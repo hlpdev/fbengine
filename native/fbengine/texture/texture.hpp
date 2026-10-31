@@ -44,6 +44,8 @@ struct texture_t {
     std::int32_t wrap_u = 0;
     std::int32_t wrap_v = 0;
     std::uint32_t references = 0;
+    /// How many times its pixels have changed on the GPU, which a CPU copy of them was read at.
+    std::uint64_t version = 0;
     /// Whether it's the engine's own, as the frame graph's transient targets' images are, which
     /// Texture.Count doesn't count.
     bool engine = false;
@@ -78,6 +80,17 @@ constexpr std::uint32_t white = 0;
 /// The bytes of a level of a texture, read back from the GPU after what the frame recorded so far,
 /// its rows packed; empty, with fbe_error's why, if they can't be.
 std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level);
+
+/// Sends what was written into a texture's CPU copy of its pixels (fbe_texture_pixels) to the GPU,
+/// if anything was, as a write in its turn: what uses a texture on the GPU calls it first.
+void send_pixels(std::uint64_t handle);
+
+/// Counts a change the GPU makes to a texture's pixels, which a CPU copy of them is then older
+/// than: what writes a texture on the GPU calls it.
+void changed_on_gpu(std::uint64_t handle);
+
+/// How many times a CPU copy of a texture's pixels has been read back from the GPU.
+std::uint64_t pixel_readbacks();
 
 /// How many bytes a pixel of an FBE_TEXTURE_ format has; 0 for none.
 std::uint32_t pixel_size(std::int32_t format);

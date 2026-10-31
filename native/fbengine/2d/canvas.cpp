@@ -234,6 +234,10 @@ bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, bool solid = false) {
     if (!found->target) {
         return fbe::fail("the texture isn't a target, which draws");
     }
+    // What the CPU wrote into it goes before what's drawn into it now, and so does the batch so
+    // far, if the write's a pass.
+    fbe::texture::send_pixels(handle);
+    found = fbe::texture::find(handle);
     const std::int64_t width = found->width;
     const std::int64_t height = found->height;
     if (handle != batch_target) {
@@ -523,6 +527,9 @@ FBE_API bool fbe_2d_oval(uint64_t target, const fbe_2d_pen_t* pen, int32_t x, in
 
 FBE_API bool fbe_2d_texture(uint64_t target, const fbe_2d_pen_t* pen, uint64_t texture,
                             const fbe_2d_sprite_t* sprite, float x, float y) {
+    // What the CPU wrote into the texture goes before it's drawn, and before the draw's begun, as
+    // sending it can send the batch.
+    fbe::texture::send_pixels(texture);
     source_t source;
     if (!begin(target, pen) || !source_of(texture, sprite, source)) {
         return false;
@@ -567,6 +574,7 @@ FBE_API bool fbe_2d_texture(uint64_t target, const fbe_2d_pen_t* pen, uint64_t t
 
 FBE_API bool fbe_2d_tile(uint64_t target, const fbe_2d_pen_t* pen, uint64_t texture,
                          const fbe_2d_sprite_t* sprite, float x, float y) {
+    fbe::texture::send_pixels(texture);
     source_t source;
     if (!begin(target, pen) || !source_of(texture, sprite, source)) {
         return false;

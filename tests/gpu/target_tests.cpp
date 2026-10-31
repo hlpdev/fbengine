@@ -275,13 +275,26 @@ TEST_CASE("a copy between textures is exact, and refuses what can't be copied", 
     CHECK(!fbe_texture_copy(gray, 0, 0, made, 0, 0, 4, 4));
     CHECK(std::string(fbe_error()) ==
           "textures of formats of different sizes aren't copied between");
-    CHECK(!fbe_texture_copy(copied, 0, 0, copied, 4, 4, 4, 4));
     CHECK(!fbe_texture_copy(copied, 8, 8, made, 0, 0, 16, 16));
     CHECK(std::string(fbe_error()) == "a 16x16 region at 8, 8 isn't in a 16x16 texture");
     CHECK(!fbe_texture_copy(made, 0, 0, copied, 0, 0, 4, 4));
     CHECK(std::string(fbe_error()) == "a multisampled target is drawn into, not copied into");
     const std::vector<std::uint8_t> pixels(64, 255);
     CHECK(!fbe_texture_write(made, 0, 0, 4, 4, pixels.data(), 16));
+    stop_gpu();
+}
+
+// Within one texture, a region copied onto one it overlaps copies as it was, through a transient
+// target, as Blitz's buffers' CopyRect did.
+TEST_CASE("a region copied within a texture copies as it was, overlapping", "[gpu]") {
+    start();
+    const std::uint64_t texture = fbe_texture_create(8, 1, FBE_TEXTURE_R8, false);
+    REQUIRE(texture != 0);
+    const std::array<std::uint8_t, 8> counted{ 0, 1, 2, 3, 4, 5, 6, 7 };
+    require(fbe_texture_write(texture, 0, 0, 8, 1, counted.data(), 8));
+    // 0 to 5 onto 2 to 7: a copy a pixel at a time, left to right, would repeat 0 and 1.
+    require(fbe_texture_copy(texture, 2, 0, texture, 0, 0, 6, 1));
+    CHECK(fbe::texture::read(texture, 0) == std::vector<std::uint8_t>{ 0, 1, 0, 1, 2, 3, 4, 5 });
     stop_gpu();
 }
 

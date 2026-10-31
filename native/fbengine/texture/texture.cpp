@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -34,6 +35,27 @@ std::vector<std::uint32_t> generations;
 std::vector<bool> live;
 std::vector<std::uint32_t> free_slots;
 std::int32_t textures_made = 0;
+
+/// A CPU copy of a texture's first level's pixels: their bytes, the texture's version they were
+/// read at, and the rectangle written since they were last sent, empty when its right isn't past
+/// its left.
+struct cpu_copy_t {
+    std::vector<std::uint8_t> pixels;
+    std::uint64_t version = UINT64_MAX;
+    std::int32_t left = 0;
+    std::int32_t top = 0;
+    std::int32_t right = 0;
+    std::int32_t bottom = 0;
+};
+
+/// The CPU copies there are, by slot, how many have something written to send, and how many have
+/// been read back.
+std::unordered_map<std::uint32_t, cpu_copy_t>& copies() {
+    static std::unordered_map<std::uint32_t, cpu_copy_t> made;
+    return made;
+}
+std::uint32_t written_copies = 0;
+std::uint64_t readbacks = 0;
 
 using fbe::texture::resting_stages;
 /// The stages that read textures, which an upload's writes are made visible to.
@@ -415,6 +437,7 @@ bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std
             std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
             std::uint32_t pitch) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
+    fbe::texture::changed_on_gpu(handle);
     const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
     const VkBufferCreateInfo buffer_info{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -517,6 +540,53 @@ std::uint64_t create(const spec_t& spec) {
     return handle_of(slot);
 }
 
+/// Copies `region` of a texture within it, through a transient target the region's size, so
+/// regions that overlap copy as they were; false, with fbe_error's why, if it can't.
+bool copy_within(const texture_t& texture, fbe::gpu::resource_t resource,
+                 const VkImageCopy& region) {
+    const fbe::gpu::resource_t through = fbe::gpu::transient_resource({
+        .width = region.extent.width,
+        .height = region.extent.height,
+        .format = texture.format,
+    });
+    if (through == fbe::gpu::no_resource) {
+        return false;
+    }
+    VkImageCopy out = region;
+    out.dstOffset = {};
+    VkImageCopy back = region;
+    back.srcOffset = {};
+    return fbe::gpu::add_pass({
+               .name = "copy",
+               .uses = {
+                   { resource, fbe::gpu::use_t::COPY_FROM },
+                   { through, fbe::gpu::use_t::COPY_TO },
+               },
+               .record =
+                   [image = texture.image, through, out](VkCommandBuffer commands) {
+                       const texture_t* held =
+                           fbe::texture::find(fbe::gpu::resource_texture(through));
+                       vkCmdCopyImage(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                      held->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &out);
+                   },
+           }) &&
+           fbe::gpu::add_pass({
+               .name = "copy",
+               .uses = {
+                   { through, fbe::gpu::use_t::COPY_FROM },
+                   { resource, fbe::gpu::use_t::MIPMAPPED },
+               },
+               .record =
+                   [copied = texture, through, back](VkCommandBuffer commands) {
+                       const texture_t* held =
+                           fbe::texture::find(fbe::gpu::resource_texture(through));
+                       vkCmdCopyImage(commands, held->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                      copied.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &back);
+                       record_mipmaps(commands, copied);
+                   },
+           });
+}
+
 /// Whether a region is inside a texture's first level; false, with fbe_error's why, if not.
 bool inside(const texture_t& texture, std::int32_t x, std::int32_t y, std::int32_t width,
             std::int32_t height) {
@@ -549,6 +619,7 @@ std::uint32_t sampler_of(const texture_t& texture) {
 }
 
 std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level) {
+    send_pixels(handle);
     const texture_t* texture = find(handle);
     if (texture == nullptr) {
         return {};
@@ -572,6 +643,47 @@ std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level) {
     };
     return gpu::read_pixels(texture->image, extent, pixel_size(texture->format),
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, level);
+}
+
+void send_pixels(std::uint64_t handle) {
+    if (written_copies == 0) {
+        return;
+    }
+    const auto slot = static_cast<std::uint32_t>(handle);
+    const auto found = copies().find(slot);
+    if (found == copies().end() || found->second.right <= found->second.left) {
+        return;
+    }
+    cpu_copy_t& kept = found->second;
+    const texture_t* texture = find(handle);
+    if (texture == nullptr) {
+        return;
+    }
+    // Emptied first, so the write, which this is called before, doesn't send it again.
+    const auto left = static_cast<std::uint32_t>(kept.left);
+    const auto top = static_cast<std::uint32_t>(kept.top);
+    const auto width = static_cast<std::uint32_t>(kept.right - kept.left);
+    const auto height = static_cast<std::uint32_t>(kept.bottom - kept.top);
+    kept.right = kept.left;
+    --written_copies;
+    const std::uint32_t pitch = texture->width * pixel_size(texture->format);
+    const std::size_t at =
+        (std::size_t{ top } * pitch) + (std::size_t{ left } * pixel_size(texture->format));
+    upload(handle, *texture, left, top, width, height, kept.pixels.data() + at, pitch);
+    // What the GPU has now is what the kept has.
+    const texture_t* sent = find(handle);
+    kept.version = sent != nullptr ? sent->version : UINT64_MAX;
+}
+
+void changed_on_gpu(std::uint64_t handle) {
+    const auto slot = static_cast<std::uint32_t>(handle);
+    if (slot < textures.size() && live[slot]) {
+        ++textures[slot].version;
+    }
+}
+
+std::uint64_t pixel_readbacks() {
+    return readbacks;
 }
 
 std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, std::int32_t format,
@@ -628,6 +740,8 @@ void stop_textures() {
     }
     textures.clear();
     live.clear();
+    copies().clear();
+    written_copies = 0;
     free_slots.clear();
     // Slots and their generations are kept, so handles from before never come back.
     for (auto slot = static_cast<std::uint32_t>(generations.size()); slot-- > 0;) {
@@ -732,9 +846,6 @@ FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, 
     if (target == nullptr || source == nullptr) {
         return false;
     }
-    if (target == source) {
-        return fbe::fail("a texture isn't copied into itself");
-    }
     if (target->msaa != VK_NULL_HANDLE) {
         return fbe::fail("a multisampled target is drawn into, not copied into");
     }
@@ -749,17 +860,21 @@ FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, 
     if (into == fbe::gpu::no_resource || out_of == fbe::gpu::no_resource) {
         return false;
     }
+    const VkExtent3D extent{
+        .width = static_cast<std::uint32_t>(width),
+        .height = static_cast<std::uint32_t>(height),
+        .depth = 1,
+    };
     const VkImageCopy region{
         .srcSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1 },
         .srcOffset = { .x = from_x, .y = from_y },
         .dstSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1 },
         .dstOffset = { .x = x, .y = y },
-        .extent = {
-            .width = static_cast<std::uint32_t>(width),
-            .height = static_cast<std::uint32_t>(height),
-            .depth = 1,
-        },
+        .extent = extent,
     };
+    if (to == from) {
+        return copy_within(*target, into, region);
+    }
     return fbe::gpu::add_pass({
         .name = "copy",
         .uses = { { out_of, fbe::gpu::use_t::COPY_FROM }, { into, fbe::gpu::use_t::MIPMAPPED } },
@@ -770,6 +885,69 @@ FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, 
                 record_mipmaps(commands, copied);
             },
     });
+}
+
+FBE_API uint8_t* fbe_texture_pixels(uint64_t texture, int64_t* size) {
+    const texture_t* found = fbe::texture::find(texture);
+    if (found == nullptr) {
+        return nullptr;
+    }
+    if (found->msaa != VK_NULL_HANDLE) {
+        fbe::fail("a multisampled target's pixels are only drawn");
+        return nullptr;
+    }
+    // A 2D batch drawing into it goes to the graph first, so its version counts it.
+    fbe::gpu::in_graph(texture);
+    found = fbe::texture::find(texture);
+    const auto slot = static_cast<std::uint32_t>(texture);
+    cpu_copy_t& kept = copies()[slot];
+    if (kept.version != found->version) {
+        // Nothing's written into a kept older than the texture: what uses it on the GPU sends the
+        // kept's writes first.
+        std::vector<std::uint8_t> read = fbe::texture::read(texture, 0);
+        if (read.empty()) {
+            copies().erase(slot);
+            return nullptr;
+        }
+        kept.pixels = std::move(read);
+        found = fbe::texture::find(texture);
+        kept.version = found->version;
+        ++readbacks;
+    }
+    if (size != nullptr) {
+        *size = static_cast<std::int64_t>(kept.pixels.size());
+    }
+    return kept.pixels.data();
+}
+
+FBE_API bool fbe_texture_pixels_written(uint64_t texture, int32_t x, int32_t y, int32_t width,
+                                        int32_t height) {
+    const texture_t* found = fbe::texture::find(texture);
+    if (found == nullptr) {
+        return false;
+    }
+    const auto kept = copies().find(static_cast<std::uint32_t>(texture));
+    if (kept == copies().end() || kept->second.pixels.empty()) {
+        return fbe::fail(
+            "the texture's pixels weren't on the CPU, as fbe_texture_pixels puts them");
+    }
+    if (!inside(*found, x, y, width, height)) {
+        return false;
+    }
+    cpu_copy_t& written = kept->second;
+    if (written.right <= written.left) {
+        written.left = x;
+        written.top = y;
+        written.right = x + width;
+        written.bottom = y + height;
+        ++written_copies;
+    } else {
+        written.left = std::min(written.left, x);
+        written.top = std::min(written.top, y);
+        written.right = std::max(written.right, x + width);
+        written.bottom = std::max(written.bottom, y + height);
+    }
+    return true;
 }
 
 FBE_API bool fbe_texture_read(uint64_t texture, int32_t level, uint8_t* pixels, int64_t size) {
@@ -809,7 +987,12 @@ FBE_API bool fbe_texture_release(uint64_t texture) {
     if (--textures[slot].references > 0) {
         return true;
     }
-    // Its handles are caught now; its image and slot wait for the frames that could draw it.
+    // Its handles are caught now; its image and slot wait for the frames that could draw it. What
+    // was written into its CPU copy and not sent goes with it.
+    if (const auto kept = copies().find(slot); kept != copies().end()) {
+        written_copies -= kept->second.right > kept->second.left ? 1U : 0U;
+        copies().erase(kept);
+    }
     live[slot] = false;
     ++generations[slot];
     textures_made -= textures[slot].engine ? 0 : 1;

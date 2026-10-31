@@ -105,3 +105,43 @@ Function ALevelsBytesAreMoreThanAnInt32Holds()
     Expect(Texture.Bytes(4, 4, TextureFormat.R8) == 16)
     Expect(Texture.Bytes(3, 2, TextureFormat.RGBA8) == 24)
 End Function
+
+@Test
+Function ATexturesPixelsAreLockedReadAndWritten() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local texture = Try Texture(4, 2, TextureFormat.RGBA8_LINEAR, False)
+    texture.Clear(Color(1, 0, 0, 1))
+    Local pixels = texture.LockPixels()
+    Expect(pixels.Width() == 4 && pixels.Height() == 2)
+    Expect(pixels.Get(3, 1) == Color32(255, 0, 0, 255))
+    pixels.Set(0, 0, Color32(0, 0, 255, 255))
+    pixels.Set(2, 1, Color32(0, 255, 0, 255))
+    pixels.Unlock()
+    Local image = texture.ToImage()
+    Expect(image[0, 0] == Color32(0, 0, 255, 255))
+    Expect(image[2, 1] == Color32(0, 255, 0, 255))
+    Expect(image[1, 0] == Color32(255, 0, 0, 255))
+    texture.WritePixel(1, 0, Color32(10, 20, 30, 40))
+    Expect(texture.ReadPixel(1, 0) == Color32(10, 20, 30, 40))
+    Expect(texture.ToImage()[1, 0] == Color32(10, 20, 30, 40))
+    Local part = texture.ToImage(1, 0, 2, 2)
+    Expect(part.Width == 2 && part.Height == 2)
+    Expect(part[0, 0] == Color32(10, 20, 30, 40))
+    Expect(part[1, 1] == Color32(0, 255, 0, 255))
+End Function
+
+@Test
+Function TheScreensPixelsAreLocked() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(8, 4)
+    Defer EndGraphics()
+    Screen.Texture()?.Clear(Color(0, 1, 0, 1))
+    Local pixels = Try Screen.LockPixels()
+    Expect(pixels.Get(7, 3) == Color32(0, 255, 0, 255))
+    pixels.Set(0, 0, Color32(255, 0, 0, 255))
+    pixels.Unlock()
+    Local image = Try Screen.ToImage()
+    Expect(image[0, 0] == Color32(255, 0, 0, 255))
+End Function

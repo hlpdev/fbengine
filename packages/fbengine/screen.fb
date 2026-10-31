@@ -8,6 +8,7 @@ Import std.io
 Import std.math
 Import "./c/fbe_gpu"
 Import "./canvas"
+Import "./pixels"
 Import "./texture"
 Import "./window"
 
@@ -119,6 +120,15 @@ Public Class Screen
             pixels[(pixel * 4) + 3] = 255
         End For
         Return Image.FromBytes(shown.Width(), shown.Height(), pixels)
+    End Method
+
+    /// The screen's pixels on the CPU, as Texture.LockPixels gives them. It throws without a
+    /// window, and panics for a multisampled screen, whose pixels are only drawn.
+    @MainThread @PanicsAtCaller
+    Public Static Method LockPixels(): Pixels Throws GraphicsError
+        Local shown = Texture()
+        If shown == Null Then Throw GraphicsError("there's no window, so no screen; Graphics opens one")
+        Return shown.LockPixels()
     End Method
 
     /// Saves the screen as a PNG at `path`, a screenshot, after everything the frame's drawn so

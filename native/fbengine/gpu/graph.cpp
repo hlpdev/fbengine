@@ -817,6 +817,19 @@ bool add_pass(pass_t pass) {
         return fail("a pass isn't added as the frame's graph is recorded");
     }
     flush_held_back();
+    // What the CPU wrote into a texture this uses goes before it.
+    const auto send = [](resource_t resource) {
+        if (resource < resources.size() && resources[resource].kind == kind_t::TEXTURE) {
+            fbe::texture::send_pixels(resources[resource].handle);
+        }
+    };
+    for (const color_t& color : pass.colors) {
+        send(color.target);
+    }
+    send(pass.depth);
+    for (const auto& use : pass.uses) {
+        send(use.first);
+    }
     const std::size_t first = accesses.size();
     if (!expand(pass)) {
         accesses.resize(first);
@@ -825,6 +838,13 @@ bool add_pass(pass_t pass) {
     if (!once_each(first)) {
         accesses.resize(first);
         return fail("a pass uses an image once, never drawing into a texture it reads");
+    }
+    // A CPU copy of what this writes is older than it now.
+    for (std::size_t at = first; at < accesses.size(); ++at) {
+        const resource_record_t& resource = resources[accesses[at].resource];
+        if (accesses[at].state.writes && resource.kind == kind_t::TEXTURE) {
+            fbe::texture::changed_on_gpu(resource.handle);
+        }
     }
     added.push_back({
         .pass = std::move(pass),

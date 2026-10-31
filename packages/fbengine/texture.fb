@@ -8,6 +8,7 @@ Import std.image
 Import std.io
 Import std.math
 Import "./c/fbe_texture"
+Import "./pixels"
 Import "./window"
 
 /// What a texture's pixels are.
@@ -240,9 +241,9 @@ Public Final Class Texture
     /// Copies the pixels `width` by `height` at `fromX`, `fromY` of `source` into it at `x`, `y`,
     /// as they are, after what the frame does with either before, and makes its mipmaps again: how
     /// a frame drawn into the screen or a target is kept, as feedback effects and security
-    /// monitors want. It panics unless their formats' pixels are the same size (RGBA8's and
-    /// RGBA8_LINEAR's are), both regions are in them, they're two textures, and it isn't a
-    /// multisampled target.
+    /// monitors want; from itself, regions that overlap copy as they were. It panics unless
+    /// their formats' pixels are the same size (RGBA8's and RGBA8_LINEAR's are), both regions are
+    /// in them, and it isn't a multisampled target.
     @MainThread @PanicsAtCaller
     Public Method CopyFrom(source: Texture, fromX: Int32, fromY: Int32, width: Int32, height: Int32,
                            x: Int32 = 0, y: Int32 = 0)
@@ -287,6 +288,61 @@ Public Final Class Texture
             Panic("an Image is read from an RGBA8 or RGBA8_LINEAR texture, not {format}")
         End If
         Return Image.FromBytes(Width(), Height(), ReadPixels())
+    End Method
+
+    /// Its first level's pixels on the CPU, to read and write a pixel at a time: read back from the
+    /// GPU only when it's changed them since, which waits for the frame so far, and what's written
+    /// sent at Unlock, before the GPU next uses it. It panics unless it's RGBA8 or RGBA8_LINEAR,
+    /// and for a multisampled target, whose pixels are only drawn.
+    @MainThread @PanicsAtCaller
+    Public Method LockPixels(): Pixels
+        Local texture = Live("LockPixels")
+        Local format = Format()
+        If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
+            Panic("a texture's pixels are locked as RGBA8 or RGBA8_LINEAR, not {format}")
+        End If
+        Local data: Ptr<UInt8> = Null
+        Unsafe
+            data = fbe_texture_pixels(texture, Null)
+        End Unsafe
+        If data == Null Then Panic(LastError())
+        Return Pixels(Self, data)
+    End Method
+
+    /// The pixel at `x`, `y`, through LockPixels, so a run of them reads the GPU back once.
+    @MainThread @PanicsAtCaller
+    Public Method ReadPixel(x: Int32, y: Int32): Color32 => LockPixels().Get(x, y)
+
+    /// Sets the pixel at `x`, `y` through LockPixels, sent to the GPU before it next uses the texture;
+    /// a run of them is sent once.
+    @MainThread @PanicsAtCaller
+    Public Method WritePixel(x: Int32, y: Int32, color: Color32)
+        Local pixels = LockPixels()
+        pixels.Set(x, y, color)
+        pixels.Unlock()
+    End Method
+
+    /// The pixels `width` by `height` at `x`, `y` of its first level as an Image, through
+    /// LockPixels, so a run of them reads the GPU back once. It panics as LockPixels does, and
+    /// unless the region's in it.
+    @MainThread @PanicsAtCaller
+    Public Method ToImage(x: Int32, y: Int32, width: Int32, height: Int32): Image
+        If x < 0 || y < 0 || width < 1 || height < 1 || x + width > Width() || y + height > Height()
+            Panic("a {width}x{height} region at {x}, {y} isn't in a {Width()}x{Height()} texture")
+        End If
+        Local pixels = LockPixels()
+        Local bytes: UInt8[] = []
+        bytes.Reserve((width * height * 4) As Int)
+        For row = y To y + height - 1
+            For column = x To x + width - 1
+                Local color = pixels.Get(column, row)
+                bytes.Add(color.r)
+                bytes.Add(color.g)
+                bytes.Add(color.b)
+                bytes.Add(color.a)
+            End For
+        End For
+        Return Image.FromBytes(width, height, bytes)
     End Method
 
     /// How many textures there are.

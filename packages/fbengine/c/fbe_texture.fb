@@ -30,6 +30,9 @@ Public Extern "C" Lib "fbengine_native"
                                alpha: Float32): Bool
     Function fbe_texture_copy(to: UInt64, x: Int32, y: Int32, from: UInt64, from_x: Int32,
                               from_y: Int32, width: Int32, height: Int32): Bool
+    Function fbe_texture_pixels(texture: UInt64, size: Ptr<Int64>): Ptr<UInt8>
+    Function fbe_texture_pixels_written(texture: UInt64, x: Int32, y: Int32, width: Int32,
+                                        height: Int32): Bool
     Function fbe_texture_read(texture: UInt64, level: Int32, pixels: Ptr<UInt8>, size: Int64): Bool
     Function fbe_texture_set_filter(texture: UInt64, filter: Int32): Bool
     Function fbe_texture_filter(texture: UInt64): Int32

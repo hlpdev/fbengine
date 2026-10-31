@@ -75,11 +75,24 @@ FBE_API bool fbe_texture_clear(uint64_t texture, float red, float green, float b
 
 // Copies the pixels `width` by `height` at `from_x`, `from_y` of `from`'s first level to `x`, `y`
 // in `to`'s, and makes `to`'s mipmaps again, in the frame's commands, so a frame drawn into a
-// target can be copied into a texture as it's drawn; false unless their formats are the same size
-// (RGBA8 and RGBA8_LINEAR are), the regions are in them, they're two textures, and `to` isn't a
-// multisampled target, which is only drawn into.
+// target can be copied into a texture as it's drawn; within one texture, regions that overlap
+// copy as they were. False unless their formats are the same size (RGBA8 and RGBA8_LINEAR are),
+// the regions are in them, and `to` isn't a multisampled target, which is only drawn into.
 FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, int32_t from_x,
                               int32_t from_y, int32_t width, int32_t height);
+
+// A CPU copy of a texture's first level's pixels, rows top first, packed, in its format's bytes,
+// which reads and writes go to a pixel at a time; `size` is how many bytes there are. It's read
+// back from the GPU only when the GPU's changed them since, which waits for the frame so far, and
+// stays where it is until the texture's freed. What's written into it reaches the GPU once
+// fbe_texture_pixels_written says where, before the GPU next uses the texture, so drawing and
+// writing keep their order. nullptr if the texture isn't live or is multisampled, whose pixels
+// are only drawn.
+FBE_API uint8_t* fbe_texture_pixels(uint64_t texture, int64_t* size);
+// Says the rectangle `width` by `height` at `x`, `y` of a texture's CPU copy was written; false
+// if it isn't in it, or the texture has no CPU copy.
+FBE_API bool fbe_texture_pixels_written(uint64_t texture, int32_t x, int32_t y, int32_t width,
+                                        int32_t height);
 
 // Reads a level's pixels back into `pixels`, `size` bytes, after everything the frame's recorded
 // so far, waiting for the GPU to finish it: rows top first, packed, in its format's bytes. False
