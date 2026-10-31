@@ -37,6 +37,26 @@ plane_t* plane_of(std::uint64_t handle) {
     return &scene().planes[scene().entities.component[entity]];
 }
 
+float entity_fade(std::uint32_t entity, std::uint32_t camera) {
+    const entities_t& entities = scene().entities;
+    const float start = entities.fade_near[entity];
+    const float end = entities.fade_far[entity];
+    if (end <= 0.0F) {
+        return 1.0F;
+    }
+    update_world(entity);
+    update_world(camera);
+    const float distance =
+        length(entities.world_matrix[entity].axis(3) - entities.world_matrix[camera].axis(3));
+    if (distance <= start) {
+        return 1.0F;
+    }
+    if (distance >= end) {
+        return 0.0F;
+    }
+    return 1.0F - ((distance - start) / (end - start));
+}
+
 void add_plane(std::uint32_t entity) {
     scene_t& s = scene();
     s.entities.component[entity] = static_cast<std::uint32_t>(s.planes.size());
@@ -135,23 +155,7 @@ FBE_API float fbe_entity_fade(uint64_t entity, uint64_t camera) {
     if (eye == none) {
         return -1.0F;
     }
-    const fbe::scene::entities_t& entities = scene().entities;
-    const float start = entities.fade_near[slot];
-    const float end = entities.fade_far[slot];
-    if (end <= 0.0F) {
-        return 1.0F;
-    }
-    fbe::scene::update_world(slot);
-    fbe::scene::update_world(eye);
-    const float distance = fbe::scene::length(entities.world_matrix[slot].axis(3) -
-                                              entities.world_matrix[eye].axis(3));
-    if (distance <= start) {
-        return 1.0F;
-    }
-    if (distance >= end) {
-        return 0.0F;
-    }
-    return 1.0F - ((distance - start) / (end - start));
+    return fbe::scene::entity_fade(slot, eye);
 }
 
 FBE_API int32_t fbe_mesh_intersects(uint64_t mesh, uint64_t other) {

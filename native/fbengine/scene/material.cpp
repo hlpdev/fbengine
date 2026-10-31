@@ -103,6 +103,19 @@ void release_materials(const std::vector<surface_t>& surfaces) {
     }
 }
 
+std::int32_t drawn_blend(std::uint32_t material, float alpha) {
+    const material_t drawn = material != none ? scene().materials[material] : material_t();
+    switch (drawn.blend) {
+    case FBE_BLEND_AUTO:
+        return drawn.color[3] * alpha < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
+    case FBE_BLEND_OPAQUE:
+        // An opaque material's own alpha is left out, but what draws in it still fades.
+        return alpha < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
+    default:
+        return drawn.blend;
+    }
+}
+
 } // namespace fbe::scene
 
 using fbe::scene::layer_t;
@@ -494,17 +507,7 @@ FBE_API int32_t fbe_mesh_blend(uint64_t mesh, int32_t surface) {
     if (material == none) {
         material = surfaces[static_cast<std::size_t>(surface)].material;
     }
-    const material_t drawn = material != none ? scene().materials[material] : material_t();
-    const float tint = found->tint[3];
-    switch (drawn.blend) {
-    case FBE_BLEND_AUTO:
-        return drawn.color[3] * tint < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
-    case FBE_BLEND_OPAQUE:
-        // An opaque material's own alpha is left out, but its mesh still fades.
-        return tint < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
-    default:
-        return drawn.blend;
-    }
+    return fbe::scene::drawn_blend(material, found->tint[3]);
 }
 
 } // extern "C"

@@ -1,6 +1,8 @@
 // Cameras: how each projects, the part of its target it draws to, what it clears, its order among
 // the others, and projecting points between the world and its view.
 
+#include "scene/camera.hpp"
+
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "scene/math.hpp"
@@ -19,18 +21,28 @@ namespace fbe::scene {
 
 namespace {
 
-/// A camera's viewport in its target's units, and its view, as the projections work them out.
-/// A viewport with no size, as a window dragged to nothing high has, has the shape of a square,
-/// and nothing projects into it.
-struct view_t {
-    float x = 0.0F;
-    float y = 0.0F;
-    float width = 0.0F;
-    float height = 0.0F;
-    bool sized = true;
-    vec3_t position;
-    quat_t rotation;
-};
+/// How far in front a point a camera sees can be, its nearest less what rounding moves a point on
+/// the near plane by, so Unproject's points at the near plane project again.
+float nearest_seen(const camera_t& camera) {
+    return camera.nearest * (1.0F - 1e-4F);
+}
+
+bool valid_range(float nearest, float farthest) {
+    return nearest > 0.0F && nearest < farthest && std::isfinite(farthest);
+}
+
+fbe_vec3_t from_vec(vec3_t v) {
+    return { .x = v.x, .y = v.y, .z = v.z };
+}
+
+/// The view a handle's camera has in a target, or false with fbe_error saying why.
+bool camera_view(std::uint64_t handle, float target_width, float target_height,
+                 const camera_t*& camera, view_t& view) {
+    camera = camera_of(handle);
+    return camera != nullptr && view_of(*camera, target_width, target_height, view);
+}
+
+} // namespace
 
 /// The viewport in a target of this size, and where the camera is.
 bool view_of(const camera_t& camera, float target_width, float target_height, view_t& view) {
@@ -59,20 +71,6 @@ void half_extents(const camera_t& camera, const view_t& view, float& half_width,
                       ? std::tan(camera.field_of_view / 2.0F)
                       : camera.orthographic_height / 2.0F;
     half_width = view.sized ? half_height * (view.width / view.height) : half_height;
-}
-
-/// How far in front a point a camera sees can be, its nearest less what rounding moves a point on
-/// the near plane by, so Unproject's points at the near plane project again.
-float nearest_seen(const camera_t& camera) {
-    return camera.nearest * (1.0F - 1e-4F);
-}
-
-bool valid_range(float nearest, float farthest) {
-    return nearest > 0.0F && nearest < farthest && std::isfinite(farthest);
-}
-
-fbe_vec3_t from_vec(vec3_t v) {
-    return { .x = v.x, .y = v.y, .z = v.z };
 }
 
 /// Whether some of the points might be in view: not all of them behind one of the view's six
@@ -105,15 +103,6 @@ bool in_view(const camera_t& camera, const view_t& view, const vec3_t* points, s
     }
     return std::ranges::none_of(all_behind, [](bool behind) { return behind; });
 }
-
-/// The view a handle's camera has in a target, or false with fbe_error saying why.
-bool camera_view(std::uint64_t handle, float target_width, float target_height,
-                 const camera_t*& camera, view_t& view) {
-    camera = camera_of(handle);
-    return camera != nullptr && view_of(*camera, target_width, target_height, view);
-}
-
-} // namespace
 
 void add_camera(std::uint32_t entity) {
     scene_t& s = scene();
@@ -160,6 +149,29 @@ camera_t* camera_of(std::uint64_t handle) {
         return nullptr;
     }
     return &scene().cameras[scene().entities.component[entity]];
+}
+
+mat4_t draw_projection(const camera_t& camera, const view_t& view) {
+    float half_width = 0.0F;
+    float half_height = 0.0F;
+    half_extents(camera, view, half_width, half_height);
+    const float nearest = camera.nearest;
+    const float farthest = camera.farthest;
+    const float span = farthest - nearest;
+    // Vulkan's y points down, and depth is reversed: 1 at the near plane, 0 at the far one.
+    mat4_t m;
+    m.at(0, 0) = 1.0F / half_width;
+    m.at(1, 1) = -1.0F / half_height;
+    if (camera.projection == FBE_PROJECTION_PERSPECTIVE) {
+        m.at(2, 2) = nearest / span;
+        m.at(3, 2) = nearest * farthest / span;
+        m.at(2, 3) = -1.0F;
+        m.at(3, 3) = 0.0F;
+    } else {
+        m.at(2, 2) = 1.0F / span;
+        m.at(3, 2) = farthest / span;
+    }
+    return m;
 }
 
 } // namespace fbe::scene
@@ -389,6 +401,18 @@ FBE_API bool fbe_camera_view_matrix(uint64_t camera, fbe_mat4_t* matrix) {
     const fbe::scene::vec3_t at = s.entities.world_matrix[found->entity].axis(3);
     const fbe::scene::mat4_t view = fbe::scene::compose(back * -at, back, { 1.0F, 1.0F, 1.0F });
     std::ranges::copy(view.m, matrix->m);
+    return true;
+}
+
+FBE_API bool fbe_camera_draw_projection(uint64_t camera, float target_width, float target_height,
+                                        fbe_mat4_t* matrix) {
+    const camera_t* found = camera_of(camera);
+    fbe::scene::view_t view;
+    if (found == nullptr || !fbe::scene::view_of(*found, target_width, target_height, view)) {
+        return false;
+    }
+    const fbe::scene::mat4_t m = fbe::scene::draw_projection(*found, view);
+    std::ranges::copy(m.m, matrix->m);
     return true;
 }
 

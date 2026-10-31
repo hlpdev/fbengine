@@ -229,7 +229,7 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                scene/camera_tests.cpp scene/light_tests.cpp scene/geometry_tests.cpp
                scene/material_tests.cpp scene/bvh_tests.cpp scene/collision_tests.cpp
                scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
-               scene/plane_tests.cpp
+               scene/plane_tests.cpp scene/draw_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
@@ -316,7 +316,10 @@ if(FBENGINE_FB_TESTS)
       "plane-segments=SetSegments on a GroundPlane: a ground plane has 1 to 16 segments, not 17"
       "auto-fade=SetAutoFade on a Pivot: a fade is 0 <= start < end, finite, or 0 and 0 for none, not 5 to 1"
       "mirror-freed=Reflection on a Mirror that was freed"
-      "intersects-freed=Intersects on a Mesh that was freed")
+      "intersects-freed=Intersects on a Mesh that was freed"
+      "draws-tween=Draws on a Camera: a tween is 0 to 1, not 2"
+      "draws-no-window=Draws on a Camera: the camera's viewport has no size"
+      "draw-projection-no-window=DrawProjection on a Camera: the camera's viewport has no size")
   foreach(case IN LISTS fbengine_scene_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)
