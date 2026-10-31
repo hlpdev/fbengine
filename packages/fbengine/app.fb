@@ -1,0 +1,43 @@
+// The app's own calls to the OS: its message box, for errors a player should see, and opening a
+// link or a file as the OS does. Headless, neither opens anything, so a test never waits on one.
+
+Import std.core
+Import std.ffi
+Import "./c/fbe_app"
+
+/// What a message box says it is, which its icon shows.
+Public Enum MessageKind
+    ERROR
+    WARNING
+    INFORMATION
+End Enum
+
+/// Shows the OS's message box with `title` and `text`, over the window if it's open, and waits
+/// for the player to close it, as a game does with an error it can't go on from, like a missing
+/// file or a GPU it can't use. Headless (Window.SetHeadless, or SDL's video driver set to
+/// offscreen or dummy, as tests run), or when the OS can't show one, it writes "title: text" to
+/// stderr instead, and goes on at once.
+@MainThread Public Function ShowMessage(title: String, text: String,
+                                        kind: MessageKind = MessageKind.ERROR)
+    fbe_app_show_message(title, text, kind As Int32)
+End Function
+
+/// Opens `url` as the OS does: a link like "https://example.com" in the player's browser, and a
+/// file or a folder, by its path, in the app the OS opens it with; a path that isn't absolute is
+/// from the current folder (on Windows, the OS's own full path, as "C:x.txt" is from C:'s own
+/// folder). It's the best the OS can do, False when it can't, which a game goes on without.
+/// Headless, it opens nothing and keeps the link, a path as its file:// link, which OpenedURLs
+/// gives: on Windows the shell's own form, which leaves letters past ASCII as they are and puts a
+/// UNC path's server after "file://", and elsewhere RFC 8089's, its UTF-8 in %XX.
+@MainThread Public Function OpenURL(url: String): Bool => fbe_app_open_url(url)
+
+/// The links OpenURL kept headless, the first first, for a game's tests to check.
+@MainThread Public Function OpenedURLs(): String[]
+    Local links: String[] = []
+    For index = 0 To fbe_app_opened_count() - 1
+        Unsafe
+            links.Add(fbe_app_opened_at(index).ToString())
+        End Unsafe
+    End For
+    Return links
+End Function

@@ -46,6 +46,9 @@ good modern engine on its own. Every structural choice is checked against both.
   `native/common/handles.hpp`, each package in a range of its own so two never share one:
   fbengine 1 to 63 (World 1, entity 2, geometry 3, material 4, then as its milestones add pools),
   fbengine_audio 64 to 95, fbengine_physics 96 to 127, fbengine_video 128 to 143.
+- **OS devices** go by the OS's own IDs, not pool handles: gamepads and joysticks by SDL's
+  instance IDs, which SDL never reuses in a run, so a stale one names no device, and the FB side
+  wraps each in an object of its own; displays by their place in the OS's list, read afresh.
 - **Errors**: a call that can fail returns `bool` or a 0 handle, and `fbe_error()` says why, per
   thread. The FB side throws a typed Error for what a game should handle (a file that won't load,
   a mode that can't be set) and panics for a programming mistake (a freed handle, a value out of
@@ -91,8 +94,10 @@ good modern engine on its own. Every structural choice is checked against both.
 
 ## The renderer
 
-- **Vulkan 1.2** with dynamic rendering, synchronization2, and descriptor indexing (bindless
-  textures), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
+- **Vulkan 1.2** with dynamic rendering, synchronization2, descriptor indexing (bindless
+  textures), and buffer device addresses (shaders read buffers through addresses in push
+  constants), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
+  The window's images and the screen are sRGB, so drawing is in linear light.
 - **What it runs on** (the user, 2026-10-31): Vulkan 1.2 GPUs (2016 onward), Windows 10, Linux
   with glibc 2.28, macOS 13 on MoltenVK. **What it aims for** (the user, 2026-10-31): a scene of
   SCP:CB's scale in the high hundreds of fps, 500 or more at 1080p on the user's RTX 4080 and

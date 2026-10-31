@@ -18,7 +18,7 @@ original 1.3.11, and ue5-additions.md what v5 adds; the steps below cover both.
 | | Goal | Needs | Done when |
 |---|---|---|---|
 | **E0** | Setup | | done (2026-10-31) |
-| **E1** | App and input | E0 | a test under the offscreen driver reads every kind of input, and coroutines resume once per frame |
+| **E1** | App and input | E0 | done (2026-10-31) |
 | **E2** | The GPU core | E1 step 1 | golden images of a triangle, a textured quad, and a readback match on lavapipe |
 | **E3** | 2D | E2 | a small arcade game runs, and its frames match their golden images |
 | **E4** | The scene | E1 step 2 | transforms, hierarchy, visibility, collisions, and picks pass their tests, with no GPU |
@@ -57,6 +57,8 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 7. `ShowMessage(title, text)`, the OS's message box, for errors players should see; `OpenURL`,
    which opens a link or a file as the OS does; loose ends; E1's review.
 
+Steps 3 to 7 done (2026-10-31, landed at 3698cf3).
+
 ### E2: The GPU core
 
 1. Vulkan through volk and VMA: instance, device (preferring a discrete GPU, lavapipe in tests),
@@ -82,7 +84,9 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 2. Textures as images: load, draw with handle (pivot), rotation, scale, color and alpha, frames
    of a sheet, tiles, regions; drawing into a texture.
 3. Text: TrueType fonts from files and the system's, by name, size, and style; glyph atlases;
-   measuring; text drawn crisp at any DPI.
+   measuring; text drawn crisp at any DPI. Its core, on the CPU (FreeType and HarfBuzz, fonts,
+   fallback, shaping, measuring, and the atlas's pages and glyph places), is the input lane's,
+   in `native/fbengine/text/`, so E11 doesn't wait; the gpu lane uploads the pages and draws.
 4. Pixels: locking a texture or the window for CPU reads and writes, through one copy per frame;
    copying regions between the window, textures, and images; std.image's Image in and out.
 5. Collisions in 2D: rectangles, and pixel-exact masks of images.
@@ -235,7 +239,7 @@ that waits on another lane's step builds what it can without it, and the rest on
 
 | Lane | Builds, in order | Waits on | Owns |
 |---|---|---|---|
-| input | E1 steps 3 to 7, then E11 | E11: gpu's E3 step 3 (text) | `native/fbengine/input/`, the input modules, Simulate's input |
+| input | E1 steps 3 to 7, then E11, with E3 step 3's text core | E11's drawing: gpu's E3 steps 1 to 3 | `native/fbengine/input/`, `text/`, the input and text modules, Simulate's input |
 | gpu | E2, then E3, then E6 | E6: scene's E5 | `native/fbengine/gpu/`, `2d/`, `shaders/`; the window's Vulkan surface in `window/`; Flip's present in `frame/` |
 | scene | E4, then E5 | E5: gpu's E2; E4 step 8: assets' job system | `native/fbengine/scene/` (then `render/`), the scene modules |
 | assets | E8 step 0, the job system; E8 steps 1 to 3; then 4 and 5 | step 2's textures: gpu's E2 step 3; meshes: scene's E4 step 5; steps 4 and 5: FutureBlitz 1.1's build step | `native/fbengine/jobs/`, `assets/`, the asset modules; fbengine_tools |

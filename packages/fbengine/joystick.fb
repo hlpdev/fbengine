@@ -1,0 +1,175 @@
+// Joysticks: every device SDL sees, gamepads too, unmapped, for wheels, flight sticks, and pads
+// SDL has no mapping for, as the last Flip read them.
+
+Import std.collections
+Import std.core
+Import std.ffi
+Import "./c/fbe_input"
+Import "./frame"
+
+/// What kind of device a joystick says it is.
+Public Enum JoystickType: Int32
+    UNKNOWN = 0
+    GAMEPAD = 1
+    WHEEL = 2
+    ARCADE_STICK = 3
+    FLIGHT_STICK = 4
+    DANCE_PAD = 5
+    GUITAR = 6
+    DRUM_KIT = 7
+    ARCADE_PAD = 8
+    THROTTLE = 9
+End Enum
+
+/// The way a joystick's hat points: none of them when it's centered, two for a diagonal.
+@Flags Public Enum HatDirection: Int32
+    UP, RIGHT, DOWN, LEFT
+End Enum
+
+/// A joystick, which stays the same object while it's connected, and for the Flip that reads it
+/// disconnecting; everything about one that's disconnected is "", False, or 0. Its axes, buttons, and hats are numbered from 0, as
+/// the device numbers them.
+Public Final Class Joystick Implements Printable
+    Static Field known: Map<UInt64, Joystick> = {}
+    Static Field forgetting: Bool = False
+    Field id: UInt64
+
+    Private New(id: UInt64)
+        Self.id = id
+    End New
+
+    // The one Joystick for SDL's device `id`.
+    @MainThread Package Static Method Of(id: UInt64): Joystick
+        Local found = known.Get(id)
+        If found != Null Then Return found
+        Local stick = Joystick(id)
+        known[id] = stick
+        If !forgetting
+            forgetting = True
+            Frame.OnFlip(ForgetJoysticks)
+        End If
+        Return stick
+    End Method
+
+    // Drops the Joysticks disconnected before the last Flip, which nothing lists any more.
+    @MainThread Package Static Method Forget()
+        Local gone: UInt64[] = []
+        For id In known.Keys()
+            If !fbe_input_joystick_connected(id) && !DisconnectedNow(id) Then gone.Add(id)
+        End For
+        For id In gone
+            known.Remove(id)
+        End For
+    End Method
+
+    @MainThread Static Method DisconnectedNow(id: UInt64): Bool
+        For index = 0 To fbe_input_joysticks_removed_count() - 1
+            If fbe_input_joystick_removed_at(index) == id Then Return True
+        End For
+        Return False
+    End Method
+
+    /// Whether it was connected when the last Flip read the OS's events.
+    @MainThread Public Method Connected(): Bool => fbe_input_joystick_connected(id)
+
+    /// Its name, as SDL knows it.
+    @MainThread Public Method Name(): String
+        Unsafe
+            Return fbe_input_joystick_name(id).ToString()
+        End Unsafe
+    End Method
+
+    /// Its GUID, which every device of its kind on its bus shares: 32 hex digits, "" once it's
+    /// disconnected.
+    @MainThread Public Method Guid(): String
+        Unsafe
+            Return fbe_input_joystick_guid(id).ToString()
+        End Unsafe
+    End Method
+
+    /// Its serial number, "" when it has none.
+    @MainThread Public Method Serial(): String
+        Unsafe
+            Return fbe_input_joystick_serial(id).ToString()
+        End Unsafe
+    End Method
+
+    /// What kind of device it says it is.
+    @MainThread Public Method Type(): JoystickType
+        Local type = fbe_input_joystick_type(id)
+        If type < 0 || type > JoystickType.THROTTLE As Int32 Then Return JoystickType.UNKNOWN
+        Return type As JoystickType
+    End Method
+
+    /// Whether SDL maps it as a gamepad too, in Gamepads().
+    @MainThread Public Method IsGamepad(): Bool => fbe_input_joystick_is_gamepad(id)
+
+    /// How many axes it has.
+    @MainThread Public Method AxisCount(): Int32 => fbe_input_joystick_axis_count(id)
+
+    /// How many buttons it has.
+    @MainThread Public Method ButtonCount(): Int32 => fbe_input_joystick_button_count(id)
+
+    /// How many hats it has.
+    @MainThread Public Method HatCount(): Int32 => fbe_input_joystick_hat_count(id)
+
+    /// Its `axis`th axis, -1 to 1, with no dead zone, as the last Flip read it; 0 for one it
+    /// doesn't have.
+    @MainThread Public Method Axis(axis: Int32): Float32 => fbe_input_joystick_axis(id, axis)
+
+    /// Whether its `button`th button was held when the last Flip read the OS's events.
+    @MainThread Public Method Down(button: Int32): Bool => fbe_input_joystick_down(id, button)
+
+    /// Whether the last Flip read its `button`th button pressed.
+    @MainThread Public Method Hit(button: Int32): Bool => fbe_input_joystick_hits(id, button) > 0
+
+    /// How many times the last Flip read its `button`th button pressed.
+    @MainThread Public Method Hits(button: Int32): Int32 => fbe_input_joystick_hits(id, button)
+
+    /// Whether the last Flip read its `button`th button released.
+    @MainThread Public Method Up(button: Int32): Bool => fbe_input_joystick_ups(id, button) > 0
+
+    /// The way its `hat`th hat points, as the last Flip read it.
+    @MainThread Public Method Hat(hat: Int32): HatDirection
+        Return fbe_input_joystick_hat(id, hat) As HatDirection
+    End Method
+
+    Public Method ToString(): String
+        Unsafe
+            Return fbe_input_joystick_name(id).ToString()
+        End Unsafe
+    End Method
+End Class
+
+// Frame's hook, which Joystick.Of adds.
+Function ForgetJoysticks()
+    Joystick.Forget()
+End Function
+
+/// Every joystick connected, gamepads too, as the last Flip read them, in the order they
+/// connected. The first call starts SDL's joysticks, as Gamepads' does; none if they can't start.
+@MainThread Public Function Joysticks(): Joystick[]
+    Local sticks: Joystick[] = []
+    For index = 0 To fbe_input_joystick_count() - 1
+        sticks.Add(Joystick.Of(fbe_input_joystick_at(index)))
+    End For
+    Return sticks
+End Function
+
+/// The joysticks the last Flip read connecting, in order.
+@MainThread Public Function JoysticksConnected(): Joystick[]
+    Local sticks: Joystick[] = []
+    For index = 0 To fbe_input_joysticks_added_count() - 1
+        sticks.Add(Joystick.Of(fbe_input_joystick_added_at(index)))
+    End For
+    Return sticks
+End Function
+
+/// The joysticks the last Flip read disconnecting, in order.
+@MainThread Public Function JoysticksDisconnected(): Joystick[]
+    Local sticks: Joystick[] = []
+    For index = 0 To fbe_input_joysticks_removed_count() - 1
+        sticks.Add(Joystick.Of(fbe_input_joystick_removed_at(index)))
+    End For
+    Return sticks
+End Function

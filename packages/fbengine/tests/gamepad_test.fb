@@ -1,0 +1,311 @@
+// Gamepads and joysticks, on SDL's virtual devices, offscreen.
+
+Import std.core
+Import std.math
+Import std.test
+Import std.text
+Import std.time
+Import fbengine
+
+// A virtual gamepad, connected and read by a Flip.
+Function Connected(): VirtualGamepad Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Local pad = Try Simulate.ConnectGamepad()
+    Flip()
+    Return pad
+End Function
+
+Function Near(a: Float32, b: Float32): Bool => Abs(a - b) < 0.001
+
+@Test
+Function AGamepadConnectsAndDisconnects() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    // The pads connected already connect at the first Flip after SDL's gamepads start.
+    Gamepads()
+    Flip()
+    Local before = Gamepads().Count
+    Local virtual = Try Simulate.ConnectGamepad("Test Pad")
+    // A pad's in Gamepads() from the Flip that reads it connecting.
+    Expect(Gamepads().Count == before)
+    Flip()
+    Local pad = virtual.Device()
+    Expect(pad.Connected())
+    Expect(pad.Name() == "Test Pad")
+    Expect(Gamepads().Count == before + 1)
+    Expect(Gamepads()[Gamepads().Count - 1] == pad)
+    Expect(GamepadsConnected().Count == 1)
+    Expect(GamepadsConnected()[0] == pad)
+    Flip()
+    Expect(GamepadsConnected().Count == 0)
+    virtual.Unplug()
+    Flip()
+    Expect(!pad.Connected())
+    Expect(pad.Name() == "")
+    Expect(GamepadsDisconnected().Count == 1)
+    Expect(GamepadsDisconnected()[0] == pad)
+    Expect(Gamepads().Count == before)
+End Function
+
+@Test
+Function AButtonIsHitDownAndUpForTheFrameItsReadIn() Throws GraphicsError, InputError
+    Local virtual = Try Connected()
+    Defer EndGraphics()
+    Defer virtual.Unplug()
+    Local pad = virtual.Device()
+    virtual.SetButton(GamepadButton.SOUTH, True)
+    Expect(!pad.Down(GamepadButton.SOUTH))
+    Flip()
+    Expect(pad.Down(GamepadButton.SOUTH))
+    Expect(pad.Hit(GamepadButton.SOUTH))
+    Expect(pad.Hits(GamepadButton.SOUTH) == 1)
+    Expect(!pad.Hit(GamepadButton.EAST))
+    Flip()
+    Expect(pad.Down(GamepadButton.SOUTH))
+    Expect(!pad.Hit(GamepadButton.SOUTH))
+    virtual.SetButton(GamepadButton.SOUTH, False)
+    virtual.SetButton(GamepadButton.DPAD_LEFT, True)
+    Flip()
+    Expect(!pad.Down(GamepadButton.SOUTH))
+    Expect(pad.Up(GamepadButton.SOUTH))
+    Expect(pad.Hit(GamepadButton.DPAD_LEFT))
+    FlushGamepads()
+    Expect(!pad.Hit(GamepadButton.DPAD_LEFT))
+    Expect(pad.Down(GamepadButton.DPAD_LEFT))
+End Function
+
+@Test
+Function AxesArePastTheDeadZonesAndRawAxesAsThePadSays() Throws GraphicsError, InputError
+    Local virtual = Try Connected()
+    Defer EndGraphics()
+    Defer virtual.Unplug()
+    Local pad = virtual.Device()
+    Expect(GamepadDeadZones().Stick == 0.2)
+    Expect(GamepadDeadZones().Trigger == 0.1)
+    virtual.SetAxis(GamepadAxis.LEFT_X, 0.1)
+    virtual.SetAxis(GamepadAxis.RIGHT_X, 0.6)
+    virtual.SetAxis(GamepadAxis.LEFT_TRIGGER, 0.55)
+    Flip()
+    // Inside the dead zone, the stick's at rest.
+    Expect(Near(pad.RawAxis(GamepadAxis.LEFT_X), 0.1))
+    Expect(pad.Axis(GamepadAxis.LEFT_X) == 0.0)
+    // Past it, it goes on from 0: halfway from 0.2 to 1 is 0.5.
+    Expect(Near(pad.Axis(GamepadAxis.RIGHT_X), 0.5))
+    Expect(Near(pad.Axis(GamepadAxis.LEFT_TRIGGER), 0.5))
+    Expect(Near(pad.RawAxis(GamepadAxis.LEFT_TRIGGER), 0.55))
+    virtual.SetAxis(GamepadAxis.RIGHT_X, -1.0)
+    virtual.SetAxis(GamepadAxis.LEFT_TRIGGER, 1.0)
+    Flip()
+    Expect(Near(pad.Axis(GamepadAxis.RIGHT_X), -1.0))
+    Expect(Near(pad.Axis(GamepadAxis.LEFT_TRIGGER), 1.0))
+End Function
+
+// A stick's dead zone is round, so pushing it a little on a diagonal still moves.
+@Test
+Function AStickPushedOnADiagonalPassesItsDeadZoneTogether() Throws GraphicsError, InputError
+    Local virtual = Try Connected()
+    Defer EndGraphics()
+    Defer virtual.Unplug()
+    Local pad = virtual.Device()
+    virtual.SetAxis(GamepadAxis.LEFT_X, 0.3)
+    virtual.SetAxis(GamepadAxis.LEFT_Y, 0.4)
+    Flip()
+    // The stick's 0.5 out, so 0.375 past the zone, shared as 0.3 and 0.4 are.
+    Expect(Near(pad.Axis(GamepadAxis.LEFT_X), 0.225))
+    Expect(Near(pad.Axis(GamepadAxis.LEFT_Y), 0.3))
+    SetGamepadDeadZones(DeadZones(0.6, 0.0))
+    Defer SetGamepadDeadZones(DeadZones(0.2, 0.1))
+    Expect(pad.Axis(GamepadAxis.LEFT_X) == 0.0)
+    Expect(pad.Axis(GamepadAxis.LEFT_Y) == 0.0)
+End Function
+
+@Test
+Function RumbleReachesThePadAndStopsWhenItsTimeIsUp() Throws GraphicsError, InputError
+    Local virtual = Try Connected()
+    Defer EndGraphics()
+    Defer virtual.Unplug()
+    Local pad = virtual.Device()
+    Expect(pad.Rumble(0.5, 1.0, 0.05))
+    Expect(Near(virtual.LowRumble(), 0.5))
+    Expect(Near(virtual.HighRumble(), 1.0))
+    Expect(pad.RumbleTriggers(0.25, 0.0, 0.05))
+    Expect(Near(virtual.LeftTriggerRumble(), 0.25))
+    // SDL stops it at a Flip once the time is up; a slow machine gets two seconds.
+    Local waited = Stopwatch.StartNew()
+    While virtual.HighRumble() > 0.0 && waited.Elapsed.TotalSeconds < 2.0
+        Flip()
+    End While
+    Expect(virtual.HighRumble() == 0.0)
+    Expect(pad.Rumble(0.0, 0.0, 0.0))
+End Function
+
+// SDL's own 0 would rumble for good: 0 seconds stops it, and a sliver is a millisecond.
+@Test
+Function ARumblesTimeIsNeverForGood() Throws GraphicsError, InputError
+    Local virtual = Try Connected()
+    Defer EndGraphics()
+    Defer virtual.Unplug()
+    Local pad = virtual.Device()
+    Expect(pad.Rumble(1.0, 1.0, 10.0))
+    Expect(pad.Rumble(1.0, 1.0, 0.0))
+    Expect(virtual.LowRumble() == 0.0)
+    Expect(pad.RumbleTriggers(1.0, 1.0, 0.0))
+    Expect(virtual.LeftTriggerRumble() == 0.0)
+    Expect(pad.Rumble(1.0, 1.0, 0.0001))
+    Expect(virtual.LowRumble() == 1.0)
+    Local waited = Stopwatch.StartNew()
+    While virtual.LowRumble() > 0.0 && waited.Elapsed.TotalSeconds < 2.0
+        Flip()
+    End While
+    Expect(virtual.LowRumble() == 0.0)
+    // Past SDL's longest, 65.535 seconds, it's that long.
+    Expect(pad.Rumble(0.5, 0.5, 1000000.0))
+    Flip()
+    Expect(Near(virtual.LowRumble(), 0.5))
+    Expect(pad.Rumble(0.0, 0.0, 0.0))
+End Function
+
+@Test
+Function APadThatCantRumbleSaysSo() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local virtual = Try Simulate.ConnectGamepad("Still Pad", rumbles: False)
+    Defer virtual.Unplug()
+    Flip()
+    Expect(!virtual.Device().Rumble(1.0, 1.0, 1.0))
+    Expect(!virtual.Device().RumbleTriggers(1.0, 1.0, 1.0))
+End Function
+
+@Test
+Function APadIsKnownByItsGuidAndPlayer() Throws GraphicsError, InputError
+    Local virtual = Try Connected()
+    Defer EndGraphics()
+    Local pad = virtual.Device()
+    Expect(pad.Guid().Length == 32)
+    Expect(pad.Serial() == "")
+    pad.SetPlayerIndex(2)
+    Expect(pad.PlayerIndex() == 2)
+    pad.SetPlayerIndex(-1)
+    Expect(pad.PlayerIndex() == -1)
+    virtual.Unplug()
+    Flip()
+    Expect(pad.Guid() == "")
+    Expect(pad.PlayerIndex() == -1)
+    // Setting it on a pad that's gone is nothing.
+    pad.SetPlayerIndex(1)
+    Expect(pad.PlayerIndex() == -1)
+End Function
+
+// A Gamepad stays for the Flip that reads it disconnecting, and goes after.
+@Test
+Function ADisconnectedGamepadIsForgottenAfterItsFlip() Throws GraphicsError, InputError
+    Local virtual = Try Connected()
+    Defer EndGraphics()
+    Local weak: Weak<Gamepad> = virtual.Device()
+    virtual.Unplug()
+    Flip()
+    Local reported: Gamepad? = weak
+    Expect(reported != Null)
+    Expect(GamepadsDisconnected()[0] == reported)
+    reported = Null
+    Flip()
+    Local after: Gamepad? = weak
+    Expect(after == Null)
+End Function
+
+Function ConnectedAndLetGo(): Gamepad Throws InputError
+    Local virtual = Try Simulate.ConnectGamepad()
+    Flip()
+    Return virtual.Device()
+End Function
+
+@Test
+Function AVirtualPadLetGoOfUnplugs() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local pad = Try ConnectedAndLetGo()
+    Expect(pad.Connected())
+    Flip()
+    Expect(!pad.Connected())
+End Function
+
+@Test
+Function ADisconnectedGamepadIsAtRest() Throws GraphicsError, InputError
+    Local virtual = Try Connected()
+    Defer EndGraphics()
+    Local pad = virtual.Device()
+    virtual.SetButton(GamepadButton.START, True)
+    virtual.SetAxis(GamepadAxis.LEFT_Y, 1.0)
+    Flip()
+    Expect(pad.Down(GamepadButton.START))
+    virtual.Unplug()
+    Flip()
+    Expect(!pad.Down(GamepadButton.START))
+    Expect(pad.Axis(GamepadAxis.LEFT_Y) == 0.0)
+    Expect(!pad.Rumble(1.0, 1.0, 1.0))
+End Function
+
+@Test
+Function AJoystickIsReadUnmapped() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local virtual = Try Simulate.ConnectJoystick(JoystickType.WHEEL, 3, 12, 1, "Test Wheel")
+    Defer virtual.Unplug()
+    Flip()
+    Local wheel = virtual.Device()
+    Expect(wheel.Connected())
+    Expect(wheel.Name() == "Test Wheel")
+    Expect(wheel.Type() == JoystickType.WHEEL)
+    Expect(!wheel.IsGamepad())
+    Expect(wheel.AxisCount() == 3)
+    Expect(wheel.ButtonCount() == 12)
+    Expect(wheel.HatCount() == 1)
+    Expect(JoysticksConnected().Count == 1)
+    Expect(JoysticksConnected()[0] == wheel)
+    virtual.SetAxis(0, -0.5)
+    virtual.SetButton(11, True)
+    virtual.SetHat(0, HatDirection.UP | HatDirection.LEFT)
+    Flip()
+    // No dead zone, as a wheel wants.
+    Expect(Near(wheel.Axis(0), -0.5))
+    Expect(wheel.Down(11))
+    Expect(wheel.Hit(11))
+    Expect(wheel.Hat(0) == HatDirection.UP | HatDirection.LEFT)
+    Expect(wheel.Axis(7) == 0.0)
+    Expect(!wheel.Down(12))
+    virtual.SetButton(11, False)
+    virtual.SetHat(0, (0 As HatDirection))
+    Flip()
+    Expect(wheel.Up(11))
+    Expect(wheel.Hat(0) == (0 As HatDirection))
+End Function
+
+@Test
+Function AGamepadIsAJoystickToo() Throws GraphicsError, InputError
+    Local virtual = Try Connected()
+    Defer EndGraphics()
+    Defer virtual.Unplug()
+    Local found = False
+    For stick In Joysticks()
+        If stick.Name() == virtual.Device().Name() && stick.IsGamepad() Then found = True
+    End For
+    Expect(found)
+End Function
+
+// A joystick out of SDL's sizes panics, which tests/input's joystick-sizes checks.
+@Test
+Function AJoystickIsKnownByItsGuid() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local virtual = Try Simulate.ConnectJoystick(JoystickType.FLIGHT_STICK, 4, 8, 1)
+    Defer virtual.Unplug()
+    Flip()
+    Expect(virtual.Device().Guid().Length == 32)
+    Expect(virtual.Device().Serial() == "")
+End Function
