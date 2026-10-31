@@ -2,6 +2,7 @@
 // check what ShowMessage writes.
 
 Import std.core
+Import std.os
 Import std.test
 Import std.text
 Import fbengine
@@ -24,16 +25,34 @@ Function OpenURLKeepsALinkHeadless()
     Expect(LastOpened() == "mailto:someone@example.com")
 End Function
 
+// On Windows, a path's link is UrlCreateFromPathW's, which the shell reads back: other than ASCII
+// as it is, and a UNC path's server its host; tests/app's C++ reads each back through the shell.
 @Test
-Function APathOpensAsItsFileLink()
+Function AWindowsPathOpensAsItsFileLink()
+    If System.Platform != Platform.WINDOWS Then Skip("Windows' paths")
     Window.SetHeadless(True)
-    Expect(OpenURL("/home/player/My Saves/slot 1.sav"))
-    Expect(LastOpened() == "file:///home/player/My%20Saves/slot%201.sav")
-    // A Windows drive is a path, not a scheme, and its backslashes are slashes.
     Expect(OpenURL("C:\\Games\\Notes #1.txt"))
     Expect(LastOpened() == "file:///C:/Games/Notes%20%231.txt")
     Expect(OpenURL("C:/Games/é.txt"))
-    Expect(LastOpened() == "file:///C:/Games/%C3%A9.txt")
+    Expect(LastOpened() == "file:///C:/Games/é.txt")
+    Expect(OpenURL("\\\\server\\share\\a b.txt"))
+    Expect(LastOpened() == "file://server/share/a%20b.txt")
+    // A drive's own folder, not the current one with "C:x.txt" on its end.
+    Expect(OpenURL("C:x.txt"))
+    Expect(LastOpened().StartsWith("file:///C:/"))
+    Expect(LastOpened().EndsWith("/x.txt"))
+    Expect(!LastOpened().Contains("C:x"))
+End Function
+
+// Elsewhere, it's RFC 8089's, its UTF-8 in %XX.
+@Test
+Function APosixPathOpensAsItsFileLink()
+    If System.Platform == Platform.WINDOWS Then Skip("POSIX's paths")
+    Window.SetHeadless(True)
+    Expect(OpenURL("/home/player/My Saves/slot 1.sav"))
+    Expect(LastOpened() == "file:///home/player/My%20Saves/slot%201.sav")
+    Expect(OpenURL("/home/José/é.txt"))
+    Expect(LastOpened() == "file:///home/Jos%C3%A9/%C3%A9.txt")
 End Function
 
 @Test

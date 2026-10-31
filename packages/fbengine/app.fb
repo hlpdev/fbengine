@@ -24,9 +24,11 @@ End Function
 
 /// Opens `url` as the OS does: a link like "https://example.com" in the player's browser, and a
 /// file or a folder, by its path, in the app the OS opens it with; a path that isn't absolute is
-/// from the current folder. It's the best the OS can do, False when it can't, which a game goes
-/// on without. Headless, it opens nothing and keeps the link, a path as its file:// link, which
-/// OpenedURLs gives.
+/// from the current folder (on Windows, the OS's own full path, as "C:x.txt" is from C:'s own
+/// folder). It's the best the OS can do, False when it can't, which a game goes on without.
+/// Headless, it opens nothing and keeps the link, a path as its file:// link, which OpenedURLs
+/// gives: on Windows the shell's own form, which leaves letters past ASCII as they are and puts a
+/// UNC path's server after "file://", and elsewhere RFC 8089's, its UTF-8 in %XX.
 @MainThread Public Function OpenURL(url: String): Bool => fbe_app_open_url(url)
 
 /// The links OpenURL kept headless, the first first, for a game's tests to check.

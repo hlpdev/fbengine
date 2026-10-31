@@ -24,8 +24,10 @@ extern "C" {
 FBE_API bool fbe_app_show_message(const char* title, const char* text, int32_t kind);
 
 // Opens a link in the OS's browser, or a file or folder, by its path, in the app the OS opens it
-// with; a path that isn't absolute is from the current folder. False if the OS can't. Headless,
-// it opens nothing, and keeps the link, a path as its file:// link, which the others give.
+// with; a path that isn't absolute is from the current folder (on Windows, the OS's own full
+// path, which resolves a drive's own folder too). False if the OS can't. Headless, it opens
+// nothing, and keeps the link, a path as its file:// link, which the others give: on Windows the
+// shell's own, UrlCreateFromPathW's, and elsewhere RFC 8089's, its UTF-8 in %XX.
 FBE_API bool fbe_app_open_url(const char* url);
 // The links fbe_app_open_url kept, headless, the first first; "" for no such one.
 FBE_API int32_t fbe_app_opened_count(void);
