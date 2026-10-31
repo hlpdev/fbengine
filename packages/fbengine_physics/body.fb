@@ -37,7 +37,8 @@ End Enum
 /// ```
 Public Final Class Body
     Field handle: UInt64
-    ReadOnly Field world: PhysicsWorld
+    // Its world keeps it while it's in it, so it doesn't keep its world.
+    ReadOnly Field world: Weak<PhysicsWorld>
     ReadOnly Field shape: Shape
 
     /// A body of `shape` in `world`, moving as `motion` says, at `position`, turned by `rotation`,
@@ -64,7 +65,8 @@ Public Final Class Body
     @MainThread Public Method Free()
         If handle == 0 Then Return
         fbe_body_free(handle)
-        world.Drop(handle)
+        Local in = world
+        If in != Null Then in.Drop(handle)
         handle = 0
     End Method
 
@@ -72,7 +74,13 @@ Public Final Class Body
     @MainThread Public Method Freed(): Bool => handle == 0
 
     /// The world the body's in.
-    @MainThread Public Method World(): PhysicsWorld => world
+    @MainThread Public Method World(): PhysicsWorld
+        Live("Body.World")
+        Local in = world
+        // A world that's gone has freed its bodies.
+        If in == Null Then Panic("Body.World: this Body was freed")
+        Return in
+    End Method
 
     /// The shape the body's made of.
     @MainThread Public Method Shape(): Shape => shape

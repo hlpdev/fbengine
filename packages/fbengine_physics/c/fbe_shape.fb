@@ -38,6 +38,7 @@ Public Extern "C" Lib "fbengine_physics_native"
                             indices: Ptr<UInt32>, index_count: Int32): UInt64
     Function fbe_shape_compound(parts: Ptr<fbe_shape_part_t>, count: Int32): UInt64
     Function fbe_shape_free(shape: UInt64): Bool
+    Function fbe_shape_count(): Int32
     Function fbe_shape_kind(shape: UInt64): Int32
     Function fbe_shape_bounds(shape: UInt64, low: Ptr<fbe_shape_vec3_t>,
                               high: Ptr<fbe_shape_vec3_t>): Bool

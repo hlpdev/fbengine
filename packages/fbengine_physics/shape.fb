@@ -154,6 +154,11 @@ Public Final Class Shape
         handle = 0
     End Method
 
+    // A shape dropped unfreed frees itself.
+    Method Destroy()
+        If handle != 0 Then fbe_shape_free(handle)
+    End Method
+
     /// Whether Free has freed the shape.
     @MainThread Public Method Freed(): Bool => handle == 0
 

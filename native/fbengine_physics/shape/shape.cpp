@@ -217,6 +217,10 @@ FBE_PHYSICS_API bool fbe_shape_free(uint64_t shape) {
     return find(shape) != nullptr && shapes().remove(shape);
 }
 
+FBE_PHYSICS_API int32_t fbe_shape_count(void) {
+    return static_cast<int32_t>(shapes().count());
+}
+
 FBE_PHYSICS_API int32_t fbe_shape_kind(uint64_t shape) {
     const shape_t* found = find(shape);
     return found != nullptr ? found->kind : 0;
