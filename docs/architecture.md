@@ -99,6 +99,10 @@ good modern engine on its own. Every structural choice is checked against both.
   well over 144 on a GTX 1060-class GPU, so about 2 ms a frame for the engine, CPU and GPU: batched
   draws, culling, no per-object overhead per frame. Each milestone measures its test scenes
   against it.
+- **Depth and clip space**: targets and the screen use reversed 32-bit float depth, cleared to 0,
+  1 at the near plane, compared GREATER_OR_EQUAL, and Vulkan's clip space, y down. Cameras build
+  their own projections for it; std.math's `Perspective` and `Frustum` are the general ones,
+  near 0 and far 1, y up, and the engine doesn't use them for drawing.
 - **A small frame graph**: each frame's passes (shadows, depth prepass, opaque, sky,
   transparent, post, 2D overlay) declare what they read and write; the graph orders them, places
   barriers, and reuses transient targets.
@@ -129,11 +133,11 @@ good modern engine on its own. Every structural choice is checked against both.
 - Paths are std.vfs's (`res://`), with folders in development and pak files in a release.
 - Loaders are C++ (fastgltf, KTX, stb_image), on worker threads.
   `Assets.Load<T>(path)` loads now; `Await Assets.LoadAsync<T>(path)` loads on a worker, and the
-  Task completes on the main thread at a Flip.
+  Task completes on the main thread at a Flip, or at a tick of the main scheduler while FB waits.
 - A cache keyed by normalized path hands out the same asset again, refcounted; `Free()` and the
   last reference let it go.
 - The cooker, typed references, and hot reload are E8's, and need a package build step from
-  FutureBlitz (docs/questions.md).
+  FutureBlitz, which 1.1 adds.
 - The engine loads modern formats only: glTF for meshes, scenes, and animation; KTX2, PNG, and
   JPEG for textures; OGG, WAV, and FLAC for sound. Converting anything else is a game's own
   tooling, outside the engine and the language (the user, 2026-10-31).
@@ -143,7 +147,8 @@ good modern engine on its own. Every structural choice is checked against both.
 - The API is the main thread's (`@MainThread`). Inside, the C++ core has one job system, a
   worker per core less one, which asset decoding, culling, animation, and collisions use;
   Jolt runs on its own pool.
-- Nothing calls into FB from a worker; finished work is queued and handed over at Flip.
+- Nothing calls into FB from a worker; finished work is queued and handed over at Flip, and at
+  the main scheduler's ticks while FB waits without one.
 
 ## How packages work together
 

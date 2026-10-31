@@ -34,9 +34,12 @@ fb is the installed release (`fb --version`); fb-bindgen is beside it.
 5. **Commit and push**: as hlpdev <hunterpollock2006@gmail.com>, short lowercase messages, small
    commits, no Claude attribution, no "wip" left. Push the branch. Never force-push: a rebased
    branch whose old commits were pushed goes up as `<branch>-2`.
-6. **Report** to the coordinator: the branch, the last commit, verify.py's result, the decisions
-   taken, and a paragraph for the history, in docs/history.md's style (what the step added, by
-   name). Then start the next step, unless the coordinator says otherwise.
+6. **Report** to the coordinator by ending the turn with the report, never by a message in the
+   middle of one: the branch, the last commit, verify.py's result, the decisions taken, and a
+   paragraph for the history, in docs/history.md's style (what the step added, by name). The
+   coordinator's messages (review findings, answers) only reach a lane between turns, so a lane
+   that keeps one turn going never gets them. Then the next turn starts the next step, after any
+   findings the coordinator has sent, which come first.
 
 ## Rules
 
@@ -64,3 +67,19 @@ before it counts. The lane fixes every confirmed finding with a test, runs verif
 reports again. The coordinator rebases the branch onto master (keeping its commits), runs
 verify.py on the result, fast-forwards master only once it prints "everything passed", watches
 CI, and updates docs/plan.md and the history.
+
+## When messages can't reach a lane
+
+The app stops the coordinator's messages after ten since the user last typed, so while the user
+is away (overnight), notes go through files in `C:/Users/Hunter/Projects/fbengine-notes/`
+instead, and a lane keeps one turn going:
+
+- After each step or set of fixes is pushed, the lane appends its report to
+  `from-<lane>.md` there, under a heading with the time and the last commit, and goes straight
+  on, without ending its turn.
+- Before each step and after each push, it reads `to-<lane>.md`, where the coordinator writes
+  findings and answers, each under a heading with its time. New entries come first, each fixed
+  with a test, and the next report names the headings it handled.
+- Work it waits on from another lane is looked for on `origin/master` at each step's start. Only
+  when nothing at all is left that it can do does it end its turn, with a report saying what it
+  waits on.
