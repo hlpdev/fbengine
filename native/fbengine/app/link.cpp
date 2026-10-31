@@ -3,8 +3,11 @@
 
 #include "app/app.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <SDL3/SDL_hints.h>
+#include <SDL3/SDL_init.h>
+#include <SDL3/SDL_video.h>
 #include <string>
 #include <string_view>
 
@@ -23,6 +26,14 @@ bool plain(unsigned char byte) {
     return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
            (byte >= '0' && byte <= '9') || byte == '-' || byte == '.' || byte == '_' ||
            byte == '~' || byte == '/' || byte == ':';
+}
+
+/// Whether `named` is `name`, in any case, as SDL compares its drivers' names.
+bool named_as(std::string_view named, std::string_view name) {
+    const auto lower = [](char c) {
+        return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+    };
+    return std::ranges::equal(named, name, {}, lower, lower);
 }
 
 void escape(std::string& link, unsigned char byte) {
@@ -119,9 +130,18 @@ bool shows_nothing(bool headless) {
     if (headless) {
         return true;
     }
-    const char* driver = SDL_GetHint(SDL_HINT_VIDEO_DRIVER);
-    const std::string_view named = driver != nullptr ? driver : "";
-    return named == "offscreen" || named == "dummy";
+    // The driver SDL started, once it has; before, the first it'd try, as it reads the hint: a
+    // list, by commas, in any case.
+    std::string_view named;
+    if (SDL_WasInit(SDL_INIT_VIDEO) != 0) {
+        const char* current = SDL_GetCurrentVideoDriver();
+        named = current != nullptr ? current : "";
+    } else {
+        const char* hint = SDL_GetHint(SDL_HINT_VIDEO_DRIVER);
+        named = hint != nullptr ? hint : "";
+        named = named.substr(0, named.find(','));
+    }
+    return named_as(named, "offscreen") || named_as(named, "dummy");
 }
 
 bool has_scheme(std::string_view url) {

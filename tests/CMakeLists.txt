@@ -79,7 +79,10 @@ if(FBENGINE_FB_TESTS)
       "show-message-offscreen|Missing file: rooms.ini isn't there\r?\nwent on"
       "binding-key-out-of-range|panic: Binding[.]OfKey[(]9999[)]: SDL has no such key"
       "binding-button-out-of-range|panic: Binding[.]OfMouseButton[(]0[)]: a mouse's buttons are 1 to 32"
-      "binding-nan-scale|panic: Binding[.]OfGamepadAxis: a scale is a finite number, not")
+      "binding-nan-scale|panic: Binding[.]OfGamepadAxis: a scale is a finite number, not"
+      "bind-unchecked|panic: Action[.]Bind: a key binding's code is 1 to 511, not 9999"
+      "bind-y-infinite|panic: Action[.]BindY: a binding's scale is a finite number, not Inf"
+      "replace-overflows|panic: Action[.]Replace: a binding's scale is a finite number, not Inf")
   foreach(case IN LISTS fbengine_input_cases)
     string(REPLACE "|" ";" case "${case}")
     list(GET case 0 name)

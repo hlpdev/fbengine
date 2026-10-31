@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <SDL3/SDL_hints.h>
+#include <SDL3/SDL_init.h>
 #include <string>
 #include <string_view>
 
@@ -33,6 +34,31 @@ TEST_CASE("nothing's shown headless, or on a video driver with no screen") {
     set_driver("dummy");
     CHECK(fbe::shows_nothing(false));
     set_driver("x11");
+    CHECK_FALSE(fbe::shows_nothing(false));
+    // SDL reads the hint as a list, the first it can start winning, in any case.
+    set_driver("offscreen,windows");
+    CHECK(fbe::shows_nothing(false));
+    set_driver("windows,offscreen");
+    CHECK_FALSE(fbe::shows_nothing(false));
+    set_driver("OFFSCREEN");
+    CHECK(fbe::shows_nothing(false));
+    set_driver("offscreenish");
+    CHECK_FALSE(fbe::shows_nothing(false));
+    set_driver("offscreen");
+}
+
+TEST_CASE("once the video's started, the driver it started is the one that counts") {
+    // SDL's offscreen driver starts only for its name in lowercase in the hint, whatever case its
+    // list's matched in; "OFFSCREEN" shows nothing above all the same, so a test never waits.
+    set_driver("offscreen");
+    const bool started = SDL_InitSubSystem(SDL_INIT_VIDEO);
+    INFO(SDL_GetError());
+    REQUIRE(started);
+    CHECK(fbe::shows_nothing(false));
+    // A hint set after it started changes nothing SDL does, nor this.
+    set_driver("windows");
+    CHECK(fbe::shows_nothing(false));
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
     CHECK_FALSE(fbe::shows_nothing(false));
     set_driver("offscreen");
 }
