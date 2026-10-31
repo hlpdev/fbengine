@@ -1,0 +1,26 @@
+name: Install fb
+description: Installs a FutureBlitz release from futureblitz.dev's install scripts and puts fb on PATH.
+
+inputs:
+  version:
+    description: The release, like 1.0.0
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - if: runner.os != 'Windows'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        curl -fsSL https://futureblitz.dev/install.sh | sh -s -- --version "$VERSION" --no-modify-path
+        echo "$HOME/.futureblitz/bin" >> "$GITHUB_PATH"
+
+    - if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        iex "& { $(irm https://futureblitz.dev/install.ps1) } -Version $env:VERSION -NoModifyPath"
+        "$env:USERPROFILE\.futureblitz\bin" >> $env:GITHUB_PATH

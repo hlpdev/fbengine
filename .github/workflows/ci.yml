@@ -1,8 +1,7 @@
 name: CI
 
-# Each target's DLLs are built as a release's are, Linux's in a manylinux_2_28 container (AlmaLinux
-# 8), so they run on glibc 2.28 as the programs fb builds do. Then fb's release installs on a plain
-# runner of each target, which runs the packages' tests and the examples on those DLLs.
+# Each target's DLLs (native.yml), then fb's release on a plain runner of each target, which runs
+# the packages' tests and the examples on those DLLs.
 
 on:
   push:
@@ -20,61 +19,7 @@ env:
 
 jobs:
   native:
-    name: native ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: windows-x64
-            os: windows-2025
-            shell: msys2 {0}
-            configure: -G Ninja
-          - target: linux-x64
-            os: ubuntu-22.04
-            container: quay.io/pypa/manylinux_2_28_x86_64
-            shell: bash
-          - target: linux-arm64
-            os: ubuntu-22.04-arm
-            container: quay.io/pypa/manylinux_2_28_aarch64
-            shell: bash
-          - target: macos-arm64
-            os: macos-15
-            shell: bash
-          - target: macos-x64
-            os: macos-15-intel
-            shell: bash
-    defaults:
-      run:
-        shell: ${{ matrix.shell }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install MinGW
-        if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: false
-          path-type: inherit
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-
-      - name: Build
-        run: |
-          cmake -S . -B build ${{ matrix.configure }} -DCMAKE_BUILD_TYPE=Release -DFBENGINE_BUILD_TESTS=OFF
-          cmake --build build --parallel
-          tar -cf native-${{ matrix.target }}.tar packages/*/native/${{ matrix.target }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: native-${{ matrix.target }}
-          path: native-${{ matrix.target }}.tar
-          if-no-files-found: error
+    uses: ./.github/workflows/native.yml
 
   test:
     name: test ${{ matrix.target }}
@@ -105,18 +50,9 @@ jobs:
         with:
           name: native-${{ matrix.target }}
 
-      - name: Install fb
-        if: runner.os != 'Windows'
-        run: |
-          curl -fsSL https://futureblitz.dev/install.sh | sh -s -- --version "$FB_VERSION" --no-modify-path
-          echo "$HOME/.futureblitz/bin" >> "$GITHUB_PATH"
-
-      - name: Install fb (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          iex "& { $(irm https://futureblitz.dev/install.ps1) } -Version $env:FB_VERSION -NoModifyPath"
-          "$env:USERPROFILE\.futureblitz\bin" >> $env:GITHUB_PATH
+      - uses: ./.github/actions/install-fb
+        with:
+          version: ${{ env.FB_VERSION }}
 
       - name: Test
         run: |
@@ -135,10 +71,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install fb
-        run: |
-          curl -fsSL https://futureblitz.dev/install.sh | sh -s -- --version "$FB_VERSION" --no-modify-path
-          echo "$HOME/.futureblitz/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/install-fb
+        with:
+          version: ${{ env.FB_VERSION }}
 
       # The .clang-format's keys need clang-format 19, which the runner's apt doesn't have; this is
       # the version Visual Studio's is.

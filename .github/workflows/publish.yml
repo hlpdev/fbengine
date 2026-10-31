@@ -1,0 +1,145 @@
+name: Publish
+
+# Publishes every package, at the version their project.toml says, to a registry, through trusted
+# publishing: each package trusts this workflow on the registry, so there's no stored token. It
+# runs by hand, on the tag v<version>: `gh workflow run publish.yml --ref v0.1.0 -f
+# registry=staging`. Each target's DLLs are built first (native.yml), into the packages' target
+# archives; then fb's release adds each package from the registry, on each target, and runs it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      registry:
+        description: The registry to publish to
+        type: choice
+        options: [staging, futureblitz]
+        default: staging
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  FB_VERSION: 1.0.0
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      index: ${{ steps.version.outputs.index }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tag is the version every package's project.toml says.
+      - id: version
+        env:
+          REGISTRY: ${{ inputs.registry }}
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' packages/fbengine/project.toml)"
+          if [ "$GITHUB_REF" != "refs/tags/v$version" ]; then
+            echo "::error::Publish runs on the tag v$version, not $GITHUB_REF"
+            exit 1
+          fi
+          for toml in packages/*/project.toml; do
+            if [ "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$toml")" != "$version" ]; then
+              echo "::error::$toml isn't version $version, as packages/fbengine's is"
+              exit 1
+            fi
+          done
+          case "$REGISTRY" in
+            staging) index=https://staging-index.futureblitz.dev/ ;;
+            futureblitz) index=futureblitz ;;
+            *) echo "::error::There's no registry $REGISTRY"; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "index=$index" >> "$GITHUB_OUTPUT"
+
+  native:
+    needs: version
+    uses: ./.github/workflows/native.yml
+
+  publish:
+    name: publish
+    needs: [version, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          merge-multiple: true
+
+      - uses: ./.github/actions/install-fb
+        with:
+          version: ${{ env.FB_VERSION }}
+
+      - name: Publish
+        env:
+          INDEX: ${{ needs.version.outputs.index }}
+        run: |
+          for archive in native-*.tar; do tar -xf "$archive"; done
+          for target in windows-x64 linux-x64 linux-arm64 macos-arm64 macos-x64; do
+            test -d "packages/fbengine/native/$target"
+          done
+          fb publish packages/fbengine --registry "$INDEX"
+
+  check:
+    name: check ${{ matrix.target }}
+    needs: [version, publish]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2025
+          - target: linux-x64
+            os: ubuntu-22.04
+          - target: linux-arm64
+            os: ubuntu-22.04-arm
+          - target: macos-arm64
+            os: macos-15
+          - target: macos-x64
+            os: macos-15-intel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/install-fb
+        with:
+          version: ${{ env.FB_VERSION }}
+
+      # A new game adds fbengine from the registry, as anyone would, and runs examples/hello's
+      # program with it. The registry's index can take a moment to show the new version.
+      - name: Add and run
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          INDEX: ${{ needs.version.outputs.index }}
+        run: |
+          fb new "$RUNNER_TEMP/game"
+          cp examples/hello/main.fb "$RUNNER_TEMP/game/main.fb"
+          cd "$RUNNER_TEMP/game"
+          registry=futureblitz
+          if [ "$INDEX" != futureblitz ]; then
+            registry=published
+            printf '\n[registries]\npublished = { index = "%s" }\n' "$INDEX" >> project.toml
+          fi
+          for attempt in 1 2 3 4 5 6; do
+            if fb add "fbengine@$VERSION" --registry "$registry"; then break; fi
+            if [ "$attempt" = 6 ]; then exit 1; fi
+            sleep 20
+          done
+          cat project.toml
+          output="$(fb --color never run | tr -d '\r')"
+          printf '%s\n' "$output"
+          test "$(printf '%s\n' "$output" | tail -n 1)" = "fbengine $VERSION"
