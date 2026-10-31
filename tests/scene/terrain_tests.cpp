@@ -351,3 +351,27 @@ TEST_CASE("a terrain that blocks sight blocks it", "[scene]") {
     CHECK(fbe_entity_can_see_point(eye, 4000.0F, 1.0F, 3000.0F) == 0);
     CHECK(fbe_entity_can_see_point(eye, 1000.0F, 1.0F, 1000.0F) == 1);
 }
+
+TEST_CASE("a pick straight down on a flat terrain hits it, at any height", "[scene]") {
+    // A flat piece's box has no height, so a line's sweep from where it enters it began on its
+    // plane, and a rounding put it behind: at 0.7, 0.9, and 1.7 here, and 2 where multiply-adds
+    // are fused, as arm64's are.
+    const test_world_t world;
+    const std::uint64_t terrain = fbe_entity_create(world.handle, 0, FBE_ENTITY_TERRAIN);
+    REQUIRE(fbe_terrain_set_size(terrain, 16));
+    fbe_entity_set_pick_mode(terrain, FBE_PICK_MESH);
+    for (const float height : { 2.0F, 0.7F, 0.9F, 1.7F }) {
+        std::vector<float> heights(std::size_t{ 17 } * 17, height);
+        REQUIRE(fbe_terrain_set_heights(terrain, heights.data(),
+                                        static_cast<std::int32_t>(heights.size())));
+        for (const float place : { 5.5F, 8.0F, 3.25F, 16.0F }) {
+            for (const float radius : { 0.0F, 0.3F }) {
+                const fbe_pick_t hit =
+                    pick(world.handle, at(place, 10.0F, place), at(place, -10.0F, place), radius);
+                CAPTURE(height, place, radius);
+                CHECK(hit.entity == terrain);
+                CHECK(near(hit.point.y, height));
+            }
+        }
+    }
+}
