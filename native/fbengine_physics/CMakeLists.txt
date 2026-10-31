@@ -13,11 +13,14 @@ set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
 set(PROFILER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
 set(ENABLE_OBJECT_STREAM OFF CACHE BOOL "" FORCE)
 set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
-# Jolt's own asserts in a debug build, which catch a call it doesn't take.
+# Jolt's own asserts and debug symbols in a debug build, which catch a call it doesn't take; a
+# release's DLL has neither.
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(USE_ASSERTS ON CACHE BOOL "" FORCE)
+  set(GENERATE_DEBUG_SYMBOLS ON CACHE BOOL "" FORCE)
 else()
   set(USE_ASSERTS OFF CACHE BOOL "" FORCE)
+  set(GENERATE_DEBUG_SYMBOLS OFF CACHE BOOL "" FORCE)
 endif()
 # No GPU compute: fbengine's renderer is the GPU's user.
 set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
