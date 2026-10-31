@@ -1,12 +1,18 @@
 // Emitters: places in the world that Channels play from.
 
+Import std.collections
 Import std.core
+Import std.ffi
 Import std.math
 Import "./audio"
 Import "./c/fbe_emitter"
 Import "./channel"
+Import "./follow"
 Import "./listener"
 Import "./sound"
+
+/// The Emitters that follow something, which Flip moves each frame.
+Global followed: Emitter[] = []
 
 /// How an Emitter's Channels get quieter with distance, past its near end.
 Public Enum Falloff
@@ -28,6 +34,10 @@ Public Final Class Emitter
     Field handle: UInt64
     Field position: Vec3
     Field velocity: Vec3
+    /// What it follows, where it was a frame ago, and whether it was anywhere yet.
+    Field follows: (Func(): Vec3)? = Null
+    Field followedFrom: Vec3
+    Field followedBefore: Bool = False
 
     /// An Emitter at the origin, at rest, whose Channels are at their full volume within 1 unit
     /// and get quieter inversely beyond it, with a rolloff of 1, and are pitched as in the world.
@@ -44,6 +54,7 @@ Public Final Class Emitter
     /// Lets it go, though its Channels play on where it was, at rest; using it after panics.
     /// Freeing it again does nothing. It's freed when nothing has it any more, too.
     @MainThread Public Method Free()
+        Unfollow()
         If handle != 0
             fbe_emitter_free(handle)
             handle = 0
@@ -52,6 +63,35 @@ Public Final Class Emitter
 
     /// Whether Free let it go.
     @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// Moves it each frame, at Flip, to where `where` says, and its Channels with it, at the
+    /// velocity of the move over the frame, which pitches them by the Doppler effect: how a sound
+    /// follows what's making it. Following something else stops following the first; Unfollow and
+    /// Free stop it. While it follows, it's kept.
+    @MainThread Public Method Follow(where: Func(): Vec3)
+        Live()
+        If follows == Null Then followed.Add(Self)
+        follows = where
+        followedBefore = False
+        followEmitters = MoveFollowed
+        StartFollowing()
+    End Method
+
+    /// Stops following what it follows, and leaves it where it is, at rest.
+    @MainThread Public Method Unfollow()
+        If follows == Null Then Return
+        follows = Null
+        For i = 0 Until followed.Count
+            If RefEquals(followed[i], Self)
+                followed.RemoveAt(i)
+                Break
+            End If
+        End For
+        If handle != 0 Then SetVelocity(Vec3(0, 0, 0))
+    End Method
+
+    /// Whether it follows something.
+    @MainThread Public Method Following(): Bool => follows != Null
 
     /// Puts it, and its Channels, at `position`.
     @MainThread Public Method SetPosition(position: Vec3)
@@ -129,3 +169,41 @@ Public Final Class Emitter
         Return handle
     End Method
 End Class
+
+// Each Emitter that follows something, to where it is, in one call to fbengine_audio_native. Those
+// that Flip found following are asked, in the order they began, and one that stopped or was freed
+// while another was asked is left out.
+Function MoveFollowed()
+    Local each: Emitter[] = []
+    each.AddAll(followed)
+    If each.Count == 0 Then Return
+    Local handles = Buffer<UInt64>(each.Count)
+    Local positions = Buffer<Float32>(each.Count * 3)
+    Local velocities = Buffer<Float32>(each.Count * 3)
+    Local placed = 0
+    For emitter In each
+        Local where = emitter.follows
+        If where == Null || emitter.handle == 0 Then Continue
+        Local now = where()
+        CheckVector(now, "where an Emitter follows")
+        If emitter.follows == Null || emitter.handle == 0 Then Continue
+        Local moving = Vec3(0, 0, 0)
+        If emitter.followedBefore Then moving = Moved(emitter.followedFrom, now)
+        emitter.position = now
+        emitter.velocity = moving
+        emitter.followedFrom = now
+        emitter.followedBefore = True
+        handles[placed] = emitter.handle
+        positions[placed * 3] = now.x
+        positions[placed * 3 + 1] = now.y
+        positions[placed * 3 + 2] = now.z
+        velocities[placed * 3] = moving.x
+        velocities[placed * 3 + 1] = moving.y
+        velocities[placed * 3 + 2] = moving.z
+        placed += 1
+    End For
+    Unsafe
+        fbe_emitter_place_all(handles.Pointer(), positions.Pointer(), velocities.Pointer(),
+                              placed As Int32)
+    End Unsafe
+End Function

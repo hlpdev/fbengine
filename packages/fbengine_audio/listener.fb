@@ -4,6 +4,7 @@ Import std.core
 Import std.math
 Import "./audio"
 Import "./c/fbe_listener"
+Import "./follow"
 
 /// Where sounds in the world, the Channels Emitters play, are heard from, which there's one of: a
 /// game puts it where its camera is, each frame. Its place, rotation, and velocity are in
@@ -13,6 +14,11 @@ Public Final Class Listener
     Static Field position: Vec3 = Vec3(0, 0, 0)
     Static Field rotation: Quat = Quat.Identity
     Static Field velocity: Vec3 = Vec3(0, 0, 0)
+    /// What it follows, where it was a frame ago, and whether it was anywhere yet.
+    Static Field follows: (Func(): Vec3)? = Null
+    Static Field turns: (Func(): Quat)? = Null
+    Static Field followedFrom: Vec3 = Vec3(0, 0, 0)
+    Static Field followedBefore: Bool = False
 
     Private New()
     End New
@@ -26,6 +32,43 @@ Public Final Class Listener
 
     /// Where it is.
     @MainThread Public Static Method Position(): Vec3 => position
+
+    /// Moves it each frame, at Flip, to where `where` says, turned as `turned` says, at the
+    /// velocity of the move over the frame: how it stays with the camera. Unfollow stops it.
+    @MainThread Public Static Method Follow(where: Func(): Vec3, turned: Func(): Quat)
+        follows = where
+        turns = turned
+        followedBefore = False
+        followListener = MoveListener
+        StartFollowing()
+    End Method
+
+    /// Stops following, and leaves it where it is, at rest.
+    @MainThread Public Static Method Unfollow()
+        If follows == Null Then Return
+        follows = Null
+        turns = Null
+        SetVelocity(Vec3(0, 0, 0))
+    End Method
+
+    /// Whether it follows something.
+    @MainThread Public Static Method Following(): Bool => follows != Null
+
+    // To where it follows, turned as it says, at the velocity of the move.
+    @MainThread Package Static Method MoveToFollowed()
+        Local where = follows
+        Local turned = turns
+        If where == Null || turned == Null Then Return
+        Local now = where()
+        CheckVector(now, "where the Listener follows")
+        Local moving = Vec3(0, 0, 0)
+        If followedBefore Then moving = Moved(followedFrom, now)
+        SetVelocity(moving)
+        SetPosition(now)
+        SetRotation(turned())
+        followedFrom = now
+        followedBefore = True
+    End Method
 
     /// Turns it by `rotation` from facing -Z with Y up, as a camera turned by it faces.
     @MainThread Public Static Method SetRotation(rotation: Quat)
@@ -66,4 +109,8 @@ Package Function CheckVector(vector: Vec3, what: String)
     If !IsFinite(vector.x) || !IsFinite(vector.y) || !IsFinite(vector.z)
         Panic("{what} is a vector of numbers, not {vector}")
     End If
+End Function
+
+Function MoveListener()
+    Listener.MoveToFollowed()
 End Function

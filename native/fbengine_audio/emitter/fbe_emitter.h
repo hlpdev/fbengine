@@ -18,6 +18,11 @@ FBE_AUDIO_API void fbe_emitter_free(uint64_t emitter);
 // Each of these moves its channels too; an emitter that's gone is nothing.
 FBE_AUDIO_API void fbe_emitter_set_position(uint64_t emitter, float x, float y, float z);
 FBE_AUDIO_API void fbe_emitter_set_velocity(uint64_t emitter, float x, float y, float z);
+// Places `count` emitters at once, as following what makes their sounds does each frame: each of
+// `emitters` at the three floats of `positions` at its index, moving at those of `velocities`.
+// Those that are gone are nothing.
+FBE_AUDIO_API void fbe_emitter_place_all(const uint64_t* emitters, const float* positions,
+                                         const float* velocities, int32_t count);
 // Within `nearest` units its channels are at their full volume, and past `farthest` no quieter;
 // false unless 0 < nearest <= farthest. (Windows defines near and far as macros.)
 FBE_AUDIO_API bool fbe_emitter_set_range(uint64_t emitter, float nearest, float farthest);

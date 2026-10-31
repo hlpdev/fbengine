@@ -27,7 +27,9 @@ A `Bus` groups channels under one volume, low-pass, and reverb, inside another b
 mix: music, effects, and voices at the volumes a player sets, or sounds muffled behind a wall.
 
 An `Emitter` plays sounds in the world, heard from the `Listener`: quieter with distance, panned to
-their side, and pitched by the Doppler effect. Its channels move with it. A `Channel` is one play of a
+their side, and pitched by the Doppler effect. Its channels move with it. An emitter that follows
+something, and the listener following the camera, are moved at each of fbengine's Flips, at the
+velocity of the move over the frame. A `Channel` is one play of a
 `Sound`; once it ends or is stopped, its methods do nothing, so a game can stop or ask about one
 whose sound ended long ago.
 
