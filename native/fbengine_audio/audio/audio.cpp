@@ -322,6 +322,32 @@ FBE_AUDIO_API const char* fbe_audio_device_name(void) {
     return mixer != nullptr ? mixer->device_name.c_str() : "";
 }
 
+FBE_AUDIO_API bool fbe_audio_lost(void) {
+    return mixer != nullptr && mixer->has_device &&
+           ma_device_get_state(&mixer->device) != ma_device_state_started;
+}
+
+FBE_AUDIO_API bool fbe_audio_simulate(int32_t event) {
+    if (mixer == nullptr || !mixer->has_device) {
+        return fbe::audio::fail("only a device's output is unplugged; start the audio on one");
+    }
+    // As miniaudio does when the OS says the output's gone, and when it says it's back.
+    switch (event) {
+    case FBE_AUDIO_SIMULATE_UNPLUG: {
+        const ma_result stopped = ma_device_stop(&mixer->device);
+        return stopped == MA_SUCCESS ||
+               fbe::audio::fail_ma("couldn't stop the audio device", stopped);
+    }
+    case FBE_AUDIO_SIMULATE_PLUG_IN: {
+        const ma_result started = ma_device_start(&mixer->device);
+        return started == MA_SUCCESS ||
+               fbe::audio::fail_ma("couldn't start the audio device", started);
+    }
+    default:
+        return fbe::audio::fail(std::format("there's no audio event {}", event));
+    }
+}
+
 FBE_AUDIO_API int32_t fbe_audio_sample_rate(void) {
     return mixer != nullptr ? static_cast<int32_t>(ma_engine_get_sample_rate(&mixer->engine)) : 0;
 }

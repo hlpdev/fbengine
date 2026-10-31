@@ -108,6 +108,24 @@ Public Final Class Audio
     /// Whether the mix is started.
     @MainThread Public Static Method Started(): Bool => fbe_audio_started()
 
+    /// Whether the device stopped on its own, though the mix is started, as one does when its
+    /// output's unplugged: nothing's mixed, so Channels wait where they are, until it starts again,
+    /// as it does on Windows when the output's plugged back in. A game can Stop and Start again, on
+    /// the default output or another of Outputs. False when it's stopped or on MANUAL.
+    @MainThread Public Static Method Lost(): Bool => fbe_audio_lost()
+
+    /// The device's output, unplugged as the OS would unplug it, which stops the device, for a
+    /// game's tests. It throws AudioError unless the audio's started on a device.
+    @MainThread Public Static Method SimulateUnplug() Throws AudioError
+        If !fbe_audio_simulate(FBE_AUDIO_SIMULATE_UNPLUG) Then Throw AudioError(LastError())
+    End Method
+
+    /// The device's output, plugged back in as the OS would, which starts the device again. It
+    /// throws AudioError unless the audio's started on a device.
+    @MainThread Public Static Method SimulatePlugIn() Throws AudioError
+        If !fbe_audio_simulate(FBE_AUDIO_SIMULATE_PLUG_IN) Then Throw AudioError(LastError())
+    End Method
+
     /// The device Start was given. Panics when it's stopped.
     @MainThread Public Static Method Device(): AudioDevice
         If !fbe_audio_started() Then Panic("the audio isn't started")
