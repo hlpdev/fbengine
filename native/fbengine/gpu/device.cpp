@@ -3,6 +3,7 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
 
 #include <algorithm>
@@ -546,6 +547,7 @@ bool start(VkSurfaceKHR surface) {
     }
     picked = index;
     started = true;
+    start_pipeline_cache();
     return true;
 }
 

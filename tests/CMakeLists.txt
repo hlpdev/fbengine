@@ -46,19 +46,33 @@ if(NOT fbengine_vulkan_driver STREQUAL "")
   set(fbengine_vulkan_environment "VK_DRIVER_FILES=${fbengine_vulkan_driver}")
 endif()
 
+# stb's PNGs, for the golden image harness; stb has no releases, so it's pinned to a commit.
+FetchContent_Declare(
+  stb
+  GIT_REPOSITORY https://github.com/nothings/stb.git
+  GIT_TAG 003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5
+  SOURCE_SUBDIR none
+)
+FetchContent_MakeAvailable(stb)
+
 # Vulkan with no window, on the system's loader, which volk loads, and the tests' driver; and the
-# GPU through fbengine_native's C API, whose DLL is copied beside them on Windows.
-add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp)
+# GPU through fbengine's C API and its insides, built in from fbengine_internal, with the golden
+# image harness (tests/golden/) and the tests' own shaders. Each test's tags are its labels, so
+# `ctest -L golden` runs the golden image tests, as tools/golden.py does.
+add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
+               gpu/pipeline_tests.cpp golden/golden.cpp golden/golden_tests.cpp
+               golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
-                      fbengine_native)
+                      fbengine_internal)
+target_include_directories(fbengine_gpu_tests SYSTEM PRIVATE "${stb_SOURCE_DIR}")
+target_include_directories(fbengine_gpu_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(fbengine_gpu_tests PRIVATE
+                           FBENGINE_GOLDEN_IMAGES="${CMAKE_CURRENT_SOURCE_DIR}/golden"
+                           FBENGINE_GOLDEN_FAILURES="${PROJECT_BINARY_DIR}/golden-failures")
 fbengine_set_warnings(fbengine_gpu_tests)
-if(WIN32)
-  add_custom_command(TARGET fbengine_gpu_tests POST_BUILD
-                     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                             "$<TARGET_FILE:fbengine_native>" "$<TARGET_FILE_DIR:fbengine_gpu_tests>"
-                     VERBATIM)
-endif()
-catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu."
+fbengine_add_shaders(fbengine_gpu_tests fbe::test_shaders test_shaders.hpp
+                     gpu/shaders/triangle.slang)
+catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
 

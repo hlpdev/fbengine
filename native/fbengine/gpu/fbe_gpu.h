@@ -51,6 +51,16 @@ FBE_API bool fbe_gpu_swapchain_vsync(void);
 // Whether the window's images are a headless window's own, not a swapchain's.
 FBE_API bool fbe_gpu_swapchain_headless(void);
 
+// Where the GPU keeps the pipelines it makes, so they're made faster the next time the program
+// runs: read as the GPU starts, if it's this GPU's and driver's, and written at the fbe_frame_flip
+// after new pipelines are made; "" keeps none. By default it's the user's cache folder's
+// fbengine/<program>/pipelines.bin (LOCALAPPDATA on Windows, ~/Library/Caches on macOS,
+// XDG_CACHE_HOME or ~/.cache elsewhere), or "" where they can't be found.
+FBE_API void fbe_gpu_set_pipeline_cache(const char* path);
+FBE_API const char* fbe_gpu_pipeline_cache(void);
+// How many pipelines the GPU has made.
+FBE_API int32_t fbe_gpu_pipelines(void);
+
 // How many errors Vulkan's validation layers found since the GPU started, which are on in a debug
 // build of the DLL when the layers are there, or when FBE_GPU_VALIDATION is 1 (and off when it's
 // 0); each is printed as it's found.

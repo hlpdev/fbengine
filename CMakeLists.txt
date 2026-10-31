@@ -31,6 +31,7 @@ include(cmake/warnings.cmake)
 include(cmake/native.cmake)
 include(cmake/sdl.cmake)
 include(cmake/vulkan.cmake)
+include(cmake/slang.cmake)
 
 add_subdirectory(native/fbengine)
 

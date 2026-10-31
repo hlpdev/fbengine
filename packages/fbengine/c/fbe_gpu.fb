@@ -21,6 +21,9 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_gpu_swapchain_height(): Int32
     Function fbe_gpu_swapchain_vsync(): Bool
     Function fbe_gpu_swapchain_headless(): Bool
+    Function fbe_gpu_set_pipeline_cache(path: CString)
+    Function fbe_gpu_pipeline_cache(): CString
+    Function fbe_gpu_pipelines(): Int32
     Function fbe_gpu_validation_errors(): Int32
     Function fbe_gpu_validating(): Bool
 End Extern

@@ -93,6 +93,26 @@ Public Class Gpu
     /// minimized.
     @MainThread Public Static Method Presented(): Int64 => fbe_gpu_presented()
 
+    /// Keeps the pipelines the GPU makes in the file at `path`, so they're made faster the next time
+    /// the program runs: it's read as the GPU starts, if this GPU and driver wrote it, and written
+    /// at the Flip after new pipelines are made. "" keeps none. By default it's the user's cache
+    /// folder's fbengine/<program>/pipelines.bin: LOCALAPPDATA on Windows, ~/Library/Caches on
+    /// macOS, and XDG_CACHE_HOME or ~/.cache elsewhere.
+    @MainThread Public Static Method SetPipelineCache(path: String)
+        fbe_gpu_set_pipeline_cache(path)
+    End Method
+
+    /// The file the GPU keeps its pipelines in, "" for none.
+    @MainThread Public Static Method PipelineCache(): String
+        Unsafe
+            Return fbe_gpu_pipeline_cache().ToString()
+        End Unsafe
+    End Method
+
+    /// How many pipelines the GPU has made: one for each way of drawing, which a debug overlay
+    /// can show.
+    @MainThread Public Static Method Pipelines(): Int32 => fbe_gpu_pipelines()
+
     /// Whether Vulkan's validation layers check what the GPU's asked to do: in a debug build of
     /// fbengine's DLL when they're installed, or when the FBE_GPU_VALIDATION variable is 1, and
     /// never when it's 0.

@@ -8,6 +8,8 @@
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/gpu.hpp"
+#include "gpu/image.hpp"
+#include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
 
 #include <algorithm>
@@ -325,39 +327,6 @@ void destroy_window() {
     }
 }
 
-/// The barrier that moves one of the window's images from `from` to `to`.
-VkImageMemoryBarrier2 transition(VkImage image, VkImageLayout from, VkImageLayout to,
-                                 VkPipelineStageFlags2 before_stages, VkAccessFlags2 before,
-                                 VkPipelineStageFlags2 after_stages, VkAccessFlags2 after) {
-    return {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-        .srcStageMask = before_stages,
-        .srcAccessMask = before,
-        .dstStageMask = after_stages,
-        .dstAccessMask = after,
-        .oldLayout = from,
-        .newLayout = to,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = image,
-        .subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .levelCount = 1,
-            .layerCount = 1,
-        },
-    };
-}
-
-void barrier(const fbe::gpu::device_t& gpu, VkCommandBuffer commands,
-             const VkImageMemoryBarrier2& image) {
-    const VkDependencyInfo dependency{
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &image,
-    };
-    gpu.pipeline_barrier(commands, &dependency);
-}
-
 /// Records the frame's commands into the window's image `index`: cleared, then left to be
 /// presented, or, a headless window's, to be copied from. A headless window's one image is drawn
 /// by each frame in flight, which the first barrier orders after the frame before's copies.
@@ -372,9 +341,9 @@ void record(const fbe::gpu::device_t& gpu, VkCommandBuffer commands, std::uint32
     const auto write = flag<VkAccessFlags2>(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
     const auto copy = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COPY_BIT);
     const auto copy_read = flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT);
-    barrier(gpu, commands,
-            transition(images[index], VK_IMAGE_LAYOUT_UNDEFINED,
-                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, output | copy, 0, output, write));
+    fbe::gpu::barrier(commands, fbe::gpu::color_transition(images[index], VK_IMAGE_LAYOUT_UNDEFINED,
+                                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                           output | copy, 0, output, write));
     const VkRenderingAttachmentInfo color{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .imageView = views[index],
@@ -393,14 +362,15 @@ void record(const fbe::gpu::device_t& gpu, VkCommandBuffer commands, std::uint32
     gpu.begin_rendering(commands, &rendering);
     gpu.end_rendering(commands);
     if (swapchain != VK_NULL_HANDLE) {
-        barrier(gpu, commands,
-                transition(images[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                           VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, output, write,
-                           flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_NONE), 0));
+        fbe::gpu::barrier(commands, fbe::gpu::color_transition(
+                                        images[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, output, write,
+                                        flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_NONE), 0));
     } else {
-        barrier(gpu, commands,
-                transition(images[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output, write, copy, copy_read));
+        fbe::gpu::barrier(commands, fbe::gpu::color_transition(
+                                        images[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output, write, copy,
+                                        copy_read));
     }
     vkEndCommandBuffer(commands);
 }
@@ -474,7 +444,11 @@ void gpu_window_closing() {
 
 void gpu_present(bool wait) {
     gpu::device_t* found = gpu::device();
-    if (found == nullptr || window == nullptr || fbe_window_minimized()) {
+    if (found == nullptr) {
+        return;
+    }
+    gpu::save_pipeline_cache();
+    if (window == nullptr || fbe_window_minimized()) {
         return;
     }
     gpu::device_t& gpu = *found;

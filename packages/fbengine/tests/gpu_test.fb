@@ -5,6 +5,7 @@
 Import std.core
 Import std.os
 Import std.test
+Import std.text
 Import fbengine
 Import fbengine.c.fbe_gpu
 
@@ -133,4 +134,16 @@ Function TheDeviceCantBeSetToOneThatIsntThere() Throws GraphicsError
     Local count = (Try Gpu.Devices()).Count
     Expect(!fbe_gpu_set_device(count))
     Expect(!fbe_gpu_set_device(-2))
+End Function
+
+@Test
+Function ThePipelineCacheIsTheUsersByDefaultAndCanBeNone()
+    Local path = Gpu.PipelineCache()
+    Defer Gpu.SetPipelineCache(path)
+    Expect(path.EndsWith("/pipelines.bin"))
+    Gpu.SetPipelineCache("")
+    Expect(Gpu.PipelineCache() == "")
+    Gpu.SetPipelineCache("cache/here.bin")
+    Expect(Gpu.PipelineCache() == "cache/here.bin")
+    Expect(Gpu.Pipelines() >= 0)
 End Function

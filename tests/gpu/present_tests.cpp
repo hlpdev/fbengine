@@ -5,8 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdint>
-#include <fbengine.h>
 #include <cstdlib>
+#include <fbengine.h>
 #include <string>
 #include <string_view>
 
