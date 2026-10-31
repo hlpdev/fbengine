@@ -43,3 +43,12 @@ bool frame_counts_t::current() const {
 }
 
 } // namespace fbe
+
+extern "C" {
+
+FBE_API const char* fbe_input_sdl_hint(const char* name) {
+    const char* value = name != nullptr ? SDL_GetHint(name) : nullptr;
+    return value != nullptr ? value : "";
+}
+
+} // extern "C"

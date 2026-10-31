@@ -33,6 +33,10 @@ bool start_video() {
     if (headless) {
         SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
     }
+    // SDL otherwise turns a hidden cursor's frequent warps into relative mode by itself, above
+    // about 33 frames a second, which changes MoveMouse's units with the frame rate; mouse look
+    // asks for relative mode instead.
+    SDL_SetHint(SDL_HINT_MOUSE_EMULATE_WARP_WITH_RELATIVE, "0");
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
         return fail_sdl("couldn't start the video");
     }

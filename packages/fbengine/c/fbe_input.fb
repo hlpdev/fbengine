@@ -56,6 +56,10 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_input_gamepad_connected(pad: UInt64): Bool
     Function fbe_input_gamepad_name(pad: UInt64): CString
     Function fbe_input_gamepad_type(pad: UInt64): Int32
+    Function fbe_input_gamepad_guid(pad: UInt64): CString
+    Function fbe_input_gamepad_serial(pad: UInt64): CString
+    Function fbe_input_gamepad_player_index(pad: UInt64): Int32
+    Function fbe_input_gamepad_set_player_index(pad: UInt64, index: Int32): Bool
     Function fbe_input_gamepad_down(pad: UInt64, button: Int32): Bool
     Function fbe_input_gamepad_hits(pad: UInt64, button: Int32): Int32
     Function fbe_input_gamepad_ups(pad: UInt64, button: Int32): Int32
@@ -77,6 +81,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_input_joystick_removed_at(index: Int32): UInt64
     Function fbe_input_joystick_connected(stick: UInt64): Bool
     Function fbe_input_joystick_name(stick: UInt64): CString
+    Function fbe_input_joystick_guid(stick: UInt64): CString
+    Function fbe_input_joystick_serial(stick: UInt64): CString
     Function fbe_input_joystick_type(stick: UInt64): Int32
     Function fbe_input_joystick_is_gamepad(stick: UInt64): Bool
     Function fbe_input_joystick_axis_count(stick: UInt64): Int32
@@ -87,6 +93,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_input_joystick_hits(stick: UInt64, button: Int32): Int32
     Function fbe_input_joystick_ups(stick: UInt64, button: Int32): Int32
     Function fbe_input_joystick_hat(stick: UInt64, hat: Int32): Int32
+    Function fbe_input_sdl_hint(name: CString): CString
     Function fbe_input_simulate_key(key: Int32, down: Bool, repeat: Bool): Bool
     Function fbe_input_simulate_text(text: CString): Bool
     Function fbe_input_simulate_composition(text: CString, start: Int32, length: Int32): Bool
@@ -94,7 +101,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_input_simulate_mouse_motion(x: Float32, y: Float32): Bool
     Function fbe_input_simulate_mouse_button(button: Int32, down: Bool, clicks: Int32): Bool
     Function fbe_input_simulate_mouse_wheel(x: Float32, y: Float32): Bool
-    Function fbe_input_simulate_gamepad(name: CString): UInt64
+    Function fbe_input_simulate_gamepad(name: CString, rumbles: Bool): UInt64
     Function fbe_input_simulate_joystick(name: CString, type: Int32, axes: Int32, buttons: Int32,
                                          hats: Int32): UInt64
     Function fbe_input_simulate_unplug(device: UInt64): Bool

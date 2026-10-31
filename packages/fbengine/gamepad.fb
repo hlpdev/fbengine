@@ -4,7 +4,9 @@
 Import std.collections
 Import std.core
 Import std.ffi
+Import std.math
 Import "./c/fbe_input"
+Import "./frame"
 Import "./window"
 
 /// A gamepad's button, by where it is on the pad: SOUTH is Xbox's A, PlayStation's Cross, and
@@ -85,11 +87,13 @@ Public Struct DeadZones
     Public Field Trigger: Float32
 End Struct
 
-/// A gamepad SDL maps, which stays the same object while it's connected and after, though a pad
-/// that connects again is a new Gamepad; everything about one that's disconnected is "", False,
-/// or 0.
+/// A gamepad SDL maps, which stays the same object while it's connected, and for the Flip that
+/// reads it disconnecting; a pad that connects again is a new Gamepad, which Guid, Serial, and
+/// PlayerIndex tell a game is the same pad. Everything about one that's disconnected is "",
+/// False, or 0.
 Public Final Class Gamepad Implements Printable
     Static Field known: Map<UInt64, Gamepad> = {}
+    Static Field forgetting: Bool = False
     Field id: UInt64
 
     Private New(id: UInt64)
@@ -102,7 +106,29 @@ Public Final Class Gamepad Implements Printable
         If found != Null Then Return found
         Local pad = Gamepad(id)
         known[id] = pad
+        If !forgetting
+            forgetting = True
+            Frame.OnFlip(ForgetGamepads)
+        End If
         Return pad
+    End Method
+
+    // Drops the Gamepads disconnected before the last Flip, which nothing lists any more.
+    @MainThread Package Static Method Forget()
+        Local gone: UInt64[] = []
+        For id In known.Keys()
+            If !fbe_input_gamepad_connected(id) && !DisconnectedNow(id) Then gone.Add(id)
+        End For
+        For id In gone
+            known.Remove(id)
+        End For
+    End Method
+
+    @MainThread Static Method DisconnectedNow(id: UInt64): Bool
+        For index = 0 To fbe_input_gamepads_removed_count() - 1
+            If fbe_input_gamepad_removed_at(index) == id Then Return True
+        End For
+        Return False
     End Method
 
     /// Whether it was connected when the last Flip read the OS's events.
@@ -120,6 +146,31 @@ Public Final Class Gamepad Implements Printable
         Local type = fbe_input_gamepad_type(id)
         If type < 0 || type > GamepadType.GAMECUBE As Int32 Then Return GamepadType.STANDARD
         Return type As GamepadType
+    End Method
+
+    /// Its GUID, which every pad of its kind on its bus shares: 32 hex digits, "" once it's
+    /// disconnected.
+    @MainThread Public Method Guid(): String
+        Unsafe
+            Return fbe_input_gamepad_guid(id).ToString()
+        End Unsafe
+    End Method
+
+    /// Its serial number, which tells two pads of a kind apart, "" when it has none.
+    @MainThread Public Method Serial(): String
+        Unsafe
+            Return fbe_input_gamepad_serial(id).ToString()
+        End Unsafe
+    End Method
+
+    /// The player it's for, from 0, which its lights show on pads that have them; -1 for none.
+    @MainThread Public Method PlayerIndex(): Int32 => fbe_input_gamepad_player_index(id)
+
+    /// Makes it the pad of player `index`, from 0, or of none with -1. Panics for one under -1;
+    /// a pad that's disconnected is left as it is.
+    @MainThread Public Method SetPlayerIndex(index: Int32)
+        If index < -1 Then Panic("SetPlayerIndex({index}): a player's index is 0 or more, or -1")
+        fbe_input_gamepad_set_player_index(id, index)
     End Method
 
     /// Whether `button` was held when the last Flip read the OS's events.
@@ -153,15 +204,24 @@ Public Final Class Gamepad Implements Printable
     End Method
 
     /// Rumbles its low frequency motor, the heavy one, and its high frequency one, from 0 to 1, for
-    /// `seconds`, replacing the rumble before; Rumble(0, 0, 0) stops it. False if it can't.
+    /// `seconds`, from a millisecond to 65.535 seconds at most, replacing the rumble before; 0
+    /// seconds stops it. It's the best the pad can do: False when it can't rumble or isn't
+    /// connected, which a game goes on without. Panics for a time under 0, or NaN.
     @MainThread Public Method Rumble(low: Float32, high: Float32, seconds: Float64): Bool
+        CheckTime("Rumble", seconds)
         Return fbe_input_gamepad_rumble(id, low, high, seconds)
     End Method
 
-    /// Rumbles the motors in its triggers, which Xbox One's and Series' pads have, from 0 to 1, for
-    /// `seconds`. False if it can't.
+    /// Rumbles the motors in its triggers, which Xbox One's and Series' pads have, as Rumble does.
     @MainThread Public Method RumbleTriggers(left: Float32, right: Float32, seconds: Float64): Bool
+        CheckTime("RumbleTriggers", seconds)
         Return fbe_input_gamepad_rumble_triggers(id, left, right, seconds)
+    End Method
+
+    Static Method CheckTime(call: String, seconds: Float64)
+        If IsNaN(seconds) || seconds < 0.0
+            Panic("{call}: a rumble lasts 0 seconds or more, not {seconds}")
+        End If
     End Method
 
     Public Method ToString(): String
@@ -172,8 +232,9 @@ Public Final Class Gamepad Implements Printable
 End Class
 
 /// The gamepads connected, as the last Flip read them, in the order they connected. The first
-/// call starts SDL's gamepads, which can take a moment, so a game asks as it starts; none if they
-/// can't start.
+/// call, or GamepadsConnected's, starts SDL's gamepads, which can take a moment, so a game asks
+/// as it starts; the pads connected already connect at the next Flip, as any other does. None if
+/// they can't start.
 @MainThread Public Function Gamepads(): Gamepad[]
     Local pads: Gamepad[] = []
     For index = 0 To fbe_input_gamepad_count() - 1
@@ -204,6 +265,11 @@ End Function
 /// connections, until the next Flip; buttons held stay held.
 @MainThread Public Function FlushGamepads()
     fbe_input_flush_gamepads()
+End Function
+
+// Frame's hook, which Gamepad.Of adds.
+Function ForgetGamepads()
+    Gamepad.Forget()
 End Function
 
 /// Sets every gamepad's dead zones, 0.2 for sticks and 0.1 for triggers at first; panics for a

@@ -23,12 +23,9 @@ void gamepad_event(const SDL_Event& event);
 /// The joysticks' part of input_event.
 void joystick_event(const SDL_Event& event);
 
-/// Starts SDL's gamepads and joysticks, the first time they're asked for, and opens those
-/// connected already; false, saying why, if they can't start.
+/// Starts SDL's gamepads and joysticks, the first time they're asked for; false, saying why, if
+/// they can't start. Those connected already are read connecting at the next fbe_frame_flip.
 bool start_gamepads();
-
-/// Opens the joysticks connected as SDL's joysticks start.
-void open_joysticks();
 
 /// Zeroes what the last Flip counted of the joysticks.
 void flush_joysticks();

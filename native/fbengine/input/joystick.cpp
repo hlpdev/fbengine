@@ -6,6 +6,7 @@
 #include "input/input.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <SDL3/SDL.h>
@@ -117,15 +118,6 @@ const fbe::button_t* button_of(std::uint64_t stick, std::int32_t button) {
 
 namespace fbe {
 
-void open_joysticks() {
-    int found = 0;
-    SDL_JoystickID* ids = SDL_GetJoysticks(&found);
-    for (int index = 0; ids != nullptr && index < found; ++index) {
-        open(ids[index]);
-    }
-    SDL_free(ids);
-}
-
 void flush_joysticks() {
     zero_counts();
 }
@@ -194,6 +186,9 @@ FBE_API uint64_t fbe_input_joystick_at(int32_t index) {
 }
 
 FBE_API int32_t fbe_input_joysticks_added_count(void) {
+    if (!fbe::start_gamepads()) {
+        return 0;
+    }
     return count_of(added);
 }
 
@@ -202,6 +197,9 @@ FBE_API uint64_t fbe_input_joystick_added_at(int32_t index) {
 }
 
 FBE_API int32_t fbe_input_joysticks_removed_count(void) {
+    if (!fbe::start_gamepads()) {
+        return 0;
+    }
     return count_of(removed);
 }
 
@@ -217,6 +215,25 @@ FBE_API const char* fbe_input_joystick_name(uint64_t stick) {
     const stick_t* found = stick_of(stick);
     const char* named = found != nullptr ? SDL_GetJoystickName(found->joystick) : nullptr;
     name = named != nullptr ? named : "";
+    return name.c_str();
+}
+
+FBE_API const char* fbe_input_joystick_guid(uint64_t stick) {
+    const stick_t* found = stick_of(stick);
+    name.clear();
+    if (found != nullptr) {
+        std::array<char, 33> text{};
+        SDL_GUIDToString(SDL_GetJoystickGUID(found->joystick), text.data(),
+                         static_cast<int>(text.size()));
+        name = text.data();
+    }
+    return name.c_str();
+}
+
+FBE_API const char* fbe_input_joystick_serial(uint64_t stick) {
+    const stick_t* found = stick_of(stick);
+    const char* serial = found != nullptr ? SDL_GetJoystickSerial(found->joystick) : nullptr;
+    name = serial != nullptr ? serial : "";
     return name.c_str();
 }
 

@@ -70,7 +70,11 @@ if(FBENGINE_FB_TESTS)
       "key-out-of-range|panic: Simulate[.]KeyDown[(]9999[)]: SDL has no such key"
       "button-out-of-range|panic: Simulate[.]MouseDown[(]33[)]: a mouse's buttons are 1 to 32"
       "draws-composition|draws False\r?\ndraws True\r?\ndraws True\r?\npanic: who draws the composition is set before"
-      "key-name-before-video|A A\r?\npanic: headless is set before")
+      "key-name-before-video|A A\r?\npanic: headless is set before"
+      "rumble-negative|panic: Rumble: a rumble lasts 0 seconds or more, not -1"
+      "rumble-nan|panic: RumbleTriggers: a rumble lasts 0 seconds or more, not"
+      "joystick-sizes|panic: Simulate[.]ConnectJoystick: a joystick has 0 to 255 axes, buttons, and hats, not 0, 256, and 0"
+      "pads-before-start|before a Flip True\r?\neach connects at the first True\r?\nand once True")
   foreach(case IN LISTS fbengine_input_cases)
     string(REPLACE "|" ";" case "${case}")
     list(GET case 0 name)

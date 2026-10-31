@@ -1,8 +1,10 @@
 // The mouse, through Simulate's mouse, offscreen.
 
 Import std.core
+Import std.ffi
 Import std.test
 Import fbengine
+Import fbengine.c.fbe_input
 
 @Test
 Function TheMouseIsWhereTheLastFlipReadIt() Throws GraphicsError
@@ -60,19 +62,19 @@ Function MoveMouseIsNoMotion() Throws GraphicsError
 End Function
 
 @Test
-Function RelativeModeCountsRawMotion() Throws GraphicsError
+Function RelativeModeCountsRawMotion() Throws GraphicsError, InputError
     Window.SetHeadless(True)
     Try Graphics(320, 200)
     Defer EndGraphics()
     Expect(!MouseRelative())
-    SetMouseRelative(True)
+    Try SetMouseRelative(True)
     Expect(MouseRelative())
     Try Simulate.MouseMotion(7.0, -3.0)
     Try Simulate.MouseMotion(5.0, 1.0)
     Flip()
     Expect(MouseXSpeed() == 12.0)
     Expect(MouseYSpeed() == -2.0)
-    SetMouseRelative(False)
+    Try SetMouseRelative(False)
     Expect(!MouseRelative())
 End Function
 
@@ -144,6 +146,46 @@ Function TheWheelCountsNotchesAndWholeSteps() Throws GraphicsError
     Flip()
     Expect(MouseWheel() == 0.0)
     Expect(MouseWheelSteps() == 0)
+End Function
+
+// A leftover fraction never cancels a turn the other way, and FlushMouse forgets it.
+@Test
+Function AWheelTurnedBackStartsItsStepsAfresh() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.Wheel(0.75)
+    Flip()
+    Try Simulate.Wheel(-1.0)
+    Flip()
+    Expect(MouseWheelSteps() == -1)
+    Try Simulate.Wheel(0.75)
+    Flip()
+    FlushMouse()
+    Try Simulate.Wheel(0.5)
+    Flip()
+    Expect(MouseWheelSteps() == 0)
+End Function
+
+// SDL would otherwise turn a hidden cursor's warps into relative mode by itself, above about 33
+// frames a second, so MoveMouse's units would change with the frame rate.
+@Test
+Function MoveMouseNeverTurnsIntoRelativeMode() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local hint = CString.From("SDL_MOUSE_EMULATE_WARP_WITH_RELATIVE")
+    Unsafe
+        Expect(fbe_input_sdl_hint(hint).ToString() == "0")
+        hint.Free()
+    End Unsafe
+    SetCursorVisible(False)
+    Defer SetCursorVisible(True)
+    For frame = 1 To 10
+        MoveMouse(160.0, 100.0)
+        Flip()
+    End For
+    Expect(!MouseRelative())
 End Function
 
 @Test

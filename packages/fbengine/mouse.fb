@@ -3,6 +3,7 @@
 
 Import std.core
 Import "./c/fbe_input"
+Import "./input"
 Import "./window"
 
 /// A mouse's button, by its number, from 1 to 32; the Enum's open to the ones past the side
@@ -87,15 +88,18 @@ End Function
     fbe_input_set_cursor_visible(visible)
 End Function
 
-/// Whether the mouse's cursor shows over the window.
+/// Whether the mouse's cursor shows over the window, as SetCursorVisible said; relative mode hides
+/// it too, which this doesn't say.
 @MainThread Public Function CursorVisible(): Bool => fbe_input_cursor_visible()
 
 /// Puts the mouse in relative mode, for mouse look, or takes it out: the cursor hidden and held
 /// in the window, and MouseXSpeed and MouseYSpeed the mouse's own raw counts, which the OS's speed
-/// and acceleration leave alone, so it never stops at the window's edge. Headless, where there's
-/// no mouse to hold, it's only what was set. Panics without a window.
-@MainThread Public Function SetMouseRelative(relative: Bool)
-    If !fbe_input_set_mouse_relative(relative) Then Panic(LastError())
+/// and acceleration leave alone, so it never stops at the window's edge; on macOS, the OS gives
+/// its accelerated motion. Headless, where there's no mouse to hold, it's only what was set. Throws
+/// when the OS can't (X11 without XInput2), and panics without a window.
+@MainThread Public Function SetMouseRelative(relative: Bool) Throws InputError
+    If !Window.Open() Then Panic("SetMouseRelative: there's no window; Graphics opens one")
+    If !fbe_input_set_mouse_relative(relative) Then Throw InputError(LastError())
 End Function
 
 /// Whether the mouse is in relative mode.
