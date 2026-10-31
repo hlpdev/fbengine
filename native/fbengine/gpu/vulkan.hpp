@@ -58,6 +58,10 @@ struct frame_t {
     buffer_t ring;
     std::byte* ring_data = nullptr;
     VkDeviceSize ring_used = 0;
+    /// Two timestamps, as the frame's commands begin and end, where the device has them, and
+    /// whether its last submit wrote them, to be read once the GPU's done with it.
+    VkQueryPool timer = VK_NULL_HANDLE;
+    bool timed = false;
 };
 
 /// The device the GPU started on, and what it draws with. Vulkan 1.3's names for dynamic
@@ -72,6 +76,10 @@ struct device_t {
     VkPhysicalDeviceProperties properties{};
     /// The most anisotropy its samplers take, 0 if it has none.
     float max_anisotropy = 0.0F;
+    /// How many bits of a timestamp its queue writes, 0 if it writes none, and how many
+    /// nanoseconds one counts.
+    std::uint32_t timestamp_bits = 0;
+    float timestamp_period = 0.0F;
     PFN_vkCmdBeginRendering begin_rendering = nullptr;
     PFN_vkCmdEndRendering end_rendering = nullptr;
     PFN_vkCmdPipelineBarrier2 pipeline_barrier = nullptr;
@@ -196,6 +204,10 @@ enum class fault_t : std::uint8_t {
     WORK_NOW,
     /// Making a sampler.
     SAMPLER,
+    /// Submitting a frame, as the device is lost.
+    LOST,
+    /// Listing the devices, as if each lacked dynamic rendering.
+    LACKS,
 };
 
 /// Makes the next `fault` happen.
@@ -210,5 +222,20 @@ bool start_with_window();
 
 /// Keeps a Vulkan call's failure for fbe_error(), with what was being done, and returns false.
 bool fail_vulkan(std::string_view doing, VkResult result);
+
+/// Whether the GPU was lost, as a driver's crash or reset loses it: nothing runs on it from then
+/// on, and what needs it fails, saying so, until it's stopped and started again.
+bool lost();
+/// Keeps that the GPU was lost if `result` says it was; whether it was.
+bool lose(VkResult result);
+/// Keeps for fbe_error() that the GPU was lost, and returns false.
+bool fail_lost();
+
+/// Counts what the frame does, for the counters a debug overlay shows (fbe_gpu_counters): draws
+/// and their triangles, as passes record them, which they count themselves; the graph's passes
+/// and barriers, as it's recorded; and the bytes uploaded, as textures and buffers are written.
+void count_draws(std::uint64_t draws, std::uint64_t triangles);
+void count_passes(std::uint32_t passes, std::uint32_t barriers);
+void count_upload(std::uint64_t bytes);
 
 } // namespace fbe::gpu

@@ -19,6 +19,7 @@
 #include <string_view>
 #include <test_shaders.hpp>
 #include <texture/texture.hpp>
+#include <utility>
 #include <vector>
 
 using fbe::gpu::resource_t;
@@ -548,6 +549,46 @@ TEST_CASE("a frame drawn through transient targets matches its golden image", "[
     stop_gpu();
 }
 
+// The last frame's counters: the draws and triangles its passes counted, Flip's present's too, its
+// passes and barriers, the bytes it uploaded, and, a frame or two on, the GPU's time over it.
+TEST_CASE("the last frame's counters say what it did", "[gpu]") {
+    open(64, 32);
+    const std::uint64_t texture = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(texture != 0);
+    fbe_frame_flip(false);
+    const std::vector<std::uint8_t> pixels(64, 255);
+    require(fbe_texture_write(texture, 0, 0, 4, 4, pixels.data(), 16));
+    require(fbe::gpu::add_pass({
+        .name = "counted",
+        .colors = { { .target = fbe::gpu::texture_resource(fbe_gpu_screen()) } },
+        .record = [](VkCommandBuffer /*commands*/) { fbe::gpu::count_draws(3, 12); },
+    }));
+    fbe_frame_flip(false);
+    fbe_gpu_counters_t counters{};
+    require(fbe_gpu_counters(&counters));
+    CHECK(counters.draws == 4);
+    CHECK(counters.triangles == 13);
+    CHECK(counters.passes == 2);
+    CHECK(std::cmp_equal(counters.barriers, fbe::gpu::last_recorded().barriers));
+    CHECK(counters.uploaded == 64);
+    CHECK(counters.transient_images == 0);
+    fbe_frame_flip(false);
+    fbe_frame_flip(false);
+    fbe_frame_flip(false);
+    require(fbe_gpu_counters(&counters));
+    CHECK(counters.draws == 1);
+    CHECK(counters.uploaded == 0);
+    if (fbe::gpu::device()->timestamp_bits > 0) {
+        CHECK(counters.gpu_milliseconds >= 0.0F);
+        WARN("the GPU's time over an empty 64x32 frame: " << counters.gpu_milliseconds << " ms");
+    } else {
+        CHECK(counters.gpu_milliseconds == -1.0F);
+    }
+    CHECK(!fbe_gpu_counters(nullptr));
+    fbe_window_close();
+    stop_gpu();
+}
+
 // Not a check, a measure: what the graph costs the CPU for a 1280x720 frame of 65 passes, 32
 // transient targets each drawn, then drawn into the screen sampling four textures besides, and
 // the present: adding them, and recording them, with what their own commands cost, timed, the
@@ -622,9 +663,12 @@ TEST_CASE("a frame of 65 passes through the graph, timed", "[gpu]") {
     const std::chrono::duration<double, std::milli> spent =
         std::chrono::steady_clock::now() - started;
     CHECK(fbe::gpu::transient_images() == 2);
+    fbe_gpu_counters_t counters{};
+    require(fbe_gpu_counters(&counters));
     WARN("65 passes: adding " << adding.count() / frames << " ms, recording "
                               << recording.count() / frames << " ms, the frame "
-                              << spent.count() / frames << " ms, on "
+                              << spent.count() / frames << " ms, the GPU's "
+                              << counters.gpu_milliseconds << " ms, on "
                               << fbe_gpu_device_name(fbe_gpu_device()));
     fbe_window_close();
     stop_gpu();

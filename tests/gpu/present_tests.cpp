@@ -5,6 +5,7 @@
 
 #include "gpu_testing.hpp"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdint>
@@ -312,5 +313,55 @@ TEST_CASE("work run now whose commands can't be made leaks nothing, and runs nex
     CHECK(!fbe::gpu::run_now([](VkCommandBuffer /*commands*/) {}));
     CHECK(std::string(fbe_error()).starts_with("couldn't make the GPU's commands for work now"));
     CHECK(fbe::gpu::run_now([](VkCommandBuffer /*commands*/) {}));
+    stop_gpu();
+}
+
+// The GPU's lost as a submit is: nothing runs from then on, Flip presents nothing, what needs the
+// GPU says it was lost, and stopping and starting it makes it again.
+TEST_CASE("a lost GPU runs nothing, says so, and starts again", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    fbe_gpu_set_pipeline_cache("");
+    require(fbe_window_open(64, 32, FBE_WINDOW_WINDOWED));
+    require(fbe_gpu_start());
+    const std::uint64_t texture = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(texture != 0);
+    require(fbe_texture_clear(texture, 1.0F, 0.0F, 0.0F, 1.0F));
+    const std::int64_t presented = fbe_gpu_presented();
+    fbe::gpu::inject(fbe::gpu::fault_t::LOST);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_lost());
+    CHECK(fbe_gpu_presented() == presented);
+    const std::string lost = "the GPU was lost, as a driver's crash or reset loses it; stopping it "
+                             "and starting it again makes it again";
+    CHECK(fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8, false) == 0);
+    CHECK(std::string(fbe_error()) == lost);
+    // A pass is still added, and dropped, as nothing runs.
+    require(fbe_texture_clear(texture, 0.0F, 1.0F, 0.0F, 1.0F));
+    std::array<std::uint8_t, 64> pixels{};
+    CHECK(!fbe_texture_read(texture, 0, pixels.data(), 64));
+    CHECK(std::string(fbe_error()) == lost);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == presented);
+    stop_gpu();
+    CHECK(!fbe_gpu_lost());
+    require(fbe_gpu_start());
+    const std::int64_t again = fbe_gpu_presented();
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == again + 1);
+    stop_gpu();
+}
+
+// Every device lacks dynamic rendering, as a GPU from before Vulkan 1.3 can: the GPU doesn't start,
+// and says which lacks what, as each device does.
+TEST_CASE("a GPU that lacks what fbengine needs says what it lacks", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    fbe::gpu::inject(fbe::gpu::fault_t::LACKS);
+    CHECK(!fbe_gpu_start());
+    const std::string why = fbe_error();
+    CHECK(why.starts_with("no GPU has what fbengine needs: "));
+    CHECK(why.contains(fbe_gpu_device_name(0)));
+    CHECK(why.ends_with("dynamic rendering"));
+    CHECK(std::string_view(fbe_gpu_device_lacks(0)).ends_with("dynamic rendering"));
+    CHECK(!fbe_gpu_started());
     stop_gpu();
 }

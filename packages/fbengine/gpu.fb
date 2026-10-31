@@ -34,6 +34,24 @@ Public Struct GpuDevice Implements Printable
     Public Method ToString(): String => "{Name} ({Kind})"
 End Struct
 
+/// What the last frame did, as a debug overlay shows it.
+Public Struct GpuCounters
+    /// The draws its passes recorded, and their triangles.
+    Public Field Draws: Int64
+    Public Field Triangles: Int64
+    /// The bytes it uploaded: the pixels and data written into textures and buffers.
+    Public Field Uploaded: Int64
+    /// Its passes, what draws into a target or copies into a texture, and the image barriers
+    /// between them.
+    Public Field Passes: Int32
+    Public Field Barriers: Int32
+    /// The images transient targets have, kept for the frames that ask for them.
+    Public Field TransientImages: Int32
+    /// How long the GPU took over its commands, in milliseconds, a frame or two behind; -1 until
+    /// it's known, and where the GPU writes no timestamps.
+    Public Field GpuMilliseconds: Float32
+End Struct
+
 /// The GPU fbengine draws with, Vulkan 1.2 on a device that has dynamic rendering,
 /// synchronization2, descriptor indexing, and buffer device addresses. It starts the first time something needs it:
 /// Graphics, for a window that's shown; for a headless one, the first thing that draws, or Start.
@@ -82,6 +100,22 @@ Public Class Gpu
 
     /// Whether the GPU has started.
     @MainThread Public Static Method Started(): Bool => fbe_gpu_started()
+
+    /// Whether the GPU was lost, as a driver's crash or reset loses it: from then on nothing
+    /// draws, Flip shows nothing, and what needs the GPU throws or panics, saying so, until Stop
+    /// and Start make it again; nothing made on it before is left, so a game makes its textures
+    /// again.
+    @MainThread Public Static Method Lost(): Bool => fbe_gpu_lost()
+
+    /// What the last frame did, as a debug overlay shows it.
+    @MainThread Public Static Method Counters(): GpuCounters
+        Local counters = fbe_gpu_counters_t(0, 0, 0, 0, 0, 0, -1.0)
+        Unsafe
+            fbe_gpu_counters(AddressOf(counters))
+        End Unsafe
+        Return GpuCounters(counters.draws, counters.triangles, counters.uploaded, counters.passes,
+                           counters.barriers, counters.transient_images, counters.gpu_milliseconds)
+    End Method
 
     /// The name of the device the GPU started on, "" before it starts.
     @MainThread Public Static Method Name(): String

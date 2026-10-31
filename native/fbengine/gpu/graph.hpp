@@ -118,6 +118,9 @@ std::uint64_t resource_texture(resource_t resource);
 /// are dropped. The frame's submits record it first.
 bool record_graph();
 
+/// Drops the passes added since the graph was last recorded, unrecorded, as a lost GPU runs none.
+void drop_passes();
+
 /// What the graph's last recording did: the passes it recorded, by name, in order, and the level
 /// each was in; how many it dropped; the image barriers it placed, and the commands that placed
 /// them; and the transient targets' images it made.

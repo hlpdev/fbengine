@@ -443,6 +443,7 @@ bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std
     vmaFlushAllocation(gpu.allocator, memory, 0, VK_WHOLE_SIZE);
     fbe::gpu::after_frame(
         [buffer, memory] { vmaDestroyBuffer(fbe::gpu::device()->allocator, buffer, memory); });
+    fbe::gpu::count_upload(buffer_info.size);
 
     const VkBufferImageCopy region{
         .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1 },
@@ -488,6 +489,9 @@ bool checked(std::int32_t width, std::int32_t height, std::int32_t format) {
     }
     if (!fbe::gpu::start_with_window()) {
         return false;
+    }
+    if (fbe::gpu::lost()) {
+        return fbe::gpu::fail_lost();
     }
     const auto largest =
         static_cast<std::int32_t>(fbe::gpu::device()->properties.limits.maxImageDimension2D);

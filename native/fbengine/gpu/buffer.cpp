@@ -179,6 +179,7 @@ bool write_buffer(const buffer_t& buffer, VkDeviceSize offset, std::span<const s
     std::memcpy(mapped, bytes.data(), bytes.size());
     after_frame(
         [staging] { vmaDestroyBuffer(device()->allocator, staging.buffer, staging.memory); });
+    count_upload(bytes.size());
     VkCommandBuffer commands = upload_commands();
     buffer_barrier(commands, buffer.buffer, readers, 0, transfer, transfer_write);
     const VkBufferCopy region{ .dstOffset = offset, .size = bytes.size() };

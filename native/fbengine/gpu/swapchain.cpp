@@ -407,6 +407,7 @@ void draw_screen(VkCommandBuffer commands, fbe::gpu::resource_t screen, const Vk
                        flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0, sizeof(constants),
                        &constants);
     vkCmdDraw(commands, 3, 1, 0, 0);
+    fbe::gpu::count_draws(1, 1);
 }
 
 /// Adds the frame's last pass to the graph, into the window's image `index`: cleared, the screen
@@ -533,8 +534,8 @@ void gpu_present(bool wait) {
     }
     gpu::save_pipeline_cache();
     const gpu::device_t& gpu = *found;
-    // A frame with nowhere to present still runs what it recorded.
-    if (!presentable(gpu, wait)) {
+    // A frame with nowhere to present still runs what it recorded; a lost GPU's runs nothing.
+    if (gpu::lost() || !presentable(gpu, wait)) {
         update_screen();
         gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE);
         return;
@@ -547,6 +548,7 @@ void gpu_present(bool wait) {
         const VkResult acquired = vkAcquireNextImageKHR(gpu.device, swapchain, UINT64_MAX,
                                                         frame.acquired, VK_NULL_HANDLE, &index);
         if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+            gpu::lose(acquired);
             stale = stale || acquired == VK_ERROR_OUT_OF_DATE_KHR;
             update_screen();
             gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE);
@@ -576,6 +578,7 @@ void gpu_present(bool wait) {
         .pImageIndices = &index,
     };
     const VkResult result = vkQueuePresentKHR(gpu.queue, &present);
+    gpu::lose(result);
     stale = stale || result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
         ++presented;

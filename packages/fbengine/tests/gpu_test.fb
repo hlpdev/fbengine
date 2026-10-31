@@ -3,6 +3,7 @@
 // 1 and skips them.
 
 Import std.core
+Import std.math
 Import std.os
 Import std.test
 Import std.text
@@ -179,4 +180,28 @@ Function ThePipelineCacheIsTheUsersByDefaultAndCanBeNone()
     Gpu.SetPipelineCache("cache/here.bin")
     Expect(Gpu.PipelineCache() == "cache/here.bin")
     Expect(Gpu.Pipelines() >= 0)
+End Function
+
+@Test
+Function TheLastFramesCountersSayWhatItDid() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(64, 32)
+    Defer EndGraphics()
+    Try Gpu.Start()
+    Local texture = Try Texture(4, 4, TextureFormat.RGBA8, False)
+    Defer texture.Free()
+    texture.Clear(Color(1, 0, 0, 1))
+    Flip()
+    // The clear and Flip's present, which draws one triangle.
+    Local counters = Gpu.Counters()
+    Expect(counters.Passes == 2)
+    Expect(counters.Draws == 1)
+    Expect(counters.Triangles == 1)
+    Expect(counters.Barriers >= 2)
+    Flip()
+    Flip()
+    Expect(Gpu.Counters().Passes == 1)
+    Expect(Gpu.Counters().Uploaded == 0)
+    Expect(!Gpu.Lost())
 End Function

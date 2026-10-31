@@ -816,9 +816,16 @@ bool record_graph() {
     if (recorded.dropped < added.size()) {
         record_levels(levels);
     }
+    count_passes(static_cast<std::uint32_t>(recorded.passes.size()), recorded.barriers);
     empty();
     recording = false;
     return made;
+}
+
+void drop_passes() {
+    if (!recording) {
+        empty();
+    }
 }
 
 const recorded_t& last_recorded() {

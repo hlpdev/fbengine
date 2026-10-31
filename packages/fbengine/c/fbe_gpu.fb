@@ -12,6 +12,16 @@ Public Const FBE_GPU_INTEGER: Int32 = 2
     Public Field height: Int32
 End Struct
 
+@CLayout Public Struct fbe_gpu_counters_t
+    Public Field draws: Int64
+    Public Field triangles: Int64
+    Public Field uploaded: Int64
+    Public Field passes: Int32
+    Public Field barriers: Int32
+    Public Field transient_images: Int32
+    Public Field gpu_milliseconds: Float32
+End Struct
+
 Public Const FBE_GPU_OTHER: Int32 = 0
 Public Const FBE_GPU_INTEGRATED: Int32 = 1
 Public Const FBE_GPU_DISCRETE: Int32 = 2
@@ -28,6 +38,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_gpu_start(): Bool
     Function fbe_gpu_started(): Bool
     Function fbe_gpu_stop()
+    Function fbe_gpu_lost(): Bool
     Function fbe_gpu_presented(): Int64
     Function fbe_gpu_swapchain_width(): Int32
     Function fbe_gpu_swapchain_height(): Int32
@@ -51,6 +62,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_gpu_scaling(): Int32
     Function fbe_gpu_scaling_smooth(): Bool
     Function fbe_gpu_screen_area(area: Ptr<fbe_gpu_rect_t>): Bool
+    Function fbe_gpu_counters(counters: Ptr<fbe_gpu_counters_t>): Bool
     Function fbe_gpu_validation_errors(): Int32
     Function fbe_gpu_validating(): Bool
 End Extern

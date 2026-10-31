@@ -26,6 +26,21 @@ typedef struct fbe_gpu_rect_t {
     int32_t height;
 } fbe_gpu_rect_t;
 
+// What the last frame did, as a debug overlay shows it: the draws its passes recorded and their
+// triangles, the bytes it uploaded, its passes and the image barriers between them, the images
+// transient targets have, and how long the GPU took over its commands, in milliseconds, a frame or
+// two behind, and -1 until it's known or where the GPU writes no timestamps.
+// NOLINTNEXTLINE(modernize-use-using)
+typedef struct fbe_gpu_counters_t {
+    int64_t draws;
+    int64_t triangles;
+    int64_t uploaded;
+    int32_t passes;
+    int32_t barriers;
+    int32_t transient_images;
+    float gpu_milliseconds;
+} fbe_gpu_counters_t;
+
 // What kind of GPU a device is, as its driver says.
 #define FBE_GPU_OTHER      0
 #define FBE_GPU_INTEGRATED 1
@@ -56,6 +71,10 @@ FBE_API bool fbe_gpu_started(void);
 // Stops the GPU, if it's started, freeing everything it made, the window's swapchain first; the
 // window stays open, and the GPU can start again.
 FBE_API void fbe_gpu_stop(void);
+// Whether the GPU was lost, as a driver's crash or reset loses it: from then on nothing draws,
+// fbe_frame_flip shows nothing, and what needs the GPU fails, saying so, until fbe_gpu_stop and
+// fbe_gpu_start make it again, and with it everything on it, as nothing made before is left.
+FBE_API bool fbe_gpu_lost(void);
 
 // How many frames fbe_frame_flip has presented, which skips them while the window is minimized.
 // A headless window's are drawn into an image of its own, its size in pixels, which nothing shows.
@@ -115,6 +134,9 @@ FBE_API bool fbe_gpu_scaling_smooth(void);
 // The part of the window the screen there is now is shown in, in the window's pixels; false
 // without a window.
 FBE_API bool fbe_gpu_screen_area(fbe_gpu_rect_t* area);
+
+// Fills `counters` with what the last frame did; false if there are none to fill.
+FBE_API bool fbe_gpu_counters(fbe_gpu_counters_t* counters);
 
 // How many errors Vulkan's validation layers have found since the program started, which are on
 // in a debug build of the DLL when the layers are there, or when FBE_GPU_VALIDATION is 1 (and off

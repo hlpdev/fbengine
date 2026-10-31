@@ -53,6 +53,8 @@ fbe::gpu::fault_t injected = fbe::gpu::fault_t::NONE;
 
 bool validating = false;
 std::int32_t validation_errors = 0;
+/// Whether the GPU was lost, until it's stopped.
+bool gpu_lost = false;
 VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
 
 bool has_extension(const std::vector<VkExtensionProperties>& extensions, std::string_view name) {
@@ -325,10 +327,16 @@ bool list_devices(VkSurfaceKHR surface) {
     std::vector<VkPhysicalDevice> physicals(count);
     vkEnumeratePhysicalDevices(vulkan, &count, physicals.data());
     candidates.clear();
+    // A test makes every device lack something, as a GPU from before Vulkan 1.3 might.
+    const bool lacking = fbe::gpu::faulted(fbe::gpu::fault_t::LACKS);
     for (VkPhysicalDevice physical : physicals) {
         candidate_t candidate{ .physical = physical };
         vkGetPhysicalDeviceProperties(physical, &candidate.properties);
         candidate.lacks = lacks_of(physical, candidate.properties, surface);
+        if (lacking) {
+            candidate.lacks +=
+                candidate.lacks.empty() ? "dynamic rendering" : ", dynamic rendering";
+        }
         candidates.push_back(std::move(candidate));
     }
     return true;
@@ -477,6 +485,13 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     current.end_rendering = core13 ? vkCmdEndRendering : vkCmdEndRenderingKHR;
     current.pipeline_barrier = core13 ? vkCmdPipelineBarrier2 : vkCmdPipelineBarrier2KHR;
     current.queue_submit = core13 ? vkQueueSubmit2 : vkQueueSubmit2KHR;
+    std::uint32_t families = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(candidate.physical, &families, nullptr);
+    std::vector<VkQueueFamilyProperties> family_properties(families);
+    vkGetPhysicalDeviceQueueFamilyProperties(candidate.physical, &families,
+                                             family_properties.data());
+    current.timestamp_bits = family_properties[current.family].timestampValidBits;
+    current.timestamp_period = candidate.properties.limits.timestampPeriod;
 
     VmaAllocatorCreateInfo allocator_info{
         .flags = flag<VmaAllocatorCreateFlags>(VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT),
@@ -502,6 +517,17 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
             !fbe::gpu::remake_frame(current, frame)) {
             return false;
         }
+        // A frame's GPU time is only counted where the queue writes timestamps; a timer that
+        // can't be made leaves it uncounted.
+        const VkQueryPoolCreateInfo timer_info{
+            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+            .queryType = VK_QUERY_TYPE_TIMESTAMP,
+            .queryCount = 2,
+        };
+        if (current.timestamp_bits > 0 &&
+            vkCreateQueryPool(current.device, &timer_info, nullptr, &frame.timer) != VK_SUCCESS) {
+            frame.timer = VK_NULL_HANDLE;
+        }
     }
     return true;
 }
@@ -512,6 +538,7 @@ void destroy_device() {
     if (current.device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(current.device);
         for (const fbe::gpu::frame_t& frame : current.frames) {
+            vkDestroyQueryPool(current.device, frame.timer, nullptr);
             vkDestroySemaphore(current.device, frame.acquired, nullptr);
             vkDestroyFence(current.device, frame.done, nullptr);
             vkDestroyCommandPool(current.device, frame.pool, nullptr);
@@ -622,6 +649,7 @@ void stop() {
         started = false;
         picked = -1;
     }
+    gpu_lost = false;
     candidates.clear();
     if (vulkan != VK_NULL_HANDLE) {
         if (messenger != VK_NULL_HANDLE) {
@@ -662,6 +690,20 @@ bool remake_frame(const device_t& gpu, frame_t& frame) {
     return result == VK_SUCCESS
                ? true
                : fail_vulkan("couldn't make a frame's fence and semaphore", result);
+}
+
+bool lost() {
+    return gpu_lost;
+}
+
+bool lose(VkResult result) {
+    gpu_lost = gpu_lost || result == VK_ERROR_DEVICE_LOST;
+    return result == VK_ERROR_DEVICE_LOST;
+}
+
+bool fail_lost() {
+    return fail("the GPU was lost, as a driver's crash or reset loses it; stopping it and starting "
+                "it again makes it again");
 }
 
 void inject(fault_t fault) {
@@ -727,6 +769,10 @@ FBE_API bool fbe_gpu_started(void) {
 
 FBE_API void fbe_gpu_stop(void) {
     fbe::gpu::stop();
+}
+
+FBE_API bool fbe_gpu_lost(void) {
+    return gpu_lost;
 }
 
 FBE_API int32_t fbe_gpu_validation_errors(void) {

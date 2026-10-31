@@ -131,6 +131,9 @@ bool run_now(const std::function<void(VkCommandBuffer)>& record) {
     if (gpu == nullptr) {
         return fail("the GPU hasn't started");
     }
+    if (lost()) {
+        return fail_lost();
+    }
     if (!start_immediate(*gpu)) {
         return false;
     }
@@ -156,6 +159,9 @@ bool run_now(const std::function<void(VkCommandBuffer)>& record) {
         result = vkWaitForFences(gpu->device, 1, &done, VK_TRUE, UINT64_MAX);
     }
     vkResetFences(gpu->device, 1, &done);
+    if (lose(result)) {
+        return fail_lost();
+    }
     return result == VK_SUCCESS ? true : fail_vulkan("the GPU couldn't run its work", result);
 }
 
