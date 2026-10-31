@@ -70,6 +70,8 @@ float unpack_right(std::uint64_t both) {
 
 /// How long a change of a channel's gains is ramped over, however many mixes that takes.
 constexpr double ramp_seconds = 0.005;
+/// A sound's stop time when nothing's to stop it, as miniaudio makes one.
+constexpr ma_uint64 never = ~ma_uint64{ 0 };
 
 /// A channel's gains: a node after its sound, in the mix's channels, that multiplies each side of
 /// a stereo mix by its own gain, the channel's volume and pan together, or every channel of
@@ -93,9 +95,13 @@ struct gains_t {
     ma_uint32 ramp_left = 0;
     ma_uint32 ramp_frames = 1;
     ma_uint32 channels = 0;
-    /// The mixing thread's: whether it's been mixed, before which nothing of it has been heard, so
-    /// its first mix takes its gains at once, as a play and then a volume set make them.
-    bool mixed = false;
+    /// Whether it's been mixed since its sound first started, before which nothing of it has been
+    /// heard, so its first mix takes its gains at once, as a play and then a volume set make them:
+    /// the mixing thread sets it, and a paused play's first resume clears it, since miniaudio
+    /// mixes the node while its sound is stopped too.
+    std::atomic<bool> mixed = false;
+    /// The mixing thread's, under the live lock: whether a pause silences it, whatever its gains.
+    std::atomic<bool> silenced = false;
 };
 
 // miniaudio's signature for a node's processing.
@@ -105,14 +111,15 @@ void process_gains(ma_node* node, const float** in, ma_uint32* /*in_count*/, flo
     // NOLINTEND(misc-const-correctness, readability-non-const-parameter)
     auto* gains = static_cast<gains_t*>(node);
     const std::uint64_t target = gains->target.load(std::memory_order_acquire);
-    const float left = unpack_left(target);
-    const float right = unpack_right(target);
+    const bool silenced = gains->silenced.load(std::memory_order_acquire);
+    const float left = silenced ? 0.0F : unpack_left(target);
+    const float right = silenced ? 0.0F : unpack_right(target);
     // A new pair is ramped to from where the gains are, over a whole ramp.
-    if (!gains->mixed) {
+    if (!gains->mixed.load(std::memory_order_acquire)) {
         gains->left = gains->to_left = left;
         gains->right = gains->to_right = right;
         gains->ramp_left = 0;
-        gains->mixed = true;
+        gains->mixed.store(true, std::memory_order_release);
     } else if (left != gains->to_left || right != gains->to_right) {
         const auto steps = static_cast<float>(gains->ramp_frames);
         gains->to_left = left;
@@ -179,9 +186,16 @@ struct voice_t {
     bool has_gains = false;
     bool joined = false;
     bool paused = false;
+    /// The main thread's: whether its sound has been started, so something of it may have been
+    /// heard.
+    bool started = false;
+    /// Under the live lock: whether the mixing thread has silenced its gains and set its sound to
+    /// stop on the pause's ramp's last frame.
+    bool pause_set = false;
     /// Whether it plays from an emitter, which pans it itself.
     bool spatial = false;
-    /// Whether its gains go to silence, whatever its volume and pan, as it pauses or stops.
+    /// Whether its gains go to silence, whatever its volume and pan, as it stops; a pause's are its
+    /// gains' silenced.
     bool muted = false;
     /// Where its going quiet is, under the live lock.
     quieting_t quieting = quieting_t::NONE;
@@ -513,6 +527,7 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
         voice->joined = true;
     }
     voice->paused = how.paused;
+    voice->started = !how.paused;
     if (!how.paused) {
         result = ma_sound_start(&voice->sound);
         if (result != MA_SUCCESS) {
@@ -551,6 +566,15 @@ void before_mix() {
     channels_t& all = channels();
     const std::scoped_lock lock(all.live_lock);
     for (voice_t* voice : all.live) {
+        // A pause's ramp starts with this mix, and its sound stops on the ramp's last frame, so
+        // what's read of it is what's heard.
+        if (voice->quieting == quieting_t::PAUSING && !voice->pause_set) {
+            voice->gains.silenced.store(true, std::memory_order_release);
+            ma_sound_set_stop_time_in_pcm_frames(
+                &voice->sound,
+                ma_engine_get_time_in_pcm_frames(engine()) + voice->gains.ramp_frames);
+            voice->pause_set = true;
+        }
         if (voice->unlooped.exchange(false, std::memory_order_acq_rel)) {
             end_loop(*voice);
         }
@@ -614,21 +638,27 @@ FBE_AUDIO_API void fbe_channel_stop(uint64_t channel) try {
     fbe::audio::out_of_memory();
 }
 
-// A pause ramps to silence first, and the mixing thread stops the sound once it's there.
+// A pause before anything of it is heard stops its sound at once. Otherwise it ramps to silence
+// from the next mix, and its sound stops on the ramp's last frame, which the mixing thread sets.
 FBE_AUDIO_API void fbe_channel_pause(uint64_t channel) {
     voice_t* voice = find(channel);
     if (voice == nullptr || voice->paused) {
         return;
     }
     voice->paused = true;
-    voice->muted = true;
-    apply_pan(*voice);
     const std::scoped_lock lock(channels().live_lock);
+    if (!voice->started || !voice->gains.mixed.load(std::memory_order_acquire)) {
+        ma_sound_stop(&voice->sound);
+        // Unheard, it's as if it never started: its first resume takes its gains at once.
+        voice->started = false;
+        voice->quieting = quieting_t::PAUSED;
+        return;
+    }
     voice->quieting = quieting_t::PAUSING;
 }
 
-// A resume ramps back from silence: a pause still ramping only turns round; one the mixing
-// thread finished starts its sound again; one that started paused just starts.
+// A resume ramps back from silence: a pause still ramping only turns round, its stop taken back;
+// one the mixing thread finished starts its sound again; one never heard starts at its gains.
 FBE_AUDIO_API void fbe_channel_resume(uint64_t channel) {
     voice_t* voice = find(channel);
     if (voice == nullptr || !voice->paused) {
@@ -636,14 +666,19 @@ FBE_AUDIO_API void fbe_channel_resume(uint64_t channel) {
     }
     {
         const std::scoped_lock lock(channels().live_lock);
+        ma_sound_set_stop_time_in_pcm_frames(&voice->sound, never);
+        voice->gains.silenced.store(false, std::memory_order_release);
+        voice->pause_set = false;
         if (voice->quieting != quieting_t::PAUSING) {
+            if (!voice->started) {
+                voice->gains.mixed.store(false, std::memory_order_release);
+            }
             ma_sound_start(&voice->sound);
+            voice->started = true;
         }
         voice->quieting = quieting_t::NONE;
     }
     voice->paused = false;
-    voice->muted = false;
-    apply_pan(*voice);
 }
 
 FBE_AUDIO_API bool fbe_channel_set_volume(uint64_t channel, float volume) try {
