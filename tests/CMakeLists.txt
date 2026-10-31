@@ -367,3 +367,25 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.loading PROPERTIES TIMEOUT 120
                        PASS_REGULAR_EXPRESSION "Running loading[^\n]*\nloading\r?\nloaded\r?\n$")
 endif()
+
+# The loaders' decoders, built into the tests from their own sources, with libktx's writer and
+# encoder, which make the KTX2 files the tests read, and stb_image_write, the PNGs and JPEGs.
+add_executable(fbengine_assets_tests assets/images_tests.cpp assets/models_tests.cpp
+               assets/files.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/image.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/gltf.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/stb.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")
+target_include_directories(fbengine_assets_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+# stb_image_write's code, C as it's written, without fbengine's C++ warnings.
+add_library(fbengine_stb_write STATIC assets/stb_write.c)
+target_link_libraries(fbengine_stb_write PUBLIC fbengine_stb)
+target_link_libraries(fbengine_assets_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
+                      fastgltf::fastgltf)
+fbengine_set_warnings(fbengine_assets_tests)
+catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets."
+                     DL_PATHS "${fbengine_test_dll_paths}")
