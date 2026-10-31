@@ -1,0 +1,91 @@
+// Skins: joints bound to entities by name, and the palette a skinned Mesh is drawn with, posed by a
+// Player; with no window or GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+// Whether `m` takes `point` to `to`.
+Function Takes(m: Mat4, point: Vec3, to: Vec3): Bool => IsClose(m.TransformPoint(point), to)
+
+@Test
+Function ASkinnedMeshsPaletteFollowsItsJoints()
+    Local world = Fresh()
+    Defer world.Free()
+    Local body = Pivot()
+    Local mesh = Mesh(Null, body)
+    Local hips = Pivot(body)
+    hips.SetName("hips")
+    hips.SetPosition(Vec3(0, 1, 0))
+    Local knee = Pivot(hips)
+    knee.SetName("knee")
+    knee.SetPosition(Vec3(0, -0.5, 0))
+    Local skin = Skin()
+    skin.AddJoint("hips", Mat4.Translation(Vec3(0, -1, 0)))
+    skin.AddJoint("knee", Mat4.Translation(Vec3(0, -0.5, 0)))
+    Expect(skin.JointCount() == 2 && skin.JointName(1) == "knee")
+    Expect(mesh.Skin() == Null)
+    mesh.SetSkin(skin, body)
+    Expect(RefEquals(mesh.Skin(), skin))
+    // Where they were bound, nothing moves.
+    Local palette = mesh.Palette()
+    Expect(palette.Count == 2 && IsClose(palette[0], Mat4.Identity) &&
+           IsClose(palette[1], Mat4.Identity))
+    // The hips turned a quarter round Z take a vertex bound at the knee to (0.5, 1, 0).
+    hips.SetRotation(Quat.FromAxisAngle(Vec3(0, 0, 1), Deg(90)))
+    palette = mesh.Palette()
+    Expect(Takes(palette[1], Vec3(0, 0.5, 0), Vec3(0.5, 1, 0)))
+    Expect(Takes(palette[0], Vec3(0, 1, 0), Vec3(0, 1, 0)))
+    // Moving the body, with the mesh and its bones, changes nothing in the mesh's space.
+    body.SetPosition(Vec3(5, 0, 3))
+    Expect(IsClose(mesh.Palette()[1], palette[1]))
+    mesh.RemoveSkin()
+    Expect(mesh.Skin() == Null)
+End Function
+
+// The skeleton a Clip poses by time is the palette the mesh is drawn with.
+@Test
+Function AClipPosesTheBonesASkinFollows()
+    Local world = Fresh()
+    Defer world.Free()
+    Local body = Pivot()
+    Local mesh = Mesh(Null, body)
+    Local arm = Pivot(body)
+    arm.SetName("arm")
+    Local skin = Skin()
+    skin.AddJoint("arm", Mat4.Identity)
+    mesh.SetSkin(skin, body)
+    Local wave = Clip("wave")
+    wave.AddRotations("arm", [0, 1], [Quat.Identity, Quat.FromAxisAngle(Vec3(0, 0, 1), Deg(90))])
+    body.Player().Play(wave)
+    UpdateWorld(1)
+    Expect(Takes(mesh.Palette()[0], Vec3(1, 0, 0), Vec3(0, 1, 0)))
+    body.Player().SetTime(0)
+    Expect(Takes(mesh.Palette()[0], Vec3(1, 0, 0), Vec3(1, 0, 0)))
+End Function
+
+@Test
+Function ASkinLivesWhileAMeshIsSkinnedByIt()
+    Local world = Fresh()
+    Defer world.Free()
+    Local body = Pivot()
+    Local mesh = Mesh(Null, body)
+    Local bone = Pivot(body)
+    bone.SetName("bone")
+    Local skin = Skin()
+    skin.AddJoint("bone", Mat4.Identity)
+    mesh.SetSkin(skin, body)
+    skin.Free()
+    Expect(skin.Freed())
+    bone.SetPosition(Vec3(0, 2, 0))
+    Expect(Takes(mesh.Palette()[0], Vec3(0, 0, 0), Vec3(0, 2, 0)))
+    // The Skin it was given was freed, so there's no Skin of the game's to give.
+    Expect(mesh.Skin() == Null)
+End Function

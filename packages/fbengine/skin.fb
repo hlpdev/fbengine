@@ -1,0 +1,156 @@
+// Skins: how a Mesh's vertices follow the entities that are its bones, and the palette of matrices
+// a skinned Mesh is drawn with.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_skin"
+Import "./entity"
+Import "./mesh"
+Import "./window"
+Import "./world"
+
+// The Skin each Mesh was given, by its handle's slot.
+Global skinned: Skin?[] = []
+
+/// How a Mesh's vertices follow the entities that are its bones: its joints, each a name and the
+/// inverse of its bind matrix, which takes the mesh's space to the joint's as it was when the
+/// vertices were made. Every Mesh skinned by one shares it, so a joint added to it is added to them
+/// all. It lives while the game holds it, or a Mesh is skinned by it.
+Public Final Class Skin
+    Field handle: UInt64
+
+    /// A new Skin, with no joints.
+    @MainThread
+    Public New()
+        handle = fbe_skin_create()
+    End New
+
+    Method Destroy()
+        If handle != 0 Then fbe_skin_release(handle)
+    End Method
+
+    /// Lets go of the Skin now; Meshes skinned by it keep it. Using it after panics.
+    @MainThread @PanicsAtCaller
+    Public Method Free()
+        If !fbe_skin_release(Live("Free")) Then Failed("Free")
+        handle = 0
+    End Method
+
+    /// Whether Free let go of it.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// Adds a joint named `name`, bound where `inverseBind` says: the inverse of the joint's matrix
+    /// in the mesh's space as the vertices were made. An empty name, a joint's already, or a matrix
+    /// that isn't numbers panics.
+    @MainThread @PanicsAtCaller
+    Public Method AddJoint(name: String, inverseBind: Mat4)
+        Local skin = Live("AddJoint")
+        Local floats = Buffer<Float32>(16)
+        Local columns = [inverseBind.x, inverseBind.y, inverseBind.z, inverseBind.w]
+        For column = 0 Until 4
+            For row = 0 Until 4
+                floats[column * 4 + row] = columns[column][row]
+            End For
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_skin_add_joint(skin, name, floats.Pointer())
+        End Unsafe
+        If !done Then Failed("AddJoint")
+    End Method
+
+    /// How many joints it has.
+    @MainThread @PanicsAtCaller
+    Public Method JointCount(): Int => fbe_skin_joint_count(Live("JointCount"))
+
+    /// The name of the joint at `index`, from 0. One outside 0 to JointCount() - 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method JointName(index: Int): String
+        Local skin = Live("JointName")
+        Local count = JointCount()
+        If index < 0 || index >= count
+            Panic("JointName({index}) on a Skin with {count} {count == 1 ? "joint" : "joints"}")
+        End If
+        Unsafe
+            Return fbe_skin_joint_name(skin, index).ToString()
+        End Unsafe
+    End Method
+
+    // A panic naming the call, with what C said went wrong.
+    @PanicsAtCaller
+    Package Method Failed(call: String)
+        Panic("{call} on a Skin: {LastError()}")
+    End Method
+
+    // The handle, or a panic naming the call for a Skin that was freed.
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call} on a Skin that was freed")
+        Return handle
+    End Method
+End Class
+
+Extend Mesh
+    /// Skins the mesh by `skin`: its vertices follow its joints, the entities of their names under
+    /// `root`, the root itself or the first under it with the name, depth first, as Find finds
+    /// them, bound as it's skinned or once the Skin changes. A joint no entity has, or one freed
+    /// since, stays where it was bound.
+    @MainThread @PanicsAtCaller
+    Public Method SetSkin(skin: Skin, root: Entity)
+        Local mesh = Live("SetSkin")
+        If !fbe_skin_attach(mesh, skin.Live("SetSkin"), root.Live("SetSkin")) Then Failed("SetSkin")
+        Local slot = Slot(mesh)
+        While skinned.Count <= slot
+            skinned.Add(Null)
+        End While
+        skinned[slot] = skin
+    End Method
+
+    /// Draws the mesh as its vertices are again, skinned by nothing.
+    @MainThread @PanicsAtCaller
+    Public Method RemoveSkin()
+        Local mesh = Live("RemoveSkin")
+        If !fbe_skin_attach(mesh, 0, 0) Then Failed("RemoveSkin")
+        Local slot = Slot(mesh)
+        If slot < skinned.Count Then skinned[slot] = Null
+    End Method
+
+    /// The Skin the mesh is skinned by, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Skin(): Skin?
+        Local mesh = Live("Skin")
+        Local slot = Slot(mesh)
+        If slot >= skinned.Count Then Return Null
+        Local kept = skinned[slot]
+        If kept == Null || kept.handle == 0 || fbe_skin_of(mesh) != kept.handle Then Return Null
+        Return kept
+    End Method
+
+    /// The matrices the mesh is drawn with, one a joint: the joint's matrix to the world times its
+    /// inverse bind, in the mesh's own space. A mesh skinned by nothing panics.
+    @MainThread @PanicsAtCaller
+    Public Method Palette(): Mat4[]
+        Local mesh = Live("Palette")
+        Local skin = fbe_skin_of(mesh)
+        If skin == 0 Then Panic("Palette on a Mesh skinned by nothing")
+        Local count = fbe_skin_joint_count(skin)
+        Local floats = Buffer<Float32>(count * 16)
+        Local written = 0
+        Unsafe
+            written = fbe_skin_palette(mesh, floats.Pointer(), count)
+        End Unsafe
+        If written < 0 Then Failed("Palette")
+        Local matrices: Mat4[] = []
+        For joint = 0 Until written
+            Local at = joint * 16
+            matrices.Add(Mat4(Vec4(floats[at], floats[at + 1], floats[at + 2], floats[at + 3]),
+                              Vec4(floats[at + 4], floats[at + 5], floats[at + 6], floats[at + 7]),
+                              Vec4(floats[at + 8], floats[at + 9], floats[at + 10],
+                                   floats[at + 11]),
+                              Vec4(floats[at + 12], floats[at + 13], floats[at + 14],
+                                   floats[at + 15])))
+        End For
+        Return matrices
+    End Method
+End Extend

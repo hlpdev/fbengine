@@ -5,11 +5,14 @@
 // the bindings tools/bindgen.sh makes of each, one file per area in packages/fbengine/c/.
 
 #include "app/fbe_app.h"
+#include "clip/fbe_clip.h"
 #include "core/fbe_core.h"
 #include "frame/fbe_frame.h"
 #include "input/fbe_input.h"
+#include "player/fbe_player.h"
 #include "render/fbe_render.h"
 #include "scene/fbe_scene.h"
+#include "skin/fbe_skin.h"
 #include "window/fbe_window.h"
 
 #endif

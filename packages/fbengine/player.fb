@@ -1,0 +1,101 @@
+// Players: what plays a Clip on an entity and the entities under it, which an entity's Player()
+// gives, and UpdateWorld moves on.
+
+Import std.core
+Import "./c/fbe_player"
+Import "./clip"
+Import "./entity"
+Import "./window"
+Import "./world"
+
+// The Player of each entity that has one, by its handle's slot.
+Global players: Player?[] = []
+
+/// What plays a Clip on an entity and the entities under it: the one its Player() gives. Each of
+/// the Clip's channels moves the entity of its name, the entity itself or the first under it with
+/// the name, depth first, as Find finds them, bound as it's played or once the Clip changes; a
+/// name no entity has is left out. UpdateWorld moves it on by its seconds, and a Clip played past
+/// its end holds there. Once its entity's freed, using it panics.
+Public Final Class Player
+    Field handle: UInt64
+    Field owner: Entity
+    Field current: Clip? = Null
+
+    New(owner: Entity)
+        handle = fbe_player_create(owner.Live("Player"))
+        If handle == 0 Then Panic("Player on a {owner.KindName()}: {LastError()}")
+        Self.owner = owner
+    End New
+
+    Method Destroy()
+        If handle != 0 Then fbe_player_free(handle)
+    End Method
+
+    /// The entity it plays on.
+    @MainThread Public Method Entity(): Entity => owner
+
+    /// Plays `clip` from its start, posing what it moves at once.
+    @MainThread @PanicsAtCaller
+    Public Method Play(clip: Clip)
+        If !fbe_player_play(handle, clip.Live("Play")) Then Failed("Play")
+        current = clip
+    End Method
+
+    /// Stops what it plays, leaving what it moved where it is.
+    @MainThread @PanicsAtCaller
+    Public Method Stop()
+        If !fbe_player_play(handle, 0) Then Failed("Stop")
+        current = Null
+    End Method
+
+    /// The Clip it plays, or Null.
+    @MainThread Public Method Clip(): Clip? => current
+
+    /// Puts what it plays at `seconds`, posing what it moves at once: before 0 at its first keys,
+    /// past its Length at its last. Not finite panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetTime(seconds: Float)
+        If !fbe_player_set_time(handle, seconds) Then Failed("SetTime")
+    End Method
+
+    /// Where it is in what it plays, in seconds, 0 when it plays nothing.
+    @MainThread Public Method Time(): Float => fbe_player_time(handle)
+
+    // A panic naming the call, with what C said went wrong.
+    @PanicsAtCaller
+    Method Failed(call: String)
+        Panic("{call} on a Player: {LastError()}")
+    End Method
+End Class
+
+Extend Entity
+    /// The Player that plays Clips on the entity and the entities under it, made the first time
+    /// it's asked for.
+    @MainThread @PanicsAtCaller
+    Public Method Player(): Player
+        Local slot = Slot(Live("Player"))
+        If slot < players.Count
+            Local kept = players[slot]
+            If kept != Null && RefEquals(kept.owner, Self) Then Return kept
+        End If
+        Return PlayerFor(Self, slot)
+    End Method
+End Extend
+
+Extend World
+    // Moves on every Player on an entity of the World by `seconds`, as Update does.
+    @PanicsAtCaller
+    Package Method Animate(seconds: Float64)
+        If !fbe_player_advance(Live("Update"), seconds As Float32) Then Failed("Update")
+    End Method
+End Extend
+
+// A new Player for `entity`, kept as its slot's.
+Function PlayerFor(entity: Entity, slot: Int): Player
+    Local made = Player(entity)
+    While players.Count <= slot
+        players.Add(Null)
+    End While
+    players[slot] = made
+    Return made
+End Function

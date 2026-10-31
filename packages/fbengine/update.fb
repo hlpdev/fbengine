@@ -7,11 +7,11 @@ Import std.math
 Import "./c/fbe_scene"
 Import "./collision"
 Import "./entity"
+Import "./player"
 Import "./transform"
 Import "./world"
 
-/// Steps the current World by `seconds`: its collisions now, and its animation once there is
-/// animation (E7's), which `seconds` advances.
+/// Steps the current World by `seconds`, 0 or more: its Players move on by them, then it collides.
 @MainThread @PanicsAtCaller
 Public Function UpdateWorld(seconds: Float64 = 0)
     World.Current().Update(seconds)
@@ -25,10 +25,11 @@ Public Function CaptureWorld()
 End Function
 
 Extend World
-    /// Steps the World by `seconds`: its collisions now, and its animation once there is
-    /// animation, which `seconds` advances.
+    /// Steps the World by `seconds`, 0 or more: the Players on its entities move on by them, then
+    /// it collides. Below 0, or not finite, panics.
     @MainThread @PanicsAtCaller
     Public Method Update(seconds: Float64 = 0)
+        Animate(seconds)
         Collide()
     End Method
 

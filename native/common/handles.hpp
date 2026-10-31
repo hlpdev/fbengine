@@ -21,6 +21,10 @@ enum handle_kind_t : std::uint8_t {
     ENTITY_KIND = 2,
     GEOMETRY_KIND = 3,
     MATERIAL_KIND = 4,
+    // E7's animation, apart from the kinds assets' loads and the GPU's objects take.
+    CLIP_KIND = 20,
+    SKIN_KIND = 21,
+    PLAYER_KIND = 22,
     // fbengine_audio, 64 to 95.
     // fbengine_physics, 96 to 127.
     PHYSICS_WORLD_KIND = 96,
