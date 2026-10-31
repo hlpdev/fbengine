@@ -1,11 +1,11 @@
 #pragma once
 
 // What draws with textures reads of them: the texture a handle is for, its index in the bindless
-// set, and its sampler's; and what draws into them: a target's passes, clears, and copies.
+// set, and its sampler's; how a texture rests between what the frame's commands do with it, which
+// the frame graph's passes draw into, copy, and clear; and targets the engine makes for itself.
 
 #include "gpu/vulkan.hpp"
 
-#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -13,6 +13,21 @@ namespace fbe::texture {
 
 /// Handles' kind for textures, in fbengine's range (architecture.md's handles).
 constexpr std::uint8_t kind = 5;
+
+/// The stages that sample textures.
+constexpr auto shader_stages =
+    gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT) |
+    gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT) |
+    gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+/// A texture's image rests, between what the frame's commands do with it, as the uploads, run
+/// before them, need: every level SHADER_READ_ONLY, what wrote it last seen by these stages, which
+/// whatever uses it next waits for: a shader sampling it, a copy or blit out of it, or a pass's
+/// drawing. A multisampled target's samples rest drawn into, COLOR_ATTACHMENT, and a target's
+/// depth as depth, DEPTH_STENCIL_ATTACHMENT, the next pass waiting for the last's writes.
+constexpr auto resting_stages =
+    shader_stages | gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COPY_BIT) |
+    gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_BLIT_BIT) |
+    gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
 
 /// A texture: its image on the GPU, a view of every level, and how it's sampled. Its slot is its
 /// index in the bindless set.
@@ -29,6 +44,9 @@ struct texture_t {
     std::int32_t wrap_u = 0;
     std::int32_t wrap_v = 0;
     std::uint32_t references = 0;
+    /// Whether it's the engine's own, as the frame graph's transient targets' images are, which
+    /// Texture.Count doesn't count.
+    bool engine = false;
     /// Whether it's drawn into, a target, and the samples a pass draws, which a multisampled
     /// target's resolve into its image at the pass's end.
     bool target = false;
@@ -46,15 +64,6 @@ struct texture_t {
 /// A target's depth's format.
 constexpr VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
 
-/// What a pass clears its target to as it begins: its color, linear, and its depth, 0, the
-/// farthest, unless it keeps them.
-struct clear_t {
-    bool color = false;
-    std::array<float, 4> rgba{};
-    bool depth = false;
-    float depth_value = 0.0F;
-};
-
 /// The live texture a handle is for, or nullptr, with fbe_error's why.
 texture_t* find(std::uint64_t handle);
 
@@ -71,11 +80,10 @@ std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level);
 /// How many bytes a pixel of an FBE_TEXTURE_ format has; 0 for none.
 std::uint32_t pixel_size(std::int32_t format);
 
-/// Begins drawing into a target in the frame's commands, clearing what `clear` says, with the
-/// viewport and scissor its whole; the command buffer, or VK_NULL_HANDLE, with fbe_error's why,
-/// if the handle isn't a live target's. end_pass ends it, resolving a multisampled one, and leaves
-/// it to be sampled.
-VkCommandBuffer begin_pass(std::uint64_t target, const clear_t& clear);
-void end_pass(std::uint64_t target);
+/// A target the engine makes for itself, `width` by `height` of an FBE_TEXTURE_ format, drawing
+/// `samples` a pixel, with depth if it says, which Texture.Count doesn't count and
+/// fbe_texture_release lets go of; its handle, or 0, with fbe_error's why, if it can't be made.
+std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, std::int32_t format,
+                                   VkSampleCountFlagBits samples, bool depth);
 
 } // namespace fbe::texture

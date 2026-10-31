@@ -10,8 +10,11 @@
 #include <chrono>
 #include <cstdint>
 #include <fbengine.h>
+#include <gpu/graph.hpp>
 #include <gpu/pipeline.hpp>
 #include <gpu/vulkan.hpp>
+#include <memory>
+#include <optional>
 #include <string>
 #include <test_shaders.hpp>
 #include <texture/texture.hpp>
@@ -54,9 +57,10 @@ struct shape_t {
     float depth;
 };
 
-/// Draws `shapes` into a target in one pass, clearing it to `clear` first, depth tested if it
-/// has depth.
-void draw(std::uint64_t into, std::array<float, 4> clear, const std::vector<shape_t>& shapes) {
+/// Draws `shapes` into a target in a pass, clearing it to `clear` first, or drawing on it without
+/// one, depth tested if it has depth, its depth cleared to the farthest with the color.
+void draw(std::uint64_t into, std::optional<std::array<float, 4>> clear,
+          const std::vector<shape_t>& shapes) {
     const fbe::texture::texture_t& found = *fbe::texture::find(into);
     const bool depth = found.depth != VK_NULL_HANDLE;
     VkPipeline pipeline = fbe::gpu::pipeline({
@@ -69,17 +73,28 @@ void draw(std::uint64_t into, std::array<float, 4> clear, const std::vector<shap
     });
     INFO(fbe_error());
     REQUIRE(pipeline != VK_NULL_HANDLE);
-    VkCommandBuffer commands =
-        fbe::texture::begin_pass(into, { .color = true, .rgba = clear, .depth = true });
-    REQUIRE(commands != VK_NULL_HANDLE);
-    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    for (const shape_t& shape : shapes) {
-        vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
-                           flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0, sizeof(shape_t),
-                           &shape);
-        vkCmdDraw(commands, 3, 1, 0, 0);
-    }
-    fbe::texture::end_pass(into);
+    const fbe::gpu::resource_t target = fbe::gpu::texture_resource(into);
+    require(fbe::gpu::add_pass({
+        .name = "shapes",
+        .colors = { {
+            .target = target,
+            .clear = clear.has_value(),
+            .rgba = clear.value_or(std::array<float, 4>{}),
+        }, },
+        .depth = depth ? target : fbe::gpu::no_resource,
+        .clear_depth = clear.has_value(),
+        .record =
+            [pipeline, drawn = std::make_shared<const std::vector<shape_t>>(shapes)](
+                VkCommandBuffer commands) {
+                vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                for (const shape_t& shape : *drawn) {
+                    vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
+                                       flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0,
+                                       sizeof(shape_t), &shape);
+                    vkCmdDraw(commands, 3, 1, 0, 0);
+                }
+            },
+    }));
 }
 
 /// A texture's first level read back through the C API.
@@ -162,7 +177,7 @@ TEST_CASE("a target has the samples and depth it was made with", "[gpu]") {
     CHECK(std::string(fbe_error()) == "a target draws 1, 2, 4, or 8 samples a pixel, not 3");
     CHECK(fbe_texture_create_target(0, 4, FBE_TEXTURE_RGBA8, 1, false) == 0);
     // Only a target's drawn into.
-    CHECK(fbe::texture::begin_pass(plain, {}) == VK_NULL_HANDLE);
+    CHECK(!fbe::gpu::add_pass({ .colors = { { .target = fbe::gpu::texture_resource(plain) } } }));
     CHECK(std::string(fbe_error()) == "the texture isn't a target, which draws");
     stop_gpu();
 }
@@ -213,20 +228,8 @@ TEST_CASE("a pass keeps what the last drew unless it clears", "[gpu]") {
     start();
     const std::uint64_t made = target(16, 16, 4, false);
     draw(made, navy, { { .color = red, .offset = { -0.5F, 0.0F }, .size = 0.4F, .depth = 0.5F } });
-    // A second pass that loads what's there.
-    VkPipeline pipeline = fbe::gpu::pipeline({
-        .shader = &fbe::test_shaders::shape,
-        .color = VK_FORMAT_R8G8B8A8_SRGB,
-        .samples = VK_SAMPLE_COUNT_4_BIT,
-    });
-    VkCommandBuffer commands = fbe::texture::begin_pass(made, {});
-    REQUIRE(commands != VK_NULL_HANDLE);
-    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    const shape_t right{ .color = green, .offset = { 0.5F, 0.0F }, .size = 0.4F, .depth = 0.5F };
-    vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
-                       flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0, sizeof(shape_t), &right);
-    vkCmdDraw(commands, 3, 1, 0, 0);
-    fbe::texture::end_pass(made);
+    // A second pass that draws on what's there.
+    draw(made, {}, { { .color = green, .offset = { 0.5F, 0.0F }, .size = 0.4F, .depth = 0.5F } });
     const fbe::golden::frame_t frame = read(made);
     CHECK(pixel(frame, 4, 9) == std::array<std::uint8_t, 4>{ 255, 0, 0, 255 });
     CHECK(pixel(frame, 12, 9) == std::array<std::uint8_t, 4>{ 0, 255, 0, 255 });
@@ -244,20 +247,7 @@ TEST_CASE("a clear sets every level, and a target's depth", "[gpu]") {
     draw(made, navy, { { .color = red, .offset = {}, .size = 1.0F, .depth = 0.9F } });
     require(fbe_texture_clear(made, 0.0F, 0.0F, 0.0F, 1.0F));
     CHECK(pixel(read(made), 4, 4) == std::array<std::uint8_t, 4>{ 0, 0, 0, 255 });
-    VkPipeline pipeline = fbe::gpu::pipeline({
-        .shader = &fbe::test_shaders::shape,
-        .color = VK_FORMAT_R8G8B8A8_SRGB,
-        .depth = fbe::texture::depth_format,
-        .depth_test = true,
-        .depth_write = true,
-    });
-    VkCommandBuffer commands = fbe::texture::begin_pass(made, {});
-    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    const shape_t far{ .color = green, .offset = {}, .size = 1.0F, .depth = 0.1F };
-    vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
-                       flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0, sizeof(shape_t), &far);
-    vkCmdDraw(commands, 3, 1, 0, 0);
-    fbe::texture::end_pass(made);
+    draw(made, {}, { { .color = green, .offset = {}, .size = 1.0F, .depth = 0.1F } });
     CHECK(pixel(read(made), 4, 4) == std::array<std::uint8_t, 4>{ 0, 255, 0, 255 });
     stop_gpu();
 }

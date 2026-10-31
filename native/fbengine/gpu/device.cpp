@@ -3,6 +3,7 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "gpu/graph.hpp"
 #include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
 
@@ -89,6 +90,16 @@ bool has_validation_layer() {
     });
 }
 
+/// Whether the validation layer can check synchronization too, which the frame graph's barriers
+/// are checked by: the layers since 1.2.135 can.
+bool has_sync_validation() {
+    std::uint32_t count = 0;
+    vkEnumerateInstanceExtensionProperties(validation_layer, &count, nullptr);
+    std::vector<VkExtensionProperties> extensions(count);
+    vkEnumerateInstanceExtensionProperties(validation_layer, &count, extensions.data());
+    return has_extension(extensions, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+}
+
 VKAPI_ATTR VkBool32 VKAPI_CALL on_validation(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                              VkDebugUtilsMessageTypeFlagsEXT /*types*/,
                                              const VkDebugUtilsMessengerCallbackDataEXT* data,
@@ -150,10 +161,21 @@ bool make_instance() {
     std::vector<const char*> layers;
     validating = wants_validation() && has_validation_layer() &&
                  has_extension(extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    const bool sync = validating && has_sync_validation();
     if (validating) {
         layers.push_back(validation_layer);
         enabled.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
+    if (sync) {
+        enabled.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+    }
+    const VkValidationFeatureEnableEXT synchronization =
+        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+    const VkValidationFeaturesEXT checks{
+        .sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
+        .enabledValidationFeatureCount = 1,
+        .pEnabledValidationFeatures = &synchronization,
+    };
 
     const VkApplicationInfo application{
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -162,6 +184,7 @@ bool make_instance() {
     };
     const VkInstanceCreateInfo info{
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pNext = sync ? &checks : nullptr,
         .flags = flags,
         .pApplicationInfo = &application,
         .enabledLayerCount = static_cast<std::uint32_t>(layers.size()),
@@ -588,6 +611,7 @@ bool start(VkSurfaceKHR surface) {
 void stop() {
     if (started) {
         vkDeviceWaitIdle(current.device);
+        stop_graph();
         stop_window();
         stop_frames();
         stop_textures();

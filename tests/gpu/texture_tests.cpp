@@ -11,9 +11,11 @@
 #include <chrono>
 #include <cstdint>
 #include <fbengine.h>
+#include <gpu/graph.hpp>
 #include <gpu/image.hpp>
 #include <gpu/pipeline.hpp>
 #include <gpu/vulkan.hpp>
+#include <memory>
 #include <string>
 #include <test_shaders.hpp>
 #include <texture/texture.hpp>
@@ -47,7 +49,7 @@ struct quad_t {
     std::uint32_t sampler;
 };
 
-/// Draws `quads` over a dark grey clear into an sRGB image `size` big, in the frame's commands,
+/// Draws `quads` over a dark grey clear into an sRGB image `size` big, the frame's own, in a pass,
 /// and reads it back.
 fbe::golden::frame_t draw(VkExtent2D size, const std::vector<quad_t>& quads) {
     constexpr VkFormat srgb = VK_FORMAT_R8G8B8A8_SRGB;
@@ -59,48 +61,32 @@ fbe::golden::frame_t draw(VkExtent2D size, const std::vector<quad_t>& quads) {
         .blend = fbe::gpu::blend_t::ALPHA,
     });
     REQUIRE(pipeline != VK_NULL_HANDLE);
-    const fbe::gpu::device_t& gpu = *fbe::gpu::device();
-    VkCommandBuffer commands = fbe::gpu::frame_commands();
-    const auto output =
-        flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
-    const auto write = flag<VkAccessFlags2>(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-    fbe::gpu::barrier(commands, fbe::gpu::color_transition(image.image, VK_IMAGE_LAYOUT_UNDEFINED,
-                                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                                           output, 0, output, write));
-    const VkRenderingAttachmentInfo color{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .imageView = image.view,
-        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .clearValue = { .color = { .float32 = { 0.01F, 0.01F, 0.01F, 1.0F } } },
-    };
-    const VkRenderingInfo rendering{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-        .renderArea = { .extent = size },
-        .layerCount = 1,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &color,
-    };
-    gpu.begin_rendering(commands, &rendering);
-    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    VkDescriptorSet set = fbe::gpu::bindless_set();
-    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, fbe::gpu::pipeline_layout(),
-                            0, 1, &set, 0, nullptr);
-    const VkViewport viewport{
-        .width = static_cast<float>(size.width),
-        .height = static_cast<float>(size.height),
-        .maxDepth = 1.0F,
-    };
-    vkCmdSetViewport(commands, 0, 1, &viewport);
-    const VkRect2D scissor{ .extent = size };
-    vkCmdSetScissor(commands, 0, 1, &scissor);
-    for (const quad_t& quad : quads) {
-        vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
-                           flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0, sizeof(quad_t), &quad);
-        vkCmdDraw(commands, 6, 1, 0, 0);
-    }
-    gpu.end_rendering(commands);
+    const fbe::gpu::resource_t into = fbe::gpu::external_resource({
+        .image = image.image,
+        .view = image.view,
+        .extent = size,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .stages = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COPY_BIT),
+        .access = flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT),
+    });
+    require(fbe::gpu::add_pass({
+        .name = "quads",
+        .colors = { { .target = into, .clear = true, .rgba = { 0.01F, 0.01F, 0.01F, 1.0F } } },
+        .record =
+            [pipeline,
+             drawn = std::make_shared<const std::vector<quad_t>>(quads)](VkCommandBuffer commands) {
+                vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                VkDescriptorSet set = fbe::gpu::bindless_set();
+                vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        fbe::gpu::pipeline_layout(), 0, 1, &set, 0, nullptr);
+                for (const quad_t& quad : *drawn) {
+                    vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
+                                       flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0,
+                                       sizeof(quad_t), &quad);
+                    vkCmdDraw(commands, 6, 1, 0, 0);
+                }
+            },
+    }));
     REQUIRE(fbe::gpu::finish_frame());
     fbe::golden::frame_t frame{
         .width = size.width,

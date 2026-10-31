@@ -11,12 +11,12 @@
 #include <cstring>
 #include <fbengine.h>
 #include <gpu/buffer.hpp>
+#include <gpu/graph.hpp>
 #include <gpu/pipeline.hpp>
 #include <gpu/vulkan.hpp>
 #include <span>
 #include <string>
 #include <test_shaders.hpp>
-#include <texture/texture.hpp>
 #include <vector>
 
 using fbe::tests::require;
@@ -130,24 +130,31 @@ TEST_CASE("draws read their corners through buffers' addresses and indices", "[g
         .color = VK_FORMAT_R8G8B8A8_UNORM,
     });
     REQUIRE(pipeline != VK_NULL_HANDLE);
-    VkCommandBuffer commands =
-        fbe::texture::begin_pass(target, { .color = true, .rgba = { 0.0F, 0.0F, 0.0F, 1.0F } });
-    REQUIRE(commands != VK_NULL_HANDLE);
-    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    const auto push = [commands](VkDeviceAddress address, std::array<float, 4> color) {
-        const points_t constants{ .corners = address, .color = color };
-        vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
-                           flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0, sizeof(constants),
-                           &constants);
-    };
-    push(corners.address, { 1.0F, 0.0F, 0.0F, 1.0F });
-    vkCmdDraw(commands, 3, 1, 0, 0);
-    push(slice.address, { 0.0F, 1.0F, 0.0F, 1.0F });
-    vkCmdDraw(commands, 3, 1, 0, 0);
-    push(right.address, { 0.0F, 0.0F, 1.0F, 1.0F });
-    vkCmdBindIndexBuffer(commands, order.buffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(commands, 3, 1, 0, 0, 0);
-    fbe::texture::end_pass(target);
+    require(fbe::gpu::add_pass({
+        .name = "points",
+        .colors = { {
+            .target = fbe::gpu::texture_resource(target),
+            .clear = true,
+            .rgba = { 0.0F, 0.0F, 0.0F, 1.0F },
+        }, },
+        .record =
+            [&](VkCommandBuffer commands) {
+                vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                const auto push = [commands](VkDeviceAddress address, std::array<float, 4> color) {
+                    const points_t constants{ .corners = address, .color = color };
+                    vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
+                                       flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0,
+                                       sizeof(constants), &constants);
+                };
+                push(corners.address, { 1.0F, 0.0F, 0.0F, 1.0F });
+                vkCmdDraw(commands, 3, 1, 0, 0);
+                push(slice.address, { 0.0F, 1.0F, 0.0F, 1.0F });
+                vkCmdDraw(commands, 3, 1, 0, 0);
+                push(right.address, { 0.0F, 0.0F, 1.0F, 1.0F });
+                vkCmdBindIndexBuffer(commands, order.buffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(commands, 3, 1, 0, 0, 0);
+            },
+    }));
 
     std::vector<std::uint8_t> rgba(std::size_t{ 48 } * 16 * 4);
     require(fbe_texture_read(target, 0, rgba.data(), static_cast<std::int64_t>(rgba.size())));

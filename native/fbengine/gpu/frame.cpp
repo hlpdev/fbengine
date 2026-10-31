@@ -1,9 +1,11 @@
-// The frame's commands: begun the first time something records after a Flip, submitted at the
-// Flip, uploads first, and what each frame in flight leaves to free once the GPU's done with it. A
-// submit that fails for want of memory keeps the frame's uploads, and what they copy from, for the
-// next submit to run first, so a texture written then still gets its pixels.
+// The frame's commands: begun the first time something records after a Flip, the frame graph
+// recorded into them as they're submitted, at the Flip, uploads first, and what each frame in
+// flight leaves to free once the GPU's done with it. A submit that fails for want of memory keeps
+// the frame's uploads, and what they copy from, for the next submit to run first, so a texture
+// written then still gets its pixels.
 
 #include "core/engine.hpp"
+#include "gpu/graph.hpp"
 #include "gpu/vulkan.hpp"
 
 #include <array>
@@ -199,6 +201,8 @@ bool make_frame_commands(const device_t& gpu, frame_t& frame) {
 
 bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
     device_t& gpu = *device();
+    record_graph();
+    age_transients();
     frame_t& frame = gpu.frames[gpu.frame];
     if (!frame.begun && wait == VK_NULL_HANDLE && carried.empty()) {
         // Nothing was recorded, so no frame begins to free what the finished ones left.
@@ -217,6 +221,7 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
 
 bool finish_frame() {
     device_t& gpu = *device();
+    record_graph();
     frame_t& frame = gpu.frames[gpu.frame];
     if (!frame.begun && carried.empty()) {
         return true;

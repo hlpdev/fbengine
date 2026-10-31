@@ -124,9 +124,9 @@ void stop_frames();
 bool start_bindless();
 bool start_textures();
 
-/// The frame's own commands, and its uploads', begun the first time something records into them
-/// after a Flip: that waits for the GPU to finish the frame in flight that last had them, and
-/// frees what it left.
+/// The frame's own commands, which the frame graph records its passes into, and its uploads',
+/// begun the first time something records into them after a Flip: that waits for the GPU to
+/// finish the frame in flight that last had them, and frees what it left.
 VkCommandBuffer frame_commands();
 VkCommandBuffer upload_commands();
 
@@ -136,15 +136,15 @@ frame_t& recording_frame();
 /// Has `free` run once the GPU is done with the frame being recorded, and every frame before it.
 void after_frame(std::function<void()> free);
 
-/// Ends the frame's commands, if any were recorded, and submits them, uploads first, waiting on
-/// `wait` and signaling `signal` if they're not VK_NULL_HANDLE, so the next frame in flight is
-/// recorded next; false, with fbe_error's why, if the submit failed, which makes the frame's fence
-/// and acquire semaphore again.
+/// Records the frame graph, then ends the frame's commands, if any were recorded, and submits
+/// them, uploads first, waiting on `wait` and signaling `signal` if they're not VK_NULL_HANDLE, so
+/// the next frame in flight is recorded next; false, with fbe_error's why, if the submit failed,
+/// which makes the frame's fence and acquire semaphore again.
 bool submit_frame(VkSemaphore wait, VkSemaphore signal);
 
-/// Submits what the frame has recorded so far and waits for the GPU to finish it, as a readback
-/// needs; the frame goes on, recorded again from where it was; false, with fbe_error's why, if it
-/// couldn't.
+/// Records the frame graph, submits what the frame has so far, and waits for the GPU to finish it,
+/// as a readback needs; the frame goes on, recorded again from where it was; false, with
+/// fbe_error's why, if it couldn't.
 bool finish_frame();
 
 /// The samplers' binding in the bindless set, and the textures'. A shader reads a texture by its

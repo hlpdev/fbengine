@@ -1,13 +1,14 @@
 // Textures: a pool of them by slot, each slot its index in the bindless set, with the white
 // texture at 0; pixels uploaded through staging buffers in the frame's uploads, which free them
 // once the GPU's done; mipmaps made by blitting each level from the one before; targets, drawn
-// into by passes in the frame's commands, multisampled and with depth if they ask; and clears,
-// copies, and reading pixels back.
+// into by the frame graph's passes, multisampled and with depth if they ask; and clears and
+// copies, passes too, and reading pixels back.
 
 #include "texture/texture.hpp"
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "gpu/graph.hpp"
 #include "gpu/image.hpp"
 #include "gpu/vulkan.hpp"
 
@@ -34,11 +35,9 @@ std::vector<bool> live;
 std::vector<std::uint32_t> free_slots;
 std::int32_t textures_made = 0;
 
+using fbe::texture::resting_stages;
 /// The stages that read textures, which an upload's writes are made visible to.
-constexpr auto readers =
-    fbe::gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT) |
-    fbe::gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT) |
-    fbe::gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+constexpr auto readers = fbe::texture::shader_stages;
 constexpr auto copy = fbe::gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COPY_BIT);
 constexpr auto blit = fbe::gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_BLIT_BIT);
 constexpr auto transfer =
@@ -58,9 +57,6 @@ constexpr auto tests =
 constexpr auto depth_access =
     fbe::gpu::flag<VkAccessFlags2>(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT) |
     fbe::gpu::flag<VkAccessFlags2>(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-/// What a texture at rest, SHADER_READ_ONLY, was last used by, which whatever uses it next waits
-/// for: a shader reading it, a copy or blit out of it, or a pass's writes.
-constexpr auto resting_stages = readers | copy | blit | output;
 
 std::uint64_t handle_of(std::uint32_t slot) {
     return (std::uint64_t{ fbe::texture::kind } << 56U) |
@@ -230,7 +226,7 @@ VkImageMemoryBarrier2 depth_barrier(VkImage image, VkImageLayout from, VkImageLa
 }
 
 /// What a texture is made: its size and format, and whether it has mipmaps, or is a target, with
-/// its samples and depth.
+/// its samples and depth, and whether it's the engine's own.
 struct spec_t {
     std::uint32_t width = 1;
     std::uint32_t height = 1;
@@ -239,6 +235,7 @@ struct spec_t {
     bool target = false;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     bool depth = false;
+    bool engine = false;
 };
 
 /// Whether the device can make a texture of `spec`; false, with fbe_error's why, if not.
@@ -289,6 +286,7 @@ bool make(std::uint32_t slot, const spec_t& spec) {
         .wrap_u = FBE_TEXTURE_REPEAT,
         .wrap_v = FBE_TEXTURE_REPEAT,
         .references = 1,
+        .engine = spec.engine,
         .target = spec.target,
         .samples = spec.samples,
     };
@@ -405,7 +403,7 @@ bool make(std::uint32_t slot, const spec_t& spec) {
     }
     fbe::gpu::write_texture(slot, texture.view);
     live[slot] = true;
-    ++textures_made;
+    textures_made += spec.engine ? 0 : 1;
     return true;
 }
 
@@ -457,26 +455,6 @@ bool upload(texture_t& texture, std::uint32_t x, std::uint32_t y, std::uint32_t 
                            &region);
     record_mipmaps(commands, texture);
     return true;
-}
-
-/// Records clearing a texture that isn't a target, every level, in the frame's commands.
-void record_clear(VkCommandBuffer commands, const texture_t& texture,
-                  const VkClearColorValue& color) {
-    fbe::gpu::barrier(commands, levels_barrier(texture.image, 0, texture.levels,
-                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, resting_stages,
-                                               0, transfer, transfer_write));
-    const VkImageSubresourceRange everything{
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .levelCount = texture.levels,
-        .layerCount = 1,
-    };
-    vkCmdClearColorImage(commands, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1,
-                         &everything);
-    fbe::gpu::barrier(commands, levels_barrier(texture.image, 0, texture.levels,
-                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer,
-                                               transfer_write, resting_stages, shader_read));
 }
 
 bool valid_filter(std::int32_t filter) {
@@ -569,91 +547,17 @@ std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level) {
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, level);
 }
 
-VkCommandBuffer begin_pass(std::uint64_t target, const clear_t& clear) {
-    const texture_t* found = find(target);
-    if (found == nullptr) {
-        return VK_NULL_HANDLE;
-    }
-    if (!found->target) {
-        fail("the texture isn't a target, which draws");
-        return VK_NULL_HANDLE;
-    }
-    const gpu::device_t& gpu = *gpu::device();
-    VkCommandBuffer commands = gpu::frame_commands();
-    // The image is drawn into, or a multisampled one resolved into; its samples, and its depth,
-    // wait for the pass before's writes.
-    gpu::barrier(commands,
-                 gpu::color_transition(found->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, resting_stages, 0,
-                                       output, output_access));
-    if (found->msaa != VK_NULL_HANDLE) {
-        gpu::barrier(commands,
-                     gpu::color_transition(found->msaa, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, output,
-                                           output_write, output, output_access));
-    }
-    if (found->depth != VK_NULL_HANDLE) {
-        gpu::barrier(commands,
-                     depth_barrier(found->depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, tests,
-                                   depth_access));
-    }
-    const bool multisampled = found->msaa != VK_NULL_HANDLE;
-    const VkRenderingAttachmentInfo color{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .imageView = multisampled ? found->msaa_view : found->view,
-        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .resolveMode = multisampled ? VK_RESOLVE_MODE_AVERAGE_BIT : VK_RESOLVE_MODE_NONE,
-        .resolveImageView = multisampled ? found->view : VK_NULL_HANDLE,
-        .resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .loadOp = clear.color ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .clearValue = {
-            .color = {
-                .float32 = { clear.rgba[0], clear.rgba[1], clear.rgba[2], clear.rgba[3] },
-            },
-        },
-    };
-    const VkRenderingAttachmentInfo depth{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .imageView = found->depth_view,
-        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        .loadOp = clear.depth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .clearValue = { .depthStencil = { .depth = clear.depth_value } },
-    };
-    const VkExtent2D extent{ .width = found->width, .height = found->height };
-    const VkRenderingInfo rendering{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-        .renderArea = { .extent = extent },
-        .layerCount = 1,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &color,
-        .pDepthAttachment = found->depth != VK_NULL_HANDLE ? &depth : nullptr,
-    };
-    gpu.begin_rendering(commands, &rendering);
-    const VkViewport viewport{
-        .width = static_cast<float>(extent.width),
-        .height = static_cast<float>(extent.height),
-        .maxDepth = 1.0F,
-    };
-    vkCmdSetViewport(commands, 0, 1, &viewport);
-    const VkRect2D scissor{ .extent = extent };
-    vkCmdSetScissor(commands, 0, 1, &scissor);
-    return commands;
-}
-
-void end_pass(std::uint64_t target) {
-    const texture_t* found = find(target);
-    if (found == nullptr || !found->target) {
-        return;
-    }
-    VkCommandBuffer commands = gpu::frame_commands();
-    gpu::device()->end_rendering(commands);
-    gpu::barrier(commands,
-                 gpu::color_transition(found->image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, output,
-                                       output_write, resting_stages, shader_read));
+std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, std::int32_t format,
+                                   VkSampleCountFlagBits samples, bool depth) {
+    return create({
+        .width = width,
+        .height = height,
+        .format = format,
+        .target = true,
+        .samples = samples,
+        .depth = depth,
+        .engine = true,
+    });
 }
 
 std::uint32_t pixel_size(std::int32_t format) {
@@ -677,10 +581,9 @@ namespace fbe::gpu {
 bool start_textures() {
     // The white texture, which a draw with no texture reads, in slot 0.
     const std::uint32_t slot = take_slot();
-    if (slot == UINT32_MAX || !make(slot, { .format = FBE_TEXTURE_RGBA8_LINEAR })) {
+    if (slot == UINT32_MAX || !make(slot, { .format = FBE_TEXTURE_RGBA8_LINEAR, .engine = true })) {
         return false;
     }
-    --textures_made;
     const std::array<std::uint8_t, 4> white{ 255, 255, 255, 255 };
     return upload(textures[slot], 0, 0, 1, 1, white.data(), 4);
 }
@@ -765,17 +668,34 @@ FBE_API bool fbe_texture_clear(uint64_t texture, float r, float g, float b, floa
     if (found == nullptr) {
         return false;
     }
-    if (found->target) {
-        if (fbe::texture::begin_pass(texture,
-                                     { .color = true, .rgba = { r, g, b, a }, .depth = true }) ==
-            VK_NULL_HANDLE) {
-            return false;
-        }
-        fbe::texture::end_pass(texture);
-        return true;
+    const fbe::gpu::resource_t cleared = fbe::gpu::texture_resource(texture);
+    if (cleared == fbe::gpu::no_resource) {
+        return false;
     }
-    record_clear(fbe::gpu::frame_commands(), *found, { .float32 = { r, g, b, a } });
-    return true;
+    // A target's is a pass that draws nothing, its depth cleared to the farthest.
+    if (found->target) {
+        return fbe::gpu::add_pass({
+            .name = "clear",
+            .colors = { { .target = cleared, .clear = true, .rgba = { r, g, b, a } } },
+            .depth = found->depth != VK_NULL_HANDLE ? cleared : fbe::gpu::no_resource,
+            .clear_depth = true,
+        });
+    }
+    return fbe::gpu::add_pass({
+        .name = "clear",
+        .uses = { { cleared, fbe::gpu::use_t::COPY_TO } },
+        .record =
+            [image = found->image, levels = found->levels,
+             color = VkClearColorValue{ .float32 = { r, g, b, a } }](VkCommandBuffer commands) {
+                const VkImageSubresourceRange everything{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .levelCount = levels,
+                    .layerCount = 1,
+                };
+                vkCmdClearColorImage(commands, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color,
+                                     1, &everything);
+            },
+    });
 }
 
 FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, int32_t from_x,
@@ -797,15 +717,11 @@ FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, 
     if (!inside(*target, x, y, width, height) || !inside(*source, from_x, from_y, width, height)) {
         return false;
     }
-    VkCommandBuffer commands = fbe::gpu::frame_commands();
-    fbe::gpu::barrier(commands,
-                      levels_barrier(source->image, 0, 1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, resting_stages, 0, copy,
-                                     transfer_read));
-    fbe::gpu::barrier(commands, levels_barrier(target->image, 0, target->levels,
-                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, resting_stages,
-                                               0, transfer, transfer_write));
+    const fbe::gpu::resource_t into = fbe::gpu::texture_resource(to);
+    const fbe::gpu::resource_t out_of = fbe::gpu::texture_resource(from);
+    if (into == fbe::gpu::no_resource || out_of == fbe::gpu::no_resource) {
+        return false;
+    }
     const VkImageCopy region{
         .srcSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1 },
         .srcOffset = { .x = from_x, .y = from_y },
@@ -817,14 +733,16 @@ FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, 
             .depth = 1,
         },
     };
-    vkCmdCopyImage(commands, source->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target->image,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    fbe::gpu::barrier(commands,
-                      levels_barrier(source->image, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, copy, 0,
-                                     resting_stages, shader_read));
-    record_mipmaps(commands, *target);
-    return true;
+    return fbe::gpu::add_pass({
+        .name = "copy",
+        .uses = { { out_of, fbe::gpu::use_t::COPY_FROM }, { into, fbe::gpu::use_t::MIPMAPPED } },
+        .record =
+            [source = source->image, copied = *target, region](VkCommandBuffer commands) {
+                vkCmdCopyImage(commands, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, copied.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                record_mipmaps(commands, copied);
+            },
+    });
 }
 
 FBE_API bool fbe_texture_read(uint64_t texture, int32_t level, uint8_t* pixels, int64_t size) {
@@ -867,7 +785,7 @@ FBE_API bool fbe_texture_release(uint64_t texture) {
     // Its handles are caught now; its image and slot wait for the frames that could draw it.
     live[slot] = false;
     ++generations[slot];
-    --textures_made;
+    textures_made -= textures[slot].engine ? 0 : 1;
     fbe::gpu::after_frame([slot] {
         fbe::gpu::write_texture(slot, textures[fbe::texture::white].view);
         destroy(textures[slot]);

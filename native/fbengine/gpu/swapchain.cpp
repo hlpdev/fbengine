@@ -1,15 +1,16 @@
 // The window's images and Flip's present. A shown window has a surface and a swapchain, made
 // again whenever the window's size in pixels or vsync changes, or the surface says it's out of
-// date; each frame in flight acquires one of its images, draws the screen into it, scaled, and
-// presents it. A headless window has one image of its own, its size in pixels, which each frame
-// draws into the same way and leaves, as nothing shows it: Vulkan's headless surfaces aren't on
-// every driver (Windows' have none, and lavapipe's need udmabuf), so headless frames never depend
-// on them. The window's images are sRGB, so what's drawn is linear light, and the screen scales
-// into them in linear light too.
+// date; each frame in flight acquires one of its images, draws the screen into it, scaled, the
+// frame graph's last pass, and presents it. A headless window has one image of its own, its size in
+// pixels, which each frame draws into the same way and leaves, as nothing shows it: Vulkan's
+// headless surfaces aren't on every driver (Windows' have none, and lavapipe's need udmabuf), so
+// headless frames never depend on them. The window's images are sRGB, so what's drawn is linear
+// light, and the screen scales into them in linear light too.
 
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/gpu.hpp"
+#include "gpu/graph.hpp"
 #include "gpu/image.hpp"
 #include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
@@ -22,6 +23,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -370,11 +372,10 @@ struct present_t {
     std::uint32_t encode;
 };
 
-/// Records drawing the screen into its area of the window's image, a triangle covering it.
-void draw_screen(VkCommandBuffer commands) {
-    const std::uint64_t screen = fbe::gpu::screen_handle();
-    const fbe::texture::texture_t* found = screen != 0 ? fbe::texture::find(screen) : nullptr;
-    if (found == nullptr) {
+/// Records drawing the screen, the graph's `screen`, into its area of the window's image, a
+/// triangle covering it.
+void draw_screen(VkCommandBuffer commands, fbe::gpu::resource_t screen) {
+    if (screen == fbe::gpu::no_resource) {
         return;
     }
     VkPipeline pipeline = fbe::gpu::pipeline({ .shader = &fbe::shaders::present, .color = format });
@@ -397,7 +398,7 @@ void draw_screen(VkCommandBuffer commands) {
                             0, 1, &set, 0, nullptr);
     const bool srgb = format == VK_FORMAT_B8G8R8A8_SRGB || format == VK_FORMAT_R8G8B8A8_SRGB;
     const present_t constants{
-        .texture = fbe::texture::index_of(screen),
+        .texture = fbe::gpu::resource_index(screen),
         .sampler = fbe::gpu::sampler_index(fbe::gpu::screen_smooth() ? FBE_TEXTURE_LINEAR
                                                                      : FBE_TEXTURE_NEAREST,
                                            FBE_TEXTURE_CLAMP, FBE_TEXTURE_CLAMP),
@@ -409,48 +410,37 @@ void draw_screen(VkCommandBuffer commands) {
     vkCmdDraw(commands, 3, 1, 0, 0);
 }
 
-/// Records the frame's last pass into the window's image `index`: cleared, the screen drawn into
-/// it, then left to be presented, or, a headless window's, to be copied from. A headless window's
-/// one image is drawn by each frame in flight, which the first barrier orders after the frame
-/// before's copies.
-void record(const fbe::gpu::device_t& gpu, VkCommandBuffer commands, std::uint32_t index) {
+/// Adds the frame's last pass to the graph, into the window's image `index`: cleared, the screen
+/// drawn into it, then left to be presented, or, a headless window's, to be copied from. A
+/// headless window's one image is drawn by each frame in flight, so its first use waits for the
+/// frame before's copies.
+void add_present(std::uint32_t index) {
     const auto output =
         flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
-    const auto write = flag<VkAccessFlags2>(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
     const auto copy = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COPY_BIT);
-    const auto copy_read = flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT);
-    fbe::gpu::barrier(commands, fbe::gpu::color_transition(images[index], VK_IMAGE_LAYOUT_UNDEFINED,
-                                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                                           output | copy, 0, output, write));
+    const bool presents = swapchain != VK_NULL_HANDLE;
+    const fbe::gpu::resource_t window_image = fbe::gpu::external_resource({
+        .image = images[index],
+        .view = views[index],
+        .extent = extent,
+        .waits = output | copy,
+        .layout = presents ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .stages = presents ? output : copy,
+        .access = presents ? 0 : flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT),
+    });
+    const std::uint64_t handle = fbe::gpu::screen_handle();
+    const fbe::gpu::resource_t screen =
+        handle != 0 ? fbe::gpu::texture_resource(handle) : fbe::gpu::no_resource;
     // Black around the screen, where it doesn't fill the window.
-    const VkRenderingAttachmentInfo color{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .imageView = views[index],
-        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .clearValue = { .color = { .float32 = { 0.0F, 0.0F, 0.0F, 1.0F } } },
+    fbe::gpu::pass_t present{
+        .name = "present",
+        .colors = { { .target = window_image, .clear = true, .rgba = { 0.0F, 0.0F, 0.0F, 1.0F } } },
+        .record = [screen](VkCommandBuffer commands) { draw_screen(commands, screen); },
     };
-    const VkRenderingInfo rendering{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-        .renderArea = { .extent = extent },
-        .layerCount = 1,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &color,
-    };
-    gpu.begin_rendering(commands, &rendering);
-    draw_screen(commands);
-    gpu.end_rendering(commands);
-    if (swapchain != VK_NULL_HANDLE) {
-        fbe::gpu::barrier(commands, fbe::gpu::color_transition(
-                                        images[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, output, write, output, 0));
-    } else {
-        fbe::gpu::barrier(commands, fbe::gpu::color_transition(
-                                        images[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output, write, copy,
-                                        copy_read));
+    if (screen != fbe::gpu::no_resource) {
+        present.uses.emplace_back(screen, fbe::gpu::use_t::SAMPLED);
     }
+    fbe::gpu::add_pass(std::move(present));
 }
 
 /// Whether the window has images to present this frame in, made again first if it's changed.
@@ -527,20 +517,20 @@ void gpu_window_closing() {
 }
 
 void gpu_present(bool wait) {
-    gpu::device_t* found = gpu::device();
+    const gpu::device_t* found = gpu::device();
     if (found == nullptr) {
         return;
     }
     gpu::save_pipeline_cache();
-    gpu::device_t& gpu = *found;
+    const gpu::device_t& gpu = *found;
     // A frame with nowhere to present still runs what it recorded.
     if (!presentable(gpu, wait)) {
         gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE);
         return;
     }
 
-    VkCommandBuffer commands = gpu::frame_commands();
-    const gpu::frame_t& frame = gpu.frames[gpu.frame];
+    // Begun, so the acquire's semaphore is the frame's once the GPU's done with it.
+    const gpu::frame_t& frame = gpu::recording_frame();
     std::uint32_t index = 0;
     if (swapchain != VK_NULL_HANDLE) {
         const VkResult acquired = vkAcquireNextImageKHR(gpu.device, swapchain, UINT64_MAX,
@@ -552,7 +542,7 @@ void gpu_present(bool wait) {
         }
         stale = stale || acquired == VK_SUBOPTIMAL_KHR;
     }
-    record(gpu, commands, index);
+    add_present(index);
     if (swapchain == VK_NULL_HANDLE) {
         if (gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE)) {
             ++presented;
