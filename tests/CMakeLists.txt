@@ -64,3 +64,12 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.hello PROPERTIES
                        PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
 endif()
+
+# The job system, built into the tests from its own source, since the DLL exports only its C API.
+add_executable(fbengine_jobs_tests jobs/jobs_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")
+target_include_directories(fbengine_jobs_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_link_libraries(fbengine_jobs_tests PRIVATE Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_jobs_tests)
+catch_discover_tests(fbengine_jobs_tests TEST_PREFIX "jobs."
+                     DL_PATHS "${fbengine_test_dll_paths}")
