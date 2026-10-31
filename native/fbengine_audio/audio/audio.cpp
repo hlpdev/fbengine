@@ -8,14 +8,17 @@
 #include "fbengine_audio.h"
 #include "listener/listener.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <format>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -29,6 +32,10 @@ constexpr std::int32_t no_device = 2;
 constexpr std::int32_t standard_rate = 48000;
 constexpr std::int32_t standard_channels = 2;
 constexpr std::int32_t most_channels = 8;
+/// The seconds a device mixes at a time, as a start can ask for.
+constexpr double shortest_period = 0.001;
+constexpr double longest_period = 1.0;
+constexpr double milliseconds = 1000.0;
 constexpr std::int32_t slowest = ma_standard_sample_rate_min;
 constexpr std::int32_t fastest = ma_standard_sample_rate_max;
 
@@ -86,29 +93,66 @@ void play(ma_device* device, void* output, const void* /*input*/, ma_uint32 fram
     playing->frames.fetch_add(frames, std::memory_order_relaxed);
 }
 
-/// Opens `made`'s device, on the null backend or the OS's own; false if it won't open, as on a
-/// machine with no output for the OS's.
-bool open_device(mixer_t& made, std::int32_t kind, std::int32_t sample_rate,
-                 std::int32_t channels) {
+/// The outputs fbe_audio_list_outputs found, the main thread's.
+std::vector<std::string> outputs;
+
+/// Opens `context` on `kind`'s backends: the null one, or the OS's own; false if there's none.
+bool open_context(ma_context& context, std::int32_t kind) {
     const std::vector<ma_backend> backends = kind == null_device
                                                  ? std::vector<ma_backend>{ ma_backend_null }
                                                  : fbe::audio::output_backends();
-    ma_result result = ma_context_init(backends.data(), static_cast<ma_uint32>(backends.size()),
-                                       nullptr, &made.context);
+    const ma_result result = ma_context_init(
+        backends.data(), static_cast<ma_uint32>(backends.size()), nullptr, &context);
     if (result != MA_SUCCESS) {
         return fbe::audio::fail_ma(kind == null_device ? "couldn't start the null backend"
                                                        : "there's no audio output to play to",
                                    result);
     }
+    return true;
+}
+
+/// How a device is opened: its rate and channels, 0 for its own, the output named, "" for the
+/// OS's default, and the seconds it mixes at a time, 0 for its own.
+struct opening_t {
+    std::int32_t sample_rate = 0;
+    std::int32_t channels = 0;
+    std::string_view output;
+    double period = 0.0;
+};
+
+/// Opens `made`'s device, on the null backend or the OS's own; false if it won't open, as on a
+/// machine with no output for the OS's, or with no output of the name asked for.
+bool open_device(mixer_t& made, std::int32_t kind, const opening_t& how) {
+    if (!open_context(made.context, kind)) {
+        return false;
+    }
     made.has_context = true;
 
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     config.playback.format = ma_format_f32;
-    config.playback.channels = static_cast<ma_uint32>(channels);
-    config.sampleRate = static_cast<ma_uint32>(sample_rate);
+    config.playback.channels = static_cast<ma_uint32>(how.channels);
+    config.sampleRate = static_cast<ma_uint32>(how.sample_rate);
+    config.periodSizeInMilliseconds =
+        static_cast<ma_uint32>(std::llround(how.period * milliseconds));
     config.dataCallback = play;
     config.pUserData = &made;
-    result = ma_device_init(&made.context, &config, &made.device);
+    ma_device_id id{};
+    if (!how.output.empty()) {
+        ma_device_info* found = nullptr;
+        ma_uint32 count = 0;
+        if (ma_context_get_devices(&made.context, &found, &count, nullptr, nullptr) != MA_SUCCESS) {
+            count = 0;
+        }
+        const std::span<ma_device_info> infos(found, count);
+        const auto named = std::ranges::find_if(
+            infos, [&](const ma_device_info& info) { return how.output == info.name; });
+        if (named == infos.end()) {
+            return fbe::audio::fail(std::format("there's no audio output named {}", how.output));
+        }
+        id = named->id;
+        config.playback.pDeviceID = &id;
+    }
+    const ma_result result = ma_device_init(&made.context, &config, &made.device);
     if (result != MA_SUCCESS) {
         return fbe::audio::fail_ma("couldn't open the audio device", result);
     }
@@ -151,7 +195,8 @@ FBE_AUDIO_API const char* fbe_audio_error(void) {
     return last_error.c_str();
 }
 
-FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t channels) {
+FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t channels,
+                                   const char* output, double period) {
     if (mixer != nullptr) {
         return fbe::audio::fail("the audio is started already; stop it first");
     }
@@ -168,6 +213,12 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
                                             "not {}",
                                             most_channels, channels));
     }
+    if (period != 0.0 &&
+        (std::isnan(period) || period < shortest_period || period > longest_period)) {
+        return fbe::audio::fail(std::format("a period is 0, for the device's, or {} to {} seconds, "
+                                            "not {}",
+                                            shortest_period, longest_period, period));
+    }
 
     auto made = std::make_unique<mixer_t>();
     ma_engine_config config = ma_engine_config_init();
@@ -176,7 +227,13 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
         config.sampleRate = static_cast<ma_uint32>(sample_rate != 0 ? sample_rate : standard_rate);
         config.channels = static_cast<ma_uint32>(channels != 0 ? channels : standard_channels);
     } else {
-        if (!open_device(*made, device, sample_rate, channels)) {
+        const opening_t how = {
+            .sample_rate = sample_rate,
+            .channels = channels,
+            .output = output != nullptr ? output : "",
+            .period = period,
+        };
+        if (!open_device(*made, device, how)) {
             return false;
         }
         config.pDevice = &made->device;
@@ -216,6 +273,45 @@ FBE_AUDIO_API void fbe_audio_stop(void) {
 
 FBE_AUDIO_API bool fbe_audio_started(void) {
     return mixer != nullptr;
+}
+
+FBE_AUDIO_API int32_t fbe_audio_list_outputs(int32_t device) {
+    outputs.clear();
+    if (device == no_device) {
+        return 0;
+    }
+    if (device < default_device || device > no_device) {
+        fbe::audio::fail(std::format("there's no audio device {}", device));
+        return -1;
+    }
+    ma_context context;
+    if (!open_context(context, device)) {
+        return -1;
+    }
+    ma_device_info* found = nullptr;
+    ma_uint32 count = 0;
+    if (ma_context_get_devices(&context, &found, &count, nullptr, nullptr) == MA_SUCCESS) {
+        for (const ma_device_info& info : std::span<ma_device_info>(found, count)) {
+            outputs.emplace_back(info.name);
+        }
+    }
+    ma_context_uninit(&context);
+    return static_cast<int32_t>(outputs.size());
+}
+
+FBE_AUDIO_API const char* fbe_audio_output_name(int32_t index) {
+    if (index < 0 || std::cmp_greater_equal(index, outputs.size())) {
+        return "";
+    }
+    return outputs[static_cast<std::size_t>(index)].c_str();
+}
+
+FBE_AUDIO_API double fbe_audio_period(void) {
+    if (mixer == nullptr || !mixer->has_device) {
+        return 0.0;
+    }
+    return static_cast<double>(mixer->device.playback.internalPeriodSizeInFrames) /
+           static_cast<double>(mixer->device.sampleRate);
 }
 
 FBE_AUDIO_API int32_t fbe_audio_device(void) {

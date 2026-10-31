@@ -52,11 +52,16 @@ Public Final Class Audio
     End Method
 
     /// Starts the mix on `device`, at `sampleRate` frames a second, from 8000 to 384000, with
-    /// `channels`, from 1 to 8, or for either 0, the device's own: 48000 and 2 on MANUAL. It
-    /// panics when it's started already or a value's out of range.
+    /// `channels`, from 1 to 8, or for either 0, the device's own: 48000 and 2 on MANUAL. It plays
+    /// on `output`, one of the names Outputs gives for the device, as a game's options let a player
+    /// pick, or its default for "", mixing `period` seconds at a time, from 0.001 to 1, or the
+    /// device's own for 0: shorter is heard sooner, at more work. It throws AudioError when the
+    /// device won't start or has no output of that name, and panics when it's started already or a
+    /// value's out of range.
     @MainThread Public Static Method Start(device: AudioDevice = AudioDevice.DEFAULT,
-                                           sampleRate: Int32 = 0,
-                                           channels: Int32 = 0) Throws AudioError
+                                           sampleRate: Int32 = 0, channels: Int32 = 0,
+                                           output: String = "",
+                                           period: Float64 = 0.0) Throws AudioError
         If fbe_audio_started() Then Panic("the audio is started already; Stop it first")
         If sampleRate != 0 && (sampleRate < 8000 || sampleRate > 384000)
             Panic("a sample rate is 0, for the device's, or 8000 to 384000 Hz, not {sampleRate}")
@@ -66,10 +71,33 @@ Public Final Class Audio
             Panic("the audio has 0, for the device's, to 8 channels, not {channels}")
         End If
 
-        If !fbe_audio_start(device As Int32, sampleRate, channels)
+        If period != 0.0 && !(period >= 0.001 && period <= 1.0)
+            Panic("a period is 0, for the device's, or 0.001 to 1 seconds, not {period}")
+        End If
+
+        If !fbe_audio_start(device As Int32, sampleRate, channels, output, period)
             Throw AudioError(LastError())
         End If
     End Method
+
+    /// The names of `device`'s outputs, the speakers and headphones a player picks from, for
+    /// Start: the OS's for DEFAULT, the null backend's one for SILENT, and none for MANUAL. It
+    /// throws AudioError when there's no audio backend to ask, as on a machine with no output.
+    @MainThread Public Static Method Outputs(device: AudioDevice): String[] Throws AudioError
+        Local count = fbe_audio_list_outputs(device As Int32)
+        If count < 0 Then Throw AudioError(LastError())
+        Local names: String[] = []
+        For i = 0 Until count
+            Unsafe
+                names.Add(fbe_audio_output_name(i).ToString())
+            End Unsafe
+        End For
+        Return names
+    End Method
+
+    /// The seconds the device mixes at a time, which what's mixed is heard about that much later
+    /// than, or 0 when the audio's stopped or on MANUAL.
+    @MainThread Public Static Method Period(): Float64 => fbe_audio_period()
 
     /// Stops the mix, which finishes every Channel, and lets its device go; stopped already, it does
     /// nothing. Sounds stay loaded.

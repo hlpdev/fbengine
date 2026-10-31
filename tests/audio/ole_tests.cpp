@@ -9,7 +9,7 @@
 #include <ole2.h>
 
 TEST_CASE("OLE starts on the thread that started the audio") {
-    REQUIRE(fbe_audio_start(1, 0, 0));
+    REQUIRE(fbe_audio_start(1, 0, 0, nullptr, 0.0));
     const HRESULT ole = OleInitialize(nullptr);
     CHECK(ole != RPC_E_CHANGED_MODE);
     CHECK(SUCCEEDED(ole));

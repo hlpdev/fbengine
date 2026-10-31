@@ -37,13 +37,24 @@ FBE_AUDIO_API const char* fbe_audio_error(void);
 // Starts the mix on `device`: 0 the OS's default output, on any of its backends but the null one,
 // 1 miniaudio's null backend, which plays to nothing at the pace a device would, or 2 none, where
 // fbe_audio_mix makes each frame when it's called. `sample_rate` is from 8000 to 384000 Hz and
-// `channels` from 1 to 8, or 0 for the device's own (48000 Hz and 2 with no device). False if it's
-// started already, a value's out of range, or the device won't start.
-FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t channels);
+// `channels` from 1 to 8, or 0 for the device's own (48000 Hz and 2 with no device). `output` is
+// the name of one of the device's outputs, as fbe_audio_list_outputs lists them, or "" or null for
+// its default; `period` the seconds it mixes at a time, from 0.001 to 1, or 0 for its own. False if
+// it's started already, a value's out of range, there's no output of that name, or the device
+// won't start.
+FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t channels,
+                                   const char* output, double period);
 // Stops the mix, which finishes every channel, and lets the device go; stopped already, it does
 // nothing.
 FBE_AUDIO_API void fbe_audio_stop(void);
 FBE_AUDIO_API bool fbe_audio_started(void);
+// Lists `device`'s outputs, 0's the OS's and 1's the null backend's one, for fbe_audio_output_name:
+// how many, or -1, for fbe_audio_error, if there's no backend to list them; 2 has none.
+FBE_AUDIO_API int32_t fbe_audio_list_outputs(int32_t device);
+// The name of output `index` of those fbe_audio_list_outputs listed last, "" for another index.
+FBE_AUDIO_API const char* fbe_audio_output_name(int32_t index);
+// The seconds the device mixes at a time, 0 when it's stopped or there's no device.
+FBE_AUDIO_API double fbe_audio_period(void);
 // What fbe_audio_start was given for its device, -1 when it's stopped.
 FBE_AUDIO_API int32_t fbe_audio_device(void);
 // The device's name, "" when it's stopped or has none.
