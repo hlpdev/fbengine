@@ -56,10 +56,11 @@ Public Final Class Audio
     /// `channels`, from 1 to 8, or for either 0, the device's own: 48000 and 2 on MANUAL. It plays
     /// on `output`, one of the names Outputs gives for the device, as a game's options let a player
     /// pick, or its default for "", mixing `period` seconds at a time, from 0.001 to 1, or the
-    /// device's own for 0: shorter is heard sooner, at more work. When the output's lost, the next
-    /// Flip moves the mix to the default one, as Lost says. It throws AudioError when the device
-    /// won't start or has no output of that name, and panics when it's started already or a value's
-    /// out of range.
+    /// device's own for 0: shorter is heard sooner, at more work. On the default output, it follows
+    /// the OS's default when that changes, within about a second, at a Flip; when the output's lost,
+    /// the next Flip moves the mix to the default one, as Lost says. It throws AudioError when the
+    /// device won't start or has no output of that name, and panics when it's started already or a
+    /// value's out of range.
     @MainThread Public Static Method Start(device: AudioDevice = AudioDevice.DEFAULT,
                                            sampleRate: Int32 = 0, channels: Int32 = 0,
                                            output: String = "",
@@ -112,12 +113,16 @@ Public Final Class Audio
     /// Whether the mix is started.
     @MainThread Public Static Method Started(): Bool => fbe_audio_started()
 
-    /// Whether the output the mix plays on was lost, as one is when it's unplugged: nothing's mixed,
-    /// so Channels wait where they are. At the next Flip, the device is made again on the default
-    /// output, at the mix's rate and channels, and the Channels go on where they were; it stays
-    /// Lost until the Flip after, so a game can tell the player, and Output names the output now. A
-    /// game that wants the one it named back Starts on it again. With no output at all, it stays
-    /// Lost, and each Flip tries the default again. False when it's stopped or on MANUAL.
+    /// Whether the output the mix plays on was lost: its device stopped, as one does when its
+    /// output's unplugged, or it's mixed nothing for a quarter of a second, four of its periods if
+    /// they're longer (two seconds before it's mixed at all), as one whose output's gone does on
+    /// macOS and Linux, or whose driver's hung. Nothing's mixed, so Channels wait where they are.
+    /// At the next Flip, the device is made again on the default output, at the mix's rate and
+    /// channels, and the Channels go on where they were; it stays Lost until the Flip after, so a
+    /// game can tell the player, and Output names the output now. It's Lost for the Flip, too, that
+    /// moves a mix on the default output to a new default. A game that wants the one it named back
+    /// Starts on it again. With no output at all, it stays Lost, and each Flip tries the default
+    /// again. False when it's stopped or on MANUAL.
     @MainThread Public Static Method Lost(): Bool => fbe_audio_lost()
 
     /// The output in use, unplugged as the OS would unplug it, which stops the device, for a game's
@@ -130,6 +135,20 @@ Public Final Class Audio
     /// SimulatePlugIn. It throws AudioError unless the audio's started on a device.
     @MainThread Public Static Method SimulateUnplugAll() Throws AudioError
         If !fbe_audio_simulate(FBE_AUDIO_SIMULATE_UNPLUG_ALL) Then Throw AudioError(LastError())
+    End Method
+
+    /// The device's mix stalled, left started, as one whose output's gone is on macOS and Linux, or
+    /// whose driver's hung, for a game's tests: Lost once it's mixed nothing for long enough, and
+    /// made again at the Flip after. It throws AudioError unless the audio's started on a device.
+    @MainThread Public Static Method SimulateStall() Throws AudioError
+        If !fbe_audio_simulate(FBE_AUDIO_SIMULATE_STALL) Then Throw AudioError(LastError())
+    End Method
+
+    /// The OS's default output changed, as a player's choosing another does, for a game's tests: a
+    /// mix on the default output moves to it at the next Flip. It throws AudioError unless the
+    /// audio's started on a device.
+    @MainThread Public Static Method SimulateDefaultChange() Throws AudioError
+        If !fbe_audio_simulate(FBE_AUDIO_SIMULATE_DEFAULT_CHANGE) Then Throw AudioError(LastError())
     End Method
 
     /// Every output, plugged back in as the OS would, so the next Flip has the default to fall back

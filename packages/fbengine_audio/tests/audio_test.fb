@@ -232,3 +232,61 @@ Function WithNoOutputLeftItStaysLostAndTriesEachFlip() Throws AudioError, SoundE
     Expect(!Audio.Lost())
     Expect(FramesPast(0) > 0)
 End Function
+
+// A device whose mix stalls, left started, as a lost output's is on CoreAudio and PulseAudio, is
+// Lost once it's mixed nothing for a quarter of a second, and made again at the next Flip, its
+// Channels going on where they were.
+@Test
+Function AStalledMixIsLostAndMadeAgain() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.SILENT, 48000, 2)
+    Defer Audio.Stop()
+    Local channel = (Try Sound.FromBytes(Wav(Constant(16384, 480000)))).Play()
+    Expect(FramesPast(0) > 0)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Try Audio.SimulateStall()
+    Sleep(50.Milliseconds)
+    Local frames = Audio.Frames()
+    Expect(!Audio.Lost())
+    Sleep(400.Milliseconds)
+    Expect(Audio.Frames() == frames)
+    Expect(Audio.Lost())
+    Expect(Audio.Started())
+    Local position = channel.Position()
+    Flip(False)
+    Expect(Audio.Lost())
+    Expect(FramesPast(frames) > frames)
+    Expect(channel.Position() > position)
+    Flip(False)
+    Expect(!Audio.Lost())
+End Function
+
+// On the default output, a change of the OS's default moves the mix at the next Flip, Lost for
+// that Flip; one named stays where it is. Asked again a second on, the null backend's default is
+// the one it's on.
+@Test
+Function ADefaultChangeMovesAMixOnTheDefault() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.SILENT, 48000, 2)
+    Defer Audio.Stop()
+    Expect(FramesPast(0) > 0)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Sleep(1100.Milliseconds)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Try Audio.SimulateDefaultChange()
+    Expect(!Audio.Lost())
+    Local frames = Audio.Frames()
+    Flip(False)
+    Expect(Audio.Lost())
+    Expect(Audio.Output() != "")
+    Expect(FramesPast(frames) > frames)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Audio.Stop()
+    Try Audio.Start(AudioDevice.SILENT, 48000, 2, (Try Audio.Outputs(AudioDevice.SILENT))[0])
+    Expect(FramesPast(0) > 0)
+    Try Audio.SimulateDefaultChange()
+    Flip(False)
+    Expect(!Audio.Lost())
+End Function

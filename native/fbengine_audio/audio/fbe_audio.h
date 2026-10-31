@@ -29,11 +29,15 @@ extern "C" {
 #endif
 
 // What fbe_audio_simulate does to the device, as the OS would: its output unplugged, which stops
-// it; every output plugged back in, so fbe_audio_recover has the default to fall back to; and every
-// output unplugged, so it has none until they're plugged back in.
-#define FBE_AUDIO_SIMULATE_UNPLUG     0
-#define FBE_AUDIO_SIMULATE_PLUG_IN    1
-#define FBE_AUDIO_SIMULATE_UNPLUG_ALL 2
+// it; every output plugged back in, so fbe_audio_recover has the default to fall back to; every
+// output unplugged, so it has none until they're plugged back in; its mix stalled, the device
+// left started, as a lost output's is on CoreAudio and PulseAudio; and the default output
+// changed, which a device opened on it follows.
+#define FBE_AUDIO_SIMULATE_UNPLUG         0
+#define FBE_AUDIO_SIMULATE_PLUG_IN        1
+#define FBE_AUDIO_SIMULATE_UNPLUG_ALL     2
+#define FBE_AUDIO_SIMULATE_STALL          3
+#define FBE_AUDIO_SIMULATE_DEFAULT_CHANGE 4
 
 // The version of fbengine this DLL is, like "0.1.0", which is its packages'.
 FBE_AUDIO_API const char* fbe_audio_version(void);
@@ -67,14 +71,17 @@ FBE_AUDIO_API double fbe_audio_period(void);
 FBE_AUDIO_API int32_t fbe_audio_device(void);
 // The name of the output the device plays on, "" when it's stopped or has none.
 FBE_AUDIO_API const char* fbe_audio_device_name(void);
-// Whether the device stopped on its own, though the mix is started, as one does when its output's
-// unplugged, or fbe_audio_recover made it again since the flip before; nothing's mixed while it's
-// stopped. False when the mix is stopped or has no device.
+// Whether the device was lost, though the mix is started: it stopped on its own, as one does when
+// its output's unplugged, or it's started but its mix hasn't moved for a quarter of a second (four
+// periods if they're longer, two seconds before its first frames), as a lost output's doesn't on
+// CoreAudio and PulseAudio; or fbe_audio_recover made it again since the flip before. Nothing's
+// mixed meanwhile. False when the mix is stopped or has no device.
 FBE_AUDIO_API bool fbe_audio_lost(void);
-// fbengine_audio's work at each flip: a device that stopped on its own is made again on the
-// default output, at the mix's rate and channels and the period it was started with, and the
-// channels go on where they were. One that won't open, as with no output at all, is tried again
-// at the next.
+// fbengine_audio's work at each flip, the only one that moves the device: one that's lost, or one
+// on the default output when the OS's default has changed (asked once a second, on WASAPI, whose
+// own rerouting is off), is made again on the default output, at the mix's rate and channels and
+// the period it was started with, and the channels go on where they were. One that won't open, as
+// with no output at all, is tried again at the next.
 FBE_AUDIO_API void fbe_audio_recover(void);
 // Does one of the FBE_AUDIO_SIMULATE_ events to the device; false when the mix is stopped or has
 // no device, or for another event.
