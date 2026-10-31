@@ -6,9 +6,13 @@
 Public Extern "C" Lib "fbengine_audio_native"
     Function fbe_audio_version(): CString
     Function fbe_audio_error(): CString
-    Function fbe_audio_start(device: Int32, sample_rate: Int32, channels: Int32): Bool
+    Function fbe_audio_start(device: Int32, sample_rate: Int32, channels: Int32, output: CString,
+                             period: Float64): Bool
     Function fbe_audio_stop()
     Function fbe_audio_started(): Bool
+    Function fbe_audio_list_outputs(device: Int32): Int32
+    Function fbe_audio_output_name(index: Int32): CString
+    Function fbe_audio_period(): Float64
     Function fbe_audio_device(): Int32
     Function fbe_audio_device_name(): CString
     Function fbe_audio_sample_rate(): Int32

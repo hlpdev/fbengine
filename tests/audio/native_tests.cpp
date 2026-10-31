@@ -91,7 +91,7 @@ std::pair<float, float> mixed_beside(Change change) {
 // A low-pass at 0 Hz puts out a full-scale click; taking one away mustn't let the mixing thread
 // make it at 0 Hz between the cutoff going and the low-pass going.
 TEST_CASE("a bus's low-pass taken away while another thread mixes never clicks") {
-    REQUIRE(fbe_audio_start(2, rate, 1));
+    REQUIRE(fbe_audio_start(2, rate, 1, nullptr, 0.0));
     const std::uint64_t bus = fbe_bus_add(0);
     REQUIRE(loop(tone(), bus) != 0);
     const auto [loudest, unused] = mixed_beside([&] {
@@ -109,7 +109,7 @@ TEST_CASE("a bus's low-pass taken away while another thread mixes never clicks")
 // the left and 0.462 on the right. Its pan and volume reach the mixing thread together, so a mix
 // between never has one side louder than either pan makes it.
 TEST_CASE("a pan changed while another thread mixes is never heard half changed") {
-    REQUIRE(fbe_audio_start(2, rate, 2));
+    REQUIRE(fbe_audio_start(2, rate, 2, nullptr, 0.0));
     REQUIRE(fbe_channel_set_pan_law(1));
     const std::uint64_t channel = loop(wav(std::vector<std::int16_t>(4800, 16384)), 0);
     REQUIRE(channel != 0);
