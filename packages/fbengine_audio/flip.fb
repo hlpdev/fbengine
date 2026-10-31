@@ -1,6 +1,7 @@
-// fbengine_audio's work at each Flip, in one of Frame.OnFlip's hooks: a device whose output was lost
-// is made again on the default output, then the Listener moves, then the Emitters, so each
-// Emitter's Doppler effect is from where the Listener is now.
+// fbengine_audio's work at each Flip, in one of Frame.OnFlip's late hooks, after the others, as
+// physics', have moved what's followed: a device whose output was lost is made again on the default
+// output, then the Listener moves, then the Emitters, so each Emitter's Doppler effect is from
+// where the Listener is now.
 
 Import std.core
 Import std.math
@@ -16,7 +17,7 @@ Global hooked = False
 @MainThread Package Function HookFlip()
     If hooked Then Return
     hooked = True
-    Frame.OnFlip(EachFrame)
+    Frame.OnFlip(EachFrame, late: True)
 End Function
 
 /// How fast something moved from `last` to `now` over the last frame, at rest when there was none,
