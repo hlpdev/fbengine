@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <format>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 #if defined(__x86_64__) || defined(_M_X64)
@@ -570,4 +571,51 @@ TEST_CASE("a cast hits the same of bodies as near in a world restored") {
     CHECK(std::ranges::count(before, 0) == 0);
     CHECK(after == before);
     fbe_physics_free(world);
+}
+
+namespace {
+
+// The bits of a ball's x a second after a push too small for a float to keep once it's divided by
+// the ball's mass, 523 kg, given with the calling thread's numbers that small flushed to 0 or not.
+std::uint32_t pushed_by(int how, bool flush) {
+    const std::uint64_t world = fbe_physics_new(16);
+    const fbe_shape_vec3_t floor_size{ .x = 10.0F, .y = 1.0F, .z = 10.0F };
+    const fbe_body_vec3_t floor_at = at(0.0F, -0.5F, 0.0F);
+    fbe_body_add(world, fbe_shape_box(&floor_size), FBE_BODY_STATIC, &floor_at, &unturned);
+    const fbe_body_vec3_t ball_at = at(0.0F, 0.5F, 0.0F);
+    const std::uint64_t ball =
+        fbe_body_add(world, fbe_shape_sphere(0.5F), FBE_BODY_DYNAMIC, &ball_at, &unturned);
+    {
+        std::optional<flushed_t> flushed;
+        if (flush) {
+            flushed.emplace();
+        }
+        const fbe_body_vec3_t tiny = at(1e-36F, 0.0F, 0.0F);
+        const fbe_body_vec3_t force = at(6e-35F, 0.0F, 0.0F);
+        const fbe_body_vec3_t top = at(0.0F, 1.0F, 0.0F);
+        if (how == 0) {
+            fbe_body_add_impulse(ball, &tiny);
+        } else if (how == 1) {
+            fbe_body_add_force(ball, &force);
+        } else {
+            fbe_body_add_impulse_at(ball, &tiny, &top);
+        }
+    }
+    for (int i = 0; i < 60; ++i) {
+        fbe_physics_step(world, 1.0F / 60, 1);
+    }
+    fbe_body_vec3_t now{};
+    fbe_body_position(ball, &now);
+    fbe_physics_free(world);
+    return std::bit_cast<std::uint32_t>(now.x);
+}
+
+} // namespace
+
+// Every call that works out floats, not only steps, casts, and moves, does so in fbengine's mode.
+TEST_CASE("a push works out the same whatever floating point mode the game's thread is in") {
+    fbe_physics_set_threads(0);
+    for (const int how : { 0, 1, 2 }) {
+        CHECK(pushed_by(how, true) == pushed_by(how, false));
+    }
 }

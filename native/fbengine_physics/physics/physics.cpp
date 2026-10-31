@@ -240,6 +240,7 @@ FBE_PHYSICS_API int32_t fbe_physics_bodies(uint64_t world) {
 }
 
 FBE_PHYSICS_API bool fbe_physics_optimize(uint64_t world) {
+    const fp_mode_t fp_mode;
     world_t* found = find_world(world);
     if (found == nullptr) {
         return false;
@@ -255,6 +256,7 @@ FBE_PHYSICS_API uint32_t fbe_physics_max_bodies(uint64_t world) {
 }
 
 FBE_PHYSICS_API bool fbe_physics_set_gravity(uint64_t world, const fbe_physics_vec3_t* gravity) {
+    const fp_mode_t fp_mode;
     world_t* found = find_world(world);
     if (found == nullptr) {
         return false;
@@ -267,6 +269,7 @@ FBE_PHYSICS_API bool fbe_physics_set_gravity(uint64_t world, const fbe_physics_v
 }
 
 FBE_PHYSICS_API bool fbe_physics_gravity(uint64_t world, fbe_physics_vec3_t* gravity) {
+    const fp_mode_t fp_mode;
     const world_t* found = find_world(world);
     if (found == nullptr) {
         return false;
@@ -277,6 +280,7 @@ FBE_PHYSICS_API bool fbe_physics_gravity(uint64_t world, fbe_physics_vec3_t* gra
 }
 
 FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t collision_steps) {
+    const fp_mode_t fp_mode;
     world_t* found = find_world(world);
     if (found == nullptr) {
         return false;
@@ -288,7 +292,6 @@ FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t col
         return fail(std::format("a step finds collisions 1 to {} times, not {}",
                                 FBE_PHYSICS_MAX_COLLISION_STEPS, collision_steps));
     }
-    const fp_mode_t mode;
     found->began.clear();
     found->ended.clear();
     // Each collision step is an update of Jolt's of its own, whose contacts are taken as it ends:

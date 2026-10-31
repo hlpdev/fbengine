@@ -162,6 +162,7 @@ extern "C" {
 
 FBE_PHYSICS_API uint64_t fbe_character_new(uint64_t world, uint64_t shape,
                                            const fbe_character_vec3_t* position) {
+    const fp_mode_t fp_mode;
     world_t* in = find_world(world);
     if (in == nullptr) {
         return 0;
@@ -219,6 +220,7 @@ FBE_PHYSICS_API uint64_t fbe_character_body(uint64_t character) {
 
 FBE_PHYSICS_API bool fbe_character_move(uint64_t character, const fbe_character_vec3_t* velocity,
                                         float seconds) {
+    const fp_mode_t fp_mode;
     const character_t* found = find(character);
     if (found == nullptr) {
         return false;
@@ -230,7 +232,6 @@ FBE_PHYSICS_API bool fbe_character_move(uint64_t character, const fbe_character_
         return fail(std::format("a character moves for more than 0 seconds and at most 1, not {}",
                                 seconds));
     }
-    const fp_mode_t mode;
     JPH::CharacterVirtual& moving = *found->character;
     moving.SetLinearVelocity(vec3(*velocity));
     JPH::CharacterVirtual::ExtendedUpdateSettings update;
@@ -243,6 +244,7 @@ FBE_PHYSICS_API bool fbe_character_move(uint64_t character, const fbe_character_
 }
 
 FBE_PHYSICS_API bool fbe_character_position(uint64_t character, fbe_character_vec3_t* position) {
+    const fp_mode_t fp_mode;
     const character_t* found = find(character);
     if (found == nullptr) {
         return false;
@@ -253,6 +255,7 @@ FBE_PHYSICS_API bool fbe_character_position(uint64_t character, fbe_character_ve
 
 FBE_PHYSICS_API bool fbe_character_set_position(uint64_t character,
                                                 const fbe_character_vec3_t* position) {
+    const fp_mode_t fp_mode;
     const character_t* found = find(character);
     if (found == nullptr) {
         return false;
@@ -265,6 +268,7 @@ FBE_PHYSICS_API bool fbe_character_set_position(uint64_t character,
 }
 
 FBE_PHYSICS_API bool fbe_character_velocity(uint64_t character, fbe_character_vec3_t* velocity) {
+    const fp_mode_t fp_mode;
     const character_t* found = find(character);
     if (found == nullptr) {
         return false;
@@ -292,6 +296,7 @@ FBE_PHYSICS_API int32_t fbe_character_ground(uint64_t character) {
 }
 
 FBE_PHYSICS_API bool fbe_character_ground_normal(uint64_t character, fbe_character_vec3_t* normal) {
+    const fp_mode_t fp_mode;
     const character_t* found = find(character);
     if (found == nullptr) {
         return false;
@@ -302,6 +307,7 @@ FBE_PHYSICS_API bool fbe_character_ground_normal(uint64_t character, fbe_charact
 
 FBE_PHYSICS_API bool fbe_character_ground_velocity(uint64_t character,
                                                    fbe_character_vec3_t* velocity) {
+    const fp_mode_t fp_mode;
     const character_t* found = find(character);
     if (found == nullptr) {
         return false;
@@ -324,6 +330,7 @@ FBE_PHYSICS_API uint64_t fbe_character_ground_body(uint64_t character) {
 }
 
 FBE_PHYSICS_API bool fbe_character_set_shape(uint64_t character, uint64_t shape) {
+    const fp_mode_t fp_mode;
     const character_t* found = find(character);
     if (found == nullptr) {
         return false;
@@ -332,7 +339,6 @@ FBE_PHYSICS_API bool fbe_character_set_shape(uint64_t character, uint64_t shape)
     if (of == nullptr) {
         return false;
     }
-    const fp_mode_t mode;
     const filters_t filters(*found);
     const float deepest = 1.5F * found->world->system.GetPhysicsSettings().mPenetrationSlop;
     if (!found->character->SetShape(of, deepest, filters.broad_phase, filters.objects,
@@ -344,24 +350,29 @@ FBE_PHYSICS_API bool fbe_character_set_shape(uint64_t character, uint64_t shape)
 }
 
 FBE_PHYSICS_API float fbe_character_max_slope(uint64_t character) {
+    const fp_mode_t fp_mode;
     return get_float(character, [](const character_t& c) {
         return std::acos(c.character->GetCosMaxSlopeAngle());
     });
 }
 
 FBE_PHYSICS_API float fbe_character_mass(uint64_t character) {
+    const fp_mode_t fp_mode;
     return get_float(character, [](const character_t& c) { return c.character->GetMass(); });
 }
 
 FBE_PHYSICS_API float fbe_character_strength(uint64_t character) {
+    const fp_mode_t fp_mode;
     return get_float(character, [](const character_t& c) { return c.character->GetMaxStrength(); });
 }
 
 FBE_PHYSICS_API float fbe_character_step_height(uint64_t character) {
+    const fp_mode_t fp_mode;
     return get_float(character, [](const character_t& c) { return c.step_height; });
 }
 
 FBE_PHYSICS_API bool fbe_character_set_max_slope(uint64_t character, float radians) {
+    const fp_mode_t fp_mode;
     return set_float(character, radians,
                      radians >= 0.0F && radians <= std::numbers::pi_v<float> / 2,
                      "a max slope is 0 to pi / 2",
@@ -369,16 +380,19 @@ FBE_PHYSICS_API bool fbe_character_set_max_slope(uint64_t character, float radia
 }
 
 FBE_PHYSICS_API bool fbe_character_set_mass(uint64_t character, float mass) {
+    const fp_mode_t fp_mode;
     return set_float(character, mass, mass > 0.0F, "a character's mass is more than 0",
                      [](character_t& c, float v) { c.character->SetMass(v); });
 }
 
 FBE_PHYSICS_API bool fbe_character_set_strength(uint64_t character, float strength) {
+    const fp_mode_t fp_mode;
     return set_float(character, strength, strength > 0.0F, "a character's strength is more than 0",
                      [](character_t& c, float v) { c.character->SetMaxStrength(v); });
 }
 
 FBE_PHYSICS_API bool fbe_character_set_step_height(uint64_t character, float height) {
+    const fp_mode_t fp_mode;
     return set_float(character, height, height >= 0.0F, "a step height is 0 or more",
                      [](character_t& c, float v) { c.step_height = v; });
 }

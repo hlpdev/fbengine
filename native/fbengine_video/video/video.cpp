@@ -1,7 +1,8 @@
 // Videos: each decoded on a thread of its own, a few pictures ahead of its clock, which the main
 // thread moves on, showing each picture as it falls due. A seek starts the thread again where it
 // says, and a looping video's thread starts again at its start each time it ends, each loop's
-// pictures due a loop's length after the last's.
+// pictures due a loop's length after the last's. A clock moved on past the next picture a seek
+// starts from seeks there, rather than decoding every picture between.
 
 #include "fbengine_video.h"
 #include "video/decoder.hpp"
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <deque>
 #include <format>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -38,13 +40,64 @@ bool fail(std::string_view message) {
     return false;
 }
 
+// A RIFF WAV file of `sound`'s 32-bit float samples, which fit one.
+std::vector<std::uint8_t> wav_of(const sound_t& sound) {
+    std::vector<std::uint8_t> wav;
+    const auto put = [&wav](std::uint32_t value, int bytes) {
+        for (int i = 0; i < bytes; ++i) {
+            wav.push_back(static_cast<std::uint8_t>(value >> (8U * static_cast<unsigned>(i))));
+        }
+    };
+    const auto tag = [&wav](std::string_view text) {
+        wav.insert(wav.end(), text.begin(), text.end());
+    };
+    const auto data = static_cast<std::uint32_t>(sound.samples.size() * sizeof(float));
+    const auto channels = static_cast<std::uint32_t>(sound.channels);
+    const auto rate = static_cast<std::uint32_t>(sound.rate);
+    tag("RIFF");
+    put(36 + data, 4);
+    tag("WAVE");
+    tag("fmt ");
+    put(16, 4);
+    // IEEE float.
+    put(3, 2);
+    put(channels, 2);
+    put(rate, 4);
+    put(rate * channels * 4, 4);
+    put(channels * 4, 2);
+    put(32, 2);
+    tag("data");
+    put(data, 4);
+    const std::size_t start = wav.size();
+    wav.resize(start + data);
+    if (data > 0) {
+        std::memcpy(wav.data() + start, sound.samples.data(), data);
+    }
+    return wav;
+}
+
+// Where a thread starts again: a time in a loop, and when that loop starts.
+struct seek_t {
+    double to = 0.0;
+    double loop_start = 0.0;
+};
+
 struct video_t {
     explicit video_t(std::unique_ptr<decoder_t> made)
         : decoder(std::move(made)), width(decoder->width()), height(decoder->height()),
-          frame_rate(decoder->frame_rate()), duration(decoder->duration()),
+          frame_rate(decoder->frame_rate()), frames(decoder->frames()),
+          duration(decoder->duration()),
           // A picture's due a little before its time, so a clock moved on by a frame's time at a
           // time, which rounds, never falls a hair short of it.
-          slack(0.001 / frame_rate), worker([this] { work(); }) {}
+          slack(0.001 / frame_rate) {
+        const sound_t sound = decoder->take_sound();
+        sound_rate = sound.rate;
+        sound_channels = sound.channels;
+        if (sound_rate > 0) {
+            wav = wav_of(sound);
+        }
+        worker = std::thread([this] { work(); });
+    }
 
     ~video_t() {
         {
@@ -64,8 +117,13 @@ struct video_t {
     const std::int32_t width;
     const std::int32_t height;
     const double frame_rate;
+    const std::int64_t frames;
     const double duration;
     const double slack;
+    std::int32_t sound_rate = 0;
+    std::int32_t sound_channels = 0;
+    // Its sound, as a WAV, made once.
+    std::vector<std::uint8_t> wav;
 
     // The thread's and the main thread's, under the lock.
     std::mutex lock;
@@ -74,7 +132,7 @@ struct video_t {
     std::vector<picture_t> spare;
     // Which seek the thread's pictures are of, and where the next is to.
     std::uint64_t generation = 0;
-    std::optional<double> seek_to = 0.0;
+    std::optional<seek_t> seek_to = seek_t{};
     bool loop = false;
     // Whether the thread's decoded to the end, not looping.
     bool decoded_all = false;
@@ -110,13 +168,13 @@ struct video_t {
         double last = 0.0;
         while (!quit) {
             if (seek_to.has_value()) {
-                const double to = *seek_to;
+                const seek_t to = *seek_to;
                 seek_to.reset();
                 of = generation;
-                loop_start = 0.0;
+                loop_start = to.loop_start;
                 picture_t picture = take_spare();
                 hold.unlock();
-                const bool found = decoder->seek(to, picture);
+                const bool found = decoder->seek(to.to, picture);
                 hold.lock();
                 if (of == generation) {
                     decoded(found, std::move(picture), loop_start, last);
@@ -163,8 +221,63 @@ struct video_t {
         changed.notify_all();
     }
 
+    // Starts the thread again at `to`, a time in the loop that starts at `loop_start`, the picture
+    // it decodes first shown whenever it's ready.
+    void restart(std::optional<seek_t> to) {
+        {
+            const std::scoped_lock hold(lock);
+            for (picture_t& picture : ready) {
+                spare.push_back(std::move(picture));
+            }
+            ready.clear();
+            ++generation;
+            seek_to = to;
+            decoded_all = !to.has_value();
+        }
+        changed.notify_all();
+    }
+
+    // Seeks to the picture the clock's at, if that's past the next picture a seek starts from,
+    // or a loop on, which decoding every picture between would be slow to get to.
+    void skip_ahead() {
+        if (showing_next) {
+            return;
+        }
+        double into = clock - shown.loop_start;
+        std::int64_t loops = 0;
+        if (into >= duration) {
+            if (loop) {
+                loops = static_cast<std::int64_t>(std::floor(into / duration));
+                into -= static_cast<double>(loops) * duration;
+            } else {
+                into = duration;
+            }
+        }
+        const std::int64_t due =
+            std::clamp(static_cast<std::int64_t>(std::floor((into * frame_rate) + 0.001)),
+                       std::int64_t{ 0 }, frames - 1);
+        // Where the thread gets to as soon as a seek would: the next start, or into the next loop
+        // as far as its first.
+        std::int64_t start = decoder->next_start(shown.number);
+        if (start == std::numeric_limits<std::int64_t>::max()) {
+            if (!loop) {
+                return;
+            }
+            start = frames + std::min(decoder->next_start(0), frames);
+        }
+        if ((loops * frames) + due < start) {
+            return;
+        }
+        restart(seek_t{
+            .to = into,
+            .loop_start = shown.loop_start + (static_cast<double>(loops) * duration),
+        });
+        showing_next = true;
+    }
+
     // Shows the picture due by the clock, waiting for the thread to decode it if it's behind.
     void show_due() {
+        skip_ahead();
         std::unique_lock hold(lock);
         for (;;) {
             while (!ready.empty() && (showing_next || ready.front().time <= clock + slack)) {
@@ -173,6 +286,10 @@ struct video_t {
                 showing_next = false;
                 ++frames_shown;
                 changed.notify_all();
+            }
+            // A seek that found nothing to show leaves what's shown.
+            if (showing_next && ready.empty() && decoded_all) {
+                showing_next = false;
             }
             // The next is ready but not due, or there's none; or the next isn't decoded yet but
             // is due, as the one shown has had its time.
@@ -192,21 +309,35 @@ struct video_t {
 
     // Starts the thread again at `seconds`, and shows the picture due then.
     void seek(double seconds) {
-        {
-            const std::scoped_lock hold(lock);
-            for (picture_t& picture : ready) {
-                spare.push_back(std::move(picture));
-            }
-            ready.clear();
-            ++generation;
-            seek_to = seconds;
-            decoded_all = false;
-        }
-        changed.notify_all();
+        restart(seek_t{ .to = seconds, .loop_start = 0.0 });
         clock = seconds;
         ended = false;
         showing_next = true;
         show_due();
+    }
+
+    // Makes the video loop, or not: a loop turned off ends at its end, though the thread's gone
+    // on into the next, after the picture shown.
+    void set_loop(bool looping) {
+        const bool stopping = loop && !looping;
+        {
+            const std::scoped_lock hold(lock);
+            loop = looping;
+            // A thread at the end goes on into the next loop.
+            if (looping && decoded_all) {
+                decoded_all = false;
+            }
+        }
+        changed.notify_all();
+        // A seek's picture still to come is of the loop it says.
+        if (stopping && !showing_next) {
+            const std::int64_t next = shown.number + 1;
+            restart(next < frames ? std::optional(seek_t{
+                                        .to = static_cast<double>(next) / frame_rate,
+                                        .loop_start = shown.loop_start,
+                                    })
+                                  : std::nullopt);
+        }
     }
 };
 
@@ -222,40 +353,6 @@ video_t* find(std::uint64_t handle) {
         fail(handle == 0 ? "there's no video" : "the video was freed");
     }
     return video;
-}
-
-// A RIFF WAV file of `sound`'s 32-bit float samples.
-std::vector<std::uint8_t> wav_of(const sound_t& sound) {
-    std::vector<std::uint8_t> wav;
-    const auto put = [&wav](std::uint32_t value, int bytes) {
-        for (int i = 0; i < bytes; ++i) {
-            wav.push_back(static_cast<std::uint8_t>(value >> (8U * static_cast<unsigned>(i))));
-        }
-    };
-    const auto tag = [&wav](std::string_view text) {
-        wav.insert(wav.end(), text.begin(), text.end());
-    };
-    const auto data = static_cast<std::uint32_t>(sound.samples.size() * sizeof(float));
-    const auto channels = static_cast<std::uint32_t>(sound.channels);
-    const auto rate = static_cast<std::uint32_t>(sound.rate);
-    tag("RIFF");
-    put(36 + data, 4);
-    tag("WAVE");
-    tag("fmt ");
-    put(16, 4);
-    // IEEE float.
-    put(3, 2);
-    put(channels, 2);
-    put(rate, 4);
-    put(rate * channels * 4, 4);
-    put(channels * 4, 2);
-    put(32, 2);
-    tag("data");
-    put(data, 4);
-    const std::size_t start = wav.size();
-    wav.resize(start + data);
-    std::memcpy(wav.data() + start, sound.samples.data(), data);
-    return wav;
 }
 
 } // namespace
@@ -275,8 +372,13 @@ FBE_VIDEO_API uint64_t fbe_video_open(const uint8_t* data, int64_t size) {
         fail("a video is some bytes");
         return 0;
     }
+    bool too_long = false;
     std::unique_ptr<decoder_t> decoder =
-        open_decoder(std::vector<std::uint8_t>(data, data + static_cast<std::size_t>(size)));
+        open_decoder(std::span(data, static_cast<std::size_t>(size)), too_long);
+    if (too_long) {
+        fail("the video's sound is longer than a WAV holds, 4 GB of it");
+        return 0;
+    }
     if (decoder == nullptr) {
         fail("that isn't a video fbengine_video decodes: an MPEG-1 program stream");
         return 0;
@@ -320,17 +422,17 @@ FBE_VIDEO_API double fbe_video_duration(uint64_t video) {
 
 FBE_VIDEO_API bool fbe_video_has_sound(uint64_t video) {
     const video_t* found = find(video);
-    return found != nullptr && found->decoder->has_sound();
+    return found != nullptr && found->sound_rate > 0;
 }
 
 FBE_VIDEO_API int32_t fbe_video_sound_rate(uint64_t video) {
     const video_t* found = find(video);
-    return found != nullptr ? found->decoder->sound_rate() : 0;
+    return found != nullptr ? found->sound_rate : 0;
 }
 
 FBE_VIDEO_API int32_t fbe_video_sound_channels(uint64_t video) {
     const video_t* found = find(video);
-    return found != nullptr ? found->decoder->sound_channels() : 0;
+    return found != nullptr ? found->sound_channels : 0;
 }
 
 FBE_VIDEO_API int64_t fbe_video_sound(uint64_t video, uint8_t* bytes, int64_t capacity) {
@@ -338,15 +440,14 @@ FBE_VIDEO_API int64_t fbe_video_sound(uint64_t video, uint8_t* bytes, int64_t ca
     if (found == nullptr) {
         return -1;
     }
-    if (!found->decoder->has_sound()) {
+    if (found->sound_rate == 0) {
         fail("the video has no sound");
         return -1;
     }
-    const std::vector<std::uint8_t> wav = wav_of(found->decoder->sound());
-    if (std::cmp_greater_equal(capacity, wav.size())) {
-        std::ranges::copy(wav, bytes);
+    if (std::cmp_greater_equal(capacity, found->wav.size())) {
+        std::ranges::copy(found->wav, bytes);
     }
-    return static_cast<int64_t>(wav.size());
+    return static_cast<int64_t>(found->wav.size());
 }
 
 FBE_VIDEO_API bool fbe_video_play(uint64_t video) {
@@ -380,25 +481,13 @@ FBE_VIDEO_API bool fbe_video_set_loop(uint64_t video, bool loop) {
     if (found == nullptr) {
         return false;
     }
-    {
-        const std::scoped_lock hold(found->lock);
-        found->loop = loop;
-        // A thread at the end goes on into the next loop.
-        if (loop && found->decoded_all) {
-            found->decoded_all = false;
-        }
-    }
-    found->changed.notify_all();
+    found->set_loop(loop);
     return true;
 }
 
 FBE_VIDEO_API bool fbe_video_looping(uint64_t video) {
-    video_t* found = find(video);
-    if (found == nullptr) {
-        return false;
-    }
-    const std::scoped_lock hold(found->lock);
-    return found->loop;
+    const video_t* found = find(video);
+    return found != nullptr && found->loop;
 }
 
 FBE_VIDEO_API bool fbe_video_update(uint64_t video, double seconds) {

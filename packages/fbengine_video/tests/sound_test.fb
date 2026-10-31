@@ -1,0 +1,71 @@
+// A video's sound: its first sample at the video's time 0, however late it starts, a gap in it
+// kept as silence, and a time that can't be right ignored.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import std.test
+Import fbengine_video
+
+// The left channel's sample at `seconds` of a WAV of two channels at 44100 Hz.
+Function SampleAt(wav: Buffer<UInt8>, seconds: Float64): Float
+    Local at = 44 + (Floor(seconds * 44100) As Int64) * 8
+    Local bits = (wav[at] As UInt32) | ((wav[at + 1] As UInt32) << 8) |
+                 ((wav[at + 2] As UInt32) << 16) | ((wav[at + 3] As UInt32) << 24)
+    Return Float32.FromBits(bits)
+End Function
+
+// The loudest sample from `from` to `to` seconds.
+Function Loudest(wav: Buffer<UInt8>, from: Float64, to: Float64): Float
+    Local most: Float = 0
+    Local t = from
+    While t < to
+        most = Max(most, Abs(SampleAt(wav, t)))
+        t += 1.0 / 4410
+    End While
+    Return most
+End Function
+
+Function SecondsOf(wav: Buffer<UInt8>): Float64 => ((wav.Count - 44) As Float64) / (44100 * 8)
+
+@Test
+Function ASoundStartingLateIsSilentUntilThen() Throws VideoError
+    Local video = Try Video.Load(Embed("media/late.mpg"))
+    Defer video.Free()
+    Local wav = Buffer<UInt8>.From(video.Sound())
+    Expect(Loudest(wav, 0, 0.45) < 0.001, "it's {Loudest(wav, 0, 0.45)} before it starts")
+    Expect(Loudest(wav, 0.6, 1.9) > 0.05)
+    Expect(SecondsOf(wav) > 1.9 && SecondsOf(wav) < 2.1, "it's {SecondsOf(wav)} s long")
+End Function
+
+// Packets of sound gone from 0.8 s to 1.3 s leave silence there, and the rest at its times.
+@Test
+Function AGapInASoundIsSilence() Throws VideoError
+    Local video = Try Video.Load(Embed("media/gap.mpg"))
+    Defer video.Free()
+    Local wav = Buffer<UInt8>.From(video.Sound())
+    Expect(Loudest(wav, 0.1, 0.75) > 0.05)
+    Expect(Loudest(wav, 0.95, 1.28) < 0.001, "it's {Loudest(wav, 0.95, 1.28)} in the gap")
+    Expect(Loudest(wav, 1.45, 1.85) > 0.05)
+    Expect(SecondsOf(wav) > 1.9 && SecondsOf(wav) < 2.1, "it's {SecondsOf(wav)} s long")
+End Function
+
+// The sound's decoded once, as the video opens, and each Sound is the same.
+@Test
+Function ASoundIsTheSameEachTime() Throws VideoError
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    Local first = video.Sound()
+    Expect(video.Sound() == first)
+End Function
+
+// A packet whose time says it's 26 hours on, in a video of 2 seconds, is taken to be wrong, and its
+// sound goes on from the packet before's.
+@Test
+Function ASoundPacketsTimeFarPastTheVideoIsIgnored() Throws VideoError
+    Local video = Try Video.Load(Embed("media/longsound.mpg"))
+    Defer video.Free()
+    Local wav = Buffer<UInt8>.From(video.Sound())
+    Expect(SecondsOf(wav) > 1.9 && SecondsOf(wav) < 2.1, "it's {SecondsOf(wav)} s long")
+    Expect(Loudest(wav, 1.8, 1.95) > 0.05)
+End Function

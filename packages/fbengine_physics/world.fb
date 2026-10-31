@@ -272,7 +272,8 @@ Public Final Class PhysicsWorld
         Return HitOf(hit)
     End Method
 
-    /// Every body CastRay's ray hits, nearest first, as CastRay hits them.
+    /// Every body CastRay's ray hits, nearest first, as CastRay hits them: once where it crosses
+    /// each surface, though it crosses where a mesh's triangles share an edge or a corner.
     @MainThread Public Method CastRayAll(origin: Vec3, direction: Vec3, distance: Float,
                                          layers: UInt32 = ALL_LAYERS, ignore: Body? = Null,
                                          backFaces: Bool = False): Hit[]

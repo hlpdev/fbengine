@@ -178,6 +178,7 @@ FBE_PHYSICS_API uint64_t fbe_joint_fixed(uint64_t a, uint64_t b) {
 }
 
 FBE_PHYSICS_API uint64_t fbe_joint_point(uint64_t a, uint64_t b, const fbe_joint_vec3_t* point) {
+    const fp_mode_t fp_mode;
     joined_t bodies;
     JPH::Vec3 at;
     if (!joined(a, b, bodies) || !vec3(*point, at)) {
@@ -191,6 +192,7 @@ FBE_PHYSICS_API uint64_t fbe_joint_point(uint64_t a, uint64_t b, const fbe_joint
 
 FBE_PHYSICS_API uint64_t fbe_joint_hinge(uint64_t a, uint64_t b, const fbe_joint_vec3_t* point,
                                          const fbe_joint_vec3_t* hinge_axis) {
+    const fp_mode_t fp_mode;
     joined_t bodies;
     JPH::Vec3 at;
     JPH::Vec3 about;
@@ -208,6 +210,7 @@ FBE_PHYSICS_API uint64_t fbe_joint_hinge(uint64_t a, uint64_t b, const fbe_joint
 }
 
 FBE_PHYSICS_API uint64_t fbe_joint_slider(uint64_t a, uint64_t b, const fbe_joint_vec3_t* along) {
+    const fp_mode_t fp_mode;
     joined_t bodies;
     JPH::Vec3 slide;
     if (!joined(a, b, bodies) || !axis(*along, slide)) {
@@ -224,6 +227,7 @@ FBE_PHYSICS_API uint64_t fbe_joint_slider(uint64_t a, uint64_t b, const fbe_join
 
 FBE_PHYSICS_API uint64_t fbe_joint_distance(uint64_t a, uint64_t b, const fbe_joint_vec3_t* point_a,
                                             const fbe_joint_vec3_t* point_b) {
+    const fp_mode_t fp_mode;
     joined_t bodies;
     JPH::Vec3 on_a;
     JPH::Vec3 on_b;
@@ -251,6 +255,7 @@ FBE_PHYSICS_API int32_t fbe_joint_kind(uint64_t joint) {
 }
 
 FBE_PHYSICS_API bool fbe_joint_set_limits(uint64_t joint, float low, float high) {
+    const fp_mode_t fp_mode;
     const joint_t* found = find(joint);
     if (found == nullptr) {
         return false;
@@ -286,6 +291,7 @@ FBE_PHYSICS_API bool fbe_joint_set_limits(uint64_t joint, float low, float high)
 }
 
 FBE_PHYSICS_API bool fbe_joint_set_spring(uint64_t joint, float frequency, float damping) {
+    const fp_mode_t fp_mode;
     const joint_t* found = find(joint);
     if (found == nullptr) {
         return false;
@@ -318,6 +324,7 @@ FBE_PHYSICS_API bool fbe_joint_set_spring(uint64_t joint, float frequency, float
 
 FBE_PHYSICS_API bool fbe_joint_set_motor(uint64_t joint, int32_t mode, float target,
                                          float strength) {
+    const fp_mode_t fp_mode;
     const joint_t* found = find(joint);
     if (found == nullptr) {
         return false;
@@ -359,6 +366,7 @@ FBE_PHYSICS_API bool fbe_joint_set_motor(uint64_t joint, int32_t mode, float tar
 }
 
 FBE_PHYSICS_API bool fbe_joint_position(uint64_t joint, float* position) {
+    const fp_mode_t fp_mode;
     const joint_t* found = find(joint);
     if (found == nullptr) {
         return false;
@@ -387,6 +395,7 @@ FBE_PHYSICS_API bool fbe_joint_position(uint64_t joint, float* position) {
 }
 
 FBE_PHYSICS_API bool fbe_joint_set_enabled(uint64_t joint, bool enabled) {
+    const fp_mode_t fp_mode;
     const joint_t* found = find(joint);
     if (found == nullptr) {
         return false;

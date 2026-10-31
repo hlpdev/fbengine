@@ -187,6 +187,7 @@ extern "C" {
 FBE_PHYSICS_API int32_t fbe_physics_began(uint64_t world, fbe_physics_contact_t* contacts,
                                           int32_t capacity) {
     using namespace fbe::physics;
+    const fp_mode_t fp_mode;
     const world_t* found = find_world(world);
     if (found == nullptr) {
         return -1;

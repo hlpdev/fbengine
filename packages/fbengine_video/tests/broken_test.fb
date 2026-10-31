@@ -1,0 +1,36 @@
+// Videos that read or wrote outside the heap in pl_mpeg before its patches open, or are refused,
+// and play, seek, and give their sound without going outside it.
+
+Import std.core
+Import std.test
+Import fbengine_video
+
+Function Broken(): (String, UInt8[])[] => [
+    ("heap-read-decode-block", Embed("media/broken/heap-read-decode-block.mpg")),
+    ("heap-read-process-macroblock", Embed("media/broken/heap-read-process-macroblock.mpg")),
+    ("heap-write-decode-block", Embed("media/broken/heap-write-decode-block.mpg")),
+    ("issue68", Embed("media/broken/issue68.mpg"))]
+
+@Test
+Function ABrokenVideoPlaysOrIsRefused()
+    For entry In Broken()
+        Local name, bytes = entry
+        Try
+            Local video = Try Video.Load(bytes)
+            Defer video.Free()
+            video.Play()
+            Local updates = 0
+            While !video.Ended() && updates < 1000
+                video.Update(1.0 / 25)
+                updates += 1
+            End While
+            Expect(video.Ended(), "{name} hasn't ended")
+            video.Seek(video.Duration() / 2)
+            video.Seek(video.Duration())
+            If video.HasSound() Then Expect(video.Sound().Count >= 44)
+            Expect(video.Frame().Width == video.Width())
+        Catch error As VideoError
+            Expect(error.Message != "", name)
+        End Try
+    End For
+End Function

@@ -115,15 +115,24 @@ Function TheCApiRefusesMovesItDoesntTake()
         Expect(!fbe_body_set_can_sleep(wall, False))
         Expect(Error() == "a static body doesn't move, so it has no sleep")
         Expect(!fbe_body_continuous(wall) && !fbe_body_can_sleep(wall))
-        // A time too short for the way makes velocities too fast for a float, or whose squares
-        // are, which Jolt works out: a meter in 1e-40 seconds, or in 1e-30.
+        // A time too short for the way is faster than Jolt moves a body, whose solver goes wrong
+        // past it: a meter in a thousandth of a second, or less, or a radian in a 60th.
         Local there = fbe_body_vec3_t(1, 0, 0)
-        Expect(!fbe_body_move_to(lift, AddressOf(there), AddressOf(unturned), 1e-40))
-        Expect(Error() == "a body moved there over 1e-40 seconds moves faster than a float holds")
-        Expect(!fbe_body_move_to(lift, AddressOf(there), AddressOf(unturned), 1e-30))
-        Expect(Error() == "a body moved there over 1e-30 seconds moves faster than a float holds")
-        // A meter in 1e-15 seconds isn't, and the world steps on, pushing the crate the lift's in.
-        Expect(fbe_body_move_to(lift, AddressOf(there), AddressOf(unturned), 1e-15))
+        For seconds In [1e-40, 1e-30, 1e-19, 1e-18, 1e-17, 1e-15, 1e-3]
+            Expect(!fbe_body_move_to(lift, AddressOf(there), AddressOf(unturned), seconds),
+                   "a meter in {seconds} s")
+        End For
+        Expect(Error() == "a body moved there over 0.001 seconds is faster than its most, 500 m/s and 47.12389 radians a second",
+               Error())
+        Local radian = fbe_body_quat_t(0, Sin(0.5), 0, Cos(0.5))
+        For seconds In [1e-15, 1.0 / 60]
+            Expect(!fbe_body_move_to(lift, AddressOf(at), AddressOf(radian), seconds),
+                   "a radian in {seconds} s")
+        End For
+        // A meter in a 60th of a second, or a radian in a tenth, isn't, and the world steps on,
+        // pushing the crate the lift's in.
+        Expect(fbe_body_move_to(lift, AddressOf(there), AddressOf(unturned), 1.0 / 60))
+        Expect(fbe_body_move_to(lift, AddressOf(at), AddressOf(radian), 0.1))
         Expect(fbe_physics_step(world, 1.0 / 60, 1))
         // A kinematic body, or a sensor, has no collisions to find along its way, and a body made
         // either stops finding them.

@@ -180,3 +180,12 @@ endif()
 fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# fbengine_video, through its DLL, against its test videos with bytes changed at random.
+add_executable(fbengine_video_tests video/mutation_tests.cpp)
+target_link_libraries(fbengine_video_tests PRIVATE fbengine_video_native Catch2::Catch2WithMain)
+target_compile_definitions(fbengine_video_tests PRIVATE
+                           FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
+fbengine_set_warnings(fbengine_video_tests)
+catch_discover_tests(fbengine_video_tests TEST_PREFIX "video."
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>")

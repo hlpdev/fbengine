@@ -34,9 +34,10 @@ FBE_VIDEO_API const char* fbe_video_version(void);
 // What the last call that failed on this thread says went wrong.
 FBE_VIDEO_API const char* fbe_video_error(void);
 
-// A video of the `size` bytes at `data`, which it keeps a copy of: an MPEG-1 program stream, as a
-// .mpg is, of MPEG-1 video and, if it has sound, MPEG-1 audio layer II. Paused at its start, its
-// first frame decoded; 0 if the bytes aren't a video of a format it decodes.
+// A video of the `size` bytes at `data`, which it keeps what it needs of: an MPEG-1 program
+// stream, as a .mpg is, of MPEG-1 video and, if it has sound, MPEG-1 audio layer II, its sound
+// decoded now. Paused at its start, its first frame decoded; 0 if the bytes aren't a video of a
+// format it decodes, or its sound is longer than a WAV holds.
 FBE_VIDEO_API uint64_t fbe_video_open(const uint8_t* data, int64_t size);
 
 // Frees `video`, stopping its thread; false if it isn't a video.
@@ -60,7 +61,8 @@ FBE_VIDEO_API int32_t fbe_video_sound_channels(uint64_t video);
 
 // `video`'s whole sound, as a WAV file of 32-bit float samples at its rate and channels, in up to
 // `capacity` bytes at `bytes`, if there's room for it, giving how many bytes it takes; -1 if it
-// isn't a video or has no sound. Its first sample is at the video's time 0.
+// isn't a video or has no sound. Its first sample is at the video's time 0, and it's silent where
+// its stream has a gap; it was decoded as the video was opened.
 FBE_VIDEO_API int64_t fbe_video_sound(uint64_t video, uint8_t* bytes, int64_t capacity);
 
 // Plays `video` from where its clock is, or pauses it there; false if it isn't a video. A video

@@ -239,6 +239,7 @@ extern "C" {
 FBE_PHYSICS_API uint64_t fbe_body_add(uint64_t world, uint64_t shape, int32_t motion_type,
                                       const fbe_body_vec3_t* position,
                                       const fbe_body_quat_t* rotation) {
+    const fp_mode_t fp_mode;
     world_t* in = find_world(world);
     if (in == nullptr) {
         return 0;
@@ -321,6 +322,7 @@ FBE_PHYSICS_API int32_t fbe_body_motion(uint64_t body) {
 }
 
 FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion_type) {
+    const fp_mode_t fp_mode;
     const body_t* found = find_own(body);
     JPH::EMotionType type{};
     if (found == nullptr || !motion(motion_type, type)) {
@@ -344,10 +346,12 @@ FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion_type) {
 }
 
 FBE_PHYSICS_API bool fbe_body_position(uint64_t body, fbe_body_vec3_t* position) {
+    const fp_mode_t fp_mode;
     return get_vec3(body, position, [](const body_t& b) { return b.bodies().GetPosition(b.id); });
 }
 
 FBE_PHYSICS_API bool fbe_body_rotation(uint64_t body, fbe_body_quat_t* rotation) {
+    const fp_mode_t fp_mode;
     const body_t* found = find(body);
     if (found == nullptr) {
         return false;
@@ -358,12 +362,14 @@ FBE_PHYSICS_API bool fbe_body_rotation(uint64_t body, fbe_body_quat_t* rotation)
 }
 
 FBE_PHYSICS_API bool fbe_body_set_position(uint64_t body, const fbe_body_vec3_t* position) {
+    const fp_mode_t fp_mode;
     return find_own(body) != nullptr && push(body, position, [](const body_t& b, JPH::Vec3Arg v) {
                b.bodies().SetPosition(b.id, v, JPH::EActivation::Activate);
            });
 }
 
 FBE_PHYSICS_API bool fbe_body_set_rotation(uint64_t body, const fbe_body_quat_t* rotation) {
+    const fp_mode_t fp_mode;
     const body_t* found = find_own(body);
     JPH::Quat turned;
     if (found == nullptr || !quat(*rotation, turned)) {
@@ -374,28 +380,33 @@ FBE_PHYSICS_API bool fbe_body_set_rotation(uint64_t body, const fbe_body_quat_t*
 }
 
 FBE_PHYSICS_API bool fbe_body_velocity(uint64_t body, fbe_body_vec3_t* velocity) {
+    const fp_mode_t fp_mode;
     return get_vec3(body, velocity,
                     [](const body_t& b) { return b.bodies().GetLinearVelocity(b.id); });
 }
 
 FBE_PHYSICS_API bool fbe_body_angular_velocity(uint64_t body, fbe_body_vec3_t* velocity) {
+    const fp_mode_t fp_mode;
     return get_vec3(body, velocity,
                     [](const body_t& b) { return b.bodies().GetAngularVelocity(b.id); });
 }
 
 FBE_PHYSICS_API bool fbe_body_set_velocity(uint64_t body, const fbe_body_vec3_t* velocity) {
+    const fp_mode_t fp_mode;
     return find_own(body) != nullptr && find_moving(body, "velocity") != nullptr &&
            push(body, velocity,
                 [](const body_t& b, JPH::Vec3Arg v) { b.bodies().SetLinearVelocity(b.id, v); });
 }
 
 FBE_PHYSICS_API bool fbe_body_set_angular_velocity(uint64_t body, const fbe_body_vec3_t* velocity) {
+    const fp_mode_t fp_mode;
     return find_own(body) != nullptr && find_moving(body, "angular velocity") != nullptr &&
            push(body, velocity,
                 [](const body_t& b, JPH::Vec3Arg v) { b.bodies().SetAngularVelocity(b.id, v); });
 }
 
 FBE_PHYSICS_API bool fbe_body_add_force(uint64_t body, const fbe_body_vec3_t* force) {
+    const fp_mode_t fp_mode;
     return push(body, force, [](const body_t& b, JPH::Vec3Arg v) {
         b.bodies().AddForce(b.id, v, JPH::EActivation::Activate);
     });
@@ -403,6 +414,7 @@ FBE_PHYSICS_API bool fbe_body_add_force(uint64_t body, const fbe_body_vec3_t* fo
 
 FBE_PHYSICS_API bool fbe_body_add_force_at(uint64_t body, const fbe_body_vec3_t* force,
                                            const fbe_body_vec3_t* point) {
+    const fp_mode_t fp_mode;
     JPH::Vec3 at;
     return vec3(*point, at) && push(body, force, [at](const body_t& b, JPH::Vec3Arg v) {
                b.bodies().AddForce(b.id, v, at, JPH::EActivation::Activate);
@@ -410,18 +422,21 @@ FBE_PHYSICS_API bool fbe_body_add_force_at(uint64_t body, const fbe_body_vec3_t*
 }
 
 FBE_PHYSICS_API bool fbe_body_add_torque(uint64_t body, const fbe_body_vec3_t* torque) {
+    const fp_mode_t fp_mode;
     return push(body, torque, [](const body_t& b, JPH::Vec3Arg v) {
         b.bodies().AddTorque(b.id, v, JPH::EActivation::Activate);
     });
 }
 
 FBE_PHYSICS_API bool fbe_body_add_impulse(uint64_t body, const fbe_body_vec3_t* impulse) {
+    const fp_mode_t fp_mode;
     return push(body, impulse,
                 [](const body_t& b, JPH::Vec3Arg v) { b.bodies().AddImpulse(b.id, v); });
 }
 
 FBE_PHYSICS_API bool fbe_body_add_impulse_at(uint64_t body, const fbe_body_vec3_t* impulse,
                                              const fbe_body_vec3_t* point) {
+    const fp_mode_t fp_mode;
     JPH::Vec3 at;
     return vec3(*point, at) && push(body, impulse, [at](const body_t& b, JPH::Vec3Arg v) {
                b.bodies().AddImpulse(b.id, v, at);
@@ -429,11 +444,13 @@ FBE_PHYSICS_API bool fbe_body_add_impulse_at(uint64_t body, const fbe_body_vec3_
 }
 
 FBE_PHYSICS_API bool fbe_body_add_angular_impulse(uint64_t body, const fbe_body_vec3_t* impulse) {
+    const fp_mode_t fp_mode;
     return push(body, impulse,
                 [](const body_t& b, JPH::Vec3Arg v) { b.bodies().AddAngularImpulse(b.id, v); });
 }
 
 FBE_PHYSICS_API float fbe_body_mass(uint64_t body) {
+    const fp_mode_t fp_mode;
     const body_t* found = find(body);
     if (found == nullptr || !found->weighed || found->body().IsStatic()) {
         return 0.0F;
@@ -443,6 +460,7 @@ FBE_PHYSICS_API float fbe_body_mass(uint64_t body) {
 }
 
 FBE_PHYSICS_API bool fbe_body_set_mass(uint64_t body, float mass) {
+    const fp_mode_t fp_mode;
     const body_t* found = find_moving(body, "mass");
     if (found == nullptr) {
         return false;
@@ -458,16 +476,19 @@ FBE_PHYSICS_API bool fbe_body_set_mass(uint64_t body, float mass) {
 }
 
 FBE_PHYSICS_API float fbe_body_friction(uint64_t body) {
+    const fp_mode_t fp_mode;
     const body_t* found = find(body);
     return found != nullptr ? found->body().GetFriction() : -1.0F;
 }
 
 FBE_PHYSICS_API float fbe_body_restitution(uint64_t body) {
+    const fp_mode_t fp_mode;
     const body_t* found = find(body);
     return found != nullptr ? found->body().GetRestitution() : -1.0F;
 }
 
 FBE_PHYSICS_API bool fbe_body_set_friction(uint64_t body, float friction) {
+    const fp_mode_t fp_mode;
     const body_t* found = find(body);
     if (found == nullptr) {
         return false;
@@ -480,6 +501,7 @@ FBE_PHYSICS_API bool fbe_body_set_friction(uint64_t body, float friction) {
 }
 
 FBE_PHYSICS_API bool fbe_body_set_restitution(uint64_t body, float restitution) {
+    const fp_mode_t fp_mode;
     const body_t* found = find(body);
     if (found == nullptr) {
         return false;
@@ -492,28 +514,34 @@ FBE_PHYSICS_API bool fbe_body_set_restitution(uint64_t body, float restitution) 
 }
 
 FBE_PHYSICS_API float fbe_body_linear_damping(uint64_t body) {
+    const fp_mode_t fp_mode;
     return get_motion(body, [](const JPH::MotionProperties& m) { return m.GetLinearDamping(); });
 }
 
 FBE_PHYSICS_API float fbe_body_angular_damping(uint64_t body) {
+    const fp_mode_t fp_mode;
     return get_motion(body, [](const JPH::MotionProperties& m) { return m.GetAngularDamping(); });
 }
 
 FBE_PHYSICS_API float fbe_body_gravity_factor(uint64_t body) {
+    const fp_mode_t fp_mode;
     return get_motion(body, [](const JPH::MotionProperties& m) { return m.GetGravityFactor(); });
 }
 
 FBE_PHYSICS_API bool fbe_body_set_linear_damping(uint64_t body, float damping) {
+    const fp_mode_t fp_mode;
     return set_motion_float(body, damping, damping >= 0.0F, "damping", "a damping is 0 or more",
                             [](JPH::MotionProperties& m, float v) { m.SetLinearDamping(v); });
 }
 
 FBE_PHYSICS_API bool fbe_body_set_angular_damping(uint64_t body, float damping) {
+    const fp_mode_t fp_mode;
     return set_motion_float(body, damping, damping >= 0.0F, "damping", "a damping is 0 or more",
                             [](JPH::MotionProperties& m, float v) { m.SetAngularDamping(v); });
 }
 
 FBE_PHYSICS_API bool fbe_body_set_gravity_factor(uint64_t body, float factor) {
+    const fp_mode_t fp_mode;
     return set_motion_float(body, factor, true, "gravity factor", "a gravity factor is finite",
                             [](JPH::MotionProperties& m, float v) { m.SetGravityFactor(v); });
 }
@@ -547,6 +575,7 @@ FBE_PHYSICS_API int32_t fbe_body_layer(uint64_t body) {
 }
 
 FBE_PHYSICS_API bool fbe_body_set_layer(uint64_t body, int32_t layer) {
+    const fp_mode_t fp_mode;
     const body_t* found = find(body);
     if (found == nullptr) {
         return false;
@@ -601,6 +630,7 @@ FBE_PHYSICS_API int32_t fbe_body_touching(uint64_t body, uint64_t* bodies, int32
 
 FBE_PHYSICS_API bool fbe_body_move_to(uint64_t body, const fbe_body_vec3_t* position,
                                       const fbe_body_quat_t* rotation, float seconds) {
+    const fp_mode_t fp_mode;
     const body_t* found = find_own(body);
     JPH::Vec3 at;
     JPH::Quat turned;
@@ -613,18 +643,21 @@ FBE_PHYSICS_API bool fbe_body_move_to(uint64_t body, const fbe_body_vec3_t* posi
     if (!std::isfinite(seconds) || seconds <= 0.0F) {
         return fail(std::format("a body's moved there over more than 0 seconds, not {}", seconds));
     }
-    const fp_mode_t mode;
-    // Its velocities, as Jolt works them out, which a time too short for the way makes too fast
-    // for Jolt, which squares them, as it does a dynamic body's that one pushes.
+    // Its velocities, as Jolt works them out, which a time too short for the way makes faster than
+    // Jolt keeps a body, whose solver goes wrong past them, for a body it pushes too.
     const JPH::Body& moved = found->body();
     const JPH::Vec3 center = turned * moved.GetShape()->GetCenterOfMass();
     const JPH::Vec3 way = at + center - moved.GetCenterOfMassPosition();
     const JPH::Vec3 linear = way / seconds;
     const JPH::Quat turn = turned * moved.GetRotation().Conjugated();
     const JPH::Vec3 angular = turn.GetAngularVelocity(seconds);
-    if (!std::isfinite(linear.LengthSq()) || !std::isfinite(angular.LengthSq())) {
-        return fail(std::format(
-            "a body moved there over {} seconds moves faster than a float holds", seconds));
+    const JPH::MotionProperties& motion = *moved.GetMotionProperties();
+    if (!(linear.Length() <= motion.GetMaxLinearVelocity()) ||
+        !(angular.Length() <= motion.GetMaxAngularVelocity())) {
+        return fail(std::format("a body moved there over {} seconds is faster than its most, {} "
+                                "m/s and {} radians a second",
+                                seconds, motion.GetMaxLinearVelocity(),
+                                motion.GetMaxAngularVelocity()));
     }
     found->bodies().MoveKinematic(found->id, at, turned, seconds);
     return true;

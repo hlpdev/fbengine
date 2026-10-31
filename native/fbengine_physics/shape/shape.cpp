@@ -95,6 +95,7 @@ const JPH::Shape* find_shape(std::uint64_t handle) {
 extern "C" {
 
 FBE_PHYSICS_API uint64_t fbe_shape_box(const fbe_shape_vec3_t* size) {
+    const fp_mode_t fp_mode;
     start();
     if (!positive(size->x, "a box's width") || !positive(size->y, "a box's height") ||
         !positive(size->z, "a box's depth")) {
@@ -106,6 +107,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_box(const fbe_shape_vec3_t* size) {
 }
 
 FBE_PHYSICS_API uint64_t fbe_shape_sphere(float radius) {
+    const fp_mode_t fp_mode;
     start();
     if (!positive(radius, "a sphere's radius")) {
         return 0;
@@ -114,6 +116,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_sphere(float radius) {
 }
 
 FBE_PHYSICS_API uint64_t fbe_shape_capsule(float height, float radius) {
+    const fp_mode_t fp_mode;
     start();
     if (!positive(radius, "a capsule's radius")) {
         return 0;
@@ -128,6 +131,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_capsule(float height, float radius) {
 }
 
 FBE_PHYSICS_API uint64_t fbe_shape_cylinder(float height, float radius) {
+    const fp_mode_t fp_mode;
     start();
     if (!positive(height, "a cylinder's height") || !positive(radius, "a cylinder's radius")) {
         return 0;
@@ -138,6 +142,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_cylinder(float height, float radius) {
 }
 
 FBE_PHYSICS_API uint64_t fbe_shape_convex_hull(const fbe_shape_vec3_t* points, int32_t count) {
+    const fp_mode_t fp_mode;
     start();
     if (count < 3) {
         fail(std::format("a convex hull is of 3 points or more, not {}", count));
@@ -158,6 +163,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_convex_hull(const fbe_shape_vec3_t* points, i
 
 FBE_PHYSICS_API uint64_t fbe_shape_mesh(const fbe_shape_vec3_t* vertices, int32_t vertex_count,
                                         const uint32_t* indices, int32_t index_count) {
+    const fp_mode_t fp_mode;
     start();
     if (vertex_count < 3 || index_count < 3 || index_count % 3 != 0) {
         fail(std::format("a mesh is of 3 vertices or more and three indices a triangle, not {} "
@@ -236,6 +242,7 @@ FBE_PHYSICS_API int32_t fbe_shape_kind(uint64_t shape) {
 
 FBE_PHYSICS_API bool fbe_shape_bounds(uint64_t shape, fbe_shape_vec3_t* low,
                                       fbe_shape_vec3_t* high) {
+    const fp_mode_t fp_mode;
     const shape_t* found = find(shape);
     if (found == nullptr) {
         return false;
@@ -249,6 +256,7 @@ FBE_PHYSICS_API bool fbe_shape_bounds(uint64_t shape, fbe_shape_vec3_t* low,
 }
 
 FBE_PHYSICS_API float fbe_shape_volume(uint64_t shape) {
+    const fp_mode_t fp_mode;
     const shape_t* found = find(shape);
     return found != nullptr ? std::max(found->shape->GetVolume(), 0.0F) : 0.0F;
 }

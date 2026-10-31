@@ -246,6 +246,21 @@ Function ARayHitsTrianglesFromTheFrontUnlessAskedForTheirBacks() Throws ShapeErr
             Expect(Near(all[0].Distance, backs ? 5.0 : 15.0))
         End For
     End For
+    // Onto the edge the +X side's triangles share, where y is z, and through both sides' edges;
+    // and onto a corner, where three sides' six triangles meet: a hit for each surface crossed.
+    For backs In [False, True]
+        Expect(world.CastRayAll(Vec3(0, 2, 2), Vec3(1, 0, 0), 20, ALL_LAYERS, Null, backs).Count ==
+               1)
+        Local through = world.CastRayAll(Vec3(-20, 2, 2), Vec3(1, 0, 0), 40, ALL_LAYERS, Null,
+                                         backs)
+        Expect(through.Count == (backs ? 2 : 1),
+               "through both edges, backs {backs}: {through.Count}")
+        Local corner = world.CastRayAll(Vec3(0, 0, 0), Vec3(1, 1, 1), 20, ALL_LAYERS, Null, backs)
+        Expect(corner.Count == 1, "onto a corner, backs {backs}: {corner.Count}")
+        Expect(Near(corner[0].Distance, Sqrt(75.0)))
+        Expect(world.CastRay(Vec3(0, 0, 0), Vec3(1, 1, 1), 20, ALL_LAYERS, Null, backs)?.Triangle ==
+               corner[0].Triangle)
+    End For
     // As before, CastRay and CastRayAll's nearest agree.
     Expect(world.CastRay(Vec3(-10, 1, 2), Vec3(1, 0, 0), 30)?.Distance ==
            world.CastRayAll(Vec3(-10, 1, 2), Vec3(1, 0, 0), 30)[0].Distance)

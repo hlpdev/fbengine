@@ -155,7 +155,8 @@ FBE_PHYSICS_API bool fbe_physics_cast_ray(uint64_t world, const fbe_physics_vec3
                                           fbe_physics_hit_t* hit);
 
 // As fbe_physics_cast_ray, but every hit, nearest first, up to `capacity` of them in `hits`,
-// giving how many there were, -1 if it isn't a world or a number's out of range.
+// giving how many there were, -1 if it isn't a world or a number's out of range: one where it
+// crosses each surface, though it crosses where a body's triangles share an edge or a corner.
 FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physics_vec3_t* origin,
                                                  const fbe_physics_vec3_t* direction,
                                                  float distance, uint32_t layers, uint64_t ignore,

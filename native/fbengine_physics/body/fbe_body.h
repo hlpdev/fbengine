@@ -153,7 +153,8 @@ FBE_PHYSICS_API int32_t fbe_body_touching(uint64_t body, uint64_t* bodies, int32
 // 0, by the velocities that take it there, so it pushes what it meets on the way, as a door or a
 // lift a game drives does; it keeps them until it's moved again or given others. False if it isn't
 // a body, isn't kinematic, is a character's, a number's out of range, or the time's so short that
-// a velocity's square, which Jolt works out, is more than a float holds.
+// it's faster than Jolt moves a body: 500 m/s, or a quarter turn a 60th of a second, 47 radians a
+// second.
 FBE_PHYSICS_API bool fbe_body_move_to(uint64_t body, const fbe_body_vec3_t* position,
                                       const fbe_body_quat_t* rotation, float seconds);
 

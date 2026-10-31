@@ -8,8 +8,9 @@ Import std.image
 Import std.io
 Import "./c/fbe_video"
 
-/// A video that can't be opened: a file that can't be read, or bytes that aren't a video of a
-/// format fbengine_video decodes, an MPEG-1 program stream.
+/// A video that can't be opened: a file that can't be read, bytes that aren't a video of a format
+/// fbengine_video decodes, an MPEG-1 program stream, or one whose sound is longer than a WAV
+/// holds, 4 GB of samples, 3.4 hours.
 Public Class VideoError Extends Error
 End Class
 
@@ -113,8 +114,9 @@ Public Final Class Video
         fbe_video_sound_channels(Live("Video.SoundChannels"))
 
     /// The video's whole sound, as a WAV file of 32-bit float samples at its rate, whose first
-    /// sample is at the video's time 0, for a game to play beside it; a video without sound has
-    /// none to give.
+    /// sample is at the video's time 0, for a game to play beside it: silent until a sound that
+    /// starts later starts, and where its stream has a gap. It's decoded once, as the video's
+    /// opened. A video without sound has none to give.
     @MainThread Public Method Sound(): UInt8[]
         Local video = Live("Video.Sound")
         Local size = fbe_video_sound(video, Null, 0)

@@ -269,6 +269,7 @@ extern "C" {
 
 FBE_PHYSICS_API int64_t fbe_physics_save(uint64_t world, double carried) {
     using namespace fbe::physics;
+    const fp_mode_t fp_mode;
     world_t* found = find_world(world);
     if (found == nullptr) {
         return -1;
@@ -292,6 +293,7 @@ FBE_PHYSICS_API int64_t fbe_physics_saved(uint64_t world, uint8_t* bytes, int64_
 FBE_PHYSICS_API bool fbe_physics_restore(uint64_t world, const uint8_t* bytes, int64_t size,
                                          double* carried) {
     using namespace fbe::physics;
+    const fp_mode_t fp_mode;
     world_t* found = find_world(world);
     if (found == nullptr) {
         return false;

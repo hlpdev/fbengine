@@ -1,12 +1,13 @@
 // MPEG-1, by pl_mpeg: a program stream of MPEG-1 video and MPEG-1 audio layer II, decoded from
-// memory. The video's thread has a decoder of its own; the sound is decoded by another, over the
-// same bytes, which neither changes.
+// memory. Its video and sound are taken out of the program stream as it's opened, and its sound is
+// decoded then, all of it, to be given as a WAV; its video's decoded by the video's thread.
 //
 // pl_mpeg's own seek can miss in a short video, and shows an open group of pictures' first
 // B-frames, which are made from the group before's pictures, made from nothing, and its times
-// for them a frame or two out. So its video decoder reads the video's elementary stream, which
-// is taken out of the program stream on opening, its groups of pictures found: a seek starts
-// it again at a group's start and numbers its pictures from there.
+// for them a frame or two out. So its video decoder reads the video's elementary stream, its
+// groups of pictures found as it's opened: a seek starts it again at a group's start and numbers
+// its pictures from there. Its own sound's times start at 0 and run on through a gap, so the
+// sound's frames are placed by the times of the packets they're in.
 
 #include "video/decoder.hpp"
 
@@ -16,7 +17,9 @@
 #include <cstdint>
 // pl_mpeg's header takes stdio.h's FILE.
 #include <cstdio>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <pl_mpeg.h>
 #include <span>
 #include <utility>
@@ -26,21 +29,16 @@ namespace fbe::video {
 
 namespace {
 
-// pl_mpeg's sound is two channels, interleaved.
+// pl_mpeg's sound is two channels, interleaved, in frames of 1152 samples each.
 constexpr std::int32_t sound_channels_of_mpeg1 = 2;
+constexpr std::int64_t samples_per_frame = 1152;
 
 // Start codes, 00 00 01 and a byte, which MPEG-1 video has nowhere else.
 constexpr std::uint32_t picture_start_code = 0x00000100U;
 constexpr std::uint32_t group_start_code = 0x000001B8U;
 
-// How much of the elementary stream pl_mpeg's video decoder is given at a time.
+// How much of a stream pl_mpeg's decoders are given at a time.
 constexpr std::size_t chunk_size = std::size_t{ 64 } * 1024;
-
-struct plm_deleter_t {
-    void operator()(plm_t* plm) const {
-        plm_destroy(plm);
-    }
-};
 
 struct demux_deleter_t {
     void operator()(plm_demux_t* demux) const {
@@ -54,9 +52,15 @@ struct video_deleter_t {
     }
 };
 
-using plm_ptr_t = std::unique_ptr<plm_t, plm_deleter_t>;
+struct audio_deleter_t {
+    void operator()(plm_audio_t* audio) const {
+        plm_audio_destroy(audio);
+    }
+};
+
 using demux_ptr_t = std::unique_ptr<plm_demux_t, demux_deleter_t>;
 using video_ptr_t = std::unique_ptr<plm_video_t, video_deleter_t>;
+using audio_ptr_t = std::unique_ptr<plm_audio_t, audio_deleter_t>;
 
 // A group of pictures in a video's elementary stream, which its decoder can start at.
 struct group_t {
@@ -70,64 +74,60 @@ struct group_t {
     bool closed = true;
 };
 
-// A video's elementary stream: its pictures and their groups.
+// A packet of a video's sound: where its data starts in the sound's stream, and when it starts, if
+// it says, or a negative.
+struct sound_packet_t {
+    std::size_t offset = 0;
+    double time = -1.0;
+};
+
+// A video's program stream taken apart: its video's elementary stream, its pictures, and their
+// groups, and its sound's stream and packets.
 struct stream_t {
+    bool headers = false;
+    bool has_video = false;
+    bool has_sound = false;
     std::vector<std::uint8_t> bytes;
     std::vector<group_t> groups;
     std::int64_t pictures = 0;
+    // When its first picture's packet says it starts, or a negative.
+    double start = -1.0;
+    std::vector<std::uint8_t> sound;
+    std::vector<sound_packet_t> sound_packets;
 };
 
-// A decoder of `bytes`, which it reads but never frees, with video or sound.
-plm_ptr_t decoder_of(std::vector<std::uint8_t>& bytes, bool video) {
-    plm_ptr_t plm(plm_create_with_memory(bytes.data(), bytes.size(), 0));
-    if (plm != nullptr) {
-        plm_set_video_enabled(plm.get(), video ? 1 : 0);
-        plm_set_audio_enabled(plm.get(), video ? 0 : 1);
+// As many as `bits` of the bits after a start code that ends at `at` in `bytes`, as if 0s follow
+// their end.
+std::uint32_t bits_after(std::span<const std::uint8_t> bytes, std::size_t at, std::uint32_t bits) {
+    std::uint32_t word = 0;
+    for (std::size_t j = 1; j <= 4; ++j) {
+        word = (word << 8U) | (at + j < bytes.size() ? bytes[at + j] : 0U);
     }
-    return plm;
+    return word >> (32U - bits);
 }
 
-// The video `bytes`' elementary stream, its video packets' data, with its pictures counted and
-// its groups found, without decoding them.
-stream_t stream_of(std::vector<std::uint8_t>& bytes) {
-    stream_t stream;
-    // The demuxer frees the buffer.
-    const demux_ptr_t demux(
-        plm_demux_create(plm_buffer_create_with_memory(bytes.data(), bytes.size(), 0), 1));
-    for (const plm_packet_t* packet = plm_demux_decode(demux.get()); packet != nullptr;
-         packet = plm_demux_decode(demux.get())) {
-        if (packet->type == PLM_DEMUX_PACKET_VIDEO_1) {
-            const std::span data(packet->data, packet->length);
-            stream.bytes.insert(stream.bytes.end(), data.begin(), data.end());
-        }
-    }
+// Counts `stream`'s pictures and finds their groups, without decoding them: a group only once a
+// picture follows it, so start codes of groups of nothing take nothing.
+void find_groups(stream_t& stream) {
     const std::span video(stream.bytes);
-    bool first_of_group = false;
+    std::optional<group_t> group;
     std::uint32_t last = 0xFFFFFFFFU;
     for (std::size_t i = 0; i < video.size(); ++i) {
         last = (last << 8U) | video[i];
-        // The bits after a start code, if there are 4 bytes of them.
-        const auto after = [&](std::size_t bits) {
-            std::uint32_t word = 0;
-            for (std::size_t j = 1; j <= 4; ++j) {
-                word = (word << 8U) | (i + j < video.size() ? video[i + j] : 0U);
-            }
-            return word >> (32U - bits);
-        };
         if (last == group_start_code) {
             // A 25-bit time code, then whether it's closed.
-            stream.groups.push_back({
+            group = group_t{
                 .offset = i - 3,
                 .first = stream.pictures,
                 .leading = 0,
-                .closed = (after(26) & 1U) != 0,
-            });
-            first_of_group = true;
+                .closed = (bits_after(video, i, 26) & 1U) != 0,
+            };
         } else if (last == picture_start_code) {
             // Its key frame's 10-bit temporal reference is how many are shown before it.
-            if (first_of_group) {
-                stream.groups.back().leading = after(10);
-                first_of_group = false;
+            if (group.has_value()) {
+                group->leading = bits_after(video, i, 10);
+                stream.groups.push_back(*group);
+                group.reset();
             }
             ++stream.pictures;
         }
@@ -136,15 +136,168 @@ stream_t stream_of(std::vector<std::uint8_t>& bytes) {
     if (stream.groups.empty() || stream.groups.front().first != 0) {
         stream.groups.insert(stream.groups.begin(), group_t{});
     }
+}
+
+// The program stream `bytes`, taken apart.
+stream_t stream_of(std::span<const std::uint8_t> bytes) {
+    stream_t stream;
+    // The demuxer frees the buffer, which only reads the bytes.
+    const demux_ptr_t demux(plm_demux_create(
+        plm_buffer_create_with_memory(const_cast<std::uint8_t*>(bytes.data()), bytes.size(), 0),
+        1));
+    stream.headers = plm_demux_has_headers(demux.get()) != 0;
+    if (!stream.headers) {
+        return stream;
+    }
+    stream.has_video = plm_demux_get_num_video_streams(demux.get()) > 0;
+    stream.has_sound = plm_demux_get_num_audio_streams(demux.get()) > 0;
+    for (const plm_packet_t* packet = plm_demux_decode(demux.get()); packet != nullptr;
+         packet = plm_demux_decode(demux.get())) {
+        const std::span data(packet->data, packet->length);
+        if (packet->type == PLM_DEMUX_PACKET_VIDEO_1) {
+            if (stream.start < 0.0 && packet->pts >= 0.0) {
+                stream.start = packet->pts;
+            }
+            stream.bytes.insert(stream.bytes.end(), data.begin(), data.end());
+        } else if (packet->type == PLM_DEMUX_PACKET_AUDIO_1 && !data.empty()) {
+            stream.sound_packets.push_back({ .offset = stream.sound.size(), .time = packet->pts });
+            stream.sound.insert(stream.sound.end(), data.begin(), data.end());
+        }
+    }
+    find_groups(stream);
     return stream;
 }
 
+// A video's sound, decoded, its samples placed as its packets' times say, from its first
+// picture's, as far as the video's `duration` and a second either way: a time past that is taken
+// to be wrong, and its frame goes on from the one before.
+class sound_decoding_t {
+public:
+    sound_decoding_t(const stream_t& stream, double duration)
+        : m_stream(stream), m_duration(duration) {
+        // Its times are from the first picture's, or from the sound's own first if there's none.
+        m_start = stream.start;
+        for (const sound_packet_t& packet : stream.sound_packets) {
+            if (m_start < 0.0 && packet.time >= 0.0) {
+                m_start = packet.time;
+                break;
+            }
+        }
+    }
+
+    // Decodes it all into `sound`; false if it's more than a WAV holds.
+    bool decode(sound_t& sound) {
+        plm_buffer_t* buffer = plm_buffer_create_with_capacity(chunk_size);
+        const audio_ptr_t audio(plm_audio_create_with_buffer(buffer, 1));
+        const std::vector<sound_packet_t>& packets = m_stream.sound_packets;
+        for (std::size_t k = 0; k < packets.size(); ++k) {
+            const std::size_t end =
+                k + 1 < packets.size() ? packets[k + 1].offset : m_stream.sound.size();
+            // A packet's time is its first frame to start in it, after the end of one before.
+            const bool straddling = plm_buffer_get_remaining(buffer) > 0;
+            const std::span data =
+                std::span(m_stream.sound).subspan(packets[k].offset, end - packets[k].offset);
+            plm_buffer_write(buffer, const_cast<std::uint8_t*>(data.data()), data.size());
+            if (k + 1 == packets.size()) {
+                plm_buffer_signal_end(buffer);
+            }
+            std::size_t decoded = 0;
+            for (const plm_samples_t* samples = plm_audio_decode(audio.get()); samples != nullptr;
+                 samples = plm_audio_decode(audio.get()), ++decoded) {
+                if (m_rate == 0) {
+                    m_rate = plm_audio_get_samplerate(audio.get());
+                    // A sound of no rate is none.
+                    if (m_rate <= 0) {
+                        sound = {};
+                        return true;
+                    }
+                }
+                if (decoded == (straddling ? 1U : 0U) && packets[k].time >= 0.0 &&
+                    !place(packets[k].time - m_start)) {
+                    return false;
+                }
+                m_first = false;
+                if (!add(*samples)) {
+                    return false;
+                }
+            }
+        }
+        // A sound whose samples all come before the first picture is none.
+        if (m_samples.empty()) {
+            sound = {};
+            return true;
+        }
+        sound = {
+            .rate = m_rate,
+            .channels = sound_channels_of_mpeg1,
+            .samples = std::move(m_samples),
+        };
+        return true;
+    }
+
+private:
+    // Puts the next frame `seconds` from the first picture, if that's within the video and a
+    // second: after silence, if it's the first and later, or with its samples before the first
+    // picture left out; and after silence if it's a gap after the frame before.
+    bool place(double seconds) {
+        if (std::abs(seconds) > m_duration + 1.0) {
+            return true;
+        }
+        const std::int64_t at = std::llround(seconds * m_rate);
+        if (m_first) {
+            if (at < 0) {
+                m_dropping = -at;
+                return true;
+            }
+            return pad(at);
+        }
+        return at > m_written + (samples_per_frame / 2) ? pad(at - m_written) : true;
+    }
+
+    bool pad(std::int64_t count) {
+        if (!fits(m_written + count)) {
+            return false;
+        }
+        m_samples.resize(
+            m_samples.size() + static_cast<std::size_t>(count * sound_channels_of_mpeg1), 0.0F);
+        m_written += count;
+        return true;
+    }
+
+    bool add(const plm_samples_t& samples) {
+        const std::int64_t skipped = std::min<std::int64_t>(m_dropping, samples.count);
+        if (!fits(m_written + samples.count - skipped)) {
+            return false;
+        }
+        m_dropping -= skipped;
+        const std::span interleaved =
+            std::span(samples.interleaved,
+                      static_cast<std::size_t>(samples.count) * sound_channels_of_mpeg1)
+                .subspan(static_cast<std::size_t>(skipped) * sound_channels_of_mpeg1);
+        m_samples.insert(m_samples.end(), interleaved.begin(), interleaved.end());
+        m_written += samples.count - skipped;
+        return true;
+    }
+
+    // Whether `count` samples of each channel fit a WAV.
+    static bool fits(std::int64_t count) {
+        return count >= 0 && wav_holds(static_cast<std::uint64_t>(count) * sound_channels_of_mpeg1 *
+                                       sizeof(float));
+    }
+
+    const stream_t& m_stream;
+    double m_duration;
+    double m_start = -1.0;
+    std::int32_t m_rate = 0;
+    std::vector<float> m_samples;
+    std::int64_t m_written = 0;
+    std::int64_t m_dropping = 0;
+    bool m_first = true;
+};
+
 class mpeg1_t final : public decoder_t {
 public:
-    mpeg1_t(std::vector<std::uint8_t> bytes, stream_t stream, bool has_sound,
-            std::int32_t sound_rate)
-        : m_bytes(std::move(bytes)), m_stream(std::move(stream)), m_has_sound(has_sound),
-          m_sound_rate(sound_rate) {
+    explicit mpeg1_t(stream_t stream) : m_stream(std::move(stream)) {
         // The decoder reads its sequence header now, from the start of the stream.
         plm_buffer_t* buffer = plm_buffer_create_with_capacity(chunk_size);
         plm_buffer_set_load_callback(buffer, &mpeg1_t::load, this);
@@ -167,6 +320,17 @@ public:
         return m_width > 0 && m_height > 0 && m_frame_rate > 0.0 && m_stream.pictures > 0;
     }
 
+    // Decodes its sound, after which it keeps none of the sound's stream; false if it's more than
+    // a WAV holds.
+    bool decode_sound() {
+        if (m_stream.has_sound && !sound_decoding_t(m_stream, duration()).decode(m_sound)) {
+            return false;
+        }
+        m_stream.sound = {};
+        m_stream.sound_packets = {};
+        return true;
+    }
+
     [[nodiscard]] std::int32_t width() const override {
         return m_width;
     }
@@ -179,20 +343,22 @@ public:
         return m_frame_rate;
     }
 
+    [[nodiscard]] std::int64_t frames() const override {
+        return m_stream.pictures;
+    }
+
     [[nodiscard]] double duration() const override {
         return static_cast<double>(m_stream.pictures) / m_frame_rate;
     }
 
-    [[nodiscard]] bool has_sound() const override {
-        return m_has_sound;
-    }
-
-    [[nodiscard]] std::int32_t sound_rate() const override {
-        return m_sound_rate;
-    }
-
-    [[nodiscard]] std::int32_t sound_channels() const override {
-        return m_has_sound ? sound_channels_of_mpeg1 : 0;
+    [[nodiscard]] std::int64_t next_start(std::int64_t number) const override {
+        // The next group's start, or past its first pictures if they're made from the group
+        // before's, which a seek to them starts before.
+        const auto after = std::ranges::upper_bound(m_stream.groups, number, {}, &group_t::first);
+        if (after == m_stream.groups.end()) {
+            return std::numeric_limits<std::int64_t>::max();
+        }
+        return after->first + (after->closed ? 0 : after->leading);
     }
 
     bool next(picture_t& picture) override {
@@ -205,7 +371,8 @@ public:
     }
 
     // From the start of the last group to start at or before the picture due, or of the one
-    // before if it's one of an open group's shown before its key frame.
+    // before if it's one of an open group's shown before its key frame; the last there is, if the
+    // stream ends before it.
     bool seek(double seconds, picture_t& picture) override {
         const auto due =
             std::clamp(static_cast<std::int64_t>(std::floor((seconds * m_frame_rate) + 0.001)),
@@ -218,40 +385,26 @@ public:
         plm_video_rewind(m_video.get());
         m_cursor = group->offset;
         m_next = group->first;
+        // The last picture decoded, which pl_mpeg leaves as it is once there's no more.
+        plm_frame_t* last = nullptr;
         for (plm_frame_t* frame = plm_video_decode(m_video.get()); frame != nullptr;
              frame = plm_video_decode(m_video.get())) {
             if (m_next == due) {
                 convert(*frame, picture, m_next++);
                 return true;
             }
+            last = frame;
             ++m_next;
         }
-        return false;
+        if (last == nullptr) {
+            return false;
+        }
+        convert(*last, picture, m_next - 1);
+        return true;
     }
 
-    [[nodiscard]] sound_t sound() const override {
-        sound_t sound{ .rate = m_sound_rate, .channels = sound_channels(), .samples = {} };
-        if (!m_has_sound) {
-            return sound;
-        }
-        // Its own decoder of the bytes, which it only reads.
-        auto& bytes = const_cast<std::vector<std::uint8_t>&>(m_bytes);
-        const plm_ptr_t plm = decoder_of(bytes, false);
-        bool first = true;
-        for (plm_samples_t* samples = plm_decode_audio(plm.get()); samples != nullptr;
-             samples = plm_decode_audio(plm.get())) {
-            // Silence until the first sound, so the first sample is at time 0.
-            if (first && samples->time > 0.0) {
-                const auto silent = static_cast<std::size_t>(
-                    std::llround(samples->time * m_sound_rate) * sound_channels_of_mpeg1);
-                sound.samples.resize(silent, 0.0F);
-            }
-            first = false;
-            sound.samples.insert(sound.samples.end(), samples->interleaved,
-                                 samples->interleaved +
-                                     (std::size_t{ samples->count } * sound_channels_of_mpeg1));
-        }
-        return sound;
+    [[nodiscard]] sound_t take_sound() override {
+        return std::exchange(m_sound, {});
     }
 
 private:
@@ -282,14 +435,12 @@ private:
         picture.time = static_cast<double>(number) / m_frame_rate;
     }
 
-    std::vector<std::uint8_t> m_bytes;
     stream_t m_stream;
-    bool m_has_sound;
-    std::int32_t m_sound_rate;
     video_ptr_t m_video;
     std::int32_t m_width = 0;
     std::int32_t m_height = 0;
     double m_frame_rate = 0.0;
+    sound_t m_sound;
     // Where in the stream the decoder's given the next of it from.
     std::size_t m_cursor = 0;
     // The number of the next picture the decoder gives.
@@ -298,31 +449,25 @@ private:
 
 } // namespace
 
-std::unique_ptr<decoder_t> open_mpeg1(std::vector<std::uint8_t>& bytes) {
-    const plm_ptr_t plm = decoder_of(bytes, true);
-    if (plm == nullptr || plm_has_headers(plm.get()) == 0 ||
-        plm_get_num_video_streams(plm.get()) == 0 || plm_get_width(plm.get()) <= 0 ||
-        plm_get_height(plm.get()) <= 0 || !(plm_get_framerate(plm.get()) > 0.0)) {
-        return nullptr;
-    }
+std::unique_ptr<decoder_t> open_mpeg1(std::span<const std::uint8_t> bytes, bool& too_long) {
     stream_t stream = stream_of(bytes);
-    if (stream.pictures == 0) {
+    if (!stream.headers || !stream.has_video || stream.pictures == 0) {
         return nullptr;
     }
-    const bool has_sound = plm_get_num_audio_streams(plm.get()) > 0;
-    const std::int32_t sound_rate = has_sound ? plm_get_samplerate(plm.get()) : 0;
-    auto decoder =
-        std::make_unique<mpeg1_t>(std::move(bytes), std::move(stream), has_sound, sound_rate);
-    // Its own decoder of the stream finds what the program stream's did, or it isn't one.
+    auto decoder = std::make_unique<mpeg1_t>(std::move(stream));
     if (!decoder->decodes()) {
+        return nullptr;
+    }
+    if (!decoder->decode_sound()) {
+        too_long = true;
         return nullptr;
     }
     return decoder;
 }
 
-std::unique_ptr<decoder_t> open_decoder(std::vector<std::uint8_t> bytes) {
-    // Each format's in turn; the bytes go to the first that takes them.
-    return open_mpeg1(bytes);
+std::unique_ptr<decoder_t> open_decoder(std::span<const std::uint8_t> bytes, bool& too_long) {
+    // Each format's in turn, each given the bytes as they are.
+    return open_mpeg1(bytes, too_long);
 }
 
 } // namespace fbe::video
