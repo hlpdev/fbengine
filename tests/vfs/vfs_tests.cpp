@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <random>
 #include <string>
@@ -365,14 +366,28 @@ TEST_CASE("a folder finds no name a pak wouldn't", "[vfs]") {
              "res://con",
              "res://Nul .tar.gz",
              "res://COM0",
+             // COM and LPT with a superscript one, two, or three, and the console's own.
+             "res://COM\xC2\xB9",
+             "res://LPT\xC2\xB2.txt",
+             "res://com\xC2\xB3",
+             "res://CONIN$",
+             "res://conout$.log",
          }) {
         const vfs::result_t<vfs::path_t> parsed = vfs::parse(text);
         REQUIRE_FALSE(parsed.has_value());
         REQUIRE(parsed.error().failure == vfs::failure_t::INVALID_PATH);
     }
     // Names that only start like a device's are names.
-    for (const std::string_view text :
-         { "res://console.txt", "res://com10", "res://nul_x.txt", "res://lpt", "res://.hidden" }) {
+    for (const std::string_view text : {
+             "res://console.txt",
+             "res://com10",
+             "res://nul_x.txt",
+             "res://lpt",
+             "res://.hidden",
+             "res://com\xE2\x81\xB4",
+             "res://conin",
+             "res://conout$x",
+         }) {
         REQUIRE(vfs::parse(text).has_value());
     }
 }
@@ -744,4 +759,97 @@ TEST_CASE("reads on many threads see whole mounts while the mounts change", "[vf
     }
     REQUIRE(wrong == 0);
     REQUIRE(read(files, "res://a.txt") == "first");
+}
+
+TEST_CASE("res:// is a folder with nothing mounted, as kind, list, and read say", "[vfs]") {
+    const vfs::vfs_t files;
+    REQUIRE(kind(files, "res://") == vfs::kind_t::FOLDER);
+    REQUIRE(list(files, "res://").empty());
+    REQUIRE(read_failure(files, "res://") == vfs::failure_t::IS_A_FOLDER);
+}
+
+TEST_CASE("a folder's listing is kept until the folder changes", "[vfs]") {
+    const temp_folder_t folder;
+    folder.write("a.txt", "a");
+    folder.write("b.txt", "b");
+    folder.write("sub/c.txt", "c");
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    // Long enough after its last change that it's kept as it's listed.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    REQUIRE(list(files, "res://") == std::vector<std::string>{ "a.txt", "b.txt", "sub/" });
+    REQUIRE(read(files, "res://sub/c.txt") == "c");
+
+    // What's added, taken out, or made a folder is seen at once.
+    folder.write("new.txt", "new");
+    REQUIRE(read(files, "res://new.txt") == "new");
+    fs::remove(folder.path / "a.txt");
+    REQUIRE(read_failure(files, "res://a.txt") == vfs::failure_t::NOT_FOUND);
+    fs::remove(folder.path / "b.txt");
+    folder.write("b.txt/inside.txt", "inside");
+    REQUIRE(kind(files, "res://b.txt") == vfs::kind_t::FOLDER);
+    REQUIRE(read(files, "res://b.txt/inside.txt") == "inside");
+    fs::rename(folder.path / "sub", folder.path / "moved");
+    REQUIRE(read_failure(files, "res://sub/c.txt") == vfs::failure_t::NOT_FOUND);
+    REQUIRE(read(files, "res://moved/c.txt") == "c");
+    // And a file's new bytes, which aren't the listing's.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    REQUIRE(read(files, "res://new.txt") == "new");
+    folder.write("new.txt", "newer");
+    REQUIRE(read(files, "res://new.txt") == "newer");
+    // A folder taken out is gone, and one put back is seen.
+    fs::remove_all(folder.path / "moved");
+    REQUIRE(kind(files, "res://moved") == vfs::kind_t::NONE);
+    folder.write("moved/d.txt", "d");
+    REQUIRE(read(files, "res://moved/d.txt") == "d");
+}
+
+TEST_CASE("reading each file of a big folder takes a stat of each folder on its path", "[vfs]") {
+    constexpr int count = 2000;
+    const temp_folder_t folder;
+    for (int i = 0; i < count; ++i) {
+        folder.write(std::format("GFX/map/tex{}.png", i), "x");
+    }
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < count; ++i) {
+        REQUIRE(read(files, std::format("res://gfx/MAP/tex{}.png", i)) == "x");
+        REQUIRE(read_failure(files, std::format("res://gfx/map/missing{}.png", i)) ==
+                vfs::failure_t::NOT_FOUND);
+    }
+    // Listing the folder at each read takes minutes.
+    REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::seconds(20));
+}
+
+TEST_CASE("a read with no memory for a file's bytes fails as OTHER", "[vfs]") {
+    const temp_folder_t folder;
+    folder.write("a.txt", "a");
+    vfs::vfs_t files;
+    files.mount(path("res://disk"), vfs::folder(folder.path));
+    files.mount(path("res://pak"), pak_of({ { .name = "b.txt", .data = "b" } }));
+    for (const std::string_view at : { "res://disk/a.txt", "res://pak/b.txt" }) {
+        vfs::inject(vfs::fault_t::OUT_OF_MEMORY);
+        const vfs::result_t<vfs::bytes_t> bytes = files.read(path(at));
+        REQUIRE_FALSE(bytes.has_value());
+        REQUIRE(bytes.error().failure == vfs::failure_t::OTHER);
+        REQUIRE(bytes.error().message.contains("memory"));
+        // Once.
+        REQUIRE(files.read(path(at)).has_value());
+    }
+}
+
+TEST_CASE("a view reads the mounts there were when it was taken", "[vfs]") {
+    vfs::vfs_t files;
+    files.mount(path("res://"), pak_of({ { .name = "a.txt", .data = "first" } }));
+    const vfs::view_t view = files.view();
+    files.mount(path("res://"), pak_of({ { .name = "a.txt", .data = "second" } }));
+    REQUIRE(read(files, "res://a.txt") == "second");
+    REQUIRE(files.unmount(path("res://")));
+    REQUIRE(files.unmount(path("res://")));
+    REQUIRE(read_failure(files, "res://a.txt") == vfs::failure_t::NOT_FOUND);
+    const vfs::result_t<vfs::bytes_t> kept = view.read(path("res://a.txt"));
+    REQUIRE(kept.has_value());
+    REQUIRE(text_of(*kept) == "first");
+    REQUIRE(view.kind(path("res://a.txt")) == vfs::kind_t::FILE);
 }

@@ -4,6 +4,7 @@
 Public Extern "C" Lib "fbengine_native"
     Function fbe_jobs_workers(): Int32
     Function fbe_jobs_hand_over()
+    Function fbe_jobs_hand_overs(): UInt64
     Function fbe_jobs_finished_count(): Int32
     Function fbe_jobs_finished_at(index: Int32): UInt64
     Function fbe_jobs_forget_finished()

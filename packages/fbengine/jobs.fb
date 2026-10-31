@@ -11,7 +11,8 @@ Import "./window"
 /// The engine's worker threads, one per core the game can run on, less one, which its loading,
 /// culling, animation, and collisions run on. What the engine starts on them for the game
 /// finishes on the main thread, at the Flip after it's done, or, while the main thread waits for
-/// it or awaits it without flipping, as at a game's start, at the main scheduler's next tick.
+/// it or awaits it without flipping, as at a game's start, within a millisecond, at a tick of
+/// the main scheduler.
 Public Final Class Jobs
     // The work the FB side waits for, by ticket; the Flip hook that hands it over while there's
     // any, and whether the coroutine that does between Flips is running.
@@ -36,7 +37,9 @@ Public Final Class Jobs
         If hook == 0 Then hook = Frame.OnFlip(HandOverJobs)
         If !pumping
             pumping = True
-            Pump()
+            // On the main scheduler, whichever scheduler awaits it, since that one may never tick
+            // again.
+            Scheduler.Main.Run(Pump())
         End If
         Return source.Task
     End Method
@@ -73,11 +76,12 @@ Public Final Class Jobs
         End If
     End Method
 
-    // Hands over at each tick of the main scheduler while anything waits, so a Wait() or a
-    // top-level Await of a job's Task finishes without a Flip.
+    // Hands over each millisecond, on the main scheduler, while anything waits, so a Wait() or a
+    // top-level Await of a job's Task finishes without a Flip, and the main thread sleeps
+    // between.
     @MainThread Static Async Method Pump()
         While waiting.Count > 0
-            Await NextTick()
+            Await RealWait(1.Milliseconds)
             HandOver()
         End While
         pumping = False

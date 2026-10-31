@@ -71,9 +71,10 @@ End Struct
 /// every OS. Folders and pak files are mounted at places in res://, a later mount over an earlier
 /// one, so a mod's folder can stand in for some of a game's pak: a file is the last mount's that
 /// has it, and a folder lists what every mount has in it. A path that goes above "res://", or has
-/// a name no file can have on every OS (with one of `: * ? " < > |` or a control character), is
-/// an IOError of INVALID_PATH where a path can come from a game's data, and a panic where it's
-/// a mount's place.
+/// a name no file can have on every OS (with one of `: * ? " < > |` or a control character, a dot
+/// or a space at its end, or a Windows device's, as CON, nul.txt, or COM1), is an IOError of
+/// INVALID_PATH where a path can come from a game's data, and a panic where it's a mount's
+/// place.
 ///
 /// # Examples
 ///
@@ -91,8 +92,8 @@ Public Final Class Assets
 
     /// Mounts the folder on the disk at `folder` at `at`, over what's mounted. It's read as it's
     /// asked, so it sees what changes in it, and is empty while it isn't there. A name is found in
-    /// any case: as it's written if it's there, and otherwise the first, by its bytes, of those in
-    /// the folder that differ from it only in case. Panics when `at` isn't a res:// path.
+    /// any case: of the names in the folder that differ from it only in case, the first by its
+    /// bytes, as a pak of the folder would have it. Panics when `at` isn't a res:// path.
     @MainThread @PanicsAtCaller
     Public Static Method MountFolder(at: String, folder: Path)
         If !fbe_vfs_mount_folder(at, folder.Text) Then Panic(LastError())
