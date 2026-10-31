@@ -42,6 +42,13 @@ TEST_CASE("nothing's shown headless, or on a video driver with no screen") {
     CHECK_FALSE(fbe::shows_nothing(false));
     set_driver("OFFSCREEN");
     CHECK(fbe::shows_nothing(false));
+    // An empty entry names no driver, so SDL goes on to the next.
+    set_driver(",offscreen");
+    CHECK(fbe::shows_nothing(false));
+    set_driver(",,windows,offscreen");
+    CHECK_FALSE(fbe::shows_nothing(false));
+    set_driver(",");
+    CHECK_FALSE(fbe::shows_nothing(false));
     set_driver("offscreenish");
     CHECK_FALSE(fbe::shows_nothing(false));
     set_driver("offscreen");

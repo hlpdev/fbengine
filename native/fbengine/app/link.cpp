@@ -131,15 +131,19 @@ bool shows_nothing(bool headless) {
         return true;
     }
     // The driver SDL started, once it has; before, the first it'd try, as it reads the hint: a
-    // list, by commas, in any case.
+    // list, by commas, in any case, an empty entry naming none.
     std::string_view named;
     if (SDL_WasInit(SDL_INIT_VIDEO) != 0) {
         const char* current = SDL_GetCurrentVideoDriver();
         named = current != nullptr ? current : "";
     } else {
         const char* hint = SDL_GetHint(SDL_HINT_VIDEO_DRIVER);
-        named = hint != nullptr ? hint : "";
-        named = named.substr(0, named.find(','));
+        std::string_view list = hint != nullptr ? hint : "";
+        while (named.empty() && !list.empty()) {
+            const std::size_t comma = list.find(',');
+            named = list.substr(0, comma);
+            list = comma == std::string_view::npos ? "" : list.substr(comma + 1);
+        }
     }
     return named_as(named, "offscreen") || named_as(named, "dummy");
 }
