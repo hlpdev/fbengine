@@ -143,6 +143,15 @@ struct sprite_t {
     float roll = 0.0F;
 };
 
+/// A ground plane: the material it's drawn in, which it holds, or none, its own color, and the grid
+/// it's drawn in.
+struct plane_t {
+    std::uint32_t entity = none;
+    std::uint32_t material = none;
+    std::array<float, 4> tint{ 1.0F, 1.0F, 1.0F, 1.0F };
+    std::int32_t segments = 1;
+};
+
 /// Every entity's data, a field to an array, indexed by slot.
 struct entities_t {
     slots_t slots{ ENTITY_KIND };
@@ -178,6 +187,9 @@ struct entities_t {
     std::vector<quat_t> captured_rotation;
     std::vector<vec3_t> captured_scale;
     std::vector<bool> captured;
+    /// Where it starts fading from a camera, and where it's gone, 0 and 0 for never.
+    std::vector<float> fade_near;
+    std::vector<float> fade_far;
 };
 
 /// An entity picks can hit, with its box in the world, which picks read one after another before
@@ -249,6 +261,7 @@ struct scene_t {
     std::vector<light_t> lights;
     std::vector<mesh_t> meshes;
     std::vector<sprite_t> sprites;
+    std::vector<plane_t> planes;
     slots_t geometry_slots{ GEOMETRY_KIND };
     std::vector<geometry_t> geometries;
     slots_t material_slots{ MATERIAL_KIND };
@@ -294,6 +307,12 @@ void add_mesh(std::uint32_t entity);
 void remove_mesh(std::uint32_t entity);
 /// The live mesh a handle is for, or null, with fbe_error saying so.
 mesh_t* mesh_of(std::uint64_t handle);
+void add_plane(std::uint32_t entity);
+void remove_plane(std::uint32_t entity);
+/// The live ground plane a handle is for, or null, with fbe_error saying so.
+plane_t* plane_of(std::uint64_t handle);
+/// Whether two meshes' triangles cross, in the world.
+bool meshes_cross(std::uint32_t first, std::uint32_t second);
 void add_sprite(std::uint32_t entity);
 void remove_sprite(std::uint32_t entity);
 /// The live sprite a handle is for, or null, with fbe_error saying so.

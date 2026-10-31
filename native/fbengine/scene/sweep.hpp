@@ -63,6 +63,11 @@ inline vec3_t box_corner(vec3_t min, vec3_t max, unsigned corner) {
              (corner & 4U) != 0 ? max.z : min.z };
 }
 
+/// The part of an infinite plane, its matrix's local y of 0 facing its +Y, under a box in the
+/// world, as two triangles facing its front; false when the matrix can't be inverted.
+bool plane_under(const mat4_t& matrix, vec3_t min, vec3_t max,
+                 std::array<std::array<vec3_t, 3>, 2>& triangles);
+
 /// Makes a triangle of three corners, turned when what it's of mirrors, so its front stays out;
 /// false for one too thin to have a front.
 bool make_triangle(std::array<vec3_t, 3> corners, bool mirrored, triangle_t& triangle);

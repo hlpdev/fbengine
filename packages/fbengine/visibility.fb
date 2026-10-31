@@ -102,3 +102,35 @@ Function Seen(answer: Int32, on: Entity, call: String): Bool
     If answer < 0 Then on.Failed(call)
     Return answer == 1
 End Function
+
+/// How far from a camera meshes and sprites fade out, as distant props do.
+Extend Entity
+    /// Sets how far from a camera the entity fades: whole nearer than `start`, gone past `end`,
+    /// and fading between, from the camera's place to its own; 0 and 0, at first, for never.
+    /// Anything but 0 <= start < end, finite, or both 0, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetAutoFade(start: Float, end: Float)
+        If !fbe_entity_set_auto_fade(Live("SetAutoFade"), start, end) Then Failed("SetAutoFade")
+    End Method
+
+    /// Where the entity starts fading from a camera, and where it's gone, as x and y.
+    @MainThread @PanicsAtCaller
+    Public Method AutoFade(): Vec2
+        Local entity = Live("AutoFade")
+        Local found = fbe_vec2_t(0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_entity_auto_fade(entity, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("AutoFade")
+        Return Vec2(found.x, found.y)
+    End Method
+
+    /// The alpha the entity's fade gives it seen from `camera`, 0 to 1.
+    @MainThread @PanicsAtCaller
+    Public Method Fade(camera: Camera): Float
+        Local faded = fbe_entity_fade(Live("Fade"), camera.Live("Fade"))
+        If faded < 0 Then Failed("Fade")
+        Return faded
+    End Method
+End Extend

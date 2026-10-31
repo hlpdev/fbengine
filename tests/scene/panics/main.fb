@@ -218,6 +218,18 @@ Select arguments[0]
         FixedStep(60, 0)
     Case "fixed-step-steps"
         FixedStep(60).Steps(-1)
+    Case "plane-segments"
+        GroundPlane(17)
+    Case "auto-fade"
+        Pivot().SetAutoFade(5, 1)
+    Case "mirror-freed"
+        Local gone = Mirror()
+        gone.Free()
+        gone.Reflection()
+    Case "intersects-freed"
+        Local gone = Mesh(Geometry.Cube())
+        gone.Free()
+        Mesh(Geometry.Cube()).Intersects(gone)
     Default
         Panic("no case {arguments[0]}")
 End Select

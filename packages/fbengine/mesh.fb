@@ -34,4 +34,13 @@ Public Final Class Mesh Extends Entity
     /// The Geometry the mesh draws, or Null.
     @MainThread @PanicsAtCaller
     Public Method Geometry(): Geometry? => GeometryOf(fbe_mesh_geometry(Live("Geometry")))
+
+    /// Whether any of the mesh's triangles cross any of `other`'s, in the world, from either
+    /// side; False when either draws nothing. Triangles flat on each other touch, not cross.
+    @MainThread @PanicsAtCaller
+    Public Method Intersects(other: Mesh): Bool
+        Local crossed = fbe_mesh_intersects(Live("Intersects"), other.Live("Intersects"))
+        If crossed < 0 Then Failed("Intersects")
+        Return crossed == 1
+    End Method
 End Class

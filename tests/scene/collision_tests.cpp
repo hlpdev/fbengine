@@ -597,7 +597,7 @@ TEST_CASE("a long walk among turned solids never gets 0.005 into them", "[scene]
     // The review's long walk at the worst two of 40 seeds of 20,000 frames, just past their worst
     // frames: 40 solids, boxes and cube meshes, turned every way, and a 0.3 by 0.6 mover falling
     // and walking among them. Its worst, 0.0045, is between two solids nearly facing each other.
-    for (const auto [seed, frames] : { std::pair{ 6U, 1400 }, std::pair{ 34U, 4900 } }) {
+    for (const auto& [seed, frames] : { std::pair{ 6U, 1400 }, std::pair{ 34U, 4900 } }) {
         std::mt19937 random(seed); // NOLINT(bugprone-random-generator-seed)
         const test_world_t world;
         const std::uint64_t floor = level(world.handle, fbe_geometry_plane(1));

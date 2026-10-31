@@ -1,0 +1,77 @@
+// Ground planes, mirrors, fading, and meshes crossing, with no GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+Function Near(a: Vec3, b: Vec3): Bool => IsClose(a, b, 0.001)
+
+@Test
+Function AGroundPlaneIsAFloorEverywhere()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(1, 2, CollisionResponse.SLIDE)
+    Local ground = GroundPlane(4)
+    Expect(ground.Kind() == EntityKind.PLANE && ground.Segments() == 4)
+    ground.SetCollisionGroup(2)
+    ground.SetPickMode(PickMode.MESH)
+    Local mover = Pivot()
+    mover.SetCollisionGroup(1)
+    mover.SetCollisionRadius(0.5)
+    mover.SetPosition(Vec3(-800, 3, 1200))
+    world.Collide()
+    mover.Translate(Vec3(0, -10, 0))
+    world.Collide()
+    Expect(IsClose(mover.Position().y, 0.501, 0.001))
+    Expect(world.Pick(Vec3(9000, 5, 9000), Vec3(9000, -5, 9000))?.Entity == ground)
+    // A copy keeps its settings.
+    Local glow = Material()
+    ground.SetMaterial(glow)
+    ground.SetColor(Color(0.5, 0.5, 0.5, 1))
+    Local copy = ground.Copy() As GroundPlane
+    Expect(copy.Segments() == 4 && copy.Material() == glow)
+    Expect(copy.Color() == Color(0.5, 0.5, 0.5, 1))
+End Function
+
+@Test
+Function AMirrorReflectsThroughItsPlane()
+    Local world = Fresh()
+    Defer world.Free()
+    Local mirror = Mirror()
+    mirror.SetPosition(Vec3(0, 2, 0))
+    Expect(mirror.Kind() == EntityKind.MIRROR)
+    Expect(Near(mirror.Reflection().TransformPoint(Vec3(3, 5, 1)), Vec3(3, -1, 1)))
+End Function
+
+@Test
+Function APropFadesWithDistance()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Camera()
+    Local prop = Mesh(Geometry.Cube())
+    prop.SetAutoFade(10, 20)
+    Expect(prop.AutoFade() == Vec2(10, 20))
+    prop.SetPosition(Vec3(0, 0, -15))
+    Expect(IsClose(prop.Fade(camera), 0.5, 0.001))
+    prop.SetPosition(Vec3(0, 0, -30))
+    Expect(prop.Fade(camera) == 0)
+End Function
+
+@Test
+Function MeshesIntersectWhereTheyCross()
+    Local world = Fresh()
+    Defer world.Free()
+    Local one = Mesh(Geometry.Cube())
+    Local two = Mesh(Geometry.Cube())
+    two.SetPosition(Vec3(1.5, 0.5, 0))
+    Expect(one.Intersects(two))
+    two.SetPosition(Vec3(3, 0, 0))
+    Expect(!one.Intersects(two))
+End Function

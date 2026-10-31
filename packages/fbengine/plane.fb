@@ -1,0 +1,71 @@
+// Ground planes: entities that are an infinite floor, which collisions and picks touch from above.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./light"
+Import "./material"
+
+/// An infinite plane at the entity's own y of 0, facing its +Y: a floor that goes on to the
+/// horizon. Movers touch it as that plane, and picks of PickMode.MESH hit it, from above only.
+Public Final Class GroundPlane Extends Entity
+    /// A new GroundPlane, drawn in a grid of `segments` a side, 1 to 16, the last child of
+    /// `parent`, or at the top of the current World when `parent` is Null.
+    @MainThread @PanicsAtCaller
+    Public New(segments: Int = 1, parent: Entity? = Null)
+        Super.New(Create(parent, FBE_ENTITY_PLANE))
+        SetSegments(segments)
+    End New
+
+    Package New(handle: UInt64)
+        Super.New(handle)
+    End New
+
+    Override Package Method KindName(): String => "GroundPlane"
+
+    /// Sets how many segments a side the plane is drawn in, 1 to 16, 1 at first. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetSegments(segments: Int)
+        If !fbe_plane_set_segments(Live("SetSegments"), segments) Then Failed("SetSegments")
+    End Method
+
+    /// How many segments a side the plane is drawn in.
+    @MainThread @PanicsAtCaller
+    Public Method Segments(): Int => fbe_plane_segments(Live("Segments"))
+
+    /// Makes the plane draw in `material`, or white for Null; its copies share it.
+    @MainThread @PanicsAtCaller
+    Public Method SetMaterial(material: Material?)
+        Local plane = Live("SetMaterial")
+        Local drawn: UInt64 = material != Null ? material.Live("SetMaterial") : 0
+        If !fbe_plane_set_material(plane, drawn) Then Failed("SetMaterial")
+    End Method
+
+    /// The material the plane draws in, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Material(): Material? => MaterialOf(fbe_plane_material(Live("Material")))
+
+    /// Sets the plane's own color and alpha, which multiply its material's, white at first.
+    /// Colors take any finite value; an alpha outside 0 to 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetColor(color: Color)
+        If !fbe_plane_set_tint(Live("SetColor"), color.r, color.g, color.b, color.a)
+            Failed("SetColor")
+        End If
+    End Method
+
+    /// The plane's own color and alpha.
+    @MainThread @PanicsAtCaller
+    Public Method Color(): Color
+        Local plane = Live("Color")
+        Local found = fbe_color_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_plane_tint(plane, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("Color")
+        Return ColorOf(found)
+    End Method
+End Class
