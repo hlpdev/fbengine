@@ -124,6 +124,30 @@ mat4_t to_world(std::uint32_t entity) {
 
 } // namespace
 
+mat4_t tweened_matrix(std::uint32_t entity, float tween) {
+    const entities_t& entities = scene().entities;
+    // From the top down, each one's local transform part way from its capture.
+    std::vector<std::uint32_t> chain;
+    for (std::uint32_t at = entity; at != none; at = entities.parent[at]) {
+        chain.push_back(at);
+    }
+    mat4_t found;
+    for (const std::uint32_t at : std::views::reverse(chain)) {
+        vec3_t position = entities.position[at];
+        quat_t rotation = entities.rotation[at];
+        vec3_t scale = entities.scale[at];
+        if (entities.captured[at]) {
+            const vec3_t moved = position - entities.captured_position[at];
+            const vec3_t grown = scale - entities.captured_scale[at];
+            position = entities.captured_position[at] + moved * tween;
+            rotation = slerp(entities.captured_rotation[at], rotation, tween);
+            scale = entities.captured_scale[at] + grown * tween;
+        }
+        found = found * compose(position, rotation, scale);
+    }
+    return found;
+}
+
 void reset_transform(std::uint32_t entity) {
     entities_t& entities = scene().entities;
     entities.position[entity] = {};
@@ -407,26 +431,7 @@ FBE_API bool fbe_entity_tweened_matrix(uint64_t entity, float tween, fbe_mat4_t*
     if (std::isnan(tween) || tween < 0.0F || tween > 1.0F) {
         return fbe::fail(std::format("a tween is 0 to 1, not {}", tween));
     }
-    const fbe::scene::entities_t& entities = scene().entities;
-    // From the top down, each one's local transform part way from its capture.
-    std::vector<std::uint32_t> chain;
-    for (std::uint32_t at = slot; at != none; at = entities.parent[at]) {
-        chain.push_back(at);
-    }
-    fbe::scene::mat4_t found;
-    for (const std::uint32_t at : std::views::reverse(chain)) {
-        fbe::scene::vec3_t position = entities.position[at];
-        fbe::scene::quat_t rotation = entities.rotation[at];
-        fbe::scene::vec3_t scale = entities.scale[at];
-        if (entities.captured[at]) {
-            const fbe::scene::vec3_t moved = position - entities.captured_position[at];
-            const fbe::scene::vec3_t grown = scale - entities.captured_scale[at];
-            position = entities.captured_position[at] + moved * tween;
-            rotation = fbe::scene::slerp(entities.captured_rotation[at], rotation, tween);
-            scale = entities.captured_scale[at] + grown * tween;
-        }
-        found = found * fbe::scene::compose(position, rotation, scale);
-    }
+    const fbe::scene::mat4_t found = fbe::scene::tweened_matrix(slot, tween);
     for (std::size_t i = 0; i < found.m.size(); ++i) {
         matrix->m[i] = found.m[i];
     }

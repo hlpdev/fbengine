@@ -359,6 +359,12 @@ FBE_API int32_t fbe_world_cameras(uint64_t world, uint64_t* cameras, int32_t cap
 FBE_API bool fbe_camera_view_matrix(uint64_t camera, fbe_mat4_t* matrix);
 // A camera's projection in a target of this size, as std.math's Mat4.Perspective and
 // Orthographic make it, with depth from 0 at nearest to 1 at farthest.
+// The camera's projection as the engine draws with it, in a target of this size: Vulkan's clip
+// space, y down, and depth reversed, 1 at its near plane and 0 at its far one, which the screen's
+// depth is cleared to and compared GREATER_OR_EQUAL against. Project and the in-view tests agree
+// with it.
+FBE_API bool fbe_camera_draw_projection(uint64_t camera, float target_width, float target_height,
+                                        fbe_mat4_t* matrix);
 FBE_API bool fbe_camera_projection_matrix(uint64_t camera, float target_width, float target_height,
                                           fbe_mat4_t* matrix);
 // Where a point in the world is in a camera's view, in a target of this size: x and y in its

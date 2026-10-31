@@ -358,6 +358,14 @@ void pickable_changed(std::uint32_t entity);
 /// Marks an entity's box, if picks hit it, to be worked out again.
 void pickable_moved(std::uint32_t entity);
 
+/// An entity's matrix to the world `tween` of the way from its World's last capture to now.
+mat4_t tweened_matrix(std::uint32_t entity, float tween);
+/// The FBE_BLEND_ something drawn in a material, or none for the default, at this alpha, its own
+/// times its material's, is drawn with, AUTO and OPAQUE settled.
+std::int32_t drawn_blend(std::uint32_t material, float alpha);
+/// The alpha an entity's fade gives it seen from a camera.
+float entity_fade(std::uint32_t entity, std::uint32_t camera);
+
 /// Gives an entity a transform of nothing: at its parent's origin, unturned, at scale 1.
 void reset_transform(std::uint32_t entity);
 /// Marks an entity, and what's under it, to have its world transform worked out again.

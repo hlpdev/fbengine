@@ -1,0 +1,60 @@
+// What cameras draw, as the renderer extracts it, and the projection they draw with, with no GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+// A camera at the origin looking down -Z, 1600 by 900.
+Function Looking(): Camera
+    Local camera = Camera()
+    camera.SetViewport(Rect(0, 0, 1600, 900))
+    Return camera
+End Function
+
+@Test
+Function ACameraDrawsWhatItSeesInItsOrder()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Looking()
+    Local far = Mesh(Geometry.Cube())
+    far.SetPosition(Vec3(0, 0, -20))
+    Local near = Mesh(Geometry.Cube())
+    near.SetPosition(Vec3(0, 0, -5))
+    Local glass = Material()
+    glass.SetBlend(Blend.ALPHA)
+    Local pane = Mesh(Geometry.Cube())
+    pane.SetMaterial(glass)
+    pane.SetPosition(Vec3(2, 0, -10))
+    Local behind = Mesh(Geometry.Cube())
+    behind.SetPosition(Vec3(0, 0, 10))
+    Local draws = camera.Draws()
+    Expect(draws.Count == 3)
+    Expect(draws[0].Entity == near && draws[1].Entity == far && draws[2].Entity == pane)
+    Expect(draws[0].Blend == Blend.OPAQUE && draws[2].Blend == Blend.ALPHA)
+    Expect(draws[2].Material == glass && draws[0].Surface == near.Geometry()?.Surface(0))
+    Expect(IsClose(draws[0].Depth, 5, 0.001))
+    Expect(IsClose(draws[0].Matrix.TransformPoint(Vec3.Zero()), Vec3(0, 0, -5), 0.001))
+End Function
+
+@Test
+Function ACamerasDrawProjectionIsReversedAndYDown()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Looking()
+    camera.SetRange(0.5, 100)
+    Local p = camera.DrawProjection()
+    // A point ahead at the near plane has depth 1, at the far plane 0.
+    Local at_near = p * Vec4(0, 0, -0.5, 1)
+    Local at_far = p * Vec4(0, 0, -100, 1)
+    Expect(IsClose(at_near.z / at_near.w, 1, 0.0001) && IsClose(at_far.z / at_far.w, 0, 0.0001))
+    // Above the middle is up the screen: a negative clip y.
+    Local above = p * Vec4(0, 1, -5, 1)
+    Expect(above.y < 0)
+End Function

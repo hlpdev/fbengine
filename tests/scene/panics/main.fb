@@ -230,6 +230,14 @@ Select arguments[0]
         Local gone = Mesh(Geometry.Cube())
         gone.Free()
         Mesh(Geometry.Cube()).Intersects(gone)
+    Case "draws-tween"
+        Local camera = Camera()
+        camera.SetViewport(Rect(0, 0, 100, 100))
+        camera.Draws(2)
+    Case "draws-no-window"
+        Camera().Draws()
+    Case "draw-projection-no-window"
+        Camera().DrawProjection()
     Default
         Panic("no case {arguments[0]}")
 End Select
