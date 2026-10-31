@@ -1,0 +1,157 @@
+// Everything a game does, at random, on the SILENT device, where miniaudio's own thread mixes while
+// the game's changes what it mixes: sounds played, paused, stopped, seeked, faded, looped, pitched,
+// moved between buses and emitters; sounds, buses, and emitters freed; effects, the listener, and
+// the audio itself changed and restarted, its output unplugged and plugged back in, and the
+// device made again at Flip on the default output. From a fixed seed, for a few seconds; nothing
+// crashes, and what's asked about stays in range.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import std.time
+Import fbengine
+Import fbengine_audio
+Import "./wav"
+
+Function Pick<T>(random: Random, items: T[]): T => items[random.Int(items.Count)]
+
+@Test
+Function EverythingAtOnceOnTheSilentDevice() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.SILENT)
+    Defer Audio.Stop()
+    Defer Listener.SetPosition(Vec3(0, 0, 0))
+    Defer Listener.SetRotation(Quat.Identity)
+    Defer Listener.SetVelocity(Vec3(0, 0, 0))
+    Defer Listener.SetSpeedOfSound(343.3)
+    Local random = Random(31)
+    Local files = [Embed("data/tone.ogg"), Embed("data/tone.flac"), Embed("data/tone.wav"),
+                   Wav(Rising(4800))]
+    Local sounds: Sound[] = [Try Sound.FromBytes(files[0])]
+    Local channels: Channel[] = []
+    Local buses: Bus[] = []
+    Local emitters: Emitter[] = []
+    Local operations = 0
+    Local mixed: Int64 = 0
+    Local started = Instant.Now()
+    While started.Elapsed < 3.Seconds
+        operations += 1
+        Local what = random.Int(25)
+        If what == 0
+            sounds.Add(Try Sound.FromBytes(Pick(random, files)))
+        ElseIf what == 1
+            sounds.Add(Try Sound.StreamBytes(Pick(random, files)))
+        ElseIf what <= 5 && sounds.Count > 0
+            Local sound = Pick(random, sounds)
+            If sound.Freed() Then Continue
+            sound.SetLoop(random.Int(3) == 0)
+            sound.SetBus(buses.Count > 0 && random.Int(2) == 0 ? Pick(random, buses) : Null)
+            Local live = buses.Count == 0 || !(sound.Bus()?.Freed() ?? False)
+            If !live Then sound.SetBus(Null)
+            Local fadeIn = random.Int(3) == 0 ? 0.01 : 0.0
+            If emitters.Count > 0 && random.Int(2) == 0
+                Local emitter = Pick(random, emitters)
+                If !emitter.Freed()
+                    channels.Add(emitter.Play(sound, random.Int(5) == 0, fadeIn))
+                End If
+            Else
+                channels.Add(sound.Play(random.Int(5) == 0, fadeIn))
+            End If
+        ElseIf what == 6 && sounds.Count > 0
+            Pick(random, sounds).Free()
+        ElseIf what == 7 && channels.Count > 0
+            Pick(random, channels).Stop()
+        ElseIf what == 8 && channels.Count > 0
+            Pick(random, channels).Seek(random.Float(0.0, 0.05))
+        ElseIf what == 9 && channels.Count > 0
+            Local channel = Pick(random, channels)
+            If random.Int(2) == 0
+                channel.FadeOut(random.Float(0.0, 0.02))
+            Else
+                channel.FadeTo(random.Float(0.0, 1.0), random.Float(0.0, 0.02))
+            End If
+        ElseIf what == 10 && channels.Count > 0
+            Local channel = Pick(random, channels)
+            If random.Int(2) == 0
+                channel.Pause()
+            Else
+                channel.Resume()
+            End If
+            channel.SetPitch(random.Float(0.25, 4.0))
+            channel.SetLoop(random.Int(2) == 0)
+            channel.SetVolume(random.Float(0.0, 1.0))
+            channel.SetPan(random.Float(-1.0, 1.0))
+        ElseIf what == 11 && channels.Count > 0
+            Local into: Bus? = buses.Count > 0 && random.Int(2) == 0 ? Pick(random, buses) : Null
+            If into == Null || !into.Freed() Then Pick(random, channels).SetBus(into)
+        ElseIf what == 12
+            Local parent: Bus? = buses.Count > 0 && random.Int(2) == 0 ? Pick(random, buses) : Null
+            If parent == Null || !parent.Freed() Then buses.Add(Bus(parent))
+        ElseIf what == 13 && buses.Count > 0
+            Pick(random, buses).Free()
+        ElseIf what == 14 && buses.Count > 0
+            Local bus = Pick(random, buses)
+            If bus.Freed() Then Continue
+            bus.SetLowPass(random.Int(3) == 0 ? 0.0 : random.Float(100.0, 10000.0))
+            bus.SetVolume(random.Float(0.0, 1.0))
+        ElseIf what == 15 && buses.Count > 0
+            Local bus = Pick(random, buses)
+            If bus.Freed() Then Continue
+            If random.Int(3) == 0
+                bus.ClearReverb()
+            Else
+                bus.SetReverb(Reverb(RoomSize: random.Float(0.0, 1.0), Wet: 0.3))
+            End If
+        ElseIf what == 16
+            emitters.Add(Emitter())
+        ElseIf what == 17 && emitters.Count > 0
+            Pick(random, emitters).Free()
+        ElseIf what == 18 && emitters.Count > 0
+            Local emitter = Pick(random, emitters)
+            If emitter.Freed() Then Continue
+            emitter.SetPosition(Vec3(random.Float(-10.0, 10.0), 0, random.Float(-10.0, 10.0)))
+            emitter.SetVelocity(Vec3(random.Float(-500.0, 500.0), 0, random.Float(-500.0, 500.0)))
+            emitter.SetFalloff(Pick(random, [Falloff.INVERSE, Falloff.LINEAR, Falloff.EXPONENTIAL]))
+            emitter.SetDoppler(random.Float(0.0, 2.0))
+        ElseIf what == 19
+            Listener.SetPosition(Vec3(random.Float(-10.0, 10.0), 0, random.Float(-10.0, 10.0)))
+            Listener.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), random.Float(0.0, 6.28)))
+            Listener.SetVelocity(Vec3(random.Float(-500.0, 500.0), 0, 0))
+        ElseIf what == 20
+            Audio.SetPanLaw(Pick(random, [PanLaw.BALANCE, PanLaw.CONSTANT_POWER, PanLaw.LINEAR]))
+            Audio.SetVolume(random.Float(0.5, 1.0))
+        ElseIf what == 21 && channels.Count > 0
+            Local channel = Pick(random, channels)
+            Local position = channel.Position()
+            Expect(position >= 0.0 && position <= 1.0)
+            Expect(channel.Fade() >= 0.0 && channel.Fade() <= 1.0)
+        ElseIf what == 22 && random.Int(100) == 0
+            // The audio stopped and started again, which finishes every channel.
+            mixed += Audio.Frames()
+            Audio.Stop()
+            Try Audio.Start(AudioDevice.SILENT)
+            channels = []
+        ElseIf what == 23 && random.Int(20) == 0
+            // The output unplugged, or every one, or plugged back in: nothing's mixed while it's
+            // lost.
+            Local how = random.Int(3)
+            If how == 0
+                Try Audio.SimulatePlugIn()
+            ElseIf how == 1
+                Try Audio.SimulateUnplug()
+            Else
+                Try Audio.SimulateUnplugAll()
+            End If
+        ElseIf what == 24 && random.Int(10) == 0
+            // A Flip, which makes a lost device again on the default output.
+            Flip(False)
+        Else
+            Sleep(100.Microseconds)
+        End If
+        If channels.Count > 200 Then channels.RemoveRange(0, 100)
+    End While
+    Expect(operations > 1000)
+    Expect(mixed + Audio.Frames() > 0)
+    Audio.SetPanLaw(PanLaw.BALANCE)
+    Audio.SetVolume(1.0)
+End Function

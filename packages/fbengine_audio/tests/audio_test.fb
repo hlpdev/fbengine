@@ -1,0 +1,292 @@
+// The mix, on no device and on miniaudio's null backend, as every test's is: none plays sound.
+
+Import std.core
+Import std.test
+Import std.time
+Import fbengine
+Import fbengine_audio
+Import "./wav"
+
+@Test
+Function AManualMixIsSilenceAt48000HzInStereoUntilStopped() Throws AudioError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Expect(Audio.Started())
+    Expect(Audio.Device() == AudioDevice.MANUAL)
+    Expect(Audio.Output() == "")
+    Expect(Audio.SampleRate() == 48000)
+    Expect(Audio.Channels() == 2)
+    Expect(Audio.Frames() == 0)
+    Local samples = Audio.Mix(256)
+    Expect(samples.Count == 512)
+    For sample In samples
+        Expect(sample == 0.0)
+    End For
+    Expect(Audio.Frames() == 256)
+    Expect(Audio.Mix(0).Count == 0)
+    Expect(Audio.Frames() == 256)
+    Audio.Stop()
+    Expect(!Audio.Started())
+    Expect(Audio.SampleRate() == 0)
+    Expect(Audio.Channels() == 0)
+    Expect(Audio.Frames() == 0)
+    // Stopping again does nothing.
+    Audio.Stop()
+    Expect(!Audio.Started())
+End Function
+
+@Test
+Function AMixHasTheRateAndChannelsItsAskedFor() Throws AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 22050, 1)
+    Defer Audio.Stop()
+    Expect(Audio.SampleRate() == 22050)
+    Expect(Audio.Channels() == 1)
+    Expect(Audio.Mix(100).Count == 100)
+    Audio.Stop()
+    Try Audio.Start(AudioDevice.MANUAL, 96000, 6)
+    Expect(Audio.SampleRate() == 96000)
+    Expect(Audio.Mix(10).Count == 60)
+End Function
+
+@Test
+Function TheVolumeIsKeptWhileTheAudiosStopped() Throws AudioError
+    Expect(Audio.Volume() == 1.0)
+    Audio.SetVolume(0.25)
+    Defer Audio.SetVolume(1.0)
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Expect(Audio.Volume() == 0.25)
+    Audio.SetVolume(2.0)
+    Audio.Stop()
+    Expect(Audio.Volume() == 2.0)
+End Function
+
+// The null backend mixes on miniaudio's own thread, at a device's pace, so the frames go up
+// without Mix; a slow machine gets seconds for its first.
+@Test
+Function TheSilentDeviceMixesAsADeviceWould() Throws AudioError
+    Try Audio.Start(AudioDevice.SILENT)
+    Defer Audio.Stop()
+    Expect(Audio.Device() == AudioDevice.SILENT)
+    Expect(Audio.Output() != "")
+    Expect(Audio.SampleRate() >= 8000)
+    Expect(Audio.Channels() >= 1)
+    Local waited = Instant.Now()
+    While Audio.Frames() == 0 && waited.Elapsed < 10.Seconds
+        Sleep(10.Milliseconds)
+    End While
+    Expect(Audio.Frames() > 0)
+End Function
+
+@Test
+Function TheAudioStartsAgainAfterItStops() Throws AudioError
+    Try Audio.Start(AudioDevice.SILENT, 44100, 2)
+    Expect(Audio.SampleRate() == 44100)
+    Audio.Stop()
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Expect(Audio.Device() == AudioDevice.MANUAL)
+    Expect(Audio.Frames() == 0)
+End Function
+
+// The null backend has the one output, which a start can name; a name it hasn't is an AudioError.
+@Test
+Function AStartPlaysOnTheOutputItNames() Throws AudioError
+    Local outputs = Try Audio.Outputs(AudioDevice.SILENT)
+    Expect(outputs.Count == 1)
+    Expect(outputs[0] != "")
+    Expect((Try Audio.Outputs(AudioDevice.MANUAL)).Count == 0)
+    Try Audio.Start(AudioDevice.SILENT, 0, 0, outputs[0])
+    Expect(Audio.Output() == outputs[0])
+    Audio.Stop()
+    Local error = ExpectThrows<AudioError>(Audio.Start(AudioDevice.SILENT, 0, 0, "no such output"))
+    Expect(error?.Message == "there's no audio output named no such output")
+    Expect(!Audio.Started())
+End Function
+
+// A device mixes the period it's asked for at a time, which MANUAL has none of.
+@Test
+Function AStartMixesThePeriodItAsks() Throws AudioError
+    Try Audio.Start(AudioDevice.SILENT, 48000, 2, "", 0.005)
+    Expect(Audio.Period() >= 0.004 && Audio.Period() <= 0.006)
+    Audio.Stop()
+    Expect(Audio.Period() == 0.0)
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Expect(Audio.Period() == 0.0)
+End Function
+
+// The frames mixed once they're more than `frames`, or after 10 seconds.
+Function FramesPast(frames: Int64): Int64
+    Local waited = Instant.Now()
+    While Audio.Frames() <= frames && waited.Elapsed < 10.Seconds
+        Sleep(10.Milliseconds)
+    End While
+    Return Audio.Frames()
+End Function
+
+// An unplugged output stops its device, so nothing's mixed and a Channel waits where it is, until
+// a Flip makes the device again: plugging it back in starts nothing, as miniaudio starts only a
+// default output again by itself. With the mix stopped, or on MANUAL, there's no output to unplug.
+@Test
+Function AnUnpluggedOutputIsLostUntilAFlip() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.SILENT, 48000, 2)
+    Defer Audio.Stop()
+    Expect(!Audio.Lost())
+    Local channel = (Try Sound.FromBytes(Wav(Constant(16384, 480000)))).Play()
+    Expect(FramesPast(0) > 0)
+    Try Audio.SimulateUnplug()
+    Expect(Audio.Lost())
+    Expect(Audio.Started())
+    Local frames = Audio.Frames()
+    Local position = channel.Position()
+    Sleep(50.Milliseconds)
+    Expect(Audio.Frames() == frames)
+    Expect(channel.Position() == position)
+    Expect(channel.Playing())
+    // Unplugged again, it's as it was.
+    Try Audio.SimulateUnplug()
+    Expect(Audio.Lost())
+    Try Audio.SimulatePlugIn()
+    Sleep(50.Milliseconds)
+    Expect(Audio.Lost())
+    Expect(Audio.Frames() == frames)
+    Flip(False)
+    Expect(FramesPast(frames) > frames)
+    Expect(channel.Position() > position)
+    Audio.Stop()
+    Expect(!Audio.Lost())
+    Local error = ExpectThrows<AudioError>(Audio.SimulateUnplug())
+    Expect(error?.Message == "only a device's output is unplugged; start the audio on one")
+    Try Audio.Start(AudioDevice.MANUAL)
+    Expect(!Audio.Lost())
+    ExpectThrows<AudioError>(Audio.SimulatePlugIn())
+End Function
+
+// A lost output falls to the default at the next Flip, at the mix's rate and channels and the
+// period it was started with, and its Channels go on where they were; it stays Lost for that Flip.
+// On SILENT, the default is the null backend's one output, which it was started on by name.
+@Test
+Function ALostOutputFallsToTheDefaultAtTheNextFlip() Throws AudioError, SoundError
+    Local named = (Try Audio.Outputs(AudioDevice.SILENT))[0]
+    Try Audio.Start(AudioDevice.SILENT, 44100, 1, named, 0.005)
+    Defer Audio.Stop()
+    Local channel = (Try Sound.FromBytes(Wav(Constant(16384, 480000)))).Play()
+    Expect(FramesPast(0) > 0)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Try Audio.SimulateUnplug()
+    Expect(Audio.Lost())
+    Local frames = Audio.Frames()
+    Local position = channel.Position()
+    Flip(False)
+    Expect(Audio.Lost())
+    Expect(Audio.Started())
+    Expect(Audio.Device() == AudioDevice.SILENT)
+    Expect(Audio.Output() == named)
+    Expect(Audio.SampleRate() == 44100 && Audio.Channels() == 1)
+    Expect(Audio.Period() >= 0.004 && Audio.Period() <= 0.006)
+    Expect(channel.Playing())
+    Expect(FramesPast(frames) > frames)
+    Expect(channel.Position() > position)
+    Flip(False)
+    Expect(!Audio.Lost())
+End Function
+
+// With every output unplugged, there's none to fall back to: it stays Lost, mixing nothing, and
+// each Flip tries the default again, until one's plugged back in. Stopped while it has no device,
+// it lets go as ever.
+@Test
+Function WithNoOutputLeftItStaysLostAndTriesEachFlip() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.SILENT, 48000, 2)
+    Defer Audio.Stop()
+    Local channel = (Try Sound.FromBytes(Wav(Constant(16384, 480000)))).Play()
+    Expect(FramesPast(0) > 0)
+    Try Audio.SimulateUnplugAll()
+    Expect(Audio.Lost())
+    Flip(False)
+    Expect(Audio.Lost())
+    Expect(Audio.Output() == "")
+    Expect(Audio.Period() == 0.0)
+    Local frames = Audio.Frames()
+    Sleep(50.Milliseconds)
+    Flip(False)
+    Expect(Audio.Lost())
+    Expect(Audio.Frames() == frames)
+    Expect(channel.Playing())
+    // Unplugging what isn't there does nothing.
+    Try Audio.SimulateUnplug()
+    Try Audio.SimulatePlugIn()
+    Expect(Audio.Lost())
+    Flip(False)
+    Expect(Audio.Lost())
+    Expect(Audio.Output() != "")
+    Expect(FramesPast(frames) > frames)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Try Audio.SimulateUnplugAll()
+    Flip(False)
+    Audio.Stop()
+    Expect(!Audio.Started())
+    Expect(!Audio.Lost())
+    Try Audio.Start(AudioDevice.SILENT)
+    Expect(!Audio.Lost())
+    Expect(FramesPast(0) > 0)
+End Function
+
+// A device whose mix stalls, left started, as a lost output's is on CoreAudio and PulseAudio, is
+// Lost once it's mixed nothing for a quarter of a second, and made again at the next Flip, its
+// Channels going on where they were.
+@Test
+Function AStalledMixIsLostAndMadeAgain() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.SILENT, 48000, 2)
+    Defer Audio.Stop()
+    Local channel = (Try Sound.FromBytes(Wav(Constant(16384, 480000)))).Play()
+    Expect(FramesPast(0) > 0)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Try Audio.SimulateStall()
+    Sleep(50.Milliseconds)
+    Local frames = Audio.Frames()
+    Expect(!Audio.Lost())
+    Sleep(400.Milliseconds)
+    Expect(Audio.Frames() == frames)
+    Expect(Audio.Lost())
+    Expect(Audio.Started())
+    Local position = channel.Position()
+    Flip(False)
+    Expect(Audio.Lost())
+    Expect(FramesPast(frames) > frames)
+    Expect(channel.Position() > position)
+    Flip(False)
+    Expect(!Audio.Lost())
+End Function
+
+// On the default output, a change of the OS's default moves the mix at the next Flip, Lost for
+// that Flip; one named stays where it is. Asked again a second on, the null backend's default is
+// the one it's on.
+@Test
+Function ADefaultChangeMovesAMixOnTheDefault() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.SILENT, 48000, 2)
+    Defer Audio.Stop()
+    Expect(FramesPast(0) > 0)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Sleep(1100.Milliseconds)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Try Audio.SimulateDefaultChange()
+    Expect(!Audio.Lost())
+    Local frames = Audio.Frames()
+    Flip(False)
+    Expect(Audio.Lost())
+    Expect(Audio.Output() != "")
+    Expect(FramesPast(frames) > frames)
+    Flip(False)
+    Expect(!Audio.Lost())
+    Audio.Stop()
+    Try Audio.Start(AudioDevice.SILENT, 48000, 2, (Try Audio.Outputs(AudioDevice.SILENT))[0])
+    Expect(FramesPast(0) > 0)
+    Try Audio.SimulateDefaultChange()
+    Flip(False)
+    Expect(!Audio.Lost())
+End Function

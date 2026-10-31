@@ -26,7 +26,7 @@ original 1.3.11, and ue5-additions.md what v5 adds; the steps below cover both.
 | **E6** | The modern renderer | E5 | Khronos's glTF sample models match their references, with shadows and post effects |
 | **E7** | Animation | E4 (E5 to draw it) | skinned and morphing sample models match their reference frames |
 | **E8** | Assets | E2, E4; a FutureBlitz build step for its last steps | a game runs from cooked paks, and reloads changed files in development |
-| **E9** | Audio (fbengine_audio) | E1 step 2 | on miniaudio's null backend, tests mix to known buffers, and sounds follow entities |
+| **E9** | Audio (fbengine_audio) | E1 step 2 | done but for step 4's entities (2026-10-31); sounds follow entities |
 | **E10** | Physics (fbengine_physics) | E1 step 2 | Jolt's sample scenes stay stable, deterministic runs repeat, and bodies drive entities |
 | **E11** | UI (fbengine_ui) | E3 | a sample game's menus, HUD, and console work by mouse, keyboard, and gamepad |
 | **E12** | Video (fbengine_video) | E3, E9 | a video plays into a texture with its sound in sync |
@@ -180,6 +180,9 @@ Steps 3 to 7 done (2026-10-31, landed at 3698cf3).
    Doppler.
 5. Buses and effects: groups with volume, low-pass, reverb.
 6. Loose ends and E9's review.
+
+Steps 1 to 6 done (2026-10-31, landed at 5d7e461), but for step 4's entity overloads, which wait
+for E4.
 
 ### E10: Physics (fbengine_physics)
 

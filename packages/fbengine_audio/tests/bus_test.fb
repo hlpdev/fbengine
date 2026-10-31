@@ -1,0 +1,227 @@
+// Buses, their volumes, low-passes, and reverbs, mixed on no device. As in sound_test.fb, each play
+// is a frame late.
+
+Import std.core
+Import std.test
+Import fbengine_audio
+Import "./wav"
+
+// How loud `samples` are, from `start` on: the root of their mean square.
+Function Loudness(samples: Float32[], start: Int): Float64
+    Local sum: Float64 = 0.0
+    For i = start To samples.Count - 1
+        sum += (samples[i] As Float64) * samples[i]
+    End For
+    Return (sum / (samples.Count - start)) ** 0.5
+End Function
+
+// `count` frames of a square wave, 4 frames at 0.5 and 4 at -0.5, which is 6000 Hz at 48000.
+Function Buzz(count: Int): Int[]
+    Local samples: Int[] = []
+    For i = 0 To count - 1
+        samples.Add((i / 4) % 2 == 0 ? 16384 : -16384)
+    End For
+    Return samples
+End Function
+
+@Test
+Function ABussVolumeScalesWhatsInIt() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local effects = Bus()
+    effects.SetVolume(0.5)
+    Expect(effects.Volume() == 0.5)
+    Expect(effects.Parent() == Null)
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 8)))
+    sound.SetBus(effects)
+    Expect(sound.Bus() == effects)
+    sound.Play()
+    Expect(Audio.Mix(2) == [0.0, 0.25] As Float32[])
+End Function
+
+@Test
+Function ABusInABusGoesThroughBoth() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local all = Bus()
+    all.SetVolume(0.5)
+    Local voices = Bus(all)
+    voices.SetVolume(0.5)
+    Expect(voices.Parent() == all)
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 8)))
+    sound.SetBus(voices)
+    sound.Play()
+    Expect(Audio.Mix(2) == [0.0, 0.125] As Float32[])
+End Function
+
+@Test
+Function AChannelMovesBetweenBuses() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local quiet = Bus()
+    quiet.SetVolume(0.25)
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 8)))
+    Local channel = sound.Play()
+    Expect(Audio.Mix(2) == [0.0, 0.5] As Float32[])
+    channel.SetBus(quiet)
+    Expect(Audio.Mix(1) == [0.125] As Float32[])
+    channel.SetBus(Null)
+    Expect(Audio.Mix(1) == [0.5] As Float32[])
+End Function
+
+// A game makes its buses once; they're kept, with their settings, through the audio stopping.
+@Test
+Function ABusIsKeptWhileTheAudiosStopped() Throws AudioError, SoundError
+    Local music = Bus()
+    music.SetVolume(0.5)
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 8)))
+    sound.SetBus(music)
+    sound.Play()
+    Expect(Audio.Mix(2) == [0.0, 0.25] As Float32[])
+    Audio.Stop()
+    music.SetVolume(0.25)
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    sound.Play()
+    Expect(Audio.Mix(2) == [0.0, 0.125] As Float32[])
+End Function
+
+@Test
+Function AFreedBussChannelsPlayOnThroughIt() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local half = Bus()
+    half.SetVolume(0.5)
+    Local inner = Bus(half)
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 8)))
+    sound.SetBus(inner)
+    sound.Play()
+    sound.SetBus(Null)
+    half.Free()
+    inner.Free()
+    Expect(half.Freed())
+    half.Free()
+    Expect(Audio.Mix(2) == [0.0, 0.25] As Float32[])
+End Function
+
+// A low-pass keeps what's low, a constant, and takes away what's high, the buzz, once it has
+// settled; taken away, it leaves the sound as it was.
+@Test
+Function ALowPassMuffles() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local muffled = Bus()
+    muffled.SetLowPass(1000.0)
+    Expect(muffled.LowPass() == 1000.0)
+    Local buzz = Try Sound.FromBytes(Wav(Buzz(4800)))
+    buzz.SetBus(muffled)
+    Local playing = buzz.Play()
+    Expect(Loudness(Audio.Mix(4000), 480) < 0.01)
+    playing.Stop()
+    Local hum = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    hum.SetBus(muffled)
+    playing = hum.Play()
+    Local mixed = Audio.Mix(4000)
+    Expect(mixed[3999] > 0.499 && mixed[3999] < 0.501)
+    playing.Stop()
+    // A new cutoff, made on the mixing thread, is heard from the next mix.
+    muffled.SetLowPass(20000.0)
+    playing = buzz.Play()
+    Expect(Loudness(Audio.Mix(4000), 480) > 0.3)
+    playing.Stop()
+    // A stopped channel ramps out over the next 5 ms of the mix.
+    Audio.Mix(240)
+    muffled.SetLowPass(0.0)
+    Expect(muffled.LowPass() == 0.0)
+    buzz.Play()
+    Expect(Audio.Mix(6) == [0.0, 0.5, 0.5, 0.5, 0.5, -0.5] As Float32[])
+End Function
+
+// A click, then silence: a reverb keeps it ringing, and taken away, leaves the click alone.
+@Test
+Function AReverbRings() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local room = Bus()
+    room.SetReverb(Reverb(RoomSize: 0.8, Wet: 0.5))
+    Expect(room.Reverb()?.RoomSize == 0.8)
+    Expect(room.ReverbHeard())
+    Local samples = Constant(0, 9600)
+    samples[0] = 16384
+    Local click = Try Sound.FromBytes(Wav(samples))
+    click.SetBus(room)
+    click.Play()
+    Local mixed = Audio.Mix(9600)
+    Expect(Loudness(mixed, 4800) > 0.0001)
+    // A dry reverb, changed on the mixing thread, plays what goes in as it is.
+    room.SetReverb(Reverb(Wet: 0.0))
+    Audio.Mix(48000)
+    click.Play()
+    Local dry = Audio.Mix(4)
+    Expect(dry[2] == 0.5 && dry[3] == 0.5)
+    room.ClearReverb()
+    Expect(room.Reverb() == Null)
+    Expect(!room.ReverbHeard())
+    click.Play()
+    // Past the click, frame 1, nothing rings.
+    Expect(Loudness(Audio.Mix(9600), 4) == 0.0)
+End Function
+
+// Freeverb is mono or stereo, so a mix of more channels plays a reverb dry.
+@Test
+Function AReverbOnASurroundMixIsDry() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 6)
+    Defer Audio.Stop()
+    Local room = Bus()
+    room.SetReverb(Reverb())
+    Expect(!room.ReverbHeard())
+    Expect(room.Reverb() != Null)
+    Local samples = Constant(0, 4800)
+    samples[0] = 16384
+    Local click = Try Sound.FromBytes(Wav(samples))
+    click.SetBus(room)
+    click.Play()
+    Expect(Loudness(Audio.Mix(4800), 60) == 0.0)
+End Function
+
+// In float32, a low-pass far below its mix's rate rings, and passes more or less than goes in, so
+// it's held to 1/2400 of the rate: at 10 Hz, once settled, a constant passes as it is.
+@Test
+Function ALowPassFarBelowItsRatePassesWhatsLow() Throws AudioError, SoundError
+    For rate In [48000, 384000]
+        Try Audio.Start(AudioDevice.MANUAL, rate, 1)
+        Local muffled = Bus()
+        muffled.SetLowPass(10.0)
+        Expect(muffled.LowPass() == 10.0)
+        Local hum = Try Sound.FromBytes(Wav(Constant(16384, rate), 1, rate))
+        hum.SetBus(muffled)
+        hum.Play()
+        Local mixed = Audio.Mix(rate)
+        Local least: Float32 = 1.0
+        Local most: Float32 = 0.0
+        For i = rate / 2 To rate - 2
+            least = Min(least, mixed[i])
+            most = Max(most, mixed[i])
+        End For
+        Expect(least > 0.495 && most < 0.505)
+        Audio.Stop()
+    End For
+End Function
+
+// Freeverb, as verblib has it, takes 22050 to 176400 Hz, so a bus in a 192000 Hz mix plays its
+// reverb dry.
+@Test
+Function AReverbAbove176400HzIsDry() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 192000, 2)
+    Defer Audio.Stop()
+    Local room = Bus()
+    room.SetReverb(Reverb())
+    Expect(!room.ReverbHeard())
+    Local samples = Constant(0, 19200)
+    samples[0] = 16384
+    Local click = Try Sound.FromBytes(Wav(samples, 1, 192000))
+    click.SetBus(room)
+    click.Play()
+    Expect(Loudness(Audio.Mix(19200), 4) == 0.0)
+End Function

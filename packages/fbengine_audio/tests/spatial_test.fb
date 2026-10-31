@@ -1,0 +1,298 @@
+// The Listener and Emitters, mixed in stereo on no device. A mono sound in front of the Listener,
+// within an Emitter's near end, is a quarter on each side: half on each, spread over both.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine_audio
+Import "./wav"
+
+// The last frame's left and right, of 1000 frames of a looping constant 0.5 from `emitter`.
+Function Heard(emitter: Emitter): Float32[] Throws SoundError
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    sound.SetLoop(True)
+    Local channel = emitter.Play(sound)
+    Local mixed = Audio.Mix(1000)
+    channel.Stop()
+    Return [mixed[1998], mixed[1999]]
+End Function
+
+// An Emitter at `position`.
+Function At(position: Vec3): Emitter
+    Local emitter = Emitter()
+    emitter.SetPosition(position)
+    Return emitter
+End Function
+
+Function Near(a: Float32, b: Float32): Bool => a - b < 0.001 && b - a < 0.001
+
+// The Listener as it starts, for the next test.
+Function PutBack()
+    Listener.SetPosition(Vec3(0, 0, 0))
+    Listener.SetRotation(Quat.Identity)
+    Listener.SetVelocity(Vec3(0, 0, 0))
+    Listener.SetSpeedOfSound(343.3)
+End Function
+
+@Test
+Function ChannelsGetQuieterInverselyPastTheNearEnd() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local heard = Try Heard(At(Vec3(0, 0, -1)))
+    Expect(Near(heard[0], 0.25) && Near(heard[1], 0.25))
+    // Within it, they're as loud.
+    heard = Try Heard(At(Vec3(0, 0, -0.5)))
+    Expect(Near(heard[0], 0.25))
+    // 1 / (1 + (2 - 1)): half as loud, as behind as in front.
+    heard = Try Heard(At(Vec3(0, 0, -2)))
+    Expect(Near(heard[0], 0.125) && Near(heard[1], 0.125))
+    heard = Try Heard(At(Vec3(0, 0, 2)))
+    Expect(Near(heard[0], 0.125))
+End Function
+
+@Test
+Function TheRangeRolloffAndFalloffShapeHowTheyFade() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local emitter = At(Vec3(0, 0, -4))
+    Expect(emitter.Near() == 1.0)
+    Expect(emitter.Falloff() == Falloff.INVERSE)
+    // Past the far end, no quieter.
+    emitter.SetRange(1.0, 2.0)
+    Expect(emitter.Far() == 2.0)
+    Local heard = Try Heard(emitter)
+    Expect(Near(heard[0], 0.125))
+    emitter.SetRolloff(0.0)
+    Expect(emitter.Rolloff() == 0.0)
+    heard = Try Heard(emitter)
+    Expect(Near(heard[0], 0.25))
+    emitter.SetRolloff(1.0)
+    // Linearly to silence at the far end: halfway, half.
+    emitter.SetRange(1.0, 3.0)
+    emitter.SetFalloff(Falloff.LINEAR)
+    emitter.SetPosition(Vec3(0, 0, -2))
+    heard = Try Heard(emitter)
+    Expect(Near(heard[0], 0.125))
+    emitter.SetPosition(Vec3(0, 0, -3))
+    heard = Try Heard(emitter)
+    Expect(Near(heard[0], 0.0))
+    // (2 / 1) to the power of -1.
+    emitter.SetFalloff(Falloff.EXPONENTIAL)
+    emitter.SetPosition(Vec3(0, 0, -2))
+    heard = Try Heard(emitter)
+    Expect(Near(heard[0], 0.125))
+End Function
+
+@Test
+Function AChannelIsPannedToItsSideOfTheListener() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Local heard = Try Heard(At(Vec3(2, 0, 0)))
+    Expect(heard[1] > heard[0] * 2.0)
+    heard = Try Heard(At(Vec3(-2, 0, 0)))
+    Expect(heard[0] > heard[1] * 2.0)
+    // Turned around, the right is on the left.
+    Listener.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(180)))
+    heard = Try Heard(At(Vec3(2, 0, 0)))
+    Expect(heard[0] > heard[1] * 2.0)
+End Function
+
+@Test
+Function DistanceIsFromTheListenersPlace() Throws AudioError, SoundError
+    Listener.SetPosition(Vec3(5, 0, 0))
+    Defer PutBack()
+    Expect(Listener.Position() == Vec3(5, 0, 0))
+    // Set while the audio's stopped, it's kept for when it starts.
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local heard = Try Heard(At(Vec3(5, 0, -2)))
+    Expect(Near(heard[0], 0.125) && Near(heard[1], 0.125))
+End Function
+
+@Test
+Function AnEmittersChannelsMoveWithIt() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    sound.SetLoop(True)
+    Local emitter = At(Vec3(0, 0, -1))
+    Local channel = emitter.Play(sound)
+    Expect(Near(Audio.Mix(100)[199], 0.25))
+    // miniaudio eases a moving Channel's volume in over a few hundred frames, so it doesn't click.
+    emitter.SetPosition(Vec3(0, 0, -2))
+    Expect(emitter.Position() == Vec3(0, 0, -2))
+    Expect(Near(Audio.Mix(1000)[1999], 0.125))
+    // Freed, it leaves them where it was.
+    emitter.Free()
+    Expect(emitter.Freed())
+    Expect(channel.Playing())
+    Expect(Near(Audio.Mix(1000)[1999], 0.125))
+End Function
+
+// How many frames `channel` plays for, mixed 100 at a time, as a device's would be: its sound's,
+// and the mix that finds it ended.
+Function Length(channel: Channel): Int
+    Local frames = 0
+    While channel.Playing() && frames < 10000
+        Audio.Mix(100)
+        frames += 100
+    End While
+    Return frames
+End Function
+
+// A Channel coming toward the Listener is pitched up, so its 4800 frames end sooner: at 100 units
+// a second, by 343.3 / (343.3 - 100), in about 3400 frames, the first mix, before miniaudio has
+// worked out the pitch, as recorded.
+@Test
+Function TheDopplerEffectPitchesWhatsMoving() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    Local still = At(Vec3(0, 0, -10)).Play(sound)
+    Expect(Length(still) == 4900)
+    Local coming = At(Vec3(0, 0, -10))
+    coming.SetVelocity(Vec3(0, 0, 100))
+    Expect(coming.Velocity() == Vec3(0, 0, 100))
+    Local pitched = Length(coming.Play(sound))
+    Expect(pitched >= 3300 && pitched <= 3600)
+    Local unpitched = At(Vec3(0, 0, -10))
+    unpitched.SetVelocity(Vec3(0, 0, 100))
+    unpitched.SetDoppler(0.0)
+    Expect(unpitched.Doppler() == 0.0)
+    Expect(Length(unpitched.Play(sound)) == 4900)
+    // A slower speed of sound pitches more: 200 / (200 - 100), twice as fast.
+    Listener.SetSpeedOfSound(200.0)
+    Expect(Listener.SpeedOfSound() == 200.0)
+    Local twice = Length(coming.Play(sound))
+    Expect(twice >= 2400 && twice <= 2600)
+    // The Listener's own velocity counts too: moving away as fast, it's back to as recorded.
+    Listener.SetVelocity(Vec3(0, 0, 100))
+    Expect(Length(coming.Play(sound)) == 4900)
+End Function
+
+// A Channel that isn't from an Emitter isn't in the world, wherever the Listener is.
+@Test
+Function APlainChannelIsntInTheWorld() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Listener.SetPosition(Vec3(100, 0, 0))
+    Listener.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(90)))
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 8)))
+    sound.Play()
+    Expect(Audio.Mix(2) == [0.0, 0.0, 0.5, 0.5] As Float32[])
+End Function
+
+// At or past the speed of sound toward the Listener, the Doppler effect's pitch would be infinite,
+// or negative: it's held to 16, so 4800 frames play in about 300, and what's mixed stays numbers.
+// Going away as fast, it's pitched down, as in the world: by 343.3 / (343.3 + 686.6), a third, so
+// 1200 frames play in 3600.
+@Test
+Function TheDopplerEffectIsHeldAtAndPastTheSpeedOfSound() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    For speed In [343.3, 342.3, 686.6, 1000000.0] As Float32[]
+        Local coming = At(Vec3(0, 0, -10))
+        coming.SetVelocity(Vec3(0, 0, speed))
+        Local channel = coming.Play(sound)
+        Local frames = 0
+        Local numbers = True
+        While channel.Playing() && frames < 10000
+            For sample In Audio.Mix(100)
+                numbers = numbers && IsFinite(sample)
+            End For
+            frames += 100
+        End While
+        Expect(numbers)
+        Expect(frames >= 300 && frames <= 500)
+    End For
+    Local going = At(Vec3(0, 0, -10))
+    going.SetVelocity(Vec3(0, 0, -686.6))
+    Local slow = Length(going.Play(Try Sound.FromBytes(Wav(Constant(16384, 1200)))))
+    Expect(slow >= 3500 && slow <= 3800)
+End Function
+
+// With a Doppler factor, at and past the speed of sound over it toward the Listener, a Channel is
+// as high as it goes too: a multiply-subtract fused there, on arm64 or by GCC, went below 0 and
+// gave 1/16 at a factor of 1.2 or 0.3. The Listener going away as fast hears it as recorded.
+@Test
+Function ADopplerFactorAtTheSpeedOfSoundIsAsHighAsItGoes() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    For factor In [1.2, 0.3] As Float32[]
+        Local fastest = (343.3 As Float32) / factor
+        For speed In [fastest, fastest * 1.5, 1000000.0] As Float32[]
+            Local coming = At(Vec3(0, 0, -10))
+            coming.SetDoppler(factor)
+            coming.SetVelocity(Vec3(0, 0, speed))
+            Local frames = Length(coming.Play(sound))
+            Expect(frames >= 300 && frames <= 500)
+            Listener.SetVelocity(Vec3(0, 0, speed))
+            Expect(Length(coming.Play(sound)) == 4900)
+            Listener.SetVelocity(Vec3(0, 0, 0))
+        End For
+    End For
+End Function
+
+// Only a Channel's pitch times the Doppler effect's is held to 1/16 to 16: at 1/16, coming at the
+// speed of sound, it's heard at 16, as the two make, not at 1, as the Doppler effect held to 16
+// alone made it.
+@Test
+Function OnlyThePitchTimesTheDopplerEffectIsHeld() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    Local coming = At(Vec3(0, 0, -10))
+    coming.SetVelocity(Vec3(0, 0, 343.3))
+    Local channel = coming.Play(sound)
+    channel.SetPitch(0.0625)
+    Local frames = Length(channel)
+    Expect(frames >= 300 && frames <= 500)
+End Function
+
+// A freed Emitter's Channels stay where it was, at rest, and their Doppler effect follows the
+// Listener: going toward them at 100 units a second, it hears them pitched up by
+// (343.3 + 100) / 343.3, as it would the Emitter's, so 4800 frames play in about 3700.
+@Test
+Function AFreedEmittersChannelsArePitchedAsTheListenerMoves() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    Local emitter = At(Vec3(0, 0, -10))
+    emitter.SetVelocity(Vec3(0, 0, 100))
+    Local channel = emitter.Play(sound)
+    emitter.Free()
+    Listener.SetVelocity(Vec3(0, 0, -100))
+    Local frames = Length(channel)
+    Expect(frames >= 3600 && frames <= 3950)
+    // Many freed with a Channel each, left among the remains until they finish, and pruned as the
+    // Listener moves.
+    For i = 1 To 100
+        Local short = At(Vec3(0, 0, -10))
+        short.Play(sound)
+        short.Free()
+    End For
+    For i = 1 To 50
+        Audio.Mix(100)
+    End For
+    Listener.SetVelocity(Vec3(0, 0, 0))
+    Expect(Audio.Playing() == 0)
+End Function
+
+// Rolled over, the Listener's up is down, so what's on its right is heard on its left: which way is
+// up reaches the mix through the mixing thread, by the next mix.
+@Test
+Function ARolledOverListenerHearsItsSidesSwapped() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Listener.SetRotation(Quat.FromAxisAngle(Vec3(0, 0, 1), Deg(180)))
+    Local heard = Try Heard(At(Vec3(2, 0, 0)))
+    Expect(heard[0] > heard[1] * 2.0)
+End Function
