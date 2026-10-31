@@ -7,7 +7,10 @@ Import std.core
 Import std.ffi
 Import std.io
 Import std.text
+Import "./c/fbe_assets"
 Import "./c/fbe_vfs"
+Import "./jobs"
+Import "./loads"
 Import "./window"
 
 /// A file or a folder in a res:// folder, as Assets.Entries finds it.
@@ -180,6 +183,74 @@ Public Final Class Assets
                                    kind))
         End For
         Return entries
+    End Method
+
+    /// The file at `path` loaded as a T now, read and decoded on this thread, and on the workers
+    /// what can be at once, as a glTF's images are. A file no mount has throws an IOError of
+    /// NOT_FOUND, one that isn't what a T is made from, or is broken, one of INVALID_DATA, and a
+    /// path that isn't a res:// path one of INVALID_PATH.
+    @MainThread
+    Public Static Method Load<T: Asset>(path: String): T Throws IOError
+        Local load = fbe_assets_load(T.LoadKind() As Int32, path, False)
+        If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
+        Return Try Made<T>(load, path)
+    End Method
+
+    /// The file at `path` loaded as a T on the workers, while the game goes on: its Task is done on
+    /// the main thread once it's loaded, at a Flip, or at the main scheduler's next tick while
+    /// the main thread waits for it or awaits it without flipping. `progress`, if it's given,
+    /// follows the load, as a loading screen's bar would. It throws as Load does.
+    @MainThread
+    Public Static Async Method LoadAsync<T: Asset>(path: String,
+                                                   progress: LoadProgress? = Null): T Throws IOError
+        Local load = fbe_assets_load_async(T.LoadKind() As Int32, path, False)
+        If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
+        If progress != Null Then progress.Add(load)
+        Await Jobs.Finished(load)
+        Return Try Made<T>(load, path)
+    End Method
+
+    /// ReadBytes's Async twin, which reads the file on a worker. It reads the mounts there are
+    /// when it begins, whatever's mounted while it waits.
+    @MainThread
+    Public Static Async Method ReadBytesAsync(path: String): UInt8[] Throws IOError
+        Local load = fbe_assets_load_async(AssetKind.BYTES As Int32, path, False)
+        If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
+        Await Jobs.Finished(load)
+        Local held = AssetLoad(load)
+        If fbe_assets_failed(load) Then Throw LoadFailed(load, path)
+        Return held.Bytes()
+    End Method
+
+    // A T made of a load that's done, whose AssetLoad lets the load go once nothing holds it.
+    @MainThread
+    Static Method Made<T: Asset>(load: UInt64, path: String): T Throws IOError
+        Local held = AssetLoad(load)
+        If fbe_assets_failed(load) Then Throw LoadFailed(load, path)
+        Return Try T.FromLoad(held)
+    End Method
+
+    // The IOError of a load that failed.
+    @MainThread
+    Static Method LoadFailed(load: UInt64, path: String): IOError
+        Local message = ""
+        Unsafe
+            message = fbe_assets_error(load).ToString()
+        End Unsafe
+        Local kind = IOErrorKind.OTHER
+        Select fbe_assets_failure(load)
+            Case FBE_ASSETS_NOT_FOUND
+                kind = IOErrorKind.NOT_FOUND
+            Case FBE_ASSETS_IS_A_FOLDER
+                kind = IOErrorKind.IS_A_DIRECTORY
+            Case FBE_ASSETS_NOT_A_FOLDER
+                kind = IOErrorKind.NOT_A_DIRECTORY
+            Case FBE_ASSETS_INVALID_PATH
+                kind = IOErrorKind.INVALID_PATH
+            Case FBE_ASSETS_INVALID_DATA
+                kind = IOErrorKind.INVALID_DATA
+        End Select
+        Return IOError(kind, message, path)
     End Method
 
     // The IOError of a mount that just failed, of the pak at `path`; a panic for its place.
