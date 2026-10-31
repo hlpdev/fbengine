@@ -154,19 +154,35 @@ bool finite(const fbe_collide_place_t* place) {
     return all ? true : fbe::fail("a place's position, handle, rotation, and scale are finite");
 }
 
-/// The cosine and sine of `rotation` degrees, exact for quarter turns, as the GPU's snapped
+/// How many quarter turns `rotation` radians is, from 0 to 3, if it's one, within a few of a
+/// float's steps, as a float pi over 2 is, which the GPU's snapped corners draw as one exactly; or
+/// -1.
+int quarters(float rotation) {
+    const double turns = static_cast<double>(rotation) / (std::numbers::pi / 2.0);
+    const double nearest = std::round(turns);
+    const double off =
+        std::abs(static_cast<double>(rotation) - (nearest * (std::numbers::pi / 2.0)));
+    // Four of a float's steps at its size, or of 1's for one near 0.
+    const double steps = 4.0 * std::max(std::abs(static_cast<double>(rotation)), 1.0) /
+                         static_cast<double>(1U << 23U);
+    if (off > steps || std::abs(nearest) > 1e15) {
+        return -1;
+    }
+    return static_cast<int>(((static_cast<std::int64_t>(nearest) % 4) + 4) % 4);
+}
+
+/// The cosine and sine of `rotation` radians, exact for quarter turns, as the GPU's snapped
 /// corners are.
 void turned(float rotation, double& cosine, double& sine) {
-    const double degrees = std::fmod(static_cast<double>(rotation), 360.0);
-    if (std::fmod(degrees, 90.0) == 0.0) {
+    const int quarter = quarters(rotation);
+    if (quarter >= 0) {
         constexpr std::array<double, 4> cosines{ 1.0, 0.0, -1.0, 0.0 };
         constexpr std::array<double, 4> sines{ 0.0, 1.0, 0.0, -1.0 };
-        const auto quarter = static_cast<std::size_t>(((std::lround(degrees / 90.0) % 4) + 4) % 4);
-        cosine = cosines[quarter];
-        sine = sines[quarter];
+        cosine = cosines[static_cast<std::size_t>(quarter)];
+        sine = sines[static_cast<std::size_t>(quarter)];
         return;
     }
-    const double turn = degrees * std::numbers::pi / 180.0;
+    const double turn = std::fmod(static_cast<double>(rotation), 2.0 * std::numbers::pi);
     cosine = std::cos(turn);
     sine = std::sin(turn);
 }
@@ -209,8 +225,7 @@ placed_t placed(const mask_t& mask, const fbe_collide_place_t& place) {
         return made;
     }
     made.empty = false;
-    if (std::fmod(place.rotation, 360.0F) == 0.0F && place.scale_x == 1.0F &&
-        place.scale_y == 1.0F) {
+    if (quarters(place.rotation) == 0 && place.scale_x == 1.0F && place.scale_y == 1.0F) {
         // A screen pixel's middle lands in the mask's pixel it's drawn from, floored.
         made.plain = true;
         made.dx = pixel_of(std::ceil(static_cast<double>(place.x) - place.handle_x - 0.5));
