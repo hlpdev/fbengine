@@ -1,0 +1,87 @@
+// The mix, on no device and on miniaudio's null backend, as every test's is: none plays sound.
+
+Import std.core
+Import std.test
+Import std.time
+Import fbengine_audio
+
+@Test
+Function AManualMixIsSilenceAt48000HzInStereoUntilStopped() Throws AudioError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Expect(Audio.Started())
+    Expect(Audio.Device() == AudioDevice.MANUAL)
+    Expect(Audio.DeviceName() == "")
+    Expect(Audio.SampleRate() == 48000)
+    Expect(Audio.Channels() == 2)
+    Expect(Audio.Frames() == 0)
+    Local samples = Audio.Mix(256)
+    Expect(samples.Count == 512)
+    For sample In samples
+        Expect(sample == 0.0)
+    End For
+    Expect(Audio.Frames() == 256)
+    Expect(Audio.Mix(0).Count == 0)
+    Expect(Audio.Frames() == 256)
+    Audio.Stop()
+    Expect(!Audio.Started())
+    Expect(Audio.SampleRate() == 0)
+    Expect(Audio.Channels() == 0)
+    Expect(Audio.Frames() == 0)
+    // Stopping again does nothing.
+    Audio.Stop()
+    Expect(!Audio.Started())
+End Function
+
+@Test
+Function AMixHasTheRateAndChannelsItsAskedFor() Throws AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 22050, 1)
+    Defer Audio.Stop()
+    Expect(Audio.SampleRate() == 22050)
+    Expect(Audio.Channels() == 1)
+    Expect(Audio.Mix(100).Count == 100)
+    Audio.Stop()
+    Try Audio.Start(AudioDevice.MANUAL, 96000, 6)
+    Expect(Audio.SampleRate() == 96000)
+    Expect(Audio.Mix(10).Count == 60)
+End Function
+
+@Test
+Function TheVolumeIsKeptWhileTheAudiosStopped() Throws AudioError
+    Expect(Audio.Volume() == 1.0)
+    Audio.SetVolume(0.25)
+    Defer Audio.SetVolume(1.0)
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Expect(Audio.Volume() == 0.25)
+    Audio.SetVolume(2.0)
+    Audio.Stop()
+    Expect(Audio.Volume() == 2.0)
+End Function
+
+// The null backend mixes on miniaudio's own thread, at a device's pace, so the frames go up
+// without Mix; a slow machine gets seconds for its first.
+@Test
+Function TheSilentDeviceMixesAsADeviceWould() Throws AudioError
+    Try Audio.Start(AudioDevice.SILENT)
+    Defer Audio.Stop()
+    Expect(Audio.Device() == AudioDevice.SILENT)
+    Expect(Audio.DeviceName() != "")
+    Expect(Audio.SampleRate() >= 8000)
+    Expect(Audio.Channels() >= 1)
+    Local waited = Instant.Now()
+    While Audio.Frames() == 0 && waited.Elapsed < 10.Seconds
+        Sleep(10.Milliseconds)
+    End While
+    Expect(Audio.Frames() > 0)
+End Function
+
+@Test
+Function TheAudioStartsAgainAfterItStops() Throws AudioError
+    Try Audio.Start(AudioDevice.SILENT, 44100, 2)
+    Expect(Audio.SampleRate() == 44100)
+    Audio.Stop()
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Expect(Audio.Device() == AudioDevice.MANUAL)
+    Expect(Audio.Frames() == 0)
+End Function

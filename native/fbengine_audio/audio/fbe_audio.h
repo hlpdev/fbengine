@@ -1,0 +1,64 @@
+#ifndef FBE_AUDIO_H
+#define FBE_AUDIO_H
+
+// fbengine_audio's mix and the device it plays on, and what every area of its C API shares: how
+// its functions are exported, and its errors. Each area's header (fbe_<area>.h) has its own binding
+// file in packages/fbengine_audio/c/, which tools/bindgen.sh makes, so an area's header uses only
+// fixed-size types and its own structs, never another area's. Everything but fbe_audio_version and
+// fbe_audio_error is the main thread's, which the FB API's @MainThread keeps it to.
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifndef _WIN32
+#define FBE_AUDIO_API __attribute__((visibility("default")))
+#else
+#ifdef FBE_AUDIO_BUILDING
+#define FBE_AUDIO_API __declspec(dllexport)
+#else
+#define FBE_AUDIO_API __declspec(dllimport)
+#endif
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// The version of fbengine this DLL is, like "0.1.0", which is its packages'.
+FBE_AUDIO_API const char* fbe_audio_version(void);
+
+// What the last call that failed on this thread says went wrong.
+FBE_AUDIO_API const char* fbe_audio_error(void);
+
+// Starts the mix on `device`: 0 the OS's default output, 1 miniaudio's null backend, which plays
+// to nothing at the pace a device would, or 2 none, where fbe_audio_mix makes each frame when it's
+// called. `sample_rate` is from 8000 to 384000 Hz and `channels` from 1 to 8, or 0 for the
+// device's own (48000 Hz and 2 with no device). False if it's started already, a value's out of
+// range, or the device won't start.
+FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t channels);
+// Stops the mix and lets the device go; stopped already, it does nothing.
+FBE_AUDIO_API void fbe_audio_stop(void);
+FBE_AUDIO_API bool fbe_audio_started(void);
+// What fbe_audio_start was given for its device, -1 when it's stopped.
+FBE_AUDIO_API int32_t fbe_audio_device(void);
+// The device's name, "" when it's stopped or has none.
+FBE_AUDIO_API const char* fbe_audio_device_name(void);
+// The mix's frames a second and channels, 0 when it's stopped.
+FBE_AUDIO_API int32_t fbe_audio_sample_rate(void);
+FBE_AUDIO_API int32_t fbe_audio_channels(void);
+// How many frames have been mixed since it started, 0 when it's stopped.
+FBE_AUDIO_API int64_t fbe_audio_frames(void);
+// The volume the whole mix is multiplied by, 1 at first, kept while it's stopped; false if it's
+// negative or not a number.
+FBE_AUDIO_API bool fbe_audio_set_volume(float volume);
+FBE_AUDIO_API float fbe_audio_volume(void);
+// Mixes the next `frames` frames into `samples`, which has room for frames times
+// fbe_audio_channels() floats, interleaved; false unless it's started with no device, or if
+// `frames` is negative.
+FBE_AUDIO_API bool fbe_audio_mix(float* samples, int32_t frames);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

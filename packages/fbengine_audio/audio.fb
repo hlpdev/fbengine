@@ -1,0 +1,120 @@
+// fbengine_audio, over its C API: the bindings in c/, one for each area's header in
+// native/fbengine_audio/, which tools/bindgen.sh makes and `Import fbengine_audio` leaves out
+// (they're fbengine_audio.c.fbe_<area>). Audio is the mix and the device it plays on.
+
+Import std.core
+Import std.ffi
+Import "./c/fbe_audio"
+
+/// Where the mix goes.
+Public Enum AudioDevice
+    /// The OS's default output, which follows it when it changes.
+    DEFAULT = 0
+    /// No sound at all, mixed at the pace a device would be, on miniaudio's null backend: for
+    /// servers, and tests that run as a game does.
+    SILENT = 1
+    /// No device: Audio.Mix makes each frame when it's called, as tests that check what's mixed
+    /// and offline renders want.
+    MANUAL = 2
+End Enum
+
+/// A device that won't start.
+Public Class AudioError Extends Error
+End Class
+
+/// The mix, which sounds play into, and the device it plays on, which there's one of.
+Public Class Audio
+    Private New()
+    End New
+
+    /// The version of fbengine the program runs with, like "0.1.0", its DLL's.
+    Public Static Method Version(): String
+        Unsafe
+            Return fbe_audio_version().ToString()
+        End Unsafe
+    End Method
+
+    /// Starts the mix on `device`, at `sampleRate` frames a second, from 8000 to 384000, with
+    /// `channels`, from 1 to 8, or for either 0, the device's own: 48000 and 2 on MANUAL. It
+    /// panics when it's started already or a value's out of range.
+    @MainThread Public Static Method Start(device: AudioDevice = AudioDevice.DEFAULT,
+                                           sampleRate: Int32 = 0,
+                                           channels: Int32 = 0) Throws AudioError
+        If fbe_audio_started() Then Panic("the audio is started already; Stop it first")
+        If sampleRate != 0 && (sampleRate < 8000 || sampleRate > 384000)
+            Panic("a sample rate is 0, for the device's, or 8000 to 384000 Hz, not {sampleRate}")
+        End If
+
+        If channels < 0 || channels > 8
+            Panic("the audio has 0, for the device's, to 8 channels, not {channels}")
+        End If
+
+        If !fbe_audio_start(device As Int32, sampleRate, channels)
+            Throw AudioError(LastError())
+        End If
+    End Method
+
+    /// Stops the mix and lets its device go; stopped already, it does nothing.
+    @MainThread Public Static Method Stop()
+        fbe_audio_stop()
+    End Method
+
+    /// Whether the mix is started.
+    @MainThread Public Static Method Started(): Bool => fbe_audio_started()
+
+    /// The device Start was given. Panics when it's stopped.
+    @MainThread Public Static Method Device(): AudioDevice
+        If !fbe_audio_started() Then Panic("the audio isn't started")
+        Return fbe_audio_device() As AudioDevice
+    End Method
+
+    /// The name of the device the mix plays on, "" when it's stopped or on MANUAL.
+    @MainThread Public Static Method DeviceName(): String
+        Unsafe
+            Return fbe_audio_device_name().ToString()
+        End Unsafe
+    End Method
+
+    /// The mix's frames a second, 0 when it's stopped.
+    @MainThread Public Static Method SampleRate(): Int32 => fbe_audio_sample_rate()
+
+    /// The mix's channels, 2 for stereo, 0 when it's stopped.
+    @MainThread Public Static Method Channels(): Int32 => fbe_audio_channels()
+
+    /// How many frames have been mixed since it started, which a device's keeps adding to as it
+    /// plays, 0 when it's stopped.
+    @MainThread Public Static Method Frames(): Int64 => fbe_audio_frames()
+
+    /// Multiplies the whole mix by `volume`, 0 or more: 1, as it starts, leaves it as it is, 0
+    /// silences it, and more than 1 makes it louder. It's kept while the audio's stopped.
+    @MainThread Public Static Method SetVolume(volume: Float32)
+        If !fbe_audio_set_volume(volume) Then Panic(LastError())
+    End Method
+
+    /// What the whole mix is multiplied by.
+    @MainThread Public Static Method Volume(): Float32 => fbe_audio_volume()
+
+    /// The next `frames` frames of the mix, Channels() samples each, one after another, from -1
+    /// to 1. Panics unless the audio's started on MANUAL, or when `frames` is negative.
+    @MainThread Public Static Method Mix(frames: Int32): Float32[]
+        If !fbe_audio_started() || fbe_audio_device() != AudioDevice.MANUAL As Int32
+            Panic("only audio started on AudioDevice.MANUAL is mixed by Mix")
+        End If
+
+        If frames < 0 Then Panic("a mix is 0 frames or more, not {frames}")
+        If frames == 0 Then Return []
+        Local samples = Buffer<Float32>((frames As Int64) * fbe_audio_channels())
+        Unsafe
+            If !fbe_audio_mix(samples.Pointer(), frames) Then Panic(LastError())
+        End Unsafe
+
+        Return samples.ToArray()
+    End Method
+End Class
+
+/// What the last call to fbengine_audio_native that failed says went wrong.
+Package Function LastError(): String
+    Unsafe
+        Return fbe_audio_error().ToString()
+    End Unsafe
+End Function
