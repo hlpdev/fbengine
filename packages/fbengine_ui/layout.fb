@@ -407,6 +407,31 @@ Public Class Node Implements Printable
         Return Self
     End Method
 
+    /// Puts its shown children in `content`, its box less its padding, as its Arrangement says:
+    /// what Layout does for each Node, which a container of its own, as a scroll view, overrides
+    /// to place its children itself, each with Place.
+    @MainThread Public Method ArrangeChildren(content: Rect)
+        Local shown = Shown()
+        If shown.Count == 0 Then Return
+        Select arrangement
+            Case Arrangement.ROW
+                ArrangeLine(Self, shown, content, True)
+            Case Arrangement.COLUMN
+                ArrangeLine(Self, shown, content, False)
+            Default
+                ArrangeStack(Self, shown, content)
+        End Select
+    End Method
+
+    /// Puts it at `box`, and its children in it, as its parent's ArrangeChildren does.
+    @MainThread Public Method Place(box: Rect)
+        Arrange(Self, box)
+    End Method
+
+    /// Its size as it'd be laid out fitting what's in it, its fixed size where it has one, as its
+    /// parent's ArrangeChildren reads it.
+    @MainThread Public Method NaturalSize(): Vec2 => Natural()
+
     Public Method ToString(): String => name == "" ? "a Node" : "Node \"{name}\""
 
     /// Marks it, and each Node it's in, to be laid out again at the next Layout: what a widget
@@ -478,17 +503,7 @@ End Function
 Function Arrange(node: Node, box: Rect)
     node.box = box
     node.dirty = False
-    Local shown = node.Shown()
-    If shown.Count == 0 Then Return
-    Local content = Inset(box, node.padding)
-    Select node.arrangement
-        Case Arrangement.ROW
-            ArrangeLine(node, shown, content, True)
-        Case Arrangement.COLUMN
-            ArrangeLine(node, shown, content, False)
-        Default
-            ArrangeStack(node, shown, content)
-    End Select
+    node.ArrangeChildren(Inset(box, node.padding))
 End Function
 
 // One axis of a box: where it starts, and how long it is.

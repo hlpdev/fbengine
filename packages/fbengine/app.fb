@@ -41,3 +41,14 @@ End Function
     End For
     Return links
 End Function
+
+/// Puts `text` on the OS's clipboard, as a text field's copy does; headless, SDL keeps it itself.
+/// It's the best the OS can do: False when it can't. It starts the video, as Displays does.
+@MainThread Public Function SetClipboard(text: String): Bool => fbe_app_set_clipboard(text)
+
+/// The text on the OS's clipboard, "" for none, as a text field's paste reads it.
+@MainThread Public Function Clipboard(): String
+    Unsafe
+        Return fbe_app_clipboard().ToString()
+    End Unsafe
+End Function
