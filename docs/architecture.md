@@ -46,6 +46,9 @@ good modern engine on its own. Every structural choice is checked against both.
   `native/common/handles.hpp`, each package in a range of its own so two never share one:
   fbengine 1 to 63 (World 1, entity 2, geometry 3, material 4, then as its milestones add pools),
   fbengine_audio 64 to 95, fbengine_physics 96 to 127, fbengine_video 128 to 143.
+- **OS devices** go by the OS's own IDs, not pool handles: gamepads and joysticks by SDL's
+  instance IDs, which SDL never reuses in a run, so a stale one names no device, and the FB side
+  wraps each in an object of its own; displays by their place in the OS's list, read afresh.
 - **Errors**: a call that can fail returns `bool` or a 0 handle, and `fbe_error()` says why, per
   thread. The FB side throws a typed Error for what a game should handle (a file that won't load,
   a mode that can't be set) and panics for a programming mistake (a freed handle, a value out of
@@ -91,8 +94,10 @@ good modern engine on its own. Every structural choice is checked against both.
 
 ## The renderer
 
-- **Vulkan 1.2** with dynamic rendering, synchronization2, and descriptor indexing (bindless
-  textures), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
+- **Vulkan 1.2** with dynamic rendering, synchronization2, descriptor indexing (bindless
+  textures), and buffer device addresses (shaders read buffers through addresses in push
+  constants), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
+  The window's images and the screen are sRGB, so drawing is in linear light.
 - **What it runs on** (the user, 2026-10-31): Vulkan 1.2 GPUs (2016 onward), Windows 10, Linux
   with glibc 2.28, macOS 13 on MoltenVK. **What it aims for** (the user, 2026-10-31): a scene of
   SCP:CB's scale in the high hundreds of fps, 500 or more at 1080p on the user's RTX 4080 and
@@ -133,7 +138,7 @@ good modern engine on its own. Every structural choice is checked against both.
 - Paths are std.vfs's (`res://`), with folders in development and pak files in a release.
 - Loaders are C++ (fastgltf, KTX, stb_image), on worker threads.
   `Assets.Load<T>(path)` loads now; `Await Assets.LoadAsync<T>(path)` loads on a worker, and the
-  Task completes on the main thread at a Flip.
+  Task completes on the main thread at a Flip, or at a tick of the main scheduler while FB waits.
 - A cache keyed by normalized path hands out the same asset again, refcounted; `Free()` and the
   last reference let it go.
 - The cooker, typed references, and hot reload are E8's, and need a package build step from
@@ -147,7 +152,8 @@ good modern engine on its own. Every structural choice is checked against both.
 - The API is the main thread's (`@MainThread`). Inside, the C++ core has one job system, a
   worker per core less one, which asset decoding, culling, animation, and collisions use;
   Jolt runs on its own pool.
-- Nothing calls into FB from a worker; finished work is queued and handed over at Flip.
+- Nothing calls into FB from a worker; finished work is queued and handed over at Flip, and at
+  the main scheduler's ticks while FB waits without one.
 
 ## How packages work together
 

@@ -1,0 +1,306 @@
+// The mouse, through Simulate's mouse, offscreen.
+
+Import std.core
+Import std.ffi
+Import std.test
+Import fbengine
+Import fbengine.c.fbe_input
+
+@Test
+Function TheMouseIsWhereTheLastFlipReadIt() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.MoveMouse(10.0, 20.0)
+    Try Simulate.MoveMouse(40.5, 30.25)
+    Expect(MouseX() != 40.5)
+    Flip()
+    Expect(MouseX() == 40.5)
+    Expect(MouseY() == 30.25)
+    // Its speed is the frame's motion, and its place stays once it stops.
+    Flip()
+    Expect(MouseX() == 40.5)
+    Expect(MouseXSpeed() == 0.0)
+End Function
+
+@Test
+Function SpeedIsTheMotionTheLastFlipRead() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.MoveMouse(100.0, 100.0)
+    Flip()
+    Try Simulate.MoveMouse(103.0, 98.0)
+    Try Simulate.MoveMouse(110.0, 90.0)
+    Flip()
+    Expect(MouseXSpeed() == 10.0)
+    Expect(MouseYSpeed() == -10.0)
+    Flip()
+    Expect(MouseXSpeed() == 0.0)
+    Expect(MouseYSpeed() == 0.0)
+End Function
+
+// SCP:CB's mouse look puts the cursor back in the window's middle every few frames, which can't
+// turn the camera.
+@Test
+Function MoveMouseIsNoMotion() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.MoveMouse(300.0, 20.0)
+    Flip()
+    MoveMouse(160.0, 100.0)
+    Expect(MouseX() == 160.0)
+    Expect(MouseY() == 100.0)
+    Flip()
+    Expect(MouseX() == 160.0)
+    Expect(MouseXSpeed() == 0.0)
+    Expect(MouseYSpeed() == 0.0)
+    Try Simulate.MoveMouse(165.0, 100.0)
+    Flip()
+    Expect(MouseXSpeed() == 5.0)
+End Function
+
+@Test
+Function RelativeModeCountsRawMotion() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Expect(!MouseRelative())
+    Try SetMouseRelative(True)
+    Expect(MouseRelative())
+    Try Simulate.MouseMotion(7.0, -3.0)
+    Try Simulate.MouseMotion(5.0, 1.0)
+    Flip()
+    Expect(MouseXSpeed() == 12.0)
+    Expect(MouseYSpeed() == -2.0)
+    Try SetMouseRelative(False)
+    Expect(!MouseRelative())
+End Function
+
+@Test
+Function AClickIsHitDownAndUpForTheFrameItsReadIn() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Expect(!MouseDown(MouseButton.LEFT))
+    Flip()
+    Expect(MouseDown(MouseButton.LEFT))
+    Expect(MouseHit(MouseButton.LEFT))
+    Expect(MouseHits(MouseButton.LEFT) == 1)
+    Expect(!MouseHit(MouseButton.RIGHT))
+    Flip()
+    Expect(MouseDown(MouseButton.LEFT))
+    Expect(!MouseHit(MouseButton.LEFT))
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Flip()
+    Expect(!MouseDown(MouseButton.LEFT))
+    Expect(MouseUp(MouseButton.LEFT))
+    Try Simulate.Click(MouseButton.FORWARD)
+    Try Simulate.Click(MouseButton.FORWARD)
+    Flip()
+    Expect(!MouseDown(MouseButton.FORWARD))
+    Expect(MouseHits(MouseButton.FORWARD) == 2)
+    Expect(MouseUp(MouseButton.FORWARD))
+End Function
+
+@Test
+Function TheOSsSecondClickInARowIsADoubleClick() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.Click(MouseButton.LEFT)
+    Flip()
+    Expect(MouseHit(MouseButton.LEFT))
+    Expect(!MouseDoubleClick(MouseButton.LEFT))
+    Try Simulate.Click(MouseButton.LEFT, clicks: 2)
+    Flip()
+    Expect(MouseDoubleClick(MouseButton.LEFT))
+    Flip()
+    Expect(!MouseDoubleClick(MouseButton.LEFT))
+End Function
+
+@Test
+Function TheWheelCountsNotchesAndWholeSteps() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.Wheel(1.0)
+    Try Simulate.Wheel(1.0, x: -0.5)
+    Flip()
+    Expect(MouseWheel() == 2.0)
+    Expect(MouseWheelX() == -0.5)
+    Expect(MouseWheelSteps() == 2)
+    // A smooth wheel's fractions add up to whole steps over frames.
+    Try Simulate.Wheel(0.75)
+    Flip()
+    Expect(MouseWheel() == 0.75)
+    Expect(MouseWheelSteps() == 0)
+    Try Simulate.Wheel(0.5)
+    Flip()
+    Expect(MouseWheelSteps() == 1)
+    Try Simulate.Wheel(-1.25)
+    Flip()
+    Expect(MouseWheelSteps() == -1)
+    Flip()
+    Expect(MouseWheel() == 0.0)
+    Expect(MouseWheelSteps() == 0)
+End Function
+
+// A leftover fraction never cancels a turn the other way, and FlushMouse forgets it.
+@Test
+Function AWheelTurnedBackStartsItsStepsAfresh() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.Wheel(0.75)
+    Flip()
+    Try Simulate.Wheel(-1.0)
+    Flip()
+    Expect(MouseWheelSteps() == -1)
+    Try Simulate.Wheel(0.75)
+    Flip()
+    FlushMouse()
+    Try Simulate.Wheel(0.5)
+    Flip()
+    Expect(MouseWheelSteps() == 0)
+End Function
+
+// SDL would otherwise turn a hidden cursor's warps into relative mode by itself, above about 33
+// frames a second, so MoveMouse's units would change with the frame rate.
+@Test
+Function MoveMouseNeverTurnsIntoRelativeMode() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local hint = CString.From("SDL_MOUSE_EMULATE_WARP_WITH_RELATIVE")
+    Unsafe
+        Expect(fbe_input_sdl_hint(hint).ToString() == "0")
+        hint.Free()
+    End Unsafe
+    SetCursorVisible(False)
+    Defer SetCursorVisible(True)
+    For frame = 1 To 10
+        MoveMouse(160.0, 100.0)
+        Flip()
+    End For
+    Expect(!MouseRelative())
+End Function
+
+@Test
+Function FlushMouseForgetsTheFramesInputButNotWhatsHeld() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.MoveMouse(50.0, 50.0)
+    Flip()
+    Try Simulate.MoveMouse(60.0, 50.0)
+    Try Simulate.MouseDown(MouseButton.RIGHT)
+    Try Simulate.Wheel(1.0)
+    Flip()
+    FlushMouse()
+    Expect(!MouseHit(MouseButton.RIGHT))
+    Expect(MouseXSpeed() == 0.0)
+    Expect(MouseWheel() == 0.0)
+    Expect(MouseDown(MouseButton.RIGHT))
+    Expect(MouseX() == 60.0)
+    Try Simulate.MouseUp(MouseButton.RIGHT)
+    Flip()
+End Function
+
+@Test
+Function LosingTheFocusLetsGoOfEveryButton() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Flip()
+    Try Simulate.BlurWindow()
+    Flip()
+    Expect(!MouseDown(MouseButton.LEFT))
+    Expect(MouseUp(MouseButton.LEFT))
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Flip()
+    Expect(!MouseUp(MouseButton.LEFT))
+End Function
+
+@Test
+Function ClosingTheWindowLetsGoOfEveryButton() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Try Simulate.MoveMouse(300.0, 150.0)
+    Try Simulate.MouseDown(MouseButton.MIDDLE)
+    Flip()
+    EndGraphics()
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Flip()
+    Expect(!MouseDown(MouseButton.MIDDLE))
+    // Where it was is the closed window's.
+    Expect(MouseX() == 0.0)
+    Expect(MouseY() == 0.0)
+    // A move in the new window is from there.
+    Try Simulate.MoveMouse(10.0, 0.0)
+    Flip()
+    Expect(MouseXSpeed() == 10.0)
+End Function
+
+@Test
+Function TheCursorCanBeHidden() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Expect(CursorVisible())
+    SetCursorVisible(False)
+    Expect(!CursorVisible())
+    SetCursorVisible(True)
+    Expect(CursorVisible())
+End Function
+
+@Test
+Function SimulatingTheMouseNeedsAWindow()
+    Window.SetHeadless(True)
+    Expect(ExpectThrows<GraphicsError>(Simulate.MoveMouse(1.0, 1.0)) != Null)
+    Expect(ExpectThrows<GraphicsError>(Simulate.MouseMotion(1.0, 1.0)) != Null)
+    Expect(ExpectThrows<GraphicsError>(Simulate.Click(MouseButton.LEFT)) != Null)
+    Expect(ExpectThrows<GraphicsError>(Simulate.Wheel(1.0)) != Null)
+    Expect(!MouseRelative())
+End Function
+
+@Test
+Function AButtonOutsideTheMousesIsNeverDown() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    // Simulate panics for one; tests/input's button-out-of-range checks it.
+    Local beyond = 33 As MouseButton
+    Expect(!MouseDown(beyond))
+    Expect(!MouseHit(beyond))
+    Expect(!MouseDown(0 As MouseButton))
+End Function
+
+// A closed window's mouse is no one's at once, before any Flip: a game that opens a window
+// again, as changing its resolution does, and moves the mouse at once, moves it from the corner.
+@Test
+Function ANewWindowsMouseIsNowhereBeforeAnyFlip() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Try Simulate.MoveMouse(300.0, 150.0)
+    Flip()
+    EndGraphics()
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Expect(MouseX() == 0.0)
+    Expect(MouseY() == 0.0)
+    Try Simulate.MoveMouse(10.0, 0.0)
+    Flip()
+    Expect(MouseXSpeed() == 10.0)
+    Expect(MouseX() == 10.0)
+    EndGraphics()
+    Try Graphics(320, 200)
+    Try Simulate.MouseMotion(5.0, 0.0)
+    Flip()
+    Expect(MouseX() == 5.0)
+    Expect(MouseXSpeed() == 5.0)
+End Function
