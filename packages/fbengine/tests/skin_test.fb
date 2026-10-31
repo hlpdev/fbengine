@@ -86,6 +86,27 @@ Function ASkinLivesWhileAMeshIsSkinnedByIt()
     Expect(skin.Freed())
     bone.SetPosition(Vec3(0, 2, 0))
     Expect(Takes(mesh.Palette()[0], Vec3(0, 0, 0), Vec3(0, 2, 0)))
-    // The Skin it was given was freed, so there's no Skin of the game's to give.
-    Expect(mesh.Skin() == Null)
+    // The Skin it was given was freed, so a new one stands for what it's skinned by.
+    Local again = mesh.Skin()
+    Expect(again != Null && !RefEquals(again, skin) && again.JointName(0) == "bone")
+End Function
+
+// A copy of a skinned body is skinned by the same Skin, its mesh following the copy's own bones.
+@Test
+Function ACopiedBodyKeepsItsSkin()
+    Local world = Fresh()
+    Defer world.Free()
+    Local body = Pivot()
+    Local mesh = Mesh(Null, body)
+    Local arm = Pivot(body)
+    arm.SetName("arm")
+    Local skin = Skin()
+    skin.AddJoint("arm", Mat4.Identity)
+    mesh.SetSkin(skin, body)
+    Local copy = body.Copy()
+    Local copied = copy.Child(0) As Mesh
+    Expect(RefEquals(copied.Skin(), skin))
+    copy.Child(1).SetPosition(Vec3(0, 5, 0))
+    Expect(Takes(copied.Palette()[0], Vec3(0, 0, 0), Vec3(0, 5, 0)))
+    Expect(Takes(mesh.Palette()[0], Vec3(0, 0, 0), Vec3(0, 0, 0)))
 End Function

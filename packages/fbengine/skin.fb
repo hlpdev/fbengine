@@ -11,8 +11,9 @@ Import "./mesh"
 Import "./window"
 Import "./world"
 
-// The Skin each Mesh was given, by its handle's slot.
-Global skinned: Skin?[] = []
+// One wrapper for each skin the game holds, by its handle's slot; it goes when the game lets go
+// of it, and a Mesh's Skin gets a new one.
+Global skins: Weak<Skin>[] = []
 
 /// How a Mesh's vertices follow the entities that are its bones: its joints, each a name and the
 /// inverse of its bind matrix, which takes the mesh's space to the joint's as it was when the
@@ -25,11 +26,13 @@ Public Final Class Skin
     @MainThread
     Public New()
         handle = fbe_skin_create()
+        Keep(Self)
     End New
 
     // A wrapper for a handle C made, which holds it once.
     New(handle: UInt64)
         Self.handle = handle
+        Keep(Self)
     End New
 
     /// A Skin of the skin at `index`, from 0, of the glTF a model load decoded, its joints named as
@@ -50,6 +53,8 @@ Public Final Class Skin
     @MainThread @PanicsAtCaller
     Public Method Free()
         If !fbe_skin_release(Live("Free")) Then Failed("Free")
+        Local gone: Skin? = Null
+        skins[Slot(handle)] = gone
         handle = 0
     End Method
 
@@ -105,6 +110,14 @@ Public Final Class Skin
         If handle == 0 Then Panic("{call} on a Skin that was freed")
         Return handle
     End Method
+
+    Static Method Keep(skin: Skin)
+        Local slot = Slot(skin.handle)
+        While skins.Count <= slot
+            skins.Add(Null)
+        End While
+        skins[slot] = skin
+    End Method
 End Class
 
 Extend Mesh
@@ -116,32 +129,18 @@ Extend Mesh
     Public Method SetSkin(skin: Skin, root: Entity)
         Local mesh = Live("SetSkin")
         If !fbe_skin_attach(mesh, skin.Live("SetSkin"), root.Live("SetSkin")) Then Failed("SetSkin")
-        Local slot = Slot(mesh)
-        While skinned.Count <= slot
-            skinned.Add(Null)
-        End While
-        skinned[slot] = skin
     End Method
 
     /// Draws the mesh as its vertices are again, skinned by nothing.
     @MainThread @PanicsAtCaller
     Public Method RemoveSkin()
-        Local mesh = Live("RemoveSkin")
-        If !fbe_skin_attach(mesh, 0, 0) Then Failed("RemoveSkin")
-        Local slot = Slot(mesh)
-        If slot < skinned.Count Then skinned[slot] = Null
+        If !fbe_skin_attach(Live("RemoveSkin"), 0, 0) Then Failed("RemoveSkin")
     End Method
 
-    /// The Skin the mesh is skinned by, or Null.
+    /// The Skin the mesh is skinned by, or Null; a copy of a skinned mesh is skinned by its
+    /// original's.
     @MainThread @PanicsAtCaller
-    Public Method Skin(): Skin?
-        Local mesh = Live("Skin")
-        Local slot = Slot(mesh)
-        If slot >= skinned.Count Then Return Null
-        Local kept = skinned[slot]
-        If kept == Null || kept.handle == 0 || fbe_skin_of(mesh) != kept.handle Then Return Null
-        Return kept
-    End Method
+    Public Method Skin(): Skin? => SkinOf(fbe_skin_of(Live("Skin")))
 
     /// The matrices the mesh is drawn with, one a joint: the joint's matrix to the world times its
     /// inverse bind, in the mesh's own space. A mesh skinned by nothing panics.
@@ -170,3 +169,16 @@ Extend Mesh
         Return matrices
     End Method
 End Extend
+
+// The Skin a handle is for, from its wrapper if the game still holds one, or a new one, which holds
+// the handle once.
+Function SkinOf(handle: UInt64): Skin?
+    If handle == 0 Then Return Null
+    Local slot = Slot(handle)
+    If slot < skins.Count
+        Local kept = skins[slot]
+        If kept != Null && kept.handle == handle Then Return kept
+    End If
+    If !fbe_skin_retain(handle) Then Panic("a skin's handle went stale: {LastError()}")
+    Return Skin(handle)
+End Function

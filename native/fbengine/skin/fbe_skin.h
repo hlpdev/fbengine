@@ -11,8 +11,8 @@
 // it's skinned, or after the skin changes: the root itself if it has the name, else the first under
 // it that has it, depth first, as fbe_entity_find finds them. Its palette is what it's drawn with,
 // each joint's world matrix times its inverse bind, in the mesh's space; a joint no entity has, or
-// one freed since, is where it was bound. A mesh freed lets go of its skin at the next
-// fbe_skin_create or fbe_skin_attach.
+// one freed since, is where it was bound. A mesh's copy is skinned as it is, its joints found under
+// its root's copy when the root was copied with it; a mesh freed lets go of its skin.
 
 #include "../core/fbe_core.h"
 

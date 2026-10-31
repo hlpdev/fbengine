@@ -166,15 +166,60 @@ TEST_CASE("a skin lives while a mesh is skinned by it, until it's taken off or t
     CHECK(!fbe_skin_alive(skin));
     CHECK(fbe_skin_of(leg.mesh) == 0);
     CHECK(fbe_skin_attach(leg.mesh, 0, 0));
-    // A mesh freed lets go of its skin at the next skin made.
+    // A mesh freed lets go of its skin at once.
     const std::uint64_t kept = fbe_skin_create();
     fbe_skin_attach(leg.mesh, kept, leg.body);
     fbe_skin_release(kept);
     fbe_entity_free(leg.mesh);
-    CHECK(fbe_skin_alive(kept));
-    const std::uint64_t next = fbe_skin_create();
     CHECK(!fbe_skin_alive(kept));
     CHECK(!fbe_skin_release(kept));
     CHECK(says("the skin was freed"));
-    fbe_skin_release(next);
+}
+
+TEST_CASE("a mesh freed with its World, or its parent, lets go of its skin") {
+    const std::uint64_t skin = fbe_skin_create();
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t body = entity(world, 0, FBE_ENTITY_PIVOT, "body");
+    const std::uint64_t mesh = entity(world, body, FBE_ENTITY_MESH, "skin");
+    fbe_skin_attach(mesh, skin, body);
+    const std::uint64_t other = entity(world, 0, FBE_ENTITY_MESH, "other");
+    fbe_skin_attach(other, skin, body);
+    fbe_skin_release(skin);
+    fbe_entity_free(body);
+    CHECK(fbe_skin_alive(skin));
+    fbe_world_free(world);
+    CHECK(!fbe_skin_alive(skin));
+}
+
+TEST_CASE("a copied tree's mesh is skinned by the copies of its bones") {
+    const leg_t leg;
+    REQUIRE(fbe_skin_attach(leg.mesh, leg.skin, leg.body));
+    const std::uint64_t copy = fbe_entity_copy(leg.body, 0, 0);
+    REQUIRE(copy != 0);
+    // In the order they were made: the mesh, then the hips, with the knee under them.
+    const std::uint64_t mesh = fbe_entity_child(copy, 0);
+    const std::uint64_t hips = fbe_entity_child(copy, 1);
+    REQUIRE(fbe_skin_of(mesh) == leg.skin);
+    // The copy's hips move the copy's palette, not the original's.
+    fbe_entity_set_position(hips, 0.0F, 3.0F, 0.0F, FBE_SPACE_LOCAL);
+    std::array<float, 32> copied{};
+    REQUIRE(fbe_skin_palette(mesh, copied.data(), 2) == 2);
+    CHECK(through(copied, 0, 0.0F, 1.0F, 0.0F)[1] == Catch::Approx(3.0F));
+    std::array<float, 32> original{};
+    fbe_skin_palette(leg.mesh, original.data(), 2);
+    CHECK(through(original, 0, 0.0F, 1.0F, 0.0F)[1] == Catch::Approx(1.0F));
+    // The copy holds the skin too.
+    fbe_entity_free(leg.mesh);
+    CHECK(fbe_skin_alive(leg.skin));
+}
+
+TEST_CASE("a copy of a skinned mesh alone follows its original's bones") {
+    const leg_t leg;
+    REQUIRE(fbe_skin_attach(leg.mesh, leg.skin, leg.body));
+    const std::uint64_t copy = fbe_entity_copy(leg.mesh, 0, leg.body);
+    REQUIRE(fbe_skin_of(copy) == leg.skin);
+    fbe_entity_set_position(leg.hips, 0.0F, 2.0F, 0.0F, FBE_SPACE_LOCAL);
+    std::array<float, 32> palette{};
+    REQUIRE(fbe_skin_palette(copy, palette.data(), 2) == 2);
+    CHECK(through(palette, 0, 0.0F, 1.0F, 0.0F)[1] == Catch::Approx(2.0F));
 }

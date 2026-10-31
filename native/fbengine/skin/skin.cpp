@@ -1,6 +1,8 @@
 // Skins' C API: joints by name with their inverse binds, shared by the meshes skinned by them, each
 // mesh's joints bound to entities under its root, and the palette it's drawn with.
 
+#include "skin/skin.hpp"
+
 #include "assets/loads.hpp"
 #include "assets/model.hpp"
 #include "core/engine.hpp"
@@ -33,13 +35,15 @@ struct skin_t {
 };
 
 /// A mesh skinned by a skin, which it holds: the root its joints are found under, the skin's
-/// version they were bound at, and the entity of each joint, 0 for none.
+/// version they were bound at, the entity of each joint, 0 for none, and its palette as it was
+/// last worked out.
 struct skinned_t {
     std::uint64_t mesh = 0;
     std::uint32_t skin = scene::none;
     std::uint64_t root = 0;
     std::uint64_t version = 0;
     std::vector<std::uint64_t> joints;
+    std::vector<scene::mat4_t> palette;
 };
 
 struct skins_t {
@@ -75,19 +79,6 @@ std::uint32_t mesh_slot(std::uint64_t handle) {
     return slot;
 }
 
-/// Lets go of the skins of meshes freed since, so they don't keep them.
-void prune() {
-    std::vector<skinned_t>& skinned = skins().skinned;
-    const auto gone = std::ranges::remove_if(skinned, [](const skinned_t& each) {
-        if (scene::scene().entities.slots.find(each.mesh)) {
-            return false;
-        }
-        release_skin(each.skin);
-        return true;
-    });
-    skinned.erase(gone.begin(), gone.end());
-}
-
 skinned_t* skinned_of(std::uint64_t mesh) {
     std::vector<skinned_t>& skinned = skins().skinned;
     const auto found =
@@ -114,6 +105,67 @@ void bind(skinned_t& skinned) {
 
 } // namespace
 
+void copy_skins(const std::vector<std::pair<std::uint32_t, std::size_t>>& originals,
+                const std::vector<std::uint32_t>& copies) {
+    const scene::entities_t& entities = scene::scene().entities;
+    for (std::size_t i = 0; i < originals.size(); ++i) {
+        const skinned_t* original = skinned_of(entities.slots.handle(originals[i].first));
+        if (original == nullptr) {
+            continue;
+        }
+        skinned_t copy;
+        copy.mesh = entities.slots.handle(copies[i]);
+        copy.skin = original->skin;
+        copy.root = original->root;
+        const auto root = entities.slots.find(original->root);
+        const auto copied = std::ranges::find_if(
+            originals, [&](const auto& entity) { return root && entity.first == *root; });
+        if (copied != originals.end()) {
+            copy.root =
+                entities.slots.handle(copies[static_cast<std::size_t>(copied - originals.begin())]);
+        }
+        ++skins().kept[copy.skin].references;
+        bind(copy);
+        skins().skinned.push_back(std::move(copy));
+    }
+}
+
+void forget_skin(std::uint32_t mesh) {
+    const std::uint64_t handle = scene::scene().entities.slots.handle(mesh);
+    std::erase_if(skins().skinned, [&](const skinned_t& each) {
+        if (each.mesh != handle) {
+            return false;
+        }
+        release_skin(each.skin);
+        return true;
+    });
+}
+
+std::span<const scene::mat4_t> skin_palette(std::uint32_t mesh, const scene::tweened_t& tweened) {
+    skinned_t* found = skinned_of(scene::scene().entities.slots.handle(mesh));
+    if (found == nullptr) {
+        return {};
+    }
+    const skin_t& skin = skins().kept[found->skin];
+    if (found->version != skin.version) {
+        bind(*found);
+    }
+    const scene::entities_t& entities = scene::scene().entities;
+    // From the world to the mesh's space; one scaled to nothing has none, and is drawn as nothing.
+    scene::mat4_t to_mesh;
+    if (!scene::inverse_affine(tweened.pose(mesh).matrix, to_mesh)) {
+        to_mesh = scene::mat4_t(scene::vec3_t{}, scene::vec3_t{}, scene::vec3_t{}, scene::vec3_t{});
+    }
+    found->palette.assign(skin.joints.size(), scene::mat4_t{});
+    for (std::size_t i = 0; i < skin.joints.size(); ++i) {
+        const auto joint = entities.slots.find(found->joints[i]);
+        if (joint) {
+            found->palette[i] = to_mesh * tweened.pose(*joint).matrix * skin.inverse_binds[i];
+        }
+    }
+    return found->palette;
+}
+
 } // namespace fbe::anim
 
 using fbe::fail;
@@ -125,7 +177,6 @@ using fbe::scene::none;
 extern "C" {
 
 FBE_API uint64_t fbe_skin_create(void) {
-    fbe::anim::prune();
     auto& made = skins();
     const std::uint32_t slot = made.slots.make();
     if (slot == made.kept.size()) {
@@ -263,7 +314,6 @@ FBE_API bool fbe_skin_attach(uint64_t mesh, uint64_t skin, uint64_t root) {
     if (fbe::anim::mesh_slot(mesh) == none) {
         return false;
     }
-    fbe::anim::prune();
     std::uint32_t slot = none;
     if (skin != 0) {
         slot = skin_slot(skin);
@@ -305,37 +355,21 @@ FBE_API int32_t fbe_skin_palette(uint64_t mesh, float* matrices, int32_t capacit
     if (slot == none) {
         return -1;
     }
-    fbe::anim::skinned_t* found = fbe::anim::skinned_of(mesh);
+    const fbe::anim::skinned_t* found = fbe::anim::skinned_of(mesh);
     if (found == nullptr) {
         fail("the mesh isn't skinned");
         return -1;
     }
-    const fbe::anim::skin_t& skin = skins().kept[found->skin];
-    if (found->version != skin.version) {
-        fbe::anim::bind(*found);
-    }
-    const std::size_t count = skin.joints.size();
+    const std::size_t count = skins().kept[found->skin].joints.size();
     if (std::cmp_less(capacity, count) || (matrices == nullptr && count > 0)) {
         fail(std::format("the mesh's palette is {} joints", count));
         return -1;
     }
-    fbe::scene::entities_t& entities = fbe::scene::scene().entities;
-    fbe::scene::update_world(slot);
-    // From the world to the mesh's space; one scaled to nothing has none, and is drawn as nothing.
-    mat4_t to_mesh;
-    if (!fbe::scene::inverse_affine(entities.world_matrix[slot], to_mesh)) {
-        to_mesh = mat4_t(fbe::scene::vec3_t{}, fbe::scene::vec3_t{}, fbe::scene::vec3_t{},
-                         fbe::scene::vec3_t{});
-    }
+    const std::span<const mat4_t> palette =
+        fbe::anim::skin_palette(slot, fbe::scene::tweened_t(1.0F));
     const std::span<float> out(matrices, matrices != nullptr ? count * 16 : 0);
-    for (std::size_t i = 0; i < count; ++i) {
-        const auto joint = entities.slots.find(found->joints[i]);
-        mat4_t matrix;
-        if (joint) {
-            fbe::scene::update_world(*joint);
-            matrix = to_mesh * entities.world_matrix[*joint] * skin.inverse_binds[i];
-        }
-        std::ranges::copy(matrix.m, out.subspan(i * 16, 16).begin());
+    for (std::size_t i = 0; i < palette.size(); ++i) {
+        std::ranges::copy(palette[i].m, out.subspan(i * 16, 16).begin());
     }
     return static_cast<int32_t>(count);
 }
