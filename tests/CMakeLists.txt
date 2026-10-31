@@ -109,3 +109,10 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.audio_stress PROPERTIES TIMEOUT 120
                        PASS_REGULAR_EXPRESSION "600 frames on no device, up to 64 channels at once\r?\n.*within the budget\r?\n$")
 endif()
+
+# fbengine_native's frame, each test in a process of its own, as a program's first frames are.
+add_executable(fbengine_core_tests core/frame_tests.cpp)
+target_link_libraries(fbengine_core_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_core_tests)
+catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_native>")
