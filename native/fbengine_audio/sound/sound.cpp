@@ -216,7 +216,7 @@ FBE_AUDIO_API int64_t fbe_sound_frames(uint64_t sound) {
 }
 
 FBE_AUDIO_API uint64_t fbe_sound_play(uint64_t sound, float volume, float pan, float pitch,
-                                      bool loop, bool paused, double fade_in) {
+                                      bool loop, bool paused, double fade_in, uint64_t bus) {
     if (!fbe::audio::check_volume(volume) || !fbe::audio::check_pan(pan) ||
         !fbe::audio::check_pitch(pitch)) {
         return 0;
@@ -226,6 +226,11 @@ FBE_AUDIO_API uint64_t fbe_sound_play(uint64_t sound, float volume, float pan, f
         fbe::audio::fail("the sound was freed");
         return 0;
     }
+    std::shared_ptr<fbe::audio::bus_t> into = fbe::audio::find_bus(bus);
+    if (bus != 0 && into == nullptr) {
+        fbe::audio::fail("the bus was freed");
+        return 0;
+    }
     const fbe::audio::play_t how = {
         .volume = volume,
         .pan = pan,
@@ -233,6 +238,7 @@ FBE_AUDIO_API uint64_t fbe_sound_play(uint64_t sound, float volume, float pan, f
         .loop = loop,
         .paused = paused,
         .fade_in = fade_in,
+        .bus = std::move(into),
     };
     return fbe::audio::play(std::move(data), how);
 }

@@ -4,7 +4,8 @@
 # miniaudio, compiled here into a static library of its own, without its warnings, as it ships no
 # CMake build fbengine wants: SOURCE_SUBDIR names a folder it doesn't have, so only its sources
 # come. The engine loads OGG, WAV, and FLAC, never MP3, and writes no sound files; Ogg Vorbis is
-# stb_vorbis, from miniaudio's extras, which its implementation finds declared before it.
+# stb_vorbis, from miniaudio's extras, which its implementation finds declared before it. Its
+# extras' reverb node, verblib's Freeverb, is the buses' reverb.
 FetchContent_Declare(
   miniaudio
   GIT_REPOSITORY https://github.com/mackron/miniaudio.git
@@ -22,6 +23,7 @@ file(WRITE "${fbengine_miniaudio_source}.in" [=[
 #include "miniaudio.h"
 #undef STB_VORBIS_HEADER_ONLY
 #include "extras/stb_vorbis.c"
+#include "extras/nodes/ma_reverb_node/ma_reverb_node.c"
 ]=])
 configure_file("${fbengine_miniaudio_source}.in" "${fbengine_miniaudio_source}" COPYONLY)
 add_library(fbengine_miniaudio STATIC "${fbengine_miniaudio_source}")

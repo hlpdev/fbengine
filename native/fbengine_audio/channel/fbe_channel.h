@@ -41,6 +41,8 @@ FBE_AUDIO_API bool fbe_channel_fade(uint64_t channel, float level, double second
 FBE_AUDIO_API bool fbe_channel_fade_out(uint64_t channel, double seconds);
 // Where its fade is.
 FBE_AUDIO_API float fbe_channel_fade_level(uint64_t channel);
+// Moves it into `bus`, or the whole mix for 0; false if the bus is gone.
+FBE_AUDIO_API bool fbe_channel_set_bus(uint64_t channel, uint64_t bus);
 // How many channels are playing, paused ones too.
 FBE_AUDIO_API int32_t fbe_channel_count(void);
 

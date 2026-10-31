@@ -2,6 +2,7 @@
 // backend, or on none, where fbe_audio_mix pulls each frame, as tests and offline renders do.
 
 #include "audio/mixer.hpp"
+#include "bus/buses.hpp"
 #include "channel/voices.hpp"
 #include "fbengine_audio.h"
 
@@ -75,6 +76,7 @@ float volume = 1.0F;
 void play(ma_device* device, void* output, const void* /*input*/, ma_uint32 frames) {
     auto* playing = static_cast<mixer_t*>(device->pUserData);
     fbe::audio::before_mix();
+    fbe::audio::update_buses(&playing->engine);
     ma_engine_read_pcm_frames(&playing->engine, output, frames, nullptr);
     fbe::audio::after_mix();
     playing->frames.fetch_add(frames, std::memory_order_relaxed);
@@ -182,18 +184,25 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
     made->has_engine = true;
     made->kind = device;
     ma_engine_set_volume(&made->engine, volume);
-    if (made->has_device) {
-        const ma_result started = ma_device_start(&made->device);
+    // The buses' nodes are made in the mix before its device starts.
+    mixer = made.release();
+    if (!fbe::audio::start_buses()) {
+        fbe_audio_stop();
+        return false;
+    }
+    if (mixer->has_device) {
+        const ma_result started = ma_device_start(&mixer->device);
         if (started != MA_SUCCESS) {
+            fbe_audio_stop();
             return fbe::audio::fail_ma("couldn't start the audio device", started);
         }
     }
-    mixer = made.release();
     return true;
 }
 
 FBE_AUDIO_API void fbe_audio_stop(void) {
     fbe::audio::end_channels();
+    fbe::audio::stop_buses();
     delete mixer;
     mixer = nullptr;
 }
@@ -249,6 +258,7 @@ FBE_AUDIO_API bool fbe_audio_mix(float* samples, int32_t frames) {
     }
     ma_uint64 read = 0;
     fbe::audio::before_mix();
+    fbe::audio::update_buses(&mixer->engine);
     const ma_result result =
         ma_engine_read_pcm_frames(&mixer->engine, samples, static_cast<ma_uint64>(frames), &read);
     fbe::audio::after_mix();
