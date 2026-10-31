@@ -28,8 +28,8 @@ TEST_CASE("a handle is its slot, its kind, and its generation") {
     pool_t<int> pool(BODY_KIND);
     const std::uint64_t handle = pool.add(std::make_unique<int>(1));
     CHECK(static_cast<std::uint32_t>(handle) == 0);
-    CHECK(static_cast<std::uint8_t>(handle >> 32U) == BODY_KIND);
-    CHECK(handle >> 40U == 1);
+    CHECK(((handle >> 32U) & 0xFFFFFFU) == 1);
+    CHECK(handle >> 56U == BODY_KIND);
 }
 
 TEST_CASE("a freed handle finds nothing, though its slot is used again") {
@@ -63,7 +63,7 @@ TEST_CASE("a handle of a slot past the pool's finds nothing") {
     pool_t<int> pool(BODY_KIND);
     pool.add(std::make_unique<int>(1));
     const std::uint64_t past =
-        (std::uint64_t{ 1 } << 40U) | (std::uint64_t{ BODY_KIND } << 32U) | 7U;
+        (std::uint64_t{ BODY_KIND } << 56U) | (std::uint64_t{ 1 } << 32U) | 7U;
     CHECK(pool.get(past) == nullptr);
     CHECK_FALSE(pool.remove(past));
 }
@@ -74,7 +74,7 @@ TEST_CASE("a slot freed at its last generation is retired, never used again") {
     for (std::uint64_t generation = 1; generation <= 3; ++generation) {
         handle = pool.add(std::make_unique<int>(1));
         CHECK(static_cast<std::uint32_t>(handle) == 0);
-        CHECK(handle >> 40U == generation);
+        CHECK(((handle >> 32U) & 0xFFFFFFU) == generation);
         CHECK(pool.remove(handle));
     }
     // Slot 0 is retired, so the next object has slot 1.
