@@ -13,6 +13,12 @@ Public Const FBE_COOK_RGBA8: Int32 = 3
     Public Field quality: Int32
 End Struct
 
+@CLayout Public Struct fbe_cook_model_t
+    Public Field optimize: Bool
+End Struct
+
 Public Extern "C" Lib "fbengine_tools_native"
     Function fbe_cook_image(from: CString, to: CString, options: Ptr<fbe_cook_image_t>): Bool
+    Function fbe_cook_model(from: CString, to: CString, root: CString,
+                            options: Ptr<fbe_cook_model_t>): Bool
 End Extern

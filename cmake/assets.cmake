@@ -75,3 +75,15 @@ if(MINGW)
     endif()
   endforeach()
 endif()
+
+# meshoptimizer, which the cooker orders meshes' triangles and vertices for the GPU with.
+FetchContent_Declare(
+  meshoptimizer
+  GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+  GIT_TAG v1.3
+  GIT_SHALLOW TRUE
+  SYSTEM
+  EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(meshoptimizer)
+set_target_properties(meshoptimizer PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -661,6 +661,9 @@ private:
         }
 
         model.images.resize(count);
+        if (!m_options.images) {
+            return {};
+        }
         std::vector<std::optional<error_t>> errors(count);
         const auto decode_one = [&](std::size_t i) {
             // On a job, whose work mustn't throw: what an image says it has can be more than
