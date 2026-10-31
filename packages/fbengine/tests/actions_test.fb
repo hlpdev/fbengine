@@ -1,0 +1,362 @@
+// Input actions, through Simulate's keys, mouse, and virtual gamepads, offscreen.
+
+Import std.core
+Import std.math
+Import std.test
+Import std.text
+Import fbengine
+
+Function Near(a: Float32, b: Float32): Bool => Abs(a - b) < 0.001
+
+Function Opened() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+End Function
+
+@Test
+Function AnActionIsDownHitAndUpAsItsKeysAre() Throws GraphicsError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfKey(Key.SPACE))
+    jump.Bind(Binding.OfMouseButton(MouseButton.RIGHT))
+    Try Simulate.KeyDown(Key.SPACE)
+    Expect(!jump.Down())
+    Flip()
+    Expect(jump.Down())
+    Expect(jump.Hit())
+    Expect(jump.Value() == 1.0)
+    // Its other binding, pressed while it's down, is no second press.
+    Try Simulate.MouseDown(MouseButton.RIGHT)
+    Flip()
+    Expect(jump.Down())
+    Expect(!jump.Hit())
+    Try Simulate.KeyUp(Key.SPACE)
+    Flip()
+    Expect(jump.Down())
+    Expect(!jump.Up())
+    Try Simulate.MouseUp(MouseButton.RIGHT)
+    Flip()
+    Expect(!jump.Down())
+    Expect(jump.Up())
+    Expect(jump.Value() == 0.0)
+End Function
+
+@Test
+Function ATapWithinAFrameIsAHitAndAnUp() Throws GraphicsError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local fire = controls.Add("fire")
+    fire.Bind(Binding.OfKey(Key.F))
+    Try Simulate.PressKey(Key.F)
+    Try Simulate.PressKey(Key.F)
+    Flip()
+    Expect(!fire.Down())
+    Expect(fire.Hits() == 2)
+    Expect(fire.Up())
+End Function
+
+// Keys and a pad's axes add up to -1 to 1, and an action that goes both ways is Down one way.
+@Test
+Function AOneAxisActionsBindingsAddUp() Throws GraphicsError, InputError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local steer = controls.Add("steer")
+    steer.Bind(Binding.OfKey(Key.D))
+    steer.Bind(Binding.OfKey(Key.A, -1.0))
+    steer.Bind(Binding.OfGamepadAxis(GamepadAxis.LEFT_X))
+    Local virtual = Try Simulate.ConnectGamepad()
+    Defer virtual.Unplug()
+    Try Simulate.KeyDown(Key.A)
+    Flip()
+    Expect(steer.Value() == -1.0)
+    Expect(!steer.Down())
+    Try Simulate.KeyDown(Key.D)
+    Flip()
+    Expect(steer.Value() == 0.0)
+    virtual.SetAxis(GamepadAxis.LEFT_X, 1.0)
+    Flip()
+    // Past 1, it's 1.
+    Expect(steer.Value() == 1.0)
+    Expect(steer.Down())
+    Try Simulate.KeyUp(Key.A)
+    Try Simulate.KeyUp(Key.D)
+    virtual.SetAxis(GamepadAxis.LEFT_X, 0.7)
+    Flip()
+    Expect(Near(steer.Value(), 0.625))
+    Expect(steer.Down())
+    virtual.SetAxis(GamepadAxis.LEFT_X, 0.5)
+    Flip()
+    Expect(!steer.Down())
+End Function
+
+// A pad's axis pushed to the press point presses an action, as a "menu up" on a stick wants.
+@Test
+Function AnAxisPushedFarEnoughPressesItsAction() Throws GraphicsError, InputError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local menuUp = controls.Add("menu up")
+    menuUp.Bind(Binding.OfGamepadAxis(GamepadAxis.LEFT_Y, -1.0))
+    Local virtual = Try Simulate.ConnectGamepad()
+    Defer virtual.Unplug()
+    Flip()
+    virtual.SetAxis(GamepadAxis.LEFT_Y, 0.9)
+    Flip()
+    Expect(!menuUp.Down())
+    virtual.SetAxis(GamepadAxis.LEFT_Y, -0.9)
+    Flip()
+    Expect(menuUp.Down())
+    Expect(menuUp.Hit())
+    Flip()
+    Expect(!menuUp.Hit())
+    controls.SetPressPoint(0.95)
+    Flip()
+    Expect(!menuUp.Down())
+    Expect(menuUp.Up())
+End Function
+
+@Test
+Function ATwoAxisActionsKeysKeepItsLengthTo1() Throws GraphicsError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local move = controls.Add("move")
+    move.Bind(Binding.OfKey(Key.D))
+    move.Bind(Binding.OfKey(Key.A, -1.0))
+    move.BindY(Binding.OfKey(Key.S))
+    move.BindY(Binding.OfKey(Key.W, -1.0))
+    Expect(move.TwoAxis())
+    Try Simulate.KeyDown(Key.W)
+    Try Simulate.KeyDown(Key.D)
+    Flip()
+    Local moving = move.Vector()
+    Expect(Near(moving.x, 0.7071))
+    Expect(Near(moving.y, -0.7071))
+    Expect(move.Down())
+    Expect(move.Hit())
+    Try Simulate.KeyUp(Key.W)
+    Try Simulate.KeyUp(Key.D)
+    Flip()
+    Expect(move.Up())
+    Expect(move.Vector() == Vec2(0.0, 0.0))
+End Function
+
+// The mouse's motion isn't kept to -1 to 1, so mouse look is its units times the binding's scale.
+@Test
+Function TheMousesMotionAddsOnTopUnkept() Throws GraphicsError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local look = controls.Add("look")
+    look.Bind(Binding.OfMouseAxis(MouseAxis.X, 0.5))
+    look.BindY(Binding.OfMouseAxis(MouseAxis.Y, -0.5))
+    look.Bind(Binding.OfGamepadAxis(GamepadAxis.RIGHT_X))
+    Try Simulate.MoveMouse(100.0, 100.0)
+    Flip()
+    Try Simulate.MoveMouse(140.0, 80.0)
+    Flip()
+    Expect(look.Vector() == Vec2(20.0, 10.0))
+    // Motion isn't a press.
+    Expect(!look.Down())
+End Function
+
+@Test
+Function TheWheelsNotchesAreHits() Throws GraphicsError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local next = controls.Add("next weapon")
+    next.Bind(Binding.OfMouseAxis(MouseAxis.WHEEL))
+    Local previous = controls.Add("previous weapon")
+    previous.Bind(Binding.OfMouseAxis(MouseAxis.WHEEL, -1.0))
+    Try Simulate.Wheel(2.0)
+    Flip()
+    Expect(next.Hits() == 2)
+    Expect(!previous.Hit())
+    Try Simulate.Wheel(-1.0)
+    Flip()
+    Expect(!next.Hit())
+    Expect(previous.Hits() == 1)
+End Function
+
+@Test
+Function APlayersSetReadsOnlyTheirGamepad() Throws GraphicsError, InputError
+    Try Opened()
+    Defer EndGraphics()
+    Local first = Try Simulate.ConnectGamepad("First")
+    Defer first.Unplug()
+    Local second = Try Simulate.ConnectGamepad("Second")
+    Defer second.Unplug()
+    Flip()
+    Local one = ActionSet()
+    one.SetGamepad(first.Device())
+    Expect(one.Pad() == first.Device())
+    Local jumpOne = one.Add("jump")
+    jumpOne.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    Local any = ActionSet()
+    Local jumpAny = any.Add("jump")
+    jumpAny.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    second.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Expect(!jumpOne.Down())
+    Expect(jumpAny.Down())
+    first.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Expect(jumpOne.Hit())
+End Function
+
+@Test
+Function ASetThatsOffLetsGoOfItsActions() Throws GraphicsError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfKey(Key.SPACE))
+    Try Simulate.KeyDown(Key.SPACE)
+    Flip()
+    Expect(jump.Down())
+    controls.SetEnabled(False)
+    Expect(!controls.Enabled())
+    Flip()
+    Expect(!jump.Down())
+    Expect(jump.Up())
+    Flip()
+    Expect(!jump.Up())
+    controls.SetEnabled(True)
+    Flip()
+    // Held all along, it's down again, and that's a press.
+    Expect(jump.Down())
+    Expect(jump.Hit())
+    controls.Flush()
+    Expect(!jump.Hit())
+    Expect(jump.Down())
+    Try Simulate.KeyUp(Key.SPACE)
+    Flip()
+End Function
+
+Function Bound(): ActionSet
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfKey(Key.SPACE))
+    jump.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    Local move = controls.Add("move")
+    move.Bind(Binding.OfKey(Key.D))
+    move.Bind(Binding.OfKey(Key.A, -1.0))
+    move.Bind(Binding.OfGamepadAxis(GamepadAxis.LEFT_X))
+    move.BindY(Binding.OfKey(Key.W, -1.0))
+    move.BindY(Binding.OfMouseAxis(MouseAxis.WHEEL, 0.25))
+    controls.Add("use").Bind(Binding.OfMouseButton(MouseButton.BACK))
+    Return controls
+End Function
+
+@Test
+Function BindingsSaveAndLoadAsToml() Throws InputError
+    Local saved = Bound().Save()
+    Expect(saved.Contains("[[jump]]\nkey = \"SPACE\""))
+    Expect(saved.Contains("[[move.x]]"))
+    Expect(saved.Contains("key = \"A\"\nscale = -1.0"))
+    Expect(saved.Contains("[move]"))
+    Local controls = ActionSet()
+    controls.Add("jump")
+    Local move = controls.Add("move")
+    controls.Add("use")
+    Try controls.Load(saved)
+    Expect(controls.Save() == saved)
+    Expect(move.Bindings()[1] == Binding.OfKey(Key.A, -1.0))
+    Expect(move.BindingsY()[1] == Binding.OfMouseAxis(MouseAxis.WHEEL, 0.25))
+End Function
+
+// A player's saved bindings change what they name, and what they don't name keeps its own.
+@Test
+Function LoadingLeavesWhatTheBindingsDontName() Throws InputError
+    Local controls = Bound()
+    Try controls.Load(r"""
+        jump = [{ key = "RETURN" }]
+        old_action = [{ key = "Q" }]
+        """)
+    Local jump = controls.Get("jump")
+    Expect(jump != Null)
+    If jump != Null Then Expect(jump.Bindings() == [Binding.OfKey(Key.RETURN)])
+    Local move = controls.Get("move")
+    If move != Null Then Expect(move.Bindings().Count == 3)
+    Expect(controls.Get("old_action") == Null)
+End Function
+
+@Test
+Function BindingsThatArentOnesChangeNothing()
+    Local controls = Bound()
+    Local before = controls.Save()
+    Expect(ExpectThrows<InputError>(controls.Load("jump = [")) != Null)
+    Expect(ExpectThrows<InputError>(controls.Load("jump = [{{ key = \"NOT_A_KEY\" }}]")) != Null)
+    Expect(ExpectThrows<InputError>(controls.Load("jump = [{{ joystick = \"A\" }}]")) != Null)
+    Expect(
+        ExpectThrows<InputError>(
+            controls.Load("jump = [{{ key = \"A\", gamepad_button = \"SOUTH\" }}]")) !=
+        Null)
+    Expect(ExpectThrows<InputError>(controls.Load("jump = [{{ key = \"A\", scale = \"big\" }}]")) !=
+           Null)
+    Expect(ExpectThrows<InputError>(controls.Load("jump = 3")) != Null)
+    Expect(ExpectThrows<InputError>(controls.Load("jump = [\"SPACE\"]")) != Null)
+    // A good one and a bad one: neither changes.
+    Expect(ExpectThrows<InputError>(controls.Load(r"""
+        use = [{ key = "U" }]
+        jump = [{}]
+        """)) != Null)
+    Expect(controls.Save() == before)
+End Function
+
+// A key bindings menu: the next input pressed replaces a binding, going the way it went.
+@Test
+Function RebindingFromTheNextInputPressed() Throws GraphicsError, InputError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = Bound()
+    Local move = controls.Get("move")
+    If move == Null Then Return
+    Expect(InputPressed() == Null)
+    Try Simulate.PressKey(Key.LEFT)
+    Flip()
+    Local pressed = InputPressed()
+    Expect(pressed == Binding.OfKey(Key.LEFT))
+    If pressed != Null Then Expect(move.Replace(Binding.OfKey(Key.A, -1.0), pressed))
+    Expect(move.Bindings()[1] == Binding.OfKey(Key.LEFT, -1.0))
+    Flip()
+    Expect(InputPressed() == Null)
+    // A stick pushed left, rebound in place of the arrow, goes left too.
+    Local virtual = Try Simulate.ConnectGamepad()
+    Defer virtual.Unplug()
+    Flip()
+    Flip()
+    virtual.SetAxis(GamepadAxis.RIGHT_X, -1.0)
+    Flip()
+    Local pushed = InputPressed()
+    Expect(pushed == Binding.OfGamepadAxis(GamepadAxis.RIGHT_X, -1.0))
+    If pushed != Null Then Expect(move.Replace(Binding.OfKey(Key.LEFT, -1.0), pushed))
+    Expect(move.Bindings()[1] == Binding.OfGamepadAxis(GamepadAxis.RIGHT_X, 1.0))
+    // Held, it's no new press.
+    Flip()
+    Expect(InputPressed() == Null)
+    virtual.SetButton(GamepadButton.NORTH, True)
+    Flip()
+    Expect(InputPressed() == Binding.OfGamepadButton(GamepadButton.NORTH))
+    Expect(!move.Replace(Binding.OfKey(Key.Z), Binding.OfKey(Key.X)))
+End Function
+
+@Test
+Function UnbindingTakesABindingOffBothAxes()
+    Local controls = Bound()
+    Local move = controls.Get("move")
+    If move == Null Then Return
+    move.Unbind(Binding.OfKey(Key.D))
+    Expect(move.Bindings().Count == 2)
+    move.ClearBindings()
+    Expect(move.Bindings().Count == 0)
+    Expect(!move.TwoAxis())
+    Expect(controls.Actions().Count == 3)
+    Expect("{Binding.OfKey(Key.W, -1.0)}" == "key W * -1")
+    Expect(Binding.OfGamepadButton(GamepadButton.SOUTH).Name() == "SOUTH")
+End Function

@@ -49,7 +49,9 @@ Function TheLimitSpacesFramesOutAndCapsTheRate()
     // 50 a second is 20 ms apart; a frame can come later, never sooner.
     Expect(Frame.Delta() >= 0.0195)
     Frame.SetLimit(200)
-    For i = 1 To 150
+    // The rate's half second can start before the limit, with the tests before's fast frames, so
+    // the second one after it, all at the limit, is the one read.
+    For i = 1 To 250
         Flip()
     End For
     Expect(Frame.Rate() > 0.0)
