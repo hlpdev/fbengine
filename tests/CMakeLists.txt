@@ -46,10 +46,17 @@ option(FBENGINE_FB_TESTS "Test the packages and the examples with fb" ON)
 if(FBENGINE_FB_TESTS)
   find_program(FBENGINE_FB fb REQUIRED DOC "The fb that builds and tests the packages")
 
-  add_test(NAME fbengine.package
-           COMMAND "${FBENGINE_FB}" test "${PROJECT_SOURCE_DIR}/packages/fbengine")
-  # SDL's offscreen video, so no test opens a window, as each test asks too.
-  set_tests_properties(fbengine.package PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
+  # Every package's own tests, with SDL's offscreen video, so no test opens a window, as each test
+  # asks too.
+  file(GLOB fbengine_packages CONFIGURE_DEPENDS LIST_DIRECTORIES true
+       "${PROJECT_SOURCE_DIR}/packages/*")
+  foreach(package IN LISTS fbengine_packages)
+    if(EXISTS "${package}/project.toml")
+      cmake_path(GET package FILENAME name)
+      add_test(NAME ${name}.package COMMAND "${FBENGINE_FB}" test "${package}")
+      set_tests_properties(${name}.package PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
+    endif()
+  endforeach()
 
   # fb's own lines, building the program, come before what it prints.
   add_test(NAME examples.hello

@@ -61,7 +61,7 @@ jobs:
         run: |
           tar -xf native-${{ matrix.target }}.tar
           fb --version
-          fb test packages/fbengine
+          for package in packages/*/; do fb test "$package"; done
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' packages/fbengine/project.toml)"
           output="$(fb --color never run examples/hello | tr -d '\r')"
           printf '%s\n' "$output"

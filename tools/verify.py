@@ -102,14 +102,13 @@ def this_target():
 def check_exports():
     step("exports")
     for native in sorted((ROOT / "native").iterdir()):
-        prefix = {"fbengine": "fbe_"}.get(native.name, f"{native.name.removeprefix('fbengine_')}_")
         # Other targets' DLLs, from CI's artifacts, are only checked on their own machines.
         folder = ROOT / "packages" / native.name / "native" / this_target()
         dlls = [file for file in folder.rglob("*") if file.suffix in (".dll", ".so", ".dylib")]
         if not dlls:
             fail(f"{native.name} has no built DLL in {folder.relative_to(ROOT)}")
         for dll in dlls:
-            if run(["sh", "tools/check-exports.sh", dll.relative_to(ROOT).as_posix(), prefix]) != 0:
+            if run(["sh", "tools/check-exports.sh", dll.relative_to(ROOT).as_posix(), "fbe_"]) != 0:
                 fail(f"{dll.name} exports more than its C API")
 
 

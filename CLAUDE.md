@@ -24,8 +24,10 @@ Blitz code and assets are a game's own tools, never the engine's or the language
 - snake_case; types end in _t; private/protected members use m_; enum constants UPPER_CASE;
   template params CamelCase; never align declarations or assignments; spaces inside braced lists.
 - Each package's DLL (cmake/native.cmake's fbengine_add_native) is C++ behind a C API of
-  fixed-size types, exporting only its prefix's functions (`fbe_` for fbengine), with its C++
-  runtime linked in. Functions are `fbe_<area>_<verb>`; handles are `uint64_t`.
+  fixed-size types, exporting only its `fbe_` functions, with its C++
+  runtime linked in. Every package's functions are `fbe_<area>_<verb>` (`fbe_window_open`,
+  `fbe_audio_play`, `fbe_body_add`), so one export check covers them all; handles are
+  `uint64_t`.
 - The C API is split by area: native/<package>/<area>/fbe_<area>.h, its .cpp files beside it
   (CMake takes every area folder's), and its bindings, packages/<package>/c/fbe_<area>.fb, which
   `sh tools/bindgen.sh` makes again whenever a header changes. An area's header uses only

@@ -70,7 +70,7 @@ jobs:
         run: |
           cmake -S . -B build ${{ matrix.configure }} -DCMAKE_BUILD_TYPE=Release -DFBENGINE_BUILD_TESTS=OFF
           cmake --build build --parallel
-          for dll in packages/fbengine/native/${{ matrix.target }}/*fbengine_native.*; do
+          for dll in packages/*/native/${{ matrix.target }}/*_native.*; do
             case "$dll" in *.dll.a) ;; *) sh tools/check-exports.sh "$dll" fbe_ ;; esac
           done
           tar -cf native-${{ matrix.target }}.tar packages/*/native/${{ matrix.target }}
