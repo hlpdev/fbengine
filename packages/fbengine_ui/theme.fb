@@ -1,0 +1,432 @@
+// Themes: how widgets look, by their style's name and their state, set in code or loaded from TOML.
+
+Import std.collections
+Import std.core
+Import std.data.toml
+Import std.math
+Import std.text
+Import "./layout"
+
+/// A theme that can't be loaded.
+Public Class UIError Extends Error
+End Class
+
+/// What a widget's doing, which its look follows.
+Public Enum WidgetState
+    NORMAL
+    /// The mouse is over it.
+    HOVERED
+    /// It's held down.
+    PRESSED
+    /// It has the keyboard's or the gamepad's focus.
+    FOCUSED
+    /// It can't be used.
+    DISABLED
+End Enum
+
+/// How a widget looks in one of its states.
+Public Struct Style Implements Printable
+    /// What's behind it.
+    Public Field Background: Color
+    /// Its text and its icons.
+    Public Field Foreground: Color
+    /// Its border's color.
+    Public Field Border: Color
+    /// How wide its border is, 0 for none.
+    Public Field BorderWidth: Float32
+    /// How round its corners are.
+    Public Field CornerRadius: Float32
+    /// The space between its edge and what it shows.
+    Public Field Padding: Insets
+    /// Its text's font, by name, as fbengine's text finds it; "" for the default one.
+    Public Field Font: String
+    /// Its text's size.
+    Public Field FontSize: Float32
+
+    /// What a theme with no style for a widget gives it: white text, 16 high, on nothing.
+    Public Static Method Plain(): Style
+        Return Style(Color.Transparent, Color.White, Color.Transparent, 0.0, 0.0, Insets.All(0.0),
+                     "",
+                     16.0)
+    End Method
+
+    Public Method ToString(): String =>
+        "{Background.ToHex()} {Foreground.ToHex()} {Font} {FontSize}"
+End Struct
+
+// A state's name in a theme's TOML.
+Function StateName(state: WidgetState): String
+    Select state
+        Case WidgetState.HOVERED
+            Return "hovered"
+        Case WidgetState.PRESSED
+            Return "pressed"
+        Case WidgetState.FOCUSED
+            Return "focused"
+        Case WidgetState.DISABLED
+            Return "disabled"
+        Default
+            Return "normal"
+    End Select
+End Function
+
+Function StateNamed(name: String): WidgetState?
+    For state In States()
+        If StateName(state) == name Then Return state
+    End For
+    Return Null
+End Function
+
+Function States(): WidgetState[]
+    Return [WidgetState.NORMAL, WidgetState.HOVERED, WidgetState.PRESSED, WidgetState.FOCUSED,
+            WidgetState.DISABLED]
+End Function
+
+/// How a game's widgets look: a Style for each style name and state. A widget asks for its
+/// style's name, as "button", or a kind of one, as "button.primary": the theme gives that name's
+/// style in that state, or in its normal state, or else the name it's a kind of's, and so on to
+/// "default", and Style.Plain when it has none of them.
+Public Final Class Theme
+    Field styles: Map<String, Style>
+
+    /// A theme with no styles, so every widget looks as Style.Plain does.
+    @MainThread Public New()
+        styles = {}
+    End New
+
+    /// fbengine_ui's own theme: light text on dark panels, buttons that light up under the mouse
+    /// and go darker held, and a blue edge on what has the focus.
+    @MainThread Public Static Method Dark(): Theme
+        Local theme = Theme()
+        Local text = Color.Hex("#e6e8eb")
+        Local plain = Style(Color.Transparent, text, Color.Transparent, 0.0, 0.0, Insets.All(0.0),
+                            "", 16.0)
+        theme.SetStyle("default", plain)
+        Local faded = plain
+        faded.Foreground = Color.Hex("#7d838c")
+        theme.SetStyle("default", faded, WidgetState.DISABLED)
+
+        Local panel = plain
+        panel.Background = Color.Hex("#1c1f24")
+        panel.Border = Color.Hex("#30353d")
+        panel.BorderWidth = 1.0
+        panel.CornerRadius = 6.0
+        panel.Padding = Insets.All(12.0)
+        theme.SetStyle("panel", panel)
+
+        Local button = plain
+        button.Background = Color.Hex("#2b3038")
+        button.CornerRadius = 4.0
+        button.Padding = Insets.Symmetric(12.0, 6.0)
+        theme.SetStyle("button", button)
+        Local hovered = button
+        hovered.Background = Color.Hex("#363c46")
+        theme.SetStyle("button", hovered, WidgetState.HOVERED)
+        Local pressed = button
+        pressed.Background = Color.Hex("#22262c")
+        theme.SetStyle("button", pressed, WidgetState.PRESSED)
+        Local focused = button
+        focused.Border = Color.Hex("#4c8dff")
+        focused.BorderWidth = 2.0
+        theme.SetStyle("button", focused, WidgetState.FOCUSED)
+        Local disabled = button
+        disabled.Foreground = faded.Foreground
+        theme.SetStyle("button", disabled, WidgetState.DISABLED)
+
+        Local field = button
+        field.Background = Color.Hex("#14161a")
+        field.Border = Color.Hex("#30353d")
+        field.BorderWidth = 1.0
+        theme.SetStyle("field", field)
+        theme.SetStyle("field", focused, WidgetState.FOCUSED)
+        Return theme
+    End Method
+
+    /// Sets the style named `name` in `state`, its normal one at first. Panics for a name that's
+    /// "", or has a part that is, as "button." does.
+    @MainThread Public Method SetStyle(name: String, style: Style,
+                                       state: WidgetState = WidgetState.NORMAL)
+        CheckName("Theme.SetStyle", name)
+        styles["{name}/{StateName(state)}"] = style
+    End Method
+
+    /// Whether it has a style named `name` in `state` of its own, not one it falls back to.
+    @MainThread Public Method HasStyle(name: String, state: WidgetState = WidgetState.NORMAL): Bool
+        Return styles.Get("{name}/{StateName(state)}") != Null
+    End Method
+
+    /// The style a widget of style `name` has in `state`: that name's in that state, or its
+    /// normal one, or the name it's a kind of's, as "button" is for "button.primary", and so on to
+    /// "default"'s, or Style.Plain.
+    @MainThread Public Method StyleOf(name: String, state: WidgetState = WidgetState.NORMAL): Style
+        For each In Lineage(name)
+            Local found = styles.Get("{each}/{StateName(state)}")
+            If found != Null Then Return found
+            Local normal = styles.Get("{each}/normal")
+            If normal != Null Then Return normal
+        End For
+        Return Style.Plain()
+    End Method
+
+    /// The names it has styles for, in order.
+    @MainThread Public Method Names(): String[]
+        Local names: String[] = []
+        For key In styles.Keys()
+            Local name = key.Slice(0, key.FindLast("/") ?? key.Length)
+            If !names.Contains(name) Then names.Add(name)
+        End For
+        names.Sort()
+        Return names
+    End Method
+
+    /// Its styles as a TOML document, which Load reads back the same: a table for each name, with
+    /// its normal style's fields, and a table in it for each state it has its own style for.
+    ///
+    /// ```toml
+    /// [button]
+    /// background = "#2b3038"
+    /// foreground = "#e6e8eb"
+    /// padding = [12, 6, 12, 6]
+    /// corner_radius = 4
+    ///
+    /// [button.hovered]
+    /// background = "#363c46"
+    /// ```
+    @MainThread Public Method Save(): String
+        Local document = Value.Object()
+        For name In Names()
+            Local table = Value.Object()
+            Local normal = styles.Get("{name}/normal")
+            If normal != Null Then Fields(table, normal)
+            For state In States()
+                If state == WidgetState.NORMAL Then Continue
+                Local own = styles.Get("{name}/{StateName(state)}")
+                If own == Null Then Continue
+                Local stated = Value.Object()
+                Fields(stated, own)
+                table[StateName(state)] = stated
+            End For
+            document[name] = table
+        End For
+        Return Toml.Write(document)
+    End Method
+
+    /// Reads styles from a TOML document, as Save writes them or a person does, over the ones it
+    /// has. A name's table gives the fields it changes: in each of the name's styles, for a name it
+    /// has; for a new one, from the name it's a kind of's, or "default"'s, and for a new kind, in
+    /// each state its parent has a style of its own in too. A state's table in it gives the fields
+    /// that state's style changes from that, and a table in it that isn't a state's is a kind of
+    /// it: so `[button.primary]` with
+    /// `background = "#4c8dff"` is the style "button.primary", with every other field of
+    /// "button"'s, in each of its states, and `[button]` with `font_size = 20` makes every button
+    /// bigger, leaving the rest of the theme's button as it was. The fields: background, foreground, and border, CSS's hex colors;
+    /// border_width, corner_radius, and font_size, numbers of 0 or more; padding, one number for
+    /// every side, two for left and right then top and bottom, or four, left, top, right, bottom;
+    /// and font, a name. Nothing changes when it throws, for text that isn't TOML or a field that
+    /// isn't one of those.
+    @MainThread Public Method Load(text: String) Throws UIError
+        Local document = Value.Object()
+        Try
+            document = Try Toml.Read(text)
+        Catch e As ParseError
+            Throw UIError("the theme isn't TOML: {e.Message}", e)
+        End Try
+        Local found: (String, Value)[] = []
+        For name In document.Keys()
+            Local table = document[name]
+            If table == Null || !table.IsObject
+                Throw UIError("the style {name} is a table of its fields, not {table ?? Value()}")
+            End If
+            found.Add((name, table))
+            Kinds(name, table, found)
+        End For
+        // Each name after the ones it's a kind of, so it reads what they'll have.
+        found.SortBy<Int>(Function(each: (String, Value)) => each.0.Split(".").Count)
+        Local loaded = Theme()
+        loaded.styles = styles.Clone()
+        For each In found
+            Local name, table = each
+            Try loaded.LoadStyle(name, table)
+        End For
+        styles = loaded.styles
+    End Method
+
+    // Reads one name's table. A name it has styles for already has its fields changed in each of
+    // them, and gets the states the table gives; a new one starts from the name it's a kind of, or
+    // "default"'s, and a new kind, as "button.primary", gets each state its parent has a style of
+    // its own in too. A table with no fields of its own, only kinds' and states' tables, changes
+    // nothing of the name's own.
+    @MainThread Method LoadStyle(name: String, table: Value) Throws UIError
+        If !GoodName(name) Then Throw UIError("\"{name}\" isn't a style's name, which has no empty parts")
+        Local above = Above(name)
+        Local existed = HasStyle(name)
+        Local normal = Try Changed(existed ? StyleOf(name) : StyleOf(above), name, table)
+        Local stated: (WidgetState, Style)[] = []
+        For state In States()
+            If state == WidgetState.NORMAL Then Continue
+            Local own = table[StateName(state)]
+            Local given = own != Null && own.IsObject
+            Local base = normal
+            If HasStyle(name, state)
+                base = Try Changed(StyleOf(name, state), name, table)
+            ElseIf !existed && name.Contains(".") && HasStyle(above, state)
+                base = Try Changed(StyleOf(above, state), name, table)
+            ElseIf !given
+                Continue
+            End If
+            If given && own != Null Then base = Try Changed(base, "{name}.{StateName(state)}", own)
+            stated.Add((state, base))
+        End For
+        If existed || HasFields(table) Then SetStyle(name, normal)
+        For each In stated
+            Local state, style = each
+            SetStyle(name, style, state)
+        End For
+    End Method
+End Class
+
+// The kinds of `name` its table has, tables that aren't a state's, as `[button.primary]` is in
+// "button"'s, each with its own name, as "button.primary", and theirs, in `found`.
+Function Kinds(name: String, table: Value, found: (String, Value)[])
+    For key In table.Keys()
+        Local value = table[key]
+        If value == Null || !value.IsObject || StateNamed(key) != Null Then Continue
+        Local kind = "{name}.{key}"
+        found.Add((kind, value))
+        Kinds(kind, value, found)
+    End For
+End Function
+
+// Whether `table` has fields of its own, not only states' and kinds' tables.
+Function HasFields(table: Value): Bool
+    For key In table.Keys()
+        Local value = table[key]
+        If value != Null && !value.IsObject Then Return True
+    End For
+    Return False
+End Function
+
+// `name`, then each name it's a kind of, then "default".
+Function Lineage(name: String): String[]
+    Local names: String[] = []
+    Local at = name
+    While at != ""
+        names.Add(at)
+        Local dot = at.FindLast(".")
+        at = dot != Null ? at.Slice(0, dot) : ""
+    End While
+    If !names.Contains("default") Then names.Add("default")
+    Return names
+End Function
+
+// The name `name` is a kind of, or "default" for one that's a kind of none.
+Function Above(name: String): String
+    Local dot = name.FindLast(".")
+    Return dot != Null ? name.Slice(0, dot) : (name == "default" ? "" : "default")
+End Function
+
+Function GoodName(name: String): Bool
+    If name == "" Then Return False
+    For part In name.Split(".")
+        If part == "" Then Return False
+    End For
+    Return True
+End Function
+
+Function CheckName(call: String, name: String)
+    If !GoodName(name) Then Panic("{call}: \"{name}\" isn't a style's name, which has no empty parts")
+End Function
+
+// A style's fields, as Save writes them.
+Function Fields(table: Value, style: Style)
+    table["background"] = Value(style.Background.ToHex())
+    table["foreground"] = Value(style.Foreground.ToHex())
+    table["border"] = Value(style.Border.ToHex())
+    table["border_width"] = Number(style.BorderWidth)
+    table["corner_radius"] = Number(style.CornerRadius)
+    Local padding = Value.Array()
+    For side In [style.Padding.Left, style.Padding.Top, style.Padding.Right, style.Padding.Bottom]
+        padding.Add(Number(side))
+    End For
+    table["padding"] = padding
+    table["font"] = Value(style.Font)
+    table["font_size"] = Number(style.FontSize)
+End Function
+
+// A Float32 as TOML's number, in its own shortest form.
+Function Number(value: Float32): Value
+    Return Value(Double.Parse("{value}") ?? value As Double)
+End Function
+
+// `style` with the fields `table` gives, for the style `name`; a table in it is a state's, which
+// isn't a field.
+Function Changed(style: Style, name: String, table: Value): Style Throws UIError
+    Local changed = style
+    For key In table.Keys()
+        Local value = table[key]
+        If value == Null Then Continue
+        // A state's table, or a kind's, which aren't fields.
+        If value.IsObject Then Continue
+        Select key
+            Case "background"
+                changed.Background = Try ColorIn(name, key, value)
+            Case "foreground"
+                changed.Foreground = Try ColorIn(name, key, value)
+            Case "border"
+                changed.Border = Try ColorIn(name, key, value)
+            Case "border_width"
+                changed.BorderWidth = Try LengthIn(name, key, value)
+            Case "corner_radius"
+                changed.CornerRadius = Try LengthIn(name, key, value)
+            Case "font_size"
+                changed.FontSize = Try LengthIn(name, key, value)
+            Case "padding"
+                changed.Padding = Try PaddingIn(name, value)
+            Case "font"
+                Local font = value.AsString()
+                If font == Null Then Throw UIError("{name}'s font is a name, not {value}")
+                changed.Font = font
+            Default
+                Throw UIError("{name} has no field {key}; a style's are background, foreground, " +
+                              "border, border_width, corner_radius, padding, font, and font_size, " +
+                              "and its states' tables, hovered, pressed, focused, and disabled")
+        End Select
+    End For
+    Return changed
+End Function
+
+Function ColorIn(name: String, key: String, value: Value): Color Throws UIError
+    Local text = value.AsString()
+    Local color = text != Null ? Color.TryHex(text) : Null
+    If color == Null Then Throw UIError("{name}'s {key} is a hex color, like \"#ff8800\", not {value}")
+    Return color
+End Function
+
+Function LengthIn(name: String, key: String, value: Value): Float32 Throws UIError
+    Local number = value.AsDouble()
+    Local length = number != Null ? number As Float32 : -1.0
+    If !(length >= 0.0 && IsFinite(length))
+        Throw UIError("{name}'s {key} is a number of 0 or more, not {value}")
+    End If
+    Return length
+End Function
+
+Function PaddingIn(name: String, value: Value): Insets Throws UIError
+    If !value.IsArray Then Return Insets.All(Try LengthIn(name, "padding", value))
+    Local sides: Float32[] = []
+    For index = 0 To value.Count - 1
+        Local side = value[index]
+        If side == Null Then Throw UIError("{name}'s padding is numbers")
+        sides.Add(Try LengthIn(name, "padding", side))
+    End For
+    Select sides.Count
+        Case 1
+            Return Insets.All(sides[0])
+        Case 2
+            Return Insets.Symmetric(sides[0], sides[1])
+        Case 4
+            Return Insets(sides[0], sides[1], sides[2], sides[3])
+        Default
+            Throw UIError("{name}'s padding is one number, two, or four, not {sides.Count}")
+    End Select
+End Function

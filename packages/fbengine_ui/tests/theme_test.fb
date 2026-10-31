@@ -1,0 +1,133 @@
+// Themes: styles by name and state, what each falls back to, and TOML.
+
+Import std.core
+Import std.math
+Import std.test
+Import std.text
+Import fbengine_ui
+
+@Test
+Function AThemeWithNoStylesGivesThePlainOne()
+    Local theme = Theme()
+    Expect(theme.StyleOf("button") == Style.Plain())
+    Expect(theme.StyleOf("button.primary", WidgetState.PRESSED) == Style.Plain())
+    Expect(theme.Names().Count == 0)
+End Function
+
+// A style falls back to its name's normal one, then to the name it's a kind of, then to
+// "default".
+@Test
+Function AStyleFallsBackByStateThenByName()
+    Local theme = Theme()
+    Local plain = Style.Plain()
+    plain.FontSize = 20.0
+    theme.SetStyle("default", plain)
+    Local button = plain
+    button.Background = Color.Hex("#202020")
+    theme.SetStyle("button", button)
+    Local hovered = button
+    hovered.Background = Color.Hex("#404040")
+    theme.SetStyle("button", hovered, WidgetState.HOVERED)
+    Expect(theme.StyleOf("button", WidgetState.HOVERED) == hovered)
+    Expect(theme.StyleOf("button", WidgetState.PRESSED) == button)
+    Expect(theme.StyleOf("button.primary.big", WidgetState.HOVERED) == hovered)
+    Expect(theme.StyleOf("label") == plain)
+    Expect(theme.HasStyle("button", WidgetState.HOVERED))
+    Expect(!theme.HasStyle("button", WidgetState.PRESSED))
+    Expect(theme.Names() == ["button", "default"])
+End Function
+
+@Test
+Function TheDarkThemeLightsButtonsUpUnderTheMouse()
+    Local theme = Theme.Dark()
+    Local normal = theme.StyleOf("button")
+    Expect(theme.StyleOf("button", WidgetState.HOVERED).Background != normal.Background)
+    Expect(theme.StyleOf("button", WidgetState.FOCUSED).BorderWidth > 0.0)
+    Expect(theme.StyleOf("panel").Padding == Insets.All(12.0))
+    Expect(theme.StyleOf("label") == theme.StyleOf("default"))
+End Function
+
+// A kind of a style, loaded, changes only what it says, in every state its parent has.
+@Test
+Function AKindLoadedKeepsItsParentsOtherFields() Throws UIError
+    Local theme = Theme.Dark()
+    Try theme.Load("[button.primary]\nbackground = \"#4c8dff\"\n\n[button.primary.pressed]\nbackground = \"#3a6fd0\"\n")
+    Local primary = theme.StyleOf("button.primary")
+    Expect(primary.Background == Color.Hex("#4c8dff"))
+    Expect(primary.Padding == theme.StyleOf("button").Padding)
+    // Its parent's focused style, with its own background.
+    Local focused = theme.StyleOf("button.primary", WidgetState.FOCUSED)
+    Expect(focused.BorderWidth == theme.StyleOf("button", WidgetState.FOCUSED).BorderWidth)
+    Expect(focused.Background == Color.Hex("#4c8dff"))
+    Expect(theme.StyleOf("button.primary", WidgetState.PRESSED).Background == Color.Hex("#3a6fd0"))
+    // A name with a dot in quotes is the same.
+    Try theme.Load("[\"button.danger\"]\nforeground = \"#ff5555\"\n")
+    Expect(theme.StyleOf("button.danger").Foreground == Color.Hex("#ff5555"))
+    Expect(theme.StyleOf("button.danger").Background == theme.StyleOf("button").Background)
+End Function
+
+@Test
+Function PaddingIsOneNumberTwoOrFour() Throws UIError
+    Local theme = Theme()
+    Try theme.Load("[a]\npadding = 4\n[b]\npadding = [8, 2]\n[c]\npadding = [1, 2, 3, 4]\n")
+    Expect(theme.StyleOf("a").Padding == Insets.All(4.0))
+    Expect(theme.StyleOf("b").Padding == Insets.Symmetric(8.0, 2.0))
+    Expect(theme.StyleOf("c").Padding == Insets(1.0, 2.0, 3.0, 4.0))
+End Function
+
+@Test
+Function AThemeSavesAndLoadsTheSame() Throws UIError
+    Local dark = Theme.Dark()
+    Try dark.Load(
+        "[button.primary]\nbackground = \"#4c8dff\"\nfont = \"Inter\"\nfont_size = 18.5\n")
+    Local saved = dark.Save()
+    Expect(saved.Contains("[button.hovered]"))
+    Expect(saved.Contains("font_size = 18.5\n"))
+    Local loaded = Theme()
+    Try loaded.Load(saved)
+    Expect(loaded.Save() == saved)
+    Expect(loaded.Names() == dark.Names())
+    For name In dark.Names()
+        For state In [WidgetState.NORMAL, WidgetState.HOVERED, WidgetState.PRESSED,
+                      WidgetState.FOCUSED, WidgetState.DISABLED]
+            Expect(loaded.StyleOf(name, state) == dark.StyleOf(name, state))
+        End For
+    End For
+End Function
+
+@Test
+Function AThemeThatIsntOneChangesNothing()
+    Local theme = Theme.Dark()
+    Local before = theme.Save()
+    Expect(ExpectThrows<UIError>(theme.Load("[button")) != Null)
+    Expect(ExpectThrows<UIError>(theme.Load("[button]\nbackground = \"blue\"\n")) != Null)
+    Expect(ExpectThrows<UIError>(theme.Load("[button]\nborder_width = -1\n")) != Null)
+    Expect(ExpectThrows<UIError>(theme.Load("[button]\nshadow = 2\n")) != Null)
+    Expect(ExpectThrows<UIError>(theme.Load("[button]\npadding = [1, 2, 3]\n")) != Null)
+    Expect(ExpectThrows<UIError>(theme.Load("[button]\nfont = 3\n")) != Null)
+    Expect(ExpectThrows<UIError>(theme.Load("button = 3\n")) != Null)
+    Expect(ExpectThrows<UIError>(theme.Load("[button]\nhovered = 3\n")) != Null)
+    // A good style and a bad one: neither changes.
+    Expect(
+        ExpectThrows<UIError>(
+            theme.Load("[label]\nfont_size = 30\n[button]\nfont_size = \"big\"\n")) != Null)
+    Expect(theme.Save() == before)
+End Function
+
+// Loaded over a theme, a name's fields change in each of its styles, and the rest stay.
+@Test
+Function LoadingANamesFieldsChangesThemInEachOfItsStyles() Throws UIError
+    Local theme = Theme.Dark()
+    Local normal = theme.StyleOf("button")
+    Local hovered = theme.StyleOf("button", WidgetState.HOVERED)
+    Try theme.Load("[button]\nfont_size = 20\n")
+    Expect(theme.StyleOf("button").FontSize == 20.0)
+    Expect(theme.StyleOf("button").Background == normal.Background)
+    Expect(theme.StyleOf("button", WidgetState.HOVERED).FontSize == 20.0)
+    Expect(theme.StyleOf("button", WidgetState.HOVERED).Background == hovered.Background)
+    // A table with only a kind's in it leaves its own as they were.
+    Try theme.Load("[panel.dialog]\ncorner_radius = 10\n")
+    Expect(theme.StyleOf("panel") == Theme.Dark().StyleOf("panel"))
+    Expect(theme.StyleOf("panel.dialog").CornerRadius == 10.0)
+    Expect(theme.StyleOf("panel.dialog").Background == theme.StyleOf("panel").Background)
+End Function
