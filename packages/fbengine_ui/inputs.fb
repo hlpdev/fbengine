@@ -7,8 +7,8 @@ Import std.text
 Import fbengine
 Import "./widget"
 
-/// A value from Low to High, which dragging along it sets, as the arrows, Home, End, and the pages
-/// do while it has the focus: style "slider".
+/// A value from Low to High, which dragging along it sets, as left and right, Home, End, and the
+/// pages do while it has the focus (up and down move the focus on): style "slider".
 Public Class Slider Extends Widget
     Field low: Float32
     Field high: Float32
@@ -81,9 +81,9 @@ Public Class Slider Extends Widget
     @MainThread Public Override Method KeyTyped(key: Key): Bool
         Local by = stepping > 0.0 ? stepping : (high - low) / 20.0
         Select key
-            Case Key.LEFT, Key.DOWN
+            Case Key.LEFT
                 Moved(value - by)
-            Case Key.RIGHT, Key.UP
+            Case Key.RIGHT
                 Moved(value + by)
             Case Key.HOME
                 Moved(low)

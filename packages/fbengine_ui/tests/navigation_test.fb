@@ -1,0 +1,256 @@
+// Focus by keyboard and gamepad, and input routed between the UI and the game, offscreen.
+
+Import std.core
+Import std.math
+Import std.test
+Import std.time
+Import fbengine
+Import fbengine_ui
+
+Function Shown(root: Node): Ui Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Return ui
+End Function
+
+Function Frame(ui: Ui)
+    Flip()
+    ui.Update()
+End Function
+
+Function Press(ui: Ui, key: Key) Throws GraphicsError
+    Try Simulate.PressKey(key)
+    Frame(ui)
+End Function
+
+// A 2 by 2 grid of buttons, a b over c d.
+Function Grid(): (Node, Button, Button, Button, Button)
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.SetGap(10.0)
+    Local top = Node("top")
+    top.SetArrangement(Arrangement.ROW)
+    top.SetGap(10.0)
+    Local bottom = Node("bottom")
+    bottom.SetArrangement(Arrangement.ROW)
+    bottom.SetGap(10.0)
+    Local a = Button("a")
+    Local b = Button("b")
+    Local c = Button("c")
+    Local d = Button("d")
+    top.Add(a)
+    top.Add(b)
+    bottom.Add(c)
+    bottom.Add(d)
+    root.Add(top)
+    root.Add(bottom)
+    Return (root, a, b, c, d)
+End Function
+
+@Test
+Function TabMovesTheFocusInTheTreesOrder() Throws GraphicsError
+    Local root, a, b, c, d = Grid()
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Try Press(ui, Key.TAB)
+    Expect(ui.Focused() == a)
+    Try Press(ui, Key.TAB)
+    Expect(ui.Focused() == b)
+    Try Press(ui, Key.TAB)
+    Try Press(ui, Key.TAB)
+    Expect(ui.Focused() == d)
+    // After the last, the first.
+    Try Press(ui, Key.TAB)
+    Expect(ui.Focused() == a)
+    Try Simulate.KeyDown(Key.LEFT_SHIFT)
+    Frame(ui)
+    Try Press(ui, Key.TAB)
+    Expect(ui.Focused() == d)
+    Try Simulate.KeyUp(Key.LEFT_SHIFT)
+    Frame(ui)
+End Function
+
+@Test
+Function TheArrowsMoveTheFocusToTheNearestThatWay() Throws GraphicsError
+    Local root, a, b, c, d = Grid()
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    // With nothing focused, the first.
+    Try Press(ui, Key.DOWN)
+    Expect(ui.Focused() == a)
+    Try Press(ui, Key.RIGHT)
+    Expect(ui.Focused() == b)
+    Try Press(ui, Key.DOWN)
+    Expect(ui.Focused() == d)
+    Try Press(ui, Key.LEFT)
+    Expect(ui.Focused() == c)
+    // Nothing that way leaves it.
+    Try Press(ui, Key.DOWN)
+    Expect(ui.Focused() == c)
+    Try Press(ui, Key.UP)
+    Expect(ui.Focused() == a)
+    Try Press(ui, Key.ESCAPE)
+    Expect(ui.Back())
+    Frame(ui)
+    Expect(!ui.Back())
+End Function
+
+@Test
+Function AWidgetUsesTheArrowsItTakesAndTheRestMoveOn() Throws GraphicsError
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    Local volume = Slider(0.0, 10.0, 5.0)
+    Local list = List(["one", "two"])
+    Local quit = Button("Quit")
+    root.Add(volume)
+    root.Add(list)
+    root.Add(quit)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(volume)
+    Try Press(ui, Key.RIGHT)
+    Expect(volume.Value() > 5.0)
+    Expect(ui.Focused() == volume)
+    Try Press(ui, Key.DOWN)
+    Expect(ui.Focused() == list)
+    // The list takes up and down for its items.
+    Try Press(ui, Key.DOWN)
+    Expect(ui.Focused() == list)
+    Expect(list.Selected() == 0)
+    Try Simulate.PressKey(Key.TAB)
+    Frame(ui)
+    Expect(ui.Focused() == quit)
+End Function
+
+@Test
+Function AGamepadMovesTheFocusAndActivates() Throws GraphicsError, InputError
+    Local root, a, b, c, d = Grid()
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local pad = Try Simulate.ConnectGamepad()
+    Defer pad.Unplug()
+    Frame(ui)
+    pad.SetButton(GamepadButton.DPAD_DOWN, True)
+    Frame(ui)
+    Expect(ui.Focused() == a)
+    pad.SetButton(GamepadButton.DPAD_DOWN, False)
+    pad.SetAxis(GamepadAxis.LEFT_X, 1.0)
+    Frame(ui)
+    Expect(ui.Focused() == b)
+    pad.SetAxis(GamepadAxis.LEFT_X, 0.0)
+    pad.SetButton(GamepadButton.SOUTH, True)
+    Frame(ui)
+    Expect(b.Clicked())
+    pad.SetButton(GamepadButton.SOUTH, False)
+    pad.SetButton(GamepadButton.EAST, True)
+    Frame(ui)
+    Expect(ui.Back())
+    pad.SetButton(GamepadButton.EAST, False)
+    Frame(ui)
+End Function
+
+// Held, a gamepad's way moves the focus again after a moment, and on while it's held.
+@Test
+Function AHeldWayMovesTheFocusAgain() Throws GraphicsError, InputError
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    Local buttons: Button[] = []
+    For i = 1 To 20
+        Local button = Button("{i}")
+        buttons.Add(button)
+        root.Add(button)
+    End For
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local pad = Try Simulate.ConnectGamepad()
+    Defer pad.Unplug()
+    Frame(ui)
+    ui.Focus(buttons[0])
+    pad.SetButton(GamepadButton.DPAD_DOWN, True)
+    Frame(ui)
+    Expect(ui.Focused() == buttons[1])
+    // A slow machine gets two seconds.
+    Local waited = Stopwatch.StartNew()
+    While ui.Focused() == buttons[1] && waited.Elapsed.TotalSeconds < 2.0
+        Frame(ui)
+    End While
+    Expect(ui.Focused() == buttons[2])
+    Expect(waited.Elapsed.TotalSeconds >= 0.35)
+    pad.SetButton(GamepadButton.DPAD_DOWN, False)
+    Frame(ui)
+End Function
+
+// The game's controls are off while a widget has the focus, and on again after, with what was
+// held for the menu no press.
+@Test
+Function AFocusedWidgetTurnsTheGamesControlsOff() Throws GraphicsError
+    Local play = Button("Play")
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(play)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfKey(Key.RETURN))
+    ui.Route(controls)
+    ui.Focus(play)
+    Frame(ui)
+    Expect(!controls.Enabled())
+    Try Simulate.KeyDown(Key.RETURN)
+    Frame(ui)
+    Expect(play.Clicked())
+    Expect(!jump.Hit())
+    ui.Focus(Null)
+    Frame(ui)
+    Expect(controls.Enabled())
+    Frame(ui)
+    Expect(jump.Down() && !jump.Hit())
+    Try Simulate.KeyUp(Key.RETURN)
+    Frame(ui)
+    ui.Unroute(controls)
+End Function
+
+@Test
+Function AHiddenWidgetLosesTheFocus() Throws GraphicsError
+    Local root, a, b, c, d = Grid()
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(b)
+    b.SetVisible(False)
+    Frame(ui)
+    Expect(ui.Focused() == Null)
+    // A hidden one is passed over.
+    Try Press(ui, Key.TAB)
+    Try Press(ui, Key.TAB)
+    Expect(ui.Focused() == c)
+End Function
+
+// The focus moved into a scroll view shows what it moved to.
+@Test
+Function MovingTheFocusIntoAScrollViewShowsIt() Throws GraphicsError
+    Local column = Node("column")
+    Local buttons: Button[] = []
+    For i = 1 To 10
+        Local button = Button("{i}")
+        buttons.Add(button)
+        column.Add(button)
+    End For
+    Local view = ScrollView("view")
+    view.SetHeight(Sizing.Fixed(80.0))
+    view.Add(column)
+    Local root = Node("root")
+    root.Add(view)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(buttons[0])
+    For i = 1 To 9
+        Try Simulate.PressKey(Key.DOWN)
+        Frame(ui)
+    End For
+    Expect(ui.Focused() == buttons[9])
+    Expect(view.Offset() == view.MaxOffset())
+End Function
