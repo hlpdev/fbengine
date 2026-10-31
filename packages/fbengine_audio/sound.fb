@@ -5,6 +5,7 @@ Import std.core
 Import std.ffi
 Import std.io
 Import "./audio"
+Import "./bus"
 Import "./c/fbe_sound"
 Import "./channel"
 
@@ -23,6 +24,7 @@ Public Final Class Sound
     Field pan: Float32 = 0.0
     Field pitch: Float32 = 1.0
     Field loop: Bool = False
+    Field bus: Bus?
 
     Private New(handle: UInt64)
         Self.handle = handle
@@ -110,7 +112,10 @@ Public Final Class Sound
         Live()
         If !Audio.Started() Then Panic("the audio isn't started; Audio.Start it first")
         CheckFade(fadeIn)
-        Local channel = fbe_sound_play(handle, volume, pan, pitch, loop, paused, fadeIn)
+        Local into: UInt64 = 0
+        Local playsInto = bus
+        If playsInto != Null Then into = playsInto.Live()
+        Local channel = fbe_sound_play(handle, volume, pan, pitch, loop, paused, fadeIn, into)
         If channel == 0 Then Panic(LastError())
         Return Channel(channel)
     End Method
@@ -156,6 +161,15 @@ Public Final Class Sound
 
     /// Whether its plays loop.
     @MainThread Public Method Looping(): Bool => loop
+
+    /// Sets the Bus its plays play into, or the whole mix for Null, as it's loaded.
+    @MainThread Public Method SetBus(bus: Bus?)
+        Live()
+        Self.bus = bus
+    End Method
+
+    /// The Bus its plays play into, or Null for the whole mix.
+    @MainThread Public Method Bus(): Bus? => bus
 
     Method Destroy()
         If handle != 0 Then fbe_sound_free(handle)

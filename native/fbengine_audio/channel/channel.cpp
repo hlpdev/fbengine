@@ -32,6 +32,8 @@ struct voice_t {
     /// The mixing thread's, for the main thread: the frame of its sound it has played to.
     std::atomic<std::uint64_t> position = 0;
     std::shared_ptr<const fbe::audio::sound_data_t> data;
+    /// What it plays into, which it keeps while it plays, or null for the whole mix.
+    std::shared_ptr<fbe::audio::bus_t> bus;
     ma_audio_buffer_ref buffer;
     ma_decoder decoder;
     ma_sound sound;
@@ -207,8 +209,9 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
         fail_ma("couldn't play the sound", result);
         return 0;
     }
+    voice->bus = how.bus;
     result = ma_sound_init_from_data_source(mix, voice->source(), MA_SOUND_FLAG_NO_SPATIALIZATION,
-                                            nullptr, &voice->sound);
+                                            bus_group(voice->bus.get()), &voice->sound);
     if (result != MA_SUCCESS) {
         fail_ma("couldn't play the sound", result);
         return 0;
@@ -425,6 +428,19 @@ FBE_AUDIO_API bool fbe_channel_fade_out(uint64_t channel, double seconds) {
 FBE_AUDIO_API float fbe_channel_fade_level(uint64_t channel) {
     const voice_t* voice = find(channel);
     return voice != nullptr ? ma_sound_get_current_fade_volume(&voice->sound) : 0.0F;
+}
+
+FBE_AUDIO_API bool fbe_channel_set_bus(uint64_t channel, uint64_t bus) {
+    std::shared_ptr<fbe::audio::bus_t> into = fbe::audio::find_bus(bus);
+    if (bus != 0 && into == nullptr) {
+        return fbe::audio::fail("the bus was freed");
+    }
+    voice_t* voice = find(channel);
+    if (voice != nullptr) {
+        ma_node_attach_output_bus(&voice->sound, 0, fbe::audio::bus_input(into.get()), 0);
+        voice->bus = std::move(into);
+    }
+    return true;
 }
 
 FBE_AUDIO_API int32_t fbe_channel_count(void) {

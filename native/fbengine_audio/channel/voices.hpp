@@ -3,6 +3,7 @@
 // The channels playing, which fbe_sound_play starts and fbe_audio_stop ends, and what the thread
 // that mixes does around each mix.
 
+#include "bus/buses.hpp"
 #include "sound/sound.hpp"
 
 #include <cstdint>
@@ -19,6 +20,8 @@ struct play_t {
     bool paused = false;
     /// Seconds it fades in over, from silence, or 0.
     double fade_in = 0.0;
+    /// What it plays into, or null for the whole mix.
+    std::shared_ptr<bus_t> bus;
 };
 
 /// Plays `data` on a new channel, giving its handle, or 0, with fbe_audio_error's message, if the

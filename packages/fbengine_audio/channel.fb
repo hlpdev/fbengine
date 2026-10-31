@@ -3,6 +3,7 @@
 Import std.core
 Import std.math
 Import "./audio"
+Import "./bus"
 Import "./c/fbe_channel"
 
 /// One play of a Sound, which Sound.Play gives. It plays until its sound ends, or for good when it
@@ -98,25 +99,11 @@ Public Struct Channel
 
     /// Where its fade is, from 1 as it starts.
     @MainThread Public Method Fade(): Float32 => fbe_channel_fade_level(handle)
+
+    /// Moves it into `bus`, or the whole mix for Null, from the next mix.
+    @MainThread Public Method SetBus(bus: Bus?)
+        Local into: UInt64 = 0
+        If bus != Null Then into = bus.Live()
+        fbe_channel_set_bus(handle, into)
+    End Method
 End Struct
-
-// A volume, pan, or pitch out of range is a mistake, finished Channel or not.
-@PanicsAtCaller
-Package Function CheckVolume(volume: Float32)
-    If !IsFinite(volume) || volume < 0.0 Then Panic("a volume is 0 or more, not {volume}")
-End Function
-
-@PanicsAtCaller
-Package Function CheckPan(pan: Float32)
-    If !(pan >= -1.0 && pan <= 1.0) Then Panic("a pan is -1, the left, to 1, the right, not {pan}")
-End Function
-
-@PanicsAtCaller
-Package Function CheckPitch(pitch: Float32)
-    If !(pitch >= 0.0625 && pitch <= 16.0) Then Panic("a pitch is 1/16 to 16, not {pitch}")
-End Function
-
-@PanicsAtCaller
-Package Function CheckFade(seconds: Float64)
-    If !IsFinite(seconds) || seconds < 0.0 Then Panic("a fade takes 0 seconds or more, not {seconds}")
-End Function

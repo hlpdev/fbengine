@@ -21,7 +21,10 @@ channel.SetPitch(1.2)
 
 Sounds are WAV, FLAC, or Ogg Vorbis, told apart by their bytes, decoded whole by `Sound.Load` or
 decoded as they play by `Sound.Stream`, for music. A crossfade is one channel's `FadeOut` and the
-next one's `Play(fadeIn: ...)`. A `Channel` is one play of a
+next one's `Play(fadeIn: ...)`.
+
+A `Bus` groups channels under one volume, low-pass, and reverb, inside another bus or the whole
+mix: music, effects, and voices at the volumes a player sets, or sounds muffled behind a wall. A `Channel` is one play of a
 `Sound`; once it ends or is stopped, its methods do nothing, so a game can stop or ask about one
 whose sound ended long ago.
 
