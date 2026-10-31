@@ -200,5 +200,5 @@ if(FBENGINE_FB_TESTS)
   add_test(NAME examples.audio_stress
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress")
   set_tests_properties(examples.audio_stress PROPERTIES TIMEOUT 120
-                       PASS_REGULAR_EXPRESSION "600 frames, up to 64 channels at once\r?\n.*within the budget\r?\n$")
+                       PASS_REGULAR_EXPRESSION "600 frames on no device, up to 64 channels at once\r?\n.*within the budget\r?\n$")
 endif()

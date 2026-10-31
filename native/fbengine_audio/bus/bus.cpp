@@ -250,10 +250,6 @@ std::shared_ptr<bus_t> find_bus(std::uint64_t handle) {
     return found != nullptr ? *found : nullptr;
 }
 
-ma_sound_group* bus_group(bus_t* bus) {
-    return bus != nullptr ? &bus->group : nullptr;
-}
-
 ma_node* bus_input(bus_t* bus) {
     if (bus != nullptr) {
         return &bus->group;

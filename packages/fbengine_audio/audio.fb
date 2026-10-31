@@ -21,8 +21,9 @@ Public Enum AudioDevice
 End Enum
 
 /// How a mono Channel's pan is heard on each side of a stereo mix, as a game whose sounds are
-/// positioned by hand, by setting each one's pan and volume each frame, wants it heard. Any other
-/// Channel's pan, a stereo sound's, an Emitter's, or one in a mix of other channels, is a balance.
+/// positioned by hand, by setting each one's pan and volume each frame, wants it heard. A stereo
+/// sound's pan, or an Emitter's Channel's, is a balance; in a mix that isn't stereo, a pan does
+/// nothing.
 Public Enum PanLaw
     /// Taking from the other side only: both sides at full in the middle, and one fading to
     /// silence as it pans away, as a stereo sound's balance does.
