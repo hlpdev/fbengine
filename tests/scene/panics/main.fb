@@ -125,6 +125,23 @@ Select arguments[0]
         Local material = Material()
         material.Free()
         Triangle().Surface(0).SetMaterial(material)
+    Case "collision-group"
+        Pivot().SetCollisionGroup(1024)
+    Case "collision-radius"
+        Pivot().SetCollisionRadius(0, 1)
+    Case "collision-box"
+        Pivot().SetCollisionBox(AABB(Vec3(1, 0, 0), Vec3(0, 1, 1)))
+    Case "step-height"
+        Pivot().SetStepHeight(-1)
+    Case "response-group"
+        world.SetCollisionResponse(0, 1, CollisionResponse.SLIDE)
+    Case "iterations"
+        world.SetCollisionIterations(0)
+    Case "skin"
+        world.SetCollisionSkin(1)
+    Case "collide-freed"
+        world.Free()
+        world.Collide()
     Default
         Panic("no case {arguments[0]}")
 End Select

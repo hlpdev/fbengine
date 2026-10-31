@@ -227,7 +227,7 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 # The scene, through fbengine's C API, with no window or GPU.
 add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.cpp
                scene/camera_tests.cpp scene/light_tests.cpp scene/geometry_tests.cpp
-               scene/material_tests.cpp scene/bvh_tests.cpp
+               scene/material_tests.cpp scene/bvh_tests.cpp scene/collision_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
@@ -276,7 +276,15 @@ if(FBENGINE_FB_TESTS)
       "layer=a material's layers are 0 to 7, not 8"
       "layer-uv-set=a layer's UV set is 0 or 1, not 2"
       "material-freed=SetOrder on a Material that was freed"
-      "surface-freed-material=SetMaterial on a Material that was freed")
+      "surface-freed-material=SetMaterial on a Material that was freed"
+      "collision-group=a collision group is 0 to 1023, not 1024"
+      "collision-radius=collision radii are above 0, not 0 and 1"
+      "collision-box=a collision box has its least corner at or below its greatest"
+      "step-height=a step height is 0 or more, not -1"
+      "response-group=group 0 is no group, which collides with nothing"
+      "iterations=a move touches 1 to 64 times, not 0"
+      "skin=a collision skin is 0 to 0.1, not 1"
+      "collide-freed=Collide on a World that was freed")
   foreach(case IN LISTS fbengine_scene_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)

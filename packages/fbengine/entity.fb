@@ -40,7 +40,7 @@ End Class
 
 /// What every entity has: its place in its World's tree, its name, and whether it's shown. Its
 /// Classes are Final, so a game keeps its own object on an entity with SetData.
-Public Class Entity
+Public Class Entity Implements Printable
     Field handle: UInt64
     Field attached: Attached? = Null
 

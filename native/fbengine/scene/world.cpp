@@ -69,6 +69,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.moved.push_back(true);
         entities.component.push_back(none);
         entities.blocks_sight.push_back(false);
+        entities.colliders.emplace_back();
     } else {
         entities.kind[entity] = kind;
         entities.world[entity] = world;
@@ -77,6 +78,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.name[entity].clear();
         entities.hidden[entity] = false;
         entities.blocks_sight[entity] = false;
+        entities.colliders[entity] = {};
     }
     reset_transform(entity);
     add_component(entity);
@@ -94,6 +96,7 @@ void free_tree(std::uint32_t entity) {
     entities.children[entity].clear();
     entities.name[entity].clear();
     entities.name[entity].shrink_to_fit();
+    entities.colliders[entity] = {};
     remove_component(entity);
     --scene().worlds[entities.world[entity]].count;
     scene().freed.push_back(entities.slots.handle(entity));
@@ -428,6 +431,10 @@ FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_w
     }
     fbe::scene::attach(slot, world, parent_slot);
     fbe::scene::mark_moved(slot);
+    // A jump to where a new parent takes it isn't a move to sweep.
+    if (!keep_world) {
+        entities.colliders[slot].has_previous = false;
+    }
     if (keep_world) {
         fbe::scene::set_world_rotation(slot, rotation);
         fbe::scene::set_world_scale(slot, scale);
@@ -534,6 +541,10 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         entities.rotation[copy] = entities.rotation[original];
         entities.scale[copy] = entities.scale[original];
         entities.blocks_sight[copy] = entities.blocks_sight[original];
+        // A copy collides as its original does, from where it is, with nothing touched yet.
+        entities.colliders[copy] = entities.colliders[original];
+        entities.colliders[copy].has_previous = false;
+        entities.colliders[copy].contacts.clear();
         fbe::scene::copy_component(original, copy);
         fbe::scene::attach(copy, world_index, i == 0 ? parent_slot : copies[tree[i].second]);
         copies[i] = copy;

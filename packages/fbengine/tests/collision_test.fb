@@ -1,0 +1,276 @@
+// Collisions: swept ellipsoids against meshes, boxes, and ellipsoids, their responses, steps, and
+// contacts, with no GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Const MOVER = 1
+Const LEVEL = 2
+Const OTHER = 3
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+Function Near(a: Float, b: Float): Bool => IsClose(a, b, 0.002)
+
+Function Near(a: Vec3, b: Vec3): Bool => IsClose(a, b, 0.002)
+
+// A floor 20 across at y = 0, facing up, in the LEVEL group.
+Function Floor(): Mesh
+    Local floor = Mesh(Geometry.Plane(4))
+    floor.SetScale(Vec3(10, 1, 10))
+    floor.SetCollisionGroup(LEVEL)
+    Return floor
+End Function
+
+// A mover of radius 0.5 at `at`, in the MOVER group, whose first Collide only notes where it is.
+Function Mover(world: World, at: Vec3): Pivot
+    Local mover = Pivot()
+    mover.SetCollisionGroup(MOVER)
+    mover.SetCollisionRadius(0.5)
+    mover.SetPosition(at)
+    world.Collide()
+    Return mover
+End Function
+
+@Test
+Function AMoverFallsOntoTheFloorAndStaysOnIt()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Local floor = Floor()
+    Local mover = Mover(world, Vec3(1, 3, 2))
+    mover.Translate(Vec3(0, -10, 0))
+    world.Collide()
+    Expect(Near(mover.Position(), Vec3(1, 0.501, 2)))
+    Local touched = mover.Collisions()
+    Expect(touched.Count == 1)
+    Expect(touched[0].Other == floor)
+    Expect(Near(touched[0].Normal, Vec3(0, 1, 0)))
+    Expect(Near(touched[0].Point, Vec3(1, 0, 2)))
+    Expect(touched[0].Time > 0.2 && touched[0].Time < 0.3)
+    Expect(touched[0].Surface == floor.Geometry()?.Surface(0))
+    Expect(touched[0].Triangle >= 0)
+    Expect(mover.Collided(LEVEL) == floor && mover.Collided(OTHER) == Null)
+    // The floor has the contact too, with the mover as its other.
+    Expect(floor.Collisions().Count == 1 && floor.Collisions()[0].Other == mover)
+    // Falling again, it stays.
+    mover.Translate(Vec3(0, -0.1, 0))
+    world.Collide()
+    Expect(Near(mover.Position().y, 0.501))
+    // Nothing moved: nothing touched.
+    world.Collide()
+    Expect(mover.Collisions().Count == 0)
+End Function
+
+@Test
+Function AMoverSlidesAlongAWallOrStopsAtIt()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    // A wall at z = -2 facing +Z.
+    Local wall = Mesh(Geometry.Plane())
+    wall.Turn(Deg(90), 0, 0)
+    wall.SetScale(Vec3(10, 1, 10))
+    wall.SetPosition(Vec3(0, 0, -2))
+    wall.SetCollisionGroup(LEVEL)
+    Local mover = Mover(world, Vec3(0, 0, 0))
+    mover.Translate(Vec3(2, 0, -4))
+    world.Collide()
+    Local at = mover.Position()
+    Expect(Near(at.z, -1.499))
+    Expect(Near(at.x, 2))
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.STOP)
+    mover.SetPosition(Vec3(0, 0, 0))
+    mover.ResetCollisions()
+    world.Collide()
+    mover.Translate(Vec3(2, 0, -4))
+    world.Collide()
+    at = mover.Position()
+    Expect(Near(at, Vec3(0.75, 0, -1.499)))
+End Function
+
+@Test
+Function SlidingHorizontallyKeepsAMoverOnASlope()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE_HORIZONTAL)
+    Local slope = Floor()
+    slope.Turn(0, 0, Deg(30))
+    Local mover = Mover(world, Vec3(0, 2, 0))
+    // Gravity alone, a frame at a time.
+    For frame = 0 Until 20
+        mover.Translate(Vec3(0, -0.2, 0))
+        world.Collide()
+    End For
+    Local resting = mover.Position()
+    Expect(Abs(resting.x) < 0.05)
+    // Sliding as SLIDE does, gravity takes it down the slope.
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    For frame = 0 Until 20
+        mover.Translate(Vec3(0, -0.2, 0))
+        world.Collide()
+    End For
+    Expect(mover.Position().x < resting.x - 0.5)
+End Function
+
+@Test
+Function AnEllipsoidRestsAtItsVerticalRadius()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Floor()
+    Local mover = Mover(world, Vec3(0, 3, 0))
+    mover.SetCollisionRadius(0.15, 0.3)
+    Expect(mover.CollisionRadius() == Vec2(0.15, 0.3))
+    world.Collide()
+    mover.Translate(Vec3(0, -5, 0))
+    world.Collide()
+    Expect(Near(mover.Position().y, 0.302))
+    Expect(Near(mover.Collisions()[0].Normal, Vec3(0, 1, 0)))
+End Function
+
+@Test
+Function MoversTouchOtherEllipsoidsAndBoxes()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, OTHER, CollisionResponse.STOP)
+    Local post = Pivot()
+    post.SetCollisionGroup(OTHER)
+    post.SetCollisionRadius(0.5)
+    post.SetPosition(Vec3(0, 0, -5))
+    Local mover = Mover(world, Vec3(0, 0, 0))
+    mover.Translate(Vec3(0, 0, -10))
+    world.Collide()
+    Expect(Near(mover.Position(), Vec3(0, 0, -3.999)))
+    Expect(mover.Collided(OTHER) == post)
+    Expect(Near(mover.Collisions()[0].Normal, Vec3(0, 0, 1)))
+    Expect(mover.Collisions()[0].Surface == Null && mover.Collisions()[0].Triangle == -1)
+
+    post.SetCollisionShape(CollisionShape.BOX)
+    post.SetCollisionBox(AABB(Vec3(-1, -1, -0.25), Vec3(1, 1, 0.25)))
+    Expect(post.CollisionShape() == CollisionShape.BOX)
+    Expect(post.CollisionBox() == AABB(Vec3(-1, -1, -0.25), Vec3(1, 1, 0.25)))
+    mover.SetPosition(Vec3(0, 0, 0))
+    mover.ResetCollisions()
+    world.Collide()
+    mover.Translate(Vec3(0, 0, -10))
+    world.Collide()
+    Expect(Near(mover.Position(), Vec3(0, 0, -4.249)))
+    // A box turns and scales with its entity.
+    post.SetScale(Vec3(1, 1, 4))
+    mover.SetPosition(Vec3(0, 0, 0))
+    mover.ResetCollisions()
+    world.Collide()
+    mover.Translate(Vec3(0, 0, -10))
+    world.Collide()
+    Expect(Near(mover.Position(), Vec3(0, 0, -3.499)))
+End Function
+
+@Test
+Function OnlyShowingEntitiesOfGroupsThatCollideAreTouched()
+    Local world = Fresh()
+    Defer world.Free()
+    Local floor = Floor()
+    Local mover = Mover(world, Vec3(0, 2, 0))
+    mover.Translate(Vec3(0, -5, 0))
+    world.Collide()
+    Expect(mover.Position().y == -3.0)
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Expect(world.CollisionResponse(MOVER, LEVEL) == CollisionResponse.SLIDE)
+    Expect(world.CollisionResponse(LEVEL, MOVER) == CollisionResponse.NONE)
+    floor.Hide()
+    mover.SetPosition(Vec3(0, 2, 0))
+    mover.ResetCollisions()
+    world.Collide()
+    mover.Translate(Vec3(0, -5, 0))
+    world.Collide()
+    Expect(mover.Position().y == -3.0)
+    floor.Show()
+    // From behind, a mesh's triangles let a mover through.
+    mover.Translate(Vec3(0, 5, 0))
+    world.Collide()
+    Expect(mover.Position().y == 2.0)
+    world.ClearCollisionResponses()
+    Expect(world.CollisionResponse(MOVER, LEVEL) == CollisionResponse.NONE)
+End Function
+
+@Test
+Function ResettingIsATeleport()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Floor()
+    Local mover = Mover(world, Vec3(0, 2, 0))
+    mover.SetPosition(Vec3(0, -2, 0))
+    mover.ResetCollisions()
+    world.Collide()
+    Expect(mover.Position().y == -2.0)
+    // A new group forgets where it was too.
+    mover.SetPosition(Vec3(0, 2, 0))
+    mover.SetCollisionGroup(MOVER)
+    world.Collide()
+    Expect(mover.Position().y == 2.0)
+End Function
+
+@Test
+Function AStepUpClimbsOntoWhatsLowEnough()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Floor()
+    // A step from x = 1 on, 0.5 high.
+    Local step = Pivot()
+    step.SetCollisionGroup(LEVEL)
+    step.SetCollisionShape(CollisionShape.BOX)
+    step.SetCollisionBox(AABB(Vec3(1, 0, -5), Vec3(5, 0.5, 5)))
+    Local mover = Mover(world, Vec3(0, 0.251, 0))
+    mover.SetCollisionRadius(0.25)
+    mover.ResetCollisions()
+    world.Collide()
+    mover.Translate(Vec3(2, -0.01, 0))
+    world.Collide()
+    Expect(Near(mover.Position().x, 0.749))
+    mover.SetStepHeight(0.6)
+    Expect(mover.StepHeight() == 0.6)
+    mover.Translate(Vec3(1, -0.01, 0))
+    world.Collide()
+    Expect(Near(mover.Position(), Vec3(1.749, 0.751, 0)))
+End Function
+
+@Test
+Function AMirroredMeshStillFacesOut()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Local floor = Floor()
+    floor.SetScale(Vec3(-10, 1, 10))
+    Local mover = Mover(world, Vec3(0.5, 2, 0.5))
+    mover.Translate(Vec3(0, -5, 0))
+    world.Collide()
+    Expect(Near(mover.Position().y, 0.501))
+End Function
+
+@Test
+Function AMoverUnderAParentMovesInTheWorld()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Floor()
+    Local parent = Pivot()
+    parent.SetPosition(Vec3(3, 0, 0))
+    parent.SetScale(Vec3(2, 2, 2))
+    Local mover = Pivot(parent)
+    mover.SetCollisionGroup(MOVER)
+    mover.SetCollisionRadius(0.5)
+    mover.SetPosition(Vec3(0, 1, 0))
+    world.Collide()
+    mover.Translate(Vec3(0, -2, 0))
+    world.Collide()
+    Expect(Near(mover.Position(Space.WORLD), Vec3(3, 0.501, 0)))
+End Function
