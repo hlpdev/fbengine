@@ -3,6 +3,7 @@
 // pitch of 1 too, so a pitch can change without a glitch, holds one.
 
 Import std.core
+Import std.math
 Import std.io
 Import std.test
 Import fbengine_audio
@@ -139,8 +140,11 @@ Function ALoopingChannelPlaysUntilStopped() Throws AudioError, SoundError
     Expect(channel.Looping())
     Expect(Audio.Mix(6) == [0.0, 0.5, 0.25, 0.5, 0.25, 0.5] As Float32[])
     Expect(channel.Playing())
+    // A stop ramps to silence over the next stretch mixed, so it doesn't click: half its sample,
+    // then none.
     channel.Stop()
     Expect(!channel.Playing())
+    Expect(Audio.Mix(2) == [0.125, 0.0] As Float32[])
     Expect(Audio.Mix(2) == [0.0, 0.0] As Float32[])
     // A loop turned off plays to its sound's end after what miniaudio read ahead, 512 frames.
     Local again = sound.Play()
@@ -155,18 +159,72 @@ End Function
 Function APausedChannelWaitsWhereItIs() Throws AudioError, SoundError
     Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
     Defer Audio.Stop()
-    Local sound = Try Sound.FromBytes(Wav(quarter))
+    Local sound = Try Sound.FromBytes(Wav(Rising(4800)))
     Local channel = sound.Play(paused: True)
     Expect(channel.Playing())
     Expect(channel.Paused())
     Expect(Audio.Mix(2) == [0.0, 0.0] As Float32[])
+    // Started paused, it starts as it is: a frame late, then frames 0 and 1.
     channel.Resume()
-    Expect(Audio.Mix(2) == [0.0, 0.5] As Float32[])
+    Expect(Audio.Mix(3) == [0.0, 0.0, 4.0 / 32768.0] As Float32[])
+    // A pause ramps to silence over the next stretch mixed, so it doesn't click, then waits.
     channel.Pause()
     Expect(channel.Paused())
-    Expect(Audio.Mix(2) == [0.0, 0.0] As Float32[])
+    Local ramping = Audio.Mix(4)
+    Expect(ramping[0] > 0.0 && ramping[3] == 0.0)
+    Expect(Audio.Mix(4) == [0.0, 0.0, 0.0, 0.0] As Float32[])
+    // Resumed, it ramps back from where it was, not from its start.
     channel.Resume()
-    Expect(Audio.Mix(2) == [-0.25, 0.125] As Float32[])
+    Local back = Audio.Mix(4)
+    Expect(back[0] < back[3])
+    Expect(back[3] * 32768.0 / 4.0 > 5.0 && back[3] * 32768.0 / 4.0 < 12.0)
+End Function
+
+// A pause turned round before it's silent ramps back up, never stopping its sound.
+@Test
+Function APauseResumedWhileItRampsTurnsRound() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    Local channel = sound.Play()
+    Audio.Mix(10)
+    channel.Pause()
+    channel.Resume()
+    Expect(!channel.Paused())
+    Expect(Audio.Mix(4) == [0.5, 0.5, 0.5, 0.5] As Float32[])
+End Function
+
+// A stopped or paused sine ramps to silence: no step is bigger than the sine's own, about 0.0314
+// at 0.5 and 441 Hz in a 44100 Hz mix, where stopping it at once would step by up to 0.5.
+@Test
+Function StopAndPauseDontClick() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 1)
+    Defer Audio.Stop()
+    Local samples: Int[] = []
+    For i = 0 To 99
+        samples.Add((Sin(Tau * (i As Float) / 100.0) * 16384.0) As Int)
+    End For
+    Local sine = Try Sound.FromBytes(Wav(samples, 1, 44100))
+    sine.SetLoop(True)
+    For pausing In [False, True]
+        Local channel = sine.Play()
+        // Stopped at the sine's peak, where an instant stop is the biggest step.
+        Local before = Audio.Mix(26)
+        If pausing
+            channel.Pause()
+        Else
+            channel.Stop()
+        End If
+        Local after = Audio.Mix(512)
+        Local largest = Abs(after[0] - before[25])
+        For i = 1 To 511
+            largest = Max(largest, Abs(after[i] - after[i - 1]))
+        End For
+        Expect(largest < 0.034)
+        Expect(after[511] == 0.0)
+        channel.Stop()
+        Audio.Mix(1)
+    End For
 End Function
 
 @Test

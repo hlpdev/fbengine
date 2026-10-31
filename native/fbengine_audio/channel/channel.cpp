@@ -36,6 +36,22 @@ constexpr std::int32_t linear_law = 2;
 /// How a mono channel's pan is heard in a stereo mix; the main thread's.
 std::int32_t pan_law = balance_law;
 
+/// Where a channel's going quiet is, which its gains ramp to silence for before it pauses or goes,
+/// so neither clicks. The main thread starts it and the mixing thread ends it, each under the live
+/// lock.
+enum class quieting_t : std::uint8_t {
+    /// Playing, or paused before it started.
+    NONE,
+    /// Ramping to silence, to pause.
+    PAUSING,
+    /// Silent, its sound stopped by the mixing thread, to resume.
+    PAUSED,
+    /// Ramping to silence, stopped: its handle finds nothing, and it goes once it's silent.
+    STOPPING,
+    /// Silent and stopped, for the main thread to let go.
+    QUIET,
+};
+
 /// Two floats as one 64-bit value, so the main thread sets both at once and the mixing thread
 /// reads both at once.
 std::uint64_t pack(float left, float right) {
@@ -141,6 +157,10 @@ struct voice_t {
     bool paused = false;
     /// Whether it plays from an emitter, which pans it itself.
     bool spatial = false;
+    /// Whether its gains go to silence, whatever its volume and pan, as it pauses or stops.
+    bool muted = false;
+    /// Where its going quiet is, under the live lock.
+    quieting_t quieting = quieting_t::NONE;
     /// The main thread's, for the mixing thread: whether it finishes once its fade is silent.
     std::atomic<bool> fading_out = false;
     /// The main thread's, for the mixing thread: whether its loop was turned off since the last
@@ -180,13 +200,14 @@ struct voice_t {
     }
 };
 
-/// The channels, and those the mixing thread sees, each joining once it's made and leaving
-/// before it goes; made once and never let go, since a program that ends with the audio started
-/// has its device's thread mixing as the C++ runtime tears down.
+/// The channels, those stopped that are still going quiet, and those the mixing thread sees, each
+/// joining once it's made and leaving before it goes; made once and never let go, since a program
+/// that ends with the audio started has its device's thread mixing as the C++ runtime tears down.
 struct channels_t {
     std::mutex live_lock;
     std::vector<voice_t*> live;
     fbe::audio::pool_t<voice_t> voices{ fbe::audio::kind_t::CHANNEL };
+    std::vector<std::unique_ptr<voice_t>> stopping;
 };
 
 channels_t& channels() {
@@ -240,10 +261,10 @@ std::pair<float, float> sides(const voice_t& voice) {
 }
 
 /// Gives `voice`'s gains its volume and pan, both at once, which a mix that isn't stereo has its
-/// volume only of.
+/// volume only of, or silence while it's going quiet.
 void apply_pan(voice_t& voice) {
-    float left = voice.volume;
-    float right = voice.volume;
+    float left = voice.muted ? 0.0F : voice.volume;
+    float right = left;
     if (voice.gains.channels == 2) {
         const auto [left_side, right_side] = sides(voice);
         left *= left_side;
@@ -277,6 +298,44 @@ void end_loop(voice_t& voice) {
         voice.sound.processingCacheFramesRemaining = static_cast<ma_uint32>(kept);
         ma_data_source_seek_to_pcm_frame(voice.source(), frames);
     }
+}
+
+/// Lets go of the stopped channels that have gone quiet, or whose sounds ended as they did.
+void let_quiet_go() {
+    channels_t& all = channels();
+    std::vector<std::unique_ptr<voice_t>> quiet;
+    {
+        const std::scoped_lock lock(all.live_lock);
+        std::erase_if(all.stopping, [&](std::unique_ptr<voice_t>& voice) {
+            if (voice->quieting != quieting_t::QUIET && !voice->ended()) {
+                return false;
+            }
+            quiet.push_back(std::move(voice));
+            return true;
+        });
+    }
+    // They go outside the lock, which their leaving the mixing thread's list takes.
+}
+
+/// Stops the channel `handle` is for: its handle finds nothing from now, and it goes once it has
+/// ramped to silence, or now if it's silent already, paused or ended.
+void stop(std::uint64_t handle) {
+    std::unique_ptr<voice_t> stopped = channels().voices.remove(handle);
+    if (stopped == nullptr || stopped->ended()) {
+        return;
+    }
+    stopped->muted = true;
+    apply_pan(*stopped);
+    const std::scoped_lock lock(channels().live_lock);
+    if (stopped->paused && stopped->quieting != quieting_t::PAUSING) {
+        // It goes as this returns, after the lock, which its leaving the mixing thread's list
+        // takes.
+        stopped->quieting = quieting_t::QUIET;
+        channels().stopping.push_back(std::move(stopped));
+        return;
+    }
+    stopped->quieting = quieting_t::STOPPING;
+    channels().stopping.push_back(std::move(stopped));
 }
 
 /// The frames a fade of `seconds` takes in the mix.
@@ -347,6 +406,7 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
         return 0;
     }
     channels().voices.remove_if([](const voice_t& voice) { return voice.ended(); });
+    let_quiet_go();
 
     auto voice = std::make_unique<voice_t>();
     voice->data = std::move(data);
@@ -446,6 +506,11 @@ bool set_doppler(std::uint64_t handle, float doppler) {
 
 void end_channels() {
     channels().voices.clear();
+    std::vector<std::unique_ptr<voice_t>> stopping;
+    {
+        const std::scoped_lock lock(channels().live_lock);
+        stopping.swap(channels().stopping);
+    }
 }
 
 void before_mix() {
@@ -482,6 +547,15 @@ void after_mix() {
             ma_sound_stop(&voice->sound);
             voice->faded_out.store(true, std::memory_order_release);
         }
+        // Gone quiet, a pausing channel's sound stops, and a stopped one's is ready to go.
+        const bool silent = voice->gains.left == 0.0F && voice->gains.right == 0.0F;
+        if (silent && voice->quieting == quieting_t::PAUSING) {
+            ma_sound_stop(&voice->sound);
+            voice->quieting = quieting_t::PAUSED;
+        } else if (silent && voice->quieting == quieting_t::STOPPING) {
+            ma_sound_stop(&voice->sound);
+            voice->quieting = quieting_t::QUIET;
+        }
     }
 }
 
@@ -499,23 +573,39 @@ FBE_AUDIO_API bool fbe_channel_paused(uint64_t channel) {
 }
 
 FBE_AUDIO_API void fbe_channel_stop(uint64_t channel) {
-    channels().voices.remove(channel);
+    stop(channel);
 }
 
+// A pause ramps to silence first, and the mixing thread stops the sound once it's there.
 FBE_AUDIO_API void fbe_channel_pause(uint64_t channel) {
     voice_t* voice = find(channel);
-    if (voice != nullptr && !voice->paused) {
-        ma_sound_stop(&voice->sound);
-        voice->paused = true;
+    if (voice == nullptr || voice->paused) {
+        return;
     }
+    voice->paused = true;
+    voice->muted = true;
+    apply_pan(*voice);
+    const std::scoped_lock lock(channels().live_lock);
+    voice->quieting = quieting_t::PAUSING;
 }
 
+// A resume ramps back from silence: a pause still ramping only turns round; one the mixing
+// thread finished starts its sound again; one that started paused just starts.
 FBE_AUDIO_API void fbe_channel_resume(uint64_t channel) {
     voice_t* voice = find(channel);
-    if (voice != nullptr && voice->paused) {
-        ma_sound_start(&voice->sound);
-        voice->paused = false;
+    if (voice == nullptr || !voice->paused) {
+        return;
     }
+    {
+        const std::scoped_lock lock(channels().live_lock);
+        if (voice->quieting != quieting_t::PAUSING) {
+            ma_sound_start(&voice->sound);
+        }
+        voice->quieting = quieting_t::NONE;
+    }
+    voice->paused = false;
+    voice->muted = false;
+    apply_pan(*voice);
 }
 
 FBE_AUDIO_API bool fbe_channel_set_volume(uint64_t channel, float volume) {
@@ -634,7 +724,7 @@ FBE_AUDIO_API bool fbe_channel_fade_out(uint64_t channel, double seconds) {
         return true;
     }
     if (seconds == 0.0) {
-        channels().voices.remove(channel);
+        stop(channel);
         return true;
     }
     ma_sound_set_fade_in_pcm_frames(&voice->sound, -1.0F, 0.0F, fade_frames(seconds));
@@ -676,6 +766,7 @@ FBE_AUDIO_API int32_t fbe_channel_pan_law(void) {
 
 FBE_AUDIO_API int32_t fbe_channel_count(void) {
     channels().voices.remove_if([](const voice_t& voice) { return voice.ended(); });
+    let_quiet_go();
     return static_cast<int32_t>(channels().voices.count());
 }
 
