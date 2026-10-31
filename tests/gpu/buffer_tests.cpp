@@ -193,3 +193,27 @@ TEST_CASE("the frame's ring gives aligned space, grows, and starts again each fr
     CHECK(again.offset == 0);
     stop_gpu();
 }
+
+// A readback mid-frame submits what's recorded, but the frame goes on, and so does its ring: slices
+// handed out before it stay the frame's, and the ring starts again only as a Flip moves on.
+TEST_CASE("the frame's ring keeps its slices across a readback", "[gpu]") {
+    start();
+    const std::uint64_t texture = fbe_texture_create(1, 1, FBE_TEXTURE_RGBA8_LINEAR, false);
+    REQUIRE(texture != 0);
+    const fbe::gpu::slice_t first = fbe::gpu::frame_memory(64, 16);
+    REQUIRE(first.data != nullptr);
+    std::array<std::uint8_t, 4> pixels{};
+    require(fbe_texture_read(texture, 0, pixels.data(), 4));
+    const fbe::gpu::slice_t second = fbe::gpu::frame_memory(64, 16);
+    CHECK(second.buffer == first.buffer);
+    CHECK(second.offset >= first.offset + 64);
+    // The next frame in flight has its own; the one after this one starts it again.
+    fbe_frame_flip(false);
+    CHECK(fbe::gpu::frame_memory(64, 16).buffer != first.buffer);
+    fbe_frame_flip(false);
+    const fbe::gpu::slice_t again = fbe::gpu::frame_memory(64, 16);
+    CHECK(again.buffer == first.buffer);
+    CHECK(again.offset == 0);
+    REQUIRE(fbe_texture_release(texture));
+    stop_gpu();
+}

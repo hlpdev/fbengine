@@ -133,7 +133,10 @@ endif()
 # what it does, on the tests' Vulkan.
 if(FBENGINE_FB_TESTS)
   set(fbengine_texture_panics
-      "wrapped-size=32768 by 16385 pixels of RGBA16F are 4295229440 bytes, not 262144")
+      "wrapped-size=32768 by 16385 pixels of RGBA16F are 4295229440 bytes, not 262144"
+      "lod-bias=a LOD bias is -16 to 16, not 17"
+      "anisotropy=anisotropy is 1, for none, to 16, not 0.5"
+      "screen-samples=the screen draws 1, 2, 4, or 8 samples a pixel, not 3")
   foreach(case IN LISTS fbengine_texture_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)

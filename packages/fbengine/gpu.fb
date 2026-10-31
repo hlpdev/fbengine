@@ -123,9 +123,11 @@ Public Class Gpu
 
     /// Biases which mipmap every texture is read from, added to the one the GPU picks: negative
     /// is sharper, and can shimmer, positive blurrier, as a texture detail setting wants; from -16
-    /// to 16, which the GPU's own limit clamps further. It panics for one outside.
-    @MainThread Public Static Method SetLodBias(bias: Float32)
-        If !fbe_gpu_set_lod_bias(bias) Then Panic(LastError())
+    /// to 16, which the GPU's own limit clamps further. It panics for one outside, and throws,
+    /// keeping the bias it had, when the GPU can't make samplers with it.
+    @MainThread Public Static Method SetLodBias(bias: Float32) Throws GraphicsError
+        If !(bias >= -16.0 && bias <= 16.0) Then Panic("a LOD bias is -16 to 16, not {bias}")
+        If !fbe_gpu_set_lod_bias(bias) Then Throw GraphicsError(LastError())
     End Method
 
     /// How every texture's mipmaps are biased, 0 unless set.
@@ -133,9 +135,12 @@ Public Class Gpu
 
     /// Sets the most anisotropic filtering textures filtered LINEAR get, sharper at glancing
     /// angles: 1 for none, the default, up to 16, which MaxAnisotropy clamps. It panics for one
-    /// outside.
-    @MainThread Public Static Method SetAnisotropy(anisotropy: Float32)
-        If !fbe_gpu_set_anisotropy(anisotropy) Then Panic(LastError())
+    /// outside, and throws, keeping what it had, when the GPU can't make samplers with it.
+    @MainThread Public Static Method SetAnisotropy(anisotropy: Float32) Throws GraphicsError
+        If !(anisotropy >= 1.0 && anisotropy <= 16.0)
+            Panic("anisotropy is 1, for none, to 16, not {anisotropy}")
+        End If
+        If !fbe_gpu_set_anisotropy(anisotropy) Then Throw GraphicsError(LastError())
     End Method
 
     /// The most anisotropic filtering textures get, as set.

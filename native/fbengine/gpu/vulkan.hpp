@@ -167,7 +167,7 @@ void write_texture(std::uint32_t index, VkImageView view);
 /// The screen, for a window `window` pixels big: made again if the size it should be, its own or
 /// the window's, or its samples changed, its handle, or the old one's, or 0, if it can't be made.
 std::uint64_t update_screen(VkExtent2D window);
-/// The part of a window `window` pixels big the screen is shown in, as it's scaled.
+/// The part of a window `window` pixels big the screen there is now is shown in, as it's scaled.
 VkRect2D screen_area(VkExtent2D window);
 /// The screen's handle, 0 without one, and whether it's scaled smoothly.
 std::uint64_t screen_handle();
@@ -177,6 +177,8 @@ void close_screen();
 void stop_screen();
 /// A headless window's image as the last Flip left it, RGBA, rows top first; empty without one.
 std::vector<std::uint8_t> read_window();
+/// Whether a window's open, which the GPU draws the screen for.
+bool window_open();
 
 /// The index of the sampler for a filter and a wrap in U and V, fbe_texture.h's.
 std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32_t wrap_v);

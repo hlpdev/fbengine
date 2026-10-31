@@ -1,5 +1,6 @@
-// Texture's panics, each a mistake a game can make, which fb test can't catch: ctest runs this with
-// a case's name and checks it panics with the case's message.
+// Texture's panics, and the GPU's and the screen's settings', each a mistake a game can make,
+// which fb test can't catch: ctest runs this with a case's name and checks it panics with the
+// case's message.
 
 Import std.core
 Import std.os
@@ -16,6 +17,12 @@ Function Run(name: String) Throws GraphicsError
                 bytes.Add(0)
             End For
             texture.WritePixels(0, 0, 32768, 16385, bytes)
+        Case "lod-bias"
+            Try Gpu.SetLodBias(17)
+        Case "anisotropy"
+            Try Gpu.SetAnisotropy(0.5)
+        Case "screen-samples"
+            Try Screen.SetSamples(3)
         Default
             Panic("no such case as {name}")
     End Select

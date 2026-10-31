@@ -407,10 +407,13 @@ bool make(std::uint32_t slot, const spec_t& spec) {
     return true;
 }
 
-/// Uploads `width` by `height` pixels at `x`, `y` into level 0, rows `pitch` bytes apart, through
-/// a staging buffer freed after the frame, and makes the mipmaps again.
-bool upload(texture_t& texture, std::uint32_t x, std::uint32_t y, std::uint32_t width,
-            std::uint32_t height, const std::uint8_t* pixels, std::uint32_t pitch) {
+/// Uploads `width` by `height` pixels at `x`, `y` into level 0 of `handle`'s texture, rows `pitch`
+/// bytes apart, through a staging buffer freed after the frame, and makes the mipmaps again: in the
+/// uploads, before the frame's commands, unless a pass of the frame's graph uses the texture, and
+/// then in a pass after it, so writes and what else the frame does with a texture keep their order.
+bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std::uint32_t y,
+            std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
+            std::uint32_t pitch) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
     const VkBufferCreateInfo buffer_info{
@@ -441,16 +444,28 @@ bool upload(texture_t& texture, std::uint32_t x, std::uint32_t y, std::uint32_t 
     fbe::gpu::after_frame(
         [buffer, memory] { vmaDestroyBuffer(fbe::gpu::device()->allocator, buffer, memory); });
 
-    VkCommandBuffer commands = fbe::gpu::upload_commands();
-    fbe::gpu::barrier(commands, levels_barrier(texture.image, 0, texture.levels,
-                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, resting_stages,
-                                               0, transfer, transfer_write));
     const VkBufferImageCopy region{
         .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1 },
         .imageOffset = { .x = static_cast<std::int32_t>(x), .y = static_cast<std::int32_t>(y) },
         .imageExtent = { .width = width, .height = height, .depth = 1 },
     };
+    if (fbe::gpu::in_graph(handle)) {
+        return fbe::gpu::add_pass({
+            .name = "write",
+            .uses = { { fbe::gpu::texture_resource(handle), fbe::gpu::use_t::MIPMAPPED } },
+            .record =
+                [buffer, written = texture, region](VkCommandBuffer commands) {
+                    vkCmdCopyBufferToImage(commands, buffer, written.image,
+                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                    record_mipmaps(commands, written);
+                },
+        });
+    }
+    VkCommandBuffer commands = fbe::gpu::upload_commands();
+    fbe::gpu::barrier(commands, levels_barrier(texture.image, 0, texture.levels,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, resting_stages,
+                                               0, transfer, transfer_write));
     vkCmdCopyBufferToImage(commands, buffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                            &region);
     record_mipmaps(commands, texture);
@@ -585,7 +600,7 @@ bool start_textures() {
         return false;
     }
     const std::array<std::uint8_t, 4> white{ 255, 255, 255, 255 };
-    return upload(textures[slot], 0, 0, 1, 1, white.data(), 4);
+    return upload(handle_of(slot), textures[slot], 0, 0, 1, 1, white.data(), 4);
 }
 
 void stop_textures() {
@@ -833,7 +848,7 @@ FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t w
         return fbe::fail(std::format("a row of {} pixels is {} bytes, more than the pitch {}",
                                      width, row, pitch));
     }
-    return upload(*found, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y),
+    return upload(texture, *found, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y),
                   static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), pixels,
                   static_cast<std::uint32_t>(pitch));
 }

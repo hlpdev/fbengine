@@ -753,6 +753,10 @@ resource_t external_resource(const external_t& image) {
     return static_cast<resource_t>(resources.size() - 1);
 }
 
+bool in_graph(std::uint64_t handle) {
+    return by_handle().contains(handle);
+}
+
 bool add_pass(pass_t pass) {
     if (recording) {
         return fail("a pass isn't added as the frame's graph is recorded");

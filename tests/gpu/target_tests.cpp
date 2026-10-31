@@ -241,7 +241,12 @@ TEST_CASE("a clear sets every level, and a target's depth", "[gpu]") {
     const std::uint64_t mipmapped = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA8_LINEAR, true);
     require(fbe_texture_clear(mipmapped, 1.0F, 0.5F, 0.0F, 1.0F));
     const std::vector<std::uint8_t> last = fbe::texture::read(mipmapped, 2);
-    CHECK(last == std::vector<std::uint8_t>{ 255, 128, 0, 255 });
+    REQUIRE(last.size() == 4);
+    CHECK(last[0] == 255);
+    // 0.5 is 127 or 128, as a GPU rounds it.
+    CHECK((last[1] == 127 || last[1] == 128));
+    CHECK(last[2] == 0);
+    CHECK(last[3] == 255);
     // The target's depth is cleared to the farthest, so anything nearer draws.
     const std::uint64_t made = target(8, 8, 1, true);
     draw(made, navy, { { .color = red, .offset = {}, .size = 1.0F, .depth = 0.9F } });
@@ -399,5 +404,86 @@ TEST_CASE("a 1920x1080 Flip, its screen scaled in, timed", "[gpu]") {
         std::chrono::steady_clock::now() - started;
     WARN("a 1920x1080 Flip with its screen: " << spent.count() / frames << " ms on "
                                               << fbe_gpu_device_name(fbe_gpu_device()));
+    stop_gpu();
+}
+
+// The window's resized after a Flip, and the frame's drawn into the screen there is, as of that
+// Flip: the next Flip shows that frame, fitted into the new size, and then makes a screen the new
+// size for the frame after.
+TEST_CASE("the frame drawn as the window resizes is the one Flip shows", "[gpu]") {
+    open(160, 100);
+    require(fbe_texture_clear(fbe_gpu_screen(), 1.0F, 0.0F, 0.0F, 1.0F));
+    fbe_frame_flip(false);
+    require(fbe_window_open(200, 120, FBE_WINDOW_WINDOWED));
+    const std::uint64_t drawn_into = fbe_gpu_screen();
+    CHECK(fbe_texture_width(drawn_into) == 160);
+    require(fbe_texture_clear(drawn_into, 0.0F, 1.0F, 0.0F, 1.0F));
+    const fbe::golden::frame_t frame = flipped();
+    REQUIRE(frame.width == 200);
+    CHECK(pixel(frame, 100, 60) == std::array<std::uint8_t, 4>{ 0, 255, 0, 255 });
+    // 160x100 fitted into 200x120 is 192x120, with bars 4 wide.
+    CHECK(pixel(frame, 1, 60) == std::array<std::uint8_t, 4>{ 0, 0, 0, 255 });
+    CHECK(fbe_gpu_screen() != drawn_into);
+    CHECK(fbe_texture_width(fbe_gpu_screen()) == 200);
+    CHECK(fbe_texture_height(fbe_gpu_screen()) == 120);
+    stop_gpu();
+}
+
+// Set before the GPU starts, which can't say yet what it draws, a count it lacks gives the most it
+// draws below; set after, it's refused, and the screen stays as it was.
+TEST_CASE("the screen draws only samples the GPU has", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    fbe_gpu_set_pipeline_cache("");
+    require(fbe_gpu_set_render_samples(2));
+    require(fbe_window_open(64, 32, FBE_WINDOW_WINDOWED));
+    require(fbe_gpu_start());
+    const VkPhysicalDeviceLimits& limits = fbe::gpu::device()->properties.limits;
+    const auto draws = [&limits](std::int32_t count) {
+        return (limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts &
+                static_cast<std::uint32_t>(count)) != 0;
+    };
+    const std::int32_t first = draws(2) ? 2 : 1;
+    REQUIRE(fbe_gpu_screen() != 0);
+    CHECK(fbe_texture_samples(fbe_gpu_screen()) == first);
+    CHECK(fbe_gpu_render_samples() == first);
+    for (const std::int32_t count : { 2, 4, 8 }) {
+        INFO(count << " samples");
+        const std::int32_t before = fbe_gpu_render_samples();
+        if (draws(count)) {
+            require(fbe_gpu_set_render_samples(count));
+            CHECK(fbe_texture_samples(fbe_gpu_screen()) == count);
+        } else {
+            CHECK(!fbe_gpu_set_render_samples(count));
+            CHECK(std::string(fbe_error()) ==
+                  "this GPU doesn't draw " + std::to_string(count) + " samples a pixel");
+            CHECK(fbe_gpu_render_samples() == before);
+        }
+    }
+    require(fbe_gpu_set_render_samples(1));
+    CHECK(fbe_texture_samples(fbe_gpu_screen()) == 1);
+    stop_gpu();
+}
+
+// Nothing but the screen starts the GPU for a headless window, whose screen's there at once.
+TEST_CASE("a headless window's screen is there before anything starts the GPU", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    fbe_gpu_set_pipeline_cache("");
+    require(fbe_window_open(32, 16, FBE_WINDOW_WINDOWED));
+    REQUIRE(!fbe_gpu_started());
+    const std::uint64_t screen = fbe_gpu_screen();
+    CHECK(screen != 0);
+    CHECK(fbe_gpu_started());
+    CHECK(fbe_texture_width(screen) == 32);
+    stop_gpu();
+}
+
+// A target's clip space is Vulkan's, y down: a shape at clip y -0.5 is in its top half.
+TEST_CASE("a target's clip space is y down", "[gpu]") {
+    start();
+    const std::uint64_t made = target(16, 16, 1, false);
+    draw(made, navy, { { .color = red, .offset = { 0.0F, -0.5F }, .size = 0.4F, .depth = 0.5F } });
+    const fbe::golden::frame_t frame = read(made);
+    CHECK(pixel(frame, 8, 4) == std::array<std::uint8_t, 4>{ 255, 0, 0, 255 });
+    CHECK(pixel(frame, 8, 12)[0] == 0);
     stop_gpu();
 }

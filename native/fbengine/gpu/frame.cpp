@@ -47,7 +47,6 @@ fbe::gpu::frame_t& begin() {
     }
     vkWaitForFences(gpu.device, 1, &frame.done, VK_TRUE, UINT64_MAX);
     collect(frame);
-    frame.ring_used = 0;
     vkResetCommandPool(gpu.device, frame.pool, 0);
     const VkCommandBufferBeginInfo info{
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -215,6 +214,9 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
     }
     begin();
     const bool submitted = submit(gpu, frame, wait, signal);
+    // Its ring starts again as the frame's begun next, once the GPU's done with it; a readback's
+    // submit, mid-frame, leaves it, as slices handed out before are still the frame's.
+    frame.ring_used = 0;
     gpu.frame = (gpu.frame + 1) % frames_in_flight;
     return submitted;
 }

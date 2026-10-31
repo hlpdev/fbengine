@@ -76,10 +76,10 @@ Function TheLodBiasAndAnisotropyAreEveryTextures() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Window.SetHeadless(True)
     Try Gpu.Start()
-    Defer Gpu.SetLodBias(0.0)
-    Defer Gpu.SetAnisotropy(1.0)
-    Gpu.SetLodBias(-0.4)
-    Gpu.SetAnisotropy(8.0)
+    Defer Try? Gpu.SetLodBias(0.0)
+    Defer Try? Gpu.SetAnisotropy(1.0)
+    Try Gpu.SetLodBias(-0.4)
+    Try Gpu.SetAnisotropy(8.0)
     Expect(Gpu.LodBias() == -0.4)
     Expect(Gpu.Anisotropy() == 8.0)
     Expect(Gpu.MaxAnisotropy() >= 1.0)
@@ -96,4 +96,12 @@ Function StoppingTheGpuFreesEveryTexture() Throws GraphicsError
     Local again = Try Texture(4, 4)
     Expect(!again.Freed())
     Expect(Gpu.ValidationErrors() == 0)
+End Function
+
+@Test
+Function ALevelsBytesAreMoreThanAnInt32Holds()
+    // 16384 by 16384 RGBA16F pixels are 2 GiB, one more than Int32's most.
+    Expect(Texture.Bytes(16384, 16384, TextureFormat.RGBA16F) == 2147483648)
+    Expect(Texture.Bytes(4, 4, TextureFormat.R8) == 16)
+    Expect(Texture.Bytes(3, 2, TextureFormat.RGBA8) == 24)
 End Function

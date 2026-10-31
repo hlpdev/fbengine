@@ -91,8 +91,10 @@ FBE_API float fbe_gpu_anisotropy(void);
 FBE_API float fbe_gpu_max_anisotropy(void);
 
 // The screen: the target, a texture, each frame's drawn into, RGBA8 with depth, which Flip shows
-// in the window, scaled; 0 without a window. It's made again, a new texture, when its size or
-// samples change, and its pixels stay from one Flip to the next.
+// in the window, scaled, starting the GPU if nothing has; 0 without a window, or if the GPU can't
+// start. It's made again, a new texture, when its size or samples change, a new size of the
+// window's once the Flip after it has shown the frame drawn into the old one, and its pixels stay
+// from one Flip to the next.
 FBE_API uint64_t fbe_gpu_screen(void);
 // The screen's size in pixels, 0 by 0 for the window's in pixels, which it follows as of the last
 // fbe_frame_flip; false if it's not 1 to 16384 a side. A new size, or samples, makes the screen
@@ -100,7 +102,9 @@ FBE_API uint64_t fbe_gpu_screen(void);
 FBE_API bool fbe_gpu_set_render_size(int32_t width, int32_t height);
 FBE_API int32_t fbe_gpu_render_width(void);
 FBE_API int32_t fbe_gpu_render_height(void);
-// How many samples the screen draws a pixel, 1, 2, 4, or 8; false for another.
+// How many samples the screen draws a pixel, 1, 2, 4, or 8; false for another, or, once the GPU's
+// started, for one it doesn't draw. Set before, the screen draws the most the GPU does, up to it,
+// and fbe_gpu_render_samples is what the screen draws.
 FBE_API bool fbe_gpu_set_render_samples(int32_t samples);
 FBE_API int32_t fbe_gpu_render_samples(void);
 // How the screen is scaled into the window, an FBE_GPU_ scaling, FIT unless set, and whether
@@ -108,7 +112,8 @@ FBE_API int32_t fbe_gpu_render_samples(void);
 FBE_API bool fbe_gpu_set_scaling(int32_t scaling, bool smooth);
 FBE_API int32_t fbe_gpu_scaling(void);
 FBE_API bool fbe_gpu_scaling_smooth(void);
-// The part of the window the screen's shown in, in the window's pixels; false without a window.
+// The part of the window the screen there is now is shown in, in the window's pixels; false
+// without a window.
 FBE_API bool fbe_gpu_screen_area(fbe_gpu_rect_t* area);
 
 // How many errors Vulkan's validation layers have found since the program started, which are on

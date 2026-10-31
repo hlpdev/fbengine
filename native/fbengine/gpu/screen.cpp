@@ -34,6 +34,26 @@ VkExtent2D size_for(VkExtent2D window) {
     return wanted.width != 0 ? wanted : window;
 }
 
+/// Whether the GPU draws `count` samples a pixel into a target with depth, as the screen is.
+bool draws(std::int32_t count) {
+    const VkPhysicalDeviceLimits& limits = fbe::gpu::device()->properties.limits;
+    return (limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts &
+            static_cast<std::uint32_t>(count)) != 0;
+}
+
+/// The samples the screen draws: as many as asked, or, where the GPU lacks that many, as it set
+/// before the GPU started, the most it draws below.
+std::int32_t drawn_samples() {
+    if (fbe::gpu::device() == nullptr) {
+        return samples;
+    }
+    std::int32_t count = samples;
+    while (count > 1 && !draws(count)) {
+        count /= 2;
+    }
+    return count;
+}
+
 } // namespace
 
 namespace fbe::gpu {
@@ -44,14 +64,15 @@ std::uint64_t update_screen(VkExtent2D window) {
     if (size.width == 0 || size.height == 0) {
         return screen;
     }
+    const std::int32_t count = drawn_samples();
     if (screen != 0 && size.width == made.width && size.height == made.height &&
-        samples == made_samples && fbe_texture_width(screen) > 0) {
+        count == made_samples && fbe_texture_width(screen) > 0) {
         return screen;
     }
     // A screen that can't be made leaves the old one, if there is one, which Flip shows.
     const std::uint64_t made_now = fbe_texture_create_target(static_cast<std::int32_t>(size.width),
                                                              static_cast<std::int32_t>(size.height),
-                                                             FBE_TEXTURE_RGBA8, samples, true);
+                                                             FBE_TEXTURE_RGBA8, count, true);
     if (made_now == 0) {
         return screen;
     }
@@ -60,12 +81,13 @@ std::uint64_t update_screen(VkExtent2D window) {
     }
     screen = made_now;
     made = size;
-    made_samples = samples;
+    made_samples = count;
     return screen;
 }
 
 VkRect2D screen_area(VkExtent2D window) {
-    const VkExtent2D size = size_for(window);
+    // The screen there is, which can be a size the window's no longer, until the next Flip.
+    const VkExtent2D size = screen != 0 ? made : size_for(window);
     if (size.width == 0 || size.height == 0 || scaling == FBE_GPU_STRETCH) {
         return { .extent = window };
     }
@@ -114,7 +136,11 @@ void stop_screen() {
 extern "C" {
 
 FBE_API uint64_t fbe_gpu_screen(void) {
-    return fbe::gpu::screen_handle();
+    // A headless window's screen is made as the GPU starts, which nothing else may have started.
+    if (screen == 0 && fbe::gpu::window_open() && fbe::gpu::device() == nullptr) {
+        fbe::gpu::start_with_window();
+    }
+    return screen;
 }
 
 FBE_API bool fbe_gpu_set_render_size(int32_t width, int32_t height) {
@@ -147,6 +173,10 @@ FBE_API bool fbe_gpu_set_render_samples(int32_t count) {
         return fbe::fail(
             std::format("the screen draws 1, 2, 4, or 8 samples a pixel, not {}", count));
     }
+    // Before the GPU starts, what it draws isn't known, and the screen draws the most it can.
+    if (fbe::gpu::device() != nullptr && !draws(count)) {
+        return fbe::fail(std::format("this GPU doesn't draw {} samples a pixel", count));
+    }
     samples = count;
     if (screen != 0) {
         fbe::gpu::update_screen(window_size);
@@ -155,7 +185,7 @@ FBE_API bool fbe_gpu_set_render_samples(int32_t count) {
 }
 
 FBE_API int32_t fbe_gpu_render_samples(void) {
-    return samples;
+    return screen != 0 ? made_samples : samples;
 }
 
 FBE_API bool fbe_gpu_set_scaling(int32_t mode, bool smoothly) {

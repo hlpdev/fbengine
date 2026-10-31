@@ -98,6 +98,10 @@ struct external_t {
 
 resource_t external_resource(const external_t& image);
 
+/// Whether a texture's in the graph, as a pass added since it was last recorded uses it, so what's
+/// done with it next, as a write of its pixels, is a pass after those.
+bool in_graph(std::uint64_t handle);
+
 /// Adds a pass to the graph, after those added before, which it runs after; false, with
 /// fbe_error's why, if what it uses isn't in the graph, isn't a target where it draws, is used
 /// twice, or its targets don't match.

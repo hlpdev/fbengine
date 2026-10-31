@@ -53,7 +53,7 @@ struct shape_t {
 };
 
 /// What the textured shader's push constants are.
-struct quad_t {
+struct textured_t {
     std::array<float, 4> rect;
     std::array<float, 4> uv;
     std::uint32_t texture;
@@ -122,7 +122,7 @@ void quad(std::string_view name, resource_t into, resource_t from,
                 VkDescriptorSet set = fbe::gpu::bindless_set();
                 vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         fbe::gpu::pipeline_layout(), 0, 1, &set, 0, nullptr);
-                push(commands, quad_t{
+                push(commands, textured_t{
                                    .rect = rect,
                                    .uv = { 0.0F, 0.0F, 1.0F, 1.0F },
                                    .texture = fbe::gpu::resource_index(from),
@@ -589,7 +589,7 @@ TEST_CASE("a frame of 65 passes through the graph, timed", "[gpu]") {
                         vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                                 fbe::gpu::pipeline_layout(), 0, 1, &set, 0,
                                                 nullptr);
-                        push(commands, quad_t{
+                        push(commands, textured_t{
                                            .rect = { left, -0.5F, left + 0.0625F, 0.5F },
                                            .uv = { 0.0F, 0.0F, 1.0F, 1.0F },
                                            .texture = fbe::gpu::resource_index(drawn),
@@ -627,5 +627,46 @@ TEST_CASE("a frame of 65 passes through the graph, timed", "[gpu]") {
                               << spent.count() / frames << " ms, on "
                               << fbe_gpu_device_name(fbe_gpu_device()));
     fbe_window_close();
+    stop_gpu();
+}
+
+// A write's in turn with what else the frame does with a texture: after a clear, a copy, or a draw
+// sampling it that came before, as a pass of its own, and before what comes after; a texture the
+// frame hasn't used yet is written in the uploads, before the frame's commands.
+TEST_CASE("a write comes in turn with what the frame does with the texture", "[gpu]") {
+    begin_test();
+    const std::uint64_t texture = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA8_LINEAR, false);
+    REQUIRE(texture != 0);
+    const std::vector<std::uint8_t> blue{
+        0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255,
+    };
+    const std::vector<std::uint8_t> red{
+        255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+    };
+    require(fbe_texture_clear(texture, 1.0F, 0.0F, 0.0F, 1.0F));
+    require(fbe_texture_write(texture, 0, 0, 2, 2, blue.data(), 8));
+    CHECK(fbe::texture::read(texture, 0) == blue);
+    CHECK(fbe::gpu::last_recorded().passes == std::vector<std::string_view>{ "clear", "write" });
+
+    const std::uint64_t green = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA8_LINEAR, false);
+    REQUIRE(green != 0);
+    require(fbe_texture_clear(green, 0.0F, 1.0F, 0.0F, 1.0F));
+    require(fbe::gpu::finish_frame());
+    require(fbe_texture_copy(texture, 0, 0, green, 0, 0, 2, 2));
+    require(fbe_texture_write(texture, 0, 0, 2, 2, blue.data(), 8));
+    CHECK(fbe::texture::read(texture, 0) == blue);
+
+    // Drawn with before the write, it's drawn as it was.
+    const std::uint64_t shown = target(2, 2);
+    quad("drawn", fbe::gpu::texture_resource(shown), fbe::gpu::texture_resource(texture));
+    require(fbe_texture_write(texture, 0, 0, 2, 2, red.data(), 8));
+    CHECK(pixel(read(shown), 1, 1) == blue8);
+    CHECK(fbe::texture::read(texture, 0) == red);
+
+    // Written before the frame uses it, it's in the uploads, and what's drawn with it after has it.
+    require(fbe_texture_write(texture, 0, 0, 2, 2, blue.data(), 8));
+    quad("drawn", fbe::gpu::texture_resource(shown), fbe::gpu::texture_resource(texture));
+    CHECK(pixel(read(shown), 1, 1) == blue8);
+    CHECK(fbe::gpu::last_recorded().passes == std::vector<std::string_view>{ "drawn" });
     stop_gpu();
 }

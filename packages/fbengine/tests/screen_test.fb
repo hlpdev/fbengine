@@ -50,8 +50,8 @@ Function TheScreensOwnSizeIsFittedIntoTheWindow() Throws GraphicsError
     Expect(Screen.Scaling() == Scaling.INTEGER)
     Expect(!Screen.Smooth())
     Expect(Screen.Area() == Rect(16, 2, 128, 96))
-    Screen.SetSamples(4)
-    Defer Screen.SetSamples(1)
+    Try Screen.SetSamples(4)
+    Defer Try? Screen.SetSamples(1)
     Expect((Screen.Texture()?.Samples() ?? 0) == 4)
 End Function
 
@@ -102,4 +102,32 @@ Function ATargetIsClearedCopiedAndReadBack() Throws GraphicsError
     Local gray = Try Texture(2, 2, TextureFormat.R8, False)
     gray.WritePixels(0, 0, 2, 2, [1 As UInt8, 2, 3, 4])
     Expect(gray.ReadPixels() == [1 As UInt8, 2, 3, 4])
+End Function
+
+@Test
+Function AHeadlessWindowsScreenIsThereBeforeTheGpuStarts() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Gpu.Stop()
+    Window.SetHeadless(True)
+    Try Graphics(64, 32)
+    Defer EndGraphics()
+    Expect(Screen.Texture() != Null)
+    Expect(Gpu.Started())
+    Expect(Screen.Width() == Window.PixelWidth())
+    Local image = Try Screen.ToImage()
+    Expect(image.Width == Window.PixelWidth())
+End Function
+
+@Test
+Function AScreenshotIsOpaqueAsTheWindowShowsIt() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(32, 16)
+    Defer EndGraphics()
+    // A new screen's transparent black, and the window shows it black.
+    Local image = Try Screen.ToImage()
+    Expect(image[3, 3] == Color32(0, 0, 0, 255))
+    Screen.Texture()?.Clear(Color(0, 0, 1, 0.25))
+    image = Try Screen.ToImage()
+    Expect(image[3, 3] == Color32(0, 0, 255, 255))
 End Function

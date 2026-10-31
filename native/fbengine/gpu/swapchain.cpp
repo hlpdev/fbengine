@@ -372,9 +372,9 @@ struct present_t {
     std::uint32_t encode;
 };
 
-/// Records drawing the screen, the graph's `screen`, into its area of the window's image, a
+/// Records drawing the screen, the graph's `screen`, into `area` of the window's image, a
 /// triangle covering it.
-void draw_screen(VkCommandBuffer commands, fbe::gpu::resource_t screen) {
+void draw_screen(VkCommandBuffer commands, fbe::gpu::resource_t screen, const VkRect2D& area) {
     if (screen == fbe::gpu::no_resource) {
         return;
     }
@@ -382,7 +382,6 @@ void draw_screen(VkCommandBuffer commands, fbe::gpu::resource_t screen) {
     if (pipeline == VK_NULL_HANDLE) {
         return;
     }
-    const VkRect2D area = fbe::gpu::screen_area(extent);
     const VkViewport viewport{
         .x = static_cast<float>(area.offset.x),
         .y = static_cast<float>(area.offset.y),
@@ -411,10 +410,10 @@ void draw_screen(VkCommandBuffer commands, fbe::gpu::resource_t screen) {
 }
 
 /// Adds the frame's last pass to the graph, into the window's image `index`: cleared, the screen
-/// drawn into it, then left to be presented, or, a headless window's, to be copied from. A
-/// headless window's one image is drawn by each frame in flight, so its first use waits for the
-/// frame before's copies.
-void add_present(std::uint32_t index) {
+/// the frame drew into, `drawn`, drawn into it, scaled to the window's size now, then left to be
+/// presented, or, a headless window's, to be copied from. A headless window's one image is drawn
+/// by each frame in flight, so its first use waits for the frame before's copies.
+void add_present(std::uint32_t index, std::uint64_t drawn) {
     const auto output =
         flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
     const auto copy = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COPY_BIT);
@@ -428,14 +427,14 @@ void add_present(std::uint32_t index) {
         .stages = presents ? output : copy,
         .access = presents ? 0 : flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT),
     });
-    const std::uint64_t handle = fbe::gpu::screen_handle();
     const fbe::gpu::resource_t screen =
-        handle != 0 ? fbe::gpu::texture_resource(handle) : fbe::gpu::no_resource;
+        drawn != 0 ? fbe::gpu::texture_resource(drawn) : fbe::gpu::no_resource;
+    const VkRect2D area = fbe::gpu::screen_area(extent);
     // Black around the screen, where it doesn't fill the window.
     fbe::gpu::pass_t present{
         .name = "present",
         .colors = { { .target = window_image, .clear = true, .rgba = { 0.0F, 0.0F, 0.0F, 1.0F } } },
-        .record = [screen](VkCommandBuffer commands) { draw_screen(commands, screen); },
+        .record = [screen, area](VkCommandBuffer commands) { draw_screen(commands, screen, area); },
     };
     if (screen != fbe::gpu::no_resource) {
         present.uses.emplace_back(screen, fbe::gpu::use_t::SAMPLED);
@@ -453,8 +452,15 @@ bool presentable(const fbe::gpu::device_t& gpu, bool wait) {
         pixels.height != made_for.height) {
         make_images(gpu, wait);
     }
-    fbe::gpu::update_screen(pixels);
     return !images.empty();
+}
+
+/// Brings the screen up to date for the window's size now, for the next frame, once the frame
+/// drawn into the one there was is presented.
+void update_screen() {
+    if (window != nullptr) {
+        fbe::gpu::update_screen(window_pixels());
+    }
 }
 
 } // namespace
@@ -488,6 +494,10 @@ std::vector<std::uint8_t> read_window() {
         std::swap(pixels[at], pixels[at + 2]);
     }
     return pixels;
+}
+
+bool window_open() {
+    return window != nullptr;
 }
 
 void stop_window() {
@@ -525,6 +535,7 @@ void gpu_present(bool wait) {
     const gpu::device_t& gpu = *found;
     // A frame with nowhere to present still runs what it recorded.
     if (!presentable(gpu, wait)) {
+        update_screen();
         gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE);
         return;
     }
@@ -537,12 +548,14 @@ void gpu_present(bool wait) {
                                                         frame.acquired, VK_NULL_HANDLE, &index);
         if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
             stale = stale || acquired == VK_ERROR_OUT_OF_DATE_KHR;
+            update_screen();
             gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE);
             return;
         }
         stale = stale || acquired == VK_SUBOPTIMAL_KHR;
     }
-    add_present(index);
+    add_present(index, gpu::screen_handle());
+    update_screen();
     if (swapchain == VK_NULL_HANDLE) {
         if (gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE)) {
             ++presented;

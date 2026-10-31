@@ -41,7 +41,10 @@ FBE_API bool fbe_texture_release(uint64_t texture);
 // Makes a target, a texture drawn into, `width` by `height` pixels of an FBE_TEXTURE_ format,
 // transparent black, with no mipmaps, drawing `samples` samples a pixel (1, 2, 4, or 8), which
 // each pass resolves into it, and with depth if `depth` (32-bit floats, reversed: 1 nearest, 0
-// farthest, as it's cleared); 0 if it can't. It's held and freed as fbe_texture_create's are.
+// farthest, as it's cleared, compared GREATER_OR_EQUAL); 0 if it can't. What's drawn into it is in
+// Vulkan's clip space, x right and y down from -1 to 1, depth 1 at the near plane, as the engine's
+// cameras project (std.math's Perspective, near 0 and y up, isn't for it). It's held and freed as
+// fbe_texture_create's are.
 FBE_API uint64_t fbe_texture_create_target(int32_t width, int32_t height, int32_t format,
                                            int32_t samples, bool depth);
 // Whether it's a target, how many samples a pass draws a pixel, -1 if the handle isn't a
@@ -59,15 +62,15 @@ FBE_API int32_t fbe_texture_levels(uint64_t texture);
 
 // Replaces the pixels `width` by `height` at `x`, `y` from its top left with `pixels`, rows
 // `pitch` bytes apart, in its format's bytes (4 a pixel for RGBA8, 1 for R8, 8 for RGBA16F), and
-// makes its mipmaps again. Writes reach the GPU before the frame's commands, so every draw of the
-// frame sees them, those recorded before the write too, and fbe_texture_clear's and _copy's come
-// after every write. False if the region isn't in it, or it's a multisampled target, which is
-// only drawn into.
+// makes its mipmaps again, in turn with what else the frame does with it: drawing with it or into
+// it, clearing, and copying before the write see it as it was, and after, the write. False if the
+// region isn't in it, or it's a multisampled target, which is only drawn into.
 FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t width,
                                int32_t height, const uint8_t* pixels, int32_t pitch);
 
 // Clears every level of it to a color, linear (an RGBA8 texture's is stored as sRGB), and a
-// target's depth to the farthest, in the frame's commands, after what they draw before.
+// target's depth to the farthest, in the frame's commands, after what the frame does with it
+// before.
 FBE_API bool fbe_texture_clear(uint64_t texture, float red, float green, float blue, float alpha);
 
 // Copies the pixels `width` by `height` at `from_x`, `from_y` of `from`'s first level to `x`, `y`

@@ -29,7 +29,8 @@ Public Class Screen
     Private New()
     End New
 
-    /// The texture each frame's drawn into, as it is now; Null without a window.
+    /// The texture each frame's drawn into, as it is now, starting the GPU if nothing has; Null
+    /// without a window, or if the GPU can't start.
     @MainThread Public Static Method Texture(): Texture? => TextureOf(fbe_gpu_screen())
 
     /// Gives the screen a size of its own, `width` by `height` pixels, which Flip scales into the
@@ -55,12 +56,17 @@ Public Class Screen
     @MainThread Public Static Method FollowsWindow(): Bool => fbe_gpu_render_width() == 0
 
     /// Draws the screen with `samples` samples a pixel, 1, 2, 4, or 8, smoothing its edges, as an
-    /// anti-aliasing setting wants. It panics for another count.
-    @MainThread Public Static Method SetSamples(samples: Int32)
-        If !fbe_gpu_set_render_samples(samples) Then Panic(LastError())
+    /// anti-aliasing setting wants. It panics for another count, and throws when the GPU doesn't
+    /// draw that many; set before the GPU starts, the screen draws the most the GPU does, up to it.
+    @MainThread Public Static Method SetSamples(samples: Int32) Throws GraphicsError
+        If samples != 1 && samples != 2 && samples != 4 && samples != 8
+            Panic("the screen draws 1, 2, 4, or 8 samples a pixel, not {samples}")
+        End If
+        If !fbe_gpu_set_render_samples(samples) Then Throw GraphicsError(LastError())
     End Method
 
-    /// How many samples a pixel the screen draws, 1 unless set.
+    /// How many samples a pixel the screen draws, 1 unless set: the screen's own, which are fewer
+    /// than were set before the GPU started where it doesn't draw that many.
     @MainThread Public Static Method Samples(): Int32 => fbe_gpu_render_samples()
 
     /// Sets how Flip scales the screen into the window, and whether smoothly or by its nearest
@@ -87,12 +93,17 @@ Public Class Screen
         Return Rect(area.x As Float, area.y As Float, area.width As Float, area.height As Float)
     End Method
 
-    /// The screen's pixels as an Image, after everything the frame's drawn so far, which it waits
-    /// for. It throws without a window.
+    /// The screen's pixels as an Image, opaque, as the window shows them, after everything the
+    /// frame's drawn so far, which it waits for. It throws without a window.
     @MainThread Public Static Method ToImage(): Image Throws GraphicsError
         Local shown = Texture()
         If shown == Null Then Throw GraphicsError("there's no window, so no screen; Graphics opens one")
-        Return shown.ToImage()
+        // Whatever alpha the frame left, the window shows its pixels opaque.
+        Local pixels = shown.ReadPixels()
+        For pixel = 0 To (pixels.Count / 4) - 1
+            pixels[(pixel * 4) + 3] = 255
+        End For
+        Return Image.FromBytes(shown.Width(), shown.Height(), pixels)
     End Method
 
     /// Saves the screen as a PNG at `path`, a screenshot, after everything the frame's drawn so
