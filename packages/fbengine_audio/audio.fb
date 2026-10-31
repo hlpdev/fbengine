@@ -20,6 +20,20 @@ Public Enum AudioDevice
     MANUAL = 2
 End Enum
 
+/// How a mono Channel's pan is heard on each side of a stereo mix, as a game whose sounds are
+/// positioned by hand, by setting each one's pan and volume each frame, wants it heard. Any other
+/// Channel's pan, a stereo sound's, an Emitter's, or one in a mix of other channels, is a balance.
+Public Enum PanLaw
+    /// Taking from the other side only: both sides at full in the middle, and one fading to
+    /// silence as it pans away, as a stereo sound's balance does.
+    BALANCE = 0
+    /// At constant power, the cosine and sine of (pan + 1) * Pi / 4: 0.707 each in the middle,
+    /// so a sound is as loud wherever it's panned.
+    CONSTANT_POWER = 1
+    /// Linearly, (1 - pan) / 2 and (1 + pan) / 2: half each in the middle.
+    LINEAR = 2
+End Enum
+
 /// A device that won't start.
 Public Class AudioError Extends Error
 End Class
@@ -87,6 +101,15 @@ Public Final Class Audio
     /// How many frames have been mixed since it started, which a device's keeps adding to as it
     /// plays, 0 when it's stopped.
     @MainThread Public Static Method Frames(): Int64 => fbe_audio_frames()
+
+    /// Sets how every mono Channel's pan is heard, BALANCE as it starts; it's kept while the
+    /// audio's stopped.
+    @MainThread Public Static Method SetPanLaw(law: PanLaw)
+        fbe_channel_set_pan_law(law As Int32)
+    End Method
+
+    /// How mono Channels' pans are heard.
+    @MainThread Public Static Method PanLaw(): PanLaw => fbe_channel_pan_law() As PanLaw
 
     /// How many Channels are playing, paused ones too.
     @MainThread Public Static Method Playing(): Int32 => fbe_channel_count()

@@ -64,6 +64,16 @@ public:
         }
     }
 
+    /// Runs `visit` on each item, in slot order.
+    template <typename Visit>
+    void each(Visit visit) {
+        for (const slot_t& slot : m_slots) {
+            if (slot.item != nullptr) {
+                visit(*slot.item);
+            }
+        }
+    }
+
     /// Removes every item, so no handle given out finds one.
     void clear() {
         remove_if([](const Item&) { return true; });

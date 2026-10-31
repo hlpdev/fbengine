@@ -21,5 +21,7 @@ Public Extern "C" Lib "fbengine_audio_native"
     Function fbe_channel_fade_out(channel: UInt64, seconds: Float64): Bool
     Function fbe_channel_fade_level(channel: UInt64): Float32
     Function fbe_channel_set_bus(channel: UInt64, bus: UInt64): Bool
+    Function fbe_channel_set_pan_law(law: Int32): Bool
+    Function fbe_channel_pan_law(): Int32
     Function fbe_channel_count(): Int32
 End Extern
