@@ -16,7 +16,7 @@ Import "./window"
 Extend Camera
     /// Whether the camera might see `entity`: a Mesh by its geometry's box, turned and scaled with
     /// it, in view unless the whole box is behind one of the view's planes; any other entity by
-    /// its position.
+    /// its position. An entity in another World than the camera's isn't in view.
     @MainThread @PanicsAtCaller
     Public Method InView(entity: Entity): Bool
         Local camera = Live("InView")
@@ -78,7 +78,7 @@ Extend Entity
     Public Method BlocksSight(): Bool => fbe_entity_blocks_sight(Live("BlocksSight"))
 
     /// Whether nothing that blocks sight in its World is between the entity and `target`, position
-    /// to position; neither of the two blocks it.
+    /// to position; neither of the two blocks it, and a target in another World can't be seen.
     @MainThread @PanicsAtCaller
     Public Method CanSee(target: Entity): Bool
         Return Seen(fbe_entity_can_see(Live("CanSee"), target.Live("CanSee")), Self, "CanSee")

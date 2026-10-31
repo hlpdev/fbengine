@@ -24,11 +24,11 @@ vec3_t vec(const fbe_vec3_t& v) {
 }
 
 vec3_t least(vec3_t a, vec3_t b) {
-    return { std::fmin(a.x, b.x), std::fmin(a.y, b.y), std::fmin(a.z, b.z) };
+    return { std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z) };
 }
 
 vec3_t greatest(vec3_t a, vec3_t b) {
-    return { std::fmax(a.x, b.x), std::fmax(a.y, b.y), std::fmax(a.z, b.z) };
+    return { std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z) };
 }
 
 /// Whether the segment from `a` along `delta` passes through the box anywhere from 0 to `until`.
@@ -164,6 +164,36 @@ std::uint32_t bvh_t::split(std::uint32_t first, std::uint32_t count, std::vector
     const std::uint32_t second = split(first + half, count - half, centers);
     m_nodes[at].second = second;
     return at;
+}
+
+void bvh_t::refit(const std::vector<surface_t>& surfaces) {
+    for (std::size_t t = 0; t < m_origins.size(); ++t) {
+        const surface_t& surface = surfaces[m_origins[t].surface];
+        const std::size_t first = static_cast<std::size_t>(m_origins[t].triangle) * 3;
+        for (std::size_t k = 0; k < 3; ++k) {
+            m_corners[(t * 3) + k] = vec(surface.vertices[surface.indices[first + k]].position);
+        }
+    }
+    // A node's children come after it, so going back fits every child before its parent.
+    for (std::size_t at = m_nodes.size(); at-- > 0;) {
+        node_t& node = m_nodes[at];
+        if (node.count > 0) {
+            node.min = corners(m_order[node.first])[0];
+            node.max = node.min;
+            for (std::uint32_t i = node.first; i < node.first + node.count; ++i) {
+                const vec3_t* triangle = corners(m_order[i]);
+                for (std::size_t k = 0; k < 3; ++k) {
+                    node.min = least(node.min, triangle[k]);
+                    node.max = greatest(node.max, triangle[k]);
+                }
+            }
+        } else {
+            const node_t& first = m_nodes[at + 1];
+            const node_t& second = m_nodes[node.second];
+            node.min = least(first.min, second.min);
+            node.max = greatest(first.max, second.max);
+        }
+    }
 }
 
 bool bvh_t::blocks(vec3_t a, vec3_t b) const {

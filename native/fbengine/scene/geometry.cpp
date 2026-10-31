@@ -229,15 +229,17 @@ void release_geometry(std::uint32_t geometry) {
     geometry_t& found = scene().geometries[geometry];
     if (--found.references == 0) {
         release_materials(found.surfaces);
-        found.surfaces.clear();
-        found.surfaces.shrink_to_fit();
+        found = {};
         scene().geometry_slots.free(geometry);
     }
 }
 
-void touch_geometry(std::uint32_t geometry) {
+void touch_geometry(std::uint32_t geometry, bool reshaped) {
     geometry_t& found = scene().geometries[geometry];
     ++found.version;
+    if (reshaped) {
+        ++found.shape_version;
+    }
     found.bounds_stale = true;
 }
 
@@ -270,8 +272,14 @@ void geometry_bounds(std::uint32_t geometry, vec3_t& min, vec3_t& max) {
 const bvh_t& geometry_tree(std::uint32_t geometry) {
     geometry_t& found = scene().geometries[geometry];
     if (found.tree_version != found.version) {
-        found.tree.build(found.surfaces);
+        // Only moved: the same triangles in the same leaves, their boxes fitted again.
+        if (found.tree_shape_version == found.shape_version) {
+            found.tree.refit(found.surfaces);
+        } else {
+            found.tree.build(found.surfaces);
+        }
         found.tree_version = found.version;
+        found.tree_shape_version = found.shape_version;
     }
     return found.tree;
 }
@@ -372,7 +380,7 @@ FBE_API int32_t fbe_geometry_add_surface(uint64_t geometry) {
     }
     std::vector<surface_t>& surfaces = scene().geometries[slot].surfaces;
     surfaces.emplace_back();
-    fbe::scene::touch_geometry(slot);
+    fbe::scene::touch_geometry(slot, true);
     return static_cast<std::int32_t>(surfaces.size() - 1);
 }
 
@@ -392,7 +400,7 @@ FBE_API bool fbe_geometry_add(uint64_t geometry, uint64_t other, const fbe_mat4_
     std::vector<surface_t>& surfaces = scene().geometries[slot].surfaces;
     surfaces.insert(surfaces.end(), std::make_move_iterator(added.begin()),
                     std::make_move_iterator(added.end()));
-    fbe::scene::touch_geometry(slot);
+    fbe::scene::touch_geometry(slot, true);
     return true;
 }
 
@@ -405,7 +413,7 @@ FBE_API bool fbe_geometry_transform(uint64_t geometry, const fbe_mat4_t* transfo
     for (surface_t& surface : scene().geometries[slot].surfaces) {
         fbe::scene::transform_surface(surface, m);
     }
-    fbe::scene::touch_geometry(slot);
+    fbe::scene::touch_geometry(slot, false);
     return true;
 }
 
@@ -422,7 +430,7 @@ FBE_API bool fbe_geometry_flip(uint64_t geometry) {
             std::swap(surface.indices[i + 1], surface.indices[i + 2]);
         }
     }
-    fbe::scene::touch_geometry(slot);
+    fbe::scene::touch_geometry(slot, false);
     return true;
 }
 
@@ -434,7 +442,7 @@ FBE_API bool fbe_geometry_update_normals(uint64_t geometry) {
     for (surface_t& surface : scene().geometries[slot].surfaces) {
         fbe::scene::update_normals(surface);
     }
-    fbe::scene::touch_geometry(slot);
+    fbe::scene::touch_geometry(slot, false);
     return true;
 }
 
@@ -497,7 +505,7 @@ FBE_API bool fbe_geometry_fit(uint64_t geometry, const fbe_aabb_t* box, bool uni
     for (surface_t& surface : scene().geometries[slot].surfaces) {
         fbe::scene::transform_surface(surface, m);
     }
-    fbe::scene::touch_geometry(slot);
+    fbe::scene::touch_geometry(slot, false);
     return true;
 }
 
@@ -541,7 +549,7 @@ FBE_API int32_t fbe_surface_add_vertices(uint64_t geometry, int32_t surface,
     }
     const auto first = static_cast<std::int32_t>(found->vertices.size());
     found->vertices.insert(found->vertices.end(), vertices, vertices + count);
-    fbe::scene::touch_geometry(geometry_slot(geometry));
+    fbe::scene::touch_geometry(geometry_slot(geometry), false);
     return first;
 }
 
@@ -565,7 +573,7 @@ FBE_API int32_t fbe_surface_add_triangles(uint64_t geometry, int32_t surface,
     }
     const auto first = static_cast<std::int32_t>(found->indices.size() / 3);
     found->indices.insert(found->indices.end(), indices, indices + count);
-    fbe::scene::touch_geometry(geometry_slot(geometry));
+    fbe::scene::touch_geometry(geometry_slot(geometry), true);
     return first;
 }
 
@@ -608,7 +616,7 @@ FBE_API bool fbe_surface_set_vertices(uint64_t geometry, int32_t surface, int32_
             fbe::scene::out_of_range("vertices", found->vertices.size(), first, count));
     }
     std::copy_n(vertices, count, found->vertices.begin() + first);
-    fbe::scene::touch_geometry(geometry_slot(geometry));
+    fbe::scene::touch_geometry(geometry_slot(geometry), false);
     return true;
 }
 
@@ -637,7 +645,7 @@ FBE_API bool fbe_surface_clear(uint64_t geometry, int32_t surface, bool vertices
     if (vertices) {
         found->vertices.clear();
     }
-    fbe::scene::touch_geometry(geometry_slot(geometry));
+    fbe::scene::touch_geometry(geometry_slot(geometry), true);
     return true;
 }
 

@@ -174,22 +174,28 @@ void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit
     const vec3_t n = triangle.normal;
     const float distance = dot(n, c - triangle.corners[0]);
     // A mover whose middle is behind a triangle passes out through it, and one going away from
-    // its front doesn't touch it.
+    // its front, further than its radius, doesn't touch it.
     if (distance < 0.0F) {
         return;
     }
     const float approach = dot(n, v);
     float first = 0.0F;
     bool embedded = false;
+    // Within its radius of the plane and going away, it can't touch the face, but it can still
+    // go sideways onto an edge or a corner.
+    bool leaving = false;
     if (std::fabs(approach) < tiny) {
         if (distance >= r) {
             return;
         }
         embedded = true;
-    } else {
-        if (approach > 0.0F) {
+    } else if (approach > 0.0F) {
+        if (distance >= r) {
             return;
         }
+        embedded = true;
+        leaving = true;
+    } else {
         first = (r - distance) / approach;
         const float last = (-r - distance) / approach;
         if (first > hit.time || last < 0.0F) {
@@ -197,7 +203,7 @@ void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit
         }
         first = std::fmax(first, 0.0F);
     }
-    if (distance < r) {
+    if (distance < r && !leaving) {
         // Already touching its plane: its face, if the middle is over it, or else its edges.
         const vec3_t under = c - n * distance;
         if (inside(triangle, under)) {
@@ -237,9 +243,20 @@ void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit
     bool touched = false;
     vec3_t point;
     for (const vec3_t& corner : triangle.corners) {
+        const float apart = dot(corner - c, corner - c) - (r * r);
+        const float closing = 2.0F * dot(v, c - corner);
+        // Already over a corner, it touches it now if it's going further in, else not at all: a
+        // root then would be where it leaves, which can't stop it.
+        if (apart < 0.0F) {
+            if (closing < 0.0F) {
+                best = 0.0F;
+                point = corner;
+                touched = true;
+            }
+            continue;
+        }
         float root = 0.0F;
-        if (lowest_root(speed, 2.0F * dot(v, c - corner), dot(corner - c, corner - c) - (r * r),
-                        best, root)) {
+        if (lowest_root(speed, closing, apart, best, root)) {
             best = root;
             point = corner;
             touched = true;
@@ -256,6 +273,17 @@ void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit
         const float b = (length * 2.0F * dot(v, to_start)) - (2.0F * along_v * along_start);
         const float cc =
             (length * ((r * r) - dot(to_start, to_start))) + (along_start * along_start);
+        // Already over the edge's line: where it's over the edge itself, it touches it now if
+        // it's going further in, else not at all; past the edge's ends, its corners say.
+        if (cc > 0.0F) {
+            const float fraction = -along_start / length;
+            if (fraction >= 0.0F && fraction <= 1.0F && b > 0.0F) {
+                best = 0.0F;
+                point = start + edge * fraction;
+                touched = true;
+            }
+            continue;
+        }
         float root = 0.0F;
         if (lowest_root(a, b, cc, best, root)) {
             const float fraction = ((along_v * root) - along_start) / length;
@@ -424,10 +452,24 @@ nearby_t gather(const snapshot_t& snapshot, const mover_t& mover, float reach) {
     return nearby;
 }
 
+/// Where a sphere of radius `r` going from `c` along `v` first touches anything near, or its end.
+vec3_t unblocked(const nearby_t& nearby, vec3_t c, vec3_t v, float r) {
+    hit_t hit;
+    bool found = false;
+    for (const triangle_t& triangle : nearby.triangles) {
+        sweep_triangle(c, v, r, triangle, hit, found);
+    }
+    for (const ellipsoid_t& ellipsoid : nearby.ellipsoids) {
+        sweep_ellipsoid(c, v, r, ellipsoid, hit, found);
+    }
+    return c + v * (found ? hit.time : 1.0F);
+}
+
 /// A move from `base` along `v` in sphere space, touching and sliding as the rules say, at most
-/// `iterations` times; gives where it ended and adds what it touched.
+/// `iterations` times, never sliding higher than `ceiling`; gives where it ended and adds what it
+/// touched.
 vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& nearby, vec3_t base,
-             vec3_t v, std::vector<hit_t>& hits) {
+             vec3_t v, float ceiling, std::vector<hit_t>& hits) {
     const float r = mover.horizontal;
     const float skin = snapshot.world->collision_skin;
     const vec3_t original = v;
@@ -450,10 +492,19 @@ vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& n
             break;
         }
         hits.push_back(hit);
-        // Just off what it touched, skin away.
+        // Just off what it touched, skin away. Touching it from the start, it may be in it, as
+        // when it moved into the mover: pushed out only as far as nothing else is, so a mover
+        // squeezed between two stays where it is, never pushed into either.
         const vec3_t at = base + v * hit.time;
         const vec3_t out = normalize(at - hit.point);
         base = hit.point + (dot(out, out) > 0.0F ? out : hit.normal) * (r + skin);
+        if (hit.time <= 0.0F) {
+            base = unblocked(nearby, at, base - at, r);
+        } else {
+            // Nor does the skin raise it past what its move and step allow: still no nearer
+            // what it touched than its radius, since only the rise is taken off.
+            base.y = std::fmin(base.y, std::fmax(ceiling, at.y));
+        }
         const std::int32_t response =
             response_of(*snapshot.world, mover.group, snapshot.targets[hit.target].group);
         if (response == FBE_RESPONSE_STOP) {
@@ -475,6 +526,9 @@ vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& n
                 next = size > 0.0F ? next * (across / size) : vec3_t();
             }
         }
+        // Sliding up what it touched raises it no higher than its move and its step allow, so a
+        // tall mover sliding up an edge isn't thrown up by its slide.
+        next.y = std::fmin(next.y, std::fmax(ceiling - base.y, 0.0F));
         if (dot(next, original) <= 0.0F) {
             break;
         }
@@ -500,28 +554,31 @@ result_t move(const snapshot_t& snapshot, const mover_t& mover) {
     const nearby_t nearby = gather(snapshot, mover, reach);
     const vec3_t start = into(mover.from);
     const vec3_t wanted = into(mover.to) - start;
-    std::vector<hit_t> hits;
-    vec3_t end = slide(snapshot, mover, nearby, start, wanted, hits);
-
-    // Blocked going across: up the step, across, and back down, if that lands on ground and gets
-    // further.
+    // No slide takes a mover higher than its move rises, and its step height.
     const float step = mover.step * squash;
+    const float ceiling = start.y + std::fmax(wanted.y, 0.0F) + step;
+    std::vector<hit_t> hits;
+    vec3_t end = slide(snapshot, mover, nearby, start, wanted, ceiling, hits);
+
+    // Blocked going across: up the step, across, and back down, if that lands on ground no
+    // higher than the step and gets further.
     if (step > 0.0F && !hits.empty() && across(start, end) + tiny < across(start, start + wanted)) {
         std::vector<hit_t> stepped;
-        const vec3_t up = slide(snapshot, mover, nearby, start, { 0.0F, step, 0.0F }, stepped);
+        const vec3_t up =
+            slide(snapshot, mover, nearby, start, { 0.0F, step, 0.0F }, ceiling, stepped);
         const vec3_t over =
-            slide(snapshot, mover, nearby, up, { wanted.x, 0.0F, wanted.z }, stepped);
+            slide(snapshot, mover, nearby, up, { wanted.x, 0.0F, wanted.z }, ceiling, stepped);
         const std::size_t before_down = stepped.size();
-        const vec3_t down =
-            slide(snapshot, mover, nearby, over,
-                  { 0.0F, -(over.y - start.y) + std::fmin(wanted.y, 0.0F), 0.0F }, stepped);
+        const vec3_t down = slide(snapshot, mover, nearby, over,
+                                  { 0.0F, -(over.y - start.y) + std::fmin(wanted.y, 0.0F), 0.0F },
+                                  ceiling, stepped);
         bool landed = false;
         for (std::size_t i = before_down; i < stepped.size(); ++i) {
             const vec3_t normal = normalize(
                 vec3_t(stepped[i].normal.x, stepped[i].normal.y * squash, stepped[i].normal.z));
             landed = landed || normal.y >= walkable;
         }
-        if (landed && across(start, down) > across(start, end) + tiny) {
+        if (landed && down.y <= ceiling + tiny && across(start, down) > across(start, end) + tiny) {
             end = down;
             hits = std::move(stepped);
         }
