@@ -13,6 +13,7 @@
 #include <cmath>
 #include <format>
 #include <mutex>
+#include <new>
 
 namespace {
 
@@ -98,7 +99,7 @@ FBE_AUDIO_API void fbe_listener_set_velocity(float x, float y, float z) {
     fbe::audio::pitch_every_emitter();
 }
 
-FBE_AUDIO_API bool fbe_listener_set_speed_of_sound(float units_per_second) {
+FBE_AUDIO_API bool fbe_listener_set_speed_of_sound(float units_per_second) try {
     if (!std::isfinite(units_per_second) || units_per_second <= 0.0F) {
         return fbe::audio::fail(
             std::format("sound goes more than 0 units a second, not {}", units_per_second));
@@ -106,6 +107,8 @@ FBE_AUDIO_API bool fbe_listener_set_speed_of_sound(float units_per_second) {
     speed = units_per_second;
     fbe::audio::pitch_every_emitter();
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_listener_speed_of_sound(void) {

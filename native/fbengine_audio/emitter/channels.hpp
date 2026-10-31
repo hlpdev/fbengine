@@ -29,6 +29,11 @@ public:
         std::erase_if(m_channels, [&](std::uint64_t channel) { return !change(channel); });
     }
 
+    /// Makes room for one more, so the next add can't run out of memory.
+    void reserve() {
+        m_channels.reserve(m_channels.size() + 1);
+    }
+
     /// How many handles it keeps, finished ones it hasn't let go of yet too.
     [[nodiscard]] std::size_t size() const {
         return m_channels.size();

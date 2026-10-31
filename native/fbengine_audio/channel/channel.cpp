@@ -18,6 +18,7 @@
 #include <format>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <numbers>
 #include <utility>
 #include <vector>
@@ -327,6 +328,12 @@ void end_loop(voice_t& voice) {
 void let_quiet_go() {
     channels_t& all = channels();
     std::vector<std::unique_ptr<voice_t>> quiet;
+    // With no room to take them out, they wait for the next.
+    try {
+        quiet.reserve(all.stopping.size());
+    } catch (const std::bad_alloc&) {
+        return;
+    }
     {
         const std::scoped_lock lock(all.live_lock);
         std::erase_if(all.stopping, [&](std::unique_ptr<voice_t>& voice) {
@@ -343,6 +350,8 @@ void let_quiet_go() {
 /// Stops the channel `handle` is for: its handle finds nothing from now, and it goes once it has
 /// ramped to silence, or now if it's silent already, paused or ended.
 void stop(std::uint64_t handle) {
+    // Room for it among the stopping first, which can run out of memory before it's changed.
+    channels().stopping.reserve(channels().stopping.size() + 1);
     std::unique_ptr<voice_t> stopped = channels().voices.remove(handle);
     if (stopped == nullptr || stopped->ended()) {
         return;
@@ -597,8 +606,12 @@ FBE_AUDIO_API bool fbe_channel_paused(uint64_t channel) {
     return voice != nullptr && voice->paused;
 }
 
-FBE_AUDIO_API void fbe_channel_stop(uint64_t channel) {
+FBE_AUDIO_API void fbe_channel_stop(uint64_t channel) try {
     stop(channel);
+} catch (const std::bad_alloc&) {
+    // With no room to ramp it out, it goes at once.
+    channels().voices.remove(channel);
+    fbe::audio::out_of_memory();
 }
 
 // A pause ramps to silence first, and the mixing thread stops the sound once it's there.
@@ -633,7 +646,7 @@ FBE_AUDIO_API void fbe_channel_resume(uint64_t channel) {
     apply_pan(*voice);
 }
 
-FBE_AUDIO_API bool fbe_channel_set_volume(uint64_t channel, float volume) {
+FBE_AUDIO_API bool fbe_channel_set_volume(uint64_t channel, float volume) try {
     if (!fbe::audio::check_volume(volume)) {
         return false;
     }
@@ -643,6 +656,8 @@ FBE_AUDIO_API bool fbe_channel_set_volume(uint64_t channel, float volume) {
         apply_pan(*voice);
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_channel_volume(uint64_t channel) {
@@ -650,7 +665,7 @@ FBE_AUDIO_API float fbe_channel_volume(uint64_t channel) {
     return voice != nullptr ? voice->volume : 0.0F;
 }
 
-FBE_AUDIO_API bool fbe_channel_set_pan(uint64_t channel, float pan) {
+FBE_AUDIO_API bool fbe_channel_set_pan(uint64_t channel, float pan) try {
     if (!fbe::audio::check_pan(pan)) {
         return false;
     }
@@ -660,6 +675,8 @@ FBE_AUDIO_API bool fbe_channel_set_pan(uint64_t channel, float pan) {
         apply_pan(*voice);
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_channel_pan(uint64_t channel) {
@@ -667,7 +684,7 @@ FBE_AUDIO_API float fbe_channel_pan(uint64_t channel) {
     return voice != nullptr ? voice->pan : 0.0F;
 }
 
-FBE_AUDIO_API bool fbe_channel_set_pitch(uint64_t channel, float pitch) {
+FBE_AUDIO_API bool fbe_channel_set_pitch(uint64_t channel, float pitch) try {
     if (!fbe::audio::check_pitch(pitch)) {
         return false;
     }
@@ -677,6 +694,8 @@ FBE_AUDIO_API bool fbe_channel_set_pitch(uint64_t channel, float pitch) {
         apply_pitch(*voice);
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_channel_pitch(uint64_t channel) {
@@ -708,7 +727,7 @@ FBE_AUDIO_API double fbe_channel_position(uint64_t channel) {
            voice->data->sample_rate;
 }
 
-FBE_AUDIO_API bool fbe_channel_seek(uint64_t channel, double seconds) {
+FBE_AUDIO_API bool fbe_channel_seek(uint64_t channel, double seconds) try {
     if (!std::isfinite(seconds) || seconds < 0.0) {
         return fbe::audio::fail(
             std::format("a seek is 0 seconds to its sound's length, not {}", seconds));
@@ -726,9 +745,11 @@ FBE_AUDIO_API bool fbe_channel_seek(uint64_t channel, double seconds) {
     voice->position.store(static_cast<std::uint64_t>(frame), std::memory_order_relaxed);
     voice->seek_to.store(frame, std::memory_order_release);
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
-FBE_AUDIO_API bool fbe_channel_fade(uint64_t channel, float level, double seconds) {
+FBE_AUDIO_API bool fbe_channel_fade(uint64_t channel, float level, double seconds) try {
     if (!fbe::audio::check_volume(level) || !check_fade(seconds)) {
         return false;
     }
@@ -738,9 +759,11 @@ FBE_AUDIO_API bool fbe_channel_fade(uint64_t channel, float level, double second
         ma_sound_set_fade_in_pcm_frames(&voice->sound, -1.0F, level, fade_frames(seconds));
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
-FBE_AUDIO_API bool fbe_channel_fade_out(uint64_t channel, double seconds) {
+FBE_AUDIO_API bool fbe_channel_fade_out(uint64_t channel, double seconds) try {
     if (!check_fade(seconds)) {
         return false;
     }
@@ -755,6 +778,8 @@ FBE_AUDIO_API bool fbe_channel_fade_out(uint64_t channel, double seconds) {
     ma_sound_set_fade_in_pcm_frames(&voice->sound, -1.0F, 0.0F, fade_frames(seconds));
     voice->fading_out.store(true, std::memory_order_release);
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_channel_fade_level(uint64_t channel) {
@@ -762,7 +787,7 @@ FBE_AUDIO_API float fbe_channel_fade_level(uint64_t channel) {
     return voice != nullptr ? ma_sound_get_current_fade_volume(&voice->sound) : 0.0F;
 }
 
-FBE_AUDIO_API bool fbe_channel_set_bus(uint64_t channel, uint64_t bus) {
+FBE_AUDIO_API bool fbe_channel_set_bus(uint64_t channel, uint64_t bus) try {
     std::shared_ptr<fbe::audio::bus_t> into = fbe::audio::find_bus(bus);
     if (bus != 0 && into == nullptr) {
         return fbe::audio::fail("the bus was freed");
@@ -773,9 +798,11 @@ FBE_AUDIO_API bool fbe_channel_set_bus(uint64_t channel, uint64_t bus) {
         voice->bus = std::move(into);
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
-FBE_AUDIO_API bool fbe_channel_set_pan_law(int32_t law) {
+FBE_AUDIO_API bool fbe_channel_set_pan_law(int32_t law) try {
     if (law < balance_law || law > linear_law) {
         return fbe::audio::fail(std::format("there's no pan law {}", law));
     }
@@ -783,6 +810,8 @@ FBE_AUDIO_API bool fbe_channel_set_pan_law(int32_t law) {
     channels().voices.remove_if([](const voice_t& voice) { return voice.ended(); });
     channels().voices.each([](voice_t& voice) { apply_pan(voice); });
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API int32_t fbe_channel_pan_law(void) {

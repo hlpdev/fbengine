@@ -56,7 +56,8 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
 FBE_AUDIO_API void fbe_audio_stop(void);
 FBE_AUDIO_API bool fbe_audio_started(void);
 // Lists `device`'s outputs, 0's the OS's and 1's the null backend's one, for fbe_audio_output_name:
-// how many, or -1, for fbe_audio_error, if there's no backend to list them; 2 has none.
+// how many, or -1, for fbe_audio_error, if there's no backend to list them; 2 has none. A second
+// output of one name is listed as "name (2)", which fbe_audio_start takes for it.
 FBE_AUDIO_API int32_t fbe_audio_list_outputs(int32_t device);
 // The name of output `index` of those fbe_audio_list_outputs listed last, "" for another index.
 FBE_AUDIO_API const char* fbe_audio_output_name(int32_t index);

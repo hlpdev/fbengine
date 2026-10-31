@@ -11,10 +11,12 @@
 #include <vector>
 
 #ifdef _WIN32
+// psapi.h needs windows.h's types first.
+// clang-format off
 #include <windows.h>
-
 #include <psapi.h>
-#elif defined(__APPLE__)
+// clang-format on
+#elifdef __APPLE__
 #include <malloc/malloc.h>
 #else
 #include <unistd.h>
@@ -39,7 +41,7 @@ std::uint64_t allocated() {
     GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
                          sizeof(counters));
     return counters.PrivateUsage;
-#elif defined(__APPLE__)
+#elifdef __APPLE__
     malloc_statistics_t statistics{};
     malloc_zone_statistics(nullptr, &statistics);
     return statistics.size_in_use;
