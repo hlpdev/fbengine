@@ -26,14 +26,16 @@ vec3_t greatest(vec3_t a, vec3_t b) {
     return { std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z) };
 }
 
-/// Where a triangle's corners are on each side of a plane, by their signed distances; false when
-/// they're all on one side, so the triangle doesn't reach it.
-bool straddles(const std::array<float, 3>& distances) {
-    const bool above = distances[0] > tiny || distances[1] > tiny || distances[2] > tiny;
-    const bool below = distances[0] < -tiny || distances[1] < -tiny || distances[2] < -tiny;
-    const bool on = std::fabs(distances[0]) <= tiny || std::fabs(distances[1]) <= tiny ||
-                    std::fabs(distances[2]) <= tiny;
-    return (above && below) || on;
+/// Whether a triangle has corners strictly on both sides of a plane, by their signed distances
+/// times the plane's normal's length, within a tolerance of that length: one resting on the plane,
+/// or touching it at a corner or an edge, doesn't cross it.
+bool straddles(const std::array<float, 3>& distances, float normal) {
+    const float tolerance = 1e-5F * normal;
+    const bool above =
+        distances[0] > tolerance || distances[1] > tolerance || distances[2] > tolerance;
+    const bool below =
+        distances[0] < -tolerance || distances[1] < -tolerance || distances[2] < -tolerance;
+    return above && below;
 }
 
 /// The part of the line where two planes meet that a triangle covers, as times along `axis` from
@@ -73,7 +75,7 @@ bool triangles_cross(const std::array<vec3_t, 3>& u, const std::array<vec3_t, 3>
         dot(nu, v[1] - u[0]),
         dot(nu, v[2] - u[0]),
     };
-    if (!straddles(dv)) {
+    if (!straddles(dv, length(nu))) {
         return false;
     }
     const vec3_t nv = cross(v[1] - v[0], v[2] - v[0]);
@@ -82,7 +84,7 @@ bool triangles_cross(const std::array<vec3_t, 3>& u, const std::array<vec3_t, 3>
         dot(nv, u[1] - v[0]),
         dot(nv, u[2] - v[0]),
     };
-    if (!straddles(du)) {
+    if (!straddles(du, length(nv))) {
         return false;
     }
     const vec3_t line = cross(nu, nv);
@@ -107,8 +109,19 @@ bool meshes_cross(std::uint32_t first, std::uint32_t second) {
     if (a == none || b == none) {
         return false;
     }
-    update_world(first);
-    update_world(second);
+    // Their boxes in the world first: apart, nothing crosses.
+    std::array<vec3_t, 4> boxes;
+    for (std::size_t i = 0; i < 2; ++i) {
+        const std::uint32_t entity = i == 0 ? first : second;
+        vec3_t min;
+        vec3_t max;
+        geometry_bounds(i == 0 ? a : b, min, max);
+        world_box(entity, min, max, boxes[i * 2], boxes[(i * 2) + 1]);
+    }
+    if (boxes[1].x < boxes[2].x || boxes[3].x < boxes[0].x || boxes[1].y < boxes[2].y ||
+        boxes[3].y < boxes[0].y || boxes[1].z < boxes[2].z || boxes[3].z < boxes[0].z) {
+        return false;
+    }
     mat4_t into;
     if (!inverse_affine(s.entities.world_matrix[first], into)) {
         return false;

@@ -97,10 +97,10 @@ public:
     void overlapping(vec3_t min, vec3_t max, Visit&& visit) const;
 
     /// Calls `visit` with each triangle's index in a leaf whose box the segment from `a` to `b`
-    /// passes within `grow` of, before the part of it `until()` gives, 0 to 1, which `visit` may
-    /// lower as it finds hits.
+    /// passes within `grow` of, along each axis, before the part of it `until()` gives, 0 to 1,
+    /// which `visit` may lower as it finds hits.
     template <typename Until, typename Visit>
-    void along(vec3_t a, vec3_t b, float grow, Until&& until, Visit&& visit) const;
+    void along(vec3_t a, vec3_t b, vec3_t grow, Until&& until, Visit&& visit) const;
 
     /// A triangle's three corners.
     [[nodiscard]] const vec3_t* corners(std::uint32_t triangle) const {
@@ -158,18 +158,17 @@ void bvh_t::overlapping(vec3_t min, vec3_t max, Visit&& visit) const {
 }
 
 template <typename Until, typename Visit>
-void bvh_t::along(vec3_t a, vec3_t b, float grow, Until&& until, Visit&& visit) const {
+void bvh_t::along(vec3_t a, vec3_t b, vec3_t grow, Until&& until, Visit&& visit) const {
     if (m_nodes.empty()) {
         return;
     }
     const segment_t segment(a, b - a);
-    const vec3_t margin(grow, grow, grow);
     std::vector<std::uint32_t> stack{ 0 };
     while (!stack.empty()) {
         const std::uint32_t at = stack.back();
         stack.pop_back();
         const node_t& node = m_nodes[at];
-        if (!crosses_box(segment, node.min - margin, node.max + margin, until())) {
+        if (!crosses_box(segment, node.min - grow, node.max + grow, until())) {
             continue;
         }
         if (node.count > 0) {

@@ -179,3 +179,79 @@ TEST_CASE("a tweened matrix goes from the capture to where an entity is", "[scen
     CHECK(near(m.m[12], 4.0F));
     CHECK_FALSE(fbe_entity_tweened_matrix(late, 1.5F, &m));
 }
+
+TEST_CASE("a tween holds across a new parent and a new World", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t moved = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    fbe_entity_set_position(moved, 5.0F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+    REQUIRE(fbe_world_capture(world.handle));
+    // A parent made since, turned, scaled, and far off; the entity kept where it is under it.
+    const std::uint64_t parent = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    fbe_entity_set_position(parent, 0.0F, 0.0F, -10.0F, FBE_SPACE_WORLD);
+    fbe_entity_set_rotation(parent, 0.0F, 0.70710678F, 0.0F, 0.70710678F, FBE_SPACE_WORLD);
+    fbe_entity_set_scale(parent, 2.0F, 2.0F, 2.0F, FBE_SPACE_LOCAL);
+    REQUIRE(fbe_entity_set_parent(moved, parent, true));
+    fbe_mat4_t m{};
+    REQUIRE(fbe_entity_tweened_matrix(moved, 0.0F, &m));
+    CHECK((near(m.m[12], 5.0F) && near(m.m[13], 0.0F) && near(m.m[14], 0.0F)));
+    CHECK((near(m.m[0], 1.0F) && near(m.m[5], 1.0F) && near(m.m[10], 1.0F)));
+    // Moved under one in another World, still from where it was.
+    const test_world_t other;
+    const std::uint64_t there = fbe_entity_create(other.handle, 0, FBE_ENTITY_PIVOT);
+    fbe_entity_set_position(there, 3.0F, 3.0F, 3.0F, FBE_SPACE_WORLD);
+    REQUIRE(fbe_entity_set_parent(moved, there, false));
+    REQUIRE(fbe_entity_tweened_matrix(moved, 0.0F, &m));
+    CHECK((near(m.m[12], 5.0F) && near(m.m[13], 0.0F) && near(m.m[14], 0.0F)));
+    // And at 1, where it is.
+    fbe_mat4_t now{};
+    fbe_entity_matrix(moved, FBE_SPACE_WORLD, &now);
+    REQUIRE(fbe_entity_tweened_matrix(moved, 1.0F, &m));
+    for (std::size_t i = 0; i < 16; ++i) {
+        CHECK(near(m.m[i], now.m[i]));
+    }
+}
+
+TEST_CASE("a fixed sprite's bounds hold its corners under a shearing parent", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t parent = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    fbe_entity_set_scale(parent, 3.0F, 1.0F, 1.0F, FBE_SPACE_LOCAL);
+    const std::uint64_t sprite = fbe_entity_create(world.handle, parent, FBE_ENTITY_SPRITE);
+    fbe_sprite_set_view_mode(sprite, FBE_SPRITE_FIXED);
+    fbe_entity_set_rotation(sprite, 0.0F, 0.0F, 0.38268343F, 0.92387953F, FBE_SPACE_LOCAL);
+    fbe_mat4_t m{};
+    REQUIRE(fbe_sprite_matrix(sprite, sprite, &m));
+    fbe_aabb_t bounds{};
+    REQUIRE(fbe_entity_bounds(sprite, &bounds));
+    for (const float x : { -1.0F, 1.0F }) {
+        for (const float y : { -1.0F, 1.0F }) {
+            const fbe_vec3_t p = corner(m, x, y);
+            CHECK(p.x >= bounds.min.x - 0.0001F);
+            CHECK(p.x <= bounds.max.x + 0.0001F);
+            CHECK(p.y >= bounds.min.y - 0.0001F);
+            CHECK(p.y <= bounds.max.y + 0.0001F);
+        }
+    }
+}
+
+TEST_CASE("a billboard seen by a camera under a mirror isn't mirrored", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t mirror = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    fbe_entity_set_scale(mirror, 1.0F, 1.0F, -1.0F, FBE_SPACE_LOCAL);
+    const std::uint64_t camera = fbe_entity_create(world.handle, mirror, FBE_ENTITY_CAMERA);
+    const std::uint64_t sprite = fbe_entity_create(world.handle, 0, FBE_ENTITY_SPRITE);
+    fbe_entity_set_position(sprite, 0.0F, 0.0F, -5.0F, FBE_SPACE_WORLD);
+    for (const std::int32_t mode : { FBE_SPRITE_BILLBOARD, FBE_SPRITE_UPRIGHT }) {
+        fbe_sprite_set_view_mode(sprite, mode);
+        fbe_mat4_t m{};
+        REQUIRE(fbe_sprite_matrix(sprite, camera, &m));
+        // It faces the camera, at +Z from it, and its axes keep their hand: X cross Y is along Z.
+        const std::array<float, 3> x{ m.m[0], m.m[1], m.m[2] };
+        const std::array<float, 3> y{ m.m[4], m.m[5], m.m[6] };
+        const std::array<float, 3> z{ m.m[8], m.m[9], m.m[10] };
+        const float hand = (((x[1] * y[2]) - (x[2] * y[1])) * z[0]) +
+                           (((x[2] * y[0]) - (x[0] * y[2])) * z[1]) +
+                           (((x[0] * y[1]) - (x[1] * y[0])) * z[2]);
+        CHECK(z[2] > 0.0F);
+        CHECK(hand > 0.0F);
+    }
+}

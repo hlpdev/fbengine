@@ -647,10 +647,10 @@ FBE_API bool fbe_geometry_clear_cull_box(uint64_t geometry);
 FBE_API bool fbe_geometry_cull_box(uint64_t geometry, fbe_aabb_t* box);
 
 // Visibility. Whether a camera might see an entity, in a target of this size: a mesh's box of its
-// geometry, turned and scaled with it, a sprite's box of its reach, however it turns, or another
-// entity's position, against the six planes of
-// the camera's view, near and far included; in view unless the whole box is behind one plane, so
-// something just past a corner of the view can count, as culling allows. Only the frustum
+// geometry, turned and scaled with it, a sprite's box of its reach, however it turns, a ground
+// plane unless the camera's whole view is under it, or another entity's position, against the six
+// planes of the camera's view, near and far included; in view unless the whole box is behind one
+// plane, so something just past a corner of the view can count, as culling allows. Only the frustum
 // counts: nothing in front hides it, and hiding the entity doesn't; an entity in another World
 // than the camera's isn't in view. 1 in view, 0 not, -1 for a freed camera or entity.
 FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, float target_height,
@@ -725,12 +725,12 @@ FBE_API int32_t fbe_world_collision(uint64_t world, int32_t source, int32_t targ
 // Makes every pair FBE_RESPONSE_NONE again.
 FBE_API bool fbe_world_clear_collisions(uint64_t world);
 // The most times one move touches something and goes on, 1 to 64, 8 at first; a move that has
-// touched that many times ends where it got to.
+// touched that many times ends where it got to, pushed out of what it's in if that's less in, or
+// where it began if it's further in than there.
 FBE_API bool fbe_world_set_collision_iterations(uint64_t world, int32_t iterations);
 FBE_API int32_t fbe_world_collision_iterations(uint64_t world);
 // How far a mover stays from what it touches, so it doesn't sink in, 0 to 0.1, 0.001 at first.
-// Between two solids nearly facing each other it can end nearer: long walks among turned solids
-// measured it at most 0.0045 in, at the first skin.
+// Long walks among turned solids measured a mover at most 0.00004 in them, at the first skin.
 FBE_API bool fbe_world_set_collision_skin(uint64_t world, float skin);
 FBE_API float fbe_world_collision_skin(uint64_t world);
 // Moves every moving entity of the World as its collisions say, from where its last move ended to

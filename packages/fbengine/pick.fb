@@ -69,10 +69,12 @@ End Extend
 
 Extend World
     /// The nearest hit from `from` to `to` of a sphere of `radius` swept along the line, or the
-    /// line with 0; Null for none. A radius below 0 panics.
+    /// line with 0, never hitting `ignore`, as a player's own body; Null for none. A radius below
+    /// 0 panics.
     @MainThread @PanicsAtCaller
-    Public Method Pick(from: Vec3, to: Vec3, radius: Float = 0): Pick?
-        Return Picked(Self, Null, from, to, radius, 0, "Pick")
+    Public Method Pick(from: Vec3, to: Vec3, radius: Float = 0, ignore: Entity? = Null): Pick?
+        Local skipped: UInt64 = ignore?.Live("Pick") ?? 0
+        Return Picked(Self, Null, from, to, radius, skipped, "Pick")
     End Method
 End Extend
 

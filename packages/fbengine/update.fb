@@ -87,14 +87,16 @@ Public Final Class FixedStep
         Self.most = most
     End New
 
-    /// How many steps to run for a frame that took `seconds`, as Frame.Delta() gives it. Below 0
-    /// panics.
+    /// How many steps to run for a frame that took `seconds`, as Frame.Delta() gives it. Below 0,
+    /// or not finite, panics.
     @PanicsAtCaller
     Public Method Steps(seconds: Float64): Int
-        If !(seconds >= 0)
-            Panic("Steps on a FixedStep: a frame takes 0 seconds or more, not {seconds}")
+        If !(seconds >= 0 && IsFinite(seconds))
+            Panic("Steps on a FixedStep: a frame takes 0 seconds or more, finite, not {seconds}")
         End If
         banked += seconds * rate
+        // A frame long enough to overflow runs the most steps; what's past them is dropped.
+        If !IsFinite(banked) Then banked = most
         // A hair over, so a frame of exactly two steps isn't one and a rounding.
         Local whole = Floor(banked + 1e-9)
         banked = Max(banked - whole, 0.0)

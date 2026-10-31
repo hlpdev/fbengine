@@ -214,6 +214,7 @@ std::uint32_t make_geometry() {
         s.geometries[slot] = {};
     }
     s.geometries[slot].references = 1;
+    s.geometries[slot].version = ++s.geometry_versions;
     return slot;
 }
 
@@ -236,7 +237,7 @@ void release_geometry(std::uint32_t geometry) {
 
 void touch_geometry(std::uint32_t geometry, bool reshaped) {
     geometry_t& found = scene().geometries[geometry];
-    ++found.version;
+    found.version = ++scene().geometry_versions;
     if (reshaped) {
         ++found.shape_version;
     }
@@ -674,6 +675,7 @@ FBE_API bool fbe_mesh_set_geometry(uint64_t mesh, uint64_t geometry) {
         fbe::scene::release_geometry(found->geometry);
     }
     found->geometry = slot;
+    fbe::scene::pickable_moved(found->entity);
     return true;
 }
 

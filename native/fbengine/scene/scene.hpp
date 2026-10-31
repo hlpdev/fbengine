@@ -281,6 +281,9 @@ struct scene_t {
     std::vector<terrain_t> terrains;
     slots_t geometry_slots{ GEOMETRY_KIND };
     std::vector<geometry_t> geometries;
+    /// Every geometry's version is the next of this, so a new one in a freed slot never has the
+    /// version its slot's last one had.
+    std::uint64_t geometry_versions = 0;
     slots_t material_slots{ MATERIAL_KIND };
     std::vector<material_t> materials;
     /// The handles freed since fbe_entity_freed last took them.

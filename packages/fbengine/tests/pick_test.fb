@@ -113,3 +113,16 @@ Function ACameraPicksWhatsUnderAPointOfItsView()
     camera.Turn(0, Deg(180), 0)
     Expect(camera.Pick(Vec2(800, 450)) == Null)
 End Function
+
+@Test
+Function AWorldsPickCanIgnoreAnEntity()
+    Local world = Fresh()
+    Defer world.Free()
+    Local floor = Floor()
+    Local player = Pivot()
+    player.SetPosition(Vec3(0, 1, 0))
+    player.SetCollisionRadius(0.5)
+    player.SetPickMode(PickMode.ELLIPSOID)
+    Expect(world.Pick(Vec3(0, 5, 0), Vec3(0, -5, 0))?.Entity == player)
+    Expect(world.Pick(Vec3(0, 5, 0), Vec3(0, -5, 0), 0, player)?.Entity == floor)
+End Function

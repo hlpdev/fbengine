@@ -171,6 +171,26 @@ inline quat_t from_to(vec3_t from, vec3_t to) {
     return normalize(quat_t(axis.x, axis.y, axis.z, 1.0F + cosine));
 }
 /// Part of the way from `a` to `b`, the short way round.
+/// The rotation that turns the axes X, Y, and Z to three others, at right angles and length 1,
+/// Shepperd's way.
+inline quat_t from_axes(vec3_t x, vec3_t y, vec3_t z) {
+    const float trace = x.x + y.y + z.z;
+    if (trace > 0.0F) {
+        const float s = std::sqrt(trace + 1.0F) * 2.0F;
+        return normalize(quat_t((y.z - z.y) / s, (z.x - x.z) / s, (x.y - y.x) / s, 0.25F * s));
+    }
+    if (x.x > y.y && x.x > z.z) {
+        const float s = std::sqrt(1.0F + x.x - y.y - z.z) * 2.0F;
+        return normalize(quat_t(0.25F * s, (y.x + x.y) / s, (z.x + x.z) / s, (y.z - z.y) / s));
+    }
+    if (y.y > z.z) {
+        const float s = std::sqrt(1.0F + y.y - x.x - z.z) * 2.0F;
+        return normalize(quat_t((y.x + x.y) / s, 0.25F * s, (z.y + y.z) / s, (z.x - x.z) / s));
+    }
+    const float s = std::sqrt(1.0F + z.z - x.x - y.y) * 2.0F;
+    return normalize(quat_t((z.x + x.z) / s, (z.y + y.z) / s, 0.25F * s, (x.y - y.x) / s));
+}
+
 inline quat_t slerp(quat_t a, quat_t b, float t) {
     float cosine = (a.x * b.x) + (a.y * b.y) + (a.z * b.z) + (a.w * b.w);
     if (cosine < 0.0F) {

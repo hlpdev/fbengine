@@ -31,6 +31,10 @@ vec3_t greatest(vec3_t a, vec3_t b) {
     return { std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z) };
 }
 
+/// How far past a triangle's edge, as a part of the triangle, a crossing still counts: so a segment
+/// through an edge two triangles share crosses one of them, however it rounds.
+constexpr float edge_slack = 1e-5F;
+
 /// Where along the segment from `a` along `delta`, 0 to 1, it crosses the triangle, Moller and
 /// Trumbore's way, or a negative for nowhere; `front` says it met the triangle's front.
 float crosses_triangle(vec3_t a, vec3_t delta, const vec3_t* corners, bool& front) {
@@ -44,12 +48,12 @@ float crosses_triangle(vec3_t a, vec3_t delta, const vec3_t* corners, bool& fron
     const float inverse = 1.0F / determinant;
     const vec3_t offset = a - corners[0];
     const float u = dot(offset, across) * inverse;
-    if (u < 0.0F || u > 1.0F) {
+    if (u < -edge_slack || u > 1.0F + edge_slack) {
         return -1.0F;
     }
     const vec3_t up = cross(offset, edge1);
     const float v = dot(delta, up) * inverse;
-    if (v < 0.0F || u + v > 1.0F) {
+    if (v < -edge_slack || u + v > 1.0F + edge_slack) {
         return -1.0F;
     }
     const float time = dot(edge2, up) * inverse;

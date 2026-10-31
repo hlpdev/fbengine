@@ -27,10 +27,14 @@ vec3_t vec(const fbe_vec3_t& v) {
     return { v.x, v.y, v.z };
 }
 
-/// The most a matrix stretches a length: never more than the root of its axes' squared lengths.
-float stretch(const mat4_t& m) {
-    return std::sqrt(dot(m.axis(0), m.axis(0)) + dot(m.axis(1), m.axis(1)) +
-                     dot(m.axis(2), m.axis(2)));
+/// How far a length in the world goes along each of a matrix's own axes at most: each row's
+/// length, so a radius in the world is a margin per axis in the matrix's space.
+vec3_t stretch(const mat4_t& m) {
+    const auto row = [&](int r) {
+        const vec3_t across(m.at(0, r), m.at(1, r), m.at(2, r));
+        return length(across);
+    };
+    return { row(0), row(1), row(2) };
 }
 
 /// Sweeps the pick against an entity as its pick mode says, keeping the hit if it's the nearest
@@ -48,6 +52,14 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
                             collider.horizontal + radius),
             .target = entity,
         };
+        // A pick starting in it goes out through it, as one starting in a box or behind a
+        // mesh's triangles does: a player's eye in its own ellipsoid doesn't pick itself.
+        const vec3_t in((from.x - ellipsoid.center.x) / ellipsoid.radii.x,
+                        (from.y - ellipsoid.center.y) / ellipsoid.radii.y,
+                        (from.z - ellipsoid.center.z) / ellipsoid.radii.z);
+        if (dot(in, in) < 1.0F) {
+            return;
+        }
         sweep_ellipsoid(from, along, radius, ellipsoid, hit, found);
         return;
     }
@@ -81,7 +93,7 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
         const terrain_t& terrain = s.terrains[s.entities.component[entity]];
         const vec3_t a = transform_point(into, from);
         const vec3_t b = transform_point(into, from + along);
-        const float grow = radius * stretch(into);
+        const vec3_t margin = stretch(into) * radius;
         const float span = std::fmax(std::fabs(b.x - a.x), std::fabs(b.z - a.z));
         const int pieces = std::clamp(static_cast<int>(std::ceil(span / 4.0F)), 1, 4096);
         std::vector<std::array<vec3_t, 3>> under;
@@ -91,7 +103,6 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
             const vec3_t across = b - a;
             const vec3_t p0 = a + across * t0;
             const vec3_t p1 = a + across * t1;
-            const vec3_t margin(grow, grow, grow);
             under.clear();
             terrain_under(
                 terrain,
@@ -113,6 +124,29 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
                     sweep_triangle(from, along, radius, triangle, hit, found);
                 }
             }
+        }
+        return;
+    }
+    if (collider.pick == FBE_PICK_MESH && s.entities.kind[entity] == FBE_ENTITY_PLANE &&
+        radius <= 0.0F) {
+        // A line meets the plane itself, from above, with no triangles' seams to slip through.
+        const vec3_t normal = transform_normal(matrix, vec3_t(0.0F, 1.0F, 0.0F));
+        const float above = dot(from - matrix.axis(3), normal);
+        const float closing = dot(along, normal);
+        if (above < 0.0F || closing >= 0.0F) {
+            return;
+        }
+        const float time = above / -closing;
+        if (time <= 1.0F && (!found || time < hit.time)) {
+            hit = {
+                .time = time,
+                .point = from + along * time,
+                .normal = normal,
+                .target = entity,
+                .origin = triangle_origin_t(),
+                .from_mesh = false,
+            };
+            found = true;
         }
         return;
     }
@@ -142,13 +176,31 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
     if (geometry == none || !inverse_affine(matrix, into)) {
         return;
     }
-    // The tree is in the mesh's own space, so the pick goes there to search it, its radius
-    // stretched as far as that space can, and each triangle it might hit comes back to the world.
+    // The tree is in the mesh's own space, so the pick goes there to search it.
     const bvh_t& tree = geometry_tree(geometry);
     const vec3_t a = transform_point(into, from);
     const vec3_t b = transform_point(into, from + along);
+    if (radius <= 0.0F) {
+        // A line by the tree's own crossing, watertight along its triangles' shared edges; a
+        // mirror keeps which side is the front, as any matrix keeps which side a point is on.
+        segment_hit_t crossing;
+        if (tree.nearest(a, b, true, crossing) && (!found || crossing.time < hit.time)) {
+            hit = {
+                .time = crossing.time,
+                .point = from + along * crossing.time,
+                .normal = transform_normal(matrix, crossing.normal),
+                .target = entity,
+                .origin = crossing.origin,
+                .from_mesh = true,
+            };
+            found = true;
+        }
+        return;
+    }
+    // Each triangle it might hit comes back to the world, the radius stretched as far as the
+    // mesh's space does along each of its axes.
     tree.along(
-        a, b, radius * stretch(into), [&] { return found ? hit.time : 1.0F; },
+        a, b, stretch(into) * radius, [&] { return found ? hit.time : 1.0F; },
         [&](std::uint32_t index) {
             const vec3_t* corners = tree.corners(index);
             triangle_t triangle;

@@ -134,8 +134,12 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view, f
         if (!seen(plane.entity, fade) || plane.tint[3] * fade <= 0.0F) {
             continue;
         }
-        // It goes on to the horizon, so it's always in view.
+        // It goes on to the horizon, so it's in view unless the whole view is under it.
         const mat4_t matrix = scene::tweened_matrix(plane.entity, tween);
+        const vec3_t up = scene::transform_normal(matrix, vec3_t(0.0F, 1.0F, 0.0F));
+        if (!scene::plane_in_view(camera, view, matrix.axis(3), up)) {
+            continue;
+        }
         items.push_back(item_of(plane.entity, plane.material, matrix, plane.tint, fade, view));
     }
     // By order; in one, opaque by material and nearest first, then blended furthest first; ties in
