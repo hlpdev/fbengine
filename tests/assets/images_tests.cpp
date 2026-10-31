@@ -425,3 +425,21 @@ TEST_CASE("an image's texels are the decoder's own, not a copy", "[assets]") {
     REQUIRE(kept.size() == std::size_t{ 4 } * 4 * 4);
     REQUIRE(kept[0] == pattern(0, 0, 0, 0, 0)[0]);
 }
+
+TEST_CASE("a KTX2's sample of 32 bits or more isn't loaded", "[assets]") {
+    // The review's, whose samples libktx would shift 1 by 119, 26 in a Zstd one, and a cube map's.
+    for (const std::string_view name :
+         { "dfd_cube_0.ktx2", "dfd_uastc_119.ktx2", "dfd_zstd_26.ktx2" }) {
+        INFO(name);
+        REQUIRE(failure(fixture(name)) == assets::failure_t::INVALID_DATA);
+    }
+    // One of 32 bits, made here, and the 8 bits a real RGBA8's are.
+    const bytes_t ktx = ktx2(4, 4, 1, 1, 1, false, pattern, [](ktxTexture2*) {});
+    REQUIRE(decoded(ktx).width == 4);
+    bytes_t wide = ktx;
+    const std::uint32_t dfd =
+        static_cast<std::uint32_t>(wide[48]) | (static_cast<std::uint32_t>(wide[49]) << 8U);
+    // The first sample's bit length, its word's third byte, at the block's 24th byte.
+    wide[dfd + 4 + 24 + 2] = 32;
+    REQUIRE(message(wide).contains("32 bits"));
+}

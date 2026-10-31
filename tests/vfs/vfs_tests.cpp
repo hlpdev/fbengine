@@ -5,10 +5,21 @@
 #include "vfs/disk.hpp"
 #include "vfs/vfs.hpp"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -768,6 +779,16 @@ TEST_CASE("res:// is a folder with nothing mounted, as kind, list, and read say"
     REQUIRE(read_failure(files, "res://") == vfs::failure_t::IS_A_FOLDER);
 }
 
+namespace {
+
+// Waits until what was just written to a folder has settled, so the folder's listing is kept: a
+// change as old as a disk's coarsest times, 2 s.
+void settle() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2100));
+}
+
+} // namespace
+
 TEST_CASE("a folder's listing is kept until the folder changes", "[vfs]") {
     const temp_folder_t folder;
     folder.write("a.txt", "a");
@@ -775,8 +796,9 @@ TEST_CASE("a folder's listing is kept until the folder changes", "[vfs]") {
     folder.write("sub/c.txt", "c");
     vfs::vfs_t files;
     files.mount(path("res://"), vfs::folder(folder.path));
-    // Long enough after its last change that it's kept as it's listed.
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    // Long enough after its last change that it's kept as it's listed, on a disk of times in
+    // whole seconds or two too.
+    settle();
     REQUIRE(list(files, "res://") == std::vector<std::string>{ "a.txt", "b.txt", "sub/" });
     REQUIRE(read(files, "res://sub/c.txt") == "c");
 
@@ -793,7 +815,7 @@ TEST_CASE("a folder's listing is kept until the folder changes", "[vfs]") {
     REQUIRE(read_failure(files, "res://sub/c.txt") == vfs::failure_t::NOT_FOUND);
     REQUIRE(read(files, "res://moved/c.txt") == "c");
     // And a file's new bytes, which aren't the listing's.
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    settle();
     REQUIRE(read(files, "res://new.txt") == "new");
     folder.write("new.txt", "newer");
     REQUIRE(read(files, "res://new.txt") == "newer");
@@ -812,6 +834,8 @@ TEST_CASE("reading each file of a big folder takes a stat of each folder on its 
     }
     vfs::vfs_t files;
     files.mount(path("res://"), vfs::folder(folder.path));
+    // Its folders' listings are kept once they've settled.
+    settle();
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < count; ++i) {
         REQUIRE(read(files, std::format("res://gfx/MAP/tex{}.png", i)) == "x");
@@ -852,4 +876,85 @@ TEST_CASE("a view reads the mounts there were when it was taken", "[vfs]") {
     REQUIRE(kept.has_value());
     REQUIRE(text_of(*kept) == "first");
     REQUIRE(view.kind(path("res://a.txt")) == vfs::kind_t::FILE);
+}
+
+TEST_CASE("a linked folder's listing follows what's in its target", "[vfs]") {
+    const temp_folder_t folder;
+    folder.write("shared/a.txt", "a");
+    fs::create_directories(folder.path / "mounted");
+    const fs::path link = folder.path / "mounted" / "linked";
+#ifdef _WIN32
+    // A junction, which Windows makes without the privilege a link needs, as a game's checkout
+    // of shared textures would be.
+    const std::string command = std::format(R"(cmd /c mklink /J "{}" "{}" >nul)", vfs::utf8(link),
+                                            vfs::utf8(folder.path / "shared"));
+    // The test's own command, of its own folder's paths.
+    REQUIRE(std::system(command.c_str()) == 0); // NOLINT(bugprone-command-processor)
+#else
+    fs::create_directory_symlink(folder.path / "shared", link);
+#endif
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path / "mounted"));
+    files.mount(path("res://direct"), vfs::folder(link));
+    settle();
+    REQUIRE(read(files, "res://linked/a.txt") == "a");
+    REQUIRE(read(files, "res://direct/a.txt") == "a");
+    // Kept and settled, then a change in the target, which is the link's own folder's.
+    folder.write("shared/b.txt", "b");
+    REQUIRE(read(files, "res://linked/b.txt") == "b");
+    REQUIRE(read(files, "res://direct/b.txt") == "b");
+    settle();
+    fs::remove(folder.path / "shared" / "a.txt");
+    REQUIRE(kind(files, "res://linked/a.txt") == vfs::kind_t::NONE);
+    REQUIRE(list(files, "res://direct") == std::vector<std::string>{ "b.txt" });
+#ifdef _WIN32
+    // A junction is taken out as a folder, leaving its target.
+    fs::remove(link);
+#endif
+}
+
+namespace {
+
+// Puts a folder's last-write time back to `time`, which std::filesystem can't on Windows, where a
+// folder opens only with backup semantics.
+void put_back(const fs::path& folder, fs::file_time_type time) {
+#ifdef _WIN32
+    const fs::file_time_type now = fs::last_write_time(folder);
+    // FILETIMEs are 100 ns ticks, as file_time_type's are on Windows.
+    const auto ticks = [](fs::file_time_type at) {
+        return static_cast<std::uint64_t>(at.time_since_epoch().count());
+    };
+    HANDLE handle = CreateFileW(folder.c_str(), FILE_WRITE_ATTRIBUTES,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    REQUIRE(handle != INVALID_HANDLE_VALUE);
+    FILETIME written{};
+    REQUIRE(GetFileTime(handle, nullptr, nullptr, &written) != 0);
+    const std::uint64_t back =
+        ((static_cast<std::uint64_t>(written.dwHighDateTime) << 32U) | written.dwLowDateTime) -
+        (ticks(now) - ticks(time));
+    written.dwLowDateTime = static_cast<DWORD>(back);
+    written.dwHighDateTime = static_cast<DWORD>(back >> 32U);
+    REQUIRE(SetFileTime(handle, nullptr, nullptr, &written) != 0);
+    CloseHandle(handle);
+#else
+    fs::last_write_time(folder, time);
+#endif
+}
+
+} // namespace
+
+TEST_CASE("a change on a disk of coarse times is seen", "[vfs]") {
+    // A folder listed in the same second as it changed, then changed again, its time put back, as
+    // a disk of whole seconds or two leaves it.
+    const temp_folder_t folder;
+    folder.write("a.txt", "a");
+    const fs::file_time_type written = fs::last_write_time(folder.path);
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    REQUIRE(list(files, "res://") == std::vector<std::string>{ "a.txt" });
+    folder.write("b.txt", "b");
+    put_back(folder.path, written);
+    REQUIRE(read(files, "res://b.txt") == "b");
+    REQUIRE(list(files, "res://") == std::vector<std::string>{ "a.txt", "b.txt" });
 }

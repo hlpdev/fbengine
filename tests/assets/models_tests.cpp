@@ -726,3 +726,39 @@ TEST_CASE("a glTF's images aren't decoded when it's asked not to", "[assets]") {
     REQUIRE(unread.images[0].width == 0);
     REQUIRE(unread.images[0].texels.size() == 0);
 }
+
+TEST_CASE("what fastgltf reads past a short string's end in is refused", "[assets]") {
+    // An empty data URI, and an accessor's type of "", which fastgltf looked into before its
+    // patch, in a debug build checked by libstdc++ too.
+    builder_t built;
+    built.positions({ 0, 0, 0 });
+    REQUIRE(failure(built.json("", "data:application/octet-stream;base64,")) ==
+            assets::failure_t::INVALID_DATA);
+    const test::temp_folder_t folder;
+    vfs::vfs_t files;
+    files.mount(path("res://models"), vfs::folder(FBENGINE_ASSETS_FIXTURES));
+    const vfs::bytes_t bytes = *files.read(path("res://models/empty_type.gltf"));
+    const assets::result_t<assets::model_t> model =
+        assets::decode_model(path("res://models/empty_type.gltf"), bytes, files.view(), {});
+    REQUIRE_FALSE(model.has_value());
+    REQUIRE(model.error().failure == assets::failure_t::INVALID_DATA);
+}
+
+TEST_CASE("a glTF's buffer there isn't the memory for fails as OTHER", "[assets]") {
+    builder_t built;
+    built.positions({ 0, 0, 0, 1, 0, 0, 0, 1, 0 });
+    // A data URI's, which fastgltf would otherwise allocate itself in a function that can't throw.
+    vfs::inject(vfs::fault_t::OUT_OF_MEMORY);
+    REQUIRE(failure(built.json("", built.data_uri())) == assets::failure_t::OTHER);
+    // A binary glTF's chunk, which it would otherwise read into a byte.
+    const std::string json =
+        built.json(R"(,"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}])", "");
+    const bytes_t glb = test::glb(json, built.buffer);
+    vfs::inject(vfs::fault_t::OUT_OF_MEMORY);
+    const assets::result_t<assets::model_t> model =
+        assets::decode_model(path("res://test.glb"), glb, vfs::view_t(), {});
+    REQUIRE_FALSE(model.has_value());
+    REQUIRE(model.error().failure == assets::failure_t::OTHER);
+    // Once.
+    REQUIRE(assets::decode_model(path("res://test.glb"), glb, vfs::view_t(), {}).has_value());
+}

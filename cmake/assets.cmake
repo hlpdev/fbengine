@@ -60,10 +60,41 @@ if(MINGW)
   target_compile_definitions(ktx PUBLIC _FILE_OFFSET_BITS=64)
 endif()
 
-# fastgltf's asserts look at what a hostile glTF breaks before the engine can check it, as a data
-# URI's base64 shorter than 4 characters, and end the process in a debug build; its own code is
-# built as a release's is, and the engine checks what they would.
-target_compile_definitions(fastgltf PRIVATE NDEBUG)
+# fastgltf's asserts look at what a hostile glTF breaks before the engine can check it, and end the
+# process in a debug build; its own code is built as a release's is, and the engine checks what they
+# would. Two of its headers are patched, where the parse itself reads past a string that's too
+# short, before the engine sees the data: a data URI's base64 of 0 to 3 characters, whose padding
+# getPadding looks for before its start, and an accessor's type too short to be one, which
+# getAccessorType reads past. The patched copies come before its own headers in its own code, which
+# alone calls them, and each patch's text has to be there, once, or configuring fails. In a debug
+# build, libstdc++'s own checks are on in it, so what reads out of range ends the tests.
+target_compile_definitions(fastgltf PRIVATE NDEBUG $<$<CONFIG:Debug>:_GLIBCXX_ASSERTIONS>)
+set(fbengine_fastgltf_patches
+    "base64.hpp"
+    "\t\tassert(string.size() >= 4 && string.size() % 4 == 0)\;\n\t\tconst auto size = string.size()\;"
+    "\t\tif (string.size() < 4 || string.size() % 4 != 0)\n\t\t\treturn 0\;\n\t\tconst auto size = string.size()\;"
+    "types.hpp"
+    "\t\tassert(!accessorTypeName.empty())\;\n\t\tswitch (accessorTypeName[0]) {"
+    "\t\tif (accessorTypeName.size() < 4)\n\t\t\treturn AccessorType::Invalid\;\n\t\tswitch (accessorTypeName[0]) {")
+set(fbengine_fastgltf_patched "${CMAKE_BINARY_DIR}/fastgltf-patched")
+foreach(fbengine_patch RANGE 0 5 3)
+  math(EXPR fbengine_patch_from "${fbengine_patch} + 1")
+  math(EXPR fbengine_patch_to "${fbengine_patch} + 2")
+  list(GET fbengine_fastgltf_patches ${fbengine_patch} fbengine_file)
+  list(GET fbengine_fastgltf_patches ${fbengine_patch_from} fbengine_from)
+  list(GET fbengine_fastgltf_patches ${fbengine_patch_to} fbengine_to)
+  file(READ "${fastgltf_SOURCE_DIR}/include/fastgltf/${fbengine_file}" fbengine_text)
+  string(FIND "${fbengine_text}" "${fbengine_from}" fbengine_first)
+  string(FIND "${fbengine_text}" "${fbengine_from}" fbengine_last REVERSE)
+  if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
+    message(FATAL_ERROR "fastgltf's ${fbengine_file} doesn't have, once, what a patch expects")
+  endif()
+  string(REPLACE "${fbengine_from}" "${fbengine_to}" fbengine_text "${fbengine_text}")
+  file(WRITE "${fbengine_fastgltf_patched}/fastgltf/${fbengine_file}.in" "${fbengine_text}")
+  configure_file("${fbengine_fastgltf_patched}/fastgltf/${fbengine_file}.in"
+                 "${fbengine_fastgltf_patched}/fastgltf/${fbengine_file}" COPYONLY)
+endforeach()
+target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_fastgltf_patched}")
 
 # fbengine's DLLs are UCRT's (cmake/native.cmake), so libktx is built for UCRT too: its encoder's
 # sprintf_s is UCRT's, inlined from the headers, which msvcrt's has no export of. What links the

@@ -133,13 +133,14 @@ public:
         }
         gltf::Parser parser(extensions);
         m_bytes = bytes.size();
+        m_chunk = has_chunk(bytes);
         parser.setUserPointer(this);
         parser.setBufferAllocationCallback(map);
         parser.setBase64DecodeCallback(decode_base64);
         parser.setExtrasParseCallback(read_extras);
         auto parsed = parser.loadGltf(data.get(), {}, gltf::Options::DecomposeNodeMatrices);
         if (m_refused) {
-            return fail(*m_refused);
+            return fail(*m_refused, m_refused_failure);
         }
         if (parsed.error() != gltf::Error::None) {
             return fail(gltf::getErrorMessage(parsed.error()));
@@ -210,12 +211,19 @@ private:
             self.refuse("a data URI isn't base64");
             return { .mappedMemory = &self.m_nothing, .customId = 0 };
         }
+        // A binary glTF's chunk is the first that's mapped, before its JSON's data URIs.
+        const bool chunk = self.m_chunk;
+        self.m_chunk = false;
         try {
+            if (vfs::faulted(vfs::fault_t::OUT_OF_MEMORY)) {
+                throw std::bad_alloc();
+            }
             self.m_mapped.emplace_back(static_cast<std::size_t>(size));
         } catch (const std::bad_alloc&) {
-            self.refuse("there isn't the memory for its buffers");
-            // With none, fastgltf leaves out a binary glTF's chunk.
-            return { .mappedMemory = nullptr, .customId = 0 };
+            self.refuse("there isn't the memory for its buffers", failure_t::OTHER);
+            // With none, fastgltf leaves out a binary glTF's chunk, which it would read into a
+            // byte; a data URI's it would allocate itself, so it gets the byte nothing writes.
+            return { .mappedMemory = chunk ? nullptr : &self.m_nothing, .customId = 0 };
         }
         return {
             .mappedMemory = self.m_mapped.back().data(),
@@ -265,9 +273,30 @@ private:
         }
     }
 
-    void refuse(std::string_view why) {
+    // Whether `bytes` are a binary glTF's with a binary chunk after its JSON's, which fastgltf
+    // maps before it reads the JSON.
+    static bool has_chunk(std::span<const std::uint8_t> bytes) {
+        constexpr std::size_t header = 12;
+        constexpr std::size_t chunk = 8;
+        if (bytes.size() < header + chunk ||
+            !std::ranges::equal(bytes.first(4), std::string_view("glTF"), {}, {},
+                                [](char c) { return static_cast<std::uint8_t>(c); })) {
+            return false;
+        }
+        const auto u32 = [&bytes](std::size_t at) {
+            std::uint32_t value = 0;
+            std::memcpy(&value, bytes.data() + at, sizeof(value));
+            return value;
+        };
+        const std::uint64_t json = u32(header);
+        const std::uint64_t binary = header + chunk + json;
+        return binary + chunk <= bytes.size() && u32(static_cast<std::size_t>(binary)) != 0;
+    }
+
+    void refuse(std::string_view why, failure_t failure = failure_t::INVALID_DATA) {
         if (!m_refused) {
             m_refused = std::string(why);
+            m_refused_failure = failure;
         }
     }
 
@@ -1273,7 +1302,9 @@ private:
     std::size_t m_bytes = 0;
     std::vector<std::vector<std::byte>> m_mapped;
     std::byte m_nothing{};
+    bool m_chunk = false;
     std::optional<std::string> m_refused;
+    failure_t m_refused_failure = failure_t::INVALID_DATA;
     // Its animations' frame rates from their extras, by index; 0 for none.
     std::vector<float> m_frame_rates;
     std::size_t m_steps = 1;

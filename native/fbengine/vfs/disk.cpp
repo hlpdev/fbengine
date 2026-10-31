@@ -145,14 +145,22 @@ std::string utf8(const std::filesystem::path& path) {
 }
 
 std::optional<folder_time_t> folder_time(const std::filesystem::path& path) {
-    // FILETIMEs, in 100 ns ticks, which the system's clock moves in steps of up to 16 ms; a
-    // folder's is when an entry was last added to it, taken out, or renamed.
-    constexpr std::uint64_t settling = std::uint64_t{ 100 } * 10'000;
+    // FILETIMEs, in 100 ns ticks, which a disk keeps in steps of up to 2 s (FAT's); a folder's is
+    // when an entry was last added to it, taken out, or renamed. A junction's or a link's is its
+    // target's, as its listing is, which opening it, rather than reading its attributes, gives.
+    constexpr std::uint64_t settling = std::uint64_t{ 2000 } * 10'000;
     FILETIME now{};
     GetSystemTimePreciseAsFileTime(&now);
-    WIN32_FILE_ATTRIBUTE_DATA data{};
-    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data) == 0 ||
-        (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    HANDLE handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return std::nullopt;
+    }
+    BY_HANDLE_FILE_INFORMATION data{};
+    const bool read = GetFileInformationByHandle(handle, &data) != 0;
+    CloseHandle(handle);
+    if (!read || (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
         return std::nullopt;
     }
     const auto ticks = [](const FILETIME& time) {
@@ -249,9 +257,10 @@ std::string utf8(const std::filesystem::path& path) {
 }
 
 std::optional<folder_time_t> folder_time(const std::filesystem::path& path) {
-    // Nanoseconds, which the kernel's clock moves in steps of up to 10 ms; a folder's is when an
-    // entry was last added to it, taken out, or renamed.
-    constexpr std::uint64_t settling = 100'000'000;
+    // Nanoseconds, which a disk keeps in steps of up to 2 s (HFS+'s and ext3's are whole seconds,
+    // FAT's two); a folder's is when an entry was last added to it, taken out, or renamed. stat
+    // follows a link, so a linked folder's is its target's, as its listing is.
+    constexpr std::uint64_t settling = 2'000'000'000;
     timespec now{};
     clock_gettime(CLOCK_REALTIME, &now);
     struct stat status{};
