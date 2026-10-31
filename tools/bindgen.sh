@@ -14,11 +14,11 @@ scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
 # Whether two binding files say the same, leaving out their first lines, which name the target
-# fb-bindgen ran for and so differ by machine.
+# fb-bindgen ran for and so differ by machine, and any CR a checkout put before a line's end.
 same_bindings() {
     [ -e "$2" ] || return 1
-    tail -n +2 "$1" > "$scratch/made"
-    tail -n +2 "$2" > "$scratch/kept"
+    tail -n +2 "$1" | tr -d '\r' > "$scratch/made"
+    tail -n +2 "$2" | tr -d '\r' > "$scratch/kept"
     cmp -s "$scratch/made" "$scratch/kept"
 }
 
