@@ -227,11 +227,11 @@ Public Final Class Texture
     End Method
 
     /// Copies the pixels `width` by `height` at `fromX`, `fromY` of `source` into it at `x`, `y`,
-    /// as they are, after what the frame does with either before, and makes its mipmaps again:
-    /// how a frame
-    /// drawn into the screen or a target is kept, as feedback effects and security monitors want.
-    /// It panics unless their formats' pixels are the same size (RGBA8's and RGBA8_LINEAR's are),
-    /// both regions are in them, they're two textures, and it isn't a multisampled target.
+    /// as they are, after what the frame does with either before, and makes its mipmaps again: how
+    /// a frame drawn into the screen or a target is kept, as feedback effects and security
+    /// monitors want. It panics unless their formats' pixels are the same size (RGBA8's and
+    /// RGBA8_LINEAR's are), both regions are in them, they're two textures, and it isn't a
+    /// multisampled target.
     @MainThread @PanicsAtCaller
     Public Method CopyFrom(source: Texture, fromX: Int32, fromY: Int32, width: Int32, height: Int32,
                            x: Int32 = 0, y: Int32 = 0)
@@ -243,6 +243,8 @@ Public Final Class Texture
 
     /// Its pixels at mipmap `level`, read back from the GPU after everything the frame's drawn so
     /// far, which it waits for: rows top first, in its format's bytes, as WritePixels takes them.
+    /// It panics for a level whose bytes are more than an array holds, 2147483647, as a 16384 by
+    /// 16384 RGBA16F texture's first level's are, before reading any.
     @MainThread @PanicsAtCaller
     Public Method ReadPixels(level: Int32 = 0): UInt8[]
         Local texture = Live("ReadPixels")
@@ -252,7 +254,11 @@ Public Final Class Texture
         End If
         Local width = Max(Width() >> level, 1)
         Local height = Max(Height() >> level, 1)
-        Local buffer = Buffer<UInt8>(Bytes(width, height, Format()))
+        Local bytes = Bytes(width, height, Format())
+        If bytes > 2147483647
+            Panic("level {level}'s {bytes} bytes are more than an array holds")
+        End If
+        Local buffer = Buffer<UInt8>(bytes)
         Local read = False
         Unsafe
             read = fbe_texture_read(texture, level, buffer.Pointer(), buffer.Count)

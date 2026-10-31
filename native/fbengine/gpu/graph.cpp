@@ -165,6 +165,14 @@ std::vector<access_t> accesses;
 std::vector<image_t> images;
 std::vector<pooled_t> pool;
 fbe::gpu::recorded_t recorded;
+
+/// A carried pass the graph last recorded, its textures by handle, kept for a failed submit.
+struct carried_t {
+    std::string_view name;
+    std::vector<std::pair<std::uint64_t, use_t>> uses;
+    std::function<void(VkCommandBuffer)> record;
+};
+std::vector<carried_t> carriable;
 bool recording = false;
 /// What sends a batch held back to the graph, and drops it, and whether it's sending it.
 void (*held_back)() = nullptr;
@@ -442,6 +450,33 @@ std::int32_t level_passes() {
         }
     }
     return levels;
+}
+
+/// Drops each kept pass that reads a transient target's image no kept pass before it drew, or
+/// draws on one without drawing all of it, as when what drew it was dropped for a transient that
+/// couldn't be made; what it would have drawn into transient targets is then missing too, for the
+/// passes after.
+void drop_unwritten() {
+    std::vector<bool> written(resources.size() * parts, false);
+    for (added_t& pass : added) {
+        if (!pass.kept) {
+            continue;
+        }
+        const std::span<const access_t> uses = uses_of(pass);
+        pass.kept = std::ranges::none_of(uses, [&written](const access_t& use) {
+            return resources[use.resource].kind == kind_t::TRANSIENT &&
+                   (!use.state.writes || !use.overwrites) &&
+                   !written[key_of(use.resource, use.part)];
+        });
+        if (!pass.kept) {
+            continue;
+        }
+        for (const access_t& use : uses) {
+            if (use.state.writes) {
+                written[key_of(use.resource, use.part)] = true;
+            }
+        }
+    }
 }
 
 /// Gives each transient target the kept passes use an image: one kept for a target like it that
@@ -826,17 +861,34 @@ bool record_graph() {
     drop_unneeded();
     const std::int32_t levels = level_passes();
     const bool made = give_images();
-    // A pass that uses a transient target that has no image is dropped.
+    // A pass that uses a transient target that has no image is dropped, and so is one that needs
+    // what such a pass would have drawn.
     for (added_t& pass : added) {
         if (pass.kept && std::ranges::any_of(uses_of(pass), [](const access_t& use) {
                 return resources[use.resource].failed;
             })) {
             pass.kept = false;
         }
+    }
+    if (!made) {
+        drop_unwritten();
+    }
+    for (const added_t& pass : added) {
         recorded.dropped += pass.kept ? 0U : 1U;
     }
     if (recorded.dropped < added.size()) {
         record_levels(levels);
+    }
+    carriable.clear();
+    for (added_t& pass : added) {
+        if (!pass.kept || !pass.pass.carried) {
+            continue;
+        }
+        carried_t carry{ .name = pass.pass.name, .record = std::move(pass.pass.record) };
+        for (const auto& [resource, use] : pass.pass.uses) {
+            carry.uses.emplace_back(resources[resource].handle, use);
+        }
+        carriable.push_back(std::move(carry));
     }
     count_passes(static_cast<std::uint32_t>(recorded.passes.size()), recorded.barriers);
     empty();
@@ -844,7 +896,25 @@ bool record_graph() {
     return made;
 }
 
+void carry_passes() {
+    std::vector<carried_t> carrying = std::move(carriable);
+    carriable.clear();
+    for (carried_t& carry : carrying) {
+        pass_t pass{ .name = carry.name, .record = std::move(carry.record), .carried = true };
+        // A texture freed since is written no more; what was staged for it goes with the frame.
+        const bool live = std::ranges::all_of(carry.uses, [&pass](const auto& use) {
+            const resource_t resource = texture_resource(use.first);
+            pass.uses.emplace_back(resource, use.second);
+            return resource != no_resource;
+        });
+        if (live) {
+            add_pass(std::move(pass));
+        }
+    }
+}
+
 void drop_passes() {
+    carriable.clear();
     if (drop_held != nullptr) {
         drop_held();
     }
@@ -873,6 +943,7 @@ void age_transients() {
 }
 
 void stop_graph() {
+    carriable.clear();
     if (drop_held != nullptr) {
         drop_held();
     }

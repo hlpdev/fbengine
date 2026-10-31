@@ -64,7 +64,9 @@ struct texture_t {
 /// A target's depth's format.
 constexpr VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
 
-/// The live texture a handle is for, or nullptr, with fbe_error's why.
+/// The live texture a handle is for, or nullptr, with fbe_error's why. The pool it's in grows as
+/// textures are made, which recording the frame graph can do, so the pointer's good only until
+/// then.
 texture_t* find(std::uint64_t handle);
 
 /// A live texture's index in the bindless set, which is its slot, and its sampler's; the white

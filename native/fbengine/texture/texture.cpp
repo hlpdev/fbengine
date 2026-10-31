@@ -451,6 +451,7 @@ bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std
         .imageExtent = { .width = width, .height = height, .depth = 1 },
     };
     if (fbe::gpu::in_graph(handle)) {
+        // Carried, as the uploads are, if the frame's submit fails, its staging buffer with it.
         return fbe::gpu::add_pass({
             .name = "write",
             .uses = { { fbe::gpu::texture_resource(handle), fbe::gpu::use_t::MIPMAPPED } },
@@ -460,6 +461,7 @@ bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std
                                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
                     record_mipmaps(commands, written);
                 },
+            .carried = true,
         });
     }
     VkCommandBuffer commands = fbe::gpu::upload_commands();
@@ -555,7 +557,13 @@ std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level) {
         fail(std::format("the texture has {} levels, not {}", texture->levels, level + 1));
         return {};
     }
+    // Recording the frame can make textures, transient targets' images, which can move the pool,
+    // so the texture's found again after.
     if (!gpu::finish_frame()) {
+        return {};
+    }
+    texture = find(handle);
+    if (texture == nullptr) {
         return {};
     }
     const VkExtent2D extent{

@@ -52,7 +52,9 @@ struct color_t {
 /// drawing into its targets, with the viewport and scissor their whole, before `record`, and ends
 /// it after, resolving a multisampled target into its texture; a pass that draws into nothing,
 /// as a copy, records outside drawing. Its name, which lasts, as a literal does, is what
-/// recorded_t says.
+/// recorded_t says. A pass that's `carried`, as a write of pixels into a texture is, goes into the
+/// graph again if the submit it was recorded for fails, as the frame's uploads are carried; it
+/// uses textures only, and what it records stays good until a submit runs it.
 struct pass_t {
     std::string_view name;
     std::vector<color_t> colors;
@@ -61,6 +63,7 @@ struct pass_t {
     float depth_value = 0.0F;
     std::vector<std::pair<resource_t, use_t>> uses;
     std::function<void(VkCommandBuffer)> record;
+    bool carried = false;
 };
 
 /// A live texture, by its handle, at rest as it is between frames' commands; the same resource
@@ -125,6 +128,10 @@ bool record_graph();
 
 /// Drops the passes added since the graph was last recorded, unrecorded, as a lost GPU runs none.
 void drop_passes();
+
+/// Adds the carried passes the graph last recorded to it again, first, after the submit they were
+/// recorded for failed.
+void carry_passes();
 
 /// What the graph's last recording did: the passes it recorded, by name, in order, and the level
 /// each was in; how many it dropped; the image barriers it placed, and the commands that placed

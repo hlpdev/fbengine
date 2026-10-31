@@ -17,6 +17,10 @@ Function Run(name: String) Throws GraphicsError
                 bytes.Add(0)
             End For
             texture.WritePixels(0, 0, 32768, 16385, bytes)
+        // A level of 2^31 bytes, one more than an array holds.
+        Case "huge-read"
+            Local texture = Try Texture(16384, 16384, TextureFormat.RGBA16F, False)
+            texture.ReadPixels()
         Case "lod-bias"
             Try Gpu.SetLodBias(17)
         Case "anisotropy"

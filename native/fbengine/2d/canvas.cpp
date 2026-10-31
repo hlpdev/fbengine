@@ -145,8 +145,13 @@ void flush() {
     quads.clear();
     draws.clear();
     const fbe::texture::texture_t* found = fbe::texture::find(batch_target);
-    const fbe::gpu::resource_t target =
-        found != nullptr ? fbe::gpu::texture_resource(batch_target) : fbe::gpu::no_resource;
+    if (found == nullptr) {
+        return;
+    }
+    const VkExtent2D extent{ .width = found->width, .height = found->height };
+    const VkFormat format = found->vk_format;
+    const VkSampleCountFlagBits samples = found->samples;
+    const fbe::gpu::resource_t target = fbe::gpu::texture_resource(batch_target);
     const VkDeviceSize bytes = sent.size() * sizeof(quad_t);
     const fbe::gpu::slice_t slice =
         target != fbe::gpu::no_resource ? fbe::gpu::frame_memory(bytes, 16) : fbe::gpu::slice_t{};
@@ -155,16 +160,17 @@ void flush() {
         const push_t push{
             .quads = slice.address,
             .scale = {
-                2.0F / static_cast<float>(found->width),
-                2.0F / static_cast<float>(found->height),
+                2.0F / static_cast<float>(extent.width),
+                2.0F / static_cast<float>(extent.height),
             },
         };
         fbe::gpu::add_pass({
             .name = "2d",
             .colors = { { .target = target } },
             .record =
-                [push, drawn, format = found->vk_format, samples = found->samples](
-                    VkCommandBuffer commands) { record(commands, push, *drawn, format, samples); },
+                [push, drawn, format, samples](VkCommandBuffer commands) {
+                    record(commands, push, *drawn, format, samples);
+                },
         });
     }
 }
@@ -210,13 +216,13 @@ bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, bool solid = false) {
     if (!found->target) {
         return fbe::fail("the texture isn't a target, which draws");
     }
+    const std::int64_t width = found->width;
+    const std::int64_t height = found->height;
     if (handle != batch_target) {
         flush();
         batch_target = handle;
     }
     const bool whole = pen->viewport_width == 0 && pen->viewport_height == 0;
-    const std::int64_t width = found->width;
-    const std::int64_t height = found->height;
     clip = {
         .left = whole ? 0 : std::clamp<std::int64_t>(pen->viewport_x, 0, width),
         .top = whole ? 0 : std::clamp<std::int64_t>(pen->viewport_y, 0, height),

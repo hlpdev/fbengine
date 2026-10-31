@@ -549,6 +549,69 @@ TEST_CASE("a frame drawn through transient targets matches its golden image", "[
     stop_gpu();
 }
 
+// Each readback records the frame, which makes a transient target's image, a texture, as it goes:
+// the texture read is found again after, wherever the pool's moved.
+TEST_CASE("a readback that makes a transient target's image reads what was drawn", "[gpu]") {
+    begin_test();
+    const std::uint64_t shown = target(8, 8);
+    for (std::uint32_t at = 0; at < 40; ++at) {
+        INFO("readback " << at);
+        const resource_t drawn = fbe::gpu::transient_resource(
+            { .width = 8 + at, .height = 8, .format = FBE_TEXTURE_RGBA8 });
+        triangle("drawn", drawn, red);
+        quad("shown", fbe::gpu::texture_resource(shown), drawn);
+        CHECK(middle(shown) == red8);
+    }
+    CHECK(fbe::gpu::transient_images() == 40);
+    stop_gpu();
+}
+
+// The first transient target can't be made, so what draws into it is dropped, and so is what draws
+// the second from it, and what draws the texture on the second, whose image holds a frame before's.
+TEST_CASE("a pass that needs what a dropped pass drew is dropped too", "[gpu]") {
+    begin_test();
+    const std::uint64_t shown = target(16, 16);
+    constexpr fbe::gpu::transient_t larger{
+        .width = 16,
+        .height = 16,
+        .format = FBE_TEXTURE_RGBA8,
+    };
+    const resource_t before = fbe::gpu::transient_resource(larger);
+    triangle("red before", before, red);
+    quad("shown before", fbe::gpu::texture_resource(shown), before);
+    require(fbe::gpu::finish_frame());
+    require(fbe_texture_clear(shown, 0.0F, 0.0F, 1.0F, 1.0F));
+    require(fbe::gpu::finish_frame());
+    const resource_t first = fbe::gpu::transient_resource(small);
+    const resource_t second = fbe::gpu::transient_resource(larger);
+    triangle("first", first, green);
+    quad("second", second, first);
+    quad("shown", fbe::gpu::texture_resource(shown), second, whole, false);
+    fbe::gpu::inject(fbe::gpu::fault_t::VIEW);
+    CHECK(!fbe::gpu::record_graph());
+    CHECK(fbe::gpu::last_recorded().passes.empty());
+    CHECK(fbe::gpu::last_recorded().dropped == 3);
+    CHECK(middle(shown) == blue8);
+    stop_gpu();
+}
+
+// A write of pixels after a draw sampled the texture is a pass in the frame's commands, which a
+// failed submit drops; it's carried to the next, as the uploads are.
+TEST_CASE("a write that's a pass is carried past a failed submit", "[gpu]") {
+    begin_test();
+    const std::uint64_t texture = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA8_LINEAR, false);
+    REQUIRE(texture != 0);
+    const std::uint64_t shown = target(2, 2);
+    quad("drawn", fbe::gpu::texture_resource(shown), fbe::gpu::texture_resource(texture));
+    const std::vector<std::uint8_t> written(16, 77);
+    require(fbe_texture_write(texture, 0, 0, 2, 2, written.data(), 8));
+    fbe::gpu::inject(fbe::gpu::fault_t::SUBMIT);
+    CHECK(!fbe::gpu::finish_frame());
+    CHECK(fbe::texture::read(texture, 0) == written);
+    CHECK(fbe::gpu::last_recorded().passes == std::vector<std::string_view>{ "write" });
+    stop_gpu();
+}
+
 // The last frame's counters: the draws and triangles its passes counted, Flip's present's too, its
 // passes and barriers, the bytes it uploaded, and, a frame or two on, the GPU's time over it.
 TEST_CASE("the last frame's counters say what it did", "[gpu]") {

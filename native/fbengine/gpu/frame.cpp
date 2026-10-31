@@ -1,10 +1,10 @@
 // The frame's commands: begun the first time something records after a Flip, the frame graph
 // recorded into them as they're submitted, at the Flip, uploads first, and what each frame in
 // flight leaves to free once the GPU's done with it. A submit that fails for want of memory keeps
-// the frame's uploads, and what they copy from, for the next submit to run first, so a texture
-// written then still gets its pixels; a lost GPU runs nothing, freeing what each frame leaves at
-// once. And the counters of what the last frame did, its GPU time read from its timestamps once
-// the GPU's done with it.
+// the frame's uploads, and what they copy from, for the next submit to run first, and puts the
+// writes the graph recorded as passes into it again, so a texture written then still gets its
+// pixels; a lost GPU runs nothing, freeing what each frame leaves at once. And the counters of what
+// the last frame did, its GPU time read from its timestamps once the GPU's done with it.
 
 #include "core/engine.hpp"
 #include "fbengine.h"
@@ -170,6 +170,8 @@ bool submit(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame, VkSemaphore
             carried.push_back(
                 { .pool = pool, .uploads = uploads, .garbage = std::move(frame.garbage) });
             frame.garbage.clear();
+            // Writes that were passes in the frame's commands go into the graph again, first.
+            fbe::gpu::carry_passes();
         } else {
             collect(frame);
             for (const carried_t& carry : carried) {
