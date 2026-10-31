@@ -4,6 +4,7 @@
 // skipped: FBE_AUDIO_API, a macro that isn't a number
 Public Const FBE_AUDIO_SIMULATE_UNPLUG: Int32 = 0
 Public Const FBE_AUDIO_SIMULATE_PLUG_IN: Int32 = 1
+Public Const FBE_AUDIO_SIMULATE_UNPLUG_ALL: Int32 = 2
 
 Public Extern "C" Lib "fbengine_audio_native"
     Function fbe_audio_version(): CString
@@ -18,6 +19,7 @@ Public Extern "C" Lib "fbengine_audio_native"
     Function fbe_audio_device(): Int32
     Function fbe_audio_device_name(): CString
     Function fbe_audio_lost(): Bool
+    Function fbe_audio_recover()
     Function fbe_audio_simulate(event: Int32): Bool
     Function fbe_audio_sample_rate(): Int32
     Function fbe_audio_channels(): Int32

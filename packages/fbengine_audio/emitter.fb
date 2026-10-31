@@ -7,7 +7,7 @@ Import std.math
 Import "./audio"
 Import "./c/fbe_emitter"
 Import "./channel"
-Import "./follow"
+Import "./flip"
 Import "./listener"
 Import "./sound"
 
@@ -74,7 +74,7 @@ Public Final Class Emitter
         follows = where
         followedBefore = False
         followEmitters = MoveFollowed
-        StartFollowing()
+        HookFlip()
     End Method
 
     /// Stops following what it follows, and leaves it where it is, at rest.

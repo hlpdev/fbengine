@@ -4,7 +4,7 @@ Import std.core
 Import std.math
 Import "./audio"
 Import "./c/fbe_listener"
-Import "./follow"
+Import "./flip"
 
 /// Where sounds in the world, the Channels Emitters play, are heard from, which there's one of: a
 /// game puts it where its camera is, each frame. Its place, rotation, and velocity are in
@@ -40,7 +40,7 @@ Public Final Class Listener
         turns = turned
         followedBefore = False
         followListener = MoveListener
-        StartFollowing()
+        HookFlip()
     End Method
 
     /// Stops following, and leaves it where it is, at rest.
