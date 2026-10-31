@@ -109,6 +109,11 @@ struct geometry_t {
     bool bounds_stale = true;
     vec3_t bounds_min;
     vec3_t bounds_max;
+    /// A box drawing culls it by instead of its bounds, as a skinned mesh's, whose vertices move
+    /// out of them, wants.
+    bool has_cull_box = false;
+    vec3_t cull_min;
+    vec3_t cull_max;
     /// Goes up when its triangles come or go, as against only moving, which a tree can be
     /// refitted for rather than built again.
     std::uint64_t shape_version = 0;
@@ -150,6 +155,17 @@ struct plane_t {
     std::uint32_t material = none;
     std::array<float, 4> tint{ 1.0F, 1.0F, 1.0F, 1.0F };
     std::int32_t segments = 1;
+};
+
+/// A terrain: its grid's size, its corners' heights row by row along Z, and how it's drawn; its
+/// version goes up at every change.
+struct terrain_t {
+    std::uint32_t entity = none;
+    std::uint32_t material = none;
+    std::array<float, 4> tint{ 1.0F, 1.0F, 1.0F, 1.0F };
+    std::int32_t size = 1;
+    std::vector<float> heights;
+    std::uint64_t version = 0;
 };
 
 /// Every entity's data, a field to an array, indexed by slot.
@@ -262,6 +278,7 @@ struct scene_t {
     std::vector<mesh_t> meshes;
     std::vector<sprite_t> sprites;
     std::vector<plane_t> planes;
+    std::vector<terrain_t> terrains;
     slots_t geometry_slots{ GEOMETRY_KIND };
     std::vector<geometry_t> geometries;
     slots_t material_slots{ MATERIAL_KIND };
@@ -307,6 +324,19 @@ void add_mesh(std::uint32_t entity);
 void remove_mesh(std::uint32_t entity);
 /// The live mesh a handle is for, or null, with fbe_error saying so.
 mesh_t* mesh_of(std::uint64_t handle);
+void add_terrain(std::uint32_t entity);
+void remove_terrain(std::uint32_t entity);
+/// The live terrain a handle is for, or null, with fbe_error saying so.
+terrain_t* terrain_of(std::uint64_t handle);
+/// The box a terrain's grid is in, in its own space.
+void terrain_bounds(const terrain_t& terrain, vec3_t& min, vec3_t& max);
+/// The triangles of a terrain's squares under a box in its own space, counterclockwise seen from
+/// above, in its own space.
+void terrain_under(const terrain_t& terrain, vec3_t min, vec3_t max,
+                   std::vector<std::array<vec3_t, 3>>& triangles);
+/// The point on a terrain's surface over a point in its own space, and the surface's normal there;
+/// false off its grid.
+bool terrain_surface(const terrain_t& terrain, vec3_t local, vec3_t& point, vec3_t& normal);
 void add_plane(std::uint32_t entity);
 void remove_plane(std::uint32_t entity);
 /// The live ground plane a handle is for, or null, with fbe_error saying so.

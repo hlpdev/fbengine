@@ -518,11 +518,19 @@ FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, f
     }
     fbe::scene::update_world(slot);
     const fbe::scene::mat4_t& m = s.entities.world_matrix[slot];
-    if (s.entities.kind[slot] == FBE_ENTITY_SPRITE) {
-        // The box its quad stays in, however it turns.
+    if (s.entities.kind[slot] == FBE_ENTITY_SPRITE || s.entities.kind[slot] == FBE_ENTITY_TERRAIN) {
+        // A sprite's quad stays in its box however it turns; a terrain's grid is in its own.
         fbe::scene::vec3_t min;
         fbe::scene::vec3_t max;
-        fbe::scene::sprite_bounds(slot, min, max);
+        if (s.entities.kind[slot] == FBE_ENTITY_SPRITE) {
+            fbe::scene::sprite_bounds(slot, min, max);
+        } else {
+            fbe::scene::vec3_t local_min;
+            fbe::scene::vec3_t local_max;
+            fbe::scene::terrain_bounds(s.terrains[s.entities.component[slot]], local_min,
+                                       local_max);
+            fbe::scene::world_box(slot, local_min, local_max, min, max);
+        }
         std::array<fbe::scene::vec3_t, 8> corners;
         for (std::size_t corner = 0; corner < 8; ++corner) {
             corners[corner] = fbe::scene::vec3_t((corner & 1U) != 0 ? max.x : min.x,

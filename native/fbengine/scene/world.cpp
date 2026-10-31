@@ -22,7 +22,7 @@ namespace {
 
 /// The kinds fbe_entity_create takes.
 bool valid_kind(std::int32_t kind) {
-    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_MIRROR;
+    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_TERRAIN;
 }
 
 /// Where an entity sits: its parent's children, or its world's roots.

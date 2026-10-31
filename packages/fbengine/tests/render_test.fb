@@ -58,3 +58,20 @@ Function ACamerasDrawProjectionIsReversedAndYDown()
     Local above = p * Vec4(0, 1, -5, 1)
     Expect(above.y < 0)
 End Function
+
+@Test
+Function AGeometrysCullBoxCullsItsMeshes()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Looking()
+    Local geometry = Geometry.Cube()
+    Local mesh = Mesh(geometry)
+    mesh.SetPosition(Vec3(0, 0, -5))
+    geometry.Translate(Vec3(100, 0, 0))
+    Expect(camera.Draws().Count == 0 && geometry.CullBox() == Null)
+    geometry.SetCullBox(AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1)))
+    Expect(camera.Draws().Count == 1)
+    Expect(geometry.CullBox() == AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1)))
+    geometry.SetCullBox(Null)
+    Expect(camera.Draws().Count == 0)
+End Function

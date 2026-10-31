@@ -1,0 +1,60 @@
+// Terrains: heights, the surface at a point, movers and picks on it, with no GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+@Test
+Function ATerrainIsItsGridOfHeights()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hills = Terrain(8)
+    Expect(hills.Kind() == EntityKind.TERRAIN && hills.Size() == 8)
+    hills.SetHeight(4, 4, 3)
+    Expect(hills.Height(4, 4) == 3 && hills.Height(0, 0) == 0)
+    Expect(IsClose(hills.SurfacePoint(Vec3(4, 50, 4))?.y ?? 0, 3, 0.001))
+    Expect((hills.SurfaceNormal(Vec3(1, 0, 1))?.y ?? 0) == 1)
+    Expect(hills.SurfacePoint(Vec3(-1, 0, 4)) == Null)
+    Local heights: Float[] = []
+    For i = 0 Until 81
+        heights.Add(1)
+    End For
+    hills.SetHeights(heights)
+    Expect(hills.Height(4, 4) == 1)
+    // A copy has its own heights.
+    Local copy = hills.Copy() As Terrain
+    copy.SetHeight(0, 0, 5)
+    Expect(hills.Height(0, 0) == 1 && copy.Size() == 8)
+End Function
+
+@Test
+Function MoversAndPicksMeetATerrain()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(1, 2, CollisionResponse.SLIDE)
+    Local ground = Terrain(16)
+    ground.SetCollisionGroup(2)
+    ground.SetPickMode(PickMode.MESH)
+    For z = 0 To 16
+        For x = 0 To 16
+            ground.SetHeight(x, z, 2)
+        End For
+    End For
+    Local mover = Pivot()
+    mover.SetCollisionGroup(1)
+    mover.SetCollisionRadius(0.5)
+    mover.SetPosition(Vec3(5, 10, 5))
+    world.Collide()
+    mover.Translate(Vec3(0, -20, 0))
+    world.Collide()
+    Expect(IsClose(mover.Position().y, 2.501, 0.002))
+    Expect(world.Pick(Vec3(8, 10, 8), Vec3(8, -10, 8))?.Entity == ground)
+    Expect(world.Pick(Vec3(8, -10, 8), Vec3(8, 10, 8)) == Null)
+End Function

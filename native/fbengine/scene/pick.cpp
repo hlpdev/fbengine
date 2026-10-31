@@ -8,6 +8,8 @@
 #include "scene/scene.hpp"
 #include "scene/sweep.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -69,6 +71,51 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
         }
         return;
     }
+    if (collider.pick == FBE_PICK_MESH && s.entities.kind[entity] == FBE_ENTITY_TERRAIN) {
+        mat4_t into;
+        if (!inverse_affine(matrix, into)) {
+            return;
+        }
+        // In pieces of a few squares each, so a long pick over a big terrain tries only the
+        // squares near its line, nearest first, and stops at the first piece with a hit.
+        const terrain_t& terrain = s.terrains[s.entities.component[entity]];
+        const vec3_t a = transform_point(into, from);
+        const vec3_t b = transform_point(into, from + along);
+        const float grow = radius * stretch(into);
+        const float span = std::fmax(std::fabs(b.x - a.x), std::fabs(b.z - a.z));
+        const int pieces = std::clamp(static_cast<int>(std::ceil(span / 4.0F)), 1, 4096);
+        std::vector<std::array<vec3_t, 3>> under;
+        for (int piece = 0; piece < pieces && !found; ++piece) {
+            const float t0 = static_cast<float>(piece) / static_cast<float>(pieces);
+            const float t1 = static_cast<float>(piece + 1) / static_cast<float>(pieces);
+            const vec3_t across = b - a;
+            const vec3_t p0 = a + across * t0;
+            const vec3_t p1 = a + across * t1;
+            const vec3_t margin(grow, grow, grow);
+            under.clear();
+            terrain_under(
+                terrain,
+                vec3_t(std::fmin(p0.x, p1.x), std::fmin(p0.y, p1.y), std::fmin(p0.z, p1.z)) -
+                    margin,
+                vec3_t(std::fmax(p0.x, p1.x), std::fmax(p0.y, p1.y), std::fmax(p0.z, p1.z)) +
+                    margin,
+                under);
+            for (const auto& corners : under) {
+                triangle_t triangle;
+                if (make_triangle(
+                        {
+                            transform_point(matrix, corners[0]),
+                            transform_point(matrix, corners[1]),
+                            transform_point(matrix, corners[2]),
+                        },
+                        mirrored, triangle)) {
+                    triangle.target = entity;
+                    sweep_triangle(from, along, radius, triangle, hit, found);
+                }
+            }
+        }
+        return;
+    }
     if (collider.pick == FBE_PICK_MESH && s.entities.kind[entity] == FBE_ENTITY_PLANE) {
         // The part of the plane under the pick's box.
         const vec3_t to = from + along;
@@ -126,6 +173,18 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
 bool refresh(pickable_t& entry) {
     const scene_t& s = scene();
     const std::uint32_t entity = entry.entity;
+    if (entry.mode == FBE_PICK_MESH && s.entities.kind[entity] == FBE_ENTITY_TERRAIN) {
+        const terrain_t& terrain = s.terrains[s.entities.component[entity]];
+        if (entry.stale || entry.version != terrain.version) {
+            vec3_t min;
+            vec3_t max;
+            terrain_bounds(terrain, min, max);
+            world_box(entity, min, max, entry.min, entry.max);
+            entry.version = terrain.version;
+            entry.stale = false;
+        }
+        return true;
+    }
     if (entry.mode == FBE_PICK_MESH && s.entities.kind[entity] == FBE_ENTITY_PLANE) {
         // Everywhere: the plane's own test says.
         entry.min = vec3_t(-INFINITY, -INFINITY, -INFINITY);

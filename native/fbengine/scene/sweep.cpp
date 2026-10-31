@@ -6,6 +6,7 @@
 #include "scene/math.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <utility>
 
 namespace fbe::scene {
@@ -40,9 +41,13 @@ bool lowest_root(float a, float b, float c, float below, float& root) {
 /// Whether a point on a triangle's plane is inside it.
 bool inside(const triangle_t& triangle, vec3_t p) {
     const auto& c = triangle.corners;
-    return dot(cross(c[1] - c[0], p - c[0]), triangle.normal) >= 0.0F &&
-           dot(cross(c[2] - c[1], p - c[1]), triangle.normal) >= 0.0F &&
-           dot(cross(c[0] - c[2], p - c[2]), triangle.normal) >= 0.0F;
+    // A hair past each edge counts, so a point on an edge or a corner its neighbours share is in
+    // one of them, whatever rounding does: no cracks between a mesh's triangles.
+    const auto within = [&](std::size_t from, std::size_t to) {
+        const vec3_t edge = c[to] - c[from];
+        return dot(cross(edge, p - c[from]), triangle.normal) >= -1e-5F * dot(edge, edge);
+    };
+    return within(0, 1) && within(1, 2) && within(2, 0);
 }
 
 } // namespace

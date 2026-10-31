@@ -90,9 +90,13 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view, f
             continue;
         }
         const mat4_t matrix = scene::tweened_matrix(mesh.entity, tween);
-        vec3_t min;
-        vec3_t max;
-        scene::geometry_bounds(mesh.geometry, min, max);
+        // Its cull box, if its geometry has one, else its bounds.
+        const scene::geometry_t& geometry = s.geometries[mesh.geometry];
+        vec3_t min = geometry.cull_min;
+        vec3_t max = geometry.cull_max;
+        if (!geometry.has_cull_box) {
+            scene::geometry_bounds(mesh.geometry, min, max);
+        }
         const std::array<vec3_t, 8> corners = corners_of(matrix, min, max);
         if (!scene::in_view(camera, view, corners.data(), corners.size())) {
             continue;

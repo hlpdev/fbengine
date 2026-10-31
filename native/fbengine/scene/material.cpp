@@ -410,6 +410,44 @@ FBE_API bool fbe_mesh_tint(uint64_t mesh, fbe_color_t* tint) {
     return true;
 }
 
+FBE_API bool fbe_terrain_set_material(uint64_t terrain, uint64_t material) {
+    fbe::scene::terrain_t* found = fbe::scene::terrain_of(terrain);
+    std::uint32_t slot = none;
+    if (found == nullptr || !fbe::scene::optional_material(material, slot)) {
+        return false;
+    }
+    fbe::scene::retain_material(slot);
+    fbe::scene::release_material(found->material);
+    found->material = slot;
+    return true;
+}
+
+FBE_API uint64_t fbe_terrain_material(uint64_t terrain) {
+    const fbe::scene::terrain_t* found = fbe::scene::terrain_of(terrain);
+    if (found == nullptr || found->material == none) {
+        return 0;
+    }
+    return scene().material_slots.handle(found->material);
+}
+
+FBE_API bool fbe_terrain_set_tint(uint64_t terrain, float r, float g, float b, float a) {
+    fbe::scene::terrain_t* found = fbe::scene::terrain_of(terrain);
+    if (found == nullptr || !fbe::scene::valid_color(r, g, b, a, "a terrain's")) {
+        return false;
+    }
+    found->tint = { r, g, b, a };
+    return true;
+}
+
+FBE_API bool fbe_terrain_tint(uint64_t terrain, fbe_color_t* tint) {
+    const fbe::scene::terrain_t* found = fbe::scene::terrain_of(terrain);
+    if (found == nullptr) {
+        return false;
+    }
+    *tint = fbe::scene::color_of(found->tint);
+    return true;
+}
+
 FBE_API bool fbe_plane_set_material(uint64_t plane, uint64_t material) {
     fbe::scene::plane_t* found = fbe::scene::plane_of(plane);
     std::uint32_t slot = none;

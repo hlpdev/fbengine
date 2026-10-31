@@ -1,0 +1,225 @@
+// Terrains: a grid of heights, made in code and changed in place, its surface's height and normal
+// at a point, and the triangles of it under a box, which collisions and picks sweep.
+
+#include "core/engine.hpp"
+#include "fbengine.h"
+#include "scene/math.hpp"
+#include "scene/scene.hpp"
+#include "scene/sweep.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <format>
+#include <vector>
+
+namespace fbe::scene {
+
+namespace {
+
+constexpr std::int32_t most_size = 4096;
+
+/// A grid corner's height.
+float height_at(const terrain_t& terrain, std::int32_t x, std::int32_t z) {
+    const auto row = static_cast<std::size_t>(terrain.size) + 1;
+    return terrain.heights[(static_cast<std::size_t>(z) * row) + static_cast<std::size_t>(x)];
+}
+
+/// The two triangles of a square, (x, z) its least corner, counterclockwise seen from above.
+std::array<std::array<vec3_t, 3>, 2> square(const terrain_t& terrain, std::int32_t x,
+                                            std::int32_t z) {
+    const auto fx = static_cast<float>(x);
+    const auto fz = static_cast<float>(z);
+    const vec3_t a(fx, height_at(terrain, x, z), fz);
+    const vec3_t b(fx + 1.0F, height_at(terrain, x + 1, z), fz);
+    const vec3_t c(fx, height_at(terrain, x, z + 1), fz + 1.0F);
+    const vec3_t d(fx + 1.0F, height_at(terrain, x + 1, z + 1), fz + 1.0F);
+    return { { { a, c, d }, { a, d, b } } };
+}
+
+} // namespace
+
+terrain_t* terrain_of(std::uint64_t handle) {
+    const std::uint32_t entity = entity_slot(handle);
+    if (entity == none) {
+        return nullptr;
+    }
+    if (scene().entities.kind[entity] != FBE_ENTITY_TERRAIN) {
+        fail("the entity isn't a terrain");
+        return nullptr;
+    }
+    return &scene().terrains[scene().entities.component[entity]];
+}
+
+void add_terrain(std::uint32_t entity) {
+    scene_t& s = scene();
+    s.entities.component[entity] = static_cast<std::uint32_t>(s.terrains.size());
+    terrain_t terrain{ .entity = entity };
+    terrain.heights.assign(4, 0.0F);
+    s.terrains.push_back(std::move(terrain));
+}
+
+void remove_terrain(std::uint32_t entity) {
+    scene_t& s = scene();
+    const std::uint32_t index = s.entities.component[entity];
+    release_material(s.terrains[index].material);
+    if (index != s.terrains.size() - 1) {
+        s.terrains[index] = std::move(s.terrains.back());
+        s.entities.component[s.terrains[index].entity] = index;
+    }
+    s.terrains.pop_back();
+}
+
+void terrain_bounds(const terrain_t& terrain, vec3_t& min, vec3_t& max) {
+    const auto [low, high] = std::ranges::minmax(terrain.heights);
+    const auto size = static_cast<float>(terrain.size);
+    min = vec3_t(0.0F, low, 0.0F);
+    max = vec3_t(size, high, size);
+}
+
+void terrain_under(const terrain_t& terrain, vec3_t min, vec3_t max,
+                   std::vector<std::array<vec3_t, 3>>& triangles) {
+    // The squares the box's footprint is on, in the grid's own space: a point's own square too.
+    const auto first_x = std::clamp(static_cast<std::int32_t>(std::floor(min.x)), 0, terrain.size);
+    const auto first_z = std::clamp(static_cast<std::int32_t>(std::floor(min.z)), 0, terrain.size);
+    const auto last_x =
+        std::clamp(static_cast<std::int32_t>(std::floor(max.x)) + 1, 0, terrain.size);
+    const auto last_z =
+        std::clamp(static_cast<std::int32_t>(std::floor(max.z)) + 1, 0, terrain.size);
+    for (std::int32_t z = first_z; z < last_z; ++z) {
+        for (std::int32_t x = first_x; x < last_x; ++x) {
+            for (const auto& corners : square(terrain, x, z)) {
+                triangles.push_back(corners);
+            }
+        }
+    }
+}
+
+bool terrain_surface(const terrain_t& terrain, vec3_t local, vec3_t& point, vec3_t& normal) {
+    const auto size = static_cast<float>(terrain.size);
+    if (std::isnan(local.x) || std::isnan(local.z) || local.x < 0.0F || local.x > size ||
+        local.z < 0.0F || local.z > size) {
+        return false;
+    }
+    const auto x = std::min(static_cast<std::int32_t>(local.x), terrain.size - 1);
+    const auto z = std::min(static_cast<std::int32_t>(local.z), terrain.size - 1);
+    const auto triangles = square(terrain, x, z);
+    // Over the square's diagonal from its least corner to its greatest, or under it.
+    const float across = local.x - static_cast<float>(x);
+    const float along = local.z - static_cast<float>(z);
+    const auto& t = along >= across ? triangles[0] : triangles[1];
+    normal = normalize(cross(t[1] - t[0], t[2] - t[0]));
+    // Up the plane of that triangle to the point above `local`.
+    const float height =
+        t[0].y - (((normal.x * (local.x - t[0].x)) + (normal.z * (local.z - t[0].z))) / normal.y);
+    point = vec3_t(local.x, height, local.z);
+    return true;
+}
+
+} // namespace fbe::scene
+
+using fbe::scene::entity_slot;
+using fbe::scene::none;
+using fbe::scene::scene;
+using fbe::scene::terrain_t;
+using fbe::scene::vec3_t;
+
+extern "C" {
+
+FBE_API bool fbe_terrain_set_size(uint64_t terrain, int32_t size) {
+    terrain_t* found = fbe::scene::terrain_of(terrain);
+    if (found == nullptr) {
+        return false;
+    }
+    if (size < 1 || size > fbe::scene::most_size) {
+        return fbe::fail(std::format("a terrain is 1 to {} squares a side, not {}",
+                                     fbe::scene::most_size, size));
+    }
+    found->size = size;
+    const auto row = static_cast<std::size_t>(size) + 1;
+    found->heights.assign(row * row, 0.0F);
+    ++found->version;
+    fbe::scene::pickable_moved(found->entity);
+    return true;
+}
+
+FBE_API int32_t fbe_terrain_size(uint64_t terrain) {
+    const terrain_t* found = fbe::scene::terrain_of(terrain);
+    return found != nullptr ? found->size : -1;
+}
+
+FBE_API bool fbe_terrain_set_height(uint64_t terrain, int32_t x, int32_t z, float height) {
+    terrain_t* found = fbe::scene::terrain_of(terrain);
+    if (found == nullptr) {
+        return false;
+    }
+    if (x < 0 || x > found->size || z < 0 || z > found->size) {
+        return fbe::fail(std::format(
+            "a terrain's corners are 0 to {} across and along, not ({}, {})", found->size, x, z));
+    }
+    if (!std::isfinite(height)) {
+        return fbe::fail(std::format("a terrain's height is finite, not {}", height));
+    }
+    const auto row = static_cast<std::size_t>(found->size) + 1;
+    found->heights[(static_cast<std::size_t>(z) * row) + static_cast<std::size_t>(x)] = height;
+    ++found->version;
+    fbe::scene::pickable_moved(found->entity);
+    return true;
+}
+
+FBE_API float fbe_terrain_height(uint64_t terrain, int32_t x, int32_t z) {
+    const terrain_t* found = fbe::scene::terrain_of(terrain);
+    if (found == nullptr || x < 0 || x > found->size || z < 0 || z > found->size) {
+        return NAN;
+    }
+    return fbe::scene::height_at(*found, x, z);
+}
+
+FBE_API bool fbe_terrain_set_heights(uint64_t terrain, const float* heights, int32_t count) {
+    terrain_t* found = fbe::scene::terrain_of(terrain);
+    if (found == nullptr) {
+        return false;
+    }
+    if (static_cast<std::size_t>(std::max(count, 0)) != found->heights.size()) {
+        return fbe::fail(std::format("a terrain {} squares a side has {} heights, not {}",
+                                     found->size, found->heights.size(), count));
+    }
+    for (std::int32_t i = 0; i < count; ++i) {
+        if (!std::isfinite(heights[i])) {
+            return fbe::fail(std::format("a terrain's height is finite, not {}", heights[i]));
+        }
+    }
+    std::copy(heights, heights + count, found->heights.begin());
+    ++found->version;
+    fbe::scene::pickable_moved(found->entity);
+    return true;
+}
+
+FBE_API int32_t fbe_terrain_surface(uint64_t terrain, float x, float y, float z, fbe_vec3_t* point,
+                                    fbe_vec3_t* normal) {
+    const std::uint32_t slot = entity_slot(terrain);
+    const terrain_t* found = slot != none ? fbe::scene::terrain_of(terrain) : nullptr;
+    if (found == nullptr) {
+        return -1;
+    }
+    fbe::scene::update_world(slot);
+    const fbe::scene::mat4_t& matrix = scene().entities.world_matrix[slot];
+    fbe::scene::mat4_t into;
+    if (!fbe::scene::inverse_affine(matrix, into)) {
+        return 0;
+    }
+    vec3_t local_point;
+    vec3_t local_normal;
+    if (!fbe::scene::terrain_surface(*found, fbe::scene::transform_point(into, vec3_t(x, y, z)),
+                                     local_point, local_normal)) {
+        return 0;
+    }
+    const vec3_t world_point = fbe::scene::transform_point(matrix, local_point);
+    const vec3_t world_normal = fbe::scene::transform_normal(matrix, local_normal);
+    *point = { .x = world_point.x, .y = world_point.y, .z = world_point.z };
+    *normal = { .x = world_normal.x, .y = world_normal.y, .z = world_normal.z };
+    return 1;
+}
+
+} // extern "C"

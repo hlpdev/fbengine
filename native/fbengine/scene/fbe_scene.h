@@ -15,13 +15,14 @@ extern "C" {
 #endif
 
 // What an entity is.
-#define FBE_ENTITY_PIVOT  0
-#define FBE_ENTITY_CAMERA 1
-#define FBE_ENTITY_LIGHT  2
-#define FBE_ENTITY_MESH   3
-#define FBE_ENTITY_SPRITE 4
-#define FBE_ENTITY_PLANE  5
-#define FBE_ENTITY_MIRROR 6
+#define FBE_ENTITY_PIVOT   0
+#define FBE_ENTITY_CAMERA  1
+#define FBE_ENTITY_LIGHT   2
+#define FBE_ENTITY_MESH    3
+#define FBE_ENTITY_SPRITE  4
+#define FBE_ENTITY_PLANE   5
+#define FBE_ENTITY_MIRROR  6
+#define FBE_ENTITY_TERRAIN 7
 
 // The space a transform is in: the entity's parent's, or the world's.
 #define FBE_SPACE_LOCAL 0
@@ -597,6 +598,28 @@ FBE_API bool fbe_plane_tint(uint64_t plane, fbe_color_t* tint);
 FBE_API bool fbe_plane_set_segments(uint64_t plane, int32_t segments);
 FBE_API int32_t fbe_plane_segments(uint64_t plane);
 
+// Terrains: a grid of squares, size by size, in their own space from (0, 0) to (size, size) across
+// X and Z, each corner at its own height up Y, 0 at first, two triangles a square facing up.
+// Collisions touch their triangles when their collision shape is FBE_COLLISION_AUTO or
+// FBE_COLLISION_MESH, and picks of FBE_PICK_MESH hit them, from above; E5 draws them. Made 1 square
+// a side; a new size, 1 to 4096, makes every height 0 again.
+FBE_API bool fbe_terrain_set_size(uint64_t terrain, int32_t size);
+FBE_API int32_t fbe_terrain_size(uint64_t terrain);
+// A corner's height, x and z 0 to its size; NaN for one it hasn't. Heights are any finite value.
+FBE_API bool fbe_terrain_set_height(uint64_t terrain, int32_t x, int32_t z, float height);
+FBE_API float fbe_terrain_height(uint64_t terrain, int32_t x, int32_t z);
+// Every corner's height at once, row by row along Z, x across each: (size + 1) squared of them.
+FBE_API bool fbe_terrain_set_heights(uint64_t terrain, const float* heights, int32_t count);
+// The point on a terrain's surface above or below a point in the world, along its own Y, and the
+// surface's normal there, both in the world: 1 and the point, 0 off its grid, -1 for a freed one.
+FBE_API int32_t fbe_terrain_surface(uint64_t terrain, float x, float y, float z, fbe_vec3_t* point,
+                                    fbe_vec3_t* normal);
+// Its material, which it holds, 0 for none, and its own color and alpha, as a mesh's tint.
+FBE_API bool fbe_terrain_set_material(uint64_t terrain, uint64_t material);
+FBE_API uint64_t fbe_terrain_material(uint64_t terrain);
+FBE_API bool fbe_terrain_set_tint(uint64_t terrain, float r, float g, float b, float a);
+FBE_API bool fbe_terrain_tint(uint64_t terrain, fbe_color_t* tint);
+
 // Mirrors: entities that reflect the scene through their own XZ plane, which E5 draws. The matrix
 // that reflects the world through a mirror's plane, which a camera's view takes first to draw
 // what's in it.
@@ -615,6 +638,13 @@ FBE_API float fbe_entity_fade(uint64_t entity, uint64_t camera);
 // either draws nothing, -1 for a freed one or one that isn't a mesh. Triangles flat on each other
 // touch, they don't cross.
 FBE_API int32_t fbe_mesh_intersects(uint64_t mesh, uint64_t other);
+
+// The box a geometry's meshes are culled by when drawn, in its own space, instead of its bounds,
+// as a skinned mesh's, whose vertices move out of them, wants; InView and Bounds keep its bounds.
+// False for a backward box. fbe_geometry_cull_box gives false while it has none.
+FBE_API bool fbe_geometry_set_cull_box(uint64_t geometry, const fbe_aabb_t* box);
+FBE_API bool fbe_geometry_clear_cull_box(uint64_t geometry);
+FBE_API bool fbe_geometry_cull_box(uint64_t geometry, fbe_aabb_t* box);
 
 // Visibility. Whether a camera might see an entity, in a target of this size: a mesh's box of its
 // geometry, turned and scaled with it, a sprite's box of its reach, however it turns, or another
