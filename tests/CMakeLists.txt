@@ -85,3 +85,11 @@ target_link_libraries(fbengine_vfs_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_vfs_tests)
 catch_discover_tests(fbengine_vfs_tests TEST_PREFIX "vfs."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# A program that awaits jobs before its first Flip, which the main scheduler's ticks hand over.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME examples.loading
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/loading")
+  set_tests_properties(examples.loading PROPERTIES TIMEOUT 120
+                       PASS_REGULAR_EXPRESSION "Running loading[^\n]*\nloading\r?\nloaded\r?\n$")
+endif()

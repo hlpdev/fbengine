@@ -31,10 +31,11 @@ Function ThereIsAWorkerPerCoreLessOne()
 End Function
 
 @Test
-Function FinishedWorkWaitsForTheNextFlip()
+Function FinishedWorkWaitsForTheMainThread()
     finished = 0
     CountWhenDone(Jobs.Simulate(Duration.Zero()))
-    // It's done on the worker long before this, but the main thread only hears at a Flip.
+    // It's done on the worker long before this, but the main thread only hears at a Flip, or at a
+    // tick of its scheduler, and this one has had neither.
     Sleep(100.Milliseconds)
     Expect(finished == 0)
     Flip()
@@ -64,4 +65,13 @@ Function ASlowJobFinishesAtALaterFlip()
     Expect(finished == 0)
     FlipUntil(1)
     Expect(finished == 1)
+End Function
+
+// As at a game's start: a Wait, or a top-level Await (examples/loading), with no Flip.
+@Test
+Function AJobsTaskFinishesWithoutAFlip()
+    Local frames = Frame.Count()
+    Jobs.Simulate(10.Milliseconds).Wait()
+    Jobs.Simulate(Duration.Zero()).Wait()
+    Expect(Frame.Count() == frames)
 End Function

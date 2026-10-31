@@ -1,4 +1,4 @@
-// The engine's jobs: its worker threads, and the work they finish that Flip hands over.
+// The engine's jobs: its worker threads, and the work they finish that's handed to the main thread.
 
 Import std.collections
 Import std.concurrent
@@ -8,32 +8,39 @@ Import "./c/fbe_jobs"
 Import "./frame"
 Import "./window"
 
-/// The engine's worker threads, a worker per core less one, which its loading, culling,
-/// animation, and collisions run on. What the engine starts on them for the game finishes on the
-/// main thread, at the Flip after it's done.
-Public Class Jobs
-    // The work the FB side waits for, by ticket, and the Flip hook that hands it over while there's
-    // any.
+/// The engine's worker threads, one per core the game can run on, less one, which its loading,
+/// culling, animation, and collisions run on. What the engine starts on them for the game
+/// finishes on the main thread, at the Flip after it's done, or, while the main thread waits for
+/// it or awaits it without flipping, as at a game's start, at the main scheduler's next tick.
+Public Final Class Jobs
+    // The work the FB side waits for, by ticket; the Flip hook that hands it over while there's
+    // any, and whether the coroutine that does between Flips is running.
     Static Field waiting: Map<UInt64, TaskSource<Bool>> = Map<UInt64, TaskSource<Bool>>()
     Static Field hook: Int = 0
+    Static Field pumping: Bool = False
 
     Private New()
     End New
 
-    /// How many worker threads there are: one per core less one, at least one.
+    /// How many worker threads there are: one per core the game can run on, less one, and at
+    /// least one.
     @MainThread Public Static Method Workers(): Int32 => fbe_jobs_workers()
 
-    // A Task done at the Flip that hands `ticket` over, once its work has finished.
+    // A Task done once `ticket` is handed over, after its work has finished.
     @MainThread Package Static Method Finished(ticket: UInt64): Task<Bool>
         Local source = TaskSource<Bool>()
         waiting[ticket] = source
         If hook == 0 Then hook = Frame.OnFlip(HandOverJobs)
+        If !pumping
+            pumping = True
+            Pump()
+        End If
         Return source.Task
     End Method
 
-    /// Starts a job that takes `time` on a worker, as a load would, done at the Flip after it
-    /// finishes, as the engine's own are: for a game's tests of what waits on loading. Panics when
-    /// `time` is below 0 or above 2147 seconds.
+    /// Starts a job that takes `time` on a worker, as a load would, done as the engine's own are:
+    /// for a game's tests of what waits on loading. Panics when `time` is below 0 or above 2147
+    /// seconds.
     @MainThread Public Static Async Method Simulate(time: Duration)
         Local microseconds = time.Nanoseconds / 1000
         If time.IsNegative || microseconds > 2_147_483_647
@@ -44,8 +51,10 @@ Public Class Jobs
         Await Finished(ticket)
     End Method
 
-    // Finishes the Tasks of the tickets this Flip handed over, and stops looking once none waits.
+    // Hands over what the jobs finished, finishing the Tasks of its tickets, and stops the Flip
+    // hook once none waits. Flip calls it before the coroutines resume, so they see that Flip's.
     @MainThread Package Static Method HandOver()
+        fbe_jobs_hand_over()
         For i = 0 To fbe_jobs_finished_count() - 1
             Local ticket = fbe_jobs_finished_at(i)
             Local source = waiting.Get(ticket)
@@ -54,10 +63,21 @@ Public Class Jobs
                 source.Finish(True)
             End If
         End For
-        If waiting.Count == 0
+        fbe_jobs_forget_finished()
+        If waiting.Count == 0 && hook != 0
             Frame.RemoveOnFlip(hook)
             hook = 0
         End If
+    End Method
+
+    // Hands over at each tick of the main scheduler while anything waits, so a Wait() or a
+    // top-level Await of a job's Task finishes without a Flip.
+    @MainThread Static Async Method Pump()
+        While waiting.Count > 0
+            Await NextTick()
+            HandOver()
+        End While
+        pumping = False
     End Method
 End Class
 
