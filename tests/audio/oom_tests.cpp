@@ -24,10 +24,11 @@ thread_local bool failed = false;
 
 } // namespace
 
-// The one allocation function the others are made of: the default operator new[] calls it, and the
-// default deletes free what it gives, as malloc's. Its own deletes would differ from the
-// platform's declarations of them in their parameters' names, which the platform's headers make
-// reserved ones.
+// The allocation functions, each of which can fail as it says: the default ones, as libstdc++'s
+// DLL has them on Windows, call that DLL's own operator new, never this one, so new[] and the
+// nothrow forms are this test's too. The default deletes free what they give, as malloc's; its own
+// deletes would differ from the platform's declarations of them in their parameters' names, which
+// the platform's headers make reserved ones.
 // NOLINTBEGIN(cppcoreguidelines-no-malloc, cppcoreguidelines-owning-memory)
 // NOLINTBEGIN(misc-new-delete-overloads)
 void* operator new(std::size_t size) {
@@ -41,6 +42,26 @@ void* operator new(std::size_t size) {
         throw std::bad_alloc();
     }
     return made;
+}
+
+void* operator new[](std::size_t size) {
+    return operator new(size);
+}
+
+void* operator new(std::size_t size, const std::nothrow_t& /*nothrow*/) noexcept {
+    try {
+        return operator new(size);
+    } catch (const std::bad_alloc&) {
+        return nullptr;
+    }
+}
+
+void* operator new[](std::size_t size, const std::nothrow_t& /*nothrow*/) noexcept {
+    try {
+        return operator new(size);
+    } catch (const std::bad_alloc&) {
+        return nullptr;
+    }
 }
 // NOLINTEND(misc-new-delete-overloads)
 // NOLINTEND(cppcoreguidelines-no-malloc, cppcoreguidelines-owning-memory)
