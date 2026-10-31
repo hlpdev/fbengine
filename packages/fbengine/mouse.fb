@@ -20,7 +20,8 @@ Import "./window"
 End Enum
 
 /// The mouse's x in the window's units, from its left, as the last Flip read it or MoveMouse put
-/// it: outside the window while a button's held, and 0 until the mouse first moves.
+/// it: outside the window while a button's held, and 0 until the mouse first moves in a window,
+/// the one Graphics opened last.
 @MainThread Public Function MouseX(): Float32 => fbe_input_mouse_x()
 
 /// The mouse's y in the window's units, from its top, down positive.
@@ -72,7 +73,7 @@ End Function
 
 /// Forgets what the last Flip read of the mouse, its presses, releases, motion, and wheel, until
 /// the next Flip, as a game coming back from its menu wants, so the camera doesn't jump; buttons
-/// held stay held, and the mouse stays where it is.
+/// held stay held, and the mouse stays where it is. An ActionSet's Actions are its own Flush's.
 @MainThread Public Function FlushMouse()
     fbe_input_flush_mouse()
 End Function

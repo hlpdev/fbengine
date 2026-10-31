@@ -174,8 +174,15 @@ void mouse_event(const SDL_Event& event) {
         wheel_event(event.wheel);
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
-    case SDL_EVENT_WINDOW_DESTROYED:
         release_buttons();
+        break;
+    case SDL_EVENT_WINDOW_DESTROYED:
+        // Where it was is the closed window's, not the next one's, which it's in nowhere yet.
+        release_buttons();
+        x = 0.0F;
+        y = 0.0F;
+        pushed_x = 0.0F;
+        pushed_y = 0.0F;
         break;
     default:
         break;

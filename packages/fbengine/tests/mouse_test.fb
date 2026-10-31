@@ -229,6 +229,7 @@ End Function
 Function ClosingTheWindowLetsGoOfEveryButton() Throws GraphicsError
     Window.SetHeadless(True)
     Try Graphics(320, 200)
+    Try Simulate.MoveMouse(300.0, 150.0)
     Try Simulate.MouseDown(MouseButton.MIDDLE)
     Flip()
     EndGraphics()
@@ -236,6 +237,13 @@ Function ClosingTheWindowLetsGoOfEveryButton() Throws GraphicsError
     Defer EndGraphics()
     Flip()
     Expect(!MouseDown(MouseButton.MIDDLE))
+    // Where it was is the closed window's.
+    Expect(MouseX() == 0.0)
+    Expect(MouseY() == 0.0)
+    // A move in the new window is from there.
+    Try Simulate.MoveMouse(10.0, 0.0)
+    Flip()
+    Expect(MouseXSpeed() == 10.0)
 End Function
 
 @Test

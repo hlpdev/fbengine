@@ -265,7 +265,8 @@ End Function
 End Function
 
 /// Forgets what the last Flip read of every gamepad and joystick, their presses, releases, and
-/// connections, until the next Flip; buttons held stay held.
+/// connections, until the next Flip; buttons held stay held. An ActionSet's Actions are its own
+/// Flush's.
 @MainThread Public Function FlushGamepads()
     fbe_input_flush_gamepads()
 End Function
