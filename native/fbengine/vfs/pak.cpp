@@ -246,6 +246,9 @@ public:
             return invalid(std::format("{} is past its end", shown(file.path)));
         }
         try {
+            if (faulted(fault_t::OUT_OF_MEMORY)) {
+                throw std::bad_alloc();
+            }
             bytes_t bytes(static_cast<std::size_t>(file.size));
             if (!m_reader->read(data, bytes)) {
                 return unreadable();

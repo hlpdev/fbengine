@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fbe::vfs {
@@ -99,7 +100,8 @@ public:
 };
 
 /// A folder on the disk, read as it's asked, so it sees what changes in it; it's empty while the
-/// folder isn't there. A name is found in any case, the one written first.
+/// folder isn't there. A name is found in any case: of the names in a folder that fold to it, the
+/// first by its bytes.
 std::shared_ptr<source_t> folder(std::filesystem::path folder);
 
 /// A pak file: a zip whose files are stored, not compressed, read through its index, which this
@@ -111,38 +113,72 @@ result_t<std::shared_ptr<source_t>> pak(const std::filesystem::path& file);
 /// A pak in memory, which it keeps.
 result_t<std::shared_ptr<source_t>> pak(bytes_t bytes);
 
-/// Sources mounted at places, a later mount over an earlier one. A file is the last mount's that
-/// has it; a folder lists what every mount has in it, and the mounts under it, by their folded
-/// names, the last mount's name for one two have. A read reads the mounts there were when it
-/// began, whatever's mounted meanwhile.
-class vfs_t {
+/// The mounts there were at a moment, which what's read through it keeps, whatever's mounted
+/// since, as a load reads its file, its sidecar, and what its file names. A file is the last
+/// mount's that has it; a folder lists what every mount has in it, and the mounts under it, by
+/// their folded names, the last mount's name for one two have.
+class view_t {
 public:
-    void mount(const path_t& at, std::shared_ptr<source_t> source);
-    /// Takes out the last mount at `at`, and gives whether there was one.
-    bool unmount(const path_t& at);
-
-    /// The file's bytes. One that no mount has is NOT_FOUND, and a folder IS_A_FOLDER.
-    result_t<bytes_t> read(const path_t& path) const;
-    result_t<kind_t> kind(const path_t& path) const;
+    /// The file's bytes. One that no mount has is NOT_FOUND, and a folder, res:// too,
+    /// IS_A_FOLDER.
+    [[nodiscard]] result_t<bytes_t> read(const path_t& path) const;
+    [[nodiscard]] result_t<kind_t> kind(const path_t& path) const;
     /// What's in the folder, sorted by folded names. A folder no mount has is NOT_FOUND, and a
     /// file NOT_A_FOLDER.
-    result_t<std::vector<entry_t>> list(const path_t& path) const;
+    [[nodiscard]] result_t<std::vector<entry_t>> list(const path_t& path) const;
 
 private:
+    friend class vfs_t;
+
     struct mount_t {
         path_t at;
         std::shared_ptr<source_t> source;
     };
     using mounts_t = std::vector<mount_t>;
 
-    [[nodiscard]] std::shared_ptr<const mounts_t> mounts() const;
+    explicit view_t(std::shared_ptr<const mounts_t> mounts) : m_mounts(std::move(mounts)) {}
 
+    std::shared_ptr<const mounts_t> m_mounts;
+};
+
+/// Sources mounted at places, a later mount over an earlier one, read as view_t reads them. A read
+/// reads the mounts there were when it began, whatever's mounted meanwhile.
+class vfs_t {
+public:
+    void mount(const path_t& at, std::shared_ptr<source_t> source);
+    /// Takes out the last mount at `at`, and gives whether there was one.
+    bool unmount(const path_t& at);
+
+    /// The mounts there are now.
+    [[nodiscard]] view_t view() const;
+
+    [[nodiscard]] result_t<bytes_t> read(const path_t& path) const {
+        return view().read(path);
+    }
+    [[nodiscard]] result_t<kind_t> kind(const path_t& path) const {
+        return view().kind(path);
+    }
+    [[nodiscard]] result_t<std::vector<entry_t>> list(const path_t& path) const {
+        return view().list(path);
+    }
+
+private:
     mutable std::mutex m_mutex;
-    // The mounts, replaced whole by each mount and unmount, so a read keeps the ones it began with.
-    std::shared_ptr<const mounts_t> m_mounts = std::make_shared<const mounts_t>();
+    // The mounts, replaced whole by each mount and unmount, so a view keeps the ones it was of.
+    std::shared_ptr<const view_t::mounts_t> m_mounts = std::make_shared<const view_t::mounts_t>();
 };
 
 /// The engine's res://, which the C API mounts and the loaders read.
 vfs_t& files();
+
+/// A fault a test makes happen, as the disk and the system can: OUT_OF_MEMORY is the next read of
+/// a file's bytes, from a folder or a pak, finding no memory for them.
+enum class fault_t : std::uint8_t { NONE, OUT_OF_MEMORY };
+
+/// Makes `fault` happen once, at the next place it can.
+void inject(fault_t fault);
+
+/// Whether `fault` happens here: whether it was injected, which it no longer is.
+bool faulted(fault_t fault);
 
 } // namespace fbe::vfs

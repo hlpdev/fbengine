@@ -2,15 +2,19 @@
 // case: at each name, every name in the folders so far that folds to it, by their real names on
 // the disk, first by bytes, so "Data" and "data" are one folder, and neither spelling in a path,
 // nor Windows' own names for a file (a short 8.3 name, a dot at the end, a device), finds what a
-// pak of the same files wouldn't.
+// pak of the same files wouldn't. Each folder's listing is kept, and listed again only once the
+// folder has changed, so a read takes a stat of each folder on its path.
 
 #include "vfs/disk.hpp"
 #include "vfs/vfs.hpp"
 
 #include <algorithm>
 #include <format>
+#include <functional>
 #include <map>
+#include <mutex>
 #include <new>
+#include <optional>
 #include <span>
 #include <string>
 #include <system_error>
@@ -49,6 +53,9 @@ public:
             });
         }
         try {
+            if (faulted(fault_t::OUT_OF_MEMORY)) {
+                throw std::bad_alloc();
+            }
             bytes_t bytes(static_cast<std::size_t>(opened->size()));
             if (!opened->read_at(0, bytes)) {
                 return std::unexpected(error_t{
@@ -92,11 +99,16 @@ public:
             if (folder.kind != kind_t::FOLDER) {
                 continue;
             }
-            for (found_t& entry : entries(folder.path)) {
-                const auto [at, added] = listed.try_emplace(
-                    fold(entry.name), entry_t{ .name = entry.name, .kind = entry.kind });
+            const std::shared_ptr<const listing_t> entries = listing(folder.path);
+            if (entries == nullptr) {
+                continue;
+            }
+            for (const auto& [key, named] : entries->names) {
+                const found_t& entry = named.front();
+                const auto [at, added] =
+                    listed.try_emplace(key, entry_t{ .name = entry.name, .kind = entry.kind });
                 if (!added && entry.name < at->second.name) {
-                    at->second = { .name = std::move(entry.name), .kind = entry.kind };
+                    at->second = { .name = entry.name, .kind = entry.kind };
                 }
             }
         }
@@ -109,38 +121,49 @@ public:
     }
 
 private:
-    struct found_t {
-        fs::path path;
-        kind_t kind = kind_t::NONE;
-        // Its name on the disk.
-        std::string name;
+    using found_t = listed_t;
+
+    // A folder on the disk as it was listed: when it last changed then, and its entries by their
+    // folded names, first by bytes, of which a lookup takes one stat.
+    struct listing_t {
+        folder_time_t time;
+        std::map<std::string, std::vector<found_t>, std::less<>> names;
     };
 
-    static kind_t kind_of(const fs::path& path) {
-        std::error_code error;
-        const fs::file_status status = fs::status(path, error);
-        if (error) {
-            return kind_t::NONE;
+    // `folder`'s listing, listed again when it has changed since, or was listed so soon after its
+    // last change that another might not have changed its time; null when it isn't a folder.
+    [[nodiscard]] std::shared_ptr<const listing_t> listing(const fs::path& folder) const {
+        const std::optional<folder_time_t> time = folder_time(folder);
+        if (!time) {
+            const std::scoped_lock lock(m_mutex);
+            m_listings.erase(folder);
+            return nullptr;
         }
-        if (fs::is_directory(status)) {
-            return kind_t::FOLDER;
-        }
-        return fs::is_regular_file(status) ? kind_t::FILE : kind_t::NONE;
-    }
-
-    // What's in `folder` that a res:// path can name, by its real names, in no order.
-    static std::vector<found_t> entries(const fs::path& folder) {
-        std::vector<found_t> found;
-        std::error_code error;
-        for (fs::directory_iterator it(folder, error); !error && it != fs::directory_iterator();
-             it.increment(error)) {
-            std::string name = utf8(it->path().filename());
-            const kind_t kind = kind_of(it->path());
-            if (kind != kind_t::NONE && nameable(name)) {
-                found.push_back({ .path = it->path(), .kind = kind, .name = std::move(name) });
+        {
+            const std::scoped_lock lock(m_mutex);
+            const auto it = m_listings.find(folder);
+            if (it != m_listings.end() && it->second->time.settled &&
+                it->second->time.written == time->written) {
+                return it->second;
             }
         }
-        return found;
+        std::optional<std::vector<found_t>> entries = list_folder(folder);
+        if (!entries) {
+            return nullptr;
+        }
+        auto listed = std::make_shared<listing_t>();
+        listed->time = *time;
+        for (found_t& entry : *entries) {
+            if (nameable(entry.name)) {
+                listed->names[fold(entry.name)].push_back(std::move(entry));
+            }
+        }
+        for (auto& [key, found] : listed->names) {
+            std::ranges::sort(found, {}, &found_t::name);
+        }
+        const std::scoped_lock lock(m_mutex);
+        m_listings.insert_or_assign(folder, listed);
+        return listed;
     }
 
     // Everything at `keys`, first by bytes at each name: the folders it can be in, and what's in
@@ -153,22 +176,28 @@ private:
                 if (folder.kind != kind_t::FOLDER) {
                     continue;
                 }
-                for (found_t& entry : entries(folder.path)) {
-                    if (fold(entry.name) == key) {
-                        next.push_back(std::move(entry));
-                    }
+                const std::shared_ptr<const listing_t> listed = listing(folder.path);
+                if (listed == nullptr) {
+                    continue;
+                }
+                const auto named = listed->names.find(key);
+                if (named != listed->names.end()) {
+                    next.insert(next.end(), named->second.begin(), named->second.end());
                 }
             }
-            std::ranges::stable_sort(next, {}, &found_t::name);
             if (next.empty()) {
                 return {};
             }
+            std::ranges::stable_sort(next, {}, &found_t::name);
             at = std::move(next);
         }
         return at;
     }
 
     fs::path m_folder;
+    mutable std::mutex m_mutex;
+    // The folders in it listed so far, by their paths on the disk.
+    mutable std::map<fs::path, std::shared_ptr<const listing_t>> m_listings;
 };
 
 } // namespace

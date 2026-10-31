@@ -1,12 +1,14 @@
 // UTF-8 to and from what the OS's paths are: UTF-16 on Windows, and bytes, taken as UTF-8,
-// elsewhere; and files read at an offset, by ReadFile on Windows and pread elsewhere, which take
-// no file pointer, so threads read one file at once.
+// elsewhere; files read at an offset, by ReadFile on Windows and pread elsewhere, which take no
+// file pointer, so threads read one file at once; and folders listed by FindFirstFileEx on
+// Windows, whose entries come with their attributes, and readdir's d_type elsewhere.
 
 #include "vfs/disk.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <system_error>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -18,6 +20,7 @@
 #include <windows.h>
 #else
 #include <cerrno>
+#include <ctime>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -28,6 +31,19 @@ namespace fbe::vfs {
 namespace {
 
 constexpr char32_t replacement = 0xFFFD;
+
+// What a link links to, a file or a folder, or NONE.
+kind_t followed(const std::filesystem::path& path) {
+    std::error_code error;
+    const std::filesystem::file_status status = std::filesystem::status(path, error);
+    if (error) {
+        return kind_t::NONE;
+    }
+    if (std::filesystem::is_directory(status)) {
+        return kind_t::FOLDER;
+    }
+    return std::filesystem::is_regular_file(status) ? kind_t::FILE : kind_t::NONE;
+}
 
 // The code points of UTF-8, with U+FFFD for each byte that doesn't start a well-formed one.
 std::u32string decoded(std::string_view text) {
@@ -128,6 +144,56 @@ std::string utf8(const std::filesystem::path& path) {
     return encoded(points);
 }
 
+std::optional<folder_time_t> folder_time(const std::filesystem::path& path) {
+    // FILETIMEs, in 100 ns ticks, which the system's clock moves in steps of up to 16 ms; a
+    // folder's is when an entry was last added to it, taken out, or renamed.
+    constexpr std::uint64_t settling = std::uint64_t{ 100 } * 10'000;
+    FILETIME now{};
+    GetSystemTimePreciseAsFileTime(&now);
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data) == 0 ||
+        (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        return std::nullopt;
+    }
+    const auto ticks = [](const FILETIME& time) {
+        return (static_cast<std::uint64_t>(time.dwHighDateTime) << 32U) | time.dwLowDateTime;
+    };
+    const std::uint64_t written = ticks(data.ftLastWriteTime);
+    return folder_time_t{ .written = written, .settled = ticks(now) > written + settling };
+}
+
+std::optional<std::vector<listed_t>> list_folder(const std::filesystem::path& path) {
+    WIN32_FIND_DATAW data{};
+    HANDLE find = FindFirstFileExW((path / L"*").c_str(), FindExInfoBasic, &data,
+                                   FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+    if (find == INVALID_HANDLE_VALUE) {
+        return std::nullopt;
+    }
+    std::vector<listed_t> listed;
+    do {
+        const std::wstring_view name = data.cFileName;
+        if (name == L"." || name == L"..") {
+            continue;
+        }
+        std::filesystem::path entry = path / name;
+        kind_t kind =
+            (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? kind_t::FOLDER : kind_t::FILE;
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+            kind = followed(entry);
+        }
+        if (kind != kind_t::NONE) {
+            std::string text = utf8(entry.filename());
+            listed.push_back({ .path = std::move(entry), .name = std::move(text), .kind = kind });
+        }
+    } while (FindNextFileW(find, &data) != 0);
+    const bool whole = GetLastError() == ERROR_NO_MORE_FILES;
+    FindClose(find);
+    if (!whole) {
+        return std::nullopt;
+    }
+    return listed;
+}
+
 std::unique_ptr<read_file_t> read_file_t::open(const std::filesystem::path& path, bool& missing) {
     // Others may read, write, rename, and remove it meanwhile, as they can on Linux and macOS.
     HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ,
@@ -180,6 +246,55 @@ std::filesystem::path disk_path(std::string_view utf8) {
 
 std::string utf8(const std::filesystem::path& path) {
     return path.native();
+}
+
+std::optional<folder_time_t> folder_time(const std::filesystem::path& path) {
+    // Nanoseconds, which the kernel's clock moves in steps of up to 10 ms; a folder's is when an
+    // entry was last added to it, taken out, or renamed.
+    constexpr std::uint64_t settling = 100'000'000;
+    timespec now{};
+    clock_gettime(CLOCK_REALTIME, &now);
+    struct stat status{};
+    if (stat(path.c_str(), &status) != 0 || !S_ISDIR(status.st_mode)) {
+        return std::nullopt;
+    }
+#ifdef __APPLE__
+    const timespec& modified = status.st_mtimespec;
+#else
+    const timespec& modified = status.st_mtim;
+#endif
+    const auto nanoseconds = [](const timespec& time) {
+        return (static_cast<std::uint64_t>(time.tv_sec) * 1'000'000'000) +
+               static_cast<std::uint64_t>(time.tv_nsec);
+    };
+    const std::uint64_t written = nanoseconds(modified);
+    return folder_time_t{ .written = written, .settled = nanoseconds(now) > written + settling };
+}
+
+std::optional<std::vector<listed_t>> list_folder(const std::filesystem::path& path) {
+    // libstdc++'s and libc++'s entries keep readdir's d_type, so only a link is stat'd.
+    std::vector<listed_t> listed;
+    std::error_code error;
+    std::filesystem::directory_iterator it(path, error);
+    for (; !error && it != std::filesystem::directory_iterator(); it.increment(error)) {
+        kind_t kind = kind_t::NONE;
+        std::error_code type_error;
+        if (it->is_symlink(type_error)) {
+            kind = followed(it->path());
+        } else if (it->is_directory(type_error)) {
+            kind = kind_t::FOLDER;
+        } else if (it->is_regular_file(type_error)) {
+            kind = kind_t::FILE;
+        }
+        if (kind != kind_t::NONE) {
+            listed.push_back(
+                { .path = it->path(), .name = utf8(it->path().filename()), .kind = kind });
+        }
+    }
+    if (error) {
+        return std::nullopt;
+    }
+    return listed;
 }
 
 std::unique_ptr<read_file_t> read_file_t::open(const std::filesystem::path& path, bool& missing) {

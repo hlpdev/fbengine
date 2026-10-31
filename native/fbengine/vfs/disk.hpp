@@ -1,15 +1,20 @@
 #pragma once
 
-// The disk: paths from UTF-8 and back, text made well-formed UTF-8, and files read at any offset.
+// The disk: paths from UTF-8 and back, text made well-formed UTF-8, files read at any offset, and
+// folders listed with their entries' kinds and when they last changed.
 // std::filesystem's own conversions need libstdc++'s codecvt, whose names MinGW's UCRT build of
 // the DLL can't link, so Windows' UTF-16 is made here.
+
+#include "vfs/vfs.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fbe::vfs {
 
@@ -22,6 +27,28 @@ std::string utf8(const std::filesystem::path& path);
 /// `bytes` as well-formed UTF-8: U+FFFD for each byte that doesn't start a well-formed sequence,
 /// as std.io's ReadText has it.
 std::string well_formed(std::string_view bytes);
+
+/// When a folder last changed, on the disk's clock, and whether that was long enough before now
+/// that any change since has changed it again, however coarse the disk's clock is.
+struct folder_time_t {
+    std::uint64_t written = 0;
+    bool settled = false;
+};
+
+/// When the folder at `path` last changed, or nullopt when there's no folder there.
+std::optional<folder_time_t> folder_time(const std::filesystem::path& path);
+
+/// A file or a folder in a folder on the disk: its path, its name in UTF-8, and its kind.
+struct listed_t {
+    std::filesystem::path path;
+    std::string name;
+    kind_t kind = kind_t::NONE;
+};
+
+/// What's in the folder at `path`, in no order: its files and folders, a link as what it links
+/// to, and nothing else, each one's kind from the listing, so only a link is looked at on its own.
+/// nullopt when it can't be listed.
+std::optional<std::vector<listed_t>> list_folder(const std::filesystem::path& path);
 
 /// A file open for reading at any offset, from several threads at once, which can be replaced,
 /// renamed, or removed while it's open, as an updater does to a mounted pak, while what's open

@@ -389,3 +389,24 @@ target_link_libraries(fbengine_assets_tests PRIVATE Catch2::Catch2WithMain fbeng
 fbengine_set_warnings(fbengine_assets_tests)
 catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# What Assets' mounts panic for, each by a run of tests/assets/panics, which says it, at the line
+# that called the mount.
+if(FBENGINE_FB_TESTS)
+  foreach(case IN ITEMS "files-empty;have '', which isn't a file's path"
+                        "files-folder;have 'textures/', which isn't a file's path"
+                        "files-above;have '\\.\\./x\\.txt', which isn't a file's path"
+                        "files-colon;have 'a:b\\.txt', which isn't a file's path"
+                        "files-device;have 'maps/con\\.txt', which isn't a file's path"
+                        "files-file-and-folder;files mounted at res://mf can't be"
+                        "files-place;data://mf"
+                        "folder-place;goes above res://")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME assets.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/assets/panics"
+                     -- ${name})
+    set_tests_properties(assets.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
+                         "panic: [^\n]*${said}[^\n]* at [^\n]*assets/panics/main\\.fb:")
+  endforeach()
+endif()

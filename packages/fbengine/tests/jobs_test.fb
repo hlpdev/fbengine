@@ -7,6 +7,7 @@ Import std.os
 Import std.test
 Import std.time
 Import fbengine
+Import fbengine.c.fbe_jobs
 
 Global finished = 0
 
@@ -73,5 +74,34 @@ Function AJobsTaskFinishesWithoutAFlip()
     Local frames = Frame.Count()
     Jobs.Simulate(10.Milliseconds).Wait()
     Jobs.Simulate(Duration.Zero()).Wait()
+    Expect(Frame.Count() == frames)
+End Function
+
+// While it waits, the main thread sleeps between hand-overs: one a millisecond at most, not one a
+// tick of a scheduler with nothing else to do.
+@Test
+Function AWaitHandsOverEachMillisecondAtMost()
+    Local before = fbe_jobs_hand_overs()
+    Jobs.Simulate(500.Milliseconds).Wait()
+    Local passes = fbe_jobs_hand_overs() - before
+    Expect(passes >= 1)
+    Expect(passes <= 600)
+End Function
+
+Async Function LevelScript()
+    // On the level's scheduler, inside its Tick.
+    Await NextTick()
+    Await Jobs.Simulate(10.Milliseconds)
+End Function
+
+// A level's scheduler that starts a load and is then paused, never ticked again, doesn't hold up a
+// Wait at the top level, which the main scheduler's hand-overs finish.
+@Test
+Function APausedSchedulersLoadDoesntHoldUpAWait()
+    Local level = Scheduler()
+    level.Run(LevelScript())
+    level.Tick(0.016)
+    Local frames = Frame.Count()
+    Jobs.Simulate(10.Milliseconds).Wait()
     Expect(Frame.Count() == frames)
 End Function

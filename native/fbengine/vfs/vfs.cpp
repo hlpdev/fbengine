@@ -4,6 +4,7 @@
 #include "vfs/vfs.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <format>
 #include <map>
 #include <ranges>
@@ -16,18 +17,27 @@ namespace {
 
 constexpr std::string_view scheme = "res://";
 
+std::atomic<fault_t> injected = fault_t::NONE;
+
 // Whether `name` is one of Windows' devices, which a name is with any extension, or spaces before
-// it: CON, PRN, AUX, NUL, COM0 to COM9, and LPT0 to LPT9.
+// it: CON, PRN, AUX, NUL, CONIN$, CONOUT$, and COM and LPT with a digit, 0 to 9, or a
+// superscript one, two, or three.
 bool device(std::string_view name) {
     std::string base = fold(name.substr(0, name.find('.')));
     while (!base.empty() && base.back() == ' ') {
         base.pop_back();
     }
-    if (base == "con" || base == "prn" || base == "aux" || base == "nul") {
+    if (base == "con" || base == "prn" || base == "aux" || base == "nul" || base == "conin$" ||
+        base == "conout$") {
         return true;
     }
-    return base.size() == 4 && (base.starts_with("com") || base.starts_with("lpt")) &&
-           base[3] >= '0' && base[3] <= '9';
+    if (!base.starts_with("com") && !base.starts_with("lpt")) {
+        return false;
+    }
+    const std::string_view digit = std::string_view(base).substr(3);
+    // U+00B9, U+00B2, and U+00B3 in UTF-8.
+    return (digit.size() == 1 && digit[0] >= '0' && digit[0] <= '9') || digit == "\xC2\xB9" ||
+           digit == "\xC2\xB2" || digit == "\xC2\xB3";
 }
 
 } // namespace
@@ -133,17 +143,17 @@ result_t<path_t> resolve(const path_t& base, std::string_view relative) {
 
 void vfs_t::mount(const path_t& at, std::shared_ptr<source_t> source) {
     const std::scoped_lock lock(m_mutex);
-    auto changed = std::make_shared<mounts_t>(*m_mounts);
+    auto changed = std::make_shared<view_t::mounts_t>(*m_mounts);
     changed->push_back({ .at = at, .source = std::move(source) });
     m_mounts = std::move(changed);
 }
 
 bool vfs_t::unmount(const path_t& at) {
     const std::scoped_lock lock(m_mutex);
-    const mounts_t& mounts = *m_mounts;
+    const view_t::mounts_t& mounts = *m_mounts;
     for (std::size_t i = mounts.size(); i-- > 0;) {
         if (mounts[i].at.keys == at.keys) {
-            auto changed = std::make_shared<mounts_t>(*m_mounts);
+            auto changed = std::make_shared<view_t::mounts_t>(*m_mounts);
             changed->erase(changed->begin() + static_cast<std::ptrdiff_t>(i));
             m_mounts = std::move(changed);
             return true;
@@ -152,20 +162,32 @@ bool vfs_t::unmount(const path_t& at) {
     return false;
 }
 
-std::shared_ptr<const vfs_t::mounts_t> vfs_t::mounts() const {
-    const std::scoped_lock lock(m_mutex);
-    return m_mounts;
+void inject(fault_t fault) {
+    injected = fault;
 }
 
-result_t<bytes_t> vfs_t::read(const path_t& path) const {
-    const std::shared_ptr<const mounts_t> mounts = this->mounts();
+bool faulted(fault_t fault) {
+    fault_t expected = fault;
+    return fault != fault_t::NONE && injected.compare_exchange_strong(expected, fault_t::NONE);
+}
+
+view_t vfs_t::view() const {
+    const std::scoped_lock lock(m_mutex);
+    return view_t(m_mounts);
+}
+
+result_t<bytes_t> view_t::read(const path_t& path) const {
     const error_t folder{
         .failure = failure_t::IS_A_FOLDER,
         .message = std::format("{} is a folder", path.text()),
     };
+    // res:// is a folder with nothing mounted too, as kind has it.
+    if (path.keys.empty()) {
+        return std::unexpected(folder);
+    }
     // As kind finds it: the newest mount that has something there, or a mount at or under it,
     // which makes it a folder.
-    for (const mount_t& mount : std::views::reverse(*mounts)) {
+    for (const mount_t& mount : std::views::reverse(*m_mounts)) {
         if (starts(mount.at.keys, path.keys)) {
             return std::unexpected(folder);
         }
@@ -196,12 +218,11 @@ result_t<bytes_t> vfs_t::read(const path_t& path) const {
     });
 }
 
-result_t<kind_t> vfs_t::kind(const path_t& path) const {
+result_t<kind_t> view_t::kind(const path_t& path) const {
     if (path.keys.empty()) {
         return kind_t::FOLDER;
     }
-    const std::shared_ptr<const mounts_t> mounts = this->mounts();
-    for (const mount_t& mount : std::views::reverse(*mounts)) {
+    for (const mount_t& mount : std::views::reverse(*m_mounts)) {
         // A mount in it makes it a folder, and so does one at it.
         if (starts(mount.at.keys, path.keys)) {
             return kind_t::FOLDER;
@@ -219,8 +240,7 @@ result_t<kind_t> vfs_t::kind(const path_t& path) const {
     return kind_t::NONE;
 }
 
-result_t<std::vector<entry_t>> vfs_t::list(const path_t& path) const {
-    const std::shared_ptr<const mounts_t> mounts = this->mounts();
+result_t<std::vector<entry_t>> view_t::list(const path_t& path) const {
     // A later mount's file where an earlier one has a folder is the file, as kind says.
     const result_t<kind_t> there = kind(path);
     if (!there) {
@@ -235,7 +255,7 @@ result_t<std::vector<entry_t>> vfs_t::list(const path_t& path) const {
 
     bool found = path.keys.empty();
     std::map<std::string, entry_t> listed;
-    for (const mount_t& mount : std::views::reverse(*mounts)) {
+    for (const mount_t& mount : std::views::reverse(*m_mounts)) {
         // A mount below the folder is a folder in it.
         const std::size_t depth = mount.at.keys.size();
         if (depth > path.keys.size() && starts(mount.at.keys, path.keys)) {

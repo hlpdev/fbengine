@@ -17,6 +17,9 @@ FBE_API int32_t fbe_jobs_workers(void);
 // Runs the work the jobs finished for the main thread, handing over the tickets of what's done,
 // as fbe_frame_flip does: for the FB side's waits when it isn't flipping.
 FBE_API void fbe_jobs_hand_over(void);
+// How many times fbe_jobs_hand_over has been called: for tests of how often the FB side hands
+// over while it waits.
+FBE_API uint64_t fbe_jobs_hand_overs(void);
 // How many tickets have been handed over since the FB side last forgot them.
 FBE_API int32_t fbe_jobs_finished_count(void);
 // The ticket at `index` of those, in the order they were handed over; 0 if there's none there.

@@ -21,8 +21,10 @@ namespace {
 
 std::atomic<bool> started = false;
 std::atomic<std::uint64_t> last_ticket = 0;
-// The tickets handed over that the FB side hasn't forgotten; the main thread's.
+// The tickets handed over that the FB side hasn't forgotten, and how many hand-overs it's asked
+// for; the main thread's.
 std::vector<std::uint64_t> handed;
+std::uint64_t hand_overs = 0;
 
 } // namespace
 
@@ -69,7 +71,12 @@ FBE_API int32_t fbe_jobs_workers(void) {
 }
 
 FBE_API void fbe_jobs_hand_over(void) {
+    ++hand_overs;
     fbe::hand_over_jobs();
+}
+
+FBE_API uint64_t fbe_jobs_hand_overs(void) {
+    return hand_overs;
 }
 
 FBE_API int32_t fbe_jobs_finished_count(void) {
