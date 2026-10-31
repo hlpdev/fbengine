@@ -22,6 +22,7 @@
 #include <limits>
 #include <new>
 #include <optional>
+#include <simdjson.h>
 #include <string>
 #include <utility>
 #include <variant>
@@ -135,6 +136,7 @@ public:
         parser.setUserPointer(this);
         parser.setBufferAllocationCallback(map);
         parser.setBase64DecodeCallback(decode_base64);
+        parser.setExtrasParseCallback(read_extras);
         auto parsed = parser.loadGltf(data.get(), {}, gltf::Options::DecomposeNodeMatrices);
         if (m_refused) {
             return fail(*m_refused);
@@ -182,11 +184,12 @@ public:
         for (const gltf::Skin& skin : m_asset.skins) {
             model.skins.push_back(decode_skin(skin));
         }
-        for (const gltf::Animation& animation : m_asset.animations) {
-            result_t<clip_t> clip = decode_clip(animation, model);
+        for (std::size_t i = 0; i < m_asset.animations.size(); ++i) {
+            result_t<clip_t> clip = decode_clip(m_asset.animations[i], model);
             if (!clip) {
                 return std::unexpected(std::move(clip.error()));
             }
+            clip->frame_rate = i < m_frame_rates.size() ? m_frame_rates[i] : 0;
             model.clips.push_back(std::move(*clip));
         }
         decode_cameras_and_lights(model);
@@ -238,6 +241,27 @@ private:
             for (std::size_t i = 0; i < 3 && out < size; ++i) {
                 into[out++] = static_cast<std::uint8_t>(group >> (16U - (8U * i)));
             }
+        }
+    }
+
+    // What the engine reads of a part's extras: an animation's frame rate, a positive finite
+    // number, as animation tools write it.
+    static void read_extras(simdjson::dom::object* extras, std::size_t index,
+                            gltf::Category category, void* user) {
+        auto& self = *static_cast<decoder_t*>(user);
+        double rate = 0;
+        if (category != gltf::Category::Animations ||
+            (*extras)["frameRate"].get_double().get(rate) != simdjson::SUCCESS ||
+            !std::isfinite(rate) || rate <= 0 || rate > std::numeric_limits<float>::max()) {
+            return;
+        }
+        try {
+            if (self.m_frame_rates.size() <= index) {
+                self.m_frame_rates.resize(index + 1, 0);
+            }
+            self.m_frame_rates[index] = static_cast<float>(rate);
+        } catch (const std::bad_alloc&) {
+            self.refuse("there isn't the memory for its clips");
         }
     }
 
@@ -1247,6 +1271,8 @@ private:
     std::vector<std::vector<std::byte>> m_mapped;
     std::byte m_nothing{};
     std::optional<std::string> m_refused;
+    // Its animations' frame rates from their extras, by index; 0 for none.
+    std::vector<float> m_frame_rates;
     std::size_t m_steps = 1;
     std::atomic<std::size_t> m_done = 0;
 };

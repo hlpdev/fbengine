@@ -151,6 +151,9 @@ struct clip_t {
     std::vector<channel_t> channels;
     /// Its last keyframe's time.
     float length = 0;
+    /// The frames a second it was made at, as its glTF's extras give it (`"frameRate": 30`); 0
+    /// when they give none, or one that isn't a positive finite number.
+    float frame_rate = 0;
 };
 
 struct camera_t {
