@@ -683,3 +683,30 @@ TEST_CASE("a load reads its file and its sidecar through one view of the mounts"
     REQUIRE(load.settings == "optimize = false\n");
     REQUIRE(load.model.meshes.size() == 1);
 }
+
+TEST_CASE("a clip's frame rate is its animation's extras'", "[assets]") {
+    builder_t built;
+    built.positions({ 0, 0, 0 });
+    const int times = built.floats("SCALAR", 2, { 0, 1 }, R"(,"min":[0],"max":[1])");
+    const int moves = built.floats("VEC3", 2, { 0, 0, 0, 0, 1, 0 });
+    const auto clip = [&](std::string_view extras) {
+        return R"({"channels":[{"sampler":0,"target":{"node":0,"path":"translation"}}],)"
+               R"("samplers":[{"input":)" +
+               std::to_string(times) + R"(,"output":)" + std::to_string(moves) + "}]" +
+               std::string(extras) + "}";
+    };
+    const std::string rest =
+        R"(,"nodes":[{}],"animations":[)" + clip(R"(,"extras":{"frameRate":30})") + "," +
+        clip(R"(,"extras":{"frameRate":23.976,"other":1})") + "," + clip("") + "," +
+        clip(R"(,"extras":{"frameRate":-5})") + "," + clip(R"(,"extras":{"frameRate":"30"})") +
+        "," + clip(R"(,"extras":{"frameRate":1e300})") + "," +
+        clip(R"(,"extras":{"frameRate":0})") + "]";
+    const assets::model_t model = decoded(built.json(rest, built.data_uri()));
+    REQUIRE(model.clips.size() == 7);
+    REQUIRE(model.clips[0].frame_rate == 30);
+    REQUIRE(model.clips[1].frame_rate == 23.976F);
+    for (std::size_t i = 2; i < 7; ++i) {
+        INFO(i);
+        REQUIRE(model.clips[i].frame_rate == 0);
+    }
+}
