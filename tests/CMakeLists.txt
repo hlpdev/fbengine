@@ -63,6 +63,40 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/hello")
   set_tests_properties(examples.hello PROPERTIES
                        PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
+
+  # Input's cases that need a process of their own: what panics, and what's set before the video
+  # starts, each checked against what it prints.
+  set(fbengine_input_cases
+      "key-out-of-range|panic: Simulate[.]KeyDown[(]9999[)]: SDL has no such key"
+      "button-out-of-range|panic: Simulate[.]MouseDown[(]33[)]: a mouse's buttons are 1 to 32"
+      "draws-composition|draws False\r?\ndraws True\r?\ndraws True\r?\npanic: who draws the composition is set before"
+      "key-name-before-video|A A\r?\npanic: headless is set before"
+      "rumble-negative|panic: Rumble: a rumble lasts 0 seconds or more, not -1"
+      "rumble-nan|panic: RumbleTriggers: a rumble lasts 0 seconds or more, not"
+      "joystick-sizes|panic: Simulate[.]ConnectJoystick: a joystick has 0 to 255 axes, buttons, and hats, not 0, 256, and 0"
+      "pads-before-start|before a Flip True\r?\neach connects at the first True\r?\nand once True"
+      "show-message|Missing file: rooms.ini isn't there\r?\nwent on"
+      "show-message-offscreen|Missing file: rooms.ini isn't there\r?\nwent on"
+      "binding-key-out-of-range|panic: Binding[.]OfKey[(]9999[)]: SDL has no such key"
+      "binding-button-out-of-range|panic: Binding[.]OfMouseButton[(]0[)]: a mouse's buttons are 1 to 32"
+      "binding-nan-scale|panic: Binding[.]OfGamepadAxis: a scale is a finite number, not"
+      "bind-unchecked|panic: Action[.]Bind: a key binding's code is 1 to 511, not 9999"
+      "bind-y-infinite|panic: Action[.]BindY: a binding's scale is a finite number, not Inf"
+      "replace-overflows|panic: Action[.]Replace: a binding's scale is a finite number, not Inf")
+  foreach(case IN LISTS fbengine_input_cases)
+    string(REPLACE "|" ";" case "${case}")
+    list(GET case 0 name)
+    list(GET case 1 printed)
+    add_test(NAME input.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/input" -- ${name})
+    set_tests_properties(input.${name} PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+                         PASS_REGULAR_EXPRESSION "${printed}" TIMEOUT 120)
+  endforeach()
+
+  add_test(NAME examples.controls
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/controls")
+  set_tests_properties(examples.controls PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+                       PASS_REGULAR_EXPRESSION "Running controls[^\n]*\nmove [(]0, -1[)], jump True\r?\nmove [(]1, 0[)], jump True\r?\n$")
 endif()
 
 # The scene, through fbengine's C API, with no window or GPU.
@@ -203,3 +237,15 @@ if(FBENGINE_FB_TESTS)
                          "panic: PhysicsWorld\\.Step: [^\n]*${said}")
   endforeach()
 endif()
+
+# fbengine's app area apart from its DLL: what it shows nothing for, and what a link opens, on
+# Windows read back through the shell; it opens nothing.
+add_executable(fbengine_app_tests app/app_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/app/link.cpp")
+target_include_directories(fbengine_app_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_link_libraries(fbengine_app_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
+if(WIN32)
+  target_link_libraries(fbengine_app_tests PRIVATE shlwapi)
+endif()
+fbengine_set_warnings(fbengine_app_tests)
+catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
+                     DL_PATHS "${fbengine_test_dll_paths}")
