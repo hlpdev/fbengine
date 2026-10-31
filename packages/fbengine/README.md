@@ -1,7 +1,6 @@
 # fbengine
 
-A game engine for FutureBlitz: windows and input, 2D, the 3D scene, and a Vulkan renderer that
-can look like Blitz3D or like a modern game.
+A game engine for FutureBlitz: windows and input, 2D, the 3D scene, and a Vulkan renderer.
 
 ```toml
 [dependencies]

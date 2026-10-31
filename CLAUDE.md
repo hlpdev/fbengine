@@ -4,7 +4,8 @@ FutureBlitz's game engine, as packages built on the language, never part of it. 
 the milestones E0 to E14, their steps, and the lanes; docs/architecture.md how it fits together;
 docs/questions.md what waits on the user; docs/research/ the read-throughs of Blitz3D's and SCP:CB's
 source. FutureBlitz's docs/engine.md is the summary, and its decisions go in FutureBlitz's
-docs/decisions.md. fbengine is a modern engine and copies none of Blitz3D's quirks.
+docs/decisions.md. fbengine is its own engine, not a modern copy of Blitz3D's; converters for
+Blitz code and assets are a game's own tools, never the engine's or the language's.
 
 ## How we work
 - As in FutureBlitz: you write the code, C++ and .fb, one step at a time, in my code style, and
@@ -36,7 +37,7 @@ docs/decisions.md. fbengine is a modern engine and copies none of Blitz3D's quir
 ## Current step
 E0 is done, and E1 steps 1 and 2 (2026-10-31; FutureBlitz's docs/history.md has what each added).
 The engine's planning pass (2026-10-31) wrote docs/plan.md, architecture.md, questions.md, and
-research/; next, the user's answers to questions.md's first five, then the step that splits the
+research/; next, the user's answers to questions.md's first four, then the step that splits the
 headers, bindings, and folders by area and adds tools/verify.py, then the first wave of lanes.
 
 ## CI notes

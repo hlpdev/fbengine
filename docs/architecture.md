@@ -5,9 +5,10 @@ packages, and the milestones; this doc has how the pieces fit, and docs/plan.md 
 marked **Proposed** waits on the user (docs/questions.md); the rest follows from decisions already
 made.
 
-The yardstick: SCP: Containment Breach, remade 1-to-1 at the end (E14), has to feel nearly
-identical, and the engine has to be a good modern engine on its own. Every structural choice is
-checked against both.
+fbengine is its own engine, not a modern copy of Blitz3D's (the user, 2026-10-31). The
+yardstick: it has to cover every engine feature SCP: Containment Breach needs, so a 1-to-1 remake
+can be built on it later (docs/research/scpcb-requirements.md), and be a good modern engine on its
+own. Every structural choice is checked against both.
 
 ## Layers
 
@@ -27,7 +28,7 @@ checked against both.
 - **What goes in C++**: everything per frame and per object in bulk: rendering, culling, skinning
   and animation sampling, collisions and picks, physics, mixing, decoding assets.
 - **What goes in FB**: the API's shape, everything a game calls once per thing per frame, glue
-  between packages, fbengine_ui, fbengine_tools, the editor, and the migrator. Code that isn't hot
+  between packages, fbengine_ui, fbengine_tools, and the editor. Code that isn't hot
   and is easier to write in FB is written in FB; that's also the engine dogfooding the language.
 - A C++ DLL is called only by its own package's FB code; packages meet in FB (physics reads an
   entity's transform through fbengine's FB API and hands Jolt numbers). No C++ links across
@@ -60,12 +61,10 @@ checked against both.
   panics ("this Mesh was freed").
 - **Proposed**: engine Classes are Final, and a game attaches its own data with
   `entity.SetData(obj)` and `entity.Data()`, rather than extending `Entity`. That keeps the
-  wrapper table simple and matches how Blitz games use NameEntity and Handle/Object.
-- **Modern conventions, not Blitz3D's** (the user, 2026-10-31): the engine follows std.math:
-  right-handed, Y up, -Z forward, radians, Vec3, Quat, Mat4, with `Deg()` where a game thinks in
-  degrees (`cube.Turn(0, Deg(1), 0)`). No Blitz3D oddity is copied into the engine; a game made
-  from a Blitz one converts its assets to modern formats as it's made, and deals with Blitz's
-  axes there.
+  wrapper table simple, and it's how games tag entities with their own state.
+- **Units and axes are std.math's** (the user, 2026-10-31): right-handed, Y up, -Z forward,
+  radians, Vec3, Quat, Mat4, with `Deg()` where a game thinks in degrees
+  (`cube.Turn(0, Deg(1), 0)`).
 
 ## The scene
 
@@ -121,9 +120,8 @@ checked against both.
 - The cooker, typed references, and hot reload are E8's, and need a package build step from
   FutureBlitz (docs/questions.md).
 - The engine loads modern formats only: glTF for meshes, scenes, and animation; KTX2, PNG, and
-  JPEG for textures; OGG, WAV, and FLAC for sound. A Blitz game's formats (`.b3d`, `.x`, `.3ds`,
-  SCP:CB's `.rmesh` rooms) are converted once, when the game is made, by fbengine_tools'
-  converters, and stored converted (the user, 2026-10-31).
+  JPEG for textures; OGG, WAV, and FLAC for sound. Converting anything else is a game's own
+  tooling, outside the engine and the language (the user, 2026-10-31).
 
 ## Threads
 
@@ -148,8 +146,4 @@ checked against both.
 - **Golden images**: a test renders on lavapipe, which is the same on every machine, and compares
   with a checked-in PNG within a tolerance (per pixel, and how many may differ). A tool rewrites
   them on purpose, and a changed image is reviewed like code.
-- **Reference scenes**: for looks a game depends on (SCP:CB's lightmapped, fogged rooms),
-  screenshots of the original next to fbengine's render of the converted scene, checked by eye
-  and within a loose tolerance.
-- **Feel fixtures** (E14): SCP:CB's numbers (speeds, radii, fog, timing) as tests of the remake.
 - Performance budgets per milestone, measured on the user's machine.

@@ -5,9 +5,11 @@ has how the engine fits together; docs/questions.md what waits on the user; docs
 read-throughs of Blitz3D and SCP:CB this plan comes from. FutureBlitz's docs/engine.md keeps the
 summary table.
 
-The end: SCP: Containment Breach remade 1-to-1 (E14), feeling nearly identical, on an engine that
-is a good modern engine on its own. fbengine copies none of Blitz3D's quirks; the remake converts
-its assets and reproduces what it needs in game code.
+fbengine is its own engine, not a modern copy of Blitz3D's (the user, 2026-10-31). Its feature
+set has to cover every engine feature SCP: Containment Breach needs (docs/research/
+scpcb-requirements.md, section 6), checked at E14, so a 1-to-1 remake can be built on it later. The
+remake is a separate project, much later, with its own tools and converters for the game's code
+and assets, tied to neither the engine nor the language.
 
 ## Milestones
 
@@ -21,13 +23,13 @@ its assets and reproduces what it needs in game code.
 | **E5** | Drawing the scene | E2, E4 | a lightmapped, fogged, lit room with cameras rendering to textures matches its golden images |
 | **E6** | The modern renderer | E5 | Khronos's glTF sample models match their references, with shadows and post effects |
 | **E7** | Animation | E4 (E5 to draw it) | skinned and morphing sample models match their reference frames |
-| **E8** | Assets | E2, E4; a FutureBlitz build step for its last steps | a game runs from cooked paks, reloads changed files in development, and the legacy converters turn .b3d and .x into glTF |
+| **E8** | Assets | E2, E4; a FutureBlitz build step for its last steps | a game runs from cooked paks, and reloads changed files in development |
 | **E9** | Audio (fbengine_audio) | E1 step 2 | on miniaudio's null backend, tests mix to known buffers, and sounds follow entities |
 | **E10** | Physics (fbengine_physics) | E1 step 2 | Jolt's sample scenes stay stable, deterministic runs repeat, and bodies drive entities |
 | **E11** | UI (fbengine_ui) | E3 | a sample game's menus, HUD, and console work by mouse, keyboard, and gamepad |
 | **E12** | Video (fbengine_video) | E3, E9 | a video plays into a texture with its sound in sync |
 | **E13** | The editor | E5, E7, E8, E11 | a scene is made, saved, played, and inspected in the editor |
-| **E14** | The proof | everything | SCP:CB remade 1-to-1, and a modern showcase game, on Windows, Linux, and macOS |
+| **E14** | The proof | everything | a sample for each of SCP:CB's engine requirements runs, and a modern showcase game, on Windows, Linux, and macOS |
 
 The order below is one possible: with lanes, E2, E4, E9, and E10 start together once E1's input
 is in, and the rest start as what they need lands.
@@ -149,12 +151,9 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 2. Loading: glTF (meshes, materials, scenes, skins, clips), KTX2, PNG, JPEG, OGG, WAV, FLAC, on
    worker threads; `Assets.Load<T>` and `Await Assets.LoadAsync<T>` with progress.
 3. The cache: one asset per path, refcounted; import settings in sidecar files.
-4. Legacy converters in fbengine_tools: .b3d, .x, and .3ds to glTF, keeping node and bone names,
-   frames, per-surface materials, texture names, and vertex colors; old image and sound formats
-   to modern ones.
-5. The cooker: compressed textures (BC7, ASTC in KTX2), optimized meshes (meshoptimizer), paks.
-6. Typed references and hot reload, through FutureBlitz's package build step.
-7. Loose ends and E8's review.
+4. The cooker: compressed textures (BC7, ASTC in KTX2), optimized meshes (meshoptimizer), paks.
+5. Typed references and hot reload, through FutureBlitz's package build step.
+6. Loose ends and E8's review.
 
 ### E9: Audio (fbengine_audio)
 
@@ -198,9 +197,12 @@ editor.
 
 ### E14: The proof
 
-SCP:CB remade in a repository of its own, from its source's behavior (docs/research/), with its
-assets converted by fbengine_tools and its quirks reproduced in game code; and a modern showcase
-game. Planned when E13 lands.
+A sample for each engine requirement in docs/research/scpcb-requirements.md's section 6, each
+built from fbengine's own features (lightmapped and fogged rooms, cameras into textures, several
+cameras a frame, swept collisions with sliding, picks and in-view tests, meshes built in code with
+two UV sets, skinned animation with bones under game control, streamed and positional sound,
+video, a console), so every feature the remake will need is known to work; and a modern
+showcase game. Planned when E13 lands. The remake itself is a separate, later project.
 
 ## Lanes
 

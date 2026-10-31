@@ -1,15 +1,15 @@
 # fbengine
 
-A game engine for [FutureBlitz](https://futureblitz.dev), as packages: any Blitz3D game can be
-remade with it, looking nearly identical, and a modern game can be made with it from the start.
+A game engine for [FutureBlitz](https://futureblitz.dev), as packages, for 2D and 3D games.
 
 | Package | What's in it |
 |---|---|
-| `fbengine` | windows and input, 2D, the 3D scene, animation, the renderer, assets, Blitz's collisions |
+| `fbengine` | windows and input, 2D, the 3D scene, collisions and picks, animation, the renderer, assets |
 | `fbengine_audio` | sound, 3D sound, and music |
 | `fbengine_physics` | Jolt's rigid bodies, characters, and casts |
 | `fbengine_ui` | a game's UI, and a debug UI |
-| `fbengine_tools` | the asset cooker, pak files, and the mesh converter |
+| `fbengine_video` | video into a texture, with its sound |
+| `fbengine_tools` | the asset cooker, pak files, and typed references |
 
 They're released together, at one version.
 
