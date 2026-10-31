@@ -22,7 +22,7 @@ Struct FlipHook
 End Struct
 
 /// How long frames take, and the most there can be a second.
-Public Class Frame
+Public Final Class Frame
     Static Field hooks: FlipHook[] = []
     Static Field lastHook: Int = 0
 
