@@ -13,31 +13,65 @@ Import "./jobs"
 Import "./loads"
 Import "./window"
 
+// An asset of the cache, as the index of every type's held assets has it: whether it's there
+// still, and its hold let go.
+Interface HeldAsset
+    // Whether its asset is made, and not gone.
+    Method Alive(): Bool
+
+    // Lets go of one of its holds, and gives whether that was the last, which takes it out of its
+    // type's cache, so the next load of its path loads it again.
+    Method Release(): Bool
+
+    // Its asset's Hash, by which the index has it.
+    Method HashOf(): UInt64
+End Interface
+
 // An asset of the cache: held weakly, so it goes with its last reference; how many of the loads
-// that gave it hold it; and, until it's made, the load it's made of, and why it failed, for each
-// that waited for it.
-Final Class Cached<T: Class>
+// that gave it hold it; until it's made, the load it's made of, and why it failed, for each that
+// waited for it; whether its FromLoad is making it; and whether its last hold has been let go, after
+// which what waited for it loads it again.
+Final Class Cached<T> Implements HeldAsset
+    Where T: Asset & Class & Hashable
+    Field Key: String
     Field Made: Weak<T>
+    Field Hash: UInt64
     Field Holds: Int
     Field Load: UInt64
     Field Failure: IOError?
+    Field Making: Bool
+    Field Released: Bool
 
-    New(load: UInt64)
+    New(key: String, load: UInt64)
+        Key = key
+        Hash = 0
         Holds = 0
         Load = load
         Failure = Null
+        Making = False
+        Released = False
     End New
+
+    Method Alive(): Bool => Made != Null
+
+    Method Release(): Bool
+        Holds -= 1
+        If Holds > 0 Then Return False
+        Released = True
+        Local entries = TypedCache<T>.Of().Entries
+        Local kept = entries.Get(Key)
+        If kept != Null && RefEquals(kept, Self) Then entries.Remove(Key)
+        Return True
+    End Method
+
+    Method HashOf(): UInt64 => Hash
 End Class
 
-// What the cache does for every type's assets at once.
-Interface AnyCache
-    // Takes out what's gone: made, and its asset let go.
-    Method Prune()
-End Interface
-
-// The cache of one type's assets, by normalized path, and how big it grows before what's gone is
-// taken out of it.
-Final Class TypedCache<T: Class> Implements AnyCache
+// The cache of one type's assets, by normalized path, one a type, as a generic Class's Static Field
+// is; and how big it grows before what's gone is taken out of it.
+Final Class TypedCache<T>
+    Where T: Asset & Class & Hashable
+    Static Field shared: TypedCache<T>? = Null
     Field Entries: Map<String, Cached<T>>
     Field PruneAt: Int
 
@@ -46,9 +80,21 @@ Final Class TypedCache<T: Class> Implements AnyCache
         PruneAt = 64
     End New
 
+    // T's cache.
+    Static Method Of(): TypedCache<T>
+        Local found = shared
+        If found != Null Then Return found
+        Local made = TypedCache<T>()
+        shared = made
+        Return made
+    End Method
+
+    // Takes out what's gone: made, and its asset let go, from here and the index.
     Method Prune()
         Entries.RemoveWhere(Function(key: String, cached: Cached<T>): Bool
-            Return cached.Load == 0 && cached.Made == Null
+            Local gone = !cached.Making && cached.Load == 0 && cached.Made == Null
+            If gone Then Assets.Unindex(cached)
+            Return gone
         End Function)
         PruneAt = Max(64, Entries.Count * 2)
     End Method
@@ -84,8 +130,9 @@ End Struct
 /// Expect(Assets.Unmount("res://config"))
 /// ```
 Public Final Class Assets
-    // The assets loaded, a type's cache by its name.
-    Static Field caches: Map<String, AnyCache> = Map<String, AnyCache>()
+    // Every type's assets the cache holds, by their Hash, so Release finds one at once, whatever
+    // type its Free is written in.
+    Static Field held: Map<UInt64, HeldAsset[]> = Map<UInt64, HeldAsset[]>()
 
     Private New()
     End New
@@ -257,9 +304,9 @@ Public Final Class Assets
     /// isn't kept, so the next load tries again.
     @MainThread
     Public Static Method Load<T>(path: String): T Throws IOError
-        Where T: Asset & Class
+        Where T: Asset & Class & Hashable
         Local key = Try Normalize(path)
-        Local cached = CacheOf<T>().Entries.Get(key)
+        Local cached = TypedCache<T>.Of().Entries.Get(key)
         If cached != Null && cached.Load != 0
             // It's loading on the workers still, and is finished here, now.
             fbe_assets_wait(cached.Load)
@@ -279,9 +326,9 @@ Public Final Class Assets
     @MainThread
     Public Static Async Method LoadAsync<T>(path: String,
                                             progress: LoadProgress? = Null): T Throws IOError
-        Where T: Asset & Class
+        Where T: Asset & Class & Hashable
         Local key = Try Normalize(path)
-        Local cached = CacheOf<T>().Entries.Get(key)
+        Local cached = TypedCache<T>.Of().Entries.Get(key)
         If cached == Null || (cached.Load == 0 && cached.Made == Null)
             Local load = fbe_assets_load_async(T.LoadKind() As Int32, path, False, True)
             If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
@@ -291,6 +338,9 @@ Public Final Class Assets
             If progress != Null Then progress.Add(cached.Load)
             // One handed over already is done, and its ticket given.
             If !fbe_assets_done(cached.Load) Then Await Jobs.Finished(cached.Load)
+        ElseIf progress != Null
+            // The cache had it: a load that's done.
+            progress.AddDone()
         End If
         Return Try Held<T>(key, cached, path)
     End Method
@@ -300,31 +350,47 @@ Public Final Class Assets
     /// INVALID_PATH for a path that isn't a res:// path.
     @MainThread
     Public Static Method Find<T>(path: String): T? Throws IOError
-        Where T: Asset & Class
-        Local cached = CacheOf<T>().Entries.Get(Try Normalize(path))
-        If cached == Null Then Return Null
+        Where T: Asset & Class & Hashable
+        Local cached = TypedCache<T>.Of().Entries.Get(Try Normalize(path))
+        If cached == Null || cached.Released Then Return Null
         Return cached.Made
     End Method
 
     /// Lets go of one hold of `asset`, of the loads that gave it, as its Free does, and gives
     /// whether that was the last, after which its Free frees what it holds; one the cache doesn't
-    /// have, as an asset no load gave, gives True.
+    /// have, as an asset no load gave, gives True. It finds the asset by itself, whatever type its
+    /// Free is written in, as a base Class's is, at once however many the cache has.
     @MainThread
-    Public Static Method Release<T: Class>(asset: T): Bool
-        Local entries = CacheOf<T>().Entries
-        Local found = ""
-        For entry In entries
-            Local made = entry.1.Made
+    Public Static Method Release<T>(asset: T): Bool
+        Where T: Asset & Class & Hashable
+        Local hash = asset.Hash()
+        Local bucket = held.Get(hash)
+        If bucket == Null Then Return True
+        // Its own type's entry, which is it; else, for a Free written in a base Class, the one of
+        // its Hash that's there, which is it, since a Class's Hash is its identity's, unless it
+        // has its own, and no two objects there at once have one identity's.
+        Local at = -1
+        For i = 0 Until bucket.Count
+            Local typed = bucket[i] As? Cached<T>
+            If typed == Null Then Continue
+            Local made = typed.Made
             If made != Null && RefEquals(made, asset)
-                found = entry.0
+                at = i
                 Break
             End If
         End For
-        If found == "" Then Return True
-        Local cached = entries[found]
-        cached.Holds -= 1
-        If cached.Holds > 0 Then Return False
-        entries.Remove(found)
+        If at < 0
+            For i = 0 Until bucket.Count
+                If bucket[i].Alive()
+                    at = i
+                    Break
+                End If
+            End For
+        End If
+        If at < 0 Then Return True
+        If !bucket[at].Release() Then Return False
+        bucket.RemoveAt(at)
+        If bucket.Count == 0 Then held.Remove(hash)
         Return True
     End Method
 
@@ -351,36 +417,34 @@ Public Final Class Assets
         Return Try SettingsOf<S>(text, sidecar)
     End Method
 
-    // The cache of T's assets.
-    @MainThread
-    Static Method CacheOf<T: Class>(): TypedCache<T>
-        Local found = caches.Get(TypeName<T>())
-        If found != Null
-            Local typed = found As? TypedCache<T>
-            If typed != Null Then Return typed
-        End If
-        Local made = TypedCache<T>()
-        caches[TypeName<T>()] = made
-        Return made
-    End Method
-
     // A new entry of T's cache for `load`, which takes out what's gone from it now and then.
     @MainThread
-    Static Method Kept<T: Class>(key: String, load: UInt64): Cached<T>
-        Local typed = CacheOf<T>()
+    Static Method Kept<T>(key: String, load: UInt64): Cached<T>
+        Where T: Asset & Class & Hashable
+        Local typed = TypedCache<T>.Of()
         If typed.Entries.Count >= typed.PruneAt Then typed.Prune()
-        Local cached = Cached<T>(load)
+        Local cached = Cached<T>(key, load)
         typed.Entries[key] = cached
         Return cached
     End Method
 
     // The T of `cached`, made of its load the first time, once the load's done, and held once
-    // more. What failed is thrown to each that waited for it, and taken out of the cache.
+    // more. What failed is thrown to each that waited for it, and taken out of the cache; what
+    // was let go meanwhile, or is gone, is loaded again; and one that's being made, which its
+    // own FromLoad asks for, is made of itself, which it can't be.
     @MainThread
     Static Method Held<T>(key: String, cached: Cached<T>, path: String): T Throws IOError
-        Where T: Asset & Class
+        Where T: Asset & Class & Hashable
         Local failure = cached.Failure
         If failure != Null Then Throw failure
+        If cached.Making
+            Throw IOError(IOErrorKind.INVALID_DATA, "{path} is made of itself, which it can't be",
+                          path)
+        End If
+        Local current = TypedCache<T>.Of().Entries.Get(key)
+        If cached.Released || current == Null || !RefEquals(current, cached)
+            Return Try Load<T>(path)
+        End If
         Local made = cached.Made
         If made != Null
             cached.Holds += 1
@@ -391,15 +455,23 @@ Public Final Class Assets
             Forget<T>(key, cached)
             Return Try Load<T>(path)
         End If
-        Local held = AssetLoad(cached.Load)
-        cached.Load = 0
+        // Being made, the entry keeps its load, so Prune leaves it while its FromLoad loads
+        // others.
+        Local loaded = AssetLoad(cached.Load)
+        cached.Making = True
         Try
-            If fbe_assets_failed(held.Handle) Then Throw LoadFailed(held.Handle, path)
-            Local making = T.FromLoad(held)
+            If fbe_assets_failed(loaded.Handle) Then Throw LoadFailed(loaded.Handle, path)
+            Local making = T.FromLoad(loaded)
+            cached.Making = False
+            cached.Load = 0
             cached.Made = making
+            cached.Hash = making.Hash()
             cached.Holds += 1
+            Index(cached)
             Return making
         Catch e As IOError
+            cached.Making = False
+            cached.Load = 0
             cached.Failure = e
             Forget<T>(key, cached)
             Throw e
@@ -408,10 +480,36 @@ Public Final Class Assets
 
     // Takes `cached` out of T's cache, if it's still the entry of `key`.
     @MainThread
-    Static Method Forget<T: Class>(key: String, cached: Cached<T>)
-        Local entries = CacheOf<T>().Entries
+    Static Method Forget<T>(key: String, cached: Cached<T>)
+        Where T: Asset & Class & Hashable
+        Local entries = TypedCache<T>.Of().Entries
         Local kept = entries.Get(key)
         If kept != Null && RefEquals(kept, cached) Then entries.Remove(key)
+    End Method
+
+    // Puts a made asset in the index, by its Hash.
+    @MainThread
+    Static Method Index(cached: HeldAsset)
+        Local bucket = held.Get(cached.HashOf())
+        If bucket == Null
+            held[cached.HashOf()] = [cached]
+        Else
+            bucket.Add(cached)
+        End If
+    End Method
+
+    // Takes an asset that's gone out of the index.
+    @MainThread
+    Static Method Unindex(cached: HeldAsset)
+        Local bucket = held.Get(cached.HashOf())
+        If bucket == Null Then Return
+        For at = 0 Until bucket.Count
+            If RefEquals(bucket[at], cached)
+                bucket.RemoveAt(at)
+                Break
+            End If
+        End For
+        If bucket.Count == 0 Then held.Remove(cached.HashOf())
     End Method
 
     /// ReadBytes's Async twin, which reads the file on a worker. It reads the mounts there are

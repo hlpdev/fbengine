@@ -25,6 +25,9 @@ End Enum
 /// Assets gives one of a path while anything holds it, each load of it holding it once. An Asset
 /// whose Free() frees what it holds calls `Assets.Release(Self)` there first, and frees it only
 /// when that gives True, the last load's hold let go, so a game's other loads of it still have it.
+/// The cache finds an asset by its Hash, so an Asset's Class is Hashable, as every Class is unless
+/// it has an `==` of its own without one. One with a Hash of its own has its Free in its own
+/// Class, since one written in a base Class is found by its Hash alone.
 Public Interface Asset
     /// The kind of load that makes one.
     Static Method LoadKind(): AssetKind
@@ -161,13 +164,16 @@ Public Final Class AssetLoad
     End Method
 End Class
 
-/// How far loads have got, for a loading screen: each Assets.LoadAsync given it adds its load.
+/// How far loads have got, for a loading screen: each Assets.LoadAsync given it adds its load, and
+/// one the cache had counts as a load that's done.
 Public Final Class LoadProgress
     Field loads: UInt64[]
+    Field cached: Int
 
     /// Progress of no loads yet.
     Public New()
         loads = []
+        cached = 0
     End New
 
     // Follows `load` too.
@@ -175,19 +181,24 @@ Public Final Class LoadProgress
         loads.Add(load)
     End Method
 
+    // Counts a load the cache had, done at once.
+    @MainThread Package Method AddDone()
+        cached += 1
+    End Method
+
     /// How many loads it follows.
-    @MainThread Public Method Count(): Int => loads.Count
+    @MainThread Public Method Count(): Int => loads.Count + cached
 
     /// How much of its loads is done, from 0 to 1, each load counting the same; 1 for none.
     @MainThread Public Method Fraction(): Float64
-        If loads.Count == 0 Then Return 1.0
-        Local sum: Float64 = 0.0
+        If Count() == 0 Then Return 1.0
+        Local sum = cached As Float64
         For load In loads
             Local progress = fbe_assets_progress(load) As Float64
             // A load that's gone was done, and made what it loaded.
             sum += progress < 0.0 ? 1.0 : progress
         End For
-        Return sum / (loads.Count As Float64)
+        Return sum / (Count() As Float64)
     End Method
 
     /// Whether all of its loads are done, as their Tasks are once the main thread's had them.
@@ -218,66 +229,120 @@ Package Function FailureKind(failure: Int32): IOErrorKind
 End Function
 
 // `text`, a sidecar's TOML, as an S, with its Fields' defaults for what the sidecar leaves out. A
-// sidecar's keys are snake_case, and its settings' Fields their PascalCase, as "alpha_cutoff" is
-// AlphaCutoff, and a key that's no Field's is a mistake in the sidecar, as a misspelling is.
+// sidecar's keys are snake_case, each a Field's name in snake_case, as "alpha_cutoff" is
+// AlphaCutoff's and "uv_scale" UVScale's, and a key that's no Field's, or two Fields', is a
+// mistake in the sidecar, as a misspelling is. The keys of a Map, or a Value, are as they're
+// written. A Field's place is found by Defaults<S>(), which an array of tables has none of, so
+// the sidecar's loaded once to find its elements' Fields, by what they loaded as, and again with
+// them named.
 @MainThread
 Package Function SettingsOf<S>(text: String, sidecar: String): S Throws IOError
     Try
         Local written = Try Toml.Read(text)
-        Local settings = Try Load<S>(FieldsOf(written))
-        Local unknown = Unknown(written, Save(settings))
-        If unknown != Null
-            Throw IOError(IOErrorKind.INVALID_DATA,
-                          "{sidecar} has {unknown}, which isn't a setting of {TypeName<S>()}",
-                          sidecar)
-        End If
-        Return settings
+        Local shape = Defaults<S>()
+        Local first = Try Load<S>(Try Named(written, shape, Null, sidecar))
+        Return Try Load<S>(Try Named(written, shape, Save(first), sidecar))
     Catch e As ParseError
         Throw IOError(IOErrorKind.INVALID_DATA,
                       "{sidecar} isn't {TypeName<S>()}'s import settings: {e.Message}", sidecar, e)
     End Try
 End Function
 
-// `value` with its tables' keys as Fields are named: each word of a snake_case key capitalized.
-Function FieldsOf(value: Value): Value
-    If value.IsArray
-        Local renamed = Value.Array()
-        For at = 0 Until value.Count
-            Local item = value[at]
-            If item != Null Then renamed.Add(FieldsOf(item))
+// `given` with each key where a Struct's Fields are named as its Field is. `shape` is
+// Defaults' form of the type there: an Object of a Struct's Fields, else a Map's or a Value's,
+// whose keys stay as written; and `saved` what was loaded there before, for an array's elements,
+// which Defaults has none of. An element without either keeps its keys, for the first load.
+Function Named(given: Value, shape: Value?, saved: Value?, sidecar: String): Value Throws IOError
+    If shape != Null && shape.IsArray
+        // A T[], given as an array, or as one table, which Load reads as one element.
+        Local first = shape.Count > 0 ? shape[0] : Null
+        If !given.IsArray
+            Local kept = saved != Null && saved.IsArray && saved.Count > 0 ? saved[0] : Null
+            Return Try Named(given, first ?? kept, Null, sidecar)
+        End If
+        Local named = Value.Array()
+        For at = 0 Until given.Count
+            Local item = given[at]
+            If item == Null Then Continue
+            Local kept = saved != Null && saved.IsArray && at < saved.Count ? saved[at] : Null
+            named.Add(Try Named(item, first ?? kept, Null, sidecar))
         End For
-        Return renamed
+        Return named
     End If
-    If !value.IsObject Then Return value
-    Local renamed = Value.Object()
-    For key In value.Keys()
-        Local item = value[key]
-        If item != Null Then renamed[FieldOf(key)] = FieldsOf(item)
-    End For
-    Return renamed
-End Function
-
-// The Field a sidecar's key is: each word of it capitalized, as "alpha_cutoff" is AlphaCutoff.
-Function FieldOf(key: String): String
-    Local field = ""
-    For word In key.Split("_")
-        If word != "" Then field += word.Slice(0, 1).ToUpper() + word.Slice(1, word.Length)
-    End For
-    Return field
-End Function
-
-// The first key of `given`'s tables, as its sidecar wrote it, that's no Field of `known`'s, what
-// its settings saved; Null when there's none.
-Function Unknown(given: Value, known: Value): String?
-    If !given.IsObject || !known.IsObject Then Return Null
+    If !given.IsObject || shape == Null || !shape.IsObject || shape.Count == 0 Then Return given
+    Local named = Value.Object()
     For key In given.Keys()
-        Local inner = known[FieldOf(key)]
-        If inner == Null Then Return "'{key}'"
-        Local deeper = given[key]
-        If deeper != Null
-            Local found = Unknown(deeper, inner)
-            If found != Null Then Return found
+        Local field = Try FieldOf(key, shape, sidecar)
+        Local item = given[key]
+        If item == Null Then Continue
+        Local kept = saved != Null && saved.IsObject ? saved[field] : Null
+        named[field] = Try Named(item, shape[field], kept, sidecar)
+    End For
+    Return named
+End Function
+
+// The Field of `shape`'s, a Struct's Fields, that `key` names: the one whose name in snake_case
+// it is. A key that isn't snake_case (a-z, 0-9, and single '_'s between words, from a letter), or
+// names no Field, or two, is a mistake in the sidecar.
+Function FieldOf(key: String, shape: Value, sidecar: String): String Throws IOError
+    If !IsSnakeCase(key)
+        Throw IOError(IOErrorKind.INVALID_DATA,
+                      "{sidecar} has '{key}', which isn't a setting's name: a setting is " +
+                      "snake_case, as alpha_cutoff is", sidecar)
+    End If
+    Local found: String? = Null
+    For field In shape.Keys()
+        If SnakeCase(field) != key Then Continue
+        If found != Null
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{sidecar} has '{key}', which names two settings, {found} and {field}",
+                          sidecar)
+        End If
+        found = field
+    End For
+    If found == Null
+        Throw IOError(IOErrorKind.INVALID_DATA, "{sidecar} has '{key}', which isn't a setting",
+                      sidecar)
+    End If
+    Return found
+End Function
+
+// Whether `key` is snake_case: ASCII lower-case letters and digits, from a letter, with single '_'s
+// between its words.
+Function IsSnakeCase(key: String): Bool
+    Local bytes = key.Bytes
+    If bytes.Count == 0 || bytes[0] < 0x61 || bytes[0] > 0x7A Then Return False
+    For at = 0 Until bytes.Count
+        Local byte = bytes[at]
+        Local letter = (byte >= 0x61 && byte <= 0x7A) || (byte >= 0x30 && byte <= 0x39)
+        If byte == 0x5F
+            If at + 1 == bytes.Count || bytes[at + 1] == 0x5F Then Return False
+        ElseIf !letter
+            Return False
         End If
     End For
-    Return Null
+    Return True
+End Function
+
+// A Field's name in snake_case: a '_' before each word, which starts at a capital after a small
+// letter or a digit, or at the last capital of a run before a small letter, as UVScale is
+// uv_scale, and then all in lower case.
+Function SnakeCase(field: String): String
+    Local bytes = field.Bytes
+    Local snake: UInt8[] = []
+    For at = 0 Until bytes.Count
+        Local byte = bytes[at]
+        Local upper = byte >= 0x41 && byte <= 0x5A
+        If upper && at > 0
+            Local before = bytes[at - 1]
+            Local lowerBefore = (before >= 0x61 && before <= 0x7A) ||
+                                (before >= 0x30 && before <= 0x39)
+            Local upperBefore = before >= 0x41 && before <= 0x5A
+            Local lowerAfter = at + 1 < bytes.Count && bytes[at + 1] >= 0x61 &&
+                               bytes[at + 1] <= 0x7A
+            If lowerBefore || (upperBefore && lowerAfter) Then snake.Add(0x5F)
+        End If
+        snake.Add(upper ? (byte + 0x20) As UInt8 : byte)
+    End For
+    Return String.FromUtf8(snake) ?? field
 End Function

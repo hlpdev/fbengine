@@ -656,3 +656,30 @@ TEST_CASE("a long chain of nodes takes time as its nodes do", "[assets]") {
     round.replace(round.rfind("{}"), 2, R"({"children":[0]})");
     REQUIRE(failure(built.json(round, built.data_uri())) == assets::failure_t::INVALID_DATA);
 }
+
+TEST_CASE("a load reads its file and its sidecar through one view of the mounts", "[assets]") {
+    const test::temp_folder_t first;
+    const test::temp_folder_t second;
+    builder_t built;
+    built.positions({ 0, 0, 0, 1, 0, 0, 0, 1, 0 });
+    const std::string json = built.json(
+        R"(,"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}])", built.data_uri());
+    first.write("tri.gltf", json);
+    first.write("tri.gltf.toml", "optimize = false\n");
+    second.write("tri.gltf", "not a glTF");
+    second.write("tri.gltf.toml", "optimize = true\n");
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(first.path));
+
+    assets::load_t load;
+    load.kind = assets::load_kind_t::MODEL;
+    load.path = path("res://tri.gltf");
+    load.options.settings = true;
+    load.files = files.view();
+    // Mounted over it before it runs, which the load doesn't see.
+    files.mount(path("res://"), vfs::folder(second.path));
+    assets::run_load(load, nullptr);
+    REQUIRE_FALSE(load.error.has_value());
+    REQUIRE(load.settings == "optimize = false\n");
+    REQUIRE(load.model.meshes.size() == 1);
+}
