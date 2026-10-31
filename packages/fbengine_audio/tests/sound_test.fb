@@ -242,3 +242,14 @@ Function ASoundIsResampledToTheMix() Throws AudioError, SoundError
     Audio.Mix(20)
     Expect(!faster.Playing())
 End Function
+
+// A mix is clipped to -1 to 1, as a device's output is, so a test hears what a device plays.
+@Test
+Function AMixIsClippedAsADevicesIs() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav([16384, -16384, 8192, 0]))
+    sound.SetVolume(4.0)
+    sound.Play()
+    Expect(Audio.Mix(4) == [0.0, 1.0, -1.0, 1.0] As Float32[])
+End Function

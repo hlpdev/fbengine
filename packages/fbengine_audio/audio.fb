@@ -25,7 +25,7 @@ Public Class AudioError Extends Error
 End Class
 
 /// The mix, which sounds play into, and the device it plays on, which there's one of.
-Public Class Audio
+Public Final Class Audio
     Private New()
     End New
 
