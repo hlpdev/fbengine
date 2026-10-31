@@ -124,14 +124,31 @@ mat4_t to_world(std::uint32_t entity) {
 
 } // namespace
 
-mat4_t tweened_matrix(std::uint32_t entity, float tween) {
-    const entities_t& entities = scene().entities;
-    // From the top down, each one's local transform part way from its capture.
-    std::vector<std::uint32_t> chain;
-    for (std::uint32_t at = entity; at != none; at = entities.parent[at]) {
+tweened_t::tweened_t(float tween) : m_tween(tween), m_stamp(++scene().posings) {}
+
+pose_t tweened_t::pose(std::uint32_t entity) const {
+    scene_t& s = scene();
+    const entities_t& entities = s.entities;
+    if (m_tween >= 1.0F) {
+        update_world(entity);
+        return {
+            .matrix = entities.world_matrix[entity],
+            .rotation = entities.world_rotation[entity],
+            .scale = entities.world_scale[entity],
+        };
+    }
+    if (s.poses.size() < entities.kind.size()) {
+        s.poses.resize(entities.kind.size());
+        s.posed.resize(entities.kind.size(), 0);
+    }
+    // Up to the first already worked out, then down again, each from its parent, its local
+    // transform part way from its capture, as update_world does it; the chain kept for the next.
+    thread_local std::vector<std::uint32_t> chain;
+    chain.clear();
+    for (std::uint32_t at = entity; at != none && s.posed[at] != m_stamp;
+         at = entities.parent[at]) {
         chain.push_back(at);
     }
-    mat4_t found;
     for (const std::uint32_t at : std::views::reverse(chain)) {
         vec3_t position = entities.position[at];
         quat_t rotation = entities.rotation[at];
@@ -139,13 +156,30 @@ mat4_t tweened_matrix(std::uint32_t entity, float tween) {
         if (entities.captured[at]) {
             const vec3_t moved = position - entities.captured_position[at];
             const vec3_t grown = scale - entities.captured_scale[at];
-            position = entities.captured_position[at] + moved * tween;
-            rotation = slerp(entities.captured_rotation[at], rotation, tween);
-            scale = entities.captured_scale[at] + grown * tween;
+            position = entities.captured_position[at] + moved * m_tween;
+            rotation = slerp(entities.captured_rotation[at], rotation, m_tween);
+            scale = entities.captured_scale[at] + grown * m_tween;
         }
-        found = found * compose(position, rotation, scale);
+        const mat4_t local = compose(position, rotation, scale);
+        const std::uint32_t parent = entities.parent[at];
+        pose_t& found = s.poses[at];
+        if (parent == none) {
+            found = { .matrix = local, .rotation = rotation, .scale = scale };
+        } else {
+            const pose_t& above = s.poses[parent];
+            found = {
+                .matrix = above.matrix * local,
+                .rotation = normalize(above.rotation * reflect(rotation, above.scale)),
+                .scale = above.scale * scale,
+            };
+        }
+        s.posed[at] = m_stamp;
     }
-    return found;
+    return s.poses[entity];
+}
+
+mat4_t tweened_matrix(std::uint32_t entity, float tween) {
+    return tweened_t(tween).pose(entity).matrix;
 }
 
 void reset_transform(std::uint32_t entity) {

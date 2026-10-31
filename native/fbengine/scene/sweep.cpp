@@ -15,23 +15,42 @@ namespace {
 
 constexpr float tiny = 1e-6F;
 
+/// A vector in double, for the terms that cancel in float.
+struct wide_t {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+};
+
+wide_t wide(vec3_t v) {
+    return { .x = v.x, .y = v.y, .z = v.z };
+}
+
+wide_t operator-(wide_t a, wide_t b) {
+    return { .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z };
+}
+
+double dot(wide_t a, wide_t b) {
+    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
+}
+
 /// The smallest root of a t^2 + b t + c from 0 up to `below`, if there's one.
-bool lowest_root(float a, float b, float c, float below, float& root) {
-    const float discriminant = (b * b) - (4.0F * a * c);
-    if (discriminant < 0.0F || std::fabs(a) < 1e-12F) {
+bool lowest_root(double a, double b, double c, double below, double& root) {
+    const double discriminant = (b * b) - (4.0 * a * c);
+    if (discriminant < 0.0 || std::fabs(a) < 1e-24) {
         return false;
     }
-    const float square = std::sqrt(discriminant);
-    float first = (-b - square) / (2.0F * a);
-    float second = (-b + square) / (2.0F * a);
+    const double square = std::sqrt(discriminant);
+    double first = (-b - square) / (2.0 * a);
+    double second = (-b + square) / (2.0 * a);
     if (first > second) {
         std::swap(first, second);
     }
-    if (first >= 0.0F && first < below) {
+    if (first >= 0.0 && first < below) {
         root = first;
         return true;
     }
-    if (second >= 0.0F && second < below) {
+    if (second >= 0.0 && second < below) {
         root = second;
         return true;
     }
@@ -181,26 +200,33 @@ void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit
     if (r <= 0.0F) {
         return;
     }
-    // Its corners, then its edges.
-    const float speed = dot(v, v);
-    float best = found ? hit.time : 1.0F;
+    // Its corners, then its edges, in double: for a sweep long beside a big triangle their terms
+    // are far bigger than how near it passes, and a near miss would touch in float.
+    const wide_t from = wide(c);
+    const wide_t way = wide(v);
+    const double speed = dot(way, way);
+    const double reach = static_cast<double>(r) * r;
+    double best = found ? hit.time : 1.0;
     bool touched = false;
     vec3_t point;
     for (const vec3_t& corner : triangle.corners) {
-        const float apart = dot(corner - c, corner - c) - (r * r);
-        const float closing = 2.0F * dot(v, c - corner);
-        // Already over a corner, it touches it now if it's going further in, else not at all: a
-        // root then would be where it leaves, which can't stop it. A touch now that's already
-        // found stays, so a face's isn't taken for its neighbour's edge, whose normal leans.
-        if (apart < 0.0F) {
-            if (closing < 0.0F && best > 0.0F) {
-                best = 0.0F;
+        const wide_t to_corner = wide(corner) - from;
+        const double apart = dot(to_corner, to_corner) - reach;
+        const double closing = -2.0 * dot(way, to_corner);
+        // Already over a corner, or just at it, it touches it now if it's going further in, else
+        // not at all: a root then would be where it leaves, which can't stop it, and at it, a
+        // root at 0 (-0 in float) would hold it there whichever way it went. A touch now that's
+        // already found stays, so a face's isn't taken for its neighbour's edge, whose normal
+        // leans.
+        if (apart <= 0.0) {
+            if (closing < 0.0 && best > 0.0) {
+                best = 0.0;
                 point = corner;
                 touched = true;
             }
             continue;
         }
-        float root = 0.0F;
+        double root = 0.0;
         if (lowest_root(speed, closing, apart, best, root)) {
             best = root;
             point = corner;
@@ -210,39 +236,42 @@ void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit
     for (std::size_t k = 0; k < 3; ++k) {
         const vec3_t start = triangle.corners[k];
         const vec3_t edge = triangle.corners[(k + 1) % 3] - start;
-        const vec3_t to_start = start - c;
-        const float length = dot(edge, edge);
-        const float along_v = dot(edge, v);
-        const float along_start = dot(edge, to_start);
-        const float a = (length * -speed) + (along_v * along_v);
-        const float b = (length * 2.0F * dot(v, to_start)) - (2.0F * along_v * along_start);
-        const float cc =
-            (length * ((r * r) - dot(to_start, to_start))) + (along_start * along_start);
-        // Already over the edge's line: where it's over the edge itself, it touches it now if
-        // it's going further in, else not at all; past the edge's ends, its corners say.
-        if (cc > 0.0F) {
-            const float fraction = -along_start / length;
-            if (fraction >= 0.0F && fraction <= 1.0F && b > 0.0F && best > 0.0F) {
-                best = 0.0F;
-                point = start + edge * fraction;
+        const wide_t across = wide(triangle.corners[(k + 1) % 3]) - wide(start);
+        const wide_t to_start = wide(start) - from;
+        const double length = dot(across, across);
+        const double along_v = dot(across, way);
+        const double along_start = dot(across, to_start);
+        const double a = (length * -speed) + (along_v * along_v);
+        const double b = (length * 2.0 * dot(way, to_start)) - (2.0 * along_v * along_start);
+        const double cc =
+            (length * (reach - dot(to_start, to_start))) + (along_start * along_start);
+        // Already over the edge's line, or just at it: where it's over the edge itself, it
+        // touches it now if it's going further in, else not at all; past the edge's ends, its
+        // corners say.
+        if (cc >= 0.0) {
+            const double fraction = -along_start / length;
+            if (fraction >= 0.0 && fraction <= 1.0 && b > 0.0 && best > 0.0) {
+                best = 0.0;
+                point = start + edge * static_cast<float>(fraction);
                 touched = true;
             }
             continue;
         }
-        float root = 0.0F;
+        double root = 0.0;
         if (lowest_root(a, b, cc, best, root)) {
-            const float fraction = ((along_v * root) - along_start) / length;
-            if (fraction >= 0.0F && fraction <= 1.0F) {
+            const double fraction = ((along_v * root) - along_start) / length;
+            if (fraction >= 0.0 && fraction <= 1.0) {
                 best = root;
-                point = start + edge * fraction;
+                point = start + edge * static_cast<float>(fraction);
                 touched = true;
             }
         }
     }
     if (touched) {
-        const vec3_t at = c + v * best;
+        const auto time = static_cast<float>(best);
+        const vec3_t at = c + v * time;
         hit = {
-            .time = best,
+            .time = time,
             .point = point,
             .normal = normalize(at - point),
             .target = triangle.target,
@@ -262,15 +291,19 @@ void sweep_ellipsoid(vec3_t c, vec3_t v, float r, const ellipsoid_t& ellipsoid, 
     const vec3_t d = v * inverse;
     const float start = dot(q, q) - 1.0F;
     float time = 0.0F;
-    if (start < 0.0F) {
-        // Inside already: it touches only going further in.
+    double root = 0.0;
+    if (start <= 0.0F) {
+        // Inside already, or just at it: it touches only going further in, else a root at 0 would
+        // hold it there whichever way it went.
         if (dot(q, d) >= 0.0F) {
             return;
         }
     } else if (!lowest_root(dot(d, d), 2.0F * dot(q, d), start, found ? hit.time : 1.0F + tiny,
-                            time) ||
-               time > 1.0F) {
+                            root) ||
+               root > 1.0) {
         return;
+    } else {
+        time = static_cast<float>(root);
     }
     const vec3_t at = c + v * time;
     const vec3_t from_center = at - ellipsoid.center;

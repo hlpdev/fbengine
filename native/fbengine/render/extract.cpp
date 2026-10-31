@@ -31,6 +31,7 @@ struct item_t {
     bool blended = false;
     std::uint32_t material = none;
     std::uint32_t entity = none;
+    std::uint64_t made = 0;
 };
 
 void put(fbe_draw_t& draw, const mat4_t& matrix, const std::array<float, 4>& tint, float fade) {
@@ -47,6 +48,7 @@ item_t item_of(std::uint32_t entity, std::uint32_t material, const mat4_t& matri
     const scene::scene_t& s = scene::scene();
     item_t item;
     item.entity = entity;
+    item.made = s.entities.made[entity];
     item.material = material;
     item.order = material != none ? s.materials[material].order : 0;
     item.draw.entity = s.entities.slots.handle(entity);
@@ -73,7 +75,8 @@ std::array<vec3_t, 8> corners_of(const mat4_t& matrix, vec3_t min, vec3_t max) {
 }
 
 /// What a camera draws, in its order.
-std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view, float tween) {
+std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
+                            const scene::tweened_t& tweened) {
     const scene::scene_t& s = scene::scene();
     const std::uint32_t world = s.entities.world[camera.entity];
     std::vector<item_t> items;
@@ -89,7 +92,7 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view, f
         if (mesh.geometry == none || !seen(mesh.entity, fade) || mesh.tint[3] * fade <= 0.0F) {
             continue;
         }
-        const mat4_t matrix = scene::tweened_matrix(mesh.entity, tween);
+        const mat4_t matrix = tweened.pose(mesh.entity).matrix;
         // Its cull box, if its geometry has one, else its bounds.
         const scene::geometry_t& geometry = s.geometries[mesh.geometry];
         vec3_t min = geometry.cull_min;
@@ -119,14 +122,16 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view, f
         if (!seen(sprite.entity, fade) || sprite.tint[3] * fade <= 0.0F) {
             continue;
         }
+        // Where it is between the steps, turned to the camera as it is then.
+        const mat4_t own = tweened.pose(sprite.entity).matrix;
         vec3_t min;
         vec3_t max;
-        scene::sprite_bounds(sprite.entity, min, max);
+        scene::sprite_bounds(sprite.entity, own, min, max);
         const std::array<vec3_t, 8> corners = corners_of(mat4_t(), min, max);
         if (!scene::in_view(camera, view, corners.data(), corners.size())) {
             continue;
         }
-        const mat4_t matrix = scene::sprite_matrix(sprite.entity, camera.entity);
+        const mat4_t matrix = scene::sprite_matrix(sprite.entity, own, view.rotation);
         items.push_back(item_of(sprite.entity, sprite.material, matrix, sprite.tint, fade, view));
     }
     for (const scene::plane_t& plane : s.planes) {
@@ -135,7 +140,7 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view, f
             continue;
         }
         // It goes on to the horizon, so it's in view unless the whole view is under it.
-        const mat4_t matrix = scene::tweened_matrix(plane.entity, tween);
+        const mat4_t matrix = tweened.pose(plane.entity).matrix;
         const vec3_t up = scene::transform_normal(matrix, vec3_t(0.0F, 1.0F, 0.0F));
         if (!scene::plane_in_view(camera, view, matrix.axis(3), up)) {
             continue;
@@ -148,7 +153,7 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view, f
             continue;
         }
         // Its grid's box; drawing makes its triangles from its heights.
-        const mat4_t matrix = scene::tweened_matrix(terrain.entity, tween);
+        const mat4_t matrix = tweened.pose(terrain.entity).matrix;
         vec3_t min;
         vec3_t max;
         scene::terrain_bounds(terrain, min, max);
@@ -164,22 +169,26 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view, f
         item.draw.depth = scene::dot(middle - view.position, forward);
         items.push_back(item);
     }
-    // By order; in one, opaque by material and nearest first, then blended furthest first; ties in
-    // the scene's own order, so a frame draws as the last did.
-    std::ranges::stable_sort(items, [](const item_t& a, const item_t& b) {
+    // By order; in one, opaque by material and nearest first, then blended furthest first; ties as
+    // the entities were made, and a mesh's surfaces in order, so a frame draws as the last did
+    // whatever's freed between.
+    std::ranges::sort(items, [](const item_t& a, const item_t& b) {
         if (a.order != b.order) {
             return a.order < b.order;
         }
         if (a.blended != b.blended) {
             return !a.blended;
         }
-        if (a.blended) {
-            return a.draw.depth > b.draw.depth;
-        }
-        if (a.material != b.material) {
+        if (!a.blended && a.material != b.material) {
             return a.material < b.material;
         }
-        return a.draw.depth < b.draw.depth;
+        if (a.draw.depth != b.draw.depth) {
+            return a.blended ? a.draw.depth > b.draw.depth : a.draw.depth < b.draw.depth;
+        }
+        if (a.made != b.made) {
+            return a.made < b.made;
+        }
+        return a.draw.surface < b.draw.surface;
     });
     return items;
 }
@@ -211,7 +220,12 @@ FBE_API int32_t fbe_render_draws(uint64_t camera, float target_width, float targ
         !fbe::scene::view_of(found, target_width, target_height, view) || !view.sized) {
         return 0;
     }
-    const std::vector<fbe::render::item_t> items = fbe::render::extract(found, view, tween);
+    // Seen from where the camera is between the steps, as everything else is drawn.
+    const fbe::scene::tweened_t tweened(tween);
+    const fbe::scene::pose_t eye = tweened.pose(slot);
+    view.position = eye.matrix.axis(3);
+    view.rotation = eye.rotation;
+    const std::vector<fbe::render::item_t> items = fbe::render::extract(found, view, tweened);
     const auto count = std::min(items.size(), static_cast<std::size_t>(std::max(capacity, 0)));
     for (std::size_t i = 0; i < count; ++i) {
         draws[i] = items[i].draw;

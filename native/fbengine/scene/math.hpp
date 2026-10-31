@@ -170,7 +170,6 @@ inline quat_t from_to(vec3_t from, vec3_t to) {
     const vec3_t axis = cross(start, finish);
     return normalize(quat_t(axis.x, axis.y, axis.z, 1.0F + cosine));
 }
-/// Part of the way from `a` to `b`, the short way round.
 /// The rotation that turns the axes X, Y, and Z to three others, at right angles and length 1,
 /// Shepperd's way.
 inline quat_t from_axes(vec3_t x, vec3_t y, vec3_t z) {
@@ -191,6 +190,7 @@ inline quat_t from_axes(vec3_t x, vec3_t y, vec3_t z) {
     return normalize(quat_t((z.x + x.z) / s, (z.y + y.z) / s, 0.25F * s, (x.y - y.x) / s));
 }
 
+/// Part of the way from `a` to `b`, the short way round.
 inline quat_t slerp(quat_t a, quat_t b, float t) {
     float cosine = (a.x * b.x) + (a.y * b.y) + (a.z * b.z) + (a.w * b.w);
     if (cosine < 0.0F) {

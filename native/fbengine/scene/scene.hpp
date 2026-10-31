@@ -166,6 +166,11 @@ struct terrain_t {
     std::int32_t size = 1;
     std::vector<float> heights;
     std::uint64_t version = 0;
+    /// Its lowest and highest heights, so its bounds don't read them all; worked out again, the
+    /// next time they're asked for, when a corner at one of them moved in.
+    mutable float low = 0.0F;
+    mutable float high = 0.0F;
+    mutable bool range_stale = false;
 };
 
 /// Every entity's data, a field to an array, indexed by slot.
@@ -206,6 +211,10 @@ struct entities_t {
     /// Where it starts fading from a camera, and where it's gone, 0 and 0 for never.
     std::vector<float> fade_near;
     std::vector<float> fade_far;
+    /// When it was made, by a count every entity takes the next of, which ties in drawing's order
+    /// go by, so a free elsewhere, which moves a pool's last into its slot, doesn't change them.
+    std::vector<std::uint64_t> made;
+    std::uint64_t mades = 0;
 };
 
 /// An entity picks can hit, with its box in the world, which picks read one after another before
@@ -265,6 +274,14 @@ struct light_t {
     float outer_cone = 0.78539816F;
 };
 
+/// Where an entity is in the world: its matrix, and its turn and scale, a mirror in the scale's
+/// signs, as update_world keeps them.
+struct pose_t {
+    mat4_t matrix;
+    quat_t rotation;
+    vec3_t scale{ 1.0F, 1.0F, 1.0F };
+};
+
 struct scene_t {
     slots_t world_slots{ WORLD_KIND };
     std::vector<world_t> worlds;
@@ -292,6 +309,10 @@ struct scene_t {
     /// there are as many as used ones.
     std::vector<pickable_t> pickables;
     std::size_t unused_pickables = 0;
+    /// Entities' tweened poses, by slot, each for the tweened_t whose stamp it has.
+    std::vector<pose_t> poses;
+    std::vector<std::uint64_t> posed;
+    std::uint64_t posings = 0;
 };
 
 /// The one scene, which every World is in.
@@ -333,6 +354,9 @@ void remove_terrain(std::uint32_t entity);
 terrain_t* terrain_of(std::uint64_t handle);
 /// The box a terrain's grid is in, in its own space.
 void terrain_bounds(const terrain_t& terrain, vec3_t& min, vec3_t& max);
+/// Whether the segment from `a` to `b`, in a terrain's own space, crosses any of its triangles,
+/// from above or below.
+bool terrain_blocks(const terrain_t& terrain, vec3_t a, vec3_t b);
 /// The triangles of a terrain's squares under a box in its own space, counterclockwise seen from
 /// above, in its own space.
 void terrain_under(const terrain_t& terrain, vec3_t min, vec3_t max,
@@ -352,8 +376,14 @@ void remove_sprite(std::uint32_t entity);
 sprite_t* sprite_of(std::uint64_t handle);
 /// A sprite's quad's matrix in the world as an entity, a camera, sees it.
 mat4_t sprite_matrix(std::uint32_t entity, std::uint32_t camera);
+/// A sprite's quad's matrix in the world, its own matrix to the world `own`, seen by a camera
+/// turned `eye`.
+mat4_t sprite_matrix(std::uint32_t entity, const mat4_t& own, quat_t eye);
 /// The box in the world a sprite's quad stays in, however it turns.
 void sprite_bounds(std::uint32_t entity, vec3_t& min, vec3_t& max);
+/// The box in the world a sprite's quad stays in, however it turns, its own matrix to the world
+/// `own`.
+void sprite_bounds(std::uint32_t entity, const mat4_t& own, vec3_t& min, vec3_t& max);
 
 /// A new geometry, held once, as its handle is.
 std::uint32_t make_geometry();
@@ -390,6 +420,20 @@ void world_box(std::uint32_t entity, vec3_t local_min, vec3_t local_max, vec3_t&
 void pickable_changed(std::uint32_t entity);
 /// Marks an entity's box, if picks hit it, to be worked out again.
 void pickable_moved(std::uint32_t entity);
+
+/// Entities' poses `tween` of the way from their World's last capture to now, each worked out
+/// once, from its parent's, while this lasts, as a frame's drawing wants them; at a tween of 1,
+/// where they are.
+class tweened_t {
+public:
+    explicit tweened_t(float tween);
+
+    [[nodiscard]] pose_t pose(std::uint32_t entity) const;
+
+private:
+    float m_tween;
+    std::uint64_t m_stamp;
+};
 
 /// An entity's matrix to the world `tween` of the way from its World's last capture to now.
 mat4_t tweened_matrix(std::uint32_t entity, float tween);

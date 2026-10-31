@@ -35,8 +35,8 @@ vec3_t greatest(vec3_t a, vec3_t b) {
 /// through an edge two triangles share crosses one of them, however it rounds.
 constexpr float edge_slack = 1e-5F;
 
-/// Where along the segment from `a` along `delta`, 0 to 1, it crosses the triangle, Moller and
-/// Trumbore's way, or a negative for nowhere; `front` says it met the triangle's front.
+} // namespace
+
 float crosses_triangle(vec3_t a, vec3_t delta, const vec3_t* corners, bool& front) {
     const vec3_t edge1 = corners[1] - corners[0];
     const vec3_t edge2 = corners[2] - corners[0];
@@ -64,8 +64,6 @@ float crosses_triangle(vec3_t a, vec3_t delta, const vec3_t* corners, bool& fron
     front = determinant > 0.0F;
     return time;
 }
-
-} // namespace
 
 void bvh_t::build(const std::vector<surface_t>& surfaces) {
     m_corners.clear();

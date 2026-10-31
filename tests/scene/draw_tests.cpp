@@ -286,3 +286,89 @@ TEST_CASE("a camera draws a terrain its grid shows it, and a plane unless it's u
     fbe_entity_set_position(below, 0.0F, -10.0F, 0.0F, FBE_SPACE_WORLD);
     CHECK(draws(below).empty());
 }
+
+TEST_CASE("a camera's draws are seen from where it is between the steps, sprites too", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    // A gun held 1 ahead of the camera, as its child, and a sprite 20 ahead.
+    const std::uint64_t gun = cube(world.handle, 0.0F, 0.0F, 0.0F);
+    REQUIRE(fbe_entity_set_parent(gun, camera, false));
+    fbe_entity_set_scale(gun, 0.1F, 0.1F, 0.1F, FBE_SPACE_LOCAL);
+    fbe_entity_set_position(gun, 0.0F, 0.0F, -1.0F, FBE_SPACE_LOCAL);
+    const std::uint64_t sprite = fbe_entity_create(world.handle, 0, FBE_ENTITY_SPRITE);
+    fbe_entity_set_position(sprite, -2.0F, 0.0F, -20.0F, FBE_SPACE_WORLD);
+    REQUIRE(fbe_world_capture(world.handle));
+    // A step: the camera walks 2 ahead, the sprite 4 to the right.
+    fbe_entity_translate(camera, 0.0F, 0.0F, -2.0F, FBE_SPACE_WORLD);
+    fbe_entity_translate(sprite, 4.0F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+    const std::vector<fbe_draw_t> found = draws(camera, 0.5F);
+    REQUIRE(found.size() == 2);
+    for (const fbe_draw_t& draw : found) {
+        if (draw.entity == gun) {
+            // Still 1 ahead, from where the camera is half way.
+            CHECK(near(draw.matrix[14], -2.0F));
+            CHECK(near(draw.depth, 1.0F));
+        } else {
+            CHECK(draw.entity == sprite);
+            CHECK(near(draw.matrix[12], 0.0F));
+            CHECK(near(draw.depth, 19.0F));
+        }
+    }
+    // The view matrix half way puts the camera at z -1; now, at -2.
+    fbe_mat4_t view{};
+    REQUIRE(fbe_camera_tweened_view_matrix(camera, 0.5F, &view));
+    CHECK(near(view.m[14], 1.0F));
+    REQUIRE(fbe_camera_view_matrix(camera, &view));
+    CHECK(near(view.m[14], 2.0F));
+    CHECK_FALSE(fbe_camera_tweened_view_matrix(camera, 1.5F, &view));
+    // A billboard faces the camera as it's turned half way: 30 degrees of 60.
+    const test_world_t turning;
+    const std::uint64_t eye = fbe_entity_create(turning.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t ahead = fbe_entity_create(turning.handle, 0, FBE_ENTITY_SPRITE);
+    fbe_entity_set_position(ahead, 0.0F, 0.0F, -10.0F, FBE_SPACE_WORLD);
+    REQUIRE(fbe_world_capture(turning.handle));
+    fbe_entity_set_rotation(eye, 0.0F, 0.5F, 0.0F, 0.8660254F, FBE_SPACE_WORLD);
+    const std::vector<fbe_draw_t> seen = draws(eye, 0.5F);
+    REQUIRE(seen.size() == 1);
+    CHECK(near(seen[0].matrix[8], 0.5F));
+    CHECK(near(seen[0].matrix[10], 0.8660254F));
+}
+
+TEST_CASE("a camera's draw projection holds with its far plane near float's top", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    REQUIRE(fbe_camera_set_range(camera, 10.0F, 1e38F));
+    fbe_mat4_t p{};
+    REQUIRE(fbe_camera_draw_projection(camera, 1600.0F, 900.0F, &p));
+    for (const float value : p.m) {
+        CHECK(std::isfinite(value));
+    }
+    // At the near plane, depth 1.
+    const float z = (p.m[10] * -10.0F) + p.m[14];
+    const float w = (p.m[11] * -10.0F) + p.m[15];
+    CHECK(near(z / w, 1.0F));
+}
+
+TEST_CASE("draws that tie keep their order when something else is freed", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    // Made first, so freeing it moves the meshes' last into its place in their pool.
+    const std::uint64_t gone = cube(world.handle, 0.0F, 0.0F, -50.0F);
+    std::array<std::uint64_t, 3> tied{};
+    for (std::uint64_t& made : tied) {
+        made = cube(world.handle, 0.0F, 0.0F, -5.0F);
+    }
+    const auto order = [&] {
+        std::vector<std::uint64_t> found;
+        for (const fbe_draw_t& draw : draws(camera)) {
+            if (draw.entity != gone) {
+                found.push_back(draw.entity);
+            }
+        }
+        return found;
+    };
+    const std::vector<std::uint64_t> made_order(tied.begin(), tied.end());
+    CHECK(order() == made_order);
+    REQUIRE(fbe_entity_free(gone));
+    CHECK(order() == made_order);
+}

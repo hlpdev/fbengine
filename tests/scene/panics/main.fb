@@ -208,6 +208,8 @@ Select arguments[0]
         gone.SetHandle(Vec2(0, -1))
     Case "tween-range"
         Pivot().TweenedMatrix(2)
+    Case "view-tween-range"
+        Camera().TweenedViewMatrix(-1)
     Case "capture-freed"
         Local gone = World()
         gone.Free()

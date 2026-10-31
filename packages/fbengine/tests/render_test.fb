@@ -89,3 +89,20 @@ Function ACameraDrawsATerrainByItsGrid()
     // Its grid's middle, 15 ahead; its corner is 20.
     Expect(IsClose(draws[0].Depth, 15, 0.001))
 End Function
+
+@Test
+Function ACameraDrawsFromWhereItIsBetweenSteps()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Looking()
+    Local gun = Mesh(Geometry.Cube(), camera)
+    gun.SetPosition(Vec3(0, 0, -1))
+    world.Capture()
+    camera.SetPosition(Vec3(0, 0, -2))
+    // Half way, the camera is at z -1, and the gun 1 ahead of it.
+    Local view = camera.TweenedViewMatrix(0.5)
+    Expect(IsClose(view.TransformPoint(Vec3(0, 0, -1)), Vec3.Zero(), 0.001))
+    Local draws = camera.Draws(0.5)
+    Expect(draws.Count == 1 && IsClose(draws[0].Depth, 1, 0.001))
+    Expect(IsClose(draws[0].Matrix.TransformPoint(Vec3.Zero()), Vec3(0, 0, -2), 0.001))
+End Function

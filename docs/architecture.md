@@ -109,8 +109,11 @@ good modern engine on its own. Every structural choice is checked against both.
     along the face. Long walks among turned solids measured it at most 0.00004 in, over 200 seeds
     of 20,000 frames at the first skin of 0.001, which a test holds at the three that were worst
     before.
-  - A mover already within its radius of a face, an edge, or a corner touches it only going
-    further in, so one starting in a seam goes out of it, never through.
+  - A mover already within its radius of a face, an edge, or a corner, or just at it, touches it
+    only going further in, so one starting in a seam goes out of it, never through, and one that
+    rounding puts exactly its radius from an edge isn't held there. Edges' and corners' terms are
+    worked out in double, since for a long sweep beside a big triangle they're far bigger than how
+    near it passes.
   - A mover climbs ground, a slope within its max slope of level (45 degrees at first), as far as
     the slope goes, as physics' Character does. Sliding along anything steeper, edges and corners
     too, raises it no more than the move's own rise and its step height, so a tall mover isn't

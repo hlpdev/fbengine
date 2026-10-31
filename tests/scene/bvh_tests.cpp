@@ -94,7 +94,7 @@ TEST_CASE("the tree finds the nearest triangle along a segment as trying each do
     CHECK(hits > 100);
 }
 
-TEST_CASE("the tree gives every triangle whose box a box touches", "[scene]") {
+TEST_CASE("the tree gives every triangle whose box a box touches, and only those", "[scene]") {
     std::mt19937 random(11); // NOLINT(bugprone-random-generator-seed)
     bvh_t tree;
     tree.build(soup(1000, random));
@@ -114,9 +114,8 @@ TEST_CASE("the tree gives every triangle whose box a box touches", "[scene]") {
             touches = touches && high >= fbe::scene::component(min, axis) &&
                       low <= fbe::scene::component(max, axis);
         }
-        if (touches) {
-            CHECK(found.contains(t));
-        }
+        // Those in a leaf it touches whose own boxes don't, too, would be swept for nothing.
+        CHECK(found.contains(t) == touches);
     }
 }
 

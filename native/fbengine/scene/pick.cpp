@@ -37,6 +37,56 @@ vec3_t stretch(const mat4_t& m) {
     return { row(0), row(1), row(2) };
 }
 
+/// Sweeps the pick against a triangle from `enter` of the way along, where it comes within reach
+/// of it, instead of from its start, so a long pick's edge and corner terms keep their precision,
+/// and keeps the hit, its time along the whole pick, if it's the nearest. A triangle is hit from
+/// in front of it, and a pick that began behind it passes out through it, untouched until it's
+/// clear of it, its radius in front, as one starting in it does: so it's swept from there, and
+/// whether it began behind is worked out where it enters, the same however far back it began.
+void sweep_from(vec3_t from, vec3_t along, float enter, float radius, const triangle_t& triangle,
+                hit_t& hit, bool& found) {
+    const vec3_t n = triangle.normal;
+    // How far in front of its plane it is where it enters, and, the plane's distance changing
+    // evenly along it, where it began.
+    const float closing = dot(n, along);
+    const float ahead = dot(n, from + along * enter - triangle.corners[0]);
+    if (ahead - (closing * enter) < 0.0F && ahead < radius) {
+        if (closing <= 0.0F) {
+            return;
+        }
+        enter += (radius - ahead) / closing;
+        if (enter >= 1.0F) {
+            return;
+        }
+    } else if (ahead < 0.0F) {
+        // It went behind it before it came within reach, so it's never in front of it again.
+        return;
+    }
+    if (enter <= 0.0F) {
+        sweep_triangle(from, along, radius, triangle, hit, found);
+        return;
+    }
+    if (found && hit.time <= enter) {
+        return;
+    }
+    const float rest = 1.0F - enter;
+    hit_t nearer = hit;
+    if (found) {
+        nearer.time = (hit.time - enter) / rest;
+    }
+    const float before = nearer.time;
+    bool touched = found;
+    // On the plane, not a rounding behind it.
+    vec3_t start = from + along * enter;
+    start = start - n * std::fmin(dot(n, start - triangle.corners[0]), 0.0F);
+    sweep_triangle(start, along * rest, radius, triangle, nearer, touched);
+    if (touched && (!found || nearer.time < before)) {
+        hit = nearer;
+        hit.time = enter + (nearer.time * rest);
+        found = true;
+    }
+}
+
 /// Sweeps the pick against an entity as its pick mode says, keeping the hit if it's the nearest
 /// yet; its box in the world is already known to be in the pick's way.
 void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, hit_t& hit,
@@ -89,7 +139,9 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
             return;
         }
         // In pieces of a few squares each, so a long pick over a big terrain tries only the
-        // squares near its line, nearest first, and stops at the first piece with a hit.
+        // squares near its line, nearest first, until a hit, this or another's, is no later than
+        // where the next piece starts: a touch in a piece's squares may be past its part of the
+        // line, since they reach past it.
         const terrain_t& terrain = s.terrains[s.entities.component[entity]];
         const vec3_t a = transform_point(into, from);
         const vec3_t b = transform_point(into, from + along);
@@ -97,8 +149,12 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
         const float span = std::fmax(std::fabs(b.x - a.x), std::fabs(b.z - a.z));
         const int pieces = std::clamp(static_cast<int>(std::ceil(span / 4.0F)), 1, 4096);
         std::vector<std::array<vec3_t, 3>> under;
-        for (int piece = 0; piece < pieces && !found; ++piece) {
+        const segment_t segment(a, b - a);
+        for (int piece = 0; piece < pieces; ++piece) {
             const float t0 = static_cast<float>(piece) / static_cast<float>(pieces);
+            if (found && hit.time <= t0) {
+                break;
+            }
             const float t1 = static_cast<float>(piece + 1) / static_cast<float>(pieces);
             const vec3_t across = b - a;
             const vec3_t p0 = a + across * t0;
@@ -111,6 +167,25 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
                 vec3_t(std::fmax(p0.x, p1.x), std::fmax(p0.y, p1.y), std::fmax(p0.z, p1.z)) +
                     margin,
                 under);
+            if (under.empty()) {
+                continue;
+            }
+            // Swept from where the pick comes within reach of these squares.
+            vec3_t low = under[0][0];
+            vec3_t high = under[0][0];
+            for (const auto& corners : under) {
+                for (const vec3_t& corner : corners) {
+                    low = vec3_t(std::fmin(low.x, corner.x), std::fmin(low.y, corner.y),
+                                 std::fmin(low.z, corner.z));
+                    high = vec3_t(std::fmax(high.x, corner.x), std::fmax(high.y, corner.y),
+                                  std::fmax(high.z, corner.z));
+                }
+            }
+            float enter = 0.0F;
+            if (!crosses_box(segment, low - margin, high + margin, found ? hit.time : 1.0F,
+                             enter)) {
+                continue;
+            }
             for (const auto& corners : under) {
                 triangle_t triangle;
                 if (make_triangle(
@@ -121,7 +196,7 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
                         },
                         mirrored, triangle)) {
                     triangle.target = entity;
-                    sweep_triangle(from, along, radius, triangle, hit, found);
+                    sweep_from(from, along, enter, radius, triangle, hit, found);
                 }
             }
         }
@@ -201,7 +276,7 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
     // mesh's space does along each of its axes.
     tree.along(
         a, b, stretch(into) * radius, [&] { return found ? hit.time : 1.0F; },
-        [&](std::uint32_t index) {
+        [&](std::uint32_t index, float enter) {
             const vec3_t* corners = tree.corners(index);
             triangle_t triangle;
             if (!make_triangle(
@@ -216,7 +291,7 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
             triangle.target = entity;
             triangle.origin = tree.origin(index);
             triangle.from_mesh = true;
-            sweep_triangle(from, along, radius, triangle, hit, found);
+            sweep_from(from, along, enter, radius, triangle, hit, found);
         });
 }
 

@@ -53,14 +53,27 @@ inline bool within_slab(float from, float inverse, float low, float high, float&
     return enter <= leave;
 }
 
-/// Whether a segment passes through the box anywhere from 0 to `until` along it.
-inline bool crosses_box(const segment_t& segment, vec3_t min, vec3_t max, float until) {
-    float enter = 0.0F;
+/// Whether a segment passes through the box anywhere from 0 to `until` along it, and how far
+/// along, `enter`, it goes in.
+inline bool crosses_box(const segment_t& segment, vec3_t min, vec3_t max, float until,
+                        float& enter) {
+    enter = 0.0F;
     float leave = until;
     return within_slab(segment.from.x, segment.inverse.x, min.x, max.x, enter, leave) &&
            within_slab(segment.from.y, segment.inverse.y, min.y, max.y, enter, leave) &&
            within_slab(segment.from.z, segment.inverse.z, min.z, max.z, enter, leave);
 }
+
+/// Whether a segment passes through the box anywhere from 0 to `until` along it.
+inline bool crosses_box(const segment_t& segment, vec3_t min, vec3_t max, float until) {
+    float enter = 0.0F;
+    return crosses_box(segment, min, max, until, enter);
+}
+
+/// Where along the segment from `a` along `delta`, 0 to 1, it crosses a triangle's three
+/// `corners`, Moller and Trumbore's way, or a negative for nowhere; `front` says it met the
+/// triangle's front.
+float crosses_triangle(vec3_t a, vec3_t delta, const vec3_t* corners, bool& front);
 
 /// Where a triangle came from: its surface and its index there.
 struct triangle_origin_t {
@@ -98,7 +111,8 @@ public:
 
     /// Calls `visit` with each triangle's index in a leaf whose box the segment from `a` to `b`
     /// passes within `grow` of, along each axis, before the part of it `until()` gives, 0 to 1,
-    /// which `visit` may lower as it finds hits.
+    /// which `visit` may lower as it finds hits; and how far along, 0 to 1, it comes within
+    /// `grow` of the leaf.
     template <typename Until, typename Visit>
     void along(vec3_t a, vec3_t b, vec3_t grow, Until&& until, Visit&& visit) const;
 
@@ -137,7 +151,9 @@ void bvh_t::overlapping(vec3_t min, vec3_t max, Visit&& visit) const {
     if (m_nodes.empty()) {
         return;
     }
-    std::vector<std::uint32_t> stack{ 0 };
+    // Kept for the next search, so a search doesn't allocate.
+    thread_local std::vector<std::uint32_t> stack;
+    stack.assign(1, 0);
     while (!stack.empty()) {
         const node_t& node = m_nodes[stack.back()];
         const std::uint32_t at = stack.back();
@@ -148,6 +164,16 @@ void bvh_t::overlapping(vec3_t min, vec3_t max, Visit&& visit) const {
         }
         if (node.count > 0) {
             for (std::uint32_t i = node.first; i < node.first + node.count; ++i) {
+                // Each of the leaf's own, by its corners' box.
+                const vec3_t* c = corners(m_order[i]);
+                if (std::fmax(std::fmax(c[0].x, c[1].x), c[2].x) < min.x ||
+                    std::fmin(std::fmin(c[0].x, c[1].x), c[2].x) > max.x ||
+                    std::fmax(std::fmax(c[0].y, c[1].y), c[2].y) < min.y ||
+                    std::fmin(std::fmin(c[0].y, c[1].y), c[2].y) > max.y ||
+                    std::fmax(std::fmax(c[0].z, c[1].z), c[2].z) < min.z ||
+                    std::fmin(std::fmin(c[0].z, c[1].z), c[2].z) > max.z) {
+                    continue;
+                }
                 visit(m_order[i]);
             }
         } else {
@@ -168,12 +194,13 @@ void bvh_t::along(vec3_t a, vec3_t b, vec3_t grow, Until&& until, Visit&& visit)
         const std::uint32_t at = stack.back();
         stack.pop_back();
         const node_t& node = m_nodes[at];
-        if (!crosses_box(segment, node.min - grow, node.max + grow, until())) {
+        float enter = 0.0F;
+        if (!crosses_box(segment, node.min - grow, node.max + grow, until(), enter)) {
             continue;
         }
         if (node.count > 0) {
             for (std::uint32_t i = node.first; i < node.first + node.count; ++i) {
-                visit(m_order[i]);
+                visit(m_order[i], enter);
             }
         } else {
             stack.push_back(node.second);
