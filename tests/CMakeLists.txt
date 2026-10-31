@@ -63,6 +63,23 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/hello")
   set_tests_properties(examples.hello PROPERTIES
                        PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
+
+  # Input's cases that need a process of their own: what panics, and what's set before the video
+  # starts, each checked against what it prints.
+  set(fbengine_input_cases
+      "key-out-of-range|panic: Simulate[.]KeyDown[(]9999[)]: SDL has no such key"
+      "button-out-of-range|panic: Simulate[.]MouseDown[(]33[)]: a mouse's buttons are 1 to 32"
+      "draws-composition|draws False\r?\ndraws True\r?\ndraws True\r?\npanic: who draws the composition is set before"
+      "key-name-before-video|A A\r?\npanic: headless is set before")
+  foreach(case IN LISTS fbengine_input_cases)
+    string(REPLACE "|" ";" case "${case}")
+    list(GET case 0 name)
+    list(GET case 1 printed)
+    add_test(NAME input.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/input" -- ${name})
+    set_tests_properties(input.${name} PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+                         PASS_REGULAR_EXPRESSION "${printed}")
+  endforeach()
 endif()
 
 # fbengine_physics' C++ that's subtle, apart from its DLL.

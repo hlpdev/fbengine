@@ -209,7 +209,8 @@ End Function
 End Function
 
 /// What `key` is called on the player's layout, as a key bindings menu shows it: "Z" for
-/// `Key.W` on an AZERTY keyboard, "Space" for `Key.SPACE`, and "" for none.
+/// `Key.W` on an AZERTY keyboard, "Space" for `Key.SPACE`, and "" for none. The layout is the
+/// video's, which this starts if nothing has, as Displays does, so SetHeadless comes first.
 @MainThread Public Function KeyName(key: Key): String
     Unsafe
         Return fbe_input_key_name(key As Int32).ToString()
@@ -238,6 +239,37 @@ End Function
     If !fbe_input_set_text_area(x, y, width, height, cursor) Then Panic(LastError())
 End Function
 
+/// Where SetTextInputArea last put the text being typed, all 0 at first. Panics without a window.
+@MainThread Public Function TextInputArea(): TextArea
+    Local area = fbe_text_area_t(0, 0, 0, 0, 0)
+    Local found = False
+    Unsafe
+        found = fbe_input_text_area(AddressOf(area))
+    End Unsafe
+    If !found Then Panic(LastError())
+    Return TextArea(area.x, area.y, area.width, area.height, area.cursor)
+End Function
+
+/// Where the text being typed is in the window's units, and its cursor, from the area's left.
+Public Struct TextArea
+    Public Field X: Int32
+    Public Field Y: Int32
+    Public Field Width: Int32
+    Public Field Height: Int32
+    Public Field Cursor: Int32
+End Struct
+
+/// Says the game draws the IME's composition itself, at its text field's cursor, as fbengine_ui's
+/// text fields do, rather than the OS drawing it over the window, which is how a game with no
+/// text field of its own still takes Japanese or Chinese text. It's set before the first window
+/// or display, as SetHeadless is, and panics after.
+@MainThread Public Function SetDrawsComposition(draws: Bool)
+    If !fbe_input_set_draws_composition(draws) Then Panic(LastError())
+End Function
+
+/// Whether the game draws the IME's composition itself.
+@MainThread Public Function DrawsComposition(): Bool => fbe_input_draws_composition()
+
 /// The text the last Flip read typed while text input was on, "" for none.
 @MainThread Public Function TextInput(): String
     Unsafe
@@ -255,7 +287,8 @@ Public Struct Composition
     Public Field Length: Int32
 End Struct
 
-/// The IME's composition as the last Flip read it.
+/// The IME's composition as the last Flip read it, while the game draws it (SetDrawsComposition);
+/// otherwise the OS draws it, and it's always empty here.
 @MainThread Public Function TextComposition(): Composition
     Unsafe
         Return Composition(fbe_input_composition().ToString(), fbe_input_composition_start(),

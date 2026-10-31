@@ -39,6 +39,9 @@ std::int32_t composition_length = -1;
 // fbe_input_key_name's, which the next call replaces.
 std::string name;
 
+// Whether the game draws the IME's composition, which SDL's IME hint says before the video starts.
+bool draws_composition = false;
+
 bool valid_key(std::int32_t key) {
     return key > SDL_SCANCODE_UNKNOWN && key < SDL_SCANCODE_COUNT;
 }
@@ -151,8 +154,13 @@ void keyboard_event(const SDL_Event& event) {
         key_event(event.key);
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
-    case SDL_EVENT_WINDOW_DESTROYED:
         release_keys();
+        break;
+    case SDL_EVENT_WINDOW_DESTROYED:
+        // Its text input ends with it, and SDL's own empty composition for it, which comes with
+        // the closed window's ID, is never typing.
+        release_keys();
+        clear_composition();
         break;
     case SDL_EVENT_TEXT_INPUT:
         if (typing(event) && event.text.text != nullptr) {
@@ -211,7 +219,8 @@ FBE_API void fbe_input_flush_keys(void) {
 
 FBE_API const char* fbe_input_key_name(int32_t key) {
     name.clear();
-    if (valid_key(key)) {
+    // The layout is the video driver's; until it starts, SDL knows only a US keyboard's.
+    if (valid_key(key) && fbe::start_video()) {
         const auto scancode = static_cast<SDL_Scancode>(key);
         const SDL_Keycode code = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false);
         const char* named = code != SDLK_UNKNOWN ? SDL_GetKeyName(code) : nullptr;
@@ -254,6 +263,41 @@ FBE_API bool fbe_input_set_text_area(int32_t x, int32_t y, int32_t width, int32_
     return SDL_SetTextInputArea(window, &area, cursor)
                ? true
                : fbe::fail_sdl("couldn't set the text's area");
+}
+
+FBE_API bool fbe_input_text_area(fbe_text_area_t* area) {
+    SDL_Window* window = fbe::needed_window();
+    if (window == nullptr) {
+        return false;
+    }
+    SDL_Rect rect{};
+    int cursor = 0;
+    if (!SDL_GetTextInputArea(window, &rect, &cursor)) {
+        return fbe::fail_sdl("couldn't get the text's area");
+    }
+    area->x = rect.x;
+    area->y = rect.y;
+    area->width = rect.w;
+    area->height = rect.h;
+    area->cursor = cursor;
+    return true;
+}
+
+FBE_API bool fbe_input_set_draws_composition(bool draws) {
+    if (fbe::video_started() && draws != draws_composition) {
+        return fbe::fail("who draws the composition is set before the first window or display");
+    }
+    draws_composition = draws;
+    if (draws) {
+        SDL_SetHint(SDL_HINT_IME_IMPLEMENTED_UI, "composition");
+    } else {
+        SDL_ResetHint(SDL_HINT_IME_IMPLEMENTED_UI);
+    }
+    return true;
+}
+
+FBE_API bool fbe_input_draws_composition(void) {
+    return draws_composition;
 }
 
 FBE_API const char* fbe_input_text(void) {
