@@ -211,9 +211,10 @@ bool open_device(mixer_t& made, const opening_t& how) {
     return true;
 }
 
-/// Notes that `made`'s device has just started: its mix hasn't moved yet, and the default it
-/// follows is the one it's on.
-void started_now(mixer_t& made) {
+/// Notes that `made`'s device is about to start: its mix hasn't moved yet, and the default it
+/// follows is the one it's on. Before the start, not after, since a device's thread can mix its
+/// first periods before the start returns, which would then read as no frames since it started.
+void starting(mixer_t& made) {
     const steady_clock_t::time_point now = steady_clock_t::now();
     made.frames_seen = made.frames.load(std::memory_order_relaxed);
     made.frames_moved = now;
@@ -376,12 +377,12 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
         return false;
     }
     if (mixer->has_device) {
+        starting(*mixer);
         const ma_result started = ma_device_start(&mixer->device);
         if (started != MA_SUCCESS) {
             fbe_audio_stop();
             return fbe::audio::fail_ma("couldn't start the audio device", started);
         }
-        started_now(*mixer);
     }
     return true;
 } catch (const std::bad_alloc&) {
@@ -505,10 +506,13 @@ FBE_AUDIO_API void fbe_audio_recover(void) try {
         .period = mixer->period,
     };
     // One that won't open or start is tried again at the next flip.
-    if (open_device(*mixer, how) && ma_device_start(&mixer->device) == MA_SUCCESS) {
+    if (!open_device(*mixer, how)) {
+        return;
+    }
+    starting(*mixer);
+    if (ma_device_start(&mixer->device) == MA_SUCCESS) {
         mixer->fell_back = true;
         mixer->on_default = true;
-        started_now(*mixer);
     }
 } catch (const std::bad_alloc&) {
     // It's tried again at the next flip.
