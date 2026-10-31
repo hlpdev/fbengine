@@ -48,8 +48,8 @@ Function EachLawSplitsAMonoSoundAsItSays() Throws AudioError, SoundError
     End For
 End Function
 
-// A law changed while channels play is heard from the next mix, and leaves their volumes and pans
-// as they were set.
+// A law changed while channels play is ramped to over the next stretch mixed, so it doesn't
+// click, and leaves their volumes and pans as they were set.
 @Test
 Function ALawChangesWhatsPlaying() Throws AudioError, SoundError
     Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
@@ -59,7 +59,12 @@ Function ALawChangesWhatsPlaying() Throws AudioError, SoundError
     channel.SetVolume(0.5)
     Expect(Audio.Mix(1) == [0.25, 0.25] As Float32[])
     Audio.SetPanLaw(PanLaw.LINEAR)
-    Expect(Audio.Mix(1) == [0.125, 0.125] As Float32[])
+    Local mixed = Audio.Mix(100)
+    Expect(mixed[0] < 0.25 && mixed[0] > 0.24)
+    For i = 1 To 99
+        Expect(mixed[i * 2] <= mixed[(i - 1) * 2] && mixed[i * 2] == mixed[i * 2 + 1])
+    End For
+    Expect(mixed[198] == 0.125)
     Expect(channel.Volume() == 0.5)
     Expect(channel.Pan() == 0.0)
 End Function
@@ -99,4 +104,68 @@ Function ASoundPositionedByHandFollowsItsSource() Throws AudioError, SoundError
         Local sides = Sides(PanLaw.CONSTANT_POWER, pan)
         Expect(Close(mixed[1468], sides[0] * volume) && Close(mixed[1469], sides[1] * volume))
     End For
+End Function
+
+// A looping mono sine at 0.5, 441 Hz in a 44100 Hz mix: no step of it is more than 0.5 * 2 * Pi *
+// 441 / 44100, about 0.0314.
+Function Sine(): Channel Throws SoundError
+    Local samples: Int[] = []
+    For i = 0 To 99
+        samples.Add((Sin(Tau * (i As Float) / 100.0) * 16384.0) As Int)
+    End For
+    Local sound = Try Sound.FromBytes(Wav(samples, 1, 44100))
+    sound.SetLoop(True)
+    Local channel = sound.Play()
+    Audio.Mix(1)
+    Return channel
+End Function
+
+// The largest step from one frame to the next on either side, `last` the frame before `mixed`.
+Function LargestStep(mixed: Float32[], last: Float32[]): Float32
+    Local step = Max(Abs(mixed[0] - last[0]), Abs(mixed[1] - last[1]))
+    For i = 1 To mixed.Count / 2 - 1
+        step = Max(step, Abs(mixed[i * 2] - mixed[(i - 1) * 2]))
+        step = Max(step, Abs(mixed[i * 2 + 1] - mixed[(i - 1) * 2 + 1]))
+    End For
+    Return step
+End Function
+
+// A law switched at the sine's peak is ramped to, so no step is bigger than the sine's own.
+@Test
+Function ALawSwitchedMidPlayDoesntClick() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Defer Audio.SetPanLaw(PanLaw.BALANCE)
+    For pair In [[PanLaw.BALANCE, PanLaw.CONSTANT_POWER], [PanLaw.BALANCE, PanLaw.LINEAR],
+                 [PanLaw.CONSTANT_POWER, PanLaw.LINEAR]]
+        Audio.SetPanLaw(pair[0])
+        Local channel = Try Sine()
+        channel.SetPan(0.5)
+        Local before = Audio.Mix(1025)
+        Audio.SetPanLaw(pair[1])
+        Local after = Audio.Mix(735)
+        Expect(LargestStep(after, [before[2048], before[2049]]) < 0.034)
+        channel.Stop()
+    End For
+End Function
+
+// A source positioned by hand, its pan and volume set each frame, as pan_test's going round the
+// camera: where each frame's settings land, the step is no bigger than the sine's own.
+@Test
+Function ASoundPositionedByHandDoesntZipper() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Defer Audio.SetPanLaw(PanLaw.BALANCE)
+    Audio.SetPanLaw(PanLaw.CONSTANT_POWER)
+    Local channel = Try Sine()
+    Local last: Float32[] = [0.0, 0.0]
+    Local largest: Float32 = 0.0
+    For frame = 0 To 35
+        channel.SetVolume(1.0 - (1.0 + (frame As Float) / 6.0) / 10.0)
+        channel.SetPan(Sin(-Deg((frame * 10) As Float)))
+        Local mixed = Audio.Mix(735)
+        If frame > 0 Then largest = Max(largest, LargestStep(mixed, last))
+        last = [mixed[1468], mixed[1469]]
+    End For
+    Expect(largest < 0.034)
 End Function

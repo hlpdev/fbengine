@@ -1,8 +1,9 @@
 // Channels: each a miniaudio sound in the mix, over a decoded sound's frames or a decoder of a
-// streamed sound's file. One that has ended is let go the next time it's asked about or another
-// plays, so finished channels never pile up and their handles find nothing. Around each mix, on
-// the thread that mixes, before_mix does the seeks asked for and after_mix keeps where each
-// channel is, since miniaudio's own seek and cursor leave out what it has read ahead.
+// streamed sound's file, then a node of fbe's that gives each side its gain, its volume and pan.
+// One that has ended is let go the next time it's asked about or another plays, so finished
+// channels never pile up and their handles find nothing. Around each mix, on the thread that mixes,
+// before_mix does the seeks asked for and after_mix keeps where each channel is, since miniaudio's
+// own seek and cursor leave out what it has read ahead.
 
 #include "audio/mixer.hpp"
 #include "audio/pool.hpp"
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -34,6 +36,83 @@ constexpr std::int32_t linear_law = 2;
 /// How a mono channel's pan is heard in a stereo mix; the main thread's.
 std::int32_t pan_law = balance_law;
 
+/// Two floats as one 64-bit value, so the main thread sets both at once and the mixing thread
+/// reads both at once.
+std::uint64_t pack(float left, float right) {
+    return std::bit_cast<std::uint32_t>(left) |
+           (static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(right)) << 32U);
+}
+
+float unpack_left(std::uint64_t both) {
+    return std::bit_cast<float>(static_cast<std::uint32_t>(both));
+}
+
+float unpack_right(std::uint64_t both) {
+    return std::bit_cast<float>(static_cast<std::uint32_t>(both >> 32U));
+}
+
+/// A channel's gains: a node after its sound, in the mix's channels, that multiplies each side of
+/// a stereo mix by its own gain, the channel's volume and pan together, or every channel of
+/// another mix by its volume. The main thread sets the two gains as one value, so the mixing
+/// thread never hears a pan half changed; a change is ramped over the next stretch the mix
+/// processes, at most 512 frames, about 10 ms, so it doesn't click. miniaudio's own volume and pan
+/// on the sound stay 1 and 0.
+struct gains_t {
+    /// First, as miniaudio's nodes' are.
+    ma_node_base base;
+    /// The main thread's: the gains it's to have, left and right.
+    std::atomic<std::uint64_t> target = pack(1.0F, 1.0F);
+    /// The mixing thread's: the gains it has.
+    float left = 1.0F;
+    float right = 1.0F;
+    ma_uint32 channels = 0;
+};
+
+// miniaudio's signature for a node's processing.
+// NOLINTBEGIN(misc-const-correctness, readability-non-const-parameter)
+void process_gains(ma_node* node, const float** in, ma_uint32* /*in_count*/, float** out,
+                   ma_uint32* out_count) {
+    // NOLINTEND(misc-const-correctness, readability-non-const-parameter)
+    auto* gains = static_cast<gains_t*>(node);
+    const std::uint64_t target = gains->target.load(std::memory_order_acquire);
+    const float left = unpack_left(target);
+    const float right = unpack_right(target);
+    const ma_uint32 frames = *out_count;
+    const ma_uint32 channels = gains->channels;
+    const float* from = in[0];
+    float* to = out[0];
+    const float left_step = frames != 0 ? (left - gains->left) / static_cast<float>(frames) : 0.0F;
+    const float right_step =
+        frames != 0 ? (right - gains->right) / static_cast<float>(frames) : 0.0F;
+    for (ma_uint32 frame = 0; frame < frames; ++frame) {
+        const auto ramped = static_cast<float>(frame + 1);
+        const float now_left = frame + 1 == frames ? left : gains->left + (left_step * ramped);
+        const std::size_t at = static_cast<std::size_t>(frame) * channels;
+        if (channels == 2) {
+            const float now_right =
+                frame + 1 == frames ? right : gains->right + (right_step * ramped);
+            to[at] = from[at] * now_left;
+            to[at + 1] = from[at + 1] * now_right;
+        } else {
+            for (ma_uint32 channel = 0; channel < channels; ++channel) {
+                to[at + channel] = from[at + channel] * now_left;
+            }
+        }
+    }
+    if (frames != 0) {
+        gains->left = left;
+        gains->right = right;
+    }
+}
+
+ma_node_vtable gains_vtable = {
+    .onProcess = process_gains,
+    .onGetRequiredInputFrameCount = nullptr,
+    .inputBusCount = 1,
+    .outputBusCount = 1,
+    .flags = 0,
+};
+
 /// A channel: its sound's frames, read through a buffer or decoded as they play, into a miniaudio
 /// sound in the mix. miniaudio's init functions clear each of its structs first.
 struct voice_t {
@@ -42,7 +121,7 @@ struct voice_t {
     /// The mixing thread's, for the main thread: the frame of its sound it has played to.
     std::atomic<std::uint64_t> position = 0;
     std::shared_ptr<const fbe::audio::sound_data_t> data;
-    /// The volume and pan it was given, which its pan law makes miniaudio's.
+    /// The volume and pan it was given, which its pan law makes its gains.
     float volume = 1.0F;
     float pan = 0.0F;
     /// The pitch it was given, and its emitter's Doppler pitch, which it plays at the two of.
@@ -53,9 +132,11 @@ struct voice_t {
     ma_audio_buffer_ref buffer;
     ma_decoder decoder;
     ma_sound sound;
+    gains_t gains;
     bool has_buffer = false;
     bool has_decoder = false;
     bool has_sound = false;
+    bool has_gains = false;
     bool joined = false;
     bool paused = false;
     /// Whether it plays from an emitter, which pans it itself.
@@ -123,6 +204,9 @@ voice_t::~voice_t() {
     if (has_sound) {
         ma_sound_uninit(&sound);
     }
+    if (has_gains) {
+        ma_node_uninit(&gains.base, nullptr);
+    }
     if (has_decoder) {
         ma_decoder_uninit(&decoder);
     }
@@ -141,35 +225,31 @@ voice_t* find(std::uint64_t handle) {
     return voice;
 }
 
-/// Gives `voice`'s sound its volume and pan. A mono channel not from an emitter, in a stereo mix,
-/// is heard on each side as the pan law has it, as miniaudio's balance, which takes from the other
-/// side only, and a volume: the louder side's gain. Any other channel's pan is a balance.
-void apply_pan(voice_t& voice) {
-    float gain = 1.0F;
-    float balance = voice.pan;
-    if (pan_law != balance_law && voice.data->channels == 1 && !voice.spatial &&
-        ma_engine_get_channels(fbe::audio::engine()) == 2) {
-        float left = 0.0F;
-        float right = 0.0F;
-        if (pan_law == constant_power_law) {
-            const float angle = (voice.pan + 1.0F) * std::numbers::pi_v<float> / 4.0F;
-            left = std::max(std::cos(angle), 0.0F);
-            right = std::max(std::sin(angle), 0.0F);
-        } else {
-            left = (1.0F - voice.pan) / 2.0F;
-            right = (1.0F + voice.pan) / 2.0F;
-        }
-        gain = std::max(left, right);
-        if (left < right) {
-            balance = 1.0F - (left / right);
-        } else if (right < left) {
-            balance = (right / left) - 1.0F;
-        } else {
-            balance = 0.0F;
-        }
+/// The gains a pan of `pan` gives each side of a stereo mix: a mono channel not from an emitter's,
+/// as the pan law has it; any other's as a balance, which takes from the other side only.
+std::pair<float, float> sides(const voice_t& voice) {
+    const float pan = voice.pan;
+    if (pan_law == balance_law || voice.data->channels != 1 || voice.spatial) {
+        return { std::min(1.0F - pan, 1.0F), std::min(1.0F + pan, 1.0F) };
     }
-    ma_sound_set_pan(&voice.sound, balance);
-    ma_sound_set_volume(&voice.sound, voice.volume * gain);
+    if (pan_law == constant_power_law) {
+        const float angle = (pan + 1.0F) * std::numbers::pi_v<float> / 4.0F;
+        return { std::max(std::cos(angle), 0.0F), std::max(std::sin(angle), 0.0F) };
+    }
+    return { (1.0F - pan) / 2.0F, (1.0F + pan) / 2.0F };
+}
+
+/// Gives `voice`'s gains its volume and pan, both at once, which a mix that isn't stereo has its
+/// volume only of.
+void apply_pan(voice_t& voice) {
+    float left = voice.volume;
+    float right = voice.volume;
+    if (voice.gains.channels == 2) {
+        const auto [left_side, right_side] = sides(voice);
+        left *= left_side;
+        right *= right_side;
+    }
+    voice.gains.target.store(pack(left, right), std::memory_order_release);
 }
 
 /// Gives `voice`'s sound its pitch times its Doppler pitch, held to the pitches a channel plays at.
@@ -289,21 +369,41 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
         return 0;
     }
     voice->bus = how.bus;
+    voice->volume = how.volume;
+    voice->pan = how.pan;
+    voice->spatial = how.emitter != nullptr;
+
+    // Its gains first, at what they start at, into its bus, then its sound into them.
+    voice->gains.channels = ma_engine_get_channels(mix);
+    apply_pan(*voice);
+    const std::uint64_t start = voice->gains.target.load(std::memory_order_relaxed);
+    voice->gains.left = unpack_left(start);
+    voice->gains.right = unpack_right(start);
+    ma_node_config gains_config = ma_node_config_init();
+    gains_config.vtable = &gains_vtable;
+    gains_config.pInputChannels = &voice->gains.channels;
+    gains_config.pOutputChannels = &voice->gains.channels;
+    result =
+        ma_node_init(ma_engine_get_node_graph(mix), &gains_config, nullptr, &voice->gains.base);
+    if (result != MA_SUCCESS) {
+        fail_ma("couldn't play the sound", result);
+        return 0;
+    }
+    voice->has_gains = true;
+    ma_node_attach_output_bus(&voice->gains.base, 0, bus_input(voice->bus.get()), 0);
+
     // Only a channel played from an emitter is in the world.
-    const ma_uint32 flags =
-        how.emitter != nullptr ? 0 : static_cast<ma_uint32>(MA_SOUND_FLAG_NO_SPATIALIZATION);
-    result = ma_sound_init_from_data_source(mix, voice->source(), flags,
-                                            bus_group(voice->bus.get()), &voice->sound);
+    auto flags = static_cast<ma_uint32>(MA_SOUND_FLAG_NO_DEFAULT_ATTACHMENT);
+    if (how.emitter == nullptr) {
+        flags |= static_cast<ma_uint32>(MA_SOUND_FLAG_NO_SPATIALIZATION);
+    }
+    result = ma_sound_init_from_data_source(mix, voice->source(), flags, nullptr, &voice->sound);
     if (result != MA_SUCCESS) {
         fail_ma("couldn't play the sound", result);
         return 0;
     }
     voice->has_sound = true;
-
-    voice->volume = how.volume;
-    voice->pan = how.pan;
-    voice->spatial = how.emitter != nullptr;
-    apply_pan(*voice);
+    ma_node_attach_output_bus(&voice->sound, 0, &voice->gains.base, 0);
     ma_sound_set_looping(&voice->sound, how.loop ? MA_TRUE : MA_FALSE);
     voice->pitch = how.pitch;
     if (how.emitter != nullptr) {
@@ -554,7 +654,7 @@ FBE_AUDIO_API bool fbe_channel_set_bus(uint64_t channel, uint64_t bus) {
     }
     voice_t* voice = find(channel);
     if (voice != nullptr) {
-        ma_node_attach_output_bus(&voice->sound, 0, fbe::audio::bus_input(into.get()), 0);
+        ma_node_attach_output_bus(&voice->gains.base, 0, fbe::audio::bus_input(into.get()), 0);
         voice->bus = std::move(into);
     }
     return true;
