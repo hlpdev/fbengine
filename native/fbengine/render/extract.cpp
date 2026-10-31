@@ -142,6 +142,28 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view, f
         }
         items.push_back(item_of(plane.entity, plane.material, matrix, plane.tint, fade, view));
     }
+    for (const scene::terrain_t& terrain : s.terrains) {
+        float fade = 1.0F;
+        if (!seen(terrain.entity, fade) || terrain.tint[3] * fade <= 0.0F) {
+            continue;
+        }
+        // Its grid's box; drawing makes its triangles from its heights.
+        const mat4_t matrix = scene::tweened_matrix(terrain.entity, tween);
+        vec3_t min;
+        vec3_t max;
+        scene::terrain_bounds(terrain, min, max);
+        const std::array<vec3_t, 8> corners = corners_of(matrix, min, max);
+        if (!scene::in_view(camera, view, corners.data(), corners.size())) {
+            continue;
+        }
+        item_t item = item_of(terrain.entity, terrain.material, matrix, terrain.tint, fade, view);
+        // How far its grid's middle is, since its place is a corner of it.
+        const vec3_t across = max - min;
+        const vec3_t middle = scene::transform_point(matrix, min + across * 0.5F);
+        const vec3_t forward = view.rotation * vec3_t(0.0F, 0.0F, -1.0F);
+        item.draw.depth = scene::dot(middle - view.position, forward);
+        items.push_back(item);
+    }
     // By order; in one, opaque by material and nearest first, then blended furthest first; ties in
     // the scene's own order, so a frame draws as the last did.
     std::ranges::stable_sort(items, [](const item_t& a, const item_t& b) {
