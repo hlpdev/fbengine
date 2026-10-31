@@ -74,7 +74,9 @@ if(FBENGINE_FB_TESTS)
       "rumble-negative|panic: Rumble: a rumble lasts 0 seconds or more, not -1"
       "rumble-nan|panic: RumbleTriggers: a rumble lasts 0 seconds or more, not"
       "joystick-sizes|panic: Simulate[.]ConnectJoystick: a joystick has 0 to 255 axes, buttons, and hats, not 0, 256, and 0"
-      "pads-before-start|before a Flip True\r?\neach connects at the first True\r?\nand once True")
+      "pads-before-start|before a Flip True\r?\neach connects at the first True\r?\nand once True"
+      "show-message|Missing file: rooms.ini isn't there"
+      "show-message-offscreen|Missing file: rooms.ini isn't there")
   foreach(case IN LISTS fbengine_input_cases)
     string(REPLACE "|" ";" case "${case}")
     list(GET case 0 name)
@@ -82,7 +84,7 @@ if(FBENGINE_FB_TESTS)
     add_test(NAME input.${name}
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/input" -- ${name})
     set_tests_properties(input.${name} PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
-                         PASS_REGULAR_EXPRESSION "${printed}")
+                         PASS_REGULAR_EXPRESSION "${printed}" TIMEOUT 120)
   endforeach()
 
   add_test(NAME examples.controls
