@@ -389,3 +389,88 @@ TEST_CASE("text that can't be drawn is refused", "[gpu]") {
     CHECK(std::string(fbe_error()) == "there's no text core yet to lay text out");
     stop();
 }
+
+// Text checks the GPU as the canvas's other draws do: after a stop, its target's freed and it's
+// refused, whatever pages it would make; once the GPU's lost, it's refused; and as a headless
+// window's first draw, it starts the GPU for the screen, as a rectangle does.
+TEST_CASE("text is refused without a GPU to draw it, and starts one for the screen", "[gpu]") {
+    start();
+    const std::uint64_t made = target(8, 8);
+    draw(made, "I", 0, 0);
+    fbe_frame_flip(false);
+    fbe_gpu_stop();
+    const fbe_2d_pen_t ink = pen(white);
+    CHECK(!fbe_2d_text(made, &ink, filler_font, "L", 1, 0, 0));
+    CHECK(std::string(fbe_error()) == "the texture was freed");
+    stop();
+    // As a headless window's first draw.
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_window_open(16, 8, FBE_WINDOW_WINDOWED));
+    fbe::text::set_lay_out(fill);
+    REQUIRE(!fbe_gpu_started());
+    draw(0, "I", 0, 0);
+    CHECK(fbe_gpu_started());
+    const fbe::golden::frame_t screen = read(fbe_gpu_screen());
+    CHECK(pixel(screen, 0, 0)[0] == 255);
+    CHECK(pixel(screen, 1, 2)[0] == 255);
+    CHECK(pixel(screen, 0, 2)[0] == 0);
+    // Lost.
+    fbe::gpu::inject(fbe::gpu::fault_t::LOST);
+    fbe_frame_flip(false);
+    REQUIRE(fbe_gpu_lost());
+    CHECK(!fbe_2d_text(0, &ink, filler_font, "I", 1, 0, 0));
+    CHECK(std::string(fbe_error()).starts_with("the GPU was lost"));
+    fbe::text::set_lay_out(nullptr);
+    stop_gpu();
+    fbe_window_close();
+}
+
+// New glyphs are written into their page in the frame's uploads, so they don't send the 2D batch
+// drawing the page to the GPU early: a frame of rectangles and text between them takes the passes
+// a frame of the same text, its glyphs already there, does.
+TEST_CASE("new glyphs leave the 2D batch whole", "[gpu]") {
+    start();
+    const std::uint64_t made = target(64, 8);
+    const fbe_2d_pen_t ink = pen(white);
+    const auto frame = [&] {
+        require(fbe_2d_rect(made, &ink, 0, 0, 1, 1, true));
+        draw(made, "I", 2, 0);
+        require(fbe_2d_rect(made, &ink, 8, 0, 1, 1, true));
+        draw(made, "L", 10, 0);
+        require(fbe_2d_rect(made, &ink, 16, 0, 1, 1, true));
+        draw(made, "T", 18, 0);
+        fbe_frame_flip(false);
+        fbe_gpu_counters_t counters{};
+        require(fbe_gpu_counters(&counters));
+        return counters.passes;
+    };
+    fbe_frame_flip(false);
+    const std::int32_t fresh = frame();
+    CHECK(places == 3);
+    const std::int32_t cached = frame();
+    CHECK(places == 3);
+    CHECK(fresh == cached);
+    const fbe::golden::frame_t drawn = read(made);
+    check_glyph(drawn, 'L', 10, 0);
+    stop();
+}
+
+// A page's texture made again, as the GPU's started again, keeps nothing of what the page's keys
+// say until it's uploaded, so an upload that fails is tried again by the next text drawn.
+TEST_CASE("a page's texture made again is uploaded once an upload of it fails", "[gpu]") {
+    start();
+    std::uint64_t made = target(8, 8);
+    draw(made, "I", 0, 0);
+    fbe_frame_flip(false);
+    stop_gpu();
+    require(fbe_gpu_start());
+    made = target(8, 8);
+    clear(made);
+    fbe::gpu::inject(fbe::gpu::fault_t::UPLOAD);
+    const fbe_2d_pen_t ink = pen(white);
+    CHECK(!fbe_2d_text(made, &ink, filler_font, "I", 1, 0, 0));
+    CHECK(std::string(fbe_error()).starts_with("couldn't make a buffer to upload a texture"));
+    draw(made, "I", 0, 0);
+    check_glyph(read(made), 'I', 0, 0);
+    stop();
+}

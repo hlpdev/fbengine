@@ -457,10 +457,11 @@ bool make(std::uint32_t slot, const spec_t& spec) {
 /// Uploads `width` by `height` pixels at `x`, `y` into level 0 of `handle`'s texture, rows `pitch`
 /// bytes apart, through a staging buffer freed after the frame, and makes the mipmaps again: in the
 /// uploads, before the frame's commands, unless a pass of the frame's graph uses the texture, and
-/// then in a pass after it, so writes and what else the frame does with a texture keep their order.
+/// then in a pass after it, so writes and what else the frame does with a texture keep their order;
+/// or, `ahead`, in the uploads whatever the graph has.
 bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std::uint32_t y,
             std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
-            std::uint32_t pitch) {
+            std::uint32_t pitch, bool ahead = false) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     fbe::texture::changed_on_gpu(handle);
     const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
@@ -479,8 +480,10 @@ bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation memory = VK_NULL_HANDLE;
     VmaAllocationInfo mapped{};
-    const VkResult made =
-        vmaCreateBuffer(gpu.allocator, &buffer_info, &allocation_info, &buffer, &memory, &mapped);
+    const VkResult made = fbe::gpu::faulted(fbe::gpu::fault_t::UPLOAD)
+                              ? VK_ERROR_OUT_OF_DEVICE_MEMORY
+                              : vmaCreateBuffer(gpu.allocator, &buffer_info, &allocation_info,
+                                                &buffer, &memory, &mapped);
     if (made != VK_SUCCESS) {
         return fbe::gpu::fail_vulkan("couldn't make a buffer to upload a texture through", made);
     }
@@ -498,7 +501,7 @@ bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std
         .imageOffset = { .x = static_cast<std::int32_t>(x), .y = static_cast<std::int32_t>(y) },
         .imageExtent = { .width = width, .height = height, .depth = 1 },
     };
-    if (fbe::gpu::in_graph(handle)) {
+    if (!ahead && fbe::gpu::in_graph(handle)) {
         // Carried, as the uploads are, if the frame's submit fails, its staging buffer with it.
         return fbe::gpu::add_pass({
             .name = "write",
@@ -726,12 +729,28 @@ std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, st
 
 std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height,
                                     std::int32_t format) {
+    if (gpu::device() == nullptr) {
+        fbe::fail("the GPU isn't started");
+        return 0;
+    }
     return create({
         .width = width,
         .height = height,
         .format = format,
         .engine = true,
     });
+}
+
+bool write_ahead(std::uint64_t handle, std::uint32_t x, std::uint32_t y, std::uint32_t width,
+                 std::uint32_t height, const std::uint8_t* pixels, std::uint32_t pitch) {
+    const texture_t* found = find(handle);
+    if (found == nullptr) {
+        return false;
+    }
+    if (found->levels != 1 || x + width > found->width || y + height > found->height) {
+        return fbe::fail("a write ahead is to a part of a texture without mipmaps");
+    }
+    return upload(handle, *found, x, y, width, height, pixels, pitch, true);
 }
 
 std::uint32_t pixel_size(std::int32_t format) {

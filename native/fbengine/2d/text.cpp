@@ -71,9 +71,15 @@ bool upload_pages() {
             kept.width = page.width;
             kept.height = page.height;
             kept.format = page.format;
+            // Nothing's in it yet, whatever the page's keys are, until it's uploaded.
+            kept.generation = UINT64_MAX;
+            kept.version = UINT64_MAX;
             written = { .x = 0, .y = 0, .width = page.width, .height = page.height };
         } else if (kept.generation == atlas.generation() && kept.version == page.version) {
             continue;
+        } else if (kept.version == UINT64_MAX) {
+            // Made, but its first upload failed: all of it, still.
+            written = { .x = 0, .y = 0, .width = page.width, .height = page.height };
         } else if (!written.empty()) {
             const std::int32_t left = std::max(written.x - 1, 0);
             const std::int32_t top = std::max(written.y - 1, 0);
@@ -86,9 +92,14 @@ bool upload_pages() {
             const std::size_t pitch = static_cast<std::size_t>(page.width) * channels;
             const std::size_t first = (static_cast<std::size_t>(written.y) * pitch) +
                                       (static_cast<std::size_t>(written.x) * channels);
-            if (!fbe_texture_write(kept.texture, written.x, written.y, written.width,
-                                   written.height, page.pixels.data() + first,
-                                   static_cast<std::int32_t>(pitch))) {
+            // In the frame's uploads, so a batch drawing the page isn't sent: what's written is
+            // only where no glyph drawn yet is.
+            if (!fbe::texture::write_ahead(kept.texture, static_cast<std::uint32_t>(written.x),
+                                           static_cast<std::uint32_t>(written.y),
+                                           static_cast<std::uint32_t>(written.width),
+                                           static_cast<std::uint32_t>(written.height),
+                                           page.pixels.data() + first,
+                                           static_cast<std::uint32_t>(pitch))) {
                 return false;
             }
         }
@@ -122,6 +133,18 @@ FBE_API bool fbe_2d_text(uint64_t target, const fbe_2d_pen_t* pen, uint64_t font
     }
     if (pen == nullptr) {
         return fbe::fail("no pen was given");
+    }
+    // The target, as the canvas's draws find it, the screen starting the GPU for a window, before
+    // the pages' textures are made.
+    if (fbe::gpu::lost()) {
+        return fbe::gpu::fail_lost();
+    }
+    const std::uint64_t handle = target != 0 ? target : fbe_gpu_screen();
+    if (handle == 0) {
+        return fbe::fail("there's no screen, as there's no window");
+    }
+    if (fbe::texture::find(handle) == nullptr) {
+        return false;
     }
     // What the frame's first canvas draw does, before the atlas takes this text's glyphs.
     fbe::canvas::trim_atlas();

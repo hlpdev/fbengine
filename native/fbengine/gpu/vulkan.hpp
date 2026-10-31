@@ -215,6 +215,8 @@ enum class fault_t : std::uint8_t {
     LOST,
     /// Listing the devices, as if each lacked dynamic rendering.
     LACKS,
+    /// Making a buffer to upload a texture through.
+    UPLOAD,
 };
 
 /// Makes the next `fault` happen.

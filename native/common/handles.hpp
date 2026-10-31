@@ -21,6 +21,7 @@ enum handle_kind_t : std::uint8_t {
     ENTITY_KIND = 2,
     GEOMETRY_KIND = 3,
     MATERIAL_KIND = 4,
+    TEXTURE_KIND = 5,
     // fbengine_audio, 64 to 95.
     // fbengine_physics, 96 to 127.
     PHYSICS_WORLD_KIND = 96,
