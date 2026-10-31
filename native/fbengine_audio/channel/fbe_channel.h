@@ -43,6 +43,13 @@ FBE_AUDIO_API bool fbe_channel_fade_out(uint64_t channel, double seconds);
 FBE_AUDIO_API float fbe_channel_fade_level(uint64_t channel);
 // Moves it into `bus`, or the whole mix for 0; false if the bus is gone.
 FBE_AUDIO_API bool fbe_channel_set_bus(uint64_t channel, uint64_t bus);
+// How a mono channel's pan, not from an emitter, is heard in a stereo mix, for every channel: 0 as
+// a balance, which takes from the other side only, so both are at full in the middle; 1 at constant
+// power, cos and sin of (pan + 1) * pi / 4, 0.707 each in the middle; 2 linearly, (1 - pan) / 2
+// and (1 + pan) / 2, half each in the middle. Any other channel's pan is a balance. False for
+// another law.
+FBE_AUDIO_API bool fbe_channel_set_pan_law(int32_t law);
+FBE_AUDIO_API int32_t fbe_channel_pan_law(void);
 // How many channels are playing, paused ones too.
 FBE_AUDIO_API int32_t fbe_channel_count(void);
 

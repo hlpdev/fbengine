@@ -9,12 +9,14 @@
 #include "channel/voices.hpp"
 #include "fbengine_audio.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <format>
 #include <memory>
 #include <mutex>
+#include <numbers>
 #include <utility>
 #include <vector>
 
@@ -24,6 +26,14 @@ constexpr float lowest_pitch = 1.0F / 16.0F;
 constexpr float highest_pitch = 16.0F;
 constexpr std::int64_t no_seek = -1;
 
+/// fbe_channel_set_pan_law's laws.
+constexpr std::int32_t balance_law = 0;
+constexpr std::int32_t constant_power_law = 1;
+constexpr std::int32_t linear_law = 2;
+
+/// How a mono channel's pan is heard in a stereo mix; the main thread's.
+std::int32_t pan_law = balance_law;
+
 /// A channel: its sound's frames, read through a buffer or decoded as they play, into a miniaudio
 /// sound in the mix. miniaudio's init functions clear each of its structs first.
 struct voice_t {
@@ -32,6 +42,9 @@ struct voice_t {
     /// The mixing thread's, for the main thread: the frame of its sound it has played to.
     std::atomic<std::uint64_t> position = 0;
     std::shared_ptr<const fbe::audio::sound_data_t> data;
+    /// The volume and pan it was given, which its pan law makes miniaudio's.
+    float volume = 1.0F;
+    float pan = 0.0F;
     /// What it plays into, which it keeps while it plays, or null for the whole mix.
     std::shared_ptr<fbe::audio::bus_t> bus;
     ma_audio_buffer_ref buffer;
@@ -42,6 +55,8 @@ struct voice_t {
     bool has_sound = false;
     bool joined = false;
     bool paused = false;
+    /// Whether it plays from an emitter, which pans it itself.
+    bool spatial = false;
     /// The main thread's, for the mixing thread: whether it finishes once its fade is silent.
     std::atomic<bool> fading_out = false;
     /// The mixing thread's, for the main thread: whether it faded out.
@@ -118,6 +133,37 @@ voice_t* find(std::uint64_t handle) {
         return nullptr;
     }
     return voice;
+}
+
+/// Gives `voice`'s sound its volume and pan. A mono channel not from an emitter, in a stereo mix,
+/// is heard on each side as the pan law has it, as miniaudio's balance, which takes from the other
+/// side only, and a volume: the louder side's gain. Any other channel's pan is a balance.
+void apply_pan(voice_t& voice) {
+    float gain = 1.0F;
+    float balance = voice.pan;
+    if (pan_law != balance_law && voice.data->channels == 1 && !voice.spatial &&
+        ma_engine_get_channels(fbe::audio::engine()) == 2) {
+        float left = 0.0F;
+        float right = 0.0F;
+        if (pan_law == constant_power_law) {
+            const float angle = (voice.pan + 1.0F) * std::numbers::pi_v<float> / 4.0F;
+            left = std::max(std::cos(angle), 0.0F);
+            right = std::max(std::sin(angle), 0.0F);
+        } else {
+            left = (1.0F - voice.pan) / 2.0F;
+            right = (1.0F + voice.pan) / 2.0F;
+        }
+        gain = std::max(left, right);
+        if (left < right) {
+            balance = 1.0F - (left / right);
+        } else if (right < left) {
+            balance = (right / left) - 1.0F;
+        } else {
+            balance = 0.0F;
+        }
+    }
+    ma_sound_set_pan(&voice.sound, balance);
+    ma_sound_set_volume(&voice.sound, voice.volume * gain);
 }
 
 /// The frames a fade of `seconds` takes in the mix.
@@ -221,8 +267,10 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
     }
     voice->has_sound = true;
 
-    ma_sound_set_volume(&voice->sound, how.volume);
-    ma_sound_set_pan(&voice->sound, how.pan);
+    voice->volume = how.volume;
+    voice->pan = how.pan;
+    voice->spatial = how.emitter != nullptr;
+    apply_pan(*voice);
     ma_sound_set_pitch(&voice->sound, how.pitch);
     ma_sound_set_looping(&voice->sound, how.loop ? MA_TRUE : MA_FALSE);
     if (how.emitter != nullptr) {
@@ -329,14 +377,15 @@ FBE_AUDIO_API bool fbe_channel_set_volume(uint64_t channel, float volume) {
     }
     voice_t* voice = find(channel);
     if (voice != nullptr) {
-        ma_sound_set_volume(&voice->sound, volume);
+        voice->volume = volume;
+        apply_pan(*voice);
     }
     return true;
 }
 
 FBE_AUDIO_API float fbe_channel_volume(uint64_t channel) {
     const voice_t* voice = find(channel);
-    return voice != nullptr ? ma_sound_get_volume(&voice->sound) : 0.0F;
+    return voice != nullptr ? voice->volume : 0.0F;
 }
 
 FBE_AUDIO_API bool fbe_channel_set_pan(uint64_t channel, float pan) {
@@ -345,14 +394,15 @@ FBE_AUDIO_API bool fbe_channel_set_pan(uint64_t channel, float pan) {
     }
     voice_t* voice = find(channel);
     if (voice != nullptr) {
-        ma_sound_set_pan(&voice->sound, pan);
+        voice->pan = pan;
+        apply_pan(*voice);
     }
     return true;
 }
 
 FBE_AUDIO_API float fbe_channel_pan(uint64_t channel) {
     const voice_t* voice = find(channel);
-    return voice != nullptr ? ma_sound_get_pan(&voice->sound) : 0.0F;
+    return voice != nullptr ? voice->pan : 0.0F;
 }
 
 FBE_AUDIO_API bool fbe_channel_set_pitch(uint64_t channel, float pitch) {
@@ -452,6 +502,20 @@ FBE_AUDIO_API bool fbe_channel_set_bus(uint64_t channel, uint64_t bus) {
         voice->bus = std::move(into);
     }
     return true;
+}
+
+FBE_AUDIO_API bool fbe_channel_set_pan_law(int32_t law) {
+    if (law < balance_law || law > linear_law) {
+        return fbe::audio::fail(std::format("there's no pan law {}", law));
+    }
+    pan_law = law;
+    channels().voices.remove_if([](const voice_t& voice) { return voice.ended(); });
+    channels().voices.each([](voice_t& voice) { apply_pan(voice); });
+    return true;
+}
+
+FBE_AUDIO_API int32_t fbe_channel_pan_law(void) {
+    return pan_law;
 }
 
 FBE_AUDIO_API int32_t fbe_channel_count(void) {
