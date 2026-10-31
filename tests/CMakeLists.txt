@@ -339,3 +339,11 @@ target_link_libraries(fbengine_core_tests PRIVATE fbengine_native Catch2::Catch2
 fbengine_set_warnings(fbengine_core_tests)
 catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_native>")
+# The job system, built into the tests from its own source, since the DLL exports only its C API.
+add_executable(fbengine_jobs_tests jobs/jobs_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")
+target_include_directories(fbengine_jobs_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_link_libraries(fbengine_jobs_tests PRIVATE Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_jobs_tests)
+catch_discover_tests(fbengine_jobs_tests TEST_PREFIX "jobs."
+                     DL_PATHS "${fbengine_test_dll_paths}")
