@@ -2,6 +2,7 @@
 // play is a frame late, and so leaves its last frame out: miniaudio's resampler, which runs at a
 // pitch of 1 too, so a pitch can change without a glitch, holds one.
 
+Import std.collections
 Import std.core
 Import std.math
 Import std.io
@@ -96,11 +97,17 @@ Function AStereoSoundKeepsItsSides() Throws AudioError, SoundError
     Expect(Audio.Mix(3) == [0.0, 0.0, 0.5, -0.5, 0.25, 0.0] As Float32[])
 End Function
 
+// The stereo frame mixed once a change has ramped in, over 5 ms of a 48000 Hz mix.
+Function Settled(): Float32[]
+    Local mixed = Audio.Mix(241)
+    Return [mixed[480], mixed[481]]
+End Function
+
 @Test
 Function VolumeAndPanScaleEachSide() Throws AudioError, SoundError
     Try Audio.Start(AudioDevice.MANUAL)
     Defer Audio.Stop()
-    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 8)))
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
     sound.SetVolume(0.5)
     Expect(sound.Volume() == 0.5)
     Local channel = sound.Play()
@@ -110,12 +117,24 @@ Function VolumeAndPanScaleEachSide() Throws AudioError, SoundError
     channel.SetVolume(1.0)
     channel.SetPan(-1.0)
     Expect(channel.Pan() == -1.0)
-    Expect(Audio.Mix(1) == [0.5, 0.0] As Float32[])
+    Expect(Settled() == [0.5, 0.0] As Float32[])
     // Panning takes from the other side only.
     channel.SetPan(0.5)
-    Expect(Audio.Mix(1) == [0.25, 0.5] As Float32[])
+    Expect(Settled() == [0.25, 0.5] As Float32[])
     channel.SetVolume(0.0)
-    Expect(Audio.Mix(1) == [0.0, 0.0] As Float32[])
+    Expect(Settled() == [0.0, 0.0] As Float32[])
+End Function
+
+// Set before it's first mixed, as a play and then its volume and pan are, they're heard at once:
+// nothing of it was heard to ramp from.
+@Test
+Function APlaysFirstVolumeAndPanAreHeardAtOnce() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Local channel = (Try Sound.FromBytes(Wav(Constant(16384, 4800)))).Play()
+    channel.SetVolume(0.5)
+    channel.SetPan(-1.0)
+    Expect(Audio.Mix(2) == [0.0, 0.0, 0.25, 0.0] As Float32[])
 End Function
 
 @Test
@@ -140,11 +159,11 @@ Function ALoopingChannelPlaysUntilStopped() Throws AudioError, SoundError
     Expect(channel.Looping())
     Expect(Audio.Mix(6) == [0.0, 0.5, 0.25, 0.5, 0.25, 0.5] As Float32[])
     Expect(channel.Playing())
-    // A stop ramps to silence over the next stretch mixed, so it doesn't click: half its sample,
-    // then none.
+    // A stop ramps to silence over the next 5 ms of the mix, so it doesn't click, then it's gone.
     channel.Stop()
     Expect(!channel.Playing())
-    Expect(Audio.Mix(2) == [0.125, 0.0] As Float32[])
+    Local ramping = Audio.Mix(240)
+    Expect(ramping[0] > 0.2 && ramping[239] == 0.0)
     Expect(Audio.Mix(2) == [0.0, 0.0] As Float32[])
     // A loop turned off plays to its sound's end after what miniaudio read ahead, 512 frames.
     Local again = sound.Play()
@@ -167,17 +186,18 @@ Function APausedChannelWaitsWhereItIs() Throws AudioError, SoundError
     // Started paused, it starts as it is: a frame late, then frames 0 and 1.
     channel.Resume()
     Expect(Audio.Mix(3) == [0.0, 0.0, 4.0 / 32768.0] As Float32[])
-    // A pause ramps to silence over the next stretch mixed, so it doesn't click, then waits.
+    // A pause ramps to silence over the next 5 ms of the mix, so it doesn't click, then waits.
     channel.Pause()
     Expect(channel.Paused())
-    Local ramping = Audio.Mix(4)
-    Expect(ramping[0] > 0.0 && ramping[3] == 0.0)
+    Local ramping = Audio.Mix(240)
+    Expect(ramping[0] > 0.0 && ramping[239] == 0.0)
     Expect(Audio.Mix(4) == [0.0, 0.0, 0.0, 0.0] As Float32[])
-    // Resumed, it ramps back from where it was, not from its start.
+    // Resumed, it ramps back from where it was, about 242 frames in, not from its start: 241
+    // frames later it's at its 483rd, where from its start it would be at its 241st.
     channel.Resume()
-    Local back = Audio.Mix(4)
-    Expect(back[0] < back[3])
-    Expect(back[3] * 32768.0 / 4.0 > 5.0 && back[3] * 32768.0 / 4.0 < 12.0)
+    Local back = Audio.Mix(241)
+    Expect(back[0] < back[240])
+    Expect(back[240] * 32768.0 / 4.0 > 470.0 && back[240] * 32768.0 / 4.0 < 500.0)
 End Function
 
 // A pause turned round before it's silent ramps back up, never stopping its sound.
@@ -224,6 +244,42 @@ Function StopAndPauseDontClick() Throws AudioError, SoundError
         Expect(after[511] == 0.0)
         channel.Stop()
         Audio.Mix(1)
+    End For
+End Function
+
+// A change of volume, and a stop, ramp over 5 ms of the mix, 240 frames at 48000 Hz, however short
+// each mix is: mixed 1, 4, or 48 frames at a time, a constant 0.5 steps by 0.5 / 240 a frame, where
+// a ramp over each mix alone stepped by 0.5 in 1-frame mixes.
+@Test
+Function ARampIsFiveMillisecondsHoweverShortTheMixes() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 48000)))
+    sound.SetLoop(True)
+    For each In [1, 4, 48]
+        For stopping In [False, True]
+            Local channel = sound.Play()
+            Audio.Mix(1000)
+            If stopping
+                channel.Stop()
+            Else
+                channel.SetVolume(0.0)
+            End If
+            Local heard: Float32[] = []
+            While heard.Count < 480
+                heard.AddAll(Audio.Mix(each))
+            End While
+            Local largest = 0.5 - heard[0]
+            Local silent = -1
+            For i = 1 Until heard.Count
+                largest = Max(largest, Abs(heard[i] - heard[i - 1]))
+                If silent < 0 && heard[i] == 0.0 Then silent = i
+            End For
+            Expect(largest < 0.0022)
+            Expect(silent >= 238 && silent <= 240)
+            channel.Stop()
+            Audio.Mix(480)
+        End For
     End For
 End Function
 

@@ -15,8 +15,8 @@ extern "C" {
 FBE_AUDIO_API bool fbe_channel_playing(uint64_t channel);
 FBE_AUDIO_API bool fbe_channel_paused(uint64_t channel);
 // Stops the channel, which is finished after; what's heard of it ramps to silence over the next
-// stretch the mix makes, at most 512 frames, before it goes. A pause ramps to silence before its
-// sound stops, and a resume ramps back.
+// 5 ms of the mix, 240 frames at 48000 Hz, however many mixes that takes, before it goes. A pause
+// ramps to silence before its sound stops, and a resume ramps back.
 FBE_AUDIO_API void fbe_channel_stop(uint64_t channel);
 FBE_AUDIO_API void fbe_channel_pause(uint64_t channel);
 FBE_AUDIO_API void fbe_channel_resume(uint64_t channel);
@@ -24,8 +24,7 @@ FBE_AUDIO_API void fbe_channel_resume(uint64_t channel);
 FBE_AUDIO_API bool fbe_channel_set_volume(uint64_t channel, float volume);
 FBE_AUDIO_API float fbe_channel_volume(uint64_t channel);
 // -1, the left, to 1, the right, in a stereo mix; in a mix that isn't stereo, a pan does nothing.
-// A change of volume or pan is heard ramped over the next stretch the mix makes, at most 512
-// frames, never half applied.
+// A change of volume or pan is heard ramped over the next 5 ms of the mix, never half applied.
 FBE_AUDIO_API bool fbe_channel_set_pan(uint64_t channel, float pan);
 FBE_AUDIO_API float fbe_channel_pan(uint64_t channel);
 // 1/16 to 16.

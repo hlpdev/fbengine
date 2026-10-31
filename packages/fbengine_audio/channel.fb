@@ -19,14 +19,14 @@ Public Struct Channel
     /// Whether it's paused, which a finished Channel isn't.
     @MainThread Public Method Paused(): Bool => fbe_channel_paused(handle)
 
-    /// Stops it, which finishes it at once; what's heard ramps to silence over the next few
-    /// milliseconds the mix makes, so it doesn't click.
+    /// Stops it, which finishes it at once; what's heard ramps to silence over the next 5 ms of the
+    /// mix, however short each mix is, so it doesn't click.
     @MainThread Public Method Stop()
         fbe_channel_stop(handle)
     End Method
 
-    /// Pauses it where it is, until Resume, ramping to silence over the next few milliseconds the
-    /// mix makes, so it doesn't click.
+    /// Pauses it where it is, until Resume, ramping to silence over the next 5 ms of the mix, so it
+    /// doesn't click.
     @MainThread Public Method Pause()
         fbe_channel_pause(handle)
     End Method
@@ -48,7 +48,7 @@ Public Struct Channel
 
     /// Sets its pan, from -1, the left only, through 0, both, to 1, the right only, in a stereo
     /// mix, as Audio's PanLaw has it; in a mix that isn't stereo, a pan does nothing. A change of
-    /// pan or volume is ramped over the next few milliseconds the mix makes, so it doesn't click.
+    /// pan or volume is ramped over the next 5 ms of the mix, so it doesn't click.
     @MainThread Public Method SetPan(pan: Float32)
         CheckPan(pan)
         fbe_channel_set_pan(handle, pan)

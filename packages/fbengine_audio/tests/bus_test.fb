@@ -130,8 +130,8 @@ Function ALowPassMuffles() Throws AudioError, SoundError
     playing = buzz.Play()
     Expect(Loudness(Audio.Mix(4000), 480) > 0.3)
     playing.Stop()
-    // A stopped channel ramps out over the next stretch, a frame here.
-    Audio.Mix(1)
+    // A stopped channel ramps out over the next 5 ms of the mix.
+    Audio.Mix(240)
     muffled.SetLowPass(0.0)
     Expect(muffled.LowPass() == 0.0)
     buzz.Play()

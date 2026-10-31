@@ -67,21 +67,34 @@ float unpack_right(std::uint64_t both) {
     return std::bit_cast<float>(static_cast<std::uint32_t>(both >> 32U));
 }
 
+/// How long a change of a channel's gains is ramped over, however many mixes that takes.
+constexpr double ramp_seconds = 0.005;
+
 /// A channel's gains: a node after its sound, in the mix's channels, that multiplies each side of
 /// a stereo mix by its own gain, the channel's volume and pan together, or every channel of
 /// another mix by its volume. The main thread sets the two gains as one value, so the mixing
-/// thread never hears a pan half changed; a change is ramped over the next stretch the mix
-/// processes, at most 512 frames, about 10 ms, so it doesn't click. miniaudio's own volume and pan
-/// on the sound stay 1 and 0.
+/// thread never hears a pan half changed; a change is ramped over the next 5 ms of the mix, 240
+/// frames at 48000 Hz, carried across as many stretches as that takes, so it doesn't click however
+/// short each is. miniaudio's own volume and pan on the sound stay 1 and 0.
 struct gains_t {
     /// First, as miniaudio's nodes' are.
     ma_node_base base;
     /// The main thread's: the gains it's to have, left and right.
     std::atomic<std::uint64_t> target = pack(1.0F, 1.0F);
-    /// The mixing thread's: the gains it has.
+    /// The mixing thread's: the gains it has, those it's ramping to, how far a frame moves each,
+    /// and the frames of the ramp left; and a ramp's frames, at the mix's rate.
     float left = 1.0F;
     float right = 1.0F;
+    float to_left = 1.0F;
+    float to_right = 1.0F;
+    float left_step = 0.0F;
+    float right_step = 0.0F;
+    ma_uint32 ramp_left = 0;
+    ma_uint32 ramp_frames = 1;
     ma_uint32 channels = 0;
+    /// The mixing thread's: whether it's been mixed, before which nothing of it has been heard, so
+    /// its first mix takes its gains at once, as a play and then a volume set make them.
+    bool mixed = false;
 };
 
 // miniaudio's signature for a node's processing.
@@ -93,31 +106,41 @@ void process_gains(ma_node* node, const float** in, ma_uint32* /*in_count*/, flo
     const std::uint64_t target = gains->target.load(std::memory_order_acquire);
     const float left = unpack_left(target);
     const float right = unpack_right(target);
+    // A new pair is ramped to from where the gains are, over a whole ramp.
+    if (!gains->mixed) {
+        gains->left = gains->to_left = left;
+        gains->right = gains->to_right = right;
+        gains->ramp_left = 0;
+        gains->mixed = true;
+    } else if (left != gains->to_left || right != gains->to_right) {
+        const auto steps = static_cast<float>(gains->ramp_frames);
+        gains->to_left = left;
+        gains->to_right = right;
+        gains->left_step = (left - gains->left) / steps;
+        gains->right_step = (right - gains->right) / steps;
+        gains->ramp_left = gains->ramp_frames;
+    }
     const ma_uint32 frames = *out_count;
     const ma_uint32 channels = gains->channels;
     const float* from = in[0];
     float* to = out[0];
-    const float left_step = frames != 0 ? (left - gains->left) / static_cast<float>(frames) : 0.0F;
-    const float right_step =
-        frames != 0 ? (right - gains->right) / static_cast<float>(frames) : 0.0F;
     for (ma_uint32 frame = 0; frame < frames; ++frame) {
-        const auto ramped = static_cast<float>(frame + 1);
-        const float now_left = frame + 1 == frames ? left : gains->left + (left_step * ramped);
+        if (gains->ramp_left > 0) {
+            --gains->ramp_left;
+            // Its last frame lands on the pair exactly.
+            gains->left = gains->ramp_left == 0 ? gains->to_left : gains->left + gains->left_step;
+            gains->right =
+                gains->ramp_left == 0 ? gains->to_right : gains->right + gains->right_step;
+        }
         const std::size_t at = static_cast<std::size_t>(frame) * channels;
         if (channels == 2) {
-            const float now_right =
-                frame + 1 == frames ? right : gains->right + (right_step * ramped);
-            to[at] = from[at] * now_left;
-            to[at + 1] = from[at + 1] * now_right;
+            to[at] = from[at] * gains->left;
+            to[at + 1] = from[at + 1] * gains->right;
         } else {
             for (ma_uint32 channel = 0; channel < channels; ++channel) {
-                to[at + channel] = from[at + channel] * now_left;
+                to[at + channel] = from[at + channel] * gains->left;
             }
         }
-    }
-    if (frames != 0) {
-        gains->left = left;
-        gains->right = right;
     }
 }
 
@@ -437,8 +460,10 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
     voice->gains.channels = ma_engine_get_channels(mix);
     apply_pan(*voice);
     const std::uint64_t start = voice->gains.target.load(std::memory_order_relaxed);
-    voice->gains.left = unpack_left(start);
-    voice->gains.right = unpack_right(start);
+    voice->gains.left = voice->gains.to_left = unpack_left(start);
+    voice->gains.right = voice->gains.to_right = unpack_right(start);
+    voice->gains.ramp_frames = std::max<ma_uint32>(
+        1, static_cast<ma_uint32>(std::lround(ramp_seconds * ma_engine_get_sample_rate(mix))));
     ma_node_config gains_config = ma_node_config_init();
     gains_config.vtable = &gains_vtable;
     gains_config.pInputChannels = &voice->gains.channels;
