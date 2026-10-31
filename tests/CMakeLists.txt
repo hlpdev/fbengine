@@ -76,7 +76,10 @@ if(FBENGINE_FB_TESTS)
       "joystick-sizes|panic: Simulate[.]ConnectJoystick: a joystick has 0 to 255 axes, buttons, and hats, not 0, 256, and 0"
       "pads-before-start|before a Flip True\r?\neach connects at the first True\r?\nand once True"
       "show-message|Missing file: rooms.ini isn't there"
-      "show-message-offscreen|Missing file: rooms.ini isn't there")
+      "show-message-offscreen|Missing file: rooms.ini isn't there"
+      "binding-key-out-of-range|panic: Binding[.]OfKey[(]9999[)]: SDL has no such key"
+      "binding-button-out-of-range|panic: Binding[.]OfMouseButton[(]0[)]: a mouse's buttons are 1 to 32"
+      "binding-nan-scale|panic: Binding[.]OfGamepadAxis: a scale is a finite number, not")
   foreach(case IN LISTS fbengine_input_cases)
     string(REPLACE "|" ";" case "${case}")
     list(GET case 0 name)
