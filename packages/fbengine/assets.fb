@@ -7,8 +7,10 @@ Import std.core
 Import std.ffi
 Import std.io
 Import std.text
+Import std.time
 Import "./c/fbe_assets"
 Import "./c/fbe_vfs"
+Import "./frame"
 Import "./jobs"
 Import "./loads"
 Import "./window"
@@ -67,9 +69,15 @@ Final Class Cached<T> Implements HeldAsset
     Method HashOf(): UInt64 => Hash
 End Class
 
+// What the cache does for every type's assets at once.
+Interface AnyCache
+    // Loads `key`'s asset again, if it has one, as a changed file's is.
+    Async Method Reload(key: String)
+End Interface
+
 // The cache of one type's assets, by normalized path, one a type, as a generic Class's Static Field
 // is; and how big it grows before what's gone is taken out of it.
-Final Class TypedCache<T>
+Final Class TypedCache<T> Implements AnyCache
     Where T: Asset & Class & Hashable
     Static Field shared: TypedCache<T>? = Null
     Field Entries: Map<String, Cached<T>>
@@ -86,7 +94,37 @@ Final Class TypedCache<T>
         If found != Null Then Return found
         Local made = TypedCache<T>()
         shared = made
+        Assets.Track(made)
         Return made
+    End Method
+
+    // Loads `key`'s asset again, if it's made, on the workers; then its Reload takes it in place,
+    // or the cache lets go of it, so the next Load makes a new one. What doesn't load keeps what it
+    // had.
+    Async Method Reload(key: String)
+        Local cached = Entries.Get(key)
+        If cached == Null || cached.Making || cached.Load != 0 Then Return
+        Local made = cached.Made
+        If made == Null Then Return
+        Local load = fbe_assets_load_async(T.LoadKind() As Int32, key, False, True)
+        If load == 0 Then Return
+        Await Jobs.Finished(load)
+        Local loaded = AssetLoad(load)
+        If fbe_assets_failed(load)
+            Assets.Reported(AssetReload(key, False, Assets.LoadFailed(load, key)))
+            Return
+        End If
+        Try
+            Local inPlace = Try made.Reload(loaded)
+            If !inPlace
+                cached.Released = True
+                Local kept = Entries.Get(key)
+                If kept != Null && RefEquals(kept, cached) Then Entries.Remove(key)
+            End If
+            Assets.Reported(AssetReload(key, inPlace, Null))
+        Catch e As IOError
+            Assets.Reported(AssetReload(key, False, e))
+        End Try
     End Method
 
     // Takes out what's gone: made, and its asset let go, from here and the index.
@@ -98,6 +136,35 @@ Final Class TypedCache<T>
         End Function)
         PruneAt = Max(64, Entries.Count * 2)
     End Method
+End Class
+
+/// A file's asset loaded again, as hot reload does when the file, or its sidecar, changes.
+Public Struct AssetReload
+    /// Its res:// path, normalized.
+    Public Field Path: String
+    /// Whether its Reload took it in place; if not, the cache let go of it, so the next Load
+    /// makes a new one.
+    Public Field InPlace: Bool
+    /// Why it couldn't be loaded again, if it couldn't, which leaves it as it was.
+    Public Field Error: IOError?
+End Struct
+
+// The folders on the disk hot reload watches: a watcher of each, the res:// folders each is, and
+// the res:// paths that changed, by when they last did.
+Final Class FolderWatch
+    Field Watchers: FileWatcher[]
+    Field Places: String[][]
+    Field Watched: Map<String, Int>
+    Field Changed: Map<String, Instant>
+    Field Hook: Int
+
+    New()
+        Watchers = []
+        Places = []
+        Watched = Map<String, Int>()
+        Changed = Map<String, Instant>()
+        Hook = 0
+    End New
 End Class
 
 /// A file or a folder in a res:// folder, as Assets.Entries finds it.
@@ -120,7 +187,8 @@ End Struct
 /// a name no file can have on every OS (with one of `: * ? " < > |` or a control character, a dot
 /// or a space at its end, or a Windows device's, as CON, nul.txt, or COM1), is an IOError of
 /// INVALID_PATH where a path can come from a game's data, and a panic where it's a mount's
-/// place.
+/// place. In a game's development builds, WatchFolders loads again what changes in its mounted
+/// folders, as it changes.
 ///
 /// # Examples
 ///
@@ -133,6 +201,13 @@ Public Final Class Assets
     // Every type's assets the cache holds, by their Hash, so Release finds one at once, whatever
     // type its Free is written in.
     Static Field held: Map<UInt64, HeldAsset[]> = Map<UInt64, HeldAsset[]>()
+    // Every type's cache, for what's done to all of them; the mounts, each place's normalized path
+    // and, for a folder's, its folder on the disk; what hot reload watches, while it does; and
+    // what it reloaded that the game hasn't been told of.
+    Static Field caches: AnyCache[] = []
+    Static Field mounts: (String, Path?)[] = []
+    Static Field watch: FolderWatch? = Null
+    Static Field reloads: AssetReload[] = []
 
     Private New()
     End New
@@ -144,6 +219,9 @@ Public Final Class Assets
     @MainThread @PanicsAtCaller
     Public Static Method MountFolder(at: String, folder: Path)
         If !fbe_vfs_mount_folder(at, folder.Text) Then Panic(LastError())
+        Local place = Mounted(at, folder)
+        Local watching = watch
+        If watching != Null Then Try? WatchTree(watching, folder, place)
     End Method
 
     /// Mounts the pak file at `file` at `at`, over what's mounted, reading its index now. A pak is
@@ -156,6 +234,7 @@ Public Final Class Assets
     @MainThread @PanicsAtCaller
     Public Static Method MountPak(at: String, file: Path) Throws IOError
         If !fbe_vfs_mount_pak(at, file.Text) Then Throw MountFailed(file.Text)
+        Mounted(at, Null)
     End Method
 
     /// Mounts `pak`, a pak in memory, as Embed gives one, at `at`, copying it. It throws as
@@ -173,6 +252,7 @@ Public Final Class Assets
             End If
         End Unsafe
         If !mounted Then Throw MountFailed(Null)
+        Mounted(at, Null)
     End Method
 
     /// Mounts `files` in memory at `at`, by their paths in it, with '/' (or '\') between folders,
@@ -206,9 +286,74 @@ Public Final Class Assets
     /// a res:// path.
     @MainThread @PanicsAtCaller
     Public Static Method Unmount(at: String): Bool
-        If fbe_vfs_unmount(at) Then Return True
+        If fbe_vfs_unmount(at)
+            Local place = Try? Normalize(at)
+            For i = mounts.Count - 1 To 0 Step -1
+                If mounts[i].0 == place
+                    mounts.RemoveAt(i)
+                    Break
+                End If
+            End For
+            Return True
+        End If
         If fbe_vfs_failure() == FBE_VFS_INVALID_PATH Then Panic(LastError())
         Return False
+    End Method
+
+    /// Watches the folders mounted with MountFolder, and those mounted after, for what changes in
+    /// them, all the way down, for a game's development builds. At each Flip, the assets of a file
+    /// that changed, or whose sidecar did, once neither has for a tenth of a second, are loaded
+    /// again on the workers. Then each one's Reload takes it in place, or the cache lets go of
+    /// it, so the next Load makes a new one; one that doesn't load keeps what it had. Reloaded
+    /// gives what was. A folder that can't be watched throws an IOError.
+    @MainThread
+    Public Static Method WatchFolders() Throws IOError
+        If watch != Null Then Return
+        Local made = FolderWatch()
+        watch = made
+        Try
+            For mount In mounts
+                Local folder = mount.1
+                If folder != Null Then Try WatchTree(made, folder, mount.0)
+            End For
+        Catch e As IOError
+            StopWatching()
+            Throw e
+        End Try
+        made.Hook = Frame.OnFlip(PollWatchedFolders)
+    End Method
+
+    /// Stops watching the mounted folders, as WatchFolders did; what changed that wasn't loaded
+    /// again yet isn't.
+    @MainThread
+    Public Static Method StopWatching()
+        Local made = watch
+        If made == Null Then Return
+        For watcher In made.Watchers
+            watcher.Close()
+        End For
+        If made.Hook != 0 Then Frame.RemoveOnFlip(made.Hook)
+        watch = Null
+    End Method
+
+    /// Loads the assets of the file at `path` again, as hot reload does when it changes, and
+    /// gives at once; Reloaded tells of each when it's done. It throws an IOError of INVALID_PATH
+    /// for a path that isn't a res:// path.
+    @MainThread
+    Public Static Method Reload(path: String) Throws IOError
+        Local key = Try Normalize(path)
+        For cache In caches
+            cache.Reload(key)
+        End For
+    End Method
+
+    /// What hot reload, or Reload, has loaded again since this was last asked, in the order each
+    /// was done.
+    @MainThread
+    Public Static Method Reloaded(): AssetReload[]
+        Local done = reloads
+        reloads = []
+        Return done
     End Method
 
     /// `path` as the engine compares it, and its cache keys it: "res://", then its names, with
@@ -417,6 +562,92 @@ Public Final Class Assets
         Return Try SettingsOf<S>(text, sidecar)
     End Method
 
+    // Keeps `cache` with every type's.
+    @MainThread
+    Static Method Track(cache: AnyCache)
+        caches.Add(cache)
+    End Method
+
+    // Keeps what a reload did, for Reloaded.
+    @MainThread
+    Static Method Reported(reload: AssetReload)
+        reloads.Add(reload)
+    End Method
+
+    // Keeps a mount at `at`, of the folder `folder` or not, and gives its place, normalized.
+    @MainThread
+    Static Method Mounted(at: String, folder: Path?): String
+        Local place = (Try? Normalize(at)) ?? at
+        mounts.Add((place, folder))
+        Return place
+    End Method
+
+    // Watches `folder`, which is `place` in res://, and every folder in it.
+    @MainThread
+    Static Method WatchTree(made: FolderWatch, folder: Path, place: String) Throws IOError
+        If !Dir.Exists(folder) Then Return
+        Try WatchOne(made, folder, place)
+        For entry In Try Dir.Walk(folder)
+            If entry.Kind != FileKind.DIRECTORY Then Continue
+            Try WatchOne(made, entry.Path, place + "/" + entry.Relative.Text.Replace("\\", "/"))
+        End For
+    End Method
+
+    // Watches the one folder `folder`, which is `place` in res://, as well as any other places it
+    // already is.
+    @MainThread
+    Static Method WatchOne(made: FolderWatch, folder: Path, place: String) Throws IOError
+        Local at = made.Watched.Get(folder.Text)
+        If at != Null
+            If !made.Places[at].Contains(place) Then made.Places[at].Add(place)
+            Return
+        End If
+        made.Watchers.Add(Try FileWatcher(folder))
+        made.Places.Add([place])
+        made.Watched[folder.Text] = made.Watchers.Count - 1
+    End Method
+
+    // Takes what the watchers saw, and loads again what's settled.
+    @MainThread
+    Static Method PollFolders()
+        Local made = watch
+        If made == Null Then Return
+        Local now = Instant.Now()
+        Local count = made.Watchers.Count
+        For at = 0 Until count
+            Local event = made.Watchers[at].TryNext()
+            While event != Null
+                Local name = event.Path.FileName()
+                For place In made.Places[at]
+                    Local changed = place == "res://" ? place + name : place + "/" + name
+                    Local key = Try? Normalize(changed)
+                    If key != Null Then made.Changed[key] = now
+                    // A folder made in a watched one is watched too.
+                    If event.Kind == FileEventKind.CREATED && Dir.Exists(event.Path)
+                        Try? WatchTree(made, event.Path, changed)
+                    End If
+                End For
+                event = made.Watchers[at].TryNext()
+            End While
+        End For
+        // What hasn't changed for a tenth of a second is written whole, as a tool that writes a
+        // file in parts has it.
+        Local settled: String[] = []
+        For change In made.Changed
+            If now - change.1 >= 100.Milliseconds Then settled.Add(change.0)
+        End For
+        For path In settled
+            made.Changed.Remove(path)
+            // A sidecar's file is loaded again with its new settings.
+            Local bytes = path.Bytes
+            Local target = path
+            If path.EndsWith(".toml") Then target = String.FromUtf8(bytes[0..bytes.Count - 5]) ?? path
+            For cache In caches
+                cache.Reload(target)
+            End For
+        End For
+    End Method
+
     // A new entry of T's cache for `load`, which takes out what's gone from it now and then.
     @MainThread
     Static Method Kept<T>(key: String, load: UInt64): Cached<T>
@@ -560,3 +791,7 @@ Public Final Class Assets
         Return IOError(IOErrorKind.OTHER, message, path)
     End Method
 End Class
+
+@MainThread Function PollWatchedFolders()
+    Assets.PollFolders()
+End Function

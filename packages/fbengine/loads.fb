@@ -35,6 +35,15 @@ Public Interface Asset
     /// One made from `load`, done and loaded; it keeps the load for as long as it needs what the
     /// load made. It throws an IOError of INVALID_DATA for a file that loaded but isn't one.
     Static Method FromLoad(load: AssetLoad): Self Throws IOError
+
+    /// Takes what `load` made of its file, loaded again because the file changed, as hot reload
+    /// does (Assets.WatchFolders), in place of what it was made of, and gives True, so what holds
+    /// it has the new one. It gives False, as it does unless its type says otherwise, for one the
+    /// cache lets go of instead, so the next Load makes a new one. It throws an IOError of
+    /// INVALID_DATA for a file that loaded but isn't one, which leaves it as it was.
+    Method Reload(load: AssetLoad): Bool Throws IOError
+        Return False
+    End Method
 End Interface
 
 /// An image a load decoded: its Vulkan format, its size in texels, and how many layers, faces (6
