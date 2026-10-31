@@ -1,0 +1,104 @@
+// The screen: the target each frame's drawn into, which Flip shows in the window, its size its own
+// or the window's, scaled to fit it; and saving it, a screenshot.
+
+Import std.core
+Import std.ffi
+Import std.image
+Import std.io
+Import std.math
+Import "./c/fbe_gpu"
+Import "./texture"
+Import "./window"
+
+/// How the screen is scaled into the window, where their sizes differ.
+Public Enum Scaling
+    /// Stretched to fill the window, whatever its shape.
+    STRETCH = 0
+    /// As big as fits, keeping its shape, with black bars where the window's another shape.
+    FIT = 1
+    /// As big as fits by whole pixels, twice, three times, and so on, with black around it, as
+    /// pixel art wants; fitted if the window's smaller.
+    INTEGER = 2
+End Enum
+
+/// The screen: the target, a Texture with depth, that a frame's drawn into, which Flip shows in
+/// the window. It's the window's size in pixels, following it as it changes, unless SetSize gives
+/// it a size of its own, which Flip scales into the window; its pixels stay from one Flip to the
+/// next. It's there while the window's open, and a new size or samples make it a new Texture.
+Public Class Screen
+    Private New()
+    End New
+
+    /// The texture each frame's drawn into, as it is now; Null without a window.
+    @MainThread Public Static Method Texture(): Texture? => TextureOf(fbe_gpu_screen())
+
+    /// Gives the screen a size of its own, `width` by `height` pixels, which Flip scales into the
+    /// window, or, with 0 by 0, the window's in pixels again. It panics for a side that isn't 1 to
+    /// 16384.
+    @MainThread Public Static Method SetSize(width: Int32, height: Int32)
+        If !fbe_gpu_set_render_size(width, height) Then Panic(LastError())
+    End Method
+
+    /// How wide the screen is in pixels, 0 without a window.
+    @MainThread Public Static Method Width(): Int32
+        Local shown = Texture()
+        Return shown != Null ? shown.Width() : 0
+    End Method
+
+    /// How high the screen is in pixels, 0 without a window.
+    @MainThread Public Static Method Height(): Int32
+        Local shown = Texture()
+        Return shown != Null ? shown.Height() : 0
+    End Method
+
+    /// Whether the screen follows the window's size, not one SetSize gave it.
+    @MainThread Public Static Method FollowsWindow(): Bool => fbe_gpu_render_width() == 0
+
+    /// Draws the screen with `samples` samples a pixel, 1, 2, 4, or 8, smoothing its edges, as an
+    /// anti-aliasing setting wants. It panics for another count.
+    @MainThread Public Static Method SetSamples(samples: Int32)
+        If !fbe_gpu_set_render_samples(samples) Then Panic(LastError())
+    End Method
+
+    /// How many samples a pixel the screen draws, 1 unless set.
+    @MainThread Public Static Method Samples(): Int32 => fbe_gpu_render_samples()
+
+    /// Sets how Flip scales the screen into the window, and whether smoothly or by its nearest
+    /// pixels; FIT and smoothly unless set.
+    @MainThread Public Static Method SetScaling(scaling: Scaling, smooth: Bool = True)
+        If !fbe_gpu_set_scaling(scaling As Int32, smooth) Then Panic(LastError())
+    End Method
+
+    /// How Flip scales the screen into the window.
+    @MainThread Public Static Method Scaling(): Scaling => fbe_gpu_scaling() As Scaling
+
+    /// Whether Flip scales the screen smoothly.
+    @MainThread Public Static Method Smooth(): Bool => fbe_gpu_scaling_smooth()
+
+    /// The part of the window the screen's shown in, in the window's pixels from its top left, as
+    /// mapping the mouse onto the screen wants; Null without a window.
+    @MainThread Public Static Method Area(): Rect?
+        Local area = fbe_gpu_rect_t(0, 0, 0, 0)
+        Local found = False
+        Unsafe
+            found = fbe_gpu_screen_area(AddressOf(area))
+        End Unsafe
+        If !found Then Return Null
+        Return Rect(area.x As Float, area.y As Float, area.width As Float, area.height As Float)
+    End Method
+
+    /// The screen's pixels as an Image, after everything the frame's drawn so far, which it waits
+    /// for. It throws without a window.
+    @MainThread Public Static Method ToImage(): Image Throws GraphicsError
+        Local shown = Texture()
+        If shown == Null Then Throw GraphicsError("there's no window, so no screen; Graphics opens one")
+        Return shown.ToImage()
+    End Method
+
+    /// Saves the screen as a PNG at `path`, a screenshot, after everything the frame's drawn so
+    /// far. It throws without a window, or when the file can't be written.
+    @MainThread Public Static Method Save(path: Path) Throws GraphicsError, IOError
+        Local image = Try ToImage()
+        Try File.WriteBytes(path, Png.Encode(image))
+    End Method
+End Class

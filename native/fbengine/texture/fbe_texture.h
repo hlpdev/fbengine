@@ -38,6 +38,18 @@ FBE_API uint64_t fbe_texture_create(int32_t width, int32_t height, int32_t forma
 FBE_API bool fbe_texture_retain(uint64_t texture);
 FBE_API bool fbe_texture_release(uint64_t texture);
 
+// Makes a target, a texture drawn into, `width` by `height` pixels of an FBE_TEXTURE_ format,
+// transparent black, with no mipmaps, drawing `samples` samples a pixel (1, 2, 4, or 8), which
+// each pass resolves into it, and with depth if `depth` (32-bit floats, reversed: 1 nearest, 0
+// farthest, as it's cleared); 0 if it can't. It's held and freed as fbe_texture_create's are.
+FBE_API uint64_t fbe_texture_create_target(int32_t width, int32_t height, int32_t format,
+                                           int32_t samples, bool depth);
+// Whether it's a target, how many samples a pass draws a pixel, -1 if the handle isn't a
+// texture's, and whether it has depth.
+FBE_API bool fbe_texture_is_target(uint64_t texture);
+FBE_API int32_t fbe_texture_samples(uint64_t texture);
+FBE_API bool fbe_texture_has_depth(uint64_t texture);
+
 // Its size in pixels, format, and how many mipmap levels it has, the first its own size; -1 if
 // the handle isn't a texture's.
 FBE_API int32_t fbe_texture_width(uint64_t texture);
@@ -47,10 +59,27 @@ FBE_API int32_t fbe_texture_levels(uint64_t texture);
 
 // Replaces the pixels `width` by `height` at `x`, `y` from its top left with `pixels`, rows
 // `pitch` bytes apart, in its format's bytes (4 a pixel for RGBA8, 1 for R8, 8 for RGBA16F), and
-// makes its mipmaps again; the GPU has them before anything the frame draws after. False if the
-// region isn't in it.
+// makes its mipmaps again; the GPU has them before anything the frame draws. False if the region
+// isn't in it, or it's a multisampled target, which is only drawn into.
 FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t width,
                                int32_t height, const uint8_t* pixels, int32_t pitch);
+
+// Clears every level of it to a color, linear (an RGBA8 texture's is stored as sRGB), and a
+// target's depth to the farthest, in the frame's commands, after what they draw before.
+FBE_API bool fbe_texture_clear(uint64_t texture, float red, float green, float blue, float alpha);
+
+// Copies the pixels `width` by `height` at `from_x`, `from_y` of `from`'s first level to `x`, `y`
+// in `to`'s, and makes `to`'s mipmaps again, in the frame's commands, so a frame drawn into a
+// target can be copied into a texture as it's drawn; false unless their formats are the same size
+// (RGBA8 and RGBA8_LINEAR are), the regions are in them, they're two textures, and `to` isn't a
+// multisampled target, which is only drawn into.
+FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, int32_t from_x,
+                              int32_t from_y, int32_t width, int32_t height);
+
+// Reads a level's pixels back into `pixels`, `size` bytes, after everything the frame's recorded
+// so far, waiting for the GPU to finish it: rows top first, packed, in its format's bytes. False
+// if there's no such level, or `size` isn't its size.
+FBE_API bool fbe_texture_read(uint64_t texture, int32_t level, uint8_t* pixels, int64_t size);
 
 // Its FBE_TEXTURE_ filter, and wraps in U, across, and V, down; false if one isn't an
 // FBE_TEXTURE_ one.

@@ -59,8 +59,8 @@ FetchContent_MakeAvailable(stb)
 # image harness (tests/golden/) and the tests' own shaders. Each test's tags are its labels, so
 # `ctest -L golden` runs the golden image tests, as tools/golden.py does.
 add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
-               gpu/pipeline_tests.cpp gpu/texture_tests.cpp golden/golden.cpp
-               golden/golden_tests.cpp golden/stb.cpp)
+               gpu/pipeline_tests.cpp gpu/texture_tests.cpp gpu/target_tests.cpp
+               golden/golden.cpp golden/golden_tests.cpp golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)
 target_include_directories(fbengine_gpu_tests SYSTEM PRIVATE "${stb_SOURCE_DIR}")
@@ -73,7 +73,8 @@ target_compile_definitions(fbengine_gpu_tests PRIVATE
 fbengine_set_warnings(fbengine_gpu_tests)
 fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      HEADER test_shaders.hpp
-                     SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang)
+                     SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang
+                             gpu/shaders/shape.slang)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")

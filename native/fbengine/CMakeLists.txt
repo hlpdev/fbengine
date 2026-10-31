@@ -19,3 +19,11 @@ if(FBENGINE_BUILD_TESTS)
   target_link_libraries(fbengine_internal PUBLIC SDL3::SDL3-static volk Vulkan::Headers
                         fbengine_vma)
 endif()
+
+# The engine's own shaders, embedded in the DLL, and in its sources' static library for the tests.
+set(fbengine_shader_targets fbengine_native)
+if(TARGET fbengine_internal)
+  list(APPEND fbengine_shader_targets fbengine_internal)
+endif()
+fbengine_add_shaders(TARGETS ${fbengine_shader_targets} NAMESPACE fbe::shaders
+                     HEADER engine_shaders.hpp SHADERS shaders/present.slang)

@@ -11,6 +11,21 @@
 extern "C" {
 #endif
 
+// How the screen is scaled into the window, where their sizes differ: stretched to fill it,
+// fitted, as big as it fits keeping its shape, or by whole pixels, as big as that fits.
+#define FBE_GPU_STRETCH 0
+#define FBE_GPU_FIT     1
+#define FBE_GPU_INTEGER 2
+
+// A part of the window, in its pixels from its top left. C has no `using`, so it's a typedef.
+// NOLINTNEXTLINE(modernize-use-using)
+typedef struct fbe_gpu_rect_t {
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+} fbe_gpu_rect_t;
+
 // What kind of GPU a device is, as its driver says.
 #define FBE_GPU_OTHER      0
 #define FBE_GPU_INTEGRATED 1
@@ -74,6 +89,27 @@ FBE_API float fbe_gpu_lod_bias(void);
 FBE_API bool fbe_gpu_set_anisotropy(float anisotropy);
 FBE_API float fbe_gpu_anisotropy(void);
 FBE_API float fbe_gpu_max_anisotropy(void);
+
+// The screen: the target, a texture, each frame's drawn into, RGBA8 with depth, which Flip shows
+// in the window, scaled; 0 without a window. It's made again, a new texture, when its size or
+// samples change, and its pixels stay from one Flip to the next.
+FBE_API uint64_t fbe_gpu_screen(void);
+// The screen's size in pixels, 0 by 0 for the window's in pixels, which it follows as of the last
+// fbe_frame_flip; false if it's not 1 to 16384 a side. A new size, or samples, makes the screen
+// again at once.
+FBE_API bool fbe_gpu_set_render_size(int32_t width, int32_t height);
+FBE_API int32_t fbe_gpu_render_width(void);
+FBE_API int32_t fbe_gpu_render_height(void);
+// How many samples the screen draws a pixel, 1, 2, 4, or 8; false for another.
+FBE_API bool fbe_gpu_set_render_samples(int32_t samples);
+FBE_API int32_t fbe_gpu_render_samples(void);
+// How the screen is scaled into the window, an FBE_GPU_ scaling, FIT unless set, and whether
+// smoothly, or by its nearest pixels; false for another scaling.
+FBE_API bool fbe_gpu_set_scaling(int32_t scaling, bool smooth);
+FBE_API int32_t fbe_gpu_scaling(void);
+FBE_API bool fbe_gpu_scaling_smooth(void);
+// The part of the window the screen's shown in, in the window's pixels; false without a window.
+FBE_API bool fbe_gpu_screen_area(fbe_gpu_rect_t* area);
 
 // How many errors Vulkan's validation layers have found since the program started, which are on
 // in a debug build of the DLL when the layers are there, or when FBE_GPU_VALIDATION is 1 (and off

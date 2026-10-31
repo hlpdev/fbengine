@@ -1,6 +1,8 @@
 // Textures: a pool of them by slot, each slot its index in the bindless set, with the white
 // texture at 0; pixels uploaded through staging buffers in the frame's uploads, which free them
-// once the GPU's done; mipmaps made by blitting each level from the one before.
+// once the GPU's done; mipmaps made by blitting each level from the one before; targets, drawn
+// into by passes in the frame's commands, multisampled and with depth if they ask; and clears,
+// copies, and reading pixels back.
 
 #include "texture/texture.hpp"
 
@@ -15,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -43,6 +46,21 @@ constexpr auto transfer =
 constexpr auto transfer_read = fbe::gpu::flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT);
 constexpr auto transfer_write = fbe::gpu::flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_WRITE_BIT);
 constexpr auto shader_read = fbe::gpu::flag<VkAccessFlags2>(VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+constexpr auto output =
+    fbe::gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
+constexpr auto output_write =
+    fbe::gpu::flag<VkAccessFlags2>(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+constexpr auto output_access =
+    output_write | fbe::gpu::flag<VkAccessFlags2>(VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
+constexpr auto tests =
+    fbe::gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT) |
+    fbe::gpu::flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT);
+constexpr auto depth_access =
+    fbe::gpu::flag<VkAccessFlags2>(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT) |
+    fbe::gpu::flag<VkAccessFlags2>(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+/// What a texture at rest, SHADER_READ_ONLY, was last used by, which whatever uses it next waits
+/// for: a shader reading it, a copy or blit out of it, or a pass's writes.
+constexpr auto resting_stages = readers | copy | blit | output;
 
 std::uint64_t handle_of(std::uint32_t slot) {
     return (std::uint64_t{ fbe::texture::kind } << 56U) |
@@ -151,53 +169,142 @@ std::uint32_t take_slot() {
     return static_cast<std::uint32_t>(textures.size() - 1);
 }
 
-/// Destroys a texture's image now, which the GPU is done with.
+/// Destroys a texture's images now, which the GPU is done with.
 void destroy(texture_t& texture) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     vkDestroyImageView(gpu.device, texture.view, nullptr);
     vmaDestroyImage(gpu.allocator, texture.image, texture.memory);
+    vkDestroyImageView(gpu.device, texture.msaa_view, nullptr);
+    vmaDestroyImage(gpu.allocator, texture.msaa, texture.msaa_memory);
+    vkDestroyImageView(gpu.device, texture.depth_view, nullptr);
+    vmaDestroyImage(gpu.allocator, texture.depth, texture.depth_memory);
     texture = {};
 }
 
-/// Makes a texture in `slot`: its image, transparent black, every level SHADER_READ_ONLY, and
-/// its view in the bindless set; false, with fbe_error's why, if it can't.
-bool make(std::uint32_t slot, std::uint32_t width, std::uint32_t height, std::int32_t format,
-          bool mipmaps) {
+/// A target's own attachment, the size of its image: its multisampled color or its depth, with a
+/// view; false, with fbe_error's why, if it can't be made.
+bool make_attachment(const texture_t& texture, VkFormat format, VkImageUsageFlags usage,
+                     VkImageAspectFlags aspect, VkImage& image, VmaAllocation& memory,
+                     VkImageView& view) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
-    texture_t& texture = textures[slot];
-    texture = {
+    const VkImageCreateInfo info{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
         .format = format,
-        .vk_format = vk_format_of(format),
-        .width = width,
-        .height = height,
-        .levels =
-            mipmaps ? static_cast<std::uint32_t>(std::bit_width(std::max(width, height))) : 1U,
-        .filter = FBE_TEXTURE_LINEAR,
-        .wrap_u = FBE_TEXTURE_REPEAT,
-        .wrap_v = FBE_TEXTURE_REPEAT,
-        .references = 1,
+        .extent = { .width = texture.width, .height = texture.height, .depth = 1 },
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = texture.samples,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = usage,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
+    const VmaAllocationCreateInfo allocation{ .usage = VMA_MEMORY_USAGE_AUTO };
+    VkResult result = vmaCreateImage(gpu.allocator, &info, &allocation, &image, &memory, nullptr);
+    if (result != VK_SUCCESS) {
+        image = VK_NULL_HANDLE;
+        return fbe::gpu::fail_vulkan("couldn't make a target's attachment", result);
+    }
+    const VkImageViewCreateInfo view_info{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .subresourceRange = { .aspectMask = aspect, .levelCount = 1, .layerCount = 1 },
+    };
+    result = vkCreateImageView(gpu.device, &view_info, nullptr, &view);
+    if (result != VK_SUCCESS) {
+        view = VK_NULL_HANDLE;
+        return fbe::gpu::fail_vulkan("couldn't make a target's attachment's view", result);
+    }
+    return true;
+}
+
+/// The barrier that moves a target's depth from `from` to `to`.
+VkImageMemoryBarrier2 depth_barrier(VkImage image, VkImageLayout from, VkImageLayout to,
+                                    VkPipelineStageFlags2 before_stages, VkAccessFlags2 before) {
+    VkImageMemoryBarrier2 barrier =
+        fbe::gpu::color_transition(image, from, to, before_stages, before, tests, depth_access);
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    return barrier;
+}
+
+/// What a texture is made: its size and format, and whether it has mipmaps, or is a target, with
+/// its samples and depth.
+struct spec_t {
+    std::uint32_t width = 1;
+    std::uint32_t height = 1;
+    std::int32_t format = FBE_TEXTURE_RGBA8;
+    bool mipmaps = false;
+    bool target = false;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    bool depth = false;
+};
+
+/// Whether the device can make a texture of `spec`; false, with fbe_error's why, if not.
+bool supports(const spec_t& spec) {
+    const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     VkFormatProperties support{};
-    vkGetPhysicalDeviceFormatProperties(gpu.physical, texture.vk_format, &support);
+    vkGetPhysicalDeviceFormatProperties(gpu.physical, vk_format_of(spec.format), &support);
     const auto mipmappable =
         flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_BLIT_SRC_BIT) |
         flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_BLIT_DST_BIT) |
         flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
-    if (mipmaps && (support.optimalTilingFeatures & mipmappable) != mipmappable) {
+    if (spec.mipmaps && (support.optimalTilingFeatures & mipmappable) != mipmappable) {
         return fbe::fail("this GPU can't make that format's mipmaps");
     }
+    const auto drawable = flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) |
+                          flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT);
+    if (spec.target && (support.optimalTilingFeatures & drawable) != drawable) {
+        return fbe::fail("this GPU can't draw into that format");
+    }
+    const VkSampleCountFlags counts =
+        gpu.properties.limits.framebufferColorSampleCounts &
+        (spec.depth ? gpu.properties.limits.framebufferDepthSampleCounts : ~0U);
+    if ((counts & flag<VkSampleCountFlags>(spec.samples)) == 0) {
+        return fbe::fail(std::format("this GPU doesn't draw {} samples a pixel",
+                                     static_cast<int>(spec.samples)));
+    }
+    return true;
+}
+
+/// Makes a texture in `slot`: its image, transparent black, every level SHADER_READ_ONLY, a
+/// target's attachments, cleared, and its view in the bindless set; false, with fbe_error's why,
+/// if it can't.
+bool make(std::uint32_t slot, const spec_t& spec) {
+    const fbe::gpu::device_t& gpu = *fbe::gpu::device();
+    if (!supports(spec)) {
+        return false;
+    }
+    texture_t& texture = textures[slot];
+    texture = {
+        .format = spec.format,
+        .vk_format = vk_format_of(spec.format),
+        .width = spec.width,
+        .height = spec.height,
+        .levels = spec.mipmaps ? static_cast<std::uint32_t>(
+                                     std::bit_width(std::max(spec.width, spec.height)))
+                               : 1U,
+        .filter = FBE_TEXTURE_LINEAR,
+        .wrap_u = FBE_TEXTURE_REPEAT,
+        .wrap_v = FBE_TEXTURE_REPEAT,
+        .references = 1,
+        .target = spec.target,
+        .samples = spec.samples,
+    };
     const VkImageCreateInfo info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .imageType = VK_IMAGE_TYPE_2D,
         .format = texture.vk_format,
-        .extent = { .width = width, .height = height, .depth = 1 },
+        .extent = { .width = spec.width, .height = spec.height, .depth = 1 },
         .mipLevels = texture.levels,
         .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = flag<VkImageUsageFlags>(VK_IMAGE_USAGE_SAMPLED_BIT) |
                  flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT) |
-                 flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT),
+                 flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_SRC_BIT) |
+                 (spec.target ? flag<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) : 0U),
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     const VmaAllocationCreateInfo allocation{ .usage = VMA_MEMORY_USAGE_AUTO };
@@ -225,6 +332,21 @@ bool make(std::uint32_t slot, std::uint32_t width, std::uint32_t height, std::in
         destroy(texture);
         return fbe::gpu::fail_vulkan("couldn't make a texture's view", result);
     }
+    const auto attached = flag<VkImageUsageFlags>(VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    const bool multisampled = spec.samples != VK_SAMPLE_COUNT_1_BIT;
+    if ((multisampled &&
+         !make_attachment(texture, texture.vk_format,
+                          attached | flag<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT),
+                          flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT), texture.msaa,
+                          texture.msaa_memory, texture.msaa_view)) ||
+        (spec.depth && !make_attachment(texture, fbe::texture::depth_format,
+                                        attached | flag<VkImageUsageFlags>(
+                                                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
+                                        flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT),
+                                        texture.depth, texture.depth_memory, texture.depth_view))) {
+        destroy(texture);
+        return false;
+    }
 
     VkCommandBuffer commands = fbe::gpu::upload_commands();
     const VkImageMemoryBarrier2 to_clear =
@@ -242,7 +364,45 @@ bool make(std::uint32_t slot, std::uint32_t width, std::uint32_t height, std::in
     fbe::gpu::barrier(commands, levels_barrier(texture.image, 0, texture.levels,
                                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer,
-                                               transfer_write, readers, shader_read));
+                                               transfer_write, resting_stages, shader_read));
+    // A multisampled color rests drawn into, and depth rests as depth, cleared to the farthest.
+    if (texture.msaa != VK_NULL_HANDLE) {
+        fbe::gpu::barrier(commands,
+                          fbe::gpu::color_transition(texture.msaa, VK_IMAGE_LAYOUT_UNDEFINED,
+                                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, transfer,
+                                                     0, transfer, transfer_write));
+        const VkImageSubresourceRange whole{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .levelCount = 1,
+            .layerCount = 1,
+        };
+        vkCmdClearColorImage(commands, texture.msaa, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black,
+                             1, &whole);
+        fbe::gpu::barrier(
+            commands, fbe::gpu::color_transition(texture.msaa, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, transfer,
+                                                 transfer_write, output, output_access));
+    }
+    if (texture.depth != VK_NULL_HANDLE) {
+        VkImageMemoryBarrier2 to_depth_clear =
+            depth_barrier(texture.depth, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, transfer, 0);
+        to_depth_clear.dstStageMask = transfer;
+        to_depth_clear.dstAccessMask = transfer_write;
+        fbe::gpu::barrier(commands, to_depth_clear);
+        const VkClearDepthStencilValue farthest{ .depth = 0.0F };
+        const VkImageSubresourceRange whole{
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .levelCount = 1,
+            .layerCount = 1,
+        };
+        vkCmdClearDepthStencilImage(commands, texture.depth, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                    &farthest, 1, &whole);
+        fbe::gpu::barrier(commands,
+                          depth_barrier(texture.depth, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, transfer,
+                                        transfer_write));
+    }
     fbe::gpu::write_texture(slot, texture.view);
     live[slot] = true;
     ++textures_made;
@@ -286,8 +446,8 @@ bool upload(texture_t& texture, std::uint32_t x, std::uint32_t y, std::uint32_t 
     VkCommandBuffer commands = fbe::gpu::upload_commands();
     fbe::gpu::barrier(commands, levels_barrier(texture.image, 0, texture.levels,
                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, readers, 0,
-                                               transfer, transfer_write));
+                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, resting_stages,
+                                               0, transfer, transfer_write));
     const VkBufferImageCopy region{
         .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1 },
         .imageOffset = { .x = static_cast<std::int32_t>(x), .y = static_cast<std::int32_t>(y) },
@@ -299,12 +459,76 @@ bool upload(texture_t& texture, std::uint32_t x, std::uint32_t y, std::uint32_t 
     return true;
 }
 
+/// Records clearing a texture that isn't a target, every level, in the frame's commands.
+void record_clear(VkCommandBuffer commands, const texture_t& texture,
+                  const VkClearColorValue& color) {
+    fbe::gpu::barrier(commands, levels_barrier(texture.image, 0, texture.levels,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, resting_stages,
+                                               0, transfer, transfer_write));
+    const VkImageSubresourceRange everything{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .levelCount = texture.levels,
+        .layerCount = 1,
+    };
+    vkCmdClearColorImage(commands, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1,
+                         &everything);
+    fbe::gpu::barrier(commands, levels_barrier(texture.image, 0, texture.levels,
+                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer,
+                                               transfer_write, resting_stages, shader_read));
+}
+
 bool valid_filter(std::int32_t filter) {
     return filter == FBE_TEXTURE_NEAREST || filter == FBE_TEXTURE_LINEAR;
 }
 
 bool valid_wrap(std::int32_t wrap) {
     return wrap == FBE_TEXTURE_REPEAT || wrap == FBE_TEXTURE_CLAMP || wrap == FBE_TEXTURE_MIRROR;
+}
+
+/// Whether a new texture can be `width` by `height` of `format`, starting the GPU if it hasn't;
+/// false, with fbe_error's why, if not.
+bool checked(std::int32_t width, std::int32_t height, std::int32_t format) {
+    if (fbe::texture::pixel_size(format) == 0) {
+        return fbe::fail(std::format("{} isn't a TextureFormat", format));
+    }
+    if (!fbe::gpu::start_with_window()) {
+        return false;
+    }
+    const auto largest =
+        static_cast<std::int32_t>(fbe::gpu::device()->properties.limits.maxImageDimension2D);
+    if (width < 1 || height < 1 || width > largest || height > largest) {
+        return fbe::fail(std::format("a texture is 1 to {} pixels on a side, not {}x{}", largest,
+                                     width, height));
+    }
+    return true;
+}
+
+/// A new texture of `spec`, its handle, or 0, with fbe_error's why.
+std::uint64_t create(const spec_t& spec) {
+    const std::uint32_t slot = take_slot();
+    if (slot == UINT32_MAX) {
+        return 0;
+    }
+    if (!make(slot, spec)) {
+        free_slots.push_back(slot);
+        return 0;
+    }
+    return handle_of(slot);
+}
+
+/// Whether a region is inside a texture's first level; false, with fbe_error's why, if not.
+bool inside(const texture_t& texture, std::int32_t x, std::int32_t y, std::int32_t width,
+            std::int32_t height) {
+    const auto across = static_cast<std::int64_t>(texture.width);
+    const auto down = static_cast<std::int64_t>(texture.height);
+    if (x < 0 || y < 0 || width < 1 || height < 1 || x + std::int64_t{ width } > across ||
+        y + std::int64_t{ height } > down) {
+        return fbe::fail(std::format("a {}x{} region at {}, {} isn't in a {}x{} texture", width,
+                                     height, x, y, across, down));
+    }
+    return true;
 }
 
 } // namespace
@@ -345,6 +569,93 @@ std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level) {
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, level);
 }
 
+VkCommandBuffer begin_pass(std::uint64_t target, const clear_t& clear) {
+    const texture_t* found = find(target);
+    if (found == nullptr) {
+        return VK_NULL_HANDLE;
+    }
+    if (!found->target) {
+        fail("the texture isn't a target, which draws");
+        return VK_NULL_HANDLE;
+    }
+    const gpu::device_t& gpu = *gpu::device();
+    VkCommandBuffer commands = gpu::frame_commands();
+    // The image is drawn into, or a multisampled one resolved into; its samples, and its depth,
+    // wait for the pass before's writes.
+    gpu::barrier(commands,
+                 gpu::color_transition(found->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, resting_stages, 0,
+                                       output, output_access));
+    if (found->msaa != VK_NULL_HANDLE) {
+        gpu::barrier(commands,
+                     gpu::color_transition(found->msaa, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, output,
+                                           output_write, output, output_access));
+    }
+    if (found->depth != VK_NULL_HANDLE) {
+        gpu::barrier(commands,
+                     depth_barrier(found->depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, tests,
+                                   depth_access));
+    }
+    const bool multisampled = found->msaa != VK_NULL_HANDLE;
+    const VkRenderingAttachmentInfo color{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = multisampled ? found->msaa_view : found->view,
+        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .resolveMode = multisampled ? VK_RESOLVE_MODE_AVERAGE_BIT : VK_RESOLVE_MODE_NONE,
+        .resolveImageView = multisampled ? found->view : VK_NULL_HANDLE,
+        .resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .loadOp = clear.color ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = {
+            .color = {
+                .float32 = { clear.rgba[0], clear.rgba[1], clear.rgba[2], clear.rgba[3] },
+            },
+        },
+    };
+    const VkRenderingAttachmentInfo depth{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = found->depth_view,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .loadOp = clear.depth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .clearValue = { .depthStencil = { .depth = clear.depth_value } },
+    };
+    const VkExtent2D extent{ .width = found->width, .height = found->height };
+    const VkRenderingInfo rendering{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .renderArea = { .extent = extent },
+        .layerCount = 1,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &color,
+        .pDepthAttachment = found->depth != VK_NULL_HANDLE ? &depth : nullptr,
+    };
+    gpu.begin_rendering(commands, &rendering);
+    const VkViewport viewport{
+        .width = static_cast<float>(extent.width),
+        .height = static_cast<float>(extent.height),
+        .maxDepth = 1.0F,
+    };
+    vkCmdSetViewport(commands, 0, 1, &viewport);
+    const VkRect2D scissor{ .extent = extent };
+    vkCmdSetScissor(commands, 0, 1, &scissor);
+    return commands;
+}
+
+void end_pass(std::uint64_t target) {
+    const texture_t* found = find(target);
+    if (found == nullptr || !found->target) {
+        return;
+    }
+    VkCommandBuffer commands = gpu::frame_commands();
+    gpu::device()->end_rendering(commands);
+    gpu::barrier(commands,
+                 gpu::color_transition(found->image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, output,
+                                       output_write, resting_stages, shader_read));
+}
+
 std::uint32_t pixel_size(std::int32_t format) {
     switch (format) {
     case FBE_TEXTURE_RGBA8:
@@ -366,7 +677,7 @@ namespace fbe::gpu {
 bool start_textures() {
     // The white texture, which a draw with no texture reads, in slot 0.
     const std::uint32_t slot = take_slot();
-    if (slot == UINT32_MAX || !make(slot, 1, 1, FBE_TEXTURE_RGBA8_LINEAR, false)) {
+    if (slot == UINT32_MAX || !make(slot, { .format = FBE_TEXTURE_RGBA8_LINEAR })) {
         return false;
     }
     --textures_made;
@@ -404,30 +715,136 @@ void stop_textures() {
 extern "C" {
 
 FBE_API uint64_t fbe_texture_create(int32_t width, int32_t height, int32_t format, bool mipmaps) {
-    if (fbe::texture::pixel_size(format) == 0) {
-        fbe::fail(std::format("{} isn't a TextureFormat", format));
+    if (!checked(width, height, format)) {
         return 0;
     }
-    if (!fbe::gpu::start_with_window()) {
+    return create({
+        .width = static_cast<std::uint32_t>(width),
+        .height = static_cast<std::uint32_t>(height),
+        .format = format,
+        .mipmaps = mipmaps,
+    });
+}
+
+FBE_API uint64_t fbe_texture_create_target(int32_t width, int32_t height, int32_t format,
+                                           int32_t samples, bool depth) {
+    if (samples != 1 && samples != 2 && samples != 4 && samples != 8) {
+        fbe::fail(std::format("a target draws 1, 2, 4, or 8 samples a pixel, not {}", samples));
         return 0;
     }
-    const auto largest =
-        static_cast<std::int32_t>(fbe::gpu::device()->properties.limits.maxImageDimension2D);
-    if (width < 1 || height < 1 || width > largest || height > largest) {
-        fbe::fail(std::format("a texture is 1 to {} pixels on a side, not {}x{}", largest, width,
-                              height));
+    if (!checked(width, height, format)) {
         return 0;
     }
-    const std::uint32_t slot = take_slot();
-    if (slot == UINT32_MAX) {
-        return 0;
+    return create({
+        .width = static_cast<std::uint32_t>(width),
+        .height = static_cast<std::uint32_t>(height),
+        .format = format,
+        .target = true,
+        .samples = static_cast<VkSampleCountFlagBits>(samples),
+        .depth = depth,
+    });
+}
+
+FBE_API bool fbe_texture_is_target(uint64_t texture) {
+    const texture_t* found = fbe::texture::find(texture);
+    return found != nullptr && found->target;
+}
+
+FBE_API int32_t fbe_texture_samples(uint64_t texture) {
+    const texture_t* found = fbe::texture::find(texture);
+    return found != nullptr ? static_cast<std::int32_t>(found->samples) : -1;
+}
+
+FBE_API bool fbe_texture_has_depth(uint64_t texture) {
+    const texture_t* found = fbe::texture::find(texture);
+    return found != nullptr && found->depth != VK_NULL_HANDLE;
+}
+
+FBE_API bool fbe_texture_clear(uint64_t texture, float r, float g, float b, float a) {
+    const texture_t* found = fbe::texture::find(texture);
+    if (found == nullptr) {
+        return false;
     }
-    if (!make(slot, static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), format,
-              mipmaps)) {
-        free_slots.push_back(slot);
-        return 0;
+    if (found->target) {
+        if (fbe::texture::begin_pass(texture,
+                                     { .color = true, .rgba = { r, g, b, a }, .depth = true }) ==
+            VK_NULL_HANDLE) {
+            return false;
+        }
+        fbe::texture::end_pass(texture);
+        return true;
     }
-    return handle_of(slot);
+    record_clear(fbe::gpu::frame_commands(), *found, { .float32 = { r, g, b, a } });
+    return true;
+}
+
+FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, int32_t from_x,
+                              int32_t from_y, int32_t width, int32_t height) {
+    texture_t* target = fbe::texture::find(to);
+    const texture_t* source = target != nullptr ? fbe::texture::find(from) : nullptr;
+    if (target == nullptr || source == nullptr) {
+        return false;
+    }
+    if (target == source) {
+        return fbe::fail("a texture isn't copied into itself");
+    }
+    if (target->msaa != VK_NULL_HANDLE) {
+        return fbe::fail("a multisampled target is drawn into, not copied into");
+    }
+    if (fbe::texture::pixel_size(target->format) != fbe::texture::pixel_size(source->format)) {
+        return fbe::fail("textures of formats of different sizes aren't copied between");
+    }
+    if (!inside(*target, x, y, width, height) || !inside(*source, from_x, from_y, width, height)) {
+        return false;
+    }
+    VkCommandBuffer commands = fbe::gpu::frame_commands();
+    fbe::gpu::barrier(commands,
+                      levels_barrier(source->image, 0, 1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, resting_stages, 0, copy,
+                                     transfer_read));
+    fbe::gpu::barrier(commands, levels_barrier(target->image, 0, target->levels,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, resting_stages,
+                                               0, transfer, transfer_write));
+    const VkImageCopy region{
+        .srcSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1 },
+        .srcOffset = { .x = from_x, .y = from_y },
+        .dstSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1 },
+        .dstOffset = { .x = x, .y = y },
+        .extent = {
+            .width = static_cast<std::uint32_t>(width),
+            .height = static_cast<std::uint32_t>(height),
+            .depth = 1,
+        },
+    };
+    vkCmdCopyImage(commands, source->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target->image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    fbe::gpu::barrier(commands,
+                      levels_barrier(source->image, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, copy, 0,
+                                     resting_stages, shader_read));
+    record_mipmaps(commands, *target);
+    return true;
+}
+
+FBE_API bool fbe_texture_read(uint64_t texture, int32_t level, uint8_t* pixels, int64_t size) {
+    const texture_t* found = fbe::texture::find(texture);
+    if (found == nullptr) {
+        return false;
+    }
+    if (level < 0) {
+        return fbe::fail(std::format("the texture has {} levels, not {}", found->levels, level));
+    }
+    const std::vector<std::uint8_t> read =
+        fbe::texture::read(texture, static_cast<std::uint32_t>(level));
+    if (read.empty()) {
+        return false;
+    }
+    if (pixels == nullptr || std::cmp_not_equal(size, read.size())) {
+        return fbe::fail(std::format("the level's {} bytes, not {}", read.size(), size));
+    }
+    std::memcpy(pixels, read.data(), read.size());
+    return true;
 }
 
 FBE_API bool fbe_texture_retain(uint64_t texture) {
@@ -487,12 +904,11 @@ FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t w
     if (found == nullptr) {
         return false;
     }
-    const auto across = static_cast<std::int64_t>(found->width);
-    const auto down = static_cast<std::int64_t>(found->height);
-    if (x < 0 || y < 0 || width < 1 || height < 1 || x + std::int64_t{ width } > across ||
-        y + std::int64_t{ height } > down) {
-        return fbe::fail(std::format("a {}x{} region at {}, {} isn't in a {}x{} texture", width,
-                                     height, x, y, across, down));
+    if (found->msaa != VK_NULL_HANDLE) {
+        return fbe::fail("a multisampled target is drawn into, not written");
+    }
+    if (!inside(*found, x, y, width, height)) {
+        return false;
     }
     const std::int64_t row = std::int64_t{ width } * fbe::texture::pixel_size(found->format);
     if (pixels == nullptr || pitch < row) {

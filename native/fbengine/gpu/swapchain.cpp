@@ -1,9 +1,11 @@
 // The window's images and Flip's present. A shown window has a surface and a swapchain, made
 // again whenever the window's size in pixels or vsync changes, or the surface says it's out of
-// date; each frame in flight acquires one of its images, draws into it, and presents it. A headless
-// window has one image of its own, its size in pixels, which each frame draws into the same way
-// and leaves, as nothing shows it: Vulkan's headless surfaces aren't on every driver (Windows'
-// have none, and lavapipe's need udmabuf), so headless frames never depend on them.
+// date; each frame in flight acquires one of its images, draws the screen into it, scaled, and
+// presents it. A headless window has one image of its own, its size in pixels, which each frame
+// draws into the same way and leaves, as nothing shows it: Vulkan's headless surfaces aren't on
+// every driver (Windows' have none, and lavapipe's need udmabuf), so headless frames never depend
+// on them. The window's images are sRGB, so what's drawn is linear light, and the screen scales
+// into them in linear light too.
 
 #include "core/engine.hpp"
 #include "fbengine.h"
@@ -11,9 +13,11 @@
 #include "gpu/image.hpp"
 #include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
+#include "texture/texture.hpp"
 
 #include <algorithm>
 #include <cstdint>
+#include <engine_shaders.hpp>
 #include <format>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -25,7 +29,7 @@ namespace {
 using fbe::gpu::flag;
 
 /// What a headless window's image is, as a swapchain's mostly are.
-constexpr VkFormat headless_format = VK_FORMAT_B8G8R8A8_UNORM;
+constexpr VkFormat headless_format = VK_FORMAT_B8G8R8A8_SRGB;
 
 SDL_Window* window = nullptr;
 /// Whether the window is shown, not headless.
@@ -39,6 +43,9 @@ VkExtent2D extent{};
 /// The window's size in pixels when its images were made, which a surface's size can lag.
 VkExtent2D made_for{};
 bool vsync = true;
+/// The window's images' format: sRGB, or, where a surface has none, 8-bit stored as it's written,
+/// which the present pass encodes as sRGB itself.
+VkFormat format = VK_FORMAT_UNDEFINED;
 /// Whether the surface said the swapchain no longer matches it.
 bool stale = false;
 std::vector<VkImage> images;
@@ -80,14 +87,15 @@ void destroy_images(const fbe::gpu::device_t& gpu) {
     extent = {};
 }
 
-/// A view of each of the images, of `format`; false, with fbe_error's why, if one can't be made.
-bool make_views(const fbe::gpu::device_t& gpu, VkFormat format) {
+/// A view of each of the images, of `view_format`; false, with fbe_error's why, if one can't be
+/// made.
+bool make_views(const fbe::gpu::device_t& gpu, VkFormat view_format) {
     for (VkImage image : images) {
         const VkImageViewCreateInfo info{
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .image = image,
             .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = format,
+            .format = view_format,
             .subresourceRange = {
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                 .levelCount = 1,
@@ -134,7 +142,12 @@ VkSurfaceFormatKHR surface_format(const fbe::gpu::device_t& gpu) {
     vkGetPhysicalDeviceSurfaceFormatsKHR(gpu.physical, surface, &count, nullptr);
     std::vector<VkSurfaceFormatKHR> formats(count);
     vkGetPhysicalDeviceSurfaceFormatsKHR(gpu.physical, surface, &count, formats.data());
-    for (const VkFormat wanted : { headless_format, VK_FORMAT_R8G8B8A8_UNORM }) {
+    for (const VkFormat wanted : {
+             headless_format,
+             VK_FORMAT_R8G8B8A8_SRGB,
+             VK_FORMAT_B8G8R8A8_UNORM,
+             VK_FORMAT_R8G8B8A8_UNORM,
+         }) {
         for (const VkSurfaceFormatKHR& found : formats) {
             if (found.format == wanted && found.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
                 return found;
@@ -230,6 +243,7 @@ bool make_swapchain(const fbe::gpu::device_t& gpu, bool wait) {
     vkGetSwapchainImagesKHR(gpu.device, swapchain, &count, nullptr);
     images.resize(count);
     vkGetSwapchainImagesKHR(gpu.device, swapchain, &count, images.data());
+    format = chosen.format;
     if (!make_views(gpu, chosen.format)) {
         destroy_images(gpu);
         return false;
@@ -285,6 +299,7 @@ bool make_headless(const fbe::gpu::device_t& gpu, bool wait) {
         return fbe::gpu::fail_vulkan("couldn't make the headless window's image", result);
     }
     images.push_back(headless);
+    format = headless_format;
     if (!make_views(gpu, headless_format)) {
         destroy_images(gpu);
         return false;
@@ -330,6 +345,7 @@ bool make_window(const fbe::gpu::device_t& gpu) {
                 std::format("the GPU {} can't present to the window", gpu.properties.deviceName));
         }
     }
+    fbe::gpu::update_screen(window_pixels());
     return make_images(gpu, vsync);
 }
 
@@ -346,9 +362,57 @@ void destroy_window() {
     }
 }
 
-/// Records the frame's last pass into the window's image `index`: cleared, then left to be
-/// presented, or, a headless window's, to be copied from. A headless window's one image is drawn
-/// by each frame in flight, which the first barrier orders after the frame before's copies.
+/// What the present shader's push constants are: the screen's index and sampler, and whether the
+/// window's image is stored as written, so the shader encodes sRGB itself.
+struct present_t {
+    std::uint32_t texture;
+    std::uint32_t sampler;
+    std::uint32_t encode;
+};
+
+/// Records drawing the screen into its area of the window's image, a triangle covering it.
+void draw_screen(VkCommandBuffer commands) {
+    const std::uint64_t screen = fbe::gpu::screen_handle();
+    const fbe::texture::texture_t* found = screen != 0 ? fbe::texture::find(screen) : nullptr;
+    if (found == nullptr) {
+        return;
+    }
+    VkPipeline pipeline = fbe::gpu::pipeline({ .shader = &fbe::shaders::present, .color = format });
+    if (pipeline == VK_NULL_HANDLE) {
+        return;
+    }
+    const VkRect2D area = fbe::gpu::screen_area(extent);
+    const VkViewport viewport{
+        .x = static_cast<float>(area.offset.x),
+        .y = static_cast<float>(area.offset.y),
+        .width = static_cast<float>(area.extent.width),
+        .height = static_cast<float>(area.extent.height),
+        .maxDepth = 1.0F,
+    };
+    vkCmdSetViewport(commands, 0, 1, &viewport);
+    vkCmdSetScissor(commands, 0, 1, &area);
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    VkDescriptorSet set = fbe::gpu::bindless_set();
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, fbe::gpu::pipeline_layout(),
+                            0, 1, &set, 0, nullptr);
+    const bool srgb = format == VK_FORMAT_B8G8R8A8_SRGB || format == VK_FORMAT_R8G8B8A8_SRGB;
+    const present_t constants{
+        .texture = fbe::texture::index_of(screen),
+        .sampler = fbe::gpu::sampler_index(fbe::gpu::screen_smooth() ? FBE_TEXTURE_LINEAR
+                                                                     : FBE_TEXTURE_NEAREST,
+                                           FBE_TEXTURE_CLAMP, FBE_TEXTURE_CLAMP),
+        .encode = srgb ? 0U : 1U,
+    };
+    vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
+                       flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0, sizeof(constants),
+                       &constants);
+    vkCmdDraw(commands, 3, 1, 0, 0);
+}
+
+/// Records the frame's last pass into the window's image `index`: cleared, the screen drawn into
+/// it, then left to be presented, or, a headless window's, to be copied from. A headless window's
+/// one image is drawn by each frame in flight, which the first barrier orders after the frame
+/// before's copies.
 void record(const fbe::gpu::device_t& gpu, VkCommandBuffer commands, std::uint32_t index) {
     const auto output =
         flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
@@ -358,6 +422,7 @@ void record(const fbe::gpu::device_t& gpu, VkCommandBuffer commands, std::uint32
     fbe::gpu::barrier(commands, fbe::gpu::color_transition(images[index], VK_IMAGE_LAYOUT_UNDEFINED,
                                                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                                            output | copy, 0, output, write));
+    // Black around the screen, where it doesn't fill the window.
     const VkRenderingAttachmentInfo color{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .imageView = views[index],
@@ -374,6 +439,7 @@ void record(const fbe::gpu::device_t& gpu, VkCommandBuffer commands, std::uint32
         .pColorAttachments = &color,
     };
     gpu.begin_rendering(commands, &rendering);
+    draw_screen(commands);
     gpu.end_rendering(commands);
     if (swapchain != VK_NULL_HANDLE) {
         fbe::gpu::barrier(commands, fbe::gpu::color_transition(
@@ -397,6 +463,7 @@ bool presentable(const fbe::gpu::device_t& gpu, bool wait) {
         pixels.height != made_for.height) {
         make_images(gpu, wait);
     }
+    fbe::gpu::update_screen(pixels);
     return !images.empty();
 }
 
@@ -418,7 +485,23 @@ bool start_with_window() {
     return window == nullptr || make_window(*device());
 }
 
+std::vector<std::uint8_t> read_window() {
+    const device_t* gpu = device();
+    if (gpu == nullptr || headless == VK_NULL_HANDLE) {
+        return {};
+    }
+    vkDeviceWaitIdle(gpu->device);
+    std::vector<std::uint8_t> pixels =
+        read_pixels(headless, extent, 4, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    // Blue first, as the image keeps them, to red first.
+    for (std::size_t at = 0; at + 3 < pixels.size(); at += 4) {
+        std::swap(pixels[at], pixels[at + 2]);
+    }
+    return pixels;
+}
+
 void stop_window() {
+    stop_screen();
     destroy_window();
     made_for = {};
     stale = false;
@@ -438,6 +521,7 @@ bool gpu_window_opened(SDL_Window* opened, bool unless_headless) {
 }
 
 void gpu_window_closing() {
+    gpu::close_screen();
     destroy_window();
     window = nullptr;
 }
@@ -513,6 +597,20 @@ FBE_API int32_t fbe_gpu_swapchain_height(void) {
 
 FBE_API bool fbe_gpu_swapchain_vsync(void) {
     return !images.empty() && vsync;
+}
+
+FBE_API bool fbe_gpu_screen_area(fbe_gpu_rect_t* area) {
+    if (window == nullptr || area == nullptr) {
+        return fbe::fail("there's no window; Graphics opens one");
+    }
+    const VkRect2D part = fbe::gpu::screen_area(window_pixels());
+    *area = {
+        .x = part.offset.x,
+        .y = part.offset.y,
+        .width = static_cast<std::int32_t>(part.extent.width),
+        .height = static_cast<std::int32_t>(part.extent.height),
+    };
+    return true;
 }
 
 FBE_API bool fbe_gpu_swapchain_headless(void) {
