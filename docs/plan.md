@@ -77,6 +77,8 @@ Steps 3 to 7 done (2026-10-31, landed at 3698cf3).
 6. Loose ends and E2's review: device loss, a GPU that lacks a feature (a clear error), MoltenVK
    on macOS, timings, and counters (draws, triangles) for a debug overlay.
 
+Steps 1 to 6 done (2026-11-01, landed at e9d02d6, the gpu lane's merge).
+
 ### E3: 2D
 
 1. The 2D canvas: drawing into the window or a target, origin, viewport (clip), color, lines,
@@ -91,6 +93,9 @@ Steps 3 to 7 done (2026-10-31, landed at 3698cf3).
    copying regions between the window, textures, and images; std.image's Image in and out.
 5. Collisions in 2D: rectangles, and pixel-exact masks of images (the input lane's, on the CPU).
 6. Loose ends and E3's review: the arcade game example and its golden images.
+
+Steps 1 to 5 done (2026-11-01: 1, 2, 4, and 3's drawing landed at e9d02d6; 3's core and 5 at
+0d0c099).
 
 ### E4: The scene
 
@@ -186,8 +191,8 @@ Steps 0 to 3, and 4 and 5 but for running in `fb build`, done (2026-10-31, lande
 5. Buses and effects: groups with volume, low-pass, reverb.
 6. Loose ends and E9's review.
 
-Steps 1 to 6 done (2026-10-31, landed at 5d7e461), but for step 4's entity overloads, which wait
-for E4.
+Steps 1 to 6 done (2026-10-31, landed at 5d7e461), and step 4's entity overloads (2026-11-01, at
+e9d02d6).
 
 ### E10: Physics (fbengine_physics)
 
