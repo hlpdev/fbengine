@@ -2,8 +2,12 @@
 // and its replays.
 
 Import std.core
+Import std.ffi
 Import "./c/fbe_input"
 Import "./c/fbe_window"
+Import "./gamepad"
+Import "./input"
+Import "./joystick"
 Import "./keyboard"
 Import "./mouse"
 Import "./window"
@@ -106,7 +110,103 @@ Public Final Class Simulate
         If !fbe_input_simulate_mouse_wheel(x, y) Then Throw GraphicsError(LastError())
     End Method
 
+    /// A gamepad, connected: one of SDL's virtual devices, with every button and axis a Gamepad
+    /// has, which the next Flip reads connecting.
+    @MainThread Public Static Method ConnectGamepad(
+            name: String = "Virtual Gamepad"): VirtualGamepad Throws InputError
+        Local id = fbe_input_simulate_gamepad(name)
+        If id == 0 Then Throw InputError(LastError())
+        Return VirtualGamepad(id)
+    End Method
+
+    /// A joystick of `type`, connected, with `axes` axes, `buttons` buttons, and `hats` hats,
+    /// each from 0 to 255.
+    @MainThread Public Static Method ConnectJoystick(type: JoystickType, axes: Int32, buttons: Int32,
+                                                     hats: Int32,
+                                                     name: String = "Virtual Joystick"): VirtualJoystick Throws InputError
+        Local id = fbe_input_simulate_joystick(name, type As Int32, axes, buttons, hats)
+        If id == 0 Then Throw InputError(LastError())
+        Return VirtualJoystick(id)
+    End Method
+
     @MainThread Static Method Push(event: Int32) Throws GraphicsError
         If !fbe_window_simulate(event) Then Throw GraphicsError(LastError())
+    End Method
+End Class
+
+/// A gamepad Simulate connected, which SDL reads as it reads a real one: what's set on it reaches
+/// its Gamepad at the next Flip. Setting anything on one that's unplugged panics.
+Public Final Class VirtualGamepad
+    Field id: UInt64
+
+    Package New(id: UInt64)
+        Self.id = id
+    End New
+
+    /// The Gamepad it is, once a Flip has read it connecting.
+    @MainThread Public Method Device(): Gamepad => Gamepad.Of(id)
+
+    /// Holds `button` down, or lets it go.
+    @MainThread Public Method SetButton(button: GamepadButton, down: Bool)
+        If !fbe_input_simulate_device_button(id, button As Int32, down) Then Panic(LastError())
+    End Method
+
+    /// Puts `axis` at `value`: a stick's -1 to 1, a trigger's 0 to 1.
+    @MainThread Public Method SetAxis(axis: GamepadAxis, value: Float32)
+        If !fbe_input_simulate_device_axis(id, axis As Int32, value) Then Panic(LastError())
+    End Method
+
+    /// How hard the game last made its low frequency motor rumble, 0 to 1, which goes back to 0
+    /// once the rumble's time is up.
+    @MainThread Public Method LowRumble(): Float32 => fbe_input_simulate_device_rumble(id, 0)
+
+    /// How hard the game last made its high frequency motor rumble.
+    @MainThread Public Method HighRumble(): Float32 => fbe_input_simulate_device_rumble(id, 1)
+
+    /// How hard the game last made its left trigger rumble.
+    @MainThread Public Method LeftTriggerRumble(): Float32 => fbe_input_simulate_device_rumble(id,
+                                                                                               2)
+
+    /// How hard the game last made its right trigger rumble.
+    @MainThread Public Method RightTriggerRumble(): Float32
+        Return fbe_input_simulate_device_rumble(id, 3)
+    End Method
+
+    /// Disconnects it, which the next Flip reads.
+    @MainThread Public Method Unplug()
+        If !fbe_input_simulate_unplug(id) Then Panic(LastError())
+    End Method
+End Class
+
+/// A joystick Simulate connected, which SDL reads as it reads a real one. Setting anything on one
+/// that's unplugged, or that it doesn't have, panics.
+Public Final Class VirtualJoystick
+    Field id: UInt64
+
+    Package New(id: UInt64)
+        Self.id = id
+    End New
+
+    /// The Joystick it is, once a Flip has read it connecting.
+    @MainThread Public Method Device(): Joystick => Joystick.Of(id)
+
+    /// Holds its `button`th button down, or lets it go.
+    @MainThread Public Method SetButton(button: Int32, down: Bool)
+        If !fbe_input_simulate_device_button(id, button, down) Then Panic(LastError())
+    End Method
+
+    /// Puts its `axis`th axis at `value`, -1 to 1.
+    @MainThread Public Method SetAxis(axis: Int32, value: Float32)
+        If !fbe_input_simulate_device_axis(id, axis, value) Then Panic(LastError())
+    End Method
+
+    /// Points its `hat`th hat.
+    @MainThread Public Method SetHat(hat: Int32, direction: HatDirection)
+        If !fbe_input_simulate_device_hat(id, hat, direction As Int32) Then Panic(LastError())
+    End Method
+
+    /// Disconnects it, which the next Flip reads.
+    @MainThread Public Method Unplug()
+        If !fbe_input_simulate_unplug(id) Then Panic(LastError())
     End Method
 End Class
