@@ -207,7 +207,7 @@ Public Class Node Implements Printable
         End If
         children.Insert(index, child)
         child.parent = Self
-        Changed()
+        Reflow()
     End Method
 
     /// Takes `child` out of its children; False if it isn't one.
@@ -216,8 +216,8 @@ Public Class Node Implements Printable
             If RefEquals(children[i], child)
                 children.RemoveAt(i)
                 child.parent = Null
-                Changed()
-                child.Changed()
+                Reflow()
+                child.Reflow()
                 Return True
             End If
         End For
@@ -238,13 +238,13 @@ Public Class Node Implements Printable
     /// Sets how its width is found, fitting what's in it at first.
     @MainThread Public Method SetWidth(sizing: Sizing)
         width = sizing
-        Changed()
+        Reflow()
     End Method
 
     /// Sets how its height is found, fitting what's in it at first.
     @MainThread Public Method SetHeight(sizing: Sizing)
         height = sizing
-        Changed()
+        Reflow()
     End Method
 
     /// Fixes its width and height.
@@ -263,26 +263,26 @@ Public Class Node Implements Printable
     @MainThread Public Method SetMinSize(width: Float32, height: Float32)
         If !(width >= 0.0 && height >= 0.0) Then Panic("Node.SetMinSize: a size is 0 or more")
         minimum = Vec2(width, height)
-        Changed()
+        Reflow()
     End Method
 
     /// The most it's laid out as, Inf at first for no most; a least past it wins.
     @MainThread Public Method SetMaxSize(width: Float32, height: Float32)
         If !(width >= 0.0 && height >= 0.0) Then Panic("Node.SetMaxSize: a size is 0 or more")
         maximum = Vec2(width, height)
-        Changed()
+        Reflow()
     End Method
 
     /// Sets the space between its edge and its children.
     @MainThread Public Method SetPadding(insets: Insets)
         padding = insets
-        Changed()
+        Reflow()
     End Method
 
     /// Sets the space around it, between it and its siblings and its parent's padding.
     @MainThread Public Method SetMargin(insets: Insets)
         margin = insets
-        Changed()
+        Reflow()
     End Method
 
     /// Its padding.
@@ -294,7 +294,7 @@ Public Class Node Implements Printable
     /// Sets how it lays its children out: in a column, at first, a row, or a stack.
     @MainThread Public Method SetArrangement(laid: Arrangement)
         arrangement = laid
-        Changed()
+        Reflow()
     End Method
 
     /// How it lays its children out.
@@ -304,40 +304,40 @@ Public Class Node Implements Printable
     @MainThread Public Method SetGap(units: Float32)
         If !(units >= 0.0) Then Panic("Node.SetGap: a gap is 0 or more, not {units}")
         gap = units
-        Changed()
+        Reflow()
     End Method
 
     /// Sets where the space a row's or a column's children leave goes, after them at first.
     @MainThread Public Method SetJustify(where: Justify)
         justify = where
-        Changed()
+        Reflow()
     End Method
 
     /// Sets where its children go across its row or column, or in its stack: stretched across, at
     /// first.
     @MainThread Public Method SetAlign(where: Align)
         align = where
-        Changed()
+        Reflow()
     End Method
 
     /// Sets where it goes across its parent's row or column, or in its stack, over its parent's
     /// Align; Null for its parent's.
     @MainThread Public Method SetAlignSelf(where: Align?)
         selfAlign = where
-        Changed()
+        Reflow()
     End Method
 
     /// Sets where it goes in its parent's stack, over its parent's Align; Null to be placed by it.
     @MainThread Public Method SetAnchors(where: Anchors?)
         anchors = where
-        Changed()
+        Reflow()
     End Method
 
     /// Shows it, or hides it, which takes it and its children out of the layout, as if they
     /// weren't there, and out of NodeAt.
     @MainThread Public Method SetVisible(shown: Bool)
         visible = shown
-        Changed()
+        Reflow()
     End Method
 
     /// Whether it's shown, by itself; a parent that's hidden hides it too.
@@ -348,7 +348,7 @@ Public Class Node Implements Printable
     @MainThread Public Method SetContentSize(width: Float32, height: Float32)
         If !(width >= 0.0 && height >= 0.0) Then Panic("Node.SetContentSize: a size is 0 or more")
         content = Vec2(width, height)
-        Changed()
+        Reflow()
     End Method
 
     /// The size of what it shows when it has no children, without its padding, which sizing it
@@ -386,7 +386,7 @@ Public Class Node Implements Printable
     Public Method ToString(): String => name == "" ? "a Node" : "Node \"{name}\""
 
     // Marks it, and each Node it's in, to be laid out again.
-    Package Method Changed()
+    Package Method Reflow()
         Local at: Node? = Self
         While at != Null
             at.dirty = True
