@@ -63,35 +63,36 @@ thread_local bool ran_out = false;
 /// mixes. miniaudio's init functions clear each of its structs first.
 struct mixer_t {
     ma_context context;
-    bool has_context = false;
     ma_device device;
-    bool has_device = false;
     ma_engine engine;
-    bool has_engine = false;
-    std::int32_t kind = -1;
     std::string device_name;
     /// The seconds Start asked the device to mix at a time, which a device made again keeps.
     double period = 0.0;
+    /// The main thread's: when it last asked which output is the OS's default, for a device that
+    /// follows it (on_default).
+    steady_clock_t::time_point default_asked;
+    /// The main thread's: the frames it last saw mixed, and when they last moved, by which a
+    /// device that's stopped mixing is lost (mixing says whether they've moved since it started).
+    std::int64_t frames_seen = 0;
+    steady_clock_t::time_point frames_moved;
+    std::atomic<std::int64_t> frames = 0;
+    std::int32_t kind = -1;
+    bool has_context = false;
+    bool has_device = false;
+    bool has_engine = false;
     /// The main thread's: whether the last fbe_audio_recover made the device again, which keeps it
     /// lost until the next, and whether fbe_audio_simulate unplugged every output.
     bool fell_back = false;
     bool unplugged_all = false;
     /// The main thread's: whether the device follows the OS's default output, as one opened with
-    /// no name, or made again, does; when it last asked which that is; and whether
-    /// fbe_audio_simulate changed it.
+    /// no name, or made again, does, and whether fbe_audio_simulate changed it.
     bool on_default = false;
-    steady_clock_t::time_point default_asked{};
     bool default_changed = false;
-    /// The main thread's: the frames it last saw mixed, when they last moved, and whether they've
-    /// moved since the device started, by which a device that's stopped mixing is lost.
-    std::int64_t frames_seen = 0;
-    steady_clock_t::time_point frames_moved{};
     bool mixing = false;
     /// fbe_audio_simulate's, for the device's callback: a mix that's stopped, as a device's whose
     /// output is gone on CoreAudio or PulseAudio, or whose driver's hung, mixing and counting
     /// nothing.
     std::atomic<bool> stalled = false;
-    std::atomic<std::int64_t> frames = 0;
 
     mixer_t() = default;
     mixer_t(const mixer_t&) = delete;
