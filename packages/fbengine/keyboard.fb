@@ -203,7 +203,8 @@ End Enum
 End Function
 
 /// Forgets what the last Flip read of the keyboard, its presses, releases, and text, until the
-/// next Flip, as a menu that's just closed wants; the keys held stay held.
+/// next Flip, as a menu that's just closed wants; the keys held stay held. An ActionSet read its
+/// Actions at the Flip already, which its own Flush forgets.
 @MainThread Public Function FlushKeys()
     fbe_input_flush_keys()
 End Function

@@ -76,7 +76,7 @@ FBE_API int32_t fbe_input_composition_length(void);
 
 // The mouse's position in the window's units, from its top left, as the last fbe_frame_flip read
 // it or fbe_input_move_mouse put it; outside the window while a button's held, and 0 until it
-// first moves.
+// first moves in a window.
 FBE_API float fbe_input_mouse_x(void);
 FBE_API float fbe_input_mouse_y(void);
 // How far it moved by the motion the last fbe_frame_flip read, in the window's units, or in the
