@@ -1,0 +1,63 @@
+// E1's done-when, in part: a test under the offscreen driver reads every kind of input, all in
+// the one frame a Flip read, with the window's own events beside them. frame_test's
+// CoroutinesResumeOncePerFlip is the rest.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Near(a: Float32, b: Float32): Bool => Abs(a - b) < 0.001
+
+@Test
+Function OneFlipReadsEveryKindOfInput() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+    StartTextInput()
+    Defer StopTextInput()
+    Local pad = Try Simulate.ConnectGamepad("Pad")
+    Defer pad.Unplug()
+    Local wheel = Try Simulate.ConnectJoystick(JoystickType.WHEEL, 1, 2, 1, "Wheel")
+    Defer wheel.Unplug()
+    Local controls = ActionSet()
+    Local fire = controls.Add("fire")
+    fire.Bind(Binding.OfGamepadAxis(GamepadAxis.RIGHT_TRIGGER))
+    Try Simulate.MoveMouse(100.0, 50.0)
+    Flip()
+
+    // Everything at once, as a busy frame has it.
+    Try Simulate.FocusWindow()
+    Try Simulate.KeyDown(Key.W)
+    Try Simulate.Text("w")
+    Try Simulate.Composition("か", 1, 0)
+    Try Simulate.MoveMouse(110.0, 45.0)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Try Simulate.Wheel(1.0)
+    pad.SetButton(GamepadButton.SOUTH, True)
+    pad.SetAxis(GamepadAxis.LEFT_X, -1.0)
+    pad.SetAxis(GamepadAxis.RIGHT_TRIGGER, 1.0)
+    wheel.SetAxis(0, 0.25)
+    wheel.SetButton(1, True)
+    wheel.SetHat(0, HatDirection.DOWN)
+    Flip()
+
+    Expect(Window.Focused())
+    Expect(KeyDown(Key.W) && KeyHit(Key.W))
+    Expect(TextInput() == "w")
+    Expect(TextComposition().Text == "か")
+    Expect(MouseX() == 110.0 && MouseXSpeed() == 10.0 && MouseYSpeed() == -5.0)
+    Expect(MouseHit(MouseButton.LEFT))
+    Expect(MouseWheelSteps() == 1)
+    Local gamepad = pad.Device()
+    Expect(gamepad.Hit(GamepadButton.SOUTH))
+    Expect(Near(gamepad.Axis(GamepadAxis.LEFT_X), -1.0))
+    Local joystick = wheel.Device()
+    Expect(Near(joystick.Axis(0), 0.25))
+    Expect(joystick.Hit(1))
+    Expect(joystick.Hat(0) == HatDirection.DOWN)
+    Expect(fire.Hit() && fire.Value() == 1.0)
+    Try Simulate.KeyUp(Key.W)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Flip()
+End Function

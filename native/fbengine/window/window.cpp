@@ -99,11 +99,15 @@ void copy_mode(const SDL_DisplayMode& from, fbe_display_mode_t* to) {
 
 namespace fbe {
 
+SDL_Window* window() {
+    return ::window;
+}
+
 void window_event(const SDL_Event& event) {
-    const bool ours = window != nullptr && event.window.windowID == SDL_GetWindowID(window);
+    const bool ours = window() != nullptr && event.window.windowID == SDL_GetWindowID(window());
     switch (event.type) {
     case SDL_EVENT_QUIT:
-        closed = closed || window != nullptr;
+        closed = closed || window() != nullptr;
         break;
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
         closed = closed || ours;

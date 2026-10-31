@@ -1,0 +1,42 @@
+// A game's controls: actions bound to keys, the mouse, and a gamepad, with the player's own
+// bindings loaded over the game's, driven here by Simulate, offscreen, as a test or a replay is.
+
+Import std.core
+Import fbengine
+
+Function Main() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+
+    // The game's own bindings.
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfKey(Key.SPACE))
+    jump.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    Local move = controls.Add("move")
+    move.Bind(Binding.OfKey(Key.D))
+    move.Bind(Binding.OfKey(Key.A, -1.0))
+    move.Bind(Binding.OfGamepadAxis(GamepadAxis.LEFT_X))
+    move.BindY(Binding.OfKey(Key.S))
+    move.BindY(Binding.OfKey(Key.W, -1.0))
+    move.BindY(Binding.OfGamepadAxis(GamepadAxis.LEFT_Y))
+
+    // The player's: they jump with Return, as their settings file says.
+    Try controls.Load("jump = [{{ key = \"RETURN\" }}, {{ gamepad_button = \"SOUTH\" }}]")
+
+    Local pad = Try Simulate.ConnectGamepad("Player One")
+    Try Simulate.KeyDown(Key.W)
+    Try Simulate.PressKey(Key.RETURN)
+    Flip()
+    Print("move {move.Vector()}, jump {jump.Hit()}")
+
+    Try Simulate.KeyUp(Key.W)
+    pad.SetAxis(GamepadAxis.LEFT_X, 1.0)
+    pad.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Print("move {move.Vector()}, jump {jump.Hit()}")
+    pad.Unplug()
+End Function
+
+Try Main()

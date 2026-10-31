@@ -3,6 +3,7 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "input/input.hpp"
 #include "jobs/jobs.hpp"
 
 #include <cstdint>
@@ -48,6 +49,7 @@ FBE_API void fbe_frame_flip(bool wait_for_vsync) {
         SDL_Event event{};
         while (SDL_PollEvent(&event)) {
             fbe::window_event(event);
+            fbe::input_event(event);
         }
     }
 

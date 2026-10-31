@@ -18,7 +18,7 @@ original 1.3.11, and ue5-additions.md what v5 adds; the steps below cover both.
 | | Goal | Needs | Done when |
 |---|---|---|---|
 | **E0** | Setup | | done (2026-10-31) |
-| **E1** | App and input | E0 | a test under the offscreen driver reads every kind of input, and coroutines resume once per frame |
+| **E1** | App and input | E0 | done (2026-10-31) |
 | **E2** | The GPU core | E1 step 1 | golden images of a triangle, a textured quad, and a readback match on lavapipe |
 | **E3** | 2D | E2 | a small arcade game runs, and its frames match their golden images |
 | **E4** | The scene | E1 step 2 | transforms, hierarchy, visibility, collisions, and picks pass their tests, with no GPU |
@@ -56,6 +56,8 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
    two-axis actions; bindings saved and loaded as TOML; rebinding from the next input pressed.
 7. `ShowMessage(title, text)`, the OS's message box, for errors players should see; `OpenURL`,
    which opens a link or a file as the OS does; loose ends; E1's review.
+
+Steps 3 to 7 done (2026-10-31, landed at 3698cf3).
 
 ### E2: The GPU core
 
