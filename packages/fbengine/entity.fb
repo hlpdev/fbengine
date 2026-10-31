@@ -7,6 +7,7 @@ Import std.ffi
 Import "./c/fbe_scene"
 Import "./camera"
 Import "./light"
+Import "./mesh"
 Import "./window"
 Import "./world"
 
@@ -18,6 +19,8 @@ Public Enum EntityKind
     CAMERA = 1
     /// A Light, which lights what it reaches.
     LIGHT = 2
+    /// A Mesh, which draws a Geometry.
+    MESH = 3
 End Enum
 
 // One wrapper for each live entity, by its handle's slot.
@@ -250,6 +253,8 @@ Package Function EntityOf(handle: UInt64): Entity?
             Return Camera(handle)
         Case FBE_ENTITY_LIGHT
             Return Light(handle)
+        Case FBE_ENTITY_MESH
+            Return Mesh(handle)
     End Select
     Panic(LastError())
 End Function

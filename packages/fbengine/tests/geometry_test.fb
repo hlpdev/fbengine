@@ -1,0 +1,251 @@
+// Geometry built in code and as primitive shapes, and the Meshes that draw and share it, with no
+// GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+Function Near(a: Vec3, b: Vec3): Bool => IsClose(a, b, 0.0001)
+
+// Whether every triangle faces the way its vertices' normals do, every normal is length 1, and
+// no triangle is flat.
+Function FacesOut(geometry: Geometry): Bool
+    For surface In geometry.Surfaces()
+        Local vertices = surface.Vertices()
+        Local indices = surface.Triangles()
+        For vertex In vertices
+            If !IsClose(Length(vertex.Normal), 1.0, 0.001) Then Return False
+        End For
+        For t = 0 Until indices.Count / 3
+            Local a = vertices[indices[t * 3]]
+            Local b = vertices[indices[t * 3 + 1]]
+            Local c = vertices[indices[t * 3 + 2]]
+            Local face = Cross(b.Position - a.Position, c.Position - a.Position)
+            If Length(face) < 0.0000001 Then Return False
+            If Dot(face, a.Normal + b.Normal + c.Normal) <= 0 Then Return False
+        End For
+    End For
+    Return True
+End Function
+
+// A square from 0 to 1 in X and Y, facing +Z.
+Function Square(): Geometry
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    Local back = Vec3(0, 0, 1)
+    surface.AddVertices([Vertex(Vec3(0, 0, 0), back, Vec2(0, 1)),
+                         Vertex(Vec3(1, 0, 0), back, Vec2(1, 1)),
+                         Vertex(Vec3(1, 1, 0), back, Vec2(1, 0)),
+                         Vertex(Vec3(0, 1, 0), back, Vec2(0, 0))])
+    surface.AddTriangles([0, 1, 2, 0, 2, 3])
+    Return geometry
+End Function
+
+@Test
+Function ASurfaceIsBuiltOfVerticesAndTriangles()
+    Local geometry = Geometry()
+    Expect(geometry.SurfaceCount() == 0)
+    Local surface = geometry.AddSurface()
+    Expect(surface.Index == 0 && surface.Owner == geometry)
+    Expect(surface.AddVertex(Vec3(0, 0, 0)) == 0)
+    Expect(surface.AddVertex(Vec3(1, 0, 0), Vec2(1, 0)) == 1)
+    Expect(surface.AddVertex(Vertex(Vec3(0, 1, 0), Vec3(0, 0, 1))) == 2)
+    Expect(surface.AddTriangle(0, 1, 2) == 0)
+    Expect(surface.VertexCount() == 3 && surface.TriangleCount() == 1)
+    Expect(surface.Triangle(0) == Vec3i(0, 1, 2))
+    Expect(surface.Triangles() == [0, 1, 2])
+    Local plain = surface.Vertex(0)
+    Expect(plain.Normal == Vec3.Zero() && plain.Uv0 == Vec2.Zero())
+    Expect(plain.Color == Color.White)
+    Expect(surface.VertexUv(1) == Vec2(1, 0) && surface.VertexUv(1, 1) == Vec2(1, 0))
+    Expect(surface.Vertices().Count == 3)
+    Expect(geometry.Surface(0) == surface)
+    Expect(geometry.SurfaceCount() == 1)
+End Function
+
+@Test
+Function AVertexsPartsAreSetOneByOne()
+    Local geometry = Square()
+    Local surface = geometry.Surface(0)
+    surface.SetVertexPosition(2, Vec3(2, 2, 0))
+    surface.SetVertexNormal(2, Vec3(0, 1, 0))
+    surface.SetVertexUv(2, Vec2(0.5, 0.5), 1)
+    surface.SetVertexColor(2, Color(1, 0, 0, 0.5))
+    Local vertex = surface.Vertex(2)
+    Expect(vertex.Position == Vec3(2, 2, 0) && surface.VertexPosition(2) == Vec3(2, 2, 0))
+    Expect(surface.VertexNormal(2) == Vec3(0, 1, 0))
+    Expect(surface.VertexUv(2) == Vec2(1, 0) && surface.VertexUv(2, 1) == Vec2(0.5, 0.5))
+    Expect(surface.VertexColor(2) == Color(1, 0, 0, 0.5))
+    surface.SetVertices(0, [Vertex(Vec3(5, 5, 5)), Vertex(Vec3(6, 6, 6))])
+    Expect(surface.VertexPosition(1) == Vec3(6, 6, 6))
+    Expect(surface.VertexPosition(2) == Vec3(2, 2, 0))
+    surface.ClearTriangles()
+    Expect(surface.TriangleCount() == 0 && surface.VertexCount() == 4)
+    surface.Clear()
+    Expect(surface.VertexCount() == 0)
+End Function
+
+@Test
+Function BoundsAreTheBoxAroundTheVertices()
+    Expect(Geometry().Bounds() == AABB(Vec3.Zero(), Vec3.Zero()))
+    Expect(Square().Bounds() == AABB(Vec3(0, 0, 0), Vec3(1, 1, 0)))
+    Expect(Geometry.Cube().Bounds() == AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1)))
+    Local plane = Geometry.Plane(4).Bounds()
+    Expect(plane == AABB(Vec3(-1, 0, -1), Vec3(1, 0, 1)))
+End Function
+
+@Test
+Function PrimitiveShapesFaceOut()
+    Local cube = Geometry.Cube()
+    Expect(cube.SurfaceCount() == 1)
+    Expect(cube.Surface(0).VertexCount() == 24 && cube.Surface(0).TriangleCount() == 12)
+    Expect(FacesOut(cube))
+    For segments In [3, 8, 16]
+        Expect(FacesOut(Geometry.Sphere(segments)))
+        Expect(FacesOut(Geometry.Cylinder(segments)))
+        Expect(FacesOut(Geometry.Cylinder(segments, False)))
+        Expect(FacesOut(Geometry.Cone(segments)))
+        Expect(FacesOut(Geometry.Cone(segments, False)))
+        Expect(FacesOut(Geometry.Plane(segments)))
+    End For
+    Local sphere = Geometry.Sphere(8)
+    For vertex In sphere.Surface(0).Vertices()
+        Expect(IsClose(Length(vertex.Position), 1.0, 0.0001))
+    End For
+    Expect(IsClose(sphere.Bounds().Max.y, 1.0) && IsClose(sphere.Bounds().Min.y, -1.0))
+    Expect(Geometry.Plane(2).Surface(0).TriangleCount() == 8)
+    Local cone = Geometry.Cone(4, False).Surface(0)
+    Expect(cone.TriangleCount() == 4)
+End Function
+
+@Test
+Function TransformingMovesVerticesAndKeepsFacesOut()
+    Local cube = Geometry.Cube()
+    cube.Scale(Vec3(2, 1, 1))
+    cube.Translate(Vec3(0, 5, 0))
+    Expect(cube.Bounds() == AABB(Vec3(-2, 4, -1), Vec3(2, 6, 1)))
+    Expect(FacesOut(cube))
+    // A mirror turns the triangles too.
+    cube.Scale(Vec3(-1, 1, 1))
+    Expect(FacesOut(cube))
+    cube.Rotate(Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(90)))
+    Expect(Near(cube.Bounds().Min, Vec3(-1, 4, -2)) && Near(cube.Bounds().Max, Vec3(1, 6, 2)))
+    Expect(FacesOut(cube))
+    Local square = Square()
+    square.Transform(Mat4.RotationX(Deg(-90)))
+    Expect(Near(square.Surface(0).VertexNormal(0), Vec3(0, 1, 0)))
+End Function
+
+@Test
+Function FlippingTurnsItInsideOut()
+    Local cube = Geometry.Cube()
+    cube.Flip()
+    Expect(FacesOut(cube))
+    Local square = Square()
+    square.Flip()
+    Expect(square.Surface(0).VertexNormal(0) == Vec3(0, 0, -1))
+    Expect(square.Surface(0).Triangle(0) == Vec3i(0, 2, 1))
+End Function
+
+@Test
+Function UpdateNormalsSmoothsASurfacesVerticesAtOnePlace()
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    surface.AddVertex(Vec3(0, 0, 0))
+    surface.AddVertex(Vec3(0, 0, 1))
+    surface.AddVertex(Vec3(1, 0, 0))
+    surface.AddTriangle(0, 1, 2)
+    geometry.UpdateNormals()
+    Expect(surface.VertexNormal(0) == Vec3(0, 1, 0))
+    // A cube's corners are three vertices at one place in its one surface, which smooth together.
+    Local cube = Geometry.Cube()
+    cube.UpdateNormals()
+    For vertex In cube.Surface(0).Vertices()
+        Expect(Near(vertex.Normal, Normalize(vertex.Position)))
+    End For
+End Function
+
+@Test
+Function FitScalesIntoABox()
+    Local cube = Geometry.Cube()
+    cube.Fit(AABB(Vec3(0, 0, 0), Vec3(4, 2, 2)))
+    Expect(cube.Bounds() == AABB(Vec3(0, 0, 0), Vec3(4, 2, 2)))
+    Local even = Geometry.Cube()
+    even.Fit(AABB(Vec3(0, 0, 0), Vec3(4, 2, 2)), True)
+    Expect(even.Bounds() == AABB(Vec3(1, 0, 0), Vec3(3, 2, 2)))
+    // A flat axis is moved, not scaled.
+    Local plane = Geometry.Plane()
+    plane.Fit(AABB(Vec3(0, 3, 0), Vec3(10, 5, 10)), True)
+    Expect(plane.Bounds() == AABB(Vec3(0, 4, 0), Vec3(10, 4, 10)))
+End Function
+
+@Test
+Function AddingCopiesSurfacesInAndCloningCopiesThemOut()
+    Local room = Geometry()
+    Local wall = Square()
+    room.Add(wall)
+    room.Add(wall, Mat4.Translation(Vec3(5, 0, 0)))
+    Expect(room.SurfaceCount() == 2)
+    Expect(room.Surface(1).VertexPosition(0) == Vec3(5, 0, 0))
+    room.Add(room)
+    Expect(room.SurfaceCount() == 4)
+    Expect(room.Positions().Count == 16)
+    Local indices = room.Indices()
+    Expect(indices.Count == 24 && indices[6] == 4 && indices[23] == 15)
+    Local copy = room.Clone()
+    copy.Translate(Vec3(0, 1, 0))
+    Expect(room.Surface(0).VertexPosition(0) == Vec3(0, 0, 0))
+    Expect(copy.Surface(0).VertexPosition(0) == Vec3(0, 1, 0))
+    Local before = room.Version()
+    room.Surface(0).SetVertexPosition(0, Vec3(1, 1, 1))
+    Expect(room.Version() > before)
+End Function
+
+@Test
+Function MeshesAndTheirCopiesShareTheirGeometry()
+    Local world = Fresh()
+    Defer world.Free()
+    Local cube = Geometry.Cube()
+    Local mesh = Mesh(cube)
+    Expect(mesh.Kind() == EntityKind.MESH)
+    Expect(mesh.Geometry() == cube)
+    Local copy = mesh.Copy() As Mesh
+    Expect(copy.Geometry() == cube)
+    cube.Translate(Vec3(0, 1, 0))
+    Expect(copy.Geometry()?.Bounds()?.Max?.y == 2.0)
+    copy.SetGeometry(Null)
+    Expect(copy.Geometry() == Null)
+    Expect(Mesh(Null).Geometry() == Null)
+    Expect(world.Find("") == mesh)
+End Function
+
+@Test
+Function AGeometryLivesWhileAMeshDrawsIt()
+    Local world = Fresh()
+    Defer world.Free()
+    Local mesh = Mesh(Geometry.Sphere(4))
+    // Nothing but the mesh holds the sphere, whose geometry is still there to ask for.
+    Local sphere = mesh.Geometry()
+    If sphere == Null
+        Fail("the mesh has no geometry")
+        Return
+    End If
+    Expect(sphere.Surface(0).VertexCount() == 45)
+    sphere.Free()
+    Expect(sphere.Freed())
+    Local again = mesh.Geometry()
+    If again == Null
+        Fail("the mesh has no geometry")
+        Return
+    End If
+    Expect(again != sphere && again.Surface(0).VertexCount() == 45)
+    mesh.Free()
+    Expect(again.Surface(0).VertexCount() == 45)
+End Function

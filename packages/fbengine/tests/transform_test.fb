@@ -219,6 +219,11 @@ Function PointsVectorsAndNormalsGoBetweenEntities()
     Local normal = TransformNormal(Normalize(Vec3(1, 1, 0)), a, Null)
     Expect(Near(normal, Normalize(Vec3(0.5, 1, 0))))
     Expect(TransformNormal(Vec3.Zero(), a, Null) == Vec3.Zero())
+    // A mirror turns a normal with its surface.
+    Local mirror = Pivot()
+    mirror.SetScale(Vec3(-1, 1, 1))
+    Expect(Near(TransformNormal(Vec3(1, 0, 0), mirror, Null), Vec3(-1, 0, 0)))
+    Expect(Near(TransformNormal(Vec3(0, 1, 0), mirror, Null), Vec3(0, 1, 0)))
 End Function
 
 @Test
