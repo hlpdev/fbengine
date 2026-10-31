@@ -54,6 +54,31 @@ struct world_t {
 struct surface_t {
     std::vector<fbe_vertex_t> vertices;
     std::vector<std::uint32_t> indices;
+    /// The material it's drawn in, by slot, which it holds, or none for the default.
+    std::uint32_t material = none;
+};
+
+/// One of a material's texture layers: how it blends with the layers under it, and which UV set
+/// it reads.
+struct layer_t {
+    std::int32_t blend = 0;
+    std::int32_t uv_set = 0;
+};
+
+/// A material: how surfaces look, shared by every surface and mesh drawing in it, which its
+/// references count, as a geometry's do.
+struct material_t {
+    std::uint32_t references = 0;
+    std::array<float, 4> color{ 1.0F, 1.0F, 1.0F, 1.0F };
+    float shininess = 0.0F;
+    std::int32_t shading = 0;
+    std::int32_t blend = 0;
+    float alpha_cutoff = 0.0F;
+    bool vertex_colors = false;
+    bool two_sided = false;
+    bool fogged = true;
+    std::int32_t order = 0;
+    std::array<layer_t, FBE_MATERIAL_LAYERS> layers{};
 };
 
 /// A geometry: surfaces, shared by every mesh drawing it. It lives while the FB side holds its
@@ -73,6 +98,10 @@ struct geometry_t {
 struct mesh_t {
     std::uint32_t entity = none;
     std::uint32_t geometry = none;
+    /// A material it draws every surface in instead of their own, which it holds, or none.
+    std::uint32_t material = none;
+    /// Its own color and alpha, which multiply its materials', white at first.
+    std::array<float, 4> tint{ 1.0F, 1.0F, 1.0F, 1.0F };
 };
 
 /// Every entity's data, a field to an array, indexed by slot.
@@ -154,6 +183,8 @@ struct scene_t {
     std::vector<mesh_t> meshes;
     slots_t geometry_slots{ 3 };
     std::vector<geometry_t> geometries;
+    slots_t material_slots{ 4 };
+    std::vector<material_t> materials;
     /// The handles freed since fbe_entity_freed last took them.
     std::vector<std::uint64_t> freed;
 };
@@ -194,6 +225,17 @@ void retain_geometry(std::uint32_t geometry);
 void release_geometry(std::uint32_t geometry);
 /// Marks a geometry changed.
 void touch_geometry(std::uint32_t geometry);
+/// A new material, held once, as its handle is.
+std::uint32_t make_material();
+/// The live material a handle is for, or none, with fbe_error saying so.
+std::uint32_t material_slot(std::uint64_t handle);
+/// Holds a material once more, or lets it go once, freeing it after its last; none does nothing.
+void retain_material(std::uint32_t material);
+void release_material(std::uint32_t material);
+/// Holds the materials of surfaces copied from others, as Clone and Add copy them.
+void retain_materials(const std::vector<surface_t>& surfaces);
+void release_materials(const std::vector<surface_t>& surfaces);
+
 /// The box around a geometry's vertices, nothing at the origin for none.
 void geometry_bounds(std::uint32_t geometry, vec3_t& min, vec3_t& max);
 

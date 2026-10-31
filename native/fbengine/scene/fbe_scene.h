@@ -52,6 +52,31 @@ extern "C" {
 #define FBE_FOG_EXPONENTIAL         2
 #define FBE_FOG_EXPONENTIAL_SQUARED 3
 
+// How a material is lit: physically, as glTF's metal and roughness have it; not at all, its color
+// as it is; or per vertex, as fixed-function hardware lit, for an old look.
+#define FBE_SHADING_PBR    0
+#define FBE_SHADING_UNLIT  1
+#define FBE_SHADING_VERTEX 2
+
+// How a material blends with what's drawn behind it: opaque unless its alpha, or its mesh's, is
+// below 1, then alpha; opaque; alpha; adding its light; or multiplying what's behind.
+#define FBE_BLEND_AUTO     0
+#define FBE_BLEND_OPAQUE   1
+#define FBE_BLEND_ALPHA    2
+#define FBE_BLEND_ADD      3
+#define FBE_BLEND_MULTIPLY 4
+
+// How a texture layer combines with the layers under it: multiplying them, adding to them,
+// laid over them by its alpha, or multiplying them twice over, so its middle gray leaves them as
+// they are, as lightmaps over a 2x ambient layer want.
+#define FBE_LAYER_MULTIPLY   0
+#define FBE_LAYER_ADD        1
+#define FBE_LAYER_ALPHA      2
+#define FBE_LAYER_MULTIPLY_2 3
+
+// How many texture layers a material has.
+#define FBE_MATERIAL_LAYERS 8
+
 // std.math's Vec3, Quat, and Mat4 as C has them; the matrix is column-major, its columns the
 // axes, then the origin. C has no `using`, so they're typedefs.
 // NOLINTBEGIN(modernize-use-using)
@@ -397,6 +422,59 @@ FBE_API bool fbe_surface_clear(uint64_t geometry, int32_t surface, bool vertices
 FBE_API bool fbe_mesh_set_geometry(uint64_t mesh, uint64_t geometry);
 // The geometry a mesh draws, 0 for none; its handle is good while the mesh draws it.
 FBE_API uint64_t fbe_mesh_geometry(uint64_t mesh);
+
+// Materials: how surfaces look, shared by every surface and mesh drawing in one, which hold it as
+// geometry is held, by handle and by what draws in it. New, a material is white, opaque, with a
+// shininess of 0, FBE_SHADING_PBR, FBE_BLEND_AUTO, no alpha cutoff, no vertex colors, one-sided,
+// fogged, in order 0, its layers multiplying, each reading UV set 0.
+FBE_API uint64_t fbe_material_create(void);
+FBE_API bool fbe_material_retain(uint64_t material);
+FBE_API bool fbe_material_release(uint64_t material);
+FBE_API bool fbe_material_alive(uint64_t material);
+// A new material with another's settings, held once.
+FBE_API uint64_t fbe_material_clone(uint64_t material);
+// Its color and alpha, linear.
+FBE_API bool fbe_material_set_color(uint64_t material, float r, float g, float b, float a);
+FBE_API bool fbe_material_color(uint64_t material, fbe_color_t* color);
+// How sharp and bright its highlights are, 0 for none to 1; false outside.
+FBE_API bool fbe_material_set_shininess(uint64_t material, float shininess);
+FBE_API float fbe_material_shininess(uint64_t material);
+FBE_API bool fbe_material_set_shading(uint64_t material, int32_t shading);
+FBE_API int32_t fbe_material_shading(uint64_t material);
+FBE_API bool fbe_material_set_blend(uint64_t material, int32_t blend);
+FBE_API int32_t fbe_material_blend(uint64_t material);
+// The alpha below which a pixel isn't drawn at all, as a mask's holes want, 0 for none, to 1.
+FBE_API bool fbe_material_set_alpha_cutoff(uint64_t material, float cutoff);
+FBE_API float fbe_material_alpha_cutoff(uint64_t material);
+// Whether vertices' colors and alphas multiply its own.
+FBE_API bool fbe_material_set_vertex_colors(uint64_t material, bool vertex_colors);
+FBE_API bool fbe_material_vertex_colors(uint64_t material);
+// Whether triangles are drawn from behind too.
+FBE_API bool fbe_material_set_two_sided(uint64_t material, bool two_sided);
+FBE_API bool fbe_material_two_sided(uint64_t material);
+// Whether cameras' fog covers it.
+FBE_API bool fbe_material_set_fogged(uint64_t material, bool fogged);
+FBE_API bool fbe_material_fogged(uint64_t material);
+// When it's drawn: 0 with the scene, by depth; below 0 before the scene, and above 0 after it,
+// lower first, each over what's drawn before it, with no depth test, as skies and overlays want.
+FBE_API bool fbe_material_set_order(uint64_t material, int32_t order);
+FBE_API int32_t fbe_material_order(uint64_t material);
+// A texture layer's FBE_LAYER_ blend and UV set, 0 or 1, for layers 0 to FBE_MATERIAL_LAYERS - 1.
+FBE_API bool fbe_material_set_layer(uint64_t material, int32_t layer, int32_t blend,
+                                    int32_t uv_set);
+FBE_API int32_t fbe_material_layer_blend(uint64_t material, int32_t layer);
+FBE_API int32_t fbe_material_layer_uv_set(uint64_t material, int32_t layer);
+
+// The material a surface draws in, which it holds, 0 for the default one.
+FBE_API bool fbe_surface_set_material(uint64_t geometry, int32_t surface, uint64_t material);
+FBE_API uint64_t fbe_surface_material(uint64_t geometry, int32_t surface);
+// A material a mesh draws all its surfaces in instead of their own, which it holds, 0 for none.
+FBE_API bool fbe_mesh_set_material(uint64_t mesh, uint64_t material);
+FBE_API uint64_t fbe_mesh_material(uint64_t mesh);
+// A mesh's own color and alpha, which multiply its materials', white at first: each mesh's,
+// copies' too, so a copy fades or tints alone.
+FBE_API bool fbe_mesh_set_tint(uint64_t mesh, float r, float g, float b, float a);
+FBE_API bool fbe_mesh_tint(uint64_t mesh, fbe_color_t* tint);
 
 // Copies an entity and everything under it, as the last child of `parent`, or at the top of
 // `world` when `parent` is 0; each copy has its original's name, transform, and settings, and

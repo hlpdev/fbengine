@@ -109,6 +109,22 @@ Select arguments[0]
         Local geometry = Geometry()
         geometry.Free()
         Mesh(geometry)
+    Case "shininess"
+        Material().SetShininess(2)
+    Case "alpha-cutoff"
+        Material().SetAlphaCutoff(-1)
+    Case "layer"
+        Material().SetLayer(8, LayerBlend.ADD)
+    Case "layer-uv-set"
+        Material().SetLayer(0, LayerBlend.ADD, 2)
+    Case "material-freed"
+        Local material = Material()
+        material.Free()
+        material.SetOrder(1)
+    Case "surface-freed-material"
+        Local material = Material()
+        material.Free()
+        Triangle().Surface(0).SetMaterial(material)
     Default
         Panic("no case {arguments[0]}")
 End Select
