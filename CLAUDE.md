@@ -32,9 +32,14 @@ migration.md); its decisions go in FutureBlitz's docs/decisions.md.
 - examples/: programs on the packages, which ctest runs.
 
 ## Current step
-E0, setup (2026-10-31): the hello package; CI (ci.yml) building each target's DLLs (native.yml),
-Linux's on glibc 2.28, and running the package's tests and the examples on fb 1.0.0 on all five
-targets; and publish.yml, run by hand on a v<version> tag (`gh workflow run publish.yml --ref
-v0.1.1 -f registry=staging`), which publishes through trusted publishing and then adds and runs
-the package from the registry on every target. fbengine 0.1.0 (from the user's `fb login`) and
-0.1.1 (trusted publishing) are on staging, not production. Next: headless Vulkan in CI, then E1.
+E0 is done (2026-10-31; FutureBlitz's docs/history.md has what it added): the hello package, CI on
+every target with GPU tests on lavapipe and MoltenVK, and publish.yml's trusted publishing, with
+0.1.0 and 0.1.1 on staging, not production. Next: E1, app and input (SDL3, windows, input, frame
+timing, `Flip` stepping `Scheduler.Main`).
+
+## CI notes
+- Windows' GPU job uses mesa-dist-win's MSVC lavapipe, registered in HKLM, since the loader
+  ignores VK_DRIVER_FILES for an administrator and MSYS2's MinGW lavapipe corrupts its heap.
+- Intel Macs have no GPU job: no Metal on their runners, no lavapipe in Homebrew's Mesa.
+- Publishing: `gh workflow run publish.yml --ref v<version> -f registry=staging` on a tag of the
+  version in every package's project.toml.
