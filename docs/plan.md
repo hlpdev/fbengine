@@ -21,7 +21,7 @@ original 1.3.11, and ue5-additions.md what v5 adds; the steps below cover both.
 | **E1** | App and input | E0 | done (2026-10-31) |
 | **E2** | The GPU core | E1 step 1 | golden images of a triangle, a textured quad, and a readback match on lavapipe |
 | **E3** | 2D | E2 | a small arcade game runs, and its frames match their golden images |
-| **E4** | The scene | E1 step 2 | transforms, hierarchy, visibility, collisions, and picks pass their tests, with no GPU |
+| **E4** | The scene | E1 step 2 | done (2026-10-31) |
 | **E5** | Drawing the scene | E2, E4 | a lightmapped, fogged, lit room with cameras rendering to textures matches its golden images |
 | **E6** | The modern renderer | E5 | Khronos's glTF sample models match their references, with shadows and post effects |
 | **E7** | Animation | E4 (E5 to draw it) | skinned and morphing sample models match their reference frames |
@@ -122,6 +122,9 @@ Steps 3 to 7 done (2026-10-31, landed at 3698cf3).
 12. Terrain: a heightmap entity made in code or from an image (E8's loading), its height and
     normal at a point, collisions and picks against its grid, changed in place; its LOD drawing
     is E5's.
+
+Steps 1 to 12 done (2026-10-31, landed at a74f435), with E5 step 1's CPU half: what cameras
+draw, and the projection they draw with.
 
 ### E5: Drawing the scene
 

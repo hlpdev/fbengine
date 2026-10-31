@@ -1,0 +1,342 @@
+// Entities: the tree a World's scene is, each with a parent, children in order, a name, and
+// whether it's shown. Every entity has one wrapper while it lives, so whatever gives one back, a
+// parent, a find, or a pick, gives the object the game has.
+
+Import std.core
+Import std.ffi
+Import "./c/fbe_scene"
+Import "./camera"
+Import "./light"
+Import "./mesh"
+Import "./mirror"
+Import "./plane"
+Import "./sprite"
+Import "./terrain"
+Import "./window"
+Import "./world"
+
+/// What an entity is.
+Public Enum EntityKind
+    /// A Pivot: a place, to move, turn, and parent things to.
+    PIVOT = 0
+    /// A Camera, which draws what it sees.
+    CAMERA = 1
+    /// A Light, which lights what it reaches.
+    LIGHT = 2
+    /// A Mesh, which draws a Geometry.
+    MESH = 3
+    /// A Sprite, which draws a quad facing the camera.
+    SPRITE = 4
+    /// A GroundPlane, an infinite floor.
+    PLANE = 5
+    /// A Mirror, which reflects the scene.
+    MIRROR = 6
+    /// A Terrain, a grid of heights.
+    TERRAIN = 7
+End Enum
+
+// One wrapper for each live entity, by its handle's slot.
+Global entities: Entity?[] = []
+
+// Lets go of what the wrappers keep when the program's Globals go, after the game's, so a game's
+// object that keeps its own entity, attached to it with SetData, isn't a cycle left at the end.
+// The attachments go first, with every handle still set, so such an object's Destroy can still
+// read or free its entity; then the handles.
+Class Wrappers
+    Method Destroy()
+        For kept In entities
+            kept?.LetGo()
+        End For
+        For kept In entities
+            kept?.Forget()
+        End For
+    End Method
+End Class
+
+Global wrappers = Wrappers()
+
+// What a game attached with SetData, of the type it was set as.
+Interface Attached
+End Interface
+
+Class Attachment<T: Class> Implements Attached
+    Field value: T
+
+    New(value: T)
+        Self.value = value
+    End New
+End Class
+
+/// What every entity has: its place in its World's tree, its name, and whether it's shown. Its
+/// Classes are Final, so a game keeps its own object on an entity with SetData.
+Public Class Entity Implements Printable
+    Field handle: UInt64
+    Field attached: Attached? = Null
+
+    // Made by a Class extending it, for a handle C made, which it keeps as the handle's wrapper.
+    Package New(handle: UInt64)
+        If handle == 0 Then Panic(LastError())
+        Self.handle = handle
+        Local slot = Slot(handle)
+        While entities.Count <= slot
+            entities.Add(Null)
+        End While
+        entities[slot] = Self
+    End New
+
+    /// Frees the entity and every entity under it. Using them after panics.
+    @MainThread @PanicsAtCaller
+    Public Method Free()
+        If !fbe_entity_free(Live("Free")) Then Failed("Free")
+        DropFreed()
+    End Method
+
+    /// Whether the entity was freed, itself or with its parent or World.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// What the entity is.
+    @MainThread @PanicsAtCaller
+    Public Method Kind(): EntityKind => fbe_entity_kind(Live("Kind")) As EntityKind
+
+    /// The World the entity is in.
+    @MainThread @PanicsAtCaller
+    Public Method World(): World => WorldOf(fbe_entity_world(Live("World")))
+
+    /// Names the entity, for Find; files' nodes come with their names.
+    @MainThread @PanicsAtCaller
+    Public Method SetName(name: String)
+        If !fbe_entity_set_name(Live("SetName"), name) Then Failed("SetName")
+    End Method
+
+    /// The entity's name, "" until it's named.
+    @MainThread @PanicsAtCaller
+    Public Method Name(): String
+        Local entity = Live("Name")
+        Unsafe
+            Return fbe_entity_name(entity).ToString()
+        End Unsafe
+    End Method
+
+    /// Makes the entity the last child of `parent`, or puts it at the top of its World when
+    /// `parent` is Null; a parent in another World takes it and what's under it there. With
+    /// `keepWorld`, it stays where it is and its transform changes to the parent's space; without,
+    /// its transform stays and it moves with the parent. Its own parent again changes nothing. A
+    /// parent that's the entity or under it panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetParent(parent: Entity?, keepWorld: Bool = True)
+        Local entity = Live("SetParent")
+        Local to: UInt64 = parent != Null ? parent.Live("SetParent") : 0
+        If !fbe_entity_set_parent(entity, to, keepWorld) Then Failed("SetParent")
+    End Method
+
+    /// The entity's parent, Null at the top of its World.
+    @MainThread @PanicsAtCaller
+    Public Method Parent(): Entity? => EntityOf(fbe_entity_parent(Live("Parent")))
+
+    /// How many children the entity has, not counting theirs.
+    @MainThread @PanicsAtCaller
+    Public Method ChildCount(): Int => fbe_entity_child_count(Live("ChildCount"))
+
+    /// The entity's child at `index`, from 0, in the order they became its children. An index
+    /// outside 0 to ChildCount() - 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method Child(index: Int): Entity
+        Local child = fbe_entity_child(Live("Child"), index)
+        If child == 0
+            Local count = ChildCount()
+            Panic(
+                "Child({index}) on a {KindName()} with {count} {count == 1 ? "child" : "children"}")
+        End If
+        Return Present(EntityOf(child), Self, "Child")
+    End Method
+
+    /// The entity's children, in order.
+    @MainThread @PanicsAtCaller
+    Public Method Children(): Entity[]
+        Local entity = Live("Children")
+        Return Handles(Function(out: Ptr<UInt64>, capacity: Int32): Int32
+            Return fbe_entity_children(entity, out, capacity)
+        End Function)
+    End Method
+
+    /// The first entity under this one with the name, depth first, each parent before its
+    /// children, or Null; the entity itself isn't looked at.
+    @MainThread @PanicsAtCaller
+    Public Method Find(name: String): Entity? => EntityOf(fbe_entity_find(Live("Find"), name))
+
+    /// Hides the entity and what's under it: they aren't drawn, collided with, or picked, and a
+    /// hidden camera or light does nothing.
+    @MainThread @PanicsAtCaller
+    Public Method Hide()
+        If !fbe_entity_set_hidden(Live("Hide"), True) Then Failed("Hide")
+    End Method
+
+    /// Shows the entity again, which shows what's under it unless something above is hidden.
+    @MainThread @PanicsAtCaller
+    Public Method Show()
+        If !fbe_entity_set_hidden(Live("Show"), False) Then Failed("Show")
+    End Method
+
+    /// Whether the entity itself was hidden.
+    @MainThread @PanicsAtCaller
+    Public Method Hidden(): Bool => fbe_entity_hidden(Live("Hidden"))
+
+    /// Whether the entity and every entity above it are shown, so it's drawn, collides, and picks.
+    @MainThread @PanicsAtCaller
+    Public Method Showing(): Bool => fbe_entity_showing(Live("Showing"))
+
+    /// A copy of the entity and everything under it, the last child of `parent`, or at the top of
+    /// the current World when `parent` is Null. Each copy has its original's name, transform, and
+    /// settings, and shares its geometry, but not what SetData attached.
+    @MainThread @PanicsAtCaller
+    Public Method Copy(parent: Entity? = Null): Entity
+        Local entity = Live("Copy")
+        Local world: UInt64 = 0
+        Local under: UInt64 = 0
+        If parent != Null
+            under = parent.Live("Copy")
+        Else
+            world = CurrentWorld().Live("Copy")
+        End If
+        Return Present(EntityOf(fbe_entity_copy(entity, world, under)), Self, "Copy")
+    End Method
+
+    /// Keeps the game's own object on the entity, as Data<T>() gives it back, or lets it go with
+    /// Null.
+    @MainThread @PanicsAtCaller
+    Public Method SetData<T: Class>(data: T?)
+        Live("SetData")
+        attached = data != Null ? Attachment<T>(data) : Null
+    End Method
+
+    /// The object SetData kept, if it was set as a T, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Data<T: Class>(): T?
+        Live("Data")
+        Return (attached As? Attachment<T>)?.value
+    End Method
+
+    /// The entity's name and kind, as `Pivot "door"`, or `freed Pivot`.
+    Public Method ToString(): String
+        If handle == 0 Then Return "freed {KindName()}"
+        Return "{KindName()} \"{Name()}\""
+    End Method
+
+    // What the entity is, as panics name it.
+    Package Method KindName(): String => "Entity"
+
+    // The handle, or a panic naming the call for an entity that was freed.
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call} on a {KindName()} that was freed")
+        Return handle
+    End Method
+
+    // A panic naming the call and the entity's kind, with what C said went wrong.
+    @PanicsAtCaller
+    Package Method Failed(call: String)
+        Panic("{call} on a {KindName()}: {LastError()}")
+    End Method
+
+    // Lets go of what was attached, keeping the handle.
+    Package Method LetGo()
+        attached = Null
+    End Method
+
+    // Lets go of the handle and what was attached, once C has freed it.
+    Package Method Forget()
+        handle = 0
+        attached = Null
+    End Method
+End Class
+
+/// A place in the scene, which isn't drawn: to move, turn, and parent things to.
+Public Final Class Pivot Extends Entity
+    /// A new Pivot, the last child of `parent`, or at the top of the current World when `parent`
+    /// is Null.
+    @MainThread @PanicsAtCaller
+    Public New(parent: Entity? = Null)
+        Super.New(Create(parent, FBE_ENTITY_PIVOT))
+    End New
+
+    Package New(handle: UInt64)
+        Super.New(handle)
+    End New
+
+    Override Package Method KindName(): String => "Pivot"
+End Class
+
+/// A new entity's handle, of `kind`, under `parent` or at the top of the current World.
+@PanicsAtCaller
+Package Function Create(parent: Entity?, kind: Int32): UInt64
+    Local made: UInt64 = 0
+    If parent != Null
+        made = fbe_entity_create(0, parent.Live("New"), kind)
+    Else
+        made = fbe_entity_create(CurrentWorld().Live("New"), 0, kind)
+    End If
+    If made == 0 Then Panic("New: {LastError()}")
+    Return made
+End Function
+
+/// The entity a handle is for, from its wrapper, which is made if there isn't one yet, as for a
+/// copy's; Null for 0.
+Package Function EntityOf(handle: UInt64): Entity?
+    If handle == 0 Then Return Null
+    Local slot = Slot(handle)
+    If slot < entities.Count
+        Local kept = entities[slot]
+        If kept != Null && kept.handle == handle Then Return kept
+    End If
+    Local kind = fbe_entity_kind(handle)
+    If kind < 0 Then Panic("an entity's handle went stale: {LastError()}")
+    Select kind
+        Case FBE_ENTITY_PIVOT
+            Return Pivot(handle)
+        Case FBE_ENTITY_CAMERA
+            Return Camera(handle)
+        Case FBE_ENTITY_LIGHT
+            Return Light(handle)
+        Case FBE_ENTITY_MESH
+            Return Mesh(handle)
+        Case FBE_ENTITY_SPRITE
+            Return Sprite(handle)
+        Case FBE_ENTITY_PLANE
+            Return GroundPlane(handle)
+        Case FBE_ENTITY_MIRROR
+            Return Mirror(handle)
+        Case FBE_ENTITY_TERRAIN
+            Return Terrain(handle)
+    End Select
+    Panic("an entity of kind {kind} has no wrapper")
+End Function
+
+/// Lets go of the wrappers of every entity C has freed.
+Package Function DropFreed()
+    Local taken = Buffer<UInt64>(64)
+    While True
+        Local count = 0
+        Unsafe
+            count = fbe_entity_freed(taken.Pointer(), 64)
+        End Unsafe
+        For i = 0 Until count
+            Local handle = taken[i]
+            Local slot = Slot(handle)
+            If slot < entities.Count
+                Local kept = entities[slot]
+                If kept != Null && kept.handle == handle
+                    kept.Forget()
+                    entities[slot] = Null
+                End If
+            End If
+        End For
+        If count < 64 Then Return
+    End While
+End Function
+
+/// The entity a call on `on` gave, which panics naming the call when it gave none.
+@PanicsAtCaller
+Package Function Present(entity: Entity?, on: Entity, call: String): Entity
+    If entity == Null Then on.Failed(call)
+    Return entity ?? on
+End Function

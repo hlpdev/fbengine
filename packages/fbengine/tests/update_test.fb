@@ -1,0 +1,75 @@
+// The frame's scene calls: UpdateWorld, CaptureWorld and the tween, and FixedStep, with no GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+@Test
+Function UpdateWorldCollidesTheCurrentWorld()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(1, 2, CollisionResponse.STOP)
+    Local floor = Mesh(Geometry.Plane())
+    floor.SetScale(Vec3(10, 1, 10))
+    floor.SetCollisionGroup(2)
+    Local mover = Pivot()
+    mover.SetCollisionGroup(1)
+    mover.SetCollisionRadius(0.5)
+    mover.SetPosition(Vec3(0, 2, 0))
+    UpdateWorld()
+    mover.Translate(Vec3(0, -5, 0))
+    UpdateWorld(1.0 / 60)
+    Expect(IsClose(mover.Position().y, 0.501, 0.002) && mover.Collisions().Count == 1)
+End Function
+
+@Test
+Function DrawingTweensFromTheCapture()
+    Local world = Fresh()
+    Defer world.Free()
+    Local door = Pivot()
+    Local handle = Pivot(door)
+    handle.SetPosition(Vec3(1, 0, 0))
+    CaptureWorld()
+    door.SetPosition(Vec3(0, 4, 0))
+    door.Turn(0, Deg(90), 0)
+    Local halfway = handle.TweenedMatrix(0.5)
+    // Up 2, and a quarter of a quarter turn round: 45 degrees.
+    Local at = halfway.TransformPoint(Vec3.Zero())
+    Expect(IsClose(at, Vec3(Cos(Deg(45)), 2, -Sin(Deg(45))), 0.0001))
+    Expect(IsClose(handle.TweenedMatrix(1), handle.Matrix(Space.WORLD), 0.0001))
+    Expect(IsClose(handle.TweenedMatrix(0).TransformPoint(Vec3.Zero()), Vec3(1, 0, 0), 0.0001))
+    // Made since, it's where it is.
+    Local late = Pivot()
+    late.SetPosition(Vec3(3, 0, 0))
+    Expect(IsClose(late.TweenedMatrix(0).TransformPoint(Vec3.Zero()), Vec3(3, 0, 0), 0.0001))
+End Function
+
+@Test
+Function AFixedStepRunsWhatTheFramesHold()
+    Local logic = FixedStep(60)
+    Expect(logic.Rate() == 60 && IsClose(logic.Seconds(), 1.0 / 60, 1e-12))
+    // A 30 Hz frame is two steps; a 120 Hz one is half of one, banked.
+    Expect(logic.Steps(1.0 / 30) == 2)
+    Expect(logic.Steps(1.0 / 120) == 0 && IsClose(logic.Tween(), 0.5, 0.0001))
+    Expect(logic.Steps(1.0 / 120) == 1 && logic.Tween() < 0.0001)
+    // A second's stall runs at most 5, and drops the rest.
+    Expect(logic.Steps(1) == 5 && logic.Tween() < 1)
+    Expect(logic.Steps(0) == 0)
+    Local slow = FixedStep(10, 2)
+    Expect(slow.Steps(0.25) == 2 && IsClose(slow.Tween(), 0.5, 0.0001))
+End Function
+
+@Test
+Function AFixedStepTakesAFrameTooLongToCount()
+    Local logic = FixedStep(60)
+    // So long that its steps overflow: the most it runs, the rest dropped.
+    Expect(logic.Steps(1e308) == 5 && logic.Tween() == 0)
+    Expect(logic.Steps(1.0 / 60) == 1)
+End Function
