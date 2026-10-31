@@ -4,6 +4,7 @@
 // frames in flight, and the bindless set every pipeline reads textures through.
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string_view>
@@ -26,6 +27,16 @@ constexpr Flags flag(Bit bit) {
     return static_cast<Flags>(bit);
 }
 
+/// A buffer on the GPU, its memory, size, what it's read as, and its address, which shaders read
+/// it through (gpu/buffer.hpp).
+struct buffer_t {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VmaAllocation memory = VK_NULL_HANDLE;
+    VkDeviceSize size = 0;
+    VkBufferUsageFlags usage = 0;
+    VkDeviceAddress address = 0;
+};
+
 /// One frame in flight: its commands, uploads first, what says the GPU's done with them, and what
 /// waits for that to be freed.
 struct frame_t {
@@ -42,6 +53,11 @@ struct frame_t {
     bool begun = false;
     /// What's freed once the GPU is done with the frame, and with every frame before it.
     std::vector<std::function<void()>> garbage;
+    /// The frame's ring: host-visible memory for what's written every frame (gpu/buffer.hpp),
+    /// where the CPU writes it, and how much of it the frame's given out.
+    buffer_t ring;
+    std::byte* ring_data = nullptr;
+    VkDeviceSize ring_used = 0;
 };
 
 /// The device the GPU started on, and what it draws with. Vulkan 1.3's names for dynamic
@@ -85,6 +101,10 @@ void stop();
 /// wasn't freed.
 std::uint32_t allocations_left();
 
+/// Makes a frame a command pool of its own and its two command buffers, uploads and its own; false,
+/// with fbe_error's why, if they can't be, and then it's left as it was.
+bool make_frame_commands(const device_t& gpu, frame_t& frame);
+
 /// Makes a frame's fence, signaled, and its acquire semaphore again, after a submit that failed
 /// left them waiting on nothing; false, with fbe_error's why, if they can't be.
 bool remake_frame(const device_t& gpu, frame_t& frame);
@@ -109,6 +129,9 @@ bool start_textures();
 /// frees what it left.
 VkCommandBuffer frame_commands();
 VkCommandBuffer upload_commands();
+
+/// The frame being recorded, begun if it isn't.
+frame_t& recording_frame();
 
 /// Has `free` run once the GPU is done with the frame being recorded, and every frame before it.
 void after_frame(std::function<void()> free);
@@ -169,6 +192,8 @@ enum class fault_t : std::uint8_t {
     DEVICE,
     /// Making the commands for work run now.
     WORK_NOW,
+    /// Making a sampler.
+    SAMPLER,
 };
 
 /// Makes the next `fault` happen.

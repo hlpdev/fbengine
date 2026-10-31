@@ -59,8 +59,10 @@ FBE_API int32_t fbe_texture_levels(uint64_t texture);
 
 // Replaces the pixels `width` by `height` at `x`, `y` from its top left with `pixels`, rows
 // `pitch` bytes apart, in its format's bytes (4 a pixel for RGBA8, 1 for R8, 8 for RGBA16F), and
-// makes its mipmaps again; the GPU has them before anything the frame draws. False if the region
-// isn't in it, or it's a multisampled target, which is only drawn into.
+// makes its mipmaps again. Writes reach the GPU before the frame's commands, so every draw of the
+// frame sees them, those recorded before the write too, and fbe_texture_clear's and _copy's come
+// after every write. False if the region isn't in it, or it's a multisampled target, which is
+// only drawn into.
 FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t width,
                                int32_t height, const uint8_t* pixels, int32_t pitch);
 

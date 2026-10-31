@@ -1,0 +1,27 @@
+// Texture's panics, each a mistake a game can make, which fb test can't catch: ctest runs this with
+// a case's name and checks it panics with the case's message.
+
+Import std.core
+Import std.os
+Import fbengine
+
+Function Run(name: String) Throws GraphicsError
+    Select name
+        // A region whose bytes are more than an Int32 holds: 32768 by 16385 RGBA16F pixels are
+        // 4,295,229,440 bytes, which wrapped to 262144 in Int32.
+        Case "wrapped-size"
+            Local texture = Try Texture(4, 4, TextureFormat.RGBA16F, False)
+            Local bytes: UInt8[] = []
+            For i = 1 To 262144
+                bytes.Add(0)
+            End For
+            texture.WritePixels(0, 0, 32768, 16385, bytes)
+        Default
+            Panic("no such case as {name}")
+    End Select
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Count != 1 Then Panic("give the case to run")
+Window.SetHeadless(True)
+Try Run(arguments[0])

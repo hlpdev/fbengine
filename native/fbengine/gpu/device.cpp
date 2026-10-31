@@ -222,7 +222,8 @@ std::uint32_t queue_family(VkPhysicalDevice physical, VkSurfaceKHR surface) {
 
 /// What `physical` lacks of what fbengine needs, "" for nothing: Vulkan 1.2, swapchains, dynamic
 /// rendering, synchronization2, descriptor indexing for bindless textures, timeline semaphores,
-/// and a queue that draws (and presents to `surface`, if there is one).
+/// buffer device addresses, which shaders read buffers through, and a queue that draws (and
+/// presents to `surface`, if there is one).
 std::string lacks_of(VkPhysicalDevice physical, const VkPhysicalDeviceProperties& properties,
                      VkSurfaceKHR surface) {
     if (properties.apiVersion < VK_API_VERSION_1_2) {
@@ -273,6 +274,9 @@ std::string lacks_of(VkPhysicalDevice physical, const VkPhysicalDeviceProperties
     }
     if (vulkan12.timelineSemaphore != VK_TRUE) {
         missing.emplace_back("timeline semaphores");
+    }
+    if (vulkan12.bufferDeviceAddress != VK_TRUE) {
+        missing.emplace_back("buffer device addresses");
     }
     if (queue_family(physical, VK_NULL_HANDLE) == UINT32_MAX) {
         missing.emplace_back("a queue that draws");
@@ -409,6 +413,7 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         .descriptorBindingVariableDescriptorCount = VK_TRUE,
         .runtimeDescriptorArray = VK_TRUE,
         .timelineSemaphore = VK_TRUE,
+        .bufferDeviceAddress = VK_TRUE,
     };
     // Anisotropic filtering and wireframes, where the device has them.
     const VkPhysicalDeviceFeatures2 features{
@@ -451,6 +456,7 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     current.queue_submit = core13 ? vkQueueSubmit2 : vkQueueSubmit2KHR;
 
     VmaAllocatorCreateInfo allocator_info{
+        .flags = flag<VmaAllocatorCreateFlags>(VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT),
         .physicalDevice = current.physical,
         .device = current.device,
         .instance = vulkan,
@@ -465,42 +471,13 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     }
 
     for (fbe::gpu::frame_t& frame : current.frames) {
-        const VkCommandPoolCreateInfo pool_info{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-            .flags = flag<VkCommandPoolCreateFlags>(VK_COMMAND_POOL_CREATE_TRANSIENT_BIT),
-            .queueFamilyIndex = current.family,
-        };
-        const VkFenceCreateInfo fence_info{
-            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-            .flags = flag<VkFenceCreateFlags>(VK_FENCE_CREATE_SIGNALED_BIT),
-        };
-        const VkSemaphoreCreateInfo semaphore_info{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        };
-        VkResult result =
-            fbe::gpu::faulted(fbe::gpu::fault_t::DEVICE)
-                ? VK_ERROR_INITIALIZATION_FAILED
-                : vkCreateCommandPool(current.device, &pool_info, nullptr, &frame.pool);
-        if (result == VK_SUCCESS) {
-            const VkCommandBufferAllocateInfo commands_info{
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                .commandPool = frame.pool,
-                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                .commandBufferCount = 2,
-            };
-            std::array<VkCommandBuffer, 2> buffers{};
-            result = vkAllocateCommandBuffers(current.device, &commands_info, buffers.data());
-            frame.uploads = buffers[0];
-            frame.commands = buffers[1];
+        if (fbe::gpu::faulted(fbe::gpu::fault_t::DEVICE)) {
+            return fbe::gpu::fail_vulkan("couldn't make the GPU's frames",
+                                         VK_ERROR_INITIALIZATION_FAILED);
         }
-        if (result == VK_SUCCESS) {
-            result = vkCreateFence(current.device, &fence_info, nullptr, &frame.done);
-        }
-        if (result == VK_SUCCESS) {
-            result = vkCreateSemaphore(current.device, &semaphore_info, nullptr, &frame.acquired);
-        }
-        if (result != VK_SUCCESS) {
-            return fbe::gpu::fail_vulkan("couldn't make the GPU's frames", result);
+        if (!fbe::gpu::make_frame_commands(current, frame) ||
+            !fbe::gpu::remake_frame(current, frame)) {
+            return false;
         }
     }
     return true;
@@ -658,8 +635,9 @@ bool remake_frame(const device_t& gpu, frame_t& frame) {
     if (result == VK_SUCCESS) {
         result = vkCreateSemaphore(gpu.device, &semaphore_info, nullptr, &frame.acquired);
     }
-    return result == VK_SUCCESS ? true
-                                : fail_vulkan("couldn't make a frame's fences again", result);
+    return result == VK_SUCCESS
+               ? true
+               : fail_vulkan("couldn't make a frame's fence and semaphore", result);
 }
 
 void inject(fault_t fault) {

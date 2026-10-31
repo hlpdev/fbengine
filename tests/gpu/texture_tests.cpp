@@ -5,6 +5,7 @@
 #include "golden/golden.hpp"
 #include "gpu_testing.hpp"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -382,6 +383,60 @@ TEST_CASE("the LOD bias and anisotropy are every texture's, within their range",
     CHECK(!fbe_gpu_set_anisotropy(0.5F));
     CHECK(fbe_gpu_lod_bias() == 0.8F);
     fbe_frame_flip(false);
+    stop_gpu();
+}
+
+// A submit that fails for want of memory keeps the frame's uploads, and their staging, for the
+// next submit, which runs them first: the pixels written before it arrive, and the textures are
+// as their uses expect.
+TEST_CASE("a failed submit's texture uploads run in the next", "[gpu]") {
+    start();
+    const std::uint64_t texture = make(2, 2, FBE_TEXTURE_RGBA8_LINEAR, false);
+    const std::vector<std::uint8_t> pixels(16, 200);
+    require(fbe_texture_write(texture, 0, 0, 2, 2, pixels.data(), 8));
+    fbe::gpu::inject(fbe::gpu::fault_t::SUBMIT);
+    CHECK(!fbe::gpu::finish_frame());
+    CHECK(fbe::texture::read(texture, 0) == pixels);
+    // At a Flip, with nothing recorded after, the carried uploads still run.
+    const std::vector<std::uint8_t> others(16, 77);
+    require(fbe_texture_write(texture, 0, 0, 2, 2, others.data(), 8));
+    fbe::gpu::inject(fbe::gpu::fault_t::SUBMIT);
+    fbe_frame_flip(false);
+    fbe_frame_flip(false);
+    CHECK(fbe::texture::read(texture, 0) == others);
+    // Twice running, both are carried, in order.
+    require(fbe_texture_write(texture, 0, 0, 2, 2, pixels.data(), 8));
+    fbe::gpu::inject(fbe::gpu::fault_t::SUBMIT);
+    CHECK(!fbe::gpu::finish_frame());
+    require(fbe_texture_write(texture, 0, 0, 1, 1, others.data(), 4));
+    fbe::gpu::inject(fbe::gpu::fault_t::SUBMIT);
+    CHECK(!fbe::gpu::finish_frame());
+    std::vector<std::uint8_t> both = pixels;
+    std::copy_n(others.begin(), 4, both.begin());
+    CHECK(fbe::texture::read(texture, 0) == both);
+    stop_gpu();
+}
+
+// Samplers are all made before the old ones go, so one that can't be made leaves the set as it
+// was, and the setting too.
+TEST_CASE("samplers that can't be made leave the old ones and their settings", "[gpu]") {
+    start();
+    const std::vector<std::uint8_t> pixels = card();
+    const std::uint64_t texture = make(8, 8, FBE_TEXTURE_RGBA8, true);
+    require(fbe_texture_write(texture, 0, 0, 8, 8, pixels.data(), 32));
+    const auto drawn = [texture] {
+        return draw({ .width = 32, .height = 32 },
+                    { quad_of(texture, { -1.0F, -1.0F, 1.0F, 1.0F }, { 0.0F, 0.0F, 1.0F, 1.0F }) });
+    };
+    const fbe::golden::frame_t before = drawn();
+    fbe::gpu::inject(fbe::gpu::fault_t::SAMPLER);
+    CHECK(!fbe_gpu_set_lod_bias(0.5F));
+    CHECK(std::string(fbe_error()).starts_with("couldn't make the GPU's samplers"));
+    CHECK(fbe_gpu_lod_bias() == 0.0F);
+    fbe::gpu::inject(fbe::gpu::fault_t::SAMPLER);
+    CHECK(!fbe_gpu_set_anisotropy(8.0F));
+    CHECK(fbe_gpu_anisotropy() == 1.0F);
+    CHECK(drawn().rgba == before.rgba);
     stop_gpu();
 }
 

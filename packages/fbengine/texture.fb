@@ -128,7 +128,8 @@ Public Final Class Texture
     Public Method Levels(): Int32 => Checked(fbe_texture_levels(Live("Levels")))
 
     /// Writes `image`'s pixels into it with their top left at `x`, `y`, and makes its mipmaps
-    /// again; what the frame draws after has them. It panics unless the texture is RGBA8 or
+    /// again; every draw of the frame has them, the ones recorded before the write too, as writes
+    /// reach the GPU before the frame's draws. It panics unless the texture is RGBA8 or
     /// RGBA8_LINEAR and the image is inside it.
     @MainThread @PanicsAtCaller
     Public Method Write(x: Int32, y: Int32, image: Image)
@@ -147,21 +148,22 @@ Public Final Class Texture
 
     /// Writes `width` by `height` pixels at `x`, `y` from `bytes`, rows packed top first, in its
     /// format's bytes: 4 a pixel for RGBA8, 1 for R8, and 8 for RGBA16F, half floats, little end
-    /// first; and makes its mipmaps again. It panics unless there are that many bytes and the
-    /// region is inside it.
+    /// first; and makes its mipmaps again, which every draw of the frame has, as Write's. It panics
+    /// unless there are that many bytes and the region is inside it.
     @MainThread @PanicsAtCaller
     Public Method WritePixels(x: Int32, y: Int32, width: Int32, height: Int32, bytes: UInt8[])
         Local texture = Live("WritePixels")
-        Local size = PixelSize(Format())
-        If width < 1 || height < 1 || bytes.Count != width * height * size
-            Panic("{width} by {height} pixels of {Format()} are {width * height * size} bytes, " +
-                  "not {bytes.Count}")
+        // In Int64, as a region's bytes can be more than an Int32 holds.
+        Local size = PixelSize(Format()) As Int64
+        Local needed = (width As Int64) * (height As Int64) * size
+        If width < 1 || height < 1 || bytes.Count != needed
+            Panic("{width} by {height} pixels of {Format()} are {needed} bytes, not {bytes.Count}")
         End If
         Local buffer = Buffer<UInt8>.From(bytes)
         Local written = False
         Unsafe
             written = fbe_texture_write(texture, x, y, width, height, buffer.Pointer(),
-                                        width * size)
+                                        ((width As Int64) * size) As Int32)
         End Unsafe
         If !written Then Panic(LastError())
     End Method

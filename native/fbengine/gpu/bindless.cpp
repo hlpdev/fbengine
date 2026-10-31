@@ -33,8 +33,9 @@ std::array<VkSampler, fbe::gpu::sampler_slots> samplers{};
 float lod_bias = 0.0F;
 float anisotropy = 1.0F;
 
-void destroy_samplers(const fbe::gpu::device_t& gpu) {
-    for (VkSampler& sampler : samplers) {
+void destroy_samplers(const fbe::gpu::device_t& gpu,
+                      std::array<VkSampler, fbe::gpu::sampler_slots>& made) {
+    for (VkSampler& sampler : made) {
         vkDestroySampler(gpu.device, sampler, nullptr);
         sampler = VK_NULL_HANDLE;
     }
@@ -51,10 +52,11 @@ VkSamplerAddressMode address_mode(std::int32_t wrap) {
     }
 }
 
-/// Makes a sampler for each filter and wrap with the LOD bias and anisotropy, and points the set
-/// at them; false, with fbe_error's why, if one can't be made.
+/// Makes a sampler for each filter and wrap with the LOD bias and anisotropy, and only once
+/// they're all made points the set at them and destroys the old ones; false, with fbe_error's
+/// why, if one can't be made, leaving the old ones as they were.
 bool make_samplers(const fbe::gpu::device_t& gpu) {
-    destroy_samplers(gpu);
+    std::array<VkSampler, fbe::gpu::sampler_slots> made{};
     const float bias = std::clamp(lod_bias, -gpu.properties.limits.maxSamplerLodBias,
                                   gpu.properties.limits.maxSamplerLodBias);
     const float most = std::min(anisotropy, gpu.max_anisotropy);
@@ -79,8 +81,11 @@ bool make_samplers(const fbe::gpu::device_t& gpu) {
                 };
                 const std::uint32_t index = fbe::gpu::sampler_index(filter, u, v);
                 const VkResult result =
-                    vkCreateSampler(gpu.device, &info, nullptr, &samplers.at(index));
+                    fbe::gpu::faulted(fbe::gpu::fault_t::SAMPLER)
+                        ? VK_ERROR_OUT_OF_HOST_MEMORY
+                        : vkCreateSampler(gpu.device, &info, nullptr, &made.at(index));
                 if (result != VK_SUCCESS) {
+                    destroy_samplers(gpu, made);
                     return fbe::gpu::fail_vulkan("couldn't make the GPU's samplers", result);
                 }
             }
@@ -88,8 +93,7 @@ bool make_samplers(const fbe::gpu::device_t& gpu) {
     }
     // The slots past the last are the first's, so every one the set has is written.
     for (std::uint32_t index = 0; index < fbe::gpu::sampler_slots; ++index) {
-        infos.at(index).sampler =
-            samplers.at(index) != VK_NULL_HANDLE ? samplers.at(index) : samplers.front();
+        infos.at(index).sampler = made.at(index) != VK_NULL_HANDLE ? made.at(index) : made.front();
     }
     const VkWriteDescriptorSet write{
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -100,6 +104,8 @@ bool make_samplers(const fbe::gpu::device_t& gpu) {
         .pImageInfo = infos.data(),
     };
     vkUpdateDescriptorSets(gpu.device, 1, &write, 0, nullptr);
+    destroy_samplers(gpu, samplers);
+    samplers = made;
     return true;
 }
 
@@ -222,7 +228,7 @@ bool start_bindless() {
 
 void stop_bindless() {
     const device_t& gpu = *device();
-    destroy_samplers(gpu);
+    destroy_samplers(gpu, samplers);
     vkDestroyDescriptorPool(gpu.device, pool, nullptr);
     vkDestroyDescriptorSetLayout(gpu.device, layout, nullptr);
     pool = VK_NULL_HANDLE;
@@ -272,8 +278,14 @@ FBE_API bool fbe_gpu_set_lod_bias(float bias) {
     if (!std::isfinite(bias) || std::abs(bias) > furthest_bias) {
         return fbe::fail(std::format("a LOD bias is -{0} to {0}, not {1}", furthest_bias, bias));
     }
+    // A bias the samplers can't be made with leaves the one they have.
+    const float before = lod_bias;
     lod_bias = bias;
-    return remake_samplers();
+    if (!remake_samplers()) {
+        lod_bias = before;
+        return false;
+    }
+    return true;
 }
 
 FBE_API float fbe_gpu_lod_bias(void) {
@@ -285,8 +297,13 @@ FBE_API bool fbe_gpu_set_anisotropy(float most) {
         return fbe::fail(
             std::format("anisotropy is 1, for none, to {}, not {}", furthest_bias, most));
     }
+    const float before = anisotropy;
     anisotropy = most;
-    return remake_samplers();
+    if (!remake_samplers()) {
+        anisotropy = before;
+        return false;
+    }
+    return true;
 }
 
 FBE_API float fbe_gpu_anisotropy(void) {

@@ -312,3 +312,11 @@ TEST_CASE("a program's pipeline cache is in the user's cache folder by default",
     fbe_gpu_set_pipeline_cache("");
     CHECK(std::string(fbe_gpu_pipeline_cache()).empty());
 }
+
+// Hidden, so only tests/golden/failed_update.cmake runs it, updating: it fails after its golden
+// image's check, so that image has to stay unwritten.
+TEST_CASE("a golden image test that fails after its check", "[.][golden-failed-update]") {
+    start();
+    fbe::golden::check("failed_update", draw_triangle({ .width = 16, .height = 16 }));
+    FAIL("this test fails after its check, so its golden image isn't written");
+}

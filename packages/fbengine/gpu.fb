@@ -35,7 +35,7 @@ Public Struct GpuDevice Implements Printable
 End Struct
 
 /// The GPU fbengine draws with, Vulkan 1.2 on a device that has dynamic rendering,
-/// synchronization2, and descriptor indexing. It starts the first time something needs it:
+/// synchronization2, descriptor indexing, and buffer device addresses. It starts the first time something needs it:
 /// Graphics, for a window that's shown; for a headless one, the first thing that draws, or Start.
 Public Class Gpu
     Private New()

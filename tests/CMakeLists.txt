@@ -60,6 +60,7 @@ FetchContent_MakeAvailable(stb)
 # `ctest -L golden` runs the golden image tests, as tools/golden.py does.
 add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
                gpu/pipeline_tests.cpp gpu/texture_tests.cpp gpu/target_tests.cpp
+               gpu/buffer_tests.cpp
                golden/golden.cpp golden/golden_tests.cpp golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)
@@ -74,10 +75,24 @@ fbengine_set_warnings(fbengine_gpu_tests)
 fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      HEADER test_shaders.hpp
                      SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang
-                             gpu/shaders/shape.slang)
+                             gpu/shaders/shape.slang gpu/shaders/points.slang)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+
+# A golden image update takes only a passing test's images: the hidden test that fails after its
+# check, run updating, has to leave its image unwritten.
+add_test(NAME gpu.golden_updates_only_from_passing_tests
+         COMMAND "${CMAKE_COMMAND}" "-DTESTS=$<TARGET_FILE:fbengine_gpu_tests>"
+                 "-DIMAGE=${CMAKE_CURRENT_SOURCE_DIR}/golden/failed_update.png"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/golden/failed_update.cmake")
+set_tests_properties(gpu.golden_updates_only_from_passing_tests PROPERTIES
+                     LABELS "gpu"
+                     ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
+if(fbengine_test_dll_paths)
+  set_property(TEST gpu.golden_updates_only_from_passing_tests PROPERTY ENVIRONMENT_MODIFICATION
+               "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+endif()
 
 # The packages' own tests, run by `fb test`, and the examples, run by `fb run` and checked against
 # what they print, each after the DLLs are built into the packages' native/<target>/ folders.
@@ -111,5 +126,24 @@ if(FBENGINE_FB_TESTS)
       cmake_path(GET package FILENAME name)
       set_property(TEST ${name}.package APPEND PROPERTY ENVIRONMENT ${fbengine_vulkan_environment})
     endif()
+  endforeach()
+endif()
+
+# Texture's panics, each a case of tests/texture/panics run on its own, which has to panic saying
+# what it does, on the tests' Vulkan.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_texture_panics
+      "wrapped-size=32768 by 16385 pixels of RGBA16F are 4295229440 bytes, not 262144")
+  foreach(case IN LISTS fbengine_texture_panics)
+    string(FIND "${case}" "=" split)
+    string(SUBSTRING "${case}" 0 ${split} name)
+    math(EXPR split "${split} + 1")
+    string(SUBSTRING "${case}" ${split} -1 message)
+    add_test(NAME texture.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/texture/panics"
+                     -- ${name})
+    set_tests_properties(texture.panics.${name} PROPERTIES
+                         PASS_REGULAR_EXPRESSION "panic: ${message}"
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
   endforeach()
 endif()
