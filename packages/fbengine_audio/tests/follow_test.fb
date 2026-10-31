@@ -221,6 +221,25 @@ Function TheDopplerEffectIsFromWhatsFollowed() Throws AudioError, SoundError
     Expect(Length(channel) == 4900)
 End Function
 
+// From one end of a Float32's range to the other in a frame is too fast to say: at rest, rather
+// than a velocity that isn't a number, which the Listener's would panic at in Flip.
+@Test
+Function AMoveTooFarForAFloatIsAtRest()
+    Defer PutBack()
+    Local emitter = Emitter()
+    Defer emitter.Free()
+    here = Vec3(-3e38, 0, 0)
+    emitter.Follow(Here)
+    Listener.Follow(Here, Turned)
+    Flips(1)
+    here = Vec3(3e38, 0, 0)
+    Flips(1)
+    Expect(emitter.Position() == Vec3(3e38, 0, 0))
+    Expect(emitter.Velocity() == Vec3(0, 0, 0))
+    Expect(Listener.Position() == Vec3(3e38, 0, 0))
+    Expect(Listener.Velocity() == Vec3(0, 0, 0))
+End Function
+
 @Test
 Function TheListenerFollowsWhereAndHowItsTurned()
     Defer PutBack()
