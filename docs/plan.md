@@ -153,6 +153,8 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 
 ### E8: Assets
 
+0. The job system, which scene's collisions and assets' loading both run on: a worker per core
+   less one, jobs and their dependencies, and finished work handed to the main thread at Flip.
 1. The VFS (`res://`), folders and pak files, mounted over each other.
 2. Loading: glTF (meshes, materials, scenes, skins, clips), KTX2, PNG, JPEG, OGG, WAV, FLAC, on
    worker threads; `Assets.Load<T>` and `Await Assets.LoadAsync<T>` with progress.
@@ -220,27 +222,36 @@ the coordinator (the session that starts them) reviews each step and lands it on
 alone edits this file, docs/architecture.md, docs/questions.md, CLAUDE.md, and FutureBlitz's
 docs.
 
-**Before the lanes**, one step by the coordinator splits what every lane would otherwise share:
+**Before the lanes** (done, 2026-10-31): the C API split by area (`native/fbengine/<area>/`,
+`fbe_<area>.h`, one binding file each, by `tools/bindgen.sh`); `tools/verify.py`, every lane's
+and every landing's check; every package's tests and exports checked by ctest and CI without
+naming it; `publish.yml` publishing every package; and `Frame.OnFlip`, the hook packages use to
+run each frame.
 
-- The C API header by area (`fbe_core.h`, `fbe_window.h`, `fbe_frame.h`, `fbe_input.h`,
-  `fbe_gpu.h`, `fbe_scene.h`, ...) under one `fbengine.h`, and one binding file per area in
-  `c/`, made by `tools/bindgen.sh`.
-- `native/fbengine/<area>/` folders, with CMake taking each folder's sources.
-- `tools/verify.py`: the build, ctest, the package tests, the export check, clang-format,
-  clang-tidy on what changed, and `fb fmt --check`; every lane's and every landing's check.
+**The lanes**: six at once, each going on to its next milestone when its last one lands. A lane
+that waits on another lane's step builds what it can without it, and the rest once it lands.
 
-**The first wave**, five lanes:
+| Lane | Builds, in order | Waits on | Owns |
+|---|---|---|---|
+| input | E1 steps 3 to 7, then E11 | E11: gpu's E3 step 3 (text) | `native/fbengine/input/`, the input modules, Simulate's input |
+| gpu | E2, then E3, then E6 | E6: scene's E5 | `native/fbengine/gpu/`, `2d/`, `shaders/`; the window's Vulkan surface in `window/`; Flip's present in `frame/` |
+| scene | E4, then E5, then E7 | E5: gpu's E2; E4 step 8: assets' job system | `native/fbengine/scene/` (then `render/`, `anim/`), the scene modules |
+| assets | E8 step 0, the job system; E8 steps 1 to 3; then 4 and 5 | step 2's textures: gpu's E2 step 3; meshes: scene's E4 step 5; steps 4 and 5: FutureBlitz's build step (docs/questions.md) | `native/fbengine/jobs/`, `assets/`, the asset modules; fbengine_tools |
+| audio | E9, then E12 | E9 step 4: scene's E4 step 2; E12: gpu's E3 step 2 | `native/fbengine_audio/`, `packages/fbengine_audio/`, then fbengine_video's |
+| physics | E10, then E13 | E10 step 2's meshes: scene's E4 step 5; step 3: scene's E4 step 2; E13: E5, E7, E8, E11 | `native/fbengine_physics/`, `packages/fbengine_physics/`, then the editor |
 
-| Lane | Builds | Owns |
-|---|---|---|
-| input | E1 steps 3 to 7 | `native/fbengine/input/`, `fbe_input.h`, packages/fbengine's input modules |
-| gpu | E2, then E3 | `native/fbengine/gpu/` (then `2d/`), `shaders/` |
-| scene | E4 | `native/fbengine/scene/`, `fbe_scene.h`, the scene modules |
-| audio | E9 | `native/fbengine_audio/`, `packages/fbengine_audio/` |
-| physics | E10 | `native/fbengine_physics/`, `packages/fbengine_physics/` |
+E8 step 0, the job system, comes first in the assets lane, since scene's collisions and assets'
+loading both run on it: a worker per core less one, jobs and their dependencies, and finished work
+handed to the main thread at Flip. E14 comes last, after every lane's milestones.
 
-**Later waves**, as lanes finish: E5 (once E2 and E4 land), E7, E8, E11, E12, E6, then E13. A
-FutureBlitz lane builds the package build step E8 needs, once the user settles its design.
+**Shared files**: the top CMakeLists.txt, `.github/workflows/`, `tests/CMakeLists.txt`, and
+`native/fbengine/frame/frame.cpp` take additions at the end of a list, one call per lane in
+Flip's order (events to input, then the present), so landings merge cleanly. Anything else
+outside a lane's own area goes through the coordinator.
+
+**FutureBlitz**: what a lane finds in the language, fb, or std goes to the coordinator with a
+program that shows it, and is fixed there, in a FutureBlitz release, never worked around here.
+The package build step E8 needs is FutureBlitz work once the user settles its design.
 
 **Each step**: the lane builds it, `tools/verify.py` passes, it pushes and reports; the
 coordinator reviews it (one review per step, about three reviewers and a skeptic each, as M6's),

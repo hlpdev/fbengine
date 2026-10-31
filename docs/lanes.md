@@ -41,9 +41,10 @@ fb is the installed release (`fb --version`); fb-bindgen is beside it.
 ## Rules
 
 - **Files**: a lane edits its own area (docs/plan.md's Lanes table) and adds what its step needs.
-  Shared files (the top CMakeLists.txt, ci.yml, native.yml, tests/CMakeLists.txt) take additions
-  only, at the end of a list, so landings merge cleanly. Another lane's files go through the
-  coordinator.
+  Shared files (docs/plan.md's list) take additions only, at the end of a list, so landings merge
+  cleanly. Another lane's files go through the coordinator.
+- **Waiting**: a step that needs another lane's unlanded work builds what it can without it, says
+  what's left in its report, and finishes once that lands on master (rebase onto it then).
 - **The coordinator alone** edits docs/plan.md, docs/architecture.md, docs/questions.md, CLAUDE.md,
   and FutureBlitz's docs.
 - **Libraries**: the ones docs/plan.md and architecture.md name, through FetchContent, pinned to a

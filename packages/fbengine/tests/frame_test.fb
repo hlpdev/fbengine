@@ -99,3 +99,50 @@ Function SimulatingNeedsAWindow()
     Expect(ExpectThrows<GraphicsError>(Simulate.CloseWindow()) != Null)
     Expect(!Window.Closed())
 End Function
+
+Global said = ""
+
+@Test
+Function HooksRunAtEveryFlipInOrderUntilRemoved()
+    said = ""
+    Local first = Frame.OnFlip(SayA)
+    Local second = Frame.OnFlip(SayB)
+    Flip()
+    Expect(said == "ab")
+    Frame.RemoveOnFlip(first)
+    Flip()
+    Expect(said == "abb")
+    Frame.RemoveOnFlip(second)
+    // Removing one that's gone is nothing.
+    Frame.RemoveOnFlip(second)
+    Flip()
+    Expect(said == "abb")
+End Function
+
+// A hook runs before the coroutines waiting for the tick, so they see what it did that frame.
+@Test
+Function HooksRunBeforeCoroutinesResume()
+    said = ""
+    Local hook = Frame.OnFlip(SayH)
+    Defer Frame.RemoveOnFlip(hook)
+    SayAfterTick()
+    Flip()
+    Expect(said == "hc")
+End Function
+
+Async Function SayAfterTick()
+    Await NextTick()
+    said += "c"
+End Function
+
+Function SayA()
+    said += "a"
+End Function
+
+Function SayB()
+    said += "b"
+End Function
+
+Function SayH()
+    said += "h"
+End Function

@@ -1,5 +1,6 @@
 // The frame: Flip ends one, and Frame says how long it took.
 
+Import std.collections
 Import std.core
 Import "./c/fbe_frame"
 Import "./window"
@@ -10,13 +11,52 @@ Import "./window"
 /// the next frame's code.
 @MainThread Public Function Flip(vsync: Bool = True)
     fbe_frame_flip(vsync)
+    Frame.RunHooks()
     Scheduler.Main.Step()
 End Function
 
+// A function OnFlip added, by the number it gave for it.
+Struct FlipHook
+    Field Id: Int
+    Field Run: Func()
+End Struct
+
 /// How long frames take, and the most there can be a second.
 Public Class Frame
+    Static Field hooks: FlipHook[] = []
+    Static Field lastHook: Int = 0
+
     Private New()
     End New
+
+    /// Runs `hook` at every Flip, after the OS's events are read and before the coroutines
+    /// resume, in the order hooks were added: how a package does its work each frame, as audio
+    /// following a camera or physics moving entities, without the game calling it. Gives the
+    /// number RemoveOnFlip takes.
+    @MainThread Public Static Method OnFlip(hook: Func()): Int
+        lastHook += 1
+        hooks.Add(FlipHook(lastHook, hook))
+        Return lastHook
+    End Method
+
+    /// Stops running the hook OnFlip gave `id` for; one that's gone already is left as it is.
+    @MainThread Public Static Method RemoveOnFlip(id: Int)
+        For i = 0 To hooks.Count - 1
+            If hooks[i].Id == id
+                hooks.RemoveAt(i)
+                Return
+            End If
+        End For
+    End Method
+
+    // Each hook as Flip found them, so one that adds or removes hooks changes the next Flip's.
+    @MainThread Package Static Method RunHooks()
+        Local running: FlipHook[] = []
+        running.AddAll(hooks)
+        For hook In running
+            hook.Run()
+        End For
+    End Method
 
     /// How many seconds the last frame took, from one Flip to the next, 0 before the second.
     @MainThread Public Static Method Delta(): Float64 => fbe_frame_delta()
