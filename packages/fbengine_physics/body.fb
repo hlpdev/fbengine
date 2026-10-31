@@ -42,7 +42,8 @@ Public Final Class Body
     Field handle: UInt64
     // Its world keeps it while it's in it, so it doesn't keep its world.
     ReadOnly Field world: Weak<PhysicsWorld>
-    ReadOnly Field shape: Shape
+    // A character's changes as its character's does.
+    Field shape: Shape
     // Whether it's a character's, which moves it, and frees it.
     ReadOnly Field character: Bool = False
 
@@ -291,14 +292,21 @@ Public Final Class Body
     /// Whether the body's awake: moving, or touched since it came to rest. A static body never is.
     @MainThread Public Method Active(): Bool => fbe_body_active(Live("Body.Active"))
 
-    /// Wakes the body, for the world's next step.
+    /// Wakes the body, for the world's next step; a character's sleeps and wakes as its character
+    /// goes.
     @MainThread Public Method Wake()
-        fbe_body_wake(Live("Body.Wake"))
+        If !fbe_body_wake(Live("Body.Wake")) Then Panic("Body.Wake: {LastError()}")
     End Method
 
-    /// Puts the body to sleep, until something touches it or a call that moves it wakes it.
+    /// Puts the body to sleep, until something touches it or a call that moves it wakes it; a
+    /// character's sleeps and wakes as its character goes.
     @MainThread Public Method Sleep()
-        fbe_body_sleep(Live("Body.Sleep"))
+        If !fbe_body_sleep(Live("Body.Sleep")) Then Panic("Body.Sleep: {LastError()}")
+    End Method
+
+    // Its character's become `shape`.
+    @MainThread Package Method Reshape(shape: Shape)
+        Self.shape = shape
     End Method
 
     /// The layer the body's in, from 0 to 31.

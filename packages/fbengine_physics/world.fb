@@ -287,8 +287,8 @@ Public Final Class PhysicsWorld
         Return all
     End Method
 
-    /// The first body of the `layers`, but `ignore`, that `shape`, at `position` and turned by
-    /// `rotation`, hits moving by `motion`, as a thrown crate's path or a camera kept out of walls
+    /// The first body of the `layers`, but `ignore`, that `shape`, which has no mesh in it, its
+    /// origin at `position` and turned by `rotation`, hits moving by `motion`, as a thrown crate's path or a camera kept out of walls
     /// does, its Distance how far along the motion it got, or Null for none. A shape already
     /// touching a body hits it at 0.
     @MainThread Public Method CastShape(shape: Shape, position: Vec3, rotation: Quat, motion: Vec3,
@@ -313,8 +313,8 @@ Public Final Class PhysicsWorld
         Return HitOf(hit)
     End Method
 
-    /// The bodies of the `layers`, but `ignore`, that `shape`, at `position` and turned by
-    /// `rotation`, touches, as an explosion reaches or a closing door would crush, in an order
+    /// The bodies of the `layers`, but `ignore`, that `shape`, which has no mesh in it, its origin
+    /// at `position` and turned by `rotation`, touches, as an explosion reaches or a closing door would crush, in an order
     /// that's the same each run.
     @MainThread Public Method Overlapping(shape: Shape, position: Vec3, rotation: Quat,
                                           layers: UInt32 = ALL_LAYERS, ignore: Body? = Null): Body[]

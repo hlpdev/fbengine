@@ -68,9 +68,47 @@ Function ACharacterWalksUpAStepButNotAWall()
     // The wall's face is at z = -5.5, and the capsule's 0.3 wide.
     Expect(player.Position().z > -5.25)
     Expect(player.Position().z < -5)
-    // Higher than its step height, it doesn't climb.
+End Function
+
+@Test
+Function ACharacterDoesntClimbAStepHigherThanItsStepHeight()
+    Local world, floor, player = Standing()
+    Defer world.Free()
     player.SetStepHeight(0.1)
     Expect(Near(player.StepHeight(), 0.1))
+    // A step 0.3 high from z = -1 on.
+    Body(world, Shape.Box(Vec3(4, 0.3, 6)), Motion.STATIC, Vec3(0, 0.15, -4))
+    Walk(world, player, Vec3(0, 0, -2), 2.0)
+    Expect(player.Position().y < 1, "it's at {player.Position()}")
+    Expect(player.Position().z > -1.05)
+End Function
+
+// A ramp of `degrees` rising from z = -1 toward -Z, 6 m long, as a mesh.
+Function Ramp(world: PhysicsWorld, degrees: Float) Throws ShapeError
+    Local high = 6 * Tan(degrees * Pi / 180)
+    Local corners: Vec3[] = [Vec3(-2, 0, -1), Vec3(2, 0, -1), Vec3(2, high, -7), Vec3(-2, high, -7)]
+    Body(world, Try Shape.Mesh(corners, [0, 1, 2, 0, 2, 3]), Motion.STATIC, Vec3(0, 0, 0))
+End Function
+
+@Test
+Function ACharacterWalksUpASlopeNoSteeperThanItsMaxSlope() Throws ShapeError
+    Local world, floor, player = Standing()
+    Defer world.Free()
+    Try Ramp(world, 30)
+    Walk(world, player, Vec3(0, 0, -2), 2.5)
+    // Some 4 m up the ramp, 2.3 m high.
+    Expect(player.Position().y > 2, "it's at {player.Position()}")
+    Expect(player.OnGround())
+End Function
+
+@Test
+Function ACharacterDoesntWalkUpASlopeSteeperThanItsMaxSlope() Throws ShapeError
+    Local world, floor, player = Standing()
+    Defer world.Free()
+    Try Ramp(world, 60)
+    Walk(world, player, Vec3(0, 0, -2), 2.5)
+    Expect(player.Position().y < 1.5, "it's at {player.Position()}")
+    Expect(player.Position().z > -2)
 End Function
 
 @Test
@@ -93,6 +131,7 @@ Function ACharacterCrouchesAndCantStandUnderATable()
     Local standing = player.Shape()
     Expect(player.SetShape(crouched))
     Expect(player.Shape() == crouched)
+    Expect(player.Body().Shape() == crouched)
     // Under a table top 1.2 up.
     player.SetPosition(Vec3(0, 0.45, 0))
     Body(world, Shape.Box(Vec3(3, 0.1, 3)), Motion.STATIC, Vec3(0, 1.25, 0))
@@ -171,6 +210,8 @@ Function TheCApiKeepsACharactersBodyItsCharacters()
     Expect(!fbe_body_free(body))
     Expect(!fbe_body_set_sensor(body, True))
     Expect(!fbe_body_set_motion(body, FBE_BODY_DYNAMIC))
+    Expect(!fbe_body_sleep(body))
+    Expect(!fbe_body_wake(body))
     Expect(fbe_body_motion(body) == FBE_BODY_KINEMATIC)
     Expect(!fbe_character_set_max_slope(player, 2))
     Expect(Error() == "a max slope is 0 to pi / 2, not 2")

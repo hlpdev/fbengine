@@ -120,9 +120,10 @@ FBE_PHYSICS_API bool fbe_physics_gravity(uint64_t world, fbe_physics_vec3_t* gra
 
 // Steps `world` on by `seconds`, more than 0 and at most 1, its collisions found
 // `collision_steps` times, 1 to FBE_PHYSICS_MAX_COLLISION_STEPS, a step of seconds over
-// collision_steps each, on Jolt's job system; false if it isn't a world or either is out of
-// range. A world made and stepped by the same calls in the same order steps the same, bit for
-// bit, on any number of threads, and on every target, compiler, and build.
+// collision_steps each, on Jolt's job system, gathering what began and ended touching in all of
+// them; false if it isn't a world or either is out of range. A world made and stepped by the same
+// calls in the same order steps the same, bit for bit, on any number of threads, and on every
+// target, compiler, and build.
 FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t collision_steps);
 
 // How many times `world` has been stepped, -1 if it isn't a world.
@@ -143,8 +144,8 @@ FBE_PHYSICS_API bool fbe_physics_collides(uint64_t world, int32_t a, int32_t b);
 
 // Casts a ray from `origin` along `direction`, which isn't 0, as far as `distance`, from 0 on, at
 // the bodies of the `layers` (a bit for each), but `ignore`'s, and puts the nearest hit in `hit`;
-// false if it hits none, isn't a world, or a number's out of range, when fbe_physics_error says
-// why. Casts never hit a sensor.
+// false if it hits none, isn't a world, `ignore` is another world's, or a number's out of range,
+// when fbe_physics_error says why. Casts never hit a sensor.
 FBE_PHYSICS_API bool fbe_physics_cast_ray(uint64_t world, const fbe_physics_vec3_t* origin,
                                           const fbe_physics_vec3_t* direction, float distance,
                                           uint32_t layers, uint64_t ignore, fbe_physics_hit_t* hit);
@@ -156,18 +157,20 @@ FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physi
                                                  float distance, uint32_t layers, uint64_t ignore,
                                                  fbe_physics_hit_t* hits, int32_t capacity);
 
-// Sweeps `shape`, at `position` and turned by `rotation`, by `motion`, at the bodies of
-// the `layers` but `ignore`'s, and puts the first hit in `hit`, its distance how far along the
-// motion it got; false as fbe_physics_cast_ray is. A shape already touching a body hits it at 0.
+// Sweeps `shape`, which has no mesh in it, its origin at `position` and turned by `rotation`, by
+// `motion`, at the bodies of the `layers` but `ignore`'s, and puts the first hit in `hit`, its
+// distance how far along the motion it got; false as fbe_physics_cast_ray is. A shape already
+// touching a body hits it at 0.
 FBE_PHYSICS_API bool fbe_physics_cast_shape(uint64_t world, uint64_t shape,
                                             const fbe_physics_vec3_t* position,
                                             const fbe_physics_quat_t* rotation,
                                             const fbe_physics_vec3_t* motion, uint32_t layers,
                                             uint64_t ignore, fbe_physics_hit_t* hit);
 
-// The bodies of the `layers` but `ignore`'s that `shape`, at `position` and turned by `rotation`,
-// touches, up to `capacity` of them in `bodies`, in an order that's the same each run, giving how
-// many there were, -1 if it isn't a world or a number's out of range.
+// The bodies of the `layers` but `ignore`'s that `shape`, which has no mesh in it, its origin at
+// `position` and turned by `rotation`, touches, up to `capacity` of them in `bodies`, in an order
+// that's the same each run, giving how many there were, -1 if it isn't a world or a number's out of
+// range.
 FBE_PHYSICS_API int32_t fbe_physics_overlap(uint64_t world, uint64_t shape,
                                             const fbe_physics_vec3_t* position,
                                             const fbe_physics_quat_t* rotation, uint32_t layers,

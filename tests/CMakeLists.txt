@@ -82,6 +82,20 @@ fbengine_set_warnings(fbengine_physics_step_tests)
 catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_physics_native>")
 
+# fbengine_physics' own C++, built into its test, for what only its insides show.
+file(GLOB fbengine_physics_sources CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/native/fbengine_physics/*/*.cpp")
+add_executable(fbengine_physics_internal_tests physics/contacts_tests.cpp
+               ${fbengine_physics_sources})
+target_include_directories(fbengine_physics_internal_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_physics")
+target_compile_definitions(fbengine_physics_internal_tests PRIVATE FBE_PHYSICS_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(fbengine_physics_internal_tests PRIVATE Jolt Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_physics_internal_tests)
+catch_discover_tests(fbengine_physics_internal_tests TEST_PREFIX "physics."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
 # fbengine_physics' examples, checked against what they print.
 if(FBENGINE_FB_TESTS)
   add_test(NAME examples.falling_boxes
@@ -114,4 +128,9 @@ if(FBENGINE_FB_TESTS)
     set_tests_properties(physics.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
                          "panic: PhysicsWorld\\.Step: [^\n]*${said}")
   endforeach()
+  # A world still alive as a panic ends the program, which then exits as a panic does.
+  add_test(NAME physics.panics.with-a-world
+           COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}"
+                   "-DPROGRAM=${CMAKE_CURRENT_SOURCE_DIR}/physics/panics" -DCASE=with-a-world
+                   -DCODE=101 -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/exits.cmake")
 endif()

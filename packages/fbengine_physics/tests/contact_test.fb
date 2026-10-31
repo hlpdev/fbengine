@@ -184,3 +184,63 @@ Function ABodyAsleepInASensorIsStillInItUntilItLeaves()
     Expect(!zone.Touching().Contains(ball))
     Expect(world.Began().Count == 0)
 End Function
+
+// A ball in a sensor as a step begins, and out of it within it: the step's collision steps say
+// both, and the sensor doesn't hold it after.
+Function Shot(): (PhysicsWorld, Body, Body)
+    Local world = PhysicsWorld()
+    world.SetGravity(Vec3(0, 0, 0))
+    Local zone = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.STATIC, Vec3(0, 0, 0))
+    zone.SetSensor(True)
+    Local ball = Body(world, Shape.Sphere(0.1), Motion.DYNAMIC, Vec3(0.3, 0, 0))
+    ball.SetVelocity(Vec3(60, 0, 0))
+    Return (world, zone, ball)
+End Function
+
+@Test
+Function ABallThatLeavesASensorWithinAStepHasLeftIt()
+    For collisionSteps = 2 To 4
+        Local world, zone, ball = Shot()
+        world.Step(1.0 / 30, collisionSteps)
+        Expect(Between(world.Began(), zone, ball) != Null)
+        Expect(Parted(world.Ended(), zone, ball), "in {collisionSteps} collision steps")
+        Expect(!zone.Touching().Contains(ball))
+        Run(world, 1.0)
+        Expect(!zone.Touching().Contains(ball))
+        Expect(ball.Touching().Count == 0)
+        world.Free()
+    End For
+End Function
+
+@Test
+Function UpdateGathersWhatEndedInAllItsStepsCollisionSteps()
+    Local world, zone, ball = Shot()
+    Defer world.Free()
+    // At 30 a second, each step is two collision steps.
+    world.SetStepRate(30)
+    world.Update(1.0 / 30)
+    Expect(Between(world.Began(), zone, ball) != Null)
+    Expect(Parted(world.Ended(), zone, ball))
+    world.Update(1.0 / 30)
+    Expect(world.Ended().Count == 0)
+    Expect(!zone.Touching().Contains(ball))
+End Function
+
+// A kinematic sensor notices what doesn't move, however it came to be both.
+@Test
+Function AKinematicSensorNoticesStaticBodiesWhicheverCameFirst()
+    For order = 0 To 1
+        Local world, floor = Floored()
+        Local zone = Body(world, Shape.Box(Vec3(2, 2, 2)), Motion.DYNAMIC, Vec3(0, 0.5, 0))
+        If order == 0
+            zone.SetSensor(True)
+            zone.SetMotion(Motion.KINEMATIC)
+        Else
+            zone.SetMotion(Motion.KINEMATIC)
+            zone.SetSensor(True)
+        End If
+        Run(world, 0.5)
+        Expect(zone.Touching().Contains(floor), "sensor first: {order == 0}")
+        world.Free()
+    End For
+End Function

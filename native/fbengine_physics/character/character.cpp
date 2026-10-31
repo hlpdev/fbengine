@@ -34,8 +34,10 @@ struct character_t {
 };
 
 pool_t<character_t>& characters() {
-    static pool_t<character_t> pool(CHARACTER_KIND);
-    return pool;
+    // Never freed, as Jolt isn't: statics freed as the process ends go in any order, and a world
+    // left then would free its bodies into a pool that had gone.
+    static auto* pool = new pool_t<character_t>(CHARACTER_KIND);
+    return *pool;
 }
 
 character_t* find(std::uint64_t handle) {

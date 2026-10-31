@@ -126,7 +126,8 @@ FBE_PHYSICS_API bool fbe_body_set_gravity_factor(uint64_t body, float factor);
 // a body.
 FBE_PHYSICS_API bool fbe_body_active(uint64_t body);
 
-// Wakes `body`, or puts it to sleep; false if it isn't a body.
+// Wakes `body`, or puts it to sleep; false if it isn't a body, or is a character's, which sleeps
+// and wakes as its character goes.
 FBE_PHYSICS_API bool fbe_body_wake(uint64_t body);
 FBE_PHYSICS_API bool fbe_body_sleep(uint64_t body);
 

@@ -31,8 +31,10 @@ struct shape_t {
 };
 
 pool_t<shape_t>& shapes() {
-    static pool_t<shape_t> pool(SHAPE_KIND);
-    return pool;
+    // Never freed, as Jolt isn't: statics freed as the process ends go in any order, and a world
+    // left then would free its bodies into a pool that had gone.
+    static auto* pool = new pool_t<shape_t>(SHAPE_KIND);
+    return *pool;
 }
 
 bool finite(const fbe_shape_vec3_t& v) {

@@ -7,6 +7,8 @@ Import std.math
 Import std.test
 Import fbengine_physics
 Import fbengine_physics.c.fbe_physics
+Import fbengine_physics.c.fbe_shape
+Import fbengine_physics.c.fbe_body
 
 Function Near(a: Float, b: Float, within: Float = 0.01): Bool => Abs(a - b) <= within
 
@@ -175,5 +177,83 @@ End Function
 @MainThread Function Error(): String
     Unsafe
         Return fbe_physics_error().ToString()
+    End Unsafe
+End Function
+
+// A shape's origin is where a cast puts it, wherever its center of mass is.
+@Test
+Function ACastPutsAShapesOriginWhereItsGiven() Throws ShapeError
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local ball = Body(world, Shape.Sphere(0.5), Motion.STATIC, Vec3(0, 0, 0))
+    // A box 5 m above its compound's origin.
+    Local high = Shape.Compound([ShapePart(Shape.Box(Vec3(1, 1, 1)), Vec3(0, 5, 0),
+                                           Quat(0, 0, 0, 1))])
+    Expect(world.Overlapping(high, Vec3(0, 0, 0), Quat(0, 0, 0, 1)).Count == 0)
+    Local low = world.Overlapping(high, Vec3(0, -5, 0), Quat(0, 0, 0, 1))
+    Expect(low.Count == 1 && low[0] == ball)
+    // A hull from y = 0 to 2 cast up under a ceiling at 3.8 meets it 1.8 m on.
+    Local ceiling = Body(world, Shape.Box(Vec3(4, 0.2, 4)), Motion.STATIC, Vec3(10, 3.9, 0))
+    Local rock = Try Shape.ConvexHull([Vec3(-0.5, 0, -0.5), Vec3(0.5, 0, -0.5), Vec3(0, 0, 0.5),
+                                       Vec3(0, 2, 0)])
+    Local hit = world.CastShape(rock, Vec3(10, 0, 0), Quat(0, 0, 0, 1), Vec3(0, 5, 0))
+    Expect(hit?.Body == ceiling)
+    Expect(Near(hit?.Distance ?? 0, 1.8, 0.03), "it met the ceiling {hit?.Distance ?? 0} m on")
+End Function
+
+// A cast's distance is finite however far it goes, and 0 from inside what it hits.
+@Test
+Function CastDistancesAreFinite()
+    Local world, floor, crate = Scene()
+    Defer world.Free()
+    Local far = world.CastRay(Vec3(0, 10, 0), Vec3(0, -1, 0), 1e20)
+    Expect(far?.Body == crate)
+    Expect(Near(far?.Distance ?? 0, 7.5))
+    Local inside = world.CastRay(Vec3(0, 2, 0), Vec3(0, -1, 0), 10)
+    Expect(inside?.Body == crate)
+    Expect(inside?.Distance == 0.0)
+    Local swept = world.CastShape(Shape.Sphere(0.5), Vec3(0, 10, 0), Quat(0, 0, 0, 1),
+                                  Vec3(0, -1e20, 0))
+    Expect(swept?.Body == crate)
+    Expect(Near(swept?.Distance ?? 0, 7, 0.05))
+End Function
+
+@Test @MainThread
+Function TheCApiRefusesCastsOfMeshesAndOtherWorldsBodies()
+    Local world = fbe_physics_new(10)
+    Defer fbe_physics_free(world)
+    Local other = fbe_physics_new(10)
+    Defer fbe_physics_free(other)
+    Local corners = Buffer<fbe_shape_vec3_t>(3)
+    corners[1] = fbe_shape_vec3_t(1, 0, 0)
+    corners[2] = fbe_shape_vec3_t(0, 0, 1)
+    Local indices = Buffer<UInt32>.From([0, 2, 1])
+    Local plate: UInt64 = 0
+    Unsafe
+        plate = fbe_shape_mesh(corners.Pointer(), 3, indices.Pointer(), 3)
+    End Unsafe
+    Defer fbe_shape_free(plate)
+    Local ball = fbe_shape_sphere(1)
+    Defer fbe_shape_free(ball)
+    Local at = fbe_physics_vec3_t(0, 0, 0)
+    Local down = fbe_physics_vec3_t(0, -1, 0)
+    Local unturned = fbe_physics_quat_t(0, 0, 0, 1)
+    Local hit = fbe_physics_hit_t(0, at, at, 0, -1)
+    Local found = Buffer<UInt64>(4)
+    Local elsewhere: UInt64 = 0
+    Unsafe
+        Expect(!fbe_physics_cast_shape(world, plate, AddressOf(at), AddressOf(unturned),
+                                       AddressOf(down),
+                                       ALL_LAYERS, 0, AddressOf(hit)))
+        Expect(Error() == "a cast's shape has no mesh in it")
+        Expect(fbe_physics_overlap(world, plate, AddressOf(at), AddressOf(unturned), ALL_LAYERS, 0,
+                                   found.Pointer(), 4) == -1)
+        Local still = fbe_body_quat_t(0, 0, 0, 1)
+        Local origin = fbe_body_vec3_t(0, 0, 0)
+        elsewhere = fbe_body_add(other, ball, 0, AddressOf(origin), AddressOf(still))
+        Expect(!fbe_physics_cast_ray(world, AddressOf(at), AddressOf(down), 10, ALL_LAYERS,
+                                     elsewhere,
+                                     AddressOf(hit)))
+        Expect(Error() == "the ignored body is of another world")
     End Unsafe
 End Function

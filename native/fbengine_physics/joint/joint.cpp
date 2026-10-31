@@ -32,8 +32,10 @@ struct joint_t {
 };
 
 pool_t<joint_t>& joints() {
-    static pool_t<joint_t> pool(JOINT_KIND);
-    return pool;
+    // Never freed, as Jolt isn't: statics freed as the process ends go in any order, and a world
+    // left then would free its bodies into a pool that had gone.
+    static auto* pool = new pool_t<joint_t>(JOINT_KIND);
+    return *pool;
 }
 
 joint_t* find(std::uint64_t handle) {

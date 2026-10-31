@@ -42,8 +42,10 @@ struct body_t {
 };
 
 pool_t<body_t>& bodies() {
-    static pool_t<body_t> pool(BODY_KIND);
-    return pool;
+    // Never freed, as Jolt isn't: statics freed as the process ends go in any order, and a world
+    // left then would free its bodies into a pool that had gone.
+    static auto* pool = new pool_t<body_t>(BODY_KIND);
+    return *pool;
 }
 
 body_t* find(std::uint64_t handle) {
@@ -331,6 +333,9 @@ FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion_type) {
         return fail(not_dynamic(found->weighed, found->body().GetShape()->MustBeStatic()));
     }
     found->bodies().SetMotionType(found->id, type, JPH::EActivation::Activate);
+    // A kinematic sensor notices what doesn't move, as fbe_body_set_sensor has it.
+    JPH::Body& made = found->body();
+    made.SetCollideKinematicVsNonDynamic(made.IsSensor() && made.IsKinematic());
     return true;
 }
 
@@ -515,7 +520,7 @@ FBE_PHYSICS_API bool fbe_body_active(uint64_t body) {
 }
 
 FBE_PHYSICS_API bool fbe_body_wake(uint64_t body) {
-    const body_t* found = find(body);
+    const body_t* found = find_own(body);
     if (found == nullptr) {
         return false;
     }
@@ -524,7 +529,7 @@ FBE_PHYSICS_API bool fbe_body_wake(uint64_t body) {
 }
 
 FBE_PHYSICS_API bool fbe_body_sleep(uint64_t body) {
-    const body_t* found = find(body);
+    const body_t* found = find_own(body);
     if (found == nullptr) {
         return false;
     }

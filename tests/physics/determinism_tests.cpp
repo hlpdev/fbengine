@@ -19,7 +19,7 @@
 namespace {
 
 // What every target's step of the scene comes to; a change to it is a change to how worlds step.
-constexpr std::uint64_t golden = 0xC741AA55AED556D1ULL;
+constexpr std::uint64_t golden = 0xC8E32DE2056558FFULL;
 
 constexpr fbe_body_quat_t unturned{ .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F };
 constexpr int steps = 300;
@@ -179,8 +179,9 @@ struct scene_t {
         order[handle] = order.size();
     }
 
-    // Steps it from step `from` to step `to`, giving the hash of each step's end.
-    [[nodiscard]] std::uint64_t run(int from, int to) const {
+    // Steps it from step `from` to step `to`, each step a 15th of a second in `collision_steps`
+    // collision steps, or with 0, mostly a 60th, giving the hash of each step's end.
+    [[nodiscard]] std::uint64_t run(int from, int to, std::int32_t collision_steps = 0) const {
         hash_t hash;
         for (int step = from; step < to; ++step) {
             const float turn = static_cast<float>(step) * 0.05F;
@@ -188,8 +189,10 @@ struct scene_t {
             fbe_body_set_velocity(mover, &round);
             const fbe_character_vec3_t walk{ .x = 1.5F, .y = -2.0F, .z = -0.5F };
             fbe_character_move(character, &walk, 1.0F / 60.0F);
-            // A step in several collision steps now and then, a long one in several updates.
-            if (step % 50 == 25) {
+            // A step in several collision steps now and then, a long one in many.
+            if (collision_steps > 0) {
+                fbe_physics_step(world, 1.0F / 15.0F, collision_steps);
+            } else if (step % 50 == 25) {
                 fbe_physics_step(world, 0.2F, 12);
             } else {
                 fbe_physics_step(world, 1.0F / 60.0F, step % 10 == 0 ? 2 : 1);
@@ -249,10 +252,10 @@ struct scene_t {
     static constexpr fbe_body_vec3_t kick{ .x = 30.0F, .y = 0.0F, .z = 0.0F };
 };
 
-std::uint64_t stepped(std::int32_t threads) {
+std::uint64_t stepped(std::int32_t threads, std::int32_t collision_steps = 0) {
     fbe_physics_set_threads(threads);
     const scene_t scene;
-    return scene.run(0, steps);
+    return scene.run(0, collision_steps > 0 ? steps / 4 : steps, collision_steps);
 }
 
 } // namespace
@@ -266,6 +269,15 @@ TEST_CASE("a world steps the same on any number of threads") {
     CHECK(stepped(1) == alone);
     CHECK(stepped(7) == alone);
     CHECK(stepped(31) == alone);
+}
+
+// What began and ended in each of a step's collision steps comes out in the same order, with the
+// same positions and speeds, however Jolt's threads ran.
+TEST_CASE("contacts are the same on any number of threads, in steps of many collision steps") {
+    const std::uint64_t alone = stepped(0, 4);
+    CHECK(stepped(15, 4) == alone);
+    CHECK(stepped(15, 4) == alone);
+    CHECK(stepped(31, 4) == alone);
 }
 
 TEST_CASE("a world steps the same on every target, compiler, and build") {

@@ -30,10 +30,6 @@ thread_local std::string last_error;
 // What a step's jobs can be, as Jolt's samples have them.
 constexpr std::uint32_t max_jobs = 2048;
 constexpr std::uint32_t max_barriers = 64;
-// The most collision steps one of Jolt's updates takes, all of whose jobs it makes at its start:
-// at Jolt's widest, 32 at once, a collision step makes up to 300 of the 2048, so 4 leave room for
-// the jobs a step makes as it goes. More are taken in several updates, the same on every machine.
-constexpr std::int32_t collision_steps_an_update = 4;
 // A step's memory, past which it takes from the heap.
 constexpr std::uint32_t step_memory_size = 16U * 1024U * 1024U;
 // The fewest pairs of touching bodies, and contacts between them, a world keeps room for; past
@@ -104,8 +100,10 @@ jolt_t& jolt() {
 }
 
 pool_t<world_t>& worlds() {
-    static pool_t<world_t> pool(WORLD_KIND);
-    return pool;
+    // Never freed, as Jolt isn't: statics freed as the process ends go in any order, and a world
+    // left then would free its bodies into a pool that had gone.
+    static auto* pool = new pool_t<world_t>(WORLD_KIND);
+    return *pool;
 }
 
 bool finite(const fbe_physics_vec3_t& v) {
@@ -282,18 +280,19 @@ FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t col
     }
     found->began.clear();
     found->ended.clear();
-    before_contacts(*found);
+    // Each collision step is an update of Jolt's of its own, whose contacts are taken as it ends:
+    // in one, a pair of parts begins or ends touching at most once, so sorting them puts them in
+    // the order they happened, the same however Jolt's threads ran, and an update's jobs, all made
+    // as it starts, always fit.
+    const float part = seconds / static_cast<float>(collision_steps);
     JPH::EPhysicsUpdateError errors = JPH::EPhysicsUpdateError::None;
-    for (std::int32_t done = 0; done < collision_steps;) {
-        const std::int32_t these = std::min(collision_steps - done, collision_steps_an_update);
-        const float part =
-            seconds * static_cast<float>(these) / static_cast<float>(collision_steps);
-        errors |= found->system.Update(part, these, &step_memory(), &jobs());
-        done += these;
+    for (std::int32_t i = 0; i < collision_steps; ++i) {
+        before_contacts(*found);
+        errors |= found->system.Update(part, 1, &step_memory(), &jobs());
+        take_contacts(*found);
     }
     found->overflowed = errors != JPH::EPhysicsUpdateError::None;
     found->changes = 0;
-    take_contacts(*found);
     ++found->steps;
     return true;
 }

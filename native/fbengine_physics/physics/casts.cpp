@@ -70,9 +70,18 @@ bool cast_of(std::uint64_t world, std::uint64_t ignore, cast_t& cast) {
         if (body == nullptr) {
             return false;
         }
+        // Another world's body's id may be one of this world's.
+        if (in != cast.world) {
+            return fail("the ignored body is of another world");
+        }
         cast.ignore = body->GetID();
     }
     return true;
+}
+
+// How long `v` is, in doubles, which a float's square of can't overflow.
+double length(const fbe_physics_vec3_t& v) {
+    return std::sqrt((double{ v.x } * v.x) + (double{ v.y } * v.y) + (double{ v.z } * v.z));
 }
 
 bool finite(const fbe_physics_vec3_t& v) {
@@ -102,8 +111,8 @@ bool ray_of(const fbe_physics_vec3_t& origin, const fbe_physics_vec3_t& directio
     return true;
 }
 
-// What a ray's hit is, which `world`'s body there's locked for.
-fbe_physics_hit_t hit_of(const world_t& world, const JPH::RRayCast& ray,
+// What a ray going `distance` hit, which `world`'s body there's locked for.
+fbe_physics_hit_t hit_of(const world_t& world, const JPH::RRayCast& ray, float distance,
                          const JPH::RayCastResult& result) {
     const JPH::BodyLockRead lock(world.system.GetBodyLockInterfaceNoLock(), result.mBodyID);
     const JPH::RVec3 point = ray.GetPointOnRay(result.mFraction);
@@ -115,7 +124,7 @@ fbe_physics_hit_t hit_of(const world_t& world, const JPH::RRayCast& ray,
         .body = body.GetUserData(),
         .position = vec3(JPH::Vec3(point)),
         .normal = vec3(body.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, point)),
-        .distance = result.mFraction * ray.mDirection.Length(),
+        .distance = result.mFraction * distance,
         .triangle = triangle_of(body, result.mSubShapeID2),
     };
 }
@@ -127,6 +136,10 @@ bool placed(std::uint64_t shape, const fbe_physics_vec3_t& position,
     if (found == nullptr) {
         return false;
     }
+    // Jolt casts a mesh's triangles against nothing.
+    if (found->MustBeStatic()) {
+        return fail("a cast's shape has no mesh in it");
+    }
     JPH::Quat turned;
     if (!finite(position)) {
         return fail("a shape is cast from a finite position");
@@ -134,7 +147,9 @@ bool placed(std::uint64_t shape, const fbe_physics_vec3_t& position,
     if (!normalized(rotation.x, rotation.y, rotation.z, rotation.w, turned)) {
         return false;
     }
-    transform = JPH::RMat44::sRotationTranslation(turned, vec3(position));
+    // Jolt's shape is about its center of mass, which is off the shape's origin.
+    transform = JPH::RMat44::sRotationTranslation(turned, vec3(position))
+                    .PreTranslated(found->GetCenterOfMass());
     return true;
 }
 
@@ -171,7 +186,7 @@ FBE_PHYSICS_API bool fbe_physics_cast_ray(uint64_t world, const fbe_physics_vec3
             ray, result, JPH::BroadPhaseLayerFilter(), mask, bodies)) {
         return fail("the ray hits nothing");
     }
-    *hit = hit_of(*cast.world, ray, result);
+    *hit = hit_of(*cast.world, ray, distance, result);
     return true;
 }
 
@@ -204,7 +219,7 @@ FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physi
     const auto count =
         std::min(collector.mHits.size(), static_cast<std::size_t>(std::max(capacity, 0)));
     for (std::size_t i = 0; i < count; ++i) {
-        hits[i] = hit_of(*cast.world, ray, collector.mHits[i]);
+        hits[i] = hit_of(*cast.world, ray, distance, collector.mHits[i]);
     }
     return static_cast<int32_t>(collector.mHits.size());
 }
@@ -247,7 +262,7 @@ FBE_PHYSICS_API bool fbe_physics_cast_shape(uint64_t world, uint64_t shape,
         .body = body.GetUserData(),
         .position = vec3(JPH::Vec3(result.mContactPointOn2)),
         .normal = vec3(axis.LengthSq() > 0.0F ? -axis.Normalized() : JPH::Vec3::sZero()),
-        .distance = result.mFraction * vec3(*motion).Length(),
+        .distance = static_cast<float>(result.mFraction * length(*motion)),
         .triangle = triangle_of(body, result.mSubShapeID2),
     };
     return true;

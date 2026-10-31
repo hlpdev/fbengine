@@ -111,6 +111,7 @@ Public Final Class Character
         Local character = Live("Character.SetShape")
         If fbe_character_set_shape(character, shape.Live("Character.SetShape"))
             Self.shape = shape
+            body.Reshape(shape)
             Return True
         End If
         If LastError() != "the shape doesn't fit where the character is"
