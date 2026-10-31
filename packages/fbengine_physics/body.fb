@@ -1,0 +1,327 @@
+// Bodies: shapes at places in worlds, which steps move.
+
+Import std.core
+Import std.math
+Import "./c/fbe_body"
+Import "./physics"
+Import "./shape"
+Import "./world"
+
+/// How a Body moves.
+Public Enum Motion
+    /// Never: a floor, a wall, a level's mesh. Static bodies cost next to nothing.
+    STATIC = 0
+    /// By gravity, forces, and what it touches: a crate, a ball, debris.
+    DYNAMIC = 1
+    /// By the game alone, setting its velocity or where it is, pushing dynamic bodies out of its
+    /// way and never pushed back: a door, a lift, a moving platform.
+    KINEMATIC = 2
+End Enum
+
+/// A Shape at a place in a PhysicsWorld, which the world's steps move as its Motion says. Its
+/// position is its shape's origin's, in the world's space, in std.math's axes and meters, and its
+/// velocities are meters, and radians, a second. A body that's rested a while sleeps, costing
+/// nothing, until something touches it, or a call that moves it wakes it. Free, or freeing its
+/// world, frees it.
+///
+/// ```
+/// Local world = PhysicsWorld()
+/// Local floor = Body(world, Shape.Box(Vec3(20, 1, 20)), Motion.STATIC, Vec3(0, -0.5, 0))
+/// Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 5, 0))
+/// For i = 1 To 180
+///     world.Step(1.0 / 60)
+/// End For
+/// // It's fallen, and rests on the floor, as far into it as Jolt's slop of 2 cm.
+/// Expect(Abs(ball.Position().y - 0.49) < 0.015)
+/// world.Free()
+/// ```
+Public Final Class Body
+    Field handle: UInt64
+    ReadOnly Field world: PhysicsWorld
+    ReadOnly Field shape: Shape
+
+    /// A body of `shape` in `world`, moving as `motion` says, at `position`, turned by `rotation`,
+    /// and awake unless it's static. A dynamic body's shape has an inside to weigh, which a mesh
+    /// hasn't, and the world has room for it, as its MaxBodies says.
+    @MainThread Public New(world: PhysicsWorld, shape: Shape, motion: Motion, position: Vec3,
+                           rotation: Quat)
+        Self.world = world
+        Self.shape = shape
+        handle = Added(world, shape, motion, position, rotation)
+        world.Keep(handle, Self)
+    End New
+
+    /// A body of `shape` in `world`, moving as `motion` says, at `position`, unturned.
+    @MainThread Public New(world: PhysicsWorld, shape: Shape, motion: Motion, position: Vec3)
+        Self.world = world
+        Self.shape = shape
+        handle = Added(world, shape, motion, position, Quat(0, 0, 0, 1))
+        world.Keep(handle, Self)
+    End New
+
+    /// Frees the body, taking it out of its world; using it after panics. Freeing one that's freed
+    /// already does nothing.
+    @MainThread Public Method Free()
+        If handle == 0 Then Return
+        fbe_body_free(handle)
+        world.Drop(handle)
+        handle = 0
+    End Method
+
+    /// Whether Free, or freeing its world, has freed the body.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// The world the body's in.
+    @MainThread Public Method World(): PhysicsWorld => world
+
+    /// The shape the body's made of.
+    @MainThread Public Method Shape(): Shape => shape
+
+    /// How the body moves.
+    @MainThread Public Method Motion(): Motion => fbe_body_motion(Live("Body.Motion")) As Motion
+
+    /// Makes a dynamic body kinematic, as a crate a player picks up, or a kinematic one dynamic,
+    /// waking it. A static body stays static, a body that moves keeps moving, and a mesh is never
+    /// dynamic.
+    @MainThread Public Method SetMotion(motion: Motion)
+        If !fbe_body_set_motion(Live("Body.SetMotion"), motion As Int32)
+            Panic("Body.SetMotion: {LastError()}")
+        End If
+    End Method
+
+    /// Where the body is: its shape's origin, in the world.
+    @MainThread Public Method Position(): Vec3 => GetVec3(Live("Body.Position"), fbe_body_position)
+
+    /// Puts the body at `position` at once, waking it, as a teleport does: it doesn't pass
+    /// through what's between. A kinematic body moved by its velocity pushes what it meets.
+    @MainThread Public Method SetPosition(position: Vec3)
+        SetVec3("SetPosition", Live("Body.SetPosition"), position, fbe_body_set_position)
+    End Method
+
+    /// How the body's turned.
+    @MainThread Public Method Rotation(): Quat
+        Local turned = fbe_body_quat_t(0, 0, 0, 1)
+        Unsafe
+            fbe_body_rotation(Live("Body.Rotation"), AddressOf(turned))
+        End Unsafe
+        Return Quat(turned.x, turned.y, turned.z, turned.w)
+    End Method
+
+    /// Turns the body to `rotation` at once, waking it, as SetPosition moves it.
+    @MainThread Public Method SetRotation(rotation: Quat)
+        Local turned = fbe_body_quat_t(rotation.x, rotation.y, rotation.z, rotation.w)
+        Local ok = False
+        Unsafe
+            ok = fbe_body_set_rotation(Live("Body.SetRotation"), AddressOf(turned))
+        End Unsafe
+        If !ok Then Panic("Body.SetRotation: {LastError()}")
+    End Method
+
+    /// How fast the body moves, in meters a second.
+    @MainThread Public Method Velocity(): Vec3 => GetVec3(Live("Body.Velocity"), fbe_body_velocity)
+
+    /// Sets how fast the body moves, waking it; a static body doesn't.
+    @MainThread Public Method SetVelocity(velocity: Vec3)
+        SetVec3("SetVelocity", Live("Body.SetVelocity"), velocity, fbe_body_set_velocity)
+    End Method
+
+    /// How fast the body turns about each axis, in radians a second.
+    @MainThread Public Method AngularVelocity(): Vec3
+        Return GetVec3(Live("Body.AngularVelocity"), fbe_body_angular_velocity)
+    End Method
+
+    /// Sets how fast the body turns about each axis, waking it; a static body doesn't.
+    @MainThread Public Method SetAngularVelocity(velocity: Vec3)
+        SetVec3("SetAngularVelocity", Live("Body.SetAngularVelocity"), velocity,
+                fbe_body_set_angular_velocity)
+    End Method
+
+    /// Pushes a dynamic body with `force`, in newtons, at its center of mass, through the world's
+    /// next step, waking it; a static or kinematic body takes none. A force to keep up is added
+    /// before every step.
+    @MainThread Public Method AddForce(force: Vec3)
+        SetVec3("AddForce", Live("Body.AddForce"), force, fbe_body_add_force)
+    End Method
+
+    /// Pushes a dynamic body with `force`, in newtons, at `point` in the world, through the
+    /// world's next step, turning it as well, as AddForce does.
+    @MainThread Public Method AddForceAt(force: Vec3, point: Vec3)
+        Local pushed = BodyVec3(force)
+        Local at = BodyVec3(point)
+        Local ok = False
+        Unsafe
+            ok = fbe_body_add_force_at(Live("Body.AddForceAt"), AddressOf(pushed), AddressOf(at))
+        End Unsafe
+        If !ok Then Panic("Body.AddForceAt: {LastError()}")
+    End Method
+
+    /// Turns a dynamic body with `torque`, in newton meters, through the world's next step, as
+    /// AddForce pushes it.
+    @MainThread Public Method AddTorque(torque: Vec3)
+        SetVec3("AddTorque", Live("Body.AddTorque"), torque, fbe_body_add_torque)
+    End Method
+
+    /// Changes a dynamic body's velocity at once by `impulse`, in newton seconds, as a hit or a
+    /// jump does, waking it; a static or kinematic body takes none.
+    @MainThread Public Method AddImpulse(impulse: Vec3)
+        SetVec3("AddImpulse", Live("Body.AddImpulse"), impulse, fbe_body_add_impulse)
+    End Method
+
+    /// Changes a dynamic body's velocity and angular velocity at once by `impulse`, in newton
+    /// seconds, at `point` in the world, as AddImpulse does.
+    @MainThread Public Method AddImpulseAt(impulse: Vec3, point: Vec3)
+        Local pushed = BodyVec3(impulse)
+        Local at = BodyVec3(point)
+        Local ok = False
+        Unsafe
+            ok = fbe_body_add_impulse_at(Live("Body.AddImpulseAt"), AddressOf(pushed),
+                                         AddressOf(at))
+        End Unsafe
+        If !ok Then Panic("Body.AddImpulseAt: {LastError()}")
+    End Method
+
+    /// Changes a dynamic body's angular velocity at once by `impulse`, in newton meter seconds, as
+    /// AddImpulse does its velocity.
+    @MainThread Public Method AddAngularImpulse(impulse: Vec3)
+        SetVec3("AddAngularImpulse", Live("Body.AddAngularImpulse"), impulse,
+                fbe_body_add_angular_impulse)
+    End Method
+
+    /// The body's mass, in kilograms: its shape's volume at 1000 kilograms a cubic meter, as
+    /// water's, unless SetMass has set it; 0 for a static body, or a mesh.
+    @MainThread Public Method Mass(): Float => fbe_body_mass(Live("Body.Mass"))
+
+    /// Sets the body's mass, in kilograms, more than 0, which how hard it is to turn follows; a
+    /// static body or a mesh has none to set.
+    @MainThread Public Method SetMass(kilograms: Float)
+        If !fbe_body_set_mass(Live("Body.SetMass"), kilograms) Then Panic("Body.SetMass: {LastError()}")
+    End Method
+
+    /// How much the body grips what it slides on, from 0 on, 0.2 at first: of two bodies touching,
+    /// the grip is their frictions' geometric mean.
+    @MainThread Public Method Friction(): Float => fbe_body_friction(Live("Body.Friction"))
+
+    /// Sets how much the body grips what it slides on, from 0, ice, on.
+    @MainThread Public Method SetFriction(friction: Float)
+        If !fbe_body_set_friction(Live("Body.SetFriction"), friction)
+            Panic("Body.SetFriction: {LastError()}")
+        End If
+    End Method
+
+    /// How much the body bounces, from 0, not at all, as at first, to 1, wholly: of two bodies
+    /// touching, the bounce is the more of the two.
+    @MainThread Public Method Restitution(): Float => fbe_body_restitution(Live("Body.Restitution"))
+
+    /// Sets how much the body bounces, from 0 to 1.
+    @MainThread Public Method SetRestitution(restitution: Float)
+        If !fbe_body_set_restitution(Live("Body.SetRestitution"), restitution)
+            Panic("Body.SetRestitution: {LastError()}")
+        End If
+    End Method
+
+    /// How much of the body's velocity goes a second, as air slows it, from 0 on, 0.05 at first;
+    /// 0 for a static body.
+    @MainThread Public Method LinearDamping(): Float
+        Return Moving(fbe_body_linear_damping(Live("Body.LinearDamping")))
+    End Method
+
+    /// Sets how much of the body's velocity goes a second, from 0 on; a static body has none.
+    @MainThread Public Method SetLinearDamping(damping: Float)
+        If !fbe_body_set_linear_damping(Live("Body.SetLinearDamping"), damping)
+            Panic("Body.SetLinearDamping: {LastError()}")
+        End If
+    End Method
+
+    /// How much of the body's angular velocity goes a second, from 0 on, 0.05 at first; 0 for a
+    /// static body.
+    @MainThread Public Method AngularDamping(): Float
+        Return Moving(fbe_body_angular_damping(Live("Body.AngularDamping")))
+    End Method
+
+    /// Sets how much of the body's angular velocity goes a second, from 0 on; a static body has
+    /// none.
+    @MainThread Public Method SetAngularDamping(damping: Float)
+        If !fbe_body_set_angular_damping(Live("Body.SetAngularDamping"), damping)
+            Panic("Body.SetAngularDamping: {LastError()}")
+        End If
+    End Method
+
+    /// How much of the world's gravity pulls the body, 1 at first: 0 floats, and less than 0
+    /// rises; 0 for a static body.
+    @MainThread Public Method GravityFactor(): Float
+        Local body = Live("Body.GravityFactor")
+        If fbe_body_motion(body) == FBE_BODY_STATIC Then Return 0
+        Return fbe_body_gravity_factor(body)
+    End Method
+
+    /// Sets how much of the world's gravity pulls the body; a static body has none.
+    @MainThread Public Method SetGravityFactor(factor: Float)
+        If !fbe_body_set_gravity_factor(Live("Body.SetGravityFactor"), factor)
+            Panic("Body.SetGravityFactor: {LastError()}")
+        End If
+    End Method
+
+    /// Whether the body's awake: moving, or touched since it came to rest. A static body never is.
+    @MainThread Public Method Active(): Bool => fbe_body_active(Live("Body.Active"))
+
+    /// Wakes the body, for the world's next step.
+    @MainThread Public Method Wake()
+        fbe_body_wake(Live("Body.Wake"))
+    End Method
+
+    /// Puts the body to sleep, until something touches it or a call that moves it wakes it.
+    @MainThread Public Method Sleep()
+        fbe_body_sleep(Live("Body.Sleep"))
+    End Method
+
+    // The body's handle, for `call`, which panics once it's freed.
+    @MainThread Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call}: this Body was freed")
+        Return handle
+    End Method
+
+    // Its world's Free freed it.
+    @MainThread Package Method Forget()
+        handle = 0
+    End Method
+End Class
+
+// A new body's handle, which panics with what C says when it can't be made.
+@MainThread Function Added(world: PhysicsWorld, shape: Shape, motion: Motion, position: Vec3,
+                           rotation: Quat): UInt64
+    Local at = BodyVec3(position)
+    Local turned = fbe_body_quat_t(rotation.x, rotation.y, rotation.z, rotation.w)
+    Local inWorld = world.Live("Body")
+    Local of = shape.Live("Body")
+    Local handle: UInt64 = 0
+    Unsafe
+        handle = fbe_body_add(inWorld, of, motion As Int32, AddressOf(at), AddressOf(turned))
+    End Unsafe
+    If handle == 0 Then Panic("Body: {LastError()}")
+    Return handle
+End Function
+
+Function BodyVec3(v: Vec3): fbe_body_vec3_t => fbe_body_vec3_t(v.x, v.y, v.z)
+
+// A vector of a body's, which `get` puts where it's told.
+@MainThread Function GetVec3(handle: UInt64, get: Func(UInt64, Ptr<fbe_body_vec3_t>): Bool): Vec3
+    Local got = fbe_body_vec3_t(0, 0, 0)
+    Unsafe
+        get(handle, AddressOf(got))
+    End Unsafe
+    Return Vec3(got.x, got.y, got.z)
+End Function
+
+// Gives a body `value` by `set`, for Body's `call`, which panics with what C says when it fails.
+@MainThread Function SetVec3(call: String, handle: UInt64, value: Vec3,
+                             set: Func(UInt64, Ptr<fbe_body_vec3_t>): Bool)
+    Local given = BodyVec3(value)
+    Local ok = False
+    Unsafe
+        ok = set(handle, AddressOf(given))
+    End Unsafe
+    If !ok Then Panic("Body.{call}: {LastError()}")
+End Function
+
+// What a static body's dampings are, -1, as 0.
+Function Moving(value: Float): Float => value < 0 ? 0.0 : value

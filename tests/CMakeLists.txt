@@ -73,3 +73,11 @@ target_link_libraries(fbengine_physics_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_physics_tests)
 catch_discover_tests(fbengine_physics_tests TEST_PREFIX "physics."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# fbengine_physics' examples, checked against what they print.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME examples.falling_boxes
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/falling_boxes")
+  set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION
+                       "\n200 boxes fell, 200 came to rest, 100 on others\r?\n$")
+endif()

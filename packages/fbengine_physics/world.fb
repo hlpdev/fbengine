@@ -1,7 +1,9 @@
 // Worlds of bodies, which Jolt steps on.
 
+Import std.collections
 Import std.core
 Import std.math
+Import "./body"
 Import "./c/fbe_physics"
 Import "./physics"
 
@@ -23,6 +25,8 @@ Public Final Class PhysicsWorld
     Field mostSteps: Int32 = 4
     // The time Update was given that no step has taken yet.
     Field owed: Float64 = 0
+    // Its bodies, by handle.
+    Field bodies: Map<UInt64, Body>
 
     /// A world with no bodies and Earth's gravity, which keeps room for at most `maxBodies`, from 1
     /// to 1048576.
@@ -30,15 +34,21 @@ Public Final Class PhysicsWorld
         If maxBodies < 1 || maxBodies > FBE_PHYSICS_MAX_BODIES
             Panic("PhysicsWorld: a world is for 1 to {FBE_PHYSICS_MAX_BODIES} bodies, not {maxBodies}")
         End If
+        bodies = Map<UInt64, Body>()
         handle = fbe_physics_new(maxBodies As UInt32)
         If handle == 0 Then Panic("PhysicsWorld: {LastError()}")
     End New
 
-    /// Frees the world; using it after panics. Freeing one that's freed already does nothing.
+    /// Frees the world and its bodies; using any of them after panics. Freeing one that's freed
+    /// already does nothing.
     @MainThread Public Method Free()
         If handle == 0 Then Return
         fbe_physics_free(handle)
         handle = 0
+        For kept In bodies.Values()
+            kept.Forget()
+        End For
+        bodies.Clear()
     End Method
 
     /// Whether Free has freed the world.
@@ -46,14 +56,14 @@ Public Final Class PhysicsWorld
 
     /// The most bodies the world keeps room for.
     @MainThread Public Method MaxBodies(): Int32 =>
-        fbe_physics_max_bodies(Live("MaxBodies")) As Int32
+        fbe_physics_max_bodies(Live("PhysicsWorld.MaxBodies")) As Int32
 
     /// Sets the world's gravity, in meters a second a second, which is (0, -9.81, 0) at first.
     @MainThread Public Method SetGravity(gravity: Vec3)
         Local g = fbe_physics_vec3_t(gravity.x, gravity.y, gravity.z)
         Local ok = False
         Unsafe
-            ok = fbe_physics_set_gravity(Live("SetGravity"), AddressOf(g))
+            ok = fbe_physics_set_gravity(Live("PhysicsWorld.SetGravity"), AddressOf(g))
         End Unsafe
         If !ok Then Panic("PhysicsWorld.SetGravity: {LastError()}, not {gravity}")
     End Method
@@ -62,7 +72,7 @@ Public Final Class PhysicsWorld
     @MainThread Public Method Gravity(): Vec3
         Local g = fbe_physics_vec3_t(0, 0, 0)
         Unsafe
-            fbe_physics_gravity(Live("Gravity"), AddressOf(g))
+            fbe_physics_gravity(Live("PhysicsWorld.Gravity"), AddressOf(g))
         End Unsafe
         Return Vec3(g.x, g.y, g.z)
     End Method
@@ -73,24 +83,25 @@ Public Final Class PhysicsWorld
     @MainThread Public Method Step(seconds: Float64, collisionSteps: Int32 = 0)
         Local steps = collisionSteps
         If steps == 0 Then steps = CollisionStepsFor(seconds)
-        If !fbe_physics_step(Live("Step"), seconds As Float32, steps)
+        If !fbe_physics_step(Live("PhysicsWorld.Step"), seconds As Float32, steps)
             Panic("PhysicsWorld.Step: {LastError()}")
         End If
     End Method
 
     /// How many times the world's been stepped, by Step and by Update.
-    @MainThread Public Method Steps(): Int64 => fbe_physics_steps(Live("Steps"))
+    @MainThread Public Method Steps(): Int64 => fbe_physics_steps(Live("PhysicsWorld.Steps"))
 
     /// Whether the last step ran out of room for bodies touching, and so left some of their
     /// contacts out, as a pile of more bodies than MaxBodies keeps room for can.
-    @MainThread Public Method Overflowed(): Bool => fbe_physics_overflowed(Live("Overflowed"))
+    @MainThread Public Method Overflowed(): Bool =>
+        fbe_physics_overflowed(Live("PhysicsWorld.Overflowed"))
 
     /// Steps the world for `seconds` of time, from 0 on, as a frame took: as many steps of a
     /// StepRate()th of a second as are due, carrying what's left over to the next Update. It takes
     /// at most MaxSteps() of them, dropping the rest of the time, so a slow frame never makes the
     /// next one slower. Gives how many steps it took.
     @MainThread Public Method Update(seconds: Float64): Int32
-        Live("Update")
+        Live("PhysicsWorld.Update")
         If !(seconds >= 0 && seconds < 1e9)
             Panic("PhysicsWorld.Update: a frame takes 0 seconds or more, not {seconds}")
         End If
@@ -111,13 +122,13 @@ Public Final Class PhysicsWorld
     /// How far through the next step the time Update has been given is, from 0 up to 1, for
     /// drawing what moves between its last two steps.
     @MainThread Public Method Alpha(): Float64
-        Live("Alpha")
+        Live("PhysicsWorld.Alpha")
         Return Clamp(owed * (rate As Float64), 0.0, 1.0)
     End Method
 
     /// Makes Update step `stepsPerSecond` times a second, from 1 to 1000, 60 at first.
     @MainThread Public Method SetStepRate(stepsPerSecond: Int32)
-        Live("SetStepRate")
+        Live("PhysicsWorld.SetStepRate")
         If stepsPerSecond < 1 || stepsPerSecond > 1000
             Panic("PhysicsWorld.SetStepRate: a world steps 1 to 1000 times a second, not {stepsPerSecond}")
         End If
@@ -126,13 +137,13 @@ Public Final Class PhysicsWorld
 
     /// How many times a second Update steps the world.
     @MainThread Public Method StepRate(): Int32
-        Live("StepRate")
+        Live("PhysicsWorld.StepRate")
         Return rate
     End Method
 
     /// Makes Update take at most `steps` steps, from 1 to 100, 4 at first.
     @MainThread Public Method SetMaxSteps(steps: Int32)
-        Live("SetMaxSteps")
+        Live("PhysicsWorld.SetMaxSteps")
         If steps < 1 || steps > 100
             Panic("PhysicsWorld.SetMaxSteps: an Update takes 1 to 100 steps, not {steps}")
         End If
@@ -141,14 +152,33 @@ Public Final Class PhysicsWorld
 
     /// The most steps an Update takes.
     @MainThread Public Method MaxSteps(): Int32
-        Live("MaxSteps")
+        Live("PhysicsWorld.MaxSteps")
         Return mostSteps
     End Method
 
+    /// How many bodies the world has.
+    @MainThread Public Method Bodies(): Int32 => fbe_physics_bodies(Live("PhysicsWorld.Bodies"))
+
+    /// Sorts the world's bodies for finding quickly which might touch, as is worth doing once
+    /// after adding many at once, as loading a level does, rather than every step.
+    @MainThread Public Method Optimize()
+        fbe_physics_optimize(Live("PhysicsWorld.Optimize"))
+    End Method
+
     // The world's handle, for `call`, which panics once it's freed.
-    Method Live(call: String): UInt64
-        If handle == 0 Then Panic("PhysicsWorld.{call}: this PhysicsWorld was freed")
+    @MainThread Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call}: this PhysicsWorld was freed")
         Return handle
+    End Method
+
+    // Keeps `body`, which `handle` is, until it's freed.
+    @MainThread Package Method Keep(handle: UInt64, body: Body)
+        bodies.Add(handle, body)
+    End Method
+
+    // Forgets the body `handle` was.
+    @MainThread Package Method Drop(handle: UInt64)
+        bodies.Remove(handle)
     End Method
 End Class
 

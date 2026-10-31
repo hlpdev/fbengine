@@ -1,0 +1,347 @@
+// Bodies: how each motion moves, what they rest on, forces and impulses, and their worlds.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine_physics
+Import fbengine_physics.c.fbe_body
+Import fbengine_physics.c.fbe_physics
+Import fbengine_physics.c.fbe_shape
+Import std.ffi
+
+Function Near(a: Float, b: Float, within: Float = 0.001): Bool => Abs(a - b) <= within
+
+Function Near(a: Vec3, b: Vec3, within: Float = 0.001): Bool => Distance(a, b) <= within
+
+// Whether a body resting at `y` rests at `height`: Jolt lets it sink as far as its penetration
+// slop, 2 cm, into what it's on, so it doesn't jitter.
+Function Resting(y: Float, height: Float): Bool => y > height - 0.025 && y < height + 0.005
+
+// Steps `world` through `seconds`, a 60th of a second a step.
+Function Run(world: PhysicsWorld, seconds: Float64)
+    For i = 1 To Round(seconds * 60) As Int
+        world.Step(1.0 / 60)
+    End For
+End Function
+
+// A world with a static floor whose top is at y = 0.
+Function Floored(): PhysicsWorld
+    Local world = PhysicsWorld()
+    Body(world, Shape.Box(Vec3(40, 1, 40)), Motion.STATIC, Vec3(0, -0.5, 0))
+    Return world
+End Function
+
+@Test
+Function ADynamicBodyFallsAsGravitySays()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 100, 0))
+    ball.SetLinearDamping(0)
+    Expect(ball.Active())
+    For i = 1 To 60
+        world.Step(1.0 / 60)
+    End For
+    // v = gt, and Jolt's steps, velocity first, fall a step's more than gt²/2.
+    Expect(Near(ball.Velocity().y, -9.81, 0.01))
+    Expect(Near(ball.Position().y, 100 - 9.81 / 2 - 9.81 / 120, 0.02))
+    Expect(Near(ball.Position().x, 0) && Near(ball.Position().z, 0))
+End Function
+
+@Test
+Function ABodyRestsOnAStaticFloorAndSleeps()
+    Local world = Floored()
+    Defer world.Free()
+    Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 3, 0))
+    Run(world, 5.0)
+    Expect(Resting(ball.Position().y, 0.5), "at {ball.Position()}")
+    Expect(!ball.Active())
+    // Waking it changes nothing where it rests.
+    ball.Wake()
+    Expect(ball.Active())
+    Run(world, 0.5)
+    Expect(Resting(ball.Position().y, 0.5), "at {ball.Position()}")
+End Function
+
+@Test
+Function AStaticBodyNeverMoves()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local wall = Body(world, Shape.Box(Vec3(1, 4, 10)), Motion.STATIC, Vec3(3, 2, 0))
+    Expect(wall.Motion() == Motion.STATIC)
+    Expect(!wall.Active())
+    wall.AddImpulse(Vec3(1000, 0, 0))
+    wall.AddForce(Vec3(1000, 0, 0))
+    Run(world, 1.0)
+    Expect(Near(wall.Position(), Vec3(3, 2, 0)))
+    Expect(wall.Mass() == 0.0)
+    Expect(wall.LinearDamping() == 0.0)
+    Expect(wall.GravityFactor() == 0.0)
+End Function
+
+@Test
+Function AKinematicBodyMovesByItsVelocityAloneAndPushes()
+    Local world = Floored()
+    Defer world.Free()
+    Local pusher = Body(world, Shape.Box(Vec3(1, 1, 4)), Motion.KINEMATIC, Vec3(-3, 0.5, 0))
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0.5, 0))
+    pusher.SetVelocity(Vec3(2, 0, 0))
+    Run(world, 2.0)
+    // No gravity, no floor, no crate slows it.
+    Expect(Near(pusher.Position(), Vec3(1, 0.5, 0), 0.01))
+    Expect(Near(pusher.Velocity(), Vec3(2, 0, 0)))
+    // The crate's been pushed ahead of it.
+    Expect(crate.Position().x > 1.4)
+End Function
+
+@Test
+Function AnImpulseChangesVelocityByItOverMass()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    world.SetGravity(Vec3(0, 0, 0))
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0, 0))
+    // A cubic meter of water's.
+    Expect(Near(crate.Mass(), 1000, 0.5))
+    crate.SetMass(2)
+    Expect(Near(crate.Mass(), 2))
+    crate.AddImpulse(Vec3(0, 0, 6))
+    Expect(Near(crate.Velocity(), Vec3(0, 0, 3)))
+    crate.SetAngularDamping(0)
+    crate.AddAngularImpulse(Vec3(0, 1, 0))
+    Expect(crate.AngularVelocity().y > 0)
+End Function
+
+@Test
+Function AForceActsThroughTheNextStep()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    world.SetGravity(Vec3(0, 0, 0))
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0, 0))
+    crate.SetMass(1)
+    crate.SetLinearDamping(0)
+    crate.AddForce(Vec3(60, 0, 0))
+    world.Step(1.0 / 60)
+    Expect(Near(crate.Velocity().x, 1, 0.001))
+    // Only through it.
+    world.Step(1.0 / 60)
+    Expect(Near(crate.Velocity().x, 1, 0.001))
+    // Off its center, it turns it too.
+    crate.AddForceAt(Vec3(60, 0, 0), Vec3(0, 0.5, 0))
+    world.Step(1.0 / 60)
+    Expect(Abs(crate.AngularVelocity().z) > 0.1)
+    crate.AddTorque(Vec3(0, 10, 0))
+    world.Step(1.0 / 60)
+    Expect(crate.AngularVelocity().y > 0)
+End Function
+
+@Test
+Function TeleportingPutsABodyThereAndWakesIt()
+    Local world = Floored()
+    Defer world.Free()
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0.5, 0))
+    Run(world, 3.0)
+    Expect(!crate.Active())
+    crate.SetPosition(Vec3(5, 4, 0))
+    Expect(crate.Active())
+    Expect(Near(crate.Position(), Vec3(5, 4, 0)))
+    Local turned = Quat.FromAxisAngle(Vec3(0, 1, 0), Pi / 4)
+    crate.SetRotation(turned)
+    Expect(IsClose(crate.Rotation(), turned))
+    Run(world, 3.0)
+    Expect(Resting(crate.Position().y, 0.5), "at {crate.Position()}")
+End Function
+
+@Test
+Function ABodyCanBeMadeTurned()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local turned = Quat.FromAxisAngle(Vec3(1, 0, 0), Pi / 3)
+    Local crate = Body(world, Shape.Box(Vec3(1, 2, 1)), Motion.STATIC, Vec3(1, 2, 3), turned)
+    Expect(IsClose(crate.Rotation(), turned))
+    Expect(Near(crate.Position(), Vec3(1, 2, 3)))
+End Function
+
+@Test
+Function ADynamicBodyCanBeMadeKinematicAndBack()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 10, 0))
+    crate.SetMotion(Motion.KINEMATIC)
+    Expect(crate.Motion() == Motion.KINEMATIC)
+    Run(world, 1.0)
+    // Held where it is.
+    Expect(Near(crate.Position(), Vec3(0, 10, 0)))
+    crate.SetMotion(Motion.DYNAMIC)
+    Run(world, 0.5)
+    Expect(crate.Position().y < 9)
+    Expect(Near(crate.Mass(), 1000, 0.5))
+End Function
+
+@Test
+Function ABouncyBallBouncesAndAGripplessOneSlides()
+    Local world = Floored()
+    Defer world.Free()
+    Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 5.5, 0))
+    ball.SetRestitution(1)
+    ball.SetLinearDamping(0)
+    Expect(ball.Restitution() == 1.0)
+    // It reaches the floor at about a second, and is back up by two.
+    Run(world, 2.0)
+    Expect(ball.Position().y > 4)
+
+    Local puck = Body(world, Shape.Cylinder(0.2, 0.5), Motion.DYNAMIC, Vec3(5, 0.1, 0))
+    puck.SetFriction(0)
+    puck.SetLinearDamping(0)
+    Expect(puck.Friction() == 0.0)
+    puck.SetVelocity(Vec3(0, 0, 1))
+    Run(world, 1.0)
+    Expect(Near(puck.Velocity().z, 1, 0.01))
+End Function
+
+@Test
+Function GravityFactorAndDampingAreABodysOwn()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local balloon = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 0, 0))
+    Expect(balloon.GravityFactor() == 1.0)
+    Expect(Near(balloon.LinearDamping(), 0.05))
+    Expect(Near(balloon.AngularDamping(), 0.05))
+    balloon.SetGravityFactor(-0.5)
+    Expect(balloon.GravityFactor() == -0.5)
+    Run(world, 1.0)
+    Expect(balloon.Position().y > 0)
+End Function
+
+@Test
+Function ABodyRestsOnAMesh() Throws ShapeError
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local corners: Vec3[] = [Vec3(-5, 0, -5), Vec3(5, 0, -5), Vec3(5, 0, 5), Vec3(-5, 0, 5)]
+    Local floor = Try Shape.Mesh(corners, [0, 2, 1, 0, 3, 2])
+    Local ground = Body(world, floor, Motion.STATIC, Vec3(0, 0, 0))
+    Expect(ground.Mass() == 0.0)
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 3, 0))
+    Run(world, 3.0)
+    Expect(Resting(crate.Position().y, 0.5), "at {crate.Position()}")
+    // A kinematic mesh, as a lift's, moves.
+    Local lift = Body(world, floor, Motion.KINEMATIC, Vec3(20, 0, 0))
+    Expect(lift.Mass() == 0.0)
+    lift.SetVelocity(Vec3(0, 1, 0))
+    Run(world, 1.0)
+    Expect(Near(lift.Position().y, 1, 0.01))
+End Function
+
+// Jolt's own sample: a stack of boxes stays standing.
+@Test
+Function AStackOfBoxesStaysStanding()
+    Local world = Floored()
+    Defer world.Free()
+    Local box = Shape.Box(Vec3(1, 1, 1))
+    Local stack: Body[] = []
+    For i = 0 To 9
+        stack.Add(Body(world, box, Motion.DYNAMIC, Vec3(0, 0.5 + (i As Float), 0)))
+    End For
+    Run(world, 10.0)
+    For i = 0 To 9
+        Local at = stack[i].Position()
+        Expect(Near(at, Vec3(0, 0.5 + (i As Float), 0), 0.05), "box {i} is at {at}")
+    End For
+    Expect(!stack[9].Active())
+End Function
+
+@Test
+Function AWorldCountsItsBodiesAndFreesThem()
+    Local world = PhysicsWorld(10)
+    Local first = Body(world, Shape.Sphere(1), Motion.DYNAMIC, Vec3(0, 0, 0))
+    Local second = Body(world, Shape.Sphere(1), Motion.DYNAMIC, Vec3(5, 0, 0))
+    Local third = Body(world, Shape.Sphere(1), Motion.STATIC, Vec3(10, 0, 0))
+    Expect(world.Bodies() == 3)
+    Expect(first.World() == world)
+    Expect(first.Shape().Kind() == ShapeKind.SPHERE)
+    first.Free()
+    Expect(first.Freed())
+    Expect(world.Bodies() == 2)
+    // The rest are as they were.
+    Expect(Near(second.Position(), Vec3(5, 0, 0)))
+    world.Optimize()
+    world.Free()
+    Expect(second.Freed() && third.Freed())
+    // Freeing one its world freed is nothing.
+    second.Free()
+End Function
+
+@Test @MainThread
+Function TheCApiRefusesBodiesItDoesntTake()
+    Local world = fbe_physics_new(2)
+    Local ball = fbe_shape_sphere(1)
+    Defer fbe_shape_free(ball)
+    Local corners = Buffer<fbe_shape_vec3_t>(3)
+    corners[1] = fbe_shape_vec3_t(1, 0, 0)
+    corners[2] = fbe_shape_vec3_t(0, 0, 1)
+    Local indices = Buffer<UInt32>.From([0, 2, 1])
+    Local floor: UInt64 = 0
+    Unsafe
+        floor = fbe_shape_mesh(corners.Pointer(), 3, indices.Pointer(), 3)
+    End Unsafe
+    Defer fbe_shape_free(floor)
+    Local at = fbe_body_vec3_t(0, 0, 0)
+    Local unturned = fbe_body_quat_t(0, 0, 0, 1)
+    Local nothing = fbe_body_quat_t(0, 0, 0, 0)
+    Local nowhere = fbe_body_vec3_t(NaN, 0, 0)
+    Local body: UInt64 = 0
+    Unsafe
+        Expect(fbe_body_add(world, ball, 3, AddressOf(at), AddressOf(unturned)) == 0)
+        Expect(Error() == "3 isn't a Motion")
+        Expect(fbe_body_add(world, floor, FBE_BODY_DYNAMIC, AddressOf(at),
+                            AddressOf(unturned)) == 0)
+        Expect(Error() == "a dynamic body's shape has an inside to weigh, which a mesh hasn't")
+        Expect(fbe_body_add(world, ball, FBE_BODY_DYNAMIC, AddressOf(nowhere),
+                            AddressOf(unturned)) == 0)
+        Expect(Error() == "a vector is finite")
+        Expect(fbe_body_add(world, ball, FBE_BODY_DYNAMIC, AddressOf(at),
+                            AddressOf(nothing)) == 0)
+        Expect(Error() == "a rotation is finite, and not 0")
+        Expect(fbe_body_add(world, 0, FBE_BODY_DYNAMIC, AddressOf(at), AddressOf(unturned)) == 0)
+        Expect(Error() == "there's no shape")
+
+        body = fbe_body_add(world, ball, FBE_BODY_STATIC, AddressOf(at),
+                            AddressOf(unturned))
+        Expect(body != 0)
+        Expect(!fbe_body_set_velocity(body, AddressOf(at)))
+        Expect(Error() == "a static body doesn't move, so it has no velocity")
+        Expect(!fbe_body_set_motion(body, FBE_BODY_DYNAMIC))
+        Expect(!fbe_body_set_mass(body, 5))
+        Expect(!fbe_body_set_linear_damping(body, 1))
+        Expect(Error() == "a static body doesn't move, so it has no damping")
+
+        Local mover = fbe_body_add(world, floor, FBE_BODY_KINEMATIC, AddressOf(at),
+                                   AddressOf(unturned))
+        Expect(mover != 0)
+        Expect(!fbe_body_set_motion(mover, FBE_BODY_DYNAMIC))
+        Expect(!fbe_body_set_mass(mover, 5))
+        Expect(Error() == "a mesh has no inside to weigh")
+        Expect(!fbe_body_set_friction(mover, -1))
+        Expect(!fbe_body_set_restitution(mover, 2))
+        Expect(!fbe_body_set_linear_damping(mover, -1))
+        Expect(Error() == "a damping is 0 or more, not -1")
+
+        // The world has room for two.
+        Expect(fbe_body_add(world, ball, FBE_BODY_DYNAMIC, AddressOf(at),
+                            AddressOf(unturned)) == 0)
+        Expect(Error() == "the world has room for 2 bodies, and has them all")
+        Expect(fbe_body_free(mover))
+        Expect(!fbe_body_free(mover))
+        Expect(Error() == "the body was freed")
+        Expect(fbe_body_motion(mover) == -1)
+    End Unsafe
+    Expect(fbe_physics_bodies(world) == 1)
+    // Freeing the world frees its bodies' handles.
+    fbe_physics_free(world)
+    Expect(fbe_body_motion(body) == -1)
+    Expect(fbe_physics_bodies(world) == -1)
+End Function
+
+@MainThread Function Error(): String
+    Unsafe
+        Return fbe_physics_error().ToString()
+    End Unsafe
+End Function

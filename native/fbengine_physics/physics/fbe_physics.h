@@ -60,6 +60,13 @@ FBE_PHYSICS_API uint64_t fbe_physics_new(uint32_t max_bodies);
 // Frees `world`, and its bodies; false if it isn't one.
 FBE_PHYSICS_API bool fbe_physics_free(uint64_t world);
 
+// How many bodies `world` has, -1 if it isn't a world.
+FBE_PHYSICS_API int32_t fbe_physics_bodies(uint64_t world);
+
+// Sorts `world`'s bodies for finding which might touch quickly, as is worth doing once after
+// adding many at once, as loading a level does, rather than every step; false if it isn't a world.
+FBE_PHYSICS_API bool fbe_physics_optimize(uint64_t world);
+
 // The most bodies `world` was made for, 0 if it isn't a world.
 FBE_PHYSICS_API uint32_t fbe_physics_max_bodies(uint64_t world);
 
