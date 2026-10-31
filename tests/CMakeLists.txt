@@ -153,3 +153,23 @@ endif()
 fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# fbengine_ui's panics, each by a run of tests/ui, which says it.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_ui_cases
+      "add-twice|panic: Node[.]Add: Node \"child\" is in another Node already"
+      "add-into-itself|panic: Node[.]Add: Node \"outer\" can't go in itself"
+      "insert-out-of-range|panic: Node[.]Insert: 1 isn't 0 to 0"
+      "fixed-negative|panic: Sizing[.]Fixed: a length is 0 or more, not -1"
+      "fill-zero|panic: Sizing[.]Fill: a weight is over 0, not 0"
+      "fraction-past-one|panic: Sizing[.]Fraction: a fraction is 0 to 1, not 1[.]5"
+      "style-empty-name|panic: Theme[.]SetStyle: \"button[.]\" isn't a style's name")
+  foreach(case IN LISTS fbengine_ui_cases)
+    string(REPLACE "|" ";" case "${case}")
+    list(GET case 0 name)
+    list(GET case 1 printed)
+    add_test(NAME ui.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- ${name})
+    set_tests_properties(ui.${name} PROPERTIES PASS_REGULAR_EXPRESSION "${printed}" TIMEOUT 120)
+  endforeach()
+endif()

@@ -1,0 +1,668 @@
+// Layout: a tree of Nodes, each a box laid out in its parent's, in rows, columns, and stacks: sized
+// to fit what's in it, fixed, filling what its siblings leave, or a fraction of its parent's, with
+// padding, margins, gaps, alignment, and, in a stack, anchors. Units are the UI's own, which the
+// game scales to the window.
+
+Import std.collections
+Import std.core
+Import std.math
+
+/// How a Node lays its children out.
+Public Enum Arrangement
+    /// Left to right.
+    ROW
+    /// Top to bottom.
+    COLUMN
+    /// Over each other, the last on top, each placed by its anchors or by its parent's Align: a
+    /// child that fits or fills stretched over the whole, at first, and one of a fixed size or a
+    /// fraction at the top left.
+    STACK
+End Enum
+
+/// Where a row's or a column's children go across it, or a stack's children in it.
+Public Enum Align
+    START
+    CENTER
+    END
+    /// Across the whole of its parent's content, less its margins, when it's sized to fit.
+    STRETCH
+End Enum
+
+/// Where the space a row's or a column's children leave along it goes.
+Public Enum Justify
+    START
+    CENTER
+    END
+    /// Between them, and none at the ends.
+    SPACE_BETWEEN
+    /// Around each, so the ends have half of what's between two.
+    SPACE_AROUND
+End Enum
+
+/// How a Node's width or height is found.
+Public Enum SizeMode
+    /// As big as what's in it: its children, or what it measures.
+    FIT
+    /// Its Value, in units.
+    FIXED
+    /// Along its parent's row or column, a share of what its siblings leave, its Value its weight;
+    /// across it, or in a stack, the whole of its parent's content.
+    FILL
+    /// Its Value, from 0 to 1, of its parent's content.
+    FRACTION
+End Enum
+
+/// How a Node's width or height is found: its Mode, and the Value the Mode takes.
+Public Struct Sizing Implements Printable
+    Public Field Mode: SizeMode
+    Public Field Value: Float32
+
+    /// As big as what's in it.
+    Public Static Method Fit(): Sizing => Sizing(SizeMode.FIT, 0.0)
+
+    /// `units` long. Panics for a length under 0, or one that isn't finite.
+    Public Static Method Fixed(units: Float32): Sizing
+        If !(units >= 0.0 && IsFinite(units)) Then Panic("Sizing.Fixed: a length is 0 or more, not {units}")
+        Return Sizing(SizeMode.FIXED, units)
+    End Method
+
+    /// A share of what's left, `weight` to its siblings' weights. Panics for a weight that's not
+    /// over 0, or isn't finite.
+    Public Static Method Fill(weight: Float32 = 1.0): Sizing
+        If !(weight > 0.0 && IsFinite(weight)) Then Panic("Sizing.Fill: a weight is over 0, not {weight}")
+        Return Sizing(SizeMode.FILL, weight)
+    End Method
+
+    /// `fraction`, from 0 to 1, of its parent's content. Panics outside that.
+    Public Static Method Fraction(fraction: Float32): Sizing
+        If !(fraction >= 0.0 && fraction <= 1.0)
+            Panic("Sizing.Fraction: a fraction is 0 to 1, not {fraction}")
+        End If
+        Return Sizing(SizeMode.FRACTION, fraction)
+    End Method
+
+    Public Method ToString(): String
+        Select Mode
+            Case SizeMode.FIT
+                Return "fit"
+            Case SizeMode.FIXED
+                Return "{Value}"
+            Case SizeMode.FILL
+                Return "fill {Value}"
+            Default
+                Return "{Value * 100}%"
+        End Select
+    End Method
+End Struct
+
+/// Space on each side of a box: a Node's padding, between its edge and its children, and its
+/// margin, between it and its siblings and its parent's padding.
+Public Struct Insets Implements Printable
+    Public Field Left: Float32
+    Public Field Top: Float32
+    Public Field Right: Float32
+    Public Field Bottom: Float32
+
+    /// The same on every side.
+    Public Static Method All(units: Float32): Insets => Insets(units, units, units, units)
+
+    /// `horizontal` on the left and right, `vertical` on the top and bottom.
+    Public Static Method Symmetric(horizontal: Float32, vertical: Float32): Insets
+        Return Insets(horizontal, vertical, horizontal, vertical)
+    End Method
+
+    /// Its left and right together.
+    Public Method Horizontal(): Float32 => Left + Right
+
+    /// Its top and bottom together.
+    Public Method Vertical(): Float32 => Top + Bottom
+
+    Public Method ToString(): String => "({Left}, {Top}, {Right}, {Bottom})"
+End Struct
+
+/// Where a stack's child goes in it, as fractions of its parent's content, 0 its left or top and 1
+/// its right or bottom. On an axis whose two anchors are apart, the child stretches between them,
+/// less its margins; on one whose anchors are one, it keeps its own size, at that point of the
+/// space its margins leave: 0 against the start, 1 against the end, 0.5 in the middle.
+Public Struct Anchors Implements Printable
+    Public Field MinX: Float32
+    Public Field MinY: Float32
+    Public Field MaxX: Float32
+    Public Field MaxY: Float32
+
+    /// One point on each axis: (1, 0) is the top right corner, (0.5, 0.5) the middle.
+    Public Static Method Point(x: Float32, y: Float32): Anchors => Anchors(x, y, x, y)
+
+    /// The whole of its parent's content, less its margins.
+    Public Static Method Fill(): Anchors => Anchors(0.0, 0.0, 1.0, 1.0)
+
+    Public Method ToString(): String => "({MinX}, {MinY}) to ({MaxX}, {MaxY})"
+End Struct
+
+// Each Layout's number, which a Node's natural size is kept for, so a pass measures each once.
+Global layouts: Int = 0
+
+/// A box in the UI's tree: laid out in its parent's by its sizes, margins, and alignment, and
+/// laying its children out in its own, less its padding, as its Arrangement says. A widget is a
+/// Node, which measures what it shows; a Node that isn't one is a panel, a row, or a spacer.
+/// Every change marks the tree, and the root's next Layout lays it out again; one with nothing
+/// changed and the same bounds does nothing.
+Public Class Node Implements Printable
+    Field name: String
+    Field parent: Weak<Node>
+    Field children: Node[] = []
+    Field width: Sizing
+    Field height: Sizing
+    Field minimum: Vec2
+    Field maximum: Vec2
+    Field padding: Insets
+    Field margin: Insets
+    Field arrangement: Arrangement = Arrangement.COLUMN
+    Field gap: Float32 = 0.0
+    Field justify: Justify = Justify.START
+    Field align: Align = Align.STRETCH
+    Field selfAlign: Align? = Null
+    Field anchors: Anchors? = Null
+    Field visible: Bool = True
+    Field content: Vec2
+    Field box: Rect
+    Field dirty: Bool = True
+    Field bounds: Rect
+    Field natural: Vec2
+    Field measured: Int = -1
+
+    /// A Node named `name`, which Find finds it by, sized to fit, with no children.
+    @MainThread Public New(name: String = "")
+        Self.name = name
+        maximum = Vec2(Inf, Inf)
+    End New
+
+    /// Its name, "" for none.
+    @MainThread Public Method Name(): String => name
+
+    /// Its parent, Null for a root.
+    @MainThread Public Method Parent(): Node? => parent
+
+    /// Its children, in order: a row's left to right, a column's top to bottom, a stack's bottom to
+    /// top.
+    @MainThread Public Method Children(): Node[] => children.Clone()
+
+    /// Adds `child` after its other children. Panics for one with a parent already, or this one
+    /// or one it's in.
+    @MainThread Public Method Add(child: Node)
+        Insert(children.Count, child)
+    End Method
+
+    /// Puts `child` at `index` among its children, from 0 to how many it has. Panics as Add does,
+    /// and for an index out of range.
+    @MainThread Public Method Insert(index: Int, child: Node)
+        If child.Parent() != Null Then Panic("Node.Add: {child} is in another Node already")
+        Local above: Node? = Self
+        While above != Null
+            If RefEquals(above, child) Then Panic("Node.Add: {child} can't go in itself")
+            above = above.Parent()
+        End While
+        If index < 0 || index > children.Count
+            Panic("Node.Insert: {index} isn't 0 to {children.Count}")
+        End If
+        children.Insert(index, child)
+        child.parent = Self
+        Changed()
+    End Method
+
+    /// Takes `child` out of its children; False if it isn't one.
+    @MainThread Public Method Remove(child: Node): Bool
+        For i = 0 To children.Count - 1
+            If RefEquals(children[i], child)
+                children.RemoveAt(i)
+                child.parent = Null
+                Changed()
+                child.Changed()
+                Return True
+            End If
+        End For
+        Return False
+    End Method
+
+    /// The first Node named `name` in its tree, itself first, then each child's tree in order;
+    /// Null for none.
+    @MainThread Public Method Find(name: String): Node?
+        If Self.name == name Then Return Self
+        For child In children
+            Local found = child.Find(name)
+            If found != Null Then Return found
+        End For
+        Return Null
+    End Method
+
+    /// Sets how its width is found, fitting what's in it at first.
+    @MainThread Public Method SetWidth(sizing: Sizing)
+        width = sizing
+        Changed()
+    End Method
+
+    /// Sets how its height is found, fitting what's in it at first.
+    @MainThread Public Method SetHeight(sizing: Sizing)
+        height = sizing
+        Changed()
+    End Method
+
+    /// Fixes its width and height.
+    @MainThread Public Method SetSize(width: Float32, height: Float32)
+        SetWidth(Sizing.Fixed(width))
+        SetHeight(Sizing.Fixed(height))
+    End Method
+
+    /// How its width is found.
+    @MainThread Public Method Width(): Sizing => width
+
+    /// How its height is found.
+    @MainThread Public Method Height(): Sizing => height
+
+    /// The least it's laid out as, however it's sized, 0 at first.
+    @MainThread Public Method SetMinSize(width: Float32, height: Float32)
+        If !(width >= 0.0 && height >= 0.0) Then Panic("Node.SetMinSize: a size is 0 or more")
+        minimum = Vec2(width, height)
+        Changed()
+    End Method
+
+    /// The most it's laid out as, Inf at first for no most; a least past it wins.
+    @MainThread Public Method SetMaxSize(width: Float32, height: Float32)
+        If !(width >= 0.0 && height >= 0.0) Then Panic("Node.SetMaxSize: a size is 0 or more")
+        maximum = Vec2(width, height)
+        Changed()
+    End Method
+
+    /// Sets the space between its edge and its children.
+    @MainThread Public Method SetPadding(insets: Insets)
+        padding = insets
+        Changed()
+    End Method
+
+    /// Sets the space around it, between it and its siblings and its parent's padding.
+    @MainThread Public Method SetMargin(insets: Insets)
+        margin = insets
+        Changed()
+    End Method
+
+    /// Its padding.
+    @MainThread Public Method Padding(): Insets => padding
+
+    /// Its margin.
+    @MainThread Public Method Margin(): Insets => margin
+
+    /// Sets how it lays its children out: in a column, at first, a row, or a stack.
+    @MainThread Public Method SetArrangement(laid: Arrangement)
+        arrangement = laid
+        Changed()
+    End Method
+
+    /// How it lays its children out.
+    @MainThread Public Method ArrangedAs(): Arrangement => arrangement
+
+    /// Sets the space between each two of a row's or a column's children, 0 at first.
+    @MainThread Public Method SetGap(units: Float32)
+        If !(units >= 0.0) Then Panic("Node.SetGap: a gap is 0 or more, not {units}")
+        gap = units
+        Changed()
+    End Method
+
+    /// Sets where the space a row's or a column's children leave goes, after them at first.
+    @MainThread Public Method SetJustify(where: Justify)
+        justify = where
+        Changed()
+    End Method
+
+    /// Sets where its children go across its row or column, or in its stack: stretched across, at
+    /// first.
+    @MainThread Public Method SetAlign(where: Align)
+        align = where
+        Changed()
+    End Method
+
+    /// Sets where it goes across its parent's row or column, or in its stack, over its parent's
+    /// Align; Null for its parent's.
+    @MainThread Public Method SetAlignSelf(where: Align?)
+        selfAlign = where
+        Changed()
+    End Method
+
+    /// Sets where it goes in its parent's stack, over its parent's Align; Null to be placed by it.
+    @MainThread Public Method SetAnchors(where: Anchors?)
+        anchors = where
+        Changed()
+    End Method
+
+    /// Shows it, or hides it, which takes it and its children out of the layout, as if they
+    /// weren't there, and out of NodeAt.
+    @MainThread Public Method SetVisible(shown: Bool)
+        visible = shown
+        Changed()
+    End Method
+
+    /// Whether it's shown, by itself; a parent that's hidden hides it too.
+    @MainThread Public Method Visible(): Bool => visible
+
+    /// Sets the size of what a Node with no children shows, which Measure gives: a widget's text
+    /// or image, (0, 0) at first.
+    @MainThread Public Method SetContentSize(width: Float32, height: Float32)
+        If !(width >= 0.0 && height >= 0.0) Then Panic("Node.SetContentSize: a size is 0 or more")
+        content = Vec2(width, height)
+        Changed()
+    End Method
+
+    /// The size of what it shows when it has no children, without its padding, which sizing it
+    /// to fit takes: its content size, which a widget's own Measure works out instead.
+    @MainThread Public Method Measure(): Vec2 => content
+
+    /// Its box, as the last Layout put it, in the UI's units: its edge, which its padding is in.
+    @MainThread Public Method Box(): Rect => box
+
+    /// Its box less its padding, where its children go.
+    @MainThread Public Method ContentBox(): Rect => Inset(box, padding)
+
+    /// Lays its tree out in `bounds`, as a root does with the screen: it fills them, less its
+    /// margin, and each child goes in it as its sizes say. Nothing's done when nothing's changed
+    /// since the last Layout, and the bounds are the same.
+    @MainThread Public Method Layout(bounds: Rect)
+        If !dirty && bounds == Self.bounds Then Return
+        Self.bounds = bounds
+        layouts += 1
+        Arrange(Self, Inset(bounds, margin))
+    End Method
+
+    /// The Node its tree shows at `point`: the last child whose box has it, of the last child
+    /// whose box has it, and so on down, or itself; Null when it's hidden, or its box doesn't have
+    /// the point. A child outside its parent's box isn't found there, as it isn't drawn there.
+    @MainThread Public Method NodeAt(point: Vec2): Node?
+        If !visible || !box.Contains(point) Then Return Null
+        For i = children.Count - 1 To 0 Step -1
+            Local found = children[i].NodeAt(point)
+            If found != Null Then Return found
+        End For
+        Return Self
+    End Method
+
+    Public Method ToString(): String => name == "" ? "a Node" : "Node \"{name}\""
+
+    // Marks it, and each Node it's in, to be laid out again.
+    Package Method Changed()
+        Local at: Node? = Self
+        While at != Null
+            at.dirty = True
+            at = at.Parent()
+        End While
+    End Method
+
+    // Its size as it'd be laid out fitting what's in it, its fixed size where it has one, in the
+    // Layout being done, which keeps it.
+    Package Method Natural(): Vec2
+        If measured == layouts Then Return natural
+        measured = layouts
+        Local fitted = Measure()
+        Local shown = Shown()
+        If shown.Count > 0
+            fitted = Vec2(0.0, 0.0)
+            For child In shown
+                Local size = child.Natural()
+                Local wide = size.x + child.margin.Horizontal()
+                Local tall = size.y + child.margin.Vertical()
+                Select arrangement
+                    Case Arrangement.ROW
+                        fitted = Vec2(fitted.x + wide, Max(fitted.y, tall))
+                    Case Arrangement.COLUMN
+                        fitted = Vec2(Max(fitted.x, wide), fitted.y + tall)
+                    Default
+                        fitted = Vec2(Max(fitted.x, wide), Max(fitted.y, tall))
+                End Select
+            End For
+            Local gaps = gap * ((shown.Count - 1) As Float32)
+            If arrangement == Arrangement.ROW Then fitted.x += gaps
+            If arrangement == Arrangement.COLUMN Then fitted.y += gaps
+        End If
+        fitted = Vec2(fitted.x + padding.Horizontal(), fitted.y + padding.Vertical())
+        Local across = width.Mode == SizeMode.FIXED ? width.Value : fitted.x
+        Local down = height.Mode == SizeMode.FIXED ? height.Value : fitted.y
+        natural = Vec2(Kept(across, minimum.x, maximum.x), Kept(down, minimum.y, maximum.y))
+        Return natural
+    End Method
+
+    // Its children that are shown, which the layout lays out.
+    Package Method Shown(): Node[] => children.Filter(Function(child: Node) => child.visible)
+End Class
+
+// `length` kept from `least` to `most`, a least past the most winning.
+Function Kept(length: Float32, least: Float32, most: Float32): Float32
+    Return Max(Min(length, most), least)
+End Function
+
+// `box` less `insets`, never less than nothing.
+Function Inset(box: Rect, insets: Insets): Rect
+    Return Rect(box.X + insets.Left, box.Y + insets.Top, Max(box.Width - insets.Horizontal(), 0.0),
+                Max(box.Height - insets.Vertical(), 0.0))
+End Function
+
+// Puts `node` at `box`, and its children in it.
+Function Arrange(node: Node, box: Rect)
+    node.box = box
+    node.dirty = False
+    Local shown = node.Shown()
+    If shown.Count == 0 Then Return
+    Local content = Inset(box, node.padding)
+    Select node.arrangement
+        Case Arrangement.ROW
+            ArrangeLine(node, shown, content, True)
+        Case Arrangement.COLUMN
+            ArrangeLine(node, shown, content, False)
+        Default
+            ArrangeStack(node, shown, content)
+    End Select
+End Function
+
+// One axis of a box: where it starts, and how long it is.
+Struct Span
+    Field Start: Float32
+    Field Length: Float32
+End Struct
+
+// A row's children, or a column's when `horizontal` is False, along it and across it.
+Function ArrangeLine(node: Node, shown: Node[], content: Rect, horizontal: Bool)
+    Local along = horizontal ? Span(content.X, content.Width) : Span(content.Y, content.Height)
+    Local across = horizontal ? Span(content.Y, content.Height) : Span(content.X, content.Width)
+    Local count = shown.Count
+    Local lengths: Float32[] = []
+    Local filling: Bool[] = []
+    Local used = node.gap * ((count - 1) As Float32)
+    For child In shown
+        Local sizing = horizontal ? child.width : child.height
+        used += horizontal ? child.margin.Horizontal() : child.margin.Vertical()
+        Local length: Float32 = 0.0
+        Select sizing.Mode
+            Case SizeMode.FIXED
+                length = sizing.Value
+            Case SizeMode.FIT
+                length = horizontal ? child.Natural().x : child.Natural().y
+            Case SizeMode.FRACTION
+                length = sizing.Value * along.Length
+            Default
+                length = 0.0
+        End Select
+        Local fills = sizing.Mode == SizeMode.FILL
+        If !fills
+            length = KeptAlong(child, length, horizontal)
+            used += length
+        End If
+        lengths.Add(length)
+        filling.Add(fills)
+    End For
+    Share(shown, lengths, filling, Max(along.Length - used, 0.0), horizontal)
+
+    // What's left after the children, which Justify gives out.
+    Local total = node.gap * ((count - 1) As Float32)
+    For i = 0 To count - 1
+        Local child = shown[i]
+        total += lengths[i] + (horizontal ? child.margin.Horizontal() : child.margin.Vertical())
+    End For
+    Local free = Max(along.Length - total, 0.0)
+    Local first: Float32 = 0.0
+    Local between = node.gap
+    Select node.justify
+        Case Justify.CENTER
+            first = free / 2.0
+        Case Justify.END
+            first = free
+        Case Justify.SPACE_BETWEEN
+            If count > 1 Then between += free / ((count - 1) As Float32)
+        Case Justify.SPACE_AROUND
+            first = free / (2.0 * (count As Float32))
+            between += free / (count As Float32)
+        Default
+            first = 0.0
+    End Select
+
+    Local at = along.Start + first
+    For i = 0 To count - 1
+        Local child = shown[i]
+        Local before = horizontal ? child.margin.Left : child.margin.Top
+        Local after = horizontal ? child.margin.Right : child.margin.Bottom
+        at += before
+        Local place = Across(node, child, across, horizontal)
+        If horizontal
+            Arrange(child, Rect(at, place.Start, lengths[i], place.Length))
+        Else
+            Arrange(child, Rect(place.Start, at, place.Length, lengths[i]))
+        End If
+        at += lengths[i] + after + between
+    End For
+End Function
+
+// Gives the filling children their shares of `free`, by their weights, kept to their least and
+// most: one kept gets that, and the rest share what's left, until none is kept.
+Function Share(shown: Node[], lengths: Float32[], filling: Bool[], free: Float32, horizontal: Bool)
+    Local open: Int[] = []
+    For i = 0 To shown.Count - 1
+        If filling[i] Then open.Add(i)
+    End For
+    Local left = free
+    While open.Count > 0
+        Local weights: Float32 = 0.0
+        For i In open
+            weights += (horizontal ? shown[i].width : shown[i].height).Value
+        End For
+        Local kept: Int[] = []
+        For i In open
+            Local share = left * (horizontal ? shown[i].width : shown[i].height).Value / weights
+            Local length = KeptAlong(shown[i], share, horizontal)
+            lengths[i] = length
+            If length != share Then kept.Add(i)
+        End For
+        If kept.Count == 0 Then Return
+        // The kept have theirs; the rest share again what they leave.
+        For i In kept
+            left -= lengths[i]
+            open.Remove(i)
+        End For
+        left = Max(left, 0.0)
+    End While
+End Function
+
+// `length` kept to `child`'s least and most along a row, or a column.
+Function KeptAlong(child: Node, length: Float32, horizontal: Bool): Float32
+    If horizontal Then Return Kept(length, child.minimum.x, child.maximum.x)
+    Return Kept(length, child.minimum.y, child.maximum.y)
+End Function
+
+// Where `child` goes across its parent's row or column: by its sizing, stretched when it fits and
+// its alignment's STRETCH, and placed by its alignment.
+Function Across(node: Node, child: Node, across: Span, horizontal: Bool): Span
+    Local sizing = horizontal ? child.height : child.width
+    Local before = horizontal ? child.margin.Top : child.margin.Left
+    Local after = horizontal ? child.margin.Bottom : child.margin.Right
+    Local room = Max(across.Length - before - after, 0.0)
+    Local where = child.selfAlign ?? node.align
+    Local length: Float32 = 0.0
+    Select sizing.Mode
+        Case SizeMode.FIXED
+            length = sizing.Value
+        Case SizeMode.FILL
+            length = room
+        Case SizeMode.FRACTION
+            length = sizing.Value * across.Length
+        Default
+            length = where == Align.STRETCH ? room : (horizontal ? child.Natural().y
+                                                                 : child.Natural().x)
+    End Select
+    length = KeptAlong(child, length, !horizontal)
+    Select where
+        Case Align.CENTER
+            Return Span(across.Start + before + (room - length) / 2.0, length)
+        Case Align.END
+            Return Span(across.Start + across.Length - after - length, length)
+        Default
+            Return Span(across.Start + before, length)
+    End Select
+End Function
+
+// A stack's children, each placed on each axis by its anchors, or its parent's Align.
+Function ArrangeStack(node: Node, shown: Node[], content: Rect)
+    For child In shown
+        Local where = child.selfAlign ?? node.align
+        Local anchored = child.anchors ?? AnchorsOf(where, child)
+        Local x = Placed(child, Span(content.X, content.Width), anchored.MinX, anchored.MaxX,
+                         child.width, child.margin.Left, child.margin.Right, child.Natural().x,
+                         child.minimum.x, child.maximum.x)
+        Local y = Placed(child, Span(content.Y, content.Height), anchored.MinY, anchored.MaxY,
+                         child.height, child.margin.Top, child.margin.Bottom, child.Natural().y,
+                         child.minimum.y, child.maximum.y)
+        Arrange(child, Rect(x.Start, y.Start, x.Length, y.Length))
+    End For
+End Function
+
+// The anchors an alignment is in a stack: a point at the start, middle, or end; or, stretched,
+// the whole on each axis `child` fits or fills on, as a row's STRETCH is, and the start on the
+// others.
+Function AnchorsOf(where: Align, child: Node): Anchors
+    Select where
+        Case Align.CENTER
+            Return Anchors.Point(0.5, 0.5)
+        Case Align.END
+            Return Anchors.Point(1.0, 1.0)
+        Case Align.STRETCH
+            Local wide = Stretches(child.width) ? 1.0 : 0.0
+            Local tall = Stretches(child.height) ? 1.0 : 0.0
+            Return Anchors(0.0, 0.0, wide, tall)
+        Default
+            Return Anchors.Point(0.0, 0.0)
+    End Select
+End Function
+
+Function Stretches(sizing: Sizing): Bool
+    Return sizing.Mode == SizeMode.FIT || sizing.Mode == SizeMode.FILL
+End Function
+
+// Where a stack's child goes on one axis of its parent's content, `room`: between its anchors, less
+// its margins, when they're apart; at its own size, that far along the space its margins leave,
+// when they're one.
+Function Placed(child: Node, room: Span, first: Float32, last: Float32, sizing: Sizing,
+                before: Float32, after: Float32, natural: Float32, least: Float32,
+                most: Float32): Span
+    If last > first
+        Local start = room.Start + first * room.Length + before
+        Local finish = room.Start + last * room.Length - after
+        Return Span(start, Kept(Max(finish - start, 0.0), least, most))
+    End If
+    Local space = Max(room.Length - before - after, 0.0)
+    Local length: Float32 = 0.0
+    Select sizing.Mode
+        Case SizeMode.FIXED
+            length = sizing.Value
+        Case SizeMode.FILL
+            length = space
+        Case SizeMode.FRACTION
+            length = sizing.Value * room.Length
+        Default
+            length = natural
+    End Select
+    length = Kept(length, least, most)
+    Return Span(room.Start + before + first * (space - length), length)
+End Function

@@ -1,0 +1,315 @@
+// Layout: rows, columns, and stacks, their sizes, gaps, padding, margins, alignment, and anchors.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine_ui
+
+Function Fixed(name: String, width: Float32, height: Float32): Node
+    Local node = Node(name)
+    node.SetSize(width, height)
+    Return node
+End Function
+
+@Test
+Function AColumnStacksItsChildrenDownWithGapsInItsPadding()
+    Local column = Node("column")
+    column.SetPadding(Insets.All(10.0))
+    column.SetGap(5.0)
+    column.SetAlign(Align.START)
+    Local a = Fixed("a", 100.0, 20.0)
+    Local b = Fixed("b", 50.0, 30.0)
+    column.Add(a)
+    column.Add(b)
+    column.Layout(Rect(0.0, 0.0, 400.0, 300.0))
+    Expect(column.Box() == Rect(0.0, 0.0, 400.0, 300.0))
+    Expect(column.ContentBox() == Rect(10.0, 10.0, 380.0, 280.0))
+    Expect(a.Box() == Rect(10.0, 10.0, 100.0, 20.0))
+    Expect(b.Box() == Rect(10.0, 35.0, 50.0, 30.0))
+End Function
+
+@Test
+Function ARowsFillingChildrenShareWhatsLeftByWeight()
+    Local row = Node("row")
+    row.SetArrangement(Arrangement.ROW)
+    row.SetGap(10.0)
+    Local fixed = Fixed("fixed", 100.0, 20.0)
+    Local one = Node("one")
+    one.SetWidth(Sizing.Fill())
+    Local two = Node("two")
+    two.SetWidth(Sizing.Fill(2.0))
+    row.Add(fixed)
+    row.Add(one)
+    row.Add(two)
+    row.Layout(Rect(0.0, 0.0, 420.0, 50.0))
+    // 420 less 100 and two gaps is 300: a third and two thirds.
+    Expect(one.Box() == Rect(110.0, 0.0, 100.0, 50.0))
+    Expect(two.Box() == Rect(220.0, 0.0, 200.0, 50.0))
+    // A row's children stretch across it at first, a fixed one keeping its own.
+    Expect(fixed.Box().Height == 20.0)
+End Function
+
+// A filling child kept to its most has that, and the others share again what it leaves.
+@Test
+Function AFillingChildKeptToItsMostLeavesTheRestToTheOthers()
+    Local row = Node("row")
+    row.SetArrangement(Arrangement.ROW)
+    Local kept = Node("kept")
+    kept.SetWidth(Sizing.Fill())
+    kept.SetMaxSize(50.0, Inf)
+    Local other = Node("other")
+    other.SetWidth(Sizing.Fill())
+    Local least = Node("least")
+    least.SetWidth(Sizing.Fill())
+    least.SetMinSize(200.0, 0.0)
+    row.Add(kept)
+    row.Add(other)
+    row.Add(least)
+    row.Layout(Rect(0.0, 0.0, 400.0, 10.0))
+    Expect(kept.Box().Width == 50.0)
+    Expect(least.Box().Width == 200.0)
+    Expect(other.Box().Width == 150.0)
+    Expect(other.Box().X == 50.0)
+End Function
+
+@Test
+Function ANodeSizedToFitIsWhatsInIt()
+    Local outer = Node("outer")
+    outer.SetArrangement(Arrangement.STACK)
+    Local column = Node("column")
+    column.SetPadding(Insets.All(5.0))
+    column.SetGap(4.0)
+    column.SetAlignSelf(Align.START)
+    column.Add(Fixed("a", 100.0, 20.0))
+    Local b = Fixed("b", 80.0, 30.0)
+    b.SetMargin(Insets(0.0, 0.0, 10.0, 0.0))
+    column.Add(b)
+    outer.Add(column)
+    outer.Layout(Rect(0.0, 0.0, 1000.0, 1000.0))
+    // As wide as its widest, with its margin, and as tall as both and the gap, with its padding.
+    Expect(column.Box() == Rect(0.0, 0.0, 110.0, 64.0))
+    // A leaf fits what it measures, with its padding.
+    Local label = Node("label")
+    label.SetContentSize(40.0, 12.0)
+    label.SetPadding(Insets.Symmetric(3.0, 2.0))
+    label.SetAlignSelf(Align.END)
+    outer.Add(label)
+    outer.Layout(Rect(0.0, 0.0, 1000.0, 1000.0))
+    Expect(label.Box() == Rect(954.0, 984.0, 46.0, 16.0))
+End Function
+
+@Test
+Function JustifyGivesOutWhatsLeftAlongARow()
+    Local row = Node("row")
+    row.SetArrangement(Arrangement.ROW)
+    Local a = Fixed("a", 100.0, 10.0)
+    Local b = Fixed("b", 100.0, 10.0)
+    row.Add(a)
+    row.Add(b)
+    Local bounds = Rect(0.0, 0.0, 500.0, 10.0)
+    row.SetJustify(Justify.CENTER)
+    row.Layout(bounds)
+    Expect(a.Box().X == 150.0 && b.Box().X == 250.0)
+    row.SetJustify(Justify.END)
+    row.Layout(bounds)
+    Expect(a.Box().X == 300.0 && b.Box().X == 400.0)
+    row.SetJustify(Justify.SPACE_BETWEEN)
+    row.Layout(bounds)
+    Expect(a.Box().X == 0.0 && b.Box().X == 400.0)
+    row.SetJustify(Justify.SPACE_AROUND)
+    row.Layout(bounds)
+    Expect(a.Box().X == 75.0 && b.Box().X == 325.0)
+End Function
+
+@Test
+Function AlignPlacesChildrenAcrossAndAChildCanGoItsOwnWay()
+    Local column = Node("column")
+    column.SetAlign(Align.CENTER)
+    Local a = Fixed("a", 100.0, 10.0)
+    Local b = Fixed("b", 100.0, 10.0)
+    b.SetAlignSelf(Align.END)
+    Local c = Node("c")
+    c.SetHeight(Sizing.Fixed(10.0))
+    c.SetAlignSelf(Align.STRETCH)
+    c.SetMargin(Insets.Symmetric(20.0, 0.0))
+    column.Add(a)
+    column.Add(b)
+    column.Add(c)
+    column.Layout(Rect(0.0, 0.0, 300.0, 100.0))
+    Expect(a.Box().X == 100.0)
+    Expect(b.Box().X == 200.0)
+    Expect(c.Box() == Rect(20.0, 20.0, 260.0, 10.0))
+End Function
+
+@Test
+Function AFractionIsOfItsParentsContent()
+    Local row = Node("row")
+    row.SetArrangement(Arrangement.ROW)
+    row.SetPadding(Insets.All(10.0))
+    Local half = Node("half")
+    half.SetWidth(Sizing.Fraction(0.5))
+    half.SetHeight(Sizing.Fraction(0.25))
+    half.SetAlignSelf(Align.START)
+    row.Add(half)
+    row.Layout(Rect(0.0, 0.0, 220.0, 120.0))
+    Expect(half.Box() == Rect(10.0, 10.0, 100.0, 25.0))
+End Function
+
+@Test
+Function AStacksChildrenGoByTheirAnchors()
+    Local screen = Node("screen")
+    screen.SetArrangement(Arrangement.STACK)
+    // Its corner: its own size, against the bottom right, less its margin.
+    Local corner = Fixed("corner", 100.0, 40.0)
+    corner.SetAnchors(Anchors.Point(1.0, 1.0))
+    corner.SetMargin(Insets.All(10.0))
+    // Its middle.
+    Local middle = Fixed("middle", 200.0, 100.0)
+    middle.SetAnchors(Anchors.Point(0.5, 0.5))
+    // The bottom quarter, stretched between its anchors.
+    Local bar = Node("bar")
+    bar.SetAnchors(Anchors(0.0, 0.75, 1.0, 1.0))
+    bar.SetMargin(Insets.Symmetric(8.0, 0.0))
+    screen.Add(corner)
+    screen.Add(middle)
+    screen.Add(bar)
+    screen.Layout(Rect(0.0, 0.0, 800.0, 600.0))
+    Expect(corner.Box() == Rect(690.0, 550.0, 100.0, 40.0))
+    Expect(middle.Box() == Rect(300.0, 250.0, 200.0, 100.0))
+    Expect(bar.Box() == Rect(8.0, 450.0, 784.0, 150.0))
+    // Without anchors, a stack's child goes by its Align: stretched, at first.
+    Local backdrop = Node("backdrop")
+    screen.Insert(0, backdrop)
+    screen.Layout(Rect(0.0, 0.0, 800.0, 600.0))
+    Expect(backdrop.Box() == Rect(0.0, 0.0, 800.0, 600.0))
+End Function
+
+@Test
+Function AHiddenNodeTakesNoSpaceAndIsntFound()
+    Local column = Node("column")
+    Local a = Fixed("a", 10.0, 10.0)
+    Local hidden = Fixed("hidden", 10.0, 50.0)
+    Local b = Fixed("b", 10.0, 10.0)
+    column.Add(a)
+    column.Add(hidden)
+    column.Add(b)
+    hidden.SetVisible(False)
+    column.Layout(Rect(0.0, 0.0, 100.0, 100.0))
+    Expect(b.Box().Y == 10.0)
+    Expect(!hidden.Visible())
+    Expect(column.NodeAt(Vec2(5.0, 15.0)) == b)
+    hidden.SetVisible(True)
+    column.Layout(Rect(0.0, 0.0, 100.0, 100.0))
+    Expect(b.Box().Y == 60.0)
+End Function
+
+@Test
+Function NodeAtFindsTheTopmostAtAPoint()
+    Local screen = Node("screen")
+    screen.SetArrangement(Arrangement.STACK)
+    Local under = Fixed("under", 100.0, 100.0)
+    Local over = Fixed("over", 50.0, 50.0)
+    Local inside = Fixed("inside", 10.0, 10.0)
+    over.Add(inside)
+    screen.Add(under)
+    screen.Add(over)
+    screen.Layout(Rect(0.0, 0.0, 200.0, 200.0))
+    Expect(screen.NodeAt(Vec2(5.0, 5.0)) == inside)
+    Expect(screen.NodeAt(Vec2(30.0, 30.0)) == over)
+    Expect(screen.NodeAt(Vec2(80.0, 80.0)) == under)
+    Expect(screen.NodeAt(Vec2(150.0, 150.0)) == screen)
+    Expect(screen.NodeAt(Vec2(300.0, 5.0)) == Null)
+End Function
+
+// A widget measures what it shows; Layout does nothing when nothing's changed.
+Class Counted Extends Node
+    Field measures: Int = 0
+
+    Public New()
+        Super.New("counted")
+    End New
+
+    Public Override Method Measure(): Vec2
+        measures += 1
+        Return Vec2(30.0, 10.0)
+    End Method
+End Class
+
+@Test
+Function ALayoutWithNothingChangedDoesNothing()
+    Local column = Node("column")
+    column.SetAlign(Align.START)
+    Local counted = Counted()
+    column.Add(counted)
+    Local bounds = Rect(0.0, 0.0, 100.0, 100.0)
+    column.Layout(bounds)
+    Expect(counted.measures == 1)
+    Expect(counted.Box() == Rect(0.0, 0.0, 30.0, 10.0))
+    column.Layout(bounds)
+    Expect(counted.measures == 1)
+    // A change anywhere in the tree, or new bounds, lays it out again.
+    counted.SetMargin(Insets.All(1.0))
+    column.Layout(bounds)
+    Expect(counted.measures == 2)
+    Expect(counted.Box().X == 1.0)
+    column.Layout(Rect(0.0, 0.0, 200.0, 100.0))
+    Expect(counted.measures == 3)
+End Function
+
+@Test
+Function ATreesNodesAreFoundAddedAndRemoved()
+    Local root = Node("root")
+    Local menu = Node("menu")
+    Local play = Node("play")
+    root.Add(menu)
+    menu.Add(play)
+    Expect(root.Find("play") == play)
+    Expect(root.Find("nothing") == Null)
+    Expect(play.Parent() == menu)
+    Expect(root.Parent() == Null)
+    Local quit = Node("quit")
+    menu.Insert(0, quit)
+    Expect(menu.Children() == [quit, play])
+    Expect(menu.Remove(quit))
+    Expect(!menu.Remove(quit))
+    Expect(quit.Parent() == Null)
+    // A removed Node can go somewhere else.
+    root.Add(quit)
+    Expect(root.Children() == [menu, quit])
+End Function
+
+// A least past the most wins, as CSS's does.
+@Test
+Function ALeastPastTheMostWins()
+    Local column = Node("column")
+    Local node = Fixed("node", 10.0, 10.0)
+    node.SetMaxSize(20.0, 20.0)
+    node.SetMinSize(30.0, 0.0)
+    column.SetAlign(Align.START)
+    column.Add(node)
+    column.Layout(Rect(0.0, 0.0, 100.0, 100.0))
+    Expect(node.Box().Width == 30.0)
+    Expect(node.Box().Height == 10.0)
+End Function
+
+@Test
+Function SizingsSayWhatTheyAre()
+    Expect("{Sizing.Fit()}" == "fit")
+    Expect("{Sizing.Fixed(12.0)}" == "12")
+    Expect("{Sizing.Fill(2.0)}" == "fill 2")
+    Expect("{Sizing.Fraction(0.5)}" == "50%")
+    Expect(Node("menu").Width() == Sizing.Fit())
+    Expect("{Node("menu")}" == "Node \"menu\"")
+End Function
+
+// A parent keeps its children, and they only point back to it, so a child of a parent that's let
+// go of has none, and can go somewhere else.
+@Test
+Function AChildOfAParentLetGoOfHasNone()
+    Local child = Node("child")
+    Node("gone").Add(child)
+    Expect(child.Parent() == Null)
+    Local kept = Node("kept")
+    kept.Add(child)
+    Expect(child.Parent() == kept)
+End Function

@@ -1,0 +1,34 @@
+// fbengine_ui's cases that need a process of their own, which ctest runs by name and checks
+// against what they print: what panics.
+
+Import std.core
+Import std.os
+Import fbengine_ui
+
+Local arguments = Process.Arguments()
+Local name = arguments.Count > 0 ? arguments[0] : ""
+Select name
+    Case "add-twice"
+        // Its first parent kept, since a child of one that's gone has no parent.
+        Local child = Node("child")
+        Local first = Node("a")
+        first.Add(child)
+        Node("b").Add(child)
+    Case "add-into-itself"
+        Local outer = Node("outer")
+        Local inner = Node("inner")
+        outer.Add(inner)
+        inner.Add(outer)
+    Case "insert-out-of-range"
+        Node("a").Insert(1, Node("b"))
+    Case "fixed-negative"
+        Sizing.Fixed(-1.0)
+    Case "fill-zero"
+        Sizing.Fill(0.0)
+    Case "fraction-past-one"
+        Sizing.Fraction(1.5)
+    Case "style-empty-name"
+        Theme().SetStyle("button.", Style.Plain())
+    Default
+        Panic("no case {name}")
+End Select
