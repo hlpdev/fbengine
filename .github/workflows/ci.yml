@@ -94,9 +94,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # MINGW64's lavapipe corrupts its heap as the device is made; UCRT64's is the one MSYS2
-      # keeps current.
-      - name: Install MinGW and lavapipe
+      - name: Install MinGW and the Vulkan loader
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
@@ -108,16 +106,22 @@ jobs:
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-vulkan-loader
-            mingw-w64-ucrt-x86_64-mesa
 
-      # The runner runs as an administrator, for whom the loader ignores VK_DRIVER_FILES, so
-      # lavapipe goes in the registry, where it looks for drivers.
-      - name: Use lavapipe (Windows)
+      # Windows' lavapipe is mesa-dist-win's MSVC build: MSYS2's, built with MinGW, corrupts its
+      # heap freeing host-visible memory. The runner runs as an administrator, for whom the loader
+      # ignores VK_DRIVER_FILES, so lavapipe goes in the registry, where it looks for drivers.
+      - name: Install lavapipe (Windows)
         if: runner.os == 'Windows'
         env:
           MSYS2_ARG_CONV_EXCL: '*'
+          MESA: https://github.com/pal1000/mesa-dist-win/releases/download/26.2.4/mesa3d-26.2.4-release-msvc.7z
+          MESA_SHA256: 351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695
         run: |
-          manifest="$(cygpath -w /ucrt64/share/vulkan/icd.d/lvp_icd.x86_64.json)"
+          curl -fsSL -o "$RUNNER_TEMP/mesa.7z" "$MESA"
+          echo "$MESA_SHA256  $RUNNER_TEMP/mesa.7z" | sha256sum -c
+          7z x -y "-o$RUNNER_TEMP/mesa" "$RUNNER_TEMP/mesa.7z" > /dev/null
+          manifest="$(cygpath -w "$RUNNER_TEMP/mesa/x64/lvp_icd.x86_64.json")"
+          test -f "$manifest"
           reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$manifest" /t REG_DWORD /d 0 /f
 
       - name: Install lavapipe (Linux)
