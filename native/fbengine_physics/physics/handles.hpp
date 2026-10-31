@@ -1,9 +1,10 @@
 #pragma once
 
 // The handles fbengine_physics' C API gives for its objects, as docs/architecture.md has them: a
-// 32-bit slot, an 8-bit kind, and a 24-bit generation, which goes up as the slot's freed, so a
-// freed object's handle is never another's, and a handle of one kind is never taken for another.
-// 0 is none.
+// 32-bit slot, above it a 24-bit generation, which goes up as the slot's freed, so a freed
+// object's handle is never another's, and above that an 8-bit kind, so a handle of one kind is
+// never taken for another. 0 is none. Its layout is native/common/handles.hpp's, which it gives
+// way to once that's on master.
 
 #include <cstdint>
 #include <memory>
@@ -12,8 +13,8 @@
 
 namespace fbe::physics {
 
-/// The kinds of fbengine_physics' handles, apart from every other package's.
-enum handle_kind_t : std::uint8_t { WORLD_KIND = 0x40, SHAPE_KIND = 0x41, BODY_KIND = 0x42 };
+/// The kinds of fbengine_physics' handles, in its range of architecture.md's, 96 to 127.
+enum handle_kind_t : std::uint8_t { WORLD_KIND = 96, SHAPE_KIND = 97, BODY_KIND = 98 };
 
 /// The objects of one kind, each owned by its slot, by handle.
 template <typename T>
@@ -35,15 +36,15 @@ public:
         }
         m_slots[slot].item = std::move(item);
         ++m_count;
-        return (static_cast<std::uint64_t>(m_slots[slot].generation) << 40U) |
-               (static_cast<std::uint64_t>(m_kind) << 32U) | slot;
+        return (static_cast<std::uint64_t>(m_kind) << 56U) |
+               (static_cast<std::uint64_t>(m_slots[slot].generation) << 32U) | slot;
     }
 
     /// The object `handle` is, or nullptr for one that's freed, never was, or is of another kind.
     [[nodiscard]] T* get(std::uint64_t handle) const {
         const auto slot = static_cast<std::uint32_t>(handle);
-        const auto kind = static_cast<std::uint8_t>(handle >> 32U);
-        const auto generation = static_cast<std::uint32_t>(handle >> 40U);
+        const auto generation = static_cast<std::uint32_t>(handle >> 32U) & 0xFFFFFFU;
+        const auto kind = static_cast<std::uint8_t>(handle >> 56U);
         if (kind != m_kind || slot >= m_slots.size() || m_slots[slot].generation != generation) {
             return nullptr;
         }
