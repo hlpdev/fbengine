@@ -6,6 +6,8 @@ Public Extern "C" Lib "fbengine_audio_native"
     Function fbe_emitter_free(emitter: UInt64)
     Function fbe_emitter_set_position(emitter: UInt64, x: Float32, y: Float32, z: Float32)
     Function fbe_emitter_set_velocity(emitter: UInt64, x: Float32, y: Float32, z: Float32)
+    Function fbe_emitter_place_all(emitters: Ptr<UInt64>, positions: Ptr<Float32>,
+                                   velocities: Ptr<Float32>, count: Int32)
     Function fbe_emitter_set_range(emitter: UInt64, nearest: Float32, farthest: Float32): Bool
     Function fbe_emitter_nearest(emitter: UInt64): Float32
     Function fbe_emitter_farthest(emitter: UInt64): Float32

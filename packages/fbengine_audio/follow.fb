@@ -1,0 +1,32 @@
+// What follows what each frame: one of Frame.OnFlip's hooks, which moves the Listener, then the
+// Emitters, so each Emitter's Doppler effect is from where the Listener is now.
+
+Import std.core
+Import std.math
+Import fbengine
+
+/// What moves the Listener, and the Emitters, each frame, once something follows.
+Package Global followListener: (Func())? = Null
+Package Global followEmitters: (Func())? = Null
+Global hooked = False
+
+/// Has Flip move what follows from now on, once.
+@MainThread Package Function StartFollowing()
+    If hooked Then Return
+    hooked = True
+    Frame.OnFlip(EachFrame)
+End Function
+
+/// How fast something moved from `last` to `now` over the last frame, at rest when there was none.
+Package Function Moved(last: Vec3, now: Vec3): Vec3
+    Local seconds = Frame.Delta()
+    If seconds <= 0.0 Then Return Vec3(0, 0, 0)
+    Return (now - last) * ((1.0 / seconds) As Float)
+End Function
+
+Function EachFrame()
+    Local listener = followListener
+    If listener != Null Then listener()
+    Local emitters = followEmitters
+    If emitters != Null Then emitters()
+End Function

@@ -18,6 +18,7 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -169,6 +170,34 @@ FBE_AUDIO_API void fbe_emitter_set_position(uint64_t emitter, float x, float y, 
     found->position = { x, y, z };
     each_channel(*found, [&](ma_sound& sound) { ma_sound_set_position(&sound, x, y, z); });
     pitch_channels(*found);
+}
+
+FBE_AUDIO_API void fbe_emitter_place_all(const uint64_t* emitters_placed, const float* positions,
+                                         const float* velocities, int32_t count) {
+    if (emitters_placed == nullptr || positions == nullptr || velocities == nullptr || count <= 0) {
+        return;
+    }
+    const auto placed = static_cast<std::size_t>(count);
+    const std::span<const uint64_t> handles(emitters_placed, placed);
+    const std::span<const float> wheres(positions, placed * 3);
+    const std::span<const float> moves(velocities, placed * 3);
+    for (std::size_t i = 0; i < placed; ++i) {
+        emitter_t* found = emitters().find(handles[i]);
+        if (found == nullptr) {
+            continue;
+        }
+        const std::array<float, 3> position = {
+            wheres[i * 3],
+            wheres[(i * 3) + 1],
+            wheres[(i * 3) + 2],
+        };
+        found->position = position;
+        found->velocity = { moves[i * 3], moves[(i * 3) + 1], moves[(i * 3) + 2] };
+        each_channel(*found, [&](ma_sound& sound) {
+            ma_sound_set_position(&sound, position[0], position[1], position[2]);
+        });
+        pitch_channels(*found);
+    }
 }
 
 FBE_AUDIO_API void fbe_emitter_set_velocity(uint64_t emitter, float x, float y, float z) {
