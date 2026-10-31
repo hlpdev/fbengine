@@ -652,6 +652,40 @@ TEST_CASE("the last frame's counters say what it did", "[gpu]") {
     stop_gpu();
 }
 
+// The GPU's time counts the frame's uploads, which run before its commands: a frame writing 64 MiB
+// takes longer than an empty one.
+TEST_CASE("the GPU's time counts the frame's uploads", "[gpu]") {
+    open(64, 32);
+    if (fbe::gpu::device()->timestamp_bits == 0) {
+        SKIP("this GPU writes no timestamps");
+    }
+    const std::uint64_t big = fbe_texture_create(4096, 4096, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(big != 0);
+    const std::vector<std::uint8_t> pixels(std::size_t{ 4096 } * 4096 * 4, 100);
+    const auto time_of = [](bool upload, std::uint64_t texture,
+                            const std::vector<std::uint8_t>& from) {
+        if (upload) {
+            require(fbe_texture_write(texture, 0, 0, 4096, 4096, from.data(), 4096 * 4));
+        }
+        // Its time's read as its frame in flight comes round again, two Flips on.
+        fbe_frame_flip(false);
+        fbe_frame_flip(false);
+        fbe_frame_flip(false);
+        fbe_gpu_counters_t counters{};
+        require(fbe_gpu_counters(&counters));
+        return counters.gpu_milliseconds;
+    };
+    // The texture's made cleared, in a frame's uploads, which goes by first.
+    time_of(false, big, pixels);
+    const float empty = time_of(false, big, pixels);
+    const float uploading = time_of(true, big, pixels);
+    WARN("an empty frame " << empty << " ms, one uploading 64 MiB " << uploading << " ms");
+    CHECK(uploading > 2.0F * empty);
+    CHECK(fbe_texture_release(big));
+    fbe_window_close();
+    stop_gpu();
+}
+
 // Not a check, a measure: what the graph costs the CPU for a 1280x720 frame of 65 passes, 32
 // transient targets each drawn, then drawn into the screen sampling four textures besides, and
 // the present: adding them, and recording them, with what their own commands cost, timed, the

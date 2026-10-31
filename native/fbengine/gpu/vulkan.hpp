@@ -45,6 +45,9 @@ struct frame_t {
     /// anywhere in the frame sees them.
     VkCommandBuffer uploads = VK_NULL_HANDLE;
     VkCommandBuffer commands = VK_NULL_HANDLE;
+    /// The frame's first timestamp, submitted before everything else, uploads carried from a
+    /// failed submit too, so the GPU's time counts them; never carried itself.
+    VkCommandBuffer timing = VK_NULL_HANDLE;
     /// Signaled when the GPU has finished the frame's commands, as it starts.
     VkFence done = VK_NULL_HANDLE;
     /// Signaled when the swapchain's image the frame draws into is free.
@@ -109,7 +112,8 @@ void stop();
 /// wasn't freed.
 std::uint32_t allocations_left();
 
-/// Makes a frame a command pool of its own and its two command buffers, uploads and its own; false,
+/// Makes a frame a command pool of its own and its three command buffers, uploads, its own, and
+/// its first timestamp's; false,
 /// with fbe_error's why, if they can't be, and then it's left as it was.
 bool make_frame_commands(const device_t& gpu, frame_t& frame);
 
@@ -204,7 +208,7 @@ enum class fault_t : std::uint8_t {
     WORK_NOW,
     /// Making a sampler.
     SAMPLER,
-    /// Submitting a frame, as the device is lost.
+    /// Submitting a frame, or asking whether one's done, as the device is lost.
     LOST,
     /// Listing the devices, as if each lacked dynamic rendering.
     LACKS,

@@ -84,11 +84,12 @@ fbe::gpu::frame_t& begin() {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .flags = flag<VkCommandBufferUsageFlags>(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT),
     };
+    vkBeginCommandBuffer(frame.timing, &info);
     vkBeginCommandBuffer(frame.uploads, &info);
     vkBeginCommandBuffer(frame.commands, &info);
     if (frame.timer != VK_NULL_HANDLE) {
-        vkCmdResetQueryPool(frame.commands, frame.timer, 0, 2);
-        vkCmdWriteTimestamp(frame.commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.timer, 0);
+        vkCmdResetQueryPool(frame.timing, frame.timer, 0, 2);
+        vkCmdWriteTimestamp(frame.timing, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.timer, 0);
     }
     frame.begun = true;
     return frame;
@@ -110,6 +111,7 @@ bool submit(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame, VkSemaphore
     if (frame.timer != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(frame.commands, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.timer, 1);
     }
+    vkEndCommandBuffer(frame.timing);
     vkEndCommandBuffer(frame.uploads);
     vkEndCommandBuffer(frame.commands);
     frame.begun = false;
@@ -126,7 +128,11 @@ bool submit(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame, VkSemaphore
         .stageMask = output,
     };
     std::vector<VkCommandBufferSubmitInfo> commands;
-    commands.reserve(carried.size() + 2);
+    commands.reserve(carried.size() + 3);
+    commands.push_back({
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+        .commandBuffer = frame.timing,
+    });
     for (const carried_t& carry : carried) {
         commands.push_back({
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
@@ -200,6 +206,7 @@ bool submit(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame, VkSemaphore
 bool give_up(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame) {
     fbe::gpu::drop_passes();
     if (frame.begun) {
+        vkEndCommandBuffer(frame.timing);
         vkEndCommandBuffer(frame.uploads);
         vkEndCommandBuffer(frame.commands);
         frame.begun = false;
@@ -242,7 +249,7 @@ bool make_frame_commands(const device_t& gpu, frame_t& frame) {
     };
     VkCommandPool pool = VK_NULL_HANDLE;
     VkResult result = vkCreateCommandPool(gpu.device, &pool_info, nullptr, &pool);
-    std::array<VkCommandBuffer, 2> buffers{};
+    std::array<VkCommandBuffer, 3> buffers{};
     if (result == VK_SUCCESS) {
         const VkCommandBufferAllocateInfo commands_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -259,6 +266,7 @@ bool make_frame_commands(const device_t& gpu, frame_t& frame) {
     frame.pool = pool;
     frame.uploads = buffers[0];
     frame.commands = buffers[1];
+    frame.timing = buffers[2];
     return true;
 }
 
@@ -296,7 +304,13 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
     if (!frame.begun && wait == VK_NULL_HANDLE && carried.empty()) {
         // Nothing was recorded, so no frame begins to free what the finished ones left.
         for (frame_t& finished : gpu.frames) {
-            if (!finished.begun && vkGetFenceStatus(gpu.device, finished.done) == VK_SUCCESS) {
+            const VkResult done = faulted(fault_t::LOST)
+                                      ? VK_ERROR_DEVICE_LOST
+                                      : vkGetFenceStatus(gpu.device, finished.done);
+            if (lose(done)) {
+                return fail_lost();
+            }
+            if (!finished.begun && done == VK_SUCCESS) {
                 collect(finished);
             }
         }
@@ -337,6 +351,7 @@ void stop_frames() {
     vkDeviceWaitIdle(gpu.device);
     for (frame_t& frame : gpu.frames) {
         if (frame.begun) {
+            vkEndCommandBuffer(frame.timing);
             vkEndCommandBuffer(frame.uploads);
             vkEndCommandBuffer(frame.commands);
             frame.begun = false;

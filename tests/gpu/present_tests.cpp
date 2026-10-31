@@ -380,3 +380,16 @@ TEST_CASE("the GPU's memory budget and usage are its own memory's", "[gpu]") {
     CHECK(fbe_gpu_memory_budget() > 0);
     stop_gpu();
 }
+
+// The device's lost as a Flip with nothing recorded asks whether the frames are done.
+TEST_CASE("a lost GPU is caught on a Flip with nothing to run", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_start());
+    fbe_frame_flip(false);
+    CHECK(!fbe_gpu_lost());
+    fbe::gpu::inject(fbe::gpu::fault_t::LOST);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_lost());
+    CHECK(std::string(fbe_error()).starts_with("the GPU was lost"));
+    stop_gpu();
+}
