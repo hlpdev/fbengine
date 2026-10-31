@@ -47,7 +47,12 @@ End Struct
 /// given. Boxes, spheres, capsules, and cylinders collide fastest, convex hulls next; a mesh is
 /// for what doesn't move on its own, as a level's walls and floors.
 ///
+/// # Examples
+///
 /// ```
+/// Import std.math
+/// Import fbengine_physics
+///
 /// Local crate = Shape.Box(Vec3(1, 1, 1))
 /// Expect(crate.Volume() == 1.0)
 /// Expect(crate.Bounds() == (Vec3(-0.5, -0.5, -0.5), Vec3(0.5, 0.5, 0.5)))

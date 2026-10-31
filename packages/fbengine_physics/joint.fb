@@ -27,7 +27,12 @@ End Enum
 /// limits, springs, and, but for the distance joint, a motor. Free, or freeing either body or the
 /// world, frees it.
 ///
+/// # Examples
+///
 /// ```
+/// Import std.math
+/// Import fbengine_physics
+///
 /// Local world = PhysicsWorld()
 /// Local door = Body(world, Shape.Box(Vec3(1, 2, 0.1)), Motion.DYNAMIC, Vec3(0.5, 1, 0))
 /// // Hung on its left edge, turning about Y, a quarter turn either way.

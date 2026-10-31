@@ -19,13 +19,19 @@ End Class
 /// the game took, showing each of its frames as it falls due; Seek puts the clock anywhere. Its
 /// Sound is a WAV a game plays beside it. Free, or dropping it, frees it.
 ///
+/// # Examples
+///
 /// ```
-/// Local intro = Try Video.Open("intro.mpg")
+/// // A video's bytes, as Embed or File.ReadBytes gives them, or Video.Open("intro.mpg") opens.
+/// # Local bytes = Embed("tests/media/count.mpg")
+/// Local intro = Try Video.Load(bytes)
 /// intro.Play()
 /// While !intro.Ended()
+///     // A frame's time, as a game's loop gives it.
 ///     intro.Update(1.0 / 60)
 ///     Local frame = intro.Frame()
 /// End While
+/// Expect(intro.FramesShown() == 50)
 /// intro.Free()
 /// ```
 Public Final Class Video

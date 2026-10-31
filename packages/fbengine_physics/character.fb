@@ -28,7 +28,12 @@ End Enum
 /// notice, and dynamic bodies bump into; its Position is its shape's origin, the middle of a
 /// capsule. Free, or freeing its world, frees it.
 ///
+/// # Examples
+///
 /// ```
+/// Import std.math
+/// Import fbengine_physics
+///
 /// Local world = PhysicsWorld()
 /// Body(world, Shape.Box(Vec3(20, 1, 20)), Motion.STATIC, Vec3(0, -0.5, 0))
 /// Local player = Character(world, Shape.Capsule(1.8, 0.3), Vec3(0, 0.9, 0))

@@ -27,7 +27,12 @@ End Enum
 /// with nothing, but notices what comes into it and leaves it, as a trigger does. Free, or freeing
 /// its world, frees it, and its joints.
 ///
+/// # Examples
+///
 /// ```
+/// Import std.math
+/// Import fbengine_physics
+///
 /// Local world = PhysicsWorld()
 /// Local floor = Body(world, Shape.Box(Vec3(20, 1, 20)), Motion.STATIC, Vec3(0, -0.5, 0))
 /// Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 5, 0))

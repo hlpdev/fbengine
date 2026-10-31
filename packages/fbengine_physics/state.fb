@@ -29,7 +29,12 @@ End Class
 /// by the same version of fbengine_physics. Bytes gives it to keep, and a state made of them
 /// again is the same state.
 ///
+/// # Examples
+///
 /// ```
+/// Import std.math
+/// Import fbengine_physics
+///
 /// Local world = PhysicsWorld()
 /// Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 10, 0))
 /// Local saved = world.Save()

@@ -22,7 +22,12 @@ Import "./state"
 /// collide with each other as SetCollides says, and casts hit as their `layers` say, a bit for
 /// each. Free frees it.
 ///
+/// # Examples
+///
 /// ```
+/// Import std.math
+/// Import fbengine_physics
+///
 /// Local world = PhysicsWorld()
 /// Expect(world.Gravity() == Vec3(0, -9.81, 0))
 /// // A frame of a 30th of a second is two steps of a 60th.
