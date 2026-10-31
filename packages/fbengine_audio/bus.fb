@@ -1,0 +1,123 @@
+// Buses: groups of Channels, mixed through their own volume, low-pass, and reverb.
+
+Import std.core
+Import std.math
+Import "./audio"
+Import "./c/fbe_bus"
+
+/// A reverb, Freeverb's, each setting from 0 to 1.
+Public Struct Reverb
+    /// How big the room sounds, from a closet to a hall.
+    Public Field RoomSize: Float32 = 0.5
+    /// How much its walls soak up the highs.
+    Public Field Damping: Float32 = 0.25
+    /// How wide it is, from mono to full stereo.
+    Public Field Width: Float32 = 1.0
+    /// How loud the reverb is.
+    Public Field Wet: Float32 = 0.33
+    /// How loud what goes in is, 1 as it is.
+    Public Field Dry: Float32 = 1.0
+End Struct
+
+/// A group of Channels mixed together, through its own volume and effects, into the Bus it's in or
+/// the whole mix: a game's music, effects, and voices, each at the volume a player sets, or the
+/// sounds behind a wall, muffled together. It keeps its settings while the audio's stopped.
+Public Final Class Bus
+    Field handle: UInt64
+    Field parent: Bus?
+    Field reverb: Reverb?
+
+    /// A Bus in `parent`, whose volume and effects it goes through too, or in the whole mix.
+    @MainThread Public New(parent: Bus? = Null)
+        Local inside: UInt64 = 0
+        If parent != Null Then inside = parent.Live()
+        handle = fbe_bus_add(inside)
+        If handle == 0 Then Panic(LastError())
+        Self.parent = parent
+    End New
+
+    /// Lets the Bus go, though the Channels and Buses in it play on through it; using it after
+    /// panics. Freeing it again does nothing. It's freed when nothing has it any more, too.
+    @MainThread Public Method Free()
+        If handle != 0
+            fbe_bus_free(handle)
+            handle = 0
+        End If
+    End Method
+
+    /// Whether Free let it go.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// The Bus it's in, or Null for the whole mix.
+    @MainThread Public Method Parent(): Bus? => parent
+
+    /// Multiplies what's in it by `volume`, 0 or more: 1, as it starts, leaves it as it is.
+    @MainThread Public Method SetVolume(volume: Float32)
+        CheckVolume(volume)
+        fbe_bus_set_volume(Live(), volume)
+    End Method
+
+    /// What's in it is multiplied by.
+    @MainThread Public Method Volume(): Float32 => fbe_bus_volume(Live())
+
+    /// Muffles what's in it, through a low-pass at `hertz`, from 10 to 24000, which takes away
+    /// more of each octave above it, 24 dB, or takes the low-pass away with 0. It's held to between
+    /// 1/2400 of the mix's rate, below which its filter rings (20 Hz at 48000, 160 at 384000), and
+    /// 0.9 of half of it.
+    @MainThread Public Method SetLowPass(hertz: Float32)
+        If hertz != 0.0 && (!IsFinite(hertz) || hertz < 10.0 || hertz > 24000.0)
+            Panic("a low-pass is 0, for none, or 10 to 24000 Hz, not {hertz}")
+        End If
+
+        If !fbe_bus_set_low_pass(Live(), hertz) Then Panic(LastError())
+    End Method
+
+    /// Its low-pass's hertz, or 0 when it has none.
+    @MainThread Public Method LowPass(): Float32 => fbe_bus_low_pass(Live())
+
+    /// Gives what's in it `reverb`. A mix of more than 2 channels, or under 22050 or over 176400
+    /// frames a second, which Freeverb can't do, plays it dry.
+    @MainThread Public Method SetReverb(reverb: Reverb)
+        CheckFraction(reverb.RoomSize, "room size")
+        CheckFraction(reverb.Damping, "damping")
+        CheckFraction(reverb.Width, "width")
+        CheckFraction(reverb.Wet, "wet")
+        CheckFraction(reverb.Dry, "dry")
+        fbe_bus_set_reverb(Live(), reverb.RoomSize, reverb.Damping, reverb.Width, reverb.Wet,
+                           reverb.Dry)
+        Self.reverb = reverb
+    End Method
+
+    /// Takes its reverb away.
+    @MainThread Public Method ClearReverb()
+        fbe_bus_clear_reverb(Live())
+        reverb = Null
+    End Method
+
+    /// Its reverb, or Null when it has none.
+    @MainThread Public Method Reverb(): Reverb?
+        Live()
+        Return reverb
+    End Method
+
+    /// Whether its reverb is heard: False when it has none, or the mix can't play it.
+    @MainThread Public Method ReverbHeard(): Bool => fbe_bus_reverb_heard(Live())
+
+    Method Destroy()
+        If handle != 0 Then fbe_bus_free(handle)
+    End Method
+
+    // Its handle, or a panic once it's freed.
+    @PanicsAtCaller
+    Package Method Live(): UInt64
+        If handle == 0 Then Panic("this Bus was freed")
+        Return handle
+    End Method
+End Class
+
+@PanicsAtCaller
+Function CheckFraction(value: Float32, what: String)
+    If !IsFinite(value) || value < 0.0 || value > 1.0
+        Panic("a reverb's {what} is 0 to 1, not {value}")
+    End If
+End Function

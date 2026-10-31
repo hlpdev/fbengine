@@ -1,0 +1,55 @@
+// WAV files made in tests, of 16-bit samples, whose values are exact as floats: 16384 is 0.5.
+
+Import std.collections
+Import std.core
+
+/// A WAV file of `samples`, from -32768 to 32767, `channels` to a frame, at `rate`.
+Package Function Wav(samples: Int[], channels: Int = 1, rate: Int = 48000): UInt8[]
+    Local bytes: UInt8[] = []
+    AddText(bytes, "RIFF")
+    AddInt(bytes, 36 + samples.Count * 2, 4)
+    AddText(bytes, "WAVEfmt ")
+    AddInt(bytes, 16, 4)
+    // PCM.
+    AddInt(bytes, 1, 2)
+    AddInt(bytes, channels, 2)
+    AddInt(bytes, rate, 4)
+    AddInt(bytes, rate * channels * 2, 4)
+    AddInt(bytes, channels * 2, 2)
+    AddInt(bytes, 16, 2)
+    AddText(bytes, "data")
+    AddInt(bytes, samples.Count * 2, 4)
+    For sample In samples
+        AddInt(bytes, sample < 0 ? sample + 65536 : sample, 2)
+    End For
+    Return bytes
+End Function
+
+/// `count` frames of `sample`, mono.
+Package Function Constant(sample: Int, count: Int): Int[]
+    Local samples: Int[] = []
+    For i = 1 To count
+        samples.Add(sample)
+    End For
+    Return samples
+End Function
+
+Function AddText(bytes: UInt8[], text: String)
+    bytes.AddAll(text.Bytes)
+End Function
+
+// `value`'s `count` low bytes, the lowest first.
+Function AddInt(bytes: UInt8[], value: Int, count: Int)
+    For i = 0 To count - 1
+        bytes.Add(((value >> (i * 8)) & 255) As UInt8)
+    End For
+End Function
+
+/// `count` frames rising by 4 from 0, mono, so a mixed sample says which frame it was.
+Package Function Rising(count: Int): Int[]
+    Local samples: Int[] = []
+    For i = 0 To count - 1
+        samples.Add(i * 4)
+    End For
+    Return samples
+End Function

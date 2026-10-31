@@ -1,0 +1,190 @@
+// Sounds: Sound.Load decodes a file whole, Sound.Stream keeps it to decode as it plays, and Play
+// plays it on a Channel of its own.
+
+Import std.core
+Import std.ffi
+Import std.io
+Import "./audio"
+Import "./bus"
+Import "./c/fbe_sound"
+Import "./channel"
+
+/// A sound that can't be read, or isn't WAV, FLAC, or Ogg Vorbis.
+Public Class SoundError Extends Error
+End Class
+
+/// A sound, which plays any number of times at once, each on a Channel of its own: decoded whole
+/// into memory, for the short sounds a game plays often, or streamed, its file kept and decoded as
+/// each Channel plays it, for music and long sounds, which would take many times the memory
+/// decoded. What it plays at is its own volume, pan, pitch, and looping, which each play starts
+/// with and its Channel can change.
+Public Final Class Sound
+    Field handle: UInt64
+    Field volume: Float32 = 1.0
+    Field pan: Float32 = 0.0
+    Field pitch: Float32 = 1.0
+    Field loop: Bool = False
+    Field bus: Bus?
+
+    Private New(handle: UInt64)
+        Self.handle = handle
+    End New
+
+    /// Reads and decodes the sound file at `path`, WAV, FLAC, or Ogg Vorbis, whatever its name
+    /// says, at its own rate and channels.
+    @MainThread Public Static Method Load(path: Path): Sound Throws IOError, SoundError
+        Local bytes = Try File.ReadBytes(path)
+        Return Try Make(bytes, False, "{path}: ")
+    End Method
+
+    /// Decodes a sound file's `bytes`, WAV, FLAC, or Ogg Vorbis, which it doesn't keep.
+    @MainThread Public Static Method FromBytes(bytes: UInt8[]): Sound Throws SoundError
+        Return Try Make(bytes, False, "")
+    End Method
+
+    /// Reads the sound file at `path`, WAV, FLAC, or Ogg Vorbis, whatever its name says, and
+    /// keeps it, for each Channel playing it to decode as it plays.
+    @MainThread Public Static Method Stream(path: Path): Sound Throws IOError, SoundError
+        Local bytes = Try File.ReadBytes(path)
+        Return Try Make(bytes, True, "{path}: ")
+    End Method
+
+    /// Keeps a copy of a sound file's `bytes`, WAV, FLAC, or Ogg Vorbis, for each Channel playing
+    /// it to decode as it plays.
+    @MainThread Public Static Method StreamBytes(bytes: UInt8[]): Sound Throws SoundError
+        Return Try Make(bytes, True, "")
+    End Method
+
+    @MainThread Static Method Make(bytes: UInt8[], streamed: Bool,
+                                   from: String): Sound Throws SoundError
+        Local handle: UInt64 = 0
+        If bytes.Count > 0
+            Unsafe
+                If streamed
+                    handle = fbe_sound_stream(AddressOf(bytes[0]), bytes.Count)
+                Else
+                    handle = fbe_sound_load(AddressOf(bytes[0]), bytes.Count)
+                End If
+            End Unsafe
+        End If
+
+        If handle == 0
+            Throw SoundError(bytes.Count > 0 ? "{from}{LastError()}" : "{from}there are no bytes")
+        End If
+
+        Return Sound(handle)
+    End Method
+
+    /// Lets the sound go, though the Channels playing it play on to their ends; using it after
+    /// panics. Freeing it again does nothing. It's freed when nothing has it any more, too.
+    @MainThread Public Method Free()
+        If handle != 0
+            fbe_sound_free(handle)
+            handle = 0
+        End If
+    End Method
+
+    /// Whether Free let it go.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// Whether it's streamed, decoded as each Channel plays it.
+    @MainThread Public Method Streamed(): Bool => fbe_sound_streamed(Live())
+
+    /// Its frames a second.
+    @MainThread Public Method SampleRate(): Int32 => fbe_sound_sample_rate(Live())
+
+    /// Its channels, 1 for mono, 2 for stereo.
+    @MainThread Public Method Channels(): Int32 => fbe_sound_channels(Live())
+
+    /// How many frames long it is.
+    @MainThread Public Method Frames(): Int64 => fbe_sound_frames(Live())
+
+    /// How many seconds long it is.
+    @MainThread Public Method Length(): Float64
+        Return (fbe_sound_frames(Live()) As Float64) / fbe_sound_sample_rate(handle)
+    End Method
+
+    /// Plays it, on a Channel of its own, at its volume, pan, pitch, and looping, or paused, so
+    /// it starts at Resume, and fading in from silence over `fadeIn` seconds, if they're more than
+    /// 0. A crossfade is one Channel's FadeOut and the next one's Play with a fadeIn. Panics when
+    /// the audio isn't started. An Emitter's Play plays it in the world.
+    @MainThread Public Method Play(paused: Bool = False, fadeIn: Float64 = 0.0): Channel
+        Return PlayFrom(0, paused, fadeIn)
+    End Method
+
+    // Play, from the Emitter `emitter` is the handle of, or 0 for none.
+    @MainThread Package Method PlayFrom(emitter: UInt64, paused: Bool, fadeIn: Float64): Channel
+        Live()
+        If !Audio.Started() Then Panic("the audio isn't started; Audio.Start it first")
+        CheckFade(fadeIn)
+        Local into: UInt64 = 0
+        Local playsInto = bus
+        If playsInto != Null Then into = playsInto.Live()
+        Local channel = fbe_sound_play(handle, volume, pan, pitch, loop, paused, fadeIn, into,
+                                       emitter)
+        If channel == 0 Then Panic(LastError())
+        Return Channel(channel)
+    End Method
+
+    /// Sets the volume its plays start at, 0 or more: 1, as it's loaded, plays it as it is, and
+    /// 0.5 at half its amplitude.
+    @MainThread Public Method SetVolume(volume: Float32)
+        Live()
+        CheckVolume(volume)
+        Self.volume = volume
+    End Method
+
+    /// The volume its plays start at.
+    @MainThread Public Method Volume(): Float32 => volume
+
+    /// Sets the pan its plays start at, from -1, the left only, through 0, both, to 1, the right
+    /// only.
+    @MainThread Public Method SetPan(pan: Float32)
+        Live()
+        CheckPan(pan)
+        Self.pan = pan
+    End Method
+
+    /// The pan its plays start at.
+    @MainThread Public Method Pan(): Float32 => pan
+
+    /// Sets the pitch its plays start at, from 1/16 to 16: 1 is as it was recorded, 2 an octave
+    /// higher and twice as fast, and 0.5 an octave lower and half as fast.
+    @MainThread Public Method SetPitch(pitch: Float32)
+        Live()
+        CheckPitch(pitch)
+        Self.pitch = pitch
+    End Method
+
+    /// The pitch its plays start at.
+    @MainThread Public Method Pitch(): Float32 => pitch
+
+    /// Makes its plays loop, from its end to its start, until they're stopped, or play once.
+    @MainThread Public Method SetLoop(loop: Bool)
+        Live()
+        Self.loop = loop
+    End Method
+
+    /// Whether its plays loop.
+    @MainThread Public Method Looping(): Bool => loop
+
+    /// Sets the Bus its plays play into, or the whole mix for Null, as it's loaded.
+    @MainThread Public Method SetBus(bus: Bus?)
+        Live()
+        Self.bus = bus
+    End Method
+
+    /// The Bus its plays play into, or Null for the whole mix.
+    @MainThread Public Method Bus(): Bus? => bus
+
+    Method Destroy()
+        If handle != 0 Then fbe_sound_free(handle)
+    End Method
+
+    // Its handle, or a panic once it's freed.
+    @PanicsAtCaller
+    Method Live(): UInt64
+        If handle == 0 Then Panic("this Sound was freed")
+        Return handle
+    End Method
+End Class

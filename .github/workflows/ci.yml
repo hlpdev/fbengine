@@ -66,6 +66,36 @@ jobs:
           output="$(fb --color never run examples/hello | tr -d '\r')"
           printf '%s\n' "$output"
           test "$(printf '%s\n' "$output" | tail -n 1)" = "fbengine $version"
+          # fbengine_audio's examples, on miniaudio's null backend, each with 120 s to end, as a
+          # program ending with its audio started, or panicking, must at once: the example, its
+          # output in $output, and its exit code in $status.
+          example() {
+            fb --color never run "examples/$1" > example.txt 2>&1 &
+            pid=$!
+            for second in $(seq 120); do kill -0 "$pid" 2> /dev/null || break; sleep 1; done
+            if kill -0 "$pid" 2> /dev/null; then
+              kill "$pid"
+              cat example.txt
+              echo "examples/$1 didn't end in 120 s"
+              exit 1
+            fi
+            status=0
+            wait "$pid" || status=$?
+            output="$(tr -d '\r' < example.txt)"
+            printf '%s\n' "$output"
+          }
+          example sound
+          test "$status" = 0
+          test "$(printf '%s\n' "$output" | tail -n 1)" = "played 0.25 seconds of tone.ogg"
+          example audio_exit
+          test "$status" = 0
+          test "$(printf '%s\n' "$output" | tail -n 1)" = "ending with the audio started"
+          example audio_panic
+          test "$status" != 0
+          grep -q "^panic: a mistake, with the audio started" <<< "$output"
+          example audio_stress
+          test "$status" = 0
+          test "$(printf '%s\n' "$output" | tail -n 1)" = "within the budget"
 
   # The GPU tests, with no window, on a software Vulkan driver, which the system's loader is told
   # to use alone: lavapipe, from Mesa (MSYS2's UCRT64 on Windows, apt's on Linux), and MoltenVK on
