@@ -14,5 +14,5 @@ Import fbengine
 Print("fbengine {Version()}")
 ```
 
-Its sound is `fbengine_audio`, its physics `fbengine_physics`, and its UI `fbengine_ui`, released
-with it at the same version. Apache-2.0.
+Its sound is `fbengine_audio`, its physics `fbengine_physics`, its UI `fbengine_ui`, and its video
+`fbengine_video`, released with it at the same version. Apache-2.0.
