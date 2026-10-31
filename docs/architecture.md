@@ -46,6 +46,9 @@ good modern engine on its own. Every structural choice is checked against both.
   `native/common/handles.hpp`, each package in a range of its own so two never share one:
   fbengine 1 to 63 (World 1, entity 2, geometry 3, material 4, then as its milestones add pools),
   fbengine_audio 64 to 95, fbengine_physics 96 to 127, fbengine_video 128 to 143.
+- **OS devices** go by the OS's own IDs, not pool handles: gamepads and joysticks by SDL's
+  instance IDs, which SDL never reuses in a run, so a stale one names no device, and the FB side
+  wraps each in an object of its own; displays by their place in the OS's list, read afresh.
 - **Errors**: a call that can fail returns `bool` or a 0 handle, and `fbe_error()` says why, per
   thread. The FB side throws a typed Error for what a game should handle (a file that won't load,
   a mode that can't be set) and panics for a programming mistake (a freed handle, a value out of

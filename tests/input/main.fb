@@ -70,6 +70,12 @@ Function Main() Throws GraphicsError, InputError
             // Not headless, but SDL's video driver is offscreen, as ctest sets it: no box either.
             ShowMessage("Missing file", "rooms.ini isn't there")
             Print("went on")
+        Case "binding-key-out-of-range"
+            Binding.OfKey(9999 As Key)
+        Case "binding-button-out-of-range"
+            Binding.OfMouseButton(0 As MouseButton)
+        Case "binding-nan-scale"
+            Binding.OfGamepadAxis(GamepadAxis.LEFT_X, NaN)
         Default
             Panic("no case {name}")
     End Select
