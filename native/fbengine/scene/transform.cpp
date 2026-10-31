@@ -130,6 +130,7 @@ void reset_transform(std::uint32_t entity) {
     entities.rotation[entity] = {};
     entities.scale[entity] = { 1.0F, 1.0F, 1.0F };
     entities.moved[entity] = true;
+    pickable_moved(entity);
 }
 
 void mark_moved(std::uint32_t entity) {
@@ -143,6 +144,7 @@ void mark_moved(std::uint32_t entity) {
         const std::uint32_t at = stack.back();
         stack.pop_back();
         entities.moved[at] = true;
+        pickable_moved(at);
         for (const std::uint32_t child : entities.children[at]) {
             if (!entities.moved[child]) {
                 stack.push_back(child);

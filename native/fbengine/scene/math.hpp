@@ -263,4 +263,9 @@ inline vec3_t transform_normal(const mat4_t& m, vec3_t n) {
     return dot(a, across) < 0.0F ? -turned : turned;
 }
 
+/// Whether a matrix mirrors what it moves, which turns its triangles' fronts to the back.
+inline bool mirrors(const mat4_t& m) {
+    return dot(cross(m.axis(0), m.axis(1)), m.axis(2)) < 0.0F;
+}
+
 } // namespace fbe::scene

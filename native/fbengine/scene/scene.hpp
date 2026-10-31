@@ -57,6 +57,8 @@ struct collider_t {
     vec3_t box_min{ -1.0F, -1.0F, -1.0F };
     vec3_t box_max{ 1.0F, 1.0F, 1.0F };
     float step_height = 0.0F;
+    /// What picks hit it as, FBE_PICK_NONE for nothing.
+    std::int32_t pick = 0;
     bool has_previous = false;
     vec3_t previous;
     std::vector<contact_t> contacts;
@@ -152,6 +154,24 @@ struct entities_t {
     /// Whether it blocks line of sight, by its triangles for a mesh.
     std::vector<bool> blocks_sight;
     std::vector<collider_t> colliders;
+    /// Its entry in scene_t's pickables, or none.
+    std::vector<std::uint32_t> pickable;
+};
+
+/// An entity picks can hit, with its box in the world, which picks read one after another before
+/// looking closer: worked out again once it's stale, as when it moved, or a mesh's geometry
+/// changed since.
+struct pickable_t {
+    vec3_t min;
+    vec3_t max;
+    /// The entity, or none for an entry no longer used.
+    std::uint32_t entity = none;
+    std::uint32_t world = none;
+    std::int32_t mode = 0;
+    /// For a mesh's triangles, the geometry and its version the box is of.
+    std::uint32_t geometry = none;
+    std::uint64_t version = 0;
+    bool stale = true;
 };
 
 /// A camera: how it projects, the part of its target it draws to, what it clears, and when it
@@ -212,6 +232,10 @@ struct scene_t {
     std::vector<material_t> materials;
     /// The handles freed since fbe_entity_freed last took them.
     std::vector<std::uint64_t> freed;
+    /// Every entity with a pick mode, and the entries no longer used, which picks pass over until
+    /// there are as many as used ones.
+    std::vector<pickable_t> pickables;
+    std::size_t unused_pickables = 0;
 };
 
 /// The one scene, which every World is in.
@@ -277,6 +301,12 @@ bool showing(std::uint32_t entity);
 /// The box in the world around a box in an entity's space, through its world matrix.
 void world_box(std::uint32_t entity, vec3_t local_min, vec3_t local_max, vec3_t& world_min,
                vec3_t& world_max);
+
+/// Keeps an entity's pickables entry as its pick mode and World say: made, let go of, or with its
+/// box to work out again.
+void pickable_changed(std::uint32_t entity);
+/// Marks an entity's box, if picks hit it, to be worked out again.
+void pickable_moved(std::uint32_t entity);
 
 /// Gives an entity a transform of nothing: at its parent's origin, unturned, at scale 1.
 void reset_transform(std::uint32_t entity);

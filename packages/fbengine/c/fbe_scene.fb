@@ -44,6 +44,10 @@ Public Const FBE_COLLISION_ELLIPSOID: Int32 = 1
 Public Const FBE_COLLISION_BOX: Int32 = 2
 Public Const FBE_COLLISION_MESH: Int32 = 3
 Public Const FBE_COLLISION_GROUPS: Int32 = 1024
+Public Const FBE_PICK_NONE: Int32 = 0
+Public Const FBE_PICK_ELLIPSOID: Int32 = 1
+Public Const FBE_PICK_BOX: Int32 = 2
+Public Const FBE_PICK_MESH: Int32 = 3
 
 @CLayout Public Struct fbe_vec3_t
     Public Field x: Float32
@@ -95,6 +99,16 @@ End Struct
 End Struct
 
 @CLayout Public Struct fbe_collision_t
+    Public Field entity: UInt64
+    Public Field point: fbe_vec3_t
+    Public Field normal: fbe_vec3_t
+    Public Field time: Float32
+    Public Field geometry: UInt64
+    Public Field surface: Int32
+    Public Field triangle: Int32
+End Struct
+
+@CLayout Public Struct fbe_pick_t
     Public Field entity: UInt64
     Public Field point: fbe_vec3_t
     Public Field normal: fbe_vec3_t
@@ -322,5 +336,9 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_world_set_collision_skin(world: UInt64, skin: Float32): Bool
     Function fbe_world_collision_skin(world: UInt64): Float32
     Function fbe_world_collide(world: UInt64): Bool
+    Function fbe_entity_set_pick_mode(entity: UInt64, mode: Int32): Bool
+    Function fbe_entity_pick_mode(entity: UInt64): Int32
+    Function fbe_world_pick(world: UInt64, from: Ptr<fbe_vec3_t>, to: Ptr<fbe_vec3_t>,
+                            radius: Float32, ignore: UInt64, pick: Ptr<fbe_pick_t>): Int32
     Function fbe_entity_copy(entity: UInt64, world: UInt64, parent: UInt64): UInt64
 End Extern

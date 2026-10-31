@@ -73,6 +73,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.component.push_back(none);
         entities.blocks_sight.push_back(false);
         entities.colliders.emplace_back();
+        entities.pickable.push_back(none);
     } else {
         entities.kind[entity] = kind;
         entities.world[entity] = world;
@@ -117,6 +118,7 @@ void free_tree(std::uint32_t entity) {
         entities.name[at].clear();
         entities.name[at].shrink_to_fit();
         entities.colliders[at] = {};
+        pickable_changed(at);
         remove_component(at);
         --scene().worlds[entities.world[at]].count;
         scene().freed.push_back(entities.slots.handle(at));
@@ -131,6 +133,7 @@ void move_tree(std::uint32_t entity, std::uint32_t world) {
         --scene().worlds[entities.world[at]].count;
         ++scene().worlds[world].count;
         entities.world[at] = world;
+        pickable_changed(at);
     }
 }
 
@@ -534,6 +537,7 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         entities.colliders[copy] = entities.colliders[original];
         entities.colliders[copy].has_previous = false;
         entities.colliders[copy].contacts.clear();
+        fbe::scene::pickable_changed(copy);
         fbe::scene::copy_component(original, copy);
         fbe::scene::attach(copy, world_index, i == 0 ? parent_slot : copies[tree[i].second]);
         copies[i] = copy;

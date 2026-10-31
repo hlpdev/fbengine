@@ -6,8 +6,10 @@
 
 #include "scene/math.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace fbe::scene {
@@ -24,6 +26,40 @@ inline float component(vec3_t v, int axis) {
     default:
         return v.z;
     }
+}
+
+/// A segment from a point along a vector, with the vector's inverse worked out once, for testing it
+/// against many boxes.
+struct segment_t {
+    vec3_t from;
+    vec3_t inverse;
+
+    segment_t(vec3_t a, vec3_t delta)
+        : from(a), inverse(1.0F / delta.x, 1.0F / delta.y, 1.0F / delta.z) {}
+};
+
+/// Narrows the part of a segment, from `enter` to `leave`, to what's within one axis's slab of a
+/// box, and whether any is left. Not moving along the axis, its inverse is infinite, so it's in
+/// the slab everywhere or nowhere; on the slab's side, 0 times infinity leaves the part as it was.
+inline bool within_slab(float from, float inverse, float low, float high, float& enter,
+                        float& leave) {
+    float t0 = (low - from) * inverse;
+    float t1 = (high - from) * inverse;
+    if (t0 > t1) {
+        std::swap(t0, t1);
+    }
+    enter = t0 > enter ? t0 : enter;
+    leave = t1 < leave ? t1 : leave;
+    return enter <= leave;
+}
+
+/// Whether a segment passes through the box anywhere from 0 to `until` along it.
+inline bool crosses_box(const segment_t& segment, vec3_t min, vec3_t max, float until) {
+    float enter = 0.0F;
+    float leave = until;
+    return within_slab(segment.from.x, segment.inverse.x, min.x, max.x, enter, leave) &&
+           within_slab(segment.from.y, segment.inverse.y, min.y, max.y, enter, leave) &&
+           within_slab(segment.from.z, segment.inverse.z, min.z, max.z, enter, leave);
 }
 
 /// Where a triangle came from: its surface and its index there.
@@ -59,6 +95,12 @@ public:
     /// Calls `visit` with each triangle's index whose box touches the box from `min` to `max`.
     template <typename Visit>
     void overlapping(vec3_t min, vec3_t max, Visit&& visit) const;
+
+    /// Calls `visit` with each triangle's index in a leaf whose box the segment from `a` to `b`
+    /// passes within `grow` of, before the part of it `until()` gives, 0 to 1, which `visit` may
+    /// lower as it finds hits.
+    template <typename Until, typename Visit>
+    void along(vec3_t a, vec3_t b, float grow, Until&& until, Visit&& visit) const;
 
     /// A triangle's three corners.
     [[nodiscard]] const vec3_t* corners(std::uint32_t triangle) const {
@@ -102,6 +144,32 @@ void bvh_t::overlapping(vec3_t min, vec3_t max, Visit&& visit) const {
         stack.pop_back();
         if (node.max.x < min.x || node.min.x > max.x || node.max.y < min.y || node.min.y > max.y ||
             node.max.z < min.z || node.min.z > max.z) {
+            continue;
+        }
+        if (node.count > 0) {
+            for (std::uint32_t i = node.first; i < node.first + node.count; ++i) {
+                visit(m_order[i]);
+            }
+        } else {
+            stack.push_back(node.second);
+            stack.push_back(at + 1);
+        }
+    }
+}
+
+template <typename Until, typename Visit>
+void bvh_t::along(vec3_t a, vec3_t b, float grow, Until&& until, Visit&& visit) const {
+    if (m_nodes.empty()) {
+        return;
+    }
+    const segment_t segment(a, b - a);
+    const vec3_t margin(grow, grow, grow);
+    std::vector<std::uint32_t> stack{ 0 };
+    while (!stack.empty()) {
+        const std::uint32_t at = stack.back();
+        stack.pop_back();
+        const node_t& node = m_nodes[at];
+        if (!crosses_box(segment, node.min - margin, node.max + margin, until())) {
             continue;
         }
         if (node.count > 0) {
