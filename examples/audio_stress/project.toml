@@ -1,0 +1,6 @@
+[project]
+name = "audio_stress"
+version = "0.1.0"
+
+[dependencies]
+fbengine_audio = { path = "../../packages/fbengine_audio" }

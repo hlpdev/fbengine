@@ -1,0 +1,119 @@
+// A game's sound under load, as SCP:CB's is: a mix at 44100 Hz of up to 64 channels, with a
+// streamed track looping under them, and each 60 fps frame starting short sounds, moving each
+// playing one's pan and volume as its source moves, and stopping some, then mixing the frame's
+// 735 frames. It prints what the game's calls and the mix take a frame, against the engine's
+// budget of about 2 ms a frame; mixed on no device, so it runs in tests and measures the mixing
+// itself, which a device's thread does beside the game.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.time
+Import fbengine_audio
+
+Const FRAMES = 600
+Const MOST_CHANNELS = 64
+Const STARTS_A_FRAME = 8
+Const RATE = 44100
+Const FRAME = 735
+
+// A mono WAV of `count` frames of a tone at `hertz`, at 44100 Hz.
+Function Tone(hertz: Float, count: Int): UInt8[]
+    Local bytes: UInt8[] = []
+    Add(bytes, "RIFF".Bytes)
+    Bytes(bytes, 36 + count * 2, 4)
+    Add(bytes, "WAVEfmt ".Bytes)
+    Bytes(bytes, 16, 4)
+    Bytes(bytes, 1, 2)
+    Bytes(bytes, 1, 2)
+    Bytes(bytes, RATE, 4)
+    Bytes(bytes, RATE * 2, 4)
+    Bytes(bytes, 2, 2)
+    Bytes(bytes, 16, 2)
+    Add(bytes, "data".Bytes)
+    Bytes(bytes, count * 2, 4)
+    For i = 0 Until count
+        Local sample = (Sin(Tau * hertz * (i As Float) / (RATE As Float)) * 8000.0) As Int
+        Bytes(bytes, sample < 0 ? sample + 65536 : sample, 2)
+    End For
+    Return bytes
+End Function
+
+Function Add(bytes: UInt8[], more: UInt8[])
+    bytes.AddAll(more)
+End Function
+
+Function Bytes(bytes: UInt8[], value: Int, count: Int)
+    For i = 0 Until count
+        bytes.Add(((value >> (i * 8)) & 255) As UInt8)
+    End For
+End Function
+
+Function Run() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, RATE, 2)
+    Local effects = Bus()
+    effects.SetVolume(0.5)
+    Local random = Random(1)
+    Local sounds: Sound[] = []
+    For i = 0 Until 16
+        // From 20 ms to half a second, as footsteps, clicks, and drips are.
+        Local sound = Try Sound.FromBytes(Tone(200.0 + (i As Float) * 50.0, random.Int(882, 22050)))
+        sound.SetBus(effects)
+        sounds.Add(sound)
+    End For
+    Local music = Try Sound.StreamBytes(Embed("tone.ogg"))
+    music.SetLoop(True)
+    music.Play()
+
+    Local playing: Channel[] = []
+    Local calls = Duration.Zero()
+    Local mixing = Duration.Zero()
+    Local slowestCalls = Duration.Zero()
+    Local slowestMix = Duration.Zero()
+    Local busiest = 0
+    For frame = 1 To FRAMES
+        Local started = Instant.Now()
+        // What finished goes; what's playing moves, as each source does against the camera.
+        Local still: Channel[] = []
+        For channel In playing
+            If channel.Playing()
+                channel.SetPan(Sin((frame As Float) * 0.05 + (still.Count As Float)))
+                channel.SetVolume(random.Float(0.2, 1.0))
+                still.Add(channel)
+            End If
+        End For
+        playing = still
+        For i = 1 To STARTS_A_FRAME
+            If Audio.Playing() >= MOST_CHANNELS Then Break
+            Local channel = sounds[random.Int(sounds.Count)].Play()
+            channel.SetPitch(random.Float(0.8, 1.25))
+            playing.Add(channel)
+        End For
+        If playing.Count > 4 && random.Int(4) == 0 Then playing[0].Stop()
+        busiest = Max(busiest, Audio.Playing())
+        Local took = started.Elapsed
+        calls += took
+        slowestCalls = Max(slowestCalls, took)
+
+        Local before = Instant.Now()
+        Local mixed = Audio.Mix(FRAME)
+        Local mix = before.Elapsed
+        mixing += mix
+        slowestMix = Max(slowestMix, mix)
+        If mixed.Count != FRAME * 2 Then Panic("frame {frame} mixed {mixed.Count} samples")
+    End For
+    Audio.Stop()
+
+    Print("{FRAMES} frames, up to {busiest} channels at once")
+    Print("the game's calls: {calls.TotalMilliseconds / FRAMES} ms a frame, " +
+          "{slowestCalls.TotalMilliseconds} ms at most")
+    Print("the mix: {mixing.TotalMilliseconds / FRAMES} ms a frame, " +
+          "{slowestMix.TotalMilliseconds} ms at most")
+    // The game's calls are within the engine's budget, and the mix, on a device's own thread,
+    // keeps up with the 16.7 ms each frame plays for, even in a debug build on a slow machine.
+    If calls.TotalMilliseconds / FRAMES > 2.0 Then Panic("the game's calls are over the budget")
+    If mixing.TotalMilliseconds / FRAMES > 16.7 Then Panic("the mix is slower than it plays")
+    Print("within the budget")
+End Function
+
+Try Run()

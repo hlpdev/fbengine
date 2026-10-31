@@ -192,4 +192,9 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_panic")
   set_tests_properties(examples.audio_panic PROPERTIES TIMEOUT 60
                        PASS_REGULAR_EXPRESSION "panic: a mistake, with the audio started at [^\n]*\n.*exited with code 101")
+  # 64 channels at 44100 Hz under a game's load, within the budget.
+  add_test(NAME examples.audio_stress
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress")
+  set_tests_properties(examples.audio_stress PROPERTIES TIMEOUT 120
+                       PASS_REGULAR_EXPRESSION "600 frames, up to 64 channels at once\r?\n.*within the budget\r?\n$")
 endif()
