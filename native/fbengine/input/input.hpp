@@ -1,11 +1,10 @@
 #pragma once
 
-// What input's files share: the events fbe_frame_flip hands it, the window it reads them for,
-// and how each device counts what a Flip read.
+// What input's files share: the events fbe_frame_flip hands it, and how each device counts what a
+// Flip read.
 
-#include <SDL3/SDL_events.h>
-#include <SDL3/SDL_video.h>
 #include <cstdint>
+#include <SDL3/SDL_events.h>
 
 namespace fbe {
 
@@ -15,8 +14,14 @@ void input_event(const SDL_Event& event);
 /// The keyboard's part of input_event.
 void keyboard_event(const SDL_Event& event);
 
-/// The window fbengine opened, or null.
-SDL_Window* input_window();
+/// The mouse's part of input_event.
+void mouse_event(const SDL_Event& event);
+
+/// The window, for a call that needs one: null without one, with fbe_error saying so.
+SDL_Window* needed_window();
+
+/// Pushes an event as the OS would, for the next fbe_frame_flip; false, saying why, if it can't.
+bool push_event(SDL_Event& event);
 
 /// What a device counted of one Flip's events: zeroed when the first event of a new Flip
 /// arrives, and read as zero once a Flip went by with none.
