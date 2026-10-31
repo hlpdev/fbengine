@@ -2,6 +2,7 @@
 // with a case's name and checks it panics with the case's message.
 
 Import std.core
+Import std.math
 Import std.os
 Import fbengine
 
@@ -48,6 +49,20 @@ Select arguments[0]
         Local pivot = Pivot()
         pivot.Free()
         pivot.Data<World>()
+    Case "poses-count"
+        Entity.SetPoses([Pivot() As Entity], [], Space.WORLD)
+    Case "poses-freed"
+        Local pivot = Pivot()
+        pivot.Free()
+        Entity.Poses([pivot As Entity], Space.WORLD)
+    Case "into-nothing"
+        Local flat = Pivot()
+        flat.SetScale(Vec3(1, 0, 1))
+        TransformPoint(Vec3.Zero(), Null, flat)
+    Case "turn-freed"
+        Local pivot = Pivot()
+        pivot.Free()
+        pivot.Turn(0, 1, 0)
     Default
         Panic("no case {arguments[0]}")
 End Select

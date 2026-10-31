@@ -3,6 +3,8 @@
 // What the scene's files share: the handle tables, and the entities' data, kept by field in arrays
 // indexed by slot, so what runs over many entities a frame reads only what it needs.
 
+#include "scene/math.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -47,6 +49,18 @@ struct entities_t {
     std::vector<std::vector<std::uint32_t>> children;
     std::vector<std::string> name;
     std::vector<bool> hidden;
+
+    // The transform in the parent's space, and in the world's, which is worked out again only once
+    // something above it or it moved: a moved entity marks itself and what's under it, and stops at
+    // one marked already, since what's under a marked entity is marked too.
+    std::vector<vec3_t> position;
+    std::vector<quat_t> rotation;
+    std::vector<vec3_t> scale;
+    std::vector<mat4_t> world_matrix;
+    /// The parent's world rotation times the entity's own, and its scales multiplied.
+    std::vector<quat_t> world_rotation;
+    std::vector<vec3_t> world_scale;
+    std::vector<bool> moved;
 };
 
 struct scene_t {
@@ -65,5 +79,16 @@ scene_t& scene();
 std::uint32_t entity_slot(std::uint64_t handle);
 /// The live world a handle is for, or none, with fbe_error saying so.
 std::uint32_t world_slot(std::uint64_t handle);
+
+/// Gives an entity a transform of nothing: at its parent's origin, unturned, at scale 1.
+void reset_transform(std::uint32_t entity);
+/// Marks an entity, and what's under it, to have its world transform worked out again.
+void mark_moved(std::uint32_t entity);
+/// Works out an entity's world transform, and its parents', if they moved.
+void update_world(std::uint32_t entity);
+/// Sets an entity's local transform so its world one is this, under its parent as it is.
+void set_world_position(std::uint32_t entity, vec3_t position);
+void set_world_rotation(std::uint32_t entity, quat_t rotation);
+void set_world_scale(std::uint32_t entity, vec3_t scale);
 
 } // namespace fbe::scene

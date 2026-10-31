@@ -60,6 +60,13 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.children.emplace_back();
         entities.name.emplace_back();
         entities.hidden.push_back(false);
+        entities.position.emplace_back();
+        entities.rotation.emplace_back();
+        entities.scale.emplace_back();
+        entities.world_matrix.emplace_back();
+        entities.world_rotation.emplace_back();
+        entities.world_scale.emplace_back();
+        entities.moved.push_back(true);
     } else {
         entities.kind[entity] = kind;
         entities.world[entity] = world;
@@ -68,6 +75,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.name[entity].clear();
         entities.hidden[entity] = false;
     }
+    reset_transform(entity);
     ++scene().worlds[world].count;
     return entity;
 }
@@ -140,7 +148,8 @@ void list_tree(std::uint32_t entity, std::size_t parent,
 /// Writes up to `capacity` of `slots` as handles and gives how many there are.
 std::int32_t write_handles(const slots_t& slots, const std::vector<std::uint32_t>& from,
                            std::uint64_t* to, std::int32_t capacity) {
-    const std::size_t count = std::min(from.size(), static_cast<std::size_t>(std::max(capacity, 0)));
+    const std::size_t count =
+        std::min(from.size(), static_cast<std::size_t>(std::max(capacity, 0)));
     for (std::size_t i = 0; i < count; ++i) {
         to[i] = slots.handle(from[i]);
     }
@@ -370,8 +379,6 @@ FBE_API const char* fbe_entity_name(uint64_t entity) {
 }
 
 FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_world) {
-    // Keeping the world transform comes with transforms.
-    static_cast<void>(keep_world);
     const std::uint32_t slot = entity_slot(entity);
     if (slot == none) {
         return false;
@@ -393,11 +400,21 @@ FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_w
     if (entities.parent[slot] == parent_slot && entities.world[slot] == world) {
         return true;
     }
+    fbe::scene::update_world(slot);
+    const fbe::scene::vec3_t position = entities.world_matrix[slot].axis(3);
+    const fbe::scene::quat_t rotation = entities.world_rotation[slot];
+    const fbe::scene::vec3_t scale = entities.world_scale[slot];
     fbe::scene::detach(slot);
     if (world != entities.world[slot]) {
         fbe::scene::move_tree(slot, world);
     }
     fbe::scene::attach(slot, world, parent_slot);
+    fbe::scene::mark_moved(slot);
+    if (keep_world) {
+        fbe::scene::set_world_rotation(slot, rotation);
+        fbe::scene::set_world_scale(slot, scale);
+        fbe::scene::set_world_position(slot, position);
+    }
     return true;
 }
 
@@ -504,6 +521,9 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         const std::uint32_t copy = fbe::scene::make_entity(world_index, entities.kind[original]);
         entities.name[copy] = entities.name[original];
         entities.hidden[copy] = entities.hidden[original];
+        entities.position[copy] = entities.position[original];
+        entities.rotation[copy] = entities.rotation[original];
+        entities.scale[copy] = entities.scale[original];
         fbe::scene::attach(copy, world_index, i == 0 ? parent_slot : copies[tree[i].second]);
         copies[i] = copy;
     }

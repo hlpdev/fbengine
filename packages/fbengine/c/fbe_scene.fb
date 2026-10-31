@@ -2,6 +2,36 @@
 // Run fb-bindgen again instead of editing it.
 
 Public Const FBE_ENTITY_PIVOT: Int32 = 0
+Public Const FBE_SPACE_LOCAL: Int32 = 0
+Public Const FBE_SPACE_WORLD: Int32 = 1
+Public Const FBE_AXIS_RIGHT: Int32 = 0
+Public Const FBE_AXIS_UP: Int32 = 1
+Public Const FBE_AXIS_FORWARD: Int32 = 2
+Public Const FBE_TRANSFORM_POINT: Int32 = 0
+Public Const FBE_TRANSFORM_VECTOR: Int32 = 1
+Public Const FBE_TRANSFORM_NORMAL: Int32 = 2
+
+@CLayout Public Struct fbe_vec3_t
+    Public Field x: Float32
+    Public Field y: Float32
+    Public Field z: Float32
+End Struct
+
+@CLayout Public Struct fbe_quat_t
+    Public Field x: Float32
+    Public Field y: Float32
+    Public Field z: Float32
+    Public Field w: Float32
+End Struct
+
+@CLayout Public Struct fbe_mat4_t
+    Public Field m: Float32[16]
+End Struct
+
+@CLayout Public Struct fbe_pose_t
+    Public Field position: fbe_vec3_t
+    Public Field rotation: fbe_quat_t
+End Struct
 
 Public Extern "C" Lib "fbengine_native"
     Function fbe_world_create(): UInt64
@@ -29,5 +59,30 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_entity_set_hidden(entity: UInt64, hidden: Bool): Bool
     Function fbe_entity_hidden(entity: UInt64): Bool
     Function fbe_entity_showing(entity: UInt64): Bool
+    Function fbe_entity_set_position(entity: UInt64, x: Float32, y: Float32, z: Float32,
+                                     space: Int32): Bool
+    Function fbe_entity_position(entity: UInt64, space: Int32, position: Ptr<fbe_vec3_t>): Bool
+    Function fbe_entity_set_rotation(entity: UInt64, x: Float32, y: Float32, z: Float32, w: Float32,
+                                     space: Int32): Bool
+    Function fbe_entity_rotation(entity: UInt64, space: Int32, rotation: Ptr<fbe_quat_t>): Bool
+    Function fbe_entity_set_scale(entity: UInt64, x: Float32, y: Float32, z: Float32,
+                                  space: Int32): Bool
+    Function fbe_entity_scale(entity: UInt64, space: Int32, scale: Ptr<fbe_vec3_t>): Bool
+    Function fbe_entity_matrix(entity: UInt64, space: Int32, matrix: Ptr<fbe_mat4_t>): Bool
+    Function fbe_entity_move(entity: UInt64, x: Float32, y: Float32, z: Float32): Bool
+    Function fbe_entity_translate(entity: UInt64, x: Float32, y: Float32, z: Float32,
+                                  space: Int32): Bool
+    Function fbe_entity_turn(entity: UInt64, x: Float32, y: Float32, z: Float32, w: Float32,
+                             space: Int32): Bool
+    Function fbe_entity_point_at(entity: UInt64, x: Float32, y: Float32, z: Float32,
+                                 roll: Float32): Bool
+    Function fbe_entity_align(entity: UInt64, x: Float32, y: Float32, z: Float32, axis: Int32,
+                              rate: Float32): Bool
+    Function fbe_entity_transform(from: UInt64, to: UInt64, kind: Int32, x: Float32, y: Float32,
+                                  z: Float32, result: Ptr<fbe_vec3_t>): Bool
+    Function fbe_entity_set_poses(entities: Ptr<UInt64>, poses: Ptr<fbe_pose_t>, count: Int32,
+                                  space: Int32): Bool
+    Function fbe_entity_poses(entities: Ptr<UInt64>, poses: Ptr<fbe_pose_t>, count: Int32,
+                              space: Int32): Bool
     Function fbe_entity_copy(entity: UInt64, world: UInt64, parent: UInt64): UInt64
 End Extern

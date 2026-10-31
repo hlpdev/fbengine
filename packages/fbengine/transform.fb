@@ -1,0 +1,353 @@
+// Transforms: where entities are, how they're turned and scaled, in their parent's space or the
+// world's, in std.math's space (right-handed, Y up, -Z forward, radians); and the batches physics
+// and animation sync many entities with in one call.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./window"
+Import "./world"
+
+/// The space a transform is in.
+Public Enum Space
+    /// The entity's parent's, or the world's at the top of its World.
+    LOCAL = 0
+    /// The world's.
+    WORLD = 1
+End Enum
+
+/// One of an entity's own axes.
+Public Enum Axis
+    /// +X.
+    RIGHT = 0
+    /// +Y.
+    UP = 1
+    /// -Z, where an unturned entity faces.
+    FORWARD = 2
+End Enum
+
+/// Where an entity is and how it's turned, as the batches give and take them.
+Public Struct Pose Implements Printable
+    /// Its position.
+    Public Field Position: Vec3
+    /// Its rotation.
+    Public Field Rotation: Quat
+
+    Public Method ToString(): String => "{Position} turned {Rotation}"
+End Struct
+
+/// An entity's transform. Its matrix scales, then turns, then moves, and its world matrix is its
+/// parent's times its own. Its world rotation is its parent's times its own, and its world scale
+/// its parent's times its own on each axis, which a turned child of a parent scaled unevenly
+/// shears away from, as any matrix hierarchy does.
+Extend Entity
+    /// Puts the entity at `position`, in its parent's space or the world's.
+    @MainThread @PanicsAtCaller
+    Public Method SetPosition(position: Vec3, space: Space = Space.LOCAL)
+        Local entity = Live("SetPosition")
+        If !fbe_entity_set_position(entity, position.x, position.y, position.z, space As Int32)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// Where the entity is, in its parent's space or the world's.
+    @MainThread @PanicsAtCaller
+    Public Method Position(space: Space = Space.LOCAL): Vec3
+        Local entity = Live("Position")
+        Local found = fbe_vec3_t(0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_entity_position(entity, space As Int32, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return VecOf(found)
+    End Method
+
+    /// Turns the entity to `rotation`, relative to its parent or the world.
+    @MainThread @PanicsAtCaller
+    Public Method SetRotation(rotation: Quat, space: Space = Space.LOCAL)
+        Local entity = Live("SetRotation")
+        If !fbe_entity_set_rotation(entity, rotation.x, rotation.y, rotation.z, rotation.w,
+                                    space As Int32)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// Turns the entity to Euler angles in radians, as Quat.FromEuler takes them: `roll` about
+    /// Z, then `pitch` about X, then `yaw` about Y.
+    @MainThread @PanicsAtCaller
+    Public Method SetRotation(pitch: Float, yaw: Float, roll: Float, space: Space = Space.LOCAL)
+        SetRotation(Quat.FromEuler(pitch, yaw, roll), space)
+    End Method
+
+    /// How the entity is turned, relative to its parent or the world.
+    @MainThread @PanicsAtCaller
+    Public Method Rotation(space: Space = Space.LOCAL): Quat
+        Local entity = Live("Rotation")
+        Local found = fbe_quat_t(0, 0, 0, 1)
+        Local done = False
+        Unsafe
+            done = fbe_entity_rotation(entity, space As Int32, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return Quat(found.x, found.y, found.z, found.w)
+    End Method
+
+    /// The entity's pitch, about X, from -Pi / 2 to Pi / 2, as Quat.ToEuler gives it: positive
+    /// looks up.
+    @MainThread @PanicsAtCaller
+    Public Method Pitch(space: Space = Space.LOCAL): Float => Rotation(space).ToEuler().x
+
+    /// The entity's yaw, about Y, from -Pi to Pi: positive turns left.
+    @MainThread @PanicsAtCaller
+    Public Method Yaw(space: Space = Space.LOCAL): Float => Rotation(space).ToEuler().y
+
+    /// The entity's roll, about Z, from -Pi to Pi: positive rolls left.
+    @MainThread @PanicsAtCaller
+    Public Method Roll(space: Space = Space.LOCAL): Float => Rotation(space).ToEuler().z
+
+    /// Scales the entity on each of its axes, by itself, or so its scale in the world is this.
+    @MainThread @PanicsAtCaller
+    Public Method SetScale(scale: Vec3, space: Space = Space.LOCAL)
+        Local entity = Live("SetScale")
+        If !fbe_entity_set_scale(entity, scale.x, scale.y, scale.z, space As Int32)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// The entity's scale on each of its axes, its own, or its parents' times its own.
+    @MainThread @PanicsAtCaller
+    Public Method Scale(space: Space = Space.LOCAL): Vec3
+        Local entity = Live("Scale")
+        Local found = fbe_vec3_t(0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_entity_scale(entity, space As Int32, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return VecOf(found)
+    End Method
+
+    /// The entity's matrix, from its own space to its parent's, or to the world's.
+    @MainThread @PanicsAtCaller
+    Public Method Matrix(space: Space = Space.LOCAL): Mat4
+        Local entity = Live("Matrix")
+        Local found = fbe_mat4_t()
+        Local done = False
+        Unsafe
+            done = fbe_entity_matrix(entity, space As Int32, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Local m = found.m
+        Return Mat4(Vec4(m[0], m[1], m[2], m[3]), Vec4(m[4], m[5], m[6], m[7]),
+                    Vec4(m[8], m[9], m[10], m[11]), Vec4(m[12], m[13], m[14], m[15]))
+    End Method
+
+    /// Where the entity's forward axis, -Z, points in the world, at length 1.
+    @MainThread @PanicsAtCaller
+    Public Method Forward(): Vec3 => Rotation(Space.WORLD) * Vec3.Forward
+
+    /// Where the entity's right axis, +X, points in the world, at length 1.
+    @MainThread @PanicsAtCaller
+    Public Method Right(): Vec3 => Rotation(Space.WORLD) * Vec3.Right
+
+    /// Where the entity's up axis, +Y, points in the world, at length 1.
+    @MainThread @PanicsAtCaller
+    Public Method Up(): Vec3 => Rotation(Space.WORLD) * Vec3.Up
+
+    /// Moves the entity along its own axes, as it's turned, in its parent's units: Move(Vec3(0,
+    /// 0, -1)) is a step forward.
+    @MainThread @PanicsAtCaller
+    Public Method Move(offset: Vec3)
+        Local entity = Live("Move")
+        If !fbe_entity_move(entity, offset.x, offset.y, offset.z) Then Panic(LastError())
+    End Method
+
+    /// Moves the entity along its parent's axes, or the world's, however it's turned.
+    @MainThread @PanicsAtCaller
+    Public Method Translate(offset: Vec3, space: Space = Space.LOCAL)
+        Local entity = Live("Translate")
+        If !fbe_entity_translate(entity, offset.x, offset.y, offset.z, space As Int32)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// Turns the entity by `rotation`, about its own axes, or the world's.
+    @MainThread @PanicsAtCaller
+    Public Method Turn(rotation: Quat, space: Space = Space.LOCAL)
+        Local entity = Live("Turn")
+        If !fbe_entity_turn(entity, rotation.x, rotation.y, rotation.z, rotation.w,
+                            space As Int32)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// Turns the entity by Euler angles in radians, as Quat.FromEuler takes them, about its own
+    /// axes, or the world's: Turn(0, Deg(1), 0) turns it a degree to its left.
+    @MainThread @PanicsAtCaller
+    Public Method Turn(pitch: Float, yaw: Float, roll: Float, space: Space = Space.LOCAL)
+        Turn(Quat.FromEuler(pitch, yaw, roll), space)
+    End Method
+
+    /// Turns the entity so its forward axis points at `target`, as upright as it goes, then
+    /// rolled by `roll` about that axis; a target where it is changes nothing.
+    @MainThread @PanicsAtCaller
+    Public Method PointAt(target: Entity, roll: Float = 0)
+        PointAt(target.Position(Space.WORLD), roll)
+    End Method
+
+    /// Turns the entity so its forward axis points at a place in the world, as upright as it
+    /// goes, then rolled by `roll` about that axis; a place where it is changes nothing.
+    @MainThread @PanicsAtCaller
+    Public Method PointAt(target: Vec3, roll: Float = 0)
+        Local entity = Live("PointAt")
+        If !fbe_entity_point_at(entity, target.x, target.y, target.z, roll) Then Panic(LastError())
+    End Method
+
+    /// Turns one of the entity's axes toward a direction in the world, the shortest way round, by
+    /// `rate` of the way, from 0 to 1, so a rate below 1 each frame eases it there; a zero
+    /// direction changes nothing.
+    @MainThread @PanicsAtCaller
+    Public Method AlignTo(direction: Vec3, axis: Axis = Axis.FORWARD, rate: Float = 1)
+        Local entity = Live("AlignTo")
+        If !fbe_entity_align(entity, direction.x, direction.y, direction.z, axis As Int32, rate)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// How far apart the entity and `target` are in the world.
+    @MainThread @PanicsAtCaller
+    Public Method DistanceTo(target: Entity): Float
+        Return Distance(Position(Space.WORLD), target.Position(Space.WORLD))
+    End Method
+
+    /// How far the entity is from a place in the world.
+    @MainThread @PanicsAtCaller
+    Public Method DistanceTo(target: Vec3): Float => Distance(Position(Space.WORLD), target)
+
+    /// How far the entity would turn left about the world's Y, from -Pi to Pi, to face `target`,
+    /// as YawOf measures the line to it and its forward axis.
+    @MainThread @PanicsAtCaller
+    Public Method YawTo(target: Entity): Float => YawTo(target.Position(Space.WORLD))
+
+    /// How far the entity would turn left about the world's Y, from -Pi to Pi, to face a place.
+    @MainThread @PanicsAtCaller
+    Public Method YawTo(target: Vec3): Float
+        Return Wrap(YawOf(target - Position(Space.WORLD)) - YawOf(Forward()), -Pi, Pi)
+    End Method
+
+    /// How far the entity would pitch up, from -Pi to Pi, for its forward axis to rise as high as
+    /// `target`, as PitchOf measures the line to it and its forward axis.
+    @MainThread @PanicsAtCaller
+    Public Method PitchTo(target: Entity): Float => PitchTo(target.Position(Space.WORLD))
+
+    /// How far the entity would pitch up, from -Pi to Pi, to rise as high as a place.
+    @MainThread @PanicsAtCaller
+    Public Method PitchTo(target: Vec3): Float
+        Return Wrap(PitchOf(target - Position(Space.WORLD)) - PitchOf(Forward()), -Pi, Pi)
+    End Method
+
+    /// Sets the poses of many entities in one call, as physics syncs its bodies' entities each
+    /// frame: each entity takes the pose at its index, in order, so in the world a parent's goes
+    /// before its children's. Arrays of different lengths, or a freed entity, panic.
+    @MainThread @PanicsAtCaller
+    Public Static Method SetPoses(entities: Entity[], poses: Pose[], space: Space)
+        If entities.Count != poses.Count
+            Panic("SetPoses takes a pose for each entity, not {poses.Count} for {entities.Count}")
+        End If
+        Local handles = HandlesOf(entities, "SetPoses")
+        Local taken = Buffer<fbe_pose_t>(entities.Count)
+        For i, pose In poses
+            taken[i] = fbe_pose_t(fbe_vec3_t(pose.Position.x, pose.Position.y, pose.Position.z),
+                                  fbe_quat_t(pose.Rotation.x, pose.Rotation.y, pose.Rotation.z,
+                                             pose.Rotation.w))
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_entity_set_poses(handles.Pointer(), taken.Pointer(),
+                                        entities.Count As Int32, space As Int32)
+        End Unsafe
+        If !done Then Panic(LastError())
+    End Method
+
+    /// The poses of many entities, in one call, as animation and sound read where entities are
+    /// each frame. A freed entity panics.
+    @MainThread @PanicsAtCaller
+    Public Static Method Poses(entities: Entity[], space: Space): Pose[]
+        Local handles = HandlesOf(entities, "Poses")
+        Local found = Buffer<fbe_pose_t>(entities.Count)
+        Local done = False
+        Unsafe
+            done = fbe_entity_poses(handles.Pointer(), found.Pointer(), entities.Count As Int32,
+                                    space As Int32)
+        End Unsafe
+        If !done Then Panic(LastError())
+        Local poses: Pose[] = []
+        For pose In found
+            poses.Add(Pose(VecOf(pose.position),
+                           Quat(pose.rotation.x, pose.rotation.y, pose.rotation.z,
+                                pose.rotation.w)))
+        End For
+        Return poses
+    End Method
+End Extend
+
+/// A point in `from`'s space, in `to`'s, where Null is the world's for either: where a place on an
+/// entity is in the world, or where a place in the world is to an entity. An entity `to` scaled
+/// to nothing on an axis panics, since nothing comes back from there.
+@MainThread @PanicsAtCaller
+Public Function TransformPoint(point: Vec3, from: Entity?, to: Entity?): Vec3
+    Return Transformed(FBE_TRANSFORM_POINT, point, from, to, "TransformPoint")
+End Function
+
+/// A direction in `from`'s space, in `to`'s, turned and scaled but not moved, nor made length 1.
+@MainThread @PanicsAtCaller
+Public Function TransformVector(vector: Vec3, from: Entity?, to: Entity?): Vec3
+    Return Transformed(FBE_TRANSFORM_VECTOR, vector, from, to, "TransformVector")
+End Function
+
+/// A surface's normal in `from`'s space, in `to`'s, through the inverse transpose, so it stays at
+/// right angles to the surface however it's scaled, at length 1; a zero normal gives zero.
+@MainThread @PanicsAtCaller
+Public Function TransformNormal(normal: Vec3, from: Entity?, to: Entity?): Vec3
+    Return Transformed(FBE_TRANSFORM_NORMAL, normal, from, to, "TransformNormal")
+End Function
+
+/// The yaw of a direction, about Y, from -Pi to Pi: 0 for forward, -Z, and positive to its left;
+/// 0 for a direction straight up or down, or zero.
+Public Function YawOf(direction: Vec3): Float
+    If direction.x == 0 && direction.z == 0 Then Return 0
+    Return Atan2(-direction.x, -direction.z)
+End Function
+
+/// The pitch of a direction, from -Pi / 2 to Pi / 2: positive above level, 0 for zero.
+Public Function PitchOf(direction: Vec3): Float
+    Return Atan2(direction.y, Sqrt(direction.x * direction.x + direction.z * direction.z))
+End Function
+
+@PanicsAtCaller
+Function Transformed(kind: Int32, v: Vec3, from: Entity?, to: Entity?, call: String): Vec3
+    Local source: UInt64 = from != Null ? from.Live(call) : 0
+    Local target: UInt64 = to != Null ? to.Live(call) : 0
+    Local found = fbe_vec3_t(0, 0, 0)
+    Local done = False
+    Unsafe
+        done = fbe_entity_transform(source, target, kind, v.x, v.y, v.z, AddressOf(found))
+    End Unsafe
+    If !done Then Panic(LastError())
+    Return VecOf(found)
+End Function
+
+Function VecOf(v: fbe_vec3_t): Vec3 => Vec3(v.x, v.y, v.z)
+
+// The entities' handles, for a batch, each checked live.
+@PanicsAtCaller
+Function HandlesOf(entities: Entity[], call: String): Buffer<UInt64>
+    Local handles = Buffer<UInt64>(entities.Count)
+    For i, entity In entities
+        handles[i] = entity.Live(call)
+    End For
+    Return handles
+End Function
