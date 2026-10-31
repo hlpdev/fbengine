@@ -122,12 +122,14 @@ catch_discover_tests(fbengine_audio_tests TEST_PREFIX "audio."
 
 # fbengine_audio_native's C API, with a thread of the test's own mixing, as a device's does, and on
 # Windows, with OLE, on the null backend.
-add_executable(fbengine_audio_native_tests audio/native_tests.cpp)
+add_executable(fbengine_audio_native_tests audio/native_tests.cpp audio/memory_tests.cpp)
 target_link_libraries(fbengine_audio_native_tests PRIVATE fbengine_audio_native
                       Catch2::Catch2WithMain)
+target_compile_definitions(fbengine_audio_native_tests PRIVATE
+                           FBE_AUDIO_TEST_DATA="${PROJECT_SOURCE_DIR}/packages/fbengine_audio/tests/data")
 if(WIN32)
   target_sources(fbengine_audio_native_tests PRIVATE audio/ole_tests.cpp)
-  target_link_libraries(fbengine_audio_native_tests PRIVATE ole32)
+  target_link_libraries(fbengine_audio_native_tests PRIVATE ole32 psapi)
 endif()
 fbengine_set_warnings(fbengine_audio_native_tests)
 catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio."

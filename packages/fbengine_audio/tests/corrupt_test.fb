@@ -60,3 +60,34 @@ Function ChangedBytesAreASoundErrorOrASound()
     // Most changes miss what a decoder checks.
     Expect(loaded > 0)
 End Function
+
+// A file whose sample rate is out of the mix's range is corrupt: rate.ogg says 3,423,710,276 Hz,
+// which loaded, and a looped Channel of it stalled the mix for seconds. rate.wav, which says the
+// same, miniaudio's WAV reader refuses already.
+@Test
+Function ASampleRateOutOfRangeIsASoundError()
+    Local said = "a sound's sample rate is 8000 to 384000 Hz, not 3423710276"
+    Expect(ExpectThrows<SoundError>(Sound.FromBytes(Embed("data/rate.ogg")))?.Message == said)
+    Expect(ExpectThrows<SoundError>(Sound.StreamBytes(Embed("data/rate.ogg")))?.Message == said)
+    ExpectThrows<SoundError>(Sound.FromBytes(Embed("data/rate.wav")))
+    ExpectThrows<SoundError>(Sound.StreamBytes(Embed("data/rate.wav")))
+End Function
+
+// leak16.ogg leaked 32 MB at each load or stream (tests/audio/memory_tests.cpp counts it); here,
+// it's a SoundError every time.
+@Test
+Function ALeakingOggIsASoundErrorEveryTime()
+    For i = 1 To 3
+        ExpectThrows<SoundError>(Sound.FromBytes(Embed("data/leak16.ogg")))
+        ExpectThrows<SoundError>(Sound.StreamBytes(Embed("data/leak16.ogg")))
+    End For
+End Function
+
+// short.ogg is tone.ogg with its vendor's length 35, so reading the comment count runs off the
+// comment packet's end two bytes in, where stb_vorbis shifted its -1 left: undefined, which
+// UBSan finds. It's a SoundError, loaded or streamed.
+@Test
+Function ACommentCountPastItsPacketIsASoundError()
+    ExpectThrows<SoundError>(Sound.FromBytes(Embed("data/short.ogg")))
+    ExpectThrows<SoundError>(Sound.StreamBytes(Embed("data/short.ogg")))
+End Function

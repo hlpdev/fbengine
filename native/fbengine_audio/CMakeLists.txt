@@ -16,12 +16,18 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(miniaudio)
 
-# stb_vorbis 1.22, patched where a corrupt file's comment header corrupts the heap. The vendor's
-# and each comment's length and the comment count are read from the file and size allocations,
-# through setup_malloc's int, which a count past 2^28 overflows; a comment that won't read leaves
-# comment_list partly unset, and a count too big to allocate leaves it null, for vorbis_deinit to
-# free what was never allocated either way. The copy refuses a string past 16 MB or a count past
-# 2^20, clears comment_list as it's allocated, and frees its comments only when there's a list.
+# stb_vorbis 1.22, patched where a corrupt file corrupts the heap, leaks, or shifts a negative:
+# - The vendor's and each comment's length and the comment count are read from the file and size
+#   allocations, through setup_malloc's int, which a count past 2^28 overflows; a comment that
+#   won't read leaves comment_list partly unset, and a count too big to allocate leaves it null,
+#   for vorbis_deinit to free what was never allocated either way. The copy refuses a string past
+#   16 MB or a count past 2^20, clears comment_list as it's allocated, and frees its comments only
+#   when there's a list.
+# - A sparse codebook's lengths, up to 16 MB, and its values are temporary allocations, which an
+#   error return between their malloc and free leaks. The copy keeps them in the decoder, clears
+#   them as they're freed, and frees what's left in vorbis_deinit (a codebook's codewords, which
+#   are temporary too, it frees already).
+# - get32_packet shifts get8_packet's -1, at a packet's end, left; the copy shifts it as a uint32.
 # Each patch's text has to be there, once, or configuring fails.
 file(READ "${miniaudio_SOURCE_DIR}/extras/stb_vorbis.c" fbengine_stb_vorbis)
 set(fbengine_stb_vorbis_patches
@@ -34,7 +40,19 @@ set(fbengine_stb_vorbis_patches
     "      len = get32_packet(f)\;\n      f->comment_list[i] ="
     "      len = get32_packet(f)\;\n      if (len < 0 || len > (1 << 24))              return error(f, VORBIS_invalid_setup)\;\n      f->comment_list[i] ="
     "   for (i=0\; i < p->comment_list_length\; ++i) {\n"
-    "   for (i=0\; p->comment_list != NULL && i < p->comment_list_length\; ++i) {\n")
+    "   for (i=0\; p->comment_list != NULL && i < p->comment_list_length\; ++i) {\n"
+    "   int temp_offset\;\n"
+    "   int temp_offset\;\n   void *fbe_temp_lengths, *fbe_temp_values\;\n"
+    "         lengths = (uint8 *) setup_temp_malloc(f, c->entries)\;\n"
+    "         lengths = (uint8 *) (f->fbe_temp_lengths = setup_temp_malloc(f, c->entries))\;\n"
+    "            values = (uint32 *) setup_temp_malloc(f, sizeof(*values) * c->sorted_entries)\;\n"
+    "            values = (uint32 *) (f->fbe_temp_values = setup_temp_malloc(f, sizeof(*values) * c->sorted_entries))\;\n"
+    "      f->temp_offset += (sz+7)&~7\;\n      return\;\n   }\n   free(p)\;\n"
+    "      f->temp_offset += (sz+7)&~7\;\n      return\;\n   }\n   if (p == f->fbe_temp_lengths) f->fbe_temp_lengths = NULL\;\n   if (p == f->fbe_temp_values) f->fbe_temp_values = NULL\;\n   free(p)\;\n"
+    "   int i,j\;\n\n   setup_free(p, p->vendor)\;\n"
+    "   int i,j\;\n\n   if (!p->alloc.alloc_buffer) {\n      free(p->fbe_temp_lengths)\;\n      free(p->fbe_temp_values)\;\n   }\n   setup_free(p, p->vendor)\;\n"
+    "   x += get8_packet(f) << 8\;\n   x += get8_packet(f) << 16\;\n"
+    "   x += (uint32) get8_packet(f) << 8\;\n   x += (uint32) get8_packet(f) << 16\;\n")
 list(LENGTH fbengine_stb_vorbis_patches fbengine_patch_count)
 math(EXPR fbengine_patch_last "${fbengine_patch_count} - 1")
 foreach(fbengine_patch RANGE 0 ${fbengine_patch_last} 2)
