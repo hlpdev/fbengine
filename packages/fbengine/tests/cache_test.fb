@@ -8,8 +8,11 @@ Import std.image.png
 Import std.io
 Import std.test
 Import std.text
+Import std.time
 Import fbengine
 Import fbengine.c.fbe_assets
+Import "./named/first" As First
+Import "./named/second" As Second
 
 Global made = 0
 
@@ -239,4 +242,281 @@ Function ASidecarThatIsntSettingsDoesntLoad() Throws IOError
     Local typo =
         ExpectThrows<IOError>(Assets.ReadSettings<SpriteSettings>("res://test-bad/typo.png"))
     Expect((typo?.Message ?? "").Contains("'filtr'"))
+End Function
+
+// An Asset whose Free lets go of its hold, as an engine type's does, without import settings.
+Class Plain Implements Asset
+    Field Freed: Bool
+
+    New()
+        Freed = False
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): Plain Throws IOError => Plain()
+
+    Method Free()
+        If !Assets.Release(Self) Then Return
+        Freed = True
+    End Method
+End Class
+
+// A base Class's Free, which a derived Class's assets free through.
+Class Base Implements Asset
+    Field Freed: Bool
+
+    New()
+        Freed = False
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): Base Throws IOError => Base()
+
+    Method Free()
+        If !Assets.Release(Self) Then Return
+        Freed = True
+    End Method
+End Class
+
+Class Derived Extends Base Implements Asset
+    Public Static Method FromLoad(load: AssetLoad): Derived Throws IOError => Derived()
+End Class
+
+// An asset made of others of its type, as a prefab of prefabs is, or, at "self.png", of itself.
+Class Nest Implements Asset
+    Field Kids: Nest[]
+
+    New(kids: Nest[])
+        Kids = kids
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): Nest Throws IOError
+        Local kids: Nest[] = []
+        If load.Path().EndsWith("root.png")
+            For i = 0 Until 70
+                kids.Add(Try Assets.Load<Nest>("res://test-nest/k{i}.png"))
+            End For
+        ElseIf load.Path().EndsWith("self.png")
+            kids.Add(Try Assets.Load<Nest>(load.Path()))
+        End If
+        Return Nest(kids)
+    End Method
+End Class
+
+@Test
+Function AWaiterOnALoadLetGoMeanwhileLoadsItAgain() Throws IOError
+    MountSprites("res://test-waiter")
+    Defer Assets.Unmount("res://test-waiter")
+    Local later = Assets.LoadAsync<Plain>("res://test-waiter/hero.png")
+    // A load now finishes the one on the workers, and its Free lets go of the only hold.
+    Local now = Try Assets.Load<Plain>("res://test-waiter/hero.png")
+    now.Free()
+    Expect(now.Freed)
+    Local waited = Try later.Wait()
+    Expect(!RefEquals(waited, now))
+    Expect(!waited.Freed)
+    waited.Free()
+    Expect(waited.Freed)
+End Function
+
+@Test
+Function TypesOfOneNameInTwoModulesAreApart() Throws IOError
+    MountSprites("res://test-names")
+    Defer Assets.Unmount("res://test-names")
+    Local first = Try Assets.Load<First.Sprite>("res://test-names/hero.png")
+    Local second = Try Assets.Load<Second.Sprite>("res://test-names/hero.png")
+    Local again = Try Assets.Load<First.Sprite>("res://test-names/hero.png")
+    Expect(RefEquals(first, again))
+    // Two holds, of the two loads of the first module's.
+    first.Free()
+    Expect(!first.Freed)
+    again.Free()
+    Expect(first.Freed)
+    second.Free()
+    Expect(second.Freed)
+End Function
+
+@Test
+Function ReleaseFindsAnAssetWhateverTypeItsFreeIsIn() Throws IOError
+    MountSprites("res://test-derived")
+    Defer Assets.Unmount("res://test-derived")
+    Local a = Try Assets.Load<Derived>("res://test-derived/hero.png")
+    Local b = Try Assets.Load<Derived>("res://test-derived/hero.png")
+    Expect(RefEquals(a, b))
+    a.Free()
+    Expect(!b.Freed)
+    b.Free()
+    Expect(b.Freed)
+    // Let go, it's loaded again.
+    Local c = Try Assets.Load<Derived>("res://test-derived/hero.png")
+    Expect(!RefEquals(c, a))
+    c.Free()
+End Function
+
+@Test
+Function ReleasingManyTakesTimeAsTheyDo() Throws IOError
+    Local files = Map<String, UInt8[]>()
+    Local png = Png.Encode(Image(1, 1))
+    Local count = 20000
+    For i = 0 Until count
+        files["p{i}.png"] = png
+    End For
+    Assets.MountFiles("res://test-many", files)
+    Defer Assets.Unmount("res://test-many")
+    Local held: Plain[] = []
+    For i = 0 Until count
+        held.Add(Try Assets.Load<Plain>("res://test-many/p{i}.png"))
+    End For
+    // Last first, which a Release that looks through what the cache has takes seconds for.
+    Local watch = Stopwatch.StartNew()
+    For j = 0 Until count
+        held[count - 1 - j].Free()
+    End For
+    Expect(watch.Elapsed < 1.Seconds)
+    Expect(held[0].Freed)
+End Function
+
+@Test
+Function AFromLoadThatLoadsOthersKeepsItsEntry() Throws IOError
+    Local files = Map<String, UInt8[]>()
+    Local png = Png.Encode(Image(1, 1))
+    files["root.png"] = png
+    files["self.png"] = png
+    For i = 0 Until 70
+        files["k{i}.png"] = png
+    End For
+    Assets.MountFiles("res://test-nest", files)
+    Defer Assets.Unmount("res://test-nest")
+    // Its 70 loads prune the cache while it's being made, which leaves it.
+    Local first = Try Assets.Load<Nest>("res://test-nest/root.png")
+    Expect(first.Kids.Count == 70)
+    Expect(RefEquals(Try Assets.Find<Nest>("res://test-nest/root.png"), first))
+    Expect(RefEquals(Try Assets.Load<Nest>("res://test-nest/root.png"), first))
+    // One made of itself can't be.
+    Expect(ExpectThrows<IOError>(Assets.Load<Nest>("res://test-nest/self.png"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect((Try Assets.Find<Nest>("res://test-nest/self.png")) == Null)
+End Function
+
+@Test
+Function ACachedLoadCountsAsDoneInItsProgress() Throws IOError
+    MountSprites("res://test-progress")
+    Defer Assets.Unmount("res://test-progress")
+    Local first = Try Assets.Load<Plain>("res://test-progress/hero.png")
+    Local progress = LoadProgress()
+    Local again = Try Assets.LoadAsync<Plain>("res://test-progress/hero.png", progress).Wait()
+    Expect(progress.Count() == 1)
+    Expect(progress.Done())
+    Expect(progress.Fraction() == 1.0)
+    first.Free()
+    again.Free()
+End Function
+
+@Test
+Function ASidecarFailsOnlyWhatReadsIt() Throws IOError
+    Assets.MountFiles("res://test-lazy", {"a.bin": "abc".Bytes, "a.bin.toml": [0xFF] As UInt8[],
+                                          "b.png": Png.Encode(Image(2, 2)),
+                                          "b.png.toml": [0x61, 0x3D, 0x31, 0x00] As UInt8[],
+                                          "c.png": Png.Encode(Image(2, 2)),
+                                          "c.png.toml/inside.txt": "a folder".Bytes})
+    Defer Assets.Unmount("res://test-lazy")
+    // Bytes aren't read with their sidecars.
+    Expect((Try Assets.ReadBytes("res://test-lazy/a.bin")).Count == 3)
+    Expect((Try Assets.ReadBytesAsync("res://test-lazy/a.bin").Wait()).Count == 3)
+    // A type that reads no settings loads; one that does fails, on the sidecar.
+    Local plain = Try Assets.Load<Plain>("res://test-lazy/b.png")
+    plain.Free()
+    Local refused = ExpectThrows<IOError>(Assets.Load<Sprite>("res://test-lazy/b.png"))
+    Expect(refused?.Kind == IOErrorKind.INVALID_DATA)
+    Expect(refused?.Path == "res://test-lazy/b.png.toml")
+    // A folder where the sidecar would be is no settings.
+    Local folder = Try Assets.Load<Sprite>("res://test-lazy/c.png")
+    Expect(folder.Settings.Scale == 1.0)
+    folder.Free()
+End Function
+
+Struct Tagged
+    Field Scale: Float64 = 1.0
+    Field Tags: Map<String, String>? = Null
+    Field Counts: Map<String, Int>? = Null
+End Struct
+
+Struct Lod
+    Field Distance: Float64 = 0.0
+    Field UVScale: Float64 = 1.0
+End Struct
+
+Struct Lods
+    Field Levels: Lod[] = []
+End Struct
+
+Struct Twice
+    Field UVScale: Float64 = 1.0
+    Field UvScale: Float64 = 1.0
+End Struct
+
+Function SettingsFrom<S>(text: String): S Throws IOError
+    Assets.MountFiles("res://test-keys", {"a.png.toml": text.Bytes})
+    Defer Assets.Unmount("res://test-keys")
+    Return Try Assets.ReadSettings<S>("res://test-keys/a.png")
+End Function
+
+Function Refused<S>(text: String): Bool
+    Try
+        SettingsFrom<S>(text)
+        Return False
+    Catch e As IOError
+        Return e.Kind == IOErrorKind.INVALID_DATA
+    End Try
+End Function
+
+@Test
+Function ASettingsKeyIsItsFieldsNameInSnakeCase() Throws IOError
+    Expect((Try SettingsFrom<SpriteSettings>("alpha_cutoff = 0.25")).AlphaCutoff == 0.25)
+    // Capitals in a run are one word.
+    Expect((Try SettingsFrom<Lod>("uv_scale = 2.0")).UVScale == 2.0)
+    // Not snake_case: a Field's own name, two '_'s, one at the end, or what isn't ASCII.
+    Expect(Refused<SpriteSettings>("AlphaCutoff = 0.25"))
+    Expect(Refused<SpriteSettings>("alpha__cutoff = 0.25"))
+    Expect(Refused<SpriteSettings>("alpha_cutoff_ = 0.25"))
+    Expect(Refused<SpriteSettings>("_scale = 2.0"))
+    Expect(Refused<SpriteSettings>("\"\u{E9}clat\" = 1"))
+    // A key that names two Fields.
+    Expect(Refused<Twice>("uv_scale = 2.0"))
+End Function
+
+@Test
+Function AMapsKeysAreAsTheyreWritten() Throws IOError
+    Local read = Try SettingsFrom<Tagged>("scale = 2.0\n[tags]\nmy_key = \"x\"\nOther = \"y\"\n" +
+                                          "[counts]\n\"\u{E9}t\u{E9}\" = 3\n")
+    Expect(read.Scale == 2.0)
+    Local tags = read.Tags
+    Expect(tags != Null)
+    If tags != Null
+        Expect(tags.Get("my_key") == "x")
+        Expect(tags.Get("Other") == "y")
+    End If
+    Local counts = read.Counts
+    Expect(counts != Null)
+    If counts != Null Then Expect(counts.Get("\u{E9}t\u{E9}") == 3)
+End Function
+
+@Test
+Function AnArrayOfTablesIsCheckedAsItsElementsType() Throws IOError
+    Local read = Try SettingsFrom<Lods>("[[levels]]\ndistance = 3.0\nuv_scale = 0.5\n" +
+                                        "[[levels]]\ndistance = 9.0\n")
+    Expect(read.Levels.Count == 2)
+    Expect(read.Levels[0].Distance == 3.0)
+    Expect(read.Levels[0].UVScale == 0.5)
+    Expect(read.Levels[1].Distance == 9.0)
+    Expect(Refused<Lods>("[[levels]]\ndistanse = 3.0\n"))
+    // One table for an array, which is its one element.
+    Local one = Try SettingsFrom<Lods>("[levels]\ndistance = 2.0\n")
+    Expect(one.Levels.Count == 1)
+    Expect(one.Levels[0].Distance == 2.0)
+    Expect(Refused<Lods>("[levels]\ndistanse = 2.0\n"))
 End Function
