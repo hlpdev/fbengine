@@ -159,12 +159,17 @@ Public Final Class Ui
             Focus(Null)
             Return
         End If
-        For key In EditingKeys()
-            // Its presses, then the OS's repeats while it's held, which don't activate.
-            Local presses = KeyHits(key)
-            For time = 1 To KeyTyped(key)
-                Local used = own.KeyTyped(key)
-                If !used && time <= presses && Activates(key) Then own.Activate()
+        // The frame's presses in the order the Flip read them, each activating unless it's used;
+        // then the OS's repeats of the keys held, which don't activate.
+        Local editing = EditingKeys()
+        For key In KeysHit()
+            If !editing.Contains(key) Then Continue
+            Local used = own.KeyTyped(key)
+            If !used && Activates(key) Then own.Activate()
+        End For
+        For key In editing
+            For time = 1 To KeyTyped(key) - KeyHits(key)
+                own.KeyTyped(key)
             End For
         End For
         Local text = TextInput()

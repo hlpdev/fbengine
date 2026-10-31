@@ -188,6 +188,20 @@ Public Final Class Theme
         theme.SetFields("field", field)
         // Its own border is nearer than default's focused one, so it gives its own.
         theme.SetFields("field", focused, WidgetState.FOCUSED)
+
+        Local track = StyleFields()
+        track.Background = Color.Hex("#2b3038")
+        track.CornerRadius = 4.0
+        theme.SetFields("slider", track)
+        Local item = StyleFields()
+        item.Padding = Insets.Symmetric(8.0, 4.0)
+        theme.SetFields("list.item", item)
+        Local under = StyleFields()
+        under.Background = Color.Hex("#262a31")
+        theme.SetFields("list.item", under, WidgetState.HOVERED)
+        Local picked = StyleFields()
+        picked.Background = Color.Hex("#2f4a7a")
+        theme.SetFields("list.item.selected", picked)
         Return theme
     End Method
 

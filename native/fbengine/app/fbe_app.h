@@ -33,6 +33,12 @@ FBE_API bool fbe_app_open_url(const char* url);
 FBE_API int32_t fbe_app_opened_count(void);
 FBE_API const char* fbe_app_opened_at(int32_t index);
 
+// Puts `text`, UTF-8, on the OS's clipboard, which SDL's video holds while the OS has none, as
+// headless; false if it can't. It starts the video if nothing has.
+FBE_API bool fbe_app_set_clipboard(const char* text);
+// The text on the clipboard, "" for none.
+FBE_API const char* fbe_app_clipboard(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,0 +1,397 @@
+// The widgets that take a value: a slider, and a text field.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.text
+Import fbengine
+Import "./widget"
+
+/// A value from Low to High, which dragging along it sets, as the arrows, Home, End, and the pages
+/// do while it has the focus: style "slider".
+Public Class Slider Extends Widget
+    Field low: Float32
+    Field high: Float32
+    Field value: Float32
+    Field stepping: Float32 = 0.0
+    Field changed: Bool = False
+
+    /// A slider from `low` to `high`, at `value`. Panics for a range that isn't finite, or ends
+    /// before it starts.
+    @MainThread Public New(low: Float32 = 0.0, high: Float32 = 1.0, value: Float32 = 0.0,
+                           name: String = "")
+        Super.New("slider", name)
+        SetFocusable(True)
+        SetContentSize(160.0, 16.0)
+        SetRange(low, high)
+        SetValue(value)
+    End New
+
+    /// Its value.
+    @MainThread Public Method Value(): Float32 => value
+
+    /// Sets its value, kept to its range and its step; NaN is its low. Not a change the player
+    /// made, so Changed stays False.
+    @MainThread Public Method SetValue(set: Float32)
+        value = Kept(set)
+    End Method
+
+    /// Its lowest value.
+    @MainThread Public Method Low(): Float32 => low
+
+    /// Its highest value.
+    @MainThread Public Method High(): Float32 => high
+
+    /// Sets its range, keeping its value in it.
+    @MainThread Public Method SetRange(lowest: Float32, highest: Float32)
+        If !(IsFinite(lowest) && IsFinite(highest) && highest >= lowest)
+            Panic("Slider.SetRange: a range is finite, and ends at its start or after, not {lowest} to {highest}")
+        End If
+        low = lowest
+        high = highest
+        value = Kept(value)
+    End Method
+
+    /// Sets the step its value goes by from its low, 0 at first for none, so the arrows move it a
+    /// twentieth of its range.
+    @MainThread Public Method SetStep(step: Float32)
+        If !(step >= 0.0 && IsFinite(step)) Then Panic("Slider.SetStep: a step is 0 or more, not {step}")
+        stepping = step
+        value = Kept(value)
+    End Method
+
+    /// The step its value goes by, 0 for none.
+    @MainThread Public Method Step(): Float32 => stepping
+
+    /// How far along its range its value is, from 0 to 1.
+    @MainThread Public Method Fraction(): Float32 => high > low ? (value - low) / (high - low) : 0.0
+
+    /// Whether the last Ui.Update read the player change its value.
+    @MainThread Public Method Changed(): Bool => changed
+
+    @MainThread Public Override Method PointerDown(point: Vec2): Bool
+        SetFrom(point)
+        Return True
+    End Method
+
+    @MainThread Public Override Method PointerDrag(point: Vec2)
+        SetFrom(point)
+    End Method
+
+    @MainThread Public Override Method KeyTyped(key: Key): Bool
+        Local by = stepping > 0.0 ? stepping : (high - low) / 20.0
+        Select key
+            Case Key.LEFT, Key.DOWN
+                Moved(value - by)
+            Case Key.RIGHT, Key.UP
+                Moved(value + by)
+            Case Key.HOME
+                Moved(low)
+            Case Key.END
+                Moved(high)
+            Case Key.PAGE_DOWN
+                Moved(value - (high - low) / 10.0)
+            Case Key.PAGE_UP
+                Moved(value + (high - low) / 10.0)
+            Default
+                Return False
+        End Select
+        Return True
+    End Method
+
+    @MainThread Public Override Method Forget()
+        changed = False
+    End Method
+
+    // Sets its value from where the pointer is along it.
+    @MainThread Method SetFrom(point: Vec2)
+        Local box = ContentBox()
+        Local along = box.Width > 0.0 ? Clamp((point.x - box.X) / box.Width, 0.0, 1.0) : 0.0
+        Moved(low + along * (high - low))
+    End Method
+
+    @MainThread Method Moved(to: Float32)
+        Local kept = Kept(to)
+        If kept == value Then Return
+        value = kept
+        changed = True
+    End Method
+
+    // `set` kept to its range, on its step.
+    Method Kept(set: Float32): Float32
+        If IsNaN(set) Then Return low
+        Local kept = Clamp(set, low, high)
+        If stepping > 0.0 Then kept = Min(low + Round((kept - low) / stepping) * stepping, high)
+        Return kept
+    End Method
+End Class
+
+/// A line of text the player types, with the window's text input on while it has the focus, the
+/// IME's composition and all: the arrows move its cursor, with Shift its selection, Home and End
+/// to its ends, Backspace and Delete take away, Ctrl (or Command) with A, C, X, and V select all,
+/// copy, cut, and paste, and with the arrows, Backspace, or Delete go by words; Return submits
+/// it. The pointer puts the cursor where it's pressed, and selects by dragging: style "field".
+Public Class TextField Extends Widget
+    Field chars: Char[] = []
+    Field text: String = ""
+    Field cursor: Int = 0
+    Field anchor: Int = 0
+    Field placeholder: String
+    Field limit: Int = 0
+    Field changed: Bool = False
+    Field submitted: Bool = False
+
+    /// A field holding `text`, which shows `placeholder` while it's empty.
+    @MainThread Public New(text: String = "", placeholder: String = "", name: String = "")
+        Super.New("field", name)
+        Self.placeholder = placeholder
+        SetFocusable(True)
+        SetText(text)
+    End New
+
+    /// What it holds.
+    @MainThread Public Method Text(): String => text
+
+    /// Holds `held`, cut to its most, with its cursor at the end; not a change the player made, so
+    /// Changed stays False.
+    @MainThread Public Method SetText(held: String)
+        chars = held.Chars
+        If limit > 0 && chars.Count > limit Then chars = chars[0..limit]
+        cursor = chars.Count
+        anchor = cursor
+        Rebuilt()
+    End Method
+
+    /// What it shows while it's empty.
+    @MainThread Public Method Placeholder(): String => placeholder
+
+    /// Shows `shown` while it's empty.
+    @MainThread Public Method SetPlaceholder(shown: String)
+        placeholder = shown
+        Reflow()
+    End Method
+
+    /// The most characters it holds, 0 at first for no most; what it holds past it goes.
+    @MainThread Public Method SetMaxLength(most: Int)
+        If most < 0 Then Panic("TextField.SetMaxLength: a most is 0, for none, or more, not {most}")
+        limit = most
+        If limit > 0 && chars.Count > limit
+            chars = chars[0..limit]
+            cursor = Min(cursor, limit)
+            anchor = Min(anchor, limit)
+            Rebuilt()
+        End If
+    End Method
+
+    /// The most characters it holds, 0 for no most.
+    @MainThread Public Method MaxLength(): Int => limit
+
+    /// Where its cursor is, in characters from its start.
+    @MainThread Public Method Cursor(): Int => cursor
+
+    /// Its selection, from its start to its end, in characters; the two are its cursor when
+    /// nothing's selected.
+    @MainThread Public Method Selection(): (Int, Int) => (Min(anchor, cursor), Max(anchor, cursor))
+
+    /// What's selected, "" for nothing.
+    @MainThread Public Method SelectedText(): String
+        Local from, to = Selection()
+        Return Joined(chars, from, to)
+    End Method
+
+    /// Selects from `from` to `to`, kept to what it holds, the cursor at `to`.
+    @MainThread Public Method SelectRange(from: Int, to: Int)
+        anchor = Clamp(from, 0, chars.Count)
+        cursor = Clamp(to, 0, chars.Count)
+    End Method
+
+    /// Selects everything it holds.
+    @MainThread Public Method SelectAll()
+        SelectRange(0, chars.Count)
+    End Method
+
+    /// Whether the last Ui.Update read the player change what it holds.
+    @MainThread Public Method Changed(): Bool => changed
+
+    /// Whether the last Ui.Update read the player press Return in it.
+    @MainThread Public Method Submitted(): Bool => submitted
+
+    @MainThread Public Override Method TakesText(): Bool => True
+
+    @MainThread Public Override Method TextCursorX(): Float32
+        Return Padding().Left + TextSize(Joined(chars, 0, cursor)).x
+    End Method
+
+    @MainThread Public Override Method Measure(): Vec2
+        Local shown = text != "" ? text : placeholder
+        Return Vec2(TextSize(shown).x, TextSize("Ag").y)
+    End Method
+
+    @MainThread Public Override Method PointerDown(point: Vec2): Bool
+        cursor = IndexAt(point.x)
+        If !Shifted() Then anchor = cursor
+        Return True
+    End Method
+
+    @MainThread Public Override Method PointerDrag(point: Vec2)
+        cursor = IndexAt(point.x)
+    End Method
+
+    @MainThread Public Override Method TextTyped(typed: String)
+        // A line's text, without what the OS's keys type that isn't text.
+        Local kept: Char[] = []
+        For each In typed.Chars
+            If each != '\n' && each != '\r' && each != '\t' Then kept.Add(each)
+        End For
+        If kept.Count > 0 Then Put(kept)
+    End Method
+
+    @MainThread Public Override Method KeyTyped(key: Key): Bool
+        Local command = KeyDown(Key.LEFT_CONTROL) || KeyDown(Key.RIGHT_CONTROL) ||
+                        KeyDown(Key.LEFT_SUPER) || KeyDown(Key.RIGHT_SUPER)
+        Local from, to = Selection()
+        Select key
+            Case Key.LEFT
+                MoveTo(!Shifted() && from != to ? from
+                                                : (command ? WordBefore(cursor) : cursor - 1))
+            Case Key.RIGHT
+                MoveTo(!Shifted() && from != to ? to : (command ? WordAfter(cursor) : cursor + 1))
+            Case Key.HOME
+                MoveTo(0)
+            Case Key.END
+                MoveTo(chars.Count)
+            Case Key.BACKSPACE
+                If from == to Then from = command ? WordBefore(cursor) : Max(cursor - 1, 0)
+                Taken(from, to)
+            Case Key.DELETE
+                If from == to Then to = command ? WordAfter(cursor) : Min(cursor + 1, chars.Count)
+                Taken(from, to)
+            Case Key.RETURN, Key.KEYPAD_ENTER
+                submitted = True
+            Case Key.A
+                If command Then SelectAll()
+            Case Key.C
+                If command && from != to Then SetClipboard(SelectedText())
+            Case Key.X
+                If command && from != to
+                    SetClipboard(SelectedText())
+                    Taken(from, to)
+                End If
+            Case Key.V
+                If command Then TextTyped(FirstLine(Clipboard()))
+            Case Key.SPACE
+                // It's text, which TextTyped has; it never activates a field.
+                Return True
+            Default
+                Return False
+        End Select
+        Return True
+    End Method
+
+    @MainThread Public Override Method Forget()
+        changed = False
+        submitted = False
+    End Method
+
+    // Puts `put` in place of the selection, as much as its most leaves room for.
+    @MainThread Method Put(put: Char[])
+        Local from, to = Selection()
+        Local room = limit > 0 ? limit - (chars.Count - (to - from)) : put.Count
+        If room <= 0 && to == from Then Return
+        Local fitting = put[0..Min(put.Count, Max(room, 0))]
+        Local made: Char[] = chars[0..from]
+        made.AddAll(fitting)
+        made.AddAll(chars[to..chars.Count])
+        chars = made
+        cursor = from + fitting.Count
+        anchor = cursor
+        changed = True
+        Rebuilt()
+    End Method
+
+    // Takes away the characters from `from` to `to`.
+    @MainThread Method Taken(from: Int, to: Int)
+        If from >= to
+            anchor = cursor
+            Return
+        End If
+        Local made: Char[] = chars[0..from]
+        made.AddAll(chars[to..chars.Count])
+        chars = made
+        cursor = from
+        anchor = from
+        changed = True
+        Rebuilt()
+    End Method
+
+    @MainThread Method MoveTo(at: Int)
+        cursor = Clamp(at, 0, chars.Count)
+        If !Shifted() Then anchor = cursor
+    End Method
+
+    // The character boundary nearest `x`, in the UI's units.
+    @MainThread Method IndexAt(x: Float32): Int
+        Local along = x - ContentBox().X
+        Local best = 0
+        Local nearest = Abs(along)
+        For i = 1 To chars.Count
+            Local width = TextSize(Joined(chars, 0, i)).x
+            If Abs(along - width) < nearest
+                nearest = Abs(along - width)
+                best = i
+            End If
+        End For
+        Return best
+    End Method
+
+    // The start of the word before `at`: past the spaces before it, then its letters.
+    Method WordBefore(at: Int): Int
+        Local i = at
+        While i > 0 && chars[i - 1] == ' '
+            i -= 1
+        End While
+        While i > 0 && chars[i - 1] != ' '
+            i -= 1
+        End While
+        Return i
+    End Method
+
+    // The end of the word after `at`.
+    Method WordAfter(at: Int): Int
+        Local i = at
+        While i < chars.Count && chars[i] == ' '
+            i += 1
+        End While
+        While i < chars.Count && chars[i] != ' '
+            i += 1
+        End While
+        Return i
+    End Method
+
+    @MainThread Method Rebuilt()
+        text = Joined(chars, 0, chars.Count)
+        Reflow()
+    End Method
+End Class
+
+// Whether Shift is held, which moving the cursor selects with.
+@MainThread Function Shifted(): Bool => KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT)
+
+// The characters from `from` up to `to`, as a String.
+Function Joined(chars: Char[], from: Int, to: Int): String
+    Local built = StringBuilder()
+    For i = from To to - 1
+        built.Append(chars[i])
+    End For
+    Return built.ToString()
+End Function
+
+// `text`'s first line.
+Function FirstLine(text: String): String
+    Local line: Char[] = []
+    For each In text.Chars
+        If each == '\n' || each == '\r' Then Break
+        line.Add(each)
+    End For
+    Return Joined(line, 0, line.Count)
+End Function

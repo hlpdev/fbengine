@@ -80,3 +80,12 @@ Function AMessageHeadlessGoesOnAtOnce()
     ShowMessage("fbengine's tests", "a message no one has to close", MessageKind.INFORMATION)
     ShowMessage("fbengine's tests", "a warning", MessageKind.WARNING)
 End Function
+
+@Test
+Function TheClipboardHoldsWhatsPutOnIt()
+    Window.SetHeadless(True)
+    Expect(SetClipboard("copied é"))
+    Expect(Clipboard() == "copied é")
+    Expect(SetClipboard(""))
+    Expect(Clipboard() == "")
+End Function
