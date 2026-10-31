@@ -1,8 +1,10 @@
 # fbengine
 
-FutureBlitz's game engine, as packages built on the language, never part of it. The plan, its
-packages and milestones E0 to E14, is FutureBlitz's docs/engine.md (with assets.md and
-migration.md); its decisions go in FutureBlitz's docs/decisions.md.
+FutureBlitz's game engine, as packages built on the language, never part of it. docs/plan.md has
+the milestones E0 to E14, their steps, and the lanes; docs/architecture.md how it fits together;
+docs/questions.md what waits on the user; docs/research/ the read-throughs of Blitz3D's and SCP:CB's
+source. FutureBlitz's docs/engine.md is the summary, and its decisions go in FutureBlitz's
+docs/decisions.md. fbengine is a modern engine and copies none of Blitz3D's quirks.
 
 ## How we work
 - As in FutureBlitz: you write the code, C++ and .fb, one step at a time, in my code style, and
@@ -32,10 +34,10 @@ migration.md); its decisions go in FutureBlitz's docs/decisions.md.
 - examples/: programs on the packages, which ctest runs.
 
 ## Current step
-E0 is done (2026-10-31; FutureBlitz's docs/history.md has what it added): the hello package, CI on
-every target with GPU tests on lavapipe and MoltenVK, and publish.yml's trusted publishing, with
-0.1.0 and 0.1.1 on staging, not production. Next: E1, app and input (SDL3, windows, input, frame
-timing, `Flip` stepping `Scheduler.Main`).
+E0 is done, and E1 steps 1 and 2 (2026-10-31; FutureBlitz's docs/history.md has what each added).
+The engine's planning pass (2026-10-31) wrote docs/plan.md, architecture.md, questions.md, and
+research/; next, the user's answers to questions.md's first five, then the step that splits the
+headers, bindings, and folders by area and adds tools/verify.py, then the first wave of lanes.
 
 ## CI notes
 - Windows' GPU job uses mesa-dist-win's MSVC lavapipe, registered in HKLM, since the loader

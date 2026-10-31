@@ -1,0 +1,155 @@
+# fbengine's architecture
+
+How the engine is built, across its packages. FutureBlitz's docs/engine.md has the goals, the
+packages, and the milestones; this doc has how the pieces fit, and docs/plan.md the steps. What's
+marked **Proposed** waits on the user (docs/questions.md); the rest follows from decisions already
+made.
+
+The yardstick: SCP: Containment Breach, remade 1-to-1 at the end (E14), has to feel nearly
+identical, and the engine has to be a good modern engine on its own. Every structural choice is
+checked against both.
+
+## Layers
+
+```
+ game code (FutureBlitz)
+   │  imports
+   ▼
+ fbengine, fbengine_audio, fbengine_physics, fbengine_ui     ← FB: the API, objects with methods
+   │  Extern "C" through fb-bindgen's bindings (c/*.fb)
+   ▼
+ fbengine_native, fbengine_audio_native, fbengine_physics_native   ← C++23 DLLs behind C APIs
+   │  statically linked
+   ▼
+ SDL3, Vulkan (volk, VMA), fastgltf, KTX, stb, miniaudio, Jolt, meshoptimizer
+```
+
+- **What goes in C++**: everything per frame and per object in bulk: rendering, culling, skinning
+  and animation sampling, collisions and picks, physics, mixing, decoding assets.
+- **What goes in FB**: the API's shape, everything a game calls once per thing per frame, glue
+  between packages, fbengine_ui, fbengine_tools, the editor, and the migrator. Code that isn't hot
+  and is easier to write in FB is written in FB; that's also the engine dogfooding the language.
+- A C++ DLL is called only by its own package's FB code; packages meet in FB (physics reads an
+  entity's transform through fbengine's FB API and hands Jolt numbers). No C++ links across
+  packages.
+
+## The C API
+
+- Functions are `<prefix>_<area>_<verb>`: `fbe_entity_set_position`. Every type is fixed-size, so
+  one checked-in binding is every target's. Structs go by pointer, never by value, so a Callback
+  never needs a Struct by value (FutureBlitz's deferred work).
+- **Handles**: an engine object is a `uint64_t`: a 32-bit slot and a 32-bit generation. 0 is none.
+  A freed slot's generation goes up, so an old handle is caught, never aliased. Each area has its
+  own pool (entities, meshes, textures, materials, sounds, ...).
+- **Errors**: a call that can fail returns `bool` or a 0 handle, and `fbe_error()` says why, per
+  thread. The FB side throws a typed Error for what a game should handle (a file that won't load,
+  a mode that can't be set) and panics for a programming mistake (a freed handle, a value out of
+  range), with the object's kind and the call in the message.
+- **Batches** where a game touches many objects a frame: `fbe_entity_set_transforms(handles,
+  matrices, count)`, so physics and animation sync is one call, not thousands.
+- Headers are split by area (`fbe_window.h`, `fbe_input.h`, `fbe_scene.h`, ...) under one
+  `fbengine.h`, and each gets its own binding file, so lanes don't edit the same files.
+
+## The FB API
+
+- Decided (2026-10-31): `@MainThread` Functions and Methods, no Properties; Structs' Fields for
+  plain data; Enum members UPPER_CASE; checked Errors for what can fail at run time.
+- **An object per handle**: the FB side keeps one wrapper per live handle in a table, so
+  `CameraPick` returns the same `Entity` object the game made, and `==` and Map keys work.
+  `Free()` frees the engine object and drops the table's entry; the wrapper stays, and using it
+  panics ("this Mesh was freed").
+- **Proposed**: engine Classes are Final, and a game attaches its own data with
+  `entity.SetData(obj)` and `entity.Data()`, rather than extending `Entity`. That keeps the
+  wrapper table simple and matches how Blitz games use NameEntity and Handle/Object.
+- **Modern conventions, not Blitz3D's** (the user, 2026-10-31): the engine follows std.math:
+  right-handed, Y up, -Z forward, radians, Vec3, Quat, Mat4, with `Deg()` where a game thinks in
+  degrees (`cube.Turn(0, Deg(1), 0)`). No Blitz3D oddity is copied into the engine; a game made
+  from a Blitz one converts its assets to modern formats as it's made, and deals with Blitz's
+  axes there.
+
+## The scene
+
+- **The game's view is a tree of entities**: `Pivot`, `Camera`, `Light`, `Mesh`, `Sprite`,
+  `Terrain`, each with a parent, a local transform, a name, and its render, pick, and collision
+  settings.
+- **Inside, it's data-oriented**: transforms in arrays with dirty flags, world matrices updated
+  once a frame for what moved, components (mesh renderer, light, camera, collider) in pools
+  indexed by entity. No ECS is exposed; a game never sees the arrays.
+- **Worlds**: entities live in a `World`. There's a default one, so a small game never names it,
+  and a game or the editor can make more (a preview scene, a scene rendered to a texture). A Camera
+  renders the World it's in.
+- `UpdateWorld(seconds)` steps animation and the scene's collisions; `RenderWorld()` draws every
+  camera; both are the game's to call, in its own loop. A fixed-step helper (`FixedStep(rate)`)
+  gives a game logic at a fixed rate with tweening between steps, as SCP:CB's needs.
+- **Collisions and picks** are the scene's own, for games that don't need a physics engine:
+  swept spheres and ellipsoids against meshes, boxes, and spheres, with stop and slide responses,
+  step-up, and ray and sphere picks, in C++ on the job system. SCP:CB's player and NPCs move this
+  way; a game wanting rigid bodies uses fbengine_physics.
+
+## The renderer
+
+- **Vulkan 1.2** with dynamic rendering, synchronization2, and descriptor indexing (bindless
+  textures), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
+- **A small frame graph**: each frame's passes (shadows, depth prepass, opaque, sky,
+  transparent, post, 2D overlay) declare what they read and write; the graph orders them, places
+  barriers, and reuses transient targets.
+- **Extract, then draw**: after UpdateWorld, the scene is read into render lists (visible
+  objects, sorted), so drawing never reads the live scene; a render thread can take drawing over
+  later without changing the API.
+- **One material system, three shading models**: PBR, UNLIT, and VERTEX (per-vertex lighting,
+  for a retro look). Texture layers with blend modes and their own UV sets, lightmaps (SCP:CB's
+  rooms are lightmapped), fog, and alpha all go through the same pipelines, as specialization
+  constants, so any mix of them draws in the same pass.
+- **Lights**: clustered forward, so the many small lights of a facility work, per pixel or per
+  vertex. Shadows come with E6.
+- **Render to texture**: any Camera can render into a Texture (security monitors, mirrors,
+  portals), and post effects run per camera.
+- **2D** draws after 3D, in the same frame graph, into the window or into an Image; pixel
+  access (`Lock`, `ReadPixel`, `WritePixel`) works on a CPU copy, uploaded or read back once per
+  frame, never per pixel.
+- **Shaders** are Slang, compiled to SPIR-V when the engine's built and embedded in the DLL.
+  Games' own shaders (E6) come with the asset pipeline's build step.
+
+## Assets
+
+- Paths are std.vfs's (`res://`), with folders in development and pak files in a release.
+- Loaders are C++ (fastgltf, KTX, stb_image), on worker threads.
+  `Assets.Load<T>(path)` loads now; `Await Assets.LoadAsync<T>(path)` loads on a worker, and the
+  Task completes on the main thread at a Flip.
+- A cache keyed by normalized path hands out the same asset again, refcounted; `Free()` and the
+  last reference let it go.
+- The cooker, typed references, and hot reload are E8's, and need a package build step from
+  FutureBlitz (docs/questions.md).
+- The engine loads modern formats only: glTF for meshes, scenes, and animation; KTX2, PNG, and
+  JPEG for textures; OGG, WAV, and FLAC for sound. A Blitz game's formats (`.b3d`, `.x`, `.3ds`,
+  SCP:CB's `.rmesh` rooms) are converted once, when the game is made, by fbengine_tools'
+  converters, and stored converted (the user, 2026-10-31).
+
+## Threads
+
+- The API is the main thread's (`@MainThread`). Inside, the C++ core has one job system, a
+  worker per core less one, which asset decoding, culling, animation, and collisions use;
+  Jolt runs on its own pool.
+- Nothing calls into FB from a worker; finished work is queued and handed over at Flip.
+
+## How packages work together
+
+- `Frame.OnFlip(hook)`: a package registers what it does each frame (audio moving its listener
+  with a camera, physics syncing bodies to entities), so a game doesn't call each package's
+  update itself. Hooks run in Flip, in registration order, before `Scheduler.Main.Step()`.
+- fbengine_audio's 3D sound and fbengine_physics' bodies follow entities through fbengine's FB
+  API, read in a batch per frame.
+
+## Testing
+
+- C++ unit tests (Catch2) per area; FB tests (`fb test`) per package; examples that ctest runs.
+- **No windows**: SDL's offscreen video, and Vulkan on lavapipe (Linux and Windows) and MoltenVK
+  (Apple silicon) in CI.
+- **Golden images**: a test renders on lavapipe, which is the same on every machine, and compares
+  with a checked-in PNG within a tolerance (per pixel, and how many may differ). A tool rewrites
+  them on purpose, and a changed image is reviewed like code.
+- **Reference scenes**: for looks a game depends on (SCP:CB's lightmapped, fogged rooms),
+  screenshots of the original next to fbengine's render of the converted scene, checked by eye
+  and within a loose tolerance.
+- **Feel fixtures** (E14): SCP:CB's numbers (speeds, radii, fog, timing) as tests of the remake.
+- Performance budgets per milestone, measured on the user's machine.
