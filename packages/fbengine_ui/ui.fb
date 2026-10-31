@@ -7,6 +7,7 @@ Import std.math
 Import fbengine
 Import "./layout"
 Import "./scroll"
+Import "./strings"
 Import "./theme"
 Import "./widget"
 
@@ -47,6 +48,9 @@ Public Final Class Ui
     Field held: Float64[]
     Field back: Bool = False
     Field routed: ActionSet[] = []
+    Field strings: Strings? = Null
+    // Its Strings' stamp when its widgets were last laid out by them.
+    Field stamp: Int = 0
 
     /// A Ui of the tree `root`, in `theme`, or Theme.Dark().
     @MainThread Public New(root: Node, theme: Theme? = Null)
@@ -168,6 +172,26 @@ Public Final Class Ui
         root.Invalidate()
     End Method
 
+    /// Sets the Strings its widgets show the text of for the keys they're given, as a language
+    /// a game's player picked, or none with Null. Its widgets are laid out by them again at the
+    /// next Update, and again after each change to them, or to a Strings they fall back to.
+    @MainThread Public Method SetStrings(language: Strings?)
+        strings = language
+        stamp = language?.Stamp() ?? 0
+        root.Invalidate()
+    End Method
+
+    /// The Strings its widgets show the text of, or Null.
+    @MainThread Public Method CurrentStrings(): Strings? => strings
+
+    /// What a widget that translates shows for `text`: its Strings' text for it, its values
+    /// unfilled, when they have it, else `text`.
+    @MainThread Public Method Translated(text: String): String
+        Local own = strings
+        If own == Null || own.Get(text) == Null Then Return text
+        Return own.Text(text)
+    End Method
+
     /// Sets how many of the window's units each of its own is, 1 at first: 2 makes it twice as
     /// big, as a player's UI scale or a high DPI screen wants. Panics for one not over 0.
     @MainThread Public Method SetScale(units: Float32)
@@ -222,6 +246,11 @@ Public Final Class Ui
     @MainThread Public Method Update()
         Forget(root)
         back = False
+        Local changed = strings?.Stamp() ?? 0
+        If changed != stamp
+            stamp = changed
+            root.Invalidate()
+        End If
         Local bounds = Rect(0.0, 0.0, (Window.Width() As Float32) / scale,
                             (Window.Height() As Float32) / scale)
         Restyle(root)

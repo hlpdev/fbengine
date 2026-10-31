@@ -17,6 +17,7 @@ Public Class Widget Extends Node
     Field state: WidgetState = WidgetState.NORMAL
     Field style: Style
     Field ui: Weak<Ui>
+    Field translates: Bool = True
 
     /// A widget of the style `styleName`, as "button", named `name`.
     @MainThread Public New(styleName: String, name: String = "")
@@ -61,6 +62,24 @@ Public Class Widget Extends Node
 
     /// The Ui it was last updated in, or Null.
     @MainThread Public Method Owner(): Ui? => ui
+
+    /// Sets whether the text it's given is a key, which it shows its Ui's Strings' text for, when
+    /// they have it, as it does at first; text a player typed, or a name, isn't.
+    @MainThread Public Method SetTranslates(on: Bool)
+        translates = on
+        Reflow()
+    End Method
+
+    /// Whether it shows its Ui's Strings' text for the text it's given.
+    @MainThread Public Method Translates(): Bool => translates
+
+    /// What it shows for `text`: its Ui's Strings' text for it while it translates, when they have
+    /// it, else `text`.
+    @MainThread Public Method Translated(text: String): String
+        Local own = ui
+        If !translates || own == Null Then Return text
+        Return own.Translated(text)
+    End Method
 
     /// The size `text` takes in its style's font, as its Ui measures it.
     @MainThread Public Method TextSize(text: String): Vec2

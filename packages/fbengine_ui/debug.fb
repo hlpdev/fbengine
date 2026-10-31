@@ -95,8 +95,11 @@ Public Class DebugPanel Extends Widget
             made.SetAlign(Align.CENTER)
             Local label = Label(name)
             label.SetStyleName("debug.name")
+            label.SetTranslates(False)
             made.Add(label)
-            made.Add(make())
+            Local widget = make()
+            widget.SetTranslates(False)
+            made.Add(widget)
             Add(made)
             rows[name] = made
             row = made

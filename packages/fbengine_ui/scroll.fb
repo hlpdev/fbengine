@@ -134,10 +134,20 @@ Public Class List Extends Widget
             Remove(child)
         End For
         For i = 0 To items.Count - 1
-            Add(ListItem(Self, i, items[i]))
+            Local item = ListItem(Self, i, items[i])
+            item.SetTranslates(Translates())
+            Add(item)
         End For
         If selected >= items.Count Then selected = items.Count - 1
         Restyled()
+    End Method
+
+    /// Sets whether its items are keys, as Widget.SetTranslates says, and each item with it.
+    @MainThread Public Override Method SetTranslates(on: Bool)
+        Super.SetTranslates(on)
+        For child In Children()
+            (child As? Widget)?.SetTranslates(on)
+        End For
     End Method
 
     /// The item picked, from 0, or -1 for none.

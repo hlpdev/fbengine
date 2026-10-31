@@ -1,0 +1,226 @@
+// Strings: a language's text, by keys, which a Ui's widgets show in place of the text they're given,
+// and a game fills in itself, with values and plurals.
+
+Import std.collections
+Import std.core
+Import std.data.toml
+Import std.math
+Import std.text
+Import "./theme"
+
+/// A language's text, by keys: what a Ui's widgets show in place of the text they're given, when
+/// it's a key, and what a game's own text is, through Text and Plural. A key it hasn't is its
+/// fallback's (another language's, as the one the game's written in), and with none, the key
+/// itself, so a key with no text shows.
+///
+/// Text holds `{name}` where a value goes, as "{points} points", which Text and Plural fill;
+/// `{{` is a "{" of its own. A plural's keys are its key and its categories, "apples.one" and
+/// "apples.other", the categories its plural rule gives a count, by CLDR's names (zero, one, two,
+/// few, many, other): English's at first, "one" for 1 and "other" for the rest, and a game's own
+/// for its other languages (SetPluralRule).
+///
+/// ```vb
+/// Local french = Strings("fr")
+/// french.Set("menu.play", "Jouer")
+/// french.Set("score", r"{points} points")
+/// french.SetPluralRule(Function(count: Int64) => Abs(count) < 2 ? "one" : "other")
+/// ui.SetStrings(french)
+/// score.SetText(french.Text("score", {"points": "{points}"}))
+/// ```
+Public Class Strings
+    Field language: String
+    Field texts: Map<String, String>
+    Field fallback: Strings?
+    Field rule: Func(Int64): String
+    // When it last changed, by the package's count of changes to any Strings.
+    Field stamp: Int = 0
+
+    /// No text, in `language`, a BCP 47 tag, as "fr" or "pt-BR".
+    @MainThread Public New(language: String)
+        Self.language = language
+        texts = {}
+        rule = EnglishPlural
+    End New
+
+    /// Its language's tag.
+    @MainThread Public Method Language(): String => language
+
+    /// Sets `key`'s text.
+    @MainThread Public Method Set(key: String, text: String)
+        If texts.Get(key) == text Then Return
+        texts[key] = text
+        Changed()
+    End Method
+
+    /// Takes `key`'s text away; False if it had none.
+    @MainThread Public Method Remove(key: String): Bool
+        If !texts.Remove(key) Then Return False
+        Changed()
+        Return True
+    End Method
+
+    /// Whether it has text of its own for `key`, its fallback's aside.
+    @MainThread Public Method Has(key: String): Bool => texts.Get(key) != Null
+
+    /// `key`'s text as it's set, its `{name}`s unfilled: its own, or its fallback's, or Null.
+    @MainThread Public Method Get(key: String): String?
+        Return texts.Get(key) ?? fallback?.Get(key)
+    End Method
+
+    /// The keys it has text for, its fallback's aside, in order.
+    @MainThread Public Method Keys(): String[]
+        Local keys: String[] = []
+        For key In texts.Keys()
+            keys.Add(key)
+        End For
+        keys.Sort()
+        Return keys
+    End Method
+
+    /// Sets the Strings whose text a key it hasn't is, or none with Null. Panics where `strings`
+    /// falls back to it, which would never end.
+    @MainThread Public Method SetFallback(strings: Strings?)
+        Local at = strings
+        While at != Null
+            If RefEquals(at, Self)
+                Panic("Strings.SetFallback: {language}'s strings fall back to {strings?.language ?? ""}'s, which fall back to them")
+            End If
+            at = at.fallback
+        End While
+        fallback = strings
+        Changed()
+    End Method
+
+    /// The Strings whose text a key it hasn't is, or Null.
+    @MainThread Public Method Fallback(): Strings? => fallback
+
+    /// Sets the plural category of a count in its language: "one", "other", or another of
+    /// CLDR's names, as Plural reads its key's text by.
+    @MainThread Public Method SetPluralRule(category: Func(Int64): String)
+        rule = category
+        Changed()
+    End Method
+
+    // When it or a Strings it falls back to last changed, which only goes up, as its Ui reads to
+    // lay its widgets out again.
+    @MainThread Package Method Stamp(): Int => Max(stamp, fallback?.Stamp() ?? 0)
+
+    @MainThread Method Changed()
+        stamps += 1
+        stamp = stamps
+    End Method
+
+    /// The plural category `count` is in its language.
+    @MainThread Public Method PluralOf(count: Int64): String => rule(count)
+
+    /// `key`'s text, its own or its fallback's, else the key, with its `{name}`s filled from
+    /// `values`; a name with no value stays as it is.
+    @MainThread Public Method Text(key: String, values: Map<String, String>? = Null): String
+        Return Filled(Get(key) ?? key, values ?? {})
+    End Method
+
+    /// `count`'s text of `key`: the text of `key` and its category, as "apples.one", or of
+    /// "apples.other" when it hasn't that one, then of `key` itself, with `{count}` and its
+    /// `{name}`s filled from `values`.
+    @MainThread Public Method Plural(key: String, count: Int64,
+                                     values: Map<String, String>? = Null): String
+        Local text = Get("{key}.{PluralOf(count)}") ?? Get("{key}.other") ?? Get(key) ?? key
+        Local filled: Map<String, String> = values?.Clone() ?? {}
+        If filled.Get("count") == Null Then filled["count"] = "{count}"
+        Return Filled(text, filled)
+    End Method
+
+    /// Its text as a TOML document, which Load reads back the same: each key and its text, in
+    /// order, a key with a dot in it in quotes.
+    ///
+    /// ```toml
+    /// "menu.play" = "Jouer"
+    /// "apples.one" = "{count} pomme"
+    /// "apples.other" = "{count} pommes"
+    /// ```
+    @MainThread Public Method Save(): String
+        Local document = Value.Object()
+        For key In Keys()
+            document[key] = Value(texts[key])
+        End For
+        Return Toml.Write(document)
+    End Method
+
+    /// Reads text from a TOML document, as Save writes it or a translator does, over the text it
+    /// has: each key's text, a string, where a table's keys are its key's, after a dot, so
+    /// `[menu]` with `play = "Jouer"` is "menu.play"'s, as `"menu.play" = "Jouer"` is. Nothing
+    /// changes when it throws: for text that isn't TOML, or a value that's neither a string nor a
+    /// table.
+    @MainThread Public Method Load(text: String) Throws UIError
+        Local document = Value.Object()
+        Try
+            document = Try Toml.Read(text)
+        Catch e As ParseError
+            Throw UIError("{language}'s strings aren't TOML: {e.Message}", e)
+        End Try
+        Local found: (String, String)[] = []
+        Try Flattened("", document, found)
+        For each In found
+            Local key, said = each
+            Set(key, said)
+        End For
+    End Method
+End Class
+
+// How many changes there have been to any Strings, the last one's stamp.
+Global stamps: Int = 0
+
+// English's plural categories: "one" for 1 and -1, "other" for the rest.
+Function EnglishPlural(count: Int64): String => count == 1 || count == -1 ? "one" : "other"
+
+// `table`'s keys and their text, each after `prefix` and a dot, its tables' too, in `found`.
+Function Flattened(prefix: String, table: Value, found: (String, String)[]) Throws UIError
+    For name In table.Keys()
+        Local key = prefix == "" ? name : "{prefix}.{name}"
+        Local value = table[name] ?? Value()
+        If value.IsObject
+            Try Flattened(key, value, found)
+        Else
+            Local said = value.AsString()
+            If said == Null Then Throw UIError("{key}'s text is a string, not {value}")
+            found.Add((key, said))
+        End If
+    End For
+End Function
+
+// `text` with each `{name}` that `values` has filled, and `{{` a "{".
+Function Filled(text: String, values: Map<String, String>): String
+    If !text.Contains("{{") Then Return text
+    Local built = StringBuilder()
+    Local chars = text.Chars
+    Local i = 0
+    While i < chars.Count
+        Local each = chars[i]
+        If each == '{' && i + 1 < chars.Count && chars[i + 1] == '{'
+            built.Append('{')
+            i += 2
+            Continue
+        End If
+        If each == '{'
+            Local close = i + 1
+            While close < chars.Count && chars[close] != '}' && chars[close] != '{'
+                close += 1
+            End While
+            If close < chars.Count && chars[close] == '}'
+                Local name = StringBuilder()
+                For at = i + 1 To close - 1
+                    name.Append(chars[at])
+                End For
+                Local value = values.Get(name.ToString())
+                If value != Null
+                    built.Append(value)
+                    i = close + 1
+                    Continue
+                End If
+            End If
+        End If
+        built.Append(each)
+        i += 1
+    End While
+    Return built.ToString()
+End Function

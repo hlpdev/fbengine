@@ -1,5 +1,5 @@
-// ShowMessage and OpenURL, headless, where they open nothing; tests/input's show-message cases
-// check what ShowMessage writes.
+// ShowMessage and OpenURL, headless, where they open nothing (tests/input's show-message cases
+// check what ShowMessage writes), and the player's languages.
 
 Import std.core
 Import std.os
@@ -88,4 +88,27 @@ Function TheClipboardHoldsWhatsPutOnIt()
     Expect(Clipboard() == "copied é")
     Expect(SetClipboard(""))
     Expect(Clipboard() == "")
+End Function
+
+@Test
+Function ThePlayersLanguagesAreTags()
+    For tag In Languages()
+        Expect(tag != "" && !tag.Contains("_") && !tag.Contains(" "))
+    End For
+End Function
+
+@Test
+Function TheBestLanguageIsThePlayersFirstThatTheGameHas()
+    Local available = ["en-US", "fr", "pt-BR", "zh-Hans"]
+    Expect(BestLanguage(available, ["de", "fr-CA", "en-US"]) == "fr")
+    Expect(BestLanguage(available, ["EN-us"]) == "en-US")
+    // Then any of the language: an "en" player gets the game's "en-US".
+    Expect(BestLanguage(available, ["en-GB"]) == "en-US")
+    Expect(BestLanguage(available, ["zh-Hans-CN"]) == "zh-Hans")
+    Expect(BestLanguage(available, ["pt"]) == "pt-BR")
+    Expect(BestLanguage(available, ["de", "ja"]) == Null)
+    Expect(BestLanguage([], ["en"]) == Null)
+    // Without preferred, the OS's, which picks one of them or none.
+    Local best = BestLanguage(available)
+    Expect(best == Null || available.Contains(best ?? ""))
 End Function
