@@ -60,21 +60,25 @@ End Struct
 
 /// How entities collide. An entity in a collision group that its World says collides with another
 /// moves as an ellipsoid, swept from where its last move ended to where it is now, against every
-/// showing entity of a group its own collides with, which it touches as its CollisionShape; what
-/// it touches is where it is now, a moving one's ellipsoid where its last move ended, and isn't
-/// swept itself, so a moving door pushes nothing, but a mover it closed on is pushed out of it on
-/// its next move, only as far as nothing else is: one squeezed between two stays where it was. A
-/// mover already within its radius of a face, an edge, or a corner touches it only going further
-/// in. A slide along ground, within the mover's MaxSlope of level, may raise it as far as the
-/// slope goes; along anything steeper, edges and corners too, no more than the move's own rise and
-/// its StepHeight. Each move is worked out on its own, so their order changes nothing. Moving an entity by SetPosition is a move to sweep; ResetCollisions is a
-/// teleport.
+/// showing entity of a group its own collides with, which it touches as its CollisionShape; what it
+/// touches is where it is now, a moving one's ellipsoid where its last move ended, and isn't swept
+/// itself, so a moving door pushes nothing, but a mover it closed on is pushed out of it at the
+/// next Collide, moving or not, only as far as nothing else is; between two facing each other, its
+/// middle goes to the middle of the gap, so a squeezed one is in neither, unless one closes faster
+/// than its radius in a frame and passes over its middle first. A mover already within its radius
+/// of a face, an edge, or a corner touches it only going further in. A slide along ground, within
+/// the mover's MaxSlope of level, may raise it as far as the slope goes; along anything steeper,
+/// edges and corners too, no more than the move's own rise and its StepHeight. Each move is worked
+/// out on its own, so their order changes nothing. Moving an entity by SetPosition is a move to
+/// sweep; ResetCollisions is a teleport.
 Extend Entity
     /// Puts the entity in a collision group, 1 to 1023, or none with 0, as at first; it forgets
     /// where its last move ended. Others panic.
     @MainThread @PanicsAtCaller
     Public Method SetCollisionGroup(group: Int)
-        If !fbe_entity_set_collision_group(Live("SetCollisionGroup"), group) Then Failed("SetCollisionGroup")
+        If !fbe_entity_set_collision_group(Live("SetCollisionGroup"), group)
+            Failed("SetCollisionGroup")
+        End If
     End Method
 
     /// The entity's collision group, 0 for none.
@@ -93,7 +97,9 @@ Extend Entity
     @MainThread @PanicsAtCaller
     Public Method SetCollisionRadius(horizontal: Float, vertical: Float)
         Local entity = Live("SetCollisionRadius")
-        If !fbe_entity_set_collision_radius(entity, horizontal, vertical) Then Failed("SetCollisionRadius")
+        If !fbe_entity_set_collision_radius(entity, horizontal, vertical)
+            Failed("SetCollisionRadius")
+        End If
     End Method
 
     /// The entity's ellipsoid's radii: x across, y up.
@@ -232,7 +238,9 @@ Extend World
     @MainThread @PanicsAtCaller
     Public Method SetCollisionResponse(source: Int, target: Int, response: CollisionResponse)
         Local world = Live("SetCollisionResponse")
-        If !fbe_world_set_collision(world, source, target, response As Int32) Then Failed("SetCollisionResponse")
+        If !fbe_world_set_collision(world, source, target, response As Int32)
+            Failed("SetCollisionResponse")
+        End If
     End Method
 
     /// What an entity of the `source` group does when it touches one of the `target` group.
@@ -246,7 +254,9 @@ Extend World
     /// Makes every pair of groups NONE again.
     @MainThread @PanicsAtCaller
     Public Method ClearCollisionResponses()
-        If !fbe_world_clear_collisions(Live("ClearCollisionResponses")) Then Failed("ClearCollisionResponses")
+        If !fbe_world_clear_collisions(Live("ClearCollisionResponses"))
+            Failed("ClearCollisionResponses")
+        End If
     End Method
 
     /// Sets the most times one move touches something and goes on, 1 to 64, 8 at first; a move
@@ -254,7 +264,9 @@ Extend World
     @MainThread @PanicsAtCaller
     Public Method SetCollisionIterations(iterations: Int)
         Local world = Live("SetCollisionIterations")
-        If !fbe_world_set_collision_iterations(world, iterations) Then Failed("SetCollisionIterations")
+        If !fbe_world_set_collision_iterations(world, iterations)
+            Failed("SetCollisionIterations")
+        End If
     End Method
 
     /// The most times one move touches something and goes on.
@@ -264,10 +276,13 @@ Extend World
     End Method
 
     /// Sets how far movers stay from what they touch, so they don't sink in, 0 to 0.1 world units,
-    /// 0.001 at first. Others panic.
+    /// 0.001 at first. Between two solids nearly facing each other one can end nearer: long walks
+    /// among turned solids measured it at most 0.0045 in, at the first skin. Others panic.
     @MainThread @PanicsAtCaller
     Public Method SetCollisionSkin(skin: Float)
-        If !fbe_world_set_collision_skin(Live("SetCollisionSkin"), skin) Then Failed("SetCollisionSkin")
+        If !fbe_world_set_collision_skin(Live("SetCollisionSkin"), skin)
+            Failed("SetCollisionSkin")
+        End If
     End Method
 
     /// How far movers stay from what they touch.

@@ -478,3 +478,217 @@ TEST_CASE("a mover squeezed between closing walls stays between them", "[scene]"
         CHECK(at.x < gap / 2.0F);
     }
 }
+
+TEST_CASE("a mover squeezed by one closing wall against a still one stays between them",
+          "[scene]") {
+    // Walls 1 thick in x as boxes or cube meshes, the still one's inner face at -1, the other's
+    // closing from 1 to -0.7, a gap of 0.3, below the mover's radius of 0.4.
+    struct case_t {
+        bool meshes;
+        float walk;
+        float vertical;
+    };
+    for (const case_t& c : {
+             case_t{ .meshes = false, .walk = 0.02F, .vertical = 0.0F },
+             case_t{ .meshes = false, .walk = -0.02F, .vertical = 0.0F },
+             case_t{ .meshes = true, .walk = 0.02F, .vertical = 0.0F },
+             case_t{ .meshes = true, .walk = 0.02F, .vertical = 0.8F },
+         }) {
+        const test_world_t world;
+        const auto wall = [&] {
+            if (!c.meshes) {
+                return box(world.handle, extent(-0.5F, -5.0F, -5.0F, 0.5F, 5.0F, 5.0F));
+            }
+            const std::uint64_t made = level(world.handle, fbe_geometry_cube());
+            fbe_entity_set_scale(made, 0.5F, 5.0F, 5.0F, FBE_SPACE_LOCAL);
+            return made;
+        };
+        const bool falls = c.vertical > 0.0F;
+        if (falls) {
+            const std::uint64_t floor = level(world.handle, fbe_geometry_plane(4));
+            fbe_entity_set_scale(floor, 20.0F, 1.0F, 20.0F, FBE_SPACE_LOCAL);
+        }
+        const std::uint64_t still = wall();
+        const std::uint64_t door = wall();
+        fbe_entity_set_position(still, -1.5F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+        const std::uint64_t made = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+        fbe_entity_set_collision_group(made, mover_group);
+        fbe_entity_set_collision_radius(made, 0.4F, falls ? c.vertical : 0.4F);
+        fbe_entity_set_step_height(made, falls ? 0.1F : 0.0F);
+        fbe_entity_set_position(made, 0.0F, falls ? c.vertical + 0.01F : 0.0F, 0.0F,
+                                FBE_SPACE_WORLD);
+        float face = 1.0F;
+        fbe_entity_set_position(door, face + 0.5F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+        fbe_world_collide(world.handle);
+        for (int frame = 0; frame < 80; ++frame) {
+            face = std::fmax(face - 0.05F, -0.7F);
+            fbe_entity_set_position(door, face + 0.5F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+            move(world.handle, made, c.walk, falls ? -0.05F : 0.0F, 0.0F);
+            const fbe_vec3_t at = position(made);
+            CHECK(at.x > -1.0F);
+            CHECK(at.x < face);
+            CHECK(at.y >= (falls ? 0.0F : -0.001F));
+        }
+        // Squeezed below its diameter, it's in the middle of the gap.
+        CHECK(std::fabs(position(made).x - -0.85F) < 0.002F);
+    }
+}
+
+TEST_CASE("a mover over a refitted mesh ends where one over a fresh copy of it does", "[scene]") {
+    std::mt19937 random(4); // NOLINT(bugprone-random-generator-seed)
+    std::uniform_real_distribution<float> nudge(-0.3F, 0.3F);
+    std::uniform_real_distribution<float> place(-6.0F, 6.0F);
+    const test_world_t refitted;
+    // A sphere and a copy of it a little aside, overlapping, in two surfaces.
+    const std::uint64_t geometry = fbe_geometry_sphere(24);
+    fbe_geometry_add_surface(geometry);
+    const fbe_mat4_t aside{ .m = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.5F, 0.5F, 0, 1 } };
+    fbe_geometry_add(geometry, geometry, &aside);
+    const std::uint64_t mesh = fbe_entity_create(refitted.handle, 0, FBE_ENTITY_MESH);
+    fbe_mesh_set_geometry(mesh, geometry);
+    fbe_entity_set_collision_group(mesh, level_group);
+    fbe_entity_set_scale(mesh, 3.0F, 3.0F, 3.0F, FBE_SPACE_LOCAL);
+    const std::int32_t surfaces = fbe_geometry_surface_count(geometry);
+    for (int round = 0; round < 40; ++round) {
+        // Every vertex moved, flipped now and then, or transformed: refits, not builds.
+        for (std::int32_t surface = 0; surface < surfaces; ++surface) {
+            const std::int32_t count = fbe_surface_vertex_count(geometry, surface);
+            std::vector<fbe_vertex_t> vertices(static_cast<std::size_t>(count));
+            fbe_surface_vertices(geometry, surface, 0, vertices.data(), count);
+            for (fbe_vertex_t& vertex : vertices) {
+                vertex.position.x += nudge(random);
+                vertex.position.y += nudge(random);
+                vertex.position.z += nudge(random);
+            }
+            fbe_surface_set_vertices(geometry, surface, 0, vertices.data(), count);
+        }
+        if (round % 7 == 3) {
+            fbe_geometry_flip(geometry);
+        }
+        if (round % 5 == 2) {
+            const fbe_mat4_t skew{
+                .m = { 1.1F, 0.2F, 0, 0, 0, 0.9F, 0, 0, 0.1F, 0, 1.05F, 0, 0.2F, 0, -0.1F, 1 },
+            };
+            fbe_geometry_transform(geometry, &skew);
+        }
+        // The same mesh on a fresh copy, whose tree is built, in a World of its own.
+        const test_world_t fresh;
+        const std::uint64_t other = level(fresh.handle, fbe_geometry_clone(geometry));
+        fbe_entity_set_scale(other, 3.0F, 3.0F, 3.0F, FBE_SPACE_LOCAL);
+        const float x = place(random);
+        const float z = place(random);
+        const std::uint64_t one = mover(refitted.handle, x, 8.0F, z, 0.3F);
+        const std::uint64_t two = mover(fresh.handle, x, 8.0F, z, 0.3F);
+        for (int i = 0; i < 30; ++i) {
+            const float dx = nudge(random);
+            const float dz = nudge(random);
+            move(refitted.handle, one, dx, -0.4F, dz);
+            move(fresh.handle, two, dx, -0.4F, dz);
+            const fbe_vec3_t a = position(one);
+            const fbe_vec3_t b = position(two);
+            REQUIRE((a.x == b.x && a.y == b.y && a.z == b.z));
+        }
+        fbe_entity_free(one);
+    }
+    fbe_geometry_release(geometry);
+}
+
+TEST_CASE("a long walk among turned solids never gets 0.005 into them", "[scene]") {
+    // The review's long walk at the worst two of 40 seeds of 20,000 frames, just past their worst
+    // frames: 40 solids, boxes and cube meshes, turned every way, and a 0.3 by 0.6 mover falling
+    // and walking among them. Its worst, 0.0045, is between two solids nearly facing each other.
+    for (const auto [seed, frames] : { std::pair{ 6U, 1400 }, std::pair{ 34U, 4900 } }) {
+        std::mt19937 random(seed); // NOLINT(bugprone-random-generator-seed)
+        const test_world_t world;
+        const std::uint64_t floor = level(world.handle, fbe_geometry_plane(1));
+        fbe_entity_set_scale(floor, 30.0F, 1.0F, 30.0F, FBE_SPACE_LOCAL);
+        std::uniform_real_distribution<float> place(-12.0F, 12.0F);
+        std::uniform_real_distribution<float> unit(-1.0F, 1.0F);
+        std::uniform_real_distribution<float> size(0.3F, 2.0F);
+        std::vector<std::uint64_t> solids;
+        for (int i = 0; i < 40; ++i) {
+            const std::uint64_t solid =
+                i % 2 == 0 ? box(world.handle, extent(-1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F))
+                           : level(world.handle, fbe_geometry_cube());
+            const float sx = size(random);
+            const float sy = size(random);
+            const float sz = size(random);
+            fbe_entity_set_scale(solid, sx, sy, sz, FBE_SPACE_LOCAL);
+            const float qx = unit(random);
+            const float qy = unit(random);
+            const float qz = unit(random);
+            const float qw = unit(random);
+            fbe_entity_set_rotation(solid, qx, qy, qz, qw, FBE_SPACE_WORLD);
+            const float px = place(random);
+            const float py = size(random) - 0.5F;
+            const float pz = place(random);
+            fbe_entity_set_position(solid, px, py, pz, FBE_SPACE_WORLD);
+            solids.push_back(solid);
+        }
+        const auto inside_any = [&](fbe_vec3_t p) {
+            return std::ranges::any_of(solids, [&](std::uint64_t solid) {
+                fbe_vec3_t local{};
+                fbe_entity_transform(0, solid, FBE_TRANSFORM_POINT, p.x, p.y, p.z, &local);
+                return std::fabs(local.x) < 1.0F && std::fabs(local.y) < 1.0F &&
+                       std::fabs(local.z) < 1.0F;
+            });
+        };
+        const auto clear = [&](fbe_vec3_t p) {
+            return std::ranges::all_of(solids, [&](std::uint64_t solid) {
+                fbe_mat4_t matrix{};
+                fbe_entity_matrix(solid, FBE_SPACE_WORLD, &matrix);
+                return apart(matrix, extent(-1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F), vec(p), 0.5F) >
+                       0.3F;
+            });
+        };
+        fbe_vec3_t start{};
+        do {
+            const float sx = place(random);
+            const float sz = place(random);
+            start = { .x = sx, .y = 3.0F, .z = sz };
+        } while (inside_any(start) || !clear(start));
+        const std::uint64_t made = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+        fbe_entity_set_collision_group(made, mover_group);
+        fbe_entity_set_collision_radius(made, 0.3F, 0.6F);
+        fbe_entity_set_position(made, start.x, start.y, start.z, FBE_SPACE_WORLD);
+        fbe_world_collide(world.handle);
+        fbe_entity_set_step_height(made, 0.2F);
+        std::uniform_real_distribution<float> speed(0.0F, 0.6F);
+        float fall = 0.0F;
+        float dx = 0.0F;
+        float dz = 0.0F;
+        float worst = 0.0F;
+        for (int frame = 0; frame < frames; ++frame) {
+            if (frame % 30 == 0) {
+                const float pace = speed(random);
+                // The review's walk's own constant, so its seeds walk as they did.
+                const float angle = unit(random) * 3.14159F; // NOLINT(modernize-use-std-numbers)
+                dx = std::cos(angle) * pace;
+                dz = std::sin(angle) * pace;
+            }
+            fall = std::min(fall + 0.02F, 0.5F);
+            move(world.handle, made, dx, -fall, dz);
+            std::array<fbe_collision_t, 32> touched{};
+            const std::int32_t count = fbe_entity_collisions(made, touched.data(), 32);
+            for (std::int32_t i = 0; i < std::min(count, 32); ++i) {
+                if (touched[static_cast<std::size_t>(i)].normal.y > 0.7F) {
+                    fall = 0.0F;
+                }
+            }
+            const fbe::scene::vec3_t at = vec(position(made));
+            for (const std::uint64_t solid : solids) {
+                fbe_mat4_t matrix{};
+                fbe_entity_matrix(solid, FBE_SPACE_WORLD, &matrix);
+                worst = std::fmax(
+                    worst,
+                    0.3F - apart(matrix, extent(-1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F), at, 0.5F));
+            }
+            if (std::fabs(at.x) > 14.0F || std::fabs(at.z) > 14.0F) {
+                fbe_entity_set_position(made, start.x, 3.0F, start.z, FBE_SPACE_WORLD);
+                fbe_entity_reset_collisions(made);
+                fbe_world_collide(world.handle);
+            }
+        }
+        CHECK(worst < 0.005F);
+    }
+}

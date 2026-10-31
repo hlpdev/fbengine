@@ -112,8 +112,8 @@ Public Final Class World
         Return found
     End Method
 
-    /// Sets the World's ambient light, which lights everything a little, from everywhere: std.math's
-    /// Color.Gray, sRGB's half gray, at first. Its alpha is left out.
+    /// Sets the World's ambient light, which lights everything a little, from everywhere:
+    /// std.math's Color.Gray, sRGB's half gray, at first. Its alpha is left out.
     @MainThread @PanicsAtCaller
     Public Method SetAmbientLight(color: Color)
         If !fbe_world_set_ambient(Live("SetAmbientLight"), color.r, color.g, color.b)

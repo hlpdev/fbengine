@@ -60,6 +60,15 @@ bool make_triangle(std::array<vec3_t, 3> corners, bool mirrored, triangle_t& tri
     return true;
 }
 
+bool in_face(vec3_t c, float r, const triangle_t& triangle, vec3_t& foot, float& distance) {
+    distance = dot(triangle.normal, c - triangle.corners[0]);
+    if (distance < 0.0F || distance >= r) {
+        return false;
+    }
+    foot = c - triangle.normal * distance;
+    return inside(triangle, foot);
+}
+
 void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit_t& hit,
                     bool& found) {
     const vec3_t n = triangle.normal;
@@ -142,9 +151,10 @@ void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit
         const float apart = dot(corner - c, corner - c) - (r * r);
         const float closing = 2.0F * dot(v, c - corner);
         // Already over a corner, it touches it now if it's going further in, else not at all: a
-        // root then would be where it leaves, which can't stop it.
+        // root then would be where it leaves, which can't stop it. A touch now that's already
+        // found stays, so a face's isn't taken for its neighbour's edge, whose normal leans.
         if (apart < 0.0F) {
-            if (closing < 0.0F) {
+            if (closing < 0.0F && best > 0.0F) {
                 best = 0.0F;
                 point = corner;
                 touched = true;
@@ -173,7 +183,7 @@ void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit
         // it's going further in, else not at all; past the edge's ends, its corners say.
         if (cc > 0.0F) {
             const float fraction = -along_start / length;
-            if (fraction >= 0.0F && fraction <= 1.0F && b > 0.0F) {
+            if (fraction >= 0.0F && fraction <= 1.0F && b > 0.0F && best > 0.0F) {
                 best = 0.0F;
                 point = start + edge * fraction;
                 touched = true;

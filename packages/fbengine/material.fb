@@ -174,7 +174,9 @@ Public Final Class Material
     /// none, to 1. Outside 0 to 1 panics.
     @MainThread @PanicsAtCaller
     Public Method SetAlphaCutoff(cutoff: Float)
-        If !fbe_material_set_alpha_cutoff(Live("SetAlphaCutoff"), cutoff) Then Failed("SetAlphaCutoff")
+        If !fbe_material_set_alpha_cutoff(Live("SetAlphaCutoff"), cutoff)
+            Failed("SetAlphaCutoff")
+        End If
     End Method
 
     /// The alpha below which a pixel isn't drawn.
@@ -184,7 +186,9 @@ Public Final Class Material
     /// Sets whether vertices' colors and alphas multiply its own.
     @MainThread @PanicsAtCaller
     Public Method SetVertexColors(on: Bool)
-        If !fbe_material_set_vertex_colors(Live("SetVertexColors"), on) Then Failed("SetVertexColors")
+        If !fbe_material_set_vertex_colors(Live("SetVertexColors"), on)
+            Failed("SetVertexColors")
+        End If
     End Method
 
     /// Whether vertices' colors and alphas multiply its own.

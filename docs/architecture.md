@@ -93,10 +93,15 @@ good modern engine on its own. Every structural choice is checked against both.
     fronts), boxes (their twelve triangles), and ellipsoids, each a snapshot at its current
     transform. Both sides get the contact.
   - Where it differs from Blitz3D, on purpose: targets are where they are now, never swept, so
-    one moving into a mover pushes it out only as far as nothing else is, and a mover squeezed
-    between two stays where it was, never inside either. An ellipsoid target keeps both its radii;
-    a box turns and scales with its entity. A mover that touches its World's iteration count of
-    times (8 by default) stops where its last touch left it.
+    one moving into a mover pushes it out only as far as nothing else is; squeezed between two
+    facing each other, the mover's middle goes to the middle of the gap, never inside either,
+    unless one closes faster than its radius in a frame and passes over its middle first. An
+    ellipsoid target keeps both its radii; a box turns and scales with its entity. A mover whose
+    touches use up its World's iterations (8 by default) is pushed out of every plane it still
+    touches at once, where that leaves it less in them, and stops there.
+  - The skin keeps a mover off what it touches, but between two solids nearly facing each other
+    it can end nearer: long walks among turned solids measured at most 0.0045 in, at the first
+    skin of 0.001, which a test holds.
   - A mover already within its radius of a face, an edge, or a corner touches it only going
     further in, so one starting in a seam goes out of it, never through.
   - A mover climbs ground, a slope within its max slope of level (45 degrees at first), as far as

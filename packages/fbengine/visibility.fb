@@ -70,7 +70,9 @@ Extend Entity
     /// triangles, from either side, while it's showing, as walls and doors do.
     @MainThread @PanicsAtCaller
     Public Method SetBlocksSight(blocks: Bool)
-        If !fbe_entity_set_blocks_sight(Live("SetBlocksSight"), blocks) Then Failed("SetBlocksSight")
+        If !fbe_entity_set_blocks_sight(Live("SetBlocksSight"), blocks)
+            Failed("SetBlocksSight")
+        End If
     End Method
 
     /// Whether the entity blocks line of sight.

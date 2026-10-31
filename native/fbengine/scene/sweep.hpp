@@ -72,6 +72,10 @@ bool make_triangle(std::array<vec3_t, 3> corners, bool mirrored, triangle_t& tri
 void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit_t& hit,
                     bool& found);
 
+/// Whether a sphere of radius `r` at `c` is in a triangle's face from the front, its middle over
+/// the face and nearer its plane than `r`; if so, gives where under it and how far.
+bool in_face(vec3_t c, float r, const triangle_t& triangle, vec3_t& foot, float& distance);
+
 /// Sweeps a point from `c` along `v` against an ellipsoid grown by the sphere's radius `r`, and
 /// keeps the hit if it's sooner than `hit`'s, or `found` is false.
 void sweep_ellipsoid(vec3_t c, vec3_t v, float r, const ellipsoid_t& ellipsoid, hit_t& hit,

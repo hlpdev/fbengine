@@ -178,6 +178,28 @@ Select arguments[0]
         Camera().Pick(Vec2(1, 1))
     Case "max-slope"
         Pivot().SetMaxSlope(2)
+    Case "drawn-blend"
+        Local glowing = Mesh(Geometry.Cube())
+        Local glow = Material()
+        glow.SetBlend(Blend.ADD)
+        glowing.SetMaterial(glow)
+        glowing.DrawnBlend(99)
+    Case "screen-ray-freed"
+        Local gone = Camera()
+        gone.Free()
+        gone.ScreenRay(Vec2(1, 1))
+    Case "screen-ray-no-window"
+        Camera().ScreenRay(Vec2(1, 1))
+    Case "view-frustum-freed"
+        Local gone = Camera()
+        gone.Free()
+        gone.ViewFrustum()
+    Case "view-frustum-no-window"
+        Camera().ViewFrustum()
+    Case "camera-pick-freed"
+        Local gone = Camera()
+        gone.Free()
+        gone.Pick(Vec2(1, 1))
     Default
         Panic("no case {arguments[0]}")
 End Select
