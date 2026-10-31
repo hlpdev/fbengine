@@ -20,6 +20,7 @@
 #include <fastgltf/types.hpp>
 #include <format>
 #include <limits>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <simdjson.h>
@@ -194,6 +195,13 @@ public:
             model.clips.push_back(std::move(*clip));
         }
         decode_cameras_and_lights(model);
+        {
+            const std::scoped_lock lock(m_reads_mutex);
+            std::ranges::sort(m_reads);
+            const auto repeated = std::ranges::unique(m_reads);
+            m_reads.erase(repeated.begin(), repeated.end());
+            model.reads = std::move(m_reads);
+        }
         if (result_t<void> tied = check_ties(model); !tied) {
             return std::unexpected(std::move(tied.error()));
         }
@@ -337,6 +345,10 @@ private:
         result_t<vfs::path_t> named = vfs::resolve(m_path, text);
         if (!named) {
             return std::unexpected(std::move(named.error()));
+        }
+        {
+            const std::scoped_lock lock(m_reads_mutex);
+            m_reads.push_back(named->key());
         }
         result_t<bytes_t> bytes = m_files.read(*named);
         if (!bytes) {
@@ -1318,6 +1330,9 @@ private:
     failure_t m_refused_failure = failure_t::INVALID_DATA;
     // Its animations' frame rates from their extras, by index; 0 for none.
     std::vector<float> m_frame_rates;
+    // What it's read, by key, which images' decodes on the jobs add to too.
+    mutable std::mutex m_reads_mutex;
+    mutable std::vector<std::string> m_reads;
     std::size_t m_steps = 1;
     std::atomic<std::size_t> m_done = 0;
 };

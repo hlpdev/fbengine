@@ -85,6 +85,11 @@ FBE_API const char* fbe_assets_settings(uint64_t load);
 // rest, and why; -1 and "" for one that was, and a load without one.
 FBE_API int32_t fbe_assets_settings_failure(uint64_t load);
 FBE_API const char* fbe_assets_settings_error(uint64_t load);
+// How many files the load read besides its own, done, and the res:// path, normalized, of the
+// one at `index`: its sidecar, if it reads one, and a model's buffers and images; -1 and "" for
+// a load that isn't done, or freed.
+FBE_API int32_t fbe_assets_reads(uint64_t load);
+FBE_API const char* fbe_assets_read(uint64_t load, int32_t index);
 // Waits for a load on the workers to be done, and runs its hand-over, as fbe_frame_flip does, so
 // it's done when this returns; false for a load that's freed.
 FBE_API bool fbe_assets_wait(uint64_t load);

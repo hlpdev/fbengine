@@ -74,6 +74,9 @@ void run_load_here(load_t& load, jobs_t* jobs) {
     }
     if (load.options.settings) {
         read_sidecar(load);
+        if (const std::optional<vfs::path_t> sidecar = sidecar_of(load.path)) {
+            load.reads.push_back(sidecar->key());
+        }
     }
     switch (load.kind) {
     case load_kind_t::BYTES:
@@ -101,6 +104,7 @@ void run_load_here(load_t& load, jobs_t* jobs) {
         };
         result_t<model_t> model = decode_model(load.path, *bytes, load.files, options);
         if (model) {
+            load.reads.insert(load.reads.end(), model->reads.begin(), model->reads.end());
             load.model = std::move(*model);
         } else {
             load.error = std::move(model.error());

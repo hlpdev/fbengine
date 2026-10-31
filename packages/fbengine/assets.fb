@@ -43,6 +43,8 @@ Final Class Cached<T> Implements HeldAsset
     Field Failure: IOError?
     Field Making: Bool
     Field Released: Bool
+    Field Reloading: Bool
+    Field Again: Bool
 
     New(key: String, load: UInt64)
         Key = key
@@ -52,6 +54,8 @@ Final Class Cached<T> Implements HeldAsset
         Failure = Null
         Making = False
         Released = False
+        Reloading = False
+        Again = False
     End New
 
     Method Alive(): Bool => Made != Null
@@ -100,31 +104,58 @@ Final Class TypedCache<T> Implements AnyCache
 
     // Loads `key`'s asset again, if it's made, on the workers; then its Reload takes it in place,
     // or the cache lets go of it, so the next Load makes a new one. What doesn't load keeps what it
-    // had.
+    // had. One that's loading, or loading again, is loaded again once that's done, so the last
+    // change wins; and one let go of meanwhile, whose Free may have freed what it holds, isn't
+    // touched.
     Async Method Reload(key: String)
         Local cached = Entries.Get(key)
-        If cached == Null || cached.Making || cached.Load != 0 Then Return
-        Local made = cached.Made
-        If made == Null Then Return
-        Local load = fbe_assets_load_async(T.LoadKind() As Int32, key, False, True)
-        If load == 0 Then Return
-        Await Jobs.Finished(load)
-        Local loaded = AssetLoad(load)
-        If fbe_assets_failed(load)
-            Assets.Reported(AssetReload(key, False, Assets.LoadFailed(load, key)))
+        If cached == Null || cached.Released Then Return
+        If cached.Making || cached.Load != 0 || cached.Reloading
+            cached.Again = True
             Return
         End If
-        Try
-            Local inPlace = Try made.Reload(loaded)
-            If !inPlace
-                cached.Released = True
-                Local kept = Entries.Get(key)
-                If kept != Null && RefEquals(kept, cached) Then Entries.Remove(key)
-            End If
-            Assets.Reported(AssetReload(key, inPlace, Null))
-        Catch e As IOError
-            Assets.Reported(AssetReload(key, False, e))
-        End Try
+        If cached.Made == Null Then Return
+        cached.Reloading = True
+        Local load = fbe_assets_load_async(T.LoadKind() As Int32, key, False, True)
+        If load == 0
+            cached.Reloading = False
+            Return
+        End If
+        Await Jobs.Finished(load)
+        Local loaded = AssetLoad(load)
+        cached.Reloading = False
+        Local current = Entries.Get(key)
+        Local made = cached.Made
+        If cached.Released || current == Null || !RefEquals(current, cached) || made == Null
+            Return
+        End If
+        If fbe_assets_failed(load)
+            Assets.Reported(AssetReload(key, False, Assets.LoadFailed(load, key)))
+        Else
+            Try
+                Local inPlace = Try made.Reload(loaded)
+                If inPlace
+                    // What it's made of now, and of what, may differ.
+                    Local hash = made.Hash()
+                    If hash != cached.Hash
+                        Assets.Unindex(cached)
+                        cached.Hash = hash
+                        Assets.Index(cached)
+                    End If
+                    Assets.Depends(key, load)
+                Else
+                    cached.Released = True
+                    Entries.Remove(key)
+                End If
+                Assets.Reported(AssetReload(key, inPlace, Null))
+            Catch e As IOError
+                Assets.Reported(AssetReload(key, False, e))
+            End Try
+        End If
+        If cached.Again && !cached.Released
+            cached.Again = False
+            Reload(key)
+        End If
     End Method
 
     // Takes out what's gone: made, and its asset let go, from here and the index.
@@ -149,17 +180,20 @@ Public Struct AssetReload
     Public Field Error: IOError?
 End Struct
 
-// The folders on the disk hot reload watches: a watcher of each, the res:// folders each is, and
-// the res:// paths that changed, by when they last did.
+// The folders on the disk hot reload watches: a watcher of each, its folder, the res:// folders it
+// is, each with the folder on the disk of the mount that made it one; which watcher a folder has;
+// and the res:// paths that changed, by when they last did.
 Final Class FolderWatch
-    Field Watchers: FileWatcher[]
-    Field Places: String[][]
+    Field Watchers: FileWatcher?[]
+    Field Folders: Path[]
+    Field Places: (String, String)[][]
     Field Watched: Map<String, Int>
     Field Changed: Map<String, Instant>
     Field Hook: Int
 
     New()
         Watchers = []
+        Folders = []
         Places = []
         Watched = Map<String, Int>()
         Changed = Map<String, Instant>()
@@ -208,6 +242,8 @@ Public Final Class Assets
     Static Field mounts: (String, Path?)[] = []
     Static Field watch: FolderWatch? = Null
     Static Field reloads: AssetReload[] = []
+    // The assets whose loads read a file besides their own, by its path, as a glTF's buffers.
+    Static Field dependents: Map<String, Set<String>> = Map<String, Set<String>>()
 
     Private New()
     End New
@@ -221,7 +257,7 @@ Public Final Class Assets
         If !fbe_vfs_mount_folder(at, folder.Text) Then Panic(LastError())
         Local place = Mounted(at, folder)
         Local watching = watch
-        If watching != Null Then Try? WatchTree(watching, folder, place)
+        If watching != Null Then Try? WatchTree(watching, folder, place, folder.Text, 0, False)
     End Method
 
     /// Mounts the pak file at `file` at `at`, over what's mounted, reading its index now. A pak is
@@ -290,7 +326,12 @@ Public Final Class Assets
             Local place = Try? Normalize(at)
             For i = mounts.Count - 1 To 0 Step -1
                 If mounts[i].0 == place
+                    Local folder = mounts[i].1
                     mounts.RemoveAt(i)
+                    Local watching = watch
+                    If watching != Null && folder != Null && place != Null
+                        Unplace(watching, place, folder.Text)
+                    End If
                     Break
                 End If
             End For
@@ -303,9 +344,14 @@ Public Final Class Assets
     /// Watches the folders mounted with MountFolder, and those mounted after, for what changes in
     /// them, all the way down, for a game's development builds. At each Flip, the assets of a file
     /// that changed, or whose sidecar did, once neither has for a tenth of a second, are loaded
-    /// again on the workers. Then each one's Reload takes it in place, or the cache lets go of
-    /// it, so the next Load makes a new one; one that doesn't load keeps what it had. Reloaded
-    /// gives what was. A folder that can't be watched throws an IOError.
+    /// again on the workers, and so are those whose loads read it, as a glTF's do its buffers. A
+    /// `.toml` file is loaded again as its own file and as its stem's sidecar. Then each one's
+    /// Reload takes it in place, or the cache lets go of it, so the next Load makes a new one; one
+    /// that doesn't load keeps what it had. Reloaded gives what was. Unmount stops watching what it
+    /// takes out. It follows links, as the folder mount does. A folder that can't be watched
+    /// throws an IOError. On Windows, while it watches, a folder that holds a watched one can't be
+    /// renamed, since each folder has a watcher of its own until FutureBlitz's FileWatcher watches
+    /// a whole tree.
     @MainThread
     Public Static Method WatchFolders() Throws IOError
         If watch != Null Then Return
@@ -314,7 +360,7 @@ Public Final Class Assets
         Try
             For mount In mounts
                 Local folder = mount.1
-                If folder != Null Then Try WatchTree(made, folder, mount.0)
+                If folder != Null Then Try WatchTree(made, folder, mount.0, folder.Text, 0, False)
             End For
         Catch e As IOError
             StopWatching()
@@ -330,7 +376,7 @@ Public Final Class Assets
         Local made = watch
         If made == Null Then Return
         For watcher In made.Watchers
-            watcher.Close()
+            If watcher != Null Then watcher.Close()
         End For
         If made.Hook != 0 Then Frame.RemoveOnFlip(made.Hook)
         watch = Null
@@ -341,9 +387,42 @@ Public Final Class Assets
     /// for a path that isn't a res:// path.
     @MainThread
     Public Static Method Reload(path: String) Throws IOError
-        Local key = Try Normalize(path)
+        ReloadPath(Try Normalize(path))
+    End Method
+
+    // Loads `key`'s assets again, of every type, and those whose loads read it.
+    @MainThread
+    Static Method ReloadPath(key: String)
         For cache In caches
             cache.Reload(key)
+        End For
+        Local reading = dependents.Get(key)
+        If reading == Null Then Return
+        For dependent In reading.ToArray()
+            For cache In caches
+                cache.Reload(dependent)
+            End For
+        End For
+    End Method
+
+    // Keeps what `load`, `key`'s, read besides its file, for hot reload to load it again when one
+    // of those changes.
+    @MainThread
+    Static Method Depends(key: String, load: UInt64)
+        For at = 0 Until fbe_assets_reads(load)
+            Local read = ""
+            Unsafe
+                read = fbe_assets_read(load, at As Int32).ToString()
+            End Unsafe
+            If read == key || read == "" Then Continue
+            Local reading = dependents.Get(read)
+            If reading == Null
+                Local made = Set<String>()
+                made.Add(key)
+                dependents[read] = made
+            Else
+                reading.Add(key)
+            End If
         End For
     End Method
 
@@ -586,29 +665,86 @@ Public Final Class Assets
         Return place
     End Method
 
-    // Watches `folder`, which is `place` in res://, and every folder in it.
+    // Watches `folder`, which is `place` in res://, of the mount of the folder `root`, and every
+    // folder in it, following links as the folder mount does, 32 deep at most. For a `fresh` one,
+    // just made, each file in it is taken as changed, since it may have been written before its
+    // folder was watched.
     @MainThread
-    Static Method WatchTree(made: FolderWatch, folder: Path, place: String) Throws IOError
-        If !Dir.Exists(folder) Then Return
-        Try WatchOne(made, folder, place)
-        For entry In Try Dir.Walk(folder)
-            If entry.Kind != FileKind.DIRECTORY Then Continue
-            Try WatchOne(made, entry.Path, place + "/" + entry.Relative.Text.Replace("\\", "/"))
+    Static Method WatchTree(made: FolderWatch, folder: Path, place: String, root: String,
+                            depth: Int, fresh: Bool) Throws IOError
+        If depth > 32 || !Dir.Exists(folder) Then Return
+        Try WatchOne(made, folder, place, root)
+        For entry In Try Dir.Entries(folder)
+            Local kind = entry.Kind
+            If kind == FileKind.LINK && Dir.Exists(entry.Path) Then kind = FileKind.DIRECTORY
+            Local name = place == "res://" ? place + entry.Name() : place + "/" + entry.Name()
+            If kind == FileKind.DIRECTORY
+                Try WatchTree(made, entry.Path, name, root, depth + 1, fresh)
+            ElseIf fresh
+                Local key = Try? Normalize(name)
+                If key != Null Then made.Changed[key] = Instant.Now()
+            End If
         End For
     End Method
 
-    // Watches the one folder `folder`, which is `place` in res://, as well as any other places it
-    // already is.
+    // Watches the one folder `folder`, which is `place` in res://, of the mount of `root`, as well
+    // as any other places it already is.
     @MainThread
-    Static Method WatchOne(made: FolderWatch, folder: Path, place: String) Throws IOError
+    Static Method WatchOne(made: FolderWatch, folder: Path, place: String,
+                           root: String) Throws IOError
         Local at = made.Watched.Get(folder.Text)
         If at != Null
-            If !made.Places[at].Contains(place) Then made.Places[at].Add(place)
+            Local found = False
+            For known In made.Places[at]
+                If known.0 == place && known.1 == root Then found = True
+            End For
+            If !found Then made.Places[at].Add((place, root))
             Return
         End If
         made.Watchers.Add(Try FileWatcher(folder))
-        made.Places.Add([place])
+        made.Folders.Add(folder)
+        made.Places.Add([(place, root)])
         made.Watched[folder.Text] = made.Watchers.Count - 1
+    End Method
+
+    // Stops watching `folder` and every folder in it, as when it's gone, or made again.
+    @MainThread
+    Static Method Unwatch(made: FolderWatch, folder: Path)
+        Local text = folder.Text
+        For at = 0 Until made.Watchers.Count
+            Local watched = made.Folders[at].Text
+            If watched == text || watched.StartsWith(text + "/") || watched.StartsWith(text + "\\")
+                Close(made, at)
+            End If
+        End For
+    End Method
+
+    // Takes `place`, the mount of `root`'s, and what's in it, from what's watched, closing each
+    // watcher no place needs any more.
+    @MainThread
+    Static Method Unplace(made: FolderWatch, place: String, root: String)
+        Local prefix = place == "res://" ? place : place + "/"
+        For at = 0 Until made.Watchers.Count
+            If made.Watchers[at] == Null Then Continue
+            Local kept: (String, String)[] = []
+            For known In made.Places[at]
+                Local under = known.0 == place || known.0.StartsWith(prefix)
+                If !(under && known.1 == root) Then kept.Add(known)
+            End For
+            made.Places[at] = kept
+            If kept.Count == 0 Then Close(made, at)
+        End For
+    End Method
+
+    // Closes watcher `at`, which watches nothing after.
+    @MainThread
+    Static Method Close(made: FolderWatch, at: Int)
+        Local watcher = made.Watchers[at]
+        If watcher == Null Then Return
+        watcher.Close()
+        made.Watchers[at] = Null
+        made.Places[at] = []
+        made.Watched.Remove(made.Folders[at].Text)
     End Method
 
     // Takes what the watchers saw, and loads again what's settled.
@@ -619,19 +755,26 @@ Public Final Class Assets
         Local now = Instant.Now()
         Local count = made.Watchers.Count
         For at = 0 Until count
-            Local event = made.Watchers[at].TryNext()
+            Local watcher = made.Watchers[at]
+            If watcher == Null Then Continue
+            Local event = watcher.TryNext()
             While event != Null
                 Local name = event.Path.FileName()
-                For place In made.Places[at]
-                    Local changed = place == "res://" ? place + name : place + "/" + name
+                Local places = made.Places[at]
+                // A folder taken out isn't watched; one made, or made again, is watched anew.
+                If event.Kind == FileEventKind.REMOVED || event.Kind == FileEventKind.CREATED
+                    Unwatch(made, event.Path)
+                End If
+                For place In places
+                    Local changed = place.0 == "res://" ? place.0 + name : place.0 + "/" + name
                     Local key = Try? Normalize(changed)
                     If key != Null Then made.Changed[key] = now
-                    // A folder made in a watched one is watched too.
                     If event.Kind == FileEventKind.CREATED && Dir.Exists(event.Path)
-                        Try? WatchTree(made, event.Path, changed)
+                        Try? WatchTree(made, event.Path, changed, place.1, 0, True)
                     End If
                 End For
-                event = made.Watchers[at].TryNext()
+                If made.Watchers[at] == Null Then Break
+                event = watcher.TryNext()
             End While
         End For
         // What hasn't changed for a tenth of a second is written whole, as a tool that writes a
@@ -642,13 +785,13 @@ Public Final Class Assets
         End For
         For path In settled
             made.Changed.Remove(path)
+            ReloadPath(path)
             // A sidecar's file is loaded again with its new settings.
-            Local bytes = path.Bytes
-            Local target = path
-            If path.EndsWith(".toml") Then target = String.FromUtf8(bytes[0..bytes.Count - 5]) ?? path
-            For cache In caches
-                cache.Reload(target)
-            End For
+            If path.EndsWith(".toml")
+                Local bytes = path.Bytes
+                Local stem = String.FromUtf8(bytes[0..bytes.Count - 5])
+                If stem != Null Then ReloadPath(stem)
+            End If
         End For
     End Method
 
@@ -703,10 +846,17 @@ Public Final Class Assets
             cached.Hash = making.Hash()
             cached.Holds += 1
             Index(cached)
+            Depends(key, loaded.Handle)
+            // What changed while it loaded is loaded again now.
+            If cached.Again
+                cached.Again = False
+                TypedCache<T>.Of().Reload(key)
+            End If
             Return making
         Catch e As IOError
             cached.Making = False
             cached.Load = 0
+            cached.Again = False
             cached.Failure = e
             Forget<T>(key, cached)
             Throw e

@@ -308,6 +308,49 @@ TEST_CASE("a glTF's images in its buffers cook into KTX2s it names through KHR_t
     REQUIRE(refused.error().failure == tools::failure_t::INVALID_DATA);
 }
 
+TEST_CASE("a texture with a KTX2 of its own keeps it, losing only its fallback", "[tools]") {
+    // Its fallback a 4 by 4 PNG, and its own a KTX2 of an 8 by 8 one.
+    const fbe_cook_image_t image{
+        .format = FBE_COOK_BC7,
+        .srgb = true,
+        .mipmaps = false,
+        .quality = 0,
+    };
+    const std::expected<tools::bytes_t, tools::error_t> own =
+        tools::cook_image(test::png(8, 8, 4, std::vector<std::uint8_t>(256, 50)), image);
+    if (!own) {
+        FAIL(own.error().message);
+    }
+    const grid_t grid;
+    std::string json = grid.json(false);
+    json.replace(json.rfind(R"(}],"weights")"), 2, R"(,"material":0}])");
+    json.pop_back();
+    json += R"(,"extensionsUsed":["KHR_texture_basisu"],)"
+            R"("materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],)"
+            R"("textures":[{"source":0,"extensions":{"KHR_texture_basisu":{"source":1}}}],)"
+            R"("images":[{"uri":"data:image/png;base64,)" +
+            test::base64(test::png(4, 4, 4, std::vector<std::uint8_t>(64, 200))) +
+            R"("},{"uri":"data:image/ktx2;base64,)" + test::base64(*own) + R"("}]})";
+    const test::temp_folder_t folder;
+    folder.write("grid.gltf", json);
+    folder.write("grid.bin", grid.bin);
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    const fbe_cook_model_t options{ .optimize = true, .images = image };
+    const std::expected<tools::bytes_t, tools::error_t> bytes = tools::cook_model(
+        *files.read(path("res://grid.gltf")), path("res://grid.gltf"), files.view(), options);
+    if (!bytes) {
+        FAIL(bytes.error().message);
+    }
+    const assets::result_t<assets::model_t> model =
+        assets::decode_model(path("res://cooked.glb"), *bytes, vfs::view_t(), {});
+    if (!model) {
+        FAIL(model.error().message);
+    }
+    REQUIRE(model->materials.at(0).base_color_texture.image == 1);
+    REQUIRE(model->images.at(1).width == 8);
+}
+
 TEST_CASE("a cooked glTF keeps its clips' frame rates", "[tools]") {
     vfs::vfs_t files;
     files.mount(path("res://models"), vfs::folder(FBENGINE_ASSETS_FIXTURES));

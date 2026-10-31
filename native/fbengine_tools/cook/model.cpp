@@ -125,13 +125,16 @@ private:
     }
 
     // Each texture that shows an image cooked into a KTX2 names it through KHR_texture_basisu, as
-    // a KTX2's is, which the glTF then needs.
+    // a KTX2's is, which the glTF then needs; one with a KTX2 of its own keeps that, and loses only
+    // its fallback, a KTX2 now too.
     void name_cooked(const std::vector<char>& cooked) {
         bool any = false;
         for (gltf::Texture& texture : m_asset.textures) {
             if (texture.imageIndex && *texture.imageIndex < cooked.size() &&
                 cooked[*texture.imageIndex] != 0) {
-                texture.basisuImageIndex = texture.imageIndex;
+                if (!texture.basisuImageIndex) {
+                    texture.basisuImageIndex = texture.imageIndex;
+                }
                 texture.imageIndex.reset();
                 any = true;
             }

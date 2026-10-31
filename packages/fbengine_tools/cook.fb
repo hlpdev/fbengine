@@ -8,6 +8,7 @@ Import std.core
 Import std.data
 Import std.ffi
 Import std.io
+Import std.os
 Import std.text
 Import fbengine
 Import "./c/fbe_cook"
@@ -113,12 +114,12 @@ Public Final Class Cooker
             End If
             seen[Folded(file.1)] = file.1
         End For
-        Local output = ((Try? pak.Absolute()) ?? pak).Text
+        Local output = OnDisk(pak)
         Local cooked: (String, UInt8[])[] = []
         // The buffers the cooked glTFs named, by their names folded, which are in them now.
         Local buffers = Set<String>()
         For file In files
-            If ((Try? file.0.Absolute()) ?? file.0).Text == output Then Continue
+            If OnDisk(file.0) == output Then Continue
             Local name = file.1
             Try Assets.Normalize("{place}/{name}")
             Local bytes = Try File.ReadBytes(file.0)
@@ -156,7 +157,14 @@ Public Final Class Cooker
                           "{folder} is more than 32 folders deep, as links that go round make one",
                           folder.Text)
         End If
-        For entry In Try Dir.Entries(folder)
+        Local entries: DirEntry[] = []
+        Try
+            entries = Try Dir.Entries(folder)
+        Catch e As IOError
+            Try Reachable(folder)
+            Throw e
+        End Try
+        For entry In entries
             Local name = relative == "" ? entry.Name() : relative + "/" + entry.Name()
             Local kind = entry.Kind
             If kind == FileKind.LINK
@@ -165,15 +173,54 @@ Public Final Class Cooker
                 ElseIf File.Exists(entry.Path)
                     kind = FileKind.FILE
                 Else
+                    // One whose target isn't there is left out.
+                    Try Reachable(entry.Path)
                     Continue
                 End If
             End If
             If kind == FileKind.DIRECTORY
                 Try Listed(entry.Path, name, depth + 1, into)
             ElseIf kind == FileKind.FILE
+                If !File.Exists(entry.Path) Then Try Reachable(entry.Path)
                 into.Add((entry.Path, name))
             End If
         End For
+    End Method
+
+    // `path`, absolute, as the disk tells paths apart: folded on Windows and macOS, whose disks
+    // ignore case.
+    Static Method OnDisk(path: Path): String
+        Local text = ((Try? path.Absolute()) ?? path).Text
+        Return System.Platform == Platform.LINUX ? text : Folded(text)
+    End Method
+
+    // Throws, for `path`, which a listing has but the OS can't reach, an IOError of INVALID_DATA
+    // when it's past the longest path the OS takes, as links that go round make one when their
+    // names are long, before they're 32 deep: 259 UTF-16 units on Windows, 1023 bytes on macOS,
+    // and 4095 on Linux.
+    Static Method Reachable(path: Path) Throws IOError
+        Local past = False
+        If System.Platform == Platform.WINDOWS
+            // Of its UTF-8, each byte that starts a character, and two for one past U+FFFF.
+            Local units = 0
+            For byte In path.Text.Bytes
+                If byte >= 0xF0
+                    units += 2
+                ElseIf byte < 0x80 || byte >= 0xC0
+                    units += 1
+                End If
+            End For
+            past = units > 259
+        ElseIf System.Platform == Platform.MACOS
+            past = path.Text.Length > 1023
+        Else
+            past = path.Text.Length > 4095
+        End If
+        If past
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{path} is longer than the OS takes, as links that go round make one",
+                          path.Text)
+        End If
     End Method
 
     // The buffers the glTF `name`, whose bytes are `bytes`, names by their paths, as names from

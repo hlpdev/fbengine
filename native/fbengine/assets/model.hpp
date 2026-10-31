@@ -197,6 +197,9 @@ struct model_t {
     std::vector<clip_t> clips;
     std::vector<camera_t> cameras;
     std::vector<light_t> lights;
+    /// The res:// paths, normalized, of what it read besides its own file, its buffers' and its
+    /// images', which hot reload loads it again for when they change.
+    std::vector<std::string> reads;
 };
 
 struct model_options_t {
