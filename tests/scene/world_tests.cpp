@@ -30,8 +30,7 @@ std::vector<std::uint64_t> take_freed() {
 /// Empties the freed queue.
 void drop_freed() noexcept {
     std::array<std::uint64_t, 16> some{};
-    while (fbe_entity_freed(some.data(), some.size()) != 0) {
-    }
+    while (fbe_entity_freed(some.data(), some.size()) != 0) {}
 }
 
 std::vector<std::uint64_t> children(std::uint64_t entity) {

@@ -66,7 +66,7 @@ if(FBENGINE_FB_TESTS)
 endif()
 
 # The scene, through fbengine's C API, with no window or GPU.
-add_executable(fbengine_scene_tests scene/world_tests.cpp)
+add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.cpp)
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
 catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
@@ -85,7 +85,11 @@ if(FBENGINE_FB_TESTS)
       "own-parent=an entity can't be its own parent"
       "under-itself=an entity can't go under what's under it"
       "child-out-of-range=an entity's children are at 0 to 1, not 2"
-      "data-freed=Data on a Pivot that was freed")
+      "data-freed=Data on a Pivot that was freed"
+      "poses-count=SetPoses takes a pose for each entity, not 0 for 1"
+      "poses-freed=Poses on a Pivot that was freed"
+      "into-nothing=the entity to transform into is scaled to nothing on an axis"
+      "turn-freed=Turn on a Pivot that was freed")
   foreach(case IN LISTS fbengine_scene_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)

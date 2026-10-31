@@ -1,0 +1,284 @@
+// Entities' transforms, in std.math's space, which need no window or GPU. Each test makes a World
+// of its own and makes it current.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+Function Near(a: Vec3, b: Vec3): Bool => IsClose(a, b, 0.0001)
+
+Function Near(a: Float, b: Float): Bool => IsClose(a, b, 0.0001)
+
+@Test
+Function ANewEntityIsAtItsParentsOriginUnturnedAtScaleOne()
+    Local world = Fresh()
+    Defer world.Free()
+    Local pivot = Pivot()
+    Expect(pivot.Position() == Vec3.Zero())
+    Expect(pivot.Rotation() == Quat.Identity)
+    Expect(pivot.Scale() == Vec3.One())
+    Expect(pivot.Matrix() == Mat4.Identity)
+    Expect(pivot.Matrix(Space.WORLD) == Mat4.Identity)
+    Expect(Near(pivot.Forward(), Vec3.Forward))
+End Function
+
+@Test
+Function AChildFollowsItsParentWhenItMoves()
+    Local world = Fresh()
+    Defer world.Free()
+    Local parent = Pivot()
+    Local child = Pivot(parent)
+    child.SetPosition(Vec3(0, 0, -1))
+    parent.SetPosition(Vec3(10, 0, 0))
+    Expect(Near(child.Position(Space.WORLD), Vec3(10, 0, -1)))
+
+    // A quarter turn left takes forward, -Z, to -X.
+    parent.Turn(0, Deg(90), 0)
+    Expect(Near(child.Position(Space.WORLD), Vec3(9, 0, 0)))
+    Expect(Near(child.Forward(), Vec3(-1, 0, 0)))
+    parent.SetScale(Vec3(2, 2, 2))
+    Expect(Near(child.Position(Space.WORLD), Vec3(8, 0, 0)))
+    Expect(child.Position() == Vec3(0, 0, -1))
+    Expect(Near(child.Scale(Space.WORLD), Vec3(2, 2, 2)))
+
+    // A grandchild follows through a parent that hasn't been asked where it is since.
+    Local grandchild = Pivot(child)
+    grandchild.SetPosition(Vec3(0, 1, 0))
+    parent.SetPosition(Vec3(0, 0, 0))
+    Expect(Near(grandchild.Position(Space.WORLD), Vec3(-2, 2, 0)))
+End Function
+
+@Test
+Function AWorldPositionGoesThroughTheParent()
+    Local world = Fresh()
+    Defer world.Free()
+    Local parent = Pivot()
+    parent.SetPosition(Vec3(1, 2, 3))
+    parent.SetRotation(Deg(30), Deg(45), Deg(10))
+    parent.SetScale(Vec3(2, 3, 0.5))
+    Local child = Pivot(parent)
+    child.SetPosition(Vec3(4, 5, 6), Space.WORLD)
+    Expect(Near(child.Position(Space.WORLD), Vec3(4, 5, 6)))
+    Local turn = Quat.FromEuler(Deg(-20), Deg(100), Deg(5))
+    child.SetRotation(turn, Space.WORLD)
+    Expect(IsClose(child.Rotation(Space.WORLD), turn))
+    child.SetScale(Vec3(1, 1, 1), Space.WORLD)
+    Expect(Near(child.Scale(Space.WORLD), Vec3(1, 1, 1)))
+    Expect(Near(child.Scale(), Vec3(0.5, 1 / 3.0, 2)))
+    Expect(Near(child.Position(Space.WORLD), Vec3(4, 5, 6)))
+End Function
+
+@Test
+Function MoveGoesAlongTheEntitysAxesAndTranslateAlongItsParents()
+    Local world = Fresh()
+    Defer world.Free()
+    Local parent = Pivot()
+    parent.Turn(0, Deg(90), 0)
+    Local child = Pivot(parent)
+    child.Turn(0, Deg(90), 0)
+    child.SetScale(Vec3(5, 5, 5))
+
+    // The child's forward, turned a quarter left, is -X in its parent's space, unscaled.
+    child.Move(Vec3(0, 0, -1))
+    Expect(Near(child.Position(), Vec3(-1, 0, 0)))
+    child.Translate(Vec3(0, 0, -1))
+    Expect(Near(child.Position(), Vec3(-1, 0, -1)))
+    child.SetPosition(Vec3.Zero())
+    child.Translate(Vec3(0, 0, -1), Space.WORLD)
+    Expect(Near(child.Position(Space.WORLD), Vec3(0, 0, -1)))
+    // The world's -Z is +X to the parent, turned a quarter left.
+    Expect(Near(child.Position(), Vec3(1, 0, 0)))
+End Function
+
+@Test
+Function TurningLocallyIsAboutTheEntitysAxesAndInTheWorldAboutTheWorlds()
+    Local world = Fresh()
+    Defer world.Free()
+    Local local = Pivot()
+    local.Turn(Deg(-90), 0, 0)
+    Expect(Near(local.Forward(), Vec3(0, -1, 0)))
+    local.Turn(0, Deg(90), 0)
+    // Its own Y now points forward, so its yaw turns its nose, at the ground, sideways.
+    Expect(Near(local.Forward(), Vec3(0, -1, 0)) == False)
+    Expect(Near(local.Up(), Vec3(0, 0, -1)))
+
+    Local global = Pivot()
+    global.Turn(Deg(-90), 0, 0)
+    global.Turn(0, Deg(90), 0, Space.WORLD)
+    Expect(Near(global.Forward(), Vec3(0, -1, 0)))
+    Expect(Near(global.Up(), Vec3(-1, 0, 0)))
+End Function
+
+@Test
+Function EulerAnglesComeBackAsTheyWent()
+    Local world = Fresh()
+    Defer world.Free()
+    Local pivot = Pivot()
+    pivot.SetRotation(Deg(20), Deg(-130), Deg(45))
+    Expect(Near(pivot.Pitch(), Deg(20)))
+    Expect(Near(pivot.Yaw(), Deg(-130)))
+    Expect(Near(pivot.Roll(), Deg(45)))
+    Local parent = Pivot()
+    parent.SetRotation(0, Deg(10), 0)
+    pivot.SetParent(parent, False)
+    Expect(Near(pivot.Yaw(Space.WORLD), Deg(-120)))
+End Function
+
+@Test
+Function PointAtFacesTheTargetUpright()
+    Local world = Fresh()
+    Defer world.Free()
+    Local looker = Pivot()
+    looker.SetPosition(Vec3(1, 1, 1))
+    Local target = Pivot()
+    target.SetPosition(Vec3(5, 1, 1))
+    looker.PointAt(target)
+    Expect(Near(looker.Forward(), Vec3(1, 0, 0)))
+    Expect(Near(looker.Up(), Vec3(0, 1, 0)))
+    Expect(Near(looker.Yaw(), Deg(-90)))
+    looker.PointAt(Vec3(1, 11, 1))
+    Expect(Near(looker.Forward(), Vec3(0, 1, 0)))
+    looker.PointAt(Vec3(1, 1, -9), Deg(90))
+    Expect(Near(looker.Forward(), Vec3(0, 0, -1)))
+    Expect(Near(looker.Up(), Vec3(-1, 0, 0)))
+
+    // A target where it is changes nothing.
+    Local before = looker.Rotation()
+    looker.PointAt(looker.Position(Space.WORLD))
+    Expect(looker.Rotation() == before)
+End Function
+
+@Test
+Function AlignToTurnsAnAxisPartOfTheWay()
+    Local world = Fresh()
+    Defer world.Free()
+    Local pivot = Pivot()
+    pivot.AlignTo(Vec3(1, 0, 0), Axis.UP, 0.5)
+    Expect(Near(pivot.Up(), Normalize(Vec3(1, 1, 0))))
+    pivot.AlignTo(Vec3(1, 0, 0), Axis.UP)
+    Expect(Near(pivot.Up(), Vec3(1, 0, 0)))
+    pivot.AlignTo(Vec3(0, 0, 3), Axis.FORWARD)
+    Expect(Near(pivot.Forward(), Vec3(0, 0, 1)))
+    pivot.AlignTo(Vec3(0, -2, 0), Axis.RIGHT)
+    Expect(Near(pivot.Right(), Vec3(0, -1, 0)))
+    Local before = pivot.Rotation()
+    pivot.AlignTo(Vec3.Zero(), Axis.RIGHT)
+    Expect(pivot.Rotation() == before)
+End Function
+
+@Test
+Function ReparentingKeepsTheWorldTransformOrTheLocalOne()
+    Local world = Fresh()
+    Defer world.Free()
+    Local parent = Pivot()
+    parent.SetPosition(Vec3(10, 0, 0))
+    parent.Turn(0, Deg(90), 0)
+    parent.SetScale(Vec3(2, 2, 2))
+    Local kept = Pivot()
+    kept.SetPosition(Vec3(1, 2, 3))
+    kept.SetParent(parent)
+    Expect(Near(kept.Position(Space.WORLD), Vec3(1, 2, 3)))
+    Expect(Near(kept.Scale(Space.WORLD), Vec3(1, 1, 1)))
+    Expect(Near(kept.Forward(), Vec3.Forward))
+
+    Local moved = Pivot()
+    moved.SetPosition(Vec3(1, 2, 3))
+    moved.SetParent(parent, False)
+    Expect(moved.Position() == Vec3(1, 2, 3))
+    Expect(Near(moved.Position(Space.WORLD), Vec3(16, 4, -2)))
+
+    // Back to the top, it keeps where it is in the world.
+    moved.SetParent(Null)
+    Expect(Near(moved.Position(), Vec3(16, 4, -2)))
+End Function
+
+@Test
+Function PointsVectorsAndNormalsGoBetweenEntities()
+    Local world = Fresh()
+    Defer world.Free()
+    Local a = Pivot()
+    a.SetPosition(Vec3(5, 0, 0))
+    a.SetScale(Vec3(2, 1, 1))
+    Local b = Pivot()
+    b.SetPosition(Vec3(0, 3, 0))
+    b.Turn(0, Deg(90), 0)
+    Expect(Near(TransformPoint(Vec3(1, 0, 0), a, Null), Vec3(7, 0, 0)))
+    Expect(Near(TransformPoint(Vec3(7, 0, 0), Null, a), Vec3(1, 0, 0)))
+    Expect(Near(TransformVector(Vec3(1, 0, 0), a, Null), Vec3(2, 0, 0)))
+    // b's forward, -Z, is the world's -X, so a's origin, at +X from b, is behind it.
+    Expect(Near(TransformPoint(Vec3.Zero(), a, b), Vec3(0, -3, 5)))
+    Expect(Near(TransformVector(Vec3(1, 0, 0), Null, b), Vec3(0, 0, 1)))
+    // A slope scaled twice as wide gets a normal that leans half as far.
+    Local normal = TransformNormal(Normalize(Vec3(1, 1, 0)), a, Null)
+    Expect(Near(normal, Normalize(Vec3(0.5, 1, 0))))
+    Expect(TransformNormal(Vec3.Zero(), a, Null) == Vec3.Zero())
+End Function
+
+@Test
+Function AnglesAndDistancesToATarget()
+    Local world = Fresh()
+    Defer world.Free()
+    Local looker = Pivot()
+    Local target = Pivot()
+    target.SetPosition(Vec3(-3, 4, 0))
+    Expect(Near(looker.DistanceTo(target), 5))
+    Expect(Near(looker.DistanceTo(Vec3(0, 0, 2)), 2))
+    // Left of forward, -Z, is -X: a quarter turn left.
+    Expect(Near(looker.YawTo(target), Deg(90)))
+    Expect(Near(looker.PitchTo(target), Atan2(4.0, 3.0)))
+    looker.Turn(0, Deg(180), 0)
+    Expect(Near(looker.YawTo(target), Deg(-90)))
+    Expect(Near(YawOf(Vec3(1, 0, 0)), Deg(-90)))
+    Expect(Near(PitchOf(Vec3(0, -1, 0)), Deg(-90)))
+    Expect(YawOf(Vec3.Zero()) == 0.0 && PitchOf(Vec3.Zero()) == 0.0)
+End Function
+
+@Test
+Function CopiesKeepTheirOriginalsTransforms()
+    Local world = Fresh()
+    Defer world.Free()
+    Local original = Pivot()
+    original.SetPosition(Vec3(1, 2, 3))
+    original.SetRotation(0, Deg(30), 0)
+    original.SetScale(Vec3(2, 2, 2))
+    Local child = Pivot(original)
+    child.SetPosition(Vec3(0, 1, 0))
+    Local copy = original.Copy()
+    Expect(copy.Position() == Vec3(1, 2, 3))
+    Expect(IsClose(copy.Rotation(), original.Rotation()))
+    Expect(copy.Scale() == Vec3(2, 2, 2))
+    Expect(Near(copy.Child(0).Position(Space.WORLD), child.Position(Space.WORLD)))
+    copy.Move(Vec3(0, 0, -1))
+    Expect(original.Position() == Vec3(1, 2, 3))
+End Function
+
+@Test
+Function PosesGoInAndOutInBatches()
+    Local world = Fresh()
+    Defer world.Free()
+    Local parent = Pivot()
+    parent.SetPosition(Vec3(0, 10, 0))
+    Local entities: Entity[] = []
+    Local poses: Pose[] = []
+    For i = 0 Until 100
+        entities.Add(Pivot(parent))
+        Local at = i As Float
+        poses.Add(Pose(Vec3(at, 0, 0), Quat.FromEuler(0, at * 0.01, 0)))
+    End For
+    Entity.SetPoses(entities, poses, Space.WORLD)
+    Expect(Near(entities[7].Position(), Vec3(7, -10, 0)))
+    Expect(IsClose(entities[7].Rotation(Space.WORLD), Quat.FromEuler(0, 0.07, 0)))
+    Local local = Entity.Poses(entities, Space.LOCAL)
+    Expect(local.Count == 100)
+    Expect(Near(local[99].Position, Vec3(99, -10, 0)))
+    Local back = Entity.Poses(entities, Space.WORLD)
+    Expect(Near(back[42].Position, Vec3(42, 0, 0)))
+    Expect(Entity.Poses([], Space.WORLD).Count == 0)
+End Function
