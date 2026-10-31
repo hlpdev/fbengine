@@ -214,3 +214,84 @@ Function APressInAFieldPutsItsCursorThere() Throws GraphicsError
     Frame(ui)
     Expect(field.SelectedText() == "cde")
 End Function
+
+// A page moves a slider a step at least, and a range's width is finite.
+@Test
+Function ASlidersPageIsAStepAtLeast() Throws GraphicsError
+    Local volume = Slider(0.0, 10.0, 0.0)
+    volume.SetStep(5.0)
+    Local ui = Try Holding(volume)
+    Defer EndGraphics()
+    ui.Focus(volume)
+    Try Keys(ui, [Key.PAGE_UP])
+    Expect(volume.Value() == 5.0)
+    Try Keys(ui, [Key.PAGE_UP])
+    Expect(volume.Value() == 10.0)
+    Try Keys(ui, [Key.PAGE_DOWN])
+    Expect(volume.Value() == 5.0)
+End Function
+
+// A field's cursor, selection, and most go by grapheme clusters.
+@Test
+Function AFieldGoesByWhatAPlayerSeesAsACharacter() Throws GraphicsError
+    Local field = TextField("e\u{301}")
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Expect(field.Length() == 1 && field.Cursor() == 1)
+    Try Keys(ui, [Key.LEFT])
+    Expect(field.Cursor() == 0)
+    // An emoji and its skin tone go as one.
+    field.SetText("a\u{1F44D}\u{1F3FD}")
+    Try Keys(ui, [Key.BACKSPACE])
+    Expect(field.Text() == "a")
+    // A mark typed after a letter joins it.
+    Try Typed(ui, "e")
+    Try Typed(ui, "\u{301}")
+    Expect(field.Text() == "ae\u{301}" && field.Length() == 2 && field.Cursor() == 2)
+    // A family, its people joined by ZWJs, is one, which the most keeps whole.
+    Local family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
+    field.SetText("")
+    field.SetMaxLength(2)
+    Try Typed(ui, "x" + family + "y")
+    Expect(field.Text() == "x" + family)
+    Try Keys(ui, [Key.LEFT])
+    Expect(field.Cursor() == 1)
+    field.SelectRange(1, 2)
+    Expect(field.SelectedText() == family)
+End Function
+
+// Each platform's keys edit by its own rules.
+@Test
+Function AFieldsKeysAreThePlatformsOwn() Throws GraphicsError
+    Local field = TextField("one two three")
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    Local had = CurrentEditingKeys()
+    ui.Focus(field)
+    Frame(ui)
+    SetEditingKeys(EditingKeys.PC)
+    Try With(ui, Key.LEFT_CONTROL, [Key.LEFT])
+    Expect(field.Cursor() == 8)
+    // Option's nothing on a PC.
+    Try With(ui, Key.LEFT_ALT, [Key.LEFT])
+    Expect(field.Cursor() == 7)
+    SetEditingKeys(EditingKeys.MAC)
+    Expect(CurrentEditingKeys() == EditingKeys.MAC)
+    Try With(ui, Key.LEFT_ALT, [Key.LEFT])
+    Expect(field.Cursor() == 4)
+    Try With(ui, Key.LEFT_SUPER, [Key.RIGHT])
+    Expect(field.Cursor() == 13)
+    Try With(ui, Key.LEFT_ALT, [Key.BACKSPACE])
+    Expect(field.Text() == "one two ")
+    Try With(ui, Key.LEFT_SUPER, [Key.BACKSPACE])
+    Expect(field.Text() == "")
+    // Command's A, C, X, and V; Ctrl's aren't.
+    field.SetText("copy")
+    Try With(ui, Key.LEFT_CONTROL, [Key.A])
+    Expect(field.Selection() == (4, 4))
+    Try With(ui, Key.LEFT_SUPER, [Key.A])
+    Expect(field.Selection() == (0, 4))
+    SetEditingKeys(had)
+End Function

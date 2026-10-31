@@ -212,3 +212,36 @@ Function TablesWhereFieldsGoAreRefused()
     Expect(ExpectThrows<UIError>(theme.Load("[button]\nbackground = {{}}\n")) != Null)
     Expect(theme.Save() == before)
 End Function
+
+// Setting nothing is no fields of its own, so a Save and a Load give the same.
+@Test
+Function AnEmptySetOfFieldsIsNone() Throws UIError
+    Local theme = Theme()
+    theme.SetFields("button.ghost", StyleFields())
+    Expect(!theme.HasStyle("button.ghost"))
+    Local fields = StyleFields()
+    fields.Background = Color(1.0, 0.0, 0.0, 1.0)
+    theme.SetFields("button.ghost", fields)
+    Expect(theme.HasStyle("button.ghost"))
+    theme.SetFields("button.ghost", StyleFields())
+    Expect(!theme.HasStyle("button.ghost"))
+    Local loaded = Theme()
+    Try loaded.Load(theme.Save())
+    Expect(loaded.Names() == theme.Names())
+End Function
+
+// A table named normal is a mistake: a name's own fields are its normal state's.
+@Test
+Function ANormalTableIsAMistake()
+    For text In ["[button.normal]\nbackground = \"#ff0000\"\n",
+                 "[button]\nnormal = {{ background = \"#ff0000\" }}\n"]
+        Local said = ""
+        Try
+            Try Theme().Load(text)
+        Catch e As UIError
+            said = e.Message
+        End Try
+        Expect(said ==
+               "button.normal: normal isn't a state; a name's own fields are its normal ones")
+    End For
+End Function

@@ -14,6 +14,8 @@ Import "./widget"
 /// "scroll".
 Public Class ScrollView Extends Widget
     Field offset: Float32 = 0.0
+    // The offset asked for, which each Layout keeps to what it shows.
+    Field wanted: Float32 = 0.0
     Field step: Float32 = 40.0
     Field extent: Float32 = 0.0
     Field view: Float32 = 0.0
@@ -26,11 +28,14 @@ Public Class ScrollView Extends Widget
     /// How far down what it shows it's scrolled, in the UI's units.
     @MainThread Public Method Offset(): Float32 => offset
 
-    /// Scrolls it to `units` down, kept to what it shows, as the next Layout puts it.
+    /// Scrolls it to `units` down, kept to what it shows at each Layout, so an offset set before
+    /// the first holds, and Inf keeps it at the bottom as what it shows grows, as a console's
+    /// does.
     @MainThread Public Method SetOffset(units: Float32)
-        Local kept = Kept(units)
-        If kept == offset Then Return
-        offset = kept
+        Local asked = IsNaN(units) ? 0.0 : Max(units, 0.0)
+        If asked == wanted && Kept(asked) == offset Then Return
+        wanted = asked
+        offset = Kept(asked)
         Reflow()
     End Method
 
@@ -63,7 +68,7 @@ Public Class ScrollView Extends Widget
             Local tall = Max(child.NaturalSize().y + child.Margin().Vertical(), content.Height)
             extent = Max(extent, tall)
         End For
-        offset = Kept(offset)
+        offset = Kept(wanted)
         For child In shown
             Local margin = child.Margin()
             Local tall = Max(extent - margin.Vertical(), 0.0)
@@ -71,6 +76,9 @@ Public Class ScrollView Extends Widget
                              Max(content.Width - margin.Horizontal(), 0.0), tall))
         End For
     End Method
+
+    // What it shows is only in its content box.
+    @MainThread Public Override Method Clips(): Bool => True
 
     @MainThread Public Override Method Wheel(steps: Int32): Bool
         Local before = offset
@@ -101,9 +109,11 @@ Public Class ListItem Extends Label
     @MainThread Public Override Method PointerDown(point: Vec2): Bool
         Local own = list
         If own == Null Then Return False
+        // The OS's double click, by its time and distance, chooses it, when its first press was on
+        // it too.
+        If MouseDoubleClick(MouseButton.LEFT) && own.pressedItem == index Then own.Choose()
+        own.pressedItem = index
         own.Pick(index)
-        // The OS's double click, by its time and distance, chooses it too.
-        If MouseDoubleClick(MouseButton.LEFT) Then own.Choose()
         Return True
     End Method
 End Class
@@ -116,6 +126,8 @@ Public Class List Extends Widget
     Field selected: Int = -1
     Field changed: Bool = False
     Field chosen: Bool = False
+    // The item the last press was on, -1 for none.
+    Field pressedItem: Int = -1
 
     /// A list of `items`, none picked.
     @MainThread Public New(items: String[] = [], name: String = "")
@@ -127,9 +139,12 @@ Public Class List Extends Widget
     /// Its items' text.
     @MainThread Public Method Items(): String[] => items.Clone()
 
-    /// Shows `shown`, keeping the one picked if there's still one there.
+    /// Shows `shown`, keeping the item picked if it's still there, by its text; if it isn't, none
+    /// is, and SelectionChanged is True.
     @MainThread Public Method SetItems(shown: String[])
+        Local had = selected >= 0 ? items[selected] : Null
         items = shown.Clone()
+        pressedItem = -1
         For child In Children()
             Remove(child)
         End For
@@ -138,7 +153,10 @@ Public Class List Extends Widget
             item.SetTranslates(Translates())
             Add(item)
         End For
-        If selected >= items.Count Then selected = items.Count - 1
+        If had != Null
+            selected = items.IndexOf(had) ?? -1
+            If selected < 0 Then changed = True
+        End If
         Restyled()
     End Method
 
@@ -172,22 +190,26 @@ Public Class List Extends Widget
 
     @MainThread Public Override Method KeyTyped(key: Key): Bool
         If items.Count == 0 Then Return False
+        Local to = selected
         Select key
             Case Key.UP
-                Pick(Max(selected - 1, 0))
+                to = Max(selected - 1, 0)
             Case Key.DOWN
-                Pick(Min(selected + 1, items.Count - 1))
+                to = Min(selected + 1, items.Count - 1)
             Case Key.HOME
-                Pick(0)
+                to = 0
             Case Key.END
-                Pick(items.Count - 1)
+                to = items.Count - 1
             Case Key.PAGE_UP
-                Pick(Max(selected - 10, 0))
+                to = Max(selected - 10, 0)
             Case Key.PAGE_DOWN
-                Pick(Min(selected + 10, items.Count - 1))
+                to = Min(selected + 10, items.Count - 1)
             Default
                 Return False
         End Select
+        // At an end, the key's the focus's, to move on past it.
+        If to == selected Then Return False
+        Pick(to)
         Return True
     End Method
 

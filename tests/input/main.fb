@@ -80,6 +80,8 @@ Function Main() Throws GraphicsError, InputError
             ActionSet().Add("jump").Bind(Binding(BindingKind.KEY, 9999, 1.0))
         Case "bind-y-infinite"
             ActionSet().Add("look").BindY(Binding(BindingKind.MOUSE_AXIS, 0, Inf))
+        Case "unblock-unblocked"
+            ActionSet().Unblock()
         Case "replace-overflows"
             Local look = ActionSet().Add("look")
             look.Bind(Binding.OfMouseAxis(MouseAxis.X, 1e30))

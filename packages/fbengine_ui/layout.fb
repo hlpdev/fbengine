@@ -400,12 +400,17 @@ Public Class Node Implements Printable
     /// the point. A child outside its parent's box isn't found there, as it isn't drawn there.
     @MainThread Public Method NodeAt(point: Vec2): Node?
         If !visible || !box.Contains(point) Then Return Null
+        If Clips() && !ContentBox().Contains(point) Then Return Self
         For i = children.Count - 1 To 0 Step -1
             Local found = children[i].NodeAt(point)
             If found != Null Then Return found
         End For
         Return Self
     End Method
+
+    /// Whether it shows its children only in its content box, as a scroll view does, so NodeAt
+    /// finds them only there; False at first.
+    @MainThread Public Method Clips(): Bool => False
 
     /// Puts its shown children in `content`, its box less its padding, as its Arrangement says:
     /// what Layout does for each Node, which a container of its own, as a scroll view, overrides

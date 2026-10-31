@@ -516,6 +516,7 @@ Public Final Class ActionSet
     Field pad: Gamepad? = Null
     Field press: Float32 = 0.5
     Field enabled: Bool = True
+    Field blocks: Int = 0
     Field hook: Int = 0
 
     /// A set with no Actions, which every Flip reads from now on, until it's let go of.
@@ -595,8 +596,24 @@ Public Final Class ActionSet
         enabled = on
     End Method
 
-    /// Whether it's on.
+    /// Whether it's on, as SetEnabled set it, whether or not it's blocked.
     @MainThread Public Method Enabled(): Bool => enabled
+
+    /// Blocks it, as a Ui does while one of its widgets has the focus: it reads as off does
+    /// until each Block has its Unblock, whatever SetEnabled says, so a cutscene's SetEnabled(False)
+    /// isn't undone by a menu closing. Several can block it at once, each taking back its own.
+    @MainThread Public Method Block()
+        blocks += 1
+    End Method
+
+    /// Takes back a Block. Panics when nothing blocks it.
+    @MainThread Public Method Unblock()
+        If blocks == 0 Then Panic("ActionSet.Unblock: nothing blocks it")
+        blocks -= 1
+    End Method
+
+    /// Whether anything blocks it.
+    @MainThread Public Method Blocked(): Bool => blocks > 0
 
     /// Forgets the presses and releases the last Flip read of its Actions, until the next Flip;
     /// what's held stays held.
@@ -607,7 +624,7 @@ Public Final Class ActionSet
     End Method
 
     @MainThread Method Update()
-        If !enabled
+        If !enabled || blocks > 0
             For action In actions
                 action.Release()
             End For

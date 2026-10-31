@@ -11,12 +11,23 @@
 #include <memory>
 #include <SDL3/SDL.h>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
 
 // The most presses a Flip keeps in order, for fbe_input_key_hit_at.
 constexpr std::size_t most_hits = 64;
+
+// The most keystrokes a Flip keeps, for fbe_input_keystroke_at.
+constexpr std::size_t most_keystrokes = 1024;
+
+// A key that went down, or a piece of text typed: FBE_INPUT_KEYSTROKE_'s kind.
+struct keystroke_t {
+    std::int32_t kind = FBE_INPUT_KEYSTROKE_PRESS;
+    std::int32_t key = 0;
+    std::string text;
+};
 
 // A key: whether it's held, and what the last Flip counted of it.
 struct key_t {
@@ -30,6 +41,7 @@ std::array<key_t, SDL_SCANCODE_COUNT> keys{};
 fbe::frame_counts_t counts;
 std::vector<std::int32_t> hit_order;
 std::string text;
+std::vector<keystroke_t> keystrokes;
 
 // The IME's composition, which stays until it changes.
 std::string composition;
@@ -59,6 +71,13 @@ void zero_counts() {
     }
     hit_order.clear();
     text.clear();
+    keystrokes.clear();
+}
+
+void stroke(std::int32_t kind, std::int32_t key, std::string_view typed) {
+    if (keystrokes.size() < most_keystrokes) {
+        keystrokes.push_back({ .kind = kind, .key = key, .text = std::string(typed) });
+    }
 }
 
 /// Zeroes what was counted when this is the first event of a Flip.
@@ -77,12 +96,15 @@ void key_event(const SDL_KeyboardEvent& event) {
     if (event.down) {
         ++key.typed;
         // A key that's held already is the OS's repeat, whatever the event says.
-        if (!event.repeat && !key.down) {
+        const bool pressed = !event.repeat && !key.down;
+        if (pressed) {
             ++key.hits;
             if (hit_order.size() < most_hits) {
                 hit_order.push_back(event.scancode);
             }
         }
+        stroke(pressed ? FBE_INPUT_KEYSTROKE_PRESS : FBE_INPUT_KEYSTROKE_REPEAT, event.scancode,
+               "");
         key.down = true;
     } else if (key.down) {
         ++key.ups;
@@ -100,6 +122,13 @@ void release_keys() {
             key.down = false;
         }
     }
+}
+
+/// The `index`th keystroke the last Flip read, or nullptr.
+const keystroke_t* keystroke_at(std::int32_t index) {
+    const bool there =
+        counts.current() && index >= 0 && static_cast<std::size_t>(index) < keystrokes.size();
+    return there ? &keystrokes[static_cast<std::size_t>(index)] : nullptr;
 }
 
 /// Whether the event's window has text input on, which text counts only while.
@@ -166,6 +195,7 @@ void keyboard_event(const SDL_Event& event) {
         if (typing(event) && event.text.text != nullptr) {
             count();
             text += event.text.text;
+            stroke(FBE_INPUT_KEYSTROKE_TEXT, 0, event.text.text);
             clear_composition();
         }
         read_string(event.text.text);
@@ -211,6 +241,25 @@ FBE_API int32_t fbe_input_key_hit_at(int32_t index) {
     const bool there =
         counts.current() && index >= 0 && static_cast<std::size_t>(index) < hit_order.size();
     return there ? hit_order[static_cast<std::size_t>(index)] : 0;
+}
+
+FBE_API int32_t fbe_input_keystroke_count(void) {
+    return counts.current() ? static_cast<std::int32_t>(keystrokes.size()) : 0;
+}
+
+FBE_API int32_t fbe_input_keystroke_kind(int32_t index) {
+    const keystroke_t* found = keystroke_at(index);
+    return found != nullptr ? found->kind : -1;
+}
+
+FBE_API int32_t fbe_input_keystroke_key(int32_t index) {
+    const keystroke_t* found = keystroke_at(index);
+    return found != nullptr ? found->key : 0;
+}
+
+FBE_API const char* fbe_input_keystroke_text(int32_t index) {
+    const keystroke_t* found = keystroke_at(index);
+    return found != nullptr ? found->text.c_str() : "";
 }
 
 FBE_API void fbe_input_flush_keys(void) {

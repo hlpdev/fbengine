@@ -10,7 +10,7 @@ Import fbengine_ui
 
 Global gave: String[] = []
 
-Function Give(words: String[]): String
+Function Give(console: Console, words: String[]): String
     gave = words
     Return "gave {words.Join(", ")}"
 End Function
@@ -177,4 +177,63 @@ Function ADebugPanelsTweaksFollowThePlayerAndTheGame() Throws GraphicsError
     game.Ask(panel)
     Expect(game.speed == 2.0)
     Expect(slider.Value() == 2.0)
+End Function
+
+// A command that can throw.
+Class Loads Implements ConsoleCommand
+    Public Method Run(console: Console, words: String[]): String Throws Error
+        If words.Count == 0 Then Throw Error("which level?")
+        Return "loaded {words[0]}"
+    End Method
+End Class
+
+// A command that throws prints its error's message, after its name.
+@Test
+Function ACommandsErrorIsPrinted()
+    Local console = Console()
+    console.Register("load", "loads a level", Loads())
+    console.Run("load")
+    Expect(console.Lines() == ["> load", "load: which level?"])
+    console.Run("load e1m1")
+    Expect(console.Lines()[3] == "loaded e1m1")
+End Function
+
+// The console's toggle key opens and closes it, and isn't typed into its line.
+@Test
+Function TheToggleKeyIsntTyped() Throws GraphicsError
+    Local console = Console()
+    Expect(console.ToggleKey() == Key.GRAVE)
+    Local root = Node("root")
+    root.Add(console)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(console.Line())
+    Frame(ui)
+    Try Simulate.Text("a")
+    Try Simulate.PressKey(Key.GRAVE)
+    Try Simulate.Text("`")
+    Try Simulate.Text("b")
+    Frame(ui)
+    Expect(console.Line().Text() == "ab")
+    console.SetToggleKey(Key.F1)
+    Try Simulate.PressKey(Key.GRAVE)
+    Try Simulate.Text("`")
+    Frame(ui)
+    Expect(console.Line().Text() == "ab`")
+End Function
+
+// A tweak gives back the game's own value, unless the player moved it.
+@Test
+Function ATweakGivesBackTheGamesValue() Throws GraphicsError
+    Local panel = DebugPanel()
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(panel)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Expect(panel.Tweak("speed", 0.0, 20.0, 50.0) == 50.0)
+    Frame(ui)
+    Expect(panel.Tweak("speed", 0.0, 20.0, 50.0) == 50.0)
+    Local slider = RowWidget(panel, "speed") As? Slider
+    Expect(slider?.Value() == 20.0)
 End Function

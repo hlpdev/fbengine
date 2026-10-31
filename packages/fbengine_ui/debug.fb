@@ -23,35 +23,43 @@ Import "./widget"
 /// ```
 Public Class DebugPanel Extends Widget
     Field rows: Map<String, Node>
+    // What kind of row each name's is, as "Slider".
+    Field kinds: Map<String, String>
     Field asked: String[] = []
 
     /// A panel with no rows.
     @MainThread Public New(name: String = "")
         rows = {}
+        kinds = {}
         Super.New("debug", name)
         SetGap(4.0)
     End New
 
-    /// Shows `name`'s value, `value`, this frame.
+    /// Shows `name`'s value, `value`, this frame. Panics where `name`'s row is another kind's, as
+    /// for each kind.
     @MainThread Public Method Watch(name: String, value: String)
-        Local shown = Row(name, Function() => Label(value) As Widget) As? Label
+        Local shown = Row("Watch", name, "Label", Function() => Label(value) As Widget) As? Label
         If shown != Null Then shown.SetText(value)
     End Method
 
-    /// A slider for `name`, from `low` to `high`, at `value` unless the player moved it this
-    /// frame: what it's at, which the game keeps, as `speed = panel.Tweak("speed", 0, 20, speed)`.
+    /// A slider for `name`, from `low` to `high`, showing `value`: `value` as it's given unless
+    /// the player moved it this frame, then what it's at, which the game keeps, as
+    /// `speed = panel.Tweak("speed", 0, 20, speed)`.
     @MainThread Public Method Tweak(name: String, low: Float32, high: Float32,
                                     value: Float32): Float32
-        Local slider = Row(name, Function() => Slider(low, high, value) As Widget) As? Slider
+        Local slider = Row("Tweak", name, "Slider",
+                           Function() => Slider(low, high, value) As Widget) As? Slider
         If slider == Null Then Return value
         If slider.Low() != low || slider.High() != high Then slider.SetRange(low, high)
-        If !slider.Changed() Then slider.SetValue(value)
-        Return slider.Value()
+        If slider.Changed() Then Return slider.Value()
+        slider.SetValue(value)
+        Return value
     End Method
 
     /// A switch for `name`, `on` unless the player turned it over this frame: whether it's on.
     @MainThread Public Method Switch(name: String, on: Bool): Bool
-        Local toggle = Row(name, Function() => Toggle("", on) As Widget) As? Toggle
+        Local toggle = Row("Switch", name, "Toggle",
+                           Function() => Toggle("", on) As Widget) As? Toggle
         If toggle == Null Then Return on
         If !toggle.Changed() Then toggle.SetOn(on)
         Return toggle.On()
@@ -59,7 +67,8 @@ Public Class DebugPanel Extends Widget
 
     /// A button for `name`: whether the last Update read it clicked.
     @MainThread Public Method Pressed(name: String): Bool
-        Local button = Row(name, Function() => Button(name) As Widget) As? Button
+        Local button = Row("Pressed", name, "Button",
+                           Function() => Button(name) As Widget) As? Button
         Return button != Null && button.Clicked()
     End Method
 
@@ -78,14 +87,17 @@ Public Class DebugPanel Extends Widget
             If !asked.Contains(child.Name())
                 Remove(child)
                 rows.Remove(child.Name())
+                kinds.Remove(child.Name())
             End If
         End For
         asked.Clear()
     End Method
 
-    // The row `name`'s widget, which `make` makes the first time, and a Label of its name before
-    // it; the row's asked for this frame.
-    @MainThread Method Row(name: String, make: Func(): Widget): Widget?
+    // The row `name`'s widget, of `kind`, which `make` makes the first time, and a Label of its
+    // name before it; the row's asked for this frame. Panics, for `call`, where it's another kind's.
+    @MainThread Method Row(call: String, name: String, kind: String, make: Func(): Widget): Widget?
+        Local had = kinds.Get(name)
+        If had != Null && had != kind Then Panic("DebugPanel.{call}: the debug row {name} is a {had}")
         If !asked.Contains(name) Then asked.Add(name)
         Local row = rows.Get(name)
         If row == Null
@@ -102,6 +114,7 @@ Public Class DebugPanel Extends Widget
             made.Add(widget)
             Add(made)
             rows[name] = made
+            kinds[name] = kind
             row = made
         End If
         Local children = row.Children()

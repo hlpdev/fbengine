@@ -82,7 +82,8 @@ if(FBENGINE_FB_TESTS)
       "binding-nan-scale|panic: Binding[.]OfGamepadAxis: a scale is a finite number, not"
       "bind-unchecked|panic: Action[.]Bind: a key binding's code is 1 to 511, not 9999"
       "bind-y-infinite|panic: Action[.]BindY: a binding's scale is a finite number, not Inf"
-      "replace-overflows|panic: Action[.]Replace: a binding's scale is a finite number, not Inf")
+      "replace-overflows|panic: Action[.]Replace: a binding's scale is a finite number, not Inf"
+      "unblock-unblocked|panic: ActionSet[.]Unblock: nothing blocks it")
   foreach(case IN LISTS fbengine_input_cases)
     string(REPLACE "|" ";" case "${case}")
     list(GET case 0 name)
@@ -500,12 +501,14 @@ if(FBENGINE_FB_TESTS)
       "content-size-nan|panic: Node[.]SetContentSize: a size is 0 or more, and finite, not NaN by 0"
       "anchor-nan|panic: Node[.]SetAnchors: an anchor is finite, not NaN"
       "slider-range-backward|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not 2 to 1"
+      "slider-range-too-wide|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not -3"
       "slider-step-negative|panic: Slider[.]SetStep: a step is 0 or more, not -1"
       "max-length-negative|panic: TextField[.]SetMaxLength: a most is 0, for none, or more, not -1"
       "wheel-step-zero|panic: ScrollView[.]SetWheelStep: a step is over 0, not 0"
       "scale-zero|panic: Ui[.]SetScale: a scale is over 0, not 0"
       "command-with-a-space|panic: Console[.]Register: \"give item\" isn't a command's name"
       "console-no-lines|panic: Console[.]SetMaxLines: a console keeps 1 line or more, not 0"
+      "debug-row-two-kinds|panic: DebugPanel[.]Switch: the debug row mode is a Label"
       "strings-fall-back-to-themselves|panic: Strings[.]SetFallback: en's strings fall back to fr's, which fall back to them")
   foreach(case IN LISTS fbengine_ui_cases)
     string(REPLACE "|" ";" case "${case}")

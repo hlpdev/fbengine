@@ -62,6 +62,8 @@ Select name
         Node("a").SetAnchors(Anchors(NaN, 0.0, 1.0, 1.0))
     Case "slider-range-backward"
         Slider(0.0, 1.0, 0.0).SetRange(2.0, 1.0)
+    Case "slider-range-too-wide"
+        Slider(0.0, 1.0, 0.0).SetRange(-3e38, 3e38)
     Case "slider-step-negative"
         Slider(0.0, 1.0, 0.0).SetStep(-1.0)
     Case "max-length-negative"
@@ -71,7 +73,11 @@ Select name
     Case "scale-zero"
         Ui(Node("root")).SetScale(0.0)
     Case "command-with-a-space"
-        Console().Register("give item", "", Function(words: String[]) => "")
+        Console().Register("give item", "", Function(console: Console, words: String[]) => "")
+    Case "debug-row-two-kinds"
+        Local panel = DebugPanel()
+        panel.Watch("mode", "noclip")
+        panel.Switch("mode", True)
     Case "console-no-lines"
         Console().SetMaxLines(0)
     Case "strings-fall-back-to-themselves"

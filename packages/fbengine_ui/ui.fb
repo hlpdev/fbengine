@@ -22,14 +22,16 @@ End Enum
 /// A UI on the screen: a tree, its theme, and the widget the pointer's over, the one holding it,
 /// and the one with the focus. Update, once a frame after Flip, lays it out in the window, gives
 /// its widgets the input the Flip read, and styles each by its state; WantsPointer and
-/// WantsKeys say whether the game should leave the mouse and the keyboard to it, and Route turns
-/// a game's ActionSet off while a widget has the focus.
+/// WantsKeys say whether the game should leave the mouse and the keyboard to it, and Route blocks
+/// a game's ActionSet while a widget has the focus.
 ///
 /// The focus moves by Tab and Shift+Tab, in the tree's order, and by the arrows, and a gamepad's
 /// D-pad or left stick, to the nearest widget that way, once the focused widget doesn't use them
 /// itself (a list uses up and down, a slider left and right); held, a gamepad's moves it again
-/// after a moment, and on while it's held. A gamepad's SOUTH activates the focused widget, as
-/// Return and Space do; its EAST, and Escape, are Back, which a menu closes on.
+/// after a moment, and on while it's held. With nothing focused, Tab starts the focus, and the
+/// arrows and a gamepad do while it's navigable (SetNavigable), as a menu is. A gamepad's SOUTH
+/// activates the focused widget, as Return and Space do; its EAST, and Escape, are Back, which a
+/// menu closes on.
 Public Final Class Ui
     Field root: Node
     Field theme: Theme
@@ -48,6 +50,9 @@ Public Final Class Ui
     Field held: Float64[]
     Field back: Bool = False
     Field routed: ActionSet[] = []
+    // Whether it blocks its routed sets, while a widget has the focus.
+    Field blocking: Bool = False
+    Field navigable: Bool = False
     Field strings: Strings? = Null
     // Its Strings' stamp when its widgets were last laid out by them.
     Field stamp: Int = 0
@@ -85,19 +90,41 @@ Public Final Class Ui
     /// back, which closes it.
     @MainThread Public Method Back(): Bool => back
 
-    /// Turns `actions` off while one of its widgets has the focus, and on again after, so the keys
-    /// and gamepad buttons a menu takes don't move the player too; turned back on, what's held
-    /// from the menu reads as Down with no Hit.
+    /// Blocks `actions` while one of its widgets has the focus (ActionSet.Block), and unblocks
+    /// them after, so the keys and gamepad buttons a menu takes don't move the player too; when
+    /// they read again, what's held from the menu reads as Down with no Hit. Its block is apart
+    /// from SetEnabled, and from another Ui's.
     @MainThread Public Method Route(actions: ActionSet)
         For each In routed
             If RefEquals(each, actions) Then Return
         End For
         routed.Add(actions)
+        If blocking Then actions.Block()
     End Method
 
-    /// Stops turning `actions` off and on.
+    /// Stops blocking `actions`, taking back its own block if it has one.
     @MainThread Public Method Unroute(actions: ActionSet)
-        routed.RemoveAll(Function(each: ActionSet) => RefEquals(each, actions))
+        Local had = routed.RemoveAll(Function(each: ActionSet) => RefEquals(each, actions))
+        If had > 0 && blocking Then actions.Unblock()
+    End Method
+
+    /// Lets the arrows, a gamepad's D-pad, and its left stick start the focus, at the first
+    /// widget, while nothing has it, as a menu wants while it's open; off at first, so a HUD's
+    /// field doesn't take the player's movement. Tab starts it either way, and they move it either
+    /// way once something has it.
+    @MainThread Public Method SetNavigable(on: Bool)
+        navigable = on
+    End Method
+
+    /// Whether the arrows and a gamepad start the focus.
+    @MainThread Public Method Navigable(): Bool => navigable
+
+    // Its blocks go with it.
+    Method Destroy()
+        If !blocking Then Return
+        For each In routed
+            each.Unblock()
+        End For
     End Method
 
     /// Moves the focus to the next widget that can have it, in the tree's order, after the last
@@ -116,47 +143,48 @@ Public Final Class Ui
     End Method
 
     /// Moves the focus to the nearest widget that can have it `direction`'s way from the focused
-    /// one, by their boxes' middles, the ones off to the side farther; with nothing focused, to
-    /// the first in the tree's order. Nothing that way leaves it where it is.
+    /// one, by their boxes' middles: of those whose boxes are across from its own (beside it for
+    /// left and right, above or below it for up and down), the nearest that way; with none, the
+    /// nearest within 45 degrees of that way; with nothing focused, the first in the tree's order.
+    /// Nothing that way leaves it where it is.
     @MainThread Public Method MoveFocus(direction: Direction)
         Local own = focused
         If own == Null
             FocusNext()
             Return
         End If
-        Local from = own.Box().Center
+        Local box = own.Box()
+        Local from = box.Center
         Local order: Widget[] = []
         Focusables(root, order)
-        Local best: Widget? = Null
-        Local score = Inf
+        Local across: Widget? = Null
+        Local nearestAcross = Inf
+        Local coned: Widget? = Null
+        Local nearestConed = Inf
         For each In order
             If RefEquals(each, own) Then Continue
-            Local to = each.Box().Center
-            Local dx = to.x - from.x
-            Local dy = to.y - from.y
-            Local along: Float32 = 0.0
-            Local aside: Float32 = 0.0
-            Select direction
-                Case Direction.UP
-                    along = -dy
-                    aside = Abs(dx)
-                Case Direction.DOWN
-                    along = dy
-                    aside = Abs(dx)
-                Case Direction.LEFT
-                    along = -dx
-                    aside = Abs(dy)
-                Default
-                    along = dx
-                    aside = Abs(dy)
-            End Select
+            Local other = each.Box()
+            Local dx = other.Center.x - from.x
+            Local dy = other.Center.y - from.y
+            Local sideways = direction == Direction.LEFT || direction == Direction.RIGHT
+            Local along = sideways ? dx : dy
+            If direction == Direction.UP || direction == Direction.LEFT Then along = -along
+            Local aside = Abs(sideways ? dy : dx)
             If along <= 0.5 Then Continue
-            Local scored = along + aside * 2.0
-            If scored < score
-                score = scored
-                best = each
+            // Across: its box overlaps its own across the way it moves.
+            Local overlaps = other.X < box.X + box.Width && box.X < other.X + other.Width
+            If sideways Then overlaps = other.Y < box.Y + box.Height && box.Y < other.Y + other.Height
+            If overlaps && along < nearestAcross
+                nearestAcross = along
+                across = each
+            End If
+            Local distance = along * along + aside * aside
+            If aside <= along && distance < nearestConed
+                nearestConed = distance
+                coned = each
             End If
         End For
+        Local best = across ?? coned
         If best != Null Then Moved(best)
     End Method
 
@@ -267,9 +295,12 @@ Public Final Class Ui
 
         Restyle(root)
         root.Layout(bounds)
-        For each In routed
-            each.SetEnabled(!WantsKeys())
-        End For
+        If WantsKeys() != blocking
+            blocking = WantsKeys()
+            For each In routed
+                If blocking Then each.Block() Else each.Unblock()
+            End For
+        End If
     End Method
 
     // Focuses `widget` as the keys or a gamepad moved there, and shows it in the ScrollView it's
@@ -290,6 +321,8 @@ Public Final Class Ui
     // What a key or a gamepad's way that the focused widget didn't use does: Tab and the ways move
     // the focus, and Escape is back.
     @MainThread Method Navigate(key: Key)
+        Local way = key == Key.UP || key == Key.DOWN || key == Key.LEFT || key == Key.RIGHT
+        If way && focused == Null && !navigable Then Return
         Select key
             Case Key.TAB
                 FocusNext(KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT))
@@ -313,8 +346,11 @@ Public Final Class Ui
     @MainThread Method Pads()
         Local keys = [Key.UP, Key.DOWN, Key.LEFT, Key.RIGHT]
         For i = 0 To ways.Count - 1
+            Checked()
             Local way = ways[i]
             Local pressed = way.Hit()
+            // Pressed, again or not, it's held from now.
+            If pressed Then held[i] = 0.0
             If way.Down() && !pressed
                 // Held, it moves again after 0.4 seconds, then every 0.1.
                 Local before = held[i]
@@ -329,19 +365,34 @@ Public Final Class Ui
             Local own = focused
             If own == Null || !own.KeyTyped(keys[i]) Then Navigate(keys[i])
         End For
+        Checked()
         Local own = focused
         If accept.Hit() && own != Null Then own.Activate()
         If cancel.Hit() Then back = True
     End Method
 
+    // Takes the focus from a widget that can't have it now: disabled, hidden, or out of its tree,
+    // as a key it was given may have made it.
+    @MainThread Method Checked()
+        Local had = focused
+        If had != Null && (!had.Focusable() || !Showing(had, root)) Then Focus(Null)
+    End Method
+
     // The pointer's presses, moves, and releases this frame.
     @MainThread Method Pointer(point: Vec2, under: Widget?)
+        // A widget holding the pointer that's disabled, hidden, or out of the tree lets go, not
+        // over itself.
+        Local gone = pressed
+        If gone != Null && (!gone.EffectivelyEnabled() || !Showing(gone, root))
+            pressed = Null
+            gone.PointerUp(point, False)
+        End If
         If MouseHit(MouseButton.LEFT)
             // The widget under it, or the first it's in, that takes it.
             Local taking: Widget? = Null
             Local at = under
             While at != Null && taking == Null
-                If at.Enabled() && at.PointerDown(point) Then taking = at
+                If at.EffectivelyEnabled() && at.PointerDown(point) Then taking = at
                 at = WidgetAbove(at)
             End While
             pressed = taking
@@ -368,43 +419,38 @@ Public Final Class Ui
         If steps == 0 Then Return
         Local at = under
         While at != Null
-            If at.Enabled() && at.Wheel(steps) Then Return
+            If at.EffectivelyEnabled() && at.Wheel(steps) Then Return
             at = WidgetAbove(at)
         End While
     End Method
 
-    // The keys typed this frame to the widget with the focus, then what it didn't use: activating
-    // it, and moving the focus.
+    // The keys and text typed this frame, in the order the OS gave them, to the widget with the
+    // focus, then what it didn't use: activating it, and moving the focus. Each key pressed goes
+    // to it, and the OS's repeats of the editing keys.
     @MainThread Method Keys()
-        Local had = focused
-        If had != Null && (!had.Focusable() || !Showing(had, root)) Then Focus(Null)
-        // The frame's presses in the order the Flip read them, each to the focused widget, then
-        // activating it or moving the focus unless it used it; then the OS's repeats of the keys
-        // held, which only the widget gets.
         Local editing = EditingKeys()
-        For key In KeysHit()
-            If !editing.Contains(key) Then Continue
+        For stroke In Keystrokes()
+            Checked()
             Local own = focused
-            If own != Null && own.KeyTyped(key) Then Continue
-            If own != Null && Activates(key)
-                own.Activate()
-            Else
-                Navigate(key)
-            End If
+            Select stroke.Kind
+                Case KeystrokeKind.PRESS
+                    If own != Null && own.KeyTyped(stroke.Key) Then Continue
+                    If own != Null && Activates(stroke.Key)
+                        own.Activate()
+                    Else
+                        Navigate(stroke.Key)
+                    End If
+                Case KeystrokeKind.REPEAT
+                    If own != Null && editing.Contains(stroke.Key) Then own.KeyTyped(stroke.Key)
+                Default
+                    If own != Null Then own.TextTyped(stroke.Text)
+            End Select
         End For
-        Local own = focused
-        If own == Null Then Return
-        For key In editing
-            For time = 1 To KeyTyped(key) - KeyHits(key)
-                own.KeyTyped(key)
-            End For
-        End For
-        Local text = TextInput()
-        If text != "" Then own.TextTyped(text)
     End Method
 
     // Starts the window's text input while the focused widget takes text, and stops it after.
     @MainThread Method Typing()
+        Checked()
         Local own = focused
         Local wants = own != Null && own.TakesText()
         If wants && own != Null
@@ -439,9 +485,9 @@ Public Final Class Ui
         If holding != Null && RefEquals(holding, widget) && Within(hovered, widget)
             Return WidgetState.PRESSED
         End If
-        If Within(hovered, widget) Then Return WidgetState.HOVERED
         Local own = focused
         If own != Null && RefEquals(own, widget) Then Return WidgetState.FOCUSED
+        If Within(hovered, widget) Then Return WidgetState.HOVERED
         Return WidgetState.NORMAL
     End Method
 
@@ -454,7 +500,7 @@ Public Final Class Ui
     End Method
 End Class
 
-// The keys a focused widget is given each time they're typed, the OS's repeats too: editing's,
+// The keys a focused widget is given the OS's repeats of, as it is every key pressed: editing's,
 // moving's, and activating's.
 Function EditingKeys(): Key[]
     Return [Key.BACKSPACE, Key.DELETE, Key.LEFT, Key.RIGHT, Key.UP, Key.DOWN, Key.HOME, Key.END,
