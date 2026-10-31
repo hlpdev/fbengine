@@ -1,0 +1,42 @@
+// Input's cases that need a process of their own, which ctest runs by name and checks against
+// what they print: what panics, and what's set before the video starts.
+
+Import std.core
+Import std.os
+Import fbengine
+
+Function Main() Throws GraphicsError
+    Local arguments = Process.Arguments()
+    Local name = arguments.Count > 0 ? arguments[0] : ""
+    Select name
+        Case "key-out-of-range"
+            Window.SetHeadless(True)
+            Try Graphics(320, 200)
+            Try Simulate.KeyDown(9999 As Key)
+        Case "button-out-of-range"
+            Window.SetHeadless(True)
+            Try Graphics(320, 200)
+            Try Simulate.MouseDown(33 As MouseButton)
+        Case "draws-composition"
+            Print("draws {DrawsComposition()}")
+            SetDrawsComposition(True)
+            Print("draws {DrawsComposition()}")
+            Window.SetHeadless(True)
+            Try Graphics(320, 200)
+            // Saying it again is nothing; changing it now is a mistake.
+            SetDrawsComposition(True)
+            Print("draws {DrawsComposition()}")
+            SetDrawsComposition(False)
+        Case "key-name-before-video"
+            Window.SetHeadless(True)
+            Local before = KeyName(Key.A)
+            Try Graphics(320, 200)
+            Print("{before} {KeyName(Key.A)}")
+            // KeyName started the video, which knows the layout, so it's too late for this.
+            Window.SetHeadless(False)
+        Default
+            Panic("no case {name}")
+    End Select
+End Function
+
+Try Main()

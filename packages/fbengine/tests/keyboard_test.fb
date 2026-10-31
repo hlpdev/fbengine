@@ -223,10 +223,72 @@ Function AKeyOutsideSDLsIsNeverDown() Throws GraphicsError
     Window.SetHeadless(True)
     Try Graphics(320, 200)
     Defer EndGraphics()
+    // Simulate panics for one; tests/input's key-out-of-range checks it.
     Local beyond = 9999 As Key
     Expect(!KeyDown(beyond))
+    Expect(!KeyHit(beyond))
     Expect(KeyName(beyond) == "")
-    Expect(ExpectThrows<GraphicsError>(Simulate.KeyDown(beyond)) != Null)
+End Function
+
+@Test
+Function KeysHitKeepsAFramesFirst64Presses() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    // A to Insert, 70 keys.
+    For code = 4 To 73
+        Try Simulate.PressKey(code As Key)
+    End For
+    Flip()
+    Local hit = KeysHit()
+    Expect(hit.Count == 64)
+    Expect(hit[0] == Key.A)
+    Expect(hit[63] == 67 As Key)
+    // Each key's own count has every press.
+    Expect(KeyHit(Key.INSERT))
+End Function
+
+@Test
+Function TheTextsAreaIsWhereItWasSet() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local first = TextInputArea()
+    Expect(first.Width == 0)
+    SetTextInputArea(10, 20, 200, 16, 4)
+    Local area = TextInputArea()
+    Expect(area.X == 10)
+    Expect(area.Y == 20)
+    Expect(area.Width == 200)
+    Expect(area.Height == 16)
+    Expect(area.Cursor == 4)
+End Function
+
+// The OS draws the composition unless the game says it does, before the video starts, which
+// tests/input's draws-composition checks.
+@Test
+Function TheOSDrawsTheCompositionUnlessTheGameSaysItDoes()
+    Expect(!DrawsComposition())
+    // Saying what's so already is nothing, even once the video's started.
+    SetDrawsComposition(False)
+    Expect(!DrawsComposition())
+End Function
+
+@Test
+Function ClosingTheWindowDropsTheComposition() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    StartTextInput()
+    Try Simulate.Composition("ab", 2, 0)
+    Flip()
+    Expect(TextComposition().Text == "ab")
+    EndGraphics()
+    Flip()
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Flip()
+    Expect(TextComposition().Text == "")
+    Expect(TextComposition().Start == -1)
 End Function
 
 // No Flip reads a frame's presses twice, though the Flips between read nothing.

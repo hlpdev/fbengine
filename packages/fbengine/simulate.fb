@@ -42,13 +42,16 @@ Public Class Simulate
         Try Push(FBE_WINDOW_SIMULATE_RESTORE)
     End Method
 
-    /// `key` going down, or held down for the OS's repeat when `repeat` is True.
+    /// `key` going down, or held down for the OS's repeat when `repeat` is True. Panics for a key
+    /// SDL has none of.
     @MainThread Public Static Method KeyDown(key: Key, repeat: Bool = False) Throws GraphicsError
+        CheckKey("KeyDown", key)
         If !fbe_input_simulate_key(key As Int32, True, repeat) Then Throw GraphicsError(LastError())
     End Method
 
     /// `key` going up.
     @MainThread Public Static Method KeyUp(key: Key) Throws GraphicsError
+        CheckKey("KeyUp", key)
         If !fbe_input_simulate_key(key As Int32, False, False) Then Throw GraphicsError(LastError())
     End Method
 
@@ -84,8 +87,10 @@ Public Class Simulate
     End Method
 
     /// `button` going down where the mouse is, the `clicks`th in a row: 2 for a double click.
+    /// Panics for a button that isn't 1 to 32.
     @MainThread Public Static Method MouseDown(button: MouseButton,
                                                clicks: Int32 = 1) Throws GraphicsError
+        CheckButton("MouseDown", button)
         If !fbe_input_simulate_mouse_button(button As Int32, True, clicks)
             Throw GraphicsError(LastError())
         End If
@@ -93,6 +98,7 @@ Public Class Simulate
 
     /// `button` going up.
     @MainThread Public Static Method MouseUp(button: MouseButton) Throws GraphicsError
+        CheckButton("MouseUp", button)
         If !fbe_input_simulate_mouse_button(button As Int32, False, 1)
             Throw GraphicsError(LastError())
         End If
@@ -127,6 +133,19 @@ Public Class Simulate
         Local id = fbe_input_simulate_joystick(name, type As Int32, axes, buttons, hats)
         If id == 0 Then Throw InputError(LastError())
         Return VirtualJoystick(id)
+    End Method
+
+    // A key out of SDL's range is a mistake, not something a game handles.
+    Static Method CheckKey(call: String, key: Key)
+        Local code = key As Int32
+        If code <= 0 || code >= 512 Then Panic("Simulate.{call}({code}): SDL has no such key")
+    End Method
+
+    Static Method CheckButton(call: String, button: MouseButton)
+        Local number = button As Int32
+        If number < 1 || number > 32
+            Panic("Simulate.{call}({number}): a mouse's buttons are 1 to 32")
+        End If
     End Method
 
     @MainThread Static Method Push(event: Int32) Throws GraphicsError

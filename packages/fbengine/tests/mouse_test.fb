@@ -223,9 +223,9 @@ Function AButtonOutsideTheMousesIsNeverDown() Throws GraphicsError
     Window.SetHeadless(True)
     Try Graphics(320, 200)
     Defer EndGraphics()
+    // Simulate panics for one; tests/input's button-out-of-range checks it.
     Local beyond = 33 As MouseButton
     Expect(!MouseDown(beyond))
     Expect(!MouseHit(beyond))
-    Expect(ExpectThrows<GraphicsError>(Simulate.MouseDown(beyond)) != Null)
-    Expect(ExpectThrows<GraphicsError>(Simulate.MouseDown(0 As MouseButton)) != Null)
+    Expect(!MouseDown(0 As MouseButton))
 End Function

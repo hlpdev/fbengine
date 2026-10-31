@@ -33,8 +33,26 @@ FBE_API int32_t fbe_input_key_hit_at(int32_t index);
 // keys held stay held.
 FBE_API void fbe_input_flush_keys(void);
 // The key's name on the keyboard's layout ("Q" for the key left of W on an AZERTY one), or its
-// scancode's when the layout has none; "" for none.
+// scancode's when the layout has none; "" for none. It starts SDL's video, which knows the
+// layout, if nothing has.
 FBE_API const char* fbe_input_key_name(int32_t key);
+
+// Where the text being typed is in the window, and its cursor, for the IME's windows.
+// C has no `using`, so it's a typedef.
+// NOLINTNEXTLINE(modernize-use-using)
+typedef struct fbe_text_area_t {
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+    int32_t cursor;
+} fbe_text_area_t;
+
+// Whether the game draws the IME's composition itself, at its text's cursor, rather than the OS
+// drawing it over the window, which is what makes fbe_input_composition say it on Windows and
+// X11. It's set before the first window or display; false if it's too late.
+FBE_API bool fbe_input_set_draws_composition(bool draws);
+FBE_API bool fbe_input_draws_composition(void);
 
 // Starts the window's text input, which the IME's composition joins; false without a window.
 FBE_API bool fbe_input_start_text(void);
@@ -45,10 +63,13 @@ FBE_API bool fbe_input_text_active(void);
 // area's left, so the IME's windows go beside it; false without a window.
 FBE_API bool fbe_input_set_text_area(int32_t x, int32_t y, int32_t width, int32_t height,
                                      int32_t cursor);
+// Where fbe_input_set_text_area last put it, all 0 at first; false without a window.
+FBE_API bool fbe_input_text_area(fbe_text_area_t* area);
 // The text the last fbe_frame_flip read typed, in UTF-8, "" for none.
 FBE_API const char* fbe_input_text(void);
 // The IME's composition, the text not yet typed, as the last fbe_frame_flip read it, "" for
-// none; its cursor and the length of its selection, in characters, -1 when the IME doesn't say.
+// none, and always "" unless fbe_input_set_draws_composition said the game draws it; its cursor and
+// the length of its selection, in characters, -1 when the IME doesn't say.
 FBE_API const char* fbe_input_composition(void);
 FBE_API int32_t fbe_input_composition_start(void);
 FBE_API int32_t fbe_input_composition_length(void);
