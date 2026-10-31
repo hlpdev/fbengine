@@ -166,7 +166,14 @@ if(FBENGINE_FB_TESTS)
       "fixed-negative|panic: Sizing[.]Fixed: a length is 0 or more, not -1"
       "fill-zero|panic: Sizing[.]Fill: a weight is over 0, not 0"
       "fraction-past-one|panic: Sizing[.]Fraction: a fraction is 0 to 1, not 1[.]5"
-      "style-empty-name|panic: Theme[.]SetStyle: \"button[.]\" isn't a style's name")
+      "style-empty-name|panic: Theme[.]SetFields: \"button[.]\" isn't a style's name"
+      "set-width-unchecked|panic: Node[.]SetWidth: a fill's weight is over 0, not 0"
+      "min-size-nan|panic: Node[.]SetMinSize: a least is 0 or more, and finite, not NaN"
+      "padding-negative|panic: Node[.]SetPadding: padding is 0 or more, and finite, not -1"
+      "margin-infinite|panic: Node[.]SetMargin: a margin is finite, not Inf"
+      "anchors-backward|panic: Node[.]SetAnchors: a Max is at its Min or after"
+      "style-negative-border|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not -1"
+      "style-nan-font-size|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not NaN")
   foreach(case IN LISTS fbengine_ui_cases)
     string(REPLACE "|" ";" case "${case}")
     list(GET case 0 name)

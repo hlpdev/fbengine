@@ -2,6 +2,7 @@
 // against what they print: what panics.
 
 Import std.core
+Import std.math
 Import std.os
 Import fbengine_ui
 
@@ -29,6 +30,24 @@ Select name
         Sizing.Fraction(1.5)
     Case "style-empty-name"
         Theme().SetStyle("button.", Style.Plain())
+    Case "set-width-unchecked"
+        Node("a").SetWidth(Sizing(SizeMode.FILL, 0.0))
+    Case "min-size-nan"
+        Node("a").SetMinSize(NaN, 0.0)
+    Case "padding-negative"
+        Node("a").SetPadding(Insets.All(-1.0))
+    Case "margin-infinite"
+        Node("a").SetMargin(Insets(0.0, Inf, 0.0, 0.0))
+    Case "anchors-backward"
+        Node("a").SetAnchors(Anchors(1.0, 0.0, 0.0, 1.0))
+    Case "style-negative-border"
+        Local style = Style.Plain()
+        style.BorderWidth = -1.0
+        Theme().SetStyle("x", style)
+    Case "style-nan-font-size"
+        Local style = Style.Plain()
+        style.FontSize = NaN
+        Theme().SetStyle("x", style)
     Default
         Panic("no case {name}")
 End Select
