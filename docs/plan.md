@@ -251,7 +251,12 @@ outside a lane's own area goes through the coordinator.
 
 **FutureBlitz**: what a lane finds in the language, fb, or std goes to the coordinator with a
 program that shows it, and is fixed there, in a FutureBlitz release, never worked around here.
-The package build step E8 needs is FutureBlitz work once the user settles its design.
+A FutureBlitz lane builds what the engine's lanes found, released as FutureBlitz 1.1
+(the user, 2026-10-31): dependencies with both a path and a version (so fbengine_audio and
+fbengine_physics depend on fbengine and still publish), a built-in `Object` (for `SetData` and
+`Data<T>`), and package tests seeing Package members (so test aids stay Package). The package
+build step E8 needs joins it once the user settles its design. Every change lands with its docs,
+the website's included.
 
 **Each step**: the lane builds it, `tools/verify.py` passes, it pushes and reports; the
 coordinator reviews it (one review per step, about three reviewers and a skeptic each, as M6's),
