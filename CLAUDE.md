@@ -32,5 +32,7 @@ migration.md); its decisions go in FutureBlitz's docs/decisions.md.
 - examples/: programs on the packages, which ctest runs.
 
 ## Current step
-E0, setup: the hello package builds and its tests pass on Windows; next, the GitHub repo, CI
-building each target's DLLs into the packages' archives, and trusted publishing.
+E0, setup: the hello package, and CI (.github/workflows/ci.yml) building each target's DLLs, Linux's
+on glibc 2.28, and running the package's tests and the examples on fb 1.0.0's release on all five
+targets, green (2026-10-31). Next: a publish workflow, trusted publishing to the staging registry,
+and `fb add fbengine` from it on Windows, Linux, and macOS; then headless Vulkan in CI.
