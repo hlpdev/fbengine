@@ -209,6 +209,6 @@ struct model_options_t {
 /// names by relative paths read from `files`. A file that isn't a glTF, or is broken, or names
 /// what isn't there, fails, as INVALID_DATA, or as reading what it names fails.
 result_t<model_t> decode_model(const vfs::path_t& path, std::span<const std::uint8_t> bytes,
-                               const vfs::vfs_t& files, const model_options_t& options);
+                               const vfs::view_t& files, const model_options_t& options);
 
 } // namespace fbe::assets

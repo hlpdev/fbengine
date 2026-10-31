@@ -53,12 +53,13 @@ typedef struct fbe_model_info_t {
 } fbe_model_info_t;
 
 // Loads the file at `path` as `kind` now, on this thread and the workers, an image's color linear
-// if `linear`, and gives the load, done, which can have failed; 0 if `path` isn't a res:// path,
-// or `kind` isn't a kind.
-FBE_API uint64_t fbe_assets_load(int32_t kind, const char* path, bool linear);
+// if `linear`, and its sidecar too if `settings`, and gives the load, done, which can have
+// failed; 0 if `path` isn't a res:// path, or `kind` isn't a kind. It reads the mounts there are
+// as it's asked for, whatever's mounted while it runs.
+FBE_API uint64_t fbe_assets_load(int32_t kind, const char* path, bool linear, bool settings);
 // Starts loading the file at `path` on the workers, and gives the load, which the hand-over
 // after it's done gives the FB side as its ticket; 0 as fbe_assets_load gives it.
-FBE_API uint64_t fbe_assets_load_async(int32_t kind, const char* path, bool linear);
+FBE_API uint64_t fbe_assets_load_async(int32_t kind, const char* path, bool linear, bool settings);
 // Whether the load is done: at once for fbe_assets_load's, and at its hand-over for the rest.
 FBE_API bool fbe_assets_done(uint64_t load);
 // How much of the load is done, from 0 to 1; -1 for a load that's freed.
@@ -74,8 +75,13 @@ FBE_API const char* fbe_assets_path(uint64_t load);
 // Whether the load's file has import settings: a sidecar beside it, its path with ".toml" after
 // it, which the load read with it.
 FBE_API bool fbe_assets_has_settings(uint64_t load);
-// The text of the load's sidecar, TOML, as UTF-8 with no NULs; "" for a load without one.
+// The text of the load's sidecar, TOML, as UTF-8 with no NULs; "" for a load without one, or
+// whose sidecar can't be read or isn't TOML's text.
 FBE_API const char* fbe_assets_settings(uint64_t load);
+// How the load's sidecar couldn't be read, or wasn't TOML's text, FBE_ASSETS_NOT_FOUND and the
+// rest, and why; -1 and "" for one that was, and a load without one.
+FBE_API int32_t fbe_assets_settings_failure(uint64_t load);
+FBE_API const char* fbe_assets_settings_error(uint64_t load);
 // Waits for a load on the workers to be done, and runs its hand-over, as fbe_frame_flip does, so
 // it's done when this returns; false for a load that's freed.
 FBE_API bool fbe_assets_wait(uint64_t load);

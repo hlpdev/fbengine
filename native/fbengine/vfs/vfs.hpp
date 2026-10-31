@@ -119,6 +119,9 @@ result_t<std::shared_ptr<source_t>> pak(bytes_t bytes);
 /// their folded names, the last mount's name for one two have.
 class view_t {
 public:
+    /// No mounts.
+    view_t() = default;
+
     /// The file's bytes. One that no mount has is NOT_FOUND, and a folder, res:// too,
     /// IS_A_FOLDER.
     [[nodiscard]] result_t<bytes_t> read(const path_t& path) const;
@@ -138,7 +141,7 @@ private:
 
     explicit view_t(std::shared_ptr<const mounts_t> mounts) : m_mounts(std::move(mounts)) {}
 
-    std::shared_ptr<const mounts_t> m_mounts;
+    std::shared_ptr<const mounts_t> m_mounts = std::make_shared<const mounts_t>();
 };
 
 /// Sources mounted at places, a later mount over an earlier one, read as view_t reads them. A read

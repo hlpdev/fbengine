@@ -375,12 +375,16 @@ add_executable(fbengine_assets_tests assets/images_tests.cpp assets/models_tests
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/image.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/gltf.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/assets/stb.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/loads.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")
 target_include_directories(fbengine_assets_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+# Hostile files the reviews found, which mustn't decode.
+target_compile_definitions(fbengine_assets_tests PRIVATE
+                           FBENGINE_ASSETS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/assets/fixtures")
 # stb_image_write's code, C as it's written, without fbengine's C++ warnings.
 add_library(fbengine_stb_write STATIC assets/stb_write.c)
 target_link_libraries(fbengine_stb_write PUBLIC fbengine_stb)

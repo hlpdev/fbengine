@@ -1,12 +1,16 @@
 // Decoding images: stb_image's PNGs and JPEGs to RGBA8 (or RGBA16, for a 16-bit PNG), and
-// libktx's KTX2s as they are, or transcoded from Basis Universal. stb_image keeps its failures per
-// thread, so decoding on several at once is safe, and so is libktx's, once its tables are made.
+// libktx's KTX2s as they are, or transcoded from UASTC, Basis Universal's. stb_image keeps its
+// failures per thread, so decoding on several at once is safe, and so is libktx's, once its tables
+// are made. Their sizes are read from their headers first, and libktx's trust in a KTX2's index
+// isn't given until it's checked; BasisLZ's, ETC1S's, transcoder breaks on files it's given, so
+// those aren't loaded at all.
 
 #include "assets/image.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <climits>
 #include <cstring>
 #include <format>
@@ -39,15 +43,21 @@ error_t invalid(std::string_view name, std::string_view why) {
     return { .failure = failure_t::INVALID_DATA, .message = std::format("{} {}", name, why) };
 }
 
-// An image of one level, layer, and face, `bytes_a_texel` a texel.
-image_t flat(std::uint32_t format, std::uint32_t width, std::uint32_t height,
-             std::size_t bytes_a_texel, const void* texels) {
-    const std::size_t size = std::size_t{ width } * height * bytes_a_texel;
-    image_t image{ .format = format, .width = width, .height = height };
-    image.levels.push_back({ .width = width, .height = height, .offset = 0, .size = size });
-    image.texels.resize(size);
-    std::memcpy(image.texels.data(), texels, size);
-    return image;
+std::uint32_t u32(std::span<const std::uint8_t> bytes, std::size_t at) {
+    std::uint32_t value = 0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        value |= std::uint32_t{ bytes[at + i] } << (8U * i);
+    }
+    return value;
+}
+
+std::uint64_t u64(std::span<const std::uint8_t> bytes, std::size_t at) {
+    return std::uint64_t{ u32(bytes, at) } | (std::uint64_t{ u32(bytes, at + 4) } << 32U);
+}
+
+// Whether `length` bytes from `offset` are within `size`.
+bool within(std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
+    return offset <= size && length <= size - offset;
 }
 
 result_t<image_t> decode_stb(std::span<const std::uint8_t> bytes, const image_options_t& options,
@@ -60,24 +70,39 @@ result_t<image_t> decode_stb(std::span<const std::uint8_t> bytes, const image_op
     int width = 0;
     int height = 0;
     int channels = 0;
-    const bool wide = stbi_is_16_bit_from_memory(data, size) != 0;
-    // stb_image's texels are malloc's, which free lets go.
-    const std::unique_ptr<void, decltype(&stbi_image_free)> texels(
-        wide ? static_cast<void*>(stbi_load_16_from_memory(data, size, &width, &height, &channels,
-                                                           static_cast<int>(rgba)))
-             : static_cast<void*>(stbi_load_from_memory(data, size, &width, &height, &channels,
-                                                        static_cast<int>(rgba))),
-        &stbi_image_free);
-    if (texels == nullptr) {
+    // Its header first, so what it says it is is never more than an image can be.
+    if (stbi_info_from_memory(data, size, &width, &height, &channels) == 0) {
         return std::unexpected(
             invalid(name, std::format("won't decode: {}", stbi_failure_reason())));
     }
+    const auto past = [](int side) { return std::cmp_greater(side, most_side); };
+    if (past(width) || past(height)) {
+        return std::unexpected(invalid(name, std::format("is {} by {}, past the {} an image can be",
+                                                         width, height, most_side)));
+    }
+    const bool wide = stbi_is_16_bit_from_memory(data, size) != 0;
+    void* decoded = wide ? static_cast<void*>(stbi_load_16_from_memory(
+                               data, size, &width, &height, &channels, static_cast<int>(rgba)))
+                         : static_cast<void*>(stbi_load_from_memory(
+                               data, size, &width, &height, &channels, static_cast<int>(rgba)));
+    if (decoded == nullptr) {
+        return std::unexpected(
+            invalid(name, std::format("won't decode: {}", stbi_failure_reason())));
+    }
+    // stb_image's texels are malloc's, which its free lets go, kept as they are.
+    const std::shared_ptr<const void> texels(
+        decoded, [](const void* made) { stbi_image_free(const_cast<void*>(made)); });
     std::uint32_t format = formats::rgba16;
     if (!wide) {
         format = options.srgb ? formats::rgba8_srgb : formats::rgba8;
     }
-    return flat(format, static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height),
-                wide ? rgba * 2 : rgba, texels.get());
+    const auto across = static_cast<std::uint32_t>(width);
+    const auto high = static_cast<std::uint32_t>(height);
+    const std::size_t length = std::size_t{ across } * high * (wide ? rgba * 2 : rgba);
+    image_t image{ .format = format, .width = across, .height = high };
+    image.levels.push_back({ .width = across, .height = high, .offset = 0, .size = length });
+    image.texels = texels_t(texels, std::span(static_cast<const std::uint8_t*>(decoded), length));
+    return image;
 }
 
 ktx_transcode_fmt_e transcode_format(transcode_t transcode) {
@@ -110,17 +135,132 @@ KTX_error_code transcode(ktxTexture2* texture, ktx_transcode_fmt_e format) {
     return code;
 }
 
+// What a KTX2's header says, checked before libktx reads it, which trusts it: its sizes within
+// an image's, its mips no more than its sizes, its supercompression none or Zstd, and each level,
+// and its other parts, within the file.
+result_t<void> check_ktx2(std::span<const std::uint8_t> bytes, std::string_view name) {
+    constexpr std::size_t header = 80;
+    constexpr std::size_t level_index = 24;
+    constexpr std::uint32_t basis_lz = 1;
+    constexpr std::uint32_t zstd = 2;
+    if (bytes.size() < header) {
+        return std::unexpected(invalid(name, "is cut short"));
+    }
+    const std::uint32_t width = u32(bytes, 20);
+    const std::uint32_t height = u32(bytes, 24);
+    const std::uint32_t depth = u32(bytes, 28);
+    const std::uint32_t layers = u32(bytes, 32);
+    const std::uint32_t faces = u32(bytes, 36);
+    const std::uint32_t levels = u32(bytes, 40);
+    const std::uint32_t scheme = u32(bytes, 44);
+    if (scheme == basis_lz) {
+        return std::unexpected(invalid(
+            name, "is ETC1S, in BasisLZ, which the engine doesn't load: cook it as UASTC instead"));
+    }
+    if (scheme != 0 && scheme != zstd) {
+        return std::unexpected(invalid(
+            name, "is supercompressed as the engine doesn't load, by neither Zstd nor nothing"));
+    }
+    if (width == 0 || width > most_side || height > most_side || depth > most_side ||
+        layers > most_layers || (faces != 1 && faces != 6)) {
+        return std::unexpected(invalid(
+            name,
+            std::format("is {} by {} by {}, of {} layers and {} faces, which an image can't be",
+                        width, height, depth, layers, faces)));
+    }
+    // No more than an image of most_side by most_side texels, whatever its shape.
+    const std::uint64_t texels = std::uint64_t{ width } * std::max(height, 1U) *
+                                 std::max(depth, 1U) * std::max(layers, 1U) * faces;
+    if (texels > std::uint64_t{ most_side } * most_side) {
+        return std::unexpected(
+            invalid(name, std::format("has {} texels, more than an image of {} by {}", texels,
+                                      most_side, most_side)));
+    }
+    if (std::cmp_greater(levels, std::bit_width(std::max({ width, height, depth })))) {
+        return std::unexpected(
+            invalid(name, std::format("has {} mip levels, more than its sizes have", levels)));
+    }
+    const std::uint64_t size = bytes.size();
+    const std::size_t count = std::max(levels, 1U);
+    if (!within(header, std::uint64_t{ count } * level_index, size)) {
+        return std::unexpected(invalid(name, "is cut short"));
+    }
+    if (!within(u32(bytes, 48), u32(bytes, 52), size) ||
+        !within(u32(bytes, 56), u32(bytes, 60), size) ||
+        !within(u64(bytes, 64), u64(bytes, 72), size)) {
+        return std::unexpected(invalid(name, "has a part past its end"));
+    }
+    for (std::size_t level = 0; level < count; ++level) {
+        const std::size_t at = header + (level * level_index);
+        if (!within(u64(bytes, at), u64(bytes, at + 8), size)) {
+            return std::unexpected(invalid(name, std::format("has level {} past its end", level)));
+        }
+    }
+    return {};
+}
+
+// A stream over bytes in memory for libktx to read, which, unlike its own, allocates nothing, so
+// nothing's left when it fails. It reads from data.custom_ptr, and is at readpos.
+ktxStream reader_of(std::span<const std::uint8_t> bytes) {
+    ktxStream stream{ .type = eStreamTypeCustom };
+    stream.read = [](ktxStream* self, void* into, ktx_size_t count) {
+        const auto at = static_cast<std::size_t>(self->readpos);
+        if (count > self->data.custom_ptr.size - at) {
+            return KTX_FILE_UNEXPECTED_EOF;
+        }
+        std::memcpy(into, static_cast<const std::uint8_t*>(self->data.custom_ptr.address) + at,
+                    count);
+        self->readpos += static_cast<ktx_off_t>(count);
+        return KTX_SUCCESS;
+    };
+    stream.skip = [](ktxStream* self, ktx_size_t count) {
+        if (count > self->data.custom_ptr.size - static_cast<std::size_t>(self->readpos)) {
+            return KTX_FILE_UNEXPECTED_EOF;
+        }
+        self->readpos += static_cast<ktx_off_t>(count);
+        return KTX_SUCCESS;
+    };
+    stream.write = [](ktxStream* /*self*/, const void* /*from*/, ktx_size_t /*size*/,
+                      ktx_size_t /*count*/) { return KTX_INVALID_OPERATION; };
+    stream.getpos = [](ktxStream* self, ktx_off_t* const at) {
+        *at = self->readpos;
+        return KTX_SUCCESS;
+    };
+    stream.setpos = [](ktxStream* self, ktx_off_t at) {
+        if (at < 0 || static_cast<std::size_t>(at) > self->data.custom_ptr.size) {
+            return KTX_INVALID_OPERATION;
+        }
+        self->readpos = at;
+        return KTX_SUCCESS;
+    };
+    stream.getsize = [](ktxStream* self, ktx_size_t* const size) {
+        *size = self->data.custom_ptr.size;
+        return KTX_SUCCESS;
+    };
+    stream.destruct = [](ktxStream* /*self*/) {};
+    // libktx only reads through it.
+    stream.data.custom_ptr.address = const_cast<std::uint8_t*>(bytes.data());
+    stream.data.custom_ptr.size = bytes.size();
+    stream.readpos = 0;
+    stream.closeOnDestruct = KTX_FALSE;
+    return stream;
+}
+
 result_t<image_t> decode_ktx2(std::span<const std::uint8_t> bytes, const image_options_t& options,
                               std::string_view name) {
+    if (result_t<void> checked = check_ktx2(bytes, name); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    ktxStream stream = reader_of(bytes);
     ktxTexture2* loaded = nullptr;
-    KTX_error_code code = ktxTexture2_CreateFromMemory(
-        bytes.data(), bytes.size(), KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &loaded);
+    KTX_error_code code =
+        ktxTexture2_CreateFromStream(&stream, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &loaded);
     if (code != KTX_SUCCESS) {
         return std::unexpected(
             invalid(name, std::format("won't decode: {}", ktxErrorString(code))));
     }
-    const std::unique_ptr<ktxTexture2, decltype(&ktxTexture2_Destroy)> texture(
-        loaded, &ktxTexture2_Destroy);
+    // The texture is kept as the image's texels, which are its.
+    const std::shared_ptr<ktxTexture2> texture(loaded, &ktxTexture2_Destroy);
     if (ktxTexture2_NeedsTranscoding(texture.get())) {
         code = transcode(texture.get(), transcode_format(options.transcode));
         if (code != KTX_SUCCESS) {
@@ -155,7 +295,7 @@ result_t<image_t> decode_ktx2(std::span<const std::uint8_t> bytes, const image_o
             .size = ktxTexture_GetImageSize(base, level),
         });
     }
-    image.texels.assign(texture->pData, texture->pData + texture->dataSize);
+    image.texels = texels_t(texture, std::span(texture->pData, texture->dataSize));
     return image;
 }
 

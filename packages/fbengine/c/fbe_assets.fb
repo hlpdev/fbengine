@@ -35,8 +35,8 @@ End Struct
 End Struct
 
 Public Extern "C" Lib "fbengine_native"
-    Function fbe_assets_load(kind: Int32, path: CString, linear: Bool): UInt64
-    Function fbe_assets_load_async(kind: Int32, path: CString, linear: Bool): UInt64
+    Function fbe_assets_load(kind: Int32, path: CString, linear: Bool, settings: Bool): UInt64
+    Function fbe_assets_load_async(kind: Int32, path: CString, linear: Bool, settings: Bool): UInt64
     Function fbe_assets_done(load: UInt64): Bool
     Function fbe_assets_progress(load: UInt64): Float32
     Function fbe_assets_failed(load: UInt64): Bool
@@ -45,6 +45,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_assets_path(load: UInt64): CString
     Function fbe_assets_has_settings(load: UInt64): Bool
     Function fbe_assets_settings(load: UInt64): CString
+    Function fbe_assets_settings_failure(load: UInt64): Int32
+    Function fbe_assets_settings_error(load: UInt64): CString
     Function fbe_assets_wait(load: UInt64): Bool
     Function fbe_assets_free(load: UInt64): Bool
     Function fbe_assets_count(): Int64

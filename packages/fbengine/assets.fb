@@ -264,7 +264,7 @@ Public Final Class Assets
             // It's loading on the workers still, and is finished here, now.
             fbe_assets_wait(cached.Load)
         ElseIf cached == Null || cached.Made == Null
-            Local load = fbe_assets_load(T.LoadKind() As Int32, path, False)
+            Local load = fbe_assets_load(T.LoadKind() As Int32, path, False, True)
             If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
             cached = Kept<T>(key, load)
         End If
@@ -283,7 +283,7 @@ Public Final Class Assets
         Local key = Try Normalize(path)
         Local cached = CacheOf<T>().Entries.Get(key)
         If cached == Null || (cached.Load == 0 && cached.Made == Null)
-            Local load = fbe_assets_load_async(T.LoadKind() As Int32, path, False)
+            Local load = fbe_assets_load_async(T.LoadKind() As Int32, path, False, True)
             If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
             cached = Kept<T>(key, load)
         End If
@@ -418,7 +418,7 @@ Public Final Class Assets
     /// when it begins, whatever's mounted while it waits.
     @MainThread
     Public Static Async Method ReadBytesAsync(path: String): UInt8[] Throws IOError
-        Local load = fbe_assets_load_async(AssetKind.BYTES As Int32, path, False)
+        Local load = fbe_assets_load_async(AssetKind.BYTES As Int32, path, False, False)
         If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
         Await Jobs.Finished(load)
         Local held = AssetLoad(load)
@@ -433,20 +433,7 @@ Public Final Class Assets
         Unsafe
             message = fbe_assets_error(load).ToString()
         End Unsafe
-        Local kind = IOErrorKind.OTHER
-        Select fbe_assets_failure(load)
-            Case FBE_ASSETS_NOT_FOUND
-                kind = IOErrorKind.NOT_FOUND
-            Case FBE_ASSETS_IS_A_FOLDER
-                kind = IOErrorKind.IS_A_DIRECTORY
-            Case FBE_ASSETS_NOT_A_FOLDER
-                kind = IOErrorKind.NOT_A_DIRECTORY
-            Case FBE_ASSETS_INVALID_PATH
-                kind = IOErrorKind.INVALID_PATH
-            Case FBE_ASSETS_INVALID_DATA
-                kind = IOErrorKind.INVALID_DATA
-        End Select
-        Return IOError(kind, message, path)
+        Return IOError(FailureKind(fbe_assets_failure(load)), message, path)
     End Method
 
     // The IOError of a mount that just failed, of the pak at `path`; a panic for its place.
