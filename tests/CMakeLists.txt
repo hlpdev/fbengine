@@ -75,7 +75,7 @@ catch_discover_tests(fbengine_physics_tests TEST_PREFIX "physics."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # fbengine_physics' steps, through its DLL, which the tests find where CMake built it.
-add_executable(fbengine_physics_step_tests physics/step_tests.cpp)
+add_executable(fbengine_physics_step_tests physics/step_tests.cpp physics/determinism_tests.cpp)
 target_link_libraries(fbengine_physics_step_tests PRIVATE fbengine_physics_native
                       Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_physics_step_tests)

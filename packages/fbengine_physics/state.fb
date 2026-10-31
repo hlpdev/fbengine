@@ -1,0 +1,54 @@
+// A world's state, which its steps change, saved and restored.
+
+Import std.collections
+Import std.core
+
+/// A state that can't be restored into a world: another world's, one of other bodies, joints, or
+/// characters than the world has now, or bytes that aren't a world's state at all.
+Public Class PhysicsStateError Extends Error
+End Class
+
+/// All of a world's state that its steps change, as PhysicsWorld.Save took it: where its bodies
+/// and characters are and how they move, what sleeps, what touches what, its joints' and its
+/// contacts' state, its steps, and the time Update carries; which PhysicsWorld.Restore puts back,
+/// so its steps go on exactly as they went on from where it was saved, as rewinding a game played
+/// over a network, or a replay, needs. It's of the world's bodies, joints, and characters as they
+/// were, and restores only into the world while it has the same ones; what the game sets, as a
+/// friction or a character's shape, isn't in it. Bytes gives it to keep, and a state made of them
+/// again is the same state.
+///
+/// ```
+/// Local world = PhysicsWorld()
+/// Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 10, 0))
+/// Local saved = world.Save()
+/// world.Update(0.5)
+/// Local fallen = ball.Position()
+/// Try world.Restore(saved)
+/// Expect(ball.Position() == Vec3(0, 10, 0))
+/// world.Update(0.5)
+/// Expect(ball.Position() == fallen)
+/// world.Free()
+/// ```
+Public Final Class PhysicsState
+    ReadOnly Field bytes: UInt8[]
+
+    /// The state `bytes` are, as Bytes gave them.
+    Public New(bytes: UInt8[])
+        Local copied: UInt8[] = []
+        copied.AddAll(bytes)
+        Self.bytes = copied
+    End New
+
+    /// The state's bytes, to keep, as a file or a message does, and make a PhysicsState of again.
+    Public Method Bytes(): UInt8[]
+        Local copied: UInt8[] = []
+        copied.AddAll(bytes)
+        Return copied
+    End Method
+
+    /// How many bytes the state takes.
+    Public Method Size(): Int64 => bytes.Count As Int64
+
+    // Its bytes, as they are.
+    Package Method Kept(): UInt8[] => bytes
+End Class

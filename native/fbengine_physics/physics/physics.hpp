@@ -21,6 +21,7 @@
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/StateRecorder.h>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -196,6 +197,16 @@ void free_joints_of(const world_t& world, std::uint64_t body);
 
 /// Frees `world`'s characters, and their bodies.
 void free_characters(world_t& world);
+
+/// Whether reading `state` has run out, which StateRecorder's two streams both say.
+inline bool failed(const JPH::StateRecorder& state) {
+    return static_cast<const JPH::StreamIn&>(state).IsFailed();
+}
+
+/// Saves `world`'s characters' states into `state`, in their handles' order, or restores them from
+/// it; false if it isn't of the same characters, or ends too soon.
+void save_characters(const world_t& world, JPH::StateRecorder& state);
+bool restore_characters(const world_t& world, JPH::StateRecorder& state);
 
 /// Notes, as a step begins, which of the pairs `world` keeps while their bodies sleep are awake.
 void before_contacts(world_t& world);

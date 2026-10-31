@@ -4,6 +4,7 @@
 #include "fbengine_physics.h"
 #include "physics/physics.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -13,6 +14,7 @@
 #include <Jolt/Physics/Collision/ShapeFilter.h>
 #include <memory>
 #include <numbers>
+#include <vector>
 
 namespace {
 
@@ -127,6 +129,29 @@ void free_characters(world_t& world) {
     while (!world.characters.empty()) {
         remove(world.characters.back());
     }
+}
+
+void save_characters(const world_t& world, JPH::StateRecorder& state) {
+    std::vector<std::uint64_t> handles = world.characters;
+    std::ranges::sort(handles);
+    for (const std::uint64_t handle : handles) {
+        state.Write(handle);
+        characters().get(handle)->character->SaveState(state);
+    }
+}
+
+bool restore_characters(const world_t& world, JPH::StateRecorder& state) {
+    std::vector<std::uint64_t> handles = world.characters;
+    std::ranges::sort(handles);
+    for (const std::uint64_t handle : handles) {
+        std::uint64_t saved = 0;
+        state.Read(saved);
+        if (failed(state) || saved != handle) {
+            return false;
+        }
+        characters().get(handle)->character->RestoreState(state);
+    }
+    return !failed(state);
 }
 
 } // namespace fbe::physics

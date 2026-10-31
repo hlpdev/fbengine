@@ -121,7 +121,8 @@ FBE_PHYSICS_API bool fbe_physics_gravity(uint64_t world, fbe_physics_vec3_t* gra
 // Steps `world` on by `seconds`, more than 0 and at most 1, its collisions found
 // `collision_steps` times, 1 to FBE_PHYSICS_MAX_COLLISION_STEPS, a step of seconds over
 // collision_steps each, on Jolt's job system; false if it isn't a world or either is out of
-// range.
+// range. A world made and stepped by the same calls in the same order steps the same, bit for
+// bit, on any number of threads, and on every target, compiler, and build.
 FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t collision_steps);
 
 // How many times `world` has been stepped, -1 if it isn't a world.
@@ -171,6 +172,19 @@ FBE_PHYSICS_API int32_t fbe_physics_overlap(uint64_t world, uint64_t shape,
                                             const fbe_physics_vec3_t* position,
                                             const fbe_physics_quat_t* rotation, uint32_t layers,
                                             uint64_t ignore, uint64_t* bodies, int32_t capacity);
+
+// Saves all `world`'s steps change, and `carried`, the time an Update carries to the next, into up
+// to `capacity` bytes at `bytes`, if they're room for it, giving how many bytes it takes, -1 if it
+// isn't a world. Its steps go on from it, restored, exactly as they went on from where it was
+// saved.
+FBE_PHYSICS_API int64_t fbe_physics_save(uint64_t world, double carried, uint8_t* bytes,
+                                         int64_t capacity);
+
+// Restores `world` from the `size` bytes fbe_physics_save gave at `bytes`, putting what it carried
+// in `carried`; false, leaving the world as it was, if they aren't the state of this world's
+// bodies, joints, and characters as they are, or end too soon.
+FBE_PHYSICS_API bool fbe_physics_restore(uint64_t world, const uint8_t* bytes, int64_t size,
+                                         double* carried);
 
 // The pairs of bodies that began touching in `world`'s last step, up to `capacity` of them in
 // `contacts`, in an order that's the same each run, giving how many there were, -1 if it isn't a

@@ -190,7 +190,17 @@ FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physi
     const bodies_but_t bodies(cast.ignore);
     cast.world->system.GetNarrowPhaseQueryNoLock().CastRay(
         ray, JPH::RayCastSettings(), collector, JPH::BroadPhaseLayerFilter(), mask, bodies);
-    collector.Sort();
+    // Nearest first, and hits as near in the same order however Jolt's threads found them.
+    std::ranges::sort(collector.mHits,
+                      [](const JPH::RayCastResult& x, const JPH::RayCastResult& y) {
+                          if (x.mFraction != y.mFraction) {
+                              return x.mFraction < y.mFraction;
+                          }
+                          if (x.mBodyID != y.mBodyID) {
+                              return x.mBodyID < y.mBodyID;
+                          }
+                          return x.mSubShapeID2.GetValue() < y.mSubShapeID2.GetValue();
+                      });
     const auto count =
         std::min(collector.mHits.size(), static_cast<std::size_t>(std::max(capacity, 0)));
     for (std::size_t i = 0; i < count; ++i) {

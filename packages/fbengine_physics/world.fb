@@ -11,11 +11,14 @@ Import "./hits"
 Import "./joint"
 Import "./physics"
 Import "./shape"
+Import "./state"
 
 /// A world of bodies, which Jolt moves on each time it's stepped: by Step, for the time a game
 /// says, or by Update, at a fixed rate for the time frames take, as most games want, since a
 /// fixed step is steady and repeats. Its axes and units are std.math's: right-handed, Y up,
-/// meters, seconds. Its bodies are each in one of 32 layers, which collide with each other as
+/// meters, seconds. It's deterministic: made and stepped by the same calls in the same order, it
+/// moves the same, bit for bit, everywhere, and Save and Restore take it back to where it was, as
+/// replays and games played in lockstep need. Its bodies are each in one of 32 layers, which collide with each other as
 /// SetCollides says, and casts hit as their `layers` say, a bit for each. Free frees it.
 ///
 /// ```
@@ -116,7 +119,8 @@ Public Final Class PhysicsWorld
 
     /// Steps the world on by `seconds`, more than 0 and at most 1, finding its collisions
     /// `collisionSteps` times on the way, from 1 to 16, or with 0, once for each 60th of a second,
-    /// as Jolt suggests. The same steps of a world given the same calls move it the same.
+    /// as Jolt suggests. A world made and stepped by the same calls in the same order moves the
+    /// same, bit for bit, on any number of threads, and on every target, compiler, and build.
     @MainThread Public Method Step(seconds: Float64, collisionSteps: Int32 = 0)
         Local world = Live("PhysicsWorld.Step")
         Local steps = collisionSteps
@@ -352,6 +356,37 @@ Public Final Class PhysicsWorld
         Local all: Separation[] = []
         all.AddAll(ended)
         Return all
+    End Method
+
+    /// Saves all the world's steps change, as a PhysicsState that Restore puts back.
+    @MainThread Public Method Save(): PhysicsState
+        Local world = Live("PhysicsWorld.Save")
+        Local size = fbe_physics_save(world, owed, Null, 0)
+        Local saved = Buffer<UInt8>(size)
+        Unsafe
+            fbe_physics_save(world, owed, saved.Pointer(), size)
+        End Unsafe
+        Return PhysicsState(saved.ToArray())
+    End Method
+
+    /// Puts the world back as it was when `state` was saved, its bodies, joints, and characters
+    /// where they were and moving as they were, so its steps go on exactly as they did from there.
+    /// It's a PhysicsStateError, leaving the world as it is, if the state isn't this world's, or
+    /// the world has other bodies, joints, or characters now than it had then.
+    @MainThread Public Method Restore(state: PhysicsState) Throws PhysicsStateError
+        Local world = Live("PhysicsWorld.Restore")
+        Local bytes = state.Kept()
+        If bytes.Count == 0 Then Throw PhysicsStateError("that isn't a world's state")
+        Local saved = Buffer<UInt8>.From(bytes)
+        Local carried: Float64 = 0
+        Local ok = False
+        Unsafe
+            ok = fbe_physics_restore(world, saved.Pointer(), saved.Count, AddressOf(carried))
+        End Unsafe
+        If !ok Then Throw PhysicsStateError(LastError())
+        owed = carried
+        began.Clear()
+        ended.Clear()
     End Method
 
     // What began and ended in the step just taken.
