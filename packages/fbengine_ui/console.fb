@@ -1,0 +1,229 @@
+// The console: commands a game registers, typed into a line and run, with their output above it,
+// as a game's cheats and debugging tools want.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.text
+Import fbengine
+Import "./controls"
+Import "./inputs"
+Import "./layout"
+Import "./scroll"
+Import "./widget"
+
+/// A command a Console runs: its name, what `help` says of it, and what it does with the words
+/// typed after its name, giving what the console prints, "" for nothing.
+Public Struct Command
+    Public Field Name: String
+    Public Field Help: String
+    Public Field Run: Func(String[]): String
+End Struct
+
+/// A console: a column of what it's printed, the last lines kept, over a line the player types
+/// into, which Return runs as a command, a name then its words, which quotes keep together. Up
+/// and down in the line go through what was run before, and Tab finishes a command's name. Its
+/// own commands are `help`, which lists them, and `clear`. A game shows it, and hides it, as it
+/// likes, as on the grave key: style "console".
+Public Class Console Extends Widget
+    Field commands: Command[] = []
+    Field lines: String[] = []
+    Field most: Int = 500
+    Field history: String[] = []
+    Field recalled: Int = 0
+    Field output: Node
+    Field view: ScrollView
+    Field line: ConsoleLine
+
+    /// A console with no lines, and its own commands.
+    @MainThread Public New(name: String = "")
+        output = Node("console output")
+        view = ScrollView("console view")
+        line = ConsoleLine()
+        Super.New("console", name)
+        line.console = Self
+        view.SetHeight(Sizing.Fill())
+        view.Add(output)
+        Add(view)
+        Add(line)
+        // Its own commands hold it weakly, as it holds them.
+        Register("help", "lists the commands, or says what one does",
+                 Function[Weak Self](words: String[]) => Self?.HelpFor(words) ?? "")
+        Register("clear", "forgets what's been printed", Function[Weak Self](words: String[])
+            Self?.Clear()
+            Return ""
+        End Function)
+    End New
+
+    /// The line the player types into, which a game gives the focus as it opens the console.
+    @MainThread Public Method Line(): TextField => line
+
+    /// Adds a command, or puts one in place of the one of its name. Panics for a name that's "",
+    /// or has a space in it.
+    @MainThread Public Method Register(name: String, help: String, run: Func(String[]): String)
+        If name == "" || name.Contains(" ") Then Panic("Console.Register: \"{name}\" isn't a command's name")
+        commands.RemoveAll(Function(each: Command) => each.Name == name)
+        commands.Add(Command(name, help, run))
+        commands.SortBy<String>(Function(each: Command) => each.Name)
+    End Method
+
+    /// Takes the command named `name` away; False if there's none.
+    @MainThread Public Method Unregister(name: String): Bool
+        Return commands.RemoveAll(Function(each: Command) => each.Name == name) > 0
+    End Method
+
+    /// Its commands, by name.
+    @MainThread Public Method Commands(): Command[] => commands.Clone()
+
+    /// Prints `text`, each of its lines one of the console's, the oldest going past the most.
+    @MainThread Public Method Print(text: String)
+        For each In text.Split("\n")
+            lines.Add(each)
+            Local label = Label(each)
+            label.SetStyleName("console.line")
+            output.Add(label)
+        End For
+        Trimmed()
+        // What's new shows at the bottom.
+        view.SetOffset(Inf)
+    End Method
+
+    /// The lines it keeps, the oldest first.
+    @MainThread Public Method Lines(): String[] => lines.Clone()
+
+    /// Sets the most lines it keeps, 500 at first.
+    @MainThread Public Method SetMaxLines(count: Int)
+        If count < 1 Then Panic("Console.SetMaxLines: a console keeps 1 line or more, not {count}")
+        most = count
+        Trimmed()
+    End Method
+
+    // Lets its oldest lines go past the most it keeps.
+    @MainThread Method Trimmed()
+        While lines.Count > most
+            lines.RemoveAt(0)
+            output.Remove(output.Children()[0])
+        End While
+    End Method
+
+    /// Forgets what it's printed.
+    @MainThread Public Method Clear()
+        lines.Clear()
+        For child In output.Children()
+            output.Remove(child)
+        End For
+    End Method
+
+    /// Runs `typed` as the player does: prints it after "> ", then what its command gives, or
+    /// that there's no such command; and keeps it for up and down.
+    @MainThread Public Method Run(typed: String)
+        Local words = Words(typed)
+        If words.Count == 0 Then Return
+        Print("> {typed}")
+        If history.Count == 0 || history[history.Count - 1] != typed Then history.Add(typed)
+        recalled = history.Count
+        Local named = words[0]
+        For command In commands
+            If command.Name == named
+                Local said = command.Run(words[1..words.Count])
+                If said != "" Then Print(said)
+                Return
+            End If
+        End For
+        Print("there's no command {named}; help lists them")
+    End Method
+
+    /// What was run, the oldest first, as up and down go through it.
+    @MainThread Public Method History(): String[] => history.Clone()
+
+    // Up and down's line: what was run before or after the one shown.
+    @MainThread Package Method Recall(by: Int): String?
+        If history.Count == 0 Then Return Null
+        recalled = Clamp(recalled + by, 0, history.Count)
+        Return recalled < history.Count ? history[recalled] : ""
+    End Method
+
+    // The command names `typed` starts.
+    @MainThread Package Method Finishing(typed: String): String[]
+        Local found: String[] = []
+        For command In commands
+            If command.Name.StartsWith(typed) Then found.Add(command.Name)
+        End For
+        Return found
+    End Method
+
+    @MainThread Method HelpFor(words: String[]): String
+        If words.Count > 0
+            For command In commands
+                If command.Name == words[0] Then Return "{command.Name}: {command.Help}"
+            End For
+            Return "there's no command {words[0]}"
+        End If
+        Local listed: String[] = []
+        For command In commands
+            listed.Add("{command.Name}: {command.Help}")
+        End For
+        Return listed.Join("\n")
+    End Method
+End Class
+
+/// A Console's line, which runs what it holds on Return: up and down go through what was run, and
+/// Tab finishes a command's name, or prints those it could be: style "console.field".
+Public Class ConsoleLine Extends TextField
+    Field console: Weak<Console>
+
+    Package New()
+        Super.New("", "type a command, or help")
+        SetStyleName("console.field")
+    End New
+
+    @MainThread Public Override Method KeyTyped(key: Key): Bool
+        Local own = console
+        If own == Null Then Return Super.KeyTyped(key)
+        Select key
+            Case Key.UP, Key.DOWN
+                Local recalled = own.Recall(key == Key.UP ? -1 : 1)
+                If recalled != Null Then SetText(recalled)
+                Return True
+            Case Key.TAB
+                Local typed = Text()
+                If typed.Contains(" ") Then Return True
+                Local found = own.Finishing(typed)
+                If found.Count == 1
+                    SetText(found[0] + " ")
+                ElseIf found.Count > 1
+                    own.Print(found.Join("  "))
+                End If
+                Return True
+            Case Key.RETURN, Key.KEYPAD_ENTER
+                Local typed = Text()
+                SetText("")
+                own.Run(typed)
+                Return True
+            Default
+                Return Super.KeyTyped(key)
+        End Select
+    End Method
+End Class
+
+// `typed`'s words: by spaces, those in quotes kept together, without them.
+Function Words(typed: String): String[]
+    Local words: String[] = []
+    Local word: Char[] = []
+    Local quoted = False
+    Local any = False
+    For each In typed.Chars
+        If each == '"'
+            quoted = !quoted
+            any = True
+        ElseIf each == ' ' && !quoted
+            If any || word.Count > 0 Then words.Add(TextOf(word, 0, word.Count))
+            word = []
+            any = False
+        Else
+            word.Add(each)
+        End If
+    End For
+    If any || word.Count > 0 Then words.Add(TextOf(word, 0, word.Count))
+    Return words
+End Function
