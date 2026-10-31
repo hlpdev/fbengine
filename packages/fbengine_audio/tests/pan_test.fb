@@ -41,15 +41,16 @@ Function EachLawSplitsAMonoSoundAsItSays() Throws AudioError, SoundError
         Expect(Audio.PanLaw() == law)
         For pan In [-1.0, -0.5, 0.0, 0.25, 1.0] As Float32[]
             channel.SetPan(pan)
-            Local mixed = Audio.Mix(1)
+            // Once it's ramped to, over 5 ms of the mix.
+            Local mixed = Audio.Mix(221)
             Local sides = Sides(law, pan)
-            Expect(Close(mixed[0], sides[0]) && Close(mixed[1], sides[1]))
+            Expect(Close(mixed[440], sides[0]) && Close(mixed[441], sides[1]))
         End For
     End For
 End Function
 
-// A law changed while channels play is ramped to over the next stretch mixed, so it doesn't
-// click, and leaves their volumes and pans as they were set.
+// A law changed while channels play is ramped to over the next 5 ms of the mix, 221 frames at
+// 44100 Hz, so it doesn't click, and leaves their volumes and pans as they were set.
 @Test
 Function ALawChangesWhatsPlaying() Throws AudioError, SoundError
     Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
@@ -57,14 +58,16 @@ Function ALawChangesWhatsPlaying() Throws AudioError, SoundError
     Defer Audio.SetPanLaw(PanLaw.BALANCE)
     Local channel = Try Playing()
     channel.SetVolume(0.5)
-    Expect(Audio.Mix(1) == [0.25, 0.25] As Float32[])
+    Local settled = Audio.Mix(221)
+    Expect(settled[440] == 0.25 && settled[441] == 0.25)
     Audio.SetPanLaw(PanLaw.LINEAR)
-    Local mixed = Audio.Mix(100)
+    Local mixed = Audio.Mix(300)
     Expect(mixed[0] < 0.25 && mixed[0] > 0.24)
-    For i = 1 To 99
+    For i = 1 To 299
         Expect(mixed[i * 2] <= mixed[(i - 1) * 2] && mixed[i * 2] == mixed[i * 2 + 1])
     End For
-    Expect(mixed[198] == 0.125)
+    Expect(mixed[438] > 0.125)
+    Expect(mixed[440] == 0.125 && mixed[598] == 0.125)
     Expect(channel.Volume() == 0.5)
     Expect(channel.Pan() == 0.0)
 End Function
@@ -76,11 +79,18 @@ Function AStereoSoundIsBalancedWhateverTheLaw() Throws AudioError, SoundError
     Defer Audio.Stop()
     Defer Audio.SetPanLaw(PanLaw.BALANCE)
     Audio.SetPanLaw(PanLaw.CONSTANT_POWER)
-    Local sound = Try Sound.FromBytes(Wav([16384, 8192, 16384, 8192, 16384, 8192], 2, 44100))
+    Local samples: Int[] = []
+    For i = 1 To 600
+        samples.Add(16384)
+        samples.Add(8192)
+    End For
+    Local sound = Try Sound.FromBytes(Wav(samples, 2, 44100))
     Local channel = sound.Play()
     Expect(Audio.Mix(2) == [0.0, 0.0, 0.5, 0.25] As Float32[])
     channel.SetPan(1.0)
-    Expect(Audio.Mix(1) == [0.0, 0.25] As Float32[])
+    // Once it's ramped to, over 5 ms of the mix.
+    Local mixed = Audio.Mix(221)
+    Expect(mixed[440] == 0.0 && mixed[441] == 0.25)
 End Function
 
 // A source going round the camera, as SCP:CB hears one: its pan Sin(-yaw), its volume falling
