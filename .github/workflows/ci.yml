@@ -65,7 +65,9 @@ jobs:
           test "$(printf '%s\n' "$output" | tail -n 1)" = "fbengine $version"
 
   # The GPU tests, with no window, on a software Vulkan driver, which the system's loader is told
-  # to use alone: lavapipe, from Mesa (MSYS2's on Windows, apt's on Linux), and MoltenVK on macOS.
+  # to use alone: lavapipe, from Mesa (MSYS2's UCRT64 on Windows, apt's on Linux), and MoltenVK on
+  # macOS. Intel Macs aren't here: their runners have no Metal for MoltenVK, and Homebrew's Mesa
+  # has no lavapipe, so an Intel Mac's are run by hand.
   gpu:
     name: gpu ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -86,28 +88,27 @@ jobs:
           - target: macos-arm64
             os: macos-15
             shell: bash
-          - target: macos-x64
-            os: macos-15-intel
-            shell: bash
     defaults:
       run:
         shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
 
+      # MINGW64's lavapipe corrupts its heap as the device is made; UCRT64's is the one MSYS2
+      # keeps current.
       - name: Install MinGW and lavapipe
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: false
           path-type: inherit
           install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-vulkan-loader
-            mingw-w64-x86_64-mesa
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-vulkan-loader
+            mingw-w64-ucrt-x86_64-mesa
 
       # The runner runs as an administrator, for whom the loader ignores VK_DRIVER_FILES, so
       # lavapipe goes in the registry, where it looks for drivers.
@@ -116,7 +117,7 @@ jobs:
         env:
           MSYS2_ARG_CONV_EXCL: '*'
         run: |
-          manifest="$(cygpath -w /mingw64/share/vulkan/icd.d/lvp_icd.x86_64.json)"
+          manifest="$(cygpath -w /ucrt64/share/vulkan/icd.d/lvp_icd.x86_64.json)"
           reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$manifest" /t REG_DWORD /d 0 /f
 
       - name: Install lavapipe (Linux)
@@ -126,22 +127,11 @@ jobs:
           sudo apt-get install -y ninja-build libvulkan1 mesa-vulkan-drivers
           echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json)" >> "$GITHUB_ENV"
 
-      # Apple silicon runners have Metal, for MoltenVK; Intel ones have no GPU, so they use
-      # Homebrew Mesa's lavapipe.
-      - name: Install MoltenVK or lavapipe (macOS)
+      - name: Install MoltenVK (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install ninja vulkan-loader
-          if [ "${{ matrix.target }}" = macos-arm64 ]; then
-            brew install molten-vk
-            manifest="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
-          else
-            brew install mesa
-            find "$(brew --prefix mesa)" -name '*icd*.json'
-            manifest="$(find "$(brew --prefix mesa)" -name 'lvp_icd*.json' | head -n 1)"
-          fi
-          test -f "$manifest"
-          echo "VK_DRIVER_FILES=$manifest" >> "$GITHUB_ENV"
+          brew install ninja vulkan-loader molten-vk
+          echo "VK_DRIVER_FILES=$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
           echo "VULKAN_LIBRARIES=$(brew --prefix)/lib" >> "$GITHUB_ENV"
 
       # macOS drops DYLD_ variables on the way into the shell, so they're given to ctest itself,
@@ -149,7 +139,7 @@ jobs:
       - name: Build and test
         run: |
           echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
-          export VK_LOADER_DEBUG=error,warn,driver
+          export VK_LOADER_DEBUG=error,warn
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_FB_TESTS=OFF
           cmake --build build --parallel
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure
