@@ -5,8 +5,8 @@
 
 #include "vfs/disk.hpp"
 
+#include <exception>
 #include <format>
-#include <new>
 #include <utility>
 
 namespace fbe::assets {
@@ -22,10 +22,11 @@ void run_load_here(load_t& load, jobs_t* jobs);
 } // namespace
 
 void run_load(load_t& load, jobs_t* jobs) {
-    // What a file says it has can be more than there's memory for.
+    // On a job, whose work mustn't throw: what a file says it has can be more than there's memory
+    // for, and std's containers say so by throwing, as bad_alloc or length_error.
     try {
         run_load_here(load, jobs);
-    } catch (const std::bad_alloc&) {
+    } catch (const std::exception&) {
         load.error = error_t{
             .failure = failure_t::OTHER,
             .message = std::format("there isn't the memory to load {}", load.path.text()),
@@ -36,46 +37,43 @@ void run_load(load_t& load, jobs_t* jobs) {
 
 namespace {
 
-// Reads the sidecar of `load`'s file, if it has one, and gives false, with the load's error, for
-// one that can't be read, or isn't TOML's UTF-8.
-bool read_sidecar(load_t& load) {
+// Reads the sidecar of `load`'s file, if it has one: its text, or why it can't be read or isn't
+// TOML's UTF-8, which fails only what reads the settings, not the load.
+void read_sidecar(load_t& load) {
     const std::optional<vfs::path_t> sidecar = sidecar_of(load.path);
     if (!sidecar) {
-        return true;
+        return;
     }
-    result_t<bytes_t> bytes = vfs::files().read(*sidecar);
+    result_t<bytes_t> bytes = load.files.read(*sidecar);
     if (!bytes) {
         // A file without import settings, or with a folder where they'd be, has its defaults.
-        if (bytes.error().failure == failure_t::NOT_FOUND ||
-            bytes.error().failure == failure_t::IS_A_FOLDER) {
-            return true;
+        if (bytes.error().failure != failure_t::NOT_FOUND &&
+            bytes.error().failure != failure_t::IS_A_FOLDER) {
+            load.settings_error = std::move(bytes.error());
         }
-        load.error = std::move(bytes.error());
-        return false;
+        return;
     }
     std::string text(bytes->begin(), bytes->end());
     if (text.contains('\0') || vfs::well_formed(text) != text) {
-        load.error = error_t{
+        load.settings_error = error_t{
             .failure = failure_t::INVALID_DATA,
             .message = std::format("{}, the import settings of {}, isn't TOML: it isn't UTF-8 text",
                                    sidecar->text(), load.path.text()),
         };
-        return false;
+        return;
     }
     load.settings = std::move(text);
-    return true;
 }
 
 void run_load_here(load_t& load, jobs_t* jobs) {
-    result_t<bytes_t> bytes = vfs::files().read(load.path);
+    result_t<bytes_t> bytes = load.files.read(load.path);
     if (!bytes) {
         load.error = std::move(bytes.error());
         load.progress = 1;
         return;
     }
-    if (!read_sidecar(load)) {
-        load.progress = 1;
-        return;
+    if (load.options.settings) {
+        read_sidecar(load);
     }
     switch (load.kind) {
     case load_kind_t::BYTES:
@@ -101,7 +99,7 @@ void run_load_here(load_t& load, jobs_t* jobs) {
             .progress =
                 [&load](float done) { load.progress = read_part + ((1 - read_part) * done); },
         };
-        result_t<model_t> model = decode_model(load.path, *bytes, vfs::files(), options);
+        result_t<model_t> model = decode_model(load.path, *bytes, load.files, options);
         if (model) {
             load.model = std::move(*model);
         } else {

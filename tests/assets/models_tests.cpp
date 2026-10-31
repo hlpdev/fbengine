@@ -1,13 +1,19 @@
 // glTFs decoded to the CPU's model: made here, by a builder that packs their buffers, as JSON with
 // data URIs, as binary glTFs, and with buffers and images in files beside them in res://.
 
+#include "assets/loads.hpp"
 #include "assets/model.hpp"
 #include "files.hpp"
+#include "jobs/jobs.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -97,7 +103,7 @@ decode(std::string_view json, const vfs::vfs_t& files = vfs::vfs_t(),
        const assets::model_options_t& options = assets::model_options_t(),
        std::string_view at = "res://models/test.gltf") {
     const bytes_t bytes(json.begin(), json.end());
-    return assets::decode_model(path(at), bytes, files, options);
+    return assets::decode_model(path(at), bytes, files.view(), options);
 }
 
 assets::model_t decoded(std::string_view json, const vfs::vfs_t& files = vfs::vfs_t(),
@@ -184,7 +190,7 @@ TEST_CASE("a binary glTF decodes as its JSON does", "[assets]") {
     const triangle_t triangle;
     const bytes_t glb = test::glb(triangle.built.json(triangle_t::rest, ""), triangle.built.buffer);
     assets::result_t<assets::model_t> model =
-        assets::decode_model(path("res://test.glb"), glb, {}, {});
+        assets::decode_model(path("res://test.glb"), glb, vfs::view_t(), {});
     if (!model) {
         FAIL(model.error().message);
     }
@@ -202,7 +208,8 @@ TEST_CASE("a glTF's buffers and images are read from res://, beside it", "[asset
         R"("materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0,"texCoord":1,)"
         R"("extensions":{"KHR_texture_transform":{"offset":[0.5,0.25],"scale":[2,3],)"
         R"("rotation":0.5}}}},"normalTexture":{"index":1,"scale":0.75}}],)"
-        R"("meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":3,"material":0}]}],)"
+        R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":2,"TEXCOORD_1":2},)"
+        R"("indices":3,"material":0}]}],)"
         R"("extensionsUsed":["KHR_texture_transform"])";
     folder.write("models/tri.gltf", triangle.built.json(rest, "tri.bin"));
     folder.write("models/tri.bin", triangle.built.buffer);
@@ -225,7 +232,7 @@ TEST_CASE("a glTF's buffers and images are read from res://, beside it", "[asset
                 },
         };
         assets::result_t<assets::model_t> model =
-            assets::decode_model(path("res://Models/Tri.gltf"), gltf, files, options);
+            assets::decode_model(path("res://Models/Tri.gltf"), gltf, files.view(), options);
         if (!model) {
             FAIL(model.error().message);
         }
@@ -234,7 +241,8 @@ TEST_CASE("a glTF's buffers and images are read from res://, beside it", "[asset
         REQUIRE(model->images[0].format == assets::formats::rgba8_srgb);
         REQUIRE(model->images[0].width == 2);
         REQUIRE(model->images[1].format == assets::formats::rgba8);
-        REQUIRE(model->images[1].texels == std::vector<std::uint8_t>{ 128, 128, 255, 255 });
+        REQUIRE(std::ranges::equal(model->images[1].texels.bytes(),
+                                   std::vector<std::uint8_t>{ 128, 128, 255, 255 }));
         const assets::material_t& material = model->materials[0];
         REQUIRE(material.base_color_texture.image == 0);
         REQUIRE(material.base_color_texture.sampler == 0);
@@ -260,7 +268,7 @@ TEST_CASE("a glTF's buffers and images are read from res://, beside it", "[asset
     folder.write("models/tri.bin", bytes_t{});
     std::filesystem::remove(folder.path / "models" / "tri.bin");
     assets::result_t<assets::model_t> missing =
-        assets::decode_model(path("res://models/tri.gltf"), gltf, files, {});
+        assets::decode_model(path("res://models/tri.gltf"), gltf, files.view(), {});
     REQUIRE(missing.error().failure == assets::failure_t::NOT_FOUND);
 }
 
@@ -459,4 +467,192 @@ TEST_CASE("a glTF that's broken, or names what isn't there, doesn't decode", "[a
         REQUIRE(failure(R"({"asset":{"version":"1.0"}})") == failure_t::INVALID_DATA);
         REQUIRE(failure("") == failure_t::INVALID_DATA);
     }
+}
+
+namespace {
+
+bytes_t fixture(std::string_view name) {
+    std::ifstream stream(std::filesystem::path(FBENGINE_ASSETS_FIXTURES) / name, std::ios::binary);
+    REQUIRE(stream.good());
+    return { std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>() };
+}
+
+} // namespace
+
+TEST_CASE("hostile glTFs fail as they should, here and on a job", "[assets]") {
+    using assets::failure_t;
+    struct hostile_t {
+        std::string_view name;
+        failure_t failure;
+    };
+    const std::vector<hostile_t> cases = {
+        // Indices validate would read, and sizes whose products wrap round.
+        { .name = "anim_input_oob.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "anim_output_oob.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "anim_sampler_oob.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "count_wraps_indices.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "count_wraps_positions.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "count_wraps_times.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "ibm_count_wraps.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "sparse_count_past_views.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "sparse_indices_at_buffer_end.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "sparse_indices_offset.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "sparse_indices_view_oob.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "sparse_values_offset.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "sparse_values_view_oob.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "target_accessor_oob.gltf", .failure = failure_t::INVALID_DATA },
+        // Zeros that a few hundred bytes can ask for a billion of.
+        { .name = "no_view_1e8.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "no_view_1e9.gltf", .failure = failure_t::INVALID_DATA },
+        // Base64 that isn't a multiple of 4, which fastgltf's own decoder writes past its end on.
+        { .name = "b64_skin105.gltf", .failure = failure_t::INVALID_DATA },
+        // A joint past its skin's.
+        { .name = "joints_past_skin.gltf", .failure = failure_t::INVALID_DATA },
+        // URIs that aren't the game's files, and paths that go above res://.
+        { .name = "uri_abs.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "uri_drive.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "uri_file.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "uri_http.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "uri_unc.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "uri_backslash.gltf", .failure = failure_t::INVALID_PATH },
+        { .name = "uri_dotdot.gltf", .failure = failure_t::INVALID_PATH },
+        { .name = "uri_dotdot_space.gltf", .failure = failure_t::INVALID_PATH },
+        { .name = "uri_pct.gltf", .failure = failure_t::INVALID_PATH },
+        // res:// is the game's, and this one's is empty.
+        { .name = "uri_res.gltf", .failure = failure_t::NOT_FOUND },
+    };
+    vfs::vfs_t files;
+    files.mount(path("res://models"), vfs::folder(FBENGINE_ASSETS_FIXTURES));
+    fbe::jobs_t jobs(2);
+    for (const hostile_t& hostile : cases) {
+        INFO(hostile.name);
+        const vfs::path_t at = path(std::string("res://models/") + std::string(hostile.name));
+        const assets::result_t<assets::model_t> here =
+            assets::decode_model(at, fixture(hostile.name), files.view(), {});
+        REQUIRE_FALSE(here.has_value());
+        REQUIRE(here.error().failure == hostile.failure);
+
+        // As a load does, on a job, whose work mustn't throw.
+        assets::load_t load;
+        load.kind = assets::load_kind_t::MODEL;
+        load.path = at;
+        load.files = files.view();
+        jobs.wait(jobs.run([&load, &jobs] { assets::run_load(load, &jobs); }));
+        REQUIRE(
+            load.error.value_or(assets::error_t{ .failure = assets::failure_t::OTHER }).failure ==
+            hostile.failure);
+        REQUIRE(load.error.has_value());
+    }
+}
+
+TEST_CASE("a data URI that isn't base64 doesn't decode", "[assets]") {
+    builder_t built;
+    built.positions({ 0, 0, 0, 1, 0, 0, 0, 1, 0 });
+    for (const std::string_view base64 :
+         { "A=", "==", "AB=", "A", "AAAAA", "AA*A", "A=AA", "AAA==" }) {
+        INFO(base64);
+        const std::string json = built.json(
+            "", std::string("data:application/octet-stream;base64,") + std::string(base64));
+        REQUIRE(failure(json) == assets::failure_t::INVALID_DATA);
+    }
+}
+
+TEST_CASE("a model's parts that are tied to each other agree", "[assets]") {
+    using assets::failure_t;
+    builder_t built;
+    const int positions = built.positions({ 0, 0, 0, 1, 0, 0, 0, 1, 0 });
+    const int uvs = built.floats("VEC2", 3, { 0, 0, 1, 0, 0, 1 });
+    bytes_t joint_bytes;
+    test::append<std::uint8_t>(joint_bytes, { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 });
+    const int joints = built.add("VEC4", ubyte_type, 3, joint_bytes);
+    const int weights = built.floats("VEC4", 3, { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 });
+    const int moved =
+        built.floats("VEC3", 3, { 0, 0, 1, 0, 0, 1, 0, 0, 1 }, R"(,"min":[0,0,1],"max":[0,0,1])");
+    const int times = built.floats("SCALAR", 2, { 0, 1 }, R"(,"min":[0],"max":[1])");
+    const int two_weights = built.floats("SCALAR", 4, { 0, 0, 1, 1 });
+    const std::string uri = built.data_uri();
+    const auto p = [](int index) { return std::to_string(index); };
+    const std::string image = R"(,"images":[{"uri":"data:image/png;base64,)" +
+                              test::base64(test::png(1, 1, 4, { 1, 2, 3, 4 })) +
+                              R"("}],"textures":[{"source":0}])";
+
+    SECTION("a joint past the skin of a node it's drawn by") {
+        // Joint 1 of a skin of one joint.
+        const std::string rest =
+            R"(,"meshes":[{"primitives":[{"attributes":{"POSITION":)" + p(positions) +
+            R"(,"JOINTS_0":)" + p(joints) + R"(,"WEIGHTS_0":)" + p(weights) +
+            R"(}}]}],"nodes":[{"mesh":0,"skin":0},{}],"skins":[{"joints":[1]}])";
+        REQUIRE(failure(built.json(rest, uri)) == failure_t::INVALID_DATA);
+        // Two joints: it's there.
+        const std::string fine =
+            R"(,"meshes":[{"primitives":[{"attributes":{"POSITION":)" + p(positions) +
+            R"(,"JOINTS_0":)" + p(joints) + R"(,"WEIGHTS_0":)" + p(weights) +
+            R"(}}]}],"nodes":[{"mesh":0,"skin":0},{},{}],"skins":[{"joints":[1,2]}])";
+        REQUIRE(decoded(built.json(fine, uri)).skins.size() == 1);
+    }
+    SECTION("joints without weights") {
+        const std::string rest = R"(,"meshes":[{"primitives":[{"attributes":{"POSITION":)" +
+                                 p(positions) + R"(,"JOINTS_0":)" + p(joints) + R"(}}]}])";
+        REQUIRE(failure(built.json(rest, uri)) == failure_t::INVALID_DATA);
+    }
+    SECTION("primitives with different numbers of morph targets") {
+        const std::string rest = R"(,"meshes":[{"primitives":[{"attributes":{"POSITION":)" +
+                                 p(positions) + R"(},"targets":[{"POSITION":)" + p(moved) +
+                                 R"(}]},{"attributes":{"POSITION":)" + p(positions) + R"(}}]}])";
+        REQUIRE(failure(built.json(rest, uri)) == failure_t::INVALID_DATA);
+    }
+    SECTION("weights that aren't one a morph target") {
+        const std::string mesh =
+            R"(,"meshes":[{"weights":[1,2],"primitives":[{"attributes":{"POSITION":)" +
+            p(positions) + R"(},"targets":[{"POSITION":)" + p(moved) + R"(}]}]}])";
+        REQUIRE(failure(built.json(mesh, uri)) == failure_t::INVALID_DATA);
+        const std::string node = R"(,"meshes":[{"primitives":[{"attributes":{"POSITION":)" +
+                                 p(positions) + R"(},"targets":[{"POSITION":)" + p(moved) +
+                                 R"(}]}]}],"nodes":[{"mesh":0,"weights":[1,2]}])";
+        REQUIRE(failure(built.json(node, uri)) == failure_t::INVALID_DATA);
+        // A clip's weights, two a keyframe, for a mesh of one target.
+        const std::string clip = R"(,"meshes":[{"primitives":[{"attributes":{"POSITION":)" +
+                                 p(positions) + R"(},"targets":[{"POSITION":)" + p(moved) +
+                                 R"(}]}]}],"nodes":[{"mesh":0}],"animations":[{"channels":[)"
+                                 R"({"sampler":0,"target":{"node":0,"path":"weights"}}],)"
+                                 R"("samplers":[{"input":)" +
+                                 p(times) + R"(,"output":)" + p(two_weights) + "}]}]";
+        REQUIRE(failure(built.json(clip, uri)) == failure_t::INVALID_DATA);
+    }
+    SECTION("a texture's UV set the primitive hasn't") {
+        const auto with = [&](std::string_view attributes, std::string_view texture) {
+            return built.json(R"(,"meshes":[{"primitives":[{"attributes":{"POSITION":)" +
+                                  p(positions) + std::string(attributes) +
+                                  R"(},"material":0}]}],)"
+                                  R"("materials":[{"pbrMetallicRoughness":{"baseColorTexture":)" +
+                                  std::string(texture) + "}}]" + image,
+                              uri);
+        };
+        // The first set, which it has, and the second, which it hasn't, or a third.
+        const std::string first = R"(,"TEXCOORD_0":)" + p(uvs);
+        REQUIRE(decoded(with(first, R"({"index":0})")).materials.size() == 1);
+        REQUIRE(failure(with(first, R"({"index":0,"texCoord":1})")) == failure_t::INVALID_DATA);
+        REQUIRE(failure(with(first + R"(,"TEXCOORD_1":)" + p(uvs) + R"(,"TEXCOORD_2":)" + p(uvs),
+                             R"({"index":0,"texCoord":2})")) == failure_t::INVALID_DATA);
+        REQUIRE(failure(with("", R"({"index":0})")) == failure_t::INVALID_DATA);
+    }
+}
+
+TEST_CASE("a long chain of nodes takes time as its nodes do", "[assets]") {
+    constexpr int count = 100'000;
+    builder_t built;
+    built.positions({ 0, 0, 0 });
+    std::string nodes = R"(,"nodes":[)";
+    for (int i = 0; i < count; ++i) {
+        nodes += i + 1 < count ? R"({"children":[)" + std::to_string(i + 1) + "]}," : "{}";
+    }
+    nodes += ']';
+    const auto start = std::chrono::steady_clock::now();
+    REQUIRE(decoded(built.json(nodes, built.data_uri())).nodes.size() == count);
+    // Following each node's parents up takes seconds.
+    REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::seconds(3));
+    // And one that goes round, at the end of the chain.
+    std::string round = nodes;
+    round.replace(round.rfind("{}"), 2, R"({"children":[0]})");
+    REQUIRE(failure(built.json(round, built.data_uri())) == assets::failure_t::INVALID_DATA);
 }

@@ -8,10 +8,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <memory>
-#include <new>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -79,7 +79,8 @@ template <typename T, typename Work>
 T guarded(T failed, Work work) {
     try {
         return work();
-    } catch (const std::bad_alloc&) {
+    } catch (const std::exception&) {
+        // bad_alloc, and std's containers' length_error for more than they can have.
         last_failure = FBE_VFS_OTHER;
         fbe::fail("there isn't the memory for it");
         return failed;

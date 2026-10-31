@@ -56,3 +56,8 @@ if(MINGW)
   target_compile_definitions(ktx_read PUBLIC _FILE_OFFSET_BITS=64)
   target_compile_definitions(ktx PUBLIC _FILE_OFFSET_BITS=64)
 endif()
+
+# fastgltf's asserts look at what a hostile glTF breaks before the engine can check it, as a data
+# URI's base64 shorter than 4 characters, and end the process in a debug build; its own code is
+# built as a release's is, and the engine checks what they would.
+target_compile_definitions(fastgltf PRIVATE NDEBUG)

@@ -11,9 +11,13 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <ktx.h>
 #include <memory>
 #include <stb_image_write.h>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -124,14 +128,15 @@ TEST_CASE("a PNG decodes to RGBA8, sRGB unless it's asked not to be", "[assets]"
     REQUIRE(image.faces == 1);
     REQUIRE(image.levels.size() == 1);
     REQUIRE(image.levels[0].size == 24);
-    REQUIRE(image.texels == texels);
+    REQUIRE(std::ranges::equal(image.texels.bytes(), texels));
     REQUIRE(decoded(png, { .srgb = false }).format == assets::formats::rgba8);
 
     // Gray and RGB have alpha 255 added.
     const assets::image_t gray = decoded(test::png(2, 1, 1, { 7, 200 }));
-    REQUIRE(gray.texels == std::vector<std::uint8_t>{ 7, 7, 7, 255, 200, 200, 200, 255 });
+    REQUIRE(std::ranges::equal(gray.texels.bytes(),
+                               std::vector<std::uint8_t>{ 7, 7, 7, 255, 200, 200, 200, 255 }));
     const assets::image_t rgb = decoded(test::png(1, 1, 3, { 1, 2, 3 }));
-    REQUIRE(rgb.texels == std::vector<std::uint8_t>{ 1, 2, 3, 255 });
+    REQUIRE(std::ranges::equal(rgb.texels.bytes(), std::vector<std::uint8_t>{ 1, 2, 3, 255 }));
 }
 
 TEST_CASE("a 16-bit PNG keeps its 16 bits", "[assets]") {
@@ -190,9 +195,9 @@ TEST_CASE("a KTX2 keeps its mips, layers, and faces", "[assets]") {
                         const std::size_t texel = at.offset + (layer * at.size) +
                                                   (((std::size_t{ y } * at.width) + x) * 4);
                         const std::array<std::uint8_t, 4> want = pattern(level, layer, 0, x, y);
-                        REQUIRE(
-                            std::equal(want.begin(), want.end(),
-                                       image.texels.begin() + static_cast<std::ptrdiff_t>(texel)));
+                        REQUIRE(std::equal(want.begin(), want.end(),
+                                           image.texels.bytes().begin() +
+                                               static_cast<std::ptrdiff_t>(texel)));
                     }
                 }
             }
@@ -218,20 +223,19 @@ TEST_CASE("a KTX2 keeps its mips, layers, and faces", "[assets]") {
     }
 }
 
-TEST_CASE("a Basis Universal KTX2 transcodes to what it's asked for", "[assets]") {
-    // Flat colors, which ETC1S and UASTC keep nearly as they are.
+TEST_CASE("a UASTC KTX2 transcodes to what it's asked for", "[assets]") {
+    // Flat colors, which UASTC keeps nearly as they are.
     const auto flat = [](std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t x,
                          std::uint32_t) -> std::array<std::uint8_t, 4> {
         return x < 8 ? std::array<std::uint8_t, 4>{ 200, 40, 40, 255 }
                      : std::array<std::uint8_t, 4>{ 40, 40, 200, 255 };
     };
-    for (const bool uastc : { false, true }) {
-        const bytes_t basis = ktx2(16, 16, 1, 1, 1, true, flat, [uastc](ktxTexture2* texture) {
+    {
+        const bytes_t basis = ktx2(16, 16, 1, 1, 1, true, flat, [](ktxTexture2* texture) {
             ktxBasisParams params{};
             params.structSize = sizeof(params);
-            params.uastc = uastc ? KTX_TRUE : KTX_FALSE;
+            params.uastc = KTX_TRUE;
             params.threadCount = 1;
-            params.qualityLevel = 128;
             REQUIRE(ktxTexture2_CompressBasisEx(texture, &params) == KTX_SUCCESS);
         });
 
@@ -271,7 +275,8 @@ TEST_CASE("Basis Universal KTX2s transcode on many threads at once", "[assets]")
                 const assets::result_t<assets::image_t> image =
                     assets::decode_image(basis, assets::image_options_t(), "the test's");
                 if (image) {
-                    texels[t].push_back(image->texels);
+                    texels[t].emplace_back(image->texels.bytes().begin(),
+                                           image->texels.bytes().end());
                 } else {
                     ++failed;
                 }
@@ -289,4 +294,134 @@ TEST_CASE("Basis Universal KTX2s transcode on many threads at once", "[assets]")
         }
     }
     REQUIRE(different == 0);
+}
+
+namespace {
+
+bytes_t fixture(std::string_view name) {
+    std::ifstream stream(std::filesystem::path(FBENGINE_ASSETS_FIXTURES) / name, std::ios::binary);
+    REQUIRE(stream.good());
+    return { std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>() };
+}
+
+void put_u32(bytes_t& bytes, std::size_t at, std::uint32_t value) {
+    for (std::size_t i = 0; i < 4; ++i) {
+        bytes[at + i] = static_cast<std::uint8_t>(value >> (8U * i));
+    }
+}
+
+void put_u64(bytes_t& bytes, std::size_t at, std::uint64_t value) {
+    put_u32(bytes, at, static_cast<std::uint32_t>(value));
+    put_u32(bytes, at + 4, static_cast<std::uint32_t>(value >> 32U));
+}
+
+std::string message(const bytes_t& bytes) {
+    assets::result_t<assets::image_t> image =
+        assets::decode_image(bytes, assets::image_options_t(), "the test's");
+    REQUIRE_FALSE(image.has_value());
+    REQUIRE(image.error().failure == assets::failure_t::INVALID_DATA);
+    return image.error().message;
+}
+
+} // namespace
+
+TEST_CASE("an image bigger than an image can be isn't decoded", "[assets]") {
+    // A PNG one texel past, which says so in its header, before anything's decoded.
+    REQUIRE(message(test::png(assets::most_side + 1, 1, 1,
+                              std::vector<std::uint8_t>(assets::most_side + 1, 0)))
+                .contains("16384"));
+    REQUIRE(
+        decoded(test::png(assets::most_side, 1, 1, std::vector<std::uint8_t>(assets::most_side, 0)))
+            .width == assets::most_side);
+    // A 622-byte JPEG that asks for 1.33 GB.
+    REQUIRE(failure(fixture("jpeg_bomb.jpg")) == assets::failure_t::INVALID_DATA);
+
+    // A KTX2's header, by its sizes, its layers, and all of them at once.
+    const bytes_t ktx = ktx2(4, 4, 1, 1, 1, false, pattern, [](ktxTexture2*) {});
+    for (const auto& [at, value] : std::vector<std::pair<std::size_t, std::uint32_t>>{
+             { 20, assets::most_side + 1 },
+             { 24, assets::most_side + 1 },
+             { 28, assets::most_side + 1 },
+             { 32, assets::most_layers + 1 },
+             { 36, 2 },
+         }) {
+        bytes_t changed = ktx;
+        put_u32(changed, at, value);
+        INFO(at);
+        REQUIRE(failure(changed) == assets::failure_t::INVALID_DATA);
+    }
+    bytes_t huge = ktx;
+    put_u32(huge, 20, assets::most_side);
+    put_u32(huge, 24, assets::most_side);
+    put_u32(huge, 32, 4);
+    REQUIRE(message(huge).contains("texels"));
+}
+
+TEST_CASE("an ETC1S KTX2, in BasisLZ, isn't loaded", "[assets]") {
+    const bytes_t etc1s = ktx2(16, 16, 1, 1, 1, true, pattern, [](ktxTexture2* texture) {
+        ktxBasisParams params{};
+        params.structSize = sizeof(params);
+        params.uastc = KTX_FALSE;
+        params.threadCount = 1;
+        REQUIRE(ktxTexture2_CompressBasisEx(texture, &params) == KTX_SUCCESS);
+    });
+    REQUIRE(message(etc1s).contains("ETC1S"));
+    // The review's, whose transcode asks for a gigabyte.
+    REQUIRE(failure(fixture("etc1s_bomb.ktx2")) == assets::failure_t::INVALID_DATA);
+}
+
+TEST_CASE("a KTX2's levels and parts are within it, as many as its sizes have", "[assets]") {
+    for (const bool zstd : { false, true }) {
+        INFO(zstd);
+        const bytes_t ktx = ktx2(8, 8, 4, 1, 1, false, pattern, [zstd](ktxTexture2* texture) {
+            if (zstd) {
+                REQUIRE(ktxTexture2_DeflateZstd(texture, 5) == KTX_SUCCESS);
+            }
+        });
+        REQUIRE(decoded(ktx).levels.size() == 4);
+        // Each level's offset and length, past the end, and wrapping round.
+        for (std::size_t level = 0; level < 4; ++level) {
+            const std::size_t at = 80 + (level * 24);
+            bytes_t past = ktx;
+            put_u64(past, at + 8, ktx.size());
+            REQUIRE(message(past).contains("past its end"));
+            bytes_t wraps = ktx;
+            put_u64(wraps, at, ~std::uint64_t{ 0 } - 4);
+            put_u64(wraps, at + 8, 16);
+            REQUIRE(message(wraps).contains("past its end"));
+        }
+        // The data format, key/values, and supercompression's global data.
+        for (const std::size_t at : { 48U, 56U }) {
+            bytes_t past = ktx;
+            put_u32(past, at, static_cast<std::uint32_t>(ktx.size()));
+            put_u32(past, at + 4, 1);
+            REQUIRE(message(past).contains("past its end"));
+        }
+        bytes_t global = ktx;
+        put_u64(global, 64, ktx.size());
+        put_u64(global, 72, 1);
+        REQUIRE(message(global).contains("past its end"));
+        // More levels than an 8 by 8 has, and as many as libktx would shift by.
+        for (const std::uint32_t levels : { 5U, 33U, 0xFFFF'FFFFU }) {
+            bytes_t more = ktx;
+            put_u32(more, 40, levels);
+            REQUIRE(message(more).contains("mip levels"));
+        }
+    }
+}
+
+TEST_CASE("a KTX2 supercompressed but by Zstd isn't loaded", "[assets]") {
+    bytes_t zlib = ktx2(4, 4, 1, 1, 1, false, pattern, [](ktxTexture2*) {});
+    put_u32(zlib, 44, 3);
+    REQUIRE(message(zlib).contains("supercompressed"));
+}
+
+TEST_CASE("an image's texels are the decoder's own, not a copy", "[assets]") {
+    const bytes_t ktx = ktx2(4, 4, 1, 1, 1, false, pattern, [](ktxTexture2*) {});
+    assets::image_t image = decoded(ktx);
+    // Kept as they are while the image is, and its copies, which share them.
+    const assets::texels_t kept = image.texels;
+    image = assets::image_t();
+    REQUIRE(kept.size() == std::size_t{ 4 } * 4 * 4);
+    REQUIRE(kept[0] == pattern(0, 0, 0, 0, 0)[0]);
 }

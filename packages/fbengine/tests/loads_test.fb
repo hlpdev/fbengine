@@ -8,6 +8,7 @@ Import std.image.png
 Import std.io
 Import std.test
 Import std.text
+Import std.time
 Import fbengine
 Import fbengine.c.fbe_assets
 
@@ -111,9 +112,11 @@ Function LoadsFinishAtAFlipToo() Throws IOError
     Defer Assets.Unmount("res://test-flip")
     Local progress = LoadProgress()
     Local picture = Assets.LoadAsync<Picture>("res://test-flip/pic.png", progress)
-    Local since = Frame.Count()
-    While !progress.Done() && Frame.Count() - since < 10_000
+    // A minute at most, for a slow machine.
+    Local since = Instant.Now()
+    While !progress.Done() && (Instant.Now() - since) < 60.Seconds
         Flip()
+        Sleep(1.Milliseconds)
     End While
     Expect(progress.Done())
     Expect((Try picture.Wait()).Height == 3)
@@ -156,4 +159,24 @@ Function WhatDoesntLoadThrowsItsKind() Throws IOError
     Expect(refused?.Path == "res://test-fails/wide.png")
     // Failed loads are let go too.
     Expect(fbe_assets_count() == loads)
+End Function
+
+// A load reads the mounts there were when it was asked for, even if it waits for a worker while
+// they're taken out.
+@Test
+Function ALoadReadsTheMountsThereWereWhenItWasAskedFor() Throws IOError
+    MountTestFiles("res://test-snapshot")
+    // Every worker busy, so the load waits for one.
+    Local busy: Task[] = []
+    For i = 1 To Jobs.Workers()
+        busy.Add(Jobs.Simulate(200.Milliseconds))
+    End For
+    Local model = Assets.LoadAsync<Model>("res://test-snapshot/triangle.gltf")
+    Local bytes = Assets.ReadBytesAsync("res://test-snapshot/notes.txt")
+    Expect(Assets.Unmount("res://test-snapshot"))
+    Expect((Try model.Wait()).Info.Meshes == 1)
+    Expect((Try bytes.Wait()) == "plain text".Bytes)
+    For task In busy
+        task.Wait()
+    End For
 End Function

@@ -81,14 +81,21 @@ Public Final Class AssetLoad
 
     /// Its file's import settings, from its sidecar, as an S, whose Fields' defaults are what the
     /// sidecar leaves out, and all of them for a file without one. A sidecar that isn't TOML, or an
-    /// S's, throws an IOError of INVALID_DATA, about the sidecar.
+    /// S's, throws an IOError of INVALID_DATA, about the sidecar, and one that can't be read the
+    /// IOError of why: only what reads its settings fails on its sidecar.
     @MainThread
     Public Method Settings<S>(): S Throws IOError
+        Local sidecar = Path() + ".toml"
         Local text = ""
+        Local failure = fbe_assets_settings_failure(Handle)
         Unsafe
+            If failure >= 0
+                Throw IOError(FailureKind(failure), fbe_assets_settings_error(Handle).ToString(),
+                              sidecar)
+            End If
             text = fbe_assets_settings(Handle).ToString()
         End Unsafe
-        Return Try SettingsOf<S>(text, Path() + ".toml")
+        Return Try SettingsOf<S>(text, sidecar)
     End Method
 
     /// How many bytes a bytes load read; panics for another kind of load.
@@ -191,6 +198,24 @@ Public Final Class LoadProgress
         Return True
     End Method
 End Class
+
+// The IOErrorKind of a load's FBE_ASSETS_ failure.
+Package Function FailureKind(failure: Int32): IOErrorKind
+    Select failure
+        Case FBE_ASSETS_NOT_FOUND
+            Return IOErrorKind.NOT_FOUND
+        Case FBE_ASSETS_IS_A_FOLDER
+            Return IOErrorKind.IS_A_DIRECTORY
+        Case FBE_ASSETS_NOT_A_FOLDER
+            Return IOErrorKind.NOT_A_DIRECTORY
+        Case FBE_ASSETS_INVALID_PATH
+            Return IOErrorKind.INVALID_PATH
+        Case FBE_ASSETS_INVALID_DATA
+            Return IOErrorKind.INVALID_DATA
+        Default
+            Return IOErrorKind.OTHER
+    End Select
+End Function
 
 // `text`, a sidecar's TOML, as an S, with its Fields' defaults for what the sidecar leaves out. A
 // sidecar's keys are snake_case, and its settings' Fields their PascalCase, as "alpha_cutoff" is

@@ -1,10 +1,16 @@
 // glTF through fastgltf: the JSON (or a binary glTF's chunks) parsed, the buffers and images it
-// names by relative paths read from res://, and then everything copied out into model_t, each
-// index and count checked first, since the renderer and the scene trust what this gives them.
+// names by relative paths read from res://, and then everything copied out into model_t. Every
+// index, count, and size is checked before fastgltf's validate, which trusts them, or anything
+// reads an accessor, and what ties one part to another (a primitive's joints to its node's skin,
+// its UVs to its material's textures, its morph targets to its mesh's and nodes' weights) after,
+// since the renderer and the scene trust what this gives them. fastgltf's buffers for data URIs
+// and a binary glTF's chunk are the decoder's own, and so is its base64 decoding, which refuses
+// what isn't base64.
 
 #include "assets/model.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstddef>
@@ -14,6 +20,7 @@
 #include <fastgltf/types.hpp>
 #include <format>
 #include <limits>
+#include <new>
 #include <optional>
 #include <string>
 #include <utility>
@@ -48,14 +55,70 @@ constexpr auto extensions =
     gltf::Extensions::KHR_mesh_quantization | gltf::Extensions::KHR_lights_punctual |
     gltf::Extensions::KHR_materials_emissive_strength | gltf::Extensions::KHR_materials_unlit;
 
+// The most values an accessor without a buffer view, all zeros, can have.
+constexpr std::size_t most_zeros = std::size_t{ 1 } << 24U;
+
 std::int32_t index_of(const gltf::Optional<std::size_t>& index) {
     return index ? static_cast<std::int32_t>(*index) : -1;
+}
+
+// Whether `count` values of `size` bytes, `stride` apart from `offset`, end within `length`.
+bool fits(std::uint64_t offset, std::uint64_t count, std::uint64_t stride, std::uint64_t size,
+          std::uint64_t length) {
+    if (offset > length) {
+        return false;
+    }
+    if (count == 0) {
+        return true;
+    }
+    if (size > length - offset) {
+        return false;
+    }
+    return stride == 0 || count - 1 <= (length - offset - size) / stride;
+}
+
+// The bytes `text` is in base64, or nullopt when it isn't base64: 4 characters for each 3 bytes,
+// of A-Z, a-z, 0-9, + and /, with one or two = at its end for 2 or 1 bytes.
+std::optional<std::size_t> base64_size(std::string_view text) {
+    if (text.size() % 4 != 0) {
+        return std::nullopt;
+    }
+    std::size_t padding = 0;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '=') {
+            if (i + 2 < text.size()) {
+                return std::nullopt;
+            }
+            ++padding;
+            continue;
+        }
+        const bool letter =
+            (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        if ((!letter && c != '+' && c != '/') || padding > 0) {
+            return std::nullopt;
+        }
+    }
+    return (text.size() / 4 * 3) - padding;
+}
+
+std::uint32_t base64_value(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return static_cast<std::uint32_t>(c - 'A');
+    }
+    if (c >= 'a' && c <= 'z') {
+        return static_cast<std::uint32_t>(c - 'a' + 26);
+    }
+    if (c >= '0' && c <= '9') {
+        return static_cast<std::uint32_t>(c - '0' + 52);
+    }
+    return c == '+' ? 62 : 63;
 }
 
 // One glTF's decoding: what it's called in errors, and the parsed asset.
 class decoder_t {
 public:
-    decoder_t(const vfs::path_t& path, const vfs::vfs_t& files, const model_options_t& options)
+    decoder_t(const vfs::path_t& path, const vfs::view_t& files, const model_options_t& options)
         : m_path(path), m_files(files), m_options(options) {}
 
     result_t<model_t> decode(std::span<const std::uint8_t> bytes) {
@@ -68,7 +131,14 @@ public:
             return fail(gltf::getErrorMessage(data.error()));
         }
         gltf::Parser parser(extensions);
+        m_bytes = bytes.size();
+        parser.setUserPointer(this);
+        parser.setBufferAllocationCallback(map);
+        parser.setBase64DecodeCallback(decode_base64);
         auto parsed = parser.loadGltf(data.get(), {}, gltf::Options::DecomposeNodeMatrices);
+        if (m_refused) {
+            return fail(*m_refused);
+        }
         if (parsed.error() != gltf::Error::None) {
             return fail(gltf::getErrorMessage(parsed.error()));
         }
@@ -79,11 +149,11 @@ public:
         if (result_t<void> read = read_buffers(); !read) {
             return std::unexpected(std::move(read.error()));
         }
-        if (const gltf::Error error = gltf::validate(m_asset); error != gltf::Error::None) {
-            return fail(gltf::getErrorMessage(error));
-        }
         if (result_t<void> checked = check(); !checked) {
             return std::unexpected(std::move(checked.error()));
+        }
+        if (const gltf::Error error = gltf::validate(m_asset); error != gltf::Error::None) {
+            return fail(gltf::getErrorMessage(error));
         }
 
         model_t model;
@@ -120,11 +190,69 @@ public:
             model.clips.push_back(std::move(*clip));
         }
         decode_cameras_and_lights(model);
+        if (result_t<void> tied = check_ties(model); !tied) {
+            return std::unexpected(std::move(tied.error()));
+        }
         step();
         return model;
     }
 
 private:
+    // A buffer for fastgltf to put a data URI's bytes, or a binary glTF's chunk, in: one of the
+    // decoder's. A data URI's base64 shorter than 4 characters makes fastgltf's size wrap round,
+    // past what any URI in these bytes could hold, which is refused, given nothing that's written.
+    static gltf::BufferInfo map(std::uint64_t size, void* user) {
+        auto& self = *static_cast<decoder_t*>(user);
+        if (size > self.m_bytes) {
+            self.refuse("a data URI isn't base64");
+            return { .mappedMemory = &self.m_nothing, .customId = 0 };
+        }
+        try {
+            self.m_mapped.emplace_back(static_cast<std::size_t>(size));
+        } catch (const std::bad_alloc&) {
+            self.refuse("there isn't the memory for its buffers");
+            // With none, fastgltf leaves out a binary glTF's chunk.
+            return { .mappedMemory = nullptr, .customId = 0 };
+        }
+        return {
+            .mappedMemory = self.m_mapped.back().data(),
+            .customId = self.m_mapped.size() - 1,
+        };
+    }
+
+    // Decodes a data URI's base64 into what map gave, `size` bytes, or refuses what isn't base64,
+    // writing nothing.
+    static void decode_base64(std::string_view text, std::uint8_t* into, std::size_t /*padding*/,
+                              std::size_t size, void* user) {
+        auto& self = *static_cast<decoder_t*>(user);
+        if (base64_size(text) != size || self.m_refused) {
+            self.refuse("a data URI isn't base64");
+            return;
+        }
+        std::size_t out = 0;
+        for (std::size_t at = 0; at + 4 <= text.size(); at += 4) {
+            std::uint32_t group = 0;
+            for (std::size_t i = 0; i < 4; ++i) {
+                group = (group << 6U) | (text[at + i] == '=' ? 0 : base64_value(text[at + i]));
+            }
+            for (std::size_t i = 0; i < 3 && out < size; ++i) {
+                into[out++] = static_cast<std::uint8_t>(group >> (16U - (8U * i)));
+            }
+        }
+    }
+
+    void refuse(std::string_view why) {
+        if (!m_refused) {
+            m_refused = std::string(why);
+        }
+    }
+
+    // The bytes fastgltf put in one of the decoder's buffers.
+    [[nodiscard]] std::span<const std::byte> mapped(gltf::CustomBufferId id) const {
+        return id < m_mapped.size() ? std::span<const std::byte>(m_mapped[id])
+                                    : std::span<const std::byte>();
+    }
+
     [[nodiscard]] std::unexpected<error_t> fail(std::string_view why,
                                                 failure_t failure = failure_t::INVALID_DATA) const {
         return std::unexpected(error_t{
@@ -140,12 +268,20 @@ private:
         }
     }
 
-    // What a relative URI names, read from res://.
+    // What a URI names, read from res://: a path from the glTF's folder, or a res:// one. A URI of
+    // any other scheme, or a path from the root of a disk, isn't one of the game's files.
     result_t<bytes_t> read_uri(const gltf::URI& uri) const {
-        if (uri.isDataUri() || !uri.valid()) {
-            return fail(std::format("'{}' is a URI it can't read", uri.string()));
+        const std::string_view text = uri.string();
+        const std::size_t colon = text.find(':');
+        const std::size_t slash = text.find_first_of("/\\");
+        const bool scheme = colon != std::string_view::npos && colon < slash;
+        if (uri.isDataUri() || !uri.valid() ||
+            (scheme && vfs::fold(text.substr(0, colon)) != "res") || (!scheme && slash == 0)) {
+            return fail(std::format("'{}' is a URI it doesn't read: a path from its folder, or a "
+                                    "res:// one, is",
+                                    text));
         }
-        result_t<vfs::path_t> named = vfs::resolve(m_path, uri.path());
+        result_t<vfs::path_t> named = vfs::resolve(m_path, text);
         if (!named) {
             return std::unexpected(std::move(named.error()));
         }
@@ -163,7 +299,13 @@ private:
     // Every buffer's bytes, a binary glTF's and data URIs' already, the rest read from res://.
     result_t<void> read_buffers() {
         for (gltf::Buffer& buffer : m_asset.buffers) {
-            if (const auto* uri = std::get_if<gltf::sources::URI>(&buffer.data)) {
+            if (const auto* custom = std::get_if<gltf::sources::CustomBuffer>(&buffer.data)) {
+                gltf::sources::Vector taken;
+                if (custom->id < m_mapped.size()) {
+                    taken.bytes = std::move(m_mapped[custom->id]);
+                }
+                buffer.data = std::move(taken);
+            } else if (const auto* uri = std::get_if<gltf::sources::URI>(&buffer.data)) {
                 result_t<bytes_t> bytes = read_uri(uri->uri);
                 if (!bytes) {
                     return std::unexpected(std::move(bytes.error()));
@@ -195,34 +337,74 @@ private:
         return {};
     }
 
-    // What validate leaves: each accessor's bytes there, nodes in a forest, joints and channels'
-    // nodes there.
+    // Every index to be there, and every accessor's bytes within its buffer view's, and its view's
+    // within its buffer's, with no sum or product that wraps round, all before validate or anything
+    // reads them; the nodes a forest.
     result_t<void> check() const {
-        const auto view_fits = [this](std::size_t view) {
-            return view < m_asset.bufferViews.size() &&
-                   m_asset.bufferViews[view].bufferIndex < m_asset.buffers.size();
-        };
-        for (const gltf::Accessor& accessor : m_asset.accessors) {
-            if (accessor.bufferViewIndex && !view_fits(*accessor.bufferViewIndex)) {
-                return fail("an accessor's buffer view isn't there");
+        const std::size_t accessors = m_asset.accessors.size();
+        const std::size_t views = m_asset.bufferViews.size();
+        for (const gltf::BufferView& view : m_asset.bufferViews) {
+            if (view.bufferIndex >= m_asset.buffers.size() ||
+                !fits(view.byteOffset, 1, 0, view.byteLength,
+                      m_asset.buffers[view.bufferIndex].byteLength)) {
+                return fail("a buffer view isn't within its buffer");
             }
-            if (accessor.sparse && (!view_fits(accessor.sparse->indicesBufferView) ||
-                                    !view_fits(accessor.sparse->valuesBufferView))) {
-                return fail("a sparse accessor's buffer view isn't there");
+            if (view.byteStride && (*view.byteStride < 4 || *view.byteStride > 252)) {
+                return fail("a buffer view's stride isn't 4 to 252 bytes");
             }
         }
-        std::vector<std::int64_t> parents(m_asset.nodes.size(), -1);
-        for (std::size_t i = 0; i < m_asset.nodes.size(); ++i) {
-            for (const std::size_t child : m_asset.nodes[i].children) {
-                if (child >= m_asset.nodes.size() || parents[child] != -1 || child == i) {
-                    return fail("its nodes aren't a forest");
-                }
-                parents[child] = static_cast<std::int64_t>(i);
+        for (const gltf::Accessor& accessor : m_asset.accessors) {
+            if (result_t<void> checked = check_accessor(accessor); !checked) {
+                return checked;
             }
         }
         const auto there = [](const gltf::Optional<std::size_t>& index, std::size_t count) {
             return !index || *index < count;
         };
+        for (const gltf::Mesh& mesh : m_asset.meshes) {
+            for (const gltf::Primitive& primitive : mesh.primitives) {
+                const auto in_accessors = [accessors](const gltf::Attribute& attribute) {
+                    return attribute.accessorIndex < accessors;
+                };
+                if (!std::ranges::all_of(primitive.attributes, in_accessors) ||
+                    !std::ranges::all_of(primitive.targets,
+                                         [&](const auto& target) {
+                                             return std::ranges::all_of(target, in_accessors);
+                                         }) ||
+                    !there(primitive.indicesAccessor, accessors)) {
+                    return fail("a primitive's accessor isn't there");
+                }
+                if (!there(primitive.materialIndex, m_asset.materials.size())) {
+                    return fail("a primitive's material isn't there");
+                }
+            }
+        }
+        for (const gltf::Image& image : m_asset.images) {
+            const auto* view = std::get_if<gltf::sources::BufferView>(&image.data);
+            if (view != nullptr && view->bufferViewIndex >= views) {
+                return fail("an image's buffer view isn't there");
+            }
+        }
+        for (const gltf::Texture& texture : m_asset.textures) {
+            if (!there(texture.imageIndex, m_asset.images.size()) ||
+                !there(texture.basisuImageIndex, m_asset.images.size()) ||
+                !there(texture.samplerIndex, m_asset.samplers.size())) {
+                return fail("a texture's image or sampler isn't there");
+            }
+        }
+        for (const gltf::Material& material : m_asset.materials) {
+            const std::size_t textures = m_asset.textures.size();
+            const auto texture_there = [textures](const auto& info) {
+                return !info || info->textureIndex < textures;
+            };
+            if (!texture_there(material.pbrData.baseColorTexture) ||
+                !texture_there(material.pbrData.metallicRoughnessTexture) ||
+                !texture_there(material.normalTexture) ||
+                !texture_there(material.occlusionTexture) ||
+                !texture_there(material.emissiveTexture)) {
+                return fail("a material's texture isn't there");
+            }
+        }
         for (const gltf::Node& node : m_asset.nodes) {
             if (!there(node.meshIndex, m_asset.meshes.size()) ||
                 !there(node.skinIndex, m_asset.skins.size()) ||
@@ -243,20 +425,186 @@ private:
         }
         for (const gltf::Skin& skin : m_asset.skins) {
             if (!there(skin.skeleton, m_asset.nodes.size()) ||
+                !there(skin.inverseBindMatrices, accessors) ||
                 std::ranges::any_of(skin.joints, [this](std::size_t joint) {
                     return joint >= m_asset.nodes.size();
                 })) {
-                return fail("a skin's joint isn't there");
+                return fail("a skin's joint, skeleton, or inverse binds aren't there");
             }
         }
-        // A node's parents, followed up, end at a root, unless they go round.
-        for (std::size_t i = 0; i < m_asset.nodes.size(); ++i) {
-            std::int64_t at = parents[i];
-            for (std::size_t steps = 0; at != -1; ++steps) {
-                if (steps > m_asset.nodes.size()) {
-                    return fail("its nodes go round");
+        for (const gltf::Animation& animation : m_asset.animations) {
+            for (const gltf::AnimationSampler& sampler : animation.samplers) {
+                if (sampler.inputAccessor >= accessors || sampler.outputAccessor >= accessors) {
+                    return fail("a clip's keyframes aren't there");
                 }
-                at = parents[static_cast<std::size_t>(at)];
+            }
+            for (const gltf::AnimationChannel& channel : animation.channels) {
+                if (channel.samplerIndex >= animation.samplers.size() ||
+                    !there(channel.nodeIndex, m_asset.nodes.size())) {
+                    return fail("a clip's sampler or node isn't there");
+                }
+            }
+        }
+        return check_forest();
+    }
+
+    // An accessor's values within its buffer view, and its sparse indices and values within theirs;
+    // one without a view, its values zeros, no more than most_zeros of them.
+    [[nodiscard]] result_t<void> check_accessor(const gltf::Accessor& accessor) const {
+        const std::size_t element = gltf::getElementByteSize(accessor.type, accessor.componentType);
+        if (element == 0) {
+            return fail("an accessor's type isn't one");
+        }
+        if (accessor.bufferViewIndex) {
+            if (*accessor.bufferViewIndex >= m_asset.bufferViews.size()) {
+                return fail("an accessor's buffer view isn't there");
+            }
+            const gltf::BufferView& view = m_asset.bufferViews[*accessor.bufferViewIndex];
+            if (!fits(accessor.byteOffset, accessor.count, view.byteStride.value_or(element),
+                      element, view.byteLength)) {
+                return fail("an accessor's values are past its buffer view");
+            }
+        } else if (accessor.count > most_zeros) {
+            return fail(std::format("an accessor of zeros has {} values, more than {}",
+                                    accessor.count, most_zeros));
+        }
+        if (!accessor.sparse) {
+            return {};
+        }
+        const gltf::SparseAccessor& sparse = *accessor.sparse;
+        const std::size_t index = gltf::getComponentByteSize(sparse.indexComponentType);
+        const std::size_t views = m_asset.bufferViews.size();
+        if (sparse.count > accessor.count || index == 0 || sparse.indicesBufferView >= views ||
+            sparse.valuesBufferView >= views) {
+            return fail("a sparse accessor's indices or values aren't there");
+        }
+        if (!fits(sparse.indicesByteOffset, sparse.count, index, index,
+                  m_asset.bufferViews[sparse.indicesBufferView].byteLength) ||
+            !fits(sparse.valuesByteOffset, sparse.count, element, element,
+                  m_asset.bufferViews[sparse.valuesBufferView].byteLength)) {
+            return fail("a sparse accessor's indices or values are past their buffer views");
+        }
+        return {};
+    }
+
+    // The nodes a forest: each a child of one node at most, and each reached from a root, which a
+    // node that goes round isn't.
+    [[nodiscard]] result_t<void> check_forest() const {
+        const std::size_t count = m_asset.nodes.size();
+        std::vector<char> parented(count, 0);
+        for (std::size_t i = 0; i < count; ++i) {
+            for (const std::size_t child : m_asset.nodes[i].children) {
+                if (child >= count || parented[child] != 0 || child == i) {
+                    return fail("its nodes aren't a forest");
+                }
+                parented[child] = 1;
+            }
+        }
+        std::vector<std::size_t> next;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (parented[i] == 0) {
+                next.push_back(i);
+            }
+        }
+        std::size_t reached = 0;
+        while (!next.empty()) {
+            const std::size_t node = next.back();
+            next.pop_back();
+            ++reached;
+            next.insert(next.end(), m_asset.nodes[node].children.begin(),
+                        m_asset.nodes[node].children.end());
+        }
+        if (reached != count) {
+            return fail("its nodes go round");
+        }
+        return {};
+    }
+
+    // What ties one part of the model to another: a primitive's joints and weights each other's and
+    // within its nodes' skins, its UV sets its material's textures', each primitive of a mesh with
+    // as many morph targets, and the weights of the mesh, its nodes, and the clips that move them
+    // as many as those.
+    [[nodiscard]] result_t<void> check_ties(const model_t& model) const {
+        std::vector<std::size_t> targets(model.meshes.size(), 0);
+        for (std::size_t m = 0; m < model.meshes.size(); ++m) {
+            const mesh_t& mesh = model.meshes[m];
+            for (const primitive_t& primitive : mesh.primitives) {
+                if (&primitive != mesh.primitives.data() &&
+                    primitive.targets.size() != mesh.primitives.front().targets.size()) {
+                    return fail("a mesh's primitives have different numbers of morph targets");
+                }
+                if (primitive.joints.empty() != primitive.weights.empty()) {
+                    return fail(
+                        "a primitive has joints without weights, or weights without joints");
+                }
+                if (result_t<void> uvs = check_uvs(primitive, model); !uvs) {
+                    return uvs;
+                }
+            }
+            targets[m] = mesh.primitives.empty() ? 0 : mesh.primitives.front().targets.size();
+            if (!mesh.weights.empty() && mesh.weights.size() != targets[m]) {
+                return fail("a mesh's weights aren't one a morph target");
+            }
+        }
+        for (const node_t& node : model.nodes) {
+            if (!node.weights.empty() &&
+                (node.mesh < 0 ||
+                 node.weights.size() != targets[static_cast<std::size_t>(node.mesh)])) {
+                return fail("a node's weights aren't one a morph target of its mesh");
+            }
+            if (node.mesh < 0 || node.skin < 0) {
+                continue;
+            }
+            const std::size_t joints =
+                model.skins[static_cast<std::size_t>(node.skin)].joints.size();
+            for (const primitive_t& primitive :
+                 model.meshes[static_cast<std::size_t>(node.mesh)].primitives) {
+                for (const std::array<std::uint16_t, 4>& vertex : primitive.joints) {
+                    if (std::ranges::any_of(
+                            vertex, [joints](std::uint16_t joint) { return joint >= joints; })) {
+                        return fail("a vertex's joint is past its skin's joints");
+                    }
+                }
+            }
+        }
+        for (const clip_t& clip : model.clips) {
+            for (const channel_t& channel : clip.channels) {
+                if (channel.property != property_t::WEIGHTS) {
+                    continue;
+                }
+                const std::int32_t mesh = model.nodes[channel.node].mesh;
+                if (mesh < 0 || channel.width != targets[static_cast<std::size_t>(mesh)] ||
+                    channel.width == 0) {
+                    return fail("a clip's weights aren't one a morph target of its node's mesh");
+                }
+            }
+        }
+        return {};
+    }
+
+    // A primitive's UV sets those its material's textures read: the first or the second.
+    [[nodiscard]] result_t<void> check_uvs(const primitive_t& primitive,
+                                           const model_t& model) const {
+        if (primitive.material < 0) {
+            return {};
+        }
+        const material_t& material = model.materials[static_cast<std::size_t>(primitive.material)];
+        for (const texture_ref_t* texture : {
+                 &material.base_color_texture,
+                 &material.metallic_roughness_texture,
+                 &material.normal_texture,
+                 &material.occlusion_texture,
+                 &material.emissive_texture,
+             }) {
+            if (texture->image < 0) {
+                continue;
+            }
+            if (texture->uv_set > 1) {
+                return fail("a texture's UV set is past the two the engine keeps");
+            }
+            if ((texture->uv_set == 0 ? primitive.uv0 : primitive.uv1).empty()) {
+                return fail(std::format("a primitive's material reads UV set {}, which it hasn't",
+                                        texture->uv_set));
             }
         }
         return {};
@@ -291,13 +639,23 @@ private:
         model.images.resize(count);
         std::vector<std::optional<error_t>> errors(count);
         const auto decode_one = [&](std::size_t i) {
-            if (used[i] != 0) {
-                result_t<image_t> image = decode_one_image(i, color[i] != 0);
-                if (image) {
-                    model.images[i] = std::move(*image);
-                } else {
-                    errors[i] = std::move(image.error());
+            // On a job, whose work mustn't throw: what an image says it has can be more than
+            // there's memory for.
+            try {
+                if (used[i] != 0) {
+                    result_t<image_t> image = decode_one_image(i, color[i] != 0);
+                    if (image) {
+                        model.images[i] = std::move(*image);
+                    } else {
+                        errors[i] = std::move(image.error());
+                    }
                 }
+            } catch (const std::exception&) {
+                errors[i] = error_t{
+                    .failure = failure_t::OTHER,
+                    .message =
+                        std::format("there isn't the memory for {}'s image {}", m_path.text(), i),
+                };
             }
             step();
         };
@@ -335,6 +693,8 @@ private:
         std::span<const std::byte> bytes;
         if (const auto* array = std::get_if<gltf::sources::Array>(&image.data)) {
             bytes = std::span(array->bytes.data(), array->bytes.size_bytes());
+        } else if (const auto* custom = std::get_if<gltf::sources::CustomBuffer>(&image.data)) {
+            bytes = mapped(custom->id);
         } else if (const auto* view = std::get_if<gltf::sources::BufferView>(&image.data)) {
             const gltf::BufferView& buffer_view = m_asset.bufferViews[view->bufferViewIndex];
             const gltf::span<const std::byte> viewed =
@@ -877,9 +1237,16 @@ private:
     }
 
     const vfs::path_t& m_path;
-    const vfs::vfs_t& m_files;
+    const vfs::view_t& m_files;
     const model_options_t& m_options;
     gltf::Asset m_asset;
+    // The size of the glTF's bytes; the buffers fastgltf put its data URIs and a binary glTF's
+    // chunk in, by their ids; where it puts what's refused; and why it refused what it read, if it
+    // did.
+    std::size_t m_bytes = 0;
+    std::vector<std::vector<std::byte>> m_mapped;
+    std::byte m_nothing{};
+    std::optional<std::string> m_refused;
     std::size_t m_steps = 1;
     std::atomic<std::size_t> m_done = 0;
 };
@@ -887,7 +1254,7 @@ private:
 } // namespace
 
 result_t<model_t> decode_model(const vfs::path_t& path, std::span<const std::uint8_t> bytes,
-                               const vfs::vfs_t& files, const model_options_t& options) {
+                               const vfs::view_t& files, const model_options_t& options) {
     decoder_t decoder(path, files, options);
     return decoder.decode(bytes);
 }

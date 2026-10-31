@@ -28,15 +28,19 @@ enum class load_kind_t : std::uint8_t { BYTES, IMAGE, MODEL };
 struct load_options_t {
     /// For images: their color is linear, as a normal map's is, not sRGB.
     bool linear = false;
+    /// Whether it reads its file's sidecar, as an Asset's load does, for its import settings.
+    bool settings = false;
     transcode_t transcode = transcode_t::RGBA8;
 };
 
 /// A load, and what it made once it's done: its kind's result and its file's import settings, or
-/// why it failed.
+/// why it failed. It reads its file, its sidecar, and what its file names through one view of the
+/// mounts, those there were when it was asked for.
 struct load_t {
     load_kind_t kind = load_kind_t::BYTES;
     vfs::path_t path;
     load_options_t options;
+    vfs::view_t files;
     /// The job a load on the workers runs as; 0 for one that ran where it was asked for.
     job_t job = 0;
     /// From 0 to 1, as the worker goes.
@@ -45,15 +49,18 @@ struct load_t {
     bool done = false;
     std::optional<error_t> error;
     /// The text of its file's sidecar, its path with ".toml" after it, when there's one: UTF-8
-    /// with no NULs, as TOML is.
+    /// with no NULs, as TOML is; or why it can't be read or isn't TOML's text, which only what
+    /// reads its settings hears.
     std::optional<std::string> settings;
+    std::optional<error_t> settings_error;
     bytes_t bytes;
     image_t image;
     model_t model;
 };
 
-/// Reads and decodes `load`'s file, and its sidecar, on this thread, with `jobs` to decode a
-/// model's images at once.
+/// Reads and decodes `load`'s file, and its sidecar if it reads one, on this thread, with `jobs`
+/// to decode a model's images at once. What a file says it has can be more than there's memory
+/// for, which is the load's error.
 void run_load(load_t& load, jobs_t* jobs);
 
 /// The sidecar of the file at `path`, its import settings: its path with ".toml" after it.
