@@ -112,6 +112,7 @@ jobs:
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-vulkan-loader
+            mingw-w64-ucrt-x86_64-vulkan-validation-layers
 
       # Windows' lavapipe is mesa-dist-win's MSVC build: MSYS2's, built with MinGW, corrupts its
       # heap freeing host-visible memory. The runner runs as an administrator, for whom the loader
@@ -129,22 +130,28 @@ jobs:
           manifest="$(cygpath -w "$RUNNER_TEMP/mesa/x64/lvp_icd.x86_64.json")"
           test -f "$manifest"
           reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$manifest" /t REG_DWORD /d 0 /f
+          # The validation layers, MSYS2's, found the same way, as the loader takes no layer path
+          # from an administrator either.
+          layer="$(find /ucrt64 -name VkLayer_khronos_validation.json | head -n 1)"
+          test -n "$layer"
+          reg add 'HKLM\SOFTWARE\Khronos\Vulkan\ExplicitLayers' /v "$(cygpath -w "$layer")" /t REG_DWORD /d 0 /f
 
       - name: Install lavapipe (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libvulkan1 mesa-vulkan-drivers
+          sudo apt-get install -y ninja-build libvulkan1 mesa-vulkan-drivers vulkan-validationlayers
           # SDL's headers, which configuring the project needs, as native.yml's has them.
           sudo apt-get install -y libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
             libxfixes-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
             libegl-dev libdrm-dev libgbm-dev libdbus-1-dev libudev-dev libibus-1.0-dev
-          echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json)" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | paste -sd: -)" >> "$GITHUB_ENV"
 
       - name: Install MoltenVK (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install ninja vulkan-loader molten-vk
+          brew install ninja vulkan-loader molten-vk vulkan-validationlayers
+          echo "VK_ADD_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
           echo "VK_DRIVER_FILES=$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
           echo "VULKAN_LIBRARIES=$(brew --prefix)/lib" >> "$GITHUB_ENV"
 
@@ -153,10 +160,12 @@ jobs:
           version: ${{ env.FB_VERSION }}
 
       # macOS drops DYLD_ variables on the way into the shell, so they're given to ctest itself,
-      # which finds the loader there for volk.
+      # which finds the loader there for volk. Vulkan's validation layers check every test's GPU
+      # work, which a test requires when FBE_GPU_VALIDATION is 1.
       - name: Build and test
         env:
           SDL_VIDEO_DRIVER: offscreen
+          FBE_GPU_VALIDATION: '1'
         run: |
           echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
           export VK_LOADER_DEBUG=error,warn

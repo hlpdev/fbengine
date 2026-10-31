@@ -19,8 +19,9 @@ endif()
 
 # The tests' Vulkan: lavapipe, Mesa's driver on the CPU, whose frames are the same on every
 # machine, as the only driver the loader sees. On Windows it's mesa-dist-win's MSVC build, CI's,
-# fetched; on Linux the system's (apt's mesa-vulkan-drivers); on macOS it's MoltenVK, the
-# system's. FBENGINE_VULKAN_DRIVER names another.
+# fetched; on Linux the system's (apt's mesa-vulkan-drivers), each of its manifests, as a multiarch
+# system has one for each architecture and the loader skips the others; on macOS it's MoltenVK,
+# the system's. FBENGINE_VULKAN_DRIVER names another.
 set(FBENGINE_VULKAN_DRIVER "" CACHE FILEPATH
     "The Vulkan driver manifest (an ICD .json) the tests use, alone; empty for lavapipe")
 set(fbengine_vulkan_driver "${FBENGINE_VULKAN_DRIVER}")
@@ -35,9 +36,7 @@ if(fbengine_vulkan_driver STREQUAL "" AND WIN32)
   set(fbengine_vulkan_driver "${lavapipe_SOURCE_DIR}/x64/lvp_icd.x86_64.json")
 elseif(fbengine_vulkan_driver STREQUAL "" AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   file(GLOB fbengine_lavapipes "/usr/share/vulkan/icd.d/lvp_icd*.json")
-  if(fbengine_lavapipes)
-    list(GET fbengine_lavapipes 0 fbengine_vulkan_driver)
-  endif()
+  list(JOIN fbengine_lavapipes ":" fbengine_vulkan_driver)
 endif()
 # Windows' loader takes only backslashes.
 set(fbengine_vulkan_environment "")
