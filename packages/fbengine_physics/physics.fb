@@ -4,10 +4,15 @@
 
 Import std.core
 Import std.ffi
+Import std.math
+Import std.os
 Import "./c/fbe_physics"
 
 /// What's the same for every world: the DLL, and Jolt's threads.
 Public Class Physics
+    // Whether SetThreads, or the first world, has said how many threads Jolt has.
+    Static Field threadsChosen: Bool = False
+
     Private New()
     End New
 
@@ -19,9 +24,27 @@ Public Class Physics
         End Unsafe
     End Method
 
-    /// How many threads of Jolt's own step worlds with the main thread: one a core, less the main
-    /// thread's, and none on a machine of one core.
-    @MainThread Public Static Method Threads(): Int32 => fbe_physics_threads()
+    /// How many threads of Jolt's own step worlds with the main thread: as SetThreads said, or
+    /// else one for each processor the OS lets the program use, as System.CpuCount counts them,
+    /// less the main thread's, and at most 31, the most Jolt works on at once.
+    @MainThread Public Static Method Threads(): Int32
+        ChooseThreads()
+        Return fbe_physics_threads()
+    End Method
+
+    /// Gives Jolt `threads` of its own, from 0, stepping on the main thread alone, to 31, at once
+    /// if a world's been made, as a game that keeps cores for its own work might.
+    @MainThread Public Static Method SetThreads(threads: Int32)
+        If !fbe_physics_set_threads(threads) Then Panic("Physics.SetThreads: {LastError()}")
+        threadsChosen = True
+    End Method
+
+    // Gives Jolt its threads, unless SetThreads has, before the first world starts it.
+    @MainThread Package Static Method ChooseThreads()
+        If threadsChosen Then Return
+        threadsChosen = True
+        fbe_physics_set_threads(Clamp(System.CpuCount - 1, 0, FBE_PHYSICS_MAX_THREADS))
+    End Method
 End Class
 
 /// What the last call to fbengine_physics_native that failed says went wrong.

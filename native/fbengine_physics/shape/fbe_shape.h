@@ -81,6 +81,9 @@ FBE_PHYSICS_API uint64_t fbe_shape_compound(const fbe_shape_part_t* parts, int32
 // Frees `shape`, which the bodies made of it keep; false if it isn't a shape.
 FBE_PHYSICS_API bool fbe_shape_free(uint64_t shape);
 
+// How many shapes there are, made and not freed.
+FBE_PHYSICS_API int32_t fbe_shape_count(void);
+
 // What `shape` is, FBE_SHAPE_BOX to FBE_SHAPE_COMPOUND, or 0 if it isn't a shape.
 FBE_PHYSICS_API int32_t fbe_shape_kind(uint64_t shape);
 

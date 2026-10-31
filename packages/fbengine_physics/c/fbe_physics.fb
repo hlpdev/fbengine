@@ -4,6 +4,7 @@
 // skipped: FBE_PHYSICS_API, a macro that isn't a number
 Public Const FBE_PHYSICS_MAX_BODIES: Int32 = 1048576
 Public Const FBE_PHYSICS_MAX_COLLISION_STEPS: Int32 = 16
+Public Const FBE_PHYSICS_MAX_THREADS: Int32 = 31
 
 @CLayout Public Struct fbe_physics_vec3_t
     Public Field x: Float32
@@ -15,6 +16,8 @@ Public Extern "C" Lib "fbengine_physics_native"
     Function fbe_physics_version(): CString
     Function fbe_physics_error(): CString
     Function fbe_physics_threads(): Int32
+    Function fbe_physics_set_threads(threads: Int32): Bool
+    Function fbe_physics_worlds(): Int32
     Function fbe_physics_new(max_bodies: UInt32): UInt64
     Function fbe_physics_free(world: UInt64): Bool
     Function fbe_physics_bodies(world: UInt64): Int32

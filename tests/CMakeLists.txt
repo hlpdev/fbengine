@@ -89,3 +89,17 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION
                        "\n200 boxes fell, 200 came to rest, 100 on others\r?\n$")
 endif()
+
+# What fbengine_physics panics for, each by a run of tests/physics/panics, which says it.
+if(FBENGINE_FB_TESTS)
+  foreach(case IN ITEMS "step-nan;not nan" "step-infinity;not inf" "step-huge;not 1e\\+30"
+                        "step-freed;this PhysicsWorld was freed")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME physics.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/physics/panics"
+                     -- ${name})
+    set_tests_properties(physics.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
+                         "panic: PhysicsWorld\\.Step: [^\n]*${said}")
+  endforeach()
+endif()

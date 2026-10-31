@@ -5,6 +5,8 @@ Import std.math
 Import std.test
 Import fbengine_physics
 Import fbengine_physics.c.fbe_physics
+Import fbengine_physics.c.fbe_shape
+Import std.os
 
 // The DLL is the package's own build: its version is project.toml's, which is fbengine's.
 @Test
@@ -12,9 +14,52 @@ Function TheDllIsThePackagesVersion()
     Expect(Physics.Version() == "0.1.1")
 End Function
 
+// The threads Jolt's pool has, which C counts, are those std counts.
 @Test
-Function JoltHasAThreadACoreLessTheMainThreads()
-    Expect(Physics.Threads() >= 0)
+Function JoltHasAThreadForEachProcessorLessTheMainThreads()
+    Local expected = Clamp(System.CpuCount - 1, 0, 31)
+    Expect(Physics.Threads() == expected)
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Expect(Physics.Threads() == expected)
+End Function
+
+@Test
+Function SetThreadsGivesJoltThatManyAtOnce()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Physics.SetThreads(2)
+    Expect(Physics.Threads() == 2)
+    world.Step(1.0 / 60)
+    Physics.SetThreads(0)
+    Expect(Physics.Threads() == 0)
+    world.Step(1.0 / 60)
+    Expect(world.Steps() == 2)
+    Physics.SetThreads(Clamp(System.CpuCount - 1, 0, 31))
+End Function
+
+// A world, or a shape, dropped without Free frees itself, and its bodies.
+@Test @MainThread
+Function ADroppedWorldFreesItselfAndItsBodies()
+    Local worlds = fbe_physics_worlds()
+    Local shapes = fbe_shape_count()
+    Local kept = BodyOfADroppedWorld()
+    Expect(fbe_physics_worlds() == worlds)
+    Expect(kept.Freed())
+    Expect(fbe_shape_count() == shapes + 1)
+    kept = BodyOfADroppedWorld()
+    // The first body's shape, kept only by that body, went with it.
+    Expect(fbe_shape_count() == shapes + 1)
+End Function
+
+// A body, whose world and shape go when it's given back.
+@MainThread Function BodyOfADroppedWorld(): Body
+    Local world = PhysicsWorld()
+    Local body = Body(world, Shape.Sphere(1), Motion.DYNAMIC, Vec3(0, 0, 0))
+    Expect(fbe_physics_worlds() >= 1)
+    world.Step(1.0 / 60)
+    Expect(!body.Freed())
+    Return body
 End Function
 
 @Test

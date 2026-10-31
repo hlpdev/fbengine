@@ -1,0 +1,6 @@
+[project]
+name = "physics_panics"
+version = "0.1.0"
+
+[dependencies]
+fbengine_physics = { path = "../../../packages/fbengine_physics" }

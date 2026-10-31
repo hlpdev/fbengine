@@ -35,6 +35,7 @@ Public Final Class PhysicsWorld
             Panic("PhysicsWorld: a world is for 1 to {FBE_PHYSICS_MAX_BODIES} bodies, not {maxBodies}")
         End If
         bodies = Map<UInt64, Body>()
+        Physics.ChooseThreads()
         handle = fbe_physics_new(maxBodies As UInt32)
         If handle == 0 Then Panic("PhysicsWorld: {LastError()}")
     End New
@@ -49,6 +50,16 @@ Public Final Class PhysicsWorld
             kept.Forget()
         End For
         bodies.Clear()
+    End Method
+
+    // A world dropped unfreed frees itself.
+    Method Destroy()
+        If handle == 0 Then Return
+        fbe_physics_free(handle)
+        handle = 0
+        For kept In bodies.Values()
+            kept.Forget()
+        End For
     End Method
 
     /// Whether Free has freed the world.
@@ -81,9 +92,12 @@ Public Final Class PhysicsWorld
     /// `collisionSteps` times on the way, from 1 to 16, or with 0, once for each 60th of a second,
     /// as Jolt suggests. The same steps of a world given the same calls move it the same.
     @MainThread Public Method Step(seconds: Float64, collisionSteps: Int32 = 0)
+        Local world = Live("PhysicsWorld.Step")
         Local steps = collisionSteps
-        If steps == 0 Then steps = CollisionStepsFor(seconds)
-        If !fbe_physics_step(Live("PhysicsWorld.Step"), seconds As Float32, steps)
+        // What's out of range C says so of.
+        If steps == 0 && seconds > 0 && seconds <= 1 Then steps = CollisionStepsFor(seconds)
+        If steps == 0 Then steps = 1
+        If !fbe_physics_step(world, seconds As Float32, steps)
             Panic("PhysicsWorld.Step: {LastError()}")
         End If
     End Method
@@ -120,7 +134,8 @@ Public Final Class PhysicsWorld
     End Method
 
     /// How far through the next step the time Update has been given is, from 0 up to 1, for
-    /// drawing what moves between its last two steps.
+    /// drawing what moves between its last two steps. After SetStepRate raises the rate, it can
+    /// read 1 until the next Update takes the steps now due.
     @MainThread Public Method Alpha(): Float64
         Live("PhysicsWorld.Alpha")
         Return Clamp(owed * (rate As Float64), 0.0, 1.0)
