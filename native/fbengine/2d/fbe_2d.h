@@ -36,6 +36,23 @@ typedef struct fbe_2d_pen_t {
     int32_t blend;
 } fbe_2d_pen_t;
 
+// How a texture's drawn: the part of it, in its pixels from its top left, 0 by 0 for all of it;
+// its handle, the point of that part, in its pixels, that lands at the position drawn at, which
+// it's rotated and scaled about; its rotation, in degrees, clockwise on the screen; and its scale
+// across and down, a negative one mirroring it. C has no `using`, so it's a typedef.
+// NOLINTNEXTLINE(modernize-use-using)
+typedef struct fbe_2d_sprite_t {
+    float region_x;
+    float region_y;
+    float region_width;
+    float region_height;
+    float handle_x;
+    float handle_y;
+    float rotation;
+    float scale_x;
+    float scale_y;
+} fbe_2d_sprite_t;
+
 // Each draws into `target`, a texture that's a target or 0 for the screen, with `pen`; false if the
 // target isn't a live target, there's no screen, or the pen's viewport or blend isn't one.
 // Positions are in pixels from the target's top left, a pixel covering from its whole coordinates
@@ -63,6 +80,18 @@ FBE_API bool fbe_2d_oval(uint64_t target, const fbe_2d_pen_t* pen, int32_t x, in
 // drawn once. False for fewer than 3 points, or a point that isn't finite.
 FBE_API bool fbe_2d_polygon(uint64_t target, const fbe_2d_pen_t* pen, const float* points,
                             int32_t count, bool filled);
+// `texture` as `sprite` says, its handle at `x`, `y` (the pen's origin added), sampled as the
+// texture's filter says and clamped at its edges, times the pen's color, which tints it and its
+// alpha fades it; unrotated and at its own size at whole pixels, each pixel is one of its texels
+// exactly. False also if the texture isn't live or is the target, or the sprite's part isn't in it,
+// or its rotation or scale isn't finite.
+FBE_API bool fbe_2d_texture(uint64_t target, const fbe_2d_pen_t* pen, uint64_t texture,
+                            const fbe_2d_sprite_t* sprite, float x, float y);
+// The viewport covered with `texture` as `sprite` says, unrotated and scaled, tiles placed so one's
+// handle is at `x`, `y` (the pen's origin added); all of a texture repeats as its sampler wraps,
+// in one quad, and a part of one is a quad a tile.
+FBE_API bool fbe_2d_tile(uint64_t target, const fbe_2d_pen_t* pen, uint64_t texture,
+                         const fbe_2d_sprite_t* sprite, float x, float y);
 
 #ifdef __cplusplus
 }

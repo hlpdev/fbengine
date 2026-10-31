@@ -5,6 +5,7 @@
 Import std.core
 Import std.ffi
 Import std.image
+Import std.io
 Import std.math
 Import "./c/fbe_texture"
 Import "./window"
@@ -69,6 +70,16 @@ Public Final Class Texture
         Self.handle = handle
         Keep(Self)
     End New
+
+    /// A texture of the pixels an image file decodes to, PNG, JPEG, BMP, TGA, GIF, QOI, or WebP,
+    /// RGBA8, with mipmaps unless `mipmaps` is False. It throws when the file can't be read or
+    /// decoded, or as New does.
+    @MainThread
+    Public Static Method Load(path: Path, mipmaps: Bool = True): Texture Throws GraphicsError,
+                                                                                IOError
+        Local image = Try Image.Load(path)
+        Return Try FromImage(image, mipmaps)
+    End Method
 
     /// A texture of `image`'s pixels, RGBA8, with mipmaps unless `mipmaps` is False.
     @MainThread

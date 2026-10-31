@@ -520,6 +520,264 @@ TEST_CASE("a canvas's shapes match their golden image", "[gpu][golden]") {
     stop_gpu();
 }
 
+namespace {
+
+/// An 8x8 test card, every pixel different, opaque.
+std::uint64_t card(std::int32_t filter = FBE_TEXTURE_NEAREST) {
+    const std::uint64_t texture = fbe_texture_create(8, 8, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(texture != 0);
+    std::vector<std::uint8_t> pixels;
+    for (std::uint8_t y = 0; y < 8; ++y) {
+        for (std::uint8_t x = 0; x < 8; ++x) {
+            pixels.push_back(static_cast<std::uint8_t>((x * 32) + 8));
+            pixels.push_back(static_cast<std::uint8_t>((y * 32) + 8));
+            pixels.push_back(static_cast<std::uint8_t>(255 - ((x + y) * 16)));
+            pixels.push_back(255);
+        }
+    }
+    require(fbe_texture_write(texture, 0, 0, 8, 8, pixels.data(), 32));
+    require(fbe_texture_set_filter(texture, filter));
+    return texture;
+}
+
+/// The card's pixel at `x`, `y`.
+rgba_t card_pixel(std::int64_t x, std::int64_t y) {
+    return {
+        static_cast<std::uint8_t>((x * 32) + 8),
+        static_cast<std::uint8_t>((y * 32) + 8),
+        static_cast<std::uint8_t>(255 - ((x + y) * 16)),
+        255,
+    };
+}
+
+constexpr fbe_2d_sprite_t all{ .scale_x = 1.0F, .scale_y = 1.0F };
+
+} // namespace
+
+TEST_CASE("a texture drawn at its size at whole pixels is its texels exactly", "[gpu]") {
+    start();
+    for (const std::int32_t filter : { FBE_TEXTURE_NEAREST, FBE_TEXTURE_LINEAR }) {
+        INFO("filter " << filter);
+        const std::uint64_t made = target(16, 16);
+        const std::uint64_t texture = card(filter);
+        const fbe_2d_pen_t ink = pen(white);
+        require(fbe_2d_texture(made, &ink, texture, &all, 3.0F, 5.0F));
+        const fbe::golden::frame_t frame = read(made);
+        for (std::uint32_t y = 0; y < 8; ++y) {
+            for (std::uint32_t x = 0; x < 8; ++x) {
+                INFO(x << ", " << y);
+                CHECK(pixel(frame, x + 3, y + 5) == card_pixel(x, y));
+            }
+        }
+        CHECK(pixel(frame, 2, 5) == rgba_t{ 0, 0, 0, 0 });
+    }
+    stop_gpu();
+}
+
+TEST_CASE("a sprite's region, mirror, and quarter turn are its texels moved", "[gpu]") {
+    start();
+    const std::uint64_t made = target(16, 8);
+    const std::uint64_t texture = card();
+    const fbe_2d_pen_t ink = pen(white);
+    // The 4x4 at 2, 2, as it is at 0, 0; mirrored across with its handle at 4, 0 drawn at 4, 0,
+    // so it covers 4 to 8; turned a quarter clockwise about its top left, drawn at 16, 0, so it
+    // covers 12 to 16.
+    const fbe_2d_sprite_t region{
+        .region_x = 2,
+        .region_y = 2,
+        .region_width = 4,
+        .region_height = 4,
+        .scale_x = 1,
+        .scale_y = 1,
+    };
+    fbe_2d_sprite_t mirrored = region;
+    mirrored.handle_x = 4;
+    mirrored.scale_x = -1;
+    fbe_2d_sprite_t turned = region;
+    turned.rotation = 90;
+    require(fbe_2d_texture(made, &ink, texture, &region, 0, 0));
+    require(fbe_2d_texture(made, &ink, texture, &mirrored, 4, 0));
+    require(fbe_2d_texture(made, &ink, texture, &turned, 16, 0));
+    const fbe::golden::frame_t frame = read(made);
+    for (std::uint32_t y = 0; y < 4; ++y) {
+        for (std::uint32_t x = 0; x < 4; ++x) {
+            INFO(x << ", " << y);
+            CHECK(pixel(frame, x, y) == card_pixel(2 + x, 2 + y));
+            CHECK(pixel(frame, 4 + x, y) == card_pixel(2 + 3 - x, 2 + y));
+            // A quarter turn clockwise puts the region's left column at the top, right to left.
+            CHECK(pixel(frame, 12 + x, y) == card_pixel(2 + y, 2 + 3 - x));
+        }
+    }
+    stop_gpu();
+}
+
+TEST_CASE("a sprite's tinted and faded by the pen's color", "[gpu]") {
+    start();
+    const std::uint64_t made = target(4, 1);
+    const std::uint64_t texture = fbe_texture_create(1, 1, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(texture != 0);
+    const std::array<std::uint8_t, 4> whitened{ 255, 255, 255, 255 };
+    require(fbe_texture_write(texture, 0, 0, 1, 1, whitened.data(), 4));
+    const fbe_2d_pen_t clear = pen(black);
+    require(fbe_2d_clear(made, &clear));
+    const fbe_2d_pen_t tinted = pen(red);
+    require(fbe_2d_texture(made, &tinted, texture, &all, 0, 0));
+    const fbe_2d_pen_t faded = pen({ 255, 255, 255, 128 }, FBE_2D_ALPHA);
+    require(fbe_2d_texture(made, &faded, texture, &all, 1, 0));
+    const fbe::golden::frame_t frame = read(made);
+    CHECK(pixel(frame, 0, 0) == red);
+    CHECK(std::abs(pixel(frame, 1, 0)[0] - to_srgb(128.0 / 255.0)) <= 1);
+    stop_gpu();
+}
+
+TEST_CASE("tiles cover the viewport, one's handle at the position", "[gpu]") {
+    start();
+    const std::uint64_t made = target(24, 20);
+    const std::uint64_t texture = card();
+    fbe_2d_pen_t clipped = pen(white);
+    clipped.viewport_x = 2;
+    clipped.viewport_y = 1;
+    clipped.viewport_width = 20;
+    clipped.viewport_height = 17;
+    // All of it, repeating as it wraps, its handle 1, 2 at 5, 7: a tile's top left at 4, 5.
+    fbe_2d_sprite_t handled = all;
+    handled.handle_x = 1;
+    handled.handle_y = 2;
+    require(fbe_2d_tile(made, &clipped, texture, &handled, 5, 7));
+    fbe::golden::frame_t frame = read(made);
+    for (std::uint32_t y = 0; y < 20; ++y) {
+        for (std::uint32_t x = 0; x < 24; ++x) {
+            INFO(x << ", " << y);
+            const bool inside = x >= 2 && x < 22 && y >= 1 && y < 18;
+            CHECK(pixel(frame, x, y) == (inside ? card_pixel(((x + 8) - 4) % 8, ((y + 8) - 5) % 8)
+                                                : rgba_t{ 0, 0, 0, 0 }));
+        }
+    }
+    // A part of it, a quad a tile.
+    const fbe_2d_pen_t ink = pen(white);
+    fbe_2d_sprite_t part = all;
+    part.region_x = 4;
+    part.region_y = 4;
+    part.region_width = 3;
+    part.region_height = 2;
+    require(fbe_2d_tile(made, &ink, texture, &part, 0, 0));
+    frame = read(made);
+    for (std::uint32_t y = 0; y < 20; ++y) {
+        for (std::uint32_t x = 0; x < 24; ++x) {
+            INFO(x << ", " << y);
+            CHECK(pixel(frame, x, y) == card_pixel(4 + (x % 3), 4 + (y % 2)));
+        }
+    }
+    stop_gpu();
+}
+
+// Drawn into, then drawn from, in one frame: the pass sampling it comes after the pass drawing it.
+TEST_CASE("a texture drawn into and then drawn shows what was drawn into it", "[gpu]") {
+    start();
+    const std::uint64_t drawn = target(8, 8);
+    const std::uint64_t shown = target(8, 8);
+    const fbe_2d_pen_t ink = pen(green);
+    require(fbe_2d_rect(drawn, &ink, 2, 2, 4, 4, true));
+    const fbe_2d_pen_t plain = pen(white);
+    require(fbe_2d_texture(shown, &plain, drawn, &all, 0, 0));
+    require(fbe_2d_rect(drawn, &ink, 0, 0, 8, 8, true));
+    const fbe::golden::frame_t frame = read(shown);
+    CHECK(pixel(frame, 3, 3) == green);
+    CHECK(pixel(frame, 0, 0) == rgba_t{ 0, 0, 0, 0 });
+    CHECK(fbe::gpu::last_recorded().passes == std::vector<std::string_view>{ "2d", "2d", "2d" });
+    stop_gpu();
+}
+
+TEST_CASE("a sprite that can't be drawn is refused", "[gpu]") {
+    start();
+    const std::uint64_t made = target(8, 8);
+    const std::uint64_t texture = card();
+    const fbe_2d_pen_t ink = pen(white);
+    CHECK(!fbe_2d_texture(made, &ink, made, &all, 0, 0));
+    CHECK(std::string(fbe_error()) == "a texture isn't drawn into itself");
+    fbe_2d_sprite_t outside = all;
+    outside.region_x = 6;
+    outside.region_width = 4;
+    outside.region_height = 2;
+    CHECK(!fbe_2d_texture(made, &ink, texture, &outside, 0, 0));
+    CHECK(std::string(fbe_error()) == "a sprite's part, 4x2 at 6, 0, isn't in a 8x8 texture");
+    fbe_2d_sprite_t spun = all;
+    spun.rotation = NAN;
+    CHECK(!fbe_2d_texture(made, &ink, texture, &spun, 0, 0));
+    CHECK(!fbe_2d_texture(made, &ink, texture, nullptr, 0, 0));
+    REQUIRE(fbe_texture_release(texture));
+    CHECK(!fbe_2d_tile(made, &ink, texture, &all, 0, 0));
+    CHECK(std::string(fbe_error()) == "the texture was freed");
+    stop_gpu();
+}
+
+// E3's sprites: the card at its size, scaled, turned smoothly about its middle, mirrored, tinted
+// and faded, frames of a sheet, and tiles of all of it and of a part, into the screen.
+TEST_CASE("sprites match their golden image", "[gpu][golden]") {
+    REQUIRE(fbe_window_set_headless(true));
+    fbe_gpu_set_pipeline_cache("");
+    require(fbe_window_open(96, 64, FBE_WINDOW_WINDOWED));
+    require(fbe_gpu_start());
+    const fbe_2d_pen_t clear = pen({ 30, 30, 40, 255 });
+    require(fbe_2d_clear(0, &clear));
+    const std::uint64_t sharp = card();
+    const std::uint64_t smooth = card(FBE_TEXTURE_LINEAR);
+    const fbe_2d_pen_t plain = pen(white);
+    require(fbe_2d_texture(0, &plain, sharp, &all, 2, 2));
+    fbe_2d_sprite_t bigger = all;
+    bigger.scale_x = 3;
+    bigger.scale_y = 2;
+    require(fbe_2d_texture(0, &plain, sharp, &bigger, 12, 2));
+    fbe_2d_sprite_t turned = all;
+    turned.handle_x = 4;
+    turned.handle_y = 4;
+    turned.rotation = 30;
+    turned.scale_x = 2;
+    turned.scale_y = 2;
+    require(fbe_2d_texture(0, &plain, smooth, &turned, 50, 12));
+    fbe_2d_sprite_t mirrored = all;
+    mirrored.scale_x = -2;
+    mirrored.scale_y = 2;
+    require(fbe_2d_texture(0, &plain, sharp, &mirrored, 86, 2));
+    const fbe_2d_pen_t tinted = pen({ 255, 160, 60, 160 }, FBE_2D_ALPHA);
+    require(fbe_2d_texture(0, &tinted, sharp, &bigger, 62, 20));
+    // Frames: the card's four 4x4 quarters as a sheet, side by side.
+    for (std::int32_t frame = 0; frame < 4; ++frame) {
+        const fbe_2d_sprite_t quarter{
+            .region_x = static_cast<float>((frame % 2) * 4),
+            .region_y = frame >= 2 ? 4.0F : 0.0F,
+            .region_width = 4,
+            .region_height = 4,
+            .scale_x = 2,
+            .scale_y = 2,
+        };
+        require(fbe_2d_texture(0, &plain, sharp, &quarter,
+                               2.0F + (static_cast<float>(frame) * 10.0F), 30));
+    }
+    fbe_2d_pen_t tiles = pen(white);
+    tiles.viewport_x = 2;
+    tiles.viewport_y = 42;
+    tiles.viewport_width = 40;
+    tiles.viewport_height = 20;
+    require(fbe_2d_tile(0, &tiles, sharp, &all, 3, 44));
+    tiles.viewport_x = 46;
+    fbe_2d_sprite_t part = all;
+    part.region_x = 2;
+    part.region_y = 2;
+    part.region_width = 5;
+    part.region_height = 3;
+    require(fbe_2d_tile(0, &tiles, sharp, &part, 46, 42));
+    fbe_frame_flip(false);
+    const fbe::golden::frame_t frame{
+        .width = static_cast<std::uint32_t>(fbe_window_pixel_width()),
+        .height = static_cast<std::uint32_t>(fbe_window_pixel_height()),
+        .rgba = fbe::gpu::read_window(),
+    };
+    fbe::golden::check("sprites", frame);
+    fbe_window_close();
+    stop_gpu();
+}
+
 // Not a check, a measure: a 1280x720 frame of 10,000 rectangles, 1,000 lines, and 100 ovals into
 // the screen, what the CPU spends drawing them, and the frame.
 TEST_CASE("a frame of 11,100 shapes, timed", "[gpu]") {
@@ -564,6 +822,61 @@ TEST_CASE("a frame of 11,100 shapes, timed", "[gpu]") {
                                    << counters.gpu_milliseconds << " ms, " << counters.draws
                                    << " draws, " << counters.triangles << " triangles, on "
                                    << fbe_gpu_device_name(fbe_gpu_device()));
+    fbe_window_close();
+    stop_gpu();
+}
+
+// Not a check, a measure: a 1280x720 frame of 10,000 sprites, turned and scaled, of 8 textures,
+// into the screen, what the CPU spends drawing them, and the frame.
+TEST_CASE("a frame of 10,000 sprites, timed", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    fbe_gpu_set_pipeline_cache("");
+    require(fbe_window_open(1280, 720, FBE_WINDOW_WINDOWED));
+    require(fbe_gpu_start());
+    std::vector<std::uint64_t> textures;
+    textures.reserve(8);
+    for (int at = 0; at < 8; ++at) {
+        textures.push_back(card(FBE_TEXTURE_LINEAR));
+    }
+    const fbe_2d_pen_t ink = pen(white, FBE_2D_ALPHA);
+    const auto draw = [&] {
+        for (std::int32_t at = 0; at < 10000; ++at) {
+            const fbe_2d_sprite_t sprite{
+                .handle_x = 4,
+                .handle_y = 4,
+                .rotation = static_cast<float>(at % 360),
+                .scale_x = 2,
+                .scale_y = 2,
+            };
+            fbe_2d_texture(0, &ink, textures[static_cast<std::size_t>(at) % textures.size()],
+                           &sprite, static_cast<float>((at * 37) % 1280),
+                           static_cast<float>((at * 53) % 720));
+        }
+    };
+    for (int at = 0; at < 3; ++at) {
+        draw();
+        fbe_frame_flip(false);
+    }
+    constexpr int frames = 30;
+    std::chrono::duration<double, std::milli> drawing{};
+    const auto started = std::chrono::steady_clock::now();
+    for (int at = 0; at < frames; ++at) {
+        fbe::gpu::recording_frame();
+        const auto before = std::chrono::steady_clock::now();
+        draw();
+        drawing += std::chrono::steady_clock::now() - before;
+        fbe_frame_flip(false);
+    }
+    vkDeviceWaitIdle(fbe::gpu::device()->device);
+    const std::chrono::duration<double, std::milli> spent =
+        std::chrono::steady_clock::now() - started;
+    fbe_gpu_counters_t counters{};
+    require(fbe_gpu_counters(&counters));
+    CHECK(counters.passes == 2);
+    WARN("10,000 sprites: drawing " << drawing.count() / frames << " ms, the frame "
+                                    << spent.count() / frames << " ms, the GPU's "
+                                    << counters.gpu_milliseconds << " ms, " << counters.draws
+                                    << " draws, on " << fbe_gpu_device_name(fbe_gpu_device()));
     fbe_window_close();
     stop_gpu();
 }

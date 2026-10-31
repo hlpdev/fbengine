@@ -21,6 +21,12 @@ Function Run(name: String) Throws GraphicsError
         Case "huge-read"
             Local texture = Try Texture(16384, 16384, TextureFormat.RGBA16F, False)
             texture.ReadPixels()
+        // A frame the sprite hasn't.
+        Case "sprite-frame"
+            Local sheet = Try Texture.Target(8, 4)
+            Local sprite = Sprite(sheet)
+            sprite.SetFrames(4, 4)
+            Canvas(sheet).Draw(sprite, 0, 0, 2)
         Case "lod-bias"
             Try Gpu.SetLodBias(17)
         Case "anisotropy"

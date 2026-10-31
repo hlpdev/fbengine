@@ -2,6 +2,8 @@
 // on the GPU ctest's tests use; a machine with no Vulkan sets FBENGINE_NO_GPU to 1 and skips them.
 
 Import std.core
+From std.image Import Image, Png
+Import std.io
 Import std.math
 Import std.os
 Import std.test
@@ -74,4 +76,72 @@ Function TheScreensCanvasIsOneAndDrawsIntoTheScreen() Throws GraphicsError
     Expect(image[0, 0] == Color32(255, 128, 0, 255))
     Expect(image[14, 8] == Color32(0, 0, 255, 255))
     Expect(image[10, 4] == Color32(255, 128, 0, 255))
+End Function
+
+@Test
+Function ASpriteHasFramesAndAHandle() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local sheet = Try Texture(16, 8, TextureFormat.RGBA8, False)
+    Local sprite = Sprite(sheet)
+    Expect(sprite.Frames() == 1)
+    Expect(sprite.Width() == 16)
+    sprite.SetFrames(4, 4)
+    Expect(sprite.Frames() == 8)
+    Expect(sprite.Width() == 4 && sprite.Height() == 4)
+    sprite.MidHandle()
+    Expect(sprite.Handle() == Vec2(2, 2))
+    sprite.SetFrames(4, 4, 2, 3)
+    Expect(sprite.Frames() == 3)
+    sprite.SetRegion(1, 1, 5, 3)
+    Expect(sprite.Width() == 5 && sprite.Height() == 3 && sprite.Frames() == 1)
+    Expect(sprite.Texture() == sheet)
+End Function
+
+@Test
+Function ACanvasDrawsALoadedSprite() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    // Red, green, then blue, white, saved as a PNG and loaded.
+    Local image = Image.FromBytes(2, 2, [255 As UInt8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255,
+                                         255, 255, 255, 255])
+    Local folder = Try TempDir("fbengine-sprite-")
+    Defer Try? folder.Close()
+    Local path = folder.Path / "sprite.png"
+    Try File.WriteBytes(path, Png.Encode(image))
+    Local sprite = Try Sprite.Load(path)
+    Expect(sprite.Width() == 2)
+    Local target = Try Texture.Target(6, 4)
+    Local canvas = Canvas(target)
+    canvas.Draw(sprite, 1, 1)
+    // Mirrored across about its right edge, so it lands on 4 to 6.
+    sprite.SetHandle(2, 0)
+    canvas.SetScale(-1, 1)
+    canvas.Draw(sprite, 4, 0)
+    canvas.SetScale(1, 1)
+    sprite.SetHandle(0, 0)
+    sprite.SetFrames(1, 1)
+    canvas.Draw(sprite, 0, 3, 3)
+    Local drawn = target.ToImage()
+    Expect(drawn[1, 1] == Color32(255, 0, 0, 255))
+    Expect(drawn[2, 2] == Color32(255, 255, 255, 255))
+    Expect(drawn[4, 0] == Color32(0, 255, 0, 255))
+    Expect(drawn[5, 0] == Color32(255, 0, 0, 255))
+    Expect(drawn[0, 3] == Color32(255, 255, 255, 255))
+End Function
+
+@Test
+Function ACanvasTilesASprite() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local tile = Try Texture(2, 1, TextureFormat.RGBA8, False)
+    tile.WritePixels(0, 0, 2, 1, [255 As UInt8, 0, 0, 255, 0, 0, 255, 255])
+    tile.SetFilter(TextureFilter.NEAREST)
+    Local target = Try Texture.Target(5, 2)
+    Local canvas = Canvas(target)
+    canvas.Tile(Sprite(tile), 1, 0)
+    Local drawn = target.ToImage()
+    Expect(drawn[0, 0] == Color32(0, 0, 255, 255))
+    Expect(drawn[1, 1] == Color32(255, 0, 0, 255))
+    Expect(drawn[4, 0] == Color32(0, 0, 255, 255))
 End Function
