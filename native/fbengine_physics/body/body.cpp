@@ -552,6 +552,7 @@ FBE_PHYSICS_API bool fbe_body_active(uint64_t body) {
 }
 
 FBE_PHYSICS_API bool fbe_body_wake(uint64_t body) {
+    const fp_mode_t fp_mode;
     const body_t* found = find_own(body);
     if (found == nullptr) {
         return false;
@@ -594,6 +595,7 @@ FBE_PHYSICS_API bool fbe_body_sensor(uint64_t body) {
 }
 
 FBE_PHYSICS_API bool fbe_body_set_sensor(uint64_t body, bool sensor) {
+    const fp_mode_t fp_mode;
     const body_t* found = find_own(body);
     if (found == nullptr) {
         return false;
@@ -695,6 +697,7 @@ FBE_PHYSICS_API bool fbe_body_can_sleep(uint64_t body) {
 }
 
 FBE_PHYSICS_API bool fbe_body_set_can_sleep(uint64_t body, bool can_sleep) {
+    const fp_mode_t fp_mode;
     if (find_own(body) == nullptr) {
         return false;
     }

@@ -117,3 +117,78 @@ Function AClockMovedOnALongWaySeeksThere() Throws VideoError
     Expect(start.Elapsed < 500.Milliseconds, "it took {start.Elapsed}")
     Expect(once.Ended() && once.FrameNumber() == 49)
 End Function
+
+// Its thread has gone on into the next loop, which turning looping off lets go of; turned on
+// again at once, the video loops on as if it never was off.
+@Test
+Function ALoopTurnedOffAndOnAgainAtItsEndGoesOn() Throws VideoError
+    For off In [49, 48, 47]
+        Local video = Try Video.Load(Embed("media/count.mpg"))
+        Defer video.Free()
+        video.SetLoop(True)
+        video.Play()
+        For i = 1 To off
+            video.Update(1.0 / 25)
+        End For
+        Sleep(100.Milliseconds)
+        video.SetLoop(False)
+        video.SetLoop(True)
+        For i = off + 1 To 56
+            video.Update(1.0 / 25)
+            Expect(video.FrameNumber() == i % 50,
+                   "off and on at {off}, it shows {video.FrameNumber()} at {i}")
+        End For
+        Expect(!video.Ended())
+    End For
+End Function
+
+// A clock moved on by years, as far as it moves at a time, is as exact as at the start.
+@Test
+Function AClockMovedOnByYearsIsExact() Throws VideoError
+    Local video = Try Video.Load(Embed("media/count.mpg"))
+    Defer video.Free()
+    video.SetLoop(True)
+    video.Play()
+    Local start = Instant.Now()
+    video.Update(999999600.52)
+    Expect(video.FrameNumber() == 13, "it shows {video.FrameNumber()}")
+    For i = 1 To 100
+        video.Update(1e9)
+    End For
+    Expect(start.Elapsed < 2000.Milliseconds, "it took {start.Elapsed}")
+    Expect(video.FrameNumber() == 13, "it shows {video.FrameNumber()}")
+    Expect(Abs(video.Time() - 0.52) < 0.001, "its time is {video.Time()}")
+    For i = 14 To 60
+        video.Update(1.0 / 25)
+        Expect(video.FrameNumber() == i % 50, "it shows {video.FrameNumber()} at {i}")
+    End For
+End Function
+
+// A loop turned off before its thread's gone on into the next is left to end there, rather than
+// its thread seeking again: as quick as a frame is, not as a seek is, in a video of one group of
+// 120 pictures.
+@Test
+Function ALoopTurnedOffBeforeItsEndDoesntSeek() Throws VideoError
+    Local video = Try Video.Load(Embed("media/longgroup.mpg"))
+    Defer video.Free()
+    Local start = Instant.Now()
+    video.Seek(110.0 / 30)
+    Local seek = start.Elapsed
+    video.Seek(0)
+    video.SetLoop(True)
+    video.Play()
+    For i = 1 To 110
+        video.Update(1.0 / 30)
+    End For
+    Sleep(100.Milliseconds)
+    start = Instant.Now()
+    video.SetLoop(False)
+    video.Update(1.0 / 30)
+    Local off = start.Elapsed
+    Expect(video.FrameNumber() == 111)
+    Expect(off * 4 < seek, "turning the loop off and a frame took {off}, a seek there {seek}")
+    For i = 112 To 120
+        video.Update(1.0 / 30)
+    End For
+    Expect(video.Ended() && video.FrameNumber() == 119)
+End Function

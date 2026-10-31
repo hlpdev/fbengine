@@ -123,15 +123,16 @@ FBE_PHYSICS_API bool fbe_physics_gravity(uint64_t world, fbe_physics_vec3_t* gra
 // collision_steps each, on Jolt's job system, gathering what began and ended touching in all of
 // them; false if it isn't a world or either is out of range. A world made and stepped by the same
 // calls in the same order steps the same, bit for bit, on any number of threads, whatever floating
-// point mode the calling thread is in; Jolt is built to make it the same on every target,
-// compiler, and build too, which is checked on Windows x64 so far.
+// point mode the calling thread is in, while no step overflows; Jolt is built to make it the same
+// on every target, compiler, and build too, which is checked on Windows x64 so far.
 FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t collision_steps);
 
 // How many times `world` has been stepped, -1 if it isn't a world.
 FBE_PHYSICS_API int64_t fbe_physics_steps(uint64_t world);
 
 // Whether `world`'s last step ran out of room for the pairs of bodies touching or their contacts,
-// and so left some out, as a world of too many touching bodies for its size does.
+// and so left some out, as a world of too many touching bodies for its size does. Which it left
+// out depends on its threads, so a step that overflows isn't deterministic.
 FBE_PHYSICS_API bool fbe_physics_overflowed(uint64_t world);
 
 // Makes the bodies of layers `a` and `b`, 0 to FBE_PHYSICS_LAYERS - 1, collide, or not, from the

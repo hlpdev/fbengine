@@ -321,3 +321,47 @@ Function TheCApiRefusesCastsOfMeshesAndOtherWorldsBodies()
         Expect(Error() == "the ignored body is of another world")
     End Unsafe
 End Function
+
+// Two triangles of `mesh`'s, a quad's from `a` to `d`, counter-clockwise seen from its front.
+Function Quad(corners: Vec3[], indices: Int32[], a: Vec3, b: Vec3, c: Vec3, d: Vec3)
+    Local base = corners.Count As Int32
+    corners.AddAll([a, b, c, d])
+    indices.AddAll([base, base + 1, base + 2, base, base + 2, base + 3])
+End Function
+
+// Surfaces of one body hit apart, however near, are each a hit, however long the ray: a mesh's
+// two panes 5 cm apart, a compound's two boards 1 cm apart, and a floor and a wall 0.5 mm apart
+// where a ray grazes them.
+@Test
+Function CastRayAllHitsEachOfABodysSurfacesApart() Throws ShapeError
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local corners: Vec3[] = []
+    Local indices: Int32[] = []
+    For x In [100.0, 100.05]
+        Quad(corners, indices, Vec3(x, -1, -1), Vec3(x, -1, 1), Vec3(x, 1, 1), Vec3(x, 1, -1))
+    End For
+    Local panes = Body(world, Try Shape.Mesh(corners, indices), Motion.STATIC, Vec3(0, 0, 0))
+    For distance In [200.0, 1000.0]
+        Local hits = world.CastRayAll(Vec3(0, 0.3, 0.2), Vec3(1, 0, 0), distance)
+        Expect(hits.Count == 2, "{distance} m on to the panes: {hits.Count} hits")
+        Expect(hits[0].Body == panes && Near(hits[1].Distance - hits[0].Distance, 0.05, 0.001))
+    End For
+    Local board = Shape.Box(Vec3(0.02, 2, 2))
+    Local boards = Shape.Compound([ShapePart(board, Vec3(0, 0, 0), Quat.Identity),
+                                   ShapePart(board, Vec3(0.03, 0, 0), Quat.Identity)])
+    Body(world, boards, Motion.STATIC, Vec3(50, 10, 0))
+    For distance In [100.0, 400.0]
+        Expect(world.CastRayAll(Vec3(0, 10.3, 0.2), Vec3(1, 0, 0), distance).Count == 2)
+    End For
+    corners = []
+    indices = []
+    // The floor to x 10, and the wall from below it at x 10.0005, which the ray meets 0.6 mm past
+    // the floor.
+    Quad(corners, indices, Vec3(0, 0, -1), Vec3(0, 0, 1), Vec3(10, 0, 1), Vec3(10, 0, -1))
+    Quad(corners, indices, Vec3(10.0005, -1, -1), Vec3(10.0005, -1, 1), Vec3(10.0005, 2, 1),
+         Vec3(10.0005, 2, -1))
+    Body(world, Try Shape.Mesh(corners, indices), Motion.STATIC, Vec3(0, -20, 0))
+    Local grazing = world.CastRayAll(Vec3(0, -19.9999, 0), Vec3(1, -1.00001e-5, 0), 20)
+    Expect(grazing.Count == 2, "grazing the floor and the wall: {grazing.Count} hits")
+End Function

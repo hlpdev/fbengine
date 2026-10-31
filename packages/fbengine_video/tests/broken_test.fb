@@ -1,5 +1,5 @@
-// Videos that read or wrote outside the heap in pl_mpeg before its patches open, or are refused,
-// and play, seek, and give their sound without going outside it.
+// Videos that read or wrote outside the heap in pl_mpeg before its patches, or crashed it, open, or
+// are refused, and play, seek, and give their sound without going outside it.
 
 Import std.core
 Import std.test
@@ -9,7 +9,9 @@ Function Broken(): (String, UInt8[])[] => [
     ("heap-read-decode-block", Embed("media/broken/heap-read-decode-block.mpg")),
     ("heap-read-process-macroblock", Embed("media/broken/heap-read-process-macroblock.mpg")),
     ("heap-write-decode-block", Embed("media/broken/heap-write-decode-block.mpg")),
-    ("issue68", Embed("media/broken/issue68.mpg"))]
+    ("issue68", Embed("media/broken/issue68.mpg")),
+    ("zero1", Embed("media/broken/zero1.mpg")),
+    ("zerotail", Embed("media/broken/zerotail.mpg"))]
 
 @Test
 Function ABrokenVideoPlaysOrIsRefused()

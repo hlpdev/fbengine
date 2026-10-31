@@ -127,8 +127,8 @@ Public Final Class PhysicsWorld
     /// `collisionSteps` times on the way, from 1 to 16, or with 0, once for each 60th of a second,
     /// as Jolt suggests. A world made and stepped by the same calls in the same order moves the
     /// same, bit for bit, on any number of threads, whatever floating point mode the game's thread
-    /// is in; Jolt is built to make it the same on every target, compiler, and build too, which is
-    /// checked on Windows x64 so far.
+    /// is in, while Overflowed is False; Jolt is built to make it the same on every target,
+    /// compiler, and build too, which is checked on Windows x64 so far.
     @MainThread Public Method Step(seconds: Float64, collisionSteps: Int32 = 0)
         Local world = Live("PhysicsWorld.Step")
         Local steps = collisionSteps
@@ -149,7 +149,8 @@ Public Final Class PhysicsWorld
     @MainThread Public Method Steps(): Int64 => fbe_physics_steps(Live("PhysicsWorld.Steps"))
 
     /// Whether the last step ran out of room for bodies touching, and so left some of their
-    /// contacts out, as a pile of more bodies than MaxBodies keeps room for can.
+    /// contacts out, as a pile of more bodies than MaxBodies keeps room for can. Which it left out
+    /// depends on the threads it ran on, so a world is deterministic only while this is False.
     @MainThread Public Method Overflowed(): Bool =>
         fbe_physics_overflowed(Live("PhysicsWorld.Overflowed"))
 

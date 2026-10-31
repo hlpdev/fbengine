@@ -61,8 +61,10 @@ FBE_VIDEO_API int32_t fbe_video_sound_channels(uint64_t video);
 
 // `video`'s whole sound, as a WAV file of 32-bit float samples at its rate and channels, in up to
 // `capacity` bytes at `bytes`, if there's room for it, giving how many bytes it takes; -1 if it
-// isn't a video or has no sound. Its first sample is at the video's time 0, and it's silent where
-// its stream has a gap; it was decoded as the video was opened.
+// isn't a video or has no sound. Its first sample is at the video's time 0, its first picture's,
+// however its stream was cut, and it's silent where its stream has a gap, as its packets' times
+// say, though a time more than the sound's own length and 5 seconds out is taken to be wrong; it
+// was decoded as the video was opened.
 FBE_VIDEO_API int64_t fbe_video_sound(uint64_t video, uint8_t* bytes, int64_t capacity);
 
 // Plays `video` from where its clock is, or pauses it there; false if it isn't a video. A video
@@ -78,9 +80,11 @@ FBE_VIDEO_API bool fbe_video_playing(uint64_t video);
 FBE_VIDEO_API bool fbe_video_set_loop(uint64_t video, bool loop);
 FBE_VIDEO_API bool fbe_video_looping(uint64_t video);
 
-// Moves a playing `video`'s clock on by `seconds`, 0 or more, as a frame took, showing the frame
-// due then, and waiting for its thread to decode it if it's behind; false if it isn't a video or
-// the time's out of range. A video that isn't looping ends as its clock passes its length.
+// Moves a playing `video`'s clock on by `seconds`, 0 to a billion, as a frame took, showing the
+// frame due then, and waiting for its thread to decode it if it's behind; false if it isn't a
+// video or the time's out of range, as more than 31 years at once is a mistake, as a time in
+// nanoseconds would be. A video that isn't looping ends as its clock passes its length; a looping
+// one's clock is as exact however long it plays.
 FBE_VIDEO_API bool fbe_video_update(uint64_t video, double seconds);
 
 // Puts `video`'s clock at `seconds`, from 0 to its length, showing the frame due then, decoded from

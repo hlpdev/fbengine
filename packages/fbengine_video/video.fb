@@ -114,9 +114,10 @@ Public Final Class Video
         fbe_video_sound_channels(Live("Video.SoundChannels"))
 
     /// The video's whole sound, as a WAV file of 32-bit float samples at its rate, whose first
-    /// sample is at the video's time 0, for a game to play beside it: silent until a sound that
-    /// starts later starts, and where its stream has a gap. It's decoded once, as the video's
-    /// opened. A video without sound has none to give.
+    /// sample is at the video's time 0, its first frame's, however its stream was cut, for a game
+    /// to play beside it: silent until a sound that starts later starts, and where its stream has
+    /// a gap, though a time in it more than the sound's own length and 5 seconds out is taken to
+    /// be wrong. It's decoded once, as the video's opened. A video without sound has none to give.
     @MainThread Public Method Sound(): UInt8[]
         Local video = Live("Video.Sound")
         Local size = fbe_video_sound(video, Null, 0)
@@ -149,9 +150,11 @@ Public Final Class Video
     /// Whether the video starts again each time it ends.
     @MainThread Public Method Looping(): Bool => fbe_video_looping(Live("Video.Looping"))
 
-    /// Moves a playing video's clock on by `seconds`, 0 or more, as a frame of the game took,
-    /// showing the frame due then, and waiting for its thread to decode it if it's behind. A video
-    /// that isn't looping ends as its clock passes its last frame.
+    /// Moves a playing video's clock on by `seconds`, 0 to a billion, as a frame of the game took,
+    /// showing the frame due then, and waiting for its thread to decode it if it's behind; more
+    /// than 31 years at once panics, as a mistake, like a time in nanoseconds. A video that isn't
+    /// looping ends as its clock passes its last frame; a looping one's clock is as exact however
+    /// long it plays.
     @MainThread Public Method Update(seconds: Float64)
         If !fbe_video_update(Live("Video.Update"), seconds) Then Panic("Video.Update: {LastError()}")
     End Method

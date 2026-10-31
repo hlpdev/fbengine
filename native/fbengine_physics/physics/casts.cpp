@@ -5,6 +5,7 @@
 #include "physics/physics.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -139,6 +140,15 @@ private:
 
 // A ten thousandth of a ray past its nearest hit, a tenth of a millimeter in a meter.
 constexpr float ray_margin = 1e-4F;
+
+// How many floats apart two hits of a body are at most that are where its triangles share an edge
+// or a corner, which are as near to the bit, and a few more for rounding.
+constexpr std::uint32_t shared_ulps = 4;
+
+// How many floats `a` is past `b`, of fractions of a ray, 0 or more, which `a` isn't less than.
+std::uint32_t floats_apart(float a, float b) {
+    return std::bit_cast<std::uint32_t>(a) - std::bit_cast<std::uint32_t>(b);
+}
 
 // How far past Jolt's closest hit a swept shape's cast `length` long is cast again, as a fraction
 // of it: a ray's margin, or a millimeter, ten times the tolerance Jolt finds a swept shape's hits
@@ -290,11 +300,12 @@ FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physi
     // Nearest first, and hits as near in the same order however Jolt's broad phase has them.
     std::ranges::sort(collector.mHits, nearer<JPH::RayCastResult>);
     // One hit where the ray crosses a surface: an edge or a corner its triangles share gives one
-    // of each, as near, the first of which, as CastRay gives, is kept.
+    // of each, as near, to the bit, the first of which, as CastRay gives, is kept; surfaces of a
+    // body apart, however little, are each hit.
     std::vector<JPH::RayCastResult> crossed;
     for (const JPH::RayCastResult& found : collector.mHits) {
         if (crossed.empty() || found.mBodyID != crossed.back().mBodyID ||
-            found.mFraction - crossed.back().mFraction > ray_margin) {
+            floats_apart(found.mFraction, crossed.back().mFraction) > shared_ulps) {
             crossed.push_back(found);
         }
     }

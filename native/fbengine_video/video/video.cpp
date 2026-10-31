@@ -12,7 +12,6 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <cstring>
 #include <deque>
 #include <format>
 #include <limits>
@@ -35,51 +34,18 @@ thread_local std::string last_error;
 // How many pictures a video's thread decodes ahead of what's shown.
 constexpr std::size_t ahead = 3;
 
+// The most seconds a video's clock moves on by at a time.
+constexpr double most_update = 1e9;
+
 bool fail(std::string_view message) {
     last_error = message;
     return false;
 }
 
-// A RIFF WAV file of `sound`'s 32-bit float samples, which fit one.
-std::vector<std::uint8_t> wav_of(const sound_t& sound) {
-    std::vector<std::uint8_t> wav;
-    const auto put = [&wav](std::uint32_t value, int bytes) {
-        for (int i = 0; i < bytes; ++i) {
-            wav.push_back(static_cast<std::uint8_t>(value >> (8U * static_cast<unsigned>(i))));
-        }
-    };
-    const auto tag = [&wav](std::string_view text) {
-        wav.insert(wav.end(), text.begin(), text.end());
-    };
-    const auto data = static_cast<std::uint32_t>(sound.samples.size() * sizeof(float));
-    const auto channels = static_cast<std::uint32_t>(sound.channels);
-    const auto rate = static_cast<std::uint32_t>(sound.rate);
-    tag("RIFF");
-    put(36 + data, 4);
-    tag("WAVE");
-    tag("fmt ");
-    put(16, 4);
-    // IEEE float.
-    put(3, 2);
-    put(channels, 2);
-    put(rate, 4);
-    put(rate * channels * 4, 4);
-    put(channels * 4, 2);
-    put(32, 2);
-    tag("data");
-    put(data, 4);
-    const std::size_t start = wav.size();
-    wav.resize(start + data);
-    if (data > 0) {
-        std::memcpy(wav.data() + start, sound.samples.data(), data);
-    }
-    return wav;
-}
-
-// Where a thread starts again: a time in a loop, and when that loop starts.
+// Where a thread starts again: a time in a loop, and which loop.
 struct seek_t {
     double to = 0.0;
-    double loop_start = 0.0;
+    std::int64_t loop = 0;
 };
 
 struct video_t {
@@ -90,12 +56,10 @@ struct video_t {
           // A picture's due a little before its time, so a clock moved on by a frame's time at a
           // time, which rounds, never falls a hair short of it.
           slack(0.001 / frame_rate) {
-        const sound_t sound = decoder->take_sound();
+        sound_t sound = decoder->take_sound();
         sound_rate = sound.rate;
         sound_channels = sound.channels;
-        if (sound_rate > 0) {
-            wav = wav_of(sound);
-        }
+        wav = std::move(sound.wav);
         worker = std::thread([this] { work(); });
     }
 
@@ -142,7 +106,10 @@ struct video_t {
     picture_t shown;
     // Whether the next picture ready is shown whenever it's due, as a seek's first is.
     bool showing_next = true;
+    // The clock: a time in a loop, which a looping video's clock is kept within, and which loop,
+    // so a clock moved on by years is as exact as at the start.
     double clock = 0.0;
+    std::int64_t clock_loop = 0;
     bool playing = false;
     bool ended = false;
     std::int64_t frames_shown = 0;
@@ -163,21 +130,20 @@ struct video_t {
     void work() {
         std::unique_lock hold(lock);
         std::uint64_t of = generation;
-        // Where this loop's pictures are due from, and the last picture's time in it.
-        double loop_start = 0.0;
-        double last = 0.0;
+        // Which loop the pictures are of.
+        std::int64_t loop_of = 0;
         while (!quit) {
             if (seek_to.has_value()) {
                 const seek_t to = *seek_to;
                 seek_to.reset();
                 of = generation;
-                loop_start = to.loop_start;
+                loop_of = to.loop;
                 picture_t picture = take_spare();
                 hold.unlock();
                 const bool found = decoder->seek(to.to, picture);
                 hold.lock();
                 if (of == generation) {
-                    decoded(found, std::move(picture), loop_start, last);
+                    decoded(found, std::move(picture), loop_of);
                 }
                 continue;
             }
@@ -200,19 +166,21 @@ struct video_t {
                 continue;
             }
             if (again) {
-                // The next loop's start, a frame after the last's last picture.
-                loop_start += last + (1.0 / frame_rate);
+                // A loop turned off meanwhile ends here, and one turned on again seeks.
+                if (!loop) {
+                    decoded(false, std::move(picture), loop_of);
+                    continue;
+                }
+                ++loop_of;
             }
-            decoded(found, std::move(picture), loop_start, last);
+            decoded(found, std::move(picture), loop_of);
         }
     }
 
     // Keeps a picture the thread decoded, if it `found` one; the lock's held.
-    void decoded(bool found, picture_t picture, double loop_start, double& last) {
+    void decoded(bool found, picture_t picture, std::int64_t loop_of) {
         if (found) {
-            last = picture.time;
-            picture.loop_start = loop_start;
-            picture.time += loop_start;
+            picture.loop = loop_of;
             ready.push_back(std::move(picture));
         } else {
             decoded_all = true;
@@ -221,9 +189,8 @@ struct video_t {
         changed.notify_all();
     }
 
-    // Starts the thread again at `to`, a time in the loop that starts at `loop_start`, the picture
-    // it decodes first shown whenever it's ready.
-    void restart(std::optional<seek_t> to) {
+    // Starts the thread again at `to`, the picture it decodes first shown whenever it's ready.
+    void restart(seek_t to) {
         {
             const std::scoped_lock hold(lock);
             for (picture_t& picture : ready) {
@@ -232,9 +199,24 @@ struct video_t {
             ready.clear();
             ++generation;
             seek_to = to;
-            decoded_all = !to.has_value();
+            decoded_all = false;
         }
         changed.notify_all();
+    }
+
+    // How far the clock is past `picture`'s time, in seconds.
+    [[nodiscard]] double past(const picture_t& picture) const {
+        return (static_cast<double>(clock_loop - picture.loop) * duration) + clock - picture.time;
+    }
+
+    // Moves the clock on by `seconds`, a looping video's whole loops into its count of them.
+    void move_clock(double seconds) {
+        clock += seconds;
+        if (loop && clock >= duration) {
+            const double loops = std::floor(clock / duration);
+            clock_loop += static_cast<std::int64_t>(loops);
+            clock = std::max(0.0, clock - (loops * duration));
+        }
     }
 
     // Seeks to the picture the clock's at, if that's past the next picture a seek starts from,
@@ -243,21 +225,22 @@ struct video_t {
         if (showing_next) {
             return;
         }
-        double into = clock - shown.loop_start;
-        std::int64_t loops = 0;
-        if (into >= duration) {
-            if (loop) {
-                loops = static_cast<std::int64_t>(std::floor(into / duration));
-                into -= static_cast<double>(loops) * duration;
-            } else {
-                into = duration;
-            }
+        // How many loops on from the one shown the clock is, and how far into that loop.
+        std::int64_t loops = std::max<std::int64_t>(0, clock_loop - shown.loop);
+        double into = clock;
+        if (!loop) {
+            into = std::min(duration, (static_cast<double>(loops) * duration) + clock);
+            loops = 0;
+        } else if (into >= duration) {
+            const double whole = std::floor(into / duration);
+            loops += static_cast<std::int64_t>(whole);
+            into = std::max(0.0, into - (whole * duration));
         }
         const std::int64_t due =
             std::clamp(static_cast<std::int64_t>(std::floor((into * frame_rate) + 0.001)),
                        std::int64_t{ 0 }, frames - 1);
         // Where the thread gets to as soon as a seek would: the next start, or into the next loop
-        // as far as its first.
+        // as far as its first, which two loops on is past.
         std::int64_t start = decoder->next_start(shown.number);
         if (start == std::numeric_limits<std::int64_t>::max()) {
             if (!loop) {
@@ -265,22 +248,20 @@ struct video_t {
             }
             start = frames + std::min(decoder->next_start(0), frames);
         }
-        if ((loops * frames) + due < start) {
+        if (loops < 2 && (loops * frames) + due < start) {
             return;
         }
-        restart(seek_t{
-            .to = into,
-            .loop_start = shown.loop_start + (static_cast<double>(loops) * duration),
-        });
+        restart(seek_t{ .to = into, .loop = shown.loop + loops });
         showing_next = true;
     }
 
     // Shows the picture due by the clock, waiting for the thread to decode it if it's behind.
     void show_due() {
         skip_ahead();
+        const double frame = 1.0 / frame_rate;
         std::unique_lock hold(lock);
         for (;;) {
-            while (!ready.empty() && (showing_next || ready.front().time <= clock + slack)) {
+            while (!ready.empty() && (showing_next || past(ready.front()) + slack >= 0.0)) {
                 spare.push_back(std::exchange(shown, std::move(ready.front())));
                 ready.pop_front();
                 showing_next = false;
@@ -293,51 +274,67 @@ struct video_t {
             }
             // The next is ready but not due, or there's none; or the next isn't decoded yet but
             // is due, as the one shown has had its time.
-            const bool due = showing_next || shown.time + (1.0 / frame_rate) <= clock + slack;
+            const bool due = showing_next || past(shown) + slack >= frame;
             if (!ready.empty() || decoded_all || !due) {
                 break;
             }
             changed.wait(hold);
         }
-        if (decoded_all && ready.empty() && !showing_next &&
-            shown.time + (1.0 / frame_rate) <= clock + slack) {
+        if (decoded_all && ready.empty() && !showing_next && past(shown) + slack >= frame) {
             ended = true;
             playing = false;
-            clock = shown.time + (1.0 / frame_rate);
+            clock = shown.time + frame;
+            clock_loop = shown.loop;
         }
     }
 
     // Starts the thread again at `seconds`, and shows the picture due then.
     void seek(double seconds) {
-        restart(seek_t{ .to = seconds, .loop_start = 0.0 });
+        restart(seek_t{ .to = seconds, .loop = 0 });
         clock = seconds;
+        clock_loop = 0;
         ended = false;
         showing_next = true;
         show_due();
     }
 
-    // Makes the video loop, or not: a loop turned off ends at its end, though the thread's gone
-    // on into the next, after the picture shown.
+    // Makes the video loop, or not: a loop turned off ends at its end, and the thread, if it's
+    // gone on into the next, lets go of what it decoded of it; a loop turned on with the thread
+    // at the end starts the next.
     void set_loop(bool looping) {
-        const bool stopping = loop && !looping;
         {
             const std::scoped_lock hold(lock);
-            loop = looping;
-            // A thread at the end goes on into the next loop.
-            if (looping && decoded_all) {
+            if (loop && !looping) {
+                end_loop();
+            } else if (looping && decoded_all && !seek_to.has_value()) {
+                const std::int64_t last = ready.empty() ? shown.loop : ready.back().loop;
+                seek_to = seek_t{ .to = 0.0, .loop = last + 1 };
                 decoded_all = false;
             }
+            loop = looping;
         }
         changed.notify_all();
-        // A seek's picture still to come is of the loop it says.
-        if (stopping && !showing_next) {
-            const std::int64_t next = shown.number + 1;
-            restart(next < frames ? std::optional(seek_t{
-                                        .to = static_cast<double>(next) / frame_rate,
-                                        .loop_start = shown.loop_start,
-                                    })
-                                  : std::nullopt);
+    }
+
+    // Lets go of the pictures the thread's decoded of the loop after the one showing, and stops
+    // it, if it has any; the lock's held. A seek's pictures still to come are of the loop it says.
+    void end_loop() {
+        if (ready.empty()) {
+            return;
         }
+        const std::int64_t showing = showing_next ? ready.front().loop : shown.loop;
+        if (ready.back().loop == showing) {
+            return;
+        }
+        while (ready.back().loop != showing) {
+            spare.push_back(std::move(ready.back()));
+            ready.pop_back();
+            if (ready.empty()) {
+                break;
+            }
+        }
+        ++generation;
+        decoded_all = true;
     }
 };
 
@@ -495,11 +492,13 @@ FBE_VIDEO_API bool fbe_video_update(uint64_t video, double seconds) {
     if (found == nullptr) {
         return false;
     }
-    if (!std::isfinite(seconds) || seconds < 0.0) {
-        return fail(std::format("a video's clock moves on by 0 seconds or more, not {}", seconds));
+    // More than a billion seconds, 31 years, is a mistake, as a time in nanoseconds would be.
+    if (!std::isfinite(seconds) || seconds < 0.0 || seconds > most_update) {
+        return fail(std::format(
+            "a video's clock moves on by 0 to a billion seconds at a time, not {}", seconds));
     }
     if (found->playing) {
-        found->clock += seconds;
+        found->move_clock(seconds);
         found->show_due();
     }
     return true;
@@ -523,7 +522,10 @@ FBE_VIDEO_API double fbe_video_time(uint64_t video) {
     if (found == nullptr) {
         return -1.0;
     }
-    return std::clamp(found->clock - found->shown.loop_start, 0.0, found->duration);
+    const double since =
+        (static_cast<double>(found->clock_loop - found->shown.loop) * found->duration) +
+        found->clock;
+    return std::clamp(since, 0.0, found->duration);
 }
 
 FBE_VIDEO_API bool fbe_video_ended(uint64_t video) {

@@ -15,7 +15,9 @@ FetchContent_MakeAvailable(pl_mpeg)
 #   vector's block was checked by where it starts, not all it reads and writes: its pull request
 #   #74's checks of both, and of an audio frame's bit rate index of 0, its issue #68.
 # - An audio frame's sync is looked for up to its buffer's length less 1, which is a size_t that
-#   an empty buffer wraps: its issue #69.
+#   an empty buffer wraps: its issue #69. And a search that finds none, from the end of a buffer
+#   that ends in zeros, leaves its place a byte past the end, which what's left of the buffer
+#   wraps; the copy leaves it at the end.
 # - Motion vectors of full pixels, and an intra block's DC, are shifted left while negative, which
 #   C leaves undefined; the copy shifts them as unsigned. A packet's time's top 3 bits are shifted
 #   left 30 as an int, which overflows past 2^31, 6.6 hours; the copy shifts them as an int64_t.
@@ -44,7 +46,9 @@ set(fbengine_pl_mpeg_patches
     "\tint64_t clock = plm_buffer_read(self->buffer, 3) << 30\;"
     "\tint64_t clock = (int64_t)plm_buffer_read(self->buffer, 3) << 30\;"
     "\t\t\t\t\tplm_buffer_has_ended(self->buffer) && (\n\t\t\t\t\t\tself->picture_type == PLM_VIDEO_PICTURE_TYPE_INTRA ||\n\t\t\t\t\t\tself->picture_type == PLM_VIDEO_PICTURE_TYPE_PREDICTIVE\n\t\t\t\t\t)\n\t\t\t\t) {"
-    "\t\t\t\t\tplm_buffer_has_ended(self->buffer)\n\t\t\t\t) {")
+    "\t\t\t\t\tplm_buffer_has_ended(self->buffer)\n\t\t\t\t) {"
+    "\tself->buffer->bit_index = (i + 1) << 3\;\n\treturn FALSE\;"
+    "\tself->buffer->bit_index = (i + 1 < self->buffer->length ? i + 1 : self->buffer->length) << 3\;\n\treturn FALSE\;")
 list(LENGTH fbengine_pl_mpeg_patches fbengine_patch_count)
 math(EXPR fbengine_patch_last "${fbengine_patch_count} - 1")
 foreach(fbengine_patch RANGE 0 ${fbengine_patch_last} 2)

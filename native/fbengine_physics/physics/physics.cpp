@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -17,7 +18,7 @@
 #include <Jolt/Core/Memory.h>
 #include <Jolt/RegisterTypes.h>
 #include <memory>
-#include <optional>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -73,8 +74,25 @@ bool assert_failed(const char* expression, const char* message, const char* file
 }
 #endif
 
+// The floating point mode fbengine's work runs in, set as it's made and never put back, for Jolt's
+// threads to keep: a union doesn't destroy what's in it.
+union kept_mode_t {
+    kept_mode_t() : mode() {}
+    ~kept_mode_t() {}
+    kept_mode_t(const kept_mode_t&) = delete;
+    kept_mode_t& operator=(const kept_mode_t&) = delete;
+    kept_mode_t(kept_mode_t&&) = delete;
+    kept_mode_t& operator=(kept_mode_t&&) = delete;
+
+    fp_mode_t mode;
+};
+
 // Jolt's allocator, its types, and the job system: started once, and never stopped, since a
-// process ending stops its threads before a DLL could.
+// process ending stops its threads before a DLL could. A process can end as soon as its first
+// world's made, as a game that panics then does, and a thread stopped as it starts can hold a lock
+// of the C++ runtime's, which the DLL's end then waits on for ever; so the job system's threads
+// have all started before it's used, and keep their mode in no thread_local, whose destructor each
+// would give the runtime under that lock.
 struct jolt_t {
     struct registered_t {
         registered_t() {
@@ -88,15 +106,36 @@ struct jolt_t {
 
     jolt_t() {
         // Jolt's threads, as they start, take the mode its work runs in, which they keep.
-        jobs.SetThreadInitFunction([](int) {
-            thread_local std::optional<fp_mode_t> mode;
-            mode.emplace();
+        jobs.SetThreadInitFunction([this](int) {
+            const kept_mode_t kept;
+            {
+                const std::scoped_lock hold(lock);
+                ++running;
+            }
+            ready.notify_all();
         });
-        jobs.Init(max_jobs, max_barriers, thread_count());
+        const std::int32_t threads = thread_count();
+        start(threads, [this, threads] { jobs.Init(max_jobs, max_barriers, threads); });
+    }
+
+    // Starts the job system's `threads` by `starting`, and waits until they have.
+    template <typename Starting>
+    void start(std::int32_t threads, Starting starting) {
+        {
+            const std::scoped_lock hold(lock);
+            running = 0;
+        }
+        starting();
+        std::unique_lock hold(lock);
+        ready.wait(hold, [this, threads] { return running == threads; });
     }
 
     registered_t registered;
     JPH::TempAllocatorImplWithMallocFallback memory{ step_memory_size };
+    // How many of the job system's threads have started.
+    std::mutex lock;
+    std::condition_variable ready;
+    std::int32_t running = 0;
     JPH::JobSystemThreadPool jobs;
 };
 
@@ -207,7 +246,7 @@ FBE_PHYSICS_API bool fbe_physics_set_threads(int32_t threads) {
     }
     threads_wanted = threads;
     if (started != nullptr && started->jobs.GetMaxConcurrency() - 1 != threads) {
-        started->jobs.SetNumThreads(threads);
+        started->start(threads, [threads] { started->jobs.SetNumThreads(threads); });
     }
     return true;
 }

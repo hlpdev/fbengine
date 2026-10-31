@@ -168,6 +168,7 @@ void free_joints_of(const world_t& world, std::uint64_t body) {
 extern "C" {
 
 FBE_PHYSICS_API uint64_t fbe_joint_fixed(uint64_t a, uint64_t b) {
+    const fp_mode_t fp_mode;
     joined_t bodies;
     if (!joined(a, b, bodies)) {
         return 0;

@@ -202,6 +202,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_mesh(const fbe_shape_vec3_t* vertices, int32_
 }
 
 FBE_PHYSICS_API uint64_t fbe_shape_compound(const fbe_shape_part_t* parts, int32_t count) {
+    const fp_mode_t fp_mode;
     start();
     if (count < 1) {
         fail(std::format("a compound is of a part or more, not {}", count));

@@ -357,7 +357,7 @@ Public Final Class Body
     /// there, so it pushes what it meets on the way, which SetPosition, a teleport, doesn't. It
     /// keeps those velocities until it's moved again or given others, so a game moves it each
     /// step, or stops it with SetVelocity. A time so short that it's faster than Jolt moves a body,
-    /// 500 m/s, or a quarter turn a 60th of a second, 47 radians a second, panics.
+    /// 500 m/s, or an eighth of a turn a 60th of a second, 47.12 radians a second, panics.
     @MainThread Public Method MoveTo(position: Vec3, rotation: Quat, seconds: Float)
         Local at = BodyVec3(position)
         Local turned = fbe_body_quat_t(rotation.x, rotation.y, rotation.z, rotation.w)

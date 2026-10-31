@@ -619,3 +619,28 @@ TEST_CASE("a push works out the same whatever floating point mode the game's thr
         CHECK(pushed_by(how, true) == pushed_by(how, false));
     }
 }
+
+// A warehouse of 10,000 crates on a floor, each touching it, is more pairs than a world of 16384
+// has room for, so its steps leave some out, which depends on the threads: a world's deterministic
+// only while it doesn't overflow, which it says.
+TEST_CASE("a world whose steps leave contacts out says so") {
+    fbe_physics_set_threads(0);
+    const std::uint64_t world = fbe_physics_new(16384);
+    const fbe_shape_vec3_t floor_size{ .x = 200.0F, .y = 1.0F, .z = 200.0F };
+    const fbe_body_vec3_t floor_at = at(0.0F, -0.5F, 0.0F);
+    fbe_body_add(world, fbe_shape_box(&floor_size), FBE_BODY_STATIC, &floor_at, &unturned);
+    const fbe_shape_vec3_t crate_size{ .x = 0.6F, .y = 0.6F, .z = 0.6F };
+    const std::uint64_t crate = fbe_shape_box(&crate_size);
+    for (int i = 0; i < 10000; ++i) {
+        const int row = i / 100;
+        const fbe_body_vec3_t place =
+            at(static_cast<float>(i % 100) - 49.5F, 0.3F, static_cast<float>(row) - 49.5F);
+        fbe_body_add(world, crate, FBE_BODY_DYNAMIC, &place, &unturned);
+    }
+    fbe_physics_optimize(world);
+    CHECK_FALSE(fbe_physics_overflowed(world));
+    REQUIRE(fbe_physics_step(world, 1.0F / 60, 1));
+    CHECK(fbe_physics_overflowed(world));
+    fbe_physics_free(world);
+    fbe_shape_free(crate);
+}

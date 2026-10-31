@@ -120,7 +120,7 @@ catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics."
 file(GLOB fbengine_physics_sources CONFIGURE_DEPENDS
      "${PROJECT_SOURCE_DIR}/native/fbengine_physics/*/*.cpp")
 add_executable(fbengine_physics_internal_tests physics/contacts_tests.cpp
-               ${fbengine_physics_sources})
+               ${fbengine_physics_sources} physics/float_mode_tests.cpp)
 target_include_directories(fbengine_physics_internal_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_physics")
 target_compile_definitions(fbengine_physics_internal_tests PRIVATE FBE_PHYSICS_BUILDING
@@ -159,15 +159,29 @@ if(FBENGINE_FB_TESTS)
     add_test(NAME physics.panics.${name}
              COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/physics/panics"
                      -- ${name})
+    # A minute, past which a run's taken to hang as it ends.
     set_tests_properties(physics.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
-                         "panic: PhysicsWorld\\.Step: [^\n]*${said}")
+                         "panic: PhysicsWorld\\.Step: [^\n]*${said}" TIMEOUT 60)
   endforeach()
   # A world still alive as a panic ends the program, which then exits as a panic does.
   add_test(NAME physics.panics.with-a-world
            COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}"
                    "-DPROGRAM=${CMAKE_CURRENT_SOURCE_DIR}/physics/panics" -DCASE=with-a-world
                    -DCODE=101 -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/exits.cmake")
+  set_tests_properties(physics.panics.with-a-world PROPERTIES TIMEOUT 60)
 endif()
+
+# A program that makes a world and ends at once, as a game that panics as it starts does, run 8 at a
+# time again and again on Jolt's most threads: each run ends, rather than its DLL's end waiting for
+# ever on a lock of a thread stopped as it started.
+add_executable(fbengine_physics_ends physics/ends.cpp)
+target_link_libraries(fbengine_physics_ends PRIVATE fbengine_physics_native)
+fbengine_set_warnings(fbengine_physics_ends)
+add_test(NAME physics.ends
+         COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_physics_ends>" -DAT_ONCE=8
+                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_physics_native>"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/ends.cmake")
+set_tests_properties(physics.ends PROPERTIES TIMEOUT 600)
 
 # fbengine's app area apart from its DLL: what it shows nothing for, and what a link opens, on
 # Windows read back through the shell; it opens nothing.

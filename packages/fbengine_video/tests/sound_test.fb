@@ -1,8 +1,9 @@
-// A video's sound: its first sample at the video's time 0, however late it starts, a gap in it
-// kept as silence, and a time that can't be right ignored.
+// A video's sound: its first sample at the video's time 0, however late it starts, or however its
+// stream was cut, a gap in it kept as silence, and a time that can't be right ignored.
 
 Import std.core
 Import std.ffi
+Import std.image
 Import std.math
 Import std.test
 Import fbengine_video
@@ -68,4 +69,48 @@ Function ASoundPacketsTimeFarPastTheVideoIsIgnored() Throws VideoError
     Local wav = Buffer<UInt8>.From(video.Sound())
     Expect(SecondsOf(wav) > 1.9 && SecondsOf(wav) < 2.1, "it's {SecondsOf(wav)} s long")
     Expect(Loudest(wav, 1.8, 1.95) > 0.05)
+End Function
+
+// Silence is no longer than the sound's own frames and 5 seconds: a video made 42 s long by a
+// thousand bare pictures, 3 bytes each, whose 2 s of sound has a packet more at 6 s and one at
+// 30 s, keeps the first, after silence, and takes the second's time to be wrong.
+@Test
+Function SilenceIsNoLongerThanTheSoundsFramesAndFiveSeconds() Throws VideoError
+    Local video = Try Video.Load(Embed("media/longpad.mpg"))
+    Defer video.Free()
+    Expect(video.Duration() > 40)
+    Local wav = Buffer<UInt8>.From(video.Sound())
+    Expect(SecondsOf(wav) > 6.1 && SecondsOf(wav) < 6.3, "it's {SecondsOf(wav)} s long")
+    Expect(Loudest(wav, 2.1, 5.9) < 0.001)
+    Expect(Loudest(wav, 6.0, 6.2) > 0.05)
+End Function
+
+// The gray of a frame of opengop.mpg, which is 16 and 4 times its number.
+Function Counted(video: Video): Int => Round((video.Frame()[32, 24].r As Float) / 4.66) As Int
+
+// opencut.mpg is opengop.mpg cut at its third group of pictures, which is open, so its first two
+// pictures are made from pictures it hasn't, and the first picture whose time it says is its
+// 22nd: its sound is placed from its first picture all the same, so it plays with its pictures as
+// the whole video's does, each sample the whole's 22 frames on.
+@Test
+Function ACutVideosSoundPlaysWithItsPictures() Throws VideoError
+    Local cut = Try Video.Load(Embed("media/opencut.mpg"))
+    Defer cut.Free()
+    Local whole = Try Video.Load(Embed("media/opengop.mpg"))
+    Defer whole.Free()
+    For frame In [2, 10, 27]
+        cut.Seek((frame As Float64) / 25)
+        Expect(Counted(cut) == frame + 22, "its frame {frame} is the whole's {Counted(cut)}")
+    End For
+    Local part = Buffer<UInt8>.From(cut.Sound())
+    Local all = Buffer<UInt8>.From(whole.Sound())
+    // 22 frames of 1764 samples of 8 bytes.
+    Local on = 22 * 1764 * 8
+    Expect(part.Count > 44 && part.Count + on <= all.Count,
+           "its sound is {part.Count} bytes, the whole's {all.Count}")
+    Local same = True
+    For i = 44 To part.Count - 1
+        If part[i] != all[i + on] Then same = False
+    End For
+    Expect(same)
 End Function

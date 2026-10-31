@@ -3,6 +3,7 @@
 // A decoder of a format of video, which a video's thread decodes it with: pl_mpeg's MPEG-1 now;
 // another format joins as another decoder_t, which open_decoder tries in turn.
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -17,25 +18,33 @@ struct picture_t {
     double time = 0.0;
     std::int64_t number = 0;
     std::vector<std::uint8_t> pixels;
-    // How far into the video's loops it is, which time counts from: 0 in its first.
-    double loop_start = 0.0;
+    // Which of the video's loops it's of, from 0, its time from that loop's start.
+    std::int64_t loop = 0;
 };
 
-/// A video's whole sound: its frames a second, its channels, and its samples, interleaved, the
-/// first at the video's time 0.
+/// A video's whole sound: its frames a second, its channels, and a WAV file of its 32-bit float
+/// samples, interleaved, the first at the video's time 0.
 struct sound_t {
     std::int32_t rate = 0;
     std::int32_t channels = 0;
-    std::vector<float> samples;
+    std::vector<std::uint8_t> wav;
 };
 
+/// The bytes of a WAV's header, before its samples.
+constexpr std::size_t wav_header_size = 44;
+
 /// The most bytes of samples a WAV holds, less its header.
-constexpr std::uint64_t most_sound_bytes = std::numeric_limits<std::uint32_t>::max() - 44;
+constexpr std::uint64_t most_sound_bytes =
+    std::numeric_limits<std::uint32_t>::max() - wav_header_size;
 
 /// Whether `bytes` of samples fit a WAV, whose sizes are 32 bits.
 constexpr bool wav_holds(std::uint64_t bytes) {
     return bytes <= most_sound_bytes;
 }
+
+/// Writes the header of `wav`, its first 44 bytes, for the 32-bit float samples after them, of
+/// `channels` at `rate`, which fit a WAV.
+void write_wav_header(std::span<std::uint8_t> wav, std::int32_t rate, std::int32_t channels);
 
 /// A video's decoder: what it's like, and its pictures in order, one thread's at a time but for
 /// what's const, which any thread calls as another decodes.
