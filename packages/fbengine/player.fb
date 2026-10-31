@@ -1,30 +1,64 @@
-// Players: what plays a Clip on an entity and the entities under it, which an entity's Player()
-// gives, and UpdateWorld moves on.
+// Players: what plays Clips on an entity and the entities under it, in layers, which an entity's
+// Player() gives, and UpdateWorld moves on, handing the game the events they reach.
 
 Import std.core
+Import std.ffi
 Import "./c/fbe_player"
 Import "./clip"
 Import "./entity"
 Import "./window"
 Import "./world"
 
-// The Player of each entity that has one, by its handle's slot.
-Global players: Player?[] = []
+/// How a Clip goes on at its end.
+Public Enum PlayMode
+    /// Once, holding its end, or its start when it plays backward.
+    ONCE = 0
+    /// From its start again, or its end when it plays backward, over and over.
+    LOOP = 1
+    /// Back the way it came, then on again, over and over.
+    PING_PONG = 2
+End Enum
 
-/// What plays a Clip on an entity and the entities under it: the one its Player() gives. Each of
-/// the Clip's channels moves the entity of its name, the entity itself or the first under it with
-/// the name, depth first, as Find finds them, bound as it's played or once the Clip changes; a
-/// name no entity has is left out. UpdateWorld moves it on by its seconds, and a Clip played past
-/// its end holds there. Once its entity's freed, using it panics.
+/// An event a Player reached in a Clip it plays: the event's name, the Clip's, the layer the Clip
+/// plays on, and the event's time in the Clip.
+Public Struct ClipEvent Implements Printable
+    Public Field Name: String
+    Public Field ClipName: String
+    Public Field Layer: Int
+    Public Field Time: Float
+
+    Public Method ToString(): String => "\"{Name}\" of \"{ClipName}\" at {Time}, on layer {Layer}"
+End Struct
+
+// The Player of each entity that has one, by its entity's handle's slot, and by its own.
+Global players: Player?[] = []
+Global playersByHandle: Player?[] = []
+
+/// What plays Clips on an entity and the entities under it: the one its Player() gives. Each of a
+/// Clip's channels moves the entity of its name, the entity itself or the first under it with the
+/// name, depth first, as Find finds them, bound as it's played or once the Clip changes; a name no
+/// entity has is left out. UpdateWorld moves it on by its seconds.
+///
+/// It plays in layers, from 0 to 15, each over the ones before it, as much as its Weight says, and
+/// kept to its Mask's entities when it has one; its own methods are layer 0's. A layer plays a
+/// Clip, or two or more while a Crossfade goes from one to the next, their poses mixed by how far
+/// in each is. What a Clip moves starts from where it was before the Player first moved it, so one
+/// faded out leaves it there; what no Clip moves is left as it is, for the game to move. Once its
+/// entity's freed, using it panics.
 Public Final Class Player
     Field handle: UInt64
     Field owner: Entity
-    Field current: Clip? = Null
+    // The Clip each layer played last.
+    Field currents: Clip?[] = []
+    Field handler: (Func(ClipEvent))? = Null
 
     New(owner: Entity)
         handle = fbe_player_create(owner.Live("Player"))
         If handle == 0 Then Panic("Player on a {owner.KindName()}: {LastError()}")
         Self.owner = owner
+        For index = 0 Until FBE_PLAYER_LAYERS
+            currents.Add(Null)
+        End For
     End New
 
     Method Destroy()
@@ -34,39 +68,206 @@ Public Final Class Player
     /// The entity it plays on.
     @MainThread Public Method Entity(): Entity => owner
 
-    /// Plays `clip` from its start, posing what it moves at once.
+    /// Its layer at `index`, from 0 to 15. One outside that panics.
     @MainThread @PanicsAtCaller
-    Public Method Play(clip: Clip)
-        If !fbe_player_play(handle, clip.Live("Play")) Then Failed("Play")
-        current = clip
+    Public Method Layer(index: Int): PlayerLayer
+        If index < 0 || index >= FBE_PLAYER_LAYERS
+            Panic("Layer({index}) on a Player: its layers are 0 to {FBE_PLAYER_LAYERS - 1}")
+        End If
+        Return PlayerLayer(Self, index)
     End Method
 
-    /// Stops what it plays, leaving what it moved where it is.
+    /// Plays `clip` on layer 0, as its layer's Play does.
     @MainThread @PanicsAtCaller
-    Public Method Stop()
-        If !fbe_player_play(handle, 0) Then Failed("Stop")
-        current = Null
+    Public Method Play(clip: Clip, mode: PlayMode = PlayMode.LOOP, speed: Float = 1)
+        Layer(0).Play(clip, mode, speed)
     End Method
 
-    /// The Clip it plays, or Null.
-    @MainThread Public Method Clip(): Clip? => current
+    /// Crossfades to `clip` on layer 0, as its layer's Crossfade does.
+    @MainThread @PanicsAtCaller
+    Public Method Crossfade(clip: Clip, seconds: Float, mode: PlayMode = PlayMode.LOOP,
+                            speed: Float = 1)
+        Layer(0).Crossfade(clip, seconds, mode, speed)
+    End Method
 
-    /// Puts what it plays at `seconds`, posing what it moves at once: before 0 at its first keys,
-    /// past its Length at its last. Not finite panics.
+    /// Stops layer 0, as its layer's Stop does.
+    @MainThread @PanicsAtCaller
+    Public Method Stop(seconds: Float = 0)
+        Layer(0).Stop(seconds)
+    End Method
+
+    /// The Clip layer 0 plays, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Clip(): Clip? => Layer(0).Clip()
+
+    /// Whether layer 0 plays its Clip, as its layer's Playing says.
+    @MainThread @PanicsAtCaller
+    Public Method Playing(): Bool => Layer(0).Playing()
+
+    /// Puts layer 0's Clip at `seconds`, as its layer's SetTime does.
     @MainThread @PanicsAtCaller
     Public Method SetTime(seconds: Float)
-        If !fbe_player_set_time(handle, seconds) Then Failed("SetTime")
+        Layer(0).SetTime(seconds)
     End Method
 
-    /// Where it is in what it plays, in seconds, 0 when it plays nothing.
-    @MainThread Public Method Time(): Float => fbe_player_time(handle)
+    /// Where layer 0 is in its Clip, in seconds.
+    @MainThread @PanicsAtCaller
+    Public Method Time(): Float => Layer(0).Time()
+
+    /// Sets how fast layer 0 plays its Clip, as its layer's SetSpeed does.
+    @MainThread @PanicsAtCaller
+    Public Method SetSpeed(speed: Float)
+        Layer(0).SetSpeed(speed)
+    End Method
+
+    /// How fast layer 0 plays its Clip.
+    @MainThread @PanicsAtCaller
+    Public Method Speed(): Float => Layer(0).Speed()
+
+    /// Calls `handler` with each event its Clips reach, on any layer, in the order they're reached,
+    /// as UpdateWorld moves them on, once the World's moved; Null stops. Events reached while it
+    /// has none are let go of.
+    @MainThread
+    Public Method OnEvent(handler: (Func(ClipEvent))?)
+        Self.handler = handler
+    End Method
 
     // A panic naming the call, with what C said went wrong.
     @PanicsAtCaller
-    Method Failed(call: String)
+    Package Method Failed(call: String)
         Panic("{call} on a Player: {LastError()}")
     End Method
+
+    // The handle, or a panic naming the call once its entity's freed.
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If owner.Freed() Then Panic("{call} on a Player whose entity was freed")
+        Return handle
+    End Method
+
+    // The events it reached, let go of.
+    Package Method TakeEvents(): ClipEvent[]
+        Local events: ClipEvent[] = []
+        For index = 0 Until fbe_player_event_count(handle)
+            Local name = ""
+            Local clip = ""
+            Unsafe
+                name = fbe_player_event_name(handle, index).ToString()
+                clip = fbe_player_event_clip(handle, index).ToString()
+            End Unsafe
+            events.Add(ClipEvent(name, clip, fbe_player_event_layer(handle, index),
+                                 fbe_player_event_time(handle, index)))
+        End For
+        fbe_player_clear_events(handle)
+        Return events
+    End Method
 End Class
+
+/// One of a Player's layers, which its Layer(index) gives, over the layers before it.
+Public Struct PlayerLayer
+    Package Field owner: Player
+    Package Field index: Int
+
+    /// The Player it's one of.
+    @MainThread Public Method Player(): Player => owner
+
+    /// Which of its Player's layers it is, from 0.
+    @MainThread Public Method Index(): Int => index
+
+    /// Plays `clip` in `mode`, at `speed` times as fast as it was made, from its start, or its end
+    /// below 0, which plays it backward, in place of what the layer played, posing what it moves at
+    /// once; the Clip the layer plays already, and only it, goes on where it is, in its new mode and
+    /// speed. A speed that isn't a number panics.
+    @MainThread @PanicsAtCaller
+    Public Method Play(clip: Clip, mode: PlayMode = PlayMode.LOOP, speed: Float = 1)
+        If !fbe_player_play(owner.Live("Play"), index, clip.Live("Play"), mode As Int32, speed)
+            owner.Failed("Play")
+        End If
+        owner.currents[index] = clip
+    End Method
+
+    /// Plays `clip` as Play does, fading it in over `seconds` while what the layer played fades
+    /// out; a Clip the layer plays already goes on where it is, fading back in. Seconds below 0, or
+    /// not finite, panic.
+    @MainThread @PanicsAtCaller
+    Public Method Crossfade(clip: Clip, seconds: Float, mode: PlayMode = PlayMode.LOOP,
+                            speed: Float = 1)
+        Local played = clip.Live("Crossfade")
+        If !fbe_player_crossfade(owner.Live("Crossfade"), index, played, seconds, mode As Int32,
+                                 speed)
+            owner.Failed("Crossfade")
+        End If
+        owner.currents[index] = clip
+    End Method
+
+    /// Fades out what the layer plays over `seconds`, back to where what it moved was before, or
+    /// with 0 stops it at once, leaving what it moved where it is. Seconds below 0, or not finite,
+    /// panic.
+    @MainThread @PanicsAtCaller
+    Public Method Stop(seconds: Float = 0)
+        If !fbe_player_stop(owner.Live("Stop"), index, seconds) Then owner.Failed("Stop")
+        owner.currents[index] = Null
+    End Method
+
+    /// The Clip it played last, which it plays or fades in, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Clip(): Clip? => fbe_player_clip(owner.Live("Clip"),
+                                                   index) != 0 ? owner.currents[index] : Null
+
+    /// Whether it plays its Clip: False once a ONCE Clip's at its end, or it's stopping.
+    @MainThread @PanicsAtCaller
+    Public Method Playing(): Bool => fbe_player_playing(owner.Live("Playing"), index)
+
+    /// Puts its Clip at `seconds`, as its mode has it, posing what it moves at once: held at its
+    /// ends once, round a loop, there and back for ping-pong. An event at that time isn't reached.
+    /// Not finite panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetTime(seconds: Float)
+        If !fbe_player_set_time(owner.Live("SetTime"), index, seconds) Then owner.Failed("SetTime")
+    End Method
+
+    /// Where it is in its Clip, in seconds, 0 for none.
+    @MainThread @PanicsAtCaller
+    Public Method Time(): Float => fbe_player_time(owner.Live("Time"), index)
+
+    /// Sets how many times as fast as it was made it plays its Clip, backward below 0. Not a
+    /// number panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetSpeed(speed: Float)
+        If !fbe_player_set_speed(owner.Live("SetSpeed"), index, speed) Then owner.Failed("SetSpeed")
+    End Method
+
+    /// How fast it plays its Clip, 0 for none.
+    @MainThread @PanicsAtCaller
+    Public Method Speed(): Float => fbe_player_speed(owner.Live("Speed"), index)
+
+    /// Sets how much of its pose is over the layers before it, from 0 to 1, as it starts. Outside
+    /// that panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetWeight(weight: Float)
+        If !fbe_player_set_weight(owner.Live("SetWeight"), index, weight) Then owner.Failed("SetWeight")
+    End Method
+
+    /// How much of its pose is over the layers before it.
+    @MainThread @PanicsAtCaller
+    Public Method Weight(): Float => fbe_player_weight(owner.Live("Weight"), index)
+
+    /// Keeps it to `bones` and the entities under them, as an upper body's layer keeps to its
+    /// spine; with none, it moves all its Clips move. A bone that was freed panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetMask(bones: Entity[])
+        Local player = owner.Live("SetMask")
+        Local handles = Buffer<UInt64>(bones.Count)
+        For i = 0 Until bones.Count
+            handles[i] = bones[i].Live("SetMask")
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_player_set_mask(player, index, handles.Pointer(), bones.Count As Int32)
+        End Unsafe
+        If !done Then owner.Failed("SetMask")
+    End Method
+End Struct
 
 Extend Entity
     /// The Player that plays Clips on the entity and the entities under it, made the first time
@@ -83,10 +284,12 @@ Extend Entity
 End Extend
 
 Extend World
-    // Moves on every Player on an entity of the World by `seconds`, as Update does.
+    // Moves on every Player on an entity of the World by `seconds`, as Update does, then hands
+    // each its events.
     @PanicsAtCaller
     Package Method Animate(seconds: Float64)
         If !fbe_player_advance(Live("Update"), seconds As Float32) Then Failed("Update")
+        HandEvents()
     End Method
 End Extend
 
@@ -97,5 +300,51 @@ Function PlayerFor(entity: Entity, slot: Int): Player
         players.Add(Null)
     End While
     players[slot] = made
+    Local own = Slot(made.handle)
+    While playersByHandle.Count <= own
+        playersByHandle.Add(Null)
+    End While
+    playersByHandle[own] = made
     Return made
+End Function
+
+// Hands the events the Players reached to their handlers: every Player's taken first, so what a
+// handler does to a Player changes nothing handed.
+Function HandEvents()
+    Local room = 16
+    Local handles = Buffer<UInt64>(room)
+    Local count = 0
+    Unsafe
+        count = fbe_player_evented(handles.Pointer(), room As Int32)
+    End Unsafe
+    If count == 0 Then Return
+    If count > room
+        handles = Buffer<UInt64>(count)
+        Unsafe
+            count = fbe_player_evented(handles.Pointer(), count As Int32)
+        End Unsafe
+    End If
+    Local handing: Player[] = []
+    Local taken: ClipEvent[][] = []
+    For i = 0 Until count
+        Local handle = handles[i]
+        Local slot = Slot(handle)
+        Local player = slot < playersByHandle.Count ? playersByHandle[slot] : Null
+        If player == Null || player.handle != handle
+            fbe_player_clear_events(handle)
+            Continue
+        End If
+        Local events = player.TakeEvents()
+        If player.handler != Null
+            handing.Add(player)
+            taken.Add(events)
+        End If
+    End For
+    For i = 0 Until handing.Count
+        Local handler = handing[i].handler
+        If handler == Null Then Continue
+        For event In taken[i]
+            handler(event)
+        End For
+    End For
 End Function

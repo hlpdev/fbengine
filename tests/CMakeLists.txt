@@ -594,12 +594,17 @@ if(FBENGINE_FB_TESTS)
       "moved-twice=AddScales on a Clip: the clip moves the scale of \"a\" already"
       "clip-freed=Length on a Clip that was freed"
       "player-of-freed=Player on a Pivot that was freed"
-      "player-entity-freed=SetTime on a Player: the player's entity was freed"
-      "time-nan=SetTime on a Player: a player's time is a number of seconds, not nan"
+      "player-entity-freed=SetTime on a Player whose entity was freed"
+      "time-nan=SetTime on a Player: a clip's time is a number of seconds, not nan"
       "update-negative=Update on a World: a world is moved on by 0 seconds or more, not -1"
       "palette-unskinned=Palette on a Mesh skinned by nothing"
       "joint-twice=AddJoint on a Skin: the skin has a joint \"a\" already"
-      "joint-out-of-range=JointName\\(0\\) on a Skin with 0 joints")
+      "joint-out-of-range=JointName\\(0\\) on a Skin with 0 joints"
+      "layer-out-of-range=Layer\\(16\\) on a Player: its layers are 0 to 15"
+      "crossfade-negative=Crossfade on a Player: a fade takes 0 seconds or more, not -1"
+      "weight-outside=SetWeight on a Player: a layer's weight is from 0 to 1, not 2"
+      "event-out-of-range=EventName\\(0\\) on a Clip with 0 events"
+      "slice-backward=Slice on a Clip: a clip's part is from 0 seconds or more to then or later, not 2 to 1")
   foreach(case IN LISTS fbengine_anim_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)

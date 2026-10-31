@@ -19,6 +19,11 @@ Public Extern "C" Lib "fbengine_native"
                                   values: Ptr<Float32>, keys: Int32): Bool
     Function fbe_clip_from_model(load: UInt64, index: Int32): UInt64
     Function fbe_clip_name(clip: UInt64): CString
+    Function fbe_clip_add_event(clip: UInt64, name: CString, time: Float32): Bool
+    Function fbe_clip_event_count(clip: UInt64): Int32
+    Function fbe_clip_event_name(clip: UInt64, event: Int32): CString
+    Function fbe_clip_event_time(clip: UInt64, event: Int32): Float32
+    Function fbe_clip_slice(clip: UInt64, start: Float32, end: Float32): UInt64
     Function fbe_clip_length(clip: UInt64): Float32
     Function fbe_clip_frame_rate(clip: UInt64): Float32
     Function fbe_clip_channel_count(clip: UInt64): Int32

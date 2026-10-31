@@ -302,6 +302,81 @@ FBE_API bool fbe_clip_add_channel(uint64_t clip, const char* node, int32_t prope
     return true;
 }
 
+FBE_API bool fbe_clip_add_event(uint64_t clip, const char* name, float time) {
+    const std::uint32_t slot = clip_slot(clip);
+    if (slot == none) {
+        return false;
+    }
+    if (name == nullptr || *name == '\0') {
+        return fail("an event has a name");
+    }
+    if (!std::isfinite(time) || time < 0.0F) {
+        return fail(std::format("an event's time is 0 seconds or more, not {}", time));
+    }
+    try {
+        fbe::anim::clip_t& found = kept_clip(slot).clip;
+        const auto after =
+            std::ranges::upper_bound(found.events, time, {}, &fbe::anim::event_t::time);
+        found.events.insert(after, { .time = time, .name = name });
+        found.length = std::max(found.length, time);
+        return true;
+    } catch (const std::bad_alloc&) {
+        return fail("out of memory");
+    }
+}
+
+FBE_API int32_t fbe_clip_event_count(uint64_t clip) {
+    const std::uint32_t slot = clip_slot(clip);
+    return slot != none ? static_cast<int32_t>(kept_clip(slot).clip.events.size()) : 0;
+}
+
+FBE_API const char* fbe_clip_event_name(uint64_t clip, int32_t event) {
+    const std::uint32_t slot = clip_slot(clip);
+    if (slot == none) {
+        return "";
+    }
+    const std::vector<fbe::anim::event_t>& events = kept_clip(slot).clip.events;
+    if (event < 0 || std::cmp_greater_equal(event, events.size())) {
+        fail(std::format("the clip has {} events; there's no event {}", events.size(), event));
+        return "";
+    }
+    return events[static_cast<std::size_t>(event)].name.c_str();
+}
+
+FBE_API float fbe_clip_event_time(uint64_t clip, int32_t event) {
+    const std::uint32_t slot = clip_slot(clip);
+    if (slot == none) {
+        return 0.0F;
+    }
+    const std::vector<fbe::anim::event_t>& events = kept_clip(slot).clip.events;
+    if (event < 0 || std::cmp_greater_equal(event, events.size())) {
+        fail(std::format("the clip has {} events; there's no event {}", events.size(), event));
+        return 0.0F;
+    }
+    return events[static_cast<std::size_t>(event)].time;
+}
+
+FBE_API uint64_t fbe_clip_slice(uint64_t clip, float start, float end) {
+    const std::uint32_t slot = clip_slot(clip);
+    if (slot == none) {
+        return 0;
+    }
+    if (!std::isfinite(start) || !std::isfinite(end) || start < 0.0F || end < start) {
+        fail(std::format("a clip's part is from 0 seconds or more to then or later, not {} to {}",
+                         start, end));
+        return 0;
+    }
+    try {
+        fbe::anim::clip_t made = fbe::anim::slice(kept_clip(slot).clip, start, end);
+        const std::uint32_t sliced = fbe::anim::make_clip();
+        kept_clip(sliced).clip = std::move(made);
+        return clips().slots.handle(sliced);
+    } catch (const std::bad_alloc&) {
+        fail("out of memory");
+        return 0;
+    }
+}
+
 FBE_API const char* fbe_clip_name(uint64_t clip) {
     const std::uint32_t slot = clip_slot(clip);
     return slot != none ? kept_clip(slot).clip.name.c_str() : "";

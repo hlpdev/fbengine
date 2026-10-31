@@ -73,7 +73,7 @@ Public Final Class Clip
         End Unsafe
     End Method
 
-    /// How long it is, in seconds: its last key's time.
+    /// How long it is, in seconds: its last key's or event's time.
     @MainThread @PanicsAtCaller
     Public Method Length(): Float => fbe_clip_length(Live("Length"))
 
@@ -84,6 +84,47 @@ Public Final Class Clip
     /// How many channels it has.
     @MainThread @PanicsAtCaller
     Public Method ChannelCount(): Int => fbe_clip_channel_count(Live("ChannelCount"))
+
+    /// Adds an event named `name` at `seconds` into it, which a Player playing it hands the game
+    /// as it reaches it, through its OnEvent: a footstep's sound, or a hit's moment. Events can
+    /// share a time, or a name. An empty name, or seconds below 0 or not finite, panic.
+    @MainThread @PanicsAtCaller
+    Public Method AddEvent(name: String, seconds: Float)
+        If !fbe_clip_add_event(Live("AddEvent"), name, seconds) Then Failed("AddEvent")
+    End Method
+
+    /// How many events it has.
+    @MainThread @PanicsAtCaller
+    Public Method EventCount(): Int => fbe_clip_event_count(Live("EventCount"))
+
+    /// The name of its event at `index`, from 0, in the order of their times. One outside 0 to
+    /// EventCount() - 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method EventName(index: Int): String
+        Local clip = Live("EventName")
+        CheckEvent(index, "EventName")
+        Unsafe
+            Return fbe_clip_event_name(clip, index).ToString()
+        End Unsafe
+    End Method
+
+    /// The time of its event at `index`, in seconds, as EventName orders them.
+    @MainThread @PanicsAtCaller
+    Public Method EventTime(index: Int): Float
+        Local clip = Live("EventTime")
+        CheckEvent(index, "EventTime")
+        Return fbe_clip_event_time(clip, index)
+    End Method
+
+    /// A new Clip of the part of it from `start` to `end` seconds, moved to start at 0, which plays
+    /// as it did there: a walk's first step out of a whole walk. Its events between them, or at
+    /// either end, come with it. A start below 0, an end before it, or either not finite, panics.
+    @MainThread @PanicsAtCaller
+    Public Method Slice(start: Float, end: Float): Clip
+        Local made = fbe_clip_slice(Live("Slice"), start, end)
+        If made == 0 Then Failed("Slice")
+        Return Clip(made)
+    End Method
 
     /// Moves `node`'s position through a key at each of `times`, in seconds from 0, each after the
     /// last, to the position at its index there, going between them as `interpolation` says; CUBIC
@@ -160,6 +201,15 @@ Public Final Class Clip
                                         keys.Pointer(), values.Pointer(), times.Count As Int32)
         End Unsafe
         If !done Then Failed(call)
+    End Method
+
+    // A panic naming the call for an event that isn't one of its.
+    @PanicsAtCaller
+    Method CheckEvent(index: Int, call: String)
+        Local count = EventCount()
+        If index < 0 || index >= count
+            Panic("{call}({index}) on a Clip with {count} {count == 1 ? "event" : "events"}")
+        End If
     End Method
 
     // A panic naming the call, with what C said went wrong.

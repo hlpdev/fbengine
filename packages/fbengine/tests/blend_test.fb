@@ -1,0 +1,162 @@
+// Players' layers and how a Clip goes on: modes, speeds, crossfades, masks, weights, a Clip's
+// slices, and the events UpdateWorld hands a Player's handler; with no window or GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+// A Clip moving `node` along x from `from` to `to` over `seconds`.
+Function Slide(node: String, from: Float, to: Float, seconds: Float): Clip
+    Local clip = Clip("slide")
+    clip.AddPositions(node, [0, seconds], [Vec3(from, 0, 0), Vec3(to, 0, 0)])
+    Return clip
+End Function
+
+// Hips at the top, a spine under them, and a head under that.
+Function Body(): Pivot
+    Local hips = Pivot()
+    hips.SetName("hips")
+    Local spine = Pivot(hips)
+    spine.SetName("spine")
+    Local head = Pivot(spine)
+    head.SetName("head")
+    Return hips
+End Function
+
+@Test
+Function AClipLoopsGoesThereAndBackOrPlaysOnce()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Local player = hips.Player()
+    Local slide = Slide("hips", 0, 2, 2)
+    player.Play(slide)
+    UpdateWorld(2.5)
+    Expect(IsClose(player.Time(), 0.5) && IsClose(hips.Position().x, 0.5))
+    player.Play(slide, PlayMode.PING_PONG)
+    player.SetTime(0)
+    UpdateWorld(2.5)
+    Expect(IsClose(player.Time(), 1.5))
+    player.Stop()
+    player.Play(slide, PlayMode.ONCE, 2)
+    Expect(player.Speed() == 2 && player.Playing())
+    UpdateWorld(5)
+    Expect(player.Time() == 2 && !player.Playing())
+    // Backward, from its end.
+    player.Stop()
+    player.Play(slide, PlayMode.ONCE, -1)
+    UpdateWorld(0.5)
+    Expect(IsClose(player.Time(), 1.5))
+End Function
+
+@Test
+Function ACrossfadeMixesOneClipIntoTheNext()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    hips.SetPosition(Vec3(10, 0, 0))
+    Local player = hips.Player()
+    Local still = Slide("hips", 0, 0, 1)
+    Local away = Slide("hips", 4, 4, 1)
+    player.Play(still)
+    player.Crossfade(away, 1)
+    Expect(RefEquals(player.Clip(), away))
+    UpdateWorld(0.5)
+    Expect(IsClose(hips.Position().x, 2))
+    UpdateWorld(0.5)
+    Expect(IsClose(hips.Position().x, 4))
+    // Stopped over a second, back to where it was before the Player moved it.
+    player.Stop(1)
+    Expect(player.Clip() == Null && !player.Playing())
+    UpdateWorld(1)
+    Expect(IsClose(hips.Position().x, 10))
+End Function
+
+// An upper body's layer kept to the spine, over a walk, by half.
+@Test
+Function ALayerIsOverTheOnesBeforeItKeptToItsMask()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Local spine = hips.Child(0)
+    Local head = spine.Child(0)
+    Local walk = Clip()
+    walk.AddPositions("hips", [0], [Vec3(1, 0, 0)])
+    walk.AddPositions("head", [0], [Vec3(1, 0, 0)])
+    Local wave = Clip()
+    wave.AddPositions("hips", [0], [Vec3(5, 0, 0)])
+    wave.AddPositions("head", [0], [Vec3(5, 0, 0)])
+    Local player = hips.Player()
+    player.Play(walk)
+    Local upper = player.Layer(1)
+    Expect(upper.Index() == 1 && RefEquals(upper.Player(), player) && upper.Weight() == 1)
+    upper.SetMask([spine])
+    upper.Play(wave)
+    Expect(hips.Position().x == 1 && head.Position().x == 5)
+    upper.SetWeight(0.5)
+    UpdateWorld()
+    Expect(IsClose(head.Position().x, 3))
+    upper.SetMask([])
+    upper.SetWeight(1)
+    UpdateWorld()
+    Expect(hips.Position().x == 5)
+End Function
+
+// What a handler heard, as "name of clip at time".
+Global heard: String[] = []
+
+Function Hear(event: ClipEvent)
+    heard.Add("{event.Name} of {event.ClipName} at {event.Time} on {event.Layer}")
+End Function
+
+@Test
+Function UpdateWorldHandsAPlayersEventsToItsHandler()
+    Local world = Fresh()
+    Defer world.Free()
+    Defer heard.Clear()
+    Local hips = Body()
+    Local step = Slide("hips", 0, 1, 1)
+    step.AddEvent("down", 0.5)
+    step.AddEvent("up", 1)
+    step.AddEvent("lift", 0)
+    Expect(step.EventCount() == 3 && step.EventName(0) == "lift" && step.EventTime(2) == 1)
+    Local player = hips.Player()
+    player.OnEvent(Hear)
+    player.Play(step)
+    UpdateWorld(0.6)
+    Expect(heard == ["lift of slide at 0 on 0", "down of slide at 0.5 on 0"])
+    heard.Clear()
+    UpdateWorld(0.6)
+    Expect(heard == ["up of slide at 1 on 0", "lift of slide at 0 on 0"])
+    // With no handler, they're let go of: "down", at 0.5, isn't heard later.
+    heard.Clear()
+    player.OnEvent(Null)
+    UpdateWorld(0.4)
+    player.OnEvent(Hear)
+    UpdateWorld(0.5)
+    Expect(heard == ["up of slide at 1 on 0", "lift of slide at 0 on 0"])
+End Function
+
+@Test
+Function ASlicePlaysAsTheClipDidThere()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Local slide = Slide("hips", 0, 4, 2)
+    slide.AddEvent("middle", 1)
+    slide.AddEvent("late", 1.9)
+    Local part = slide.Slice(0.5, 1.5)
+    Expect(part.Length() == 1 && part.Name() == "slide")
+    Expect(part.EventCount() == 1 && part.EventTime(0) == 0.5)
+    hips.Player().Play(part, PlayMode.ONCE)
+    Expect(IsClose(hips.Position().x, 1))
+    UpdateWorld(1)
+    Expect(IsClose(hips.Position().x, 3))
+End Function

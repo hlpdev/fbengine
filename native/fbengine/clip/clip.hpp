@@ -33,12 +33,20 @@ struct channel_t {
     std::vector<float> values;
 };
 
+/// A time in a clip a player reports reaching, by its name.
+struct event_t {
+    float time = 0.0F;
+    std::string name;
+};
+
 struct clip_t {
     std::string name;
     /// The names of the nodes its channels move, each once.
     std::vector<std::string> nodes;
     std::vector<channel_t> channels;
-    /// Its last key's time.
+    /// Its events, in the order of their times, those at one time in the order they were added.
+    std::vector<event_t> events;
+    /// Its last key's or event's time.
     float length = 0.0F;
     /// The frames a second it was made at, or 0 for none given.
     float frame_rate = 0.0F;
@@ -68,5 +76,10 @@ std::size_t key_at(std::span<const float> times, float time, std::size_t hint);
 /// A channel's value at `time`, its `width` floats written to `out`, `cursor` its key found last,
 /// which it updates. Before its first key it holds that key's value, and after its last that one's.
 void sample(const channel_t& channel, float time, std::size_t& cursor, std::span<float> out);
+
+/// The part of `clip` from `start` to `end` seconds, 0 or more and the one after the other, moved
+/// to start at 0: each channel's keys between them, with a key at each end, which sample as the
+/// clip did there, and its events between them or at either end.
+clip_t slice(const clip_t& clip, float start, float end);
 
 } // namespace fbe::anim

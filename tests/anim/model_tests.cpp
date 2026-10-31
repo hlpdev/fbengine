@@ -115,15 +115,15 @@ TEST_CASE("a model's clip plays on entities named as its nodes") {
     const std::uint64_t hips = pivot(world, 0, "hips");
     const std::uint64_t knee = pivot(world, hips, "knee");
     const std::uint64_t player = fbe_player_create(hips);
-    REQUIRE(fbe_player_play(player, clip));
-    fbe_player_set_time(player, 0.5F);
+    REQUIRE(fbe_player_play(player, 0, clip, FBE_PLAYER_ONCE, 1.0F));
+    fbe_player_set_time(player, 0, 0.5F);
     fbe_vec3_t at{};
     fbe_entity_position(hips, FBE_SPACE_LOCAL, &at);
     CHECK(at.x == Catch::Approx(1.0F));
     fbe_quat_t turned{};
     fbe_entity_rotation(knee, FBE_SPACE_LOCAL, &turned);
     CHECK(turned.w == 1.0F);
-    fbe_player_set_time(player, 1.0F);
+    fbe_player_set_time(player, 0, 1.0F);
     fbe_entity_rotation(knee, FBE_SPACE_LOCAL, &turned);
     CHECK(turned.y == 1.0F);
     fbe_player_free(player);

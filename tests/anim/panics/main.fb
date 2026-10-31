@@ -52,6 +52,16 @@ Select arguments[0]
         skin.AddJoint("a", Mat4.Identity)
     Case "joint-out-of-range"
         Skin().JointName(0)
+    Case "layer-out-of-range"
+        Pivot().Player().Layer(16)
+    Case "crossfade-negative"
+        Pivot().Player().Crossfade(Clip(), -1)
+    Case "weight-outside"
+        Pivot().Player().Layer(1).SetWeight(2)
+    Case "event-out-of-range"
+        Clip().EventName(0)
+    Case "slice-backward"
+        Clip().Slice(2, 1)
     Default
         Panic("no case {arguments[0]}")
 End Select

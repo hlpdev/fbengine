@@ -53,7 +53,24 @@ FBE_API uint64_t fbe_clip_from_model(uint64_t load, int32_t index);
 
 // Its name, valid until it changes, or "" for a freed clip.
 FBE_API const char* fbe_clip_name(uint64_t clip);
-// Its length, its last key's time, 0 with no keys; its frames a second; how many channels it has.
+// Adds an event named `name` at `time` seconds, which a player playing the clip reports reaching
+// there; a clip's events can share a time, or a name. False for a freed clip, an empty name, or a
+// time below 0 or not finite.
+FBE_API bool fbe_clip_add_event(uint64_t clip, const char* name, float time);
+// How many events it has, 0 for a freed clip; event `event`'s name, valid until the clip's freed,
+// and time, by the order of their times, "" and 0 for one out of range.
+FBE_API int32_t fbe_clip_event_count(uint64_t clip);
+FBE_API const char* fbe_clip_event_name(uint64_t clip, int32_t event);
+FBE_API float fbe_clip_event_time(uint64_t clip, int32_t event);
+
+// A new clip of the part of `clip` from `start` to `end` seconds, moved to start at 0, which
+// samples as `clip` did there: each channel's keys between them, with a key at each end, a cubic
+// spline cut along its slope, and the events between them or at either end. 0 for a freed clip, or
+// a part that isn't finite, starts below 0, or ends before it starts.
+FBE_API uint64_t fbe_clip_slice(uint64_t clip, float start, float end);
+
+// Its length, its last key's or event's time, 0 with none; its frames a second; how many channels
+// it has.
 FBE_API float fbe_clip_length(uint64_t clip);
 FBE_API float fbe_clip_frame_rate(uint64_t clip);
 FBE_API int32_t fbe_clip_channel_count(uint64_t clip);
