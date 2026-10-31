@@ -1,0 +1,8 @@
+// Panics with the audio started, as a game's own mistake can: the program ends at once, its
+// device's thread with it.
+
+Import std.core
+Import fbengine_audio
+
+Try Audio.Start(AudioDevice.SILENT)
+Panic("a mistake, with the audio started")

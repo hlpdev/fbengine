@@ -1,0 +1,18 @@
+[project]
+name = "fbengine_audio"
+version = "0.1.1"
+type = "library"
+license = "Apache-2.0"
+description = "fbengine's sound: sounds, channels, music streams, and 3D sound, on miniaudio."
+readme = "README.md"
+repository = "https://github.com/hlpdev/fbengine"
+keywords = ["engine", "game", "audio", "sound", "music"]
+
+# Its 3D sound follows fbengine's frames, and their entities. By path for now; by path and version
+# once FutureBlitz 1.1 lets a published package's dependency have both.
+[dependencies]
+fbengine = { path = "../fbengine" }
+
+# fbengine_audio's own DLL, native/fbengine_audio, built for each target into native/<target>/.
+[native]
+fbengine_audio_native = { dynamic = "native/{target}/fbengine_audio_native" }

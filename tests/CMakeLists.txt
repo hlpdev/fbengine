@@ -271,3 +271,71 @@ endif()
 fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# fbengine_audio's own C++, where it's subtle: what's in its headers, and miniaudio's backends.
+add_executable(fbengine_audio_tests audio/pool_tests.cpp audio/backends_tests.cpp
+               audio/channels_tests.cpp audio/outputs_tests.cpp)
+target_include_directories(fbengine_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine_audio")
+target_link_libraries(fbengine_audio_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_audio_tests)
+catch_discover_tests(fbengine_audio_tests TEST_PREFIX "audio."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# fbengine_audio_native's C API, with a thread of the test's own mixing, as a device's does, and on
+# Windows, with OLE, on the null backend.
+add_executable(fbengine_audio_native_tests audio/native_tests.cpp audio/memory_tests.cpp)
+target_link_libraries(fbengine_audio_native_tests PRIVATE fbengine_audio_native
+                      Catch2::Catch2WithMain)
+target_compile_definitions(fbengine_audio_native_tests PRIVATE
+                           FBE_AUDIO_TEST_DATA="${PROJECT_SOURCE_DIR}/packages/fbengine_audio/tests/data")
+if(WIN32)
+  target_sources(fbengine_audio_native_tests PRIVATE audio/ole_tests.cpp)
+  target_link_libraries(fbengine_audio_native_tests PRIVATE ole32 psapi)
+endif()
+fbengine_set_warnings(fbengine_audio_native_tests)
+catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio."
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
+
+# fbengine_audio_native's C API with each of a call's allocations failing in turn: its sources built
+# into the test, whose operator new fails the one it says.
+file(GLOB fbengine_audio_oom_sources CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/native/fbengine_audio/*/*.cpp")
+add_executable(fbengine_audio_oom_tests audio/oom_tests.cpp ${fbengine_audio_oom_sources})
+target_include_directories(fbengine_audio_oom_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_audio")
+target_compile_definitions(fbengine_audio_oom_tests PRIVATE FBE_AUDIO_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(fbengine_audio_oom_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_audio_oom_tests)
+catch_discover_tests(fbengine_audio_oom_tests TEST_PREFIX "audio."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# Playing a sound to miniaudio's null backend, as a game plays to its device; and ending with the
+# audio started, as a program does and as a panic does, which ends at once, never waiting on its
+# device's thread.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME examples.sound
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/sound")
+  set_tests_properties(examples.sound PROPERTIES TIMEOUT 60
+                       PASS_REGULAR_EXPRESSION "Running sound[^\n]*\nplayed 0.25 seconds of tone.ogg\r?\n$")
+  add_test(NAME examples.audio_exit
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_exit")
+  set_tests_properties(examples.audio_exit PROPERTIES TIMEOUT 60
+                       PASS_REGULAR_EXPRESSION "Running audio_exit[^\n]*\nending with the audio started\r?\n$")
+  add_test(NAME examples.audio_panic
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_panic")
+  set_tests_properties(examples.audio_panic PROPERTIES TIMEOUT 60
+                       PASS_REGULAR_EXPRESSION "panic: a mistake, with the audio started at [^\n]*\n.*exited with code 101")
+  # 64 channels at 44100 Hz under a game's load, within the budget.
+  add_test(NAME examples.audio_stress
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress")
+  set_tests_properties(examples.audio_stress PROPERTIES TIMEOUT 120
+                       PASS_REGULAR_EXPRESSION "600 frames on no device, up to 64 channels at once\r?\n.*within the budget\r?\n$")
+endif()
+
+# fbengine_native's frame, each test in a process of its own, as a program's first frames are.
+add_executable(fbengine_core_tests core/frame_tests.cpp)
+target_link_libraries(fbengine_core_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_core_tests)
+catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_native>")

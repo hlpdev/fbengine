@@ -34,8 +34,10 @@ FBE_API void fbe_frame_flip(bool wait_for_vsync) {
     // The renderer presents the frame here, from E2, waiting for the display when it's asked to.
     vsync = wait_for_vsync;
 
+    // SDL's clock starts at the first flip, so the first's time can be 0.
+    const bool first = frames == 0;
     std::uint64_t now = SDL_GetTicksNS();
-    if (limit > 0 && last_flip != 0) {
+    if (limit > 0 && !first) {
         const std::uint64_t next =
             last_flip + static_cast<std::uint64_t>(nanoseconds / static_cast<double>(limit));
         if (now < next) {
@@ -52,10 +54,10 @@ FBE_API void fbe_frame_flip(bool wait_for_vsync) {
         }
     }
 
-    delta = last_flip != 0 ? static_cast<double>(now - last_flip) / nanoseconds : 0.0;
+    delta = first ? 0.0 : static_cast<double>(now - last_flip) / nanoseconds;
     last_flip = now;
     ++frames;
-    if (rate_since == 0) {
+    if (first) {
         rate_since = now;
     } else {
         ++rate_frames;

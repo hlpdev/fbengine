@@ -1,0 +1,39 @@
+// fbengine_audio's work at each Flip, in one of Frame.OnFlip's late hooks, after the others, as
+// physics', have moved what's followed: a device whose output was lost is made again on the default
+// output, then the Listener moves, then the Emitters, so each Emitter's Doppler effect is from
+// where the Listener is now.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./c/fbe_audio"
+
+/// What moves the Listener, and the Emitters, each frame, once something follows.
+Package Global followListener: (Func())? = Null
+Package Global followEmitters: (Func())? = Null
+Global hooked = False
+
+/// Has each Flip do fbengine_audio's work from now on, once.
+@MainThread Package Function HookFlip()
+    If hooked Then Return
+    hooked = True
+    Frame.OnFlip(EachFrame, late: True)
+End Function
+
+/// How fast something moved from `last` to `now` over the last frame, at rest when there was none,
+/// or when it moved too far for a Float32 to say how fast.
+Package Function Moved(last: Vec3, now: Vec3): Vec3
+    Local seconds = Frame.Delta()
+    If seconds <= 0.0 Then Return Vec3(0, 0, 0)
+    Local moving = (now - last) * ((1.0 / seconds) As Float)
+    If !IsFinite(moving.x) || !IsFinite(moving.y) || !IsFinite(moving.z) Then Return Vec3(0, 0, 0)
+    Return moving
+End Function
+
+Function EachFrame()
+    fbe_audio_recover()
+    Local listener = followListener
+    If listener != Null Then listener()
+    Local emitters = followEmitters
+    If emitters != Null Then emitters()
+End Function

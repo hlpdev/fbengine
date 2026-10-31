@@ -1,0 +1,6 @@
+[project]
+name = "audio_panic"
+version = "0.1.0"
+
+[dependencies]
+fbengine_audio = { path = "../../packages/fbengine_audio" }

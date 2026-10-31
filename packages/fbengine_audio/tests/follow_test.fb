@@ -1,0 +1,304 @@
+// Emitters and the Listener following what moves them, at each Flip, on no device and no window.
+// Frames are held to 100 a second, so each takes 10 ms or more, as a game's would.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+Import fbengine_audio
+Import "./wav"
+
+// Where the things followed are, which the tests move between Flips.
+Global here = Vec3(0, 0, 0)
+Global there = Vec3(0, 0, 0)
+Global turned = Quat.Identity
+
+Function Here(): Vec3 => here
+Function There(): Vec3 => there
+Function Turned(): Quat => turned
+
+Function Near(a: Float32, b: Float32): Bool => a - b < 0.001 && b - a < 0.001
+
+// Flips at 100 frames a second, from a frame flipped already, so each has a Delta.
+Function Flips(count: Int)
+    Frame.SetLimit(100)
+    Defer Frame.SetLimit(0)
+    For i = 1 To count
+        Flip(False)
+    End For
+End Function
+
+// How many frames `channel` plays for, mixed 100 at a time with no Flip between: its sound's, and
+// the mix that finds it ended.
+Function Length(channel: Channel): Int
+    Local frames = 0
+    While channel.Playing() && frames < 10000
+        Audio.Mix(100)
+        frames += 100
+    End While
+    Return frames
+End Function
+
+// The Listener as it starts, for the next test.
+Function PutBack()
+    Listener.Unfollow()
+    Listener.SetPosition(Vec3(0, 0, 0))
+    Listener.SetRotation(Quat.Identity)
+    Listener.SetVelocity(Vec3(0, 0, 0))
+End Function
+
+@Test
+Function AnEmitterFollowsAtEachFlip()
+    Local emitter = Emitter()
+    Defer emitter.Free()
+    here = Vec3(1, 2, 3)
+    emitter.Follow(Here)
+    Expect(emitter.Following())
+    // Nothing moves until the Flip.
+    Expect(emitter.Position() == Vec3(0, 0, 0))
+    Flips(1)
+    Expect(emitter.Position() == Vec3(1, 2, 3))
+    // At rest the first frame, from nowhere it was.
+    Expect(emitter.Velocity() == Vec3(0, 0, 0))
+    here = Vec3(3, 2, 3)
+    Flips(1)
+    Expect(emitter.Position() == Vec3(3, 2, 3))
+    // 2 units over the frame.
+    Local velocity = emitter.Velocity()
+    Expect(Near(velocity.x * (Frame.Delta() As Float32), 2.0))
+    Expect(velocity.y == 0.0 && velocity.z == 0.0)
+    // Still, it's at rest.
+    Flips(1)
+    Expect(emitter.Velocity() == Vec3(0, 0, 0))
+    // Unfollowed, it stays where it is, at rest.
+    here = Vec3(4, 2, 3)
+    Flips(1)
+    emitter.Unfollow()
+    Expect(!emitter.Following())
+    Expect(emitter.Velocity() == Vec3(0, 0, 0))
+    here = Vec3(9, 9, 9)
+    Flips(1)
+    Expect(emitter.Position() == Vec3(4, 2, 3))
+    // Following again starts at rest, from wherever it was.
+    emitter.Follow(Here)
+    Flips(1)
+    Expect(emitter.Position() == Vec3(9, 9, 9))
+    Expect(emitter.Velocity() == Vec3(0, 0, 0))
+End Function
+
+// A hook added after the first Follow, as a physics World's is, runs before following, which is
+// late: what it moves is heard where it moved that frame, not a frame late.
+Function MovesHere()
+    here = Vec3(5, 0, 0)
+End Function
+
+@Test
+Function FollowingHearsWhereOtherHooksMovedThings()
+    Local emitter = Emitter()
+    Defer emitter.Free()
+    here = Vec3(0, 0, 0)
+    emitter.Follow(Here)
+    Local mover = Frame.OnFlip(MovesHere)
+    Defer Frame.RemoveOnFlip(mover)
+    Flips(1)
+    Expect(emitter.Position() == Vec3(5, 0, 0))
+End Function
+
+@Test
+Function FollowingSomethingElseStopsFollowingTheFirst()
+    Local emitter = Emitter()
+    Defer emitter.Free()
+    here = Vec3(1, 0, 0)
+    there = Vec3(0, 1, 0)
+    emitter.Follow(Here)
+    emitter.Follow(There)
+    Flips(1)
+    Expect(emitter.Position() == Vec3(0, 1, 0))
+    emitter.Unfollow()
+    Expect(!emitter.Following())
+    there = Vec3(0, 5, 0)
+    Flips(1)
+    Expect(emitter.Position() == Vec3(0, 1, 0))
+End Function
+
+@Test
+Function AFreedEmitterStopsFollowing()
+    Local emitter = Emitter()
+    emitter.Follow(Here)
+    emitter.Free()
+    Expect(!emitter.Following())
+    Flips(2)
+    Expect(emitter.Freed())
+End Function
+
+// A followed thing that frees an Emitter, or has it stop, as a game's entity freed in its own
+// update would: the one left is placed, and the other is left out.
+Global freeing: Emitter[] = []
+
+Function FreesTheOther(): Vec3
+    If freeing.Count == 2 Then freeing[1].Free()
+    Return Vec3(7, 0, 0)
+End Function
+
+@Test
+Function AnEmitterFreedWhileTheOthersAreAskedIsLeftOut()
+    Local first = Emitter()
+    Defer first.Free()
+    Local second = Emitter()
+    freeing = [first, second]
+    Defer freeing.Clear()
+    first.Follow(FreesTheOther)
+    second.Follow(Here)
+    Flips(1)
+    Expect(first.Position() == Vec3(7, 0, 0))
+    Expect(second.Freed())
+    Expect(!second.Following())
+    Flips(1)
+    Expect(first.Position() == Vec3(7, 0, 0))
+End Function
+
+@Test
+Function ManyEmittersArePlacedAtOnce()
+    Local emitters: Emitter[] = []
+    For i = 0 Until 200
+        Local emitter = Emitter()
+        emitter.Follow(i % 2 == 0 ? Here : There)
+        emitters.Add(emitter)
+    End For
+    here = Vec3(1, 0, 0)
+    there = Vec3(-1, 0, 0)
+    Flips(1)
+    For i = 0 Until 200
+        Expect(emitters[i].Position() == (i % 2 == 0 ? Vec3(1, 0, 0) : Vec3(-1, 0, 0)))
+        emitters[i].Free()
+    End For
+End Function
+
+@Test
+Function AFollowingEmittersChannelsGoWithIt() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    sound.SetLoop(True)
+    Local emitter = Emitter()
+    Defer emitter.Free()
+    here = Vec3(0, 0, -1)
+    emitter.Follow(Here)
+    Flips(1)
+    emitter.Play(sound)
+    Local mixed = Audio.Mix(1000)
+    Expect(Near(mixed[1998], 0.25) && Near(mixed[1999], 0.25))
+    // Twice as far: half as loud.
+    here = Vec3(0, 0, -2)
+    Flips(1)
+    mixed = Audio.Mix(1000)
+    Expect(Near(mixed[1998], 0.125) && Near(mixed[1999], 0.125))
+    // On the right, it's heard on the right.
+    here = Vec3(2, 0, 0)
+    Flips(1)
+    mixed = Audio.Mix(1000)
+    Expect(mixed[1999] > mixed[1998] * 2.0)
+End Function
+
+// Coming toward the Listener, a following Emitter's Channel, played while it was still, is pitched
+// up by its velocity over the frame, so its 4800 frames end sooner; with the Listener moving as
+// fast, it's heard as recorded.
+@Test
+Function TheDopplerEffectIsFromWhatsFollowed() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    Local emitter = Emitter()
+    Defer emitter.Free()
+    here = Vec3(0, 0, -10)
+    emitter.Follow(Here)
+    Flips(1)
+    Local channel = emitter.Play(sound)
+    here = Vec3(0, 0, -9.5)
+    Flips(1)
+    Local coming = emitter.Velocity().z
+    Expect(coming > 0.0)
+    Local pitched = Length(channel)
+    // 343.3 / (343.3 - coming) faster, and the mix that finds it ended.
+    Local expected = ((4800.0 As Float32) * (343.3 - coming) / 343.3) As Int + 100
+    Expect(pitched >= expected - 200 && pitched <= expected + 200)
+    Expect(pitched < 4800)
+    // With the Listener following something 10 units ahead of it, moving as fast, there's no
+    // Doppler effect.
+    turned = Quat.Identity
+    there = Vec3(0, 0, 0.5)
+    Listener.Follow(There, Turned)
+    Flips(1)
+    channel = emitter.Play(sound)
+    here = Vec3(0, 0, -9)
+    there = Vec3(0, 0, 1)
+    Flips(1)
+    Expect(Listener.Velocity().z > 0.0)
+    Expect(Listener.Velocity() == emitter.Velocity())
+    Expect(Length(channel) == 4900)
+End Function
+
+// From one end of a Float32's range to the other in a frame is too fast to say: at rest, rather
+// than a velocity that isn't a number, which the Listener's would panic at in Flip.
+@Test
+Function AMoveTooFarForAFloatIsAtRest()
+    Defer PutBack()
+    Local emitter = Emitter()
+    Defer emitter.Free()
+    here = Vec3(-3e38, 0, 0)
+    emitter.Follow(Here)
+    Listener.Follow(Here, Turned)
+    Flips(1)
+    here = Vec3(3e38, 0, 0)
+    Flips(1)
+    Expect(emitter.Position() == Vec3(3e38, 0, 0))
+    Expect(emitter.Velocity() == Vec3(0, 0, 0))
+    Expect(Listener.Position() == Vec3(3e38, 0, 0))
+    Expect(Listener.Velocity() == Vec3(0, 0, 0))
+End Function
+
+@Test
+Function TheListenerFollowsWhereAndHowItsTurned()
+    Defer PutBack()
+    here = Vec3(1, 2, 3)
+    turned = Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(90))
+    Listener.Follow(Here, Turned)
+    Expect(Listener.Following())
+    Expect(Listener.Position() == Vec3(0, 0, 0))
+    Flips(1)
+    Expect(Listener.Position() == Vec3(1, 2, 3))
+    Expect(Listener.Rotation() == turned)
+    Expect(Listener.Velocity() == Vec3(0, 0, 0))
+    here = Vec3(1, 2, 0)
+    Flips(1)
+    Expect(Near(Listener.Velocity().z * (Frame.Delta() As Float32), -3.0))
+    Listener.Unfollow()
+    Expect(!Listener.Following())
+    Expect(Listener.Velocity() == Vec3(0, 0, 0))
+    here = Vec3(5, 5, 5)
+    Flips(1)
+    Expect(Listener.Position() == Vec3(1, 2, 0))
+End Function
+
+// A Channel that follows something moves with it as its Emitter does, the way to a heard
+// entity: on the left of a Listener turned to face +x, it's heard on the left.
+@Test
+Function AFollowingListenerHearsFromWhereItsTurned() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    sound.SetLoop(True)
+    Local emitter = Emitter()
+    Defer emitter.Free()
+    emitter.SetPosition(Vec3(0, 0, -2))
+    here = Vec3(0, 0, 0)
+    // Facing -z as it starts, turned 90 degrees to the right it faces +x, with -z on its left.
+    turned = Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(-90))
+    Listener.Follow(Here, Turned)
+    Flips(1)
+    emitter.Play(sound)
+    Local mixed = Audio.Mix(1000)
+    Expect(mixed[1998] > mixed[1999] * 2.0)
+End Function
