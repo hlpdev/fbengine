@@ -6,3 +6,8 @@ target_include_directories(fbengine_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_native PRIVATE FBE_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_native PRIVATE SDL3::SDL3-static)
+# Its float arithmetic as written, never fused, so every target computes the same: arm64's
+# compilers fuse multiply-adds, which rounded a terrain pick there another way.
+if(NOT MSVC)
+  target_compile_options(fbengine_native PRIVATE -ffp-contract=off)
+endif()
