@@ -338,3 +338,48 @@ Function ALoopTurnedOffAtItsEndEndsThere() Throws AudioError, SoundError
         Expect(rising)
     End For
 End Function
+
+// How many frames of the mix `channel` plays for, mixed 100 at a time: its sound's at its pitch,
+// and the mix that finds it ended.
+Function MixedFor(channel: Channel): Int
+    Local frames = 0
+    While channel.Playing() && frames < 10000
+        Audio.Mix(100)
+        frames += 100
+    End While
+    Return frames
+End Function
+
+// A play rate in Hz, as Blitz's SoundPitch and ChannelPitch have it, is a pitch of it over the
+// sound's own: a 48000 Hz sound at 96000 plays twice as fast, and a 22050 Hz drip at 30000, as
+// SCP:CB's are, a little faster.
+@Test
+Function APlayRateIsAPitchInHertz() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    Expect(sound.PlayRate() == 48000.0)
+    sound.SetPlayRate(24000.0)
+    Expect(sound.Pitch() == 0.5)
+    Expect(sound.PlayRate() == 24000.0)
+    Expect(sound.Play().PlayRate() == 24000.0)
+    sound.SetPitch(1.0)
+    Local channel = sound.Play()
+    Expect(channel.PlayRate() == 48000.0)
+    channel.SetPlayRate(96000.0)
+    Expect(channel.Pitch() == 2.0)
+    Expect(channel.PlayRate() == 96000.0)
+    // Twice as fast, its 4800 frames take 2400 of the mix, as recorded they take 4800.
+    Local fast = MixedFor(channel)
+    Expect(fast >= 2400 && fast <= 2600)
+    Expect(MixedFor(sound.Play()) == 4900)
+    Local drip = (Try Sound.FromBytes(Wav(Constant(16384, 2205), 1, 22050))).Play()
+    drip.SetPlayRate(30000.0)
+    Expect(drip.Pitch() > 1.3605 && drip.Pitch() < 1.3606)
+    Expect(drip.PlayRate() > 29999.0 && drip.PlayRate() < 30001.0)
+    // A finished Channel's is 0, and setting it does nothing.
+    drip.Stop()
+    drip.SetPlayRate(11025.0)
+    Expect(drip.PlayRate() == 0.0)
+    Expect(drip.Pitch() == 0.0)
+End Function

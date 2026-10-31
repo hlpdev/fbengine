@@ -4,6 +4,7 @@
 Import std.core
 Import std.ffi
 Import std.io
+Import std.math
 Import "./audio"
 Import "./bus"
 Import "./c/fbe_sound"
@@ -158,6 +159,19 @@ Public Final Class Sound
 
     /// The pitch its plays start at.
     @MainThread Public Method Pitch(): Float32 => pitch
+
+    /// Sets the frames a second its plays start at, as Blitz's SoundPitch does: a pitch of `hertz`
+    /// over its SampleRate, from 1/16 to 16 of it.
+    @MainThread Public Method SetPlayRate(hertz: Float32)
+        Live()
+        If !IsFinite(hertz) || hertz <= 0.0
+            Panic("a play rate is more than 0 Hz, not {hertz}")
+        End If
+        SetPitch(hertz / (SampleRate() As Float32))
+    End Method
+
+    /// The frames a second its plays start at: its SampleRate times its pitch.
+    @MainThread Public Method PlayRate(): Float32 => (SampleRate() As Float32) * pitch
 
     /// Makes its plays loop, from its end to its start, until they're stopped, or play once.
     @MainThread Public Method SetLoop(loop: Bool)

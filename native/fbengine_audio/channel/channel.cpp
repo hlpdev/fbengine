@@ -659,6 +659,11 @@ FBE_AUDIO_API float fbe_channel_pitch(uint64_t channel) {
     return voice != nullptr ? voice->pitch : 0.0F;
 }
 
+FBE_AUDIO_API int32_t fbe_channel_sample_rate(uint64_t channel) {
+    const voice_t* voice = find(channel);
+    return voice != nullptr ? static_cast<int32_t>(voice->data->sample_rate) : 0;
+}
+
 FBE_AUDIO_API void fbe_channel_set_loop(uint64_t channel, bool loop) {
     voice_t* voice = find(channel);
     if (voice == nullptr) {
