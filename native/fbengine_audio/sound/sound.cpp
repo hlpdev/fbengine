@@ -23,6 +23,9 @@ namespace {
 
 /// The most channels a sound has, as the mix.
 constexpr ma_uint32 most_channels = 8;
+/// The rates a sound can be at, the mix's: a file's that says another is corrupt.
+constexpr ma_uint32 slowest = ma_standard_sample_rate_min;
+constexpr ma_uint32 fastest = ma_standard_sample_rate_max;
 /// How many frames a decode reads at a time, whatever the file says, as miniaudio's readers take
 /// a count of samples as an int.
 constexpr ma_uint64 chunk = 4096;
@@ -79,7 +82,7 @@ bool open(decoder_t& decoder, const std::uint8_t* data, std::int64_t size) {
 }
 
 /// A sound's rate and channels, from its decoder, or null, with fbe_audio_error's message, for
-/// one with too many channels.
+/// one with too many channels or a rate out of range.
 std::unique_ptr<fbe::audio::sound_data_t> describe(ma_decoder& decoder) {
     auto data = std::make_unique<fbe::audio::sound_data_t>();
     ma_format format = ma_format_unknown;
@@ -92,6 +95,11 @@ std::unique_ptr<fbe::audio::sound_data_t> describe(ma_decoder& decoder) {
     if (data->channels == 0 || data->channels > most_channels) {
         fbe::audio::fail(
             std::format("a sound has 1 to {} channels, not {}", most_channels, data->channels));
+        return nullptr;
+    }
+    if (data->sample_rate < slowest || data->sample_rate > fastest) {
+        fbe::audio::fail(std::format("a sound's sample rate is {} to {} Hz, not {}", slowest,
+                                     fastest, data->sample_rate));
         return nullptr;
     }
     return data;
