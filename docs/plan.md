@@ -89,7 +89,7 @@ Steps 3 to 7 done (2026-10-31, landed at 3698cf3).
    in `native/fbengine/text/`, so E11 doesn't wait; the gpu lane uploads the pages and draws.
 4. Pixels: locking a texture or the window for CPU reads and writes, through one copy per frame;
    copying regions between the window, textures, and images; std.image's Image in and out.
-5. Collisions in 2D: rectangles, and pixel-exact masks of images.
+5. Collisions in 2D: rectangles, and pixel-exact masks of images (the input lane's, on the CPU).
 6. Loose ends and E3's review: the arcade game example and its golden images.
 
 ### E4: The scene
@@ -118,7 +118,10 @@ Steps 3 to 7 done (2026-10-31, landed at 3698cf3).
    position, normal, entity, and triangle.
 10. Sprites and billboards as entities; `UpdateWorld(seconds)` and `FixedStep(rate)` with
     tweening.
-11. Loose ends and E4's review.
+11. Loose ends and E4's review: ground planes, mirrors, fading by distance, meshes crossing.
+12. Terrain: a heightmap entity made in code or from an image (E8's loading), its height and
+    normal at a point, collisions and picks against its grid, changed in place; its LOD drawing
+    is E5's.
 
 ### E5: Drawing the scene
 
@@ -239,7 +242,7 @@ that waits on another lane's step builds what it can without it, and the rest on
 
 | Lane | Builds, in order | Waits on | Owns |
 |---|---|---|---|
-| input | E1 steps 3 to 7, then E11, with E3 step 3's text core | E11's drawing: gpu's E3 steps 1 to 3 | `native/fbengine/input/`, `text/`, the input and text modules, Simulate's input |
+| input | E1 steps 3 to 7, then E11, with E3 step 3's text core and E3 step 5 | E11's drawing: gpu's E3 steps 1 to 3 | `native/fbengine/input/`, `text/`, the input and text modules, Simulate's input |
 | gpu | E2, then E3, then E6 | E6: scene's E5 | `native/fbengine/gpu/`, `2d/`, `shaders/`; the window's Vulkan surface in `window/`; Flip's present in `frame/` |
 | scene | E4, then E5 | E5: gpu's E2; E4 step 8: assets' job system | `native/fbengine/scene/` (then `render/`), the scene modules |
 | assets | E8 step 0, the job system; E8 steps 1 to 3; then 4 and 5 | step 2's textures: gpu's E2 step 3; meshes: scene's E4 step 5; steps 4 and 5: FutureBlitz 1.1's build step | `native/fbengine/jobs/`, `assets/`, the asset modules; fbengine_tools |
