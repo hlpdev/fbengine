@@ -1166,7 +1166,7 @@ TEST_CASE("a sprite's region, mirror, and quarter turn are its texels moved", "[
     mirrored.handle_x = 4;
     mirrored.scale_x = -1;
     fbe_2d_sprite_t turned = region;
-    turned.rotation = 90;
+    turned.rotation = std::numbers::pi_v<float> / 2;
     require(fbe_2d_texture(made, &ink, texture, &region, 0, 0));
     require(fbe_2d_texture(made, &ink, texture, &mirrored, 4, 0));
     require(fbe_2d_texture(made, &ink, texture, &turned, 16, 0));
@@ -1276,10 +1276,183 @@ TEST_CASE("a sprite that can't be drawn is refused", "[gpu]") {
     fbe_2d_sprite_t spun = all;
     spun.rotation = NAN;
     CHECK(!fbe_2d_texture(made, &ink, texture, &spun, 0, 0));
+    CHECK(std::string(fbe_error()) ==
+          "a sprite's position, handle, rotation, and scale are finite");
+    CHECK(!fbe_2d_texture(made, &ink, texture, &all, NAN, 0));
+    CHECK(!fbe_2d_tile(made, &ink, texture, &all, 0, INFINITY));
+    CHECK(std::string(fbe_error()) ==
+          "a sprite's position, handle, rotation, and scale are finite");
+    fbe_2d_sprite_t flat = all;
+    flat.scale_y = 0;
+    CHECK(!fbe_2d_tile(made, &ink, texture, &flat, 0, 0));
+    CHECK(std::string(fbe_error()) == "a sprite's tiled at a scale that isn't 0");
     CHECK(!fbe_2d_texture(made, &ink, texture, nullptr, 0, 0));
     REQUIRE(fbe_texture_release(texture));
     CHECK(!fbe_2d_tile(made, &ink, texture, &all, 0, 0));
     CHECK(std::string(fbe_error()) == "the texture was freed");
+    stop_gpu();
+}
+
+// A part of a sheet, LINEAR or NEAREST, shows none of the next part's texels: scaled up, turned,
+// and drawn into a multisampled target, whose pixels at its edges take uv from inside it.
+TEST_CASE("a part of a sheet shows none of its neighbor's texels", "[gpu]") {
+    start();
+    const fbe_2d_pen_t ink = pen(white);
+    const auto bluish = [](const fbe::golden::frame_t& frame) {
+        int count = 0;
+        for (std::uint32_t y = 0; y < frame.height; ++y) {
+            for (std::uint32_t x = 0; x < frame.width; ++x) {
+                count += pixel(frame, x, y)[2] > 0 ? 1 : 0;
+            }
+        }
+        return count;
+    };
+    for (const std::int32_t filter : { FBE_TEXTURE_NEAREST, FBE_TEXTURE_LINEAR }) {
+        INFO("filter " << filter);
+        // 16 by 8, its left half red and its right blue.
+        const std::uint64_t sheet = fbe_texture_create(16, 8, FBE_TEXTURE_RGBA8, false);
+        REQUIRE(sheet != 0);
+        std::vector<std::uint8_t> halves;
+        for (std::int32_t at = 0; at < 16 * 8; ++at) {
+            const rgba_t color = at % 16 < 8 ? red : blue;
+            halves.insert(halves.end(), color.begin(), color.end());
+        }
+        require(fbe_texture_write(sheet, 0, 0, 16, 8, halves.data(), 64));
+        require(fbe_texture_set_filter(sheet, filter));
+        fbe_2d_sprite_t left{
+            .region_width = 8,
+            .region_height = 8,
+            .scale_x = 4,
+            .scale_y = 4,
+        };
+        const std::uint64_t scaled = target(64, 64);
+        require(fbe_2d_texture(scaled, &ink, sheet, &left, 0, 0));
+        CHECK(bluish(read(scaled)) == 0);
+        left.handle_x = 4;
+        left.handle_y = 4;
+        left.rotation = std::numbers::pi_v<float> / 6;
+        const std::uint64_t turned = target(64, 64);
+        require(fbe_2d_texture(turned, &ink, sheet, &left, 32, 32));
+        CHECK(bluish(read(turned)) == 0);
+        left.scale_x = 1;
+        left.scale_y = 1;
+        const std::uint64_t sampled =
+            fbe_texture_create_target(16, 16, FBE_TEXTURE_RGBA8, 4, false);
+        REQUIRE(sampled != 0);
+        require(fbe_2d_texture(sampled, &ink, sheet, &left, 8, 8));
+        CHECK(bluish(read(sampled)) == 0);
+        // Tiled, scaled up, the same.
+        left.handle_x = 0;
+        left.handle_y = 0;
+        left.rotation = 0;
+        left.scale_x = 3;
+        left.scale_y = 3;
+        const std::uint64_t tiled = target(64, 64);
+        require(fbe_2d_tile(tiled, &ink, sheet, &left, 0, 0));
+        CHECK(bluish(read(tiled)) == 0);
+    }
+    stop_gpu();
+}
+
+// Tiles are one quad over the viewport, a part's too: mirrored, a part's repeat as the mirrored
+// sprite's pixels do, and at a tiny scale it's still one quad, not a quad a tile.
+TEST_CASE("a part's tiles are one quad, mirrored or tiny", "[gpu]") {
+    start();
+    const std::uint64_t texture = card();
+    const fbe_2d_pen_t ink = pen(white);
+    fbe_2d_sprite_t part = all;
+    part.region_x = 1;
+    part.region_y = 2;
+    part.region_width = 3;
+    part.region_height = 2;
+    part.scale_x = -1;
+    const std::uint64_t mirrored = target(24, 12);
+    require(fbe_2d_tile(mirrored, &ink, texture, &part, 0, 0));
+    fbe::golden::frame_t frame = read(mirrored);
+    for (std::uint32_t y = 0; y < 12; ++y) {
+        for (std::uint32_t x = 0; x < 24; ++x) {
+            INFO(x << ", " << y);
+            CHECK(pixel(frame, x, y) == card_pixel(1 + 2 - (x % 3), 2 + (y % 2)));
+        }
+    }
+    // All of it mirrored both ways, its handle 0, 0 at 5, 7: texel 0, 0 at pixel 4, 6.
+    fbe_2d_sprite_t both = all;
+    both.scale_x = -1;
+    both.scale_y = -1;
+    const std::uint64_t whole = target(24, 20);
+    require(fbe_2d_tile(whole, &ink, texture, &both, 5, 7));
+    frame = read(whole);
+    for (std::uint32_t y = 0; y < 20; ++y) {
+        for (std::uint32_t x = 0; x < 24; ++x) {
+            INFO(x << ", " << y);
+            const std::int64_t u = (((4 - static_cast<std::int64_t>(x)) % 8) + 8) % 8;
+            const std::int64_t v = (((6 - static_cast<std::int64_t>(y)) % 8) + 8) % 8;
+            CHECK(pixel(frame, x, y) == card_pixel(u, v));
+        }
+    }
+    // A pixel of it at a hundredth of its size over 2048 by 2048: 4 * 10^10 tiles, one quad.
+    fbe_2d_sprite_t dot = all;
+    dot.region_x = 2;
+    dot.region_y = 3;
+    dot.region_width = 1;
+    dot.region_height = 1;
+    dot.scale_x = 0.01F;
+    dot.scale_y = 0.01F;
+    const std::uint64_t big = target(2048, 2048);
+    require(fbe_2d_tile(big, &ink, texture, &dot, 0, 0));
+    require(fbe::gpu::finish_frame());
+    CHECK(fbe::gpu::last_recorded().passes == std::vector<std::string_view>{ "2d" });
+    frame = read(big);
+    CHECK(pixel(frame, 0, 0) == card_pixel(2, 3));
+    CHECK(pixel(frame, 2047, 1234) == card_pixel(2, 3));
+    stop_gpu();
+}
+
+// All of a texture tiled 8 million pixels away is the same as tiled where it lands: its tiles are
+// moved by whole tiles to the viewport before their uv's worked out in floats.
+TEST_CASE("a texture tiled far from 0 is its texels still", "[gpu]") {
+    start();
+    const std::uint64_t texture = card();
+    const fbe_2d_pen_t ink = pen(white);
+    const std::uint64_t near = target(64, 8);
+    require(fbe_2d_tile(near, &ink, texture, &all, 3, 0));
+    const fbe::golden::frame_t expected = read(near);
+    for (const float offset : { 8.0e4F, 8.0e5F, 8.0e6F }) {
+        INFO("at " << offset + 3);
+        const std::uint64_t far = target(64, 8);
+        require(fbe_2d_tile(far, &ink, texture, &all, 3.0F + offset, 0));
+        CHECK(read(far).rgba == expected.rgba);
+    }
+    stop_gpu();
+}
+
+// 2D's samplers are its own, without 3D's LOD bias: a mipmapped texture at its size is its first
+// level's texels exactly, biased toward smaller levels or not.
+TEST_CASE("a sprite isn't biased by the GPU's LOD bias", "[gpu]") {
+    start();
+    const std::uint64_t texture = fbe_texture_create(8, 8, FBE_TEXTURE_RGBA8, true);
+    REQUIRE(texture != 0);
+    std::vector<std::uint8_t> pixels;
+    for (std::int64_t y = 0; y < 8; ++y) {
+        for (std::int64_t x = 0; x < 8; ++x) {
+            const rgba_t color = card_pixel(x, y);
+            pixels.insert(pixels.end(), color.begin(), color.end());
+        }
+    }
+    require(fbe_texture_write(texture, 0, 0, 8, 8, pixels.data(), 32));
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_LINEAR));
+    require(fbe_gpu_set_lod_bias(2.0F));
+    const std::uint64_t made = target(8, 8);
+    const fbe_2d_pen_t ink = pen(white);
+    require(fbe_2d_texture(made, &ink, texture, &all, 0, 0));
+    const fbe::golden::frame_t frame = read(made);
+    for (std::uint32_t y = 0; y < 8; ++y) {
+        for (std::uint32_t x = 0; x < 8; ++x) {
+            INFO(x << ", " << y);
+            CHECK(pixel(frame, x, y) == card_pixel(x, y));
+        }
+    }
+    require(fbe_gpu_set_lod_bias(0.0F));
     stop_gpu();
 }
 
@@ -1303,7 +1476,7 @@ TEST_CASE("sprites match their golden image", "[gpu][golden]") {
     fbe_2d_sprite_t turned = all;
     turned.handle_x = 4;
     turned.handle_y = 4;
-    turned.rotation = 30;
+    turned.rotation = std::numbers::pi_v<float> / 6;
     turned.scale_x = 2;
     turned.scale_y = 2;
     require(fbe_2d_texture(0, &plain, smooth, &turned, 50, 12));
@@ -1399,56 +1572,59 @@ TEST_CASE("a frame of 11,100 shapes, timed", "[gpu]") {
 }
 
 // Not a check, a measure: a 1280x720 frame of 10,000 sprites, turned and scaled, of 8 textures,
-// into the screen, what the CPU spends drawing them, and the frame.
+// and of 4,000, into the screen, what the CPU spends drawing them, and the frame.
 TEST_CASE("a frame of 10,000 sprites, timed", "[gpu]") {
-    REQUIRE(fbe_window_set_headless(true));
-    fbe_gpu_set_pipeline_cache("");
-    require(fbe_window_open(1280, 720, FBE_WINDOW_WINDOWED));
-    require(fbe_gpu_start());
-    std::vector<std::uint64_t> textures;
-    textures.reserve(8);
-    for (int at = 0; at < 8; ++at) {
-        textures.push_back(card(FBE_TEXTURE_LINEAR));
-    }
-    const fbe_2d_pen_t ink = pen(white, FBE_2D_ALPHA);
-    const auto draw = [&] {
-        for (std::int32_t at = 0; at < 10000; ++at) {
-            const fbe_2d_sprite_t sprite{
-                .handle_x = 4,
-                .handle_y = 4,
-                .rotation = static_cast<float>(at % 360),
-                .scale_x = 2,
-                .scale_y = 2,
-            };
-            fbe_2d_texture(0, &ink, textures[static_cast<std::size_t>(at) % textures.size()],
-                           &sprite, static_cast<float>((at * 37) % 1280),
-                           static_cast<float>((at * 53) % 720));
+    for (const std::size_t count : { std::size_t{ 8 }, std::size_t{ 4000 } }) {
+        REQUIRE(fbe_window_set_headless(true));
+        fbe_gpu_set_pipeline_cache("");
+        require(fbe_window_open(1280, 720, FBE_WINDOW_WINDOWED));
+        require(fbe_gpu_start());
+        std::vector<std::uint64_t> textures;
+        textures.reserve(count);
+        for (std::size_t at = 0; at < count; ++at) {
+            textures.push_back(card(FBE_TEXTURE_LINEAR));
         }
-    };
-    for (int at = 0; at < 3; ++at) {
-        draw();
-        fbe_frame_flip(false);
+        const fbe_2d_pen_t ink = pen(white, FBE_2D_ALPHA);
+        const auto draw = [&] {
+            for (std::int32_t at = 0; at < 10000; ++at) {
+                const fbe_2d_sprite_t sprite{
+                    .handle_x = 4,
+                    .handle_y = 4,
+                    .rotation = static_cast<float>(at % 360) * std::numbers::pi_v<float> / 180,
+                    .scale_x = 2,
+                    .scale_y = 2,
+                };
+                fbe_2d_texture(0, &ink, textures[static_cast<std::size_t>(at) % textures.size()],
+                               &sprite, static_cast<float>((at * 37) % 1280),
+                               static_cast<float>((at * 53) % 720));
+            }
+        };
+        for (int at = 0; at < 3; ++at) {
+            draw();
+            fbe_frame_flip(false);
+        }
+        constexpr int frames = 30;
+        std::chrono::duration<double, std::milli> drawing{};
+        const auto started = std::chrono::steady_clock::now();
+        for (int at = 0; at < frames; ++at) {
+            fbe::gpu::recording_frame();
+            const auto before = std::chrono::steady_clock::now();
+            draw();
+            drawing += std::chrono::steady_clock::now() - before;
+            fbe_frame_flip(false);
+        }
+        vkDeviceWaitIdle(fbe::gpu::device()->device);
+        const std::chrono::duration<double, std::milli> spent =
+            std::chrono::steady_clock::now() - started;
+        fbe_gpu_counters_t counters{};
+        require(fbe_gpu_counters(&counters));
+        CHECK(counters.passes == 2);
+        WARN("10,000 sprites of " << count << " textures: drawing " << drawing.count() / frames
+                                  << " ms, the frame " << spent.count() / frames
+                                  << " ms, the GPU's " << counters.gpu_milliseconds << " ms, "
+                                  << counters.draws << " draws, on "
+                                  << fbe_gpu_device_name(fbe_gpu_device()));
+        fbe_window_close();
+        stop_gpu();
     }
-    constexpr int frames = 30;
-    std::chrono::duration<double, std::milli> drawing{};
-    const auto started = std::chrono::steady_clock::now();
-    for (int at = 0; at < frames; ++at) {
-        fbe::gpu::recording_frame();
-        const auto before = std::chrono::steady_clock::now();
-        draw();
-        drawing += std::chrono::steady_clock::now() - before;
-        fbe_frame_flip(false);
-    }
-    vkDeviceWaitIdle(fbe::gpu::device()->device);
-    const std::chrono::duration<double, std::milli> spent =
-        std::chrono::steady_clock::now() - started;
-    fbe_gpu_counters_t counters{};
-    require(fbe_gpu_counters(&counters));
-    CHECK(counters.passes == 2);
-    WARN("10,000 sprites: drawing " << drawing.count() / frames << " ms, the frame "
-                                    << spent.count() / frames << " ms, the GPU's "
-                                    << counters.gpu_milliseconds << " ms, " << counters.draws
-                                    << " draws, on " << fbe_gpu_device_name(fbe_gpu_device()));
-    fbe_window_close();
-    stop_gpu();
 }

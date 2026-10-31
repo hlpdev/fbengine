@@ -138,6 +138,9 @@ if(FBENGINE_FB_TESTS)
       "huge-read=level 0's 2147483648 bytes are more than an array holds"
       "sprite-frame=the sprite's frames are 0 to 1, not 2"
       "canvas-freed=DrawRect on a Texture that was freed"
+      "pixels-freed=Get on Pixels whose Texture was freed"
+      "pixels-stopped=Set on Pixels whose Texture was freed"
+      "pixels-drawn-over=the GPU changed the texture after its pixels came to the CPU, so they're put there again to be written"
       "lod-bias=a LOD bias is -16 to 16, not 17"
       "anisotropy=anisotropy is 1, for none, to 16, not 0.5"
       "screen-samples=the screen draws 1, 2, 4, or 8 samples a pixel, not 3")

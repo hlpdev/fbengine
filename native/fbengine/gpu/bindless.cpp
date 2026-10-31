@@ -52,42 +52,53 @@ VkSamplerAddressMode address_mode(std::int32_t wrap) {
     }
 }
 
-/// Makes a sampler for each filter and wrap with the LOD bias and anisotropy, and only once
-/// they're all made points the set at them and destroys the old ones; false, with fbe_error's
-/// why, if one can't be made, leaving the old ones as they were.
+/// Makes a sampler for each filter and wrap with the LOD bias and anisotropy, and 2D's, for each
+/// filter clamped and repeating, with neither, as a sprite's texels are its own however 3D's are
+/// set; and only once they're all made points the set at them and destroys the old ones. False,
+/// with fbe_error's why, if one can't be made, leaving the old ones as they were.
 bool make_samplers(const fbe::gpu::device_t& gpu) {
     std::array<VkSampler, fbe::gpu::sampler_slots> made{};
     const float bias = std::clamp(lod_bias, -gpu.properties.limits.maxSamplerLodBias,
                                   gpu.properties.limits.maxSamplerLodBias);
     const float most = std::min(anisotropy, gpu.max_anisotropy);
     std::array<VkDescriptorImageInfo, fbe::gpu::sampler_slots> infos{};
+    const auto make = [&](std::int32_t filter, std::int32_t u, std::int32_t v, float biased,
+                          float steepest, std::uint32_t index) {
+        const bool linear = filter == FBE_TEXTURE_LINEAR;
+        const VkSamplerCreateInfo info{
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST,
+            .minFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST,
+            .mipmapMode = linear ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .addressModeU = address_mode(u),
+            .addressModeV = address_mode(v),
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .mipLodBias = biased,
+            .anisotropyEnable = linear && steepest > 1.0F ? VK_TRUE : VK_FALSE,
+            .maxAnisotropy = linear && steepest > 1.0F ? steepest : 1.0F,
+            .maxLod = VK_LOD_CLAMP_NONE,
+        };
+        const VkResult result = fbe::gpu::faulted(fbe::gpu::fault_t::SAMPLER)
+                                    ? VK_ERROR_OUT_OF_HOST_MEMORY
+                                    : vkCreateSampler(gpu.device, &info, nullptr, &made.at(index));
+        if (result != VK_SUCCESS) {
+            destroy_samplers(gpu, made);
+            return fbe::gpu::fail_vulkan("couldn't make the GPU's samplers", result);
+        }
+        return true;
+    };
     for (std::int32_t filter = 0; filter < filters; ++filter) {
         for (std::int32_t u = 0; u < wraps; ++u) {
             for (std::int32_t v = 0; v < wraps; ++v) {
-                const bool linear = filter == FBE_TEXTURE_LINEAR;
-                const VkSamplerCreateInfo info{
-                    .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-                    .magFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST,
-                    .minFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST,
-                    .mipmapMode =
-                        linear ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST,
-                    .addressModeU = address_mode(u),
-                    .addressModeV = address_mode(v),
-                    .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    .mipLodBias = bias,
-                    .anisotropyEnable = linear && most > 1.0F ? VK_TRUE : VK_FALSE,
-                    .maxAnisotropy = linear && most > 1.0F ? most : 1.0F,
-                    .maxLod = VK_LOD_CLAMP_NONE,
-                };
-                const std::uint32_t index = fbe::gpu::sampler_index(filter, u, v);
-                const VkResult result =
-                    fbe::gpu::faulted(fbe::gpu::fault_t::SAMPLER)
-                        ? VK_ERROR_OUT_OF_HOST_MEMORY
-                        : vkCreateSampler(gpu.device, &info, nullptr, &made.at(index));
-                if (result != VK_SUCCESS) {
-                    destroy_samplers(gpu, made);
-                    return fbe::gpu::fail_vulkan("couldn't make the GPU's samplers", result);
+                if (!make(filter, u, v, bias, most, fbe::gpu::sampler_index(filter, u, v))) {
+                    return false;
                 }
+            }
+        }
+        for (const std::int32_t wrap : { FBE_TEXTURE_CLAMP, FBE_TEXTURE_REPEAT }) {
+            if (!make(filter, wrap, wrap, 0.0F, 1.0F,
+                      fbe::gpu::sampler_2d_index(filter, wrap == FBE_TEXTURE_REPEAT))) {
+                return false;
             }
         }
     }
@@ -268,6 +279,12 @@ void write_texture(std::uint32_t index, VkImageView view) {
 
 std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32_t wrap_v) {
     return static_cast<std::uint32_t>((filter * wraps * wraps) + (wrap_u * wraps) + wrap_v);
+}
+
+std::uint32_t sampler_2d_index(std::int32_t filter, bool repeat) {
+    static_assert((filters * wraps * wraps) + (filters * 2) <= sampler_slots,
+                  "the set has a slot for each of 3D's samplers and 2D's");
+    return static_cast<std::uint32_t>((filters * wraps * wraps) + (filter * 2) + (repeat ? 1 : 0));
 }
 
 } // namespace fbe::gpu

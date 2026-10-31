@@ -1,7 +1,9 @@
 // 2D's quads: each drawn from its corners, in pixels, read through the address the push constants
 // give, six vertices a quad; its color, sRGB bytes, made linear unless the target's pixels are
 // data, times its texture's color. A line's quad covers the pixels around it, and keeps, along its
-// longer axis, the one nearest it, as shapes.hpp's line picks it, a tie rounding up.
+// longer axis, the one nearest it, as shapes.hpp's line picks it, a tie rounding up. A part of a
+// texture keeps its uv half a texel inside the part, so filtering never reaches a neighbor's
+// texels, and a part tiled has its uv in tiles, each wrapped into the part.
 
 import bindless;
 
@@ -9,10 +11,11 @@ struct Quad
 {
     float2 corners[4];
     float4 uv;
+    float4 part;
     uint color;
     uint texture;
-    uint mask;
     uint flags;
+    uint spare;
 };
 
 struct Canvas
@@ -28,16 +31,21 @@ ConstantBuffer<Canvas> canvas;
 struct Corner
 {
     float4 position : SV_Position;
-    float2 uv : TEXCOORD0;
+    // Centroid, so a multisampled pixel at a quad's edge doesn't take its uv from past the edge.
+    centroid float2 uv : TEXCOORD0;
+    nointerpolation float4 part : PART;
     float4 color : COLOR;
     nointerpolation uint texture : TEXTURE;
     nointerpolation int4 line : LINEPARAMS;
     nointerpolation uint flags : FLAGS;
 };
 
-// A quad's flags: it's a line; and steeper than long.
+// A quad's flags: it's a line; steeper than long; a part of its texture, left, top, right, and
+// bottom in uv; and that part tiled.
 static const uint lineFlag = 1;
 static const uint steepFlag = 2;
+static const uint partFlag = 4;
+static const uint tileFlag = 8;
 
 // A quad's two triangles, from its corners clockwise from the top left.
 static const uint cornerOf[6] = { 0, 1, 2, 0, 2, 3 };
@@ -59,6 +67,7 @@ Corner vertexMain(uint index : SV_VulkanVertexID)
                                 quad.color >> 24) / 255.0;
     const float4 decoded = float4(toLinear(bytes.r), toLinear(bytes.g), toLinear(bytes.b), bytes.a);
     corner.color = canvas.data != 0 ? bytes : decoded;
+    corner.part = quad.part;
     corner.texture = quad.texture;
     corner.line = asint(quad.uv);
     corner.flags = quad.flags;
@@ -98,5 +107,24 @@ float4 fragmentMain(Corner corner) : SV_Target
             discard;
         }
     }
-    return corner.color * sampleTexture(corner.texture & 0xFFFFFF, corner.texture >> 24, corner.uv);
+    const uint texture = corner.texture & 0xFFFFFF;
+    const uint sampler = corner.texture >> 24;
+    float2 uv = corner.uv;
+    float2 across = ddx(corner.uv);
+    float2 down = ddy(corner.uv);
+    if ((corner.flags & partFlag) != 0)
+    {
+        const float2 low = corner.part.xy;
+        const float2 high = corner.part.zw;
+        if ((corner.flags & tileFlag) != 0)
+        {
+            uv = low + frac(uv) * (high - low);
+            across *= high - low;
+            down *= high - low;
+        }
+        const float2 inset = 0.5 / textureSize(texture);
+        const float2 middle = (low + high) * 0.5;
+        uv = clamp(uv, min(low + inset, middle), max(high - inset, middle));
+    }
+    return corner.color * sampleTextureGrad(texture, sampler, uv, across, down);
 }

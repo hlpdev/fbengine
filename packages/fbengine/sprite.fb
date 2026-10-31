@@ -101,9 +101,11 @@ Public Final Class Sprite
         handle = Vec2(x, y)
     End Method
 
-    /// Puts its handle in a frame's middle.
+    /// Puts its handle in a frame's middle, at the whole pixel left of it and above it where its
+    /// size is odd, so it's drawn at whole pixels as it's drawn at them; SetHandle puts it exactly
+    /// in the middle.
     @MainThread Public Method MidHandle()
-        handle = Vec2((Width() As Float) / 2, (Height() As Float) / 2)
+        handle = Vec2((Width() / 2) As Float, (Height() / 2) As Float)
     End Method
 
     /// Its handle, in a frame's pixels from its top left.

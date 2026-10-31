@@ -302,11 +302,13 @@ Public Final Class Texture
             Panic("a texture's pixels are locked as RGBA8 or RGBA8_LINEAR, not {format}")
         End If
         Local data: Ptr<UInt8> = Null
+        Local stamp: Ptr<UInt64> = Null
         Unsafe
             data = fbe_texture_pixels(texture, Null)
+            stamp = fbe_texture_pixels_stamp(texture)
         End Unsafe
         If data == Null Then Panic(LastError())
-        Return Pixels(Self, data)
+        Return Pixels(Self, data, stamp)
     End Method
 
     /// The pixel at `x`, `y`, through LockPixels, so a run of them reads the GPU back once.

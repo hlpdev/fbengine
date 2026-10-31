@@ -354,15 +354,21 @@ bool expand(const fbe::gpu::pass_t& pass) {
     return true;
 }
 
+/// Each image part's mark, the number of the last pass checked that uses it, so a pass's checked
+/// in one go through its accesses.
+std::vector<std::uint64_t> marks;
+std::uint64_t checked = 0;
+
 /// Whether a pass's accesses from `first` use each image once.
 bool once_each(std::size_t first) {
+    ++checked;
+    marks.resize(std::max(marks.size(), resources.size() * parts), 0);
     for (std::size_t at = first; at < accesses.size(); ++at) {
-        for (std::size_t other = first; other < at; ++other) {
-            if (accesses[at].resource == accesses[other].resource &&
-                accesses[at].part == accesses[other].part) {
-                return false;
-            }
+        std::uint64_t& mark = marks[key_of(accesses[at].resource, accesses[at].part)];
+        if (mark == checked) {
+            return false;
         }
+        mark = checked;
     }
     return true;
 }
@@ -970,6 +976,7 @@ void stop_graph() {
     empty();
     // Stopping frees every texture, transient targets' too.
     pool.clear();
+    marks.clear();
     recorded = {};
     recording = false;
     frames = 0;

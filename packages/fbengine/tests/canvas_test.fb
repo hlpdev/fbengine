@@ -95,6 +95,9 @@ Function ASpriteHasFramesAndAHandle() Throws GraphicsError
     Expect(sprite.Frames() == 3)
     sprite.SetRegion(1, 1, 5, 3)
     Expect(sprite.Width() == 5 && sprite.Height() == 3 && sprite.Frames() == 1)
+    // An odd size's middle, at whole pixels.
+    sprite.MidHandle()
+    Expect(sprite.Handle() == Vec2(2, 1))
     Expect(sprite.Texture() == sheet)
 End Function
 

@@ -83,14 +83,20 @@ FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, 
 
 // A CPU copy of a texture's first level's pixels, rows top first, packed, in its format's bytes,
 // which reads and writes go to a pixel at a time; `size` is how many bytes there are. It's read
-// back from the GPU only when the GPU's changed them since, which waits for the frame so far, and
-// stays where it is until the texture's freed. What's written into it reaches the GPU once
-// fbe_texture_pixels_written says where, before the GPU next uses the texture, so drawing and
-// writing keep their order. nullptr if the texture isn't live or is multisampled, whose pixels
-// are only drawn.
+// back from the GPU, into where it is, only when the GPU's changed them since, which waits for the
+// frame so far, and stays where it is until the texture's freed or the GPU stops. What's written
+// into it reaches the GPU once fbe_texture_pixels_written says where, before the GPU next uses the
+// texture, so drawing and writing keep their order. nullptr if the texture isn't live or is
+// multisampled, whose pixels are only drawn.
 FBE_API uint8_t* fbe_texture_pixels(uint64_t texture, int64_t* size);
+// Where the stamp of a texture's CPU copy is, a number that changes whenever the copy's freed, as
+// the texture is or the GPU stops: it stays there as long as the program runs, so what holds the
+// copy's pointer can tell with a read that the copy's still there. nullptr if the texture isn't
+// live.
+FBE_API const uint64_t* fbe_texture_pixels_stamp(uint64_t texture);
 // Says the rectangle `width` by `height` at `x`, `y` of a texture's CPU copy was written; false
-// if it isn't in it, or the texture has no CPU copy.
+// if it isn't in it, the texture has no CPU copy, or the GPU's changed the texture since the copy
+// was read back, as drawing into it does, whose pixels the rectangle would go over.
 FBE_API bool fbe_texture_pixels_written(uint64_t texture, int32_t x, int32_t y, int32_t width,
                                         int32_t height);
 

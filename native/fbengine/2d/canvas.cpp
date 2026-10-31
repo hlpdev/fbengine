@@ -7,7 +7,7 @@
 // shader keeps the ones shapes.hpp's line has, so a long line costs no more than a short one; a
 // line too long for the shader's arithmetic is spans. A texture's drawn as a quad of its own
 // texels, through the bindless set, the pass saying it samples it, so what drew into it before is
-// done first.
+// done first; tiles are one quad over the viewport, whose texels repeat.
 
 #include "2d/fbe_2d.h"
 #include "2d/shapes.hpp"
@@ -28,7 +28,6 @@
 #include <engine_shaders.hpp>
 #include <format>
 #include <memory>
-#include <numbers>
 #include <span>
 #include <tuple>
 #include <utility>
@@ -38,23 +37,30 @@ namespace {
 
 using fbe::gpu::flag;
 
-/// What the canvas shader draws: a quad's corners, clockwise from its top left, in pixels; the
-/// part of its texture it shows, or, for a line, its start along its longer axis and across it,
-/// its length, and how far across it goes; its color, sRGB bytes, red first; its texture's index in
-/// the bindless set and sampler's, the sampler's in the top 8 bits; and its flags.
+/// What the canvas shader draws: a quad's corners, clockwise from its top left, in pixels; its
+/// texture's uv at its top left and bottom right, or, for a line, its start along its longer axis
+/// and across it, its length, and how far across it goes; the part of its texture a sprite's
+/// texels are kept in, left, top, right, and bottom, in uv; its color, sRGB bytes, red first; its
+/// texture's index in the bindless set and sampler's, the sampler's in the top 8 bits; and its
+/// flags.
 struct quad_t {
     std::array<float, 8> corners;
     std::array<float, 4> uv;
+    std::array<float, 4> part;
     std::uint32_t color;
     std::uint32_t texture;
-    std::uint32_t mask;
     std::uint32_t flags;
+    std::uint32_t spare;
 };
-static_assert(sizeof(quad_t) == 64, "the canvas shader reads quads 64 bytes apart");
+static_assert(sizeof(quad_t) == 80, "the canvas shader reads quads 80 bytes apart");
 
-/// A quad's flags: it's a line; and steeper than it's long, its longer axis down.
+/// A quad's flags: it's a line; steeper than it's long, its longer axis down; its texels are kept
+/// in its part, half a texel in from its edges, so filtering doesn't reach a neighbor's; and its uv
+/// is in tiles of its part, each wrapped into it.
 constexpr std::uint32_t line_flag = 1;
 constexpr std::uint32_t steep_flag = 2;
+constexpr std::uint32_t part_flag = 4;
+constexpr std::uint32_t tile_flag = 8;
 /// The longest line the shader's 32-bit arithmetic draws, and the furthest from 0 its ends can be.
 constexpr std::int64_t longest_line = 32767;
 constexpr std::int64_t furthest_line = 16777216;
@@ -86,8 +92,11 @@ struct draw_t {
 /// The batch: its target, its quads, and its draws.
 std::uint64_t batch_target = 0;
 std::vector<quad_t> quads;
-/// The textures the batch's quads sample.
+/// The textures the batch's quads sample, and each slot's mark, the batch's number when its
+/// texture was added, so each is added once.
 std::vector<std::uint64_t> sampled;
+std::vector<std::uint64_t> sampled_marks;
+std::uint64_t batches = 1;
 std::vector<draw_t> draws;
 /// The pixels the draw being added to may cover, its scissor's.
 fbe::canvas::clip_t clip;
@@ -160,6 +169,7 @@ void flush() {
     quads.clear();
     draws.clear();
     sampled.clear();
+    ++batches;
     const fbe::texture::texture_t* found = fbe::texture::find(batch_target);
     if (found == nullptr) {
         return;
@@ -206,6 +216,8 @@ void flush() {
 void drop() {
     ready = false;
     sampled.clear();
+    sampled_marks.clear();
+    ++batches;
     quads.clear();
     draws.clear();
     batch_target = 0;
@@ -393,10 +405,11 @@ struct source_t {
     std::array<float, 4> region{};
 };
 
-/// The texture `texture` and the part of it `sprite` draws, into the batch's target; false, with
-/// fbe_error's why, if it isn't live, is the target, or the part isn't in it, or the sprite's
-/// rotation or scale isn't finite.
-bool source_of(std::uint64_t texture, const fbe_2d_sprite_t* sprite, source_t& source) {
+/// The texture `texture` and the part of it `sprite` draws at `x`, `y`, into the batch's target;
+/// false, with fbe_error's why, if it isn't live, is the target, or the part isn't in it, or the
+/// position or the sprite's handle, rotation, or scale isn't finite.
+bool source_of(std::uint64_t texture, const fbe_2d_sprite_t* sprite, float x, float y,
+               source_t& source) {
     if (sprite == nullptr) {
         return fbe::fail("no sprite was given");
     }
@@ -407,10 +420,10 @@ bool source_of(std::uint64_t texture, const fbe_2d_sprite_t* sprite, source_t& s
     if (texture == batch_target) {
         return fbe::fail("a texture isn't drawn into itself");
     }
-    if (!std::isfinite(sprite->rotation) || !std::isfinite(sprite->scale_x) ||
-        !std::isfinite(sprite->scale_y) || !std::isfinite(sprite->handle_x) ||
-        !std::isfinite(sprite->handle_y)) {
-        return fbe::fail("a sprite's handle, rotation, and scale are finite");
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(sprite->rotation) ||
+        !std::isfinite(sprite->scale_x) || !std::isfinite(sprite->scale_y) ||
+        !std::isfinite(sprite->handle_x) || !std::isfinite(sprite->handle_y)) {
+        return fbe::fail("a sprite's position, handle, rotation, and scale are finite");
     }
     const auto width = static_cast<float>(found->width);
     const auto height = static_cast<float>(found->height);
@@ -440,20 +453,31 @@ bool source_of(std::uint64_t texture, const fbe_2d_sprite_t* sprite, source_t& s
     return true;
 }
 
-/// Adds a quad of `source`'s texels, `uv` from `region`'s left, top to its right, bottom, sampled
-/// with `sampler`, tinted the pen's color, and says the batch samples the texture.
+/// Adds a quad of `source`'s texels, `uv` at its top left and bottom right, sampled with 2D's
+/// sampler for its filter, repeating or not, tinted the pen's color, with `flags`, its part
+/// `source`'s; and says the batch samples the texture.
 void add_texels(const std::array<float, 8>& corners, const std::array<float, 4>& uv,
-                const source_t& source, std::uint32_t sampler) {
-    if (sampled.empty() || sampled.back() != source.handle) {
-        if (std::ranges::find(sampled, source.handle) == sampled.end()) {
-            sampled.push_back(source.handle);
-        }
+                const source_t& source, bool repeat, std::uint32_t flags) {
+    if (sampled_marks.size() <= source.slot) {
+        sampled_marks.resize(std::size_t{ source.slot } + 1, 0);
     }
+    if (sampled_marks[source.slot] != batches) {
+        sampled_marks[source.slot] = batches;
+        sampled.push_back(source.handle);
+    }
+    const std::uint32_t sampler = fbe::gpu::sampler_2d_index(source.filter, repeat);
     quads.push_back({
         .corners = corners,
         .uv = uv,
+        .part = {
+            source.region[0] / source.width,
+            source.region[1] / source.height,
+            source.region[2] / source.width,
+            source.region[3] / source.height,
+        },
         .color = color,
         .texture = source.slot | (sampler << 24U),
+        .flags = flags,
     });
     ++draws.back().count;
 }
@@ -665,12 +689,12 @@ FBE_API bool fbe_2d_texture(uint64_t target, const fbe_2d_pen_t* pen, uint64_t t
     // sending it can send the batch.
     fbe::texture::send_pixels(texture);
     source_t source;
-    if (!begin(target, pen) || !source_of(texture, sprite, source)) {
+    if (!begin(target, pen) || !source_of(texture, sprite, x, y, source)) {
         return false;
     }
     // Each corner of the part, from its handle, scaled, turned clockwise on the screen, and moved
     // to the position.
-    const double turn = static_cast<double>(sprite->rotation) * std::numbers::pi / 180.0;
+    const auto turn = static_cast<double>(sprite->rotation);
     const double cosine = std::cos(turn);
     const double sine = std::sin(turn);
     const double left = static_cast<double>(x) + pen->origin_x;
@@ -701,8 +725,7 @@ FBE_API bool fbe_2d_texture(uint64_t target, const fbe_2d_pen_t* pen, uint64_t t
                    source.region[2] / source.width,
                    source.region[3] / source.height,
                },
-               source,
-               fbe::gpu::sampler_index(source.filter, FBE_TEXTURE_CLAMP, FBE_TEXTURE_CLAMP));
+               source, false, part_flag);
     return true;
 }
 
@@ -710,71 +733,44 @@ FBE_API bool fbe_2d_tile(uint64_t target, const fbe_2d_pen_t* pen, uint64_t text
                          const fbe_2d_sprite_t* sprite, float x, float y) {
     fbe::texture::send_pixels(texture);
     source_t source;
-    if (!begin(target, pen) || !source_of(texture, sprite, source)) {
+    if (!begin(target, pen) || !source_of(texture, sprite, x, y, source)) {
         return false;
+    }
+    if (sprite->scale_x == 0.0F || sprite->scale_y == 0.0F) {
+        return fbe::fail("a sprite's tiled at a scale that isn't 0");
     }
     if (clip.right <= clip.left || clip.bottom <= clip.top) {
         return true;
     }
     // A tile's size on the target, mirrored where its scale is negative, and where the one whose
-    // handle is at the position starts.
+    // handle is at the position starts, moved by whole tiles to the viewport's top left, so its
+    // uv's small there and floats keep its texels however far away it is.
     const double across =
         static_cast<double>(source.region[2] - source.region[0]) * sprite->scale_x;
     const double down = static_cast<double>(source.region[3] - source.region[1]) * sprite->scale_y;
-    if (across == 0.0 || down == 0.0) {
-        return true;
-    }
-    const double left = static_cast<double>(x) + pen->origin_x -
-                        (static_cast<double>(sprite->handle_x) * sprite->scale_x);
-    const double top = static_cast<double>(y) + pen->origin_y -
-                       (static_cast<double>(sprite->handle_y) * sprite->scale_y);
     const auto clip_left = static_cast<double>(clip.left);
     const auto clip_top = static_cast<double>(clip.top);
     const auto clip_right = static_cast<double>(clip.right);
     const auto clip_bottom = static_cast<double>(clip.bottom);
+    double left = static_cast<double>(x) + pen->origin_x -
+                  (static_cast<double>(sprite->handle_x) * sprite->scale_x);
+    double top = static_cast<double>(y) + pen->origin_y -
+                 (static_cast<double>(sprite->handle_y) * sprite->scale_y);
+    left -= std::floor((left - clip_left) / across) * across;
+    top -= std::floor((top - clip_top) / down) * down;
+    // One quad over the viewport, its uv in tiles: all of a texture repeats as the sampler wraps,
+    // and a part as the shader wraps it into the part.
     const bool whole = source.region[0] == 0.0F && source.region[1] == 0.0F &&
                        source.region[2] == source.width && source.region[3] == source.height;
-    if (whole) {
-        // One quad over the viewport, its texels repeating as the sampler wraps.
-        const auto u = [&](double at) { return static_cast<float>((at - left) / across); };
-        const auto v = [&](double at) { return static_cast<float>((at - top) / down); };
-        const auto l = static_cast<float>(clip_left);
-        const auto t = static_cast<float>(clip_top);
-        const auto r = static_cast<float>(clip_right);
-        const auto b = static_cast<float>(clip_bottom);
-        add_texels({ l, t, r, t, r, b, l, b },
-                   { u(clip_left), v(clip_top), u(clip_right), v(clip_bottom) }, source,
-                   fbe::gpu::sampler_index(source.filter, FBE_TEXTURE_REPEAT, FBE_TEXTURE_REPEAT));
-        return true;
-    }
-    // A part of a texture is a quad a tile, from the first that reaches into the viewport.
-    const double step_x = std::abs(across);
-    const double step_y = std::abs(down);
-    const double start_x = std::min(left, left + across);
-    const double start_y = std::min(top, top + down);
-    const double first_x = start_x - (std::ceil((start_x - clip_left) / step_x) * step_x);
-    const double first_y = start_y - (std::ceil((start_y - clip_top) / step_y) * step_y);
-    const std::array<float, 4> uv{
-        (across > 0.0 ? source.region[0] : source.region[2]) / source.width,
-        (down > 0.0 ? source.region[1] : source.region[3]) / source.height,
-        (across > 0.0 ? source.region[2] : source.region[0]) / source.width,
-        (down > 0.0 ? source.region[3] : source.region[1]) / source.height,
-    };
-    const std::uint32_t sampler =
-        fbe::gpu::sampler_index(source.filter, FBE_TEXTURE_CLAMP, FBE_TEXTURE_CLAMP);
-    const auto columns = static_cast<std::int64_t>(std::ceil((clip_right - first_x) / step_x));
-    const auto rows = static_cast<std::int64_t>(std::ceil((clip_bottom - first_y) / step_y));
-    for (std::int64_t row = 0; row < rows; ++row) {
-        for (std::int64_t column = 0; column < columns; ++column) {
-            const double tile_x = first_x + (static_cast<double>(column) * step_x);
-            const double tile_y = first_y + (static_cast<double>(row) * step_y);
-            const auto l = static_cast<float>(tile_x);
-            const auto t = static_cast<float>(tile_y);
-            const auto r = static_cast<float>(tile_x + step_x);
-            const auto b = static_cast<float>(tile_y + step_y);
-            add_texels({ l, t, r, t, r, b, l, b }, uv, source, sampler);
-        }
-    }
+    const auto u = [&](double at) { return static_cast<float>((at - left) / across); };
+    const auto v = [&](double at) { return static_cast<float>((at - top) / down); };
+    const auto l = static_cast<float>(clip_left);
+    const auto t = static_cast<float>(clip_top);
+    const auto r = static_cast<float>(clip_right);
+    const auto b = static_cast<float>(clip_bottom);
+    add_texels({ l, t, r, t, r, b, l, b },
+               { u(clip_left), v(clip_top), u(clip_right), v(clip_bottom) }, source, whole,
+               whole ? 0U : part_flag | tile_flag);
     return true;
 }
 

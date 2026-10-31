@@ -39,7 +39,7 @@ typedef struct fbe_2d_pen_t {
 
 // How a texture's drawn: the part of it, in its pixels from its top left, 0 by 0 for all of it;
 // its handle, the point of that part, in its pixels, that lands at the position drawn at, which
-// it's rotated and scaled about; its rotation, in degrees, clockwise on the screen; and its scale
+// it's rotated and scaled about; its rotation, in radians, clockwise on the screen; and its scale
 // across and down, a negative one mirroring it. C has no `using`, so it's a typedef.
 // NOLINTNEXTLINE(modernize-use-using)
 typedef struct fbe_2d_sprite_t {
@@ -86,14 +86,16 @@ FBE_API bool fbe_2d_polygon(uint64_t target, const fbe_2d_pen_t* pen, const floa
                             int32_t count, bool filled);
 // `texture` as `sprite` says, its handle at `x`, `y` (the pen's origin added), sampled as the
 // texture's filter says and clamped at its edges, times the pen's color, which tints it and its
-// alpha fades it; unrotated and at its own size at whole pixels, each pixel is one of its texels
+// alpha fades it, a part's texels kept half a texel in from its edges so filtering never reaches
+// its neighbors'; unrotated and at its own size at whole pixels, each pixel is one of its texels
 // exactly. False also if the texture isn't live or is the target, or the sprite's part isn't in it,
-// or its rotation or scale isn't finite.
+// or the position or its handle, rotation, or scale isn't finite.
 FBE_API bool fbe_2d_texture(uint64_t target, const fbe_2d_pen_t* pen, uint64_t texture,
                             const fbe_2d_sprite_t* sprite, float x, float y);
 // The viewport covered with `texture` as `sprite` says, unrotated and scaled, tiles placed so one's
-// handle is at `x`, `y` (the pen's origin added); all of a texture repeats as its sampler wraps,
-// in one quad, and a part of one is a quad a tile.
+// handle is at `x`, `y` (the pen's origin added), in one quad: all of a texture repeats as its
+// sampler wraps, and a part of one as the shader wraps it into the part. False also as
+// fbe_2d_texture is, or for a scale of 0.
 FBE_API bool fbe_2d_tile(uint64_t target, const fbe_2d_pen_t* pen, uint64_t texture,
                          const fbe_2d_sprite_t* sprite, float x, float y);
 

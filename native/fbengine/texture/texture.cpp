@@ -17,6 +17,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <format>
 #include <unordered_map>
 #include <utility>
@@ -56,6 +57,30 @@ std::unordered_map<std::uint32_t, cpu_copy_t>& copies() {
 }
 std::uint32_t written_copies = 0;
 std::uint64_t readbacks = 0;
+
+/// Each slot's CPU copy's stamp, which changes whenever its copy's freed: a deque, so each stays
+/// where it is as the program runs, and what holds a copy's pointer can tell with a read that it's
+/// still there.
+std::deque<std::uint64_t>& stamps() {
+    static std::deque<std::uint64_t> made;
+    return made;
+}
+
+std::uint64_t& stamp_of(std::uint32_t slot) {
+    while (stamps().size() <= slot) {
+        stamps().push_back(0);
+    }
+    return stamps()[slot];
+}
+
+/// Frees a slot's CPU copy, if it has one, and what was written into it and not sent.
+void drop_copy(std::uint32_t slot) {
+    if (const auto kept = copies().find(slot); kept != copies().end()) {
+        written_copies -= kept->second.right > kept->second.left ? 1U : 0U;
+        copies().erase(kept);
+        ++stamp_of(slot);
+    }
+}
 
 using fbe::texture::resting_stages;
 /// The stages that read textures, which an upload's writes are made visible to.
@@ -740,6 +765,9 @@ void stop_textures() {
     }
     textures.clear();
     live.clear();
+    for (const auto& [slot, kept] : copies()) {
+        ++stamp_of(slot);
+    }
     copies().clear();
     written_copies = 0;
     free_slots.clear();
@@ -903,13 +931,17 @@ FBE_API uint8_t* fbe_texture_pixels(uint64_t texture, int64_t* size) {
     cpu_copy_t& kept = copies()[slot];
     if (kept.version != found->version) {
         // Nothing's written into a kept older than the texture: what uses it on the GPU sends the
-        // kept's writes first.
+        // kept's writes first. Read back into where it is, so it stays there.
         std::vector<std::uint8_t> read = fbe::texture::read(texture, 0);
         if (read.empty()) {
-            copies().erase(slot);
+            drop_copy(slot);
             return nullptr;
         }
-        kept.pixels = std::move(read);
+        if (kept.pixels.size() == read.size()) {
+            std::memcpy(kept.pixels.data(), read.data(), read.size());
+        } else {
+            kept.pixels = std::move(read);
+        }
         found = fbe::texture::find(texture);
         kept.version = found->version;
         ++readbacks;
@@ -920,8 +952,21 @@ FBE_API uint8_t* fbe_texture_pixels(uint64_t texture, int64_t* size) {
     return kept.pixels.data();
 }
 
+FBE_API const uint64_t* fbe_texture_pixels_stamp(uint64_t texture) {
+    if (fbe::texture::find(texture) == nullptr) {
+        return nullptr;
+    }
+    return &stamp_of(static_cast<std::uint32_t>(texture));
+}
+
 FBE_API bool fbe_texture_pixels_written(uint64_t texture, int32_t x, int32_t y, int32_t width,
                                         int32_t height) {
+    // A 2D batch drawing into it goes to the graph first, so what it drew before is older, and
+    // its version counts it.
+    if (fbe::texture::find(texture) == nullptr) {
+        return false;
+    }
+    fbe::gpu::in_graph(texture);
     const texture_t* found = fbe::texture::find(texture);
     if (found == nullptr) {
         return false;
@@ -933,6 +978,11 @@ FBE_API bool fbe_texture_pixels_written(uint64_t texture, int32_t x, int32_t y, 
     }
     if (!inside(*found, x, y, width, height)) {
         return false;
+    }
+    // Sent, the rectangle would go over what the GPU's done since with what the copy had before.
+    if (kept->second.version != found->version) {
+        return fbe::fail("the GPU changed the texture after its pixels came to the CPU, so "
+                         "they're put there again to be written");
     }
     cpu_copy_t& written = kept->second;
     if (written.right <= written.left) {
@@ -989,10 +1039,7 @@ FBE_API bool fbe_texture_release(uint64_t texture) {
     }
     // Its handles are caught now; its image and slot wait for the frames that could draw it. What
     // was written into its CPU copy and not sent goes with it.
-    if (const auto kept = copies().find(slot); kept != copies().end()) {
-        written_copies -= kept->second.right > kept->second.left ? 1U : 0U;
-        copies().erase(kept);
-    }
+    drop_copy(slot);
     live[slot] = false;
     ++generations[slot];
     textures_made -= textures[slot].engine ? 0 : 1;
@@ -1042,6 +1089,12 @@ FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t w
     if (pixels == nullptr || pitch < row) {
         return fbe::fail(std::format("a row of {} pixels is {} bytes, more than the pitch {}",
                                      width, row, pitch));
+    }
+    // What the CPU wrote into its copy goes first, so this, written after, goes over it.
+    fbe::texture::send_pixels(texture);
+    found = fbe::texture::find(texture);
+    if (found == nullptr) {
+        return false;
     }
     return upload(texture, *found, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y),
                   static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), pixels,
