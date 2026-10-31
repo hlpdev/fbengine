@@ -1,10 +1,15 @@
-// The golden image harness: PNGs through stb, compared within a tolerance.
+// The golden image harness: PNGs through stb, compared within a tolerance; and, updating, written
+// once a test that drew them has passed.
 
 #include "golden.hpp"
 
 #include <algorithm>
+#include <catch2/catch_test_case_info.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/reporters/catch_reporter_event_listener.hpp>
+#include <catch2/reporters/catch_reporter_registrars.hpp>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <fbengine.h>
 #include <filesystem>
@@ -14,17 +19,55 @@
 #include <stb_image_write.h>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 
-/// Where golden images are kept, in the source; and where frames that don't match go, in the
-/// build: FBENGINE_GOLDEN_IMAGES and FBENGINE_GOLDEN_FAILURES, which CMake defines.
+/// Where golden images are kept, in the source; where frames that don't match go, in the build;
+/// and where an update's images wait for their test to pass: FBENGINE_GOLDEN_IMAGES,
+/// FBENGINE_GOLDEN_FAILURES, and FBENGINE_GOLDEN_UPDATES, which CMake defines.
 constexpr std::string_view images = FBENGINE_GOLDEN_IMAGES;
 constexpr std::string_view failures = FBENGINE_GOLDEN_FAILURES;
+constexpr std::string_view updates = FBENGINE_GOLDEN_UPDATES;
 
-/// How loosely a frame from another GPU is compared: rasterizing and filtering differ a little
-/// between drivers, so it catches a wrong frame, not a pixel's change.
-constexpr fbe::golden::tolerance_t elsewhere{ .channel = 24, .share = 0.02 };
+/// How loosely a frame from another GPU is compared: its edges and filtering may differ by a
+/// little, as the RTX 4080's don't from lavapipe's, so a wrong frame or a shifted one fails.
+constexpr fbe::golden::tolerance_t elsewhere{ .channel = 24, .share = 0.0025 };
+
+/// The images the running test wrote, updating, each where it waits and where it goes once the
+/// test passes.
+std::vector<std::pair<std::filesystem::path, std::filesystem::path>> written;
+
+/// Moves an update's images into place once their test passes, and leaves them if it doesn't.
+class golden_listener_t : public Catch::EventListenerBase {
+public:
+    using Catch::EventListenerBase::EventListenerBase;
+
+    void testCaseStarting(const Catch::TestCaseInfo& /*info*/) override {
+        written.clear();
+    }
+
+    void testCaseEnded(const Catch::TestCaseStats& stats) override {
+        const bool passed =
+            stats.totals.assertions.allPassed() && stats.totals.testCases.skipped == 0;
+        for (const auto& [staged, golden] : written) {
+            std::error_code error;
+            if (passed) {
+                std::filesystem::copy_file(
+                    staged, golden, std::filesystem::copy_options::overwrite_existing, error);
+            }
+            const std::string line = passed && !error
+                                         ? std::format("wrote {}\n", golden.string())
+                                         : std::format("didn't write {}, as {} failed\n",
+                                                       golden.string(), stats.testInfo->name);
+            std::fputs(line.c_str(), stderr);
+        }
+        written.clear();
+    }
+};
+
+CATCH_REGISTER_LISTENER(golden_listener_t)
 
 /// Where `name`'s golden image is, and where its frame goes when it doesn't match.
 std::filesystem::path golden_image(std::string_view name) {
@@ -66,12 +109,14 @@ void check(std::string_view name, const frame_t& frame, tolerance_t tolerance) {
             FAIL("golden images are lavapipe's; this GPU is "
                  << fbe_gpu_device_name(fbe_gpu_device()));
         }
-        REQUIRE(write_png(golden, frame));
-        WARN("wrote " << golden.string());
+        // It's written once the test passes, so an update never takes a wrong frame.
+        const std::filesystem::path staged = std::filesystem::path(updates) / golden.filename();
+        REQUIRE(write_png(staged, frame));
+        written.emplace_back(staged, golden);
         return;
     }
+    const tolerance_t strict = tolerance;
     if (!reference) {
-        WARN("not lavapipe, so " << name << " is compared loosely");
         tolerance.channel = std::max(tolerance.channel, elsewhere.channel);
         tolerance.share = std::max(tolerance.share, elsewhere.share);
     }
@@ -104,6 +149,17 @@ void check(std::string_view name, const frame_t& frame, tolerance_t tolerance) {
     INFO(name << ": the frame is " << frame.width << "x" << frame.height << ", the golden image "
               << width << "x" << height);
     REQUIRE(same_size);
+    // Off lavapipe, how far it is, strictly and loosely, is shown whether it passes or not, so
+    // CI's logs say how close MoltenVK comes.
+    if (!reference) {
+        const difference_t strictly = compare(expected, frame, strict.channel);
+        WARN("not lavapipe, so " << name << " is compared loosely: " << difference.pixels
+                                 << " pixels (" << difference.share * 100.0
+                                 << "%) differ by more than " << int{ tolerance.channel } << ", "
+                                 << strictly.pixels << " (" << strictly.share * 100.0
+                                 << "%) by more than " << int{ strict.channel } << ", at most "
+                                 << difference.furthest << " away");
+    }
     INFO(name << ": " << difference.pixels << " pixels differ by more than "
               << int{ tolerance.channel } << ", " << difference.share * 100.0
               << "% of them, at most " << difference.furthest << " away; see "

@@ -76,8 +76,19 @@ std::unordered_map<fbe::gpu::pipeline_desc_t, VkPipeline, hash_t>& pipelines() {
 VkPipelineCache cache = VK_NULL_HANDLE;
 std::string cache_path;
 bool cache_path_set = false;
-/// How many pipelines there were when the cache was last written, or read.
+/// How many pipelines there were when the cache's data was last looked at.
 std::size_t cached = 0;
+/// The size and checksum of the cache's data as it was read or last written, which it's written
+/// again only once it differs from; and how many bytes were read, and writes made.
+std::size_t saved_size = 0;
+std::uint64_t saved_sum = 0;
+std::size_t loaded = 0;
+std::int32_t writes = 0;
+/// When the cache was last written, and how long it waits to be written again while the GPU
+/// runs, so a game making pipelines as it loads writes once, not at every Flip.
+std::uint64_t last_write = 0;
+bool written_yet = false;
+std::uint64_t interval = 2'000'000'000;
 
 /// The first bytes of fbengine's pipeline cache files, and the version of what follows.
 constexpr std::array<char, 8> magic{ 'F', 'B', 'E', 'P', 'I', 'P', 'E', '\0' };
@@ -397,12 +408,19 @@ VkPipeline pipeline(const pipeline_desc_t& desc) {
     return made;
 }
 
+std::vector<std::byte> pipeline_cache_from(const std::string& path,
+                                           const VkPhysicalDeviceProperties& properties) {
+    return path.empty() ? std::vector<std::byte>{}
+                        : unpack_pipeline_cache(read_file(path), properties);
+}
+
 void start_pipeline_cache() {
     const device_t* gpu = device();
-    const std::string& path = the_cache_path();
-    const std::vector<std::byte> data =
-        path.empty() ? std::vector<std::byte>{}
-                     : unpack_pipeline_cache(read_file(path), gpu->properties);
+    const std::vector<std::byte> data = pipeline_cache_from(the_cache_path(), gpu->properties);
+    loaded = data.size();
+    saved_size = data.size();
+    saved_sum = checksum(data);
+    written_yet = false;
     const VkPipelineCacheCreateInfo info{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
         .initialDataSize = data.size(),
@@ -415,9 +433,28 @@ void start_pipeline_cache() {
     cached = pipelines().size();
 }
 
-void save_pipeline_cache() {
+std::vector<std::byte> pipeline_cache_data() {
+    const device_t* gpu = device();
+    if (gpu == nullptr || cache == VK_NULL_HANDLE) {
+        return {};
+    }
+    std::size_t size = 0;
+    vkGetPipelineCacheData(gpu->device, cache, &size, nullptr);
+    std::vector<std::byte> data(size);
+    if (vkGetPipelineCacheData(gpu->device, cache, &size, data.data()) != VK_SUCCESS) {
+        return {};
+    }
+    data.resize(size);
+    return data;
+}
+
+void save_pipeline_cache(bool now) {
     const device_t* gpu = device();
     if (gpu == nullptr || cache == VK_NULL_HANDLE || pipelines().size() == cached) {
+        return;
+    }
+    const std::uint64_t time = SDL_GetTicksNS();
+    if (!now && written_yet && time - last_write < interval) {
         return;
     }
     cached = pipelines().size();
@@ -425,20 +462,40 @@ void save_pipeline_cache() {
     if (path.empty()) {
         return;
     }
-    std::size_t size = 0;
-    vkGetPipelineCacheData(gpu->device, cache, &size, nullptr);
-    std::vector<std::byte> data(size);
-    if (vkGetPipelineCacheData(gpu->device, cache, &size, data.data()) != VK_SUCCESS) {
+    const std::vector<std::byte> data = pipeline_cache_data();
+    const std::uint64_t sum = checksum(data);
+    if (data.size() == saved_size && sum == saved_sum) {
         return;
     }
-    data.resize(size);
     // A cache that can't be written is only slower next time.
-    write_file(path, pack_pipeline_cache(data, gpu->properties));
+    if (write_file(path, pack_pipeline_cache(data, gpu->properties))) {
+        saved_size = data.size();
+        saved_sum = sum;
+        ++writes;
+    }
+    last_write = time;
+    written_yet = true;
+}
+
+bool pipeline_cache_pending() {
+    return pipelines().size() != cached;
+}
+
+std::size_t pipeline_cache_loaded() {
+    return loaded;
+}
+
+std::int32_t pipeline_cache_writes() {
+    return writes;
+}
+
+void set_pipeline_cache_interval(double seconds) {
+    interval = static_cast<std::uint64_t>(seconds * 1e9);
 }
 
 void stop_pipelines() {
     const device_t* gpu = device();
-    save_pipeline_cache();
+    save_pipeline_cache(true);
     for (const auto& [desc, made] : pipelines()) {
         vkDestroyPipeline(gpu->device, made, nullptr);
     }

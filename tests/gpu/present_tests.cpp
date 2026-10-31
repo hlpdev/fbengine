@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fbengine.h>
+#include <gpu/image.hpp>
 #include <gpu/vulkan.hpp>
 #include <SDL3/SDL.h>
 #include <string>
@@ -299,5 +300,17 @@ TEST_CASE("an empty frame's Flip, timed", "[gpu]") {
         std::chrono::steady_clock::now() - start;
     WARN("an empty 1280x720 frame: " << spent.count() / frames << " ms a Flip on "
                                      << fbe_gpu_device_name(fbe_gpu_device()));
+    stop_gpu();
+}
+
+// The commands work now runs on are made the first time; a try that fails leaves nothing made,
+// and the next makes them.
+TEST_CASE("work run now whose commands can't be made leaks nothing, and runs next time", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_start());
+    fbe::gpu::inject(fbe::gpu::fault_t::WORK_NOW);
+    CHECK(!fbe::gpu::run_now([](VkCommandBuffer /*commands*/) {}));
+    CHECK(std::string(fbe_error()).starts_with("couldn't make the GPU's commands for work now"));
+    CHECK(fbe::gpu::run_now([](VkCommandBuffer /*commands*/) {}));
     stop_gpu();
 }

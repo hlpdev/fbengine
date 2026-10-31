@@ -39,10 +39,17 @@ bool start_immediate(const fbe::gpu::device_t& gpu) {
     }
     if (result == VK_SUCCESS) {
         const VkFenceCreateInfo fence_info{ .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-        result = vkCreateFence(gpu.device, &fence_info, nullptr, &done);
+        result = fbe::gpu::faulted(fbe::gpu::fault_t::WORK_NOW)
+                     ? VK_ERROR_OUT_OF_HOST_MEMORY
+                     : vkCreateFence(gpu.device, &fence_info, nullptr, &done);
     }
     if (result != VK_SUCCESS) {
+        // What was made goes, so the next try starts again, leaking nothing.
+        vkDestroyFence(gpu.device, done, nullptr);
+        vkDestroyCommandPool(gpu.device, pool, nullptr);
+        done = VK_NULL_HANDLE;
         pool = VK_NULL_HANDLE;
+        commands = VK_NULL_HANDLE;
         return fbe::gpu::fail_vulkan("couldn't make the GPU's commands for work now", result);
     }
     return true;

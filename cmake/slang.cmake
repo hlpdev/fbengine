@@ -30,17 +30,25 @@ FetchContent_MakeAvailable(slang)
 find_program(FBENGINE_SLANGC slangc PATHS "${slang_SOURCE_DIR}/bin" NO_DEFAULT_PATH REQUIRED
              DOC "Slang's compiler, the pinned release's")
 
-# Compiles a target's .slang files to SPIR-V as it builds and embeds them in it: `header`, which the
-# target includes by its name, declares a fbe::gpu::shader_t for each, named as its file is, in
-# `namespace`. Every entry point a file has is in its SPIR-V, by its own name; matrices are
-# column-major, as std.math's are; a file can import the engine's modules, as bindless.slang; and a
-# warning is an error, but for Slang's saying it widened the profile, which it does for any
-# texture sampled and which emits nothing the SPIR-V doesn't use.
-function(fbengine_add_shaders target namespace header)
-  set(folder "${CMAKE_CURRENT_BINARY_DIR}/${target}_shaders")
+# Compiles .slang files to SPIR-V as the engine builds and embeds them in each of TARGETS, which
+# share the one compile: HEADER, which a target includes by its name, declares a fbe::gpu::shader_t
+# for each file, named as the file is, in NAMESPACE.
+#
+#   fbengine_add_shaders(TARGETS <target>... NAMESPACE <namespace> HEADER <name.hpp>
+#                        SHADERS <file.slang>...)
+#
+# Every entry point a file has is in its SPIR-V, by its own name; matrices are column-major, as
+# std.math's are; a file can import the engine's modules, as bindless.slang; and a warning is an
+# error, but for Slang's saying it widened the profile, which it does for any texture sampled and
+# which emits nothing the SPIR-V doesn't use. A new slangc, or a new release of it, compiles them
+# all again.
+function(fbengine_add_shaders)
+  cmake_parse_arguments(PARSE_ARGV 0 arg "" "NAMESPACE;HEADER" "TARGETS;SHADERS")
+  cmake_path(GET arg_HEADER STEM stem)
+  set(folder "${CMAKE_CURRENT_BINARY_DIR}/${stem}")
   set(shaders "")
   set(compiled "")
-  foreach(source IN LISTS ARGN)
+  foreach(source IN LISTS arg_SHADERS)
     cmake_path(ABSOLUTE_PATH source NORMALIZE)
     cmake_path(GET source STEM name)
     set(spirv "${folder}/${name}.spv")
@@ -49,8 +57,8 @@ function(fbengine_add_shaders target namespace header)
       COMMAND "${FBENGINE_SLANGC}" "${source}" -target spirv -profile spirv_1_5
               -fvk-use-entrypoint-name -matrix-layout-column-major -O2 -warnings-as-errors all
               -warnings-disable 41012 -I "${PROJECT_SOURCE_DIR}/native/fbengine/shaders"
-              -o "${spirv}" -depfile "${spirv}.d"
-      DEPENDS "${source}"
+              "-DFBENGINE_SLANG=${fbengine_slang_version}" -o "${spirv}" -depfile "${spirv}.d"
+      DEPENDS "${source}" "${FBENGINE_SLANGC}"
       DEPFILE "${spirv}.d"
       COMMENT "Compiling ${name}.slang to SPIR-V"
       VERBATIM)
@@ -59,15 +67,16 @@ function(fbengine_add_shaders target namespace header)
   endforeach()
   # A list's semicolons would split the command's argument, so the script takes bars.
   string(REPLACE ";" "|" shaders "${shaders}")
-  cmake_path(GET header STEM stem)
   add_custom_command(
-    OUTPUT "${folder}/${header}" "${folder}/${stem}.cpp"
-    COMMAND "${CMAKE_COMMAND}" "-DHEADER=${folder}/${header}" "-DSOURCE=${folder}/${stem}.cpp"
-            "-DNAMESPACE=${namespace}" "-DSHADERS=${shaders}"
+    OUTPUT "${folder}/${arg_HEADER}" "${folder}/${stem}.cpp"
+    COMMAND "${CMAKE_COMMAND}" "-DHEADER=${folder}/${arg_HEADER}" "-DSOURCE=${folder}/${stem}.cpp"
+            "-DNAMESPACE=${arg_NAMESPACE}" "-DSHADERS=${shaders}"
             -P "${PROJECT_SOURCE_DIR}/cmake/embed_shaders.cmake"
     DEPENDS ${compiled} "${PROJECT_SOURCE_DIR}/cmake/embed_shaders.cmake"
-    COMMENT "Embedding ${target}'s shaders"
+    COMMENT "Embedding ${arg_HEADER}'s shaders"
     VERBATIM)
-  target_sources(${target} PRIVATE "${folder}/${stem}.cpp")
-  target_include_directories(${target} PRIVATE "${folder}")
+  foreach(target IN LISTS arg_TARGETS)
+    target_sources(${target} PRIVATE "${folder}/${stem}.cpp")
+    target_include_directories(${target} PRIVATE "${folder}")
+  endforeach()
 endfunction()

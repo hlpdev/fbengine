@@ -32,13 +32,7 @@ void start(const std::string& cache = "") {
     fbe::tests::require(fbe_gpu_start());
 }
 
-/// A file of this test's in the system's temporary folder, gone as the test starts.
-std::filesystem::path scratch(const std::string& name) {
-    const std::filesystem::path path =
-        std::filesystem::temp_directory_path() / "fbengine-tests" / name;
-    std::filesystem::remove(path);
-    return path;
-}
+using fbe::tests::scratch;
 
 std::vector<std::byte> read_file(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
@@ -183,10 +177,15 @@ TEST_CASE("a pipeline cache's file unpacks only whole and on its own device and 
     CHECK(fbe::gpu::unpack_pipeline_cache(packed, other).empty());
 }
 
-TEST_CASE("the pipeline cache is written at the Flip after pipelines are made", "[gpu]") {
+// While the GPU runs, the cache is written at a Flip after pipelines are made, when the driver's
+// data for it changed, and not again within its interval; lavapipe keeps nothing, so its data
+// changes once, from none to its header.
+TEST_CASE("the pipeline cache is written at the Flip after its data changes", "[gpu]") {
     const std::filesystem::path path = scratch("written/pipelines.bin");
     start(path.string());
+    fbe::gpu::set_pipeline_cache_interval(0.0);
     CHECK(fbe_gpu_pipeline_cache() == path.string());
+    const std::int32_t writes = fbe::gpu::pipeline_cache_writes();
     fbe_frame_flip(false);
     // Nothing's made, so nothing's written.
     CHECK(!std::filesystem::exists(path));
@@ -195,37 +194,97 @@ TEST_CASE("the pipeline cache is written at the Flip after pipelines are made", 
     CHECK(!std::filesystem::exists(path));
     fbe_frame_flip(false);
     REQUIRE(std::filesystem::exists(path));
+    CHECK(fbe::gpu::pipeline_cache_writes() == writes + 1);
     const VkPhysicalDeviceProperties& properties = fbe::gpu::device()->properties;
-    const std::vector<std::byte> first = read_file(path);
-    CHECK(!fbe::gpu::unpack_pipeline_cache(first, properties).empty());
-    // Written again only after another's made.
-    std::filesystem::remove(path);
+    CHECK(fbe::gpu::unpack_pipeline_cache(read_file(path), properties) ==
+          fbe::gpu::pipeline_cache_data());
+    // A Flip with nothing new writes nothing.
     fbe_frame_flip(false);
-    CHECK(!std::filesystem::exists(path));
+    CHECK(fbe::gpu::pipeline_cache_writes() == writes + 1);
+    // Another pipeline writes it again only if the driver's data changed.
+    const std::vector<std::byte> before = fbe::gpu::pipeline_cache_data();
     REQUIRE(fbe::gpu::pipeline({ .shader = &fbe::test_shaders::triangle,
                                  .color = rgba,
                                  .blend = fbe::gpu::blend_t::ADD }) != VK_NULL_HANDLE);
+    const bool changed = fbe::gpu::pipeline_cache_data() != before;
     fbe_frame_flip(false);
-    CHECK(!fbe::gpu::unpack_pipeline_cache(read_file(path), properties).empty());
+    CHECK(fbe::gpu::pipeline_cache_writes() == writes + (changed ? 2 : 1));
+    CHECK(fbe::gpu::unpack_pipeline_cache(read_file(path), properties) ==
+          fbe::gpu::pipeline_cache_data());
     CHECK(!std::filesystem::exists(std::filesystem::path(path) += ".partial"));
     fbe::tests::stop_gpu();
 }
 
-// Stopping writes what's new first, so a program that stops its GPU keeps what it made.
-TEST_CASE("the pipelines are freed as the GPU stops, the cache written, and made again after",
-          "[gpu]") {
+// A game making pipelines as it loads writes the cache once in its interval, not at every Flip;
+// what's left is written as the GPU stops.
+TEST_CASE("the pipeline cache isn't written again within its interval", "[gpu]") {
+    const std::filesystem::path path = scratch("interval/pipelines.bin");
+    start(path.string());
+    fbe::gpu::set_pipeline_cache_interval(3600.0);
+    REQUIRE(fbe::gpu::pipeline({ .shader = &fbe::test_shaders::triangle, .color = rgba }) !=
+            VK_NULL_HANDLE);
+    fbe_frame_flip(false);
+    CHECK(!fbe::gpu::pipeline_cache_pending());
+    REQUIRE(fbe::gpu::pipeline({ .shader = &fbe::test_shaders::triangle,
+                                 .color = rgba,
+                                 .blend = fbe::gpu::blend_t::ALPHA }) != VK_NULL_HANDLE);
+    fbe_frame_flip(false);
+    fbe_frame_flip(false);
+    CHECK(fbe::gpu::pipeline_cache_pending());
+    const std::vector<std::byte> data = fbe::gpu::pipeline_cache_data();
+    const VkPhysicalDeviceProperties properties = fbe::gpu::device()->properties;
+    fbe::gpu::set_pipeline_cache_interval(2.0);
+    fbe::tests::stop_gpu();
+    CHECK(fbe::gpu::unpack_pipeline_cache(read_file(path), properties) == data);
+}
+
+// Stopping writes what's new first, so a program that stops its GPU keeps what it made, and the
+// next start begins with it.
+TEST_CASE("the pipeline cache is written as the GPU stops, and read as it starts again", "[gpu]") {
     const std::filesystem::path path = scratch("stopped/pipelines.bin");
     start(path.string());
+    CHECK(fbe::gpu::pipeline_cache_loaded() == 0);
     const fbe::gpu::pipeline_desc_t desc{ .shader = &fbe::test_shaders::triangle, .color = rgba };
     REQUIRE(fbe::gpu::pipeline(desc) != VK_NULL_HANDLE);
+    const std::vector<std::byte> data = fbe::gpu::pipeline_cache_data();
+    REQUIRE(!data.empty());
     fbe::tests::stop_gpu();
     CHECK(fbe_gpu_pipelines() == 0);
-    CHECK(std::filesystem::exists(path));
+    REQUIRE(std::filesystem::exists(path));
     start(path.string());
+    CHECK(fbe::gpu::pipeline_cache_loaded() == data.size());
+    CHECK(fbe::gpu::pipeline_cache_from(path.string(), fbe::gpu::device()->properties) == data);
     CHECK(fbe::gpu::pipeline(desc) != VK_NULL_HANDLE);
     CHECK(fbe_gpu_pipelines() == 1);
     const fbe::golden::frame_t frame = draw_triangle({ .width = 128, .height = 128 });
     fbe::golden::check("triangle", frame);
+    fbe::tests::stop_gpu();
+}
+
+TEST_CASE("a pipeline cache file is read only if it's whole and this GPU's", "[gpu]") {
+    start();
+    const VkPhysicalDeviceProperties properties = fbe::gpu::device()->properties;
+    const std::vector<std::byte> data{ std::byte{ 1 }, std::byte{ 2 }, std::byte{ 3 } };
+    const std::filesystem::path path = scratch("read/pipelines.bin");
+    std::filesystem::create_directories(path.parent_path());
+    const std::vector<std::byte> packed = fbe::gpu::pack_pipeline_cache(data, properties);
+    const auto write = [&path](const std::vector<std::byte>& bytes) {
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
+    };
+    write(packed);
+    CHECK(fbe::gpu::pipeline_cache_from(path.string(), properties) == data);
+    CHECK(fbe::gpu::pipeline_cache_from("", properties).empty());
+    CHECK(fbe::gpu::pipeline_cache_from((path.parent_path() / "none.bin").string(), properties)
+              .empty());
+    VkPhysicalDeviceProperties other = properties;
+    other.deviceID += 1;
+    CHECK(fbe::gpu::pipeline_cache_from(path.string(), other).empty());
+    std::vector<std::byte> broken = packed;
+    broken.back() = std::byte{ 9 };
+    write(broken);
+    CHECK(fbe::gpu::pipeline_cache_from(path.string(), properties).empty());
     fbe::tests::stop_gpu();
 }
 

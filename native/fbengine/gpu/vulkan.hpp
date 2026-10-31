@@ -153,6 +153,8 @@ enum class fault_t : std::uint8_t {
     SUBMIT,
     /// Making the device.
     DEVICE,
+    /// Making the commands for work run now.
+    WORK_NOW,
 };
 
 /// Makes the next `fault` happen.

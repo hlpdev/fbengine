@@ -68,8 +68,29 @@ VkPipeline pipeline(const pipeline_desc_t& desc);
 /// it's this device's and whole, or an empty cache.
 void start_pipeline_cache();
 
-/// Writes the pipeline cache to its file if pipelines were made since it was last written.
-void save_pipeline_cache();
+/// Writes the pipeline cache to its file if pipelines were made since it was last looked at and
+/// its data differs from what was read or last written; while the GPU runs, not within a couple of
+/// seconds of the last write, unless `now`, as stopping writes it.
+void save_pipeline_cache(bool now = false);
+
+/// The data in the pipeline cache file at `path`, if it's whole and `properties`' device and
+/// driver wrote it, which the cache starts with; empty if not, or if `path` is "".
+std::vector<std::byte> pipeline_cache_from(const std::string& path,
+                                           const VkPhysicalDeviceProperties& properties);
+
+/// The pipeline cache's data now, as the driver gives it.
+std::vector<std::byte> pipeline_cache_data();
+
+/// Whether pipelines were made since the cache was last looked at, which a later Flip does; how
+/// many bytes the cache started with as the GPU last started; and how many times it's been
+/// written.
+bool pipeline_cache_pending();
+std::size_t pipeline_cache_loaded();
+std::int32_t pipeline_cache_writes();
+
+/// How long the cache waits after a write before it's written again while the GPU runs, 2
+/// seconds unless a test says.
+void set_pipeline_cache_interval(double seconds);
 
 /// A pipeline cache's data, with a header saying which device and driver made it and a checksum,
 /// as fbengine keeps it on disk.

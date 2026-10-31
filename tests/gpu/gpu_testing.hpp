@@ -6,7 +6,15 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
 #include <fbengine.h>
+#include <filesystem>
 #include <gpu/vulkan.hpp>
+#include <string>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace fbe::tests {
 
@@ -23,6 +31,21 @@ inline void set_variable(const char* name, const char* value) {
 #else
     REQUIRE(setenv(name, value, 1) == 0);
 #endif
+}
+
+/// A file of the test's, gone as it's asked for: in the build's test-scratch folder,
+/// FBENGINE_TEST_SCRATCH, in one of this process's own, so two runs at once, of one build or
+/// several, never share one.
+inline std::filesystem::path scratch(const std::string& name) {
+#ifdef _WIN32
+    const int process = _getpid();
+#else
+    const int process = getpid();
+#endif
+    const std::filesystem::path path =
+        std::filesystem::path(FBENGINE_TEST_SCRATCH) / std::to_string(process) / name;
+    std::filesystem::remove(path);
+    return path;
 }
 
 /// Stops the GPU, which has to free everything it made: the validation layers find no error
