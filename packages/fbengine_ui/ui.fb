@@ -90,8 +90,9 @@ Public Final Class Ui
     /// back, which closes it.
     @MainThread Public Method Back(): Bool => back
 
-    /// Blocks `actions` while one of its widgets has the focus (ActionSet.Block), and unblocks
-    /// them after, so the keys and gamepad buttons a menu takes don't move the player too; when
+    /// Blocks `actions` while one of its widgets has the focus (ActionSet.Block), from the moment
+    /// it's given, and unblocks them as it goes, so the keys and gamepad buttons a menu takes don't
+    /// move the player too; when
     /// they read again, what's held from the menu reads as Down with no Hit. Its block is apart
     /// from SetEnabled, and from another Ui's.
     @MainThread Public Method Route(actions: ActionSet)
@@ -259,6 +260,7 @@ Public Final Class Ui
         focused = widget
         If had != Null Then had.FocusChanged(False)
         If widget != Null Then widget.FocusChanged(True)
+        Blocks()
     End Method
 
     /// Whether the game should leave the mouse to it: the pointer's over one of its widgets, or
@@ -295,12 +297,17 @@ Public Final Class Ui
 
         Restyle(root)
         root.Layout(bounds)
-        If WantsKeys() != blocking
-            blocking = WantsKeys()
-            For each In routed
-                If blocking Then each.Block() Else each.Unblock()
-            End For
-        End If
+        Blocks()
+    End Method
+
+    // Blocks its routed sets while a widget has the focus, and unblocks them as it goes, so the
+    // next Flip reads them as the focus is.
+    @MainThread Method Blocks()
+        If WantsKeys() == blocking Then Return
+        blocking = WantsKeys()
+        For each In routed
+            If blocking Then each.Block() Else each.Unblock()
+        End For
     End Method
 
     // Focuses `widget` as the keys or a gamepad moved there, and shows it in the ScrollView it's

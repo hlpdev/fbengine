@@ -14,7 +14,8 @@ Import "./widget"
 
 /// What a Console runs for a command, as a Class of a game's: given the console, and the words
 /// typed after the command's name, what the console prints, "" for nothing, or an error, whose
-/// message it prints. A lambda can't throw, so a command that can is one of these.
+/// message it prints. A lambda can't throw, so a command that can is one of these, which
+/// RegisterCommand takes.
 Public Interface ConsoleCommand
     Method Run(console: Console, words: String[]): String Throws Error
 End Interface
@@ -81,13 +82,17 @@ Public Class Console Extends Widget
     /// name that's "", or has a space in it.
     @MainThread Public Method Register(name: String, help: String,
                                        run: Func(Console, String[]): String)
-        Register(name, help, FuncCommand(run))
+        Registered("Register", name, help, FuncCommand(run))
     End Method
 
     /// Adds a command that can throw, or puts it in place of the one of its name. Panics for a
     /// name that's "", or has a space in it.
-    @MainThread Public Method Register(name: String, help: String, command: ConsoleCommand)
-        If name == "" || name.Contains(" ") Then Panic("Console.Register: \"{name}\" isn't a command's name")
+    @MainThread Public Method RegisterCommand(name: String, help: String, command: ConsoleCommand)
+        Registered("RegisterCommand", name, help, command)
+    End Method
+
+    @MainThread Method Registered(call: String, name: String, help: String, command: ConsoleCommand)
+        If name == "" || name.Contains(" ") Then Panic("Console.{call}: \"{name}\" isn't a command's name")
         commands.RemoveAll(Function(each: Command) => each.Name == name)
         commands.Add(Command(name, help, command))
         commands.SortBy<String>(Function(each: Command) => each.Name)

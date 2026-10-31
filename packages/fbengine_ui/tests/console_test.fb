@@ -191,7 +191,7 @@ End Class
 @Test
 Function ACommandsErrorIsPrinted()
     Local console = Console()
-    console.Register("load", "loads a level", Loads())
+    console.RegisterCommand("load", "loads a level", Loads())
     console.Run("load")
     Expect(console.Lines() == ["> load", "load: which level?"])
     console.Run("load e1m1")
