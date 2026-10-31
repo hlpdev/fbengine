@@ -449,10 +449,14 @@ add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp a
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
-               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp")
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
+               tools/pak_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/pak.cpp")
 target_include_directories(fbengine_tools_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_tools"
                            "${PROJECT_SOURCE_DIR}/native/fbengine")
+# basisu's job pool, which libktx's encoder is patched in (cmake/assets.cmake).
+target_include_directories(fbengine_tools_tests SYSTEM PRIVATE
+                           "${ktx_SOURCE_DIR}/external/basisu/encoder")
 target_compile_definitions(fbengine_tools_tests PRIVATE
                            FBENGINE_ASSETS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/assets/fixtures")
 target_link_libraries(fbengine_tools_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx

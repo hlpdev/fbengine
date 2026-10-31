@@ -15,10 +15,11 @@ Import fbengine
 /// folders' names joined by '_', as Textures_Walls, which no name has. A name is its file's
 /// without its extension, each word capitalized, as "stone_wall.png" is StoneWall; one that two
 /// files would have, or a folder, or that's FutureBlitz's own, a keyword or a built-in type, has
-/// its extension too, as StonePng. Sidecars aren't named, nor what no res:// path can name, and of
-/// names that differ only in case, the first by its bytes is, as res:// finds it. It follows
-/// links, as the folder mount does, and a folder more than 32 deep, as links that go round make,
-/// throws an IOError of INVALID_DATA.
+/// its extension too, as StonePng. Sidecars aren't named, nor what's hidden, its name starting
+/// with '.', as .DS_Store's does, which the cooker leaves out, nor what no res:// path can name;
+/// and of names that differ only in case, the first by its bytes is, as res:// finds it. It
+/// follows links, as the folder mount does, and a folder more than 32 deep, as links that go
+/// round make, throws an IOError of INVALID_DATA.
 ///
 /// # Examples
 ///
@@ -84,8 +85,9 @@ Public Final Class References
         For entry In entries
             Local name = entry.Name()
             Local named = res == "res://" ? res + name : res + "/" + name
-            // What no res:// path names, and the second of two names that differ only in case.
-            If name.Contains("\\") || !seen.Add(Folded(name)) Then Continue
+            // What's hidden, which the cooker leaves out, what no res:// path names, and the
+            // second of two names that differ only in case.
+            If name.StartsWith(".") || name.Contains("\\") || !seen.Add(Folded(name)) Then Continue
             If (Try? Assets.Normalize(named)) == Null Then Continue
             Local kind = KindOf(entry)
             If kind == FileKind.DIRECTORY

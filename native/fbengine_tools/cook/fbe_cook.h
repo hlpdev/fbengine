@@ -55,6 +55,23 @@ FBE_TOOLS_API bool fbe_cook_image(const char* from, const char* to,
 // can't, or the engine wouldn't load it, as fbe_tools_error says.
 FBE_TOOLS_API bool fbe_cook_model(const char* from, const char* to, const char* root,
                                   const fbe_cook_model_t* options);
+// A pak, its files stored as the engine's res:// reads them, written a file at a time, so it can
+// be bigger than memory: beside `to`, as `to`.cook, making its folder, then put at `to` whole by
+// fbe_cook_pak_finish. 0 if it can't be, as fbe_tools_error says. A pak's calls are one thread's
+// at a time.
+FBE_TOOLS_API uint64_t fbe_cook_pak_open(const char* to);
+// Adds the file at `from` to the pak as `name`, '/' between its folders, a chunk at a time; false
+// if it can't, as fbe_tools_error and fbe_tools_failure say. A name that's empty, holds a '\' or a
+// NUL, ends with '/', or is longer than 65535 bytes is FBE_TOOLS_INVALID_DATA, and a file that
+// isn't there FBE_TOOLS_NOT_FOUND, which leave the pak as it was; one that fails as it's read or
+// written leaves the pak only to be freed.
+FBE_TOOLS_API bool fbe_cook_pak_add(uint64_t pak, const char* name, const char* from);
+// Writes the pak's index, puts it at its path, and frees it; false if it can't, which leaves what
+// was at the path as it was.
+FBE_TOOLS_API bool fbe_cook_pak_finish(uint64_t pak);
+// Frees a pak without putting it in place, taking out what was written of it; one that's 0, or
+// freed, is left as it is.
+FBE_TOOLS_API void fbe_cook_pak_free(uint64_t pak);
 
 #ifdef __cplusplus
 }

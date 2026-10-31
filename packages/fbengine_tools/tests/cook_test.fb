@@ -137,6 +137,10 @@ Function AFolderCooksIntoAPakAtItsOwnPaths() Throws IOError
     Try File.WriteBytes(source.Path / "hud.jpg", Jpeg.Encode(Image(8, 8)))
     Try File.WriteText(source.Path / "readme.txt", "hello")
     Try File.WriteText(source.Path / "models" / "door.gltf", "a model, as it is")
+    // What's hidden, which isn't the game's.
+    Try File.WriteText(source.Path / ".DS_Store", "the OS's")
+    Try Dir.CreateAll(source.Path / "models" / ".git")
+    Try File.WriteText(source.Path / "models" / ".git" / "HEAD", "a repository's")
     Local built = Try TempDir()
     Defer Try? built.Close()
     Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
@@ -153,6 +157,8 @@ Function AFolderCooksIntoAPakAtItsOwnPaths() Throws IOError
     // The rest as it is, the sidecar too, for the settings the game reads as it runs.
     Expect((Try Assets.ReadText("res://test-pak/readme.txt")) == "hello")
     Expect((Try Assets.ReadText("res://test-pak/models/door.gltf")) == "a model, as it is")
+    Expect(!Assets.Exists("res://test-pak/.ds_store"))
+    Expect(!Assets.DirExists("res://test-pak/models/.git"))
     Local settings = Try Assets.ReadSettings<ImageSettings>("res://test-pak/textures/wall.png")
     Expect(settings.Compression == ImageCompression.ASTC)
     Expect(!settings.Mipmaps)
@@ -169,6 +175,12 @@ Function AFolderWithABadSidecarWritesNoPak() Throws IOError
     Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path / "game.pak"))?.Kind ==
            IOErrorKind.INVALID_DATA)
     Expect(!File.Exists(built.Path / "game.pak"))
+    // One that was there stays, and nothing's left beside it.
+    Try File.WriteText(built.Path / "game.pak", "what was there")
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect((Try File.ReadText(built.Path / "game.pak")) == "what was there")
+    Expect((Try Dir.Entries(built.Path)).Count == 1)
 End Function
 
 @Test
@@ -223,6 +235,41 @@ Function AFolderCooksItsGltfsByTheirSettings() Throws IOError
     Expect(!(Try Assets.ReadSettings<ModelSettings>("res://test-models/models/door.gltf")).Optimize)
     // Its buffer's in it, not beside it.
     Expect(!Assets.Exists("res://test-models/models/door.bin"))
+End Function
+
+// A binary glTF of `json` alone, its buffers named by their paths, as some exporters write one.
+Function GlbOf(json: String): UInt8[]
+    Local chunk = json.Bytes
+    While chunk.Count % 4 != 0
+        chunk.Add(0x20)
+    End While
+    Local bytes = "glTF".Bytes
+    For value In [2, 20 + chunk.Count, chunk.Count]
+        For shift In [0, 8, 16, 24]
+            bytes.Add(((value >> shift) & 0xFF) As UInt8)
+        End For
+    End For
+    bytes.AddAll("JSON".Bytes)
+    bytes.AddAll(chunk)
+    Return bytes
+End Function
+
+@Test
+Function ABinaryGltfsBuffersBesideItAreInIt() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try WriteTriangle(source.Path, "hatch")
+    Try File.WriteBytes(source.Path / "hatch.glb",
+                        GlbOf(Try File.ReadText(source.Path / "hatch.gltf")))
+    Try File.Delete(source.Path / "hatch.gltf")
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
+    Try Assets.MountPak("res://test-glb", built.Path / "game.pak")
+    Defer Assets.Unmount("res://test-glb")
+    Expect((Try Assets.Load<LoadedModel>("res://test-glb/hatch.glb")).Info.Meshes == 1)
+    Expect(!Assets.Exists("res://test-glb/hatch.bin"))
+    Expect(Assets.Exists("res://test-glb/hatch.png"))
 End Function
 
 @Test

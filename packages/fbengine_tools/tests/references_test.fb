@@ -24,6 +24,9 @@ Function AFoldersFilesAreAModuleOfTheirPaths() Throws IOError
     Try File.WriteText(game.Path / "models" / "1up.wav", "")
     Try File.WriteText(game.Path / "models" / "{{a}}.txt", "")
     Try File.WriteText(game.Path / "models" / "nul.txt", "")
+    Try File.WriteText(game.Path / ".DS_Store", "")
+    Try Dir.CreateAll(game.Path / "models" / ".git")
+    Try File.WriteText(game.Path / "models" / ".git" / "HEAD", "")
     Local expected =
         "// Typed references to the game's files in res://, written by fbengine_tools'\n" +
         "// References: write them again when the files change, rather than editing them.\n\n" +
