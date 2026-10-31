@@ -34,12 +34,23 @@ typedef struct fbe_cook_image_t {
     int32_t quality;
 } fbe_cook_image_t;
 
+// How a glTF is cooked: its triangles and vertices ordered for the GPU, with meshoptimizer, if
+// `optimize`, and, either way, every buffer of it, and its images in buffers, in one binary glTF.
+typedef struct fbe_cook_model_t {
+    bool optimize;
+} fbe_cook_model_t;
+
 // NOLINTEND(modernize-macro-to-enum, modernize-use-using)
 
 // Cooks the image at `from`, a PNG or a JPEG, into the KTX2 at `to`; false if it can't, as
 // fbe_tools_error says.
 FBE_TOOLS_API bool fbe_cook_image(const char* from, const char* to,
                                   const fbe_cook_image_t* options);
+// Cooks the glTF (or binary glTF) at `from`, in the folder `root`, the game's res://, which it
+// reads the buffers it names from as the engine does, into the binary glTF at `to`; false if it
+// can't, or the engine wouldn't load it, as fbe_tools_error says.
+FBE_TOOLS_API bool fbe_cook_model(const char* from, const char* to, const char* root,
+                                  const fbe_cook_model_t* options);
 
 #ifdef __cplusplus
 }

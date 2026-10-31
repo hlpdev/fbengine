@@ -13,7 +13,8 @@ Import "./c/fbe_cook"
 Import "./c/fbe_tools"
 
 /// Makes a game's source files into what its release loads: its images into KTX2s of GPU blocks
-/// with their mips, and all of it into a pak, which `Assets.MountPak` mounts.
+/// with their mips, its glTFs into binary glTFs whose meshes are ordered for the GPU, and all of
+/// it into a pak, which `Assets.MountPak` mounts.
 ///
 /// # Examples
 ///
@@ -53,11 +54,37 @@ Public Final Class Cooker
         If !cooked Then Throw IOError(IOErrorKind.OTHER, ToolsError(), from.Text)
     End Method
 
+    /// Cooks the glTF (or binary glTF) at `from` into the binary glTF at `to`, as `settings` say,
+    /// reading the buffers it names from beside it, as the engine does from res://: its triangles
+    /// and vertices ordered for the GPU's caches and fetches, with meshoptimizer, unless
+    /// `settings.Optimize` is False, and its buffers, and its images in buffers, in one; the images
+    /// it names by their paths stay named. What the engine wouldn't load throws an IOError of
+    /// INVALID_DATA, and one whose files can't be read or written one of OTHER.
+    @MainThread
+    Public Static Method CookModel(from: Path, to: Path, settings: ModelSettings) Throws IOError
+        Try CookModelIn(from, to, from.Parent(), settings)
+    End Method
+
+    // CookModel, with `root` as res://, which the glTF's paths go no higher than.
+    Static Method CookModelIn(from: Path, to: Path, root: Path,
+                              settings: ModelSettings) Throws IOError
+        If !IsModel(from, Try File.ReadBytes(from))
+            Throw IOError(IOErrorKind.INVALID_DATA, "{from} isn't a glTF", from.Text)
+        End If
+        Local options = fbe_cook_model_t(settings.Optimize)
+        Local cooked = False
+        Unsafe
+            cooked = fbe_cook_model(from.Text, to.Text, root.Text, AddressOf(options))
+        End Unsafe
+        If !cooked Then Throw IOError(IOErrorKind.INVALID_DATA, ToolsError(), from.Text)
+    End Method
+
     /// Cooks the files in the folder `source`, all the way down, into the pak at `pak`, each at
     /// its own path from the folder: its images, PNGs and JPEGs by their bytes, by their sidecars'
-    /// ImageSettings, and every other file, sidecars too, as it is. The pak is written whole or
-    /// not at all. A sidecar that isn't its file's settings throws an IOError of INVALID_DATA, as
-    /// Assets.ReadSettings does, and a file whose name no res:// path can have one of
+    /// ImageSettings; its glTFs, named .gltf or .glb, by their ModelSettings; and every other file,
+    /// sidecars and buffers too, as it is. The pak is written whole or not at all. A sidecar that
+    /// isn't its file's settings throws an IOError of INVALID_DATA, as Assets.ReadSettings does, so
+    /// does a glTF the engine wouldn't load, and a file whose name no res:// path can have one of
     /// INVALID_PATH.
     @MainThread
     Public Static Method CookFolder(source: Path, pak: Path) Throws IOError
@@ -78,6 +105,11 @@ Public Final Class Cooker
                 Local cooked = scratch.Path / "cooked.ktx2"
                 Try CookImage(entry.Path, cooked, settings)
                 bytes = Try File.ReadBytes(cooked)
+            ElseIf IsModel(entry.Path, bytes)
+                Local settings = Try Assets.ReadSettings<ModelSettings>("{place}/{name}")
+                Local cooked = scratch.Path / "cooked.glb"
+                Try CookModelIn(entry.Path, cooked, source, settings)
+                bytes = Try File.ReadBytes(cooked)
             End If
             writer.Add(name, bytes, ZipMethod.STORE)
         End For
@@ -89,6 +121,23 @@ Public Final Class Cooker
         Local png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] As UInt8[]
         If bytes.Count >= 8 && bytes[0..8] == png Then Return True
         Return bytes.Count >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
+    End Method
+
+    // Whether the file at `path` is a glTF: named .gltf or .glb, and a binary glTF by its bytes or
+    // a JSON object, as the engine knows one.
+    Static Method IsModel(path: Path, bytes: UInt8[]): Bool
+        Local name = path.Text.ToLower()
+        If !name.EndsWith(".gltf") && !name.EndsWith(".glb") Then Return False
+        If bytes.Count >= 4 && bytes[0..4] == "glTF".Bytes Then Return True
+        For byte In bytes
+            If byte == 0x7B Then Return True
+            // White space, and a byte order mark's, before it.
+            If byte != 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D && byte != 0xEF &&
+               byte != 0xBB && byte != 0xBF
+                Return False
+            End If
+        End For
+        Return False
     End Method
 
     // The cooker's format for a compression.

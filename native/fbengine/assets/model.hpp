@@ -206,6 +206,9 @@ struct model_options_t {
     jobs_t* jobs = nullptr;
     /// Told how much is done, from 0 to 1, as it goes, on the threads that do it.
     std::function<void(float done)> progress;
+    /// Whether it decodes its images; without, each is there, and empty, as the cooker's check of
+    /// a glTF has them.
+    bool images = true;
 };
 
 /// The glTF (or binary glTF) at `path`, whose `bytes` are read, with the buffers and images it

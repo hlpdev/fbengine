@@ -4,6 +4,7 @@
 
 #include "cook/fbe_cook.h"
 #include "tools/tools.hpp"
+#include "vfs/vfs.hpp"
 
 #include <cstdint>
 #include <expected>
@@ -27,5 +28,12 @@ rgba_t half(const rgba_t& image, bool srgb);
 /// A PNG or a JPEG cooked into a KTX2's bytes, as `options` says.
 std::expected<bytes_t, std::string> cook_image(std::span<const std::uint8_t> bytes,
                                                const fbe_cook_image_t& options);
+
+/// The glTF at `path`, whose `bytes` are read, with what it names read from `files`, cooked into
+/// a binary glTF's bytes, as `options` says; what the engine wouldn't load isn't cooked, and
+/// says why.
+std::expected<bytes_t, std::string> cook_model(std::span<const std::uint8_t> bytes,
+                                               const vfs::path_t& path, const vfs::view_t& files,
+                                               const fbe_cook_model_t& options);
 
 } // namespace fbe::tools

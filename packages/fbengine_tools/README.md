@@ -7,7 +7,10 @@ format by its bytes, not its name.
 - Images (PNGs and JPEGs) become KTX2s of GPU blocks with their mips, made in linear light: BC7 by
   default, which every desktop GPU reads, or ASTC 4x4, Basis Universal's UASTC, or the
   texels as they are, as each one's sidecar (`wall.png.toml`, fbengine's `ImageSettings`) says.
-- Every other file, sidecars too, goes in the pak as it is.
+- glTFs (named `.gltf` or `.glb`) become binary glTFs of one buffer. meshoptimizer orders their
+  triangles and vertices for the GPU's caches and fetches, unless their sidecar (fbengine's
+  `ModelSettings`) says `optimize = false`. A glTF the engine wouldn't load stops the cook.
+- Every other file, sidecars and buffers too, goes in the pak as it is.
 
 ```toml
 [dependencies]

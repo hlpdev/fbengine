@@ -710,3 +710,19 @@ TEST_CASE("a clip's frame rate is its animation's extras'", "[assets]") {
         REQUIRE(model.clips[i].frame_rate == 0);
     }
 }
+
+TEST_CASE("a glTF's images aren't decoded when it's asked not to", "[assets]") {
+    builder_t built;
+    built.positions({ 0, 0, 0 });
+    const std::string rest =
+        R"(,"images":[{"uri":"data:image/png;base64,)" +
+        test::base64(test::png(2, 2, 4, std::vector<std::uint8_t>(16, 3))) +
+        R"("}],"textures":[{"source":0}],"materials":[{"pbrMetallicRoughness":)"
+        R"({"baseColorTexture":{"index":0}}}])";
+    const std::string json = built.json(rest, built.data_uri());
+    REQUIRE(decoded(json).images.at(0).width == 2);
+    const assets::model_t unread = decoded(json, vfs::vfs_t(), { .images = false });
+    REQUIRE(unread.images.size() == 1);
+    REQUIRE(unread.images[0].width == 0);
+    REQUIRE(unread.images[0].texels.size() == 0);
+}

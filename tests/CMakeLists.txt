@@ -238,15 +238,24 @@ catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # The cooker's C++, built into the tests from its own sources, which read back what it makes with
-# libktx, which is UCRT's here, as the DLLs are.
-add_executable(fbengine_tools_tests tools/cook_tests.cpp assets/files.cpp
+# libktx, which is UCRT's here, as the DLLs are, and with the engine's own glTF loader.
+add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp assets/files.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/glb.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/image.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/model.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/stb.cpp"
-               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp")
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/gltf.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/image.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp")
 target_include_directories(fbengine_tools_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_tools"
                            "${PROJECT_SOURCE_DIR}/native/fbengine")
-target_link_libraries(fbengine_tools_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx)
+target_link_libraries(fbengine_tools_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
+                      fastgltf::fastgltf meshoptimizer)
 fbengine_set_warnings(fbengine_tools_tests)
 if(MINGW)
   target_link_options(fbengine_tools_tests PRIVATE -mcrtdll=ucrt)
