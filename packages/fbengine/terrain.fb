@@ -1,0 +1,146 @@
+// Terrains: a grid of heights, as hills and valleys are, made in code and changed in place.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./light"
+Import "./material"
+Import "./transform"
+
+/// A grid of `size` by `size` squares, in its own space from (0, 0) to (size, size) across X and
+/// Z, each corner at its own height up Y, two triangles a square facing up. Movers touch its
+/// triangles, and picks of PickMode.MESH hit them, from above.
+Public Final Class Terrain Extends Entity
+    /// A new Terrain of `size` squares a side, 1 to 4096, every corner at 0, the last child of
+    /// `parent`, or at the top of the current World when `parent` is Null.
+    @MainThread @PanicsAtCaller
+    Public New(size: Int, parent: Entity? = Null)
+        Super.New(Create(parent, FBE_ENTITY_TERRAIN))
+        SetSize(size)
+    End New
+
+    Package New(handle: UInt64)
+        Super.New(handle)
+    End New
+
+    Override Package Method KindName(): String => "Terrain"
+
+    /// Makes the grid `size` squares a side, 1 to 4096, every corner at 0 again. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetSize(size: Int)
+        If !fbe_terrain_set_size(Live("SetSize"), size) Then Failed("SetSize")
+    End Method
+
+    /// How many squares a side the grid is.
+    @MainThread @PanicsAtCaller
+    Public Method Size(): Int => fbe_terrain_size(Live("Size"))
+
+    /// Sets a corner's height, x and z 0 to its size, as ModifyTerrain does. One off the grid, or
+    /// a height that isn't finite, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetHeight(x: Int, z: Int, height: Float)
+        If !fbe_terrain_set_height(Live("SetHeight"), x, z, height) Then Failed("SetHeight")
+    End Method
+
+    /// A corner's height. One off the grid panics.
+    @MainThread @PanicsAtCaller
+    Public Method Height(x: Int, z: Int): Float
+        Local terrain = Live("Height")
+        Local size = fbe_terrain_size(terrain)
+        If x < 0 || x > size || z < 0 || z > size
+            Panic(
+                "Height on a Terrain: its corners are 0 to {size} across and along, not ({x}, {z})")
+        End If
+        Return fbe_terrain_height(terrain, x, z)
+    End Method
+
+    /// Sets every corner's height at once, row by row along Z, x across each: (Size() + 1)
+    /// squared of them, as a heightmap gives them. Another count, or a height that isn't finite,
+    /// panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetHeights(heights: Float[])
+        Local terrain = Live("SetHeights")
+        Local given = Buffer<Float32>(heights.Count)
+        For i, height In heights
+            given[i] = height
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_terrain_set_heights(terrain, given.Pointer(), heights.Count)
+        End Unsafe
+        If !done Then Failed("SetHeights")
+    End Method
+
+    /// The point on its surface above or below `point`, along its own Y, in the world, as
+    /// TerrainY gives its height; Null off its grid.
+    @MainThread @PanicsAtCaller
+    Public Method SurfacePoint(point: Vec3): Vec3?
+        Local found = Surface(point, "SurfacePoint")
+        Return found != Null ? found.Point : Null
+    End Method
+
+    /// Its surface's normal above or below `point`, in the world; Null off its grid.
+    @MainThread @PanicsAtCaller
+    Public Method SurfaceNormal(point: Vec3): Vec3?
+        Local found = Surface(point, "SurfaceNormal")
+        Return found != Null ? found.Normal : Null
+    End Method
+
+    /// Makes it draw in `material`, or white for Null; its copies share it.
+    @MainThread @PanicsAtCaller
+    Public Method SetMaterial(material: Material?)
+        Local terrain = Live("SetMaterial")
+        Local drawn: UInt64 = material != Null ? material.Live("SetMaterial") : 0
+        If !fbe_terrain_set_material(terrain, drawn) Then Failed("SetMaterial")
+    End Method
+
+    /// The material it draws in, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Material(): Material? => MaterialOf(fbe_terrain_material(Live("Material")))
+
+    /// Sets its own color and alpha, which multiply its material's, white at first. Colors take
+    /// any finite value; an alpha outside 0 to 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetColor(color: Color)
+        If !fbe_terrain_set_tint(Live("SetColor"), color.r, color.g, color.b, color.a)
+            Failed("SetColor")
+        End If
+    End Method
+
+    /// Its own color and alpha.
+    @MainThread @PanicsAtCaller
+    Public Method Color(): Color
+        Local terrain = Live("Color")
+        Local found = fbe_color_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_terrain_tint(terrain, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("Color")
+        Return ColorOf(found)
+    End Method
+
+    // The surface's point and normal over a point in the world, or Null off its grid.
+    @PanicsAtCaller
+    Method Surface(point: Vec3, call: String): TerrainSurface?
+        Local terrain = Live(call)
+        Local at = fbe_vec3_t(0, 0, 0)
+        Local normal = fbe_vec3_t(0, 0, 0)
+        Local found = 0
+        Unsafe
+            found = fbe_terrain_surface(terrain, point.x, point.y, point.z, AddressOf(at),
+                                        AddressOf(normal))
+        End Unsafe
+        If found < 0 Then Failed(call)
+        If found == 0 Then Return Null
+        Return TerrainSurface(VecOf(at), VecOf(normal))
+    End Method
+End Class
+
+// A terrain's surface at a point: where it is, and its normal.
+Struct TerrainSurface
+    Field Point: Vec3
+    Field Normal: Vec3
+End Struct

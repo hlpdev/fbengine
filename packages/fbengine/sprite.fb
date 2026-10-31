@@ -1,0 +1,154 @@
+// Sprites: entities that draw a quad facing the camera, or turned as they are, as particles,
+// light halos, decals, and trees are.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./camera"
+Import "./entity"
+Import "./light"
+Import "./material"
+Import "./transform"
+
+/// How a sprite turns toward the camera drawing it.
+Public Enum SpriteViewMode
+    /// Parallel to the camera's view, whatever the entity's own turn and scale, as smoke is: the
+    /// one at first.
+    BILLBOARD = 0
+    /// As the entity itself is turned and scaled, as a decal on a wall is.
+    FIXED = 1
+    /// Upright on the entity's own up, turned toward the camera about it, as a tree is.
+    UPRIGHT = 2
+End Enum
+
+/// An entity that draws a quad, 2 across and 2 high around its place at first, in a Material, or
+/// white with none; its front faces +Z before its view mode turns it.
+Public Final Class Sprite Extends Entity
+    /// A new Sprite drawing `material`, or white for Null, the last child of `parent`, or at the
+    /// top of the current World when `parent` is Null.
+    @MainThread @PanicsAtCaller
+    Public New(material: Material? = Null, parent: Entity? = Null)
+        Super.New(Create(parent, FBE_ENTITY_SPRITE))
+        SetMaterial(material)
+    End New
+
+    Package New(handle: UInt64)
+        Super.New(handle)
+    End New
+
+    Override Package Method KindName(): String => "Sprite"
+
+    /// Makes the sprite draw in `material`, or white for Null; its copies share it.
+    @MainThread @PanicsAtCaller
+    Public Method SetMaterial(material: Material?)
+        Local sprite = Live("SetMaterial")
+        Local drawn: UInt64 = material != Null ? material.Live("SetMaterial") : 0
+        If !fbe_sprite_set_material(sprite, drawn) Then Failed("SetMaterial")
+    End Method
+
+    /// The material the sprite draws in, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Material(): Material? => MaterialOf(fbe_sprite_material(Live("Material")))
+
+    /// Sets the sprite's own color and alpha, which multiply its material's, white at first. Colors
+    /// take any finite value; an alpha outside 0 to 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetColor(color: Color)
+        If !fbe_sprite_set_tint(Live("SetColor"), color.r, color.g, color.b, color.a)
+            Failed("SetColor")
+        End If
+    End Method
+
+    /// The sprite's own color and alpha.
+    @MainThread @PanicsAtCaller
+    Public Method Color(): Color
+        Local sprite = Live("Color")
+        Local found = fbe_color_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_sprite_tint(sprite, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("Color")
+        Return ColorOf(found)
+    End Method
+
+    /// Sets how the sprite turns toward the camera, BILLBOARD at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetViewMode(mode: SpriteViewMode)
+        If !fbe_sprite_set_view_mode(Live("SetViewMode"), mode As Int) Then Failed("SetViewMode")
+    End Method
+
+    /// How the sprite turns toward the camera.
+    @MainThread @PanicsAtCaller
+    Public Method ViewMode(): SpriteViewMode
+        Return fbe_sprite_view_mode(Live("ViewMode")) As SpriteViewMode
+    End Method
+
+    /// Sets the quad's half-width and half-height, 1 and 1 at first, apart from the entity's
+    /// scale, which BILLBOARD and UPRIGHT leave out. Below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetSpriteScale(size: Vec2)
+        If !fbe_sprite_set_size(Live("SetSpriteScale"), size.x, size.y)
+            Failed("SetSpriteScale")
+        End If
+    End Method
+
+    /// The quad's half-width and half-height.
+    @MainThread @PanicsAtCaller
+    Public Method SpriteScale(): Vec2
+        Local sprite = Live("SpriteScale")
+        Local found = fbe_vec2_t(0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_sprite_size(sprite, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("SpriteScale")
+        Return Vec2(found.x, found.y)
+    End Method
+
+    /// Sets which point of the quad is at the entity's place, in the quad's own -1 to 1, y up:
+    /// (0, 0), its middle, at first, and (0, -1) its bottom middle, as a tree's foot.
+    @MainThread @PanicsAtCaller
+    Public Method SetHandle(handle: Vec2)
+        If !fbe_sprite_set_handle(Live("SetHandle"), handle.x, handle.y) Then Failed("SetHandle")
+    End Method
+
+    /// Which point of the quad is at the entity's place.
+    @MainThread @PanicsAtCaller
+    Public Method Handle(): Vec2
+        Local sprite = Live("Handle")
+        Local found = fbe_vec2_t(0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_sprite_handle(sprite, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("Handle")
+        Return Vec2(found.x, found.y)
+    End Method
+
+    /// Turns the quad in its own plane by `radians`, counterclockwise as seen, on top of its view
+    /// mode's turn: 0 at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetSpriteRotation(radians: Float)
+        If !fbe_sprite_set_roll(Live("SetSpriteRotation"), radians) Then Failed("SetSpriteRotation")
+    End Method
+
+    /// How far the quad is turned in its own plane, in radians.
+    @MainThread @PanicsAtCaller
+    Public Method SpriteRotation(): Float => fbe_sprite_roll(Live("SpriteRotation"))
+
+    /// The quad's matrix in the world as `camera` sees it: the quad's corners are (-1, -1, 0) to
+    /// (1, 1, 0) through it.
+    @MainThread @PanicsAtCaller
+    Public Method MatrixFor(camera: Camera): Mat4
+        Local sprite = Live("MatrixFor")
+        Local found = fbe_mat4_t()
+        Local done = False
+        Unsafe
+            done = fbe_sprite_matrix(sprite, camera.Live("MatrixFor"), AddressOf(found))
+        End Unsafe
+        If !done Then Failed("MatrixFor")
+        Return MatOf(found)
+    End Method
+End Class

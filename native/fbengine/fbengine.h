@@ -10,6 +10,8 @@
 #include "frame/fbe_frame.h"
 #include "input/fbe_input.h"
 #include "jobs/fbe_jobs.h"
+#include "render/fbe_render.h"
+#include "scene/fbe_scene.h"
 #include "vfs/fbe_vfs.h"
 #include "window/fbe_window.h"
 
