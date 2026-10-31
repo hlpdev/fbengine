@@ -1,5 +1,5 @@
-// The engine's jobs, started the first time something needs them, and the tickets each flip hands
-// to the FB side.
+// The engine's jobs, started the first time something needs them, and the tickets they hand to the
+// FB side, which keeps them until the FB side forgets them.
 
 #include "core/engine.hpp"
 #include "fbengine.h"
@@ -13,11 +13,15 @@
 #include <thread>
 #include <vector>
 
+#ifdef __linux__
+#include <sched.h>
+#endif
+
 namespace {
 
 std::atomic<bool> started = false;
 std::atomic<std::uint64_t> last_ticket = 0;
-// The tickets the last flip handed over; the main thread's.
+// The tickets handed over that the FB side hasn't forgotten; the main thread's.
 std::vector<std::uint64_t> handed;
 
 } // namespace
@@ -25,8 +29,15 @@ std::vector<std::uint64_t> handed;
 namespace fbe {
 
 int engine_workers() {
-    const unsigned cores = std::thread::hardware_concurrency();
-    return std::max(static_cast<int>(cores) - 1, 1);
+#ifdef __linux__
+    // The cores this process may run on, which a container or taskset can make fewer.
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) == 0) {
+        return std::max(CPU_COUNT(&set) - 1, 1);
+    }
+#endif
+    return std::max(static_cast<int>(std::thread::hardware_concurrency()) - 1, 1);
 }
 
 jobs_t& jobs() {
@@ -36,7 +47,6 @@ jobs_t& jobs() {
 }
 
 void hand_over_jobs() {
-    handed.clear();
     if (started) {
         jobs().hand_over();
     }
@@ -58,6 +68,10 @@ FBE_API int32_t fbe_jobs_workers(void) {
     return fbe::engine_workers();
 }
 
+FBE_API void fbe_jobs_hand_over(void) {
+    fbe::hand_over_jobs();
+}
+
 FBE_API int32_t fbe_jobs_finished_count(void) {
     return static_cast<int32_t>(handed.size());
 }
@@ -67,6 +81,10 @@ FBE_API uint64_t fbe_jobs_finished_at(int32_t index) {
         return 0;
     }
     return handed[static_cast<std::size_t>(index)];
+}
+
+FBE_API void fbe_jobs_forget_finished(void) {
+    handed.clear();
 }
 
 FBE_API uint64_t fbe_jobs_simulate(int32_t microseconds) {
