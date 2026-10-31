@@ -491,7 +491,7 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 # E7's animation: sampling, apart from the DLL, and the clip, player, and skin areas through
 # fbengine's C API, with no window or GPU.
 add_executable(fbengine_anim_tests anim/sample_tests.cpp anim/clip_tests.cpp anim/player_tests.cpp
-               anim/skin_tests.cpp
+               anim/skin_tests.cpp anim/model_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
 target_link_libraries(fbengine_anim_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_anim_tests)

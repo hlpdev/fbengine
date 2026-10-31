@@ -17,6 +17,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_clip_add_channel(clip: UInt64, node: CString, property: Int32,
                                   interpolation: Int32, width: Int32, times: Ptr<Float32>,
                                   values: Ptr<Float32>, keys: Int32): Bool
+    Function fbe_clip_from_model(load: UInt64, index: Int32): UInt64
     Function fbe_clip_name(clip: UInt64): CString
     Function fbe_clip_length(clip: UInt64): Float32
     Function fbe_clip_frame_rate(clip: UInt64): Float32

@@ -45,6 +45,12 @@ FBE_API bool fbe_clip_add_channel(uint64_t clip, const char* node, int32_t prope
                                   int32_t interpolation, int32_t width, const float* times,
                                   const float* values, int32_t keys);
 
+// A new clip of clip `index` of a model load's glTF, its channels' nodes by their names, so it
+// plays on the entities made from the model and on any others with those names; a channel of an
+// unnamed node moves nothing. 0 for a load that isn't a model load done and loaded, or an index
+// out of range.
+FBE_API uint64_t fbe_clip_from_model(uint64_t load, int32_t index);
+
 // Its name, valid until it changes, or "" for a freed clip.
 FBE_API const char* fbe_clip_name(uint64_t clip);
 // Its length, its last key's time, 0 with no keys; its frames a second; how many channels it has.

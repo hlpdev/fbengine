@@ -3,6 +3,8 @@
 
 #include "clip/clip.hpp"
 
+#include "assets/loads.hpp"
+#include "assets/model.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "scene/scene.hpp"
@@ -12,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <new>
 #include <span>
 #include <string>
 #include <utility>
@@ -77,6 +80,66 @@ bool fit(std::span<const float> times, std::span<const float> values) {
     return true;
 }
 
+/// A new clip, held once, as its handle is.
+std::uint32_t make_clip() {
+    auto& made = clips();
+    const std::uint32_t slot = made.slots.make();
+    if (slot == made.kept.size()) {
+        made.kept.emplace_back();
+    } else {
+        made.kept[slot] = {};
+    }
+    made.kept[slot].references = 1;
+    return slot;
+}
+
+static_assert(static_cast<int>(assets::property_t::WEIGHTS) ==
+              static_cast<int>(property_t::WEIGHTS));
+static_assert(static_cast<int>(assets::interpolation_t::CUBIC) ==
+              static_cast<int>(interpolation_t::CUBIC));
+
+/// Whether a model's channel is one a clip made in code could be: a node the model has, its
+/// property's width, a key or more, as many values as its keys take, and fit to sample; false with
+/// fbe_error saying what's wrong.
+bool fits(const assets::model_t& model, const assets::channel_t& channel, std::size_t index) {
+    const auto property = static_cast<property_t>(channel.property);
+    const std::uint32_t wide = width_of(property);
+    const std::size_t keys = channel.times.size();
+    const std::size_t floats =
+        keys * channel.width * (channel.interpolation == assets::interpolation_t::CUBIC ? 3 : 1);
+    if (channel.node >= model.nodes.size() ||
+        (wide != 0 ? channel.width != wide : channel.width < 1) || keys < 1 ||
+        channel.values.size() != floats) {
+        return fail(std::format("the clip's channel {} has no node, or isn't as wide as its {}, or "
+                                "has no keys, or as many values as they take",
+                                index, name_of(property)));
+    }
+    return fit(channel.times, channel.values);
+}
+
+/// A model's clip as the clip area keeps it: each channel's node by its name, the names each once.
+clip_t clip_of(const assets::model_t& model, const assets::clip_t& from) {
+    clip_t made;
+    made.name = from.name;
+    made.length = from.length;
+    made.frame_rate = from.frame_rate;
+    for (const assets::channel_t& channel : from.channels) {
+        const std::string& named = model.nodes[channel.node].name;
+        const auto at = std::ranges::find(made.nodes, named);
+        channel_t& to = made.channels.emplace_back();
+        to.node = static_cast<std::uint32_t>(at - made.nodes.begin());
+        if (at == made.nodes.end()) {
+            made.nodes.push_back(named);
+        }
+        to.property = static_cast<property_t>(channel.property);
+        to.interpolation = static_cast<interpolation_t>(channel.interpolation);
+        to.width = channel.width;
+        to.times = channel.times;
+        to.values = channel.values;
+    }
+    return made;
+}
+
 } // namespace
 
 std::uint32_t clip_slot(std::uint64_t handle) {
@@ -121,18 +184,40 @@ FBE_API uint64_t fbe_clip_create(const char* name, float frame_rate) {
         fail(std::format("a clip's frames a second are 0 or more, not {}", frame_rate));
         return 0;
     }
-    auto& made = clips();
-    const std::uint32_t slot = made.slots.make();
-    if (slot == made.kept.size()) {
-        made.kept.emplace_back();
-    } else {
-        made.kept[slot] = {};
-    }
-    kept_clip_t& clip = made.kept[slot];
+    const std::uint32_t slot = fbe::anim::make_clip();
+    kept_clip_t& clip = kept_clip(slot);
     clip.clip.name = name != nullptr ? name : "";
     clip.clip.frame_rate = frame_rate;
-    clip.references = 1;
-    return made.slots.handle(slot);
+    return clips().slots.handle(slot);
+}
+
+FBE_API uint64_t fbe_clip_from_model(uint64_t load, int32_t index) {
+    const fbe::assets::load_t* found = fbe::assets::loads().get(load);
+    if (found == nullptr || !found->done || found->error ||
+        found->kind != fbe::assets::load_kind_t::MODEL) {
+        fail("the load isn't a model load done and loaded");
+        return 0;
+    }
+    const std::vector<fbe::assets::clip_t>& from = found->model.clips;
+    if (index < 0 || std::cmp_greater_equal(index, from.size())) {
+        fail(std::format("the model has {} clips; there's no clip {}", from.size(), index));
+        return 0;
+    }
+    const fbe::assets::clip_t& clip = from[static_cast<std::size_t>(index)];
+    for (std::size_t i = 0; i < clip.channels.size(); ++i) {
+        if (!fbe::anim::fits(found->model, clip.channels[i], i)) {
+            return 0;
+        }
+    }
+    try {
+        fbe::anim::clip_t made = fbe::anim::clip_of(found->model, clip);
+        const std::uint32_t slot = fbe::anim::make_clip();
+        kept_clip(slot).clip = std::move(made);
+        return clips().slots.handle(slot);
+    } catch (const std::bad_alloc&) {
+        fail("out of memory");
+        return 0;
+    }
 }
 
 FBE_API bool fbe_clip_retain(uint64_t clip) {

@@ -5,6 +5,7 @@ Import std.core
 Import std.ffi
 Import std.math
 Import "./c/fbe_clip"
+Import "./loads"
 Import "./window"
 
 /// How a Clip's channel goes from one key to the next.
@@ -32,6 +33,22 @@ Public Final Class Clip
         handle = fbe_clip_create(name, frameRate)
         If handle == 0 Then Panic("Clip: {LastError()}")
     End New
+
+    // A wrapper for a handle C made, which holds it once.
+    New(handle: UInt64)
+        Self.handle = handle
+    End New
+
+    /// A Clip of the clip at `index`, from 0, of the glTF a model load decoded, each channel's
+    /// entity found by its node's name, so it plays on entities named as the model's nodes; a
+    /// channel of a node with no name moves nothing. A load that isn't a model's, an index outside
+    /// 0 to its model's Clips - 1, or keys a Clip made in code couldn't have, panics.
+    @MainThread @PanicsAtCaller
+    Public Static Method FromModel(load: AssetLoad, index: Int): Clip
+        Local handle = fbe_clip_from_model(load.Handle, index)
+        If handle == 0 Then Panic("Clip.FromModel: {LastError()}")
+        Return Clip(handle)
+    End Method
 
     Method Destroy()
         If handle != 0 Then fbe_clip_release(handle)

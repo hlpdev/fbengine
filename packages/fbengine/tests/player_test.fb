@@ -1,9 +1,12 @@
 // Clips made in code and Players posing entities with them: by time, by UpdateWorld, each of a
 // Clip's interpolations, and copies keeping poses of their own; with no window or GPU.
 
+Import std.collections
 Import std.core
+Import std.io
 Import std.math
 Import std.test
+Import std.text
 Import fbengine
 
 Function Fresh(): World
@@ -160,4 +163,56 @@ Function AChannelAddedWhileItPlaysIsPlayed()
     walk.AddScales("spine", [0], [Vec3(3, 3, 3)])
     UpdateWorld(0.1)
     Expect(hips.Child(0).Scale() == Vec3(3, 3, 3))
+End Function
+
+// A rig's glTF: a node "hips" and a skin of it, and a clip "walk" moving it from x 0 to 2 over a
+// second, its buffer a data URI of two times and two positions as little-endian Float32s.
+Function RigGltf(): UInt8[]
+    Local buffer = [0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0x40, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[]
+    Local uri = "data:application/octet-stream;base64,{Base64.Encode(buffer)}"
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":32,\"uri\":\"{uri}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":8}},{{\"buffer\":0,\"byteOffset\":8,\"byteLength\":24}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"," +
+            "\"min\":[0],\"max\":[1]}},{{\"bufferView\":1,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}}]," +
+            "\"nodes\":[{{\"name\":\"hips\"}}],\"skins\":[{{\"joints\":[0]}}]," +
+            "\"animations\":[{{\"name\":\"walk\",\"samplers\":[{{\"input\":0,\"output\":1}}]," +
+            "\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"translation\"}}}}]}}]}}").Bytes
+End Function
+
+// An Asset of a rig's model load: its first clip and skin.
+Class Rig Implements Asset
+    Field Walk: Clip
+    Field Bones: Skin
+
+    New(walk: Clip, bones: Skin)
+        Walk = walk
+        Bones = bones
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.MODEL
+
+    Public Static Method FromLoad(load: AssetLoad): Rig Throws IOError
+        Return Rig(Clip.FromModel(load, 0), Skin.FromModel(load, 0))
+    End Method
+End Class
+
+@Test
+Function AModelsClipAndSkinPlayOnEntitiesNamedAsItsNodes() Throws IOError
+    Assets.MountFiles("res://test-rig", {"rig.gltf": RigGltf()})
+    Defer Assets.Unmount("res://test-rig")
+    Local rig = Try Assets.Load<Rig>("res://test-rig/rig.gltf")
+    Expect(rig.Walk.Name() == "walk" && rig.Walk.Length() == 1 && rig.Walk.ChannelCount() == 1)
+    Expect(rig.Bones.JointCount() == 1 && rig.Bones.JointName(0) == "hips")
+    Local world = Fresh()
+    Defer world.Free()
+    Local body = Pivot()
+    Local mesh = Mesh(Null, body)
+    Local hips = Pivot(body)
+    hips.SetName("hips")
+    mesh.SetSkin(rig.Bones, body)
+    body.Player().Play(rig.Walk)
+    UpdateWorld(0.5)
+    Expect(IsClose(hips.Position(), Vec3(1, 0, 0)))
+    Expect(IsClose(mesh.Palette()[0].TransformPoint(Vec3(0, 0, 0)), Vec3(1, 0, 0)))
 End Function

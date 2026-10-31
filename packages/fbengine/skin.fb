@@ -6,6 +6,7 @@ Import std.ffi
 Import std.math
 Import "./c/fbe_skin"
 Import "./entity"
+Import "./loads"
 Import "./mesh"
 Import "./window"
 Import "./world"
@@ -25,6 +26,21 @@ Public Final Class Skin
     Public New()
         handle = fbe_skin_create()
     End New
+
+    // A wrapper for a handle C made, which holds it once.
+    New(handle: UInt64)
+        Self.handle = handle
+    End New
+
+    /// A Skin of the skin at `index`, from 0, of the glTF a model load decoded, its joints named as
+    /// their nodes, with their inverse binds. A load that isn't a model's, an index outside 0 to its
+    /// model's Skins - 1, or a joint whose node has no name, or the name of one before it, panics.
+    @MainThread @PanicsAtCaller
+    Public Static Method FromModel(load: AssetLoad, index: Int): Skin
+        Local handle = fbe_skin_from_model(load.Handle, index)
+        If handle == 0 Then Panic("Skin.FromModel: {LastError()}")
+        Return Skin(handle)
+    End Method
 
     Method Destroy()
         If handle != 0 Then fbe_skin_release(handle)

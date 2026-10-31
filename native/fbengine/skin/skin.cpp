@@ -1,6 +1,8 @@
 // Skins' C API: joints by name with their inverse binds, shared by the meshes skinned by them, each
 // mesh's joints bound to entities under its root, and the palette it's drawn with.
 
+#include "assets/loads.hpp"
+#include "assets/model.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "scene/math.hpp"
@@ -11,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <new>
 #include <span>
 #include <string>
 #include <utility>
@@ -132,6 +135,60 @@ FBE_API uint64_t fbe_skin_create(void) {
     }
     made.kept[slot].references = 1;
     return made.slots.handle(slot);
+}
+
+FBE_API uint64_t fbe_skin_from_model(uint64_t load, int32_t index) {
+    const fbe::assets::load_t* found = fbe::assets::loads().get(load);
+    if (found == nullptr || !found->done || found->error ||
+        found->kind != fbe::assets::load_kind_t::MODEL) {
+        fail("the load isn't a model load done and loaded");
+        return 0;
+    }
+    const fbe::assets::model_t& model = found->model;
+    if (index < 0 || std::cmp_greater_equal(index, model.skins.size())) {
+        fail(std::format("the model has {} skins; there's no skin {}", model.skins.size(), index));
+        return 0;
+    }
+    const fbe::assets::skin_t& from = model.skins[static_cast<std::size_t>(index)];
+    if (from.inverse_binds.size() != from.joints.size()) {
+        fail("the skin has an inverse bind for each joint");
+        return 0;
+    }
+    try {
+        fbe::anim::skin_t made;
+        for (std::size_t i = 0; i < from.joints.size(); ++i) {
+            if (from.joints[i] >= model.nodes.size()) {
+                fail(std::format("the skin's joint {} is no node of the model's", i));
+                return 0;
+            }
+            const std::string& named = model.nodes[from.joints[i]].name;
+            if (named.empty()) {
+                fail(std::format("the skin's joint {} is a node with no name", i));
+                return 0;
+            }
+            if (std::ranges::find(made.joints, named) != made.joints.end()) {
+                fail(std::format("the skin has two joints named \"{}\"", named));
+                return 0;
+            }
+            if (!std::ranges::all_of(from.inverse_binds[i],
+                                     [](float value) { return std::isfinite(value); })) {
+                fail(std::format("the skin's joint {}'s inverse bind matrix is numbers", i));
+                return 0;
+            }
+            made.joints.push_back(named);
+            mat4_t matrix;
+            std::ranges::copy(from.inverse_binds[i], matrix.m.begin());
+            made.inverse_binds.push_back(matrix);
+        }
+        const std::uint64_t handle = fbe_skin_create();
+        fbe::anim::skin_t& kept = skins().kept[static_cast<std::uint32_t>(handle)];
+        kept.joints = std::move(made.joints);
+        kept.inverse_binds = std::move(made.inverse_binds);
+        return handle;
+    } catch (const std::bad_alloc&) {
+        fail("out of memory");
+        return 0;
+    }
 }
 
 FBE_API bool fbe_skin_retain(uint64_t skin) {
