@@ -31,23 +31,33 @@ struct load_options_t {
     transcode_t transcode = transcode_t::RGBA8;
 };
 
-/// A load, and what it made once it's done: its kind's result, or why it failed.
+/// A load, and what it made once it's done: its kind's result and its file's import settings, or
+/// why it failed.
 struct load_t {
     load_kind_t kind = load_kind_t::BYTES;
     vfs::path_t path;
     load_options_t options;
+    /// The job a load on the workers runs as; 0 for one that ran where it was asked for.
+    job_t job = 0;
     /// From 0 to 1, as the worker goes.
     std::atomic<float> progress = 0;
     /// Set on the main thread, as the load's handed over.
     bool done = false;
     std::optional<error_t> error;
+    /// The text of its file's sidecar, its path with ".toml" after it, when there's one: UTF-8
+    /// with no NULs, as TOML is.
+    std::optional<std::string> settings;
     bytes_t bytes;
     image_t image;
     model_t model;
 };
 
-/// Reads and decodes `load`'s file, on this thread, with `jobs` to decode a model's images at once.
+/// Reads and decodes `load`'s file, and its sidecar, on this thread, with `jobs` to decode a
+/// model's images at once.
 void run_load(load_t& load, jobs_t* jobs);
+
+/// The sidecar of the file at `path`, its import settings: its path with ".toml" after it.
+std::optional<vfs::path_t> sidecar_of(const vfs::path_t& path);
 
 /// The loads by handle; the main thread's.
 class loads_t {

@@ -3,6 +3,8 @@
 
 #include "assets/loads.hpp"
 
+#include "vfs/disk.hpp"
+
 #include <format>
 #include <new>
 #include <utility>
@@ -34,10 +36,44 @@ void run_load(load_t& load, jobs_t* jobs) {
 
 namespace {
 
+// Reads the sidecar of `load`'s file, if it has one, and gives false, with the load's error, for
+// one that can't be read, or isn't TOML's UTF-8.
+bool read_sidecar(load_t& load) {
+    const std::optional<vfs::path_t> sidecar = sidecar_of(load.path);
+    if (!sidecar) {
+        return true;
+    }
+    result_t<bytes_t> bytes = vfs::files().read(*sidecar);
+    if (!bytes) {
+        // A file without import settings, or with a folder where they'd be, has its defaults.
+        if (bytes.error().failure == failure_t::NOT_FOUND ||
+            bytes.error().failure == failure_t::IS_A_FOLDER) {
+            return true;
+        }
+        load.error = std::move(bytes.error());
+        return false;
+    }
+    std::string text(bytes->begin(), bytes->end());
+    if (text.contains('\0') || vfs::well_formed(text) != text) {
+        load.error = error_t{
+            .failure = failure_t::INVALID_DATA,
+            .message = std::format("{}, the import settings of {}, isn't TOML: it isn't UTF-8 text",
+                                   sidecar->text(), load.path.text()),
+        };
+        return false;
+    }
+    load.settings = std::move(text);
+    return true;
+}
+
 void run_load_here(load_t& load, jobs_t* jobs) {
     result_t<bytes_t> bytes = vfs::files().read(load.path);
     if (!bytes) {
         load.error = std::move(bytes.error());
+        load.progress = 1;
+        return;
+    }
+    if (!read_sidecar(load)) {
         load.progress = 1;
         return;
     }
@@ -78,6 +114,14 @@ void run_load_here(load_t& load, jobs_t* jobs) {
 }
 
 } // namespace
+
+std::optional<vfs::path_t> sidecar_of(const vfs::path_t& path) {
+    if (path.names.empty()) {
+        return std::nullopt;
+    }
+    result_t<vfs::path_t> sidecar = vfs::parse(path.text() + ".toml");
+    return sidecar ? std::optional(std::move(*sidecar)) : std::nullopt;
+}
 
 std::uint64_t loads_t::add(std::shared_ptr<load_t> load) {
     std::uint32_t slot = 0;

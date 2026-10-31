@@ -13,6 +13,47 @@ Import "./jobs"
 Import "./loads"
 Import "./window"
 
+// An asset of the cache: held weakly, so it goes with its last reference; how many of the loads
+// that gave it hold it; and, until it's made, the load it's made of, and why it failed, for each
+// that waited for it.
+Final Class Cached<T: Class>
+    Field Made: Weak<T>
+    Field Holds: Int
+    Field Load: UInt64
+    Field Failure: IOError?
+
+    New(load: UInt64)
+        Holds = 0
+        Load = load
+        Failure = Null
+    End New
+End Class
+
+// What the cache does for every type's assets at once.
+Interface AnyCache
+    // Takes out what's gone: made, and its asset let go.
+    Method Prune()
+End Interface
+
+// The cache of one type's assets, by normalized path, and how big it grows before what's gone is
+// taken out of it.
+Final Class TypedCache<T: Class> Implements AnyCache
+    Field Entries: Map<String, Cached<T>>
+    Field PruneAt: Int
+
+    New()
+        Entries = Map<String, Cached<T>>()
+        PruneAt = 64
+    End New
+
+    Method Prune()
+        Entries.RemoveWhere(Function(key: String, cached: Cached<T>): Bool
+            Return cached.Load == 0 && cached.Made == Null
+        End Function)
+        PruneAt = Max(64, Entries.Count * 2)
+    End Method
+End Class
+
 /// A file or a folder in a res:// folder, as Assets.Entries finds it.
 Public Struct AssetEntry Implements Printable
     /// Its res:// path: its folder's, normalized, and its name.
@@ -42,6 +83,9 @@ End Struct
 /// Expect(Assets.Unmount("res://config"))
 /// ```
 Public Final Class Assets
+    // The assets loaded, a type's cache by its name.
+    Static Field caches: Map<String, AnyCache> = Map<String, AnyCache>()
+
     Private New()
     End New
 
@@ -204,25 +248,169 @@ Public Final Class Assets
     /// what can be at once, as a glTF's images are. A file no mount has throws an IOError of
     /// NOT_FOUND, one that isn't what a T is made from, or is broken, one of INVALID_DATA, and a
     /// path that isn't a res:// path one of INVALID_PATH.
+    ///
+    /// The cache keeps one T of a path, however it's written, while anything holds it, and a
+    /// load of one it has gives it again, at once: each load holds it once, until its Free lets go
+    /// of that hold through Release, and it goes with its last hold, or its last reference. A load
+    /// of one that's still loading on the workers finishes that load here. What failed to load
+    /// isn't kept, so the next load tries again.
     @MainThread
-    Public Static Method Load<T: Asset>(path: String): T Throws IOError
-        Local load = fbe_assets_load(T.LoadKind() As Int32, path, False)
-        If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
-        Return Try Made<T>(load, path)
+    Public Static Method Load<T>(path: String): T Throws IOError
+        Where T: Asset & Class
+        Local key = Try Normalize(path)
+        Local cached = CacheOf<T>().Entries.Get(key)
+        If cached != Null && cached.Load != 0
+            // It's loading on the workers still, and is finished here, now.
+            fbe_assets_wait(cached.Load)
+        ElseIf cached == Null || cached.Made == Null
+            Local load = fbe_assets_load(T.LoadKind() As Int32, path, False)
+            If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
+            cached = Kept<T>(key, load)
+        End If
+        Return Try Held<T>(key, cached, path)
     End Method
 
     /// The file at `path` loaded as a T on the workers, while the game goes on: its Task is done on
     /// the main thread once it's loaded, at a Flip, or at the main scheduler's next tick while
-    /// the main thread waits for it or awaits it without flipping. `progress`, if it's given,
-    /// follows the load, as a loading screen's bar would. It throws as Load does.
+    /// the main thread waits for it or awaits it without flipping. One the cache has is done at
+    /// once, and loads of one that's loading share that load, and the T it makes. `progress`, if
+    /// it's given, follows the load, as a loading screen's bar would. It throws as Load does.
     @MainThread
-    Public Static Async Method LoadAsync<T: Asset>(path: String,
-                                                   progress: LoadProgress? = Null): T Throws IOError
-        Local load = fbe_assets_load_async(T.LoadKind() As Int32, path, False)
-        If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
-        If progress != Null Then progress.Add(load)
-        Await Jobs.Finished(load)
-        Return Try Made<T>(load, path)
+    Public Static Async Method LoadAsync<T>(path: String,
+                                            progress: LoadProgress? = Null): T Throws IOError
+        Where T: Asset & Class
+        Local key = Try Normalize(path)
+        Local cached = CacheOf<T>().Entries.Get(key)
+        If cached == Null || (cached.Load == 0 && cached.Made == Null)
+            Local load = fbe_assets_load_async(T.LoadKind() As Int32, path, False)
+            If load == 0 Then Throw IOError(IOErrorKind.INVALID_PATH, LastError(), path)
+            cached = Kept<T>(key, load)
+        End If
+        If cached.Load != 0
+            If progress != Null Then progress.Add(cached.Load)
+            // One handed over already is done, and its ticket given.
+            If !fbe_assets_done(cached.Load) Then Await Jobs.Finished(cached.Load)
+        End If
+        Return Try Held<T>(key, cached, path)
+    End Method
+
+    /// The T the cache has of `path`, without holding it, or Null when there's none, as for a
+    /// file that isn't loaded, or is loading still, or whose T is gone. It throws an IOError of
+    /// INVALID_PATH for a path that isn't a res:// path.
+    @MainThread
+    Public Static Method Find<T>(path: String): T? Throws IOError
+        Where T: Asset & Class
+        Local cached = CacheOf<T>().Entries.Get(Try Normalize(path))
+        If cached == Null Then Return Null
+        Return cached.Made
+    End Method
+
+    /// Lets go of one hold of `asset`, of the loads that gave it, as its Free does, and gives
+    /// whether that was the last, after which its Free frees what it holds; one the cache doesn't
+    /// have, as an asset no load gave, gives True.
+    @MainThread
+    Public Static Method Release<T: Class>(asset: T): Bool
+        Local entries = CacheOf<T>().Entries
+        Local found = ""
+        For entry In entries
+            Local made = entry.1.Made
+            If made != Null && RefEquals(made, asset)
+                found = entry.0
+                Break
+            End If
+        End For
+        If found == "" Then Return True
+        Local cached = entries[found]
+        cached.Holds -= 1
+        If cached.Holds > 0 Then Return False
+        entries.Remove(found)
+        Return True
+    End Method
+
+    /// The import settings of the file at `path`, from its sidecar, its path with ".toml" after
+    /// it, as an S, whose Fields' defaults are what the sidecar leaves out, and all of them for a
+    /// file without one, as AssetLoad.Settings gives them. A sidecar that isn't TOML's UTF-8, or an
+    /// S's, throws an IOError of INVALID_DATA, and a path that isn't a res:// path one of
+    /// INVALID_PATH.
+    @MainThread
+    Public Static Method ReadSettings<S>(path: String): S Throws IOError
+        Local sidecar = (Try Normalize(path)) + ".toml"
+        Local text = ""
+        Try
+            Local bytes = ReadBytes(sidecar)
+            Local read = String.FromUtf8(bytes)
+            If read == Null || bytes.Contains(0)
+                Throw IOError(IOErrorKind.INVALID_DATA, "{sidecar} isn't TOML: it isn't UTF-8 text",
+                              sidecar)
+            End If
+            text = read
+        Catch e As IOError
+            If e.Kind != IOErrorKind.NOT_FOUND && e.Kind != IOErrorKind.IS_A_DIRECTORY Then Throw e
+        End Try
+        Return Try SettingsOf<S>(text, sidecar)
+    End Method
+
+    // The cache of T's assets.
+    @MainThread
+    Static Method CacheOf<T: Class>(): TypedCache<T>
+        Local found = caches.Get(TypeName<T>())
+        If found != Null
+            Local typed = found As? TypedCache<T>
+            If typed != Null Then Return typed
+        End If
+        Local made = TypedCache<T>()
+        caches[TypeName<T>()] = made
+        Return made
+    End Method
+
+    // A new entry of T's cache for `load`, which takes out what's gone from it now and then.
+    @MainThread
+    Static Method Kept<T: Class>(key: String, load: UInt64): Cached<T>
+        Local typed = CacheOf<T>()
+        If typed.Entries.Count >= typed.PruneAt Then typed.Prune()
+        Local cached = Cached<T>(load)
+        typed.Entries[key] = cached
+        Return cached
+    End Method
+
+    // The T of `cached`, made of its load the first time, once the load's done, and held once
+    // more. What failed is thrown to each that waited for it, and taken out of the cache.
+    @MainThread
+    Static Method Held<T>(key: String, cached: Cached<T>, path: String): T Throws IOError
+        Where T: Asset & Class
+        Local failure = cached.Failure
+        If failure != Null Then Throw failure
+        Local made = cached.Made
+        If made != Null
+            cached.Holds += 1
+            Return made
+        End If
+        If cached.Load == 0
+            // What it made is gone already, so it's loaded again.
+            Forget<T>(key, cached)
+            Return Try Load<T>(path)
+        End If
+        Local held = AssetLoad(cached.Load)
+        cached.Load = 0
+        Try
+            If fbe_assets_failed(held.Handle) Then Throw LoadFailed(held.Handle, path)
+            Local making = T.FromLoad(held)
+            cached.Made = making
+            cached.Holds += 1
+            Return making
+        Catch e As IOError
+            cached.Failure = e
+            Forget<T>(key, cached)
+            Throw e
+        End Try
+    End Method
+
+    // Takes `cached` out of T's cache, if it's still the entry of `key`.
+    @MainThread
+    Static Method Forget<T: Class>(key: String, cached: Cached<T>)
+        Local entries = CacheOf<T>().Entries
+        Local kept = entries.Get(key)
+        If kept != Null && RefEquals(kept, cached) Then entries.Remove(key)
     End Method
 
     /// ReadBytes's Async twin, which reads the file on a worker. It reads the mounts there are
@@ -235,14 +423,6 @@ Public Final Class Assets
         Local held = AssetLoad(load)
         If fbe_assets_failed(load) Then Throw LoadFailed(load, path)
         Return held.Bytes()
-    End Method
-
-    // A T made of a load that's done, whose AssetLoad lets the load go once nothing holds it.
-    @MainThread
-    Static Method Made<T: Asset>(load: UInt64, path: String): T Throws IOError
-        Local held = AssetLoad(load)
-        If fbe_assets_failed(load) Then Throw LoadFailed(load, path)
-        Return Try T.FromLoad(held)
     End Method
 
     // The IOError of a load that failed.
