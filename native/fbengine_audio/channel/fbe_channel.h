@@ -29,6 +29,18 @@ FBE_AUDIO_API bool fbe_channel_set_pitch(uint64_t channel, float pitch);
 FBE_AUDIO_API float fbe_channel_pitch(uint64_t channel);
 FBE_AUDIO_API void fbe_channel_set_loop(uint64_t channel, bool loop);
 FBE_AUDIO_API bool fbe_channel_looping(uint64_t channel);
+// How many seconds into its sound the channel has been mixed to, as of the last mix.
+FBE_AUDIO_API double fbe_channel_position(uint64_t channel);
+// Plays it on from `seconds` into its sound, 0 to its length, from the next mix; false if
+// `seconds` is out of range.
+FBE_AUDIO_API bool fbe_channel_seek(uint64_t channel, double seconds);
+// Fades it from where its fade is, 1 at first, to `level` (0 or more) over `seconds`. Its fade
+// multiplies its volume.
+FBE_AUDIO_API bool fbe_channel_fade(uint64_t channel, float level, double seconds);
+// Fades it to silence over `seconds`, then finishes it; 0 finishes it now.
+FBE_AUDIO_API bool fbe_channel_fade_out(uint64_t channel, double seconds);
+// Where its fade is.
+FBE_AUDIO_API float fbe_channel_fade_level(uint64_t channel);
 // How many channels are playing, paused ones too.
 FBE_AUDIO_API int32_t fbe_channel_count(void);
 

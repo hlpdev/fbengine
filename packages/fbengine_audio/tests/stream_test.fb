@@ -1,0 +1,182 @@
+// Streamed sounds, where Channels are, seeking, and fades, mixed on no device. As in
+// sound_test.fb, each play is a frame late.
+
+Import std.core
+Import std.io
+Import std.test
+Import fbengine_audio
+Import "./wav"
+
+// 4800 frames, each its own number times 4, so a sample says which frame it is.
+Function Ramp(): Int[]
+    Local samples: Int[] = []
+    For i = 0 To 4799
+        samples.Add(i * 4)
+    End For
+    Return samples
+End Function
+
+// Which frame of Ramp a mixed sample is.
+Function FrameOf(sample: Float32): Int => ((sample * 32768.0) As Int) / 4
+
+@Test
+Function AStreamedSoundSaysWhatItIs() Throws SoundError
+    Local ogg = Try Sound.StreamBytes(Embed("data/tone.ogg"))
+    Expect(ogg.Streamed())
+    Expect(ogg.SampleRate() == 44100)
+    Expect(ogg.Channels() == 2)
+    Expect(ogg.Frames() == 11025)
+    Expect((Try Sound.StreamBytes(Embed("data/tone.flac"))).Frames() == 2400)
+    Expect(!(Try Sound.FromBytes(Embed("data/tone.wav"))).Streamed())
+    Expect(ExpectThrows<SoundError>(Sound.StreamBytes([1, 2, 3, 4] As UInt8[])) != Null)
+    Expect(ExpectThrows<SoundError>(Sound.StreamBytes([])) != Null)
+End Function
+
+@Test
+Function StreamReadsASoundFile() Throws IOError, SoundError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local path = folder.Path / "music.ogg"
+    Try File.WriteBytes(path, Embed("data/tone.ogg"))
+    Local music = Try Sound.Stream(path)
+    Expect(music.Streamed())
+    Expect(music.Frames() == 11025)
+End Function
+
+// Decoding as it plays mixes what decoding first does, sample for sample.
+@Test
+Function AStreamMixesAsTheSoundDecodedWhole() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    (Try Sound.FromBytes(Embed("data/tone.wav"))).Play()
+    Local whole = Audio.Mix(2400)
+    (Try Sound.StreamBytes(Embed("data/tone.wav"))).Play()
+    Expect(Audio.Mix(2400) == whole)
+    (Try Sound.StreamBytes(Embed("data/tone.flac"))).Play()
+    Expect(Audio.Mix(2400) == whole)
+End Function
+
+@Test
+Function AStreamLoopsWithoutAGap() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local music = Try Sound.StreamBytes(Wav(Ramp()))
+    music.SetLoop(True)
+    Local channel = music.Play()
+    Local mixed = Audio.Mix(4800 * 3)
+    Expect(channel.Playing())
+    For i = 1 To 4800 * 3 - 1
+        Expect(FrameOf(mixed[i]) == (i - 1) % 4800)
+    End For
+End Function
+
+@Test
+Function PlaysOfOneStreamDecodeApart() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local music = Try Sound.StreamBytes(Wav(Ramp()))
+    music.Play()
+    Audio.Mix(100)
+    music.Play()
+    Local mixed = Audio.Mix(2)
+    // Frame 100 of one and frame 0 of the other.
+    Expect(FrameOf(mixed[1]) == 100)
+End Function
+
+@Test
+Function APositionIsWhatsBeenMixed() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    For sound In [Try Sound.FromBytes(Wav(Ramp())), Try Sound.StreamBytes(Wav(Ramp()))]
+        Local channel = sound.Play()
+        Expect(channel.Position() == 0.0)
+        Local mixed = Audio.Mix(480)
+        Expect(channel.Position() == ((FrameOf(mixed[479]) + 1) As Float64) / 48000.0)
+        channel.Stop()
+    End For
+End Function
+
+@Test
+Function ASeekPlaysOnFromThere() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    For sound In [Try Sound.FromBytes(Wav(Ramp())), Try Sound.StreamBytes(Wav(Ramp()))]
+        Local channel = sound.Play()
+        Audio.Mix(480)
+        channel.Seek(0.05)
+        Expect(channel.Position() == 0.05)
+        Local mixed = Audio.Mix(10)
+        // Nothing read ahead from before the seek plays after it.
+        Expect(FrameOf(mixed[9]) >= 2400)
+        Expect(FrameOf(mixed[9]) < 2410)
+        // The end of its sound is somewhere to seek to, where it finishes.
+        channel.Seek(0.1)
+        Audio.Mix(10)
+        Expect(!channel.Playing())
+    End For
+End Function
+
+@Test
+Function APlayFadesInFromSilence() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 8000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 800), 1, 8000))
+    Local channel = sound.Play(fadeIn: 0.01)
+    Local mixed = Audio.Mix(100)
+    Expect(mixed[1] < 0.02)
+    Expect(mixed[40] > 0.2 && mixed[40] < 0.3)
+    Expect(mixed[99] == 0.5)
+    Expect(channel.Fade() == 1.0)
+End Function
+
+@Test
+Function AFadeMultipliesTheVolume() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 8000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 800), 1, 8000))
+    Local channel = sound.Play()
+    channel.SetVolume(0.5)
+    channel.FadeTo(0.5, 0.0)
+    Audio.Mix(1)
+    Expect(Audio.Mix(1) == [0.125] As Float32[])
+    Expect(channel.Fade() == 0.5)
+    Expect(channel.Volume() == 0.5)
+End Function
+
+// A crossfade: one fades out and finishes as the next fades in.
+@Test
+Function AFadeOutFinishesTheChannel() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 8000, 1)
+    Defer Audio.Stop()
+    Local first = (Try Sound.FromBytes(Wav(Constant(16384, 800), 1, 8000))).Play()
+    Audio.Mix(10)
+    first.FadeOut(0.01)
+    Local second = (Try Sound.FromBytes(Wav(Constant(8192, 800), 1, 8000))).Play(fadeIn: 0.01)
+    Local mixed = Audio.Mix(100)
+    // Halfway, each is half its own.
+    Expect(mixed[41] > 0.3 && mixed[41] < 0.45)
+    Expect(mixed[99] == 0.25)
+    Expect(!first.Playing())
+    Expect(second.Playing())
+    Expect(Audio.Playing() == 1)
+    // A fade back up before it's silent keeps it.
+    second.FadeOut(0.01)
+    Audio.Mix(20)
+    second.FadeTo(1.0, 0.0)
+    Audio.Mix(100)
+    Expect(second.Playing())
+    second.FadeOut(0.0)
+    Expect(!second.Playing())
+End Function
+
+// A Global's zero, as a game's Field's.
+Global none: Channel
+
+@Test
+Function AFinishedChannelIgnoresSeeksAndFades()
+    none.Seek(1000.0)
+    none.FadeTo(0.5, 1.0)
+    none.FadeOut(1.0)
+    Expect(none.Fade() == 0.0)
+    Expect(none.Position() == 0.0)
+End Function
