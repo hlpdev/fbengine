@@ -1,0 +1,34 @@
+// Two hundred boxes fall onto a floor, in columns two high, and come to rest, stepped at 60 a
+// second for the 60th of a second each frame takes.
+
+Import std.core
+Import std.math
+Import fbengine_physics
+
+Local world = PhysicsWorld()
+Body(world, Shape.Box(Vec3(40, 1, 40)), Motion.STATIC, Vec3(0, -0.5, 0))
+Local box = Shape.Box(Vec3(1, 1, 1))
+Local boxes: Body[] = []
+For x = 0 To 9
+    For z = 0 To 9
+        For y = 0 To 1
+            Local at = Vec3((x As Float) * 1.5 - 7, 2 + (y As Float) * 1.5, (z As Float) * 1.5 - 7)
+            boxes.Add(Body(world, box, Motion.DYNAMIC, at))
+        End For
+    End For
+End For
+box.Free()
+world.Optimize()
+
+For frame = 1 To 600
+    world.Update(1.0 / 60)
+End For
+
+Local resting = 0
+Local stacked = 0
+For body In boxes
+    If !body.Active() Then resting += 1
+    If body.Position().y > 1 Then stacked += 1
+End For
+Print("{boxes.Count} boxes fell, {resting} came to rest, {stacked} on others")
+world.Free()

@@ -13,7 +13,7 @@ Import "./mouse"
 Import "./window"
 
 /// Pushes input as the OS would, for the next Flip to read.
-Public Class Simulate
+Public Final Class Simulate
     Private New()
     End New
 

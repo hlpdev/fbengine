@@ -70,9 +70,11 @@ jobs:
         run: |
           cmake -S . -B build ${{ matrix.configure }} -DCMAKE_BUILD_TYPE=Release -DFBENGINE_BUILD_TESTS=OFF
           cmake --build build --parallel
+          dlls=""
           for dll in packages/*/native/${{ matrix.target }}/*_native.*; do
-            case "$dll" in *.dll.a) ;; *) sh tools/check-exports.sh "$dll" fbe_ ;; esac
+            case "$dll" in *.dll.a) ;; *) dlls="$dlls $dll" ;; esac
           done
+          sh tools/check-exports.sh fbe_ $dlls
           tar -cf native-${{ matrix.target }}.tar packages/*/native/${{ matrix.target }}
 
       - uses: actions/upload-artifact@v4
