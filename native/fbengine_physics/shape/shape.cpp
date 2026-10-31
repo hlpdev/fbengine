@@ -39,10 +39,6 @@ bool finite(const fbe_shape_vec3_t& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
 
-bool finite(const fbe_shape_quat_t& q) {
-    return std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z) && std::isfinite(q.w);
-}
-
 JPH::Vec3 vec3(const fbe_shape_vec3_t& v) {
     return { v.x, v.y, v.z };
 }
@@ -97,6 +93,7 @@ const JPH::Shape* find_shape(std::uint64_t handle) {
 extern "C" {
 
 FBE_PHYSICS_API uint64_t fbe_shape_box(const fbe_shape_vec3_t* size) {
+    start();
     if (!positive(size->x, "a box's width") || !positive(size->y, "a box's height") ||
         !positive(size->z, "a box's depth")) {
         return 0;
@@ -107,6 +104,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_box(const fbe_shape_vec3_t* size) {
 }
 
 FBE_PHYSICS_API uint64_t fbe_shape_sphere(float radius) {
+    start();
     if (!positive(radius, "a sphere's radius")) {
         return 0;
     }
@@ -114,6 +112,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_sphere(float radius) {
 }
 
 FBE_PHYSICS_API uint64_t fbe_shape_capsule(float height, float radius) {
+    start();
     if (!positive(radius, "a capsule's radius")) {
         return 0;
     }
@@ -127,6 +126,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_capsule(float height, float radius) {
 }
 
 FBE_PHYSICS_API uint64_t fbe_shape_cylinder(float height, float radius) {
+    start();
     if (!positive(height, "a cylinder's height") || !positive(radius, "a cylinder's radius")) {
         return 0;
     }
@@ -136,6 +136,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_cylinder(float height, float radius) {
 }
 
 FBE_PHYSICS_API uint64_t fbe_shape_convex_hull(const fbe_shape_vec3_t* points, int32_t count) {
+    start();
     if (count < 3) {
         fail(std::format("a convex hull is of 3 points or more, not {}", count));
         return 0;
@@ -155,6 +156,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_convex_hull(const fbe_shape_vec3_t* points, i
 
 FBE_PHYSICS_API uint64_t fbe_shape_mesh(const fbe_shape_vec3_t* vertices, int32_t vertex_count,
                                         const uint32_t* indices, int32_t index_count) {
+    start();
     if (vertex_count < 3 || index_count < 3 || index_count % 3 != 0) {
         fail(std::format("a mesh is of 3 vertices or more and three indices a triangle, not {} "
                          "vertices and {} indices",
@@ -192,6 +194,7 @@ FBE_PHYSICS_API uint64_t fbe_shape_mesh(const fbe_shape_vec3_t* vertices, int32_
 }
 
 FBE_PHYSICS_API uint64_t fbe_shape_compound(const fbe_shape_part_t* parts, int32_t count) {
+    start();
     if (count < 1) {
         fail(std::format("a compound is of a part or more, not {}", count));
         return 0;
@@ -203,12 +206,15 @@ FBE_PHYSICS_API uint64_t fbe_shape_compound(const fbe_shape_part_t* parts, int32
             return 0;
         }
         const fbe_shape_quat_t& q = part.rotation;
-        const JPH::Quat rotation(q.x, q.y, q.z, q.w);
-        if (!finite(part.position) || !finite(q) || rotation.LengthSq() == 0.0F) {
-            fail("a compound's parts are where a finite position and rotation put them");
+        JPH::Quat rotation;
+        if (!finite(part.position)) {
+            fail("a compound's parts are at finite positions");
             return 0;
         }
-        settings.AddShape(vec3(part.position), rotation.Normalized(), shape);
+        if (!normalized(q.x, q.y, q.z, q.w, rotation)) {
+            return 0;
+        }
+        settings.AddShape(vec3(part.position), rotation, shape);
     }
     return made(settings, FBE_SHAPE_COMPOUND, "the compound");
 }

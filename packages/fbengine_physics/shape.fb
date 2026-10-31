@@ -91,7 +91,7 @@ Public Final Class Shape
 
     /// The smallest convex shape around `points`, three or more not all on a line, as a rock's or
     /// a prop's, which collides far faster than its mesh would. Points all in a plane make a flat
-    /// one.
+    /// one, which has no inside to weigh, so only a static or kinematic body is one.
     @MainThread Public Static Method ConvexHull(points: Vec3[]): Shape Throws ShapeError
         Local buffer = Buffer<fbe_shape_vec3_t>(points.Count As Int64)
         For i = 0 To points.Count - 1
@@ -107,7 +107,8 @@ Public Final Class Shape
 
     /// A mesh of triangles, three of `indices` each into `vertices`, counter-clockwise seen from
     /// their front, for a static or kinematic body: a level's walls and floors. Triangles of no
-    /// area are left out, and the rest keep their numbers, from 0, in the order they're given.
+    /// area are left out, and the rest keep their numbers, from 0, in the order they're given. A
+    /// compound with a mesh in it is for a static or kinematic body too.
     @MainThread Public Static Method Mesh(vertices: Vec3[],
                                           indices: Int32[]): Shape Throws ShapeError
         Local points = Buffer<fbe_shape_vec3_t>(vertices.Count As Int64)

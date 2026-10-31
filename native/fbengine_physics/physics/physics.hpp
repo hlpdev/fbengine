@@ -39,7 +39,18 @@ struct world_t {
     std::vector<std::uint64_t> bodies;
     std::int64_t steps = 0;
     bool overflowed = false;
+    // Bodies added and taken out since the last step or optimize, which Jolt's broad phase keeps
+    // room for until one.
+    std::uint32_t changes = 0;
 };
+
+/// Starts Jolt, its allocator, its types, and its job system, if they haven't started: before
+/// anything of Jolt's is made.
+void start();
+
+/// `x`, `y`, `z`, and `w` normalized, worked out in doubles so a quat too long or too short for a
+/// float's square still is; false, saying so, if they aren't finite, or are 0.
+bool normalized(float x, float y, float z, float w, JPH::Quat& made);
 
 /// Keeps `message` for fbe_physics_error(), and returns false, for a call that failed.
 bool fail(std::string_view message);
@@ -47,6 +58,10 @@ bool fail(std::string_view message);
 /// The world `handle` is, or nullptr, with fbe_physics_error() saying so, for one that's freed or
 /// never was.
 world_t* find_world(std::uint64_t handle);
+
+/// Counts a body added to or taken out of `world`, sorting its broad phase once there have been so
+/// many since its last step that it would run out of room.
+void changed(world_t& world);
 
 /// Frees `world`'s bodies.
 void free_bodies(world_t& world);

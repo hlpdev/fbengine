@@ -42,8 +42,9 @@ Public Final Class Body
     ReadOnly Field shape: Shape
 
     /// A body of `shape` in `world`, moving as `motion` says, at `position`, turned by `rotation`,
-    /// and awake unless it's static. A dynamic body's shape has an inside to weigh, which a mesh
-    /// hasn't, and the world has room for it, as its MaxBodies says.
+    /// and awake unless it's static. A dynamic body's shape has no mesh in it, and an inside to
+    /// weigh, which a flat convex hull hasn't; and the world has room for it, as its MaxBodies
+    /// says.
     @MainThread Public New(world: PhysicsWorld, shape: Shape, motion: Motion, position: Vec3,
                            rotation: Quat)
         Self.world = world
@@ -89,8 +90,8 @@ Public Final Class Body
     @MainThread Public Method Motion(): Motion => fbe_body_motion(Live("Body.Motion")) As Motion
 
     /// Makes a dynamic body kinematic, as a crate a player picks up, or a kinematic one dynamic,
-    /// waking it. A static body stays static, a body that moves keeps moving, and a mesh is never
-    /// dynamic.
+    /// waking it. A static body stays static, a body that moves keeps moving, and a shape no
+    /// dynamic body is made of, as a mesh, is never dynamic.
     @MainThread Public Method SetMotion(motion: Motion)
         If !fbe_body_set_motion(Live("Body.SetMotion"), motion As Int32)
             Panic("Body.SetMotion: {LastError()}")

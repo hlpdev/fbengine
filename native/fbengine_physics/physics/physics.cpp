@@ -121,6 +121,31 @@ bool finite(const fbe_physics_vec3_t& v) {
 
 namespace fbe::physics {
 
+void start() {
+    jolt();
+}
+
+void changed(world_t& world) {
+    // Jolt's broad phase has about 1.3 nodes for each of its bodies, and keeps those that bodies
+    // added and taken out use until it's next built, at a step or an optimize; half its bodies'
+    // worth of them leaves room.
+    if (++world.changes >= std::max(world.system.GetMaxBodies() / 2, 1U)) {
+        world.system.OptimizeBroadPhase();
+        world.changes = 0;
+    }
+}
+
+bool normalized(float x, float y, float z, float w, JPH::Quat& made) {
+    const double length =
+        std::sqrt((double{ x } * x) + (double{ y } * y) + (double{ z } * z) + (double{ w } * w));
+    if (!std::isfinite(length) || length == 0.0) {
+        return fail("a rotation is finite, and not 0");
+    }
+    made = JPH::Quat(static_cast<float>(x / length), static_cast<float>(y / length),
+                     static_cast<float>(z / length), static_cast<float>(w / length));
+    return true;
+}
+
 world_t::world_t(std::uint32_t max_bodies)
     : broad_phase_layers(object_layer_count, broad_phase_layer_count),
       object_layers(object_layer_count) {
@@ -219,6 +244,7 @@ FBE_PHYSICS_API bool fbe_physics_optimize(uint64_t world) {
         return false;
     }
     found->system.OptimizeBroadPhase();
+    found->changes = 0;
     return true;
 }
 
@@ -270,6 +296,7 @@ FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t col
         done += these;
     }
     found->overflowed = errors != JPH::EPhysicsUpdateError::None;
+    found->changes = 0;
     ++found->steps;
     return true;
 }
