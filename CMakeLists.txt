@@ -29,6 +29,7 @@ endif()
 include(FetchContent)
 include(cmake/warnings.cmake)
 include(cmake/native.cmake)
+include(cmake/sdl.cmake)
 
 add_subdirectory(native/fbengine)
 

@@ -1,0 +1,110 @@
+// The window and the displays, offscreen, as every test's are.
+
+Import std.core
+Import std.test
+Import fbengine
+
+@Test
+Function GraphicsOpensAWindowOfItsSizeAndTitle() Throws GraphicsError
+    Window.SetHeadless(True)
+    Window.SetTitle("before")
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Expect(Window.Open())
+    Expect(Window.Title() == "before")
+    Window.SetTitle("after")
+    Expect(Window.Title() == "after")
+    Expect(Window.Width() == 640)
+    Expect(Window.Height() == 480)
+    Expect(Window.PixelWidth() >= 640)
+    Expect(Window.PixelHeight() >= 480)
+    Expect(Window.Scale() > 0.0)
+    Expect(Window.Mode() == WindowMode.WINDOWED)
+End Function
+
+@Test
+Function GraphicsAgainResizesTheOpenWindow() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Try Graphics(800, 600)
+    Expect(Window.Width() == 800)
+    Expect(Window.Height() == 600)
+End Function
+
+@Test
+Function EndGraphicsClosesTheWindow() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    EndGraphics()
+    Expect(!Window.Open())
+    Expect(Window.Width() == 0)
+    Expect(Window.Scale() == 0.0)
+    // Closing it again does nothing.
+    EndGraphics()
+    Expect(!Window.Open())
+End Function
+
+@Test
+Function AWindowHasASizeFromOneToTheLargestASideTakes()
+    Window.SetHeadless(True)
+    Expect(ExpectThrows<GraphicsError>(Graphics(0, 480)) != Null)
+    Expect(ExpectThrows<GraphicsError>(Graphics(640, -1)) != Null)
+    Expect(ExpectThrows<GraphicsError>(Graphics(16385, 480)) != Null)
+    Expect(!Window.Open())
+End Function
+
+@Test
+Function TheModeOfAWindowThatIsntOpenCantBeSet()
+    Window.SetHeadless(True)
+    Local error = ExpectThrows<GraphicsError>(Window.SetMode(WindowMode.BORDERLESS))
+    Expect(error != Null)
+End Function
+
+@Test
+Function ABorderlessWindowFillsTheDesktopAndWindowedPutsItBack() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Try Window.SetMode(WindowMode.BORDERLESS)
+    Expect(Window.Mode() == WindowMode.BORDERLESS)
+    Try Window.SetMode(WindowMode.WINDOWED)
+    Expect(Window.Mode() == WindowMode.WINDOWED)
+    Expect(Window.Width() == 640)
+End Function
+
+@Test
+Function ResizableCanBeSetBeforeTheWindowOpens() Throws GraphicsError
+    Window.SetHeadless(True)
+    Window.SetResizable(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Expect(Window.Resizable())
+    Window.SetResizable(False)
+    Expect(!Window.Resizable())
+End Function
+
+@Test
+Function TheMainDisplayHasADesktopMode() Throws GraphicsError
+    Window.SetHeadless(True)
+    Local displays = Try Displays()
+    Expect(displays.Count >= 1)
+    Expect(displays[0].Desktop.Width > 0)
+    Expect(displays[0].Desktop.Height > 0)
+End Function
+
+// The offscreen display lists no modes for fullscreen, as Wayland's don't, so fullscreen is at
+// its desktop's mode.
+@Test
+Function FullscreenOnADisplayWithNoModesIsAtItsDesktopsMode() Throws GraphicsError
+    Window.SetHeadless(True)
+    Local main = (Try Displays())[0]
+    Expect(main.Modes.Count == 0)
+    Try Graphics(640, 480, WindowMode.FULLSCREEN)
+    Defer EndGraphics()
+    Expect(Window.Mode() == WindowMode.FULLSCREEN)
+    Expect(Window.Width() == main.Desktop.Width)
+    Expect(Window.Height() == main.Desktop.Height)
+    Try Window.SetMode(WindowMode.WINDOWED)
+    Expect(Window.Width() == 640)
+End Function

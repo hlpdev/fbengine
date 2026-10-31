@@ -48,7 +48,10 @@ function(fbengine_add_native target package prefix)
   if(MINGW)
     target_compile_definitions(${target} PRIVATE _UCRT)
     target_link_options(${target} PRIVATE -static -mcrtdll=ucrt)
-  elseif(UNIX AND NOT APPLE)
+  elseif(APPLE)
+    # Static libraries' default-visible symbols, like SDL's, stay in it.
+    target_link_options(${target} PRIVATE "LINKER:-exported_symbol,_${prefix}*")
+  elseif(UNIX)
     set(map "${CMAKE_CURRENT_BINARY_DIR}/${target}.map")
     file(WRITE "${map}" "{\n    global: ${prefix}*;\n    local: *;\n};\n")
     target_link_options(${target} PRIVATE -static-libstdc++ -static-libgcc

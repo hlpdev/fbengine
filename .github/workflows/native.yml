@@ -54,10 +54,25 @@ jobs:
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
 
+      # SDL3 loads X11's, Wayland's, and udev's libraries as it starts, so building it needs only
+      # their headers, which AlmaLinux 8 has, some in PowerTools.
+      - name: Install SDL's headers (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          dnf install -y dnf-plugins-core
+          dnf config-manager --set-enabled powertools
+          dnf install -y libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXi-devel \
+            libXfixes-devel libXScrnSaver-devel libXtst-devel libxkbcommon-devel wayland-devel \
+            wayland-protocols-devel mesa-libEGL-devel libdrm-devel mesa-libgbm-devel dbus-devel \
+            systemd-devel ibus-devel
+
       - name: Build
         run: |
           cmake -S . -B build ${{ matrix.configure }} -DCMAKE_BUILD_TYPE=Release -DFBENGINE_BUILD_TESTS=OFF
           cmake --build build --parallel
+          for dll in packages/fbengine/native/${{ matrix.target }}/*fbengine_native.*; do
+            case "$dll" in *.dll.a) ;; *) sh tools/check-exports.sh "$dll" fbe_ ;; esac
+          done
           tar -cf native-${{ matrix.target }}.tar packages/*/native/${{ matrix.target }}
 
       - uses: actions/upload-artifact@v4

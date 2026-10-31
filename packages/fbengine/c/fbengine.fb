@@ -2,7 +2,39 @@
 // Run fb-bindgen again instead of editing it.
 
 // skipped: FBE_API, a macro that isn't a number
+Public Const FBE_WINDOWED: Int32 = 0
+Public Const FBE_FULLSCREEN: Int32 = 1
+Public Const FBE_BORDERLESS: Int32 = 2
+
+@CLayout Public Struct fbe_display_mode_t
+    Public Field width: Int32
+    Public Field height: Int32
+    Public Field refresh_rate: Float32
+    Public Field pixel_density: Float32
+End Struct
 
 Public Extern "C" Lib "fbengine_native"
     Function fbe_version(): CString
+    Function fbe_error(): CString
+    Function fbe_set_headless(headless: Bool): Bool
+    Function fbe_headless(): Bool
+    Function fbe_graphics(width: Int32, height: Int32, mode: Int32): Bool
+    Function fbe_end_graphics()
+    Function fbe_has_graphics(): Bool
+    Function fbe_set_title(title: CString)
+    Function fbe_title(): CString
+    Function fbe_window_width(): Int32
+    Function fbe_window_height(): Int32
+    Function fbe_window_pixel_width(): Int32
+    Function fbe_window_pixel_height(): Int32
+    Function fbe_window_scale(): Float32
+    Function fbe_set_window_mode(mode: Int32): Bool
+    Function fbe_window_mode(): Int32
+    Function fbe_set_resizable(resizable: Bool)
+    Function fbe_resizable(): Bool
+    Function fbe_display_count(): Int32
+    Function fbe_display_name(display: Int32): CString
+    Function fbe_display_desktop(display: Int32, mode: Ptr<fbe_display_mode_t>): Bool
+    Function fbe_display_mode_count(display: Int32): Int32
+    Function fbe_display_mode_at(display: Int32, index: Int32, mode: Ptr<fbe_display_mode_t>): Bool
 End Extern

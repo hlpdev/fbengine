@@ -1,0 +1,101 @@
+// The window: Graphics opens it, and Window's Methods say and set what it is. Each is the main
+// thread's, as the OS's windows are.
+
+Import std.core
+Import std.ffi
+Import "./c/fbengine"
+
+/// How the window fills the screen.
+Public Enum WindowMode
+    /// A window with a frame, on the desktop.
+    WINDOWED = 0
+    /// The whole screen, at the display mode closest to the window's size.
+    FULLSCREEN = 1
+    /// The whole screen at the desktop's own mode, as a window with no frame.
+    BORDERLESS = 2
+End Enum
+
+/// A window that can't open, or can't be what it's asked to be.
+Public Class GraphicsError Extends Error
+End Class
+
+/// Opens the window, `width` by `height` in the desktop's units, or makes the open one that size
+/// and `mode`.
+@MainThread Public Function Graphics(width: Int32, height: Int32,
+                                     mode: WindowMode = WindowMode.WINDOWED) Throws GraphicsError
+    If !fbe_graphics(width, height, mode As Int32) Then Throw GraphicsError(LastError())
+End Function
+
+/// Closes the window, if it's open.
+@MainThread Public Function EndGraphics()
+    fbe_end_graphics()
+End Function
+
+/// The window Graphics opens, which there's one of.
+Public Class Window
+    Private New()
+    End New
+
+    /// Makes windows offscreen, never shown, as tests and servers want, before the first window
+    /// or display; it panics once one's been asked for.
+    @MainThread Public Static Method SetHeadless(headless: Bool)
+        If !fbe_set_headless(headless) Then Panic(LastError())
+    End Method
+
+    /// Whether windows are offscreen.
+    @MainThread Public Static Method Headless(): Bool => fbe_headless()
+
+    /// Whether the window's open.
+    @MainThread Public Static Method Open(): Bool => fbe_has_graphics()
+
+    /// Sets the window's title, which can be before it's open.
+    @MainThread Public Static Method SetTitle(title: String)
+        fbe_set_title(title)
+    End Method
+
+    /// The window's title.
+    @MainThread Public Static Method Title(): String
+        Unsafe
+            Return fbe_title().ToString()
+        End Unsafe
+    End Method
+
+    /// The window's width in the desktop's units, 0 when it isn't open.
+    @MainThread Public Static Method Width(): Int32 => fbe_window_width()
+
+    /// The window's height in the desktop's units, 0 when it isn't open.
+    @MainThread Public Static Method Height(): Int32 => fbe_window_height()
+
+    /// The window's width in pixels, which a high DPI display has more of than units.
+    @MainThread Public Static Method PixelWidth(): Int32 => fbe_window_pixel_width()
+
+    /// The window's height in pixels.
+    @MainThread Public Static Method PixelHeight(): Int32 => fbe_window_pixel_height()
+
+    /// How many pixels each of the desktop's units is, 2 on most high DPI displays, and 0 when
+    /// the window isn't open.
+    @MainThread Public Static Method Scale(): Float32 => fbe_window_scale()
+
+    /// How the window fills the screen.
+    @MainThread Public Static Method Mode(): WindowMode => fbe_window_mode() As WindowMode
+
+    /// Puts the open window in `mode`.
+    @MainThread Public Static Method SetMode(mode: WindowMode) Throws GraphicsError
+        If !fbe_set_window_mode(mode As Int32) Then Throw GraphicsError(LastError())
+    End Method
+
+    /// Lets the window be resized by its edges, or stops it, which can be before it's open.
+    @MainThread Public Static Method SetResizable(resizable: Bool)
+        fbe_set_resizable(resizable)
+    End Method
+
+    /// Whether the window can be resized by its edges.
+    @MainThread Public Static Method Resizable(): Bool => fbe_resizable()
+End Class
+
+/// What the last call to fbengine_native that failed says went wrong.
+Package Function LastError(): String
+    Unsafe
+        Return fbe_error().ToString()
+    End Unsafe
+End Function

@@ -1,0 +1,68 @@
+// The displays the window can go on, as they were when Displays() was called.
+
+Import std.core
+Import std.ffi
+Import "./c/fbengine"
+Import "./window"
+
+/// A size a display can show, and how often it shows a frame.
+Public Struct DisplayMode Implements Printable
+    /// Its width in pixels.
+    Public Field Width: Int32
+    /// Its height in pixels.
+    Public Field Height: Int32
+    /// How many frames a second it shows, 0 when the display doesn't say.
+    Public Field RefreshRate: Float32
+    /// How many pixels each of the desktop's units is, 2 on most high DPI displays.
+    Public Field PixelDensity: Float32
+
+    Public Method ToString(): String => "{Width}x{Height} at {RefreshRate} Hz"
+End Struct
+
+/// A display, as it was when Displays() was called.
+Public Struct Display Implements Printable
+    /// Its name, which can be "".
+    Public Field Name: String
+    /// The mode its desktop is in.
+    Public Field Desktop: DisplayMode
+    /// The modes it has for fullscreen, largest first, which can be none.
+    Public Field Modes: DisplayMode[]
+
+    Public Method ToString(): String => "{Name} ({Desktop})"
+End Struct
+
+/// The displays, the main one first.
+@MainThread Public Function Displays(): Display[] Throws GraphicsError
+    Local count = fbe_display_count()
+    If count < 0 Then Throw GraphicsError(LastError())
+    Local displays: Display[] = []
+    For index = 0 To count - 1
+        Local desktop = fbe_display_mode_t(0, 0, 0.0, 0.0)
+        Local found = False
+        Unsafe
+            found = fbe_display_desktop(index, AddressOf(desktop))
+        End Unsafe
+        If !found Then Throw GraphicsError(LastError())
+
+        Local modes: DisplayMode[] = []
+        For at = 0 To fbe_display_mode_count(index) - 1
+            Local mode = fbe_display_mode_t(0, 0, 0.0, 0.0)
+            Local there = False
+            Unsafe
+                there = fbe_display_mode_at(index, at, AddressOf(mode))
+            End Unsafe
+            If there Then modes.Add(ModeOf(mode))
+        End For
+
+        Local name = ""
+        Unsafe
+            name = fbe_display_name(index).ToString()
+        End Unsafe
+        displays.Add(Display(name, ModeOf(desktop), modes))
+    End For
+    Return displays
+End Function
+
+Function ModeOf(mode: fbe_display_mode_t): DisplayMode
+    Return DisplayMode(mode.width, mode.height, mode.refresh_rate, mode.pixel_density)
+End Function

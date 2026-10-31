@@ -48,6 +48,8 @@ if(FBENGINE_FB_TESTS)
 
   add_test(NAME fbengine.package
            COMMAND "${FBENGINE_FB}" test "${PROJECT_SOURCE_DIR}/packages/fbengine")
+  # SDL's offscreen video, so no test opens a window, as each test asks too.
+  set_tests_properties(fbengine.package PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
 
   # fb's own lines, building the program, come before what it prints.
   add_test(NAME examples.hello
