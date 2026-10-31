@@ -107,15 +107,21 @@ Public Final Class Sound
     /// Plays it, on a Channel of its own, at its volume, pan, pitch, and looping, or paused, so
     /// it starts at Resume, and fading in from silence over `fadeIn` seconds, if they're more than
     /// 0. A crossfade is one Channel's FadeOut and the next one's Play with a fadeIn. Panics when
-    /// the audio isn't started.
+    /// the audio isn't started. An Emitter's Play plays it in the world.
     @MainThread Public Method Play(paused: Bool = False, fadeIn: Float64 = 0.0): Channel
+        Return PlayFrom(0, paused, fadeIn)
+    End Method
+
+    // Play, from the Emitter `emitter` is the handle of, or 0 for none.
+    @MainThread Package Method PlayFrom(emitter: UInt64, paused: Bool, fadeIn: Float64): Channel
         Live()
         If !Audio.Started() Then Panic("the audio isn't started; Audio.Start it first")
         CheckFade(fadeIn)
         Local into: UInt64 = 0
         Local playsInto = bus
         If playsInto != Null Then into = playsInto.Live()
-        Local channel = fbe_sound_play(handle, volume, pan, pitch, loop, paused, fadeIn, into)
+        Local channel = fbe_sound_play(handle, volume, pan, pitch, loop, paused, fadeIn, into,
+                                       emitter)
         If channel == 0 Then Panic(LastError())
         Return Channel(channel)
     End Method

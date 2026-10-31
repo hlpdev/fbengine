@@ -29,10 +29,12 @@ FBE_AUDIO_API int64_t fbe_sound_frames(uint64_t sound);
 // Plays the sound on a channel of its own, at `volume` (0 or more), `pan` (-1, the left, to 1, the
 // right), and `pitch` (1/16 to 16, 2 an octave up and twice as fast), looping or once, paused
 // until fbe_channel_resume if `paused`, fading in from silence over `fade_in` seconds (0 or more),
-// into `bus`, or the whole mix for 0; the channel, or 0 if the audio's stopped, the sound or bus is
-// gone, or a value's out of range.
+// into `bus`, or the whole mix for 0, from `emitter`, in the world, or 0 for a channel that isn't;
+// the channel, or 0 if the audio's stopped, the sound, bus, or emitter is gone, or a value's out
+// of range.
 FBE_AUDIO_API uint64_t fbe_sound_play(uint64_t sound, float volume, float pan, float pitch,
-                                      bool loop, bool paused, double fade_in, uint64_t bus);
+                                      bool loop, bool paused, double fade_in, uint64_t bus,
+                                      uint64_t emitter);
 
 #ifdef __cplusplus
 }

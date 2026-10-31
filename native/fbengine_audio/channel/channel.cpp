@@ -210,7 +210,10 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
         return 0;
     }
     voice->bus = how.bus;
-    result = ma_sound_init_from_data_source(mix, voice->source(), MA_SOUND_FLAG_NO_SPATIALIZATION,
+    // Only a channel played from an emitter is in the world.
+    const ma_uint32 flags =
+        how.emitter != nullptr ? 0 : static_cast<ma_uint32>(MA_SOUND_FLAG_NO_SPATIALIZATION);
+    result = ma_sound_init_from_data_source(mix, voice->source(), flags,
                                             bus_group(voice->bus.get()), &voice->sound);
     if (result != MA_SUCCESS) {
         fail_ma("couldn't play the sound", result);
@@ -222,6 +225,9 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
     ma_sound_set_pan(&voice->sound, how.pan);
     ma_sound_set_pitch(&voice->sound, how.pitch);
     ma_sound_set_looping(&voice->sound, how.loop ? MA_TRUE : MA_FALSE);
+    if (how.emitter != nullptr) {
+        place(*how.emitter, voice->sound);
+    }
     if (how.fade_in > 0.0) {
         ma_sound_set_fade_in_pcm_frames(&voice->sound, 0.0F, 1.0F, fade_frames(how.fade_in));
     }
@@ -239,6 +245,11 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
         }
     }
     return channels().voices.add(std::move(voice));
+}
+
+ma_sound* channel_sound(std::uint64_t handle) {
+    voice_t* voice = find(handle);
+    return voice != nullptr ? &voice->sound : nullptr;
 }
 
 void end_channels() {

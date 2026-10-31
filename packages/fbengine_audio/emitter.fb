@@ -1,0 +1,130 @@
+// Emitters: places in the world that Channels play from.
+
+Import std.core
+Import std.math
+Import "./audio"
+Import "./c/fbe_emitter"
+Import "./channel"
+Import "./listener"
+Import "./sound"
+
+/// How an Emitter's Channels get quieter with distance, past its near end.
+Public Enum Falloff
+    /// Inversely: nearest / (nearest + rolloff * (distance - nearest)), as OpenAL's inverse
+    /// distance, clamped.
+    INVERSE = 0
+    /// Linearly, to silence at its far end.
+    LINEAR = 1
+    /// Exponentially: (distance / nearest) to the power of -rolloff.
+    EXPONENTIAL = 2
+End Enum
+
+/// A place in the world that Channels play from, which move with it: a game moves it with what's
+/// making the sound, each frame. They're heard from where the Listener is, quieter with distance,
+/// panned to their side, and pitched by the Doppler effect as it and the Listener move. Freed, it
+/// leaves its Channels playing where it was, at rest. Its place and velocity are in std.math's axes
+/// and the game's units.
+Public Final Class Emitter
+    Field handle: UInt64
+    Field position: Vec3
+    Field velocity: Vec3
+
+    /// An Emitter at the origin, at rest, whose Channels are at their full volume within 1 unit
+    /// and get quieter inversely beyond it, with a rolloff of 1, and are pitched as in the world.
+    @MainThread Public New()
+        handle = fbe_emitter_add()
+    End New
+
+    /// Plays `sound` from here, on a Channel of its own, as its Play does.
+    @MainThread Public Method Play(sound: Sound, paused: Bool = False,
+                                   fadeIn: Float64 = 0.0): Channel
+        Return sound.PlayFrom(Live(), paused, fadeIn)
+    End Method
+
+    /// Lets it go, though its Channels play on where it was, at rest; using it after panics.
+    /// Freeing it again does nothing. It's freed when nothing has it any more, too.
+    @MainThread Public Method Free()
+        If handle != 0
+            fbe_emitter_free(handle)
+            handle = 0
+        End If
+    End Method
+
+    /// Whether Free let it go.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// Puts it, and its Channels, at `position`.
+    @MainThread Public Method SetPosition(position: Vec3)
+        CheckVector(position, "an Emitter's position")
+        fbe_emitter_set_position(Live(), position.x, position.y, position.z)
+        Self.position = position
+    End Method
+
+    /// Where it is.
+    @MainThread Public Method Position(): Vec3
+        Live()
+        Return position
+    End Method
+
+    /// Sets how fast it, and its Channels, are moving, in units a second.
+    @MainThread Public Method SetVelocity(velocity: Vec3)
+        CheckVector(velocity, "an Emitter's velocity")
+        fbe_emitter_set_velocity(Live(), velocity.x, velocity.y, velocity.z)
+        Self.velocity = velocity
+    End Method
+
+    /// How fast it's moving.
+    @MainThread Public Method Velocity(): Vec3
+        Live()
+        Return velocity
+    End Method
+
+    /// Within `near` units of the Listener its Channels are at their full volume, and past `far`
+    /// no quieter, or silent, falling off linearly. 0 < near <= far.
+    @MainThread Public Method SetRange(near: Float32, far: Float32)
+        If !fbe_emitter_set_range(Live(), near, far) Then Panic(LastError())
+    End Method
+
+    /// Its range's near end.
+    @MainThread Public Method Near(): Float32 => fbe_emitter_nearest(Live())
+
+    /// Its range's far end, the largest Float32 as it starts.
+    @MainThread Public Method Far(): Float32 => fbe_emitter_farthest(Live())
+
+    /// Sets how quickly its Channels get quieter past its near end, 0 or more: 0 for not at all,
+    /// and 1, as it starts, for as quickly as sound does in the world.
+    @MainThread Public Method SetRolloff(rolloff: Float32)
+        If !fbe_emitter_set_rolloff(Live(), rolloff) Then Panic(LastError())
+    End Method
+
+    /// How quickly its Channels get quieter.
+    @MainThread Public Method Rolloff(): Float32 => fbe_emitter_rolloff(Live())
+
+    /// Sets how its Channels get quieter with distance.
+    @MainThread Public Method SetFalloff(falloff: Falloff)
+        fbe_emitter_set_falloff(Live(), falloff As Int32)
+    End Method
+
+    /// How its Channels get quieter with distance.
+    @MainThread Public Method Falloff(): Falloff => fbe_emitter_falloff(Live()) As Falloff
+
+    /// Sets how much its and the Listener's velocities pitch its Channels, 0 or more: 1, as it
+    /// starts, as in the world, and 0 not at all.
+    @MainThread Public Method SetDoppler(factor: Float32)
+        If !fbe_emitter_set_doppler(Live(), factor) Then Panic(LastError())
+    End Method
+
+    /// How much velocities pitch its Channels.
+    @MainThread Public Method Doppler(): Float32 => fbe_emitter_doppler(Live())
+
+    Method Destroy()
+        If handle != 0 Then fbe_emitter_free(handle)
+    End Method
+
+    // Its handle, or a panic once it's freed.
+    @PanicsAtCaller
+    Method Live(): UInt64
+        If handle == 0 Then Panic("this Emitter was freed")
+        Return handle
+    End Method
+End Class

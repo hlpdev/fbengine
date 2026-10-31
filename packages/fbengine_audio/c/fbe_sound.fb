@@ -10,5 +10,6 @@ Public Extern "C" Lib "fbengine_audio_native"
     Function fbe_sound_channels(sound: UInt64): Int32
     Function fbe_sound_frames(sound: UInt64): Int64
     Function fbe_sound_play(sound: UInt64, volume: Float32, pan: Float32, pitch: Float32,
-                            loop: Bool, paused: Bool, fade_in: Float64, bus: UInt64): UInt64
+                            loop: Bool, paused: Bool, fade_in: Float64, bus: UInt64,
+                            emitter: UInt64): UInt64
 End Extern

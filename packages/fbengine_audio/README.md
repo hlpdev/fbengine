@@ -24,7 +24,10 @@ decoded as they play by `Sound.Stream`, for music. A crossfade is one channel's 
 next one's `Play(fadeIn: ...)`.
 
 A `Bus` groups channels under one volume, low-pass, and reverb, inside another bus or the whole
-mix: music, effects, and voices at the volumes a player sets, or sounds muffled behind a wall. A `Channel` is one play of a
+mix: music, effects, and voices at the volumes a player sets, or sounds muffled behind a wall.
+
+An `Emitter` plays sounds in the world, heard from the `Listener`: quieter with distance, panned to
+their side, and pitched by the Doppler effect. Its channels move with it. A `Channel` is one play of a
 `Sound`; once it ends or is stopped, its methods do nothing, so a game can stop or ask about one
 whose sound ended long ago.
 

@@ -5,6 +5,7 @@
 #include "bus/buses.hpp"
 #include "channel/voices.hpp"
 #include "fbengine_audio.h"
+#include "listener/listener.hpp"
 
 #include <array>
 #include <atomic>
@@ -77,6 +78,7 @@ void play(ma_device* device, void* output, const void* /*input*/, ma_uint32 fram
     auto* playing = static_cast<mixer_t*>(device->pUserData);
     fbe::audio::before_mix();
     fbe::audio::update_buses(&playing->engine);
+    fbe::audio::update_listener(&playing->engine);
     ma_engine_read_pcm_frames(&playing->engine, output, frames, nullptr);
     fbe::audio::after_mix();
     playing->frames.fetch_add(frames, std::memory_order_relaxed);
@@ -184,6 +186,7 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
     made->has_engine = true;
     made->kind = device;
     ma_engine_set_volume(&made->engine, volume);
+    fbe::audio::start_listener(&made->engine);
     // The buses' nodes are made in the mix before its device starts.
     mixer = made.release();
     if (!fbe::audio::start_buses()) {
@@ -259,6 +262,7 @@ FBE_AUDIO_API bool fbe_audio_mix(float* samples, int32_t frames) {
     ma_uint64 read = 0;
     fbe::audio::before_mix();
     fbe::audio::update_buses(&mixer->engine);
+    fbe::audio::update_listener(&mixer->engine);
     const ma_result result =
         ma_engine_read_pcm_frames(&mixer->engine, samples, static_cast<ma_uint64>(frames), &read);
     fbe::audio::after_mix();
