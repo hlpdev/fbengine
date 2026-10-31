@@ -7,6 +7,7 @@
 #include "gpu/vulkan.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -266,6 +267,7 @@ std::string lacks_of(VkPhysicalDevice physical, const VkPhysicalDeviceProperties
         vulkan12.descriptorBindingPartiallyBound != VK_TRUE ||
         vulkan12.descriptorBindingVariableDescriptorCount != VK_TRUE ||
         vulkan12.descriptorBindingSampledImageUpdateAfterBind != VK_TRUE ||
+        vulkan12.descriptorBindingUpdateUnusedWhilePending != VK_TRUE ||
         vulkan12.shaderSampledImageArrayNonUniformIndexing != VK_TRUE) {
         missing.emplace_back("descriptor indexing");
     }
@@ -402,6 +404,7 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         .descriptorIndexing = VK_TRUE,
         .shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
         .descriptorBindingSampledImageUpdateAfterBind = VK_TRUE,
+        .descriptorBindingUpdateUnusedWhilePending = VK_TRUE,
         .descriptorBindingPartiallyBound = VK_TRUE,
         .descriptorBindingVariableDescriptorCount = VK_TRUE,
         .runtimeDescriptorArray = VK_TRUE,
@@ -439,6 +442,9 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     }
     volkLoadDevice(current.device);
     vkGetDeviceQueue(current.device, current.family, 0, &current.queue);
+    current.max_anisotropy = supported.samplerAnisotropy == VK_TRUE
+                                 ? candidate.properties.limits.maxSamplerAnisotropy
+                                 : 0.0F;
     current.begin_rendering = core13 ? vkCmdBeginRendering : vkCmdBeginRenderingKHR;
     current.end_rendering = core13 ? vkCmdEndRendering : vkCmdEndRenderingKHR;
     current.pipeline_barrier = core13 ? vkCmdPipelineBarrier2 : vkCmdPipelineBarrier2KHR;
@@ -480,9 +486,12 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
                 .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
                 .commandPool = frame.pool,
                 .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                .commandBufferCount = 1,
+                .commandBufferCount = 2,
             };
-            result = vkAllocateCommandBuffers(current.device, &commands_info, &frame.commands);
+            std::array<VkCommandBuffer, 2> buffers{};
+            result = vkAllocateCommandBuffers(current.device, &commands_info, buffers.data());
+            frame.uploads = buffers[0];
+            frame.commands = buffers[1];
         }
         if (result == VK_SUCCESS) {
             result = vkCreateFence(current.device, &fence_info, nullptr, &frame.done);
@@ -590,6 +599,12 @@ bool start(VkSurfaceKHR surface) {
     picked = index;
     started = true;
     start_pipeline_cache();
+    if (!start_bindless() || !start_textures()) {
+        why_failed = fbe_error();
+        stop();
+        failed = true;
+        return fail(why_failed);
+    }
     return true;
 }
 
@@ -597,7 +612,10 @@ void stop() {
     if (started) {
         vkDeviceWaitIdle(current.device);
         stop_window();
+        stop_frames();
+        stop_textures();
         stop_pipelines();
+        stop_bindless();
         stop_immediate();
         destroy_device();
         started = false;

@@ -31,8 +31,13 @@ void destroy_image(image_t& image);
 /// with fbe_error's why, if they couldn't run.
 bool run_now(const std::function<void(VkCommandBuffer)>& record);
 
-/// The pixels of a color image of 4 bytes a pixel, in `layout`, which it's left in: its rows, top
-/// first, packed; empty, with fbe_error's why, if they can't be read.
+/// The pixels of a level of a color image `extent` big at that level, `pixel_size` bytes a pixel,
+/// in `layout`, which it's left in: its rows, top first, packed; empty, with fbe_error's why, if
+/// they can't be read.
+std::vector<std::uint8_t> read_pixels(VkImage image, VkExtent2D extent, std::uint32_t pixel_size,
+                                      VkImageLayout layout, std::uint32_t level = 0);
+
+/// The pixels of a color image of 4 bytes a pixel, as read_pixels reads them.
 std::vector<std::uint8_t> read_pixels(const image_t& image, VkImageLayout layout);
 
 /// The barrier that moves the whole of a color image from `from` to `to`.

@@ -1,0 +1,233 @@
+// Textures: images on the GPU, which 2D draws and materials sample, made empty or from a
+// std.image Image, written a region at a time, with mipmaps made from their first level.
+
+Import std.core
+Import std.ffi
+Import std.image
+Import "./c/fbe_texture"
+Import "./window"
+
+/// What a texture's pixels are.
+Public Enum TextureFormat
+    /// 8-bit red, green, blue, and alpha, its color sRGB, as an Image's is, sampled as linear
+    /// light, as lighting and blending want.
+    RGBA8 = 0
+    /// 8-bit red, green, blue, and alpha, sampled as they're stored, for data, as normal maps and
+    /// masks.
+    RGBA8_LINEAR = 1
+    /// One 8-bit channel, sampled as red.
+    R8 = 2
+    /// 16-bit floating-point red, green, blue, and alpha, for light brighter than white.
+    RGBA16F = 3
+End Enum
+
+/// How a texture's pixels are blended where it's drawn bigger or smaller than it is.
+Public Enum TextureFilter
+    /// Not at all: the nearest pixel, as pixel art wants.
+    NEAREST = 0
+    /// The four pixels around, and the two nearest mipmaps, smoothly.
+    LINEAR = 1
+End Enum
+
+/// How a texture's read past its edges.
+Public Enum TextureWrap
+    /// Repeating it.
+    REPEAT = 0
+    /// Its edge, stretched.
+    CLAMP = 1
+    /// Repeating it, every other time mirrored.
+    MIRROR = 2
+End Enum
+
+// One wrapper for each texture the game holds, by its handle's slot.
+Global textures: Weak<Texture>[] = []
+
+/// An image on the GPU, which 2D draws and materials sample: made transparent black, or from an
+/// Image, and written a region at a time, with mipmaps, smaller copies for drawing it small, made
+/// from its own pixels. It lives while the game holds it or a material draws with it; Free lets
+/// go of it at once. Stopping the GPU frees every texture. New, it's filtered LINEAR and wrapped
+/// REPEAT.
+Public Final Class Texture
+    Field handle: UInt64
+
+    /// A texture `width` by `height` pixels of `format`, transparent black, with mipmaps unless
+    /// `mipmaps` is False, starting the GPU if it hasn't; it throws when the GPU can't start, the
+    /// size is more than it takes, or it holds no more textures.
+    @MainThread
+    Public New(width: Int32, height: Int32, format: TextureFormat = TextureFormat.RGBA8,
+               mipmaps: Bool = True) Throws GraphicsError
+        handle = fbe_texture_create(width, height, format As Int32, mipmaps)
+        If handle == 0 Then Throw GraphicsError(LastError())
+        Keep(Self)
+    End New
+
+    // A wrapper for a handle C holds once for it.
+    Package New(handle: UInt64)
+        If handle == 0 Then Panic(LastError())
+        Self.handle = handle
+        Keep(Self)
+    End New
+
+    /// A texture of `image`'s pixels, RGBA8, with mipmaps unless `mipmaps` is False.
+    @MainThread
+    Public Static Method FromImage(image: Image, mipmaps: Bool = True): Texture Throws GraphicsError
+        Local texture = Try Texture(image.Width As Int32, image.Height As Int32,
+                                    TextureFormat.RGBA8,
+                                    mipmaps)
+        texture.Write(0, 0, image)
+        Return texture
+    End Method
+
+    Method Destroy()
+        If handle != 0 Then fbe_texture_release(handle)
+    End Method
+
+    /// Lets go of the texture now; a material that draws with it keeps it. Using it after panics.
+    @MainThread @PanicsAtCaller
+    Public Method Free()
+        If !fbe_texture_release(Live("Free")) Then Panic(LastError())
+        Local gone: Texture? = Null
+        textures[Slot(handle)] = gone
+        handle = 0
+    End Method
+
+    /// Whether Free let go of it, or the GPU stopped, freeing it.
+    @MainThread Public Method Freed(): Bool => handle == 0 || fbe_texture_width(handle) < 0
+
+    /// How many pixels wide it is.
+    @MainThread @PanicsAtCaller
+    Public Method Width(): Int32 => Checked(fbe_texture_width(Live("Width")))
+
+    /// How many pixels high it is.
+    @MainThread @PanicsAtCaller
+    Public Method Height(): Int32 => Checked(fbe_texture_height(Live("Height")))
+
+    /// What its pixels are.
+    @MainThread @PanicsAtCaller
+    Public Method Format(): TextureFormat =>
+        Checked(fbe_texture_format(Live("Format"))) As TextureFormat
+
+    /// How many mipmap levels it has, the first its own size, each after half the one before, down
+    /// to a pixel; 1 without mipmaps.
+    @MainThread @PanicsAtCaller
+    Public Method Levels(): Int32 => Checked(fbe_texture_levels(Live("Levels")))
+
+    /// Writes `image`'s pixels into it with their top left at `x`, `y`, and makes its mipmaps
+    /// again; what the frame draws after has them. It panics unless the texture is RGBA8 or
+    /// RGBA8_LINEAR and the image is inside it.
+    @MainThread @PanicsAtCaller
+    Public Method Write(x: Int32, y: Int32, image: Image)
+        Local texture = Live("Write")
+        Local format = Format()
+        If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
+            Panic("an Image is written into an RGBA8 or RGBA8_LINEAR texture, not {format}")
+        End If
+        Local written = False
+        Unsafe
+            written = fbe_texture_write(texture, x, y, image.Width As Int32, image.Height As Int32,
+                                        image.Pixels.Pointer(), (image.Width * 4) As Int32)
+        End Unsafe
+        If !written Then Panic(LastError())
+    End Method
+
+    /// Writes `width` by `height` pixels at `x`, `y` from `bytes`, rows packed top first, in its
+    /// format's bytes: 4 a pixel for RGBA8, 1 for R8, and 8 for RGBA16F, half floats, little end
+    /// first; and makes its mipmaps again. It panics unless there are that many bytes and the
+    /// region is inside it.
+    @MainThread @PanicsAtCaller
+    Public Method WritePixels(x: Int32, y: Int32, width: Int32, height: Int32, bytes: UInt8[])
+        Local texture = Live("WritePixels")
+        Local size = PixelSize(Format())
+        If width < 1 || height < 1 || bytes.Count != width * height * size
+            Panic("{width} by {height} pixels of {Format()} are {width * height * size} bytes, " +
+                  "not {bytes.Count}")
+        End If
+        Local buffer = Buffer<UInt8>.From(bytes)
+        Local written = False
+        Unsafe
+            written = fbe_texture_write(texture, x, y, width, height, buffer.Pointer(),
+                                        width * size)
+        End Unsafe
+        If !written Then Panic(LastError())
+    End Method
+
+    /// Sets how it's blended where it's drawn bigger or smaller than it is.
+    @MainThread @PanicsAtCaller
+    Public Method SetFilter(filter: TextureFilter)
+        If !fbe_texture_set_filter(Live("SetFilter"), filter As Int32) Then Panic(LastError())
+    End Method
+
+    /// How it's blended where it's drawn bigger or smaller than it is.
+    @MainThread @PanicsAtCaller
+    Public Method Filter(): TextureFilter =>
+        Checked(fbe_texture_filter(Live("Filter"))) As TextureFilter
+
+    /// Sets how it's read past its edges, across and down.
+    @MainThread @PanicsAtCaller
+    Public Method SetWrap(across: TextureWrap, down: TextureWrap)
+        If !fbe_texture_set_wrap(Live("SetWrap"), across As Int32, down As Int32)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// How it's read past its left and right edges.
+    @MainThread @PanicsAtCaller
+    Public Method WrapAcross(): TextureWrap =>
+        Checked(fbe_texture_wrap_u(Live("WrapAcross"))) As TextureWrap
+
+    /// How it's read past its top and bottom edges.
+    @MainThread @PanicsAtCaller
+    Public Method WrapDown(): TextureWrap =>
+        Checked(fbe_texture_wrap_v(Live("WrapDown"))) As TextureWrap
+
+    /// How many textures there are.
+    @MainThread Public Static Method Count(): Int32 => fbe_texture_count()
+
+    // The handle, or a panic naming the call for a Texture that was freed.
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call} on a Texture that was freed")
+        Return handle
+    End Method
+
+    // A value a call gave for a live handle, or a panic for one the GPU's stopping freed.
+    @PanicsAtCaller
+    Static Method Checked(value: Int32): Int32
+        If value < 0 Then Panic("this Texture was freed, as the GPU stopped")
+        Return value
+    End Method
+
+    Static Method PixelSize(format: TextureFormat): Int32
+        Select format
+            Case TextureFormat.R8
+                Return 1
+            Case TextureFormat.RGBA16F
+                Return 8
+            Default
+                Return 4
+        End Select
+    End Method
+
+    Static Method Keep(texture: Texture)
+        Local slot = Slot(texture.handle)
+        While textures.Count <= slot
+            textures.Add(Null)
+        End While
+        textures[slot] = texture
+    End Method
+
+    Static Method Slot(handle: UInt64): Int => (handle & 0xFFFFFFFF) As Int
+End Class
+
+/// The Texture a handle is for, from its wrapper if the game still holds one, or a new one, which
+/// holds the handle once; Null for 0.
+Package Function TextureOf(handle: UInt64): Texture?
+    If handle == 0 Then Return Null
+    Local slot = (handle & 0xFFFFFFFF) As Int
+    If slot < textures.Count
+        Local kept = textures[slot]
+        If kept != Null && kept.handle == handle Then Return kept
+    End If
+    If !fbe_texture_retain(handle) Then Panic(LastError())
+    Return Texture(handle)
+End Function

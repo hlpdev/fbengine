@@ -121,6 +121,29 @@ Public Class Gpu
     /// can show.
     @MainThread Public Static Method Pipelines(): Int32 => fbe_gpu_pipelines()
 
+    /// Biases which mipmap every texture is read from, added to the one the GPU picks: negative
+    /// is sharper, and can shimmer, positive blurrier, as a texture detail setting wants; from -16
+    /// to 16, which the GPU's own limit clamps further. It panics for one outside.
+    @MainThread Public Static Method SetLodBias(bias: Float32)
+        If !fbe_gpu_set_lod_bias(bias) Then Panic(LastError())
+    End Method
+
+    /// How every texture's mipmaps are biased, 0 unless set.
+    @MainThread Public Static Method LodBias(): Float32 => fbe_gpu_lod_bias()
+
+    /// Sets the most anisotropic filtering textures filtered LINEAR get, sharper at glancing
+    /// angles: 1 for none, the default, up to 16, which MaxAnisotropy clamps. It panics for one
+    /// outside.
+    @MainThread Public Static Method SetAnisotropy(anisotropy: Float32)
+        If !fbe_gpu_set_anisotropy(anisotropy) Then Panic(LastError())
+    End Method
+
+    /// The most anisotropic filtering textures get, as set.
+    @MainThread Public Static Method Anisotropy(): Float32 => fbe_gpu_anisotropy()
+
+    /// The most anisotropic filtering the GPU has, 1 if it has none, and 0 before it starts.
+    @MainThread Public Static Method MaxAnisotropy(): Float32 => fbe_gpu_max_anisotropy()
+
     /// Whether Vulkan's validation layers check what the GPU's asked to do: in a debug build of
     /// fbengine's DLL when they're installed, or when the FBE_GPU_VALIDATION variable is 1, and
     /// never when it's 0.

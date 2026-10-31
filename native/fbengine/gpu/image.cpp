@@ -153,12 +153,17 @@ bool run_now(const std::function<void(VkCommandBuffer)>& record) {
 }
 
 std::vector<std::uint8_t> read_pixels(const image_t& image, VkImageLayout layout) {
+    return read_pixels(image.image, image.extent, 4, layout);
+}
+
+std::vector<std::uint8_t> read_pixels(VkImage image, VkExtent2D extent, std::uint32_t pixel_size,
+                                      VkImageLayout layout, std::uint32_t level) {
     const device_t* gpu = device();
     if (gpu == nullptr) {
         fail("the GPU hasn't started");
         return {};
     }
-    const VkDeviceSize size = VkDeviceSize{ image.extent.width } * image.extent.height * 4;
+    const VkDeviceSize size = VkDeviceSize{ extent.width } * extent.height * pixel_size;
     const VkBufferCreateInfo buffer_info{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = size,
@@ -186,21 +191,24 @@ std::vector<std::uint8_t> read_pixels(const image_t& image, VkImageLayout layout
     const auto copy = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COPY_BIT);
     const auto copy_read = flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT);
     const bool ran = run_now([&](VkCommandBuffer recording) {
-        barrier(recording,
-                color_transition(image.image, layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, all,
-                                 any, copy, copy_read));
+        VkImageMemoryBarrier2 to_copy = color_transition(
+            image, layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, all, any, copy, copy_read);
+        to_copy.subresourceRange.baseMipLevel = level;
+        barrier(recording, to_copy);
         const VkBufferImageCopy region{
-            .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1 },
-            .imageExtent = {
-                .width = image.extent.width,
-                .height = image.extent.height,
-                .depth = 1,
+            .imageSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = level,
+                .layerCount = 1,
             },
+            .imageExtent = { .width = extent.width, .height = extent.height, .depth = 1 },
         };
-        vkCmdCopyImageToBuffer(recording, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer,
-                               1, &region);
-        barrier(recording, color_transition(image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                            layout, copy, 0, all, any));
+        vkCmdCopyImageToBuffer(recording, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1,
+                               &region);
+        VkImageMemoryBarrier2 back = color_transition(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                                      layout, copy, 0, all, any);
+        back.subresourceRange.baseMipLevel = level;
+        barrier(recording, back);
         // The host reads the buffer once the copy's done.
         const VkMemoryBarrier2 to_host{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,

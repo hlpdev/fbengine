@@ -64,6 +64,17 @@ FBE_API const char* fbe_gpu_pipeline_cache(void);
 // How many pipelines the GPU has made.
 FBE_API int32_t fbe_gpu_pipelines(void);
 
+// How far every texture's mipmaps are biased, added to the level the GPU picks: negative is
+// sharper, positive blurrier; false if it's not -16 to 16. The GPU's limit clamps it.
+FBE_API bool fbe_gpu_set_lod_bias(float bias);
+FBE_API float fbe_gpu_lod_bias(void);
+// The most anisotropy textures filtered LINEAR are sampled with, sharper at glancing angles: 1 for
+// none, up to 16; false if it's not 1 to 16. fbe_gpu_max_anisotropy, the GPU's most, clamps it, 0
+// before the GPU starts and 1 on a GPU with none.
+FBE_API bool fbe_gpu_set_anisotropy(float anisotropy);
+FBE_API float fbe_gpu_anisotropy(void);
+FBE_API float fbe_gpu_max_anisotropy(void);
+
 // How many errors Vulkan's validation layers have found since the program started, which are on
 // in a debug build of the DLL when the layers are there, or when FBE_GPU_VALIDATION is 1 (and off
 // when it's 0); each is printed as it's found.

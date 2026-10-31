@@ -346,15 +346,10 @@ void destroy_window() {
     }
 }
 
-/// Records the frame's commands into the window's image `index`: cleared, then left to be
+/// Records the frame's last pass into the window's image `index`: cleared, then left to be
 /// presented, or, a headless window's, to be copied from. A headless window's one image is drawn
 /// by each frame in flight, which the first barrier orders after the frame before's copies.
 void record(const fbe::gpu::device_t& gpu, VkCommandBuffer commands, std::uint32_t index) {
-    const VkCommandBufferBeginInfo begin{
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .flags = flag<VkCommandBufferUsageFlags>(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT),
-    };
-    vkBeginCommandBuffer(commands, &begin);
     const auto output =
         flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT);
     const auto write = flag<VkAccessFlags2>(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
@@ -390,38 +385,19 @@ void record(const fbe::gpu::device_t& gpu, VkCommandBuffer commands, std::uint32
                                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output, write, copy,
                                         copy_read));
     }
-    vkEndCommandBuffer(commands);
 }
 
-/// Submits the frame's commands, waiting for the swapchain's image and signaling its present, if
-/// there's a swapchain.
-VkResult submit(const fbe::gpu::device_t& gpu, const fbe::gpu::frame_t& frame,
-                std::uint32_t index) {
-    const VkSemaphoreSubmitInfo wait_for{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .semaphore = frame.acquired,
-        .stageMask = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT),
-    };
-    const bool presents = swapchain != VK_NULL_HANDLE;
-    const VkSemaphoreSubmitInfo signal{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .semaphore = presents ? rendered[index] : VK_NULL_HANDLE,
-        .stageMask = flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT),
-    };
-    const VkCommandBufferSubmitInfo commands{
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-        .commandBuffer = frame.commands,
-    };
-    const VkSubmitInfo2 info{
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        .waitSemaphoreInfoCount = presents ? 1U : 0U,
-        .pWaitSemaphoreInfos = &wait_for,
-        .commandBufferInfoCount = 1,
-        .pCommandBufferInfos = &commands,
-        .signalSemaphoreInfoCount = presents ? 1U : 0U,
-        .pSignalSemaphoreInfos = &signal,
-    };
-    return gpu.queue_submit(gpu.queue, 1, &info, frame.done);
+/// Whether the window has images to present this frame in, made again first if it's changed.
+bool presentable(const fbe::gpu::device_t& gpu, bool wait) {
+    if (window == nullptr || fbe_window_minimized()) {
+        return false;
+    }
+    const VkExtent2D pixels = window_pixels();
+    if (stale || wait != vsync || pixels.width != made_for.width ||
+        pixels.height != made_for.height) {
+        make_images(gpu, wait);
+    }
+    return !images.empty();
 }
 
 } // namespace
@@ -472,52 +448,36 @@ void gpu_present(bool wait) {
         return;
     }
     gpu::save_pipeline_cache();
-    if (window == nullptr || fbe_window_minimized()) {
-        return;
-    }
     gpu::device_t& gpu = *found;
-    const VkExtent2D pixels = window_pixels();
-    if (stale || wait != vsync || pixels.width != made_for.width ||
-        pixels.height != made_for.height) {
-        if (!make_images(gpu, wait)) {
-            return;
-        }
-    }
-    if (images.empty()) {
+    // A frame with nowhere to present still runs what it recorded.
+    if (!presentable(gpu, wait)) {
+        gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE);
         return;
     }
 
-    gpu::frame_t& frame = gpu.frames[gpu.frame];
-    vkWaitForFences(gpu.device, 1, &frame.done, VK_TRUE, UINT64_MAX);
+    VkCommandBuffer commands = gpu::frame_commands();
+    const gpu::frame_t& frame = gpu.frames[gpu.frame];
     std::uint32_t index = 0;
     if (swapchain != VK_NULL_HANDLE) {
         const VkResult acquired = vkAcquireNextImageKHR(gpu.device, swapchain, UINT64_MAX,
                                                         frame.acquired, VK_NULL_HANDLE, &index);
-        if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
-            stale = true;
-            return;
-        }
         if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+            stale = stale || acquired == VK_ERROR_OUT_OF_DATE_KHR;
+            gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE);
             return;
         }
         stale = stale || acquired == VK_SUBOPTIMAL_KHR;
     }
-    vkResetFences(gpu.device, 1, &frame.done);
-    vkResetCommandPool(gpu.device, frame.pool, 0);
-    record(gpu, frame.commands, index);
-    const VkResult submitted = gpu::faulted(gpu::fault_t::SUBMIT) ? VK_ERROR_OUT_OF_HOST_MEMORY
-                                                                  : submit(gpu, frame, index);
-    if (submitted != VK_SUCCESS) {
-        // Nothing will signal the fence or wait on the acquire, so they're made again, and the
-        // image acquired and not presented goes with the swapchain.
-        gpu::remake_frame(gpu, frame);
-        stale = stale || swapchain != VK_NULL_HANDLE;
+    record(gpu, commands, index);
+    if (swapchain == VK_NULL_HANDLE) {
+        if (gpu::submit_frame(VK_NULL_HANDLE, VK_NULL_HANDLE)) {
+            ++presented;
+        }
         return;
     }
-    gpu.frame = (gpu.frame + 1) % gpu::frames_in_flight;
-
-    if (swapchain == VK_NULL_HANDLE) {
-        ++presented;
+    if (!gpu::submit_frame(frame.acquired, rendered[index])) {
+        // The image acquired and not presented goes with the swapchain.
+        stale = true;
         return;
     }
     const VkPresentInfoKHR present{

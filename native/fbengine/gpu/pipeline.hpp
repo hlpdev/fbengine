@@ -56,8 +56,8 @@ struct pipeline_desc_t {
 /// How many bytes of push constants every pipeline takes, all that Vulkan guarantees.
 constexpr std::uint32_t push_constant_size = 128;
 
-/// The layout every pipeline has: push constants, to every stage; VK_NULL_HANDLE, with fbe_error's
-/// why, if it can't be made.
+/// The layout every pipeline has: the bindless set as set 0, and push constants, to every stage;
+/// VK_NULL_HANDLE, with fbe_error's why, if it can't be made.
 VkPipelineLayout pipeline_layout();
 
 /// The pipeline `desc` describes, made the first time it's asked for; VK_NULL_HANDLE, with

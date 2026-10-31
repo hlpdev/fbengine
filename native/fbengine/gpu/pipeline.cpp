@@ -364,8 +364,11 @@ VkPipelineLayout pipeline_layout() {
         .stageFlags = flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL),
         .size = push_constant_size,
     };
+    VkDescriptorSetLayout bindless = bindless_layout();
     const VkPipelineLayoutCreateInfo info{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &bindless,
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &constants,
     };

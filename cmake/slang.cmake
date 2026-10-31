@@ -33,7 +33,9 @@ find_program(FBENGINE_SLANGC slangc PATHS "${slang_SOURCE_DIR}/bin" NO_DEFAULT_P
 # Compiles a target's .slang files to SPIR-V as it builds and embeds them in it: `header`, which the
 # target includes by its name, declares a fbe::gpu::shader_t for each, named as its file is, in
 # `namespace`. Every entry point a file has is in its SPIR-V, by its own name; matrices are
-# column-major, as std.math's are; and a warning is an error.
+# column-major, as std.math's are; a file can import the engine's modules, as bindless.slang; and a
+# warning is an error, but for Slang's saying it widened the profile, which it does for any
+# texture sampled and which emits nothing the SPIR-V doesn't use.
 function(fbengine_add_shaders target namespace header)
   set(folder "${CMAKE_CURRENT_BINARY_DIR}/${target}_shaders")
   set(shaders "")
@@ -46,6 +48,7 @@ function(fbengine_add_shaders target namespace header)
       OUTPUT "${spirv}"
       COMMAND "${FBENGINE_SLANGC}" "${source}" -target spirv -profile spirv_1_5
               -fvk-use-entrypoint-name -matrix-layout-column-major -O2 -warnings-as-errors all
+              -warnings-disable 41012 -I "${PROJECT_SOURCE_DIR}/native/fbengine/shaders"
               -o "${spirv}" -depfile "${spirv}.d"
       DEPENDS "${source}"
       DEPFILE "${spirv}.d"
