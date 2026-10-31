@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FB_VERSION: 1.0.0
+  FB_VERSION: 1.0.1
 
 jobs:
   native:
@@ -64,12 +64,6 @@ jobs:
           tar -xf native-${{ matrix.target }}.tar
           fb --version
           for package in packages/*/; do fb test "$package"; done
-
-      # fb 1.0.0's Linux release lacks glibc's gnu/stubs-64.h, so fb-bindgen reads the headers on
-      # Windows until 1.0.1 has it.
-      - name: Bindings
-        if: runner.os == 'Windows'
-        run: sh tools/bindgen.sh --check
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' packages/fbengine/project.toml)"
           output="$(fb --color never run examples/hello | tr -d '\r')"
           printf '%s\n' "$output"
@@ -167,6 +161,8 @@ jobs:
           echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
           export VK_LOADER_DEBUG=error,warn
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          # Every target, so ctest finds every test it lists: the C++ tests, the packages', and the
+          # examples'.
           cmake --build build --parallel
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure || {
             if [ "$RUNNER_OS" = Windows ]; then
@@ -194,3 +190,4 @@ jobs:
           pipx install clang-format==19.1.5
           git ls-files '*.h' '*.hpp' '*.c' '*.cpp' | xargs clang-format --dry-run -Werror
           fb fmt --check packages examples
+          sh tools/bindgen.sh --check
