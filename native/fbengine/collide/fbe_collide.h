@@ -3,8 +3,9 @@
 
 // Collisions in 2D, on the CPU: masks, an image's solid pixels by an alpha threshold, and whether
 // they meet each other, rectangles, and points, each placed as the canvas draws a sprite. A screen
-// pixel is a placed mask's where its middle maps back into one of the mask's solid pixels, as a
-// sprite sampled NEAREST draws it; touching isn't meeting.
+// pixel is a placed mask's where the GPU draws one of its solid pixels there, sampled NEAREST: its
+// corners where the canvas puts them, snapped to 256ths of a pixel, its two triangles, and each
+// pixel whose middle's inside one, or exactly on a left or top edge of it; touching isn't meeting.
 
 #include "../core/fbe_core.h"
 

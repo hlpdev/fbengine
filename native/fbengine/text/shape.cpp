@@ -37,6 +37,19 @@ constexpr float slant = 0.2F;
 /// Emboldening that widens the advances too, not only the glyphs.
 constexpr hb_bool_t widening = 0;
 
+/// The em glyphs are rasterized at for `pixels` an em, 26.6.
+std::int32_t em_of(float pixels) {
+    return static_cast<std::int32_t>(std::lround(std::min(pixels, largest_em) * 64.0F));
+}
+
+/// `value` rounded, kept to what a canvas can draw at, and 0 if it isn't a number.
+std::int32_t drawable(double value) {
+    if (std::isnan(value)) {
+        return 0;
+    }
+    return static_cast<std::int32_t>(std::clamp(std::round(value), -farthest, farthest));
+}
+
 /// `text` as code points, U+FFFD for each sequence that isn't well-formed UTF-8.
 std::u32string decoded(std::string_view text) {
     std::u32string points;
@@ -155,10 +168,11 @@ struct source_t {
 };
 
 /// A font's faces, in the order its glyphs come from them: its own, its fallbacks', then the OS's,
-/// each of the OS's read whole only once it gives a glyph, its coverage telling before that.
+/// each of the OS's read whole only once it gives a glyph, its coverage telling before that; each
+/// drawing a glyph or not as it does at `pixels` an em, 26.6.
 class sources_t {
 public:
-    explicit sources_t(const font_t& font) : m_font(font) {
+    sources_t(const font_t& font, std::int32_t pixels) : m_font(font), m_pixels(pixels) {
         m_own.push_back(
             { .face = font.face.get(), .bolder = font.bolder, .slanted = font.slanted });
         for (const std::uint64_t handle : font.fallbacks) {
@@ -232,8 +246,9 @@ public:
         return m_own.front();
     }
 
-    static bool draws_all(face_t& face, std::span<const char32_t> points) {
-        return std::ranges::all_of(points, [&](char32_t point) { return draws(face, point); });
+    [[nodiscard]] bool draws_all(face_t& face, std::span<const char32_t> points) const {
+        return std::ranges::all_of(points,
+                                   [&](char32_t point) { return draws(face, point, m_pixels); });
     }
 
 private:
@@ -269,6 +284,7 @@ private:
     }
 
     const font_t& m_font;
+    std::int32_t m_pixels = 0;
     std::vector<source_t> m_own;
     /// The OS's faces taken so far, by their place in its list; a deque's, so they stay put.
     std::deque<std::pair<std::size_t, source_t>> m_system;
@@ -349,7 +365,7 @@ std::vector<piece_t> pieces(const std::u32string& line, std::size_t start, std::
         const bool common = hb_unicode_script(unicode, line[at]) == HB_SCRIPT_COMMON &&
                             presentation != presentation_t::EMOJI;
         const source_t* source = nullptr;
-        if (!found.empty() && common && sources_t::draws_all(*found.back().source.face, cluster)) {
+        if (!found.empty() && common && sources.draws_all(*found.back().source.face, cluster)) {
             source = &found.back().source;
         } else {
             source = sources.chosen(cluster, presentation);
@@ -501,7 +517,7 @@ void line_metrics(const font_t& font, float pixels, float& height, float& ascent
 /// widest line, and how many lines it has.
 float shaped(const font_t& font, std::string_view text, float pixels, std::vector<shaped_t>* into,
              std::size_t& lines) {
-    sources_t sources(font);
+    sources_t sources(font, em_of(pixels));
     const std::vector<std::u32string> split = lines_of(text);
     float widest = 0.0F;
     for (std::size_t index = 0; index < split.size(); ++index) {
@@ -532,42 +548,51 @@ bool lay_out(std::uint64_t font, std::string_view text, float scale, layout_t& i
     float line_height = 0.0F;
     line_metrics(*found, pixels, line_height, into.ascent);
     into.height = line_height * static_cast<float>(lines);
+    const bool placeable = std::ranges::all_of(glyphs, [](const shaped_t& each) {
+        return std::isfinite(each.x) && std::isfinite(each.up);
+    });
+    if (!placeable || !std::isfinite(into.width) || !std::isfinite(into.height) ||
+        !std::isfinite(into.ascent)) {
+        return fbe::fail(
+            "a font's size times its scale is past what its lines and advances can be");
+    }
     // Rasterized at 512 pixels an em at most, and drawn bigger past it.
     const float rastered = std::min(pixels, largest_em);
     const double enlarged = static_cast<double>(pixels) / rastered;
-    const auto em = static_cast<std::int32_t>(std::lround(rastered * 64.0F));
+    const std::int32_t em = em_of(pixels);
     for (const shaped_t& each : glyphs) {
-        // At a whole pixel and a quarter of one across, and a whole pixel down, kept to what a
-        // canvas can draw at.
+        // At a whole pixel and a quarter of one across, a quarter of 4 the next pixel's 0, and a
+        // whole pixel down; or at the nearest pixel across, where its glyph isn't moved a
+        // quarter: one drawn bigger, a color glyph, or a strike's bitmap.
         const double x = std::clamp(static_cast<double>(each.x), -farthest, farthest);
         const double floored = std::floor(x);
-        auto whole = static_cast<std::int32_t>(floored);
         auto quarter = static_cast<std::int32_t>(std::lround((x - floored) * 4.0));
-        if (quarter == 4 || enlarged > 1.0) {
-            whole += quarter == 4 ? 1 : 0;
-            quarter = 0;
-        }
-        const double down = std::clamp(
+        double whole = floored + (quarter == 4 ? 1.0 : 0.0);
+        quarter = enlarged > 1.0 ? 0 : quarter % 4;
+        const double baseline =
             std::round(static_cast<double>(line_height) * static_cast<double>(each.line)) -
-                std::round(static_cast<double>(each.up)),
-            -farthest, farthest);
-        const auto baseline = static_cast<std::int32_t>(down);
+            std::round(static_cast<double>(each.up));
         const glyph_t* glyph = rasterized(*each.source.face, each.glyph, em, each.source.bolder,
                                           each.source.slanted, quarter);
         if (glyph == nullptr || glyph->place.empty()) {
             continue;
         }
         atlas().used(glyph->page);
+        const double grown = enlarged * glyph->scale;
+        if (grown > 1.0 || !glyph->shifted) {
+            whole = std::round(x);
+        }
+        // In doubles, each kept to the canvas's reach once it's added up.
         const auto sized = [&](std::int32_t length) {
-            return static_cast<std::int32_t>(std::lround(static_cast<double>(length) * enlarged));
+            return std::round(static_cast<double>(length) * grown);
         };
         into.glyphs.push_back({
             .page = glyph->page,
             .source = glyph->place,
-            .x = whole + sized(glyph->left),
-            .y = baseline - sized(glyph->top),
-            .width = sized(glyph->place.width),
-            .height = sized(glyph->place.height),
+            .x = drawable(whole + sized(glyph->left)),
+            .y = drawable(baseline - sized(glyph->top)),
+            .width = drawable(sized(glyph->place.width)),
+            .height = drawable(sized(glyph->place.height)),
         });
     }
     into.generation = atlas().generation();
@@ -585,6 +610,9 @@ bool measure(std::uint64_t font, std::string_view text, float& width, float& hei
     float ascent = 0.0F;
     line_metrics(*found, found->size, line_height, ascent);
     height = line_height * static_cast<float>(lines);
+    if (!std::isfinite(width) || !std::isfinite(height)) {
+        return fbe::fail("a font's size is past what its lines and advances can be");
+    }
     return true;
 }
 
@@ -604,7 +632,7 @@ FBE_API bool fbe_text_has_glyphs(uint64_t font, const char* text) {
     if (found == nullptr) {
         return false;
     }
-    fbe::text::sources_t sources(*found);
+    fbe::text::sources_t sources(*found, fbe::text::em_of(found->size));
     for (const std::u32string& line : fbe::text::lines_of(text != nullptr ? text : "")) {
         for (const char32_t point : line) {
             const std::span<const char32_t> alone(&point, 1);

@@ -10,7 +10,8 @@ Import std.math
 Import "./c/fbe_text"
 Import "./window"
 
-/// What a font's style asks for: bold and italic, which a face that isn't is made, and an
+/// What a font's style asks for: bold and italic, which a face that isn't is made, though not its
+/// color glyphs, as emoji, or a bitmap font's, which are drawn as the font has them, and an
 /// underline, which the canvas draws.
 Public Struct FontStyle
     Public Field Bold: Bool
@@ -171,7 +172,7 @@ Public Final Class Font Implements Printable
     @MainThread Public Method UnderlineThickness(): Float32 => metrics.underline_thickness
 
     /// The size `text` takes: its widest line's advance, and its lines, by "\n", times its line
-    /// height.
+    /// height. Panics for a font so big its lines or advances are past a Float32's.
     @MainThread Public Method Measure(text: String): Vec2
         Local size = fbe_text_size_t(0.0, 0.0)
         Local measured = False

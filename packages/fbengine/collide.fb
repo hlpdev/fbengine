@@ -11,9 +11,10 @@ Import "./window"
 /// Where a mask is drawn, as the canvas draws a sprite: its handle at (X, Y), turned Rotation
 /// radians clockwise on the screen about it, and scaled from it, a negative scale mirroring it. It's
 /// in the canvas's own pixels, before the pen's origin, which a game adds itself where it draws with
-/// one. A pixel exactly on its edge is its own as the GPU's top-left rule says: on a left or top
-/// edge, on the screen, it is, on a right or bottom one it isn't. A Rotation within a few of a
-/// Float32's steps of a quarter turn, as Pi / 2.0 is, is one exactly, as the GPU draws it.
+/// one. Its corners are where the canvas puts a sprite's, snapped to 256ths of a pixel, as the
+/// GPU's are, so a turn near a quarter, as Pi / 2.0 is, is one wherever the GPU draws it as one,
+/// and not where it doesn't. A pixel exactly on its edge is its own as the GPU's top-left rule
+/// says: on a left or top edge, on the screen, it is, on a right or bottom one it isn't.
 Public Struct Placement
     Public Field X: Float32
     Public Field Y: Float32

@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include FT_PARAMETER_TAGS_H
 #include FT_TRUETYPE_TABLES_H
 
 #ifdef _WIN32
@@ -127,8 +128,16 @@ std::shared_ptr<face_t> open_face(std::vector<std::uint8_t> bytes, std::int32_t 
     }
     auto face = std::make_shared<face_t>();
     face->bytes = std::move(bytes);
-    const FT_Error error = FT_New_Memory_Face(
-        started, face->bytes.data(), static_cast<FT_Long>(face->bytes.size()), index, &face->ft);
+    // An sbix font's pictures are PNGs, which FreeType isn't built to read here, so it's taken as
+    // its outlines, as it isn't by default.
+    FT_Parameter ignore_sbix{ .tag = FT_PARAM_TAG_IGNORE_SBIX, .data = nullptr };
+    FT_Open_Args arguments{};
+    arguments.flags = FT_OPEN_MEMORY | FT_OPEN_PARAMS;
+    arguments.memory_base = face->bytes.data();
+    arguments.memory_size = static_cast<FT_Long>(face->bytes.size());
+    arguments.num_params = 1;
+    arguments.params = &ignore_sbix;
+    const FT_Error error = FT_Open_Face(started, &arguments, index, &face->ft);
     if (error != 0) {
         face->ft = nullptr;
         // Too short for a font, FreeType's stream ends early.
