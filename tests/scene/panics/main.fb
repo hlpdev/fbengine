@@ -200,6 +200,24 @@ Select arguments[0]
         Local gone = Camera()
         gone.Free()
         gone.Pick(Vec2(1, 1))
+    Case "sprite-scale"
+        Sprite().SetSpriteScale(Vec2(-1, 1))
+    Case "sprite-freed"
+        Local gone = Sprite()
+        gone.Free()
+        gone.SetHandle(Vec2(0, -1))
+    Case "tween-range"
+        Pivot().TweenedMatrix(2)
+    Case "capture-freed"
+        Local gone = World()
+        gone.Free()
+        gone.Capture()
+    Case "fixed-step-rate"
+        FixedStep(0)
+    Case "fixed-step-most"
+        FixedStep(60, 0)
+    Case "fixed-step-steps"
+        FixedStep(60).Steps(-1)
     Default
         Panic("no case {arguments[0]}")
 End Select

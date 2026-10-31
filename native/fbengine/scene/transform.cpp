@@ -380,6 +380,59 @@ FBE_API bool fbe_entity_align(uint64_t entity, float x, float y, float z, int32_
     return true;
 }
 
+FBE_API bool fbe_world_capture(uint64_t world) {
+    const std::uint32_t found = fbe::scene::world_slot(world);
+    if (found == none) {
+        return false;
+    }
+    fbe::scene::entities_t& entities = scene().entities;
+    for (std::uint32_t entity = 0; entity < entities.slots.size(); ++entity) {
+        if (entities.world[entity] != found ||
+            !entities.slots.find(entities.slots.handle(entity))) {
+            continue;
+        }
+        entities.captured_position[entity] = entities.position[entity];
+        entities.captured_rotation[entity] = entities.rotation[entity];
+        entities.captured_scale[entity] = entities.scale[entity];
+        entities.captured[entity] = true;
+    }
+    return true;
+}
+
+FBE_API bool fbe_entity_tweened_matrix(uint64_t entity, float tween, fbe_mat4_t* matrix) {
+    const std::uint32_t slot = entity_slot(entity);
+    if (slot == none) {
+        return false;
+    }
+    if (std::isnan(tween) || tween < 0.0F || tween > 1.0F) {
+        return fbe::fail(std::format("a tween is 0 to 1, not {}", tween));
+    }
+    const fbe::scene::entities_t& entities = scene().entities;
+    // From the top down, each one's local transform part way from its capture.
+    std::vector<std::uint32_t> chain;
+    for (std::uint32_t at = slot; at != none; at = entities.parent[at]) {
+        chain.push_back(at);
+    }
+    fbe::scene::mat4_t found;
+    for (const std::uint32_t at : std::views::reverse(chain)) {
+        fbe::scene::vec3_t position = entities.position[at];
+        fbe::scene::quat_t rotation = entities.rotation[at];
+        fbe::scene::vec3_t scale = entities.scale[at];
+        if (entities.captured[at]) {
+            const fbe::scene::vec3_t moved = position - entities.captured_position[at];
+            const fbe::scene::vec3_t grown = scale - entities.captured_scale[at];
+            position = entities.captured_position[at] + moved * tween;
+            rotation = fbe::scene::slerp(entities.captured_rotation[at], rotation, tween);
+            scale = entities.captured_scale[at] + grown * tween;
+        }
+        found = found * fbe::scene::compose(position, rotation, scale);
+    }
+    for (std::size_t i = 0; i < found.m.size(); ++i) {
+        matrix->m[i] = found.m[i];
+    }
+    return true;
+}
+
 FBE_API bool fbe_entity_matrix(uint64_t entity, int32_t space, fbe_mat4_t* matrix) {
     const std::uint32_t slot = entity_in(entity, space);
     if (slot == none) {

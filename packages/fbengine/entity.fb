@@ -8,6 +8,7 @@ Import "./c/fbe_scene"
 Import "./camera"
 Import "./light"
 Import "./mesh"
+Import "./sprite"
 Import "./window"
 Import "./world"
 
@@ -21,6 +22,8 @@ Public Enum EntityKind
     LIGHT = 2
     /// A Mesh, which draws a Geometry.
     MESH = 3
+    /// A Sprite, which draws a quad facing the camera.
+    SPRITE = 4
 End Enum
 
 // One wrapper for each live entity, by its handle's slot.
@@ -287,6 +290,8 @@ Package Function EntityOf(handle: UInt64): Entity?
             Return Light(handle)
         Case FBE_ENTITY_MESH
             Return Mesh(handle)
+        Case FBE_ENTITY_SPRITE
+            Return Sprite(handle)
     End Select
     Panic("an entity of kind {kind} has no wrapper")
 End Function

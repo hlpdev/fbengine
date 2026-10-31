@@ -22,7 +22,7 @@ namespace {
 
 /// The kinds fbe_entity_create takes.
 bool valid_kind(std::int32_t kind) {
-    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_MESH;
+    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_SPRITE;
 }
 
 /// Where an entity sits: its parent's children, or its world's roots.
@@ -74,6 +74,10 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.blocks_sight.push_back(false);
         entities.colliders.emplace_back();
         entities.pickable.push_back(none);
+        entities.captured_position.emplace_back();
+        entities.captured_rotation.emplace_back();
+        entities.captured_scale.emplace_back();
+        entities.captured.push_back(false);
     } else {
         entities.kind[entity] = kind;
         entities.world[entity] = world;
@@ -83,6 +87,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.hidden[entity] = false;
         entities.blocks_sight[entity] = false;
         entities.colliders[entity] = {};
+        entities.captured[entity] = false;
     }
     reset_transform(entity);
     add_component(entity);

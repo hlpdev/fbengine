@@ -19,6 +19,7 @@ extern "C" {
 #define FBE_ENTITY_CAMERA 1
 #define FBE_ENTITY_LIGHT  2
 #define FBE_ENTITY_MESH   3
+#define FBE_ENTITY_SPRITE 4
 
 // The space a transform is in: the entity's parent's, or the world's.
 #define FBE_SPACE_LOCAL 0
@@ -97,6 +98,13 @@ extern "C" {
 
 // Collision groups are 1 to FBE_COLLISION_GROUPS - 1; 0 is none.
 #define FBE_COLLISION_GROUPS 1024
+
+// How a sprite turns toward the camera drawing it: parallel to the camera's view, whatever the
+// entity's own turn and scale; as the entity is turned and scaled; or upright on the entity's own
+// up, turned toward the camera about it.
+#define FBE_SPRITE_BILLBOARD 0
+#define FBE_SPRITE_FIXED     1
+#define FBE_SPRITE_UPRIGHT   2
 
 // What picks hit an entity as: nothing; its collision ellipsoid; its collision box; or its mesh's
 // triangles, from their fronts.
@@ -541,8 +549,37 @@ FBE_API bool fbe_mesh_tint(uint64_t mesh, fbe_color_t* tint);
 // with AUTO and OPAQUE settled by alpha as their docs say; -1 for a surface it doesn't have.
 FBE_API int32_t fbe_mesh_blend(uint64_t mesh, int32_t surface);
 
+// Sprites: entities that draw a quad, from (-1, -1) to (1, 1) in its own plane before its size,
+// its front facing +Z, in a material or white with none, turned toward the camera drawing it by
+// its view mode. FBE_SPRITE_BILLBOARD, 1 by 1, its middle at its place, unrolled, white, at first.
+//
+// The material it draws in, which it holds, 0 for none, and its own color and alpha, which
+// multiply the material's, as a mesh's tint does: alpha 0 to 1, colors any finite value.
+FBE_API bool fbe_sprite_set_material(uint64_t sprite, uint64_t material);
+FBE_API uint64_t fbe_sprite_material(uint64_t sprite);
+FBE_API bool fbe_sprite_set_tint(uint64_t sprite, float r, float g, float b, float a);
+FBE_API bool fbe_sprite_tint(uint64_t sprite, fbe_color_t* tint);
+// How it turns toward the camera, an FBE_SPRITE_ mode; -1 for an entity that isn't a sprite.
+FBE_API bool fbe_sprite_set_view_mode(uint64_t sprite, int32_t mode);
+FBE_API int32_t fbe_sprite_view_mode(uint64_t sprite);
+// The quad's half-width and half-height, 0 or more, apart from the entity's scale, which only
+// FBE_SPRITE_FIXED takes.
+FBE_API bool fbe_sprite_set_size(uint64_t sprite, float half_width, float half_height);
+FBE_API bool fbe_sprite_size(uint64_t sprite, fbe_vec2_t* size);
+// Which point of the quad is at the entity's place, in its own -1 to 1, y up: (0, -1) is its
+// bottom middle.
+FBE_API bool fbe_sprite_set_handle(uint64_t sprite, float x, float y);
+FBE_API bool fbe_sprite_handle(uint64_t sprite, fbe_vec2_t* handle);
+// How far the quad is turned in its own plane, in radians, counterclockwise as seen.
+FBE_API bool fbe_sprite_set_roll(uint64_t sprite, float radians);
+FBE_API float fbe_sprite_roll(uint64_t sprite);
+// The quad's matrix in the world as a camera, or any entity, sees it: its corners (+-1, +-1, 0)
+// through it are where it's drawn.
+FBE_API bool fbe_sprite_matrix(uint64_t sprite, uint64_t camera, fbe_mat4_t* matrix);
+
 // Visibility. Whether a camera might see an entity, in a target of this size: a mesh's box of its
-// geometry, turned and scaled with it, or another entity's position, against the six planes of
+// geometry, turned and scaled with it, a sprite's box of its reach, however it turns, or another
+// entity's position, against the six planes of
 // the camera's view, near and far included; in view unless the whole box is behind one plane, so
 // something just past a corner of the view can count, as culling allows. Only the frustum
 // counts: nothing in front hides it, and hiding the entity doesn't; an entity in another World
@@ -645,6 +682,15 @@ FBE_API int32_t fbe_entity_pick_mode(uint64_t entity);
 // for a freed World or entity, a radius below 0, or a point that isn't finite.
 FBE_API int32_t fbe_world_pick(uint64_t world, const fbe_vec3_t* from, const fbe_vec3_t* to,
                                float radius, uint64_t ignore, fbe_pick_t* pick);
+
+// Keeps every entity of a World's transform, its local position, rotation, and scale, as it is
+// now, for drawing between then and later: a fixed step captures before each step, and draws
+// part way between the last two.
+FBE_API bool fbe_world_capture(uint64_t world);
+// An entity's matrix to the world `tween` of the way, 0 to 1, from its World's last capture to now,
+// each entity above it tweened too: positions and scales lerped, rotations slerped. One made since
+// the capture is where it is now. False for a tween outside 0 to 1.
+FBE_API bool fbe_entity_tweened_matrix(uint64_t entity, float tween, fbe_mat4_t* matrix);
 
 // Copies an entity and everything under it, as the last child of `parent`, or at the top of
 // `world` when `parent` is 0; each copy has its original's name, transform, and settings, and

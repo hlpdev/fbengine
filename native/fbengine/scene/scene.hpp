@@ -129,6 +129,20 @@ struct mesh_t {
     std::array<float, 4> tint{ 1.0F, 1.0F, 1.0F, 1.0F };
 };
 
+/// A sprite: its quad's material, which it holds, or none, its own color, how it turns toward the
+/// camera, its half-size, which point is at its place, and its roll in its own plane.
+struct sprite_t {
+    std::uint32_t entity = none;
+    std::uint32_t material = none;
+    std::array<float, 4> tint{ 1.0F, 1.0F, 1.0F, 1.0F };
+    std::int32_t view_mode = 0;
+    float size_x = 1.0F;
+    float size_y = 1.0F;
+    float handle_x = 0.0F;
+    float handle_y = 0.0F;
+    float roll = 0.0F;
+};
+
 /// Every entity's data, a field to an array, indexed by slot.
 struct entities_t {
     slots_t slots{ ENTITY_KIND };
@@ -158,6 +172,12 @@ struct entities_t {
     std::vector<collider_t> colliders;
     /// Its entry in scene_t's pickables, or none.
     std::vector<std::uint32_t> pickable;
+    /// Its local transform at its World's last capture, which drawing tweens from, and whether it
+    /// was there for it.
+    std::vector<vec3_t> captured_position;
+    std::vector<quat_t> captured_rotation;
+    std::vector<vec3_t> captured_scale;
+    std::vector<bool> captured;
 };
 
 /// An entity picks can hit, with its box in the world, which picks read one after another before
@@ -228,6 +248,7 @@ struct scene_t {
     /// Every light, in no order, each knowing its entity.
     std::vector<light_t> lights;
     std::vector<mesh_t> meshes;
+    std::vector<sprite_t> sprites;
     slots_t geometry_slots{ GEOMETRY_KIND };
     std::vector<geometry_t> geometries;
     slots_t material_slots{ MATERIAL_KIND };
@@ -273,6 +294,14 @@ void add_mesh(std::uint32_t entity);
 void remove_mesh(std::uint32_t entity);
 /// The live mesh a handle is for, or null, with fbe_error saying so.
 mesh_t* mesh_of(std::uint64_t handle);
+void add_sprite(std::uint32_t entity);
+void remove_sprite(std::uint32_t entity);
+/// The live sprite a handle is for, or null, with fbe_error saying so.
+sprite_t* sprite_of(std::uint64_t handle);
+/// A sprite's quad's matrix in the world as an entity, a camera, sees it.
+mat4_t sprite_matrix(std::uint32_t entity, std::uint32_t camera);
+/// The box in the world a sprite's quad stays in, however it turns.
+void sprite_bounds(std::uint32_t entity, vec3_t& min, vec3_t& max);
 
 /// A new geometry, held once, as its handle is.
 std::uint32_t make_geometry();
