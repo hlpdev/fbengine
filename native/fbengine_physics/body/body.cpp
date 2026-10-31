@@ -333,6 +333,10 @@ FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion_type) {
         return fail(not_dynamic(found->weighed, found->body().GetShape()->MustBeStatic()));
     }
     found->bodies().SetMotionType(found->id, type, JPH::EActivation::Activate);
+    // A kinematic body is never continuous, as fbe_body_set_continuous has it.
+    if (type == JPH::EMotionType::Kinematic) {
+        found->bodies().SetMotionQuality(found->id, JPH::EMotionQuality::Discrete);
+    }
     // A kinematic sensor notices what doesn't move, as fbe_body_set_sensor has it.
     JPH::Body& made = found->body();
     made.SetCollideKinematicVsNonDynamic(made.IsSensor() && made.IsKinematic());
@@ -567,6 +571,10 @@ FBE_PHYSICS_API bool fbe_body_set_sensor(uint64_t body, bool sensor) {
     }
     JPH::Body& made = found->body();
     made.SetIsSensor(sensor);
+    // A sensor is never continuous, as fbe_body_set_continuous has it.
+    if (sensor && !made.IsStatic()) {
+        found->bodies().SetMotionQuality(found->id, JPH::EMotionQuality::Discrete);
+    }
     // A kinematic sensor notices what doesn't move, and other kinematic bodies, too.
     made.SetCollideKinematicVsNonDynamic(sensor && made.IsKinematic());
     found->bodies().ActivateBody(found->id);
@@ -605,6 +613,19 @@ FBE_PHYSICS_API bool fbe_body_move_to(uint64_t body, const fbe_body_vec3_t* posi
     if (!std::isfinite(seconds) || seconds <= 0.0F) {
         return fail(std::format("a body's moved there over more than 0 seconds, not {}", seconds));
     }
+    const fp_mode_t mode;
+    // Its velocities, as Jolt works them out, which a time too short for the way makes too fast
+    // for Jolt, which squares them, as it does a dynamic body's that one pushes.
+    const JPH::Body& moved = found->body();
+    const JPH::Vec3 center = turned * moved.GetShape()->GetCenterOfMass();
+    const JPH::Vec3 way = at + center - moved.GetCenterOfMassPosition();
+    const JPH::Vec3 linear = way / seconds;
+    const JPH::Quat turn = turned * moved.GetRotation().Conjugated();
+    const JPH::Vec3 angular = turn.GetAngularVelocity(seconds);
+    if (!std::isfinite(linear.LengthSq()) || !std::isfinite(angular.LengthSq())) {
+        return fail(std::format(
+            "a body moved there over {} seconds moves faster than a float holds", seconds));
+    }
     found->bodies().MoveKinematic(found->id, at, turned, seconds);
     return true;
 }
@@ -620,6 +641,15 @@ FBE_PHYSICS_API bool fbe_body_set_continuous(uint64_t body, bool continuous) {
     const body_t* found = find_moving(body, "collisions to find along its way");
     if (found == nullptr) {
         return false;
+    }
+    // Jolt's sweeps are of dynamic bodies, and go through sensors.
+    if (continuous && found->body().IsKinematic()) {
+        return fail("a kinematic body goes where it's moved, so it has no collisions to find along "
+                    "its way");
+    }
+    if (continuous && found->body().IsSensor()) {
+        return fail(
+            "a sensor collides with nothing, so it has no collisions to find along its way");
     }
     found->bodies().SetMotionQuality(found->id, continuous ? JPH::EMotionQuality::LinearCast
                                                            : JPH::EMotionQuality::Discrete);

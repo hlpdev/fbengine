@@ -152,16 +152,19 @@ FBE_PHYSICS_API int32_t fbe_body_touching(uint64_t body, uint64_t* bodies, int32
 // Moves a kinematic `body` to `position`, turned to `rotation`, over the next `seconds`, more than
 // 0, by the velocities that take it there, so it pushes what it meets on the way, as a door or a
 // lift a game drives does; it keeps them until it's moved again or given others. False if it isn't
-// a body, isn't kinematic, is a character's, or a number's out of range.
+// a body, isn't kinematic, is a character's, a number's out of range, or the time's so short that
+// a velocity's square, which Jolt works out, is more than a float holds.
 FBE_PHYSICS_API bool fbe_body_move_to(uint64_t body, const fbe_body_vec3_t* position,
                                       const fbe_body_quat_t* rotation, float seconds);
 
 // Whether `body`'s collisions are found along the way it moves in a step, not only where it ends
-// up, so a fast one, as a bullet, never passes through a thin wall, for a little more work; false
-// for a static body.
+// up, so a fast one, as a bullet, never passes through a thin wall, for a little more work: only a
+// dynamic body's that isn't a sensor, which a body made kinematic or a sensor stops being. A
+// sensor can miss a fast body, which Jolt's sweeps go through.
 FBE_PHYSICS_API bool fbe_body_continuous(uint64_t body);
 
-// Makes them so, or not; false if it isn't a body, or is static.
+// Makes them so, or not; false if it isn't a body, or is static, or it's made so of a kinematic
+// body or a sensor.
 FBE_PHYSICS_API bool fbe_body_set_continuous(uint64_t body, bool continuous);
 
 // Whether `body` sleeps once it's rested a while, as at first; false for a static body.

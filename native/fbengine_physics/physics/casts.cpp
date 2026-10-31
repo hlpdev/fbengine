@@ -16,6 +16,8 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
+#include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -78,6 +80,64 @@ bool cast_of(std::uint64_t world, std::uint64_t ignore, cast_t& cast) {
     }
     return true;
 }
+
+JPH::BodyID body_of(const JPH::RayCastResult& hit) {
+    return hit.mBodyID;
+}
+
+JPH::BodyID body_of(const JPH::ShapeCastResult& hit) {
+    return hit.mBodyID2;
+}
+
+// Whether `a` is nearer than `b`, or as near and of a lesser body, or of the same body and a lesser
+// part, so of hits as near, which is first is the same however Jolt's broad phase holds its bodies,
+// which a restore doesn't put back.
+template <typename Hit>
+bool nearer(const Hit& a, const Hit& b) {
+    if (a.GetEarlyOutFraction() != b.GetEarlyOutFraction()) {
+        return a.GetEarlyOutFraction() < b.GetEarlyOutFraction();
+    }
+    if (body_of(a) != body_of(b)) {
+        return body_of(a) < body_of(b);
+    }
+    return a.mSubShapeID2.GetValue() < b.mSubShapeID2.GetValue();
+}
+
+// The nearest hit, by nearer(). Jolt's collector of the closest leaves out the bodies whose
+// bounding boxes the cast reaches no nearer than the hit it has, but a body's box can be reached a
+// little after its shape is, so of two hits as near it keeps the first its broad phase gives it,
+// whose order a restore changes. This one leaves out only what's `margin` further, a fraction of
+// the cast: for a ray, whose hits are worked out exactly, a little more than rounding can put a
+// box after its shape; and for a swept shape, whose hits are found to within a tolerance, which
+// can be a long way along a cast that grazes, nothing.
+template <typename Collector>
+class nearest_t final : public Collector {
+public:
+    using hit_t = Collector::ResultType;
+
+    explicit nearest_t(float margin) : m_margin(margin) {}
+
+    void AddHit(const hit_t& hit) override {
+        if (!m_hit.has_value() || nearer(hit, *m_hit)) {
+            m_hit = hit;
+            const float further = hit.GetEarlyOutFraction() + m_margin;
+            if (further < Collector::GetEarlyOutFraction()) {
+                Collector::UpdateEarlyOutFraction(further);
+            }
+        }
+    }
+
+    [[nodiscard]] const std::optional<hit_t>& hit() const {
+        return m_hit;
+    }
+
+private:
+    float m_margin;
+    std::optional<hit_t> m_hit;
+};
+
+// A ten thousandth of a ray past its nearest hit, a tenth of a millimeter in a meter.
+constexpr float ray_margin = 1e-4F;
 
 // How long `v` is, in doubles, which a float's square of can't overflow.
 double length(const fbe_physics_vec3_t& v) {
@@ -179,14 +239,20 @@ FBE_PHYSICS_API bool fbe_physics_cast_ray(uint64_t world, const fbe_physics_vec3
     if (!cast_of(world, ignore, cast) || !ray_of(*origin, *direction, distance, ray)) {
         return false;
     }
-    JPH::RayCastResult result;
+    const fp_mode_t mode;
+    // As Jolt's cast of a ray for its closest hit: into convex shapes from inside them, and into
+    // the backs of triangles.
+    JPH::RayCastSettings settings;
+    settings.mBackFaceModeTriangles = JPH::EBackFaceMode::CollideWithBackFaces;
+    nearest_t<JPH::CastRayCollector> collector(ray_margin);
     const layer_mask_t mask(layers);
     const bodies_but_t bodies(cast.ignore);
-    if (!cast.world->system.GetNarrowPhaseQueryNoLock().CastRay(
-            ray, result, JPH::BroadPhaseLayerFilter(), mask, bodies)) {
+    cast.world->system.GetNarrowPhaseQueryNoLock().CastRay(
+        ray, settings, collector, JPH::BroadPhaseLayerFilter(), mask, bodies);
+    if (!collector.hit().has_value()) {
         return fail("the ray hits nothing");
     }
-    *hit = hit_of(*cast.world, ray, distance, result);
+    *hit = hit_of(*cast.world, ray, distance, *collector.hit());
     return true;
 }
 
@@ -200,22 +266,14 @@ FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physi
     if (!cast_of(world, ignore, cast) || !ray_of(*origin, *direction, distance, ray)) {
         return -1;
     }
+    const fp_mode_t mode;
     JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
     const layer_mask_t mask(layers);
     const bodies_but_t bodies(cast.ignore);
     cast.world->system.GetNarrowPhaseQueryNoLock().CastRay(
         ray, JPH::RayCastSettings(), collector, JPH::BroadPhaseLayerFilter(), mask, bodies);
-    // Nearest first, and hits as near in the same order however Jolt's threads found them.
-    std::ranges::sort(collector.mHits,
-                      [](const JPH::RayCastResult& x, const JPH::RayCastResult& y) {
-                          if (x.mFraction != y.mFraction) {
-                              return x.mFraction < y.mFraction;
-                          }
-                          if (x.mBodyID != y.mBodyID) {
-                              return x.mBodyID < y.mBodyID;
-                          }
-                          return x.mSubShapeID2.GetValue() < y.mSubShapeID2.GetValue();
-                      });
+    // Nearest first, and hits as near in the same order however Jolt's broad phase has them.
+    std::ranges::sort(collector.mHits, nearer<JPH::RayCastResult>);
     const auto count =
         std::min(collector.mHits.size(), static_cast<std::size_t>(std::max(capacity, 0)));
     for (std::size_t i = 0; i < count; ++i) {
@@ -239,19 +297,20 @@ FBE_PHYSICS_API bool fbe_physics_cast_shape(uint64_t world, uint64_t shape,
     if (!finite(*motion)) {
         return fail("a shape is cast by a finite motion");
     }
+    const fp_mode_t mode;
     const JPH::RShapeCast sweep(of, JPH::Vec3::sOne(), transform, vec3(*motion));
     JPH::ShapeCastSettings settings;
     settings.mReturnDeepestPoint = true;
-    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+    nearest_t<JPH::CastShapeCollector> collector(std::numeric_limits<float>::infinity());
     const layer_mask_t mask(layers);
     const bodies_but_t bodies(cast.ignore);
     cast.world->system.GetNarrowPhaseQueryNoLock().CastShape(
         sweep, settings, JPH::RVec3::sZero(), collector, JPH::BroadPhaseLayerFilter(), mask,
         bodies);
-    if (!collector.HadHit()) {
+    if (!collector.hit().has_value()) {
         return fail("the shape hits nothing");
     }
-    const JPH::ShapeCastResult& result = collector.mHit;
+    const JPH::ShapeCastResult& result = *collector.hit();
     const JPH::BodyLockRead lock(cast.world->system.GetBodyLockInterfaceNoLock(), result.mBodyID2);
     if (!lock.Succeeded()) {
         return fail("the shape hits nothing");
@@ -279,6 +338,7 @@ FBE_PHYSICS_API int32_t fbe_physics_overlap(uint64_t world, uint64_t shape,
     if (!cast_of(world, ignore, cast) || !placed(shape, *position, *rotation, of, transform)) {
         return -1;
     }
+    const fp_mode_t mode;
     JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
     const layer_mask_t mask(layers);
     const bodies_but_t but(cast.ignore);

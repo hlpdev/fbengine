@@ -30,8 +30,9 @@ Bodies are static, dynamic, or kinematic, of boxes, spheres, capsules, cylinders
 meshes, and compounds of them, in layers, held by joints, noticed by sensors, and found by casts;
 kinematic ones are driven where a game puts them, fast ones collide all along their way, and
 characters walk among them. A world is deterministic: made and stepped by the same calls in the
-same order, it moves the same, bit for bit, on any number of threads, and on every target,
-compiler, and build, and `Save` and `Restore` take it back to where it was.
+same order, it moves the same, bit for bit, on any number of threads, whatever floating point mode
+the game's thread is in, and `Save` and `Restore` take it back to where it was. Jolt is built to
+make it the same on every target, compiler, and build too, which is checked on Windows x64 so far.
 
 Released with fbengine at the same version. Apache-2.0; Jolt, in its DLL, is MIT
 (notices/jolt.txt).

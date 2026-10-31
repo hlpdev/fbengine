@@ -230,6 +230,7 @@ FBE_PHYSICS_API bool fbe_character_move(uint64_t character, const fbe_character_
         return fail(std::format("a character moves for more than 0 seconds and at most 1, not {}",
                                 seconds));
     }
+    const fp_mode_t mode;
     JPH::CharacterVirtual& moving = *found->character;
     moving.SetLinearVelocity(vec3(*velocity));
     JPH::CharacterVirtual::ExtendedUpdateSettings update;
@@ -331,6 +332,7 @@ FBE_PHYSICS_API bool fbe_character_set_shape(uint64_t character, uint64_t shape)
     if (of == nullptr) {
         return false;
     }
+    const fp_mode_t mode;
     const filters_t filters(*found);
     const float deepest = 1.5F * found->world->system.GetPhysicsSettings().mPenetrationSlop;
     if (!found->character->SetShape(of, deepest, filters.broad_phase, filters.objects,

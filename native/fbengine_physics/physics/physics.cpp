@@ -17,6 +17,7 @@
 #include <Jolt/Core/Memory.h>
 #include <Jolt/RegisterTypes.h>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -85,9 +86,18 @@ struct jolt_t {
         }
     };
 
+    jolt_t() {
+        // Jolt's threads, as they start, take the mode its work runs in, which they keep.
+        jobs.SetThreadInitFunction([](int) {
+            thread_local std::optional<fp_mode_t> mode;
+            mode.emplace();
+        });
+        jobs.Init(max_jobs, max_barriers, thread_count());
+    }
+
     registered_t registered;
     JPH::TempAllocatorImplWithMallocFallback memory{ step_memory_size };
-    JPH::JobSystemThreadPool jobs{ max_jobs, max_barriers, thread_count() };
+    JPH::JobSystemThreadPool jobs;
 };
 
 jolt_t* started = nullptr;
@@ -278,6 +288,7 @@ FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t col
         return fail(std::format("a step finds collisions 1 to {} times, not {}",
                                 FBE_PHYSICS_MAX_COLLISION_STEPS, collision_steps));
     }
+    const fp_mode_t mode;
     found->began.clear();
     found->ended.clear();
     // Each collision step is an update of Jolt's of its own, whose contacts are taken as it ends:

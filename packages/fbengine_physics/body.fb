@@ -351,7 +351,8 @@ Public Final Class Body
     /// than 0, as a game drives a door, a lift, or a platform: by the velocities that take it
     /// there, so it pushes what it meets on the way, which SetPosition, a teleport, doesn't. It
     /// keeps those velocities until it's moved again or given others, so a game moves it each
-    /// step, or stops it with SetVelocity.
+    /// step, or stops it with SetVelocity. A time so short that the speed's square is more than a
+    /// float holds panics.
     @MainThread Public Method MoveTo(position: Vec3, rotation: Quat, seconds: Float)
         Local at = BodyVec3(position)
         Local turned = fbe_body_quat_t(rotation.x, rotation.y, rotation.z, rotation.w)
@@ -368,7 +369,9 @@ Public Final Class Body
 
     /// Makes the body's collisions found along the way it moves in a step, so a fast one, as a
     /// bullet or a thrown grenade, never passes through a thin wall, for a little more work, or
-    /// not; a static body has none to find.
+    /// not. Only a dynamic body that isn't a sensor has them to find, and a body made kinematic
+    /// or a sensor stops being continuous; a sensor can miss a fast body, which Jolt's sweeps go
+    /// through.
     @MainThread Public Method SetContinuous(continuous: Bool)
         If !fbe_body_set_continuous(Live("Body.SetContinuous"), continuous)
             Panic("Body.SetContinuous: {LastError()}")

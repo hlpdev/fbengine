@@ -122,8 +122,9 @@ FBE_PHYSICS_API bool fbe_physics_gravity(uint64_t world, fbe_physics_vec3_t* gra
 // `collision_steps` times, 1 to FBE_PHYSICS_MAX_COLLISION_STEPS, a step of seconds over
 // collision_steps each, on Jolt's job system, gathering what began and ended touching in all of
 // them; false if it isn't a world or either is out of range. A world made and stepped by the same
-// calls in the same order steps the same, bit for bit, on any number of threads, and on every
-// target, compiler, and build.
+// calls in the same order steps the same, bit for bit, on any number of threads, whatever floating
+// point mode the calling thread is in; Jolt is built to make it the same on every target,
+// compiler, and build too, which is checked on Windows x64 so far.
 FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t collision_steps);
 
 // How many times `world` has been stepped, -1 if it isn't a world.
@@ -176,16 +177,21 @@ FBE_PHYSICS_API int32_t fbe_physics_overlap(uint64_t world, uint64_t shape,
                                             const fbe_physics_quat_t* rotation, uint32_t layers,
                                             uint64_t ignore, uint64_t* bodies, int32_t capacity);
 
-// Saves all `world`'s steps change, and `carried`, the time an Update carries to the next, into up
-// to `capacity` bytes at `bytes`, if they're room for it, giving how many bytes it takes, -1 if it
-// isn't a world. Its steps go on from it, restored, exactly as they went on from where it was
-// saved.
-FBE_PHYSICS_API int64_t fbe_physics_save(uint64_t world, double carried, uint8_t* bytes,
-                                         int64_t capacity);
+// Saves all `world`'s steps change, and `carried`, the time an Update carries to the next, as a
+// state the world keeps until it's next saved, which fbe_physics_saved copies, giving how many
+// bytes it takes, -1 if it isn't a world. Its steps go on from it, restored, exactly as they went
+// on from where it was saved.
+FBE_PHYSICS_API int64_t fbe_physics_save(uint64_t world, double carried);
 
-// Restores `world` from the `size` bytes fbe_physics_save gave at `bytes`, putting what it carried
-// in `carried`; false, leaving the world as it was, if they aren't the state of this world's
-// bodies, joints, and characters as they are, or end too soon.
+// Copies the state fbe_physics_save last saved of `world` into up to `capacity` bytes at `bytes`,
+// if there's room for it, giving how many bytes it takes, 0 if it's never been saved, -1 if it
+// isn't a world.
+FBE_PHYSICS_API int64_t fbe_physics_saved(uint64_t world, uint8_t* bytes, int64_t capacity);
+
+// Restores `world` from the `size` bytes of a state at `bytes`, putting what it carried in
+// `carried`; false, leaving the world as it was, if they aren't the state of this world's bodies,
+// joints, and characters as they are, saved by this version of fbengine_physics, as it saved
+// them.
 FBE_PHYSICS_API bool fbe_physics_restore(uint64_t world, const uint8_t* bytes, int64_t size,
                                          double* carried);
 

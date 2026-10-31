@@ -115,6 +115,30 @@ Function TheCApiRefusesMovesItDoesntTake()
         Expect(!fbe_body_set_can_sleep(wall, False))
         Expect(Error() == "a static body doesn't move, so it has no sleep")
         Expect(!fbe_body_continuous(wall) && !fbe_body_can_sleep(wall))
+        // A time too short for the way makes velocities too fast for a float, or whose squares
+        // are, which Jolt works out: a meter in 1e-40 seconds, or in 1e-30.
+        Local there = fbe_body_vec3_t(1, 0, 0)
+        Expect(!fbe_body_move_to(lift, AddressOf(there), AddressOf(unturned), 1e-40))
+        Expect(Error() == "a body moved there over 1e-40 seconds moves faster than a float holds")
+        Expect(!fbe_body_move_to(lift, AddressOf(there), AddressOf(unturned), 1e-30))
+        Expect(Error() == "a body moved there over 1e-30 seconds moves faster than a float holds")
+        // A meter in 1e-15 seconds isn't, and the world steps on, pushing the crate the lift's in.
+        Expect(fbe_body_move_to(lift, AddressOf(there), AddressOf(unturned), 1e-15))
+        Expect(fbe_physics_step(world, 1.0 / 60, 1))
+        // A kinematic body, or a sensor, has no collisions to find along its way, and a body made
+        // either stops finding them.
+        Expect(!fbe_body_set_continuous(lift, True))
+        Expect(
+            Error() ==
+            "a kinematic body goes where it's moved, so it has no collisions to find along its way")
+        Expect(fbe_body_set_continuous(lift, False))
+        Expect(fbe_body_set_continuous(crate, True) && fbe_body_continuous(crate))
+        Expect(fbe_body_set_sensor(crate, True) && !fbe_body_continuous(crate))
+        Expect(!fbe_body_set_continuous(crate, True))
+        Expect(Error() ==
+               "a sensor collides with nothing, so it has no collisions to find along its way")
+        Expect(fbe_body_set_sensor(crate, False) && fbe_body_set_continuous(crate, True))
+        Expect(fbe_body_set_motion(crate, FBE_BODY_KINEMATIC) && !fbe_body_continuous(crate))
     End Unsafe
 End Function
 

@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cstdint>
+#include <Jolt/Core/FPControlWord.h>
 #include <Jolt/Core/JobSystem.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/Body.h>
@@ -29,6 +30,22 @@
 #include <vector>
 
 namespace fbe::physics {
+
+/// The floating point mode a world's steps, its characters' moves, its kinematic bodies' moves,
+/// and its casts run in, on the thread that calls them and on Jolt's: rounding to the nearest, and
+/// numbers too small for a float kept, not flushed to 0, whatever the game, or a library it loads,
+/// has set, so they come out the same. It's put back as it goes.
+#ifdef JPH_USE_SSE
+// MXCSR's rounding, bits 13 and 14, flush to zero, bit 15, and denormals are zero, bit 6.
+using fp_mode_t = JPH::FPControlWord<0x0000U, 0x6000U | 0x8000U | 0x0040U>;
+#elif defined(JPH_CPU_ARM) && defined(JPH_COMPILER_MSVC)
+using fp_mode_t = JPH::FPControlWord<_RC_NEAR | _DN_SAVE, _MCW_RC | _MCW_DN>;
+#elif defined(JPH_CPU_ARM) && defined(JPH_USE_NEON)
+// FPCR's rounding, bits 22 and 23, and flush to zero, bit 24.
+using fp_mode_t = JPH::FPControlWord<0, (JPH::uint64{ 3 } << 22U) | (JPH::uint64{ 1 } << 24U)>;
+#else
+#error "fbengine_physics sets the floating point mode of SSE or of NEON"
+#endif
 
 /// A body's layer, 0 to 31, and whether it moves, as one of Jolt's object layers, which keep
 /// what doesn't move apart in Jolt's broad phase.
@@ -154,6 +171,8 @@ struct world_t {
     // Bodies added and taken out since the last step or optimize, which Jolt's broad phase keeps
     // room for until one.
     std::uint32_t changes = 0;
+    // The state it was last saved in, which fbe_physics_saved copies out.
+    std::vector<std::uint8_t> saved;
 };
 
 /// Starts Jolt, its allocator, its types, and its job system, if they haven't started: before

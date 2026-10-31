@@ -68,8 +68,8 @@ Public Extern "C" Lib "fbengine_physics_native"
     Function fbe_physics_overlap(world: UInt64, shape: UInt64, position: Ptr<fbe_physics_vec3_t>,
                                  rotation: Ptr<fbe_physics_quat_t>, layers: UInt32, ignore: UInt64,
                                  bodies: Ptr<UInt64>, capacity: Int32): Int32
-    Function fbe_physics_save(world: UInt64, carried: Float64, bytes: Ptr<UInt8>,
-                              capacity: Int64): Int64
+    Function fbe_physics_save(world: UInt64, carried: Float64): Int64
+    Function fbe_physics_saved(world: UInt64, bytes: Ptr<UInt8>, capacity: Int64): Int64
     Function fbe_physics_restore(world: UInt64, bytes: Ptr<UInt8>, size: Int64,
                                  carried: Ptr<Float64>): Bool
     Function fbe_physics_began(world: UInt64, contacts: Ptr<fbe_physics_contact_t>,
