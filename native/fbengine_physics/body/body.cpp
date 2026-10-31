@@ -37,7 +37,7 @@ struct body_t {
 };
 
 pool_t<body_t>& bodies() {
-    static pool_t<body_t> pool;
+    static pool_t<body_t> pool(BODY_KIND);
     return pool;
 }
 

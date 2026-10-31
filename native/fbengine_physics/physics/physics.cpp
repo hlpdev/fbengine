@@ -109,7 +109,7 @@ jolt_t& jolt() {
 }
 
 pool_t<world_t>& worlds() {
-    static pool_t<world_t> pool;
+    static pool_t<world_t> pool(WORLD_KIND);
     return pool;
 }
 

@@ -31,7 +31,7 @@ struct shape_t {
 };
 
 pool_t<shape_t>& shapes() {
-    static pool_t<shape_t> pool;
+    static pool_t<shape_t> pool(SHAPE_KIND);
     return pool;
 }
 
