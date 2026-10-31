@@ -83,7 +83,12 @@ if(FBENGINE_FB_TESTS)
       "binding-nan-scale|panic: Binding[.]OfGamepadAxis: a scale is a finite number, not"
       "bind-unchecked|panic: Action[.]Bind: a key binding's code is 1 to 511, not 9999"
       "bind-y-infinite|panic: Action[.]BindY: a binding's scale is a finite number, not Inf"
-      "replace-overflows|panic: Action[.]Replace: a binding's scale is a finite number, not Inf")
+      "replace-overflows|panic: Action[.]Replace: a binding's scale is a finite number, not Inf"
+      "mask-threshold|panic: Mask[.]FromImage: a threshold is 1 to 255, not 0"
+      "mask-region-outside|panic: Mask[.]FromImage: Rect[(]2, 0, 3, 4[)] isn't whole pixels in the image, 4 by 4"
+      "mask-region-fraction|panic: Mask[.]FromImage: Rect[(]0[.]5, 0, 2, 2[)] isn't whole pixels in the image"
+      "mask-pixels-short|panic: Mask[.]FromPixels: 2 by 1 RGBA8 pixels are 8 bytes, not 4"
+      "mask-empty-cell|panic: Mask[.]Frames: a cell is 1 pixel or more across and down, not 0 by 4")
   foreach(case IN LISTS fbengine_input_cases)
     string(REPLACE "|" ";" case "${case}")
     list(GET case 0 name)
@@ -177,6 +182,18 @@ target_link_libraries(fbengine_text_tests PRIVATE SDL3::SDL3-static freetype fbe
                       fbengine_sheenbidi Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_text_tests)
 catch_discover_tests(fbengine_text_tests TEST_PREFIX "text."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# collide's masks against a brute force, from its sources and core's.
+add_executable(fbengine_collide_tests collide/collide_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/collide/collide.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
+target_include_directories(fbengine_collide_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_compile_definitions(fbengine_collide_tests PRIVATE FBE_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(fbengine_collide_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_collide_tests)
+catch_discover_tests(fbengine_collide_tests TEST_PREFIX "collide."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # fbengine_ui's panics, each by a run of tests/ui, which says it.

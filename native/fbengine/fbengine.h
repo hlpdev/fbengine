@@ -5,6 +5,7 @@
 // the bindings tools/bindgen.sh makes of each, one file per area in packages/fbengine/c/.
 
 #include "app/fbe_app.h"
+#include "collide/fbe_collide.h"
 #include "core/fbe_core.h"
 #include "frame/fbe_frame.h"
 #include "input/fbe_input.h"

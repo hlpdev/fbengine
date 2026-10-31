@@ -1,0 +1,237 @@
+// Collisions in 2D: masks of images' solid pixels, placed as the canvas draws sprites, rectangles,
+// and points, all on the CPU, bounding boxes first, then bit rows.
+
+Import std.core
+Import std.ffi
+Import std.image
+Import std.math
+Import "./c/fbe_collide"
+Import "./window"
+
+/// Where a mask is drawn, as the canvas draws a sprite: its handle at (X, Y), turned Rotation
+/// degrees clockwise on the screen about it, and scaled from it, a negative scale mirroring it.
+Public Struct Placement
+    Public Field X: Float32
+    Public Field Y: Float32
+    Public Field Rotation: Float32
+    Public Field ScaleX: Float32
+    Public Field ScaleY: Float32
+
+    /// At `x`, `y`, unturned, at its size.
+    Public Static Method At(x: Float32, y: Float32): Placement => Placement(x, y, 0.0, 1.0, 1.0)
+End Struct
+
+/// A mask: which of an image's pixels are solid, by an alpha threshold, for collisions exact to
+/// the pixel, as the canvas draws the image: a screen pixel is a placed mask's where its middle
+/// maps back into one of its solid pixels, as a sprite sampled NEAREST is drawn, and touching
+/// isn't meeting. Its handle is the point of it placed at a Placement's position, as a Sprite's
+/// is, which it's turned about and scaled from.
+///
+/// ```vb
+/// Local ship = Mask.FromImage(Try Image.Load("ship.png"))
+/// ship.MidHandle()
+/// If ship.Collides(Placement(x, y, angle, 1.0, 1.0), rock, Placement.At(rockX, rockY)) Then Explode()
+/// ```
+Public Final Class Mask Implements Printable
+    Field handle: UInt64
+    Field pivot: Vec2
+
+    Package New(handle: UInt64)
+        Self.handle = handle
+        pivot = Vec2(0.0, 0.0)
+    End New
+
+    Method Destroy()
+        If handle != 0 Then fbe_collide_free(handle)
+    End Method
+
+    /// A mask of `image`'s pixels, each solid whose alpha is `threshold` or more, 1 at first for
+    /// every one that shows; or of `region` of it, as a frame of a sheet. Panics for a threshold
+    /// outside 1 to 255, or a region that isn't whole pixels inside the image.
+    @MainThread Public Static Method FromImage(image: Image, threshold: Int32 = 1,
+                                               region: Rect? = Null): Mask
+        Local part = region ?? Rect(0.0, 0.0, image.Width As Float32, image.Height As Float32)
+        Local x = part.X As Int32
+        Local y = part.Y As Int32
+        Local width = part.Width As Int32
+        Local height = part.Height As Int32
+        If x As Float32 != part.X || y As Float32 != part.Y || width As Float32 != part.Width ||
+           height As Float32 != part.Height || x < 0 || y < 0 || width < 0 || height < 0 ||
+           x + width > image.Width || y + height > image.Height
+            Panic("Mask.FromImage: {part} isn't whole pixels in the image, {image.Width} by {image.Height}")
+        End If
+        CheckThreshold("Mask.FromImage", threshold)
+        Local stride = (image.Width As Int64) * 4
+        Local made: UInt64 = 0
+        Unsafe
+            Local first = image.Pixels.Pointer()
+            made = fbe_collide_mask(AddressOf(first[(y As Int64) * stride + (x As Int64) * 4]),
+                                    width,
+                                    height, stride, threshold)
+        End Unsafe
+        If made == 0 Then Panic(LastError())
+        Return Mask(made)
+    End Method
+
+    /// A mask of `width` by `height` RGBA8 pixels, rows from the top, as a texture's read back are,
+    /// by `threshold` as FromImage's. Panics for pixels that aren't that many, or a threshold
+    /// outside 1 to 255.
+    @MainThread Public Static Method FromPixels(pixels: UInt8[], width: Int32, height: Int32,
+                                                threshold: Int32 = 1): Mask
+        If width < 0 || height < 0 || pixels.Count != (width As Int64) * (height As Int64) * 4
+            Panic("Mask.FromPixels: {width} by {height} RGBA8 pixels are {(width As Int64) * (height As Int64) * 4} bytes, not {pixels.Count}")
+        End If
+        CheckThreshold("Mask.FromPixels", threshold)
+        Local copied = Buffer<UInt8>.From(pixels)
+        Local made: UInt64 = 0
+        Unsafe
+            made = fbe_collide_mask(copied.Pointer(), width, height, (width As Int64) * 4,
+                                    threshold)
+        End Unsafe
+        If made == 0 Then Panic(LastError())
+        Return Mask(made)
+    End Method
+
+    /// A mask of each frame of a sheet, cells `cellWidth` by `cellHeight` from its top left, left
+    /// to right then down, a cell that's cut off left out, as Sprite.SetFrames cuts them. Panics
+    /// for a cell that isn't 1 pixel or more.
+    @MainThread Public Static Method Frames(image: Image, cellWidth: Int32, cellHeight: Int32,
+                                            threshold: Int32 = 1): Mask[]
+        If cellWidth < 1 || cellHeight < 1
+            Panic("Mask.Frames: a cell is 1 pixel or more across and down, not {cellWidth} by {cellHeight}")
+        End If
+        Local frames: Mask[] = []
+        For row = 0 To image.Height / cellHeight - 1
+            For column = 0 To image.Width / cellWidth - 1
+                Local cell = Rect((column * cellWidth) As Float32, (row * cellHeight) As Float32,
+                                  cellWidth As Float32, cellHeight As Float32)
+                frames.Add(FromImage(image, threshold, cell))
+            End For
+        End For
+        Return frames
+    End Method
+
+    /// How many masks there are, unfreed.
+    @MainThread Public Static Method Count(): Int32 => fbe_collide_count()
+
+    /// How many pixels it is across.
+    @MainThread Public Method Width(): Int32 => fbe_collide_width(Checked())
+
+    /// How many pixels it is down.
+    @MainThread Public Method Height(): Int32 => fbe_collide_height(Checked())
+
+    /// How many of its pixels are solid.
+    @MainThread Public Method SolidCount(): Int64 => fbe_collide_solid_count(Checked())
+
+    /// Whether its pixel at `x`, `y` is solid; False outside it.
+    @MainThread Public Method Solid(x: Int32, y: Int32): Bool => fbe_collide_solid(Checked(), x, y)
+
+    /// Sets its handle, the point of it, in its pixels, placed at a Placement's position.
+    @MainThread Public Method SetHandle(x: Float32, y: Float32)
+        pivot = Vec2(x, y)
+    End Method
+
+    /// Puts its handle in its middle.
+    @MainThread Public Method MidHandle()
+        pivot = Vec2((Width() As Float32) / 2.0, (Height() As Float32) / 2.0)
+    End Method
+
+    /// Its handle.
+    @MainThread Public Method Handle(): Vec2 => pivot
+
+    /// The rectangle it covers placed `at`, its corners' bounds, as the canvas draws it.
+    @MainThread Public Method Bounds(at: Placement): Rect
+        Local place = PlaceOf(at)
+        Local bounds = fbe_collide_rect_t(0.0, 0.0, 0.0, 0.0)
+        Local found = False
+        Unsafe
+            found = fbe_collide_bounds(Checked(), AddressOf(place), AddressOf(bounds))
+        End Unsafe
+        If !found Then Panic(LastError())
+        Return Rect(bounds.x, bounds.y, bounds.width, bounds.height)
+    End Method
+
+    /// Whether its bounds placed `at` and `other`'s placed `otherAt` overlap, their insides, as
+    /// RectsOverlap says: the quick test, before Collides.
+    @MainThread Public Method Overlaps(at: Placement, other: Mask, otherAt: Placement): Bool
+        Return RectsOverlap(Bounds(at), other.Bounds(otherAt))
+    End Method
+
+    /// Whether it placed `at` and `other` placed `otherAt` have a screen pixel solid in both.
+    @MainThread Public Method Collides(at: Placement, other: Mask, otherAt: Placement): Bool
+        Local place = PlaceOf(at)
+        Local otherPlace = other.PlaceOf(otherAt)
+        Local hit: Int32 = 0
+        Unsafe
+            hit = fbe_collide_masks(Checked(), AddressOf(place), other.Checked(),
+                                    AddressOf(otherPlace))
+        End Unsafe
+        If hit < 0 Then Panic(LastError())
+        Return hit == 1
+    End Method
+
+    /// Whether it at `x`, `y` and `other` at `otherX`, `otherY`, unturned and at their sizes, have
+    /// a screen pixel solid in both.
+    @MainThread Public Method Collides(x: Float32, y: Float32, other: Mask, otherX: Float32,
+                                       otherY: Float32): Bool
+        Return Collides(Placement.At(x, y), other, Placement.At(otherX, otherY))
+    End Method
+
+    /// Whether it placed `at` has a solid screen pixel inside `rect`, one whose area the rectangle's
+    /// inside reaches into.
+    @MainThread Public Method CollidesRect(at: Placement, rect: Rect): Bool
+        Local place = PlaceOf(at)
+        Local area = fbe_collide_rect_t(rect.X, rect.Y, rect.Width, rect.Height)
+        Local hit: Int32 = 0
+        Unsafe
+            hit = fbe_collide_rect(Checked(), AddressOf(place), AddressOf(area))
+        End Unsafe
+        If hit < 0 Then Panic(LastError())
+        Return hit == 1
+    End Method
+
+    /// Whether the screen pixel `point` is in is one of its solid ones, placed `at`, as a click on
+    /// it is.
+    @MainThread Public Method Contains(at: Placement, point: Vec2): Bool
+        Local place = PlaceOf(at)
+        Local hit: Int32 = 0
+        Unsafe
+            hit = fbe_collide_point(Checked(), AddressOf(place), point.x, point.y)
+        End Unsafe
+        If hit < 0 Then Panic(LastError())
+        Return hit == 1
+    End Method
+
+    /// Frees it now, rather than when nothing holds it; then it can't be used.
+    @MainThread Public Method Free()
+        If handle == 0 Then Return
+        fbe_collide_free(handle)
+        handle = 0
+    End Method
+
+    Public Method ToString(): String
+        If handle == 0 Then Return "a freed mask"
+        Return "a {Width()} by {Height()} mask"
+    End Method
+
+    // `at` as the C API takes it, with its handle.
+    Method PlaceOf(at: Placement): fbe_collide_place_t
+        Return fbe_collide_place_t(at.X, at.Y, pivot.x, pivot.y, at.Rotation, at.ScaleX, at.ScaleY)
+    End Method
+
+    Method Checked(): UInt64
+        If handle == 0 Then Panic("Mask: it's been freed")
+        Return handle
+    End Method
+End Class
+
+/// Whether two rectangles overlap, their insides: touching edges don't, as they do for std's
+/// Rect.Intersects.
+Public Function RectsOverlap(a: Rect, b: Rect): Bool
+    Return a.X < b.X + b.Width && b.X < a.X + a.Width && a.Y < b.Y + b.Height &&
+           b.Y < a.Y + a.Height
+End Function
+
+Function CheckThreshold(call: String, threshold: Int32)
+    If threshold < 1 || threshold > 255 Then Panic("{call}: a threshold is 1 to 255, not {threshold}")
+End Function
