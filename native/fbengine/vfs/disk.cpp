@@ -1,18 +1,36 @@
 // UTF-8 to and from what the OS's paths are: UTF-16 on Windows, and bytes, taken as UTF-8,
-// elsewhere.
+// elsewhere; and files read at an offset, by ReadFile on Windows and pread elsewhere, which take
+// no file pointer, so threads read one file at once.
 
 #include "vfs/disk.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace fbe::vfs {
 
 namespace {
 
-[[maybe_unused]] constexpr char32_t replacement = 0xFFFD;
+constexpr char32_t replacement = 0xFFFD;
 
 // The code points of UTF-8, with U+FFFD for each byte that doesn't start a well-formed one.
-[[maybe_unused]] std::u32string decoded(std::string_view text) {
+std::u32string decoded(std::string_view text) {
     std::u32string points;
     std::size_t at = 0;
     while (at < text.size()) {
@@ -49,7 +67,7 @@ namespace {
     return points;
 }
 
-[[maybe_unused]] std::string encoded(std::u32string_view points) {
+std::string encoded(std::u32string_view points) {
     std::string text;
     for (const char32_t point : points) {
         if (point < 0x80) {
@@ -72,6 +90,10 @@ namespace {
 }
 
 } // namespace
+
+std::string well_formed(std::string_view bytes) {
+    return encoded(decoded(bytes));
+}
 
 #ifdef _WIN32
 
@@ -106,6 +128,50 @@ std::string utf8(const std::filesystem::path& path) {
     return encoded(points);
 }
 
+std::unique_ptr<read_file_t> read_file_t::open(const std::filesystem::path& path, bool& missing) {
+    // Others may read, write, rename, and remove it meanwhile, as they can on Linux and macOS.
+    HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        const DWORD error = GetLastError();
+        missing = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+        return nullptr;
+    }
+    LARGE_INTEGER size{};
+    if (GetFileSizeEx(handle, &size) == 0) {
+        CloseHandle(handle);
+        missing = false;
+        return nullptr;
+    }
+    return std::unique_ptr<read_file_t>(
+        new read_file_t(handle, static_cast<std::uint64_t>(size.QuadPart)));
+}
+
+read_file_t::~read_file_t() {
+    CloseHandle(m_handle);
+}
+
+bool read_file_t::read_at(std::uint64_t offset, std::span<std::uint8_t> into) const {
+    std::size_t done = 0;
+    while (done < into.size()) {
+        // A read at an OVERLAPPED's offset of a file opened for synchronous reads takes no file
+        // pointer, and the system lets one at a time through.
+        OVERLAPPED at{};
+        const std::uint64_t from = offset + done;
+        at.Offset = static_cast<DWORD>(from);
+        at.OffsetHigh = static_cast<DWORD>(from >> 32U);
+        const auto chunk = static_cast<DWORD>(
+            std::min<std::size_t>(into.size() - done, std::numeric_limits<DWORD>::max() / 2));
+        DWORD got = 0;
+        if (ReadFile(m_handle, into.data() + done, chunk, &got, &at) == 0 || got == 0) {
+            return false;
+        }
+        done += got;
+    }
+    return true;
+}
+
 #else
 
 std::filesystem::path disk_path(std::string_view utf8) {
@@ -114,6 +180,42 @@ std::filesystem::path disk_path(std::string_view utf8) {
 
 std::string utf8(const std::filesystem::path& path) {
     return path.native();
+}
+
+std::unique_ptr<read_file_t> read_file_t::open(const std::filesystem::path& path, bool& missing) {
+    const int descriptor = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (descriptor < 0) {
+        missing = errno == ENOENT || errno == ENOTDIR;
+        return nullptr;
+    }
+    struct stat status{};
+    if (fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode)) {
+        close(descriptor);
+        missing = false;
+        return nullptr;
+    }
+    return std::unique_ptr<read_file_t>(
+        new read_file_t(descriptor, static_cast<std::uint64_t>(status.st_size)));
+}
+
+read_file_t::~read_file_t() {
+    close(m_handle);
+}
+
+bool read_file_t::read_at(std::uint64_t offset, std::span<std::uint8_t> into) const {
+    std::size_t done = 0;
+    while (done < into.size()) {
+        const ssize_t got = pread(m_handle, into.data() + done, into.size() - done,
+                                  static_cast<off_t>(offset + done));
+        if (got < 0 && errno == EINTR) {
+            continue;
+        }
+        if (got <= 0) {
+            return false;
+        }
+        done += static_cast<std::size_t>(got);
+    }
+    return true;
 }
 
 #endif

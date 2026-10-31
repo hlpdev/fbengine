@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -290,23 +291,91 @@ TEST_CASE("a folder on the disk reads as it's asked, in any case", "[vfs]") {
     REQUIRE(read(files, "res://late.txt") == "late");
 }
 
-#ifndef _WIN32
+namespace {
+
+// Whether the disk keeps two names that differ only in case apart, which macOS's and Windows' don't
+// by default.
+bool case_sensitive(const temp_folder_t& folder) {
+    folder.write("case.txt", "lower");
+    folder.write("CASE.txt", "upper");
+    std::size_t count = 0;
+    for ([[maybe_unused]] const fs::directory_entry& entry : fs::directory_iterator(folder.path)) {
+        ++count;
+    }
+    std::error_code error;
+    fs::remove(folder.path / "case.txt", error);
+    fs::remove(folder.path / "CASE.txt", error);
+    return count == 2;
+}
+
+} // namespace
+
 TEST_CASE("a folder's names that differ only in case give the first by its bytes", "[vfs]") {
     const temp_folder_t folder;
+    if (!case_sensitive(folder)) {
+        SKIP("this disk doesn't keep names that differ only in case apart");
+    }
     folder.write("b.txt", "lower");
     folder.write("B.txt", "upper");
     folder.write("odd:name.txt", "no path names it");
+    folder.write("Data/x.txt", "x");
+    folder.write("data/y.txt", "y");
     vfs::vfs_t files;
     files.mount(path("res://"), vfs::folder(folder.path));
-    // As written first, then the first by bytes.
-    REQUIRE(read(files, "res://b.txt") == "lower");
+    // However it's written, as a pak of these files would have it.
+    REQUIRE(read(files, "res://b.txt") == "upper");
     REQUIRE(read(files, "res://B.txt") == "upper");
     REQUIRE(read(files, "res://B.TXT") == "upper");
+    // Folders whose names fold the same are one.
+    for (const std::string_view at :
+         { "res://data/y.txt", "res://DATA/y.txt", "res://Data/y.txt" }) {
+        REQUIRE(read(files, at) == "y");
+    }
+    REQUIRE(read(files, "res://data/X.txt") == "x");
+    REQUIRE(list(files, "res://DATA") == std::vector<std::string>{ "x.txt", "y.txt" });
     // A name no res:// path can have isn't listed, and of two that fold the same, the first by
     // its bytes is.
-    REQUIRE(list(files, "res://") == std::vector<std::string>{ "B.txt" });
+    REQUIRE(list(files, "res://") == std::vector<std::string>{ "B.txt", "Data/" });
 }
-#endif
+
+TEST_CASE("a folder finds no name a pak wouldn't", "[vfs]") {
+    const temp_folder_t folder;
+    folder.write("readme.txt", "readme");
+    folder.write("textures_highres/wall.png", "wall");
+    folder.write("été.txt", "ete");
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    // Windows' short 8.3 name for a folder, and case past ASCII.
+    REQUIRE(read_failure(files, "res://TEXTUR~1/wall.png") == vfs::failure_t::NOT_FOUND);
+    REQUIRE(read_failure(files, "res://ÉTÉ.txt") == vfs::failure_t::NOT_FOUND);
+    REQUIRE(read(files, "res://été.TXT") == "ete");
+    // A dot or a space at a name's end, which Windows takes off, and Windows' devices, aren't
+    // names a path can have.
+    for (const std::string_view text : {
+             "res://readme.txt.",
+             "res://readme.txt ",
+             "res://readme.txt. .",
+             "res://nul.txt",
+             "res://missing/nul",
+             "res://textures_highres/NUL",
+             "res://aux",
+             "res://com1",
+             "res://PRN",
+             "res://lpt1.png",
+             "res://con",
+             "res://Nul .tar.gz",
+             "res://COM0",
+         }) {
+        const vfs::result_t<vfs::path_t> parsed = vfs::parse(text);
+        REQUIRE_FALSE(parsed.has_value());
+        REQUIRE(parsed.error().failure == vfs::failure_t::INVALID_PATH);
+    }
+    // Names that only start like a device's are names.
+    for (const std::string_view text :
+         { "res://console.txt", "res://com10", "res://nul_x.txt", "res://lpt", "res://.hidden" }) {
+        REQUIRE(vfs::parse(text).has_value());
+    }
+}
 
 TEST_CASE("a folder that isn't there is an empty mount", "[vfs]") {
     const temp_folder_t folder;
@@ -393,8 +462,10 @@ TEST_CASE("a pak reads its stored files through its index", "[vfs]") {
 
 TEST_CASE("a pak on the disk, and one with a comment, read as one in memory", "[vfs]") {
     const temp_folder_t folder;
-    const vfs::bytes_t bytes =
-        zip({ { .name = "a.txt", .data = "on the disk" } }, false, "a comment, PK\x05\x06 too");
+    // A comment with an end record's signature in it, far enough from the end to be looked at.
+    const std::string comment =
+        std::string("a comment, ") + std::string("PK\x05\x06", 4) + std::string(18, '\0') + " too";
+    const vfs::bytes_t bytes = zip({ { .name = "a.txt", .data = "on the disk" } }, false, comment);
     {
         std::ofstream stream(folder.path / "game.pak", std::ios::binary);
         stream.write(reinterpret_cast<const char*>(bytes.data()),
@@ -408,6 +479,38 @@ TEST_CASE("a pak on the disk, and one with a comment, read as one in memory", "[
 
     vfs::result_t<std::shared_ptr<vfs::source_t>> missing = vfs::pak(folder.path / "none.pak");
     REQUIRE(missing.error().failure == vfs::failure_t::NOT_FOUND);
+
+    // And one whose comment is a whole end record, ending the file as the real one would.
+    const vfs::bytes_t fake = zip({ { .name = "a.txt", .data = "in memory" } }, false,
+                                  std::string("PK\x05\x06", 4) + std::string(18, '\0'));
+    vfs::vfs_t from_memory;
+    from_memory.mount(path("res://"), *vfs::pak(fake));
+    REQUIRE(read(from_memory, "res://a.txt") == "in memory");
+}
+
+TEST_CASE("a mounted pak on the disk can be replaced and removed, and still reads", "[vfs]") {
+    const temp_folder_t folder;
+    const auto write = [](const fs::path& file, const vfs::bytes_t& bytes) {
+        std::ofstream stream(file, std::ios::binary);
+        stream.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+    };
+    write(folder.path / "game.pak", zip({ { .name = "a.txt", .data = "first" } }));
+    vfs::vfs_t files;
+    files.mount(path("res://"), *vfs::pak(folder.path / "game.pak"));
+    write(folder.path / "new.pak", zip({ { .name = "a.txt", .data = "second" } }));
+    // As an updater removes a pak and puts another in its place: the mounted one still reads.
+    // (Windows' plain rename over a file that's open can't, whatever the file was opened to share;
+    // one with POSIX semantics can.)
+    std::error_code error;
+    fs::remove(folder.path / "game.pak", error);
+    REQUIRE_FALSE(error);
+    REQUIRE(read(files, "res://a.txt") == "first");
+    fs::rename(folder.path / "new.pak", folder.path / "game.pak", error);
+    REQUIRE_FALSE(error);
+    REQUIRE(read(files, "res://a.txt") == "first");
+    files.mount(path("res://"), *vfs::pak(folder.path / "game.pak"));
+    REQUIRE(read(files, "res://a.txt") == "second");
 }
 
 TEST_CASE("a pak leaves out what no path reaches, and keeps a name's last entry", "[vfs]") {
@@ -465,12 +568,131 @@ TEST_CASE("a zip that isn't a pak is invalid data", "[vfs]") {
         const std::size_t directory = 30 + 5 + 9;
         bytes[directory + 42] = 0xFF;
         bytes[directory + 43] = 0x7F;
-        vfs::result_t<std::shared_ptr<vfs::source_t>> pak = vfs::pak(bytes);
-        REQUIRE(pak.has_value());
-        vfs::vfs_t files;
-        files.mount(path("res://"), *pak);
-        REQUIRE(read_failure(files, "res://a.txt") == vfs::failure_t::INVALID_DATA);
+        REQUIRE(pak_failure(bytes) == vfs::failure_t::INVALID_DATA);
+        // And a size past it.
+        bytes = zip({ { .name = "a.txt", .data = "some text" } });
+        bytes[directory + 23] = 0x7F;
+        bytes[directory + 27] = 0x7F;
+        REQUIRE(pak_failure(bytes) == vfs::failure_t::INVALID_DATA);
     }
+    SECTION("a Zip64 end record that isn't there, in a pak too small for one") {
+        // A Zip64 locator and an end record, 42 bytes, its locator pointing anywhere.
+        const temp_folder_t folder;
+        for (const std::uint64_t record : { 0ULL, 1ULL, 22ULL, 0x7FFF'FFFF'FFFF'FFFFULL }) {
+            zip_t out;
+            out.u32(0x0706'4B50);
+            out.u32(0);
+            out.u64(record);
+            out.u32(1);
+            out.u32(0x0605'4B50);
+            out.u16(0);
+            out.u16(0);
+            out.u16(0xFFFF);
+            out.u16(0xFFFF);
+            out.u32(0xFFFF'FFFF);
+            out.u32(0xFFFF'FFFF);
+            out.u16(0);
+            REQUIRE(pak_failure(out.bytes) == vfs::failure_t::INVALID_DATA);
+            folder.write("small.pak", std::string(out.bytes.begin(), out.bytes.end()));
+            REQUIRE(vfs::pak(folder.path / "small.pak").error().failure ==
+                    vfs::failure_t::INVALID_DATA);
+        }
+    }
+    SECTION("a central directory too big or too small for its entries") {
+        // A megabyte that its Zip64 records say is one entry's central directory.
+        zip_t out;
+        out.bytes.resize(std::size_t{ 1 } << 20U, 0);
+        const std::uint64_t record = out.bytes.size();
+        out.u32(0x0606'4B50);
+        out.u64(44);
+        out.u16(45);
+        out.u16(45);
+        out.u32(0);
+        out.u32(0);
+        out.u64(1);
+        out.u64(1);
+        out.u64(record);
+        out.u64(0);
+        out.u32(0x0706'4B50);
+        out.u32(0);
+        out.u64(record);
+        out.u32(1);
+        out.u32(0x0605'4B50);
+        out.u16(0);
+        out.u16(0);
+        out.u16(0xFFFF);
+        out.u16(0xFFFF);
+        out.u32(0xFFFF'FFFF);
+        out.u32(0xFFFF'FFFF);
+        out.u16(0);
+        REQUIRE(pak_failure(out.bytes) == vfs::failure_t::INVALID_DATA);
+        // And a billion entries in one entry's bytes.
+        vfs::bytes_t many = zip({ { .name = "a.txt", .data = "x" } }, true);
+        const std::size_t record_at = many.size() - 22 - 20 - 56;
+        many[record_at + 24 + 3] = 0x40;
+        many[record_at + 32 + 3] = 0x40;
+        REQUIRE(pak_failure(many) == vfs::failure_t::INVALID_DATA);
+    }
+    SECTION("a name longer or deeper than a path can be") {
+        std::string deep = "a";
+        while (deep.size() + 2 <= 65'535) {
+            deep += "/a";
+        }
+        const auto started = std::chrono::steady_clock::now();
+        REQUIRE(pak_failure(zip({ { .name = deep, .data = "x" } })) ==
+                vfs::failure_t::INVALID_DATA);
+        REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
+        std::string names = "a";
+        for (int i = 1; i < 256; ++i) {
+            names += "/a";
+        }
+        REQUIRE(pak_failure(zip({ { .name = names, .data = "x" } })) ==
+                vfs::failure_t::INVALID_DATA);
+        REQUIRE(pak_failure(zip({ { .name = std::string(4097, 'a'), .data = "x" } })) ==
+                vfs::failure_t::INVALID_DATA);
+        // 255 names, and 4096 bytes, are a path.
+        names.resize(names.size() - 2);
+        REQUIRE(vfs::pak(zip({ { .name = names, .data = "x" } })).has_value());
+        REQUIRE(vfs::pak(zip({ { .name = std::string(4096, 'a'), .data = "x" } })).has_value());
+    }
+}
+
+TEST_CASE("a pak's index takes time and memory as its names do", "[vfs]") {
+    // A thousand entries 200 folders deep each, in all about 400 KB of names.
+    std::vector<zip_entry_t> entries;
+    for (int e = 0; e < 1'000; ++e) {
+        std::string name = std::to_string(e);
+        for (int i = 0; i < 200; ++i) {
+            name += "/f";
+        }
+        entries.push_back({ .name = name + "/file.txt", .data = "x" });
+    }
+    const auto started = std::chrono::steady_clock::now();
+    const std::shared_ptr<vfs::source_t> pak = pak_of(entries);
+    REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(5));
+    vfs::vfs_t files;
+    files.mount(path("res://"), pak);
+    std::string last = "res://999";
+    for (int i = 0; i < 200; ++i) {
+        last += "/F";
+    }
+    REQUIRE(read(files, last + "/file.txt") == "x");
+}
+
+TEST_CASE("a newer mount at or under a place makes it a folder, as kind and read say", "[vfs]") {
+    vfs::vfs_t files;
+    files.mount(path("res://"), pak_of({ { .name = "data", .data = "a file" } }));
+    files.mount(path("res://data"), pak_of({ { .name = "inside.txt", .data = "inside" } }));
+    REQUIRE(kind(files, "res://data") == vfs::kind_t::FOLDER);
+    REQUIRE(read_failure(files, "res://data") == vfs::failure_t::IS_A_FOLDER);
+    REQUIRE(list(files, "res://data") == std::vector<std::string>{ "inside.txt" });
+
+    // And a newer mount's folder over an older one's file.
+    vfs::vfs_t over;
+    over.mount(path("res://"), pak_of({ { .name = "thing", .data = "a file" } }));
+    over.mount(path("res://"), pak_of({ { .name = "thing/in.txt", .data = "in" } }));
+    REQUIRE(kind(over, "res://thing") == vfs::kind_t::FOLDER);
+    REQUIRE(read_failure(over, "res://thing") == vfs::failure_t::IS_A_FOLDER);
 }
 
 TEST_CASE("reads on many threads see whole mounts while the mounts change", "[vfs][stress]") {
@@ -510,12 +732,11 @@ TEST_CASE("reads on many threads see whole mounts while the mounts change", "[vf
             }
         });
     }
-    for (int i = 0; i < 2'000; ++i) {
+    // The mounts change until the readers have read a while meanwhile, however slow they are.
+    const int before = reads;
+    for (int i = 0; i < 2'000 || reads - before < 2'000; ++i) {
         files.mount(path("res://"), i % 2 == 0 ? second : vfs::folder(folder.path));
         files.unmount(path("res://"));
-    }
-    while (reads < 1'000) {
-        std::this_thread::yield();
     }
     stop = true;
     for (std::thread& reader : readers) {

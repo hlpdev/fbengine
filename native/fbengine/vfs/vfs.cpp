@@ -16,13 +16,34 @@ namespace {
 
 constexpr std::string_view scheme = "res://";
 
-// Whether `name`, a name in a path, can be a file's on every OS.
+// Whether `name` is one of Windows' devices, which a name is with any extension, or spaces before
+// it: CON, PRN, AUX, NUL, COM0 to COM9, and LPT0 to LPT9.
+bool device(std::string_view name) {
+    std::string base = fold(name.substr(0, name.find('.')));
+    while (!base.empty() && base.back() == ' ') {
+        base.pop_back();
+    }
+    if (base == "con" || base == "prn" || base == "aux" || base == "nul") {
+        return true;
+    }
+    return base.size() == 4 && (base.starts_with("com") || base.starts_with("lpt")) &&
+           base[3] >= '0' && base[3] <= '9';
+}
+
+} // namespace
+
+// Whether `name`, a name in a path, can be a file's on every OS: none of Windows' characters
+// that can't be in one, no control characters, no dot or space at its end, which Windows takes
+// off, and none of Windows' devices.
 bool nameable(std::string_view name) {
-    return std::ranges::none_of(name, [](char c) {
+    const bool characters = std::ranges::none_of(name, [](char c) {
         const auto byte = static_cast<unsigned char>(c);
         return byte < 0x20 || byte == 0x7F || std::string_view(R"(:*?"<>|)").contains(c);
     });
+    return characters && !name.empty() && name.back() != '.' && name.back() != ' ' && !device(name);
 }
+
+namespace {
 
 error_t invalid(std::string_view text, std::string_view why) {
     return { .failure = failure_t::INVALID_PATH, .message = std::format("'{}' {}", text, why) };
@@ -138,12 +159,20 @@ std::shared_ptr<const vfs_t::mounts_t> vfs_t::mounts() const {
 
 result_t<bytes_t> vfs_t::read(const path_t& path) const {
     const std::shared_ptr<const mounts_t> mounts = this->mounts();
+    const error_t folder{
+        .failure = failure_t::IS_A_FOLDER,
+        .message = std::format("{} is a folder", path.text()),
+    };
+    // As kind finds it: the newest mount that has something there, or a mount at or under it,
+    // which makes it a folder.
     for (const mount_t& mount : std::views::reverse(*mounts)) {
-        // A mount's root is a folder.
-        const std::size_t depth = mount.at.keys.size();
-        if (path.keys.size() <= depth || !starts(path.keys, mount.at.keys)) {
+        if (starts(mount.at.keys, path.keys)) {
+            return std::unexpected(folder);
+        }
+        if (!starts(path.keys, mount.at.keys)) {
             continue;
         }
+        const std::size_t depth = mount.at.keys.size();
         const std::span<const std::string> names = std::span(path.names).subspan(depth);
         const std::span<const std::string> keys = std::span(path.keys).subspan(depth);
         result_t<std::optional<bytes_t>> bytes = mount.source->read(names, keys);
@@ -153,13 +182,13 @@ result_t<bytes_t> vfs_t::read(const path_t& path) const {
         if (*bytes) {
             return std::move(**bytes);
         }
-    }
-    const result_t<kind_t> there = kind(path);
-    if (there && *there == kind_t::FOLDER) {
-        return std::unexpected(error_t{
-            .failure = failure_t::IS_A_FOLDER,
-            .message = std::format("{} is a folder", path.text()),
-        });
+        const result_t<kind_t> there = mount.source->kind(names, keys);
+        if (!there) {
+            return std::unexpected(there.error());
+        }
+        if (*there == kind_t::FOLDER) {
+            return std::unexpected(folder);
+        }
     }
     return std::unexpected(error_t{
         .failure = failure_t::NOT_FOUND,
