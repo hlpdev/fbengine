@@ -197,6 +197,10 @@ target_link_libraries(fbengine_stb_write PUBLIC fbengine_stb)
 target_link_libraries(fbengine_assets_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
                       fastgltf::fastgltf)
 fbengine_set_warnings(fbengine_assets_tests)
+# libktx is UCRT's here, as the DLLs are (cmake/assets.cmake).
+if(MINGW)
+  target_link_options(fbengine_assets_tests PRIVATE -mcrtdll=ucrt)
+endif()
 catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
@@ -231,4 +235,21 @@ if(WIN32)
 endif()
 fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# The cooker's C++, built into the tests from its own sources, which read back what it makes with
+# libktx, which is UCRT's here, as the DLLs are.
+add_executable(fbengine_tools_tests tools/cook_tests.cpp assets/files.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/image.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/stb.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp")
+target_include_directories(fbengine_tools_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_tools"
+                           "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_link_libraries(fbengine_tools_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx)
+fbengine_set_warnings(fbengine_tools_tests)
+if(MINGW)
+  target_link_options(fbengine_tools_tests PRIVATE -mcrtdll=ucrt)
+endif()
+catch_discover_tests(fbengine_tools_tests TEST_PREFIX "tools."
                      DL_PATHS "${fbengine_test_dll_paths}")

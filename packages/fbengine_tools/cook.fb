@@ -1,0 +1,114 @@
+// The cooker: a game's files made into what its release loads fastest, each by its sidecar's
+// import settings, into a pak whose paths are the files' own, since the engine knows a file's
+// format by its bytes, not its name.
+
+Import std.collections
+Import std.compress
+Import std.core
+Import std.ffi
+Import std.io
+Import std.text
+Import fbengine
+Import "./c/fbe_cook"
+Import "./c/fbe_tools"
+
+/// Makes a game's source files into what its release loads: its images into KTX2s of GPU blocks
+/// with their mips, and all of it into a pak, which `Assets.MountPak` mounts.
+///
+/// # Examples
+///
+/// ```
+/// # Import std.io
+/// # Import fbengine
+/// Local source = Try TempDir()
+/// Try File.WriteText(source.Path / "readme.txt", "hello")
+/// Local built = Try TempDir()
+/// Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
+/// Try Assets.MountPak("res://cooked", built.Path / "game.pak")
+/// Expect((Try Assets.ReadText("res://cooked/readme.txt")) == "hello")
+/// Expect(Assets.Unmount("res://cooked"))
+/// ```
+Public Final Class Cooker
+    // How many folders have been cooked, each mounted at a place of its own while it is.
+    Static Field cooks: Int = 0
+
+    Private New()
+    End New
+
+    /// Cooks the image at `from`, a PNG or a JPEG, into the KTX2 at `to`, as `settings` say:
+    /// PLATFORM compression is BC7, which every desktop GPU reads. One that isn't a PNG or a JPEG,
+    /// or won't decode, throws an IOError of INVALID_DATA, and one that can't be read or written
+    /// one of OTHER.
+    @MainThread
+    Public Static Method CookImage(from: Path, to: Path, settings: ImageSettings) Throws IOError
+        If !IsImage(Try File.ReadBytes(from))
+            Throw IOError(IOErrorKind.INVALID_DATA, "{from} isn't a PNG or a JPEG", from.Text)
+        End If
+        Local options = fbe_cook_image_t(FormatOf(settings.Compression), settings.Srgb,
+                                         settings.Mipmaps, settings.Quality)
+        Local cooked = False
+        Unsafe
+            cooked = fbe_cook_image(from.Text, to.Text, AddressOf(options))
+        End Unsafe
+        If !cooked Then Throw IOError(IOErrorKind.OTHER, ToolsError(), from.Text)
+    End Method
+
+    /// Cooks the files in the folder `source`, all the way down, into the pak at `pak`, each at
+    /// its own path from the folder: its images, PNGs and JPEGs by their bytes, by their sidecars'
+    /// ImageSettings, and every other file, sidecars too, as it is. The pak is written whole or
+    /// not at all. A sidecar that isn't its file's settings throws an IOError of INVALID_DATA, as
+    /// Assets.ReadSettings does, and a file whose name no res:// path can have one of
+    /// INVALID_PATH.
+    @MainThread
+    Public Static Method CookFolder(source: Path, pak: Path) Throws IOError
+        cooks += 1
+        Local place = "res://fbengine-cooking-{cooks}"
+        Assets.MountFolder(place, source)
+        Defer Assets.Unmount(place)
+        Local scratch = Try TempDir()
+        Defer Try? scratch.Close()
+        Local writer = ZipWriter()
+        For entry In Try Dir.Walk(source)
+            If entry.Kind != FileKind.FILE Then Continue
+            Local name = entry.Relative.Text.Replace("\\", "/")
+            Try Assets.Normalize("{place}/{name}")
+            Local bytes = Try File.ReadBytes(entry.Path)
+            If IsImage(bytes)
+                Local settings = Try Assets.ReadSettings<ImageSettings>("{place}/{name}")
+                Local cooked = scratch.Path / "cooked.ktx2"
+                Try CookImage(entry.Path, cooked, settings)
+                bytes = Try File.ReadBytes(cooked)
+            End If
+            writer.Add(name, bytes, ZipMethod.STORE)
+        End For
+        Try File.WriteBytesAtomic(pak, writer.Finish())
+    End Method
+
+    // Whether `bytes` are a PNG's or a JPEG's, by their signatures.
+    Static Method IsImage(bytes: UInt8[]): Bool
+        Local png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] As UInt8[]
+        If bytes.Count >= 8 && bytes[0..8] == png Then Return True
+        Return bytes.Count >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
+    End Method
+
+    // The cooker's format for a compression.
+    Static Method FormatOf(compression: ImageCompression): Int32
+        Select compression
+            Case ImageCompression.UASTC
+                Return FBE_COOK_UASTC
+            Case ImageCompression.ASTC
+                Return FBE_COOK_ASTC
+            Case ImageCompression.NONE
+                Return FBE_COOK_RGBA8
+            Default
+                // PLATFORM, and BC7: every desktop GPU reads BC7, Apple's on macOS too.
+                Return FBE_COOK_BC7
+        End Select
+    End Method
+
+    Static Method ToolsError(): String
+        Unsafe
+            Return fbe_tools_error().ToString()
+        End Unsafe
+    End Method
+End Class
