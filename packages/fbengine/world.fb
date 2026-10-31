@@ -4,6 +4,7 @@
 Import std.core
 Import std.ffi
 Import "./c/fbe_scene"
+Import "./camera"
 Import "./entity"
 Import "./window"
 
@@ -79,6 +80,20 @@ Public Final Class World
         Return Handles(Function(out: Ptr<UInt64>, capacity: Int32): Int32
             Return fbe_world_roots(world, out, capacity)
         End Function)
+    End Method
+
+    /// The World's cameras, in the order they draw: lower orders first, and those of one order in
+    /// the order they were made.
+    @MainThread @PanicsAtCaller
+    Public Method Cameras(): Camera[]
+        Local world = Live("Cameras")
+        Local found: Camera[] = []
+        For entity In Handles(Function(out: Ptr<UInt64>, capacity: Int32): Int32
+            Return fbe_world_cameras(world, out, capacity)
+        End Function)
+            found.Add(entity As Camera)
+        End For
+        Return found
     End Method
 
     /// The first entity in the World with the name, depth first, each parent before its

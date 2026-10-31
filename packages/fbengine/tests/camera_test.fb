@@ -1,0 +1,201 @@
+// Cameras: their settings, their order, and projecting between the world and their view, with no
+// GPU, and a window only where a camera fills it.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+Function Near(a: Vec3, b: Vec3): Bool => IsClose(a, b, 0.001)
+
+Function Near(a: Float, b: Float): Bool => IsClose(a, b, 0.0001)
+
+// A camera drawing to an 800 by 400 viewport at 100, 50.
+Function Framed(): Camera
+    Local camera = Camera()
+    camera.SetViewport(Rect(100, 50, 800, 400))
+    Return camera
+End Function
+
+@Test
+Function ANewCameraLooksForwardWithPerspective()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Camera()
+    Expect(camera.Kind() == EntityKind.CAMERA)
+    Expect(camera.Projection() == Projection.PERSPECTIVE)
+    Expect(Near(camera.FieldOfView(), Deg(60)))
+    Expect(camera.OrthographicHeight() == 10.0)
+    Expect(Near(camera.Near(), 0.1) && camera.Far() == 1000.0)
+    Expect(camera.FillsTarget())
+    Expect(camera.ClearsColor() && camera.ClearsDepth())
+    Expect(camera.ClearColor() == Color.Black)
+    Expect(camera.Order() == 0)
+    Expect(camera.ToString() == "Camera \"\"")
+End Function
+
+@Test
+Function SettingsComeBackAsTheyWent()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Framed()
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetFieldOfView(Deg(74))
+    camera.SetOrthographicHeight(3)
+    camera.SetRange(0.01, 28)
+    camera.SetClear(False, True)
+    camera.SetClearColor(Color(0.1, 0.2, 0.3, 0.5))
+    camera.SetOrder(-2)
+    Expect(camera.Projection() == Projection.ORTHOGRAPHIC)
+    Expect(Near(camera.FieldOfView(), Deg(74)))
+    Expect(camera.OrthographicHeight() == 3.0)
+    Expect(Near(camera.Near(), 0.01) && camera.Far() == 28.0)
+    Expect(!camera.ClearsColor() && camera.ClearsDepth())
+    Expect(IsClose(camera.ClearColor(), Color(0.1, 0.2, 0.3, 0.5)))
+    Expect(camera.Order() == -2)
+    Expect(camera.Viewport() == Rect(100, 50, 800, 400))
+    Expect(!camera.FillsTarget())
+End Function
+
+@Test
+Function AWorldsCamerasDrawInOrderThenAsTheyWereMade()
+    Local world = Fresh()
+    Defer world.Free()
+    Local first = Camera()
+    Local overlay = Camera()
+    overlay.SetOrder(10)
+    Local early = Camera()
+    early.SetOrder(-1)
+    Local second = Camera()
+    Pivot()
+    Expect(world.Cameras() == [early, first, second, overlay])
+    // A copy keeps its original's settings and is made last.
+    Local copy = overlay.Copy() As Camera
+    Expect(copy.Order() == 10)
+    Expect(world.Cameras() == [early, first, second, overlay, copy])
+    first.Free()
+    Expect(world.Cameras() == [early, second, overlay, copy])
+    Expect(World.Main().Cameras().Count == 0)
+End Function
+
+@Test
+Function APointAheadProjectsToTheViewportsMiddle()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Framed()
+    camera.SetPosition(Vec3(0, 0, 10))
+    Expect(Near(camera.Project(Vec3(0, 0, 0)) ?? Vec3.Zero(), Vec3(500, 250, 10)))
+    // The top of the view, at the vertical field of view's half angle, is the viewport's top.
+    Local top = Tan(Deg(30)) * 10
+    Expect(Near(camera.Project(Vec3(0, top, 0)) ?? Vec3.Zero(), Vec3(500, 50, 10)))
+    Expect(Near(camera.Project(Vec3(top * 2, -top, 0)) ?? Vec3.Zero(), Vec3(900, 450, 10)))
+    // Behind it, or nearer than its near, there's nothing to project.
+    Expect(camera.Project(Vec3(0, 0, 11)) == Null)
+    Expect(camera.Project(Vec3(0, 0, 9.95)) == Null)
+End Function
+
+@Test
+Function UnprojectTakesBackWhatProjectGave()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Framed()
+    camera.SetPosition(Vec3(3, 2, 1))
+    camera.SetRotation(Deg(-20), Deg(35), Deg(10))
+    // A camera's scale changes nothing it sees.
+    camera.SetScale(Vec3(4, 0.5, 2))
+    Local point = Vec3(-5, 1, -8)
+    Local seen = camera.Project(point) ?? Vec3.Zero()
+    Expect(Near(camera.Unproject(seen), point))
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    seen = camera.Project(point) ?? Vec3.Zero()
+    Expect(Near(camera.Unproject(seen), point))
+    Expect(Near(camera.Unproject(Vec3(500, 250, 0)), Vec3(3, 2, 1)))
+End Function
+
+@Test
+Function TheHorizontalFieldOfViewFollowsTheViewport()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Camera()
+    // A field of view that sees 90 degrees across at 16:9, as Blitz's zoom 1 did at any shape.
+    camera.SetViewport(Rect(0, 0, 1600, 900))
+    camera.SetFieldOfView(2 * Atan(Tan(Deg(45)) * 9 / 16.0))
+    Expect(Near(camera.HorizontalFieldOfView(), Deg(90)))
+    // The same field of view, wider, sees more across.
+    camera.SetViewport(Rect(0, 0, 2100, 900))
+    Expect(camera.HorizontalFieldOfView() > Deg(100))
+    // UE's 74 at 16:9 sees 106.5 degrees across.
+    camera.SetViewport(Rect(0, 0, 1600, 900))
+    camera.SetFieldOfView(Deg(74))
+    Expect(IsClose(ToDegrees(camera.HorizontalFieldOfView()), 106.5, 0.1))
+End Function
+
+@Test
+Function TheMatricesAreStdMathsAndTheFrustumIsWhatItSees()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Framed()
+    camera.SetRange(0.5, 50)
+    Expect(IsClose(camera.ProjectionMatrix(), Mat4.Perspective(Deg(60), 2, 0.5, 50)))
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(4)
+    Expect(IsClose(camera.ProjectionMatrix(), Mat4.Orthographic(-4, 4, -2, 2, 0.5, 50)))
+    camera.SetProjection(Projection.PERSPECTIVE)
+
+    camera.SetPosition(Vec3(0, 1, 5))
+    camera.Turn(0, Deg(90), 0)
+    Expect(IsClose(camera.ViewMatrix(), Inverse(camera.Matrix(Space.WORLD))))
+    Expect(Near(camera.ViewMatrix().TransformPoint(Vec3(-3, 1, 5)), Vec3(0, 0, -3)))
+    Local frustum = camera.ViewFrustum()
+    Expect(frustum.Contains(Vec3(-3, 1, 5)))
+    Expect(!frustum.Contains(Vec3(3, 1, 5)))
+    Expect(!frustum.Contains(Vec3(-60, 1, 5)))
+End Function
+
+@Test
+Function AScreenRayGoesFromTheNearIntoTheView()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Framed()
+    camera.SetPosition(Vec3(0, 0, 10))
+    Local ray = camera.ScreenRay(Vec2(500, 250))
+    Expect(Near(ray.Origin, Vec3(0, 0, 9.9)))
+    Expect(Near(ray.Direction, Vec3(0, 0, -1)))
+    Local corner = camera.ScreenRay(Vec2(100, 50))
+    Expect(Near(Length(corner.Direction), 1))
+    Expect(corner.Direction.x < 0 && corner.Direction.y > 0)
+End Function
+
+@Test
+Function ACameraWithoutAViewportFillsTheWindow() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Camera()
+    Expect(camera.Viewport() == Rect(0, 0, 640, 480))
+    Try Graphics(800, 400)
+    Expect(camera.Viewport() == Rect(0, 0, 800, 400))
+    Expect(Near(camera.Project(Vec3(0, 0, -5)) ?? Vec3.Zero(), Vec3(400, 200, 5)))
+    camera.SetViewport(Rect(10, 10, 100, 100))
+    camera.ResetViewport()
+    Expect(camera.FillsTarget() && camera.Viewport() == Rect(0, 0, 800, 400))
+End Function
+
+@Test
+Function AFoundCameraIsTheGamesCamera()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Camera(Pivot())
+    camera.SetName("eye")
+    Local found = world.Find("eye")
+    Expect(found == camera)
+    Expect(found Is Camera)
+End Function

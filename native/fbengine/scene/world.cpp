@@ -19,7 +19,7 @@ namespace {
 
 /// The kinds fbe_entity_create takes.
 bool valid_kind(std::int32_t kind) {
-    return kind == FBE_ENTITY_PIVOT;
+    return kind == FBE_ENTITY_PIVOT || kind == FBE_ENTITY_CAMERA;
 }
 
 /// Where an entity sits: its parent's children, or its world's roots.
@@ -67,6 +67,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.world_rotation.emplace_back();
         entities.world_scale.emplace_back();
         entities.moved.push_back(true);
+        entities.component.push_back(none);
     } else {
         entities.kind[entity] = kind;
         entities.world[entity] = world;
@@ -76,6 +77,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.hidden[entity] = false;
     }
     reset_transform(entity);
+    add_component(entity);
     ++scene().worlds[world].count;
     return entity;
 }
@@ -90,6 +92,7 @@ void free_tree(std::uint32_t entity) {
     entities.children[entity].clear();
     entities.name[entity].clear();
     entities.name[entity].shrink_to_fit();
+    remove_component(entity);
     --scene().worlds[entities.world[entity]].count;
     scene().freed.push_back(entities.slots.handle(entity));
     entities.slots.free(entity);
@@ -524,6 +527,7 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         entities.position[copy] = entities.position[original];
         entities.rotation[copy] = entities.rotation[original];
         entities.scale[copy] = entities.scale[original];
+        fbe::scene::copy_component(original, copy);
         fbe::scene::attach(copy, world_index, i == 0 ? parent_slot : copies[tree[i].second]);
         copies[i] = copy;
     }

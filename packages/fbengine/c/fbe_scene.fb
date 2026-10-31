@@ -2,6 +2,7 @@
 // Run fb-bindgen again instead of editing it.
 
 Public Const FBE_ENTITY_PIVOT: Int32 = 0
+Public Const FBE_ENTITY_CAMERA: Int32 = 1
 Public Const FBE_SPACE_LOCAL: Int32 = 0
 Public Const FBE_SPACE_WORLD: Int32 = 1
 Public Const FBE_AXIS_RIGHT: Int32 = 0
@@ -10,6 +11,8 @@ Public Const FBE_AXIS_FORWARD: Int32 = 2
 Public Const FBE_TRANSFORM_POINT: Int32 = 0
 Public Const FBE_TRANSFORM_VECTOR: Int32 = 1
 Public Const FBE_TRANSFORM_NORMAL: Int32 = 2
+Public Const FBE_PROJECTION_PERSPECTIVE: Int32 = 0
+Public Const FBE_PROJECTION_ORTHOGRAPHIC: Int32 = 1
 
 @CLayout Public Struct fbe_vec3_t
     Public Field x: Float32
@@ -26,6 +29,20 @@ End Struct
 
 @CLayout Public Struct fbe_mat4_t
     Public Field m: Float32[16]
+End Struct
+
+@CLayout Public Struct fbe_viewport_t
+    Public Field x: Float32
+    Public Field y: Float32
+    Public Field width: Float32
+    Public Field height: Float32
+End Struct
+
+@CLayout Public Struct fbe_color_t
+    Public Field r: Float32
+    Public Field g: Float32
+    Public Field b: Float32
+    Public Field a: Float32
 End Struct
 
 @CLayout Public Struct fbe_pose_t
@@ -84,5 +101,38 @@ Public Extern "C" Lib "fbengine_native"
                                   space: Int32): Bool
     Function fbe_entity_poses(entities: Ptr<UInt64>, poses: Ptr<fbe_pose_t>, count: Int32,
                               space: Int32): Bool
+    Function fbe_camera_set_projection(camera: UInt64, projection: Int32): Bool
+    Function fbe_camera_projection(camera: UInt64): Int32
+    Function fbe_camera_set_field_of_view(camera: UInt64, angle: Float32): Bool
+    Function fbe_camera_field_of_view(camera: UInt64): Float32
+    Function fbe_camera_set_orthographic_height(camera: UInt64, height: Float32): Bool
+    Function fbe_camera_orthographic_height(camera: UInt64): Float32
+    Function fbe_camera_set_range(camera: UInt64, nearest: Float32, farthest: Float32): Bool
+    Function fbe_camera_nearest(camera: UInt64): Float32
+    Function fbe_camera_farthest(camera: UInt64): Float32
+    Function fbe_camera_set_viewport(camera: UInt64, x: Float32, y: Float32, width: Float32,
+                                     height: Float32): Bool
+    Function fbe_camera_reset_viewport(camera: UInt64): Bool
+    Function fbe_camera_viewport(camera: UInt64, target_width: Float32, target_height: Float32,
+                                 viewport: Ptr<fbe_viewport_t>): Bool
+    Function fbe_camera_whole_target(camera: UInt64): Bool
+    Function fbe_camera_set_clear(camera: UInt64, color: Bool, depth: Bool): Bool
+    Function fbe_camera_clears_color(camera: UInt64): Bool
+    Function fbe_camera_clears_depth(camera: UInt64): Bool
+    Function fbe_camera_set_clear_color(camera: UInt64, r: Float32, g: Float32, b: Float32,
+                                        a: Float32): Bool
+    Function fbe_camera_clear_color(camera: UInt64, color: Ptr<fbe_color_t>): Bool
+    Function fbe_camera_set_order(camera: UInt64, order: Int32): Bool
+    Function fbe_camera_order(camera: UInt64): Int32
+    Function fbe_world_cameras(world: UInt64, cameras: Ptr<UInt64>, capacity: Int32): Int32
+    Function fbe_camera_view_matrix(camera: UInt64, matrix: Ptr<fbe_mat4_t>): Bool
+    Function fbe_camera_projection_matrix(camera: UInt64, target_width: Float32,
+                                          target_height: Float32, matrix: Ptr<fbe_mat4_t>): Bool
+    Function fbe_camera_project(camera: UInt64, target_width: Float32, target_height: Float32,
+                                x: Float32, y: Float32, z: Float32,
+                                projected: Ptr<fbe_vec3_t>): Int32
+    Function fbe_camera_unproject(camera: UInt64, target_width: Float32, target_height: Float32,
+                                  x: Float32, y: Float32, depth: Float32,
+                                  point: Ptr<fbe_vec3_t>): Bool
     Function fbe_entity_copy(entity: UInt64, world: UInt64, parent: UInt64): UInt64
 End Extern

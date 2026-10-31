@@ -5,6 +5,7 @@
 Import std.core
 Import std.ffi
 Import "./c/fbe_scene"
+Import "./camera"
 Import "./window"
 Import "./world"
 
@@ -12,6 +13,8 @@ Import "./world"
 Public Enum EntityKind
     /// A Pivot: a place, to move, turn, and parent things to.
     PIVOT = 0
+    /// A Camera, which draws what it sees.
+    CAMERA = 1
 End Enum
 
 // One wrapper for each live entity, by its handle's slot.
@@ -240,6 +243,8 @@ Package Function EntityOf(handle: UInt64): Entity?
     Select fbe_entity_kind(handle)
         Case FBE_ENTITY_PIVOT
             Return Pivot(handle)
+        Case FBE_ENTITY_CAMERA
+            Return Camera(handle)
     End Select
     Panic(LastError())
 End Function
