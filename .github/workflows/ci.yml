@@ -140,7 +140,10 @@ jobs:
           curl -fsSL https://futureblitz.dev/install.sh | sh -s -- --version "$FB_VERSION" --no-modify-path
           echo "$HOME/.futureblitz/bin" >> "$GITHUB_PATH"
 
+      # The .clang-format's keys need clang-format 19, which the runner's apt doesn't have; this is
+      # the version Visual Studio's is.
       - name: clang-format and fb fmt
         run: |
-          git ls-files '*.h' '*.hpp' '*.c' '*.cpp' | xargs clang-format-18 --dry-run -Werror
+          pipx install clang-format==19.1.5
+          git ls-files '*.h' '*.hpp' '*.c' '*.cpp' | xargs clang-format --dry-run -Werror
           fb fmt --check packages examples
