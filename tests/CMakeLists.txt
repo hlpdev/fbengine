@@ -160,7 +160,7 @@ catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
 add_executable(fbengine_audio_tests audio/pool_tests.cpp)
 # fbengine_audio's own C++, where it's subtle: what's in its headers, and miniaudio's backends.
 add_executable(fbengine_audio_tests audio/pool_tests.cpp audio/backends_tests.cpp
-               audio/channels_tests.cpp)
+               audio/channels_tests.cpp audio/outputs_tests.cpp)
 target_include_directories(fbengine_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine_audio")
 target_link_libraries(fbengine_audio_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_audio_tests)
@@ -181,6 +181,20 @@ endif()
 fbengine_set_warnings(fbengine_audio_native_tests)
 catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
+
+# fbengine_audio_native's C API with each of a call's allocations failing in turn: its sources built
+# into the test, whose operator new fails the one it says.
+file(GLOB fbengine_audio_oom_sources CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/native/fbengine_audio/*/*.cpp")
+add_executable(fbengine_audio_oom_tests audio/oom_tests.cpp ${fbengine_audio_oom_sources})
+target_include_directories(fbengine_audio_oom_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_audio")
+target_compile_definitions(fbengine_audio_oom_tests PRIVATE FBE_AUDIO_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(fbengine_audio_oom_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_audio_oom_tests)
+catch_discover_tests(fbengine_audio_oom_tests TEST_PREFIX "audio."
+                     DL_PATHS "${fbengine_test_dll_paths}")
 
 # Playing a sound to miniaudio's null backend, as a game plays to its device; and ending with the
 # audio started, as a program does and as a panic does, which ends at once, never waiting on its

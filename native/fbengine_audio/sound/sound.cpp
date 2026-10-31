@@ -169,7 +169,7 @@ ma_uint64 count_frames(ma_decoder& decoder, std::uint32_t channels, std::int64_t
 
 /// Fails, for fbe_audio_error, a call that ran out of memory, and gives 0.
 std::uint64_t out_of_memory() {
-    fbe::audio::fail("out of memory");
+    fbe::audio::out_of_memory();
     return 0;
 }
 
@@ -248,7 +248,7 @@ FBE_AUDIO_API int64_t fbe_sound_frames(uint64_t sound) {
 
 FBE_AUDIO_API uint64_t fbe_sound_play(uint64_t sound, float volume, float pan, float pitch,
                                       bool loop, bool paused, double fade_in, uint64_t bus,
-                                      uint64_t emitter) {
+                                      uint64_t emitter) try {
     if (!fbe::audio::check_volume(volume) || !fbe::audio::check_pan(pan) ||
         !fbe::audio::check_pitch(pitch)) {
         return 0;
@@ -278,11 +278,16 @@ FBE_AUDIO_API uint64_t fbe_sound_play(uint64_t sound, float volume, float pan, f
         .bus = std::move(into),
         .emitter = from,
     };
+    if (from != nullptr) {
+        fbe::audio::make_room(*from);
+    }
     const std::uint64_t channel = fbe::audio::play(std::move(data), how);
     if (channel != 0 && from != nullptr) {
         fbe::audio::join(*from, channel);
     }
     return channel;
+} catch (const std::bad_alloc&) {
+    return out_of_memory();
 }
 
 } // extern "C"

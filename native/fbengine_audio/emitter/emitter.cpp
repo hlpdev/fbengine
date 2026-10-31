@@ -18,6 +18,7 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <new>
 #include <span>
 #include <utility>
 #include <vector>
@@ -158,6 +159,10 @@ float place(const emitter_t& emitter, ma_sound& sound) {
     return doppler_pitch(emitter);
 }
 
+void make_room(emitter_t& emitter) {
+    emitter.channels.reserve();
+}
+
 void join(emitter_t& emitter, std::uint64_t channel) {
     emitter.channels.add(channel, [](std::uint64_t playing) {
         return fbe::audio::channel_sound(playing) != nullptr;
@@ -173,8 +178,11 @@ void pitch_every_emitter() {
 
 extern "C" {
 
-FBE_AUDIO_API uint64_t fbe_emitter_add(void) {
+FBE_AUDIO_API uint64_t fbe_emitter_add(void) try {
     return emitters().add(std::make_unique<emitter_t>());
+} catch (const std::bad_alloc&) {
+    fbe::audio::out_of_memory();
+    return 0;
 }
 
 FBE_AUDIO_API void fbe_emitter_free(uint64_t emitter) {
@@ -182,14 +190,23 @@ FBE_AUDIO_API void fbe_emitter_free(uint64_t emitter) {
     if (found == nullptr) {
         return;
     }
-    // Its channels stay where it was, at rest, among the remains.
-    auto left = std::make_unique<emitter_t>(std::move(*found));
-    emitters().remove(emitter);
-    left->velocity = {};
-    pitch_remains();
-    pitch_channels(*left);
-    if (left->channels.size() > 0) {
-        remains().push_back(std::move(left));
+    // Its channels stay where it was, at rest, among the remains; with no room for them there,
+    // they stay at rest, pitched as they are.
+    try {
+        remains().reserve(remains().size() + 1);
+        auto left = std::make_unique<emitter_t>(std::move(*found));
+        emitters().remove(emitter);
+        left->velocity = {};
+        pitch_remains();
+        pitch_channels(*left);
+        if (left->channels.size() > 0) {
+            remains().push_back(std::move(left));
+        }
+    } catch (const std::bad_alloc&) {
+        found->velocity = {};
+        pitch_channels(*found);
+        emitters().remove(emitter);
+        fbe::audio::out_of_memory();
     }
 }
 
@@ -240,7 +257,7 @@ FBE_AUDIO_API void fbe_emitter_set_velocity(uint64_t emitter, float x, float y, 
     pitch_channels(*found);
 }
 
-FBE_AUDIO_API bool fbe_emitter_set_range(uint64_t emitter, float nearest, float farthest) {
+FBE_AUDIO_API bool fbe_emitter_set_range(uint64_t emitter, float nearest, float farthest) try {
     if (!std::isfinite(nearest) || std::isnan(farthest) || nearest <= 0.0F || farthest < nearest) {
         return fbe::audio::fail(
             std::format("an emitter's range is from more than 0 to as far or farther, not {} to {}",
@@ -257,6 +274,8 @@ FBE_AUDIO_API bool fbe_emitter_set_range(uint64_t emitter, float nearest, float 
         ma_sound_set_max_distance(&sound, farthest);
     });
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_emitter_nearest(uint64_t emitter) {
@@ -269,7 +288,7 @@ FBE_AUDIO_API float fbe_emitter_farthest(uint64_t emitter) {
     return found != nullptr ? found->farthest : 0.0F;
 }
 
-FBE_AUDIO_API bool fbe_emitter_set_rolloff(uint64_t emitter, float rolloff) {
+FBE_AUDIO_API bool fbe_emitter_set_rolloff(uint64_t emitter, float rolloff) try {
     if (!check_positive(rolloff, "rolloff")) {
         return false;
     }
@@ -279,6 +298,8 @@ FBE_AUDIO_API bool fbe_emitter_set_rolloff(uint64_t emitter, float rolloff) {
         each_channel(*found, [&](ma_sound& sound) { ma_sound_set_rolloff(&sound, rolloff); });
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_emitter_rolloff(uint64_t emitter) {
@@ -286,7 +307,7 @@ FBE_AUDIO_API float fbe_emitter_rolloff(uint64_t emitter) {
     return found != nullptr ? found->rolloff : 0.0F;
 }
 
-FBE_AUDIO_API bool fbe_emitter_set_falloff(uint64_t emitter, int32_t falloff) {
+FBE_AUDIO_API bool fbe_emitter_set_falloff(uint64_t emitter, int32_t falloff) try {
     if (falloff < 0 || std::cmp_greater_equal(falloff, models.size())) {
         return fbe::audio::fail(std::format("there's no falloff {}", falloff));
     }
@@ -298,6 +319,8 @@ FBE_AUDIO_API bool fbe_emitter_set_falloff(uint64_t emitter, int32_t falloff) {
                      [&](ma_sound& sound) { ma_sound_set_attenuation_model(&sound, model); });
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API int32_t fbe_emitter_falloff(uint64_t emitter) {
@@ -305,7 +328,7 @@ FBE_AUDIO_API int32_t fbe_emitter_falloff(uint64_t emitter) {
     return found != nullptr ? found->falloff : 0;
 }
 
-FBE_AUDIO_API bool fbe_emitter_set_doppler(uint64_t emitter, float factor) {
+FBE_AUDIO_API bool fbe_emitter_set_doppler(uint64_t emitter, float factor) try {
     if (!check_positive(factor, "Doppler factor")) {
         return false;
     }
@@ -315,6 +338,8 @@ FBE_AUDIO_API bool fbe_emitter_set_doppler(uint64_t emitter, float factor) {
         pitch_channels(*found);
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_emitter_doppler(uint64_t emitter) {

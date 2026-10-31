@@ -84,8 +84,9 @@ Public Final Class Audio
     End Method
 
     /// The names of `device`'s outputs, the speakers and headphones a player picks from, for
-    /// Start: the OS's for DEFAULT, the null backend's one for SILENT, and none for MANUAL. It
-    /// throws AudioError when there's no audio backend to ask, as on a machine with no output.
+    /// Start: the OS's for DEFAULT, the null backend's one for SILENT, and none for MANUAL. A
+    /// second of one name, as two of one model of headphones are, is "Headphones (2)". It throws
+    /// AudioError when there's no audio backend to ask, as on a machine with no output.
     @MainThread Public Static Method Outputs(device: AudioDevice): String[] Throws AudioError
         Local count = fbe_audio_list_outputs(device As Int32)
         If count < 0 Then Throw AudioError(LastError())

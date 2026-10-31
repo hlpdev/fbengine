@@ -3,6 +3,7 @@
 
 #include "audio/backends.hpp"
 #include "audio/mixer.hpp"
+#include "audio/outputs.hpp"
 #include "bus/buses.hpp"
 #include "channel/voices.hpp"
 #include "fbengine_audio.h"
@@ -15,6 +16,7 @@
 #include <cstdint>
 #include <format>
 #include <memory>
+#include <new>
 #include <span>
 #include <string>
 #include <string_view>
@@ -40,6 +42,9 @@ constexpr std::int32_t slowest = ma_standard_sample_rate_min;
 constexpr std::int32_t fastest = ma_standard_sample_rate_max;
 
 thread_local std::string last_error;
+/// Whether the last call that failed on this thread ran out of memory, which its message could
+/// need more of.
+thread_local bool ran_out = false;
 
 /// The started mix, which stays where it's made, as miniaudio's device, engine, and context are
 /// pointed at from its threads. The device is its own, not the engine's, so it counts what it
@@ -145,12 +150,17 @@ bool open_device(mixer_t& made, const opening_t& how) {
             count = 0;
         }
         const std::span<ma_device_info> infos(found, count);
-        const auto named = std::ranges::find_if(
-            infos, [&](const ma_device_info& info) { return how.output == info.name; });
-        if (named == infos.end()) {
+        std::vector<std::string> names;
+        for (const ma_device_info& info : infos) {
+            names.emplace_back(info.name);
+        }
+        // By the name it's listed by, numbered when another has its OS's name.
+        names = fbe::audio::output_names(names);
+        const auto named = std::ranges::find(names, how.output);
+        if (named == names.end()) {
             return fbe::audio::fail(std::format("there's no audio output named {}", how.output));
         }
-        id = named->id;
+        id = infos[static_cast<std::size_t>(named - names.begin())].id;
         config.playback.pDeviceID = &id;
     }
     const ma_result result = ma_device_init(&made.context, &config, &made.device);
@@ -172,12 +182,26 @@ bool open_device(mixer_t& made, const opening_t& how) {
 namespace fbe::audio {
 
 bool fail(std::string_view message) {
-    last_error = message;
+    try {
+        last_error = message;
+        ran_out = false;
+    } catch (const std::bad_alloc&) {
+        ran_out = true;
+    }
     return false;
 }
 
 bool fail_ma(std::string_view doing, ma_result result) {
-    return fail(std::format("{}: {}", doing, ma_result_description(result)));
+    try {
+        return fail(std::format("{}: {}", doing, ma_result_description(result)));
+    } catch (const std::bad_alloc&) {
+        return out_of_memory();
+    }
+}
+
+bool out_of_memory() {
+    ran_out = true;
+    return false;
 }
 
 ma_engine* engine() {
@@ -193,11 +217,11 @@ FBE_AUDIO_API const char* fbe_audio_version(void) {
 }
 
 FBE_AUDIO_API const char* fbe_audio_error(void) {
-    return last_error.c_str();
+    return ran_out ? "out of memory" : last_error.c_str();
 }
 
 FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t channels,
-                                   const char* output, double period) {
+                                   const char* output, double period) try {
     if (mixer != nullptr) {
         return fbe::audio::fail("the audio is started already; stop it first");
     }
@@ -268,6 +292,12 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
         }
     }
     return true;
+} catch (const std::bad_alloc&) {
+    // A mix made before it ran out goes.
+    if (mixer != nullptr) {
+        fbe_audio_stop();
+    }
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API void fbe_audio_stop(void) {
@@ -281,7 +311,7 @@ FBE_AUDIO_API bool fbe_audio_started(void) {
     return mixer != nullptr;
 }
 
-FBE_AUDIO_API int32_t fbe_audio_list_outputs(int32_t device) {
+FBE_AUDIO_API int32_t fbe_audio_list_outputs(int32_t device) try {
     outputs.clear();
     if (device == no_device) {
         return 0;
@@ -296,13 +326,24 @@ FBE_AUDIO_API int32_t fbe_audio_list_outputs(int32_t device) {
     }
     ma_device_info* found = nullptr;
     ma_uint32 count = 0;
-    if (ma_context_get_devices(&context, &found, &count, nullptr, nullptr) == MA_SUCCESS) {
-        for (const ma_device_info& info : std::span<ma_device_info>(found, count)) {
-            outputs.emplace_back(info.name);
+    try {
+        if (ma_context_get_devices(&context, &found, &count, nullptr, nullptr) == MA_SUCCESS) {
+            for (const ma_device_info& info : std::span<ma_device_info>(found, count)) {
+                outputs.emplace_back(info.name);
+            }
+            outputs = fbe::audio::output_names(outputs);
         }
+    } catch (const std::bad_alloc&) {
+        outputs.clear();
+        ma_context_uninit(&context);
+        throw;
     }
     ma_context_uninit(&context);
     return static_cast<int32_t>(outputs.size());
+} catch (const std::bad_alloc&) {
+    outputs.clear();
+    fbe::audio::out_of_memory();
+    return -1;
 }
 
 FBE_AUDIO_API const char* fbe_audio_output_name(int32_t index) {
@@ -316,8 +357,9 @@ FBE_AUDIO_API double fbe_audio_period(void) {
     if (mixer == nullptr || !mixer->has_device) {
         return 0.0;
     }
+    // The device's own frames, at its own rate, which the mix's may be converted to.
     return static_cast<double>(mixer->device.playback.internalPeriodSizeInFrames) /
-           static_cast<double>(mixer->device.sampleRate);
+           static_cast<double>(mixer->device.playback.internalSampleRate);
 }
 
 FBE_AUDIO_API int32_t fbe_audio_device(void) {
@@ -336,7 +378,7 @@ FBE_AUDIO_API bool fbe_audio_lost(void) {
            ma_device_get_state(&mixer->device) != ma_device_state_started;
 }
 
-FBE_AUDIO_API void fbe_audio_recover(void) {
+FBE_AUDIO_API void fbe_audio_recover(void) try {
     if (mixer == nullptr || mixer->kind == no_device) {
         return;
     }
@@ -364,9 +406,12 @@ FBE_AUDIO_API void fbe_audio_recover(void) {
     if (open_device(*mixer, how) && ma_device_start(&mixer->device) == MA_SUCCESS) {
         mixer->fell_back = true;
     }
+} catch (const std::bad_alloc&) {
+    // It's tried again at the next flip.
+    fbe::audio::out_of_memory();
 }
 
-FBE_AUDIO_API bool fbe_audio_simulate(int32_t event) {
+FBE_AUDIO_API bool fbe_audio_simulate(int32_t event) try {
     if (mixer == nullptr || mixer->kind == no_device) {
         return fbe::audio::fail("only a device's output is unplugged; start the audio on one");
     }
@@ -390,6 +435,8 @@ FBE_AUDIO_API bool fbe_audio_simulate(int32_t event) {
     default:
         return fbe::audio::fail(std::format("there's no audio event {}", event));
     }
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API int32_t fbe_audio_sample_rate(void) {
@@ -404,7 +451,7 @@ FBE_AUDIO_API int64_t fbe_audio_frames(void) {
     return mixer != nullptr ? mixer->frames.load(std::memory_order_relaxed) : 0;
 }
 
-FBE_AUDIO_API bool fbe_audio_set_volume(float to) {
+FBE_AUDIO_API bool fbe_audio_set_volume(float to) try {
     if (!std::isfinite(to) || to < 0.0F) {
         return fbe::audio::fail(std::format("a volume is 0 or more, not {}", to));
     }
@@ -413,13 +460,15 @@ FBE_AUDIO_API bool fbe_audio_set_volume(float to) {
         ma_engine_set_volume(&mixer->engine, volume);
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_audio_volume(void) {
     return volume;
 }
 
-FBE_AUDIO_API bool fbe_audio_mix(float* samples, int32_t frames) {
+FBE_AUDIO_API bool fbe_audio_mix(float* samples, int32_t frames) try {
     if (mixer == nullptr || mixer->kind != no_device) {
         return fbe::audio::fail("only audio started with no device is mixed by a call");
     }
@@ -447,6 +496,8 @@ FBE_AUDIO_API bool fbe_audio_mix(float* samples, int32_t frames) {
     ma_clip_samples_f32(samples, samples, static_cast<ma_uint64>(frames) * channels);
     mixer->frames.fetch_add(frames, std::memory_order_relaxed);
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 } // extern "C"

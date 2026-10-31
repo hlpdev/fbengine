@@ -24,6 +24,9 @@ public:
     std::uint64_t add(std::unique_ptr<Item> item) {
         std::uint32_t slot = 0;
         if (m_free.empty()) {
+            // Room for the slot in the free list first, so take never allocates; either can run
+            // out of memory before anything's changed.
+            m_free.reserve(m_slots.size() + 1);
             slot = static_cast<std::uint32_t>(m_slots.size());
             m_slots.emplace_back();
         } else {

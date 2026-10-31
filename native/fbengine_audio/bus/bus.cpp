@@ -18,6 +18,7 @@
 #include <format>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <vector>
 
@@ -183,8 +184,9 @@ bool build(bus_t& bus) {
     }
     bus.has_group = true;
     ma_sound_group_set_volume(&bus.group, bus.volume);
-    const bool low_pass = bus.cutoff > 0.0F && make_low_pass(bus);
+    // The reverb, which can run out of memory, before the low-pass, which can't.
     const bool reverb = bus.reverb.has_value() && make_reverb(bus);
+    const bool low_pass = bus.cutoff > 0.0F && make_low_pass(bus);
     join(bus, low_pass, reverb);
     const std::scoped_lock lock(buses().lock);
     bus.has_low_pass = low_pass;
@@ -257,22 +259,14 @@ ma_node* bus_input(bus_t* bus) {
     return ma_engine_get_endpoint(engine());
 }
 
+// The list of buses is the main thread's to change, so it reads it as it is, with no copy that
+// could run out of memory.
 bool start_buses() {
-    std::vector<bus_t*> all;
-    {
-        const std::scoped_lock lock(buses().lock);
-        all = buses().all;
-    }
-    return std::ranges::all_of(all, [](bus_t* bus) { return build(*bus); });
+    return std::ranges::all_of(buses().all, [](bus_t* bus) { return build(*bus); });
 }
 
 void stop_buses() {
-    std::vector<bus_t*> all;
-    {
-        const std::scoped_lock lock(buses().lock);
-        all = buses().all;
-    }
-    for (bus_t* bus : all) {
+    for (bus_t* bus : buses().all) {
         tear_down(*bus);
     }
 }
@@ -296,7 +290,7 @@ void update_buses(const ma_engine* mix) {
 
 extern "C" {
 
-FBE_AUDIO_API uint64_t fbe_bus_add(uint64_t parent) {
+FBE_AUDIO_API uint64_t fbe_bus_add(uint64_t parent) try {
     std::shared_ptr<bus_t> in;
     if (parent != 0) {
         in = fbe::audio::find_bus(parent);
@@ -315,13 +309,16 @@ FBE_AUDIO_API uint64_t fbe_bus_add(uint64_t parent) {
         return 0;
     }
     return buses().handles.add(std::make_unique<std::shared_ptr<bus_t>>(std::move(bus)));
+} catch (const std::bad_alloc&) {
+    fbe::audio::out_of_memory();
+    return 0;
 }
 
 FBE_AUDIO_API void fbe_bus_free(uint64_t bus) {
     buses().handles.remove(bus);
 }
 
-FBE_AUDIO_API bool fbe_bus_set_volume(uint64_t bus, float volume) {
+FBE_AUDIO_API bool fbe_bus_set_volume(uint64_t bus, float volume) try {
     if (!fbe::audio::check_volume(volume)) {
         return false;
     }
@@ -334,6 +331,8 @@ FBE_AUDIO_API bool fbe_bus_set_volume(uint64_t bus, float volume) {
         ma_sound_group_set_volume(&found->group, volume);
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_bus_volume(uint64_t bus) {
@@ -341,7 +340,7 @@ FBE_AUDIO_API float fbe_bus_volume(uint64_t bus) {
     return found != nullptr ? found->volume : 0.0F;
 }
 
-FBE_AUDIO_API bool fbe_bus_set_low_pass(uint64_t bus, float cutoff) {
+FBE_AUDIO_API bool fbe_bus_set_low_pass(uint64_t bus, float cutoff) try {
     if (cutoff != 0.0F &&
         (!std::isfinite(cutoff) || cutoff < lowest_cutoff || cutoff > highest_cutoff)) {
         return fbe::audio::fail(std::format("a low-pass is 0, for none, or {} to {} Hz, not {}",
@@ -377,6 +376,8 @@ FBE_AUDIO_API bool fbe_bus_set_low_pass(uint64_t bus, float cutoff) {
         found->has_low_pass = true;
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API float fbe_bus_low_pass(uint64_t bus) {
@@ -385,7 +386,7 @@ FBE_AUDIO_API float fbe_bus_low_pass(uint64_t bus) {
 }
 
 FBE_AUDIO_API bool fbe_bus_set_reverb(uint64_t bus, float room_size, float damping, float width,
-                                      float wet, float dry) {
+                                      float wet, float dry) try {
     if (!check_fraction(room_size, "room size") || !check_fraction(damping, "damping") ||
         !check_fraction(width, "width") || !check_fraction(wet, "wet") ||
         !check_fraction(dry, "dry")) {
@@ -395,8 +396,10 @@ FBE_AUDIO_API bool fbe_bus_set_reverb(uint64_t bus, float room_size, float dampi
     if (found == nullptr) {
         return false;
     }
+    std::optional<reverb_t> was;
     {
         const std::scoped_lock lock(buses().lock);
+        was = found->reverb;
         found->reverb = reverb_t{
             .room_size = room_size,
             .damping = damping,
@@ -406,12 +409,21 @@ FBE_AUDIO_API bool fbe_bus_set_reverb(uint64_t bus, float room_size, float dampi
         };
         found->reverb_changed = true;
     }
-    if (found->has_group && !found->has_reverb && make_reverb(*found)) {
-        join(*found, found->has_low_pass, true);
+    try {
+        if (found->has_group && !found->has_reverb && make_reverb(*found)) {
+            join(*found, found->has_low_pass, true);
+            const std::scoped_lock lock(buses().lock);
+            found->has_reverb = true;
+        }
+    } catch (const std::bad_alloc&) {
+        // Its node couldn't be made: the reverb it had stays.
         const std::scoped_lock lock(buses().lock);
-        found->has_reverb = true;
+        found->reverb = was;
+        return fbe::audio::out_of_memory();
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::audio::out_of_memory();
 }
 
 FBE_AUDIO_API void fbe_bus_clear_reverb(uint64_t bus) {
