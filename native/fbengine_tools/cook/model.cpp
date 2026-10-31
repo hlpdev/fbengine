@@ -24,7 +24,6 @@
 #include <format>
 #include <limits>
 #include <meshoptimizer.h>
-#include <numeric>
 #include <optional>
 #include <span>
 #include <string>
@@ -370,7 +369,10 @@ private:
             indices.resize(accessor.count);
             gltf::copyFromAccessor<std::uint32_t>(m_asset, accessor, indices.data());
         } else {
-            std::ranges::iota(indices, 0U);
+            // Apple clang's libc++ has no std::ranges::iota.
+            for (std::size_t at = 0; at < indices.size(); ++at) {
+                indices[at] = static_cast<unsigned int>(at);
+            }
         }
         if (indices.empty() || indices.size() % 3 != 0) {
             copy_primitive(primitive);
