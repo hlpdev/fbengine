@@ -17,11 +17,14 @@ Global hooked = False
     Frame.OnFlip(EachFrame)
 End Function
 
-/// How fast something moved from `last` to `now` over the last frame, at rest when there was none.
+/// How fast something moved from `last` to `now` over the last frame, at rest when there was none,
+/// or when it moved too far for a Float32 to say how fast.
 Package Function Moved(last: Vec3, now: Vec3): Vec3
     Local seconds = Frame.Delta()
     If seconds <= 0.0 Then Return Vec3(0, 0, 0)
-    Return (now - last) * ((1.0 / seconds) As Float)
+    Local moving = (now - last) * ((1.0 / seconds) As Float)
+    If !IsFinite(moving.x) || !IsFinite(moving.y) || !IsFinite(moving.z) Then Return Vec3(0, 0, 0)
+    Return moving
 End Function
 
 Function EachFrame()
