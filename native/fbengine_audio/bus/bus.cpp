@@ -85,7 +85,7 @@ constexpr ma_uint32 group_flags = static_cast<ma_uint32>(MA_SOUND_FLAG_NO_PITCH)
 struct buses_t {
     std::mutex lock;
     std::vector<bus_t*> all;
-    fbe::audio::pool_t<std::shared_ptr<bus_t>> handles;
+    fbe::audio::pool_t<std::shared_ptr<bus_t>> handles{ fbe::audio::kind_t::BUS };
 };
 
 buses_t& buses() {

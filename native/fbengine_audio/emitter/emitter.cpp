@@ -47,7 +47,7 @@ constexpr std::array<ma_attenuation_model, 3> models = {
 /// The emitters, made once and never let go, so an Emitter an FB program lets go as it ends
 /// finds them.
 fbe::audio::pool_t<emitter_t>& emitters() {
-    static auto* made = new fbe::audio::pool_t<emitter_t>();
+    static auto* made = new fbe::audio::pool_t<emitter_t>(fbe::audio::kind_t::EMITTER);
     return *made;
 }
 

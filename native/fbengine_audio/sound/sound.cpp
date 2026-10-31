@@ -31,7 +31,7 @@ struct sound_t {
 
 /// The sounds, made once and never let go, so a Sound an FB program lets go as it ends finds them.
 fbe::audio::pool_t<sound_t>& sounds() {
-    static auto* made = new fbe::audio::pool_t<sound_t>();
+    static auto* made = new fbe::audio::pool_t<sound_t>(fbe::audio::kind_t::SOUND);
     return *made;
 }
 

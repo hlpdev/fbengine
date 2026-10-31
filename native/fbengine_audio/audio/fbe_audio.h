@@ -6,6 +6,10 @@
 // file in packages/fbengine_audio/c/, which tools/bindgen.sh makes, so an area's header uses only
 // fixed-size types and its own structs, never another area's. Everything but fbe_audio_version and
 // fbe_audio_error is the main thread's, which the FB API's @MainThread keeps it to.
+//
+// Sounds, channels, buses, and emitters are handles: a 32-bit slot, a 24-bit generation, and an
+// 8-bit kind, fbengine_audio's from 64 to 95, 0 for none. A call given a freed one, or one of
+// another kind, takes it for none.
 
 #include <stdbool.h>
 #include <stdint.h>
