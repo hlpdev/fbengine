@@ -1,0 +1,13 @@
+// fbengine, over its C API in c/fbengine.fb, the bindings fb-bindgen made of
+// native/fbengine/fbengine.h, which `Import fbengine` leaves out: they're fbengine.c.fbengine.
+
+Import std.core
+Import std.ffi
+Import "./c/fbengine"
+
+/// The version of fbengine the program runs with, like "0.1.0", its DLL's.
+Public Function Version(): String
+    Unsafe
+        Return fbe_version().ToString()
+    End Unsafe
+End Function

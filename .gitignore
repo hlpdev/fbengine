@@ -1,0 +1,9 @@
+build/
+cmake-build-*/
+.cache/
+.idea/
+.vscode/
+compile_commands.json
+fb.lock
+# Each target's DLLs are built, by CMake here and by CI for a release, never checked in.
+packages/*/native/

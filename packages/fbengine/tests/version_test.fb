@@ -1,0 +1,9 @@
+Import std.core
+Import std.test
+Import fbengine
+
+// The DLL is the package's own build: its version is project.toml's.
+@Test
+Function TheDllIsThePackagesVersion()
+    Expect(Version() == "0.1.0")
+End Function

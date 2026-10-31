@@ -1,0 +1,6 @@
+// The smallest program on fbengine: it runs with the package's DLL beside it.
+
+Import std.core
+Import fbengine
+
+Print("fbengine {Version()}")

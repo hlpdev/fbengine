@@ -1,0 +1,13 @@
+[project]
+name = "fbengine"
+version = "0.1.0"
+type = "library"
+license = "Apache-2.0"
+description = "A game engine for FutureBlitz: windows, input, 2D, the 3D scene, and its renderer."
+readme = "README.md"
+repository = "https://github.com/hlpdev/fbengine"
+keywords = ["engine", "game", "graphics", "3d", "2d"]
+
+# fbengine's own DLL, native/fbengine, built for each target into native/<target>/.
+[native]
+fbengine_native = { dynamic = "native/{target}/fbengine_native" }
