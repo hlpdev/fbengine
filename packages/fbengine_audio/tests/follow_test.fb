@@ -86,6 +86,24 @@ Function AnEmitterFollowsAtEachFlip()
     Expect(emitter.Velocity() == Vec3(0, 0, 0))
 End Function
 
+// A hook added after the first Follow, as a physics World's is, runs before following, which is
+// late: what it moves is heard where it moved that frame, not a frame late.
+Function MovesHere()
+    here = Vec3(5, 0, 0)
+End Function
+
+@Test
+Function FollowingHearsWhereOtherHooksMovedThings()
+    Local emitter = Emitter()
+    Defer emitter.Free()
+    here = Vec3(0, 0, 0)
+    emitter.Follow(Here)
+    Local mover = Frame.OnFlip(MovesHere)
+    Defer Frame.RemoveOnFlip(mover)
+    Flips(1)
+    Expect(emitter.Position() == Vec3(5, 0, 0))
+End Function
+
 @Test
 Function FollowingSomethingElseStopsFollowingTheFirst()
     Local emitter = Emitter()
