@@ -1,0 +1,67 @@
+// The engine's jobs: work on the workers finishes on the main thread, at the Flip after it's done,
+// each once.
+
+Import std.concurrent
+Import std.core
+Import std.os
+Import std.test
+Import std.time
+Import fbengine
+
+Global finished = 0
+
+Async Function CountWhenDone(task: Task)
+    Await task
+    finished += 1
+End Function
+
+// Flips until `count` have finished, or a minute has gone by, for a slow machine.
+Function FlipUntil(count: Int)
+    Local since = Instant.Now()
+    While finished < count && (Instant.Now() - since) < 60.Seconds
+        Flip()
+        Sleep(1.Milliseconds)
+    End While
+End Function
+
+@Test
+Function ThereIsAWorkerPerCoreLessOne()
+    Expect(Jobs.Workers() >= 1)
+    Expect(Jobs.Workers() == Max(System.CpuCount - 1, 1))
+End Function
+
+@Test
+Function FinishedWorkWaitsForTheNextFlip()
+    finished = 0
+    CountWhenDone(Jobs.Simulate(Duration.Zero()))
+    // It's done on the worker long before this, but the main thread only hears at a Flip.
+    Sleep(100.Milliseconds)
+    Expect(finished == 0)
+    Flip()
+    Expect(finished == 1)
+    Flip()
+    Expect(finished == 1)
+End Function
+
+@Test
+Function ManyJobsEachFinishOnce()
+    finished = 0
+    For i = 1 To 500
+        CountWhenDone(Jobs.Simulate((i % 7 * 100 As Int64).Microseconds))
+    End For
+    FlipUntil(500)
+    Expect(finished == 500)
+    Flip()
+    Flip()
+    Expect(finished == 500)
+End Function
+
+@Test
+Function ASlowJobFinishesAtALaterFlip()
+    finished = 0
+    CountWhenDone(Jobs.Simulate(200.Milliseconds))
+    Flip()
+    Expect(finished == 0)
+    FlipUntil(1)
+    Expect(finished == 1)
+End Function

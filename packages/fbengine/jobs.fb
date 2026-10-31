@@ -1,0 +1,66 @@
+// The engine's jobs: its worker threads, and the work they finish that Flip hands over.
+
+Import std.collections
+Import std.concurrent
+Import std.core
+Import std.time
+Import "./c/fbe_jobs"
+Import "./frame"
+Import "./window"
+
+/// The engine's worker threads, a worker per core less one, which its loading, culling,
+/// animation, and collisions run on. What the engine starts on them for the game finishes on the
+/// main thread, at the Flip after it's done.
+Public Class Jobs
+    // The work the FB side waits for, by ticket, and the Flip hook that hands it over while there's
+    // any.
+    Static Field waiting: Map<UInt64, TaskSource<Bool>> = Map<UInt64, TaskSource<Bool>>()
+    Static Field hook: Int = 0
+
+    Private New()
+    End New
+
+    /// How many worker threads there are: one per core less one, at least one.
+    @MainThread Public Static Method Workers(): Int32 => fbe_jobs_workers()
+
+    // A Task done at the Flip that hands `ticket` over, once its work has finished.
+    @MainThread Package Static Method Finished(ticket: UInt64): Task<Bool>
+        Local source = TaskSource<Bool>()
+        waiting[ticket] = source
+        If hook == 0 Then hook = Frame.OnFlip(HandOverJobs)
+        Return source.Task
+    End Method
+
+    /// Starts a job that takes `time` on a worker, as a load would, done at the Flip after it
+    /// finishes, as the engine's own are: for a game's tests of what waits on loading. Panics when
+    /// `time` is below 0 or above 2147 seconds.
+    @MainThread Public Static Async Method Simulate(time: Duration)
+        Local microseconds = time.Nanoseconds / 1000
+        If time.IsNegative || microseconds > 2_147_483_647
+            Panic("a job takes 0 to 2147 seconds, not {time}")
+        End If
+        Local ticket = fbe_jobs_simulate(microseconds As Int32)
+        If ticket == 0 Then Panic(LastError())
+        Await Finished(ticket)
+    End Method
+
+    // Finishes the Tasks of the tickets this Flip handed over, and stops looking once none waits.
+    @MainThread Package Static Method HandOver()
+        For i = 0 To fbe_jobs_finished_count() - 1
+            Local ticket = fbe_jobs_finished_at(i)
+            Local source = waiting.Get(ticket)
+            If source != Null
+                waiting.Remove(ticket)
+                source.Finish(True)
+            End If
+        End For
+        If waiting.Count == 0
+            Frame.RemoveOnFlip(hook)
+            hook = 0
+        End If
+    End Method
+End Class
+
+@MainThread Function HandOverJobs()
+    Jobs.HandOver()
+End Function
