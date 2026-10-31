@@ -365,6 +365,77 @@ fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
+# text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
+# test fonts.
+file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")
+add_executable(fbengine_text_tests text/text_tests.cpp ${fbengine_text_sources}
+               "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
+target_include_directories(fbengine_text_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_compile_definitions(fbengine_text_tests PRIVATE FBE_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}"
+                           FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
+                           FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+                           FBE_SHAPE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/shape/data/in-house/fonts")
+target_link_libraries(fbengine_text_tests PRIVATE SDL3::SDL3-static freetype fbengine_harfbuzz
+                      fbengine_sheenbidi Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_text_tests)
+catch_discover_tests(fbengine_text_tests TEST_PREFIX "text."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# collide's masks against a brute force, from its sources and core's.
+add_executable(fbengine_collide_tests collide/collide_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/collide/collide.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
+target_include_directories(fbengine_collide_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_compile_definitions(fbengine_collide_tests PRIVATE FBE_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(fbengine_collide_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_collide_tests)
+catch_discover_tests(fbengine_collide_tests TEST_PREFIX "collide."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# fbengine_ui's panics, each by a run of tests/ui, which says it.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_ui_cases
+      "add-twice|panic: Node[.]Add: Node \"child\" is in another Node already"
+      "add-into-itself|panic: Node[.]Add: Node \"outer\" can't go in itself"
+      "insert-out-of-range|panic: Node[.]Insert: 1 isn't 0 to 0"
+      "fixed-negative|panic: Sizing[.]Fixed: a length is 0 or more, not -1"
+      "fill-zero|panic: Sizing[.]Fill: a weight is over 0, not 0"
+      "fraction-past-one|panic: Sizing[.]Fraction: a fraction is 0 to 1, not 1[.]5"
+      "style-empty-name|panic: Theme[.]SetFields: \"button[.]\" isn't a style's name"
+      "set-width-unchecked|panic: Node[.]SetWidth: a fill's weight is over 0, not 0"
+      "min-size-nan|panic: Node[.]SetMinSize: a least is 0 or more, and finite, not NaN"
+      "padding-negative|panic: Node[.]SetPadding: padding is 0 or more, and finite, not -1"
+      "margin-infinite|panic: Node[.]SetMargin: a margin is finite, not Inf"
+      "anchors-backward|panic: Node[.]SetAnchors: a Max is at its Min or after"
+      "style-negative-border|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not -1"
+      "style-nan-font-size|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not NaN"
+      "style-negative-padding|panic: Theme[.]SetFields: a style's padding is 0 or more, not -2"
+      "max-size-negative|panic: Node[.]SetMaxSize: a most is 0 or more, or Inf, not -1 by 0"
+      "gap-infinite|panic: Node[.]SetGap: a gap is 0 or more, and finite, not Inf"
+      "content-size-nan|panic: Node[.]SetContentSize: a size is 0 or more, and finite, not NaN by 0"
+      "anchor-nan|panic: Node[.]SetAnchors: an anchor is finite, not NaN"
+      "slider-range-backward|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not 2 to 1"
+      "slider-range-too-wide|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not -3"
+      "slider-step-negative|panic: Slider[.]SetStep: a step is 0 or more, not -1"
+      "max-length-negative|panic: TextField[.]SetMaxLength: a most is 0, for none, or more, not -1"
+      "wheel-step-zero|panic: ScrollView[.]SetWheelStep: a step is over 0, not 0"
+      "scale-zero|panic: Ui[.]SetScale: a scale is over 0, not 0"
+      "command-with-a-space|panic: Console[.]Register: \"give item\" isn't a command's name"
+      "console-no-lines|panic: Console[.]SetMaxLines: a console keeps 1 line or more, not 0"
+      "debug-row-two-kinds|panic: DebugPanel[.]Switch: the debug row mode is a Label"
+      "strings-fall-back-to-themselves|panic: Strings[.]SetFallback: en's strings fall back to fr's, which fall back to them")
+  foreach(case IN LISTS fbengine_ui_cases)
+    string(REPLACE "|" ";" case "${case}")
+    list(GET case 0 name)
+    list(GET case 1 printed)
+    add_test(NAME ui.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- ${name})
+    set_tests_properties(ui.${name} PROPERTIES PASS_REGULAR_EXPRESSION "${printed}" TIMEOUT 120)
+  endforeach()
+endif()
+
 # The cooker's C++, built into the tests from its own sources, which read back what it makes with
 # libktx, which is UCRT's here, as the DLLs are, and with the engine's own glTF loader.
 add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp assets/files.cpp
@@ -391,21 +462,6 @@ if(MINGW)
   target_link_options(fbengine_tools_tests PRIVATE -mcrtdll=ucrt)
 endif()
 catch_discover_tests(fbengine_tools_tests TEST_PREFIX "tools."
-# text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
-# test fonts.
-file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")
-add_executable(fbengine_text_tests text/text_tests.cpp ${fbengine_text_sources}
-               "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
-target_include_directories(fbengine_text_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
-target_compile_definitions(fbengine_text_tests PRIVATE FBE_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}"
-                           FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
-                           FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
-                           FBE_SHAPE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/shape/data/in-house/fonts")
-target_link_libraries(fbengine_text_tests PRIVATE SDL3::SDL3-static freetype fbengine_harfbuzz
-                      fbengine_sheenbidi Catch2::Catch2WithMain)
-fbengine_set_warnings(fbengine_text_tests)
-catch_discover_tests(fbengine_text_tests TEST_PREFIX "text."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # Typed references: a module tests/tools/references writes of its files/, which a game builds and
@@ -504,71 +560,3 @@ target_link_libraries(fbengine_core_tests PRIVATE fbengine_native Catch2::Catch2
 fbengine_set_warnings(fbengine_core_tests)
 catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_native>")
-# text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
-# test fonts.
-file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")
-add_executable(fbengine_text_tests text/text_tests.cpp ${fbengine_text_sources}
-               "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
-target_include_directories(fbengine_text_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
-target_compile_definitions(fbengine_text_tests PRIVATE FBE_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}"
-                           FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts")
-target_link_libraries(fbengine_text_tests PRIVATE SDL3::SDL3-static freetype fbengine_harfbuzz
-                      fbengine_sheenbidi Catch2::Catch2WithMain)
-fbengine_set_warnings(fbengine_text_tests)
-catch_discover_tests(fbengine_text_tests TEST_PREFIX "text."
-                     DL_PATHS "${fbengine_test_dll_paths}")
-
-# collide's masks against a brute force, from its sources and core's.
-add_executable(fbengine_collide_tests collide/collide_tests.cpp
-               "${PROJECT_SOURCE_DIR}/native/fbengine/collide/collide.cpp"
-               "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
-target_include_directories(fbengine_collide_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
-target_compile_definitions(fbengine_collide_tests PRIVATE FBE_BUILDING
-                           FBE_VERSION="${PROJECT_VERSION}")
-target_link_libraries(fbengine_collide_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
-fbengine_set_warnings(fbengine_collide_tests)
-catch_discover_tests(fbengine_collide_tests TEST_PREFIX "collide."
-                     DL_PATHS "${fbengine_test_dll_paths}")
-
-# fbengine_ui's panics, each by a run of tests/ui, which says it.
-if(FBENGINE_FB_TESTS)
-  set(fbengine_ui_cases
-      "add-twice|panic: Node[.]Add: Node \"child\" is in another Node already"
-      "add-into-itself|panic: Node[.]Add: Node \"outer\" can't go in itself"
-      "insert-out-of-range|panic: Node[.]Insert: 1 isn't 0 to 0"
-      "fixed-negative|panic: Sizing[.]Fixed: a length is 0 or more, not -1"
-      "fill-zero|panic: Sizing[.]Fill: a weight is over 0, not 0"
-      "fraction-past-one|panic: Sizing[.]Fraction: a fraction is 0 to 1, not 1[.]5"
-      "style-empty-name|panic: Theme[.]SetFields: \"button[.]\" isn't a style's name"
-      "set-width-unchecked|panic: Node[.]SetWidth: a fill's weight is over 0, not 0"
-      "min-size-nan|panic: Node[.]SetMinSize: a least is 0 or more, and finite, not NaN"
-      "padding-negative|panic: Node[.]SetPadding: padding is 0 or more, and finite, not -1"
-      "margin-infinite|panic: Node[.]SetMargin: a margin is finite, not Inf"
-      "anchors-backward|panic: Node[.]SetAnchors: a Max is at its Min or after"
-      "style-negative-border|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not -1"
-      "style-nan-font-size|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not NaN"
-      "style-negative-padding|panic: Theme[.]SetFields: a style's padding is 0 or more, not -2"
-      "max-size-negative|panic: Node[.]SetMaxSize: a most is 0 or more, or Inf, not -1 by 0"
-      "gap-infinite|panic: Node[.]SetGap: a gap is 0 or more, and finite, not Inf"
-      "content-size-nan|panic: Node[.]SetContentSize: a size is 0 or more, and finite, not NaN by 0"
-      "anchor-nan|panic: Node[.]SetAnchors: an anchor is finite, not NaN"
-      "slider-range-backward|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not 2 to 1"
-      "slider-range-too-wide|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not -3"
-      "slider-step-negative|panic: Slider[.]SetStep: a step is 0 or more, not -1"
-      "max-length-negative|panic: TextField[.]SetMaxLength: a most is 0, for none, or more, not -1"
-      "wheel-step-zero|panic: ScrollView[.]SetWheelStep: a step is over 0, not 0"
-      "scale-zero|panic: Ui[.]SetScale: a scale is over 0, not 0"
-      "command-with-a-space|panic: Console[.]Register: \"give item\" isn't a command's name"
-      "console-no-lines|panic: Console[.]SetMaxLines: a console keeps 1 line or more, not 0"
-      "debug-row-two-kinds|panic: DebugPanel[.]Switch: the debug row mode is a Label"
-      "strings-fall-back-to-themselves|panic: Strings[.]SetFallback: en's strings fall back to fr's, which fall back to them")
-  foreach(case IN LISTS fbengine_ui_cases)
-    string(REPLACE "|" ";" case "${case}")
-    list(GET case 0 name)
-    list(GET case 1 printed)
-    add_test(NAME ui.${name}
-             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- ${name})
-    set_tests_properties(ui.${name} PROPERTIES PASS_REGULAR_EXPRESSION "${printed}" TIMEOUT 120)
-  endforeach()
-endif()
