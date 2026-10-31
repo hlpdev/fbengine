@@ -5,6 +5,7 @@
 Import std.core
 Import std.ffi
 Import "./c/fbe_audio"
+Import "./c/fbe_channel"
 
 /// Where the mix goes.
 Public Enum AudioDevice
@@ -54,7 +55,8 @@ Public Class Audio
         End If
     End Method
 
-    /// Stops the mix and lets its device go; stopped already, it does nothing.
+    /// Stops the mix, which finishes every Channel, and lets its device go; stopped already, it does
+    /// nothing. Sounds stay loaded.
     @MainThread Public Static Method Stop()
         fbe_audio_stop()
     End Method
@@ -84,6 +86,9 @@ Public Class Audio
     /// How many frames have been mixed since it started, which a device's keeps adding to as it
     /// plays, 0 when it's stopped.
     @MainThread Public Static Method Frames(): Int64 => fbe_audio_frames()
+
+    /// How many Channels are playing, paused ones too.
+    @MainThread Public Static Method Playing(): Int32 => fbe_channel_count()
 
     /// Multiplies the whole mix by `volume`, 0 or more: 1, as it starts, leaves it as it is, 0
     /// silences it, and more than 1 makes it louder. It's kept while the audio's stopped.

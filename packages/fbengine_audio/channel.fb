@@ -1,0 +1,86 @@
+// Channels: one play of a Sound each, a small value Sound.Play gives.
+
+Import std.core
+Import std.math
+Import "./c/fbe_channel"
+
+/// One play of a Sound, which Sound.Play gives. It plays until its sound ends, or for good when it
+/// loops, until it's stopped, or the audio is; after that it's finished, and its Methods do nothing
+/// and say 0 or False, so a game can stop or ask about a Channel whose sound ended long ago. A
+/// Channel's zero, a Field's before it's given a play, is finished from the start.
+Public Struct Channel
+    Package Field handle: UInt64
+
+    /// Whether it's playing, or paused: False once it's finished.
+    @MainThread Public Method Playing(): Bool => fbe_channel_playing(handle)
+
+    /// Whether it's paused, which a finished Channel isn't.
+    @MainThread Public Method Paused(): Bool => fbe_channel_paused(handle)
+
+    /// Stops it, which finishes it.
+    @MainThread Public Method Stop()
+        fbe_channel_stop(handle)
+    End Method
+
+    /// Pauses it where it is, until Resume.
+    @MainThread Public Method Pause()
+        fbe_channel_pause(handle)
+    End Method
+
+    /// Plays it on from where Pause left it, or from its start, for a play that started paused.
+    @MainThread Public Method Resume()
+        fbe_channel_resume(handle)
+    End Method
+
+    /// Sets its volume, 0 or more: 1 plays its sound as it is, 0.5 at half its amplitude.
+    @MainThread Public Method SetVolume(volume: Float32)
+        CheckVolume(volume)
+        fbe_channel_set_volume(handle, volume)
+    End Method
+
+    /// Its volume.
+    @MainThread Public Method Volume(): Float32 => fbe_channel_volume(handle)
+
+    /// Sets its pan, from -1, the left only, through 0, both, to 1, the right only.
+    @MainThread Public Method SetPan(pan: Float32)
+        CheckPan(pan)
+        fbe_channel_set_pan(handle, pan)
+    End Method
+
+    /// Its pan.
+    @MainThread Public Method Pan(): Float32 => fbe_channel_pan(handle)
+
+    /// Sets its pitch, from 1/16 to 16: 1 is as its sound was recorded, 2 an octave higher and
+    /// twice as fast.
+    @MainThread Public Method SetPitch(pitch: Float32)
+        CheckPitch(pitch)
+        fbe_channel_set_pitch(handle, pitch)
+    End Method
+
+    /// Its pitch.
+    @MainThread Public Method Pitch(): Float32 => fbe_channel_pitch(handle)
+
+    /// Makes it loop, from its sound's end to its start, or play to its end and finish.
+    @MainThread Public Method SetLoop(loop: Bool)
+        fbe_channel_set_loop(handle, loop)
+    End Method
+
+    /// Whether it loops.
+    @MainThread Public Method Looping(): Bool => fbe_channel_looping(handle)
+End Struct
+
+// A volume, pan, or pitch out of range is a mistake, finished Channel or not.
+@PanicsAtCaller
+Package Function CheckVolume(volume: Float32)
+    If !IsFinite(volume) || volume < 0.0 Then Panic("a volume is 0 or more, not {volume}")
+End Function
+
+@PanicsAtCaller
+Package Function CheckPan(pan: Float32)
+    If !(pan >= -1.0 && pan <= 1.0) Then Panic("a pan is -1, the left, to 1, the right, not {pan}")
+End Function
+
+@PanicsAtCaller
+Package Function CheckPitch(pitch: Float32)
+    If !(pitch >= 0.0625 && pitch <= 16.0) Then Panic("a pitch is 1/16 to 16, not {pitch}")
+End Function

@@ -36,7 +36,8 @@ FBE_AUDIO_API const char* fbe_audio_error(void);
 // device's own (48000 Hz and 2 with no device). False if it's started already, a value's out of
 // range, or the device won't start.
 FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t channels);
-// Stops the mix and lets the device go; stopped already, it does nothing.
+// Stops the mix, which finishes every channel, and lets the device go; stopped already, it does
+// nothing.
 FBE_AUDIO_API void fbe_audio_stop(void);
 FBE_AUDIO_API bool fbe_audio_started(void);
 // What fbe_audio_start was given for its device, -1 when it's stopped.

@@ -2,6 +2,7 @@
 // backend, or on none, where fbe_audio_mix pulls each frame, as tests and offline renders do.
 
 #include "audio/mixer.hpp"
+#include "channel/voices.hpp"
 #include "fbengine_audio.h"
 
 #include <array>
@@ -30,8 +31,8 @@ constexpr std::int32_t fastest = ma_standard_sample_rate_max;
 thread_local std::string last_error;
 
 /// The started mix, which stays where it's made, as miniaudio's device, engine, and context are
-/// pointed at from its threads. The device is its own, not the engine's, so it counts what it mixes.
-/// miniaudio's init functions clear each of its structs first.
+/// pointed at from its threads. The device is its own, not the engine's, so it counts what it
+/// mixes. miniaudio's init functions clear each of its structs first.
 struct mixer_t {
     ma_context context;
     bool has_context = false;
@@ -188,6 +189,7 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
 }
 
 FBE_AUDIO_API void fbe_audio_stop(void) {
+    fbe::audio::end_channels();
     mixer.reset();
 }
 
@@ -241,8 +243,8 @@ FBE_AUDIO_API bool fbe_audio_mix(float* samples, int32_t frames) {
         return true;
     }
     ma_uint64 read = 0;
-    const ma_result result = ma_engine_read_pcm_frames(&mixer->engine, samples,
-                                                       static_cast<ma_uint64>(frames), &read);
+    const ma_result result =
+        ma_engine_read_pcm_frames(&mixer->engine, samples, static_cast<ma_uint64>(frames), &read);
     if (result != MA_SUCCESS && result != MA_AT_END) {
         return fbe::audio::fail_ma("couldn't mix", result);
     }

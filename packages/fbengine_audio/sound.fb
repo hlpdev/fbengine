@@ -1,0 +1,143 @@
+// Sounds: Sound.Load decodes a file whole, and Play plays it on a Channel of its own.
+
+Import std.core
+Import std.ffi
+Import std.io
+Import "./audio"
+Import "./c/fbe_sound"
+Import "./channel"
+
+/// A sound that can't be read, or isn't WAV, FLAC, or Ogg Vorbis.
+Public Class SoundError Extends Error
+End Class
+
+/// A sound, decoded whole into memory, which plays any number of times at once, each on a Channel
+/// of its own. What it plays at is its own volume, pan, pitch, and looping, which each play starts
+/// with and its Channel can change.
+Public Final Class Sound
+    Field handle: UInt64
+    Field volume: Float32 = 1.0
+    Field pan: Float32 = 0.0
+    Field pitch: Float32 = 1.0
+    Field loop: Bool = False
+
+    Private New(handle: UInt64)
+        Self.handle = handle
+    End New
+
+    /// Reads and decodes the sound file at `path`, WAV, FLAC, or Ogg Vorbis, whatever its name
+    /// says, at its own rate and channels.
+    @MainThread Public Static Method Load(path: Path): Sound Throws IOError, SoundError
+        Local bytes = Try File.ReadBytes(path)
+        Return Try Decode(bytes, "{path}: ")
+    End Method
+
+    /// Decodes a sound file's `bytes`, WAV, FLAC, or Ogg Vorbis, which it doesn't keep.
+    @MainThread Public Static Method FromBytes(bytes: UInt8[]): Sound Throws SoundError
+        Return Try Decode(bytes, "")
+    End Method
+
+    @MainThread Static Method Decode(bytes: UInt8[], from: String): Sound Throws SoundError
+        Local handle: UInt64 = 0
+        If bytes.Count > 0
+            Unsafe
+                handle = fbe_sound_load(AddressOf(bytes[0]), bytes.Count)
+            End Unsafe
+        End If
+
+        If handle == 0
+            Throw SoundError(bytes.Count > 0 ? "{from}{LastError()}" : "{from}there are no bytes")
+        End If
+
+        Return Sound(handle)
+    End Method
+
+    /// Lets the sound go, though the Channels playing it play on to their ends; using it after
+    /// panics. Freeing it again does nothing. It's freed when nothing has it any more, too.
+    @MainThread Public Method Free()
+        If handle != 0
+            fbe_sound_free(handle)
+            handle = 0
+        End If
+    End Method
+
+    /// Whether Free let it go.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// Its frames a second.
+    @MainThread Public Method SampleRate(): Int32 => fbe_sound_sample_rate(Live())
+
+    /// Its channels, 1 for mono, 2 for stereo.
+    @MainThread Public Method Channels(): Int32 => fbe_sound_channels(Live())
+
+    /// How many frames long it is.
+    @MainThread Public Method Frames(): Int64 => fbe_sound_frames(Live())
+
+    /// How many seconds long it is.
+    @MainThread Public Method Length(): Float64
+        Return (fbe_sound_frames(Live()) As Float64) / fbe_sound_sample_rate(handle)
+    End Method
+
+    /// Plays it, on a Channel of its own, at its volume, pan, pitch, and looping, or paused, so
+    /// it starts at Resume. Panics when the audio isn't started.
+    @MainThread Public Method Play(paused: Bool = False): Channel
+        Live()
+        If !Audio.Started() Then Panic("the audio isn't started; Audio.Start it first")
+        Local channel = fbe_sound_play(handle, volume, pan, pitch, loop, paused)
+        If channel == 0 Then Panic(LastError())
+        Return Channel(channel)
+    End Method
+
+    /// Sets the volume its plays start at, 0 or more: 1, as it's loaded, plays it as it is, and
+    /// 0.5 at half its amplitude.
+    @MainThread Public Method SetVolume(volume: Float32)
+        Live()
+        CheckVolume(volume)
+        Self.volume = volume
+    End Method
+
+    /// The volume its plays start at.
+    @MainThread Public Method Volume(): Float32 => volume
+
+    /// Sets the pan its plays start at, from -1, the left only, through 0, both, to 1, the right
+    /// only.
+    @MainThread Public Method SetPan(pan: Float32)
+        Live()
+        CheckPan(pan)
+        Self.pan = pan
+    End Method
+
+    /// The pan its plays start at.
+    @MainThread Public Method Pan(): Float32 => pan
+
+    /// Sets the pitch its plays start at, from 1/16 to 16: 1 is as it was recorded, 2 an octave
+    /// higher and twice as fast, and 0.5 an octave lower and half as fast.
+    @MainThread Public Method SetPitch(pitch: Float32)
+        Live()
+        CheckPitch(pitch)
+        Self.pitch = pitch
+    End Method
+
+    /// The pitch its plays start at.
+    @MainThread Public Method Pitch(): Float32 => pitch
+
+    /// Makes its plays loop, from its end to its start, until they're stopped, or play once.
+    @MainThread Public Method SetLoop(loop: Bool)
+        Live()
+        Self.loop = loop
+    End Method
+
+    /// Whether its plays loop.
+    @MainThread Public Method Looping(): Bool => loop
+
+    Method Destroy()
+        If handle != 0 Then fbe_sound_free(handle)
+    End Method
+
+    // Its handle, or a panic once it's freed.
+    @PanicsAtCaller
+    Method Live(): UInt64
+        If handle == 0 Then Panic("this Sound was freed")
+        Return handle
+    End Method
+End Class
