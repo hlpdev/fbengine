@@ -236,11 +236,40 @@ Function AStepUpClimbsOntoWhatsLowEnough()
     mover.Translate(Vec3(2, -0.01, 0))
     world.Collide()
     Expect(Near(mover.Position().x, 0.749))
+    // A step height below the step isn't a step up.
+    mover.SetStepHeight(0.4)
+    mover.Translate(Vec3(1, -0.01, 0))
+    world.Collide()
+    Expect(Near(mover.Position(), Vec3(0.749, 0.251, 0)))
     mover.SetStepHeight(0.6)
     Expect(mover.StepHeight() == 0.6)
     mover.Translate(Vec3(1, -0.01, 0))
     world.Collide()
     Expect(Near(mover.Position(), Vec3(1.749, 0.751, 0)))
+End Function
+
+@Test
+Function ClimbingASlopeTakesAStepHeight()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    // A ramp rising 20 degrees toward +X.
+    Local ramp = Floor()
+    ramp.Turn(0, 0, Deg(20))
+    Local climbs: Float[] = []
+    For step In [0.0, 0.3]
+        Local mover = Mover(world, Vec3(0, 1, 0))
+        mover.SetStepHeight(step)
+        For frame = 0 Until 30
+            mover.Translate(Vec3(0.1, -0.05, 0))
+            world.Collide()
+        End For
+        climbs.Add(mover.Position().y)
+        mover.Free()
+    End For
+    // With none, it climbs no higher than it was, as a move falling a little can't rise.
+    Expect(climbs[0] < 1.0)
+    Expect(climbs[1] > 1.2)
 End Function
 
 @Test
@@ -273,4 +302,28 @@ Function AMoverUnderAParentMovesInTheWorld()
     mover.Translate(Vec3(0, -2, 0))
     world.Collide()
     Expect(Near(mover.Position(Space.WORLD), Vec3(3, 0.501, 0)))
+End Function
+
+@Test
+Function ContactsOutliveTheGeometryTheyWereOn()
+    Local world = Fresh()
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Local floor = Floor()
+    Local mover = Mover(world, Vec3(0, 3, 0))
+    mover.Translate(Vec3(0, -10, 0))
+    world.Collide()
+    Expect(mover.Collisions()[0].Surface != Null)
+    // The floor gets a new geometry, as a door's or a destructible's does, and the old one goes.
+    floor.SetGeometry(Geometry.Plane(2))
+    Local touched = mover.Collisions()
+    Expect(touched.Count == 1 && touched[0].Other == floor)
+    Expect(touched[0].Surface == Null && touched[0].Triangle == -1)
+    // One still held is still the one touched, not the mesh's new one.
+    Local held = Geometry.Plane(4)
+    floor.SetGeometry(held)
+    mover.Translate(Vec3(0, -1, 0))
+    world.Collide()
+    floor.SetGeometry(Geometry.Plane(2))
+    Expect(mover.Collisions()[0].Surface == held.Surface(0))
 End Function

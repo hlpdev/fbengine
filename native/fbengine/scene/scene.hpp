@@ -105,10 +105,14 @@ struct geometry_t {
     bool bounds_stale = true;
     vec3_t bounds_min;
     vec3_t bounds_max;
-    /// The tree over its triangles, and the version it was built at, built when it's first
-    /// searched after a change.
+    /// Goes up when its triangles come or go, as against only moving, which a tree can be
+    /// refitted for rather than built again.
+    std::uint64_t shape_version = 0;
+    /// The tree over its triangles, and the versions it was made at, built or refitted when it's
+    /// first searched after a change.
     bvh_t tree;
     std::uint64_t tree_version = UINT64_MAX;
+    std::uint64_t tree_shape_version = UINT64_MAX;
 };
 
 /// A mesh: the geometry it draws, by slot, or none.
@@ -251,8 +255,8 @@ std::uint32_t geometry_slot(std::uint64_t handle);
 /// Holds a geometry once more, or lets it go once, freeing it after its last.
 void retain_geometry(std::uint32_t geometry);
 void release_geometry(std::uint32_t geometry);
-/// Marks a geometry changed.
-void touch_geometry(std::uint32_t geometry);
+/// Marks a geometry changed: `reshaped` when triangles or surfaces came or went, else only moved.
+void touch_geometry(std::uint32_t geometry, bool reshaped);
 /// A new material, held once, as its handle is.
 std::uint32_t make_material();
 /// The live material a handle is for, or none, with fbe_error saying so.

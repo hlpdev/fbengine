@@ -88,6 +88,20 @@ good modern engine on its own. Every structural choice is checked against both.
   swept spheres and ellipsoids against meshes, boxes, and spheres, with stop and slide responses,
   step-up, and ray and sphere picks, in C++ on the job system. SCP:CB's player and NPCs move this
   way; a game wanting rigid bodies uses fbengine_physics.
+  - A mover goes from where it was at its World's last `Collide` to where it is now, as an
+    ellipsoid swept in its own space, where it's a sphere: against meshes' triangles (their
+    fronts), boxes (their twelve triangles), and ellipsoids, each a snapshot at its current
+    transform. Both sides get the contact.
+  - Where it differs from Blitz3D, on purpose: targets are where they are now, never swept, so
+    one moving into a mover pushes it out only as far as nothing else is, and a mover squeezed
+    between two stays where it was, never inside either. An ellipsoid target keeps both its radii;
+    a box turns and scales with its entity. A mover that touches its World's iteration count of
+    times (8 by default) stops where its last touch left it.
+  - A mover already within its radius of a face, an edge, or a corner touches it only going
+    further in, so one starting in a seam goes out of it, never through.
+  - No move raises a mover more than the move's own rise and its step height: sliding up a slope
+    or over an edge, and stepping up, all take a step height, and a step up lands on ground no
+    higher than it. A mover with none climbs only as far as its move does.
 
 ## The renderer
 

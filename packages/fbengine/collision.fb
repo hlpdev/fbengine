@@ -49,7 +49,8 @@ Public Struct Collision Implements Printable
     /// When in the move it touched, from 0 to 1, of the part of the move that touched it, which
     /// after a slide is the slide.
     Public Field Time: Float
-    /// The surface touched, for a Mesh's triangles, else Null.
+    /// The surface touched, for a Mesh's triangles, else Null; Null too once the geometry it was
+    /// in is gone.
     Public Field Surface: Surface?
     /// The triangle touched in that surface, else -1.
     Public Field Triangle: Int
@@ -61,8 +62,11 @@ End Struct
 /// moves as an ellipsoid, swept from where its last move ended to where it is now, against every
 /// showing entity of a group its own collides with, which it touches as its CollisionShape; what
 /// it touches is where it is now, a moving one's ellipsoid where its last move ended, and isn't
-/// swept itself, so a moving door pushes nothing. Each move is worked out on its own, so their
-/// order changes nothing. Moving an entity by SetPosition is a move to sweep; ResetCollisions is a
+/// swept itself, so a moving door pushes nothing, but a mover it closed on is pushed out of it on
+/// its next move, only as far as nothing else is: one squeezed between two stays where it was. A
+/// mover already within its radius of a face, an edge, or a corner touches it only going further
+/// in, and no move raises a mover more than the move's own rise and its StepHeight. Each move is
+/// worked out on its own, so their order changes nothing. Moving an entity by SetPosition is a move to sweep; ResetCollisions is a
 /// teleport.
 Extend Entity
     /// Puts the entity in a collision group, 1 to 1023, or none with 0, as at first; it forgets
@@ -146,8 +150,10 @@ Extend Entity
     End Method
 
     /// Sets how high a sliding mover steps up onto what blocks it going across, as stairs want:
-    /// it goes up, across, and back down, if that lands it on ground facing up and gets it
-    /// further; 0, at first, for not at all. Below 0 panics.
+    /// it goes up, across, and back down, if that lands it on ground facing up, no higher than
+    /// the step, and gets it further. It's also how much higher than its move rises a slide may
+    /// take it, so climbing a slope or riding over an edge takes one. 0, at first, for neither.
+    /// Below 0 panics.
     @MainThread @PanicsAtCaller
     Public Method SetStepHeight(height: Float)
         If !fbe_entity_set_step_height(Live("SetStepHeight"), height) Then Failed("SetStepHeight")
@@ -181,10 +187,16 @@ Extend Entity
             Local other = EntityOf(contact.entity)
             If other == Null Then Continue
             Local surface: Surface? = Null
-            Local geometry = contact.geometry != 0 ? GeometryOf(contact.geometry) : Null
-            If geometry != Null Then surface = geometry.Surface(contact.surface)
+            Local triangle = -1
+            // A mesh given another geometry since may have let go of the one it was touched on.
+            Local kept = contact.geometry != 0 && fbe_geometry_alive(contact.geometry)
+            Local geometry = kept ? GeometryOf(contact.geometry) : Null
+            If geometry != Null
+                surface = geometry.Surface(contact.surface)
+                triangle = contact.triangle
+            End If
             collisions.Add(Collision(other, VecOf(contact.point), VecOf(contact.normal),
-                                     contact.time, surface, contact.triangle))
+                                     contact.time, surface, triangle))
         End For
         Return collisions
     End Method

@@ -45,6 +45,10 @@ public:
     /// Builds the tree over the surfaces' triangles.
     void build(const std::vector<surface_t>& surfaces);
 
+    /// Fits the tree's boxes to the surfaces' triangles again, which are the ones it was built
+    /// over, moved: far quicker than building it again.
+    void refit(const std::vector<surface_t>& surfaces);
+
     /// Whether anything crosses the segment from `a` to `b`, from either side.
     [[nodiscard]] bool blocks(vec3_t a, vec3_t b) const;
 

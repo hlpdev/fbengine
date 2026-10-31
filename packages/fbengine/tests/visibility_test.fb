@@ -107,6 +107,31 @@ Function BoundsAreTheWorldsBoxAroundAnEntity()
 End Function
 
 @Test
+Function NothingInAnotherWorldIsInViewOrSeen()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Looking()
+    Local looker = Pivot()
+    looker.SetPosition(Vec3(0, 0, 5))
+    Local elsewhere = World()
+    Defer elsewhere.Free()
+    World.SetCurrent(elsewhere)
+    // Where the camera looks and the looker sees, but in another World.
+    Local cube = Mesh(Geometry.Cube())
+    cube.SetPosition(Vec3(0, 0, -10))
+    Local there = Pivot()
+    there.SetPosition(Vec3(0, 0, -5))
+    World.SetCurrent(world)
+    Expect(!camera.InView(cube) && !camera.InView(there))
+    Expect(!looker.CanSee(there) && !there.CanSee(looker))
+    // Brought into the camera's World, they are.
+    Local here = Pivot()
+    cube.SetParent(here)
+    there.SetParent(here)
+    Expect(camera.InView(cube) && camera.InView(there) && looker.CanSee(there))
+End Function
+
+@Test
 Function WhatBlocksSightIsBetweenOrNot()
     Local world = Fresh()
     Defer world.Free()

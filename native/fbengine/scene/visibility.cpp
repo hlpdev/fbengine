@@ -133,6 +133,10 @@ FBE_API int32_t fbe_entity_can_see(uint64_t entity, uint64_t target) {
     if (other == none) {
         return -1;
     }
+    // An entity sees nothing in another World.
+    if (scene().entities.world[slot] != scene().entities.world[other]) {
+        return 0;
+    }
     const vec3_t from = fbe::scene::world_position(slot);
     const vec3_t to = fbe::scene::world_position(other);
     return fbe::scene::blocked(scene().entities.world[slot], from, to, slot, other) ? 0 : 1;

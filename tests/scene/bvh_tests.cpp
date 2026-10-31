@@ -144,3 +144,34 @@ TEST_CASE("a hit's normal faces the segment's start, and its origin is its trian
     empty.build({});
     CHECK_FALSE(empty.blocks({}, { 1.0F, 1.0F, 1.0F }));
 }
+
+TEST_CASE("a refitted tree finds what a tree built again does", "[scene]") {
+    std::mt19937 random(5); // NOLINT(bugprone-random-generator-seed)
+    std::vector<surface_t> surfaces = soup(1500, random);
+    bvh_t refitted;
+    refitted.build(surfaces);
+    // Every vertex moved, as an animated or edited mesh's are; the triangles stay.
+    std::uniform_real_distribution<float> nudge(-2.0F, 2.0F);
+    for (surface_t& surface : surfaces) {
+        for (fbe_vertex_t& vertex : surface.vertices) {
+            vertex.position.x += nudge(random);
+            vertex.position.y += nudge(random);
+        }
+    }
+    refitted.refit(surfaces);
+    bvh_t built;
+    built.build(surfaces);
+    std::uniform_real_distribution<float> place(-12.0F, 12.0F);
+    for (int i = 0; i < 300; ++i) {
+        const vec3_t a(place(random), place(random), place(random));
+        const vec3_t b(place(random), place(random), place(random));
+        segment_hit_t first;
+        segment_hit_t second;
+        const bool found = refitted.nearest(a, b, false, first);
+        CHECK(found == built.nearest(a, b, false, second));
+        if (found) {
+            CHECK(first.time == second.time);
+            CHECK(first.origin.triangle == second.origin.triangle);
+        }
+    }
+}

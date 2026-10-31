@@ -525,8 +525,8 @@ FBE_API int32_t fbe_mesh_blend(uint64_t mesh, int32_t surface);
 // geometry, turned and scaled with it, or another entity's position, against the six planes of
 // the camera's view, near and far included; in view unless the whole box is behind one plane, so
 // something just past a corner of the view can count, as culling allows. Only the frustum
-// counts: nothing in front hides it, and hiding the entity doesn't. 1 in view, 0 not, -1 for a
-// viewport with no size.
+// counts: nothing in front hides it, and hiding the entity doesn't; an entity in another World
+// than the camera's isn't in view. 1 in view, 0 not, -1 for a freed camera or entity.
 FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, float target_height,
                                           uint64_t entity);
 FBE_API int32_t fbe_camera_point_in_view(uint64_t camera, float target_width, float target_height,
@@ -541,8 +541,8 @@ FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds);
 FBE_API bool fbe_entity_set_blocks_sight(uint64_t entity, bool blocks);
 FBE_API bool fbe_entity_blocks_sight(uint64_t entity);
 // Whether nothing that blocks sight in its World is between an entity's position and a point,
-// or another entity's position; the two themselves don't block it. 1 if it can see, 0 if not,
-// -1 for a freed entity.
+// or another entity's position; the two themselves don't block it, and an entity in another
+// World can't be seen. 1 if it can see, 0 if not, -1 for a freed entity.
 FBE_API int32_t fbe_entity_can_see_point(uint64_t entity, float x, float y, float z);
 FBE_API int32_t fbe_entity_can_see(uint64_t entity, uint64_t target);
 
@@ -551,8 +551,11 @@ FBE_API int32_t fbe_entity_can_see(uint64_t entity, uint64_t target);
 // a group it collides with, and the response its World gives the pair says what it does when it
 // touches one; what it touches gets the contact too. The other entities are where they are now,
 // and moving ones where their last move ended; their own moves aren't swept, so a moving door
-// pushes nothing. Each move is worked out on its own, so the order entities are in changes
-// nothing.
+// pushes nothing, but a mover it closed on is pushed out of it on its next move, only as far as
+// nothing else is: one squeezed between two stays where it was. A mover already within its radius
+// of a face, an edge, or a corner touches it only going further in. No move raises a mover more
+// than the move's own rise and its step height. Each move is worked out on its own, so the order
+// entities are in changes nothing.
 //
 // An entity's group, 0 for none, at first. Setting one forgets where its last move ended.
 FBE_API bool fbe_entity_set_collision_group(uint64_t entity, int32_t group);
@@ -568,7 +571,9 @@ FBE_API int32_t fbe_entity_collision_shape(uint64_t entity);
 // at first; false unless its least corner is at or below its greatest.
 FBE_API bool fbe_entity_set_collision_box(uint64_t entity, const fbe_aabb_t* box);
 FBE_API bool fbe_entity_collision_box(uint64_t entity, fbe_aabb_t* box);
-// How high a sliding mover steps up onto what blocks it, 0 for not at all, at first.
+// How high a sliding mover steps up onto what blocks it, onto ground no higher, and how much
+// higher than its move rises a slide may take it, as up a slope or over an edge; 0, at first, for
+// neither.
 FBE_API bool fbe_entity_set_step_height(uint64_t entity, float height);
 FBE_API float fbe_entity_step_height(uint64_t entity);
 // Forgets where its last move ended, and what it touched, so its next move isn't swept, as a

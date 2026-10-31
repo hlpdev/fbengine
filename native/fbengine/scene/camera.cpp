@@ -488,6 +488,10 @@ FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, f
         return -1;
     }
     const fbe::scene::scene_t& s = fbe::scene::scene();
+    // A camera sees only its own World.
+    if (s.entities.world[slot] != s.entities.world[found->entity]) {
+        return 0;
+    }
     fbe::scene::update_world(slot);
     const fbe::scene::mat4_t& m = s.entities.world_matrix[slot];
     if (s.entities.kind[slot] != FBE_ENTITY_MESH ||
