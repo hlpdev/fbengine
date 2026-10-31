@@ -172,7 +172,7 @@ FBE_PHYSICS_API bool fbe_physics_restore(uint64_t world, const uint8_t* bytes, i
     }
     // What the world is now, put back if the state turns out not to be whole.
     JPH::StateRecorderImpl now;
-    save(*found, *carried, now);
+    save(*found, 0.0, now);
     JPH::StateRecorderImpl state;
     state.WriteBytes(bytes, static_cast<std::size_t>(size));
     state.Rewind();

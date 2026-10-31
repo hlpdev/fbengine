@@ -347,6 +347,45 @@ Public Final Class Body
         Return in.BodiesOf(found, count)
     End Method
 
+    /// Moves a kinematic body to `position`, turned to `rotation`, over the next `seconds`, more
+    /// than 0, as a game drives a door, a lift, or a platform: by the velocities that take it
+    /// there, so it pushes what it meets on the way, which SetPosition, a teleport, doesn't. It
+    /// keeps those velocities until it's moved again or given others, so a game moves it each
+    /// step, or stops it with SetVelocity.
+    @MainThread Public Method MoveTo(position: Vec3, rotation: Quat, seconds: Float)
+        Local at = BodyVec3(position)
+        Local turned = fbe_body_quat_t(rotation.x, rotation.y, rotation.z, rotation.w)
+        Local ok = False
+        Unsafe
+            ok = fbe_body_move_to(Live("Body.MoveTo"), AddressOf(at), AddressOf(turned), seconds)
+        End Unsafe
+        If !ok Then Panic("Body.MoveTo: {LastError()}")
+    End Method
+
+    /// Whether the body's collisions are found along the way it moves in a step, not only where it
+    /// ends up, False at first.
+    @MainThread Public Method Continuous(): Bool => fbe_body_continuous(Live("Body.Continuous"))
+
+    /// Makes the body's collisions found along the way it moves in a step, so a fast one, as a
+    /// bullet or a thrown grenade, never passes through a thin wall, for a little more work, or
+    /// not; a static body has none to find.
+    @MainThread Public Method SetContinuous(continuous: Bool)
+        If !fbe_body_set_continuous(Live("Body.SetContinuous"), continuous)
+            Panic("Body.SetContinuous: {LastError()}")
+        End If
+    End Method
+
+    /// Whether the body sleeps once it's rested a while, as it does at first.
+    @MainThread Public Method CanSleep(): Bool => fbe_body_can_sleep(Live("Body.CanSleep"))
+
+    /// Lets the body sleep, or keeps it awake, as one a game watches each step might be; a static
+    /// body never wakes, and a character's sleeps and wakes as its character goes.
+    @MainThread Public Method SetCanSleep(canSleep: Bool)
+        If !fbe_body_set_can_sleep(Live("Body.SetCanSleep"), canSleep)
+            Panic("Body.SetCanSleep: {LastError()}")
+        End If
+    End Method
+
     // Whether it's a character's body.
     @MainThread Package Method OfCharacter(): Bool => character
 

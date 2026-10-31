@@ -60,4 +60,10 @@ Public Extern "C" Lib "fbengine_physics_native"
     Function fbe_body_sensor(body: UInt64): Bool
     Function fbe_body_set_sensor(body: UInt64, sensor: Bool): Bool
     Function fbe_body_touching(body: UInt64, bodies: Ptr<UInt64>, capacity: Int32): Int32
+    Function fbe_body_move_to(body: UInt64, position: Ptr<fbe_body_vec3_t>,
+                              rotation: Ptr<fbe_body_quat_t>, seconds: Float32): Bool
+    Function fbe_body_continuous(body: UInt64): Bool
+    Function fbe_body_set_continuous(body: UInt64, continuous: Bool): Bool
+    Function fbe_body_can_sleep(body: UInt64): Bool
+    Function fbe_body_set_can_sleep(body: UInt64, can_sleep: Bool): Bool
 End Extern

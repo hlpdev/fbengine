@@ -591,4 +591,59 @@ FBE_PHYSICS_API int32_t fbe_body_touching(uint64_t body, uint64_t* bodies, int32
     return count;
 }
 
+FBE_PHYSICS_API bool fbe_body_move_to(uint64_t body, const fbe_body_vec3_t* position,
+                                      const fbe_body_quat_t* rotation, float seconds) {
+    const body_t* found = find_own(body);
+    JPH::Vec3 at;
+    JPH::Quat turned;
+    if (found == nullptr || !vec3(*position, at) || !quat(*rotation, turned)) {
+        return false;
+    }
+    if (!found->body().IsKinematic()) {
+        return fail("only a kinematic body is moved to where it's put");
+    }
+    if (!std::isfinite(seconds) || seconds <= 0.0F) {
+        return fail(std::format("a body's moved there over more than 0 seconds, not {}", seconds));
+    }
+    found->bodies().MoveKinematic(found->id, at, turned, seconds);
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_body_continuous(uint64_t body) {
+    const body_t* found = find(body);
+    return found != nullptr && !found->body().IsStatic() &&
+           found->body().GetMotionProperties()->GetMotionQuality() ==
+               JPH::EMotionQuality::LinearCast;
+}
+
+FBE_PHYSICS_API bool fbe_body_set_continuous(uint64_t body, bool continuous) {
+    const body_t* found = find_moving(body, "collisions to find along its way");
+    if (found == nullptr) {
+        return false;
+    }
+    found->bodies().SetMotionQuality(found->id, continuous ? JPH::EMotionQuality::LinearCast
+                                                           : JPH::EMotionQuality::Discrete);
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_body_can_sleep(uint64_t body) {
+    const body_t* found = find(body);
+    return found != nullptr && !found->body().IsStatic() && found->body().GetAllowSleeping();
+}
+
+FBE_PHYSICS_API bool fbe_body_set_can_sleep(uint64_t body, bool can_sleep) {
+    if (find_own(body) == nullptr) {
+        return false;
+    }
+    const body_t* found = find_moving(body, "sleep");
+    if (found == nullptr) {
+        return false;
+    }
+    found->body().SetAllowSleeping(can_sleep);
+    if (!can_sleep) {
+        found->bodies().ActivateBody(found->id);
+    }
+    return true;
+}
+
 } // extern "C"

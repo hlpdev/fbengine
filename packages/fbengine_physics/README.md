@@ -28,6 +28,7 @@ world.Free()
 
 Bodies are static, dynamic, or kinematic, of boxes, spheres, capsules, cylinders, convex hulls,
 meshes, and compounds of them, in layers, held by joints, noticed by sensors, and found by casts;
+kinematic ones are driven where a game puts them, fast ones collide all along their way, and
 characters walk among them. A world is deterministic: made and stepped by the same calls in the
 same order, it moves the same, bit for bit, on any number of threads, and on every target,
 compiler, and build, and `Save` and `Restore` take it back to where it was.

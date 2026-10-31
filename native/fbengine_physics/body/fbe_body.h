@@ -149,6 +149,28 @@ FBE_PHYSICS_API bool fbe_body_set_sensor(uint64_t body, bool sensor);
 // `capacity` of them in `bodies`, giving how many there are, -1 if it isn't a body.
 FBE_PHYSICS_API int32_t fbe_body_touching(uint64_t body, uint64_t* bodies, int32_t capacity);
 
+// Moves a kinematic `body` to `position`, turned to `rotation`, over the next `seconds`, more than
+// 0, by the velocities that take it there, so it pushes what it meets on the way, as a door or a
+// lift a game drives does; it keeps them until it's moved again or given others. False if it isn't
+// a body, isn't kinematic, is a character's, or a number's out of range.
+FBE_PHYSICS_API bool fbe_body_move_to(uint64_t body, const fbe_body_vec3_t* position,
+                                      const fbe_body_quat_t* rotation, float seconds);
+
+// Whether `body`'s collisions are found along the way it moves in a step, not only where it ends
+// up, so a fast one, as a bullet, never passes through a thin wall, for a little more work; false
+// for a static body.
+FBE_PHYSICS_API bool fbe_body_continuous(uint64_t body);
+
+// Makes them so, or not; false if it isn't a body, or is static.
+FBE_PHYSICS_API bool fbe_body_set_continuous(uint64_t body, bool continuous);
+
+// Whether `body` sleeps once it's rested a while, as at first; false for a static body.
+FBE_PHYSICS_API bool fbe_body_can_sleep(uint64_t body);
+
+// Lets `body` sleep, or keeps it awake, as a body a game watches every step might be; false if it
+// isn't a body, is static, or is a character's.
+FBE_PHYSICS_API bool fbe_body_set_can_sleep(uint64_t body, bool can_sleep);
+
 #ifdef __cplusplus
 }
 #endif
