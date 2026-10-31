@@ -18,6 +18,10 @@
 
 namespace {
 
+/// Pi, and a quarter turn, in radians, as a game's floats have them.
+constexpr auto pi = static_cast<float>(std::numbers::pi);
+constexpr float half_pi = pi / 2.0F;
+
 /// A place, as the C API takes it.
 fbe_collide_place_t place_of(float x, float y, float handle_x, float handle_y, float rotation,
                              float scale_x, float scale_y) {
@@ -82,7 +86,8 @@ bool reference(const pixels_t& pixels, const fbe_collide_place_t& place, std::in
 /// there, kept exact, sampled NEAREST, clamped.
 bool gpu_at(const pixels_t& pixels, const fbe_collide_place_t& place, std::int64_t x,
             std::int64_t y) {
-    const double turn = static_cast<double>(place.rotation) * std::numbers::pi / 180.0;
+    // The canvas's own: the cosine and sine of the float it's given, in radians.
+    const auto turn = static_cast<double>(place.rotation);
     const std::array<std::array<float, 2>, 4> part{
         {
             { 0.0F, 0.0F },
@@ -195,7 +200,7 @@ fbe_collide_place_t placed(const pixels_t& pixels, std::mt19937& random, bool& g
         const float handle_y = handles_y[static_cast<std::size_t>(four(random))];
         const std::array<float, 6> scales{ 1.0F, -1.0F, 2.0F, -2.0F, 0.5F, -0.5F };
         std::uniform_int_distribution<int> scale(0, 5);
-        const auto rotation = static_cast<float>(quarter(random) * 90);
+        const auto rotation = static_cast<float>(quarter(random)) * half_pi;
         const float scale_x = scales[static_cast<std::size_t>(scale(random))];
         return place_of(x, y, handle_x, handle_y, rotation, scale_x,
                         scales[static_cast<std::size_t>(scale(random))]);
@@ -206,11 +211,11 @@ fbe_collide_place_t placed(const pixels_t& pixels, std::mt19937& random, bool& g
     const float handle_y = (static_cast<float>(pixels.height) * (any(random) + 1.0F)) / 2.0F;
     fbe_collide_place_t place = place_of(x, y, handle_x, handle_y, 0.0F, 1.0F, 1.0F);
     if (which == 1) {
-        place.rotation = static_cast<float>(four(random) * 90);
+        place.rotation = static_cast<float>(four(random)) * half_pi;
         place.scale_x = any(random) < 0.0F ? -1.0F : 1.0F;
         place.scale_y = any(random) < 0.0F ? -2.0F : 1.0F;
     } else if (which == 2) {
-        place.rotation = any(random) * 360.0F;
+        place.rotation = any(random) * 2.0F * pi;
         place.scale_x = any(random) * 2.5F;
         place.scale_y = any(random) * 2.5F;
     }
@@ -374,7 +379,7 @@ TEST_CASE("many sprites take little time") {
     const auto plain = std::chrono::steady_clock::now();
     for (int frame = 0; frame < 100; ++frame) {
         const fbe_collide_place_t place = place_of(at(random), at(random) * 0.5625F, 16.0F, 16.0F,
-                                                   static_cast<float>(frame) * 3.7F, 1.0F, 1.0F);
+                                                   static_cast<float>(frame) * 0.0646F, 1.0F, 1.0F);
         for (const fbe_collide_place_t& each : rocks) {
             hits += fbe_collide_masks(ship.mask, &place, rock.mask, &each);
         }
@@ -384,7 +389,7 @@ TEST_CASE("many sprites take little time") {
     const fbe_collide_place_t under = place_of(100.0F, 100.0F, 24.0F, 24.0F, 0.0F, 1.0F, 1.0F);
     const fbe_collide_place_t near = place_of(101.5F, 99.25F, 16.0F, 16.0F, 0.0F, 1.0F, 1.0F);
     const fbe_collide_place_t near_turned =
-        place_of(101.5F, 99.25F, 16.0F, 16.0F, 33.0F, 1.0F, 1.0F);
+        place_of(101.5F, 99.25F, 16.0F, 16.0F, 0.576F, 1.0F, 1.0F);
     for (int each = 0; each < 10000; ++each) {
         hits += fbe_collide_masks(ship.mask, &near, rock.mask, &under);
     }
@@ -421,7 +426,7 @@ TEST_CASE("an odd sprite, mid-handled, mirrored, and turned, is the GPU's pixels
     }
     ship.mask = fbe_collide_mask(rgba.data(), 5, 3, 20, 1);
     REQUIRE(ship.mask != 0);
-    for (const float rotation : { 0.0F, 90.0F, 180.0F, 270.0F }) {
+    for (const float rotation : { 0.0F, half_pi, pi, 3.0F * half_pi, -half_pi, 2.0F * pi }) {
         for (const float scale : { 1.0F, -1.0F }) {
             const fbe_collide_place_t place =
                 place_of(10.0F, 10.0F, 2.5F, 1.5F, rotation, scale, 1.0F);
@@ -440,7 +445,7 @@ TEST_CASE("a quarter turn's pixels agree, by point, rectangle, and mask") {
     std::vector<std::uint8_t> rgba(std::size_t{ 92 }, 255);
     const std::uint64_t bar = fbe_collide_mask(rgba.data(), 1, 23, 4, 1);
     const std::uint64_t dot = fbe_collide_mask(rgba.data(), 1, 1, 4, 1);
-    const fbe_collide_place_t place = place_of(17.0F, -3.0F, 1.0F, 23.0F, 90.0F, 0.5F, 2.0F);
+    const fbe_collide_place_t place = place_of(17.0F, -3.0F, 1.0F, 23.0F, half_pi, 0.5F, 2.0F);
     int solid = 0;
     for (std::int64_t y = -20; y < 20; ++y) {
         for (std::int64_t x = -40; x < 60; ++x) {
@@ -471,8 +476,8 @@ TEST_CASE("a mask scaled up costs its own pixels, not the screen's") {
     const std::uint64_t b = fbe_collide_mask(two.data(), 32, 32, 128, 1);
     // Turned, it's a row at a time over what the canvas reaches: a huge one's slow, if not forever.
     for (const float scale : { 1.0F, 30.0F, 1000.0F, 1e6F, 3.4e38F }) {
-        for (const float rotation : { 0.0F, 90.0F, 33.0F }) {
-            if (rotation == 33.0F && scale > 1000.0F) {
+        for (const float rotation : { 0.0F, half_pi, 0.576F }) {
+            if (rotation == 0.576F && scale > 1000.0F) {
                 continue;
             }
             // Each solid only at an opposite corner, on one spot: no pixel meets, so every row of

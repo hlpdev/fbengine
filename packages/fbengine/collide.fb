@@ -9,10 +9,11 @@ Import "./c/fbe_collide"
 Import "./window"
 
 /// Where a mask is drawn, as the canvas draws a sprite: its handle at (X, Y), turned Rotation
-/// degrees clockwise on the screen about it, and scaled from it, a negative scale mirroring it. It's
+/// radians clockwise on the screen about it, and scaled from it, a negative scale mirroring it. It's
 /// in the canvas's own pixels, before the pen's origin, which a game adds itself where it draws with
 /// one. A pixel exactly on its edge is its own as the GPU's top-left rule says: on a left or top
-/// edge, on the screen, it is, on a right or bottom one it isn't.
+/// edge, on the screen, it is, on a right or bottom one it isn't. A Rotation within a few of a
+/// Float32's steps of a quarter turn, as Pi / 2.0 is, is one exactly, as the GPU draws it.
 Public Struct Placement
     Public Field X: Float32
     Public Field Y: Float32

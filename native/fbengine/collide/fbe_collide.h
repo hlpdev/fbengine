@@ -13,7 +13,7 @@ extern "C" {
 #endif
 
 // Where a mask is drawn, as a sprite is: its handle, the point of it, in its pixels, that lands at
-// (x, y), which it's turned about, `rotation` degrees clockwise on the screen, and scaled from,
+// (x, y), which it's turned about, `rotation` radians clockwise on the screen, and scaled from,
 // across and down, a negative scale mirroring it.
 // C has no `using`, so it's a typedef.
 // NOLINTNEXTLINE(modernize-use-using)

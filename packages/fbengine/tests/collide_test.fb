@@ -74,7 +74,7 @@ Function ATurnedOrScaledMaskIsWhereTheCanvasDrawsIt()
     // A bar 16 across and 2 down, turned a quarter about its middle, stands up.
     Local bar = Mask.FromImage(Drawn(16, 2, Function(x: Int32, y: Int32) => True))
     bar.MidHandle()
-    Local standing = Placement(50.0, 50.0, 90.0, 1.0, 1.0)
+    Local standing = Placement(50.0, 50.0, Pi / 2.0, 1.0, 1.0)
     Expect(bar.Contains(standing, Vec2(50.5, 43.5)) && bar.Contains(standing, Vec2(49.5, 57.5)))
     Expect(!bar.Contains(standing, Vec2(43.5, 50.5)) && !bar.Contains(standing, Vec2(50.5, 58.5)))
     Local bounds = bar.Bounds(standing)
@@ -93,7 +93,10 @@ Function ATurnedOrScaledMaskIsWhereTheCanvasDrawsIt()
     Expect(bar.Collides(Placement.At(50.0, 50.0), other, standing))
     Expect(!bar.Collides(Placement.At(50.0, 40.0), other, Placement.At(50.0, 42.0)))
     // Turned a whole turn is as it was.
-    Expect(bar.Collides(Placement(50.0, 40.0, 360.0, 1.0, 1.0), other, Placement.At(50.0, 41.0)))
+    Expect(bar.Collides(Placement(50.0, 40.0, Tau, 1.0, 1.0), other, Placement.At(50.0, 41.0)))
+    // Three quarter turns and a quarter back stand it up too, as a game's floats have them.
+    Expect(bar.Contains(Placement(50.0, 50.0, 3.0 * Pi / 2.0, 1.0, 1.0), Vec2(50.5, 43.5)))
+    Expect(bar.Contains(Placement(50.0, 50.0, -Pi / 2.0, 1.0, 1.0), Vec2(50.5, 43.5)))
     // Scaled to nothing, it's nowhere.
     Expect(!bar.Collides(Placement(50.0, 50.0, 0.0, 0.0, 1.0), other, Placement.At(50.0, 50.0)))
 End Function
