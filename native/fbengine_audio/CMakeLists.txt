@@ -3,7 +3,8 @@
 
 # miniaudio, compiled here into a static library of its own, without its warnings, as it ships no
 # CMake build fbengine wants: SOURCE_SUBDIR names a folder it doesn't have, so only its sources
-# come. The engine loads OGG, WAV, and FLAC, never MP3, and writes no sound files.
+# come. The engine loads OGG, WAV, and FLAC, never MP3, and writes no sound files; Ogg Vorbis is
+# stb_vorbis, from miniaudio's extras, which its implementation finds declared before it.
 FetchContent_Declare(
   miniaudio
   GIT_REPOSITORY https://github.com/mackron/miniaudio.git
@@ -13,7 +14,17 @@ FetchContent_Declare(
   SYSTEM
 )
 FetchContent_MakeAvailable(miniaudio)
-add_library(fbengine_miniaudio STATIC "${miniaudio_SOURCE_DIR}/miniaudio.c")
+set(fbengine_miniaudio_source "${CMAKE_CURRENT_BINARY_DIR}/miniaudio.c")
+file(WRITE "${fbengine_miniaudio_source}.in" [=[
+#define STB_VORBIS_HEADER_ONLY
+#include "extras/stb_vorbis.c"
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
+#undef STB_VORBIS_HEADER_ONLY
+#include "extras/stb_vorbis.c"
+]=])
+configure_file("${fbengine_miniaudio_source}.in" "${fbengine_miniaudio_source}" COPYONLY)
+add_library(fbengine_miniaudio STATIC "${fbengine_miniaudio_source}")
 target_include_directories(fbengine_miniaudio SYSTEM PUBLIC "${miniaudio_SOURCE_DIR}")
 target_compile_definitions(fbengine_miniaudio PUBLIC MA_NO_MP3 MA_NO_ENCODING)
 set_target_properties(fbengine_miniaudio PROPERTIES POSITION_INDEPENDENT_CODE ON)

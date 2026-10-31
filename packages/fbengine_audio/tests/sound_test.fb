@@ -1,0 +1,244 @@
+// Sounds and their Channels, mixed on no device, so each test knows every sample it hears. Each
+// play is a frame late, and so leaves its last frame out: miniaudio's resampler, which runs at a
+// pitch of 1 too, so a pitch can change without a glitch, holds one.
+
+Import std.core
+Import std.io
+Import std.test
+Import fbengine_audio
+Import "./wav"
+
+// Four frames of a mono sound: 0.5, -0.25, 0.125, and 0 as floats.
+Global quarter: Int[] = [16384, -8192, 4096, 0]
+
+@Test
+Function TheFixturesDecodeAtTheirOwnRatesAndChannels() Throws SoundError
+    Local wav = Try Sound.FromBytes(Embed("data/tone.wav"))
+    Expect(wav.SampleRate() == 48000)
+    Expect(wav.Channels() == 1)
+    Expect(wav.Frames() == 2400)
+    Expect(wav.Length() == 0.05)
+    Local flac = Try Sound.FromBytes(Embed("data/tone.flac"))
+    Expect(flac.SampleRate() == 48000)
+    Expect(flac.Frames() == 2400)
+    Local ogg = Try Sound.FromBytes(Embed("data/tone.ogg"))
+    Expect(ogg.SampleRate() == 44100)
+    Expect(ogg.Channels() == 2)
+    Expect(ogg.Frames() == 11025)
+End Function
+
+// FLAC is lossless, so it mixes to the WAV of the same tone, sample for sample.
+@Test
+Function FlacMixesAsTheWavItWasMadeFrom() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local wav = Try Sound.FromBytes(Embed("data/tone.wav"))
+    Local flac = Try Sound.FromBytes(Embed("data/tone.flac"))
+    wav.Play()
+    Local fromWav = Audio.Mix(2400)
+    flac.Play()
+    Local fromFlac = Audio.Mix(2400)
+    Expect(fromWav == fromFlac)
+    Local loudest: Float32 = 0.0
+    For sample In fromWav
+        loudest = sample > loudest ? sample : loudest
+    End For
+    Expect(loudest > 0.1)
+End Function
+
+@Test
+Function BytesThatArentASoundThrow()
+    Expect(ExpectThrows<SoundError>(Sound.FromBytes([1, 2, 3, 4] As UInt8[])) != Null)
+    Expect(ExpectThrows<SoundError>(Sound.FromBytes([])) != Null)
+End Function
+
+@Test
+Function LoadReadsASoundFileWhateverItsCalled() Throws IOError, SoundError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local path = folder.Path / "tone.sfx"
+    Try File.WriteBytes(path, Embed("data/tone.wav"))
+    Local sound = Try Sound.Load(path)
+    Expect(sound.Frames() == 2400)
+    Expect(ExpectThrows<IOError>(Sound.Load(folder.Path / "missing.wav")) != Null)
+End Function
+
+@Test
+Function AMonoSoundPlaysOnBothSidesAsItIsThenFinishes() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(quarter))
+    Local channel = sound.Play()
+    Expect(channel.Playing())
+    Expect(!channel.Paused())
+    Expect(Audio.Playing() == 1)
+    Expect(Audio.Mix(4) == [0.0, 0.0, 0.5, 0.5, -0.25, -0.25, 0.125, 0.125] As Float32[])
+    Expect(Audio.Mix(2) == [0.0, 0.0, 0.0, 0.0] As Float32[])
+    Expect(!channel.Playing())
+    Expect(Audio.Playing() == 0)
+    // A finished channel's calls do nothing.
+    channel.SetVolume(0.5)
+    channel.Pause()
+    channel.Resume()
+    channel.Stop()
+    Expect(channel.Volume() == 0.0)
+    Expect(!channel.Paused())
+End Function
+
+@Test
+Function AStereoSoundKeepsItsSides() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav([16384, -16384, 8192, 0, 0, 0], 2))
+    Expect(sound.Channels() == 2)
+    sound.Play()
+    Expect(Audio.Mix(3) == [0.0, 0.0, 0.5, -0.5, 0.25, 0.0] As Float32[])
+End Function
+
+@Test
+Function VolumeAndPanScaleEachSide() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 8)))
+    sound.SetVolume(0.5)
+    Expect(sound.Volume() == 0.5)
+    Local channel = sound.Play()
+    Expect(channel.Volume() == 0.5)
+    Audio.Mix(1)
+    Expect(Audio.Mix(1) == [0.25, 0.25] As Float32[])
+    channel.SetVolume(1.0)
+    channel.SetPan(-1.0)
+    Expect(channel.Pan() == -1.0)
+    Expect(Audio.Mix(1) == [0.5, 0.0] As Float32[])
+    // Panning takes from the other side only.
+    channel.SetPan(0.5)
+    Expect(Audio.Mix(1) == [0.25, 0.5] As Float32[])
+    channel.SetVolume(0.0)
+    Expect(Audio.Mix(1) == [0.0, 0.0] As Float32[])
+End Function
+
+@Test
+Function TheMixesVolumeScalesEverything() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Audio.SetVolume(0.5)
+    Defer Audio.SetVolume(1.0)
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4)))
+    sound.SetPan(1.0)
+    sound.Play()
+    Expect(Audio.Mix(2) == [0.0, 0.0, 0.0, 0.25] As Float32[])
+End Function
+
+@Test
+Function ALoopingChannelPlaysUntilStopped() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav([16384, 8192]))
+    sound.SetLoop(True)
+    Local channel = sound.Play()
+    Expect(channel.Looping())
+    Expect(Audio.Mix(6) == [0.0, 0.5, 0.25, 0.5, 0.25, 0.5] As Float32[])
+    Expect(channel.Playing())
+    channel.Stop()
+    Expect(!channel.Playing())
+    Expect(Audio.Mix(2) == [0.0, 0.0] As Float32[])
+    // A loop turned off plays to its sound's end after what miniaudio read ahead, 512 frames.
+    Local again = sound.Play()
+    Expect(Audio.Mix(3) == [0.0, 0.5, 0.25] As Float32[])
+    again.SetLoop(False)
+    Expect(!again.Looping())
+    Audio.Mix(1024)
+    Expect(!again.Playing())
+End Function
+
+@Test
+Function APausedChannelWaitsWhereItIs() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(quarter))
+    Local channel = sound.Play(paused: True)
+    Expect(channel.Playing())
+    Expect(channel.Paused())
+    Expect(Audio.Mix(2) == [0.0, 0.0] As Float32[])
+    channel.Resume()
+    Expect(Audio.Mix(2) == [0.0, 0.5] As Float32[])
+    channel.Pause()
+    Expect(channel.Paused())
+    Expect(Audio.Mix(2) == [0.0, 0.0] As Float32[])
+    channel.Resume()
+    Expect(Audio.Mix(2) == [-0.25, 0.125] As Float32[])
+End Function
+
+@Test
+Function PlaysOfOneSoundOverlapAndAdd() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(quarter))
+    sound.Play()
+    sound.Play()
+    Expect(Audio.Playing() == 2)
+    Expect(Audio.Mix(2) == [0.0, 1.0] As Float32[])
+End Function
+
+@Test
+Function AFreedSoundsChannelsPlayOn() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(quarter))
+    Local channel = sound.Play()
+    sound.Free()
+    Expect(sound.Freed())
+    sound.Free()
+    Expect(channel.Playing())
+    Expect(Audio.Mix(4) == [0.0, 0.5, -0.25, 0.125] As Float32[])
+End Function
+
+@Test
+Function StoppingTheAudioFinishesEveryChannel() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Local sound = Try Sound.FromBytes(Wav(quarter))
+    sound.SetLoop(True)
+    Local channel = sound.Play()
+    Audio.Stop()
+    Expect(!channel.Playing())
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    // The sound stayed loaded; the old channel stays finished, though a new one takes its slot.
+    Local next = sound.Play()
+    Expect(!channel.Playing())
+    Expect(next.Playing())
+    Expect(Audio.Playing() == 1)
+End Function
+
+// A Global's zero, as a game's Field's.
+Global none: Channel
+
+@Test
+Function AChannelsZeroIsFinished()
+    Expect(!none.Playing())
+    none.Stop()
+    none.SetVolume(0.5)
+    Expect(none.Volume() == 0.0)
+    Expect(!none.Looping())
+End Function
+
+// A sound plays at its own rate whatever the mix's: 100 frames at 24000 Hz are 200 at 48000.
+@Test
+Function ASoundIsResampledToTheMix() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(8192, 100), 1, 24000))
+    Local channel = sound.Play()
+    Audio.Mix(180)
+    Expect(channel.Playing())
+    Audio.Mix(40)
+    Expect(!channel.Playing())
+    // At twice the pitch, it's 100 frames again.
+    Local faster = sound.Play()
+    faster.SetPitch(2.0)
+    Expect(faster.Pitch() == 2.0)
+    Audio.Mix(90)
+    Expect(faster.Playing())
+    Audio.Mix(20)
+    Expect(!faster.Playing())
+End Function

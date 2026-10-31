@@ -64,3 +64,19 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.hello PROPERTIES
                        PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
 endif()
+
+# fbengine_audio's own C++, where it's subtle: what's in its headers, with nothing to link.
+add_executable(fbengine_audio_tests audio/pool_tests.cpp)
+target_include_directories(fbengine_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine_audio")
+target_link_libraries(fbengine_audio_tests PRIVATE Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_audio_tests)
+catch_discover_tests(fbengine_audio_tests TEST_PREFIX "audio."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# Playing a sound to miniaudio's null backend, as a game plays to its device.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME examples.sound
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/sound")
+  set_tests_properties(examples.sound PROPERTIES
+                       PASS_REGULAR_EXPRESSION "Running sound[^\n]*\nplayed 0.25 seconds of tone.ogg\r?\n$")
+endif()

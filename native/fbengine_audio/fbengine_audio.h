@@ -6,5 +6,7 @@
 // packages/fbengine_audio/c/.
 
 #include "audio/fbe_audio.h"
+#include "channel/fbe_channel.h"
+#include "sound/fbe_sound.h"
 
 #endif

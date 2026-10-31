@@ -1,0 +1,16 @@
+// Plays a sound to its end. A game starts the audio on AudioDevice.DEFAULT, the OS's output;
+// this example runs in tests, so it plays to miniaudio's null backend, which hears nothing but
+// keeps a device's pace.
+
+Import std.core
+Import std.time
+Import fbengine_audio
+
+Try Audio.Start(AudioDevice.SILENT)
+Local tone = Try Sound.FromBytes(Embed("tone.ogg"))
+Local channel = tone.Play()
+While channel.Playing()
+    Sleep(10.Milliseconds)
+End While
+Print("played {tone.Length()} seconds of tone.ogg")
+Audio.Stop()
