@@ -140,7 +140,9 @@ TEST_CASE("a mesh's surfaces are drawn with blends its alpha settles", "[scene]"
     fbe_material_set_blend(glow, FBE_BLEND_ADD);
     fbe_mesh_set_material(mesh, glow);
     CHECK(fbe_mesh_blend(mesh, 0) == FBE_BLEND_ADD);
-    CHECK(fbe_mesh_blend(mesh, 3) == FBE_BLEND_ADD);
+    // A surface it doesn't have is refused, whatever material draws the rest.
+    CHECK(fbe_mesh_blend(mesh, 3) == -1);
+    CHECK(fbe_mesh_blend(mesh, -1) == -1);
     fbe_mesh_set_material(mesh, 0);
     CHECK(fbe_mesh_blend(mesh, 1) == -1);
     fbe_material_release(opaque);

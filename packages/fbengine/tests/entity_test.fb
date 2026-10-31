@@ -2,6 +2,7 @@
 // and makes it current, so the tests don't see each other's entities.
 
 Import std.core
+Import std.math
 Import std.test
 Import fbengine
 
@@ -238,6 +239,31 @@ Function AGamesObjectThatKeepsItsEntityIsLetGoOfAtTheEnd()
     Local body = Body()
     body.Part.SetName("keeps its body")
     Expect(World.Main().Find("keeps its body")?.Data<Body>() == body)
+End Function
+
+// A game's object that owns its entity, attached to it, and reads and frees it when it goes: at
+// the program's end that's while the scene lets go of the attachments, with the entity still live.
+Class Guard
+    Public Field Body: Pivot
+
+    New()
+        Body = Pivot()
+        Body.SetName("owned")
+        Body.SetData(Self)
+    End New
+
+    Method Destroy()
+        Body.Translate(Body.Position(Space.WORLD))
+        Body.Free()
+    End Method
+End Class
+
+@Test
+Function AGamesObjectReadsAndFreesItsEntityWhenItGoesAtTheEnd()
+    World.SetCurrent(World.Main())
+    Local guard = Guard()
+    guard.Body.SetPosition(Vec3(1, 2, 3))
+    Expect(World.Main().Find("owned")?.Data<Guard>() == guard)
 End Function
 
 @Test

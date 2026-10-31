@@ -67,7 +67,9 @@ Public Final Class Camera Extends Entity
     /// window sees more at the sides. Outside 0 to Pi panics.
     @MainThread @PanicsAtCaller
     Public Method SetFieldOfView(angle: Float)
-        If !fbe_camera_set_field_of_view(Live("SetFieldOfView"), angle) Then Failed("SetFieldOfView")
+        If !fbe_camera_set_field_of_view(Live("SetFieldOfView"), angle)
+            Failed("SetFieldOfView")
+        End If
     End Method
 
     /// The angle from the bottom of the camera's view to its top, in radians.
@@ -287,7 +289,11 @@ Public Final Class Camera Extends Entity
 
     /// What the camera sees, as six planes in the world: what's in view is in it.
     @MainThread @PanicsAtCaller
-    Public Method ViewFrustum(): Frustum => FrustumOf(ProjectionMatrix() * ViewMatrix())
+    Public Method ViewFrustum(): Frustum
+        Live("ViewFrustum")
+        Target("ViewFrustum")
+        Return FrustumOf(ProjectionMatrix() * ViewMatrix())
+    End Method
 
     /// Where a point in the world is in the camera's view: x and y in the window's units from its
     /// top left, and z how far in front of the camera it is; or Null when it's nearer than the
@@ -333,6 +339,8 @@ Public Final Class Camera Extends Entity
     /// With a viewport of no size, it's the camera's own line, from it, forward.
     @MainThread @PanicsAtCaller
     Public Method ScreenRay(point: Vec2): Ray
+        Live("ScreenRay")
+        Target("ScreenRay")
         Local start = Unproject(Vec3(point.x, point.y, Near()))
         Local finish = Unproject(Vec3(point.x, point.y, Far()))
         If start == Null || finish == Null Then Return Ray(Position(Space.WORLD), Forward())

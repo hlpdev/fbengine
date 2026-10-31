@@ -28,8 +28,13 @@ Global entities: Entity?[] = []
 
 // Lets go of what the wrappers keep when the program's Globals go, after the game's, so a game's
 // object that keeps its own entity, attached to it with SetData, isn't a cycle left at the end.
+// The attachments go first, with every handle still set, so such an object's Destroy can still
+// read or free its entity; then the handles.
 Class Wrappers
     Method Destroy()
+        For kept In entities
+            kept?.LetGo()
+        End For
         For kept In entities
             kept?.Forget()
         End For
@@ -219,6 +224,11 @@ Public Class Entity Implements Printable
     @PanicsAtCaller
     Package Method Failed(call: String)
         Panic("{call} on a {KindName()}: {LastError()}")
+    End Method
+
+    // Lets go of what was attached, keeping the handle.
+    Package Method LetGo()
+        attached = Null
     End Method
 
     // Lets go of the handle and what was attached, once C has freed it.

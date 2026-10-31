@@ -298,7 +298,13 @@ if(FBENGINE_FB_TESTS)
       "pick-radius=Pick on the main World: a pick's radius is 0 or more, not -1"
       "pick-freed=Pick on a Pivot that was freed"
       "camera-pick-no-window=Pick on a Camera: the camera's viewport has no size"
-      "max-slope=SetMaxSlope on a Pivot: a max slope is 0 to Pi / 2, not 2")
+      "max-slope=SetMaxSlope on a Pivot: a max slope is 0 to Pi / 2, not 2"
+      "drawn-blend=DrawnBlend on a Mesh: the geometry's surfaces are 0 to 0, not 99"
+      "screen-ray-freed=ScreenRay on a Camera that was freed"
+      "screen-ray-no-window=ScreenRay on a Camera: the camera's viewport has no size"
+      "view-frustum-freed=ViewFrustum on a Camera that was freed"
+      "view-frustum-no-window=ViewFrustum on a Camera: the camera's viewport has no size"
+      "camera-pick-freed=Pick on a Camera that was freed")
   foreach(case IN LISTS fbengine_scene_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)

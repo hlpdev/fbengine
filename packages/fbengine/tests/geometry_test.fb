@@ -258,15 +258,18 @@ Function UpdateNormalsLeavesOutThinTrianglesAndKeepsWhatHasNone()
     surface.AddVertex(Vec3(0, 0, 0))
     surface.AddVertex(Vec3(0, 0, 1))
     surface.AddVertex(Vec3(1, 0, 0))
-    // A sliver on a line, which rounding would give any direction.
-    surface.AddVertex(Vec3(2, 0, 0))
+    // A sliver all but on a line, which rounding would give any direction: left out, so its own
+    // vertices keep their normals.
+    surface.AddVertex(Vertex(Vec3(0.1, 0, 0.3), Vec3(0, 0, 1)))
+    surface.AddVertex(Vertex(Vec3(0.3, 0, 0.9), Vec3(0, 0, 1)))
     surface.AddTriangle(0, 1, 2)
-    surface.AddTriangle(0, 2, 3)
+    surface.AddTriangle(0, 3, 4)
     // A vertex in no triangle.
     surface.AddVertex(Vertex(Vec3(5, 5, 5), Vec3(0, 0, 1)))
     geometry.UpdateNormals()
     Expect(surface.VertexNormal(0) == Vec3(0, 1, 0) && surface.VertexNormal(2) == Vec3(0, 1, 0))
-    Expect(surface.VertexNormal(4) == Vec3(0, 0, 1))
+    Expect(surface.VertexNormal(3) == Vec3(0, 0, 1) && surface.VertexNormal(4) == Vec3(0, 0, 1))
+    Expect(surface.VertexNormal(5) == Vec3(0, 0, 1))
 
     // A sheet's two sides at one place cancel, so each vertex takes its own triangle's.
     Local sheet = Geometry()

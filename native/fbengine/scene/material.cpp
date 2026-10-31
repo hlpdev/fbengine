@@ -402,19 +402,20 @@ FBE_API int32_t fbe_mesh_blend(uint64_t mesh, int32_t surface) {
     if (found == nullptr) {
         return -1;
     }
+    // A surface it has, whichever material draws it.
+    if (found->geometry == none) {
+        fbe::fail("the mesh draws no geometry");
+        return -1;
+    }
+    const std::vector<fbe::scene::surface_t>& surfaces =
+        scene().geometries[found->geometry].surfaces;
+    if (surface < 0 || static_cast<std::size_t>(surface) >= surfaces.size()) {
+        fbe::fail(std::format("the geometry's surfaces are 0 to {}, not {}",
+                              static_cast<std::int64_t>(surfaces.size()) - 1, surface));
+        return -1;
+    }
     std::uint32_t material = found->material;
     if (material == none) {
-        if (found->geometry == none) {
-            fbe::fail("the mesh draws no geometry");
-            return -1;
-        }
-        const std::vector<fbe::scene::surface_t>& surfaces =
-            scene().geometries[found->geometry].surfaces;
-        if (surface < 0 || static_cast<std::size_t>(surface) >= surfaces.size()) {
-            fbe::fail(std::format("the geometry's surfaces are 0 to {}, not {}",
-                                  static_cast<std::int64_t>(surfaces.size()) - 1, surface));
-            return -1;
-        }
         material = surfaces[static_cast<std::size_t>(surface)].material;
     }
     const material_t drawn = material != none ? scene().materials[material] : material_t();

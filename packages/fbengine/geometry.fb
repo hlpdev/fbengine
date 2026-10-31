@@ -389,7 +389,9 @@ Public Struct Surface
         Local geometry = Owner.Live(call)
         Local taken = Buffer<UInt32>(indices.Count)
         For i, index In indices
-            If index < 0 Then Panic("{call} on a Geometry: a triangle's index is 0 or more, not {index}")
+            If index < 0
+                Panic("{call} on a Geometry: a triangle's index is 0 or more, not {index}")
+            End If
             taken[i] = index As UInt32
         End For
         Local first = 0
@@ -574,7 +576,9 @@ Public Struct Surface
     /// Takes away its triangles, keeping its vertices.
     @MainThread @PanicsAtCaller
     Public Method ClearTriangles()
-        If !fbe_surface_clear(Owner.Live("ClearTriangles"), Index, False) Then Owner.Failed("ClearTriangles")
+        If !fbe_surface_clear(Owner.Live("ClearTriangles"), Index, False)
+            Owner.Failed("ClearTriangles")
+        End If
     End Method
 End Struct
 
@@ -600,7 +604,9 @@ End Function
 
 @PanicsAtCaller
 Function UvSet(set: Int, call: String): Int
-    If set != 0 && set != 1 Then Panic("{call} on a Geometry: a vertex's UV sets are 0 and 1, not {set}")
+    If set != 0 && set != 1
+        Panic("{call} on a Geometry: a vertex's UV sets are 0 and 1, not {set}")
+    End If
     Return set
 End Function
 

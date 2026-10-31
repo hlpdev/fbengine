@@ -83,6 +83,7 @@ Extend Camera
     /// own, it panics.
     @MainThread @PanicsAtCaller
     Public Method Pick(point: Vec2, radius: Float = 0): Pick?
+        Live("Pick")
         Target("Pick")
         Local start = Unproject(Vec3(point.x, point.y, Near()))
         Local finish = Unproject(Vec3(point.x, point.y, Far()))

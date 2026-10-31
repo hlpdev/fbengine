@@ -571,12 +571,14 @@ FBE_API int32_t fbe_entity_can_see(uint64_t entity, uint64_t target);
 // a group it collides with, and the response its World gives the pair says what it does when it
 // touches one; what it touches gets the contact too. The other entities are where they are now,
 // and moving ones where their last move ended; their own moves aren't swept, so a moving door
-// pushes nothing, but a mover it closed on is pushed out of it on its next move, only as far as
-// nothing else is: one squeezed between two stays where it was. A mover already within its radius
-// of a face, an edge, or a corner touches it only going further in. A slide along ground, within
-// the mover's max slope of level, may raise it as far as the slope goes; along anything steeper,
-// edges and corners too, no more than the move's own rise and its step height. Each move is worked
-// out on its own, so the order entities are in changes nothing.
+// pushes nothing, but a mover it closed on is pushed out of it at the World's next collide,
+// moving or not, only as far as nothing else is; between two facing each other, its middle goes to
+// the middle of the gap, so a squeezed one is in neither, unless one closes faster than its radius
+// in a frame and passes over its middle first. A mover already within its radius of a face, an
+// edge, or a corner touches it only going further in. A slide along ground, within the mover's max
+// slope of level, may raise it as far as the slope goes; along anything steeper, edges and corners
+// too, no more than the move's own rise and its step height. Each move is worked out on its own, so
+// the order entities are in changes nothing.
 //
 // An entity's group, 0 for none, at first. Setting one forgets where its last move ended.
 FBE_API bool fbe_entity_set_collision_group(uint64_t entity, int32_t group);
@@ -621,6 +623,8 @@ FBE_API bool fbe_world_clear_collisions(uint64_t world);
 FBE_API bool fbe_world_set_collision_iterations(uint64_t world, int32_t iterations);
 FBE_API int32_t fbe_world_collision_iterations(uint64_t world);
 // How far a mover stays from what it touches, so it doesn't sink in, 0 to 0.1, 0.001 at first.
+// Between two solids nearly facing each other it can end nearer: long walks among turned solids
+// measured it at most 0.0045 in, at the first skin.
 FBE_API bool fbe_world_set_collision_skin(uint64_t world, float skin);
 FBE_API float fbe_world_collision_skin(uint64_t world);
 // Moves every moving entity of the World as its collisions say, from where its last move ended to
