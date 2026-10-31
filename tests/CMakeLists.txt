@@ -64,3 +64,36 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.hello PROPERTIES
                        PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
 endif()
+
+# The scene, through fbengine's C API, with no window or GPU.
+add_executable(fbengine_scene_tests scene/world_tests.cpp)
+target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_scene_tests)
+catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
+                     DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
+
+# The scene's panics, each a case of tests/scene/panics run on its own, which has to panic saying
+# what it does.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_scene_panics
+      "freed-entity=SetName on a Pivot that was freed"
+      "freed-with-parent=Name on a Pivot that was freed"
+      "new-under-freed=New on a Pivot that was freed"
+      "freed-world=Roots on a World that was freed"
+      "current-freed=SetCurrent on a World that was freed"
+      "free-main=the main World stays"
+      "own-parent=an entity can't be its own parent"
+      "under-itself=an entity can't go under what's under it"
+      "child-out-of-range=an entity's children are at 0 to 1, not 2"
+      "data-freed=Data on a Pivot that was freed")
+  foreach(case IN LISTS fbengine_scene_panics)
+    string(FIND "${case}" "=" split)
+    string(SUBSTRING "${case}" 0 ${split} name)
+    math(EXPR split "${split} + 1")
+    string(SUBSTRING "${case}" ${split} -1 message)
+    add_test(NAME scene.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/scene/panics"
+                     -- ${name})
+    set_tests_properties(scene.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION "panic: ${message}")
+  endforeach()
+endif()

@@ -6,6 +6,7 @@
 
 #include "core/fbe_core.h"
 #include "frame/fbe_frame.h"
+#include "scene/fbe_scene.h"
 #include "window/fbe_window.h"
 
 #endif
