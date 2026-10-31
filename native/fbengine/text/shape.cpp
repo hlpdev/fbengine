@@ -371,14 +371,16 @@ bool lay_out(std::uint64_t font, std::string_view text, float scale, layout_t& i
     const auto em = static_cast<std::int32_t>(std::lround(pixels * 64.0F));
     for (const shaped_t& each : glyphs) {
         // At a whole pixel and a quarter of one across, and a whole pixel down.
-        float whole = std::floor(each.x);
-        auto quarter = static_cast<std::int32_t>(std::lround((each.x - whole) * 4.0F));
+        const float floored = std::floor(each.x);
+        auto whole = static_cast<std::int32_t>(floored);
+        auto quarter = static_cast<std::int32_t>(std::lround((each.x - floored) * 4.0F));
         if (quarter == 4) {
-            whole += 1.0F;
+            whole += 1;
             quarter = 0;
         }
-        const float baseline =
-            std::round(line_height * static_cast<float>(each.line)) - std::round(each.up);
+        const auto baseline =
+            static_cast<std::int32_t>(std::lround(line_height * static_cast<float>(each.line))) -
+            static_cast<std::int32_t>(std::lround(each.up));
         const glyph_t* glyph = rasterized(*each.source.face, each.glyph, em, each.source.bolder,
                                           each.source.slanted, quarter);
         if (glyph == nullptr || glyph->place.empty()) {
@@ -387,8 +389,8 @@ bool lay_out(std::uint64_t font, std::string_view text, float scale, layout_t& i
         into.glyphs.push_back({
             .page = glyph->page,
             .source = glyph->place,
-            .x = whole + static_cast<float>(glyph->left),
-            .y = baseline - static_cast<float>(glyph->top),
+            .x = whole + glyph->left,
+            .y = baseline - glyph->top,
         });
     }
     into.generation = atlas().generation();

@@ -70,21 +70,60 @@ End Function
 End Function
 
 /// Of the languages a game has, `available`, the one the player prefers most, by `preferred`, or
-/// Languages() for Null, Null when none is: for each preferred tag in turn, the one that's it,
-/// then the one that's it with its last parts off, as "fr" for "fr-CA", then any of its language,
-/// as "fr-FR" for "fr-CA", each in any case.
+/// Languages() for Null, Null when none is. For each preferred tag in turn: the one that's it,
+/// then it with its last parts off, as "fr" for "fr-CA", then any of its language, as "fr-FR" for
+/// "fr-CA", each in any case, and in its script: a tag's own, or the one its language is written
+/// in where it's from (Chinese's traditional in Taiwan, Hong Kong, and Macau, and simplified
+/// elsewhere; Serbian's Cyrillic, but Latin in Montenegro; Uzbek's Latin). Only when none of the
+/// player's languages is there in its script is one in another script given, as "zh-Hant" to a
+/// "zh-CN" player.
 @MainThread Public Function BestLanguage(available: String[], preferred: String[]? = Null): String?
-    For tag In preferred ?? Languages()
-        Local parts = tag.Split("-")
-        For count = parts.Count To 1 Step -1
-            Local shorter = parts[0..count].Join("-")
-            For each In available
-                If each.EqualsIgnoreCase(shorter) Then Return each
-            End For
-        End For
-        For each In available
-            If each.Split("-")[0].EqualsIgnoreCase(parts[0]) Then Return each
+    Local wanted = preferred ?? Languages()
+    For sameScript In [True, False]
+        For tag In wanted
+            Local found = Matching(available, tag, sameScript)
+            If found != Null Then Return found
         End For
     End For
     Return Null
+End Function
+
+// The one of `available` for `tag`, in its script when `sameScript`: it, it shorter, or another of
+// its language.
+Function Matching(available: String[], tag: String, sameScript: Bool): String?
+    Local parts = tag.Split("-")
+    Local script = ScriptOf(tag)
+    Local fits = Function(each: String) => !sameScript || ScriptOf(each) == script
+    For count = parts.Count To 1 Step -1
+        Local shorter = parts[0..count].Join("-")
+        For each In available
+            If each.EqualsIgnoreCase(shorter) && fits(each) Then Return each
+        End For
+    End For
+    For each In available
+        If each.Split("-")[0].EqualsIgnoreCase(parts[0]) && fits(each) Then Return each
+    End For
+    Return Null
+End Function
+
+// The script `tag` is written in, in title case: its own, or its language's there, or "" for a
+// language written in one.
+Function ScriptOf(tag: String): String
+    Local parts = tag.Split("-")
+    Local region = ""
+    For i = 1 To parts.Count - 1
+        Local part = parts[i]
+        If part.Length == 4 Then Return part.Slice(0, 1).ToUpper() + part.Slice(1, 4).ToLower()
+        If part.Length == 2 || part.Length == 3 Then region = part.ToUpper()
+    End For
+    Select parts[0].ToLower()
+        Case "zh"
+            Return region == "TW" || region == "HK" || region == "MO" ? "Hant" : "Hans"
+        Case "sr"
+            Return region == "ME" ? "Latn" : "Cyrl"
+        Case "uz"
+            Return "Latn"
+        Default
+            Return ""
+    End Select
 End Function

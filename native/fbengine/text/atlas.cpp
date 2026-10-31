@@ -80,12 +80,13 @@ bool stored(const FT_Bitmap& bitmap, glyph_t& glyph) {
             } else if (bitmap.pixel_mode == FT_PIXEL_MODE_MONO) {
                 to[at] = (from[at / 8] & (0x80U >> (at % 8))) != 0 ? 0xFF : 0x00;
             } else {
-                // FreeType's BGRA is premultiplied already.
+                // FreeType's BGRA is premultiplied, its colors sRGB's; the page's are straight.
                 const std::size_t pixel = at * 4;
-                to[pixel] = from[pixel + 2];
-                to[pixel + 1] = from[pixel + 1];
-                to[pixel + 2] = from[pixel];
-                to[pixel + 3] = from[pixel + 3];
+                const std::uint8_t alpha = from[pixel + 3];
+                to[pixel] = straight(from[pixel + 2], alpha);
+                to[pixel + 1] = straight(from[pixel + 1], alpha);
+                to[pixel + 2] = straight(from[pixel], alpha);
+                to[pixel + 3] = alpha;
             }
         }
     }
@@ -98,6 +99,14 @@ bool stored(const FT_Bitmap& bitmap, glyph_t& glyph) {
 atlas_t& atlas() {
     static atlas_t kept;
     return kept;
+}
+
+std::uint8_t straight(std::uint8_t premultiplied, std::uint8_t alpha) {
+    if (alpha == 0) {
+        return 0;
+    }
+    const unsigned scaled = ((unsigned{ premultiplied } * 255U) + (unsigned{ alpha } / 2U)) / alpha;
+    return static_cast<std::uint8_t>(std::min(scaled, 255U));
 }
 
 void atlas_t::trim() {

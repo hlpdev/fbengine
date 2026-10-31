@@ -418,8 +418,8 @@ Class KeyCatcher Extends Widget
         SetFocusable(True)
     End New
 
-    Public Override Method KeyTyped(key: Key): Bool
-        caught.Add(key)
+    Public Override Method KeyTyped(stroke: Keystroke): Bool
+        caught.Add(stroke.Key)
         Return True
     End Method
 End Class
@@ -488,4 +488,27 @@ Function TheFocusBlocksAtOnce() Throws GraphicsError
     Flip()
     Expect(jump.Hit())
     ui.Unroute(controls)
+End Function
+
+// The game's own block and the Ui's are apart: the game releasing its own leaves the Ui's, and
+// the Ui's Unroute takes back only its own.
+@Test
+Function AGamesBlockAndAUisAreApart() Throws GraphicsError
+    Local play = Button("Play")
+    Local root = Node("root")
+    root.Add(play)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    ui.Route(controls)
+    ui.Focus(play)
+    Expect(controls.Blocked())
+    Local cutscene = controls.Block()
+    cutscene.Release()
+    Expect(controls.Blocked())
+    Local again = controls.Block()
+    ui.Unroute(controls)
+    Expect(controls.Blocked())
+    again.Release()
+    Expect(!controls.Blocked())
 End Function

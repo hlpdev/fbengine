@@ -857,8 +857,8 @@ Function ALetGoAndAPressInOneFlipAreBoth() Throws GraphicsError, InputError
     Flip()
 End Function
 
-// A block is apart from SetEnabled: a set's off while either says so, and each Block has its own
-// Unblock.
+// A block is apart from SetEnabled: a set's off while either says so, and each block is its own,
+// taken back by its Release, or as it goes.
 @Test
 Function ABlockIsApartFromSetEnabled() Throws GraphicsError
     Try Opened()
@@ -869,17 +869,19 @@ Function ABlockIsApartFromSetEnabled() Throws GraphicsError
     Try Simulate.KeyDown(Key.SPACE)
     Flip()
     Expect(jump.Down())
-    controls.Block()
+    Local menu = controls.Block()
     Flip()
     Expect(controls.Blocked() && controls.Enabled())
     Expect(!jump.Down() && jump.Up())
-    // A cutscene turns it off while it's blocked, and two block it.
+    // A cutscene turns it off while it's blocked, and two block it, each releasing its own, once.
     controls.SetEnabled(False)
-    controls.Block()
-    controls.Unblock()
+    Local other = controls.Block()
+    other.Release()
+    other.Release()
+    Expect(other.Released() && controls.Blocked())
     Flip()
     Expect(!jump.Down())
-    controls.Unblock()
+    menu.Release()
     Flip()
     Expect(!controls.Blocked() && !jump.Down())
     // On again, what's held is no press.
@@ -888,4 +890,14 @@ Function ABlockIsApartFromSetEnabled() Throws GraphicsError
     Expect(jump.Down() && !jump.Hit())
     Try Simulate.KeyUp(Key.SPACE)
     Flip()
+End Function
+
+// A block nothing holds goes, and takes itself back.
+@Test
+Function ABlockNothingHoldsGoes()
+    Local controls = ActionSet()
+    Local block: ActionBlock? = controls.Block()
+    Expect(controls.Blocked())
+    block = Null
+    Expect(!controls.Blocked())
 End Function

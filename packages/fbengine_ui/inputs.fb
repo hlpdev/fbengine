@@ -80,11 +80,11 @@ Public Class Slider Extends Widget
         SetFrom(point)
     End Method
 
-    @MainThread Public Override Method KeyTyped(key: Key): Bool
+    @MainThread Public Override Method KeyTyped(stroke: Keystroke): Bool
         Local by = stepping > 0.0 ? stepping : (high - low) / 20.0
         // A page is a tenth of its range, or a step if that's more.
         Local page = Max((high - low) / 10.0, stepping)
-        Select key
+        Select stroke.Key
             Case Key.LEFT
                 Moved(value - by)
             Case Key.RIGHT
@@ -284,37 +284,36 @@ Public Class TextField Extends Widget
         If kept.Count > 0 Then Put(TextOf(kept, 0, kept.Count))
     End Method
 
-    @MainThread Public Override Method KeyTyped(key: Key): Bool
+    @MainThread Public Override Method KeyTyped(stroke: Keystroke): Bool
+        // The platform's, as the stroke's modifiers were: by words, to the line's ends, and A, C,
+        // X, and V's.
         Local mac = CurrentEditingKeys() == EditingKeys.MAC
-        Local control = KeyDown(Key.LEFT_CONTROL) || KeyDown(Key.RIGHT_CONTROL)
-        Local commandHeld = KeyDown(Key.LEFT_SUPER) || KeyDown(Key.RIGHT_SUPER)
-        Local option = KeyDown(Key.LEFT_ALT) || KeyDown(Key.RIGHT_ALT)
-        // The platform's: by words, to the line's ends, and A, C, X, and V's.
-        Local words = mac ? option : control
-        Local ends = mac && commandHeld
-        Local command = mac ? commandHeld : control
+        Local words = mac ? stroke.Alt : stroke.Control
+        Local ends = mac && stroke.Meta
+        Local command = mac ? stroke.Meta : stroke.Control
+        Local extending = stroke.Shift
         Local from, to = Selection()
-        Select key
+        Select stroke.Key
             Case Key.LEFT
                 If ends
-                    MoveTo(0)
-                ElseIf !Shifted() && from != to
-                    MoveTo(from)
+                    MoveTo(extending, 0)
+                ElseIf !extending && from != to
+                    MoveTo(extending, from)
                 Else
-                    MoveTo(words ? WordBefore(cursor) : cursor - 1)
+                    MoveTo(extending, words ? WordBefore(cursor) : cursor - 1)
                 End If
             Case Key.RIGHT
                 If ends
-                    MoveTo(clusters.Count)
-                ElseIf !Shifted() && from != to
-                    MoveTo(to)
+                    MoveTo(extending, clusters.Count)
+                ElseIf !extending && from != to
+                    MoveTo(extending, to)
                 Else
-                    MoveTo(words ? WordAfter(cursor) : cursor + 1)
+                    MoveTo(extending, words ? WordAfter(cursor) : cursor + 1)
                 End If
             Case Key.HOME
-                MoveTo(0)
+                MoveTo(extending, 0)
             Case Key.END
-                MoveTo(clusters.Count)
+                MoveTo(extending, clusters.Count)
             Case Key.BACKSPACE
                 If from == to Then from = ends ? 0 : (words ? WordBefore(cursor) : Max(cursor - 1,
                                                                                        0))
@@ -356,12 +355,18 @@ Public Class TextField Extends Widget
     // room for, the cursor after them; a mark that joins the cluster before it joins it.
     @MainThread Method Put(put: String)
         Local from, to = Selection()
+        Local before = Spanned(clusters, 0, from)
+        Local after = Spanned(clusters, to, clusters.Count)
         Local adding = Clusters(put)
-        Local room = limit > 0 ? limit - (clusters.Count - (to - from)) : adding.Count
-        If room <= 0 && to == from Then Return
-        Local fitting = Spanned(adding, 0, Min(adding.Count, Max(room, 0)))
-        Local before = Spanned(clusters, 0, from) + fitting
-        Reclustered(before, Spanned(clusters, to, clusters.Count))
+        // As many of its clusters as fit once they fall together with those around them, as a
+        // mark typed at the most joins the cluster before it.
+        Local taking = adding.Count
+        While limit > 0 && taking > 0 &&
+              Clusters(before + Spanned(adding, 0, taking) + after).Count > limit
+            taking -= 1
+        End While
+        If taking == 0 && to == from Then Return
+        Reclustered(before + Spanned(adding, 0, taking), after)
     End Method
 
     // Takes away the grapheme clusters from `from` to `to`.
@@ -390,9 +395,10 @@ Public Class TextField Extends Widget
         Rebuilt()
     End Method
 
-    @MainThread Method MoveTo(at: Int)
+    // Moves its cursor to `at`, the selection with it when `extending`.
+    @MainThread Method MoveTo(extending: Bool, at: Int)
         cursor = Clamp(at, 0, clusters.Count)
-        If !Shifted() Then anchor = cursor
+        If !extending Then anchor = cursor
     End Method
 
     // The grapheme cluster boundary nearest `x`, in the UI's units.
@@ -458,7 +464,7 @@ Function Spanned(clusters: String[], from: Int, to: Int): String
     Return built.ToString()
 End Function
 
-// Whether Shift is held, which moving the cursor selects with.
+// Whether Shift is held, which a press selects to with.
 @MainThread Function Shifted(): Bool => KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT)
 
 // The characters from `from` up to `to`, as a String.

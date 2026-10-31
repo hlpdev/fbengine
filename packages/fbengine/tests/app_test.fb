@@ -112,3 +112,30 @@ Function TheBestLanguageIsThePlayersFirstThatTheGameHas()
     Local best = BestLanguage(available)
     Expect(best == Null || available.Contains(best))
 End Function
+
+// A language's script is its tag's, or where it's from: Chinese, Serbian, and Uzbek, whatever
+// order the game lists them in.
+@Test
+Function TheBestLanguageIsInThePlayersScript()
+    For available In [["zh-Hant", "zh-Hans"], ["zh-Hans", "zh-Hant"]]
+        Expect(BestLanguage(available, ["zh-CN"]) == "zh-Hans")
+        Expect(BestLanguage(available, ["zh-TW"]) == "zh-Hant")
+        Expect(BestLanguage(available, ["zh-HK"]) == "zh-Hant")
+        Expect(BestLanguage(available, ["zh"]) == "zh-Hans")
+        Expect(BestLanguage(available, ["zh-hant-mo"]) == "zh-Hant")
+    End For
+    For available In [["zh-TW", "zh-CN"], ["zh-CN", "zh-TW"]]
+        Expect(BestLanguage(available, ["zh-Hans-SG"]) == "zh-CN")
+        Expect(BestLanguage(available, ["zh-Hant"]) == "zh-TW")
+        Expect(BestLanguage(available, ["zh-MO"]) == "zh-TW")
+    End For
+    For available In [["sr-Cyrl", "sr-Latn"], ["sr-Latn", "sr-Cyrl"]]
+        Expect(BestLanguage(available, ["sr-ME"]) == "sr-Latn")
+        Expect(BestLanguage(available, ["sr-RS"]) == "sr-Cyrl")
+        Expect(BestLanguage(available, ["sr"]) == "sr-Cyrl")
+    End For
+    Expect(BestLanguage(["uz-Cyrl", "uz"], ["uz-UZ"]) == "uz")
+    // Another script only when none of the player's languages is there in its own.
+    Expect(BestLanguage(["zh-Hant", "en"], ["zh-CN", "en"]) == "en")
+    Expect(BestLanguage(["zh-Hant", "en"], ["zh-CN"]) == "zh-Hant")
+End Function

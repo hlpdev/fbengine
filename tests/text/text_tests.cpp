@@ -1,6 +1,7 @@
 // text's atlas and layouts, apart from the DLL, as the canvas reads them, on HarfBuzz's own test
-// fonts: glyphs placed on pages, rasterized once, at a scale's pixels, color glyphs on color
-// pages, right-to-left runs turned around, and the atlas trimmed past its budget.
+// fonts: glyphs placed on pages at whole pixels, rasterized once, at a scale's pixels, color glyphs
+// on color pages, straight, right-to-left runs turned around, and the atlas trimmed past its
+// budget.
 
 #include "text/fbe_text.h"
 #include "text/font.hpp"
@@ -65,7 +66,7 @@ TEST_CASE("a text laid out is its glyphs placed on the atlas's pages") {
     REQUIRE(fbe::text::lay_out(font, "Hello", 1.0F, layout));
     REQUIRE(layout.glyphs.size() == 5);
     CHECK(layout.generation == fbe::text::atlas().generation());
-    float before = -1.0F;
+    std::int32_t before = -1;
     for (const fbe::text::placed_glyph_t& glyph : layout.glyphs) {
         const fbe::text::page_t& page = fbe::text::atlas().pages()[glyph.page];
         CHECK(page.format == fbe::text::page_format_t::COVERAGE);
@@ -73,8 +74,8 @@ TEST_CASE("a text laid out is its glyphs placed on the atlas's pages") {
         CHECK(glyph.x > before);
         before = glyph.x;
         // Above the baseline, which is at 0.
-        CHECK(glyph.y < 0.0F);
-        CHECK(glyph.y + static_cast<float>(glyph.source.height) <= 1.0F);
+        CHECK(glyph.y < 0);
+        CHECK(glyph.y + glyph.source.height <= 1);
     }
     // The pages say what's new on them.
     const fbe::text::page_t& page = fbe::text::atlas().pages()[0];
@@ -137,13 +138,14 @@ TEST_CASE("a space takes room but no place, and lines go down by the line height
     REQUIRE(spaced.glyphs.size() == 2);
     fbe_text_size_t a_space{};
     REQUIRE(fbe_text_measure(font, "a ", &a_space));
-    CHECK(spaced.glyphs[1].x >= a_space.width - 2.0F);
+    CHECK(static_cast<float>(spaced.glyphs[1].x) >= a_space.width - 2.0F);
     fbe::text::layout_t lines;
     REQUIRE(fbe::text::lay_out(font, "a\na", 1.0F, lines));
     REQUIRE(lines.glyphs.size() == 2);
     fbe_text_metrics_t metrics{};
     REQUIRE(fbe_text_font_metrics(font, &metrics));
-    CHECK(lines.glyphs[1].y - lines.glyphs[0].y == Catch::Approx(metrics.line_height).margin(1.0));
+    CHECK(static_cast<float>(lines.glyphs[1].y - lines.glyphs[0].y) ==
+          Catch::Approx(metrics.line_height).margin(1.0));
     CHECK(lines.glyphs[1].x == lines.glyphs[0].x);
     CHECK(lines.height == Catch::Approx(metrics.line_height * 2.0F));
     fbe_text_free_font(font);
@@ -202,6 +204,12 @@ TEST_CASE("a color font's glyphs are on a color page") {
     CHECK(page.pixels.size() ==
           static_cast<std::size_t>(page.width) * static_cast<std::size_t>(page.height) * 4);
     CHECK(drawn(laid.glyphs[0]));
+    // Straight, not premultiplied, rounded, and none for nothing covered.
+    CHECK(fbe::text::straight(64, 128) == 128);
+    CHECK(fbe::text::straight(100, 200) == 128);
+    CHECK(fbe::text::straight(255, 255) == 255);
+    CHECK(fbe::text::straight(0, 0) == 0);
+    CHECK(fbe::text::straight(200, 100) == 255);
     fbe_text_free_font(font);
 }
 

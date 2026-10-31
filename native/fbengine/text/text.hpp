@@ -16,8 +16,9 @@ namespace fbe::text {
 /// Handles' kind for fonts (architecture.md's handles).
 constexpr std::uint8_t kind = 6;
 
-/// A page's pixels: coverage, one byte a pixel, which an R8 texture holds and the canvas draws as
-/// the text's color times it; or color glyphs (emoji), premultiplied RGBA8, drawn as they are
+/// A page's pixels: coverage, one byte a pixel, linear, which an R8 texture holds and the canvas
+/// draws as the text's color times it; or color glyphs (emoji), straight RGBA8 in sRGB, as images
+/// are, which an RGBA8 texture decodes to linear light, and the canvas draws as it does an image,
 /// times the color's alpha.
 enum class page_format_t : std::uint8_t { COVERAGE, COLOR };
 
@@ -48,13 +49,14 @@ struct page_t {
 };
 
 /// A glyph placed for drawing: its page, where it is on it in pixels, and where that goes, in
-/// pixels from the text's origin, the first line's baseline at its left, y down. Its quarter of a
-/// pixel across is rasterized into it already, so drawn at a whole pixel plus (x, y), it's crisp.
+/// whole pixels from the text's origin, the first line's baseline at its left, y down. Its quarter
+/// of a pixel across is rasterized into it already, so drawn on pixel edges, sampled NEAREST, at a
+/// whole pixel plus (x, y), it's crisp.
 struct placed_glyph_t {
     std::uint32_t page = 0;
     rect_t source;
-    float x = 0.0F;
-    float y = 0.0F;
+    std::int32_t x = 0;
+    std::int32_t y = 0;
 };
 
 /// A text laid out: its glyphs in drawing order, a right-to-left run's turned around already, and

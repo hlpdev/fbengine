@@ -4,6 +4,10 @@
 Public Const FBE_INPUT_KEYSTROKE_PRESS: Int32 = 0
 Public Const FBE_INPUT_KEYSTROKE_REPEAT: Int32 = 1
 Public Const FBE_INPUT_KEYSTROKE_TEXT: Int32 = 2
+Public Const FBE_INPUT_MOD_SHIFT: Int32 = 1
+Public Const FBE_INPUT_MOD_CONTROL: Int32 = 2
+Public Const FBE_INPUT_MOD_ALT: Int32 = 4
+Public Const FBE_INPUT_MOD_SUPER: Int32 = 8
 
 @CLayout Public Struct fbe_text_area_t
     Public Field x: Int32
@@ -22,6 +26,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_input_key_hit_at(index: Int32): Int32
     Function fbe_input_keystroke_count(): Int32
     Function fbe_input_keystroke_kind(index: Int32): Int32
+    Function fbe_input_keystroke_mods(index: Int32): Int32
     Function fbe_input_keystroke_key(index: Int32): Int32
     Function fbe_input_keystroke_text(index: Int32): CString
     Function fbe_input_flush_keys()

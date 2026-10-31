@@ -83,8 +83,7 @@ if(FBENGINE_FB_TESTS)
       "binding-nan-scale|panic: Binding[.]OfGamepadAxis: a scale is a finite number, not"
       "bind-unchecked|panic: Action[.]Bind: a key binding's code is 1 to 511, not 9999"
       "bind-y-infinite|panic: Action[.]BindY: a binding's scale is a finite number, not Inf"
-      "replace-overflows|panic: Action[.]Replace: a binding's scale is a finite number, not Inf"
-      "unblock-unblocked|panic: ActionSet[.]Unblock: nothing blocks it")
+      "replace-overflows|panic: Action[.]Replace: a binding's scale is a finite number, not Inf")
   foreach(case IN LISTS fbengine_input_cases)
     string(REPLACE "|" ";" case "${case}")
     list(GET case 0 name)
