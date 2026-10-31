@@ -1,0 +1,212 @@
+// The tree of boxes over a geometry's triangles, and segments through it.
+
+#include "scene/bvh.hpp"
+
+#include "scene/scene.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <utility>
+#include <vector>
+
+namespace fbe::scene {
+
+namespace {
+
+/// At most this many triangles to a leaf.
+constexpr std::uint32_t leaf_size = 8;
+
+vec3_t vec(const fbe_vec3_t& v) {
+    return { v.x, v.y, v.z };
+}
+
+vec3_t least(vec3_t a, vec3_t b) {
+    return { std::fmin(a.x, b.x), std::fmin(a.y, b.y), std::fmin(a.z, b.z) };
+}
+
+vec3_t greatest(vec3_t a, vec3_t b) {
+    return { std::fmax(a.x, b.x), std::fmax(a.y, b.y), std::fmax(a.z, b.z) };
+}
+
+/// Whether the segment from `a` along `delta` passes through the box anywhere from 0 to `until`.
+bool crosses_box(vec3_t a, vec3_t delta, vec3_t min, vec3_t max, float until) {
+    float enter = 0.0F;
+    float leave = until;
+    const std::array<float, 3> from{ a.x, a.y, a.z };
+    const std::array<float, 3> along{ delta.x, delta.y, delta.z };
+    const std::array<float, 3> low{ min.x, min.y, min.z };
+    const std::array<float, 3> high{ max.x, max.y, max.z };
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (along[axis] == 0.0F) {
+            if (from[axis] < low[axis] || from[axis] > high[axis]) {
+                return false;
+            }
+            continue;
+        }
+        const float inverse = 1.0F / along[axis];
+        float t0 = (low[axis] - from[axis]) * inverse;
+        float t1 = (high[axis] - from[axis]) * inverse;
+        if (t0 > t1) {
+            std::swap(t0, t1);
+        }
+        enter = std::fmax(enter, t0);
+        leave = std::fmin(leave, t1);
+        if (enter > leave) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Where along the segment from `a` along `delta`, 0 to 1, it crosses the triangle, Moller and
+/// Trumbore's way, or a negative for nowhere; `front` says it met the triangle's front.
+float crosses_triangle(vec3_t a, vec3_t delta, const vec3_t* corners, bool& front) {
+    const vec3_t edge1 = corners[1] - corners[0];
+    const vec3_t edge2 = corners[2] - corners[0];
+    const vec3_t across = cross(delta, edge2);
+    const float determinant = dot(edge1, across);
+    if (std::fabs(determinant) < 1e-12F) {
+        return -1.0F;
+    }
+    const float inverse = 1.0F / determinant;
+    const vec3_t offset = a - corners[0];
+    const float u = dot(offset, across) * inverse;
+    if (u < 0.0F || u > 1.0F) {
+        return -1.0F;
+    }
+    const vec3_t up = cross(offset, edge1);
+    const float v = dot(delta, up) * inverse;
+    if (v < 0.0F || u + v > 1.0F) {
+        return -1.0F;
+    }
+    const float time = dot(edge2, up) * inverse;
+    if (time < 0.0F || time > 1.0F) {
+        return -1.0F;
+    }
+    // A segment meeting a counterclockwise triangle's front goes against its normal.
+    front = determinant > 0.0F;
+    return time;
+}
+
+} // namespace
+
+void bvh_t::build(const std::vector<surface_t>& surfaces) {
+    m_corners.clear();
+    m_origins.clear();
+    m_order.clear();
+    m_nodes.clear();
+    for (std::size_t s = 0; s < surfaces.size(); ++s) {
+        const surface_t& surface = surfaces[s];
+        for (std::size_t i = 0; i + 2 < surface.indices.size(); i += 3) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                m_corners.push_back(vec(surface.vertices[surface.indices[i + k]].position));
+            }
+            const auto surface_index = static_cast<std::uint32_t>(s);
+            const auto triangle_index = static_cast<std::uint32_t>(i / 3);
+            m_origins.push_back({ .surface = surface_index, .triangle = triangle_index });
+        }
+    }
+    const auto count = static_cast<std::uint32_t>(m_origins.size());
+    if (count == 0) {
+        return;
+    }
+    std::vector<vec3_t> centers(count);
+    m_order.resize(count);
+    for (std::uint32_t t = 0; t < count; ++t) {
+        const vec3_t* at = corners(t);
+        const vec3_t sum = at[0] + at[1] + at[2];
+        centers[t] = sum * (1.0F / 3.0F);
+        m_order[t] = t;
+    }
+    m_nodes.reserve(((static_cast<std::size_t>(count) / leaf_size) + 1) * 2);
+    split(0, count, centers);
+}
+
+std::uint32_t bvh_t::split(std::uint32_t first, std::uint32_t count, std::vector<vec3_t>& centers) {
+    const auto at = static_cast<std::uint32_t>(m_nodes.size());
+    m_nodes.emplace_back();
+    vec3_t min = corners(m_order[first])[0];
+    vec3_t max = min;
+    vec3_t center_min = centers[m_order[first]];
+    vec3_t center_max = center_min;
+    for (std::uint32_t i = first; i < first + count; ++i) {
+        const vec3_t* triangle = corners(m_order[i]);
+        for (std::size_t k = 0; k < 3; ++k) {
+            min = least(min, triangle[k]);
+            max = greatest(max, triangle[k]);
+        }
+        center_min = least(center_min, centers[m_order[i]]);
+        center_max = greatest(center_max, centers[m_order[i]]);
+    }
+    m_nodes[at].min = min;
+    m_nodes[at].max = max;
+    if (count <= leaf_size) {
+        m_nodes[at].first = first;
+        m_nodes[at].count = count;
+        return at;
+    }
+    const vec3_t size = center_max - center_min;
+    int axis = 2;
+    if (size.x >= size.y && size.x >= size.z) {
+        axis = 0;
+    } else if (size.y >= size.z) {
+        axis = 1;
+    }
+    const std::uint32_t half = count / 2;
+    const auto begin = m_order.begin() + first;
+    std::nth_element(begin, begin + half, begin + count, [&](std::uint32_t a, std::uint32_t b) {
+        return component(centers[a], axis) < component(centers[b], axis);
+    });
+    split(first, half, centers);
+    const std::uint32_t second = split(first + half, count - half, centers);
+    m_nodes[at].second = second;
+    return at;
+}
+
+bool bvh_t::blocks(vec3_t a, vec3_t b) const {
+    segment_hit_t hit;
+    return nearest(a, b, false, hit);
+}
+
+bool bvh_t::nearest(vec3_t a, vec3_t b, bool front_only, segment_hit_t& hit) const {
+    if (m_nodes.empty()) {
+        return false;
+    }
+    const vec3_t delta = b - a;
+    bool found = false;
+    std::vector<std::uint32_t> stack{ 0 };
+    while (!stack.empty()) {
+        const std::uint32_t at = stack.back();
+        stack.pop_back();
+        const node_t& node = m_nodes[at];
+        if (!crosses_box(a, delta, node.min, node.max, found ? hit.time : 1.0F)) {
+            continue;
+        }
+        if (node.count == 0) {
+            stack.push_back(node.second);
+            stack.push_back(at + 1);
+            continue;
+        }
+        for (std::uint32_t i = node.first; i < node.first + node.count; ++i) {
+            const std::uint32_t triangle = m_order[i];
+            bool front = false;
+            const float time = crosses_triangle(a, delta, corners(triangle), front);
+            if (time < 0.0F || (front_only && !front) || (found && time >= hit.time)) {
+                continue;
+            }
+            const vec3_t* at_corners = corners(triangle);
+            const vec3_t normal =
+                normalize(cross(at_corners[1] - at_corners[0], at_corners[2] - at_corners[0]));
+            hit.time = time;
+            hit.normal = front ? normal : -normal;
+            hit.origin = m_origins[triangle];
+            found = true;
+        }
+    }
+    return found;
+}
+
+} // namespace fbe::scene

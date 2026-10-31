@@ -227,7 +227,8 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 # The scene, through fbengine's C API, with no window or GPU.
 add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.cpp
                scene/camera_tests.cpp scene/light_tests.cpp scene/geometry_tests.cpp
-               scene/material_tests.cpp)
+               scene/material_tests.cpp scene/bvh_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
 catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."

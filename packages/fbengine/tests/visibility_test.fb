@@ -1,0 +1,164 @@
+// Visibility: what cameras might see, entities' boxes in the world, and line of sight, with no GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+Function Near(a: Vec3, b: Vec3): Bool => IsClose(a, b, 0.0001)
+
+// A camera at the origin looking down -Z, 1600 by 900, seeing from 0.1 to 50.
+Function Looking(): Camera
+    Local camera = Camera()
+    camera.SetViewport(Rect(0, 0, 1600, 900))
+    camera.SetRange(0.1, 50)
+    Return camera
+End Function
+
+// A wall facing +Z, 2 wide and high, at z = `z`, blocking sight.
+Function Wall(z: Float): Mesh
+    Local wall = Mesh(Geometry.Plane())
+    wall.Turn(Deg(90), 0, 0)
+    wall.SetPosition(Vec3(0, 0, z))
+    wall.SetBlocksSight(True)
+    Return wall
+End Function
+
+@Test
+Function APointIsInViewInsideAllSixPlanes()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Looking()
+    Expect(camera.InView(Vec3(0, 0, -5)))
+    Expect(!camera.InView(Vec3(0, 0, 5)))
+    Expect(!camera.InView(Vec3(0, 0, -0.05)))
+    Expect(!camera.InView(Vec3(0, 0, -60)))
+    Expect(!camera.InView(Vec3(0, 10, -5)))
+    camera.Turn(0, Deg(180), 0)
+    Expect(camera.InView(Vec3(0, 0, 5)))
+    Expect(!camera.InView(Vec3(0, 0, -5)))
+End Function
+
+@Test
+Function TheViewsSidesFollowTheHorizontalFieldOfView()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Looking()
+    // UE's 74 degrees from bottom to top at 16:9 sees 53.25 degrees to each side.
+    camera.SetFieldOfView(Deg(74))
+    Local inside = Vec3(-Sin(Deg(52)), 0, -Cos(Deg(52))) * 10
+    Local outside = Vec3(-Sin(Deg(55)), 0, -Cos(Deg(55))) * 10
+    Expect(camera.InView(inside) && !camera.InView(outside))
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(2)
+    Expect(camera.InView(Vec3(1.7, 0, -40)) && !camera.InView(Vec3(1.8, 0, -40)))
+End Function
+
+@Test
+Function AMeshIsInViewUnlessItsWholeBoxIsOutsideOnePlane()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Looking()
+    Local cube = Mesh(Geometry.Cube())
+    cube.SetPosition(Vec3(0, 0, -10))
+    Expect(camera.InView(cube))
+    // Its middle is behind the camera, but its front reaches past the near plane.
+    cube.SetPosition(Vec3(0, 0, 0.5))
+    Expect(camera.InView(cube))
+    cube.SetPosition(Vec3(0, 0, 5))
+    Expect(!camera.InView(cube))
+    // Scaled long, its box reaches back into view.
+    cube.SetScale(Vec3(1, 1, 10))
+    Expect(camera.InView(cube))
+    // A hidden mesh is still in view: only the frustum counts.
+    cube.Hide()
+    Expect(camera.InView(cube))
+    // Any other entity counts by its position.
+    Local pivot = Pivot()
+    pivot.SetPosition(Vec3(0, 0, -3))
+    Expect(camera.InView(pivot))
+    pivot.SetPosition(Vec3(0, 0, 3))
+    Expect(!camera.InView(pivot))
+    Expect(camera.InView(AABB(Vec3(-100, -1, -6), Vec3(-99, 1, 2))) == False)
+    Expect(camera.InView(AABB(Vec3(-100, -1, -6), Vec3(100, 1, -5))))
+End Function
+
+@Test
+Function BoundsAreTheWorldsBoxAroundAnEntity()
+    Local world = Fresh()
+    Defer world.Free()
+    Local cube = Mesh(Geometry.Cube())
+    cube.SetPosition(Vec3(10, 0, 0))
+    cube.SetScale(Vec3(2, 1, 1))
+    Expect(cube.Bounds() == AABB(Vec3(8, -1, -1), Vec3(12, 1, 1)))
+    cube.Turn(0, Deg(90), 0)
+    Local turned = cube.Bounds()
+    Expect(Near(turned.Min, Vec3(9, -1, -2)) && Near(turned.Max, Vec3(11, 1, 2)))
+    Local pivot = Pivot()
+    pivot.SetPosition(Vec3(1, 2, 3))
+    Expect(pivot.Bounds() == AABB(Vec3(1, 2, 3), Vec3(1, 2, 3)))
+    Expect(Mesh(Null).Bounds() == AABB(Vec3.Zero(), Vec3.Zero()))
+End Function
+
+@Test
+Function WhatBlocksSightIsBetweenOrNot()
+    Local world = Fresh()
+    Defer world.Free()
+    Local looker = Pivot()
+    looker.SetPosition(Vec3(0, 0, 5))
+    Local target = Pivot()
+    target.SetPosition(Vec3(0, 0, -5))
+    Expect(looker.CanSee(target))
+    Local wall = Wall(0)
+    Expect(!looker.CanSee(target))
+    // From behind too.
+    Expect(!target.CanSee(looker))
+    Expect(looker.CanSee(Vec3(0, 0, 1)))
+    Expect(!looker.CanSee(Vec3(0, 0, -1)))
+    // Past its edge, there's nothing between.
+    Expect(looker.CanSee(Vec3(3, 0, -5)))
+    wall.Hide()
+    Expect(looker.CanSee(target))
+    wall.Show()
+    wall.SetBlocksSight(False)
+    Expect(looker.CanSee(target))
+    wall.SetBlocksSight(True)
+    // What's looked at doesn't block itself.
+    Expect(looker.CanSee(wall))
+    Expect(wall.CanSee(target))
+    Expect(!looker.CanSee(target))
+    // A wall in another World doesn't block this one's sight.
+    Local elsewhere = World()
+    Defer elsewhere.Free()
+    World.SetCurrent(elsewhere)
+    Local there = Pivot()
+    World.SetCurrent(world)
+    wall.SetParent(there)
+    Expect(looker.CanSee(target))
+End Function
+
+@Test
+Function SightFollowsAGeometryAsItChanges()
+    Local world = Fresh()
+    Defer world.Free()
+    Local looker = Pivot()
+    looker.SetPosition(Vec3(0, 0, 5))
+    Local wall = Wall(0)
+    Expect(!looker.CanSee(Vec3(0, 0, -5)))
+    // Moving the wall's vertices aside opens the way.
+    Local geometry = wall.Geometry()
+    If geometry == Null
+        Fail("the wall has no geometry")
+        Return
+    End If
+    geometry.Translate(Vec3(10, 0, 0))
+    Expect(looker.CanSee(Vec3(0, 0, -5)))
+    wall.SetPosition(Vec3(-10, 0, 0))
+    Expect(!looker.CanSee(Vec3(0, 0, -5)))
+End Function

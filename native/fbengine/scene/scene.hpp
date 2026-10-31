@@ -4,6 +4,7 @@
 // indexed by slot, so what runs over many entities a frame reads only what it needs.
 
 #include "fbengine.h"
+#include "scene/bvh.hpp"
 #include "scene/math.hpp"
 
 #include <array>
@@ -92,6 +93,10 @@ struct geometry_t {
     bool bounds_stale = true;
     vec3_t bounds_min;
     vec3_t bounds_max;
+    /// The tree over its triangles, and the version it was built at, built when it's first
+    /// searched after a change.
+    bvh_t tree;
+    std::uint64_t tree_version = UINT64_MAX;
 };
 
 /// A mesh: the geometry it draws, by slot, or none.
@@ -128,6 +133,8 @@ struct entities_t {
 
     /// Where the entity's kind keeps the rest of it, as its camera in scene_t's cameras.
     std::vector<std::uint32_t> component;
+    /// Whether it blocks line of sight, by its triangles for a mesh.
+    std::vector<bool> blocks_sight;
 };
 
 /// A camera: how it projects, the part of its target it draws to, what it clears, and when it
@@ -238,6 +245,13 @@ void release_materials(const std::vector<surface_t>& surfaces);
 
 /// The box around a geometry's vertices, nothing at the origin for none.
 void geometry_bounds(std::uint32_t geometry, vec3_t& min, vec3_t& max);
+/// The tree over a geometry's triangles, built again if the geometry changed since.
+const bvh_t& geometry_tree(std::uint32_t geometry);
+/// Whether an entity and every entity above it are shown.
+bool showing(std::uint32_t entity);
+/// The box in the world around a box in an entity's space, through its world matrix.
+void world_box(std::uint32_t entity, vec3_t local_min, vec3_t local_max, vec3_t& world_min,
+               vec3_t& world_max);
 
 /// Gives an entity a transform of nothing: at its parent's origin, unturned, at scale 1.
 void reset_transform(std::uint32_t entity);

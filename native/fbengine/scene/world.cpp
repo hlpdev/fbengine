@@ -68,6 +68,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.world_scale.emplace_back();
         entities.moved.push_back(true);
         entities.component.push_back(none);
+        entities.blocks_sight.push_back(false);
     } else {
         entities.kind[entity] = kind;
         entities.world[entity] = world;
@@ -75,6 +76,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.children[entity].clear();
         entities.name[entity].clear();
         entities.hidden[entity] = false;
+        entities.blocks_sight[entity] = false;
     }
     reset_transform(entity);
     add_component(entity);
@@ -216,6 +218,16 @@ std::uint32_t slots_t::size() const {
 scene_t& scene() {
     static scene_t the_scene;
     return the_scene;
+}
+
+bool showing(std::uint32_t entity) {
+    const entities_t& entities = scene().entities;
+    for (std::uint32_t at = entity; at != none; at = entities.parent[at]) {
+        if (entities.hidden[at]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::uint32_t entity_slot(std::uint64_t handle) {
@@ -485,16 +497,7 @@ FBE_API bool fbe_entity_hidden(uint64_t entity) {
 
 FBE_API bool fbe_entity_showing(uint64_t entity) {
     const std::uint32_t slot = entity_slot(entity);
-    if (slot == none) {
-        return false;
-    }
-    const fbe::scene::entities_t& entities = scene().entities;
-    for (std::uint32_t at = slot; at != none; at = entities.parent[at]) {
-        if (entities.hidden[at]) {
-            return false;
-        }
-    }
-    return true;
+    return slot != none && fbe::scene::showing(slot);
 }
 
 FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t parent) {
@@ -530,6 +533,7 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         entities.position[copy] = entities.position[original];
         entities.rotation[copy] = entities.rotation[original];
         entities.scale[copy] = entities.scale[original];
+        entities.blocks_sight[copy] = entities.blocks_sight[original];
         fbe::scene::copy_component(original, copy);
         fbe::scene::attach(copy, world_index, i == 0 ? parent_slot : copies[tree[i].second]);
         copies[i] = copy;
