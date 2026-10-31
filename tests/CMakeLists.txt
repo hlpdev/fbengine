@@ -61,7 +61,7 @@ FetchContent_MakeAvailable(stb)
 add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
                gpu/pipeline_tests.cpp gpu/texture_tests.cpp gpu/target_tests.cpp
                gpu/buffer_tests.cpp gpu/graph_tests.cpp gpu/canvas_tests.cpp
-               gpu/pixels_tests.cpp gpu/text_tests.cpp
+               gpu/pixels_tests.cpp gpu/text_tests.cpp gpu/example_tests.cpp
                golden/golden.cpp golden/golden_tests.cpp golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)
@@ -70,6 +70,7 @@ target_include_directories(fbengine_gpu_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DI
 target_compile_definitions(fbengine_gpu_tests PRIVATE
                            FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
                            FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+                           FBENGINE_EXAMPLE_FRAMES="${PROJECT_BINARY_DIR}/example-frames"
                            FBENGINE_GOLDEN_IMAGES="${CMAKE_CURRENT_SOURCE_DIR}/golden"
                            FBENGINE_GOLDEN_FAILURES="${PROJECT_BINARY_DIR}/golden-failures"
                            FBENGINE_GOLDEN_UPDATES="${PROJECT_BINARY_DIR}/golden-updates"
@@ -95,6 +96,28 @@ set_tests_properties(gpu.golden_updates_only_from_passing_tests PROPERTIES
 if(fbengine_test_dll_paths)
   set_property(TEST gpu.golden_updates_only_from_passing_tests PROPERTY ENVIRONMENT_MODIFICATION
                "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+endif()
+
+# E3's arcade example, playing itself headless, the same every time, and saving the frames that
+# examples.arcade.golden, a hidden test of fbengine_gpu_tests run after it, compares with their
+# golden images, both on the tests' Vulkan.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME examples.arcade
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/arcade"
+                   -- --frames "${PROJECT_BINARY_DIR}/example-frames/arcade")
+  set_tests_properties(examples.arcade PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       FIXTURES_SETUP arcade_frames TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "Running arcade[^\n]*\nscore 140, lives 3\r?\n$")
+  add_test(NAME examples.arcade.golden
+           COMMAND fbengine_gpu_tests "the arcade example's frames match their golden images")
+  set_tests_properties(examples.arcade.golden PROPERTIES
+                       LABELS "gpu;golden" FIXTURES_REQUIRED arcade_frames
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
+  if(fbengine_test_dll_paths)
+    set_property(TEST examples.arcade.golden PROPERTY ENVIRONMENT_MODIFICATION
+                 "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+  endif()
 endif()
 
 # The packages' own tests, run by `fb test`, and the examples, run by `fb run` and checked against
