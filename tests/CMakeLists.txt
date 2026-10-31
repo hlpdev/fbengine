@@ -156,8 +156,7 @@ endif()
 fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
-# fbengine_audio's own C++, where it's subtle: what's in its headers, with nothing to link.
-add_executable(fbengine_audio_tests audio/pool_tests.cpp)
+
 # fbengine_audio's own C++, where it's subtle: what's in its headers, and miniaudio's backends.
 add_executable(fbengine_audio_tests audio/pool_tests.cpp audio/backends_tests.cpp
                audio/channels_tests.cpp audio/outputs_tests.cpp)
