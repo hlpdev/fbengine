@@ -30,7 +30,7 @@ extern "C" {
 
 // What fbe_audio_simulate does to the device, as the OS would: its output unplugged, which stops
 // it, and plugged back in, which starts it again.
-#define FBE_AUDIO_SIMULATE_UNPLUG 0
+#define FBE_AUDIO_SIMULATE_UNPLUG  0
 #define FBE_AUDIO_SIMULATE_PLUG_IN 1
 
 // The version of fbengine this DLL is, like "0.1.0", which is its packages'.
