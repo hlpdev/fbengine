@@ -465,3 +465,27 @@ Function FocusedOutranksHovered() Throws GraphicsError
     Expect(ui.Focused() == field && ui.Hovered() == field)
     Expect(field.State() == WidgetState.FOCUSED)
 End Function
+
+// The focus given or taken between Updates blocks or unblocks the game's controls at once, so the
+// next Flip reads them as the focus is.
+@Test
+Function TheFocusBlocksAtOnce() Throws GraphicsError
+    Local play = Button("Play")
+    Local root = Node("root")
+    root.Add(play)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfKey(Key.SPACE))
+    ui.Route(controls)
+    ui.Focus(play)
+    Expect(controls.Blocked())
+    Frame(ui)
+    ui.Focus(Null)
+    Expect(!controls.Blocked())
+    Try Simulate.PressKey(Key.SPACE)
+    Flip()
+    Expect(jump.Hit())
+    ui.Unroute(controls)
+End Function
