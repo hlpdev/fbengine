@@ -90,7 +90,8 @@ job_t jobs_t::run_for(std::size_t count, std::size_t grain,
         // Each range is count / ranges items, and the first few one more, for what's left.
         const std::size_t begin = (i * (count / ranges)) + std::min(i, count % ranges);
         const std::size_t end = begin + (count / ranges) + (i < count % ranges ? 1 : 0);
-        parts.push_back(add(lock, [shared, begin, end] { std::invoke(*shared, begin, end); }, after));
+        parts.push_back(
+            add(lock, [shared, begin, end] { std::invoke(*shared, begin, end); }, after));
     }
     return add(lock, [] {}, ranges == 0 ? after : std::span<const job_t>(parts));
 }
