@@ -56,8 +56,8 @@ struct path_t {
 
 /// `text` as a path: "res://", in any case, then names with '/' or '\' between them, where "" and
 /// "." are nothing and ".." takes out the name before it. A path that goes above the root, or has
-/// a name no file can have on every OS (with one of `: * ? " < > |` or a control character), is
-/// an INVALID_PATH.
+/// a name no file can have on every OS (with one of `: * ? " < > |` or a control character, a dot
+/// or a space at its end, or a Windows device's, as CON or nul.txt), is an INVALID_PATH.
 result_t<path_t> parse(std::string_view text);
 
 /// `relative`, a path from the folder `base` is in, as glTF's and materials' paths are, or a
@@ -66,6 +66,9 @@ result_t<path_t> resolve(const path_t& base, std::string_view relative);
 
 /// A name folded, as paths are compared.
 std::string fold(std::string_view name);
+
+/// Whether `name` can be a name in a res:// path, as parse has it.
+bool nameable(std::string_view name);
 
 /// A name in a folder, as its source has it, and what it is.
 struct entry_t {

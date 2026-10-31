@@ -1,13 +1,16 @@
-// A folder on the disk as a source. A path is looked for as it's written first, which is all a
-// disk that ignores case needs, and then name by name in any case, the first by its bytes of the
-// names that fold the same, so a game's paths find its files on every OS.
+// A folder on the disk as a source, which finds a path as a pak does, whatever the disk does with
+// case: at each name, every name in the folders so far that folds to it, by their real names on
+// the disk, first by bytes, so "Data" and "data" are one folder, and neither spelling in a path,
+// nor Windows' own names for a file (a short 8.3 name, a dot at the end, a device), finds what a
+// pak of the same files wouldn't.
 
 #include "vfs/disk.hpp"
 #include "vfs/vfs.hpp"
 
+#include <algorithm>
 #include <format>
-#include <fstream>
-#include <ios>
+#include <map>
+#include <new>
 #include <span>
 #include <string>
 #include <system_error>
@@ -23,76 +26,96 @@ class folder_source_t final : public source_t {
 public:
     explicit folder_source_t(fs::path folder) : m_folder(std::move(folder)) {}
 
-    result_t<std::optional<bytes_t>> read(std::span<const std::string> names,
+    result_t<std::optional<bytes_t>> read(std::span<const std::string> /*names*/,
                                           std::span<const std::string> keys) override {
-        const std::optional<fs::path> file = find(names, keys);
-        std::error_code error;
-        if (!file || !fs::is_regular_file(*file, error)) {
+        if (keys.empty()) {
             return std::optional<bytes_t>{};
         }
-        std::ifstream stream(*file, std::ios::binary);
-        const std::uintmax_t size = fs::file_size(*file, error);
-        if (!stream || error) {
+        const std::vector<found_t> found = find(keys);
+        if (found.empty() || found.front().kind != kind_t::FILE) {
+            return std::optional<bytes_t>{};
+        }
+        const fs::path& file = found.front().path;
+        bool missing = false;
+        const std::unique_ptr<read_file_t> opened = read_file_t::open(file, missing);
+        if (opened == nullptr) {
+            // One that's gone since it was found isn't there.
+            if (missing) {
+                return std::optional<bytes_t>{};
+            }
             return std::unexpected(error_t{
                 .failure = failure_t::OTHER,
-                .message = std::format("couldn't read {}: {}", utf8(*file),
-                                       error ? error.message() : "it won't open"),
+                .message = std::format("couldn't read {}", utf8(file)),
             });
         }
-        bytes_t bytes(static_cast<std::size_t>(size));
-        stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
-        // A file that got shorter since its size was read is what was there.
-        bytes.resize(static_cast<std::size_t>(stream.gcount()));
-        if (stream.bad()) {
+        try {
+            bytes_t bytes(static_cast<std::size_t>(opened->size()));
+            if (!opened->read_at(0, bytes)) {
+                return std::unexpected(error_t{
+                    .failure = failure_t::OTHER,
+                    .message = std::format("couldn't read {}", utf8(file)),
+                });
+            }
+            return std::optional<bytes_t>(std::move(bytes));
+        } catch (const std::bad_alloc&) {
             return std::unexpected(error_t{
                 .failure = failure_t::OTHER,
-                .message = std::format("couldn't read {}", utf8(*file)),
+                .message = std::format("there isn't the memory to read {}", utf8(file)),
             });
         }
-        return std::optional<bytes_t>(std::move(bytes));
     }
 
-    result_t<kind_t> kind(std::span<const std::string> names,
+    result_t<kind_t> kind(std::span<const std::string> /*names*/,
                           std::span<const std::string> keys) override {
-        if (names.empty()) {
+        if (keys.empty()) {
             return kind_t::FOLDER;
         }
-        const std::optional<fs::path> found = find(names, keys);
-        return found ? kind_of(*found) : kind_t::NONE;
+        const std::vector<found_t> found = find(keys);
+        return found.empty() ? kind_t::NONE : found.front().kind;
     }
 
-    result_t<std::optional<std::vector<entry_t>>> list(std::span<const std::string> names,
+    result_t<std::optional<std::vector<entry_t>>> list(std::span<const std::string> /*names*/,
                                                        std::span<const std::string> keys) override {
-        const std::optional<fs::path> found = find(names, keys);
-        if (!found || kind_of(*found) != kind_t::FOLDER) {
+        std::vector<found_t> found;
+        if (keys.empty()) {
             // The root is a folder, empty while the folder on the disk isn't there.
-            if (names.empty()) {
-                return std::optional<std::vector<entry_t>>(std::vector<entry_t>{});
-            }
-            return std::optional<std::vector<entry_t>>{};
-        }
-        std::vector<entry_t> entries;
-        std::error_code error;
-        for (fs::directory_iterator it(*found, error); !error && it != fs::directory_iterator();
-             it.increment(error)) {
-            std::string name = utf8(it->path().filename());
-            const kind_t kind = kind_of(it->path());
-            // A name no res:// path can have isn't in it.
-            const result_t<path_t> as_path = parse(std::format("res://{}", name));
-            if (kind != kind_t::NONE && as_path && as_path->names.size() == 1) {
-                entries.push_back({ .name = std::move(name), .kind = kind });
+            found.push_back({ .path = m_folder, .kind = kind_t::FOLDER });
+        } else {
+            found = find(keys);
+            if (found.empty() || found.front().kind != kind_t::FOLDER) {
+                return std::optional<std::vector<entry_t>>{};
             }
         }
-        if (error) {
-            return std::unexpected(error_t{
-                .failure = failure_t::OTHER,
-                .message = std::format("couldn't list {}: {}", utf8(*found), error.message()),
-            });
+        // What every folder of these names has, first by bytes for names that fold the same.
+        std::map<std::string, entry_t> listed;
+        for (const found_t& folder : found) {
+            if (folder.kind != kind_t::FOLDER) {
+                continue;
+            }
+            for (found_t& entry : entries(folder.path)) {
+                const auto [at, added] = listed.try_emplace(
+                    fold(entry.name), entry_t{ .name = entry.name, .kind = entry.kind });
+                if (!added && entry.name < at->second.name) {
+                    at->second = { .name = std::move(entry.name), .kind = entry.kind };
+                }
+            }
         }
-        return std::optional<std::vector<entry_t>>(std::move(entries));
+        std::vector<entry_t> items;
+        items.reserve(listed.size());
+        for (auto& [key, entry] : listed) {
+            items.push_back(std::move(entry));
+        }
+        return std::optional<std::vector<entry_t>>(std::move(items));
     }
 
 private:
+    struct found_t {
+        fs::path path;
+        kind_t kind = kind_t::NONE;
+        // Its name on the disk.
+        std::string name;
+    };
+
     static kind_t kind_of(const fs::path& path) {
         std::error_code error;
         const fs::file_status status = fs::status(path, error);
@@ -105,39 +128,42 @@ private:
         return fs::is_regular_file(status) ? kind_t::FILE : kind_t::NONE;
     }
 
-    // Where the path is on the disk, or nullopt when nothing is.
-    [[nodiscard]] std::optional<fs::path> find(std::span<const std::string> names,
-                                               std::span<const std::string> keys) const {
+    // What's in `folder` that a res:// path can name, by its real names, in no order.
+    static std::vector<found_t> entries(const fs::path& folder) {
+        std::vector<found_t> found;
         std::error_code error;
-        fs::path exact = m_folder;
-        for (const std::string& name : names) {
-            exact /= disk_path(name);
-        }
-        if (fs::exists(exact, error)) {
-            return exact;
-        }
-
-        fs::path at = m_folder;
-        for (std::size_t i = 0; i < names.size(); ++i) {
-            fs::path next = at / disk_path(names[i]);
-            if (fs::exists(next, error)) {
-                at = std::move(next);
-                continue;
+        for (fs::directory_iterator it(folder, error); !error && it != fs::directory_iterator();
+             it.increment(error)) {
+            std::string name = utf8(it->path().filename());
+            const kind_t kind = kind_of(it->path());
+            if (kind != kind_t::NONE && nameable(name)) {
+                found.push_back({ .path = it->path(), .kind = kind, .name = std::move(name) });
             }
-            std::optional<fs::path> match;
-            std::string matched;
-            for (fs::directory_iterator it(at, error); !error && it != fs::directory_iterator();
-                 it.increment(error)) {
-                std::string name = utf8(it->path().filename());
-                if (fold(name) == keys[i] && (!match || name < matched)) {
-                    match = it->path();
-                    matched = std::move(name);
+        }
+        return found;
+    }
+
+    // Everything at `keys`, first by bytes at each name: the folders it can be in, and what's in
+    // them by that name.
+    [[nodiscard]] std::vector<found_t> find(std::span<const std::string> keys) const {
+        std::vector<found_t> at = { { .path = m_folder, .kind = kind_t::FOLDER } };
+        for (const std::string& key : keys) {
+            std::vector<found_t> next;
+            for (const found_t& folder : at) {
+                if (folder.kind != kind_t::FOLDER) {
+                    continue;
+                }
+                for (found_t& entry : entries(folder.path)) {
+                    if (fold(entry.name) == key) {
+                        next.push_back(std::move(entry));
+                    }
                 }
             }
-            if (!match) {
-                return std::nullopt;
+            std::ranges::stable_sort(next, {}, &found_t::name);
+            if (next.empty()) {
+                return {};
             }
-            at = std::move(*match);
+            at = std::move(next);
         }
         return at;
     }
