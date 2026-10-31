@@ -1,0 +1,145 @@
+// Worlds: the scenes entities live in. There's a main one, so a game with one scene never names
+// it, and a game or an editor makes more, as a preview or a scene drawn into a texture.
+
+Import std.core
+Import std.ffi
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./window"
+
+/// A scene: a tree of entities, which are drawn, collide, and pick only with others in their
+/// World. Entities made without a parent go into the current one, the main World at first.
+Public Final Class World
+    // One wrapper for each live World, by its handle's slot, so each handle gives the same World.
+    Static Field worlds: World?[] = []
+    Static Field mainWorld: World? = Null
+    Static Field current: World? = Null
+
+    Field handle: UInt64
+
+    /// A new World, with no entities.
+    @MainThread Public New()
+        handle = fbe_world_create()
+        Keep(Self)
+    End New
+
+    Private New(handle: UInt64)
+        Self.handle = handle
+        Keep(Self)
+    End New
+
+    /// The World there always is, which is current until SetCurrent makes another one current.
+    @MainThread Public Static Method Main(): World
+        Local found = mainWorld
+        If found != Null Then Return found
+        Local made = World(fbe_world_main())
+        mainWorld = made
+        Return made
+    End Method
+
+    /// The World that entities made without a parent go into.
+    @MainThread Public Static Method Current(): World => current ?? Main()
+
+    /// Makes `world` the one entities made without a parent go into.
+    @MainThread @PanicsAtCaller
+    Public Static Method SetCurrent(world: World)
+        world.Live("SetCurrent")
+        current = world
+    End Method
+
+    /// Frees the World and every entity in it. The main World stays: freeing it panics, and Clear
+    /// empties it. If it was current, the main World is current again.
+    @MainThread @PanicsAtCaller
+    Public Method Free()
+        If !fbe_world_free(Live("Free")) Then Panic(LastError())
+        DropFreed()
+        worlds[Slot(handle)] = Null
+        handle = 0
+        If current == Self Then current = Null
+    End Method
+
+    /// Whether the World was freed.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// Frees every entity in the World.
+    @MainThread @PanicsAtCaller
+    Public Method Clear()
+        If !fbe_world_clear(Live("Clear")) Then Panic(LastError())
+        DropFreed()
+    End Method
+
+    /// How many entities are in the World, at every level.
+    @MainThread @PanicsAtCaller
+    Public Method EntityCount(): Int => fbe_world_entity_count(Live("EntityCount"))
+
+    /// The entities at the top of the World, with no parent, in the order they came there.
+    @MainThread @PanicsAtCaller
+    Public Method Roots(): Entity[]
+        Local world = Live("Roots")
+        Return Handles(Function(out: Ptr<UInt64>, capacity: Int32): Int32
+            Return fbe_world_roots(world, out, capacity)
+        End Function)
+    End Method
+
+    /// The first entity in the World with the name, depth first, each parent before its
+    /// children, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Find(name: String): Entity? => EntityOf(fbe_world_find(Live("Find"), name))
+
+    // The handle, or a panic naming the call for a World that was freed.
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call} on a World that was freed")
+        Return handle
+    End Method
+
+    // The World a handle is for, from its wrapper, made if there isn't one.
+    Package Static Method Of(handle: UInt64): World
+        Local slot = Slot(handle)
+        If slot < worlds.Count
+            Local kept = worlds[slot]
+            If kept != Null && kept.handle == handle Then Return kept
+        End If
+        If handle == fbe_world_main() Then Return Main()
+        Return World(handle)
+    End Method
+
+    Static Method Keep(world: World)
+        Local slot = Slot(world.handle)
+        While worlds.Count <= slot
+            worlds.Add(Null)
+        End While
+        worlds[slot] = world
+    End Method
+End Class
+
+/// The slot of a World's or entity's handle, its low 32 bits.
+Package Function Slot(handle: UInt64): Int => (handle & 0xFFFFFFFF) As Int
+
+/// The handles a C call writes, as their entities: `write` is given where to put them and how many
+/// fit, and gives how many there are, so it's called again when there wasn't room.
+Package Function Handles(write: Func(Ptr<UInt64>, Int32): Int32): Entity[]
+    Local capacity = 16
+    While True
+        Local taken = Buffer<UInt64>(capacity)
+        Local count = 0
+        Unsafe
+            count = write(taken.Pointer(), capacity As Int32)
+        End Unsafe
+        If count < 0 Then Panic(LastError())
+        If count <= capacity
+            Local found: Entity[] = []
+            For i = 0 Until count
+                found.Add(Present(EntityOf(taken[i])))
+            End For
+            Return found
+        End If
+        capacity = count
+    End While
+End Function
+
+/// The World a handle is for.
+Package Function WorldOf(handle: UInt64): World => World.Of(handle)
+
+/// The World entities made without a parent go into.
+Package Function CurrentWorld(): World => World.Current()

@@ -1,0 +1,54 @@
+// The scene's panics, each a mistake a game can make, which fb test can't catch: ctest runs this
+// with a case's name and checks it panics with the case's message.
+
+Import std.core
+Import std.os
+Import fbengine
+
+Local arguments = Process.Arguments()
+If arguments.Count != 1 Then Panic("give the case to run")
+
+Local world = World()
+World.SetCurrent(world)
+Select arguments[0]
+    Case "freed-entity"
+        Local pivot = Pivot()
+        pivot.Free()
+        pivot.SetName("x")
+    Case "freed-with-parent"
+        Local parent = Pivot()
+        Local child = Pivot(parent)
+        parent.Free()
+        Print(child.Name())
+    Case "new-under-freed"
+        Local parent = Pivot()
+        parent.Free()
+        Pivot(parent)
+    Case "freed-world"
+        world.Free()
+        world.Roots()
+    Case "current-freed"
+        world.Free()
+        World.SetCurrent(world)
+    Case "free-main"
+        World.Main().Free()
+    Case "own-parent"
+        Local pivot = Pivot()
+        pivot.SetParent(pivot)
+    Case "under-itself"
+        Local top = Pivot()
+        Local bottom = Pivot(Pivot(top))
+        top.SetParent(bottom)
+    Case "child-out-of-range"
+        Local parent = Pivot()
+        Pivot(parent)
+        Pivot(parent)
+        parent.Child(2)
+    Case "data-freed"
+        Local pivot = Pivot()
+        pivot.Free()
+        pivot.Data<World>()
+    Default
+        Panic("no case {arguments[0]}")
+End Select
+Print("no panic")

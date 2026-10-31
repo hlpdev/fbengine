@@ -1,0 +1,232 @@
+// Worlds and the tree of entities, which need no window or GPU. Each test makes a World of its own
+// and makes it current, so the tests don't see each other's entities.
+
+Import std.core
+Import std.test
+Import fbengine
+
+// A World of the test's own, current until the test frees it.
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+Class Npc
+    Public Field Health: Int
+
+    New(health: Int)
+        Health = health
+    End New
+End Class
+
+@Test
+Function EntitiesGoIntoTheCurrentWorldInOrder()
+    Local world = Fresh()
+    Defer world.Free()
+    Local a = Pivot()
+    Local b = Pivot()
+    Expect(World.Current() == world)
+    Expect(a.World() == world)
+    Expect(world.EntityCount() == 2)
+    Local roots = world.Roots()
+    Expect(roots.Count == 2 && roots[0] == a && roots[1] == b)
+    Expect(a.Kind() == EntityKind.PIVOT)
+    Expect(a.Parent() == Null)
+End Function
+
+@Test
+Function TheMainWorldIsCurrentAtFirstAndStays()
+    Expect(World.Current() == World.Main())
+    Local world = Fresh()
+    world.Free()
+    Expect(World.Current() == World.Main())
+    Expect(world.Freed())
+    Expect(!World.Main().Freed())
+End Function
+
+@Test
+Function ChildrenKeepTheOrderTheyCameIn()
+    Local world = Fresh()
+    Defer world.Free()
+    Local parent = Pivot()
+    Local first = Pivot(parent)
+    Local second = Pivot(parent)
+    Local third = Pivot()
+    third.SetParent(parent)
+    Expect(parent.ChildCount() == 3)
+    Expect(parent.Child(0) == first && parent.Child(1) == second && parent.Child(2) == third)
+    Expect(parent.Children() == [first As Entity, second, third])
+    Expect(third.Parent() == parent)
+    Expect(world.Roots() == [parent As Entity])
+    Expect(world.EntityCount() == 4)
+
+    // Its own parent again changes nothing; another puts it last there.
+    first.SetParent(parent)
+    Expect(parent.Child(0) == first)
+    first.SetParent(second)
+    Expect(parent.Children() == [second As Entity, third])
+    Expect(second.Child(0) == first)
+    first.SetParent(Null)
+    Expect(world.Roots() == [parent As Entity, first])
+End Function
+
+@Test
+Function AnEntityCantGoUnderItself()
+    Local world = Fresh()
+    Defer world.Free()
+    Local top = Pivot()
+    Local middle = Pivot(top)
+    Local bottom = Pivot(middle)
+    Expect(bottom.Parent() == middle && middle.Parent() == top && top.Parent() == Null)
+End Function
+
+@Test
+Function FindLooksDepthFirstBelowTheEntity()
+    Local world = Fresh()
+    Defer world.Free()
+    Local root = Pivot()
+    root.SetName("door")
+    Local frame = Pivot(root)
+    frame.SetName("frame")
+    Local deep = Pivot(frame)
+    deep.SetName("door")
+    Local later = Pivot(root)
+    later.SetName("door")
+    Expect(root.Name() == "door")
+    Expect(root.Find("door") == deep)
+    Expect(root.Find("frame") == frame)
+    Expect(root.Find("nothing") == Null)
+    Expect(world.Find("door") == root)
+    Expect(frame.Find("door") == deep)
+    Expect(Pivot().Name() == "")
+End Function
+
+@Test
+Function HidingHidesWhatsUnder()
+    Local world = Fresh()
+    Defer world.Free()
+    Local parent = Pivot()
+    Local child = Pivot(parent)
+    Expect(!parent.Hidden() && child.Showing())
+    parent.Hide()
+    Expect(parent.Hidden() && !parent.Showing())
+    Expect(!child.Hidden() && !child.Showing())
+    child.Hide()
+    parent.Show()
+    Expect(!child.Showing())
+    child.Show()
+    Expect(child.Showing())
+End Function
+
+@Test
+Function FreeingFreesWhatsUnderAndStopsTheirWrappers()
+    Local world = Fresh()
+    Defer world.Free()
+    Local parent = Pivot()
+    Local child = Pivot(parent)
+    Local grandchild = Pivot(child)
+    Local other = Pivot()
+    child.Free()
+    Expect(child.Freed() && grandchild.Freed())
+    Expect(!parent.Freed() && !other.Freed())
+    Expect(parent.ChildCount() == 0)
+    Expect(world.EntityCount() == 2)
+    Expect(grandchild.ToString() == "freed Pivot")
+
+    // A slot freed and used again is a new entity, never the old one's wrapper.
+    Local again = Pivot()
+    Expect(again != child && again != grandchild)
+    Expect(!again.Freed())
+End Function
+
+@Test
+Function ClearingAWorldFreesItsEntities()
+    Local world = Fresh()
+    Defer world.Free()
+    Local a = Pivot()
+    Local b = Pivot(a)
+    world.Clear()
+    Expect(a.Freed() && b.Freed())
+    Expect(world.EntityCount() == 0)
+    Expect(world.Roots().Count == 0)
+    Local c = Pivot()
+    Expect(world.Roots() == [c As Entity])
+End Function
+
+@Test
+Function FreeingAWorldFreesItsEntities()
+    Local world = Fresh()
+    Local a = Pivot()
+    world.Free()
+    Expect(a.Freed())
+End Function
+
+@Test
+Function APivotInAnotherWorldMovesWithItsParent()
+    Local first = Fresh()
+    Defer first.Free()
+    Local second = World()
+    Defer second.Free()
+    Local moving = Pivot()
+    Local under = Pivot(moving)
+    World.SetCurrent(second)
+    Local there = Pivot()
+    moving.SetParent(there)
+    Expect(moving.World() == second && under.World() == second)
+    Expect(first.EntityCount() == 0 && second.EntityCount() == 3)
+    Expect(first.Roots().Count == 0)
+End Function
+
+@Test
+Function CopiesCopyTheTreeWithNamesAndHiding()
+    Local world = Fresh()
+    Defer world.Free()
+    Local model = Pivot()
+    model.SetName("guard")
+    Local head = Pivot(model)
+    head.SetName("head")
+    head.Hide()
+    Local hand = Pivot(model)
+    hand.SetName("hand")
+    model.SetData(Npc(5))
+
+    Local copy = model.Copy()
+    Expect(copy != model)
+    Expect(copy.Name() == "guard" && copy.Kind() == EntityKind.PIVOT)
+    Expect(copy.Parent() == Null)
+    Expect(copy.ChildCount() == 2)
+    Local copiedHead = copy.Child(0)
+    Expect(copiedHead != head && copiedHead.Name() == "head" && copiedHead.Hidden())
+    Expect(copy.Child(1).Name() == "hand")
+    Expect(copy.Find("hand") == copy.Child(1))
+    Expect(copy.Data<Npc>() == Null)
+    Expect(world.EntityCount() == 6)
+
+    // A copy under its own original isn't copied again.
+    Local inside = model.Copy(hand)
+    Expect(inside.Parent() == hand)
+    Expect(inside.ChildCount() == 2 && inside.Child(1).ChildCount() == 0)
+    Expect(world.EntityCount() == 9)
+End Function
+
+@Test
+Function DataGivesBackTheGamesObject()
+    Local world = Fresh()
+    Defer world.Free()
+    Local pivot = Pivot()
+    Expect(pivot.Data<Npc>() == Null)
+    Local npc = Npc(10)
+    pivot.SetData(npc)
+    Expect(pivot.Data<Npc>() == npc)
+    Expect(pivot.Data<World>() == Null)
+    pivot.SetData<Npc>(Null)
+    Expect(pivot.Data<Npc>() == Null)
+
+    // The scene keeps the entity's wrapper, so what's found is the game's object, with its data.
+    pivot.SetName("keeper")
+    pivot.SetData(npc)
+    Local found = world.Find("keeper")
+    Expect(found == pivot)
+    Expect(found?.Data<Npc>()?.Health == 10)
+End Function
