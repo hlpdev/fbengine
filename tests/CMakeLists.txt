@@ -260,6 +260,86 @@ if(FBENGINE_FB_TESTS)
   endforeach()
 endif()
 
+# The job system, built into the tests from its own source, since the DLL exports only its C API.
+add_executable(fbengine_jobs_tests jobs/jobs_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")
+target_include_directories(fbengine_jobs_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_link_libraries(fbengine_jobs_tests PRIVATE Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_jobs_tests)
+catch_discover_tests(fbengine_jobs_tests TEST_PREFIX "jobs."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# res://'s paths, folders, and paks, built into the tests from their own sources.
+add_executable(fbengine_vfs_tests vfs/vfs_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp")
+target_include_directories(fbengine_vfs_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_link_libraries(fbengine_vfs_tests PRIVATE Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_vfs_tests)
+catch_discover_tests(fbengine_vfs_tests TEST_PREFIX "vfs."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# A program that awaits jobs before its first Flip, which the main scheduler's ticks hand over.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME examples.loading
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/loading")
+  set_tests_properties(examples.loading PROPERTIES TIMEOUT 120
+                       PASS_REGULAR_EXPRESSION "Running loading[^\n]*\nloading\r?\nloaded\r?\n$")
+endif()
+
+# The loaders' decoders, built into the tests from their own sources, with libktx's writer and
+# encoder, which make the KTX2 files the tests read, and stb_image_write, the PNGs and JPEGs.
+add_executable(fbengine_assets_tests assets/images_tests.cpp assets/models_tests.cpp
+               assets/files.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/image.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/gltf.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/stb.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/loads.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")
+target_include_directories(fbengine_assets_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+# Hostile files the reviews found, which mustn't decode.
+target_compile_definitions(fbengine_assets_tests PRIVATE
+                           FBENGINE_ASSETS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/assets/fixtures")
+# stb_image_write's code, C as it's written, without fbengine's C++ warnings.
+add_library(fbengine_stb_write STATIC assets/stb_write.c)
+target_link_libraries(fbengine_stb_write PUBLIC fbengine_stb)
+target_link_libraries(fbengine_assets_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
+                      fastgltf::fastgltf)
+fbengine_set_warnings(fbengine_assets_tests)
+# libktx is UCRT's here, as the DLLs are (cmake/assets.cmake).
+if(MINGW)
+  target_link_options(fbengine_assets_tests PRIVATE -mcrtdll=ucrt)
+endif()
+catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# What Assets' mounts panic for, each by a run of tests/assets/panics, which says it, at the line
+# that called the mount.
+if(FBENGINE_FB_TESTS)
+  foreach(case IN ITEMS "files-empty;have '', which isn't a file's path"
+                        "files-folder;have 'textures/', which isn't a file's path"
+                        "files-above;have '\\.\\./x\\.txt', which isn't a file's path"
+                        "files-colon;have 'a:b\\.txt', which isn't a file's path"
+                        "files-device;have 'maps/con\\.txt', which isn't a file's path"
+                        "files-file-and-folder;files mounted at res://mf can't be"
+                        "files-place;data://mf"
+                        "folder-place;goes above res://")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME assets.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/assets/panics"
+                     -- ${name})
+    set_tests_properties(assets.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
+                         "panic: [^\n]*${said}[^\n]* at [^\n]*assets/panics/main\\.fb:")
+  endforeach()
+endif()
+
 # fbengine's app area apart from its DLL: what it shows nothing for, and what a link opens, on
 # Windows read back through the shell; it opens nothing.
 add_executable(fbengine_app_tests app/app_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/app/link.cpp")
@@ -271,6 +351,63 @@ endif()
 fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# The cooker's C++, built into the tests from its own sources, which read back what it makes with
+# libktx, which is UCRT's here, as the DLLs are, and with the engine's own glTF loader.
+add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp assets/files.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/glb.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/image.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/model.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/stb.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/gltf.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/assets/image.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp")
+target_include_directories(fbengine_tools_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_tools"
+                           "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_compile_definitions(fbengine_tools_tests PRIVATE
+                           FBENGINE_ASSETS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/assets/fixtures")
+target_link_libraries(fbengine_tools_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
+                      fastgltf::fastgltf meshoptimizer)
+fbengine_set_warnings(fbengine_tools_tests)
+if(MINGW)
+  target_link_options(fbengine_tools_tests PRIVATE -mcrtdll=ucrt)
+endif()
+catch_discover_tests(fbengine_tools_tests TEST_PREFIX "tools."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# Typed references: a module tests/tools/references writes of its files/, which a game builds and
+# prints from, and which a game that names a file that isn't there doesn't build with.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_references_games "${CMAKE_CURRENT_BINARY_DIR}/references_games")
+  add_test(NAME tools.references.write
+           COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/tools/references"
+                   -- "${fbengine_references_games}"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tools/references/files"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tools/references/trees")
+  set_tests_properties(tools.references.write PROPERTIES FIXTURES_SETUP fbengine_references
+                       PASS_REGULAR_EXPRESSION "\nwritten\r?\n$")
+  add_test(NAME tools.references.game
+           COMMAND "${FBENGINE_FB}" --color never run "${fbengine_references_games}/game")
+  set_tests_properties(tools.references.game PROPERTIES FIXTURES_REQUIRED fbengine_references
+                       PASS_REGULAR_EXPRESSION
+                       "\nres://logo\.png\r?\nres://Textures/wall\.png\r?\nres://Textures/Walls/stone\.png\r?\n$")
+  add_test(NAME tools.references.typo
+           COMMAND "${FBENGINE_FB}" --color never run "${fbengine_references_games}/typo")
+  set_tests_properties(tools.references.typo PROPERTIES FIXTURES_REQUIRED fbengine_references
+                       PASS_REGULAR_EXPRESSION "error: Textures has no member named 'Wal'")
+  foreach(tree IN ITEMS case1 case3 m1 m2)
+    add_test(NAME tools.references.tree.${tree}
+             COMMAND "${FBENGINE_FB}" --color never run "${fbengine_references_games}/tree-${tree}")
+    set_tests_properties(tools.references.tree.${tree} PROPERTIES
+                         FIXTURES_REQUIRED fbengine_references PASS_REGULAR_EXPRESSION
+                         "\nbuilt\r?\n$")
+  endforeach()
+endif()
 
 # fbengine_audio's own C++, where it's subtle: what's in its headers, and miniaudio's backends.
 add_executable(fbengine_audio_tests audio/pool_tests.cpp audio/backends_tests.cpp

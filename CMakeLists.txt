@@ -30,9 +30,11 @@ include(FetchContent)
 include(cmake/warnings.cmake)
 include(cmake/native.cmake)
 include(cmake/sdl.cmake)
+include(cmake/assets.cmake)
 
 add_subdirectory(native/fbengine)
 add_subdirectory(native/fbengine_physics)
+add_subdirectory(native/fbengine_tools)
 add_subdirectory(native/fbengine_audio)
 
 if(FBENGINE_BUILD_TESTS)

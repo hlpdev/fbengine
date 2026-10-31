@@ -157,6 +157,9 @@ good modern engine on its own. Every structural choice is checked against both.
   atlases (the user, 2026-10-31).
 - **Names**: fbengine's GPU image is `Texture`, made from a file or a std.image `Image`, and its
   `Font` lives in its 2D module, qualified where a file imports both (the user, 2026-10-31).
+  A 2D drawable is a `Sprite2D`, which a Canvas draws; `Sprite` is the scene's billboard entity,
+  as Mesh and Camera are entities (2026-10-31, as Godot names its Sprite2D and Sprite3D). A
+  Canvas's blend is `Blend2D`; a Material's is `Blend`.
 - **Shaders** are Slang, compiled to SPIR-V when the engine's built and embedded in the DLL
   (the user, 2026-10-31).
   Games' own shaders (E6) come with the asset pipeline's build step.

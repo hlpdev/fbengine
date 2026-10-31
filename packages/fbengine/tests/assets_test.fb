@@ -1,0 +1,156 @@
+// res://: folders, paks that std.compress's ZipWriter makes, and files in memory, mounted over each
+// other and read in any case.
+
+Import std.collections
+Import std.compress
+Import std.core
+Import std.io
+Import std.test
+Import fbengine
+
+Function Pak(files: Map<String, String>, method: ZipMethod = ZipMethod.STORE): UInt8[]
+    Local writer = ZipWriter()
+    For file In files
+        writer.Add(file.0, file.1.Bytes, method)
+    End For
+    Return writer.Finish()
+End Function
+
+Function Names(entries: AssetEntry[]): String
+    Local names = ""
+    For entry In entries
+        names += entry.Kind == FileKind.DIRECTORY ? entry.Name + "/ " : entry.Name + " "
+    End For
+    Return names
+End Function
+
+@Test
+Function AFolderReadsInAnyCaseWithEitherSlash() Throws IOError
+    Local folder = Try TempDir()
+    Try Dir.Create(folder.Path / "GFX")
+    Try File.WriteText(folder.Path / "GFX" / "door.txt", "a door")
+    Assets.MountFolder("res://test-folder", folder.Path)
+    Defer Assets.Unmount("res://test-folder")
+    Expect((Try Assets.ReadText("res://test-folder/GFX/door.txt")) == "a door")
+    Expect((Try Assets.ReadText("RES://Test-Folder\\gfx\\DOOR.TXT")) == "a door")
+    Expect(Assets.Exists("res://test-folder/gfx/door.txt"))
+    Expect(Assets.DirExists("res://test-folder/gfx"))
+    Expect(!Assets.Exists("res://test-folder/gfx"))
+    Expect((Try Assets.KindOf("res://test-folder/nothing")) == Null)
+    Try folder.Close()
+End Function
+
+@Test
+Function APakFromZipWriterMountsFromTheDiskAndFromMemory() Throws IOError
+    Local pak = Pak({"textures/wall.txt": "wall", "readme.txt": "hello"})
+    Local folder = Try TempDir()
+    Try File.WriteBytes(folder.Path / "game.pak", pak)
+    Try Assets.MountPak("res://test-pak", folder.Path / "game.pak")
+    Try Assets.MountPakBytes("res://test-memory", pak)
+    Expect((Try Assets.ReadText("res://test-pak/Textures/Wall.txt")) == "wall")
+    Expect((Try Assets.ReadText("res://test-memory/readme.txt")) == "hello")
+    Expect(Names(Try Assets.Entries("res://test-pak")) == "readme.txt textures/ ")
+    Local entries = Try Assets.Entries("res://Test-Pak/textures")
+    Expect(entries.Count == 1)
+    Expect(entries[0].Path == "res://test-pak/textures/wall.txt")
+    Expect(Assets.Unmount("res://test-pak"))
+    Expect(Assets.Unmount("res://test-memory"))
+    Try folder.Close()
+End Function
+
+@Test
+Function LaterMountsComeFirst() Throws IOError
+    Assets.MountFiles("res://test-over", {"a.txt": "base a".Bytes, "b.txt": "base b".Bytes})
+    Assets.MountFiles("res://test-over", {"A.txt": "mod a".Bytes, "sub\\c.txt": "c".Bytes})
+    Expect((Try Assets.ReadText("res://test-over/a.txt")) == "mod a")
+    Expect((Try Assets.ReadText("res://test-over/b.txt")) == "base b")
+    Expect((Try Assets.ReadText("res://test-over/sub/c.txt")) == "c")
+    Expect(Names(Try Assets.Entries("res://test-over")) == "A.txt b.txt sub/ ")
+    Expect(Assets.Unmount("res://test-over"))
+    Expect((Try Assets.ReadText("res://test-over/a.txt")) == "base a")
+    Expect(Assets.Unmount("res://test-over"))
+    Expect(!Assets.Unmount("res://test-over"))
+End Function
+
+@Test
+Function WhatCantBeReadThrowsItsKind() Throws IOError
+    Assets.MountFiles("res://test-errors", {"file.txt": "x".Bytes, "folder/in.txt": "y".Bytes})
+    Defer Assets.Unmount("res://test-errors")
+    Expect(ExpectThrows<IOError>(Assets.ReadBytes("res://test-errors/none"))?.Kind ==
+           IOErrorKind.NOT_FOUND)
+    Expect(ExpectThrows<IOError>(Assets.ReadBytes("res://test-errors/folder"))?.Kind ==
+           IOErrorKind.IS_A_DIRECTORY)
+    Expect(ExpectThrows<IOError>(Assets.Entries("res://test-errors/file.txt"))?.Kind ==
+           IOErrorKind.NOT_A_DIRECTORY)
+    Expect(ExpectThrows<IOError>(Assets.ReadBytes("res://../up"))?.Kind ==
+           IOErrorKind.INVALID_PATH)
+    Expect(ExpectThrows<IOError>(Assets.ReadBytes("textures/a.png"))?.Kind ==
+           IOErrorKind.INVALID_PATH)
+    Expect(ExpectThrows<IOError>(Assets.ReadBytes("res://a:b"))?.Kind == IOErrorKind.INVALID_PATH)
+    Expect(!Assets.Exists("res://../up"))
+End Function
+
+@Test
+Function AZipThatIsntAPakDoesntMount() Throws IOError
+    Local compressed = Pak({"a.txt": "compressed, which a pak's files aren't"}, ZipMethod.DEFLATE)
+    Expect(ExpectThrows<IOError>(Assets.MountPakBytes("res://test-bad", compressed))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(ExpectThrows<IOError>(Assets.MountPakBytes("res://test-bad", "no zip".Bytes))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(ExpectThrows<IOError>(Assets.MountPakBytes("res://test-bad", [] As UInt8[]))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Local folder = Try TempDir()
+    Expect(ExpectThrows<IOError>(Assets.MountPak("res://test-bad",
+                                                 folder.Path / "none.pak"))?.Kind ==
+           IOErrorKind.NOT_FOUND)
+    Expect(!Assets.DirExists("res://test-bad"))
+    Try folder.Close()
+End Function
+
+@Test
+Function APathNormalizesToItsCacheKey() Throws IOError
+    Expect((Try Assets.Normalize("RES://GFX\\Map\\.\\x\\..\\Door01.PNG")) ==
+           "res://gfx/map/door01.png")
+    Expect((Try Assets.Normalize("res://")) == "res://")
+    // A path from a game's data that isn't one is an IOError, not a mistake in the game's code.
+    For text In ["textures/a.png", "res://../up", "res://nul.txt", "res://a.txt."]
+        Expect(ExpectThrows<IOError>(Assets.Normalize(text))?.Kind == IOErrorKind.INVALID_PATH)
+    End For
+End Function
+
+@Test
+Function TextThatIsntUtf8ReadsWithReplacements() Throws IOError
+    Assets.MountFiles("res://test-text",
+                      {"bad.txt": [0x61, 0xFF, 0x62, 0xE2, 0x82, 0x63] As UInt8[],
+                       "good.txt": "naïve".Bytes})
+    Defer Assets.Unmount("res://test-text")
+    Expect((Try Assets.ReadText("res://test-text/bad.txt")) == "a\u{FFFD}b\u{FFFD}\u{FFFD}c")
+    Expect((Try Assets.ReadText("res://test-text/good.txt")) == "naïve")
+End Function
+
+@Test
+Function AMountedPakOnTheDiskCanBeDeleted() Throws IOError
+    Local writer = ZipWriter()
+    writer.Add("a.txt", "first".Bytes, ZipMethod.STORE)
+    Local folder = Try TempDir()
+    Local file = folder.Path / "game.pak"
+    Try File.WriteBytes(file, writer.Finish())
+    Try Assets.MountPak("res://test-deleted", file)
+    Defer Assets.Unmount("res://test-deleted")
+    // As an updater does, while the game has it mounted, which still reads it.
+    Expect(Try File.Delete(file))
+    Expect((Try Assets.ReadText("res://test-deleted/a.txt")) == "first")
+    Try folder.Close()
+End Function
+
+@Test
+Function ABinaryFileReadsWhole() Throws IOError
+    Local bytes: UInt8[] = []
+    For i = 0 Until 70_000
+        bytes.Add((i % 251) As UInt8)
+    End For
+    Assets.MountFiles("res://test-binary", {"data.bin": bytes, "empty.bin": [] As UInt8[]})
+    Defer Assets.Unmount("res://test-binary")
+    Expect((Try Assets.ReadBytes("res://test-binary/data.bin")) == bytes)
+    Expect((Try Assets.ReadBytes("res://test-binary/empty.bin")).Count == 0)
+End Function
