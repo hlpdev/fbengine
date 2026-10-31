@@ -208,7 +208,7 @@ showcase game. Planned when E13 lands. The remake itself is a separate, later pr
 
 ## Lanes
 
-Lanes work as FutureBlitz's did in M6 (its docs/m6-plan.md): each a Claude Code session in a
+Lanes work as docs/lanes.md describes, as FutureBlitz's did in M6: each a Claude Code session in a
 worktree of this repository, on a branch of its own, building one milestone's steps in order;
 the coordinator (the session that starts them) reviews each step and lands it on master, and
 alone edits this file, docs/architecture.md, docs/questions.md, CLAUDE.md, and FutureBlitz's
