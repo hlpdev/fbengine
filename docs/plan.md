@@ -11,7 +11,7 @@ same game as SCP: Containment Breach Remastered), checked at E14, so a remake in
 play can be built on it later. The remake is a separate project, much later, with a codebase of
 its own, clean and nothing like the original's, and its own tools and converters for the game's
 assets, tied to neither the engine nor the language. docs/research/scpcb-requirements.md read the
-original 1.3.11; Ultimate Edition v5's additions are read when its source is in hand.
+original 1.3.11, and ue5-additions.md what v5 adds; the steps below cover both.
 
 ## Milestones
 
@@ -54,8 +54,8 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
    and raw joysticks for wheels and sticks; tests on SDL's virtual devices.
 6. Input actions: actions bound to keys, buttons, and axes, with Down, Hit, Up, and Value;
    two-axis actions; bindings saved and loaded as TOML; rebinding from the next input pressed.
-7. `ShowMessage(title, text)`, the OS's message box, for errors players should see; loose ends;
-   E1's review.
+7. `ShowMessage(title, text)`, the OS's message box, for errors players should see; `OpenURL`,
+   which opens a link or a file as the OS does; loose ends; E1's review.
 
 ### E2: The GPU core
 
@@ -67,12 +67,13 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
    tolerance, a tool to rewrite them).
 3. Buffers and textures: uploads through staging, mipmaps, samplers (filtering, wrap, LOD bias,
    anisotropy), bindless descriptors; formats sRGB and linear.
-4. Render targets and readback: offscreen color and depth targets, MSAA and resolve, copying a
-   target into a texture, reading pixels back to the CPU; a render size apart from the window's,
-   scaled to it.
+4. Render targets and readback: offscreen color and depth targets (depth reversed, 32-bit
+   float, for near planes as close as 0.01), MSAA and resolve, copying a target into a texture,
+   reading pixels back to the CPU, saving a frame as a PNG (screenshots); a render size apart from
+   the window's, scaled to it.
 5. The frame graph: passes with declared reads and writes, barriers, transient targets reused.
 6. Loose ends and E2's review: device loss, a GPU that lacks a feature (a clear error), MoltenVK
-   on macOS, timings.
+   on macOS, timings, and counters (draws, triangles) for a debug overlay.
 
 ### E3: 2D
 
@@ -94,8 +95,9 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 2. Transforms: position, rotation (Quat and Euler), scale, local and world, move, turn,
    translate, point at, align to a vector, transforming points and vectors between entities,
    angles to a point; the dirty-flag update.
-3. Cameras: perspective and orthographic, field of view, near and far, viewport, clear modes and
-   color, render order, several a frame; projecting points to the screen and back.
+3. Cameras: perspective and orthographic, field of view (vertical, the horizontal following
+   the aspect ratio), near and far, viewport, clear modes and color, render order, several a frame;
+   projecting points to the screen and back.
 4. Lights and fog as data: directional, point, spot, range, color, the ambient light; fog per
    camera.
 5. Geometry: meshes built in code (surfaces, vertices with two UV sets, colors and alpha,
@@ -119,8 +121,10 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 1. Extract: visible entities into render lists, sorted by material and depth; `RenderWorld()`
    draws every camera.
 2. Materials on the GPU: one pipeline family, specialization constants for layers, blends, UV
-   sets, vertex colors, lightmaps, fog, alpha test; the UNLIT and VERTEX shading models.
-3. Lights: clustered forward, per pixel or per vertex, many small lights; the ambient light.
+   sets, vertex colors, lightmaps, fog, alpha test; a bump-offset layer, whose map shifts the next
+   layer's UVs (the environment bump SCP:CB's rooms use); the UNLIT and VERTEX shading models.
+3. Lights: clustered forward, per pixel or per vertex, many small lights; point lights' falloff,
+   spot lights' inner and outer cones; the ambient light.
 4. Transparency and order: blending modes, sorting far to near, order groups drawn first or last.
 5. Cameras into textures: a camera rendering into a texture, several cameras and viewports a
    frame, orthographic overlays; copying the frame into a texture (feedback effects).
@@ -188,7 +192,9 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 ### E12: Video (fbengine_video)
 
 1. A decoder (docs/questions.md) in fbengine_video_native, decoding on a worker thread.
-2. Playing into a texture, with its sound through fbengine_audio, in sync; pause, seek, loop.
+2. Playing into a texture, with its sound through fbengine_audio, in sync, or beside a sound
+   stream of its own when the video has none; letterboxing; pause, seek, loop; knowing when it
+   ends.
 3. Loose ends and E12's review.
 
 ### E13: The editor
