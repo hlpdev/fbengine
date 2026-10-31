@@ -28,4 +28,14 @@ Try Cooker.CookFolder(Path("game/res"), Path("build/game.pak"))
 Try Assets.MountPak("res://", Path("game.pak"))
 ```
 
+Its References write typed references to a game's files: a module of each one's res:// path, by
+its folders and name. A game imports it as Res, so `Res.Textures.Wall` is a file's path, and a
+name with a typo is a compile error, not a failed load.
+
+```vb
+Try References.Write(Path("game/res"), Path("game/src/res.fb"))
+// And in the game, which imports "./res" As Res:
+Local wall = Try Assets.Load<Texture>(Res.Textures.Wall)
+```
+
 A game's release ships fbengine's DLL, never this one.
