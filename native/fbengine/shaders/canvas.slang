@@ -41,11 +41,12 @@ struct Corner
 };
 
 // A quad's flags: it's a line; steeper than long; a part of its texture, left, top, right, and
-// bottom in uv; and that part tiled.
+// bottom in uv; that part tiled; and its texture's coverage, its red its color's alpha.
 static const uint lineFlag = 1;
 static const uint steepFlag = 2;
 static const uint partFlag = 4;
 static const uint tileFlag = 8;
+static const uint coverageFlag = 16;
 
 // A quad's two triangles, from its corners clockwise from the top left.
 static const uint cornerOf[6] = { 0, 1, 2, 0, 2, 3 };
@@ -126,5 +127,10 @@ float4 fragmentMain(Corner corner) : SV_Target
         const float2 middle = (low + high) * 0.5;
         uv = clamp(uv, min(low + inset, middle), max(high - inset, middle));
     }
-    return corner.color * sampleTextureGrad(texture, sampler, uv, across, down);
+    float4 texel = sampleTextureGrad(texture, sampler, uv, across, down);
+    if ((corner.flags & coverageFlag) != 0)
+    {
+        texel = float4(1.0, 1.0, 1.0, texel.r);
+    }
+    return corner.color * texel;
 }

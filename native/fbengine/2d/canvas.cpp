@@ -9,6 +9,8 @@
 // texels, through the bindless set, the pass saying it samples it, so what drew into it before is
 // done first; tiles are one quad over the viewport, whose texels repeat.
 
+#include "2d/canvas.hpp"
+
 #include "2d/fbe_2d.h"
 #include "2d/shapes.hpp"
 #include "core/engine.hpp"
@@ -55,12 +57,16 @@ struct quad_t {
 static_assert(sizeof(quad_t) == 80, "the canvas shader reads quads 80 bytes apart");
 
 /// A quad's flags: it's a line; steeper than it's long, its longer axis down; its texels are kept
-/// in its part, half a texel in from its edges, so filtering doesn't reach a neighbor's; and its uv
-/// is in tiles of its part, each wrapped into it.
+/// in its part, half a texel in from its edges, so filtering doesn't reach a neighbor's; its uv is
+/// in tiles of its part, each wrapped into it; and its texture's coverage, its red the alpha of
+/// its color.
 constexpr std::uint32_t line_flag = 1;
 constexpr std::uint32_t steep_flag = 2;
 constexpr std::uint32_t part_flag = 4;
 constexpr std::uint32_t tile_flag = 8;
+constexpr std::uint32_t coverage_flag = 16;
+/// No blend but the pen's, for begin.
+constexpr std::int32_t pens_blend = -1;
 /// The longest line the shader's 32-bit arithmetic draws, and the furthest from 0 its ends can be.
 constexpr std::int64_t longest_line = 32767;
 constexpr std::int64_t furthest_line = 16777216;
@@ -101,12 +107,12 @@ std::vector<draw_t> draws;
 /// The pixels the draw being added to may cover, its scissor's.
 fbe::canvas::clip_t clip;
 std::uint32_t color = 0;
-/// The target and pen the batch was last readied for, and whether unblended, which a draw with
-/// them again needn't check, until the batch goes to the graph.
+/// The target and pen the batch was last readied for, and the blend in place of the pen's, which a
+/// draw with them again needn't check, until the batch goes to the graph.
 bool ready = false;
 std::uint64_t ready_target = 0;
 fbe_2d_pen_t ready_pen{};
-bool ready_solid = false;
+std::int32_t ready_blend = pens_blend;
 
 fbe::gpu::blend_t blend_of(std::int32_t blend) {
     switch (blend) {
@@ -225,9 +231,9 @@ void drop() {
 
 /// Readies the batch for what `pen` draws into `target`, the screen for 0: sends what it has to
 /// the graph first if that's another target's, and starts a draw if the blend or the viewport
-/// isn't the last's; `solid` draws unblended whatever the pen says. False, with fbe_error's why,
-/// if the target or the pen isn't one.
-bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, bool solid = false) {
+/// isn't the last's; `blend`, unless it's pens_blend, is drawn with whatever the pen says. False,
+/// with fbe_error's why, if the target or the pen isn't one.
+bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, std::int32_t blend = pens_blend) {
     if (pen == nullptr) {
         fbe::fail("no pen was given");
         return false;
@@ -235,7 +241,7 @@ bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, bool solid = false) {
     // Drawing again with what the batch's ready for, as most draws do; the target's checked
     // still, as a texture freed since isn't drawn into, and a new render size makes the screen
     // another texture.
-    if (ready && target == ready_target && solid == ready_solid &&
+    if (ready && target == ready_target && blend == ready_blend &&
         std::memcmp(pen, &ready_pen, sizeof(fbe_2d_pen_t)) == 0) {
         if (target != 0) {
             return fbe::texture::find(target) != nullptr;
@@ -295,15 +301,15 @@ bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, bool solid = false) {
             .height = static_cast<std::uint32_t>(clip.bottom - clip.top),
         },
     };
-    const std::int32_t blend = solid ? FBE_2D_SOLID : pen->blend;
-    if (draws.empty() || draws.back().blend != blend ||
+    const std::int32_t drawn = blend != pens_blend ? blend : pen->blend;
+    if (draws.empty() || draws.back().blend != drawn ||
         draws.back().scissor.offset.x != scissor.offset.x ||
         draws.back().scissor.offset.y != scissor.offset.y ||
         draws.back().scissor.extent.width != scissor.extent.width ||
         draws.back().scissor.extent.height != scissor.extent.height) {
         draws.push_back({
             .first = static_cast<std::uint32_t>(quads.size()),
-            .blend = blend,
+            .blend = drawn,
             .scissor = scissor,
         });
     }
@@ -313,7 +319,7 @@ bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, bool solid = false) {
     ready = true;
     ready_target = target;
     ready_pen = *pen;
-    ready_solid = solid;
+    ready_blend = blend;
     return true;
 }
 
@@ -615,10 +621,74 @@ void add_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t h
 
 } // namespace
 
+namespace fbe::canvas {
+
+bool draw_glyphs(std::uint64_t target, const fbe_2d_pen_t* pen, std::uint64_t page, bool coverage,
+                 std::span<const glyph_t> glyphs) {
+    fbe::texture::send_pixels(page);
+    const bool adds = pen != nullptr && pen->blend == FBE_2D_ADD;
+    if (!begin(target, pen, adds ? pens_blend : FBE_2D_ALPHA)) {
+        return false;
+    }
+    const fbe::texture::texture_t* found = fbe::texture::find(page);
+    if (found == nullptr) {
+        return false;
+    }
+    if (page == batch_target) {
+        return fbe::fail("a texture isn't drawn into itself");
+    }
+    const auto width = static_cast<float>(found->width);
+    const auto height = static_cast<float>(found->height);
+    const source_t source{
+        .handle = page,
+        .width = width,
+        .height = height,
+        .slot = fbe::texture::index_of(page),
+        .filter = FBE_TEXTURE_NEAREST,
+        .region = { 0.0F, 0.0F, width, height },
+    };
+    // A color glyph's texels are its own, only faded by the pen.
+    const std::uint32_t pens = color;
+    if (!coverage) {
+        color = 0x00FFFFFFU | (std::uint32_t{ pen->alpha } << 24U);
+    }
+    bool placed = true;
+    for (const glyph_t& glyph : glyphs) {
+        if (glyph.source_x < 0 || glyph.source_y < 0 || glyph.width < 0 || glyph.height < 0 ||
+            std::int64_t{ glyph.source_x } + glyph.width > found->width ||
+            std::int64_t{ glyph.source_y } + glyph.height > found->height) {
+            placed = false;
+            continue;
+        }
+        const std::int64_t left = glyph.x + pen->origin_x;
+        const std::int64_t top = glyph.y + pen->origin_y;
+        if (glyph.width == 0 || glyph.height == 0 || left >= clip.right || top >= clip.bottom ||
+            left + glyph.width <= clip.left || top + glyph.height <= clip.top) {
+            continue;
+        }
+        const auto l = static_cast<float>(left);
+        const auto t = static_cast<float>(top);
+        const auto r = static_cast<float>(left + glyph.width);
+        const auto b = static_cast<float>(top + glyph.height);
+        add_texels({ l, t, r, t, r, b, l, b },
+                   {
+                       static_cast<float>(glyph.source_x) / width,
+                       static_cast<float>(glyph.source_y) / height,
+                       static_cast<float>(glyph.source_x + glyph.width) / width,
+                       static_cast<float>(glyph.source_y + glyph.height) / height,
+                   },
+                   source, false, coverage ? coverage_flag : 0U);
+    }
+    color = pens;
+    return placed || fbe::fail("a glyph's pixels aren't on its page");
+}
+
+} // namespace fbe::canvas
+
 extern "C" {
 
 FBE_API bool fbe_2d_clear(uint64_t target, const fbe_2d_pen_t* pen) {
-    if (!begin(target, pen, true)) {
+    if (!begin(target, pen, FBE_2D_SOLID)) {
         return false;
     }
     add_rect(clip.left, clip.top, clip.right - clip.left, clip.bottom - clip.top);

@@ -5,6 +5,7 @@
 #include "golden/golden.hpp"
 #include "gpu_testing.hpp"
 
+#include <2d/canvas.hpp>
 #include <2d/shapes.hpp>
 #include <algorithm>
 #include <array>
@@ -949,6 +950,64 @@ TEST_CASE("a pen's color goes into a target of data as it's given", "[gpu]") {
             CHECK(std::abs(pixels[5] - 160) <= 1);
         }
     }
+    stop_gpu();
+}
+
+// An atlas page's glyphs, as text draws them, each texel a pixel: a page of coverage's as the
+// pen's color times it, drawn over what's there though the pen's SOLID; a page of color's as its
+// texels, faded by the pen's alpha but not tinted; and a glyph whose pixels aren't on its page
+// refused.
+TEST_CASE("an atlas page's glyphs are drawn as their coverage or their color", "[gpu]") {
+    start();
+    const fbe_2d_pen_t clear = pen(black);
+    const std::uint64_t coverage = fbe_texture_create(4, 1, FBE_TEXTURE_R8, false);
+    REQUIRE(coverage != 0);
+    const std::array<std::uint8_t, 4> covered{ 0, 64, 128, 255 };
+    require(fbe_texture_write(coverage, 0, 0, 4, 1, covered.data(), 4));
+    const fbe::canvas::glyph_t row{ .width = 4, .height = 1, .x = 2, .y = 1 };
+    // Into a target of data, white's stored as given, so each pixel's its coverage.
+    const std::uint64_t data = target(8, 2, FBE_TEXTURE_RGBA8_LINEAR);
+    require(fbe_2d_clear(data, &clear));
+    const fbe_2d_pen_t ink = pen(white);
+    REQUIRE(fbe::canvas::draw_glyphs(data, &ink, coverage, true, { &row, 1 }));
+    fbe::golden::frame_t frame = read(data);
+    for (std::uint32_t x = 0; x < 4; ++x) {
+        INFO(x);
+        CHECK(std::abs(pixel(frame, 2 + x, 1)[0] - covered.at(x)) <= 1);
+    }
+    CHECK(pixel(frame, 1, 1)[0] == 0);
+    CHECK(pixel(frame, 6, 1)[0] == 0);
+    CHECK(pixel(frame, 3, 0)[0] == 0);
+    // Into an sRGB target, red at half alpha, over black in linear light.
+    const std::uint64_t shown = target(4, 1);
+    require(fbe_2d_clear(shown, &clear));
+    const fbe_2d_pen_t faded = pen({ 255, 0, 0, 128 });
+    const fbe::canvas::glyph_t at_left{ .width = 4, .height = 1 };
+    REQUIRE(fbe::canvas::draw_glyphs(shown, &faded, coverage, true, { &at_left, 1 }));
+    frame = read(shown);
+    for (std::uint32_t x = 0; x < 4; ++x) {
+        INFO(x);
+        CHECK(std::abs(pixel(frame, x, 0)[0] - to_srgb(128.0 / 255.0 * covered.at(x) / 255.0)) <=
+              1);
+        CHECK(pixel(frame, x, 0)[1] == 0);
+    }
+    // A page of color: its texels as they are, the pen's green not tinting them.
+    const std::uint64_t colors = fbe_texture_create(2, 1, FBE_TEXTURE_RGBA8, false);
+    REQUIRE(colors != 0);
+    const std::array<std::uint8_t, 8> texels{ 200, 100, 50, 255, 10, 20, 30, 255 };
+    require(fbe_texture_write(colors, 0, 0, 2, 1, texels.data(), 8));
+    const std::uint64_t emoji = target(2, 1);
+    require(fbe_2d_clear(emoji, &clear));
+    const fbe_2d_pen_t green_ink = pen(green);
+    const fbe::canvas::glyph_t both{ .width = 2, .height = 1 };
+    REQUIRE(fbe::canvas::draw_glyphs(emoji, &green_ink, colors, false, { &both, 1 }));
+    frame = read(emoji);
+    CHECK(pixel(frame, 0, 0) == rgba_t{ 200, 100, 50, 255 });
+    CHECK(pixel(frame, 1, 0) == rgba_t{ 10, 20, 30, 255 });
+    // Off its page.
+    const fbe::canvas::glyph_t off{ .source_x = 3, .width = 2, .height = 1 };
+    CHECK(!fbe::canvas::draw_glyphs(shown, &ink, coverage, true, { &off, 1 }));
+    CHECK(std::string(fbe_error()) == "a glyph's pixels aren't on its page");
     stop_gpu();
 }
 
