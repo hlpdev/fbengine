@@ -131,6 +131,9 @@ Public Final Class Gamepad Implements Printable
         Return False
     End Method
 
+    // SDL's ID for it.
+    Package Method Id(): UInt64 => id
+
     /// Whether it was connected when the last Flip read the OS's events.
     @MainThread Public Method Connected(): Bool => fbe_input_gamepad_connected(id)
 
