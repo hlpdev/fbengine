@@ -1,6 +1,6 @@
 #pragma once
 
-// The input lane's text/text.hpp as agreed (499b0a1), for the canvas's text until its text core is
+// The input lane's text/text.hpp as agreed (5edbaf7), for the canvas's text until its text core is
 // on master, when this and text_standin.cpp go and the canvas includes that.
 //
 // What the canvas reads of text: the atlas's pages, which glyphs are rasterized into, and a text
@@ -51,15 +51,19 @@ struct page_t {
     std::uint64_t version = 0;
 };
 
-/// A glyph placed for drawing: its page, where it is on it in pixels, and where that goes, in
-/// whole pixels from the text's origin, the first line's baseline at its left, y down. Its quarter
-/// of a pixel across is rasterized into it already, so drawn on pixel edges, sampled NEAREST, at a
-/// whole pixel plus (x, y), it's crisp.
+/// A glyph placed for drawing: its page, where it is on it in pixels, and the quad it goes in, in
+/// whole pixels from the text's origin, the first line's baseline at its left, y down: (x, y),
+/// `width` by `height`. Up to 512 pixels an em, the quad is the source's size, its quarter of a
+/// pixel across rasterized into it already, so drawn on pixel edges, sampled NEAREST, at a whole
+/// pixel plus (x, y), it's crisp. Past 512, glyphs are rasterized at 512 and the quad is bigger
+/// than the source, which the canvas draws scaled, sampled LINEAR.
 struct placed_glyph_t {
     std::uint32_t page = 0;
     rect_t source;
     std::int32_t x = 0;
     std::int32_t y = 0;
+    std::int32_t width = 0;
+    std::int32_t height = 0;
 };
 
 /// A text laid out: its glyphs in drawing order, a right-to-left run's turned around already, and
@@ -90,18 +94,28 @@ public:
         return m_pages[index];
     }
 
-    /// How many times it's been cleared; a layout of an older generation is laid out again.
+    /// How many times pages of it have been emptied; a layout of an older generation is laid out
+    /// again.
     [[nodiscard]] std::uint64_t generation() const {
         return m_generation;
     }
 
     /// What the canvas calls as a frame starts, never during one: past `budget` bytes of pages, 16
-    /// MB at first, it's cleared, and its generation goes up. Within a frame it only grows, so the
-    /// frame's layouts stay drawable.
+    /// MB at first, the pages no layout used since the last trim are emptied, where they are, their
+    /// `dirty` all of them, and its generation goes up; the last frame's pages stay, however many,
+    /// so a frame that needs more than the budget isn't rasterized again each frame. Within a frame
+    /// it only grows, so the frame's layouts stay drawable.
     void trim();
 
-    /// Clears it at once, pages and all, as trim does past its budget.
+    /// Empties it at once, its pages gone, and its generation goes up.
     void clear();
+
+    /// Marks `page` used by a layout, which trim keeps.
+    void used(std::uint32_t page) {
+        if (page < m_used.size()) {
+            m_used[page] = true;
+        }
+    }
 
     /// Sets how many bytes of pages trim lets it keep.
     void set_budget(std::size_t bytes) {
@@ -128,6 +142,8 @@ private:
     /// Each page's shelves, and how far down they reach.
     std::vector<std::vector<shelf_t>> m_shelves;
     std::vector<std::int32_t> m_bottoms;
+    /// Whether a layout used each page since the last trim.
+    std::vector<bool> m_used;
     std::uint64_t m_generation = 0;
     std::size_t m_budget = std::size_t{ 16 } << 20U;
 };

@@ -10,22 +10,26 @@
 
 namespace fbe::canvas {
 
-/// A glyph drawn: its pixels on its page, `width` by `height` from `source_x`, `source_y`, and
-/// where their top left goes, in the target's pixels before the pen's origin's added.
+/// A glyph drawn: its pixels on its page, `source_width` by `source_height` from `source_x`,
+/// `source_y`, and the quad they're drawn in, `width` by `height` at `x`, `y`, in the target's
+/// pixels before the pen's origin's added.
 struct glyph_t {
     std::int32_t source_x = 0;
     std::int32_t source_y = 0;
-    std::int32_t width = 0;
-    std::int32_t height = 0;
+    std::int32_t source_width = 0;
+    std::int32_t source_height = 0;
     std::int64_t x = 0;
     std::int64_t y = 0;
+    std::int32_t width = 0;
+    std::int32_t height = 0;
 };
 
-/// Draws `glyphs` of `page`, a texture, into `target`, a target or 0 for the screen, with `pen`,
-/// each texel a pixel, sampled NEAREST: a page of coverage, R8, as the pen's color times it, and
-/// one of color, as its texels times the pen's alpha. They're drawn over what's there, as their
-/// edges are their coverage, unless the pen adds. False, with fbe_error's why, as the canvas's
-/// draws are, or for a glyph whose pixels aren't on its page.
+/// Draws `glyphs` of `page`, a texture, into `target`, a target or 0 for the screen, with `pen`:
+/// a glyph whose quad is its source's size each texel a pixel, sampled NEAREST, and a bigger one
+/// scaled, sampled LINEAR; a page of coverage, R8, as the pen's color times it, and one of color,
+/// as its texels times the pen's alpha. They're drawn over what's there, as their edges are their
+/// coverage, unless the pen adds. False, with fbe_error's why, as the canvas's draws are, or for a
+/// glyph whose pixels aren't on its page.
 bool draw_glyphs(std::uint64_t target, const fbe_2d_pen_t* pen, std::uint64_t page, bool coverage,
                  std::span<const glyph_t> glyphs);
 

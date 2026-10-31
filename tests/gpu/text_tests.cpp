@@ -150,7 +150,10 @@ bool fill(std::uint64_t /*font*/, std::string_view text, float /*scale*/,
             .source = glyph.place,
             .x = x,
             .y = character == '@' ? -2 : -5,
+            .width = glyph.place.width,
+            .height = glyph.place.height,
         });
+        fbe::text::atlas().used(glyph.page);
         x += character == 'W' ? wide + 1 : 4;
     }
     into.width = static_cast<float>(x);
@@ -258,9 +261,9 @@ TEST_CASE("text is its glyphs' pixels, texel for pixel at whole pixels", "[gpu]"
     stop();
 }
 
-// A page's texture gets what's been written into it since it was last uploaded, and nothing when
-// nothing has: a frame drawing a glyph already there uploads nothing, one adding a glyph its 3 by 5
-// bytes.
+// A page's texture gets what's been written into it since it was last uploaded, and the pixel
+// around it, and nothing when nothing has: a frame drawing a glyph already there uploads nothing,
+// one adding a glyph its 3 by 5 bytes and their transparent border, 5 by 7.
 TEST_CASE("a page's new glyphs are what's uploaded of it", "[gpu]") {
     start();
     const std::uint64_t made = target(16, 8);
@@ -275,7 +278,7 @@ TEST_CASE("a page's new glyphs are what's uploaded of it", "[gpu]") {
     draw(made, "I", 0, 0);
     CHECK(uploaded() == 0);
     draw(made, "IL", 0, 0);
-    CHECK(uploaded() == 15);
+    CHECK(uploaded() == 35);
     check_glyph(read(made), 'L', 4, 0);
     stop();
 }
@@ -300,7 +303,9 @@ TEST_CASE("a cleared atlas's pages are uploaded again, though their versions sta
 }
 
 // Past its budget, the atlas is trimmed by a frame's first canvas draw, whatever it draws, and not
-// later in the frame, so the frame's text stays drawable; text drawn after is laid out again.
+// later in the frame, so the frame's text stays drawable: a page the last frame's text used is
+// kept, and one nothing's used since is emptied where it is, all of it uploaded again, so T where
+// I was is T, and text drawn after is laid out again.
 TEST_CASE("the atlas is trimmed by a frame's first canvas draw, not during it", "[gpu]") {
     start();
     const std::uint64_t made = target(16, 8);
@@ -311,9 +316,15 @@ TEST_CASE("the atlas is trimmed by a frame's first canvas draw, not during it", 
     draw(made, "IL", 0, 0);
     CHECK(fbe::text::atlas().generation() == first);
     CHECK(places == 2);
+    // Used by the frame before, its page's kept.
     fbe_frame_flip(false);
     clear(made);
+    CHECK(fbe::text::atlas().generation() == first);
+    fbe_frame_flip(false);
+    // Used by none since, it's emptied.
+    clear(made);
     CHECK(fbe::text::atlas().generation() == first + 1);
+    CHECK(fbe::text::atlas().pages().size() == 1);
     draw(made, "TI", 0, 0);
     CHECK(fbe::text::atlas().generation() == first + 1);
     CHECK(places == 4);

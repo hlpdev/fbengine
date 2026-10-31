@@ -1,7 +1,7 @@
 // 2D's text: the atlas's pages uploaded as textures, coverage as R8 and color as sRGB RGBA8, each
-// what's been written since, and a whole page when it's new or the atlas has been cleared, as a
-// page's version starts again then; and text laid out into its glyphs, drawn texel for pixel on
-// whole pixels with the canvas, a run of glyphs of one page at a time.
+// what's been written since, keyed on the atlas's generation as well as the page's version, as a
+// page's version starts again once the atlas is cleared; and text laid out into its glyphs, drawn
+// with the canvas at whole pixels, a run of glyphs of one page at a time.
 
 #include "2d/canvas.hpp"
 #include "2d/fbe_2d.h"
@@ -20,41 +20,47 @@
 
 namespace {
 
-/// A page's texture, and the page's version it has.
+/// A page's texture, its size and format, and the atlas's generation and the page's version it
+/// has.
 struct page_texture_t {
     std::uint64_t texture = 0;
+    std::int32_t width = 0;
+    std::int32_t height = 0;
+    fbe::text::page_format_t format = fbe::text::page_format_t::COVERAGE;
+    std::uint64_t generation = 0;
     std::uint64_t version = 0;
 };
 
-/// The pages' textures, and the atlas's generation they're of.
+/// The pages' textures, by page.
 std::vector<page_texture_t> page_textures;
-std::uint64_t pages_generation = 0;
 
-/// Lets go of the pages' textures.
-void release_pages() {
-    for (const page_texture_t& page : page_textures) {
-        if (page.texture != 0 && fbe::texture::find(page.texture) != nullptr) {
-            fbe_texture_release(page.texture);
-        }
+/// Lets go of a page's texture.
+void release(page_texture_t& page) {
+    if (page.texture != 0 && fbe::texture::find(page.texture) != nullptr) {
+        fbe_texture_release(page.texture);
     }
-    page_textures.clear();
+    page.texture = 0;
 }
 
-/// Uploads what's been written into the atlas's pages since they were last uploaded, making a
-/// texture for each new page, or each again once the atlas is cleared or the GPU's started again;
-/// false, with fbe_error's why, if one can't be made.
+/// Uploads what's been written into the atlas's pages since they were last uploaded, its dirty
+/// rectangle and the transparent pixel around it, which a page made again has its old texture's
+/// pixels in; making a texture for a new page, or a page's again where it's another size or format
+/// or the GPU's started again, and uploading all of it. False, with fbe_error's why, if one can't
+/// be made.
 bool upload_pages() {
     fbe::text::atlas_t& atlas = fbe::text::atlas();
-    if (atlas.generation() != pages_generation) {
-        release_pages();
-        pages_generation = atlas.generation();
+    const std::span<const fbe::text::page_t> pages = atlas.pages();
+    for (std::size_t at = pages.size(); at < page_textures.size(); ++at) {
+        release(page_textures[at]);
     }
-    page_textures.resize(std::max(page_textures.size(), atlas.pages().size()));
-    for (std::size_t at = 0; at < atlas.pages().size(); ++at) {
+    page_textures.resize(pages.size());
+    for (std::size_t at = 0; at < pages.size(); ++at) {
         fbe::text::page_t& page = atlas.page(at);
         page_texture_t& kept = page_textures[at];
         fbe::text::rect_t written = page.dirty;
-        if (kept.texture == 0 || fbe::texture::find(kept.texture) == nullptr) {
+        if (kept.texture == 0 || fbe::texture::find(kept.texture) == nullptr ||
+            kept.width != page.width || kept.height != page.height || kept.format != page.format) {
+            release(kept);
             const bool coverage = page.format == fbe::text::page_format_t::COVERAGE;
             kept.texture = fbe::texture::create_engine_texture(
                 static_cast<std::uint32_t>(page.width), static_cast<std::uint32_t>(page.height),
@@ -62,9 +68,18 @@ bool upload_pages() {
             if (kept.texture == 0) {
                 return false;
             }
+            kept.width = page.width;
+            kept.height = page.height;
+            kept.format = page.format;
             written = { .x = 0, .y = 0, .width = page.width, .height = page.height };
-        } else if (kept.version == page.version) {
+        } else if (kept.generation == atlas.generation() && kept.version == page.version) {
             continue;
+        } else if (!written.empty()) {
+            const std::int32_t left = std::max(written.x - 1, 0);
+            const std::int32_t top = std::max(written.y - 1, 0);
+            const std::int32_t right = std::min(written.x + written.width + 1, page.width);
+            const std::int32_t bottom = std::min(written.y + written.height + 1, page.height);
+            written = { .x = left, .y = top, .width = right - left, .height = bottom - top };
         }
         if (!written.empty()) {
             const std::size_t channels = page.format == fbe::text::page_format_t::COLOR ? 4 : 1;
@@ -78,6 +93,7 @@ bool upload_pages() {
             }
         }
         page.dirty = {};
+        kept.generation = atlas.generation();
         kept.version = page.version;
     }
     return true;
@@ -146,10 +162,12 @@ FBE_API bool fbe_2d_text(uint64_t target, const fbe_2d_pen_t* pen, uint64_t font
         run.push_back({
             .source_x = glyph.source.x,
             .source_y = glyph.source.y,
-            .width = glyph.source.width,
-            .height = glyph.source.height,
+            .source_width = glyph.source.width,
+            .source_height = glyph.source.height,
             .x = left + glyph.x,
             .y = baseline + glyph.y,
+            .width = glyph.width,
+            .height = glyph.height,
         });
     }
     return draw_run();

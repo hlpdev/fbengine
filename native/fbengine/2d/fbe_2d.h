@@ -95,9 +95,9 @@ FBE_API bool fbe_2d_texture(uint64_t target, const fbe_2d_pen_t* pen, uint64_t t
 // `length` bytes of UTF-8 `text` in `font`, an fbe_text.h font, as it's laid out, its top left at
 // `x`, `y` (the pen's origin added), '\n' starting a line: each glyph's pixels at whole pixels,
 // crisp, rasterized at the target's pixels a unit of the font's size (the screen's render size
-// over the window's, a texture's 1), the pen's color times their coverage, or a color glyph's own
-// colors faded by its alpha, over what's there unless the pen adds. False also as laying it out
-// is, for a font that isn't one.
+// over the window's, a texture's 1), and past 512 pixels an em drawn scaled from 512, smooth; the
+// pen's color times their coverage, or a color glyph's own colors faded by its alpha, over what's
+// there unless the pen adds. False also as laying it out is, for a font that isn't one.
 FBE_API bool fbe_2d_text(uint64_t target, const fbe_2d_pen_t* pen, uint64_t font, const char* text,
                          int32_t length, int32_t x, int32_t y);
 // The viewport covered with `texture` as `sprite` says, unrotated and scaled, tiles placed so one's

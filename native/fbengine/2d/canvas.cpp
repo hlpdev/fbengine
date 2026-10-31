@@ -652,7 +652,7 @@ bool draw_glyphs(std::uint64_t target, const fbe_2d_pen_t* pen, std::uint64_t pa
     }
     const auto width = static_cast<float>(found->width);
     const auto height = static_cast<float>(found->height);
-    const source_t source{
+    source_t source{
         .handle = page,
         .width = width,
         .height = height,
@@ -667,9 +667,10 @@ bool draw_glyphs(std::uint64_t target, const fbe_2d_pen_t* pen, std::uint64_t pa
     }
     bool placed = true;
     for (const glyph_t& glyph : glyphs) {
-        if (glyph.source_x < 0 || glyph.source_y < 0 || glyph.width < 0 || glyph.height < 0 ||
-            std::int64_t{ glyph.source_x } + glyph.width > found->width ||
-            std::int64_t{ glyph.source_y } + glyph.height > found->height) {
+        if (glyph.source_x < 0 || glyph.source_y < 0 || glyph.source_width < 0 ||
+            glyph.source_height < 0 || glyph.width < 0 || glyph.height < 0 ||
+            std::int64_t{ glyph.source_x } + glyph.source_width > found->width ||
+            std::int64_t{ glyph.source_y } + glyph.source_height > found->height) {
             placed = false;
             continue;
         }
@@ -683,12 +684,15 @@ bool draw_glyphs(std::uint64_t target, const fbe_2d_pen_t* pen, std::uint64_t pa
         const auto t = static_cast<float>(top);
         const auto r = static_cast<float>(left + glyph.width);
         const auto b = static_cast<float>(top + glyph.height);
+        const bool scaled =
+            glyph.width != glyph.source_width || glyph.height != glyph.source_height;
+        source.filter = scaled ? FBE_TEXTURE_LINEAR : FBE_TEXTURE_NEAREST;
         add_texels({ l, t, r, t, r, b, l, b },
                    {
                        static_cast<float>(glyph.source_x) / width,
                        static_cast<float>(glyph.source_y) / height,
-                       static_cast<float>(glyph.source_x + glyph.width) / width,
-                       static_cast<float>(glyph.source_y + glyph.height) / height,
+                       static_cast<float>(glyph.source_x + glyph.source_width) / width,
+                       static_cast<float>(glyph.source_y + glyph.source_height) / height,
                    },
                    source, false, coverage ? coverage_flag : 0U);
     }

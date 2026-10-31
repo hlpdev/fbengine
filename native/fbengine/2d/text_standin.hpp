@@ -1,9 +1,9 @@
 #pragma once
 
 // Until the input lane's text core is on master, a stand-in for its atlas and lay_out, so the
-// canvas's text is built and tested against text_core.hpp without fonts: its atlas keeps pages as
-// text_core.hpp says, and its lay_out is whatever's set, which this lane's tests set to lay out
-// glyphs of their own. It goes when the core lands.
+// canvas's text is built and tested against text_core.hpp without fonts: its atlas keeps and trims
+// pages as the core's does, and its lay_out is whatever's set, which this lane's tests set to lay
+// out glyphs of their own. It goes when the core lands.
 
 #include "2d/text_core.hpp"
 

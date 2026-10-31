@@ -964,7 +964,14 @@ TEST_CASE("an atlas page's glyphs are drawn as their coverage or their color", "
     REQUIRE(coverage != 0);
     const std::array<std::uint8_t, 4> covered{ 0, 64, 128, 255 };
     require(fbe_texture_write(coverage, 0, 0, 4, 1, covered.data(), 4));
-    const fbe::canvas::glyph_t row{ .width = 4, .height = 1, .x = 2, .y = 1 };
+    const fbe::canvas::glyph_t row{
+        .source_width = 4,
+        .source_height = 1,
+        .x = 2,
+        .y = 1,
+        .width = 4,
+        .height = 1,
+    };
     // Into a target of data, white's stored as given, so each pixel's its coverage.
     const std::uint64_t data = target(8, 2, FBE_TEXTURE_RGBA8_LINEAR);
     require(fbe_2d_clear(data, &clear));
@@ -982,7 +989,12 @@ TEST_CASE("an atlas page's glyphs are drawn as their coverage or their color", "
     const std::uint64_t shown = target(4, 1);
     require(fbe_2d_clear(shown, &clear));
     const fbe_2d_pen_t faded = pen({ 255, 0, 0, 128 });
-    const fbe::canvas::glyph_t at_left{ .width = 4, .height = 1 };
+    const fbe::canvas::glyph_t at_left{
+        .source_width = 4,
+        .source_height = 1,
+        .width = 4,
+        .height = 1,
+    };
     REQUIRE(fbe::canvas::draw_glyphs(shown, &faded, coverage, true, { &at_left, 1 }));
     frame = read(shown);
     for (std::uint32_t x = 0; x < 4; ++x) {
@@ -999,13 +1011,45 @@ TEST_CASE("an atlas page's glyphs are drawn as their coverage or their color", "
     const std::uint64_t emoji = target(2, 1);
     require(fbe_2d_clear(emoji, &clear));
     const fbe_2d_pen_t green_ink = pen(green);
-    const fbe::canvas::glyph_t both{ .width = 2, .height = 1 };
+    const fbe::canvas::glyph_t both{
+        .source_width = 2,
+        .source_height = 1,
+        .width = 2,
+        .height = 1,
+    };
     REQUIRE(fbe::canvas::draw_glyphs(emoji, &green_ink, colors, false, { &both, 1 }));
     frame = read(emoji);
     CHECK(pixel(frame, 0, 0) == rgba_t{ 200, 100, 50, 255 });
     CHECK(pixel(frame, 1, 0) == rgba_t{ 10, 20, 30, 255 });
+    // A glyph drawn bigger than its pixels, as one past 512 pixels an em is, is scaled LINEAR:
+    // 0 and 255 across 4 pixels are 0, a quarter, three quarters, and 255.
+    const std::array<std::uint8_t, 2> edge{ 0, 255 };
+    const std::uint64_t ramp = fbe_texture_create(2, 1, FBE_TEXTURE_R8, false);
+    REQUIRE(ramp != 0);
+    require(fbe_texture_write(ramp, 0, 0, 2, 1, edge.data(), 2));
+    const std::uint64_t scaled = target(4, 1, FBE_TEXTURE_RGBA8_LINEAR);
+    require(fbe_2d_clear(scaled, &clear));
+    const fbe::canvas::glyph_t doubled{
+        .source_width = 2,
+        .source_height = 1,
+        .width = 4,
+        .height = 1,
+    };
+    REQUIRE(fbe::canvas::draw_glyphs(scaled, &ink, ramp, true, { &doubled, 1 }));
+    frame = read(scaled);
+    const std::array<int, 4> smooth{ 0, 64, 191, 255 };
+    for (std::uint32_t x = 0; x < 4; ++x) {
+        INFO(x);
+        CHECK(std::abs(pixel(frame, x, 0)[0] - smooth.at(x)) <= 2);
+    }
     // Off its page.
-    const fbe::canvas::glyph_t off{ .source_x = 3, .width = 2, .height = 1 };
+    const fbe::canvas::glyph_t off{
+        .source_x = 3,
+        .source_width = 2,
+        .source_height = 1,
+        .width = 2,
+        .height = 1,
+    };
     CHECK(!fbe::canvas::draw_glyphs(shown, &ink, coverage, true, { &off, 1 }));
     CHECK(std::string(fbe_error()) == "a glyph's pixels aren't on its page");
     stop_gpu();
