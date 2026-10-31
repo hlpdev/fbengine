@@ -75,8 +75,8 @@ Public Final Class Light Extends Entity
     @MainThread @PanicsAtCaller
     Public Method Intensity(): Float => fbe_light_intensity(Live("Intensity"))
 
-    /// Sets the distance a point or spot light's falloff is measured by; how it falls off with
-    /// it, and whether the light ends there, is its shading model's. One not above 0 panics.
+    /// Sets how far a point or spot light reaches: nothing past it is lit by it, and how it falls
+    /// off before is its shading model's. One not above 0 panics.
     @MainThread @PanicsAtCaller
     Public Method SetRange(range: Float)
         If !fbe_light_set_range(Live("SetRange"), range) Then Failed("SetRange")

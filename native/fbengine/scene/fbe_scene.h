@@ -394,8 +394,8 @@ FBE_API bool fbe_light_color(uint64_t light, fbe_color_t* color);
 // False below 0.
 FBE_API bool fbe_light_set_intensity(uint64_t light, float intensity);
 FBE_API float fbe_light_intensity(uint64_t light);
-// The distance a point or spot light's falloff is measured by; how it falls off with it, and
-// whether the light ends there, is the shading model's (E5's). False unless above 0.
+// How far a point or spot light reaches: nothing past it is lit by it, and how it falls off
+// before is the shading model's. False unless above 0.
 FBE_API bool fbe_light_set_range(uint64_t light, float range);
 FBE_API float fbe_light_range(uint64_t light);
 // A spot light's cone: the angle from its axis where it starts to fade, and where it's out;
@@ -538,7 +538,8 @@ FBE_API bool fbe_material_two_sided(uint64_t material);
 FBE_API bool fbe_material_set_fogged(uint64_t material, bool fogged);
 FBE_API bool fbe_material_fogged(uint64_t material);
 // When it's drawn: 0 with the scene; below 0 before the scene, and above 0 after it, lower first,
-// as skies and overlays want. How each order meets the depth of the others is E5's.
+// as skies and overlays want. Orders but 0 neither test nor write depth, and are drawn furthest
+// first, so a sky is behind everything and an overlay over it.
 FBE_API bool fbe_material_set_order(uint64_t material, int32_t order);
 FBE_API int32_t fbe_material_order(uint64_t material);
 // A texture layer's FBE_LAYER_ blend and UV set, 0 or 1, for layers 0 to FBE_MATERIAL_LAYERS - 1.

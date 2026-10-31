@@ -147,7 +147,16 @@ good modern engine on its own. Every structural choice is checked against both.
   rooms are lightmapped), fog, and alpha all go through the same pipelines, as specialization
   constants, so any mix of them draws in the same pass.
 - **Lights**: clustered forward, so the many small lights of a facility work, per pixel or per
-  vertex. Shadows come with E6.
+  vertex. The extract gives a camera's lights in its view's space, directional ones first, and
+  each of 16 by 9 by 24 clusters (the viewport's tiles, and depth slices spaced evenly in log
+  depth, or in depth for an orthographic camera) the point and spot lights whose range reaches
+  its box. A point or spot light ends at its range, as clustering needs; how it falls off before
+  is the shading model's. Shadows come with E6.
+- **Order and depth**: material orders other than 0 neither test nor write depth and draw
+  furthest first, behind the scene or over it, as Blitz's EntityOrder did; in order 0, opaque
+  draws test and write depth, by pipeline, material, and nearest first, and what blends only
+  tests it, furthest first. Each draw carries its pipeline key (shading, blend, alpha cutoff,
+  vertex colors, sides, fog, depth), which a texture layer's part joins when textures land.
 - **Render to texture**: any Camera can render into a Texture (security monitors, mirrors,
   portals), and post effects run per camera.
 - **2D** draws after 3D, in the same frame graph, into the window or into a Texture; pixel

@@ -12,6 +12,17 @@ Import "./geometry"
 Import "./material"
 Import "./transform"
 
+/// How a Draw meets the depth what's drawn before it left.
+Public Enum DepthMode
+    /// It tests it and writes its own, as the scene's opaque draws do.
+    TEST_AND_WRITE = 0
+    /// It tests it only, as what blends in the scene does.
+    TEST = 1
+    /// Neither, as every Material order but 0 does, drawn furthest first, behind the scene or
+    /// over it.
+    NONE = 2
+End Enum
+
 /// One thing a camera draws, as a debug overlay lists them.
 Public Struct Draw Implements Printable
     /// The entity drawn.
@@ -28,6 +39,12 @@ Public Struct Draw Implements Printable
     Public Field Color: Color
     /// How far in front of the camera its place is, or a Terrain's grid's middle.
     Public Field Depth: Float
+    /// How it meets the depth of what's drawn before it.
+    Public Field DepthMode: DepthMode
+    /// Its pipeline, which draws that share one share, as fbe_render.h lays out its bits: its
+    /// material's shading, blend, alpha cutoff, vertex colors, and sides, the camera's fog, and its
+    /// depth mode.
+    Public Field Pipeline: UInt64
 
     Public Method ToString(): String => "Draw of {Entity} with {Blend} at {Depth}"
 End Struct
@@ -73,7 +90,7 @@ Extend Camera
                                 Vec4(m[8], m[9], m[10], m[11]), Vec4(m[12], m[13], m[14], m[15]))
             list.Add(Draw(entity, surface, MaterialOf(draw.material), draw.blend As Blend, matrix,
                           Color(draw.color[0], draw.color[1], draw.color[2], draw.color[3]),
-                          draw.depth))
+                          draw.depth, draw.depth_mode As DepthMode, draw.pipeline))
         End For
         Return list
     End Method

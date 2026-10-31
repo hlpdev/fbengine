@@ -216,8 +216,8 @@ Public Final Class Material
     Public Method Fogged(): Bool => fbe_material_fogged(Live("Fogged"))
 
     /// Sets when it's drawn: 0, at first, with the scene; below 0 before the scene and above 0
-    /// after it, lower first, as skies and overlays want. How each order meets the others' depth
-    /// is the renderer's (E5).
+    /// after it, lower first, as skies and overlays want. Orders but 0 neither test nor write
+    /// depth, and are drawn furthest first, so a sky is behind everything and an overlay over it.
     @MainThread @PanicsAtCaller
     Public Method SetOrder(order: Int)
         If !fbe_material_set_order(Live("SetOrder"), order) Then Failed("SetOrder")

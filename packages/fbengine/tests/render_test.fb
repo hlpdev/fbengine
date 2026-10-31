@@ -106,3 +106,21 @@ Function ACameraDrawsFromWhereItIsBetweenSteps()
     Expect(draws.Count == 1 && IsClose(draws[0].Depth, 1, 0.001))
     Expect(IsClose(draws[0].Matrix.TransformPoint(Vec3.Zero()), Vec3(0, 0, -2), 0.001))
 End Function
+
+@Test
+Function ADrawSaysHowItMeetsDepth()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Looking()
+    Local sky = Material()
+    sky.SetOrder(-1)
+    Local dome = Mesh(Geometry.Cube())
+    dome.SetMaterial(sky)
+    dome.SetPosition(Vec3(0, 0, -3))
+    Local box = Mesh(Geometry.Cube())
+    box.SetPosition(Vec3(0, 0, -6))
+    Local draws = camera.Draws()
+    Expect(draws.Count == 2 && draws[0].Entity == dome && draws[1].Entity == box)
+    Expect(draws[0].DepthMode == DepthMode.NONE && draws[1].DepthMode == DepthMode.TEST_AND_WRITE)
+    Expect(draws[0].Pipeline != draws[1].Pipeline)
+End Function

@@ -3,6 +3,7 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "render/render.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
@@ -61,6 +62,23 @@ item_t item_of(std::uint32_t entity, std::uint32_t material, const mat4_t& matri
     const vec3_t forward = view.rotation * vec3_t(0.0F, 0.0F, -1.0F);
     item.draw.depth = scene::dot(matrix.axis(3) - view.position, forward);
     return item;
+}
+
+/// A draw's pipeline, as fbe_render.h lays its bits out, from its material, or a new one's for
+/// none, its blend and depth, and the camera's fog.
+std::uint64_t pipeline_of(const item_t& item, const camera_t& camera) {
+    const scene::scene_t& s = scene::scene();
+    const scene::material_t standard;
+    const scene::material_t& material =
+        item.material != none ? s.materials[item.material] : standard;
+    const std::int32_t fog = material.fogged ? camera.fog_mode : FBE_FOG_NONE;
+    return static_cast<std::uint64_t>(material.shading) |
+           (static_cast<std::uint64_t>(item.draw.blend) << 2U) |
+           (static_cast<std::uint64_t>(material.alpha_cutoff > 0.0F ? 1 : 0) << 5U) |
+           (static_cast<std::uint64_t>(material.vertex_colors ? 1 : 0) << 6U) |
+           (static_cast<std::uint64_t>(material.two_sided ? 1 : 0) << 7U) |
+           (static_cast<std::uint64_t>(fog) << 8U) |
+           (static_cast<std::uint64_t>(item.draw.depth_mode) << 10U);
 }
 
 /// The eight corners of a box through a matrix.
@@ -169,21 +187,39 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         item.draw.depth = scene::dot(middle - view.position, forward);
         items.push_back(item);
     }
-    // By order; in one, opaque by material and nearest first, then blended furthest first; ties as
-    // the entities were made, and a mesh's surfaces in order, so a frame draws as the last did
-    // whatever's freed between.
+    for (item_t& item : items) {
+        // The scene's opaque test depth and write it, what blends only tests it, and other orders,
+        // behind the scene or over it, do neither.
+        if (item.order != 0) {
+            item.draw.depth_mode = FBE_DEPTH_NONE;
+        } else if (item.blended) {
+            item.draw.depth_mode = FBE_DEPTH_TEST;
+        } else {
+            item.draw.depth_mode = FBE_DEPTH_TEST_AND_WRITE;
+        }
+        item.draw.pipeline = pipeline_of(item, camera);
+    }
+    // By order. In the scene's, opaque by pipeline, material, and nearest first, then blended
+    // furthest first; in others, which don't meet depth, all furthest first. Ties as the entities
+    // were made, and a mesh's surfaces in order, so a frame draws as the last did whatever's freed
+    // between.
     std::ranges::sort(items, [](const item_t& a, const item_t& b) {
         if (a.order != b.order) {
             return a.order < b.order;
         }
-        if (a.blended != b.blended) {
+        const bool painted = a.order != 0;
+        if (!painted && a.blended != b.blended) {
             return !a.blended;
         }
-        if (!a.blended && a.material != b.material) {
+        const bool far_first = painted || a.blended;
+        if (!far_first && a.draw.pipeline != b.draw.pipeline) {
+            return a.draw.pipeline < b.draw.pipeline;
+        }
+        if (!far_first && a.material != b.material) {
             return a.material < b.material;
         }
         if (a.draw.depth != b.draw.depth) {
-            return a.blended ? a.draw.depth > b.draw.depth : a.draw.depth < b.draw.depth;
+            return far_first ? a.draw.depth > b.draw.depth : a.draw.depth < b.draw.depth;
         }
         if (a.made != b.made) {
             return a.made < b.made;
@@ -195,36 +231,47 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
 
 } // namespace
 
+bool drawn_view(std::uint64_t camera, float target_width, float target_height, float tween,
+                std::uint32_t& slot, scene::view_t& view, bool& shows) {
+    slot = scene::entity_slot(camera);
+    if (slot == none) {
+        return false;
+    }
+    const scene::scene_t& s = scene::scene();
+    if (s.entities.kind[slot] != FBE_ENTITY_CAMERA) {
+        return fail("the entity isn't a camera");
+    }
+    if (std::isnan(tween) || tween < 0.0F || tween > 1.0F) {
+        return fail(std::format("a tween is 0 to 1, not {}", tween));
+    }
+    const camera_t& found = s.cameras[s.entities.component[slot]];
+    shows = scene::showing(slot) && scene::view_of(found, target_width, target_height, view) &&
+            view.sized;
+    // Seen from where the camera is between the steps, as everything else is drawn.
+    const scene::pose_t eye = scene::tweened_t(tween).pose(slot);
+    view.position = eye.matrix.axis(3);
+    view.rotation = eye.rotation;
+    return true;
+}
+
 } // namespace fbe::render
 
 extern "C" {
 
 FBE_API int32_t fbe_render_draws(uint64_t camera, float target_width, float target_height,
                                  float tween, fbe_draw_t* draws, int32_t capacity) {
-    const std::uint32_t slot = fbe::scene::entity_slot(camera);
-    if (slot == fbe::scene::none) {
-        return -1;
-    }
-    const fbe::scene::scene_t& s = fbe::scene::scene();
-    if (s.entities.kind[slot] != FBE_ENTITY_CAMERA) {
-        fbe::fail("the entity isn't a camera");
-        return -1;
-    }
-    if (std::isnan(tween) || tween < 0.0F || tween > 1.0F) {
-        fbe::fail(std::format("a tween is 0 to 1, not {}", tween));
-        return -1;
-    }
-    const fbe::scene::camera_t& found = s.cameras[s.entities.component[slot]];
+    std::uint32_t slot = fbe::scene::none;
     fbe::scene::view_t view;
-    if (!fbe::scene::showing(slot) ||
-        !fbe::scene::view_of(found, target_width, target_height, view) || !view.sized) {
+    bool shows = false;
+    if (!fbe::render::drawn_view(camera, target_width, target_height, tween, slot, view, shows)) {
+        return -1;
+    }
+    if (!shows) {
         return 0;
     }
-    // Seen from where the camera is between the steps, as everything else is drawn.
+    const fbe::scene::scene_t& s = fbe::scene::scene();
+    const fbe::scene::camera_t& found = s.cameras[s.entities.component[slot]];
     const fbe::scene::tweened_t tweened(tween);
-    const fbe::scene::pose_t eye = tweened.pose(slot);
-    view.position = eye.matrix.axis(3);
-    view.rotation = eye.rotation;
     const std::vector<fbe::render::item_t> items = fbe::render::extract(found, view, tweened);
     const auto count = std::min(items.size(), static_cast<std::size_t>(std::max(capacity, 0)));
     for (std::size_t i = 0; i < count; ++i) {
