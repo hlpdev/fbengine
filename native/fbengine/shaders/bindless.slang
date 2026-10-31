@@ -31,3 +31,13 @@ public float2 textureSize(uint index)
     textures[NonUniformResourceIndex(index)].GetDimensions(width, height);
     return float2(width, height);
 }
+
+/// How many levels texture `index` has, its mipmaps and its first.
+public uint textureLevels(uint index)
+{
+    uint width;
+    uint height;
+    uint levels;
+    textures[NonUniformResourceIndex(index)].GetDimensions(0, width, height, levels);
+    return levels;
+}

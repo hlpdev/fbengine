@@ -229,10 +229,11 @@ Public Final Class Canvas
 
     /// Draws a polygon through `points`, each taken to the nearest 1/16 of a pixel: filled,
     /// covering the pixels whose middles are in it, concave or not as long as its sides don't
-    /// cross, the same on every GPU but where it reaches more than 16384 pixels past the viewport,
-    /// where it's cut to the viewport first; or its outline, a line between the pixels the points
-    /// are in, each to the next and the last to the first, each pixel drawn once. It panics for
-    /// fewer than 3 points.
+    /// cross, though they can touch at a point, the same on every GPU but where it reaches more
+    /// than 16384 pixels past the viewport, when it's cut to the viewport first, and for a middle
+    /// within 1/1000 of a pixel of a side, which is the GPU's to decide; or its outline, a line
+    /// between the pixels the points are in, each to the next and the last to the first, each
+    /// pixel drawn once. It panics for fewer than 3 points.
     @MainThread @PanicsAtCaller
     Public Method DrawPolygon(points: Vec2[], filled: Bool = True)
         Local into = Into("DrawPolygon")

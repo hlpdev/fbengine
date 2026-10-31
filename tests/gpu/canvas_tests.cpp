@@ -190,6 +190,15 @@ int wrong_pixels(const pixels_t& drawn, std::span<const double> points, std::uin
     return wrong;
 }
 
+/// The points of `ring`, x and y in turn.
+std::vector<double> flat(const std::vector<point_t>& ring) {
+    std::vector<double> points;
+    for (const point_t& point : ring) {
+        points.insert(points.end(), { point[0], point[1] });
+    }
+    return points;
+}
+
 /// Twice the area of the polygon through `points`, x and y in turn.
 double twice_area(std::span<const double> points) {
     const std::size_t count = points.size() / 2;
@@ -527,6 +536,114 @@ TEST_CASE("a polygon's triangles cover each pixel middle in it once", "[gpu]") {
     CHECK(!fbe::canvas::triangulate(bowtie).empty());
 }
 
+// Lobes touching at a point, the same way round, are split there before ear clipping, which would
+// fill between them: two squares at a corner, three in a row, and seeded random pairs of star
+// shapes, one's rightmost point the other's leftmost. A hole joined by a bridge, a loop the other
+// way round, isn't split off: the awkward polygons' keyhole.
+TEST_CASE("lobes touching at a point are filled as they are", "[gpu]") {
+    const auto check = [](std::span<const double> points) {
+        const std::vector<std::array<double, 6>> triangles = fbe::canvas::triangulate(points);
+        double area = 0.0;
+        for (const std::array<double, 6>& triangle : triangles) {
+            area += std::abs(twice_area(triangle));
+        }
+        CHECK(std::abs(area - std::abs(twice_area(points))) < 1e-6);
+        int twice = 0;
+        int wrong = 0;
+        for (std::uint32_t y = 0; y < 64; ++y) {
+            for (std::uint32_t x = 0; x < 64; ++x) {
+                bool tie = false;
+                const bool in = inside(points, x + 0.5, y + 0.5, tie);
+                int covers = 0;
+                for (const std::array<double, 6>& triangle : triangles) {
+                    bool on_side = false;
+                    covers += inside(triangle, x + 0.5, y + 0.5, on_side) ? 1 : 0;
+                    tie = tie || on_side;
+                }
+                if (!tie) {
+                    twice += covers > 1 ? 1 : 0;
+                    wrong += (covers > 0) != in ? 1 : 0;
+                }
+            }
+        }
+        CHECK(twice == 0);
+        CHECK(wrong == 0);
+    };
+    check(std::vector<double>{
+        2,
+        2,
+        12,
+        2,
+        12,
+        12,
+        22,
+        12,
+        22,
+        22,
+        12,
+        22,
+        12,
+        12,
+        2,
+        12,
+    });
+    check(std::vector<double>{
+        0, 0, 10, 0, 10, 10, 20, 10, 20, 20, 30, 20, 30, 30, 20, 30, 20, 20, 10, 20, 10, 10, 0, 10,
+    });
+    // NOLINTNEXTLINE(bugprone-random-generator-seed)
+    std::mt19937 random(5);
+    const auto star = [&random](double middle_x, double middle_y) {
+        std::vector<point_t> made;
+        const auto size = static_cast<std::uint32_t>(4 + (random() % 8));
+        for (std::uint32_t at = 0; at < size; ++at) {
+            const double angle = (static_cast<double>(at) + 0.3) * 2.0 * std::numbers::pi / size;
+            const auto radius = static_cast<double>(6 + (random() % 9));
+            made.push_back({
+                std::round(middle_x + (radius * std::cos(angle))),
+                std::round(middle_y + (radius * std::sin(angle))),
+            });
+        }
+        return made;
+    };
+    int made = 0;
+    while (made < 300) {
+        std::vector<point_t> left = star(18, 32);
+        std::vector<point_t> right = star(46, 32);
+        if ((twice_area(flat(left)) > 0.0) != (twice_area(flat(right)) > 0.0)) {
+            std::ranges::reverse(right);
+        }
+        // Each other's only points at their touching x.
+        const auto rightmost =
+            std::ranges::max_element(left, {}, [](const point_t& p) { return p[0]; });
+        const auto leftmost =
+            std::ranges::min_element(right, {}, [](const point_t& p) { return p[0]; });
+        const auto at_x = [](const std::vector<point_t>& ring, double x) {
+            return std::ranges::count_if(ring, [x](const point_t& p) { return p[0] == x; });
+        };
+        const point_t touch = *rightmost;
+        const point_t start = *leftmost;
+        if (at_x(left, touch[0]) != 1 || at_x(right, start[0]) != 1) {
+            continue;
+        }
+        const point_t move{ touch[0] - start[0], touch[1] - start[1] };
+        for (point_t& p : right) {
+            p[0] += move[0];
+            p[1] += move[1];
+        }
+        std::ranges::rotate(left, rightmost);
+        std::ranges::rotate(
+            right, std::ranges::min_element(right, {}, [](const point_t& p) { return p[0]; }));
+        std::vector<point_t> both = left;
+        both.insert(both.end(), right.begin(), right.end());
+        if (!simple(flat(left)) || !simple(flat(right))) {
+            continue;
+        }
+        INFO("two lobes " << made);
+        check(flat(both));
+        ++made;
+    }
+}
+
 // Only a corner that isn't convex can be in an ear, so a convex polygon's ears are found going
 // round it once: 100,000 points take a moment, where trying each against every other would take
 // many seconds.
@@ -855,7 +972,7 @@ TEST_CASE("a polygon fills the pixels whose middles are in it, on every GPU", "[
     for (const std::vector<double>& polygon : polygons) {
         INFO("polygon " << index++);
         const auto [given, drawn] = given_and_drawn(polygon);
-        CHECK(wrong_pixels(drawn_of(given), drawn, 64, 64) == 0);
+        CHECK(wrong_pixels(drawn_of(given), drawn, 64, 64, 1e-3) == 0);
     }
     // The pentagon with a point on its first ear's diagonal fills its 270 pixels, not 340.
     const auto [in, ties] = middles_in(awkward_polygons()[6], 64, 64);
@@ -867,8 +984,108 @@ TEST_CASE("a polygon fills the pixels whose middles are in it, on every GPU", "[
             -far, (-far / 2) + 10.25, far, (far / 2) + 10.25, -far, far,
         };
         const auto [given, drawn] = given_and_drawn(points);
-        CHECK(wrong_pixels(drawn_of(given), drawn, 64, 64, 1e-6) == 0);
+        CHECK(wrong_pixels(drawn_of(given), drawn, 64, 64, 1e-3) == 0);
     }
+    stop_gpu();
+}
+
+// A polygon one of whose triangles reaches far past the viewport has all of them cut, so a whole
+// triangle beside a cut one shares a side with the same ends: quads, one point inside, one left
+// of the viewport, one far right, and one inside, whose ear clipping leaves one triangle whole,
+// drawn half transparent, each pixel once and the pixels whose middles are in them.
+TEST_CASE("a polygon partly cut far past the viewport has no cracks", "[gpu]") {
+    start();
+    const std::uint64_t made = target(256, 256, FBE_TEXTURE_RGBA8_LINEAR);
+    const fbe_2d_pen_t clear = pen({ 0, 0, 0, 0 });
+    const fbe_2d_pen_t half = pen({ 255, 255, 255, 128 }, FBE_2D_ALPHA);
+    // NOLINTNEXTLINE(bugprone-random-generator-seed)
+    std::mt19937 random(16);
+    int mixed = 0;
+    for (int at = 0; at < 400; ++at) {
+        const double x1 = -static_cast<double>(1 + (random() % 120)) - 0.5;
+        const double y1 = static_cast<double>(10 + (random() % 196)) + 0.5;
+        const auto step = static_cast<double>(2 + (random() % 6));
+        const double dx = step * static_cast<double>(5 + (random() % 30));
+        const double dy = step * (static_cast<double>(random() % 21) - 10.0);
+        const double x3 = x1 + dx;
+        const double y3 = y1 + dy;
+        if (x3 <= 2 || x3 >= 254 || y3 <= 2 || y3 >= 254) {
+            continue;
+        }
+        const double length = std::hypot(dx, dy);
+        const double out_x = dy / length;
+        const double out_y = -dx / length;
+        const double middle_x = (x1 + x3) / 2.0;
+        const double middle_y = (y1 + y3) / 2.0;
+        const double way = at % 4 < 2 ? 1.0 : -1.0;
+        const double x0 = std::round(middle_x - (way * 20.0 * out_x));
+        const double y0 = std::round(middle_y - (way * 20.0 * out_y));
+        if (x0 <= 1 || x0 >= 255 || y0 <= 1 || y0 >= 255) {
+            continue;
+        }
+        const double far = at % 2 == 0 ? 40000.0 : 2e6;
+        const double x2 = std::round(middle_x + (way * far * out_x));
+        const double y2 = std::round(middle_y + (way * far * out_y));
+        const std::vector<double> points{ x0, y0, x1, y1, x2, y2, x3, y3 };
+        if (!simple(points)) {
+            continue;
+        }
+        // Only those whose triangles are whole and cut.
+        bool whole = false;
+        for (const std::array<double, 6>& triangle : fbe::canvas::triangulate(points)) {
+            whole = whole || (triangle[0] != x2 && triangle[2] != x2 && triangle[4] != x2);
+        }
+        if (!whole) {
+            continue;
+        }
+        ++mixed;
+        INFO("quad " << at << ": " << x0 << ", " << y0 << ", " << x1 << ", " << y1 << ", " << x2
+                     << ", " << y2 << ", " << x3 << ", " << y3);
+        require(fbe_2d_clear(made, &clear));
+        const std::vector<float> given(points.begin(), points.end());
+        require(fbe_2d_polygon(made, &half, given.data(), 4, true));
+        const fbe::golden::frame_t frame = read(made);
+        // Cut, a side's ends where it crosses the viewport's edge are off the 1/16 grid, where the
+        // GPU's own grid puts them, 1/512 of a pixel at 8 bits, so middles that near it are ties.
+        const auto [in, ties] = middles_in(points, 256, 256, 1.0 / 256.0);
+        int twice = 0;
+        int wrong = 0;
+        for (std::uint32_t y = 0; y < 256; ++y) {
+            for (std::uint32_t x = 0; x < 256; ++x) {
+                const int value = pixel(frame, x, y)[0];
+                twice += value > 136 ? 1 : 0;
+                if (!ties.contains({ x, y }) && (value != 0) != in.contains({ x, y })) {
+                    ++wrong;
+                }
+            }
+        }
+        CHECK(twice == 0);
+        CHECK(wrong == 0);
+    }
+    CHECK(mixed > 50);
+    stop_gpu();
+}
+
+// Two squares at a corner, the same way round, fill their 200 pixels, not the 255 that filling
+// between them did.
+TEST_CASE("two squares touching at a corner fill only themselves", "[gpu]") {
+    start();
+    const std::uint64_t made = target(32, 32);
+    const fbe_2d_pen_t clear = pen(black);
+    require(fbe_2d_clear(made, &clear));
+    const std::array<float, 16> ring{ 2, 2, 12, 2, 12, 12, 22, 12, 22, 22, 12, 22, 12, 12, 2, 12 };
+    const fbe_2d_pen_t ink = pen(white);
+    require(fbe_2d_polygon(made, &ink, ring.data(), 8, true));
+    const pixels_t drawn = pixels_of(read(made), white);
+    pixels_t expected;
+    for (std::uint32_t y = 2; y < 22; ++y) {
+        for (std::uint32_t x = 2; x < 22; ++x) {
+            if ((x < 12) == (y < 12)) {
+                expected.emplace(x, y);
+            }
+        }
+    }
+    CHECK(drawn == expected);
     stop_gpu();
 }
 
@@ -1508,6 +1725,108 @@ TEST_CASE("a part's tiles are one quad, mirrored or tiny", "[gpu]") {
     frame = read(big);
     CHECK(pixel(frame, 0, 0) == card_pixel(2, 3));
     CHECK(pixel(frame, 2047, 1234) == card_pixel(2, 3));
+    stop_gpu();
+}
+
+// A part of a mipmapped sheet drawn smaller samples a smaller level, whose texels are bigger: it's
+// kept in by half a texel of that level, and the level's no smaller than the part, so a red cell
+// beside a blue one shows no blue, at 0.75 and 0.1, and a texel of it tiled at 0.01 is red.
+TEST_CASE("a part of a mipmapped sheet drawn smaller shows none of its neighbor's texels",
+          "[gpu]") {
+    start();
+    const fbe_2d_pen_t ink = pen(white);
+    for (const bool mipmaps : { false, true }) {
+        INFO("mipmaps " << mipmaps);
+        // 64 by 32, its left half red and its right blue.
+        const std::uint64_t sheet = fbe_texture_create(64, 32, FBE_TEXTURE_RGBA8, mipmaps);
+        REQUIRE(sheet != 0);
+        std::vector<std::uint8_t> halves;
+        for (std::int32_t at = 0; at < 64 * 32; ++at) {
+            const rgba_t color = at % 64 < 32 ? red : blue;
+            halves.insert(halves.end(), color.begin(), color.end());
+        }
+        require(fbe_texture_write(sheet, 0, 0, 64, 32, halves.data(), 256));
+        require(fbe_texture_set_filter(sheet, FBE_TEXTURE_LINEAR));
+        for (const float scale : { 0.75F, 0.1F }) {
+            INFO("scale " << scale);
+            const fbe_2d_sprite_t left{
+                .region_width = 32,
+                .region_height = 32,
+                .scale_x = scale,
+                .scale_y = scale,
+            };
+            const std::uint64_t made = target(64, 64);
+            require(fbe_2d_texture(made, &ink, sheet, &left, 4, 4));
+            int bluish = 0;
+            const fbe::golden::frame_t frame = read(made);
+            for (std::uint32_t y = 0; y < 64; ++y) {
+                for (std::uint32_t x = 0; x < 64; ++x) {
+                    bluish += pixel(frame, x, y)[2] > 0 ? 1 : 0;
+                }
+            }
+            CHECK(bluish == 0);
+        }
+        const fbe_2d_sprite_t dot{
+            .region_x = 31,
+            .region_y = 31,
+            .region_width = 1,
+            .region_height = 1,
+            .scale_x = 0.01F,
+            .scale_y = 0.01F,
+        };
+        const std::uint64_t tiled = target(64, 64);
+        require(fbe_2d_tile(tiled, &ink, sheet, &dot, 0, 0));
+        CHECK(pixel(read(tiled), 30, 30) == red);
+    }
+    stop_gpu();
+}
+
+// Tiles across a wide target, LINEAR at scale 1, are their texels however far along it they are:
+// they're quads of 2048 pixels at most, as a GPU interpolating uv over 8192 drifts. A 37 by 4 part
+// of a checker, and all of a 37 by 4 checker.
+TEST_CASE("tiles over 8192 pixels are their texels all the way", "[gpu]") {
+    start();
+    const auto checker = [](std::int64_t x, std::int64_t y) {
+        return (x + y) % 2 == 0 ? rgba_t{ 250, 10, 20, 255 } : rgba_t{ 5, 240, 30, 255 };
+    };
+    const auto texture_of = [&](std::int32_t width, std::int32_t height, std::int64_t from) {
+        const std::uint64_t made = fbe_texture_create(width, height, FBE_TEXTURE_RGBA8, false);
+        REQUIRE(made != 0);
+        std::vector<std::uint8_t> texels;
+        for (std::int64_t y = 0; y < height; ++y) {
+            for (std::int64_t x = 0; x < width; ++x) {
+                const rgba_t color = checker(x + from, y + from);
+                texels.insert(texels.end(), color.begin(), color.end());
+            }
+        }
+        require(fbe_texture_write(made, 0, 0, width, height, texels.data(), width * 4));
+        require(fbe_texture_set_filter(made, FBE_TEXTURE_LINEAR));
+        return made;
+    };
+    const std::uint64_t sheet = texture_of(64, 8, 0);
+    const std::uint64_t whole = texture_of(37, 4, 1);
+    const std::uint64_t made = target(8192, 4);
+    const fbe_2d_pen_t ink = pen(white);
+    const fbe_2d_sprite_t part{
+        .region_x = 1,
+        .region_y = 1,
+        .region_width = 37,
+        .region_height = 4,
+        .scale_x = 1,
+        .scale_y = 1,
+    };
+    for (const auto& [texture, sprite] : { std::pair{ sheet, part }, std::pair{ whole, all } }) {
+        require(fbe_2d_tile(made, &ink, texture, &sprite, 3, 0));
+        const fbe::golden::frame_t frame = read(made);
+        int wrong = 0;
+        for (std::uint32_t y = 0; y < 4; ++y) {
+            for (std::uint32_t x = 0; x < 8192; ++x) {
+                const std::int64_t u = (((static_cast<std::int64_t>(x) - 3) % 37) + 37) % 37;
+                wrong += pixel(frame, x, y) != checker(1 + u, 1 + y) ? 1 : 0;
+            }
+        }
+        CHECK(wrong == 0);
+    }
     stop_gpu();
 }
 

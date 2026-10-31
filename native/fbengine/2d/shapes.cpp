@@ -3,9 +3,11 @@
 #include "2d/shapes.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <tuple>
 #include <utility>
 
@@ -36,6 +38,136 @@ std::pair<std::int64_t, std::int64_t> row_of(std::int64_t width, std::int64_t he
     const auto left =
         static_cast<std::int64_t>(std::floor((static_cast<double>(width) / 2.0) - half + 0.5));
     return { left, std::max<std::int64_t>(width - (2 * left), 0) };
+}
+
+using point_t = std::array<double, 2>;
+
+/// Twice the area of the ring through `ring`, positive when it turns clockwise on a y-down
+/// screen.
+double twice_area(std::span<const point_t> ring) {
+    double area = 0.0;
+    for (std::size_t at = 0; at < ring.size(); ++at) {
+        const point_t& to = ring[(at + 1) % ring.size()];
+        area += (ring[at][0] * to[1]) - (to[0] * ring[at][1]);
+    }
+    return area;
+}
+
+/// Adds `ring` to `parts`, split first at a point it passes twice where the loop between and the
+/// rest both go its way round, lobes touching there, each part split again; where one goes the
+/// other way round, it's a hole, which a bridge joins to the rest, and they stay.
+void split_lobes(std::vector<point_t> ring, std::vector<std::vector<point_t>>& parts) {
+    const double whole = twice_area(ring);
+    // The points it passes more than once: its places, sorted by their point, then by place.
+    std::vector<std::size_t> order(ring.size());
+    for (std::size_t at = 0; at < order.size(); ++at) {
+        order[at] = at;
+    }
+    std::ranges::sort(order, {}, [&](std::size_t at) { return std::pair{ ring[at], at }; });
+    for (std::size_t first = 0; first < order.size() && whole != 0.0;) {
+        std::size_t last = first + 1;
+        while (last < order.size() && ring[order[last]] == ring[order[first]]) {
+            ++last;
+        }
+        for (std::size_t a = first; a < last; ++a) {
+            for (std::size_t b = a + 1; b < last; ++b) {
+                const std::span<const point_t> loop(ring.data() + order[a], order[b] - order[a]);
+                // The two rings' areas sum to the whole's, as their sides are its.
+                const double area = twice_area(loop);
+                const double rest_area = whole - area;
+                if (area == 0.0 || rest_area == 0.0 || (area > 0.0) != (whole > 0.0) ||
+                    (rest_area > 0.0) != (whole > 0.0)) {
+                    continue;
+                }
+                std::vector<point_t> lobe(loop.begin(), loop.end());
+                std::vector<point_t> rest(ring.begin(),
+                                          ring.begin() + static_cast<std::ptrdiff_t>(order[a]));
+                rest.insert(rest.end(), ring.begin() + static_cast<std::ptrdiff_t>(order[b]),
+                            ring.end());
+                split_lobes(std::move(lobe), parts);
+                split_lobes(std::move(rest), parts);
+                return;
+            }
+        }
+        first = last;
+    }
+    parts.push_back(std::move(ring));
+}
+
+/// Adds triangles covering `ring`, a polygon whose sides don't cross, to `triangles`: its ears cut
+/// off one at a time, or, where that finds none, a fan of what's left.
+void clip_ears(const std::vector<point_t>& ring, std::vector<std::array<double, 6>>& triangles) {
+    const std::size_t count = ring.size();
+    if (count < 3) {
+        return;
+    }
+    const double turn = twice_area(ring) >= 0.0 ? 1.0 : -1.0;
+    const auto cross = [&](std::size_t a, std::size_t b, std::size_t c) {
+        return (((ring[b][0] - ring[a][0]) * (ring[c][1] - ring[a][1])) -
+                ((ring[b][1] - ring[a][1]) * (ring[c][0] - ring[a][0]))) *
+               turn;
+    };
+    // The points left, a ring of each one's next and previous.
+    std::vector<std::size_t> next(count);
+    std::vector<std::size_t> previous(count);
+    for (std::size_t at = 0; at < count; ++at) {
+        next[at] = (at + 1) % count;
+        previous[at] = (at + count - 1) % count;
+    }
+    // Whether each point's corner isn't convex, and those points, the only ones an ear can have
+    // in it as long as the sides don't cross; and whether it's been cut off.
+    std::vector<std::uint8_t> reflex(count, 0);
+    std::vector<std::uint8_t> cut(count, 0);
+    std::vector<std::size_t> reflexes;
+    const auto bend = [&](std::size_t at) {
+        const bool was = reflex[at] != 0;
+        reflex[at] = cross(previous[at], at, next[at]) <= 0.0 ? 1 : 0;
+        if (reflex[at] != 0 && !was) {
+            reflexes.push_back(at);
+        }
+    };
+    for (std::size_t at = 0; at < count; ++at) {
+        bend(at);
+    }
+    // An ear: a convex corner with no other point in it or on its sides, but at its own corners.
+    const auto ear = [&](std::size_t b) {
+        const std::size_t a = previous[b];
+        const std::size_t c = next[b];
+        return reflex[b] == 0 && std::ranges::none_of(reflexes, [&](std::size_t p) {
+                   return cut[p] == 0 && reflex[p] != 0 && ring[p] != ring[a] &&
+                          ring[p] != ring[b] && ring[p] != ring[c] && cross(a, b, p) >= 0.0 &&
+                          cross(b, c, p) >= 0.0 && cross(c, a, p) >= 0.0;
+               });
+    };
+    const auto triangle = [&](std::size_t a, std::size_t b, std::size_t c) {
+        triangles.push_back(
+            { ring[a][0], ring[a][1], ring[b][0], ring[b][1], ring[c][0], ring[c][1] });
+    };
+    // Around the ring, cutting off each ear found, until a whole way round finds none.
+    std::size_t left = count;
+    std::size_t at = 0;
+    std::size_t looked = 0;
+    while (left > 3 && looked < left) {
+        if (!ear(at)) {
+            at = next[at];
+            ++looked;
+            continue;
+        }
+        const std::size_t a = previous[at];
+        const std::size_t c = next[at];
+        triangle(a, at, c);
+        cut[at] = 1;
+        next[a] = c;
+        previous[c] = a;
+        --left;
+        bend(a);
+        bend(c);
+        at = c;
+        looked = 0;
+    }
+    for (std::size_t from = next[at]; next[from] != at; from = next[from]) {
+        triangle(at, from, next[from]);
+    }
 }
 
 } // namespace
@@ -216,9 +348,9 @@ std::vector<span_t> merged(std::span<const span_t> spans) {
 }
 
 std::vector<std::array<double, 6>> triangulate(std::span<const double> points) {
-    std::vector<std::array<double, 2>> ring;
+    std::vector<point_t> ring;
     for (std::size_t at = 0; at + 1 < points.size(); at += 2) {
-        const std::array<double, 2> point{ points[at], points[at + 1] };
+        const point_t point{ points[at], points[at + 1] };
         if (ring.empty() || ring.back() != point) {
             ring.push_back(point);
         }
@@ -226,83 +358,11 @@ std::vector<std::array<double, 6>> triangulate(std::span<const double> points) {
     while (ring.size() > 1 && ring.back() == ring.front()) {
         ring.pop_back();
     }
+    std::vector<std::vector<point_t>> parts;
+    split_lobes(std::move(ring), parts);
     std::vector<std::array<double, 6>> triangles;
-    const std::size_t count = ring.size();
-    if (count < 3) {
-        return triangles;
-    }
-    // Twice the polygon's area, positive when its points turn clockwise on a y-down screen.
-    double area = 0.0;
-    for (std::size_t at = 0; at < count; ++at) {
-        const std::array<double, 2>& to = ring[(at + 1) % count];
-        area += (ring[at][0] * to[1]) - (to[0] * ring[at][1]);
-    }
-    const double turn = area >= 0.0 ? 1.0 : -1.0;
-    const auto cross = [&](std::size_t a, std::size_t b, std::size_t c) {
-        return (((ring[b][0] - ring[a][0]) * (ring[c][1] - ring[a][1])) -
-                ((ring[b][1] - ring[a][1]) * (ring[c][0] - ring[a][0]))) *
-               turn;
-    };
-    // The points left, a ring of each one's next and previous.
-    std::vector<std::size_t> next(count);
-    std::vector<std::size_t> previous(count);
-    for (std::size_t at = 0; at < count; ++at) {
-        next[at] = (at + 1) % count;
-        previous[at] = (at + count - 1) % count;
-    }
-    // Whether each point's corner isn't convex, and those points, the only ones an ear can have
-    // in it as long as the sides don't cross; and whether it's been cut off.
-    std::vector<std::uint8_t> reflex(count, 0);
-    std::vector<std::uint8_t> cut(count, 0);
-    std::vector<std::size_t> reflexes;
-    const auto bend = [&](std::size_t at) {
-        const bool was = reflex[at] != 0;
-        reflex[at] = cross(previous[at], at, next[at]) <= 0.0 ? 1 : 0;
-        if (reflex[at] != 0 && !was) {
-            reflexes.push_back(at);
-        }
-    };
-    for (std::size_t at = 0; at < count; ++at) {
-        bend(at);
-    }
-    // An ear: a convex corner with no other point in it or on its sides, but at its own corners.
-    const auto ear = [&](std::size_t b) {
-        const std::size_t a = previous[b];
-        const std::size_t c = next[b];
-        return reflex[b] == 0 && std::ranges::none_of(reflexes, [&](std::size_t p) {
-                   return cut[p] == 0 && reflex[p] != 0 && ring[p] != ring[a] &&
-                          ring[p] != ring[b] && ring[p] != ring[c] && cross(a, b, p) >= 0.0 &&
-                          cross(b, c, p) >= 0.0 && cross(c, a, p) >= 0.0;
-               });
-    };
-    const auto triangle = [&](std::size_t a, std::size_t b, std::size_t c) {
-        triangles.push_back(
-            { ring[a][0], ring[a][1], ring[b][0], ring[b][1], ring[c][0], ring[c][1] });
-    };
-    // Around the ring, cutting off each ear found, until a whole way round finds none.
-    std::size_t left = count;
-    std::size_t at = 0;
-    std::size_t looked = 0;
-    while (left > 3 && looked < left) {
-        if (!ear(at)) {
-            at = next[at];
-            ++looked;
-            continue;
-        }
-        const std::size_t a = previous[at];
-        const std::size_t c = next[at];
-        triangle(a, at, c);
-        cut[at] = 1;
-        next[a] = c;
-        previous[c] = a;
-        --left;
-        bend(a);
-        bend(c);
-        at = c;
-        looked = 0;
-    }
-    for (std::size_t from = next[at]; next[from] != at; from = next[from]) {
-        triangle(at, from, next[from]);
+    for (const std::vector<point_t>& part : parts) {
+        clip_ears(part, triangles);
     }
     return triangles;
 }

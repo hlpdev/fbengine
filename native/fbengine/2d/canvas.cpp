@@ -58,8 +58,9 @@ struct quad_t {
 static_assert(sizeof(quad_t) == 80, "the canvas shader reads quads 80 bytes apart");
 
 /// A quad's flags: it's a line; steeper than it's long, its longer axis down; its texels are kept
-/// in its part, half a texel in from its edges, so filtering doesn't reach a neighbor's; its uv is
-/// in tiles of its part, each wrapped into it; and its texture's coverage, its red the alpha of
+/// in its part, half a texel in from its edges, so filtering doesn't reach a neighbor's; it's
+/// tiles, its uv where the tiles start and how big they are, from which the shader works out each
+/// pixel's, wrapped into its part if it has one; and its texture's coverage, its red the alpha of
 /// its color.
 constexpr std::uint32_t line_flag = 1;
 constexpr std::uint32_t steep_flag = 2;
@@ -75,6 +76,9 @@ constexpr std::int64_t furthest_line = 16777216;
 /// 1/16 pixel grid every GPU draws exactly; one reaching further is cut to the clip first, in
 /// doubles, as a GPU's own clipping far out isn't exact.
 constexpr double furthest_triangle = 16384.0;
+/// The widest and tallest a tile's quad is, so how many tiles in a pixel is stays small enough for
+/// floats to keep its texels.
+constexpr std::int64_t widest_tiles = 2048;
 /// How far from 0 an outline's points are whole pixels in doubles, 2^52; a side reaching further
 /// is cut there first.
 constexpr double furthest_point = 4503599627370496.0;
@@ -493,21 +497,29 @@ void add_texels(const std::array<float, 8>& corners, const std::array<float, 4>&
     ++draws.back().count;
 }
 
-/// Adds a polygon's triangle, x and y in turn: as it is, or, where it reaches too far past the
-/// clip for every GPU to draw it exactly, the part of it in the clip, cut in doubles. Where a side
-/// two triangles share is cut, it's cut at one point, worked out from whichever end's first.
-void add_triangle(const std::array<double, 6>& triangle) {
+/// Whether a polygon's triangle, x and y in turn, reaches too far past the clip for every GPU to
+/// draw it exactly.
+bool reaches_far(const std::array<double, 6>& triangle) {
     const auto near = [](double value, std::int64_t low, std::int64_t high) {
         return value >= static_cast<double>(low) - furthest_triangle &&
                value <= static_cast<double>(high) + furthest_triangle;
     };
-    bool whole = true;
     for (std::size_t at = 0; at < triangle.size(); at += 2) {
-        whole = whole && near(triangle[at], clip.left, clip.right) &&
-                near(triangle[at + 1], clip.top, clip.bottom);
+        if (!near(triangle[at], clip.left, clip.right) ||
+            !near(triangle[at + 1], clip.top, clip.bottom)) {
+            return true;
+        }
     }
+    return false;
+}
+
+/// Adds a polygon's triangle, x and y in turn: as it is, or, `cut`, the part of it in the clip,
+/// cut in doubles, as all of a polygon's are once one reaches far, so a side a whole triangle and
+/// a cut one share has the same ends in both. Where a side two triangles share is cut, it's cut at
+/// one point, worked out from whichever end's first.
+void add_triangle(const std::array<double, 6>& triangle, bool cut) {
     const auto narrow = [](double value) { return static_cast<float>(value); };
-    if (whole) {
+    if (!cut) {
         add({
             narrow(triangle[0]),
             narrow(triangle[1]),
@@ -539,12 +551,12 @@ void add_triangle(const std::array<double, 6>& triangle) {
         const auto kept = [&](const point_t& point) {
             return past ? point[axis] >= edge : point[axis] <= edge;
         };
-        std::vector<point_t> cut;
+        std::vector<point_t> inside;
         for (std::size_t at = 0; at < shape.size(); ++at) {
             point_t from = shape[at];
             point_t to = shape[(at + 1) % shape.size()];
             if (kept(from)) {
-                cut.push_back(from);
+                inside.push_back(from);
             }
             if (kept(from) != kept(to)) {
                 if (to < from) {
@@ -554,10 +566,10 @@ void add_triangle(const std::array<double, 6>& triangle) {
                 point_t crossing{};
                 crossing[axis] = edge;
                 crossing[1 - axis] = from[1 - axis] + ((to[1 - axis] - from[1 - axis]) * share);
-                cut.push_back(crossing);
+                inside.push_back(crossing);
             }
         }
-        shape = std::move(cut);
+        shape = std::move(inside);
         if (shape.size() < 3) {
             return;
         }
@@ -830,34 +842,44 @@ FBE_API bool fbe_2d_tile(uint64_t target, const fbe_2d_pen_t* pen, uint64_t text
         return true;
     }
     // A tile's size on the target, mirrored where its scale is negative, and where the one whose
-    // handle is at the position starts, moved by whole tiles to the viewport's top left, so its
-    // uv's small there and floats keep its texels however far away it is.
+    // handle is at the position starts.
     const double across =
         static_cast<double>(source.region[2] - source.region[0]) * sprite->scale_x;
     const double down = static_cast<double>(source.region[3] - source.region[1]) * sprite->scale_y;
-    const auto clip_left = static_cast<double>(clip.left);
-    const auto clip_top = static_cast<double>(clip.top);
-    const auto clip_right = static_cast<double>(clip.right);
-    const auto clip_bottom = static_cast<double>(clip.bottom);
-    double left = static_cast<double>(x) + pen->origin_x -
-                  (static_cast<double>(sprite->handle_x) * sprite->scale_x);
-    double top = static_cast<double>(y) + pen->origin_y -
-                 (static_cast<double>(sprite->handle_y) * sprite->scale_y);
-    left -= std::floor((left - clip_left) / across) * across;
-    top -= std::floor((top - clip_top) / down) * down;
-    // One quad over the viewport, its uv in tiles: all of a texture repeats as the sampler wraps,
-    // and a part as the shader wraps it into the part.
+    const double left = static_cast<double>(x) + pen->origin_x -
+                        (static_cast<double>(sprite->handle_x) * sprite->scale_x);
+    const double top = static_cast<double>(y) + pen->origin_y -
+                       (static_cast<double>(sprite->handle_y) * sprite->scale_y);
+    // Quads over the viewport, 2048 pixels at most each way, the shader working out each pixel's
+    // uv in tiles from where it is, as a GPU's interpolating isn't exact far along a target: all
+    // of a texture repeats as the sampler wraps, and a part as the shader wraps it into the part.
+    // Each one's tiles start where one does by its top left, moved by whole tiles from the
+    // position, so floats keep its texels however far away the position is.
     const bool whole = source.region[0] == 0.0F && source.region[1] == 0.0F &&
                        source.region[2] == source.width && source.region[3] == source.height;
-    const auto u = [&](double at) { return static_cast<float>((at - left) / across); };
-    const auto v = [&](double at) { return static_cast<float>((at - top) / down); };
-    const auto l = static_cast<float>(clip_left);
-    const auto t = static_cast<float>(clip_top);
-    const auto r = static_cast<float>(clip_right);
-    const auto b = static_cast<float>(clip_bottom);
-    add_texels({ l, t, r, t, r, b, l, b },
-               { u(clip_left), v(clip_top), u(clip_right), v(clip_bottom) }, source, whole,
-               whole ? 0U : part_flag | tile_flag);
+    for (std::int64_t strip_top = clip.top; strip_top < clip.bottom; strip_top += widest_tiles) {
+        const std::int64_t strip_bottom = std::min(strip_top + widest_tiles, clip.bottom);
+        const auto t = static_cast<double>(strip_top);
+        const double first_top = top - (std::floor((top - t) / down) * down);
+        for (std::int64_t strip_left = clip.left; strip_left < clip.right;
+             strip_left += widest_tiles) {
+            const std::int64_t strip_right = std::min(strip_left + widest_tiles, clip.right);
+            const auto l = static_cast<double>(strip_left);
+            const double first_left = left - (std::floor((left - l) / across) * across);
+            const auto fl = static_cast<float>(strip_left);
+            const auto ft = static_cast<float>(strip_top);
+            const auto fr = static_cast<float>(strip_right);
+            const auto fb = static_cast<float>(strip_bottom);
+            add_texels({ fl, ft, fr, ft, fr, fb, fl, fb },
+                       {
+                           static_cast<float>(first_left),
+                           static_cast<float>(first_top),
+                           static_cast<float>(across),
+                           static_cast<float>(down),
+                       },
+                       source, whole, whole ? tile_flag : part_flag | tile_flag);
+        }
+    }
     return true;
 }
 
@@ -880,8 +902,10 @@ FBE_API bool fbe_2d_polygon(uint64_t target, const fbe_2d_pen_t* pen, const floa
         moved[at] = std::round((static_cast<double>(given[at]) + origin) * 16.0) / 16.0;
     }
     if (filled) {
-        for (const std::array<double, 6>& triangle : fbe::canvas::triangulate(moved)) {
-            add_triangle(triangle);
+        const std::vector<std::array<double, 6>> triangles = fbe::canvas::triangulate(moved);
+        const bool cut = std::ranges::any_of(triangles, reaches_far);
+        for (const std::array<double, 6>& triangle : triangles) {
+            add_triangle(triangle, cut);
         }
         return true;
     }

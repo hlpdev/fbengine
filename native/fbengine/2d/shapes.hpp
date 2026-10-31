@@ -49,7 +49,9 @@ void oval(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t heigh
 std::vector<span_t> merged(std::span<const span_t> spans);
 
 /// Triangles covering the polygon through `points`, x and y in turn, as long as its sides don't
-/// cross, each point but the one before it: its ears cut off one at a time, or, where that finds
+/// cross, each point but the one before it: split first at each point it passes twice where the
+/// loop between goes its way round, a lobe touching the rest there, while a loop the other way is
+/// a hole a bridge joins it to; then each part's ears cut off one at a time, or, where that finds
 /// none, a fan of what's left.
 std::vector<std::array<double, 6>> triangulate(std::span<const double> points);
 

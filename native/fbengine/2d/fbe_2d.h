@@ -77,8 +77,9 @@ FBE_API bool fbe_2d_oval(uint64_t target, const fbe_2d_pen_t* pen, int32_t x, in
                          int32_t width, int32_t height, bool filled);
 // A polygon through `count` points, `points` their x and y in turn, each taken to the nearest 1/16
 // of a pixel, which every GPU draws exactly: filled, covering the pixels whose middles are in it,
-// concave or not as long as its sides don't cross, a middle on a side as the GPU's rule says (cut
-// to the viewport first where it reaches more than 16384 pixels past it, the cuts as exact as the
+// concave or not as long as its sides don't cross, though they can touch at a point, a middle on
+// a side, or within 1/1000 of a pixel of one, as the GPU's rule says (all of it cut to the
+// viewport first where any of it reaches more than 16384 pixels past it, the cuts as exact as the
 // GPU draws them); or its outline, a line between the pixels the points are in, each to the next
 // and the last to the first, each pixel drawn once. False for fewer than 3 points, or a point that
 // isn't finite.

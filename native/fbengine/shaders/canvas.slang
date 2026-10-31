@@ -2,8 +2,9 @@
 // give, six vertices a quad; its color, sRGB bytes, made linear unless the target's pixels are
 // data, times its texture's color. A line's quad covers the pixels around it, and keeps, along its
 // longer axis, the one nearest it, as shapes.hpp's line picks it, a tie rounding up. A part of a
-// texture keeps its uv half a texel inside the part, so filtering never reaches a neighbor's
-// texels, and a part tiled has its uv in tiles, each wrapped into the part.
+// texture keeps its uv half a texel of the level it's sampled at inside the part, so filtering
+// never reaches a neighbor's texels; tiles have their uv worked out from where the pixel is, in
+// tiles, a part's each wrapped into the part.
 
 import bindless;
 
@@ -41,7 +42,8 @@ struct Corner
 };
 
 // A quad's flags: it's a line; steeper than long; a part of its texture, left, top, right, and
-// bottom in uv; that part tiled; and its texture's coverage, its red its color's alpha.
+// bottom in uv; tiles, its uv where they start and how big they are; and its texture's coverage,
+// its red its color's alpha.
 static const uint lineFlag = 1;
 static const uint steepFlag = 2;
 static const uint partFlag = 4;
@@ -113,6 +115,15 @@ float4 fragmentMain(Corner corner) : SV_Target
     float2 uv = corner.uv;
     float2 across = ddx(corner.uv);
     float2 down = ddy(corner.uv);
+    if ((corner.flags & tileFlag) != 0)
+    {
+        // In tiles from where the pixel is, exact however far along the target it is, which uv
+        // interpolated across a quad isn't on every GPU.
+        const float4 tiles = asfloat(corner.line);
+        uv = (corner.position.xy - tiles.xy) / tiles.zw;
+        across = float2(1.0 / tiles.z, 0.0);
+        down = float2(0.0, 1.0 / tiles.w);
+    }
     if ((corner.flags & partFlag) != 0)
     {
         const float2 low = corner.part.xy;
@@ -123,7 +134,21 @@ float4 fragmentMain(Corner corner) : SV_Target
             across *= high - low;
             down *= high - low;
         }
-        const float2 inset = 0.5 / textureSize(texture);
+        // The level sampled, as many texels as a pixel steps across, from the gradients; at most
+        // the part's smaller side, so a level's texel is still in the part. Its texels are the
+        // part's inset, half of one, and the level the coarser of the two a linear filter takes.
+        const float2 size = textureSize(texture);
+        const float2 texels = (high - low) * size;
+        const float most = max(min(texels.x, texels.y), 1.0);
+        const float steps = max(length(across * size), length(down * size));
+        if (steps > most)
+        {
+            across *= most / steps;
+            down *= most / steps;
+        }
+        const float level = clamp(ceil(log2(max(min(steps, most), 1.0))), 0.0,
+                                  float(textureLevels(texture) - 1));
+        const float2 inset = 0.5 * exp2(level) / size;
         const float2 middle = (low + high) * 0.5;
         uv = clamp(uv, min(low + inset, middle), max(high - inset, middle));
     }
