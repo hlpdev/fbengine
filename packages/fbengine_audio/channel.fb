@@ -68,24 +68,6 @@ Public Struct Channel
     /// Its pitch.
     @MainThread Public Method Pitch(): Float32 => fbe_channel_pitch(handle)
 
-    /// Plays it at `hertz` frames of its sound a second, as Blitz's ChannelPitch does: a pitch of
-    /// `hertz` over its sound's SampleRate, from 1/16 to 16 of it. A rate that isn't more than 0 is
-    /// a mistake, finished Channel or not.
-    @MainThread Public Method SetPlayRate(hertz: Float32)
-        If !IsFinite(hertz) || hertz <= 0.0
-            Panic("a play rate is more than 0 Hz, not {hertz}")
-        End If
-        Local recorded = fbe_channel_sample_rate(handle)
-        If recorded == 0 Then Return
-        SetPitch(hertz / (recorded As Float32))
-    End Method
-
-    /// The frames of its sound it plays a second, before the Doppler effect: its sound's
-    /// SampleRate times its pitch, 0 once it's finished.
-    @MainThread Public Method PlayRate(): Float32
-        Return (fbe_channel_sample_rate(handle) As Float32) * fbe_channel_pitch(handle)
-    End Method
-
     /// Makes it loop, from its sound's end to its start, or play to its end and finish.
     @MainThread Public Method SetLoop(loop: Bool)
         fbe_channel_set_loop(handle, loop)
