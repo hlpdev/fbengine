@@ -132,6 +132,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libvulkan1 mesa-vulkan-drivers
+          # SDL's headers, which configuring the project needs, as native.yml's has them.
+          sudo apt-get install -y libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libegl-dev libdrm-dev libgbm-dev libdbus-1-dev libudev-dev libibus-1.0-dev
           echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json)" >> "$GITHUB_ENV"
 
       - name: Install MoltenVK (macOS)
