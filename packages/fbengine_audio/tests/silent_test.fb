@@ -1,8 +1,8 @@
 // Everything a game does, at random, on the SILENT device, where miniaudio's own thread mixes while
 // the game's changes what it mixes: sounds played, paused, stopped, seeked, faded, looped, pitched,
 // moved between buses and emitters; sounds, buses, and emitters freed; effects, the listener, and
-// the audio itself changed and restarted. From a fixed seed, for a few seconds; nothing crashes,
-// and what's asked about stays in range.
+// the audio itself changed and restarted, and its output unplugged and plugged back in. From a
+// fixed seed, for a few seconds; nothing crashes, and what's asked about stays in range.
 
 Import std.collections
 Import std.core
@@ -129,6 +129,13 @@ Function EverythingAtOnceOnTheSilentDevice() Throws AudioError, SoundError
             Audio.Stop()
             Try Audio.Start(AudioDevice.SILENT)
             channels = []
+        ElseIf what == 23 && random.Int(20) == 0
+            // The output unplugged, or plugged back in: nothing's mixed while it's lost.
+            If Audio.Lost()
+                Try Audio.SimulatePlugIn()
+            Else
+                Try Audio.SimulateUnplug()
+            End If
         Else
             Sleep(100.Microseconds)
         End If
