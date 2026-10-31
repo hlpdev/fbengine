@@ -1,14 +1,16 @@
 // Everything a game does, at random, on the SILENT device, where miniaudio's own thread mixes while
 // the game's changes what it mixes: sounds played, paused, stopped, seeked, faded, looped, pitched,
 // moved between buses and emitters; sounds, buses, and emitters freed; effects, the listener, and
-// the audio itself changed and restarted, and its output unplugged and plugged back in. From a
-// fixed seed, for a few seconds; nothing crashes, and what's asked about stays in range.
+// the audio itself changed and restarted, its output unplugged and plugged back in, and the
+// device made again at Flip on the default output. From a fixed seed, for a few seconds; nothing
+// crashes, and what's asked about stays in range.
 
 Import std.collections
 Import std.core
 Import std.math
 Import std.test
 Import std.time
+Import fbengine
 Import fbengine_audio
 Import "./wav"
 
@@ -34,7 +36,7 @@ Function EverythingAtOnceOnTheSilentDevice() Throws AudioError, SoundError
     Local started = Instant.Now()
     While started.Elapsed < 3.Seconds
         operations += 1
-        Local what = random.Int(24)
+        Local what = random.Int(25)
         If what == 0
             sounds.Add(Try Sound.FromBytes(Pick(random, files)))
         ElseIf what == 1
@@ -130,12 +132,19 @@ Function EverythingAtOnceOnTheSilentDevice() Throws AudioError, SoundError
             Try Audio.Start(AudioDevice.SILENT)
             channels = []
         ElseIf what == 23 && random.Int(20) == 0
-            // The output unplugged, or plugged back in: nothing's mixed while it's lost.
-            If Audio.Lost()
+            // The output unplugged, or every one, or plugged back in: nothing's mixed while it's
+            // lost.
+            Local how = random.Int(3)
+            If how == 0
                 Try Audio.SimulatePlugIn()
-            Else
+            ElseIf how == 1
                 Try Audio.SimulateUnplug()
+            Else
+                Try Audio.SimulateUnplugAll()
             End If
+        ElseIf what == 24 && random.Int(10) == 0
+            // A Flip, which makes a lost device again on the default output.
+            Flip(False)
         Else
             Sleep(100.Microseconds)
         End If

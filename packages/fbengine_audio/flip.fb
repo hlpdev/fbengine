@@ -1,17 +1,19 @@
-// What follows what each frame: one of Frame.OnFlip's hooks, which moves the Listener, then the
-// Emitters, so each Emitter's Doppler effect is from where the Listener is now.
+// fbengine_audio's work at each Flip, in one of Frame.OnFlip's hooks: a device whose output was lost
+// is made again on the default output, then the Listener moves, then the Emitters, so each
+// Emitter's Doppler effect is from where the Listener is now.
 
 Import std.core
 Import std.math
 Import fbengine
+Import "./c/fbe_audio"
 
 /// What moves the Listener, and the Emitters, each frame, once something follows.
 Package Global followListener: (Func())? = Null
 Package Global followEmitters: (Func())? = Null
 Global hooked = False
 
-/// Has Flip move what follows from now on, once.
-@MainThread Package Function StartFollowing()
+/// Has each Flip do fbengine_audio's work from now on, once.
+@MainThread Package Function HookFlip()
     If hooked Then Return
     hooked = True
     Frame.OnFlip(EachFrame)
@@ -28,6 +30,7 @@ Package Function Moved(last: Vec3, now: Vec3): Vec3
 End Function
 
 Function EachFrame()
+    fbe_audio_recover()
     Local listener = followListener
     If listener != Null Then listener()
     Local emitters = followEmitters

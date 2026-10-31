@@ -24,8 +24,9 @@ decoded as they play by `Sound.Stream`, for music. A crossfade is one channel's 
 next one's `Play(fadeIn: ...)`.
 
 `Audio.Start` plays on the OS's default output, which it follows when that changes, or on one of
-`Audio.Outputs(AudioDevice.DEFAULT)` by name, as a game's options let a player pick. `Audio.Lost()` says when the
-output was unplugged, so a game can start again on another.
+`Audio.Outputs(AudioDevice.DEFAULT)` by name, as a game's options let a player pick. When that
+output's unplugged, the next `Flip` moves the mix to the default one, and `Audio.Lost()` says so
+for a frame.
 
 A `Bus` groups channels under one volume, low-pass, and reverb, inside another bus or the whole
 mix: music, effects, and voices at the volumes a player sets, or sounds muffled behind a wall.

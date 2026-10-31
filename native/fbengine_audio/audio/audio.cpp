@@ -53,6 +53,12 @@ struct mixer_t {
     bool has_engine = false;
     std::int32_t kind = -1;
     std::string device_name;
+    /// The seconds Start asked the device to mix at a time, which a device made again keeps.
+    double period = 0.0;
+    /// The main thread's: whether the last fbe_audio_recover made the device again, which keeps it
+    /// lost until the next, and whether fbe_audio_simulate unplugged every output.
+    bool fell_back = false;
+    bool unplugged_all = false;
     std::atomic<std::int64_t> frames = 0;
 
     mixer_t() = default;
@@ -120,14 +126,9 @@ struct opening_t {
     double period = 0.0;
 };
 
-/// Opens `made`'s device, on the null backend or the OS's own; false if it won't open, as on a
-/// machine with no output for the OS's, or with no output of the name asked for.
-bool open_device(mixer_t& made, std::int32_t kind, const opening_t& how) {
-    if (!open_context(made.context, kind)) {
-        return false;
-    }
-    made.has_context = true;
-
+/// Opens `made`'s device on its context; false if it won't open, as on a machine with no output for
+/// the OS's, or with no output of the name asked for.
+bool open_device(mixer_t& made, const opening_t& how) {
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     config.playback.format = ma_format_f32;
     config.playback.channels = static_cast<ma_uint32>(how.channels);
@@ -233,9 +234,14 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
             .output = output != nullptr ? output : "",
             .period = period,
         };
-        if (!open_device(*made, device, how)) {
+        if (!open_context(made->context, device)) {
             return false;
         }
+        made->has_context = true;
+        if (!open_device(*made, how)) {
+            return false;
+        }
+        made->period = period;
         config.pDevice = &made->device;
         config.noAutoStart = MA_TRUE;
     }
@@ -323,26 +329,64 @@ FBE_AUDIO_API const char* fbe_audio_device_name(void) {
 }
 
 FBE_AUDIO_API bool fbe_audio_lost(void) {
-    return mixer != nullptr && mixer->has_device &&
+    if (mixer == nullptr || mixer->kind == no_device) {
+        return false;
+    }
+    return !mixer->has_device || mixer->fell_back ||
            ma_device_get_state(&mixer->device) != ma_device_state_started;
 }
 
+FBE_AUDIO_API void fbe_audio_recover(void) {
+    if (mixer == nullptr || mixer->kind == no_device) {
+        return;
+    }
+    mixer->fell_back = false;
+    if (mixer->has_device) {
+        // Started, or starting or stopping on one of miniaudio's threads, it's left as it is. A
+        // stopped one stays where it is, so the engine's pointer to it holds.
+        if (ma_device_get_state(&mixer->device) != ma_device_state_stopped) {
+            return;
+        }
+        ma_device_uninit(&mixer->device);
+        mixer->has_device = false;
+        mixer->device_name.clear();
+    }
+    if (mixer->unplugged_all) {
+        return;
+    }
+    const opening_t how = {
+        .sample_rate = static_cast<std::int32_t>(ma_engine_get_sample_rate(&mixer->engine)),
+        .channels = static_cast<std::int32_t>(ma_engine_get_channels(&mixer->engine)),
+        .output = "",
+        .period = mixer->period,
+    };
+    // One that won't open or start is tried again at the next flip.
+    if (open_device(*mixer, how) && ma_device_start(&mixer->device) == MA_SUCCESS) {
+        mixer->fell_back = true;
+    }
+}
+
 FBE_AUDIO_API bool fbe_audio_simulate(int32_t event) {
-    if (mixer == nullptr || !mixer->has_device) {
+    if (mixer == nullptr || mixer->kind == no_device) {
         return fbe::audio::fail("only a device's output is unplugged; start the audio on one");
     }
-    // As miniaudio does when the OS says the output's gone, and when it says it's back.
+    // As miniaudio does when the OS says an output's gone: it stops the device. When it says one's
+    // back, miniaudio starts only a default output again, so fbe_audio_recover makes it again.
     switch (event) {
+    case FBE_AUDIO_SIMULATE_UNPLUG_ALL:
+        mixer->unplugged_all = true;
+        [[fallthrough]];
     case FBE_AUDIO_SIMULATE_UNPLUG: {
+        if (!mixer->has_device) {
+            return true;
+        }
         const ma_result stopped = ma_device_stop(&mixer->device);
         return stopped == MA_SUCCESS ||
                fbe::audio::fail_ma("couldn't stop the audio device", stopped);
     }
-    case FBE_AUDIO_SIMULATE_PLUG_IN: {
-        const ma_result started = ma_device_start(&mixer->device);
-        return started == MA_SUCCESS ||
-               fbe::audio::fail_ma("couldn't start the audio device", started);
-    }
+    case FBE_AUDIO_SIMULATE_PLUG_IN:
+        mixer->unplugged_all = false;
+        return true;
     default:
         return fbe::audio::fail(std::format("there's no audio event {}", event));
     }

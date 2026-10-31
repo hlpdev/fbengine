@@ -29,9 +29,11 @@ extern "C" {
 #endif
 
 // What fbe_audio_simulate does to the device, as the OS would: its output unplugged, which stops
-// it, and plugged back in, which starts it again.
-#define FBE_AUDIO_SIMULATE_UNPLUG  0
-#define FBE_AUDIO_SIMULATE_PLUG_IN 1
+// it; every output plugged back in, so fbe_audio_recover has the default to fall back to; and every
+// output unplugged, so it has none until they're plugged back in.
+#define FBE_AUDIO_SIMULATE_UNPLUG     0
+#define FBE_AUDIO_SIMULATE_PLUG_IN    1
+#define FBE_AUDIO_SIMULATE_UNPLUG_ALL 2
 
 // The version of fbengine this DLL is, like "0.1.0", which is its packages'.
 FBE_AUDIO_API const char* fbe_audio_version(void);
@@ -62,13 +64,17 @@ FBE_AUDIO_API const char* fbe_audio_output_name(int32_t index);
 FBE_AUDIO_API double fbe_audio_period(void);
 // What fbe_audio_start was given for its device, -1 when it's stopped.
 FBE_AUDIO_API int32_t fbe_audio_device(void);
-// The device's name, "" when it's stopped or has none.
+// The name of the output the device plays on, "" when it's stopped or has none.
 FBE_AUDIO_API const char* fbe_audio_device_name(void);
 // Whether the device stopped on its own, though the mix is started, as one does when its output's
-// unplugged: nothing's mixed, and channels played meanwhile wait to start, until it starts again,
-// as miniaudio starts it on Windows when the output's plugged back in. False when it's stopped or
-// there's no device.
+// unplugged, or fbe_audio_recover made it again since the flip before; nothing's mixed while it's
+// stopped. False when the mix is stopped or has no device.
 FBE_AUDIO_API bool fbe_audio_lost(void);
+// fbengine_audio's work at each flip: a device that stopped on its own is made again on the
+// default output, at the mix's rate and channels and the period it was started with, and the
+// channels go on where they were. One that won't open, as with no output at all, is tried again
+// at the next.
+FBE_AUDIO_API void fbe_audio_recover(void);
 // Does one of the FBE_AUDIO_SIMULATE_ events to the device; false when the mix is stopped or has
 // no device, or for another event.
 FBE_AUDIO_API bool fbe_audio_simulate(int32_t event);
