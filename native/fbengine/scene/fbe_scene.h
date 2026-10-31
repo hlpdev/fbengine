@@ -476,6 +476,31 @@ FBE_API uint64_t fbe_mesh_material(uint64_t mesh);
 FBE_API bool fbe_mesh_set_tint(uint64_t mesh, float r, float g, float b, float a);
 FBE_API bool fbe_mesh_tint(uint64_t mesh, fbe_color_t* tint);
 
+// Visibility. Whether a camera might see an entity, in a target of this size: a mesh's box of its
+// geometry, turned and scaled with it, or another entity's position, against the six planes of
+// the camera's view, near and far included; in view unless the whole box is behind one plane, so
+// something just past a corner of the view can count, as culling allows. Only the frustum
+// counts: nothing in front hides it, and hiding the entity doesn't. 1 in view, 0 not, -1 for a
+// viewport with no size.
+FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, float target_height,
+                                          uint64_t entity);
+FBE_API int32_t fbe_camera_point_in_view(uint64_t camera, float target_width, float target_height,
+                                         float x, float y, float z);
+FBE_API int32_t fbe_camera_box_in_view(uint64_t camera, float target_width, float target_height,
+                                       const fbe_aabb_t* box);
+// The box in the world around an entity: a mesh's geometry's, turned and scaled with it, or its
+// position, as a box of no size.
+FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds);
+// Whether an entity blocks line of sight: a mesh by its triangles, from either side, while it's
+// showing. No entity blocks it at first.
+FBE_API bool fbe_entity_set_blocks_sight(uint64_t entity, bool blocks);
+FBE_API bool fbe_entity_blocks_sight(uint64_t entity);
+// Whether nothing that blocks sight in its World is between an entity's position and a point,
+// or another entity's position; the two themselves don't block it. 1 if it can see, 0 if not,
+// -1 for a freed entity.
+FBE_API int32_t fbe_entity_can_see_point(uint64_t entity, float x, float y, float z);
+FBE_API int32_t fbe_entity_can_see(uint64_t entity, uint64_t target);
+
 // Copies an entity and everything under it, as the last child of `parent`, or at the top of
 // `world` when `parent` is 0; each copy has its original's name, transform, and settings, and
 // shares its geometry. 0 if it can't be made.

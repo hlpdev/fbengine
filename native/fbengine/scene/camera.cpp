@@ -7,7 +7,9 @@
 #include "scene/scene.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <format>
 #include <numbers>
@@ -64,6 +66,44 @@ bool valid_range(float nearest, float farthest) {
 
 fbe_vec3_t from_vec(vec3_t v) {
     return { .x = v.x, .y = v.y, .z = v.z };
+}
+
+/// Whether some of the points might be in view: not all of them behind one of the view's six
+/// planes, near and far included.
+bool in_view(const camera_t& camera, const view_t& view, const vec3_t* points, std::size_t count) {
+    float half_width = 0.0F;
+    float half_height = 0.0F;
+    half_extents(camera, view, half_width, half_height);
+    const bool perspective = camera.projection == FBE_PROJECTION_PERSPECTIVE;
+    const quat_t back = inverse(view.rotation);
+    // How far in front of each plane each point is, by plane: near, far, left, right, bottom, top.
+    std::array<bool, 6> all_behind{ true, true, true, true, true, true };
+    for (std::size_t i = 0; i < count; ++i) {
+        const vec3_t offset = points[i] - view.position;
+        const vec3_t seen = back * offset;
+        const float depth = -seen.z;
+        const float across = perspective ? half_width * depth : half_width;
+        const float up = perspective ? half_height * depth : half_height;
+        const std::array<float, 6> in_front{
+            depth - camera.nearest,
+            camera.farthest - depth,
+            seen.x + across,
+            across - seen.x,
+            seen.y + up,
+            up - seen.y,
+        };
+        for (std::size_t plane = 0; plane < 6; ++plane) {
+            all_behind[plane] = all_behind[plane] && in_front[plane] < 0.0F;
+        }
+    }
+    return std::ranges::none_of(all_behind, [](bool behind) { return behind; });
+}
+
+/// The view a handle's camera has in a target, or false with fbe_error saying why.
+bool camera_view(std::uint64_t handle, float target_width, float target_height,
+                 const camera_t*& camera, view_t& view) {
+    camera = camera_of(handle);
+    return camera != nullptr && view_of(*camera, target_width, target_height, view);
 }
 
 } // namespace
@@ -382,6 +422,66 @@ FBE_API int32_t fbe_camera_project(uint64_t camera, float target_width, float ta
                                 view.y + ((1.0F - up) * 0.5F * view.height), depth);
     *projected = fbe::scene::from_vec(at);
     return 1;
+}
+
+FBE_API int32_t fbe_camera_point_in_view(uint64_t camera, float target_width, float target_height,
+                                         float x, float y, float z) {
+    const camera_t* found = nullptr;
+    fbe::scene::view_t view;
+    if (!fbe::scene::camera_view(camera, target_width, target_height, found, view)) {
+        return -1;
+    }
+    const fbe::scene::vec3_t point(x, y, z);
+    return fbe::scene::in_view(*found, view, &point, 1) ? 1 : 0;
+}
+
+FBE_API int32_t fbe_camera_box_in_view(uint64_t camera, float target_width, float target_height,
+                                       const fbe_aabb_t* box) {
+    const camera_t* found = nullptr;
+    fbe::scene::view_t view;
+    if (!fbe::scene::camera_view(camera, target_width, target_height, found, view)) {
+        return -1;
+    }
+    std::array<fbe::scene::vec3_t, 8> corners;
+    for (std::size_t corner = 0; corner < 8; ++corner) {
+        corners[corner] = { (corner & 1U) != 0 ? box->max.x : box->min.x,
+                            (corner & 2U) != 0 ? box->max.y : box->min.y,
+                            (corner & 4U) != 0 ? box->max.z : box->min.z };
+    }
+    return fbe::scene::in_view(*found, view, corners.data(), corners.size()) ? 1 : 0;
+}
+
+FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, float target_height,
+                                          uint64_t entity) {
+    const camera_t* found = nullptr;
+    fbe::scene::view_t view;
+    if (!fbe::scene::camera_view(camera, target_width, target_height, found, view)) {
+        return -1;
+    }
+    const std::uint32_t slot = fbe::scene::entity_slot(entity);
+    if (slot == fbe::scene::none) {
+        return -1;
+    }
+    const fbe::scene::scene_t& s = fbe::scene::scene();
+    fbe::scene::update_world(slot);
+    const fbe::scene::mat4_t& m = s.entities.world_matrix[slot];
+    if (s.entities.kind[slot] != FBE_ENTITY_MESH ||
+        s.meshes[s.entities.component[slot]].geometry == fbe::scene::none) {
+        const fbe::scene::vec3_t at = m.axis(3);
+        return fbe::scene::in_view(*found, view, &at, 1) ? 1 : 0;
+    }
+    // The box's corners turned and scaled with the mesh, not the box around them.
+    fbe::scene::vec3_t min;
+    fbe::scene::vec3_t max;
+    fbe::scene::geometry_bounds(s.meshes[s.entities.component[slot]].geometry, min, max);
+    std::array<fbe::scene::vec3_t, 8> corners;
+    for (std::size_t corner = 0; corner < 8; ++corner) {
+        const fbe::scene::vec3_t local((corner & 1U) != 0 ? max.x : min.x,
+                                       (corner & 2U) != 0 ? max.y : min.y,
+                                       (corner & 4U) != 0 ? max.z : min.z);
+        corners[corner] = fbe::scene::transform_point(m, local);
+    }
+    return fbe::scene::in_view(*found, view, corners.data(), corners.size()) ? 1 : 0;
 }
 
 FBE_API bool fbe_camera_unproject(uint64_t camera, float target_width, float target_height, float x,

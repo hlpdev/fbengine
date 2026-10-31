@@ -202,6 +202,15 @@ void geometry_bounds(std::uint32_t geometry, vec3_t& min, vec3_t& max) {
     max = found.bounds_max;
 }
 
+const bvh_t& geometry_tree(std::uint32_t geometry) {
+    geometry_t& found = scene().geometries[geometry];
+    if (found.tree_version != found.version) {
+        found.tree.build(found.surfaces);
+        found.tree_version = found.version;
+    }
+    return found.tree;
+}
+
 void add_mesh(std::uint32_t entity) {
     scene_t& s = scene();
     s.entities.component[entity] = static_cast<std::uint32_t>(s.meshes.size());

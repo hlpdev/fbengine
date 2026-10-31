@@ -332,6 +332,6 @@ Public Final Class Camera Extends Entity
 End Class
 
 /// The size of what cameras draw to: the window, in its units.
-Function TargetSize(): Vec2 => Vec2(Window.Width() As Float, Window.Height() As Float)
+Package Function TargetSize(): Vec2 => Vec2(Window.Width() As Float, Window.Height() As Float)
 
 Function FrustumOf(m: Mat4): Frustum => Frustum.FromMatrix(m)
