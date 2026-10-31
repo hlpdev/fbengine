@@ -1,7 +1,8 @@
-// Input's cases that need a process of their own, which ctest runs by name and checks against
-// what they print: what panics, and what's set before the video starts.
+// Input's and 2D collisions' cases that need a process of their own, which ctest runs by name and
+// checks against what they print: what panics, and what's set before the video starts.
 
 Import std.core
+Import std.image
 Import std.math
 Import std.os
 Import fbengine
@@ -80,6 +81,16 @@ Function Main() Throws GraphicsError, InputError
             ActionSet().Add("jump").Bind(Binding(BindingKind.KEY, 9999, 1.0))
         Case "bind-y-infinite"
             ActionSet().Add("look").BindY(Binding(BindingKind.MOUSE_AXIS, 0, Inf))
+        Case "mask-threshold"
+            Mask.FromImage(Image(2, 2), 0)
+        Case "mask-region-outside"
+            Mask.FromImage(Image(4, 4), 1, Rect(2.0, 0.0, 3.0, 4.0))
+        Case "mask-region-fraction"
+            Mask.FromImage(Image(4, 4), 1, Rect(0.5, 0.0, 2.0, 2.0))
+        Case "mask-pixels-short"
+            Mask.FromPixels([0, 0, 0, 255], 2, 1)
+        Case "mask-empty-cell"
+            Mask.Frames(Image(4, 4), 0, 4)
         Case "replace-overflows"
             Local look = ActionSet().Add("look")
             look.Bind(Binding.OfMouseAxis(MouseAxis.X, 1e30))
