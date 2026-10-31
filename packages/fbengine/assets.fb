@@ -38,7 +38,7 @@ End Struct
 /// Expect((Try Assets.ReadText("res://Config\\Settings.INI")) == "fov = 74")
 /// Expect(Assets.Unmount("res://config"))
 /// ```
-Public Class Assets
+Public Final Class Assets
     Private New()
     End New
 
