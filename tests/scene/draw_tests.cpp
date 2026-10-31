@@ -237,3 +237,52 @@ TEST_CASE("a geometry's cull box culls its meshes instead of its bounds", "[rend
     };
     CHECK_FALSE(fbe_geometry_set_cull_box(geometry, &backward));
 }
+
+TEST_CASE("a camera draws a terrain its grid shows it, and a plane unless it's under it",
+          "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    fbe_camera_set_range(camera, 0.1F, 100.0F);
+    // A grid 10 across, from x -5 to 5 and z -20 to -10, in a material, tinted.
+    const std::uint64_t terrain = fbe_entity_create(world.handle, 0, FBE_ENTITY_TERRAIN);
+    REQUIRE(fbe_terrain_set_size(terrain, 10));
+    fbe_entity_set_position(terrain, -5.0F, -2.0F, -20.0F, FBE_SPACE_WORLD);
+    const std::uint64_t material = fbe_material_create();
+    fbe_terrain_set_material(terrain, material);
+    fbe_terrain_set_tint(terrain, 0.5F, 1.0F, 1.0F, 1.0F);
+    std::vector<fbe_draw_t> found = draws(camera);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].entity == terrain);
+    CHECK(found[0].kind == FBE_ENTITY_TERRAIN);
+    CHECK(found[0].geometry == 0);
+    CHECK(found[0].surface == -1);
+    CHECK(found[0].material == material);
+    CHECK(found[0].blend == FBE_BLEND_OPAQUE);
+    CHECK(near(found[0].color[0], 0.5F));
+    CHECK(near(found[0].matrix[14], -20.0F));
+    // Its depth is its grid's middle's, not its corner's.
+    CHECK(near(found[0].depth, 15.0F));
+    // Its corner far off to the side, its grid still across the view: still drawn.
+    REQUIRE(fbe_terrain_set_size(terrain, 200));
+    fbe_entity_set_position(terrain, -150.0F, -2.0F, -60.0F, FBE_SPACE_WORLD);
+    CHECK(draws(camera).size() == 1);
+    // All of it behind the camera, or with no alpha left: none.
+    fbe_entity_set_position(terrain, -100.0F, -2.0F, 1.0F, FBE_SPACE_WORLD);
+    CHECK(draws(camera).empty());
+    fbe_entity_set_position(terrain, -5.0F, -2.0F, -20.0F, FBE_SPACE_WORLD);
+    fbe_terrain_set_tint(terrain, 1.0F, 1.0F, 1.0F, 0.0F);
+    CHECK(draws(camera).empty());
+    fbe_material_release(material);
+    // A ground plane is drawn from above it, but not with the whole view under it.
+    const test_world_t open;
+    const std::uint64_t below = fbe_entity_create(open.handle, 0, FBE_ENTITY_CAMERA);
+    fbe_camera_set_range(below, 0.1F, 50.0F);
+    const std::uint64_t ground = fbe_entity_create(open.handle, 0, FBE_ENTITY_PLANE);
+    fbe_entity_set_rotation(below, -0.70710678F, 0.0F, 0.0F, 0.70710678F, FBE_SPACE_WORLD);
+    fbe_entity_set_position(below, 0.0F, 5.0F, 0.0F, FBE_SPACE_WORLD);
+    found = draws(below);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].entity == ground);
+    fbe_entity_set_position(below, 0.0F, -10.0F, 0.0F, FBE_SPACE_WORLD);
+    CHECK(draws(below).empty());
+}
