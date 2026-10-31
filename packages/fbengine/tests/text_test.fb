@@ -1,0 +1,164 @@
+// Fonts and measuring, on HarfBuzz's own test fonts, which ctest names in FBENGINE_TEST_FONTS: Open
+// Sans, Noto Sans Bold, and Mada, an Arabic one.
+
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+
+Function Near(a: Float32, b: Float32): Bool => Abs(a - b) < 0.01
+
+// The folder of test fonts, or "" when the tests run without it.
+Function Fonts(): String => Env.Get("FBENGINE_TEST_FONTS") ?? ""
+
+Function Opened(name: String, size: Float32, style: FontStyle? = Null): Font Throws IOError
+    Return Try Font.Load("{Fonts()}/{name}", size, style)
+End Function
+
+@Test
+Function AFontsMeasuresAreItsFacesAtItsSize() Throws IOError
+    If Fonts() == "" Then Return
+    Local font = Try Opened("OpenSans-Regular.ttf", 20.0)
+    Expect(font.Family() == "Open Sans" && font.StyleName() == "Regular")
+    Expect(font.Size() == 20.0)
+    Expect(font.Ascent() > 0.0 && font.Descent() > 0.0 && font.LineGap() >= 0.0)
+    Expect(Near(font.LineHeight(), font.Ascent() + font.Descent() + font.LineGap()))
+    Expect(font.UnderlinePosition() > 0.0 && font.UnderlineThickness() > 0.0)
+    Expect("{font}" == "Open Sans Regular at 20")
+    // A size twice as big is twice as wide, and as high.
+    Local big = font.Sized(40.0)
+    Expect(Near(big.Width("Hello") / font.Width("Hello"), 2.0))
+    Expect(Near(big.LineHeight(), font.LineHeight() * 2.0))
+    Expect(big.Family() == "Open Sans")
+End Function
+
+@Test
+Function TextsSizeIsItsWidestLineByItsLines() Throws IOError
+    If Fonts() == "" Then Return
+    Local font = Try Opened("OpenSans-Regular.ttf", 16.0)
+    Local hello = font.Measure("Hello")
+    Expect(hello.x > 0.0 && Near(hello.y, font.LineHeight()))
+    Local two = font.Measure("Hello\nHi")
+    Expect(Near(two.x, hello.x) && Near(two.y, font.LineHeight() * 2.0))
+    Expect(Near(font.Measure("Hi\r\nHello").x, hello.x))
+    Expect(font.Width("") == 0.0 && Near(font.Measure("").y, font.LineHeight()))
+    // Shaped: a kerned pair is narrower than its letters apart.
+    Expect(font.Width("AV") < font.Width("A") + font.Width("V"))
+End Function
+
+@Test
+Function AStyleAFaceIsntIsMade() Throws IOError
+    If Fonts() == "" Then Return
+    Local regular = Try Opened("OpenSans-Regular.ttf", 20.0)
+    Local bold = regular.Sized(20.0, FontStyle(True, False, False))
+    Expect(bold.Style().Bold && !bold.Style().Italic)
+    Expect(bold.StyleName() == "Regular")
+    Expect(bold.Width("Hello") > regular.Width("Hello"))
+    // A face that's bold is as wide as it is.
+    Local noto = Try Opened("NotoSans-Bold.ttf", 20.0, FontStyle(True, False, False))
+    Expect(Near(noto.Width("Hello"), noto.Sized(20.0, FontStyle()).Width("Hello")))
+    Local italic = regular.Sized(20.0, FontStyle(False, True, True))
+    Expect(italic.Style().Italic && italic.Style().Underline)
+End Function
+
+@Test
+Function AGlyphAFontHasntIsItsFallbacks() Throws IOError
+    If Fonts() == "" Then Return
+    Local latin = Try Opened("OpenSans-Regular.ttf", 20.0)
+    latin.SetSystemFallback(False)
+    Expect(!latin.SystemFallback())
+    Local arabic = "مرحبا"
+    Expect(latin.Has("Hello") && !latin.Has(arabic))
+    Local mada = Try Opened("Mada-VF.ttf", 40.0)
+    latin.AddFallback(mada)
+    latin.AddFallback(mada)
+    Expect(latin.Fallbacks().Count == 1)
+    Expect(latin.Has("Hello " + arabic))
+    // At the font's size, not the fallback's.
+    Expect(Near(latin.Width(arabic), mada.Sized(20.0).Width(arabic)))
+    latin.ClearFallbacks()
+    Expect(!latin.Has(arabic))
+    // Its sized fonts keep its fallbacks.
+    latin.AddFallback(mada)
+    Expect(latin.Sized(12.0).Has(arabic))
+End Function
+
+@Test
+Function AFontThatCantBeReadThrows() Throws IOError
+    If Fonts() == "" Then Return
+    Local kind: IOErrorKind? = Null
+    Try
+        Try Font.Load("{Fonts()}/no such font.ttf", 12.0)
+    Catch e As IOError
+        kind = e.Kind
+    End Try
+    Expect(kind == IOErrorKind.NOT_FOUND)
+    Local said = ""
+    Try
+        Try Font.FromBytes([1, 2, 3, 4], 12.0)
+    Catch e As IOError
+        said = e.Message
+        kind = e.Kind
+    End Try
+    Expect(kind == IOErrorKind.INVALID_DATA && said == "the font's bytes isn't a font")
+    Try
+        Try Opened("OpenSans-Regular.ttf", 12.0, Null).Sized(12.0)
+        Try Font.Load("{Fonts()}/OpenSans-Regular.ttf", 12.0, Null, 3)
+    Catch e As IOError
+        said = e.Message
+    End Try
+    Expect(said.EndsWith("OpenSans-Regular.ttf has no face 3"))
+    // From its bytes, as a pak file's.
+    Local bytes = Try File.ReadBytes(Path("{Fonts()}/OpenSans-Regular.ttf"))
+    Local font = Try Font.FromBytes(bytes, 12.0)
+    Expect(font.Family() == "Open Sans")
+End Function
+
+@Test
+Function AFolderAddedIsFoundByFamily() Throws IOError
+    If Fonts() == "" Then Return
+    Try Font.AddFolder(Fonts())
+    Expect(Font.Families().Contains("Open Sans"))
+    Local found = Font.System("open sans", 18.0)
+    Expect(found?.Family() == "Open Sans" && found?.Size() == 18.0)
+    // The nearest face, made bold if none is.
+    Local bold = Font.System("Open Sans", 18.0, FontStyle(True, False, False))
+    Expect(bold?.StyleName() == "Regular" && (bold?.Style()?.Bold ?? False))
+    Local mada = Font.System("Mada", 18.0)
+    Expect(mada?.Family() == "Mada")
+    Expect(Font.System("No Such Family At All", 18.0) == Null)
+    Local kind: IOErrorKind? = Null
+    Try
+        Try Font.AddFolder("{Fonts()}/no such folder")
+    Catch e As IOError
+        kind = e.Kind
+    End Try
+    Expect(kind == IOErrorKind.NOT_FOUND)
+End Function
+
+@Test
+Function TheOSsFontsAreFonts()
+    // Whatever the OS has, a default of them, if any, is one of its families.
+    Local ui = Font.SystemUI(14.0)
+    If ui == Null Then Return
+    Expect(ui.Family() != "" && ui.Width("Hello") > 0.0)
+    Expect(Font.Families().Count > 0)
+End Function
+
+@Test
+Function AFreedFontsGone() Throws IOError
+    If Fonts() == "" Then Return
+    Local before = Font.Count()
+    Local font = Try Opened("OpenSans-Regular.ttf", 12.0)
+    Local sized = font.Sized(24.0)
+    Expect(Font.Count() == before + 2)
+    font.Free()
+    font.Free()
+    Expect(Font.Count() == before + 1)
+    Expect("{font}" == "a freed font")
+    // Its other sizes keep the face.
+    Expect(sized.Width("Hello") > 0.0)
+End Function

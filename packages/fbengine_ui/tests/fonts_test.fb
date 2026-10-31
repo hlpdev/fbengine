@@ -1,0 +1,76 @@
+// A Ui's text measured in fbengine's fonts, on HarfBuzz's test fonts, which ctest names in
+// FBENGINE_TEST_FONTS.
+
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import fbengine
+Import fbengine_ui
+
+Function Fonts(): String => Env.Get("FBENGINE_TEST_FONTS") ?? ""
+
+Function Near(a: Float32, b: Float32): Bool => Abs(a - b) < 0.01
+
+Function Shown(root: Node): Ui Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Return ui
+End Function
+
+Function Frame(ui: Ui)
+    Flip()
+    ui.Update()
+End Function
+
+@Test
+Function AUisTextIsMeasuredInItsFonts() Throws GraphicsError, IOError
+    If Fonts() == "" Then Return
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    Local play = Label("Play")
+    Local code = Label("Play")
+    code.SetStyleName("code")
+    root.Add(play)
+    root.Add(code)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local style = ui.CurrentTheme().StyleOf("label")
+    Local estimated = EstimatedText("Play", style)
+    Expect(Near(play.Box().Width, estimated.x + style.Padding.Horizontal()))
+    // A font for every style, at each one's size.
+    Local sans = Try Font.Load("{Fonts()}/OpenSans-Regular.ttf", 10.0)
+    ui.SetFont("", sans)
+    Frame(ui)
+    Local font = ui.FontFor(style)
+    Expect(font?.Size() == style.FontSize && font?.Family() == "Open Sans")
+    Expect(ui.FontFor(style) == font)
+    Local measured = sans.Sized(style.FontSize).Measure("Play")
+    Expect(Near(play.Box().Width, measured.x + style.Padding.Horizontal()))
+    Expect(Near(play.Box().Height, measured.y + style.Padding.Vertical()))
+    // A style's own font, by the name it gives.
+    Local fields = StyleFields()
+    fields.Font = "code"
+    ui.CurrentTheme().SetFields("code", fields)
+    Local mada = Try Font.Load("{Fonts()}/Mada-VF.ttf", 10.0)
+    ui.SetFont("code", mada)
+    Frame(ui)
+    Local coded = ui.CurrentTheme().StyleOf("code")
+    Expect(ui.FontFor(coded)?.Family() == "Mada")
+    Expect(Near(code.Box().Width,
+                mada.Sized(coded.FontSize).Width("Play") + coded.Padding.Horizontal()))
+    // A game's own measuring comes first, and with Null, the fonts again.
+    ui.SetTextMeasure(Function(text: String, each: Style) => Vec2(100.0, 10.0))
+    Frame(ui)
+    Expect(Near(play.Box().Width, 100.0 + style.Padding.Horizontal()))
+    ui.SetTextMeasure(Null)
+    ui.SetFont("", Null)
+    ui.SetFont("code", Null)
+    Frame(ui)
+    Expect(Near(play.Box().Width, estimated.x + style.Padding.Horizontal()))
+    Expect(ui.FontFor(style) == Null)
+End Function

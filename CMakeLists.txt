@@ -30,6 +30,7 @@ include(FetchContent)
 include(cmake/warnings.cmake)
 include(cmake/native.cmake)
 include(cmake/sdl.cmake)
+include(cmake/text.cmake)
 
 add_subdirectory(native/fbengine)
 add_subdirectory(native/fbengine_physics)
