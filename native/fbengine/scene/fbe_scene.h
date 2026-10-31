@@ -98,6 +98,13 @@ extern "C" {
 // Collision groups are 1 to FBE_COLLISION_GROUPS - 1; 0 is none.
 #define FBE_COLLISION_GROUPS 1024
 
+// What picks hit an entity as: nothing; its collision ellipsoid; its collision box; or its mesh's
+// triangles, from their fronts.
+#define FBE_PICK_NONE      0
+#define FBE_PICK_ELLIPSOID 1
+#define FBE_PICK_BOX       2
+#define FBE_PICK_MESH      3
+
 // std.math's Vec3, Quat, and Mat4 as C has them; the matrix is column-major, its columns the
 // axes, then the origin. C has no `using`, so they're typedefs.
 // NOLINTBEGIN(modernize-use-using)
@@ -169,6 +176,19 @@ typedef struct fbe_collision_t {
     int32_t surface;
     int32_t triangle;
 } fbe_collision_t;
+
+// What a pick hit: the entity; where, on its surface, and that surface's normal there, both in
+// the world; how far along the pick, from 0 to 1; and the geometry, surface, and triangle, for a
+// mesh's, else 0 and -1s.
+typedef struct fbe_pick_t {
+    uint64_t entity;
+    fbe_vec3_t point;
+    fbe_vec3_t normal;
+    float time;
+    uint64_t geometry;
+    int32_t surface;
+    int32_t triangle;
+} fbe_pick_t;
 
 // Where an entity is and how it's turned, as the batches give and take them.
 typedef struct fbe_pose_t {
@@ -601,6 +621,21 @@ FBE_API float fbe_world_collision_skin(uint64_t world);
 // Moves every moving entity of the World as its collisions say, from where its last move ended to
 // where it is, and keeps what each touched.
 FBE_API bool fbe_world_collide(uint64_t world);
+
+// Picks. A pick is a line, or a sphere swept along one, from one point to another, which hits the
+// nearest showing entity of its World with a pick mode, as collisions touch it: its ellipsoid grown
+// by the pick's radius, its box, turned and scaled with it, or its mesh's triangles, from their
+// fronts. One starting in what it would hit goes out through it; with a radius, the point is where
+// the sphere touched.
+//
+// What picks hit an entity as, FBE_PICK_NONE at first.
+FBE_API bool fbe_entity_set_pick_mode(uint64_t entity, int32_t mode);
+FBE_API int32_t fbe_entity_pick_mode(uint64_t entity);
+// The nearest hit in a World from `from` to `to` of a sphere of `radius` swept along the line, or
+// the line with 0, never hitting `ignore` (0 for none): 1 with the hit written, 0 for no hit, -1
+// for a freed World or entity, a radius below 0, or a point that isn't finite.
+FBE_API int32_t fbe_world_pick(uint64_t world, const fbe_vec3_t* from, const fbe_vec3_t* to,
+                               float radius, uint64_t ignore, fbe_pick_t* pick);
 
 // Copies an entity and everything under it, as the last child of `parent`, or at the top of
 // `world` when `parent` is 0; each copy has its original's name, transform, and settings, and

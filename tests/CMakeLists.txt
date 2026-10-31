@@ -228,7 +228,7 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.cpp
                scene/camera_tests.cpp scene/light_tests.cpp scene/geometry_tests.cpp
                scene/material_tests.cpp scene/bvh_tests.cpp scene/collision_tests.cpp
-               scene/handles_tests.cpp
+               scene/handles_tests.cpp scene/pick_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
@@ -294,7 +294,10 @@ if(FBENGINE_FB_TESTS)
       "response-group=SetCollisionResponse on a World: group 0 is no group, which collides with nothing"
       "iterations=SetCollisionIterations on a World: a move touches 1 to 64 times, not 0"
       "skin=SetCollisionSkin on a World: a collision skin is 0 to 0.1, not 1"
-      "collide-freed=Collide on a World that was freed")
+      "collide-freed=Collide on a World that was freed"
+      "pick-radius=Pick on the main World: a pick's radius is 0 or more, not -1"
+      "pick-freed=Pick on a Pivot that was freed"
+      "camera-pick-no-window=Pick on a Camera: the camera's viewport has no size")
   foreach(case IN LISTS fbengine_scene_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)

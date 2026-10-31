@@ -1,0 +1,115 @@
+// Picks: lines and swept spheres from a World, ahead of an entity, and under a point of a camera's
+// view, with no GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+Function Near(a: Float, b: Float): Bool => IsClose(a, b, 0.001)
+
+Function Near(a: Vec3, b: Vec3): Bool => IsClose(a, b, 0.001)
+
+// A floor 20 across at y = 0, facing up, picked by its triangles.
+Function Floor(): Mesh
+    Local floor = Mesh(Geometry.Plane(4))
+    floor.SetScale(Vec3(10, 1, 10))
+    floor.SetPickMode(PickMode.MESH)
+    Return floor
+End Function
+
+@Test
+Function AWorldsPickFindsTheNearestHit()
+    Local world = Fresh()
+    Defer world.Free()
+    Local floor = Floor()
+    Local ball = Pivot()
+    ball.SetPosition(Vec3(2, 1, 0))
+    ball.SetCollisionRadius(0.5)
+    ball.SetPickMode(PickMode.ELLIPSOID)
+    Local down = world.Pick(Vec3(1, 5, 3), Vec3(1, -5, 3))
+    If down == Null
+        Fail("the floor wasn't hit")
+        Return
+    End If
+    Expect(down.Entity == floor)
+    Expect(Near(down.Point, Vec3(1, 0, 3)) && Near(down.Normal, Vec3(0, 1, 0)))
+    Expect(Near(down.Time, 0.5))
+    Expect(down.Surface == floor.Geometry()?.Surface(0) && down.Triangle >= 0)
+    // The ball is nearer.
+    Local over = world.Pick(Vec3(2, 5, 0), Vec3(2, -5, 0))
+    Expect(over?.Entity == ball && Near(over?.Point ?? Vec3.Zero(), Vec3(2, 1.5, 0)))
+    Expect(over?.Surface == Null && over?.Triangle == -1)
+    // From under the floor, a line goes through it; a sphere swept past the ball touches it.
+    Expect(world.Pick(Vec3(1, -5, 3), Vec3(1, 5, 3)) == Null)
+    Expect(world.Pick(Vec3(2.8, 5, 0), Vec3(2.8, 1, 0)) == Null)
+    Expect(world.Pick(Vec3(2.8, 5, 0), Vec3(2.8, 1, 0), 0.5)?.Entity == ball)
+End Function
+
+@Test
+Function PickModesComeBackAndCopy()
+    Local world = Fresh()
+    Defer world.Free()
+    Local crate = Pivot()
+    Expect(crate.PickMode() == PickMode.NONE)
+    crate.SetPickMode(PickMode.BOX)
+    crate.SetCollisionBox(AABB(Vec3(-1, 0, -1), Vec3(1, 2, 1)))
+    Expect(crate.PickMode() == PickMode.BOX)
+    Local copy = crate.Copy()
+    Expect(copy.PickMode() == PickMode.BOX)
+    copy.SetPosition(Vec3(10, 0, 0))
+    Expect(world.Pick(Vec3(10, 5, 0), Vec3(10, -5, 0))?.Entity == copy)
+    Expect(Near(world.Pick(Vec3(0, 5, 0), Vec3(0, -5, 0))?.Point?.y ?? 0, 2))
+    // Moved, hidden, or freed, a pick follows it.
+    crate.SetPosition(Vec3(0, -10, 0))
+    Expect(world.Pick(Vec3(0, 5, 0), Vec3(0, -5, 0)) == Null)
+    copy.Hide()
+    Expect(world.Pick(Vec3(10, 5, 0), Vec3(10, -5, 0)) == Null)
+    copy.Show()
+    copy.Free()
+    Expect(world.Pick(Vec3(10, 5, 0), Vec3(10, -5, 0)) == Null)
+End Function
+
+@Test
+Function AnEntityPicksAheadButNeverItself()
+    Local world = Fresh()
+    Defer world.Free()
+    Local looker = Pivot()
+    looker.SetPickMode(PickMode.ELLIPSOID)
+    looker.SetCollisionRadius(0.5)
+    Local target = Pivot()
+    target.SetPosition(Vec3(5, 0, 0))
+    target.SetPickMode(PickMode.ELLIPSOID)
+    target.SetCollisionRadius(0.5)
+    // Forward is -Z: nothing there.
+    Expect(looker.Pick(10) == Null)
+    looker.PointAt(target)
+    Local seen = looker.Pick(10)
+    Expect(seen?.Entity == target && Near(seen?.Time ?? 0, 0.45))
+    Expect(looker.Pick(4) == Null)
+    Expect(looker.Pick(4, 0.6)?.Entity == target)
+End Function
+
+@Test
+Function ACameraPicksWhatsUnderAPointOfItsView()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Camera()
+    camera.SetViewport(Rect(0, 0, 1600, 900))
+    Local cube = Mesh(Geometry.Cube())
+    cube.SetPosition(Vec3(0, 0, -10))
+    cube.SetPickMode(PickMode.MESH)
+    Local middle = camera.Pick(Vec2(800, 450))
+    Expect(middle?.Entity == cube && Near(middle?.Point ?? Vec3.Zero(), Vec3(0, 0, -9)))
+    Expect(Near(middle?.Normal ?? Vec3.Zero(), Vec3(0, 0, 1)))
+    Expect(camera.Pick(Vec2(10, 10)) == Null)
+    // Turned away, it sees nothing.
+    camera.Turn(0, Deg(180), 0)
+    Expect(camera.Pick(Vec2(800, 450)) == Null)
+End Function

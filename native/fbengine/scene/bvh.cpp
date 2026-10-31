@@ -31,36 +31,6 @@ vec3_t greatest(vec3_t a, vec3_t b) {
     return { std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z) };
 }
 
-/// Whether the segment from `a` along `delta` passes through the box anywhere from 0 to `until`.
-bool crosses_box(vec3_t a, vec3_t delta, vec3_t min, vec3_t max, float until) {
-    float enter = 0.0F;
-    float leave = until;
-    const std::array<float, 3> from{ a.x, a.y, a.z };
-    const std::array<float, 3> along{ delta.x, delta.y, delta.z };
-    const std::array<float, 3> low{ min.x, min.y, min.z };
-    const std::array<float, 3> high{ max.x, max.y, max.z };
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        if (along[axis] == 0.0F) {
-            if (from[axis] < low[axis] || from[axis] > high[axis]) {
-                return false;
-            }
-            continue;
-        }
-        const float inverse = 1.0F / along[axis];
-        float t0 = (low[axis] - from[axis]) * inverse;
-        float t1 = (high[axis] - from[axis]) * inverse;
-        if (t0 > t1) {
-            std::swap(t0, t1);
-        }
-        enter = std::fmax(enter, t0);
-        leave = std::fmin(leave, t1);
-        if (enter > leave) {
-            return false;
-        }
-    }
-    return true;
-}
-
 /// Where along the segment from `a` along `delta`, 0 to 1, it crosses the triangle, Moller and
 /// Trumbore's way, or a negative for nowhere; `front` says it met the triangle's front.
 float crosses_triangle(vec3_t a, vec3_t delta, const vec3_t* corners, bool& front) {
@@ -206,13 +176,14 @@ bool bvh_t::nearest(vec3_t a, vec3_t b, bool front_only, segment_hit_t& hit) con
         return false;
     }
     const vec3_t delta = b - a;
+    const segment_t segment(a, delta);
     bool found = false;
     std::vector<std::uint32_t> stack{ 0 };
     while (!stack.empty()) {
         const std::uint32_t at = stack.back();
         stack.pop_back();
         const node_t& node = m_nodes[at];
-        if (!crosses_box(a, delta, node.min, node.max, found ? hit.time : 1.0F)) {
+        if (!crosses_box(segment, node.min, node.max, found ? hit.time : 1.0F)) {
             continue;
         }
         if (node.count == 0) {

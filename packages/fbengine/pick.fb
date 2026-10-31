@@ -1,0 +1,120 @@
+// Picks: lines, and spheres swept along them, that find the nearest entity they hit, as a game
+// finds what's under the mouse, what a player looks at, or the ground under a falling item.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./camera"
+Import "./entity"
+Import "./geometry"
+Import "./transform"
+Import "./world"
+
+/// What picks hit an entity as.
+Public Enum PickMode
+    /// Nothing: picks go through it, as at first.
+    NONE = 0
+    /// Its collision ellipsoid, CollisionRadius, grown by the pick's radius.
+    ELLIPSOID = 1
+    /// Its CollisionBox, turned and scaled with it.
+    BOX = 2
+    /// Its Mesh's triangles, from their fronts.
+    MESH = 3
+End Enum
+
+/// What a pick hit.
+Public Struct Pick Implements Printable
+    /// The entity it hit.
+    Public Field Entity: Entity
+    /// Where it hit, on the entity's surface, in the world; with a radius, where the sphere touched
+    /// it.
+    Public Field Point: Vec3
+    /// The surface's normal there, out of what was hit, in the world.
+    Public Field Normal: Vec3
+    /// How far along the pick it hit, from 0 at its start to 1 at its end.
+    Public Field Time: Float
+    /// The surface hit, for a Mesh's triangles, else Null.
+    Public Field Surface: Surface?
+    /// The triangle hit in that surface, else -1.
+    Public Field Triangle: Int
+
+    Public Method ToString(): String => "Pick of {Entity} at {Point}, facing {Normal}"
+End Struct
+
+/// How picks hit entities. A pick is a line, or a sphere swept along one, from one point to
+/// another, which hits the nearest showing entity of its World with a PickMode, from outside:
+/// one starting in what it would hit goes out through it.
+Extend Entity
+    /// Sets what picks hit the entity as, PickMode.NONE at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetPickMode(mode: PickMode)
+        If !fbe_entity_set_pick_mode(Live("SetPickMode"), mode As Int) Then Failed("SetPickMode")
+    End Method
+
+    /// What picks hit the entity as.
+    @MainThread @PanicsAtCaller
+    Public Method PickMode(): PickMode => fbe_entity_pick_mode(Live("PickMode")) As PickMode
+
+    /// The nearest hit ahead of the entity, from its position along its Forward for `range`, of
+    /// a sphere of `radius`, or a line with 0; the entity itself is never hit. Null for none. A
+    /// radius below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method Pick(range: Float, radius: Float = 0): Pick?
+        Local entity = Live("Pick")
+        Local from = Position(Space.WORLD)
+        Return Picked(World(), Self, from, from + Forward() * range, radius, entity, "Pick")
+    End Method
+End Extend
+
+Extend World
+    /// The nearest hit from `from` to `to` of a sphere of `radius` swept along the line, or the
+    /// line with 0; Null for none. A radius below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method Pick(from: Vec3, to: Vec3, radius: Float = 0): Pick?
+        Return Picked(Self, Null, from, to, radius, 0, "Pick")
+    End Method
+End Extend
+
+Extend Camera
+    /// The nearest hit under a point of the camera's view, in the window's units from its top
+    /// left: from its near plane to its far plane, of a sphere of `radius`, or a line with 0. Null
+    /// for none, and when the viewport has no size. With no window open and no viewport of its
+    /// own, it panics.
+    @MainThread @PanicsAtCaller
+    Public Method Pick(point: Vec2, radius: Float = 0): Pick?
+        Target("Pick")
+        Local start = Unproject(Vec3(point.x, point.y, Near()))
+        Local finish = Unproject(Vec3(point.x, point.y, Far()))
+        If start == Null || finish == Null Then Return Null
+        Return Picked(World(), Self, start, finish, radius, 0, "Pick")
+    End Method
+End Extend
+
+// A pick in a World, never hitting `ignore`, or a panic naming the call on `on`, else the World.
+@PanicsAtCaller
+Function Picked(world: World, on: Entity?, from: Vec3, to: Vec3, radius: Float, ignore: UInt64,
+                call: String): Pick?
+    Local handle = world.Live(call)
+    Local start = fbe_vec3_t(from.x, from.y, from.z)
+    Local finish = fbe_vec3_t(to.x, to.y, to.z)
+    Local found = fbe_pick_t(0, fbe_vec3_t(0, 0, 0), fbe_vec3_t(0, 0, 0), 0, 0, 0, 0)
+    Local done = 0
+    Unsafe
+        done = fbe_world_pick(handle, AddressOf(start), AddressOf(finish), radius, ignore,
+                              AddressOf(found))
+    End Unsafe
+    If done < 0
+        If on != Null Then on.Failed(call) Else world.Failed(call)
+    End If
+    If done == 0 Then Return Null
+    Local entity = EntityOf(found.entity)
+    If entity == Null Then Return Null
+    Local surface: Surface? = Null
+    If found.geometry != 0
+        Local geometry = GeometryOf(found.geometry)
+        If geometry != Null Then surface = geometry.Surface(found.surface)
+    End If
+    Return Pick(entity, VecOf(found.point), VecOf(found.normal), found.time, surface,
+                surface != Null ? found.triangle : -1)
+End Function

@@ -168,6 +168,14 @@ Select arguments[0]
         Material().SetColor(Color(1, 1, 1, 1.5))
     Case "mesh-alpha"
         Mesh(Null).SetAlpha(-1)
+    Case "pick-radius"
+        World.Main().Pick(Vec3(0, 0, 0), Vec3(0, 0, 1), -1)
+    Case "pick-freed"
+        Local picker = Pivot()
+        picker.Free()
+        picker.Pick(1)
+    Case "camera-pick-no-window"
+        Camera().Pick(Vec2(1, 1))
     Default
         Panic("no case {arguments[0]}")
 End Select
