@@ -1,0 +1,260 @@
+// The Ui: a tree of widgets on the screen, laid out in the window, given the frame's input, and
+// styled by their states, once a frame.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./layout"
+Import "./theme"
+Import "./widget"
+
+/// A UI on the screen: a tree, its theme, and the widget the pointer's over, the one holding it,
+/// and the one with the focus. Update, once a frame after Flip, lays it out in the window, gives
+/// its widgets the input the Flip read, and styles each by its state; WantsPointer and
+/// WantsKeys say whether the game should leave the mouse and the keyboard to it.
+Public Final Class Ui
+    Field root: Node
+    Field theme: Theme
+    Field scale: Float32 = 1.0
+    Field measure: Func(String, Style): Vec2
+    Field hovered: Weak<Widget>
+    Field pressed: Weak<Widget>
+    Field focused: Weak<Widget>
+    // Whether this Ui started the window's text input, for its focused widget, so it stops it.
+    Field typing: Bool = False
+
+    /// A Ui of the tree `root`, in `theme`, or Theme.Dark().
+    @MainThread Public New(root: Node, theme: Theme? = Null)
+        Self.root = root
+        Self.theme = theme ?? Theme.Dark()
+        measure = EstimatedText
+    End New
+
+    /// Its tree.
+    @MainThread Public Method Root(): Node => root
+
+    /// Its theme.
+    @MainThread Public Method CurrentTheme(): Theme => theme
+
+    /// Sets its theme, which the next Update styles its widgets by.
+    @MainThread Public Method SetTheme(styles: Theme)
+        theme = styles
+        root.Reflow()
+    End Method
+
+    /// Sets how many of the window's units each of its own is, 1 at first: 2 makes it twice as
+    /// big, as a player's UI scale or a high DPI screen wants. Panics for one not over 0.
+    @MainThread Public Method SetScale(units: Float32)
+        If !(units > 0.0 && IsFinite(units)) Then Panic("Ui.SetScale: a scale is over 0, not {units}")
+        scale = units
+        root.Reflow()
+    End Method
+
+    /// How many of the window's units each of its own is.
+    @MainThread Public Method Scale(): Float32 => scale
+
+    /// Sets how it measures text, in a style's font: fbengine's text, once there's a font, or
+    /// EstimatedText, at first.
+    @MainThread Public Method SetTextMeasure(measured: Func(String, Style): Vec2)
+        measure = measured
+        root.Reflow()
+    End Method
+
+    /// The size `text` takes in `style`'s font.
+    @MainThread Public Method MeasureText(text: String, style: Style): Vec2 => measure(text, style)
+
+    /// The widget the pointer was over at the last Update, or Null.
+    @MainThread Public Method Hovered(): Widget? => hovered
+
+    /// The widget holding the pointer, pressed on and not let go yet, or Null.
+    @MainThread Public Method Pressed(): Widget? => pressed
+
+    /// The widget with the keyboard's and the gamepad's focus, or Null.
+    @MainThread Public Method Focused(): Widget? => focused
+
+    /// Gives `widget` the focus, or takes it from the one that has it with Null; one that can't
+    /// have it, as a label can't or one that's disabled, leaves the focus where it is.
+    @MainThread Public Method Focus(widget: Widget?)
+        If widget != Null && !widget.Focusable() Then Return
+        Local had = focused
+        If had != Null && widget != Null && RefEquals(had, widget) Then Return
+        focused = widget
+        If had != Null Then had.FocusChanged(False)
+        If widget != Null Then widget.FocusChanged(True)
+    End Method
+
+    /// Whether the game should leave the mouse to it: the pointer's over one of its widgets, or
+    /// one's holding it.
+    @MainThread Public Method WantsPointer(): Bool => hovered != Null || pressed != Null
+
+    /// Whether the game should leave the keyboard to it: one of its widgets has the focus.
+    @MainThread Public Method WantsKeys(): Bool => focused != Null
+
+    /// Lays it out in the window, at its scale; gives its widgets the input the last Flip read:
+    /// the pointer to the widget under it or holding it, the wheel to the one under it that uses
+    /// it, and keys and text to the one with the focus; and styles each by what it's doing.
+    @MainThread Public Method Update()
+        Forget(root)
+        Local bounds = Rect(0.0, 0.0, (Window.Width() As Float32) / scale,
+                            (Window.Height() As Float32) / scale)
+        Restyle(root)
+        root.Layout(bounds)
+
+        Local point = Vec2(MouseX() / scale, MouseY() / scale)
+        Local under = WidgetAt(root.NodeAt(point))
+        hovered = under
+        Pointer(point, under)
+        Wheel(under)
+        Keys()
+        Typing()
+
+        Restyle(root)
+        root.Layout(bounds)
+    End Method
+
+    // The pointer's presses, moves, and releases this frame.
+    @MainThread Method Pointer(point: Vec2, under: Widget?)
+        If MouseHit(MouseButton.LEFT)
+            // The widget under it, or the first it's in, that takes it.
+            Local taking: Widget? = Null
+            Local at = under
+            While at != Null && taking == Null
+                If at.Enabled() && at.PointerDown(point) Then taking = at
+                at = WidgetAbove(at)
+            End While
+            pressed = taking
+            // A press focuses what it pressed, or nothing, as a click on the background does.
+            Local focusing: Widget? = taking
+            While focusing != Null && !focusing.Focusable()
+                focusing = WidgetAbove(focusing)
+            End While
+            Focus(focusing)
+        End If
+        Local holding = pressed
+        If holding != Null && (MouseXSpeed() != 0.0 || MouseYSpeed() != 0.0)
+            holding.PointerDrag(point)
+        End If
+        If holding != Null && !MouseDown(MouseButton.LEFT)
+            pressed = Null
+            holding.PointerUp(point, Within(under, holding))
+        End If
+    End Method
+
+    // The wheel's notches, to the widget under the pointer that uses them, or the first it's in.
+    @MainThread Method Wheel(under: Widget?)
+        Local steps = MouseWheelSteps()
+        If steps == 0 Then Return
+        Local at = under
+        While at != Null
+            If at.Enabled() && at.Wheel(steps) Then Return
+            at = WidgetAbove(at)
+        End While
+    End Method
+
+    // The keys typed this frame, and activations, to the widget with the focus.
+    @MainThread Method Keys()
+        Local own = focused
+        If own == Null Then Return
+        If !own.Focusable()
+            Focus(Null)
+            Return
+        End If
+        For key In EditingKeys()
+            // Its presses, then the OS's repeats while it's held, which don't activate.
+            Local presses = KeyHits(key)
+            For time = 1 To KeyTyped(key)
+                Local used = own.KeyTyped(key)
+                If !used && time <= presses && Activates(key) Then own.Activate()
+            End For
+        End For
+        Local text = TextInput()
+        If text != "" Then own.TextTyped(text)
+    End Method
+
+    // Starts the window's text input while the focused widget takes text, and stops it after.
+    @MainThread Method Typing()
+        Local own = focused
+        Local wants = own != Null && own.TakesText()
+        If wants && own != Null
+            If !typing && Window.Open()
+                StartTextInput()
+                typing = True
+            End If
+            Local box = own.Box()
+            If typing
+                SetTextInputArea((box.X * scale) As Int32, (box.Y * scale) As Int32,
+                                 (box.Width * scale) As Int32, (box.Height * scale) As Int32,
+                                 (own.TextCursorX() * scale) As Int32)
+            End If
+        ElseIf typing
+            StopTextInput()
+            typing = False
+        End If
+    End Method
+
+    // Each widget's state and style.
+    @MainThread Method Restyle(node: Node)
+        Local widget = node As? Widget
+        If widget != Null Then widget.Restyle(Self, StateOf(widget))
+        For child In node.Children()
+            Restyle(child)
+        End For
+    End Method
+
+    @MainThread Method StateOf(widget: Widget): WidgetState
+        Local holding = pressed
+        // Held, it's pressed while the pointer's over it, and as it is otherwise when it isn't.
+        If holding != Null && RefEquals(holding, widget) && Within(hovered, widget)
+            Return WidgetState.PRESSED
+        End If
+        If Within(hovered, widget) Then Return WidgetState.HOVERED
+        Local own = focused
+        If own != Null && RefEquals(own, widget) Then Return WidgetState.FOCUSED
+        Return WidgetState.NORMAL
+    End Method
+
+    @MainThread Method Forget(node: Node)
+        Local widget = node As? Widget
+        If widget != Null Then widget.Forget()
+        For child In node.Children()
+            Forget(child)
+        End For
+    End Method
+End Class
+
+// The keys a focused widget is given each time they're typed, the OS's repeats too: editing's,
+// moving's, and activating's.
+Function EditingKeys(): Key[]
+    Return [Key.BACKSPACE, Key.DELETE, Key.LEFT, Key.RIGHT, Key.UP, Key.DOWN, Key.HOME, Key.END,
+            Key.PAGE_UP, Key.PAGE_DOWN, Key.RETURN, Key.KEYPAD_ENTER, Key.TAB, Key.ESCAPE,
+            Key.SPACE, Key.A, Key.C, Key.V, Key.X, Key.Z]
+End Function
+
+// Whether `key`, pressed, activates the focused widget, when it doesn't use the key itself.
+Function Activates(key: Key): Bool
+    Return key == Key.RETURN || key == Key.KEYPAD_ENTER || key == Key.SPACE
+End Function
+
+// The widget `node` is, or the first one it's in; Null for none.
+Function WidgetAt(node: Node?): Widget?
+    Local at = node
+    While at != Null
+        Local widget = at As? Widget
+        If widget != Null Then Return widget
+        at = at.Parent()
+    End While
+    Return Null
+End Function
+
+// The first widget `widget` is in, or Null.
+Function WidgetAbove(widget: Widget): Widget? => WidgetAt(widget.Parent())
+
+// Whether `node` is `widget`, or in it.
+Function Within(node: Node?, widget: Widget): Bool
+    Local at = node
+    While at != Null
+        If RefEquals(at, widget) Then Return True
+        at = at.Parent()
+    End While
+    Return False
+End Function
