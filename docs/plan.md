@@ -236,7 +236,7 @@ that waits on another lane's step builds what it can without it, and the rest on
 | input | E1 steps 3 to 7, then E11 | E11: gpu's E3 step 3 (text) | `native/fbengine/input/`, the input modules, Simulate's input |
 | gpu | E2, then E3, then E6 | E6: scene's E5 | `native/fbengine/gpu/`, `2d/`, `shaders/`; the window's Vulkan surface in `window/`; Flip's present in `frame/` |
 | scene | E4, then E5, then E7 | E5: gpu's E2; E4 step 8: assets' job system | `native/fbengine/scene/` (then `render/`, `anim/`), the scene modules |
-| assets | E8 step 0, the job system; E8 steps 1 to 3; then 4 and 5 | step 2's textures: gpu's E2 step 3; meshes: scene's E4 step 5; steps 4 and 5: FutureBlitz's build step (docs/questions.md) | `native/fbengine/jobs/`, `assets/`, the asset modules; fbengine_tools |
+| assets | E8 step 0, the job system; E8 steps 1 to 3; then 4 and 5 | step 2's textures: gpu's E2 step 3; meshes: scene's E4 step 5; steps 4 and 5: FutureBlitz 1.1's build step | `native/fbengine/jobs/`, `assets/`, the asset modules; fbengine_tools |
 | audio | E9, then E12 | E9 step 4: scene's E4 step 2; E12: gpu's E3 step 2 | `native/fbengine_audio/`, `packages/fbengine_audio/`, then fbengine_video's |
 | physics | E10, then E13 | E10 step 2's meshes: scene's E4 step 5; step 3: scene's E4 step 2; E13: E5, E7, E8, E11 | `native/fbengine_physics/`, `packages/fbengine_physics/`, then the editor |
 
@@ -254,9 +254,10 @@ program that shows it, and is fixed there, in a FutureBlitz release, never worke
 A FutureBlitz lane builds what the engine's lanes found, released as FutureBlitz 1.1
 (the user, 2026-10-31): dependencies with both a path and a version (so fbengine_audio and
 fbengine_physics depend on fbengine and still publish), a built-in `Object` (for `SetData` and
-`Data<T>`), and package tests seeing Package members (so test aids stay Package). The package
-build step E8 needs joins it once the user settles its design. Every change lands with its docs,
-the website's included.
+`Data<T>`), package tests seeing Package members (so test aids stay Package), and a package
+build step, a FutureBlitz program named in project.toml that `fb build` runs before compiling,
+whose output joins the build (E8's cooker and typed references). Every change lands with its
+docs, the website's included.
 
 **Each step**: the lane builds it, `tools/verify.py` passes, it pushes and reports; the
 coordinator reviews it (one review per step, about three reviewers and a skeptic each, as M6's),
