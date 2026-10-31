@@ -118,6 +118,13 @@ Function StateNamed(name: String): WidgetState?
     Return Null
 End Function
 
+// Whether `set` sets no field.
+Function Empty(set: StyleFields): Bool
+    Return set.Background == Null && set.Foreground == Null && set.Border == Null &&
+           set.BorderWidth == Null && set.CornerRadius == Null && set.Padding == Null &&
+           set.Font == Null && set.FontSize == Null
+End Function
+
 Function States(): WidgetState[]
     Return [WidgetState.NORMAL, WidgetState.HOVERED, WidgetState.PRESSED, WidgetState.FOCUSED,
             WidgetState.DISABLED]
@@ -219,6 +226,11 @@ Public Final Class Theme
                                         state: WidgetState = WidgetState.NORMAL)
         CheckName("Theme.SetFields", name)
         CheckFields("Theme.SetFields", set)
+        // Nothing set is no fields of its own, as Load reads an empty table.
+        If Empty(set)
+            fields.Remove(Key(name, state))
+            Return
+        End If
         fields[Key(name, state)] = set
     End Method
 
@@ -353,6 +365,10 @@ Function Key(name: String, state: WidgetState): String => "{name}/{StateName(sta
 Function Kinds(name: String, table: Value, found: (String, Value)[]) Throws UIError
     For key In table.Keys()
         Local value = table[key]
+        If value != Null && value.IsObject && key == StateName(WidgetState.NORMAL)
+            Throw UIError(
+                "{name}.{key}: normal isn't a state; a name's own fields are its normal ones")
+        End If
         If value == Null || !value.IsObject || StateNamed(key) != Null Then Continue
         If FieldNames().Contains(key) Then Throw UIError("{name}'s {key} is a field, not a table")
         Local kind = "{name}.{key}"

@@ -29,8 +29,22 @@ FBE_API int32_t fbe_input_key_typed(int32_t key);
 FBE_API int32_t fbe_input_keys_hit_count(void);
 // The `index`th of them, 0 if there's no such press.
 FBE_API int32_t fbe_input_key_hit_at(int32_t index);
-// Zeroes what the last fbe_frame_flip counted of the keyboard, and its text, until the next;
-// keys held stay held.
+// What a keystroke is: a key pressed, a key that went down again while it was held (the OS's
+// repeat), or a piece of text typed while text input was on.
+#define FBE_INPUT_KEYSTROKE_PRESS  0
+#define FBE_INPUT_KEYSTROKE_REPEAT 1
+#define FBE_INPUT_KEYSTROKE_TEXT   2
+// The keys the last fbe_frame_flip read go down, their repeats included, and the pieces of text it
+// read typed, in one list in the order SDL gave them, the first 1024 of a frame.
+FBE_API int32_t fbe_input_keystroke_count(void);
+// The `index`th's kind, FBE_INPUT_KEYSTROKE_'s; -1 if there's no such keystroke.
+FBE_API int32_t fbe_input_keystroke_kind(int32_t index);
+// Its key, for a press or a repeat; 0 for text, or no such keystroke.
+FBE_API int32_t fbe_input_keystroke_key(int32_t index);
+// Its text, UTF-8, for text; "" for a key, or no such keystroke.
+FBE_API const char* fbe_input_keystroke_text(int32_t index);
+// Zeroes what the last fbe_frame_flip counted of the keyboard, its keystrokes, and its text, until
+// the next; keys held stay held.
 FBE_API void fbe_input_flush_keys(void);
 // The key's name on the keyboard's layout ("Q" for the key left of W on an AZERTY one), or its
 // scancode's when the layout has none; "" for none. It starts SDL's video, which knows the

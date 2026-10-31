@@ -314,3 +314,40 @@ Function WithoutAWindowTextInputIsOff()
     StopTextInput()
     Expect(!TextInputActive())
 End Function
+
+// Keys and text in one list, as the OS gave them.
+@Test
+Function KeystrokesAreKeysAndTextInOrder() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    StartTextInput()
+    Try Simulate.KeyDown(Key.A)
+    Try Simulate.Text("a")
+    Try Simulate.KeyDown(Key.A, True)
+    Try Simulate.Text("a")
+    Try Simulate.KeyUp(Key.A)
+    Try Simulate.PressKey(Key.BACKSPACE)
+    Try Simulate.Text("é")
+    Flip()
+    Local strokes = Keystrokes()
+    Expect(strokes.Count == 6)
+    If strokes.Count < 6 Then Return
+    Expect(strokes[0].Kind == KeystrokeKind.PRESS && strokes[0].Key == Key.A &&
+           strokes[0].Text == "")
+    Expect(strokes[1].Kind == KeystrokeKind.TEXT && strokes[1].Text == "a")
+    Expect(strokes[1].Key == Key.UNKNOWN)
+    Expect(strokes[2].Kind == KeystrokeKind.REPEAT && strokes[2].Key == Key.A)
+    Expect(strokes[3].Kind == KeystrokeKind.TEXT)
+    Expect(strokes[4].Kind == KeystrokeKind.PRESS && strokes[4].Key == Key.BACKSPACE)
+    Expect(strokes[5].Text == "é")
+    // The next Flip's own, and a flush forgets them.
+    Try Simulate.PressKey(Key.B)
+    Flip()
+    Expect(Keystrokes().Count == 1)
+    FlushKeys()
+    Expect(Keystrokes().Count == 0)
+    Flip()
+    Expect(Keystrokes().Count == 0)
+    StopTextInput()
+End Function

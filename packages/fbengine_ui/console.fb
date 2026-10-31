@@ -12,19 +12,36 @@ Import "./layout"
 Import "./scroll"
 Import "./widget"
 
-/// A command a Console runs: its name, what `help` says of it, and what it does with the words
-/// typed after its name, giving what the console prints, "" for nothing.
+/// What a Console runs for a command, as a Class of a game's: given the console, and the words
+/// typed after the command's name, what the console prints, "" for nothing, or an error, whose
+/// message it prints. A lambda can't throw, so a command that can is one of these.
+Public Interface ConsoleCommand
+    Method Run(console: Console, words: String[]): String Throws Error
+End Interface
+
+/// A command a Console runs: its name, what `help` says of it, and what runs it.
 Public Struct Command
     Public Field Name: String
     Public Field Help: String
-    Public Field Run: Func(String[]): String
+    Public Field Runs: ConsoleCommand
 End Struct
+
+// A lambda's command, which catches the errors of what it calls itself.
+Class FuncCommand Implements ConsoleCommand
+    Field run: Func(Console, String[]): String
+
+    New(run: Func(Console, String[]): String)
+        Self.run = run
+    End New
+
+    Public Method Run(console: Console, words: String[]): String => run(console, words)
+End Class
 
 /// A console: a column of what it's printed, the last lines kept, over a line the player types
 /// into, which Return runs as a command, a name then its words, which quotes keep together. Up
 /// and down in the line go through what was run before, and Tab finishes a command's name. Its
 /// own commands are `help`, which lists them, and `clear`. A game shows it, and hides it, as it
-/// likes, as on the grave key: style "console".
+/// likes, on its toggle key (SetToggleKey), which the line doesn't type: style "console".
 Public Class Console Extends Widget
     Field commands: Command[] = []
     Field lines: String[] = []
@@ -34,6 +51,7 @@ Public Class Console Extends Widget
     Field output: Node
     Field view: ScrollView
     Field line: ConsoleLine
+    Field toggle: Key = Key.GRAVE
 
     /// A console with no lines, and its own commands.
     @MainThread Public New(name: String = "")
@@ -46,11 +64,11 @@ Public Class Console Extends Widget
         view.Add(output)
         Add(view)
         Add(line)
-        // Its own commands hold it weakly, as it holds them.
         Register("help", "lists the commands, or says what one does",
-                 Function[Weak Self](words: String[]) => Self?.HelpFor(words) ?? "")
-        Register("clear", "forgets what's been printed", Function[Weak Self](words: String[])
-            Self?.Clear()
+                 Function(console: Console, words: String[]) => console.HelpFor(words))
+        Register("clear", "forgets what's been printed",
+                 Function(console: Console, words: String[]): String
+            console.Clear()
             Return ""
         End Function)
     End New
@@ -58,12 +76,20 @@ Public Class Console Extends Widget
     /// The line the player types into, which a game gives the focus as it opens the console.
     @MainThread Public Method Line(): TextField => line
 
-    /// Adds a command, or puts one in place of the one of its name. Panics for a name that's "",
-    /// or has a space in it.
-    @MainThread Public Method Register(name: String, help: String, run: Func(String[]): String)
+    /// Adds a command, or puts one in place of the one of its name: `run` is given the console,
+    /// so it needn't hold it, and what it holds that holds the console it holds Weak. Panics for a
+    /// name that's "", or has a space in it.
+    @MainThread Public Method Register(name: String, help: String,
+                                       run: Func(Console, String[]): String)
+        Register(name, help, FuncCommand(run))
+    End Method
+
+    /// Adds a command that can throw, or puts it in place of the one of its name. Panics for a
+    /// name that's "", or has a space in it.
+    @MainThread Public Method Register(name: String, help: String, command: ConsoleCommand)
         If name == "" || name.Contains(" ") Then Panic("Console.Register: \"{name}\" isn't a command's name")
         commands.RemoveAll(Function(each: Command) => each.Name == name)
-        commands.Add(Command(name, help, run))
+        commands.Add(Command(name, help, command))
         commands.SortBy<String>(Function(each: Command) => each.Name)
     End Method
 
@@ -126,13 +152,26 @@ Public Class Console Extends Widget
         Local named = words[0]
         For command In commands
             If command.Name == named
-                Local said = command.Run(words[1..words.Count])
-                If said != "" Then Print(said)
+                Try
+                    Local said = Try command.Runs.Run(Self, words[1..words.Count])
+                    If said != "" Then Print(said)
+                Catch e As Error
+                    Print("{named}: {e.Message}")
+                End Try
                 Return
             End If
         End For
         Print("there's no command {named}; help lists them")
     End Method
+
+    /// Sets the key a game opens and closes it on, which its line doesn't type: Key.GRAVE at first,
+    /// the key left of 1, whatever it types on the player's layout.
+    @MainThread Public Method SetToggleKey(key: Key)
+        toggle = key
+    End Method
+
+    /// The key a game opens and closes it on.
+    @MainThread Public Method ToggleKey(): Key => toggle
 
     /// What was run, the oldest first, as up and down go through it.
     @MainThread Public Method History(): String[] => history.Clone()
@@ -172,6 +211,8 @@ End Class
 /// Tab finishes a command's name, or prints those it could be: style "console.field".
 Public Class ConsoleLine Extends TextField
     Field console: Weak<Console>
+    // Whether its console's toggle key went down, so the text it types is dropped.
+    Field toggled: Bool = False
 
     Package New()
         Super.New("", "type a command, or help")
@@ -181,6 +222,10 @@ Public Class ConsoleLine Extends TextField
     @MainThread Public Override Method KeyTyped(key: Key): Bool
         Local own = console
         If own == Null Then Return Super.KeyTyped(key)
+        If key == own.ToggleKey()
+            toggled = True
+            Return True
+        End If
         Select key
             Case Key.UP, Key.DOWN
                 Local recalled = own.Recall(key == Key.UP ? -1 : 1)
@@ -204,6 +249,23 @@ Public Class ConsoleLine Extends TextField
             Default
                 Return Super.KeyTyped(key)
         End Select
+    End Method
+
+    @MainThread Public Override Method TextTyped(typed: String)
+        // The toggle key's own character, whatever the layout makes it.
+        If toggled
+            toggled = False
+            Local clusters = Clusters(typed)
+            If clusters.Count <= 1 Then Return
+            Super.TextTyped(typed.Slice(clusters[0].Length, typed.Length))
+            Return
+        End If
+        Super.TextTyped(typed)
+    End Method
+
+    @MainThread Public Override Method Forget()
+        toggled = False
+        Super.Forget()
     End Method
 End Class
 

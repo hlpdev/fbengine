@@ -856,3 +856,36 @@ Function ALetGoAndAPressInOneFlipAreBoth() Throws GraphicsError, InputError
     second.SetButton(GamepadButton.SOUTH, False)
     Flip()
 End Function
+
+// A block is apart from SetEnabled: a set's off while either says so, and each Block has its own
+// Unblock.
+@Test
+Function ABlockIsApartFromSetEnabled() Throws GraphicsError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfKey(Key.SPACE))
+    Try Simulate.KeyDown(Key.SPACE)
+    Flip()
+    Expect(jump.Down())
+    controls.Block()
+    Flip()
+    Expect(controls.Blocked() && controls.Enabled())
+    Expect(!jump.Down() && jump.Up())
+    // A cutscene turns it off while it's blocked, and two block it.
+    controls.SetEnabled(False)
+    controls.Block()
+    controls.Unblock()
+    Flip()
+    Expect(!jump.Down())
+    controls.Unblock()
+    Flip()
+    Expect(!controls.Blocked() && !jump.Down())
+    // On again, what's held is no press.
+    controls.SetEnabled(True)
+    Flip()
+    Expect(jump.Down() && !jump.Hit())
+    Try Simulate.KeyUp(Key.SPACE)
+    Flip()
+End Function

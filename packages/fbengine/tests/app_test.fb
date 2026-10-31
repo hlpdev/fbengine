@@ -110,5 +110,5 @@ Function TheBestLanguageIsThePlayersFirstThatTheGameHas()
     Expect(BestLanguage([], ["en"]) == Null)
     // Without preferred, the OS's, which picks one of them or none.
     Local best = BestLanguage(available)
-    Expect(best == Null || available.Contains(best ?? ""))
+    Expect(best == Null || available.Contains(best))
 End Function

@@ -165,8 +165,15 @@ Function AListsArrowsMoveItsPick() Throws GraphicsError
     Flip()
     ui.Update()
     Expect(list.Selected() == 2)
+    Flip()
+    ui.Update()
+    // New items keep the one picked by its text, and with it gone, none.
+    list.SetItems(["c", "a"])
+    Expect(list.Selected() == 0 && list.SelectedText() == "c")
+    Expect(!list.SelectionChanged())
     list.SetItems(["only"])
-    Expect(list.Selected() == 0)
+    Expect(list.Selected() == -1 && list.SelectionChanged())
+    list.SetSelected(0)
     list.SetSelected(-1)
     Expect(list.SelectedText() == "")
 End Function
@@ -212,4 +219,129 @@ Function ADoubleClickChoosesAnItem() Throws GraphicsError
     Flip()
     ui.Update()
     Expect(list.Chosen())
+End Function
+
+// An offset asked for holds through Layouts: Inf keeps a growing column at its bottom, and one set
+// before the first Layout is kept.
+@Test
+Function AnOffsetAskedForHolds() Throws GraphicsError
+    Local column = Rows(2)
+    Local view = Viewed(column, 60.0)
+    view.SetOffset(Inf)
+    Local root = Node("root")
+    root.Add(view)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Expect(view.Offset() == 0.0)
+    For i = 1 To 8
+        Local row = Node("more {i}")
+        row.SetHeight(Sizing.Fixed(20.0))
+        column.Add(row)
+        Flip()
+        ui.Update()
+        Expect(view.Offset() == view.MaxOffset())
+    End For
+    Expect(view.MaxOffset() > 0.0)
+    // Set before its first Layout.
+    Local early = Viewed(Rows(10), 60.0)
+    early.SetOffset(30.0)
+    root.Add(early)
+    Flip()
+    ui.Update()
+    Expect(early.Offset() == 30.0)
+End Function
+
+// A console's newest line shows once its lines overflow.
+@Test
+Function AConsolesNewestLineShows() Throws GraphicsError
+    Local console = Console()
+    console.SetHeight(Sizing.Fixed(120.0))
+    Local root = Node("root")
+    root.Add(console)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    For i = 1 To 40
+        console.Print("line {i}")
+    End For
+    Flip()
+    ui.Update()
+    Local view = console.Children()[0] As? ScrollView
+    Expect(view != Null)
+    If view == Null Then Return
+    Expect(view.Offset() == view.MaxOffset() && view.MaxOffset() > 0.0)
+End Function
+
+// A double click chooses the item its first press was on, not one beside it.
+@Test
+Function ADoubleClickChoosesOnlyTheItemItsFirstPressPicked() Throws GraphicsError
+    Local list = List(["a", "b"])
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(list)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local first = list.Children()[0]
+    Local second = list.Children()[1]
+    Try Simulate.MoveMouse(first.Box().Center.x, first.Box().Center.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    // SDL counts a second press near the first a double click.
+    Try Simulate.MoveMouse(second.Box().Center.x, second.Box().Center.y)
+    Try Simulate.Click(MouseButton.LEFT, clicks: 2)
+    Flip()
+    ui.Update()
+    Expect(list.Selected() == 1 && !list.Chosen())
+    Try Simulate.Click(MouseButton.LEFT, clicks: 2)
+    Flip()
+    ui.Update()
+    Expect(list.Chosen())
+End Function
+
+// At a list's ends, the arrows move the focus on.
+@Test
+Function AListsEndsLetTheFocusMoveOn() Throws GraphicsError
+    Local top = Button("top")
+    Local list = List(["a", "b"])
+    Local bottom = Button("bottom")
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(top)
+    root.Add(list)
+    root.Add(bottom)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(list)
+    For i = 1 To 3
+        Try Simulate.PressKey(Key.DOWN)
+        Flip()
+        ui.Update()
+    End For
+    Expect(list.Selected() == 1)
+    Expect(ui.Focused() == bottom)
+    ui.Focus(list)
+    Try Simulate.PressKey(Key.HOME)
+    Try Simulate.PressKey(Key.UP)
+    Flip()
+    ui.Update()
+    Expect(list.Selected() == 0 && ui.Focused() == top)
+End Function
+
+// What's under a scroll view's padding is the view's, not what's scrolled under it.
+@Test
+Function AScrollViewsPaddingIsItsOwn() Throws GraphicsError
+    Local view = Viewed(Rows(10), 60.0)
+    view.SetWidth(Sizing.Fixed(200.0))
+    view.SetPadding(Insets.All(10.0))
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(view)
+    root.Layout(Rect(0.0, 0.0, 400.0, 300.0))
+    view.SetOffset(30.0)
+    root.Layout(Rect(0.0, 0.0, 400.0, 300.0))
+    Local box = view.Box()
+    Expect(view.NodeAt(Vec2(box.X + 20.0, box.Y + 5.0)) == view)
+    Expect(view.NodeAt(Vec2(box.X + 20.0, box.Y + box.Height - 5.0)) == view)
+    Local inside = view.NodeAt(Vec2(box.X + 20.0, box.Y + 15.0))
+    Expect(inside != Null && inside != view)
 End Function

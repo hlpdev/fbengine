@@ -43,8 +43,9 @@ Function AButtonIsClickedByThePointer() Throws GraphicsError
     Local ui = Try Opened([play])
     Defer EndGraphics()
     Local clicks = 0
-    play.OnClick(Function()
+    play.OnClick(Function(button: Button)
         clicks += 1
+        Expect(button.Text() == "Play")
     End Function)
     Try ClickAt(ui, Middle(play))
     Expect(play.Clicked())
@@ -216,4 +217,89 @@ Function AProgressBarKeepsItsValueFrom0To1()
     Expect(bar.Value() == 0.0)
     bar.SetValue(NaN)
     Expect(bar.Value() == 0.0)
+End Function
+
+// A press on a widget that's disabled, or hidden, while it's held is let go, not over it.
+@Test
+Function APressGoesWithItsWidget() Throws GraphicsError
+    Local play = Button("Play")
+    Local volume = Slider(0.0, 10.0, 0.0)
+    Local ui = Try Opened([play, volume])
+    Defer EndGraphics()
+    Try Simulate.MoveMouse(Middle(play).x, Middle(play).y)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Frame(ui)
+    Expect(ui.Pressed() == play)
+    play.SetEnabled(False)
+    Frame(ui)
+    Expect(ui.Pressed() == Null)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Frame(ui)
+    Expect(!play.Clicked())
+    // A slider hidden mid-drag moves no more.
+    Local box = volume.ContentBox()
+    Try Simulate.MoveMouse(box.X + 1.0, Middle(volume).y)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Frame(ui)
+    Expect(ui.Pressed() == volume)
+    volume.SetVisible(False)
+    Frame(ui)
+    Try Simulate.MoveMouse(box.X + box.Width, Middle(volume).y)
+    Frame(ui)
+    Expect(volume.Value() < 1.0)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Frame(ui)
+End Function
+
+Function Frame(ui: Ui)
+    Flip()
+    ui.Update()
+End Function
+
+// Disabled, a widget's own widgets take no input and no focus, as a modal dialog wants of what's
+// under it, and look disabled.
+@Test
+Function DisabledReachesAWidgetsOwn() Throws GraphicsError
+    Local list = List(["a", "b"])
+    Local column = Node("column")
+    Local ok = Button("OK")
+    column.Add(ok)
+    Local view = ScrollView("view")
+    view.SetHeight(Sizing.Fixed(60.0))
+    view.Add(column)
+    Local ui = Try Opened([list, view])
+    Defer EndGraphics()
+    list.SetEnabled(False)
+    view.SetEnabled(False)
+    Frame(ui)
+    Local item = list.Children()[1] As? Widget
+    Expect(item != Null)
+    If item == Null Then Return
+    Expect(!item.EffectivelyEnabled() && item.State() == WidgetState.DISABLED)
+    Expect(ok.Enabled() && !ok.EffectivelyEnabled() && !ok.Focusable())
+    Expect(ok.State() == WidgetState.DISABLED)
+    Try ClickAt(ui, Middle(item))
+    Expect(list.Selected() == -1)
+    Try ClickAt(ui, Middle(ok))
+    Expect(!ok.Clicked() && ui.Focused() == Null)
+    ui.Focus(ok)
+    Expect(ui.Focused() == Null)
+    Try Simulate.PressKey(Key.TAB)
+    Frame(ui)
+    Expect(ui.Focused() == Null)
+    // Enabled again, its own are too.
+    view.SetEnabled(True)
+    Frame(ui)
+    Try ClickAt(ui, Middle(ok))
+    Expect(ok.Clicked())
+End Function
+
+// A handler that's given its button holds nothing that holds it: no cycle, which the leak check
+// would find.
+@Test
+Function AHandlerIsGivenItsButton()
+    Local ok = Button("OK")
+    ok.OnClick(Function(button: Button) => button.SetText("done"))
+    ok.Click()
+    Expect(ok.Text() == "done")
 End Function

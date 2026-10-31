@@ -36,7 +36,7 @@ End Class
 Public Class Button Extends Widget
     Field text: String
     Field clicked: Int32 = 0
-    Field handlers: Func()[] = []
+    Field handlers: Func(Button)[] = []
 
     /// A button showing `text`.
     @MainThread Public New(text: String, name: String = "")
@@ -61,8 +61,10 @@ Public Class Button Extends Widget
     /// Whether the last Ui.Update read it clicked.
     @MainThread Public Method Clicked(): Bool => clicked > 0
 
-    /// Runs `handler` each time it's clicked, in the Ui.Update that reads the click.
-    @MainThread Public Method OnClick(handler: Func())
+    /// Runs `handler` each time it's clicked, in the Ui.Update that reads the click, with the
+    /// button, so a handler needn't hold the button itself, which would keep it alive; what else
+    /// it holds that holds the button, as the menu it's in, it holds Weak, `Function[Weak menu]`.
+    @MainThread Public Method OnClick(handler: Func(Button))
         handlers.Add(handler)
     End Method
 
@@ -70,7 +72,7 @@ Public Class Button Extends Widget
     @MainThread Public Method Click()
         clicked += 1
         For handler In handlers.Clone()
-            handler()
+            handler(Self)
         End For
     End Method
 

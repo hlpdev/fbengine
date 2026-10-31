@@ -78,7 +78,10 @@ Function TheArrowsMoveTheFocusToTheNearestThatWay() Throws GraphicsError
     Local root, a, b, c, d = Grid()
     Local ui = Try Shown(root)
     Defer EndGraphics()
-    // With nothing focused, the first.
+    // With nothing focused, an arrow starts the focus only while the Ui's navigable, at the first.
+    Try Press(ui, Key.DOWN)
+    Expect(ui.Focused() == Null)
+    ui.SetNavigable(True)
     Try Press(ui, Key.DOWN)
     Expect(ui.Focused() == a)
     Try Press(ui, Key.RIGHT)
@@ -135,6 +138,12 @@ Function AGamepadMovesTheFocusAndActivates() Throws GraphicsError, InputError
     Frame(ui)
     pad.SetButton(GamepadButton.DPAD_DOWN, True)
     Frame(ui)
+    Expect(ui.Focused() == Null)
+    pad.SetButton(GamepadButton.DPAD_DOWN, False)
+    Frame(ui)
+    ui.SetNavigable(True)
+    pad.SetButton(GamepadButton.DPAD_DOWN, True)
+    Frame(ui)
     Expect(ui.Focused() == a)
     pad.SetButton(GamepadButton.DPAD_DOWN, False)
     pad.SetAxis(GamepadAxis.LEFT_X, 1.0)
@@ -183,8 +192,8 @@ Function AHeldWayMovesTheFocusAgain() Throws GraphicsError, InputError
     Frame(ui)
 End Function
 
-// The game's controls are off while a widget has the focus, and on again after, with what was
-// held for the menu no press.
+// The game's controls are blocked while a widget has the focus, and read again after, with what
+// was held for the menu no press.
 @Test
 Function AFocusedWidgetTurnsTheGamesControlsOff() Throws GraphicsError
     Local play = Button("Play")
@@ -199,14 +208,14 @@ Function AFocusedWidgetTurnsTheGamesControlsOff() Throws GraphicsError
     ui.Route(controls)
     ui.Focus(play)
     Frame(ui)
-    Expect(!controls.Enabled())
+    Expect(controls.Blocked() && controls.Enabled())
     Try Simulate.KeyDown(Key.RETURN)
     Frame(ui)
     Expect(play.Clicked())
     Expect(!jump.Hit())
     ui.Focus(Null)
     Frame(ui)
-    Expect(controls.Enabled())
+    Expect(!controls.Blocked())
     Frame(ui)
     Expect(jump.Down() && !jump.Hit())
     Try Simulate.KeyUp(Key.RETURN)
@@ -253,4 +262,206 @@ Function MovingTheFocusIntoAScrollViewShowsIt() Throws GraphicsError
     End For
     Expect(ui.Focused() == buttons[9])
     Expect(view.Offset() == view.MaxOffset())
+End Function
+
+// A Ui's block is its own: a cutscene's SetEnabled(False) stays, Unroute while focused takes back
+// only its block, and two Uis each block and unblock.
+@Test
+Function ARoutesBlockIsItsOwn() Throws GraphicsError
+    Local root, a, b, c, d = Grid()
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local other = Ui(Node("other root"))
+    Local controls = ActionSet()
+    ui.Route(controls)
+    other.Route(controls)
+    ui.Focus(a)
+    Frame(ui)
+    Expect(controls.Blocked())
+    controls.SetEnabled(False)
+    ui.Focus(Null)
+    Frame(ui)
+    other.Update()
+    Expect(!controls.Blocked() && !controls.Enabled())
+    controls.SetEnabled(True)
+    // Routed while focused, it's blocked at once; unrouted, unblocked.
+    ui.Focus(b)
+    Frame(ui)
+    Local more = ActionSet()
+    ui.Route(more)
+    Expect(more.Blocked())
+    ui.Unroute(more)
+    Expect(!more.Blocked())
+    ui.Unroute(controls)
+    Expect(!controls.Blocked())
+    // A Ui that goes lets go of its blocks.
+    Local gone = Ui(Node("gone"))
+    Local held = Node("held")
+    Local button = Button("button")
+    held.Add(button)
+    Local going = Ui(held)
+    going.Route(more)
+    going.Focus(button)
+    going.Update()
+    Expect(more.Blocked())
+    going = gone
+    Expect(!more.Blocked())
+    other.Unroute(controls)
+End Function
+
+// Right goes to what's beside it before what's nearer below.
+@Test
+Function TheArrowsPreferWhatsAcross() Throws GraphicsError
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.SetGap(4.0)
+    Local top = Node("top")
+    top.SetArrangement(Arrangement.ROW)
+    top.SetGap(120.0)
+    Local wide = Button("wide")
+    wide.SetWidth(Sizing.Fixed(200.0))
+    Local beside = Button("beside")
+    top.Add(wide)
+    top.Add(beside)
+    Local below = Button("below")
+    below.SetMargin(Insets(150.0, 0.0, 0.0, 0.0))
+    root.Add(top)
+    root.Add(below)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(wide)
+    Try Press(ui, Key.RIGHT)
+    Expect(ui.Focused() == beside)
+    // Below is off to the side of beside, past 45 degrees: nothing that way.
+    Try Press(ui, Key.DOWN)
+    Expect(ui.Focused() == beside)
+    // With nothing across, the nearest within 45 degrees.
+    ui.Focus(below)
+    Try Press(ui, Key.RIGHT)
+    Expect(ui.Focused() == beside)
+    ui.Focus(below)
+    Try Press(ui, Key.UP)
+    Expect(ui.Focused() == wide)
+End Function
+
+// Pressed again in one frame, a held way starts its time again.
+@Test
+Function AWayPressedAgainWaitsAgain() Throws GraphicsError, InputError
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    Local buttons: Button[] = []
+    For i = 1 To 20
+        Local button = Button("{i}")
+        buttons.Add(button)
+        root.Add(button)
+    End For
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local pad = Try Simulate.ConnectGamepad()
+    Defer pad.Unplug()
+    Frame(ui)
+    ui.Focus(buttons[0])
+    pad.SetButton(GamepadButton.DPAD_DOWN, True)
+    Frame(ui)
+    Local waited = Stopwatch.StartNew()
+    While ui.Focused() == buttons[1] && waited.Elapsed.TotalSeconds < 2.0
+        Frame(ui)
+    End While
+    Expect(ui.Focused() == buttons[2])
+    // Let go and pressed again: one move, then none for 0.4 seconds.
+    pad.SetButton(GamepadButton.DPAD_DOWN, False)
+    pad.SetButton(GamepadButton.DPAD_DOWN, True)
+    Frame(ui)
+    Expect(ui.Focused() == buttons[3])
+    Local again = Stopwatch.StartNew()
+    While again.Elapsed.TotalSeconds < 0.25
+        Frame(ui)
+    End While
+    Expect(ui.Focused() == buttons[3])
+    pad.SetButton(GamepadButton.DPAD_DOWN, False)
+    Frame(ui)
+End Function
+
+// Keys and text go to the focused widget in the order they were typed, every key pressed.
+@Test
+Function KeysAndTextGoInTheOrderTyped() Throws GraphicsError
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    Local field = TextField("x")
+    root.Add(field)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Try Simulate.Text("a")
+    Try Simulate.PressKey(Key.BACKSPACE)
+    Frame(ui)
+    Expect(field.Text() == "x")
+    Try Simulate.PressKey(Key.BACKSPACE)
+    Try Simulate.Text("b")
+    Frame(ui)
+    Expect(field.Text() == "b")
+    // A key no editing wants still reaches it.
+    Local keys = KeyCatcher()
+    root.Add(keys)
+    ui.Focus(keys)
+    Try Simulate.PressKey(Key.F5)
+    Frame(ui)
+    Expect(keys.caught == [Key.F5])
+End Function
+
+Class KeyCatcher Extends Widget
+    Field caught: Key[] = []
+
+    New()
+        Super.New("catcher")
+        SetFocusable(True)
+    End New
+
+    Public Override Method KeyTyped(key: Key): Bool
+        caught.Add(key)
+        Return True
+    End Method
+End Class
+
+// A widget taken out by a key it was given gets no more of the frame's.
+@Test
+Function AWidgetTakenOutGetsNoMoreKeys() Throws GraphicsError
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    Local once = Button("once")
+    Local clicks = 0
+    once.OnClick(Function(button: Button)
+        clicks += 1
+        button.SetVisible(False)
+    End Function)
+    root.Add(once)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(once)
+    Try Simulate.PressKey(Key.RETURN)
+    Try Simulate.PressKey(Key.SPACE)
+    Frame(ui)
+    Expect(clicks == 1)
+    Expect(ui.Focused() == Null)
+End Function
+
+// A focused widget the pointer's over shows its focus.
+@Test
+Function FocusedOutranksHovered() Throws GraphicsError
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    Local field = TextField("x")
+    root.Add(field)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local box = field.Box()
+    Try Simulate.MoveMouse(box.X + 2.0, box.Y + 2.0)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Frame(ui)
+    Expect(field.State() == WidgetState.PRESSED)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Frame(ui)
+    Expect(ui.Focused() == field && ui.Hovered() == field)
+    Expect(field.State() == WidgetState.FOCUSED)
 End Function
