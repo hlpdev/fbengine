@@ -62,6 +62,12 @@ jobs:
           tar -xf native-${{ matrix.target }}.tar
           fb --version
           for package in packages/*/; do fb test "$package"; done
+
+      # fb 1.0.0's Linux release lacks glibc's gnu/stubs-64.h, so fb-bindgen reads the headers on
+      # Windows until 1.0.1 has it.
+      - name: Bindings
+        if: runner.os == 'Windows'
+        run: sh tools/bindgen.sh --check
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' packages/fbengine/project.toml)"
           output="$(fb --color never run examples/hello | tr -d '\r')"
           printf '%s\n' "$output"
@@ -179,4 +185,3 @@ jobs:
           pipx install clang-format==19.1.5
           git ls-files '*.h' '*.hpp' '*.c' '*.cpp' | xargs clang-format --dry-run -Werror
           fb fmt --check packages examples
-          sh tools/bindgen.sh --check
