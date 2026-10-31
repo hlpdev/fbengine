@@ -1,0 +1,278 @@
+// Videos: opening, frames falling due as the clock moves on, exact seeks, the end, loops, pauses,
+// the sound, and what the C API refuses. The videos are tests/media's, which make.sh made.
+
+Import std.core
+Import std.ffi
+Import std.image
+Import std.math
+Import std.test
+Import fbengine_video
+Import fbengine_video.c.fbe_video
+
+Function Colors(): Video Throws VideoError => Try Video.Load(Embed("media/colors.mpg"))
+
+Function Count(): Video Throws VideoError => Try Video.Load(Embed("media/count.mpg"))
+
+// count.mpg's frames with B-frames among them, which are decoded out of order.
+Function CountB(): Video Throws VideoError => Try Video.Load(Embed("media/countb.mpg"))
+
+Function Near(a: Int, b: Int, within: Int): Bool => Abs(a - b) <= within
+
+// Whether the middle of `video`'s frame is `color`, give or take what MPEG-1 rounds.
+Function Shows(video: Video, color: Color32): Bool
+    Local seen = video.Frame()[32, 24]
+    Return Near((seen.r As Int), (color.r As Int), 24) &&
+           Near((seen.g As Int), (color.g As Int), 24) &&
+           Near((seen.b As Int), (color.b As Int), 24) &&
+           seen.a == 255
+End Function
+
+// The number count.mpg's frame shows by its gray, 4.66 a frame.
+Function Counted(video: Video): Int => Round((video.Frame()[32, 24].r As Float) / 4.66) As Int
+
+@Test
+Function TheDllIsThePackagesVersion()
+    Expect(VideoVersion() == "0.1.1")
+End Function
+
+@Test
+Function AVideoOpensPausedAtItsFirstFrame() Throws VideoError
+    Local video = Try Colors()
+    Defer video.Free()
+    Expect(video.Width() == 64 && video.Height() == 48)
+    Expect(Abs(video.FrameRate() - 25) < 0.01)
+    Expect(video.Duration() > 1.9 && video.Duration() < 2.2, "it's {video.Duration()} s long")
+    Expect(video.HasSound())
+    Expect(video.SoundRate() == 44100 && video.SoundChannels() == 2)
+    Expect(!video.Playing() && !video.Ended())
+    Expect(video.Time() == 0.0)
+    Expect(video.FrameNumber() == 0 && video.FramesShown() == 1)
+    Expect(Shows(video, Color32(255, 0, 0, 255)))
+    // Paused, the clock doesn't move.
+    video.Update(1.0)
+    Expect(video.Time() == 0.0 && video.FrameNumber() == 0)
+End Function
+
+@Test
+Function FramesFallDueAsTheClockMovesOn() Throws VideoError
+    Local video = Try Colors()
+    Defer video.Free()
+    video.Play()
+    Expect(video.Playing())
+    video.Update(0.6)
+    Expect(Shows(video, Color32(0, 255, 0, 255)))
+    video.Update(0.5)
+    Expect(Shows(video, Color32(0, 0, 255, 255)))
+    video.Update(0.5)
+    Expect(Shows(video, Color32(255, 255, 255, 255)))
+    Expect(Abs(video.Time() - 1.6) < 0.001)
+End Function
+
+// A game's frames of a 25th of a second each show each of the video's frames in turn.
+@Test
+Function EachFrameIsShownWhenItsDue() Throws VideoError
+    For video In [Try Count(), Try CountB()]
+        Defer video.Free()
+        Expect(video.Duration() == 2.0, "it's {video.Duration()} s long")
+        video.Play()
+        For n = 1 To 49
+            video.Update(1.0 / 25)
+            Expect(video.FrameNumber() == n, "at frame {n}, it shows {video.FrameNumber()}")
+            Expect(Near(Counted(video), n, 1), "frame {n} looks like {Counted(video)}")
+        End For
+        Expect(video.FramesShown() == 50)
+    End For
+    // Faster than its frames, a game's frames show some twice.
+    Local more = Try Count()
+    Defer more.Free()
+    more.Play()
+    For i = 1 To 10
+        more.Update(1.0 / 100)
+    End For
+    Expect(more.FrameNumber() == 2 && more.FramesShown() == 3)
+End Function
+
+@Test
+Function AFrameFarAheadIsWaitedFor() Throws VideoError
+    Local video = Try Count()
+    Defer video.Free()
+    video.Play()
+    video.Update(1.5)
+    Expect(video.FrameNumber() == 37)
+    Expect(Near(Counted(video), 37, 1))
+End Function
+
+// Seeks to key frames, between them, to B-frames shown before a key frame and made from the one
+// before, back, to the last frame, and to the end.
+@Test
+Function ASeekShowsTheFrameDueThenExactly() Throws VideoError
+    For video In [Try Count(), Try CountB()]
+        Defer video.Free()
+        For seconds In [1.0, 0.52, 0.2, 0.48, 0.44, 0.92, 1.96, 0.0, 0.5, 2.0]
+            video.Seek(seconds)
+            // The frame due then, from frame 12, at 0.48 s, to frame 13, at 0.52.
+            Local n = Min(Floor(seconds * 25 + 0.001) As Int, 49)
+            Expect(video.FrameNumber() == n, "at {seconds} s it shows {video.FrameNumber()}")
+            Expect(Near(Counted(video), n, 1), "at {seconds} s it looks like {Counted(video)}")
+            Expect(Abs(video.Time() - seconds) < 0.0001)
+        End For
+        // Playing on from a seek.
+        video.Seek(1.0)
+        video.Play()
+        video.Update(0.2)
+        Expect(video.FrameNumber() == 30)
+        For n = 31 To 49
+            video.Update(1.0 / 25)
+            Expect(video.FrameNumber() == n && Near(Counted(video), n, 1),
+                   "at {n} it shows {video.FrameNumber()}, like {Counted(video)}")
+        End For
+    End For
+End Function
+
+@Test
+Function AVideoEndsAfterItsLastFrameAndPlaysAgainFromItsStart() Throws VideoError
+    Local video = Try Count()
+    Defer video.Free()
+    video.Play()
+    For i = 1 To 49
+        video.Update(1.0 / 25)
+    End For
+    Expect(!video.Ended() && video.FrameNumber() == 49)
+    video.Update(1.0 / 25)
+    Expect(video.Ended() && !video.Playing())
+    Expect(video.FrameNumber() == 49)
+    // Ended, the clock stays.
+    Local ended = video.Time()
+    video.Update(1.0)
+    Expect(video.Time() == ended)
+    video.Play()
+    Expect(video.Playing() && video.FrameNumber() == 0 && video.Time() == 0.0)
+End Function
+
+@Test
+Function ALoopingVideoStartsAgainAndNeverEnds() Throws VideoError
+    Local video = Try Count()
+    Defer video.Free()
+    video.SetLoop(True)
+    Expect(video.Looping())
+    video.Play()
+    For i = 1 To 75
+        video.Update(1.0 / 25)
+        Expect(video.FrameNumber() == i % 50, "at {i} it shows {video.FrameNumber()}")
+    End For
+    Expect(!video.Ended() && video.Playing())
+    // Three seconds of a video two long are one into its second loop.
+    Expect(Abs(video.Time() - 1.0) < 0.001)
+    Expect(video.FramesShown() == 76)
+    // No longer looping, it ends at its end.
+    video.SetLoop(False)
+    For i = 1 To 25
+        video.Update(1.0 / 25)
+    End For
+    Expect(video.Ended())
+End Function
+
+@Test
+Function AVideosSoundIsAWavOfItsSamples() Throws VideoError
+    Local video = Try Colors()
+    Defer video.Free()
+    Local wav = video.Sound()
+    Expect(wav.Count > 44)
+    Expect(wav[0] == 82 && wav[1] == 73 && wav[2] == 70 && wav[3] == 70)
+    Expect(wav[8] == 87 && wav[9] == 65 && wav[10] == 86 && wav[11] == 69)
+    // IEEE float, two channels, 44100 a second, 32 bits.
+    Expect(wav[20] == 3 && wav[22] == 2)
+    Expect(wav[24] + wav[25] * 256 + wav[26] * 65536 == 44100)
+    Expect(wav[34] == 32)
+    // About two seconds of samples, two channels, four bytes each.
+    Local seconds = ((wav.Count - 44) As Float) / (44100 * 2 * 4)
+    Expect(seconds > 1.9 && seconds < 2.2, "its sound is {seconds} s long")
+    // The tone is there: some samples a long way from silence.
+    Local loud = 0
+    Local samples = Buffer<UInt8>.From(wav)
+    For i = 0 To 999
+        Local at = 44 + (44100 * 4) + (i * 8)
+        Local bits = (samples[at] As UInt32) | ((samples[at + 1] As UInt32) << 8) |
+                     ((samples[at + 2] As UInt32) << 16) | ((samples[at + 3] As UInt32) << 24)
+        // ffmpeg's tone is an eighth as loud as it could be, and MPEG-1 audio a little softer.
+        If Abs(Float32.FromBits(bits)) > 0.05 Then loud += 1
+    End For
+    Expect(loud > 300)
+End Function
+
+@Test
+Function AVideoWithoutSoundSaysSo() Throws VideoError
+    Local video = Try Video.Load(Embed("media/silent.mpg"))
+    Defer video.Free()
+    Expect(!video.HasSound())
+    Expect(video.SoundRate() == 0 && video.SoundChannels() == 0)
+    Expect(Shows(video, Color32(255, 0, 0, 255)))
+End Function
+
+@Test
+Function WhatIsntAVideoIsAnError()
+    Local error = ExpectThrows<VideoError>(Video.Load([1, 2, 3, 4, 5, 6, 7, 8]))
+    Expect(error?.Message == "that isn't a video fbengine_video decodes: an MPEG-1 program stream")
+    Expect(ExpectThrows<VideoError>(Video.Load([])) != Null)
+    Expect(ExpectThrows<VideoError>(Video.Open("no such video.mpg")) != Null)
+End Function
+
+@Test
+Function AFrameGoesIntoAnImageOfItsSize() Throws VideoError
+    Local video = Try Colors()
+    Defer video.Free()
+    Local image = Image(64, 48)
+    video.FrameInto(image)
+    Expect(image[0, 0].r > 200 && image[63, 47].a == 255)
+End Function
+
+@Test @MainThread
+Function ADroppedVideoFreesItself() Throws VideoError
+    Local before = fbe_video_count()
+    Try OpenAndDrop()
+    Expect(fbe_video_count() == before)
+    Local video = Try Colors()
+    Expect(fbe_video_count() == before + 1)
+    video.Free()
+    Expect(video.Freed())
+    Expect(fbe_video_count() == before)
+End Function
+
+@MainThread Function OpenAndDrop() Throws VideoError
+    Local video = Try Count()
+    video.Play()
+    video.Update(0.5)
+End Function
+
+@Test @MainThread
+Function TheCApiRefusesWhatItDoesntTake()
+    Local bytes = Buffer<UInt8>.From(Embed("media/count.mpg"))
+    Local video: UInt64 = 0
+    Unsafe
+        video = fbe_video_open(bytes.Pointer(), bytes.Count)
+    End Unsafe
+    Expect(video != 0)
+    Expect(!fbe_video_update(video, -1))
+    Expect(Error() == "a video's clock moves on by 0 seconds or more, not -1")
+    Expect(!fbe_video_seek(video, 5))
+    Expect(!fbe_video_seek(video, NaN))
+    Local small = Buffer<UInt8>(16)
+    Unsafe
+        Expect(!fbe_video_frame(video, small.Pointer(), 16))
+    End Unsafe
+    Expect(Error() == "a frame of the video is 12288 bytes, not 16")
+    Expect(fbe_video_sound(video, Null, 0) == -1)
+    Expect(Error() == "the video has no sound")
+    Expect(fbe_video_free(video))
+    Expect(!fbe_video_free(video))
+    Expect(Error() == "the video was freed")
+    Expect(fbe_video_width(video) == 0 && fbe_video_frame_number(video) == -1)
+    Expect(!fbe_video_play(0))
+    Expect(Error() == "there's no video")
+End Function
+
+@MainThread Function Error(): String
+    Unsafe
+        Return fbe_video_error().ToString()
+    End Unsafe
+End Function

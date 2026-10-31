@@ -1,0 +1,213 @@
+// fbengine_video, over its C API: the bindings in c/, one for each area's header in
+// native/fbengine_video/, which tools/bindgen.sh makes and `Import fbengine_video` leaves out
+// (they're fbengine_video.c.fbe_<area>).
+
+Import std.core
+Import std.ffi
+Import std.image
+Import std.io
+Import "./c/fbe_video"
+
+/// A video that can't be opened: a file that can't be read, or bytes that aren't a video of a
+/// format fbengine_video decodes, an MPEG-1 program stream.
+Public Class VideoError Extends Error
+End Class
+
+/// A video: an MPEG-1 program stream, as a .mpg is, of MPEG-1 video and, if it has sound, MPEG-1
+/// audio layer II. It's decoded on a thread of its own, a few frames ahead of where it plays, into
+/// frames in memory, and plays by a clock the game moves on with Update, by the time each frame of
+/// the game took, showing each of its frames as it falls due; Seek puts the clock anywhere. Its
+/// Sound is a WAV a game plays beside it. Free, or dropping it, frees it.
+///
+/// ```
+/// Local intro = Try Video.Open("intro.mpg")
+/// intro.Play()
+/// While !intro.Ended()
+///     intro.Update(1.0 / 60)
+///     Local frame = intro.Frame()
+/// End While
+/// intro.Free()
+/// ```
+Public Final Class Video
+    Field handle: UInt64
+    ReadOnly Field width: Int32
+    ReadOnly Field height: Int32
+
+    Private New(handle: UInt64)
+        Self.handle = handle
+        width = fbe_video_width(handle)
+        height = fbe_video_height(handle)
+    End New
+
+    /// The video of `bytes`, paused at its start, its first frame decoded.
+    @MainThread Public Static Method Load(bytes: UInt8[]): Video Throws VideoError
+        If bytes.Count == 0 Then Throw VideoError("a video is some bytes")
+        Local kept = Buffer<UInt8>.From(bytes)
+        Local handle: UInt64 = 0
+        Unsafe
+            handle = fbe_video_open(kept.Pointer(), kept.Count)
+        End Unsafe
+        If handle == 0 Then Throw VideoError(LastError())
+        Return Video(handle)
+    End Method
+
+    /// The video in the file at `path`, as Load makes it of its bytes.
+    @MainThread Public Static Method Open(path: String): Video Throws VideoError
+        Local bytes: UInt8[] = []
+        Try
+            bytes = Try File.ReadBytes(Path(path))
+        Catch error As IOError
+            Throw VideoError(error.Message)
+        End Try
+        Return Try Load(bytes)
+    End Method
+
+    /// Frees the video, stopping its thread; using it after panics. Freeing one that's freed
+    /// already does nothing.
+    @MainThread Public Method Free()
+        If handle == 0 Then Return
+        fbe_video_free(handle)
+        handle = 0
+    End Method
+
+    // A video dropped unfreed frees itself.
+    Method Destroy()
+        If handle != 0 Then fbe_video_free(handle)
+    End Method
+
+    /// Whether Free has freed the video.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// The video's width in pixels.
+    @MainThread Public Method Width(): Int32
+        Live("Video.Width")
+        Return width
+    End Method
+
+    /// The video's height in pixels.
+    @MainThread Public Method Height(): Int32
+        Live("Video.Height")
+        Return height
+    End Method
+
+    /// How many frames a second the video has.
+    @MainThread Public Method FrameRate(): Float64 => fbe_video_frame_rate(Live("Video.FrameRate"))
+
+    /// How long the video is, in seconds.
+    @MainThread Public Method Duration(): Float64 => fbe_video_duration(Live("Video.Duration"))
+
+    /// Whether the video has sound.
+    @MainThread Public Method HasSound(): Bool => fbe_video_has_sound(Live("Video.HasSound"))
+
+    /// The frames a second of the video's sound, 0 for one without.
+    @MainThread Public Method SoundRate(): Int32 => fbe_video_sound_rate(Live("Video.SoundRate"))
+
+    /// How many channels the video's sound has, 0 for one without.
+    @MainThread Public Method SoundChannels(): Int32 =>
+        fbe_video_sound_channels(Live("Video.SoundChannels"))
+
+    /// The video's whole sound, as a WAV file of 32-bit float samples at its rate, whose first
+    /// sample is at the video's time 0, for a game to play beside it; a video without sound has
+    /// none to give.
+    @MainThread Public Method Sound(): UInt8[]
+        Local video = Live("Video.Sound")
+        Local size = fbe_video_sound(video, Null, 0)
+        If size < 0 Then Panic("Video.Sound: {LastError()}")
+        Local wav = Buffer<UInt8>(size)
+        Unsafe
+            fbe_video_sound(video, wav.Pointer(), size)
+        End Unsafe
+        Return wav.ToArray()
+    End Method
+
+    /// Plays the video from where its clock is, or from its start if it's ended.
+    @MainThread Public Method Play()
+        fbe_video_play(Live("Video.Play"))
+    End Method
+
+    /// Pauses the video where its clock is.
+    @MainThread Public Method Pause()
+        fbe_video_pause(Live("Video.Pause"))
+    End Method
+
+    /// Whether the video's playing: not paused, and not ended.
+    @MainThread Public Method Playing(): Bool => fbe_video_playing(Live("Video.Playing"))
+
+    /// Makes the video start again from its start each time it ends, or not, as at first.
+    @MainThread Public Method SetLoop(loop: Bool)
+        fbe_video_set_loop(Live("Video.SetLoop"), loop)
+    End Method
+
+    /// Whether the video starts again each time it ends.
+    @MainThread Public Method Looping(): Bool => fbe_video_looping(Live("Video.Looping"))
+
+    /// Moves a playing video's clock on by `seconds`, 0 or more, as a frame of the game took,
+    /// showing the frame due then, and waiting for its thread to decode it if it's behind. A video
+    /// that isn't looping ends as its clock passes its last frame.
+    @MainThread Public Method Update(seconds: Float64)
+        If !fbe_video_update(Live("Video.Update"), seconds) Then Panic("Video.Update: {LastError()}")
+    End Method
+
+    /// Puts the video's clock at `seconds`, from 0 to its Duration, showing the frame due then, as
+    /// a scrub along it or a sound's position does.
+    @MainThread Public Method Seek(seconds: Float64)
+        If !fbe_video_seek(Live("Video.Seek"), seconds) Then Panic("Video.Seek: {LastError()}")
+    End Method
+
+    /// Where the video's clock is, from 0 to its Duration.
+    @MainThread Public Method Time(): Float64 => fbe_video_time(Live("Video.Time"))
+
+    /// Whether the video's played to its end, not looping.
+    @MainThread Public Method Ended(): Bool => fbe_video_ended(Live("Video.Ended"))
+
+    /// The number of the frame the video shows, from 0.
+    @MainThread Public Method FrameNumber(): Int64 =>
+        fbe_video_frame_number(Live("Video.FrameNumber"))
+
+    /// How many frames the video's shown since it was opened, which goes up as a new one's shown.
+    @MainThread Public Method FramesShown(): Int64 =>
+        fbe_video_frames_shown(Live("Video.FramesShown"))
+
+    /// The frame the video shows, as a new Image of its size.
+    @MainThread Public Method Frame(): Image
+        Local image = Image(width, height)
+        FrameInto(image)
+        Return image
+    End Method
+
+    /// Copies the frame the video shows into `image`, which is the video's size, as a game does
+    /// into the same Image each frame.
+    @MainThread Public Method FrameInto(image: Image)
+        Local video = Live("Video.FrameInto")
+        If image.Width != width || image.Height != height
+            Panic("Video.FrameInto: the video is {width} by {height}, not {image.Width} by {image.Height}")
+        End If
+        Local pixels = image.Pixels
+        Local ok = False
+        Unsafe
+            ok = fbe_video_frame(video, pixels.Pointer(), pixels.Count)
+        End Unsafe
+        If !ok Then Panic("Video.FrameInto: {LastError()}")
+    End Method
+
+    // The video's handle, for `call`, which panics once it's freed.
+    @MainThread Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call}: this Video was freed")
+        Return handle
+    End Method
+End Class
+
+/// The version of fbengine_video the program runs with, like "0.1.0", its DLL's, which is
+/// fbengine's.
+Public Function VideoVersion(): String
+    Unsafe
+        Return fbe_video_version().ToString()
+    End Unsafe
+End Function
+
+/// What the last call to fbengine_video_native that failed says went wrong.
+Package Function LastError(): String
+    Unsafe
+        Return fbe_video_error().ToString()
+    End Unsafe
+End Function

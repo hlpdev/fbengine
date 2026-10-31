@@ -33,6 +33,7 @@ include(cmake/sdl.cmake)
 
 add_subdirectory(native/fbengine)
 add_subdirectory(native/fbengine_physics)
+add_subdirectory(native/fbengine_video)
 
 if(FBENGINE_BUILD_TESTS)
   enable_testing()
