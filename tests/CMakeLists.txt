@@ -228,7 +228,7 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.cpp
                scene/camera_tests.cpp scene/light_tests.cpp scene/geometry_tests.cpp
                scene/material_tests.cpp scene/bvh_tests.cpp scene/collision_tests.cpp
-               scene/handles_tests.cpp scene/pick_tests.cpp
+               scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
@@ -304,7 +304,14 @@ if(FBENGINE_FB_TESTS)
       "screen-ray-no-window=ScreenRay on a Camera: the camera's viewport has no size"
       "view-frustum-freed=ViewFrustum on a Camera that was freed"
       "view-frustum-no-window=ViewFrustum on a Camera: the camera's viewport has no size"
-      "camera-pick-freed=Pick on a Camera that was freed")
+      "camera-pick-freed=Pick on a Camera that was freed"
+      "sprite-scale=SetSpriteScale on a Sprite: a sprite's size is 0 or more, finite, not -1 by 1"
+      "sprite-freed=SetHandle on a Sprite that was freed"
+      "tween-range=TweenedMatrix on a Pivot: a tween is 0 to 1, not 2"
+      "capture-freed=Capture on a World that was freed"
+      "fixed-step-rate=FixedStep: a rate is above 0 steps a second, not 0"
+      "fixed-step-most=FixedStep: a frame takes at most 1 step or more, not 0"
+      "fixed-step-steps=Steps on a FixedStep: a frame takes 0 seconds or more, not -1")
   foreach(case IN LISTS fbengine_scene_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)

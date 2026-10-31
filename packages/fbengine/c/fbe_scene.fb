@@ -5,6 +5,7 @@ Public Const FBE_ENTITY_PIVOT: Int32 = 0
 Public Const FBE_ENTITY_CAMERA: Int32 = 1
 Public Const FBE_ENTITY_LIGHT: Int32 = 2
 Public Const FBE_ENTITY_MESH: Int32 = 3
+Public Const FBE_ENTITY_SPRITE: Int32 = 4
 Public Const FBE_SPACE_LOCAL: Int32 = 0
 Public Const FBE_SPACE_WORLD: Int32 = 1
 Public Const FBE_AXIS_RIGHT: Int32 = 0
@@ -44,6 +45,9 @@ Public Const FBE_COLLISION_ELLIPSOID: Int32 = 1
 Public Const FBE_COLLISION_BOX: Int32 = 2
 Public Const FBE_COLLISION_MESH: Int32 = 3
 Public Const FBE_COLLISION_GROUPS: Int32 = 1024
+Public Const FBE_SPRITE_BILLBOARD: Int32 = 0
+Public Const FBE_SPRITE_FIXED: Int32 = 1
+Public Const FBE_SPRITE_UPRIGHT: Int32 = 2
 Public Const FBE_PICK_NONE: Int32 = 0
 Public Const FBE_PICK_ELLIPSOID: Int32 = 1
 Public Const FBE_PICK_BOX: Int32 = 2
@@ -302,6 +306,20 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_mesh_set_tint(mesh: UInt64, r: Float32, g: Float32, b: Float32, a: Float32): Bool
     Function fbe_mesh_tint(mesh: UInt64, tint: Ptr<fbe_color_t>): Bool
     Function fbe_mesh_blend(mesh: UInt64, surface: Int32): Int32
+    Function fbe_sprite_set_material(sprite: UInt64, material: UInt64): Bool
+    Function fbe_sprite_material(sprite: UInt64): UInt64
+    Function fbe_sprite_set_tint(sprite: UInt64, r: Float32, g: Float32, b: Float32,
+                                 a: Float32): Bool
+    Function fbe_sprite_tint(sprite: UInt64, tint: Ptr<fbe_color_t>): Bool
+    Function fbe_sprite_set_view_mode(sprite: UInt64, mode: Int32): Bool
+    Function fbe_sprite_view_mode(sprite: UInt64): Int32
+    Function fbe_sprite_set_size(sprite: UInt64, half_width: Float32, half_height: Float32): Bool
+    Function fbe_sprite_size(sprite: UInt64, size: Ptr<fbe_vec2_t>): Bool
+    Function fbe_sprite_set_handle(sprite: UInt64, x: Float32, y: Float32): Bool
+    Function fbe_sprite_handle(sprite: UInt64, handle: Ptr<fbe_vec2_t>): Bool
+    Function fbe_sprite_set_roll(sprite: UInt64, radians: Float32): Bool
+    Function fbe_sprite_roll(sprite: UInt64): Float32
+    Function fbe_sprite_matrix(sprite: UInt64, camera: UInt64, matrix: Ptr<fbe_mat4_t>): Bool
     Function fbe_camera_entity_in_view(camera: UInt64, target_width: Float32,
                                        target_height: Float32, entity: UInt64): Int32
     Function fbe_camera_point_in_view(camera: UInt64, target_width: Float32, target_height: Float32,
@@ -342,5 +360,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_entity_pick_mode(entity: UInt64): Int32
     Function fbe_world_pick(world: UInt64, from: Ptr<fbe_vec3_t>, to: Ptr<fbe_vec3_t>,
                             radius: Float32, ignore: UInt64, pick: Ptr<fbe_pick_t>): Int32
+    Function fbe_world_capture(world: UInt64): Bool
+    Function fbe_entity_tweened_matrix(entity: UInt64, tween: Float32,
+                                       matrix: Ptr<fbe_mat4_t>): Bool
     Function fbe_entity_copy(entity: UInt64, world: UInt64, parent: UInt64): UInt64
 End Extern

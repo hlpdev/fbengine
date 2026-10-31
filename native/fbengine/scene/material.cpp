@@ -397,6 +397,44 @@ FBE_API bool fbe_mesh_tint(uint64_t mesh, fbe_color_t* tint) {
     return true;
 }
 
+FBE_API bool fbe_sprite_set_material(uint64_t sprite, uint64_t material) {
+    fbe::scene::sprite_t* found = fbe::scene::sprite_of(sprite);
+    std::uint32_t slot = none;
+    if (found == nullptr || !fbe::scene::optional_material(material, slot)) {
+        return false;
+    }
+    fbe::scene::retain_material(slot);
+    fbe::scene::release_material(found->material);
+    found->material = slot;
+    return true;
+}
+
+FBE_API uint64_t fbe_sprite_material(uint64_t sprite) {
+    const fbe::scene::sprite_t* found = fbe::scene::sprite_of(sprite);
+    if (found == nullptr || found->material == none) {
+        return 0;
+    }
+    return scene().material_slots.handle(found->material);
+}
+
+FBE_API bool fbe_sprite_set_tint(uint64_t sprite, float r, float g, float b, float a) {
+    fbe::scene::sprite_t* found = fbe::scene::sprite_of(sprite);
+    if (found == nullptr || !fbe::scene::valid_color(r, g, b, a, "a sprite's")) {
+        return false;
+    }
+    found->tint = { r, g, b, a };
+    return true;
+}
+
+FBE_API bool fbe_sprite_tint(uint64_t sprite, fbe_color_t* tint) {
+    const fbe::scene::sprite_t* found = fbe::scene::sprite_of(sprite);
+    if (found == nullptr) {
+        return false;
+    }
+    *tint = fbe::scene::color_of(found->tint);
+    return true;
+}
+
 FBE_API int32_t fbe_mesh_blend(uint64_t mesh, int32_t surface) {
     const fbe::scene::mesh_t* found = fbe::scene::mesh_of(mesh);
     if (found == nullptr) {
