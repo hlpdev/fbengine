@@ -279,3 +279,28 @@ Function AButtonOutsideTheMousesIsNeverDown() Throws GraphicsError
     Expect(!MouseHit(beyond))
     Expect(!MouseDown(0 As MouseButton))
 End Function
+
+// A closed window's mouse is no one's at once, before any Flip: a game that opens a window
+// again, as changing its resolution does, and moves the mouse at once, moves it from the corner.
+@Test
+Function ANewWindowsMouseIsNowhereBeforeAnyFlip() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Try Simulate.MoveMouse(300.0, 150.0)
+    Flip()
+    EndGraphics()
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Expect(MouseX() == 0.0)
+    Expect(MouseY() == 0.0)
+    Try Simulate.MoveMouse(10.0, 0.0)
+    Flip()
+    Expect(MouseXSpeed() == 10.0)
+    Expect(MouseX() == 10.0)
+    EndGraphics()
+    Try Graphics(320, 200)
+    Try Simulate.MouseMotion(5.0, 0.0)
+    Flip()
+    Expect(MouseX() == 5.0)
+    Expect(MouseXSpeed() == 5.0)
+End Function

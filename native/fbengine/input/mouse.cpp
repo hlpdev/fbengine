@@ -29,9 +29,11 @@ struct button_t {
 std::array<button_t, most_buttons + 1> buttons{};
 fbe::frame_counts_t counts;
 
-// Where the mouse is, which stays until it moves.
+// Where the mouse is, which stays until it moves, in the window `in`, by its ID: one closed is
+// no one's, and a window opened after it has the mouse nowhere until it moves.
 float x = 0.0F;
 float y = 0.0F;
+SDL_WindowID in = 0;
 
 // What the last Flip read of its motion and its wheel.
 float x_speed = 0.0F;
@@ -42,9 +44,17 @@ std::int32_t wheel_steps = 0;
 // The wheel's turn not yet a whole notch, which the next turn adds to.
 float wheel_part = 0.0F;
 
-// Where Simulate last put the mouse, or the events last read did, which its next motion is from.
+// Where Simulate last put the mouse, or the events last read did, which its next motion is from,
+// in the window `pushed_in`.
 float pushed_x = 0.0F;
 float pushed_y = 0.0F;
+SDL_WindowID pushed_in = 0;
+
+/// The open window's ID, 0 without one.
+SDL_WindowID open_window() {
+    SDL_Window* window = fbe::window();
+    return window != nullptr ? SDL_GetWindowID(window) : 0;
+}
 
 // Headless, the offscreen driver has no relative mode, so it's only this: the window that's in
 // it, by its ID, which a window opened later never has.
@@ -80,11 +90,17 @@ void count() {
 }
 
 void motion_event(const SDL_MouseMotionEvent& event) {
+    // A closed window's motion, read after it closed, isn't the open one's.
+    if (event.windowID == 0 || event.windowID != open_window()) {
+        return;
+    }
     count();
     x = event.x;
     y = event.y;
+    in = event.windowID;
     pushed_x = x;
     pushed_y = y;
+    pushed_in = in;
     x_speed += event.xrel;
     y_speed += event.yrel;
 }
@@ -154,7 +170,18 @@ bool push_motion(float to_x, float to_y, float by_x, float by_y) {
     }
     pushed_x = to_x;
     pushed_y = to_y;
+    pushed_in = pushed.motion.windowID;
     return true;
+}
+
+/// Where Simulate's next motion is from: where it or the events last put the mouse in the open
+/// window, or its corner, 0, in a window it's never been in.
+float pushed_from_x() {
+    return pushed_in == open_window() ? pushed_x : 0.0F;
+}
+
+float pushed_from_y() {
+    return pushed_in == open_window() ? pushed_y : 0.0F;
 }
 
 } // namespace
@@ -174,15 +201,8 @@ void mouse_event(const SDL_Event& event) {
         wheel_event(event.wheel);
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
-        release_buttons();
-        break;
     case SDL_EVENT_WINDOW_DESTROYED:
-        // Where it was is the closed window's, not the next one's, which it's in nowhere yet.
         release_buttons();
-        x = 0.0F;
-        y = 0.0F;
-        pushed_x = 0.0F;
-        pushed_y = 0.0F;
         break;
     default:
         break;
@@ -194,11 +214,11 @@ void mouse_event(const SDL_Event& event) {
 extern "C" {
 
 FBE_API float fbe_input_mouse_x(void) {
-    return x;
+    return in == open_window() ? x : 0.0F;
 }
 
 FBE_API float fbe_input_mouse_y(void) {
-    return y;
+    return in == open_window() ? y : 0.0F;
 }
 
 FBE_API float fbe_input_mouse_x_speed(void) {
@@ -251,8 +271,10 @@ FBE_API bool fbe_input_move_mouse(float to_x, float to_y) {
     SDL_WarpMouseInWindow(window, to_x, to_y);
     x = to_x;
     y = to_y;
+    in = SDL_GetWindowID(window);
     pushed_x = to_x;
     pushed_y = to_y;
+    pushed_in = in;
     return true;
 }
 
@@ -297,11 +319,11 @@ FBE_API bool fbe_input_mouse_relative(void) {
 }
 
 FBE_API bool fbe_input_simulate_mouse_move(float to_x, float to_y) {
-    return push_motion(to_x, to_y, to_x - pushed_x, to_y - pushed_y);
+    return push_motion(to_x, to_y, to_x - pushed_from_x(), to_y - pushed_from_y());
 }
 
 FBE_API bool fbe_input_simulate_mouse_motion(float by_x, float by_y) {
-    return push_motion(pushed_x + by_x, pushed_y + by_y, by_x, by_y);
+    return push_motion(pushed_from_x() + by_x, pushed_from_y() + by_y, by_x, by_y);
 }
 
 FBE_API bool fbe_input_simulate_mouse_button(int32_t button, bool down, int32_t clicks) {

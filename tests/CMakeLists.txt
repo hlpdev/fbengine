@@ -75,8 +75,8 @@ if(FBENGINE_FB_TESTS)
       "rumble-nan|panic: RumbleTriggers: a rumble lasts 0 seconds or more, not"
       "joystick-sizes|panic: Simulate[.]ConnectJoystick: a joystick has 0 to 255 axes, buttons, and hats, not 0, 256, and 0"
       "pads-before-start|before a Flip True\r?\neach connects at the first True\r?\nand once True"
-      "show-message|Missing file: rooms.ini isn't there"
-      "show-message-offscreen|Missing file: rooms.ini isn't there"
+      "show-message|Missing file: rooms.ini isn't there\r?\nwent on"
+      "show-message-offscreen|Missing file: rooms.ini isn't there\r?\nwent on"
       "binding-key-out-of-range|panic: Binding[.]OfKey[(]9999[)]: SDL has no such key"
       "binding-button-out-of-range|panic: Binding[.]OfMouseButton[(]0[)]: a mouse's buttons are 1 to 32"
       "binding-nan-scale|panic: Binding[.]OfGamepadAxis: a scale is a finite number, not")
@@ -141,3 +141,15 @@ if(FBENGINE_FB_TESTS)
                          "panic: PhysicsWorld\\.Step: [^\n]*${said}")
   endforeach()
 endif()
+
+# fbengine's app area apart from its DLL: what it shows nothing for, and what a link opens, on
+# Windows read back through the shell; it opens nothing.
+add_executable(fbengine_app_tests app/app_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/app/link.cpp")
+target_include_directories(fbengine_app_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_link_libraries(fbengine_app_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
+if(WIN32)
+  target_link_libraries(fbengine_app_tests PRIVATE shlwapi)
+endif()
+fbengine_set_warnings(fbengine_app_tests)
+catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
+                     DL_PATHS "${fbengine_test_dll_paths}")
