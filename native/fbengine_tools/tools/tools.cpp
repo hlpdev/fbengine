@@ -16,14 +16,30 @@
 namespace {
 
 thread_local std::string last_error;
+thread_local std::int32_t last_failure = FBE_TOOLS_OTHER;
 
 } // namespace
 
 namespace fbe::tools {
 
-bool fail(std::string_view message) {
-    last_error = message;
+bool fail(const error_t& error) {
+    last_error = error.message;
+    switch (error.failure) {
+    case failure_t::INVALID_DATA:
+        last_failure = FBE_TOOLS_INVALID_DATA;
+        break;
+    case failure_t::NOT_FOUND:
+        last_failure = FBE_TOOLS_NOT_FOUND;
+        break;
+    default:
+        last_failure = FBE_TOOLS_OTHER;
+        break;
+    }
     return false;
+}
+
+bool fail(std::string_view message) {
+    return fail(other(std::string(message)));
 }
 
 std::filesystem::path disk_path(std::string_view utf8) {
@@ -51,12 +67,27 @@ std::expected<void, std::string> write_file(std::string_view path,
     if (file.has_parent_path()) {
         std::filesystem::create_directories(file.parent_path(), error);
     }
-    // An ofstream truncates what it opens.
-    std::ofstream stream(file, std::ios::binary);
-    stream.write(reinterpret_cast<const char*>(bytes.data()),
-                 static_cast<std::streamsize>(bytes.size()));
-    stream.close();
-    if (!stream) {
+    // Beside it, by a name of the OS's own characters, as a std::filesystem::path's conversions
+    // from a char's would need codecvt; an ofstream that couldn't open stays good on MinGW, so
+    // that's asked too.
+    const std::filesystem::path written(
+        file.native() + std::filesystem::path::string_type{ '.', 'c', 'o', 'o', 'k' });
+    {
+        std::ofstream stream(written, std::ios::binary);
+        if (!stream.is_open()) {
+            return std::unexpected(std::format("couldn't write {}", path));
+        }
+        stream.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+        stream.close();
+        if (stream.fail()) {
+            std::filesystem::remove(written, error);
+            return std::unexpected(std::format("couldn't write {}", path));
+        }
+    }
+    std::filesystem::rename(written, file, error);
+    if (error) {
+        std::filesystem::remove(written, error);
         return std::unexpected(std::format("couldn't write {}", path));
     }
     return {};
@@ -72,6 +103,10 @@ FBE_TOOLS_API const char* fbe_tools_version(void) {
 
 FBE_TOOLS_API const char* fbe_tools_error(void) {
     return last_error.c_str();
+}
+
+FBE_TOOLS_API int32_t fbe_tools_failure(void) {
+    return last_failure;
 }
 
 } // extern "C"

@@ -12,6 +12,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <meshoptimizer.h>
 #include <numeric>
 #include <random>
@@ -172,10 +174,10 @@ cooked_t cook(const grid_t& grid, bool optimize, bool with_image = true) {
     vfs::vfs_t files;
     files.mount(path("res://"), vfs::folder(folder.path));
     const vfs::bytes_t source = *files.read(path("res://grid.gltf"));
-    std::expected<tools::bytes_t, std::string> bytes =
+    std::expected<tools::bytes_t, tools::error_t> bytes =
         tools::cook_model(source, path("res://grid.gltf"), files.view(), { .optimize = optimize });
     if (!bytes) {
-        FAIL(bytes.error());
+        FAIL(bytes.error().message);
     }
     // The engine decodes it at the same path, beside its texture.
     folder.write("grid.gltf", *bytes);
@@ -233,11 +235,98 @@ TEST_CASE("a glTF the engine wouldn't load isn't cooked", "[tools]") {
     vfs::vfs_t files;
     files.mount(path("res://"), vfs::folder(folder.path));
     const vfs::bytes_t source = *files.read(path("res://grid.gltf"));
-    const std::expected<tools::bytes_t, std::string> bytes =
+    const std::expected<tools::bytes_t, tools::error_t> bytes =
         tools::cook_model(source, path("res://grid.gltf"), files.view(), { .optimize = true });
     REQUIRE_FALSE(bytes.has_value());
-    REQUIRE(bytes.error().contains("index past its vertices"));
+    REQUIRE(bytes.error().failure == tools::failure_t::INVALID_DATA);
+    REQUIRE(bytes.error().message.contains("index past its vertices"));
     REQUIRE_FALSE(
         tools::cook_model(test::bytes("not a glTF"), path("res://x.gltf"), files.view(), {})
             .has_value());
+}
+
+namespace {
+
+bytes_t fixture(std::string_view name) {
+    std::ifstream stream(std::filesystem::path(FBENGINE_ASSETS_FIXTURES) / name, std::ios::binary);
+    REQUIRE(stream.good());
+    return { std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>() };
+}
+
+} // namespace
+
+TEST_CASE("a glTF's images in its buffers cook into KTX2s it names through KHR_texture_basisu",
+          "[tools]") {
+    // A base color texture, sRGB, and a normal map, linear, each a data URI's PNG.
+    const std::string red = test::base64(test::png(4, 4, 4, std::vector<std::uint8_t>(64, 200)));
+    const grid_t grid;
+    std::string json = grid.json(false);
+    json.replace(json.rfind(R"(}],"weights")"), 2, R"(,"material":0}])");
+    json.pop_back();
+    json += R"(,"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}},)"
+            R"("normalTexture":{"index":1}}],"textures":[{"source":0},{"source":1}],)"
+            R"("images":[{"uri":"data:image/png;base64,)" +
+            red +
+            R"("},)"
+            R"({"uri":"data:image/png;base64,)" +
+            red + R"("}]})";
+    const test::temp_folder_t folder;
+    folder.write("grid.gltf", json);
+    folder.write("grid.bin", grid.bin);
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    const fbe_cook_model_t options{
+        .optimize = true,
+        .images = { .format = FBE_COOK_BC7, .srgb = true, .mipmaps = true, .quality = 0 },
+    };
+    const std::expected<tools::bytes_t, tools::error_t> bytes = tools::cook_model(
+        *files.read(path("res://grid.gltf")), path("res://grid.gltf"), files.view(), options);
+    if (!bytes) {
+        FAIL(bytes.error().message);
+    }
+    const std::string text(bytes->begin(), bytes->end());
+    REQUIRE(text.contains("KHR_texture_basisu"));
+    const assets::result_t<assets::model_t> model =
+        assets::decode_model(path("res://cooked.glb"), *bytes, vfs::view_t(), {});
+    if (!model) {
+        FAIL(model.error().message);
+    }
+    REQUIRE(model->images.size() == 2);
+    REQUIRE(model->images[0].format == assets::formats::bc7_srgb);
+    REQUIRE(model->images[0].levels.size() == 3);
+    REQUIRE(model->images[1].format == assets::formats::bc7);
+    REQUIRE(model->materials.at(0).base_color_texture.image == 0);
+    REQUIRE(model->materials.at(0).normal_texture.image == 1);
+
+    // One that won't decode stops the cook.
+    std::string broken = json;
+    broken.replace(broken.find(red), red.size(), test::base64(test::bytes("not an image at all!")));
+    folder.write("broken.gltf", broken);
+    const std::expected<tools::bytes_t, tools::error_t> refused = tools::cook_model(
+        *files.read(path("res://broken.gltf")), path("res://broken.gltf"), files.view(), options);
+    REQUIRE_FALSE(refused.has_value());
+    REQUIRE(refused.error().failure == tools::failure_t::INVALID_DATA);
+}
+
+TEST_CASE("a cooked glTF keeps its clips' frame rates", "[tools]") {
+    vfs::vfs_t files;
+    files.mount(path("res://models"), vfs::folder(FBENGINE_ASSETS_FIXTURES));
+    const vfs::bytes_t source = fixture("clip_rate.gltf");
+    const assets::result_t<assets::model_t> before =
+        assets::decode_model(path("res://models/clip_rate.gltf"), source, files.view(), {});
+    if (!before) {
+        FAIL(before.error().message);
+    }
+    REQUIRE(before->clips.at(0).frame_rate == 30);
+    const std::expected<tools::bytes_t, tools::error_t> bytes = tools::cook_model(
+        source, path("res://models/clip_rate.gltf"), files.view(), { .optimize = true });
+    if (!bytes) {
+        FAIL(bytes.error().message);
+    }
+    const assets::result_t<assets::model_t> after =
+        assets::decode_model(path("res://models/cooked.glb"), *bytes, files.view(), {});
+    if (!after) {
+        FAIL(after.error().message);
+    }
+    REQUIRE(after->clips.at(0).frame_rate == 30);
 }

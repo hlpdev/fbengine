@@ -46,9 +46,12 @@ FBE_TOOLS_API bool fbe_cook_image(const char* from, const char* to,
         if (!source) {
             return tools::fail(source.error());
         }
-        std::expected<tools::bytes_t, std::string> cooked = tools::cook_image(*source, *options);
+        std::expected<tools::bytes_t, tools::error_t> cooked = tools::cook_image(*source, *options);
         if (!cooked) {
-            return tools::fail(std::format("couldn't cook {}: {}", from, cooked.error()));
+            return tools::fail({
+                .failure = cooked.error().failure,
+                .message = std::format("couldn't cook {}: {}", from, cooked.error().message),
+            });
         }
         if (std::expected<void, std::string> written = tools::write_file(to, *cooked); !written) {
             return tools::fail(written.error());
@@ -71,12 +74,18 @@ FBE_TOOLS_API bool fbe_cook_model(const char* from, const char* to, const char* 
         const vfs::view_t view = files.view();
         vfs::result_t<vfs::bytes_t> source = view.read(*path);
         if (!source) {
-            return tools::fail(source.error().message);
+            return tools::fail(tools::other(source.error().message));
         }
-        std::expected<tools::bytes_t, std::string> cooked =
+        std::expected<tools::bytes_t, tools::error_t> cooked =
             tools::cook_model(*source, *path, view, *options);
         if (!cooked) {
-            return tools::fail(std::format("couldn't cook {}: {}", from, cooked.error()));
+            // What it names that can't be read, as a buffer that isn't there, is OTHER's.
+            return tools::fail({
+                .failure = cooked.error().failure == vfs::failure_t::INVALID_DATA
+                               ? vfs::failure_t::INVALID_DATA
+                               : vfs::failure_t::OTHER,
+                .message = std::format("couldn't cook {}: {}", from, cooked.error().message),
+            });
         }
         if (std::expected<void, std::string> written = tools::write_file(to, *cooked); !written) {
             return tools::fail(written.error());

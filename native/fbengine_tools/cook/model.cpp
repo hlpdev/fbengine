@@ -2,8 +2,10 @@
 // triangles ordered for the GPU's vertex cache and to draw less over themselves, and its vertices
 // for the GPU's fetches, by meshoptimizer, every attribute and morph target of a primitive
 // remapped as one, and the whole written as a binary glTF of one buffer, with every accessor it
-// keeps repacked into it, and the images in its buffers too. Images it names by their paths stay
-// named, since the cooker cooks them at the same paths.
+// keeps repacked into it. The images in its buffers are cooked into KTX2s in it too, which its
+// textures name through KHR_texture_basisu, as the engine reads them; images it names by their
+// paths stay named, since the cooker cooks them at the same paths. Its clips' frame rates, in
+// their extras, go with them.
 
 #include "assets/model.hpp"
 
@@ -47,10 +49,11 @@ using blob_t = std::vector<std::byte>;
 // the accessors it keeps, with where each old view and accessor went.
 class cooker_t {
 public:
-    cooker_t(gltf::Asset& asset, bool optimize) : m_asset(asset), m_optimize(optimize) {}
+    cooker_t(gltf::Asset& asset, const fbe_cook_model_t& options, std::span<const float> rates)
+        : m_asset(asset), m_options(options), m_rates(rates) {}
 
     // The binary glTF of the asset, cooked.
-    std::expected<bytes_t, std::string> cook() {
+    std::expected<bytes_t, error_t> cook() {
         m_view_map.assign(m_asset.bufferViews.size(), std::nullopt);
         m_accessor_map.assign(m_asset.accessors.size(), std::nullopt);
         for (gltf::Mesh& mesh : m_asset.meshes) {
@@ -69,9 +72,16 @@ public:
                 sampler.outputAccessor = copied_accessor(sampler.outputAccessor);
             }
         }
-        for (gltf::Image& image : m_asset.images) {
-            pack_image(image);
+        const std::vector<char> color = colors();
+        std::vector<char> cooked(m_asset.images.size(), 0);
+        for (std::size_t i = 0; i < m_asset.images.size(); ++i) {
+            std::expected<bool, error_t> packed = pack_image(i, color[i] != 0);
+            if (!packed) {
+                return std::unexpected(std::move(packed.error()));
+            }
+            cooked[i] = *packed ? 1 : 0;
         }
+        name_cooked(cooked);
 
         m_asset.bufferViews = std::move(m_views);
         m_asset.accessors = std::move(m_accessors);
@@ -85,10 +95,57 @@ public:
             };
             m_asset.buffers.push_back(std::move(buffer));
         }
-        return write_glb(m_asset);
+        std::expected<bytes_t, std::string> written = write_glb(m_asset, m_rates);
+        if (!written) {
+            return std::unexpected(other(std::move(written.error())));
+        }
+        return std::move(*written);
     }
 
 private:
+    // Which images a color texture shows, its base color's or its emissive's, which are sRGB.
+    [[nodiscard]] std::vector<char> colors() const {
+        std::vector<char> color(m_asset.images.size(), 0);
+        const auto mark = [&](const auto& info) {
+            if (!info || info->textureIndex >= m_asset.textures.size()) {
+                return;
+            }
+            const gltf::Texture& texture = m_asset.textures[info->textureIndex];
+            for (const auto& image : { texture.imageIndex, texture.basisuImageIndex }) {
+                if (image && *image < color.size()) {
+                    color[*image] = 1;
+                }
+            }
+        };
+        for (const gltf::Material& material : m_asset.materials) {
+            mark(material.pbrData.baseColorTexture);
+            mark(material.emissiveTexture);
+        }
+        return color;
+    }
+
+    // Each texture that shows an image cooked into a KTX2 names it through KHR_texture_basisu, as
+    // a KTX2's is, which the glTF then needs.
+    void name_cooked(const std::vector<char>& cooked) {
+        bool any = false;
+        for (gltf::Texture& texture : m_asset.textures) {
+            if (texture.imageIndex && *texture.imageIndex < cooked.size() &&
+                cooked[*texture.imageIndex] != 0) {
+                texture.basisuImageIndex = texture.imageIndex;
+                texture.imageIndex.reset();
+                any = true;
+            }
+        }
+        if (!any) {
+            return;
+        }
+        for (auto* names : { &m_asset.extensionsUsed, &m_asset.extensionsRequired }) {
+            if (std::ranges::find(*names, gltf::extensions::KHR_texture_basisu) == names->end()) {
+                names->emplace_back(gltf::extensions::KHR_texture_basisu);
+            }
+        }
+    }
+
     // The bytes of the old view `view`, in its buffer, which the engine's check has seen are
     // there.
     [[nodiscard]] std::span<const std::byte> view_bytes(std::size_t view) const {
@@ -297,7 +354,7 @@ private:
     // and its vertices for the fetches, then packed; any other primitive copied.
     void cook_primitive(gltf::Primitive& primitive) {
         const auto* position = primitive.findAttribute("POSITION");
-        if (!m_optimize || primitive.type != gltf::PrimitiveType::Triangles ||
+        if (!m_options.optimize || primitive.type != gltf::PrimitiveType::Triangles ||
             position == primitive.attributes.end()) {
             copy_primitive(primitive);
             return;
@@ -384,29 +441,56 @@ private:
                                                     gltf::BufferTarget::ElementArrayBuffer, false);
     }
 
-    // An image in a buffer, or a data URI's, put in the new buffer; one named by its path stays.
-    void pack_image(gltf::Image& image) {
+    // Image `index`, in a buffer or a data URI, cooked into a KTX2 in the new buffer, sRGB if
+    // it's `color`'s, and gives True; a KTX2 already is put there as it is. One named by its path
+    // stays, and gives False.
+    std::expected<bool, error_t> pack_image(std::size_t index, bool color) {
+        gltf::Image& image = m_asset.images[index];
+        std::span<const std::byte> bytes;
         if (const auto* view = std::get_if<gltf::sources::BufferView>(&image.data)) {
-            image.data = gltf::sources::BufferView{
-                .bufferViewIndex = copied_view(view->bufferViewIndex),
-                .mimeType = view->mimeType,
-            };
+            bytes = view_bytes(view->bufferViewIndex);
         } else if (const auto* array = std::get_if<gltf::sources::Array>(&image.data)) {
-            const std::size_t at =
-                append(std::span(array->bytes.data(), array->bytes.size_bytes()),
-                       gltf::Optional<std::size_t>(), gltf::Optional<gltf::BufferTarget>());
-            image.data =
-                gltf::sources::BufferView{ .bufferViewIndex = at, .mimeType = array->mimeType };
+            bytes = std::span(array->bytes.data(), array->bytes.size_bytes());
         } else if (const auto* vector = std::get_if<gltf::sources::Vector>(&image.data)) {
-            const std::size_t at = append(vector->bytes, gltf::Optional<std::size_t>(),
-                                          gltf::Optional<gltf::BufferTarget>());
-            image.data =
-                gltf::sources::BufferView{ .bufferViewIndex = at, .mimeType = vector->mimeType };
+            bytes = vector->bytes;
+        } else {
+            return false;
         }
+        const std::span<const std::uint8_t> texels(
+            reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+        bytes_t made;
+        if (assets::kind_of(texels) == assets::file_kind_t::KTX2) {
+            // One the engine wouldn't load isn't put there either.
+            const assets::result_t<assets::image_t> checked = assets::decode_image(
+                texels, assets::image_options_t(), std::format("its image {}", index));
+            if (!checked) {
+                return std::unexpected(invalid(checked.error().message));
+            }
+            made.assign(texels.begin(), texels.end());
+        } else {
+            fbe_cook_image_t options = m_options.images;
+            options.srgb = color && options.srgb;
+            std::expected<bytes_t, error_t> cooked = cook_image(texels, options);
+            if (!cooked) {
+                return std::unexpected(error_t{
+                    .failure = cooked.error().failure,
+                    .message =
+                        std::format("its image {} won't cook: {}", index, cooked.error().message),
+                });
+            }
+            made = std::move(*cooked);
+        }
+        const std::size_t at =
+            append(std::span(reinterpret_cast<const std::byte*>(made.data()), made.size()),
+                   gltf::Optional<std::size_t>(), gltf::Optional<gltf::BufferTarget>());
+        image.data =
+            gltf::sources::BufferView{ .bufferViewIndex = at, .mimeType = gltf::MimeType::KTX2 };
+        return true;
     }
 
     gltf::Asset& m_asset;
-    bool m_optimize;
+    const fbe_cook_model_t& m_options;
+    std::span<const float> m_rates;
     blob_t m_blob;
     std::vector<gltf::BufferView> m_views;
     std::vector<gltf::Accessor> m_accessors;
@@ -448,30 +532,35 @@ std::expected<void, std::string> read_buffers(gltf::Asset& asset, const vfs::pat
 
 } // namespace
 
-std::expected<bytes_t, std::string> cook_model(std::span<const std::uint8_t> bytes,
-                                               const vfs::path_t& path, const vfs::view_t& files,
-                                               const fbe_cook_model_t& options) {
+std::expected<bytes_t, error_t> cook_model(std::span<const std::uint8_t> bytes,
+                                           const vfs::path_t& path, const vfs::view_t& files,
+                                           const fbe_cook_model_t& options) {
     // What the engine wouldn't load isn't cooked, and what it would is safe to read here.
-    const assets::result_t<assets::model_t> checked =
+    assets::result_t<assets::model_t> checked =
         assets::decode_model(path, bytes, files, { .images = false });
     if (!checked) {
-        return std::unexpected(checked.error().message);
+        return std::unexpected(std::move(checked.error()));
     }
     auto data = gltf::GltfDataBuffer::FromBytes(reinterpret_cast<const std::byte*>(bytes.data()),
                                                 bytes.size());
     if (data.error() != gltf::Error::None) {
-        return std::unexpected(std::string(gltf::getErrorMessage(data.error())));
+        return std::unexpected(other(std::string(gltf::getErrorMessage(data.error()))));
     }
     gltf::Parser parser(extensions);
+    // Its clips' frame rates, which the engine's check read too.
+    std::vector<float> rates;
+    for (const assets::clip_t& clip : checked->clips) {
+        rates.push_back(clip.frame_rate);
+    }
     auto parsed = parser.loadGltf(data.get(), {}, gltf::Options::None);
     if (parsed.error() != gltf::Error::None) {
-        return std::unexpected(std::string(gltf::getErrorMessage(parsed.error())));
+        return std::unexpected(invalid(std::string(gltf::getErrorMessage(parsed.error()))));
     }
     gltf::Asset asset = std::move(parsed.get());
     if (std::expected<void, std::string> read = read_buffers(asset, path, files); !read) {
-        return std::unexpected(read.error());
+        return std::unexpected(other(read.error()));
     }
-    cooker_t cooker(asset, options.optimize);
+    cooker_t cooker(asset, options, rates);
     return cooker.cook();
 }
 

@@ -33,9 +33,20 @@ Public Struct ImageSettings
     Public Field Quality: Int32 = 2
 End Struct
 
-/// A glTF's import settings, from its sidecar, as `door.gltf.toml` is door.gltf's.
+/// A glTF's import settings, from its sidecar, as `door.gltf.toml` is door.gltf's:
+///
+/// ```toml
+/// optimize = true
+///
+/// [images]              # the images in its buffers, as a binary glTF's are
+/// compression = "astc"
+/// ```
 Public Struct ModelSettings
     /// Whether the cooker orders its meshes' vertices and triangles for the GPU, with
     /// meshoptimizer, which a release draws faster.
     Public Field Optimize: Bool = True
+    /// How the cooker cooks the images in its buffers into KTX2s, as an image's sidecar says of
+    /// it, or Null for an image's defaults; a color texture's is sRGB when `Images.Srgb` is, and
+    /// the rest linear.
+    Public Field Images: ImageSettings? = Null
 End Struct

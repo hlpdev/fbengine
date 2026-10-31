@@ -448,6 +448,8 @@ add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp a
 target_include_directories(fbengine_tools_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_tools"
                            "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_compile_definitions(fbengine_tools_tests PRIVATE
+                           FBENGINE_ASSETS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/assets/fixtures")
 target_link_libraries(fbengine_tools_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
                       fastgltf::fastgltf meshoptimizer)
 fbengine_set_warnings(fbengine_tools_tests)

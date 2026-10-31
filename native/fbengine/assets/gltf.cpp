@@ -826,6 +826,17 @@ private:
         }
         const std::size_t count = m_asset.accessors[position->accessorIndex].count;
         const auto& attributes = primitive.attributes;
+        // Every attribute, those the engine doesn't read too, and every target's, as long as the
+        // positions, as what reads a primitive's vertices, the cooker's remap among them, trusts.
+        const auto as_long = [&](const auto& named) {
+            return std::ranges::all_of(named, [&](const gltf::Attribute& attribute) {
+                return m_asset.accessors[attribute.accessorIndex].count == count;
+            });
+        };
+        if (!as_long(attributes) || !std::ranges::all_of(primitive.targets, as_long)) {
+            return fail("a primitive has an attribute, or a morph target's, not as long as its "
+                        "positions");
+        }
         // Each attribute, as long as the positions, or none.
         auto positions = read<vec3_t>(position->accessorIndex, count);
         auto normals = read_named<vec3_t>(attributes, "NORMAL", count);

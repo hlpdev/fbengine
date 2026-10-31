@@ -28,8 +28,18 @@ extern "C" {
 // The version of fbengine_tools this DLL is, like "0.1.0", which is fbengine's.
 FBE_TOOLS_API const char* fbe_tools_version(void);
 
-// What the last call that failed on this thread says went wrong.
+// How a call failed, as std.io's IOErrorKind has it.
+// NOLINTBEGIN(modernize-macro-to-enum)
+#define FBE_TOOLS_NOT_FOUND    0
+#define FBE_TOOLS_INVALID_DATA 4
+#define FBE_TOOLS_OTHER        5
+// NOLINTEND(modernize-macro-to-enum)
+
+// What the last call that failed on this thread says went wrong, and how it failed,
+// FBE_TOOLS_INVALID_DATA for what it was given that isn't what it takes, and FBE_TOOLS_OTHER for
+// the rest, as files that can't be read or written.
 FBE_TOOLS_API const char* fbe_tools_error(void);
+FBE_TOOLS_API int32_t fbe_tools_failure(void);
 
 #ifdef __cplusplus
 }
