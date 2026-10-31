@@ -35,6 +35,15 @@ Public Const FBE_LAYER_ADD: Int32 = 1
 Public Const FBE_LAYER_ALPHA: Int32 = 2
 Public Const FBE_LAYER_MULTIPLY_2: Int32 = 3
 Public Const FBE_MATERIAL_LAYERS: Int32 = 8
+Public Const FBE_RESPONSE_NONE: Int32 = 0
+Public Const FBE_RESPONSE_STOP: Int32 = 1
+Public Const FBE_RESPONSE_SLIDE: Int32 = 2
+Public Const FBE_RESPONSE_SLIDE_HORIZONTAL: Int32 = 3
+Public Const FBE_COLLISION_AUTO: Int32 = 0
+Public Const FBE_COLLISION_ELLIPSOID: Int32 = 1
+Public Const FBE_COLLISION_BOX: Int32 = 2
+Public Const FBE_COLLISION_MESH: Int32 = 3
+Public Const FBE_COLLISION_GROUPS: Int32 = 1024
 
 @CLayout Public Struct fbe_vec3_t
     Public Field x: Float32
@@ -83,6 +92,16 @@ End Struct
     Public Field uv0: fbe_vec2_t
     Public Field uv1: fbe_vec2_t
     Public Field color: fbe_color_t
+End Struct
+
+@CLayout Public Struct fbe_collision_t
+    Public Field entity: UInt64
+    Public Field point: fbe_vec3_t
+    Public Field normal: fbe_vec3_t
+    Public Field time: Float32
+    Public Field geometry: UInt64
+    Public Field surface: Int32
+    Public Field triangle: Int32
 End Struct
 
 @CLayout Public Struct fbe_pose_t
@@ -279,5 +298,28 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_entity_blocks_sight(entity: UInt64): Bool
     Function fbe_entity_can_see_point(entity: UInt64, x: Float32, y: Float32, z: Float32): Int32
     Function fbe_entity_can_see(entity: UInt64, target: UInt64): Int32
+    Function fbe_entity_set_collision_group(entity: UInt64, group: Int32): Bool
+    Function fbe_entity_collision_group(entity: UInt64): Int32
+    Function fbe_entity_set_collision_radius(entity: UInt64, horizontal: Float32,
+                                             vertical: Float32): Bool
+    Function fbe_entity_collision_radius(entity: UInt64, radius: Ptr<fbe_vec2_t>): Bool
+    Function fbe_entity_set_collision_shape(entity: UInt64, shape: Int32): Bool
+    Function fbe_entity_collision_shape(entity: UInt64): Int32
+    Function fbe_entity_set_collision_box(entity: UInt64, box: Ptr<fbe_aabb_t>): Bool
+    Function fbe_entity_collision_box(entity: UInt64, box: Ptr<fbe_aabb_t>): Bool
+    Function fbe_entity_set_step_height(entity: UInt64, height: Float32): Bool
+    Function fbe_entity_step_height(entity: UInt64): Float32
+    Function fbe_entity_reset_collisions(entity: UInt64): Bool
+    Function fbe_entity_collisions(entity: UInt64, collisions: Ptr<fbe_collision_t>,
+                                   capacity: Int32): Int32
+    Function fbe_world_set_collision(world: UInt64, source: Int32, target: Int32,
+                                     response: Int32): Bool
+    Function fbe_world_collision(world: UInt64, source: Int32, target: Int32): Int32
+    Function fbe_world_clear_collisions(world: UInt64): Bool
+    Function fbe_world_set_collision_iterations(world: UInt64, iterations: Int32): Bool
+    Function fbe_world_collision_iterations(world: UInt64): Int32
+    Function fbe_world_set_collision_skin(world: UInt64, skin: Float32): Bool
+    Function fbe_world_collision_skin(world: UInt64): Float32
+    Function fbe_world_collide(world: UInt64): Bool
     Function fbe_entity_copy(entity: UInt64, world: UInt64, parent: UInt64): UInt64
 End Extern

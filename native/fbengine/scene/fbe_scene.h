@@ -77,6 +77,25 @@ extern "C" {
 // How many texture layers a material has.
 #define FBE_MATERIAL_LAYERS 8
 
+// What a moving entity does when it touches another in a collision group it collides with: nothing,
+// for groups that don't collide; stops where it touched; slides along what it touched for the rest
+// of its move; or slides, but no further than it moved across, so falling onto a slope doesn't
+// slide it down, and walking up one keeps its pace.
+#define FBE_RESPONSE_NONE             0
+#define FBE_RESPONSE_STOP             1
+#define FBE_RESPONSE_SLIDE            2
+#define FBE_RESPONSE_SLIDE_HORIZONTAL 3
+
+// What a moving entity is touched as: its kind's own, a mesh's triangles and any other's
+// ellipsoid; its ellipsoid; its collision box; or its mesh's triangles, from their fronts.
+#define FBE_COLLISION_AUTO      0
+#define FBE_COLLISION_ELLIPSOID 1
+#define FBE_COLLISION_BOX       2
+#define FBE_COLLISION_MESH      3
+
+// Collision groups are 1 to FBE_COLLISION_GROUPS - 1; 0 is none.
+#define FBE_COLLISION_GROUPS 1024
+
 // std.math's Vec3, Quat, and Mat4 as C has them; the matrix is column-major, its columns the
 // axes, then the origin. C has no `using`, so they're typedefs.
 // NOLINTBEGIN(modernize-use-using)
@@ -134,6 +153,20 @@ typedef struct fbe_vertex_t {
     fbe_vec2_t uv1;
     fbe_color_t color;
 } fbe_vertex_t;
+
+// What a collision touched, as an entity's list of them gives it: the other entity; the point it
+// touched, on the other's surface, and that surface's normal there, both in the world; when in the
+// move, from 0 to 1, of the step of the move that touched it, which after a slide is the slide;
+// and the geometry, surface, and triangle, for a mesh's, else 0 and -1s.
+typedef struct fbe_collision_t {
+    uint64_t entity;
+    fbe_vec3_t point;
+    fbe_vec3_t normal;
+    float time;
+    uint64_t geometry;
+    int32_t surface;
+    int32_t triangle;
+} fbe_collision_t;
 
 // Where an entity is and how it's turned, as the batches give and take them.
 typedef struct fbe_pose_t {
@@ -500,6 +533,57 @@ FBE_API bool fbe_entity_blocks_sight(uint64_t entity);
 // -1 for a freed entity.
 FBE_API int32_t fbe_entity_can_see_point(uint64_t entity, float x, float y, float z);
 FBE_API int32_t fbe_entity_can_see(uint64_t entity, uint64_t target);
+
+// Collisions. An entity in a collision group that its World says collides with another moves as an
+// ellipsoid, swept from where its last move ended to where it is, against every showing entity of
+// a group it collides with, and the response its World gives the pair says what it does when it
+// touches one; what it touches gets the contact too. The other entities are where they are now,
+// and moving ones where their last move ended; their own moves aren't swept, so a moving door
+// pushes nothing. Each move is worked out on its own, so the order entities are in changes
+// nothing.
+//
+// An entity's group, 0 for none, at first. Setting one forgets where its last move ended.
+FBE_API bool fbe_entity_set_collision_group(uint64_t entity, int32_t group);
+FBE_API int32_t fbe_entity_collision_group(uint64_t entity);
+// Its ellipsoid as a mover, and as a target of FBE_COLLISION_ELLIPSOID: `horizontal` across X and Z
+// and `vertical` up Y, in world units whatever its scale, 1 and 1 at first; false unless above 0.
+FBE_API bool fbe_entity_set_collision_radius(uint64_t entity, float horizontal, float vertical);
+FBE_API bool fbe_entity_collision_radius(uint64_t entity, fbe_vec2_t* radius);
+// What it's touched as, FBE_COLLISION_AUTO at first.
+FBE_API bool fbe_entity_set_collision_shape(uint64_t entity, int32_t shape);
+FBE_API int32_t fbe_entity_collision_shape(uint64_t entity);
+// Its box as a target of FBE_COLLISION_BOX, in its own space, turned and scaled with it, -1 to 1
+// at first; false unless its least corner is at or below its greatest.
+FBE_API bool fbe_entity_set_collision_box(uint64_t entity, const fbe_aabb_t* box);
+FBE_API bool fbe_entity_collision_box(uint64_t entity, fbe_aabb_t* box);
+// How high a sliding mover steps up onto what blocks it, 0 for not at all, at first.
+FBE_API bool fbe_entity_set_step_height(uint64_t entity, float height);
+FBE_API float fbe_entity_step_height(uint64_t entity);
+// Forgets where its last move ended, and what it touched, so its next move isn't swept, as a
+// teleport wants.
+FBE_API bool fbe_entity_reset_collisions(uint64_t entity);
+// What it touched in its World's last fbe_world_collide, as a mover or as what was touched: writes
+// up to `capacity` and gives how many there are, -1 for a freed entity.
+FBE_API int32_t fbe_entity_collisions(uint64_t entity, fbe_collision_t* collisions,
+                                      int32_t capacity);
+
+// What a source group does when it touches a target group, FBE_RESPONSE_NONE for every pair at
+// first.
+FBE_API bool fbe_world_set_collision(uint64_t world, int32_t source, int32_t target,
+                                     int32_t response);
+FBE_API int32_t fbe_world_collision(uint64_t world, int32_t source, int32_t target);
+// Makes every pair FBE_RESPONSE_NONE again.
+FBE_API bool fbe_world_clear_collisions(uint64_t world);
+// The most times one move touches something and goes on, 1 to 64, 8 at first; a move that has
+// touched that many times ends where it got to.
+FBE_API bool fbe_world_set_collision_iterations(uint64_t world, int32_t iterations);
+FBE_API int32_t fbe_world_collision_iterations(uint64_t world);
+// How far a mover stays from what it touches, so it doesn't sink in, 0 to 0.1, 0.001 at first.
+FBE_API bool fbe_world_set_collision_skin(uint64_t world, float skin);
+FBE_API float fbe_world_collision_skin(uint64_t world);
+// Moves every moving entity of the World as its collisions say, from where its last move ended to
+// where it is, and keeps what each touched.
+FBE_API bool fbe_world_collide(uint64_t world);
 
 // Copies an entity and everything under it, as the last child of `parent`, or at the top of
 // `world` when `parent` is 0; each copy has its original's name, transform, and settings, and

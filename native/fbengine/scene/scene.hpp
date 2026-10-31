@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fbe::scene {
@@ -42,12 +43,44 @@ private:
     std::vector<std::uint32_t> m_free;
 };
 
-/// A world: the entities at its top, how many it has, and its ambient light, std.math's
-/// Color.Gray, sRGB's half gray, at first.
+/// A world: the entities at its top, how many it has, its ambient light, std.math's Color.Gray,
+/// sRGB's half gray, at first, and how its collisions go.
 struct world_t {
     std::vector<std::uint32_t> roots;
     std::int32_t count = 0;
     std::array<float, 3> ambient{ 0.2158605F, 0.2158605F, 0.2158605F };
+    /// Each pair of collision groups that collide, source in the high 16 bits and target in the
+    /// low, and the FBE_RESPONSE_ the source makes; a game has a few.
+    std::vector<std::pair<std::uint32_t, std::int32_t>> collisions;
+    std::int32_t collision_iterations = 8;
+    float collision_skin = 0.001F;
+};
+
+/// What a collision touched: the other entity, where and facing which way, when in its move, and
+/// the surface and triangle, for a mesh.
+struct contact_t {
+    std::uint64_t entity = 0;
+    vec3_t point;
+    vec3_t normal;
+    float time = 0.0F;
+    std::uint64_t geometry = 0;
+    std::int32_t surface = -1;
+    std::int32_t triangle = -1;
+};
+
+/// How an entity collides: its group, its ellipsoid as a mover, its shape as a target, how high it
+/// steps up, where its last move ended, and what it touched then.
+struct collider_t {
+    std::int32_t group = 0;
+    float horizontal = 1.0F;
+    float vertical = 1.0F;
+    std::int32_t shape = 0;
+    vec3_t box_min{ -1.0F, -1.0F, -1.0F };
+    vec3_t box_max{ 1.0F, 1.0F, 1.0F };
+    float step_height = 0.0F;
+    bool has_previous = false;
+    vec3_t previous;
+    std::vector<contact_t> contacts;
 };
 
 /// One surface of a geometry: its vertices, as the C API has them, and its triangles, three
@@ -135,6 +168,7 @@ struct entities_t {
     std::vector<std::uint32_t> component;
     /// Whether it blocks line of sight, by its triangles for a mesh.
     std::vector<bool> blocks_sight;
+    std::vector<collider_t> colliders;
 };
 
 /// A camera: how it projects, the part of its target it draws to, what it clears, and when it

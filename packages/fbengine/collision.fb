@@ -1,0 +1,258 @@
+// Collisions, the scene's own, for games that don't need a physics engine: moving entities swept as
+// ellipsoids against meshes, boxes, and other ellipsoids, stopping or sliding by their groups'
+// rules, as players and NPCs walk through a level.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./geometry"
+Import "./transform"
+Import "./window"
+Import "./world"
+
+/// What a moving entity does when it touches one of a group its own collides with.
+Public Enum CollisionResponse
+    /// Nothing: the groups don't collide.
+    NONE = 0
+    /// It stops where it touched.
+    STOP = 1
+    /// It slides along what it touched for the rest of its move.
+    SLIDE = 2
+    /// It slides, but no further than it moved across, so gravity alone doesn't slide it down a
+    /// slope it stands on, and walking up one keeps its pace.
+    SLIDE_HORIZONTAL = 3
+End Enum
+
+/// What a moving entity touches an entity as.
+Public Enum CollisionShape
+    /// Its kind's own: a Mesh's triangles, and any other entity's ellipsoid.
+    AUTO = 0
+    /// Its ellipsoid, its collision radii.
+    ELLIPSOID = 1
+    /// Its collision box, turned and scaled with it.
+    BOX = 2
+    /// Its Mesh's triangles, from their fronts.
+    MESH = 3
+End Enum
+
+/// What a collision touched, in the World's last Collide.
+Public Struct Collision Implements Printable
+    /// The other entity: what a mover touched, or the mover that touched it.
+    Public Field Other: Entity
+    /// Where it touched, on the surface of what was touched, in the world.
+    Public Field Point: Vec3
+    /// The touched surface's normal there, out of what was touched, in the world: a mover on the
+    /// ground has one pointing up.
+    Public Field Normal: Vec3
+    /// When in the move it touched, from 0 to 1, of the part of the move that touched it, which
+    /// after a slide is the slide.
+    Public Field Time: Float
+    /// The surface touched, for a Mesh's triangles, else Null.
+    Public Field Surface: Surface?
+    /// The triangle touched in that surface, else -1.
+    Public Field Triangle: Int
+
+    Public Method ToString(): String => "Collision with {Other} at {Point}, facing {Normal}"
+End Struct
+
+/// How entities collide. An entity in a collision group that its World says collides with another
+/// moves as an ellipsoid, swept from where its last move ended to where it is now, against every
+/// showing entity of a group its own collides with, which it touches as its CollisionShape; what
+/// it touches is where it is now, a moving one's ellipsoid where its last move ended, and isn't
+/// swept itself, so a moving door pushes nothing. Each move is worked out on its own, so their
+/// order changes nothing. Moving an entity by SetPosition is a move to sweep; ResetCollisions is a
+/// teleport.
+Extend Entity
+    /// Puts the entity in a collision group, 1 to 1023, or none with 0, as at first; it forgets
+    /// where its last move ended. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetCollisionGroup(group: Int)
+        If !fbe_entity_set_collision_group(Live("SetCollisionGroup"), group) Then Panic(LastError())
+    End Method
+
+    /// The entity's collision group, 0 for none.
+    @MainThread @PanicsAtCaller
+    Public Method CollisionGroup(): Int => fbe_entity_collision_group(Live("CollisionGroup"))
+
+    /// Makes the entity's ellipsoid a sphere of `radius`, in world units whatever its scale, 1 at
+    /// first. One not above 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetCollisionRadius(radius: Float)
+        SetCollisionRadius(radius, radius)
+    End Method
+
+    /// Sets the entity's ellipsoid, `horizontal` across X and Z and `vertical` up Y, in world units
+    /// whatever its scale, as a person's is taller than it is wide. Ones not above 0 panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetCollisionRadius(horizontal: Float, vertical: Float)
+        Local entity = Live("SetCollisionRadius")
+        If !fbe_entity_set_collision_radius(entity, horizontal, vertical) Then Panic(LastError())
+    End Method
+
+    /// The entity's ellipsoid's radii: x across, y up.
+    @MainThread @PanicsAtCaller
+    Public Method CollisionRadius(): Vec2
+        Local entity = Live("CollisionRadius")
+        Local found = fbe_vec2_t(0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_entity_collision_radius(entity, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return Vec2(found.x, found.y)
+    End Method
+
+    /// Sets what moving entities touch the entity as, AUTO at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetCollisionShape(shape: CollisionShape)
+        If !fbe_entity_set_collision_shape(Live("SetCollisionShape"), shape As Int32)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// What moving entities touch the entity as.
+    @MainThread @PanicsAtCaller
+    Public Method CollisionShape(): CollisionShape
+        Return fbe_entity_collision_shape(Live("CollisionShape")) As CollisionShape
+    End Method
+
+    /// Sets the entity's collision box, in its own space, turned and scaled with it, -1 to 1 at
+    /// first, for CollisionShape.BOX. One turned inside out panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetCollisionBox(box: AABB)
+        Local entity = Live("SetCollisionBox")
+        Local given = fbe_aabb_t(fbe_vec3_t(box.Min.x, box.Min.y, box.Min.z),
+                                 fbe_vec3_t(box.Max.x, box.Max.y, box.Max.z))
+        Local done = False
+        Unsafe
+            done = fbe_entity_set_collision_box(entity, AddressOf(given))
+        End Unsafe
+        If !done Then Panic(LastError())
+    End Method
+
+    /// The entity's collision box, in its own space.
+    @MainThread @PanicsAtCaller
+    Public Method CollisionBox(): AABB
+        Local entity = Live("CollisionBox")
+        Local found = fbe_aabb_t(fbe_vec3_t(0, 0, 0), fbe_vec3_t(0, 0, 0))
+        Local done = False
+        Unsafe
+            done = fbe_entity_collision_box(entity, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return AABB(VecOf(found.min), VecOf(found.max))
+    End Method
+
+    /// Sets how high a sliding mover steps up onto what blocks it going across, as stairs want:
+    /// it goes up, across, and back down, if that lands it on ground facing up and gets it
+    /// further; 0, at first, for not at all. Below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetStepHeight(height: Float)
+        If !fbe_entity_set_step_height(Live("SetStepHeight"), height) Then Panic(LastError())
+    End Method
+
+    /// How high a sliding mover steps up.
+    @MainThread @PanicsAtCaller
+    Public Method StepHeight(): Float => fbe_entity_step_height(Live("StepHeight"))
+
+    /// Forgets where the entity's last move ended, and what it touched, so its next move isn't
+    /// swept: how a game teleports a mover.
+    @MainThread @PanicsAtCaller
+    Public Method ResetCollisions()
+        If !fbe_entity_reset_collisions(Live("ResetCollisions")) Then Panic(LastError())
+    End Method
+
+    /// What the entity touched in its World's last Collide, as a mover, in the order it touched
+    /// them, or as what a mover touched; one whose other entity was freed since is left out.
+    @MainThread @PanicsAtCaller
+    Public Method Collisions(): Collision[]
+        Local entity = Live("Collisions")
+        Local count = fbe_entity_collisions(entity, Null, 0)
+        If count < 0 Then Panic(LastError())
+        Local found = Buffer<fbe_collision_t>(count)
+        Unsafe
+            fbe_entity_collisions(entity, found.Pointer(), count)
+        End Unsafe
+        Local collisions: Collision[] = []
+        For contact In found
+            If !fbe_entity_alive(contact.entity) Then Continue
+            Local other = EntityOf(contact.entity)
+            If other == Null Then Continue
+            Local surface: Surface? = Null
+            Local geometry = contact.geometry != 0 ? GeometryOf(contact.geometry) : Null
+            If geometry != Null Then surface = geometry.Surface(contact.surface)
+            collisions.Add(Collision(other, VecOf(contact.point), VecOf(contact.normal),
+                                     contact.time, surface, contact.triangle))
+        End For
+        Return collisions
+    End Method
+
+    /// The first entity of a collision group the entity touched in its World's last Collide, or
+    /// Null.
+    @MainThread @PanicsAtCaller
+    Public Method Collided(group: Int): Entity?
+        For collision In Collisions()
+            If collision.Other.CollisionGroup() == group Then Return collision.Other
+        End For
+        Return Null
+    End Method
+End Extend
+
+/// A World's collision rules, and the collisions they make.
+Extend World
+    /// Sets what an entity of the `source` group does when it touches one of the `target` group,
+    /// both 1 to 1023: NONE for every pair at first. A group that's a source in a pair moves.
+    @MainThread @PanicsAtCaller
+    Public Method SetCollisionResponse(source: Int, target: Int, response: CollisionResponse)
+        Local world = Live("SetCollisionResponse")
+        If !fbe_world_set_collision(world, source, target, response As Int32) Then Panic(LastError())
+    End Method
+
+    /// What an entity of the `source` group does when it touches one of the `target` group.
+    @MainThread @PanicsAtCaller
+    Public Method CollisionResponse(source: Int, target: Int): CollisionResponse
+        Local response = fbe_world_collision(Live("CollisionResponse"), source, target)
+        If response < 0 Then Panic(LastError())
+        Return response As CollisionResponse
+    End Method
+
+    /// Makes every pair of groups NONE again.
+    @MainThread @PanicsAtCaller
+    Public Method ClearCollisionResponses()
+        If !fbe_world_clear_collisions(Live("ClearCollisionResponses")) Then Panic(LastError())
+    End Method
+
+    /// Sets the most times one move touches something and goes on, 1 to 64, 8 at first; a move
+    /// that touched that many times ends where it got to. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetCollisionIterations(iterations: Int)
+        Local world = Live("SetCollisionIterations")
+        If !fbe_world_set_collision_iterations(world, iterations) Then Panic(LastError())
+    End Method
+
+    /// The most times one move touches something and goes on.
+    @MainThread @PanicsAtCaller
+    Public Method CollisionIterations(): Int
+        Return fbe_world_collision_iterations(Live("CollisionIterations"))
+    End Method
+
+    /// Sets how far movers stay from what they touch, so they don't sink in, 0 to 0.1 world units,
+    /// 0.001 at first. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetCollisionSkin(skin: Float)
+        If !fbe_world_set_collision_skin(Live("SetCollisionSkin"), skin) Then Panic(LastError())
+    End Method
+
+    /// How far movers stay from what they touch.
+    @MainThread @PanicsAtCaller
+    Public Method CollisionSkin(): Float => fbe_world_collision_skin(Live("CollisionSkin"))
+
+    /// Moves every moving entity of the World as its collisions say, from where its last move
+    /// ended to where it is, and keeps what each touched; UpdateWorld does it each step.
+    @MainThread @PanicsAtCaller
+    Public Method Collide()
+        If !fbe_world_collide(Live("Collide")) Then Panic(LastError())
+    End Method
+End Extend
