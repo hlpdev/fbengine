@@ -176,8 +176,8 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 
 ### E10: Physics (fbengine_physics)
 
-1. Jolt in fbengine_physics_native; worlds, stepping, its job system.
-2. Bodies and shapes: static, dynamic, kinematic; boxes, spheres, capsules, convex hulls, meshes
+1. Jolt in fbengine_physics_native; worlds, stepping, its job system (done, 2026-10-31).
+2. (Done, 2026-10-31.) Bodies and shapes: static, dynamic, kinematic; boxes, spheres, capsules, convex hulls, meshes
    (from fbengine's geometry).
 3. Bodies driving entities and entities driving kinematic bodies, synced in a batch a frame.
 4. Joints, the character controller, triggers, ray and shape casts, layers.
