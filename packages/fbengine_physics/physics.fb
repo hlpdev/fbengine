@@ -1,0 +1,32 @@
+// fbengine_physics, over its C API: the bindings in c/, one for each area's header in
+// native/fbengine_physics/, which tools/bindgen.sh makes and `Import fbengine_physics` leaves out
+// (they're fbengine_physics.c.fbe_<area>).
+
+Import std.core
+Import std.ffi
+Import "./c/fbe_physics"
+
+/// What's the same for every world: the DLL, and Jolt's threads.
+Public Class Physics
+    Private New()
+    End New
+
+    /// The version of fbengine_physics the program runs with, like "0.1.0", its DLL's, which is
+    /// fbengine's.
+    Public Static Method Version(): String
+        Unsafe
+            Return fbe_physics_version().ToString()
+        End Unsafe
+    End Method
+
+    /// How many threads of Jolt's own step worlds with the main thread: one a core, less the main
+    /// thread's, and none on a machine of one core.
+    @MainThread Public Static Method Threads(): Int32 => fbe_physics_threads()
+End Class
+
+/// What the last call to fbengine_physics_native that failed says went wrong.
+Package Function LastError(): String
+    Unsafe
+        Return fbe_physics_error().ToString()
+    End Unsafe
+End Function

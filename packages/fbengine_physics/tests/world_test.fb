@@ -1,0 +1,166 @@
+// Worlds and stepping them.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine_physics
+Import fbengine_physics.c.fbe_physics
+
+// The DLL is the package's own build: its version is project.toml's, which is fbengine's.
+@Test
+Function TheDllIsThePackagesVersion()
+    Expect(Physics.Version() == "0.1.1")
+End Function
+
+@Test
+Function JoltHasAThreadACoreLessTheMainThreads()
+    Expect(Physics.Threads() >= 0)
+End Function
+
+@Test
+Function AWorldStartsWithEarthsGravity()
+    Local world = PhysicsWorld(100)
+    Defer world.Free()
+    Expect(world.MaxBodies() == 100)
+    Expect(world.Gravity() == Vec3(0, -9.81, 0))
+    Expect(world.Steps() == 0)
+    Expect(!world.Overflowed())
+End Function
+
+@Test
+Function WorldsKeepTheirOwnGravity()
+    Local moon = PhysicsWorld()
+    Defer moon.Free()
+    Local earth = PhysicsWorld()
+    Defer earth.Free()
+    moon.SetGravity(Vec3(0, -1.62, 0))
+    Expect(moon.Gravity() == Vec3(0, -1.62, 0))
+    Expect(earth.Gravity() == Vec3(0, -9.81, 0))
+End Function
+
+@Test
+Function StepsAreCounted()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    world.Step(1.0 / 60)
+    world.Step(0.1, 2)
+    world.Step(1.0)
+    Expect(world.Steps() == 3)
+End Function
+
+@Test
+Function UpdateStepsAtItsRateAndCarriesTheRest()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Expect(world.StepRate() == 60)
+    // A 30th of a second is two steps of a 60th.
+    Expect(world.Update(1.0 / 30) == 2)
+    Expect(world.Alpha() < 0.01)
+    // Half a step takes none, and is carried.
+    Expect(world.Update(1.0 / 120) == 0)
+    Expect(Abs(world.Alpha() - 0.5) < 0.01)
+    Expect(world.Update(1.0 / 120) == 1)
+    Expect(world.Steps() == 3)
+    // A frame of 0 seconds steps nothing.
+    Expect(world.Update(0) == 0)
+End Function
+
+@Test
+Function FramesOfExactlyAStepTakeOneEach()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    For i = 1 To 600
+        Expect(world.Update(1.0 / 60) == 1)
+    End For
+    Expect(world.Steps() == 600)
+End Function
+
+@Test
+Function ASlowFrameTakesAtMostMaxStepsAndDropsTheRest()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Expect(world.MaxSteps() == 4)
+    Expect(world.Update(1.0) == 4)
+    Expect(world.Alpha() == 0.0)
+    // What's dropped isn't owed to the next frame.
+    Expect(world.Update(1.0 / 60) == 1)
+    world.SetMaxSteps(100)
+    Expect(world.Update(1.0) == 60)
+End Function
+
+@Test
+Function TheStepRateSetsHowLongUpdatesStepsAre()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    world.SetStepRate(120)
+    Expect(world.StepRate() == 120)
+    Expect(world.Update(1.0 / 60) == 2)
+    world.SetStepRate(30)
+    Expect(world.Update(1.0 / 60) == 0)
+    Expect(world.Update(1.0 / 60) == 1)
+End Function
+
+@Test
+Function AFreedWorldSaysSo()
+    Local world = PhysicsWorld()
+    Expect(!world.Freed())
+    world.Free()
+    Expect(world.Freed())
+    // Freeing it again is nothing.
+    world.Free()
+    Expect(world.Freed())
+End Function
+
+// What the FB API panics for, the C API refuses, saying why, on the main thread, as its calls
+// are.
+@Test @MainThread
+Function TheCApiRefusesWhatItDoesntTake()
+    Expect(fbe_physics_new(0) == 0)
+    Expect(Error() == "a world is for 1 to 1048576 bodies, not 0")
+    Expect(fbe_physics_new((FBE_PHYSICS_MAX_BODIES + 1) As UInt32) == 0)
+
+    Local world = fbe_physics_new(10)
+    Expect(world != 0)
+    Expect(!fbe_physics_step(world, 0, 1))
+    Expect(Error() == "a step is more than 0 seconds and at most 1, not 0")
+    Expect(!fbe_physics_step(world, 1.5, 1))
+    Expect(!fbe_physics_step(world, NaN, 1))
+    Expect(!fbe_physics_step(world, 0.5, 0))
+    Expect(Error() == "a step finds collisions 1 to 16 times, not 0")
+    Expect(!fbe_physics_step(world, 0.5, 17))
+    Expect(fbe_physics_steps(world) == 0)
+
+    Local nan = fbe_physics_vec3_t(0, NaN, 0)
+    Local ok = True
+    Unsafe
+        ok = fbe_physics_set_gravity(world, AddressOf(nan))
+    End Unsafe
+    Expect(!ok)
+    Expect(Error() == "gravity is a finite vector")
+
+    Expect(fbe_physics_free(world))
+    Expect(!fbe_physics_free(world))
+    Expect(Error() == "the world was freed")
+    Expect(fbe_physics_steps(world) == -1)
+    Expect(fbe_physics_max_bodies(world) == 0)
+    Expect(!fbe_physics_step(0, 0.5, 1))
+    Expect(Error() == "there's no world")
+End Function
+
+// A freed world's handle is never another's: its slot's next world has a new generation.
+@Test @MainThread
+Function AFreedWorldsHandleIsNeverReused()
+    Local first = fbe_physics_new(10)
+    fbe_physics_free(first)
+    Local second = fbe_physics_new(10)
+    Defer fbe_physics_free(second)
+    Expect(second != first)
+    Expect(fbe_physics_steps(first) == -1)
+    Expect(fbe_physics_steps(second) == 0)
+End Function
+
+@MainThread Function Error(): String
+    Unsafe
+        Return fbe_physics_error().ToString()
+    End Unsafe
+End Function

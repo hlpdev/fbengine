@@ -64,3 +64,12 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.hello PROPERTIES
                        PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
 endif()
+
+# fbengine_physics' C++ that's subtle, apart from its DLL.
+add_executable(fbengine_physics_tests physics/handles_tests.cpp)
+target_include_directories(fbengine_physics_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_physics")
+target_link_libraries(fbengine_physics_tests PRIVATE Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_physics_tests)
+catch_discover_tests(fbengine_physics_tests TEST_PREFIX "physics."
+                     DL_PATHS "${fbengine_test_dll_paths}")
