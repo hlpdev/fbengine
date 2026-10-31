@@ -596,6 +596,58 @@ TEST_CASE("an underlined font's text has a line under each line", "[gpu]") {
     stop();
 }
 
+// The underline is under each of the lines the core breaks text into, whatever breaks it: "ab" then
+// "abababab", each line's as long as its own advance.
+TEST_CASE("an underline is under each line, whatever breaks it", "[gpu]") {
+    start();
+    const std::uint64_t lined = opened("OpenSans-Regular.ttf", 20.0F, FBE_TEXT_UNDERLINE);
+    fbe_text_metrics_t metrics{};
+    require(fbe_text_font_metrics(lined, &metrics));
+    fbe_text_size_t first{};
+    require(fbe_text_measure(lined, "ab", &first));
+    fbe_text_size_t second{};
+    require(fbe_text_measure(lined, "abababab", &second));
+    fbe::text::layout_t layout;
+    REQUIRE(fbe::text::lay_out(lined, "ab", 1.0F, layout));
+    const fbe_2d_pen_t ink = pen(white);
+    // '\n', "\r\n", a vertical tab, NEL, U+2028, and U+2029.
+    for (const std::string_view broken :
+         { "\n", "\r\n", "\v", "\xC2\x85", "\xE2\x80\xA8", "\xE2\x80\xA9" }) {
+        const std::string text = "ab" + std::string(broken) + "abababab";
+        INFO("broken by " << broken.size() << " bytes, starting " << int{ broken[0] });
+        const std::vector<std::string_view> lines = fbe::text::split_lines(text);
+        REQUIRE(lines.size() == 2);
+        CHECK(lines[0] == (broken == "\r\n" ? "ab\r" : "ab"));
+        CHECK(lines[1] == "abababab");
+        fbe::text::layout_t laid;
+        REQUIRE(fbe::text::lay_out(lined, text, 1.0F, laid));
+        CHECK(std::abs(laid.height - (2 * metrics.line_height)) < 0.01F);
+        const std::uint64_t made = target(200, 80);
+        clear(made);
+        require(fbe_2d_text(made, &ink, lined, text.c_str(), 4, 2));
+        const fbe::golden::frame_t frame = read(made);
+        for (int line = 0; line < 2; ++line) {
+            INFO("line " << line);
+            const std::int64_t baseline =
+                2 + std::lround(layout.ascent) +
+                std::llround(static_cast<float>(line) * metrics.line_height);
+            const auto y =
+                static_cast<std::uint32_t>(baseline + std::lround(metrics.underline_position));
+            const float width = line == 0 ? first.width : second.width;
+            CHECK(pixel(frame, static_cast<std::uint32_t>(4 + std::lround(width / 2.0F)), y)[0] ==
+                  255);
+            CHECK(pixel(frame, static_cast<std::uint32_t>(4 + std::lround(width) + 2), y)[0] == 0);
+        }
+    }
+    CHECK(fbe::text::split_lines("") == std::vector<std::string_view>{ "" });
+    CHECK(fbe::text::split_lines("ab\n") == std::vector<std::string_view>{ "ab", "" });
+    // A break's bytes in a sequence that isn't well-formed don't break it: NEL's second byte alone,
+    // and U+2028's first two.
+    CHECK(fbe::text::split_lines("a\x85-b\xE2\x80-c").size() == 1);
+    CHECK(fbe_text_free_font(lined));
+    stop();
+}
+
 // E3's text: Open Sans at three sizes, one underlined, two lines, color glyphs of the tests' own,
 // blended over a gray, and text in a texture drawn into the screen.
 TEST_CASE("text matches its golden image", "[gpu][golden]") {

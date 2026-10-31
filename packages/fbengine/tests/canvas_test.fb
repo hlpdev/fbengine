@@ -171,3 +171,34 @@ Function ACanvasDrawsText() Throws GraphicsError, IOError
     Expect(lit > 20)
     font.Free()
 End Function
+
+// Text ends at its first "\0": what's past it isn't drawn or measured.
+@Test
+Function TextEndsAtANul() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    If TestFonts() == "" Then Skip("no test fonts here")
+    Window.SetHeadless(True)
+    Local font = Try Font.Load("{TestFonts()}/OpenSans-Regular.ttf", 16.0)
+    Local cut = Try Texture.Target(128, 24, TextureFormat.RGBA8_LINEAR)
+    Canvas(cut).DrawText(font, "ab\0cdefgh", 1, 1)
+    Local whole = Try Texture.Target(128, 24, TextureFormat.RGBA8_LINEAR)
+    Canvas(whole).DrawText(font, "ab", 1, 1)
+    Local cutPixels = cut.LockPixels()
+    Local wholePixels = whole.LockPixels()
+    Local same = True
+    Local lit = 0
+    For y = 0 To 23
+        For x = 0 To 127
+            If cutPixels.Get(x, y).r != wholePixels.Get(x, y).r Then same = False
+            If cutPixels.Get(x, y).r > 0 Then lit = lit + 1
+        End For
+    End For
+    cutPixels.Unlock()
+    wholePixels.Unlock()
+    Expect(same)
+    Expect(lit > 20)
+    Local measured = font.Measure("ab\0cdefgh")
+    Expect(measured.x == font.Measure("ab").x && measured.y == font.Measure("ab").y)
+    Expect(measured.x < font.Measure("abcdefgh").x)
+    font.Free()
+End Function

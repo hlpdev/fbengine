@@ -50,52 +50,54 @@ std::int32_t drawable(double value) {
     return static_cast<std::int32_t>(std::clamp(std::round(value), -farthest, farthest));
 }
 
+/// The code point at `at` in `text`, U+FFFD for a sequence that isn't well-formed UTF-8, `at`
+/// moved past it.
+char32_t decoded_at(std::string_view text, std::size_t& at) {
+    const auto lead = static_cast<unsigned char>(text[at]);
+    if (lead < 0x80U) {
+        ++at;
+        return lead;
+    }
+    char32_t point = 0;
+    std::size_t needed = 0;
+    char32_t least = 0;
+    if (lead >= 0xC2U && lead <= 0xDFU) {
+        point = lead & 0x1FU;
+        needed = 1;
+        least = 0x80;
+    } else if (lead >= 0xE0U && lead <= 0xEFU) {
+        point = lead & 0x0FU;
+        needed = 2;
+        least = 0x800;
+    } else if (lead >= 0xF0U && lead <= 0xF4U) {
+        point = lead & 0x07U;
+        needed = 3;
+        least = 0x10000;
+    } else {
+        ++at;
+        return U'�';
+    }
+    std::size_t got = 0;
+    while (got < needed && at + 1 + got < text.size() &&
+           (static_cast<unsigned char>(text[at + 1 + got]) & 0xC0U) == 0x80U) {
+        point = (point << 6U) | (static_cast<unsigned char>(text[at + 1 + got]) & 0x3FU);
+        ++got;
+    }
+    if (got < needed || point < least || point > 0x10FFFF || (point >= 0xD800 && point <= 0xDFFF)) {
+        at += 1 + got;
+        return U'�';
+    }
+    at += 1 + needed;
+    return point;
+}
+
 /// `text` as code points, U+FFFD for each sequence that isn't well-formed UTF-8.
 std::u32string decoded(std::string_view text) {
     std::u32string points;
     points.reserve(text.size());
     std::size_t at = 0;
     while (at < text.size()) {
-        const auto lead = static_cast<unsigned char>(text[at]);
-        if (lead < 0x80U) {
-            points.push_back(lead);
-            ++at;
-            continue;
-        }
-        char32_t point = 0;
-        std::size_t needed = 0;
-        char32_t least = 0;
-        if (lead >= 0xC2U && lead <= 0xDFU) {
-            point = lead & 0x1FU;
-            needed = 1;
-            least = 0x80;
-        } else if (lead >= 0xE0U && lead <= 0xEFU) {
-            point = lead & 0x0FU;
-            needed = 2;
-            least = 0x800;
-        } else if (lead >= 0xF0U && lead <= 0xF4U) {
-            point = lead & 0x07U;
-            needed = 3;
-            least = 0x10000;
-        } else {
-            points.push_back(U'�');
-            ++at;
-            continue;
-        }
-        std::size_t got = 0;
-        while (got < needed && at + 1 + got < text.size() &&
-               (static_cast<unsigned char>(text[at + 1 + got]) & 0xC0U) == 0x80U) {
-            point = (point << 6U) | (static_cast<unsigned char>(text[at + 1 + got]) & 0x3FU);
-            ++got;
-        }
-        if (got < needed || point < least || point > 0x10FFFF ||
-            (point >= 0xD800 && point <= 0xDFFF)) {
-            points.push_back(U'�');
-            at += 1 + got;
-            continue;
-        }
-        points.push_back(point);
-        at += 1 + needed;
+        points.push_back(decoded_at(text, at));
     }
     return points;
 }
@@ -528,6 +530,21 @@ float shaped(const font_t& font, std::string_view text, float pixels, std::vecto
 }
 
 } // namespace
+
+std::vector<std::string_view> split_lines(std::string_view text) {
+    std::vector<std::string_view> lines;
+    std::size_t start = 0;
+    std::size_t at = 0;
+    while (at < text.size()) {
+        const std::size_t from = at;
+        if (breaks(decoded_at(text, at))) {
+            lines.push_back(text.substr(start, from - start));
+            start = at;
+        }
+    }
+    lines.push_back(text.substr(start));
+    return lines;
+}
 
 bool lay_out(std::uint64_t font, std::string_view text, float scale, layout_t& into) {
     const font_t* found = font_of(font);

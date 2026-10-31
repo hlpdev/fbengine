@@ -165,12 +165,12 @@ Public Final Class Canvas
         If !done Then Panic(LastError())
     End Method
 
-    /// Draws `text` in `font`, its top left at `x`, `y`, a "\n" starting a line: each glyph at
-    /// whole pixels, crisp, rasterized at the target's pixels a unit of the font's size (the
-    /// screen's render size over the window's size; a texture's 1), in its color times the
-    /// glyph's coverage, or a color glyph's own colors faded by its alpha, over what's there
-    /// unless its blend is ADD; and an underlined font's line under each line. It panics for a
-    /// font that was freed.
+    /// Draws `text`, which ends at its first "\0", in `font`, its top left at `x`, `y`, its lines
+    /// as the font's Measure breaks them: each glyph at whole pixels, crisp, rasterized at the
+    /// target's pixels a unit of the font's size (the screen's render size over the window's size;
+    /// a texture's 1), in its color times the glyph's coverage, or a color glyph's own colors faded
+    /// by its alpha, over what's there unless its blend is ADD; and an underlined font's line under
+    /// each line. It panics for a font that was freed.
     @MainThread @PanicsAtCaller
     Public Method DrawText(font: Font, text: String, x: Int32, y: Int32)
         Local into = Into("DrawText")

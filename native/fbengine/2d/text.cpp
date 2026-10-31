@@ -238,12 +238,12 @@ FBE_API bool fbe_2d_text(uint64_t target, const fbe_2d_pen_t* pen, uint64_t font
     const std::int64_t below = std::lround(metrics.underline_position * scale);
     const std::int64_t thick =
         std::max<std::int64_t>(std::lround(metrics.underline_thickness * scale), 1);
-    std::size_t line = 0;
-    for (std::size_t from = 0; from <= written.size(); ++line) {
-        const std::size_t end = std::min(written.find('\n', from), written.size());
+    // The lines the core broke it into, each measured on its own.
+    const std::vector<std::string_view> lines = fbe::text::split_lines(written);
+    for (std::size_t line = 0; line < lines.size(); ++line) {
         float width = 0.0F;
         float height = 0.0F;
-        if (!fbe::text::measure(font, written.substr(from, end - from), width, height)) {
+        if (!fbe::text::measure(font, lines[line], width, height)) {
             return false;
         }
         const std::int64_t across = std::lround(width * scale);
@@ -252,7 +252,6 @@ FBE_API bool fbe_2d_text(uint64_t target, const fbe_2d_pen_t* pen, uint64_t font
         if (across > 0 && !fbe::canvas::draw_over(target, pen, x, at + below, across, thick)) {
             return false;
         }
-        from = end + 1;
     }
     return true;
 }

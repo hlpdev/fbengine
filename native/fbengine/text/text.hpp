@@ -157,10 +157,16 @@ private:
 /// The atlas.
 atlas_t& atlas();
 
+/// `text`'s lines, UTF-8, as lay_out and measure break them: at '\n', a vertical tab, NEL, and
+/// Unicode's line and paragraph separators, each line without its break (a "\r\n"'s '\r' kept,
+/// which they drop as they do the other control characters).
+std::vector<std::string_view> split_lines(std::string_view text);
+
 /// Lays `text`, UTF-8, out in `font` at `scale`, the window's pixels a unit of the font's size, its
-/// glyphs rasterized into the atlas as they're needed: '\n' breaks its lines, a glyph its font
-/// hasn't is its fallbacks', and each run of a script and a direction is shaped on its own. False,
-/// with fbe_error's why, for a handle that isn't a font's, or a scale that isn't over 0.
+/// glyphs rasterized into the atlas as they're needed: split_lines' breaks break its lines, a glyph
+/// its font hasn't is its fallbacks', and each run of a script and a direction is shaped on its
+/// own. False, with fbe_error's why, for a handle that isn't a font's, or a scale that isn't over
+/// 0.
 bool lay_out(std::uint64_t font, std::string_view text, float scale, layout_t& into);
 
 /// The size `text` takes in `font`, in its own units, as lay_out lays it out at 1 without
