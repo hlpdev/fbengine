@@ -1,0 +1,41 @@
+// Simulate: input pushed as the OS would push it, which the next Flip reads, for a game's tests
+// and its replays.
+
+Import std.core
+Import "./c/fbengine"
+Import "./window"
+
+/// Pushes input as the OS would, for the next Flip to read.
+Public Class Simulate
+    Private New()
+    End New
+
+    /// The window's close button, pressed.
+    @MainThread Public Static Method CloseWindow() Throws GraphicsError
+        Try Push(FBE_SIMULATE_CLOSE)
+    End Method
+
+    /// The window, given the keyboard's focus.
+    @MainThread Public Static Method FocusWindow() Throws GraphicsError
+        Try Push(FBE_SIMULATE_FOCUS)
+    End Method
+
+    /// Another window, given the keyboard's focus.
+    @MainThread Public Static Method BlurWindow() Throws GraphicsError
+        Try Push(FBE_SIMULATE_BLUR)
+    End Method
+
+    /// The window, minimized.
+    @MainThread Public Static Method MinimizeWindow() Throws GraphicsError
+        Try Push(FBE_SIMULATE_MINIMIZE)
+    End Method
+
+    /// The window, restored from minimized.
+    @MainThread Public Static Method RestoreWindow() Throws GraphicsError
+        Try Push(FBE_SIMULATE_RESTORE)
+    End Method
+
+    @MainThread Static Method Push(event: Int32) Throws GraphicsError
+        If !fbe_simulate_window(event) Then Throw GraphicsError(LastError())
+    End Method
+End Class

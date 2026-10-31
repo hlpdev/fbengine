@@ -74,6 +74,38 @@ FBE_API int32_t fbe_window_mode(void);
 FBE_API void fbe_set_resizable(bool resizable);
 FBE_API bool fbe_resizable(void);
 
+// What the OS's events said of the window by the last fbe_flip: that its close button was pressed,
+// or the app was asked to quit, which stays so until the window's closed; whether it has the
+// keyboard's focus; whether it's minimized. All false without a window.
+FBE_API bool fbe_window_closed(void);
+FBE_API bool fbe_window_focused(void);
+FBE_API bool fbe_window_minimized(void);
+
+// Ends a frame: presents it (from E2, waiting for the display if `vsync`), waits for the frame
+// limit, and reads the OS's events.
+FBE_API void fbe_flip(bool vsync);
+// How many seconds the last frame took, flip to flip; 0 before the second flip.
+FBE_API double fbe_frame_delta(void);
+// How many frames have been flipped.
+FBE_API int64_t fbe_frame_count(void);
+// Frames a second, over the last half second or more; 0 until then.
+FBE_API double fbe_frame_rate(void);
+// The most frames a second fbe_flip lets through, 0 for no limit; false if it's not 0 to 1000.
+FBE_API bool fbe_set_frame_limit(int32_t frames_per_second);
+FBE_API int32_t fbe_frame_limit(void);
+// Whether the last fbe_flip asked to wait for the display.
+FBE_API bool fbe_vsync(void);
+
+// Window events fbe_simulate_window pushes, as the OS would, for the next fbe_flip to read.
+#define FBE_SIMULATE_CLOSE    0
+#define FBE_SIMULATE_FOCUS    1
+#define FBE_SIMULATE_BLUR     2
+#define FBE_SIMULATE_MINIMIZE 3
+#define FBE_SIMULATE_RESTORE  4
+
+// Pushes one of them for the open window; false without one.
+FBE_API bool fbe_simulate_window(int32_t event);
+
 // The displays, the first being the main one; -1 if they can't be found.
 FBE_API int32_t fbe_display_count(void);
 // A display's name, "" if there's no such display.

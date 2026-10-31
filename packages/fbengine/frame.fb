@@ -1,0 +1,38 @@
+// The frame: Flip ends one, and Frame says how long it took.
+
+Import std.core
+Import "./c/fbengine"
+Import "./window"
+
+/// Ends the frame: presents it, waiting for the display when `vsync` is True, waits for
+/// Frame's limit if there's one, reads the OS's events into the next frame's input, then resumes
+/// the coroutines waiting for the next tick, as `Scheduler.Main.Step()` does, so they run before
+/// the next frame's code.
+@MainThread Public Function Flip(vsync: Bool = True)
+    fbe_flip(vsync)
+    Scheduler.Main.Step()
+End Function
+
+/// How long frames take, and the most there can be a second.
+Public Class Frame
+    Private New()
+    End New
+
+    /// How many seconds the last frame took, from one Flip to the next, 0 before the second.
+    @MainThread Public Static Method Delta(): Float64 => fbe_frame_delta()
+
+    /// How many frames have been flipped.
+    @MainThread Public Static Method Count(): Int64 => fbe_frame_count()
+
+    /// Frames a second, over the last half second or more, 0 until then.
+    @MainThread Public Static Method Rate(): Float64 => fbe_frame_rate()
+
+    /// Makes Flip wait so there are at most `framesPerSecond` frames a second, from 1 to 1000,
+    /// or takes the limit away with 0.
+    @MainThread Public Static Method SetLimit(framesPerSecond: Int32)
+        If !fbe_set_frame_limit(framesPerSecond) Then Panic(LastError())
+    End Method
+
+    /// The most frames a second Flip lets through, 0 for no limit.
+    @MainThread Public Static Method Limit(): Int32 => fbe_frame_limit()
+End Class

@@ -1,5 +1,5 @@
 # fbengine's own DLL, which the fbengine package's FB code calls through fbengine.h.
-fbengine_add_native(fbengine_native fbengine fbe_ fbengine.cpp window.cpp)
+fbengine_add_native(fbengine_native fbengine fbe_ fbengine.cpp frame.cpp window.cpp)
 target_include_directories(fbengine_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_native PRIVATE FBE_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")

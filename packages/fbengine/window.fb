@@ -48,6 +48,16 @@ Public Class Window
     /// Whether the window's open.
     @MainThread Public Static Method Open(): Bool => fbe_has_graphics()
 
+    /// Whether, by the last Flip, the window's close button was pressed or the app was asked to
+    /// quit, which stays True until the window's closed.
+    @MainThread Public Static Method Closed(): Bool => fbe_window_closed()
+
+    /// Whether, by the last Flip, the window has the keyboard's focus.
+    @MainThread Public Static Method Focused(): Bool => fbe_window_focused()
+
+    /// Whether, by the last Flip, the window's minimized.
+    @MainThread Public Static Method Minimized(): Bool => fbe_window_minimized()
+
     /// Sets the window's title, which can be before it's open.
     @MainThread Public Static Method SetTitle(title: String)
         fbe_set_title(title)

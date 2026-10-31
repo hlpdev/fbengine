@@ -13,6 +13,12 @@ Public Const FBE_BORDERLESS: Int32 = 2
     Public Field pixel_density: Float32
 End Struct
 
+Public Const FBE_SIMULATE_CLOSE: Int32 = 0
+Public Const FBE_SIMULATE_FOCUS: Int32 = 1
+Public Const FBE_SIMULATE_BLUR: Int32 = 2
+Public Const FBE_SIMULATE_MINIMIZE: Int32 = 3
+Public Const FBE_SIMULATE_RESTORE: Int32 = 4
+
 Public Extern "C" Lib "fbengine_native"
     Function fbe_version(): CString
     Function fbe_error(): CString
@@ -32,6 +38,17 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_window_mode(): Int32
     Function fbe_set_resizable(resizable: Bool)
     Function fbe_resizable(): Bool
+    Function fbe_window_closed(): Bool
+    Function fbe_window_focused(): Bool
+    Function fbe_window_minimized(): Bool
+    Function fbe_flip(vsync: Bool)
+    Function fbe_frame_delta(): Float64
+    Function fbe_frame_count(): Int64
+    Function fbe_frame_rate(): Float64
+    Function fbe_set_frame_limit(frames_per_second: Int32): Bool
+    Function fbe_frame_limit(): Int32
+    Function fbe_vsync(): Bool
+    Function fbe_simulate_window(event: Int32): Bool
     Function fbe_display_count(): Int32
     Function fbe_display_name(display: Int32): CString
     Function fbe_display_desktop(display: Int32, mode: Ptr<fbe_display_mode_t>): Bool

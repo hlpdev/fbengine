@@ -18,6 +18,12 @@ std::string title;
 std::int32_t current_mode = FBE_WINDOWED;
 bool resizable = false;
 
+// What the OS's events, which fbe_flip reads, said of the window: its close button or the app's
+// quit, its focus, and whether it's minimized.
+bool closed = false;
+bool focused = false;
+bool minimized = false;
+
 /// The window's display, or the main one.
 SDL_DisplayID display_of_window() {
     const SDL_DisplayID display = SDL_GetDisplayForWindow(window);
@@ -90,6 +96,37 @@ void copy_mode(const SDL_DisplayMode& from, fbe_display_mode_t* to) {
 
 } // namespace
 
+namespace fbe {
+
+void window_event(const SDL_Event& event) {
+    const bool ours = window != nullptr && event.window.windowID == SDL_GetWindowID(window);
+    switch (event.type) {
+    case SDL_EVENT_QUIT:
+        closed = closed || window != nullptr;
+        break;
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+        closed = closed || ours;
+        break;
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+        focused = focused || ours;
+        break;
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        focused = focused && !ours;
+        break;
+    case SDL_EVENT_WINDOW_MINIMIZED:
+        minimized = minimized || ours;
+        break;
+    case SDL_EVENT_WINDOW_RESTORED:
+    case SDL_EVENT_WINDOW_MAXIMIZED:
+        minimized = minimized && !ours;
+        break;
+    default:
+        break;
+    }
+}
+
+} // namespace fbe
+
 extern "C" {
 
 FBE_API bool fbe_graphics(int32_t width, int32_t height, int32_t wanted) {
@@ -113,6 +150,10 @@ FBE_API bool fbe_graphics(int32_t width, int32_t height, int32_t wanted) {
         if (window == nullptr) {
             return fbe::fail_sdl("couldn't open the window");
         }
+        const SDL_WindowFlags now = SDL_GetWindowFlags(window);
+        closed = false;
+        focused = (now & SDL_WINDOW_INPUT_FOCUS) != 0;
+        minimized = (now & SDL_WINDOW_MINIMIZED) != 0;
     } else {
         // A fullscreen window's size is its mode's, so it's windowed while its size changes.
         if (!apply_mode(FBE_WINDOWED)) {
@@ -136,6 +177,50 @@ FBE_API void fbe_end_graphics(void) {
         window = nullptr;
     }
     current_mode = FBE_WINDOWED;
+    closed = false;
+    focused = false;
+    minimized = false;
+}
+
+FBE_API bool fbe_window_closed(void) {
+    return closed;
+}
+
+FBE_API bool fbe_window_focused(void) {
+    return focused;
+}
+
+FBE_API bool fbe_window_minimized(void) {
+    return minimized;
+}
+
+FBE_API bool fbe_simulate_window(int32_t event) {
+    if (window == nullptr) {
+        return fbe::fail("there's no window; Graphics opens one");
+    }
+    SDL_Event pushed{};
+    switch (event) {
+    case FBE_SIMULATE_CLOSE:
+        pushed.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+        break;
+    case FBE_SIMULATE_FOCUS:
+        pushed.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+        break;
+    case FBE_SIMULATE_BLUR:
+        pushed.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+        break;
+    case FBE_SIMULATE_MINIMIZE:
+        pushed.type = SDL_EVENT_WINDOW_MINIMIZED;
+        break;
+    case FBE_SIMULATE_RESTORE:
+        pushed.type = SDL_EVENT_WINDOW_RESTORED;
+        break;
+    default:
+        return fbe::fail(std::format("{} isn't a window event", event));
+    }
+    pushed.window.windowID = SDL_GetWindowID(window);
+    pushed.window.timestamp = SDL_GetTicksNS();
+    return SDL_PushEvent(&pushed) ? true : fbe::fail_sdl("couldn't push the event");
 }
 
 FBE_API bool fbe_has_graphics(void) {

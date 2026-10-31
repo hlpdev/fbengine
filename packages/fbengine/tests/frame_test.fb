@@ -1,0 +1,101 @@
+// Flip, the frame's timing, and what the OS's events say of the window, offscreen.
+
+Import std.core
+Import std.test
+Import fbengine
+
+Global ticks = 0
+
+Async Function CountTicks(times: Int)
+    For i = 1 To times
+        Await NextTick()
+        ticks += 1
+    End For
+End Function
+
+// E1's done-when, in part: the coroutines waiting for the next tick resume once a frame.
+@Test
+Function CoroutinesResumeOncePerFlip() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    ticks = 0
+    CountTicks(3)
+    Expect(ticks == 0)
+    Flip()
+    Expect(ticks == 1)
+    Flip()
+    Flip()
+    Expect(ticks == 3)
+    Flip()
+    Expect(ticks == 3)
+End Function
+
+@Test
+Function FlipCountsFramesWithoutAWindow()
+    Local before = Frame.Count()
+    Flip()
+    Flip(False)
+    Expect(Frame.Count() == before + 2)
+End Function
+
+@Test
+Function TheLimitSpacesFramesOutAndCapsTheRate()
+    Frame.SetLimit(50)
+    Defer Frame.SetLimit(0)
+    Expect(Frame.Limit() == 50)
+    Flip()
+    Flip()
+    // 50 a second is 20 ms apart; a frame can come later, never sooner.
+    Expect(Frame.Delta() >= 0.0195)
+    Frame.SetLimit(200)
+    For i = 1 To 150
+        Flip()
+    End For
+    Expect(Frame.Rate() > 0.0)
+    Expect(Frame.Rate() <= 205.0)
+End Function
+
+@Test
+Function TheWindowsCloseButtonStaysPressedUntilItCloses() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Expect(!Window.Closed())
+    Try Simulate.CloseWindow()
+    // Nothing's read until the next Flip.
+    Expect(!Window.Closed())
+    Flip()
+    Expect(Window.Closed())
+    Flip()
+    Expect(Window.Closed())
+    EndGraphics()
+    Expect(!Window.Closed())
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Expect(!Window.Closed())
+End Function
+
+@Test
+Function FocusAndMinimizedFollowTheOSsEvents() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.FocusWindow()
+    Flip()
+    Expect(Window.Focused())
+    Try Simulate.BlurWindow()
+    Try Simulate.MinimizeWindow()
+    Flip()
+    Expect(!Window.Focused())
+    Expect(Window.Minimized())
+    Try Simulate.RestoreWindow()
+    Flip()
+    Expect(!Window.Minimized())
+End Function
+
+@Test
+Function SimulatingNeedsAWindow()
+    Window.SetHeadless(True)
+    Expect(ExpectThrows<GraphicsError>(Simulate.CloseWindow()) != Null)
+    Expect(!Window.Closed())
+End Function
