@@ -347,3 +347,15 @@ target_link_libraries(fbengine_jobs_tests PRIVATE Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_jobs_tests)
 catch_discover_tests(fbengine_jobs_tests TEST_PREFIX "jobs."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# res://'s paths, folders, and paks, built into the tests from their own sources.
+add_executable(fbengine_vfs_tests vfs/vfs_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp")
+target_include_directories(fbengine_vfs_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_link_libraries(fbengine_vfs_tests PRIVATE Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_vfs_tests)
+catch_discover_tests(fbengine_vfs_tests TEST_PREFIX "vfs."
+                     DL_PATHS "${fbengine_test_dll_paths}")
