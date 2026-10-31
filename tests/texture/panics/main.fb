@@ -27,6 +27,13 @@ Function Run(name: String) Throws GraphicsError
             Local sprite = Sprite(sheet)
             sprite.SetFrames(4, 4)
             Canvas(sheet).Draw(sprite, 0, 0, 2)
+        // A canvas's texture freed, and drawn into after.
+        Case "canvas-freed"
+            Local made = Try Texture.Target(8, 8)
+            Local canvas = Canvas(made)
+            canvas.DrawRect(0, 0, 2, 2)
+            made.Free()
+            canvas.DrawRect(0, 0, 2, 2)
         Case "lod-bias"
             Try Gpu.SetLodBias(17)
         Case "anisotropy"

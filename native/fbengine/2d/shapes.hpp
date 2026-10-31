@@ -1,7 +1,7 @@
 #pragma once
 
-// The pixels 2D's shapes cover, worked out on the CPU so they're exact on every GPU: lines and
-// ovals as spans of whole pixels, and polygons as triangles the GPU fills.
+// The pixels 2D's shapes cover, worked out on the CPU so they're exact on every GPU: lines, ovals,
+// and outlines as spans of whole pixels, and polygons as triangles the GPU fills.
 
 #include <array>
 #include <cstdint>
@@ -30,7 +30,7 @@ struct clip_t {
 /// which leaves out `x2`, `y2`: along its longer axis, each pixel's the one nearest the line
 /// between the ends' middles, a tie going to the one further down or right, so it's the same
 /// whichever end it starts from. Only those in `clip` are added to `spans`, as runs along that
-/// axis.
+/// axis. Its ends are no further than 2^53 from 0.
 void line(std::int64_t x1, std::int64_t y1, std::int64_t x2, std::int64_t y2, bool last,
           const clip_t& clip, std::vector<span_t>& spans);
 
@@ -45,8 +45,12 @@ void rect_outline(std::int64_t x, std::int64_t y, std::int64_t width, std::int64
 void oval(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t height, bool filled,
           const clip_t& clip, std::vector<span_t>& spans);
 
+/// `spans`, which can overlap, as rectangles that cover each of their pixels once.
+std::vector<span_t> merged(std::span<const span_t> spans);
+
 /// Triangles covering the polygon through `points`, x and y in turn, as long as its sides don't
-/// cross: its ears cut off one at a time, or, where that finds none, a fan from the first point.
-std::vector<std::array<float, 6>> triangulate(std::span<const float> points);
+/// cross, each point but the one before it: its ears cut off one at a time, or, where that finds
+/// none, a fan of what's left.
+std::vector<std::array<double, 6>> triangulate(std::span<const double> points);
 
 } // namespace fbe::canvas

@@ -30,7 +30,6 @@ End Enum
 /// as it says, 0 degrees and 1 unless set, and tinted by its color. What it draws into one target
 /// goes to the GPU together, in its turn with whatever else the frame does.
 Public Final Class Canvas
-    Field target: UInt64
     Field texture: Texture?
     Field pen: fbe_2d_pen_t
     Field rotation: Float32 = 0
@@ -40,20 +39,20 @@ Public Final Class Canvas
     @MainThread @PanicsAtCaller
     Public New(texture: Texture)
         If !texture.IsTarget() Then Panic("a Canvas draws into a target, which the texture isn't")
-        target = texture.Live("Canvas")
         Self.texture = texture
+        Into("Canvas")
         pen = fbe_2d_pen_t(0, 0, 0, 0, 0, 0, 255, 255, 255, 255, FBE_2D_SOLID)
         scale = Vec2(1, 1)
     End New
 
     // The screen's.
     Package New()
-        target = 0
         pen = fbe_2d_pen_t(0, 0, 0, 0, 0, 0, 255, 255, 255, 255, FBE_2D_SOLID)
         scale = Vec2(1, 1)
     End New
 
-    /// Sets the color it draws with, alpha too, which ALPHA and ADD blend by.
+    /// Sets the color it draws with, alpha too, which ALPHA and ADD blend by; into a texture whose
+    /// pixels are data, RGBA8_LINEAR or R8, it's stored as it's given, not as sRGB.
     @MainThread Public Method SetColor(color: Color32)
         pen.red = color.r
         pen.green = color.g
@@ -139,12 +138,13 @@ Public Final Class Canvas
     /// is the target, or one that was freed.
     @MainThread @PanicsAtCaller
     Public Method Draw(sprite: Sprite, x: Float32, y: Float32, frame: Int32 = 0)
+        Local into = Into("Draw")
         Local drawn = sprite.Drawn(frame, rotation, scale.x As Float32, scale.y As Float32)
         Local texture = sprite.Live()
         Local used = pen
         Local done = False
         Unsafe
-            done = fbe_2d_texture(target, AddressOf(used), texture, AddressOf(drawn), x, y)
+            done = fbe_2d_texture(into, AddressOf(used), texture, AddressOf(drawn), x, y)
         End Unsafe
         If !done Then Panic(LastError())
     End Method
@@ -153,12 +153,13 @@ Public Final Class Canvas
     /// tiles placed so one's handle is at `x`, `y`.
     @MainThread @PanicsAtCaller
     Public Method Tile(sprite: Sprite, x: Float32, y: Float32, frame: Int32 = 0)
+        Local into = Into("Tile")
         Local drawn = sprite.Drawn(frame, 0, scale.x As Float32, scale.y As Float32)
         Local texture = sprite.Live()
         Local used = pen
         Local done = False
         Unsafe
-            done = fbe_2d_tile(target, AddressOf(used), texture, AddressOf(drawn), x, y)
+            done = fbe_2d_tile(into, AddressOf(used), texture, AddressOf(drawn), x, y)
         End Unsafe
         If !done Then Panic(LastError())
     End Method
@@ -166,10 +167,11 @@ Public Final Class Canvas
     /// Fills its viewport with its color, replacing what's there, whatever its blend.
     @MainThread @PanicsAtCaller
     Public Method Clear()
+        Local into = Into("Clear")
         Local used = pen
         Local drawn = False
         Unsafe
-            drawn = fbe_2d_clear(target, AddressOf(used))
+            drawn = fbe_2d_clear(into, AddressOf(used))
         End Unsafe
         If !drawn Then Panic(LastError())
     End Method
@@ -177,10 +179,11 @@ Public Final Class Canvas
     /// Draws a pixel.
     @MainThread @PanicsAtCaller
     Public Method Plot(x: Int32, y: Int32)
+        Local into = Into("Plot")
         Local used = pen
         Local drawn = False
         Unsafe
-            drawn = fbe_2d_plot(target, AddressOf(used), x, y)
+            drawn = fbe_2d_plot(into, AddressOf(used), x, y)
         End Unsafe
         If !drawn Then Panic(LastError())
     End Method
@@ -189,10 +192,11 @@ Public Final Class Canvas
     /// steeper, the pixel nearest it, the same whichever end it starts from.
     @MainThread @PanicsAtCaller
     Public Method DrawLine(x1: Int32, y1: Int32, x2: Int32, y2: Int32)
+        Local into = Into("DrawLine")
         Local used = pen
         Local drawn = False
         Unsafe
-            drawn = fbe_2d_line(target, AddressOf(used), x1, y1, x2, y2)
+            drawn = fbe_2d_line(into, AddressOf(used), x1, y1, x2, y2)
         End Unsafe
         If !drawn Then Panic(LastError())
     End Method
@@ -201,10 +205,11 @@ Public Final Class Canvas
     /// outline a pixel wide; nothing if a side isn't positive.
     @MainThread @PanicsAtCaller
     Public Method DrawRect(x: Int32, y: Int32, width: Int32, height: Int32, filled: Bool = True)
+        Local into = Into("DrawRect")
         Local used = pen
         Local drawn = False
         Unsafe
-            drawn = fbe_2d_rect(target, AddressOf(used), x, y, width, height, filled)
+            drawn = fbe_2d_rect(into, AddressOf(used), x, y, width, height, filled)
         End Unsafe
         If !drawn Then Panic(LastError())
     End Method
@@ -213,20 +218,24 @@ Public Final Class Canvas
     /// both its middles.
     @MainThread @PanicsAtCaller
     Public Method DrawOval(x: Int32, y: Int32, width: Int32, height: Int32, filled: Bool = True)
+        Local into = Into("DrawOval")
         Local used = pen
         Local drawn = False
         Unsafe
-            drawn = fbe_2d_oval(target, AddressOf(used), x, y, width, height, filled)
+            drawn = fbe_2d_oval(into, AddressOf(used), x, y, width, height, filled)
         End Unsafe
         If !drawn Then Panic(LastError())
     End Method
 
-    /// Draws a polygon through `points`: filled, covering the pixels whose middles are in it,
-    /// concave or not as long as its sides don't cross; or its outline, a line between the pixels
-    /// the points are in, each to the next and the last to the first. It panics for fewer than 3
-    /// points.
+    /// Draws a polygon through `points`, each taken to the nearest 1/16 of a pixel: filled,
+    /// covering the pixels whose middles are in it, concave or not as long as its sides don't
+    /// cross, the same on every GPU but where it reaches more than 16384 pixels past the viewport,
+    /// where it's cut to the viewport first; or its outline, a line between the pixels the points
+    /// are in, each to the next and the last to the first, each pixel drawn once. It panics for
+    /// fewer than 3 points.
     @MainThread @PanicsAtCaller
     Public Method DrawPolygon(points: Vec2[], filled: Bool = True)
+        Local into = Into("DrawPolygon")
         Local flat: Float32[] = []
         For point In points
             flat.Add(point.x As Float32)
@@ -236,9 +245,18 @@ Public Final Class Canvas
         Local used = pen
         Local drawn = False
         Unsafe
-            drawn = fbe_2d_polygon(target, AddressOf(used), buffer.Pointer(),
+            drawn = fbe_2d_polygon(into, AddressOf(used), buffer.Pointer(),
                                    points.Count As Int32, filled)
         End Unsafe
         If !drawn Then Panic(LastError())
+    End Method
+
+    // What it draws into: its texture's handle, or 0 for the screen; a panic naming `call` for a
+    // texture that was freed.
+    @PanicsAtCaller
+    Method Into(call: String): UInt64
+        Local drawn = texture
+        If drawn == Null Then Return 0
+        Return drawn.Live(call)
     End Method
 End Class

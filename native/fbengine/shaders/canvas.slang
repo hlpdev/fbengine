@@ -1,7 +1,7 @@
 // 2D's quads: each drawn from its corners, in pixels, read through the address the push constants
-// give, six vertices a quad; its color, sRGB bytes, made linear, times its texture's color. A
-// line's quad covers the pixels around it, and keeps, along its longer axis, the one nearest it,
-// as shapes.hpp's line picks it, a tie rounding up.
+// give, six vertices a quad; its color, sRGB bytes, made linear unless the target's pixels are
+// data, times its texture's color. A line's quad covers the pixels around it, and keeps, along its
+// longer axis, the one nearest it, as shapes.hpp's line picks it, a tie rounding up.
 
 import bindless;
 
@@ -19,6 +19,7 @@ struct Canvas
 {
     Quad* quads;
     float2 scale;
+    uint data;
 };
 
 [[vk::push_constant]]
@@ -34,12 +35,9 @@ struct Corner
     nointerpolation uint flags : FLAGS;
 };
 
-// A quad's flags: it's a line; steeper than long; and it leaves out its pixel at the end of its
-// longer axis, or at the start.
+// A quad's flags: it's a line; and steeper than long.
 static const uint lineFlag = 1;
 static const uint steepFlag = 2;
-static const uint noEndFlag = 4;
-static const uint noStartFlag = 8;
 
 // A quad's two triangles, from its corners clockwise from the top left.
 static const uint cornerOf[6] = { 0, 1, 2, 0, 2, 3 };
@@ -59,7 +57,8 @@ Corner vertexMain(uint index : SV_VulkanVertexID)
     corner.uv = float2(at == 1 || at == 2 ? quad.uv.z : quad.uv.x, at >= 2 ? quad.uv.w : quad.uv.y);
     const float4 bytes = float4(quad.color & 0xFF, (quad.color >> 8) & 0xFF, (quad.color >> 16) & 0xFF,
                                 quad.color >> 24) / 255.0;
-    corner.color = float4(toLinear(bytes.r), toLinear(bytes.g), toLinear(bytes.b), bytes.a);
+    const float4 decoded = float4(toLinear(bytes.r), toLinear(bytes.g), toLinear(bytes.b), bytes.a);
+    corner.color = canvas.data != 0 ? bytes : decoded;
     corner.texture = quad.texture;
     corner.line = asint(quad.uv);
     corner.flags = quad.flags;
@@ -81,17 +80,18 @@ float4 fragmentMain(Corner corner) : SV_Target
         const bool steep = (corner.flags & steepFlag) != 0;
         const int along = (steep ? pixel.y : pixel.x) - corner.line.x;
         const int length = corner.line.z;
-        if (along < 0 || along > length || ((corner.flags & noEndFlag) != 0 && along == length)
-            || ((corner.flags & noStartFlag) != 0 && along == 0))
+        if (along < 0 || along > length)
         {
             discard;
         }
         int nearest = corner.line.y;
         if (length > 0)
         {
-            const int top = 2 * corner.line.w * along + length;
-            const int bottom = 2 * length;
-            nearest += top / bottom - (top % bottom != 0 && top < 0 ? 1 : 0);
+            // Divided unsigned, as Vulkan leaves signed division of negative numbers undefined:
+            // 2 length squared more on top, and length less after, it's never negative, and fits
+            // for a length up to 32767.
+            const uint top = uint(2 * corner.line.w * along + length) + uint(2 * length * length);
+            nearest += int(top / uint(2 * length)) - length;
         }
         if ((steep ? pixel.x : pixel.y) != nearest)
         {

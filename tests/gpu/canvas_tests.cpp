@@ -16,7 +16,9 @@
 #include <gpu/graph.hpp>
 #include <gpu/vulkan.hpp>
 #include <numbers>
+#include <random>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -120,6 +122,234 @@ int to_srgb(double linear) {
     return static_cast<int>(std::lround(std::clamp(value, 0.0, 1.0) * 255.0));
 }
 
+/// The pixels of a frame, or worked out, as x and y.
+using pixels_t = std::set<std::pair<std::uint32_t, std::uint32_t>>;
+using point_t = std::array<double, 2>;
+
+/// Whether `x`, `y` is in the polygon through `points`, x and y in turn, even-odd, and whether
+/// it's within `near` of one of its sides, where a GPU's own rule says which side it's on.
+bool inside(std::span<const double> points, double x, double y, bool& tie, double near = 1e-7) {
+    const std::size_t count = points.size() / 2;
+    bool in = false;
+    tie = false;
+    for (std::size_t at = 0; at < count; ++at) {
+        const std::size_t before = (at + count - 1) % count;
+        const double x1 = points[at * 2];
+        const double y1 = points[(at * 2) + 1];
+        const double x2 = points[before * 2];
+        const double y2 = points[(before * 2) + 1];
+        const double across = x2 - x1;
+        const double down = y2 - y1;
+        const double length = std::hypot(across, down);
+        if (length > 0.0) {
+            const double off = std::abs((across * (y - y1)) - (down * (x - x1))) / length;
+            const double along = (((x - x1) * across) + ((y - y1) * down)) / (length * length);
+            tie = tie || (off < near && along >= -1e-12 && along <= 1.0 + 1e-12);
+        }
+        if ((y1 > y) != (y2 > y) && x < x1 + ((y - y1) * across / down)) {
+            in = !in;
+        }
+    }
+    return in;
+}
+
+/// The pixels of a target `width` by `height` whose middles are in the polygon through `points`,
+/// and those whose middles are on its sides.
+std::pair<pixels_t, pixels_t> middles_in(std::span<const double> points, std::uint32_t width,
+                                         std::uint32_t height, double near = 1e-7) {
+    pixels_t in;
+    pixels_t ties;
+    for (std::uint32_t y = 0; y < height; ++y) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+            bool tie = false;
+            if (inside(points, x + 0.5, y + 0.5, tie, near)) {
+                in.emplace(x, y);
+            }
+            if (tie) {
+                ties.emplace(x, y);
+            }
+        }
+    }
+    return { in, ties };
+}
+
+/// How many of a target's pixels `drawn` has wrong, against those whose middles are in the
+/// polygon through `points`, those on its sides left out.
+int wrong_pixels(const pixels_t& drawn, std::span<const double> points, std::uint32_t width,
+                 std::uint32_t height, double near = 1e-7) {
+    const auto [in, ties] = middles_in(points, width, height, near);
+    int wrong = 0;
+    for (std::uint32_t y = 0; y < height; ++y) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+            if (!ties.contains({ x, y }) && drawn.contains({ x, y }) != in.contains({ x, y })) {
+                ++wrong;
+            }
+        }
+    }
+    return wrong;
+}
+
+/// Twice the area of the polygon through `points`, x and y in turn.
+double twice_area(std::span<const double> points) {
+    const std::size_t count = points.size() / 2;
+    double area = 0.0;
+    for (std::size_t at = 0; at < count; ++at) {
+        const std::size_t next = (at + 1) % count;
+        area +=
+            (points[at * 2] * points[(next * 2) + 1]) - (points[next * 2] * points[(at * 2) + 1]);
+    }
+    return area;
+}
+
+/// Which side of the line from `a` to `b` `c` is: 1, -1, or 0 on it.
+int side(const point_t& a, const point_t& b, const point_t& c) {
+    const double cross = ((b[0] - a[0]) * (c[1] - a[1])) - ((b[1] - a[1]) * (c[0] - a[0]));
+    return static_cast<int>(cross > 0.0) - static_cast<int>(cross < 0.0);
+}
+
+/// Whether `c`, on the line through `a` and `b`, is between them.
+bool between(const point_t& a, const point_t& b, const point_t& c) {
+    return std::min(a[0], b[0]) <= c[0] && c[0] <= std::max(a[0], b[0]) &&
+           std::min(a[1], b[1]) <= c[1] && c[1] <= std::max(a[1], b[1]);
+}
+
+/// Whether the sides from `a` to `b` and from `c` to `d` meet, touching too.
+bool meet(const point_t& a, const point_t& b, const point_t& c, const point_t& d) {
+    const int ab_c = side(a, b, c);
+    const int ab_d = side(a, b, d);
+    const int cd_a = side(c, d, a);
+    const int cd_b = side(c, d, b);
+    return (ab_c * ab_d < 0 && cd_a * cd_b < 0) || (ab_c == 0 && between(a, b, c)) ||
+           (ab_d == 0 && between(a, b, d)) || (cd_a == 0 && between(c, d, a)) ||
+           (cd_b == 0 && between(c, d, b));
+}
+
+/// Whether the polygon through `points` is simple: no point twice, no two sides meeting but
+/// neighbors at their point, and no neighbors folding back along each other.
+bool simple(std::span<const double> points) {
+    const std::size_t count = points.size() / 2;
+    const auto point = [&](std::size_t at) {
+        return point_t{ points[(at % count) * 2], points[((at % count) * 2) + 1] };
+    };
+    for (std::size_t at = 0; at < count; ++at) {
+        for (std::size_t other = at + 1; other < count; ++other) {
+            if (point(at) == point(other)) {
+                return false;
+            }
+            const bool neighbors = other == at + 1 || (at == 0 && other == count - 1);
+            if (neighbors) {
+                // The far end of one on the other.
+                const std::size_t shared = other == at + 1 ? other : at;
+                const point_t from = point(shared + count - 1);
+                const point_t to = point(shared + 1);
+                if (side(from, point(shared), to) == 0 &&
+                    (between(from, point(shared), to) || between(to, point(shared), from))) {
+                    return false;
+                }
+            } else if (meet(point(at), point(at + 1), point(other), point(other + 1))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// `count` simple polygons of 4 to 14 points on a grid `grid` pixels wide, each moved by up to
+/// `nudge` of a pixel, from `seed`: their points sorted by angle about one near the grid's middle,
+/// none at the same angle, with an area of a pixel or more.
+std::vector<std::vector<double>> random_polygons(std::size_t count, std::uint32_t grid,
+                                                 double nudge, std::uint32_t seed) {
+    std::mt19937 random(seed);
+    const double middle_x = (grid / 2.0) + 0.37;
+    const double middle_y = (grid / 2.0) + 0.21;
+    std::vector<std::vector<double>> made;
+    while (made.size() < count) {
+        std::vector<std::pair<double, point_t>> around;
+        const auto size = static_cast<std::uint32_t>(4 + (random() % 11));
+        for (std::uint32_t at = 0; at < size; ++at) {
+            const auto x = static_cast<double>(random() % (grid + 1));
+            const auto y = static_cast<double>(random() % (grid + 1));
+            const double nudge_x = nudge * static_cast<double>(random() % 1024) / 1024.0;
+            const double nudge_y = nudge * static_cast<double>(random() % 1024) / 1024.0;
+            const point_t point{ x + nudge_x, y + nudge_y };
+            around.emplace_back(std::atan2(point[1] - middle_y, point[0] - middle_x), point);
+        }
+        std::ranges::sort(around);
+        const auto same = std::ranges::adjacent_find(
+            around, [](const auto& a, const auto& b) { return a.first == b.first; });
+        if (same != around.end()) {
+            continue;
+        }
+        std::vector<double> points;
+        for (const auto& [angle, point] : around) {
+            points.insert(points.end(), { point[0], point[1] });
+        }
+        if (std::abs(twice_area(points)) >= 2.0 && simple(points)) {
+            made.push_back(std::move(points));
+        }
+    }
+    return made;
+}
+
+/// Polygons ear clipping finds hard: concave ones, collinear points, a point twice, a hole through
+/// a bridge, a comb, a spiral, a point on a diagonal, and some the other way round.
+std::vector<std::vector<double>> awkward_polygons() {
+    std::vector<std::vector<double>> made{
+        { 1, 1, 3, 1, 3, 5, 7, 5, 7, 7, 1, 7 },
+        { 2, 2, 8, 2, 14, 2, 20, 2, 20, 9, 20, 20, 11, 20, 2, 20, 2, 11 },
+        { 2, 2, 20, 2, 20, 2, 20, 20, 20, 20, 20, 20, 2, 20, 2, 2 },
+        // A square with a square hole, a bridge from one's first point to the other's.
+        { 2, 2, 40, 2, 40, 40, 2, 40, 2, 2, 12, 12, 12, 30, 30, 30, 30, 12, 12, 12 },
+        { 2, 10, 20, 10, 20, 2, 36, 16, 20, 30, 20, 22, 2, 22 },
+        { 20, 20, 2, 2, 38, 2, 38, 38, 2, 38 },
+        // 28, 36 is on the line from 36, 24 to 20, 48, the first ear's diagonal.
+        { 36, 0, 36, 24, 40, 36, 28, 36, 20, 48 },
+    };
+    std::vector<double> comb;
+    for (int tooth = 0; tooth < 8; ++tooth) {
+        const double x = 2.0 + (tooth * 5.0);
+        comb.insert(comb.end(), { x, 2, x + 2, 2, x + 2, 30, x + 5, 30 });
+    }
+    comb.insert(comb.end(), { 42, 30, 42, 40, 2, 40 });
+    made.push_back(comb);
+    std::vector<double> spiral;
+    std::vector<double> inner;
+    for (int at = 0; at <= 60; ++at) {
+        const double angle = at * 0.25;
+        const double radius = 4.0 + (at * 0.45);
+        spiral.insert(spiral.end(), {
+                                        32 + ((radius + 3) * std::cos(angle)),
+                                        32 + ((radius + 3) * std::sin(angle)),
+                                    });
+        inner.insert(inner.end(),
+                     { 32 + (radius * std::cos(angle)), 32 + (radius * std::sin(angle)) });
+    }
+    for (std::size_t at = inner.size(); at >= 2; at -= 2) {
+        spiral.insert(spiral.end(), { inner[at - 2], inner[at - 1] });
+    }
+    made.push_back(spiral);
+    for (const std::size_t turned : { std::size_t{ 3 }, std::size_t{ 4 }, std::size_t{ 7 } }) {
+        std::vector<double> back;
+        for (std::size_t at = made[turned].size(); at >= 2; at -= 2) {
+            back.insert(back.end(), { made[turned][at - 2], made[turned][at - 1] });
+        }
+        made.push_back(back);
+    }
+    return made;
+}
+
+/// `points` as the canvas takes them, floats, and as it draws them, each to the nearest 1/16 of a
+/// pixel.
+std::pair<std::vector<float>, std::vector<double>> given_and_drawn(std::span<const double> points) {
+    std::vector<float> given;
+    std::vector<double> drawn;
+    for (const double value : points) {
+        given.push_back(static_cast<float>(value));
+        drawn.push_back(std::round(static_cast<double>(given.back()) * 16.0) / 16.0);
+    }
+    return { given, drawn };
+}
+
 } // namespace
 
 TEST_CASE("a line's pixels are one a column or row, the same from either end", "[gpu]") {
@@ -154,6 +384,165 @@ TEST_CASE("a line's pixels are one a column or row, the same from either end", "
     std::vector<fbe::canvas::span_t> clipped;
     fbe::canvas::line(-2000000000, 0, 2000000000, 0, true, { .right = 10, .bottom = 10 }, clipped);
     CHECK(covered(clipped).size() == 10);
+}
+
+// A line's pixels are worked out exactly from its ends however far apart they are, stepped from
+// the first in the clip, even where the arithmetic of one pixel's would overflow 64 bits.
+TEST_CASE("a line's pixels are exact however long it is", "[gpu]") {
+    const std::int64_t far = 4294967296;
+    const std::int64_t low = -2147483648;
+    // One pixel up from -2^31 over 2^33: below it left of 0, the tie at 0 rounding up.
+    std::vector<fbe::canvas::span_t> rising;
+    fbe::canvas::line(-far, low, far, low + 1, true,
+                      { .left = -10, .top = low - 5, .right = 10, .bottom = low + 5 }, rising);
+    std::multiset<std::pair<std::int64_t, std::int64_t>> expected;
+    for (std::int64_t x = -10; x < 10; ++x) {
+        expected.emplace(x, x < 0 ? low : low + 1);
+    }
+    CHECK(covered(rising) == expected);
+    // Ends 2^41 apart, y = x + 10.
+    std::vector<fbe::canvas::span_t> diagonal;
+    const std::int64_t further = 1099511627776;
+    fbe::canvas::line(-further, 10 - further, further, 10 + further, true,
+                      { .right = 64, .bottom = 64 }, diagonal);
+    expected.clear();
+    for (std::int64_t x = 0; x < 54; ++x) {
+        expected.emplace(x, x + 10);
+    }
+    CHECK(covered(diagonal) == expected);
+    // Outside the clip, nothing, however far its ends are.
+    for (const auto& [x1, y1, x2, y2] : std::vector<std::array<std::int64_t, 4>>{
+             { INT32_MIN, INT32_MIN, INT32_MAX, INT32_MIN },
+             { INT32_MIN, INT32_MAX, INT32_MAX, INT32_MAX },
+             { INT32_MIN, INT32_MIN, INT32_MIN, INT32_MAX },
+             { -2000000000, -1500000000, 2000000000, -1500000000 },
+         }) {
+        std::vector<fbe::canvas::span_t> spans;
+        fbe::canvas::line(x1, y1, x2, y2, true, { .right = 64, .bottom = 64 }, spans);
+        CHECK(spans.empty());
+    }
+    // Against each pixel's own arithmetic, for lines short enough for it, clipped anywhere along
+    // them.
+    // Seeded, so a failure's the same each run.
+    // NOLINTNEXTLINE(bugprone-random-generator-seed)
+    std::mt19937 random(3);
+    const auto coordinate = [&random] {
+        return static_cast<std::int64_t>(random() % 2097152) - 1048576;
+    };
+    for (int at = 0; at < 300; ++at) {
+        const std::int64_t x1 = coordinate();
+        const std::int64_t y1 = coordinate();
+        const std::int64_t x2 = at % 3 == 0 ? x1 + (coordinate() % 64) : coordinate();
+        const std::int64_t y2 = coordinate();
+        INFO(x1 << ", " << y1 << " to " << x2 << ", " << y2);
+        // A clip 64 by 64 about a point along it.
+        const std::int64_t middle_x = x1 + ((x2 - x1) * (at % 7) / 7);
+        const std::int64_t middle_y = y1 + ((y2 - y1) * (at % 7) / 7);
+        const fbe::canvas::clip_t clip{
+            .left = middle_x - 32,
+            .top = middle_y - 32,
+            .right = middle_x + 32,
+            .bottom = middle_y + 32,
+        };
+        std::vector<fbe::canvas::span_t> spans;
+        fbe::canvas::line(x1, y1, x2, y2, true, clip, spans);
+        // Along its longer axis, from the end where that's smaller, and across.
+        const bool across = std::abs(x2 - x1) >= std::abs(y2 - y1);
+        std::array<std::int64_t, 2> start = across ? std::array{ x1, y1 } : std::array{ y1, x1 };
+        std::array<std::int64_t, 2> finish = across ? std::array{ x2, y2 } : std::array{ y2, x2 };
+        if (finish[0] < start[0]) {
+            std::swap(start, finish);
+        }
+        const auto [m1, n1] = start;
+        const auto [m2, n2] = finish;
+        const std::int64_t length = m2 - m1;
+        std::multiset<std::pair<std::int64_t, std::int64_t>> each;
+        const std::int64_t from = std::max(m1, across ? clip.left : clip.top);
+        const std::int64_t to = std::min(m2, (across ? clip.right : clip.bottom) - 1);
+        for (std::int64_t m = from; m <= to; ++m) {
+            std::int64_t n = n1;
+            if (length > 0) {
+                const std::int64_t top = (2 * (n2 - n1) * (m - m1)) + length;
+                const std::int64_t bottom = 2 * length;
+                n += (top / bottom) - (top % bottom != 0 && top < 0 ? 1 : 0);
+            }
+            const std::int64_t x = across ? m : n;
+            const std::int64_t y = across ? n : m;
+            if (x >= clip.left && x < clip.right && y >= clip.top && y < clip.bottom) {
+                each.emplace(x, y);
+            }
+        }
+        CHECK(covered(spans) == each);
+    }
+}
+
+// Ear clipping covers every pixel middle in a polygon once, and none outside it, its triangles'
+// area its own: an ear's blocked by a point on its sides too, so a point on a diagonal isn't cut
+// past. On the CPU, over awkward polygons and seeded random ones, on a small grid so their points
+// are often collinear, and nudged off it.
+TEST_CASE("a polygon's triangles cover each pixel middle in it once", "[gpu]") {
+    const auto check = [](std::span<const double> points, std::uint32_t size) {
+        const std::vector<std::array<double, 6>> triangles = fbe::canvas::triangulate(points);
+        double area = 0.0;
+        for (const std::array<double, 6>& triangle : triangles) {
+            area += std::abs(twice_area(triangle));
+        }
+        CHECK(std::abs(area - std::abs(twice_area(points))) < 1e-6);
+        int twice = 0;
+        int wrong = 0;
+        for (std::uint32_t y = 0; y < size; ++y) {
+            for (std::uint32_t x = 0; x < size; ++x) {
+                bool tie = false;
+                const bool in = inside(points, x + 0.5, y + 0.5, tie);
+                int covers = 0;
+                for (const std::array<double, 6>& triangle : triangles) {
+                    bool on_side = false;
+                    covers += inside(triangle, x + 0.5, y + 0.5, on_side) ? 1 : 0;
+                    tie = tie || on_side;
+                }
+                if (!tie) {
+                    twice += covers > 1 ? 1 : 0;
+                    wrong += (covers > 0) != in ? 1 : 0;
+                }
+            }
+        }
+        CHECK(twice == 0);
+        CHECK(wrong == 0);
+    };
+    for (const std::vector<double>& polygon : awkward_polygons()) {
+        INFO("an awkward polygon of " << polygon.size() / 2 << " points, from " << polygon[0]
+                                      << ", " << polygon[1]);
+        check(polygon, 64);
+    }
+    for (const double nudge : { 0.0, 1.0 }) {
+        std::size_t index = 0;
+        for (const std::vector<double>& polygon : random_polygons(500, 12, nudge, 7)) {
+            INFO("random polygon " << index++ << ", nudged " << nudge);
+            check(polygon, 13);
+        }
+    }
+    // Sides that cross promise nothing, but are triangles still.
+    const std::vector<double> bowtie{ 0, 0, 10, 10, 10, 0, 0, 10 };
+    CHECK(!fbe::canvas::triangulate(bowtie).empty());
+}
+
+// Only a corner that isn't convex can be in an ear, so a convex polygon's ears are found going
+// round it once: 100,000 points take a moment, where trying each against every other would take
+// many seconds.
+TEST_CASE("a convex polygon's triangles are found going round it once", "[gpu]") {
+    constexpr std::size_t count = 100000;
+    std::vector<double> circle;
+    for (std::size_t at = 0; at < count; ++at) {
+        const double angle = static_cast<double>(at) * 2.0 * std::numbers::pi / count;
+        circle.insert(circle.end(),
+                      { 500 + (400 * std::cos(angle)), 500 + (400 * std::sin(angle)) });
+    }
+    const auto started = std::chrono::steady_clock::now();
+    const std::vector<std::array<double, 6>> triangles = fbe::canvas::triangulate(circle);
+    const std::chrono::duration<double, std::milli> spent =
+        std::chrono::steady_clock::now() - started;
+    CHECK(triangles.size() == count - 2);
+    CHECK(spent.count() < 1000.0);
 }
 
 TEST_CASE("an oval's pixels are symmetric, and its outline is its edge's", "[gpu]") {
@@ -243,6 +632,65 @@ TEST_CASE("a line on the GPU has the pixels the CPU works out for it", "[gpu]") 
     fbe::canvas::line(-100000, -50000, 100063, 50031, true, { .right = 64, .bottom = 64 }, spans);
     CHECK(pixels_of(read(made), white).size() == covered(spans).size());
     CHECK(!covered(spans).empty());
+    stop_gpu();
+}
+
+// Lines going back across their longer axis, where the shader's arithmetic is negative, and their
+// ties, have the CPU's pixels: each line short enough to have a box of its own on one target, and
+// long ones each alone. Signed division of negative numbers isn't defined in Vulkan, and lavapipe
+// and MoltenVK, which CI runs, do it as C++ does, so only another GPU, as an RTX 4080 in a lane's
+// own runs, shows it wrong.
+TEST_CASE("a line going back across its longer axis has the CPU's pixels, ties too", "[gpu]") {
+    start();
+    const fbe_2d_pen_t clear = pen(black);
+    const fbe_2d_pen_t ink = pen(white);
+    const auto expected_of = [](const std::vector<std::array<std::int32_t, 4>>& lines,
+                                std::int64_t width, std::int64_t height) {
+        std::vector<fbe::canvas::span_t> spans;
+        for (const auto& [x1, y1, x2, y2] : lines) {
+            fbe::canvas::line(x1, y1, x2, y2, true, { .right = width, .bottom = height }, spans);
+        }
+        std::set<std::pair<std::uint32_t, std::uint32_t>> expected;
+        for (const auto& [x, y] : covered(spans)) {
+            expected.emplace(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
+        }
+        return expected;
+    };
+    // Every slope back across for lengths 2 to 16, shallow and steep, each in an 18 pixel box.
+    std::vector<std::array<std::int32_t, 4>> short_lines;
+    for (std::int32_t length = 2; length <= 16; ++length) {
+        for (std::int32_t across = -length; across < 0; ++across) {
+            for (const bool steep : { false, true }) {
+                const auto box = static_cast<std::int32_t>(short_lines.size());
+                const std::int32_t x = ((box % 28) * 18) + 1;
+                const std::int32_t y = ((box / 28) * 18) + 1;
+                short_lines.push_back(steep ? std::array{ x + 16, y, x + 16 + across, y + length }
+                                            : std::array{ x, y + 16, x + length, y + 16 + across });
+            }
+        }
+    }
+    const std::uint64_t made = target(512, 256);
+    require(fbe_2d_clear(made, &clear));
+    for (const auto& [x1, y1, x2, y2] : short_lines) {
+        require(fbe_2d_line(made, &ink, x1, y1, x2, y2));
+    }
+    CHECK(pixels_of(read(made), white) == expected_of(short_lines, 512, 256));
+    // Long ones, those an RTX 4080 drew wrong among them.
+    std::vector<std::array<std::int32_t, 4>> long_lines{
+        { 203, 254, 217, 30 },    { 354, 5, 142, 119 },    { 55, -197, -46, 453 },
+        { 523, -221, -138, 555 }, { 219, -147, -34, 193 }, { 157, 339, 533, -11 },
+        { -3, 438, 434, -258 },   { -298, 421, 294, 185 }, { 46, 153, 433, -241 },
+    };
+    for (const std::int32_t across : { -1, -3, -99, -100, -101, -150, -199, -200 }) {
+        long_lines.push_back({ 10, 240, 210, 240 + across });
+        long_lines.push_back({ 250, 10, 250 + across, 210 });
+    }
+    for (const auto& line : long_lines) {
+        INFO(line[0] << ", " << line[1] << " to " << line[2] << ", " << line[3]);
+        require(fbe_2d_clear(made, &clear));
+        require(fbe_2d_line(made, &ink, line[0], line[1], line[2], line[3]));
+        CHECK(pixels_of(read(made), white) == expected_of({ line }, 512, 256));
+    }
     stop_gpu();
 }
 
@@ -383,6 +831,127 @@ TEST_CASE("a polygon fills the pixels whose middles are in it, concave too", "[g
     stop_gpu();
 }
 
+// Filled, a polygon covers the pixels whose middles are in it, its points to 1/16 of a pixel, the
+// precision every GPU's rasterizing is exact to; the pixels whose middles are on a side are the
+// GPU's to decide. Awkward polygons, seeded random ones off the grid, and a triangle reaching
+// further than a GPU's own clipping is exact, which is cut to the viewport first.
+TEST_CASE("a polygon fills the pixels whose middles are in it, on every GPU", "[gpu]") {
+    start();
+    const std::uint64_t made = target(64, 64);
+    const fbe_2d_pen_t clear = pen(black);
+    const fbe_2d_pen_t ink = pen(white);
+    const auto drawn_of = [&](const std::vector<float>& given) {
+        require(fbe_2d_clear(made, &clear));
+        require(fbe_2d_polygon(made, &ink, given.data(),
+                               static_cast<std::int32_t>(given.size() / 2), true));
+        return pixels_of(read(made), white);
+    };
+    std::vector<std::vector<double>> polygons = awkward_polygons();
+    for (std::vector<double>& polygon : random_polygons(60, 60, 1.0, 11)) {
+        polygons.push_back(std::move(polygon));
+    }
+    std::size_t index = 0;
+    for (const std::vector<double>& polygon : polygons) {
+        INFO("polygon " << index++);
+        const auto [given, drawn] = given_and_drawn(polygon);
+        CHECK(wrong_pixels(drawn_of(given), drawn, 64, 64) == 0);
+    }
+    // The pentagon with a point on its first ear's diagonal fills its 270 pixels, not 340.
+    const auto [in, ties] = middles_in(awkward_polygons()[6], 64, 64);
+    CHECK(in.size() == 270);
+    // Out to a billion pixels, a triangle whose long side is y = x / 2 + 10.25, as floats hold it.
+    for (const double far : { 1e4, 1e5, 1e6, 1e7, 1e8, 1e9 }) {
+        INFO("out to " << far);
+        const std::vector<double> points{
+            -far, (-far / 2) + 10.25, far, (far / 2) + 10.25, -far, far,
+        };
+        const auto [given, drawn] = given_and_drawn(points);
+        CHECK(wrong_pixels(drawn_of(given), drawn, 64, 64, 1e-6) == 0);
+    }
+    stop_gpu();
+}
+
+// An outline draws each of its pixels once, blended: a line from each point's pixel to the
+// next's, both drawn, where an acute corner's sides share pixels, a sliver's go back over each
+// other, and an outline in one pixel is that pixel; and a side from a point past where doubles
+// are whole numbers, where it reaches the target.
+TEST_CASE("a polygon's outline draws each of its pixels once", "[gpu]") {
+    start();
+    const std::uint64_t made = target(48, 24);
+    const fbe_2d_pen_t clear = pen(black);
+    const fbe_2d_pen_t half = pen({ 255, 255, 255, 128 }, FBE_2D_ALPHA);
+    const int once = to_srgb(128.0 / 255.0);
+    const auto outline = [&](const std::vector<float>& points) {
+        require(fbe_2d_clear(made, &clear));
+        require(fbe_2d_polygon(made, &half, points.data(),
+                               static_cast<std::int32_t>(points.size() / 2), false));
+        const fbe::golden::frame_t frame = read(made);
+        std::set<std::pair<std::int64_t, std::int64_t>> drawn;
+        for (std::uint32_t y = 0; y < frame.height; ++y) {
+            for (std::uint32_t x = 0; x < frame.width; ++x) {
+                const int value = pixel(frame, x, y)[0];
+                if (value != 0) {
+                    INFO(x << ", " << y);
+                    CHECK(std::abs(value - once) <= 1);
+                    drawn.emplace(x, y);
+                }
+            }
+        }
+        return drawn;
+    };
+    // The pixels of lines through `ends`, x and y in turn, each to the next and the last to the
+    // first, together.
+    const auto lines = [](const std::vector<std::int64_t>& ends) {
+        std::vector<fbe::canvas::span_t> spans;
+        for (std::size_t at = 0; at < ends.size(); at += 2) {
+            const std::size_t next = (at + 2) % ends.size();
+            fbe::canvas::line(ends[at], ends[at + 1], ends[next], ends[next + 1], true,
+                              { .right = 48, .bottom = 24 }, spans);
+        }
+        const auto pixels = covered(spans);
+        return std::set(pixels.begin(), pixels.end());
+    };
+    CHECK(outline({ 0.5F, 0.5F, 40.5F, 4.5F, 0.5F, 8.5F }) == lines({ 0, 0, 40, 4, 0, 8 }));
+    CHECK(outline({ 2.5F, 2.5F, 9.5F, 2.5F, 9.6F, 2.6F }).size() == 8);
+    CHECK(outline({ 5.1F, 5.2F, 5.8F, 5.3F, 5.5F, 5.9F }) ==
+          std::set<std::pair<std::int64_t, std::int64_t>>{ { 5, 5 } });
+    // From 1e20 left of the target: its sides along rows 10 and 20 and down column 40, which
+    // they reach from 0; from 1e20 right of it, nothing.
+    const auto far = outline({ -1e20F, 10.5F, 40.5F, 10.5F, 40.5F, 20.5F });
+    CHECK(far.size() == 41 + 41 + 9);
+    CHECK(far.contains({ 0, 10 }));
+    CHECK(far.contains({ 0, 20 }));
+    CHECK(far.contains({ 40, 15 }));
+    CHECK(outline({ 1e20F, 10.5F, 50.5F, 10.5F, 50.5F, 20.5F }).empty());
+    stop_gpu();
+}
+
+// Into a target whose pixels are data, RGBA8_LINEAR's and R8's, a pen's color is stored as it's
+// given, not taken as sRGB, and blended as it's stored.
+TEST_CASE("a pen's color goes into a target of data as it's given", "[gpu]") {
+    start();
+    for (const std::int32_t format : { FBE_TEXTURE_RGBA8_LINEAR, FBE_TEXTURE_R8 }) {
+        INFO("format " << format);
+        const std::uint64_t made = target(2, 1, format);
+        const fbe_2d_pen_t ink = pen({ 128, 64, 200, 255 });
+        require(fbe_2d_clear(made, &ink));
+        const fbe_2d_pen_t half = pen({ 255, 255, 255, 128 }, FBE_2D_ALPHA);
+        require(fbe_2d_plot(made, &half, 1, 0));
+        const std::size_t channels = format == FBE_TEXTURE_R8 ? 1 : 4;
+        std::vector<std::uint8_t> pixels(channels * 2);
+        require(fbe_texture_read(made, 0, pixels.data(), static_cast<std::int64_t>(pixels.size())));
+        CHECK(pixels[0] == 128);
+        // Half of 255 over 128: 191.75.
+        CHECK(std::abs(pixels[channels] - 192) <= 1);
+        if (channels == 4) {
+            CHECK(pixels[1] == 64);
+            CHECK(pixels[2] == 200);
+            CHECK(std::abs(pixels[5] - 160) <= 1);
+        }
+    }
+    stop_gpu();
+}
+
 // Everything drawn into one target goes to the GPU as one pass, and it keeps its turn with
 // clears, writes, and other targets' drawing.
 TEST_CASE("what's drawn into a target is one pass, in its turn", "[gpu]") {
@@ -457,9 +1026,12 @@ TEST_CASE("a canvas refuses what it can't draw into or with", "[gpu]") {
     const std::array<float, 6> broken{ 0, 0, 1, NAN, 2, 2 };
     CHECK(!fbe_2d_polygon(made, &solid, broken.data(), 3, true));
     CHECK(std::string(fbe_error()) == "a polygon's points are finite");
-    // A target freed before its batch goes to the graph is drawn into no more.
+    // A target freed before its batch goes to the graph is drawn into no more, and drawing into
+    // it again, with the pen the batch is ready for, is refused.
     require(fbe_2d_rect(made, &solid, 0, 0, 2, 2, true));
     REQUIRE(fbe_texture_release(made));
+    CHECK(!fbe_2d_rect(made, &solid, 0, 0, 2, 2, true));
+    CHECK(std::string(fbe_error()) == "the texture was freed");
     require(fbe::gpu::finish_frame());
     stop_gpu();
 }

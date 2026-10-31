@@ -20,7 +20,8 @@ extern "C" {
 
 // A pen: its origin, added to every position it draws at; its viewport, which clips what it draws,
 // in the target's pixels from its top left with the origin not added, 0 by 0 for the whole target;
-// its color, sRGB bytes; and how it blends, an FBE_2D_ blend. C has no `using`, so it's a typedef.
+// its color, sRGB bytes, or, into a target whose pixels are data, RGBA8_LINEAR's or R8's, the
+// bytes stored; and how it blends, an FBE_2D_ blend. C has no `using`, so it's a typedef.
 // NOLINTNEXTLINE(modernize-use-using)
 typedef struct fbe_2d_pen_t {
     int32_t origin_x;
@@ -74,10 +75,13 @@ FBE_API bool fbe_2d_rect(uint64_t target, const fbe_2d_pen_t* pen, int32_t x, in
 // next's; symmetric across both its middles.
 FBE_API bool fbe_2d_oval(uint64_t target, const fbe_2d_pen_t* pen, int32_t x, int32_t y,
                          int32_t width, int32_t height, bool filled);
-// A polygon through `count` points, `points` their x and y in turn: filled, covering the pixels
-// whose middles are in it, concave or not as long as its sides don't cross; or its outline, a line
-// between the pixels the points are in, each to the next and the last to the first, each pixel
-// drawn once. False for fewer than 3 points, or a point that isn't finite.
+// A polygon through `count` points, `points` their x and y in turn, each taken to the nearest 1/16
+// of a pixel, which every GPU draws exactly: filled, covering the pixels whose middles are in it,
+// concave or not as long as its sides don't cross, a middle on a side as the GPU's rule says (cut
+// to the viewport first where it reaches more than 16384 pixels past it, the cuts as exact as the
+// GPU draws them); or its outline, a line between the pixels the points are in, each to the next
+// and the last to the first, each pixel drawn once. False for fewer than 3 points, or a point that
+// isn't finite.
 FBE_API bool fbe_2d_polygon(uint64_t target, const fbe_2d_pen_t* pen, const float* points,
                             int32_t count, bool filled);
 // `texture` as `sprite` says, its handle at `x`, `y` (the pen's origin added), sampled as the

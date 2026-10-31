@@ -2,11 +2,12 @@
 // of one blend and one viewport, which become one pass, their quads in the frame's ring. They go
 // whenever another target's drawn into, or anything else is about to enter the graph, so 2D keeps
 // its turn with what the frame does. Shapes are spans of whole pixels, worked out on the CPU, and
-// polygons triangles; a triangle's a quad whose last two corners are one. A line's one quad over
-// the pixels around it, of which the shader keeps the ones shapes.hpp's line has, so a long line
-// costs no more than a short one; a line too long for the shader's arithmetic is spans. A
-// texture's drawn as a quad of its own texels, through the bindless set, the pass saying it samples
-// it, so what drew into it before is done first.
+// polygons triangles, their points to 1/16 of a pixel, which every GPU draws exactly; a triangle's
+// a quad whose last two corners are one. A line's one quad over the pixels around it, of which the
+// shader keeps the ones shapes.hpp's line has, so a long line costs no more than a short one; a
+// line too long for the shader's arithmetic is spans. A texture's drawn as a quad of its own
+// texels, through the bindless set, the pass saying it samples it, so what drew into it before is
+// done first.
 
 #include "2d/fbe_2d.h"
 #include "2d/shapes.hpp"
@@ -29,6 +30,7 @@
 #include <memory>
 #include <numbers>
 #include <span>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -50,21 +52,27 @@ struct quad_t {
 };
 static_assert(sizeof(quad_t) == 64, "the canvas shader reads quads 64 bytes apart");
 
-/// A quad's flags: it's a line; steeper than it's long, its longer axis down; and it leaves out
-/// its pixel at the end of that axis, or at the start.
+/// A quad's flags: it's a line; and steeper than it's long, its longer axis down.
 constexpr std::uint32_t line_flag = 1;
 constexpr std::uint32_t steep_flag = 2;
-constexpr std::uint32_t no_end_flag = 4;
-constexpr std::uint32_t no_start_flag = 8;
 /// The longest line the shader's 32-bit arithmetic draws, and the furthest from 0 its ends can be.
 constexpr std::int64_t longest_line = 32767;
 constexpr std::int64_t furthest_line = 16777216;
+/// How far past the clip a polygon's triangle reaches and is drawn as it is, its points on the
+/// 1/16 pixel grid every GPU draws exactly; one reaching further is cut to the clip first, in
+/// doubles, as a GPU's own clipping far out isn't exact.
+constexpr double furthest_triangle = 16384.0;
+/// How far from 0 an outline's points are whole pixels in doubles, 2^52; a side reaching further
+/// is cut there first.
+constexpr double furthest_point = 4503599627370496.0;
 
-/// What the canvas shader's push constants are: the quads' address, and what turns pixels into
-/// clip space.
+/// What the canvas shader's push constants are: the quads' address, what turns pixels into clip
+/// space, and whether the target's pixels are data, which a pen's color is stored into as it's
+/// given, not as sRGB.
 struct push_t {
     VkDeviceAddress quads;
     std::array<float, 2> scale;
+    std::uint32_t data;
 };
 
 /// A run of the batch's quads drawn with one blend and one scissor.
@@ -159,6 +167,7 @@ void flush() {
     const VkExtent2D extent{ .width = found->width, .height = found->height };
     const VkFormat format = found->vk_format;
     const VkSampleCountFlagBits samples = found->samples;
+    const bool data = found->format == FBE_TEXTURE_RGBA8_LINEAR || found->format == FBE_TEXTURE_R8;
     const fbe::gpu::resource_t target = fbe::gpu::texture_resource(batch_target);
     const VkDeviceSize bytes = sent.size() * sizeof(quad_t);
     const fbe::gpu::slice_t slice =
@@ -171,6 +180,7 @@ void flush() {
                 2.0F / static_cast<float>(extent.width),
                 2.0F / static_cast<float>(extent.height),
             },
+            .data = data ? 1U : 0U,
         };
         // A texture freed since it was drawn still has its image this frame, at rest.
         std::vector<std::pair<fbe::gpu::resource_t, fbe::gpu::use_t>> uses;
@@ -207,14 +217,20 @@ void drop() {
 /// if the target or the pen isn't one.
 bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, bool solid = false) {
     if (pen == nullptr) {
-        return fbe::fail("no pen was given");
+        fbe::fail("no pen was given");
+        return false;
     }
-    // Drawing again with what the batch's ready for, as most draws do; the screen's checked
-    // still, as a new render size makes it another texture.
+    // Drawing again with what the batch's ready for, as most draws do; the target's checked
+    // still, as a texture freed since isn't drawn into, and a new render size makes the screen
+    // another texture.
     if (ready && target == ready_target && solid == ready_solid &&
-        std::memcmp(pen, &ready_pen, sizeof(fbe_2d_pen_t)) == 0 &&
-        (target != 0 || fbe::gpu::screen_handle() == batch_target)) {
-        return true;
+        std::memcmp(pen, &ready_pen, sizeof(fbe_2d_pen_t)) == 0) {
+        if (target != 0) {
+            return fbe::texture::find(target) != nullptr;
+        }
+        if (fbe::gpu::screen_handle() == batch_target) {
+            return true;
+        }
     }
     if (pen->blend < FBE_2D_SOLID || pen->blend > FBE_2D_MULTIPLY) {
         return fbe::fail(std::format("{} isn't a Blend", pen->blend));
@@ -315,20 +331,18 @@ void add(const std::vector<fbe::canvas::span_t>& spans) {
     }
 }
 
-/// Adds a line from `x1`, `y1` to `x2`, `y2`, all of it, or with `x2`, `y2` left out unless
-/// `last`, as one quad the shader keeps shapes.hpp's pixels of; false where it's too long for the
-/// shader, for spans to draw.
-bool add_line(std::int64_t x1, std::int64_t y1, std::int64_t x2, std::int64_t y2, bool last) {
+/// Adds a line from `x1`, `y1` to `x2`, `y2` as one quad the shader keeps shapes.hpp's pixels of;
+/// false where it's too long for the shader, for spans to draw.
+bool add_line(std::int64_t x1, std::int64_t y1, std::int64_t x2, std::int64_t y2) {
     const bool steep = std::abs(y2 - y1) > std::abs(x2 - x1);
     std::int64_t m1 = steep ? y1 : x1;
     std::int64_t n1 = steep ? x1 : y1;
     std::int64_t m2 = steep ? y2 : x2;
     std::int64_t n2 = steep ? x2 : y2;
-    std::uint32_t flags = line_flag | (steep ? steep_flag : 0U) | (last ? 0U : no_end_flag);
+    const std::uint32_t flags = line_flag | (steep ? steep_flag : 0U);
     if (m2 < m1) {
         std::swap(m1, m2);
         std::swap(n1, n2);
-        flags = last ? flags : ((flags & ~no_end_flag) | no_start_flag);
     }
     const std::int64_t length = m2 - m1;
     const std::int64_t across = n2 - n1;
@@ -444,6 +458,126 @@ void add_texels(const std::array<float, 8>& corners, const std::array<float, 4>&
     ++draws.back().count;
 }
 
+/// Adds a polygon's triangle, x and y in turn: as it is, or, where it reaches too far past the
+/// clip for every GPU to draw it exactly, the part of it in the clip, cut in doubles. Where a side
+/// two triangles share is cut, it's cut at one point, worked out from whichever end's first.
+void add_triangle(const std::array<double, 6>& triangle) {
+    const auto near = [](double value, std::int64_t low, std::int64_t high) {
+        return value >= static_cast<double>(low) - furthest_triangle &&
+               value <= static_cast<double>(high) + furthest_triangle;
+    };
+    bool whole = true;
+    for (std::size_t at = 0; at < triangle.size(); at += 2) {
+        whole = whole && near(triangle[at], clip.left, clip.right) &&
+                near(triangle[at + 1], clip.top, clip.bottom);
+    }
+    const auto narrow = [](double value) { return static_cast<float>(value); };
+    if (whole) {
+        add({
+            narrow(triangle[0]),
+            narrow(triangle[1]),
+            narrow(triangle[2]),
+            narrow(triangle[3]),
+            narrow(triangle[4]),
+            narrow(triangle[5]),
+            narrow(triangle[4]),
+            narrow(triangle[5]),
+        });
+        return;
+    }
+    using point_t = std::array<double, 2>;
+    std::vector<point_t> shape{
+        { triangle[0], triangle[1] },
+        { triangle[2], triangle[3] },
+        { triangle[4], triangle[5] },
+    };
+    // Each side of the clip in turn: an axis, where it is, and whether what's kept is past it.
+    const std::array<std::tuple<std::size_t, double, bool>, 4> sides{
+        {
+            { 0, static_cast<double>(clip.left), true },
+            { 0, static_cast<double>(clip.right), false },
+            { 1, static_cast<double>(clip.top), true },
+            { 1, static_cast<double>(clip.bottom), false },
+        },
+    };
+    for (const auto& [axis, edge, past] : sides) {
+        const auto kept = [&](const point_t& point) {
+            return past ? point[axis] >= edge : point[axis] <= edge;
+        };
+        std::vector<point_t> cut;
+        for (std::size_t at = 0; at < shape.size(); ++at) {
+            point_t from = shape[at];
+            point_t to = shape[(at + 1) % shape.size()];
+            if (kept(from)) {
+                cut.push_back(from);
+            }
+            if (kept(from) != kept(to)) {
+                if (to < from) {
+                    std::swap(from, to);
+                }
+                const double share = (edge - from[axis]) / (to[axis] - from[axis]);
+                point_t crossing{};
+                crossing[axis] = edge;
+                crossing[1 - axis] = from[1 - axis] + ((to[1 - axis] - from[1 - axis]) * share);
+                cut.push_back(crossing);
+            }
+        }
+        shape = std::move(cut);
+        if (shape.size() < 3) {
+            return;
+        }
+    }
+    for (std::size_t at = 1; at + 1 < shape.size(); ++at) {
+        add({
+            narrow(shape[0][0]),
+            narrow(shape[0][1]),
+            narrow(shape[at][0]),
+            narrow(shape[at][1]),
+            narrow(shape[at + 1][0]),
+            narrow(shape[at + 1][1]),
+            narrow(shape[at + 1][0]),
+            narrow(shape[at + 1][1]),
+        });
+    }
+}
+
+/// Cuts the side from `from` to `to` to where doubles hold whole pixels, `furthest_point` either
+/// way of 0; false if none of it's there.
+bool cut_side(std::array<double, 2>& from, std::array<double, 2>& to) {
+    double first = 0.0;
+    double last = 1.0;
+    for (std::size_t axis = 0; axis < 2; ++axis) {
+        const double step = to[axis] - from[axis];
+        if (step == 0.0) {
+            if (std::abs(from[axis]) > furthest_point) {
+                return false;
+            }
+            continue;
+        }
+        const double low = (-furthest_point - from[axis]) / step;
+        const double high = (furthest_point - from[axis]) / step;
+        first = std::max(first, std::min(low, high));
+        last = std::min(last, std::max(low, high));
+    }
+    if (first > last) {
+        return false;
+    }
+    const std::array<double, 2> start = from;
+    const std::array<double, 2> end = to;
+    for (std::size_t axis = 0; axis < 2; ++axis) {
+        const double step = end[axis] - start[axis];
+        if (first > 0.0) {
+            from[axis] = start[axis] + (step * first);
+        }
+        if (last < 1.0) {
+            to[axis] = start[axis] + (step * last);
+        }
+        from[axis] = std::clamp(from[axis], -furthest_point, furthest_point);
+        to[axis] = std::clamp(to[axis], -furthest_point, furthest_point);
+    }
+    return true;
+}
+
 /// Adds the part of a rectangle in the clip, if any is.
 void add_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t height) {
     const std::int64_t left = std::max(x, clip.left);
@@ -484,7 +618,7 @@ FBE_API bool fbe_2d_line(uint64_t target, const fbe_2d_pen_t* pen, int32_t x1, i
     const std::int64_t top = std::int64_t{ y1 } + pen->origin_y;
     const std::int64_t right = std::int64_t{ x2 } + pen->origin_x;
     const std::int64_t bottom = std::int64_t{ y2 } + pen->origin_y;
-    if (!add_line(left, top, right, bottom, true)) {
+    if (!add_line(left, top, right, bottom)) {
         std::vector<fbe::canvas::span_t> spans;
         fbe::canvas::line(left, top, right, bottom, true, clip, spans);
         add(spans);
@@ -656,40 +790,31 @@ FBE_API bool fbe_2d_polygon(uint64_t target, const fbe_2d_pen_t* pen, const floa
     if (!begin(target, pen)) {
         return false;
     }
-    std::vector<float> moved(given.begin(), given.end());
-    for (std::size_t at = 0; at < moved.size(); at += 2) {
-        moved[at] += static_cast<float>(pen->origin_x);
-        moved[at + 1] += static_cast<float>(pen->origin_y);
+    // Its points moved by the origin, to the nearest 1/16 of a pixel.
+    std::vector<double> moved(given.size());
+    for (std::size_t at = 0; at < moved.size(); ++at) {
+        const std::int32_t origin = at % 2 == 0 ? pen->origin_x : pen->origin_y;
+        moved[at] = std::round((static_cast<double>(given[at]) + origin) * 16.0) / 16.0;
     }
     if (filled) {
-        for (const std::array<float, 6>& triangle : fbe::canvas::triangulate(moved)) {
-            add({
-                triangle[0],
-                triangle[1],
-                triangle[2],
-                triangle[3],
-                triangle[4],
-                triangle[5],
-                triangle[4],
-                triangle[5],
-            });
+        for (const std::array<double, 6>& triangle : fbe::canvas::triangulate(moved)) {
+            add_triangle(triangle);
         }
         return true;
     }
-    // Each side from the pixel its first point's in to the next's, that one left for the next side.
+    // Each side, from the pixel its first point's in to the next's, both drawn, every pixel once.
     std::vector<fbe::canvas::span_t> spans;
-    const auto pixel = [](float value) { return static_cast<std::int64_t>(std::floor(value)); };
+    const auto pixel = [](double value) { return static_cast<std::int64_t>(std::floor(value)); };
     for (std::size_t at = 0; at < moved.size(); at += 2) {
         const std::size_t next = (at + 2) % moved.size();
-        const std::int64_t x1 = pixel(moved[at]);
-        const std::int64_t y1 = pixel(moved[at + 1]);
-        const std::int64_t x2 = pixel(moved[next]);
-        const std::int64_t y2 = pixel(moved[next + 1]);
-        if (!add_line(x1, y1, x2, y2, false)) {
-            fbe::canvas::line(x1, y1, x2, y2, false, clip, spans);
+        std::array<double, 2> from{ moved[at], moved[at + 1] };
+        std::array<double, 2> to{ moved[next], moved[next + 1] };
+        if (cut_side(from, to)) {
+            fbe::canvas::line(pixel(from[0]), pixel(from[1]), pixel(to[0]), pixel(to[1]), true,
+                              clip, spans);
         }
     }
-    add(spans);
+    add(fbe::canvas::merged(spans));
     return true;
 }
 
