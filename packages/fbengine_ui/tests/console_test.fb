@@ -1,0 +1,180 @@
+// The console and the debug panel, run directly and driven by Simulate through a Ui, offscreen.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine_ui
+
+Global gave: String[] = []
+
+Function Give(words: String[]): String
+    gave = words
+    Return "gave {words.Join(", ")}"
+End Function
+
+@Test
+Function AConsoleRunsItsCommandsAndPrintsWhatTheySay()
+    Local console = Console()
+    console.Register("give", "gives the player an item", Give)
+    console.Run("give keycard \"level 5\"")
+    Expect(gave == ["keycard", "level 5"])
+    Expect(console.Lines() == ["> give keycard \"level 5\"", "gave keycard, level 5"])
+    console.Run("teleport")
+    Expect(console.Lines()[3] == "there's no command teleport; help lists them")
+    console.Run("help give")
+    Expect(console.Lines()[5] == "give: gives the player an item")
+    console.Run("clear")
+    Expect(console.Lines().Count == 0)
+    Expect(console.History() == ["give keycard \"level 5\"", "teleport", "help give", "clear"])
+    // Nothing typed is nothing run.
+    console.Run("   ")
+    Expect(console.History().Count == 4)
+    Expect(console.Unregister("give"))
+    Expect(!console.Unregister("give"))
+End Function
+
+@Test
+Function AConsoleKeepsItsLastLines()
+    Local console = Console()
+    console.SetMaxLines(3)
+    console.Print("one\ntwo")
+    console.Print("three")
+    console.Print("four")
+    Expect(console.Lines() == ["two", "three", "four"])
+    console.SetMaxLines(1)
+    Expect(console.Lines() == ["four"])
+End Function
+
+// A debug panel's row's widget, after its name's label.
+Function RowWidget(panel: DebugPanel, name: String): Widget?
+    Local row = panel.Find(name)
+    If row == Null Then Return Null
+    Local children = row.Children()
+    Return children.Count > 1 ? children[1] As? Widget : Null
+End Function
+
+Function Shown(root: Node): Ui Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Return ui
+End Function
+
+Function Frame(ui: Ui)
+    Flip()
+    ui.Update()
+End Function
+
+@Test
+Function TheConsolesLineRunsOnReturnAndRecallsByTheArrows() Throws GraphicsError
+    Local console = Console()
+    console.SetHeight(Sizing.Fixed(200.0))
+    console.Register("give", "gives the player an item", Give)
+    Local root = Node("root")
+    root.Add(console)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(console.Line())
+    Frame(ui)
+    Try Simulate.Text("give radio")
+    Frame(ui)
+    Try Simulate.PressKey(Key.RETURN)
+    Frame(ui)
+    Expect(gave == ["radio"])
+    Expect(console.Line().Text() == "")
+    // The focus stays in the line: up recalls, and isn't the focus's to move.
+    Try Simulate.PressKey(Key.UP)
+    Frame(ui)
+    Expect(ui.Focused() == console.Line())
+    Expect(console.Line().Text() == "give radio")
+    Try Simulate.PressKey(Key.DOWN)
+    Frame(ui)
+    Expect(console.Line().Text() == "")
+    // Tab finishes a command's name.
+    Try Simulate.Text("gi")
+    Frame(ui)
+    Try Simulate.PressKey(Key.TAB)
+    Frame(ui)
+    Expect(console.Line().Text() == "give ")
+    Expect(ui.Focused() == console.Line())
+End Function
+
+@Test
+Function ADebugPanelsRowsStayWhileTheGameAsksForThem() Throws GraphicsError
+    Local panel = DebugPanel()
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(panel)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    panel.Watch("fps", "60")
+    panel.Watch("mode", "noclip")
+    Frame(ui)
+    Expect(panel.Names() == ["fps", "mode"])
+    // The next frame asks only for fps: mode goes at the Update after.
+    panel.Watch("fps", "59")
+    Frame(ui)
+    Expect(panel.Names() == ["fps"])
+    Local value = RowWidget(panel, "fps") As? Label
+    Expect(value?.Text() == "59")
+End Function
+
+// The game's frame: it asks for its rows each time, keeping what they give.
+Class Tweaked
+    Field speed: Float32 = 5.0
+    Field noclip: Bool = False
+    Field respawned: Bool = False
+
+    Method Ask(panel: DebugPanel)
+        speed = panel.Tweak("speed", 0.0, 10.0, speed)
+        noclip = panel.Switch("noclip", noclip)
+        respawned = panel.Pressed("respawn")
+    End Method
+End Class
+
+@Test
+Function ADebugPanelsTweaksFollowThePlayerAndTheGame() Throws GraphicsError
+    Local panel = DebugPanel()
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(panel)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local game = Tweaked()
+    game.Ask(panel)
+    Frame(ui)
+    game.Ask(panel)
+    Expect(!game.respawned)
+    Local slider = RowWidget(panel, "speed") As? Slider
+    Local toggle = RowWidget(panel, "noclip") As? Toggle
+    Local button = RowWidget(panel, "respawn") As? Button
+    Expect(slider != Null && toggle != Null && button != Null)
+    If slider == Null || toggle == Null || button == Null Then Return
+    // The player drags the slider to its end, and clicks the switch and the button.
+    ui.Focus(slider)
+    Try Simulate.PressKey(Key.END)
+    Frame(ui)
+    game.Ask(panel)
+    Expect(game.speed == 10.0)
+    ui.Focus(toggle)
+    Try Simulate.PressKey(Key.RETURN)
+    Frame(ui)
+    game.Ask(panel)
+    Expect(game.noclip)
+    ui.Focus(button)
+    Try Simulate.PressKey(Key.RETURN)
+    Frame(ui)
+    game.Ask(panel)
+    Expect(game.respawned)
+    // The game sets its own value, and the slider follows.
+    game.speed = 2.0
+    Frame(ui)
+    game.Ask(panel)
+    Expect(game.speed == 2.0)
+    Expect(slider.Value() == 2.0)
+End Function

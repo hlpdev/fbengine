@@ -1,0 +1,107 @@
+// The debug panel: rows a game asks for each frame, by name, which stay while it asks and go when
+// it stops, as an immediate-mode debug UI's do.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+Import "./controls"
+Import "./inputs"
+Import "./layout"
+Import "./widget"
+
+/// A column of rows a game asks for by name each frame, after its Ui's Update: values it
+/// watches, and sliders, switches, and buttons it tweaks with. A row stays while the game asks
+/// for it, and goes at the Update after a frame it didn't, so a row for a mode that's off goes
+/// with it: style "debug", each row's name "debug.name".
+///
+/// ```vb
+/// panel.Watch("fps", "{Frame.Rate()}")
+/// speed = panel.Tweak("speed", 0, 20, speed)
+/// noclip = panel.Switch("noclip", noclip)
+/// If panel.Pressed("respawn") Then Respawn()
+/// ```
+Public Class DebugPanel Extends Widget
+    Field rows: Map<String, Node>
+    Field asked: String[] = []
+
+    /// A panel with no rows.
+    @MainThread Public New(name: String = "")
+        rows = {}
+        Super.New("debug", name)
+        SetGap(4.0)
+    End New
+
+    /// Shows `name`'s value, `value`, this frame.
+    @MainThread Public Method Watch(name: String, value: String)
+        Local shown = Row(name, Function() => Label(value) As Widget) As? Label
+        If shown != Null Then shown.SetText(value)
+    End Method
+
+    /// A slider for `name`, from `low` to `high`, at `value` unless the player moved it this
+    /// frame: what it's at, which the game keeps, as `speed = panel.Tweak("speed", 0, 20, speed)`.
+    @MainThread Public Method Tweak(name: String, low: Float32, high: Float32,
+                                    value: Float32): Float32
+        Local slider = Row(name, Function() => Slider(low, high, value) As Widget) As? Slider
+        If slider == Null Then Return value
+        If slider.Low() != low || slider.High() != high Then slider.SetRange(low, high)
+        If !slider.Changed() Then slider.SetValue(value)
+        Return slider.Value()
+    End Method
+
+    /// A switch for `name`, `on` unless the player turned it over this frame: whether it's on.
+    @MainThread Public Method Switch(name: String, on: Bool): Bool
+        Local toggle = Row(name, Function() => Toggle("", on) As Widget) As? Toggle
+        If toggle == Null Then Return on
+        If !toggle.Changed() Then toggle.SetOn(on)
+        Return toggle.On()
+    End Method
+
+    /// A button for `name`: whether the last Update read it clicked.
+    @MainThread Public Method Pressed(name: String): Bool
+        Local button = Row(name, Function() => Button(name) As Widget) As? Button
+        Return button != Null && button.Clicked()
+    End Method
+
+    /// The names of its rows, in the order they were first asked for.
+    @MainThread Public Method Names(): String[]
+        Local names: String[] = []
+        For child In Children()
+            names.Add(child.Name())
+        End For
+        Return names
+    End Method
+
+    @MainThread Public Override Method Forget()
+        // The rows the game didn't ask for since the last Update go.
+        For child In Children()
+            If !asked.Contains(child.Name())
+                Remove(child)
+                rows.Remove(child.Name())
+            End If
+        End For
+        asked.Clear()
+    End Method
+
+    // The row `name`'s widget, which `make` makes the first time, and a Label of its name before
+    // it; the row's asked for this frame.
+    @MainThread Method Row(name: String, make: Func(): Widget): Widget?
+        If !asked.Contains(name) Then asked.Add(name)
+        Local row = rows.Get(name)
+        If row == Null
+            Local made = Node(name)
+            made.SetArrangement(Arrangement.ROW)
+            made.SetGap(8.0)
+            made.SetAlign(Align.CENTER)
+            Local label = Label(name)
+            label.SetStyleName("debug.name")
+            made.Add(label)
+            made.Add(make())
+            Add(made)
+            rows[name] = made
+            row = made
+        End If
+        Local children = row.Children()
+        Return children.Count > 1 ? children[1] As? Widget : Null
+    End Method
+End Class

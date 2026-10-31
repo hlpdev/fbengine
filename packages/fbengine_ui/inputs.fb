@@ -196,7 +196,7 @@ Public Class TextField Extends Widget
     /// What's selected, "" for nothing.
     @MainThread Public Method SelectedText(): String
         Local from, to = Selection()
-        Return Joined(chars, from, to)
+        Return TextOf(chars, from, to)
     End Method
 
     /// Selects from `from` to `to`, kept to what it holds, the cursor at `to`.
@@ -219,7 +219,7 @@ Public Class TextField Extends Widget
     @MainThread Public Override Method TakesText(): Bool => True
 
     @MainThread Public Override Method TextCursorX(): Float32
-        Return Padding().Left + TextSize(Joined(chars, 0, cursor)).x
+        Return Padding().Left + TextSize(TextOf(chars, 0, cursor)).x
     End Method
 
     @MainThread Public Override Method Measure(): Vec2
@@ -335,7 +335,7 @@ Public Class TextField Extends Widget
         Local best = 0
         Local nearest = Abs(along)
         For i = 1 To chars.Count
-            Local width = TextSize(Joined(chars, 0, i)).x
+            Local width = TextSize(TextOf(chars, 0, i)).x
             If Abs(along - width) < nearest
                 nearest = Abs(along - width)
                 best = i
@@ -369,7 +369,7 @@ Public Class TextField Extends Widget
     End Method
 
     @MainThread Method Rebuilt()
-        text = Joined(chars, 0, chars.Count)
+        text = TextOf(chars, 0, chars.Count)
         Reflow()
     End Method
 End Class
@@ -378,7 +378,7 @@ End Class
 @MainThread Function Shifted(): Bool => KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT)
 
 // The characters from `from` up to `to`, as a String.
-Function Joined(chars: Char[], from: Int, to: Int): String
+Package Function TextOf(chars: Char[], from: Int, to: Int): String
     Local built = StringBuilder()
     For i = from To to - 1
         built.Append(chars[i])
@@ -393,5 +393,5 @@ Function FirstLine(text: String): String
         If each == '\n' || each == '\r' Then Break
         line.Add(each)
     End For
-    Return Joined(line, 0, line.Count)
+    Return TextOf(line, 0, line.Count)
 End Function
