@@ -192,7 +192,7 @@ Public Extern "C" Lib "fbengine_native"
                                 projected: Ptr<fbe_vec3_t>): Int32
     Function fbe_camera_unproject(camera: UInt64, target_width: Float32, target_height: Float32,
                                   x: Float32, y: Float32, depth: Float32,
-                                  point: Ptr<fbe_vec3_t>): Bool
+                                  point: Ptr<fbe_vec3_t>): Int32
     Function fbe_light_set_type(light: UInt64, type: Int32): Bool
     Function fbe_light_type(light: UInt64): Int32
     Function fbe_light_set_color(light: UInt64, r: Float32, g: Float32, b: Float32): Bool
@@ -287,6 +287,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_mesh_material(mesh: UInt64): UInt64
     Function fbe_mesh_set_tint(mesh: UInt64, r: Float32, g: Float32, b: Float32, a: Float32): Bool
     Function fbe_mesh_tint(mesh: UInt64, tint: Ptr<fbe_color_t>): Bool
+    Function fbe_mesh_blend(mesh: UInt64, surface: Int32): Int32
     Function fbe_camera_entity_in_view(camera: UInt64, target_width: Float32,
                                        target_height: Float32, entity: UInt64): Int32
     Function fbe_camera_point_in_view(camera: UInt64, target_width: Float32, target_height: Float32,

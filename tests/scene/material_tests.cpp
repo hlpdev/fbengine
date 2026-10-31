@@ -80,7 +80,70 @@ TEST_CASE("a material's settings take only what they can be", "[scene]") {
     const std::uint64_t geometry = fbe_geometry_cube();
     CHECK_FALSE(fbe_surface_set_material(geometry, 1, material));
     CHECK_FALSE(fbe_surface_set_material(geometry, 0, geometry));
-    CHECK(std::string_view(fbe_error()) == "the material was freed");
+    CHECK(std::string_view(fbe_error()) == "that handle isn't a material's");
     fbe_geometry_release(geometry);
     fbe_material_release(material);
+}
+
+TEST_CASE("what Add copies holds its surfaces' materials", "[scene]") {
+    const std::uint64_t material = fbe_material_create();
+    const std::uint64_t from = fbe_geometry_cube();
+    REQUIRE(fbe_surface_set_material(from, 0, material));
+    const std::uint64_t into = fbe_geometry_create();
+    const fbe_mat4_t identity{ .m = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 } };
+    REQUIRE(fbe_geometry_add(into, from, &identity));
+    fbe_material_release(material);
+    fbe_geometry_release(from);
+    CHECK(fbe_material_alive(material));
+    CHECK(fbe_surface_material(into, 0) == material);
+    // A new material may take the freed slot; letting go of `into` must not touch it.
+    const std::uint64_t other = fbe_material_create();
+    fbe_geometry_release(into);
+    CHECK(fbe_material_alive(other));
+    CHECK_FALSE(fbe_material_alive(material));
+    fbe_material_release(other);
+}
+
+TEST_CASE("alpha is 0 to 1, and colors any finite value", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t material = fbe_material_create();
+    CHECK(fbe_material_set_color(material, -2.0F, 5.0F, 0.0F, 1.0F));
+    CHECK_FALSE(fbe_material_set_color(material, 1.0F, 1.0F, 1.0F, 1.5F));
+    CHECK(std::string_view(fbe_error()) == "a material's alpha is 0 to 1, not 1.5");
+    CHECK_FALSE(fbe_material_set_color(material, 1.0F, 1.0F, 1.0F, -0.1F));
+    const std::uint64_t mesh = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
+    CHECK_FALSE(fbe_mesh_set_tint(mesh, 1.0F, 1.0F, 1.0F, 2.0F));
+    CHECK(fbe_mesh_set_tint(mesh, 3.0F, 1.0F, 1.0F, 0.0F));
+    fbe_material_release(material);
+}
+
+TEST_CASE("a mesh's surfaces are drawn with blends its alpha settles", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t geometry = fbe_geometry_cube();
+    const std::uint64_t mesh = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
+    fbe_mesh_set_geometry(mesh, geometry);
+    // The default material is AUTO and opaque.
+    CHECK(fbe_mesh_blend(mesh, 0) == FBE_BLEND_OPAQUE);
+    fbe_mesh_set_tint(mesh, 1.0F, 1.0F, 1.0F, 0.5F);
+    CHECK(fbe_mesh_blend(mesh, 0) == FBE_BLEND_ALPHA);
+    const std::uint64_t opaque = fbe_material_create();
+    fbe_material_set_blend(opaque, FBE_BLEND_OPAQUE);
+    fbe_material_set_color(opaque, 1.0F, 1.0F, 1.0F, 0.25F);
+    fbe_surface_set_material(geometry, 0, opaque);
+    // OPAQUE leaves its own alpha out, but the mesh's still fades it.
+    CHECK(fbe_mesh_blend(mesh, 0) == FBE_BLEND_ALPHA);
+    fbe_mesh_set_tint(mesh, 1.0F, 1.0F, 1.0F, 1.0F);
+    CHECK(fbe_mesh_blend(mesh, 0) == FBE_BLEND_OPAQUE);
+    fbe_material_set_blend(opaque, FBE_BLEND_AUTO);
+    CHECK(fbe_mesh_blend(mesh, 0) == FBE_BLEND_ALPHA);
+    const std::uint64_t glow = fbe_material_create();
+    fbe_material_set_blend(glow, FBE_BLEND_ADD);
+    fbe_mesh_set_material(mesh, glow);
+    CHECK(fbe_mesh_blend(mesh, 0) == FBE_BLEND_ADD);
+    CHECK(fbe_mesh_blend(mesh, 3) == FBE_BLEND_ADD);
+    fbe_mesh_set_material(mesh, 0);
+    CHECK(fbe_mesh_blend(mesh, 1) == -1);
+    fbe_material_release(opaque);
+    fbe_material_release(glow);
+    fbe_geometry_release(geometry);
 }

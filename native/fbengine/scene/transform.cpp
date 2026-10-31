@@ -9,6 +9,8 @@
 #include <cmath>
 #include <cstdint>
 #include <format>
+#include <ranges>
+#include <vector>
 
 namespace fbe::scene {
 
@@ -58,6 +60,12 @@ fbe_vec3_t from_vec(vec3_t v) {
 
 fbe_quat_t from_quat(quat_t q) {
     return { .x = q.x, .y = q.y, .z = q.z, .w = q.w };
+}
+
+/// `a` over `b` per component, keeping `kept`'s where `b` is 0, which has no inverse.
+vec3_t divide_or_keep(vec3_t a, vec3_t b, vec3_t kept) {
+    return { b.x != 0.0F ? a.x / b.x : kept.x, b.y != 0.0F ? a.y / b.y : kept.y,
+             b.z != 0.0F ? a.z / b.z : kept.z };
 }
 
 /// The rotation whose forward, -Z, points along `direction`, as near upright as it goes, then
@@ -129,9 +137,17 @@ void mark_moved(std::uint32_t entity) {
     if (entities.moved[entity]) {
         return;
     }
-    entities.moved[entity] = true;
-    for (const std::uint32_t child : entities.children[entity]) {
-        mark_moved(child);
+    // By a stack of its own, so no tree is too deep.
+    std::vector<std::uint32_t> stack{ entity };
+    while (!stack.empty()) {
+        const std::uint32_t at = stack.back();
+        stack.pop_back();
+        entities.moved[at] = true;
+        for (const std::uint32_t child : entities.children[at]) {
+            if (!entities.moved[child]) {
+                stack.push_back(child);
+            }
+        }
     }
 }
 
@@ -140,21 +156,31 @@ void update_world(std::uint32_t entity) {
     if (!entities.moved[entity]) {
         return;
     }
-    const mat4_t local =
-        compose(entities.position[entity], entities.rotation[entity], entities.scale[entity]);
-    const std::uint32_t parent = entities.parent[entity];
-    if (parent == none) {
-        entities.world_matrix[entity] = local;
-        entities.world_rotation[entity] = entities.rotation[entity];
-        entities.world_scale[entity] = entities.scale[entity];
-    } else {
-        update_world(parent);
-        entities.world_matrix[entity] = entities.world_matrix[parent] * local;
-        entities.world_rotation[entity] =
-            normalize(entities.world_rotation[parent] * entities.rotation[entity]);
-        entities.world_scale[entity] = entities.world_scale[parent] * entities.scale[entity];
+    // Up to the topmost that moved, then down again, each from its parent.
+    std::vector<std::uint32_t> chain{ entity };
+    for (std::uint32_t parent = entities.parent[entity]; parent != none && entities.moved[parent];
+         parent = entities.parent[parent]) {
+        chain.push_back(parent);
     }
-    entities.moved[entity] = false;
+    for (const std::uint32_t moved : std::views::reverse(chain)) {
+        const mat4_t local =
+            compose(entities.position[moved], entities.rotation[moved], entities.scale[moved]);
+        const std::uint32_t parent = entities.parent[moved];
+        if (parent == none) {
+            entities.world_matrix[moved] = local;
+            entities.world_rotation[moved] = entities.rotation[moved];
+            entities.world_scale[moved] = entities.scale[moved];
+        } else {
+            // Under a mirror, the child's rotation is what the mirror makes of it; the mirror
+            // itself stays in the world scale's signs.
+            const vec3_t parent_scale = entities.world_scale[parent];
+            entities.world_matrix[moved] = entities.world_matrix[parent] * local;
+            entities.world_rotation[moved] = normalize(
+                entities.world_rotation[parent] * reflect(entities.rotation[moved], parent_scale));
+            entities.world_scale[moved] = parent_scale * entities.scale[moved];
+        }
+        entities.moved[moved] = false;
+    }
 }
 
 void set_world_position(std::uint32_t entity, vec3_t position) {
@@ -168,22 +194,26 @@ void set_world_position(std::uint32_t entity, vec3_t position) {
         if (inverse_affine(entities.world_matrix[parent], into)) {
             entities.position[entity] = transform_point(into, position);
         } else {
-            // A parent scaled to nothing on an axis leaves the child at its origin on that axis.
+            // On an axis a parent scales to nothing, there's nowhere to put the child, so it
+            // keeps its own place there.
             const vec3_t offset = position - entities.world_matrix[parent].axis(3);
-            entities.position[entity] = divide(inverse(entities.world_rotation[parent]) * offset,
-                                               entities.world_scale[parent]);
+            entities.position[entity] =
+                divide_or_keep(inverse(entities.world_rotation[parent]) * offset,
+                               entities.world_scale[parent], entities.position[entity]);
         }
     }
     mark_moved(entity);
 }
 
 void set_world_rotation(std::uint32_t entity, quat_t rotation) {
-    scene().entities.rotation[entity] = normalize(inverse(parent_rotation(entity)) * rotation);
+    scene().entities.rotation[entity] =
+        normalize(reflect(inverse(parent_rotation(entity)) * rotation, parent_scale(entity)));
     mark_moved(entity);
 }
 
 void set_world_scale(std::uint32_t entity, vec3_t scale) {
-    scene().entities.scale[entity] = divide(scale, parent_scale(entity));
+    entities_t& entities = scene().entities;
+    entities.scale[entity] = divide_or_keep(scale, parent_scale(entity), entities.scale[entity]);
     mark_moved(entity);
 }
 

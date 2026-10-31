@@ -20,16 +20,19 @@ namespace fbe::scene {
 namespace {
 
 /// A camera's viewport in its target's units, and its view, as the projections work them out.
+/// A viewport with no size, as a window dragged to nothing high has, has the shape of a square,
+/// and nothing projects into it.
 struct view_t {
     float x = 0.0F;
     float y = 0.0F;
     float width = 0.0F;
     float height = 0.0F;
+    bool sized = true;
     vec3_t position;
     quat_t rotation;
 };
 
-/// The viewport in a target of this size, and where the camera is; false for one with no size.
+/// The viewport in a target of this size, and where the camera is.
 bool view_of(const camera_t& camera, float target_width, float target_height, view_t& view) {
     if (camera.whole_target) {
         view.width = target_width;
@@ -40,10 +43,8 @@ bool view_of(const camera_t& camera, float target_width, float target_height, vi
         view.width = camera.viewport_width;
         view.height = camera.viewport_height;
     }
-    if (!(view.width > 0.0F && view.height > 0.0F && std::isfinite(view.width) &&
-          std::isfinite(view.height))) {
-        return fail("the camera's viewport has no size: open the window, or give it a viewport");
-    }
+    view.sized = view.width > 0.0F && view.height > 0.0F && std::isfinite(view.width) &&
+                 std::isfinite(view.height);
     update_world(camera.entity);
     view.position = scene().entities.world_matrix[camera.entity].axis(3);
     view.rotation = scene().entities.world_rotation[camera.entity];
@@ -57,7 +58,13 @@ void half_extents(const camera_t& camera, const view_t& view, float& half_width,
     half_height = camera.projection == FBE_PROJECTION_PERSPECTIVE
                       ? std::tan(camera.field_of_view / 2.0F)
                       : camera.orthographic_height / 2.0F;
-    half_width = half_height * (view.width / view.height);
+    half_width = view.sized ? half_height * (view.width / view.height) : half_height;
+}
+
+/// How far in front a point a camera sees can be, its nearest less what rounding moves a point on
+/// the near plane by, so Unproject's points at the near plane project again.
+float nearest_seen(const camera_t& camera) {
+    return camera.nearest * (1.0F - 1e-4F);
 }
 
 bool valid_range(float nearest, float farthest) {
@@ -127,6 +134,22 @@ void remove_camera(std::uint32_t entity) {
     s.cameras.pop_back();
 }
 
+void renumber_cameras(const std::vector<std::pair<std::uint32_t, std::size_t>>& originals,
+                      const std::vector<std::uint32_t>& copies) {
+    scene_t& s = scene();
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> made;
+    for (std::size_t i = 0; i < copies.size(); ++i) {
+        const std::uint32_t original = originals[i].first;
+        if (s.entities.kind[original] == FBE_ENTITY_CAMERA) {
+            made.emplace_back(s.cameras[s.entities.component[original]].made, copies[i]);
+        }
+    }
+    std::ranges::sort(made);
+    for (const auto& [when, copy] : made) {
+        s.cameras[s.entities.component[copy]].made = ++s.cameras_made;
+    }
+}
+
 camera_t* camera_of(std::uint64_t handle) {
     const std::uint32_t entity = entity_slot(handle);
     if (entity == none) {
@@ -168,7 +191,9 @@ FBE_API bool fbe_camera_set_field_of_view(uint64_t camera, float angle) {
     if (found == nullptr) {
         return false;
     }
-    if (angle <= 0.0F || angle >= std::numbers::pi_v<float> || std::isnan(angle)) {
+    // One so small that the projection's 1 / tan(angle / 2) isn't finite has no view.
+    if (angle <= 0.0F || angle >= std::numbers::pi_v<float> || std::isnan(angle) ||
+        !std::isfinite(1.0F / std::tan(angle / 2.0F))) {
         return fbe::fail(std::format("a field of view is between 0 and Pi, not {}", angle));
     }
     found->field_of_view = angle;
@@ -185,7 +210,7 @@ FBE_API bool fbe_camera_set_orthographic_height(uint64_t camera, float height) {
     if (found == nullptr) {
         return false;
     }
-    if (height <= 0.0F || !std::isfinite(height)) {
+    if (height <= 0.0F || !std::isfinite(height) || !std::isfinite(2.0F / height)) {
         return fbe::fail(std::format("an orthographic height is above 0, not {}", height));
     }
     found->orthographic_height = height;
@@ -409,7 +434,7 @@ FBE_API int32_t fbe_camera_project(uint64_t camera, float target_width, float ta
     const fbe::scene::vec3_t offset = fbe::scene::vec3_t(x, y, z) - view.position;
     const fbe::scene::vec3_t seen = fbe::scene::inverse(view.rotation) * offset;
     const float depth = -seen.z;
-    if (!(depth >= found->nearest)) {
+    if (!view.sized || !(depth >= fbe::scene::nearest_seen(*found))) {
         return 0;
     }
     float half_width = 0.0F;
@@ -484,12 +509,15 @@ FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, f
     return fbe::scene::in_view(*found, view, corners.data(), corners.size()) ? 1 : 0;
 }
 
-FBE_API bool fbe_camera_unproject(uint64_t camera, float target_width, float target_height, float x,
-                                  float y, float depth, fbe_vec3_t* point) {
+FBE_API int32_t fbe_camera_unproject(uint64_t camera, float target_width, float target_height,
+                                     float x, float y, float depth, fbe_vec3_t* point) {
     const camera_t* found = camera_of(camera);
     fbe::scene::view_t view;
     if (found == nullptr || !fbe::scene::view_of(*found, target_width, target_height, view)) {
-        return false;
+        return -1;
+    }
+    if (!view.sized) {
+        return 0;
     }
     float half_width = 0.0F;
     float half_height = 0.0F;
@@ -499,7 +527,7 @@ FBE_API bool fbe_camera_unproject(uint64_t camera, float target_width, float tar
     const float scale = found->projection == FBE_PROJECTION_PERSPECTIVE ? depth : 1.0F;
     const fbe::scene::vec3_t seen(across * half_width * scale, up * half_height * scale, -depth);
     *point = fbe::scene::from_vec(view.rotation * seen + view.position);
-    return true;
+    return 1;
 }
 
 } // extern "C"

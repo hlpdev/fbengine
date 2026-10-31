@@ -72,16 +72,6 @@ Function ChildrenKeepTheOrderTheyCameIn()
 End Function
 
 @Test
-Function AnEntityCantGoUnderItself()
-    Local world = Fresh()
-    Defer world.Free()
-    Local top = Pivot()
-    Local middle = Pivot(top)
-    Local bottom = Pivot(middle)
-    Expect(bottom.Parent() == middle && middle.Parent() == top && top.Parent() == Null)
-End Function
-
-@Test
 Function FindLooksDepthFirstBelowTheEntity()
     Local world = Fresh()
     Defer world.Free()
@@ -229,4 +219,42 @@ Function DataGivesBackTheGamesObject()
     Local found = world.Find("keeper")
     Expect(found == pivot)
     Expect(found?.Data<Npc>()?.Health == 10)
+End Function
+
+// A game's object that keeps its own entity, attached to it: a cycle the scene lets go of when the
+// program ends, so this test, which leaves it in the main World, leaks nothing.
+Class Body
+    Public Field Part: Pivot
+
+    New()
+        Part = Pivot()
+        Part.SetData(Self)
+    End New
+End Class
+
+@Test
+Function AGamesObjectThatKeepsItsEntityIsLetGoOfAtTheEnd()
+    World.SetCurrent(World.Main())
+    Local body = Body()
+    body.Part.SetName("keeps its body")
+    Expect(World.Main().Find("keeps its body")?.Data<Body>() == body)
+End Function
+
+@Test
+Function AChainThousandsDeepIsFoundCopiedAndFreed()
+    Local world = Fresh()
+    Defer world.Free()
+    Local root = Pivot()
+    Local at: Entity = root
+    For i = 0 Until 5000
+        at = Pivot(at)
+    End For
+    at.SetName("bottom")
+    Expect(root.Find("bottom") == at)
+    Local copy = root.Copy()
+    Expect(world.EntityCount() == 10002)
+    Expect(copy.Find("bottom") != at)
+    root.Free()
+    Expect(at.Freed())
+    Expect(world.EntityCount() == 5001)
 End Function

@@ -9,7 +9,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <optional>
+#include <ranges>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -86,31 +89,48 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
     return entity;
 }
 
+/// An entity and what's under it, depth first, each parent before its children, with each one's
+/// parent's index in the list, by a stack of their own, so no tree is too deep.
+std::vector<std::pair<std::uint32_t, std::size_t>> list_tree(std::uint32_t entity) {
+    const entities_t& entities = scene().entities;
+    std::vector<std::pair<std::uint32_t, std::size_t>> tree;
+    std::vector<std::pair<std::uint32_t, std::size_t>> stack{ { entity, 0 } };
+    while (!stack.empty()) {
+        const auto [at, parent] = stack.back();
+        stack.pop_back();
+        const std::size_t index = tree.size();
+        tree.emplace_back(at, parent);
+        const std::vector<std::uint32_t>& children = entities.children[at];
+        for (const std::uint32_t child : std::views::reverse(children)) {
+            stack.emplace_back(child, index);
+        }
+    }
+    return tree;
+}
+
 /// Frees an entity and what's under it, which are already out of the tree but for the entity's
 /// own children.
 void free_tree(std::uint32_t entity) {
     entities_t& entities = scene().entities;
-    for (const std::uint32_t child : entities.children[entity]) {
-        free_tree(child);
+    for (const auto& [at, parent] : list_tree(entity)) {
+        entities.children[at].clear();
+        entities.name[at].clear();
+        entities.name[at].shrink_to_fit();
+        entities.colliders[at] = {};
+        remove_component(at);
+        --scene().worlds[entities.world[at]].count;
+        scene().freed.push_back(entities.slots.handle(at));
+        entities.slots.free(at);
     }
-    entities.children[entity].clear();
-    entities.name[entity].clear();
-    entities.name[entity].shrink_to_fit();
-    entities.colliders[entity] = {};
-    remove_component(entity);
-    --scene().worlds[entities.world[entity]].count;
-    scene().freed.push_back(entities.slots.handle(entity));
-    entities.slots.free(entity);
 }
 
 /// Sets the world of an entity and what's under it, moving their counts.
 void move_tree(std::uint32_t entity, std::uint32_t world) {
     entities_t& entities = scene().entities;
-    --scene().worlds[entities.world[entity]].count;
-    ++scene().worlds[world].count;
-    entities.world[entity] = world;
-    for (const std::uint32_t child : entities.children[entity]) {
-        move_tree(child, world);
+    for (const auto& [at, parent] : list_tree(entity)) {
+        --scene().worlds[entities.world[at]].count;
+        ++scene().worlds[world].count;
+        entities.world[at] = world;
     }
 }
 
@@ -125,32 +145,24 @@ bool under(std::uint32_t entity, std::uint32_t ancestor) {
     return false;
 }
 
-/// The first of `entities` or what's under them, depth first, with the name.
+/// The first of `among` or what's under them, depth first, each parent before its children, with
+/// the name.
 std::uint32_t find_in(const std::vector<std::uint32_t>& among, const char* name) {
     if (name == nullptr) {
         return none;
     }
     const entities_t& entities = scene().entities;
-    for (const std::uint32_t entity : among) {
-        if (entities.name[entity] == name) {
-            return entity;
+    std::vector<std::uint32_t> stack(among.rbegin(), among.rend());
+    while (!stack.empty()) {
+        const std::uint32_t at = stack.back();
+        stack.pop_back();
+        if (entities.name[at] == name) {
+            return at;
         }
-        const std::uint32_t found = find_in(entities.children[entity], name);
-        if (found != none) {
-            return found;
-        }
+        const std::vector<std::uint32_t>& children = entities.children[at];
+        stack.insert(stack.end(), children.rbegin(), children.rend());
     }
     return none;
-}
-
-/// An entity and what's under it in order, each with its parent's index in the list.
-void list_tree(std::uint32_t entity, std::size_t parent,
-               std::vector<std::pair<std::uint32_t, std::size_t>>& tree) {
-    const std::size_t index = tree.size();
-    tree.emplace_back(entity, parent);
-    for (const std::uint32_t child : scene().entities.children[entity]) {
-        list_tree(child, index, tree);
-    }
 }
 
 /// Writes up to `capacity` of `slots` as handles and gives how many there are.
@@ -164,59 +176,54 @@ std::int32_t write_handles(const slots_t& slots, const std::vector<std::uint32_t
     return static_cast<std::int32_t>(from.size());
 }
 
-/// A world's slot, made the first time for the main one.
+/// A new world, empty, in a new slot or a freed one, which keeps nothing of the world it held.
+std::uint32_t make_world() {
+    scene_t& s = scene();
+    const std::uint32_t world = s.world_slots.make();
+    if (world == s.worlds.size()) {
+        s.worlds.emplace_back();
+    } else {
+        s.worlds[world] = {};
+    }
+    return world;
+}
+
+/// The main world's slot, made the first time it's asked for.
 std::uint32_t main_world() {
     scene_t& s = scene();
     if (s.main_world == none) {
-        s.main_world = s.world_slots.make();
-        if (s.main_world == s.worlds.size()) {
-            s.worlds.emplace_back();
-        }
+        s.main_world = make_world();
     }
     return s.main_world;
 }
 
+/// Where a new entity or copy goes: under `parent`, in its world, or at the top of `world`; a
+/// nonzero `world` must be live and, with a parent, the parent's. False with fbe_error saying why.
+bool place(std::uint64_t world, std::uint64_t parent, std::uint32_t& world_index,
+           std::uint32_t& parent_slot) {
+    parent_slot = none;
+    world_index = none;
+    if (world != 0) {
+        world_index = world_slot(world);
+        if (world_index == none) {
+            return false;
+        }
+    }
+    if (parent != 0) {
+        parent_slot = entity_slot(parent);
+        if (parent_slot == none) {
+            return false;
+        }
+        const std::uint32_t parents = scene().entities.world[parent_slot];
+        if (world_index != none && world_index != parents) {
+            return fail("the parent is in another World");
+        }
+        world_index = parents;
+    }
+    return world_index != none || fail("no World or parent was given");
+}
+
 } // namespace
-
-std::uint32_t slots_t::make() {
-    if (!m_free.empty()) {
-        const std::uint32_t slot = m_free.back();
-        m_free.pop_back();
-        m_live[slot] = true;
-        return slot;
-    }
-    m_generations.push_back(1);
-    m_live.push_back(true);
-    return static_cast<std::uint32_t>(m_generations.size() - 1);
-}
-
-void slots_t::free(std::uint32_t slot) {
-    m_live[slot] = false;
-    // A slot whose generation would wrap is never used again, so no old handle comes back.
-    if (++m_generations[slot] < (1U << 24U)) {
-        m_free.push_back(slot);
-    }
-}
-
-std::optional<std::uint32_t> slots_t::find(std::uint64_t handle) const {
-    const auto slot = static_cast<std::uint32_t>(handle);
-    const auto generation = static_cast<std::uint32_t>(handle >> 32U) & 0xFFFFFFU;
-    const auto tag = static_cast<std::uint8_t>(handle >> 56U);
-    if (tag != m_tag || slot >= m_generations.size() || !m_live[slot] ||
-        m_generations[slot] != generation) {
-        return std::nullopt;
-    }
-    return slot;
-}
-
-std::uint64_t slots_t::handle(std::uint32_t slot) const {
-    return (static_cast<std::uint64_t>(m_tag) << 56U) |
-           (static_cast<std::uint64_t>(m_generations[slot]) << 32U) | slot;
-}
-
-std::uint32_t slots_t::size() const {
-    return static_cast<std::uint32_t>(m_generations.size());
-}
 
 scene_t& scene() {
     static scene_t the_scene;
@@ -233,22 +240,28 @@ bool showing(std::uint32_t entity) {
     return true;
 }
 
-std::uint32_t entity_slot(std::uint64_t handle) {
-    const std::optional<std::uint32_t> slot = scene().entities.slots.find(handle);
-    if (!slot) {
-        fail(handle == 0 ? "no entity was given" : "the entity was freed");
-        return none;
+std::uint32_t live_slot(const slots_t& slots, std::uint64_t handle, const char* what) {
+    const std::optional<std::uint32_t> slot = slots.find(handle);
+    if (slot) {
+        return *slot;
     }
-    return *slot;
+    if (handle == 0) {
+        fail(std::format("no {} was given", what));
+    } else if (kind_of(handle) != slots.kind()) {
+        const bool vowel = std::string_view("aeiou").contains(what[0]);
+        fail(std::format("that handle isn't {} {}'s", vowel ? "an" : "a", what));
+    } else {
+        fail(std::format("the {} was freed", what));
+    }
+    return none;
+}
+
+std::uint32_t entity_slot(std::uint64_t handle) {
+    return live_slot(scene().entities.slots, handle, "entity");
 }
 
 std::uint32_t world_slot(std::uint64_t handle) {
-    const std::optional<std::uint32_t> slot = scene().world_slots.find(handle);
-    if (!slot) {
-        fail(handle == 0 ? "no World was given" : "the World was freed");
-        return none;
-    }
-    return *slot;
+    return live_slot(scene().world_slots, handle, "World");
 }
 
 } // namespace fbe::scene
@@ -261,14 +274,7 @@ using fbe::scene::world_slot;
 extern "C" {
 
 FBE_API uint64_t fbe_world_create(void) {
-    fbe::scene::scene_t& s = scene();
-    const std::uint32_t world = s.world_slots.make();
-    if (world == s.worlds.size()) {
-        s.worlds.emplace_back();
-    } else {
-        s.worlds[world] = {};
-    }
-    return s.world_slots.handle(world);
+    return scene().world_slots.handle(fbe::scene::make_world());
 }
 
 FBE_API uint64_t fbe_world_main(void) {
@@ -335,17 +341,8 @@ FBE_API uint64_t fbe_entity_create(uint64_t world, uint64_t parent, int32_t kind
     }
     std::uint32_t parent_slot = none;
     std::uint32_t world_index = none;
-    if (parent != 0) {
-        parent_slot = entity_slot(parent);
-        if (parent_slot == none) {
-            return 0;
-        }
-        world_index = scene().entities.world[parent_slot];
-    } else {
-        world_index = world_slot(world);
-        if (world_index == none) {
-            return 0;
-        }
+    if (!fbe::scene::place(world, parent, world_index, parent_slot)) {
+        return 0;
     }
     const std::uint32_t entity = fbe::scene::make_entity(world_index, kind);
     fbe::scene::attach(entity, world_index, parent_slot);
@@ -514,23 +511,15 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
     }
     fbe::scene::entities_t& entities = scene().entities;
     std::uint32_t parent_slot = none;
-    std::uint32_t world_index = entities.world[slot];
-    if (parent != 0) {
-        parent_slot = entity_slot(parent);
-        if (parent_slot == none) {
-            return 0;
-        }
-        world_index = entities.world[parent_slot];
-    } else if (world != 0) {
-        world_index = world_slot(world);
-        if (world_index == none) {
-            return 0;
-        }
+    std::uint32_t world_index = none;
+    if (world == 0 && parent == 0) {
+        world_index = entities.world[slot];
+    } else if (!fbe::scene::place(world, parent, world_index, parent_slot)) {
+        return 0;
     }
 
     // The whole tree is listed first, so a copy put under its own original isn't copied again.
-    std::vector<std::pair<std::uint32_t, std::size_t>> tree;
-    fbe::scene::list_tree(slot, 0, tree);
+    const std::vector<std::pair<std::uint32_t, std::size_t>> tree = fbe::scene::list_tree(slot);
     std::vector<std::uint32_t> copies(tree.size(), none);
     for (std::size_t i = 0; i < tree.size(); ++i) {
         const std::uint32_t original = tree[i].first;
@@ -549,6 +538,7 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         fbe::scene::attach(copy, world_index, i == 0 ? parent_slot : copies[tree[i].second]);
         copies[i] = copy;
     }
+    fbe::scene::renumber_cameras(tree, copies);
     return entities.slots.handle(copies[0]);
 }
 

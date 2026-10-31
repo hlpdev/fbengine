@@ -24,9 +24,9 @@ Public Enum FogMode
     NONE = 0
     /// None at its start, whole at its end, and evenly between.
     LINEAR = 1
-    /// What's seen fades as e to the minus its density times the depth.
+    /// What's seen fades as e to the minus (density x depth).
     EXPONENTIAL = 2
-    /// What's seen fades as e to the minus the square of its density times the depth.
+    /// What's seen fades as e to the minus (density x depth) squared.
     EXPONENTIAL_SQUARED = 3
 End Enum
 
@@ -52,7 +52,7 @@ Public Final Class Camera Extends Entity
     @MainThread @PanicsAtCaller
     Public Method SetProjection(projection: Projection)
         If !fbe_camera_set_projection(Live("SetProjection"), projection As Int32)
-            Panic(LastError())
+            Failed("SetProjection")
         End If
     End Method
 
@@ -67,7 +67,7 @@ Public Final Class Camera Extends Entity
     /// window sees more at the sides. Outside 0 to Pi panics.
     @MainThread @PanicsAtCaller
     Public Method SetFieldOfView(angle: Float)
-        If !fbe_camera_set_field_of_view(Live("SetFieldOfView"), angle) Then Panic(LastError())
+        If !fbe_camera_set_field_of_view(Live("SetFieldOfView"), angle) Then Failed("SetFieldOfView")
     End Method
 
     /// The angle from the bottom of the camera's view to its top, in radians.
@@ -78,7 +78,10 @@ Public Final Class Camera Extends Entity
     /// view and its viewport's width over its height make.
     @MainThread @PanicsAtCaller
     Public Method HorizontalFieldOfView(): Float
+        Target("HorizontalFieldOfView")
         Local view = Viewport()
+        // A viewport with no size, as a window dragged to nothing high has, is square.
+        If !(view.Width > 0 && view.Height > 0) Then Return FieldOfView()
         Return 2 * Atan(Tan(FieldOfView() / 2) * view.Width / view.Height)
     End Method
 
@@ -87,7 +90,7 @@ Public Final Class Camera Extends Entity
     @MainThread @PanicsAtCaller
     Public Method SetOrthographicHeight(height: Float)
         If !fbe_camera_set_orthographic_height(Live("SetOrthographicHeight"), height)
-            Panic(LastError())
+            Failed("SetOrthographicHeight")
         End If
     End Method
 
@@ -97,11 +100,11 @@ Public Final Class Camera Extends Entity
         Return fbe_camera_orthographic_height(Live("OrthographicHeight"))
     End Method
 
-    /// Sets how far in front of the camera it sees, from `near` to `far`: a near as close as 0.01
-    /// works, since depth is a reversed 32-bit float. Anything but 0 < near < far, finite, panics.
+    /// Sets how far in front of the camera it sees, from `near` to `far`. Anything but 0 < near <
+    /// far, finite, panics.
     @MainThread @PanicsAtCaller
     Public Method SetRange(near: Float, far: Float)
-        If !fbe_camera_set_range(Live("SetRange"), near, far) Then Panic(LastError())
+        If !fbe_camera_set_range(Live("SetRange"), near, far) Then Failed("SetRange")
     End Method
 
     /// The nearest the camera sees.
@@ -119,14 +122,14 @@ Public Final Class Camera Extends Entity
         Local camera = Live("SetViewport")
         If !fbe_camera_set_viewport(camera, viewport.X, viewport.Y, viewport.Width,
                                     viewport.Height)
-            Panic(LastError())
+            Failed("SetViewport")
         End If
     End Method
 
     /// Makes the camera draw to the whole window again, whatever size it is.
     @MainThread @PanicsAtCaller
     Public Method ResetViewport()
-        If !fbe_camera_reset_viewport(Live("ResetViewport")) Then Panic(LastError())
+        If !fbe_camera_reset_viewport(Live("ResetViewport")) Then Failed("ResetViewport")
     End Method
 
     /// The part of the window the camera draws to, in the window's units from its top left: the
@@ -140,7 +143,7 @@ Public Final Class Camera Extends Entity
         Unsafe
             done = fbe_camera_viewport(camera, target.x, target.y, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Viewport")
         Return Rect(found.x, found.y, found.width, found.height)
     End Method
 
@@ -153,7 +156,7 @@ Public Final Class Camera Extends Entity
     /// overlay does; one that clears only depth draws its things in front of theirs.
     @MainThread @PanicsAtCaller
     Public Method SetClear(color: Bool, depth: Bool)
-        If !fbe_camera_set_clear(Live("SetClear"), color, depth) Then Panic(LastError())
+        If !fbe_camera_set_clear(Live("SetClear"), color, depth) Then Failed("SetClear")
     End Method
 
     /// Whether the camera clears its viewport's color before it draws.
@@ -168,7 +171,7 @@ Public Final Class Camera Extends Entity
     @MainThread @PanicsAtCaller
     Public Method SetClearColor(color: Color)
         If !fbe_camera_set_clear_color(Live("SetClearColor"), color.r, color.g, color.b, color.a)
-            Panic(LastError())
+            Failed("SetClearColor")
         End If
     End Method
 
@@ -181,7 +184,7 @@ Public Final Class Camera Extends Entity
         Unsafe
             done = fbe_camera_clear_color(camera, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("ClearColor")
         Return ColorOf(found)
     End Method
 
@@ -189,7 +192,7 @@ Public Final Class Camera Extends Entity
     /// those of one order in the order they were made.
     @MainThread @PanicsAtCaller
     Public Method SetOrder(order: Int)
-        If !fbe_camera_set_order(Live("SetOrder"), order) Then Panic(LastError())
+        If !fbe_camera_set_order(Live("SetOrder"), order) Then Failed("SetOrder")
     End Method
 
     /// When the camera draws among its World's cameras.
@@ -201,7 +204,7 @@ Public Final Class Camera Extends Entity
     /// sees only as far as its fog, with its far there.
     @MainThread @PanicsAtCaller
     Public Method SetFogMode(mode: FogMode)
-        If !fbe_camera_set_fog_mode(Live("SetFogMode"), mode As Int32) Then Panic(LastError())
+        If !fbe_camera_set_fog_mode(Live("SetFogMode"), mode As Int32) Then Failed("SetFogMode")
     End Method
 
     /// How the camera's fog thickens with depth.
@@ -212,7 +215,7 @@ Public Final Class Camera Extends Entity
     @MainThread @PanicsAtCaller
     Public Method SetFogColor(color: Color)
         If !fbe_camera_set_fog_color(Live("SetFogColor"), color.r, color.g, color.b)
-            Panic(LastError())
+            Failed("SetFogColor")
         End If
     End Method
 
@@ -225,7 +228,7 @@ Public Final Class Camera Extends Entity
         Unsafe
             done = fbe_camera_fog_color(camera, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("FogColor")
         Return ColorOf(found)
     End Method
 
@@ -233,7 +236,7 @@ Public Final Class Camera Extends Entity
     /// 100 at first. Anything but 0 <= start < end, finite, panics.
     @MainThread @PanicsAtCaller
     Public Method SetFogRange(start: Float, finish: Float)
-        If !fbe_camera_set_fog_range(Live("SetFogRange"), start, finish) Then Panic(LastError())
+        If !fbe_camera_set_fog_range(Live("SetFogRange"), start, finish) Then Failed("SetFogRange")
     End Method
 
     /// Where linear fog starts.
@@ -247,7 +250,7 @@ Public Final Class Camera Extends Entity
     /// Sets how thick exponential fog is, 0.02 at first. Below 0 panics.
     @MainThread @PanicsAtCaller
     Public Method SetFogDensity(density: Float)
-        If !fbe_camera_set_fog_density(Live("SetFogDensity"), density) Then Panic(LastError())
+        If !fbe_camera_set_fog_density(Live("SetFogDensity"), density) Then Failed("SetFogDensity")
     End Method
 
     /// How thick exponential fog is.
@@ -263,7 +266,7 @@ Public Final Class Camera Extends Entity
         Unsafe
             done = fbe_camera_view_matrix(camera, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("ViewMatrix")
         Return MatOf(found)
     End Method
 
@@ -272,13 +275,13 @@ Public Final Class Camera Extends Entity
     @MainThread @PanicsAtCaller
     Public Method ProjectionMatrix(): Mat4
         Local camera = Live("ProjectionMatrix")
-        Local target = TargetSize()
+        Local target = Target("ProjectionMatrix")
         Local found = fbe_mat4_t()
         Local done = False
         Unsafe
             done = fbe_camera_projection_matrix(camera, target.x, target.y, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("ProjectionMatrix")
         Return MatOf(found)
     End Method
 
@@ -288,46 +291,63 @@ Public Final Class Camera Extends Entity
 
     /// Where a point in the world is in the camera's view: x and y in the window's units from its
     /// top left, and z how far in front of the camera it is; or Null when it's nearer than the
-    /// camera's near, so behind it. A point off the sides projects outside the viewport.
+    /// camera's near, so behind it, or the viewport has no size, as a window dragged to nothing
+    /// high has. A point off the sides projects outside the viewport. With no window open and no
+    /// viewport of its own, it panics.
     @MainThread @PanicsAtCaller
     Public Method Project(point: Vec3): Vec3?
         Local camera = Live("Project")
-        Local target = TargetSize()
+        Local target = Target("Project")
         Local found = fbe_vec3_t(0, 0, 0)
         Local done = 0
         Unsafe
             done = fbe_camera_project(camera, target.x, target.y, point.x, point.y, point.z,
                                       AddressOf(found))
         End Unsafe
-        If done < 0 Then Panic(LastError())
+        If done < 0 Then Failed("Project")
         If done == 0 Then Return Null
         Return VecOf(found)
     End Method
 
     /// The point in the world at x and y in the camera's view, in the window's units from its top
-    /// left, z in front of the camera: what Project took there.
+    /// left, z in front of the camera: what Project took there; Null when the viewport has no
+    /// size. With no window open and no viewport of its own, it panics.
     @MainThread @PanicsAtCaller
-    Public Method Unproject(point: Vec3): Vec3
+    Public Method Unproject(point: Vec3): Vec3?
         Local camera = Live("Unproject")
-        Local target = TargetSize()
+        Local target = Target("Unproject")
         Local found = fbe_vec3_t(0, 0, 0)
-        Local done = False
+        Local done = 0
         Unsafe
             done = fbe_camera_unproject(camera, target.x, target.y, point.x, point.y, point.z,
                                         AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If done < 0 Then Failed("Unproject")
+        If done == 0 Then Return Null
         Return VecOf(found)
     End Method
 
     /// The line through a point of the camera's view, in the window's units from its top left:
     /// from the camera's near, with a Direction of length 1 into what it sees, which is far
     /// away at the camera's far, as the mouse's place picks what's under it.
+    /// With a viewport of no size, it's the camera's own line, from it, forward.
     @MainThread @PanicsAtCaller
     Public Method ScreenRay(point: Vec2): Ray
         Local start = Unproject(Vec3(point.x, point.y, Near()))
         Local finish = Unproject(Vec3(point.x, point.y, Far()))
+        If start == Null || finish == Null Then Return Ray(Position(Space.WORLD), Forward())
         Return Ray(start, Normalize(finish - start))
+    End Method
+
+    // The size of what the camera draws to, or a panic naming the call when that's a window that
+    // isn't open and the camera has no viewport of its own.
+    @PanicsAtCaller
+    Package Method Target(call: String): Vec2
+        If !Window.Open() && FillsTarget()
+            Panic("{call} on a Camera: the camera's viewport has no size: open the window, or " +
+                  "give it a viewport")
+        End If
+        Return TargetSize()
     End Method
 End Class
 

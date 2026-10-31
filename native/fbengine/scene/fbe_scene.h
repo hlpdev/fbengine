@@ -46,7 +46,7 @@ extern "C" {
 #define FBE_LIGHT_SPOT        2
 
 // How a camera's fog thickens with depth in front of it: not at all; linearly from its start to
-// its end; or as e to the minus density times the depth, or that squared.
+// its end; as e to the minus (density x depth); or as e to the minus (density x depth) squared.
 #define FBE_FOG_NONE                0
 #define FBE_FOG_LINEAR              1
 #define FBE_FOG_EXPONENTIAL         2
@@ -58,8 +58,10 @@ extern "C" {
 #define FBE_SHADING_UNLIT  1
 #define FBE_SHADING_VERTEX 2
 
-// How a material blends with what's drawn behind it: opaque unless its alpha, or its mesh's, is
-// below 1, then alpha; opaque; alpha; adding its light; or multiplying what's behind.
+// How a material blends with what's drawn behind it: AUTO, opaque unless its alpha times its
+// mesh's is below 1, then alpha; OPAQUE, which leaves its own and its textures' alpha out, though
+// its mesh's alpha below 1 still blends it as alpha, so a mesh fades whatever it draws in; alpha;
+// adding its light, scaled by its alpha; or multiplying what's behind, scaled by its alpha.
 #define FBE_BLEND_AUTO     0
 #define FBE_BLEND_OPAQUE   1
 #define FBE_BLEND_ALPHA    2
@@ -68,7 +70,7 @@ extern "C" {
 
 // How a texture layer combines with the layers under it: multiplying them, adding to them,
 // laid over them by its alpha, or multiplying them twice over, so its middle gray leaves them as
-// they are, as lightmaps over a 2x ambient layer want.
+// they are, as a doubled ambient layer under a lightmap wants.
 #define FBE_LAYER_MULTIPLY   0
 #define FBE_LAYER_ADD        1
 #define FBE_LAYER_ALPHA      2
@@ -206,8 +208,8 @@ FBE_API int32_t fbe_entity_freed(uint64_t* entities, int32_t capacity);
 FBE_API int32_t fbe_entity_kind(uint64_t entity);
 FBE_API uint64_t fbe_entity_world(uint64_t entity);
 
-// An entity's name, "" at first; what fbe_entity_name gives stays until the name changes or the
-// entity is freed, and is NULL for a freed one.
+// An entity's name, "" at first; what fbe_entity_name gives is good until the next scene call,
+// which can move it, so a caller copies it at once; NULL for a freed one.
 FBE_API bool fbe_entity_set_name(uint64_t entity, const char* name);
 FBE_API const char* fbe_entity_name(uint64_t entity);
 
@@ -287,10 +289,10 @@ FBE_API bool fbe_entity_poses(const uint64_t* entities, fbe_pose_t* poses, int32
 // black, and depth, and is in order 0.
 FBE_API bool fbe_camera_set_projection(uint64_t camera, int32_t projection);
 FBE_API int32_t fbe_camera_projection(uint64_t camera);
-// False outside 0 to Pi.
+// False outside 0 to Pi, or so small the projection isn't finite.
 FBE_API bool fbe_camera_set_field_of_view(uint64_t camera, float angle);
 FBE_API float fbe_camera_field_of_view(uint64_t camera);
-// False unless above 0.
+// False unless above 0, and big enough that the projection is finite.
 FBE_API bool fbe_camera_set_orthographic_height(uint64_t camera, float height);
 FBE_API float fbe_camera_orthographic_height(uint64_t camera);
 // False unless 0 < nearest < farthest, finite.
@@ -326,23 +328,25 @@ FBE_API int32_t fbe_world_cameras(uint64_t world, uint64_t* cameras, int32_t cap
 // The matrix from the world to a camera's view, where it's at the origin looking down -Z.
 FBE_API bool fbe_camera_view_matrix(uint64_t camera, fbe_mat4_t* matrix);
 // A camera's projection in a target of this size, as std.math's Mat4.Perspective and
-// Orthographic make it, with depth from 0 at nearest to 1 at farthest; false for a viewport with
-// no size.
+// Orthographic make it, with depth from 0 at nearest to 1 at farthest.
 FBE_API bool fbe_camera_projection_matrix(uint64_t camera, float target_width, float target_height,
                                           fbe_mat4_t* matrix);
 // Where a point in the world is in a camera's view, in a target of this size: x and y in its
 // units from the target's top left, and z how far in front of the camera it is. 1 if it projected,
-// 0 if it's nearer than the camera's nearest, so behind it, and -1 for a viewport with no size.
+// 0 if it's nearer than the camera's nearest, so behind it, or the viewport has no size, as a
+// window dragged to nothing high has; -1 for a freed camera. A viewport with no size has the
+// shape of a square for the projection matrix and the in-view tests.
 FBE_API int32_t fbe_camera_project(uint64_t camera, float target_width, float target_height,
                                    float x, float y, float z, fbe_vec3_t* projected);
-// The point in the world at x and y in a camera's view, `depth` in front of it.
-FBE_API bool fbe_camera_unproject(uint64_t camera, float target_width, float target_height, float x,
-                                  float y, float depth, fbe_vec3_t* point);
+// The point in the world at x and y in a camera's view, `depth` in front of it: 1 if there's one,
+// 0 for a viewport with no size, -1 for a freed camera.
+FBE_API int32_t fbe_camera_unproject(uint64_t camera, float target_width, float target_height,
+                                     float x, float y, float depth, fbe_vec3_t* point);
 
 // A light shines along its forward axis, -Z, as directional and spot lights do, or out from where
 // it is, as point lights do; one that's hidden lights nothing. New, it's directional, white, of
-// intensity 1, reaching 10 units, with a cone from 0 to Pi / 4 from its axis. A color can be
-// negative, which takes light away.
+// intensity 1, of range 10, with a cone from 0 to Pi / 4 from its axis. A color can be negative,
+// which takes light away.
 FBE_API bool fbe_light_set_type(uint64_t light, int32_t type);
 FBE_API int32_t fbe_light_type(uint64_t light);
 FBE_API bool fbe_light_set_color(uint64_t light, float r, float g, float b);
@@ -350,7 +354,8 @@ FBE_API bool fbe_light_color(uint64_t light, fbe_color_t* color);
 // False below 0.
 FBE_API bool fbe_light_set_intensity(uint64_t light, float intensity);
 FBE_API float fbe_light_intensity(uint64_t light);
-// How far a point or spot light reaches, where it's faded to nothing; false unless above 0.
+// The distance a point or spot light's falloff is measured by; how it falls off with it, and
+// whether the light ends there, is the shading model's (E5's). False unless above 0.
 FBE_API bool fbe_light_set_range(uint64_t light, float range);
 FBE_API float fbe_light_range(uint64_t light);
 // A spot light's cone: the angle from its axis where it starts to fade, and where it's out;
@@ -358,8 +363,8 @@ FBE_API float fbe_light_range(uint64_t light);
 FBE_API bool fbe_light_set_cone(uint64_t light, float inner, float outer);
 FBE_API float fbe_light_inner_cone(uint64_t light);
 FBE_API float fbe_light_outer_cone(uint64_t light);
-// A World's lights, in the tree's order, depth first: writes up to `capacity` and gives how many
-// there are, -1 for a freed World.
+// A World's lights, hidden ones too, in the tree's order, depth first: writes up to `capacity` and
+// gives how many there are, -1 for a freed World.
 FBE_API int32_t fbe_world_lights(uint64_t world, uint64_t* lights, int32_t capacity);
 // A World's ambient light, which lights everything a little from everywhere: std.math's
 // Color.Gray, sRGB's half gray, at first.
@@ -405,20 +410,24 @@ FBE_API bool fbe_geometry_transform(uint64_t geometry, const fbe_mat4_t* transfo
 // Turns it inside out: every normal negated, and every triangle's winding.
 FBE_API bool fbe_geometry_flip(uint64_t geometry);
 // Gives every vertex the normal of the triangles around it, smoothing across vertices of a
-// surface at the same place, each triangle weighted by its angle at the vertex.
+// surface at the same place, each triangle weighted by its angle at the vertex; triangles too
+// thin to face anywhere are left out. Where a place's triangles cancel, as a sheet's two sides do,
+// a vertex takes its own triangles', and one in no triangle keeps its normal.
 FBE_API bool fbe_geometry_update_normals(uint64_t geometry);
 // The box around its vertices; nothing at the origin for none.
 FBE_API bool fbe_geometry_bounds(uint64_t geometry, fbe_aabb_t* bounds);
 // Scales and moves it to fill a box, centered, or keeping its shape with `uniform`; a flat axis
 // is moved, not scaled.
 FBE_API bool fbe_geometry_fit(uint64_t geometry, const fbe_aabb_t* box, bool uniform);
-// Every vertex's position, surface after surface, as physics' mesh shapes take them: writes up to
-// `capacity` and gives how many there are, -1 for a freed geometry.
+// Every place a vertex is, welded: once each, bit for bit, -0 as 0, in the order surfaces first
+// use them, as physics' mesh shapes take them, so their triangles meet across UV and normal seams
+// and what Add joined: writes up to `capacity` and gives how many there are, -1 for a freed
+// geometry.
 FBE_API int32_t fbe_geometry_positions(uint64_t geometry, fbe_vec3_t* positions, int32_t capacity);
-// Every triangle's three indices into what fbe_geometry_positions gives: writes up to `capacity`
-// indices and gives how many there are.
+// Every triangle's three indices into what fbe_geometry_positions gives, surface after surface, in
+// their order, so a triangle's number is physics' too: writes up to `capacity` indices and gives
+// how many there are.
 FBE_API int32_t fbe_geometry_indices(uint64_t geometry, uint32_t* indices, int32_t capacity);
-
 // Primitive shapes, each one surface, new and held once, of radius 1 about the origin: a cube from
 // -1 to 1, flat-shaded, each face's UVs 0 to 1; a sphere of `segments` rings from pole to pole
 // and twice as many around, 3 to 100; a cylinder and a cone from y -1 to 1, `segments` around, 3
@@ -466,7 +475,7 @@ FBE_API bool fbe_material_release(uint64_t material);
 FBE_API bool fbe_material_alive(uint64_t material);
 // A new material with another's settings, held once.
 FBE_API uint64_t fbe_material_clone(uint64_t material);
-// Its color and alpha, linear.
+// Its color and alpha, linear: any finite color, and alpha 0 to 1.
 FBE_API bool fbe_material_set_color(uint64_t material, float r, float g, float b, float a);
 FBE_API bool fbe_material_color(uint64_t material, fbe_color_t* color);
 // How sharp and bright its highlights are, 0 for none to 1; false outside.
@@ -488,8 +497,8 @@ FBE_API bool fbe_material_two_sided(uint64_t material);
 // Whether cameras' fog covers it.
 FBE_API bool fbe_material_set_fogged(uint64_t material, bool fogged);
 FBE_API bool fbe_material_fogged(uint64_t material);
-// When it's drawn: 0 with the scene, by depth; below 0 before the scene, and above 0 after it,
-// lower first, each over what's drawn before it, with no depth test, as skies and overlays want.
+// When it's drawn: 0 with the scene; below 0 before the scene, and above 0 after it, lower first,
+// as skies and overlays want. How each order meets the depth of the others is E5's.
 FBE_API bool fbe_material_set_order(uint64_t material, int32_t order);
 FBE_API int32_t fbe_material_order(uint64_t material);
 // A texture layer's FBE_LAYER_ blend and UV set, 0 or 1, for layers 0 to FBE_MATERIAL_LAYERS - 1.
@@ -505,9 +514,12 @@ FBE_API uint64_t fbe_surface_material(uint64_t geometry, int32_t surface);
 FBE_API bool fbe_mesh_set_material(uint64_t mesh, uint64_t material);
 FBE_API uint64_t fbe_mesh_material(uint64_t mesh);
 // A mesh's own color and alpha, which multiply its materials', white at first: each mesh's,
-// copies' too, so a copy fades or tints alone.
+// copies' too, so a copy fades or tints alone. Alpha is 0 to 1, and colors any finite value.
 FBE_API bool fbe_mesh_set_tint(uint64_t mesh, float r, float g, float b, float a);
 FBE_API bool fbe_mesh_tint(uint64_t mesh, fbe_color_t* tint);
+// The FBE_BLEND_ a mesh's surface is drawn with: its material's, the mesh's own or the surface's,
+// with AUTO and OPAQUE settled by alpha as their docs say; -1 for a surface it doesn't have.
+FBE_API int32_t fbe_mesh_blend(uint64_t mesh, int32_t surface);
 
 // Visibility. Whether a camera might see an entity, in a target of this size: a mesh's box of its
 // geometry, turned and scaled with it, or another entity's position, against the six planes of

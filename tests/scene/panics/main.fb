@@ -142,6 +142,32 @@ Select arguments[0]
     Case "collide-freed"
         world.Free()
         world.Collide()
+    Case "point-at-freed"
+        Local target = Pivot()
+        target.Free()
+        Pivot().PointAt(target)
+    Case "distance-freed"
+        Local target = Pivot()
+        target.Free()
+        Pivot().DistanceTo(target)
+    Case "yaw-freed"
+        Local target = Pivot()
+        target.Free()
+        Pivot().YawTo(target)
+    Case "pitch-freed"
+        Local target = Pivot()
+        target.Free()
+        Pivot().PitchTo(target)
+    Case "horizontal-no-window"
+        Camera().HorizontalFieldOfView()
+    Case "fit-backward"
+        Geometry.Cube().Fit(AABB(Vec3(1, 0, 0), Vec3(0, 1, 1)))
+    Case "material-alpha"
+        Material().SetAlpha(2)
+    Case "color-alpha"
+        Material().SetColor(Color(1, 1, 1, 1.5))
+    Case "mesh-alpha"
+        Mesh(Null).SetAlpha(-1)
     Default
         Panic("no case {arguments[0]}")
 End Select

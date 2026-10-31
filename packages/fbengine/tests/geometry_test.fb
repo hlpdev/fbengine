@@ -196,9 +196,10 @@ Function AddingCopiesSurfacesInAndCloningCopiesThemOut()
     Expect(room.Surface(1).VertexPosition(0) == Vec3(5, 0, 0))
     room.Add(room)
     Expect(room.SurfaceCount() == 4)
-    Expect(room.Positions().Count == 16)
+    // The copies weld onto the places they copied: two squares' worth.
+    Expect(room.Positions().Count == 8)
     Local indices = room.Indices()
-    Expect(indices.Count == 24 && indices[6] == 4 && indices[23] == 15)
+    Expect(indices.Count == 24 && indices[6] == 4 && indices[12] == 0 && indices[23] == 7)
     Local copy = room.Clone()
     copy.Translate(Vec3(0, 1, 0))
     Expect(room.Surface(0).VertexPosition(0) == Vec3(0, 0, 0))
@@ -248,4 +249,84 @@ Function AGeometryLivesWhileAMeshDrawsIt()
     Expect(again != sphere && again.Surface(0).VertexCount() == 45)
     mesh.Free()
     Expect(again.Surface(0).VertexCount() == 45)
+End Function
+
+@Test
+Function UpdateNormalsLeavesOutThinTrianglesAndKeepsWhatHasNone()
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    surface.AddVertex(Vec3(0, 0, 0))
+    surface.AddVertex(Vec3(0, 0, 1))
+    surface.AddVertex(Vec3(1, 0, 0))
+    // A sliver on a line, which rounding would give any direction.
+    surface.AddVertex(Vec3(2, 0, 0))
+    surface.AddTriangle(0, 1, 2)
+    surface.AddTriangle(0, 2, 3)
+    // A vertex in no triangle.
+    surface.AddVertex(Vertex(Vec3(5, 5, 5), Vec3(0, 0, 1)))
+    geometry.UpdateNormals()
+    Expect(surface.VertexNormal(0) == Vec3(0, 1, 0) && surface.VertexNormal(2) == Vec3(0, 1, 0))
+    Expect(surface.VertexNormal(4) == Vec3(0, 0, 1))
+
+    // A sheet's two sides at one place cancel, so each vertex takes its own triangle's.
+    Local sheet = Geometry()
+    Local both = sheet.AddSurface()
+    both.AddVertices([Vertex(Vec3(0, 0, 0)), Vertex(Vec3(0, 0, 1)), Vertex(Vec3(1, 0, 0)),
+                      Vertex(Vec3(0, 0, 0)), Vertex(Vec3(1, 0, 0)), Vertex(Vec3(0, 0, 1))])
+    both.AddTriangles([0, 1, 2, 3, 4, 5])
+    sheet.UpdateNormals()
+    Expect(both.VertexNormal(0) == Vec3(0, 1, 0) && both.VertexNormal(3) == Vec3(0, -1, 0))
+End Function
+
+@Test
+Function APrimitivesSeamsWeldBitForBit()
+    // A sphere's seam and poles smooth to its own normals.
+    Local sphere = Geometry.Sphere(12)
+    Local built = sphere.Surface(0).Vertices()
+    sphere.UpdateNormals()
+    Local smoothed = sphere.Surface(0).Vertices()
+    For i, vertex In smoothed
+        Expect(Dot(vertex.Normal, built[i].Normal) > 0.999)
+    End For
+    Expect(Geometry.Cube().Positions().Count == 8)
+    Expect(Geometry.Cylinder(8).Positions().Count == 18)
+    Expect(Geometry.Cone(8).Positions().Count == 10)
+    Expect(Geometry.Sphere(4).Positions().Count == 2 + 3 * 8)
+End Function
+
+@Test
+Function EveryPrimitiveReadsItsTextureTheSameWayRound()
+    Local shapes = [Geometry.Cube(), Geometry.Sphere(6), Geometry.Cylinder(6), Geometry.Cone(6),
+                    Geometry.Plane(3)]
+    For shape In shapes
+        Local surface = shape.Surface(0)
+        Local vertices = surface.Vertices()
+        Local indices = surface.Triangles()
+        For t = 0 Until indices.Count / 3
+            Local a = vertices[indices[t * 3]].Uv0
+            Local b = vertices[indices[t * 3 + 1]].Uv0
+            Local c = vertices[indices[t * 3 + 2]].Uv0
+            // Seen from the front, u goes right and v down, so each triangle's UVs wind clockwise.
+            Local area = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)
+            Expect(area < 0)
+        End For
+    End For
+End Function
+
+@Test
+Function PolesAndTipsSitAtTheirColumnsMiddles()
+    Local sphere = Geometry.Sphere(3).Surface(0)
+    // The north pole's row: one point, each vertex at its column's middle.
+    For i = 0 To 5
+        Local vertex = sphere.Vertex(i)
+        Expect(vertex.Position == Vec3(0, 1, 0))
+        Expect(IsClose(vertex.Uv0.x, ((i As Float) + 0.5) / 6))
+    End For
+    Local cone = Geometry.Cone(4, False).Surface(0)
+    Local tip = cone.Vertex(0)
+    Expect(tip.Position == Vec3(0, 1, 0))
+    Expect(IsClose(tip.Uv0.x, 0.125))
+    // Its normal leans out at its column's middle, halfway between the base's first two.
+    Expect(IsClose(Normalize(Vec3(tip.Normal.x, 0, tip.Normal.z)),
+                   Normalize(Vec3(Cos(Deg(45)), 0, -Sin(Deg(45)))), 0.0001))
 End Function

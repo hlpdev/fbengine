@@ -192,6 +192,16 @@ inline quat_t slerp(quat_t a, quat_t b, float t) {
     return { x, y, z, w };
 }
 
+/// A rotation seen in a mirror that flips the axes `scale` is negative on (0 counting as
+/// positive): the rotation that mirror turns it into. It's its own inverse.
+inline quat_t reflect(quat_t q, vec3_t scale) {
+    const float x = scale.x < 0.0F ? -1.0F : 1.0F;
+    const float y = scale.y < 0.0F ? -1.0F : 1.0F;
+    const float z = scale.z < 0.0F ? -1.0F : 1.0F;
+    const float d = x * y * z;
+    return { d * x * q.x, d * y * q.y, d * z * q.z, q.w };
+}
+
 /// Scales, then turns, then moves, as an entity's transform does.
 inline mat4_t compose(vec3_t position, quat_t rotation, vec3_t scale) {
     return { rotation * vec3_t(scale.x, 0.0F, 0.0F), rotation * vec3_t(0.0F, scale.y, 0.0F),

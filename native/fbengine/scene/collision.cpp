@@ -739,7 +739,10 @@ FBE_API bool fbe_entity_set_collision_box(uint64_t entity, const fbe_aabb_t* box
     const bool ordered =
         box->min.x <= box->max.x && box->min.y <= box->max.y && box->min.z <= box->max.z;
     if (!ordered) {
-        return fbe::fail("a collision box has its least corner at or below its greatest");
+        return fbe::fail(std::format("a collision box has its least corner at or below its "
+                                     "greatest, not ({}, {}, {}) to ({}, {}, {})",
+                                     box->min.x, box->min.y, box->min.z, box->max.x, box->max.y,
+                                     box->max.z));
     }
     found->box_min = { box->min.x, box->min.y, box->min.z };
     found->box_max = { box->max.x, box->max.y, box->max.z };

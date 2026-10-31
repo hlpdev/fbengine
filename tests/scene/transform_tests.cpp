@@ -129,15 +129,28 @@ TEST_CASE("a parent scaled to nothing doesn't make nonsense of its children", "[
     fbe_entity_set_position(parent, 1.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL);
     fbe_entity_set_scale(parent, 0.0F, 1.0F, 1.0F, FBE_SPACE_LOCAL);
     const std::uint64_t child = pivot(world.handle, parent);
+    fbe_entity_set_position(child, 7.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL);
+    // On the axis the parent flattens, the child keeps its own place and scale.
     REQUIRE(fbe_entity_set_position(child, 5.0F, 2.0F, 3.0F, FBE_SPACE_WORLD));
     fbe_vec3_t local{};
     fbe_entity_position(child, FBE_SPACE_LOCAL, &local);
-    CHECK(near(local, { 0.0F, 2.0F, 3.0F }));
+    CHECK(near(local, { 7.0F, 2.0F, 3.0F }));
     CHECK(near(world_position(child), { 1.0F, 2.0F, 3.0F }));
     REQUIRE(fbe_entity_set_scale(child, 2.0F, 2.0F, 2.0F, FBE_SPACE_WORLD));
     fbe_vec3_t scale{};
     fbe_entity_scale(child, FBE_SPACE_LOCAL, &scale);
-    CHECK(near(scale, { 0.0F, 2.0F, 2.0F }));
+    CHECK(near(scale, { 1.0F, 2.0F, 2.0F }));
+
+    // A child put in a container scaled to nothing comes back where it was when it grows back.
+    const std::uint64_t box = pivot(world.handle);
+    fbe_entity_set_scale(box, 0.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL);
+    const std::uint64_t kept = pivot(world.handle);
+    fbe_entity_set_position(kept, 3.0F, 4.0F, 5.0F, FBE_SPACE_LOCAL);
+    REQUIRE(fbe_entity_set_parent(kept, box, true));
+    fbe_entity_set_scale(box, 1.0F, 1.0F, 1.0F, FBE_SPACE_LOCAL);
+    CHECK(near(world_position(kept), { 3.0F, 4.0F, 5.0F }));
+    fbe_entity_scale(kept, FBE_SPACE_WORLD, &scale);
+    CHECK(near(scale, { 1.0F, 1.0F, 1.0F }));
 
     fbe_vec3_t out{};
     CHECK_FALSE(fbe_entity_transform(0, parent, FBE_TRANSFORM_POINT, 1.0F, 1.0F, 1.0F, &out));

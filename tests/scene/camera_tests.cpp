@@ -103,7 +103,30 @@ TEST_CASE("a camera's settings take only what they can be", "[scene]") {
     CHECK_FALSE(fbe_camera_set_projection(made, 2));
     CHECK(std::string_view(fbe_error()) == "2 isn't a Projection");
     fbe_vec3_t out{};
-    CHECK(fbe_camera_project(made, 0.0F, 0.0F, 0.0F, 0.0F, -1.0F, &out) == -1);
+    CHECK(fbe_camera_project(made, 0.0F, 0.0F, 0.0F, 0.0F, -1.0F, &out) == 0);
     CHECK(fbe_camera_project(made, 100.0F, 100.0F, 0.0F, 0.0F, -1.0F, &out) == 1);
     CHECK(fbe_world_cameras(0, nullptr, 0) == -1);
+}
+
+TEST_CASE("a target with no size projects nothing, and has a square's shape", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t made = camera(world.handle);
+    fbe_vec3_t out{};
+    // A window dragged to nothing high.
+    CHECK(fbe_camera_project(made, 100.0F, 0.0F, 0.0F, 0.0F, -5.0F, &out) == 0);
+    CHECK(fbe_camera_unproject(made, 100.0F, 0.0F, 50.0F, 0.0F, 5.0F, &out) == 0);
+    fbe_mat4_t projection{};
+    REQUIRE(fbe_camera_projection_matrix(made, 100.0F, 0.0F, &projection));
+    CHECK(projection.m[0] == projection.m[5]);
+    CHECK(fbe_camera_point_in_view(made, 100.0F, 0.0F, 0.0F, 0.0F, -5.0F) == 1);
+    CHECK(fbe_camera_unproject(made, 100.0F, 100.0F, 50.0F, 50.0F, 5.0F, &out) == 1);
+}
+
+TEST_CASE("a field of view or height too small to project is refused", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t made = camera(world.handle);
+    CHECK_FALSE(fbe_camera_set_field_of_view(made, 1e-45F));
+    CHECK_FALSE(fbe_camera_set_orthographic_height(made, 1e-45F));
+    CHECK(fbe_camera_set_field_of_view(made, 1e-6F));
+    CHECK(fbe_camera_set_orthographic_height(made, 1e-6F));
 }
