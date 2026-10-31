@@ -147,7 +147,8 @@ good modern engine on its own. Every structural choice is checked against both.
 - The API is the main thread's (`@MainThread`). Inside, the C++ core has one job system, a
   worker per core less one, which asset decoding, culling, animation, and collisions use;
   Jolt runs on its own pool.
-- Nothing calls into FB from a worker; finished work is queued and handed over at Flip, and at the main scheduler's ticks while FB waits without one.
+- Nothing calls into FB from a worker; finished work is queued and handed over at Flip, and at
+  the main scheduler's ticks while FB waits without one.
 
 ## How packages work together
 
