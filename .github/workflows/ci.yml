@@ -54,10 +54,12 @@ jobs:
         with:
           version: ${{ env.FB_VERSION }}
 
-      # SDL's offscreen video, so no test opens a window, as each test asks too.
+      # SDL's offscreen video, so no test opens a window, as each test asks too. These runners have
+      # no Vulkan, so the GPU's tests skip themselves; the gpu job runs them.
       - name: Test
         env:
           SDL_VIDEO_DRIVER: offscreen
+          FBENGINE_NO_GPU: '1'
         run: |
           tar -xf native-${{ matrix.target }}.tar
           fb --version
@@ -75,8 +77,9 @@ jobs:
 
   # The GPU tests, with no window, on a software Vulkan driver, which the system's loader is told
   # to use alone: lavapipe, from Mesa (MSYS2's UCRT64 on Windows, apt's on Linux), and MoltenVK on
-  # macOS. Intel Macs aren't here: their runners have no Metal for MoltenVK, and Homebrew's Mesa
-  # has no lavapipe, so an Intel Mac's are run by hand.
+  # macOS: the C++ tests, and the packages' and examples', which draw. Intel Macs aren't here: their
+  # runners have no Metal for MoltenVK, and Homebrew's Mesa has no lavapipe, so an Intel Mac's are
+  # run by hand.
   gpu:
     name: gpu ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -151,14 +154,20 @@ jobs:
           echo "VK_DRIVER_FILES=$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
           echo "VULKAN_LIBRARIES=$(brew --prefix)/lib" >> "$GITHUB_ENV"
 
+      - uses: ./.github/actions/install-fb
+        with:
+          version: ${{ env.FB_VERSION }}
+
       # macOS drops DYLD_ variables on the way into the shell, so they're given to ctest itself,
       # which finds the loader there for volk.
       - name: Build and test
+        env:
+          SDL_VIDEO_DRIVER: offscreen
         run: |
           echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
           export VK_LOADER_DEBUG=error,warn
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_FB_TESTS=OFF
-          cmake --build build --parallel --target fbengine_gpu_tests
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build --parallel
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure || {
             if [ "$RUNNER_OS" = Windows ]; then
               pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-gdb > /dev/null

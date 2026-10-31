@@ -6,3 +6,5 @@ target_include_directories(fbengine_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_native PRIVATE FBE_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_native PRIVATE SDL3::SDL3-static)
+# The GPU's Vulkan, through volk and VMA.
+target_link_libraries(fbengine_native PRIVATE volk Vulkan::Headers fbengine_vma)

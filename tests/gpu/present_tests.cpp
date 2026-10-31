@@ -1,0 +1,191 @@
+// The GPU through fbengine's C API: starting it, and Flip presenting a headless window, which draws
+// into an image of its own, as a shown one's swapchain's. A swapchain needs a window on screen,
+// which no test opens.
+
+#include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <cstdint>
+#include <fbengine.h>
+#include <cstdlib>
+#include <string>
+#include <string_view>
+
+namespace {
+
+/// Requires a call that can fail to have worked, saying fbe_error's why if it didn't.
+void require(bool worked) {
+    INFO(fbe_error());
+    REQUIRE(worked);
+}
+
+/// A headless window, open while it's in scope, with the GPU started.
+struct window_t {
+    window_t(std::int32_t width, std::int32_t height) {
+        REQUIRE(fbe_window_set_headless(true));
+        require(fbe_window_open(width, height, FBE_WINDOW_WINDOWED));
+        require(fbe_gpu_start());
+    }
+    window_t(const window_t&) = delete;
+    window_t& operator=(const window_t&) = delete;
+    window_t(window_t&&) = delete;
+    window_t& operator=(window_t&&) = delete;
+    ~window_t() {
+        fbe_window_close();
+    }
+};
+
+/// Sets an environment variable, as the loader reads them, before Vulkan starts.
+void set_variable(const char* name, const char* value) {
+#ifdef _WIN32
+    REQUIRE(_putenv_s(name, value) == 0);
+#else
+    REQUIRE(setenv(name, value, 1) == 0);
+#endif
+}
+
+bool swapchain_is_windows_size() {
+    return fbe_gpu_swapchain_width() == fbe_window_pixel_width() &&
+           fbe_gpu_swapchain_height() == fbe_window_pixel_height();
+}
+
+} // namespace
+
+TEST_CASE("the GPU starts on a device with what fbengine needs, with no window", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    REQUIRE(!fbe_gpu_started());
+    REQUIRE(fbe_gpu_device_count() >= 1);
+    REQUIRE(fbe_gpu_device() == -1);
+    require(fbe_gpu_start());
+    REQUIRE(fbe_gpu_started());
+    const std::int32_t device = fbe_gpu_device();
+    REQUIRE(device >= 0);
+    CHECK(std::string_view(fbe_gpu_device_lacks(device)).empty());
+    WARN("GPU: " << fbe_gpu_device_name(device)
+                 << (fbe_gpu_validating() ? ", validated" : ", not validated"));
+    // Its device is set before it starts.
+    CHECK(!fbe_gpu_set_device(-1));
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// The loader's filter, which it takes even from an administrator, as its driver lists it doesn't.
+TEST_CASE("with no driver, the GPU doesn't start, and says why each time", "[gpu]") {
+    set_variable("VK_LOADER_DRIVERS_DISABLE", "*");
+    REQUIRE(fbe_window_set_headless(true));
+    CHECK(!fbe_gpu_start());
+    const std::string why = fbe_error();
+    CHECK(!why.empty());
+    CHECK(fbe_gpu_device_count() <= 0);
+    CHECK(!fbe_gpu_start());
+    CHECK(fbe_error() == why);
+    CHECK(!fbe_gpu_started());
+    CHECK(fbe_gpu_presented() == 0);
+    // A headless window opens without it, and Flip has nothing to present.
+    require(fbe_window_open(320, 200, FBE_WINDOW_WINDOWED));
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == 0);
+    fbe_window_close();
+}
+
+TEST_CASE("a device that isn't there can't be picked", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    const std::int32_t count = fbe_gpu_device_count();
+    CHECK(!fbe_gpu_set_device(count));
+    CHECK(!fbe_gpu_set_device(-2));
+    CHECK(std::string_view(fbe_gpu_device_name(count)).empty());
+    CHECK(fbe_gpu_set_device(0));
+    CHECK(fbe_gpu_device() == 0);
+}
+
+TEST_CASE("a headless window opened before the GPU starts gets its image as it starts", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_window_open(320, 200, FBE_WINDOW_WINDOWED));
+    // A headless window doesn't start the GPU.
+    CHECK(!fbe_gpu_started());
+    CHECK(fbe_gpu_swapchain_width() == 0);
+    require(fbe_gpu_start());
+    CHECK(fbe_gpu_swapchain_headless());
+    CHECK(swapchain_is_windows_size());
+    fbe_window_close();
+    CHECK(fbe_gpu_swapchain_width() == 0);
+}
+
+TEST_CASE("Flip presents with vsync and without", "[gpu]") {
+    const window_t window(320, 200);
+    const std::int64_t before = fbe_gpu_presented();
+    fbe_frame_flip(true);
+    CHECK(fbe_gpu_presented() == before + 1);
+    CHECK(fbe_gpu_swapchain_vsync());
+    fbe_frame_flip(false);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before + 3);
+    CHECK(!fbe_gpu_swapchain_vsync());
+    fbe_frame_flip(true);
+    CHECK(fbe_gpu_swapchain_vsync());
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("the window's images follow its size and mode", "[gpu]") {
+    const window_t window(320, 200);
+    fbe_frame_flip(false);
+    CHECK(swapchain_is_windows_size());
+    REQUIRE(fbe_window_open(640, 480, FBE_WINDOW_WINDOWED));
+    const std::int64_t before = fbe_gpu_presented();
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before + 1);
+    CHECK(swapchain_is_windows_size());
+    REQUIRE(fbe_window_set_mode(FBE_WINDOW_BORDERLESS));
+    fbe_frame_flip(false);
+    CHECK(swapchain_is_windows_size());
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// Flip presents before it reads the OS's events, so the frame after the one that read them is the
+// first they change.
+TEST_CASE("a minimized window isn't presented", "[gpu]") {
+    const window_t window(320, 200);
+    REQUIRE(fbe_window_simulate(FBE_WINDOW_SIMULATE_MINIMIZE));
+    fbe_frame_flip(false);
+    const std::int64_t before = fbe_gpu_presented();
+    fbe_frame_flip(false);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before);
+    REQUIRE(fbe_window_simulate(FBE_WINDOW_SIMULATE_RESTORE));
+    fbe_frame_flip(false);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before + 1);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("a window opened again is presented again", "[gpu]") {
+    {
+        const window_t window(320, 200);
+        fbe_frame_flip(false);
+    }
+    const std::int64_t before = fbe_gpu_presented();
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before);
+    const window_t again(200, 100);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before + 1);
+    CHECK(swapchain_is_windows_size());
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// Not a check, a measure: what Flip costs the CPU for an empty frame, which the budget's 2 ms
+// covers, shown on every run.
+TEST_CASE("an empty frame's Flip, timed", "[gpu]") {
+    const window_t window(1280, 720);
+    constexpr int frames = 200;
+    for (int i = 0; i < 10; ++i) {
+        fbe_frame_flip(false);
+    }
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < frames; ++i) {
+        fbe_frame_flip(false);
+    }
+    const std::chrono::duration<double, std::milli> spent =
+        std::chrono::steady_clock::now() - start;
+    WARN("an empty 1280x720 frame: " << spent.count() / frames << " ms a Flip on "
+                                     << fbe_gpu_device_name(fbe_gpu_device()));
+    CHECK(fbe_gpu_validation_errors() == 0);
+}

@@ -1,0 +1,103 @@
+// The GPU fbengine draws with: which devices there are, which one it starts on, and starting it.
+
+Import std.core
+Import std.ffi
+Import "./c/fbe_gpu"
+Import "./window"
+
+/// What kind of GPU a device is, as its driver says.
+Public Enum GpuKind
+    /// One its driver doesn't say.
+    OTHER = 0
+    /// Part of the CPU's chip, sharing its memory.
+    INTEGRATED = 1
+    /// A card of its own, with its own memory.
+    DISCRETE = 2
+    /// A virtual machine's.
+    VIRTUAL = 3
+    /// Software on the CPU, as lavapipe is.
+    CPU = 4
+End Enum
+
+/// A device Vulkan has, as Gpu.Devices() found it.
+Public Struct GpuDevice Implements Printable
+    /// Its name, like "NVIDIA GeForce RTX 4080".
+    Public Field Name: String
+    /// What kind of GPU it is.
+    Public Field Kind: GpuKind
+    /// What it lacks of what fbengine needs, like "dynamic rendering", "" when it has it all.
+    Public Field Lacks: String
+
+    /// Whether the GPU can start on it.
+    Public Method Usable(): Bool => Lacks == ""
+
+    Public Method ToString(): String => "{Name} ({Kind})"
+End Struct
+
+/// The GPU fbengine draws with, Vulkan 1.2 on a device that has dynamic rendering,
+/// synchronization2, and descriptor indexing. It starts the first time something needs it:
+/// Graphics, for a window that's shown; for a headless one, the first thing that draws, or Start.
+Public Class Gpu
+    Private New()
+    End New
+
+    /// The devices Vulkan has, in its order, which SetDevice takes the index of.
+    @MainThread Public Static Method Devices(): GpuDevice[] Throws GraphicsError
+        Local count = fbe_gpu_device_count()
+        If count < 0 Then Throw GraphicsError(LastError())
+        Local devices: GpuDevice[] = []
+        For index = 0 To count - 1
+            Unsafe
+                devices.Add(GpuDevice(fbe_gpu_device_name(index).ToString(),
+                                      fbe_gpu_device_kind(index) As GpuKind,
+                                      fbe_gpu_device_lacks(index).ToString()))
+            End Unsafe
+        End For
+        Return devices
+    End Method
+
+    /// Makes the GPU start on the device at `index` in Devices(), or with -1 on the best usable
+    /// one, a discrete GPU first, which is what it does unless told; it panics once the GPU has
+    /// started, and for an index Devices() doesn't have.
+    @MainThread Public Static Method SetDevice(index: Int32)
+        If !fbe_gpu_set_device(index) Then Panic(LastError())
+    End Method
+
+    /// The index in Devices() of the device the GPU started on, or of the one it will start on,
+    /// -1 for the best.
+    @MainThread Public Static Method Device(): Int32 => fbe_gpu_device()
+
+    /// Starts the GPU now, if it hasn't started, with a swapchain for the window if it's open.
+    @MainThread Public Static Method Start() Throws GraphicsError
+        If !fbe_gpu_start() Then Throw GraphicsError(LastError())
+    End Method
+
+    /// Whether the GPU has started.
+    @MainThread Public Static Method Started(): Bool => fbe_gpu_started()
+
+    /// The name of the device the GPU started on, "" before it starts.
+    @MainThread Public Static Method Name(): String
+        If !fbe_gpu_started() Then Return ""
+        Unsafe
+            Return fbe_gpu_device_name(fbe_gpu_device()).ToString()
+        End Unsafe
+    End Method
+
+    /// The kind of device the GPU started on, OTHER before it starts.
+    @MainThread Public Static Method Kind(): GpuKind
+        If !fbe_gpu_started() Then Return GpuKind.OTHER
+        Return fbe_gpu_device_kind(fbe_gpu_device()) As GpuKind
+    End Method
+
+    /// How many frames Flip has presented in the window, which it doesn't while the window's
+    /// minimized.
+    @MainThread Public Static Method Presented(): Int64 => fbe_gpu_presented()
+
+    /// Whether Vulkan's validation layers check what the GPU's asked to do: in a debug build of
+    /// fbengine's DLL when they're installed, or when the FBE_GPU_VALIDATION variable is 1, and
+    /// never when it's 0.
+    @MainThread Public Static Method Validating(): Bool => fbe_gpu_validating()
+
+    /// How many errors the validation layers have found, each printed as it's found.
+    @MainThread Public Static Method ValidationErrors(): Int32 => fbe_gpu_validation_errors()
+End Class

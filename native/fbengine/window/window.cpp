@@ -2,6 +2,7 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "gpu/gpu.hpp"
 
 #include <cstdint>
 #include <format>
@@ -151,6 +152,13 @@ FBE_API bool fbe_window_open(int32_t width, int32_t height, int32_t wanted) {
         if (window == nullptr) {
             return fbe::fail_sdl("couldn't open the window");
         }
+        // A shown window needs the GPU to be seen, and a started GPU makes it a swapchain.
+        if (!fbe::gpu_window_opened(window, !fbe_window_headless())) {
+            fbe::gpu_window_closing();
+            SDL_DestroyWindow(window);
+            window = nullptr;
+            return false;
+        }
         const SDL_WindowFlags now = SDL_GetWindowFlags(window);
         closed = false;
         focused = (now & SDL_WINDOW_INPUT_FOCUS) != 0;
@@ -174,6 +182,7 @@ FBE_API bool fbe_window_open(int32_t width, int32_t height, int32_t wanted) {
 
 FBE_API void fbe_window_close(void) {
     if (window != nullptr) {
+        fbe::gpu_window_closing();
         SDL_DestroyWindow(window);
         window = nullptr;
     }

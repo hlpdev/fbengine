@@ -21,7 +21,9 @@ Public Class GraphicsError Extends Error
 End Class
 
 /// Opens the window, `width` by `height` in the desktop's units, or makes the open one that size
-/// and `mode`.
+/// and `mode`. A window that's shown starts the GPU, which it needs to be seen, and throws when
+/// there's no GPU fbengine can draw with (see Gpu); a headless one leaves it to start when
+/// something needs it.
 @MainThread Public Function Graphics(width: Int32, height: Int32,
                                      mode: WindowMode = WindowMode.WINDOWED) Throws GraphicsError
     If !fbe_window_open(width, height, mode As Int32) Then Throw GraphicsError(LastError())

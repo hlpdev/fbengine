@@ -1,0 +1,136 @@
+// The GPU and Flip's present in a headless window, which draws into an image of its own as a shown
+// one's swapchain's. ctest runs them on lavapipe; a machine with no Vulkan sets FBENGINE_NO_GPU to
+// 1 and skips them.
+
+Import std.core
+Import std.os
+Import std.test
+Import fbengine
+Import fbengine.c.fbe_gpu
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+@Test
+Function TheDevicesSayWhatTheyLack() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local devices = Try Gpu.Devices()
+    Expect(devices.Count >= 1)
+    Local usable = 0
+    For device In devices
+        Expect(device.Name != "")
+        If device.Usable() Then usable += 1
+    End For
+    Expect(usable >= 1)
+End Function
+
+@Test
+Function StartingTheGpuPicksAUsableDevice() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Gpu.Start()
+    Expect(Gpu.Started())
+    Expect(Gpu.Name() != "")
+    Local device = Gpu.Device()
+    Expect(device >= 0)
+    Expect((Try Gpu.Devices())[device].Usable())
+    // Starting it again is nothing.
+    Try Gpu.Start()
+    Expect(Gpu.Device() == device)
+    Expect(Gpu.ValidationErrors() == 0)
+End Function
+
+@Test
+Function FlipPresentsAHeadlessWindowWithVsyncOrWithout() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Gpu.Start()
+    Expect(fbe_gpu_swapchain_headless())
+    Expect(fbe_gpu_swapchain_width() == Window.PixelWidth())
+    Expect(fbe_gpu_swapchain_height() == Window.PixelHeight())
+    Local before = Gpu.Presented()
+    Flip()
+    Expect(Gpu.Presented() == before + 1)
+    Expect(fbe_gpu_swapchain_vsync())
+    Flip(False)
+    Flip(False)
+    Expect(Gpu.Presented() == before + 3)
+    Expect(!fbe_gpu_swapchain_vsync())
+    Flip()
+    Expect(fbe_gpu_swapchain_vsync())
+    Expect(Gpu.ValidationErrors() == 0)
+End Function
+
+@Test
+Function TheWindowsImagesFollowItsSize() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Gpu.Start()
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Flip()
+    Expect(fbe_gpu_swapchain_width() == Window.PixelWidth())
+    Try Graphics(640, 480)
+    Local before = Gpu.Presented()
+    Flip()
+    Expect(Gpu.Presented() == before + 1)
+    Expect(fbe_gpu_swapchain_width() == Window.PixelWidth())
+    Expect(fbe_gpu_swapchain_height() == Window.PixelHeight())
+    Try Window.SetMode(WindowMode.BORDERLESS)
+    Flip()
+    Expect(fbe_gpu_swapchain_width() == Window.PixelWidth())
+    Expect(Gpu.ValidationErrors() == 0)
+End Function
+
+// Flip presents before it reads the OS's events, so the frame after the one that read them is the
+// first one they change.
+@Test
+Function AMinimizedWindowIsntPresented() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Gpu.Start()
+    Try Simulate.MinimizeWindow()
+    Flip()
+    Local before = Gpu.Presented()
+    Flip()
+    Flip()
+    Expect(Gpu.Presented() == before)
+    Try Simulate.RestoreWindow()
+    Flip()
+    Flip()
+    Expect(Gpu.Presented() == before + 1)
+End Function
+
+@Test
+Function AWindowOpenedAgainIsPresentedAgain() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Gpu.Start()
+    Try Graphics(320, 200)
+    Flip()
+    EndGraphics()
+    Expect(fbe_gpu_swapchain_width() == 0)
+    Local before = Gpu.Presented()
+    // Without a window, there's nothing to present.
+    Flip()
+    Expect(Gpu.Presented() == before)
+    Try Graphics(200, 100)
+    Defer EndGraphics()
+    Flip()
+    Expect(Gpu.Presented() == before + 1)
+    Expect(fbe_gpu_swapchain_width() == Window.PixelWidth())
+    Expect(Gpu.ValidationErrors() == 0)
+End Function
+
+@Test
+Function TheDeviceCantBeSetToOneThatIsntThere() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local count = (Try Gpu.Devices()).Count
+    Expect(!fbe_gpu_set_device(count))
+    Expect(!fbe_gpu_set_device(-2))
+End Function
