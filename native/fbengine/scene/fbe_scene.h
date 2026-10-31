@@ -14,7 +14,8 @@ extern "C" {
 #endif
 
 // What an entity is.
-#define FBE_ENTITY_PIVOT 0
+#define FBE_ENTITY_PIVOT  0
+#define FBE_ENTITY_CAMERA 1
 
 // The space a transform is in: the entity's parent's, or the world's.
 #define FBE_SPACE_LOCAL 0
@@ -30,6 +31,10 @@ extern "C" {
 #define FBE_TRANSFORM_POINT  0
 #define FBE_TRANSFORM_VECTOR 1
 #define FBE_TRANSFORM_NORMAL 2
+
+// How a camera projects: with perspective, or orthographically, without.
+#define FBE_PROJECTION_PERSPECTIVE  0
+#define FBE_PROJECTION_ORTHOGRAPHIC 1
 
 // std.math's Vec3, Quat, and Mat4 as C has them; the matrix is column-major, its columns the
 // axes, then the origin. C has no `using`, so they're typedefs.
@@ -50,6 +55,23 @@ typedef struct fbe_quat_t {
 typedef struct fbe_mat4_t {
     float m[16];
 } fbe_mat4_t;
+
+// The part of a target, the window or a texture, a camera draws to, in its units from its top
+// left.
+typedef struct fbe_viewport_t {
+    float x;
+    float y;
+    float width;
+    float height;
+} fbe_viewport_t;
+
+// std.math's Color: linear red, green, and blue, and alpha.
+typedef struct fbe_color_t {
+    float r;
+    float g;
+    float b;
+    float a;
+} fbe_color_t;
 
 // Where an entity is and how it's turned, as the batches give and take them.
 typedef struct fbe_pose_t {
@@ -160,6 +182,67 @@ FBE_API bool fbe_entity_set_poses(const uint64_t* entities, const fbe_pose_t* po
 // Gives the poses of `count` entities in a space; false if one was freed, whose pose is zeros.
 FBE_API bool fbe_entity_poses(const uint64_t* entities, fbe_pose_t* poses, int32_t count,
                               int32_t space);
+
+// A camera looks along its forward axis, -Z, from where it is in the world, turned as it is, its
+// scale left out. It projects with perspective, its field of view the angle from the bottom of its
+// view to the top, and the horizontal one following its viewport's width over its height, or
+// orthographically, its view `height` world units high; it sees from `nearest` to `farthest` in
+// front of it. New, it's perspective, at a field of view of Pi / 3, 10 units high
+// orthographically, sees from 0.1 to 1000, draws to the whole of its target, clears color, to
+// black, and depth, and is in order 0.
+FBE_API bool fbe_camera_set_projection(uint64_t camera, int32_t projection);
+FBE_API int32_t fbe_camera_projection(uint64_t camera);
+// False outside 0 to Pi.
+FBE_API bool fbe_camera_set_field_of_view(uint64_t camera, float angle);
+FBE_API float fbe_camera_field_of_view(uint64_t camera);
+// False unless above 0.
+FBE_API bool fbe_camera_set_orthographic_height(uint64_t camera, float height);
+FBE_API float fbe_camera_orthographic_height(uint64_t camera);
+// False unless 0 < nearest < farthest, finite.
+FBE_API bool fbe_camera_set_range(uint64_t camera, float nearest, float farthest);
+FBE_API float fbe_camera_nearest(uint64_t camera);
+FBE_API float fbe_camera_farthest(uint64_t camera);
+
+// Gives a camera a viewport of its own, in its target's units from the top left, or the whole of
+// its target again, whatever size the target is.
+FBE_API bool fbe_camera_set_viewport(uint64_t camera, float x, float y, float width, float height);
+FBE_API bool fbe_camera_reset_viewport(uint64_t camera);
+// The camera's viewport in a target of this size.
+FBE_API bool fbe_camera_viewport(uint64_t camera, float target_width, float target_height,
+                                 fbe_viewport_t* viewport);
+// Whether the camera draws to the whole of its target.
+FBE_API bool fbe_camera_whole_target(uint64_t camera);
+
+// What a camera clears of its viewport before it draws: its color, to the clear color, and its
+// depth. A camera that clears neither draws over the ones before it.
+FBE_API bool fbe_camera_set_clear(uint64_t camera, bool color, bool depth);
+FBE_API bool fbe_camera_clears_color(uint64_t camera);
+FBE_API bool fbe_camera_clears_depth(uint64_t camera);
+FBE_API bool fbe_camera_set_clear_color(uint64_t camera, float r, float g, float b, float a);
+FBE_API bool fbe_camera_clear_color(uint64_t camera, fbe_color_t* color);
+// When a camera draws among its World's: lower orders first, and those of one order in the order
+// they were made.
+FBE_API bool fbe_camera_set_order(uint64_t camera, int32_t order);
+FBE_API int32_t fbe_camera_order(uint64_t camera);
+// A World's cameras, in the order they draw: writes up to `capacity` and gives how many there
+// are, -1 for a freed World.
+FBE_API int32_t fbe_world_cameras(uint64_t world, uint64_t* cameras, int32_t capacity);
+
+// The matrix from the world to a camera's view, where it's at the origin looking down -Z.
+FBE_API bool fbe_camera_view_matrix(uint64_t camera, fbe_mat4_t* matrix);
+// A camera's projection in a target of this size, as std.math's Mat4.Perspective and
+// Orthographic make it, with depth from 0 at nearest to 1 at farthest; false for a viewport with
+// no size.
+FBE_API bool fbe_camera_projection_matrix(uint64_t camera, float target_width, float target_height,
+                                          fbe_mat4_t* matrix);
+// Where a point in the world is in a camera's view, in a target of this size: x and y in its
+// units from the target's top left, and z how far in front of the camera it is. 1 if it projected,
+// 0 if it's nearer than the camera's nearest, so behind it, and -1 for a viewport with no size.
+FBE_API int32_t fbe_camera_project(uint64_t camera, float target_width, float target_height,
+                                   float x, float y, float z, fbe_vec3_t* projected);
+// The point in the world at x and y in a camera's view, `depth` in front of it.
+FBE_API bool fbe_camera_unproject(uint64_t camera, float target_width, float target_height, float x,
+                                  float y, float depth, fbe_vec3_t* point);
 
 // Copies an entity and everything under it, as the last child of `parent`, or at the top of
 // `world` when `parent` is 0; each copy has its original's name, transform, and settings, and

@@ -140,9 +140,7 @@ Extend Entity
             done = fbe_entity_matrix(entity, space As Int32, AddressOf(found))
         End Unsafe
         If !done Then Panic(LastError())
-        Local m = found.m
-        Return Mat4(Vec4(m[0], m[1], m[2], m[3]), Vec4(m[4], m[5], m[6], m[7]),
-                    Vec4(m[8], m[9], m[10], m[11]), Vec4(m[12], m[13], m[14], m[15]))
+        Return MatOf(found)
     End Method
 
     /// Where the entity's forward axis, -Z, points in the world, at length 1.
@@ -340,7 +338,13 @@ Function Transformed(kind: Int32, v: Vec3, from: Entity?, to: Entity?, call: Str
     Return VecOf(found)
 End Function
 
-Function VecOf(v: fbe_vec3_t): Vec3 => Vec3(v.x, v.y, v.z)
+Package Function VecOf(v: fbe_vec3_t): Vec3 => Vec3(v.x, v.y, v.z)
+
+Package Function MatOf(found: fbe_mat4_t): Mat4
+    Local m = found.m
+    Return Mat4(Vec4(m[0], m[1], m[2], m[3]), Vec4(m[4], m[5], m[6], m[7]),
+                Vec4(m[8], m[9], m[10], m[11]), Vec4(m[12], m[13], m[14], m[15]))
+End Function
 
 // The entities' handles, for a batch, each checked live.
 @PanicsAtCaller

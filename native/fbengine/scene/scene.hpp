@@ -5,6 +5,7 @@
 
 #include "scene/math.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -61,6 +62,32 @@ struct entities_t {
     std::vector<quat_t> world_rotation;
     std::vector<vec3_t> world_scale;
     std::vector<bool> moved;
+
+    /// Where the entity's kind keeps the rest of it, as its camera in scene_t's cameras.
+    std::vector<std::uint32_t> component;
+};
+
+/// A camera: how it projects, the part of its target it draws to, what it clears, and when it
+/// draws among the others.
+struct camera_t {
+    std::uint32_t entity = none;
+    std::int32_t projection = 0;
+    float field_of_view = 1.0471976F;
+    float orthographic_height = 10.0F;
+    float nearest = 0.1F;
+    float farthest = 1000.0F;
+    /// Without a viewport of its own, it draws to the whole of its target, whatever its size.
+    bool whole_target = true;
+    float viewport_x = 0.0F;
+    float viewport_y = 0.0F;
+    float viewport_width = 0.0F;
+    float viewport_height = 0.0F;
+    bool clears_color = true;
+    bool clears_depth = true;
+    std::array<float, 4> clear_color{ 0.0F, 0.0F, 0.0F, 1.0F };
+    std::int32_t order = 0;
+    /// When it was made, which orders cameras of one order.
+    std::uint64_t made = 0;
 };
 
 struct scene_t {
@@ -68,6 +95,9 @@ struct scene_t {
     std::vector<world_t> worlds;
     std::uint32_t main_world = none;
     entities_t entities;
+    /// Every camera, in no order, each knowing its entity.
+    std::vector<camera_t> cameras;
+    std::uint64_t cameras_made = 0;
     /// The handles freed since fbe_entity_freed last took them.
     std::vector<std::uint64_t> freed;
 };
@@ -79,6 +109,17 @@ scene_t& scene();
 std::uint32_t entity_slot(std::uint64_t handle);
 /// The live world a handle is for, or none, with fbe_error saying so.
 std::uint32_t world_slot(std::uint64_t handle);
+
+/// Gives a new entity what its kind keeps, as a camera's settings.
+void add_component(std::uint32_t entity);
+/// Lets go of what an entity's kind kept, as it's freed.
+void remove_component(std::uint32_t entity);
+/// Gives a copy what its original's kind keeps.
+void copy_component(std::uint32_t from, std::uint32_t to);
+/// The live camera a handle is for, or null, with fbe_error saying so.
+camera_t* camera_of(std::uint64_t handle);
+void add_camera(std::uint32_t entity);
+void remove_camera(std::uint32_t entity);
 
 /// Gives an entity a transform of nothing: at its parent's origin, unturned, at scale 1.
 void reset_transform(std::uint32_t entity);

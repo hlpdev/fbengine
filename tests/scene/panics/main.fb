@@ -63,6 +63,18 @@ Select arguments[0]
         Local pivot = Pivot()
         pivot.Free()
         pivot.Turn(0, 1, 0)
+    Case "field-of-view"
+        Camera().SetFieldOfView(0)
+    Case "range"
+        Camera().SetRange(5, 1)
+    Case "viewport"
+        Camera().SetViewport(Rect(0, 0, 0, 10))
+    Case "no-window"
+        Camera().Project(Vec3(0, 0, -1))
+    Case "camera-freed"
+        Local camera = Camera()
+        camera.Free()
+        camera.SetOrder(1)
     Default
         Panic("no case {arguments[0]}")
 End Select

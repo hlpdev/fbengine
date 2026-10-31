@@ -225,7 +225,8 @@ fbengine_set_warnings(fbengine_core_tests)
 catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_native>")
 # The scene, through fbengine's C API, with no window or GPU.
-add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.cpp)
+add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.cpp
+               scene/camera_tests.cpp)
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
 catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
@@ -248,7 +249,12 @@ if(FBENGINE_FB_TESTS)
       "poses-count=SetPoses takes a pose for each entity, not 0 for 1"
       "poses-freed=Poses on a Pivot that was freed"
       "into-nothing=the entity to transform into is scaled to nothing on an axis"
-      "turn-freed=Turn on a Pivot that was freed")
+      "turn-freed=Turn on a Pivot that was freed"
+      "field-of-view=a field of view is between 0 and Pi, not 0"
+      "range=a camera's range is 0 < near < far, finite, not 5 to 1"
+      "viewport=a viewport has a finite place and a size above 0"
+      "no-window=the camera's viewport has no size: open the window, or give it a viewport"
+      "camera-freed=SetOrder on a Camera that was freed")
   foreach(case IN LISTS fbengine_scene_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)

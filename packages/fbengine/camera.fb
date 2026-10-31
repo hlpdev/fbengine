@@ -1,0 +1,266 @@
+// Cameras: what each sees of its World, and where on its target it draws it. The target is the
+// window; E5 lets a camera draw into a texture.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./transform"
+Import "./window"
+
+/// How a camera projects what it sees.
+Public Enum Projection
+    /// With perspective: what's further looks smaller.
+    PERSPECTIVE = 0
+    /// Without: a box of the world, as plans and overlays want.
+    ORTHOGRAPHIC = 1
+End Enum
+
+/// A camera: it looks along its forward axis, -Z, from where it is, turned as it is, its scale
+/// left out. New, it's perspective, at a field of view of 60 degrees from the bottom of its view
+/// to the top, sees from 0.1 to 1000 units in front of it, draws to the whole window, and clears
+/// it to black first. A hidden camera draws nothing, and a World draws its cameras in their order.
+Public Final Class Camera Extends Entity
+    /// A new Camera, the last child of `parent`, or at the top of the current World when `parent`
+    /// is Null.
+    @MainThread @PanicsAtCaller
+    Public New(parent: Entity? = Null)
+        Super.New(Create(parent, FBE_ENTITY_CAMERA))
+    End New
+
+    Package New(handle: UInt64)
+        Super.New(handle)
+    End New
+
+    Override Package Method KindName(): String => "Camera"
+
+    /// Makes the camera project with perspective, or orthographically.
+    @MainThread @PanicsAtCaller
+    Public Method SetProjection(projection: Projection)
+        If !fbe_camera_set_projection(Live("SetProjection"), projection As Int32)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// How the camera projects.
+    @MainThread @PanicsAtCaller
+    Public Method Projection(): Projection
+        Return fbe_camera_projection(Live("Projection")) As Projection
+    End Method
+
+    /// Sets the camera's field of view: the angle from the bottom of its view to the top, in
+    /// radians, from 0 to Pi, with the angle across following its viewport's shape, so a wider
+    /// window sees more at the sides. Outside 0 to Pi panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetFieldOfView(angle: Float)
+        If !fbe_camera_set_field_of_view(Live("SetFieldOfView"), angle) Then Panic(LastError())
+    End Method
+
+    /// The angle from the bottom of the camera's view to its top, in radians.
+    @MainThread @PanicsAtCaller
+    Public Method FieldOfView(): Float => fbe_camera_field_of_view(Live("FieldOfView"))
+
+    /// The angle from the left of the camera's view to its right, in radians, which its field of
+    /// view and its viewport's width over its height make.
+    @MainThread @PanicsAtCaller
+    Public Method HorizontalFieldOfView(): Float
+        Local view = Viewport()
+        Return 2 * Atan(Tan(FieldOfView() / 2) * view.Width / view.Height)
+    End Method
+
+    /// Sets how many world units high the camera's view is when it's orthographic, its width
+    /// following its viewport's shape. One not above 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetOrthographicHeight(height: Float)
+        If !fbe_camera_set_orthographic_height(Live("SetOrthographicHeight"), height)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// How many world units high the camera's view is when it's orthographic.
+    @MainThread @PanicsAtCaller
+    Public Method OrthographicHeight(): Float
+        Return fbe_camera_orthographic_height(Live("OrthographicHeight"))
+    End Method
+
+    /// Sets how far in front of the camera it sees, from `near` to `far`: a near as close as 0.01
+    /// works, since depth is a reversed 32-bit float. Anything but 0 < near < far, finite, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetRange(near: Float, far: Float)
+        If !fbe_camera_set_range(Live("SetRange"), near, far) Then Panic(LastError())
+    End Method
+
+    /// The nearest the camera sees.
+    @MainThread @PanicsAtCaller
+    Public Method Near(): Float => fbe_camera_nearest(Live("Near"))
+
+    /// The furthest the camera sees.
+    @MainThread @PanicsAtCaller
+    Public Method Far(): Float => fbe_camera_farthest(Live("Far"))
+
+    /// Makes the camera draw to part of the window, in the window's units from its top left, as a
+    /// split screen or a picture in a picture does. One with no size panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetViewport(viewport: Rect)
+        Local camera = Live("SetViewport")
+        If !fbe_camera_set_viewport(camera, viewport.X, viewport.Y, viewport.Width,
+                                    viewport.Height)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// Makes the camera draw to the whole window again, whatever size it is.
+    @MainThread @PanicsAtCaller
+    Public Method ResetViewport()
+        If !fbe_camera_reset_viewport(Live("ResetViewport")) Then Panic(LastError())
+    End Method
+
+    /// The part of the window the camera draws to, in the window's units from its top left: the
+    /// whole of it unless SetViewport gave it a part.
+    @MainThread @PanicsAtCaller
+    Public Method Viewport(): Rect
+        Local camera = Live("Viewport")
+        Local target = TargetSize()
+        Local found = fbe_viewport_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_camera_viewport(camera, target.x, target.y, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return Rect(found.x, found.y, found.width, found.height)
+    End Method
+
+    /// Whether the camera draws to the whole window, following its size.
+    @MainThread @PanicsAtCaller
+    Public Method FillsTarget(): Bool => fbe_camera_whole_target(Live("FillsTarget"))
+
+    /// Sets what the camera clears of its viewport before it draws: its color, to the clear
+    /// color, and its depth. A camera that clears neither draws over the cameras before it, as an
+    /// overlay does; one that clears only depth draws its things in front of theirs.
+    @MainThread @PanicsAtCaller
+    Public Method SetClear(color: Bool, depth: Bool)
+        If !fbe_camera_set_clear(Live("SetClear"), color, depth) Then Panic(LastError())
+    End Method
+
+    /// Whether the camera clears its viewport's color before it draws.
+    @MainThread @PanicsAtCaller
+    Public Method ClearsColor(): Bool => fbe_camera_clears_color(Live("ClearsColor"))
+
+    /// Whether the camera clears its viewport's depth before it draws.
+    @MainThread @PanicsAtCaller
+    Public Method ClearsDepth(): Bool => fbe_camera_clears_depth(Live("ClearsDepth"))
+
+    /// Sets the color the camera clears its viewport to, black at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetClearColor(color: Color)
+        If !fbe_camera_set_clear_color(Live("SetClearColor"), color.r, color.g, color.b, color.a)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// The color the camera clears its viewport to.
+    @MainThread @PanicsAtCaller
+    Public Method ClearColor(): Color
+        Local camera = Live("ClearColor")
+        Local found = fbe_color_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_camera_clear_color(camera, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return Color(found.r, found.g, found.b, found.a)
+    End Method
+
+    /// Sets when the camera draws among its World's cameras: lower orders first, 0 at first, and
+    /// those of one order in the order they were made.
+    @MainThread @PanicsAtCaller
+    Public Method SetOrder(order: Int)
+        If !fbe_camera_set_order(Live("SetOrder"), order) Then Panic(LastError())
+    End Method
+
+    /// When the camera draws among its World's cameras.
+    @MainThread @PanicsAtCaller
+    Public Method Order(): Int => fbe_camera_order(Live("Order"))
+
+    /// The matrix from the world to the camera's view, where it's at the origin looking down -Z.
+    @MainThread @PanicsAtCaller
+    Public Method ViewMatrix(): Mat4
+        Local camera = Live("ViewMatrix")
+        Local found = fbe_mat4_t()
+        Local done = False
+        Unsafe
+            done = fbe_camera_view_matrix(camera, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return MatOf(found)
+    End Method
+
+    /// The camera's projection, as Mat4.Perspective or Mat4.Orthographic makes it, at its
+    /// viewport's shape, with depth from 0 at its near to 1 at its far.
+    @MainThread @PanicsAtCaller
+    Public Method ProjectionMatrix(): Mat4
+        Local camera = Live("ProjectionMatrix")
+        Local target = TargetSize()
+        Local found = fbe_mat4_t()
+        Local done = False
+        Unsafe
+            done = fbe_camera_projection_matrix(camera, target.x, target.y, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return MatOf(found)
+    End Method
+
+    /// What the camera sees, as six planes in the world: what's in view is in it.
+    @MainThread @PanicsAtCaller
+    Public Method ViewFrustum(): Frustum => FrustumOf(ProjectionMatrix() * ViewMatrix())
+
+    /// Where a point in the world is in the camera's view: x and y in the window's units from its
+    /// top left, and z how far in front of the camera it is; or Null when it's nearer than the
+    /// camera's near, so behind it. A point off the sides projects outside the viewport.
+    @MainThread @PanicsAtCaller
+    Public Method Project(point: Vec3): Vec3?
+        Local camera = Live("Project")
+        Local target = TargetSize()
+        Local found = fbe_vec3_t(0, 0, 0)
+        Local done = 0
+        Unsafe
+            done = fbe_camera_project(camera, target.x, target.y, point.x, point.y, point.z,
+                                      AddressOf(found))
+        End Unsafe
+        If done < 0 Then Panic(LastError())
+        If done == 0 Then Return Null
+        Return VecOf(found)
+    End Method
+
+    /// The point in the world at x and y in the camera's view, in the window's units from its top
+    /// left, z in front of the camera: what Project took there.
+    @MainThread @PanicsAtCaller
+    Public Method Unproject(point: Vec3): Vec3
+        Local camera = Live("Unproject")
+        Local target = TargetSize()
+        Local found = fbe_vec3_t(0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_camera_unproject(camera, target.x, target.y, point.x, point.y, point.z,
+                                        AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return VecOf(found)
+    End Method
+
+    /// The line through a point of the camera's view, in the window's units from its top left:
+    /// from the camera's near, with a Direction of length 1 into what it sees, which is far
+    /// away at the camera's far, as the mouse's place picks what's under it.
+    @MainThread @PanicsAtCaller
+    Public Method ScreenRay(point: Vec2): Ray
+        Local start = Unproject(Vec3(point.x, point.y, Near()))
+        Local finish = Unproject(Vec3(point.x, point.y, Far()))
+        Return Ray(start, Normalize(finish - start))
+    End Method
+End Class
+
+/// The size of what cameras draw to: the window, in its units.
+Function TargetSize(): Vec2 => Vec2(Window.Width() As Float, Window.Height() As Float)
+
+Function FrustumOf(m: Mat4): Frustum => Frustum.FromMatrix(m)
