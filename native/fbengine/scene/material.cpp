@@ -49,8 +49,16 @@ fbe_color_t color_of(const std::array<float, 4>& rgba) {
     return { .r = rgba[0], .g = rgba[1], .b = rgba[2], .a = rgba[3] };
 }
 
-bool finite(float r, float g, float b, float a) {
-    return std::isfinite(r) && std::isfinite(g) && std::isfinite(b) && std::isfinite(a);
+/// Whether a color's channels are finite, which can be any, and its alpha 0 to 1; false with
+/// fbe_error saying why, naming `what` it's a color of.
+bool valid_color(float r, float g, float b, float a, const char* what) {
+    if (!(std::isfinite(r) && std::isfinite(g) && std::isfinite(b))) {
+        return fail(std::format("{} color is finite", what));
+    }
+    if (std::isnan(a) || a < 0.0F || a > 1.0F) {
+        return fail(std::format("{} alpha is 0 to 1, not {}", what, a));
+    }
+    return true;
 }
 
 } // namespace
@@ -68,12 +76,7 @@ std::uint32_t make_material() {
 }
 
 std::uint32_t material_slot(std::uint64_t handle) {
-    const std::optional<std::uint32_t> slot = scene().material_slots.find(handle);
-    if (!slot) {
-        fail(handle == 0 ? "no material was given" : "the material was freed");
-        return none;
-    }
-    return *slot;
+    return live_slot(scene().material_slots, handle, "material");
 }
 
 void retain_material(std::uint32_t material) {
@@ -153,8 +156,8 @@ FBE_API bool fbe_material_set_color(uint64_t material, float r, float g, float b
     if (found == nullptr) {
         return false;
     }
-    if (!fbe::scene::finite(r, g, b, a)) {
-        return fbe::fail("a material's color is finite");
+    if (!fbe::scene::valid_color(r, g, b, a, "a material's")) {
+        return false;
     }
     found->color = { r, g, b, a };
     return true;
@@ -378,8 +381,8 @@ FBE_API bool fbe_mesh_set_tint(uint64_t mesh, float r, float g, float b, float a
     if (found == nullptr) {
         return false;
     }
-    if (!fbe::scene::finite(r, g, b, a)) {
-        return fbe::fail("a mesh's tint is finite");
+    if (!fbe::scene::valid_color(r, g, b, a, "a mesh's")) {
+        return false;
     }
     found->tint = { r, g, b, a };
     return true;
@@ -392,6 +395,39 @@ FBE_API bool fbe_mesh_tint(uint64_t mesh, fbe_color_t* tint) {
     }
     *tint = fbe::scene::color_of(found->tint);
     return true;
+}
+
+FBE_API int32_t fbe_mesh_blend(uint64_t mesh, int32_t surface) {
+    const fbe::scene::mesh_t* found = fbe::scene::mesh_of(mesh);
+    if (found == nullptr) {
+        return -1;
+    }
+    std::uint32_t material = found->material;
+    if (material == none) {
+        if (found->geometry == none) {
+            fbe::fail("the mesh draws no geometry");
+            return -1;
+        }
+        const std::vector<fbe::scene::surface_t>& surfaces =
+            scene().geometries[found->geometry].surfaces;
+        if (surface < 0 || static_cast<std::size_t>(surface) >= surfaces.size()) {
+            fbe::fail(std::format("the geometry's surfaces are 0 to {}, not {}",
+                                  static_cast<std::int64_t>(surfaces.size()) - 1, surface));
+            return -1;
+        }
+        material = surfaces[static_cast<std::size_t>(surface)].material;
+    }
+    const material_t drawn = material != none ? scene().materials[material] : material_t();
+    const float tint = found->tint[3];
+    switch (drawn.blend) {
+    case FBE_BLEND_AUTO:
+        return drawn.color[3] * tint < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
+    case FBE_BLEND_OPAQUE:
+        // An opaque material's own alpha is left out, but its mesh still fades.
+        return tint < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
+    default:
+        return drawn.blend;
+    }
 }
 
 } // extern "C"

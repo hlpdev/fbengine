@@ -11,7 +11,8 @@ Import "./world"
 
 /// A vertex of a surface: where it is, its normal, two sets of UVs, from the top left of a
 /// texture, as the second set a lightmap's are, and its color and alpha, linear, which multiply
-/// what's drawn. A vertex made from fewer has a zero normal and UVs, and is white.
+/// what's drawn when its material's VertexColors is on. A vertex made from fewer has a zero normal
+/// and UVs, and is white.
 Public Struct Vertex Implements Printable
     /// Where it is.
     Public Field Position: Vec3
@@ -90,40 +91,40 @@ Public Final Class Geometry
     End Method
 
     /// A cube from -1 to 1 on each axis, flat-shaded, each face's UVs from 0 to 1.
-    @MainThread Public Static Method Cube(): Geometry => Geometry(fbe_geometry_cube())
+    @MainThread Public Static Method Cube(): Geometry => Made(fbe_geometry_cube(), "Cube")
 
     /// A sphere of radius 1, of `segments` rings from pole to pole and twice as many around, from 3
     /// to 100.
     @MainThread @PanicsAtCaller
     Public Static Method Sphere(segments: Int = 16): Geometry
-        Return Geometry(fbe_geometry_sphere(segments))
+        Return Made(fbe_geometry_sphere(segments), "Sphere")
     End Method
 
     /// A cylinder of radius 1 from y -1 to 1, of `segments` around, from 3 to 100, with its ends
     /// closed when `capped`.
     @MainThread @PanicsAtCaller
     Public Static Method Cylinder(segments: Int = 16, capped: Bool = True): Geometry
-        Return Geometry(fbe_geometry_cylinder(segments, capped))
+        Return Made(fbe_geometry_cylinder(segments, capped), "Cylinder")
     End Method
 
     /// A cone of radius 1 at y -1, to its point at y 1, of `segments` around, from 3 to 100, with
     /// its base closed when `capped`.
     @MainThread @PanicsAtCaller
     Public Static Method Cone(segments: Int = 16, capped: Bool = True): Geometry
-        Return Geometry(fbe_geometry_cone(segments, capped))
+        Return Made(fbe_geometry_cone(segments, capped), "Cone")
     End Method
 
     /// A square from -1 to 1 in X and Z, facing up, of `segments` squares along each side, from 1
     /// to 100.
     @MainThread @PanicsAtCaller
     Public Static Method Plane(segments: Int = 1): Geometry
-        Return Geometry(fbe_geometry_plane(segments))
+        Return Made(fbe_geometry_plane(segments), "Plane")
     End Method
 
     /// Lets go of the geometry now; Meshes drawing it keep it. Using it after panics.
     @MainThread @PanicsAtCaller
     Public Method Free()
-        If !fbe_geometry_release(Live("Free")) Then Panic(LastError())
+        If !fbe_geometry_release(Live("Free")) Then Failed("Free")
         Local gone: Geometry? = Null
         geometries[Slot(handle)] = gone
         handle = 0
@@ -132,9 +133,9 @@ Public Final Class Geometry
     /// Whether Free let go of it.
     @MainThread Public Method Freed(): Bool => handle == 0
 
-    /// A Geometry of its own with copies of these surfaces.
+    /// A Geometry of its own with copies of these surfaces, which draw in the same materials.
     @MainThread @PanicsAtCaller
-    Public Method Clone(): Geometry => Geometry(fbe_geometry_clone(Live("Clone")))
+    Public Method Clone(): Geometry => Made(fbe_geometry_clone(Live("Clone")), "Clone")
 
     /// How many surfaces it has.
     @MainThread @PanicsAtCaller
@@ -145,7 +146,8 @@ Public Final Class Geometry
     Public Method Surface(index: Int): Surface
         Local count = SurfaceCount()
         If index < 0 || index >= count
-            Panic("the geometry's surfaces are 0 to {count - 1}, not {index}")
+            Panic(
+                "Surface({index}) on a Geometry with {count} {count == 1 ? "surface" : "surfaces"}")
         End If
         Return SurfaceOf(Self, index)
     End Method
@@ -164,18 +166,19 @@ Public Final Class Geometry
     @MainThread @PanicsAtCaller
     Public Method AddSurface(): Surface
         Local index = fbe_geometry_add_surface(Live("AddSurface"))
-        If index < 0 Then Panic(LastError())
+        If index < 0 Then Failed("AddSurface")
         Return SurfaceOf(Self, index)
     End Method
 
-    /// Adds copies of another Geometry's surfaces at the end, as they are; it can be this one.
+    /// Adds copies of another Geometry's surfaces at the end, as they are, drawing in the same
+    /// materials; it can be this one.
     @MainThread @PanicsAtCaller
     Public Method Add(other: Geometry)
         Add(other, Mat4.Identity)
     End Method
 
-    /// Adds copies of another Geometry's surfaces at the end, transformed by `transform`, as
-    /// building a room of pieces does; it can be this one.
+    /// Adds copies of another Geometry's surfaces at the end, transformed by `transform`, drawing
+    /// in the same materials, as building a room of pieces does; it can be this one.
     @MainThread @PanicsAtCaller
     Public Method Add(other: Geometry, transform: Mat4)
         Local geometry = Live("Add")
@@ -185,7 +188,7 @@ Public Final Class Geometry
         Unsafe
             done = fbe_geometry_add(geometry, from, AddressOf(m))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Add")
     End Method
 
     /// Transforms every vertex, and its normal with it, staying length 1; a transform that
@@ -198,7 +201,7 @@ Public Final Class Geometry
         Unsafe
             done = fbe_geometry_transform(geometry, AddressOf(m))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Transform")
     End Method
 
     /// Moves every vertex.
@@ -222,15 +225,17 @@ Public Final Class Geometry
     /// Turns it inside out: every normal reversed, and every triangle's winding.
     @MainThread @PanicsAtCaller
     Public Method Flip()
-        If !fbe_geometry_flip(Live("Flip")) Then Panic(LastError())
+        If !fbe_geometry_flip(Live("Flip")) Then Failed("Flip")
     End Method
 
     /// Gives every vertex the normal of the triangles around it, smoothed across a surface's
     /// vertices at one place, each triangle counting by its angle there; vertices of other
-    /// surfaces, as across a hard edge, stay apart.
+    /// surfaces, as across a hard edge, stay apart. Triangles too thin to face anywhere are left
+    /// out; where a place's triangles cancel, as a sheet's two sides do, a vertex takes its own
+    /// triangles' normal, and one in no triangle keeps the normal it had.
     @MainThread @PanicsAtCaller
     Public Method UpdateNormals()
-        If !fbe_geometry_update_normals(Live("UpdateNormals")) Then Panic(LastError())
+        If !fbe_geometry_update_normals(Live("UpdateNormals")) Then Failed("UpdateNormals")
     End Method
 
     /// The box around its vertices, in its own space; nothing at the origin for none.
@@ -242,7 +247,7 @@ Public Final Class Geometry
         Unsafe
             done = fbe_geometry_bounds(geometry, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Bounds")
         Return AABB(VecOf(found.min), VecOf(found.max))
     End Method
 
@@ -257,10 +262,12 @@ Public Final Class Geometry
         Unsafe
             done = fbe_geometry_fit(geometry, AddressOf(within), uniform)
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Fit")
     End Method
 
-    /// Every vertex's position, surface after surface, as physics' mesh shapes take them.
+    /// Every place a vertex is, welded: once each, bit for bit, in the order surfaces first use
+    /// them, as physics' mesh shapes take them, so their triangles meet across UV and normal seams
+    /// and what Add joined.
     @MainThread @PanicsAtCaller
     Public Method Positions(): Vec3[]
         Local geometry = Live("Positions")
@@ -276,7 +283,8 @@ Public Final Class Geometry
         Return positions
     End Method
 
-    /// Every triangle's three indices into what Positions gives, in order.
+    /// Every triangle's three indices into what Positions gives, surface after surface, in their
+    /// order, so a triangle's number is physics' too.
     @MainThread @PanicsAtCaller
     Public Method Indices(): Int[]
         Local geometry = Live("Indices")
@@ -295,6 +303,12 @@ Public Final Class Geometry
     /// How many times it has changed, so what's worked out from it can know it's stale.
     @MainThread @PanicsAtCaller
     Public Method Version(): UInt64 => fbe_geometry_version(Live("Version"))
+
+    // A panic naming the call, with what C said went wrong.
+    @PanicsAtCaller
+    Package Method Failed(call: String)
+        Panic("{call} on a Geometry: {LastError()}")
+    End Method
 
     // The handle, or a panic naming the call for a Geometry that was freed.
     @PanicsAtCaller
@@ -322,25 +336,29 @@ Public Struct Surface
 
     /// Adds a vertex and gives its index.
     @MainThread @PanicsAtCaller
-    Public Method AddVertex(vertex: Vertex): Int => AddVertices([vertex])
+    Public Method AddVertex(vertex: Vertex): Int => Added([vertex], "AddVertex")
 
     /// Adds a white vertex at `position`, with a zero normal and UVs, and gives its index.
     @MainThread @PanicsAtCaller
-    Public Method AddVertex(position: Vec3): Int => AddVertices([PlainVertex(position,
-                                                                             Vec2.Zero())])
+    Public Method AddVertex(position: Vec3): Int
+        Return Added([PlainVertex(position, Vec2.Zero())], "AddVertex")
+    End Method
 
     /// Adds a white vertex at `position` with both sets of UVs `uv`, and a zero normal, and gives
     /// its index.
     @MainThread @PanicsAtCaller
     Public Method AddVertex(position: Vec3, uv: Vec2): Int
-        Return AddVertices([PlainVertex(position, uv)])
+        Return Added([PlainVertex(position, uv)], "AddVertex")
     End Method
 
     /// Adds vertices in one call, as loading or building a big surface does, and gives the first's
     /// index.
     @MainThread @PanicsAtCaller
-    Public Method AddVertices(vertices: Vertex[]): Int
-        Local geometry = Owner.Live("AddVertices")
+    Public Method AddVertices(vertices: Vertex[]): Int => Added(vertices, "AddVertices")
+
+    @PanicsAtCaller
+    Method Added(vertices: Vertex[], call: String): Int
+        Local geometry = Owner.Live(call)
         Local taken = Buffer<fbe_vertex_t>(vertices.Count)
         For i, vertex In vertices
             taken[i] = CVertexOf(vertex)
@@ -350,23 +368,28 @@ Public Struct Surface
             first = fbe_surface_add_vertices(geometry, Index, taken.Pointer(),
                                              vertices.Count As Int32)
         End Unsafe
-        If first < 0 Then Panic(LastError())
+        If first < 0 Then Owner.Failed(call)
         Return first
     End Method
 
     /// Adds a triangle between three of its vertices, counterclockwise seen from the front, and
     /// gives its index. An index of a vertex it doesn't have panics.
     @MainThread @PanicsAtCaller
-    Public Method AddTriangle(a: Int, b: Int, c: Int): Int => AddTriangles([a, b, c])
+    Public Method AddTriangle(a: Int, b: Int, c: Int): Int
+        Return AddedTriangles([a, b, c], "AddTriangle")
+    End Method
 
     /// Adds triangles in one call, three indices each, and gives the first's index. A count that
     /// isn't a multiple of 3, or an index of a vertex it doesn't have, panics.
     @MainThread @PanicsAtCaller
-    Public Method AddTriangles(indices: Int[]): Int
-        Local geometry = Owner.Live("AddTriangles")
+    Public Method AddTriangles(indices: Int[]): Int => AddedTriangles(indices, "AddTriangles")
+
+    @PanicsAtCaller
+    Method AddedTriangles(indices: Int[], call: String): Int
+        Local geometry = Owner.Live(call)
         Local taken = Buffer<UInt32>(indices.Count)
         For i, index In indices
-            If index < 0 Then Panic("a triangle's index is 0 or more, not {index}")
+            If index < 0 Then Panic("{call} on a Geometry: a triangle's index is 0 or more, not {index}")
             taken[i] = index As UInt32
         End For
         Local first = 0
@@ -374,7 +397,7 @@ Public Struct Surface
             first = fbe_surface_add_triangles(geometry, Index, taken.Pointer(),
                                               indices.Count As Int32)
         End Unsafe
-        If first < 0 Then Panic(LastError())
+        If first < 0 Then Owner.Failed(call)
         Return first
     End Method
 
@@ -382,7 +405,7 @@ Public Struct Surface
     @MainThread @PanicsAtCaller
     Public Method VertexCount(): Int
         Local count = fbe_surface_vertex_count(Owner.Live("VertexCount"), Index)
-        If count < 0 Then Panic(LastError())
+        If count < 0 Then Owner.Failed("VertexCount")
         Return count
     End Method
 
@@ -390,27 +413,30 @@ Public Struct Surface
     @MainThread @PanicsAtCaller
     Public Method TriangleCount(): Int
         Local count = fbe_surface_triangle_count(Owner.Live("TriangleCount"), Index)
-        If count < 0 Then Panic(LastError())
+        If count < 0 Then Owner.Failed("TriangleCount")
         Return count
     End Method
 
     /// The vertex at `index`. One it doesn't have panics.
     @MainThread @PanicsAtCaller
-    Public Method Vertex(index: Int): Vertex
-        Local geometry = Owner.Live("Vertex")
+    Public Method Vertex(index: Int): Vertex => Read(index, "Vertex")
+
+    @PanicsAtCaller
+    Method Read(index: Int, call: String): Vertex
+        Local geometry = Owner.Live(call)
         Local found = Buffer<fbe_vertex_t>(1)
         Local done = False
         Unsafe
             done = fbe_surface_vertices(geometry, Index, index, found.Pointer(), 1)
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Owner.Failed(call)
         Return VertexOf(found[0])
     End Method
 
     /// Sets the vertex at `index`. One it doesn't have panics.
     @MainThread @PanicsAtCaller
     Public Method SetVertex(index: Int, vertex: Vertex)
-        SetVertices(index, [vertex])
+        Written(index, [vertex], "SetVertex")
     End Method
 
     /// Every vertex, in order.
@@ -423,7 +449,7 @@ Public Struct Surface
         Unsafe
             done = fbe_surface_vertices(geometry, Index, 0, found.Pointer(), count As Int32)
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Owner.Failed("Vertices")
         Local vertices: Vertex[] = []
         For vertex In found
             vertices.Add(VertexOf(vertex))
@@ -434,7 +460,12 @@ Public Struct Surface
     /// Sets vertices from `first` in one call. Ones it doesn't have panic.
     @MainThread @PanicsAtCaller
     Public Method SetVertices(first: Int, vertices: Vertex[])
-        Local geometry = Owner.Live("SetVertices")
+        Written(first, vertices, "SetVertices")
+    End Method
+
+    @PanicsAtCaller
+    Method Written(first: Int, vertices: Vertex[], call: String)
+        Local geometry = Owner.Live(call)
         Local taken = Buffer<fbe_vertex_t>(vertices.Count)
         For i, vertex In vertices
             taken[i] = CVertexOf(vertex)
@@ -444,62 +475,62 @@ Public Struct Surface
             done = fbe_surface_set_vertices(geometry, Index, first, taken.Pointer(),
                                             vertices.Count As Int32)
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Owner.Failed(call)
     End Method
 
     /// Where the vertex at `index` is.
     @MainThread @PanicsAtCaller
-    Public Method VertexPosition(index: Int): Vec3 => Vertex(index).Position
+    Public Method VertexPosition(index: Int): Vec3 => Read(index, "VertexPosition").Position
 
     /// Moves the vertex at `index`.
     @MainThread @PanicsAtCaller
     Public Method SetVertexPosition(index: Int, position: Vec3)
-        Local vertex = Vertex(index)
+        Local vertex = Read(index, "SetVertexPosition")
         vertex.Position = position
-        SetVertex(index, vertex)
+        Written(index, [vertex], "SetVertexPosition")
     End Method
 
     /// The normal of the vertex at `index`.
     @MainThread @PanicsAtCaller
-    Public Method VertexNormal(index: Int): Vec3 => Vertex(index).Normal
+    Public Method VertexNormal(index: Int): Vec3 => Read(index, "VertexNormal").Normal
 
     /// Sets the normal of the vertex at `index`, as it's given.
     @MainThread @PanicsAtCaller
     Public Method SetVertexNormal(index: Int, normal: Vec3)
-        Local vertex = Vertex(index)
+        Local vertex = Read(index, "SetVertexNormal")
         vertex.Normal = normal
-        SetVertex(index, vertex)
+        Written(index, [vertex], "SetVertexNormal")
     End Method
 
     /// The UVs of the vertex at `index` in a set, 0 or 1. Another set panics.
     @MainThread @PanicsAtCaller
     Public Method VertexUv(index: Int, set: Int = 0): Vec2
-        Local vertex = Vertex(index)
-        Return UvSet(set) == 0 ? vertex.Uv0 : vertex.Uv1
+        Local vertex = Read(index, "VertexUv")
+        Return UvSet(set, "VertexUv") == 0 ? vertex.Uv0 : vertex.Uv1
     End Method
 
     /// Sets the UVs of the vertex at `index` in a set, 0 or 1. Another set panics.
     @MainThread @PanicsAtCaller
     Public Method SetVertexUv(index: Int, uv: Vec2, set: Int = 0)
-        Local vertex = Vertex(index)
-        If UvSet(set) == 0
+        Local vertex = Read(index, "SetVertexUv")
+        If UvSet(set, "SetVertexUv") == 0
             vertex.Uv0 = uv
         Else
             vertex.Uv1 = uv
         End If
-        SetVertex(index, vertex)
+        Written(index, [vertex], "SetVertexUv")
     End Method
 
     /// The color and alpha of the vertex at `index`.
     @MainThread @PanicsAtCaller
-    Public Method VertexColor(index: Int): Color => Vertex(index).Color
+    Public Method VertexColor(index: Int): Color => Read(index, "VertexColor").Color
 
     /// Sets the color and alpha of the vertex at `index`.
     @MainThread @PanicsAtCaller
     Public Method SetVertexColor(index: Int, color: Color)
-        Local vertex = Vertex(index)
+        Local vertex = Read(index, "SetVertexColor")
         vertex.Color = color
-        SetVertex(index, vertex)
+        Written(index, [vertex], "SetVertexColor")
     End Method
 
     /// The three vertices of the triangle at `index`, counterclockwise seen from the front. One it
@@ -512,7 +543,7 @@ Public Struct Surface
         Unsafe
             done = fbe_surface_triangles(geometry, Index, index, found.Pointer(), 1)
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Owner.Failed("Triangle")
         Return Vec3i(found[0] As Int, found[1] As Int, found[2] As Int)
     End Method
 
@@ -526,7 +557,7 @@ Public Struct Surface
         Unsafe
             done = fbe_surface_triangles(geometry, Index, 0, found.Pointer(), count As Int32)
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Owner.Failed("Triangles")
         Local indices: Int[] = []
         For index In found
             indices.Add(index As Int)
@@ -537,15 +568,22 @@ Public Struct Surface
     /// Takes away its triangles and vertices.
     @MainThread @PanicsAtCaller
     Public Method Clear()
-        If !fbe_surface_clear(Owner.Live("Clear"), Index, True) Then Panic(LastError())
+        If !fbe_surface_clear(Owner.Live("Clear"), Index, True) Then Owner.Failed("Clear")
     End Method
 
     /// Takes away its triangles, keeping its vertices.
     @MainThread @PanicsAtCaller
     Public Method ClearTriangles()
-        If !fbe_surface_clear(Owner.Live("ClearTriangles"), Index, False) Then Panic(LastError())
+        If !fbe_surface_clear(Owner.Live("ClearTriangles"), Index, False) Then Owner.Failed("ClearTriangles")
     End Method
 End Struct
+
+/// A new Geometry for a handle a call made, or a panic naming the call when it made none.
+@PanicsAtCaller
+Function Made(handle: UInt64, call: String): Geometry
+    If handle == 0 Then Panic("{call}: {LastError()}")
+    Return Geometry(handle)
+End Function
 
 /// The Geometry a handle is for, from its wrapper if the game still holds one, or a new one, which
 /// holds the handle once.
@@ -556,13 +594,13 @@ Package Function GeometryOf(handle: UInt64): Geometry?
         Local kept = geometries[slot]
         If kept != Null && kept.handle == handle Then Return kept
     End If
-    If !fbe_geometry_retain(handle) Then Panic(LastError())
+    If !fbe_geometry_retain(handle) Then Panic("a geometry's handle went stale: {LastError()}")
     Return Geometry(handle)
 End Function
 
 @PanicsAtCaller
-Function UvSet(set: Int): Int
-    If set != 0 && set != 1 Then Panic("a vertex's UV sets are 0 and 1, not {set}")
+Function UvSet(set: Int, call: String): Int
+    If set != 0 && set != 1 Then Panic("{call} on a Geometry: a vertex's UV sets are 0 and 1, not {set}")
     Return set
 End Function
 

@@ -23,15 +23,16 @@ End Enum
 
 /// How a material blends with what's drawn behind it.
 Public Enum Blend
-    /// Opaque, unless its alpha, or its Mesh's, is below 1; then ALPHA.
+    /// Opaque, unless its alpha times its Mesh's is below 1; then ALPHA.
     AUTO = 0
-    /// Opaque: it hides what's behind.
+    /// Opaque: it hides what's behind, its own and its textures' alpha left out; but a Mesh whose
+    /// own alpha is below 1 still blends it as ALPHA, so a Mesh fades whatever it draws in.
     OPAQUE = 1
     /// Laid over what's behind by its alpha, drawn far to near.
     ALPHA = 2
-    /// Its light added to what's behind, as glows and flames want.
+    /// Its light, scaled by its alpha, added to what's behind, as glows and flames want.
     ADD = 3
-    /// What's behind multiplied by it, as shadows and stains want.
+    /// What's behind multiplied by it, scaled by its alpha, as shadows and stains want.
     MULTIPLY = 4
 End Enum
 
@@ -43,8 +44,8 @@ Public Enum LayerBlend
     ADD = 1
     /// Laid over them by its alpha.
     ALPHA = 2
-    /// Multiplying them twice over, so its middle gray leaves them as they are, as a lightmap over
-    /// a doubled ambient layer wants.
+    /// Multiplying them twice over, so its middle gray leaves them as they are, as a doubled
+    /// ambient layer under a lightmap wants.
     MULTIPLY_2 = 3
 End Enum
 
@@ -89,7 +90,7 @@ Public Final Class Material
     /// Lets go of the material now; what draws in it keeps it. Using it after panics.
     @MainThread @PanicsAtCaller
     Public Method Free()
-        If !fbe_material_release(Live("Free")) Then Panic(LastError())
+        If !fbe_material_release(Live("Free")) Then Failed("Free")
         Local gone: Material? = Null
         materials[Slot(handle)] = gone
         handle = 0
@@ -102,12 +103,13 @@ Public Final Class Material
     @MainThread @PanicsAtCaller
     Public Method Clone(): Material => Material(fbe_material_clone(Live("Clone")))
 
-    /// Sets its color and alpha, linear.
+    /// Sets its color and alpha, linear: alpha too, so SetColor after SetAlpha sets the alpha
+    /// again. Colors take any finite value; an alpha outside 0 to 1 panics.
     @MainThread @PanicsAtCaller
     Public Method SetColor(color: Color)
         Local material = Live("SetColor")
         If !fbe_material_set_color(material, color.r, color.g, color.b, color.a)
-            Panic(LastError())
+            Failed("SetColor")
         End If
     End Method
 
@@ -120,16 +122,18 @@ Public Final Class Material
         Unsafe
             done = fbe_material_color(material, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Color")
         Return ColorOf(found)
     End Method
 
-    /// Sets its alpha alone, from 0, unseen, to 1, opaque.
+    /// Sets its alpha alone, from 0, unseen, to 1, opaque. Outside 0 to 1 panics.
     @MainThread @PanicsAtCaller
     Public Method SetAlpha(alpha: Float)
+        Local material = Live("SetAlpha")
         Local color = Color()
-        color.a = alpha
-        SetColor(color)
+        If !fbe_material_set_color(material, color.r, color.g, color.b, alpha)
+            Failed("SetAlpha")
+        End If
     End Method
 
     /// Its alpha.
@@ -139,7 +143,7 @@ Public Final Class Material
     /// Sets how sharp and bright its highlights are, from 0, none, to 1. Outside 0 to 1 panics.
     @MainThread @PanicsAtCaller
     Public Method SetShininess(shininess: Float)
-        If !fbe_material_set_shininess(Live("SetShininess"), shininess) Then Panic(LastError())
+        If !fbe_material_set_shininess(Live("SetShininess"), shininess) Then Failed("SetShininess")
     End Method
 
     /// How sharp and bright its highlights are.
@@ -149,7 +153,7 @@ Public Final Class Material
     /// Sets how it's lit.
     @MainThread @PanicsAtCaller
     Public Method SetShading(shading: Shading)
-        If !fbe_material_set_shading(Live("SetShading"), shading As Int32) Then Panic(LastError())
+        If !fbe_material_set_shading(Live("SetShading"), shading As Int32) Then Failed("SetShading")
     End Method
 
     /// How it's lit.
@@ -159,7 +163,7 @@ Public Final Class Material
     /// Sets how it blends with what's behind it.
     @MainThread @PanicsAtCaller
     Public Method SetBlend(blend: Blend)
-        If !fbe_material_set_blend(Live("SetBlend"), blend As Int32) Then Panic(LastError())
+        If !fbe_material_set_blend(Live("SetBlend"), blend As Int32) Then Failed("SetBlend")
     End Method
 
     /// How it blends with what's behind it.
@@ -170,7 +174,7 @@ Public Final Class Material
     /// none, to 1. Outside 0 to 1 panics.
     @MainThread @PanicsAtCaller
     Public Method SetAlphaCutoff(cutoff: Float)
-        If !fbe_material_set_alpha_cutoff(Live("SetAlphaCutoff"), cutoff) Then Panic(LastError())
+        If !fbe_material_set_alpha_cutoff(Live("SetAlphaCutoff"), cutoff) Then Failed("SetAlphaCutoff")
     End Method
 
     /// The alpha below which a pixel isn't drawn.
@@ -180,7 +184,7 @@ Public Final Class Material
     /// Sets whether vertices' colors and alphas multiply its own.
     @MainThread @PanicsAtCaller
     Public Method SetVertexColors(on: Bool)
-        If !fbe_material_set_vertex_colors(Live("SetVertexColors"), on) Then Panic(LastError())
+        If !fbe_material_set_vertex_colors(Live("SetVertexColors"), on) Then Failed("SetVertexColors")
     End Method
 
     /// Whether vertices' colors and alphas multiply its own.
@@ -190,7 +194,7 @@ Public Final Class Material
     /// Sets whether its triangles are drawn from behind too.
     @MainThread @PanicsAtCaller
     Public Method SetTwoSided(on: Bool)
-        If !fbe_material_set_two_sided(Live("SetTwoSided"), on) Then Panic(LastError())
+        If !fbe_material_set_two_sided(Live("SetTwoSided"), on) Then Failed("SetTwoSided")
     End Method
 
     /// Whether its triangles are drawn from behind too.
@@ -200,19 +204,19 @@ Public Final Class Material
     /// Sets whether cameras' fog covers it, as it does at first.
     @MainThread @PanicsAtCaller
     Public Method SetFogged(on: Bool)
-        If !fbe_material_set_fogged(Live("SetFogged"), on) Then Panic(LastError())
+        If !fbe_material_set_fogged(Live("SetFogged"), on) Then Failed("SetFogged")
     End Method
 
     /// Whether cameras' fog covers it.
     @MainThread @PanicsAtCaller
     Public Method Fogged(): Bool => fbe_material_fogged(Live("Fogged"))
 
-    /// Sets when it's drawn: 0, at first, with the scene, by depth; below 0 before the scene and
-    /// above 0 after it, lower first, each over what's drawn before it with no depth test, as
-    /// skies and overlays want.
+    /// Sets when it's drawn: 0, at first, with the scene; below 0 before the scene and above 0
+    /// after it, lower first, as skies and overlays want. How each order meets the others' depth
+    /// is the renderer's (E5).
     @MainThread @PanicsAtCaller
     Public Method SetOrder(order: Int)
-        If !fbe_material_set_order(Live("SetOrder"), order) Then Panic(LastError())
+        If !fbe_material_set_order(Live("SetOrder"), order) Then Failed("SetOrder")
     End Method
 
     /// When it's drawn.
@@ -224,7 +228,7 @@ Public Final Class Material
     @MainThread @PanicsAtCaller
     Public Method SetLayer(layer: Int, blend: LayerBlend, uvSet: Int = 0)
         If !fbe_material_set_layer(Live("SetLayer"), layer, blend As Int32, uvSet)
-            Panic(LastError())
+            Failed("SetLayer")
         End If
     End Method
 
@@ -232,7 +236,7 @@ Public Final Class Material
     @MainThread @PanicsAtCaller
     Public Method LayerBlend(layer: Int): LayerBlend
         Local blend = fbe_material_layer_blend(Live("LayerBlend"), layer)
-        If blend < 0 Then Panic(LastError())
+        If blend < 0 Then Failed("LayerBlend")
         Return blend As LayerBlend
     End Method
 
@@ -240,8 +244,14 @@ Public Final Class Material
     @MainThread @PanicsAtCaller
     Public Method LayerUvSet(layer: Int): Int
         Local set = fbe_material_layer_uv_set(Live("LayerUvSet"), layer)
-        If set < 0 Then Panic(LastError())
+        If set < 0 Then Failed("LayerUvSet")
         Return set
+    End Method
+
+    // A panic naming the call, with what C said went wrong.
+    @PanicsAtCaller
+    Package Method Failed(call: String)
+        Panic("{call} on a Material: {LastError()}")
     End Method
 
     // The handle, or a panic naming the call for a Material that was freed.
@@ -267,7 +277,7 @@ Extend Surface
     Public Method SetMaterial(material: Material?)
         Local geometry = Owner.Live("SetMaterial")
         Local drawn: UInt64 = material != Null ? material.Live("SetMaterial") : 0
-        If !fbe_surface_set_material(geometry, Index, drawn) Then Panic(LastError())
+        If !fbe_surface_set_material(geometry, Index, drawn) Then Owner.Failed("SetMaterial")
     End Method
 
     /// The material the surface draws in, or Null for the default.
@@ -275,7 +285,7 @@ Extend Surface
     Public Method Material(): Material?
         Local geometry = Owner.Live("Material")
         Local found = fbe_surface_material(geometry, Index)
-        If found == 0 && fbe_surface_vertex_count(geometry, Index) < 0 Then Panic(LastError())
+        If found == 0 && fbe_surface_vertex_count(geometry, Index) < 0 Then Owner.Failed("Material")
         Return MaterialOf(found)
     End Method
 End Extend
@@ -288,7 +298,7 @@ Extend Mesh
     Public Method SetMaterial(material: Material?)
         Local mesh = Live("SetMaterial")
         Local drawn: UInt64 = material != Null ? material.Live("SetMaterial") : 0
-        If !fbe_mesh_set_material(mesh, drawn) Then Panic(LastError())
+        If !fbe_mesh_set_material(mesh, drawn) Then Failed("SetMaterial")
     End Method
 
     /// The material the mesh draws every surface in, or Null when they draw in their own.
@@ -296,11 +306,13 @@ Extend Mesh
     Public Method Material(): Material? => MaterialOf(fbe_mesh_material(Live("Material")))
 
     /// Sets the mesh's own color and alpha, which multiply its materials' for it alone, white at
-    /// first: a copy tinted or faded is the only one that is.
+    /// first: a copy tinted or faded is the only one that is. It sets alpha too, so SetColor after
+    /// SetAlpha sets the alpha again. Colors take any finite value; an alpha outside 0 to 1
+    /// panics.
     @MainThread @PanicsAtCaller
     Public Method SetColor(color: Color)
         If !fbe_mesh_set_tint(Live("SetColor"), color.r, color.g, color.b, color.a)
-            Panic(LastError())
+            Failed("SetColor")
         End If
     End Method
 
@@ -313,16 +325,27 @@ Extend Mesh
         Unsafe
             done = fbe_mesh_tint(mesh, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Color")
         Return ColorOf(found)
     End Method
 
-    /// Sets the mesh's own alpha alone: at 0 it isn't drawn, but it still collides and picks.
+    /// Sets the mesh's own alpha alone, which fades it whatever its materials' blends, as their
+    /// docs say: at 0 it isn't drawn, but it still collides and picks. Outside 0 to 1 panics.
     @MainThread @PanicsAtCaller
     Public Method SetAlpha(alpha: Float)
+        Local mesh = Live("SetAlpha")
         Local tint = Color()
-        tint.a = alpha
-        SetColor(tint)
+        If !fbe_mesh_set_tint(mesh, tint.r, tint.g, tint.b, alpha) Then Failed("SetAlpha")
+    End Method
+
+    /// How the mesh's surface at `index` is drawn over what's behind it: its material's Blend,
+    /// the mesh's own or the surface's, with AUTO and OPAQUE settled by the alpha, as their docs
+    /// say. A surface the mesh's geometry doesn't have panics.
+    @MainThread @PanicsAtCaller
+    Public Method DrawnBlend(index: Int): Blend
+        Local blend = fbe_mesh_blend(Live("DrawnBlend"), index)
+        If blend < 0 Then Failed("DrawnBlend")
+        Return blend As Blend
     End Method
 
     /// The mesh's own alpha.
@@ -339,6 +362,6 @@ Package Function MaterialOf(handle: UInt64): Material?
         Local kept = materials[slot]
         If kept != Null && kept.handle == handle Then Return kept
     End If
-    If !fbe_material_retain(handle) Then Panic(LastError())
+    If !fbe_material_retain(handle) Then Panic("a material's handle went stale: {LastError()}")
     Return Material(handle)
 End Function

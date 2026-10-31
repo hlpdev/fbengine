@@ -54,7 +54,7 @@ Public Final Class World
     /// empties it. If it was current, the main World is current again.
     @MainThread @PanicsAtCaller
     Public Method Free()
-        If !fbe_world_free(Live("Free")) Then Panic(LastError())
+        If !fbe_world_free(Live("Free")) Then Failed("Free")
         DropFreed()
         worlds[Slot(handle)] = Null
         handle = 0
@@ -67,7 +67,7 @@ Public Final Class World
     /// Frees every entity in the World.
     @MainThread @PanicsAtCaller
     Public Method Clear()
-        If !fbe_world_clear(Live("Clear")) Then Panic(LastError())
+        If !fbe_world_clear(Live("Clear")) Then Failed("Clear")
         DropFreed()
     End Method
 
@@ -98,7 +98,8 @@ Public Final Class World
         Return found
     End Method
 
-    /// The World's lights, in the tree's order, depth first, each parent before its children.
+    /// The World's lights, hidden ones too, in the tree's order, depth first, each parent before
+    /// its children.
     @MainThread @PanicsAtCaller
     Public Method Lights(): Light[]
         Local world = Live("Lights")
@@ -116,7 +117,7 @@ Public Final Class World
     @MainThread @PanicsAtCaller
     Public Method SetAmbientLight(color: Color)
         If !fbe_world_set_ambient(Live("SetAmbientLight"), color.r, color.g, color.b)
-            Panic(LastError())
+            Failed("SetAmbientLight")
         End If
     End Method
 
@@ -129,7 +130,7 @@ Public Final Class World
         Unsafe
             done = fbe_world_ambient(world, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("AmbientLight")
         Return ColorOf(found)
     End Method
 
@@ -137,6 +138,13 @@ Public Final Class World
     /// children, or Null.
     @MainThread @PanicsAtCaller
     Public Method Find(name: String): Entity? => EntityOf(fbe_world_find(Live("Find"), name))
+
+    // A panic naming the call and the World, with what C said went wrong.
+    @PanicsAtCaller
+    Package Method Failed(call: String)
+        Local which = handle == fbe_world_main() ? "the main World" : "a World"
+        Panic("{call} on {which}: {LastError()}")
+    End Method
 
     // The handle, or a panic naming the call for a World that was freed.
     @PanicsAtCaller
@@ -178,11 +186,13 @@ Package Function Handles(write: Func(Ptr<UInt64>, Int32): Int32): Entity[]
         Unsafe
             count = write(taken.Pointer(), capacity As Int32)
         End Unsafe
-        If count < 0 Then Panic(LastError())
+        If count < 0 Then Panic("a list of entities: {LastError()}")
         If count <= capacity
             Local found: Entity[] = []
             For i = 0 Until count
-                found.Add(Present(EntityOf(taken[i])))
+                Local entity = EntityOf(taken[i])
+                If entity == Null Then Panic("a list of entities had a stale one")
+                found.Add(entity)
             End For
             Return found
         End If

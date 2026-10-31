@@ -20,16 +20,18 @@ Extend Camera
     @MainThread @PanicsAtCaller
     Public Method InView(entity: Entity): Bool
         Local camera = Live("InView")
-        Local target = TargetSize()
-        Return Seen(fbe_camera_entity_in_view(camera, target.x, target.y, entity.Live("InView")))
+        Local target = Target("InView")
+        Return Seen(fbe_camera_entity_in_view(camera, target.x, target.y, entity.Live("InView")),
+                    Self, "InView")
     End Method
 
     /// Whether a point in the world is in the camera's view.
     @MainThread @PanicsAtCaller
     Public Method InView(point: Vec3): Bool
         Local camera = Live("InView")
-        Local target = TargetSize()
-        Return Seen(fbe_camera_point_in_view(camera, target.x, target.y, point.x, point.y, point.z))
+        Local target = Target("InView")
+        Return Seen(fbe_camera_point_in_view(camera, target.x, target.y, point.x, point.y, point.z),
+                    Self, "InView")
     End Method
 
     /// Whether the camera might see some of a box in the world: not unless the whole box is behind
@@ -37,14 +39,14 @@ Extend Camera
     @MainThread @PanicsAtCaller
     Public Method InView(box: AABB): Bool
         Local camera = Live("InView")
-        Local target = TargetSize()
+        Local target = Target("InView")
         Local within = fbe_aabb_t(fbe_vec3_t(box.Min.x, box.Min.y, box.Min.z),
                                   fbe_vec3_t(box.Max.x, box.Max.y, box.Max.z))
         Local seen = 0
         Unsafe
             seen = fbe_camera_box_in_view(camera, target.x, target.y, AddressOf(within))
         End Unsafe
-        Return Seen(seen)
+        Return Seen(seen, Self, "InView")
     End Method
 End Extend
 
@@ -60,7 +62,7 @@ Extend Entity
         Unsafe
             done = fbe_entity_bounds(entity, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Bounds")
         Return AABB(VecOf(found.min), VecOf(found.max))
     End Method
 
@@ -68,7 +70,7 @@ Extend Entity
     /// triangles, from either side, while it's showing, as walls and doors do.
     @MainThread @PanicsAtCaller
     Public Method SetBlocksSight(blocks: Bool)
-        If !fbe_entity_set_blocks_sight(Live("SetBlocksSight"), blocks) Then Panic(LastError())
+        If !fbe_entity_set_blocks_sight(Live("SetBlocksSight"), blocks) Then Failed("SetBlocksSight")
     End Method
 
     /// Whether the entity blocks line of sight.
@@ -79,21 +81,22 @@ Extend Entity
     /// to position; neither of the two blocks it.
     @MainThread @PanicsAtCaller
     Public Method CanSee(target: Entity): Bool
-        Return Seen(fbe_entity_can_see(Live("CanSee"), target.Live("CanSee")))
+        Return Seen(fbe_entity_can_see(Live("CanSee"), target.Live("CanSee")), Self, "CanSee")
     End Method
 
     /// Whether nothing that blocks sight in its World is between the entity and a point in the
     /// world; the entity itself doesn't block it.
     @MainThread @PanicsAtCaller
     Public Method CanSee(point: Vec3): Bool
-        Return Seen(fbe_entity_can_see_point(Live("CanSee"), point.x, point.y, point.z))
+        Return Seen(fbe_entity_can_see_point(Live("CanSee"), point.x, point.y, point.z), Self,
+                    "CanSee")
     End Method
 End Extend
 
-/// What a C call that sees or doesn't says: 1 for True, 0 for False, and a panic with its error
-/// for -1.
+/// What a C call on `on` that sees or doesn't says: 1 for True, 0 for False, and a panic naming
+/// the call for -1.
 @PanicsAtCaller
-Function Seen(answer: Int32): Bool
-    If answer < 0 Then Panic(LastError())
+Function Seen(answer: Int32, on: Entity, call: String): Bool
+    If answer < 0 Then on.Failed(call)
     Return answer == 1
 End Function

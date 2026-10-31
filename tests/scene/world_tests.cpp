@@ -210,3 +210,68 @@ TEST_CASE("an entity moved into another world takes what's under it", "[scene]")
     CHECK(fbe_world_entity_count(first.handle) == 0);
     CHECK(fbe_world_entity_count(second.handle) == 3);
 }
+
+TEST_CASE("a chain 100,000 deep is walked, copied, moved, and freed", "[scene]") {
+    const test_world_t world;
+    const test_world_t other;
+    const std::uint64_t root = pivot(world.handle);
+    std::uint64_t at = root;
+    for (int i = 0; i < 100000; ++i) {
+        at = pivot(world.handle, at);
+        fbe_entity_set_position(at, 0.0F, 1.0F, 0.0F, FBE_SPACE_LOCAL);
+    }
+    fbe_entity_set_name(at, "bottom");
+    CHECK(fbe_entity_find(root, "bottom") == at);
+    CHECK(fbe_world_find(world.handle, "bottom") == at);
+    fbe_vec3_t position{};
+    REQUIRE(fbe_entity_position(at, FBE_SPACE_WORLD, &position));
+    CHECK(position.y == 100000.0F);
+    fbe_entity_set_position(root, 0.0F, -100000.0F, 0.0F, FBE_SPACE_LOCAL);
+    REQUIRE(fbe_entity_position(at, FBE_SPACE_WORLD, &position));
+    CHECK(position.y == 0.0F);
+    CHECK(fbe_entity_showing(at));
+
+    const std::uint64_t copy = fbe_entity_copy(root, other.handle, 0);
+    REQUIRE(copy != 0);
+    CHECK(fbe_world_entity_count(other.handle) == 100001);
+    const std::uint64_t parent = pivot(other.handle);
+    REQUIRE(fbe_entity_set_parent(root, parent, true));
+    CHECK(fbe_world_entity_count(world.handle) == 0);
+    CHECK(fbe_world_entity_count(other.handle) == 200003);
+    REQUIRE(fbe_entity_free(root));
+    CHECK(fbe_world_entity_count(other.handle) == 100002);
+    drop_freed();
+}
+
+TEST_CASE("a World given with a parent is live and the parent's", "[scene]") {
+    const test_world_t world;
+    const test_world_t other;
+    const std::uint64_t parent = pivot(world.handle);
+    CHECK(fbe_entity_create(world.handle, parent, FBE_ENTITY_PIVOT) != 0);
+    CHECK(fbe_entity_create(other.handle, parent, FBE_ENTITY_PIVOT) == 0);
+    CHECK(std::string_view(fbe_error()) == "the parent is in another World");
+    const std::uint64_t freed = fbe_world_create();
+    fbe_world_free(freed);
+    CHECK(fbe_entity_create(freed, parent, FBE_ENTITY_PIVOT) == 0);
+    CHECK(std::string_view(fbe_error()) == "the World was freed");
+    CHECK(fbe_entity_create(0x123456789ULL, parent, FBE_ENTITY_PIVOT) == 0);
+    CHECK(fbe_entity_copy(parent, other.handle, parent) == 0);
+    CHECK(fbe_entity_copy(parent, freed, parent) == 0);
+    CHECK(fbe_entity_copy(parent, world.handle, parent) != 0);
+    CHECK(fbe_entity_create(0, 0, FBE_ENTITY_PIVOT) == 0);
+    CHECK(std::string_view(fbe_error()) == "no World or parent was given");
+}
+
+TEST_CASE("the main World, made in a freed World's slot, keeps nothing of it", "[scene]") {
+    // Each test runs in a process of its own, so the main World isn't made yet.
+    const std::uint64_t world = fbe_world_create();
+    fbe_world_set_ambient(world, 1.0F, 0.0F, 0.0F);
+    fbe_world_set_collision(world, 1, 2, FBE_RESPONSE_SLIDE);
+    REQUIRE(fbe_world_free(world));
+    const std::uint64_t main = fbe_world_main();
+    CHECK(static_cast<std::uint32_t>(main) == static_cast<std::uint32_t>(world));
+    fbe_color_t ambient{};
+    REQUIRE(fbe_world_ambient(main, &ambient));
+    CHECK(ambient.r == ambient.g);
+    CHECK(fbe_world_collision(main, 1, 2) == FBE_RESPONSE_NONE);
+}

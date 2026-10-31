@@ -111,11 +111,11 @@ Function UnprojectTakesBackWhatProjectGave()
     camera.SetScale(Vec3(4, 0.5, 2))
     Local point = Vec3(-5, 1, -8)
     Local seen = camera.Project(point) ?? Vec3.Zero()
-    Expect(Near(camera.Unproject(seen), point))
+    Expect(Near(camera.Unproject(seen) ?? Vec3.Zero(), point))
     camera.SetProjection(Projection.ORTHOGRAPHIC)
     seen = camera.Project(point) ?? Vec3.Zero()
-    Expect(Near(camera.Unproject(seen), point))
-    Expect(Near(camera.Unproject(Vec3(500, 250, 0)), Vec3(3, 2, 1)))
+    Expect(Near(camera.Unproject(seen) ?? Vec3.Zero(), point))
+    Expect(Near(camera.Unproject(Vec3(500, 250, 0)) ?? Vec3.Zero(), Vec3(3, 2, 1)))
 End Function
 
 @Test
@@ -198,4 +198,38 @@ Function AFoundCameraIsTheGamesCamera()
     Local found = world.Find("eye")
     Expect(found == camera)
     Expect(found Is Camera)
+End Function
+
+@Test
+Function CopiedCamerasDrawInTheirOriginalsOrder()
+    Local world = Fresh()
+    Defer world.Free()
+    Local rig = Pivot()
+    // The HUD's camera comes first in the tree, but was made after the main one.
+    Local holder = Pivot(rig)
+    Local main = Camera(rig)
+    Local hud = Camera(holder)
+    Expect(world.Cameras() == [main, hud])
+    Local copy = rig.Copy()
+    Local copied = world.Cameras()
+    Expect(copied.Count == 4 && copied[0] == main && copied[1] == hud)
+    Expect(copied[2].Parent() == copy && copied[3].Parent()?.Parent() == copy)
+End Function
+
+@Test
+Function PointsOnTheNearPlaneProjectAgain()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Framed()
+    camera.SetPosition(Vec3(1, 2, 3))
+    camera.SetRotation(Deg(-10), Deg(30), 0)
+    camera.SetRange(0.01, 100)
+    Local missed = 0
+    For y = 0 To 20
+        For x = 0 To 20
+            Local ray = camera.ScreenRay(Vec2(100 + (x As Float) * 40, 50 + (y As Float) * 20))
+            If camera.Project(ray.Origin) == Null Then missed += 1
+        End For
+    End For
+    Expect(missed == 0)
 End Function

@@ -122,3 +122,38 @@ Function EachMeshHasItsOwnTint()
     Expect(copy.Alpha() == 0.0 && mesh.Alpha() == 0.25)
     Expect(copy.Geometry() == mesh.Geometry())
 End Function
+
+@Test
+Function WhatAddCopiesDrawsInTheSameMaterial()
+    Local into = Geometry()
+    If True
+        Local from = Geometry.Cube()
+        from.Surface(0).SetMaterial(Material(Color(0, 0, 1)))
+        into.Add(from)
+    End If
+    Expect(into.Surface(0).Material()?.Color() == Color(0, 0, 1))
+End Function
+
+@Test
+Function AMeshsSurfacesBlendAsTheirAlphaSays()
+    Local world = Fresh()
+    Defer world.Free()
+    Local cube = Geometry.Cube()
+    Local mesh = Mesh(cube)
+    Expect(mesh.DrawnBlend(0) == Blend.OPAQUE)
+    mesh.SetAlpha(0.5)
+    Expect(mesh.DrawnBlend(0) == Blend.ALPHA)
+    Local imported = Material(Color(1, 1, 1, 0.25))
+    imported.SetBlend(Blend.OPAQUE)
+    cube.Surface(0).SetMaterial(imported)
+    // An opaque material's own alpha is left out, but the mesh's still fades it.
+    Expect(mesh.DrawnBlend(0) == Blend.ALPHA)
+    mesh.SetAlpha(1)
+    Expect(mesh.DrawnBlend(0) == Blend.OPAQUE)
+    imported.SetBlend(Blend.AUTO)
+    Expect(mesh.DrawnBlend(0) == Blend.ALPHA)
+    // SetColor sets alpha too.
+    imported.SetAlpha(0.25)
+    imported.SetColor(Color.White)
+    Expect(imported.Alpha() == 1.0)
+End Function

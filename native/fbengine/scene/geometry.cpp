@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -51,6 +52,18 @@ surface_t* surface_of(std::uint64_t geometry, std::int32_t index) {
     return &surfaces[static_cast<std::size_t>(index)];
 }
 
+/// What a read or write of `count` of a surface's `what` from `first` says when they aren't all
+/// there: the one it asked for, or the run.
+std::string out_of_range(const char* what, std::size_t size, std::int32_t first,
+                         std::int32_t count) {
+    const auto last = static_cast<std::int64_t>(size) - 1;
+    if (count == 1) {
+        return std::format("the surface's {} are 0 to {}, not {}", what, last, first);
+    }
+    return std::format("the surface's {} are 0 to {}, not {} to {}", what, last, first,
+                       static_cast<std::int64_t>(first) + count - 1);
+}
+
 /// Transforms a surface's vertices and normals, turning its triangles when the matrix flips.
 void transform_surface(surface_t& surface, const mat4_t& m) {
     for (fbe_vertex_t& vertex : surface.vertices) {
@@ -86,16 +99,38 @@ std::uint32_t bits(float value) {
     return std::bit_cast<std::uint32_t>(value + 0.0F);
 }
 
+/// A position's place, bit for bit, with -0 as 0.
+place_t place_of_point(const fbe_vec3_t& p) {
+    return { .x = bits(p.x), .y = bits(p.y), .z = bits(p.z) };
+}
+
+/// A triangle's unit normal, or zero for one too thin to have a direction its rounding doesn't
+/// make up.
+vec3_t face_normal(vec3_t a, vec3_t b, vec3_t c) {
+    const vec3_t first = b - a;
+    const vec3_t second = c - a;
+    const vec3_t across = cross(first, second);
+    const float size = length(across);
+    if (size <= 1e-6F * length(first) * length(second)) {
+        return {};
+    }
+    return across * (1.0F / size);
+}
+
 void update_normals(surface_t& surface) {
     std::unordered_map<place_t, std::size_t, place_hash_t> places;
     std::vector<std::size_t> place_of(surface.vertices.size());
+    // Each place's normals weighted by angle, and how much angle that is, then each vertex's own.
     std::vector<vec3_t> sums;
+    std::vector<float> weights;
+    std::vector<vec3_t> own(surface.vertices.size());
+    std::vector<float> own_weights(surface.vertices.size(), 0.0F);
     for (std::size_t i = 0; i < surface.vertices.size(); ++i) {
-        const fbe_vec3_t& p = surface.vertices[i].position;
-        const place_t place{ .x = bits(p.x), .y = bits(p.y), .z = bits(p.z) };
-        const auto [at, added] = places.try_emplace(place, sums.size());
+        const auto [at, added] =
+            places.try_emplace(place_of_point(surface.vertices[i].position), sums.size());
         if (added) {
             sums.emplace_back();
+            weights.push_back(0.0F);
         }
         place_of[i] = at->second;
     }
@@ -110,7 +145,10 @@ void update_normals(surface_t& surface) {
             vec(surface.vertices[corners[1]].position),
             vec(surface.vertices[corners[2]].position),
         };
-        const vec3_t face = normalize(cross(at[1] - at[0], at[2] - at[0]));
+        const vec3_t face = face_normal(at[0], at[1], at[2]);
+        if (dot(face, face) == 0.0F) {
+            continue;
+        }
         // Each corner takes the face's normal by its angle there, so how a face is cut into
         // triangles doesn't change its weight.
         for (std::size_t k = 0; k < 3; ++k) {
@@ -119,10 +157,42 @@ void update_normals(surface_t& surface) {
             const float angle = std::acos(std::fmax(-1.0F, std::fmin(1.0F, dot(to_next, to_last))));
             const std::size_t place = place_of[corners[k]];
             sums[place] = sums[place] + face * angle;
+            weights[place] += angle;
+            own[corners[k]] = own[corners[k]] + face * angle;
+            own_weights[corners[k]] += angle;
         }
     }
+    // Where a place's faces cancel, as a sheet's two sides do, its vertex takes its own triangles'
+    // normal, and one in no triangle keeps the normal it had.
     for (std::size_t i = 0; i < surface.vertices.size(); ++i) {
-        surface.vertices[i].normal = c_vec(normalize(sums[place_of[i]]));
+        const std::size_t place = place_of[i];
+        if (length(sums[place]) > 1e-4F * weights[place]) {
+            surface.vertices[i].normal = c_vec(normalize(sums[place]));
+        } else if (length(own[i]) > 1e-4F * own_weights[i]) {
+            surface.vertices[i].normal = c_vec(normalize(own[i]));
+        }
+    }
+}
+
+/// A geometry's positions welded, each place once in the order it's first used, surface after
+/// surface, and its triangles' indices into them, in their order.
+void weld(const geometry_t& geometry, std::vector<fbe_vec3_t>& positions,
+          std::vector<std::uint32_t>& indices) {
+    std::unordered_map<place_t, std::uint32_t, place_hash_t> places;
+    for (const surface_t& surface : geometry.surfaces) {
+        std::vector<std::uint32_t> welded(surface.vertices.size());
+        for (std::size_t i = 0; i < surface.vertices.size(); ++i) {
+            const fbe_vec3_t& p = surface.vertices[i].position;
+            const auto [at, added] =
+                places.try_emplace(place_of_point(p), static_cast<std::uint32_t>(positions.size()));
+            if (added) {
+                positions.push_back({ .x = p.x + 0.0F, .y = p.y + 0.0F, .z = p.z + 0.0F });
+            }
+            welded[i] = at->second;
+        }
+        for (const std::uint32_t index : surface.indices) {
+            indices.push_back(welded[index]);
+        }
     }
 }
 
@@ -148,12 +218,7 @@ std::uint32_t make_geometry() {
 }
 
 std::uint32_t geometry_slot(std::uint64_t handle) {
-    const std::optional<std::uint32_t> slot = scene().geometry_slots.find(handle);
-    if (!slot) {
-        fail(handle == 0 ? "no geometry was given" : "the geometry was freed");
-        return none;
-    }
-    return *slot;
+    return live_slot(scene().geometry_slots, handle, "geometry");
 }
 
 void retain_geometry(std::uint32_t geometry) {
@@ -393,7 +458,10 @@ FBE_API bool fbe_geometry_fit(uint64_t geometry, const fbe_aabb_t* box, bool uni
     const bool ordered =
         box->min.x <= box->max.x && box->min.y <= box->max.y && box->min.z <= box->max.z;
     if (!ordered) {
-        return fbe::fail("a box to fit into has its least corner at or below its greatest");
+        return fbe::fail(std::format("a box to fit into has its least corner at or below its "
+                                     "greatest, not ({}, {}, {}) to ({}, {}, {})",
+                                     box->min.x, box->min.y, box->min.z, box->max.x, box->max.y,
+                                     box->max.z));
     }
     fbe::scene::vec3_t min;
     fbe::scene::vec3_t max;
@@ -438,17 +506,13 @@ FBE_API int32_t fbe_geometry_positions(uint64_t geometry, fbe_vec3_t* positions,
     if (slot == none) {
         return -1;
     }
-    std::size_t count = 0;
-    const auto room = static_cast<std::size_t>(std::max(capacity, 0));
-    for (const surface_t& surface : scene().geometries[slot].surfaces) {
-        for (const fbe_vertex_t& vertex : surface.vertices) {
-            if (count < room) {
-                positions[count] = vertex.position;
-            }
-            ++count;
-        }
-    }
-    return static_cast<std::int32_t>(count);
+    std::vector<fbe_vec3_t> welded;
+    std::vector<std::uint32_t> indices;
+    fbe::scene::weld(scene().geometries[slot], welded, indices);
+    const std::size_t count =
+        std::min(welded.size(), static_cast<std::size_t>(std::max(capacity, 0)));
+    std::copy_n(welded.begin(), count, positions);
+    return static_cast<std::int32_t>(welded.size());
 }
 
 FBE_API int32_t fbe_geometry_indices(uint64_t geometry, uint32_t* indices, int32_t capacity) {
@@ -456,19 +520,13 @@ FBE_API int32_t fbe_geometry_indices(uint64_t geometry, uint32_t* indices, int32
     if (slot == none) {
         return -1;
     }
-    std::size_t count = 0;
-    std::uint32_t first = 0;
-    const auto room = static_cast<std::size_t>(std::max(capacity, 0));
-    for (const surface_t& surface : scene().geometries[slot].surfaces) {
-        for (const std::uint32_t index : surface.indices) {
-            if (count < room) {
-                indices[count] = first + index;
-            }
-            ++count;
-        }
-        first += static_cast<std::uint32_t>(surface.vertices.size());
-    }
-    return static_cast<std::int32_t>(count);
+    std::vector<fbe_vec3_t> positions;
+    std::vector<std::uint32_t> welded;
+    fbe::scene::weld(scene().geometries[slot], positions, welded);
+    const std::size_t count =
+        std::min(welded.size(), static_cast<std::size_t>(std::max(capacity, 0)));
+    std::copy_n(welded.begin(), count, indices);
+    return static_cast<std::int32_t>(welded.size());
 }
 
 FBE_API int32_t fbe_surface_add_vertices(uint64_t geometry, int32_t surface,
@@ -530,9 +588,8 @@ FBE_API bool fbe_surface_vertices(uint64_t geometry, int32_t surface, int32_t fi
     if (first < 0 || count < 0 ||
         static_cast<std::size_t>(first) + static_cast<std::size_t>(count) >
             found->vertices.size()) {
-        return fbe::fail(std::format("the surface's vertices are 0 to {}, not {} to {}",
-                                     static_cast<std::int64_t>(found->vertices.size()) - 1, first,
-                                     static_cast<std::int64_t>(first) + count - 1));
+        return fbe::fail(
+            fbe::scene::out_of_range("vertices", found->vertices.size(), first, count));
     }
     std::copy_n(found->vertices.begin() + first, count, vertices);
     return true;
@@ -547,9 +604,8 @@ FBE_API bool fbe_surface_set_vertices(uint64_t geometry, int32_t surface, int32_
     if (first < 0 || count < 0 ||
         static_cast<std::size_t>(first) + static_cast<std::size_t>(count) >
             found->vertices.size()) {
-        return fbe::fail(std::format("the surface's vertices are 0 to {}, not {} to {}",
-                                     static_cast<std::int64_t>(found->vertices.size()) - 1, first,
-                                     static_cast<std::int64_t>(first) + count - 1));
+        return fbe::fail(
+            fbe::scene::out_of_range("vertices", found->vertices.size(), first, count));
     }
     std::copy_n(vertices, count, found->vertices.begin() + first);
     fbe::scene::touch_geometry(geometry_slot(geometry));
@@ -565,9 +621,7 @@ FBE_API bool fbe_surface_triangles(uint64_t geometry, int32_t surface, int32_t f
     const std::size_t triangles = found->indices.size() / 3;
     if (first < 0 || count < 0 ||
         static_cast<std::size_t>(first) + static_cast<std::size_t>(count) > triangles) {
-        return fbe::fail(std::format("the surface's triangles are 0 to {}, not {} to {}",
-                                     static_cast<std::int64_t>(triangles) - 1, first,
-                                     static_cast<std::int64_t>(first) + count - 1));
+        return fbe::fail(fbe::scene::out_of_range("triangles", triangles, first, count));
     }
     std::copy_n(found->indices.begin() + (static_cast<std::ptrdiff_t>(first) * 3), count * 3,
                 indices);

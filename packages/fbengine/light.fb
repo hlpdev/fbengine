@@ -18,7 +18,7 @@ Public Enum LightType
 End Enum
 
 /// A light, shining along its forward axis, -Z, or out from where it is. New, it's white, of
-/// intensity 1, reaching 10 units, with a cone from 0 to 45 degrees from its axis. A hidden light
+/// intensity 1, of range 10, with a cone from 0 to 45 degrees from its axis. A hidden light
 /// lights nothing.
 Public Final Class Light Extends Entity
     /// A new Light of a type, the last child of `parent`, or at the top of the current World when
@@ -38,7 +38,7 @@ Public Final Class Light Extends Entity
     /// Makes the light another type.
     @MainThread @PanicsAtCaller
     Public Method SetLightType(type: LightType)
-        If !fbe_light_set_type(Live("SetLightType"), type As Int32) Then Panic(LastError())
+        If !fbe_light_set_type(Live("SetLightType"), type As Int32) Then Failed("SetLightType")
     End Method
 
     /// What type of light it is.
@@ -49,7 +49,7 @@ Public Final Class Light Extends Entity
     /// below 0 takes light away, as dark spots want.
     @MainThread @PanicsAtCaller
     Public Method SetColor(color: Color)
-        If !fbe_light_set_color(Live("SetColor"), color.r, color.g, color.b) Then Panic(LastError())
+        If !fbe_light_set_color(Live("SetColor"), color.r, color.g, color.b) Then Failed("SetColor")
     End Method
 
     /// The light's color, with an alpha of 1.
@@ -61,28 +61,28 @@ Public Final Class Light Extends Entity
         Unsafe
             done = fbe_light_color(light, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Color")
         Return ColorOf(found)
     End Method
 
     /// Sets how bright the light is, its color times this. Below 0 panics.
     @MainThread @PanicsAtCaller
     Public Method SetIntensity(intensity: Float)
-        If !fbe_light_set_intensity(Live("SetIntensity"), intensity) Then Panic(LastError())
+        If !fbe_light_set_intensity(Live("SetIntensity"), intensity) Then Failed("SetIntensity")
     End Method
 
     /// How bright the light is.
     @MainThread @PanicsAtCaller
     Public Method Intensity(): Float => fbe_light_intensity(Live("Intensity"))
 
-    /// Sets how far a point or spot light reaches, where it's faded to nothing. One not above 0
-    /// panics.
+    /// Sets the distance a point or spot light's falloff is measured by; how it falls off with
+    /// it, and whether the light ends there, is its shading model's. One not above 0 panics.
     @MainThread @PanicsAtCaller
     Public Method SetRange(range: Float)
-        If !fbe_light_set_range(Live("SetRange"), range) Then Panic(LastError())
+        If !fbe_light_set_range(Live("SetRange"), range) Then Failed("SetRange")
     End Method
 
-    /// How far a point or spot light reaches.
+    /// The distance a point or spot light's falloff is measured by.
     @MainThread @PanicsAtCaller
     Public Method Range(): Float => fbe_light_range(Live("Range"))
 
@@ -90,7 +90,7 @@ Public Final Class Light Extends Entity
     /// where it's out, `outer`. Anything but 0 <= inner <= outer <= Pi / 2 panics.
     @MainThread @PanicsAtCaller
     Public Method SetCone(inner: Float, outer: Float)
-        If !fbe_light_set_cone(Live("SetCone"), inner, outer) Then Panic(LastError())
+        If !fbe_light_set_cone(Live("SetCone"), inner, outer) Then Failed("SetCone")
     End Method
 
     /// The angle from a spot light's axis where it starts to fade.

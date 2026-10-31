@@ -26,6 +26,18 @@ End Enum
 // One wrapper for each live entity, by its handle's slot.
 Global entities: Entity?[] = []
 
+// Lets go of what the wrappers keep when the program's Globals go, after the game's, so a game's
+// object that keeps its own entity, attached to it with SetData, isn't a cycle left at the end.
+Class Wrappers
+    Method Destroy()
+        For kept In entities
+            kept?.Forget()
+        End For
+    End Method
+End Class
+
+Global wrappers = Wrappers()
+
 // What a game attached with SetData, of the type it was set as.
 Interface Attached
 End Interface
@@ -58,7 +70,7 @@ Public Class Entity Implements Printable
     /// Frees the entity and every entity under it. Using them after panics.
     @MainThread @PanicsAtCaller
     Public Method Free()
-        If !fbe_entity_free(Live("Free")) Then Panic(LastError())
+        If !fbe_entity_free(Live("Free")) Then Failed("Free")
         DropFreed()
     End Method
 
@@ -76,7 +88,7 @@ Public Class Entity Implements Printable
     /// Names the entity, for Find; files' nodes come with their names.
     @MainThread @PanicsAtCaller
     Public Method SetName(name: String)
-        If !fbe_entity_set_name(Live("SetName"), name) Then Panic(LastError())
+        If !fbe_entity_set_name(Live("SetName"), name) Then Failed("SetName")
     End Method
 
     /// The entity's name, "" until it's named.
@@ -97,7 +109,7 @@ Public Class Entity Implements Printable
     Public Method SetParent(parent: Entity?, keepWorld: Bool = True)
         Local entity = Live("SetParent")
         Local to: UInt64 = parent != Null ? parent.Live("SetParent") : 0
-        If !fbe_entity_set_parent(entity, to, keepWorld) Then Panic(LastError())
+        If !fbe_entity_set_parent(entity, to, keepWorld) Then Failed("SetParent")
     End Method
 
     /// The entity's parent, Null at the top of its World.
@@ -114,9 +126,11 @@ Public Class Entity Implements Printable
     Public Method Child(index: Int): Entity
         Local child = fbe_entity_child(Live("Child"), index)
         If child == 0
-            Panic("an entity's children are at 0 to {ChildCount() - 1}, not {index}")
+            Local count = ChildCount()
+            Panic(
+                "Child({index}) on a {KindName()} with {count} {count == 1 ? "child" : "children"}")
         End If
-        Return Present(EntityOf(child))
+        Return Present(EntityOf(child), Self, "Child")
     End Method
 
     /// The entity's children, in order.
@@ -137,13 +151,13 @@ Public Class Entity Implements Printable
     /// hidden camera or light does nothing.
     @MainThread @PanicsAtCaller
     Public Method Hide()
-        If !fbe_entity_set_hidden(Live("Hide"), True) Then Panic(LastError())
+        If !fbe_entity_set_hidden(Live("Hide"), True) Then Failed("Hide")
     End Method
 
     /// Shows the entity again, which shows what's under it unless something above is hidden.
     @MainThread @PanicsAtCaller
     Public Method Show()
-        If !fbe_entity_set_hidden(Live("Show"), False) Then Panic(LastError())
+        If !fbe_entity_set_hidden(Live("Show"), False) Then Failed("Show")
     End Method
 
     /// Whether the entity itself was hidden.
@@ -167,7 +181,7 @@ Public Class Entity Implements Printable
         Else
             world = CurrentWorld().Live("Copy")
         End If
-        Return Present(EntityOf(fbe_entity_copy(entity, world, under)))
+        Return Present(EntityOf(fbe_entity_copy(entity, world, under)), Self, "Copy")
     End Method
 
     /// Keeps the game's own object on the entity, as Data<T>() gives it back, or lets it go with
@@ -199,6 +213,12 @@ Public Class Entity Implements Printable
     Package Method Live(call: String): UInt64
         If handle == 0 Then Panic("{call} on a {KindName()} that was freed")
         Return handle
+    End Method
+
+    // A panic naming the call and the entity's kind, with what C said went wrong.
+    @PanicsAtCaller
+    Package Method Failed(call: String)
+        Panic("{call} on a {KindName()}: {LastError()}")
     End Method
 
     // Lets go of the handle and what was attached, once C has freed it.
@@ -233,7 +253,7 @@ Package Function Create(parent: Entity?, kind: Int32): UInt64
     Else
         made = fbe_entity_create(CurrentWorld().Live("New"), 0, kind)
     End If
-    If made == 0 Then Panic(LastError())
+    If made == 0 Then Panic("New: {LastError()}")
     Return made
 End Function
 
@@ -246,7 +266,9 @@ Package Function EntityOf(handle: UInt64): Entity?
         Local kept = entities[slot]
         If kept != Null && kept.handle == handle Then Return kept
     End If
-    Select fbe_entity_kind(handle)
+    Local kind = fbe_entity_kind(handle)
+    If kind < 0 Then Panic("an entity's handle went stale: {LastError()}")
+    Select kind
         Case FBE_ENTITY_PIVOT
             Return Pivot(handle)
         Case FBE_ENTITY_CAMERA
@@ -256,7 +278,7 @@ Package Function EntityOf(handle: UInt64): Entity?
         Case FBE_ENTITY_MESH
             Return Mesh(handle)
     End Select
-    Panic(LastError())
+    Panic("an entity of kind {kind} has no wrapper")
 End Function
 
 /// Lets go of the wrappers of every entity C has freed.
@@ -282,9 +304,9 @@ Package Function DropFreed()
     End While
 End Function
 
-/// The entity a call gave, which panics with what C said when it gave none.
+/// The entity a call on `on` gave, which panics naming the call when it gave none.
 @PanicsAtCaller
-Package Function Present(entity: Entity?): Entity
-    If entity == Null Then Panic(LastError())
-    Return entity
+Package Function Present(entity: Entity?, on: Entity, call: String): Entity
+    If entity == Null Then on.Failed(call)
+    Return entity ?? on
 End Function

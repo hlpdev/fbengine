@@ -48,7 +48,7 @@ Extend Entity
     Public Method SetPosition(position: Vec3, space: Space = Space.LOCAL)
         Local entity = Live("SetPosition")
         If !fbe_entity_set_position(entity, position.x, position.y, position.z, space As Int32)
-            Panic(LastError())
+            Failed("SetPosition")
         End If
     End Method
 
@@ -61,7 +61,7 @@ Extend Entity
         Unsafe
             done = fbe_entity_position(entity, space As Int32, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Position")
         Return VecOf(found)
     End Method
 
@@ -71,7 +71,7 @@ Extend Entity
         Local entity = Live("SetRotation")
         If !fbe_entity_set_rotation(entity, rotation.x, rotation.y, rotation.z, rotation.w,
                                     space As Int32)
-            Panic(LastError())
+            Failed("SetRotation")
         End If
     End Method
 
@@ -91,7 +91,7 @@ Extend Entity
         Unsafe
             done = fbe_entity_rotation(entity, space As Int32, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Rotation")
         Return Quat(found.x, found.y, found.z, found.w)
     End Method
 
@@ -113,7 +113,7 @@ Extend Entity
     Public Method SetScale(scale: Vec3, space: Space = Space.LOCAL)
         Local entity = Live("SetScale")
         If !fbe_entity_set_scale(entity, scale.x, scale.y, scale.z, space As Int32)
-            Panic(LastError())
+            Failed("SetScale")
         End If
     End Method
 
@@ -126,7 +126,7 @@ Extend Entity
         Unsafe
             done = fbe_entity_scale(entity, space As Int32, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Scale")
         Return VecOf(found)
     End Method
 
@@ -139,7 +139,7 @@ Extend Entity
         Unsafe
             done = fbe_entity_matrix(entity, space As Int32, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("Matrix")
         Return MatOf(found)
     End Method
 
@@ -160,7 +160,7 @@ Extend Entity
     @MainThread @PanicsAtCaller
     Public Method Move(offset: Vec3)
         Local entity = Live("Move")
-        If !fbe_entity_move(entity, offset.x, offset.y, offset.z) Then Panic(LastError())
+        If !fbe_entity_move(entity, offset.x, offset.y, offset.z) Then Failed("Move")
     End Method
 
     /// Moves the entity along its parent's axes, or the world's, however it's turned.
@@ -168,7 +168,7 @@ Extend Entity
     Public Method Translate(offset: Vec3, space: Space = Space.LOCAL)
         Local entity = Live("Translate")
         If !fbe_entity_translate(entity, offset.x, offset.y, offset.z, space As Int32)
-            Panic(LastError())
+            Failed("Translate")
         End If
     End Method
 
@@ -178,7 +178,7 @@ Extend Entity
         Local entity = Live("Turn")
         If !fbe_entity_turn(entity, rotation.x, rotation.y, rotation.z, rotation.w,
                             space As Int32)
-            Panic(LastError())
+            Failed("Turn")
         End If
     End Method
 
@@ -193,6 +193,7 @@ Extend Entity
     /// rolled by `roll` about that axis; a target where it is changes nothing.
     @MainThread @PanicsAtCaller
     Public Method PointAt(target: Entity, roll: Float = 0)
+        target.Live("PointAt")
         PointAt(target.Position(Space.WORLD), roll)
     End Method
 
@@ -201,7 +202,7 @@ Extend Entity
     @MainThread @PanicsAtCaller
     Public Method PointAt(target: Vec3, roll: Float = 0)
         Local entity = Live("PointAt")
-        If !fbe_entity_point_at(entity, target.x, target.y, target.z, roll) Then Panic(LastError())
+        If !fbe_entity_point_at(entity, target.x, target.y, target.z, roll) Then Failed("PointAt")
     End Method
 
     /// Turns one of the entity's axes toward a direction in the world, the shortest way round, by
@@ -211,13 +212,14 @@ Extend Entity
     Public Method AlignTo(direction: Vec3, axis: Axis = Axis.FORWARD, rate: Float = 1)
         Local entity = Live("AlignTo")
         If !fbe_entity_align(entity, direction.x, direction.y, direction.z, axis As Int32, rate)
-            Panic(LastError())
+            Failed("AlignTo")
         End If
     End Method
 
     /// How far apart the entity and `target` are in the world.
     @MainThread @PanicsAtCaller
     Public Method DistanceTo(target: Entity): Float
+        target.Live("DistanceTo")
         Return Distance(Position(Space.WORLD), target.Position(Space.WORLD))
     End Method
 
@@ -228,7 +230,10 @@ Extend Entity
     /// How far the entity would turn left about the world's Y, from -Pi to Pi, to face `target`,
     /// as YawOf measures the line to it and its forward axis.
     @MainThread @PanicsAtCaller
-    Public Method YawTo(target: Entity): Float => YawTo(target.Position(Space.WORLD))
+    Public Method YawTo(target: Entity): Float
+        target.Live("YawTo")
+        Return YawTo(target.Position(Space.WORLD))
+    End Method
 
     /// How far the entity would turn left about the world's Y, from -Pi to Pi, to face a place.
     @MainThread @PanicsAtCaller
@@ -239,7 +244,10 @@ Extend Entity
     /// How far the entity would pitch up, from -Pi to Pi, for its forward axis to rise as high as
     /// `target`, as PitchOf measures the line to it and its forward axis.
     @MainThread @PanicsAtCaller
-    Public Method PitchTo(target: Entity): Float => PitchTo(target.Position(Space.WORLD))
+    Public Method PitchTo(target: Entity): Float
+        target.Live("PitchTo")
+        Return PitchTo(target.Position(Space.WORLD))
+    End Method
 
     /// How far the entity would pitch up, from -Pi to Pi, to rise as high as a place.
     @MainThread @PanicsAtCaller
@@ -267,7 +275,7 @@ Extend Entity
             done = fbe_entity_set_poses(handles.Pointer(), taken.Pointer(),
                                         entities.Count As Int32, space As Int32)
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Panic("SetPoses: {LastError()}")
     End Method
 
     /// The poses of many entities, in one call, as animation and sound read where entities are
@@ -281,7 +289,7 @@ Extend Entity
             done = fbe_entity_poses(handles.Pointer(), found.Pointer(), entities.Count As Int32,
                                     space As Int32)
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Panic("Poses: {LastError()}")
         Local poses: Pose[] = []
         For pose In found
             poses.Add(Pose(VecOf(pose.position),
@@ -334,7 +342,7 @@ Function Transformed(kind: Int32, v: Vec3, from: Entity?, to: Entity?, call: Str
     Unsafe
         done = fbe_entity_transform(source, target, kind, v.x, v.y, v.z, AddressOf(found))
     End Unsafe
-    If !done Then Panic(LastError())
+    If !done Then Panic("{call}: {LastError()}")
     Return VecOf(found)
 End Function
 

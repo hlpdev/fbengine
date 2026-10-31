@@ -24,14 +24,19 @@ bool finite(float r, float g, float b) {
     return std::isfinite(r) && std::isfinite(g) && std::isfinite(b);
 }
 
-/// The lights of a world in the tree's order, depth first, each parent before its children.
+/// The lights of a world in the tree's order, depth first, each parent before its children, by a
+/// stack of their own, so no tree is too deep.
 void lights_in(const std::vector<std::uint32_t>& among, std::vector<std::uint32_t>& found) {
     const entities_t& entities = scene().entities;
-    for (const std::uint32_t entity : among) {
-        if (entities.kind[entity] == FBE_ENTITY_LIGHT) {
-            found.push_back(entity);
+    std::vector<std::uint32_t> stack(among.rbegin(), among.rend());
+    while (!stack.empty()) {
+        const std::uint32_t at = stack.back();
+        stack.pop_back();
+        if (entities.kind[at] == FBE_ENTITY_LIGHT) {
+            found.push_back(at);
         }
-        lights_in(entities.children[entity], found);
+        const std::vector<std::uint32_t>& children = entities.children[at];
+        stack.insert(stack.end(), children.rbegin(), children.rend());
     }
 }
 

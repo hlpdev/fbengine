@@ -69,7 +69,7 @@ Extend Entity
     /// where its last move ended. Others panic.
     @MainThread @PanicsAtCaller
     Public Method SetCollisionGroup(group: Int)
-        If !fbe_entity_set_collision_group(Live("SetCollisionGroup"), group) Then Panic(LastError())
+        If !fbe_entity_set_collision_group(Live("SetCollisionGroup"), group) Then Failed("SetCollisionGroup")
     End Method
 
     /// The entity's collision group, 0 for none.
@@ -88,7 +88,7 @@ Extend Entity
     @MainThread @PanicsAtCaller
     Public Method SetCollisionRadius(horizontal: Float, vertical: Float)
         Local entity = Live("SetCollisionRadius")
-        If !fbe_entity_set_collision_radius(entity, horizontal, vertical) Then Panic(LastError())
+        If !fbe_entity_set_collision_radius(entity, horizontal, vertical) Then Failed("SetCollisionRadius")
     End Method
 
     /// The entity's ellipsoid's radii: x across, y up.
@@ -100,7 +100,7 @@ Extend Entity
         Unsafe
             done = fbe_entity_collision_radius(entity, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("CollisionRadius")
         Return Vec2(found.x, found.y)
     End Method
 
@@ -108,7 +108,7 @@ Extend Entity
     @MainThread @PanicsAtCaller
     Public Method SetCollisionShape(shape: CollisionShape)
         If !fbe_entity_set_collision_shape(Live("SetCollisionShape"), shape As Int32)
-            Panic(LastError())
+            Failed("SetCollisionShape")
         End If
     End Method
 
@@ -129,7 +129,7 @@ Extend Entity
         Unsafe
             done = fbe_entity_set_collision_box(entity, AddressOf(given))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("SetCollisionBox")
     End Method
 
     /// The entity's collision box, in its own space.
@@ -141,7 +141,7 @@ Extend Entity
         Unsafe
             done = fbe_entity_collision_box(entity, AddressOf(found))
         End Unsafe
-        If !done Then Panic(LastError())
+        If !done Then Failed("CollisionBox")
         Return AABB(VecOf(found.min), VecOf(found.max))
     End Method
 
@@ -150,7 +150,7 @@ Extend Entity
     /// further; 0, at first, for not at all. Below 0 panics.
     @MainThread @PanicsAtCaller
     Public Method SetStepHeight(height: Float)
-        If !fbe_entity_set_step_height(Live("SetStepHeight"), height) Then Panic(LastError())
+        If !fbe_entity_set_step_height(Live("SetStepHeight"), height) Then Failed("SetStepHeight")
     End Method
 
     /// How high a sliding mover steps up.
@@ -161,7 +161,7 @@ Extend Entity
     /// swept: how a game teleports a mover.
     @MainThread @PanicsAtCaller
     Public Method ResetCollisions()
-        If !fbe_entity_reset_collisions(Live("ResetCollisions")) Then Panic(LastError())
+        If !fbe_entity_reset_collisions(Live("ResetCollisions")) Then Failed("ResetCollisions")
     End Method
 
     /// What the entity touched in its World's last Collide, as a mover, in the order it touched
@@ -170,7 +170,7 @@ Extend Entity
     Public Method Collisions(): Collision[]
         Local entity = Live("Collisions")
         Local count = fbe_entity_collisions(entity, Null, 0)
-        If count < 0 Then Panic(LastError())
+        If count < 0 Then Failed("Collisions")
         Local found = Buffer<fbe_collision_t>(count)
         Unsafe
             fbe_entity_collisions(entity, found.Pointer(), count)
@@ -207,21 +207,21 @@ Extend World
     @MainThread @PanicsAtCaller
     Public Method SetCollisionResponse(source: Int, target: Int, response: CollisionResponse)
         Local world = Live("SetCollisionResponse")
-        If !fbe_world_set_collision(world, source, target, response As Int32) Then Panic(LastError())
+        If !fbe_world_set_collision(world, source, target, response As Int32) Then Failed("SetCollisionResponse")
     End Method
 
     /// What an entity of the `source` group does when it touches one of the `target` group.
     @MainThread @PanicsAtCaller
     Public Method CollisionResponse(source: Int, target: Int): CollisionResponse
         Local response = fbe_world_collision(Live("CollisionResponse"), source, target)
-        If response < 0 Then Panic(LastError())
+        If response < 0 Then Failed("CollisionResponse")
         Return response As CollisionResponse
     End Method
 
     /// Makes every pair of groups NONE again.
     @MainThread @PanicsAtCaller
     Public Method ClearCollisionResponses()
-        If !fbe_world_clear_collisions(Live("ClearCollisionResponses")) Then Panic(LastError())
+        If !fbe_world_clear_collisions(Live("ClearCollisionResponses")) Then Failed("ClearCollisionResponses")
     End Method
 
     /// Sets the most times one move touches something and goes on, 1 to 64, 8 at first; a move
@@ -229,7 +229,7 @@ Extend World
     @MainThread @PanicsAtCaller
     Public Method SetCollisionIterations(iterations: Int)
         Local world = Live("SetCollisionIterations")
-        If !fbe_world_set_collision_iterations(world, iterations) Then Panic(LastError())
+        If !fbe_world_set_collision_iterations(world, iterations) Then Failed("SetCollisionIterations")
     End Method
 
     /// The most times one move touches something and goes on.
@@ -242,7 +242,7 @@ Extend World
     /// 0.001 at first. Others panic.
     @MainThread @PanicsAtCaller
     Public Method SetCollisionSkin(skin: Float)
-        If !fbe_world_set_collision_skin(Live("SetCollisionSkin"), skin) Then Panic(LastError())
+        If !fbe_world_set_collision_skin(Live("SetCollisionSkin"), skin) Then Failed("SetCollisionSkin")
     End Method
 
     /// How far movers stay from what they touch.
@@ -253,6 +253,6 @@ Extend World
     /// ended to where it is, and keeps what each touched; UpdateWorld does it each step.
     @MainThread @PanicsAtCaller
     Public Method Collide()
-        If !fbe_world_collide(Live("Collide")) Then Panic(LastError())
+        If !fbe_world_collide(Live("Collide")) Then Failed("Collide")
     End Method
 End Extend

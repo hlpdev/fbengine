@@ -28,7 +28,7 @@ Public Final Class Mesh Extends Entity
     Public Method SetGeometry(geometry: Geometry?)
         Local mesh = Live("SetGeometry")
         Local drawn: UInt64 = geometry != Null ? geometry.Live("SetGeometry") : 0
-        If !fbe_mesh_set_geometry(mesh, drawn) Then Panic(LastError())
+        If !fbe_mesh_set_geometry(mesh, drawn) Then Failed("SetGeometry")
     End Method
 
     /// The Geometry the mesh draws, or Null.

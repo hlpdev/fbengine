@@ -3,10 +3,13 @@
 
 #include "fbengine.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <map>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -143,4 +146,47 @@ TEST_CASE("fitting takes only a box the right way round", "[scene]") {
     CHECK(bounds.min.x == 3.0F);
     CHECK(bounds.max.z == 3.0F);
     fbe_geometry_release(geometry);
+}
+
+namespace {
+
+/// How many edges, by welded index, aren't shared by exactly two triangles.
+std::size_t open_edges(std::uint64_t geometry) {
+    std::vector<std::uint32_t> indices(
+        static_cast<std::size_t>(fbe_geometry_indices(geometry, nullptr, 0)));
+    fbe_geometry_indices(geometry, indices.data(), static_cast<std::int32_t>(indices.size()));
+    std::map<std::pair<std::uint32_t, std::uint32_t>, int> edges;
+    for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            const std::uint32_t a = indices[i + k];
+            const std::uint32_t b = indices[i + ((k + 1) % 3)];
+            ++edges[{ std::min(a, b), std::max(a, b) }];
+        }
+    }
+    return static_cast<std::size_t>(
+        std::ranges::count_if(edges, [](const auto& edge) { return edge.second != 2; }));
+}
+
+} // namespace
+
+TEST_CASE("welded positions close every closed primitive", "[scene]") {
+    const std::uint64_t cube = fbe_geometry_cube();
+    CHECK(fbe_geometry_positions(cube, nullptr, 0) == 8);
+    CHECK(fbe_geometry_indices(cube, nullptr, 0) == 36);
+    CHECK(open_edges(cube) == 0);
+    for (const std::int32_t segments : { 3, 8, 16 }) {
+        const std::uint64_t sphere = fbe_geometry_sphere(segments);
+        const std::uint64_t cylinder = fbe_geometry_cylinder(segments, true);
+        const std::uint64_t cone = fbe_geometry_cone(segments, true);
+        const std::array<std::uint64_t, 3> closed{ sphere, cylinder, cone };
+        for (const std::uint64_t shape : closed) {
+            CHECK(open_edges(shape) == 0);
+            fbe_geometry_release(shape);
+        }
+    }
+    // A plane's edges are its rim, 4 squares of 4.
+    const std::uint64_t plane = fbe_geometry_plane(4);
+    CHECK(open_edges(plane) == 16);
+    fbe_geometry_release(plane);
+    fbe_geometry_release(cube);
 }

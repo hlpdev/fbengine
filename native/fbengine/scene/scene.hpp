@@ -3,13 +3,13 @@
 // What the scene's files share: the handle tables, and the entities' data, kept by field in arrays
 // indexed by slot, so what runs over many entities a frame reads only what it needs.
 
+#include "../../common/handles.hpp"
 #include "fbengine.h"
 #include "scene/bvh.hpp"
 #include "scene/math.hpp"
 
 #include <array>
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,29 +19,8 @@ namespace fbe::scene {
 /// No slot: no parent, no world.
 constexpr std::uint32_t none = UINT32_MAX;
 
-/// The slots of one kind of handle: a 32-bit slot, and above it a 24-bit generation and the kind's
-/// 8-bit tag, so a handle of another kind, as a World's given for an entity, is caught too. A freed
-/// slot's generation goes up, so its old handles are caught, never taken for the next one made
-/// there.
-class slots_t {
-public:
-    explicit slots_t(std::uint8_t tag) : m_tag(tag) {}
-
-    /// A free slot, or a new one; its handle is handle(slot).
-    std::uint32_t make();
-    void free(std::uint32_t slot);
-    /// The live slot a handle is for, if it is.
-    [[nodiscard]] std::optional<std::uint32_t> find(std::uint64_t handle) const;
-    [[nodiscard]] std::uint64_t handle(std::uint32_t slot) const;
-    /// How many slots there are, live or free, which the field arrays are sized to.
-    [[nodiscard]] std::uint32_t size() const;
-
-private:
-    std::uint8_t m_tag;
-    std::vector<std::uint32_t> m_generations;
-    std::vector<bool> m_live;
-    std::vector<std::uint32_t> m_free;
-};
+/// The slots of one kind of handle, which a pool's data is indexed by.
+using slots_t = handle_slots_t;
 
 /// A world: the entities at its top, how many it has, its ambient light, std.math's Color.Gray,
 /// sRGB's half gray, at first, and how its collisions go.
@@ -144,7 +123,7 @@ struct mesh_t {
 
 /// Every entity's data, a field to an array, indexed by slot.
 struct entities_t {
-    slots_t slots{ 2 };
+    slots_t slots{ ENTITY_KIND };
     std::vector<std::int32_t> kind;
     std::vector<std::uint32_t> world;
     std::vector<std::uint32_t> parent;
@@ -199,8 +178,9 @@ struct camera_t {
     float fog_density = 0.02F;
 };
 
-/// A light: what kind, its color times its intensity, how far a point or spot light reaches, and a
-/// spot light's cone, its angles from its axis to where it starts to fade and to where it's out.
+/// A light: what kind, its color and its intensity, the range a point or spot light's falloff is
+/// measured by, and a spot light's cone, its angles from its axis to where it starts to fade and
+/// to where it's out.
 struct light_t {
     std::uint32_t entity = none;
     std::int32_t type = 0;
@@ -212,7 +192,7 @@ struct light_t {
 };
 
 struct scene_t {
-    slots_t world_slots{ 1 };
+    slots_t world_slots{ WORLD_KIND };
     std::vector<world_t> worlds;
     std::uint32_t main_world = none;
     entities_t entities;
@@ -222,9 +202,9 @@ struct scene_t {
     /// Every light, in no order, each knowing its entity.
     std::vector<light_t> lights;
     std::vector<mesh_t> meshes;
-    slots_t geometry_slots{ 3 };
+    slots_t geometry_slots{ GEOMETRY_KIND };
     std::vector<geometry_t> geometries;
-    slots_t material_slots{ 4 };
+    slots_t material_slots{ MATERIAL_KIND };
     std::vector<material_t> materials;
     /// The handles freed since fbe_entity_freed last took them.
     std::vector<std::uint64_t> freed;
@@ -233,6 +213,9 @@ struct scene_t {
 /// The one scene, which every World is in.
 scene_t& scene();
 
+/// The live slot of `slots` a handle is for, or none, with fbe_error saying why, naming `what` it
+/// should be: none given, another kind's handle, or one freed.
+std::uint32_t live_slot(const slots_t& slots, std::uint64_t handle, const char* what);
 /// The live entity a handle is for, or none, with fbe_error saying so.
 std::uint32_t entity_slot(std::uint64_t handle);
 /// The live world a handle is for, or none, with fbe_error saying so.
@@ -248,6 +231,10 @@ void copy_component(std::uint32_t from, std::uint32_t to);
 camera_t* camera_of(std::uint64_t handle);
 void add_camera(std::uint32_t entity);
 void remove_camera(std::uint32_t entity);
+/// Numbers a tree's copied cameras anew in the order their originals were made, so cameras of one
+/// order draw as their originals do, whatever the tree's order.
+void renumber_cameras(const std::vector<std::pair<std::uint32_t, std::size_t>>& originals,
+                      const std::vector<std::uint32_t>& copies);
 /// The live light a handle is for, or null, with fbe_error saying so.
 light_t* light_of(std::uint64_t handle);
 void add_light(std::uint32_t entity);

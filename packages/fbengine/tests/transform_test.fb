@@ -224,6 +224,9 @@ Function PointsVectorsAndNormalsGoBetweenEntities()
     mirror.SetScale(Vec3(-1, 1, 1))
     Expect(Near(TransformNormal(Vec3(1, 0, 0), mirror, Null), Vec3(-1, 0, 0)))
     Expect(Near(TransformNormal(Vec3(0, 1, 0), mirror, Null), Vec3(0, 1, 0)))
+    mirror.SetScale(Vec3(1, -1, 1))
+    Expect(Near(TransformNormal(Vec3(0, 1, 0), mirror, Null), Vec3(0, -1, 0)))
+    Expect(Near(TransformNormal(Vec3(1, 0, 0), mirror, Null), Vec3(1, 0, 0)))
 End Function
 
 @Test
@@ -286,4 +289,43 @@ Function PosesGoInAndOutInBatches()
     Local back = Entity.Poses(entities, Space.WORLD)
     Expect(Near(back[42].Position, Vec3(42, 0, 0)))
     Expect(Entity.Poses([], Space.WORLD).Count == 0)
+End Function
+
+@Test
+Function UnderAMirrorTheWorldRotationAndScaleMakeTheWorldMatrix()
+    Local world = Fresh()
+    Defer world.Free()
+    For mirror In [Vec3(-1, 1, 1), Vec3(1, -1, 1), Vec3(1, 1, -1), Vec3(-1, -1, 1),
+                   Vec3(-1, -1, -1)]
+        Local parent = Pivot()
+        parent.SetScale(mirror * 2)
+        parent.SetRotation(0, Deg(20), 0)
+        Local child = Pivot(parent)
+        child.SetRotation(Deg(10), 0.5, Deg(5))
+        child.SetPosition(Vec3(1, 2, 3))
+        Local composed = Mat4.Compose(child.Position(Space.WORLD), child.Rotation(Space.WORLD),
+                                      child.Scale(Space.WORLD))
+        Expect(IsClose(composed, child.Matrix(Space.WORLD), 0.0001))
+        // Forward is the rotation's -Z, which the matrix flips where the world scale is below 0.
+        Local looks = Normalize(TransformVector(Vec3.Forward, child, Null))
+        Local flipped = child.Scale(Space.WORLD).z < 0
+        Expect(Near(child.Forward(), flipped ? -looks : looks))
+        // A world rotation set comes back as it went.
+        Local turn = Quat.FromEuler(Deg(-30), Deg(70), 0)
+        child.SetRotation(turn, Space.WORLD)
+        Expect(IsClose(child.Rotation(Space.WORLD), turn))
+    End For
+End Function
+
+@Test
+Function PointAtUnderAMirrorFacesTheTarget()
+    Local world = Fresh()
+    Defer world.Free()
+    Local parent = Pivot()
+    parent.SetScale(Vec3(-1, 1, 1))
+    Local child = Pivot(parent)
+    child.Turn(0, 0.5, 0)
+    child.PointAt(Vec3(5, 0, 0))
+    Expect(Near(Normalize(TransformVector(Vec3.Forward, child, Null)), Vec3(1, 0, 0)))
+    Expect(Near(child.Forward(), Vec3(1, 0, 0)))
 End Function
