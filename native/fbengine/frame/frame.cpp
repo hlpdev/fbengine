@@ -3,6 +3,7 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "gpu/gpu.hpp"
 #include "input/input.hpp"
 #include "jobs/jobs.hpp"
 
@@ -32,8 +33,8 @@ bool vsync = true;
 extern "C" {
 
 FBE_API void fbe_frame_flip(bool wait_for_vsync) {
-    // The renderer presents the frame here, from E2, waiting for the display when it's asked to.
     vsync = wait_for_vsync;
+    fbe::gpu_present(wait_for_vsync);
 
     // SDL's clock starts at the first flip, so the first's time can be 0.
     const bool first = frames == 0;

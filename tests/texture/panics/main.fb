@@ -1,0 +1,70 @@
+// Texture's panics, and the GPU's and the screen's settings', each a mistake a game can make,
+// which fb test can't catch: ctest runs this with a case's name and checks it panics with the
+// case's message.
+
+Import std.core
+Import std.math
+Import std.os
+Import fbengine
+
+Function Run(name: String) Throws GraphicsError
+    Select name
+        // A region whose bytes are more than an Int32 holds: 32768 by 16385 RGBA16F pixels are
+        // 4,295,229,440 bytes, which wrapped to 262144 in Int32.
+        Case "wrapped-size"
+            Local texture = Try Texture(4, 4, TextureFormat.RGBA16F, False)
+            Local bytes: UInt8[] = []
+            For i = 1 To 262144
+                bytes.Add(0)
+            End For
+            texture.WritePixels(0, 0, 32768, 16385, bytes)
+        // A level of 2^31 bytes, one more than an array holds.
+        Case "huge-read"
+            Local texture = Try Texture(16384, 16384, TextureFormat.RGBA16F, False)
+            texture.ReadPixels()
+        // A frame the sprite hasn't.
+        Case "sprite-frame"
+            Local sheet = Try Texture.Target(8, 4)
+            Local sprite = Sprite2D(sheet)
+            sprite.SetFrames(4, 4)
+            Canvas(sheet).Draw(sprite, 0, 0, 2)
+        // A canvas's texture freed, and drawn into after.
+        Case "canvas-freed"
+            Local made = Try Texture.Target(8, 8)
+            Local canvas = Canvas(made)
+            canvas.DrawRect(0, 0, 2, 2)
+            made.Free()
+            canvas.DrawRect(0, 0, 2, 2)
+        // Pixels used after their texture's freed, and after the GPU stops.
+        Case "pixels-freed"
+            Local texture = Try Texture(4, 4, TextureFormat.RGBA8_LINEAR, False)
+            Local pixels = texture.LockPixels()
+            texture.Free()
+            pixels.Get(0, 0)
+        Case "pixels-stopped"
+            Local texture = Try Texture(4, 4, TextureFormat.RGBA8_LINEAR, False)
+            Local pixels = texture.LockPixels()
+            Gpu.Stop()
+            pixels.Set(1, 1, Color32(0, 255, 0, 255))
+        // Pixels written after their target's drawn into since they were locked.
+        Case "pixels-drawn-over"
+            Local target = Try Texture.Target(4, 4, TextureFormat.RGBA8_LINEAR)
+            Local pixels = target.LockPixels()
+            pixels.Set(0, 0, Color32(0, 0, 255, 255))
+            Canvas(target).DrawRect(1, 1, 1, 1)
+            pixels.Unlock()
+        Case "lod-bias"
+            Try Gpu.SetLodBias(17)
+        Case "anisotropy"
+            Try Gpu.SetAnisotropy(0.5)
+        Case "screen-samples"
+            Try Screen.SetSamples(3)
+        Default
+            Panic("no such case as {name}")
+    End Select
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Count != 1 Then Panic("give the case to run")
+Window.SetHeadless(True)
+Try Run(arguments[0])
