@@ -625,3 +625,132 @@ Function AMenuFindsWhatsBoundToAKeyAlready()
     Expect(controls.BoundTo(Binding.OfKey(Key.Z)).Count == 0)
     Expect(move.Reads(Binding.OfKey(Key.D, -1.0)))
 End Function
+
+// An action rebound, cleared, or loaded while it's Down, and so no longer Down, is let go: its Up
+// is from its own Down, so a charge that ends on Up never sticks.
+@Test
+Function RebindingAnActionWhileItsDownLetsItGo() Throws GraphicsError, InputError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local fire = controls.Add("fire")
+    fire.Bind(Binding.OfKey(Key.F))
+    Local charge = controls.Add("charge")
+    charge.Bind(Binding.OfKey(Key.H))
+    Try Simulate.KeyDown(Key.F)
+    Try Simulate.KeyDown(Key.H)
+    Flip()
+    Expect(fire.Down() && charge.Down())
+    Expect(fire.Replace(Binding.OfKey(Key.F), Binding.OfKey(Key.G)))
+    charge.ClearBindings()
+    Flip()
+    Expect(!fire.Down() && fire.Up())
+    Expect(!charge.Down() && charge.Up())
+    Flip()
+    Expect(!fire.Up() && !charge.Up())
+    // Loaded while held: Down, with no Hit, and its Up when it's let go.
+    Try controls.Load("fire = [{{ key = \"F\" }}]")
+    Flip()
+    Expect(fire.Down() && !fire.Hit())
+    Try Simulate.KeyUp(Key.F)
+    Try Simulate.KeyUp(Key.H)
+    Flip()
+    Expect(!fire.Down() && fire.Up())
+End Function
+
+// A player's set handed the pad they pressed SOUTH on to join, still held, isn't confirmed by
+// that press; nor is a key held long before when the key holding it back is unbound.
+@Test
+Function ChangingWhatASetReadsIsNoPress() Throws GraphicsError, InputError
+    Try Opened()
+    Defer EndGraphics()
+    Local first = Try Simulate.ConnectGamepad("First")
+    Defer first.Unplug()
+    Local second = Try Simulate.ConnectGamepad("Second")
+    Defer second.Unplug()
+    Flip()
+    Local player = ActionSet()
+    player.SetGamepad(first.Device())
+    Local confirm = player.Add("confirm")
+    confirm.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    Flip()
+    second.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Expect(second.Device().Hit(GamepadButton.SOUTH) && !confirm.Hit())
+    player.SetGamepad(second.Device())
+    Flip()
+    Expect(confirm.Down() && !confirm.Hit())
+    second.SetButton(GamepadButton.SOUTH, False)
+    Flip()
+    Expect(confirm.Up())
+
+    Local controls = ActionSet()
+    Local steer = controls.Add("steer")
+    steer.Bind(Binding.OfKey(Key.D))
+    steer.Bind(Binding.OfKey(Key.A, -1.0))
+    Try Simulate.KeyDown(Key.A)
+    Try Simulate.KeyDown(Key.D)
+    Flip()
+    Flip()
+    steer.Unbind(Binding.OfKey(Key.A, -1.0))
+    Flip()
+    Expect(steer.Down() && !steer.Hit())
+    Try Simulate.KeyUp(Key.A)
+    Try Simulate.KeyUp(Key.D)
+    Flip()
+End Function
+
+// Held through a Flip, an action's Hit and Up come together or not at all: a handover from one
+// key to another is a hold.
+@Test
+Function AHandoverBetweenBindingsIsAHold() Throws GraphicsError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfKey(Key.SPACE))
+    jump.Bind(Binding.OfKey(Key.RETURN))
+    Try Simulate.KeyDown(Key.RETURN)
+    Flip()
+    Flip()
+    Try Simulate.KeyDown(Key.SPACE)
+    Try Simulate.KeyUp(Key.RETURN)
+    Flip()
+    Expect(jump.Down() && !jump.Hit() && !jump.Up())
+    // Space alone, let go and pressed again, is a release and a press.
+    Try Simulate.KeyUp(Key.SPACE)
+    Try Simulate.KeyDown(Key.SPACE)
+    Flip()
+    Expect(jump.Down() && jump.Hits() == 1 && jump.Up())
+    Try Simulate.KeyUp(Key.SPACE)
+    Flip()
+End Function
+
+// Over two pads, a pad's press counts when no other pad holds the button, and its release when
+// no other still does.
+@Test
+Function TwoPadsOnOneButtonAreOneHold() Throws GraphicsError, InputError
+    Try Opened()
+    Defer EndGraphics()
+    Local first = Try Simulate.ConnectGamepad("First")
+    Defer first.Unplug()
+    Local second = Try Simulate.ConnectGamepad("Second")
+    Defer second.Unplug()
+    Flip()
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    Flip()
+    first.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Expect(jump.Hit())
+    second.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Expect(jump.Down() && !jump.Hit() && !jump.Up())
+    second.SetButton(GamepadButton.SOUTH, False)
+    Flip()
+    Expect(jump.Down() && !jump.Hit() && !jump.Up())
+    first.SetButton(GamepadButton.SOUTH, False)
+    Flip()
+    Expect(!jump.Down() && jump.Up())
+End Function

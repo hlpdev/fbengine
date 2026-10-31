@@ -76,6 +76,15 @@ Function Main() Throws GraphicsError, InputError
             Binding.OfMouseButton(0 As MouseButton)
         Case "binding-nan-scale"
             Binding.OfGamepadAxis(GamepadAxis.LEFT_X, NaN)
+        Case "bind-unchecked"
+            ActionSet().Add("jump").Bind(Binding(BindingKind.KEY, 9999, 1.0))
+        Case "bind-y-infinite"
+            ActionSet().Add("look").BindY(Binding(BindingKind.MOUSE_AXIS, 0, Inf))
+        Case "replace-overflows"
+            Local look = ActionSet().Add("look")
+            look.Bind(Binding.OfMouseAxis(MouseAxis.X, 1e30))
+            look.Replace(Binding.OfMouseAxis(MouseAxis.X, 1e30),
+                         Binding.OfMouseAxis(MouseAxis.Y, 1e30))
         Default
             Panic("no case {name}")
     End Select

@@ -8,9 +8,10 @@
 
 namespace fbe {
 
-/// Whether nothing's to be shown: `headless`, or SDL's video driver hint (the SDL_VIDEO_DRIVER
-/// environment variable included) naming one with no screen, "offscreen" or "dummy", as tests set
-/// it, so a test can't open a message box that waits for a player.
+/// Whether nothing's to be shown: `headless`, or SDL's video driver one with no screen,
+/// "offscreen" or "dummy", in any case, as tests set it, so a test can't open a message box that
+/// waits for a player: the driver SDL started, once its video has, and before, the first in its
+/// hint's list (the SDL_VIDEO_DRIVER environment variable included), which it'd try first.
 bool shows_nothing(bool headless);
 
 /// Whether `url` starts with a scheme, like "https:" or "mailto:", which a path doesn't: a
