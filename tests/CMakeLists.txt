@@ -65,6 +65,52 @@ if(FBENGINE_FB_TESTS)
                        PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
 endif()
 
+# fbengine_physics' C++ that's subtle, apart from its DLL.
+add_executable(fbengine_physics_tests physics/handles_tests.cpp)
+target_include_directories(fbengine_physics_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_physics")
+target_link_libraries(fbengine_physics_tests PRIVATE Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_physics_tests)
+catch_discover_tests(fbengine_physics_tests TEST_PREFIX "physics."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# fbengine_physics' steps, through its DLL, which the tests find where CMake built it.
+add_executable(fbengine_physics_step_tests physics/step_tests.cpp)
+target_link_libraries(fbengine_physics_step_tests PRIVATE fbengine_physics_native
+                      Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_physics_step_tests)
+catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics."
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_physics_native>")
+
+# fbengine_physics' examples, checked against what they print.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME examples.falling_boxes
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/falling_boxes")
+  set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION
+                       "\n200 boxes fell, 200 came to rest, 100 on others\r?\n$")
+endif()
+
+# Shapes made in a process before any world, as shape_test's are when it runs alone.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME fbengine_physics.shapes_alone
+           COMMAND "${FBENGINE_FB}" test "${PROJECT_SOURCE_DIR}/packages/fbengine_physics"
+                   --filter shape_test)
+endif()
+
+# What fbengine_physics panics for, each by a run of tests/physics/panics, which says it.
+if(FBENGINE_FB_TESTS)
+  foreach(case IN ITEMS "step-nan;not nan" "step-infinity;not inf" "step-huge;not 1e\\+30"
+                        "step-freed;this PhysicsWorld was freed")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME physics.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/physics/panics"
+                     -- ${name})
+    set_tests_properties(physics.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
+                         "panic: PhysicsWorld\\.Step: [^\n]*${said}")
+  endforeach()
+endif()
+
 # The job system, built into the tests from its own source, since the DLL exports only its C API.
 add_executable(fbengine_jobs_tests jobs/jobs_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")

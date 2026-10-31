@@ -1,0 +1,22 @@
+// What fbengine_physics panics for, one a run, by its argument, which ctest checks the message
+// of.
+
+Import std.core
+Import std.math
+Import std.os
+Import fbengine_physics
+
+Local which = Process.Arguments()[0]
+Local world = PhysicsWorld()
+Select which
+    Case "step-nan"
+        world.Step(NaN)
+    Case "step-infinity"
+        world.Step(Inf)
+    Case "step-huge"
+        world.Step(1e30)
+    Case "step-freed"
+        world.Free()
+        world.Step(NaN)
+End Select
+Print("{which} didn't panic")
