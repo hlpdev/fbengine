@@ -1,0 +1,25 @@
+// fbengine_audio's panics that need fbengine's entities, each a mistake a game can make, which fb
+// test can't catch: ctest runs this with a case's name and checks it panics with the case's message.
+
+Import std.core
+Import std.os
+Import fbengine
+Import fbengine_audio
+
+Local arguments = Process.Arguments()
+If arguments.Count != 1 Then Panic("give the case to run")
+
+Local world = World()
+World.SetCurrent(world)
+Select arguments[0]
+    Case "emitter-follows-freed"
+        Local car = Pivot()
+        car.Free()
+        Emitter().Follow(car)
+    Case "listener-follows-freed"
+        Local camera = Pivot()
+        camera.Free()
+        Listener.Follow(camera)
+    Default
+        Panic("no case {arguments[0]}")
+End Select

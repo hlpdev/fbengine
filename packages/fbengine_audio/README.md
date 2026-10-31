@@ -34,10 +34,11 @@ mix: music, effects, and voices at the volumes a player sets, or sounds muffled 
 
 An `Emitter` plays sounds in the world, heard from the `Listener`: quieter with distance, panned to
 their side, and pitched by the Doppler effect. Its channels move with it. An emitter that follows
-something, and the listener following the camera, are moved at each of fbengine's Flips, at the
-velocity of the move over the frame. A `Channel` is one play of a
-`Sound`; once it ends or is stopped, its methods do nothing, so a game can stop or ask about one
-whose sound ended long ago.
+an entity, or where a function says, and the listener following the camera, are moved at each of
+fbengine's Flips, at the velocity of the move over the frame; given the game's `FixedStep`, they're
+where the entity is drawn between steps, so they move as smoothly as what's seen. A `Channel` is
+one play of a `Sound`; once it ends or is stopped, its methods do nothing, so a game can stop or
+ask about one whose sound ended long ago.
 
 It's released with fbengine, at the same version. Apache-2.0; miniaudio is MIT-0 or public
 domain.
