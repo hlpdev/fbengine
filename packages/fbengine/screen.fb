@@ -3,10 +3,11 @@
 
 Import std.core
 Import std.ffi
-Import std.image
+From std.image Import Image, Png
 Import std.io
 Import std.math
 Import "./c/fbe_gpu"
+Import "./canvas"
 Import "./texture"
 Import "./window"
 
@@ -21,6 +22,9 @@ Public Enum Scaling
     INTEGER = 2
 End Enum
 
+// The screen's canvas, kept so its pen stays as set.
+Global screenCanvas: Canvas? = Null
+
 /// The screen: the target, a Texture with depth, that a frame's drawn into, which Flip shows in
 /// the window. It's the window's size in pixels, following it as it changes, unless SetSize gives
 /// it a size of its own, which Flip scales into the window; its pixels stay from one Flip to the
@@ -28,6 +32,17 @@ End Enum
 Public Class Screen
     Private New()
     End New
+
+    /// The canvas that draws into the screen, whichever texture it is as the window changes: the
+    /// same one each time, so its pen stays as set.
+    @MainThread Public Static Method Canvas(): Canvas
+        Local kept = screenCanvas
+        If kept != Null Then Return kept
+        // Qualified, as Canvas here is this Method.
+        Local made = canvas.Canvas()
+        screenCanvas = made
+        Return made
+    End Method
 
     /// The texture each frame's drawn into, as it is now, starting the GPU if nothing has; Null
     /// without a window, or if the GPU can't start.

@@ -26,4 +26,5 @@ if(TARGET fbengine_internal)
   list(APPEND fbengine_shader_targets fbengine_internal)
 endif()
 fbengine_add_shaders(TARGETS ${fbengine_shader_targets} NAMESPACE fbe::shaders
-                     HEADER engine_shaders.hpp SHADERS shaders/present.slang)
+                     HEADER engine_shaders.hpp SHADERS shaders/present.slang
+                     shaders/canvas.slang)

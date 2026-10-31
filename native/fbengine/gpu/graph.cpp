@@ -166,6 +166,10 @@ std::vector<image_t> images;
 std::vector<pooled_t> pool;
 fbe::gpu::recorded_t recorded;
 bool recording = false;
+/// What sends a batch held back to the graph, and drops it, and whether it's sending it.
+void (*held_back)() = nullptr;
+void (*drop_held)() = nullptr;
+bool flushing = false;
 /// Frames submitted, which say how long ago a transient's image was last asked for.
 std::uint64_t frames = 0;
 /// How many frames a transient's image is kept for without being asked for.
@@ -670,6 +674,16 @@ void record_levels(std::int32_t levels) {
     }
 }
 
+/// Sends what a batch held back to the graph, before anything else enters it.
+void flush_held_back() {
+    if (held_back == nullptr || flushing || recording) {
+        return;
+    }
+    flushing = true;
+    held_back();
+    flushing = false;
+}
+
 /// Empties the graph for the next passes, keeping its lists' room.
 void empty() {
     resources.clear();
@@ -753,7 +767,13 @@ resource_t external_resource(const external_t& image) {
     return static_cast<resource_t>(resources.size() - 1);
 }
 
+void hold_back(void (*flush)(), void (*drop)()) {
+    held_back = flush;
+    drop_held = drop;
+}
+
 bool in_graph(std::uint64_t handle) {
+    flush_held_back();
     return by_handle().contains(handle);
 }
 
@@ -761,6 +781,7 @@ bool add_pass(pass_t pass) {
     if (recording) {
         return fail("a pass isn't added as the frame's graph is recorded");
     }
+    flush_held_back();
     const std::size_t first = accesses.size();
     if (!expand(pass)) {
         accesses.resize(first);
@@ -795,6 +816,7 @@ bool record_graph() {
     if (recording) {
         return true;
     }
+    flush_held_back();
     if (added.empty()) {
         empty();
         return true;
@@ -823,6 +845,9 @@ bool record_graph() {
 }
 
 void drop_passes() {
+    if (drop_held != nullptr) {
+        drop_held();
+    }
     if (!recording) {
         empty();
     }
@@ -848,6 +873,9 @@ void age_transients() {
 }
 
 void stop_graph() {
+    if (drop_held != nullptr) {
+        drop_held();
+    }
     empty();
     // Stopping frees every texture, transient targets' too.
     pool.clear();

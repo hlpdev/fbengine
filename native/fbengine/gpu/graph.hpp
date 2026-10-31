@@ -98,6 +98,11 @@ struct external_t {
 
 resource_t external_resource(const external_t& image);
 
+/// Has `flush` run whenever the graph's about to take a pass, say whether a texture's in it, or be
+/// recorded, so what a batch holds back, as 2D's does, goes in first, in its turn; and `drop` run
+/// when the graph's passes are dropped, as a lost GPU's are, or the GPU stops.
+void hold_back(void (*flush)(), void (*drop)());
+
 /// Whether a texture's in the graph, as a pass added since it was last recorded uses it, so what's
 /// done with it next, as a write of its pixels, is a pass after those.
 bool in_graph(std::uint64_t handle);

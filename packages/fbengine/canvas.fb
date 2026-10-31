@@ -1,0 +1,189 @@
+// 2D: a Canvas draws into a target, the screen or a Texture, with a pen of its own: a color, an
+// origin, a viewport, and a blend. Its shapes are exact to the pixel, the same on every GPU, and
+// what's drawn into one target goes to the GPU together.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_2d"
+Import "./texture"
+Import "./window"
+
+/// How a Canvas blends what it draws with what's there.
+Public Enum Blend
+    /// Replaces it, alpha too.
+    SOLID = 0
+    /// Over it, by the color's alpha.
+    ALPHA = 1
+    /// Added to it, as light is, by the color's alpha.
+    ADD = 2
+    /// Multiplied with it, darkening it.
+    MULTIPLY = 3
+End Enum
+
+/// A pen that draws into a target: the screen, whichever texture it is as the window changes, as
+/// Screen.Canvas() gives; or a Texture that's a target, which it keeps. Its color is white, its
+/// origin, added to every position it draws at, 0, 0, its viewport, which clips what it draws, the
+/// whole target, and its blend SOLID, unless set. Positions are pixels from the target's top left,
+/// a pixel covering from its whole coordinates to the next. What it draws into one target goes to
+/// the GPU together, in its turn with whatever else the frame does.
+Public Final Class Canvas
+    Field target: UInt64
+    Field texture: Texture?
+    Field pen: fbe_2d_pen_t
+
+    /// A canvas that draws into `texture`; it panics unless the texture's a target.
+    @MainThread @PanicsAtCaller
+    Public New(texture: Texture)
+        If !texture.IsTarget() Then Panic("a Canvas draws into a target, which the texture isn't")
+        target = texture.Live("Canvas")
+        Self.texture = texture
+        pen = fbe_2d_pen_t(0, 0, 0, 0, 0, 0, 255, 255, 255, 255, FBE_2D_SOLID)
+    End New
+
+    // The screen's.
+    Package New()
+        target = 0
+        pen = fbe_2d_pen_t(0, 0, 0, 0, 0, 0, 255, 255, 255, 255, FBE_2D_SOLID)
+    End New
+
+    /// Sets the color it draws with, alpha too, which ALPHA and ADD blend by.
+    @MainThread Public Method SetColor(color: Color32)
+        pen.red = color.r
+        pen.green = color.g
+        pen.blue = color.b
+        pen.alpha = color.a
+    End Method
+
+    /// The color it draws with.
+    @MainThread Public Method Color(): Color32 => Color32(pen.red, pen.green, pen.blue, pen.alpha)
+
+    /// Sets its origin, which is added to every position it draws at.
+    @MainThread Public Method SetOrigin(x: Int32, y: Int32)
+        pen.origin_x = x
+        pen.origin_y = y
+    End Method
+
+    /// Its origin.
+    @MainThread Public Method Origin(): Vec2i => Vec2i(pen.origin_x As Int, pen.origin_y As Int)
+
+    /// Clips what it draws to `width` by `height` pixels at `x`, `y` of the target, the origin not
+    /// added, as much of it as is in the target. It panics for a negative size.
+    @MainThread @PanicsAtCaller
+    Public Method SetViewport(x: Int32, y: Int32, width: Int32, height: Int32)
+        If width < 0 || height < 0 Then Panic("a viewport is 0 by 0 or bigger, not {width}x{height}")
+        pen.viewport_x = x
+        pen.viewport_y = y
+        pen.viewport_width = width
+        pen.viewport_height = height
+        // 0 by 0 is the whole target to C, so an empty viewport's one that misses it.
+        If width == 0 || height == 0
+            pen.viewport_x = -1
+            pen.viewport_y = -1
+            pen.viewport_width = 1
+            pen.viewport_height = 1
+        End If
+    End Method
+
+    /// Clips what it draws to the whole target again.
+    @MainThread Public Method ResetViewport()
+        pen.viewport_x = 0
+        pen.viewport_y = 0
+        pen.viewport_width = 0
+        pen.viewport_height = 0
+    End Method
+
+    /// What it clips to, Null for the whole target.
+    @MainThread Public Method Viewport(): Rect?
+        If pen.viewport_width == 0 && pen.viewport_height == 0 Then Return Null
+        Return Rect(pen.viewport_x As Float, pen.viewport_y As Float, pen.viewport_width As Float,
+                    pen.viewport_height As Float)
+    End Method
+
+    /// Sets how it blends what it draws with what's there.
+    @MainThread Public Method SetBlend(blend: Blend)
+        pen.blend = blend As Int32
+    End Method
+
+    /// How it blends.
+    @MainThread Public Method Blend(): Blend => pen.blend As Blend
+
+    /// Fills its viewport with its color, replacing what's there, whatever its blend.
+    @MainThread @PanicsAtCaller
+    Public Method Clear()
+        Local used = pen
+        Local drawn = False
+        Unsafe
+            drawn = fbe_2d_clear(target, AddressOf(used))
+        End Unsafe
+        If !drawn Then Panic(LastError())
+    End Method
+
+    /// Draws a pixel.
+    @MainThread @PanicsAtCaller
+    Public Method Plot(x: Int32, y: Int32)
+        Local used = pen
+        Local drawn = False
+        Unsafe
+            drawn = fbe_2d_plot(target, AddressOf(used), x, y)
+        End Unsafe
+        If !drawn Then Panic(LastError())
+    End Method
+
+    /// Draws a line from one pixel to another, both drawn: in each column, or each row where it's
+    /// steeper, the pixel nearest it, the same whichever end it starts from.
+    @MainThread @PanicsAtCaller
+    Public Method DrawLine(x1: Int32, y1: Int32, x2: Int32, y2: Int32)
+        Local used = pen
+        Local drawn = False
+        Unsafe
+            drawn = fbe_2d_line(target, AddressOf(used), x1, y1, x2, y2)
+        End Unsafe
+        If !drawn Then Panic(LastError())
+    End Method
+
+    /// Draws a rectangle `width` by `height` pixels with its top left at `x`, `y`, filled, or its
+    /// outline a pixel wide; nothing if a side isn't positive.
+    @MainThread @PanicsAtCaller
+    Public Method DrawRect(x: Int32, y: Int32, width: Int32, height: Int32, filled: Bool = True)
+        Local used = pen
+        Local drawn = False
+        Unsafe
+            drawn = fbe_2d_rect(target, AddressOf(used), x, y, width, height, filled)
+        End Unsafe
+        If !drawn Then Panic(LastError())
+    End Method
+
+    /// Draws the ellipse that fills that rectangle, filled, or its outline; it's symmetric across
+    /// both its middles.
+    @MainThread @PanicsAtCaller
+    Public Method DrawOval(x: Int32, y: Int32, width: Int32, height: Int32, filled: Bool = True)
+        Local used = pen
+        Local drawn = False
+        Unsafe
+            drawn = fbe_2d_oval(target, AddressOf(used), x, y, width, height, filled)
+        End Unsafe
+        If !drawn Then Panic(LastError())
+    End Method
+
+    /// Draws a polygon through `points`: filled, covering the pixels whose middles are in it,
+    /// concave or not as long as its sides don't cross; or its outline, a line between the pixels
+    /// the points are in, each to the next and the last to the first. It panics for fewer than 3
+    /// points.
+    @MainThread @PanicsAtCaller
+    Public Method DrawPolygon(points: Vec2[], filled: Bool = True)
+        Local flat: Float32[] = []
+        For point In points
+            flat.Add(point.x As Float32)
+            flat.Add(point.y As Float32)
+        End For
+        Local buffer = Buffer<Float32>.From(flat)
+        Local used = pen
+        Local drawn = False
+        Unsafe
+            drawn = fbe_2d_polygon(target, AddressOf(used), buffer.Pointer(),
+                                   points.Count As Int32, filled)
+        End Unsafe
+        If !drawn Then Panic(LastError())
+    End Method
+End Class
