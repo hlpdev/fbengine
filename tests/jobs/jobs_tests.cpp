@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <span>
@@ -181,20 +182,26 @@ TEST_CASE("a finished job's handle stays finished when its slot runs another", "
     jobs.wait(second);
 }
 
-TEST_CASE("run_for covers every item once", "[jobs]") {
+TEST_CASE("run_for covers every item once, a grain a range at least", "[jobs]") {
     fbe::jobs_t jobs(6);
-    const std::array<std::size_t, 6> counts = { 0, 1, 7, 64, 1'000, 100'003 };
-    const std::array<std::size_t, 5> grains = { 0, 1, 10, 4'096, 1'000'000 };
+    const std::array<std::size_t, 7> counts = { 0, 1, 7, 10, 64, 1'000, 100'003 };
+    const std::array<std::size_t, 8> grains = {
+        0, 1, 4, 10, 4'096, 1'000'000, SIZE_MAX - 1, SIZE_MAX,
+    };
     for (const std::size_t count : counts) {
         for (const std::size_t grain : grains) {
             std::vector<std::atomic<int>> seen(count);
             std::atomic<int> ranges = 0;
             std::atomic<int> empty = 0;
+            std::atomic<std::size_t> smallest = SIZE_MAX;
             jobs.wait(jobs.run_for(count, grain, [&](std::size_t begin, std::size_t end) {
                 if (begin >= end) {
                     ++empty;
                 }
                 ++ranges;
+                std::size_t least = smallest;
+                while (end - begin < least && !smallest.compare_exchange_weak(least, end - begin)) {
+                }
                 for (std::size_t i = begin; i < end; ++i) {
                     ++seen[i];
                 }
@@ -203,9 +210,14 @@ TEST_CASE("run_for covers every item once", "[jobs]") {
             for (const std::atomic<int>& item : seen) {
                 REQUIRE(item == 1);
             }
-            // At least a grain a range, and at most four ranges a thread.
-            const std::size_t least = grain == 0 ? 1 : grain;
-            REQUIRE(static_cast<std::size_t>(ranges) <= (count + least - 1) / least);
+            // A grain a range at least, or one range for fewer, and at most four a thread.
+            if (count == 0) {
+                REQUIRE(ranges == 0);
+            } else if (count <= std::max<std::size_t>(grain, 1)) {
+                REQUIRE(ranges == 1);
+            } else {
+                REQUIRE(smallest >= std::max<std::size_t>(grain, 1));
+            }
             REQUIRE(ranges <= 4 * (jobs.workers() + 1));
         }
     }
@@ -415,4 +427,153 @@ TEST_CASE("under stress, from many threads, every job runs once and in order", "
             }
         }
     }
+}
+
+TEST_CASE("a job can hold what can't be copied", "[jobs]") {
+    fbe::jobs_t jobs(2);
+    auto owned = std::make_unique<int>(41);
+    std::atomic<int> seen = 0;
+    jobs.wait(jobs.run([owned = std::move(owned), &seen, &jobs] mutable {
+        ++*owned;
+        jobs.to_main([owned = std::move(owned), &seen] { seen = *owned; });
+    }));
+    REQUIRE(seen == 0);
+    jobs.hand_over();
+    REQUIRE(seen == 42);
+    REQUIRE_FALSE(fbe::work_t());
+}
+
+namespace {
+
+// How deep in waits the running job is, on its thread.
+thread_local int nesting = 0;
+
+// Holds a worker until it's let go, so the jobs queued meanwhile are in a known order.
+struct hold_t {
+    explicit hold_t(fbe::jobs_t& jobs) : held(mutex) {
+        job = jobs.run([this] {
+            holding = true;
+            const std::scoped_lock wait(mutex);
+        });
+        while (!holding) {
+            std::this_thread::yield();
+        }
+    }
+
+    std::mutex mutex;
+    std::unique_lock<std::mutex> held;
+    std::atomic<bool> holding = false;
+    fbe::job_t job = 0;
+};
+
+// Waits up to a minute for `job`, for a slow machine, without running it here.
+bool finishes(const fbe::jobs_t& jobs, fbe::job_t job) {
+    for (int i = 0; i < 6'000 && !jobs.finished(job); ++i) {
+        std::this_thread::sleep_for(10ms);
+    }
+    return jobs.finished(job);
+}
+
+} // namespace
+
+TEST_CASE("a wait runs only its job and what it runs after", "[jobs]") {
+    // One worker: A waits for B, and C for D, which runs after A. A wait that ran whatever was
+    // first in the queue would run C inside A's, and C would wait for D, which waits for A.
+    // Leaked, so a deadlock fails the test rather than hanging it.
+    auto* jobs = new fbe::jobs_t(1);
+    hold_t hold(*jobs);
+    std::atomic<fbe::job_t> b = 0;
+    std::atomic<fbe::job_t> d = 0;
+    const fbe::job_t a = jobs->run([&] { jobs->wait(b.load()); });
+    const fbe::job_t c = jobs->run([&] { jobs->wait(d.load()); });
+    b = jobs->run([] {});
+    const std::array after_a = { a };
+    d = jobs->run([] {}, after_a);
+    hold.held.unlock();
+    REQUIRE(finishes(*jobs, d));
+    REQUIRE(jobs->finished(a));
+    REQUIRE(jobs->finished(c));
+    delete jobs;
+}
+
+TEST_CASE("a wait ends soon after its job, whatever else is queued", "[jobs]") {
+    using steady_t = std::chrono::steady_clock;
+    fbe::jobs_t jobs(2);
+    std::atomic<int> started = 0;
+    std::atomic<bool> long_ran_here = false;
+    const std::thread::id here = std::this_thread::get_id();
+    // Both workers busy, one with a long load and one with what the frame's job runs after.
+    jobs.run([&] {
+        ++started;
+        std::this_thread::sleep_for(3s);
+    });
+    const fbe::job_t before = jobs.run([&] {
+        ++started;
+        std::this_thread::sleep_for(20ms);
+    });
+    while (started < 2) {
+        std::this_thread::yield();
+    }
+    // Another long load is queued first; a wait that ran it would take three seconds.
+    jobs.run([&] {
+        long_ran_here = std::this_thread::get_id() == here;
+        std::this_thread::sleep_for(3s);
+    });
+    const std::array after = { before };
+    const fbe::job_t frame = jobs.run([] {}, after);
+    const auto start = steady_t::now();
+    jobs.wait(frame);
+    REQUIRE(steady_t::now() - start < 1500ms);
+    REQUIRE_FALSE(long_ran_here);
+}
+
+TEST_CASE("waits don't stack on a thread", "[jobs]") {
+    fbe::jobs_t jobs(2);
+    hold_t slow(jobs);
+    std::atomic<int> deepest = 0;
+    std::atomic<int> ran = 0;
+    // Twenty thousand jobs each waiting for one that's held: each worker takes one and waits, and
+    // never runs another inside its wait, as it would run every one, a few frames deeper each.
+    for (int i = 0; i < 20'000; ++i) {
+        jobs.run([&] {
+            const int depth = ++nesting;
+            int most = deepest;
+            while (depth > most && !deepest.compare_exchange_weak(most, depth)) {}
+            jobs.wait(slow.job);
+            --nesting;
+            ++ran;
+        });
+    }
+    std::this_thread::sleep_for(100ms);
+    slow.held.unlock();
+    jobs.wait(slow.job);
+    while (ran < 20'000) {
+        std::this_thread::yield();
+    }
+    REQUIRE(deepest == 1);
+}
+
+TEST_CASE("a wait for a long chain runs it without going deeper", "[jobs]") {
+    fbe::jobs_t jobs(3);
+    std::atomic<int> ran = 0;
+    fbe::job_t last = 0;
+    for (int i = 0; i < 5'000; ++i) {
+        const std::array before = { last };
+        last = jobs.run([&ran] { ++ran; }, before);
+    }
+    jobs.wait(last);
+    REQUIRE(ran == 5'000);
+
+    // And a lattice, where every job runs after all of the layer before, looked at once a search.
+    std::vector<fbe::job_t> layer;
+    for (int depth = 0; depth < 30; ++depth) {
+        std::vector<fbe::job_t> next;
+        next.reserve(8);
+        for (int i = 0; i < 8; ++i) {
+            next.push_back(jobs.run([&ran] { ++ran; }, layer));
+        }
+        layer = std::move(next);
+    }
+    jobs.wait(jobs.run([] {}, layer));
+    REQUIRE(ran == 5'000 + (30 * 8));
 }
