@@ -1,0 +1,172 @@
+// Loads: what Assets.Load and Assets.LoadAsync make things from, and how far loads have got.
+
+Import std.collections
+Import std.core
+Import std.ffi
+Import "./c/fbe_assets"
+
+/// What a load decodes its file to.
+Public Enum AssetKind
+    /// Its bytes as they are.
+    BYTES = 0
+    /// An image: a PNG's, JPEG's, or KTX2's texels.
+    IMAGE = 1
+    /// A glTF's meshes, materials and their images, nodes, scenes, skins, and clips.
+    MODEL = 2
+End Enum
+
+/// What Assets.Load and Assets.LoadAsync make: an object made from a file, as the engine's
+/// textures, geometry, and scenes are. A package makes its own types Assets, as a sound made from
+/// a file's bytes, by saying the kind of load their files need and making one from a load once
+/// it's done.
+Public Interface Asset
+    /// The kind of load that makes one.
+    Static Method LoadKind(): AssetKind
+
+    /// One made from `load`, done and loaded; it keeps the load for as long as it needs what the
+    /// load made. It throws an IOError of INVALID_DATA for a file that loaded but isn't one.
+    Static Method FromLoad(load: AssetLoad): Self Throws IOError
+End Interface
+
+/// An image a load decoded: its Vulkan format, its size in texels, and how many layers, faces (6
+/// for a cube map), and mip levels it has.
+Public Struct ImageInfo
+    Public Field Format: UInt32
+    Public Field Width: UInt32
+    Public Field Height: UInt32
+    Public Field Depth: UInt32
+    Public Field Layers: UInt32
+    Public Field Faces: UInt32
+    Public Field Levels: UInt32
+End Struct
+
+/// How much of each thing a glTF a load decoded has.
+Public Struct ModelInfo
+    Public Field Meshes: Int32
+    Public Field Primitives: Int32
+    Public Field Materials: Int32
+    Public Field Images: Int32
+    Public Field Nodes: Int32
+    Public Field Scenes: Int32
+    Public Field Skins: Int32
+    Public Field Clips: Int32
+    Public Field Cameras: Int32
+    Public Field Lights: Int32
+End Struct
+
+/// A file loaded, done, and what it was decoded to, which stays until the last reference to the
+/// load goes.
+Public Final Class AssetLoad
+    Package ReadOnly Field Handle: UInt64
+
+    Package New(handle: UInt64)
+        Handle = handle
+    End New
+
+    /// The res:// path it read, normalized.
+    @MainThread Public Method Path(): String
+        Unsafe
+            Return fbe_assets_path(Handle).ToString()
+        End Unsafe
+    End Method
+
+    /// How many bytes a bytes load read; panics for another kind of load.
+    @MainThread @PanicsAtCaller
+    Public Method Size(): Int64
+        Local size = fbe_assets_size(Handle)
+        If size < 0 Then Panic("only a bytes load has bytes")
+        Return size
+    End Method
+
+    /// A copy of a bytes load's bytes; panics for another kind of load.
+    @MainThread @PanicsAtCaller
+    Public Method Bytes(): UInt8[]
+        Local size = Size()
+        Local bytes: UInt8[] = []
+        If size == 0 Then Return bytes
+        bytes.Resize(size As Int, 0)
+        Unsafe
+            Local start = fbe_assets_bytes(Handle)
+            For i = 0 Until size As Int
+                bytes[i] = start[i]
+            End For
+        End Unsafe
+        Return bytes
+    End Method
+
+    /// Where a bytes load's bytes are, Size() of them, for a package's C to read without copying
+    /// them, which stay there while the load is referenced; panics for another kind of load.
+    @MainThread @PanicsAtCaller
+    Public Method BytesPointer(): Ptr<UInt8>
+        Size()
+        Return fbe_assets_bytes(Handle)
+    End Method
+
+    /// An image load's image; panics for another kind of load.
+    @MainThread @PanicsAtCaller
+    Public Method Image(): ImageInfo
+        Local info = fbe_image_info_t(0, 0, 0, 0, 0, 0, 0)
+        Local found = False
+        Unsafe
+            found = fbe_assets_image(Handle, AddressOf(info))
+        End Unsafe
+        If !found Then Panic("only an image load has an image")
+        Return ImageInfo(info.format, info.width, info.height, info.depth, info.layers, info.faces,
+                         info.levels)
+    End Method
+
+    /// A model load's model; panics for another kind of load.
+    @MainThread @PanicsAtCaller
+    Public Method Model(): ModelInfo
+        Local info = fbe_model_info_t(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        Local found = False
+        Unsafe
+            found = fbe_assets_model(Handle, AddressOf(info))
+        End Unsafe
+        If !found Then Panic("only a model load has a model")
+        Return ModelInfo(info.meshes, info.primitives, info.materials, info.images, info.nodes,
+                         info.scenes, info.skins, info.clips, info.cameras, info.lights)
+    End Method
+
+    Method Destroy()
+        fbe_assets_free(Handle)
+    End Method
+End Class
+
+/// How far loads have got, for a loading screen: each Assets.LoadAsync given it adds its load.
+Public Final Class LoadProgress
+    Field loads: UInt64[]
+
+    /// Progress of no loads yet.
+    Public New()
+        loads = []
+    End New
+
+    // Follows `load` too.
+    @MainThread Package Method Add(load: UInt64)
+        loads.Add(load)
+    End Method
+
+    /// How many loads it follows.
+    @MainThread Public Method Count(): Int => loads.Count
+
+    /// How much of its loads is done, from 0 to 1, each load counting the same; 1 for none.
+    @MainThread Public Method Fraction(): Float64
+        If loads.Count == 0 Then Return 1.0
+        Local sum: Float64 = 0.0
+        For load In loads
+            Local progress = fbe_assets_progress(load) As Float64
+            // A load that's gone was done, and made what it loaded.
+            sum += progress < 0.0 ? 1.0 : progress
+        End For
+        Return sum / (loads.Count As Float64)
+    End Method
+
+    /// Whether all of its loads are done, as their Tasks are once the main thread's had them.
+    @MainThread Public Method Done(): Bool
+        For load In loads
+            If fbe_assets_progress(load) >= 0.0 && !fbe_assets_done(load) Then Return False
+        End For
+        Return True
+    End Method
+End Class
