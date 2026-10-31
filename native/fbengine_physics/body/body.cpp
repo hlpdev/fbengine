@@ -24,8 +24,10 @@ struct body_t {
     JPH::BodyID id;
     // Where it is in its world's list.
     std::size_t index;
-    // Whether its shape has an inside, and so a mass, which a mesh hasn't.
+    // Whether its shape has an inside, and so a mass, which a mesh and a flat convex hull haven't.
     bool weighed;
+    // Whether its shape can be dynamic: weighed, and with no mesh in it.
+    bool can_be_dynamic;
 
     [[nodiscard]] JPH::BodyInterface& bodies() const {
         return world->system.GetBodyInterfaceNoLock();
@@ -78,13 +80,19 @@ fbe_body_vec3_t vec3(JPH::Vec3Arg v) {
 
 // `q` as Jolt's, normalized, if it's finite and not 0; false, saying so, if it isn't.
 bool quat(const fbe_body_quat_t& q, JPH::Quat& made) {
-    const JPH::Quat rotation(q.x, q.y, q.z, q.w);
-    if (!std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z) || !std::isfinite(q.w) ||
-        rotation.LengthSq() == 0.0F) {
-        return fail("a rotation is finite, and not 0");
+    return normalized(q.x, q.y, q.z, q.w, made);
+}
+
+// Why a shape that's `weighed` or not, and `must_be_static` or not, can't be dynamic, or nullptr
+// if it can.
+const char* not_dynamic(bool weighed, bool must_be_static) {
+    if (must_be_static) {
+        return "a dynamic body has no mesh in its shape, which only a static or kinematic body has";
     }
-    made = rotation.Normalized();
-    return true;
+    if (!weighed) {
+        return "a dynamic body's shape has an inside to weigh, which a flat convex hull hasn't";
+    }
+    return nullptr;
 }
 
 bool motion(std::int32_t motion, JPH::EMotionType& made) {
@@ -203,8 +211,9 @@ FBE_PHYSICS_API uint64_t fbe_body_add(uint64_t world, uint64_t shape, int32_t mo
     }
     const float mass = of->GetMassProperties().mMass;
     const bool weighed = std::isfinite(mass) && mass > 0.0F;
-    if (type == JPH::EMotionType::Dynamic && !weighed) {
-        fail("a dynamic body's shape has an inside to weigh, which a mesh hasn't");
+    const char* why = not_dynamic(weighed, of->MustBeStatic());
+    if (type == JPH::EMotionType::Dynamic && why != nullptr) {
+        fail(why);
         return 0;
     }
 
@@ -212,7 +221,8 @@ FBE_PHYSICS_API uint64_t fbe_body_add(uint64_t world, uint64_t shape, int32_t mo
     JPH::BodyCreationSettings settings(of, at, turned, type,
                                        moves ? moving_layer : not_moving_layer);
     if (moves && !weighed) {
-        // A kinematic mesh weighs nothing it can be pushed by; Jolt asks for a mass all the same.
+        // A kinematic mesh weighs nothing, since nothing pushes it; Jolt asks for a mass all the
+        // same.
         settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
         settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(JPH::Vec3::sOne(), 1000.0F);
     }
@@ -225,8 +235,9 @@ FBE_PHYSICS_API uint64_t fbe_body_add(uint64_t world, uint64_t shape, int32_t mo
     }
     face.AddBody(made->GetID(),
                  moves ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
-    const std::uint64_t handle =
-        bodies().add(std::make_unique<body_t>(in, made->GetID(), in->bodies.size(), weighed));
+    changed(*in);
+    const std::uint64_t handle = bodies().add(
+        std::make_unique<body_t>(in, made->GetID(), in->bodies.size(), weighed, why == nullptr));
     in->bodies.push_back(handle);
     made->SetUserData(handle);
     return handle;
@@ -240,6 +251,7 @@ FBE_PHYSICS_API bool fbe_body_free(uint64_t body) {
     JPH::BodyInterface& face = found->bodies();
     face.RemoveBody(found->id);
     face.DestroyBody(found->id);
+    changed(*found->world);
     forget(*found);
     return bodies().remove(body);
 }
@@ -269,8 +281,8 @@ FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion_type) {
     if (found->body().IsStatic() || type == JPH::EMotionType::Static) {
         return fail("a static body stays static, and a body that moves keeps moving");
     }
-    if (type == JPH::EMotionType::Dynamic && !found->weighed) {
-        return fail("a dynamic body's shape has an inside to weigh, which a mesh hasn't");
+    if (type == JPH::EMotionType::Dynamic && !found->can_be_dynamic) {
+        return fail(not_dynamic(found->weighed, found->body().GetShape()->MustBeStatic()));
     }
     found->bodies().SetMotionType(found->id, type, JPH::EActivation::Activate);
     return true;
@@ -371,7 +383,8 @@ FBE_PHYSICS_API float fbe_body_mass(uint64_t body) {
     if (found == nullptr || !found->weighed || found->body().IsStatic()) {
         return 0.0F;
     }
-    return 1.0F / found->body().GetMotionProperties()->GetInverseMass();
+    // A kinematic body keeps the mass it has as a dynamic one.
+    return 1.0F / found->body().GetMotionProperties()->GetInverseMassUnchecked();
 }
 
 FBE_PHYSICS_API bool fbe_body_set_mass(uint64_t body, float mass) {

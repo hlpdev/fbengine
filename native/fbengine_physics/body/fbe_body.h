@@ -39,8 +39,8 @@ typedef struct fbe_body_quat_t {
 
 // A new body of `shape` in `world`, moving as `motion` says, at `position`, turned by `rotation`,
 // which is normalized, and awake unless it's static; 0 if the world or the shape isn't one, the
-// world has all the bodies it has room for, or a dynamic body would be a mesh, which has no
-// inside to weigh.
+// world has all the bodies it has room for, or a dynamic body's shape would have a mesh in it,
+// or no inside to weigh, as a flat convex hull hasn't.
 FBE_PHYSICS_API uint64_t fbe_body_add(uint64_t world, uint64_t shape, int32_t motion,
                                       const fbe_body_vec3_t* position,
                                       const fbe_body_quat_t* rotation);
@@ -52,7 +52,7 @@ FBE_PHYSICS_API bool fbe_body_free(uint64_t body);
 FBE_PHYSICS_API int32_t fbe_body_motion(uint64_t body);
 
 // Makes a dynamic `body` kinematic, or a kinematic one dynamic; false if it isn't a body, it's
-// static or would be, or it would be a dynamic mesh.
+// static or would be, or it would be dynamic of a shape fbe_body_add refuses a dynamic one.
 FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion);
 
 // Where `body` is, and how it's turned; false if it isn't a body.

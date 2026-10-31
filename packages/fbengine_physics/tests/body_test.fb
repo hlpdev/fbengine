@@ -293,7 +293,8 @@ Function TheCApiRefusesBodiesItDoesntTake()
         Expect(Error() == "3 isn't a Motion")
         Expect(fbe_body_add(world, floor, FBE_BODY_DYNAMIC, AddressOf(at),
                             AddressOf(unturned)) == 0)
-        Expect(Error() == "a dynamic body's shape has an inside to weigh, which a mesh hasn't")
+        Expect(Error() ==
+               "a dynamic body has no mesh in its shape, which only a static or kinematic body has")
         Expect(fbe_body_add(world, ball, FBE_BODY_DYNAMIC, AddressOf(nowhere),
                             AddressOf(unturned)) == 0)
         Expect(Error() == "a vector is finite")
@@ -338,6 +339,152 @@ Function TheCApiRefusesBodiesItDoesntTake()
     fbe_physics_free(world)
     Expect(fbe_body_motion(body) == -1)
     Expect(fbe_physics_bodies(world) == -1)
+End Function
+
+// A compound with a mesh in it, and a flat convex hull, are static or kinematic, never dynamic.
+@Test @MainThread
+Function TheCApiRefusesDynamicBodiesOfShapesThatMustBeStatic()
+    Local world = fbe_physics_new(10)
+    Defer fbe_physics_free(world)
+    Local size = fbe_shape_vec3_t(1, 1, 1)
+    Local corners = Buffer<fbe_shape_vec3_t>(4)
+    corners[1] = fbe_shape_vec3_t(1, 0, 0)
+    corners[2] = fbe_shape_vec3_t(0, 0, 1)
+    corners[3] = fbe_shape_vec3_t(1, 0, 1)
+    Local indices = Buffer<UInt32>.From([0, 2, 1])
+    Local box: UInt64 = 0
+    Local plate: UInt64 = 0
+    Local flat: UInt64 = 0
+    Unsafe
+        box = fbe_shape_box(AddressOf(size))
+        plate = fbe_shape_mesh(corners.Pointer(), 3, indices.Pointer(), 3)
+        flat = fbe_shape_convex_hull(corners.Pointer(), 4)
+    End Unsafe
+    Local parts = Buffer<fbe_shape_part_t>(2)
+    parts[0] = fbe_shape_part_t(box, fbe_shape_vec3_t(0, 1, 0), fbe_shape_quat_t(0, 0, 0, 1))
+    parts[1] = fbe_shape_part_t(plate, fbe_shape_vec3_t(0, 0, 0), fbe_shape_quat_t(0, 0, 0, 1))
+    Local both: UInt64 = 0
+    Unsafe
+        both = fbe_shape_compound(parts.Pointer(), 2)
+    End Unsafe
+    Expect(both != 0)
+    Local at = fbe_body_vec3_t(0, 0, 0)
+    Local unturned = fbe_body_quat_t(0, 0, 0, 1)
+    Unsafe
+        Expect(fbe_body_add(world, both, FBE_BODY_DYNAMIC, AddressOf(at), AddressOf(unturned)) == 0)
+        Expect(Error() ==
+               "a dynamic body has no mesh in its shape, which only a static or kinematic body has")
+        Expect(fbe_body_add(world, flat, FBE_BODY_DYNAMIC, AddressOf(at), AddressOf(unturned)) == 0)
+        Expect(Error() ==
+               "a dynamic body's shape has an inside to weigh, which a flat convex hull hasn't")
+        Local lift = fbe_body_add(world, both, FBE_BODY_KINEMATIC, AddressOf(at),
+                                  AddressOf(unturned))
+        Expect(lift != 0)
+        Expect(!fbe_body_set_motion(lift, FBE_BODY_DYNAMIC))
+        Expect(Error() ==
+               "a dynamic body has no mesh in its shape, which only a static or kinematic body has")
+        Local panel = fbe_body_add(world, flat, FBE_BODY_KINEMATIC, AddressOf(at),
+                                   AddressOf(unturned))
+        Expect(panel != 0)
+        Expect(!fbe_body_set_motion(panel, FBE_BODY_DYNAMIC))
+        Expect(Error() ==
+               "a dynamic body's shape has an inside to weigh, which a flat convex hull hasn't")
+        Expect(fbe_body_motion(panel) == FBE_BODY_KINEMATIC)
+    End Unsafe
+    fbe_shape_free(both)
+    fbe_shape_free(plate)
+    fbe_shape_free(flat)
+    fbe_shape_free(box)
+End Function
+
+// A handle given to another kind's call is refused, never taken for another object.
+@Test @MainThread
+Function AHandleOfOneKindIsNeverAnothers()
+    Local world = fbe_physics_new(10)
+    Local ball = fbe_shape_sphere(1)
+    Local at = fbe_body_vec3_t(0, 0, 0)
+    Local unturned = fbe_body_quat_t(0, 0, 0, 1)
+    Local body: UInt64 = 0
+    Unsafe
+        body = fbe_body_add(world, ball, FBE_BODY_DYNAMIC, AddressOf(at), AddressOf(unturned))
+    End Unsafe
+    Expect(world != ball && ball != body && body != world)
+    Expect(!fbe_body_free(world))
+    Expect(!fbe_body_free(ball))
+    Expect(!fbe_shape_free(body))
+    Expect(!fbe_shape_free(world))
+    Expect(!fbe_physics_free(body))
+    Expect(!fbe_physics_free(ball))
+    Expect(fbe_shape_kind(body) == 0)
+    Expect(fbe_body_motion(world) == -1)
+    Expect(fbe_physics_bodies(ball) == -1)
+    // Each is still what it was.
+    Expect(fbe_physics_bodies(world) == 1)
+    Expect(fbe_shape_kind(ball) == FBE_SHAPE_SPHERE)
+    Expect(fbe_body_motion(body) == FBE_BODY_DYNAMIC)
+    Expect(fbe_body_free(body))
+    Expect(fbe_shape_free(ball))
+    Expect(fbe_physics_free(world))
+End Function
+
+@Test
+Function AKinematicBodyHasTheMassItWouldHaveDynamic()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local door = Body(world, Shape.Box(Vec3(1, 2, 0.1)), Motion.KINEMATIC, Vec3(0, 1, 0))
+    Expect(Near(door.Mass(), 200, 0.1))
+    door.SetMass(50)
+    Expect(Near(door.Mass(), 50))
+    door.SetMotion(Motion.DYNAMIC)
+    Expect(Near(door.Mass(), 50))
+End Function
+
+// Jolt's broad phase keeps room for bodies added and taken out only until it's next built, so a
+// level loaded and unloaded again and again with no step between sorts it as it goes.
+@Test
+Function ManyBodiesAddedAndFreedWithNoStepBetweenFit()
+    Local world = PhysicsWorld(1000)
+    Defer world.Free()
+    Local crate = Shape.Box(Vec3(1, 1, 1))
+    For load = 1 To 10
+        Local level: Body[] = []
+        For i = 0 To 999
+            level.Add(Body(world, crate, Motion.STATIC,
+                           Vec3(((i % 32) As Float) * 2, 0, ((i / 32) As Float) * 2)))
+        End For
+        For body In level
+            body.Free()
+        End For
+    End For
+    Expect(world.Bodies() == 0)
+End Function
+
+// A rotation too long, or too short, for a float to square is normalized all the same.
+@Test
+Function RotationsOfAnyLengthAreNormalized()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0, 0),
+                       Quat(3e20, 0, 0, 1e20))
+    Local expected = Quat(3.0 / Sqrt(10.0), 0, 0, 1.0 / Sqrt(10.0))
+    Expect(IsClose(crate.Rotation(), expected))
+    crate.SetRotation(Quat(1e-25, 0, 0, 1e-25))
+    Expect(IsClose(crate.Rotation(), Quat(Sqrt(0.5), 0, 0, Sqrt(0.5))))
+    world.Step(1.0 / 60)
+    Expect(Abs(Length(crate.Rotation()) - 1) < 0.001)
+End Function
+
+// The docs' own pattern: a shape made for a body and never freed goes with the body.
+@Test @MainThread
+Function AShapeMadeForABodyGoesWithIt()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local shapes = fbe_shape_count()
+    For i = 1 To 100
+        Local floor = Body(world, Shape.Box(Vec3(20, 1, 20)), Motion.STATIC, Vec3(0, -0.5, 0))
+        floor.Free()
+    End For
+    Expect(fbe_shape_count() == shapes)
 End Function
 
 @MainThread Function Error(): String

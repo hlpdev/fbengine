@@ -64,13 +64,15 @@ FBE_PHYSICS_API uint64_t fbe_shape_capsule(float height, float radius);
 FBE_PHYSICS_API uint64_t fbe_shape_cylinder(float height, float radius);
 
 // The smallest convex shape around `count` points; 0 if they don't make one, as fewer than three
-// or ones all on a line don't. Points all in a plane make a flat one.
+// or ones all on a line don't. Points all in a plane make a flat one, which has no inside to
+// weigh, so only a static or kinematic body is one.
 FBE_PHYSICS_API uint64_t fbe_shape_convex_hull(const fbe_shape_vec3_t* points, int32_t count);
 
 // A mesh of triangles, three of `indices` each into `vertices`, counter-clockwise seen from their
 // front; 0 if there are none, `index_count` isn't three times a number, an index is past the
 // vertices, or a vertex isn't finite. Triangles of no area are left out, and the rest keep their
-// numbers, from 0, in the order they're given. Only a static or kinematic body is a mesh.
+// numbers, from 0, in the order they're given. Only a static or kinematic body is a mesh, or a
+// compound with one in it.
 FBE_PHYSICS_API uint64_t fbe_shape_mesh(const fbe_shape_vec3_t* vertices, int32_t vertex_count,
                                         const uint32_t* indices, int32_t index_count);
 

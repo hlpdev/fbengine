@@ -90,6 +90,13 @@ if(FBENGINE_FB_TESTS)
                        "\n200 boxes fell, 200 came to rest, 100 on others\r?\n$")
 endif()
 
+# Shapes made in a process before any world, as shape_test's are when it runs alone.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME fbengine_physics.shapes_alone
+           COMMAND "${FBENGINE_FB}" test "${PROJECT_SOURCE_DIR}/packages/fbengine_physics"
+                   --filter shape_test)
+endif()
+
 # What fbengine_physics panics for, each by a run of tests/physics/panics, which says it.
 if(FBENGINE_FB_TESTS)
   foreach(case IN ITEMS "step-nan;not nan" "step-infinity;not inf" "step-huge;not 1e\\+30"
