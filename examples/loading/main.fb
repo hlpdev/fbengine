@@ -1,0 +1,12 @@
+// A game's start: it awaits its first loads at the top level, before its first Flip, as a loading
+// screen's first frame would.
+
+Import std.core
+Import std.time
+Import fbengine
+
+Window.SetHeadless(True)
+Print("loading")
+Await Jobs.Simulate(10.Milliseconds)
+Await Jobs.Simulate(Duration.Zero())
+Print("loaded")

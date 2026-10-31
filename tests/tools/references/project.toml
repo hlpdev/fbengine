@@ -1,0 +1,6 @@
+[project]
+name = "references"
+version = "0.1.0"
+
+[dependencies]
+fbengine_tools = { path = "../../../packages/fbengine_tools" }

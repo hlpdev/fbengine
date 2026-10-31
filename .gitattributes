@@ -1,3 +1,5 @@
 # Text files check out with LF on every OS, as the repo stores them: the bindings are compared
 # with what fb-bindgen writes, byte for byte, and FutureBlitz writes \n everywhere.
 * text=auto eol=lf
+# Fonts are bytes.
+*.ttf binary

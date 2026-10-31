@@ -1,0 +1,347 @@
+// Scroll views and lists, laid out on their own and driven by Simulate through a Ui, offscreen.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+Import fbengine_ui
+
+// A column of `count` rows, each 20 high.
+Function Rows(count: Int): Node
+    Local column = Node("rows")
+    For i = 1 To count
+        Local row = Node("row {i}")
+        row.SetHeight(Sizing.Fixed(20.0))
+        column.Add(row)
+    End For
+    Return column
+End Function
+
+Function Viewed(content: Node, height: Float32): ScrollView
+    Local view = ScrollView("view")
+    view.SetHeight(Sizing.Fixed(height))
+    view.Add(content)
+    Return view
+End Function
+
+@Test
+Function AScrollViewShowsItsContentFromItsOffset()
+    Local rows = Rows(10)
+    Local view = Viewed(rows, 50.0)
+    Local root = Node("root")
+    root.Add(view)
+    Local bounds = Rect(0.0, 0.0, 200.0, 300.0)
+    root.Layout(bounds)
+    Expect(view.Box().Height == 50.0)
+    Expect(rows.Box() == Rect(0.0, 0.0, 200.0, 200.0))
+    Expect(view.MaxOffset() == 150.0)
+    view.SetOffset(60.0)
+    root.Layout(bounds)
+    Expect(rows.Box().Y == -60.0)
+    // Kept to what it shows.
+    view.SetOffset(1000.0)
+    root.Layout(bounds)
+    Expect(view.Offset() == 150.0)
+    view.SetOffset(-5.0)
+    Expect(view.Offset() == 0.0)
+    root.Layout(bounds)
+    // What's scrolled out of it isn't found.
+    Expect(root.NodeAt(Vec2(10.0, 10.0)) == rows.Find("row 1"))
+    view.SetOffset(100.0)
+    root.Layout(bounds)
+    Expect(root.NodeAt(Vec2(10.0, 10.0)) == rows.Find("row 6"))
+    Expect(root.NodeAt(Vec2(10.0, 60.0)) == root)
+End Function
+
+@Test
+Function ScrollIntoViewMovesItAsLittleAsShowsABox()
+    Local rows = Rows(10)
+    Local view = Viewed(rows, 50.0)
+    Local root = Node("root")
+    root.Add(view)
+    Local bounds = Rect(0.0, 0.0, 200.0, 300.0)
+    root.Layout(bounds)
+    Local sixth = rows.Find("row 6")
+    Expect(sixth != Null)
+    If sixth == Null Then Return
+    view.ScrollIntoView(sixth.Box())
+    root.Layout(bounds)
+    // Its bottom at the view's bottom.
+    Expect(view.Offset() == 70.0)
+    Local second = rows.Find("row 2")
+    If second == Null Then Return
+    view.ScrollIntoView(second.Box())
+    root.Layout(bounds)
+    Expect(view.Offset() == 20.0)
+    // One in view already stays.
+    view.ScrollIntoView(second.Box())
+    Expect(view.Offset() == 20.0)
+End Function
+
+// A window and a Ui of `root`, laid out.
+Function Shown(root: Node): Ui Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Return ui
+End Function
+
+@Test
+Function TheWheelScrollsTheViewUnderThePointer() Throws GraphicsError
+    Local rows = Rows(10)
+    Local view = Viewed(rows, 50.0)
+    Local root = Node("root")
+    root.Add(view)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Try Simulate.MoveMouse(10.0, 10.0)
+    Try Simulate.Wheel(-1.0)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == 40.0)
+    // Away from the player scrolls back up.
+    Try Simulate.Wheel(2.0)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == 0.0)
+    // Off it, the wheel's nothing to it.
+    Try Simulate.MoveMouse(10.0, 200.0)
+    Try Simulate.Wheel(-1.0)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == 0.0)
+End Function
+
+@Test
+Function AListsItemIsPickedByAClickAndChosenByReturn() Throws GraphicsError
+    Local list = List(["New game", "Load game", "Options", "Quit"])
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(list)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Expect(list.Selected() == -1)
+    Local third = list.Children()[2]
+    Try Simulate.MoveMouse(third.Box().Center.x, third.Box().Center.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    Expect(list.Selected() == 2)
+    Expect(list.SelectedText() == "Options")
+    Expect(list.SelectionChanged())
+    Expect(ui.Focused() == list)
+    Expect((third As? Widget)?.StyleName() == "list.item.selected")
+    Try Simulate.PressKey(Key.RETURN)
+    Flip()
+    ui.Update()
+    Expect(list.Chosen())
+    Expect(!list.SelectionChanged())
+End Function
+
+@Test
+Function AListsArrowsMoveItsPick() Throws GraphicsError
+    Local list = List(["a", "b", "c", "d"])
+    Local root = Node("root")
+    root.Add(list)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(list)
+    Try Simulate.PressKey(Key.DOWN)
+    Flip()
+    ui.Update()
+    Expect(list.Selected() == 0)
+    Try Simulate.PressKey(Key.END)
+    Flip()
+    ui.Update()
+    Expect(list.Selected() == 3)
+    Try Simulate.PressKey(Key.DOWN)
+    Flip()
+    ui.Update()
+    Expect(list.Selected() == 3)
+    Expect(!list.SelectionChanged())
+    Try Simulate.PressKey(Key.UP)
+    Flip()
+    ui.Update()
+    Expect(list.Selected() == 2)
+    Flip()
+    ui.Update()
+    // New items keep the one picked by its text, and with it gone, none.
+    list.SetItems(["c", "a"])
+    Expect(list.Selected() == 0 && list.SelectedText() == "c")
+    Expect(!list.SelectionChanged())
+    list.SetItems(["only"])
+    Expect(list.Selected() == -1 && list.SelectionChanged())
+    list.SetSelected(0)
+    list.SetSelected(-1)
+    Expect(list.SelectedText() == "")
+End Function
+
+// A list in a scroll view scrolls its pick into view.
+@Test
+Function AListInAScrollViewShowsItsPick() Throws GraphicsError
+    Local items: String[] = []
+    For i = 1 To 30
+        items.Add("Save {i}")
+    End For
+    Local list = List(items)
+    Local view = Viewed(list, 60.0)
+    Local root = Node("root")
+    root.Add(view)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(list)
+    Try Simulate.PressKey(Key.END)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == view.MaxOffset())
+    Local last = list.Children()[29]
+    Expect(last.Box().Y + last.Box().Height <=
+           view.ContentBox().Y + view.ContentBox().Height + 0.01)
+End Function
+
+@Test
+Function ADoubleClickChoosesAnItem() Throws GraphicsError
+    Local list = List(["a", "b"])
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(list)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local first = list.Children()[0]
+    Try Simulate.MoveMouse(first.Box().Center.x, first.Box().Center.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    Expect(!list.Chosen())
+    Try Simulate.Click(MouseButton.LEFT, clicks: 2)
+    Flip()
+    ui.Update()
+    Expect(list.Chosen())
+End Function
+
+// An offset asked for holds through Layouts: Inf keeps a growing column at its bottom, and one set
+// before the first Layout is kept.
+@Test
+Function AnOffsetAskedForHolds() Throws GraphicsError
+    Local column = Rows(2)
+    Local view = Viewed(column, 60.0)
+    view.SetOffset(Inf)
+    Local root = Node("root")
+    root.Add(view)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Expect(view.Offset() == 0.0)
+    For i = 1 To 8
+        Local row = Node("more {i}")
+        row.SetHeight(Sizing.Fixed(20.0))
+        column.Add(row)
+        Flip()
+        ui.Update()
+        Expect(view.Offset() == view.MaxOffset())
+    End For
+    Expect(view.MaxOffset() > 0.0)
+    // Set before its first Layout.
+    Local early = Viewed(Rows(10), 60.0)
+    early.SetOffset(30.0)
+    root.Add(early)
+    Flip()
+    ui.Update()
+    Expect(early.Offset() == 30.0)
+End Function
+
+// A console's newest line shows once its lines overflow.
+@Test
+Function AConsolesNewestLineShows() Throws GraphicsError
+    Local console = Console()
+    console.SetHeight(Sizing.Fixed(120.0))
+    Local root = Node("root")
+    root.Add(console)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    For i = 1 To 40
+        console.Print("line {i}")
+    End For
+    Flip()
+    ui.Update()
+    Local view = console.Children()[0] As? ScrollView
+    Expect(view != Null)
+    If view == Null Then Return
+    Expect(view.Offset() == view.MaxOffset() && view.MaxOffset() > 0.0)
+End Function
+
+// A double click chooses the item its first press was on, not one beside it.
+@Test
+Function ADoubleClickChoosesOnlyTheItemItsFirstPressPicked() Throws GraphicsError
+    Local list = List(["a", "b"])
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(list)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local first = list.Children()[0]
+    Local second = list.Children()[1]
+    Try Simulate.MoveMouse(first.Box().Center.x, first.Box().Center.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    // SDL counts a second press near the first a double click.
+    Try Simulate.MoveMouse(second.Box().Center.x, second.Box().Center.y)
+    Try Simulate.Click(MouseButton.LEFT, clicks: 2)
+    Flip()
+    ui.Update()
+    Expect(list.Selected() == 1 && !list.Chosen())
+    Try Simulate.Click(MouseButton.LEFT, clicks: 2)
+    Flip()
+    ui.Update()
+    Expect(list.Chosen())
+End Function
+
+// At a list's ends, the arrows move the focus on.
+@Test
+Function AListsEndsLetTheFocusMoveOn() Throws GraphicsError
+    Local top = Button("top")
+    Local list = List(["a", "b"])
+    Local bottom = Button("bottom")
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(top)
+    root.Add(list)
+    root.Add(bottom)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    ui.Focus(list)
+    For i = 1 To 3
+        Try Simulate.PressKey(Key.DOWN)
+        Flip()
+        ui.Update()
+    End For
+    Expect(list.Selected() == 1)
+    Expect(ui.Focused() == bottom)
+    ui.Focus(list)
+    Try Simulate.PressKey(Key.HOME)
+    Try Simulate.PressKey(Key.UP)
+    Flip()
+    ui.Update()
+    Expect(list.Selected() == 0 && ui.Focused() == top)
+End Function
+
+// What's under a scroll view's padding is the view's, not what's scrolled under it.
+@Test
+Function AScrollViewsPaddingIsItsOwn() Throws GraphicsError
+    Local view = Viewed(Rows(10), 60.0)
+    view.SetWidth(Sizing.Fixed(200.0))
+    view.SetPadding(Insets.All(10.0))
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(view)
+    root.Layout(Rect(0.0, 0.0, 400.0, 300.0))
+    view.SetOffset(30.0)
+    root.Layout(Rect(0.0, 0.0, 400.0, 300.0))
+    Local box = view.Box()
+    Expect(view.NodeAt(Vec2(box.X + 20.0, box.Y + 5.0)) == view)
+    Expect(view.NodeAt(Vec2(box.X + 20.0, box.Y + box.Height - 5.0)) == view)
+    Local inside = view.NodeAt(Vec2(box.X + 20.0, box.Y + 15.0))
+    Expect(inside != Null && inside != view)
+End Function

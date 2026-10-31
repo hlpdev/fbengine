@@ -1,0 +1,90 @@
+// Typed references: a game's files' res:// paths as a module, by their folders and names, with
+// names made unique, and FutureBlitz's own words, sidecars, and what res:// can't name left out.
+
+Import std.core
+Import std.io
+Import std.os
+Import std.test
+Import std.text
+Import fbengine_tools
+
+@Test
+Function AFoldersFilesAreAModuleOfTheirPaths() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try Dir.CreateAll(game.Path / "Textures" / "Walls")
+    Try Dir.CreateAll(game.Path / "models")
+    Try File.WriteText(game.Path / "logo.png", "")
+    Try File.WriteText(game.Path / "Textures" / "stone_wall.png", "")
+    Try File.WriteText(game.Path / "Textures" / "stone_wall.png.toml", "srgb = false")
+    Try File.WriteText(game.Path / "Textures" / "Walls" / "brick-old.png", "")
+    Try File.WriteText(game.Path / "models" / "door.gltf", "")
+    Try File.WriteText(game.Path / "models" / "door.bin", "")
+    Try File.WriteText(game.Path / "models" / "end.glb", "")
+    Try File.WriteText(game.Path / "models" / "1up.wav", "")
+    Try File.WriteText(game.Path / "models" / "{{a}}.txt", "")
+    Try File.WriteText(game.Path / "models" / "nul.txt", "")
+    Local expected =
+        "// Typed references to the game's files in res://, written by fbengine_tools'\n" +
+        "// References: write them again when the files change, rather than editing them.\n\n" +
+        "Import std.core\n\n" +
+        "/// res://logo.png\nPublic Const Logo = \"res://logo.png\"\n\n" +
+        "/// res://Textures/\nPublic Final Class Textures\n" +
+        "    /// res://Textures/stone_wall.png\n    Public Static Property StoneWall: String\n" +
+        "        Get => \"res://Textures/stone_wall.png\"\n    End Property\n\n" +
+        "    /// res://Textures/Walls/\n    Public Static Property Walls: Textures_Walls\n" +
+        "        Get => Textures_Walls()\n    End Property\nEnd Class\n\n" +
+        "/// res://Textures/Walls/\nPublic Final Class Textures_Walls\n" +
+        "    /// res://Textures/Walls/brick-old.png\n    Public Property BrickOld: String\n" +
+        "        Get => \"res://Textures/Walls/brick-old.png\"\n    End Property\nEnd Class\n\n" +
+        "/// res://models/\nPublic Final Class Models\n" +
+        "    /// res://models/1up.wav\n    Public Static Property N1up: String\n" +
+        "        Get => \"res://models/1up.wav\"\n    End Property\n\n" +
+        "    /// res://models/door.bin\n    Public Static Property DoorBin: String\n" +
+        "        Get => \"res://models/door.bin\"\n    End Property\n\n" +
+        "    /// res://models/door.gltf\n    Public Static Property DoorGltf: String\n" +
+        "        Get => \"res://models/door.gltf\"\n    End Property\n\n" +
+        "    /// res://models/end.glb\n    Public Static Property EndGlb: String\n" +
+        "        Get => \"res://models/end.glb\"\n    End Property\n\n" +
+        "    /// res://models/{{a}}.txt\n    Public Static Property A: String\n" +
+        "        Get => \"res://models/{{{{a}}}}.txt\"\n    End Property\nEnd Class\n"
+    Local made = Try References.Of(game.Path)
+    Expect(made == expected)
+    Try References.Write(game.Path, game.Path / "res.fb")
+    Expect((Try File.ReadText(game.Path / "res.fb")) == expected)
+End Function
+
+@Test
+Function NamesThatDifferOnlyInCaseAreOne() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try File.WriteText(game.Path / "Wall.png", "")
+    Try File.WriteText(game.Path / "wall.png", "")
+    Local made = Try References.Of(game.Path)
+    // The disk may keep one of them, or both; either way it names one.
+    Expect(made.Contains("Public Const Wall = "))
+    Expect(!made.Contains("Wall2"))
+End Function
+
+// Links `link` to the folder `target`, as a junction on Windows, which needs no privilege.
+Function LinkFolder(link: Path, target: Path) Throws IOError
+    If System.Platform == Platform.WINDOWS
+        // cmd takes a forward slash as a switch's.
+        Try Command("cmd").Args(["/c", "mklink", "/J", link.Text.Replace("/", "\\"),
+                                 target.Text.Replace("/", "\\")]).Output()
+    Else
+        Try Command("ln").Args(["-s", target.Text, link.Text]).Output()
+    End If
+End Function
+
+@Test
+Function AFolderBehindALinkIsInTheModule() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Local shared = Try TempDir()
+    Defer Try? shared.Close()
+    Try File.WriteText(shared.Path / "door.png", "")
+    Try LinkFolder(game.Path / "shared", shared.Path)
+    Local made = Try References.Of(game.Path)
+    Expect(made.Contains("Get => \"res://shared/door.png\""))
+End Function
