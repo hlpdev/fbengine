@@ -89,8 +89,11 @@ good modern engine on its own. Every structural choice is checked against both.
 - **Vulkan 1.2** with dynamic rendering, synchronization2, and descriptor indexing (bindless
   textures), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
 - **What it runs on** (the user, 2026-10-31): Vulkan 1.2 GPUs (2016 onward), Windows 10, Linux
-  with glibc 2.28, macOS 13 on MoltenVK. **What it aims for**: 60 fps at 1080p on a GTX 1060-class
-  GPU for a scene of SCP:CB's scale, and test scenes within 144 fps on the user's RTX 4080.
+  with glibc 2.28, macOS 13 on MoltenVK. **What it aims for** (the user, 2026-10-31): a scene of
+  SCP:CB's scale in the high hundreds of fps, 500 or more at 1080p on the user's RTX 4080 and
+  well over 144 on a GTX 1060-class GPU, so about 2 ms a frame for the engine, CPU and GPU: batched
+  draws, culling, no per-object overhead per frame. Each milestone measures its test scenes
+  against it.
 - **A small frame graph**: each frame's passes (shadows, depth prepass, opaque, sky,
   transparent, post, 2D overlay) declare what they read and write; the graph orders them, places
   barriers, and reuses transient targets.
