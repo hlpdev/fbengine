@@ -26,6 +26,8 @@ FALLBACKS = {
     "CLANG_FORMAT": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/Llvm/x64/bin/clang-format.exe",
     "CLANG_TIDY": "C:/Users/Hunter/AppData/Local/Programs/CLion/bin/clang/win/x64/bin/clang-tidy.exe",
 }
+# The clang-format CI pins (ci.yml), which every check formats with.
+CLANG_FORMAT_VERSION = "19.1.5"
 failures = []
 
 
@@ -55,9 +57,23 @@ def tool(variable, name):
 
 
 def sources():
-    """Every C and C++ file git knows, ours, not a dependency's."""
-    files = output(["git", "ls-files", "*.h", "*.hpp", "*.c", "*.cpp"]).split()
-    return [file for file in files if not file.startswith("build")]
+    """Every C and C++ file of ours, tracked or new, not a dependency's."""
+    patterns = ["*.h", "*.hpp", "*.c", "*.cpp"]
+    files = output(["git", "ls-files", *patterns]).split()
+    files += output(["git", "ls-files", "--others", "--exclude-standard", *patterns]).split()
+    return sorted({file for file in files if not file.startswith("build")})
+
+
+def pinned_clang_format():
+    """clang-format at the version CI pins, which formats as CI does; another version formats some
+    lines differently, so it's never used."""
+    candidates = [os.environ.get("CLANG_FORMAT"), FALLBACKS["CLANG_FORMAT"], shutil.which("clang-format")]
+    for candidate in candidates:
+        if candidate and pathlib.Path(candidate).exists() or (candidate and shutil.which(candidate)):
+            version = output([candidate, "--version"])
+            if f"version {CLANG_FORMAT_VERSION}" in version:
+                return candidate
+    return None
 
 
 def changed_cpp(base):
@@ -101,15 +117,19 @@ def this_target():
 
 def check_exports():
     step("exports")
+    # Other targets' DLLs, from CI's artifacts, are only checked on their own machines.
+    dlls = []
     for native in sorted((ROOT / "native").iterdir()):
-        # Other targets' DLLs, from CI's artifacts, are only checked on their own machines.
+        if not native.is_dir() or native.name == "common":
+            continue
         folder = ROOT / "packages" / native.name / "native" / this_target()
-        dlls = [file for file in folder.rglob("*") if file.suffix in (".dll", ".so", ".dylib")]
-        if not dlls:
+        found = [file for file in folder.rglob("*") if file.suffix in (".dll", ".so", ".dylib")]
+        if not found:
             fail(f"{native.name} has no built DLL in {folder.relative_to(ROOT)}")
-        for dll in dlls:
-            if run(["sh", "tools/check-exports.sh", dll.relative_to(ROOT).as_posix(), "fbe_"]) != 0:
-                fail(f"{dll.name} exports more than its C API")
+        dlls += found
+    names = [dll.relative_to(ROOT).as_posix() for dll in dlls]
+    if names and run(["sh", "tools/check-exports.sh", "fbe_", *names]) != 0:
+        fail("a DLL exports more than its C API, or two DLLs export one name")
 
 
 def check_bindings():
@@ -119,10 +139,10 @@ def check_bindings():
 
 
 def check_format():
-    step("clang-format")
-    clang_format = tool("CLANG_FORMAT", "clang-format")
+    step(f"clang-format {CLANG_FORMAT_VERSION}")
+    clang_format = pinned_clang_format()
     if clang_format is None:
-        fail("clang-format isn't on PATH; set CLANG_FORMAT")
+        fail(f"no clang-format {CLANG_FORMAT_VERSION}, the version CI pins; set CLANG_FORMAT to one")
         return
     files = sources()
     if files and run([clang_format, "--dry-run", "-Werror", *files]) != 0:
