@@ -1,0 +1,623 @@
+// The Ui: a tree of widgets on the screen, laid out in the window, given the frame's input, and
+// styled by their states, once a frame.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+Import "./layout"
+Import "./scroll"
+Import "./strings"
+Import "./theme"
+Import "./widget"
+
+/// Which way the focus moves.
+Public Enum Direction
+    UP
+    DOWN
+    LEFT
+    RIGHT
+End Enum
+
+/// A UI on the screen: a tree, its theme, and the widget the pointer's over, the one holding it,
+/// and the one with the focus. Update, once a frame after Flip, lays it out in the window, gives
+/// its widgets the input the Flip read, and styles each by its state; WantsPointer and
+/// WantsKeys say whether the game should leave the mouse and the keyboard to it, and Route blocks
+/// a game's ActionSet while a widget has the focus.
+///
+/// The focus moves by Tab and Shift+Tab, in the tree's order, and by the arrows, and a gamepad's
+/// D-pad or left stick, to the nearest widget that way, once the focused widget doesn't use them
+/// itself (a list uses up and down, a slider left and right); held, a gamepad's moves it again
+/// after a moment, and on while it's held. With nothing focused, Tab starts the focus, and the
+/// arrows and a gamepad do while it's navigable (SetNavigable), as a menu is. A gamepad's SOUTH
+/// activates the focused widget, as Return and Space do; its EAST, and Escape, are Back, which a
+/// menu closes on.
+Public Final Class Ui
+    Field root: Node
+    Field theme: Theme
+    Field scale: Float32 = 1.0
+    // A game's own measuring, which comes before its fonts'.
+    Field measure: (Func(String, Style): Vec2)? = Null
+    // Its fonts by the names styles give them, and each at the sizes styles ask for, the 64 used
+    // last, the last of them last.
+    Field fonts: Map<String, Font>
+    Field sized: Map<String, Font>
+    Field recent: String[] = []
+    Field hovered: Weak<Widget>
+    Field pressed: Weak<Widget>
+    Field focused: Weak<Widget>
+    // Whether this Ui started the window's text input, for its focused widget, so it stops it.
+    Field typing: Bool = False
+    // Its own controls, for gamepads, and how long each way's been held.
+    Field controls: ActionSet
+    Field ways: Action[]
+    Field accept: Action
+    Field cancel: Action
+    Field held: Float64[]
+    Field back: Bool = False
+    Field routed: ActionSet[] = []
+    // Whether it blocks its routed sets, while a widget has the focus, and its blocks, each its
+    // routed set's.
+    Field blocking: Bool = False
+    Field blocks: ActionBlock?[] = []
+    Field navigable: Bool = False
+    Field strings: Strings? = Null
+    // Its Strings' stamp when its widgets were last laid out by them.
+    Field stamp: Int = 0
+
+    /// A Ui of the tree `root`, in `theme`, or Theme.Dark().
+    @MainThread Public New(root: Node, theme: Theme? = Null)
+        Self.root = root
+        Self.theme = theme ?? Theme.Dark()
+        fonts = {}
+        sized = {}
+        controls = ActionSet()
+        ways = []
+        held = [0.0, 0.0, 0.0, 0.0]
+        For each In [(GamepadButton.DPAD_UP, GamepadAxis.LEFT_Y, -1.0),
+                     (GamepadButton.DPAD_DOWN, GamepadAxis.LEFT_Y, 1.0),
+                     (GamepadButton.DPAD_LEFT, GamepadAxis.LEFT_X, -1.0),
+                     (GamepadButton.DPAD_RIGHT, GamepadAxis.LEFT_X, 1.0)]
+            Local button, axis, scale = each
+            Local way = controls.Add("{button}")
+            way.Bind(Binding.OfGamepadButton(button))
+            way.Bind(Binding.OfGamepadAxis(axis, scale))
+            ways.Add(way)
+        End For
+        accept = controls.Add("accept")
+        accept.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+        cancel = controls.Add("back")
+        cancel.Bind(Binding.OfGamepadButton(GamepadButton.EAST))
+    End New
+
+    /// Reads only `gamepad` for moving the focus and activating, or with Null, every gamepad.
+    @MainThread Public Method SetGamepad(gamepad: Gamepad?)
+        controls.SetGamepad(gamepad)
+    End Method
+
+    /// Whether the last Update read Escape, or a gamepad's EAST, which no widget used: a menu's
+    /// back, which closes it.
+    @MainThread Public Method Back(): Bool => back
+
+    /// Blocks `actions` while one of its widgets has the focus (ActionSet.Block), from the moment
+    /// it's given, and unblocks them as it goes, so the keys and gamepad buttons a menu takes don't
+    /// move the player too; when they read again, what's held from the menu reads as Down with no
+    /// Hit. Its block is its own, apart from SetEnabled, the game's blocks, and another Ui's.
+    @MainThread Public Method Route(actions: ActionSet)
+        For each In routed
+            If RefEquals(each, actions) Then Return
+        End For
+        routed.Add(actions)
+        blocks.Add(blocking ? actions.Block() : Null)
+    End Method
+
+    /// Stops blocking `actions`, taking back its own block if it has one.
+    @MainThread Public Method Unroute(actions: ActionSet)
+        For i = routed.Count - 1 To 0 Step -1
+            If RefEquals(routed[i], actions)
+                blocks[i]?.Release()
+                routed.RemoveAt(i)
+                blocks.RemoveAt(i)
+            End If
+        End For
+    End Method
+
+    /// Lets the arrows, a gamepad's D-pad, and its left stick start the focus, at the first
+    /// widget, while nothing has it, as a menu wants while it's open; off at first, so a HUD's
+    /// field doesn't take the player's movement. Tab starts it either way, and they move it either
+    /// way once something has it.
+    @MainThread Public Method SetNavigable(on: Bool)
+        navigable = on
+    End Method
+
+    /// Whether the arrows and a gamepad start the focus.
+    @MainThread Public Method Navigable(): Bool => navigable
+
+    // Its blocks go with it.
+    Method Destroy()
+        For each In blocks
+            each?.Release()
+        End For
+    End Method
+
+    /// Moves the focus to the next widget that can have it, in the tree's order, after the last
+    /// the first; `backward`, to the one before.
+    @MainThread Public Method FocusNext(backward: Bool = False)
+        Local order: Widget[] = []
+        Focusables(root, order)
+        If order.Count == 0 Then Return
+        Local at = -1
+        Local own = focused
+        For i = 0 To order.Count - 1
+            If own != Null && RefEquals(order[i], own) Then at = i
+        End For
+        Local next = backward ? (at <= 0 ? order.Count - 1 : at - 1) : (at + 1) % order.Count
+        Moved(order[next])
+    End Method
+
+    /// Moves the focus to the nearest widget that can have it `direction`'s way from the focused
+    /// one, by their boxes' middles: of those whose boxes are across from its own (beside it for
+    /// left and right, above or below it for up and down), the nearest that way; with none, the
+    /// nearest within 45 degrees of that way; with nothing focused, the first in the tree's order.
+    /// Nothing that way leaves it where it is.
+    @MainThread Public Method MoveFocus(direction: Direction)
+        Local own = focused
+        If own == Null
+            FocusNext()
+            Return
+        End If
+        Local box = own.Box()
+        Local from = box.Center
+        Local order: Widget[] = []
+        Focusables(root, order)
+        Local across: Widget? = Null
+        Local nearestAcross = Inf
+        Local coned: Widget? = Null
+        Local nearestConed = Inf
+        For each In order
+            If RefEquals(each, own) Then Continue
+            Local other = each.Box()
+            Local dx = other.Center.x - from.x
+            Local dy = other.Center.y - from.y
+            Local sideways = direction == Direction.LEFT || direction == Direction.RIGHT
+            Local along = sideways ? dx : dy
+            If direction == Direction.UP || direction == Direction.LEFT Then along = -along
+            Local aside = Abs(sideways ? dy : dx)
+            If along <= 0.5 Then Continue
+            // Across: its box overlaps its own across the way it moves.
+            Local overlaps = other.X < box.X + box.Width && box.X < other.X + other.Width
+            If sideways Then overlaps = other.Y < box.Y + box.Height && box.Y < other.Y + other.Height
+            If overlaps && along < nearestAcross
+                nearestAcross = along
+                across = each
+            End If
+            Local distance = along * along + aside * aside
+            If aside <= along && distance < nearestConed
+                nearestConed = distance
+                coned = each
+            End If
+        End For
+        Local best = across ?? coned
+        If best != Null Then Moved(best)
+    End Method
+
+    /// Its tree.
+    @MainThread Public Method Root(): Node => root
+
+    /// Its theme.
+    @MainThread Public Method CurrentTheme(): Theme => theme
+
+    /// Sets its theme, which the next Update styles its widgets by.
+    @MainThread Public Method SetTheme(styles: Theme)
+        theme = styles
+        root.Invalidate()
+    End Method
+
+    /// Sets the Strings its widgets show the text of for the keys they're given, as a language
+    /// a game's player picked, or none with Null. Its widgets are laid out by them again at the
+    /// next Update, and again after each change to them, or to a Strings they fall back to.
+    @MainThread Public Method SetStrings(language: Strings?)
+        strings = language
+        stamp = language?.Stamp() ?? 0
+        root.Invalidate()
+    End Method
+
+    /// The Strings its widgets show the text of, or Null.
+    @MainThread Public Method CurrentStrings(): Strings? => strings
+
+    /// What a widget that translates shows for `text`: its Strings' text for it, its values
+    /// unfilled, when they have it, else `text`.
+    @MainThread Public Method Translated(text: String): String
+        Local own = strings
+        If own == Null || own.Get(text) == Null Then Return text
+        Return own.Text(text)
+    End Method
+
+    /// Sets how many of the window's units each of its own is, 1 at first: 2 makes it twice as
+    /// big, as a player's UI scale or a high DPI screen wants. Panics for one not over 0.
+    @MainThread Public Method SetScale(units: Float32)
+        If !(units > 0.0 && IsFinite(units)) Then Panic("Ui.SetScale: a scale is over 0, not {units}")
+        scale = units
+        root.Invalidate()
+    End Method
+
+    /// How many of the window's units each of its own is.
+    @MainThread Public Method Scale(): Float32 => scale
+
+    /// Sets the font a style's Font names, or with "", the one for styles whose font it hasn't,
+    /// which their text is measured in, as it's drawn, at each style's FontSize; Null takes it
+    /// away. With none, text is measured by EstimatedText.
+    @MainThread Public Method SetFont(name: String, font: Font?)
+        If font == Null
+            fonts.Remove(name)
+        Else
+            fonts[name] = font
+        End If
+        sized.Clear()
+        recent.Clear()
+        root.Invalidate()
+    End Method
+
+    /// The font `style`'s text is in: the one its Font names, or the one for "", at its
+    /// FontSize; Null when it has neither, or a FontSize of 0.
+    @MainThread Public Method FontFor(style: Style): Font?
+        Local named = fonts.Get(style.Font) != Null ? style.Font : ""
+        Local font = fonts.Get(named)
+        If font == Null || !(style.FontSize > 0.0) Then Return Null
+        If font.Size() == style.FontSize Then Return font
+        Local key = "{named}/{style.FontSize}"
+        recent.Remove(key)
+        recent.Add(key)
+        Local made = sized.Get(key)
+        If made != Null Then Return made
+        Local resized = font.Sized(style.FontSize)
+        sized[key] = resized
+        // A tween's sizes, each once, don't pile up.
+        If recent.Count > 64
+            sized.Remove(recent[0])
+            recent.RemoveAt(0)
+        End If
+        Return resized
+    End Method
+
+    /// Sets how it measures text in a style, in place of its fonts, or with Null, by its fonts
+    /// again.
+    @MainThread Public Method SetTextMeasure(measured: (Func(String, Style): Vec2)?)
+        measure = measured
+        root.Invalidate()
+    End Method
+
+    /// The size `text` takes in `style`: as SetTextMeasure set, or in its font (FontFor), or by
+    /// EstimatedText without one.
+    @MainThread Public Method MeasureText(text: String, style: Style): Vec2
+        Local measured = measure
+        If measured != Null Then Return measured(text, style)
+        Local font = FontFor(style)
+        Return font != Null ? font.Measure(text) : EstimatedText(text, style)
+    End Method
+
+    /// The widget the pointer was over at the last Update, or Null.
+    @MainThread Public Method Hovered(): Widget? => hovered
+
+    /// The widget holding the pointer, pressed on and not let go yet, or Null.
+    @MainThread Public Method Pressed(): Widget? => pressed
+
+    /// The widget with the keyboard's and the gamepad's focus, or Null.
+    @MainThread Public Method Focused(): Widget? => focused
+
+    /// Gives `widget` the focus, or takes it from the one that has it with Null; one that can't
+    /// have it, as a label can't or one that's disabled, leaves the focus where it is.
+    @MainThread Public Method Focus(widget: Widget?)
+        If widget != Null && !widget.Focusable() Then Return
+        Local had = focused
+        If had != Null && widget != Null && RefEquals(had, widget) Then Return
+        focused = widget
+        If had != Null Then had.FocusChanged(False)
+        If widget != Null Then widget.FocusChanged(True)
+        Blocks()
+    End Method
+
+    /// Whether the game should leave the mouse to it: the pointer's over one of its widgets, or
+    /// one's holding it.
+    @MainThread Public Method WantsPointer(): Bool => hovered != Null || pressed != Null
+
+    /// Whether the game should leave the keyboard to it: one of its widgets has the focus.
+    @MainThread Public Method WantsKeys(): Bool => focused != Null
+
+    /// Lays it out in the window, at its scale; gives its widgets the input the last Flip read:
+    /// the pointer to the widget under it or holding it, the wheel to the one under it that uses
+    /// it, and keys and text to the one with the focus; and styles each by what it's doing.
+    @MainThread Public Method Update()
+        Forget(root)
+        back = False
+        Local changed = strings?.Stamp() ?? 0
+        If changed != stamp
+            stamp = changed
+            root.Invalidate()
+        End If
+        Local bounds = Rect(0.0, 0.0, (Window.Width() As Float32) / scale,
+                            (Window.Height() As Float32) / scale)
+        Restyle(root)
+        root.Layout(bounds)
+
+        Local point = Vec2(MouseX() / scale, MouseY() / scale)
+        Local under = WidgetAt(root.NodeAt(point))
+        hovered = under
+        Pointer(point, under)
+        Wheel(under)
+        Keys()
+        Pads()
+        Typing()
+
+        Restyle(root)
+        root.Layout(bounds)
+        Blocks()
+    End Method
+
+    // Blocks its routed sets while a widget has the focus, and unblocks them as it goes, so the
+    // next Flip reads them as the focus is.
+    @MainThread Method Blocks()
+        If WantsKeys() == blocking Then Return
+        blocking = WantsKeys()
+        For i = 0 To routed.Count - 1
+            blocks[i]?.Release()
+            blocks[i] = blocking ? routed[i].Block() : Null
+        End For
+    End Method
+
+    // Focuses `widget` as the keys or a gamepad moved there, and shows it in the ScrollView it's
+    // in.
+    @MainThread Method Moved(widget: Widget)
+        Focus(widget)
+        Local above = widget.Parent()
+        While above != Null
+            Local view = above As? ScrollView
+            If view != Null
+                view.ScrollIntoView(widget.Box())
+                Return
+            End If
+            above = above.Parent()
+        End While
+    End Method
+
+    // What a key or a gamepad's way that the focused widget didn't use does: Tab, with Shift held
+    // as it went down or not, and the ways move the focus, and Escape is back.
+    @MainThread Method Navigate(stroke: Keystroke)
+        Local key = stroke.Key
+        Local way = key == Key.UP || key == Key.DOWN || key == Key.LEFT || key == Key.RIGHT
+        If way && focused == Null && !navigable Then Return
+        Select key
+            Case Key.TAB
+                FocusNext(stroke.Shift)
+            Case Key.UP
+                MoveFocus(Direction.UP)
+            Case Key.DOWN
+                MoveFocus(Direction.DOWN)
+            Case Key.LEFT
+                MoveFocus(Direction.LEFT)
+            Case Key.RIGHT
+                MoveFocus(Direction.RIGHT)
+            Case Key.ESCAPE
+                back = True
+            Default
+                Return
+        End Select
+    End Method
+
+    // A gamepad's ways, as the arrows to the focused widget and then the focus, pressed or held
+    // past a moment; SOUTH activates, and EAST is back.
+    @MainThread Method Pads()
+        Local keys = [Key.UP, Key.DOWN, Key.LEFT, Key.RIGHT]
+        For i = 0 To ways.Count - 1
+            Checked()
+            Local way = ways[i]
+            Local pressed = way.Hit()
+            // Pressed, again or not, it's held from now.
+            If pressed Then held[i] = 0.0
+            If way.Down() && !pressed
+                // Held, it moves again after 0.4 seconds, then every 0.1.
+                Local before = held[i]
+                held[i] += Frame.Delta()
+                pressed = before < 0.4 && held[i] >= 0.4 ||
+                          before >= 0.4 &&
+                          Floor((held[i] - 0.4) / 0.1) > Floor((before - 0.4) / 0.1)
+            ElseIf !way.Down()
+                held[i] = 0.0
+            End If
+            If !pressed Then Continue
+            Local own = focused
+            Local stroke = Keystroke(KeystrokeKind.PRESS, keys[i], "", False, False, False, False)
+            If own == Null || !own.KeyTyped(stroke) Then Navigate(stroke)
+        End For
+        Checked()
+        Local own = focused
+        If accept.Hit() && own != Null Then own.Activate()
+        If cancel.Hit() Then back = True
+    End Method
+
+    // Takes the focus from a widget that can't have it now: disabled, hidden, or out of its tree,
+    // as a key it was given may have made it.
+    @MainThread Method Checked()
+        Local had = focused
+        If had != Null && (!had.Focusable() || !Showing(had, root)) Then Focus(Null)
+    End Method
+
+    // The pointer's presses, moves, and releases this frame.
+    @MainThread Method Pointer(point: Vec2, under: Widget?)
+        // A widget holding the pointer that's disabled, hidden, or out of the tree lets go, not
+        // over itself.
+        Local gone = pressed
+        If gone != Null && (!gone.EffectivelyEnabled() || !Showing(gone, root))
+            pressed = Null
+            gone.PointerUp(point, False)
+        End If
+        If MouseHit(MouseButton.LEFT)
+            // The widget under it, or the first it's in, that takes it.
+            Local taking: Widget? = Null
+            Local at = under
+            While at != Null && taking == Null
+                If at.EffectivelyEnabled() && at.PointerDown(point) Then taking = at
+                at = WidgetAbove(at)
+            End While
+            pressed = taking
+            // A press focuses what it pressed, or nothing, as a click on the background does.
+            Local focusing: Widget? = taking
+            While focusing != Null && !focusing.Focusable()
+                focusing = WidgetAbove(focusing)
+            End While
+            Focus(focusing)
+        End If
+        Local holding = pressed
+        If holding != Null && (MouseXSpeed() != 0.0 || MouseYSpeed() != 0.0)
+            holding.PointerDrag(point)
+        End If
+        If holding != Null && !MouseDown(MouseButton.LEFT)
+            pressed = Null
+            holding.PointerUp(point, Within(under, holding))
+        End If
+    End Method
+
+    // The wheel's notches, to the widget under the pointer that uses them, or the first it's in.
+    @MainThread Method Wheel(under: Widget?)
+        Local steps = MouseWheelSteps()
+        If steps == 0 Then Return
+        Local at = under
+        While at != Null
+            If at.EffectivelyEnabled() && at.Wheel(steps) Then Return
+            at = WidgetAbove(at)
+        End While
+    End Method
+
+    // The keys and text typed this frame, in the order the OS gave them, to the widget with the
+    // focus, then what it didn't use: activating it, and moving the focus. Each key pressed goes
+    // to it, and the OS's repeats of the editing keys.
+    @MainThread Method Keys()
+        Local editing = EditingKeys()
+        For stroke In Keystrokes()
+            Checked()
+            Local own = focused
+            Select stroke.Kind
+                Case KeystrokeKind.PRESS
+                    If own != Null && own.KeyTyped(stroke) Then Continue
+                    If own != Null && Activates(stroke.Key)
+                        own.Activate()
+                    Else
+                        Navigate(stroke)
+                    End If
+                Case KeystrokeKind.REPEAT
+                    If own != Null && editing.Contains(stroke.Key) Then own.KeyTyped(stroke)
+                Default
+                    If own != Null Then own.TextTyped(stroke.Text)
+            End Select
+        End For
+    End Method
+
+    // Starts the window's text input while the focused widget takes text, and stops it after.
+    @MainThread Method Typing()
+        Checked()
+        Local own = focused
+        Local wants = own != Null && own.TakesText()
+        If wants && own != Null
+            If !typing && Window.Open()
+                StartTextInput()
+                typing = True
+            End If
+            Local box = own.Box()
+            If typing
+                SetTextInputArea((box.X * scale) As Int32, (box.Y * scale) As Int32,
+                                 (box.Width * scale) As Int32, (box.Height * scale) As Int32,
+                                 (own.TextCursorX() * scale) As Int32)
+            End If
+        ElseIf typing
+            StopTextInput()
+            typing = False
+        End If
+    End Method
+
+    // Each widget's state and style.
+    @MainThread Method Restyle(node: Node)
+        Local widget = node As? Widget
+        If widget != Null Then widget.Restyle(Self, StateOf(widget))
+        For child In node.Children()
+            Restyle(child)
+        End For
+    End Method
+
+    @MainThread Method StateOf(widget: Widget): WidgetState
+        Local holding = pressed
+        // Held, it's pressed while the pointer's over it, and as it is otherwise when it isn't.
+        If holding != Null && RefEquals(holding, widget) && Within(hovered, widget)
+            Return WidgetState.PRESSED
+        End If
+        Local own = focused
+        If own != Null && RefEquals(own, widget) Then Return WidgetState.FOCUSED
+        If Within(hovered, widget) Then Return WidgetState.HOVERED
+        Return WidgetState.NORMAL
+    End Method
+
+    @MainThread Method Forget(node: Node)
+        Local widget = node As? Widget
+        If widget != Null Then widget.Forget()
+        For child In node.Children()
+            Forget(child)
+        End For
+    End Method
+End Class
+
+// The keys a focused widget is given the OS's repeats of, as it is every key pressed: editing's,
+// moving's, and activating's.
+Function EditingKeys(): Key[]
+    Return [Key.BACKSPACE, Key.DELETE, Key.LEFT, Key.RIGHT, Key.UP, Key.DOWN, Key.HOME, Key.END,
+            Key.PAGE_UP, Key.PAGE_DOWN, Key.RETURN, Key.KEYPAD_ENTER, Key.TAB, Key.ESCAPE,
+            Key.SPACE, Key.A, Key.C, Key.V, Key.X, Key.Z]
+End Function
+
+// Whether `key`, pressed, activates the focused widget, when it doesn't use the key itself.
+Function Activates(key: Key): Bool
+    Return key == Key.RETURN || key == Key.KEYPAD_ENTER || key == Key.SPACE
+End Function
+
+// The widgets in `node`'s tree that can have the focus, in its order, those hidden left out.
+Function Focusables(node: Node, order: Widget[])
+    If !node.Visible() Then Return
+    Local widget = node As? Widget
+    If widget != Null && widget.Focusable() Then order.Add(widget)
+    For child In node.Children()
+        Focusables(child, order)
+    End For
+End Function
+
+// Whether `widget` is in `root`'s tree, shown, with every Node it's in.
+Function Showing(widget: Widget, root: Node): Bool
+    Local at: Node? = widget
+    While at != Null
+        If !at.Visible() Then Return False
+        If RefEquals(at, root) Then Return True
+        at = at.Parent()
+    End While
+    Return False
+End Function
+
+// The widget `node` is, or the first one it's in; Null for none.
+Function WidgetAt(node: Node?): Widget?
+    Local at = node
+    While at != Null
+        Local widget = at As? Widget
+        If widget != Null Then Return widget
+        at = at.Parent()
+    End While
+    Return Null
+End Function
+
+// The first widget `widget` is in, or Null.
+Function WidgetAbove(widget: Widget): Widget? => WidgetAt(widget.Parent())
+
+// Whether `node` is `widget`, or in it.
+Function Within(node: Node?, widget: Widget): Bool
+    Local at = node
+    While at != Null
+        If RefEquals(at, widget) Then Return True
+        at = at.Parent()
+    End While
+    Return False
+End Function

@@ -1,6 +1,7 @@
-// app's guard and links, apart from the DLL: whether it shows nothing for SDL's video driver
-// hints, and, on Windows, that each path's link reads back through the shell as the path it
-// opens. Nothing here shows a message box or opens a link.
+// app's guard, links, and languages, apart from the DLL: whether it shows nothing for SDL's video
+// driver hints, on Windows, that each path's link reads back through the shell as the path it
+// opens, and the player's languages from SDL's hint. Nothing here shows a message box or opens a
+// link.
 
 #include "app/app.hpp"
 
@@ -9,6 +10,7 @@
 #include <SDL3/SDL_init.h>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifdef _WIN32
 #include <array>
@@ -68,6 +70,26 @@ TEST_CASE("once the video's started, the driver it started is the one that count
     SDL_QuitSubSystem(SDL_INIT_VIDEO);
     CHECK_FALSE(fbe::shows_nothing(false));
     set_driver("offscreen");
+}
+
+TEST_CASE("the player's languages are BCP 47's tags, the most preferred first, each once") {
+    SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, "fr_CA, EN_us,de,fr_CA,,it,en_US,1x");
+    CHECK(fbe::languages() == std::vector<std::string>{ "fr-CA", "en-US", "de", "it" });
+    // Without a country, an OS gives a script, as "zh-Hans".
+    SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, "ZH_hans,pt_br");
+    CHECK(fbe::languages() == std::vector<std::string>{ "zh-Hans", "pt-BR" });
+    // A script with the language, as macOS gives one, and a country after it.
+    SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, "zh-Hant_TW,sr-Latn_RS,es-419");
+    CHECK(fbe::languages() == std::vector<std::string>{ "zh-Hant-TW", "sr-Latn-RS", "es-419" });
+    // POSIX's C and POSIX aren't languages, and an encoding isn't a country's.
+    SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, "C,posix,POSIX,en_US.UTF-8");
+    CHECK(fbe::languages() == std::vector<std::string>{ "en-US" });
+    SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, nullptr);
+    // The OS's own, whatever they are, are tags too.
+    for (const std::string& tag : fbe::languages()) {
+        CHECK_FALSE(tag.empty());
+        CHECK_FALSE(tag.contains('_'));
+    }
 }
 
 TEST_CASE("a scheme is two letters or more before a colon, and a drive isn't one") {

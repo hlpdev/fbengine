@@ -7,6 +7,7 @@
 #include "app/fbe_app.h"
 #include "assets/fbe_assets.h"
 #include "clip/fbe_clip.h"
+#include "collide/fbe_collide.h"
 #include "core/fbe_core.h"
 #include "frame/fbe_frame.h"
 #include "input/fbe_input.h"
@@ -15,6 +16,7 @@
 #include "render/fbe_render.h"
 #include "scene/fbe_scene.h"
 #include "skin/fbe_skin.h"
+#include "text/fbe_text.h"
 #include "vfs/fbe_vfs.h"
 #include "window/fbe_window.h"
 

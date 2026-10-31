@@ -1,10 +1,12 @@
 #pragma once
 
 // What app's calls work out before they reach the OS, apart from the engine, so its tests can
-// check them without opening anything: whether to show nothing, and what a link opens.
+// check them without opening anything: whether to show nothing, what a link opens, and the
+// player's languages.
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fbe {
 
@@ -30,5 +32,9 @@ struct opening_t {
 /// and other than ASCII left as it is, which the shell reads back; elsewhere, the link is opened,
 /// with its UTF-8 in %XX, as RFC 8089's are.
 opening_t opening(std::string_view url, std::string_view folder);
+
+/// The player's languages, as the OS prefers them, the first most, each once, as BCP 47's tags
+/// in their usual case: "en-US", "fr". SDL_HINT_PREFERRED_LOCALES, set, is in the OS's place.
+std::vector<std::string> languages();
 
 } // namespace fbe
