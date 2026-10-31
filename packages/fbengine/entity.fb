@@ -8,6 +8,8 @@ Import "./c/fbe_scene"
 Import "./camera"
 Import "./light"
 Import "./mesh"
+Import "./mirror"
+Import "./plane"
 Import "./sprite"
 Import "./window"
 Import "./world"
@@ -24,6 +26,10 @@ Public Enum EntityKind
     MESH = 3
     /// A Sprite, which draws a quad facing the camera.
     SPRITE = 4
+    /// A GroundPlane, an infinite floor.
+    PLANE = 5
+    /// A Mirror, which reflects the scene.
+    MIRROR = 6
 End Enum
 
 // One wrapper for each live entity, by its handle's slot.
@@ -292,6 +298,10 @@ Package Function EntityOf(handle: UInt64): Entity?
             Return Mesh(handle)
         Case FBE_ENTITY_SPRITE
             Return Sprite(handle)
+        Case FBE_ENTITY_PLANE
+            Return GroundPlane(handle)
+        Case FBE_ENTITY_MIRROR
+            Return Mirror(handle)
     End Select
     Panic("an entity of kind {kind} has no wrapper")
 End Function

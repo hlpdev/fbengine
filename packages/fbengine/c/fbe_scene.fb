@@ -6,6 +6,8 @@ Public Const FBE_ENTITY_CAMERA: Int32 = 1
 Public Const FBE_ENTITY_LIGHT: Int32 = 2
 Public Const FBE_ENTITY_MESH: Int32 = 3
 Public Const FBE_ENTITY_SPRITE: Int32 = 4
+Public Const FBE_ENTITY_PLANE: Int32 = 5
+Public Const FBE_ENTITY_MIRROR: Int32 = 6
 Public Const FBE_SPACE_LOCAL: Int32 = 0
 Public Const FBE_SPACE_WORLD: Int32 = 1
 Public Const FBE_AXIS_RIGHT: Int32 = 0
@@ -320,6 +322,17 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_sprite_set_roll(sprite: UInt64, radians: Float32): Bool
     Function fbe_sprite_roll(sprite: UInt64): Float32
     Function fbe_sprite_matrix(sprite: UInt64, camera: UInt64, matrix: Ptr<fbe_mat4_t>): Bool
+    Function fbe_plane_set_material(plane: UInt64, material: UInt64): Bool
+    Function fbe_plane_material(plane: UInt64): UInt64
+    Function fbe_plane_set_tint(plane: UInt64, r: Float32, g: Float32, b: Float32, a: Float32): Bool
+    Function fbe_plane_tint(plane: UInt64, tint: Ptr<fbe_color_t>): Bool
+    Function fbe_plane_set_segments(plane: UInt64, segments: Int32): Bool
+    Function fbe_plane_segments(plane: UInt64): Int32
+    Function fbe_mirror_reflection(mirror: UInt64, matrix: Ptr<fbe_mat4_t>): Bool
+    Function fbe_entity_set_auto_fade(entity: UInt64, start: Float32, end: Float32): Bool
+    Function fbe_entity_auto_fade(entity: UInt64, fade: Ptr<fbe_vec2_t>): Bool
+    Function fbe_entity_fade(entity: UInt64, camera: UInt64): Float32
+    Function fbe_mesh_intersects(mesh: UInt64, other: UInt64): Int32
     Function fbe_camera_entity_in_view(camera: UInt64, target_width: Float32,
                                        target_height: Float32, entity: UInt64): Int32
     Function fbe_camera_point_in_view(camera: UInt64, target_width: Float32, target_height: Float32,

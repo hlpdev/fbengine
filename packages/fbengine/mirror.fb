@@ -1,0 +1,39 @@
+// Mirrors: entities that reflect the scene, as a polished floor or a mirror on a wall does.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./transform"
+
+/// An entity that reflects the scene through its own XZ plane, facing its +Y: what's above it
+/// shows in it, drawn first, as if from below.
+Public Final Class Mirror Extends Entity
+    /// A new Mirror, the last child of `parent`, or at the top of the current World when `parent`
+    /// is Null.
+    @MainThread @PanicsAtCaller
+    Public New(parent: Entity? = Null)
+        Super.New(Create(parent, FBE_ENTITY_MIRROR))
+    End New
+
+    Package New(handle: UInt64)
+        Super.New(handle)
+    End New
+
+    Override Package Method KindName(): String => "Mirror"
+
+    /// The matrix that reflects the world through the mirror's plane, which a camera's view takes
+    /// first to draw what's in it.
+    @MainThread @PanicsAtCaller
+    Public Method Reflection(): Mat4
+        Local mirror = Live("Reflection")
+        Local found = fbe_mat4_t()
+        Local done = False
+        Unsafe
+            done = fbe_mirror_reflection(mirror, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("Reflection")
+        Return MatOf(found)
+    End Method
+End Class

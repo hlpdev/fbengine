@@ -47,6 +47,37 @@ bool inside(const triangle_t& triangle, vec3_t p) {
 
 } // namespace
 
+bool plane_under(const mat4_t& matrix, vec3_t min, vec3_t max,
+                 std::array<std::array<vec3_t, 3>, 2>& triangles) {
+    mat4_t into;
+    if (!inverse_affine(matrix, into)) {
+        return false;
+    }
+    // The box in the plane's own space, and the square of the plane under it, a little wider, so a
+    // line straight down has some of the plane under it.
+    vec3_t low = transform_point(into, min);
+    vec3_t high = low;
+    for (unsigned corner = 1; corner < 8; ++corner) {
+        const vec3_t p = transform_point(into, box_corner(min, max, corner));
+        low = vec3_t(std::fmin(low.x, p.x), std::fmin(low.y, p.y), std::fmin(low.z, p.z));
+        high = vec3_t(std::fmax(high.x, p.x), std::fmax(high.y, p.y), std::fmax(high.z, p.z));
+    }
+    low = low - vec3_t(1.0F, 0.0F, 1.0F);
+    high = high + vec3_t(1.0F, 0.0F, 1.0F);
+    const vec3_t near_left = transform_point(matrix, vec3_t(low.x, 0.0F, low.z));
+    const vec3_t far_left = transform_point(matrix, vec3_t(low.x, 0.0F, high.z));
+    const vec3_t far_right = transform_point(matrix, vec3_t(high.x, 0.0F, high.z));
+    const vec3_t near_right = transform_point(matrix, vec3_t(high.x, 0.0F, low.z));
+    // Counterclockwise seen from +Y.
+    triangles = {
+        {
+            { near_left, far_left, far_right },
+            { near_left, far_right, near_right },
+        },
+    };
+    return true;
+}
+
 bool make_triangle(std::array<vec3_t, 3> corners, bool mirrored, triangle_t& triangle) {
     if (mirrored) {
         std::swap(corners[1], corners[2]);

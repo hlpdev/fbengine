@@ -26,6 +26,8 @@ namespace fbe::scene {
 namespace {
 
 constexpr float tiny = 1e-6F;
+/// A ground plane's shape, as targets have it.
+constexpr std::int32_t plane_shape = -1;
 constexpr std::int32_t most_iterations = 64;
 constexpr float most_skin = 0.1F;
 
@@ -152,6 +154,14 @@ nearby_t gather(const snapshot_t& snapshot, const mover_t& mover, float reach) {
                                 target.horizontal + mover.horizontal),
                 .target = t,
             });
+        } else if (target.shape == plane_shape) {
+            std::array<std::array<vec3_t, 3>, 2> under;
+            if (plane_under(target.matrix, low, high, under)) {
+                for (const auto& corners : under) {
+                    add_triangle(nearby, corners, squash, t, target.mirrored, triangle_origin_t(),
+                                 false);
+                }
+            }
         } else if (target.shape == FBE_COLLISION_BOX) {
             const collider_t& collider = scene().entities.colliders[target.entity];
             for (const auto& corners : box_triangles) {
@@ -516,7 +526,10 @@ void collide(std::uint32_t world_slot) {
         std::int32_t shape = collider.shape;
         const bool mesh = entities.kind[entity] == FBE_ENTITY_MESH;
         const std::uint32_t geometry = mesh ? s.meshes[entities.component[entity]].geometry : none;
-        if (shape == FBE_COLLISION_AUTO) {
+        if (entities.kind[entity] == FBE_ENTITY_PLANE &&
+            (shape == FBE_COLLISION_AUTO || shape == FBE_COLLISION_MESH)) {
+            shape = plane_shape;
+        } else if (shape == FBE_COLLISION_AUTO) {
             shape = mesh && geometry != none ? FBE_COLLISION_MESH : FBE_COLLISION_ELLIPSOID;
         }
         if (shape == FBE_COLLISION_MESH && geometry == none) {
@@ -529,6 +542,10 @@ void collide(std::uint32_t world_slot) {
             const vec3_t radii(collider.horizontal, collider.vertical, collider.horizontal);
             target.min = target.center - radii;
             target.max = target.center + radii;
+        } else if (shape == plane_shape) {
+            // Everywhere: every move's box is over some of it.
+            target.min = vec3_t(-INFINITY, -INFINITY, -INFINITY);
+            target.max = vec3_t(INFINITY, INFINITY, INFINITY);
         } else if (shape == FBE_COLLISION_BOX) {
             world_box(entity, collider.box_min, collider.box_max, target.min, target.max);
         } else {

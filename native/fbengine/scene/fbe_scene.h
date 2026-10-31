@@ -20,6 +20,8 @@ extern "C" {
 #define FBE_ENTITY_LIGHT  2
 #define FBE_ENTITY_MESH   3
 #define FBE_ENTITY_SPRITE 4
+#define FBE_ENTITY_PLANE  5
+#define FBE_ENTITY_MIRROR 6
 
 // The space a transform is in: the entity's parent's, or the world's.
 #define FBE_SPACE_LOCAL 0
@@ -576,6 +578,37 @@ FBE_API float fbe_sprite_roll(uint64_t sprite);
 // The quad's matrix in the world as a camera, or any entity, sees it: its corners (+-1, +-1, 0)
 // through it are where it's drawn.
 FBE_API bool fbe_sprite_matrix(uint64_t sprite, uint64_t camera, fbe_mat4_t* matrix);
+
+// Ground planes: entities that are an infinite plane at their own y of 0, facing their +Y, which
+// collisions touch as that plane when their collision shape is FBE_COLLISION_AUTO or
+// FBE_COLLISION_MESH, and picks of FBE_PICK_MESH hit, both from above only; E5 draws them out to
+// the camera's far plane. Their material, which they hold, 0 for none; their own color and alpha,
+// as a mesh's tint; and the grid they're drawn in, 1 to 16 segments a side, 1 at first.
+FBE_API bool fbe_plane_set_material(uint64_t plane, uint64_t material);
+FBE_API uint64_t fbe_plane_material(uint64_t plane);
+FBE_API bool fbe_plane_set_tint(uint64_t plane, float r, float g, float b, float a);
+FBE_API bool fbe_plane_tint(uint64_t plane, fbe_color_t* tint);
+FBE_API bool fbe_plane_set_segments(uint64_t plane, int32_t segments);
+FBE_API int32_t fbe_plane_segments(uint64_t plane);
+
+// Mirrors: entities that reflect the scene through their own XZ plane, which E5 draws. The matrix
+// that reflects the world through a mirror's plane, which a camera's view takes first to draw
+// what's in it.
+FBE_API bool fbe_mirror_reflection(uint64_t mirror, fbe_mat4_t* matrix);
+
+// How far from a camera an entity fades out, for a mesh or a sprite: whole nearer than `start`, not
+// drawn past `end`, and its alpha times 1 - (d - start) / (end - start) between, d from the
+// camera's place to its own; 0 and 0, at first, for never. False unless 0 <= start < end, finite,
+// or both 0.
+FBE_API bool fbe_entity_set_auto_fade(uint64_t entity, float start, float end);
+FBE_API bool fbe_entity_auto_fade(uint64_t entity, fbe_vec2_t* fade);
+// The alpha an entity's fade gives it seen from `camera`, 0 to 1; -1 for a freed one.
+FBE_API float fbe_entity_fade(uint64_t entity, uint64_t camera);
+
+// Whether any of two meshes' triangles cross, in the world, either side: 1 if they do, 0 if not or
+// either draws nothing, -1 for a freed one or one that isn't a mesh. Triangles flat on each other
+// touch, they don't cross.
+FBE_API int32_t fbe_mesh_intersects(uint64_t mesh, uint64_t other);
 
 // Visibility. Whether a camera might see an entity, in a target of this size: a mesh's box of its
 // geometry, turned and scaled with it, a sprite's box of its reach, however it turns, or another

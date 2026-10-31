@@ -69,6 +69,24 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
         }
         return;
     }
+    if (collider.pick == FBE_PICK_MESH && s.entities.kind[entity] == FBE_ENTITY_PLANE) {
+        // The part of the plane under the pick's box.
+        const vec3_t to = from + along;
+        const vec3_t grow(radius, radius, radius);
+        const vec3_t min(std::fmin(from.x, to.x), std::fmin(from.y, to.y), std::fmin(from.z, to.z));
+        const vec3_t max(std::fmax(from.x, to.x), std::fmax(from.y, to.y), std::fmax(from.z, to.z));
+        std::array<std::array<vec3_t, 3>, 2> under;
+        if (plane_under(matrix, min - grow, max + grow, under)) {
+            for (const auto& corners : under) {
+                triangle_t triangle;
+                if (make_triangle(corners, mirrored, triangle)) {
+                    triangle.target = entity;
+                    sweep_triangle(from, along, radius, triangle, hit, found);
+                }
+            }
+        }
+        return;
+    }
     if (collider.pick != FBE_PICK_MESH || s.entities.kind[entity] != FBE_ENTITY_MESH) {
         return;
     }
@@ -108,6 +126,13 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
 bool refresh(pickable_t& entry) {
     const scene_t& s = scene();
     const std::uint32_t entity = entry.entity;
+    if (entry.mode == FBE_PICK_MESH && s.entities.kind[entity] == FBE_ENTITY_PLANE) {
+        // Everywhere: the plane's own test says.
+        entry.min = vec3_t(-INFINITY, -INFINITY, -INFINITY);
+        entry.max = vec3_t(INFINITY, INFINITY, INFINITY);
+        entry.stale = false;
+        return true;
+    }
     if (entry.mode == FBE_PICK_MESH) {
         const std::uint32_t geometry = s.entities.kind[entity] == FBE_ENTITY_MESH
                                            ? s.meshes[s.entities.component[entity]].geometry

@@ -397,6 +397,44 @@ FBE_API bool fbe_mesh_tint(uint64_t mesh, fbe_color_t* tint) {
     return true;
 }
 
+FBE_API bool fbe_plane_set_material(uint64_t plane, uint64_t material) {
+    fbe::scene::plane_t* found = fbe::scene::plane_of(plane);
+    std::uint32_t slot = none;
+    if (found == nullptr || !fbe::scene::optional_material(material, slot)) {
+        return false;
+    }
+    fbe::scene::retain_material(slot);
+    fbe::scene::release_material(found->material);
+    found->material = slot;
+    return true;
+}
+
+FBE_API uint64_t fbe_plane_material(uint64_t plane) {
+    const fbe::scene::plane_t* found = fbe::scene::plane_of(plane);
+    if (found == nullptr || found->material == none) {
+        return 0;
+    }
+    return scene().material_slots.handle(found->material);
+}
+
+FBE_API bool fbe_plane_set_tint(uint64_t plane, float r, float g, float b, float a) {
+    fbe::scene::plane_t* found = fbe::scene::plane_of(plane);
+    if (found == nullptr || !fbe::scene::valid_color(r, g, b, a, "a ground plane's")) {
+        return false;
+    }
+    found->tint = { r, g, b, a };
+    return true;
+}
+
+FBE_API bool fbe_plane_tint(uint64_t plane, fbe_color_t* tint) {
+    const fbe::scene::plane_t* found = fbe::scene::plane_of(plane);
+    if (found == nullptr) {
+        return false;
+    }
+    *tint = fbe::scene::color_of(found->tint);
+    return true;
+}
+
 FBE_API bool fbe_sprite_set_material(uint64_t sprite, uint64_t material) {
     fbe::scene::sprite_t* found = fbe::scene::sprite_of(sprite);
     std::uint32_t slot = none;

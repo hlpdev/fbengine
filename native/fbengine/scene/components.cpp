@@ -19,6 +19,8 @@ void add_component(std::uint32_t entity) {
         add_mesh(entity);
     } else if (entities.kind[entity] == FBE_ENTITY_SPRITE) {
         add_sprite(entity);
+    } else if (entities.kind[entity] == FBE_ENTITY_PLANE) {
+        add_plane(entity);
     }
 }
 
@@ -31,6 +33,8 @@ void remove_component(std::uint32_t entity) {
         remove_mesh(entity);
     } else if (scene().entities.kind[entity] == FBE_ENTITY_SPRITE) {
         remove_sprite(entity);
+    } else if (scene().entities.kind[entity] == FBE_ENTITY_PLANE) {
+        remove_plane(entity);
     }
     scene().entities.component[entity] = none;
 }
@@ -60,6 +64,11 @@ void copy_component(std::uint32_t from, std::uint32_t to) {
         // Copies share their original's material, and have its settings.
         sprite_t& copy = scene().sprites[entities.component[to]];
         copy = scene().sprites[entities.component[from]];
+        copy.entity = to;
+        retain_material(copy.material);
+    } else if (entities.kind[from] == FBE_ENTITY_PLANE) {
+        plane_t& copy = scene().planes[entities.component[to]];
+        copy = scene().planes[entities.component[from]];
         copy.entity = to;
         retain_material(copy.material);
     }
