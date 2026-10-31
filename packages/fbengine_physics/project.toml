@@ -1,0 +1,17 @@
+[project]
+name = "fbengine_physics"
+version = "0.1.1"
+type = "library"
+license = "Apache-2.0"
+description = "fbengine's physics, on Jolt: worlds of rigid bodies, joints, characters, and casts."
+readme = "README.md"
+repository = "https://github.com/hlpdev/fbengine"
+keywords = ["engine", "game", "physics", "jolt", "3d"]
+
+[dependencies]
+fbengine = { path = "../fbengine" }
+
+# fbengine_physics' own DLL, native/fbengine_physics, built for each target into native/<target>/,
+# with Jolt in it.
+[native]
+fbengine_physics_native = { dynamic = "native/{target}/fbengine_physics_native" }
