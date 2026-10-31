@@ -200,6 +200,68 @@ Function APausedChannelWaitsWhereItIs() Throws AudioError, SoundError
     Expect(back[240] * 32768.0 / 4.0 > 470.0 && back[240] * 32768.0 / 4.0 < 500.0)
 End Function
 
+// A pause before any mix stops its sound at once, as nothing of it was heard: nothing's mixed and
+// it's where it started; resumed, it plays from its start at its gains at once.
+@Test
+Function APauseBeforeAnyMixStopsItAtOnce() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Local channel = (Try Sound.FromBytes(Wav(Constant(16384, 48000)))).Play()
+    channel.Pause()
+    Local mixed = Audio.Mix(4800)
+    For sample In mixed
+        Expect(sample == 0.0)
+    End For
+    Expect(channel.Position() == 0.0)
+    Expect(channel.Paused())
+    channel.Resume()
+    mixed = Audio.Mix(4800)
+    Expect(mixed[2] == 0.5 && mixed[3] == 0.5)
+    Expect(channel.Position() > 0.099 && channel.Position() < 0.101)
+End Function
+
+// A play started paused and mixed while it waits is resumed at the gains it has then, at once:
+// nothing of it was heard to ramp from, though miniaudio mixed its gains while its sound waited.
+@Test
+Function APausedPlaysFirstResumeIsAtItsGainsAtOnce() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Local channel = (Try Sound.FromBytes(Wav(Constant(16384, 48000)))).Play(paused: True)
+    Audio.Mix(4800)
+    channel.SetVolume(0.2)
+    channel.Resume()
+    Local mixed = Audio.Mix(4)
+    Expect(mixed[2] > 0.0999 && mixed[2] < 0.1001)
+    Expect(mixed[6] > 0.0999 && mixed[6] < 0.1001)
+End Function
+
+// A pause stops its sound on its ramp's last frame, inside the mix it lands in, so its Position is
+// what was heard: 4800 frames, then the 240 of the ramp, not the whole second mix; resumed, it
+// plays on from there.
+@Test
+Function APauseStopsOnItsRampsLastFrame() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL)
+    Defer Audio.Stop()
+    Local channel = (Try Sound.FromBytes(Wav(Rising(48000)))).Play()
+    Audio.Mix(4800)
+    channel.Pause()
+    Local mixed = Audio.Mix(4800)
+    Local heard = 0
+    While heard < 4800 && mixed[heard * 2] != 0.0
+        heard += 1
+    End While
+    Expect(heard >= 236 && heard <= 241)
+    Local at = channel.Position() * 48000.0
+    Expect(at >= 5035.0 && at <= 5042.0)
+    Audio.Mix(4800)
+    Expect(channel.Position() * 48000.0 == at)
+    channel.Resume()
+    Local back = Audio.Mix(481)
+    // Back at its gains, it's at the frame after where it stopped, not 4560 frames on.
+    Local frame = back[960] * 32768.0 / 4.0
+    Expect(frame > at + 470.0 && frame < at + 490.0)
+End Function
+
 // A pause turned round before it's silent ramps back up, never stopping its sound.
 @Test
 Function APauseResumedWhileItRampsTurnsRound() Throws AudioError, SoundError
