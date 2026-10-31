@@ -3,6 +3,8 @@
 Import std.core
 Import std.math
 Import std.test
+Import std.text
+Import std.time
 Import fbengine
 Import fbengine_ui
 
@@ -337,4 +339,23 @@ Function AMarkAtTheMostJoinsTheClusterBeforeIt() Throws GraphicsError
     // A letter of its own doesn't fit.
     Try Typed(ui, "x")
     Expect(field.Text() == "\u{E01}\u{E48}")
+End Function
+
+// Pasted at its most, a long text is cut at once, not a cluster at a time.
+@Test
+Function APasteAtTheMostIsCutQuickly() Throws GraphicsError
+    Local field = TextField("ab")
+    field.SetMaxLength(10)
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Local long = StringBuilder()
+    For i = 1 To 4000
+        long.Append('x')
+    End For
+    Local timer = Stopwatch.StartNew()
+    Try Typed(ui, long.ToString())
+    Expect(field.Text() == "abxxxxxxxx" && field.Length() == 10)
+    Expect(timer.Elapsed.TotalSeconds < 0.2)
 End Function

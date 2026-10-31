@@ -38,9 +38,11 @@ Public Final Class Ui
     Field scale: Float32 = 1.0
     // A game's own measuring, which comes before its fonts'.
     Field measure: (Func(String, Style): Vec2)? = Null
-    // Its fonts by the names styles give them, and each at the sizes styles ask for.
+    // Its fonts by the names styles give them, and each at the sizes styles ask for, the 64 used
+    // last, the last of them last.
     Field fonts: Map<String, Font>
     Field sized: Map<String, Font>
+    Field recent: String[] = []
     Field hovered: Weak<Widget>
     Field pressed: Weak<Widget>
     Field focused: Weak<Widget>
@@ -252,6 +254,7 @@ Public Final Class Ui
             fonts[name] = font
         End If
         sized.Clear()
+        recent.Clear()
         root.Invalidate()
     End Method
 
@@ -263,10 +266,17 @@ Public Final Class Ui
         If font == Null || !(style.FontSize > 0.0) Then Return Null
         If font.Size() == style.FontSize Then Return font
         Local key = "{named}/{style.FontSize}"
+        recent.Remove(key)
+        recent.Add(key)
         Local made = sized.Get(key)
         If made != Null Then Return made
         Local resized = font.Sized(style.FontSize)
         sized[key] = resized
+        // A tween's sizes, each once, don't pile up.
+        If recent.Count > 64
+            sized.Remove(recent[0])
+            recent.RemoveAt(0)
+        End If
         Return resized
     End Method
 

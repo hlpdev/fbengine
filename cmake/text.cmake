@@ -36,8 +36,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(freetype harfbuzz sheenbidi)
 
-# Built into a shared library, their code is position-independent too.
+# Built into a shared library, their code is position-independent too. FreeType registers only
+# the modules TrueType and OpenType fonts need (cmake/freetype/fbengine_ftmodule.h), so the rest
+# aren't linked.
 set_target_properties(freetype PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(freetype PRIVATE "${CMAKE_CURRENT_LIST_DIR}/freetype")
+# C's only: Windows' resource compiler can't take the angle brackets.
+target_compile_definitions(
+  freetype PRIVATE "$<$<COMPILE_LANGUAGE:C>:FT_CONFIG_MODULES_H=<fbengine_ftmodule.h$<ANGLE-R>>")
 
 # HarfBuzz from its one-file build, with its own OpenType functions, so it needs nothing else. Its
 # one object has more sections than COFF's 65,535, which MinGW's and MSVC's big objects take.

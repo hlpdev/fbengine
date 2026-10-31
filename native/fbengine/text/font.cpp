@@ -31,8 +31,9 @@ namespace {
 
 FT_Library freetype = nullptr;
 
-/// How many faces have been read, the last one's id.
+/// How many faces have been read, the last one's id, and how many are open.
 std::uint32_t faces_read = 0;
+std::size_t open_faces = 0;
 
 /// A face read from a file, kept while a font has it, so the file's read once.
 struct file_face_t {
@@ -89,7 +90,16 @@ std::string given;
 
 } // namespace
 
+face_t::face_t() {
+    ++open_faces;
+}
+
+std::size_t faces_open() {
+    return open_faces;
+}
+
 face_t::~face_t() {
+    --open_faces;
     hb_font_destroy(hb);
     hb_face_destroy(hb_face);
     if (ft != nullptr) {
@@ -111,6 +121,10 @@ std::shared_ptr<face_t> open_face(std::vector<std::uint8_t> bytes, std::int32_t 
     if (started == nullptr) {
         return nullptr;
     }
+    if (index < 0 || index > 0xFFFF) {
+        fbe::fail(std::format("a font's face is 0 to 65,535, not {}", index));
+        return nullptr;
+    }
     auto face = std::make_shared<face_t>();
     face->bytes = std::move(bytes);
     const FT_Error error = FT_New_Memory_Face(
@@ -126,6 +140,11 @@ std::shared_ptr<face_t> open_face(std::vector<std::uint8_t> bytes, std::int32_t 
         } else {
             fbe::fail(std::format("{} is a broken font (FreeType's error {})", named, error));
         }
+        return nullptr;
+    }
+    // What HarfBuzz shapes: TrueType's and OpenType's, not bitmap fonts' others.
+    if (!FT_IS_SFNT(face->ft)) {
+        fbe::fail(std::format("{} isn't a TrueType or OpenType font", named));
         return nullptr;
     }
     // A font with no Unicode charmap keeps the one it has, as a symbol font's.

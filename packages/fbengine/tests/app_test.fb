@@ -139,3 +139,10 @@ Function TheBestLanguageIsInThePlayersScript()
     Expect(BestLanguage(["zh-Hant", "en"], ["zh-CN", "en"]) == "en")
     Expect(BestLanguage(["zh-Hant", "en"], ["zh-CN"]) == "zh-Hant")
 End Function
+
+// A variant of four digits isn't a script: German's 1996 spelling is German's.
+@Test
+Function AVariantIsntAScript()
+    Expect(BestLanguage(["de", "en"], ["de-1996"]) == "de")
+    Expect(BestLanguage(["sr-Latn", "sr-Cyrl"], ["sr-1996"]) == "sr-Cyrl")
+End Function

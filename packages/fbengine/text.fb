@@ -20,7 +20,11 @@ End Struct
 
 /// A font: a face of a font file, or of the OS's fonts, at a size, in the game's own units, as
 /// CSS's px are (the em's height), with a style. A glyph it hasn't is its fallbacks', each at its
-/// size and style, then the OS's fonts', as its system fallback is on, at first. Text is laid out
+/// size and style, then the OS's fonts', as its system fallback is on, at first; an emoji is a
+/// color font's first, the OS's own emoji font among them, and a character with marks the first
+/// face's that has them all. The OS's fonts are listed the first time they're needed, by a lookup
+/// by family or a glyph no font has, on the main thread, which takes about 100 ms with a warm disk
+/// and 400 ms cold on a Windows PC with 119 families: ScanSystem does it at a loading screen. Text is laid out
 /// in runs of one script and one direction, each shaped as its script is, Arabic's joined and
 /// Hebrew's right to left, with its lines by "\n".
 ///
@@ -70,7 +74,7 @@ Public Final Class Font Implements Printable
     /// The OS's font of `family`, as "Arial", or of a family and a style as its fonts name them,
     /// as "Segoe UI Semibold", the face nearest `style`, made bold or italic if none is; Null
     /// when the OS, and the folders AddFolder added, have none of it. The first call lists the
-    /// OS's fonts, which takes a moment. Panics for a size that isn't over 0.
+    /// OS's fonts, unless ScanSystem has. Panics for a size that isn't over 0.
     @MainThread Public Static Method System(family: String, size: Float32,
                                             style: FontStyle? = Null): Font?
         CheckSize("Font.System", size)
@@ -84,6 +88,12 @@ Public Final Class Font Implements Printable
         CheckSize("Font.SystemUI", size)
         Local made = fbe_text_default_font(size, Bits(style))
         Return made != 0 ? Font(made) : Null
+    End Method
+
+    /// Lists the OS's fonts now, as a loading screen does, so the first lookup by family, or the
+    /// first glyph no font has, doesn't stop a frame for it.
+    @MainThread Public Static Method ScanSystem()
+        fbe_text_scan_system()
     End Method
 
     /// Adds a folder of font files, and those in the folders in it, as a game's own fonts, which

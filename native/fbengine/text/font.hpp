@@ -13,6 +13,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 #include FT_FREETYPE_H
 #include <hb-ot.h>
@@ -28,7 +29,7 @@ constexpr std::uint32_t underline_bit = 4U;
 /// A face of a font file, read once and shared by the fonts of it: FreeType's, for its glyphs, and
 /// HarfBuzz's, for shaping, at its units per em, over the same bytes.
 struct face_t {
-    face_t() = default;
+    face_t();
     face_t(const face_t&) = delete;
     face_t& operator=(const face_t&) = delete;
     face_t(face_t&&) = delete;
@@ -47,6 +48,9 @@ struct face_t {
     std::int32_t weight = 400;
     bool italic = false;
     std::int32_t units_per_em = 1000;
+    /// Whether each glyph asked of it can be drawn: an outline, COLR's layers, or a bitmap FreeType
+    /// reads, not a PNG or SVG picture alone.
+    std::unordered_map<std::uint32_t, bool> drawable;
 };
 
 /// A font, as its handle is: a face at a size, in its own units, the style asked of it, what of
@@ -60,6 +64,9 @@ struct font_t {
     std::vector<std::uint64_t> fallbacks;
     bool system_fallback = true;
 };
+
+/// How many faces are read and kept, by a font or a fallback.
+std::size_t faces_open();
 
 /// FreeType, started the first time anything reads a font; null with fbe_error's why if it can't.
 FT_Library library();
@@ -92,11 +99,21 @@ std::vector<std::string> system_families();
 bool add_folder(const std::filesystem::path& folder);
 
 /// How many faces the OS's fonts fall back to for a glyph a font and its fallbacks haven't, from
-/// this OS's own list of families covering the scripts its fonts have between them.
+/// this OS's own list of families covering the scripts its fonts have between them, and which of
+/// them is its color emoji font (the count where it hasn't one).
 std::size_t system_fallback_count();
+std::size_t system_emoji_fallback();
 
-/// The `index`th of them, read the first time it's asked for, or null where the OS hasn't it.
+/// Whether the `index`th has `point`, by its coverage, read from its file's character map the
+/// first time, without reading the file whole: none for a face it can't draw.
+bool system_fallback_has(std::size_t index, char32_t point);
+
+/// The `index`th, read whole the first time it gives a glyph, then kept; null where the OS hasn't
+/// it.
 std::shared_ptr<face_t> system_fallback(std::size_t index);
+
+/// Lists the OS's fonts now, as the first lookup by family or a fallback to them would.
+void scan_system();
 
 /// The OS's own font for its UI, as Segoe UI is Windows', or its first, or null with fbe_error's
 /// why when it has none.
@@ -111,6 +128,10 @@ struct glyph_t {
     std::int32_t left = 0;
     std::int32_t top = 0;
 };
+
+/// Whether `face` can draw its glyph for `point`: it has one, and FreeType can load it, in color
+/// or not; kept for each glyph.
+bool draws(face_t& face, char32_t point);
 
 /// The glyph `glyph` of `face` in the atlas, rasterized the first time it's asked for at `pixels`
 /// an em, in 26.6 fixed point, made bolder and slanted as they say, and moved right by `quarter`

@@ -359,8 +359,10 @@ Public Class TextField Extends Widget
         Local after = Spanned(clusters, to, clusters.Count)
         Local adding = Clusters(put)
         // As many of its clusters as fit once they fall together with those around them, as a
-        // mark typed at the most joins the cluster before it.
-        Local taking = adding.Count
+        // mark typed at the most joins the cluster before it: clusters fall together only at its
+        // two ends, so the room left, and two more, is as many as can.
+        Local room = limit - (clusters.Count - (to - from))
+        Local taking = limit > 0 ? Min(adding.Count, Max(room, 0) + 2) : adding.Count
         While limit > 0 && taking > 0 &&
               Clusters(before + Spanned(adding, 0, taking) + after).Count > limit
             taking -= 1

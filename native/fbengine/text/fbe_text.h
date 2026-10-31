@@ -87,6 +87,10 @@ FBE_API bool fbe_text_measure(uint64_t font, const char* text, fbe_text_size_t* 
 // Whether `font`, with its fallbacks and the OS's, has a glyph for each character of `text`.
 FBE_API bool fbe_text_has_glyphs(uint64_t font, const char* text);
 
+// Lists the OS's fonts now, as the first lookup by family or the first glyph no font has would, on
+// the main thread: about 100 ms with a warm disk and 400 ms cold, on a Windows PC with 119
+// families.
+FBE_API void fbe_text_scan_system(void);
 // Adds a folder of font files, and those in the folders in it, as a game's own fonts, whose
 // families fbe_text_system_font finds before the OS's; false if it isn't a folder.
 FBE_API bool fbe_text_add_font_folder(const char* folder);

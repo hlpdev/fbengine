@@ -98,32 +98,48 @@ mask_t* mask_of(std::uint64_t handle) {
     return masks[slot].get();
 }
 
-/// A mask placed: its screen pixels' rows and columns it may cover, [left, right) by [top,
+/// The farthest from the origin a screen pixel's row or column is taken, the canvas's reach.
+constexpr double farthest = 16777216.0;
+
+/// A mask placed: the screen pixels' rows and columns it may cover, [left, right) by [top,
 /// bottom), and how a screen pixel maps into it. Plain, neither turned nor scaled, a screen pixel
-/// is its pixel moved by (dx, dy); otherwise a screen pixel's middle is at `at` + x `across` + y
-/// `down` in its pixels.
+/// is its pixel moved by (dx, dy). Otherwise a pixel's middle maps back into its pixels by one
+/// arithmetic everywhere, so every path agrees: from the position, turned back, scaled back, from
+/// the handle; and a middle exactly on its edge is inside by the GPU's top-left rule, on a left or
+/// top edge on the screen, and outside on a right or bottom one.
 struct placed_t {
     const mask_t* mask = nullptr;
     bool empty = true;
     bool plain = false;
     std::int64_t dx = 0;
     std::int64_t dy = 0;
-    double at_u = 0.0;
-    double at_v = 0.0;
+    double x = 0.0;
+    double y = 0.0;
+    double handle_x = 0.0;
+    double handle_y = 0.0;
+    double cosine = 1.0;
+    double sine = 0.0;
+    double scale_x = 1.0;
+    double scale_y = 1.0;
+    /// How far u and v go a pixel across and a pixel down, to find where they reach whole numbers.
     double across_u = 0.0;
     double across_v = 0.0;
     double down_u = 0.0;
     double down_v = 0.0;
+    /// Whether a middle exactly on the edges u = 0, u = width, v = 0, and v = height is inside.
+    bool u_low = true;
+    bool u_high = false;
+    bool v_low = true;
+    bool v_high = false;
     std::int64_t left = 0;
     std::int64_t top = 0;
     std::int64_t right = 0;
     std::int64_t bottom = 0;
 };
 
-/// `value` kept to what an int64_t holds with room to spare, as a screen pixel's row or column.
+/// `value` kept to the canvas's reach, as a screen pixel's row or column.
 std::int64_t pixel_of(double value) {
-    constexpr double far = 1e15;
-    return static_cast<std::int64_t>(std::clamp(value, -far, far));
+    return static_cast<std::int64_t>(std::clamp(value, -farthest, farthest));
 }
 
 /// Whether every field of `place` is finite, or false with fbe_error's why.
@@ -138,12 +154,29 @@ bool finite(const fbe_collide_place_t* place) {
     return all ? true : fbe::fail("a place's position, handle, rotation, and scale are finite");
 }
 
+/// The cosine and sine of `rotation` degrees, exact for quarter turns, as the GPU's snapped
+/// corners are.
+void turned(float rotation, double& cosine, double& sine) {
+    const double degrees = std::fmod(static_cast<double>(rotation), 360.0);
+    if (std::fmod(degrees, 90.0) == 0.0) {
+        constexpr std::array<double, 4> cosines{ 1.0, 0.0, -1.0, 0.0 };
+        constexpr std::array<double, 4> sines{ 0.0, 1.0, 0.0, -1.0 };
+        const auto quarter = static_cast<std::size_t>(((std::lround(degrees / 90.0) % 4) + 4) % 4);
+        cosine = cosines[quarter];
+        sine = sines[quarter];
+        return;
+    }
+    const double turn = degrees * std::numbers::pi / 180.0;
+    cosine = std::cos(turn);
+    sine = std::sin(turn);
+}
+
 /// The corners of `mask` placed as `place`, as the canvas puts a sprite's: from its handle,
 /// scaled, turned clockwise, and moved; x then y of each.
 std::array<double, 8> corners(const mask_t& mask, const fbe_collide_place_t& place) {
-    const double turn = static_cast<double>(place.rotation) * std::numbers::pi / 180.0;
-    const double cosine = std::cos(turn);
-    const double sine = std::sin(turn);
+    double cosine = 1.0;
+    double sine = 0.0;
+    turned(place.rotation, cosine, sine);
     const std::array<std::array<double, 2>, 4> part{
         {
             { 0.0, 0.0 },
@@ -162,6 +195,12 @@ std::array<double, 8> corners(const mask_t& mask, const fbe_collide_place_t& pla
     return found;
 }
 
+/// Whether an edge whose inward normal on the screen is (`across`, `down`) is a left or a top one,
+/// whose middles are inside.
+bool top_left(double across, double down) {
+    return across > 0.0 || (across == 0.0 && down > 0.0);
+}
+
 /// `mask` placed as `place`.
 placed_t placed(const mask_t& mask, const fbe_collide_place_t& place) {
     placed_t made;
@@ -176,10 +215,10 @@ placed_t placed(const mask_t& mask, const fbe_collide_place_t& place) {
         made.plain = true;
         made.dx = pixel_of(std::ceil(static_cast<double>(place.x) - place.handle_x - 0.5));
         made.dy = pixel_of(std::ceil(static_cast<double>(place.y) - place.handle_y - 0.5));
-        made.left = made.dx;
-        made.right = made.dx + mask.width;
-        made.top = made.dy;
-        made.bottom = made.dy + mask.height;
+        made.left = std::max(made.dx, pixel_of(-farthest));
+        made.right = std::min(made.dx + mask.width, pixel_of(farthest));
+        made.top = std::max(made.dy, pixel_of(-farthest));
+        made.bottom = std::min(made.dy + mask.height, pixel_of(farthest));
         return made;
     }
     const std::array<double, 8> found = corners(mask, place);
@@ -193,47 +232,94 @@ placed_t placed(const mask_t& mask, const fbe_collide_place_t& place) {
         least_y = std::min(least_y, found[(at * 2) + 1]);
         most_y = std::max(most_y, found[(at * 2) + 1]);
     }
-    // The pixels whose middles are inside its corners' bounds.
-    made.left = pixel_of(std::ceil(least_x - 0.5));
-    made.right = pixel_of(std::floor(most_x - 0.5)) + 1;
-    made.top = pixel_of(std::ceil(least_y - 0.5));
-    made.bottom = pixel_of(std::floor(most_y - 0.5)) + 1;
-    const double turn = static_cast<double>(place.rotation) * std::numbers::pi / 180.0;
-    const double cosine = std::cos(turn);
-    const double sine = std::sin(turn);
-    const double across = 1.0 / static_cast<double>(place.scale_x);
-    const double down = 1.0 / static_cast<double>(place.scale_y);
-    const double from_x = 0.5 - static_cast<double>(place.x);
-    const double from_y = 0.5 - static_cast<double>(place.y);
-    made.at_u = (((from_x * cosine) + (from_y * sine)) * across) + place.handle_x;
-    made.at_v = (((from_y * cosine) - (from_x * sine)) * down) + place.handle_y;
-    made.across_u = cosine * across;
-    made.across_v = -sine * down;
-    made.down_u = sine * across;
-    made.down_v = cosine * down;
+    // The pixels whose middles are inside its corners' bounds, a pixel more each way for what's
+    // rounded, kept to the canvas's reach.
+    made.left = pixel_of(std::ceil(least_x - 0.5) - 1.0);
+    made.right = pixel_of(std::floor(most_x - 0.5) + 2.0);
+    made.top = pixel_of(std::ceil(least_y - 0.5) - 1.0);
+    made.bottom = pixel_of(std::floor(most_y - 0.5) + 2.0);
+    turned(place.rotation, made.cosine, made.sine);
+    made.x = place.x;
+    made.y = place.y;
+    made.handle_x = place.handle_x;
+    made.handle_y = place.handle_y;
+    made.scale_x = place.scale_x;
+    made.scale_y = place.scale_y;
+    made.across_u = made.cosine / made.scale_x;
+    made.down_u = made.sine / made.scale_x;
+    made.across_v = -made.sine / made.scale_y;
+    made.down_v = made.cosine / made.scale_y;
+    made.u_low = top_left(made.across_u, made.down_u);
+    made.u_high = top_left(-made.across_u, -made.down_u);
+    made.v_low = top_left(made.across_v, made.down_v);
+    made.v_high = top_left(-made.across_v, -made.down_v);
     return made;
+}
+
+/// Where the middle of the screen pixel `x`, `y` is in a placed mask's pixels, the one arithmetic
+/// every path takes.
+void local(const placed_t& place, std::int64_t x, std::int64_t y, double& u, double& v) {
+    const double from_x = (static_cast<double>(x) + 0.5) - place.x;
+    const double from_y = (static_cast<double>(y) + 0.5) - place.y;
+    u = (((from_x * place.cosine) + (from_y * place.sine)) / place.scale_x) + place.handle_x;
+    v = (((from_y * place.cosine) - (from_x * place.sine)) / place.scale_y) + place.handle_y;
+}
+
+/// The column or row `value` is in of `size`, or -1 outside, its edges by `low` and `high`.
+std::int64_t index_of(double value, std::int32_t size, bool low, bool high) {
+    const auto whole = static_cast<double>(size);
+    const bool inside =
+        (value > 0.0 || (value == 0.0 && low)) && (value < whole || (value == whole && high));
+    if (!inside) {
+        return -1;
+    }
+    return value == whole ? size - 1 : static_cast<std::int64_t>(value);
 }
 
 /// Whether the screen pixel at `x`, `y` is one of a placed mask's solid ones.
 bool solid_at(const placed_t& place, std::int64_t x, std::int64_t y) {
+    if (place.empty) {
+        return false;
+    }
     if (place.plain) {
         return place.mask->test(x - place.dx, y - place.dy);
     }
-    const auto across = static_cast<double>(x);
-    const auto down = static_cast<double>(y);
-    const double u = place.at_u + (across * place.across_u) + (down * place.down_u);
-    const double v = place.at_v + (across * place.across_v) + (down * place.down_v);
-    if (u < 0.0 || v < 0.0 || u >= place.mask->width || v >= place.mask->height) {
-        return false;
-    }
-    return place.mask->test(static_cast<std::int64_t>(u), static_cast<std::int64_t>(v));
+    double u = 0.0;
+    double v = 0.0;
+    local(place, x, y, u, v);
+    const std::int64_t column = index_of(u, place.mask->width, place.u_low, place.u_high);
+    const std::int64_t row = index_of(v, place.mask->height, place.v_low, place.v_high);
+    return column >= 0 && row >= 0 && place.mask->test(column, row);
 }
 
-/// Where along row `y`, from `from` up to `to`, `start` + x `step` is from 0 up to `size`, a pixel
-/// past each end for what's rounded; false where it never is.
+/// The next pixel past `at` where `value`, going `step` a pixel and `ahead` at the next pixel, may
+/// reach a whole number, a pixel early so rounding never passes one, or `to` if it doesn't before;
+/// on one already, the next pixel, unless it stays there, as a value too big for its step does,
+/// when it's where it'd reach the next one.
+std::int64_t reaching(double value, double step, double ahead, std::int64_t at, std::int64_t to) {
+    if (step == 0.0 || !std::isfinite(value)) {
+        return to;
+    }
+    const double whole = std::floor(value);
+    double target = step > 0.0 ? whole + 1.0 : whole;
+    if (value == whole) {
+        if (ahead != value) {
+            return at + 1;
+        }
+        target = step > 0.0 ? whole + 1.0 : whole - 1.0;
+    }
+    const double early = std::ceil(static_cast<double>(at) + ((target - value) / step)) - 1.0;
+    if (!(early < static_cast<double>(to))) {
+        return to;
+    }
+    return std::max(at + 1, static_cast<std::int64_t>(early));
+}
+
+/// Where along a row `start` + x `step` is from 0 to `size`, narrowing [from, to), a pixel past
+/// each end for what's rounded; false where it never is. A `step` of 0 narrows nothing.
 bool within(double start, double step, double size, std::int64_t& from, std::int64_t& to) {
-    if (std::abs(step) < 1e-12) {
-        return start >= 0.0 && start < size;
+    if (step == 0.0 || !std::isfinite(step)) {
+        return true;
     }
     double low = -start / step;
     double high = (size - start) / step;
@@ -258,36 +344,100 @@ bool span(const placed_t& place, std::int64_t y, std::int64_t& from, std::int64_
     if (place.plain) {
         return true;
     }
-    const auto down = static_cast<double>(y);
-    const double u = place.at_u + (down * place.down_u);
-    const double v = place.at_v + (down * place.down_v);
+    double u = 0.0;
+    double v = 0.0;
+    local(place, 0, y, u, v);
     return within(u, place.across_u, place.mask->width, from, to) &&
            within(v, place.across_v, place.mask->height, from, to);
 }
 
-/// Whether any of the screen pixels from `from` up to `to` of row `y` is solid in a placed mask,
-/// and in `other` as well, if it isn't null.
-bool any(const placed_t& place, const placed_t* other, std::int64_t y, std::int64_t from,
-         std::int64_t to) {
-    if (place.plain && (other == nullptr || other->plain)) {
-        for (std::int64_t x = from; x < to; x += 64) {
-            const std::int64_t count = std::min<std::int64_t>(64, to - x);
-            std::uint64_t bits = place.mask->run(y - place.dy, x - place.dx, count);
-            if (other != nullptr && bits != 0) {
-                bits &= other->mask->run(y - other->dy, x - other->dx, count);
-            }
-            if (bits != 0) {
-                return true;
-            }
+/// Calls `visit(from, to, solid)` for each run of row `y`'s pixels from `from` up to `to` in one
+/// of a placed mask's pixels, or outside it, stepping a pixel of the mask at a time, not a pixel of
+/// the screen, so a scaled-up mask costs no more than its own pixels; true as soon as `visit` is.
+template <typename Visit>
+bool walk(const placed_t& place, std::int64_t y, std::int64_t from, std::int64_t to,
+          const Visit& visit) {
+    for (std::int64_t x = from; x < to;) {
+        double u = 0.0;
+        double v = 0.0;
+        local(place, x, y, u, v);
+        const std::int64_t column = index_of(u, place.mask->width, place.u_low, place.u_high);
+        const std::int64_t row = index_of(v, place.mask->height, place.v_low, place.v_high);
+        const bool solid = column >= 0 && row >= 0 && place.mask->test(column, row);
+        double next_u = 0.0;
+        double next_v = 0.0;
+        local(place, x + 1, y, next_u, next_v);
+        const std::int64_t next = std::min(reaching(u, place.across_u, next_u, x, to),
+                                           reaching(v, place.across_v, next_v, x, to));
+        if (visit(x, next, solid)) {
+            return true;
         }
-        return false;
+        x = next;
     }
-    for (std::int64_t x = from; x < to; ++x) {
-        if (solid_at(place, x, y) && (other == nullptr || solid_at(*other, x, y))) {
+    return false;
+}
+
+/// The next row past `y` whose runs may differ from `y`'s: the next for a plain or turned mask,
+/// and for one turned a quarter or not, the next in another of its rows or columns.
+std::int64_t next_row(const placed_t& place, std::int64_t y, std::int64_t bottom) {
+    if (place.plain) {
+        return y + 1;
+    }
+    double u = 0.0;
+    double v = 0.0;
+    double next_u = 0.0;
+    double next_v = 0.0;
+    local(place, 0, y, u, v);
+    local(place, 0, y + 1, next_u, next_v);
+    if (place.across_u == 0.0 && place.down_v == 0.0) {
+        return reaching(u, place.down_u, next_u, y, bottom);
+    }
+    if (place.across_v == 0.0 && place.down_u == 0.0) {
+        return reaching(v, place.down_v, next_v, y, bottom);
+    }
+    return y + 1;
+}
+
+/// Whether any of a plain mask's pixels from `from` up to `to` of row `y` is solid, a word of its
+/// row at a time, and `other`'s too, if it's plain as well.
+bool any_bits(const placed_t& place, const placed_t* other, std::int64_t y, std::int64_t from,
+              std::int64_t to) {
+    for (std::int64_t x = from; x < to; x += 64) {
+        const std::int64_t count = std::min<std::int64_t>(64, to - x);
+        std::uint64_t bits = place.mask->run(y - place.dy, x - place.dx, count);
+        if (other != nullptr && bits != 0) {
+            bits &= other->mask->run(y - other->dy, x - other->dx, count);
+        }
+        if (bits != 0) {
             return true;
         }
     }
     return false;
+}
+
+/// Whether any screen pixel of row `y` from `from` up to `to` is solid in `one`, and in `other` as
+/// well, if it isn't null.
+bool row_hit(const placed_t& one, const placed_t* other, std::int64_t y, std::int64_t from,
+             std::int64_t to) {
+    if (one.plain && (other == nullptr || other->plain)) {
+        return any_bits(one, other, y, from, to);
+    }
+    if (one.plain) {
+        return row_hit(*other, &one, y, from, to);
+    }
+    return walk(one, y, from, to, [&](std::int64_t start, std::int64_t end, bool solid) {
+        if (!solid) {
+            return false;
+        }
+        if (other == nullptr) {
+            return true;
+        }
+        if (other->plain) {
+            return any_bits(*other, nullptr, y, start, end);
+        }
+        return walk(*other, y, start, end,
+                    [](std::int64_t, std::int64_t, bool also) { return also; });
+    });
 }
 
 } // namespace
@@ -418,17 +568,18 @@ FBE_API int32_t fbe_collide_masks(uint64_t first, const fbe_collide_place_t* fir
     if (a.empty || b.empty) {
         return 0;
     }
-    // Their bounds first, then each row both cover.
+    // Their bounds first, then each row both cover, rows that are the same taken once.
     const std::int64_t top = std::max(a.top, b.top);
     const std::int64_t bottom = std::min(a.bottom, b.bottom);
     const std::int64_t left = std::max(a.left, b.left);
     const std::int64_t right = std::min(a.right, b.right);
-    for (std::int64_t y = top; y < bottom && left < right; ++y) {
+    for (std::int64_t y = top; y < bottom && left < right;) {
         std::int64_t from = left;
         std::int64_t to = right;
-        if (span(a, y, from, to) && span(b, y, from, to) && any(a, &b, y, from, to)) {
+        if (span(a, y, from, to) && span(b, y, from, to) && row_hit(a, &b, y, from, to)) {
             return 1;
         }
+        y = std::min(next_row(a, y, bottom), next_row(b, y, bottom));
     }
     return 0;
 }
@@ -455,12 +606,13 @@ FBE_API int32_t fbe_collide_rect(uint64_t mask, const fbe_collide_place_t* place
     const std::int64_t top = std::max(at.top, pixel_of(std::floor(rect->y)));
     const std::int64_t bottom =
         std::min(at.bottom, pixel_of(std::ceil(static_cast<double>(rect->y) + rect->height)));
-    for (std::int64_t y = top; y < bottom && left < right; ++y) {
+    for (std::int64_t y = top; y < bottom && left < right;) {
         std::int64_t from = left;
         std::int64_t to = right;
-        if (span(at, y, from, to) && any(at, nullptr, y, from, to)) {
+        if (span(at, y, from, to) && row_hit(at, nullptr, y, from, to)) {
             return 1;
         }
+        y = next_row(at, y, bottom);
     }
     return 0;
 }

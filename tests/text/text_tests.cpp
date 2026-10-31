@@ -7,6 +7,7 @@
 #include "text/font.hpp"
 #include "text/text.hpp"
 
+#include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
@@ -24,6 +25,24 @@ std::uint64_t opened(const char* name, float size) {
     REQUIRE(font != 0);
     fbe_text_set_system_fallback(font, false);
     return font;
+}
+
+/// One of the tests' own fonts, at `size`, with no fallback from the OS's.
+std::uint64_t own(const char* name, float size) {
+    const std::string path = std::string(FBE_OWN_TEST_FONTS) + "/" + name;
+    const std::uint64_t font = fbe_text_load_font(path.c_str(), 0, size, 0);
+    INFO(fbe_error());
+    REQUIRE(font != 0);
+    fbe_text_set_system_fallback(font, false);
+    return font;
+}
+
+/// The format of the page `text`'s one glyph in `font` is on.
+fbe::text::page_format_t format_of(std::uint64_t font, const char* text) {
+    fbe::text::layout_t laid;
+    REQUIRE(fbe::text::lay_out(font, text, 1.0F, laid));
+    REQUIRE(laid.glyphs.size() == 1);
+    return fbe::text::atlas().pages()[laid.glyphs[0].page].format;
 }
 
 /// Whether `glyph`'s place on its page has coverage, and a clear pixel all around it.
@@ -225,15 +244,22 @@ TEST_CASE("a glyph bigger than a page has one of its own, and trim clears past t
     const std::uint64_t generation = fbe::text::atlas().generation();
     fbe::text::atlas().trim();
     CHECK(fbe::text::atlas().generation() == generation);
+    // Past its budget, a page the last frame used stays.
     fbe::text::atlas().set_budget(1);
+    REQUIRE(fbe::text::lay_out(font, "W", 1.0F, huge));
+    fbe::text::atlas().trim();
+    CHECK(fbe::text::atlas().generation() == generation);
+    // A frame that doesn't use it: emptied, where it is.
     fbe::text::atlas().trim();
     CHECK(fbe::text::atlas().generation() == generation + 1);
-    CHECK(fbe::text::atlas().pages().empty());
+    REQUIRE(fbe::text::atlas().pages().size() == 1);
+    CHECK(fbe::text::atlas().pages()[0].dirty.width == fbe::text::atlas().pages()[0].width);
     fbe::text::atlas().set_budget(std::size_t{ 16 } << 20U);
-    // Laid out again, it's rasterized again.
+    // Laid out again, it's rasterized again, on that page.
     REQUIRE(fbe::text::lay_out(font, "W", 1.0F, huge));
     CHECK(huge.generation == generation + 1);
     CHECK(fbe::text::atlas().pages().size() == 1);
+    CHECK(drawn(huge.glyphs[0]));
     fbe_text_free_font(font);
 }
 
@@ -260,4 +286,187 @@ TEST_CASE("a font's faces are read once, its sizes share them, and its handles a
     CHECK(std::string(fbe_error()) == "a font's size is over 0, not -1");
     fbe_text_free_font(font);
     fbe_text_free_font(again);
+}
+
+TEST_CASE("a paragraph or line separator breaks a line, and NEL and a vertical tab do") {
+    const std::uint64_t font = opened("OpenSans-Regular.ttf", 20.0F);
+    fbe_text_size_t one{};
+    REQUIRE(fbe_text_measure(font, "a", &one));
+    // Each separator's literal ends before the b, which would be another of its hex digits.
+    const std::array<const char*, 4> separated{
+        "a\xE2\x80\xA9"
+        "b",
+        "a\xC2\x85"
+        "b",
+        "a\xE2\x80\xA8"
+        "b",
+        "a\x0B"
+        "b",
+    };
+    for (const char* text : separated) {
+        fbe_text_size_t size{};
+        REQUIRE(fbe_text_measure(font, text, &size));
+        CHECK(size.height == Catch::Approx(one.height * 2.0F));
+        fbe::text::layout_t laid;
+        REQUIRE(fbe::text::lay_out(font, text, 1.0F, laid));
+        REQUIRE(laid.glyphs.size() == 2);
+        CHECK(laid.glyphs[1].y > laid.glyphs[0].y);
+    }
+    // C1's other controls take no room.
+    fbe_text_size_t controlled{};
+    REQUIRE(fbe_text_measure(font, "a\xC2\x80\xC2\x9F", &controlled));
+    CHECK(controlled.width == Catch::Approx(one.width));
+    fbe_text_free_font(font);
+}
+
+TEST_CASE("past 512 pixels an em, glyphs are rasterized at 512 and drawn bigger") {
+    fbe::text::atlas().clear();
+    const std::uint64_t font = opened("OpenSans-Regular.ttf", 20000.0F);
+    fbe::text::layout_t huge;
+    REQUIRE(fbe::text::lay_out(font, "W", 1.0F, huge));
+    REQUIRE(huge.glyphs.size() == 1);
+    const fbe::text::placed_glyph_t& glyph = huge.glyphs[0];
+    // Rasterized at 512, about a 40th the size, and placed at its full size.
+    CHECK(glyph.source.width < 600);
+    CHECK(glyph.width > glyph.source.width * 30);
+    CHECK(glyph.height > glyph.source.height * 30);
+    std::size_t bytes = 0;
+    for (const fbe::text::page_t& page : fbe::text::atlas().pages()) {
+        bytes += page.pixels.size();
+    }
+    CHECK(bytes <= std::size_t{ 1024 } * 1024);
+    // At a size it rasterizes, the quad is the source's.
+    const std::uint64_t small = opened("OpenSans-Regular.ttf", 20.0F);
+    fbe::text::layout_t laid;
+    REQUIRE(fbe::text::lay_out(small, "W", 1.0F, laid));
+    CHECK(laid.glyphs[0].width == laid.glyphs[0].source.width);
+    CHECK(laid.glyphs[0].height == laid.glyphs[0].source.height);
+    // A size past a float's is refused, and a far line is kept to the canvas's reach.
+    CHECK_FALSE(fbe::text::lay_out(font, "W", 3e38F, huge));
+    std::string lines(100, '\n');
+    lines += 'W';
+    const std::uint64_t vast = opened("OpenSans-Regular.ttf", 1e6F);
+    REQUIRE(fbe::text::lay_out(vast, lines, 1.0F, laid));
+    CHECK(laid.glyphs[0].y >= -16777216 - laid.glyphs[0].height);
+    fbe_text_free_font(font);
+    fbe_text_free_font(small);
+    fbe_text_free_font(vast);
+}
+
+TEST_CASE("a face that isn't one, and a font that isn't TrueType or OpenType, are refused") {
+    const std::string path = std::string(FBE_TEST_FONTS) + "/OpenSans-Regular.ttf";
+    CHECK(fbe_text_load_font(path.c_str(), -1, 12.0F, 0) == 0);
+    CHECK(std::string(fbe_error()) == "a font's face is 0 to 65,535, not -1");
+    CHECK(fbe_text_load_font(path.c_str(), 65536, 12.0F, 0) == 0);
+    // A BDF bitmap font: FreeType's own module for it isn't built in.
+    const char* bdf = "STARTFONT 2.1\nFONT x\nSIZE 8 75 75\nFONTBOUNDINGBOX 8 8 0 0\n"
+                      "CHARS 1\nSTARTCHAR a\nENCODING 97\nSWIDTH 500 0\nDWIDTH 8 0\n"
+                      "BBX 8 8 0 0\nBITMAP\nFF\nFF\nFF\nFF\nFF\nFF\nFF\nFF\nENDCHAR\nENDFONT\n";
+    const std::string bytes(bdf);
+    CHECK(fbe_text_load_font_bytes(reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                                   static_cast<std::int64_t>(bytes.size()), "a.bdf", 0, 12.0F,
+                                   0) == 0);
+    CHECK(std::string(fbe_error()) == "a.bdf isn't a font");
+}
+
+TEST_CASE("an emoji is in color first, and text where FE0E asks") {
+    const std::uint64_t text = own("FbeTestText-Regular.ttf", 32.0F);
+    const std::uint64_t color = own("FbeTestColor-Regular.ttf", 32.0F);
+    REQUIRE(fbe_text_add_fallback(text, color));
+    using fbe::text::page_format_t;
+    // A watch is an emoji, its color face's before the font's own; with FE0E, the font's.
+    CHECK(format_of(text, "\xE2\x8C\x9A") == page_format_t::COLOR);
+    CHECK(format_of(text, "\xE2\x8C\x9A\xEF\xB8\x8E") == page_format_t::COVERAGE);
+    // A private character is text, unless FE0F asks for an emoji.
+    CHECK(format_of(text, "\xEE\xA4\x83") == page_format_t::COVERAGE);
+    CHECK(format_of(text, "\xEE\xA4\x83\xEF\xB8\x8F") == page_format_t::COLOR);
+    fbe_text_free_font(text);
+    fbe_text_free_font(color);
+}
+
+TEST_CASE("a mark's cluster is the first face's that has it whole") {
+    const std::uint64_t text = own("FbeTestText-Regular.ttf", 100.0F);
+    const std::uint64_t marks = own("FbeTestMarks-Regular.ttf", 100.0F);
+    REQUIRE(fbe_text_add_fallback(text, marks));
+    fbe_text_size_t size{};
+    // The text face's a is 50 across, the marks face's 52; with its low line, the marks face's.
+    REQUIRE(fbe_text_measure(text, "a", &size));
+    CHECK(size.width == Catch::Approx(50.0F));
+    REQUIRE(fbe_text_measure(text, "a\xCC\xB2", &size));
+    CHECK(size.width == Catch::Approx(52.0F));
+    CHECK(fbe_text_has_glyphs(text, "a\xCC\xB2"));
+    // b, which the marks face hasn't, keeps its own face, and its mark the first with it.
+    REQUIRE(fbe_text_measure(text, "b\xCC\xB2", &size));
+    CHECK(size.width == Catch::Approx(60.0F));
+    fbe_text_free_font(text);
+    fbe_text_free_font(marks);
+}
+
+TEST_CASE("a glyph FreeType can't draw in color is drawn as its outline, or not chosen") {
+    // An SVG picture, which FreeType isn't built to draw here, over an outline: the outline.
+    const std::uint64_t svg = own("FbeTestSvg-Regular.ttf", 32.0F);
+    CHECK(format_of(svg, "\xEE\xA4\x83") == fbe::text::page_format_t::COVERAGE);
+    // A picture over an empty outline, as sbix's PNGs often are, draws nothing, so the font doesn't
+    // have it, and a fallback that draws it is taken.
+    CHECK_FALSE(fbe_text_has_glyphs(svg, "\xEE\xA4\x84"));
+    const std::string sbix =
+        std::string(FBE_SHAPE_TEST_FONTS) + "/fcbaa518d3cce441ed37ae3b1fed6a19e9b54efd.ttf";
+    const std::uint64_t pictured = fbe_text_load_font(sbix.c_str(), 0, 32.0F, 0);
+    REQUIRE(pictured != 0);
+    fbe_text_set_system_fallback(pictured, false);
+    CHECK_FALSE(fbe_text_has_glyphs(pictured, "\xF0\x9F\x98\x80"));
+    // CBDT's alone, no outlines: its keycap isn't one the font draws.
+    const std::uint64_t text = own("FbeTestText-Regular.ttf", 32.0F);
+    const std::uint64_t bitmapped = opened("NotoColorEmoji.subset.ttf", 32.0F);
+    REQUIRE(fbe_text_add_fallback(text, bitmapped));
+    CHECK_FALSE(fbe_text_has_glyphs(text, "\xE2\x83\xA3"));
+    // A space draws nothing, and has a glyph all the same.
+    CHECK(fbe_text_has_glyphs(text, "a b"));
+    fbe_text_free_font(svg);
+    fbe_text_free_font(pictured);
+    fbe_text_free_font(text);
+    fbe_text_free_font(bitmapped);
+}
+
+TEST_CASE("a character no font has reads no fallback face whole") {
+    const std::uint64_t text = own("FbeTestText-Regular.ttf", 32.0F);
+    fbe_text_set_system_fallback(text, true);
+    // The OS's fonts listed, and their coverage read, before counting.
+    CHECK_FALSE(fbe_text_has_glyphs(text, "\xF3\xB0\x80\x80"));
+    const std::size_t before = fbe::text::faces_open();
+    CHECK_FALSE(fbe_text_has_glyphs(text, "\xF3\xB0\x80\x81"));
+    fbe_text_size_t size{};
+    REQUIRE(fbe_text_measure(text, "\xF3\xB0\x80\x82", &size));
+    CHECK(fbe::text::faces_open() == before);
+    fbe_text_free_font(text);
+}
+
+TEST_CASE("a frame that needs more than the budget isn't rasterized again each frame") {
+    fbe::text::atlas().clear();
+    fbe::text::atlas().set_budget(1);
+    const std::uint64_t big = opened("OpenSans-Regular.ttf", 300.0F);
+    const std::uint64_t small = opened("OpenSans-Regular.ttf", 12.0F);
+    fbe::text::layout_t laid;
+    // Each frame lays out the same text, past the budget; another text, once, then not again.
+    REQUIRE(fbe::text::lay_out(small, "once", 1.0F, laid));
+    const std::uint32_t once_page = laid.glyphs[0].page;
+    REQUIRE(fbe::text::lay_out(big, "Text", 1.0F, laid));
+    const std::uint32_t text_page = laid.glyphs[0].page;
+    fbe::text::atlas().trim();
+    std::uint64_t versions = 0;
+    for (int frame = 0; frame < 5; ++frame) {
+        REQUIRE(fbe::text::lay_out(big, "Text", 1.0F, laid));
+        if (frame == 1) {
+            versions = fbe::text::atlas().pages()[text_page].version;
+        }
+        fbe::text::atlas().trim();
+    }
+    CHECK(fbe::text::atlas().pages()[text_page].version == versions);
+    if (once_page != text_page) {
+        CHECK(fbe::text::atlas().pages()[once_page].dirty.width ==
+              fbe::text::atlas().pages()[once_page].width);
+    }
+    fbe::text::atlas().set_budget(std::size_t{ 16 } << 20U);
+    fbe_text_free_font(big);
+    fbe_text_free_font(small);
 }

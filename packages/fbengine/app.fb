@@ -113,7 +113,10 @@ Function ScriptOf(tag: String): String
     Local region = ""
     For i = 1 To parts.Count - 1
         Local part = parts[i]
-        If part.Length == 4 Then Return part.Slice(0, 1).ToUpper() + part.Slice(1, 4).ToLower()
+        // A script's four letters, not a variant's digits, as "1996"'s.
+        If part.Length == 4 && part.Chars.All(Function(each: Char) => each.IsLetter())
+            Return part.Slice(0, 1).ToUpper() + part.Slice(1, 4).ToLower()
+        End If
         If part.Length == 2 || part.Length == 3 Then region = part.ToUpper()
     End For
     Select parts[0].ToLower()

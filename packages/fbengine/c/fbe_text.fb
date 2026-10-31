@@ -39,6 +39,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_text_system_fallback(font: UInt64): Bool
     Function fbe_text_measure(font: UInt64, text: CString, size: Ptr<fbe_text_size_t>): Bool
     Function fbe_text_has_glyphs(font: UInt64, text: CString): Bool
+    Function fbe_text_scan_system()
     Function fbe_text_add_font_folder(folder: CString): Bool
     Function fbe_text_system_family_count(): Int32
     Function fbe_text_system_family_at(index: Int32): CString

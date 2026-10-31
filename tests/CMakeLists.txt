@@ -55,7 +55,7 @@ if(FBENGINE_FB_TESTS)
       cmake_path(GET package FILENAME name)
       add_test(NAME ${name}.package COMMAND "${FBENGINE_FB}" test "${package}")
       set_tests_properties(${name}.package PROPERTIES ENVIRONMENT
-                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts")
+                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts")
     endif()
   endforeach()
 
@@ -87,6 +87,7 @@ if(FBENGINE_FB_TESTS)
       "mask-threshold|panic: Mask[.]FromImage: a threshold is 1 to 255, not 0"
       "mask-region-outside|panic: Mask[.]FromImage: Rect[(]2, 0, 3, 4[)] isn't whole pixels in the image, 4 by 4"
       "mask-region-fraction|panic: Mask[.]FromImage: Rect[(]0[.]5, 0, 2, 2[)] isn't whole pixels in the image"
+      "mask-region-overflowing|panic: Mask[.]FromImage: Rect[(]2147483520, 0, 2147483520, 4[)] isn't whole pixels"
       "mask-pixels-short|panic: Mask[.]FromPixels: 2 by 1 RGBA8 pixels are 8 bytes, not 4"
       "mask-empty-cell|panic: Mask[.]Frames: a cell is 1 pixel or more across and down, not 0 by 4")
   foreach(case IN LISTS fbengine_input_cases)
@@ -177,7 +178,9 @@ add_executable(fbengine_text_tests text/text_tests.cpp ${fbengine_text_sources}
 target_include_directories(fbengine_text_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_compile_definitions(fbengine_text_tests PRIVATE FBE_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}"
-                           FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts")
+                           FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
+                           FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+                           FBE_SHAPE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/shape/data/in-house/fonts")
 target_link_libraries(fbengine_text_tests PRIVATE SDL3::SDL3-static freetype fbengine_harfbuzz
                       fbengine_sheenbidi Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_text_tests)
