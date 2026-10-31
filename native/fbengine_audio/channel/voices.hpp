@@ -4,6 +4,7 @@
 // that mixes does around each mix.
 
 #include "bus/buses.hpp"
+#include "emitter/emitters.hpp"
 #include "sound/sound.hpp"
 
 #include <cstdint>
@@ -22,11 +23,16 @@ struct play_t {
     double fade_in = 0.0;
     /// What it plays into, or null for the whole mix.
     std::shared_ptr<bus_t> bus;
+    /// Where it plays from, or null for a channel that isn't in the world.
+    const emitter_t* emitter = nullptr;
 };
 
 /// Plays `data` on a new channel, giving its handle, or 0, with fbe_audio_error's message, if the
 /// audio's stopped or miniaudio can't.
 std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how);
+
+/// The miniaudio sound of the channel `handle` is for, or null for one that's finished.
+ma_sound* channel_sound(std::uint64_t handle);
 
 /// Ends every channel, before the mix they play in goes.
 void end_channels();

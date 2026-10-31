@@ -8,6 +8,8 @@
 #include "audio/fbe_audio.h"
 #include "bus/fbe_bus.h"
 #include "channel/fbe_channel.h"
+#include "emitter/fbe_emitter.h"
+#include "listener/fbe_listener.h"
 #include "sound/fbe_sound.h"
 
 #endif

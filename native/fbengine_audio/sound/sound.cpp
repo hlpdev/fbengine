@@ -7,6 +7,7 @@
 #include "audio/mixer.hpp"
 #include "audio/pool.hpp"
 #include "channel/voices.hpp"
+#include "emitter/emitters.hpp"
 #include "fbengine_audio.h"
 
 #include <cstddef>
@@ -216,7 +217,8 @@ FBE_AUDIO_API int64_t fbe_sound_frames(uint64_t sound) {
 }
 
 FBE_AUDIO_API uint64_t fbe_sound_play(uint64_t sound, float volume, float pan, float pitch,
-                                      bool loop, bool paused, double fade_in, uint64_t bus) {
+                                      bool loop, bool paused, double fade_in, uint64_t bus,
+                                      uint64_t emitter) {
     if (!fbe::audio::check_volume(volume) || !fbe::audio::check_pan(pan) ||
         !fbe::audio::check_pitch(pitch)) {
         return 0;
@@ -231,6 +233,11 @@ FBE_AUDIO_API uint64_t fbe_sound_play(uint64_t sound, float volume, float pan, f
         fbe::audio::fail("the bus was freed");
         return 0;
     }
+    fbe::audio::emitter_t* from = fbe::audio::find_emitter(emitter);
+    if (emitter != 0 && from == nullptr) {
+        fbe::audio::fail("the emitter was freed");
+        return 0;
+    }
     const fbe::audio::play_t how = {
         .volume = volume,
         .pan = pan,
@@ -239,8 +246,13 @@ FBE_AUDIO_API uint64_t fbe_sound_play(uint64_t sound, float volume, float pan, f
         .paused = paused,
         .fade_in = fade_in,
         .bus = std::move(into),
+        .emitter = from,
     };
-    return fbe::audio::play(std::move(data), how);
+    const std::uint64_t channel = fbe::audio::play(std::move(data), how);
+    if (channel != 0 && from != nullptr) {
+        fbe::audio::join(*from, channel);
+    }
+    return channel;
 }
 
 } // extern "C"

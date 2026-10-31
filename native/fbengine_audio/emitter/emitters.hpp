@@ -1,0 +1,22 @@
+#pragma once
+
+// Emitters, which channels play from: fbe_sound_play places a channel at one before it starts, and
+// the emitter moves it after.
+
+#include <cstdint>
+#include <miniaudio.h>
+
+namespace fbe::audio {
+
+struct emitter_t;
+
+/// The emitter `handle` is for, or null for 0 or one that's gone.
+emitter_t* find_emitter(std::uint64_t handle);
+
+/// Gives `sound` `emitter`'s place, velocity, and falloff.
+void place(const emitter_t& emitter, ma_sound& sound);
+
+/// Makes `channel` one of `emitter`'s, which move with it.
+void join(emitter_t& emitter, std::uint64_t channel);
+
+} // namespace fbe::audio
