@@ -238,6 +238,14 @@ Select arguments[0]
         Camera().Draws()
     Case "draw-projection-no-window"
         Camera().DrawProjection()
+    Case "cull-box"
+        Geometry.Cube().SetCullBox(AABB(Vec3(1, 0, 0), Vec3(0, 1, 1)))
+    Case "terrain-size"
+        Terrain(0)
+    Case "terrain-corner"
+        Terrain(4).SetHeight(5, 0, 1)
+    Case "terrain-heights"
+        Terrain(2).SetHeights([1.0, 2.0])
     Default
         Panic("no case {arguments[0]}")
 End Select

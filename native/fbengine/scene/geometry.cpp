@@ -357,9 +357,17 @@ FBE_API uint64_t fbe_geometry_clone(uint64_t geometry) {
         return 0;
     }
     std::vector<surface_t> surfaces = scene().geometries[slot].surfaces;
+    // Its cull box too, read before making the copy moves the geometries.
+    const bool has_cull_box = scene().geometries[slot].has_cull_box;
+    const fbe::scene::vec3_t cull_min = scene().geometries[slot].cull_min;
+    const fbe::scene::vec3_t cull_max = scene().geometries[slot].cull_max;
     fbe::scene::retain_materials(surfaces);
     const std::uint32_t copy = fbe::scene::make_geometry();
-    scene().geometries[copy].surfaces = std::move(surfaces);
+    fbe::scene::geometry_t& made = scene().geometries[copy];
+    made.surfaces = std::move(surfaces);
+    made.has_cull_box = has_cull_box;
+    made.cull_min = cull_min;
+    made.cull_max = cull_max;
     return scene().geometry_slots.handle(copy);
 }
 
@@ -675,6 +683,51 @@ FBE_API uint64_t fbe_mesh_geometry(uint64_t mesh) {
         return 0;
     }
     return scene().geometry_slots.handle(found->geometry);
+}
+
+FBE_API bool fbe_geometry_set_cull_box(uint64_t geometry, const fbe_aabb_t* box) {
+    const std::uint32_t slot = fbe::scene::geometry_slot(geometry);
+    if (slot == none) {
+        return false;
+    }
+    if (std::isnan(box->min.x) || std::isnan(box->min.y) || std::isnan(box->min.z) ||
+        std::isnan(box->max.x) || std::isnan(box->max.y) || std::isnan(box->max.z) ||
+        box->min.x > box->max.x || box->min.y > box->max.y || box->min.z > box->max.z) {
+        return fbe::fail(std::format("a cull box has its least corner at or below its greatest, "
+                                     "not ({}, {}, {}) to ({}, {}, {})",
+                                     box->min.x, box->min.y, box->min.z, box->max.x, box->max.y,
+                                     box->max.z));
+    }
+    fbe::scene::geometry_t& found = scene().geometries[slot];
+    found.has_cull_box = true;
+    found.cull_min = { box->min.x, box->min.y, box->min.z };
+    found.cull_max = { box->max.x, box->max.y, box->max.z };
+    return true;
+}
+
+FBE_API bool fbe_geometry_clear_cull_box(uint64_t geometry) {
+    const std::uint32_t slot = fbe::scene::geometry_slot(geometry);
+    if (slot == none) {
+        return false;
+    }
+    scene().geometries[slot].has_cull_box = false;
+    return true;
+}
+
+FBE_API bool fbe_geometry_cull_box(uint64_t geometry, fbe_aabb_t* box) {
+    const std::uint32_t slot = fbe::scene::geometry_slot(geometry);
+    if (slot == none) {
+        return false;
+    }
+    const fbe::scene::geometry_t& found = scene().geometries[slot];
+    if (!found.has_cull_box) {
+        return false;
+    }
+    *box = {
+        .min = { .x = found.cull_min.x, .y = found.cull_min.y, .z = found.cull_min.z },
+        .max = { .x = found.cull_max.x, .y = found.cull_max.y, .z = found.cull_max.z },
+    };
+    return true;
 }
 
 } // extern "C"

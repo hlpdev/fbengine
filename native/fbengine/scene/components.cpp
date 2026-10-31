@@ -21,6 +21,8 @@ void add_component(std::uint32_t entity) {
         add_sprite(entity);
     } else if (entities.kind[entity] == FBE_ENTITY_PLANE) {
         add_plane(entity);
+    } else if (entities.kind[entity] == FBE_ENTITY_TERRAIN) {
+        add_terrain(entity);
     }
 }
 
@@ -35,6 +37,8 @@ void remove_component(std::uint32_t entity) {
         remove_sprite(entity);
     } else if (scene().entities.kind[entity] == FBE_ENTITY_PLANE) {
         remove_plane(entity);
+    } else if (scene().entities.kind[entity] == FBE_ENTITY_TERRAIN) {
+        remove_terrain(entity);
     }
     scene().entities.component[entity] = none;
 }
@@ -69,6 +73,12 @@ void copy_component(std::uint32_t from, std::uint32_t to) {
     } else if (entities.kind[from] == FBE_ENTITY_PLANE) {
         plane_t& copy = scene().planes[entities.component[to]];
         copy = scene().planes[entities.component[from]];
+        copy.entity = to;
+        retain_material(copy.material);
+    } else if (entities.kind[from] == FBE_ENTITY_TERRAIN) {
+        // A copy has its own heights, to change apart from its original's.
+        terrain_t& copy = scene().terrains[entities.component[to]];
+        copy = scene().terrains[entities.component[from]];
         copy.entity = to;
         retain_material(copy.material);
     }

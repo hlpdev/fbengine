@@ -230,6 +230,7 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                scene/material_tests.cpp scene/bvh_tests.cpp scene/collision_tests.cpp
                scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
                scene/plane_tests.cpp scene/draw_tests.cpp
+               scene/terrain_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
@@ -319,7 +320,11 @@ if(FBENGINE_FB_TESTS)
       "intersects-freed=Intersects on a Mesh that was freed"
       "draws-tween=Draws on a Camera: a tween is 0 to 1, not 2"
       "draws-no-window=Draws on a Camera: the camera's viewport has no size"
-      "draw-projection-no-window=DrawProjection on a Camera: the camera's viewport has no size")
+      "draw-projection-no-window=DrawProjection on a Camera: the camera's viewport has no size"
+      "cull-box=SetCullBox on a Geometry: a cull box has its least corner at or below its greatest"
+      "terrain-size=SetSize on a Terrain: a terrain is 1 to 4096 squares a side, not 0"
+      "terrain-corner=SetHeight on a Terrain: a terrain's corners are 0 to 4 across and along, not \\(5, 0\\)"
+      "terrain-heights=SetHeights on a Terrain: a terrain 2 squares a side has 9 heights, not 2")
   foreach(case IN LISTS fbengine_scene_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)

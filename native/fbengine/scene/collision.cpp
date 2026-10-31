@@ -26,8 +26,9 @@ namespace fbe::scene {
 namespace {
 
 constexpr float tiny = 1e-6F;
-/// A ground plane's shape, as targets have it.
+/// A ground plane's shape, and a terrain's, as targets have them.
 constexpr std::int32_t plane_shape = -1;
+constexpr std::int32_t terrain_shape = -2;
 constexpr std::int32_t most_iterations = 64;
 constexpr float most_skin = 0.1F;
 
@@ -154,6 +155,31 @@ nearby_t gather(const snapshot_t& snapshot, const mover_t& mover, float reach) {
                                 target.horizontal + mover.horizontal),
                 .target = t,
             });
+        } else if (target.shape == terrain_shape) {
+            // Its squares under the move's box, found in its own space.
+            mat4_t into;
+            if (!inverse_affine(target.matrix, into)) {
+                continue;
+            }
+            vec3_t local_min = transform_point(into, low);
+            vec3_t local_max = local_min;
+            for (unsigned corner = 1; corner < 8; ++corner) {
+                const vec3_t p = transform_point(into, box_corner(low, high, corner));
+                local_min = least(local_min, p);
+                local_max = greatest(local_max, p);
+            }
+            std::vector<std::array<vec3_t, 3>> under;
+            const terrain_t& terrain = scene().terrains[scene().entities.component[target.entity]];
+            terrain_under(terrain, local_min, local_max, under);
+            for (const auto& corners : under) {
+                add_triangle(nearby,
+                             {
+                                 transform_point(target.matrix, corners[0]),
+                                 transform_point(target.matrix, corners[1]),
+                                 transform_point(target.matrix, corners[2]),
+                             },
+                             squash, t, target.mirrored, triangle_origin_t(), false);
+            }
         } else if (target.shape == plane_shape) {
             std::array<std::array<vec3_t, 3>, 2> under;
             if (plane_under(target.matrix, low, high, under)) {
@@ -529,6 +555,9 @@ void collide(std::uint32_t world_slot) {
         if (entities.kind[entity] == FBE_ENTITY_PLANE &&
             (shape == FBE_COLLISION_AUTO || shape == FBE_COLLISION_MESH)) {
             shape = plane_shape;
+        } else if (entities.kind[entity] == FBE_ENTITY_TERRAIN &&
+                   (shape == FBE_COLLISION_AUTO || shape == FBE_COLLISION_MESH)) {
+            shape = terrain_shape;
         } else if (shape == FBE_COLLISION_AUTO) {
             shape = mesh && geometry != none ? FBE_COLLISION_MESH : FBE_COLLISION_ELLIPSOID;
         }
@@ -542,6 +571,11 @@ void collide(std::uint32_t world_slot) {
             const vec3_t radii(collider.horizontal, collider.vertical, collider.horizontal);
             target.min = target.center - radii;
             target.max = target.center + radii;
+        } else if (shape == terrain_shape) {
+            vec3_t min;
+            vec3_t max;
+            terrain_bounds(s.terrains[entities.component[entity]], min, max);
+            world_box(entity, min, max, target.min, target.max);
         } else if (shape == plane_shape) {
             // Everywhere: every move's box is over some of it.
             target.min = vec3_t(-INFINITY, -INFINITY, -INFINITY);

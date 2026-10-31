@@ -200,3 +200,40 @@ TEST_CASE("the projection a camera draws with is Vulkan's, depth reversed, and a
     // Up in the world is up the screen: a point above the middle has a negative clip y.
     CHECK(p.m[5] < 0.0F);
 }
+
+TEST_CASE("a geometry's cull box culls its meshes instead of its bounds", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t mesh = cube(world.handle, 0.0F, 0.0F, -5.0F);
+    // Its vertices moved far aside, as a skinned mesh's bones can take them.
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    fbe_mat4_t aside{};
+    aside.m[0] = 1.0F;
+    aside.m[5] = 1.0F;
+    aside.m[10] = 1.0F;
+    aside.m[15] = 1.0F;
+    aside.m[12] = 100.0F;
+    fbe_geometry_transform(geometry, &aside);
+    CHECK(draws(camera).empty());
+    const fbe_aabb_t box{
+        .min = { .x = -1.0F, .y = -1.0F, .z = -1.0F },
+        .max = { .x = 1.0F, .y = 1.0F, .z = 1.0F },
+    };
+    REQUIRE(fbe_geometry_set_cull_box(geometry, &box));
+    CHECK(draws(camera).size() == 1);
+    fbe_aabb_t found{};
+    REQUIRE(fbe_geometry_cull_box(geometry, &found));
+    CHECK(found.max.y == 1.0F);
+    // A clone keeps it; cleared, the bounds cull again; a backward box is refused.
+    const std::uint64_t clone = fbe_geometry_clone(geometry);
+    CHECK(fbe_geometry_cull_box(clone, &found));
+    fbe_geometry_release(clone);
+    REQUIRE(fbe_geometry_clear_cull_box(geometry));
+    CHECK_FALSE(fbe_geometry_cull_box(geometry, &found));
+    CHECK(draws(camera).empty());
+    const fbe_aabb_t backward{
+        .min = { .x = 1.0F, .y = 0.0F, .z = 0.0F },
+        .max = { .x = 0.0F, .y = 1.0F, .z = 1.0F },
+    };
+    CHECK_FALSE(fbe_geometry_set_cull_box(geometry, &backward));
+}

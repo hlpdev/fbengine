@@ -251,6 +251,38 @@ Public Final Class Geometry
         Return AABB(VecOf(found.min), VecOf(found.max))
     End Method
 
+    /// Sets the box, in its own space, its meshes are culled by when drawn instead of its bounds,
+    /// as a skinned mesh's, whose vertices move out of them, wants, or its bounds again for Null.
+    /// InView and Bounds keep its bounds; copies keep it. A backward box panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetCullBox(box: AABB?)
+        Local geometry = Live("SetCullBox")
+        If box == Null
+            fbe_geometry_clear_cull_box(geometry)
+            Return
+        End If
+        Local given = fbe_aabb_t(fbe_vec3_t(box.Min.x, box.Min.y, box.Min.z),
+                                 fbe_vec3_t(box.Max.x, box.Max.y, box.Max.z))
+        Local done = False
+        Unsafe
+            done = fbe_geometry_set_cull_box(geometry, AddressOf(given))
+        End Unsafe
+        If !done Then Failed("SetCullBox")
+    End Method
+
+    /// The box its meshes are culled by when drawn, or Null for its bounds.
+    @MainThread @PanicsAtCaller
+    Public Method CullBox(): AABB?
+        Local geometry = Live("CullBox")
+        Local found = fbe_aabb_t(fbe_vec3_t(0, 0, 0), fbe_vec3_t(0, 0, 0))
+        Local done = False
+        Unsafe
+            done = fbe_geometry_cull_box(geometry, AddressOf(found))
+        End Unsafe
+        If !done Then Return Null
+        Return AABB(VecOf(found.min), VecOf(found.max))
+    End Method
+
     /// Scales and moves it to fill `box`, centered in it, or with `uniform`, keeping its shape at
     /// the largest that fits; a flat axis is moved, not scaled.
     @MainThread @PanicsAtCaller
