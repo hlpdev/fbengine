@@ -85,8 +85,12 @@ FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds) {
     vec3_t min;
     vec3_t max;
     const fbe::scene::scene_t& s = scene();
-    if (s.entities.kind[slot] == FBE_ENTITY_MESH &&
-        s.meshes[s.entities.component[slot]].geometry != none) {
+    if (s.entities.kind[slot] == FBE_ENTITY_PLANE) {
+        // It goes on forever, as collisions and picks find it.
+        min = vec3_t(-INFINITY, -INFINITY, -INFINITY);
+        max = vec3_t(INFINITY, INFINITY, INFINITY);
+    } else if (s.entities.kind[slot] == FBE_ENTITY_MESH &&
+               s.meshes[s.entities.component[slot]].geometry != none) {
         vec3_t local_min;
         vec3_t local_max;
         fbe::scene::geometry_bounds(s.meshes[s.entities.component[slot]].geometry, local_min,

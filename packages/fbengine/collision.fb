@@ -276,8 +276,8 @@ Extend World
     End Method
 
     /// Sets how far movers stay from what they touch, so they don't sink in, 0 to 0.1 world units,
-    /// 0.001 at first. Between two solids nearly facing each other one can end nearer: long walks
-    /// among turned solids measured it at most 0.0045 in, at the first skin. Others panic.
+    /// 0.001 at first. Long walks among turned solids measured a mover at most 0.00004 in them, at
+    /// the first skin. Others panic.
     @MainThread @PanicsAtCaller
     Public Method SetCollisionSkin(skin: Float)
         If !fbe_world_set_collision_skin(Live("SetCollisionSkin"), skin)

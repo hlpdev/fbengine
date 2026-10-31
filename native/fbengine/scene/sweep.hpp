@@ -73,9 +73,10 @@ bool plane_under(const mat4_t& matrix, vec3_t min, vec3_t max,
 bool make_triangle(std::array<vec3_t, 3> corners, bool mirrored, triangle_t& triangle);
 
 /// Sweeps a sphere of radius `r` from `c` along `v` against a triangle's front, and keeps the hit
-/// if it's sooner than `hit`'s, or `found` is false.
+/// if it's sooner than `hit`'s, or `found` is false; sets `leaving`, if given, when the sphere
+/// starts in the triangle's face and goes away from it.
 void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit_t& hit,
-                    bool& found);
+                    bool& found, bool* leaving_face = nullptr);
 
 /// Whether a sphere of radius `r` at `c` is in a triangle's face from the front, its middle over
 /// the face and nearer its plane than `r`; if so, gives where under it and how far.

@@ -65,3 +65,11 @@ Function AFixedStepRunsWhatTheFramesHold()
     Local slow = FixedStep(10, 2)
     Expect(slow.Steps(0.25) == 2 && IsClose(slow.Tween(), 0.5, 0.0001))
 End Function
+
+@Test
+Function AFixedStepTakesAFrameTooLongToCount()
+    Local logic = FixedStep(60)
+    // So long that its steps overflow: the most it runs, the rest dropped.
+    Expect(logic.Steps(1e308) == 5 && logic.Tween() == 0)
+    Expect(logic.Steps(1.0 / 60) == 1)
+End Function

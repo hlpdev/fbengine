@@ -146,6 +146,36 @@ void move_tree(std::uint32_t entity, std::uint32_t world) {
     }
 }
 
+/// Gives a captured entity, moved under a new parent, the captured local transform that puts it
+/// where it was at the capture, `was`, under its new parent's capture.
+void recapture(std::uint32_t entity, const mat4_t& was) {
+    entities_t& entities = scene().entities;
+    const std::uint32_t parent = entities.parent[entity];
+    mat4_t into;
+    if (!inverse_affine(parent != none ? tweened_matrix(parent, 0.0F) : mat4_t(), into)) {
+        return;
+    }
+    const mat4_t local = into * was;
+    vec3_t x = local.axis(0);
+    vec3_t y = local.axis(1);
+    vec3_t z = local.axis(2);
+    vec3_t scale(length(x), length(y), length(z));
+    if (scale.x <= 0.0F || scale.y <= 0.0F || scale.z <= 0.0F) {
+        return;
+    }
+    x = x * (1.0F / scale.x);
+    y = y * (1.0F / scale.y);
+    z = z * (1.0F / scale.z);
+    // A mirror goes in the scale, so what's left is a turn.
+    if (dot(cross(x, y), z) < 0.0F) {
+        x = -x;
+        scale.x = -scale.x;
+    }
+    entities.captured_position[entity] = local.axis(3);
+    entities.captured_rotation[entity] = from_axes(x, y, z);
+    entities.captured_scale[entity] = scale;
+}
+
 /// Whether `entity` is `ancestor` or under it.
 bool under(std::uint32_t entity, std::uint32_t ancestor) {
     const entities_t& entities = scene().entities;
@@ -434,6 +464,10 @@ FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_w
     const fbe::scene::vec3_t position = entities.world_matrix[slot].axis(3);
     const fbe::scene::quat_t rotation = entities.world_rotation[slot];
     const fbe::scene::vec3_t scale = entities.world_scale[slot];
+    // Where it was at its World's capture, which drawing still tweens from.
+    const bool captured = entities.captured[slot];
+    const fbe::scene::mat4_t was =
+        captured ? fbe::scene::tweened_matrix(slot, 0.0F) : fbe::scene::mat4_t();
     fbe::scene::detach(slot);
     if (world != entities.world[slot]) {
         fbe::scene::move_tree(slot, world);
@@ -448,6 +482,9 @@ FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_w
         fbe::scene::set_world_rotation(slot, rotation);
         fbe::scene::set_world_scale(slot, scale);
         fbe::scene::set_world_position(slot, position);
+    }
+    if (captured) {
+        fbe::scene::recapture(slot, was);
     }
     return true;
 }

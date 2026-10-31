@@ -284,3 +284,147 @@ TEST_CASE("a pick follows whatever changes where an entity is hit", "[scene]") {
         CHECK(hit == (i % 10 == 0 ? many[i] : 0));
     }
 }
+
+TEST_CASE("a pick starting in an ellipsoid goes out through it", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t ball = pivot(world.handle, 0.0F, 0.0F, 0.0F, FBE_PICK_ELLIPSOID);
+    CHECK(pick(world.handle, at(0.0F, 0.5F, 0.0F), at(0.0F, -5.0F, 0.0F)).entity == 0);
+    CHECK(pick(world.handle, at(0.0F, 0.5F, 0.0F), at(0.0F, 5.0F, 0.0F)).entity == 0);
+    CHECK(pick(world.handle, at(0.0F, 0.5F, 0.0F), at(5.0F, -1.0F, 0.0F)).entity == 0);
+    CHECK(pick(world.handle, at(0.0F, 0.5F, 0.0F), at(0.0F, -5.0F, 0.0F), 0.25F).entity == 0);
+    // From outside, it's hit.
+    CHECK(pick(world.handle, at(0.0F, 5.0F, 0.0F), at(0.0F, -5.0F, 0.0F)).entity == ball);
+    // A player's eye in its own pick ellipsoid, looking down at the floor ahead, sees the floor.
+    const std::uint64_t player = pivot(world.handle, 0.0F, 1.0F, -20.0F, FBE_PICK_ELLIPSOID);
+    fbe_entity_set_collision_radius(player, 0.3F, 0.9F);
+    const std::uint64_t floor = mesh(world.handle, fbe_geometry_plane(1));
+    fbe_entity_set_scale(floor, 10.0F, 1.0F, 10.0F, FBE_SPACE_LOCAL);
+    fbe_entity_set_position(floor, 0.0F, 0.0F, -30.0F, FBE_SPACE_LOCAL);
+    CHECK(pick(world.handle, at(0.0F, 1.6F, -20.0F), at(0.0F, 0.0F, -25.0F)).entity == floor);
+}
+
+TEST_CASE("a line through a mesh's seams or a ground plane hits it, however it's placed",
+          "[scene]") {
+    const test_world_t world;
+    const std::uint64_t floor = mesh(world.handle, fbe_geometry_plane(1));
+    std::mt19937 random(7); // NOLINT(bugprone-random-generator-seed)
+    std::uniform_real_distribution<float> unit(0.02F, 0.98F);
+    std::uniform_real_distribution<float> any(-1.0F, 1.0F);
+    struct setup_t {
+        float sx;
+        float sz;
+        float yaw;
+        float px;
+        float py;
+        float pz;
+    };
+    int missed = 0;
+    for (const setup_t& s : {
+             setup_t{ .sx = 1.0F, .sz = 1.0F, .yaw = 0.0F, .px = 0.0F, .py = 0.0F, .pz = 0.0F },
+             setup_t{ .sx = 3.7F, .sz = 3.7F, .yaw = 0.0F, .px = 0.3F, .py = 0.0F, .pz = 0.7F },
+             setup_t{ .sx = 1.0F, .sz = 1.0F, .yaw = 0.52F, .px = 0.0F, .py = 0.0F, .pz = 0.0F },
+             setup_t{ .sx = 2.3F, .sz = 5.1F, .yaw = 1.1F, .px = 10.3F, .py = 1.7F, .pz = -4.9F },
+             setup_t{ .sx = 4.0F, .sz = 4.0F, .yaw = 0.3F, .px = 100.25F, .py = 0.0F, .pz = 73.5F },
+             setup_t{ .sx = -2.0F, .sz = 1.5F, .yaw = 0.7F, .px = -3.0F, .py = 0.5F, .pz = 2.0F },
+         }) {
+        fbe_entity_set_scale(floor, s.sx, 1.0F, s.sz, FBE_SPACE_LOCAL);
+        fbe_entity_set_rotation(floor, 0.0F, std::sin(s.yaw * 0.5F), 0.0F, std::cos(s.yaw * 0.5F),
+                                FBE_SPACE_LOCAL);
+        fbe_entity_set_position(floor, s.px, s.py, s.pz, FBE_SPACE_LOCAL);
+        // Its diagonal, the two triangles' shared edge, from (-1, 0, -1) to (1, 0, 1).
+        fbe_mat4_t m{};
+        fbe_entity_matrix(floor, FBE_SPACE_WORLD, &m);
+        const auto through = [&](float x, float z) {
+            return at((m.m[0] * x) + (m.m[8] * z) + m.m[12], (m.m[1] * x) + (m.m[9] * z) + m.m[13],
+                      (m.m[2] * x) + (m.m[10] * z) + m.m[14]);
+        };
+        for (int i = 0; i < 2000; ++i) {
+            const float t = (unit(random) * 2.0F) - 1.0F;
+            const fbe_vec3_t p = through(t, t);
+            missed +=
+                pick(world.handle, at(p.x, p.y + 5.0F, p.z), at(p.x, p.y - 5.0F, p.z)).entity ==
+                        floor
+                    ? 0
+                    : 1;
+            const fbe_vec3_t o =
+                at(p.x + (any(random) * 3.0F), p.y + 4.0F, p.z + (any(random) * 3.0F));
+            const fbe_vec3_t e = at(p.x + (p.x - o.x), p.y - 4.0F, p.z + (p.z - o.z));
+            missed += pick(world.handle, o, e).entity == floor ? 0 : 1;
+        }
+    }
+    CHECK(missed == 0);
+    // A ground plane, from above anywhere, straight down or slanting.
+    const test_world_t open;
+    const std::uint64_t ground = fbe_entity_create(open.handle, 0, FBE_ENTITY_PLANE);
+    fbe_entity_set_pick_mode(ground, FBE_PICK_MESH);
+    fbe_entity_set_rotation(ground, 0.0F, 0.3F, 0.0F, 0.9539F, FBE_SPACE_LOCAL);
+    std::uniform_real_distribution<float> far(-500.0F, 500.0F);
+    int plane_missed = 0;
+    for (int i = 0; i < 2000; ++i) {
+        const float x = far(random);
+        const float z = far(random);
+        plane_missed += pick(open.handle, at(x, 3.0F, z), at(x, -3.0F, z)).entity == ground ? 0 : 1;
+        plane_missed +=
+            pick(open.handle, at(x, 3.0F, z), at(x + any(random), -3.0F, z)).entity == ground ? 0
+                                                                                              : 1;
+    }
+    CHECK(plane_missed == 0);
+}
+
+TEST_CASE("a pick follows a mesh's new geometry in a freed geometry's slot", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t made = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
+    fbe_entity_set_pick_mode(made, FBE_PICK_MESH);
+    // A triangle `size` across, its corner at the origin, facing up.
+    const auto triangle = [](float size) {
+        const std::uint64_t geometry = fbe_geometry_create();
+        const std::int32_t surface = fbe_geometry_add_surface(geometry);
+        std::array<fbe_vertex_t, 3> vertices{};
+        vertices[1].position = at(0.0F, 0.0F, size);
+        vertices[2].position = at(size, 0.0F, 0.0F);
+        fbe_surface_add_vertices(geometry, surface, vertices.data(), 3);
+        const std::array<std::uint32_t, 3> indices{ 0, 1, 2 };
+        fbe_surface_add_triangles(geometry, surface, indices.data(), 3);
+        return geometry;
+    };
+    const auto down = [&](float x, float z) {
+        return pick(world.handle, at(x, 5.0F, z), at(x, -5.0F, z)).entity == made;
+    };
+    for (const float size : { 1.0F, 5.0F, 10.0F }) {
+        const std::uint64_t geometry = triangle(size);
+        fbe_mesh_set_geometry(made, geometry);
+        fbe_geometry_release(geometry);
+        CHECK(down(0.2F, 0.2F));
+        CHECK(down(size * 0.3F, size * 0.3F));
+    }
+}
+
+TEST_CASE("a sphere picks a mesh scaled unevenly as one scaled in its vertices", "[scene]") {
+    const test_world_t scaled;
+    const test_world_t baked;
+    const std::uint64_t one = mesh(scaled.handle, fbe_geometry_sphere(16));
+    fbe_entity_set_scale(one, 10.0F, 1.0F, 0.5F, FBE_SPACE_LOCAL);
+    const std::uint64_t geometry = fbe_geometry_sphere(16);
+    fbe_mat4_t stretch{};
+    stretch.m[0] = 10.0F;
+    stretch.m[5] = 1.0F;
+    stretch.m[10] = 0.5F;
+    stretch.m[15] = 1.0F;
+    fbe_geometry_transform(geometry, &stretch);
+    mesh(baked.handle, geometry);
+    std::mt19937 random(3); // NOLINT(bugprone-random-generator-seed)
+    std::uniform_real_distribution<float> place(-12.0F, 12.0F);
+    int hits = 0;
+    for (int i = 0; i < 300; ++i) {
+        const fbe_vec3_t a = at(place(random), place(random), place(random));
+        const fbe_vec3_t b = at(place(random), place(random), place(random));
+        const fbe_pick_t first = pick(scaled.handle, a, b, 0.4F);
+        const fbe_pick_t second = pick(baked.handle, a, b, 0.4F);
+        CHECK((first.entity != 0) == (second.entity != 0));
+        if (first.entity != 0 && second.entity != 0) {
+            CHECK(std::fabs(first.time - second.time) < 1e-3F);
+            ++hits;
+        }
+    }
+    CHECK(hits > 20);
+}

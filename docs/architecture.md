@@ -101,10 +101,14 @@ good modern engine on its own. Every structural choice is checked against both.
     unless one closes faster than its radius in a frame and passes over its middle first. An
     ellipsoid target keeps both its radii; a box turns and scales with its entity. A mover whose
     touches use up its World's iterations (8 by default) is pushed out of every plane it still
-    touches at once, where that leaves it less in them, and stops there.
-  - The skin keeps a mover off what it touches, but between two solids nearly facing each other
-    it can end nearer: long walks among turned solids measured at most 0.0045 in, at the first
-    skin of 0.001, which a test holds.
+    touches at once, where that leaves it less in them, and stops there, unless it's still
+    further in than where the move began, as along a crease into a narrowing wedge: then it
+    stays where it was.
+  - The skin keeps a mover off what it touches: it backs away the way it came, never pushed off
+    along the face's normal into something it was leaving, and goes on with what it backed off
+    along the face. Long walks among turned solids measured it at most 0.00004 in, over 200 seeds
+    of 20,000 frames at the first skin of 0.001, which a test holds at the three that were worst
+    before.
   - A mover already within its radius of a face, an edge, or a corner touches it only going
     further in, so one starting in a seam goes out of it, never through.
   - A mover climbs ground, a slope within its max slope of level (45 degrees at first), as far as

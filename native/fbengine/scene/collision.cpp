@@ -214,6 +214,7 @@ nearby_t gather(const snapshot_t& snapshot, const mover_t& mover, float reach) {
                 local_max = greatest(local_max, p);
             }
             const bvh_t& tree = scene().geometries[target.geometry].tree;
+            const std::size_t first = nearby.triangles.size();
             tree.overlapping(local_min, local_max, [&](std::uint32_t triangle) {
                 const vec3_t* corners = tree.corners(triangle);
                 const vec3_t a = transform_point(target.matrix, corners[0]);
@@ -222,19 +223,16 @@ nearby_t gather(const snapshot_t& snapshot, const mover_t& mover, float reach) {
                 add_triangle(nearby, { a, b, c }, squash, t, target.mirrored, tree.origin(triangle),
                              true);
             });
+            // In the order of the mesh's own triangles, not its tree's leaves, so a refitted tree
+            // and one built again give the same touches, ties too; targets come in their order.
+            std::sort(nearby.triangles.begin() + static_cast<std::ptrdiff_t>(first),
+                      nearby.triangles.end(), [](const triangle_t& a, const triangle_t& b) {
+                          return a.origin.surface != b.origin.surface
+                                     ? a.origin.surface < b.origin.surface
+                                     : a.origin.triangle < b.origin.triangle;
+                      });
         }
     }
-    // In the order of their meshes' own triangles, not the trees' leaves, so a refitted tree
-    // and one built again give the same touches, ties too.
-    std::ranges::stable_sort(nearby.triangles, [](const triangle_t& a, const triangle_t& b) {
-        if (a.target != b.target) {
-            return a.target < b.target;
-        }
-        if (a.origin.surface != b.origin.surface) {
-            return a.origin.surface < b.origin.surface;
-        }
-        return a.origin.triangle < b.origin.triangle;
-    });
     return nearby;
 }
 
@@ -274,17 +272,18 @@ vec3_t pushed_out(const nearby_t& nearby, vec3_t at, vec3_t wanted, vec3_t touch
     if (facing > -0.5F) {
         return at + push * blocking.time;
     }
-    // How far along the push its plane is, and how far back what it touched is.
-    const float ahead = std::fmax(dot(blocking.point - at, blocking.normal) / facing, 0.0F);
     const float behind = length(at - touched);
+    // Two facing each other: halfway across the gap between them along the push, measured to the
+    // second's plane and back to what it touched.
+    const float ahead = std::fmax(dot(blocking.point - at, blocking.normal) / facing, 0.0F);
     return at + direction * std::clamp((ahead - behind) * 0.5F, -behind, size);
 }
 
-/// After a move's touches used up its iterations, the mover pushed out of every plane it still
-/// touches at once, a few rounds of moving out of each in turn, if that leaves it less in them than
-/// it is, and swept there as a push is. Out of what's steeper than ground, no higher than
-/// `ceiling`.
-vec3_t settle(const mover_t& mover, const nearby_t& nearby, vec3_t base,
+/// After a move from `from` used up its iterations on its touches, the mover pushed out of every
+/// plane it still touches at once, a few rounds of moving out of each in turn, if that leaves it
+/// less in them than it is, and swept there as a push is; but back at `from` if it's still further
+/// in them than it was there. Out of what's steeper than ground, no higher than `ceiling`.
+vec3_t settle(const mover_t& mover, const nearby_t& nearby, vec3_t from, vec3_t base,
               const std::vector<hit_t>& hits, float r, float skin, float ceiling) {
     // Only what it's still at: a plane it slid off, over an edge, isn't one to push out of.
     std::vector<hit_t> touched;
@@ -315,12 +314,16 @@ vec3_t settle(const mover_t& mover, const nearby_t& nearby, vec3_t base,
             settled = settled + out;
         }
     }
-    if (deepest(settled) >= deepest(base)) {
-        return base;
+    vec3_t ended = base;
+    if (deepest(settled) < deepest(base)) {
+        hit_t blocking;
+        const vec3_t push = settled - base;
+        ended =
+            first_touch(nearby, base, push, r, blocking) ? base + push * blocking.time : settled;
     }
-    hit_t blocking;
-    const vec3_t push = settled - base;
-    return first_touch(nearby, base, push, r, blocking) ? base + push * blocking.time : settled;
+    // Further in than it started, as along a crease into a wedge that narrows ahead, with no way
+    // out: it doesn't go.
+    return deepest(ended) > deepest(from) + tiny ? from : ended;
 }
 
 /// A move from `base` along `v` in sphere space, touching and sliding as the rules say, at most
@@ -330,10 +333,14 @@ vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& n
              vec3_t v, float ceiling, std::vector<hit_t>& hits) {
     const float r = mover.horizontal;
     const float skin = snapshot.world->collision_skin;
+    const vec3_t from = base;
     const vec3_t original = v;
     vec3_t previous_normal;
     bool has_previous = false;
     const std::size_t first = hits.size();
+    // Whether it didn't move, or went away from a face it was in, as one something closed on is.
+    const bool still = dot(v, v) < tiny * tiny;
+    bool left_a_face = false;
     std::int32_t i = 0;
     for (; i < snapshot.world->collision_iterations; ++i) {
         if (dot(v, v) < tiny * tiny) {
@@ -342,7 +349,7 @@ vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& n
         hit_t hit;
         bool found = false;
         for (const triangle_t& triangle : nearby.triangles) {
-            sweep_triangle(base, v, r, triangle, hit, found);
+            sweep_triangle(base, v, r, triangle, hit, found, &left_a_face);
         }
         for (const ellipsoid_t& ellipsoid : nearby.ellipsoids) {
             sweep_ellipsoid(base, v, r, ellipsoid, hit, found);
@@ -353,26 +360,37 @@ vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& n
         }
         hits.push_back(hit);
         const bool ground = on_ground(mover, hit.normal);
-        // Just off what it touched, skin away. Touching it from the start, it may be in it, as
-        // when it moved into the mover: pushed out only as far as nothing else is, so a mover
-        // squeezed between two stays where it is, never pushed into either.
         const vec3_t at = base + v * hit.time;
         const vec3_t out = normalize(at - hit.point);
-        base = hit.point + (dot(out, out) > 0.0F ? out : hit.normal) * (r + skin);
+        const vec3_t away = dot(out, out) > 0.0F ? out : hit.normal;
+        // What's left of the move, from where it ends up, toward where it was going.
+        vec3_t remaining = v * (1.0F - hit.time);
         if (hit.time <= 0.0F) {
-            base = pushed_out(nearby, at, base, hit.point, r);
-        } else if (!ground) {
-            // Nor does the skin off what's steeper than ground raise it past what its move and
-            // step allow: still no nearer what it touched than its radius, since only the rise is
-            // taken off.
-            base.y = std::fmin(base.y, std::fmax(ceiling, at.y));
+            // Touching it from the start, it may be in it, as when it moved into the mover: pushed
+            // out skin away only as far as nothing else is, so a mover squeezed between two stays
+            // where it is, never pushed into either.
+            base = pushed_out(nearby, at, hit.point + away * (r + skin), hit.point, r);
+        } else {
+            // Back the way it came until it's skin away from what it touched, never further back
+            // than where this part of the move began: where it's been is clear, while a push off
+            // what it touched could go into something it's leaving. What it went back is left to
+            // go, along what it touched.
+            const float travelled = length(v) * hit.time;
+            const vec3_t heading = v * (1.0F / length(v));
+            const float closing = -dot(heading, away);
+            const float back = closing > tiny ? std::fmin(skin / closing, travelled) : 0.0F;
+            base = at - heading * back;
+            remaining = remaining + heading * back;
+            if (!ground) {
+                // Nor does it end higher than its move and step allow.
+                base.y = std::fmin(base.y, std::fmax(ceiling, at.y));
+            }
         }
         const std::int32_t response =
             response_of(*snapshot.world, mover.group, snapshot.targets[hit.target].group);
         if (response == FBE_RESPONSE_STOP) {
             break;
         }
-        const vec3_t remaining = v * (1.0F - hit.time);
         vec3_t next = remaining - hit.normal * dot(remaining, hit.normal);
         if (has_previous && dot(next, previous_normal) < 0.0F) {
             // Between two surfaces, along the crease where they meet, or not at all.
@@ -404,20 +422,23 @@ vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& n
     if (i == snapshot.world->collision_iterations && hits.size() > first) {
         const std::vector<hit_t> touched(hits.begin() + static_cast<std::ptrdiff_t>(first),
                                          hits.end());
-        base = settle(mover, nearby, base, touched, r, skin, ceiling);
+        base = settle(mover, nearby, from, base, touched, r, skin, ceiling);
     }
     // Still in a face it moved away from, as when something closed on it from behind as it went
-    // the other way: pushed out of the deepest, as from a touch at its start.
+    // the other way: pushed out of the deepest, as from a touch at its start. Only a mover that
+    // didn't move, or left a face it was in, can be.
     const triangle_t* deepest = nullptr;
     vec3_t foot;
     float least = r;
-    for (const triangle_t& triangle : nearby.triangles) {
-        vec3_t under;
-        float distance = 0.0F;
-        if (in_face(base, r, triangle, under, distance) && distance < least - tiny) {
-            deepest = &triangle;
-            foot = under;
-            least = distance;
+    if (still || left_a_face) {
+        for (const triangle_t& triangle : nearby.triangles) {
+            vec3_t under;
+            float distance = 0.0F;
+            if (in_face(base, r, triangle, under, distance) && distance < least - tiny) {
+                deepest = &triangle;
+                foot = under;
+                least = distance;
+            }
         }
     }
     if (deepest != nullptr) {
@@ -468,7 +489,10 @@ result_t move(const snapshot_t& snapshot, const mover_t& mover) {
         for (std::size_t i = before_down; i < stepped.size(); ++i) {
             landed = landed || on_ground(mover, stepped[i].normal);
         }
-        if (landed && down.y <= ceiling + tiny && across(start, down) > across(start, end) + tiny) {
+        // Within the skin of the step's height: a step as high as it is stepped onto.
+        const float skin = snapshot.world->collision_skin;
+        if (landed && down.y <= ceiling + skin + tiny &&
+            across(start, down) > across(start, end) + tiny) {
             end = down;
             hits = std::move(stepped);
         }

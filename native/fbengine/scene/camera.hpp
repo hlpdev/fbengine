@@ -34,6 +34,10 @@ void half_extents(const camera_t& camera, const view_t& view, float& half_width,
 /// when every one is behind one plane.
 bool in_view(const camera_t& camera, const view_t& view, const vec3_t* points, std::size_t count);
 
+/// Whether a camera might see any of a plane through `place` facing `normal`, from above: false
+/// only when its whole view is under it.
+bool plane_in_view(const camera_t& camera, const view_t& view, vec3_t place, vec3_t normal);
+
 /// The camera's projection as the engine draws with it: Vulkan's clip space, y down, and depth
 /// reversed, 1 at its near plane and 0 at its far one.
 mat4_t draw_projection(const camera_t& camera, const view_t& view);

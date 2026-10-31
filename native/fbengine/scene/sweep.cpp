@@ -106,7 +106,7 @@ bool in_face(vec3_t c, float r, const triangle_t& triangle, vec3_t& foot, float&
 }
 
 void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit_t& hit,
-                    bool& found) {
+                    bool& found, bool* leaving_face) {
     const vec3_t n = triangle.normal;
     const float distance = dot(n, c - triangle.corners[0]);
     // A mover whose middle is behind a triangle passes out through it, and one going away from
@@ -131,6 +131,9 @@ void sweep_triangle(vec3_t c, vec3_t v, float r, const triangle_t& triangle, hit
         }
         embedded = true;
         leaving = true;
+        if (leaving_face != nullptr) {
+            *leaving_face = true;
+        }
     } else {
         first = (r - distance) / approach;
         const float last = (-r - distance) / approach;

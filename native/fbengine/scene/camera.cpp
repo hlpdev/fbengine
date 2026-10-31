@@ -151,6 +151,27 @@ camera_t* camera_of(std::uint64_t handle) {
     return &scene().cameras[scene().entities.component[entity]];
 }
 
+bool plane_in_view(const camera_t& camera, const view_t& view, vec3_t place, vec3_t normal) {
+    float half_width = 0.0F;
+    float half_height = 0.0F;
+    half_extents(camera, view, half_width, half_height);
+    const bool perspective = camera.projection == FBE_PROJECTION_PERSPECTIVE;
+    // The view's eight corners, near and far, in the world.
+    for (const float depth : { camera.nearest, camera.farthest }) {
+        const float across = perspective ? half_width * depth : half_width;
+        const float up = perspective ? half_height * depth : half_height;
+        for (unsigned corner = 0; corner < 4; ++corner) {
+            const vec3_t seen((corner & 1U) != 0 ? across : -across, (corner & 2U) != 0 ? up : -up,
+                              -depth);
+            const vec3_t at = view.position + view.rotation * seen;
+            if (dot(at - place, normal) >= 0.0F) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 mat4_t draw_projection(const camera_t& camera, const view_t& view) {
     float half_width = 0.0F;
     float half_height = 0.0F;
@@ -518,6 +539,11 @@ FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, f
     }
     fbe::scene::update_world(slot);
     const fbe::scene::mat4_t& m = s.entities.world_matrix[slot];
+    if (s.entities.kind[slot] == FBE_ENTITY_PLANE) {
+        const fbe::scene::vec3_t up =
+            fbe::scene::transform_normal(m, fbe::scene::vec3_t(0.0F, 1.0F, 0.0F));
+        return fbe::scene::plane_in_view(*found, view, m.axis(3), up) ? 1 : 0;
+    }
     if (s.entities.kind[slot] == FBE_ENTITY_SPRITE || s.entities.kind[slot] == FBE_ENTITY_TERRAIN) {
         // A sprite's quad stays in its box however it turns; a terrain's grid is in its own.
         fbe::scene::vec3_t min;

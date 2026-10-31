@@ -207,3 +207,52 @@ TEST_CASE("meshes intersect where their triangles cross, not where one holds the
     const std::uint64_t empty = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
     CHECK(fbe_mesh_intersects(one, empty) == 0);
 }
+
+TEST_CASE("meshes resting on each other touch, not cross", "[scene]") {
+    const test_world_t world;
+    // One on the other, exactly: its bottom on the other's top.
+    const std::uint64_t below = cube(world.handle, 0.0F, 0.0F, 0.0F);
+    const std::uint64_t above = cube(world.handle, 0.0F, 2.0F, 0.0F);
+    CHECK(fbe_mesh_intersects(below, above) == 0);
+    // Side by side, face to face, and corner to corner.
+    fbe_entity_set_position(above, 2.0F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+    CHECK(fbe_mesh_intersects(below, above) == 0);
+    fbe_entity_set_position(above, 2.0F, 2.0F, 2.0F, FBE_SPACE_WORLD);
+    CHECK(fbe_mesh_intersects(below, above) == 0);
+    // Turned alike and stacked along their turned up, and scaled.
+    const float s = 0.38268343F;
+    const float c = 0.92387953F;
+    fbe_entity_set_rotation(below, 0.0F, 0.0F, s, c, FBE_SPACE_WORLD);
+    fbe_entity_set_rotation(above, 0.0F, 0.0F, s, c, FBE_SPACE_WORLD);
+    fbe_entity_set_position(above, -2.0F * 0.70710678F, 2.0F * 0.70710678F, 0.0F, FBE_SPACE_WORLD);
+    CHECK(fbe_mesh_intersects(below, above) == 0);
+    fbe_entity_set_rotation(below, 0.0F, 0.0F, 0.0F, 1.0F, FBE_SPACE_WORLD);
+    fbe_entity_set_rotation(above, 0.0F, 0.0F, 0.0F, 1.0F, FBE_SPACE_WORLD);
+    fbe_entity_set_scale(below, 3.0F, 0.5F, 3.0F, FBE_SPACE_LOCAL);
+    fbe_entity_set_scale(above, 0.5F, 0.25F, 0.5F, FBE_SPACE_LOCAL);
+    fbe_entity_set_position(above, 0.5F, 0.75F, 0.5F, FBE_SPACE_WORLD);
+    CHECK(fbe_mesh_intersects(below, above) == 0);
+    // A little into it, it crosses.
+    fbe_entity_set_position(above, 0.5F, 0.74F, 0.5F, FBE_SPACE_WORLD);
+    CHECK(fbe_mesh_intersects(below, above) == 1);
+}
+
+TEST_CASE("a ground plane is seen unless the view is under it, and is everywhere", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t plane = fbe_entity_create(world.handle, 0, FBE_ENTITY_PLANE);
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    fbe_camera_set_range(camera, 0.1F, 50.0F);
+    // Looking straight down from above, it's in view; from far below, looking down, it isn't.
+    fbe_entity_set_rotation(camera, -0.70710678F, 0.0F, 0.0F, 0.70710678F, FBE_SPACE_WORLD);
+    fbe_entity_set_position(camera, 0.0F, 5.0F, 0.0F, FBE_SPACE_WORLD);
+    CHECK(fbe_camera_entity_in_view(camera, 100.0F, 100.0F, plane) == 1);
+    fbe_entity_set_position(camera, 0.0F, -10.0F, 0.0F, FBE_SPACE_WORLD);
+    CHECK(fbe_camera_entity_in_view(camera, 100.0F, 100.0F, plane) == 0);
+    // Looking up from below, the view reaches above it.
+    fbe_entity_set_rotation(camera, 0.70710678F, 0.0F, 0.0F, 0.70710678F, FBE_SPACE_WORLD);
+    CHECK(fbe_camera_entity_in_view(camera, 100.0F, 100.0F, plane) == 1);
+    fbe_aabb_t bounds{};
+    REQUIRE(fbe_entity_bounds(plane, &bounds));
+    CHECK(std::isinf(bounds.min.x));
+    CHECK(std::isinf(bounds.max.z));
+}

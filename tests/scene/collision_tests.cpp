@@ -593,11 +593,14 @@ TEST_CASE("a mover over a refitted mesh ends where one over a fresh copy of it d
     fbe_geometry_release(geometry);
 }
 
-TEST_CASE("a long walk among turned solids never gets 0.005 into them", "[scene]") {
-    // The review's long walk at the worst two of 40 seeds of 20,000 frames, just past their worst
-    // frames: 40 solids, boxes and cube meshes, turned every way, and a 0.3 by 0.6 mover falling
-    // and walking among them. Its worst, 0.0045, is between two solids nearly facing each other.
-    for (const auto& [seed, frames] : { std::pair{ 6U, 1400 }, std::pair{ 34U, 4900 } }) {
+TEST_CASE("a long walk among turned solids never gets 0.001 into them", "[scene]") {
+    // The review's long walk at the worst three of 200 seeds of 20,000 frames, just past what were
+    // their worst frames: 40 solids, boxes and cube meshes, turned every way, and a 0.3 by 0.6
+    // mover falling and walking among them. Pushed off along a face's normal, it went 0.009 into
+    // a box along a crease into a narrowing wedge (98, 190), or into an edge it was leaving (85);
+    // backing off the way it came, the 200's worst is 0.00004.
+    for (const auto& [seed, frames] :
+         { std::pair{ 98U, 3850 }, std::pair{ 190U, 14250 }, std::pair{ 85U, 19350 } }) {
         std::mt19937 random(seed); // NOLINT(bugprone-random-generator-seed)
         const test_world_t world;
         const std::uint64_t floor = level(world.handle, fbe_geometry_plane(1));
@@ -689,6 +692,26 @@ TEST_CASE("a long walk among turned solids never gets 0.005 into them", "[scene]
                 fbe_world_collide(world.handle);
             }
         }
-        CHECK(worst < 0.005F);
+        CAPTURE(seed);
+        CHECK(worst < 0.001F);
+    }
+}
+
+TEST_CASE("a step as high as the step height is climbed", "[scene]") {
+    for (const float high : { 0.295F, 0.299F, 0.3F }) {
+        const test_world_t world;
+        box(world.handle, extent(-10.0F, -1.0F, -10.0F, 10.0F, 0.0F, 10.0F));
+        box(world.handle, extent(1.0F, 0.0F, -5.0F, 5.0F, high, 5.0F));
+        const std::uint64_t made = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+        fbe_entity_set_collision_group(made, mover_group);
+        fbe_entity_set_collision_radius(made, 0.3F, 0.9F);
+        fbe_entity_set_step_height(made, 0.3F);
+        fbe_entity_set_position(made, 0.69F, 0.901F, 0.0F, FBE_SPACE_WORLD);
+        fbe_world_collide(world.handle);
+        move(world.handle, made, 1.0F, -0.01F, 0.0F);
+        const fbe_vec3_t at = position(made);
+        CAPTURE(high, at.x, at.y);
+        CHECK(at.x > 1.5F);
+        CHECK(std::fabs(at.y - (high + 0.901F)) < 0.003F);
     }
 }
