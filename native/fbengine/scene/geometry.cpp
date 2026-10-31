@@ -163,6 +163,7 @@ void retain_geometry(std::uint32_t geometry) {
 void release_geometry(std::uint32_t geometry) {
     geometry_t& found = scene().geometries[geometry];
     if (--found.references == 0) {
+        release_materials(found.surfaces);
         found.surfaces.clear();
         found.surfaces.shrink_to_fit();
         scene().geometry_slots.free(geometry);
@@ -213,6 +214,7 @@ void remove_mesh(std::uint32_t entity) {
     if (s.meshes[index].geometry != none) {
         release_geometry(s.meshes[index].geometry);
     }
+    release_material(s.meshes[index].material);
     if (index != s.meshes.size() - 1) {
         s.meshes[index] = s.meshes.back();
         s.entities.component[s.meshes[index].entity] = index;
@@ -273,6 +275,7 @@ FBE_API uint64_t fbe_geometry_clone(uint64_t geometry) {
         return 0;
     }
     std::vector<surface_t> surfaces = scene().geometries[slot].surfaces;
+    fbe::scene::retain_materials(surfaces);
     const std::uint32_t copy = fbe::scene::make_geometry();
     scene().geometries[copy].surfaces = std::move(surfaces);
     return scene().geometry_slots.handle(copy);
@@ -307,6 +310,7 @@ FBE_API bool fbe_geometry_add(uint64_t geometry, uint64_t other, const fbe_mat4_
     }
     // A copy first, so a geometry added to itself adds what it had.
     std::vector<surface_t> added = scene().geometries[from].surfaces;
+    fbe::scene::retain_materials(added);
     const fbe::scene::mat4_t m = fbe::scene::matrix(*transform);
     for (surface_t& surface : added) {
         fbe::scene::transform_surface(surface, m);

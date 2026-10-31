@@ -44,12 +44,14 @@ void copy_component(std::uint32_t from, std::uint32_t to) {
         copy = scene().lights[entities.component[from]];
         copy.entity = to;
     } else if (entities.kind[from] == FBE_ENTITY_MESH) {
-        // Copies share their original's geometry.
-        const std::uint32_t geometry = scene().meshes[entities.component[from]].geometry;
-        scene().meshes[entities.component[to]].geometry = geometry;
-        if (geometry != none) {
-            retain_geometry(geometry);
+        // Copies share their original's geometry and material, and have its tint.
+        mesh_t& copy = scene().meshes[entities.component[to]];
+        copy = scene().meshes[entities.component[from]];
+        copy.entity = to;
+        if (copy.geometry != none) {
+            retain_geometry(copy.geometry);
         }
+        retain_material(copy.material);
     }
 }
 
