@@ -5,6 +5,8 @@
 // wraps through the bindings tools/bindgen.sh makes of each, one file per area in
 // packages/fbengine_physics/c/.
 
+#include "body/fbe_body.h"
 #include "physics/fbe_physics.h"
+#include "shape/fbe_shape.h"
 
 #endif

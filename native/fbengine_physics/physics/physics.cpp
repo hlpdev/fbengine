@@ -165,7 +165,26 @@ FBE_PHYSICS_API uint64_t fbe_physics_new(uint32_t max_bodies) {
 }
 
 FBE_PHYSICS_API bool fbe_physics_free(uint64_t world) {
-    return find_world(world) != nullptr && worlds().remove(world);
+    world_t* found = find_world(world);
+    if (found == nullptr) {
+        return false;
+    }
+    free_bodies(*found);
+    return worlds().remove(world);
+}
+
+FBE_PHYSICS_API int32_t fbe_physics_bodies(uint64_t world) {
+    const world_t* found = find_world(world);
+    return found != nullptr ? static_cast<int32_t>(found->bodies.size()) : -1;
+}
+
+FBE_PHYSICS_API bool fbe_physics_optimize(uint64_t world) {
+    world_t* found = find_world(world);
+    if (found == nullptr) {
+        return false;
+    }
+    found->system.OptimizeBroadPhase();
+    return true;
 }
 
 FBE_PHYSICS_API uint32_t fbe_physics_max_bodies(uint64_t world) {

@@ -1,0 +1,476 @@
+// Bodies: Jolt's, by handle, each in its world's list, so freeing the world frees them. Every call
+// is the main thread's, between steps, so none locks Jolt's bodies.
+
+#include "fbengine_physics.h"
+#include "physics/physics.hpp"
+
+#include <cmath>
+#include <cstdint>
+#include <format>
+#include <Jolt/Physics/Body/Body.h>
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyLockInterface.h>
+#include <Jolt/Physics/Body/MotionProperties.h>
+#include <memory>
+#include <vector>
+
+namespace {
+
+using namespace fbe::physics;
+
+struct body_t {
+    world_t* world;
+    JPH::BodyID id;
+    // Where it is in its world's list.
+    std::size_t index;
+    // Whether its shape has an inside, and so a mass, which a mesh hasn't.
+    bool weighed;
+
+    [[nodiscard]] JPH::BodyInterface& bodies() const {
+        return world->system.GetBodyInterfaceNoLock();
+    }
+
+    [[nodiscard]] JPH::Body& body() const {
+        return *world->system.GetBodyLockInterfaceNoLock().TryGetBody(id);
+    }
+};
+
+pool_t<body_t>& bodies() {
+    static pool_t<body_t> pool;
+    return pool;
+}
+
+body_t* find(std::uint64_t handle) {
+    body_t* body = bodies().get(handle);
+    if (body == nullptr) {
+        fail(handle == 0 ? "there's no body" : "the body was freed");
+    }
+    return body;
+}
+
+// The body `handle` is, if it's one that moves, which `doing` needs.
+body_t* find_moving(std::uint64_t handle, const char* doing) {
+    body_t* body = find(handle);
+    if (body != nullptr && body->body().IsStatic()) {
+        fail(std::format("a static body doesn't move, so it has no {}", doing));
+        return nullptr;
+    }
+    return body;
+}
+
+bool finite(const fbe_body_vec3_t& v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
+// `v` as Jolt's, if it's finite; false, saying so, if it isn't.
+bool vec3(const fbe_body_vec3_t& v, JPH::Vec3& made) {
+    if (!finite(v)) {
+        return fail("a vector is finite");
+    }
+    made = JPH::Vec3(v.x, v.y, v.z);
+    return true;
+}
+
+fbe_body_vec3_t vec3(JPH::Vec3Arg v) {
+    return { .x = v.GetX(), .y = v.GetY(), .z = v.GetZ() };
+}
+
+// `q` as Jolt's, normalized, if it's finite and not 0; false, saying so, if it isn't.
+bool quat(const fbe_body_quat_t& q, JPH::Quat& made) {
+    const JPH::Quat rotation(q.x, q.y, q.z, q.w);
+    if (!std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z) || !std::isfinite(q.w) ||
+        rotation.LengthSq() == 0.0F) {
+        return fail("a rotation is finite, and not 0");
+    }
+    made = rotation.Normalized();
+    return true;
+}
+
+bool motion(std::int32_t motion, JPH::EMotionType& made) {
+    switch (motion) {
+    case FBE_BODY_STATIC:
+        made = JPH::EMotionType::Static;
+        return true;
+    case FBE_BODY_DYNAMIC:
+        made = JPH::EMotionType::Dynamic;
+        return true;
+    case FBE_BODY_KINEMATIC:
+        made = JPH::EMotionType::Kinematic;
+        return true;
+    default:
+        return fail(std::format("{} isn't a Motion", motion));
+    }
+}
+
+// What a vector of a body's is, by `get`, into `out`; false if it isn't a body.
+template <typename Get>
+bool get_vec3(std::uint64_t handle, fbe_body_vec3_t* out, Get get) {
+    const body_t* body = find(handle);
+    if (body == nullptr) {
+        return false;
+    }
+    *out = vec3(get(*body));
+    return true;
+}
+
+// Does `push` to a body with a vector, if it's dynamic; false if it isn't a body or the vector
+// isn't finite.
+template <typename Push>
+bool push(std::uint64_t handle, const fbe_body_vec3_t* v, Push push) {
+    const body_t* body = find(handle);
+    JPH::Vec3 made;
+    if (body == nullptr || !vec3(*v, made)) {
+        return false;
+    }
+    push(*body, made);
+    return true;
+}
+
+// A float of what moves a body that moves, by `get`, or -1.
+template <typename Get>
+float get_motion(std::uint64_t handle, Get get) {
+    const body_t* body = find_moving(handle, "motion");
+    return body != nullptr ? get(*body->body().GetMotionProperties()) : -1.0F;
+}
+
+// Sets a float of what moves a body that moves, its `what`, by `set`, if `in_range`; false,
+// saying `range`, if it isn't, or it isn't a body that moves.
+template <typename Set>
+bool set_motion_float(std::uint64_t handle, float value, bool in_range, const char* what,
+                      const char* range, Set set) {
+    const body_t* body = find_moving(handle, what);
+    if (body == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(value) || !in_range) {
+        return fail(std::format("{}, not {}", range, value));
+    }
+    set(*body->body().GetMotionProperties(), value);
+    return true;
+}
+
+void forget(const body_t& body) {
+    std::vector<std::uint64_t>& list = body.world->bodies;
+    const std::uint64_t last = list.back();
+    list[body.index] = last;
+    bodies().get(last)->index = body.index;
+    list.pop_back();
+}
+
+} // namespace
+
+namespace fbe::physics {
+
+void free_bodies(world_t& world) {
+    std::vector<JPH::BodyID> ids;
+    ids.reserve(world.bodies.size());
+    for (const std::uint64_t handle : world.bodies) {
+        ids.push_back(bodies().get(handle)->id);
+        bodies().remove(handle);
+    }
+    if (!ids.empty()) {
+        JPH::BodyInterface& face = world.system.GetBodyInterfaceNoLock();
+        face.RemoveBodies(ids.data(), static_cast<int>(ids.size()));
+        face.DestroyBodies(ids.data(), static_cast<int>(ids.size()));
+    }
+    world.bodies.clear();
+}
+
+} // namespace fbe::physics
+
+extern "C" {
+
+FBE_PHYSICS_API uint64_t fbe_body_add(uint64_t world, uint64_t shape, int32_t motion_type,
+                                      const fbe_body_vec3_t* position,
+                                      const fbe_body_quat_t* rotation) {
+    world_t* in = find_world(world);
+    if (in == nullptr) {
+        return 0;
+    }
+    const JPH::Shape* of = find_shape(shape);
+    JPH::EMotionType type{};
+    JPH::Vec3 at;
+    JPH::Quat turned;
+    if (of == nullptr || !motion(motion_type, type) || !vec3(*position, at) ||
+        !quat(*rotation, turned)) {
+        return 0;
+    }
+    if (in->bodies.size() >= in->system.GetMaxBodies()) {
+        fail(std::format("the world has room for {} bodies, and has them all",
+                         in->system.GetMaxBodies()));
+        return 0;
+    }
+    const float mass = of->GetMassProperties().mMass;
+    const bool weighed = std::isfinite(mass) && mass > 0.0F;
+    if (type == JPH::EMotionType::Dynamic && !weighed) {
+        fail("a dynamic body's shape has an inside to weigh, which a mesh hasn't");
+        return 0;
+    }
+
+    const bool moves = type != JPH::EMotionType::Static;
+    JPH::BodyCreationSettings settings(of, at, turned, type,
+                                       moves ? moving_layer : not_moving_layer);
+    if (moves && !weighed) {
+        // A kinematic mesh weighs nothing it can be pushed by; Jolt asks for a mass all the same.
+        settings.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
+        settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(JPH::Vec3::sOne(), 1000.0F);
+    }
+    JPH::BodyInterface& face = in->system.GetBodyInterfaceNoLock();
+    JPH::Body* made = face.CreateBody(settings);
+    if (made == nullptr) {
+        fail(std::format("the world has room for {} bodies, and has them all",
+                         in->system.GetMaxBodies()));
+        return 0;
+    }
+    face.AddBody(made->GetID(),
+                 moves ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+    const std::uint64_t handle =
+        bodies().add(std::make_unique<body_t>(in, made->GetID(), in->bodies.size(), weighed));
+    in->bodies.push_back(handle);
+    made->SetUserData(handle);
+    return handle;
+}
+
+FBE_PHYSICS_API bool fbe_body_free(uint64_t body) {
+    const body_t* found = find(body);
+    if (found == nullptr) {
+        return false;
+    }
+    JPH::BodyInterface& face = found->bodies();
+    face.RemoveBody(found->id);
+    face.DestroyBody(found->id);
+    forget(*found);
+    return bodies().remove(body);
+}
+
+FBE_PHYSICS_API int32_t fbe_body_motion(uint64_t body) {
+    const body_t* found = find(body);
+    if (found == nullptr) {
+        return -1;
+    }
+    switch (found->body().GetMotionType()) {
+    case JPH::EMotionType::Static:
+        return FBE_BODY_STATIC;
+    case JPH::EMotionType::Dynamic:
+        return FBE_BODY_DYNAMIC;
+    case JPH::EMotionType::Kinematic:
+        return FBE_BODY_KINEMATIC;
+    }
+    return -1;
+}
+
+FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion_type) {
+    const body_t* found = find(body);
+    JPH::EMotionType type{};
+    if (found == nullptr || !motion(motion_type, type)) {
+        return false;
+    }
+    if (found->body().IsStatic() || type == JPH::EMotionType::Static) {
+        return fail("a static body stays static, and a body that moves keeps moving");
+    }
+    if (type == JPH::EMotionType::Dynamic && !found->weighed) {
+        return fail("a dynamic body's shape has an inside to weigh, which a mesh hasn't");
+    }
+    found->bodies().SetMotionType(found->id, type, JPH::EActivation::Activate);
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_body_position(uint64_t body, fbe_body_vec3_t* position) {
+    return get_vec3(body, position, [](const body_t& b) { return b.bodies().GetPosition(b.id); });
+}
+
+FBE_PHYSICS_API bool fbe_body_rotation(uint64_t body, fbe_body_quat_t* rotation) {
+    const body_t* found = find(body);
+    if (found == nullptr) {
+        return false;
+    }
+    const JPH::Quat q = found->bodies().GetRotation(found->id);
+    *rotation = { .x = q.GetX(), .y = q.GetY(), .z = q.GetZ(), .w = q.GetW() };
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_body_set_position(uint64_t body, const fbe_body_vec3_t* position) {
+    return push(body, position, [](const body_t& b, JPH::Vec3Arg v) {
+        b.bodies().SetPosition(b.id, v, JPH::EActivation::Activate);
+    });
+}
+
+FBE_PHYSICS_API bool fbe_body_set_rotation(uint64_t body, const fbe_body_quat_t* rotation) {
+    const body_t* found = find(body);
+    JPH::Quat turned;
+    if (found == nullptr || !quat(*rotation, turned)) {
+        return false;
+    }
+    found->bodies().SetRotation(found->id, turned, JPH::EActivation::Activate);
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_body_velocity(uint64_t body, fbe_body_vec3_t* velocity) {
+    return get_vec3(body, velocity,
+                    [](const body_t& b) { return b.bodies().GetLinearVelocity(b.id); });
+}
+
+FBE_PHYSICS_API bool fbe_body_angular_velocity(uint64_t body, fbe_body_vec3_t* velocity) {
+    return get_vec3(body, velocity,
+                    [](const body_t& b) { return b.bodies().GetAngularVelocity(b.id); });
+}
+
+FBE_PHYSICS_API bool fbe_body_set_velocity(uint64_t body, const fbe_body_vec3_t* velocity) {
+    return find_moving(body, "velocity") != nullptr &&
+           push(body, velocity,
+                [](const body_t& b, JPH::Vec3Arg v) { b.bodies().SetLinearVelocity(b.id, v); });
+}
+
+FBE_PHYSICS_API bool fbe_body_set_angular_velocity(uint64_t body, const fbe_body_vec3_t* velocity) {
+    return find_moving(body, "angular velocity") != nullptr &&
+           push(body, velocity,
+                [](const body_t& b, JPH::Vec3Arg v) { b.bodies().SetAngularVelocity(b.id, v); });
+}
+
+FBE_PHYSICS_API bool fbe_body_add_force(uint64_t body, const fbe_body_vec3_t* force) {
+    return push(body, force, [](const body_t& b, JPH::Vec3Arg v) {
+        b.bodies().AddForce(b.id, v, JPH::EActivation::Activate);
+    });
+}
+
+FBE_PHYSICS_API bool fbe_body_add_force_at(uint64_t body, const fbe_body_vec3_t* force,
+                                           const fbe_body_vec3_t* point) {
+    JPH::Vec3 at;
+    return vec3(*point, at) && push(body, force, [at](const body_t& b, JPH::Vec3Arg v) {
+               b.bodies().AddForce(b.id, v, at, JPH::EActivation::Activate);
+           });
+}
+
+FBE_PHYSICS_API bool fbe_body_add_torque(uint64_t body, const fbe_body_vec3_t* torque) {
+    return push(body, torque, [](const body_t& b, JPH::Vec3Arg v) {
+        b.bodies().AddTorque(b.id, v, JPH::EActivation::Activate);
+    });
+}
+
+FBE_PHYSICS_API bool fbe_body_add_impulse(uint64_t body, const fbe_body_vec3_t* impulse) {
+    return push(body, impulse,
+                [](const body_t& b, JPH::Vec3Arg v) { b.bodies().AddImpulse(b.id, v); });
+}
+
+FBE_PHYSICS_API bool fbe_body_add_impulse_at(uint64_t body, const fbe_body_vec3_t* impulse,
+                                             const fbe_body_vec3_t* point) {
+    JPH::Vec3 at;
+    return vec3(*point, at) && push(body, impulse, [at](const body_t& b, JPH::Vec3Arg v) {
+               b.bodies().AddImpulse(b.id, v, at);
+           });
+}
+
+FBE_PHYSICS_API bool fbe_body_add_angular_impulse(uint64_t body, const fbe_body_vec3_t* impulse) {
+    return push(body, impulse,
+                [](const body_t& b, JPH::Vec3Arg v) { b.bodies().AddAngularImpulse(b.id, v); });
+}
+
+FBE_PHYSICS_API float fbe_body_mass(uint64_t body) {
+    const body_t* found = find(body);
+    if (found == nullptr || !found->weighed || found->body().IsStatic()) {
+        return 0.0F;
+    }
+    return 1.0F / found->body().GetMotionProperties()->GetInverseMass();
+}
+
+FBE_PHYSICS_API bool fbe_body_set_mass(uint64_t body, float mass) {
+    const body_t* found = find_moving(body, "mass");
+    if (found == nullptr) {
+        return false;
+    }
+    if (!found->weighed) {
+        return fail("a mesh has no inside to weigh");
+    }
+    if (!std::isfinite(mass) || mass <= 0.0F) {
+        return fail(std::format("a mass is more than 0, not {}", mass));
+    }
+    found->body().GetMotionProperties()->ScaleToMass(mass);
+    return true;
+}
+
+FBE_PHYSICS_API float fbe_body_friction(uint64_t body) {
+    const body_t* found = find(body);
+    return found != nullptr ? found->body().GetFriction() : -1.0F;
+}
+
+FBE_PHYSICS_API float fbe_body_restitution(uint64_t body) {
+    const body_t* found = find(body);
+    return found != nullptr ? found->body().GetRestitution() : -1.0F;
+}
+
+FBE_PHYSICS_API bool fbe_body_set_friction(uint64_t body, float friction) {
+    const body_t* found = find(body);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(friction) || friction < 0.0F) {
+        return fail(std::format("a friction is 0 or more, not {}", friction));
+    }
+    found->body().SetFriction(friction);
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_body_set_restitution(uint64_t body, float restitution) {
+    const body_t* found = find(body);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(restitution) || restitution < 0.0F || restitution > 1.0F) {
+        return fail(std::format("a restitution is 0 to 1, not {}", restitution));
+    }
+    found->body().SetRestitution(restitution);
+    return true;
+}
+
+FBE_PHYSICS_API float fbe_body_linear_damping(uint64_t body) {
+    return get_motion(body, [](const JPH::MotionProperties& m) { return m.GetLinearDamping(); });
+}
+
+FBE_PHYSICS_API float fbe_body_angular_damping(uint64_t body) {
+    return get_motion(body, [](const JPH::MotionProperties& m) { return m.GetAngularDamping(); });
+}
+
+FBE_PHYSICS_API float fbe_body_gravity_factor(uint64_t body) {
+    return get_motion(body, [](const JPH::MotionProperties& m) { return m.GetGravityFactor(); });
+}
+
+FBE_PHYSICS_API bool fbe_body_set_linear_damping(uint64_t body, float damping) {
+    return set_motion_float(body, damping, damping >= 0.0F, "damping", "a damping is 0 or more",
+                            [](JPH::MotionProperties& m, float v) { m.SetLinearDamping(v); });
+}
+
+FBE_PHYSICS_API bool fbe_body_set_angular_damping(uint64_t body, float damping) {
+    return set_motion_float(body, damping, damping >= 0.0F, "damping", "a damping is 0 or more",
+                            [](JPH::MotionProperties& m, float v) { m.SetAngularDamping(v); });
+}
+
+FBE_PHYSICS_API bool fbe_body_set_gravity_factor(uint64_t body, float factor) {
+    return set_motion_float(body, factor, true, "gravity factor", "a gravity factor is finite",
+                            [](JPH::MotionProperties& m, float v) { m.SetGravityFactor(v); });
+}
+
+FBE_PHYSICS_API bool fbe_body_active(uint64_t body) {
+    const body_t* found = find(body);
+    return found != nullptr && found->body().IsActive();
+}
+
+FBE_PHYSICS_API bool fbe_body_wake(uint64_t body) {
+    const body_t* found = find(body);
+    if (found == nullptr) {
+        return false;
+    }
+    found->bodies().ActivateBody(found->id);
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_body_sleep(uint64_t body) {
+    const body_t* found = find(body);
+    if (found == nullptr) {
+        return false;
+    }
+    found->bodies().DeactivateBody(found->id);
+    return true;
+}
+
+} // extern "C"

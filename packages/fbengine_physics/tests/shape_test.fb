@@ -1,0 +1,174 @@
+// Shapes: their sizes, kinds, and what they refuse.
+
+Import std.core
+Import std.math
+Import std.test
+Import std.text
+Import fbengine_physics
+Import fbengine_physics.c.fbe_physics
+Import fbengine_physics.c.fbe_shape
+
+Function Near(a: Float, b: Float, within: Float = 0.001): Bool => Abs(a - b) <= within
+
+Function Near(a: Vec3, b: Vec3, within: Float = 0.001): Bool => Distance(a, b) <= within
+
+@Test
+Function ABoxIsItsSizeAcrossAboutItsOrigin()
+    Local box = Shape.Box(Vec3(2, 4, 6))
+    Defer box.Free()
+    Expect(box.Kind() == ShapeKind.BOX)
+    Expect(Near(box.Volume(), 48))
+    Local low, high = box.Bounds()
+    Expect(Near(low, Vec3(-1, -2, -3)))
+    Expect(Near(high, Vec3(1, 2, 3)))
+End Function
+
+@Test
+Function ASphereAndACylinderAreAboutTheirOrigins()
+    Local sphere = Shape.Sphere(2)
+    Defer sphere.Free()
+    Expect(sphere.Kind() == ShapeKind.SPHERE)
+    Expect(Near(sphere.Volume(), 4.0 / 3 * Pi * 8, 0.01))
+    Local low, high = sphere.Bounds()
+    Expect(Near(low, Vec3(-2, -2, -2)) && Near(high, Vec3(2, 2, 2)))
+
+    Local cylinder = Shape.Cylinder(4, 1)
+    Defer cylinder.Free()
+    Expect(cylinder.Kind() == ShapeKind.CYLINDER)
+    Expect(Near(cylinder.Volume(), Pi * 4, 0.01))
+    Local bottom, top = cylinder.Bounds()
+    Expect(Near(bottom, Vec3(-1, -2, -1)) && Near(top, Vec3(1, 2, 1)))
+End Function
+
+// A capsule's height is from end to end, as a character's is.
+@Test
+Function ACapsulesHeightIsEndToEndAlongY()
+    Local capsule = Shape.Capsule(2, 0.5)
+    Defer capsule.Free()
+    Expect(capsule.Kind() == ShapeKind.CAPSULE)
+    Local low, high = capsule.Bounds()
+    Expect(Near(low, Vec3(-0.5, -1, -0.5)) && Near(high, Vec3(0.5, 1, 0.5)))
+    // A cylinder 1 long and a sphere.
+    Expect(Near(capsule.Volume(), Pi * 0.25 + 4.0 / 3 * Pi * 0.125, 0.01))
+End Function
+
+@Test
+Function AConvexHullIsAroundItsPoints() Throws ShapeError
+    // A unit cube's corners, with a point inside, which the hull leaves out.
+    Local points: Vec3[] = [Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(1, 1, 0),
+                            Vec3(0, 0, 1), Vec3(1, 0, 1), Vec3(0, 1, 1), Vec3(1, 1, 1),
+                            Vec3(0.5, 0.5, 0.5)]
+    Local hull = Try Shape.ConvexHull(points)
+    Defer hull.Free()
+    Expect(hull.Kind() == ShapeKind.CONVEX_HULL)
+    Expect(Near(hull.Volume(), 1, 0.01))
+    Local low, high = hull.Bounds()
+    Expect(Near(low, Vec3(0, 0, 0), 0.01) && Near(high, Vec3(1, 1, 1), 0.01))
+End Function
+
+@Test
+Function AConvexHullOfPointsInAPlaneIsFlat() Throws ShapeError
+    Local square: Vec3[] = [Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 0, 1), Vec3(1, 0, 1)]
+    Local flat = Try Shape.ConvexHull(square)
+    Defer flat.Free()
+    Local low, high = flat.Bounds()
+    Expect(Near(low, Vec3(0, 0, 0), 0.01) && Near(high, Vec3(1, 0, 1), 0.01))
+End Function
+
+@Test
+Function AConvexHullOfPointsOnALineIsAnError()
+    Local line: Vec3[] = [Vec3(0, 0, 0), Vec3(1, 1, 1), Vec3(2, 2, 2), Vec3(3, 3, 3)]
+    Local error = ExpectThrows<ShapeError>(Shape.ConvexHull(line))
+    Expect(error?.Message?.StartsWith("the convex hull can't be made: ") == True)
+    Local two: Vec3[] = [Vec3(0, 0, 0), Vec3(1, 0, 0)]
+    Local few = ExpectThrows<ShapeError>(Shape.ConvexHull(two))
+    Expect(few?.Message == "a convex hull is of 3 points or more, not 2")
+End Function
+
+@Test
+Function AMeshIsItsTrianglesWithNoInside() Throws ShapeError
+    // A floor 10 across, of two triangles facing up.
+    Local corners: Vec3[] = [Vec3(-5, 0, -5), Vec3(5, 0, -5), Vec3(5, 0, 5), Vec3(-5, 0, 5)]
+    Local mesh = Try Shape.Mesh(corners, [0, 2, 1, 0, 3, 2])
+    Defer mesh.Free()
+    Expect(mesh.Kind() == ShapeKind.MESH)
+    Expect(mesh.Volume() == 0.0)
+    Local low, high = mesh.Bounds()
+    Expect(Near(low.x, -5, 0.01) && Near(high.x, 5, 0.01))
+    Expect(Near(low.z, -5, 0.01) && Near(high.z, 5, 0.01))
+End Function
+
+@Test
+Function AMeshOfBadTrianglesIsAnError()
+    Local corners: Vec3[] = [Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 0, 1)]
+    Local past = ExpectThrows<ShapeError>(Shape.Mesh(corners, [0, 1, 3]))
+    Expect(past?.Message == "index 2 of the mesh is 3, past its 3 vertices")
+    Local before = ExpectThrows<ShapeError>(Shape.Mesh(corners, [0, -1, 2]))
+    Expect(before?.Message == "index 1 of the mesh is -1, before its first vertex")
+    Expect(ExpectThrows<ShapeError>(Shape.Mesh(corners, [0, 1])) != Null)
+    // A triangle of no area is left out, which leaves none.
+    Expect(ExpectThrows<ShapeError>(Shape.Mesh(corners, [0, 1, 1])) != Null)
+End Function
+
+@Test
+Function ACompoundIsItsPartsWhereTheyreGiven()
+    Local box = Shape.Box(Vec3(1, 1, 1))
+    Defer box.Free()
+    Local turned = Quat.FromAxisAngle(Vec3(0, 1, 0), Pi / 2)
+    Local parts: ShapePart[] = [ShapePart(box, Vec3(-2, 0, 0), Quat(0, 0, 0, 1)),
+                                ShapePart(box, Vec3(2, 0.5, 0), turned)]
+    Local both = Shape.Compound(parts)
+    Defer both.Free()
+    Expect(both.Kind() == ShapeKind.COMPOUND)
+    Expect(Near(both.Volume(), 2, 0.01))
+    Local low, high = both.Bounds()
+    Expect(Near(low, Vec3(-2.5, -0.5, -0.5), 0.01))
+    Expect(Near(high, Vec3(2.5, 1, 0.5), 0.01))
+End Function
+
+// A shape's bodies keep it, so it can be freed as soon as they're made.
+@Test
+Function AFreedShapesBodiesKeepIt()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local ball = Shape.Sphere(0.5)
+    Local body = Body(world, ball, Motion.DYNAMIC, Vec3(0, 10, 0))
+    ball.Free()
+    Expect(ball.Freed())
+    world.Update(0.5)
+    Expect(body.Position().y < 10)
+    // Freeing it again is nothing.
+    ball.Free()
+End Function
+
+@Test @MainThread
+Function TheCApiRefusesShapesItDoesntTake()
+    Local flat = fbe_shape_vec3_t(1, 0, 1)
+    Local handle: UInt64 = 1
+    Unsafe
+        handle = fbe_shape_box(AddressOf(flat))
+    End Unsafe
+    Expect(handle == 0)
+    Expect(Error() == "a box's height is more than 0, not 0")
+    Expect(fbe_shape_sphere(NaN) == 0)
+    Expect(fbe_shape_sphere(-1) == 0)
+    Expect(Error() == "a sphere's radius is more than 0, not -1")
+    Expect(fbe_shape_capsule(0.5, 0.5) == 0)
+    Expect(Error() == "a capsule's height is at least twice its radius, 1, not 0.5")
+    Expect(fbe_shape_cylinder(1, 0) == 0)
+    Expect(fbe_shape_kind(0) == 0)
+    Expect(Error() == "there's no shape")
+
+    Local sphere = fbe_shape_sphere(1)
+    Expect(fbe_shape_kind(sphere) == FBE_SHAPE_SPHERE)
+    Expect(fbe_shape_free(sphere))
+    Expect(!fbe_shape_free(sphere))
+    Expect(Error() == "the shape was freed")
+    Expect(fbe_shape_volume(sphere) == 0.0)
+End Function
+
+@MainThread Function Error(): String
+    Unsafe
+        Return fbe_physics_error().ToString()
+    End Unsafe
+End Function

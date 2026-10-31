@@ -18,6 +18,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 namespace fbe::physics {
 
@@ -34,6 +35,8 @@ struct world_t {
     JPH::ObjectLayerPairFilterTable object_layers;
     std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> object_vs_broad_phase;
     JPH::PhysicsSystem system;
+    // Its bodies' handles, in no order.
+    std::vector<std::uint64_t> bodies;
     std::int64_t steps = 0;
     bool overflowed = false;
 };
@@ -44,6 +47,13 @@ bool fail(std::string_view message);
 /// The world `handle` is, or nullptr, with fbe_physics_error() saying so, for one that's freed or
 /// never was.
 world_t* find_world(std::uint64_t handle);
+
+/// Frees `world`'s bodies.
+void free_bodies(world_t& world);
+
+/// The shape `handle` is, or nullptr, with fbe_physics_error() saying so, for one that's freed or
+/// never was.
+const JPH::Shape* find_shape(std::uint64_t handle);
 
 /// Jolt's job system, which steps worlds, started with Jolt.
 JPH::JobSystem& jobs();
