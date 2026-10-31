@@ -182,3 +182,44 @@ Function AReverbOnASurroundMixIsDry() Throws AudioError, SoundError
     click.Play()
     Expect(Loudness(Audio.Mix(4800), 60) == 0.0)
 End Function
+
+// In float32, a low-pass far below its mix's rate rings, and passes more or less than goes in, so
+// it's held to 1/2400 of the rate: at 10 Hz, once settled, a constant passes as it is.
+@Test
+Function ALowPassFarBelowItsRatePassesWhatsLow() Throws AudioError, SoundError
+    For rate In [48000, 384000]
+        Try Audio.Start(AudioDevice.MANUAL, rate, 1)
+        Local muffled = Bus()
+        muffled.SetLowPass(10.0)
+        Expect(muffled.LowPass() == 10.0)
+        Local hum = Try Sound.FromBytes(Wav(Constant(16384, rate), 1, rate))
+        hum.SetBus(muffled)
+        hum.Play()
+        Local mixed = Audio.Mix(rate)
+        Local least: Float32 = 1.0
+        Local most: Float32 = 0.0
+        For i = rate / 2 To rate - 2
+            least = Min(least, mixed[i])
+            most = Max(most, mixed[i])
+        End For
+        Expect(least > 0.495 && most < 0.505)
+        Audio.Stop()
+    End For
+End Function
+
+// Freeverb, as verblib has it, takes 22050 to 176400 Hz, so a bus in a 192000 Hz mix plays its
+// reverb dry.
+@Test
+Function AReverbAbove176400HzIsDry() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 192000, 2)
+    Defer Audio.Stop()
+    Local room = Bus()
+    room.SetReverb(Reverb())
+    Expect(!room.ReverbHeard())
+    Local samples = Constant(0, 19200)
+    samples[0] = 16384
+    Local click = Try Sound.FromBytes(Wav(samples, 1, 192000))
+    click.SetBus(room)
+    click.Play()
+    Expect(Loudness(Audio.Mix(19200), 4) == 0.0)
+End Function

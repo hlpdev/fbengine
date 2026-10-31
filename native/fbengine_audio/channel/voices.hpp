@@ -34,6 +34,13 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how);
 /// The miniaudio sound of the channel `handle` is for, or null for one that's finished.
 ma_sound* channel_sound(std::uint64_t handle);
 
+/// Pitches the channel `handle` is for by `doppler` too; false for one that's finished.
+bool set_doppler(std::uint64_t handle, float doppler);
+
+/// The pitches a channel plays at, its own times its emitter's Doppler pitch held to them too.
+constexpr float lowest_pitch = 1.0F / 16.0F;
+constexpr float highest_pitch = 16.0F;
+
 /// Ends every channel, before the mix they play in goes.
 void end_channels();
 

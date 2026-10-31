@@ -184,3 +184,45 @@ Function APlainChannelIsntInTheWorld() Throws AudioError, SoundError
     sound.Play()
     Expect(Audio.Mix(2) == [0.0, 0.0, 0.5, 0.5] As Float32[])
 End Function
+
+// At or past the speed of sound toward the Listener, the Doppler effect's pitch would be infinite,
+// or negative: it's held to 16, so 4800 frames play in about 300, and what's mixed stays numbers.
+// Going away as fast, it's pitched down, as in the world: by 343.3 / (343.3 + 686.6), a third, so
+// 1200 frames play in 3600.
+@Test
+Function TheDopplerEffectIsHeldAtAndPastTheSpeedOfSound() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    For speed In [343.3, 342.3, 686.6, 1000000.0] As Float32[]
+        Local coming = At(Vec3(0, 0, -10))
+        coming.SetVelocity(Vec3(0, 0, speed))
+        Local channel = coming.Play(sound)
+        Local frames = 0
+        Local numbers = True
+        While channel.Playing() && frames < 10000
+            For sample In Audio.Mix(100)
+                numbers = numbers && IsFinite(sample)
+            End For
+            frames += 100
+        End While
+        Expect(numbers)
+        Expect(frames >= 300 && frames <= 500)
+    End For
+    Local going = At(Vec3(0, 0, -10))
+    going.SetVelocity(Vec3(0, 0, -686.6))
+    Local slow = Length(going.Play(Try Sound.FromBytes(Wav(Constant(16384, 1200)))))
+    Expect(slow >= 3500 && slow <= 3800)
+End Function
+
+// Rolled over, the Listener's up is down, so what's on its right is heard on its left: which way is
+// up reaches the mix through the mixing thread, by the next mix.
+@Test
+Function ARolledOverListenerHearsItsSidesSwapped() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Listener.SetRotation(Quat.FromAxisAngle(Vec3(0, 0, 1), Deg(180)))
+    Local heard = Try Heard(At(Vec3(2, 0, 0)))
+    Expect(heard[0] > heard[1] * 2.0)
+End Function

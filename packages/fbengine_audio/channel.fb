@@ -53,7 +53,8 @@ Public Struct Channel
     @MainThread Public Method Pan(): Float32 => fbe_channel_pan(handle)
 
     /// Sets its pitch, from 1/16 to 16: 1 is as its sound was recorded, 2 an octave higher and
-    /// twice as fast.
+    /// twice as fast. A Channel an Emitter plays is pitched by the Doppler effect too, and plays at
+    /// the two together, held to 1/16 to 16.
     @MainThread Public Method SetPitch(pitch: Float32)
         CheckPitch(pitch)
         fbe_channel_set_pitch(handle, pitch)

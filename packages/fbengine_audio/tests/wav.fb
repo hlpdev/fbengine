@@ -44,3 +44,12 @@ Function AddInt(bytes: UInt8[], value: Int, count: Int)
         bytes.Add(((value >> (i * 8)) & 255) As UInt8)
     End For
 End Function
+
+/// `count` frames rising by 4 from 0, mono, so a mixed sample says which frame it was.
+Package Function Rising(count: Int): Int[]
+    Local samples: Int[] = []
+    For i = 0 To count - 1
+        samples.Add(i * 4)
+    End For
+    Return samples
+End Function

@@ -60,9 +60,10 @@ Public Final Class Bus
     /// What's in it is multiplied by.
     @MainThread Public Method Volume(): Float32 => fbe_bus_volume(Live())
 
-    /// Muffles what's in it, through a low-pass at `hertz`, from 10 to 24000, held below half the
-    /// mix's rate, which takes away more of each octave above it, 24 dB, or takes the low-pass
-    /// away with 0.
+    /// Muffles what's in it, through a low-pass at `hertz`, from 10 to 24000, which takes away
+    /// more of each octave above it, 24 dB, or takes the low-pass away with 0. It's held to between
+    /// 1/2400 of the mix's rate, below which its filter rings (20 Hz at 48000, 160 at 384000), and
+    /// 0.9 of half of it.
     @MainThread Public Method SetLowPass(hertz: Float32)
         If hertz != 0.0 && (!IsFinite(hertz) || hertz < 10.0 || hertz > 24000.0)
             Panic("a low-pass is 0, for none, or 10 to 24000 Hz, not {hertz}")
@@ -74,8 +75,8 @@ Public Final Class Bus
     /// Its low-pass's hertz, or 0 when it has none.
     @MainThread Public Method LowPass(): Float32 => fbe_bus_low_pass(Live())
 
-    /// Gives what's in it `reverb`. A mix of more than 2 channels, or under 22050 frames a second,
-    /// which Freeverb can't do, plays it dry.
+    /// Gives what's in it `reverb`. A mix of more than 2 channels, or under 22050 or over 176400
+    /// frames a second, which Freeverb can't do, plays it dry.
     @MainThread Public Method SetReverb(reverb: Reverb)
         CheckFraction(reverb.RoomSize, "room size")
         CheckFraction(reverb.Damping, "damping")

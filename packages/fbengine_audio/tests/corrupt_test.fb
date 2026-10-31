@@ -1,0 +1,62 @@
+// Sound files that are corrupt, or that lie about how long they are, as a game's files can be:
+// each is a SoundError or a sound, never a crash, and never takes what a lie asks for.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import fbengine_audio
+
+// tone.ogg with its comment count, byte 0x76, made 64: the first comment's length is then past the
+// header, which stb_vorbis once left half its comment list unset for, and freed.
+@Test
+Function ACorruptOggIsASoundError() Throws SoundError
+    Local good = Embed("data/tone.ogg")
+    For i = 1 To 20
+        (Try Sound.FromBytes(good)).Free()
+    End For
+    Local bad = Embed("data/corrupt.ogg")
+    Expect(ExpectThrows<SoundError>(Sound.FromBytes(bad)) != Null)
+    Expect(ExpectThrows<SoundError>(Sound.StreamBytes(bad)) != Null)
+    (Try Sound.FromBytes(good)).Free()
+End Function
+
+// forged.flac says it has 2^36 - 1 frames, forged.ogg's last page 2^33, and forged.wav's data
+// nearly 4 GB: each has only what it decodes to.
+@Test
+Function AFileIsAsLongAsWhatItDecodesTo() Throws SoundError
+    Expect((Try Sound.FromBytes(Embed("data/forged.flac"))).Frames() == 2400)
+    Expect((Try Sound.StreamBytes(Embed("data/forged.flac"))).Frames() == 2400)
+    Expect((Try Sound.FromBytes(Embed("data/forged.wav"))).Frames() == 2400)
+    Expect((Try Sound.StreamBytes(Embed("data/forged.wav"))).Frames() == 2400)
+    // stb_vorbis takes the last page's granule as where the last packet ends.
+    Local ogg = Try Sound.FromBytes(Embed("data/forged.ogg"))
+    Expect(ogg.Frames() > 10000 && ogg.Frames() <= 11025)
+    Expect((Try Sound.StreamBytes(Embed("data/forged.ogg"))).Frames() == ogg.Frames())
+End Function
+
+// Each of the fixtures with 1 to 8 of its bytes changed, at random but from a fixed seed, so a
+// failure is the same each run: decoded whole and streamed, each a SoundError or a sound.
+@Test
+Function ChangedBytesAreASoundErrorOrASound()
+    Local random = Random(20261031)
+    Local loaded = 0
+    For original In [Embed("data/tone.ogg"), Embed("data/tone.flac"), Embed("data/tone.wav")]
+        For i = 1 To 1000
+            Local bytes: UInt8[] = []
+            bytes.AddAll(original)
+            For j = 1 To random.Int(1, 8)
+                bytes[random.Int(bytes.Count)] = random.Int(256) As UInt8
+            End For
+            Local whole = Try? Sound.FromBytes(bytes)
+            If whole != Null
+                Expect(whole.Frames() > 0)
+                loaded += 1
+            End If
+            Local streamed = Try? Sound.StreamBytes(bytes)
+            If streamed != Null Then Expect(streamed.Frames() > 0)
+        End For
+    End For
+    // Most changes miss what a decoder checks.
+    Expect(loaded > 0)
+End Function

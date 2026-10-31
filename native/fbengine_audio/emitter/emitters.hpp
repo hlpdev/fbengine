@@ -13,10 +13,13 @@ struct emitter_t;
 /// The emitter `handle` is for, or null for 0 or one that's gone.
 emitter_t* find_emitter(std::uint64_t handle);
 
-/// Gives `sound` `emitter`'s place, velocity, and falloff.
-void place(const emitter_t& emitter, ma_sound& sound);
+/// Gives `sound` `emitter`'s place and falloff, and gives the Doppler pitch it plays at.
+float place(const emitter_t& emitter, ma_sound& sound);
 
 /// Makes `channel` one of `emitter`'s, which move with it.
 void join(emitter_t& emitter, std::uint64_t channel);
+
+/// Gives every emitter's channels their Doppler pitch again, as the listener moves.
+void pitch_every_emitter();
 
 } // namespace fbe::audio

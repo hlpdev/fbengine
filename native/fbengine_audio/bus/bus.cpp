@@ -47,7 +47,8 @@ struct bus_t {
     std::optional<reverb_t> reverb;
     ma_sound_group group;
     ma_lpf_node low_pass;
-    ma_reverb_node reverb_node;
+    /// Its reverb node, while it has one: at 408 KB, a bus without a reverb doesn't keep one.
+    std::unique_ptr<ma_reverb_node> reverb_node;
     bool has_group = false;
     bool has_low_pass = false;
     bool has_reverb = false;
@@ -63,6 +64,9 @@ struct bus_t {
     ~bus_t();
 };
 
+// A bus is small without its reverb.
+static_assert(sizeof(bus_t) < std::size_t{ 64 } * 1024U);
+
 } // namespace fbe::audio
 
 namespace {
@@ -74,6 +78,9 @@ constexpr float lowest_cutoff = 10.0F;
 constexpr float highest_cutoff = 24000.0F;
 /// Where a low-pass is held below half the mix's rate, past which its filter means nothing.
 constexpr double most_of_half = 0.9;
+/// How far below its mix's rate a low-pass goes: further, miniaudio's float32 biquads ring, and
+/// pass more or less than what goes in (10 Hz at 48000 is 1.2 dB over, at 384000 a thirtieth).
+constexpr double lowest_of_rate = 1.0 / 2400.0;
 /// The channels and rates Freeverb, as verblib has it, takes.
 constexpr ma_uint32 most_reverb_channels = 2;
 /// A group at the mix's rate needs no resampler, which would hold a frame, nor a place.
@@ -97,16 +104,17 @@ ma_node_graph* graph() {
     return ma_engine_get_node_graph(fbe::audio::engine());
 }
 
-/// A low-pass at `cutoff` in `mix`, held below half its rate.
+/// A low-pass at `cutoff` in `mix`, held below half its rate, and at or above 1/2400 of it.
 ma_lpf_node_config low_pass_config(const ma_engine* mix, float cutoff) {
     const ma_uint32 rate = ma_engine_get_sample_rate(mix);
-    const double held = std::min(static_cast<double>(cutoff), rate * 0.5 * most_of_half);
+    const double held =
+        std::clamp(static_cast<double>(cutoff), rate * lowest_of_rate, rate * 0.5 * most_of_half);
     return ma_lpf_node_config_init(ma_engine_get_channels(mix), rate, held, low_pass_order);
 }
 
 /// Gives `bus`'s reverb node `settings`, verblib's dry being twice what goes in.
 void apply_reverb(bus_t& bus, const reverb_t& settings) {
-    verblib* reverb = &bus.reverb_node.reverb;
+    verblib* reverb = &bus.reverb_node->reverb;
     verblib_set_room_size(reverb, settings.room_size);
     verblib_set_damping(reverb, settings.damping);
     verblib_set_width(reverb, settings.width);
@@ -132,7 +140,9 @@ bool make_reverb(bus_t& bus) {
     }
     const ma_reverb_node_config config =
         ma_reverb_node_config_init(channels, ma_engine_get_sample_rate(mix));
-    if (ma_reverb_node_init(graph(), &config, nullptr, &bus.reverb_node) != MA_SUCCESS) {
+    bus.reverb_node = std::make_unique<ma_reverb_node>();
+    if (ma_reverb_node_init(graph(), &config, nullptr, bus.reverb_node.get()) != MA_SUCCESS) {
+        bus.reverb_node.reset();
         return false;
     }
     apply_reverb(bus, *bus.reverb);
@@ -149,7 +159,7 @@ void join(bus_t& bus, bool low_pass, bool reverb) {
         chain.at(count++) = &bus.low_pass;
     }
     if (reverb) {
-        chain.at(count++) = &bus.reverb_node;
+        chain.at(count++) = bus.reverb_node.get();
     }
     ma_node* into = bus.parent != nullptr ? static_cast<ma_node*>(&bus.parent->group)
                                           : ma_engine_get_endpoint(fbe::audio::engine());
@@ -194,7 +204,8 @@ void tear_down(bus_t& bus) {
         bus.has_reverb = false;
     }
     if (reverb) {
-        ma_reverb_node_uninit(&bus.reverb_node, nullptr);
+        ma_reverb_node_uninit(bus.reverb_node.get(), nullptr);
+        bus.reverb_node.reset();
     }
     if (low_pass) {
         ma_lpf_node_uninit(&bus.low_pass, nullptr);
@@ -273,7 +284,7 @@ void stop_buses() {
 void update_buses(const ma_engine* mix) {
     const std::scoped_lock lock(buses().lock);
     for (bus_t* bus : buses().all) {
-        if (bus->cutoff_changed && bus->has_low_pass) {
+        if (bus->cutoff_changed && bus->has_low_pass && bus->cutoff > 0.0F) {
             const ma_lpf_node_config config = low_pass_config(mix, bus->cutoff);
             ma_lpf_node_reinit(&config.lpf, &bus->low_pass);
         }
@@ -344,28 +355,30 @@ FBE_AUDIO_API bool fbe_bus_set_low_pass(uint64_t bus, float cutoff) {
     if (found == nullptr) {
         return false;
     }
+    // Taken away, the mixing thread is told it's gone with its cutoff, in one go, so it never
+    // makes the low-pass again at 0 Hz.
+    bool removed = false;
     {
         const std::scoped_lock lock(buses().lock);
         found->cutoff = cutoff;
-        found->cutoff_changed = true;
+        found->cutoff_changed = cutoff > 0.0F;
+        if (cutoff == 0.0F && found->has_low_pass) {
+            found->has_low_pass = false;
+            removed = true;
+        }
     }
-    if (!found->has_group) {
+    if (removed) {
+        join(*found, false, found->has_reverb);
+        ma_lpf_node_uninit(&found->low_pass, nullptr);
         return true;
     }
-    if (cutoff > 0.0F && !found->has_low_pass) {
+    if (found->has_group && cutoff > 0.0F && !found->has_low_pass) {
         if (!make_low_pass(*found)) {
             return false;
         }
         join(*found, true, found->has_reverb);
         const std::scoped_lock lock(buses().lock);
         found->has_low_pass = true;
-    } else if (cutoff == 0.0F && found->has_low_pass) {
-        {
-            const std::scoped_lock lock(buses().lock);
-            found->has_low_pass = false;
-        }
-        join(*found, false, found->has_reverb);
-        ma_lpf_node_uninit(&found->low_pass, nullptr);
     }
     return true;
 }
@@ -420,7 +433,8 @@ FBE_AUDIO_API void fbe_bus_clear_reverb(uint64_t bus) {
     }
     if (heard) {
         join(*found, found->has_low_pass, false);
-        ma_reverb_node_uninit(&found->reverb_node, nullptr);
+        ma_reverb_node_uninit(found->reverb_node.get(), nullptr);
+        found->reverb_node.reset();
     }
 }
 

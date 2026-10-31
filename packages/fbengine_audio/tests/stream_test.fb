@@ -180,3 +180,18 @@ Function AFinishedChannelIgnoresSeeksAndFades()
     Expect(none.Fade() == 0.0)
     Expect(none.Position() == 0.0)
 End Function
+
+// A finished channel's seek is nothing, however far, whether it was asked if it was playing or not.
+@Test
+Function AFinishedChannelsSeekIsNothingAskedOrNot() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(8192, 100)))
+    Local unasked = sound.Play()
+    Local asked = sound.Play()
+    Audio.Mix(300)
+    Expect(!asked.Playing())
+    asked.Seek(1000.0)
+    unasked.Seek(1000.0)
+    Expect(!unasked.Playing())
+End Function

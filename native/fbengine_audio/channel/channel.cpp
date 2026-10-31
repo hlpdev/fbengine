@@ -22,8 +22,8 @@
 
 namespace {
 
-constexpr float lowest_pitch = 1.0F / 16.0F;
-constexpr float highest_pitch = 16.0F;
+using fbe::audio::highest_pitch;
+using fbe::audio::lowest_pitch;
 constexpr std::int64_t no_seek = -1;
 
 /// fbe_channel_set_pan_law's laws.
@@ -45,6 +45,9 @@ struct voice_t {
     /// The volume and pan it was given, which its pan law makes miniaudio's.
     float volume = 1.0F;
     float pan = 0.0F;
+    /// The pitch it was given, and its emitter's Doppler pitch, which it plays at the two of.
+    float pitch = 1.0F;
+    float doppler = 1.0F;
     /// What it plays into, which it keeps while it plays, or null for the whole mix.
     std::shared_ptr<fbe::audio::bus_t> bus;
     ma_audio_buffer_ref buffer;
@@ -59,6 +62,9 @@ struct voice_t {
     bool spatial = false;
     /// The main thread's, for the mixing thread: whether it finishes once its fade is silent.
     std::atomic<bool> fading_out = false;
+    /// The main thread's, for the mixing thread: whether its loop was turned off since the last
+    /// mix, so what it read ahead past its end, back at its start, doesn't play.
+    std::atomic<bool> unlooped = false;
     /// The mixing thread's, for the main thread: whether it faded out.
     std::atomic<bool> faded_out = false;
 
@@ -166,6 +172,33 @@ void apply_pan(voice_t& voice) {
     ma_sound_set_volume(&voice.sound, voice.volume * gain);
 }
 
+/// Gives `voice`'s sound its pitch times its Doppler pitch, held to the pitches a channel plays at.
+void apply_pitch(voice_t& voice) {
+    ma_sound_set_pitch(&voice.sound,
+                       std::clamp(voice.pitch * voice.doppler, lowest_pitch, highest_pitch));
+}
+
+/// Ends `voice`'s loop where it is: what miniaudio read ahead, which a loop turned off near its
+/// sound's end has already taken back round to its start, is cut at the end, and what it reads
+/// next is the end, so it finishes there rather than playing its sound again. The cache holds the
+/// frames up to the cursor, so it starts `cached` frames back, in a loop of `frames`. The mixing
+/// thread's.
+void end_loop(voice_t& voice) {
+    const std::uint64_t frames = voice.data->frames;
+    ma_uint64 cursor = 0;
+    if (frames == 0 ||
+        ma_data_source_get_cursor_in_pcm_frames(voice.source(), &cursor) != MA_SUCCESS) {
+        return;
+    }
+    const std::uint64_t cached = voice.sound.processingCacheFramesRemaining;
+    const std::uint64_t start = (cursor + frames - (cached % frames)) % frames;
+    const std::uint64_t kept = std::min(cached, frames - start);
+    if (kept < cached) {
+        voice.sound.processingCacheFramesRemaining = static_cast<ma_uint32>(kept);
+        ma_data_source_seek_to_pcm_frame(voice.source(), frames);
+    }
+}
+
 /// The frames a fade of `seconds` takes in the mix.
 ma_uint64 fade_frames(double seconds) {
     return static_cast<ma_uint64>(
@@ -271,11 +304,12 @@ std::uint64_t play(std::shared_ptr<const sound_data_t> data, const play_t& how) 
     voice->pan = how.pan;
     voice->spatial = how.emitter != nullptr;
     apply_pan(*voice);
-    ma_sound_set_pitch(&voice->sound, how.pitch);
     ma_sound_set_looping(&voice->sound, how.loop ? MA_TRUE : MA_FALSE);
+    voice->pitch = how.pitch;
     if (how.emitter != nullptr) {
-        place(*how.emitter, voice->sound);
+        voice->doppler = place(*how.emitter, voice->sound);
     }
+    apply_pitch(*voice);
     if (how.fade_in > 0.0) {
         ma_sound_set_fade_in_pcm_frames(&voice->sound, 0.0F, 1.0F, fade_frames(how.fade_in));
     }
@@ -300,6 +334,16 @@ ma_sound* channel_sound(std::uint64_t handle) {
     return voice != nullptr ? &voice->sound : nullptr;
 }
 
+bool set_doppler(std::uint64_t handle, float doppler) {
+    voice_t* voice = find(handle);
+    if (voice == nullptr) {
+        return false;
+    }
+    voice->doppler = doppler;
+    apply_pitch(*voice);
+    return true;
+}
+
 void end_channels() {
     channels().voices.clear();
 }
@@ -308,6 +352,9 @@ void before_mix() {
     channels_t& all = channels();
     const std::scoped_lock lock(all.live_lock);
     for (voice_t* voice : all.live) {
+        if (voice->unlooped.exchange(false, std::memory_order_acq_rel)) {
+            end_loop(*voice);
+        }
         const std::int64_t target = voice->seek_to.load(std::memory_order_acquire);
         if (target == no_seek) {
             continue;
@@ -411,21 +458,25 @@ FBE_AUDIO_API bool fbe_channel_set_pitch(uint64_t channel, float pitch) {
     }
     voice_t* voice = find(channel);
     if (voice != nullptr) {
-        ma_sound_set_pitch(&voice->sound, pitch);
+        voice->pitch = pitch;
+        apply_pitch(*voice);
     }
     return true;
 }
 
 FBE_AUDIO_API float fbe_channel_pitch(uint64_t channel) {
     const voice_t* voice = find(channel);
-    return voice != nullptr ? ma_sound_get_pitch(&voice->sound) : 0.0F;
+    return voice != nullptr ? voice->pitch : 0.0F;
 }
 
 FBE_AUDIO_API void fbe_channel_set_loop(uint64_t channel, bool loop) {
     voice_t* voice = find(channel);
-    if (voice != nullptr) {
-        ma_sound_set_looping(&voice->sound, loop ? MA_TRUE : MA_FALSE);
+    if (voice == nullptr) {
+        return;
     }
+    const bool was = ma_sound_is_looping(&voice->sound) != MA_FALSE;
+    ma_sound_set_looping(&voice->sound, loop ? MA_TRUE : MA_FALSE);
+    voice->unlooped.store(was && !loop, std::memory_order_release);
 }
 
 FBE_AUDIO_API bool fbe_channel_looping(uint64_t channel) {
@@ -443,17 +494,22 @@ FBE_AUDIO_API double fbe_channel_position(uint64_t channel) {
 }
 
 FBE_AUDIO_API bool fbe_channel_seek(uint64_t channel, double seconds) {
-    voice_t* voice = channels().voices.find(channel);
-    const std::int64_t frame = voice != nullptr ? voice->frame_at(seconds) : 0;
-    if (!std::isfinite(seconds) || seconds < 0.0 || frame < 0) {
+    if (!std::isfinite(seconds) || seconds < 0.0) {
         return fbe::audio::fail(
             std::format("a seek is 0 seconds to its sound's length, not {}", seconds));
     }
-    voice = find(channel);
-    if (voice != nullptr) {
-        voice->position.store(static_cast<std::uint64_t>(frame), std::memory_order_relaxed);
-        voice->seek_to.store(frame, std::memory_order_release);
+    // A finished channel's seek is nothing, however far, as its other calls are.
+    voice_t* voice = find(channel);
+    if (voice == nullptr) {
+        return true;
     }
+    const std::int64_t frame = voice->frame_at(seconds);
+    if (frame < 0) {
+        return fbe::audio::fail(
+            std::format("a seek is 0 seconds to its sound's length, not {}", seconds));
+    }
+    voice->position.store(static_cast<std::uint64_t>(frame), std::memory_order_relaxed);
+    voice->seek_to.store(frame, std::memory_order_release);
     return true;
 }
 
