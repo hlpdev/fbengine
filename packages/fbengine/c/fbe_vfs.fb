@@ -21,6 +21,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_vfs_normalized(): CString
     Function fbe_vfs_kind(path: CString): Int32
     Function fbe_vfs_read(path: CString): Int64
+    Function fbe_vfs_read_text(path: CString): Int64
     Function fbe_vfs_read_copy(into: Ptr<UInt8>)
     Function fbe_vfs_list(path: CString): Int32
     Function fbe_vfs_list_name(index: Int32): CString

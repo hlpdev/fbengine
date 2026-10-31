@@ -108,9 +108,39 @@ Function AZipThatIsntAPakDoesntMount() Throws IOError
 End Function
 
 @Test
-Function APathNormalizesToItsCacheKey()
-    Expect(Assets.Normalize("RES://GFX\\Map\\.\\x\\..\\Door01.PNG") == "res://gfx/map/door01.png")
-    Expect(Assets.Normalize("res://") == "res://")
+Function APathNormalizesToItsCacheKey() Throws IOError
+    Expect((Try Assets.Normalize("RES://GFX\\Map\\.\\x\\..\\Door01.PNG")) ==
+           "res://gfx/map/door01.png")
+    Expect((Try Assets.Normalize("res://")) == "res://")
+    // A path from a game's data that isn't one is an IOError, not a mistake in the game's code.
+    For text In ["textures/a.png", "res://../up", "res://nul.txt", "res://a.txt."]
+        Expect(ExpectThrows<IOError>(Assets.Normalize(text))?.Kind == IOErrorKind.INVALID_PATH)
+    End For
+End Function
+
+@Test
+Function TextThatIsntUtf8ReadsWithReplacements() Throws IOError
+    Assets.MountFiles("res://test-text",
+                      {"bad.txt": [0x61, 0xFF, 0x62, 0xE2, 0x82, 0x63] As UInt8[],
+                       "good.txt": "naïve".Bytes})
+    Defer Assets.Unmount("res://test-text")
+    Expect((Try Assets.ReadText("res://test-text/bad.txt")) == "a\u{FFFD}b\u{FFFD}\u{FFFD}c")
+    Expect((Try Assets.ReadText("res://test-text/good.txt")) == "naïve")
+End Function
+
+@Test
+Function AMountedPakOnTheDiskCanBeDeleted() Throws IOError
+    Local writer = ZipWriter()
+    writer.Add("a.txt", "first".Bytes, ZipMethod.STORE)
+    Local folder = Try TempDir()
+    Local file = folder.Path / "game.pak"
+    Try File.WriteBytes(file, writer.Finish())
+    Try Assets.MountPak("res://test-deleted", file)
+    Defer Assets.Unmount("res://test-deleted")
+    // As an updater does, while the game has it mounted, which still reads it.
+    Expect(Try File.Delete(file))
+    Expect((Try Assets.ReadText("res://test-deleted/a.txt")) == "first")
+    Try folder.Close()
 End Function
 
 @Test
@@ -123,6 +153,4 @@ Function ABinaryFileReadsWhole() Throws IOError
     Defer Assets.Unmount("res://test-binary")
     Expect((Try Assets.ReadBytes("res://test-binary/data.bin")) == bytes)
     Expect((Try Assets.ReadBytes("res://test-binary/empty.bin")).Count == 0)
-    Expect(ExpectThrows<IOError>(Assets.ReadText("res://test-binary/data.bin"))?.Kind ==
-           IOErrorKind.INVALID_DATA)
 End Function
