@@ -1,15 +1,57 @@
+FetchContent_Declare(
+  Catch2
+  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+  GIT_TAG v3.16.1
+  GIT_SHALLOW TRUE
+  SYSTEM
+)
+FetchContent_Declare(
+  VulkanHeaders
+  GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+  GIT_TAG v1.4.350
+  GIT_SHALLOW TRUE
+  SYSTEM
+)
+FetchContent_Declare(
+  volk
+  GIT_REPOSITORY https://github.com/zeux/volk.git
+  GIT_TAG 1.4.350
+  GIT_SHALLOW TRUE
+  SYSTEM
+)
+FetchContent_MakeAvailable(Catch2 VulkanHeaders volk)
+
+list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+include(Catch)
+
+# ctest puts the toolchain's DLLs (MinGW's libstdc++ and friends) on PATH for the tests, so
+# they run from any terminal.
+set(fbengine_test_dll_paths "")
+if(MINGW)
+  cmake_path(GET CMAKE_CXX_COMPILER PARENT_PATH fbengine_test_dll_paths)
+endif()
+
+# Vulkan with no window, on the system's loader, which volk loads: the GPU's own driver on a
+# developer's machine, and lavapipe in CI.
+add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp)
+target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_gpu_tests)
+catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
 # The packages' own tests, run by `fb test`, and the examples, run by `fb run` and checked against
 # what they print, each after the DLLs are built into the packages' native/<target>/ folders.
-find_program(FBENGINE_FB fb REQUIRED DOC "The fb that builds and tests the packages")
+# CI's GPU jobs build without them, and without fb.
+option(FBENGINE_FB_TESTS "Test the packages and the examples with fb" ON)
+if(FBENGINE_FB_TESTS)
+  find_program(FBENGINE_FB fb REQUIRED DOC "The fb that builds and tests the packages")
 
-add_test(NAME fbengine.package
-         COMMAND "${FBENGINE_FB}" test "${PROJECT_SOURCE_DIR}/packages/fbengine")
+  add_test(NAME fbengine.package
+           COMMAND "${FBENGINE_FB}" test "${PROJECT_SOURCE_DIR}/packages/fbengine")
 
-# fb's own lines, building the program, come before what it prints.
-add_test(NAME examples.hello
-         COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/hello")
-set_tests_properties(examples.hello PROPERTIES
-                     PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
-
-# The tests use what the last build put in the packages.
-add_custom_target(fbengine_natives ALL DEPENDS fbengine_native)
+  # fb's own lines, building the program, come before what it prints.
+  add_test(NAME examples.hello
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/hello")
+  set_tests_properties(examples.hello PROPERTIES
+                       PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
+endif()
