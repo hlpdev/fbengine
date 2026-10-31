@@ -34,9 +34,12 @@ fb is the installed release (`fb --version`); fb-bindgen is beside it.
 5. **Commit and push**: as hlpdev <hunterpollock2006@gmail.com>, short lowercase messages, small
    commits, no Claude attribution, no "wip" left. Push the branch. Never force-push: a rebased
    branch whose old commits were pushed goes up as `<branch>-2`.
-6. **Report** to the coordinator: the branch, the last commit, verify.py's result, the decisions
-   taken, and a paragraph for the history, in docs/history.md's style (what the step added, by
-   name). Then start the next step, unless the coordinator says otherwise.
+6. **Report** to the coordinator by ending the turn with the report, never by a message in the
+   middle of one: the branch, the last commit, verify.py's result, the decisions taken, and a
+   paragraph for the history, in docs/history.md's style (what the step added, by name). The
+   coordinator's messages (review findings, answers) only reach a lane between turns, so a lane
+   that keeps one turn going never gets them. Then the next turn starts the next step, after any
+   findings the coordinator has sent, which come first.
 
 ## Rules
 
