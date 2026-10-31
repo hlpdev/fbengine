@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>
@@ -771,4 +772,69 @@ TEST_CASE("a mover just its radius from a box's edge goes away from it", "[scene
     fbe_world_collide(world.handle);
     // Every way it goes, if only a little toward the box.
     CHECK(ways_out(world.handle, made) == 8);
+}
+
+TEST_CASE("many movers move on the job system's workers, as they would one at a time", "[scene]") {
+    // Enough to go to the workers: two worlds alike, the second's entities in the first's freed
+    // slots, every mover walking into the others and the walls of a box, come out bit for bit the
+    // same, however the workers took the moves; and none has its middle in a wall or the floor,
+    // however they crowd.
+    const auto walk = [](std::vector<fbe_vec3_t>& ends) {
+        const test_world_t world;
+        fbe_world_set_collision(world.handle, mover_group, mover_group, FBE_RESPONSE_SLIDE);
+        box(world.handle, extent(-12.0F, -1.0F, -12.0F, 12.0F, 0.0F, 12.0F));
+        // A wall each side, 11 to 12 out, each box from its least corner to its greatest.
+        for (const auto& [low, high] : { std::pair{ -12.0F, -11.0F }, std::pair{ 11.0F, 12.0F } }) {
+            box(world.handle, extent(low, 0.0F, -12.0F, high, 3.0F, 12.0F));
+            box(world.handle, extent(-12.0F, 0.0F, low, 12.0F, 3.0F, high));
+        }
+        std::mt19937 random(21); // NOLINT(bugprone-random-generator-seed)
+        // On a grid, apart, and slower than half their radius a frame, so none closes on another
+        // faster than its radius, which squeezes one into a wall.
+        std::uniform_real_distribution<float> pace(-0.1F, 0.1F);
+        std::vector<std::uint64_t> movers;
+        std::vector<fbe_vec3_t> paces;
+        for (int i = 0; i < 200; ++i) {
+            const int across = i % 15;
+            const int along = i / 15;
+            const auto column = static_cast<float>(across);
+            const auto row = static_cast<float>(along);
+            movers.push_back(
+                mover(world.handle, -9.0F + (1.25F * column), 1.0F, -9.0F + (1.25F * row), 0.3F));
+            const float x = pace(random);
+            const float z = pace(random);
+            paces.push_back({ .x = x, .y = -0.05F, .z = z });
+        }
+        for (int frame = 0; frame < 120; ++frame) {
+            for (std::size_t i = 0; i < movers.size(); ++i) {
+                fbe_entity_translate(movers[i], paces[i].x, paces[i].y, paces[i].z,
+                                     FBE_SPACE_WORLD);
+            }
+            fbe_world_collide(world.handle);
+        }
+        ends.clear();
+        for (const std::uint64_t made : movers) {
+            ends.push_back(position(made));
+        }
+    };
+    std::vector<fbe_vec3_t> first;
+    std::vector<fbe_vec3_t> second;
+    walk(first);
+    walk(second);
+    REQUIRE(first.size() == second.size());
+    int differ = 0;
+    int out = 0;
+    const auto same = [](fbe_vec3_t a, fbe_vec3_t b) {
+        return std::bit_cast<std::uint32_t>(a.x) == std::bit_cast<std::uint32_t>(b.x) &&
+               std::bit_cast<std::uint32_t>(a.y) == std::bit_cast<std::uint32_t>(b.y) &&
+               std::bit_cast<std::uint32_t>(a.z) == std::bit_cast<std::uint32_t>(b.z);
+    };
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        differ += same(first[i], second[i]) ? 0 : 1;
+        const bool inside =
+            std::fabs(first[i].x) < 11.0F && std::fabs(first[i].z) < 11.0F && first[i].y > 0.0F;
+        out += inside ? 0 : 1;
+    }
+    CHECK(differ == 0);
+    CHECK(out == 0);
 }

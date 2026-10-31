@@ -3,11 +3,12 @@
 //
 // Each move is worked out in the mover's own space, where its ellipsoid is a sphere: y scaled by
 // its horizontal radius over its vertical. The targets are snapshot first, so every move reads
-// the same targets and writes only its own result, and the moves can run side by side; the job
-// system (E8 step 0) takes over for_each_move when it lands.
+// the same targets and writes only its own result, and the moves run side by side on the job
+// system's workers.
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "jobs/jobs.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
 #include "scene/sweep.hpp"
@@ -76,13 +77,28 @@ struct snapshot_t {
     std::vector<target_t> targets;
 };
 
-/// Runs `work` for each move. Each writes only its own result, so the job system can run them on
-/// its workers.
+/// Runs `work` for each move, on the job system's workers when there are enough to be worth
+/// waking them, a few to a job, and waits for them all: a move takes a couple of microseconds, so
+/// a room of 41 movers is done before workers would be, and 400 take a third of the time on them.
+/// Each reads only the snapshot, everything it reads worked out before (trees, world matrices,
+/// terrains' ranges), and writes only its own result, so the moves come out the same whatever runs
+/// them in whatever order.
 template <typename Work>
 void for_each_move(std::size_t count, Work&& work) {
-    for (std::size_t i = 0; i < count; ++i) {
-        work(i);
+    constexpr std::size_t worth = 64;
+    constexpr std::size_t grain = 16;
+    if (count < worth) {
+        for (std::size_t i = 0; i < count; ++i) {
+            work(i);
+        }
+        return;
     }
+    jobs_t& engine = jobs();
+    engine.wait(engine.run_for(count, grain, [&work](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+            work(i);
+        }
+    }));
 }
 
 std::uint32_t pair_of(std::int32_t source, std::int32_t target) {
@@ -625,6 +641,13 @@ void collide(std::uint32_t world_slot) {
         }
         snapshot.targets.push_back(target);
     }
+    // As the entities were made, not as their slots are, which frees elsewhere reuse: touches that
+    // tie go by the targets' order, and contacts come in the movers'.
+    std::ranges::stable_sort(snapshot.targets, {}, [&entities](const target_t& target) {
+        return entities.made[target.entity];
+    });
+    std::ranges::stable_sort(
+        movers, {}, [&entities](const mover_t& mover) { return entities.made[mover.entity]; });
 
     std::vector<result_t> results(movers.size());
     for_each_move(movers.size(), [&](std::size_t i) { results[i] = move(snapshot, movers[i]); });
