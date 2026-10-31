@@ -38,14 +38,15 @@ void atlas_t::trim() {
     }
     bool emptied = false;
     if (bytes > m_budget) {
-        // The pages no layout used since the last trim, emptied where they are.
+        // The pages no layout used since the last trim, dropped where they are.
         for (std::size_t index = 0; index < m_pages.size(); ++index) {
             page_t& page = m_pages[index];
             if (m_used[index] || m_shelves[index].empty()) {
                 continue;
             }
-            std::ranges::fill(page.pixels, std::uint8_t{ 0 });
-            page.dirty = { .x = 0, .y = 0, .width = page.width, .height = page.height };
+            page.pixels.clear();
+            page.pixels.shrink_to_fit();
+            page.dirty = {};
             ++page.version;
             m_shelves[index].clear();
             m_bottoms[index] = 0;
@@ -72,7 +73,7 @@ bool atlas_t::place(page_format_t format, std::int32_t width, std::int32_t heigh
     const std::int32_t tall = height + 2;
     for (std::size_t index = 0; index < m_pages.size(); ++index) {
         const page_t& each = m_pages[index];
-        if (each.format != format || wide > each.width) {
+        if (each.dropped() || each.format != format || wide > each.width) {
             continue;
         }
         for (shelf_t& shelf : m_shelves[index]) {
@@ -92,7 +93,19 @@ bool atlas_t::place(page_format_t format, std::int32_t width, std::int32_t heigh
             return true;
         }
     }
-    page_t made;
+    // A page trimmed made again, its number kept, all of it to upload; or a new one.
+    std::size_t index = 0;
+    while (index < m_pages.size() && !m_pages[index].dropped()) {
+        ++index;
+    }
+    if (index == m_pages.size()) {
+        m_pages.emplace_back();
+        m_shelves.emplace_back();
+        m_bottoms.push_back(0);
+        m_used.push_back(false);
+    }
+    page_t& made = m_pages[index];
+    const bool again = made.version != 0;
     made.format = format;
     made.width = std::max(page_size, wide);
     made.height = std::max(page_size, tall);
@@ -100,11 +113,12 @@ bool atlas_t::place(page_format_t format, std::int32_t width, std::int32_t heigh
                            static_cast<std::size_t>(made.height) *
                            (format == page_format_t::COLOR ? 4U : 1U),
                        0);
-    m_pages.push_back(std::move(made));
-    m_shelves.push_back({ { .y = 0, .height = tall, .used = wide } });
-    m_bottoms.push_back(tall);
-    m_used.push_back(false);
-    page = static_cast<std::uint32_t>(m_pages.size() - 1);
+    made.dirty =
+        again ? rect_t{ .x = 0, .y = 0, .width = made.width, .height = made.height } : rect_t{};
+    made.version += again ? 1 : 0;
+    m_shelves[index] = { { .y = 0, .height = tall, .used = wide } };
+    m_bottoms[index] = tall;
+    page = static_cast<std::uint32_t>(index);
     place = { .x = 1, .y = 1, .width = width, .height = height };
     return true;
 }

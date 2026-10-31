@@ -1,6 +1,6 @@
 #pragma once
 
-// The input lane's text/text.hpp as agreed (5edbaf7), for the canvas's text until its text core is
+// The input lane's text/text.hpp as agreed (bb261b8), for the canvas's text until its text core is
 // on master, when this and text_standin.cpp go and the canvas includes that.
 //
 // What the canvas reads of text: the atlas's pages, which glyphs are rasterized into, and a text
@@ -45,18 +45,27 @@ struct page_t {
     page_format_t format = page_format_t::COVERAGE;
     std::int32_t width = 0;
     std::int32_t height = 0;
-    /// Rows top down, `width` times 1 or 4 bytes each.
+    /// Rows top down, `width` times 1 or 4 bytes each; none once it's dropped.
     std::vector<std::uint8_t> pixels;
     rect_t dirty;
     std::uint64_t version = 0;
+
+    /// Whether trim's let go of it: it has no pixels, nothing's on it, and the canvas lets go of
+    /// its texture, until a glyph's placed on it, when it's made again, its number kept, perhaps
+    /// another format and size, all of it `dirty`.
+    [[nodiscard]] bool dropped() const {
+        return pixels.empty();
+    }
 };
 
 /// A glyph placed for drawing: its page, where it is on it in pixels, and the quad it goes in, in
 /// whole pixels from the text's origin, the first line's baseline at its left, y down: (x, y),
 /// `width` by `height`. Up to 512 pixels an em, the quad is the source's size, its quarter of a
-/// pixel across rasterized into it already, so drawn on pixel edges, sampled NEAREST, at a whole
-/// pixel plus (x, y), it's crisp. Past 512, glyphs are rasterized at 512 and the quad is bigger
-/// than the source, which the canvas draws scaled, sampled LINEAR.
+/// pixel across rasterized into it already (a color glyph's, or a strike's bitmap's, at the
+/// nearest pixel instead), so drawn on pixel edges, sampled NEAREST, at a whole pixel plus (x, y),
+/// it's crisp. Past 512, glyphs are rasterized at 512, and past 2048 pixels across or down,
+/// smaller, and the quad is bigger than the source, which the canvas draws scaled, sampled
+/// LINEAR.
 struct placed_glyph_t {
     std::uint32_t page = 0;
     rect_t source;
@@ -101,8 +110,8 @@ public:
     }
 
     /// What the canvas calls as a frame starts, never during one: past `budget` bytes of pages, 16
-    /// MB at first, the pages no layout used since the last trim are emptied, where they are, their
-    /// `dirty` all of them, and its generation goes up; the last frame's pages stay, however many,
+    /// MB at first, the pages no layout used since the last trim are dropped, their pixels let go
+    /// of, where they are, and its generation goes up; the last frame's pages stay, however many,
     /// so a frame that needs more than the budget isn't rasterized again each frame. Within a frame
     /// it only grows, so the frame's layouts stay drawable.
     void trim();

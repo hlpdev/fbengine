@@ -6,6 +6,7 @@
 #include "golden/golden.hpp"
 #include "gpu_testing.hpp"
 
+#include <2d/canvas.hpp>
 #include <2d/text_standin.hpp>
 #include <algorithm>
 #include <array>
@@ -304,8 +305,9 @@ TEST_CASE("a cleared atlas's pages are uploaded again, though their versions sta
 
 // Past its budget, the atlas is trimmed by a frame's first canvas draw, whatever it draws, and not
 // later in the frame, so the frame's text stays drawable: a page the last frame's text used is
-// kept, and one nothing's used since is emptied where it is, all of it uploaded again, so T where
-// I was is T, and text drawn after is laid out again.
+// kept, and one nothing's used since is dropped, its texture let go of, and made again, its number
+// kept, when a glyph's placed on it, all of it uploaded, so T where I was is T; text drawn after is
+// laid out again.
 TEST_CASE("the atlas is trimmed by a frame's first canvas draw, not during it", "[gpu]") {
     start();
     const std::uint64_t made = target(16, 8);
@@ -321,11 +323,17 @@ TEST_CASE("the atlas is trimmed by a frame's first canvas draw, not during it", 
     clear(made);
     CHECK(fbe::text::atlas().generation() == first);
     fbe_frame_flip(false);
-    // Used by none since, it's emptied.
+    // Used by none since, it's dropped, and its texture's let go of by the next text drawn, which
+    // has nothing on it; then made again.
     clear(made);
     CHECK(fbe::text::atlas().generation() == first + 1);
-    CHECK(fbe::text::atlas().pages().size() == 1);
+    REQUIRE(fbe::text::atlas().pages().size() == 1);
+    CHECK(fbe::text::atlas().pages()[0].dropped());
+    CHECK(fbe::canvas::page_textures_made() == 1);
+    draw(made, " ", 0, 0);
+    CHECK(fbe::canvas::page_textures_made() == 0);
     draw(made, "TI", 0, 0);
+    CHECK(fbe::canvas::page_textures_made() == 1);
     CHECK(fbe::text::atlas().generation() == first + 1);
     CHECK(places == 4);
     const fbe::golden::frame_t frame = read(made);

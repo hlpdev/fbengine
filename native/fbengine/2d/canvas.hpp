@@ -5,6 +5,7 @@
 
 #include "2d/fbe_2d.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -35,5 +36,8 @@ bool draw_glyphs(std::uint64_t target, const fbe_2d_pen_t* pen, std::uint64_t pa
 
 /// Trims the text atlas, as a frame's first canvas draw does, if this frame's hasn't yet.
 void trim_atlas();
+
+/// How many of the atlas's pages have a texture now, which tests count.
+std::size_t page_textures_made();
 
 } // namespace fbe::canvas

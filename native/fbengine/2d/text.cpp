@@ -11,6 +11,7 @@
 #include "gpu/vulkan.hpp"
 #include "texture/texture.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -57,6 +58,11 @@ bool upload_pages() {
     for (std::size_t at = 0; at < pages.size(); ++at) {
         fbe::text::page_t& page = atlas.page(at);
         page_texture_t& kept = page_textures[at];
+        // Trimmed away, it's nothing to draw; made again, its texture is, from all of it.
+        if (page.dropped()) {
+            release(kept);
+            continue;
+        }
         fbe::text::rect_t written = page.dirty;
         if (kept.texture == 0 || fbe::texture::find(kept.texture) == nullptr ||
             kept.width != page.width || kept.height != page.height || kept.format != page.format) {
@@ -123,6 +129,15 @@ float scale_of(std::uint64_t target) {
 }
 
 } // namespace
+
+namespace fbe::canvas {
+
+std::size_t page_textures_made() {
+    return static_cast<std::size_t>(std::ranges::count_if(
+        page_textures, [](const page_texture_t& page) { return page.texture != 0; }));
+}
+
+} // namespace fbe::canvas
 
 extern "C" {
 
