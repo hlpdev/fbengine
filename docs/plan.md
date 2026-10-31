@@ -173,6 +173,8 @@ draw, and the projection they draw with.
 5. Typed references and hot reload, through FutureBlitz's package build step.
 6. Loose ends and E8's review.
 
+Steps 0 to 3, and 4 and 5 but for running in `fb build`, done (2026-10-31, landed at d4c0dbd).
+
 ### E9: Audio (fbengine_audio)
 
 1. miniaudio in fbengine_audio_native; the device, the null backend for tests.
