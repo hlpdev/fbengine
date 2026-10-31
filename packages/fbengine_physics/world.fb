@@ -2,15 +2,21 @@
 
 Import std.collections
 Import std.core
+Import std.ffi
 Import std.math
 Import "./body"
 Import "./c/fbe_physics"
+Import "./character"
+Import "./hits"
+Import "./joint"
 Import "./physics"
+Import "./shape"
 
 /// A world of bodies, which Jolt moves on each time it's stepped: by Step, for the time a game
 /// says, or by Update, at a fixed rate for the time frames take, as most games want, since a
 /// fixed step is steady and repeats. Its axes and units are std.math's: right-handed, Y up,
-/// meters, seconds. Free frees it.
+/// meters, seconds. Its bodies are each in one of 32 layers, which collide with each other as
+/// SetCollides says, and casts hit as their `layers` say, a bit for each. Free frees it.
 ///
 /// ```
 /// Local world = PhysicsWorld()
@@ -25,8 +31,15 @@ Public Final Class PhysicsWorld
     Field mostSteps: Int32 = 4
     // The time Update was given that no step has taken yet.
     Field owed: Float64 = 0
-    // Its bodies, by handle.
+    // Its bodies, joints, and characters, by handle.
     Field bodies: Map<UInt64, Body>
+    Field joints: Map<UInt64, Joint>
+    Field characters: Map<UInt64, Character>
+    // What began and ended touching in the last Step, or the last Update's steps.
+    Field began: Contact[] = []
+    Field ended: Separation[] = []
+    // Whether Update is stepping it, so each step adds to what began and ended.
+    Field updating: Bool = False
 
     /// A world with no bodies and Earth's gravity, which keeps room for at most `maxBodies`, from 1
     /// to 1048576.
@@ -35,21 +48,23 @@ Public Final Class PhysicsWorld
             Panic("PhysicsWorld: a world is for 1 to {FBE_PHYSICS_MAX_BODIES} bodies, not {maxBodies}")
         End If
         bodies = Map<UInt64, Body>()
+        joints = Map<UInt64, Joint>()
+        characters = Map<UInt64, Character>()
         Physics.ChooseThreads()
         handle = fbe_physics_new(maxBodies As UInt32)
         If handle == 0 Then Panic("PhysicsWorld: {LastError()}")
     End New
 
-    /// Frees the world and its bodies; using any of them after panics. Freeing one that's freed
-    /// already does nothing.
+    /// Frees the world and its bodies, joints, and characters; using any of them after panics.
+    /// Freeing one that's freed already does nothing.
     @MainThread Public Method Free()
         If handle == 0 Then Return
         fbe_physics_free(handle)
         handle = 0
-        For kept In bodies.Values()
-            kept.Forget()
-        End For
+        ForgetAll()
         bodies.Clear()
+        joints.Clear()
+        characters.Clear()
     End Method
 
     // A world dropped unfreed frees itself.
@@ -57,8 +72,19 @@ Public Final Class PhysicsWorld
         If handle == 0 Then Return
         fbe_physics_free(handle)
         handle = 0
+        ForgetAll()
+    End Method
+
+    // Its bodies, joints, and characters went with it.
+    @MainThread Method ForgetAll()
         For kept In bodies.Values()
             kept.Forget()
+        End For
+        For joint In joints.Values()
+            joint.Forget()
+        End For
+        For character In characters.Values()
+            character.Forget()
         End For
     End Method
 
@@ -100,6 +126,11 @@ Public Final Class PhysicsWorld
         If !fbe_physics_step(world, seconds As Float32, steps)
             Panic("PhysicsWorld.Step: {LastError()}")
         End If
+        If !updating
+            began.Clear()
+            ended.Clear()
+        End If
+        TakeContacts()
     End Method
 
     /// How many times the world's been stepped, by Step and by Update.
@@ -124,11 +155,15 @@ Public Final Class PhysicsWorld
         Local taken = 0
         // A step's time owed but for rounding is due.
         Local due = step * 0.999
+        began.Clear()
+        ended.Clear()
+        updating = True
         While owed >= due && taken < mostSteps
             Step(step)
             owed -= step
             taken += 1
         End While
+        updating = False
         If owed >= due Then owed = 0
         Return taken
     End Method
@@ -180,6 +215,229 @@ Public Final Class PhysicsWorld
         fbe_physics_optimize(Live("PhysicsWorld.Optimize"))
     End Method
 
+    /// Makes the bodies of layers `a` and `b`, from 0 to 31, collide with each other, or not, from
+    /// the next step: a player's with a ghost's, say, or not. Every layer collides with every one at
+    /// first.
+    @MainThread Public Method SetCollides(a: Int32, b: Int32, collides: Bool)
+        If !fbe_physics_set_collides(Live("PhysicsWorld.SetCollides"), a, b, collides)
+            Panic("PhysicsWorld.SetCollides: {LastError()}")
+        End If
+    End Method
+
+    /// Whether the bodies of layers `a` and `b`, from 0 to 31, collide.
+    @MainThread Public Method Collides(a: Int32, b: Int32): Bool
+        Local world = Live("PhysicsWorld.Collides")
+        If a < 0 || a >= FBE_PHYSICS_LAYERS || b < 0 || b >= FBE_PHYSICS_LAYERS
+            Panic(
+                "PhysicsWorld.Collides: a layer is 0 to {FBE_PHYSICS_LAYERS - 1}, not {a} and {b}")
+        End If
+        Return fbe_physics_collides(world, a, b)
+    End Method
+
+    /// The nearest body of the `layers`, a bit for each, but `ignore`, that a ray from `origin`
+    /// along `direction`, which isn't 0, hits within `distance` meters, as a shot or a look at
+    /// what's ahead does, or Null for none. Casts never hit a sensor.
+    @MainThread Public Method CastRay(origin: Vec3, direction: Vec3, distance: Float,
+                                      layers: UInt32 = ALL_LAYERS, ignore: Body? = Null): Hit?
+        Local world = Live("PhysicsWorld.CastRay")
+        Local from = fbe_physics_vec3_t(origin.x, origin.y, origin.z)
+        Local along = fbe_physics_vec3_t(direction.x, direction.y, direction.z)
+        Local skip = Ignored(ignore, "PhysicsWorld.CastRay")
+        Local hit = fbe_physics_hit_t(0, from, from, 0, -1)
+        Local found = False
+        Unsafe
+            found = fbe_physics_cast_ray(world, AddressOf(from), AddressOf(along), distance, layers,
+                                         skip, AddressOf(hit))
+        End Unsafe
+        If !found
+            If LastError() != "the ray hits nothing" Then Panic("PhysicsWorld.CastRay: {LastError()}")
+            Return Null
+        End If
+        Return HitOf(hit)
+    End Method
+
+    /// Every body CastRay's ray hits, nearest first.
+    @MainThread Public Method CastRayAll(origin: Vec3, direction: Vec3, distance: Float,
+                                         layers: UInt32 = ALL_LAYERS, ignore: Body? = Null): Hit[]
+        Local world = Live("PhysicsWorld.CastRayAll")
+        Local from = fbe_physics_vec3_t(origin.x, origin.y, origin.z)
+        Local along = fbe_physics_vec3_t(direction.x, direction.y, direction.z)
+        Local skip = Ignored(ignore, "PhysicsWorld.CastRayAll")
+        Local hits = Buffer<fbe_physics_hit_t>(16)
+        Local count = 0
+        Unsafe
+            count = fbe_physics_cast_ray_all(world, AddressOf(from), AddressOf(along), distance,
+                                             layers, skip, hits.Pointer(), 16)
+            If count > 16
+                hits = Buffer<fbe_physics_hit_t>(count As Int64)
+                count = fbe_physics_cast_ray_all(world, AddressOf(from), AddressOf(along), distance,
+                                                 layers, skip, hits.Pointer(), count)
+            End If
+        End Unsafe
+        If count < 0 Then Panic("PhysicsWorld.CastRayAll: {LastError()}")
+        Local all: Hit[] = []
+        For i = 0 To count - 1
+            Local hit = HitOf(hits[i])
+            If hit != Null Then all.Add(hit)
+        End For
+        Return all
+    End Method
+
+    /// The first body of the `layers`, but `ignore`, that `shape`, at `position` and turned by
+    /// `rotation`, hits moving by `motion`, as a thrown crate's path or a camera kept out of walls
+    /// does, its Distance how far along the motion it got, or Null for none. A shape already
+    /// touching a body hits it at 0.
+    @MainThread Public Method CastShape(shape: Shape, position: Vec3, rotation: Quat, motion: Vec3,
+                                        layers: UInt32 = ALL_LAYERS, ignore: Body? = Null): Hit?
+        Local world = Live("PhysicsWorld.CastShape")
+        Local at = fbe_physics_vec3_t(position.x, position.y, position.z)
+        Local turned = fbe_physics_quat_t(rotation.x, rotation.y, rotation.z, rotation.w)
+        Local by = fbe_physics_vec3_t(motion.x, motion.y, motion.z)
+        Local of = shape.Live("PhysicsWorld.CastShape")
+        Local skip = Ignored(ignore, "PhysicsWorld.CastShape")
+        Local hit = fbe_physics_hit_t(0, at, at, 0, -1)
+        Local found = False
+        Unsafe
+            found = fbe_physics_cast_shape(world, of, AddressOf(at), AddressOf(turned),
+                                           AddressOf(by),
+                                           layers, skip, AddressOf(hit))
+        End Unsafe
+        If !found
+            If LastError() != "the shape hits nothing" Then Panic("PhysicsWorld.CastShape: {LastError()}")
+            Return Null
+        End If
+        Return HitOf(hit)
+    End Method
+
+    /// The bodies of the `layers`, but `ignore`, that `shape`, at `position` and turned by
+    /// `rotation`, touches, as an explosion reaches or a closing door would crush, in an order
+    /// that's the same each run.
+    @MainThread Public Method Overlapping(shape: Shape, position: Vec3, rotation: Quat,
+                                          layers: UInt32 = ALL_LAYERS, ignore: Body? = Null): Body[]
+        Local world = Live("PhysicsWorld.Overlapping")
+        Local at = fbe_physics_vec3_t(position.x, position.y, position.z)
+        Local turned = fbe_physics_quat_t(rotation.x, rotation.y, rotation.z, rotation.w)
+        Local of = shape.Live("PhysicsWorld.Overlapping")
+        Local skip = Ignored(ignore, "PhysicsWorld.Overlapping")
+        Local found = Buffer<UInt64>(16)
+        Local count = 0
+        Unsafe
+            count = fbe_physics_overlap(world, of, AddressOf(at), AddressOf(turned), layers, skip,
+                                        found.Pointer(), 16)
+            If count > 16
+                found = Buffer<UInt64>(count As Int64)
+                count = fbe_physics_overlap(world, of, AddressOf(at), AddressOf(turned), layers,
+                                            skip,
+                                            found.Pointer(), count)
+            End If
+        End Unsafe
+        If count < 0 Then Panic("PhysicsWorld.Overlapping: {LastError()}")
+        Return BodiesOf(found, count)
+    End Method
+
+    /// The pairs of bodies that began touching in the last Step, or in the steps of the last
+    /// Update, in an order that's the same each run: a sensor's are the bodies that came into it.
+    @MainThread Public Method Began(): Contact[]
+        Live("PhysicsWorld.Began")
+        Local all: Contact[] = []
+        all.AddAll(began)
+        Return all
+    End Method
+
+    /// The pairs of bodies that stopped touching in the last Step, or in the steps of the last
+    /// Update: a sensor's are the bodies that left it. A body that's freed stops touching what it
+    /// touched without one.
+    @MainThread Public Method Ended(): Separation[]
+        Live("PhysicsWorld.Ended")
+        Local all: Separation[] = []
+        all.AddAll(ended)
+        Return all
+    End Method
+
+    // What began and ended in the step just taken.
+    @MainThread Method TakeContacts()
+        Local count = fbe_physics_began(handle, Null, 0)
+        If count > 0
+            Local contacts = Buffer<fbe_physics_contact_t>(count As Int64)
+            Unsafe
+                fbe_physics_began(handle, contacts.Pointer(), count)
+            End Unsafe
+            For contact In contacts
+                Local a = bodies.Get(contact.a)
+                Local b = bodies.Get(contact.b)
+                If a != Null && b != Null
+                    Local at = Vec3(contact.position.x, contact.position.y, contact.position.z)
+                    Local normal = Vec3(contact.normal.x, contact.normal.y, contact.normal.z)
+                    began.Add(Contact(a, b, at, normal, contact.speed))
+                End If
+            End For
+        End If
+        Local pairs = fbe_physics_ended(handle, Null, 0)
+        If pairs > 0
+            Local both = Buffer<UInt64>((pairs * 2) As Int64)
+            Unsafe
+                fbe_physics_ended(handle, both.Pointer(), pairs)
+            End Unsafe
+            For i = 0 To pairs - 1
+                Local a = bodies.Get(both[(i * 2) As Int64])
+                Local b = bodies.Get(both[(i * 2 + 1) As Int64])
+                If a != Null && b != Null Then ended.Add(Separation(a, b))
+            End For
+        End If
+    End Method
+
+    // The Hit `hit` is, or Null for a body the world doesn't know.
+    @MainThread Method HitOf(hit: fbe_physics_hit_t): Hit?
+        Local body = bodies.Get(hit.body)
+        If body == Null Then Return Null
+        Return Hit(body, Vec3(hit.position.x, hit.position.y, hit.position.z),
+                   Vec3(hit.normal.x, hit.normal.y, hit.normal.z), hit.distance, hit.triangle)
+    End Method
+
+    // The bodies of the first `count` handles in `handles`.
+    @MainThread Package Method BodiesOf(handles: Buffer<UInt64>, count: Int32): Body[]
+        Local all: Body[] = []
+        For i = 0 To Min(count As Int64, handles.Count) - 1
+            Local body = bodies.Get(handles[i])
+            If body != Null Then all.Add(body)
+        End For
+        Return all
+    End Method
+
+    // The body `handle` is, or Null.
+    @MainThread Package Method BodyOf(handle: UInt64): Body? => bodies.Get(handle)
+
+    // Keeps `joint`, which `handle` is, until it's freed.
+    @MainThread Package Method KeepJoint(handle: UInt64, joint: Joint)
+        joints.Add(handle, joint)
+    End Method
+
+    // Forgets the joint `handle` was.
+    @MainThread Package Method DropJoint(handle: UInt64)
+        joints.Remove(handle)
+    End Method
+
+    // Forgets the joints of `body`, which C freed with it.
+    @MainThread Package Method DropJointsOf(body: Body)
+        For key In joints.Keys()
+            Local joint = joints.Get(key)
+            If joint != Null && joint.Joins(body)
+                joint.Forget()
+                joints.Remove(key)
+            End If
+        End For
+    End Method
+
+    // Keeps `character`, which `handle` is, until it's freed.
+    @MainThread Package Method KeepCharacter(handle: UInt64, character: Character)
+        characters.Add(handle, character)
+    End Method
+
+    // Forgets the character `handle` was.
+    @MainThread Package Method DropCharacter(handle: UInt64)
+        characters.Remove(handle)
+    End Method
+
     // The world's handle, for `call`, which panics once it's freed.
     @MainThread Package Method Live(call: String): UInt64
         If handle == 0 Then Panic("{call}: this PhysicsWorld was freed")
@@ -200,4 +458,11 @@ End Class
 // Jolt's suggestion: collisions found once a 60th of a second.
 Function CollisionStepsFor(seconds: Float64): Int32
     Return Clamp(Ceil(seconds * 60 - 1e-6) As Int32, 1, FBE_PHYSICS_MAX_COLLISION_STEPS)
+End Function
+
+// The handle of the body a cast ignores, 0 for none, for `call`.
+@MainThread Function Ignored(ignore: Body?, call: String): UInt64
+    Local body = ignore
+    If body == Null Then Return 0
+    Return body.Live(call)
 End Function

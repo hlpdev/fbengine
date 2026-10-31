@@ -45,14 +45,16 @@ FBE_PHYSICS_API uint64_t fbe_body_add(uint64_t world, uint64_t shape, int32_t mo
                                       const fbe_body_vec3_t* position,
                                       const fbe_body_quat_t* rotation);
 
-// Frees `body`, taking it out of its world; false if it isn't a body.
+// Frees `body`, taking it out of its world, with its joints; false if it isn't a body, or is a
+// character's, which goes with its character.
 FBE_PHYSICS_API bool fbe_body_free(uint64_t body);
 
 // How `body` moves, FBE_BODY_STATIC to FBE_BODY_KINEMATIC, or -1 if it isn't a body.
 FBE_PHYSICS_API int32_t fbe_body_motion(uint64_t body);
 
 // Makes a dynamic `body` kinematic, or a kinematic one dynamic; false if it isn't a body, it's
-// static or would be, or it would be dynamic of a shape fbe_body_add refuses a dynamic one.
+// static or would be, it would be dynamic of a shape fbe_body_add refuses a dynamic one, or it's a
+// character's, which only its character moves.
 FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion);
 
 // Where `body` is, and how it's turned; false if it isn't a body.
@@ -60,7 +62,7 @@ FBE_PHYSICS_API bool fbe_body_position(uint64_t body, fbe_body_vec3_t* position)
 FBE_PHYSICS_API bool fbe_body_rotation(uint64_t body, fbe_body_quat_t* rotation);
 
 // Puts `body` at `position`, or turns it to `rotation`, at once, waking it; false if it isn't a
-// body, or the vector or rotation isn't finite, or the rotation is 0.
+// body, or is a character's, or the vector or rotation isn't finite, or the rotation is 0.
 FBE_PHYSICS_API bool fbe_body_set_position(uint64_t body, const fbe_body_vec3_t* position);
 FBE_PHYSICS_API bool fbe_body_set_rotation(uint64_t body, const fbe_body_quat_t* rotation);
 
@@ -68,8 +70,8 @@ FBE_PHYSICS_API bool fbe_body_set_rotation(uint64_t body, const fbe_body_quat_t*
 FBE_PHYSICS_API bool fbe_body_velocity(uint64_t body, fbe_body_vec3_t* velocity);
 FBE_PHYSICS_API bool fbe_body_angular_velocity(uint64_t body, fbe_body_vec3_t* velocity);
 
-// Sets how fast `body` moves or turns, waking it; false if it isn't a body, it's static, or the
-// vector isn't finite.
+// Sets how fast `body` moves or turns, waking it; false if it isn't a body, it's static or a
+// character's, or the vector isn't finite.
 FBE_PHYSICS_API bool fbe_body_set_velocity(uint64_t body, const fbe_body_vec3_t* velocity);
 FBE_PHYSICS_API bool fbe_body_set_angular_velocity(uint64_t body, const fbe_body_vec3_t* velocity);
 
@@ -127,6 +129,24 @@ FBE_PHYSICS_API bool fbe_body_active(uint64_t body);
 // Wakes `body`, or puts it to sleep; false if it isn't a body.
 FBE_PHYSICS_API bool fbe_body_wake(uint64_t body);
 FBE_PHYSICS_API bool fbe_body_sleep(uint64_t body);
+
+// The layer `body` is in, 0 to 31, 0 at first, which its world says what it collides with of; -1
+// if it isn't a body.
+FBE_PHYSICS_API int32_t fbe_body_layer(uint64_t body);
+
+// Puts `body` in `layer`, from the next step; false if it isn't a body or the layer's out of range.
+FBE_PHYSICS_API bool fbe_body_set_layer(uint64_t body, int32_t layer);
+
+// Whether `body` is a sensor, which collides with nothing, but says what comes into it and leaves
+// it, as a trigger does; a static one notices what moves, a kinematic one what doesn't, too.
+FBE_PHYSICS_API bool fbe_body_sensor(uint64_t body);
+
+// Makes `body` a sensor, or not, waking it; false if it isn't a body, or is a character's.
+FBE_PHYSICS_API bool fbe_body_set_sensor(uint64_t body, bool sensor);
+
+// The bodies `body` touches, or that are in it if it's a sensor, as of the last step, up to
+// `capacity` of them in `bodies`, giving how many there are, -1 if it isn't a body.
+FBE_PHYSICS_API int32_t fbe_body_touching(uint64_t body, uint64_t* bodies, int32_t capacity);
 
 #ifdef __cplusplus
 }

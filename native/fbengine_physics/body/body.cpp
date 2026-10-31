@@ -13,6 +13,7 @@
 #include <Jolt/Physics/Body/BodyLockInterface.h>
 #include <Jolt/Physics/Body/MotionProperties.h>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -28,6 +29,8 @@ struct body_t {
     bool weighed;
     // Whether its shape can be dynamic: weighed, and with no mesh in it.
     bool can_be_dynamic;
+    // Whether it's a character's, which moves it.
+    bool character = false;
 
     [[nodiscard]] JPH::BodyInterface& bodies() const {
         return world->system.GetBodyInterfaceNoLock();
@@ -47,6 +50,17 @@ body_t* find(std::uint64_t handle) {
     body_t* body = bodies().get(handle);
     if (body == nullptr) {
         fail(handle == 0 ? "there's no body" : "the body was freed");
+    }
+    return body;
+}
+
+// The body `handle` is, if it isn't a character's, which `doing` would move it as its character
+// doesn't.
+body_t* find_own(std::uint64_t handle) {
+    body_t* body = find(handle);
+    if (body != nullptr && body->character) {
+        fail("a character's body goes as its character goes");
+        return nullptr;
     }
     return body;
 }
@@ -174,7 +188,10 @@ void free_bodies(world_t& world) {
     std::vector<JPH::BodyID> ids;
     ids.reserve(world.bodies.size());
     for (const std::uint64_t handle : world.bodies) {
-        ids.push_back(bodies().get(handle)->id);
+        // A character's goes with its character.
+        if (!bodies().get(handle)->character) {
+            ids.push_back(bodies().get(handle)->id);
+        }
         bodies().remove(handle);
     }
     if (!ids.empty()) {
@@ -183,6 +200,34 @@ void free_bodies(world_t& world) {
         face.DestroyBodies(ids.data(), static_cast<int>(ids.size()));
     }
     world.bodies.clear();
+}
+
+JPH::Body* find_body(std::uint64_t handle, world_t*& world) {
+    const body_t* found = find(handle);
+    if (found == nullptr) {
+        return nullptr;
+    }
+    world = found->world;
+    return &found->body();
+}
+
+std::uint64_t add_character_body(world_t& world, JPH::BodyID id) {
+    auto body = std::make_unique<body_t>(&world, id, world.bodies.size(), true, false);
+    body->character = true;
+    const std::uint64_t handle = bodies().add(std::move(body));
+    world.bodies.push_back(handle);
+    return handle;
+}
+
+void drop_character_body(std::uint64_t handle) {
+    const body_t* found = bodies().get(handle);
+    if (found == nullptr) {
+        return;
+    }
+    forget_contacts(*found->world, found->id);
+    free_joints_of(*found->world, handle);
+    forget(*found);
+    bodies().remove(handle);
 }
 
 } // namespace fbe::physics
@@ -218,8 +263,7 @@ FBE_PHYSICS_API uint64_t fbe_body_add(uint64_t world, uint64_t shape, int32_t mo
     }
 
     const bool moves = type != JPH::EMotionType::Static;
-    JPH::BodyCreationSettings settings(of, at, turned, type,
-                                       moves ? moving_layer : not_moving_layer);
+    JPH::BodyCreationSettings settings(of, at, turned, type, object_layer(0, moves));
     if (moves && !weighed) {
         // A kinematic mesh weighs nothing, since nothing pushes it; Jolt asks for a mass all the
         // same.
@@ -244,10 +288,12 @@ FBE_PHYSICS_API uint64_t fbe_body_add(uint64_t world, uint64_t shape, int32_t mo
 }
 
 FBE_PHYSICS_API bool fbe_body_free(uint64_t body) {
-    const body_t* found = find(body);
+    const body_t* found = find_own(body);
     if (found == nullptr) {
         return false;
     }
+    free_joints_of(*found->world, body);
+    forget_contacts(*found->world, found->id);
     JPH::BodyInterface& face = found->bodies();
     face.RemoveBody(found->id);
     face.DestroyBody(found->id);
@@ -273,7 +319,7 @@ FBE_PHYSICS_API int32_t fbe_body_motion(uint64_t body) {
 }
 
 FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion_type) {
-    const body_t* found = find(body);
+    const body_t* found = find_own(body);
     JPH::EMotionType type{};
     if (found == nullptr || !motion(motion_type, type)) {
         return false;
@@ -303,13 +349,13 @@ FBE_PHYSICS_API bool fbe_body_rotation(uint64_t body, fbe_body_quat_t* rotation)
 }
 
 FBE_PHYSICS_API bool fbe_body_set_position(uint64_t body, const fbe_body_vec3_t* position) {
-    return push(body, position, [](const body_t& b, JPH::Vec3Arg v) {
-        b.bodies().SetPosition(b.id, v, JPH::EActivation::Activate);
-    });
+    return find_own(body) != nullptr && push(body, position, [](const body_t& b, JPH::Vec3Arg v) {
+               b.bodies().SetPosition(b.id, v, JPH::EActivation::Activate);
+           });
 }
 
 FBE_PHYSICS_API bool fbe_body_set_rotation(uint64_t body, const fbe_body_quat_t* rotation) {
-    const body_t* found = find(body);
+    const body_t* found = find_own(body);
     JPH::Quat turned;
     if (found == nullptr || !quat(*rotation, turned)) {
         return false;
@@ -329,13 +375,13 @@ FBE_PHYSICS_API bool fbe_body_angular_velocity(uint64_t body, fbe_body_vec3_t* v
 }
 
 FBE_PHYSICS_API bool fbe_body_set_velocity(uint64_t body, const fbe_body_vec3_t* velocity) {
-    return find_moving(body, "velocity") != nullptr &&
+    return find_own(body) != nullptr && find_moving(body, "velocity") != nullptr &&
            push(body, velocity,
                 [](const body_t& b, JPH::Vec3Arg v) { b.bodies().SetLinearVelocity(b.id, v); });
 }
 
 FBE_PHYSICS_API bool fbe_body_set_angular_velocity(uint64_t body, const fbe_body_vec3_t* velocity) {
-    return find_moving(body, "angular velocity") != nullptr &&
+    return find_own(body) != nullptr && find_moving(body, "angular velocity") != nullptr &&
            push(body, velocity,
                 [](const body_t& b, JPH::Vec3Arg v) { b.bodies().SetAngularVelocity(b.id, v); });
 }
@@ -484,6 +530,60 @@ FBE_PHYSICS_API bool fbe_body_sleep(uint64_t body) {
     }
     found->bodies().DeactivateBody(found->id);
     return true;
+}
+
+FBE_PHYSICS_API int32_t fbe_body_layer(uint64_t body) {
+    const body_t* found = find(body);
+    return found != nullptr ? static_cast<int32_t>(layer_of(found->body().GetObjectLayer())) : -1;
+}
+
+FBE_PHYSICS_API bool fbe_body_set_layer(uint64_t body, int32_t layer) {
+    const body_t* found = find(body);
+    if (found == nullptr) {
+        return false;
+    }
+    if (layer < 0 || layer >= FBE_PHYSICS_LAYERS) {
+        return fail(std::format("a layer is 0 to {}, not {}", FBE_PHYSICS_LAYERS - 1, layer));
+    }
+    found->bodies().SetObjectLayer(
+        found->id, object_layer(static_cast<std::uint32_t>(layer), !found->body().IsStatic()));
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_body_sensor(uint64_t body) {
+    const body_t* found = find(body);
+    return found != nullptr && found->body().IsSensor();
+}
+
+FBE_PHYSICS_API bool fbe_body_set_sensor(uint64_t body, bool sensor) {
+    const body_t* found = find_own(body);
+    if (found == nullptr) {
+        return false;
+    }
+    JPH::Body& made = found->body();
+    made.SetIsSensor(sensor);
+    // A kinematic sensor notices what doesn't move, and other kinematic bodies, too.
+    made.SetCollideKinematicVsNonDynamic(sensor && made.IsKinematic());
+    found->bodies().ActivateBody(found->id);
+    return true;
+}
+
+FBE_PHYSICS_API int32_t fbe_body_touching(uint64_t body, uint64_t* bodies, int32_t capacity) {
+    const body_t* found = find(body);
+    if (found == nullptr) {
+        return -1;
+    }
+    std::int32_t count = 0;
+    for (const auto& [key, pair] : found->world->touching) {
+        if (pair.a != body && pair.b != body) {
+            continue;
+        }
+        if (count < capacity) {
+            bodies[count] = pair.a == body ? pair.b : pair.a;
+        }
+        ++count;
+    }
+    return count;
 }
 
 } // extern "C"

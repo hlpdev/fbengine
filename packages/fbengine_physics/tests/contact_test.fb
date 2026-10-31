@@ -1,0 +1,186 @@
+// Contacts, sensors, and layers: what began and ended touching, what's in a trigger, and which
+// layers collide.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import fbengine_physics
+
+Function Run(world: PhysicsWorld, seconds: Float64)
+    For i = 1 To Round(seconds * 60) As Int
+        world.Step(1.0 / 60)
+    End For
+End Function
+
+Function Floored(): (PhysicsWorld, Body)
+    Local world = PhysicsWorld()
+    Local floor = Body(world, Shape.Box(Vec3(40, 1, 40)), Motion.STATIC, Vec3(0, -0.5, 0))
+    Return (world, floor)
+End Function
+
+// Whether `contacts` has one between `a` and `b`, either way round.
+Function Between(contacts: Contact[], a: Body, b: Body): Contact?
+    For contact In contacts
+        If (contact.A == a && contact.B == b) || (contact.A == b && contact.B == a) Then Return contact
+    End For
+    Return Null
+End Function
+
+Function Parted(separations: Separation[], a: Body, b: Body): Bool
+    For separation In separations
+        If (separation.A == a && separation.B == b) || (separation.A == b && separation.B == a)
+            Return True
+        End If
+    End For
+    Return False
+End Function
+
+@Test
+Function ABallLandingBeginsTouchingTheFloorOnce()
+    Local world, floor = Floored()
+    Defer world.Free()
+    // From 5 m up, it meets the floor at about 9.9 m/s.
+    Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 5.5, 0))
+    Local landed: Contact? = Null
+    Local times = 0
+    For i = 1 To 120
+        world.Step(1.0 / 60)
+        Local contact = Between(world.Began(), ball, floor)
+        If contact != Null
+            landed = contact
+            times += 1
+        End If
+    End For
+    Expect(times == 1)
+    Expect(landed != Null)
+    Local speed = landed?.Speed ?? 0
+    Expect(speed > 8 && speed < 11, "it met the floor at {speed} m/s")
+    // The normal's from A to B: down, from the ball to the floor, or up from the floor.
+    Local normal = landed?.Normal ?? Vec3(0, 0, 0)
+    Local down = landed?.A == ball ? Vec3(0, -1, 0) : Vec3(0, 1, 0)
+    Expect(Distance(normal, down) < 0.01)
+    Expect(ball.Touching().Contains(floor))
+    Expect(floor.Touching().Contains(ball))
+End Function
+
+@Test
+Function UpdateGathersWhatBeganInAllItsSteps()
+    Local world, floor = Floored()
+    Defer world.Free()
+    Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 0.6, 0))
+    world.SetMaxSteps(100)
+    // A second's steps at once, which the ball lands in.
+    world.Update(1.0)
+    Expect(Between(world.Began(), ball, floor) != Null)
+    world.Update(1.0 / 60)
+    Expect(world.Began().Count == 0)
+End Function
+
+@Test
+Function ASensorNoticesWhatComesInAndLeavesButStopsNothing()
+    Local world, floor = Floored()
+    Defer world.Free()
+    Local trigger = Body(world, Shape.Box(Vec3(2, 1, 2)), Motion.STATIC, Vec3(0, 5, 0))
+    trigger.SetSensor(True)
+    Expect(trigger.Sensor())
+    Local ball = Body(world, Shape.Sphere(0.25), Motion.DYNAMIC, Vec3(0, 8, 0))
+    Local entered = False
+    Local left = False
+    Local inside = False
+    For i = 1 To 120
+        world.Step(1.0 / 60)
+        If Between(world.Began(), trigger, ball) != Null Then entered = True
+        If Parted(world.Ended(), trigger, ball) Then left = True
+        If trigger.Touching().Contains(ball) Then inside = True
+    End For
+    Expect(entered && inside && left)
+    // It fell through, to the floor.
+    Expect(ball.Position().y < 0.3)
+    Expect(!trigger.Touching().Contains(ball))
+End Function
+
+@Test
+Function LayersThatDontCollidePassThrough()
+    Local world, floor = Floored()
+    Defer world.Free()
+    floor.SetLayer(2)
+    Local ghost = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 2, 0))
+    ghost.SetLayer(1)
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(3, 2, 0))
+    crate.SetLayer(1)
+    Expect(world.Collides(1, 2))
+    world.SetCollides(1, 2, False)
+    Expect(!world.Collides(1, 2) && !world.Collides(2, 1))
+    Expect(world.Collides(1, 1))
+    // The crate's layer collides with the floor's again.
+    crate.SetLayer(3)
+    Run(world, 2.0)
+    Expect(ghost.Position().y < -5)
+    Expect(crate.Position().y > 0.4)
+End Function
+
+@Test
+Function AFreedBodyStopsTouchingWithNoEnd()
+    Local world, floor = Floored()
+    Defer world.Free()
+    Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 0.5, 0))
+    Run(world, 0.5)
+    Expect(floor.Touching().Contains(ball))
+    ball.Free()
+    Expect(floor.Touching().Count == 0)
+    world.Step(1.0 / 60)
+    Expect(world.Ended().Count == 0)
+End Function
+
+// The same world, made and stepped the same way twice, says the same in the same order.
+@Test
+Function ContactsComeInTheSameOrderEachRun()
+    Local first = Landings()
+    Local second = Landings()
+    Expect(first == second)
+    Expect(first.Count > 0)
+End Function
+
+Function Landings(): String[]
+    Local world, floor = Floored()
+    Defer world.Free()
+    Local balls: Body[] = []
+    For i = 0 To 19
+        balls.Add(Body(world, Shape.Sphere(0.3), Motion.DYNAMIC,
+                       Vec3(((i % 5) As Float) * 0.7, 1 + ((i / 5) As Float) * 0.8, 0)))
+    End For
+    Local said: String[] = []
+    For step = 1 To 120
+        world.Step(1.0 / 60)
+        For contact In world.Began()
+            said.Add("{step}: {balls.IndexOf(contact.A) ?? -1} {balls.IndexOf(contact.B) ?? -1} {contact.Position}")
+        End For
+    End For
+    Return said
+End Function
+
+// Jolt forgets what sleeping bodies touch; they still touch it, until they're moved away.
+@Test
+Function ABodyAsleepInASensorIsStillInItUntilItLeaves()
+    Local world, floor = Floored()
+    Defer world.Free()
+    Local zone = Body(world, Shape.Box(Vec3(4, 2, 4)), Motion.STATIC, Vec3(0, 1, 0))
+    zone.SetSensor(True)
+    Local ball = Body(world, Shape.Sphere(0.25), Motion.DYNAMIC, Vec3(0, 1, 0))
+    Run(world, 4.0)
+    Expect(!ball.Active())
+    Expect(zone.Touching().Contains(ball))
+    Expect(floor.Touching().Contains(ball))
+    // Asleep, nothing ends.
+    Run(world, 1.0)
+    Expect(world.Ended().Count == 0)
+    Expect(zone.Touching().Contains(ball))
+    // Taken out, it leaves the zone, and the floor.
+    ball.SetPosition(Vec3(10, 5, 0))
+    world.Step(1.0 / 60)
+    Expect(Parted(world.Ended(), zone, ball))
+    Expect(Parted(world.Ended(), floor, ball))
+    Expect(!zone.Touching().Contains(ball))
+    Expect(world.Began().Count == 0)
+End Function

@@ -27,11 +27,6 @@ using namespace fbe::physics;
 
 thread_local std::string last_error;
 
-// Jolt's broad phase layers, one for each object layer.
-constexpr JPH::BroadPhaseLayer not_moving_broad_phase{ 0 };
-constexpr JPH::BroadPhaseLayer moving_broad_phase{ 1 };
-constexpr std::uint32_t broad_phase_layer_count = 2;
-
 // What a step's jobs can be, as Jolt's samples have them.
 constexpr std::uint32_t max_jobs = 2048;
 constexpr std::uint32_t max_barriers = 64;
@@ -146,19 +141,18 @@ bool normalized(float x, float y, float z, float w, JPH::Quat& made) {
     return true;
 }
 
-world_t::world_t(std::uint32_t max_bodies)
-    : broad_phase_layers(object_layer_count, broad_phase_layer_count),
-      object_layers(object_layer_count) {
-    broad_phase_layers.MapObjectToBroadPhaseLayer(not_moving_layer, not_moving_broad_phase);
-    broad_phase_layers.MapObjectToBroadPhaseLayer(moving_layer, moving_broad_phase);
-    object_layers.EnableCollision(not_moving_layer, moving_layer);
-    object_layers.EnableCollision(moving_layer, moving_layer);
-    // It reads the layers as it's made.
-    object_vs_broad_phase = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(
-        broad_phase_layers, broad_phase_layer_count, object_layers, object_layer_count);
+world_t::world_t(std::uint32_t max_bodies) {
     system.Init(max_bodies, 0, std::max(max_bodies, fewest_pairs),
-                std::max(max_bodies / 2, fewest_pairs), broad_phase_layers, *object_vs_broad_phase,
-                object_layers);
+                std::max(max_bodies / 2, fewest_pairs), broad_phase, object_vs_broad_phase, layers);
+    system.SetContactListener(&contact_listener);
+}
+
+// Its joints go before the bodies they join, and its characters, which own theirs, before the
+// rest of its bodies.
+world_t::~world_t() {
+    free_joints(*this);
+    free_characters(*this);
+    free_bodies(*this);
 }
 
 bool fail(std::string_view message) {
@@ -225,11 +219,10 @@ FBE_PHYSICS_API uint64_t fbe_physics_new(uint32_t max_bodies) {
 }
 
 FBE_PHYSICS_API bool fbe_physics_free(uint64_t world) {
-    world_t* found = find_world(world);
+    const world_t* found = find_world(world);
     if (found == nullptr) {
         return false;
     }
-    free_bodies(*found);
     return worlds().remove(world);
 }
 
@@ -287,6 +280,9 @@ FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t col
         return fail(std::format("a step finds collisions 1 to {} times, not {}",
                                 FBE_PHYSICS_MAX_COLLISION_STEPS, collision_steps));
     }
+    found->began.clear();
+    found->ended.clear();
+    before_contacts(*found);
     JPH::EPhysicsUpdateError errors = JPH::EPhysicsUpdateError::None;
     for (std::int32_t done = 0; done < collision_steps;) {
         const std::int32_t these = std::min(collision_steps - done, collision_steps_an_update);
@@ -297,6 +293,7 @@ FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t col
     }
     found->overflowed = errors != JPH::EPhysicsUpdateError::None;
     found->changes = 0;
+    take_contacts(*found);
     ++found->steps;
     return true;
 }
@@ -309,6 +306,30 @@ FBE_PHYSICS_API int64_t fbe_physics_steps(uint64_t world) {
 FBE_PHYSICS_API bool fbe_physics_overflowed(uint64_t world) {
     const world_t* found = find_world(world);
     return found != nullptr && found->overflowed;
+}
+
+FBE_PHYSICS_API bool fbe_physics_set_collides(uint64_t world, int32_t a, int32_t b, bool collides) {
+    world_t* found = find_world(world);
+    if (found == nullptr) {
+        return false;
+    }
+    if (a < 0 || a >= FBE_PHYSICS_LAYERS || b < 0 || b >= FBE_PHYSICS_LAYERS) {
+        return fail(std::format("a layer is 0 to {}, not {} and {}", FBE_PHYSICS_LAYERS - 1, a, b));
+    }
+    found->layers.set_collides(static_cast<std::uint32_t>(a), static_cast<std::uint32_t>(b),
+                               collides);
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_physics_collides(uint64_t world, int32_t a, int32_t b) {
+    const world_t* found = find_world(world);
+    if (found == nullptr) {
+        return false;
+    }
+    if (a < 0 || a >= FBE_PHYSICS_LAYERS || b < 0 || b >= FBE_PHYSICS_LAYERS) {
+        return fail(std::format("a layer is 0 to {}, not {} and {}", FBE_PHYSICS_LAYERS - 1, a, b));
+    }
+    return found->layers.collides(static_cast<std::uint32_t>(a), static_cast<std::uint32_t>(b));
 }
 
 } // extern "C"

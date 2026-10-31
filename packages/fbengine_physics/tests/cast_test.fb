@@ -1,0 +1,179 @@
+// Casts: rays, swept shapes, and overlaps, by layer, ignoring a body and every sensor.
+
+Import std.collections
+Import std.core
+Import std.ffi
+Import std.math
+Import std.test
+Import fbengine_physics
+Import fbengine_physics.c.fbe_physics
+
+Function Near(a: Float, b: Float, within: Float = 0.01): Bool => Abs(a - b) <= within
+
+Function Near(a: Vec3, b: Vec3, within: Float = 0.01): Bool => Distance(a, b) <= within
+
+// A floor whose top is at y = 0, and a crate 1 across on it at (0, 2, 0), held there kinematic.
+Function Scene(): (PhysicsWorld, Body, Body)
+    Local world = PhysicsWorld()
+    Local floor = Body(world, Shape.Box(Vec3(20, 1, 20)), Motion.STATIC, Vec3(0, -0.5, 0))
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.KINEMATIC, Vec3(0, 2, 0))
+    Return (world, floor, crate)
+End Function
+
+@Test
+Function ARayHitsTheNearestBodyAtItsSurface()
+    Local world, floor, crate = Scene()
+    Defer world.Free()
+    Local hit = world.CastRay(Vec3(0, 10, 0), Vec3(0, -1, 0), 100)
+    Expect(hit != Null)
+    Expect(hit?.Body == crate)
+    Expect(Near(hit?.Position ?? Vec3(0, 0, 0), Vec3(0, 2.5, 0)))
+    Expect(Near(hit?.Normal ?? Vec3(0, 0, 0), Vec3(0, 1, 0)))
+    Expect(Near(hit?.Distance ?? 0, 7.5))
+    Expect(hit?.Triangle == -1)
+    // Beside the crate, the floor.
+    Local beside = world.CastRay(Vec3(5, 10, 0), Vec3(0, -2, 0), 100)
+    Expect(beside?.Body == floor)
+    Expect(Near(beside?.Distance ?? 0, 10))
+End Function
+
+@Test
+Function ARayThatHitsNothingIsNull()
+    Local world, floor, crate = Scene()
+    Defer world.Free()
+    Expect(world.CastRay(Vec3(0, 10, 0), Vec3(0, 1, 0), 100) == Null)
+    // Nor anything past its distance.
+    Expect(world.CastRay(Vec3(0, 10, 0), Vec3(0, -1, 0), 7) == Null)
+End Function
+
+@Test
+Function ARayIgnoresItsBodyAndEverySensor()
+    Local world, floor, crate = Scene()
+    Defer world.Free()
+    Local trigger = Body(world, Shape.Box(Vec3(4, 1, 4)), Motion.STATIC, Vec3(0, 5, 0))
+    trigger.SetSensor(True)
+    Local hit = world.CastRay(Vec3(0, 10, 0), Vec3(0, -1, 0), 100, ALL_LAYERS, crate)
+    Expect(hit?.Body == floor)
+    Expect(Near(hit?.Distance ?? 0, 10))
+End Function
+
+@Test
+Function ARayHitsOnlyTheLayersItsGiven()
+    Local world, floor, crate = Scene()
+    Defer world.Free()
+    crate.SetLayer(3)
+    Expect(crate.Layer() == 3)
+    Expect(floor.Layer() == 0)
+    Local past = world.CastRay(Vec3(0, 10, 0), Vec3(0, -1, 0), 100, ALL_LAYERS & ~(1 << 3))
+    Expect(past?.Body == floor)
+    Local only = world.CastRay(Vec3(0, 10, 0), Vec3(0, -1, 0), 100, 1 << 3)
+    Expect(only?.Body == crate)
+    Expect(world.CastRay(Vec3(0, 10, 0), Vec3(0, -1, 0), 100, 1 << 5) == Null)
+End Function
+
+@Test
+Function ARayHitsAMeshsTriangleByItsNumber() Throws ShapeError
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    // Two triangles facing up: 0 over x < z, 1 over x > z.
+    Local corners: Vec3[] = [Vec3(-5, 0, -5), Vec3(5, 0, -5), Vec3(5, 0, 5), Vec3(-5, 0, 5)]
+    Local ground = Body(world, Try Shape.Mesh(corners, [0, 3, 2, 0, 2, 1]), Motion.STATIC,
+                        Vec3(0, 0, 0))
+    Local first = world.CastRay(Vec3(-2, 5, 2), Vec3(0, -1, 0), 10)
+    Expect(first?.Body == ground)
+    Expect(first?.Triangle == 0)
+    Local second = world.CastRay(Vec3(2, 5, -2), Vec3(0, -1, 0), 10)
+    Expect(second?.Triangle == 1)
+    Expect(Near(second?.Normal ?? Vec3(0, 0, 0), Vec3(0, 1, 0)))
+End Function
+
+@Test
+Function CastRayAllHitsEveryBodyNearestFirst()
+    Local world, floor, crate = Scene()
+    Defer world.Free()
+    Local hits = world.CastRayAll(Vec3(0, 10, 0), Vec3(0, -1, 0), 100)
+    Expect(hits.Count == 2)
+    Expect(hits[0].Body == crate)
+    Expect(hits[1].Body == floor)
+    Expect(hits[0].Distance < hits[1].Distance)
+End Function
+
+@Test
+Function AShapeCastHitsWhatItsPathMeets()
+    Local world, floor, crate = Scene()
+    Defer world.Free()
+    Local ball = Shape.Sphere(0.5)
+    Local hit = world.CastShape(ball, Vec3(0, 10, 0), Quat(0, 0, 0, 1), Vec3(0, -20, 0))
+    Expect(hit?.Body == crate)
+    // Its bottom meets the crate's top at 2.5.
+    Expect(Near(hit?.Distance ?? 0, 7, 0.05))
+    Expect(Near(hit?.Normal ?? Vec3(0, 0, 0), Vec3(0, 1, 0), 0.05))
+    Expect(world.CastShape(ball, Vec3(0, 10, 0), Quat(0, 0, 0, 1), Vec3(0, 20, 0)) == Null)
+    // Already touching the floor, it hits it at 0.
+    Local touching = world.CastShape(ball, Vec3(5, 0.25, 0), Quat(0, 0, 0, 1), Vec3(0, -1, 0))
+    Expect(touching?.Body == floor)
+    Expect(Near(touching?.Distance ?? 1, 0))
+End Function
+
+@Test
+Function OverlappingIsTheBodiesAShapeTouches()
+    Local world, floor, crate = Scene()
+    Defer world.Free()
+    Local small = Shape.Box(Vec3(0.5, 0.5, 0.5))
+    Local inCrate = world.Overlapping(small, Vec3(0, 2, 0), Quat(0, 0, 0, 1))
+    Expect(inCrate.Count == 1)
+    Expect(inCrate[0] == crate)
+    Local tall = Shape.Box(Vec3(1, 10, 1))
+    Local both = world.Overlapping(tall, Vec3(0, 0, 0), Quat(0, 0, 0, 1))
+    Expect(both.Count == 2)
+    Expect(both.Contains(floor) && both.Contains(crate))
+    Expect(world.Overlapping(tall, Vec3(0, 0, 0), Quat(0, 0, 0, 1), ALL_LAYERS, crate).Count == 1)
+    Expect(world.Overlapping(small, Vec3(0, 20, 0), Quat(0, 0, 0, 1)).Count == 0)
+End Function
+
+// More hits than the first try's room for are all given.
+@Test
+Function ManyHitsAreAllGiven()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local plate = Shape.Box(Vec3(4, 0.1, 4))
+    For i = 0 To 39
+        Body(world, plate, Motion.STATIC, Vec3(0, i As Float, 0))
+    End For
+    Expect(world.CastRayAll(Vec3(0, 50, 0), Vec3(0, -1, 0), 100).Count == 40)
+    Expect(world.Overlapping(Shape.Box(Vec3(1, 100, 1)), Vec3(0, 0, 0), Quat(0, 0, 0, 1)).Count ==
+           40)
+End Function
+
+@Test @MainThread
+Function TheCApiRefusesCastsItDoesntTake()
+    Local world = fbe_physics_new(10)
+    Defer fbe_physics_free(world)
+    Local from = fbe_physics_vec3_t(0, 0, 0)
+    Local nowhere = fbe_physics_vec3_t(0, 0, 0)
+    Local down = fbe_physics_vec3_t(0, -1, 0)
+    Local hit = fbe_physics_hit_t(0, from, from, 0, -1)
+    Unsafe
+        Expect(!fbe_physics_cast_ray(world, AddressOf(from), AddressOf(nowhere), 10, ALL_LAYERS, 0,
+                                     AddressOf(hit)))
+        Expect(Error() == "a ray is from a finite origin along a finite direction that isn't 0")
+        Expect(!fbe_physics_cast_ray(world, AddressOf(from), AddressOf(down), -1, ALL_LAYERS, 0,
+                                     AddressOf(hit)))
+        Expect(Error() == "a ray goes 0 meters or more, not -1")
+        Expect(!fbe_physics_cast_ray(world, AddressOf(from), AddressOf(down), 10, ALL_LAYERS, 0,
+                                     AddressOf(hit)))
+        Expect(Error() == "the ray hits nothing")
+        Expect(!fbe_physics_cast_ray(world, AddressOf(from), AddressOf(down), 10, ALL_LAYERS, world,
+                                     AddressOf(hit)))
+        Expect(Error() == "the body was freed")
+    End Unsafe
+    Expect(!fbe_physics_set_collides(world, 0, 32, True))
+    Expect(Error() == "a layer is 0 to 31, not 0 and 32")
+    Expect(!fbe_physics_collides(world, -1, 0))
+End Function
+
+@MainThread Function Error(): String
+    Unsafe
+        Return fbe_physics_error().ToString()
+    End Unsafe
+End Function

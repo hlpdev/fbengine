@@ -88,6 +88,11 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/falling_boxes")
   set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION
                        "\n200 boxes fell, 200 came to rest, 100 on others\r?\n$")
+  add_test(NAME examples.door_and_trigger
+           COMMAND "${FBENGINE_FB}" --color never run
+                   "${PROJECT_SOURCE_DIR}/examples/door_and_trigger")
+  set_tests_properties(examples.door_and_trigger PROPERTIES PASS_REGULAR_EXPRESSION
+                       "\nthe door swung open: True\r?\nthe player walked into the room: True, and is in it: True\r?\n$")
 endif()
 
 # Shapes made in a process before any world, as shape_test's are when it runs alone.

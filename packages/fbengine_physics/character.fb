@@ -1,0 +1,241 @@
+// Characters: players and NPCs, moved by the game through a world.
+
+Import std.core
+Import std.math
+Import "./body"
+Import "./c/fbe_character"
+Import "./physics"
+Import "./shape"
+Import "./world"
+
+/// What a Character stands on.
+Public Enum Ground
+    /// Ground no steeper than its MaxSlope, which it walks on.
+    ON_GROUND = 0
+    /// Ground too steep to walk on, which it slides down.
+    ON_STEEP_GROUND = 1
+    /// Something it touches but can't stand on.
+    NOT_SUPPORTED = 2
+    /// Nothing: it's falling, or jumping.
+    IN_AIR = 3
+End Enum
+
+/// A shape the game moves through a world, as a player or an NPC walks: Move slides it along
+/// walls, walks it up steps as high as its StepHeight and slopes as steep as its MaxSlope, keeps it
+/// to the floor going down them, and pushes dynamic bodies as hard as its Strength, but nothing
+/// pushes it. The game gives it its velocity each Move, gravity's too, from what it stands on,
+/// between the world's steps. It has a kinematic Body of its own shape, which casts hit, sensors
+/// notice, and dynamic bodies bump into; its Position is its shape's origin, the middle of a
+/// capsule. Free, or freeing its world, frees it.
+///
+/// ```
+/// Local world = PhysicsWorld()
+/// Body(world, Shape.Box(Vec3(20, 1, 20)), Motion.STATIC, Vec3(0, -0.5, 0))
+/// Local player = Character(world, Shape.Capsule(1.8, 0.3), Vec3(0, 0.9, 0))
+/// Local fall: Float = 0
+/// For i = 1 To 60
+///     // Walking along -Z at 2 m/s, falling while it's in the air.
+///     fall = player.OnGround() ? 0.0 : fall - 9.81 / 60
+///     player.Move(Vec3(0, fall, -2), 1.0 / 60)
+///     world.Step(1.0 / 60)
+/// End For
+/// Expect(player.Position().z < -1.9)
+/// world.Free()
+/// ```
+Public Final Class Character
+    Field handle: UInt64
+    ReadOnly Field world: Weak<PhysicsWorld>
+    Field shape: Shape
+    ReadOnly Field body: Body
+
+    /// A character of `shape`, a capsule as a rule, which has no mesh in it, in `world` at
+    /// `position`, with its body in layer 0. The world has room for its body.
+    @MainThread Public New(world: PhysicsWorld, shape: Shape, position: Vec3)
+        Local at = fbe_character_vec3_t(position.x, position.y, position.z)
+        Local inWorld = world.Live("Character")
+        Local of = shape.Live("Character")
+        Local made: UInt64 = 0
+        Unsafe
+            made = fbe_character_new(inWorld, of, AddressOf(at))
+        End Unsafe
+        If made == 0 Then Panic("Character: {LastError()}")
+        handle = made
+        Self.world = world
+        Self.shape = shape
+        body = CharacterBody(world, shape, fbe_character_body(made))
+        world.KeepCharacter(made, Self)
+    End New
+
+    /// Frees the character and its body; using them after panics. Freeing one that's freed already
+    /// does nothing.
+    @MainThread Public Method Free()
+        If handle == 0 Then Return
+        fbe_character_free(handle)
+        Local in = world
+        If in != Null
+            in.DropCharacter(handle)
+            in.Drop(body.Live("Character.Free"))
+            in.DropJointsOf(body)
+        End If
+        body.Forget()
+        handle = 0
+    End Method
+
+    /// Whether Free, or freeing its world, has freed the character.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// The world the character's in.
+    @MainThread Public Method World(): PhysicsWorld
+        Live("Character.World")
+        Local in = world
+        If in == Null Then Panic("Character.World: this Character was freed")
+        Return in
+    End Method
+
+    /// The character's body, which casts hit and sensors notice, whose layer is its own: the game
+    /// reads it, and sets its layer, but it moves, and goes, as its character does.
+    @MainThread Public Method Body(): Body
+        Live("Character.Body")
+        Return body
+    End Method
+
+    /// The character's shape.
+    @MainThread Public Method Shape(): Shape
+        Live("Character.Shape")
+        Return shape
+    End Method
+
+    /// Makes the character of `shape`, as crouching does, if it fits where it is, giving whether it
+    /// did: standing up under a table doesn't.
+    @MainThread Public Method SetShape(shape: Shape): Bool
+        Local character = Live("Character.SetShape")
+        If fbe_character_set_shape(character, shape.Live("Character.SetShape"))
+            Self.shape = shape
+            Return True
+        End If
+        If LastError() != "the shape doesn't fit where the character is"
+            Panic("Character.SetShape: {LastError()}")
+        End If
+        Return False
+    End Method
+
+    /// Moves the character at `velocity` for `seconds`, more than 0 and at most 1, as far as what's
+    /// in its way lets it, between the world's steps, as a frame's input says it walks.
+    @MainThread Public Method Move(velocity: Vec3, seconds: Float)
+        Local at = fbe_character_vec3_t(velocity.x, velocity.y, velocity.z)
+        Local ok = False
+        Unsafe
+            ok = fbe_character_move(Live("Character.Move"), AddressOf(at), seconds)
+        End Unsafe
+        If !ok Then Panic("Character.Move: {LastError()}")
+    End Method
+
+    /// Where the character is: its shape's origin, in the world.
+    @MainThread Public Method Position(): Vec3 =>
+        GetCharacterVec3(Live("Character.Position"), fbe_character_position)
+
+    /// Puts the character at `position` at once, as a teleport does.
+    @MainThread Public Method SetPosition(position: Vec3)
+        Local at = fbe_character_vec3_t(position.x, position.y, position.z)
+        Local ok = False
+        Unsafe
+            ok = fbe_character_set_position(Live("Character.SetPosition"), AddressOf(at))
+        End Unsafe
+        If !ok Then Panic("Character.SetPosition: {LastError()}")
+    End Method
+
+    /// How fast the character went in its last Move, which what was in its way slowed.
+    @MainThread Public Method Velocity(): Vec3 =>
+        GetCharacterVec3(Live("Character.Velocity"), fbe_character_velocity)
+
+    /// What the character stood on after its last Move.
+    @MainThread Public Method Ground(): Ground =>
+        fbe_character_ground(Live("Character.Ground")) As Ground
+
+    /// Whether the character stood on ground it walks on after its last Move.
+    @MainThread Public Method OnGround(): Bool =>
+        fbe_character_ground(Live("Character.OnGround")) == FBE_CHARACTER_ON_GROUND
+
+    /// The normal of the ground the character stands on.
+    @MainThread Public Method GroundNormal(): Vec3 =>
+        GetCharacterVec3(Live("Character.GroundNormal"), fbe_character_ground_normal)
+
+    /// How fast the ground the character stands on moves where it stands, as a lift's does, which
+    /// a game adds to its velocity to ride it.
+    @MainThread Public Method GroundVelocity(): Vec3 =>
+        GetCharacterVec3(Live("Character.GroundVelocity"), fbe_character_ground_velocity)
+
+    /// The body the character stands on, or Null for none.
+    @MainThread Public Method GroundBody(): Body?
+        Local ground = fbe_character_ground_body(Live("Character.GroundBody"))
+        Local in = world
+        If ground == 0 || in == Null Then Return Null
+        Return in.BodyOf(ground)
+    End Method
+
+    /// The steepest ground the character walks on, in radians from level, 50 degrees at first.
+    @MainThread Public Method MaxSlope(): Float =>
+        fbe_character_max_slope(Live("Character.MaxSlope"))
+
+    /// Sets the steepest ground the character walks on, from 0 to Pi / 2 radians.
+    @MainThread Public Method SetMaxSlope(radians: Float)
+        If !fbe_character_set_max_slope(Live("Character.SetMaxSlope"), radians)
+            Panic("Character.SetMaxSlope: {LastError()}")
+        End If
+    End Method
+
+    /// The character's mass, in kilograms, 70 at first, as what it stands on feels it.
+    @MainThread Public Method Mass(): Float => fbe_character_mass(Live("Character.Mass"))
+
+    /// Sets the character's mass, in kilograms, more than 0.
+    @MainThread Public Method SetMass(kilograms: Float)
+        If !fbe_character_set_mass(Live("Character.SetMass"), kilograms)
+            Panic("Character.SetMass: {LastError()}")
+        End If
+    End Method
+
+    /// The most force the character pushes dynamic bodies with, in newtons, 100 at first.
+    @MainThread Public Method Strength(): Float =>
+        fbe_character_strength(Live("Character.Strength"))
+
+    /// Sets the most force the character pushes with, in newtons, more than 0.
+    @MainThread Public Method SetStrength(newtons: Float)
+        If !fbe_character_set_strength(Live("Character.SetStrength"), newtons)
+            Panic("Character.SetStrength: {LastError()}")
+        End If
+    End Method
+
+    /// The highest step the character walks up, and so about how far down it keeps to the floor
+    /// going down, in meters, 0.4 at first.
+    @MainThread Public Method StepHeight(): Float =>
+        fbe_character_step_height(Live("Character.StepHeight"))
+
+    /// Sets the highest step the character walks up, in meters, from 0 on.
+    @MainThread Public Method SetStepHeight(meters: Float)
+        If !fbe_character_set_step_height(Live("Character.SetStepHeight"), meters)
+            Panic("Character.SetStepHeight: {LastError()}")
+        End If
+    End Method
+
+    // Its world's Free freed it.
+    @MainThread Package Method Forget()
+        handle = 0
+        body.Forget()
+    End Method
+
+    // The character's handle, for `call`, which panics once it's freed.
+    @MainThread Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call}: this Character was freed")
+        Return handle
+    End Method
+End Class
+
+// A vector of a character's, which `get` puts where it's told.
+@MainThread Function GetCharacterVec3(handle: UInt64,
+                                      get: Func(UInt64, Ptr<fbe_character_vec3_t>): Bool): Vec3
+    Local got = fbe_character_vec3_t(0, 0, 0)
+    Unsafe
+        get(handle, AddressOf(got))
+    End Unsafe
+    Return Vec3(got.x, got.y, got.z)
+End Function

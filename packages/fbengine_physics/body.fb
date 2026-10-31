@@ -1,6 +1,7 @@
 // Bodies: shapes at places in worlds, which steps move.
 
 Import std.core
+Import std.ffi
 Import std.math
 Import "./c/fbe_body"
 Import "./physics"
@@ -21,8 +22,10 @@ End Enum
 /// A Shape at a place in a PhysicsWorld, which the world's steps move as its Motion says. Its
 /// position is its shape's origin's, in the world's space, in std.math's axes and meters, and its
 /// velocities are meters, and radians, a second. A body that's rested a while sleeps, costing
-/// nothing, until something touches it, or a call that moves it wakes it. Free, or freeing its
-/// world, frees it.
+/// nothing, until something touches it, or a call that moves it wakes it. It's in one of its
+/// world's 32 layers, 0 at first, which say what it collides with. A sensor is a body that collides
+/// with nothing, but notices what comes into it and leaves it, as a trigger does. Free, or freeing
+/// its world, frees it, and its joints.
 ///
 /// ```
 /// Local world = PhysicsWorld()
@@ -40,6 +43,8 @@ Public Final Class Body
     // Its world keeps it while it's in it, so it doesn't keep its world.
     ReadOnly Field world: Weak<PhysicsWorld>
     ReadOnly Field shape: Shape
+    // Whether it's a character's, which moves it, and frees it.
+    ReadOnly Field character: Bool = False
 
     /// A body of `shape` in `world`, moving as `motion` says, at `position`, turned by `rotation`,
     /// and awake unless it's static. A dynamic body's shape has no mesh in it, and an inside to
@@ -61,13 +66,26 @@ Public Final Class Body
         world.Keep(handle, Self)
     End New
 
-    /// Frees the body, taking it out of its world; using it after panics. Freeing one that's freed
-    /// already does nothing.
+    // A character's body, which `handle` is, which its character made.
+    @MainThread Package New(world: PhysicsWorld, shape: Shape, handle: UInt64)
+        Self.world = world
+        Self.shape = shape
+        Self.handle = handle
+        character = True
+        world.Keep(handle, Self)
+    End New
+
+    /// Frees the body, taking it out of its world, with its joints; using it after panics. Freeing
+    /// one that's freed already does nothing. A character's body goes with its character.
     @MainThread Public Method Free()
         If handle == 0 Then Return
+        If character Then Panic("Body.Free: a character's body goes as its character goes")
         fbe_body_free(handle)
         Local in = world
-        If in != Null Then in.Drop(handle)
+        If in != Null
+            in.Drop(handle)
+            in.DropJointsOf(Self)
+        End If
         handle = 0
     End Method
 
@@ -283,6 +301,47 @@ Public Final Class Body
         fbe_body_sleep(Live("Body.Sleep"))
     End Method
 
+    /// The layer the body's in, from 0 to 31.
+    @MainThread Public Method Layer(): Int32 => fbe_body_layer(Live("Body.Layer"))
+
+    /// Puts the body in `layer`, from 0 to 31, which collides with what its world's SetCollides
+    /// says, from the next step.
+    @MainThread Public Method SetLayer(layer: Int32)
+        If !fbe_body_set_layer(Live("Body.SetLayer"), layer) Then Panic("Body.SetLayer: {LastError()}")
+    End Method
+
+    /// Whether the body's a sensor, colliding with nothing but noticing what comes into it and
+    /// leaves it, which its world's Began and Ended say, and Touching. A static sensor notices
+    /// bodies that move; a kinematic one notices what doesn't move, too.
+    @MainThread Public Method Sensor(): Bool => fbe_body_sensor(Live("Body.Sensor"))
+
+    /// Makes the body a sensor, or a body that collides again, waking it.
+    @MainThread Public Method SetSensor(sensor: Bool)
+        If !fbe_body_set_sensor(Live("Body.SetSensor"), sensor)
+            Panic("Body.SetSensor: {LastError()}")
+        End If
+    End Method
+
+    /// The bodies the body touches, or that are in it if it's a sensor, as of the last step.
+    @MainThread Public Method Touching(): Body[]
+        Local body = Live("Body.Touching")
+        Local found = Buffer<UInt64>(16)
+        Local count = 0
+        Unsafe
+            count = fbe_body_touching(body, found.Pointer(), 16)
+            If count > 16
+                found = Buffer<UInt64>(count As Int64)
+                count = fbe_body_touching(body, found.Pointer(), count)
+            End If
+        End Unsafe
+        Local in = world
+        If in == Null Then Return []
+        Return in.BodiesOf(found, count)
+    End Method
+
+    // Whether it's a character's body.
+    @MainThread Package Method OfCharacter(): Bool => character
+
     // The body's handle, for `call`, which panics once it's freed.
     @MainThread Package Method Live(call: String): UInt64
         If handle == 0 Then Panic("{call}: this Body was freed")
@@ -334,3 +393,9 @@ End Function
 
 // What a static body's dampings are, -1, as 0.
 Function Moving(value: Float): Float => value < 0 ? 0.0 : value
+
+// A character's body, which `handle` is, which its character made: Character's own Body Method
+// hides Body's name there.
+@MainThread Package Function CharacterBody(world: PhysicsWorld, shape: Shape, handle: UInt64): Body
+    Return Body(world, shape, handle)
+End Function

@@ -32,6 +32,8 @@
 // The most threads Jolt's job system has besides the one stepping a world: Jolt does at most 32
 // things at once.
 #define FBE_PHYSICS_MAX_THREADS 31
+// How many layers a world's bodies are in, 0 to 31.
+#define FBE_PHYSICS_LAYERS 32
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,6 +45,34 @@ typedef struct fbe_physics_vec3_t {
     float y;
     float z;
 } fbe_physics_vec3_t;
+
+// A rotation, std.math's Quat.
+typedef struct fbe_physics_quat_t {
+    float x;
+    float y;
+    float z;
+    float w;
+} fbe_physics_quat_t;
+
+// What a cast hit: a body, the point it hit it at, and the body's surface's normal there, how far
+// along the cast it was, in meters, and the number of the mesh's triangle it hit, or -1.
+typedef struct fbe_physics_hit_t {
+    uint64_t body;
+    fbe_physics_vec3_t position;
+    fbe_physics_vec3_t normal;
+    float distance;
+    int32_t triangle;
+} fbe_physics_hit_t;
+
+// Two bodies that began touching, `a` and `b`, where, the normal from a to b, and how fast they
+// came together along it, in meters a second.
+typedef struct fbe_physics_contact_t {
+    uint64_t a;
+    uint64_t b;
+    fbe_physics_vec3_t position;
+    fbe_physics_vec3_t normal;
+    float speed;
+} fbe_physics_contact_t;
 
 // NOLINTEND(modernize-macro-to-enum, modernize-use-using)
 
@@ -100,6 +130,58 @@ FBE_PHYSICS_API int64_t fbe_physics_steps(uint64_t world);
 // Whether `world`'s last step ran out of room for the pairs of bodies touching or their contacts,
 // and so left some out, as a world of too many touching bodies for its size does.
 FBE_PHYSICS_API bool fbe_physics_overflowed(uint64_t world);
+
+// Makes the bodies of layers `a` and `b`, 0 to FBE_PHYSICS_LAYERS - 1, collide, or not, from the
+// next step; every layer collides with every one at first. False if it isn't a world or a layer is
+// out of range.
+FBE_PHYSICS_API bool fbe_physics_set_collides(uint64_t world, int32_t a, int32_t b, bool collides);
+
+// Whether the bodies of layers `a` and `b` collide; false if it isn't a world or a layer's out of
+// range.
+FBE_PHYSICS_API bool fbe_physics_collides(uint64_t world, int32_t a, int32_t b);
+
+// Casts a ray from `origin` along `direction`, which isn't 0, as far as `distance`, from 0 on, at
+// the bodies of the `layers` (a bit for each), but `ignore`'s, and puts the nearest hit in `hit`;
+// false if it hits none, isn't a world, or a number's out of range, when fbe_physics_error says
+// why. Casts never hit a sensor.
+FBE_PHYSICS_API bool fbe_physics_cast_ray(uint64_t world, const fbe_physics_vec3_t* origin,
+                                          const fbe_physics_vec3_t* direction, float distance,
+                                          uint32_t layers, uint64_t ignore, fbe_physics_hit_t* hit);
+
+// As fbe_physics_cast_ray, but every hit, nearest first, up to `capacity` of them in `hits`,
+// giving how many there were, -1 if it isn't a world or a number's out of range.
+FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physics_vec3_t* origin,
+                                                 const fbe_physics_vec3_t* direction,
+                                                 float distance, uint32_t layers, uint64_t ignore,
+                                                 fbe_physics_hit_t* hits, int32_t capacity);
+
+// Sweeps `shape`, at `position` and turned by `rotation`, by `motion`, at the bodies of
+// the `layers` but `ignore`'s, and puts the first hit in `hit`, its distance how far along the
+// motion it got; false as fbe_physics_cast_ray is. A shape already touching a body hits it at 0.
+FBE_PHYSICS_API bool fbe_physics_cast_shape(uint64_t world, uint64_t shape,
+                                            const fbe_physics_vec3_t* position,
+                                            const fbe_physics_quat_t* rotation,
+                                            const fbe_physics_vec3_t* motion, uint32_t layers,
+                                            uint64_t ignore, fbe_physics_hit_t* hit);
+
+// The bodies of the `layers` but `ignore`'s that `shape`, at `position` and turned by `rotation`,
+// touches, up to `capacity` of them in `bodies`, in an order that's the same each run, giving how
+// many there were, -1 if it isn't a world or a number's out of range.
+FBE_PHYSICS_API int32_t fbe_physics_overlap(uint64_t world, uint64_t shape,
+                                            const fbe_physics_vec3_t* position,
+                                            const fbe_physics_quat_t* rotation, uint32_t layers,
+                                            uint64_t ignore, uint64_t* bodies, int32_t capacity);
+
+// The pairs of bodies that began touching in `world`'s last step, up to `capacity` of them in
+// `contacts`, in an order that's the same each run, giving how many there were, -1 if it isn't a
+// world. A sensor's are the bodies that came into it.
+FBE_PHYSICS_API int32_t fbe_physics_began(uint64_t world, fbe_physics_contact_t* contacts,
+                                          int32_t capacity);
+
+// The pairs of bodies that stopped touching in `world`'s last step, two handles each, up to
+// `capacity` pairs in `pairs`, giving how many there were, -1 if it isn't a world. A body that's
+// freed stops touching what it touched with none.
+FBE_PHYSICS_API int32_t fbe_physics_ended(uint64_t world, uint64_t* pairs, int32_t capacity);
 
 #ifdef __cplusplus
 }
