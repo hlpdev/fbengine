@@ -117,19 +117,25 @@ Public Final Class Simulate
     End Method
 
     /// A gamepad, connected: one of SDL's virtual devices, with every button and axis a Gamepad
-    /// has, which the next Flip reads connecting.
-    @MainThread Public Static Method ConnectGamepad(
-            name: String = "Virtual Gamepad"): VirtualGamepad Throws InputError
-        Local id = fbe_input_simulate_gamepad(name)
+    /// has, which can rumble unless `rumbles` is False, and which the next Flip reads connecting.
+    @MainThread Public Static Method ConnectGamepad(name: String = "Virtual Gamepad",
+                                                    rumbles: Bool =
+                                                    True): VirtualGamepad Throws InputError
+        Local id = fbe_input_simulate_gamepad(name, rumbles)
         If id == 0 Then Throw InputError(LastError())
         Return VirtualGamepad(id)
     End Method
 
     /// A joystick of `type`, connected, with `axes` axes, `buttons` buttons, and `hats` hats,
-    /// each from 0 to 255.
+    /// each from 0 to 255, which panics for others.
     @MainThread Public Static Method ConnectJoystick(type: JoystickType, axes: Int32, buttons: Int32,
                                                      hats: Int32,
                                                      name: String = "Virtual Joystick"): VirtualJoystick Throws InputError
+        If axes < 0 || axes > 255 || buttons < 0 || buttons > 255 || hats < 0 || hats > 255
+            Panic(
+                "Simulate.ConnectJoystick: a joystick has 0 to 255 axes, buttons, and hats, not " +
+                "{axes}, {buttons}, and {hats}")
+        End If
         Local id = fbe_input_simulate_joystick(name, type As Int32, axes, buttons, hats)
         If id == 0 Then Throw InputError(LastError())
         Return VirtualJoystick(id)
@@ -154,13 +160,19 @@ Public Final Class Simulate
 End Class
 
 /// A gamepad Simulate connected, which SDL reads as it reads a real one: what's set on it reaches
-/// its Gamepad at the next Flip. Setting anything on one that's unplugged panics.
+/// its Gamepad at the next Flip. Setting anything on one that's unplugged panics; one that's let
+/// go of unplugs.
 Public Final Class VirtualGamepad
     Field id: UInt64
+    Field plugged: Bool = True
 
     Package New(id: UInt64)
         Self.id = id
     End New
+
+    Method Destroy()
+        If plugged Then fbe_input_simulate_unplug(id)
+    End Method
 
     /// The Gamepad it is, once a Flip has read it connecting.
     @MainThread Public Method Device(): Gamepad => Gamepad.Of(id)
@@ -194,17 +206,23 @@ Public Final Class VirtualGamepad
     /// Disconnects it, which the next Flip reads.
     @MainThread Public Method Unplug()
         If !fbe_input_simulate_unplug(id) Then Panic(LastError())
+        plugged = False
     End Method
 End Class
 
 /// A joystick Simulate connected, which SDL reads as it reads a real one. Setting anything on one
-/// that's unplugged, or that it doesn't have, panics.
+/// that's unplugged, or that it doesn't have, panics; one that's let go of unplugs.
 Public Final Class VirtualJoystick
     Field id: UInt64
+    Field plugged: Bool = True
 
     Package New(id: UInt64)
         Self.id = id
     End New
+
+    Method Destroy()
+        If plugged Then fbe_input_simulate_unplug(id)
+    End Method
 
     /// The Joystick it is, once a Flip has read it connecting.
     @MainThread Public Method Device(): Joystick => Joystick.Of(id)
@@ -227,5 +245,6 @@ Public Final Class VirtualJoystick
     /// Disconnects it, which the next Flip reads.
     @MainThread Public Method Unplug()
         If !fbe_input_simulate_unplug(id) Then Panic(LastError())
+        plugged = False
     End Method
 End Class

@@ -2,10 +2,11 @@
 // what they print: what panics, and what's set before the video starts.
 
 Import std.core
+Import std.math
 Import std.os
 Import fbengine
 
-Function Main() Throws GraphicsError
+Function Main() Throws GraphicsError, InputError
     Local arguments = Process.Arguments()
     Local name = arguments.Count > 0 ? arguments[0] : ""
     Select name
@@ -34,6 +35,33 @@ Function Main() Throws GraphicsError
             Print("{before} {KeyName(Key.A)}")
             // KeyName started the video, which knows the layout, so it's too late for this.
             Window.SetHeadless(False)
+        Case "rumble-negative"
+            Window.SetHeadless(True)
+            Try Graphics(320, 200)
+            Local virtual = Try Simulate.ConnectGamepad()
+            Flip()
+            virtual.Device().Rumble(1.0, 1.0, -1.0)
+        Case "rumble-nan"
+            Window.SetHeadless(True)
+            Try Graphics(320, 200)
+            Local virtual = Try Simulate.ConnectGamepad()
+            Flip()
+            virtual.Device().RumbleTriggers(1.0, 1.0, NaN As Float64)
+        Case "joystick-sizes"
+            Try Simulate.ConnectJoystick(JoystickType.WHEEL, 0, 256, 0)
+        Case "pads-before-start"
+            // A pad connected before SDL's gamepads start, as SDL's own virtual one is by the
+            // call that starts them, connects once, at the next Flip, as a pad connected later does.
+            Window.SetHeadless(True)
+            Try Graphics(320, 200)
+            Local virtual = Try Simulate.ConnectGamepad()
+            Print("before a Flip {Gamepads().Count == 0 && GamepadsConnected().Count == 0}")
+            Flip()
+            Local listed = Gamepads().Count
+            Print("each connects at the first {listed >= 1 && GamepadsConnected().Count == listed}")
+            Flip()
+            Flip()
+            Print("and once {GamepadsConnected().Count == 0 && Gamepads().Count == listed}")
         Default
             Panic("no case {name}")
     End Select

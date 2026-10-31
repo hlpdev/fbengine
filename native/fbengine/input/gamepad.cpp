@@ -127,9 +127,23 @@ Uint16 strength(float value) {
     return static_cast<Uint16>(std::lround(std::clamp(value, 0.0F, 1.0F) * 65535.0F));
 }
 
+/// A rumble's time, 0 or more seconds, in SDL's milliseconds: at least 1, since SDL's 0 never
+/// stops, and at most SDL's most, 65.535 seconds.
 Uint32 milliseconds(double seconds) {
-    return static_cast<Uint32>(std::clamp(seconds * 1000.0, 0.0, 4294967295.0));
+    constexpr double most = 65535.0;
+    return seconds > 0.0 ? static_cast<Uint32>(std::min(std::ceil(seconds * 1000.0), most)) : 0;
 }
+
+/// Whether `seconds` is a rumble's time, saying why not if it isn't.
+bool valid_time(double seconds) {
+    // Written so a NaN isn't one either.
+    if (!(seconds >= 0.0)) {
+        return fbe::fail(std::format("a rumble lasts 0 seconds or more, not {}", seconds));
+    }
+    return true;
+}
+
+std::string guid_text;
 
 } // namespace
 
@@ -142,14 +156,9 @@ bool start_gamepads() {
     if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
         return fail_sdl("couldn't start the gamepads");
     }
+    // The pads and joysticks connected already are opened from the events SDL queues for them as
+    // it starts, as a pad connected later is, so each connects once, at the next Flip.
     started = true;
-    int found = 0;
-    SDL_JoystickID* ids = SDL_GetGamepads(&found);
-    for (int index = 0; ids != nullptr && index < found; ++index) {
-        open(ids[index]);
-    }
-    SDL_free(ids);
-    open_joysticks();
     return true;
 }
 
@@ -216,6 +225,9 @@ FBE_API uint64_t fbe_input_gamepad_at(int32_t index) {
 }
 
 FBE_API int32_t fbe_input_gamepads_added_count(void) {
+    if (!fbe::start_gamepads()) {
+        return 0;
+    }
     return count_of(added);
 }
 
@@ -224,6 +236,9 @@ FBE_API uint64_t fbe_input_gamepad_added_at(int32_t index) {
 }
 
 FBE_API int32_t fbe_input_gamepads_removed_count(void) {
+    if (!fbe::start_gamepads()) {
+        return 0;
+    }
     return count_of(removed);
 }
 
@@ -313,9 +328,15 @@ FBE_API bool fbe_input_gamepad_rumble(uint64_t pad, float low, float high, doubl
     if (found == nullptr) {
         return fbe::fail("the gamepad isn't connected");
     }
-    return SDL_RumbleGamepad(found->gamepad, strength(low), strength(high), milliseconds(seconds))
-               ? true
-               : fbe::fail_sdl("the gamepad can't rumble");
+    if (!valid_time(seconds)) {
+        return false;
+    }
+    // No time is no rumble, as SDL's 0 would rumble for good.
+    const Uint32 time = milliseconds(seconds);
+    const bool rumbled =
+        time > 0 ? SDL_RumbleGamepad(found->gamepad, strength(low), strength(high), time)
+                 : SDL_RumbleGamepad(found->gamepad, 0, 0, 0);
+    return rumbled ? true : fbe::fail_sdl("the gamepad can't rumble");
 }
 
 FBE_API bool fbe_input_gamepad_rumble_triggers(uint64_t pad, float left, float right,
@@ -324,10 +345,52 @@ FBE_API bool fbe_input_gamepad_rumble_triggers(uint64_t pad, float left, float r
     if (found == nullptr) {
         return fbe::fail("the gamepad isn't connected");
     }
-    return SDL_RumbleGamepadTriggers(found->gamepad, strength(left), strength(right),
-                                     milliseconds(seconds))
+    if (!valid_time(seconds)) {
+        return false;
+    }
+    const Uint32 time = milliseconds(seconds);
+    const bool rumbled =
+        time > 0 ? SDL_RumbleGamepadTriggers(found->gamepad, strength(left), strength(right), time)
+                 : SDL_RumbleGamepadTriggers(found->gamepad, 0, 0, 0);
+    return rumbled ? true : fbe::fail_sdl("the gamepad's triggers can't rumble");
+}
+
+FBE_API const char* fbe_input_gamepad_guid(uint64_t pad) {
+    const pad_t* found = pad_of(pad);
+    guid_text.clear();
+    if (found != nullptr) {
+        std::array<char, 33> text{};
+        SDL_GUIDToString(SDL_GetGamepadGUIDForID(found->id), text.data(),
+                         static_cast<int>(text.size()));
+        guid_text = text.data();
+    }
+    return guid_text.c_str();
+}
+
+FBE_API const char* fbe_input_gamepad_serial(uint64_t pad) {
+    const pad_t* found = pad_of(pad);
+    const char* serial = found != nullptr ? SDL_GetGamepadSerial(found->gamepad) : nullptr;
+    name = serial != nullptr ? serial : "";
+    return name.c_str();
+}
+
+FBE_API int32_t fbe_input_gamepad_player_index(uint64_t pad) {
+    const pad_t* found = pad_of(pad);
+    return found != nullptr ? SDL_GetGamepadPlayerIndex(found->gamepad) : -1;
+}
+
+FBE_API bool fbe_input_gamepad_set_player_index(uint64_t pad, int32_t index) {
+    const pad_t* found = pad_of(pad);
+    if (found == nullptr) {
+        return fbe::fail("the gamepad isn't connected");
+    }
+    if (index < -1) {
+        return fbe::fail(
+            std::format("a player's index is 0 or more, or -1 for none, not {}", index));
+    }
+    return SDL_SetGamepadPlayerIndex(found->gamepad, index)
                ? true
-               : fbe::fail_sdl("the gamepad's triggers can't rumble");
+               : fbe::fail_sdl("couldn't set the gamepad's player");
 }
 
 FBE_API void fbe_input_flush_gamepads(void) {

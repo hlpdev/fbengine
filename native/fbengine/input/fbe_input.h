@@ -111,13 +111,15 @@ FBE_API bool fbe_input_cursor_visible(void);
 FBE_API bool fbe_input_set_mouse_relative(bool relative);
 FBE_API bool fbe_input_mouse_relative(void);
 
-// The gamepads connected, as the last fbe_frame_flip read them, in the order they connected; the
-// first call starts SDL's gamepads, which takes a moment, and opens those connected already. -1 if
+// The gamepads connected, as the last fbe_frame_flip read them, in the order they connected. The
+// first call here, or to the connecting or disconnecting ones, starts SDL's gamepads, which takes
+// a moment; those connected already connect at the next fbe_frame_flip, as any other does. -1 if
 // they can't start.
 FBE_API int32_t fbe_input_gamepad_count(void);
 // The `index`th of them, 0 if there's no such gamepad.
 FBE_API uint64_t fbe_input_gamepad_at(int32_t index);
-// The gamepads the last fbe_frame_flip read connecting, and disconnecting, in order.
+// The gamepads the last fbe_frame_flip read connecting, and disconnecting, in order; 0 if they
+// can't start.
 FBE_API int32_t fbe_input_gamepads_added_count(void);
 FBE_API uint64_t fbe_input_gamepad_added_at(int32_t index);
 FBE_API int32_t fbe_input_gamepads_removed_count(void);
@@ -128,6 +130,14 @@ FBE_API bool fbe_input_gamepad_connected(uint64_t pad);
 FBE_API const char* fbe_input_gamepad_name(uint64_t pad);
 // SDL's SDL_GamepadType for it: Xbox, PlayStation, Switch, and the rest.
 FBE_API int32_t fbe_input_gamepad_type(uint64_t pad);
+// What a pad that connects again can be known by: its GUID, its kind's (32 hex digits), and its
+// serial number, "" when it has none.
+FBE_API const char* fbe_input_gamepad_guid(uint64_t pad);
+FBE_API const char* fbe_input_gamepad_serial(uint64_t pad);
+// The player SDL and the pad's lights say it's for, from 0, -1 for none; false if it isn't
+// connected, or for an index under -1.
+FBE_API int32_t fbe_input_gamepad_player_index(uint64_t pad);
+FBE_API bool fbe_input_gamepad_set_player_index(uint64_t pad, int32_t index);
 // Whether the button was held when the last fbe_frame_flip read the OS's events; how many times
 // it read it pressed, and released.
 FBE_API bool fbe_input_gamepad_down(uint64_t pad, int32_t button);
@@ -144,7 +154,8 @@ FBE_API bool fbe_input_set_gamepad_dead_zones(float stick, float trigger);
 FBE_API float fbe_input_gamepad_stick_dead_zone(void);
 FBE_API float fbe_input_gamepad_trigger_dead_zone(void);
 // Rumbles the gamepad's low and high frequency motors, or its triggers' motors, from 0 to 1, for
-// `seconds`, replacing the rumble before; false if it can't.
+// `seconds`, at least a millisecond and at most 65.535 seconds, replacing the rumble before; 0
+// seconds stops it. False if it can't, or for a time under 0 or NaN.
 FBE_API bool fbe_input_gamepad_rumble(uint64_t pad, float low, float high, double seconds);
 FBE_API bool fbe_input_gamepad_rumble_triggers(uint64_t pad, float left, float right,
                                                double seconds);
@@ -154,7 +165,7 @@ FBE_API void fbe_input_flush_gamepads(void);
 
 // Every joystick connected, gamepads too, as the last fbe_frame_flip read them, in the order
 // they connected, unmapped: wheels, flight sticks, and pads SDL has no mapping for. The first call
-// starts SDL's joysticks; -1 if they can't start.
+// starts SDL's joysticks, as fbe_input_gamepad_count's does; -1 if they can't start.
 FBE_API int32_t fbe_input_joystick_count(void);
 FBE_API uint64_t fbe_input_joystick_at(int32_t index);
 FBE_API int32_t fbe_input_joysticks_added_count(void);
@@ -163,6 +174,9 @@ FBE_API int32_t fbe_input_joysticks_removed_count(void);
 FBE_API uint64_t fbe_input_joystick_removed_at(int32_t index);
 FBE_API bool fbe_input_joystick_connected(uint64_t stick);
 FBE_API const char* fbe_input_joystick_name(uint64_t stick);
+// Its GUID, 32 hex digits, and its serial number, "" when it has none.
+FBE_API const char* fbe_input_joystick_guid(uint64_t stick);
+FBE_API const char* fbe_input_joystick_serial(uint64_t stick);
 // SDL's SDL_JoystickType for it: a gamepad, a wheel, a flight stick, and the rest.
 FBE_API int32_t fbe_input_joystick_type(uint64_t stick);
 // Whether SDL maps it as a gamepad, which fbe_input_gamepad_ takes too.
@@ -177,6 +191,9 @@ FBE_API int32_t fbe_input_joystick_hits(uint64_t stick, int32_t button);
 FBE_API int32_t fbe_input_joystick_ups(uint64_t stick, int32_t button);
 // The `hat`th hat's direction, SDL's SDL_HAT_ bits: 1 up, 2 right, 4 down, 8 left, 0 centered.
 FBE_API int32_t fbe_input_joystick_hat(uint64_t stick, int32_t hat);
+
+// SDL's hint `name`, "" when it's not set, for tests of what fbengine sets.
+FBE_API const char* fbe_input_sdl_hint(const char* name);
 
 // Pushes the key going down (`repeat` for the OS's repeat while it's held) or up, as the OS
 // would, for the next fbe_frame_flip to read; false without a window, or for a key out of range.
@@ -195,10 +212,10 @@ FBE_API bool fbe_input_simulate_mouse_motion(float x, float y);
 FBE_API bool fbe_input_simulate_mouse_button(int32_t button, bool down, int32_t clicks);
 // Pushes the wheel turning `y` notches up and `x` right; false without a window.
 FBE_API bool fbe_input_simulate_mouse_wheel(float x, float y);
-// Connects one of SDL's virtual devices, a gamepad with every button and axis SDL's have, or a
-// joystick of the SDL_JoystickType `type` with these many axes, buttons, and hats; its handle,
-// which is the device's too, or 0 if it can't.
-FBE_API uint64_t fbe_input_simulate_gamepad(const char* name);
+// Connects one of SDL's virtual devices, a gamepad with every button and axis SDL's have, which
+// can rumble if `rumbles`, or a joystick of the SDL_JoystickType `type` with these many axes,
+// buttons, and hats; its handle, which is the device's too, or 0 if it can't.
+FBE_API uint64_t fbe_input_simulate_gamepad(const char* name, bool rumbles);
 FBE_API uint64_t fbe_input_simulate_joystick(const char* name, int32_t type, int32_t axes,
                                              int32_t buttons, int32_t hats);
 // Disconnects a virtual device; false if there's no such device.

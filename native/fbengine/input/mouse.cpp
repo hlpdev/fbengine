@@ -113,6 +113,10 @@ void wheel_event(const SDL_MouseWheelEvent& event) {
     const float turned = event.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.0F : 1.0F;
     wheel += event.y * turned;
     wheel_x += event.x * turned;
+    // A turn the other way starts afresh, so a leftover fraction never cancels it.
+    if (wheel_part * event.y * turned < 0.0F) {
+        wheel_part = 0.0F;
+    }
     wheel_part += event.y * turned;
     const float whole = std::trunc(wheel_part);
     wheel_steps += static_cast<std::int32_t>(whole);
@@ -228,6 +232,7 @@ FBE_API int32_t fbe_input_mouse_clicks(int32_t button) {
 
 FBE_API void fbe_input_flush_mouse(void) {
     zero_counts();
+    wheel_part = 0.0F;
 }
 
 FBE_API bool fbe_input_move_mouse(float to_x, float to_y) {

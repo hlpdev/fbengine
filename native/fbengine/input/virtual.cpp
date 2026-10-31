@@ -58,15 +58,17 @@ bool SDLCALL rumble_triggers(void* userdata, Uint16 left, Uint16 right) {
 }
 
 /// Attaches a device as `description` says, and opens it to set its state; its handle, or 0.
-std::uint64_t attach(SDL_VirtualJoystickDesc& description, bool gamepad) {
+std::uint64_t attach(SDL_VirtualJoystickDesc& description, bool gamepad, bool rumbles) {
     if (!fbe::start_gamepads()) {
         return 0;
     }
     auto device = std::make_unique<device_t>();
     device->gamepad = gamepad;
     description.userdata = device.get();
-    description.Rumble = rumble;
-    description.RumbleTriggers = rumble_triggers;
+    if (rumbles) {
+        description.Rumble = rumble;
+        description.RumbleTriggers = rumble_triggers;
+    }
     const SDL_JoystickID id = SDL_AttachVirtualJoystick(&description);
     if (id == 0) {
         fbe::fail_sdl("couldn't connect the virtual device");
@@ -97,14 +99,14 @@ Sint16 trigger_value(float value) {
 
 extern "C" {
 
-FBE_API uint64_t fbe_input_simulate_gamepad(const char* name) {
+FBE_API uint64_t fbe_input_simulate_gamepad(const char* name, bool rumbles) {
     SDL_VirtualJoystickDesc description{};
     SDL_INIT_INTERFACE(&description);
     description.type = SDL_JOYSTICK_TYPE_GAMEPAD;
     description.naxes = SDL_GAMEPAD_AXIS_COUNT;
     description.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
     description.name = name;
-    return attach(description, true);
+    return attach(description, true, rumbles);
 }
 
 FBE_API uint64_t fbe_input_simulate_joystick(const char* name, int32_t type, int32_t axes,
@@ -124,7 +126,7 @@ FBE_API uint64_t fbe_input_simulate_joystick(const char* name, int32_t type, int
     description.nbuttons = static_cast<Uint16>(buttons);
     description.nhats = static_cast<Uint16>(hats);
     description.name = name;
-    return attach(description, false);
+    return attach(description, false, true);
 }
 
 FBE_API bool fbe_input_simulate_unplug(uint64_t device) {
