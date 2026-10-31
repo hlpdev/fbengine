@@ -13,12 +13,16 @@ void add_component(std::uint32_t entity) {
     entities.component[entity] = none;
     if (entities.kind[entity] == FBE_ENTITY_CAMERA) {
         add_camera(entity);
+    } else if (entities.kind[entity] == FBE_ENTITY_LIGHT) {
+        add_light(entity);
     }
 }
 
 void remove_component(std::uint32_t entity) {
     if (scene().entities.kind[entity] == FBE_ENTITY_CAMERA) {
         remove_camera(entity);
+    } else if (scene().entities.kind[entity] == FBE_ENTITY_LIGHT) {
+        remove_light(entity);
     }
     scene().entities.component[entity] = none;
 }
@@ -31,6 +35,10 @@ void copy_component(std::uint32_t from, std::uint32_t to) {
         copy = scene().cameras[entities.component[from]];
         copy.entity = to;
         copy.made = made;
+    } else if (entities.kind[from] == FBE_ENTITY_LIGHT) {
+        light_t& copy = scene().lights[entities.component[to]];
+        copy = scene().lights[entities.component[from]];
+        copy.entity = to;
     }
 }
 

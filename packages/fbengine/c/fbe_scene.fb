@@ -3,6 +3,7 @@
 
 Public Const FBE_ENTITY_PIVOT: Int32 = 0
 Public Const FBE_ENTITY_CAMERA: Int32 = 1
+Public Const FBE_ENTITY_LIGHT: Int32 = 2
 Public Const FBE_SPACE_LOCAL: Int32 = 0
 Public Const FBE_SPACE_WORLD: Int32 = 1
 Public Const FBE_AXIS_RIGHT: Int32 = 0
@@ -13,6 +14,13 @@ Public Const FBE_TRANSFORM_VECTOR: Int32 = 1
 Public Const FBE_TRANSFORM_NORMAL: Int32 = 2
 Public Const FBE_PROJECTION_PERSPECTIVE: Int32 = 0
 Public Const FBE_PROJECTION_ORTHOGRAPHIC: Int32 = 1
+Public Const FBE_LIGHT_DIRECTIONAL: Int32 = 0
+Public Const FBE_LIGHT_POINT: Int32 = 1
+Public Const FBE_LIGHT_SPOT: Int32 = 2
+Public Const FBE_FOG_NONE: Int32 = 0
+Public Const FBE_FOG_LINEAR: Int32 = 1
+Public Const FBE_FOG_EXPONENTIAL: Int32 = 2
+Public Const FBE_FOG_EXPONENTIAL_SQUARED: Int32 = 3
 
 @CLayout Public Struct fbe_vec3_t
     Public Field x: Float32
@@ -134,5 +142,28 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_camera_unproject(camera: UInt64, target_width: Float32, target_height: Float32,
                                   x: Float32, y: Float32, depth: Float32,
                                   point: Ptr<fbe_vec3_t>): Bool
+    Function fbe_light_set_type(light: UInt64, type: Int32): Bool
+    Function fbe_light_type(light: UInt64): Int32
+    Function fbe_light_set_color(light: UInt64, r: Float32, g: Float32, b: Float32): Bool
+    Function fbe_light_color(light: UInt64, color: Ptr<fbe_color_t>): Bool
+    Function fbe_light_set_intensity(light: UInt64, intensity: Float32): Bool
+    Function fbe_light_intensity(light: UInt64): Float32
+    Function fbe_light_set_range(light: UInt64, range: Float32): Bool
+    Function fbe_light_range(light: UInt64): Float32
+    Function fbe_light_set_cone(light: UInt64, inner: Float32, outer: Float32): Bool
+    Function fbe_light_inner_cone(light: UInt64): Float32
+    Function fbe_light_outer_cone(light: UInt64): Float32
+    Function fbe_world_lights(world: UInt64, lights: Ptr<UInt64>, capacity: Int32): Int32
+    Function fbe_world_set_ambient(world: UInt64, r: Float32, g: Float32, b: Float32): Bool
+    Function fbe_world_ambient(world: UInt64, color: Ptr<fbe_color_t>): Bool
+    Function fbe_camera_set_fog_mode(camera: UInt64, mode: Int32): Bool
+    Function fbe_camera_fog_mode(camera: UInt64): Int32
+    Function fbe_camera_set_fog_color(camera: UInt64, r: Float32, g: Float32, b: Float32): Bool
+    Function fbe_camera_fog_color(camera: UInt64, color: Ptr<fbe_color_t>): Bool
+    Function fbe_camera_set_fog_range(camera: UInt64, start: Float32, end: Float32): Bool
+    Function fbe_camera_fog_start(camera: UInt64): Float32
+    Function fbe_camera_fog_end(camera: UInt64): Float32
+    Function fbe_camera_set_fog_density(camera: UInt64, density: Float32): Bool
+    Function fbe_camera_fog_density(camera: UInt64): Float32
     Function fbe_entity_copy(entity: UInt64, world: UInt64, parent: UInt64): UInt64
 End Extern

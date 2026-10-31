@@ -35,10 +35,12 @@ private:
     std::vector<std::uint32_t> m_free;
 };
 
-/// A world: the entities at its top, and how many it has.
+/// A world: the entities at its top, how many it has, and its ambient light, std.math's
+/// Color.Gray, sRGB's half gray, at first.
 struct world_t {
     std::vector<std::uint32_t> roots;
     std::int32_t count = 0;
+    std::array<float, 3> ambient{ 0.2158605F, 0.2158605F, 0.2158605F };
 };
 
 /// Every entity's data, a field to an array, indexed by slot.
@@ -88,6 +90,23 @@ struct camera_t {
     std::int32_t order = 0;
     /// When it was made, which orders cameras of one order.
     std::uint64_t made = 0;
+    std::int32_t fog_mode = 0;
+    std::array<float, 3> fog_color{ 0.0F, 0.0F, 0.0F };
+    float fog_start = 1.0F;
+    float fog_end = 100.0F;
+    float fog_density = 0.02F;
+};
+
+/// A light: what kind, its color times its intensity, how far a point or spot light reaches, and a
+/// spot light's cone, its angles from its axis to where it starts to fade and to where it's out.
+struct light_t {
+    std::uint32_t entity = none;
+    std::int32_t type = 0;
+    std::array<float, 3> color{ 1.0F, 1.0F, 1.0F };
+    float intensity = 1.0F;
+    float range = 10.0F;
+    float inner_cone = 0.0F;
+    float outer_cone = 0.78539816F;
 };
 
 struct scene_t {
@@ -98,6 +117,8 @@ struct scene_t {
     /// Every camera, in no order, each knowing its entity.
     std::vector<camera_t> cameras;
     std::uint64_t cameras_made = 0;
+    /// Every light, in no order, each knowing its entity.
+    std::vector<light_t> lights;
     /// The handles freed since fbe_entity_freed last took them.
     std::vector<std::uint64_t> freed;
 };
@@ -120,6 +141,10 @@ void copy_component(std::uint32_t from, std::uint32_t to);
 camera_t* camera_of(std::uint64_t handle);
 void add_camera(std::uint32_t entity);
 void remove_camera(std::uint32_t entity);
+/// The live light a handle is for, or null, with fbe_error saying so.
+light_t* light_of(std::uint64_t handle);
+void add_light(std::uint32_t entity);
+void remove_light(std::uint32_t entity);
 
 /// Gives an entity a transform of nothing: at its parent's origin, unturned, at scale 1.
 void reset_transform(std::uint32_t entity);

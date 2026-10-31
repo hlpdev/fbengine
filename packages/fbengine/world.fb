@@ -3,9 +3,11 @@
 
 Import std.core
 Import std.ffi
+Import std.math
 Import "./c/fbe_scene"
 Import "./camera"
 Import "./entity"
+Import "./light"
 Import "./window"
 
 /// A scene: a tree of entities, which are drawn, collide, and pick only with others in their
@@ -94,6 +96,41 @@ Public Final Class World
             found.Add(entity As Camera)
         End For
         Return found
+    End Method
+
+    /// The World's lights, in the tree's order, depth first, each parent before its children.
+    @MainThread @PanicsAtCaller
+    Public Method Lights(): Light[]
+        Local world = Live("Lights")
+        Local found: Light[] = []
+        For entity In Handles(Function(out: Ptr<UInt64>, capacity: Int32): Int32
+            Return fbe_world_lights(world, out, capacity)
+        End Function)
+            found.Add(entity As Light)
+        End For
+        Return found
+    End Method
+
+    /// Sets the World's ambient light, which lights everything a little, from everywhere: std.math's
+    /// Color.Gray, sRGB's half gray, at first. Its alpha is left out.
+    @MainThread @PanicsAtCaller
+    Public Method SetAmbientLight(color: Color)
+        If !fbe_world_set_ambient(Live("SetAmbientLight"), color.r, color.g, color.b)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// The World's ambient light, with an alpha of 1.
+    @MainThread @PanicsAtCaller
+    Public Method AmbientLight(): Color
+        Local world = Live("AmbientLight")
+        Local found = fbe_color_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_world_ambient(world, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return ColorOf(found)
     End Method
 
     /// The first entity in the World with the name, depth first, each parent before its

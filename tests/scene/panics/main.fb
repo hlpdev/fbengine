@@ -75,6 +75,20 @@ Select arguments[0]
         Local camera = Camera()
         camera.Free()
         camera.SetOrder(1)
+    Case "intensity"
+        Light().SetIntensity(-1)
+    Case "light-range"
+        Light().SetRange(0)
+    Case "cone"
+        Light().SetCone(1, 0.5)
+    Case "fog-range"
+        Camera().SetFogRange(5, 5)
+    Case "fog-density"
+        Camera().SetFogDensity(-0.1)
+    Case "light-freed"
+        Local light = Light()
+        light.Free()
+        light.SetColor(Color.Red)
     Default
         Panic("no case {arguments[0]}")
 End Select

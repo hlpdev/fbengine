@@ -1,0 +1,106 @@
+// Lights, as the data the renderer lights a World with: E5 draws them.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./window"
+
+/// What a light is.
+Public Enum LightType
+    /// The sun's: from everywhere, along the light's forward axis.
+    DIRECTIONAL = 0
+    /// A bulb's: out from where the light is, to its range.
+    POINT = 1
+    /// A torch's: in a cone along the light's forward axis, to its range.
+    SPOT = 2
+End Enum
+
+/// A light, shining along its forward axis, -Z, or out from where it is. New, it's white, of
+/// intensity 1, reaching 10 units, with a cone from 0 to 45 degrees from its axis. A hidden light
+/// lights nothing.
+Public Final Class Light Extends Entity
+    /// A new Light of a type, the last child of `parent`, or at the top of the current World when
+    /// `parent` is Null.
+    @MainThread @PanicsAtCaller
+    Public New(type: LightType = LightType.POINT, parent: Entity? = Null)
+        Super.New(Create(parent, FBE_ENTITY_LIGHT))
+        SetLightType(type)
+    End New
+
+    Package New(handle: UInt64)
+        Super.New(handle)
+    End New
+
+    Override Package Method KindName(): String => "Light"
+
+    /// Makes the light another type.
+    @MainThread @PanicsAtCaller
+    Public Method SetLightType(type: LightType)
+        If !fbe_light_set_type(Live("SetLightType"), type As Int32) Then Panic(LastError())
+    End Method
+
+    /// What type of light it is.
+    @MainThread @PanicsAtCaller
+    Public Method LightType(): LightType => fbe_light_type(Live("LightType")) As LightType
+
+    /// Sets the light's color, linear, as std.math's Color is; its alpha is left out. A color
+    /// below 0 takes light away, as dark spots want.
+    @MainThread @PanicsAtCaller
+    Public Method SetColor(color: Color)
+        If !fbe_light_set_color(Live("SetColor"), color.r, color.g, color.b) Then Panic(LastError())
+    End Method
+
+    /// The light's color, with an alpha of 1.
+    @MainThread @PanicsAtCaller
+    Public Method Color(): Color
+        Local light = Live("Color")
+        Local found = fbe_color_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_light_color(light, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return ColorOf(found)
+    End Method
+
+    /// Sets how bright the light is, its color times this. Below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetIntensity(intensity: Float)
+        If !fbe_light_set_intensity(Live("SetIntensity"), intensity) Then Panic(LastError())
+    End Method
+
+    /// How bright the light is.
+    @MainThread @PanicsAtCaller
+    Public Method Intensity(): Float => fbe_light_intensity(Live("Intensity"))
+
+    /// Sets how far a point or spot light reaches, where it's faded to nothing. One not above 0
+    /// panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetRange(range: Float)
+        If !fbe_light_set_range(Live("SetRange"), range) Then Panic(LastError())
+    End Method
+
+    /// How far a point or spot light reaches.
+    @MainThread @PanicsAtCaller
+    Public Method Range(): Float => fbe_light_range(Live("Range"))
+
+    /// Sets a spot light's cone, in radians from its axis: where it starts to fade, `inner`, and
+    /// where it's out, `outer`. Anything but 0 <= inner <= outer <= Pi / 2 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetCone(inner: Float, outer: Float)
+        If !fbe_light_set_cone(Live("SetCone"), inner, outer) Then Panic(LastError())
+    End Method
+
+    /// The angle from a spot light's axis where it starts to fade.
+    @MainThread @PanicsAtCaller
+    Public Method InnerCone(): Float => fbe_light_inner_cone(Live("InnerCone"))
+
+    /// The angle from a spot light's axis where it's out.
+    @MainThread @PanicsAtCaller
+    Public Method OuterCone(): Float => fbe_light_outer_cone(Live("OuterCone"))
+End Class
+
+/// A C color as std.math's.
+Package Function ColorOf(found: fbe_color_t): Color => Color(found.r, found.g, found.b, found.a)
