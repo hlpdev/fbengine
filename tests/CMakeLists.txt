@@ -54,7 +54,8 @@ if(FBENGINE_FB_TESTS)
     if(EXISTS "${package}/project.toml")
       cmake_path(GET package FILENAME name)
       add_test(NAME ${name}.package COMMAND "${FBENGINE_FB}" test "${package}")
-      set_tests_properties(${name}.package PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
+      set_tests_properties(${name}.package PROPERTIES ENVIRONMENT
+                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts")
     endif()
   endforeach()
 
@@ -82,7 +83,13 @@ if(FBENGINE_FB_TESTS)
       "binding-nan-scale|panic: Binding[.]OfGamepadAxis: a scale is a finite number, not"
       "bind-unchecked|panic: Action[.]Bind: a key binding's code is 1 to 511, not 9999"
       "bind-y-infinite|panic: Action[.]BindY: a binding's scale is a finite number, not Inf"
-      "replace-overflows|panic: Action[.]Replace: a binding's scale is a finite number, not Inf")
+      "replace-overflows|panic: Action[.]Replace: a binding's scale is a finite number, not Inf"
+      "mask-threshold|panic: Mask[.]FromImage: a threshold is 1 to 255, not 0"
+      "mask-region-outside|panic: Mask[.]FromImage: Rect[(]2, 0, 3, 4[)] isn't whole pixels in the image, 4 by 4"
+      "mask-region-fraction|panic: Mask[.]FromImage: Rect[(]0[.]5, 0, 2, 2[)] isn't whole pixels in the image"
+      "mask-region-overflowing|panic: Mask[.]FromImage: Rect[(]2147483520, 0, 2147483520, 4[)] isn't whole pixels"
+      "mask-pixels-short|panic: Mask[.]FromPixels: 2 by 1 RGBA8 pixels are 8 bytes, not 4"
+      "mask-empty-cell|panic: Mask[.]Frames: a cell is 1 pixel or more across and down, not 0 by 4")
   foreach(case IN LISTS fbengine_input_cases)
     string(REPLACE "|" ";" case "${case}")
     list(GET case 0 name)
@@ -97,6 +104,11 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/controls")
   set_tests_properties(examples.controls PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
                        PASS_REGULAR_EXPRESSION "Running controls[^\n]*\nmove [(]0, -1[)], jump True\r?\nmove [(]1, 0[)], jump True\r?\n$")
+
+  add_test(NAME examples.menu
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/menu")
+  set_tests_properties(examples.menu PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+                       PASS_REGULAR_EXPRESSION "Running menu[^\n]*\noptions open: True\r?\nvolume 0[.]65, fullscreen True, name Ada\r?\nmenu again: True\r?\nplaying: True, focus none\r?\na jump: score 100\r?\nconsole: [[]> give 50, gave 50[]], score 150, typed \" \"\r?\nclosed, a jump: score 250\r?\n$")
 endif()
 
 # The scene, through fbengine's C API, with no window or GPU.
@@ -342,7 +354,8 @@ endif()
 
 # fbengine's app area apart from its DLL: what it shows nothing for, and what a link opens, on
 # Windows read back through the shell; it opens nothing.
-add_executable(fbengine_app_tests app/app_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/app/link.cpp")
+add_executable(fbengine_app_tests app/app_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/app/link.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/app/languages.cpp")
 target_include_directories(fbengine_app_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_link_libraries(fbengine_app_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
 if(WIN32)
@@ -351,6 +364,77 @@ endif()
 fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
+# test fonts.
+file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")
+add_executable(fbengine_text_tests text/text_tests.cpp ${fbengine_text_sources}
+               "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
+target_include_directories(fbengine_text_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_compile_definitions(fbengine_text_tests PRIVATE FBE_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}"
+                           FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
+                           FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+                           FBE_SHAPE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/shape/data/in-house/fonts")
+target_link_libraries(fbengine_text_tests PRIVATE SDL3::SDL3-static freetype fbengine_harfbuzz
+                      fbengine_sheenbidi Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_text_tests)
+catch_discover_tests(fbengine_text_tests TEST_PREFIX "text."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# collide's masks against a brute force, from its sources and core's.
+add_executable(fbengine_collide_tests collide/collide_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/collide/collide.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
+target_include_directories(fbengine_collide_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_compile_definitions(fbengine_collide_tests PRIVATE FBE_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(fbengine_collide_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_collide_tests)
+catch_discover_tests(fbengine_collide_tests TEST_PREFIX "collide."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# fbengine_ui's panics, each by a run of tests/ui, which says it.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_ui_cases
+      "add-twice|panic: Node[.]Add: Node \"child\" is in another Node already"
+      "add-into-itself|panic: Node[.]Add: Node \"outer\" can't go in itself"
+      "insert-out-of-range|panic: Node[.]Insert: 1 isn't 0 to 0"
+      "fixed-negative|panic: Sizing[.]Fixed: a length is 0 or more, not -1"
+      "fill-zero|panic: Sizing[.]Fill: a weight is over 0, not 0"
+      "fraction-past-one|panic: Sizing[.]Fraction: a fraction is 0 to 1, not 1[.]5"
+      "style-empty-name|panic: Theme[.]SetFields: \"button[.]\" isn't a style's name"
+      "set-width-unchecked|panic: Node[.]SetWidth: a fill's weight is over 0, not 0"
+      "min-size-nan|panic: Node[.]SetMinSize: a least is 0 or more, and finite, not NaN"
+      "padding-negative|panic: Node[.]SetPadding: padding is 0 or more, and finite, not -1"
+      "margin-infinite|panic: Node[.]SetMargin: a margin is finite, not Inf"
+      "anchors-backward|panic: Node[.]SetAnchors: a Max is at its Min or after"
+      "style-negative-border|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not -1"
+      "style-nan-font-size|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not NaN"
+      "style-negative-padding|panic: Theme[.]SetFields: a style's padding is 0 or more, not -2"
+      "max-size-negative|panic: Node[.]SetMaxSize: a most is 0 or more, or Inf, not -1 by 0"
+      "gap-infinite|panic: Node[.]SetGap: a gap is 0 or more, and finite, not Inf"
+      "content-size-nan|panic: Node[.]SetContentSize: a size is 0 or more, and finite, not NaN by 0"
+      "anchor-nan|panic: Node[.]SetAnchors: an anchor is finite, not NaN"
+      "slider-range-backward|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not 2 to 1"
+      "slider-range-too-wide|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not -3"
+      "slider-step-negative|panic: Slider[.]SetStep: a step is 0 or more, not -1"
+      "max-length-negative|panic: TextField[.]SetMaxLength: a most is 0, for none, or more, not -1"
+      "wheel-step-zero|panic: ScrollView[.]SetWheelStep: a step is over 0, not 0"
+      "scale-zero|panic: Ui[.]SetScale: a scale is over 0, not 0"
+      "command-with-a-space|panic: Console[.]Register: \"give item\" isn't a command's name"
+      "console-no-lines|panic: Console[.]SetMaxLines: a console keeps 1 line or more, not 0"
+      "debug-row-two-kinds|panic: DebugPanel[.]Switch: the debug row mode is a Label"
+      "strings-fall-back-to-themselves|panic: Strings[.]SetFallback: en's strings fall back to fr's, which fall back to them")
+  foreach(case IN LISTS fbengine_ui_cases)
+    string(REPLACE "|" ";" case "${case}")
+    list(GET case 0 name)
+    list(GET case 1 printed)
+    add_test(NAME ui.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- ${name})
+    set_tests_properties(ui.${name} PROPERTIES PASS_REGULAR_EXPRESSION "${printed}" TIMEOUT 120)
+  endforeach()
+endif()
 
 # The cooker's C++, built into the tests from its own sources, which read back what it makes with
 # libktx, which is UCRT's here, as the DLLs are, and with the engine's own glTF loader.

@@ -1,0 +1,139 @@
+// Masks of images, placed as the canvas draws sprites, against each other, rectangles, and
+// points.
+
+Import std.core
+Import std.image
+Import std.math
+Import std.test
+Import fbengine
+
+Function Near(a: Float32, b: Float32): Bool => Abs(a - b) < 0.001
+
+// A `width` by `height` image, solid where `solid` says, at alpha 255, and clear elsewhere.
+Function Drawn(width: Int32, height: Int32, solid: Func(Int32, Int32): Bool): Image
+    Local image = Image(width, height)
+    For y = 0 To height - 1
+        For x = 0 To width - 1
+            If solid(x, y) Then image[x, y] = Color32(255, 255, 255, 255)
+        End For
+    End For
+    Return image
+End Function
+
+Function Square(size: Int32): Mask => Mask.FromImage(Drawn(size, size,
+                                                           Function(x: Int32, y: Int32) => True))
+
+@Test
+Function AMasksPixelsAreItsImagesSolidOnes()
+    Local image = Image(4, 3)
+    image[0, 0] = Color32(0, 0, 0, 255)
+    image[1, 0] = Color32(255, 0, 0, 100)
+    image[3, 2] = Color32(0, 255, 0, 1)
+    Local any = Mask.FromImage(image)
+    Expect(any.Width() == 4 && any.Height() == 3 && any.SolidCount() == 3)
+    Expect(any.Solid(0, 0) && any.Solid(1, 0) && any.Solid(3, 2) && !any.Solid(2, 0))
+    Expect(!any.Solid(-1, 0) && !any.Solid(4, 0))
+    // By a threshold, half visible and more.
+    Local half = Mask.FromImage(image, 128)
+    Expect(half.SolidCount() == 1 && half.Solid(0, 0))
+    // Of a region, as a frame of a sheet.
+    Local part = Mask.FromImage(image, 1, Rect(1.0, 0.0, 3.0, 3.0))
+    Expect(part.Width() == 3 && part.Solid(0, 0) && part.Solid(2, 2) && part.SolidCount() == 2)
+    // From a texture's pixels, as they're read back.
+    Local pixels: UInt8[] = [0, 0, 0, 255, 0, 0, 0, 0]
+    Local read = Mask.FromPixels(pixels, 2, 1)
+    Expect(read.Solid(0, 0) && !read.Solid(1, 0))
+    Expect("{read}" == "a 2 by 1 mask")
+End Function
+
+@Test
+Function MasksMeetWhereTheirSolidPixelsDoNotWhereTheyTouch()
+    Local a = Square(8)
+    Local b = Square(8)
+    Expect(!a.Collides(0.0, 0.0, b, 8.0, 0.0))
+    Expect(a.Collides(0.0, 0.0, b, 7.0, 0.0))
+    Expect(!a.Collides(0.0, 0.0, b, 0.0, -8.0))
+    // The handle is the point placed at the position.
+    b.SetHandle(8.0, 0.0)
+    Expect(b.Handle() == Vec2(8.0, 0.0))
+    Expect(a.Collides(0.0, 0.0, b, 9.0, 0.0) && !a.Collides(0.0, 0.0, b, 16.0, 0.0))
+    b.MidHandle()
+    Expect(b.Handle() == Vec2(4.0, 4.0))
+    Expect(a.Collides(0.0, 0.0, b, 11.0, 4.0) && !a.Collides(0.0, 0.0, b, 12.0, 4.0))
+    // A hollow ring and a dot in its hole don't meet, though their bounds do.
+    Local ring = Mask.FromImage(Drawn(9, 9,
+                                      Function(x: Int32, y: Int32) => x == 0 || y == 0 || x == 8 ||
+                                      y == 8))
+    Local dot = Square(1)
+    Expect(ring.Overlaps(Placement.At(0.0, 0.0), dot, Placement.At(4.0, 4.0)))
+    Expect(!ring.Collides(0.0, 0.0, dot, 4.0, 4.0) && ring.Collides(0.0, 0.0, dot, 8.0, 4.0))
+End Function
+
+@Test
+Function ATurnedOrScaledMaskIsWhereTheCanvasDrawsIt()
+    // A bar 16 across and 2 down, turned a quarter about its middle, stands up.
+    Local bar = Mask.FromImage(Drawn(16, 2, Function(x: Int32, y: Int32) => True))
+    bar.MidHandle()
+    Local standing = Placement(50.0, 50.0, Pi / 2.0, 1.0, 1.0)
+    Expect(bar.Contains(standing, Vec2(50.5, 43.5)) && bar.Contains(standing, Vec2(49.5, 57.5)))
+    Expect(!bar.Contains(standing, Vec2(43.5, 50.5)) && !bar.Contains(standing, Vec2(50.5, 58.5)))
+    Local bounds = bar.Bounds(standing)
+    Expect(Near(bounds.X, 49.0) && Near(bounds.Y, 42.0) && Near(bounds.Width, 2.0) &&
+           Near(bounds.Height, 16.0))
+    // Scaled twice, it reaches twice as far; mirrored about a left handle, it's to the left.
+    Local twice = Placement(50.0, 50.0, 0.0, 2.0, 2.0)
+    Expect(bar.Contains(twice, Vec2(34.5, 50.5)) && !bar.Contains(twice, Vec2(33.5, 50.5)))
+    bar.SetHandle(0.0, 0.0)
+    Local mirrored = Placement(50.0, 50.0, 0.0, -1.0, 1.0)
+    Expect(bar.Contains(mirrored, Vec2(35.5, 50.5)) && !bar.Contains(mirrored, Vec2(50.5, 50.5)))
+    // Two bars crossed meet; side by side they don't.
+    Local other = Mask.FromImage(Drawn(16, 2, Function(x: Int32, y: Int32) => True))
+    other.MidHandle()
+    bar.MidHandle()
+    Expect(bar.Collides(Placement.At(50.0, 50.0), other, standing))
+    Expect(!bar.Collides(Placement.At(50.0, 40.0), other, Placement.At(50.0, 42.0)))
+    // Turned a whole turn is as it was.
+    Expect(bar.Collides(Placement(50.0, 40.0, Tau, 1.0, 1.0), other, Placement.At(50.0, 41.0)))
+    // Three quarter turns and a quarter back stand it up too, as a game's floats have them.
+    Expect(bar.Contains(Placement(50.0, 50.0, 3.0 * Pi / 2.0, 1.0, 1.0), Vec2(50.5, 43.5)))
+    Expect(bar.Contains(Placement(50.0, 50.0, -Pi / 2.0, 1.0, 1.0), Vec2(50.5, 43.5)))
+    // Scaled to nothing, it's nowhere.
+    Expect(!bar.Collides(Placement(50.0, 50.0, 0.0, 0.0, 1.0), other, Placement.At(50.0, 50.0)))
+End Function
+
+@Test
+Function RectanglesAndPointsAgainstMasks()
+    Local a = Square(4)
+    Local at = Placement.At(10.0, 10.0)
+    Expect(a.CollidesRect(at, Rect(13.0, 13.0, 1.0, 1.0)))
+    Expect(!a.CollidesRect(at, Rect(14.0, 10.0, 5.0, 5.0)))
+    Expect(a.CollidesRect(at, Rect(13.9, 9.0, 0.2, 2.0)))
+    Expect(!a.CollidesRect(at, Rect(0.0, 0.0, 10.0, 10.0)))
+    Expect(!a.CollidesRect(at, Rect(11.0, 11.0, 0.0, 1.0)))
+    Expect(a.Contains(at, Vec2(10.0, 10.0)) && a.Contains(at, Vec2(13.99, 13.99)))
+    Expect(!a.Contains(at, Vec2(14.0, 12.0)) && !a.Contains(at, Vec2(9.99, 12.0)))
+    // Rectangles that touch don't overlap.
+    Expect(RectsOverlap(Rect(0.0, 0.0, 4.0, 4.0), Rect(3.0, 3.0, 4.0, 4.0)))
+    Expect(!RectsOverlap(Rect(0.0, 0.0, 4.0, 4.0), Rect(4.0, 0.0, 4.0, 4.0)))
+    Expect(!RectsOverlap(Rect(0.0, 0.0, 4.0, 4.0), Rect(0.0, 4.0, 4.0, 4.0)))
+End Function
+
+@Test
+Function ASheetsFramesAreMasksOfTheirCells()
+    // Two cells across, 8 by 8, the first solid, and a cut-off column left out.
+    Local sheet = Drawn(19, 8, Function(x: Int32, y: Int32) => x < 8)
+    Local frames = Mask.Frames(sheet, 8, 8)
+    Expect(frames.Count == 2)
+    Expect(frames[0].SolidCount() == 64 && frames[1].SolidCount() == 0)
+    Expect(!frames[1].Collides(0.0, 0.0, frames[0], 0.0, 0.0))
+End Function
+
+@Test
+Function AFreedMaskIsGone()
+    Local before = Mask.Count()
+    Local a = Square(2)
+    Expect(Mask.Count() == before + 1)
+    a.Free()
+    a.Free()
+    Expect(Mask.Count() == before && "{a}" == "a freed mask")
+End Function

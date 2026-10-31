@@ -10,4 +10,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_app_open_url(url: CString): Bool
     Function fbe_app_opened_count(): Int32
     Function fbe_app_opened_at(index: Int32): CString
+    Function fbe_app_set_clipboard(text: CString): Bool
+    Function fbe_app_clipboard(): CString
+    Function fbe_app_language_count(): Int32
+    Function fbe_app_language_at(index: Int32): CString
 End Extern

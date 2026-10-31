@@ -1,0 +1,305 @@
+// The Ui and its first widgets, driven by Simulate's mouse and keys, offscreen.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+Import fbengine_ui
+
+// A window, and a Ui of a column at its top left holding `widgets`, laid out.
+Function Opened(widgets: Widget[]): Ui Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.STACK)
+    Local column = Node("column")
+    column.SetAlignSelf(Align.START)
+    column.SetAlign(Align.START)
+    column.SetGap(10.0)
+    column.SetPadding(Insets.All(10.0))
+    For widget In widgets
+        column.Add(widget)
+    End For
+    root.Add(column)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Return ui
+End Function
+
+// Clicks the left button at `point`, in the window's units, and updates `ui`.
+Function ClickAt(ui: Ui, point: Vec2) Throws GraphicsError
+    Try Simulate.MoveMouse(point.x, point.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+End Function
+
+Function Middle(widget: Widget): Vec2 => widget.Box().Center
+
+@Test
+Function AButtonIsClickedByThePointer() Throws GraphicsError
+    Local play = Button("Play")
+    Local ui = Try Opened([play])
+    Defer EndGraphics()
+    Local clicks = 0
+    play.OnClick(Function(button: Button)
+        clicks += 1
+        Expect(button.Text() == "Play")
+    End Function)
+    Try ClickAt(ui, Middle(play))
+    Expect(play.Clicked())
+    Expect(clicks == 1)
+    // Its focus with it, which the window's keys go to.
+    Expect(ui.Focused() == play)
+    Expect(ui.WantsKeys())
+    Flip()
+    ui.Update()
+    Expect(!play.Clicked())
+    Expect(clicks == 1)
+End Function
+
+@Test
+Function APressLetGoOffAButtonIsNoClick() Throws GraphicsError
+    Local play = Button("Play")
+    Local ui = Try Opened([play])
+    Defer EndGraphics()
+    Try Simulate.MoveMouse(Middle(play).x, Middle(play).y)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    Expect(play.State() == WidgetState.PRESSED)
+    Expect(ui.Pressed() == play)
+    Expect(ui.WantsPointer())
+    Try Simulate.MoveMouse(390.0, 290.0)
+    Flip()
+    ui.Update()
+    // Held off it, it isn't pressed, and it keeps the pointer.
+    Expect(play.State() != WidgetState.PRESSED)
+    Expect(ui.Pressed() == play)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    Expect(!play.Clicked())
+    Expect(ui.Pressed() == Null)
+    Expect(!ui.WantsPointer())
+End Function
+
+@Test
+Function AButtonLooksAsItsThemeSaysInEachState() Throws GraphicsError
+    Local play = Button("Play")
+    Local ui = Try Opened([play])
+    Defer EndGraphics()
+    Local theme = ui.CurrentTheme()
+    Expect(play.State() == WidgetState.NORMAL)
+    Expect(play.CurrentStyle() == theme.StyleOf("button"))
+    // Its padding is its style's, around its text.
+    Local text = EstimatedText("Play", theme.StyleOf("button"))
+    Local padding = theme.StyleOf("button").Padding
+    Expect(play.Box().Width == text.x + padding.Horizontal())
+    Expect(play.Box().Height == text.y + padding.Vertical())
+    Try Simulate.MoveMouse(Middle(play).x, Middle(play).y)
+    Flip()
+    ui.Update()
+    Expect(play.State() == WidgetState.HOVERED)
+    Expect(ui.Hovered() == play)
+    Expect(play.CurrentStyle() == theme.StyleOf("button", WidgetState.HOVERED))
+End Function
+
+@Test
+Function TheFocusedButtonIsClickedByReturnOrSpace() Throws GraphicsError
+    Local play = Button("Play")
+    Local quit = Button("Quit")
+    Local ui = Try Opened([play, quit])
+    Defer EndGraphics()
+    ui.Focus(quit)
+    Expect(ui.Focused() == quit)
+    Try Simulate.PressKey(Key.RETURN)
+    Flip()
+    ui.Update()
+    Expect(quit.Clicked())
+    Expect(!play.Clicked())
+    Try Simulate.PressKey(Key.SPACE)
+    Flip()
+    ui.Update()
+    Expect(quit.Clicked())
+    Expect(quit.State() == WidgetState.FOCUSED)
+    // The OS's repeats while it's held don't click it again.
+    Try Simulate.KeyDown(Key.RETURN)
+    Flip()
+    ui.Update()
+    Try Simulate.KeyDown(Key.RETURN, repeat: True)
+    Flip()
+    ui.Update()
+    Expect(!quit.Clicked())
+    Try Simulate.KeyUp(Key.RETURN)
+    Flip()
+    // A click on nothing takes the focus away.
+    Try ClickAt(ui, Vec2(390.0, 290.0))
+    Expect(ui.Focused() == Null)
+    Expect(!ui.WantsKeys())
+End Function
+
+@Test
+Function AToggleTurnsOverWhenClicked() Throws GraphicsError
+    Local sound = Toggle("Sound", True)
+    Local ui = Try Opened([sound])
+    Defer EndGraphics()
+    Expect(sound.On())
+    Try ClickAt(ui, Middle(sound))
+    Expect(!sound.On())
+    Expect(sound.Changed())
+    Expect(sound.StyleName() == "toggle")
+    Flip()
+    ui.Update()
+    Expect(!sound.Changed())
+    sound.SetOn(True)
+    Expect(sound.On())
+    Expect(!sound.Changed())
+End Function
+
+@Test
+Function ADisabledButtonTakesNoClickAndNoFocus() Throws GraphicsError
+    Local play = Button("Play")
+    play.SetEnabled(False)
+    Local ui = Try Opened([play])
+    Defer EndGraphics()
+    Expect(play.State() == WidgetState.DISABLED)
+    Expect(play.CurrentStyle() == ui.CurrentTheme().StyleOf("button", WidgetState.DISABLED))
+    Try ClickAt(ui, Middle(play))
+    Expect(!play.Clicked())
+    Expect(ui.Focused() == Null)
+    ui.Focus(play)
+    Expect(ui.Focused() == Null)
+End Function
+
+@Test
+Function ALabelMeasuresItsTextAsItsUiDoes() Throws GraphicsError
+    Local title = Label("Main menu")
+    Local ui = Try Opened([title])
+    Defer EndGraphics()
+    Expect(title.Box().Width == EstimatedText("Main menu", title.CurrentStyle()).x)
+    ui.SetTextMeasure(Function(text: String, style: Style) => Vec2(7.0, 3.0))
+    Flip()
+    ui.Update()
+    Expect(title.Box().Width == 7.0)
+    title.SetText("Options")
+    Expect(title.Text() == "Options")
+    // A label takes no input, so a click on it focuses nothing.
+    Try ClickAt(ui, Middle(title))
+    Expect(ui.Focused() == Null)
+    Expect(ui.Hovered() == title)
+End Function
+
+// At a scale of 2, the UI's units are two of the window's, so it's laid out in half the window
+// and the pointer's read at half its place.
+@Test
+Function AScaledUiIsLaidOutInItsOwnUnits() Throws GraphicsError
+    Local play = Button("Play")
+    Local ui = Try Opened([play])
+    Defer EndGraphics()
+    ui.SetScale(2.0)
+    Flip()
+    ui.Update()
+    Expect(ui.Root().Box() == Rect(0.0, 0.0, 200.0, 150.0))
+    Local inWindow = Middle(play) * 2.0
+    Try ClickAt(ui, inWindow)
+    Expect(play.Clicked())
+End Function
+
+@Test
+Function AProgressBarKeepsItsValueFrom0To1()
+    Local bar = Progress(0.5)
+    Expect(bar.Value() == 0.5)
+    bar.SetValue(3.0)
+    Expect(bar.Value() == 1.0)
+    bar.SetValue(-1.0)
+    Expect(bar.Value() == 0.0)
+    bar.SetValue(NaN)
+    Expect(bar.Value() == 0.0)
+End Function
+
+// A press on a widget that's disabled, or hidden, while it's held is let go, not over it.
+@Test
+Function APressGoesWithItsWidget() Throws GraphicsError
+    Local play = Button("Play")
+    Local volume = Slider(0.0, 10.0, 0.0)
+    Local ui = Try Opened([play, volume])
+    Defer EndGraphics()
+    Try Simulate.MoveMouse(Middle(play).x, Middle(play).y)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Frame(ui)
+    Expect(ui.Pressed() == play)
+    play.SetEnabled(False)
+    Frame(ui)
+    Expect(ui.Pressed() == Null)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Frame(ui)
+    Expect(!play.Clicked())
+    // A slider hidden mid-drag moves no more.
+    Local box = volume.ContentBox()
+    Try Simulate.MoveMouse(box.X + 1.0, Middle(volume).y)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Frame(ui)
+    Expect(ui.Pressed() == volume)
+    volume.SetVisible(False)
+    Frame(ui)
+    Try Simulate.MoveMouse(box.X + box.Width, Middle(volume).y)
+    Frame(ui)
+    Expect(volume.Value() < 1.0)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Frame(ui)
+End Function
+
+Function Frame(ui: Ui)
+    Flip()
+    ui.Update()
+End Function
+
+// Disabled, a widget's own widgets take no input and no focus, as a modal dialog wants of what's
+// under it, and look disabled.
+@Test
+Function DisabledReachesAWidgetsOwn() Throws GraphicsError
+    Local list = List(["a", "b"])
+    Local column = Node("column")
+    Local ok = Button("OK")
+    column.Add(ok)
+    Local view = ScrollView("view")
+    view.SetHeight(Sizing.Fixed(60.0))
+    view.Add(column)
+    Local ui = Try Opened([list, view])
+    Defer EndGraphics()
+    list.SetEnabled(False)
+    view.SetEnabled(False)
+    Frame(ui)
+    Local item = list.Children()[1] As? Widget
+    Expect(item != Null)
+    If item == Null Then Return
+    Expect(!item.EffectivelyEnabled() && item.State() == WidgetState.DISABLED)
+    Expect(ok.Enabled() && !ok.EffectivelyEnabled() && !ok.Focusable())
+    Expect(ok.State() == WidgetState.DISABLED)
+    Try ClickAt(ui, Middle(item))
+    Expect(list.Selected() == -1)
+    Try ClickAt(ui, Middle(ok))
+    Expect(!ok.Clicked() && ui.Focused() == Null)
+    ui.Focus(ok)
+    Expect(ui.Focused() == Null)
+    Try Simulate.PressKey(Key.TAB)
+    Frame(ui)
+    Expect(ui.Focused() == Null)
+    // Enabled again, its own are too.
+    view.SetEnabled(True)
+    Frame(ui)
+    Try ClickAt(ui, Middle(ok))
+    Expect(ok.Clicked())
+End Function
+
+// A handler that's given its button holds nothing that holds it: no cycle, which the leak check
+// would find.
+@Test
+Function AHandlerIsGivenItsButton()
+    Local ok = Button("OK")
+    ok.OnClick(Function(button: Button) => button.SetText("done"))
+    ok.Click()
+    Expect(ok.Text() == "done")
+End Function

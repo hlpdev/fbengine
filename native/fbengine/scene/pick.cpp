@@ -181,9 +181,11 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
                                   std::fmax(high.z, corner.z));
                 }
             }
+            // A hair wider too, so a line straight down onto a flat piece, whose box has no height,
+            // is swept from just in front of it, never a rounding behind it.
+            const vec3_t reach = margin + vec3_t(0.01F, 0.01F, 0.01F);
             float enter = 0.0F;
-            if (!crosses_box(segment, low - margin, high + margin, found ? hit.time : 1.0F,
-                             enter)) {
+            if (!crosses_box(segment, low - reach, high + reach, found ? hit.time : 1.0F, enter)) {
                 continue;
             }
             for (const auto& corners : under) {

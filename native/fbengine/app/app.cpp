@@ -19,6 +19,12 @@ namespace {
 // The links fbe_app_open_url kept, headless.
 std::vector<std::string> opened;
 
+// fbe_app_clipboard's, which the next call replaces.
+std::string clipboard;
+
+// What fbe_app_language_count read.
+std::vector<std::string> read_languages;
+
 /// The current folder, ending in its separator, which a relative path is from.
 std::string current_folder() {
     char* current = SDL_GetCurrentDirectory();
@@ -70,6 +76,35 @@ FBE_API bool fbe_app_open_url(const char* url) {
     return SDL_OpenURL(opening.opened.c_str())
                ? true
                : fbe::fail_sdl(std::format("couldn't open {}", opening.opened));
+}
+
+FBE_API bool fbe_app_set_clipboard(const char* text) {
+    if (!fbe::start_video()) {
+        return false;
+    }
+    return SDL_SetClipboardText(text != nullptr ? text : "")
+               ? true
+               : fbe::fail_sdl("couldn't put the text on the clipboard");
+}
+
+FBE_API const char* fbe_app_clipboard(void) {
+    clipboard.clear();
+    if (fbe::start_video()) {
+        char* text = SDL_GetClipboardText();
+        clipboard = text != nullptr ? text : "";
+        SDL_free(text);
+    }
+    return clipboard.c_str();
+}
+
+FBE_API int32_t fbe_app_language_count(void) {
+    read_languages = fbe::languages();
+    return static_cast<std::int32_t>(read_languages.size());
+}
+
+FBE_API const char* fbe_app_language_at(int32_t index) {
+    const bool there = index >= 0 && static_cast<std::size_t>(index) < read_languages.size();
+    return there ? read_languages[static_cast<std::size_t>(index)].c_str() : "";
 }
 
 FBE_API int32_t fbe_app_opened_count(void) {

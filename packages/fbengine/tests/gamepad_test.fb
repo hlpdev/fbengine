@@ -309,3 +309,26 @@ Function AJoystickIsKnownByItsGuid() Throws GraphicsError, InputError
     Expect(virtual.Device().Guid().Length == 32)
     Expect(virtual.Device().Serial() == "")
 End Function
+
+// A virtual pad's button let go and pressed again before a Flip is a release and a press, as a
+// real pad's is.
+@Test
+Function AVirtualPadsTapInOneFrameIsAReleaseAndAPress() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local pad = Try Simulate.ConnectGamepad()
+    Defer pad.Unplug()
+    Flip()
+    Local gamepad = Gamepads()[0]
+    pad.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Expect(gamepad.Hits(GamepadButton.SOUTH) == 1)
+    pad.SetButton(GamepadButton.SOUTH, False)
+    pad.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Expect(gamepad.Down(GamepadButton.SOUTH))
+    Expect(gamepad.Hits(GamepadButton.SOUTH) == 1 && gamepad.Up(GamepadButton.SOUTH))
+    pad.SetButton(GamepadButton.SOUTH, False)
+    Flip()
+End Function
