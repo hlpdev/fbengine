@@ -15,6 +15,7 @@ End Struct
 
 @CLayout Public Struct fbe_cook_model_t
     Public Field optimize: Bool
+    Public Field images: fbe_cook_image_t
 End Struct
 
 Public Extern "C" Lib "fbengine_tools_native"

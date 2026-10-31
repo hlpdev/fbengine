@@ -2,8 +2,12 @@
 // Run fb-bindgen again instead of editing it.
 
 // skipped: FBE_TOOLS_API, a macro that isn't a number
+Public Const FBE_TOOLS_NOT_FOUND: Int32 = 0
+Public Const FBE_TOOLS_INVALID_DATA: Int32 = 4
+Public Const FBE_TOOLS_OTHER: Int32 = 5
 
 Public Extern "C" Lib "fbengine_tools_native"
     Function fbe_tools_version(): CString
     Function fbe_tools_error(): CString
+    Function fbe_tools_failure(): Int32
 End Extern

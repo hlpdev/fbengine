@@ -508,6 +508,10 @@ TEST_CASE("hostile glTFs fail as they should, here and on a job", "[assets]") {
         { .name = "b64_skin105.gltf", .failure = failure_t::INVALID_DATA },
         // A joint past its skin's.
         { .name = "joints_past_skin.gltf", .failure = failure_t::INVALID_DATA },
+        // An attribute the engine doesn't read, shorter than the positions, which the cooker's
+        // remap would read past.
+        { .name = "short_uv2.gltf", .failure = failure_t::INVALID_DATA },
+        { .name = "short_custom.gltf", .failure = failure_t::INVALID_DATA },
         // URIs that aren't the game's files, and paths that go above res://.
         { .name = "uri_abs.gltf", .failure = failure_t::INVALID_DATA },
         { .name = "uri_drive.gltf", .failure = failure_t::INVALID_DATA },

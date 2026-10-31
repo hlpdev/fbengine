@@ -5,6 +5,7 @@
 Import std.collections
 Import std.compress
 Import std.core
+Import std.data
 Import std.ffi
 Import std.io
 Import std.text
@@ -38,28 +39,29 @@ Public Final Class Cooker
 
     /// Cooks the image at `from`, a PNG or a JPEG, into the KTX2 at `to`, as `settings` say:
     /// PLATFORM compression is BC7, which every desktop GPU reads. One that isn't a PNG or a JPEG,
-    /// or won't decode, throws an IOError of INVALID_DATA, and one that can't be read or written
-    /// one of OTHER.
+    /// won't decode, is bigger than the engine loads (16384 across or high), or whose settings'
+    /// Quality isn't 0 to 4 throws an IOError of INVALID_DATA, and one that can't be read or
+    /// written one of OTHER, which leaves `to` as it was.
     @MainThread
     Public Static Method CookImage(from: Path, to: Path, settings: ImageSettings) Throws IOError
         If !IsImage(Try File.ReadBytes(from))
             Throw IOError(IOErrorKind.INVALID_DATA, "{from} isn't a PNG or a JPEG", from.Text)
         End If
-        Local options = fbe_cook_image_t(FormatOf(settings.Compression), settings.Srgb,
-                                         settings.Mipmaps, settings.Quality)
+        Local options = ImageOptions(settings)
         Local cooked = False
         Unsafe
             cooked = fbe_cook_image(from.Text, to.Text, AddressOf(options))
         End Unsafe
-        If !cooked Then Throw IOError(IOErrorKind.OTHER, ToolsError(), from.Text)
+        If !cooked Then Throw ToolsFailed(from.Text)
     End Method
 
     /// Cooks the glTF (or binary glTF) at `from` into the binary glTF at `to`, as `settings` say,
     /// reading the buffers it names from beside it, as the engine does from res://: its triangles
     /// and vertices ordered for the GPU's caches and fetches, with meshoptimizer, unless
     /// `settings.Optimize` is False, and its buffers, and its images in buffers, in one; the images
-    /// it names by their paths stay named. What the engine wouldn't load throws an IOError of
-    /// INVALID_DATA, and one whose files can't be read or written one of OTHER.
+    /// it names by their paths stay named, and those in its buffers are cooked into KTX2s by
+    /// `settings.Images`. What the engine wouldn't load throws an IOError of INVALID_DATA, and one
+    /// whose files can't be read or written, as a buffer that isn't there, one of OTHER.
     @MainThread
     Public Static Method CookModel(from: Path, to: Path, settings: ModelSettings) Throws IOError
         Try CookModelIn(from, to, from.Parent(), settings)
@@ -71,21 +73,25 @@ Public Final Class Cooker
         If !IsModel(from, Try File.ReadBytes(from))
             Throw IOError(IOErrorKind.INVALID_DATA, "{from} isn't a glTF", from.Text)
         End If
-        Local options = fbe_cook_model_t(settings.Optimize)
+        Local options = fbe_cook_model_t(settings.Optimize,
+                                         ImageOptions(settings.Images ?? ImageSettings()))
         Local cooked = False
         Unsafe
             cooked = fbe_cook_model(from.Text, to.Text, root.Text, AddressOf(options))
         End Unsafe
-        If !cooked Then Throw IOError(IOErrorKind.INVALID_DATA, ToolsError(), from.Text)
+        If !cooked Then Throw ToolsFailed(from.Text)
     End Method
 
-    /// Cooks the files in the folder `source`, all the way down, into the pak at `pak`, each at
-    /// its own path from the folder: its images, PNGs and JPEGs by their bytes, by their sidecars'
-    /// ImageSettings; its glTFs, named .gltf or .glb, by their ModelSettings; and every other file,
-    /// sidecars and buffers too, as it is. The pak is written whole or not at all. A sidecar that
-    /// isn't its file's settings throws an IOError of INVALID_DATA, as Assets.ReadSettings does, so
-    /// does a glTF the engine wouldn't load, and a file whose name no res:// path can have one of
-    /// INVALID_PATH.
+    /// Cooks the files in the folder `source`, all the way down, following links as its mount
+    /// does, into the pak at `pak`, making its folder, each at its own path from the folder: its
+    /// images, PNGs and JPEGs by their bytes, by their sidecars' ImageSettings; its glTFs, named
+    /// .gltf or .glb, by their ModelSettings, which leaves out the buffers they name, now in them;
+    /// and every other file, sidecars too, as it is, but the pak itself, if it's in the folder.
+    /// The pak is written whole or not at all. A sidecar that isn't its file's settings throws an
+    /// IOError of INVALID_DATA, as Assets.ReadSettings does, and so do a glTF the engine wouldn't
+    /// load, two names that differ only in case, which res:// can't tell apart, and a folder more
+    /// than 32 deep, as links that go round make one; and a file whose name no res:// path can
+    /// have throws one of INVALID_PATH.
     @MainThread
     Public Static Method CookFolder(source: Path, pak: Path) Throws IOError
         cooks += 1
@@ -94,26 +100,164 @@ Public Final Class Cooker
         Defer Assets.Unmount(place)
         Local scratch = Try TempDir()
         Defer Try? scratch.Close()
-        Local writer = ZipWriter()
-        For entry In Try Dir.Walk(source)
-            If entry.Kind != FileKind.FILE Then Continue
-            Local name = entry.Relative.Text.Replace("\\", "/")
+        Local files: (Path, String)[] = []
+        Try Listed(source, "", 0, files)
+        // Names that differ only in case, which a case-sensitive disk keeps apart.
+        Local seen = Map<String, String>()
+        For file In files
+            Local other = seen.Get(Folded(file.1))
+            If other != Null
+                Throw IOError(IOErrorKind.INVALID_DATA,
+                              "{source} has {other} and {file.1}, which res:// can't tell apart",
+                              source.Text)
+            End If
+            seen[Folded(file.1)] = file.1
+        End For
+        Local output = ((Try? pak.Absolute()) ?? pak).Text
+        Local cooked: (String, UInt8[])[] = []
+        // The buffers the cooked glTFs named, by their names folded, which are in them now.
+        Local buffers = Set<String>()
+        For file In files
+            If ((Try? file.0.Absolute()) ?? file.0).Text == output Then Continue
+            Local name = file.1
             Try Assets.Normalize("{place}/{name}")
-            Local bytes = Try File.ReadBytes(entry.Path)
+            Local bytes = Try File.ReadBytes(file.0)
             If IsImage(bytes)
                 Local settings = Try Assets.ReadSettings<ImageSettings>("{place}/{name}")
-                Local cooked = scratch.Path / "cooked.ktx2"
-                Try CookImage(entry.Path, cooked, settings)
-                bytes = Try File.ReadBytes(cooked)
-            ElseIf IsModel(entry.Path, bytes)
+                Local made = scratch.Path / "cooked.ktx2"
+                Try CookImage(file.0, made, settings)
+                bytes = Try File.ReadBytes(made)
+            ElseIf IsModel(file.0, bytes)
                 Local settings = Try Assets.ReadSettings<ModelSettings>("{place}/{name}")
-                Local cooked = scratch.Path / "cooked.glb"
-                Try CookModelIn(entry.Path, cooked, source, settings)
-                bytes = Try File.ReadBytes(cooked)
+                For named In BuffersOf(name, bytes, place)
+                    buffers.Add(named)
+                End For
+                Local made = scratch.Path / "cooked.glb"
+                Try CookModelIn(file.0, made, source, settings)
+                bytes = Try File.ReadBytes(made)
             End If
-            writer.Add(name, bytes, ZipMethod.STORE)
+            cooked.Add((name, bytes))
         End For
+        Local writer = ZipWriter()
+        For file In cooked
+            If !buffers.Contains(Folded(file.0)) Then writer.Add(file.0, file.1, ZipMethod.STORE)
+        End For
+        Local folder = pak.Parent()
+        If folder.Text != "" Then Try Dir.CreateAll(folder)
         Try File.WriteBytesAtomic(pak, writer.Finish())
+    End Method
+
+    // Adds the files in `folder`, which is `relative` from the folder cooked, and in each folder
+    // in it, following links as the folder mount does, each with its name from the folder cooked.
+    Static Method Listed(folder: Path, relative: String, depth: Int,
+                         into: (Path, String)[]) Throws IOError
+        If depth > 32
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{folder} is more than 32 folders deep, as links that go round make one",
+                          folder.Text)
+        End If
+        For entry In Try Dir.Entries(folder)
+            Local name = relative == "" ? entry.Name() : relative + "/" + entry.Name()
+            Local kind = entry.Kind
+            If kind == FileKind.LINK
+                If Dir.Exists(entry.Path)
+                    kind = FileKind.DIRECTORY
+                ElseIf File.Exists(entry.Path)
+                    kind = FileKind.FILE
+                Else
+                    Continue
+                End If
+            End If
+            If kind == FileKind.DIRECTORY
+                Try Listed(entry.Path, name, depth + 1, into)
+            ElseIf kind == FileKind.FILE
+                into.Add((entry.Path, name))
+            End If
+        End For
+    End Method
+
+    // The buffers the glTF `name`, whose bytes are `bytes`, names by their paths, as names from
+    // the folder cooked, folded, which `place` is mounted at.
+    Static Method BuffersOf(name: String, bytes: UInt8[], place: String): String[]
+        Local json = bytes
+        // A binary glTF's JSON is its first chunk's.
+        If bytes.Count >= 20 && bytes[0..4] == "glTF".Bytes
+            Local length = (bytes[12] As Int) | ((bytes[13] As Int) << 8) |
+                           ((bytes[14] As Int) << 16) | ((bytes[15] As Int) << 24)
+            If 20 + length > bytes.Count Then Return []
+            json = bytes[20..20 + length]
+        End If
+        Local text = String.FromUtf8(json)
+        If text == Null Then Return []
+        Local read = Try? Json.Read(text)
+        If read == Null Then Return []
+        Local named: String[] = []
+        Local names = name.Split("/")
+        Local folder = ""
+        For at = 0 Until names.Count - 1
+            folder += names[at] + "/"
+        End For
+        For buffer In (read["buffers"]?.AsArray() ?? [])
+            Local uri = buffer["uri"]?.AsString()
+            If uri == Null || uri.Contains(":") || uri.StartsWith("/") Then Continue
+            Local normalized = Try? Assets.Normalize("{place}/{folder}{PercentDecoded(uri)}")
+            If normalized != Null Then named.Add(normalized.Slice(place.Length + 1,
+                                                                  normalized.Length))
+        End For
+        Return named
+    End Method
+
+    // `uri` with each %XX its byte, as fastgltf reads a URI's path.
+    Static Method PercentDecoded(uri: String): String
+        Local bytes = uri.Bytes
+        Local decoded: UInt8[] = []
+        Local at = 0
+        While at < bytes.Count
+            If bytes[at] == 0x25 && at + 2 < bytes.Count && IsHex(bytes[at + 1]) &&
+               IsHex(bytes[at + 2])
+                decoded.Add(((Hex(bytes[at + 1]) << 4) | Hex(bytes[at + 2])) As UInt8)
+                at += 3
+            Else
+                decoded.Add(bytes[at])
+                at += 1
+            End If
+        End While
+        Return String.FromUtf8(decoded) ?? uri
+    End Method
+
+    Static Method IsHex(byte: UInt8): Bool
+        Return (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x46) ||
+               (byte >= 0x61 && byte <= 0x66)
+    End Method
+
+    Static Method Hex(byte: UInt8): Int
+        If byte <= 0x39 Then Return (byte As Int) - 0x30
+        If byte <= 0x46 Then Return (byte As Int) - 0x41 + 10
+        Return (byte As Int) - 0x61 + 10
+    End Method
+
+    // `name` with its ASCII letters in lower case, as res:// compares names.
+    Static Method Folded(name: String): String
+        Local folded: UInt8[] = []
+        For byte In name.Bytes
+            folded.Add(byte >= 0x41 && byte <= 0x5A ? (byte + 0x20) As UInt8 : byte)
+        End For
+        Return String.FromUtf8(folded) ?? name
+    End Method
+
+    // The cooker's options for an image's settings.
+    Static Method ImageOptions(settings: ImageSettings): fbe_cook_image_t
+        Return fbe_cook_image_t(FormatOf(settings.Compression), settings.Srgb, settings.Mipmaps,
+                                settings.Quality)
+    End Method
+
+    // The IOError of the cooker's call that just failed, about `path`: INVALID_DATA for what it was
+    // given that isn't what it takes, and OTHER for the rest, as files that can't be read or
+    // written.
+    Static Method ToolsFailed(path: String): IOError
+        Local kind = IOErrorKind.OTHER
+        If fbe_tools_failure() == FBE_TOOLS_INVALID_DATA Then kind = IOErrorKind.INVALID_DATA
+        Return IOError(kind, ToolsError(), path)
     End Method
 
     // Whether `bytes` are a PNG's or a JPEG's, by their signatures.

@@ -2,6 +2,7 @@
 // read back by libktx.
 
 #include "../assets/files.hpp"
+#include "assets/image.hpp"
 #include "cook/cook.hpp"
 
 #include <algorithm>
@@ -29,9 +30,9 @@ texture_ptr_t read(const tools::bytes_t& bytes) {
 }
 
 tools::bytes_t cooked(const tools::bytes_t& image, fbe_cook_image_t options) {
-    std::expected<tools::bytes_t, std::string> bytes = tools::cook_image(image, options);
+    std::expected<tools::bytes_t, tools::error_t> bytes = tools::cook_image(image, options);
     if (!bytes) {
-        FAIL(bytes.error());
+        FAIL(bytes.error().message);
     }
     return std::move(*bytes);
 }
@@ -52,18 +53,32 @@ std::vector<std::uint8_t> gradient(int width, int height) {
 
 } // namespace
 
-TEST_CASE("a mip averages in linear light, alpha as it is", "[tools]") {
-    const tools::rgba_t image{
+TEST_CASE("a mip averages in linear light, its colors weighted by their alpha", "[tools]") {
+    const tools::rgba_t opaque{
         .width = 2,
         .height = 2,
-        .texels = { 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255 },
+        .texels = { 0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255 },
     };
-    const tools::rgba_t srgb = tools::half(image, true);
+    const tools::rgba_t srgb = tools::half(opaque, true);
     REQUIRE(srgb.width == 1);
     REQUIRE(srgb.height == 1);
-    // Half of white's light is sRGB's 188, not 128; alpha is 128 either way.
-    REQUIRE(srgb.texels == std::vector<std::uint8_t>{ 188, 188, 188, 128 });
-    REQUIRE(tools::half(image, false).texels == std::vector<std::uint8_t>{ 128, 128, 128, 128 });
+    // Half of white's light is sRGB's 188, not 128.
+    REQUIRE(srgb.texels == std::vector<std::uint8_t>{ 188, 188, 188, 255 });
+    REQUIRE(tools::half(opaque, false).texels == std::vector<std::uint8_t>{ 128, 128, 128, 255 });
+    // What's clear, a bright red, doesn't tint what isn't, as an alpha-tested leaf's edge's would.
+    const tools::rgba_t leaf{
+        .width = 2,
+        .height = 2,
+        .texels = { 255, 0, 0, 0, 0, 0, 64, 255, 255, 0, 0, 0, 255, 0, 0, 0 },
+    };
+    REQUIRE(tools::half(leaf, false).texels == std::vector<std::uint8_t>{ 0, 0, 64, 64 });
+    // All clear, its colors as they are.
+    const tools::rgba_t clear{
+        .width = 2,
+        .height = 1,
+        .texels = { 200, 0, 0, 0, 0, 0, 0, 0 },
+    };
+    REQUIRE(tools::half(clear, false).texels == std::vector<std::uint8_t>{ 100, 0, 0, 0 });
 }
 
 TEST_CASE("a mip of an odd size takes in its last row and column", "[tools]") {
@@ -150,4 +165,27 @@ TEST_CASE("what isn't a PNG or a JPEG doesn't cook", "[tools]") {
     REQUIRE_FALSE(tools::cook_image(text, { .format = FBE_COOK_BC7 }).has_value());
     REQUIRE_FALSE(
         tools::cook_image(test::png(2, 2, 4, gradient(2, 2)), { .format = 9 }).has_value());
+}
+
+TEST_CASE("an image bigger than the engine loads, or of a quality not 0 to 4, doesn't cook",
+          "[tools]") {
+    const tools::bytes_t wide = test::png(fbe::assets::most_side + 1, 1, 1,
+                                          std::vector<std::uint8_t>(fbe::assets::most_side + 1, 0));
+    const std::expected<tools::bytes_t, tools::error_t> refused =
+        tools::cook_image(wide, { .format = FBE_COOK_RGBA8 });
+    REQUIRE_FALSE(refused.has_value());
+    REQUIRE(refused.error().failure == tools::failure_t::INVALID_DATA);
+    REQUIRE(refused.error().message.contains("16384"));
+    const tools::bytes_t small = test::png(2, 2, 4, std::vector<std::uint8_t>(16, 7));
+    for (const std::int32_t quality : { -1, 5, 9 }) {
+        const std::expected<tools::bytes_t, tools::error_t> cooked =
+            tools::cook_image(small, { .format = FBE_COOK_RGBA8, .quality = quality });
+        REQUIRE_FALSE(cooked.has_value());
+        REQUIRE(cooked.error().failure == tools::failure_t::INVALID_DATA);
+    }
+    REQUIRE(tools::cook_image(small, { .format = FBE_COOK_RGBA8, .quality = 4 }).has_value());
+    // What won't decode is INVALID_DATA too.
+    REQUIRE(tools::cook_image(test::bytes("not an image"), { .format = FBE_COOK_BC7 })
+                .error()
+                .failure == tools::failure_t::INVALID_DATA);
 }
