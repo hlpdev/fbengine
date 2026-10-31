@@ -14,7 +14,9 @@ extern "C" {
 // Whether the channel hasn't finished; a paused channel is playing.
 FBE_AUDIO_API bool fbe_channel_playing(uint64_t channel);
 FBE_AUDIO_API bool fbe_channel_paused(uint64_t channel);
-// Stops the channel, which is finished after.
+// Stops the channel, which is finished after; what's heard of it ramps to silence over the next
+// stretch the mix makes, at most 512 frames, before it goes. A pause ramps to silence before its
+// sound stops, and a resume ramps back.
 FBE_AUDIO_API void fbe_channel_stop(uint64_t channel);
 FBE_AUDIO_API void fbe_channel_pause(uint64_t channel);
 FBE_AUDIO_API void fbe_channel_resume(uint64_t channel);

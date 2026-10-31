@@ -19,17 +19,20 @@ Public Struct Channel
     /// Whether it's paused, which a finished Channel isn't.
     @MainThread Public Method Paused(): Bool => fbe_channel_paused(handle)
 
-    /// Stops it, which finishes it.
+    /// Stops it, which finishes it at once; what's heard ramps to silence over the next few
+    /// milliseconds the mix makes, so it doesn't click.
     @MainThread Public Method Stop()
         fbe_channel_stop(handle)
     End Method
 
-    /// Pauses it where it is, until Resume.
+    /// Pauses it where it is, until Resume, ramping to silence over the next few milliseconds the
+    /// mix makes, so it doesn't click.
     @MainThread Public Method Pause()
         fbe_channel_pause(handle)
     End Method
 
-    /// Plays it on from where Pause left it, or from its start, for a play that started paused.
+    /// Plays it on from where Pause left it, ramping back from silence, or from its start, for a play
+    /// that started paused.
     @MainThread Public Method Resume()
         fbe_channel_resume(handle)
     End Method
