@@ -1,13 +1,24 @@
 // Writes the typed references of the folder its second argument names into a game in the folder
 // its first names, with a program that prints some of them, and one that names a file that isn't
-// there, which ctest then builds: the first runs, and the second doesn't compile.
+// there, which ctest then builds: the first runs, and the second doesn't compile. And a game of
+// each tree in the folder its third names, of names a fuzzer found modules that didn't compile
+// for, which ctest builds and runs too.
 
 Import std.core
 Import std.io
 Import std.os
 Import fbengine_tools
 
-Function Make(into: Path, files: Path) Throws IOError
+Function Make(into: Path, files: Path, trees: Path) Throws IOError
+    For tree In Try Dir.Entries(trees)
+        Local folder = into / "tree-{tree.Name()}"
+        Try Dir.CreateAll(folder)
+        Try File.WriteText(folder / "project.toml",
+                           "[project]\nname = \"references_tree\"\nversion = \"0.1.0\"\n")
+        Try References.Write(tree.Path, folder / "res.fb")
+        Try File.WriteText(folder / "main.fb",
+                           "Import std.core\nImport \"./res\" As Res\n\nPrint(\"built\")\n")
+    End For
     For game In ["game", "typo"]
         Local folder = into / game
         Try Dir.CreateAll(folder)
@@ -23,7 +34,7 @@ Function Make(into: Path, files: Path) Throws IOError
 End Function
 
 Try
-    Make(Path(Process.Arguments()[0]), Path(Process.Arguments()[1]))
+    Make(Path(Process.Arguments()[0]), Path(Process.Arguments()[1]), Path(Process.Arguments()[2]))
     Print("written")
 Catch e As IOError
     Print("couldn't write them: {e.Message}")

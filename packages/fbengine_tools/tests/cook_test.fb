@@ -290,13 +290,14 @@ Function AFolderCooksWhatsBehindItsLinksAndNotItsPak() Throws IOError
     Try Cooker.CookFolder(source.Path, source.Path / "game.pak")
     Try Cooker.CookFolder(source.Path, source.Path / "game.pak")
     Try Cooker.CookFolder(source.Path, source.Path / "out" / "deeper" / "game.pak")
+    // And into it in another case, which on a disk that ignores case is it.
+    Try Cooker.CookFolder(source.Path, source.Path / "GAME.PAK")
     Try Assets.MountPak("res://test-links", source.Path / "game.pak")
     Defer Assets.Unmount("res://test-links")
     Expect((Try Assets.ReadText("res://test-links/linked/shared.txt")) == "shared")
     Expect((Try Assets.ReadText("res://test-links/own.txt")) == "own")
     Expect(!Assets.Exists("res://test-links/game.pak"))
     Expect(File.Exists(source.Path / "out" / "deeper" / "game.pak"))
-    If System.Platform == Platform.WINDOWS Then Try? Dir.Remove(source.Path / "linked")
 End Function
 
 @Test
@@ -309,7 +310,13 @@ Function LinksThatGoRoundDontCook() Throws IOError
     Defer Try? built.Close()
     Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path / "game.pak"))?.Kind ==
            IOErrorKind.INVALID_DATA)
-    If System.Platform == Platform.WINDOWS Then Try? Dir.Remove(source.Path / "round")
+    // And one of long names, whose paths are past the longest Windows takes before they're 32
+    // deep.
+    Try File.Delete(source.Path / "round")
+    Local long = "a folder whose name is long enough that a few of them are too long a path"
+    Try LinkFolder(source.Path / long, source.Path)
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
 End Function
 
 @Test

@@ -53,6 +53,9 @@ struct load_t {
     /// reads its settings hears.
     std::optional<std::string> settings;
     std::optional<error_t> settings_error;
+    /// The res:// paths, normalized, of what it read besides its file: its sidecar, if it reads
+    /// one, and a model's buffers and images.
+    std::vector<std::string> reads;
     bytes_t bytes;
     image_t image;
     model_t model;

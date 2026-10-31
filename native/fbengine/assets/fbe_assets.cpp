@@ -11,6 +11,7 @@
 #include <exception>
 #include <format>
 #include <memory>
+#include <utility>
 
 namespace {
 
@@ -181,6 +182,20 @@ FBE_API const char* fbe_assets_settings_error(uint64_t load) {
     return found != nullptr && found->done && found->settings_error
                ? found->settings_error->message.c_str()
                : "";
+}
+
+FBE_API int32_t fbe_assets_reads(uint64_t load) {
+    const assets::load_t* found = assets::loads().get(load);
+    return found != nullptr && found->done ? static_cast<int32_t>(found->reads.size()) : -1;
+}
+
+FBE_API const char* fbe_assets_read(uint64_t load, int32_t index) {
+    const assets::load_t* found = assets::loads().get(load);
+    if (found == nullptr || !found->done || index < 0 ||
+        std::cmp_greater_equal(index, found->reads.size())) {
+        return "";
+    }
+    return found->reads[static_cast<std::size_t>(index)].c_str();
 }
 
 FBE_API bool fbe_assets_wait(uint64_t load) {

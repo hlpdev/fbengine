@@ -47,8 +47,29 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb KTX fastgltf)
 
+# stb_image is patched where a PNG whose first IDAT is empty has stbi__getn copy none of it from
+# a null buffer, which memcpy doesn't allow, and UBSan reports: reading nothing, it gives that it
+# did before it copies. The patched copy comes before stb's own folder, and the patch's text has to
+# be there, once, or configuring fails.
+file(READ "${stb_SOURCE_DIR}/stb_image.h" fbengine_stb_image)
+set(fbengine_stb_image_from
+    "static int stbi__getn(stbi__context *s, stbi_uc *buffer, int n)\n{\n   if (s->io.read) {")
+set(fbengine_stb_image_to
+    "static int stbi__getn(stbi__context *s, stbi_uc *buffer, int n)\n{\n   if (n == 0) return 1;\n   if (s->io.read) {")
+string(FIND "${fbengine_stb_image}" "${fbengine_stb_image_from}" fbengine_first)
+string(FIND "${fbengine_stb_image}" "${fbengine_stb_image_from}" fbengine_last REVERSE)
+if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
+  message(FATAL_ERROR "stb_image.h doesn't have, once, what its patch expects")
+endif()
+string(REPLACE "${fbengine_stb_image_from}" "${fbengine_stb_image_to}" fbengine_stb_image
+               "${fbengine_stb_image}")
+set(fbengine_stb_patched "${CMAKE_BINARY_DIR}/stb-patched")
+file(WRITE "${fbengine_stb_patched}/stb_image.h.in" "${fbengine_stb_image}")
+configure_file("${fbengine_stb_patched}/stb_image.h.in" "${fbengine_stb_patched}/stb_image.h"
+               COPYONLY)
 add_library(fbengine_stb INTERFACE)
-target_include_directories(fbengine_stb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
+target_include_directories(fbengine_stb SYSTEM INTERFACE "${fbengine_stb_patched}"
+                           "${stb_SOURCE_DIR}")
 
 # Built into a shared library, their code is position-independent too.
 set_target_properties(ktx_read ktx fastgltf PROPERTIES POSITION_INDEPENDENT_CODE ON)

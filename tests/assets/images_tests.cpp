@@ -174,6 +174,18 @@ TEST_CASE("what isn't a whole image is invalid data", "[assets]") {
             assets::failure_t::INVALID_DATA);
 }
 
+TEST_CASE("a PNG whose first IDAT is empty decodes", "[assets]") {
+    // An empty IDAT, its CRC that of "IDAT" alone, before the first.
+    bytes_t png = test::png(4, 4, 4, std::vector<std::uint8_t>(64, 9));
+    const auto idat = std::ranges::search(png, std::string_view("IDAT")).begin() - 4;
+    const bytes_t empty = { 0, 0, 0, 0, 'I', 'D', 'A', 'T', 0x35, 0xAF, 0x06, 0x1E };
+    png.insert(idat, empty.begin(), empty.end());
+    const assets::image_t image = decoded(png);
+    REQUIRE(image.width == 4);
+    const auto nine = [](std::uint8_t texel) { return texel == 9; };
+    REQUIRE(std::ranges::all_of(image.texels.bytes(), nine));
+}
+
 TEST_CASE("a KTX2 keeps its mips, layers, and faces", "[assets]") {
     SECTION("mips and layers") {
         const assets::image_t image =

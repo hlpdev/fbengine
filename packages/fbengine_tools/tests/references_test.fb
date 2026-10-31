@@ -3,6 +3,7 @@
 
 Import std.core
 Import std.io
+Import std.os
 Import std.test
 Import std.text
 Import fbengine_tools
@@ -31,9 +32,9 @@ Function AFoldersFilesAreAModuleOfTheirPaths() Throws IOError
         "/// res://Textures/\nPublic Final Class Textures\n" +
         "    /// res://Textures/stone_wall.png\n    Public Static Property StoneWall: String\n" +
         "        Get => \"res://Textures/stone_wall.png\"\n    End Property\n\n" +
-        "    /// res://Textures/Walls/\n    Public Static Property Walls: TexturesWallsFolder\n" +
-        "        Get => TexturesWallsFolder()\n    End Property\nEnd Class\n\n" +
-        "/// res://Textures/Walls/\nPublic Final Class TexturesWallsFolder\n" +
+        "    /// res://Textures/Walls/\n    Public Static Property Walls: Textures_Walls\n" +
+        "        Get => Textures_Walls()\n    End Property\nEnd Class\n\n" +
+        "/// res://Textures/Walls/\nPublic Final Class Textures_Walls\n" +
         "    /// res://Textures/Walls/brick-old.png\n    Public Property BrickOld: String\n" +
         "        Get => \"res://Textures/Walls/brick-old.png\"\n    End Property\nEnd Class\n\n" +
         "/// res://models/\nPublic Final Class Models\n" +
@@ -63,4 +64,27 @@ Function NamesThatDifferOnlyInCaseAreOne() Throws IOError
     // The disk may keep one of them, or both; either way it names one.
     Expect(made.Contains("Public Const Wall = "))
     Expect(!made.Contains("Wall2"))
+End Function
+
+// Links `link` to the folder `target`, as a junction on Windows, which needs no privilege.
+Function LinkFolder(link: Path, target: Path) Throws IOError
+    If System.Platform == Platform.WINDOWS
+        // cmd takes a forward slash as a switch's.
+        Try Command("cmd").Args(["/c", "mklink", "/J", link.Text.Replace("/", "\\"),
+                                 target.Text.Replace("/", "\\")]).Output()
+    Else
+        Try Command("ln").Args(["-s", target.Text, link.Text]).Output()
+    End If
+End Function
+
+@Test
+Function AFolderBehindALinkIsInTheModule() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Local shared = Try TempDir()
+    Defer Try? shared.Close()
+    Try File.WriteText(shared.Path / "door.png", "")
+    Try LinkFolder(game.Path / "shared", shared.Path)
+    Local made = Try References.Of(game.Path)
+    Expect(made.Contains("Get => \"res://shared/door.png\""))
 End Function

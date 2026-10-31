@@ -272,7 +272,8 @@ if(FBENGINE_FB_TESTS)
   add_test(NAME tools.references.write
            COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/tools/references"
                    -- "${fbengine_references_games}"
-                   "${CMAKE_CURRENT_SOURCE_DIR}/tools/references/files")
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tools/references/files"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tools/references/trees")
   set_tests_properties(tools.references.write PROPERTIES FIXTURES_SETUP fbengine_references
                        PASS_REGULAR_EXPRESSION "\nwritten\r?\n$")
   add_test(NAME tools.references.game
@@ -284,6 +285,13 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${fbengine_references_games}/typo")
   set_tests_properties(tools.references.typo PROPERTIES FIXTURES_REQUIRED fbengine_references
                        PASS_REGULAR_EXPRESSION "error: Textures has no member named 'Wal'")
+  foreach(tree IN ITEMS case1 case3 m1 m2)
+    add_test(NAME tools.references.tree.${tree}
+             COMMAND "${FBENGINE_FB}" --color never run "${fbengine_references_games}/tree-${tree}")
+    set_tests_properties(tools.references.tree.${tree} PROPERTIES
+                         FIXTURES_REQUIRED fbengine_references PASS_REGULAR_EXPRESSION
+                         "\nbuilt\r?\n$")
+  endforeach()
 endif()
 
 # fbengine_audio's own C++, where it's subtle: what's in its headers, and miniaudio's backends.
