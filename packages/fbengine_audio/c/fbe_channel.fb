@@ -15,5 +15,10 @@ Public Extern "C" Lib "fbengine_audio_native"
     Function fbe_channel_pitch(channel: UInt64): Float32
     Function fbe_channel_set_loop(channel: UInt64, loop: Bool)
     Function fbe_channel_looping(channel: UInt64): Bool
+    Function fbe_channel_position(channel: UInt64): Float64
+    Function fbe_channel_seek(channel: UInt64, seconds: Float64): Bool
+    Function fbe_channel_fade(channel: UInt64, level: Float32, seconds: Float64): Bool
+    Function fbe_channel_fade_out(channel: UInt64, seconds: Float64): Bool
+    Function fbe_channel_fade_level(channel: UInt64): Float32
     Function fbe_channel_count(): Int32
 End Extern

@@ -2,6 +2,7 @@
 
 Import std.core
 Import std.math
+Import "./audio"
 Import "./c/fbe_channel"
 
 /// One play of a Sound, which Sound.Play gives. It plays until its sound ends, or for good when it
@@ -67,6 +68,36 @@ Public Struct Channel
 
     /// Whether it loops.
     @MainThread Public Method Looping(): Bool => fbe_channel_looping(handle)
+
+    /// How many seconds into its sound it's been mixed to, as of the last mix, which a device's
+    /// is a few milliseconds ahead of what's heard.
+    @MainThread Public Method Position(): Float64 => fbe_channel_position(handle)
+
+    /// Plays it on from `seconds` into its sound, from 0 to its length, from the next mix.
+    @MainThread Public Method Seek(seconds: Float64)
+        If !IsFinite(seconds) || seconds < 0.0
+            Panic("a seek is 0 seconds to its sound's length, not {seconds}")
+        End If
+
+        If !fbe_channel_seek(handle, seconds) Then Panic(LastError())
+    End Method
+
+    /// Fades it, from where its fade is, 1 as it starts, to `level`, 0 or more, over `seconds`, 0
+    /// for at once. Its fade multiplies its volume, so the two don't undo each other.
+    @MainThread Public Method FadeTo(level: Float32, seconds: Float64)
+        CheckVolume(level)
+        CheckFade(seconds)
+        fbe_channel_fade(handle, level, seconds)
+    End Method
+
+    /// Fades it to silence over `seconds`, then finishes it, or finishes it at once for 0.
+    @MainThread Public Method FadeOut(seconds: Float64)
+        CheckFade(seconds)
+        fbe_channel_fade_out(handle, seconds)
+    End Method
+
+    /// Where its fade is, from 1 as it starts.
+    @MainThread Public Method Fade(): Float32 => fbe_channel_fade_level(handle)
 End Struct
 
 // A volume, pan, or pitch out of range is a mistake, finished Channel or not.
@@ -83,4 +114,9 @@ End Function
 @PanicsAtCaller
 Package Function CheckPitch(pitch: Float32)
     If !(pitch >= 0.0625 && pitch <= 16.0) Then Panic("a pitch is 1/16 to 16, not {pitch}")
+End Function
+
+@PanicsAtCaller
+Package Function CheckFade(seconds: Float64)
+    If !IsFinite(seconds) || seconds < 0.0 Then Panic("a fade takes 0 seconds or more, not {seconds}")
 End Function

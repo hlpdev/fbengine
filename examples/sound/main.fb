@@ -13,4 +13,5 @@ While channel.Playing()
     Sleep(10.Milliseconds)
 End While
 Print("played {tone.Length()} seconds of tone.ogg")
-Audio.Stop()
+// A program can end with its audio started, its device still mixing.
+tone.Play()

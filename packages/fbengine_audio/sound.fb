@@ -1,4 +1,5 @@
-// Sounds: Sound.Load decodes a file whole, and Play plays it on a Channel of its own.
+// Sounds: Sound.Load decodes a file whole, Sound.Stream keeps it to decode as it plays, and Play
+// plays it on a Channel of its own.
 
 Import std.core
 Import std.ffi
@@ -11,8 +12,10 @@ Import "./channel"
 Public Class SoundError Extends Error
 End Class
 
-/// A sound, decoded whole into memory, which plays any number of times at once, each on a Channel
-/// of its own. What it plays at is its own volume, pan, pitch, and looping, which each play starts
+/// A sound, which plays any number of times at once, each on a Channel of its own: decoded whole
+/// into memory, for the short sounds a game plays often, or streamed, its file kept and decoded as
+/// each Channel plays it, for music and long sounds, which would take many times the memory
+/// decoded. What it plays at is its own volume, pan, pitch, and looping, which each play starts
 /// with and its Channel can change.
 Public Final Class Sound
     Field handle: UInt64
@@ -29,19 +32,37 @@ Public Final Class Sound
     /// says, at its own rate and channels.
     @MainThread Public Static Method Load(path: Path): Sound Throws IOError, SoundError
         Local bytes = Try File.ReadBytes(path)
-        Return Try Decode(bytes, "{path}: ")
+        Return Try Make(bytes, False, "{path}: ")
     End Method
 
     /// Decodes a sound file's `bytes`, WAV, FLAC, or Ogg Vorbis, which it doesn't keep.
     @MainThread Public Static Method FromBytes(bytes: UInt8[]): Sound Throws SoundError
-        Return Try Decode(bytes, "")
+        Return Try Make(bytes, False, "")
     End Method
 
-    @MainThread Static Method Decode(bytes: UInt8[], from: String): Sound Throws SoundError
+    /// Reads the sound file at `path`, WAV, FLAC, or Ogg Vorbis, whatever its name says, and
+    /// keeps it, for each Channel playing it to decode as it plays.
+    @MainThread Public Static Method Stream(path: Path): Sound Throws IOError, SoundError
+        Local bytes = Try File.ReadBytes(path)
+        Return Try Make(bytes, True, "{path}: ")
+    End Method
+
+    /// Keeps a copy of a sound file's `bytes`, WAV, FLAC, or Ogg Vorbis, for each Channel playing
+    /// it to decode as it plays.
+    @MainThread Public Static Method StreamBytes(bytes: UInt8[]): Sound Throws SoundError
+        Return Try Make(bytes, True, "")
+    End Method
+
+    @MainThread Static Method Make(bytes: UInt8[], streamed: Bool,
+                                   from: String): Sound Throws SoundError
         Local handle: UInt64 = 0
         If bytes.Count > 0
             Unsafe
-                handle = fbe_sound_load(AddressOf(bytes[0]), bytes.Count)
+                If streamed
+                    handle = fbe_sound_stream(AddressOf(bytes[0]), bytes.Count)
+                Else
+                    handle = fbe_sound_load(AddressOf(bytes[0]), bytes.Count)
+                End If
             End Unsafe
         End If
 
@@ -64,6 +85,9 @@ Public Final Class Sound
     /// Whether Free let it go.
     @MainThread Public Method Freed(): Bool => handle == 0
 
+    /// Whether it's streamed, decoded as each Channel plays it.
+    @MainThread Public Method Streamed(): Bool => fbe_sound_streamed(Live())
+
     /// Its frames a second.
     @MainThread Public Method SampleRate(): Int32 => fbe_sound_sample_rate(Live())
 
@@ -79,11 +103,14 @@ Public Final Class Sound
     End Method
 
     /// Plays it, on a Channel of its own, at its volume, pan, pitch, and looping, or paused, so
-    /// it starts at Resume. Panics when the audio isn't started.
-    @MainThread Public Method Play(paused: Bool = False): Channel
+    /// it starts at Resume, and fading in from silence over `fadeIn` seconds, if they're more than
+    /// 0. A crossfade is one Channel's FadeOut and the next one's Play with a fadeIn. Panics when
+    /// the audio isn't started.
+    @MainThread Public Method Play(paused: Bool = False, fadeIn: Float64 = 0.0): Channel
         Live()
         If !Audio.Started() Then Panic("the audio isn't started; Audio.Start it first")
-        Local channel = fbe_sound_play(handle, volume, pan, pitch, loop, paused)
+        CheckFade(fadeIn)
+        Local channel = fbe_sound_play(handle, volume, pan, pitch, loop, paused, fadeIn)
         If channel == 0 Then Panic(LastError())
         Return Channel(channel)
     End Method

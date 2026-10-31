@@ -64,7 +64,9 @@ struct mixer_t {
     }
 };
 
-std::unique_ptr<mixer_t> mixer;
+/// The started mix, or null. A program that ends with it started leaves it be, since its device's
+/// thread may still be mixing as the C++ runtime tears down.
+mixer_t* mixer = nullptr;
 float volume = 1.0F;
 
 /// The device's callback, on its own thread: the next frames of the mix. The output starts
@@ -72,7 +74,9 @@ float volume = 1.0F;
 // NOLINTNEXTLINE(misc-const-correctness): miniaudio's callbacks take a ma_device*.
 void play(ma_device* device, void* output, const void* /*input*/, ma_uint32 frames) {
     auto* playing = static_cast<mixer_t*>(device->pUserData);
+    fbe::audio::before_mix();
     ma_engine_read_pcm_frames(&playing->engine, output, frames, nullptr);
+    fbe::audio::after_mix();
     playing->frames.fetch_add(frames, std::memory_order_relaxed);
 }
 
@@ -184,13 +188,14 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
             return fbe::audio::fail_ma("couldn't start the audio device", started);
         }
     }
-    mixer = std::move(made);
+    mixer = made.release();
     return true;
 }
 
 FBE_AUDIO_API void fbe_audio_stop(void) {
     fbe::audio::end_channels();
-    mixer.reset();
+    delete mixer;
+    mixer = nullptr;
 }
 
 FBE_AUDIO_API bool fbe_audio_started(void) {
@@ -243,8 +248,10 @@ FBE_AUDIO_API bool fbe_audio_mix(float* samples, int32_t frames) {
         return true;
     }
     ma_uint64 read = 0;
+    fbe::audio::before_mix();
     const ma_result result =
         ma_engine_read_pcm_frames(&mixer->engine, samples, static_cast<ma_uint64>(frames), &read);
+    fbe::audio::after_mix();
     if (result != MA_SUCCESS && result != MA_AT_END) {
         return fbe::audio::fail_ma("couldn't mix", result);
     }
