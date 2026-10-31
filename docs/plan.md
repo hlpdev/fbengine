@@ -6,10 +6,12 @@ read-throughs of Blitz3D and SCP:CB this plan comes from. FutureBlitz's docs/eng
 summary table.
 
 fbengine is its own engine, not a modern copy of Blitz3D's (the user, 2026-10-31). Its feature
-set has to cover every engine feature SCP: Containment Breach needs (docs/research/
-scpcb-requirements.md, section 6), checked at E14, so a 1-to-1 remake can be built on it later. The
-remake is a separate project, much later, with its own tools and converters for the game's code
-and assets, tied to neither the engine nor the language.
+set has to cover every engine feature SCP: Containment Breach Ultimate Edition v5 needs (the
+same game as SCP: Containment Breach Remastered), checked at E14, so a remake indistinguishable to
+play can be built on it later. The remake is a separate project, much later, with a codebase of
+its own, clean and nothing like the original's, and its own tools and converters for the game's
+assets, tied to neither the engine nor the language. docs/research/scpcb-requirements.md read the
+original 1.3.11; Ultimate Edition v5's additions are read when its source is in hand.
 
 ## Milestones
 

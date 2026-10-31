@@ -1,14 +1,13 @@
 # fbengine's architecture
 
 How the engine is built, across its packages. FutureBlitz's docs/engine.md has the goals, the
-packages, and the milestones; this doc has how the pieces fit, and docs/plan.md the steps. What's
-marked **Proposed** waits on the user (docs/questions.md); the rest follows from decisions already
-made.
+packages, and the milestones; this doc has how the pieces fit, and docs/plan.md the steps. What waits
+on the user is in docs/questions.md.
 
 fbengine is its own engine, not a modern copy of Blitz3D's (the user, 2026-10-31). The
-yardstick: it has to cover every engine feature SCP: Containment Breach needs, so a 1-to-1 remake
-can be built on it later (docs/research/scpcb-requirements.md), and be a good modern engine on its
-own. Every structural choice is checked against both.
+yardstick: it has to cover every engine feature SCP: Containment Breach Ultimate Edition v5
+needs, so a remake indistinguishable to play can be built on it later (docs/research/), and be a
+good modern engine on its own. Every structural choice is checked against both.
 
 ## Layers
 
@@ -59,9 +58,9 @@ own. Every structural choice is checked against both.
   `CameraPick` returns the same `Entity` object the game made, and `==` and Map keys work.
   `Free()` frees the engine object and drops the table's entry; the wrapper stays, and using it
   panics ("this Mesh was freed").
-- **Proposed**: engine Classes are Final, and a game attaches its own data with
-  `entity.SetData(obj)` and `entity.Data()`, rather than extending `Entity`. That keeps the
-  wrapper table simple, and it's how games tag entities with their own state.
+- Engine Classes are Final, and a game attaches its own object with `entity.SetData(obj)` and
+  `entity.Data()`, rather than extending `Entity` (the user, 2026-10-31). That keeps the wrapper
+  table simple, and picks hand back the game's object through it.
 - **Units and axes are std.math's** (the user, 2026-10-31): right-handed, Y up, -Z forward,
   radians, Vec3, Quat, Mat4, with `Deg()` where a game thinks in degrees
   (`cube.Turn(0, Deg(1), 0)`).
@@ -103,10 +102,15 @@ own. Every structural choice is checked against both.
   vertex. Shadows come with E6.
 - **Render to texture**: any Camera can render into a Texture (security monitors, mirrors,
   portals), and post effects run per camera.
-- **2D** draws after 3D, in the same frame graph, into the window or into an Image; pixel
+- **2D** draws after 3D, in the same frame graph, into the window or into a Texture; pixel
   access (`Lock`, `ReadPixel`, `WritePixel`) works on a CPU copy, uploaded or read back once per
   frame, never per pixel.
-- **Shaders** are Slang, compiled to SPIR-V when the engine's built and embedded in the DLL.
+- **Text** is FreeType's rasterizing and HarfBuzz's shaping, statically linked, into glyph
+  atlases (the user, 2026-10-31).
+- **Names**: fbengine's GPU image is `Texture`, made from a file or a std.image `Image`, and its
+  `Font` lives in its 2D module, qualified where a file imports both (the user, 2026-10-31).
+- **Shaders** are Slang, compiled to SPIR-V when the engine's built and embedded in the DLL
+  (the user, 2026-10-31).
   Games' own shaders (E6) come with the asset pipeline's build step.
 
 ## Assets
