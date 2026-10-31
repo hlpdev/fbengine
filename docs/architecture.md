@@ -136,7 +136,7 @@ good modern engine on its own. Every structural choice is checked against both.
 - Paths are std.vfs's (`res://`), with folders in development and pak files in a release.
 - Loaders are C++ (fastgltf, KTX, stb_image), on worker threads.
   `Assets.Load<T>(path)` loads now; `Await Assets.LoadAsync<T>(path)` loads on a worker, and the
-  Task completes on the main thread at a Flip.
+  Task completes on the main thread at a Flip, or at a tick of the main scheduler while FB waits.
 - A cache keyed by normalized path hands out the same asset again, refcounted; `Free()` and the
   last reference let it go.
 - The cooker, typed references, and hot reload are E8's, and need a package build step from
@@ -150,7 +150,8 @@ good modern engine on its own. Every structural choice is checked against both.
 - The API is the main thread's (`@MainThread`). Inside, the C++ core has one job system, a
   worker per core less one, which asset decoding, culling, animation, and collisions use;
   Jolt runs on its own pool.
-- Nothing calls into FB from a worker; finished work is queued and handed over at Flip.
+- Nothing calls into FB from a worker; finished work is queued and handed over at Flip, and at
+  the main scheduler's ticks while FB waits without one.
 
 ## How packages work together
 
