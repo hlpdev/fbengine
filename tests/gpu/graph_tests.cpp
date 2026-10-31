@@ -7,6 +7,7 @@
 #include "golden/golden.hpp"
 #include "gpu_testing.hpp"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -675,9 +676,14 @@ TEST_CASE("the GPU's time counts the frame's uploads", "[gpu]") {
         require(fbe_gpu_counters(&counters));
         return counters.gpu_milliseconds;
     };
-    // The texture's made cleared, in a frame's uploads, which goes by first.
+    // The texture's made cleared, in a frame's uploads, which goes by first. Then the least of five
+    // empty frames, as a software GPU's time is its threads', which whatever else the machine's
+    // running slows.
     time_of(false, big, pixels);
-    const float empty = time_of(false, big, pixels);
+    float empty = time_of(false, big, pixels);
+    for (int at = 0; at < 4; ++at) {
+        empty = std::min(empty, time_of(false, big, pixels));
+    }
     const float uploading = time_of(true, big, pixels);
     WARN("an empty frame " << empty << " ms, one uploading 64 MiB " << uploading << " ms");
     CHECK(uploading > 2.0F * empty);
