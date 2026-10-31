@@ -36,6 +36,11 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 
+# simdjson, which fastgltf uses one of installed, as Homebrew's on macOS, or downloads. It gives
+# what links it the headers of the copy it downloads, but links an installed one privately; the
+# engine's glTF decoder reads extras through simdjson, as fastgltf hands them over, so an installed
+# one is found here, where the engine's targets see it, and given them through fastgltf too.
+find_package(simdjson CONFIG QUIET)
 set(FASTGLTF_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   fastgltf
@@ -46,6 +51,10 @@ FetchContent_Declare(
   EXCLUDE_FROM_ALL
 )
 FetchContent_MakeAvailable(stb KTX fastgltf)
+if(TARGET simdjson::simdjson)
+  target_link_libraries(fastgltf INTERFACE simdjson::simdjson)
+endif()
+
 
 # stb_image is patched where a PNG whose first IDAT is empty has stbi__getn copy none of it from
 # a null buffer, which memcpy doesn't allow, and UBSan reports: reading nothing, it gives that it
