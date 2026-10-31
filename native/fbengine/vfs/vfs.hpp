@@ -175,7 +175,8 @@ private:
 vfs_t& files();
 
 /// A fault a test makes happen, as the disk and the system can: OUT_OF_MEMORY is the next read of
-/// a file's bytes, from a folder or a pak, finding no memory for them.
+/// a file's bytes, from a folder or a pak, or the next of a glTF's buffers, finding no memory for
+/// them.
 enum class fault_t : std::uint8_t { NONE, OUT_OF_MEMORY };
 
 /// Makes `fault` happen once, at the next place it can.

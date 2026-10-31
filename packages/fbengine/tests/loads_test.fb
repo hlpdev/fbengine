@@ -180,3 +180,15 @@ Function ALoadReadsTheMountsThereWereWhenItWasAskedFor() Throws IOError
         task.Wait()
     End For
 End Function
+
+// A load that isn't made says how: a path that isn't a res:// path, and the rest, as for want of
+// memory.
+@Test
+Function ALoadThatIsntMadeSaysHow() Throws IOError
+    Expect(fbe_assets_load(AssetKind.IMAGE As Int32, "not a path", False, False) == 0)
+    Expect(fbe_assets_load_failure() == FBE_ASSETS_INVALID_PATH)
+    Expect(fbe_assets_load(99, "res://a.png", False, False) == 0)
+    Expect(fbe_assets_load_failure() == FBE_ASSETS_OTHER)
+    Expect(ExpectThrows<IOError>(Assets.Load<Picture>("not a path"))?.Kind ==
+           IOErrorKind.INVALID_PATH)
+End Function

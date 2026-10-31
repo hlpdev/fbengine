@@ -241,53 +241,85 @@ End Function
 // sidecar's keys are snake_case, each a Field's name in snake_case, as "alpha_cutoff" is
 // AlphaCutoff's and "uv_scale" UVScale's, and a key that's no Field's, or two Fields', is a
 // mistake in the sidecar, as a misspelling is. The keys of a Map, or a Value, are as they're
-// written. A Field's place is found by Defaults<S>(), which an array of tables has none of, so
-// the sidecar's loaded once to find its elements' Fields, by what they loaded as, and again with
-// them named.
+// written. Where a Field's place is, Defaults<S>() shows for S's own Fields and those of its Fields
+// with defaults of their own; for the rest, an array's elements, a Map's values, and a Field whose
+// default is Null, what the last pass loaded there shows, so each pass names one level more, until
+// what's loaded doesn't change.
 @MainThread
 Package Function SettingsOf<S>(text: String, sidecar: String): S Throws IOError
     Try
         Local written = Try Toml.Read(text)
         Local shape = Defaults<S>()
-        Local first = Try Load<S>(Try Named(written, shape, Null, sidecar))
-        Return Try Load<S>(Try Named(written, shape, Save(first), sidecar))
+        Local settings = Try Load<S>(Try Named(written, shape, Null, sidecar))
+        Local saved = Save(settings)
+        // Each level a pass, as deep as a sidecar's tables go.
+        For pass = 1 To 16
+            settings = Try Load<S>(Try Named(written, shape, saved, sidecar))
+            Local again = Save(settings)
+            If again == saved Then Return settings
+            saved = again
+        End For
+        Return settings
     Catch e As ParseError
         Throw IOError(IOErrorKind.INVALID_DATA,
                       "{sidecar} isn't {TypeName<S>()}'s import settings: {e.Message}", sidecar, e)
     End Try
 End Function
 
-// `given` with each key where a Struct's Fields are named as its Field is. `shape` is
-// Defaults' form of the type there: an Object of a Struct's Fields, else a Map's or a Value's,
-// whose keys stay as written; and `saved` what was loaded there before, for an array's elements,
-// which Defaults has none of. An element without either keeps its keys, for the first load.
+// `given` with each key where a Struct's Fields are named as its Field is. `shape` is Defaults'
+// form of what's there, a Struct's Fields where it's an Object with any; `saved` is what the last
+// pass loaded there, which shows a Struct's Fields, unless it has the keys as they're given, as a
+// Map loaded of them does. Where neither shows anything yet, the keys stay as written, for the next
+// pass to see what they load as.
 Function Named(given: Value, shape: Value?, saved: Value?, sidecar: String): Value Throws IOError
-    If shape != Null && shape.IsArray
+    If (shape != Null && shape.IsArray) || (saved != Null && saved.IsArray)
         // A T[], given as an array, or as one table, which Load reads as one element.
-        Local first = shape.Count > 0 ? shape[0] : Null
+        Local first = shape != Null && shape.IsArray && shape.Count > 0 ? shape[0] : Null
         If !given.IsArray
-            Local kept = saved != Null && saved.IsArray && saved.Count > 0 ? saved[0] : Null
-            Return Try Named(given, first ?? kept, Null, sidecar)
+            Local one = saved != Null && saved.IsArray && saved.Count > 0 ? saved[0] : Null
+            Return Try Named(given, first, one, sidecar)
         End If
         Local named = Value.Array()
         For at = 0 Until given.Count
             Local item = given[at]
             If item == Null Then Continue
             Local kept = saved != Null && saved.IsArray && at < saved.Count ? saved[at] : Null
-            named.Add(Try Named(item, first ?? kept, Null, sidecar))
+            named.Add(Try Named(item, first, kept, sidecar))
         End For
         Return named
     End If
-    If !given.IsObject || shape == Null || !shape.IsObject || shape.Count == 0 Then Return given
+    If !given.IsObject Then Return given
+    Local fields: Value? = Null
+    If shape != Null && shape.IsObject && shape.Count > 0
+        fields = shape
+    ElseIf saved != Null && saved.IsObject && !HasKeys(saved, given)
+        fields = saved
+    End If
     Local named = Value.Object()
     For key In given.Keys()
-        Local field = Try FieldOf(key, shape, sidecar)
         Local item = given[key]
         If item == Null Then Continue
-        Local kept = saved != Null && saved.IsObject ? saved[field] : Null
-        named[field] = Try Named(item, shape[field], kept, sidecar)
+        Local found = fields
+        If found == Null
+            // A Map's key, or one not placed yet, as written.
+            Local kept = saved != Null && saved.IsObject ? saved[key] : Null
+            named[key] = Try Named(item, Null, kept, sidecar)
+        Else
+            Local field = Try FieldOf(key, found, sidecar)
+            Local inner = shape != Null && shape.IsObject ? shape[field] : Null
+            Local kept = saved != Null && saved.IsObject ? saved[field] : Null
+            named[field] = Try Named(item, inner, kept, sidecar)
+        End If
     End For
     Return named
+End Function
+
+// Whether `saved` has each of `given`'s keys, as they're written, as a Map loaded of them does.
+Function HasKeys(saved: Value, given: Value): Bool
+    For key In given.Keys()
+        If !saved.Contains(key) Then Return False
+    End For
+    Return True
 End Function
 
 // The Field of `shape`'s, a Struct's Fields, that `key` names: the one whose name in snake_case

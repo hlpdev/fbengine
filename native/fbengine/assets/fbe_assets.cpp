@@ -34,12 +34,16 @@ int32_t failure_of(fbe::vfs::failure_t failure) {
     return FBE_ASSETS_OTHER;
 }
 
+// How the last load that gave 0 failed.
+thread_local int32_t load_failure = FBE_ASSETS_OTHER;
+
 // What `work` gives, or `failed`, with fbe_error saying so, for want of memory.
 template <typename T, typename Work>
 T guarded(T failed, Work work) {
     try {
         return work();
     } catch (const std::exception&) {
+        load_failure = FBE_ASSETS_OTHER;
         fbe::fail("there isn't the memory for it");
         return failed;
     }
@@ -49,11 +53,13 @@ T guarded(T failed, Work work) {
 // are now.
 std::shared_ptr<assets::load_t> made(int32_t kind, const char* path, bool linear, bool settings) {
     if (kind < FBE_ASSETS_BYTES || kind > FBE_ASSETS_MODEL) {
+        load_failure = FBE_ASSETS_OTHER;
         fbe::fail(std::format("a load's kind is FBE_ASSETS_BYTES, IMAGE, or MODEL, not {}", kind));
         return nullptr;
     }
     fbe::vfs::result_t<fbe::vfs::path_t> parsed = fbe::vfs::parse(path);
     if (!parsed) {
+        load_failure = FBE_ASSETS_INVALID_PATH;
         fbe::fail(parsed.error().message);
         return nullptr;
     }
@@ -112,6 +118,10 @@ FBE_API uint64_t fbe_assets_load_async(int32_t kind, const char* path, bool line
         }
         return handle;
     });
+}
+
+FBE_API int32_t fbe_assets_load_failure(void) {
+    return load_failure;
 }
 
 FBE_API bool fbe_assets_done(uint64_t load) {

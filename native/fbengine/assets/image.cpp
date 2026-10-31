@@ -135,6 +135,33 @@ KTX_error_code transcode(ktxTexture2* texture, ktx_transcode_fmt_e format) {
     return code;
 }
 
+// A KTX2's data format descriptor, at `offset`, `length` bytes, which the header's check has seen
+// are in the file: each sample of its first block, which libktx shifts 1 by its bit length for an
+// uncompressed format, one of a color model below 128, less than 32 bits. A block-compressed
+// format's one sample is its whole block, as UASTC's 128 bits are.
+result_t<void> check_dfd(std::span<const std::uint8_t> bytes, std::uint32_t offset,
+                         std::uint32_t length, std::string_view name) {
+    // Its size, then the block's header, 8 bytes, its model and planes, 16, and 16 a sample.
+    constexpr std::uint32_t block = 4;
+    constexpr std::uint32_t samples = block + 24;
+    constexpr std::uint32_t sample = 16;
+    if (length < samples) {
+        return {};
+    }
+    constexpr std::uint32_t compressed = 128;
+    if ((u32(bytes, offset + block + 8) & 0xFFU) >= compressed) {
+        return {};
+    }
+    const std::uint32_t block_size = u32(bytes, offset + block + 4) >> 16U;
+    const std::uint32_t end = std::min(length, block + block_size);
+    for (std::uint32_t at = samples; at + sample <= end; at += sample) {
+        if (((u32(bytes, offset + at) >> 16U) & 0xFFU) >= 32) {
+            return std::unexpected(invalid(name, "has a sample of 32 bits or more"));
+        }
+    }
+    return {};
+}
+
 // What a KTX2's header says, checked before libktx reads it, which trusts it: its sizes within
 // an image's, its mips no more than its sizes, its supercompression none or Zstd, and each level,
 // and its other parts, within the file.
@@ -196,7 +223,7 @@ result_t<void> check_ktx2(std::span<const std::uint8_t> bytes, std::string_view 
             return std::unexpected(invalid(name, std::format("has level {} past its end", level)));
         }
     }
-    return {};
+    return check_dfd(bytes, u32(bytes, 48), u32(bytes, 52), name);
 }
 
 // A stream over bytes in memory for libktx to read, which, unlike its own, allocates nothing, so

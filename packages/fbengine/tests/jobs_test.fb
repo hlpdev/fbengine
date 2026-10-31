@@ -77,14 +77,15 @@ Function AJobsTaskFinishesWithoutAFlip()
     Expect(Frame.Count() == frames)
 End Function
 
-// While it waits, the main thread sleeps between hand-overs: one a millisecond at most, not one a
-// tick of a scheduler with nothing else to do.
+// While it waits, the main thread sleeps between hand-overs: about one a millisecond, up to the
+// OS's timer, which is 16 ms on Windows before FutureBlitz 1.1, not one a tick of a scheduler with
+// nothing else to do.
 @Test
 Function AWaitHandsOverEachMillisecondAtMost()
     Local before = fbe_jobs_hand_overs()
     Jobs.Simulate(500.Milliseconds).Wait()
     Local passes = fbe_jobs_hand_overs() - before
-    Expect(passes >= 1)
+    Expect(passes >= 25)
     Expect(passes <= 600)
 End Function
 

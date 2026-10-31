@@ -520,3 +520,119 @@ Function AnArrayOfTablesIsCheckedAsItsElementsType() Throws IOError
     Expect(one.Levels[0].Distance == 2.0)
     Expect(Refused<Lods>("[levels]\ndistanse = 2.0\n"))
 End Function
+
+// An Asset with an == and a Hash of its own, of what it's called, not its identity: two made of
+// different files are equal, as a game's by-name textures would be.
+Class ByName Implements Asset
+    Field Name: String
+    Field Frees: Int
+
+    New(name: String)
+        Name = name
+        Frees = 0
+    End New
+
+    Operator ==(a: ByName, b: ByName): Bool => a.Name == b.Name
+
+    Method Hash(): UInt64 => Name.Hash()
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): ByName Throws IOError => ByName("wall")
+
+    Method Free()
+        If !Assets.Release(Self) Then Return
+        Frees += 1
+    End Method
+End Class
+
+@Test
+Function AClassesOwnHashFreesWhatsItsOwn() Throws IOError
+    Assets.MountFiles("res://test-hash", {"a.png": Png.Encode(Image(2, 2)),
+                                          "b.png": Png.Encode(Image(2, 2))})
+    Defer Assets.Unmount("res://test-hash")
+    // One no load gave, equal to one the cache holds twice, is freed by its own Free at once.
+    Local a = Try Assets.Load<ByName>("res://test-hash/a.png")
+    Local again = Try Assets.Load<ByName>("res://test-hash/a.png")
+    Local stranger = ByName("wall")
+    stranger.Free()
+    Expect(stranger.Frees == 1)
+    a.Free()
+    Expect(a.Frees == 0)
+    again.Free()
+    Expect(a.Frees == 1)
+    // Two files' equal assets, each by its own holds.
+    Local b = Try Assets.Load<ByName>("res://test-hash/b.png")
+    Local b2 = Try Assets.Load<ByName>("res://test-hash/b.png")
+    Local c = Try Assets.Load<ByName>("res://test-hash/a.png")
+    b.Free()
+    c.Free()
+    Expect(c.Frees == 1)
+    Expect(b.Frees == 0)
+    b2.Free()
+    Expect(b.Frees == 1)
+End Function
+
+Struct Lod5
+    Field Distance: Float64 = 0.0
+End Struct
+
+Struct Level5
+    Field Name: String = ""
+    Field Lods: Lod5[] = []
+End Struct
+
+Struct World5
+    Field Levels: Level5[] = []
+End Struct
+
+Struct Mat5
+    Field Name: String = ""
+    Field Tags: Map<String, Int>? = Null
+End Struct
+
+Struct Mats5
+    Field Items: Mat5[] = []
+End Struct
+
+Struct Cut5
+    Field AlphaCutoff: Float64 = 0.5
+End Struct
+
+Struct ByMaterial5
+    Field Materials: Map<String, Cut5>? = Null
+    Field Lod: Cut5? = Null
+    Field Cells: Int[][] = []
+End Struct
+
+@Test
+Function ASidecarsDeeperTablesAreNamedToo() Throws IOError
+    // An array of tables in an array of tables, as a model's levels and their LODs would be.
+    Local nested = "[[levels]]\nname = \"a\"\n[[levels.lods]]\ndistance = 5.0\n" +
+                   "[[levels.lods]]\ndistance = 9.0\n"
+    Local world = Try SettingsFrom<World5>(nested)
+    Expect(world.Levels.Count == 1)
+    Expect(world.Levels[0].Name == "a")
+    Expect(world.Levels[0].Lods.Count == 2)
+    Expect(world.Levels[0].Lods[1].Distance == 9.0)
+    Expect(Refused<World5>(nested + "distanse = 3.0\n"))
+    Expect((Try SettingsFrom<World5>("levels = []\n")).Levels.Count == 0)
+    // An array's Structs with a Map in them, whose keys are as they're written.
+    Local items =
+        Try SettingsFrom<Mats5>("[[items]]\nname = \"wood\"\n[items.tags]\nMy_Key = 1\nother = 2\n")
+    Expect(items.Items.Count == 1)
+    Expect(items.Items[0].Name == "wood")
+    Local tags = items.Items[0].Tags ?? Map<String, Int>()
+    Expect(tags.Get("My_Key") == 1)
+    Expect(tags.Get("other") == 2)
+    // A Map's Structs, an optional Struct, and an array of arrays.
+    Local cuts = Try SettingsFrom<ByMaterial5>(
+        "cells = [[1, 2], [3]]\n[materials.wood]\nalpha_cutoff = 0.25\n" +
+        "[lod]\nalpha_cutoff = 0.75\n")
+    Expect((cuts.Materials ?? Map<String, Cut5>()).Get("wood")?.AlphaCutoff == 0.25)
+    Expect(cuts.Lod?.AlphaCutoff == 0.75)
+    Expect(cuts.Cells.Count == 2)
+    Expect(cuts.Cells[1][0] == 3)
+    Expect(Refused<ByMaterial5>("[materials.wood]\nalpha_cutof = 0.25\n"))
+    Expect(Refused<ByMaterial5>("[lod]\nalpha_cutof = 0.25\n"))
+End Function
