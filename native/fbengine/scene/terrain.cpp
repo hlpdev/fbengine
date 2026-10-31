@@ -3,6 +3,7 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "scene/bvh.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
 #include "scene/sweep.hpp"
@@ -72,17 +73,48 @@ void remove_terrain(std::uint32_t entity) {
 }
 
 void terrain_bounds(const terrain_t& terrain, vec3_t& min, vec3_t& max) {
-    const auto [low, high] = std::ranges::minmax(terrain.heights);
+    if (terrain.range_stale) {
+        const auto [low, high] = std::ranges::minmax(terrain.heights);
+        terrain.low = low;
+        terrain.high = high;
+        terrain.range_stale = false;
+    }
     const auto size = static_cast<float>(terrain.size);
-    min = vec3_t(0.0F, low, 0.0F);
-    max = vec3_t(size, high, size);
+    min = vec3_t(0.0F, terrain.low, 0.0F);
+    max = vec3_t(size, terrain.high, size);
+}
+
+bool terrain_blocks(const terrain_t& terrain, vec3_t a, vec3_t b) {
+    // In pieces of a few squares each, as picks go, so a long line tries only the squares near it.
+    const vec3_t across = b - a;
+    const float span = std::fmax(std::fabs(across.x), std::fabs(across.z));
+    const int pieces = std::clamp(static_cast<int>(std::ceil(span / 4.0F)), 1, 4096);
+    std::vector<std::array<vec3_t, 3>> under;
+    for (int piece = 0; piece < pieces; ++piece) {
+        const vec3_t p0 = a + across * (static_cast<float>(piece) / static_cast<float>(pieces));
+        const vec3_t p1 = a + across * (static_cast<float>(piece + 1) / static_cast<float>(pieces));
+        under.clear();
+        terrain_under(
+            terrain, vec3_t(std::fmin(p0.x, p1.x), std::fmin(p0.y, p1.y), std::fmin(p0.z, p1.z)),
+            vec3_t(std::fmax(p0.x, p1.x), std::fmax(p0.y, p1.y), std::fmax(p0.z, p1.z)), under);
+        for (const auto& corners : under) {
+            bool front = false;
+            if (crosses_triangle(a, across, corners.data(), front) >= 0.0F) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void terrain_under(const terrain_t& terrain, vec3_t min, vec3_t max,
                    std::vector<std::array<vec3_t, 3>>& triangles) {
-    // The squares the box's footprint is on, in the grid's own space: a point's own square too.
-    const auto first_x = std::clamp(static_cast<std::int32_t>(std::floor(min.x)), 0, terrain.size);
-    const auto first_z = std::clamp(static_cast<std::int32_t>(std::floor(min.z)), 0, terrain.size);
+    // The squares the box's footprint is on, in the grid's own space: a point's own square too,
+    // and one on the grid's far edge, its last.
+    const auto first_x =
+        std::clamp(static_cast<std::int32_t>(std::floor(min.x)), 0, terrain.size - 1);
+    const auto first_z =
+        std::clamp(static_cast<std::int32_t>(std::floor(min.z)), 0, terrain.size - 1);
     const auto last_x =
         std::clamp(static_cast<std::int32_t>(std::floor(max.x)) + 1, 0, terrain.size);
     const auto last_z =
@@ -139,6 +171,9 @@ FBE_API bool fbe_terrain_set_size(uint64_t terrain, int32_t size) {
     found->size = size;
     const auto row = static_cast<std::size_t>(size) + 1;
     found->heights.assign(row * row, 0.0F);
+    found->low = 0.0F;
+    found->high = 0.0F;
+    found->range_stale = false;
     ++found->version;
     fbe::scene::pickable_moved(found->entity);
     return true;
@@ -162,7 +197,15 @@ FBE_API bool fbe_terrain_set_height(uint64_t terrain, int32_t x, int32_t z, floa
         return fbe::fail(std::format("a terrain's height is finite, not {}", height));
     }
     const auto row = static_cast<std::size_t>(found->size) + 1;
-    found->heights[(static_cast<std::size_t>(z) * row) + static_cast<std::size_t>(x)] = height;
+    float& corner =
+        found->heights[(static_cast<std::size_t>(z) * row) + static_cast<std::size_t>(x)];
+    const float was = corner;
+    corner = height;
+    // Past the range, it widens it; the highest moved down or the lowest up, it may narrow.
+    found->range_stale = found->range_stale || (was == found->high && height < was) ||
+                         (was == found->low && height > was);
+    found->low = std::fmin(found->low, height);
+    found->high = std::fmax(found->high, height);
     ++found->version;
     fbe::scene::pickable_moved(found->entity);
     return true;
@@ -191,6 +234,10 @@ FBE_API bool fbe_terrain_set_heights(uint64_t terrain, const float* heights, int
         }
     }
     std::copy(heights, heights + count, found->heights.begin());
+    const auto [low, high] = std::ranges::minmax(found->heights);
+    found->low = low;
+    found->high = high;
+    found->range_stale = false;
     ++found->version;
     fbe::scene::pickable_moved(found->entity);
     return true;

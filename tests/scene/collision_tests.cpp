@@ -214,6 +214,26 @@ fbe_aabb_t extent(float x0, float y0, float z0, float x1, float y1, float z1) {
     return { .min = { .x = x0, .y = y0, .z = z0 }, .max = { .x = x1, .y = y1, .z = z1 } };
 }
 
+/// How many of eight ways across a mover goes from where it is, a step of 0.3 falling 0.02, put
+/// back after each.
+int ways_out(std::uint64_t world, std::uint64_t mover) {
+    const fbe_vec3_t here = position(mover);
+    int ways = 0;
+    for (int k = 0; k < 8; ++k) {
+        const float angle = static_cast<float>(k) * 0.78539816F;
+        fbe_entity_set_position(mover, here.x, here.y, here.z, FBE_SPACE_WORLD);
+        fbe_entity_reset_collisions(mover);
+        fbe_world_collide(world);
+        move(world, mover, std::cos(angle) * 0.3F, -0.02F, std::sin(angle) * 0.3F);
+        const fbe_vec3_t now = position(mover);
+        ways += std::hypot(now.x - here.x, now.z - here.z) > 0.01F ? 1 : 0;
+    }
+    fbe_entity_set_position(mover, here.x, here.y, here.z, FBE_SPACE_WORLD);
+    fbe_entity_reset_collisions(mover);
+    fbe_world_collide(world);
+    return ways;
+}
+
 fbe::scene::vec3_t vec(fbe_vec3_t v) {
     return { v.x, v.y, v.z };
 }
@@ -593,14 +613,19 @@ TEST_CASE("a mover over a refitted mesh ends where one over a fresh copy of it d
     fbe_geometry_release(geometry);
 }
 
-TEST_CASE("a long walk among turned solids never gets 0.001 into them", "[scene]") {
+TEST_CASE("a long walk among turned solids never gets 0.001 into them, nor stuck", "[scene]") {
     // The review's long walk at the worst three of 200 seeds of 20,000 frames, just past what were
     // their worst frames: 40 solids, boxes and cube meshes, turned every way, and a 0.3 by 0.6
     // mover falling and walking among them. Pushed off along a face's normal, it went 0.009 into
     // a box along a crease into a narrowing wedge (98, 190), or into an edge it was leaving (85);
-    // backing off the way it came, the 200's worst is 0.00004.
-    for (const auto& [seed, frames] :
-         { std::pair{ 98U, 3850 }, std::pair{ 190U, 14250 }, std::pair{ 85U, 19350 } }) {
+    // backing off the way it came, the 200's worst is 0.00004. And at 30, a mover just its radius
+    // from a box's edge froze there for good, every way.
+    for (const auto& [seed, frames] : {
+             std::pair{ 98U, 3850 },
+             std::pair{ 190U, 14250 },
+             std::pair{ 85U, 19350 },
+             std::pair{ 30U, 2550 },
+         }) {
         std::mt19937 random(seed); // NOLINT(bugprone-random-generator-seed)
         const test_world_t world;
         const std::uint64_t floor = level(world.handle, fbe_geometry_plane(1));
@@ -661,6 +686,8 @@ TEST_CASE("a long walk among turned solids never gets 0.001 into them", "[scene]
         float dx = 0.0F;
         float dz = 0.0F;
         float worst = 0.0F;
+        fbe_vec3_t last = position(made);
+        int still = 0;
         for (int frame = 0; frame < frames; ++frame) {
             if (frame % 30 == 0) {
                 const float pace = speed(random);
@@ -691,6 +718,15 @@ TEST_CASE("a long walk among turned solids never gets 0.001 into them", "[scene]
                 fbe_entity_reset_collisions(made);
                 fbe_world_collide(world.handle);
             }
+            // Not moving at all for 60 frames as it walks, as in a dead end: there's a way out.
+            const fbe_vec3_t now = position(made);
+            const float moved = std::hypot(now.x - last.x, now.y - last.y, now.z - last.z);
+            still = moved < 1e-7F && std::hypot(dx, dz) > 0.05F ? still + 1 : 0;
+            if (still == 60) {
+                CAPTURE(seed, frame);
+                CHECK(ways_out(world.handle, made) > 0);
+            }
+            last = position(made);
         }
         CAPTURE(seed);
         CHECK(worst < 0.001F);
@@ -714,4 +750,25 @@ TEST_CASE("a step as high as the step height is climbed", "[scene]") {
         CHECK(at.x > 1.5F);
         CHECK(std::fabs(at.y - (high + 0.901F)) < 0.003F);
     }
+}
+
+TEST_CASE("a mover just its radius from a box's edge goes away from it", "[scene]") {
+    // From the long walk's seed 30: its distance from the edge's line came out exactly its
+    // radius, so a root at time 0 held it there whichever way it went.
+    const test_world_t world;
+    const std::uint64_t floor = level(world.handle, fbe_geometry_plane(1));
+    fbe_entity_set_scale(floor, 30.0F, 1.0F, 30.0F, FBE_SPACE_LOCAL);
+    const std::uint64_t solid = box(world.handle, extent(-1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F));
+    fbe_entity_set_scale(solid, 0x1.6eb39ep-1F, 0x1.b2b2ap-2F, 0x1.7c8c44p+0F, FBE_SPACE_LOCAL);
+    fbe_entity_set_rotation(solid, -0x1.e8801ap-3F, -0x1.6390e6p-1F, -0x1.86f8p-2F, -0x1.1f61aap-1F,
+                            FBE_SPACE_WORLD);
+    fbe_entity_set_position(solid, 0x1.93817p+2F, 0x1.be1328p-2F, 0x1.8c78dp+2F, FBE_SPACE_WORLD);
+    const std::uint64_t made = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    fbe_entity_set_collision_group(made, mover_group);
+    fbe_entity_set_collision_radius(made, 0.3F, 0.6F);
+    fbe_entity_set_step_height(made, 0.2F);
+    fbe_entity_set_position(made, 0x1.5f80c4p+2F, 0x1.343958p-1F, 0x1.4bb43p+2F, FBE_SPACE_WORLD);
+    fbe_world_collide(world.handle);
+    // Every way it goes, if only a little toward the box.
+    CHECK(ways_out(world.handle, made) == 8);
 }

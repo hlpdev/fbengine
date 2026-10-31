@@ -38,6 +38,9 @@ struct target_t {
     std::int32_t group = 0;
     std::int32_t shape = FBE_COLLISION_ELLIPSOID;
     mat4_t matrix;
+    /// Its matrix's inverse, worked out once for every move, and whether there's one.
+    mat4_t into;
+    bool invertible = false;
     bool mirrored = false;
     vec3_t min;
     vec3_t max;
@@ -113,6 +116,9 @@ vec3_t greatest(vec3_t a, vec3_t b) {
 struct nearby_t {
     std::vector<triangle_t> triangles;
     std::vector<ellipsoid_t> ellipsoids;
+    /// What finding them uses, kept with them so a move's gather doesn't allocate again.
+    std::vector<std::uint32_t> indices;
+    std::vector<std::array<vec3_t, 3>> under;
 };
 
 /// Adds a world triangle, squashed into sphere space, turning it if its target mirrors.
@@ -131,19 +137,21 @@ void add_triangle(nearby_t& nearby, std::array<vec3_t, 3> corners, float squash,
     nearby.triangles.push_back(triangle);
 }
 
-/// Everything a mover could touch within `reach` of its start.
-nearby_t gather(const snapshot_t& snapshot, const mover_t& mover, float reach) {
-    nearby_t nearby;
+/// Everything a mover could touch within `reach` of its start, in `nearby`, what it had cleared.
+void gather(const snapshot_t& snapshot, const mover_t& mover, float reach, nearby_t& nearby) {
+    nearby.triangles.clear();
+    nearby.ellipsoids.clear();
     const float squash = mover.horizontal / mover.vertical;
     const vec3_t lift(0.0F, mover.step, 0.0F);
     const vec3_t low = least(mover.from, mover.to) - vec3_t(reach, reach, reach);
     const vec3_t high = greatest(mover.from, mover.to) + vec3_t(reach, reach, reach) + lift;
     for (std::uint32_t t = 0; t < snapshot.targets.size(); ++t) {
         const target_t& target = snapshot.targets[t];
-        if (target.entity == mover.entity ||
-            response_of(*snapshot.world, mover.group, target.group) == FBE_RESPONSE_NONE ||
-            target.max.x < low.x || target.min.x > high.x || target.max.y < low.y ||
-            target.min.y > high.y || target.max.z < low.z || target.min.z > high.z) {
+        // Out of reach first, which most are: it's cheaper than finding the pair's response.
+        if (target.max.x < low.x || target.min.x > high.x || target.max.y < low.y ||
+            target.min.y > high.y || target.max.z < low.z || target.min.z > high.z ||
+            target.entity == mover.entity ||
+            response_of(*snapshot.world, mover.group, target.group) == FBE_RESPONSE_NONE) {
             continue;
         }
         if (target.shape == FBE_COLLISION_ELLIPSOID) {
@@ -157,10 +165,10 @@ nearby_t gather(const snapshot_t& snapshot, const mover_t& mover, float reach) {
             });
         } else if (target.shape == terrain_shape) {
             // Its squares under the move's box, found in its own space.
-            mat4_t into;
-            if (!inverse_affine(target.matrix, into)) {
+            if (!target.invertible) {
                 continue;
             }
+            const mat4_t& into = target.into;
             vec3_t local_min = transform_point(into, low);
             vec3_t local_max = local_min;
             for (unsigned corner = 1; corner < 8; ++corner) {
@@ -168,10 +176,10 @@ nearby_t gather(const snapshot_t& snapshot, const mover_t& mover, float reach) {
                 local_min = least(local_min, p);
                 local_max = greatest(local_max, p);
             }
-            std::vector<std::array<vec3_t, 3>> under;
+            nearby.under.clear();
             const terrain_t& terrain = scene().terrains[scene().entities.component[target.entity]];
-            terrain_under(terrain, local_min, local_max, under);
-            for (const auto& corners : under) {
+            terrain_under(terrain, local_min, local_max, nearby.under);
+            for (const auto& corners : nearby.under) {
                 add_triangle(nearby,
                              {
                                  transform_point(target.matrix, corners[0]),
@@ -201,10 +209,10 @@ nearby_t gather(const snapshot_t& snapshot, const mover_t& mover, float reach) {
                              false);
             }
         } else {
-            mat4_t into;
-            if (!inverse_affine(target.matrix, into)) {
+            if (!target.invertible) {
                 continue;
             }
+            const mat4_t& into = target.into;
             // The sweep's box in the mesh's own space, where its tree is.
             vec3_t local_min = transform_point(into, low);
             vec3_t local_max = local_min;
@@ -213,27 +221,24 @@ nearby_t gather(const snapshot_t& snapshot, const mover_t& mover, float reach) {
                 local_min = least(local_min, p);
                 local_max = greatest(local_max, p);
             }
+            // In the order of the mesh's own triangles, which the tree's indices are, not its
+            // leaves', so a refitted tree and one built again give the same touches, ties too;
+            // targets come in their order.
             const bvh_t& tree = scene().geometries[target.geometry].tree;
-            const std::size_t first = nearby.triangles.size();
-            tree.overlapping(local_min, local_max, [&](std::uint32_t triangle) {
+            nearby.indices.clear();
+            tree.overlapping(local_min, local_max,
+                             [&](std::uint32_t triangle) { nearby.indices.push_back(triangle); });
+            std::ranges::sort(nearby.indices);
+            for (const std::uint32_t triangle : nearby.indices) {
                 const vec3_t* corners = tree.corners(triangle);
                 const vec3_t a = transform_point(target.matrix, corners[0]);
                 const vec3_t b = transform_point(target.matrix, corners[1]);
                 const vec3_t c = transform_point(target.matrix, corners[2]);
                 add_triangle(nearby, { a, b, c }, squash, t, target.mirrored, tree.origin(triangle),
                              true);
-            });
-            // In the order of the mesh's own triangles, not its tree's leaves, so a refitted tree
-            // and one built again give the same touches, ties too; targets come in their order.
-            std::sort(nearby.triangles.begin() + static_cast<std::ptrdiff_t>(first),
-                      nearby.triangles.end(), [](const triangle_t& a, const triangle_t& b) {
-                          return a.origin.surface != b.origin.surface
-                                     ? a.origin.surface < b.origin.surface
-                                     : a.origin.triangle < b.origin.triangle;
-                      });
+            }
         }
     }
-    return nearby;
 }
 
 /// Whether a touch, by its normal in sphere space, is on ground the mover climbs: back in the
@@ -463,7 +468,9 @@ result_t move(const snapshot_t& snapshot, const mover_t& mover) {
     const float reach = length(mover.to - mover.from) +
                         std::fmax(mover.horizontal, mover.vertical) +
                         snapshot.world->collision_skin;
-    const nearby_t nearby = gather(snapshot, mover, reach);
+    // Each mover's own while it moves, kept for the next, so gathering doesn't allocate again.
+    thread_local nearby_t nearby;
+    gather(snapshot, mover, reach, nearby);
     const vec3_t start = into(mover.from);
     const vec3_t wanted = into(mover.to) - start;
     // No slide along what's steeper than ground takes a mover higher than its move rises, and its
@@ -570,6 +577,7 @@ void collide(std::uint32_t world_slot) {
         target.entity = entity;
         target.group = collider.group;
         target.matrix = entities.world_matrix[entity];
+        target.invertible = inverse_affine(target.matrix, target.into);
         target.mirrored = mirrors(target.matrix);
         target.horizontal = collider.horizontal;
         target.vertical = collider.vertical;

@@ -272,6 +272,20 @@ Public Final Class Camera Extends Entity
         Return MatOf(found)
     End Method
 
+    /// The view matrix `tween` of the way, 0 to 1, from where the camera's World was last
+    /// captured to now, as Draws sees from. A tween outside 0 to 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method TweenedViewMatrix(tween: Float): Mat4
+        Local camera = Live("TweenedViewMatrix")
+        Local found = fbe_mat4_t()
+        Local done = False
+        Unsafe
+            done = fbe_camera_tweened_view_matrix(camera, tween, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("TweenedViewMatrix")
+        Return MatOf(found)
+    End Method
+
     /// The camera's projection, as Mat4.Perspective or Mat4.Orthographic makes it, at its
     /// viewport's shape, with depth from 0 at its near to 1 at its far.
     @MainThread @PanicsAtCaller

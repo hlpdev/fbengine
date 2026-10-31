@@ -52,11 +52,16 @@ void remove_sprite(std::uint32_t entity) {
 }
 
 mat4_t sprite_matrix(std::uint32_t entity, std::uint32_t camera) {
-    const scene_t& s = scene();
-    const sprite_t& sprite = s.sprites[s.entities.component[entity]];
     update_world(entity);
     update_world(camera);
-    const mat4_t& own = s.entities.world_matrix[entity];
+    const scene_t& s = scene();
+    return sprite_matrix(entity, s.entities.world_matrix[entity],
+                         s.entities.world_rotation[camera]);
+}
+
+mat4_t sprite_matrix(std::uint32_t entity, const mat4_t& own, quat_t eye) {
+    const scene_t& s = scene();
+    const sprite_t& sprite = s.sprites[s.entities.component[entity]];
     const vec3_t place = own.axis(3);
     // The quad's axes in the world, as its view mode turns it, its front facing +Z.
     vec3_t x;
@@ -69,16 +74,15 @@ mat4_t sprite_matrix(std::uint32_t entity, std::uint32_t camera) {
     } else if (sprite.view_mode == FBE_SPRITE_UPRIGHT) {
         // Its own up, and toward the camera as far as that lets it.
         y = direction(own.axis(1), vec3_t(0.0F, 1.0F, 0.0F));
-        const vec3_t back = s.entities.world_rotation[camera] * vec3_t(0.0F, 0.0F, 1.0F);
+        const vec3_t back = eye * vec3_t(0.0F, 0.0F, 1.0F);
         z = direction(back - y * dot(back, y), direction(own.axis(2), vec3_t(0.0F, 0.0F, 1.0F)));
         x = cross(y, z);
     } else {
         // Parallel to the camera's view, whatever the entity's own turn and scale: the camera's
         // turn alone, as its view has it, so a mirror above the camera doesn't mirror it.
-        const quat_t turn = s.entities.world_rotation[camera];
-        x = turn * vec3_t(1.0F, 0.0F, 0.0F);
-        y = turn * vec3_t(0.0F, 1.0F, 0.0F);
-        z = turn * vec3_t(0.0F, 0.0F, 1.0F);
+        x = eye * vec3_t(1.0F, 0.0F, 0.0F);
+        y = eye * vec3_t(0.0F, 1.0F, 0.0F);
+        z = eye * vec3_t(0.0F, 0.0F, 1.0F);
     }
     // Rolled in its plane, counterclockwise as seen, sized, and moved by its handle.
     const float c = std::cos(sprite.roll);
@@ -91,13 +95,16 @@ mat4_t sprite_matrix(std::uint32_t entity, std::uint32_t camera) {
 }
 
 void sprite_bounds(std::uint32_t entity, vec3_t& min, vec3_t& max) {
+    update_world(entity);
+    sprite_bounds(entity, scene().entities.world_matrix[entity], min, max);
+}
+
+void sprite_bounds(std::uint32_t entity, const mat4_t& own, vec3_t& min, vec3_t& max) {
     const scene_t& s = scene();
     const sprite_t& sprite = s.sprites[s.entities.component[entity]];
-    update_world(entity);
-    const mat4_t& own = s.entities.world_matrix[entity];
     if (sprite.view_mode == FBE_SPRITE_FIXED) {
         // It doesn't turn toward a camera: the box of its four corners, sheared or not.
-        const mat4_t quad = sprite_matrix(entity, entity);
+        const mat4_t quad = sprite_matrix(entity, own, quat_t());
         for (unsigned corner = 0; corner < 4; ++corner) {
             const vec3_t p = transform_point(quad, vec3_t((corner & 1U) != 0 ? 1.0F : -1.0F,
                                                           (corner & 2U) != 0 ? 1.0F : -1.0F, 0.0F));

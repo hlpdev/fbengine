@@ -185,6 +185,7 @@ if(FBENGINE_FB_TESTS)
       "sprite-scale=SetSpriteScale on a Sprite: a sprite's size is 0 or more, finite, not -1 by 1"
       "sprite-freed=SetHandle on a Sprite that was freed"
       "tween-range=TweenedMatrix on a Pivot: a tween is 0 to 1, not 2"
+      "view-tween-range=TweenedViewMatrix on a Camera: a tween is 0 to 1, not -1"
       "capture-freed=Capture on a World that was freed"
       "fixed-step-rate=FixedStep: a rate is above 0 steps a second, not 0"
       "fixed-step-most=FixedStep: a frame takes at most 1 step or more, not 0"

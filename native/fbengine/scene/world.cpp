@@ -80,6 +80,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.captured.push_back(false);
         entities.fade_near.push_back(0.0F);
         entities.fade_far.push_back(0.0F);
+        entities.made.push_back(0);
     } else {
         entities.kind[entity] = kind;
         entities.world[entity] = world;
@@ -93,6 +94,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.fade_near[entity] = 0.0F;
         entities.fade_far[entity] = 0.0F;
     }
+    entities.made[entity] = ++entities.mades;
     reset_transform(entity);
     add_component(entity);
     ++scene().worlds[world].count;

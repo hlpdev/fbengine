@@ -37,6 +37,19 @@ bool blocked(std::uint32_t world, vec3_t a, vec3_t b, std::uint32_t first, std::
             return true;
         }
     }
+    for (const terrain_t& terrain : s.terrains) {
+        const std::uint32_t entity = terrain.entity;
+        if (entity == first || entity == second || s.entities.world[entity] != world ||
+            !s.entities.blocks_sight[entity] || !showing(entity)) {
+            continue;
+        }
+        update_world(entity);
+        mat4_t into;
+        if (inverse_affine(s.entities.world_matrix[entity], into) &&
+            terrain_blocks(terrain, transform_point(into, a), transform_point(into, b))) {
+            return true;
+        }
+    }
     return false;
 }
 

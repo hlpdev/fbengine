@@ -185,7 +185,8 @@ mat4_t draw_projection(const camera_t& camera, const view_t& view) {
     m.at(1, 1) = -1.0F / half_height;
     if (camera.projection == FBE_PROJECTION_PERSPECTIVE) {
         m.at(2, 2) = nearest / span;
-        m.at(3, 2) = nearest * farthest / span;
+        // Divided first, so a far plane near float's top doesn't overflow.
+        m.at(3, 2) = nearest * (farthest / span);
         m.at(2, 3) = -1.0F;
         m.at(3, 3) = 0.0F;
     } else {
@@ -411,15 +412,21 @@ FBE_API int32_t fbe_world_cameras(uint64_t world, uint64_t* cameras, int32_t cap
 }
 
 FBE_API bool fbe_camera_view_matrix(uint64_t camera, fbe_mat4_t* matrix) {
+    return fbe_camera_tweened_view_matrix(camera, 1.0F, matrix);
+}
+
+FBE_API bool fbe_camera_tweened_view_matrix(uint64_t camera, float tween, fbe_mat4_t* matrix) {
     const camera_t* found = camera_of(camera);
     if (found == nullptr) {
         return false;
     }
-    fbe::scene::update_world(found->entity);
-    const fbe::scene::scene_t& s = fbe::scene::scene();
+    if (std::isnan(tween) || tween < 0.0F || tween > 1.0F) {
+        return fbe::fail(std::format("a tween is 0 to 1, not {}", tween));
+    }
     // The camera's place and turn, without its scale, taken back to the origin.
-    const fbe::scene::quat_t back = fbe::scene::inverse(s.entities.world_rotation[found->entity]);
-    const fbe::scene::vec3_t at = s.entities.world_matrix[found->entity].axis(3);
+    const fbe::scene::pose_t pose = fbe::scene::tweened_t(tween).pose(found->entity);
+    const fbe::scene::quat_t back = fbe::scene::inverse(pose.rotation);
+    const fbe::scene::vec3_t at = pose.matrix.axis(3);
     const fbe::scene::mat4_t view = fbe::scene::compose(back * -at, back, { 1.0F, 1.0F, 1.0F });
     std::ranges::copy(view.m, matrix->m);
     return true;

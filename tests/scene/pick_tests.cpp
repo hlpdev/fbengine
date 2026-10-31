@@ -428,3 +428,40 @@ TEST_CASE("a sphere picks a mesh scaled unevenly as one scaled in its vertices",
     }
     CHECK(hits > 20);
 }
+
+TEST_CASE("a sphere picked from far off touches where it would from near", "[scene]") {
+    // Over a box's top, and a flat terrain's, at a height h: clear above it when h is more than
+    // the radius, else touching it, its point on the top, however far off the pick begins.
+    for (const bool terrain : { false, true }) {
+        const test_world_t world;
+        std::uint64_t target = 0;
+        if (terrain) {
+            target = fbe_entity_create(world.handle, 0, FBE_ENTITY_TERRAIN);
+            fbe_entity_set_scale(target, 10.0F, 1.0F, 10.0F, FBE_SPACE_LOCAL);
+            fbe_entity_set_position(target, -5.0F, 5.0F, -5.0F, FBE_SPACE_WORLD);
+            fbe_entity_set_pick_mode(target, FBE_PICK_MESH);
+        } else {
+            target = mesh(world.handle, fbe_geometry_cube());
+            fbe_entity_set_scale(target, 5.0F, 5.0F, 5.0F, FBE_SPACE_LOCAL);
+        }
+        std::mt19937 random(5); // NOLINT(bugprone-random-generator-seed)
+        std::uniform_real_distribution<float> unit(-1.0F, 1.0F);
+        int wrong = 0;
+        for (const float far : { 30.0F, 3000.0F, 30000.0F }) {
+            for (int i = 0; i < 500; ++i) {
+                const float h = 0.05F + ((unit(random) + 1.0F) * 0.5F);
+                const float z = unit(random) * 4.0F;
+                const float x = unit(random) * 4.0F;
+                const float slant = 0.3F * unit(random);
+                const fbe_pick_t hit = pick(world.handle, at(x - far, 5.0F + h, z - (slant * far)),
+                                            at(x + 10.0F, 5.0F + h, z + (slant * 10.0F)), 0.25F);
+                const bool hit_clear = h > 0.26F && hit.entity != 0;
+                const bool missed_top =
+                    h < 0.24F && (hit.entity != target || std::fabs(hit.point.y - 5.0F) > 0.01F);
+                wrong += hit_clear || missed_top ? 1 : 0;
+            }
+        }
+        CAPTURE(terrain);
+        CHECK(wrong == 0);
+    }
+}

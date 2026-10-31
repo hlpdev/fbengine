@@ -358,6 +358,9 @@ FBE_API int32_t fbe_world_cameras(uint64_t world, uint64_t* cameras, int32_t cap
 
 // The matrix from the world to a camera's view, where it's at the origin looking down -Z.
 FBE_API bool fbe_camera_view_matrix(uint64_t camera, fbe_mat4_t* matrix);
+// The view matrix `tween` of the way, 0 to 1, from where the camera's World was last captured to
+// now, as fbe_render_draws sees from; false for a freed camera or a tween outside 0 to 1.
+FBE_API bool fbe_camera_tweened_view_matrix(uint64_t camera, float tween, fbe_mat4_t* matrix);
 // A camera's projection in a target of this size, as std.math's Mat4.Perspective and
 // Orthographic make it, with depth from 0 at nearest to 1 at farthest.
 // The camera's projection as the engine draws with it, in a target of this size: Vulkan's clip
@@ -740,8 +743,9 @@ FBE_API bool fbe_world_collide(uint64_t world);
 // Picks. A pick is a line, or a sphere swept along one, from one point to another, which hits the
 // nearest showing entity of its World with a pick mode, as collisions touch it: its ellipsoid grown
 // by the pick's radius, its box, turned and scaled with it, or its mesh's triangles, from their
-// fronts. One starting in what it would hit goes out through it; with a radius, the point is where
-// the sphere touched.
+// fronts. One starting in what it would hit goes out through it, and one that began behind a
+// triangle passes out through it untouched till it's its radius in front; with a radius, the point
+// is where the sphere touched.
 //
 // What picks hit an entity as, FBE_PICK_NONE at first.
 FBE_API bool fbe_entity_set_pick_mode(uint64_t entity, int32_t mode);
