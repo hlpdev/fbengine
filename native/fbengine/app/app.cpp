@@ -22,6 +22,9 @@ std::vector<std::string> opened;
 // fbe_app_clipboard's, which the next call replaces.
 std::string clipboard;
 
+// What fbe_app_language_count read.
+std::vector<std::string> read_languages;
+
 /// The current folder, ending in its separator, which a relative path is from.
 std::string current_folder() {
     char* current = SDL_GetCurrentDirectory();
@@ -92,6 +95,16 @@ FBE_API const char* fbe_app_clipboard(void) {
         SDL_free(text);
     }
     return clipboard.c_str();
+}
+
+FBE_API int32_t fbe_app_language_count(void) {
+    read_languages = fbe::languages();
+    return static_cast<std::int32_t>(read_languages.size());
+}
+
+FBE_API const char* fbe_app_language_at(int32_t index) {
+    const bool there = index >= 0 && static_cast<std::size_t>(index) < read_languages.size();
+    return there ? read_languages[static_cast<std::size_t>(index)].c_str() : "";
 }
 
 FBE_API int32_t fbe_app_opened_count(void) {

@@ -1,8 +1,11 @@
-// The app's own calls to the OS: its message box, for errors a player should see, and opening a
-// link or a file as the OS does. Headless, neither opens anything, so a test never waits on one.
+// The app's own calls to the OS: its message box, for errors a player should see, opening a link
+// or a file as the OS does, the clipboard, and the player's languages. Headless, neither the
+// message box nor a link opens anything, so a test never waits on one.
 
+Import std.collections
 Import std.core
 Import std.ffi
+Import std.text
 Import "./c/fbe_app"
 
 /// What a message box says it is, which its icon shows.
@@ -51,4 +54,37 @@ End Function
     Unsafe
         Return fbe_app_clipboard().ToString()
     End Unsafe
+End Function
+
+/// The player's languages, as the OS prefers them, the first most: BCP 47's tags, as "en-US",
+/// "fr", or "zh-Hans", which a game picks the language of its text and voices by, as
+/// BestLanguage does. They're read again each call, as a player can change them while it runs.
+@MainThread Public Function Languages(): String[]
+    Local tags: String[] = []
+    For index = 0 To fbe_app_language_count() - 1
+        Unsafe
+            tags.Add(fbe_app_language_at(index).ToString())
+        End Unsafe
+    End For
+    Return tags
+End Function
+
+/// Of the languages a game has, `available`, the one the player prefers most, by `preferred`, or
+/// Languages() for Null, Null when none is: for each preferred tag in turn, the one that's it,
+/// then the one that's it with its last parts off, as "fr" for "fr-CA", then any of its language,
+/// as "fr-FR" for "fr-CA", each in any case.
+@MainThread Public Function BestLanguage(available: String[], preferred: String[]? = Null): String?
+    For tag In preferred ?? Languages()
+        Local parts = tag.Split("-")
+        For count = parts.Count To 1 Step -1
+            Local shorter = parts[0..count].Join("-")
+            For each In available
+                If each.EqualsIgnoreCase(shorter) Then Return each
+            End For
+        End For
+        For each In available
+            If each.Split("-")[0].EqualsIgnoreCase(parts[0]) Then Return each
+        End For
+    End For
+    Return Null
 End Function

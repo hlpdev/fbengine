@@ -165,11 +165,15 @@ Public Class TextField Extends Widget
     /// What it shows while it's empty.
     @MainThread Public Method Placeholder(): String => placeholder
 
-    /// Shows `shown` while it's empty.
+    /// Shows `shown` while it's empty, or its Ui's Strings' text for it while it translates; what's
+    /// typed in it never is.
     @MainThread Public Method SetPlaceholder(shown: String)
         placeholder = shown
         Reflow()
     End Method
+
+    /// What it shows while it's empty: its placeholder, or its Ui's Strings' text for it.
+    @MainThread Public Method ShownPlaceholder(): String => Translated(placeholder)
 
     /// The most characters it holds, 0 at first for no most; what it holds past it goes.
     @MainThread Public Method SetMaxLength(most: Int)
@@ -223,7 +227,7 @@ Public Class TextField Extends Widget
     End Method
 
     @MainThread Public Override Method Measure(): Vec2
-        Local shown = text != "" ? text : placeholder
+        Local shown = text != "" ? text : ShownPlaceholder()
         Return Vec2(TextSize(shown).x, TextSize("Ag").y)
     End Method
 

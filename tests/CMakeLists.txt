@@ -342,7 +342,8 @@ endif()
 
 # fbengine's app area apart from its DLL: what it shows nothing for, and what a link opens, on
 # Windows read back through the shell; it opens nothing.
-add_executable(fbengine_app_tests app/app_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/app/link.cpp")
+add_executable(fbengine_app_tests app/app_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/app/link.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/app/languages.cpp")
 target_include_directories(fbengine_app_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
 target_link_libraries(fbengine_app_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
 if(WIN32)
@@ -492,7 +493,20 @@ if(FBENGINE_FB_TESTS)
       "margin-infinite|panic: Node[.]SetMargin: a margin is finite, not Inf"
       "anchors-backward|panic: Node[.]SetAnchors: a Max is at its Min or after"
       "style-negative-border|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not -1"
-      "style-nan-font-size|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not NaN")
+      "style-nan-font-size|panic: Theme[.]SetFields: a style's widths, radii, and sizes are 0 or more, not NaN"
+      "style-negative-padding|panic: Theme[.]SetFields: a style's padding is 0 or more, not -2"
+      "max-size-negative|panic: Node[.]SetMaxSize: a most is 0 or more, or Inf, not -1 by 0"
+      "gap-infinite|panic: Node[.]SetGap: a gap is 0 or more, and finite, not Inf"
+      "content-size-nan|panic: Node[.]SetContentSize: a size is 0 or more, and finite, not NaN by 0"
+      "anchor-nan|panic: Node[.]SetAnchors: an anchor is finite, not NaN"
+      "slider-range-backward|panic: Slider[.]SetRange: a range is finite, and ends at its start or after, not 2 to 1"
+      "slider-step-negative|panic: Slider[.]SetStep: a step is 0 or more, not -1"
+      "max-length-negative|panic: TextField[.]SetMaxLength: a most is 0, for none, or more, not -1"
+      "wheel-step-zero|panic: ScrollView[.]SetWheelStep: a step is over 0, not 0"
+      "scale-zero|panic: Ui[.]SetScale: a scale is over 0, not 0"
+      "command-with-a-space|panic: Console[.]Register: \"give item\" isn't a command's name"
+      "console-no-lines|panic: Console[.]SetMaxLines: a console keeps 1 line or more, not 0"
+      "strings-fall-back-to-themselves|panic: Strings[.]SetFallback: en's strings fall back to fr's, which fall back to them")
   foreach(case IN LISTS fbengine_ui_cases)
     string(REPLACE "|" ";" case "${case}")
     list(GET case 0 name)

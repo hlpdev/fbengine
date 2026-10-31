@@ -2,7 +2,7 @@
 
 fbengine's UI, written in FutureBlitz on fbengine's 2D canvas and text: a tree of nodes laid out
 in rows, columns, and stacks with anchors, styled by themes, with widgets, focus by keyboard and
-gamepad, a debug UI, and a console.
+gamepad, a debug UI, a console, and its text in the player's language.
 
 ```toml
 [dependencies]

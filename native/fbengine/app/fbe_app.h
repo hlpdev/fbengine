@@ -1,7 +1,8 @@
 #ifndef FBE_APP_H
 #define FBE_APP_H
 
-// The app's own calls to the OS: its message box, and opening links and files.
+// The app's own calls to the OS: its message box, opening links and files, the clipboard, and the
+// player's languages.
 //
 // Neither opens anything headless (fbe_window_set_headless, or SDL's video driver set to
 // "offscreen" or "dummy", as tests run): a message goes to stderr, and a link is kept, for tests
@@ -38,6 +39,12 @@ FBE_API const char* fbe_app_opened_at(int32_t index);
 FBE_API bool fbe_app_set_clipboard(const char* text);
 // The text on the clipboard, "" for none.
 FBE_API const char* fbe_app_clipboard(void);
+
+// The player's languages, as the OS prefers them, the first most, each a BCP 47 tag in its usual
+// case, as "en-US" or "fr": the count reads them again, and the index is into what it read; ""
+// for no such one.
+FBE_API int32_t fbe_app_language_count(void);
+FBE_API const char* fbe_app_language_at(int32_t index);
 
 #ifdef __cplusplus
 }

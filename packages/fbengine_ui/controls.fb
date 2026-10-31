@@ -15,17 +15,20 @@ Public Class Label Extends Widget
         Self.text = text
     End New
 
-    /// What it shows.
+    /// What it's given to show, a key while it translates.
     @MainThread Public Method Text(): String => text
 
-    /// Shows `text`.
+    /// Shows `text`, or its Ui's Strings' text for it while it translates.
     @MainThread Public Method SetText(shown: String)
         If shown == text Then Return
         text = shown
         Reflow()
     End Method
 
-    @MainThread Public Override Method Measure(): Vec2 => TextSize(text)
+    /// What it shows: its text, or its Ui's Strings' text for it.
+    @MainThread Public Method ShownText(): String => Translated(text)
+
+    @MainThread Public Override Method Measure(): Vec2 => TextSize(ShownText())
 End Class
 
 /// A button with text on it, which the pointer clicks, as Return, Space, or a gamepad's SOUTH
@@ -42,15 +45,18 @@ Public Class Button Extends Widget
         SetFocusable(True)
     End New
 
-    /// What it shows.
+    /// What it's given to show, a key while it translates.
     @MainThread Public Method Text(): String => text
 
-    /// Shows `text`.
+    /// Shows `text`, or its Ui's Strings' text for it while it translates.
     @MainThread Public Method SetText(shown: String)
         If shown == text Then Return
         text = shown
         Reflow()
     End Method
+
+    /// What it shows: its text, or its Ui's Strings' text for it.
+    @MainThread Public Method ShownText(): String => Translated(text)
 
     /// Whether the last Ui.Update read it clicked.
     @MainThread Public Method Clicked(): Bool => clicked > 0
@@ -68,7 +74,7 @@ Public Class Button Extends Widget
         End For
     End Method
 
-    @MainThread Public Override Method Measure(): Vec2 => TextSize(text)
+    @MainThread Public Override Method Measure(): Vec2 => TextSize(ShownText())
 
     @MainThread Public Override Method PointerDown(point: Vec2): Bool => True
 

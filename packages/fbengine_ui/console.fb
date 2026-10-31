@@ -81,6 +81,7 @@ Public Class Console Extends Widget
             lines.Add(each)
             Local label = Label(each)
             label.SetStyleName("console.line")
+            label.SetTranslates(False)
             output.Add(label)
         End For
         Trimmed()
