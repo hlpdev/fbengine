@@ -84,7 +84,7 @@ struct voice_t {
 struct channels_t {
     std::mutex live_lock;
     std::vector<voice_t*> live;
-    fbe::audio::pool_t<voice_t> voices;
+    fbe::audio::pool_t<voice_t> voices{ fbe::audio::kind_t::CHANNEL };
 };
 
 channels_t& channels() {
