@@ -91,7 +91,7 @@ jobs:
           test "$(printf '%s\n' "$output" | tail -n 1)" = "ending with the audio started"
           example audio_panic
           test "$status" != 0
-          printf '%s\n' "$output" | grep -q "^panic: a mistake, with the audio started"
+          grep -q "^panic: a mistake, with the audio started" <<< "$output"
           example audio_stress
           test "$(printf '%s\n' "$output" | tail -n 1)" = "within the budget"
 
