@@ -1,7 +1,7 @@
-// The frame: fbe_flip ends one, waiting for the frame limit and reading the OS's events, and
+// The frame: fbe_frame_flip ends one, waiting for the frame limit and reading the OS's events, and
 // keeps the time each took.
 
-#include "engine.hpp"
+#include "core/engine.hpp"
 #include "fbengine.h"
 
 #include <cstdint>
@@ -29,7 +29,7 @@ bool vsync = true;
 
 extern "C" {
 
-FBE_API void fbe_flip(bool wait_for_vsync) {
+FBE_API void fbe_frame_flip(bool wait_for_vsync) {
     // The renderer presents the frame here, from E2, waiting for the display when it's asked to.
     vsync = wait_for_vsync;
 
@@ -78,7 +78,7 @@ FBE_API double fbe_frame_rate(void) {
     return rate;
 }
 
-FBE_API bool fbe_set_frame_limit(int32_t frames_per_second) {
+FBE_API bool fbe_frame_set_limit(int32_t frames_per_second) {
     if (frames_per_second < 0 || frames_per_second > fastest) {
         return fbe::fail(std::format("a frame limit is 0, for none, to {} frames a second, not {}",
                                      fastest, frames_per_second));
@@ -91,7 +91,7 @@ FBE_API int32_t fbe_frame_limit(void) {
     return limit;
 }
 
-FBE_API bool fbe_vsync(void) {
+FBE_API bool fbe_frame_vsync(void) {
     return vsync;
 }
 

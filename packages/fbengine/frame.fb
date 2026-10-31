@@ -1,7 +1,7 @@
 // The frame: Flip ends one, and Frame says how long it took.
 
 Import std.core
-Import "./c/fbengine"
+Import "./c/fbe_frame"
 Import "./window"
 
 /// Ends the frame: presents it, waiting for the display when `vsync` is True, waits for
@@ -9,7 +9,7 @@ Import "./window"
 /// the coroutines waiting for the next tick, as `Scheduler.Main.Step()` does, so they run before
 /// the next frame's code.
 @MainThread Public Function Flip(vsync: Bool = True)
-    fbe_flip(vsync)
+    fbe_frame_flip(vsync)
     Scheduler.Main.Step()
 End Function
 
@@ -30,7 +30,7 @@ Public Class Frame
     /// Makes Flip wait so there are at most `framesPerSecond` frames a second, from 1 to 1000,
     /// or takes the limit away with 0.
     @MainThread Public Static Method SetLimit(framesPerSecond: Int32)
-        If !fbe_set_frame_limit(framesPerSecond) Then Panic(LastError())
+        If !fbe_frame_set_limit(framesPerSecond) Then Panic(LastError())
     End Method
 
     /// The most frames a second Flip lets through, 0 for no limit.

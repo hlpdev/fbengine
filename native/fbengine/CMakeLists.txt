@@ -1,5 +1,7 @@
-# fbengine's own DLL, which the fbengine package's FB code calls through fbengine.h.
-fbengine_add_native(fbengine_native fbengine fbe_ fbengine.cpp frame.cpp window.cpp)
+# fbengine's own DLL, which the fbengine package's FB code calls through fbengine.h, an area of
+# its C API to a folder: core/, window/, frame/, and the ones each milestone adds.
+file(GLOB fbengine_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*/*.cpp")
+fbengine_add_native(fbengine_native fbengine fbe_ ${fbengine_sources})
 target_include_directories(fbengine_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(fbengine_native PRIVATE FBE_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")

@@ -1,6 +1,5 @@
+#include "core/engine.hpp"
 #include "fbengine.h"
-
-#include "engine.hpp"
 
 #include <format>
 #include <SDL3/SDL.h>
@@ -57,7 +56,7 @@ FBE_API const char* fbe_error(void) {
     return last_error.c_str();
 }
 
-FBE_API bool fbe_set_headless(bool on) {
+FBE_API bool fbe_window_set_headless(bool on) {
     if (fbe::video_started() && on != headless) {
         return fbe::fail("headless is set before the first window or display");
     }
@@ -65,7 +64,7 @@ FBE_API bool fbe_set_headless(bool on) {
     return true;
 }
 
-FBE_API bool fbe_headless(void) {
+FBE_API bool fbe_window_headless(void) {
     return headless;
 }
 

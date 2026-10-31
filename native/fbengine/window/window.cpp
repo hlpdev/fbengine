@@ -1,6 +1,6 @@
-// The window, which fbe_graphics opens, and the displays it can go on.
+// The window, which fbe_window_open opens, and the displays it can go on.
 
-#include "engine.hpp"
+#include "core/engine.hpp"
 #include "fbengine.h"
 
 #include <cstdint>
@@ -15,11 +15,11 @@ constexpr std::int32_t largest = 16384;
 
 SDL_Window* window = nullptr;
 std::string title;
-std::int32_t current_mode = FBE_WINDOWED;
+std::int32_t current_mode = FBE_WINDOW_WINDOWED;
 bool resizable = false;
 
-// What the OS's events, which fbe_flip reads, said of the window: its close button or the app's
-// quit, its focus, and whether it's minimized.
+// What the OS's events, which fbe_frame_flip reads, said of the window: its close button or the
+// app's quit, its focus, and whether it's minimized.
 bool closed = false;
 bool focused = false;
 bool minimized = false;
@@ -42,11 +42,11 @@ bool lists_modes() {
 /// Puts the window in `wanted`: for fullscreen, at the display mode closest to its size, or at
 /// the desktop's on a display that lists none.
 bool apply_mode(std::int32_t wanted) {
-    if (wanted == FBE_WINDOWED) {
+    if (wanted == FBE_WINDOW_WINDOWED) {
         if (!SDL_SetWindowFullscreen(window, false)) {
             return fbe::fail_sdl("couldn't leave fullscreen");
         }
-    } else if (wanted == FBE_BORDERLESS || !lists_modes()) {
+    } else if (wanted == FBE_WINDOW_BORDERLESS || !lists_modes()) {
         if (!SDL_SetWindowFullscreenMode(window, nullptr) ||
             !SDL_SetWindowFullscreen(window, true)) {
             return fbe::fail_sdl("couldn't make the window fill the screen");
@@ -72,7 +72,8 @@ bool apply_mode(std::int32_t wanted) {
 }
 
 bool valid_mode(std::int32_t wanted) {
-    return wanted == FBE_WINDOWED || wanted == FBE_FULLSCREEN || wanted == FBE_BORDERLESS;
+    return wanted == FBE_WINDOW_WINDOWED || wanted == FBE_WINDOW_FULLSCREEN ||
+           wanted == FBE_WINDOW_BORDERLESS;
 }
 
 /// The display at `index` in SDL's list, or 0.
@@ -129,7 +130,7 @@ void window_event(const SDL_Event& event) {
 
 extern "C" {
 
-FBE_API bool fbe_graphics(int32_t width, int32_t height, int32_t wanted) {
+FBE_API bool fbe_window_open(int32_t width, int32_t height, int32_t wanted) {
     if (width < 1 || height < 1 || width > largest || height > largest) {
         return fbe::fail(
             std::format("a window is 1 to {} pixels on a side, not {}x{}", largest, width, height));
@@ -156,7 +157,7 @@ FBE_API bool fbe_graphics(int32_t width, int32_t height, int32_t wanted) {
         minimized = (now & SDL_WINDOW_MINIMIZED) != 0;
     } else {
         // A fullscreen window's size is its mode's, so it's windowed while its size changes.
-        if (!apply_mode(FBE_WINDOWED)) {
+        if (!apply_mode(FBE_WINDOW_WINDOWED)) {
             return false;
         }
         if (!SDL_SetWindowSize(window, width, height)) {
@@ -164,19 +165,19 @@ FBE_API bool fbe_graphics(int32_t width, int32_t height, int32_t wanted) {
         }
         SDL_SyncWindow(window);
     }
-    if (wanted != FBE_WINDOWED && !apply_mode(wanted)) {
+    if (wanted != FBE_WINDOW_WINDOWED && !apply_mode(wanted)) {
         return false;
     }
     current_mode = wanted;
     return true;
 }
 
-FBE_API void fbe_end_graphics(void) {
+FBE_API void fbe_window_close(void) {
     if (window != nullptr) {
         SDL_DestroyWindow(window);
         window = nullptr;
     }
-    current_mode = FBE_WINDOWED;
+    current_mode = FBE_WINDOW_WINDOWED;
     closed = false;
     focused = false;
     minimized = false;
@@ -194,25 +195,25 @@ FBE_API bool fbe_window_minimized(void) {
     return minimized;
 }
 
-FBE_API bool fbe_simulate_window(int32_t event) {
+FBE_API bool fbe_window_simulate(int32_t event) {
     if (window == nullptr) {
         return fbe::fail("there's no window; Graphics opens one");
     }
     SDL_Event pushed{};
     switch (event) {
-    case FBE_SIMULATE_CLOSE:
+    case FBE_WINDOW_SIMULATE_CLOSE:
         pushed.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
         break;
-    case FBE_SIMULATE_FOCUS:
+    case FBE_WINDOW_SIMULATE_FOCUS:
         pushed.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
         break;
-    case FBE_SIMULATE_BLUR:
+    case FBE_WINDOW_SIMULATE_BLUR:
         pushed.type = SDL_EVENT_WINDOW_FOCUS_LOST;
         break;
-    case FBE_SIMULATE_MINIMIZE:
+    case FBE_WINDOW_SIMULATE_MINIMIZE:
         pushed.type = SDL_EVENT_WINDOW_MINIMIZED;
         break;
-    case FBE_SIMULATE_RESTORE:
+    case FBE_WINDOW_SIMULATE_RESTORE:
         pushed.type = SDL_EVENT_WINDOW_RESTORED;
         break;
     default:
@@ -223,18 +224,18 @@ FBE_API bool fbe_simulate_window(int32_t event) {
     return SDL_PushEvent(&pushed) ? true : fbe::fail_sdl("couldn't push the event");
 }
 
-FBE_API bool fbe_has_graphics(void) {
+FBE_API bool fbe_window_is_open(void) {
     return window != nullptr;
 }
 
-FBE_API void fbe_set_title(const char* text) {
+FBE_API void fbe_window_set_title(const char* text) {
     title = text != nullptr ? text : "";
     if (window != nullptr) {
         SDL_SetWindowTitle(window, title.c_str());
     }
 }
 
-FBE_API const char* fbe_title(void) {
+FBE_API const char* fbe_window_title(void) {
     return title.c_str();
 }
 
@@ -274,7 +275,7 @@ FBE_API float fbe_window_scale(void) {
     return window != nullptr ? SDL_GetWindowPixelDensity(window) : 0.0F;
 }
 
-FBE_API bool fbe_set_window_mode(int32_t wanted) {
+FBE_API bool fbe_window_set_mode(int32_t wanted) {
     if (!valid_mode(wanted)) {
         return fbe::fail(std::format("{} isn't a WindowMode", wanted));
     }
@@ -288,14 +289,14 @@ FBE_API int32_t fbe_window_mode(void) {
     return current_mode;
 }
 
-FBE_API void fbe_set_resizable(bool on) {
+FBE_API void fbe_window_set_resizable(bool on) {
     resizable = on;
     if (window != nullptr) {
         SDL_SetWindowResizable(window, on);
     }
 }
 
-FBE_API bool fbe_resizable(void) {
+FBE_API bool fbe_window_resizable(void) {
     return resizable;
 }
 

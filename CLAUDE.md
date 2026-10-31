@@ -9,7 +9,9 @@ Blitz code and assets are a game's own tools, never the engine's or the language
 
 ## How we work
 - As in FutureBlitz: you write the code, C++ and .fb, one step at a time, in my code style, and
-  verify each step before calling it done: ctest, clang-format, clang-tidy, and `fb fmt --check`.
+  verify each step before calling it done: `python tools/verify.py` prints "everything passed"
+  (the build, ctest offscreen, the export check, the bindings, clang-format, clang-tidy on what
+  changed, `fb fmt --check`).
   Every bug a check or review finds is fixed, with a test, before the step closes.
 - Commit each verified step as me (a short lowercase message, no Claude attribution) and push.
 - A bug or gap the engine finds in FutureBlitz is fixed there, with a test, never worked around
@@ -23,22 +25,26 @@ Blitz code and assets are a game's own tools, never the engine's or the language
   template params CamelCase; never align declarations or assignments; spaces inside braced lists.
 - Each package's DLL (cmake/native.cmake's fbengine_add_native) is C++ behind a C API of
   fixed-size types, exporting only its prefix's functions (`fbe_` for fbengine), with its C++
-  runtime linked in. Its FB bindings are fb-bindgen's, in the package's c/ folder, made again
-  whenever the header changes.
+  runtime linked in. Functions are `fbe_<area>_<verb>`; handles are `uint64_t`.
+- The C API is split by area: native/<package>/<area>/fbe_<area>.h, its .cpp files beside it
+  (CMake takes every area folder's), and its bindings, packages/<package>/c/fbe_<area>.fb, which
+  `sh tools/bindgen.sh` makes again whenever a header changes. An area's header uses only
+  fixed-size types and its own structs, never another area's.
 - A package's FB API is objects with properties and methods, `@MainThread`, over its bindings.
 - The packages' versions are one: packages/fbengine/project.toml's, which CMake reads; every
   package's project.toml and the tests that name it change with it.
 
 ## Layout
-- native/<package>/: each DLL's C API header and its C++.
+- native/<package>/<area>/: an area's C API header and its C++; native/fbengine/fbengine.h
+  includes every area's.
 - packages/<package>/: project.toml, the FB code, c/ (bindings), tests/ (`fb test`).
+- tools/: verify.py, bindgen.sh, check-exports.sh.
 - examples/: programs on the packages, which ctest runs.
 
 ## Current step
 E0 is done, and E1 steps 1 and 2 (2026-10-31; FutureBlitz's docs/history.md has what each added).
 The engine's planning pass (2026-10-31) wrote docs/plan.md, architecture.md, questions.md, and
-research/; next, the step that splits the headers, bindings, and folders by area and adds
-tools/verify.py, then the first wave of lanes.
+research/, and the C API is split by area, with tools/verify.py; next, the first wave of lanes.
 
 ## CI notes
 - Windows' GPU job uses mesa-dist-win's MSVC lavapipe, registered in HKLM, since the loader

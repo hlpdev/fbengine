@@ -3,7 +3,8 @@
 
 Import std.core
 Import std.ffi
-Import "./c/fbengine"
+Import "./c/fbe_core"
+Import "./c/fbe_window"
 
 /// How the window fills the screen.
 Public Enum WindowMode
@@ -23,12 +24,12 @@ End Class
 /// and `mode`.
 @MainThread Public Function Graphics(width: Int32, height: Int32,
                                      mode: WindowMode = WindowMode.WINDOWED) Throws GraphicsError
-    If !fbe_graphics(width, height, mode As Int32) Then Throw GraphicsError(LastError())
+    If !fbe_window_open(width, height, mode As Int32) Then Throw GraphicsError(LastError())
 End Function
 
 /// Closes the window, if it's open.
 @MainThread Public Function EndGraphics()
-    fbe_end_graphics()
+    fbe_window_close()
 End Function
 
 /// The window Graphics opens, which there's one of.
@@ -39,14 +40,14 @@ Public Class Window
     /// Makes windows offscreen, never shown, as tests and servers want, before the first window
     /// or display; it panics once one's been asked for.
     @MainThread Public Static Method SetHeadless(headless: Bool)
-        If !fbe_set_headless(headless) Then Panic(LastError())
+        If !fbe_window_set_headless(headless) Then Panic(LastError())
     End Method
 
     /// Whether windows are offscreen.
-    @MainThread Public Static Method Headless(): Bool => fbe_headless()
+    @MainThread Public Static Method Headless(): Bool => fbe_window_headless()
 
     /// Whether the window's open.
-    @MainThread Public Static Method Open(): Bool => fbe_has_graphics()
+    @MainThread Public Static Method Open(): Bool => fbe_window_is_open()
 
     /// Whether, by the last Flip, the window's close button was pressed or the app was asked to
     /// quit, which stays True until the window's closed.
@@ -60,13 +61,13 @@ Public Class Window
 
     /// Sets the window's title, which can be before it's open.
     @MainThread Public Static Method SetTitle(title: String)
-        fbe_set_title(title)
+        fbe_window_set_title(title)
     End Method
 
     /// The window's title.
     @MainThread Public Static Method Title(): String
         Unsafe
-            Return fbe_title().ToString()
+            Return fbe_window_title().ToString()
         End Unsafe
     End Method
 
@@ -91,16 +92,16 @@ Public Class Window
 
     /// Puts the open window in `mode`.
     @MainThread Public Static Method SetMode(mode: WindowMode) Throws GraphicsError
-        If !fbe_set_window_mode(mode As Int32) Then Throw GraphicsError(LastError())
+        If !fbe_window_set_mode(mode As Int32) Then Throw GraphicsError(LastError())
     End Method
 
     /// Lets the window be resized by its edges, or stops it, which can be before it's open.
     @MainThread Public Static Method SetResizable(resizable: Bool)
-        fbe_set_resizable(resizable)
+        fbe_window_set_resizable(resizable)
     End Method
 
     /// Whether the window can be resized by its edges.
-    @MainThread Public Static Method Resizable(): Bool => fbe_resizable()
+    @MainThread Public Static Method Resizable(): Bool => fbe_window_resizable()
 End Class
 
 /// What the last call to fbengine_native that failed says went wrong.

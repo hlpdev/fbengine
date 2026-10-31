@@ -8,7 +8,7 @@
 
 namespace fbe {
 
-/// What an event read by fbe_flip says of the window.
+/// What an event read by fbe_frame_flip says of the window.
 void window_event(const SDL_Event& event);
 
 /// Keeps `message` for fbe_error(), and returns false, for a call that failed.
@@ -17,7 +17,7 @@ bool fail(std::string_view message);
 /// SDL's last error, for fbe_error(), with what was being done, and returns false.
 bool fail_sdl(std::string_view doing);
 
-/// Starts SDL's video, offscreen if fbe_set_headless said so; false if it can't.
+/// Starts SDL's video, offscreen if fbe_window_set_headless said so; false if it can't.
 bool start_video();
 
 /// Whether SDL's video has started, after which headless can't change.

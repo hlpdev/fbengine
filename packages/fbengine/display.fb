@@ -2,7 +2,7 @@
 
 Import std.core
 Import std.ffi
-Import "./c/fbengine"
+Import "./c/fbe_window"
 Import "./window"
 
 /// A size a display can show, and how often it shows a frame.

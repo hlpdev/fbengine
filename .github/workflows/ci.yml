@@ -179,3 +179,4 @@ jobs:
           pipx install clang-format==19.1.5
           git ls-files '*.h' '*.hpp' '*.c' '*.cpp' | xargs clang-format --dry-run -Werror
           fb fmt --check packages examples
+          sh tools/bindgen.sh --check
