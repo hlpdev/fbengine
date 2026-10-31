@@ -109,25 +109,40 @@ jobs:
             mingw-w64-x86_64-vulkan-loader
             mingw-w64-x86_64-mesa
 
+      # The runner runs as an administrator, for whom the loader ignores VK_DRIVER_FILES, so
+      # lavapipe goes in the registry, where it looks for drivers.
       - name: Use lavapipe (Windows)
         if: runner.os == 'Windows'
-        run: echo "VK_DRIVER_FILES=$(cygpath -w /mingw64/share/vulkan/icd.d/lvp_icd.x86_64.json)" >> "$GITHUB_ENV"
+        env:
+          MSYS2_ARG_CONV_EXCL: '*'
+        run: |
+          manifest="$(cygpath -w /mingw64/share/vulkan/icd.d/lvp_icd.x86_64.json)"
+          reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$manifest" /t REG_DWORD /d 0 /f
 
       - name: Install lavapipe (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libvulkan1 mesa-vulkan-drivers
-          dpkg -L mesa-vulkan-drivers | grep -E 'icd|lvp'
-          echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd.*.json)" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json)" >> "$GITHUB_ENV"
 
-      - name: Install MoltenVK (macOS)
+      # Apple silicon runners have Metal, for MoltenVK; Intel ones have no GPU, so they use
+      # Homebrew Mesa's lavapipe.
+      - name: Install MoltenVK or lavapipe (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install ninja vulkan-loader molten-vk
-          prefix="$(brew --prefix)"
-          echo "VK_DRIVER_FILES=$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
-          echo "VULKAN_LIBRARIES=$prefix/lib" >> "$GITHUB_ENV"
+          brew install ninja vulkan-loader
+          if [ "${{ matrix.target }}" = macos-arm64 ]; then
+            brew install molten-vk
+            manifest="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          else
+            brew install mesa
+            find "$(brew --prefix mesa)" -name '*icd*.json'
+            manifest="$(find "$(brew --prefix mesa)" -name 'lvp_icd*.json' | head -n 1)"
+          fi
+          test -f "$manifest"
+          echo "VK_DRIVER_FILES=$manifest" >> "$GITHUB_ENV"
+          echo "VULKAN_LIBRARIES=$(brew --prefix)/lib" >> "$GITHUB_ENV"
 
       # macOS drops DYLD_ variables on the way into the shell, so they're given to ctest itself,
       # which finds the loader there for volk.
