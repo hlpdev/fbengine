@@ -16,6 +16,7 @@ extern "C" {
 // What an entity is.
 #define FBE_ENTITY_PIVOT  0
 #define FBE_ENTITY_CAMERA 1
+#define FBE_ENTITY_LIGHT  2
 
 // The space a transform is in: the entity's parent's, or the world's.
 #define FBE_SPACE_LOCAL 0
@@ -35,6 +36,19 @@ extern "C" {
 // How a camera projects: with perspective, or orthographically, without.
 #define FBE_PROJECTION_PERSPECTIVE  0
 #define FBE_PROJECTION_ORTHOGRAPHIC 1
+
+// What a light is: the sun's, along its forward axis from everywhere; a point's, out from where it
+// is; or a spot's, in a cone along its forward axis.
+#define FBE_LIGHT_DIRECTIONAL 0
+#define FBE_LIGHT_POINT       1
+#define FBE_LIGHT_SPOT        2
+
+// How a camera's fog thickens with depth in front of it: not at all; linearly from its start to
+// its end; or as e to the minus density times the depth, or that squared.
+#define FBE_FOG_NONE                0
+#define FBE_FOG_LINEAR              1
+#define FBE_FOG_EXPONENTIAL         2
+#define FBE_FOG_EXPONENTIAL_SQUARED 3
 
 // std.math's Vec3, Quat, and Mat4 as C has them; the matrix is column-major, its columns the
 // axes, then the origin. C has no `using`, so they're typedefs.
@@ -243,6 +257,47 @@ FBE_API int32_t fbe_camera_project(uint64_t camera, float target_width, float ta
 // The point in the world at x and y in a camera's view, `depth` in front of it.
 FBE_API bool fbe_camera_unproject(uint64_t camera, float target_width, float target_height, float x,
                                   float y, float depth, fbe_vec3_t* point);
+
+// A light shines along its forward axis, -Z, as directional and spot lights do, or out from where
+// it is, as point lights do; one that's hidden lights nothing. New, it's directional, white, of
+// intensity 1, reaching 10 units, with a cone from 0 to Pi / 4 from its axis. A color can be
+// negative, which takes light away.
+FBE_API bool fbe_light_set_type(uint64_t light, int32_t type);
+FBE_API int32_t fbe_light_type(uint64_t light);
+FBE_API bool fbe_light_set_color(uint64_t light, float r, float g, float b);
+FBE_API bool fbe_light_color(uint64_t light, fbe_color_t* color);
+// False below 0.
+FBE_API bool fbe_light_set_intensity(uint64_t light, float intensity);
+FBE_API float fbe_light_intensity(uint64_t light);
+// How far a point or spot light reaches, where it's faded to nothing; false unless above 0.
+FBE_API bool fbe_light_set_range(uint64_t light, float range);
+FBE_API float fbe_light_range(uint64_t light);
+// A spot light's cone: the angle from its axis where it starts to fade, and where it's out;
+// false unless 0 <= inner <= outer <= Pi / 2.
+FBE_API bool fbe_light_set_cone(uint64_t light, float inner, float outer);
+FBE_API float fbe_light_inner_cone(uint64_t light);
+FBE_API float fbe_light_outer_cone(uint64_t light);
+// A World's lights, in the tree's order, depth first: writes up to `capacity` and gives how many
+// there are, -1 for a freed World.
+FBE_API int32_t fbe_world_lights(uint64_t world, uint64_t* lights, int32_t capacity);
+// A World's ambient light, which lights everything a little from everywhere: std.math's
+// Color.Gray, sRGB's half gray, at first.
+FBE_API bool fbe_world_set_ambient(uint64_t world, float r, float g, float b);
+FBE_API bool fbe_world_ambient(uint64_t world, fbe_color_t* color);
+
+// A camera's fog, which blends what it sees toward the fog's color with its depth in front of the
+// camera: FBE_FOG_NONE at first, black, linear from 1 to 100, at a density of 0.02.
+FBE_API bool fbe_camera_set_fog_mode(uint64_t camera, int32_t mode);
+FBE_API int32_t fbe_camera_fog_mode(uint64_t camera);
+FBE_API bool fbe_camera_set_fog_color(uint64_t camera, float r, float g, float b);
+FBE_API bool fbe_camera_fog_color(uint64_t camera, fbe_color_t* color);
+// Where linear fog starts and where it's whole; false unless 0 <= start < end, finite.
+FBE_API bool fbe_camera_set_fog_range(uint64_t camera, float start, float end);
+FBE_API float fbe_camera_fog_start(uint64_t camera);
+FBE_API float fbe_camera_fog_end(uint64_t camera);
+// How thick exponential fog is; false below 0.
+FBE_API bool fbe_camera_set_fog_density(uint64_t camera, float density);
+FBE_API float fbe_camera_fog_density(uint64_t camera);
 
 // Copies an entity and everything under it, as the last child of `parent`, or at the top of
 // `world` when `parent` is 0; each copy has its original's name, transform, and settings, and

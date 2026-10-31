@@ -6,6 +6,7 @@ Import std.ffi
 Import std.math
 Import "./c/fbe_scene"
 Import "./entity"
+Import "./light"
 Import "./transform"
 Import "./window"
 
@@ -15,6 +16,18 @@ Public Enum Projection
     PERSPECTIVE = 0
     /// Without: a box of the world, as plans and overlays want.
     ORTHOGRAPHIC = 1
+End Enum
+
+/// How a camera's fog thickens with depth in front of it.
+Public Enum FogMode
+    /// No fog.
+    NONE = 0
+    /// None at its start, whole at its end, and evenly between.
+    LINEAR = 1
+    /// What's seen fades as e to the minus its density times the depth.
+    EXPONENTIAL = 2
+    /// What's seen fades as e to the minus the square of its density times the depth.
+    EXPONENTIAL_SQUARED = 3
 End Enum
 
 /// A camera: it looks along its forward axis, -Z, from where it is, turned as it is, its scale
@@ -169,7 +182,7 @@ Public Final Class Camera Extends Entity
             done = fbe_camera_clear_color(camera, AddressOf(found))
         End Unsafe
         If !done Then Panic(LastError())
-        Return Color(found.r, found.g, found.b, found.a)
+        Return ColorOf(found)
     End Method
 
     /// Sets when the camera draws among its World's cameras: lower orders first, 0 at first, and
@@ -182,6 +195,64 @@ Public Final Class Camera Extends Entity
     /// When the camera draws among its World's cameras.
     @MainThread @PanicsAtCaller
     Public Method Order(): Int => fbe_camera_order(Live("Order"))
+
+    /// Sets how the camera's fog thickens with depth: none at first. Fog blends what the camera
+    /// sees toward its color by how deep it is in front of the camera, so a fogged camera often
+    /// sees only as far as its fog, with its far there.
+    @MainThread @PanicsAtCaller
+    Public Method SetFogMode(mode: FogMode)
+        If !fbe_camera_set_fog_mode(Live("SetFogMode"), mode As Int32) Then Panic(LastError())
+    End Method
+
+    /// How the camera's fog thickens with depth.
+    @MainThread @PanicsAtCaller
+    Public Method FogMode(): FogMode => fbe_camera_fog_mode(Live("FogMode")) As FogMode
+
+    /// Sets the color the camera's fog blends toward, black at first; its alpha is left out.
+    @MainThread @PanicsAtCaller
+    Public Method SetFogColor(color: Color)
+        If !fbe_camera_set_fog_color(Live("SetFogColor"), color.r, color.g, color.b)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// The color the camera's fog blends toward, with an alpha of 1.
+    @MainThread @PanicsAtCaller
+    Public Method FogColor(): Color
+        Local camera = Live("FogColor")
+        Local found = fbe_color_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_camera_fog_color(camera, AddressOf(found))
+        End Unsafe
+        If !done Then Panic(LastError())
+        Return ColorOf(found)
+    End Method
+
+    /// Sets where linear fog starts and where it's whole, in depth in front of the camera: 1 to
+    /// 100 at first. Anything but 0 <= start < end, finite, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetFogRange(start: Float, finish: Float)
+        If !fbe_camera_set_fog_range(Live("SetFogRange"), start, finish) Then Panic(LastError())
+    End Method
+
+    /// Where linear fog starts.
+    @MainThread @PanicsAtCaller
+    Public Method FogStart(): Float => fbe_camera_fog_start(Live("FogStart"))
+
+    /// Where linear fog is whole.
+    @MainThread @PanicsAtCaller
+    Public Method FogEnd(): Float => fbe_camera_fog_end(Live("FogEnd"))
+
+    /// Sets how thick exponential fog is, 0.02 at first. Below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetFogDensity(density: Float)
+        If !fbe_camera_set_fog_density(Live("SetFogDensity"), density) Then Panic(LastError())
+    End Method
+
+    /// How thick exponential fog is.
+    @MainThread @PanicsAtCaller
+    Public Method FogDensity(): Float => fbe_camera_fog_density(Live("FogDensity"))
 
     /// The matrix from the world to the camera's view, where it's at the origin looking down -Z.
     @MainThread @PanicsAtCaller

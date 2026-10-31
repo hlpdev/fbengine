@@ -1,0 +1,106 @@
+// Lights, the ambient light, and fog, as data, with no GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+@Test
+Function ANewLightIsAWhitePointLight()
+    Local world = Fresh()
+    Defer world.Free()
+    Local light = Light()
+    Expect(light.Kind() == EntityKind.LIGHT)
+    Expect(light.LightType() == LightType.POINT)
+    Expect(light.Color() == Color.White)
+    Expect(light.Intensity() == 1.0)
+    Expect(light.Range() == 10.0)
+    Expect(light.InnerCone() == 0.0 && IsClose(light.OuterCone(), Deg(45)))
+    Expect(Light(LightType.SPOT).LightType() == LightType.SPOT)
+End Function
+
+@Test
+Function ALightsSettingsComeBackAsTheyWent()
+    Local world = Fresh()
+    Defer world.Free()
+    Local light = Light(LightType.DIRECTIONAL)
+    light.SetLightType(LightType.SPOT)
+    light.SetColor(Color(1, 0.5, 0.25, 0.1))
+    light.SetIntensity(3)
+    light.SetRange(2.5)
+    light.SetCone(Deg(10), Deg(30))
+    Expect(light.LightType() == LightType.SPOT)
+    Expect(light.Color() == Color(1, 0.5, 0.25, 1))
+    Expect(light.Intensity() == 3.0 && light.Range() == 2.5)
+    Expect(IsClose(light.InnerCone(), Deg(10)) && IsClose(light.OuterCone(), Deg(30)))
+    // A color below 0 takes light away.
+    light.SetColor(Color(-1, -1, -1))
+    Expect(light.Color().r == -1.0)
+    // A copy has its own.
+    Local copy = light.Copy() As Light
+    copy.SetIntensity(0)
+    Expect(copy.Range() == 2.5 && light.Intensity() == 3.0)
+End Function
+
+@Test
+Function AWorldsLightsComeInTheTreesOrder()
+    Local world = Fresh()
+    Defer world.Free()
+    Local room = Pivot()
+    Local lamp = Light(LightType.POINT, room)
+    Local sun = Light(LightType.DIRECTIONAL)
+    Local desk = Light(LightType.SPOT, Pivot(room))
+    Expect(world.Lights() == [lamp, desk, sun])
+    room.Free()
+    Expect(world.Lights() == [sun])
+    Expect(World.Main().Lights().Count == 0)
+End Function
+
+@Test
+Function EachWorldHasItsOwnAmbientLight()
+    Local world = Fresh()
+    Defer world.Free()
+    Expect(world.AmbientLight() == Color.Gray)
+    world.SetAmbientLight(Color(0.1, 0.2, 0.3, 0.5))
+    Expect(world.AmbientLight() == Color(0.1, 0.2, 0.3))
+    Expect(World.Main().AmbientLight() == Color.Gray)
+End Function
+
+@Test
+Function EachCameraHasItsOwnFog()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Camera()
+    Expect(camera.FogMode() == FogMode.NONE)
+    Expect(camera.FogColor() == Color.Black)
+    Expect(camera.FogStart() == 1.0 && camera.FogEnd() == 100.0)
+    Expect(IsClose(camera.FogDensity(), 0.02))
+    camera.SetFogMode(FogMode.LINEAR)
+    camera.SetFogColor(Color(0.5, 0, 0))
+    camera.SetFogRange(0.5, 5.5)
+    camera.SetFogDensity(0.3)
+    Expect(camera.FogMode() == FogMode.LINEAR)
+    Expect(camera.FogColor() == Color(0.5, 0, 0))
+    Expect(camera.FogStart() == 0.5 && camera.FogEnd() == 5.5)
+    Expect(IsClose(camera.FogDensity(), 0.3))
+    Local other = Camera()
+    Expect(other.FogMode() == FogMode.NONE)
+    Local copy = camera.Copy() As Camera
+    Expect(copy.FogMode() == FogMode.LINEAR && copy.FogEnd() == 5.5)
+End Function
+
+@Test
+Function AFoundLightIsTheGamesLight()
+    Local world = Fresh()
+    Defer world.Free()
+    Local light = Light()
+    light.SetName("bulb")
+    Expect(world.Find("bulb") == light)
+    Expect(world.Find("bulb") Is Light)
+End Function
