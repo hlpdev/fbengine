@@ -647,6 +647,17 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress")
   set_tests_properties(examples.audio_stress PROPERTIES TIMEOUT 120
                        PASS_REGULAR_EXPRESSION "600 frames on no device, up to 64 channels at once\r?\n.*within the budget\r?\n$")
+  # What fbengine_audio panics for with fbengine's entities, each by a run of tests/audio/panics.
+  foreach(case IN ITEMS "emitter-follows-freed;an Emitter can't follow a freed Pivot"
+                        "listener-follows-freed;the Listener can't follow a freed Pivot")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME audio.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/audio/panics"
+                     -- ${name})
+    set_tests_properties(audio.panics.${name} PROPERTIES TIMEOUT 60
+                         PASS_REGULAR_EXPRESSION "panic: ${said}")
+  endforeach()
 endif()
 
 # fbengine_native's frame, each test in a process of its own, as a program's first frames are.
