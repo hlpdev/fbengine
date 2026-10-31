@@ -45,8 +45,10 @@ Blitz code and assets are a game's own tools, never the engine's or the language
 
 ## Current step
 E0 is done, and E1 steps 1 and 2 (2026-10-31; FutureBlitz's docs/history.md has what each added).
-The engine's planning pass (2026-10-31) wrote docs/plan.md, architecture.md, questions.md, and
-research/, and the C API is split by area, with tools/verify.py; next, the first wave of lanes.
+The planning pass (docs/plan.md, architecture.md, questions.md, research/, lanes.md) and the lane
+prep are done. Six lanes run from 2026-10-31, as docs/plan.md's Lanes table says: input (E1, E11),
+gpu (E2, E3, E6), scene (E4, E5, E7), assets (jobs, E8), audio (E9, E12), physics (E10, E13),
+each on its branch (lane-<name>) in its own worktree. The coordinator reviews and lands each step.
 
 ## CI notes
 - Windows' GPU job uses mesa-dist-win's MSVC lavapipe, registered in HKLM, since the loader
