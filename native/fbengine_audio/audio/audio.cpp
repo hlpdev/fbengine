@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -24,6 +25,17 @@
 #include <vector>
 
 namespace {
+
+using steady_clock_t = std::chrono::steady_clock;
+
+/// How long a started device's mix can stand still before it's lost: a quarter of a second, or
+/// four of its periods if they're longer, and before its first frames, two seconds, as a device
+/// can take that long to start.
+constexpr std::chrono::duration<double> stalled_after{ 0.25 };
+constexpr double stalled_periods = 4.0;
+constexpr std::chrono::duration<double> first_frames_within{ 2.0 };
+/// How often the OS's default output is asked for, on a backend whose following it is fbe's.
+constexpr std::chrono::seconds default_asked_every{ 1 };
 
 /// fbe_audio_start's devices.
 constexpr std::int32_t default_device = 0;
@@ -64,6 +76,21 @@ struct mixer_t {
     /// lost until the next, and whether fbe_audio_simulate unplugged every output.
     bool fell_back = false;
     bool unplugged_all = false;
+    /// The main thread's: whether the device follows the OS's default output, as one opened with
+    /// no name, or made again, does; when it last asked which that is; and whether
+    /// fbe_audio_simulate changed it.
+    bool on_default = false;
+    steady_clock_t::time_point default_asked{};
+    bool default_changed = false;
+    /// The main thread's: the frames it last saw mixed, when they last moved, and whether they've
+    /// moved since the device started, by which a device that's stopped mixing is lost.
+    std::int64_t frames_seen = 0;
+    steady_clock_t::time_point frames_moved{};
+    bool mixing = false;
+    /// fbe_audio_simulate's, for the device's callback: a mix that's stopped, as a device's whose
+    /// output is gone on CoreAudio or PulseAudio, or whose driver's hung, mixing and counting
+    /// nothing.
+    std::atomic<bool> stalled = false;
     std::atomic<std::int64_t> frames = 0;
 
     mixer_t() = default;
@@ -96,6 +123,9 @@ float volume = 1.0F;
 // NOLINTNEXTLINE(misc-const-correctness): miniaudio's callbacks take a ma_device*.
 void play(ma_device* device, void* output, const void* /*input*/, ma_uint32 frames) {
     auto* playing = static_cast<mixer_t*>(device->pUserData);
+    if (playing->stalled.load(std::memory_order_acquire)) {
+        return;
+    }
     fbe::audio::before_mix();
     fbe::audio::update_buses(&playing->engine);
     fbe::audio::update_listener(&playing->engine);
@@ -142,6 +172,9 @@ bool open_device(mixer_t& made, const opening_t& how) {
         static_cast<ma_uint32>(std::llround(how.period * milliseconds));
     config.dataCallback = play;
     config.pUserData = &made;
+    // Only fbe_audio_recover moves the device, never miniaudio's own threads: WASAPI's rerouting
+    // to a new default, on its notification thread, raced it, so fbe follows the default itself.
+    config.wasapi.noAutoStreamRouting = MA_TRUE;
     ma_device_id id{};
     if (!how.output.empty()) {
         ma_device_info* found = nullptr;
@@ -175,6 +208,62 @@ bool open_device(mixer_t& made, const opening_t& how) {
         made.device_name = name.data();
     }
     return true;
+}
+
+/// Notes that `made`'s device has just started: its mix hasn't moved yet, and the default it
+/// follows is the one it's on.
+void started_now(mixer_t& made) {
+    const steady_clock_t::time_point now = steady_clock_t::now();
+    made.frames_seen = made.frames.load(std::memory_order_relaxed);
+    made.frames_moved = now;
+    made.mixing = false;
+    made.default_asked = now;
+    made.default_changed = false;
+}
+
+/// Whether `made`'s started device has stopped mixing: its frames haven't moved for as long as
+/// stalled_after says, as a device's don't whose output is gone on CoreAudio and PulseAudio,
+/// where miniaudio leaves it started, or whose driver's hung. The main thread's.
+bool stalled(mixer_t& made, steady_clock_t::time_point now) {
+    const std::int64_t frames = made.frames.load(std::memory_order_relaxed);
+    if (frames != made.frames_seen) {
+        made.frames_seen = frames;
+        made.frames_moved = now;
+        made.mixing = true;
+        return false;
+    }
+    if (!made.mixing) {
+        return now - made.frames_moved >= first_frames_within;
+    }
+    const double period = static_cast<double>(made.device.playback.internalPeriodSizeInFrames) /
+                          static_cast<double>(made.device.playback.internalSampleRate);
+    const std::chrono::duration<double> still = now - made.frames_moved;
+    return still >= stalled_after && still.count() >= stalled_periods * period;
+}
+
+/// Whether the OS's default output isn't the one `made`'s device is on, for a device that follows
+/// it on a backend that doesn't follow it itself (WASAPI, whose rerouting is off, and the null
+/// backend, for fbe_audio_simulate), asked at most every default_asked_every. CoreAudio follows
+/// it itself, under the lock its uninit takes, and PulseAudio's server moves the stream.
+bool default_moved(mixer_t& made, steady_clock_t::time_point now) {
+    if (!made.on_default) {
+        return false;
+    }
+    if (std::exchange(made.default_changed, false)) {
+        return true;
+    }
+    const ma_backend backend = made.context.backend;
+    if ((backend != ma_backend_wasapi && backend != ma_backend_null) ||
+        now - made.default_asked < default_asked_every) {
+        return false;
+    }
+    made.default_asked = now;
+    ma_device_info info{};
+    if (ma_context_get_device_info(&made.context, ma_device_type_playback, nullptr, &info) !=
+        MA_SUCCESS) {
+        return false;
+    }
+    return ma_device_id_equal(&info.id, &made.device.playback.id) == MA_FALSE;
 }
 
 } // namespace
@@ -266,6 +355,7 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
             return false;
         }
         made->period = period;
+        made->on_default = how.output.empty();
         config.pDevice = &made->device;
         config.noAutoStart = MA_TRUE;
     }
@@ -290,6 +380,7 @@ FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t 
             fbe_audio_stop();
             return fbe::audio::fail_ma("couldn't start the audio device", started);
         }
+        started_now(*mixer);
     }
     return true;
 } catch (const std::bad_alloc&) {
@@ -375,7 +466,8 @@ FBE_AUDIO_API bool fbe_audio_lost(void) {
         return false;
     }
     return !mixer->has_device || mixer->fell_back ||
-           ma_device_get_state(&mixer->device) != ma_device_state_started;
+           ma_device_get_state(&mixer->device) != ma_device_state_started ||
+           stalled(*mixer, steady_clock_t::now());
 }
 
 FBE_AUDIO_API void fbe_audio_recover(void) try {
@@ -384,14 +476,23 @@ FBE_AUDIO_API void fbe_audio_recover(void) try {
     }
     mixer->fell_back = false;
     if (mixer->has_device) {
-        // Started, or starting or stopping on one of miniaudio's threads, it's left as it is. A
-        // stopped one stays where it is, so the engine's pointer to it holds.
-        if (ma_device_get_state(&mixer->device) != ma_device_state_stopped) {
+        // Only this moves the device, as miniaudio's own rerouting is off: one that's stopped, or
+        // started but stalled or no longer on the default it follows, is let go and made again in
+        // the same place, so the engine's pointer to it holds. One starting or stopping, as only
+        // its own thread makes it, waits for the next flip.
+        const ma_device_state state = ma_device_get_state(&mixer->device);
+        const steady_clock_t::time_point now = steady_clock_t::now();
+        const bool moved = state == ma_device_state_stopped ||
+                           (state == ma_device_state_started &&
+                            (stalled(*mixer, now) || default_moved(*mixer, now)));
+        if (!moved) {
             return;
         }
         ma_device_uninit(&mixer->device);
         mixer->has_device = false;
         mixer->device_name.clear();
+        // A stall fbe_audio_simulate made was the device's, which goes.
+        mixer->stalled.store(false, std::memory_order_release);
     }
     if (mixer->unplugged_all) {
         return;
@@ -405,6 +506,8 @@ FBE_AUDIO_API void fbe_audio_recover(void) try {
     // One that won't open or start is tried again at the next flip.
     if (open_device(*mixer, how) && ma_device_start(&mixer->device) == MA_SUCCESS) {
         mixer->fell_back = true;
+        mixer->on_default = true;
+        started_now(*mixer);
     }
 } catch (const std::bad_alloc&) {
     // It's tried again at the next flip.
@@ -431,6 +534,12 @@ FBE_AUDIO_API bool fbe_audio_simulate(int32_t event) try {
     }
     case FBE_AUDIO_SIMULATE_PLUG_IN:
         mixer->unplugged_all = false;
+        return true;
+    case FBE_AUDIO_SIMULATE_STALL:
+        mixer->stalled.store(true, std::memory_order_release);
+        return true;
+    case FBE_AUDIO_SIMULATE_DEFAULT_CHANGE:
+        mixer->default_changed = true;
         return true;
     default:
         return fbe::audio::fail(std::format("there's no audio event {}", event));

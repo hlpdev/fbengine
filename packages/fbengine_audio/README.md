@@ -23,9 +23,10 @@ Sounds are WAV, FLAC, or Ogg Vorbis, told apart by their bytes, decoded whole by
 decoded as they play by `Sound.Stream`, for music. A crossfade is one channel's `FadeOut` and the
 next one's `Play(fadeIn: ...)`.
 
-`Audio.Start` plays on the OS's default output, which it follows when that changes, or on one of
-`Audio.Outputs(AudioDevice.DEFAULT)` by name, as a game's options let a player pick. When that
-output's unplugged, the next `Flip` moves the mix to the default one, and `Audio.Lost()` says so
+`Audio.Start` plays on the OS's default output, which it follows within about a second of its
+changing, at a `Flip`, or on one of `Audio.Outputs(AudioDevice.DEFAULT)` by name, as a game's
+options let a player pick. When the output's lost, the device stopped or its mix still for a
+quarter of a second, the next `Flip` moves the mix to the default one, and `Audio.Lost()` says so
 for a frame.
 
 A `Bus` groups channels under one volume, low-pass, and reverb, inside another bus or the whole

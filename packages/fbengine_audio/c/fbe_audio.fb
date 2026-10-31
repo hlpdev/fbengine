@@ -5,6 +5,8 @@
 Public Const FBE_AUDIO_SIMULATE_UNPLUG: Int32 = 0
 Public Const FBE_AUDIO_SIMULATE_PLUG_IN: Int32 = 1
 Public Const FBE_AUDIO_SIMULATE_UNPLUG_ALL: Int32 = 2
+Public Const FBE_AUDIO_SIMULATE_STALL: Int32 = 3
+Public Const FBE_AUDIO_SIMULATE_DEFAULT_CHANGE: Int32 = 4
 
 Public Extern "C" Lib "fbengine_audio_native"
     Function fbe_audio_version(): CString
