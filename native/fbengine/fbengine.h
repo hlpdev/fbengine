@@ -7,6 +7,7 @@
 #include "core/fbe_core.h"
 #include "frame/fbe_frame.h"
 #include "jobs/fbe_jobs.h"
+#include "vfs/fbe_vfs.h"
 #include "window/fbe_window.h"
 
 #endif
