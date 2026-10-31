@@ -87,6 +87,8 @@ Function Main() Throws GraphicsError, InputError
             Mask.FromImage(Image(4, 4), 1, Rect(2.0, 0.0, 3.0, 4.0))
         Case "mask-region-fraction"
             Mask.FromImage(Image(4, 4), 1, Rect(0.5, 0.0, 2.0, 2.0))
+        Case "mask-region-overflowing"
+            Mask.FromImage(Image(4, 4), 1, Rect(2147483520.0, 0.0, 2147483520.0, 4.0))
         Case "mask-pixels-short"
             Mask.FromPixels([0, 0, 0, 255], 2, 1)
         Case "mask-empty-cell"

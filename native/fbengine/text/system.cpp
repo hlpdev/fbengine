@@ -49,9 +49,18 @@ std::vector<std::filesystem::path> added;
 /// fbe_text_system_family_at's families, as the count listed them.
 std::vector<std::string> families;
 
-/// The fallback faces read so far, by their place in the OS's list, and whether each was tried.
-std::vector<std::shared_ptr<face_t>> fallbacks;
-std::vector<bool> tried;
+/// One of the families the OS's fonts fall back to, by its place in this OS's list: the code points
+/// its face has, ranges read from its file's character map the first time it's asked of, without
+/// reading the file whole, and none if it has neither outlines nor COLR's layers of them, only
+/// PNG or SVG pictures, which FreeType isn't built to draw here; and its face, read whole the
+/// first time it gives a glyph.
+struct fallback_t {
+    bool scanned = false;
+    std::vector<std::pair<char32_t, char32_t>> ranges;
+    std::shared_ptr<face_t> face;
+};
+
+std::vector<fallback_t> fallbacks;
 
 /// The families this OS's fonts fall back to, in order: its UI's, then those of other scripts.
 #ifdef _WIN32
@@ -81,6 +90,7 @@ constexpr std::array fallback_families{
     "SimSun-ExtB",
 };
 constexpr std::array default_families{ "Segoe UI", "Tahoma", "Arial" };
+constexpr const char* emoji_family = "Segoe UI Emoji";
 #elifdef __APPLE__
 constexpr std::array fallback_families{
     "Helvetica Neue",      "Lucida Grande", "Apple Color Emoji",
@@ -90,6 +100,7 @@ constexpr std::array fallback_families{
     "STIXGeneral",
 };
 constexpr std::array default_families{ "SF Pro", "Helvetica Neue", "Helvetica", "Arial" };
+constexpr const char* emoji_family = "Apple Color Emoji";
 #else
 constexpr std::array fallback_families{
     "DejaVu Sans",
@@ -108,6 +119,7 @@ constexpr std::array fallback_families{
 };
 constexpr std::array default_families{ "Noto Sans", "DejaVu Sans", "Liberation Sans",
                                        "Ubuntu",    "Cantarell",   "FreeSans" };
+constexpr const char* emoji_family = "Noto Color Emoji";
 #endif
 
 /// Whether `a` and `b` are the same, ASCII's letters in any case, as families are.
@@ -228,6 +240,56 @@ void list_file(FT_Library started, const std::filesystem::path& path) {
         FT_Done_Face(face);
     }
     std::fclose(file);
+}
+
+/// Whether the open face has the sfnt table `tag`.
+bool has_table(FT_Face face, FT_ULong tag) {
+    FT_ULong length = 0;
+    return FT_Load_Sfnt_Table(face, tag, 0, nullptr, &length) == 0 && length > 0;
+}
+
+/// The code points the face at `index` of the font file at `path` has, ranges of them in order,
+/// read from its character map without reading the file whole; none if it has neither outlines
+/// nor COLR's layers of them, only PNG or SVG pictures.
+std::vector<std::pair<char32_t, char32_t>> coverage(const std::filesystem::path& path,
+                                                    std::int32_t index) {
+    std::vector<std::pair<char32_t, char32_t>> ranges;
+    FT_Library started = library();
+    std::FILE* file = started != nullptr ? open_read(path) : nullptr;
+    if (file == nullptr) {
+        return ranges;
+    }
+    FT_StreamRec stream{};
+    stream.descriptor.pointer = file;
+    stream.read = read_stream;
+    if (std::fseek(file, 0, SEEK_END) == 0) {
+        const long size = std::ftell(file);
+        stream.size = size > 0 ? static_cast<unsigned long>(size) : 0;
+    }
+    FT_Open_Args arguments{};
+    arguments.flags = FT_OPEN_STREAM;
+    arguments.stream = &stream;
+    FT_Face face = nullptr;
+    if (FT_Open_Face(started, &arguments, index, &face) == 0) {
+        const bool outlined = has_table(face, FT_MAKE_TAG('g', 'l', 'y', 'f')) ||
+                              has_table(face, FT_MAKE_TAG('C', 'F', 'F', ' ')) ||
+                              has_table(face, FT_MAKE_TAG('C', 'F', 'F', '2'));
+        if (outlined && FT_Select_Charmap(face, FT_ENCODING_UNICODE) == 0) {
+            FT_UInt glyph = 0;
+            for (FT_ULong point = FT_Get_First_Char(face, &glyph); glyph != 0;
+                 point = FT_Get_Next_Char(face, point, &glyph)) {
+                const auto each = static_cast<char32_t>(point);
+                if (!ranges.empty() && ranges.back().second + 1 == each) {
+                    ranges.back().second = each;
+                } else {
+                    ranges.emplace_back(each, each);
+                }
+            }
+        }
+        FT_Done_Face(face);
+    }
+    std::fclose(file);
+    return ranges;
 }
 
 /// Lists the font files in `folder` and the folders in it.
@@ -358,23 +420,50 @@ std::size_t system_fallback_count() {
     return fallback_families.size();
 }
 
+std::size_t system_emoji_fallback() {
+    const auto found = std::ranges::find_if(
+        fallback_families, [](const char* each) { return std::string_view(each) == emoji_family; });
+    return static_cast<std::size_t>(found - fallback_families.begin());
+}
+
+bool system_fallback_has(std::size_t index, char32_t point) {
+    if (index >= fallback_families.size() || !list()) {
+        return false;
+    }
+    if (fallbacks.size() < fallback_families.size()) {
+        fallbacks.resize(fallback_families.size());
+    }
+    fallback_t& fallback = fallbacks[index];
+    if (!fallback.scanned) {
+        fallback.scanned = true;
+        if (const listed_t* found = nearest(fallback_families[index], 0U)) {
+            fallback.ranges = coverage(found->path, found->index);
+        }
+    }
+    // The first range ending at or after it.
+    const auto at = std::ranges::lower_bound(fallback.ranges, point, {},
+                                             [](const auto& range) { return range.second; });
+    return at != fallback.ranges.end() && at->first <= point;
+}
+
 std::shared_ptr<face_t> system_fallback(std::size_t index) {
-    if (index >= fallback_families.size()) {
+    if (index >= fallback_families.size() || !list()) {
         return nullptr;
     }
     if (fallbacks.size() < fallback_families.size()) {
         fallbacks.resize(fallback_families.size());
-        tried.resize(fallback_families.size());
     }
-    if (!tried[index]) {
-        tried[index] = true;
-        if (list()) {
-            if (const listed_t* found = nearest(fallback_families[index], 0U)) {
-                fallbacks[index] = file_face(found->path, found->index);
-            }
+    fallback_t& fallback = fallbacks[index];
+    if (fallback.face == nullptr) {
+        if (const listed_t* found = nearest(fallback_families[index], 0U)) {
+            fallback.face = file_face(found->path, found->index);
         }
     }
-    return fallbacks[index];
+    return fallback.face;
+}
+
+void scan_system() {
+    list();
 }
 
 } // namespace fbe::text
@@ -389,6 +478,10 @@ FBE_API int32_t fbe_text_system_family_count(void) {
 FBE_API const char* fbe_text_system_family_at(int32_t index) {
     const bool there = index >= 0 && static_cast<std::size_t>(index) < fbe::text::families.size();
     return there ? fbe::text::families[static_cast<std::size_t>(index)].c_str() : "";
+}
+
+FBE_API void fbe_text_scan_system(void) {
+    fbe::text::scan_system();
 }
 
 FBE_API bool fbe_text_add_font_folder(const char* folder) {

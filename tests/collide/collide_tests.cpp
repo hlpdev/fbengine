@@ -4,6 +4,7 @@
 
 #include "collide/fbe_collide.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cmath>
@@ -65,27 +66,88 @@ pixels_t made(std::int32_t width, std::int32_t height, double fill, std::mt19937
     return made;
 }
 
-/// Whether screen pixel `x`, `y` is solid for `pixels` placed at `place`, worked out from the
-/// canvas's own forward rule: a mask pixel p is drawn at position + turn((p - handle) * scale).
+/// Whether screen pixel `x`, `y` is solid for `pixels` placed at `place`, as the per-pixel answer,
+/// fbe_collide_point at its middle, gives it.
 bool reference(const pixels_t& pixels, const fbe_collide_place_t& place, std::int64_t x,
                std::int64_t y) {
-    if (place.scale_x == 0.0F || place.scale_y == 0.0F) {
-        return false;
-    }
+    const int hit = fbe_collide_point(pixels.mask, &place, static_cast<float>(x) + 0.5F,
+                                      static_cast<float>(y) + 0.5F);
+    REQUIRE(hit >= 0);
+    return hit == 1;
+}
+
+/// Whether a GPU draws screen pixel `x`, `y` of `pixels` placed at `place` as the canvas does: its
+/// corners as floats (the canvas's own arithmetic), snapped to the 1/256 pixel a rasterizer takes,
+/// its two triangles (0 1 2 and 0 2 3) covering the pixel's middle by the top-left rule, and its uv
+/// there, kept exact, sampled NEAREST, clamped.
+bool gpu_at(const pixels_t& pixels, const fbe_collide_place_t& place, std::int64_t x,
+            std::int64_t y) {
     const double turn = static_cast<double>(place.rotation) * std::numbers::pi / 180.0;
-    // The pixel's middle, from the position, turned back, and scaled back.
-    const double dx = (static_cast<double>(x) + 0.5) - place.x;
-    const double dy = (static_cast<double>(y) + 0.5) - place.y;
-    const double back_x = (std::cos(turn) * dx) + (std::sin(turn) * dy);
-    const double back_y = (-std::sin(turn) * dx) + (std::cos(turn) * dy);
-    const double u = (back_x / place.scale_x) + place.handle_x;
-    const double v = (back_y / place.scale_y) + place.handle_y;
-    if (u < 0.0 || v < 0.0 || u >= pixels.width || v >= pixels.height) {
-        return false;
+    const std::array<std::array<float, 2>, 4> part{
+        {
+            { 0.0F, 0.0F },
+            { static_cast<float>(pixels.width), 0.0F },
+            { static_cast<float>(pixels.width), static_cast<float>(pixels.height) },
+            { 0.0F, static_cast<float>(pixels.height) },
+        },
+    };
+    std::array<std::int64_t, 4> cx{};
+    std::array<std::int64_t, 4> cy{};
+    for (std::size_t at = 0; at < 4; ++at) {
+        const double from_x = (part[at][0] - place.handle_x) * static_cast<double>(place.scale_x);
+        const double from_y = (part[at][1] - place.handle_y) * static_cast<double>(place.scale_y);
+        const auto corner_x =
+            static_cast<float>(place.x + (from_x * std::cos(turn)) - (from_y * std::sin(turn)));
+        const auto corner_y =
+            static_cast<float>(place.y + (from_x * std::sin(turn)) + (from_y * std::cos(turn)));
+        cx[at] = std::llround(static_cast<double>(corner_x) * 256.0);
+        cy[at] = std::llround(static_cast<double>(corner_y) * 256.0);
     }
-    const auto column = static_cast<std::size_t>(std::floor(u));
-    const auto row = static_cast<std::size_t>(std::floor(v));
-    return pixels.solid[(row * static_cast<std::size_t>(pixels.width)) + column];
+    const std::int64_t px = (x * 256) + 128;
+    const std::int64_t py = (y * 256) + 128;
+    const std::array<std::array<std::size_t, 3>, 2> triangles{ { { 0, 1, 2 }, { 0, 2, 3 } } };
+    const std::array<std::int64_t, 4> u_of{ 0, 1, 1, 0 };
+    const std::array<std::int64_t, 4> v_of{ 0, 0, 1, 1 };
+    for (const auto& triangle : triangles) {
+        std::array<std::size_t, 3> v = triangle;
+        const std::int64_t area = ((cx[v[1]] - cx[v[0]]) * (cy[v[2]] - cy[v[0]])) -
+                                  ((cy[v[1]] - cy[v[0]]) * (cx[v[2]] - cx[v[0]]));
+        if (area == 0) {
+            continue;
+        }
+        if (area < 0) {
+            std::swap(v[1], v[2]);
+        }
+        std::array<std::int64_t, 3> weight{};
+        bool covered = true;
+        for (std::size_t edge = 0; edge < 3 && covered; ++edge) {
+            const std::size_t from = v[(edge + 1) % 3];
+            const std::size_t to = v[(edge + 2) % 3];
+            const std::int64_t dx = cx[to] - cx[from];
+            const std::int64_t dy = cy[to] - cy[from];
+            const std::int64_t value = (dx * (py - cy[from])) - (dy * (px - cx[from]));
+            // Its inward normal is (-dy, dx): a left edge's points right, a top edge's down.
+            const bool top_left = -dy > 0 || (dy == 0 && dx > 0);
+            covered = value > 0 || (value == 0 && top_left);
+            weight[edge] = value;
+        }
+        if (!covered) {
+            continue;
+        }
+        const std::int64_t total = weight[0] + weight[1] + weight[2];
+        std::int64_t u = 0;
+        std::int64_t w = 0;
+        for (std::size_t at = 0; at < 3; ++at) {
+            u += weight[at] * u_of[v[at]];
+            w += weight[at] * v_of[v[at]];
+        }
+        const std::int64_t column =
+            std::clamp<std::int64_t>((u * pixels.width) / total, 0, pixels.width - 1);
+        const std::int64_t row =
+            std::clamp<std::int64_t>((w * pixels.height) / total, 0, pixels.height - 1);
+        return pixels.solid[static_cast<std::size_t>((row * pixels.width) + column)];
+    }
+    return false;
 }
 
 /// The screen pixels a placed mask may reach, from its bounds, a few more each way.
@@ -99,21 +161,52 @@ void reach(const pixels_t& pixels, const fbe_collide_place_t& place, std::int64_
     bottom = static_cast<std::int64_t>(std::ceil(bounds.y + bounds.height)) + 2;
 }
 
-/// A random place: a position with fractions, a handle, and a rotation and scale, plain a third of
-/// the time, quarter turns and mirrors a third, and anything the rest.
-fbe_collide_place_t placed(const pixels_t& pixels, std::mt19937& random) {
+/// A random place: half the time on the GPU's grid, its position on quarter pixels, its handle
+/// on halves, ends, or the middle, a quarter turn or none, and a scale of a half, 1, or 2, either
+/// way; and the rest anything, plain a third of that, quarter turns and mirrors a third, and any
+/// turn and scale the rest. Whether it's on the grid, where the GPU's answer is exact.
+fbe_collide_place_t placed(const pixels_t& pixels, std::mt19937& random, bool& gridded) {
     std::uniform_real_distribution<float> at(-40.0F, 40.0F);
     std::uniform_real_distribution<float> any(-1.0F, 1.0F);
-    std::uniform_int_distribution<int> kind(0, 2);
-    std::uniform_int_distribution<int> quarter(0, 3);
+    std::uniform_int_distribution<int> whole(-40, 40);
+    std::uniform_int_distribution<int> kind(0, 5);
+    std::uniform_int_distribution<int> quarter(-1, 4);
+    std::uniform_int_distribution<int> four(0, 3);
+    const int which = kind(random);
+    gridded = which >= 3;
+    if (gridded) {
+        const auto x =
+            static_cast<float>(whole(random)) + (static_cast<float>(four(random)) / 4.0F);
+        const auto y =
+            static_cast<float>(whole(random)) + (static_cast<float>(four(random)) / 4.0F);
+        const std::array<float, 4> handles_x{
+            0.0F,
+            static_cast<float>(pixels.width) / 2.0F,
+            static_cast<float>(pixels.width),
+            0.5F,
+        };
+        const std::array<float, 4> handles_y{
+            0.0F,
+            static_cast<float>(pixels.height) / 2.0F,
+            static_cast<float>(pixels.height),
+            1.5F,
+        };
+        const float handle_x = handles_x[static_cast<std::size_t>(four(random))];
+        const float handle_y = handles_y[static_cast<std::size_t>(four(random))];
+        const std::array<float, 6> scales{ 1.0F, -1.0F, 2.0F, -2.0F, 0.5F, -0.5F };
+        std::uniform_int_distribution<int> scale(0, 5);
+        const auto rotation = static_cast<float>(quarter(random) * 90);
+        const float scale_x = scales[static_cast<std::size_t>(scale(random))];
+        return place_of(x, y, handle_x, handle_y, rotation, scale_x,
+                        scales[static_cast<std::size_t>(scale(random))]);
+    }
     const float x = at(random);
     const float y = at(random);
     const float handle_x = (static_cast<float>(pixels.width) * (any(random) + 1.0F)) / 2.0F;
     const float handle_y = (static_cast<float>(pixels.height) * (any(random) + 1.0F)) / 2.0F;
     fbe_collide_place_t place = place_of(x, y, handle_x, handle_y, 0.0F, 1.0F, 1.0F);
-    const int which = kind(random);
     if (which == 1) {
-        place.rotation = static_cast<float>(quarter(random) * 90);
+        place.rotation = static_cast<float>(four(random) * 90);
         place.scale_x = any(random) < 0.0F ? -1.0F : 1.0F;
         place.scale_y = any(random) < 0.0F ? -2.0F : 1.0F;
     } else if (which == 2) {
@@ -126,7 +219,8 @@ fbe_collide_place_t placed(const pixels_t& pixels, std::mt19937& random) {
 
 } // namespace
 
-TEST_CASE("placed masks meet where a brute force over every pixel says they do") {
+TEST_CASE(
+    "placed masks meet where a brute force over every pixel says they do, as a GPU draws them") {
     // Seeded, so a failure comes again.
     // NOLINTNEXTLINE(bugprone-random-generator-seed)
     std::mt19937 random(20261031);
@@ -134,6 +228,7 @@ TEST_CASE("placed masks meet where a brute force over every pixel says they do")
     std::uniform_real_distribution<double> fill(0.02, 0.6);
     std::size_t met = 0;
     std::size_t cases = 0;
+    std::size_t gridded_cases = 0;
     for (int round = 0; round < 300; ++round) {
         // Drawn one at a time, so every compiler draws them in the same order.
         const int wide = size(random);
@@ -143,8 +238,10 @@ TEST_CASE("placed masks meet where a brute force over every pixel says they do")
         const int tall = size(random);
         const pixels_t b = made(narrow, tall, fill(random), random);
         for (int pair = 0; pair < 4; ++pair) {
-            const fbe_collide_place_t at_a = placed(a, random);
-            const fbe_collide_place_t at_b = placed(b, random);
+            bool gridded_a = false;
+            bool gridded_b = false;
+            const fbe_collide_place_t at_a = placed(a, random, gridded_a);
+            const fbe_collide_place_t at_b = placed(b, random, gridded_b);
             std::int64_t left = 0;
             std::int64_t top = 0;
             std::int64_t right = 0;
@@ -188,6 +285,17 @@ TEST_CASE("placed masks meet where a brute force over every pixel says they do")
             const bool on = reference(a, at_a, static_cast<std::int64_t>(std::floor(point_x)),
                                       static_cast<std::int64_t>(std::floor(point_y)));
             CHECK(fbe_collide_point(a.mask, &at_a, point_x, point_y) == (on ? 1 : 0));
+            // On the grid, each pixel is the GPU's, ties and all.
+            if (gridded_a) {
+                ++gridded_cases;
+                std::int64_t differ = 0;
+                for (std::int64_t y = top; y < bottom; ++y) {
+                    for (std::int64_t x = left; x < right; ++x) {
+                        differ += reference(a, at_a, x, y) != gpu_at(a, at_a, x, y) ? 1 : 0;
+                    }
+                }
+                CHECK(differ == 0);
+            }
         }
         fbe_collide_free(a.mask);
         fbe_collide_free(b.mask);
@@ -195,6 +303,7 @@ TEST_CASE("placed masks meet where a brute force over every pixel says they do")
     // Both kinds of answer came up often.
     CHECK(met > cases / 5);
     CHECK(met < cases - (cases / 5));
+    CHECK(gridded_cases > 300);
     CHECK(fbe_collide_count() == 0);
 }
 
@@ -296,4 +405,97 @@ TEST_CASE("many sprites take little time") {
     CHECK(hits > 0);
     fbe_collide_free(ship.mask);
     fbe_collide_free(rock.mask);
+}
+
+TEST_CASE("an odd sprite, mid-handled, mirrored, and turned, is the GPU's pixels") {
+    // 5 by 3, every pixel solid but its first column, its handle at 2.5, 1.5: its edges' middles
+    // land on pixels' middles.
+    std::vector<std::uint8_t> rgba(std::size_t{ 60 }, 0);
+    pixels_t ship;
+    ship.width = 5;
+    ship.height = 3;
+    for (std::size_t at = 0; at < 15; ++at) {
+        const bool solid = at % 5 != 0;
+        ship.solid.push_back(solid);
+        rgba[(at * 4) + 3] = solid ? 255 : 0;
+    }
+    ship.mask = fbe_collide_mask(rgba.data(), 5, 3, 20, 1);
+    REQUIRE(ship.mask != 0);
+    for (const float rotation : { 0.0F, 90.0F, 180.0F, 270.0F }) {
+        for (const float scale : { 1.0F, -1.0F }) {
+            const fbe_collide_place_t place =
+                place_of(10.0F, 10.0F, 2.5F, 1.5F, rotation, scale, 1.0F);
+            for (std::int64_t y = 4; y < 17; ++y) {
+                for (std::int64_t x = 4; x < 17; ++x) {
+                    INFO("turned " << rotation << " scaled " << scale << " at " << x << "," << y);
+                    CHECK(reference(ship, place, x, y) == gpu_at(ship, place, x, y));
+                }
+            }
+        }
+    }
+    fbe_collide_free(ship.mask);
+}
+
+TEST_CASE("a quarter turn's pixels agree, by point, rectangle, and mask") {
+    std::vector<std::uint8_t> rgba(std::size_t{ 92 }, 255);
+    const std::uint64_t bar = fbe_collide_mask(rgba.data(), 1, 23, 4, 1);
+    const std::uint64_t dot = fbe_collide_mask(rgba.data(), 1, 1, 4, 1);
+    const fbe_collide_place_t place = place_of(17.0F, -3.0F, 1.0F, 23.0F, 90.0F, 0.5F, 2.0F);
+    int solid = 0;
+    for (std::int64_t y = -20; y < 20; ++y) {
+        for (std::int64_t x = -40; x < 60; ++x) {
+            const auto fx = static_cast<float>(x);
+            const auto fy = static_cast<float>(y);
+            const int point = fbe_collide_point(bar, &place, fx + 0.5F, fy + 0.5F);
+            const fbe_collide_rect_t inside = rect_of(fx + 0.25F, fy + 0.25F, 0.5F, 0.5F);
+            const fbe_collide_place_t on = place_of(fx, fy, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F);
+            INFO("pixel " << x << "," << y);
+            CHECK(fbe_collide_rect(bar, &place, &inside) == point);
+            CHECK(fbe_collide_masks(bar, &place, dot, &on) == point);
+            solid += point;
+        }
+    }
+    // 23 pixels down, scaled 2, turned to across, scaled a half: 46 by a half, so 46 pixels'
+    // middles, or none, along one row.
+    CHECK(solid > 0);
+    fbe_collide_free(bar);
+    fbe_collide_free(dot);
+}
+
+TEST_CASE("a mask scaled up costs its own pixels, not the screen's") {
+    std::vector<std::uint8_t> one(std::size_t{ 4096 }, 0);
+    std::vector<std::uint8_t> two(std::size_t{ 4096 }, 0);
+    one[3] = 255;
+    two[(((31 * 32) + 31) * 4) + 3] = 255;
+    const std::uint64_t a = fbe_collide_mask(one.data(), 32, 32, 128, 1);
+    const std::uint64_t b = fbe_collide_mask(two.data(), 32, 32, 128, 1);
+    // Turned, it's a row at a time over what the canvas reaches: a huge one's slow, if not forever.
+    for (const float scale : { 1.0F, 30.0F, 1000.0F, 1e6F, 3.4e38F }) {
+        for (const float rotation : { 0.0F, 90.0F, 33.0F }) {
+            if (rotation == 33.0F && scale > 1000.0F) {
+                continue;
+            }
+            // Each solid only at an opposite corner, on one spot: no pixel meets, so every row of
+            // the overlap is gone through.
+            const fbe_collide_place_t place =
+                place_of(0.0F, 0.0F, 16.0F, 16.0F, rotation, scale, scale);
+            const auto started = std::chrono::steady_clock::now();
+            CHECK(fbe_collide_masks(a, &place, b, &place) == 0);
+            const double ms = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - started)
+                                  .count();
+            INFO("scale " << scale << " turned " << rotation);
+            CHECK(ms < 500.0);
+        }
+    }
+    // Where they do meet, scaled up, each a pixel solid at its middle.
+    std::vector<std::uint8_t> middle(std::size_t{ 4096 }, 0);
+    middle[(((16 * 32) + 16) * 4) + 3] = 255;
+    const std::uint64_t c = fbe_collide_mask(middle.data(), 32, 32, 128, 1);
+    const fbe_collide_place_t big = place_of(0.0F, 0.0F, 16.0F, 16.0F, 0.0F, 1000.0F, 1000.0F);
+    const fbe_collide_place_t near = place_of(500.0F, 500.0F, 16.0F, 16.0F, 0.0F, 1.0F, 1.0F);
+    CHECK(fbe_collide_masks(c, &big, c, &near) == 1);
+    fbe_collide_free(a);
+    fbe_collide_free(b);
+    fbe_collide_free(c);
 }

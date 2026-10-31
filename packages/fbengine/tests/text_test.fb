@@ -11,8 +11,9 @@ Import fbengine
 
 Function Near(a: Float32, b: Float32): Bool => Abs(a - b) < 0.01
 
-// The folder of test fonts, or "" when the tests run without it.
+// The folders of test fonts, HarfBuzz's and the tests' own, or "" when the tests run without them.
 Function Fonts(): String => Env.Get("FBENGINE_TEST_FONTS") ?? ""
+Function OwnFonts(): String => Env.Get("FBENGINE_OWN_TEST_FONTS") ?? ""
 
 Function Opened(name: String, size: Float32, style: FontStyle? = Null): Font Throws IOError
     Return Try Font.Load("{Fonts()}/{name}", size, style)
@@ -124,9 +125,12 @@ Function AFolderAddedIsFoundByFamily() Throws IOError
     Expect(Font.Families().Contains("Open Sans"))
     Local found = Font.System("open sans", 18.0)
     Expect(found?.Family() == "Open Sans" && found?.Size() == 18.0)
-    // The nearest face, made bold if none is.
-    Local bold = Font.System("Open Sans", 18.0, FontStyle(True, False, False))
-    Expect(bold?.StyleName() == "Regular" && (bold?.Style()?.Bold ?? False))
+    // The nearest face, made bold if none is, of a family no OS has.
+    If OwnFonts() != ""
+        Try Font.AddFolder(OwnFonts())
+        Local bold = Font.System("Fbe Test Text", 18.0, FontStyle(True, False, False))
+        Expect(bold?.StyleName() == "Regular" && (bold?.Style()?.Bold ?? False))
+    End If
     Local mada = Font.System("Mada", 18.0)
     Expect(mada?.Family() == "Mada")
     Expect(Font.System("No Such Family At All", 18.0) == Null)
@@ -161,4 +165,21 @@ Function AFreedFontsGone() Throws IOError
     Expect("{font}" == "a freed font")
     // Its other sizes keep the face.
     Expect(sized.Width("Hello") > 0.0)
+End Function
+
+// Unicode's paragraph and line separators break lines, as "\n" does.
+@Test
+Function SeparatorsBreakLines() Throws IOError
+    If Fonts() == "" Then Return
+    Local font = Try Opened("OpenSans-Regular.ttf", 16.0)
+    For text In ["a\u{2029}b", "a\u{85}b", "a\u{2028}b"]
+        Expect(Near(font.Measure(text).y, font.LineHeight() * 2.0))
+    End For
+End Function
+
+@Test
+Function TheOSsFontsCanBeListedFirst()
+    Font.ScanSystem()
+    Font.ScanSystem()
+    Expect(Font.Families().Count >= 0)
 End Function

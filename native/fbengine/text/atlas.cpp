@@ -94,6 +94,58 @@ bool stored(const FT_Bitmap& bitmap, glyph_t& glyph) {
     return true;
 }
 
+/// Whether `point` draws nothing, its glyph empty: a space, or a format character.
+bool blank(char32_t point) {
+    const hb_unicode_general_category_t category =
+        hb_unicode_general_category(hb_unicode_funcs_get_default(), point);
+    return category == HB_UNICODE_GENERAL_CATEGORY_SPACE_SEPARATOR ||
+           category == HB_UNICODE_GENERAL_CATEGORY_FORMAT ||
+           category == HB_UNICODE_GENERAL_CATEGORY_CONTROL ||
+           category == HB_UNICODE_GENERAL_CATEGORY_LINE_SEPARATOR ||
+           category == HB_UNICODE_GENERAL_CATEGORY_PARAGRAPH_SEPARATOR;
+}
+
+/// Sizes `face` for `pixels` an em, 26.6, or to its first strike if it's a bitmap font's.
+bool sized(const face_t& face, std::int32_t pixels) {
+    FT_Face ft = face.ft;
+    if (FT_Set_Char_Size(ft, 0, pixels, 72, 72) == 0) {
+        return true;
+    }
+    return FT_HAS_FIXED_SIZES(ft) && FT_Select_Size(ft, 0) == 0;
+}
+
+/// Whether FreeType loads `glyph` of `face`, as it's sized, in color or not, as something it
+/// draws: an outline, or a bitmap, not a PNG or SVG picture it can't.
+bool loads(const face_t& face, std::uint32_t glyph, bool colored) {
+    // Hinted up and down only, so it's crisp and keeps its advance.
+    auto flags = static_cast<std::uint32_t>(FT_LOAD_TARGET_LIGHT);
+    if (colored) {
+        flags |= static_cast<std::uint32_t>(FT_LOAD_COLOR);
+    }
+    if (FT_Load_Glyph(face.ft, glyph, static_cast<FT_Int32>(flags)) != 0) {
+        return false;
+    }
+    const FT_Glyph_Format format = face.ft->glyph->format;
+    return format == FT_GLYPH_FORMAT_OUTLINE || format == FT_GLYPH_FORMAT_BITMAP;
+}
+
+/// An outline made bolder and slanted as they say, and moved right by `quarter` quarters of a
+/// pixel.
+bool transformed(FT_GlyphSlot slot, std::int32_t pixels, bool bolder, bool slanted,
+                 std::int32_t quarter) {
+    if (bolder) {
+        // As FreeType's own emboldening is: a 24th of an em.
+        const FT_Pos strength = pixels / 24;
+        FT_Outline_EmboldenXY(&slot->outline, strength, strength);
+    }
+    if (slanted) {
+        const FT_Matrix shear{ .xx = 0x10000L, .xy = 0x3333L, .yx = 0, .yy = 0x10000L };
+        FT_Outline_Transform(&slot->outline, &shear);
+    }
+    FT_Outline_Translate(&slot->outline, static_cast<FT_Pos>(quarter) * 16, 0);
+    return true;
+}
+
 } // namespace
 
 atlas_t& atlas() {
@@ -114,15 +166,37 @@ void atlas_t::trim() {
     for (const page_t& each : m_pages) {
         bytes += each.pixels.size();
     }
+    bool emptied = false;
     if (bytes > m_budget) {
-        clear();
+        // The pages no layout used since the last trim, emptied where they are, and their glyphs
+        // forgotten.
+        for (std::size_t index = 0; index < m_pages.size(); ++index) {
+            page_t& page = m_pages[index];
+            if (m_used[index] || m_shelves[index].empty()) {
+                continue;
+            }
+            std::ranges::fill(page.pixels, std::uint8_t{ 0 });
+            page.dirty = { .x = 0, .y = 0, .width = page.width, .height = page.height };
+            ++page.version;
+            m_shelves[index].clear();
+            m_bottoms[index] = 0;
+            emptied = true;
+            if (glyphs != nullptr) {
+                std::erase_if(*glyphs, [&](const auto& each) { return each.second.page == index; });
+            }
+        }
     }
+    if (emptied) {
+        ++m_generation;
+    }
+    std::ranges::fill(m_used, false);
 }
 
 void atlas_t::clear() {
     m_pages.clear();
     m_shelves.clear();
     m_bottoms.clear();
+    m_used.clear();
     if (glyphs != nullptr) {
         glyphs->clear();
     }
@@ -171,6 +245,7 @@ bool atlas_t::place(page_format_t format, std::int32_t width, std::int32_t heigh
     m_pages.push_back(std::move(made));
     m_shelves.push_back({ { .y = 0, .height = tall, .used = wide } });
     m_bottoms.push_back(tall);
+    m_used.push_back(false);
     page = static_cast<std::uint32_t>(m_pages.size() - 1);
     place = { .x = 1, .y = 1, .width = width, .height = height };
     return true;
@@ -207,35 +282,30 @@ const glyph_t* rasterized(face_t& face, std::uint32_t glyph, std::int32_t pixels
         return &found->second;
     }
     FT_Face ft = face.ft;
-    if (FT_Set_Char_Size(ft, 0, pixels, 72, 72) != 0 && FT_HAS_FIXED_SIZES(ft) &&
-        FT_Select_Size(ft, 0) != 0) {
+    if (!sized(face, pixels)) {
         fbe::fail(std::format("FreeType couldn't size {} at {} pixels", face.family, pixels / 64));
         return nullptr;
     }
-    // Hinted up and down only, so it's crisp and keeps its advance.
-    auto flags = static_cast<std::uint32_t>(FT_LOAD_TARGET_LIGHT);
-    if (FT_HAS_COLOR(ft)) {
-        flags |= static_cast<std::uint32_t>(FT_LOAD_COLOR);
-    }
-    if (FT_Load_Glyph(ft, glyph, static_cast<FT_Int32>(flags)) != 0) {
-        fbe::fail(std::format("FreeType couldn't load {}'s glyph {}", face.family, glyph));
-        return nullptr;
-    }
+    // In color where it has it, and as its outline where FreeType can't draw that color, as a PNG
+    // or SVG picture.
     FT_GlyphSlot slot = ft->glyph;
-    if (slot->format == FT_GLYPH_FORMAT_OUTLINE) {
-        if (bolder) {
-            // As FreeType's own emboldening is: a 24th of an em.
-            const FT_Pos strength = pixels / 24;
-            FT_Outline_EmboldenXY(&slot->outline, strength, strength);
+    bool loaded = false;
+    for (const bool colored : { true, false }) {
+        if (colored && !FT_HAS_COLOR(ft)) {
+            continue;
         }
-        if (slanted) {
-            const FT_Matrix shear{ .xx = 0x10000L, .xy = 0x3333L, .yx = 0, .yy = 0x10000L };
-            FT_Outline_Transform(&slot->outline, &shear);
+        if (!loads(face, glyph, colored)) {
+            continue;
         }
-        FT_Outline_Translate(&slot->outline, static_cast<FT_Pos>(quarter) * 16, 0);
+        loaded = slot->format == FT_GLYPH_FORMAT_BITMAP ||
+                 (slot->format == FT_GLYPH_FORMAT_OUTLINE &&
+                  transformed(slot, pixels, bolder, slanted, quarter) &&
+                  FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL) == 0);
+        if (loaded) {
+            break;
+        }
     }
-    if (slot->format != FT_GLYPH_FORMAT_BITMAP &&
-        FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL) != 0) {
+    if (!loaded) {
         fbe::fail(std::format("FreeType couldn't rasterize {}'s glyph {}", face.family, glyph));
         return nullptr;
     }
@@ -246,6 +316,28 @@ const glyph_t* rasterized(face_t& face, std::uint32_t glyph, std::int32_t pixels
         return nullptr;
     }
     return &glyphs->emplace(key, made).first->second;
+}
+
+bool draws(face_t& face, char32_t point) {
+    const FT_UInt glyph = FT_Get_Char_Index(face.ft, point);
+    if (glyph == 0) {
+        return false;
+    }
+    if (const auto found = face.drawable.find(glyph); found != face.drawable.end()) {
+        return found->second;
+    }
+    // At a size any face has, a strike of a bitmap font's or an outline's; an empty outline is
+    // only a space's, or what doesn't show.
+    const auto shows = [&] {
+        FT_GlyphSlot slot = face.ft->glyph;
+        return slot->format != FT_GLYPH_FORMAT_OUTLINE || slot->outline.n_contours > 0 ||
+               blank(point);
+    };
+    const bool can =
+        sized(face, 32 * 64) && ((FT_HAS_COLOR(face.ft) && loads(face, glyph, true) && shows()) ||
+                                 (loads(face, glyph, false) && shows()));
+    face.drawable.emplace(glyph, can);
+    return can;
 }
 
 } // namespace fbe::text

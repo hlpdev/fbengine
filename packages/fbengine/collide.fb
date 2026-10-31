@@ -9,7 +9,10 @@ Import "./c/fbe_collide"
 Import "./window"
 
 /// Where a mask is drawn, as the canvas draws a sprite: its handle at (X, Y), turned Rotation
-/// degrees clockwise on the screen about it, and scaled from it, a negative scale mirroring it.
+/// degrees clockwise on the screen about it, and scaled from it, a negative scale mirroring it. It's
+/// in the canvas's own pixels, before the pen's origin, which a game adds itself where it draws with
+/// one. A pixel exactly on its edge is its own as the GPU's top-left rule says: on a left or top
+/// edge, on the screen, it is, on a right or bottom one it isn't.
 Public Struct Placement
     Public Field X: Float32
     Public Field Y: Float32
@@ -51,23 +54,28 @@ Public Final Class Mask Implements Printable
     @MainThread Public Static Method FromImage(image: Image, threshold: Int32 = 1,
                                                region: Rect? = Null): Mask
         Local part = region ?? Rect(0.0, 0.0, image.Width As Float32, image.Height As Float32)
-        Local x = part.X As Int32
-        Local y = part.Y As Int32
-        Local width = part.Width As Int32
-        Local height = part.Height As Int32
-        If x As Float32 != part.X || y As Float32 != part.Y || width As Float32 != part.Width ||
-           height As Float32 != part.Height || x < 0 || y < 0 || width < 0 || height < 0 ||
-           x + width > image.Width || y + height > image.Height
+        // Checked as Float64s, before any's an integer, so none of it overflows.
+        Local left = part.X As Float64
+        Local top = part.Y As Float64
+        Local across = part.Width As Float64
+        Local down = part.Height As Float64
+        Local whole = left == Floor(left) && top == Floor(top) && across == Floor(across) &&
+                      down == Floor(down)
+        If !(whole && left >= 0.0 && top >= 0.0 && across >= 0.0 && down >= 0.0 &&
+             left + across <= image.Width As Float64 && top + down <= image.Height As Float64)
             Panic("Mask.FromImage: {part} isn't whole pixels in the image, {image.Width} by {image.Height}")
         End If
+        Local x = left As Int64
+        Local y = top As Int64
+        Local width = across As Int32
+        Local height = down As Int32
         CheckThreshold("Mask.FromImage", threshold)
         Local stride = (image.Width As Int64) * 4
         Local made: UInt64 = 0
         Unsafe
             Local first = image.Pixels.Pointer()
-            made = fbe_collide_mask(AddressOf(first[(y As Int64) * stride + (x As Int64) * 4]),
-                                    width,
-                                    height, stride, threshold)
+            made = fbe_collide_mask(AddressOf(first[y * stride + x * 4]), width, height, stride,
+                                    threshold)
         End Unsafe
         If made == 0 Then Panic(LastError())
         Return Mask(made)
