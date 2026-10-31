@@ -313,3 +313,94 @@ Function AChildOfAParentLetGoOfHasNone()
     kept.Add(child)
     Expect(child.Parent() == kept)
 End Function
+
+// A filling child, kept to `most` (none under 0) and `least`.
+Function Filler(name: String, most: Float32 = -1.0, least: Float32 = 0.0): Node
+    Local node = Node(name)
+    node.SetWidth(Sizing.Fill())
+    node.SetMaxSize(most < 0.0 ? Inf : most, Inf)
+    node.SetMinSize(least, 0.0)
+    Return node
+End Function
+
+Function Row(children: Node[], width: Float32): Node
+    Local row = Node("row")
+    row.SetArrangement(Arrangement.ROW)
+    For child In children
+        row.Add(child)
+    End For
+    row.Layout(Rect(0.0, 0.0, width, 10.0))
+    Return row
+End Function
+
+// When a least and a most both keep children in one round, flexbox's rule: what keeping them
+// added up, or took away, says which have theirs, and the rest share again.
+@Test
+Function FillingChildrenKeptBothWaysShareAsFlexboxDoes()
+    Local a = Filler("a", most: 90.0)
+    Local b = Filler("b", least: 200.0)
+    Local c = Filler("c")
+    Row([a, b, c], 300.0)
+    Expect(a.Box().Width == 50.0 && b.Box().Width == 200.0 && c.Box().Width == 50.0)
+    Local d = Filler("d", most: 50.0)
+    Local e = Filler("e", least: 110.0)
+    Local f = Filler("f")
+    Row([d, e, f], 300.0)
+    Expect(d.Box().Width == 50.0 && e.Box().Width == 125.0 && f.Box().Width == 125.0)
+    Local g = Filler("g", most: 50.0)
+    Local h = Filler("h", most: 120.0)
+    Local i = Filler("i", most: 130.0)
+    Row([g, h, i], 300.0)
+    Expect(g.Box().Width == 50.0 && h.Box().Width == 120.0 && i.Box().Width == 130.0)
+End Function
+
+// A game's own widget, outside the package, marks the tree changed when what it measures does.
+Class GameLabel Extends Node
+    Field size: Vec2
+
+    Public New()
+        Super.New("game label")
+        size = Vec2(30.0, 10.0)
+    End New
+
+    Public Override Method Measure(): Vec2 => size
+
+    Public Method SetWidth(width: Float32)
+        size = Vec2(width, 10.0)
+        Reflow()
+    End Method
+End Class
+
+@Test
+Function AGamesOwnWidgetMarksItsTreeChanged()
+    Local column = Node("column")
+    column.SetAlign(Align.START)
+    Local label = GameLabel()
+    column.Add(label)
+    Local bounds = Rect(0.0, 0.0, 400.0, 100.0)
+    column.Layout(bounds)
+    Expect(label.Box().Width == 30.0)
+    label.SetWidth(200.0)
+    column.Layout(bounds)
+    Expect(label.Box().Width == 200.0)
+End Function
+
+// A Node with children shown is measured by them; its own Measure isn't called.
+@Test
+Function ANodeWithChildrenIsMeasuredByThem()
+    Local holder = Node("holder")
+    holder.SetArrangement(Arrangement.STACK)
+    holder.SetAlign(Align.START)
+    Local counted = Counted()
+    Local kid = Fixed("kid", 10.0, 10.0)
+    counted.Add(kid)
+    holder.Add(counted)
+    holder.Layout(Rect(0.0, 0.0, 800.0, 600.0))
+    Expect(counted.measures == 0)
+    Expect(counted.Box() == Rect(0.0, 0.0, 10.0, 10.0))
+    // Its child hidden, it measures what it shows.
+    kid.SetVisible(False)
+    holder.Layout(Rect(0.0, 0.0, 800.0, 600.0))
+    Expect(counted.measures == 1)
+    Expect(counted.Box() == Rect(0.0, 0.0, 30.0, 10.0))
+End Function

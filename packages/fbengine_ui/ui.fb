@@ -39,7 +39,7 @@ Public Final Class Ui
     /// Sets its theme, which the next Update styles its widgets by.
     @MainThread Public Method SetTheme(styles: Theme)
         theme = styles
-        root.Reflow()
+        root.Invalidate()
     End Method
 
     /// Sets how many of the window's units each of its own is, 1 at first: 2 makes it twice as
@@ -47,7 +47,7 @@ Public Final Class Ui
     @MainThread Public Method SetScale(units: Float32)
         If !(units > 0.0 && IsFinite(units)) Then Panic("Ui.SetScale: a scale is over 0, not {units}")
         scale = units
-        root.Reflow()
+        root.Invalidate()
     End Method
 
     /// How many of the window's units each of its own is.
@@ -57,7 +57,7 @@ Public Final Class Ui
     /// EstimatedText, at first.
     @MainThread Public Method SetTextMeasure(measured: Func(String, Style): Vec2)
         measure = measured
-        root.Reflow()
+        root.Invalidate()
     End Method
 
     /// The size `text` takes in `style`'s font.

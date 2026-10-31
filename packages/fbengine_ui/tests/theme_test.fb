@@ -131,3 +131,84 @@ Function LoadingANamesFieldsChangesThemInEachOfItsStyles() Throws UIError
     Expect(theme.StyleOf("panel.dialog").CornerRadius == 10.0)
     Expect(theme.StyleOf("panel.dialog").Background == theme.StyleOf("panel").Background)
 End Function
+
+// Styles inherit as they're asked for: a kind keeps what it doesn't set of its parent's, however
+// deep, and whatever the parent sets later.
+@Test
+Function AKindInheritsItsParentLive() Throws UIError
+    Local dotted = Theme.Dark()
+    Try dotted.Load("[button.primary.big]\nbackground = \"#ff0000\"\n")
+    Local quoted = Theme.Dark()
+    Try quoted.Load("[\"button.primary.big\"]\nbackground = \"#ff0000\"\n")
+    For state In [WidgetState.NORMAL, WidgetState.HOVERED, WidgetState.PRESSED, WidgetState.FOCUSED,
+                  WidgetState.DISABLED]
+        Expect(dotted.StyleOf("button.primary.big", state) ==
+               quoted.StyleOf("button.primary.big", state))
+    End For
+    Expect(dotted.Names() == quoted.Names())
+    // Only the name with fields of its own is in it.
+    Expect(!dotted.HasStyle("button.primary"))
+    Expect(dotted.StyleOf("button.primary.big").Background == Color.Hex("#ff0000"))
+    Expect(dotted.StyleOf("button.primary.big", WidgetState.FOCUSED).BorderWidth == 2.0)
+    // Its parent changed after, it has the change.
+    Try dotted.Load("[button]\nfont_size = 20\n")
+    Expect(dotted.StyleOf("button.primary.big").FontSize == 20.0)
+    Expect(dotted.StyleOf("button.primary.big", WidgetState.HOVERED).FontSize == 20.0)
+End Function
+
+// A top-level name keeps "default"'s states: a label loaded keeps disabled's faded text.
+@Test
+Function ATopLevelNameKeepsDefaultsStates() Throws UIError
+    Local theme = Theme.Dark()
+    Local faded = theme.StyleOf("label", WidgetState.DISABLED).Foreground
+    Expect(faded == Color.Hex("#7d838c"))
+    Try theme.Load("[label]\nfont_size = 30\n")
+    Expect(theme.StyleOf("label", WidgetState.DISABLED).Foreground == faded)
+    Expect(theme.StyleOf("label", WidgetState.DISABLED).FontSize == 30.0)
+End Function
+
+// A kind set in code saves and loads the same: only the fields each name and state sets.
+@Test
+Function AKindSetInCodeSavesAndLoadsTheSame() Throws UIError
+    Local dark = Theme.Dark()
+    Local primary = StyleFields()
+    primary.Background = Color.Hex("#4c8dff")
+    dark.SetFields("button.primary", primary)
+    Local saved = dark.Save()
+    Local loaded = Theme()
+    Try loaded.Load(saved)
+    Expect(loaded.Save() == saved)
+    For name In dark.Names()
+        For state In [WidgetState.NORMAL, WidgetState.HOVERED, WidgetState.PRESSED,
+                      WidgetState.FOCUSED, WidgetState.DISABLED]
+            Expect(loaded.HasStyle(name, state) == dark.HasStyle(name, state))
+            Expect(loaded.StyleOf(name, state) == dark.StyleOf(name, state))
+        End For
+    End For
+End Function
+
+// The dark theme's field keeps its own background focused, and what's disabled fades.
+@Test
+Function TheDarkThemesFieldsAndPanelsHaveTheirOwnStates()
+    Local theme = Theme.Dark()
+    Expect(theme.StyleOf("field", WidgetState.FOCUSED).Background ==
+           theme.StyleOf("field").Background)
+    Expect(theme.StyleOf("field", WidgetState.FOCUSED).Border == Color.Hex("#4c8dff"))
+    Local faded = Color.Hex("#7d838c")
+    Expect(theme.StyleOf("field", WidgetState.DISABLED).Foreground == faded)
+    Expect(theme.StyleOf("panel", WidgetState.DISABLED).Foreground == faded)
+    Expect(theme.StyleOf("button", WidgetState.DISABLED).Foreground == faded)
+End Function
+
+@Test
+Function TablesWhereFieldsGoAreRefused()
+    Local theme = Theme.Dark()
+    Local before = theme.Save()
+    Expect(ExpectThrows<UIError>(theme.Load("[button.hovered.big]\nbackground = \"#ff0000\"\n")) !=
+           Null)
+    Expect(
+        ExpectThrows<UIError>(theme.Load("[button]\nhovered = {{ background = {{ x = 1 }} }}\n")) !=
+        Null)
+    Expect(ExpectThrows<UIError>(theme.Load("[button]\nbackground = {{}}\n")) != Null)
+    Expect(theme.Save() == before)
+End Function

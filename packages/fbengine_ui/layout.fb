@@ -237,13 +237,13 @@ Public Class Node Implements Printable
 
     /// Sets how its width is found, fitting what's in it at first.
     @MainThread Public Method SetWidth(sizing: Sizing)
-        width = sizing
+        width = CheckedSizing("Node.SetWidth", sizing)
         Reflow()
     End Method
 
     /// Sets how its height is found, fitting what's in it at first.
     @MainThread Public Method SetHeight(sizing: Sizing)
-        height = sizing
+        height = CheckedSizing("Node.SetHeight", sizing)
         Reflow()
     End Method
 
@@ -261,26 +261,37 @@ Public Class Node Implements Printable
 
     /// The least it's laid out as, however it's sized, 0 at first.
     @MainThread Public Method SetMinSize(width: Float32, height: Float32)
-        If !(width >= 0.0 && height >= 0.0) Then Panic("Node.SetMinSize: a size is 0 or more")
+        If !(Length(width) && Length(height))
+            Panic("Node.SetMinSize: a least is 0 or more, and finite, not {width} by {height}")
+        End If
         minimum = Vec2(width, height)
         Reflow()
     End Method
 
     /// The most it's laid out as, Inf at first for no most; a least past it wins.
     @MainThread Public Method SetMaxSize(width: Float32, height: Float32)
-        If !(width >= 0.0 && height >= 0.0) Then Panic("Node.SetMaxSize: a size is 0 or more")
+        If !(width >= 0.0 && height >= 0.0)
+            Panic("Node.SetMaxSize: a most is 0 or more, or Inf, not {width} by {height}")
+        End If
         maximum = Vec2(width, height)
         Reflow()
     End Method
 
-    /// Sets the space between its edge and its children.
+    /// Sets the space between its edge and its children. Panics for a side under 0, or not finite.
     @MainThread Public Method SetPadding(insets: Insets)
+        For side In [insets.Left, insets.Top, insets.Right, insets.Bottom]
+            If !Length(side) Then Panic("Node.SetPadding: padding is 0 or more, and finite, not {side}")
+        End For
         padding = insets
         Reflow()
     End Method
 
-    /// Sets the space around it, between it and its siblings and its parent's padding.
+    /// Sets the space around it, between it and its siblings and its parent's padding; a side under
+    /// 0 pulls it in. Panics for a side that isn't finite.
     @MainThread Public Method SetMargin(insets: Insets)
+        For side In [insets.Left, insets.Top, insets.Right, insets.Bottom]
+            If !IsFinite(side) Then Panic("Node.SetMargin: a margin is finite, not {side}")
+        End For
         margin = insets
         Reflow()
     End Method
@@ -302,7 +313,7 @@ Public Class Node Implements Printable
 
     /// Sets the space between each two of a row's or a column's children, 0 at first.
     @MainThread Public Method SetGap(units: Float32)
-        If !(units >= 0.0) Then Panic("Node.SetGap: a gap is 0 or more, not {units}")
+        If !Length(units) Then Panic("Node.SetGap: a gap is 0 or more, and finite, not {units}")
         gap = units
         Reflow()
     End Method
@@ -328,7 +339,17 @@ Public Class Node Implements Printable
     End Method
 
     /// Sets where it goes in its parent's stack, over its parent's Align; Null to be placed by it.
+    /// Panics for anchors that aren't finite, or a Max before its Min.
     @MainThread Public Method SetAnchors(where: Anchors?)
+        If where != Null
+            Local all = [where.MinX, where.MinY, where.MaxX, where.MaxY]
+            For each In all
+                If !IsFinite(each) Then Panic("Node.SetAnchors: an anchor is finite, not {each}")
+            End For
+            If where.MaxX < where.MinX || where.MaxY < where.MinY
+                Panic("Node.SetAnchors: a Max is at its Min or after, not {where}")
+            End If
+        End If
         anchors = where
         Reflow()
     End Method
@@ -346,13 +367,16 @@ Public Class Node Implements Printable
     /// Sets the size of what a Node with no children shows, which Measure gives: a widget's text
     /// or image, (0, 0) at first.
     @MainThread Public Method SetContentSize(width: Float32, height: Float32)
-        If !(width >= 0.0 && height >= 0.0) Then Panic("Node.SetContentSize: a size is 0 or more")
+        If !(Length(width) && Length(height))
+            Panic("Node.SetContentSize: a size is 0 or more, and finite, not {width} by {height}")
+        End If
         content = Vec2(width, height)
         Reflow()
     End Method
 
-    /// The size of what it shows when it has no children, without its padding, which sizing it
-    /// to fit takes: its content size, which a widget's own Measure works out instead.
+    /// The size of what it shows, without its padding, which sizing it to fit takes, when it has no
+    /// children shown: its content size, which a widget's own Measure works out instead. A Node
+    /// with children shown is measured by them, and this isn't called.
     @MainThread Public Method Measure(): Vec2 => content
 
     /// Its box, as the last Layout put it, in the UI's units: its edge, which its padding is in.
@@ -385,8 +409,9 @@ Public Class Node Implements Printable
 
     Public Method ToString(): String => name == "" ? "a Node" : "Node \"{name}\""
 
-    // Marks it, and each Node it's in, to be laid out again.
-    Package Method Reflow()
+    /// Marks it, and each Node it's in, to be laid out again at the next Layout: what a widget
+    /// calls when what it measures changes, as its text does, since nothing else can tell.
+    @MainThread Protected Method Reflow()
         Local at: Node? = Self
         While at != Null
             at.dirty = True
@@ -394,15 +419,22 @@ Public Class Node Implements Printable
         End While
     End Method
 
+    // Marks it to be laid out again, as the package's own code does from outside it, as a Ui does
+    // when its theme or scale changes.
+    @MainThread Package Method Invalidate()
+        Reflow()
+    End Method
+
     // Its size as it'd be laid out fitting what's in it, its fixed size where it has one, in the
     // Layout being done, which keeps it.
     Package Method Natural(): Vec2
         If measured == layouts Then Return natural
         measured = layouts
-        Local fitted = Measure()
         Local shown = Shown()
-        If shown.Count > 0
-            fitted = Vec2(0.0, 0.0)
+        Local fitted = Vec2(0.0, 0.0)
+        If shown.Count == 0
+            fitted = Measure()
+        Else
             For child In shown
                 Local size = child.Natural()
                 Local wide = size.x + child.margin.Horizontal()
@@ -537,7 +569,9 @@ Function ArrangeLine(node: Node, shown: Node[], content: Rect, horizontal: Bool)
 End Function
 
 // Gives the filling children their shares of `free`, by their weights, kept to their least and
-// most: one kept gets that, and the rest share what's left, until none is kept.
+// most, as flexbox does: each round, what keeping them took away or added up; added, the ones kept
+// to their least have theirs, taken away, the ones kept to their most, and neither, all have
+// theirs; and the rest share again what those leave.
 Function Share(shown: Node[], lengths: Float32[], filling: Bool[], free: Float32, horizontal: Bool)
     Local open: Int[] = []
     For i = 0 To shown.Count - 1
@@ -549,21 +583,47 @@ Function Share(shown: Node[], lengths: Float32[], filling: Bool[], free: Float32
         For i In open
             weights += (horizontal ? shown[i].width : shown[i].height).Value
         End For
-        Local kept: Int[] = []
+        Local over: Float32 = 0.0
+        Local raised: Int[] = []
+        Local lowered: Int[] = []
         For i In open
             Local share = left * (horizontal ? shown[i].width : shown[i].height).Value / weights
             Local length = KeptAlong(shown[i], share, horizontal)
             lengths[i] = length
-            If length != share Then kept.Add(i)
+            over += length - share
+            If length > share Then raised.Add(i)
+            If length < share Then lowered.Add(i)
         End For
-        If kept.Count == 0 Then Return
-        // The kept have theirs; the rest share again what they leave.
-        For i In kept
+        If raised.Count == 0 && lowered.Count == 0 Then Return
+        Local fixed = over > 0.0 ? raised : (over < 0.0 ? lowered : open.Clone())
+        For i In fixed
             left -= lengths[i]
             open.Remove(i)
         End For
         left = Max(left, 0.0)
     End While
+End Function
+
+// Whether `units` is a length a Node takes: 0 or more, and finite.
+Function Length(units: Float32): Bool => units >= 0.0 && IsFinite(units)
+
+// `sizing` as its Mode takes it, as Sizing's Static Methods check it, or `call` panics.
+Function CheckedSizing(call: String, sizing: Sizing): Sizing
+    Select sizing.Mode
+        Case SizeMode.FIXED
+            If !Length(sizing.Value) Then Panic("{call}: a fixed size is 0 or more, not {sizing.Value}")
+        Case SizeMode.FILL
+            If !(sizing.Value > 0.0 && IsFinite(sizing.Value))
+                Panic("{call}: a fill's weight is over 0, not {sizing.Value}")
+            End If
+        Case SizeMode.FRACTION
+            If !(sizing.Value >= 0.0 && sizing.Value <= 1.0)
+                Panic("{call}: a fraction is 0 to 1, not {sizing.Value}")
+            End If
+        Default
+            Return sizing
+    End Select
+    Return sizing
 End Function
 
 // `length` kept to `child`'s least and most along a row, or a column.
