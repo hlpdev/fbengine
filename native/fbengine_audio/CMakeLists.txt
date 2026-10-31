@@ -104,3 +104,8 @@ target_include_directories(fbengine_audio_native PUBLIC "${CMAKE_CURRENT_SOURCE_
 target_compile_definitions(fbengine_audio_native PRIVATE FBE_AUDIO_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_audio_native PRIVATE fbengine_miniaudio)
+# Its float arithmetic as written, never fused: a multiply-subtract fused near the speed of sound
+# rounds once where the Doppler effect's tests of it round twice.
+if(NOT MSVC)
+  target_compile_options(fbengine_audio_native PRIVATE -ffp-contract=off)
+endif()
