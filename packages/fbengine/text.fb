@@ -171,8 +171,10 @@ Public Final Class Font Implements Printable
     @MainThread Public Method UnderlinePosition(): Float32 => metrics.underline_position
     @MainThread Public Method UnderlineThickness(): Float32 => metrics.underline_thickness
 
-    /// The size `text` takes: its widest line's advance, and its lines, by "\n", times its line
-    /// height. Panics for a font so big its lines or advances are past a Float32's.
+    /// The size `text` takes: its widest line's advance, and its lines times its line height, a
+    /// line broken at "\n", a vertical tab, NEL, and Unicode's line and paragraph separators. The
+    /// text ends at its first "\0". Panics for a font so big its lines or advances are past a
+    /// Float32's.
     @MainThread Public Method Measure(text: String): Vec2
         Local size = fbe_text_size_t(0.0, 0.0)
         Local measured = False
