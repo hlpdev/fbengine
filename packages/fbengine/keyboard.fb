@@ -1,0 +1,264 @@
+// The keyboard and text input, as the last Flip read them: what's held is as of then, and what's
+// counted (presses, releases, text) is what that Flip read, so every call in a frame agrees.
+
+Import std.core
+Import std.ffi
+Import "./c/fbe_input"
+Import "./window"
+
+/// A key by its position on the keyboard, not the letter its layout prints on it: `Key.W` is
+/// the key above S, which is Z on an AZERTY keyboard, so WASD is the same keys everywhere. The
+/// values are SDL3's scancodes, USB HID's usages for most, and the Enum's open to the rest.
+@Open Public Enum Key: Int32
+    UNKNOWN = 0
+    A = 4
+    B = 5
+    C = 6
+    D = 7
+    E = 8
+    F = 9
+    G = 10
+    H = 11
+    I = 12
+    J = 13
+    K = 14
+    L = 15
+    M = 16
+    N = 17
+    O = 18
+    P = 19
+    Q = 20
+    R = 21
+    S = 22
+    T = 23
+    U = 24
+    V = 25
+    W = 26
+    X = 27
+    Y = 28
+    Z = 29
+    DIGIT_1 = 30
+    DIGIT_2 = 31
+    DIGIT_3 = 32
+    DIGIT_4 = 33
+    DIGIT_5 = 34
+    DIGIT_6 = 35
+    DIGIT_7 = 36
+    DIGIT_8 = 37
+    DIGIT_9 = 38
+    DIGIT_0 = 39
+    RETURN = 40
+    ESCAPE = 41
+    BACKSPACE = 42
+    TAB = 43
+    SPACE = 44
+    MINUS = 45
+    EQUALS = 46
+    LEFT_BRACKET = 47
+    RIGHT_BRACKET = 48
+    BACKSLASH = 49
+    /// The key left of Return on ISO keyboards, which most report as BACKSLASH.
+    NON_US_HASH = 50
+    SEMICOLON = 51
+    APOSTROPHE = 52
+    GRAVE = 53
+    COMMA = 54
+    PERIOD = 55
+    SLASH = 56
+    CAPS_LOCK = 57
+    F1 = 58
+    F2 = 59
+    F3 = 60
+    F4 = 61
+    F5 = 62
+    F6 = 63
+    F7 = 64
+    F8 = 65
+    F9 = 66
+    F10 = 67
+    F11 = 68
+    F12 = 69
+    PRINT_SCREEN = 70
+    SCROLL_LOCK = 71
+    PAUSE = 72
+    INSERT = 73
+    HOME = 74
+    PAGE_UP = 75
+    DELETE = 76
+    END = 77
+    PAGE_DOWN = 78
+    RIGHT = 79
+    LEFT = 80
+    DOWN = 81
+    UP = 82
+    NUM_LOCK = 83
+    KEYPAD_DIVIDE = 84
+    KEYPAD_MULTIPLY = 85
+    KEYPAD_SUBTRACT = 86
+    KEYPAD_ADD = 87
+    KEYPAD_ENTER = 88
+    KEYPAD_1 = 89
+    KEYPAD_2 = 90
+    KEYPAD_3 = 91
+    KEYPAD_4 = 92
+    KEYPAD_5 = 93
+    KEYPAD_6 = 94
+    KEYPAD_7 = 95
+    KEYPAD_8 = 96
+    KEYPAD_9 = 97
+    KEYPAD_0 = 98
+    KEYPAD_DECIMAL = 99
+    /// The key right of left Shift on ISO keyboards (<> on German ones).
+    NON_US_BACKSLASH = 100
+    /// The context menu key.
+    MENU = 101
+    POWER = 102
+    KEYPAD_EQUALS = 103
+    F13 = 104
+    F14 = 105
+    F15 = 106
+    F16 = 107
+    F17 = 108
+    F18 = 109
+    F19 = 110
+    F20 = 111
+    F21 = 112
+    F22 = 113
+    F23 = 114
+    F24 = 115
+    MUTE = 127
+    VOLUME_UP = 128
+    VOLUME_DOWN = 129
+    KEYPAD_COMMA = 133
+    /// Ro on Japanese keyboards, /? on Brazilian ones.
+    INTERNATIONAL_1 = 135
+    /// Katakana/Hiragana on Japanese keyboards.
+    INTERNATIONAL_2 = 136
+    /// Yen on Japanese keyboards.
+    INTERNATIONAL_3 = 137
+    /// Henkan (convert) on Japanese keyboards.
+    INTERNATIONAL_4 = 138
+    /// Muhenkan (no convert) on Japanese keyboards.
+    INTERNATIONAL_5 = 139
+    /// Hangul/English on Korean keyboards.
+    LANG_1 = 144
+    /// Hanja on Korean keyboards.
+    LANG_2 = 145
+    LEFT_CONTROL = 224
+    LEFT_SHIFT = 225
+    LEFT_ALT = 226
+    /// The left Windows key, or Command on a Mac.
+    LEFT_SUPER = 227
+    RIGHT_CONTROL = 228
+    RIGHT_SHIFT = 229
+    /// Right Alt, AltGr on many layouts.
+    RIGHT_ALT = 230
+    RIGHT_SUPER = 231
+    SLEEP = 258
+    WAKE = 259
+    MEDIA_PLAY = 262
+    MEDIA_PAUSE = 263
+    MEDIA_RECORD = 264
+    MEDIA_FAST_FORWARD = 265
+    MEDIA_REWIND = 266
+    MEDIA_NEXT = 267
+    MEDIA_PREVIOUS = 268
+    MEDIA_STOP = 269
+    MEDIA_EJECT = 270
+    MEDIA_PLAY_PAUSE = 271
+    MEDIA_SELECT = 272
+    BROWSER_SEARCH = 280
+    BROWSER_HOME = 281
+    BROWSER_BACK = 282
+    BROWSER_FORWARD = 283
+    BROWSER_STOP = 284
+    BROWSER_REFRESH = 285
+    BROWSER_FAVORITES = 286
+End Enum
+
+/// Whether `key` was held when the last Flip read the OS's events.
+@MainThread Public Function KeyDown(key: Key): Bool => fbe_input_key_down(key As Int32)
+
+/// Whether the last Flip read `key` pressed, the OS's repeats while it's held left out.
+@MainThread Public Function KeyHit(key: Key): Bool => fbe_input_key_hits(key As Int32) > 0
+
+/// How many times the last Flip read `key` pressed, which a slow frame can make more than one.
+@MainThread Public Function KeyHits(key: Key): Int32 => fbe_input_key_hits(key As Int32)
+
+/// Whether the last Flip read `key` released.
+@MainThread Public Function KeyUp(key: Key): Bool => fbe_input_key_ups(key As Int32) > 0
+
+/// How many times the last Flip read `key` go down, the OS's repeats while it's held included,
+/// as a text field's Backspace and arrows want.
+@MainThread Public Function KeyTyped(key: Key): Int32 => fbe_input_key_typed(key As Int32)
+
+/// The keys the last Flip read pressed, in order, the first 64 of a frame: what "press any key"
+/// and rebinding want.
+@MainThread Public Function KeysHit(): Key[]
+    Local hit: Key[] = []
+    For index = 0 To fbe_input_keys_hit_count() - 1
+        hit.Add(fbe_input_key_hit_at(index) As Key)
+    End For
+    Return hit
+End Function
+
+/// Forgets what the last Flip read of the keyboard, its presses, releases, and text, until the
+/// next Flip, as a menu that's just closed wants; the keys held stay held.
+@MainThread Public Function FlushKeys()
+    fbe_input_flush_keys()
+End Function
+
+/// What `key` is called on the player's layout, as a key bindings menu shows it: "Z" for
+/// `Key.W` on an AZERTY keyboard, "Space" for `Key.SPACE`, and "" for none.
+@MainThread Public Function KeyName(key: Key): String
+    Unsafe
+        Return fbe_input_key_name(key As Int32).ToString()
+    End Unsafe
+End Function
+
+/// Starts text input in the window, the OS turning keys into text, with its IME's composition
+/// for languages typed in several keys, and its on-screen keyboard where there is one, until
+/// StopTextInput. Panics without a window.
+@MainThread Public Function StartTextInput()
+    If !fbe_input_start_text() Then Panic(LastError())
+End Function
+
+/// Stops text input, and drops the IME's composition.
+@MainThread Public Function StopTextInput()
+    fbe_input_stop_text()
+End Function
+
+/// Whether text input is on.
+@MainThread Public Function TextInputActive(): Bool => fbe_input_text_active()
+
+/// Where the text being typed is in the window's units, with the cursor `cursor` units from its
+/// left, so the IME's windows go beside it. Panics without a window.
+@MainThread Public Function SetTextInputArea(x: Int32, y: Int32, width: Int32, height: Int32,
+                                             cursor: Int32 = 0)
+    If !fbe_input_set_text_area(x, y, width, height, cursor) Then Panic(LastError())
+End Function
+
+/// The text the last Flip read typed while text input was on, "" for none.
+@MainThread Public Function TextInput(): String
+    Unsafe
+        Return fbe_input_text().ToString()
+    End Unsafe
+End Function
+
+/// The IME's composition: text not yet typed, which a text field shows at its cursor.
+Public Struct Composition
+    /// The text, "" when there's no composition.
+    Public Field Text: String
+    /// Its cursor, in characters from its start, -1 when the IME doesn't say.
+    Public Field Start: Int32
+    /// How many characters are selected from the cursor, -1 when the IME doesn't say.
+    Public Field Length: Int32
+End Struct
+
+/// The IME's composition as the last Flip read it.
+@MainThread Public Function TextComposition(): Composition
+    Unsafe
+        Return Composition(fbe_input_composition().ToString(), fbe_input_composition_start(),
+                           fbe_input_composition_length())
+    End Unsafe
+End Function

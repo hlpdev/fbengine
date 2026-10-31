@@ -1,0 +1,254 @@
+// The keyboard and text input, through Simulate's keys, offscreen.
+
+Import std.core
+Import std.test
+Import fbengine
+
+@Test
+Function APressIsHitDownAndUpForTheFrameItsReadIn() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.KeyDown(Key.SPACE)
+    // Nothing's read until the next Flip.
+    Expect(!KeyDown(Key.SPACE))
+    Expect(!KeyHit(Key.SPACE))
+    Flip()
+    Expect(KeyDown(Key.SPACE))
+    Expect(KeyHit(Key.SPACE))
+    Expect(KeyHits(Key.SPACE) == 1)
+    Expect(!KeyUp(Key.SPACE))
+    // Every call in the frame agrees.
+    Expect(KeyHit(Key.SPACE))
+    Flip()
+    Expect(KeyDown(Key.SPACE))
+    Expect(!KeyHit(Key.SPACE))
+    Try Simulate.KeyUp(Key.SPACE)
+    Flip()
+    Expect(!KeyDown(Key.SPACE))
+    Expect(KeyUp(Key.SPACE))
+    Flip()
+    Expect(!KeyUp(Key.SPACE))
+End Function
+
+// A tap shorter than a frame is still a hit and a release, though it's never seen held.
+@Test
+Function ATapWithinAFrameIsAHitAndARelease() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.PressKey(Key.E)
+    Try Simulate.PressKey(Key.E)
+    Flip()
+    Expect(!KeyDown(Key.E))
+    Expect(KeyHit(Key.E))
+    Expect(KeyHits(Key.E) == 2)
+    Expect(KeyUp(Key.E))
+End Function
+
+@Test
+Function TheOSsRepeatsAreTypedButNotHit() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.KeyDown(Key.BACKSPACE)
+    Try Simulate.KeyDown(Key.BACKSPACE, repeat: True)
+    Try Simulate.KeyDown(Key.BACKSPACE, repeat: True)
+    Flip()
+    Expect(KeyHits(Key.BACKSPACE) == 1)
+    Expect(KeyTyped(Key.BACKSPACE) == 3)
+    Try Simulate.KeyDown(Key.BACKSPACE, repeat: True)
+    Flip()
+    Expect(!KeyHit(Key.BACKSPACE))
+    Expect(KeyTyped(Key.BACKSPACE) == 1)
+    Try Simulate.KeyUp(Key.BACKSPACE)
+    Flip()
+    Expect(KeyTyped(Key.BACKSPACE) == 0)
+End Function
+
+@Test
+Function KeysHitListsAFramesPressesInOrder() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.PressKey(Key.W)
+    Try Simulate.KeyDown(Key.LEFT_SHIFT)
+    Try Simulate.KeyDown(Key.LEFT_SHIFT, repeat: True)
+    Try Simulate.PressKey(Key.ESCAPE)
+    Flip()
+    Local hit = KeysHit()
+    Expect(hit.Count == 3)
+    Expect(hit[0] == Key.W)
+    Expect(hit[1] == Key.LEFT_SHIFT)
+    Expect(hit[2] == Key.ESCAPE)
+    Flip()
+    Expect(KeysHit().Count == 0)
+    Try Simulate.KeyUp(Key.LEFT_SHIFT)
+End Function
+
+@Test
+Function FlushKeysForgetsTheFramesPressesButNotWhatsHeld() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    StartTextInput()
+    Defer StopTextInput()
+    Try Simulate.KeyDown(Key.RETURN)
+    Try Simulate.Text("hi")
+    Flip()
+    Expect(KeyHit(Key.RETURN))
+    FlushKeys()
+    Expect(!KeyHit(Key.RETURN))
+    Expect(KeysHit().Count == 0)
+    Expect(TextInput() == "")
+    Expect(KeyDown(Key.RETURN))
+    Try Simulate.KeyUp(Key.RETURN)
+    Flip()
+    Expect(KeyUp(Key.RETURN))
+End Function
+
+// The OS never says a key went up while another window has the keyboard, so losing the focus
+// lets go of every key.
+@Test
+Function LosingTheFocusLetsGoOfEveryKey() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.KeyDown(Key.A)
+    Try Simulate.KeyDown(Key.D)
+    Flip()
+    Expect(KeyDown(Key.A))
+    Try Simulate.BlurWindow()
+    Flip()
+    Expect(!KeyDown(Key.A))
+    Expect(!KeyDown(Key.D))
+    Expect(KeyUp(Key.A))
+    // The key going up later counts no second release.
+    Try Simulate.KeyUp(Key.A)
+    Flip()
+    Expect(!KeyUp(Key.A))
+End Function
+
+@Test
+Function ClosingTheWindowLetsGoOfEveryKey() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Try Simulate.KeyDown(Key.S)
+    Flip()
+    Expect(KeyDown(Key.S))
+    EndGraphics()
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Flip()
+    Expect(!KeyDown(Key.S))
+End Function
+
+@Test
+Function TextOnlyCountsWhileTextInputIsOn() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Expect(!TextInputActive())
+    Try Simulate.Text("lost")
+    Flip()
+    Expect(TextInput() == "")
+    StartTextInput()
+    Expect(TextInputActive())
+    SetTextInputArea(10, 20, 200, 16, 4)
+    Try Simulate.Text("héllo, ")
+    Try Simulate.Text("世界")
+    Flip()
+    Expect(TextInput() == "héllo, 世界")
+    Flip()
+    Expect(TextInput() == "")
+    StopTextInput()
+    Expect(!TextInputActive())
+End Function
+
+@Test
+Function TheIMEsCompositionStaysUntilItsTyped() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    StartTextInput()
+    Defer StopTextInput()
+    Expect(TextComposition().Text == "")
+    Try Simulate.Composition("にほ", 2, 0)
+    Flip()
+    Local composing = TextComposition()
+    Expect(composing.Text == "にほ")
+    Expect(composing.Start == 2)
+    Expect(composing.Length == 0)
+    Flip()
+    Expect(TextComposition().Text == "にほ")
+    Try Simulate.Text("日本")
+    Flip()
+    Expect(TextInput() == "日本")
+    Expect(TextComposition().Text == "")
+    Expect(TextComposition().Start == -1)
+End Function
+
+@Test
+Function StoppingTextInputDropsTheComposition() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    StartTextInput()
+    Try Simulate.Composition("ab")
+    Flip()
+    Expect(TextComposition().Text == "ab")
+    StopTextInput()
+    Expect(TextComposition().Text == "")
+End Function
+
+@Test
+Function KeysAreNamedByTheLayout()
+    // The offscreen driver's layout is US's.
+    Expect(KeyName(Key.A) == "A")
+    Expect(KeyName(Key.SPACE) == "Space")
+    Expect(KeyName(Key.LEFT_SHIFT) == "Left Shift")
+    Expect(KeyName(Key.UNKNOWN) == "")
+End Function
+
+@Test
+Function SimulatingKeysNeedsAWindow()
+    Window.SetHeadless(True)
+    Expect(ExpectThrows<GraphicsError>(Simulate.KeyDown(Key.A)) != Null)
+    Expect(ExpectThrows<GraphicsError>(Simulate.Text("a")) != Null)
+    Expect(ExpectThrows<GraphicsError>(Simulate.Composition("a")) != Null)
+End Function
+
+@Test
+Function AKeyOutsideSDLsIsNeverDown() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local beyond = 9999 As Key
+    Expect(!KeyDown(beyond))
+    Expect(KeyName(beyond) == "")
+    Expect(ExpectThrows<GraphicsError>(Simulate.KeyDown(beyond)) != Null)
+End Function
+
+// No Flip reads a frame's presses twice, though the Flips between read nothing.
+@Test
+Function AFlipWithNoEventsReadsNoPresses() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Simulate.PressKey(Key.Q)
+    Flip()
+    Expect(KeyHit(Key.Q))
+    Flip(False)
+    Flip(False)
+    Expect(!KeyHit(Key.Q))
+    Expect(!KeyUp(Key.Q))
+End Function
+
+@Test
+Function WithoutAWindowTextInputIsOff()
+    Window.SetHeadless(True)
+    Expect(!TextInputActive())
+    // Stopping it is nothing.
+    StopTextInput()
+    Expect(!TextInputActive())
+End Function
