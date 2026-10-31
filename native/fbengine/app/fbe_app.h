@@ -1,0 +1,38 @@
+#ifndef FBE_APP_H
+#define FBE_APP_H
+
+// The app's own calls to the OS: its message box, and opening links and files.
+//
+// Neither opens anything headless (fbe_window_set_headless, or SDL's video driver set to
+// "offscreen" or "dummy", as tests run): a message goes to stderr, and a link is kept, for tests
+// to read.
+
+#include "../core/fbe_core.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// What a message box says it is.
+#define FBE_APP_MESSAGE_ERROR       0
+#define FBE_APP_MESSAGE_WARNING     1
+#define FBE_APP_MESSAGE_INFORMATION 2
+
+// Shows the OS's message box, over the window if it's open, and waits for the player to close
+// it; headless, or if the OS can't show it, writes "title: text" to stderr instead. False for a
+// kind that isn't one of FBE_APP_MESSAGE_.
+FBE_API bool fbe_app_show_message(const char* title, const char* text, int32_t kind);
+
+// Opens a link in the OS's browser, or a file or folder, by its path, in the app the OS opens it
+// with; a path that isn't absolute is from the current folder. False if the OS can't. Headless,
+// it opens nothing, and keeps the link, a path as its file:// link, which the others give.
+FBE_API bool fbe_app_open_url(const char* url);
+// The links fbe_app_open_url kept, headless, the first first; "" for no such one.
+FBE_API int32_t fbe_app_opened_count(void);
+FBE_API const char* fbe_app_opened_at(int32_t index);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

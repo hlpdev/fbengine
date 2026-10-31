@@ -62,6 +62,14 @@ Function Main() Throws GraphicsError, InputError
             Flip()
             Flip()
             Print("and once {GamepadsConnected().Count == 0 && Gamepads().Count == listed}")
+        Case "show-message"
+            Window.SetHeadless(True)
+            ShowMessage("Missing file", "rooms.ini isn't there")
+            Print("went on")
+        Case "show-message-offscreen"
+            // Not headless, but SDL's video driver is offscreen, as ctest sets it: no box either.
+            ShowMessage("Missing file", "rooms.ini isn't there")
+            Print("went on")
         Default
             Panic("no case {name}")
     End Select
