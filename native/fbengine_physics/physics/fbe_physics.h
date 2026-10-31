@@ -29,6 +29,9 @@
 #define FBE_PHYSICS_MAX_BODIES 1048576
 // The most collision steps a step can be cut into.
 #define FBE_PHYSICS_MAX_COLLISION_STEPS 16
+// The most threads Jolt's job system has besides the one stepping a world: Jolt does at most 32
+// things at once.
+#define FBE_PHYSICS_MAX_THREADS 31
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,9 +52,17 @@ FBE_PHYSICS_API const char* fbe_physics_version(void);
 // What the last call that failed on this thread says went wrong.
 FBE_PHYSICS_API const char* fbe_physics_error(void);
 
-// How many threads Jolt's job system has, which step a world with the thread that asks: one a
-// core, less the one asking, and none on a machine of one core. They start with the first world.
+// How many threads Jolt's job system has, which step a world with the thread that asks: as
+// fbe_physics_set_threads said, or else one a core, less the one asking, at most
+// FBE_PHYSICS_MAX_THREADS, and none on a machine of one core. They start with the first world.
 FBE_PHYSICS_API int32_t fbe_physics_threads(void);
+
+// Gives Jolt's job system `threads`, 0 to FBE_PHYSICS_MAX_THREADS, from the first world on, or at
+// once if it's started, between steps; false if it's out of range.
+FBE_PHYSICS_API bool fbe_physics_set_threads(int32_t threads);
+
+// How many worlds there are, made and not freed.
+FBE_PHYSICS_API int32_t fbe_physics_worlds(void);
 
 // A new world, with no bodies and Earth's gravity, for at most `max_bodies`, 1 to
 // FBE_PHYSICS_MAX_BODIES; 0 if that's out of range.
@@ -78,8 +89,9 @@ FBE_PHYSICS_API bool fbe_physics_set_gravity(uint64_t world, const fbe_physics_v
 FBE_PHYSICS_API bool fbe_physics_gravity(uint64_t world, fbe_physics_vec3_t* gravity);
 
 // Steps `world` on by `seconds`, more than 0 and at most 1, its collisions found
-// `collision_steps` times, 1 to FBE_PHYSICS_MAX_COLLISION_STEPS, on Jolt's job system; false if
-// it isn't a world or either is out of range.
+// `collision_steps` times, 1 to FBE_PHYSICS_MAX_COLLISION_STEPS, a step of seconds over
+// collision_steps each, on Jolt's job system; false if it isn't a world or either is out of
+// range.
 FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t collision_steps);
 
 // How many times `world` has been stepped, -1 if it isn't a world.

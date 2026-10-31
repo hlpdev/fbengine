@@ -35,14 +35,25 @@ constexpr std::uint32_t broad_phase_layer_count = 2;
 // What a step's jobs can be, as Jolt's samples have them.
 constexpr std::uint32_t max_jobs = 2048;
 constexpr std::uint32_t max_barriers = 64;
+// The most collision steps one of Jolt's updates takes, all of whose jobs it makes at its start:
+// at Jolt's widest, 32 at once, a collision step makes up to 300 of the 2048, so 4 leave room for
+// the jobs a step makes as it goes. More are taken in several updates, the same on every machine.
+constexpr std::int32_t collision_steps_an_update = 4;
 // A step's memory, past which it takes from the heap.
 constexpr std::uint32_t step_memory_size = 16U * 1024U * 1024U;
 // The fewest pairs of touching bodies, and contacts between them, a world keeps room for; past
 // that, a pair for each body it's made for, and a contact for every other.
 constexpr std::uint32_t fewest_pairs = 1024;
 
+// The threads Jolt's job system is to have, -1 for a core's less one.
+std::int32_t threads_wanted = -1;
+
 std::int32_t thread_count() {
-    return static_cast<std::int32_t>(std::max(std::thread::hardware_concurrency(), 1U)) - 1;
+    if (threads_wanted >= 0) {
+        return threads_wanted;
+    }
+    const auto cores = static_cast<std::int32_t>(std::max(std::thread::hardware_concurrency(), 1U));
+    return std::min(cores - 1, FBE_PHYSICS_MAX_THREADS);
 }
 
 // Jolt's warnings, which it says rarely, as a step running out of room does, through a printf of
@@ -56,9 +67,13 @@ void trace(const char* format, ...) { // NOLINT(modernize-avoid-variadic-functio
 }
 
 #ifdef JPH_ENABLE_ASSERTS
-// A debug build's: a call Jolt doesn't take is this DLL's mistake, which stops the program.
+// A debug build's: a call Jolt doesn't take is this DLL's mistake, which stops the program; but a
+// step that ran out of room for contacts is the world's, which fbe_physics_overflowed says.
 bool assert_failed(const char* expression, const char* message, const char* file,
                    unsigned int line) {
+    if (std::string_view(expression) == "errors == EPhysicsUpdateError::None") {
+        return false;
+    }
     const std::string said = std::format("Jolt's assert failed at {}:{}: {} {}\n", file, line,
                                          expression, message != nullptr ? message : "");
     std::fputs(said.c_str(), stderr);
@@ -84,8 +99,12 @@ struct jolt_t {
     JPH::JobSystemThreadPool jobs{ max_jobs, max_barriers, thread_count() };
 };
 
+jolt_t* started = nullptr;
+
 jolt_t& jolt() {
-    static auto* started = new jolt_t();
+    if (started == nullptr) {
+        started = new jolt_t();
+    }
     return *started;
 }
 
@@ -151,7 +170,23 @@ FBE_PHYSICS_API const char* fbe_physics_error(void) {
 }
 
 FBE_PHYSICS_API int32_t fbe_physics_threads(void) {
-    return thread_count();
+    return started != nullptr ? started->jobs.GetMaxConcurrency() - 1 : thread_count();
+}
+
+FBE_PHYSICS_API bool fbe_physics_set_threads(int32_t threads) {
+    if (threads < 0 || threads > FBE_PHYSICS_MAX_THREADS) {
+        return fail(
+            std::format("Jolt has 0 to {} threads, not {}", FBE_PHYSICS_MAX_THREADS, threads));
+    }
+    threads_wanted = threads;
+    if (started != nullptr && started->jobs.GetMaxConcurrency() - 1 != threads) {
+        started->jobs.SetNumThreads(threads);
+    }
+    return true;
+}
+
+FBE_PHYSICS_API int32_t fbe_physics_worlds(void) {
+    return static_cast<int32_t>(worlds().count());
 }
 
 FBE_PHYSICS_API uint64_t fbe_physics_new(uint32_t max_bodies) {
@@ -226,8 +261,14 @@ FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t col
         return fail(std::format("a step finds collisions 1 to {} times, not {}",
                                 FBE_PHYSICS_MAX_COLLISION_STEPS, collision_steps));
     }
-    const JPH::EPhysicsUpdateError errors =
-        found->system.Update(seconds, collision_steps, &step_memory(), &jobs());
+    JPH::EPhysicsUpdateError errors = JPH::EPhysicsUpdateError::None;
+    for (std::int32_t done = 0; done < collision_steps;) {
+        const std::int32_t these = std::min(collision_steps - done, collision_steps_an_update);
+        const float part =
+            seconds * static_cast<float>(these) / static_cast<float>(collision_steps);
+        errors |= found->system.Update(part, these, &step_memory(), &jobs());
+        done += these;
+    }
     found->overflowed = errors != JPH::EPhysicsUpdateError::None;
     ++found->steps;
     return true;
