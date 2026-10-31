@@ -2,6 +2,7 @@
 
 #include "input/input.hpp"
 
+#include "core/engine.hpp"
 #include "fbengine.h"
 
 #include <SDL3/SDL.h>
@@ -10,14 +11,19 @@ namespace fbe {
 
 void input_event(const SDL_Event& event) {
     keyboard_event(event);
+    mouse_event(event);
 }
 
-SDL_Window* input_window() {
-    int count = 0;
-    SDL_Window** windows = SDL_GetWindows(&count);
-    SDL_Window* window = windows != nullptr && count > 0 ? windows[0] : nullptr;
-    SDL_free(static_cast<void*>(windows));
-    return window;
+SDL_Window* needed_window() {
+    SDL_Window* open = window();
+    if (open == nullptr) {
+        fail("there's no window; Graphics opens one");
+    }
+    return open;
+}
+
+bool push_event(SDL_Event& event) {
+    return SDL_PushEvent(&event) ? true : fail_sdl("couldn't push the event");
 }
 
 bool frame_counts_t::start() {

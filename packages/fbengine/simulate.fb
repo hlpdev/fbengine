@@ -5,6 +5,7 @@ Import std.core
 Import "./c/fbe_input"
 Import "./c/fbe_window"
 Import "./keyboard"
+Import "./mouse"
 Import "./window"
 
 /// Pushes input as the OS would, for the next Flip to read.
@@ -66,6 +67,43 @@ Public Class Simulate
         If !fbe_input_simulate_composition(text, start, length)
             Throw GraphicsError(LastError())
         End If
+    End Method
+
+    /// The mouse, moved to `x`, `y` in the window's units.
+    @MainThread Public Static Method MoveMouse(x: Float32, y: Float32) Throws GraphicsError
+        If !fbe_input_simulate_mouse_move(x, y) Then Throw GraphicsError(LastError())
+    End Method
+
+    /// The mouse, moved by `x`, `y`, as relative mode's raw motion is.
+    @MainThread Public Static Method MouseMotion(x: Float32, y: Float32) Throws GraphicsError
+        If !fbe_input_simulate_mouse_motion(x, y) Then Throw GraphicsError(LastError())
+    End Method
+
+    /// `button` going down where the mouse is, the `clicks`th in a row: 2 for a double click.
+    @MainThread Public Static Method MouseDown(button: MouseButton,
+                                               clicks: Int32 = 1) Throws GraphicsError
+        If !fbe_input_simulate_mouse_button(button As Int32, True, clicks)
+            Throw GraphicsError(LastError())
+        End If
+    End Method
+
+    /// `button` going up.
+    @MainThread Public Static Method MouseUp(button: MouseButton) Throws GraphicsError
+        If !fbe_input_simulate_mouse_button(button As Int32, False, 1)
+            Throw GraphicsError(LastError())
+        End If
+    End Method
+
+    /// `button` pressed and let go, in the same frame.
+    @MainThread Public Static Method Click(button: MouseButton,
+                                           clicks: Int32 = 1) Throws GraphicsError
+        Try MouseDown(button, clicks)
+        Try MouseUp(button)
+    End Method
+
+    /// The wheel, turned `y` notches up, and `x` right.
+    @MainThread Public Static Method Wheel(y: Float32, x: Float32 = 0.0) Throws GraphicsError
+        If !fbe_input_simulate_mouse_wheel(x, y) Then Throw GraphicsError(LastError())
     End Method
 
     @MainThread Static Method Push(event: Int32) Throws GraphicsError

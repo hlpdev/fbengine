@@ -111,10 +111,6 @@ void clear_composition() {
     composition_length = -1;
 }
 
-bool push(SDL_Event& event) {
-    return SDL_PushEvent(&event) ? true : fbe::fail_sdl("couldn't push the event");
-}
-
 // The text of the events Simulate pushed, which SDL leaves to whoever pushed them, kept until
 // they're read, each on the heap so its characters stay put.
 std::vector<std::unique_ptr<std::string>> pushed_text;
@@ -137,19 +133,11 @@ void read_string(const char* read) {
 
 /// Pushes an event holding event_string's last copy, which goes if it can't be pushed.
 bool push_text(SDL_Event& event) {
-    if (!push(event)) {
+    if (!fbe::push_event(event)) {
         pushed_text.pop_back();
         return false;
     }
     return true;
-}
-
-SDL_Window* simulated_window() {
-    SDL_Window* window = fbe::input_window();
-    if (window == nullptr) {
-        fbe::fail("there's no window; Graphics opens one");
-    }
-    return window;
 }
 
 } // namespace
@@ -212,8 +200,8 @@ FBE_API int32_t fbe_input_keys_hit_count(void) {
 }
 
 FBE_API int32_t fbe_input_key_hit_at(int32_t index) {
-    const bool there = counts.current() && index >= 0 &&
-                       static_cast<std::size_t>(index) < hit_order.size();
+    const bool there =
+        counts.current() && index >= 0 && static_cast<std::size_t>(index) < hit_order.size();
     return there ? hit_order[static_cast<std::size_t>(index)] : 0;
 }
 
@@ -236,15 +224,15 @@ FBE_API const char* fbe_input_key_name(int32_t key) {
 }
 
 FBE_API bool fbe_input_start_text(void) {
-    SDL_Window* window = fbe::input_window();
+    SDL_Window* window = fbe::needed_window();
     if (window == nullptr) {
-        return fbe::fail("there's no window; Graphics opens one");
+        return false;
     }
     return SDL_StartTextInput(window) ? true : fbe::fail_sdl("couldn't start text input");
 }
 
 FBE_API void fbe_input_stop_text(void) {
-    SDL_Window* window = fbe::input_window();
+    SDL_Window* window = fbe::window();
     if (window != nullptr) {
         SDL_StopTextInput(window);
     }
@@ -252,19 +240,20 @@ FBE_API void fbe_input_stop_text(void) {
 }
 
 FBE_API bool fbe_input_text_active(void) {
-    SDL_Window* window = fbe::input_window();
+    SDL_Window* window = fbe::window();
     return window != nullptr && SDL_TextInputActive(window);
 }
 
 FBE_API bool fbe_input_set_text_area(int32_t x, int32_t y, int32_t width, int32_t height,
                                      int32_t cursor) {
-    SDL_Window* window = fbe::input_window();
+    SDL_Window* window = fbe::needed_window();
     if (window == nullptr) {
-        return fbe::fail("there's no window; Graphics opens one");
+        return false;
     }
     const SDL_Rect area{ .x = x, .y = y, .w = width, .h = height };
-    return SDL_SetTextInputArea(window, &area, cursor) ? true
-                                                       : fbe::fail_sdl("couldn't set the text's area");
+    return SDL_SetTextInputArea(window, &area, cursor)
+               ? true
+               : fbe::fail_sdl("couldn't set the text's area");
 }
 
 FBE_API const char* fbe_input_text(void) {
@@ -287,7 +276,7 @@ FBE_API bool fbe_input_simulate_key(int32_t key, bool down, bool repeat) {
     if (!valid_key(key)) {
         return fbe::fail(std::format("{} isn't a Key", key));
     }
-    SDL_Window* window = simulated_window();
+    SDL_Window* window = fbe::needed_window();
     if (window == nullptr) {
         return false;
     }
@@ -300,11 +289,11 @@ FBE_API bool fbe_input_simulate_key(int32_t key, bool down, bool repeat) {
     pushed.key.key = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, true);
     pushed.key.down = down;
     pushed.key.repeat = down && repeat;
-    return push(pushed);
+    return fbe::push_event(pushed);
 }
 
 FBE_API bool fbe_input_simulate_text(const char* typed) {
-    SDL_Window* window = simulated_window();
+    SDL_Window* window = fbe::needed_window();
     if (window == nullptr) {
         return false;
     }
@@ -317,7 +306,7 @@ FBE_API bool fbe_input_simulate_text(const char* typed) {
 }
 
 FBE_API bool fbe_input_simulate_composition(const char* composed, int32_t start, int32_t length) {
-    SDL_Window* window = simulated_window();
+    SDL_Window* window = fbe::needed_window();
     if (window == nullptr) {
         return false;
     }

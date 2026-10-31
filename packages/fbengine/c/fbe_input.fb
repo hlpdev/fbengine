@@ -19,7 +19,28 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_input_composition(): CString
     Function fbe_input_composition_start(): Int32
     Function fbe_input_composition_length(): Int32
+    Function fbe_input_mouse_x(): Float32
+    Function fbe_input_mouse_y(): Float32
+    Function fbe_input_mouse_x_speed(): Float32
+    Function fbe_input_mouse_y_speed(): Float32
+    Function fbe_input_mouse_wheel(): Float32
+    Function fbe_input_mouse_wheel_x(): Float32
+    Function fbe_input_mouse_wheel_steps(): Int32
+    Function fbe_input_mouse_down(button: Int32): Bool
+    Function fbe_input_mouse_hits(button: Int32): Int32
+    Function fbe_input_mouse_ups(button: Int32): Int32
+    Function fbe_input_mouse_clicks(button: Int32): Int32
+    Function fbe_input_flush_mouse()
+    Function fbe_input_move_mouse(x: Float32, y: Float32): Bool
+    Function fbe_input_set_cursor_visible(visible: Bool)
+    Function fbe_input_cursor_visible(): Bool
+    Function fbe_input_set_mouse_relative(relative: Bool): Bool
+    Function fbe_input_mouse_relative(): Bool
     Function fbe_input_simulate_key(key: Int32, down: Bool, repeat: Bool): Bool
     Function fbe_input_simulate_text(text: CString): Bool
     Function fbe_input_simulate_composition(text: CString, start: Int32, length: Int32): Bool
+    Function fbe_input_simulate_mouse_move(x: Float32, y: Float32): Bool
+    Function fbe_input_simulate_mouse_motion(x: Float32, y: Float32): Bool
+    Function fbe_input_simulate_mouse_button(button: Int32, down: Bool, clicks: Int32): Bool
+    Function fbe_input_simulate_mouse_wheel(x: Float32, y: Float32): Bool
 End Extern
