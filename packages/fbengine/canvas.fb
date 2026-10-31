@@ -7,6 +7,7 @@ Import std.ffi
 Import std.math
 Import "./c/fbe_2d"
 Import "./sprite2d"
+Import "./text"
 Import "./texture"
 Import "./window"
 
@@ -162,6 +163,23 @@ Public Final Class Canvas
             done = fbe_2d_tile(into, AddressOf(used), texture, AddressOf(drawn), x, y)
         End Unsafe
         If !done Then Panic(LastError())
+    End Method
+
+    /// Draws `text` in `font`, its top left at `x`, `y`, a "\n" starting a line: each glyph at
+    /// whole pixels, crisp, rasterized at the target's pixels a unit of the font's size (the
+    /// screen's render size over the window's size; a texture's 1), in its color times the
+    /// glyph's coverage, or a color glyph's own colors faded by its alpha, over what's there
+    /// unless its blend is ADD; and an underlined font's line under each line. It panics for a
+    /// font that was freed.
+    @MainThread @PanicsAtCaller
+    Public Method DrawText(font: Font, text: String, x: Int32, y: Int32)
+        Local into = Into("DrawText")
+        Local used = pen
+        Local drawn = False
+        Unsafe
+            drawn = fbe_2d_text(into, AddressOf(used), font.Handle(), text, x, y)
+        End Unsafe
+        If !drawn Then Panic(LastError())
     End Method
 
     /// Fills its viewport with its color, replacing what's there, whatever its blend.

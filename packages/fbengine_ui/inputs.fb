@@ -1,0 +1,489 @@
+// The widgets that take a value: a slider, and a text field.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import std.text
+Import fbengine
+Import "./widget"
+
+/// A value from Low to High, which dragging along it sets, as left and right, Home, End, and the
+/// pages do while it has the focus (up and down move the focus on): style "slider".
+Public Class Slider Extends Widget
+    Field low: Float32
+    Field high: Float32
+    Field value: Float32
+    Field stepping: Float32 = 0.0
+    Field changed: Bool = False
+
+    /// A slider from `low` to `high`, at `value`. Panics for a range that isn't finite, or ends
+    /// before it starts.
+    @MainThread Public New(low: Float32 = 0.0, high: Float32 = 1.0, value: Float32 = 0.0,
+                           name: String = "")
+        Super.New("slider", name)
+        SetFocusable(True)
+        SetContentSize(160.0, 16.0)
+        SetRange(low, high)
+        SetValue(value)
+    End New
+
+    /// Its value.
+    @MainThread Public Method Value(): Float32 => value
+
+    /// Sets its value, kept to its range and its step; NaN is its low. Not a change the player
+    /// made, so Changed stays False.
+    @MainThread Public Method SetValue(set: Float32)
+        value = Kept(set)
+    End Method
+
+    /// Its lowest value.
+    @MainThread Public Method Low(): Float32 => low
+
+    /// Its highest value.
+    @MainThread Public Method High(): Float32 => high
+
+    /// Sets its range, keeping its value in it.
+    @MainThread Public Method SetRange(lowest: Float32, highest: Float32)
+        If !(IsFinite(lowest) && IsFinite(highest) && highest >= lowest &&
+             IsFinite(highest - lowest))
+            Panic("Slider.SetRange: a range is finite, and ends at its start or after, not {lowest} to {highest}")
+        End If
+        low = lowest
+        high = highest
+        value = Kept(value)
+    End Method
+
+    /// Sets the step its value goes by from its low, 0 at first for none, so the arrows move it a
+    /// twentieth of its range.
+    @MainThread Public Method SetStep(step: Float32)
+        If !(step >= 0.0 && IsFinite(step)) Then Panic("Slider.SetStep: a step is 0 or more, not {step}")
+        stepping = step
+        value = Kept(value)
+    End Method
+
+    /// The step its value goes by, 0 for none.
+    @MainThread Public Method Step(): Float32 => stepping
+
+    /// How far along its range its value is, from 0 to 1.
+    @MainThread Public Method Fraction(): Float32 => high > low ? (value - low) / (high - low) : 0.0
+
+    /// Whether the last Ui.Update read the player change its value.
+    @MainThread Public Method Changed(): Bool => changed
+
+    @MainThread Public Override Method PointerDown(point: Vec2): Bool
+        SetFrom(point)
+        Return True
+    End Method
+
+    @MainThread Public Override Method PointerDrag(point: Vec2)
+        SetFrom(point)
+    End Method
+
+    @MainThread Public Override Method KeyTyped(stroke: Keystroke): Bool
+        Local by = stepping > 0.0 ? stepping : (high - low) / 20.0
+        // A page is a tenth of its range, or a step if that's more.
+        Local page = Max((high - low) / 10.0, stepping)
+        Select stroke.Key
+            Case Key.LEFT
+                Moved(value - by)
+            Case Key.RIGHT
+                Moved(value + by)
+            Case Key.HOME
+                Moved(low)
+            Case Key.END
+                Moved(high)
+            Case Key.PAGE_DOWN
+                Moved(value - page)
+            Case Key.PAGE_UP
+                Moved(value + page)
+            Default
+                Return False
+        End Select
+        Return True
+    End Method
+
+    @MainThread Public Override Method Forget()
+        changed = False
+    End Method
+
+    // Sets its value from where the pointer is along it.
+    @MainThread Method SetFrom(point: Vec2)
+        Local box = ContentBox()
+        Local along = box.Width > 0.0 ? Clamp((point.x - box.X) / box.Width, 0.0, 1.0) : 0.0
+        Moved(low + along * (high - low))
+    End Method
+
+    @MainThread Method Moved(to: Float32)
+        Local kept = Kept(to)
+        If kept == value Then Return
+        value = kept
+        changed = True
+    End Method
+
+    // `set` kept to its range, on its step.
+    Method Kept(set: Float32): Float32
+        If IsNaN(set) Then Return low
+        Local kept = Clamp(set, low, high)
+        If stepping > 0.0 Then kept = Min(low + Round((kept - low) / stepping) * stepping, high)
+        Return kept
+    End Method
+End Class
+
+/// Which platform's keys a TextField edits by.
+Public Enum EditingKeys
+    /// Windows' and Linux's: Ctrl with the arrows, Backspace, and Delete goes by words, and with
+    /// A, C, X, and V selects all, copies, cuts, and pastes.
+    PC
+    /// macOS's: Option with the arrows, Backspace, and Delete goes by words, Command with them to
+    /// the line's ends, and Command with A, C, X, and V selects all, copies, cuts, and pastes.
+    MAC
+End Enum
+
+Global editingKeys: EditingKeys = EditingKeys.PC
+Global editingKeysSet: Bool = False
+
+/// Sets which platform's keys TextFields edit by: the OS's at first, macOS's on a Mac.
+@MainThread Public Function SetEditingKeys(keys: EditingKeys)
+    editingKeys = keys
+    editingKeysSet = True
+End Function
+
+/// Which platform's keys TextFields edit by.
+@MainThread Public Function CurrentEditingKeys(): EditingKeys
+    If editingKeysSet Then Return editingKeys
+    Return System.Platform == Platform.MACOS ? EditingKeys.MAC : EditingKeys.PC
+End Function
+
+/// A line of text the player types, with the window's text input on while it has the focus, the
+/// IME's composition and all: the arrows move its cursor, with Shift its selection, Home and End
+/// to its ends, Backspace and Delete take away, and the platform's keys (SetEditingKeys) go by
+/// words and to the ends, and select all, copy, cut, and paste; Return submits it. The pointer
+/// puts the cursor where it's pressed, and selects by dragging. Its cursor, selection, and most
+/// length are in grapheme clusters, what a player sees as one character each, so "e" and its
+/// accent, or an emoji and its skin tone, go together: style "field".
+Public Class TextField Extends Widget
+    Field clusters: String[] = []
+    Field text: String = ""
+    Field cursor: Int = 0
+    Field anchor: Int = 0
+    Field placeholder: String
+    Field limit: Int = 0
+    Field changed: Bool = False
+    Field submitted: Bool = False
+
+    /// A field holding `text`, which shows `placeholder` while it's empty.
+    @MainThread Public New(text: String = "", placeholder: String = "", name: String = "")
+        Super.New("field", name)
+        Self.placeholder = placeholder
+        SetFocusable(True)
+        SetText(text)
+    End New
+
+    /// What it holds.
+    @MainThread Public Method Text(): String => text
+
+    /// Holds `held`, cut to its most, with its cursor at the end; not a change the player made, so
+    /// Changed stays False.
+    @MainThread Public Method SetText(held: String)
+        clusters = Clusters(held)
+        If limit > 0 && clusters.Count > limit Then clusters = clusters[0..limit]
+        cursor = clusters.Count
+        anchor = cursor
+        Rebuilt()
+    End Method
+
+    /// What it shows while it's empty.
+    @MainThread Public Method Placeholder(): String => placeholder
+
+    /// Shows `shown` while it's empty, or its Ui's Strings' text for it while it translates; what's
+    /// typed in it never is.
+    @MainThread Public Method SetPlaceholder(shown: String)
+        placeholder = shown
+        Reflow()
+    End Method
+
+    /// What it shows while it's empty: its placeholder, or its Ui's Strings' text for it.
+    @MainThread Public Method ShownPlaceholder(): String => Translated(placeholder)
+
+    /// The most grapheme clusters it holds, 0 at first for no most; what it holds past it goes.
+    @MainThread Public Method SetMaxLength(most: Int)
+        If most < 0 Then Panic("TextField.SetMaxLength: a most is 0, for none, or more, not {most}")
+        limit = most
+        If limit > 0 && clusters.Count > limit
+            clusters = clusters[0..limit]
+            cursor = Min(cursor, limit)
+            anchor = Min(anchor, limit)
+            Rebuilt()
+        End If
+    End Method
+
+    /// The most grapheme clusters it holds, 0 for no most.
+    @MainThread Public Method MaxLength(): Int => limit
+
+    /// How many grapheme clusters it holds.
+    @MainThread Public Method Length(): Int => clusters.Count
+
+    /// Where its cursor is, in grapheme clusters from its start.
+    @MainThread Public Method Cursor(): Int => cursor
+
+    /// Its selection, from its start to its end, in grapheme clusters; the two are its cursor when
+    /// nothing's selected.
+    @MainThread Public Method Selection(): (Int, Int) => (Min(anchor, cursor), Max(anchor, cursor))
+
+    /// What's selected, "" for nothing.
+    @MainThread Public Method SelectedText(): String
+        Local from, to = Selection()
+        Return Spanned(clusters, from, to)
+    End Method
+
+    /// Selects from `from` to `to`, in grapheme clusters kept to what it holds, the cursor at `to`.
+    @MainThread Public Method SelectRange(from: Int, to: Int)
+        anchor = Clamp(from, 0, clusters.Count)
+        cursor = Clamp(to, 0, clusters.Count)
+    End Method
+
+    /// Selects everything it holds.
+    @MainThread Public Method SelectAll()
+        SelectRange(0, clusters.Count)
+    End Method
+
+    /// Whether the last Ui.Update read the player change what it holds.
+    @MainThread Public Method Changed(): Bool => changed
+
+    /// Whether the last Ui.Update read the player press Return in it.
+    @MainThread Public Method Submitted(): Bool => submitted
+
+    @MainThread Public Override Method TakesText(): Bool => True
+
+    @MainThread Public Override Method TextCursorX(): Float32
+        Return Padding().Left + TextSize(Spanned(clusters, 0, cursor)).x
+    End Method
+
+    @MainThread Public Override Method Measure(): Vec2
+        Local shown = text != "" ? text : ShownPlaceholder()
+        Return Vec2(TextSize(shown).x, TextSize("Ag").y)
+    End Method
+
+    @MainThread Public Override Method PointerDown(point: Vec2): Bool
+        cursor = IndexAt(point.x)
+        If !Shifted() Then anchor = cursor
+        Return True
+    End Method
+
+    @MainThread Public Override Method PointerDrag(point: Vec2)
+        cursor = IndexAt(point.x)
+    End Method
+
+    @MainThread Public Override Method TextTyped(typed: String)
+        // A line's text, without what the OS's keys type that isn't text.
+        Local kept: Char[] = []
+        For each In typed.Chars
+            If each != '\n' && each != '\r' && each != '\t' Then kept.Add(each)
+        End For
+        If kept.Count > 0 Then Put(TextOf(kept, 0, kept.Count))
+    End Method
+
+    @MainThread Public Override Method KeyTyped(stroke: Keystroke): Bool
+        // The platform's, as the stroke's modifiers were: by words, to the line's ends, and A, C,
+        // X, and V's.
+        Local mac = CurrentEditingKeys() == EditingKeys.MAC
+        Local words = mac ? stroke.Alt : stroke.Control
+        Local ends = mac && stroke.Meta
+        Local command = mac ? stroke.Meta : stroke.Control
+        Local extending = stroke.Shift
+        Local from, to = Selection()
+        Select stroke.Key
+            Case Key.LEFT
+                If ends
+                    MoveTo(extending, 0)
+                ElseIf !extending && from != to
+                    MoveTo(extending, from)
+                Else
+                    MoveTo(extending, words ? WordBefore(cursor) : cursor - 1)
+                End If
+            Case Key.RIGHT
+                If ends
+                    MoveTo(extending, clusters.Count)
+                ElseIf !extending && from != to
+                    MoveTo(extending, to)
+                Else
+                    MoveTo(extending, words ? WordAfter(cursor) : cursor + 1)
+                End If
+            Case Key.HOME
+                MoveTo(extending, 0)
+            Case Key.END
+                MoveTo(extending, clusters.Count)
+            Case Key.BACKSPACE
+                If from == to Then from = ends ? 0 : (words ? WordBefore(cursor) : Max(cursor - 1,
+                                                                                       0))
+                Taken(from, to)
+            Case Key.DELETE
+                If from == to
+                    to = ends ? clusters.Count : (words ? WordAfter(cursor)
+                                                        : Min(cursor + 1, clusters.Count))
+                End If
+                Taken(from, to)
+            Case Key.RETURN, Key.KEYPAD_ENTER
+                submitted = True
+            Case Key.A
+                If command Then SelectAll()
+            Case Key.C
+                If command && from != to Then SetClipboard(SelectedText())
+            Case Key.X
+                If command && from != to
+                    SetClipboard(SelectedText())
+                    Taken(from, to)
+                End If
+            Case Key.V
+                If command Then TextTyped(FirstLine(Clipboard()))
+            Case Key.SPACE
+                // It's text, which TextTyped has; it never activates a field.
+                Return True
+            Default
+                Return False
+        End Select
+        Return True
+    End Method
+
+    @MainThread Public Override Method Forget()
+        changed = False
+        submitted = False
+    End Method
+
+    // Puts `put` in place of the selection, as many of its grapheme clusters as its most leaves
+    // room for, the cursor after them; a mark that joins the cluster before it joins it.
+    @MainThread Method Put(put: String)
+        Local from, to = Selection()
+        Local before = Spanned(clusters, 0, from)
+        Local after = Spanned(clusters, to, clusters.Count)
+        Local adding = Clusters(put)
+        // As many of its clusters as fit once they fall together with those around them, as a
+        // mark typed at the most joins the cluster before it: clusters fall together only at its
+        // two ends, so the room left, and two more, is as many as can.
+        Local room = limit - (clusters.Count - (to - from))
+        Local taking = limit > 0 ? Min(adding.Count, Max(room, 0) + 2) : adding.Count
+        While limit > 0 && taking > 0 &&
+              Clusters(before + Spanned(adding, 0, taking) + after).Count > limit
+            taking -= 1
+        End While
+        If taking == 0 && to == from Then Return
+        Reclustered(before + Spanned(adding, 0, taking), after)
+    End Method
+
+    // Takes away the grapheme clusters from `from` to `to`.
+    @MainThread Method Taken(from: Int, to: Int)
+        If from >= to
+            anchor = cursor
+            Return
+        End If
+        Reclustered(Spanned(clusters, 0, from), Spanned(clusters, to, clusters.Count))
+    End Method
+
+    // Holds `before` then `after`, its clusters as they fall together, cut to its most, with its
+    // cursor where `before` ends, or after the cluster it ends in.
+    @MainThread Method Reclustered(before: String, after: String)
+        clusters = Clusters(before + after)
+        Local at = 0
+        Local bytes = 0
+        While at < clusters.Count && bytes < before.Length
+            bytes += clusters[at].Length
+            at += 1
+        End While
+        If limit > 0 && clusters.Count > limit Then clusters = clusters[0..limit]
+        cursor = Min(at, clusters.Count)
+        anchor = cursor
+        changed = True
+        Rebuilt()
+    End Method
+
+    // Moves its cursor to `at`, the selection with it when `extending`.
+    @MainThread Method MoveTo(extending: Bool, at: Int)
+        cursor = Clamp(at, 0, clusters.Count)
+        If !extending Then anchor = cursor
+    End Method
+
+    // The grapheme cluster boundary nearest `x`, in the UI's units.
+    @MainThread Method IndexAt(x: Float32): Int
+        Local along = x - ContentBox().X
+        Local best = 0
+        Local nearest = Abs(along)
+        For i = 1 To clusters.Count
+            Local width = TextSize(Spanned(clusters, 0, i)).x
+            If Abs(along - width) < nearest
+                nearest = Abs(along - width)
+                best = i
+            End If
+        End For
+        Return best
+    End Method
+
+    // The start of the word before `at`: past the spaces before it, then its letters.
+    Method WordBefore(at: Int): Int
+        Local i = at
+        While i > 0 && clusters[i - 1] == " "
+            i -= 1
+        End While
+        While i > 0 && clusters[i - 1] != " "
+            i -= 1
+        End While
+        Return i
+    End Method
+
+    // The end of the word after `at`.
+    Method WordAfter(at: Int): Int
+        Local i = at
+        While i < clusters.Count && clusters[i] == " "
+            i += 1
+        End While
+        While i < clusters.Count && clusters[i] != " "
+            i += 1
+        End While
+        Return i
+    End Method
+
+    @MainThread Method Rebuilt()
+        text = Spanned(clusters, 0, clusters.Count)
+        Reflow()
+    End Method
+End Class
+
+// `text`'s grapheme clusters.
+Package Function Clusters(text: String): String[]
+    Local found: String[] = []
+    For cluster In text.Graphemes()
+        found.Add(cluster)
+    End For
+    Return found
+End Function
+
+// The grapheme clusters from `from` up to `to`, as a String.
+Function Spanned(clusters: String[], from: Int, to: Int): String
+    Local built = StringBuilder()
+    For i = from To to - 1
+        built.Append(clusters[i])
+    End For
+    Return built.ToString()
+End Function
+
+// Whether Shift is held, which a press selects to with.
+@MainThread Function Shifted(): Bool => KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT)
+
+// The characters from `from` up to `to`, as a String.
+Package Function TextOf(chars: Char[], from: Int, to: Int): String
+    Local built = StringBuilder()
+    For i = from To to - 1
+        built.Append(chars[i])
+    End For
+    Return built.ToString()
+End Function
+
+// `text`'s first line.
+Function FirstLine(text: String): String
+    Local line: Char[] = []
+    For each In text.Chars
+        If each == '\n' || each == '\r' Then Break
+        line.Add(each)
+    End For
+    Return TextOf(line, 0, line.Count)
+End Function

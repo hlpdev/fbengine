@@ -32,9 +32,12 @@ include(cmake/native.cmake)
 include(cmake/sdl.cmake)
 include(cmake/vulkan.cmake)
 include(cmake/slang.cmake)
+include(cmake/assets.cmake)
+include(cmake/text.cmake)
 
 add_subdirectory(native/fbengine)
 add_subdirectory(native/fbengine_physics)
+add_subdirectory(native/fbengine_tools)
 add_subdirectory(native/fbengine_audio)
 
 if(FBENGINE_BUILD_TESTS)

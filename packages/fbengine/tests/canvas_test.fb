@@ -11,6 +11,9 @@ Import fbengine
 
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
+// The folder of HarfBuzz's test fonts, which ctest names, or "" when the tests run without them.
+Function TestFonts(): String => Env.Get("FBENGINE_TEST_FONTS") ?? ""
+
 @Test
 Function ACanvasKeepsItsPen() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")
@@ -147,4 +150,24 @@ Function ACanvasTilesASprite() Throws GraphicsError
     Expect(drawn[0, 0] == Color32(0, 0, 255, 255))
     Expect(drawn[1, 1] == Color32(255, 0, 0, 255))
     Expect(drawn[4, 0] == Color32(0, 0, 255, 255))
+End Function
+
+@Test
+Function ACanvasDrawsText() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    If TestFonts() == "" Then Skip("no test fonts here")
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(64, 24, TextureFormat.RGBA8_LINEAR)
+    Local canvas = Canvas(target)
+    Local font = Try Font.Load("{TestFonts()}/OpenSans-Regular.ttf", 16.0)
+    canvas.DrawText(font, "ab", 1, 1)
+    Local pixels = target.LockPixels()
+    Local lit = 0
+    For y = 0 To 23
+        For x = 0 To 63
+            If pixels.Get(x, y).r > 0 Then lit = lit + 1
+        End For
+    End For
+    Expect(lit > 20)
+    font.Free()
 End Function

@@ -1,11 +1,13 @@
 // 2D's text: the atlas's pages uploaded as textures, coverage as R8 and color as sRGB RGBA8, each
 // what's been written since, keyed on the atlas's generation as well as the page's version, as a
-// page's version starts again once the atlas is cleared; and text laid out into its glyphs, drawn
-// with the canvas at whole pixels, a run of glyphs of one page at a time.
+// page's version starts again once the atlas is cleared; and text laid out into its glyphs by
+// text/'s core, drawn with the canvas at whole pixels, a run of glyphs of one page at a time, and
+// an underlined font's line under each of its lines.
+
+#include "text/text.hpp"
 
 #include "2d/canvas.hpp"
 #include "2d/fbe_2d.h"
-#include "2d/text_standin.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/vulkan.hpp"
@@ -128,6 +130,19 @@ float scale_of(std::uint64_t target) {
                : 1.0F;
 }
 
+/// Whether text can be drawn into `target`, the screen for 0, which starts the GPU for a window's
+/// screen, before the pages' textures are made; false, with fbe_error's why, if not.
+bool drawable(std::uint64_t target) {
+    if (fbe::gpu::lost()) {
+        return fbe::gpu::fail_lost();
+    }
+    const std::uint64_t handle = target != 0 ? target : fbe_gpu_screen();
+    if (handle == 0) {
+        return fbe::fail("there's no screen, as there's no window");
+    }
+    return fbe::texture::find(handle) != nullptr;
+}
+
 } // namespace
 
 namespace fbe::canvas {
@@ -137,43 +152,19 @@ std::size_t page_textures_made() {
         page_textures, [](const page_texture_t& page) { return page.texture != 0; }));
 }
 
-} // namespace fbe::canvas
-
-extern "C" {
-
-FBE_API bool fbe_2d_text(uint64_t target, const fbe_2d_pen_t* pen, uint64_t font, const char* text,
-                         int32_t length, int32_t x, int32_t y) {
-    if (text == nullptr || length < 0) {
-        return fbe::fail("no text was given");
-    }
+bool draw_text(std::uint64_t target, const fbe_2d_pen_t* pen, const fbe::text::layout_t& layout,
+               std::int32_t x, std::int32_t y) {
     if (pen == nullptr) {
         return fbe::fail("no pen was given");
     }
-    // The target, as the canvas's draws find it, the screen starting the GPU for a window, before
-    // the pages' textures are made.
-    if (fbe::gpu::lost()) {
-        return fbe::gpu::fail_lost();
-    }
-    const std::uint64_t handle = target != 0 ? target : fbe_gpu_screen();
-    if (handle == 0) {
-        return fbe::fail("there's no screen, as there's no window");
-    }
-    if (fbe::texture::find(handle) == nullptr) {
-        return false;
-    }
-    // What the frame's first canvas draw does, before the atlas takes this text's glyphs.
-    fbe::canvas::trim_atlas();
-    fbe::text::layout_t layout;
-    if (!fbe::text::lay_out(font, std::string_view(text, static_cast<std::size_t>(length)),
-                            scale_of(target), layout) ||
-        !upload_pages()) {
+    if (!drawable(target) || !upload_pages()) {
         return false;
     }
     // Its top left at x, y, so its first line's baseline below it by its ascent, in whole pixels.
     const std::int64_t left = x;
     const std::int64_t baseline = std::int64_t{ y } + std::lround(layout.ascent);
     // A run of glyphs of one page at a time, those with nothing to draw, as a space, left out.
-    std::vector<fbe::canvas::glyph_t> run;
+    std::vector<glyph_t> run;
     std::uint32_t run_page = 0;
     const std::span<const fbe::text::page_t> pages = fbe::text::atlas().pages();
     const auto draw_run = [&] {
@@ -184,8 +175,7 @@ FBE_API bool fbe_2d_text(uint64_t target, const fbe_2d_pen_t* pen, uint64_t font
             return fbe::fail("a glyph's page isn't the atlas's");
         }
         const bool coverage = pages[run_page].format == fbe::text::page_format_t::COVERAGE;
-        const bool drawn =
-            fbe::canvas::draw_glyphs(target, pen, page_textures[run_page].texture, coverage, run);
+        const bool drawn = draw_glyphs(target, pen, page_textures[run_page].texture, coverage, run);
         run.clear();
         return drawn;
     };
@@ -209,6 +199,62 @@ FBE_API bool fbe_2d_text(uint64_t target, const fbe_2d_pen_t* pen, uint64_t font
         });
     }
     return draw_run();
+}
+
+} // namespace fbe::canvas
+
+extern "C" {
+
+FBE_API bool fbe_2d_text(uint64_t target, const fbe_2d_pen_t* pen, uint64_t font, const char* text,
+                         int32_t x, int32_t y) {
+    if (text == nullptr) {
+        return fbe::fail("no text was given");
+    }
+    if (pen == nullptr) {
+        return fbe::fail("no pen was given");
+    }
+    if (!drawable(target)) {
+        return false;
+    }
+    // What the frame's first canvas draw does, before the atlas takes this text's glyphs.
+    fbe::canvas::trim_atlas();
+    const std::string_view written(text);
+    const float scale = scale_of(target);
+    fbe::text::layout_t layout;
+    if (!fbe::text::lay_out(font, written, scale, layout) ||
+        !fbe::canvas::draw_text(target, pen, layout, x, y)) {
+        return false;
+    }
+    // An underlined font's line under each of its lines, at its place below the baseline, as
+    // thick as it says but a pixel at least, as long as the line's advance.
+    fbe_text_metrics_t metrics{};
+    const std::int32_t style = fbe_text_font_style(font);
+    const bool underlined = style >= 0 && (static_cast<std::uint32_t>(style) &
+                                           std::uint32_t{ FBE_TEXT_UNDERLINE }) != 0;
+    if (!underlined || !fbe_text_font_metrics(font, &metrics)) {
+        return true;
+    }
+    const std::int64_t baseline = std::int64_t{ y } + std::lround(layout.ascent);
+    const std::int64_t below = std::lround(metrics.underline_position * scale);
+    const std::int64_t thick =
+        std::max<std::int64_t>(std::lround(metrics.underline_thickness * scale), 1);
+    std::size_t line = 0;
+    for (std::size_t from = 0; from <= written.size(); ++line) {
+        const std::size_t end = std::min(written.find('\n', from), written.size());
+        float width = 0.0F;
+        float height = 0.0F;
+        if (!fbe::text::measure(font, written.substr(from, end - from), width, height)) {
+            return false;
+        }
+        const std::int64_t across = std::lround(width * scale);
+        const std::int64_t at =
+            baseline + std::llround(static_cast<double>(line) * metrics.line_height * scale);
+        if (across > 0 && !fbe::canvas::draw_over(target, pen, x, at + below, across, thick)) {
+            return false;
+        }
+        from = end + 1;
+    }
+    return true;
 }
 
 } // extern "C"

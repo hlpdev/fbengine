@@ -1,0 +1,52 @@
+// Import settings: what a file's sidecar, its path with ".toml" after it, says of how it's cooked
+// and loaded, one Struct a kind of file, whose keys are its Fields' names in snake_case.
+
+Import std.core
+
+/// What the cooker makes of an image: whatever the platforms the game's built for read best,
+/// which is BC7 on every desktop; Basis Universal's UASTC, which a GPU's own format is transcoded
+/// from as it loads; BC7; ASTC 4x4; or its texels as they are.
+Public Enum ImageCompression
+    PLATFORM = 0
+    UASTC = 1
+    BC7 = 2
+    ASTC = 3
+    NONE = 4
+End Enum
+
+/// An image's import settings, from its sidecar, as `wall.png.toml` is wall.png's:
+///
+/// ```toml
+/// srgb = false          # a normal map's, whose texels aren't colors
+/// mipmaps = true
+/// compression = "bc7"
+/// quality = 3
+/// ```
+Public Struct ImageSettings
+    /// Whether its texels are sRGB colors, as a color texture's are, or linear data, as a normal
+    /// map's are. A KTX2 says so itself.
+    Public Field Srgb: Bool = True
+    /// Whether the cooker makes its mips, down to 1x1, each in linear light.
+    Public Field Mipmaps: Bool = True
+    Public Field Compression: ImageCompression = ImageCompression.PLATFORM
+    /// How hard the cooker's encoder works: 0, fastest, to 4, best.
+    Public Field Quality: Int32 = 2
+End Struct
+
+/// A glTF's import settings, from its sidecar, as `door.gltf.toml` is door.gltf's:
+///
+/// ```toml
+/// optimize = true
+///
+/// [images]              # the images in its buffers, as a binary glTF's are
+/// compression = "astc"
+/// ```
+Public Struct ModelSettings
+    /// Whether the cooker orders its meshes' vertices and triangles for the GPU, with
+    /// meshoptimizer, which a release draws faster.
+    Public Field Optimize: Bool = True
+    /// How the cooker cooks the images in its buffers into KTX2s, as an image's sidecar says of
+    /// it, or Null for an image's defaults; a color texture's is sRGB when `Images.Srgb` is, and
+    /// the rest linear.
+    Public Field Images: ImageSettings? = Null
+End Struct

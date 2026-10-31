@@ -1,0 +1,90 @@
+// fbengine_ui's cases that need a process of their own, which ctest runs by name and checks
+// against what they print: what panics.
+
+Import std.core
+Import std.math
+Import std.os
+Import fbengine_ui
+
+Local arguments = Process.Arguments()
+Local name = arguments.Count > 0 ? arguments[0] : ""
+Select name
+    Case "add-twice"
+        // Its first parent kept, since a child of one that's gone has no parent.
+        Local child = Node("child")
+        Local first = Node("a")
+        first.Add(child)
+        Node("b").Add(child)
+    Case "add-into-itself"
+        Local outer = Node("outer")
+        Local inner = Node("inner")
+        outer.Add(inner)
+        inner.Add(outer)
+    Case "insert-out-of-range"
+        Node("a").Insert(1, Node("b"))
+    Case "fixed-negative"
+        Sizing.Fixed(-1.0)
+    Case "fill-zero"
+        Sizing.Fill(0.0)
+    Case "fraction-past-one"
+        Sizing.Fraction(1.5)
+    Case "style-empty-name"
+        Theme().SetStyle("button.", Style.Plain())
+    Case "set-width-unchecked"
+        Node("a").SetWidth(Sizing(SizeMode.FILL, 0.0))
+    Case "min-size-nan"
+        Node("a").SetMinSize(NaN, 0.0)
+    Case "padding-negative"
+        Node("a").SetPadding(Insets.All(-1.0))
+    Case "margin-infinite"
+        Node("a").SetMargin(Insets(0.0, Inf, 0.0, 0.0))
+    Case "anchors-backward"
+        Node("a").SetAnchors(Anchors(1.0, 0.0, 0.0, 1.0))
+    Case "style-negative-border"
+        Local style = Style.Plain()
+        style.BorderWidth = -1.0
+        Theme().SetStyle("x", style)
+    Case "style-nan-font-size"
+        Local style = Style.Plain()
+        style.FontSize = NaN
+        Theme().SetStyle("x", style)
+    Case "style-negative-padding"
+        Local style = Style.Plain()
+        style.Padding = Insets(0.0, -2.0, 0.0, 0.0)
+        Theme().SetStyle("x", style)
+    Case "max-size-negative"
+        Node("a").SetMaxSize(-1.0, 0.0)
+    Case "gap-infinite"
+        Node("a").SetGap(Inf)
+    Case "content-size-nan"
+        Node("a").SetContentSize(NaN, 0.0)
+    Case "anchor-nan"
+        Node("a").SetAnchors(Anchors(NaN, 0.0, 1.0, 1.0))
+    Case "slider-range-backward"
+        Slider(0.0, 1.0, 0.0).SetRange(2.0, 1.0)
+    Case "slider-range-too-wide"
+        Slider(0.0, 1.0, 0.0).SetRange(-3e38, 3e38)
+    Case "slider-step-negative"
+        Slider(0.0, 1.0, 0.0).SetStep(-1.0)
+    Case "max-length-negative"
+        TextField().SetMaxLength(-1)
+    Case "wheel-step-zero"
+        ScrollView("view").SetWheelStep(0.0)
+    Case "scale-zero"
+        Ui(Node("root")).SetScale(0.0)
+    Case "command-with-a-space"
+        Console().Register("give item", "", Function(console: Console, words: String[]) => "")
+    Case "debug-row-two-kinds"
+        Local panel = DebugPanel()
+        panel.Watch("mode", "noclip")
+        panel.Switch("mode", True)
+    Case "console-no-lines"
+        Console().SetMaxLines(0)
+    Case "strings-fall-back-to-themselves"
+        Local english = Strings("en")
+        Local french = Strings("fr")
+        french.SetFallback(english)
+        english.SetFallback(french)
+    Default
+        Panic("no case {name}")
+End Select

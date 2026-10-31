@@ -1,0 +1,164 @@
+// A game's menus, HUD, and console on fbengine_ui: a main menu, its options, a HUD over the game,
+// and the console on the grave key, used by the mouse, the keyboard, and a gamepad, driven here by
+// Simulate, offscreen, as a test or a replay is. What it draws waits on fbengine's text.
+
+Import std.core
+Import std.math
+Import fbengine
+Import fbengine_ui
+
+Global score: Int = 0
+
+Function Main() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+
+    // The main menu, and its options, in the middle of the screen; the HUD at its top left.
+    Local screen = Node("screen")
+    screen.SetArrangement(Arrangement.STACK)
+    Local menu = Column("menu", screen)
+    Local play = Button("Play")
+    Local options = Button("Options")
+    Local quit = Button("Quit")
+    menu.Add(play)
+    menu.Add(options)
+    menu.Add(quit)
+    Local settings = Column("options", screen)
+    settings.SetVisible(False)
+    Local volume = Slider(0.0, 1.0, 0.5)
+    volume.SetStep(0.05)
+    Local fullscreen = Toggle("Fullscreen")
+    Local name = TextField("", "your name")
+    Local back = Button("Back")
+    settings.Add(volume)
+    settings.Add(fullscreen)
+    settings.Add(name)
+    settings.Add(back)
+    Local hud = Node("hud")
+    hud.SetAnchors(Anchors.Point(0.0, 0.0))
+    hud.SetPadding(Insets.All(8.0))
+    hud.SetVisible(False)
+    Local shown = Label("score 0")
+    shown.SetTranslates(False)
+    hud.Add(shown)
+    screen.Add(hud)
+    Local console = Console()
+    console.SetHeight(Sizing.Fraction(0.5))
+    console.SetAnchors(Anchors(0.0, 0.0, 1.0, 0.0))
+    console.SetVisible(False)
+    console.Register("give", "adds to the score", Function(own: Console, words: String[])
+        Local points = words.Count > 0 ? Int.Parse(words[0]) : Null
+        If points == Null Then Return "give how many?"
+        score += points
+        Return "gave {points}"
+    End Function)
+    screen.Add(console)
+
+    // The game's controls, which the UI blocks while one of its widgets has the focus.
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfKey(Key.SPACE))
+    jump.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    Local ui = Ui(screen)
+    ui.Route(controls)
+    ui.SetNavigable(True)
+    Local pad = Try Simulate.ConnectGamepad("Player One")
+    Defer pad.Unplug()
+
+    // Each frame: the console's key, the UI, then what its widgets read.
+    Local frame = Function()
+        Flip()
+        If KeyHit(console.ToggleKey())
+            console.SetVisible(!console.Visible())
+            ui.Focus(console.Visible() ? console.Line() : Null)
+        End If
+        ui.Update()
+        If options.Clicked() || back.Clicked() || ui.Back() && settings.Visible()
+            menu.SetVisible(!menu.Visible())
+            settings.SetVisible(!settings.Visible())
+            ui.Focus(Null)
+        End If
+        If play.Clicked()
+            menu.SetVisible(False)
+            hud.SetVisible(True)
+            ui.SetNavigable(False)
+            ui.Focus(Null)
+        End If
+        If jump.Hit() Then score += 100
+        shown.SetText("score {score}")
+    End Function
+    frame()
+
+    // The mouse opens the options.
+    Local at = options.Box().Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    frame()
+    Print("options open: {settings.Visible()}")
+
+    // The keyboard sets them, and Escape goes back.
+    Try Simulate.PressKey(Key.TAB)
+    frame()
+    For i = 1 To 3
+        Try Simulate.PressKey(Key.RIGHT)
+        frame()
+    End For
+    Try Simulate.PressKey(Key.DOWN)
+    frame()
+    Try Simulate.PressKey(Key.SPACE)
+    frame()
+    Try Simulate.PressKey(Key.TAB)
+    frame()
+    Try Simulate.Text("Ada")
+    frame()
+    Print("volume {volume.Value():.2}, fullscreen {fullscreen.On()}, name {name.Text()}")
+    Try Simulate.PressKey(Key.ESCAPE)
+    frame()
+    Print("menu again: {menu.Visible()}")
+
+    // A gamepad plays: the D-pad to Play, SOUTH to press it, and SOUTH again to jump.
+    pad.SetButton(GamepadButton.DPAD_DOWN, True)
+    frame()
+    pad.SetButton(GamepadButton.DPAD_DOWN, False)
+    pad.SetButton(GamepadButton.SOUTH, True)
+    frame()
+    Print("playing: {hud.Visible()}, focus {ui.Focused() == Null ? "none" : "taken"}")
+    pad.SetButton(GamepadButton.SOUTH, False)
+    pad.SetButton(GamepadButton.SOUTH, True)
+    frame()
+    Print("a jump: {shown.Text()}")
+
+    // The console, on the grave key: a command, and Space typed, not jumped.
+    Try Simulate.PressKey(Key.GRAVE)
+    frame()
+    Try Simulate.Text("give 50")
+    Try Simulate.PressKey(Key.RETURN)
+    frame()
+    Try Simulate.PressKey(Key.SPACE)
+    Try Simulate.Text(" ")
+    frame()
+    Print("console: {console.Lines()}, {shown.Text()}, typed \"{console.Line().Text()}\"")
+    Try Simulate.PressKey(Key.GRAVE)
+    frame()
+    pad.SetButton(GamepadButton.SOUTH, False)
+    frame()
+    pad.SetButton(GamepadButton.SOUTH, True)
+    frame()
+    Print("closed, a jump: {shown.Text()}")
+    pad.SetButton(GamepadButton.SOUTH, False)
+    frame()
+    ui.Unroute(controls)
+End Function
+
+// A column of `screen`'s, in its middle, its widgets 8 apart.
+Function Column(name: String, screen: Node): Node
+    Local column = Node(name)
+    column.SetAnchors(Anchors.Point(0.5, 0.5))
+    column.SetGap(8.0)
+    column.SetAlign(Align.STRETCH)
+    screen.Add(column)
+    Return column
+End Function
+
+Try Main()

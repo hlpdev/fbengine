@@ -1,0 +1,354 @@
+// The cooker: images cooked into KTX2s the engine loads as they are, and a game's folder cooked into
+// a pak, each file at its own path, by its sidecar's settings.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.jpeg
+Import std.image.png
+Import std.io
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine_tools
+
+// What the engine loaded of an image: its format and its mips.
+Class Loaded Implements Asset
+    Field Info: ImageInfo
+
+    New(info: ImageInfo)
+        Info = info
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): Loaded Throws IOError => Loaded(load.Image())
+End Class
+
+// What the engine loaded of a model: how much is in it.
+Class LoadedModel Implements Asset
+    Field Info: ModelInfo
+
+    New(info: ModelInfo)
+        Info = info
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.MODEL
+
+    Public Static Method FromLoad(load: AssetLoad): LoadedModel Throws IOError
+        Return LoadedModel(load.Model())
+    End Method
+End Class
+
+// A triangle's glTF in `folder`, as `name`.gltf, its buffer beside it in `name`.bin, its material's
+// texture `name`.png: three positions, their normals, UVs, and three indices.
+Function WriteTriangle(folder: Path, name: String) Throws IOError
+    // (0, 0, 0), (1, 0, 0), (0, 1, 0), then normals of (0, 0, 1), as little-endian Float32s, 1
+    // being 0x3F800000; UVs of (0, 0), (1, 0), (0, 1); then 0, 1, 2 as UInt16s.
+    Local one = [0, 0, 0x80, 0x3F] As UInt8[]
+    Local zero = [0, 0, 0, 0] As UInt8[]
+    Local buffer: UInt8[] = []
+    For part In [zero, zero, zero, one, zero, zero, zero, one, zero,
+                 zero, zero, one, zero, zero, one, zero, zero, one,
+                 zero, zero, one, zero, zero, one]
+        buffer.AddAll(part)
+    End For
+    buffer.AddAll([0, 0, 1, 0, 2, 0] As UInt8[])
+    Try File.WriteBytes(folder / "{name}.bin", buffer)
+    Try File.WriteBytes(folder / "{name}.png", Png.Encode(Image(2, 2)))
+    Try File.WriteText(folder / "{name}.gltf",
+                       "{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":102," +
+                       "\"uri\":\"{name}.bin\"}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+                       "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":36}}," +
+                       "{{\"buffer\":0,\"byteOffset\":72,\"byteLength\":24}}," +
+                       "{{\"buffer\":0,\"byteOffset\":96,\"byteLength\":6}}],\"accessors\":[" +
+                       "{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"," +
+                       "\"min\":[0,0,0],\"max\":[1,1,0]}},{{\"bufferView\":1,\"componentType\":5126," +
+                       "\"count\":3,\"type\":\"VEC3\"}},{{\"bufferView\":2,\"componentType\":5126," +
+                       "\"count\":3,\"type\":\"VEC2\"}},{{\"bufferView\":3,\"componentType\":5123," +
+                       "\"count\":3,\"type\":\"SCALAR\"}}],\"meshes\":[{{\"primitives\":[{{" +
+                       "\"attributes\":{{\"POSITION\":0,\"NORMAL\":1,\"TEXCOORD_0\":2}},\"indices\":3," +
+                       "\"material\":0}}]}}],\"materials\":[{{\"pbrMetallicRoughness\":{{" +
+                       "\"baseColorTexture\":{{\"index\":0}}}}}}],\"textures\":[{{\"source\":0}}]," +
+                       "\"images\":[{{\"uri\":\"{name}.png\"}}],\"nodes\":[{{\"mesh\":0}}]}}")
+End Function
+
+// The image the cooker made of a 64 by 32 PNG, as `settings` say, as the engine loads it.
+Function CookedInfo(settings: ImageSettings): ImageInfo Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "source.png", Png.Encode(Image(64, 32)))
+    Try Cooker.CookImage(folder.Path / "source.png", folder.Path / "cooked.png", settings)
+    Assets.MountFolder("res://test-cooked", folder.Path)
+    Defer Assets.Unmount("res://test-cooked")
+    Return (Try Assets.Load<Loaded>("res://test-cooked/cooked.png")).Info
+End Function
+
+@Test
+Function AnImageCooksToWhatTheGpuReads() Throws IOError
+    // BC7, sRGB, and its mips, from 64 across down to 1.
+    Local platform = Try CookedInfo(ImageSettings())
+    Expect(platform.Format == 146)
+    Expect(platform.Width == 64)
+    Expect(platform.Height == 32)
+    Expect(platform.Levels == 7)
+    Local linear = ImageSettings()
+    linear.Srgb = False
+    linear.Mipmaps = False
+    Local data = Try CookedInfo(linear)
+    Expect(data.Format == 145)
+    Expect(data.Levels == 1)
+    Local astc = ImageSettings()
+    astc.Compression = ImageCompression.ASTC
+    Expect((Try CookedInfo(astc)).Format == 158)
+    Local none = ImageSettings()
+    none.Compression = ImageCompression.NONE
+    Expect((Try CookedInfo(none)).Format == 43)
+    // UASTC is transcoded as it loads, to RGBA8 until the GPU says what it reads.
+    Local uastc = ImageSettings()
+    uastc.Compression = ImageCompression.UASTC
+    Local transcoded = Try CookedInfo(uastc)
+    Expect(transcoded.Format == 43)
+    Expect(transcoded.Levels == 7)
+End Function
+
+@Test
+Function WhatIsntAnImageDoesntCook() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteText(folder.Path / "notes.txt", "not an image")
+    Expect(ExpectThrows<IOError>(Cooker.CookImage(folder.Path / "notes.txt",
+                                                  folder.Path / "out.png",
+                                                  ImageSettings()))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(!File.Exists(folder.Path / "out.png"))
+End Function
+
+@Test
+Function AFolderCooksIntoAPakAtItsOwnPaths() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try Dir.CreateAll(source.Path / "Textures")
+    Try Dir.CreateAll(source.Path / "models")
+    Try File.WriteBytes(source.Path / "Textures" / "Wall.png", Png.Encode(Image(16, 16)))
+    Try File.WriteText(source.Path / "Textures" / "Wall.png.toml",
+                       "compression = \"astc\"\nmipmaps = false\n")
+    Try File.WriteBytes(source.Path / "hud.jpg", Jpeg.Encode(Image(8, 8)))
+    Try File.WriteText(source.Path / "readme.txt", "hello")
+    Try File.WriteText(source.Path / "models" / "door.gltf", "a model, as it is")
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
+
+    Try Assets.MountPak("res://test-pak", built.Path / "game.pak")
+    Defer Assets.Unmount("res://test-pak")
+    // Cooked at the path it had, as its sidecar says.
+    Local wall = (Try Assets.Load<Loaded>("res://test-pak/textures/wall.png")).Info
+    Expect(wall.Format == 158)
+    Expect(wall.Levels == 1)
+    Local hud = (Try Assets.Load<Loaded>("res://test-pak/hud.jpg")).Info
+    Expect(hud.Format == 146)
+    Expect(hud.Levels == 4)
+    // The rest as it is, the sidecar too, for the settings the game reads as it runs.
+    Expect((Try Assets.ReadText("res://test-pak/readme.txt")) == "hello")
+    Expect((Try Assets.ReadText("res://test-pak/models/door.gltf")) == "a model, as it is")
+    Local settings = Try Assets.ReadSettings<ImageSettings>("res://test-pak/textures/wall.png")
+    Expect(settings.Compression == ImageCompression.ASTC)
+    Expect(!settings.Mipmaps)
+End Function
+
+@Test
+Function AFolderWithABadSidecarWritesNoPak() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try File.WriteBytes(source.Path / "a.png", Png.Encode(Image(4, 4)))
+    Try File.WriteText(source.Path / "a.png.toml", "compresion = \"bc7\"")
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(!File.Exists(built.Path / "game.pak"))
+End Function
+
+@Test
+Function AGltfCooksIntoABinaryGltfTheEngineLoads() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WriteTriangle(folder.Path, "tri")
+    For optimize In [True, False]
+        Local settings = ModelSettings()
+        settings.Optimize = optimize
+        Try Cooker.CookModel(folder.Path / "tri.gltf", folder.Path / "cooked.gltf", settings)
+        Local cooked = Try File.ReadBytes(folder.Path / "cooked.gltf")
+        Expect(cooked[0..4] == "glTF".Bytes)
+        // Its buffer's in it, and its texture still named beside it.
+        Assets.MountFolder("res://test-model", folder.Path)
+        Defer Assets.Unmount("res://test-model")
+        Local info = (Try Assets.Load<LoadedModel>("res://test-model/cooked.gltf")).Info
+        Expect(info.Meshes == 1)
+        Expect(info.Images == 1)
+        Assets.Unmount("res://test-model")
+    End For
+    // What isn't a glTF, or one the engine wouldn't load.
+    Try File.WriteText(folder.Path / "notes.gltf", "notes")
+    Expect(ExpectThrows<IOError>(Cooker.CookModel(folder.Path / "notes.gltf",
+                                                  folder.Path / "out.glb",
+                                                  ModelSettings()))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Try File.WriteText(folder.Path / "broken.gltf", "{{\"asset\":{{\"version\":\"1.0\"}}}}")
+    Expect(ExpectThrows<IOError>(Cooker.CookModel(folder.Path / "broken.gltf",
+                                                  folder.Path / "out.glb",
+                                                  ModelSettings()))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(!File.Exists(folder.Path / "out.glb"))
+End Function
+
+@Test
+Function AFolderCooksItsGltfsByTheirSettings() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try Dir.CreateAll(source.Path / "models")
+    Try WriteTriangle(source.Path / "models", "door")
+    Try File.WriteText(source.Path / "models" / "door.gltf.toml", "optimize = false")
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
+    Try Assets.MountPak("res://test-models", built.Path / "game.pak")
+    Defer Assets.Unmount("res://test-models")
+    Expect((Try Assets.ReadBytes("res://test-models/models/door.gltf"))[0..4] == "glTF".Bytes)
+    Local info = (Try Assets.Load<LoadedModel>("res://test-models/models/door.gltf")).Info
+    Expect(info.Meshes == 1)
+    Expect(info.Images == 1)
+    Expect(!(Try Assets.ReadSettings<ModelSettings>("res://test-models/models/door.gltf")).Optimize)
+    // Its buffer's in it, not beside it.
+    Expect(!Assets.Exists("res://test-models/models/door.bin"))
+End Function
+
+@Test
+Function WhatsNotAnImageTheEngineLoadsIsInvalidData() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    // One bigger than the engine loads, one with a PNG's signature that won't decode, and a
+    // quality that isn't 0 to 4.
+    Try File.WriteBytes(folder.Path / "wide.png", Png.Encode(Image(16385, 1)))
+    Local broken = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3] As UInt8[]
+    Try File.WriteBytes(folder.Path / "broken.png", broken)
+    Try File.WriteBytes(folder.Path / "fine.png", Png.Encode(Image(4, 4)))
+    Local out = folder.Path / "out.ktx2"
+    Expect(ExpectThrows<IOError>(Cooker.CookImage(folder.Path / "wide.png", out,
+                                                  ImageSettings()))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(ExpectThrows<IOError>(Cooker.CookImage(folder.Path / "broken.png", out,
+                                                  ImageSettings()))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Local fine = ImageSettings()
+    fine.Quality = 9
+    Expect(ExpectThrows<IOError>(Cooker.CookImage(folder.Path / "fine.png", out, fine))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(!File.Exists(out))
+End Function
+
+@Test
+Function ACookThatCantBeWrittenSaysSo() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.png", Png.Encode(Image(4, 4)))
+    Try File.WriteText(folder.Path / "notes.txt", "a file, where a folder would be")
+    Expect(ExpectThrows<IOError>(Cooker.CookImage(folder.Path / "a.png",
+                                                  folder.Path / "notes.txt" / "out.ktx2",
+                                                  ImageSettings()))?.Kind == IOErrorKind.OTHER)
+    // A model whose buffer isn't there can't be read, which is OTHER too.
+    Try WriteTriangle(folder.Path, "tri")
+    Try File.Delete(folder.Path / "tri.bin")
+    Expect(ExpectThrows<IOError>(Cooker.CookModel(folder.Path / "tri.gltf",
+                                                  folder.Path / "out.glb",
+                                                  ModelSettings()))?.Kind == IOErrorKind.OTHER)
+End Function
+
+// Links `link` to the folder `target`, as a junction on Windows, which needs no privilege.
+Function LinkFolder(link: Path, target: Path) Throws IOError
+    If System.Platform == Platform.WINDOWS
+        // cmd takes a forward slash as a switch's.
+        Try Command("cmd").Args(["/c", "mklink", "/J", link.Text.Replace("/", "\\"),
+                                 target.Text.Replace("/", "\\")]).Output()
+    Else
+        Try Command("ln").Args(["-s", target.Text, link.Text]).Output()
+    End If
+End Function
+
+@Test
+Function AFolderCooksWhatsBehindItsLinksAndNotItsPak() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Local shared = Try TempDir()
+    Defer Try? shared.Close()
+    Try File.WriteText(shared.Path / "shared.txt", "shared")
+    Try File.WriteText(source.Path / "own.txt", "own")
+    Try LinkFolder(source.Path / "linked", shared.Path)
+    // Into a pak in the folder itself, twice, and into one whose folder isn't there yet.
+    Try Cooker.CookFolder(source.Path, source.Path / "game.pak")
+    Try Cooker.CookFolder(source.Path, source.Path / "game.pak")
+    Try Cooker.CookFolder(source.Path, source.Path / "out" / "deeper" / "game.pak")
+    // And into it in another case, which on a disk that ignores case is it.
+    Try Cooker.CookFolder(source.Path, source.Path / "GAME.PAK")
+    Try Assets.MountPak("res://test-links", source.Path / "game.pak")
+    Defer Assets.Unmount("res://test-links")
+    Expect((Try Assets.ReadText("res://test-links/linked/shared.txt")) == "shared")
+    Expect((Try Assets.ReadText("res://test-links/own.txt")) == "own")
+    Expect(!Assets.Exists("res://test-links/game.pak"))
+    Expect(File.Exists(source.Path / "out" / "deeper" / "game.pak"))
+End Function
+
+@Test
+Function LinksThatGoRoundDontCook() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try File.WriteText(source.Path / "a.txt", "a")
+    Try LinkFolder(source.Path / "round", source.Path)
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    // And one of long names, whose paths are past the longest Windows takes before they're 32
+    // deep.
+    Try File.Delete(source.Path / "round")
+    Local long = "a folder whose name is long enough that a few of them are too long a path"
+    Try LinkFolder(source.Path / long, source.Path)
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+End Function
+
+@Test
+Function NamesThatDifferOnlyInCaseDontCook() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try File.WriteText(source.Path / "Hero.txt", "upper")
+    Try File.WriteText(source.Path / "hero.txt", "lower")
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    // Only a disk that keeps both has both.
+    If (Try Dir.Entries(source.Path)).Count == 2
+        Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path,
+                                                       built.Path / "game.pak"))?.Kind ==
+               IOErrorKind.INVALID_DATA)
+    Else
+        Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
+    End If
+End Function
+
+@Test
+Function AModelsSidecarSaysHowItsImagesCook() Throws IOError
+    Assets.MountFiles("res://test-model-images",
+                      {"a.gltf.toml": "optimize = false\n[images]\ncompression = \"astc\"\nsrgb = false\n".Bytes})
+    Defer Assets.Unmount("res://test-model-images")
+    Local settings = Try Assets.ReadSettings<ModelSettings>("res://test-model-images/a.gltf")
+    Expect(!settings.Optimize)
+    Expect(settings.Images?.Compression == ImageCompression.ASTC)
+    Expect(settings.Images?.Srgb == False)
+    // What it leaves out is an image's own defaults, and a model without any has an image's.
+    Expect(settings.Images?.Mipmaps == True)
+    Expect(settings.Images?.Quality == 2)
+    Expect((Try Assets.ReadSettings<ModelSettings>("res://test-model-images/b.gltf")).Images ==
+           Null)
+End Function

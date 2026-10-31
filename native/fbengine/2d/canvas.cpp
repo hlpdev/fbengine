@@ -13,13 +13,13 @@
 
 #include "2d/fbe_2d.h"
 #include "2d/shapes.hpp"
-#include "2d/text_standin.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/buffer.hpp"
 #include "gpu/graph.hpp"
 #include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
+#include "text/text.hpp"
 #include "texture/texture.hpp"
 
 #include <algorithm>
@@ -639,6 +639,16 @@ void add_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t h
 } // namespace
 
 namespace fbe::canvas {
+
+bool draw_over(std::uint64_t target, const fbe_2d_pen_t* pen, std::int64_t x, std::int64_t y,
+               std::int64_t width, std::int64_t height) {
+    const bool adds = pen != nullptr && pen->blend == FBE_2D_ADD;
+    if (!begin(target, pen, adds ? pens_blend : FBE_2D_ALPHA)) {
+        return false;
+    }
+    add_rect(x + pen->origin_x, y + pen->origin_y, width, height);
+    return true;
+}
 
 void trim_atlas() {
     const std::uint64_t frame = fbe::gpu::submitted_frames();

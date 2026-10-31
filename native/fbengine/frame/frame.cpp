@@ -5,6 +5,7 @@
 #include "fbengine.h"
 #include "gpu/gpu.hpp"
 #include "input/input.hpp"
+#include "jobs/jobs.hpp"
 
 #include <cstdint>
 #include <format>
@@ -69,6 +70,9 @@ FBE_API void fbe_frame_flip(bool wait_for_vsync) {
             rate_frames = 0;
         }
     }
+
+    // What the jobs finished for the main thread, and the tickets the FB side waits for.
+    fbe::hand_over_jobs();
 }
 
 FBE_API double fbe_frame_delta(void) {

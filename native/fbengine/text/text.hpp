@@ -1,8 +1,5 @@
 #pragma once
 
-// The input lane's text/text.hpp as agreed (bb261b8), for the canvas's text until its text core is
-// on master, when this and text_standin.cpp go and the canvas includes that.
-//
 // What the canvas reads of text: the atlas's pages, which glyphs are rasterized into, and a text
 // laid out into glyphs placed on them. Fonts are FreeType's and HarfBuzz's, a handle each, as
 // fbe_text.h makes them; text is shaped in runs SheenBidi splits by direction. All of it is the

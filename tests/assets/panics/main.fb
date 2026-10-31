@@ -1,0 +1,29 @@
+// What Assets' mounts panic for, one a run, by its argument, which ctest checks the message of.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.os
+Import fbengine
+
+Window.SetHeadless(True)
+Local which = Process.Arguments()[0]
+Select which
+    Case "files-empty"
+        Assets.MountFiles("res://mf", {"": "x".Bytes})
+    Case "files-folder"
+        Assets.MountFiles("res://mf", {"textures/": "x".Bytes})
+    Case "files-above"
+        Assets.MountFiles("res://mf", {"../x.txt": "x".Bytes})
+    Case "files-colon"
+        Assets.MountFiles("res://mf", {"a:b.txt": "x".Bytes})
+    Case "files-device"
+        Assets.MountFiles("res://mf", {"maps/con.txt": "x".Bytes})
+    Case "files-file-and-folder"
+        Assets.MountFiles("res://mf", {"a": "x".Bytes, "a/b": "y".Bytes})
+    Case "files-place"
+        Assets.MountFiles("data://mf", {"a.txt": "x".Bytes})
+    Case "folder-place"
+        Assets.MountFolder("res://a/../..", Path("."))
+End Select
+Print("{which} didn't panic")

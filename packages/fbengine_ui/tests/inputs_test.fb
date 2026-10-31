@@ -1,0 +1,361 @@
+// Sliders and text fields, driven by Simulate through a Ui, offscreen.
+
+Import std.core
+Import std.math
+Import std.test
+Import std.text
+Import std.time
+Import fbengine
+Import fbengine_ui
+
+Function Near(a: Float32, b: Float32): Bool => Abs(a - b) < 0.001
+
+// A window, and a Ui of a column holding `widget`, laid out.
+Function Holding(widget: Widget): Ui Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.SetPadding(Insets.All(20.0))
+    root.Add(widget)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Return ui
+End Function
+
+Function Frame(ui: Ui)
+    Flip()
+    ui.Update()
+End Function
+
+Function Keys(ui: Ui, keys: Key[]) Throws GraphicsError
+    For key In keys
+        Try Simulate.PressKey(key)
+    End For
+    Frame(ui)
+End Function
+
+// Holds `held` down while `keys` are pressed, then lets go.
+Function With(ui: Ui, held: Key, keys: Key[]) Throws GraphicsError
+    Try Simulate.KeyDown(held)
+    Frame(ui)
+    Try Keys(ui, keys)
+    Try Simulate.KeyUp(held)
+    Frame(ui)
+End Function
+
+Function Typed(ui: Ui, text: String) Throws GraphicsError
+    Try Simulate.Text(text)
+    Frame(ui)
+End Function
+
+@Test
+Function ASliderIsSetByDraggingAlongIt() Throws GraphicsError
+    Local volume = Slider(0.0, 100.0, 50.0)
+    Local ui = Try Holding(volume)
+    Defer EndGraphics()
+    Local box = volume.ContentBox()
+    Try Simulate.MoveMouse(box.X + box.Width * 0.25, box.Center.y)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Frame(ui)
+    Expect(Near(volume.Value(), 25.0))
+    Expect(volume.Changed())
+    Try Simulate.MoveMouse(box.X + box.Width * 2.0, box.Center.y)
+    Frame(ui)
+    Expect(volume.Value() == 100.0)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Frame(ui)
+    Expect(!volume.Changed())
+    Expect(Near(volume.Fraction(), 1.0))
+End Function
+
+@Test
+Function ASlidersKeysMoveItByItsStep() Throws GraphicsError
+    Local volume = Slider(0.0, 10.0, 5.0)
+    Local ui = Try Holding(volume)
+    Defer EndGraphics()
+    ui.Focus(volume)
+    volume.SetStep(2.0)
+    Expect(volume.Value() == 6.0)
+    Try Keys(ui, [Key.LEFT])
+    Expect(volume.Value() == 4.0)
+    Try Keys(ui, [Key.END])
+    Expect(volume.Value() == 10.0)
+    Expect(volume.Changed())
+    Try Keys(ui, [Key.RIGHT])
+    Expect(!volume.Changed())
+    Try Keys(ui, [Key.HOME])
+    Expect(volume.Value() == 0.0)
+    volume.SetStep(0.0)
+    Try Keys(ui, [Key.RIGHT])
+    Expect(Near(volume.Value(), 0.5))
+    volume.SetValue(NaN)
+    Expect(volume.Value() == 0.0)
+End Function
+
+@Test
+Function AFieldTakesTypingWhileItHasTheFocus() Throws GraphicsError
+    Local name = TextField("", "Your name")
+    Local ui = Try Holding(name)
+    Defer EndGraphics()
+    Expect(!TextInputActive())
+    Try Simulate.MoveMouse(name.Box().Center.x, name.Box().Center.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    Frame(ui)
+    Expect(ui.Focused() == name)
+    // Its Ui turns the window's text input on for it, and says where its cursor is.
+    Expect(TextInputActive())
+    Try Typed(ui, "Ada ")
+    Try Typed(ui, "Lovelace")
+    Expect(name.Text() == "Ada Lovelace")
+    Expect(name.Changed())
+    Expect(name.Cursor() == 12)
+    Expect(TextInputArea().Cursor > 0)
+    // A click on nothing takes the focus, and the text input with it.
+    Try Simulate.MoveMouse(390.0, 290.0)
+    Try Simulate.Click(MouseButton.LEFT)
+    Frame(ui)
+    Expect(ui.Focused() == Null)
+    Expect(!TextInputActive())
+    Expect(!name.Changed())
+End Function
+
+@Test
+Function AFieldsKeysEditIt() Throws GraphicsError
+    Local field = TextField("hello world")
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Try Keys(ui, [Key.BACKSPACE, Key.BACKSPACE])
+    Expect(field.Text() == "hello wor")
+    Try Keys(ui, [Key.HOME, Key.DELETE])
+    Expect(field.Text() == "ello wor")
+    Try Keys(ui, [Key.RIGHT, Key.RIGHT])
+    Try Typed(ui, "X")
+    Expect(field.Text() == "elXlo wor")
+    // Ctrl and Backspace take a word away; the arrows go by words.
+    Try Keys(ui, [Key.END])
+    Try With(ui, Key.LEFT_CONTROL, [Key.BACKSPACE])
+    Expect(field.Text() == "elXlo ")
+    Try With(ui, Key.LEFT_CONTROL, [Key.LEFT])
+    Expect(field.Cursor() == 0)
+    // Space is text, typed, and never activates a field.
+    Try Simulate.PressKey(Key.SPACE)
+    Try Simulate.Text(" ")
+    Frame(ui)
+    Expect(field.Text() == " elXlo ")
+    // Return submits it.
+    Try Keys(ui, [Key.RETURN])
+    Expect(field.Submitted())
+    Frame(ui)
+    Expect(!field.Submitted())
+End Function
+
+@Test
+Function AFieldSelectsCopiesCutsAndPastes() Throws GraphicsError
+    Local field = TextField("one two")
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    // Shift and the arrows select.
+    Try With(ui, Key.LEFT_SHIFT, [Key.LEFT, Key.LEFT, Key.LEFT])
+    Expect(field.SelectedText() == "two")
+    Try With(ui, Key.LEFT_CONTROL, [Key.C])
+    Expect(Clipboard() == "two")
+    // Typing replaces what's selected.
+    Try Typed(ui, "2")
+    Expect(field.Text() == "one 2")
+    Try With(ui, Key.LEFT_CONTROL, [Key.A])
+    Expect(field.SelectedText() == "one 2")
+    Try With(ui, Key.LEFT_CONTROL, [Key.X])
+    Expect(field.Text() == "")
+    Expect(Clipboard() == "one 2")
+    // A paste takes the clipboard's first line.
+    SetClipboard("pasted\nsecond line")
+    Try With(ui, Key.LEFT_CONTROL, [Key.V])
+    Expect(field.Text() == "pasted")
+End Function
+
+@Test
+Function AFieldKeepsToItsMostLength() Throws GraphicsError
+    Local field = TextField("abc")
+    field.SetMaxLength(5)
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Try Typed(ui, "defgh")
+    Expect(field.Text() == "abcde")
+    field.SetText("much too long")
+    Expect(field.Text() == "much ")
+    field.SetMaxLength(2)
+    Expect(field.Text() == "mu")
+    Expect(field.Cursor() == 2)
+End Function
+
+@Test
+Function APressInAFieldPutsItsCursorThere() Throws GraphicsError
+    Local field = TextField("abcdef")
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    Local content = field.ContentBox()
+    // The estimate's characters are half the font's size wide, 8 units at 16.
+    Try Simulate.MoveMouse(content.X + 8.0 * 2.0 + 1.0, content.Center.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    Frame(ui)
+    Expect(field.Cursor() == 2)
+    // Dragging selects.
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Frame(ui)
+    Try Simulate.MoveMouse(content.X + 8.0 * 5.0, content.Center.y)
+    Frame(ui)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Frame(ui)
+    Expect(field.SelectedText() == "cde")
+End Function
+
+// A page moves a slider a step at least, and a range's width is finite.
+@Test
+Function ASlidersPageIsAStepAtLeast() Throws GraphicsError
+    Local volume = Slider(0.0, 10.0, 0.0)
+    volume.SetStep(5.0)
+    Local ui = Try Holding(volume)
+    Defer EndGraphics()
+    ui.Focus(volume)
+    Try Keys(ui, [Key.PAGE_UP])
+    Expect(volume.Value() == 5.0)
+    Try Keys(ui, [Key.PAGE_UP])
+    Expect(volume.Value() == 10.0)
+    Try Keys(ui, [Key.PAGE_DOWN])
+    Expect(volume.Value() == 5.0)
+End Function
+
+// A field's cursor, selection, and most go by grapheme clusters.
+@Test
+Function AFieldGoesByWhatAPlayerSeesAsACharacter() Throws GraphicsError
+    Local field = TextField("e\u{301}")
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Expect(field.Length() == 1 && field.Cursor() == 1)
+    Try Keys(ui, [Key.LEFT])
+    Expect(field.Cursor() == 0)
+    // An emoji and its skin tone go as one.
+    field.SetText("a\u{1F44D}\u{1F3FD}")
+    Try Keys(ui, [Key.BACKSPACE])
+    Expect(field.Text() == "a")
+    // A mark typed after a letter joins it.
+    Try Typed(ui, "e")
+    Try Typed(ui, "\u{301}")
+    Expect(field.Text() == "ae\u{301}" && field.Length() == 2 && field.Cursor() == 2)
+    // A family, its people joined by ZWJs, is one, which the most keeps whole.
+    Local family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
+    field.SetText("")
+    field.SetMaxLength(2)
+    Try Typed(ui, "x" + family + "y")
+    Expect(field.Text() == "x" + family)
+    Try Keys(ui, [Key.LEFT])
+    Expect(field.Cursor() == 1)
+    field.SelectRange(1, 2)
+    Expect(field.SelectedText() == family)
+End Function
+
+// Each platform's keys edit by its own rules.
+@Test
+Function AFieldsKeysAreThePlatformsOwn() Throws GraphicsError
+    Local field = TextField("one two three")
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    Local had = CurrentEditingKeys()
+    ui.Focus(field)
+    Frame(ui)
+    SetEditingKeys(EditingKeys.PC)
+    Try With(ui, Key.LEFT_CONTROL, [Key.LEFT])
+    Expect(field.Cursor() == 8)
+    // Option's nothing on a PC.
+    Try With(ui, Key.LEFT_ALT, [Key.LEFT])
+    Expect(field.Cursor() == 7)
+    SetEditingKeys(EditingKeys.MAC)
+    Expect(CurrentEditingKeys() == EditingKeys.MAC)
+    Try With(ui, Key.LEFT_ALT, [Key.LEFT])
+    Expect(field.Cursor() == 4)
+    Try With(ui, Key.LEFT_SUPER, [Key.RIGHT])
+    Expect(field.Cursor() == 13)
+    Try With(ui, Key.LEFT_ALT, [Key.BACKSPACE])
+    Expect(field.Text() == "one two ")
+    Try With(ui, Key.LEFT_SUPER, [Key.BACKSPACE])
+    Expect(field.Text() == "")
+    // Command's A, C, X, and V; Ctrl's aren't.
+    field.SetText("copy")
+    Try With(ui, Key.LEFT_CONTROL, [Key.A])
+    Expect(field.Selection() == (4, 4))
+    Try With(ui, Key.LEFT_SUPER, [Key.A])
+    Expect(field.Selection() == (0, 4))
+    SetEditingKeys(had)
+End Function
+
+// A key's modifiers are those held as it went down: "a", then Ctrl down in the same frame, types
+// the "a" and selects nothing.
+@Test
+Function AFieldGoesByEachKeysOwnModifiers() Throws GraphicsError
+    Local field = TextField("text")
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Try Simulate.PressKey(Key.A)
+    Try Simulate.Text("a")
+    Try Simulate.KeyDown(Key.LEFT_CONTROL)
+    Frame(ui)
+    Expect(field.Text() == "texta" && field.Selection() == (5, 5))
+    // Ctrl's A, pressed with it held, selects all; Shift let go before Left moves without it.
+    Try Simulate.PressKey(Key.A)
+    Try Simulate.KeyUp(Key.LEFT_CONTROL)
+    Frame(ui)
+    Expect(field.Selection() == (0, 5))
+    Try Simulate.KeyDown(Key.LEFT_SHIFT)
+    Try Simulate.KeyUp(Key.LEFT_SHIFT)
+    Try Simulate.PressKey(Key.LEFT)
+    Frame(ui)
+    Expect(field.Selection() == (0, 0))
+End Function
+
+// At its most, a mark typed after a letter still joins it, as Thai's tone marks are typed.
+@Test
+Function AMarkAtTheMostJoinsTheClusterBeforeIt() Throws GraphicsError
+    Local field = TextField("")
+    field.SetMaxLength(1)
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Try Typed(ui, "\u{E01}")
+    Try Typed(ui, "\u{E48}")
+    Expect(field.Text() == "\u{E01}\u{E48}" && field.Length() == 1 && field.Cursor() == 1)
+    // A letter of its own doesn't fit.
+    Try Typed(ui, "x")
+    Expect(field.Text() == "\u{E01}\u{E48}")
+End Function
+
+// Pasted at its most, a long text is cut at once, not a cluster at a time.
+@Test
+Function APasteAtTheMostIsCutQuickly() Throws GraphicsError
+    Local field = TextField("ab")
+    field.SetMaxLength(10)
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Local long = StringBuilder()
+    For i = 1 To 4000
+        long.Append('x')
+    End For
+    Local timer = Stopwatch.StartNew()
+    Try Typed(ui, long.ToString())
+    Expect(field.Text() == "abxxxxxxxx" && field.Length() == 10)
+    Expect(timer.Elapsed.TotalSeconds < 0.2)
+End Function

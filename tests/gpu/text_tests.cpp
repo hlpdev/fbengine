@@ -1,16 +1,17 @@
-// 2D's text, before the text core's on master: the atlas filled by a filler of this file's own,
-// glyphs of known pixels laid out a few pixels apart, so the pages' uploads, the glyphs' quads,
-// trimming, and fbe_2d_text are tested without fonts. Each test with the GPU ends by stopping it,
-// which has to leave nothing behind.
+// 2D's text: the atlas filled by a filler of this file's own, glyphs of known pixels laid out a few
+// pixels apart, and drawn as text/'s core's layouts are, so the pages' uploads, the glyphs'
+// quads, and trimming are tested with pixels known exactly; and fbe_2d_text in real fonts,
+// HarfBuzz's test fonts and the tests' own, against the atlas's pixels, its underline, and a
+// golden image. Each test with the GPU ends by stopping it, which has to leave nothing behind.
 
 #include "golden/golden.hpp"
 #include "gpu_testing.hpp"
 
 #include <2d/canvas.hpp>
-#include <2d/text_standin.hpp>
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <fbengine.h>
@@ -18,6 +19,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <text/text.hpp>
 #include <vector>
 
 using fbe::tests::require;
@@ -26,9 +28,6 @@ using fbe::tests::stop_gpu;
 namespace {
 
 using rgba_t = std::array<std::uint8_t, 4>;
-
-/// The filler's font, the one handle its lay_out takes.
-constexpr std::uint64_t filler_font = 1;
 
 /// The filler's coverage glyphs, 3 by 5 pixels: '#' covered, '+' half, '.' not.
 const std::map<char, std::array<std::string_view, 5>>& bitmaps() {
@@ -130,10 +129,10 @@ bool place(char character, placed_t& into) {
     return true;
 }
 
-/// The filler's lay_out: each character its glyph, 4 pixels on from the last, the top of a 3 by 5
-/// glyph 5 above the baseline and of the color one 2; a space nothing, but its 4 pixels.
-bool fill(std::uint64_t /*font*/, std::string_view text, float /*scale*/,
-          fbe::text::layout_t& into) {
+/// Lays `text` out as the core does, into `into`: each character its glyph, 4 pixels on from the
+/// last, the top of a 3 by 5 glyph 5 above the baseline and of the color one 2; a space nothing,
+/// but its 4 pixels.
+bool fill(std::string_view text, fbe::text::layout_t& into) {
     into = {};
     std::int32_t x = 0;
     for (const char character : text) {
@@ -164,20 +163,34 @@ bool fill(std::uint64_t /*font*/, std::string_view text, float /*scale*/,
     return true;
 }
 
-/// Starts the GPU headless with an empty atlas and the filler laying text out.
+/// Starts the GPU headless with an empty atlas.
 void start() {
     REQUIRE(fbe_window_set_headless(true));
     fbe_gpu_set_pipeline_cache("");
     require(fbe_gpu_start());
     fbe::text::atlas().clear();
     fbe::text::atlas().set_budget(std::size_t{ 16 } << 20U);
-    fbe::text::set_lay_out(fill);
     places = 0;
 }
 
 void stop() {
-    fbe::text::set_lay_out(nullptr);
     stop_gpu();
+}
+
+/// A font from HarfBuzz's test fonts, or the tests' own, at `size` with `style`, with no fallback
+/// from the OS's, so what it has is the font's own.
+std::uint64_t font_of(const std::string& path, float size, std::int32_t style = 0) {
+    const std::uint64_t font = fbe_text_load_font(path.c_str(), 0, size, style);
+    INFO(fbe_error());
+    REQUIRE(font != 0);
+    fbe_text_set_system_fallback(font, false);
+    return font;
+}
+std::uint64_t opened(const char* name, float size, std::int32_t style = 0) {
+    return font_of(std::string(FBE_TEST_FONTS) + "/" + name, size, style);
+}
+std::uint64_t own(const char* name, float size, std::int32_t style = 0) {
+    return font_of(std::string(FBE_OWN_TEST_FONTS) + "/" + name, size, style);
 }
 
 std::uint64_t target(std::int32_t width, std::int32_t height,
@@ -195,13 +208,20 @@ fbe_2d_pen_t pen(rgba_t color) {
 constexpr rgba_t black{ 0, 0, 0, 255 };
 constexpr rgba_t white{ 255, 255, 255, 255 };
 
-/// Draws `text` with the filler's font in white at `x`, `y`.
+/// Draws `text` as the filler lays it out at `x`, `y`, as fbe_2d_text does a layout, the atlas
+/// trimmed first as the frame's first canvas draw does; false, with fbe_error's why, if it can't.
+bool drawn(std::uint64_t into, std::string_view text, std::int32_t x, std::int32_t y,
+           rgba_t color = white) {
+    const fbe_2d_pen_t ink = pen(color);
+    fbe::canvas::trim_atlas();
+    fbe::text::layout_t layout;
+    return fill(text, layout) && fbe::canvas::draw_text(into, &ink, layout, x, y);
+}
+
 void draw(std::uint64_t into, std::string_view text, std::int32_t x, std::int32_t y,
           rgba_t color = white) {
-    const fbe_2d_pen_t ink = pen(color);
     INFO(text);
-    require(fbe_2d_text(into, &ink, filler_font, text.data(),
-                        static_cast<std::int32_t>(text.size()), x, y));
+    require(drawn(into, text, x, y, color));
 }
 
 void clear(std::uint64_t into) {
@@ -388,13 +408,14 @@ TEST_CASE("text that can't be drawn is refused", "[gpu]") {
     start();
     const std::uint64_t made = target(8, 8);
     const fbe_2d_pen_t ink = pen(white);
-    CHECK(!fbe_2d_text(made, &ink, filler_font, nullptr, 0, 0, 0));
+    const std::uint64_t font = opened("OpenSans-Regular.ttf", 12.0F);
+    CHECK(!fbe_2d_text(made, &ink, font, nullptr, 0, 0));
     CHECK(std::string(fbe_error()) == "no text was given");
-    CHECK(!fbe_2d_text(made, nullptr, filler_font, "I", 1, 0, 0));
+    CHECK(!fbe_2d_text(made, nullptr, font, "a", 0, 0));
     CHECK(std::string(fbe_error()) == "no pen was given");
-    fbe::text::set_lay_out(nullptr);
-    CHECK(!fbe_2d_text(made, &ink, filler_font, "I", 1, 0, 0));
-    CHECK(std::string(fbe_error()) == "there's no text core yet to lay text out");
+    CHECK(fbe_text_free_font(font));
+    CHECK(!fbe_2d_text(made, &ink, font, "a", 0, 0));
+    CHECK(!fbe_2d_text(made, &ink, 0, "a", 0, 0));
     stop();
 }
 
@@ -407,28 +428,32 @@ TEST_CASE("text is refused without a GPU to draw it, and starts one for the scre
     draw(made, "I", 0, 0);
     fbe_frame_flip(false);
     fbe_gpu_stop();
-    const fbe_2d_pen_t ink = pen(white);
-    CHECK(!fbe_2d_text(made, &ink, filler_font, "L", 1, 0, 0));
+    CHECK(!drawn(made, "L", 0, 0));
     CHECK(std::string(fbe_error()) == "the texture was freed");
     stop();
-    // As a headless window's first draw.
+    // As a headless window's first draw, in a real font, which starts the GPU.
     REQUIRE(fbe_window_set_headless(true));
-    require(fbe_window_open(16, 8, FBE_WINDOW_WINDOWED));
-    fbe::text::set_lay_out(fill);
+    require(fbe_window_open(32, 24, FBE_WINDOW_WINDOWED));
+    const std::uint64_t font = opened("OpenSans-Regular.ttf", 16.0F);
     REQUIRE(!fbe_gpu_started());
-    draw(0, "I", 0, 0);
+    const fbe_2d_pen_t ink = pen(white);
+    require(fbe_2d_text(0, &ink, font, "ab", 1, 1));
     CHECK(fbe_gpu_started());
     const fbe::golden::frame_t screen = read(fbe_gpu_screen());
-    CHECK(pixel(screen, 0, 0)[0] == 255);
-    CHECK(pixel(screen, 1, 2)[0] == 255);
-    CHECK(pixel(screen, 0, 2)[0] == 0);
+    int lit = 0;
+    for (std::uint32_t y = 0; y < screen.height; ++y) {
+        for (std::uint32_t x = 0; x < screen.width; ++x) {
+            lit += pixel(screen, x, y)[0] > 0 ? 1 : 0;
+        }
+    }
+    CHECK(lit > 20);
     // Lost.
     fbe::gpu::inject(fbe::gpu::fault_t::LOST);
     fbe_frame_flip(false);
     REQUIRE(fbe_gpu_lost());
-    CHECK(!fbe_2d_text(0, &ink, filler_font, "I", 1, 0, 0));
+    CHECK(!fbe_2d_text(0, &ink, font, "ab", 0, 0));
     CHECK(std::string(fbe_error()).starts_with("the GPU was lost"));
-    fbe::text::set_lay_out(nullptr);
+    CHECK(fbe_text_free_font(font));
     stop_gpu();
     fbe_window_close();
 }
@@ -475,10 +500,133 @@ TEST_CASE("a page's texture made again is uploaded once an upload of it fails", 
     made = target(8, 8);
     clear(made);
     fbe::gpu::inject(fbe::gpu::fault_t::UPLOAD);
-    const fbe_2d_pen_t ink = pen(white);
-    CHECK(!fbe_2d_text(made, &ink, filler_font, "I", 1, 0, 0));
+    CHECK(!drawn(made, "I", 0, 0));
     CHECK(std::string(fbe_error()).starts_with("couldn't make a buffer to upload a texture"));
     draw(made, "I", 0, 0);
     check_glyph(read(made), 'I', 0, 0);
     stop();
+}
+
+// In a real font, fbe_2d_text draws the glyphs its layout places, each texel of the atlas a pixel
+// at whole pixels: into a data target over black in white, each pixel is its glyphs' coverage
+// composited over each other in order, as lay_out laid them out.
+TEST_CASE("text in a font is its glyphs' coverage, texel for pixel", "[gpu]") {
+    start();
+    const std::uint64_t font = opened("OpenSans-Regular.ttf", 20.0F);
+    const std::uint64_t made = target(256, 40);
+    clear(made);
+    const fbe_2d_pen_t ink = pen(white);
+    const char* text = "Hello, fbengine";
+    require(fbe_2d_text(made, &ink, font, text, 3, 5));
+    const fbe::golden::frame_t frame = read(made);
+    fbe::text::layout_t layout;
+    REQUIRE(fbe::text::lay_out(font, text, 1.0F, layout));
+    std::vector<double> expected(std::size_t{ 256 } * 40, 0.0);
+    const std::int64_t baseline = 5 + std::lround(layout.ascent);
+    for (const fbe::text::placed_glyph_t& glyph : layout.glyphs) {
+        const fbe::text::page_t& page = fbe::text::atlas().pages()[glyph.page];
+        REQUIRE(page.format == fbe::text::page_format_t::COVERAGE);
+        REQUIRE(glyph.width == glyph.source.width);
+        for (std::int32_t row = 0; row < glyph.source.height; ++row) {
+            for (std::int32_t column = 0; column < glyph.source.width; ++column) {
+                const std::int64_t x = 3 + glyph.x + column;
+                const std::int64_t y = baseline + glyph.y + row;
+                if (x < 0 || x >= 256 || y < 0 || y >= 40) {
+                    continue;
+                }
+                const double covered =
+                    page.pixels[(static_cast<std::size_t>(glyph.source.y + row) *
+                                 static_cast<std::size_t>(page.width)) +
+                                static_cast<std::size_t>(glyph.source.x + column)] /
+                    255.0;
+                double& under =
+                    expected[(static_cast<std::size_t>(y) * 256) + static_cast<std::size_t>(x)];
+                under = covered + (under * (1.0 - covered));
+            }
+        }
+    }
+    int lit = 0;
+    for (std::uint32_t y = 0; y < 40; ++y) {
+        for (std::uint32_t x = 0; x < 256; ++x) {
+            INFO(x << ", " << y);
+            const double want = expected[(std::size_t{ y } * 256) + x] * 255.0;
+            CHECK(std::abs(pixel(frame, x, y)[0] - want) <= 1.5);
+            lit += want > 0 ? 1 : 0;
+        }
+    }
+    CHECK(lit > 200);
+    CHECK(fbe_text_free_font(font));
+    stop();
+}
+
+// An underlined font's text has a line under each of its lines, at the font's place below the
+// baseline, as thick as it says, as long as the line's advance; the same text in the font not
+// underlined has nothing there.
+TEST_CASE("an underlined font's text has a line under each line", "[gpu]") {
+    start();
+    const std::uint64_t plain = opened("OpenSans-Regular.ttf", 20.0F);
+    const std::uint64_t lined = opened("OpenSans-Regular.ttf", 20.0F, FBE_TEXT_UNDERLINE);
+    fbe_text_metrics_t metrics{};
+    require(fbe_text_font_metrics(lined, &metrics));
+    fbe_text_size_t size{};
+    require(fbe_text_measure(lined, "ab", &size));
+    fbe::text::layout_t layout;
+    REQUIRE(fbe::text::lay_out(lined, "ab", 1.0F, layout));
+    const fbe_2d_pen_t ink = pen(white);
+    for (const std::uint64_t font : { plain, lined }) {
+        INFO((font == lined ? "underlined" : "plain"));
+        const std::uint64_t made = target(128, 80);
+        clear(made);
+        require(fbe_2d_text(made, &ink, font, "ab\nab", 4, 2));
+        const fbe::golden::frame_t frame = read(made);
+        for (int line = 0; line < 2; ++line) {
+            const std::int64_t baseline =
+                2 + std::lround(layout.ascent) +
+                std::llround(static_cast<float>(line) * metrics.line_height);
+            const auto y =
+                static_cast<std::uint32_t>(baseline + std::lround(metrics.underline_position));
+            const auto middle = static_cast<std::uint32_t>(4 + std::lround(size.width / 2.0F));
+            CHECK(pixel(frame, middle, y)[0] == (font == lined ? 255 : 0));
+            CHECK(pixel(frame, static_cast<std::uint32_t>(4 + std::lround(size.width) + 2), y)[0] ==
+                  0);
+        }
+    }
+    CHECK(fbe_text_free_font(plain));
+    CHECK(fbe_text_free_font(lined));
+    stop();
+}
+
+// E3's text: Open Sans at three sizes, one underlined, two lines, color glyphs of the tests' own,
+// blended over a gray, and text in a texture drawn into the screen.
+TEST_CASE("text matches its golden image", "[gpu][golden]") {
+    REQUIRE(fbe_window_set_headless(true));
+    fbe_gpu_set_pipeline_cache("");
+    require(fbe_window_open(160, 96, FBE_WINDOW_WINDOWED));
+    require(fbe_gpu_start());
+    fbe::text::atlas().clear();
+    const fbe_2d_pen_t gray = pen({ 40, 44, 52, 255 });
+    require(fbe_2d_clear(0, &gray));
+    const std::uint64_t small = opened("OpenSans-Regular.ttf", 12.0F);
+    const std::uint64_t medium = opened("OpenSans-Regular.ttf", 18.0F, FBE_TEXT_UNDERLINE);
+    const std::uint64_t large = opened("OpenSans-Regular.ttf", 30.0F);
+    const std::uint64_t color = own("FbeTestColor-Regular.ttf", 20.0F);
+    const fbe_2d_pen_t ink = pen(white);
+    require(fbe_2d_text(0, &ink, small, "The canvas's text,\ntwo lines at 12.", 4, 2));
+    const fbe_2d_pen_t yellow = pen({ 250, 220, 90, 255 });
+    require(fbe_2d_text(0, &yellow, medium, "Underlined", 4, 34));
+    const fbe_2d_pen_t faded = pen({ 120, 200, 255, 160 });
+    require(fbe_2d_text(0, &faded, large, "Big", 100, 26));
+    require(fbe_2d_text(0, &ink, color, "\xE2\x8C\x9A\xEE\xA4\x83", 110, 2));
+    fbe_frame_flip(false);
+    const fbe::golden::frame_t frame{
+        .width = static_cast<std::uint32_t>(fbe_window_pixel_width()),
+        .height = static_cast<std::uint32_t>(fbe_window_pixel_height()),
+        .rgba = fbe::gpu::read_window(),
+    };
+    fbe::golden::check("text", frame);
+    for (const std::uint64_t font : { small, medium, large, color }) {
+        CHECK(fbe_text_free_font(font));
+    }
+    fbe_window_close();
+    stop_gpu();
 }

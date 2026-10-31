@@ -4,6 +4,7 @@
 // whole pixels of the target, in the batch with whatever else is drawn into it.
 
 #include "2d/fbe_2d.h"
+#include "text/text.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -33,6 +34,17 @@ struct glyph_t {
 /// glyph whose pixels aren't on its page.
 bool draw_glyphs(std::uint64_t target, const fbe_2d_pen_t* pen, std::uint64_t page, bool coverage,
                  std::span<const glyph_t> glyphs);
+
+/// Draws `layout`, laid out by text/'s core, into `target` with `pen`, its top left at `x`, `y`
+/// (the pen's origin added): the pages' textures brought up to date, then a run of glyphs of one
+/// page at a time. False, with fbe_error's why, as draw_glyphs is, or without a GPU to draw it.
+bool draw_text(std::uint64_t target, const fbe_2d_pen_t* pen, const fbe::text::layout_t& layout,
+               std::int32_t x, std::int32_t y);
+
+/// Draws the rectangle `width` by `height` at `x`, `y` (the pen's origin added) into `target` as
+/// text is drawn, over what's there unless the pen adds, as an underline is.
+bool draw_over(std::uint64_t target, const fbe_2d_pen_t* pen, std::int64_t x, std::int64_t y,
+               std::int64_t width, std::int64_t height);
 
 /// Trims the text atlas, as a frame's first canvas draw does, if this frame's hasn't yet.
 void trim_atlas();
