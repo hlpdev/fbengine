@@ -37,7 +37,9 @@ struct rect_t {
 /// One page of the atlas, 1024 by 1024 pixels, or a glyph's own size for one bigger. Glyphs are
 /// only added to a page, never moved, each with a transparent pixel around it, so what changes is
 /// `dirty`, what's been written since the canvas last took it, which the canvas uploads and
-/// empties, and `version`, which goes up with each write.
+/// empties, and `version`, which goes up with each write. A page trim empties keeps its `dirty`
+/// empty, as does one made again: nothing samples its old texels, and each glyph written on it
+/// later is uploaded with its border.
 struct page_t {
     page_format_t format = page_format_t::COVERAGE;
     std::int32_t width = 0;
@@ -49,7 +51,7 @@ struct page_t {
 
     /// Whether trim's let go of it: it has no pixels, nothing's on it, and the canvas lets go of
     /// its texture, until a glyph's placed on it, when it's made again, its number kept, perhaps
-    /// another format and size, all of it `dirty`.
+    /// another format and size, its `dirty` that glyph.
     [[nodiscard]] bool dropped() const {
         return pixels.empty();
     }

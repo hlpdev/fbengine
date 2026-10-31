@@ -249,7 +249,9 @@ TEST_CASE("a glyph bigger than a page has one of its own, and trim clears past t
     REQUIRE(fbe::text::lay_out(font, "W", 1.0F, huge));
     fbe::text::atlas().trim();
     CHECK(fbe::text::atlas().generation() == generation);
-    // A frame that doesn't use it: dropped, its pixels let go of, its number kept.
+    // A frame that doesn't use it: dropped, its pixels let go of, its number kept, and what was
+    // written on it, which the canvas hadn't taken, not to upload, as nothing samples it.
+    CHECK_FALSE(fbe::text::atlas().pages()[0].dirty.empty());
     fbe::text::atlas().trim();
     CHECK(fbe::text::atlas().generation() == generation + 1);
     REQUIRE(fbe::text::atlas().pages().size() == 1);
@@ -260,15 +262,17 @@ TEST_CASE("a glyph bigger than a page has one of its own, and trim clears past t
     fbe::text::atlas().trim();
     CHECK(fbe::text::atlas().generation() == generation + 1);
     fbe::text::atlas().set_budget(std::size_t{ 16 } << 20U);
-    // Laid out again, it's rasterized again, on that page made again, all of it to upload.
+    // Laid out again, it's rasterized again, on that page made again, only the glyph to upload.
     const std::uint64_t version = fbe::text::atlas().pages()[0].version;
     REQUIRE(fbe::text::lay_out(font, "W", 1.0F, huge));
     CHECK(huge.generation == generation + 1);
     REQUIRE(fbe::text::atlas().pages().size() == 1);
     const fbe::text::page_t& again = fbe::text::atlas().pages()[0];
     CHECK_FALSE(again.dropped());
-    CHECK(again.dirty.width == again.width);
-    CHECK(again.dirty.height == again.height);
+    CHECK(again.dirty.x == huge.glyphs[0].source.x);
+    CHECK(again.dirty.y == huge.glyphs[0].source.y);
+    CHECK(again.dirty.width == huge.glyphs[0].source.width);
+    CHECK(again.dirty.height == huge.glyphs[0].source.height);
     CHECK(again.version > version);
     CHECK(drawn(huge.glyphs[0]));
     fbe_text_free_font(font);

@@ -390,6 +390,11 @@ target_include_directories(fbengine_collide_tests PRIVATE "${PROJECT_SOURCE_DIR}
 target_compile_definitions(fbengine_collide_tests PRIVATE FBE_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_collide_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
+# Its float arithmetic as written, never fused, as fbengine_native's is, so its corners and the
+# GPU's it's checked against round alike on every target.
+if(NOT MSVC)
+  target_compile_options(fbengine_collide_tests PRIVATE -ffp-contract=off)
+endif()
 fbengine_set_warnings(fbengine_collide_tests)
 catch_discover_tests(fbengine_collide_tests TEST_PREFIX "collide."
                      DL_PATHS "${fbengine_test_dll_paths}")
