@@ -65,8 +65,9 @@ FBE_AUDIO_API int32_t fbe_audio_device(void);
 // The device's name, "" when it's stopped or has none.
 FBE_AUDIO_API const char* fbe_audio_device_name(void);
 // Whether the device stopped on its own, though the mix is started, as one does when its output's
-// unplugged: nothing's mixed until it starts again, as miniaudio starts it on Windows when the
-// output's plugged back in. False when it's stopped or there's no device.
+// unplugged: nothing's mixed, and channels played meanwhile wait to start, until it starts again,
+// as miniaudio starts it on Windows when the output's plugged back in. False when it's stopped or
+// there's no device.
 FBE_AUDIO_API bool fbe_audio_lost(void);
 // Does one of the FBE_AUDIO_SIMULATE_ events to the device; false when the mix is stopped or has
 // no device, or for another event.
