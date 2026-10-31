@@ -149,8 +149,9 @@ Public Final Class Emitter
     @MainThread Public Method Falloff(): Falloff => fbe_emitter_falloff(Live()) As Falloff
 
     /// Sets how much its and the Listener's velocities pitch its Channels, 0 or more: 1, as it
-    /// starts, as in the world, and 0 not at all. The Doppler effect's pitch is held to 1/16 to 16,
-    /// as at or past the speed of sound toward the Listener it would be infinite.
+    /// starts, as in the world, and 0 not at all. A Channel plays at its own pitch times the Doppler
+    /// effect's, held to 1/16 to 16; at or past the speed of sound toward the Listener, where the
+    /// Doppler effect's would be infinite, that's as high as it goes.
     @MainThread Public Method SetDoppler(factor: Float32)
         If !fbe_emitter_set_doppler(Live(), factor) Then Panic(LastError())
     End Method

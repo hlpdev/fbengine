@@ -73,9 +73,14 @@ float dot(const std::array<float, 3>& a, const std::array<float, 3>& b) {
     return (a[0] * b[0]) + (a[1] * b[1]) + (a[2] * b[2]);
 }
 
+/// How far the Doppler effect alone pitches a channel, past which its pitch times the channel's own
+/// is held to 1/16 to 16 anyway.
+constexpr float lowest_doppler = 1.0F / 256.0F;
+constexpr float highest_doppler = 256.0F;
+
 /// How `emitter`'s and the listener's velocities pitch its channels, as OpenAL works the Doppler
-/// effect out, held to 1/16 to 16: at or past the speed of sound toward the listener, the pitch
-/// would be infinite, or negative.
+/// effect out, held to 1/256 to 256: at or past the speed of sound toward the listener, the pitch
+/// would be infinite, or negative, so it's the highest, or 1 when the listener goes away as fast.
 float doppler_pitch(const emitter_t& emitter) {
     const std::array<float, 3> listener = fbe::audio::listener_position();
     const std::array<float, 3> toward = {
@@ -93,11 +98,15 @@ float doppler_pitch(const emitter_t& emitter) {
     const float hearing =
         std::min(dot(toward, fbe::audio::listener_velocity()) / distance, fastest);
     const float coming = std::min(dot(toward, emitter.velocity) / distance, fastest);
-    const float pitch = (speed - (factor * hearing)) / (speed - (factor * coming));
+    const float below = speed - (factor * coming);
+    if (coming >= fastest || !(below > 0.0F)) {
+        return hearing >= fastest ? 1.0F : highest_doppler;
+    }
+    const float pitch = (speed - (factor * hearing)) / below;
     if (std::isnan(pitch)) {
         return 1.0F;
     }
-    return std::clamp(pitch, fbe::audio::lowest_pitch, fbe::audio::highest_pitch);
+    return std::clamp(pitch, lowest_doppler, highest_doppler);
 }
 
 /// Gives each of `emitter`'s channels its Doppler pitch, letting go of those that have finished.

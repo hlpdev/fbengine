@@ -215,6 +215,46 @@ Function TheDopplerEffectIsHeldAtAndPastTheSpeedOfSound() Throws AudioError, Sou
     Expect(slow >= 3500 && slow <= 3800)
 End Function
 
+// With a Doppler factor, at and past the speed of sound over it toward the Listener, a Channel is
+// as high as it goes too: a multiply-subtract fused there, on arm64 or by GCC, went below 0 and
+// gave 1/16 at a factor of 1.2 or 0.3. The Listener going away as fast hears it as recorded.
+@Test
+Function ADopplerFactorAtTheSpeedOfSoundIsAsHighAsItGoes() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    For factor In [1.2, 0.3] As Float32[]
+        Local fastest = (343.3 As Float32) / factor
+        For speed In [fastest, fastest * 1.5, 1000000.0] As Float32[]
+            Local coming = At(Vec3(0, 0, -10))
+            coming.SetDoppler(factor)
+            coming.SetVelocity(Vec3(0, 0, speed))
+            Local frames = Length(coming.Play(sound))
+            Expect(frames >= 300 && frames <= 500)
+            Listener.SetVelocity(Vec3(0, 0, speed))
+            Expect(Length(coming.Play(sound)) == 4900)
+            Listener.SetVelocity(Vec3(0, 0, 0))
+        End For
+    End For
+End Function
+
+// Only a Channel's pitch times the Doppler effect's is held to 1/16 to 16: at 1/16, coming at the
+// speed of sound, it's heard at 16, as the two make, not at 1, as the Doppler effect held to 16
+// alone made it.
+@Test
+Function OnlyThePitchTimesTheDopplerEffectIsHeld() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    Local coming = At(Vec3(0, 0, -10))
+    coming.SetVelocity(Vec3(0, 0, 343.3))
+    Local channel = coming.Play(sound)
+    channel.SetPitch(0.0625)
+    Local frames = Length(channel)
+    Expect(frames >= 300 && frames <= 500)
+End Function
+
 // Rolled over, the Listener's up is down, so what's on its right is heard on its left: which way is
 // up reaches the mix through the mixing thread, by the next mix.
 @Test
