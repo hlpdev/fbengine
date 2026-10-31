@@ -1,0 +1,9 @@
+Import std.core
+Import std.test
+Import fbengine_audio
+
+// The DLL is the package's own build: its version is project.toml's.
+@Test
+Function TheDllIsThePackagesVersion()
+    Expect(Audio.Version() == "0.1.1")
+End Function

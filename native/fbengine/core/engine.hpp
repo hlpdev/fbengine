@@ -4,12 +4,16 @@
 // time something needs it.
 
 #include <SDL3/SDL_events.h>
+#include <SDL3/SDL_video.h>
 #include <string_view>
 
 namespace fbe {
 
 /// What an event read by fbe_frame_flip says of the window.
 void window_event(const SDL_Event& event);
+
+/// The window fbe_window_open opened, or null.
+SDL_Window* window();
 
 /// Keeps `message` for fbe_error(), and returns false, for a call that failed.
 bool fail(std::string_view message);

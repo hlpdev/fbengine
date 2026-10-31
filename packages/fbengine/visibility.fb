@@ -1,0 +1,136 @@
+// Visibility: what a camera might see, entities' boxes in the world, and line of sight past what
+// blocks it.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./camera"
+Import "./entity"
+Import "./transform"
+Import "./window"
+
+/// Whether a camera might see things: only its view counts, the six planes of its frustum, near
+/// and far included; nothing in front hides what's behind, and hiding an entity doesn't take it
+/// out of view. Something just past a corner of the view can count, as culling allows.
+Extend Camera
+    /// Whether the camera might see `entity`: a Mesh by its geometry's box, turned and scaled with
+    /// it, in view unless the whole box is behind one of the view's planes; any other entity by
+    /// its position. An entity in another World than the camera's isn't in view.
+    @MainThread @PanicsAtCaller
+    Public Method InView(entity: Entity): Bool
+        Local camera = Live("InView")
+        Local target = Target("InView")
+        Return Seen(fbe_camera_entity_in_view(camera, target.x, target.y, entity.Live("InView")),
+                    Self, "InView")
+    End Method
+
+    /// Whether a point in the world is in the camera's view.
+    @MainThread @PanicsAtCaller
+    Public Method InView(point: Vec3): Bool
+        Local camera = Live("InView")
+        Local target = Target("InView")
+        Return Seen(fbe_camera_point_in_view(camera, target.x, target.y, point.x, point.y, point.z),
+                    Self, "InView")
+    End Method
+
+    /// Whether the camera might see some of a box in the world: not unless the whole box is behind
+    /// one of the view's planes.
+    @MainThread @PanicsAtCaller
+    Public Method InView(box: AABB): Bool
+        Local camera = Live("InView")
+        Local target = Target("InView")
+        Local within = fbe_aabb_t(fbe_vec3_t(box.Min.x, box.Min.y, box.Min.z),
+                                  fbe_vec3_t(box.Max.x, box.Max.y, box.Max.z))
+        Local seen = 0
+        Unsafe
+            seen = fbe_camera_box_in_view(camera, target.x, target.y, AddressOf(within))
+        End Unsafe
+        Return Seen(seen, Self, "InView")
+    End Method
+End Extend
+
+/// Entities' boxes, and what they can see.
+Extend Entity
+    /// The box in the world around the entity: a Mesh's geometry's, turned and scaled with it, or
+    /// any other entity's position, as a box of no size.
+    @MainThread @PanicsAtCaller
+    Public Method Bounds(): AABB
+        Local entity = Live("Bounds")
+        Local found = fbe_aabb_t(fbe_vec3_t(0, 0, 0), fbe_vec3_t(0, 0, 0))
+        Local done = False
+        Unsafe
+            done = fbe_entity_bounds(entity, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("Bounds")
+        Return AABB(VecOf(found.min), VecOf(found.max))
+    End Method
+
+    /// Makes the entity block line of sight, or not, as it doesn't at first: a Mesh by its
+    /// triangles, from either side, while it's showing, as walls and doors do.
+    @MainThread @PanicsAtCaller
+    Public Method SetBlocksSight(blocks: Bool)
+        If !fbe_entity_set_blocks_sight(Live("SetBlocksSight"), blocks)
+            Failed("SetBlocksSight")
+        End If
+    End Method
+
+    /// Whether the entity blocks line of sight.
+    @MainThread @PanicsAtCaller
+    Public Method BlocksSight(): Bool => fbe_entity_blocks_sight(Live("BlocksSight"))
+
+    /// Whether nothing that blocks sight in its World is between the entity and `target`, position
+    /// to position; neither of the two blocks it, and a target in another World can't be seen.
+    @MainThread @PanicsAtCaller
+    Public Method CanSee(target: Entity): Bool
+        Return Seen(fbe_entity_can_see(Live("CanSee"), target.Live("CanSee")), Self, "CanSee")
+    End Method
+
+    /// Whether nothing that blocks sight in its World is between the entity and a point in the
+    /// world; the entity itself doesn't block it.
+    @MainThread @PanicsAtCaller
+    Public Method CanSee(point: Vec3): Bool
+        Return Seen(fbe_entity_can_see_point(Live("CanSee"), point.x, point.y, point.z), Self,
+                    "CanSee")
+    End Method
+End Extend
+
+/// What a C call on `on` that sees or doesn't says: 1 for True, 0 for False, and a panic naming
+/// the call for -1.
+@PanicsAtCaller
+Function Seen(answer: Int32, on: Entity, call: String): Bool
+    If answer < 0 Then on.Failed(call)
+    Return answer == 1
+End Function
+
+/// How far from a camera meshes and sprites fade out, as distant props do.
+Extend Entity
+    /// Sets how far from a camera the entity fades: whole nearer than `start`, gone past `end`,
+    /// and fading between, from the camera's place to its own; 0 and 0, at first, for never.
+    /// Anything but 0 <= start < end, finite, or both 0, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetAutoFade(start: Float, end: Float)
+        If !fbe_entity_set_auto_fade(Live("SetAutoFade"), start, end) Then Failed("SetAutoFade")
+    End Method
+
+    /// Where the entity starts fading from a camera, and where it's gone, as x and y.
+    @MainThread @PanicsAtCaller
+    Public Method AutoFade(): Vec2
+        Local entity = Live("AutoFade")
+        Local found = fbe_vec2_t(0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_entity_auto_fade(entity, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("AutoFade")
+        Return Vec2(found.x, found.y)
+    End Method
+
+    /// The alpha the entity's fade gives it seen from `camera`, 0 to 1.
+    @MainThread @PanicsAtCaller
+    Public Method Fade(camera: Camera): Float
+        Local faded = fbe_entity_fade(Live("Fade"), camera.Live("Fade"))
+        If faded < 0 Then Failed("Fade")
+        Return faded
+    End Method
+End Extend

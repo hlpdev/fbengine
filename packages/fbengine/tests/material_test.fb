@@ -1,0 +1,159 @@
+// Materials as data, the surfaces and Meshes that draw in them, and Meshes' own tints, with no GPU.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+@Test
+Function ANewMaterialIsWhiteAndOpaque()
+    Local material = Material()
+    Expect(material.Color() == Color.White && material.Alpha() == 1.0)
+    Expect(material.Shininess() == 0.0)
+    Expect(material.Shading() == Shading.PBR)
+    Expect(material.Blend() == Blend.AUTO)
+    Expect(material.AlphaCutoff() == 0.0)
+    Expect(!material.VertexColors() && !material.TwoSided() && material.Fogged())
+    Expect(material.Order() == 0)
+    For layer = 0 To 7
+        Expect(material.LayerBlend(layer) == LayerBlend.MULTIPLY && material.LayerUvSet(layer) == 0)
+    End For
+    Expect(Material(Color(1, 0, 0, 0.5)).Color() == Color(1, 0, 0, 0.5))
+End Function
+
+@Test
+Function AMaterialsSettingsComeBackAsTheyWent()
+    Local material = Material()
+    material.SetColor(Color(0.2, 0.4, 0.6))
+    material.SetAlpha(0.25)
+    material.SetShininess(0.5)
+    material.SetShading(Shading.VERTEX)
+    material.SetBlend(Blend.ADD)
+    material.SetAlphaCutoff(0.5)
+    material.SetVertexColors(True)
+    material.SetTwoSided(True)
+    material.SetFogged(False)
+    material.SetOrder(-1000)
+    material.SetLayer(1, LayerBlend.MULTIPLY_2, 1)
+    material.SetLayer(2, LayerBlend.ADD)
+    Expect(material.Color() == Color(0.2, 0.4, 0.6, 0.25))
+    Expect(material.Shininess() == 0.5 && material.Shading() == Shading.VERTEX)
+    Expect(material.Blend() == Blend.ADD && material.AlphaCutoff() == 0.5)
+    Expect(material.VertexColors() && material.TwoSided() && !material.Fogged())
+    Expect(material.Order() == -1000)
+    Expect(material.LayerBlend(1) == LayerBlend.MULTIPLY_2 && material.LayerUvSet(1) == 1)
+    Expect(material.LayerBlend(2) == LayerBlend.ADD && material.LayerUvSet(2) == 0)
+    Local copy = material.Clone()
+    copy.SetOrder(0)
+    Expect(copy.LayerUvSet(1) == 1 && copy.Blend() == Blend.ADD)
+    Expect(material.Order() == -1000)
+End Function
+
+@Test
+Function SurfacesShareTheirMaterial()
+    Local geometry = Geometry.Cube()
+    Local surface = geometry.Surface(0)
+    Expect(surface.Material() == Null)
+    Local metal = Material(Color(0.5, 0.5, 0.5))
+    surface.SetMaterial(metal)
+    Expect(surface.Material() == metal)
+    // A clone, or what Add copies, draws in the same material.
+    Local copy = geometry.Clone()
+    Expect(copy.Surface(0).Material() == metal)
+    geometry.Add(Geometry.Plane())
+    Expect(geometry.Surface(1).Material() == Null)
+    geometry.Surface(1).SetMaterial(metal)
+    metal.SetColor(Color.Red)
+    Expect(copy.Surface(0).Material()?.Color() == Color.Red)
+    surface.SetMaterial(Null)
+    Expect(surface.Material() == Null)
+End Function
+
+@Test
+Function AMaterialLivesWhileSomethingDrawsInIt()
+    Local geometry = Geometry.Cube()
+    geometry.Surface(0).SetMaterial(Material(Color(0, 1, 0)))
+    // Nothing but the surface holds the material.
+    Local material = geometry.Surface(0).Material()
+    If material == Null
+        Fail("the surface has no material")
+        Return
+    End If
+    Expect(material.Color() == Color(0, 1, 0))
+    material.Free()
+    Expect(material.Freed())
+    Expect(geometry.Surface(0).Material()?.Color() == Color(0, 1, 0))
+End Function
+
+@Test
+Function AMeshCanDrawEverySurfaceInOneMaterial()
+    Local world = Fresh()
+    Defer world.Free()
+    Local mesh = Mesh(Geometry.Cube())
+    Expect(mesh.Material() == Null)
+    Local glass = Material(Color(1, 1, 1, 0.3))
+    mesh.SetMaterial(glass)
+    Expect(mesh.Material() == glass)
+    Local copy = mesh.Copy() As Mesh
+    Expect(copy.Material() == glass)
+    copy.SetMaterial(Null)
+    Expect(copy.Material() == Null && mesh.Material() == glass)
+End Function
+
+@Test
+Function EachMeshHasItsOwnTint()
+    Local world = Fresh()
+    Defer world.Free()
+    Local mesh = Mesh(Geometry.Cube())
+    Expect(mesh.Color() == Color.White && mesh.Alpha() == 1.0)
+    mesh.SetColor(Color(1, 0, 0))
+    mesh.SetAlpha(0.25)
+    Expect(mesh.Color() == Color(1, 0, 0, 0.25))
+    // A copy starts with its original's tint, then has its own.
+    Local copy = mesh.Copy() As Mesh
+    Expect(copy.Color() == Color(1, 0, 0, 0.25))
+    copy.SetAlpha(0)
+    Expect(copy.Alpha() == 0.0 && mesh.Alpha() == 0.25)
+    Expect(copy.Geometry() == mesh.Geometry())
+End Function
+
+@Test
+Function WhatAddCopiesDrawsInTheSameMaterial()
+    Local into = Geometry()
+    If True
+        Local from = Geometry.Cube()
+        from.Surface(0).SetMaterial(Material(Color(0, 0, 1)))
+        into.Add(from)
+    End If
+    Expect(into.Surface(0).Material()?.Color() == Color(0, 0, 1))
+End Function
+
+@Test
+Function AMeshsSurfacesBlendAsTheirAlphaSays()
+    Local world = Fresh()
+    Defer world.Free()
+    Local cube = Geometry.Cube()
+    Local mesh = Mesh(cube)
+    Expect(mesh.DrawnBlend(0) == Blend.OPAQUE)
+    mesh.SetAlpha(0.5)
+    Expect(mesh.DrawnBlend(0) == Blend.ALPHA)
+    Local imported = Material(Color(1, 1, 1, 0.25))
+    imported.SetBlend(Blend.OPAQUE)
+    cube.Surface(0).SetMaterial(imported)
+    // An opaque material's own alpha is left out, but the mesh's still fades it.
+    Expect(mesh.DrawnBlend(0) == Blend.ALPHA)
+    mesh.SetAlpha(1)
+    Expect(mesh.DrawnBlend(0) == Blend.OPAQUE)
+    imported.SetBlend(Blend.AUTO)
+    Expect(mesh.DrawnBlend(0) == Blend.ALPHA)
+    // SetColor sets alpha too.
+    imported.SetAlpha(0.25)
+    imported.SetColor(Color.White)
+    Expect(imported.Alpha() == 1.0)
+End Function

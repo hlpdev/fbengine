@@ -18,15 +18,15 @@ original 1.3.11, and ue5-additions.md what v5 adds; the steps below cover both.
 | | Goal | Needs | Done when |
 |---|---|---|---|
 | **E0** | Setup | | done (2026-10-31) |
-| **E1** | App and input | E0 | a test under the offscreen driver reads every kind of input, and coroutines resume once per frame |
+| **E1** | App and input | E0 | done (2026-10-31) |
 | **E2** | The GPU core | E1 step 1 | golden images of a triangle, a textured quad, and a readback match on lavapipe |
 | **E3** | 2D | E2 | a small arcade game runs, and its frames match their golden images |
-| **E4** | The scene | E1 step 2 | transforms, hierarchy, visibility, collisions, and picks pass their tests, with no GPU |
+| **E4** | The scene | E1 step 2 | done (2026-10-31) |
 | **E5** | Drawing the scene | E2, E4 | a lightmapped, fogged, lit room with cameras rendering to textures matches its golden images |
 | **E6** | The modern renderer | E5 | Khronos's glTF sample models match their references, with shadows and post effects |
 | **E7** | Animation | E4 (E5 to draw it) | skinned and morphing sample models match their reference frames |
 | **E8** | Assets | E2, E4; a FutureBlitz build step for its last steps | a game runs from cooked paks, and reloads changed files in development |
-| **E9** | Audio (fbengine_audio) | E1 step 2 | on miniaudio's null backend, tests mix to known buffers, and sounds follow entities |
+| **E9** | Audio (fbengine_audio) | E1 step 2 | done but for step 4's entities (2026-10-31); sounds follow entities |
 | **E10** | Physics (fbengine_physics) | E1 step 2 | Jolt's sample scenes stay stable, deterministic runs repeat, and bodies drive entities |
 | **E11** | UI (fbengine_ui) | E3 | a sample game's menus, HUD, and console work by mouse, keyboard, and gamepad |
 | **E12** | Video (fbengine_video) | E3, E9 | a video plays into a texture with its sound in sync |
@@ -57,6 +57,8 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 7. `ShowMessage(title, text)`, the OS's message box, for errors players should see; `OpenURL`,
    which opens a link or a file as the OS does; loose ends; E1's review.
 
+Steps 3 to 7 done (2026-10-31, landed at 3698cf3).
+
 ### E2: The GPU core
 
 1. Vulkan through volk and VMA: instance, device (preferring a discrete GPU, lavapipe in tests),
@@ -82,10 +84,12 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 2. Textures as images: load, draw with handle (pivot), rotation, scale, color and alpha, frames
    of a sheet, tiles, regions; drawing into a texture.
 3. Text: TrueType fonts from files and the system's, by name, size, and style; glyph atlases;
-   measuring; text drawn crisp at any DPI.
+   measuring; text drawn crisp at any DPI. Its core, on the CPU (FreeType and HarfBuzz, fonts,
+   fallback, shaping, measuring, and the atlas's pages and glyph places), is the input lane's,
+   in `native/fbengine/text/`, so E11 doesn't wait; the gpu lane uploads the pages and draws.
 4. Pixels: locking a texture or the window for CPU reads and writes, through one copy per frame;
    copying regions between the window, textures, and images; std.image's Image in and out.
-5. Collisions in 2D: rectangles, and pixel-exact masks of images.
+5. Collisions in 2D: rectangles, and pixel-exact masks of images (the input lane's, on the CPU).
 6. Loose ends and E3's review: the arcade game example and its golden images.
 
 ### E4: The scene
@@ -114,7 +118,13 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
    position, normal, entity, and triangle.
 10. Sprites and billboards as entities; `UpdateWorld(seconds)` and `FixedStep(rate)` with
     tweening.
-11. Loose ends and E4's review.
+11. Loose ends and E4's review: ground planes, mirrors, fading by distance, meshes crossing.
+12. Terrain: a heightmap entity made in code or from an image (E8's loading), its height and
+    normal at a point, collisions and picks against its grid, changed in place; its LOD drawing
+    is E5's.
+
+Steps 1 to 12 done (2026-10-31, landed at a74f435), with E5 step 1's CPU half: what cameras
+draw, and the projection they draw with.
 
 ### E5: Drawing the scene
 
@@ -174,10 +184,13 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 5. Buses and effects: groups with volume, low-pass, reverb.
 6. Loose ends and E9's review.
 
+Steps 1 to 6 done (2026-10-31, landed at 5d7e461), but for step 4's entity overloads, which wait
+for E4.
+
 ### E10: Physics (fbengine_physics)
 
-1. Jolt in fbengine_physics_native; worlds, stepping, its job system.
-2. Bodies and shapes: static, dynamic, kinematic; boxes, spheres, capsules, convex hulls, meshes
+1. Jolt in fbengine_physics_native; worlds, stepping, its job system (done, 2026-10-31).
+2. (Done, 2026-10-31.) Bodies and shapes: static, dynamic, kinematic; boxes, spheres, capsules, convex hulls, meshes
    (from fbengine's geometry).
 3. Bodies driving entities and entities driving kinematic bodies, synced in a batch a frame.
 4. Joints, the character controller, triggers, ray and shape casts, layers.
@@ -193,7 +206,8 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 
 ### E12: Video (fbengine_video)
 
-1. A decoder (docs/questions.md) in fbengine_video_native, decoding on a worker thread.
+1. MPEG-1 through pl_mpeg in fbengine_video_native, behind a decoder interface another format
+   can join, decoding on a worker thread.
 2. Playing into a texture, with its sound through fbengine_audio, in sync, or beside a sound
    stream of its own when the video has none; letterboxing; pause, seek, loop; knowing when it
    ends.
@@ -201,9 +215,10 @@ Each step lands with tests, as FutureBlitz's do, and with its API in fb doc comm
 
 ### E13: The editor
 
-Designed when E5, E7, E8, and E11 land; its scope is a question for the user. It's a FutureBlitz
-program on the packages: a scene view, the tree, an inspector, an asset browser, play in the
-editor.
+A scene and asset editor, a FutureBlitz program on the packages and fbengine_ui: a scene view,
+the tree, an inspector, an asset browser, play in the editor. Code stays in VS Code and fb-lsp.
+Its steps are planned when E5, E7, E8, and E11 land; the inspector needs FutureBlitz's
+reflection to set Properties first.
 
 ### E14: The proof
 
@@ -233,12 +248,12 @@ that waits on another lane's step builds what it can without it, and the rest on
 
 | Lane | Builds, in order | Waits on | Owns |
 |---|---|---|---|
-| input | E1 steps 3 to 7, then E11 | E11: gpu's E3 step 3 (text) | `native/fbengine/input/`, the input modules, Simulate's input |
+| input | E1 steps 3 to 7, then E11, with E3 step 3's text core and E3 step 5 | E11's drawing: gpu's E3 steps 1 to 3 | `native/fbengine/input/`, `text/`, the input and text modules, Simulate's input |
 | gpu | E2, then E3, then E6 | E6: scene's E5 | `native/fbengine/gpu/`, `2d/`, `shaders/`; the window's Vulkan surface in `window/`; Flip's present in `frame/` |
-| scene | E4, then E5, then E7 | E5: gpu's E2; E4 step 8: assets' job system | `native/fbengine/scene/` (then `render/`, `anim/`), the scene modules |
+| scene | E4, then E5 | E5: gpu's E2; E4 step 8: assets' job system | `native/fbengine/scene/` (then `render/`), the scene modules |
 | assets | E8 step 0, the job system; E8 steps 1 to 3; then 4 and 5 | step 2's textures: gpu's E2 step 3; meshes: scene's E4 step 5; steps 4 and 5: FutureBlitz 1.1's build step | `native/fbengine/jobs/`, `assets/`, the asset modules; fbengine_tools |
-| audio | E9, then E12 | E9 step 4: scene's E4 step 2; E12: gpu's E3 step 2 | `native/fbengine_audio/`, `packages/fbengine_audio/`, then fbengine_video's |
-| physics | E10, then E13 | E10 step 2's meshes: scene's E4 step 5; step 3: scene's E4 step 2; E13: E5, E7, E8, E11 | `native/fbengine_physics/`, `packages/fbengine_physics/`, then the editor |
+| audio | E9, then E7 | E9 step 4: scene's E4 step 2; E7: scene's E4 (E5 to draw it) | `native/fbengine_audio/`, `packages/fbengine_audio/`, then `native/fbengine/anim/` and the animation modules |
+| physics | E10, then E12, then E13 | E10 step 2's meshes: scene's E4 step 5; step 3: scene's E4 step 2; E12 step 2: gpu's E3 step 2; E13: E5, E7, E8, E11 | `native/fbengine_physics/`, `packages/fbengine_physics/`, then fbengine_video's, then the editor |
 
 E8 step 0, the job system, comes first in the assets lane, since scene's collisions and assets'
 loading both run on it: a worker per core less one, jobs and their dependencies, and finished work

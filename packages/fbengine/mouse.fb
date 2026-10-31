@@ -1,0 +1,107 @@
+// The mouse, as the last Flip read it: where it is and what's held as of then, and its motion,
+// wheel, presses, and releases counted for that Flip, so every call in a frame agrees.
+
+Import std.core
+Import "./c/fbe_input"
+Import "./input"
+Import "./window"
+
+/// A mouse's button, by its number, from 1 to 32; the Enum's open to the ones past the side
+/// buttons that gaming mice have.
+@Open Public Enum MouseButton: Int32
+    LEFT = 1
+    /// The wheel, pressed.
+    MIDDLE = 2
+    RIGHT = 3
+    /// The side button nearer the player, button 4, which goes back in a browser.
+    BACK = 4
+    /// The side button further from the player, button 5, which goes forward in a browser.
+    FORWARD = 5
+End Enum
+
+/// The mouse's x in the window's units, from its left, as the last Flip read it or MoveMouse put
+/// it: outside the window while a button's held, and 0 until the mouse first moves in a window,
+/// the one Graphics opened last.
+@MainThread Public Function MouseX(): Float32 => fbe_input_mouse_x()
+
+/// The mouse's y in the window's units, from its top, down positive.
+@MainThread Public Function MouseY(): Float32 => fbe_input_mouse_y()
+
+/// How far the mouse moved right by the motion the last Flip read: in the window's units, or in
+/// relative mode the mouse's own raw counts. MoveMouse's moves aren't motion.
+@MainThread Public Function MouseXSpeed(): Float32 => fbe_input_mouse_x_speed()
+
+/// How far the mouse moved down by the motion the last Flip read.
+@MainThread Public Function MouseYSpeed(): Float32 => fbe_input_mouse_y_speed()
+
+/// How many notches the last Flip read the wheel turn, up (away from the player) positive,
+/// whatever the OS's natural scrolling; a smooth wheel or a touchpad gives fractions.
+@MainThread Public Function MouseWheel(): Float32 => fbe_input_mouse_wheel()
+
+/// How far the last Flip read the wheel tilt, or a touchpad scroll, right positive.
+@MainThread Public Function MouseWheelX(): Float32 => fbe_input_mouse_wheel_x()
+
+/// How many whole notches the last Flip read the wheel turn up, a smooth wheel's fractions
+/// adding up over frames, as a list that scrolls by its items wants.
+@MainThread Public Function MouseWheelSteps(): Int32 => fbe_input_mouse_wheel_steps()
+
+/// Whether `button` was held when the last Flip read the OS's events.
+@MainThread Public Function MouseDown(button: MouseButton): Bool
+    Return fbe_input_mouse_down(button As Int32)
+End Function
+
+/// Whether the last Flip read `button` pressed.
+@MainThread Public Function MouseHit(button: MouseButton): Bool
+    Return fbe_input_mouse_hits(button As Int32) > 0
+End Function
+
+/// How many times the last Flip read `button` pressed, which a slow frame can make more than one.
+@MainThread Public Function MouseHits(button: MouseButton): Int32
+    Return fbe_input_mouse_hits(button As Int32)
+End Function
+
+/// Whether the last Flip read `button` released.
+@MainThread Public Function MouseUp(button: MouseButton): Bool
+    Return fbe_input_mouse_ups(button As Int32) > 0
+End Function
+
+/// Whether one of the presses the last Flip read of `button` was a double click, by the OS's
+/// time and distance for one.
+@MainThread Public Function MouseDoubleClick(button: MouseButton): Bool
+    Return fbe_input_mouse_clicks(button As Int32) >= 2
+End Function
+
+/// Forgets what the last Flip read of the mouse, its presses, releases, motion, and wheel, until
+/// the next Flip, as a game coming back from its menu wants, so the camera doesn't jump; buttons
+/// held stay held, and the mouse stays where it is. An ActionSet's Actions are its own Flush's.
+@MainThread Public Function FlushMouse()
+    fbe_input_flush_mouse()
+End Function
+
+/// Puts the mouse at `x`, `y` in the window's units, which MouseX and MouseY say at once, and
+/// which isn't motion for MouseXSpeed. Panics without a window.
+@MainThread Public Function MoveMouse(x: Float32, y: Float32)
+    If !fbe_input_move_mouse(x, y) Then Panic(LastError())
+End Function
+
+/// Shows the mouse's cursor over the window, or hides it.
+@MainThread Public Function SetCursorVisible(visible: Bool)
+    fbe_input_set_cursor_visible(visible)
+End Function
+
+/// Whether the mouse's cursor shows over the window, as SetCursorVisible said; relative mode hides
+/// it too, which this doesn't say.
+@MainThread Public Function CursorVisible(): Bool => fbe_input_cursor_visible()
+
+/// Puts the mouse in relative mode, for mouse look, or takes it out: the cursor hidden and held
+/// in the window, and MouseXSpeed and MouseYSpeed the mouse's own raw counts, which the OS's speed
+/// and acceleration leave alone, so it never stops at the window's edge; on macOS, the OS gives
+/// its accelerated motion. Headless, where there's no mouse to hold, it's only what was set. Throws
+/// when the OS can't (X11 without XInput2), and panics without a window.
+@MainThread Public Function SetMouseRelative(relative: Bool) Throws InputError
+    If !Window.Open() Then Panic("SetMouseRelative: there's no window; Graphics opens one")
+    If !fbe_input_set_mouse_relative(relative) Then Throw InputError(LastError())
+End Function
+
+/// Whether the mouse is in relative mode.
+@MainThread Public Function MouseRelative(): Bool => fbe_input_mouse_relative()

@@ -1878,9 +1878,9 @@ TEST_CASE("a sprite isn't biased by the GPU's LOD bias", "[gpu]") {
     stop_gpu();
 }
 
-// E3's sprites: the card at its size, scaled, turned smoothly about its middle, mirrored, tinted
+// E3's 2D sprites: the card at its size, scaled, turned smoothly about its middle, mirrored, tinted
 // and faded, frames of a sheet, and tiles of all of it and of a part, into the screen.
-TEST_CASE("sprites match their golden image", "[gpu][golden]") {
+TEST_CASE("2D sprites match their golden image", "[gpu][golden]") {
     REQUIRE(fbe_window_set_headless(true));
     fbe_gpu_set_pipeline_cache("");
     require(fbe_window_open(96, 64, FBE_WINDOW_WINDOWED));
@@ -1940,7 +1940,7 @@ TEST_CASE("sprites match their golden image", "[gpu][golden]") {
         .height = static_cast<std::uint32_t>(fbe_window_pixel_height()),
         .rgba = fbe::gpu::read_window(),
     };
-    fbe::golden::check("sprites", frame);
+    fbe::golden::check("sprites2d", frame);
     fbe_window_close();
     stop_gpu();
 }

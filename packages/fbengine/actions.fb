@@ -1,0 +1,928 @@
+// Input actions: what a game's controls mean, like "jump" and "move", each bound to keys,
+// buttons, and axes, which a player can rebind, and which save and load as TOML. An ActionSet
+// reads its Actions once a Flip, after the OS's events, so every call in a frame agrees.
+
+Import std.collections
+Import std.core
+Import std.data.toml
+Import std.math
+Import "./c/fbe_input"
+Import "./frame"
+Import "./gamepad"
+Import "./input"
+Import "./keyboard"
+Import "./mouse"
+
+/// What a Binding reads.
+Public Enum BindingKind
+    /// A key, by its Key.
+    KEY
+    /// A mouse's button, by its MouseButton.
+    MOUSE_BUTTON
+    /// The mouse's motion or its wheel, by its MouseAxis.
+    MOUSE_AXIS
+    /// A gamepad's button, by its GamepadButton.
+    GAMEPAD_BUTTON
+    /// A gamepad's axis past its dead zones, by its GamepadAxis.
+    GAMEPAD_AXIS
+End Enum
+
+/// The mouse's axes: its motion, as MouseXSpeed and MouseYSpeed give it, and its wheel, as
+/// MouseWheel and MouseWheelX do.
+Public Enum MouseAxis
+    X
+    Y
+    WHEEL
+    WHEEL_X
+End Enum
+
+/// One input an Action reads, times its Scale: a key or a button gives its Scale while it's held,
+/// an axis its value times its Scale. So `Binding.OfKey(Key.A, -1.0)` steers left, and
+/// `Binding.OfGamepadAxis(GamepadAxis.LEFT_Y, -1.0)` is a "menu up" that pushing the stick up
+/// presses. Its `==` takes its Scale in; Reads doesn't. Its Of Methods panic for a Scale that
+/// isn't finite, a key outside SDL's 1 to 511, and a mouse's button outside 1 to 32.
+Public Struct Binding Implements Printable
+    /// What it reads.
+    Public Field Kind: BindingKind
+    /// Its Key, MouseButton, MouseAxis, GamepadButton, or GamepadAxis, as an Int32.
+    Public Field Code: Int32
+    /// What it's multiplied by.
+    Public Field Scale: Float32
+
+    /// A key.
+    Public Static Method OfKey(key: Key, scale: Float32 = 1.0): Binding
+        Local code = key As Int32
+        If code < 1 || code > 511 Then Panic("Binding.OfKey({code}): SDL has no such key")
+        Return Binding(BindingKind.KEY, code, Finite("OfKey", scale))
+    End Method
+
+    /// A mouse's button.
+    Public Static Method OfMouseButton(button: MouseButton, scale: Float32 = 1.0): Binding
+        Local number = button As Int32
+        If number < 1 || number > 32
+            Panic("Binding.OfMouseButton({number}): a mouse's buttons are 1 to 32")
+        End If
+        Return Binding(BindingKind.MOUSE_BUTTON, number, Finite("OfMouseButton", scale))
+    End Method
+
+    /// The mouse's motion, in the window's units (or raw counts in relative mode) a frame, or its
+    /// wheel's notches, times `scale`, as mouse look's sensitivity is.
+    Public Static Method OfMouseAxis(axis: MouseAxis, scale: Float32 = 1.0): Binding
+        Return Binding(BindingKind.MOUSE_AXIS, axis As Int32, Finite("OfMouseAxis", scale))
+    End Method
+
+    /// A gamepad's button.
+    Public Static Method OfGamepadButton(button: GamepadButton, scale: Float32 = 1.0): Binding
+        Return Binding(BindingKind.GAMEPAD_BUTTON, button As Int32,
+                       Finite("OfGamepadButton", scale))
+    End Method
+
+    /// A gamepad's axis, past its dead zones.
+    Public Static Method OfGamepadAxis(axis: GamepadAxis, scale: Float32 = 1.0): Binding
+        Return Binding(BindingKind.GAMEPAD_AXIS, axis As Int32, Finite("OfGamepadAxis", scale))
+    End Method
+
+    /// Whether it reads what `other` does, the same key, button, or axis, whatever their Scales,
+    /// as a key bindings menu asks to find what's bound to it already.
+    Public Method Reads(other: Binding): Bool => Kind == other.Kind && Code == other.Code
+
+    Static Method Finite(call: String, scale: Float32): Float32
+        If !IsFinite(scale) Then Panic("Binding.{call}: a scale is a finite number, not {scale}")
+        Return scale
+    End Method
+
+    /// What it reads, as a key bindings menu shows it: a key's name on the player's layout, and
+    /// the others' names, like "SOUTH" or "LEFT_X".
+    @MainThread Public Method Name(): String
+        Select Kind
+            Case BindingKind.KEY
+                Return KeyName(Code As Key)
+            Case BindingKind.MOUSE_BUTTON
+                Return "{Code As MouseButton}"
+            Case BindingKind.MOUSE_AXIS
+                Return "{Code As MouseAxis}"
+            Case BindingKind.GAMEPAD_BUTTON
+                Return "{Code As GamepadButton}"
+            Default
+                Return "{Code As GamepadAxis}"
+        End Select
+    End Method
+
+    Public Method ToString(): String
+        Local scaled = Scale == 1.0 ? "" : " * {Scale}"
+        Return "{KindName(Kind)} {CodeName(Self)}{scaled}"
+    End Method
+End Struct
+
+/// What a game's control means, like "jump" or "move", which its ActionSet reads from its
+/// Bindings once a Flip. Its Value is what its keys, buttons, and a gamepad's axes add up to,
+/// from -1 to 1, with the mouse's motion and wheel added on top. It's Down while its Value is at
+/// the set's press point or past it, so an action that goes both ways, as steering does, is Down
+/// one way. One with Y bindings too is two-axis, for moving and looking: its Vector, each of whose
+/// axes the keys, buttons, and pad's axes keep to -1 to 1 and its length to 1, and Down while that
+/// length is at the press point.
+///
+/// Hit and Up are as a key's are: a binding pressed and let go within a frame is a Hit and an Up
+/// both, and with one binding, the action's Hits and Up are its binding's. A binding's presses
+/// count when it presses the action by itself, and no other binding holds it already; a press
+/// that leaves it not Down, as D pressed while A's held does on a steering action, is none. Held
+/// through a Flip, its Hit and Up come together or not at all, from the one binding holding it
+/// let go and pressed again: a handover from one binding to another is a hold, as is one pad
+/// pressing a button another pad holds. Its Up is from its own Down, so rebinding it while it's
+/// held lets it go. The first Flip after it's bound, unbound, rebound, loaded, its set given
+/// another gamepad, or its set turned back on reads what was held already as Down with no Hit,
+/// so a pause menu that Escape closes doesn't open again on the same press.
+Public Final Class Action Implements Printable
+    Field name: String
+    Field xs: Binding[] = []
+    Field ys: Binding[] = []
+    Field down: Bool = False
+    Field hits: Int32 = 0
+    Field up: Bool = False
+    Field vector: Vec2
+    // Whether the next Flip is its first since it was bound or its set turned on.
+    Field fresh: Bool = True
+
+    Package New(name: String)
+        Self.name = name
+    End New
+
+    /// Its name, which its ActionSet knows it by, and which saved bindings say.
+    @MainThread Public Method Name(): String => name
+
+    /// Adds `binding` to its X axis, the one a one-axis action has. Panics for one the Of Methods
+    /// wouldn't make: a Scale that isn't finite, a key or a button SDL hasn't.
+    @MainThread Public Method Bind(binding: Binding)
+        xs.Add(Checked("Action.Bind", binding))
+        fresh = True
+    End Method
+
+    /// Adds `binding` to its Y axis, which makes it two-axis, and panics as Bind does.
+    @MainThread Public Method BindY(binding: Binding)
+        ys.Add(Checked("Action.BindY", binding))
+        fresh = True
+    End Method
+
+    /// Takes `binding` off both its axes, every time it's there.
+    @MainThread Public Method Unbind(binding: Binding)
+        xs.RemoveAll(Function(each: Binding) => each == binding)
+        ys.RemoveAll(Function(each: Binding) => each == binding)
+        fresh = True
+    End Method
+
+    /// Puts `with` where `old` is, on whichever axis, going the way `old` went: its Scale is
+    /// `old`'s times its own, so a key that went left, rebound to a stick pushed left (a Scale of
+    /// -1, as InputPressed gives it), goes left still. False if `old` isn't one of its Bindings.
+    /// ActionSet.BoundTo finds what reads `with` already, which a menu asks the player about.
+    /// Panics as Bind does, for a product of Scales that isn't finite too.
+    @MainThread Public Method Replace(old: Binding, with: Binding): Bool
+        Local turned = Checked("Action.Replace",
+                               Binding(with.Kind, with.Code, with.Scale * old.Scale))
+        For i = 0 To xs.Count - 1
+            If xs[i] == old
+                xs[i] = turned
+                fresh = True
+                Return True
+            End If
+        End For
+        For i = 0 To ys.Count - 1
+            If ys[i] == old
+                ys[i] = turned
+                fresh = True
+                Return True
+            End If
+        End For
+        Return False
+    End Method
+
+    /// Takes every binding off it.
+    @MainThread Public Method ClearBindings()
+        xs.Clear()
+        ys.Clear()
+        fresh = True
+    End Method
+
+    /// Its X axis's Bindings.
+    @MainThread Public Method Bindings(): Binding[] => xs.Clone()
+
+    /// Its Y axis's Bindings, none for a one-axis action.
+    @MainThread Public Method BindingsY(): Binding[] => ys.Clone()
+
+    /// Whether it's two-axis.
+    @MainThread Public Method TwoAxis(): Bool => ys.Count > 0
+
+    /// Whether any of its bindings reads what `binding` reads, whatever their Scales.
+    @MainThread Public Method Reads(binding: Binding): Bool
+        For each In xs
+            If each.Reads(binding) Then Return True
+        End For
+        For each In ys
+            If each.Reads(binding) Then Return True
+        End For
+        Return False
+    End Method
+
+    /// Whether it was down when the last Flip read it.
+    @MainThread Public Method Down(): Bool => down
+
+    /// Whether the last Flip read it pressed.
+    @MainThread Public Method Hit(): Bool => hits > 0
+
+    /// How many times the last Flip read it pressed: a key tapped twice, or a wheel's notches.
+    @MainThread Public Method Hits(): Int32 => hits
+
+    /// Whether the last Flip read it released.
+    @MainThread Public Method Up(): Bool => up
+
+    /// Its X axis's value as the last Flip read it.
+    @MainThread Public Method Value(): Float32 => vector.x
+
+    /// Both its axes' values as the last Flip read them.
+    @MainThread Public Method Vector(): Vec2 => vector
+
+    Public Method ToString(): String => name
+
+    // Reads it for a Flip, from `pads`, with `press` the set's press point.
+    @MainThread Package Method Update(pads: Gamepad[], press: Float32)
+        Local was = down
+        Local xReadings: Reading[] = []
+        Local yReadings: Reading[] = []
+        Local x: Float32 = 0.0
+        Local y: Float32 = 0.0
+        Local beforeX: Float32 = 0.0
+        Local beforeY: Float32 = 0.0
+        Local moved = Vec2(0.0, 0.0)
+        For binding In xs
+            Local reading = Read(binding, pads)
+            xReadings.Add(reading)
+            If reading.Mouse Then moved.x += reading.Value Else x += reading.Value
+            beforeX += Before(binding, reading)
+        End For
+        For binding In ys
+            Local reading = Read(binding, pads)
+            yReadings.Add(reading)
+            If reading.Mouse Then moved.y += reading.Value Else y += reading.Value
+            beforeY += Before(binding, reading)
+        End For
+        Local twoAxis = ys.Count > 0
+        down = Reaches(x, y, twoAxis, press)
+        // Whether it was held as the Flip began, for its presses: its own Down at the last Flip,
+        // or, at its first since it was bound, rebound, or its set turned on, what its bindings
+        // held then, each button's from where it is and how often it went down and up.
+        Local held = fresh ? Reaches(beforeX, beforeY, twoAxis, press) : was
+        // Rebound or given another pad while it was Down, with nothing new holding it: let go.
+        Local letGo = fresh && was && !held
+        fresh = False
+        // Held through, it's pressed again only by a binding that held it alone, let go and
+        // pressed again; a handover from one binding to another is a hold.
+        Local through = held && down
+
+        // Each binding's presses and releases, where it presses the action by itself.
+        Local presses: Int32 = 0
+        Local releases: Int32 = 0
+        For i = 0 To xs.Count - 1
+            Local reading = xReadings[i]
+            Local pressed, released = Counted(xs[i], reading, x - reading.Held, y,
+                                              beforeX - Before(xs[i], reading), beforeY, True,
+                                              twoAxis, press, through, was)
+            presses += pressed
+            releases += released
+        End For
+        For i = 0 To ys.Count - 1
+            Local reading = yReadings[i]
+            Local pressed, released = Counted(ys[i], reading, x, y - reading.Held, beforeX,
+                                              beforeY - Before(ys[i], reading), False, twoAxis,
+                                              press, through, was)
+            presses += pressed
+            releases += released
+        End For
+        // What no one binding pressed by itself: an axis pushed far enough, or keys that press it
+        // only together. Its Up is from its own Down, so rebinding it while it's held lets go.
+        If !held && down && presses == 0 Then presses = 1
+        If (was && !down || letGo) && releases == 0 Then releases = 1
+        // From not Down to Down, as some order of its events gives: inputs pressing it together
+        // are one press, and a release before its first press isn't one, as it wasn't Down.
+        If !was && !held && down
+            If releases == 0
+                presses = 1
+            ElseIf presses < 2
+                releases = 0
+            End If
+        End If
+        hits = presses
+        up = releases > 0
+
+        Local clamped = Clamped(x, y, twoAxis)
+        vector = Vec2(clamped.x + moved.x, clamped.y + moved.y)
+    End Method
+
+    // Reads it as one that isn't read, as a set that's off reads it: let go, if it was down; the
+    // next Flip that reads it is its first again.
+    @MainThread Package Method Release()
+        up = down
+        down = False
+        hits = 0
+        vector = Vec2(0.0, 0.0)
+        fresh = True
+    End Method
+
+    // Forgets what the last Flip read it doing, as ActionSet.Flush does.
+    @MainThread Package Method Flush()
+        hits = 0
+        up = False
+    End Method
+
+    // Forgets everything, as its set does when it's let go of, since nothing reads it any more.
+    @MainThread Package Method Zero()
+        down = False
+        hits = 0
+        up = False
+        vector = Vec2(0.0, 0.0)
+    End Method
+End Class
+
+// What a binding read at a Flip.
+Struct Reading
+    // What it adds to its axis.
+    Field Value: Float32
+    // Whether that's the mouse's, which isn't kept to -1 to 1.
+    Field Mouse: Bool
+    // What it adds while it's held, a key's or a button's Scale, 0 when it's not or isn't one.
+    Field Held: Float32
+    // Whether it's a key or a button, if it's down, and if it was as the Flip began.
+    Field Button: Bool
+    Field Down: Bool
+    Field Was: Bool
+    // How many times the Flip read it pressed and released: a key or a button, or a wheel's
+    // notches its way, each one both.
+    Field Presses: Int32
+    Field Releases: Int32
+End Struct
+
+// The axes' values the keys, buttons, and pads' axes give, each kept to -1 to 1, and a two-axis
+// action's length to 1, so a diagonal isn't faster.
+Function Clamped(x: Float32, y: Float32, twoAxis: Bool): Vec2
+    Local across = Clamp(x, -1.0, 1.0)
+    Local along = Clamp(y, -1.0, 1.0)
+    If !twoAxis Then Return Vec2(across, 0.0)
+    Local length = Sqrt(across * across + along * along)
+    If length > 1.0 Then Return Vec2(across / length, along / length)
+    Return Vec2(across, along)
+End Function
+
+// Whether those values press the action.
+Function Reaches(x: Float32, y: Float32, twoAxis: Bool, press: Float32): Bool
+    Local clamped = Clamped(x, y, twoAxis)
+    If !twoAxis Then Return clamped.x >= press
+    Return Length(clamped) >= press
+End Function
+
+// The presses and releases of `binding` that are the action's: when it presses the action by
+// itself, which on a one-axis action takes its own Scale at the press point, and the others, at
+// `x` and `y` without it, don't hold the action. `through`, the action held through the Flip, it
+// counts only a binding that held it alone as it began, and was let go and pressed again: as
+// many presses as releases, together. Not `was` Down, a release only counts after a press in the
+// Flip, a tap.
+Function Counted(binding: Binding, reading: Reading, x: Float32, y: Float32, beforeX: Float32,
+                 beforeY: Float32, onX: Bool, twoAxis: Bool, press: Float32, through: Bool,
+                 was: Bool): (Int32, Int32)
+    If reading.Presses == 0 && reading.Releases == 0 Then Return (0, 0)
+    If !Alone(binding, x, y, onX, twoAxis, press) Then Return (0, 0)
+    If through
+        If !reading.Was || !reading.Down || !Alone(binding, beforeX, beforeY, onX, twoAxis, press)
+            Return (0, 0)
+        End If
+        Local again = Min(reading.Presses, reading.Releases)
+        Return (again, again)
+    End If
+    If !was Then Return (reading.Presses, Min(reading.Releases, reading.Presses))
+    Return (reading.Presses, reading.Releases)
+End Function
+
+// Whether `binding` presses the action by itself, the others at `x` and `y` not holding it.
+Function Alone(binding: Binding, x: Float32, y: Float32, onX: Bool, twoAxis: Bool,
+               press: Float32): Bool
+    // A wheel's notches are the way its binding goes already, whichever way its Scale is.
+    Local adds = binding.Kind == BindingKind.MOUSE_AXIS ? Abs(binding.Scale) : binding.Scale
+    Local strong = twoAxis ? Abs(adds) >= press : adds >= press
+    If !strong || Reaches(x, y, twoAxis, press) Then Return False
+    Local withX = onX ? x + adds : x
+    Local withY = onX ? y : y + adds
+    Return Reaches(withX, withY, twoAxis, press)
+End Function
+
+// What `binding` added as the Flip began, as its reading says: a key's or a button's Scale if it
+// was down; an axis is taken to be where it is, and the mouse adds nothing to a press.
+Function Before(binding: Binding, reading: Reading): Float32
+    If reading.Mouse Then Return 0.0
+    If !reading.Button Then Return reading.Value
+    Return reading.Was ? binding.Scale : 0.0
+End Function
+
+// Whether a key or a button was down as the Flip began: one down now that went down and up an
+// odd number of times in it was the other way.
+Function WasDown(down: Bool, presses: Int32, releases: Int32): Bool
+    Return down != ((presses + releases) % 2 == 1)
+End Function
+
+// A gamepad button's reading over `pads`, as one button: down while any pad holds it; a pad's
+// press counts when no other pad held it as the Flip began, and its release when no other still
+// does, so one pad pressing it while another holds it is no press, and letting go no release.
+@MainThread Function PadsButton(binding: Binding, pads: Gamepad[]): Reading
+    Local downs: Bool[] = []
+    Local befores: Bool[] = []
+    Local presses: Int32[] = []
+    Local releases: Int32[] = []
+    For pad In pads
+        Local down = fbe_input_gamepad_down(pad.Id(), binding.Code)
+        Local pressed = fbe_input_gamepad_hits(pad.Id(), binding.Code)
+        Local released = fbe_input_gamepad_ups(pad.Id(), binding.Code)
+        downs.Add(down)
+        befores.Add(WasDown(down, pressed, released))
+        presses.Add(pressed)
+        releases.Add(released)
+    End For
+    Local down = downs.Contains(True)
+    Local was = befores.Contains(True)
+    Local pressed: Int32 = 0
+    Local released: Int32 = 0
+    For i = 0 To pads.Count - 1
+        Local otherHeld = False
+        Local otherDown = False
+        For j = 0 To pads.Count - 1
+            If j == i Then Continue
+            otherHeld = otherHeld || befores[j]
+            otherDown = otherDown || downs[j]
+        End For
+        If !otherHeld Then pressed += presses[i]
+        If !otherDown Then released += releases[i]
+    End For
+    Local held = down ? binding.Scale : 0.0
+    Return Reading(held, False, held, True, down, was, pressed, released)
+End Function
+
+// What `binding` reads now.
+@MainThread Function Read(binding: Binding, pads: Gamepad[]): Reading
+    Select binding.Kind
+        Case BindingKind.KEY
+            Local down = fbe_input_key_down(binding.Code)
+            Local held = down ? binding.Scale : 0.0
+            Local pressed = fbe_input_key_hits(binding.Code)
+            Local released = fbe_input_key_ups(binding.Code)
+            Return Reading(held, False, held, True, down, WasDown(down, pressed, released), pressed,
+                           released)
+        Case BindingKind.MOUSE_BUTTON
+            Local down = fbe_input_mouse_down(binding.Code)
+            Local held = down ? binding.Scale : 0.0
+            Local pressed = fbe_input_mouse_hits(binding.Code)
+            Local released = fbe_input_mouse_ups(binding.Code)
+            Return Reading(held, False, held, True, down, WasDown(down, pressed, released), pressed,
+                           released)
+        Case BindingKind.GAMEPAD_BUTTON
+            Return PadsButton(binding, pads)
+        Case BindingKind.GAMEPAD_AXIS
+            // The pad pushed furthest, when it's any of them.
+            Local axis = binding.Code As GamepadAxis
+            Local furthest: Float32 = 0.0
+            For pad In pads
+                Local value = pad.Axis(axis)
+                If Abs(value) > Abs(furthest) Then furthest = value
+            End For
+            Return Reading(furthest * binding.Scale, False, 0.0, False, False, False, 0, 0)
+        Default
+            Select binding.Code As MouseAxis
+                Case MouseAxis.X
+                    Return Reading(MouseXSpeed() * binding.Scale, True, 0.0, False, False, False, 0,
+                                   0)
+                Case MouseAxis.Y
+                    Return Reading(MouseYSpeed() * binding.Scale, True, 0.0, False, False, False, 0,
+                                   0)
+                Case MouseAxis.WHEEL
+                    Local steps = Max(binding.Scale < 0.0 ? -MouseWheelSteps() : MouseWheelSteps(),
+                                      0)
+                    Return Reading(MouseWheel() * binding.Scale, True, 0.0, False, False, False,
+                                   steps, steps)
+                Default
+                    Return Reading(MouseWheelX() * binding.Scale, True, 0.0, False, False, False, 0,
+                                   0)
+            End Select
+    End Select
+End Function
+
+/// A game's Actions, read once a Flip, after the OS's events: one set for a game, or one for each
+/// player, each with its own gamepad. Its bindings save and load as TOML.
+Public Final Class ActionSet
+    Field actions: Action[] = []
+    Field pad: Gamepad? = Null
+    Field press: Float32 = 0.5
+    Field enabled: Bool = True
+    Field hook: Int = 0
+
+    /// A set with no Actions, which every Flip reads from now on, until it's let go of.
+    @MainThread Public New()
+        hook = Frame.OnFlip(Function[Weak Self]() => Self?.Update())
+    End New
+
+    // Nothing reads its Actions after it, so they read as nothing, not as they were last.
+    Method Destroy()
+        Frame.RemoveOnFlip(hook)
+        For action In actions
+            action.Zero()
+        End For
+    End Method
+
+    /// A new Action named `name`, with no bindings yet. Panics for a name that's "" or taken.
+    @MainThread Public Method Add(name: String): Action
+        If name == "" Then Panic("ActionSet.Add: an Action has a name")
+        If Get(name) != Null Then Panic("ActionSet.Add: there's an Action named \"{name}\" already")
+        Local action = Action(name)
+        actions.Add(action)
+        Return action
+    End Method
+
+    /// The Action named `name`, or Null.
+    @MainThread Public Method Get(name: String): Action?
+        For action In actions
+            If action.Name() == name Then Return action
+        End For
+        Return Null
+    End Method
+
+    /// Its Actions, in the order they were added.
+    @MainThread Public Method Actions(): Action[] => actions.Clone()
+
+    /// Its Actions with a binding that reads what `binding` does, whatever its Scale, as a key
+    /// bindings menu asks before it binds the key the player pressed.
+    @MainThread Public Method BoundTo(binding: Binding): Action[]
+        Return actions.Filter(Function(action: Action) => action.Reads(binding))
+    End Method
+
+    /// Reads only `gamepad`, a player's own, or with Null, every gamepad, as a game with one
+    /// player wants: their buttons all count, and the axis pushed furthest. What the new pad holds
+    /// already, as the SOUTH a player pressed to join, is no press.
+    @MainThread Public Method SetGamepad(gamepad: Gamepad?)
+        Local had = pad
+        Local same = (had == Null && gamepad == Null) ||
+                     (had != Null && gamepad != Null && RefEquals(had, gamepad))
+        pad = gamepad
+        // What the new pad holds was pressed before the set read it: no press.
+        If !same
+            For action In actions
+                action.fresh = True
+            End For
+        End If
+    End Method
+
+    /// The gamepad it reads, or Null for every one.
+    @MainThread Public Method Pad(): Gamepad? => pad
+
+    /// Sets how far an Action's Value goes before it's Down, from just over 0 to 1, 0.5 at first.
+    /// Panics outside that.
+    @MainThread Public Method SetPressPoint(point: Float32)
+        If !(point > 0.0 && point <= 1.0)
+            Panic("ActionSet.SetPressPoint: a press point is over 0, to 1, not {point}")
+        End If
+        press = point
+    End Method
+
+    /// How far an Action's Value goes before it's Down.
+    @MainThread Public Method PressPoint(): Float32 => press
+
+    /// Turns it off, so its Actions read as let go from the next Flip, as a game's controls do
+    /// while its menu has the input; or back on, when what's held from before reads as Down with
+    /// no Hit, so the key that closed the menu doesn't press anything as it opens.
+    @MainThread Public Method SetEnabled(on: Bool)
+        enabled = on
+    End Method
+
+    /// Whether it's on.
+    @MainThread Public Method Enabled(): Bool => enabled
+
+    /// Forgets the presses and releases the last Flip read of its Actions, until the next Flip;
+    /// what's held stays held.
+    @MainThread Public Method Flush()
+        For action In actions
+            action.Flush()
+        End For
+    End Method
+
+    @MainThread Method Update()
+        If !enabled
+            For action In actions
+                action.Release()
+            End For
+            Return
+        End If
+        Local pads: Gamepad[] = []
+        If UsesGamepads()
+            Local own = pad
+            If own == Null
+                pads = Gamepads()
+            ElseIf own.Connected()
+                pads.Add(own)
+            End If
+        End If
+        For action In actions
+            action.Update(pads, press)
+        End For
+    End Method
+
+    // Whether any of its bindings reads a gamepad, so a set that doesn't never starts them.
+    Method UsesGamepads(): Bool
+        // Its Actions' own arrays, which this file reads without copying, as every Flip does.
+        For action In actions
+            For binding In action.xs
+                If ReadsGamepad(binding) Then Return True
+            End For
+            For binding In action.ys
+                If ReadsGamepad(binding) Then Return True
+            End For
+        End For
+        Return False
+    End Method
+
+    /// Its bindings as a TOML document, which Load reads: each one-axis Action an array of its
+    /// bindings, each two-axis one a table of its x and y arrays, each binding a table of what it
+    /// reads, by name, and its scale when that isn't 1. Load reads them written either way TOML
+    /// has, as Save writes them or as a person does:
+    ///
+    /// ```toml
+    /// jump = [{ key = "SPACE" }, { gamepad_button = "SOUTH" }]
+    ///
+    /// [move]
+    /// x = [{ key = "D" }, { key = "A", scale = -1.0 }, { gamepad_axis = "LEFT_X" }]
+    /// y = [{ key = "S" }, { key = "W", scale = -1.0 }, { gamepad_axis = "LEFT_Y" }]
+    /// ```
+    ///
+    /// Save writes each array as TOML's array of tables, `[[jump]]` and `[[move.x]]`.
+    @MainThread Public Method Save(): String
+        Local document = Value.Object()
+        For action In actions
+            If action.TwoAxis()
+                Local axes = Value.Object()
+                axes["x"] = Saved(action.Bindings())
+                axes["y"] = Saved(action.BindingsY())
+                document[action.Name()] = axes
+            Else
+                document[action.Name()] = Saved(action.Bindings())
+            End If
+        End For
+        Return Toml.Write(document)
+    End Method
+
+    /// Reads bindings that Save wrote, as a game reads a player's own: each Action the document
+    /// names gets its bindings, one it doesn't keeps its own, and one it names that the set
+    /// doesn't have is left out, as an older game's saves can have; what's held through it reads
+    /// as Down with no Hit. Nothing changes when it throws, for text that isn't TOML, a binding
+    /// that isn't one, or a scale that isn't a finite Float32.
+    @MainThread Public Method Load(text: String) Throws InputError
+        Local document = Value.Object()
+        Try
+            document = Try Toml.Read(text)
+        Catch e As ParseError
+            Throw InputError("the bindings aren't TOML: {e.Message}", e)
+        End Try
+        Local loaded: (Action, Binding[], Binding[])[] = []
+        For name In document.Keys()
+            Local action = Get(name)
+            Local saved = document[name]
+            If action == Null || saved == Null Then Continue
+            If saved.IsArray
+                loaded.Add((action, Try Loaded(name, saved), []))
+            ElseIf saved.IsObject
+                Local xs = saved["x"]
+                Local ys = saved["y"]
+                Local x: Binding[] = xs != Null ? Try Loaded(name, xs) : []
+                Local y: Binding[] = ys != Null ? Try Loaded(name, ys) : []
+                loaded.Add((action, x, y))
+            Else
+                Throw InputError("{name}'s bindings are an array, or a table of x and y arrays")
+            End If
+        End For
+        For each In loaded
+            Local action, x, y = each
+            action.ClearBindings()
+            For binding In x
+                action.Bind(binding)
+            End For
+            For binding In y
+                action.BindY(binding)
+            End For
+        End For
+    End Method
+End Class
+
+// `binding`, if it's one the Of Methods make: a finite Scale, a key from 1 to 511, a mouse's
+// button from 1 to 32, and an axis or a pad's button its Enum has; `call` panics otherwise.
+Function Checked(call: String, binding: Binding): Binding
+    If !IsFinite(binding.Scale)
+        Panic("{call}: a binding's scale is a finite number, not {binding.Scale}")
+    End If
+    Local least: Int32 = 0
+    Local most: Int32 = 0
+    Select binding.Kind
+        Case BindingKind.KEY
+            least = 1
+            most = 511
+        Case BindingKind.MOUSE_BUTTON
+            least = 1
+            most = 32
+        Case BindingKind.MOUSE_AXIS
+            most = MouseAxis.WHEEL_X As Int32
+        Case BindingKind.GAMEPAD_BUTTON
+            most = GamepadButton.MISC_6 As Int32
+        Default
+            most = GamepadAxis.RIGHT_TRIGGER As Int32
+    End Select
+    If binding.Code < least || binding.Code > most
+        Panic("{call}: a {KindName(binding.Kind)} binding's code is {least} to {most}, not {binding.Code}")
+    End If
+    Return binding
+End Function
+
+Function ReadsGamepad(binding: Binding): Bool
+    Return binding.Kind == BindingKind.GAMEPAD_BUTTON || binding.Kind == BindingKind.GAMEPAD_AXIS
+End Function
+
+// `bindings`, as Save writes them.
+Function Saved(bindings: Binding[]): Value
+    Local array = Value.Array()
+    For binding In bindings
+        Local table = Value.Object()
+        table[KindName(binding.Kind)] = Value(CodeName(binding))
+        // The Float32's own shortest form, 0.1, not the Double nearest it, 0.10000000149011612.
+        If binding.Scale != 1.0
+            table["scale"] = Value(Double.Parse("{binding.Scale}") ?? binding.Scale As Double)
+        End If
+        array.Add(table)
+    End For
+    Return array
+End Function
+
+// The bindings an Action named `name` has in `saved`, as Saved wrote them.
+Function Loaded(name: String, saved: Value): Binding[] Throws InputError
+    If !saved.IsArray Then Throw InputError("{name}'s bindings are an array, not {saved}")
+    Local bindings: Binding[] = []
+    For index = 0 To saved.Count - 1
+        Local table = saved[index]
+        If table == Null || !table.IsObject
+            Throw InputError("{name}'s binding {index + 1} is a table, like {{ key = \"SPACE\" }}")
+        End If
+        bindings.Add(Try LoadedBinding(name, index, table))
+    End For
+    Return bindings
+End Function
+
+Function LoadedBinding(name: String, index: Int, table: Value): Binding Throws InputError
+    Local scale: Float32 = 1.0
+    Local found: Binding? = Null
+    For key In table.Keys()
+        Local value = table[key]
+        If value == Null Then Continue
+        If key == "scale"
+            Local number = value.AsDouble()
+            If number == Null Then Throw InputError("{name}'s binding {index + 1}'s scale is a number")
+            scale = number As Float32
+            If !IsFinite(scale)
+                Throw InputError(
+                    "{name}'s binding {index + 1}'s scale is a finite Float32, not {number}")
+            End If
+            Continue
+        End If
+        Local text = value.AsString()
+        Local kind = KindNamed(key)
+        If kind == Null || text == Null
+            Throw InputError(
+                "{name}'s binding {index + 1} reads a key, mouse_button, mouse_axis, " +
+                "gamepad_button, or gamepad_axis, by name, not {key} = {value}")
+        End If
+        Local code = CodeNamed(kind, text)
+        If code == Null Then Throw InputError("{name}'s binding {index + 1}: there's no {key} {text}")
+        If found != Null Then Throw InputError("{name}'s binding {index + 1} reads one thing, not two")
+        found = Binding(kind, code, 1.0)
+    End For
+    If found == Null Then Throw InputError("{name}'s binding {index + 1} reads nothing")
+    Return Binding(found.Kind, found.Code, scale)
+End Function
+
+// The key in a saved binding's table for what it reads.
+Function KindName(kind: BindingKind): String
+    Select kind
+        Case BindingKind.KEY
+            Return "key"
+        Case BindingKind.MOUSE_BUTTON
+            Return "mouse_button"
+        Case BindingKind.MOUSE_AXIS
+            Return "mouse_axis"
+        Case BindingKind.GAMEPAD_BUTTON
+            Return "gamepad_button"
+        Default
+            Return "gamepad_axis"
+    End Select
+End Function
+
+Function KindNamed(name: String): BindingKind?
+    For kind In [BindingKind.KEY, BindingKind.MOUSE_BUTTON, BindingKind.MOUSE_AXIS,
+                 BindingKind.GAMEPAD_BUTTON, BindingKind.GAMEPAD_AXIS]
+        If KindName(kind) == name Then Return kind
+    End For
+    Return Null
+End Function
+
+// What a binding reads, by its Enum member's name, which stays the same on every layout.
+Function CodeName(binding: Binding): String
+    Select binding.Kind
+        Case BindingKind.KEY
+            Return "{binding.Code As Key}"
+        Case BindingKind.MOUSE_BUTTON
+            Return "{binding.Code As MouseButton}"
+        Case BindingKind.MOUSE_AXIS
+            Return "{binding.Code As MouseAxis}"
+        Case BindingKind.GAMEPAD_BUTTON
+            Return "{binding.Code As GamepadButton}"
+        Default
+            Return "{binding.Code As GamepadAxis}"
+    End Select
+End Function
+
+// The code of what's named `name`, for a binding of `kind`, or Null when there's none.
+Function CodeNamed(kind: BindingKind, name: String): Int32?
+    Local first: Int32 = 0
+    Local last: Int32 = 0
+    Select kind
+        Case BindingKind.KEY
+            first = 1
+            last = 511
+        Case BindingKind.MOUSE_BUTTON
+            first = 1
+            last = 32
+        Case BindingKind.MOUSE_AXIS
+            last = MouseAxis.WHEEL_X As Int32
+        Case BindingKind.GAMEPAD_BUTTON
+            last = GamepadButton.MISC_6 As Int32
+        Default
+            last = GamepadAxis.RIGHT_TRIGGER As Int32
+    End Select
+    For code = first To last
+        If CodeName(Binding(kind, code, 1.0)) == name Then Return code
+    End For
+    Return Null
+End Function
+
+// Each gamepad's axes at the last Flip, and at the one before, which InputPressed compares, so
+// an axis counts once, as it's pushed, not while it's held.
+Global axesNow: Map<UInt64, Float32[]> = {}
+Global axesBefore: Map<UInt64, Float32[]> = {}
+Global listening = False
+
+Function RecordAxes()
+    axesBefore = axesNow
+    axesNow = {}
+    For pad In Gamepads()
+        Local axes: Float32[] = []
+        For axis = 0 To GamepadAxis.RIGHT_TRIGGER As Int32
+            axes.Add(pad.Axis(axis As GamepadAxis))
+        End For
+        axesNow[pad.Id()] = axes
+    End For
+End Function
+
+/// The first input the last Flip read pressed, as a Binding, for a key bindings menu rebinding an
+/// Action from the next one the player presses: a key, then a mouse's button, then a gamepad's
+/// button, then a gamepad's axis pushed past half way, with a Scale of 1 or -1, the way it was
+/// pushed. Null for none; the mouse's motion and wheel never count. `pad` keeps it to one
+/// gamepad. Axes count from the second Flip after the first call, which starts watching them.
+@MainThread Public Function InputPressed(pad: Gamepad? = Null): Binding?
+    If !listening
+        listening = True
+        RecordAxes()
+        Frame.OnFlip(RecordAxes)
+    End If
+    Local keys = KeysHit()
+    If keys.Count > 0 Then Return Binding.OfKey(keys[0])
+    For number = 1 To 32
+        If MouseHit(number As MouseButton) Then Return Binding.OfMouseButton(number As MouseButton)
+    End For
+    Local pads: Gamepad[] = []
+    If pad != Null
+        pads.Add(pad)
+    Else
+        pads = Gamepads()
+    End If
+    For each In pads
+        For button = 0 To GamepadButton.MISC_6 As Int32
+            If each.Hit(button As GamepadButton) Then Return Binding.OfGamepadButton(button As GamepadButton)
+        End For
+    End For
+    For each In pads
+        Local now = axesNow.Get(each.Id())
+        Local before = axesBefore.Get(each.Id())
+        If now == Null || before == Null Then Continue
+        For axis = 0 To now.Count - 1
+            If Abs(now[axis]) >= 0.5 && Abs(before[axis]) < 0.5
+                Return Binding.OfGamepadAxis(axis As GamepadAxis, now[axis] < 0.0 ? -1.0 : 1.0)
+            End If
+        End For
+    End For
+    Return Null
+End Function

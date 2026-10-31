@@ -25,7 +25,7 @@ Function Run(name: String) Throws GraphicsError
         // A frame the sprite hasn't.
         Case "sprite-frame"
             Local sheet = Try Texture.Target(8, 4)
-            Local sprite = Sprite(sheet)
+            Local sprite = Sprite2D(sheet)
             sprite.SetFrames(4, 4)
             Canvas(sheet).Draw(sprite, 0, 0, 2)
         // A canvas's texture freed, and drawn into after.

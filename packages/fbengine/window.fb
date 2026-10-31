@@ -35,7 +35,7 @@ End Function
 End Function
 
 /// The window Graphics opens, which there's one of.
-Public Class Window
+Public Final Class Window
     Private New()
     End New
 

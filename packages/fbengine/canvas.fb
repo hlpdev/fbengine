@@ -6,12 +6,12 @@ Import std.core
 Import std.ffi
 Import std.math
 Import "./c/fbe_2d"
-Import "./sprite"
+Import "./sprite2d"
 Import "./texture"
 Import "./window"
 
-/// How a Canvas blends what it draws with what's there.
-Public Enum Blend
+/// How a Canvas blends what it draws with what's there; a Material's is Blend.
+Public Enum Blend2D
     /// Replaces it, alpha too.
     SOLID = 0
     /// Over it, by the color's alpha.
@@ -106,12 +106,12 @@ Public Final Class Canvas
     End Method
 
     /// Sets how it blends what it draws with what's there.
-    @MainThread Public Method SetBlend(blend: Blend)
+    @MainThread Public Method SetBlend(blend: Blend2D)
         pen.blend = blend As Int32
     End Method
 
     /// How it blends.
-    @MainThread Public Method Blend(): Blend => pen.blend As Blend
+    @MainThread Public Method Blend(): Blend2D => pen.blend As Blend2D
 
     /// Sets how far the sprites it draws are rotated about their handles, in radians, clockwise
     /// on the screen: `SetRotation(Deg(30))` for 30 degrees.
@@ -137,7 +137,7 @@ Public Final Class Canvas
     /// its pixels are its texture's exactly. It panics for a frame the sprite hasn't, a sprite whose texture
     /// is the target, or one that was freed.
     @MainThread @PanicsAtCaller
-    Public Method Draw(sprite: Sprite, x: Float32, y: Float32, frame: Int32 = 0)
+    Public Method Draw(sprite: Sprite2D, x: Float32, y: Float32, frame: Int32 = 0)
         Local into = Into("Draw")
         Local drawn = sprite.Drawn(frame, rotation, scale.x As Float32, scale.y As Float32)
         Local texture = sprite.Live()
@@ -152,7 +152,7 @@ Public Final Class Canvas
     /// Covers its viewport with frame `frame` of `sprite`, scaled as set but not rotated, its
     /// tiles placed so one's handle is at `x`, `y`.
     @MainThread @PanicsAtCaller
-    Public Method Tile(sprite: Sprite, x: Float32, y: Float32, frame: Int32 = 0)
+    Public Method Tile(sprite: Sprite2D, x: Float32, y: Float32, frame: Int32 = 0)
         Local into = Into("Tile")
         Local drawn = sprite.Drawn(frame, 0, scale.x As Float32, scale.y As Float32)
         Local texture = sprite.Live()

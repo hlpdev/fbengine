@@ -42,8 +42,13 @@ good modern engine on its own. Every structural choice is checked against both.
   generation. 0 is none. Each pool (worlds, entities, meshes, textures, materials, sounds, bodies,
   ...) has its own kind, so a handle given to the wrong kind of call is refused, never taken for
   another object; a freed slot's generation goes up, so an old handle is caught, never aliased,
-  and a slot whose generation would wrap is retired. Kinds are listed in one place, so two
-  packages' pools never share one.
+  and a slot whose generation would wrap is retired. Kinds are listed in one place,
+  `native/common/handles.hpp`, each package in a range of its own so two never share one:
+  fbengine 1 to 63 (World 1, entity 2, geometry 3, material 4, then as its milestones add pools),
+  fbengine_audio 64 to 95, fbengine_physics 96 to 127, fbengine_video 128 to 143.
+- **OS devices** go by the OS's own IDs, not pool handles: gamepads and joysticks by SDL's
+  instance IDs, which SDL never reuses in a run, so a stale one names no device, and the FB side
+  wraps each in an object of its own; displays by their place in the OS's list, read afresh.
 - **Errors**: a call that can fail returns `bool` or a 0 handle, and `fbe_error()` says why, per
   thread. The FB side throws a typed Error for what a game should handle (a file that won't load,
   a mode that can't be set) and panics for a programming mistake (a freed handle, a value out of
@@ -86,17 +91,51 @@ good modern engine on its own. Every structural choice is checked against both.
   swept spheres and ellipsoids against meshes, boxes, and spheres, with stop and slide responses,
   step-up, and ray and sphere picks, in C++ on the job system. SCP:CB's player and NPCs move this
   way; a game wanting rigid bodies uses fbengine_physics.
+  - A mover goes from where it was at its World's last `Collide` to where it is now, as an
+    ellipsoid swept in its own space, where it's a sphere: against meshes' triangles (their
+    fronts), boxes (their twelve triangles), and ellipsoids, each a snapshot at its current
+    transform. Both sides get the contact.
+  - Where it differs from Blitz3D, on purpose: targets are where they are now, never swept, so
+    one moving into a mover pushes it out only as far as nothing else is; squeezed between two
+    facing each other, the mover's middle goes to the middle of the gap, never inside either,
+    unless one closes faster than its radius in a frame and passes over its middle first. An
+    ellipsoid target keeps both its radii; a box turns and scales with its entity. A mover whose
+    touches use up its World's iterations (8 by default) is pushed out of every plane it still
+    touches at once, where that leaves it less in them, and stops there, unless it's still
+    further in than where the move began, as along a crease into a narrowing wedge: then it
+    stays where it was.
+  - The skin keeps a mover off what it touches: it backs away the way it came, never pushed off
+    along the face's normal into something it was leaving, and goes on with what it backed off
+    along the face. Long walks among turned solids measured it at most 0.00004 in, over 200 seeds
+    of 20,000 frames at the first skin of 0.001, which a test holds at the three that were worst
+    before.
+  - A mover already within its radius of a face, an edge, or a corner, or just at it, touches it
+    only going further in, so one starting in a seam goes out of it, never through, and one that
+    rounding puts exactly its radius from an edge isn't held there. Edges' and corners' terms are
+    worked out in double, since for a long sweep beside a big triangle they're far bigger than how
+    near it passes.
+  - A mover climbs ground, a slope within its max slope of level (45 degrees at first), as far as
+    the slope goes, as physics' Character does. Sliding along anything steeper, edges and corners
+    too, raises it no more than the move's own rise and its step height, so a tall mover isn't
+    thrown up over a ledge, and a step up lands on ground no higher than its step height. A step
+    height of 0 is ramps up to the max slope, and no steps.
 
 ## The renderer
 
-- **Vulkan 1.2** with dynamic rendering, synchronization2, and descriptor indexing (bindless
-  textures), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
+- **Vulkan 1.2** with dynamic rendering, synchronization2, descriptor indexing (bindless
+  textures), and buffer device addresses (shaders read buffers through addresses in push
+  constants), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
+  The window's images and the screen are sRGB, so drawing is in linear light.
 - **What it runs on** (the user, 2026-10-31): Vulkan 1.2 GPUs (2016 onward), Windows 10, Linux
   with glibc 2.28, macOS 13 on MoltenVK. **What it aims for** (the user, 2026-10-31): a scene of
   SCP:CB's scale in the high hundreds of fps, 500 or more at 1080p on the user's RTX 4080 and
   well over 144 on a GTX 1060-class GPU, so about 2 ms a frame for the engine, CPU and GPU: batched
   draws, culling, no per-object overhead per frame. Each milestone measures its test scenes
   against it.
+- **Depth and clip space**: targets and the screen use reversed 32-bit float depth, cleared to 0,
+  1 at the near plane, compared GREATER_OR_EQUAL, and Vulkan's clip space, y down. Cameras build
+  their own projections for it; std.math's `Perspective` and `Frustum` are the general ones,
+  near 0 and far 1, y up, and the engine doesn't use them for drawing.
 - **A small frame graph**: each frame's passes (shadows, depth prepass, opaque, sky,
   transparent, post, 2D overlay) declare what they read and write; the graph orders them, places
   barriers, and reuses transient targets.
@@ -118,6 +157,8 @@ good modern engine on its own. Every structural choice is checked against both.
   atlases (the user, 2026-10-31).
 - **Names**: fbengine's GPU image is `Texture`, made from a file or a std.image `Image`, and its
   `Font` lives in its 2D module, qualified where a file imports both (the user, 2026-10-31).
+  A 2D drawable is a `Sprite2D`, which a Canvas draws; `Sprite` is the scene's billboard entity,
+  as Mesh and Camera are entities (2026-10-31, as Godot names its Sprite2D and Sprite3D).
 - **Shaders** are Slang, compiled to SPIR-V when the engine's built and embedded in the DLL
   (the user, 2026-10-31).
   Games' own shaders (E6) come with the asset pipeline's build step.
@@ -127,11 +168,11 @@ good modern engine on its own. Every structural choice is checked against both.
 - Paths are std.vfs's (`res://`), with folders in development and pak files in a release.
 - Loaders are C++ (fastgltf, KTX, stb_image), on worker threads.
   `Assets.Load<T>(path)` loads now; `Await Assets.LoadAsync<T>(path)` loads on a worker, and the
-  Task completes on the main thread at a Flip.
+  Task completes on the main thread at a Flip, or at a tick of the main scheduler while FB waits.
 - A cache keyed by normalized path hands out the same asset again, refcounted; `Free()` and the
   last reference let it go.
 - The cooker, typed references, and hot reload are E8's, and need a package build step from
-  FutureBlitz (docs/questions.md).
+  FutureBlitz, which 1.1 adds.
 - The engine loads modern formats only: glTF for meshes, scenes, and animation; KTX2, PNG, and
   JPEG for textures; OGG, WAV, and FLAC for sound. Converting anything else is a game's own
   tooling, outside the engine and the language (the user, 2026-10-31).
@@ -141,7 +182,8 @@ good modern engine on its own. Every structural choice is checked against both.
 - The API is the main thread's (`@MainThread`). Inside, the C++ core has one job system, a
   worker per core less one, which asset decoding, culling, animation, and collisions use;
   Jolt runs on its own pool.
-- Nothing calls into FB from a worker; finished work is queued and handed over at Flip.
+- Nothing calls into FB from a worker; finished work is queued and handed over at Flip, and at
+  the main scheduler's ticks while FB waits without one.
 
 ## How packages work together
 

@@ -34,6 +34,8 @@ include(cmake/vulkan.cmake)
 include(cmake/slang.cmake)
 
 add_subdirectory(native/fbengine)
+add_subdirectory(native/fbengine_physics)
+add_subdirectory(native/fbengine_audio)
 
 if(FBENGINE_BUILD_TESTS)
   enable_testing()

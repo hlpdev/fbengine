@@ -33,7 +33,8 @@ using fbe::gpu::flag;
 /// What a headless window's image is, as a swapchain's mostly are.
 constexpr VkFormat headless_format = VK_FORMAT_B8G8R8A8_SRGB;
 
-SDL_Window* window = nullptr;
+/// The window the GPU draws into, from when it's opened until it starts closing.
+SDL_Window* drawn_window = nullptr;
 /// Whether the window is shown, not headless.
 bool shown = false;
 VkSurfaceKHR surface = VK_NULL_HANDLE;
@@ -61,7 +62,7 @@ std::int64_t presented = 0;
 VkExtent2D window_pixels() {
     int width = 0;
     int height = 0;
-    SDL_GetWindowSizeInPixels(window, &width, &height);
+    SDL_GetWindowSizeInPixels(drawn_window, &width, &height);
     return {
         .width = static_cast<std::uint32_t>(std::max(width, 0)),
         .height = static_cast<std::uint32_t>(std::max(height, 0)),
@@ -324,10 +325,10 @@ bool on_screen() {
 
 /// A shown window's surface, if it hasn't one yet.
 bool create_surface(VkInstance vulkan) {
-    if (window == nullptr || !on_screen() || surface != VK_NULL_HANDLE) {
+    if (drawn_window == nullptr || !on_screen() || surface != VK_NULL_HANDLE) {
         return true;
     }
-    if (!SDL_Vulkan_CreateSurface(window, vulkan, nullptr, &surface)) {
+    if (!SDL_Vulkan_CreateSurface(drawn_window, vulkan, nullptr, &surface)) {
         surface = VK_NULL_HANDLE;
         return fbe::fail_sdl("couldn't make the window's Vulkan surface");
     }
@@ -445,7 +446,7 @@ void add_present(std::uint32_t index, std::uint64_t drawn) {
 
 /// Whether the window has images to present this frame in, made again first if it's changed.
 bool presentable(const fbe::gpu::device_t& gpu, bool wait) {
-    if (window == nullptr || fbe_window_minimized()) {
+    if (drawn_window == nullptr || fbe_window_minimized()) {
         return false;
     }
     const VkExtent2D pixels = window_pixels();
@@ -459,7 +460,7 @@ bool presentable(const fbe::gpu::device_t& gpu, bool wait) {
 /// Brings the screen up to date for the window's size now, for the next frame, once the frame
 /// drawn into the one there was is presented.
 void update_screen() {
-    if (window != nullptr) {
+    if (drawn_window != nullptr) {
         fbe::gpu::update_screen(window_pixels());
     }
 }
@@ -479,7 +480,7 @@ bool start_with_window() {
     if (!create_surface(vulkan) || !start(surface)) {
         return false;
     }
-    return window == nullptr || make_window(*device());
+    return drawn_window == nullptr || make_window(*device());
 }
 
 std::vector<std::uint8_t> read_window() {
@@ -498,7 +499,7 @@ std::vector<std::uint8_t> read_window() {
 }
 
 bool window_open() {
-    return window != nullptr;
+    return drawn_window != nullptr;
 }
 
 void stop_window() {
@@ -513,7 +514,7 @@ void stop_window() {
 namespace fbe {
 
 bool gpu_window_opened(SDL_Window* opened, bool unless_headless) {
-    window = opened;
+    drawn_window = opened;
     shown = unless_headless;
     if (gpu::device() != nullptr) {
         return make_window(*gpu::device());
@@ -524,7 +525,7 @@ bool gpu_window_opened(SDL_Window* opened, bool unless_headless) {
 void gpu_window_closing() {
     gpu::close_screen();
     destroy_window();
-    window = nullptr;
+    drawn_window = nullptr;
 }
 
 void gpu_present(bool wait) {
@@ -606,7 +607,7 @@ FBE_API bool fbe_gpu_swapchain_vsync(void) {
 }
 
 FBE_API bool fbe_gpu_screen_area(fbe_gpu_rect_t* area) {
-    if (window == nullptr || area == nullptr) {
+    if (drawn_window == nullptr || area == nullptr) {
         return fbe::fail("there's no window; Graphics opens one");
     }
     const VkRect2D part = fbe::gpu::screen_area(window_pixels());
