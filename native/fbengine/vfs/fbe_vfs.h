@@ -3,7 +3,8 @@
 
 // The game's res:// files: folders on the disk and pak files, mounted at places in one tree, a
 // later mount over an earlier one. Paths are "res://" and names with '/' or '\' between them, in
-// any case. What fails says why in fbe_error, and how in fbe_vfs_failure.
+// any case. What fails says why in fbe_error, and how in fbe_vfs_failure, as OTHER when there
+// isn't the memory for it.
 
 #include "../core/fbe_core.h"
 
@@ -47,7 +48,11 @@ FBE_API int32_t fbe_vfs_kind(const char* path);
 // Reads the file at `path`, keeping its bytes for fbe_vfs_read_copy, and gives how many there are;
 // -1 if it can't.
 FBE_API int64_t fbe_vfs_read(const char* path);
-// Copies the bytes the last fbe_vfs_read on this thread kept into `into`, and lets them go.
+// Reads the file at `path` as fbe_vfs_read does, keeping it as well-formed UTF-8, with U+FFFD for
+// each byte that doesn't start a well-formed sequence, and gives how many bytes that is.
+FBE_API int64_t fbe_vfs_read_text(const char* path);
+// Copies the bytes the last fbe_vfs_read or fbe_vfs_read_text on this thread kept into `into`, and
+// lets them go.
 FBE_API void fbe_vfs_read_copy(uint8_t* into);
 // Lists the folder at `path`, sorted by folded names, keeping the list for fbe_vfs_list_name and
 // fbe_vfs_list_kind, and gives how many are in it; -1 if it can't.

@@ -85,12 +85,23 @@ Public Final Class Assets
 
     /// Mounts `files` in memory at `at`, by their paths in it, with '/' (or '\') between folders,
     /// as EmbedFolder gives them, copying them. Panics when `at` isn't a res:// path, or the files
-    /// have a path that's empty, or ends in '/', or is a file's and a folder's too.
+    /// have a path that isn't a file's in a folder (empty, ending in '/', going above it, or with
+    /// a name no res:// path can have), or is a file's and a folder's too.
     @MainThread @PanicsAtCaller
     Public Static Method MountFiles(at: String, files: Map<String, UInt8[]>)
         Local writer = ZipWriter()
         For file In files
-            writer.Add(file.0.Replace("\\", "/"), file.1, ZipMethod.STORE)
+            Local name = file.0.Replace("\\", "/")
+            // As EmbeddedSource has it, a path that names no file is a mistake.
+            Local named = !name.EndsWith("/") && fbe_vfs_normalize("res://" + name)
+            Unsafe
+                named = named && fbe_vfs_normalized().ToString() != "res://"
+            End Unsafe
+            If !named
+                Panic(
+                    "files mounted at {at} have '{file.0}', which isn't a file's path in a folder")
+            End If
+            writer.Add(name, file.1, ZipMethod.STORE)
         End For
         Try
             MountPakBytes(at, writer.Finish())
@@ -109,11 +120,11 @@ Public Final Class Assets
     End Method
 
     /// `path` as the engine compares it, and its cache keys it: "res://", then its names, with
-    /// '/' between them and ASCII letters in lower case, without "." and "..". Panics when it
-    /// isn't a res:// path.
-    @MainThread @PanicsAtCaller
-    Public Static Method Normalize(path: String): String
-        If !fbe_vfs_normalize(path) Then Panic(LastError())
+    /// '/' between them and ASCII letters in lower case, without "." and "..". One that isn't a
+    /// res:// path throws an IOError of INVALID_PATH, since a path can come from a game's data.
+    @MainThread
+    Public Static Method Normalize(path: String): String Throws IOError
+        If !fbe_vfs_normalize(path) Then Throw Failed(path)
         Unsafe
             Return fbe_vfs_normalized().ToString()
         End Unsafe
@@ -124,7 +135,12 @@ Public Final Class Assets
     /// path one of INVALID_PATH, and a pak's file it can't find in its pak one of INVALID_DATA.
     @MainThread
     Public Static Method ReadBytes(path: String): UInt8[] Throws IOError
-        Local size = fbe_vfs_read(path)
+        Return Try Kept(path, fbe_vfs_read(path))
+    End Method
+
+    // The bytes the read that gave `size` kept, or its failure.
+    @MainThread
+    Static Method Kept(path: String, size: Int64): UInt8[] Throws IOError
         If size < 0 Then Throw Failed(path)
         Local bytes: UInt8[] = []
         If size == 0 Then Return bytes
@@ -135,13 +151,12 @@ Public Final Class Assets
         Return bytes
     End Method
 
-    /// The file's text, which is UTF-8: one that isn't throws an IOError of INVALID_DATA, and the
-    /// rest throw as ReadBytes does.
+    /// The file's bytes as text, with U+FFFD for each one that doesn't start well-formed UTF-8, as
+    /// File.ReadText has it. It throws as ReadBytes does.
     @MainThread
     Public Static Method ReadText(path: String): String Throws IOError
-        Local text = String.FromUtf8(Try ReadBytes(path))
-        If text == Null Then Throw IOError(IOErrorKind.INVALID_DATA, "{path} isn't UTF-8", path)
-        Return text
+        // The engine makes it well-formed, so it's always a String.
+        Return String.FromUtf8(Try Kept(path, fbe_vfs_read_text(path))) ?? ""
     End Method
 
     /// What's at `path`, FileKind.FILE or FileKind.DIRECTORY, as a read finds it, or Null when
@@ -171,7 +186,7 @@ Public Final Class Assets
     Public Static Method Entries(path: String): AssetEntry[] Throws IOError
         Local count = fbe_vfs_list(path)
         If count < 0 Then Throw Failed(path)
-        Local folder = Normalize(path)
+        Local folder = Try Normalize(path)
         Local entries: AssetEntry[] = []
         For i = 0 Until count
             Local name = ""

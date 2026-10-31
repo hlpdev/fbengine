@@ -4,6 +4,7 @@
 #include "assets/loads.hpp"
 
 #include <format>
+#include <new>
 #include <utility>
 
 namespace fbe::assets {
@@ -14,9 +15,26 @@ constexpr std::uint32_t last_generation = (1U << 24U) - 1U;
 // A model's progress after its file's read; the rest is decoding it.
 constexpr float read_part = 0.1F;
 
+void run_load_here(load_t& load, jobs_t* jobs);
+
 } // namespace
 
 void run_load(load_t& load, jobs_t* jobs) {
+    // What a file says it has can be more than there's memory for.
+    try {
+        run_load_here(load, jobs);
+    } catch (const std::bad_alloc&) {
+        load.error = error_t{
+            .failure = failure_t::OTHER,
+            .message = std::format("there isn't the memory to load {}", load.path.text()),
+        };
+        load.progress = 1;
+    }
+}
+
+namespace {
+
+void run_load_here(load_t& load, jobs_t* jobs) {
     result_t<bytes_t> bytes = vfs::files().read(load.path);
     if (!bytes) {
         load.error = std::move(bytes.error());
@@ -58,6 +76,8 @@ void run_load(load_t& load, jobs_t* jobs) {
     }
     load.progress = 1;
 }
+
+} // namespace
 
 std::uint64_t loads_t::add(std::shared_ptr<load_t> load) {
     std::uint32_t slot = 0;
