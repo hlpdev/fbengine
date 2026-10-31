@@ -253,3 +253,30 @@ Function AMixIsClippedAsADevicesIs() Throws AudioError, SoundError
     sound.Play()
     Expect(Audio.Mix(4) == [0.0, 1.0, -1.0, 1.0] As Float32[])
 End Function
+
+// A loop turned off in its last few milliseconds, once miniaudio has read ahead round to its
+// start, ends at its end rather than playing its sound again, decoded whole or streamed.
+@Test
+Function ALoopTurnedOffAtItsEndEndsThere() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 1)
+    Defer Audio.Stop()
+    Local bytes = Wav(Rising(4800))
+    For sound In [Try Sound.FromBytes(bytes), Try Sound.StreamBytes(bytes)]
+        sound.SetLoop(True)
+        Local channel = sound.Play()
+        Audio.Mix(4750)
+        channel.SetLoop(False)
+        Local more = 0
+        Local last: Float32 = 0.0
+        Local rising = True
+        While channel.Playing() && more < 10000
+            For sample In Audio.Mix(10)
+                rising = rising && (sample >= last || sample == 0.0)
+                last = Max(last, sample)
+            End For
+            more += 10
+        End While
+        Expect(more <= 100)
+        Expect(rising)
+    End For
+End Function

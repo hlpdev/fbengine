@@ -15,14 +15,51 @@ FetchContent_Declare(
   SYSTEM
 )
 FetchContent_MakeAvailable(miniaudio)
+
+# stb_vorbis 1.22, patched where a corrupt file's comment header corrupts the heap. The vendor's
+# and each comment's length and the comment count are read from the file and size allocations,
+# through setup_malloc's int, which a count past 2^28 overflows; a comment that won't read leaves
+# comment_list partly unset, and a count too big to allocate leaves it null, for vorbis_deinit to
+# free what was never allocated either way. The copy refuses a string past 16 MB or a count past
+# 2^20, clears comment_list as it's allocated, and frees its comments only when there's a list.
+# Each patch's text has to be there, once, or configuring fails.
+file(READ "${miniaudio_SOURCE_DIR}/extras/stb_vorbis.c" fbengine_stb_vorbis)
+set(fbengine_stb_vorbis_patches
+    "   len = get32_packet(f)\;\n   f->vendor ="
+    "   len = get32_packet(f)\;\n   if (len < 0 || len > (1 << 24))                 return error(f, VORBIS_invalid_setup)\;\n   f->vendor ="
+    "   f->comment_list_length = get32_packet(f)\;\n"
+    "   f->comment_list_length = get32_packet(f)\;\n   if (f->comment_list_length < 0 || f->comment_list_length > (1 << 20)) return error(f, VORBIS_invalid_setup)\;\n"
+    "      if (f->comment_list == NULL)                  return error(f, VORBIS_outofmem)\;\n"
+    "      if (f->comment_list == NULL)                  return error(f, VORBIS_outofmem)\;\n      memset(f->comment_list, 0, sizeof(char*) * (f->comment_list_length))\;\n"
+    "      len = get32_packet(f)\;\n      f->comment_list[i] ="
+    "      len = get32_packet(f)\;\n      if (len < 0 || len > (1 << 24))              return error(f, VORBIS_invalid_setup)\;\n      f->comment_list[i] ="
+    "   for (i=0\; i < p->comment_list_length\; ++i) {\n"
+    "   for (i=0\; p->comment_list != NULL && i < p->comment_list_length\; ++i) {\n")
+list(LENGTH fbengine_stb_vorbis_patches fbengine_patch_count)
+math(EXPR fbengine_patch_last "${fbengine_patch_count} - 1")
+foreach(fbengine_patch RANGE 0 ${fbengine_patch_last} 2)
+  math(EXPR fbengine_patched "${fbengine_patch} + 1")
+  list(GET fbengine_stb_vorbis_patches ${fbengine_patch} fbengine_from)
+  list(GET fbengine_stb_vorbis_patches ${fbengine_patched} fbengine_to)
+  string(FIND "${fbengine_stb_vorbis}" "${fbengine_from}" fbengine_first)
+  string(FIND "${fbengine_stb_vorbis}" "${fbengine_from}" fbengine_last REVERSE)
+  if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
+    message(FATAL_ERROR "stb_vorbis.c doesn't have, once, what a patch expects: ${fbengine_from}")
+  endif()
+  string(REPLACE "${fbengine_from}" "${fbengine_to}" fbengine_stb_vorbis "${fbengine_stb_vorbis}")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/stb_vorbis.c.in" "${fbengine_stb_vorbis}")
+configure_file("${CMAKE_CURRENT_BINARY_DIR}/stb_vorbis.c.in" "${CMAKE_CURRENT_BINARY_DIR}/stb_vorbis.c"
+               COPYONLY)
+
 set(fbengine_miniaudio_source "${CMAKE_CURRENT_BINARY_DIR}/miniaudio.c")
 file(WRITE "${fbengine_miniaudio_source}.in" [=[
 #define STB_VORBIS_HEADER_ONLY
-#include "extras/stb_vorbis.c"
+#include "stb_vorbis.c"
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 #undef STB_VORBIS_HEADER_ONLY
-#include "extras/stb_vorbis.c"
+#include "stb_vorbis.c"
 #include "extras/nodes/ma_reverb_node/ma_reverb_node.c"
 ]=])
 configure_file("${fbengine_miniaudio_source}.in" "${fbengine_miniaudio_source}" COPYONLY)

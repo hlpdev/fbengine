@@ -66,22 +66,26 @@ if(FBENGINE_FB_TESTS)
 endif()
 
 # fbengine_audio's own C++, where it's subtle: what's in its headers, and miniaudio's backends.
-add_executable(fbengine_audio_tests audio/pool_tests.cpp audio/backends_tests.cpp)
+add_executable(fbengine_audio_tests audio/pool_tests.cpp audio/backends_tests.cpp
+               audio/channels_tests.cpp)
 target_include_directories(fbengine_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine_audio")
 target_link_libraries(fbengine_audio_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_audio_tests)
 catch_discover_tests(fbengine_audio_tests TEST_PREFIX "audio."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
-# On Windows, fbengine_audio_native's C API with OLE, on the null backend.
+# fbengine_audio_native's C API, with a thread of the test's own mixing, as a device's does, and on
+# Windows, with OLE, on the null backend.
+add_executable(fbengine_audio_native_tests audio/native_tests.cpp)
+target_link_libraries(fbengine_audio_native_tests PRIVATE fbengine_audio_native
+                      Catch2::Catch2WithMain)
 if(WIN32)
-  add_executable(fbengine_audio_ole_tests audio/ole_tests.cpp)
-  target_link_libraries(fbengine_audio_ole_tests PRIVATE fbengine_audio_native ole32
-                        Catch2::Catch2WithMain)
-  fbengine_set_warnings(fbengine_audio_ole_tests)
-  catch_discover_tests(fbengine_audio_ole_tests TEST_PREFIX "audio."
-                       DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
+  target_sources(fbengine_audio_native_tests PRIVATE audio/ole_tests.cpp)
+  target_link_libraries(fbengine_audio_native_tests PRIVATE ole32)
 endif()
+fbengine_set_warnings(fbengine_audio_native_tests)
+catch_discover_tests(fbengine_audio_native_tests TEST_PREFIX "audio."
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
 
 # Playing a sound to miniaudio's null backend, as a game plays to its device; and ending with the
 # audio started, as a program does and as a panic does, which ends at once, never waiting on its

@@ -10,10 +10,12 @@
 #include "emitter/emitters.hpp"
 #include "fbengine_audio.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <format>
 #include <memory>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -21,8 +23,14 @@ namespace {
 
 /// The most channels a sound has, as the mix.
 constexpr ma_uint32 most_channels = 8;
-/// How many frames a decode reads at a time when the decoder can't say how long the sound is.
+/// How many frames a decode reads at a time, whatever the file says, as miniaudio's readers take
+/// a count of samples as an int.
 constexpr ma_uint64 chunk = 4096;
+/// The most frames a decode makes room for before it's read them, whatever the file says it has.
+constexpr ma_uint64 first_room = ma_uint64{ 1 } << 20U;
+/// The most frames a byte of a sound file decodes to, more than any format's silence does; a file
+/// that says it has more is lying, and its frames are counted instead.
+constexpr ma_uint64 most_frames_a_byte = 4096;
 
 /// What a sound handle holds: its share of the sound.
 struct sound_t {
@@ -62,11 +70,9 @@ bool open(decoder_t& decoder, const std::uint8_t* data, std::int64_t size) {
     const ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 0, 0);
     const ma_result result =
         ma_decoder_init_memory(data, static_cast<std::size_t>(size), &config, &decoder.decoder);
-    if (result == MA_NO_BACKEND) {
-        return fbe::audio::fail("couldn't read the sound: it isn't WAV, FLAC, or Ogg Vorbis");
-    }
     if (result != MA_SUCCESS) {
-        return fbe::audio::fail_ma("couldn't read the sound", result);
+        return fbe::audio::fail(
+            "couldn't read the sound: it isn't WAV, FLAC, or Ogg Vorbis, or it's corrupt");
     }
     decoder.open = true;
     return true;
@@ -91,7 +97,8 @@ std::unique_ptr<fbe::audio::sound_data_t> describe(ma_decoder& decoder) {
     return data;
 }
 
-/// Every frame `decoder` has, or null, with fbe_audio_error's message.
+/// Every frame `decoder` has, or null, with fbe_audio_error's message. The room it makes grows as
+/// it reads, never from the length a file says, which a corrupt one makes up.
 std::unique_ptr<fbe::audio::sound_data_t> decode(ma_decoder& decoder) {
     std::unique_ptr<fbe::audio::sound_data_t> data = describe(decoder);
     if (data == nullptr) {
@@ -103,16 +110,13 @@ std::unique_ptr<fbe::audio::sound_data_t> decode(ma_decoder& decoder) {
         length = 0;
     }
     const std::size_t channels = data->channels;
-    data->samples.resize(static_cast<std::size_t>(length != 0 ? length : chunk) * channels);
+    data->samples.reserve(static_cast<std::size_t>(std::min(length, first_room)) * channels);
     ma_uint64 frames = 0;
     for (;;) {
-        if (frames * channels == data->samples.size()) {
-            data->samples.resize(data->samples.size() + (chunk * channels));
-        }
-        const ma_uint64 room = (data->samples.size() / channels) - frames;
+        data->samples.resize((frames + chunk) * channels);
         ma_uint64 read = 0;
         const ma_result result =
-            ma_decoder_read_pcm_frames(&decoder, &data->samples[frames * channels], room, &read);
+            ma_decoder_read_pcm_frames(&decoder, &data->samples[frames * channels], chunk, &read);
         frames += read;
         if (result == MA_AT_END || read == 0) {
             break;
@@ -132,11 +136,17 @@ std::unique_ptr<fbe::audio::sound_data_t> decode(ma_decoder& decoder) {
     return data;
 }
 
-/// How many frames `decoder` has: what it says, or for a file that doesn't, what it reads.
-ma_uint64 count_frames(ma_decoder& decoder, std::uint32_t channels) {
+/// How many frames `decoder`, over `size` bytes, has: what it says, if that's a length its bytes
+/// could have, or what it reads, up to the most they could.
+ma_uint64 count_frames(ma_decoder& decoder, std::uint32_t channels, std::int64_t size) {
+    const ma_uint64 most = static_cast<ma_uint64>(size) * most_frames_a_byte;
     ma_uint64 frames = 0;
-    if (ma_decoder_get_length_in_pcm_frames(&decoder, &frames) == MA_SUCCESS && frames != 0) {
+    if (ma_decoder_get_length_in_pcm_frames(&decoder, &frames) == MA_SUCCESS && frames != 0 &&
+        frames <= most) {
         return frames;
+    }
+    if (ma_decoder_seek_to_pcm_frame(&decoder, 0) != MA_SUCCESS) {
+        return 0;
     }
     frames = 0;
     std::vector<float> scratch(chunk * channels);
@@ -145,8 +155,14 @@ ma_uint64 count_frames(ma_decoder& decoder, std::uint32_t channels) {
         read = 0;
         ma_decoder_read_pcm_frames(&decoder, scratch.data(), chunk, &read);
         frames += read;
-    } while (read != 0);
+    } while (read != 0 && frames <= most);
     return frames;
+}
+
+/// Fails, for fbe_audio_error, a call that ran out of memory, and gives 0.
+std::uint64_t out_of_memory() {
+    fbe::audio::fail("out of memory");
+    return 0;
 }
 
 } // namespace
@@ -162,7 +178,9 @@ std::shared_ptr<const sound_data_t> find_sound(std::uint64_t sound) {
 
 extern "C" {
 
-FBE_AUDIO_API uint64_t fbe_sound_load(const uint8_t* data, int64_t size) {
+// A file's bytes, read at their word, can ask for more memory than there is, which fails here
+// rather than through the C API.
+FBE_AUDIO_API uint64_t fbe_sound_load(const uint8_t* data, int64_t size) try {
     decoder_t decoder;
     if (!open(decoder, data, size)) {
         return 0;
@@ -172,9 +190,11 @@ FBE_AUDIO_API uint64_t fbe_sound_load(const uint8_t* data, int64_t size) {
         return 0;
     }
     return sounds().add(std::make_unique<sound_t>(std::move(decoded)));
+} catch (const std::bad_alloc&) {
+    return out_of_memory();
 }
 
-FBE_AUDIO_API uint64_t fbe_sound_stream(const uint8_t* data, int64_t size) {
+FBE_AUDIO_API uint64_t fbe_sound_stream(const uint8_t* data, int64_t size) try {
     decoder_t decoder;
     if (!open(decoder, data, size)) {
         return 0;
@@ -183,13 +203,15 @@ FBE_AUDIO_API uint64_t fbe_sound_stream(const uint8_t* data, int64_t size) {
     if (streamed == nullptr) {
         return 0;
     }
-    streamed->frames = count_frames(decoder.decoder, streamed->channels);
+    streamed->frames = count_frames(decoder.decoder, streamed->channels, size);
     if (streamed->frames == 0) {
         fbe::audio::fail("the sound has no frames");
         return 0;
     }
     streamed->encoded.assign(data, data + size);
     return sounds().add(std::make_unique<sound_t>(std::move(streamed)));
+} catch (const std::bad_alloc&) {
+    return out_of_memory();
 }
 
 FBE_AUDIO_API bool fbe_sound_streamed(uint64_t sound) {
