@@ -1,6 +1,7 @@
-// collide's masks, apart from the DLL: what the fast paths (whole words of rows, each row's span)
-// give against a brute force over every screen pixel, on seeded random masks and placements, the
-// handles' and the canvas's rules on whole pixels, and how long many sprites take.
+// collide's masks, apart from the DLL: what the fast paths (whole words of rows, each row's span,
+// a pixel of a mask's at a time) give against a brute force over every screen pixel, and each
+// pixel against a GPU's, on seeded random masks and placements; the handles' and the canvas's
+// rules on whole pixels; and how long many sprites take.
 
 #include "collide/fbe_collide.h"
 
@@ -168,8 +169,8 @@ void reach(const pixels_t& pixels, const fbe_collide_place_t& place, std::int64_
 
 /// A random place: half the time on the GPU's grid, its position on quarter pixels, its handle
 /// on halves, ends, or the middle, a quarter turn or none, and a scale of a half, 1, or 2, either
-/// way; and the rest anything, plain a third of that, quarter turns and mirrors a third, and any
-/// turn and scale the rest. Whether it's on the grid, where the GPU's answer is exact.
+/// way, so its pixels' middles land on its edges; and the rest anything, plain a third of that,
+/// quarter turns and mirrors a third, and any turn and scale the rest. Whether it's on the grid.
 fbe_collide_place_t placed(const pixels_t& pixels, std::mt19937& random, bool& gridded) {
     std::uniform_real_distribution<float> at(-40.0F, 40.0F);
     std::uniform_real_distribution<float> any(-1.0F, 1.0F);
@@ -290,17 +291,15 @@ TEST_CASE(
             const bool on = reference(a, at_a, static_cast<std::int64_t>(std::floor(point_x)),
                                       static_cast<std::int64_t>(std::floor(point_y)));
             CHECK(fbe_collide_point(a.mask, &at_a, point_x, point_y) == (on ? 1 : 0));
-            // On the grid, each pixel is the GPU's, ties and all.
-            if (gridded_a) {
-                ++gridded_cases;
-                std::int64_t differ = 0;
-                for (std::int64_t y = top; y < bottom; ++y) {
-                    for (std::int64_t x = left; x < right; ++x) {
-                        differ += reference(a, at_a, x, y) != gpu_at(a, at_a, x, y) ? 1 : 0;
-                    }
+            // Each pixel is the GPU's, ties and all, on the grid or off it.
+            gridded_cases += gridded_a ? 1 : 0;
+            std::int64_t differ = 0;
+            for (std::int64_t y = top; y < bottom; ++y) {
+                for (std::int64_t x = left; x < right; ++x) {
+                    differ += reference(a, at_a, x, y) != gpu_at(a, at_a, x, y) ? 1 : 0;
                 }
-                CHECK(differ == 0);
             }
+            CHECK(differ == 0);
         }
         fbe_collide_free(a.mask);
         fbe_collide_free(b.mask);
@@ -474,12 +473,8 @@ TEST_CASE("a mask scaled up costs its own pixels, not the screen's") {
     two[(((31 * 32) + 31) * 4) + 3] = 255;
     const std::uint64_t a = fbe_collide_mask(one.data(), 32, 32, 128, 1);
     const std::uint64_t b = fbe_collide_mask(two.data(), 32, 32, 128, 1);
-    // Turned, it's a row at a time over what the canvas reaches: a huge one's slow, if not forever.
     for (const float scale : { 1.0F, 30.0F, 1000.0F, 1e6F, 3.4e38F }) {
         for (const float rotation : { 0.0F, half_pi, 0.576F }) {
-            if (rotation == 0.576F && scale > 1000.0F) {
-                continue;
-            }
             // Each solid only at an opposite corner, on one spot: no pixel meets, so every row of
             // the overlap is gone through.
             const fbe_collide_place_t place =
@@ -503,4 +498,193 @@ TEST_CASE("a mask scaled up costs its own pixels, not the screen's") {
     fbe_collide_free(a);
     fbe_collide_free(b);
     fbe_collide_free(c);
+}
+
+TEST_CASE("a turn near a quarter is one where the GPU's snapped corners are, and only there") {
+    // NOLINTNEXTLINE(bugprone-random-generator-seed)
+    std::mt19937 random(20261101);
+    std::uniform_int_distribution<int> size(1, 70);
+    std::uniform_int_distribution<int> turns(-200, 200);
+    std::uniform_int_distribution<int> steps(-4, 4);
+    std::uniform_int_distribution<int> either(0, 1);
+    std::uniform_real_distribution<float> at(-30.0F, 30.0F);
+    std::uniform_real_distribution<float> any(0.0F, 1.0F);
+    const std::array<float, 5> scales{ 1.0F, -1.0F, 2.0F, -0.5F, 3.0F };
+    std::uniform_int_distribution<std::size_t> scale(0, scales.size() - 1);
+    for (int round = 0; round < 400; ++round) {
+        const int across = size(random);
+        const int down = size(random);
+        const pixels_t sprite = made(across, down, 0.5, random);
+        // k quarter turns as a game's floats have them, k pi / 2 made a float, or k times a float
+        // pi / 2, a few of a float's steps either way; most far enough round to tilt on the GPU.
+        const int quarter = turns(random);
+        float rotation = either(random) == 0 ? static_cast<float>(quarter * std::numbers::pi / 2.0)
+                                             : static_cast<float>(quarter) * half_pi;
+        const int off = steps(random);
+        for (int step = 0; step < std::abs(off); ++step) {
+            rotation = std::nextafter(rotation, off > 0 ? 1e30F : -1e30F);
+        }
+        // Anywhere, not only on the grid, so the GPU's snap to 256ths counts.
+        const fbe_collide_place_t place =
+            place_of(at(random), at(random), any(random) * static_cast<float>(across),
+                     any(random) * static_cast<float>(down), rotation, scales[scale(random)],
+                     scales[scale(random)]);
+        std::int64_t left = 0;
+        std::int64_t top = 0;
+        std::int64_t right = 0;
+        std::int64_t bottom = 0;
+        reach(sprite, place, left, top, right, bottom);
+        std::int64_t differ = 0;
+        for (std::int64_t y = top; y < bottom; ++y) {
+            for (std::int64_t x = left; x < right; ++x) {
+                differ += reference(sprite, place, x, y) != gpu_at(sprite, place, x, y) ? 1 : 0;
+            }
+        }
+        INFO("round " << round << ": " << across << "x" << down << " at " << place.x << ","
+                      << place.y << " handle " << place.handle_x << "," << place.handle_y
+                      << " turned " << rotation << " scaled " << place.scale_x << ","
+                      << place.scale_y);
+        CHECK(differ == 0);
+        fbe_collide_free(sprite.mask);
+    }
+    // A float's -201.06 isn't -128 quarter turns: the canvas tilts a long bar by more than a 256th,
+    // so it covers pixels a quarter turn doesn't, as the GPU draws it.
+    std::vector<std::uint8_t> rgba(std::size_t{ 1600 }, 255);
+    pixels_t bar;
+    bar.width = 400;
+    bar.height = 1;
+    bar.solid.assign(400, true);
+    bar.mask = fbe_collide_mask(rgba.data(), 400, 1, 1600, 1);
+    REQUIRE(bar.mask != 0);
+    const fbe_collide_place_t tilted = place_of(0.5F, 0.5F, 0.0F, 0.0F, -201.06F, 1.0F, 1.0F);
+    std::int64_t left = 0;
+    std::int64_t top = 0;
+    std::int64_t right = 0;
+    std::int64_t bottom = 0;
+    reach(bar, tilted, left, top, right, bottom);
+    std::int64_t differ = 0;
+    std::int64_t solid = 0;
+    for (std::int64_t y = top; y < bottom; ++y) {
+        for (std::int64_t x = left; x < right; ++x) {
+            differ += reference(bar, tilted, x, y) != gpu_at(bar, tilted, x, y) ? 1 : 0;
+            solid += reference(bar, tilted, x, y) ? 1 : 0;
+        }
+    }
+    CHECK(differ == 0);
+    CHECK(solid > 0);
+    fbe_collide_free(bar.mask);
+}
+
+TEST_CASE("a corner's snapped to the GPU's 256ths of a pixel") {
+    std::vector<std::uint8_t> rgba(std::size_t{ 4 }, 255);
+    const std::uint64_t dot = fbe_collide_mask(rgba.data(), 1, 1, 4, 1);
+    // 3.501 is 3.5 to the GPU, a pixel's middle on its left edge, so that pixel's its.
+    const fbe_collide_place_t place = place_of(3.501F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F);
+    CHECK(fbe_collide_point(dot, &place, 3.5F, 0.5F) == 1);
+    CHECK(fbe_collide_point(dot, &place, 4.5F, 0.5F) == 0);
+    // And 3.499 is 3.5 too.
+    const fbe_collide_place_t before = place_of(3.499F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F);
+    CHECK(fbe_collide_point(dot, &before, 3.5F, 0.5F) == 1);
+    CHECK(fbe_collide_point(dot, &before, 2.5F, 0.5F) == 0);
+    fbe_collide_free(dot);
+}
+
+TEST_CASE("masks turned and scaled up are met a pixel of theirs at a time, as by rows") {
+    // Against the brute force, a few rows past where going by their pixels takes over.
+    // NOLINTNEXTLINE(bugprone-random-generator-seed)
+    std::mt19937 random(31);
+    std::uniform_real_distribution<float> turn(-3.2F, 3.2F);
+    std::uniform_real_distribution<float> at(-150.0F, 150.0F);
+    std::uniform_real_distribution<float> big(32.0F, 40.0F);
+    int met = 0;
+    for (int round = 0; round < 300; ++round) {
+        const pixels_t a = made(4, 3, 0.4, random);
+        const pixels_t b = made(3, 5, 0.4, random);
+        const fbe_collide_place_t at_a =
+            place_of(at(random), at(random), 2.0F, 1.5F, turn(random), big(random), big(random));
+        const fbe_collide_place_t at_b =
+            place_of(at(random), at(random), 1.0F, 2.5F, round % 3 == 0 ? 0.0F : turn(random),
+                     big(random), -big(random));
+        std::int64_t left = 0;
+        std::int64_t top = 0;
+        std::int64_t right = 0;
+        std::int64_t bottom = 0;
+        reach(a, at_a, left, top, right, bottom);
+        bool expected = false;
+        for (std::int64_t y = top; y < bottom && !expected; ++y) {
+            for (std::int64_t x = left; x < right && !expected; ++x) {
+                expected = reference(a, at_a, x, y) && reference(b, at_b, x, y);
+            }
+        }
+        INFO("round " << round);
+        CHECK(fbe_collide_masks(a.mask, &at_a, b.mask, &at_b) == (expected ? 1 : 0));
+        CHECK(fbe_collide_masks(b.mask, &at_b, a.mask, &at_a) == (expected ? 1 : 0));
+        // And a rectangle over part of it.
+        const fbe_collide_rect_t rect = rect_of(at(random), at(random), 90.0F, 80.0F);
+        bool inside = false;
+        const auto from_x = static_cast<std::int64_t>(std::floor(rect.x));
+        const auto to_x = static_cast<std::int64_t>(std::ceil(rect.x + rect.width));
+        const auto from_y = static_cast<std::int64_t>(std::floor(rect.y));
+        const auto to_y = static_cast<std::int64_t>(std::ceil(rect.y + rect.height));
+        for (std::int64_t y = from_y; y < to_y && !inside; ++y) {
+            for (std::int64_t x = from_x; x < to_x && !inside; ++x) {
+                inside = reference(a, at_a, x, y);
+            }
+        }
+        CHECK(fbe_collide_rect(a.mask, &at_a, &rect) == (inside ? 1 : 0));
+        met += expected ? 1 : 0;
+        fbe_collide_free(a.mask);
+        fbe_collide_free(b.mask);
+    }
+    CHECK(met > 30);
+    CHECK(met < 270);
+}
+
+TEST_CASE("a sprite a 256th wider or narrower on the GPU is still the GPU's pixels") {
+    // Just short of 65,536, a float's in 256ths, and past it in 128ths, so a sprite reaching across
+    // it has its far corner rounded a 256th nearer or farther than its size: mostly the same
+    // pixels, but not where a pixel's middle's that near its edge.
+    // NOLINTNEXTLINE(bugprone-random-generator-seed)
+    std::mt19937 random(65536);
+    std::uniform_int_distribution<int> size(1, 90);
+    std::uniform_int_distribution<int> short_of(0, 60);
+    std::uniform_int_distribution<int> fraction(0, 255);
+    std::uniform_int_distribution<int> near(-3, 3);
+    const auto snapped = [](double at) {
+        return std::llround(static_cast<double>(static_cast<float>(at)) * 256.0);
+    };
+    int resized = 0;
+    for (int round = 0; round < 600; ++round) {
+        const pixels_t sprite = made(size(random), size(random), 0.5, random);
+        // Half of them with a corner a 256th or so from a pixel's middle.
+        const auto across =
+            static_cast<float>(round % 2 == 0 ? 128 + near(random) : fraction(random));
+        const auto down =
+            static_cast<float>(round % 2 == 0 ? 128 + near(random) : fraction(random));
+        const float x = 65536.0F - static_cast<float>(short_of(random) + 1) + (across / 256.0F);
+        const float y = 65536.0F - static_cast<float>(short_of(random) + 1) + (down / 256.0F);
+        const fbe_collide_place_t place = place_of(x, y, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F);
+        resized += snapped(static_cast<double>(x) + sprite.width) - snapped(x) !=
+                           std::int64_t{ 256 } * sprite.width
+                       ? 1
+                       : 0;
+        std::int64_t left = 0;
+        std::int64_t top = 0;
+        std::int64_t right = 0;
+        std::int64_t bottom = 0;
+        reach(sprite, place, left, top, right, bottom);
+        std::int64_t differ = 0;
+        for (std::int64_t row = top; row < bottom; ++row) {
+            for (std::int64_t column = left; column < right; ++column) {
+                differ +=
+                    reference(sprite, place, column, row) != gpu_at(sprite, place, column, row) ? 1
+                                                                                                : 0;
+            }
+        }
+        INFO("round " << round << ": " << sprite.width << "x" << sprite.height << " at " << x << ","
+                      << y);
+        CHECK(differ == 0);
+        fbe_collide_free(sprite.mask);
+    }
+    CHECK(resized > 100);
 }

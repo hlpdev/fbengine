@@ -48,9 +48,9 @@ struct face_t {
     std::int32_t weight = 400;
     bool italic = false;
     std::int32_t units_per_em = 1000;
-    /// Whether each glyph asked of it can be drawn: an outline, COLR's layers, or a bitmap FreeType
-    /// reads, not a PNG or SVG picture alone.
-    std::unordered_map<std::uint32_t, bool> drawable;
+    /// Whether each glyph asked of it can be drawn, at each size it's asked at, by glyph << 32 |
+    /// size: an outline, COLR's layers, or a bitmap FreeType reads, not a PNG or SVG picture alone.
+    std::unordered_map<std::uint64_t, bool> drawable;
 };
 
 /// A font, as its handle is: a face at a size, in its own units, the style asked of it, what of
@@ -121,21 +121,26 @@ std::shared_ptr<face_t> system_default(std::uint32_t style);
 
 /// A glyph rasterized into the atlas: its page, its place there, and where that place's top left
 /// is from the pen on the baseline, y down; its place is empty for one with nothing to draw, as a
-/// space.
+/// space. `scale` is how much bigger it's drawn than it's rasterized, past 1 for one more than 2048
+/// pixels across or down; `shifted`, whether a quarter's move right, and a made bolder and slant,
+/// are rasterized into it: an outline's are, a color glyph's or a strike's bitmap's aren't.
 struct glyph_t {
     std::uint32_t page = 0;
     rect_t place;
     std::int32_t left = 0;
     std::int32_t top = 0;
+    double scale = 1.0;
+    bool shifted = true;
 };
 
-/// Whether `face` can draw its glyph for `point`: it has one, and FreeType can load it, in color
-/// or not; kept for each glyph.
-bool draws(face_t& face, char32_t point);
+/// Whether `face` can draw its glyph for `point` at `pixels` an em, 26.6: it has one, and FreeType
+/// can load it, in color or not; kept for each glyph and size.
+bool draws(face_t& face, char32_t point, std::int32_t pixels);
 
 /// The glyph `glyph` of `face` in the atlas, rasterized the first time it's asked for at `pixels`
 /// an em, in 26.6 fixed point, made bolder and slanted as they say, and moved right by `quarter`
-/// quarters of a pixel; null with fbe_error's why if FreeType can't.
+/// quarters of a pixel, where it's an outline; past 2048 pixels across or down, rasterized smaller;
+/// null with fbe_error's why if FreeType can't.
 const glyph_t* rasterized(face_t& face, std::uint32_t glyph, std::int32_t pixels, bool bolder,
                           bool slanted, std::int32_t quarter);
 

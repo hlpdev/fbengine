@@ -7,16 +7,25 @@
 - FbeTestMarks-Regular.ttf: "Fbe Test Marks", outlines for a and U+0332.
 - FbeTestSvg-Regular.ttf: "Fbe Test Svg", an SVG picture of U+E903, which FreeType isn't built to
   draw here, over an outline of it, and an SVG picture of U+E904 with an empty outline.
+- FbeTestHuge-Regular.ttf: "Fbe Test Huge", an outline for H 15 ems across and tall, as a
+  hostile font's glyph can be (FreeType renders up to 16), and for a, a hair over half an em
+  across.
+- FbeTestSbix-Regular.ttf: "Fbe Test Sbix", an sbix PNG of a at 32 pixels an em, which FreeType
+  isn't built to read here, over an outline of it.
 
 Run it again with `python tests/fonts/make_fonts.py` if they change.
 """
 
 import pathlib
+import struct
+import zlib
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import newTable
 from fontTools.ttLib.tables.S_V_G_ import SVGDocument
+from fontTools.ttLib.tables.sbixGlyph import Glyph as SbixGlyph
+from fontTools.ttLib.tables.sbixStrike import Strike
 
 HERE = pathlib.Path(__file__).parent
 
@@ -35,9 +44,18 @@ def empty():
     return TTGlyphPen(None).glyph()
 
 
-def made(family, glyphs, cmap, file, colors=None, svg=None):
-    """A font of `glyphs`, names to (advance, outline), mapped by `cmap`, with COLR's layers, and
-    SVG documents, (document, first glyph, last glyph)."""
+def png():
+    """A red pixel, as a PNG."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    return (bytes([0x89]) + b"PNG" + bytes([13, 10, 26, 10]) +
+            chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(bytes([0, 255, 0, 0, 255]))) + chunk(b"IEND", b""))
+
+
+def made(family, glyphs, cmap, file, colors=None, svg=None, sbix=None):
+    """A font of `glyphs`, names to (advance, outline), mapped by `cmap`, with COLR's layers, SVG
+    documents, (document, first glyph, last glyph), and sbix's PNGs, by size, then glyph."""
     builder = FontBuilder(1000, isTTF=True)
     order = [".notdef"] + [name for name in glyphs if name != ".notdef"]
     builder.setupGlyphOrder(order)
@@ -62,6 +80,17 @@ def made(family, glyphs, cmap, file, colors=None, svg=None):
         table = newTable("SVG ")
         table.docList = [SVGDocument(document, first, last, False) for document, first, last in svg]
         builder.font["SVG "] = table
+    if sbix is not None:
+        table = newTable("sbix")
+        table.version = 1
+        table.flags = 1
+        table.strikes = {}
+        for ppem, pictures in sbix.items():
+            strike = Strike(ppem=ppem, resolution=72)
+            for name, data in pictures.items():
+                strike.glyphs[name] = SbixGlyph(glyphName=name, graphicType="png ", imageData=data)
+            table.strikes[ppem] = strike
+        builder.font["sbix"] = table
     builder.save(str(HERE / file))
 
 
@@ -92,3 +121,14 @@ made("Fbe Test Svg",
      {0xE903: "private", 0xE904: "blank"},
      "FbeTestSvg-Regular.ttf",
      svg=[(picture.format(1), 1, 1), (picture.format(2), 2, 2)])
+
+made("Fbe Test Huge",
+     {"H": (15000, box(0, -1000, 15000, 14000)), "a": (501, box(50, 0, 450, 500))},
+     {0x48: "H", 0x61: "a"},
+     "FbeTestHuge-Regular.ttf")
+
+made("Fbe Test Sbix",
+     {"a": (500, box(50, 0, 450, 500))},
+     {0x61: "a"},
+     "FbeTestSbix-Regular.ttf",
+     sbix={32: {"a": png()}})

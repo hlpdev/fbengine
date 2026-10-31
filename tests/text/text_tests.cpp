@@ -249,16 +249,27 @@ TEST_CASE("a glyph bigger than a page has one of its own, and trim clears past t
     REQUIRE(fbe::text::lay_out(font, "W", 1.0F, huge));
     fbe::text::atlas().trim();
     CHECK(fbe::text::atlas().generation() == generation);
-    // A frame that doesn't use it: emptied, where it is.
+    // A frame that doesn't use it: dropped, its pixels let go of, its number kept.
     fbe::text::atlas().trim();
     CHECK(fbe::text::atlas().generation() == generation + 1);
     REQUIRE(fbe::text::atlas().pages().size() == 1);
-    CHECK(fbe::text::atlas().pages()[0].dirty.width == fbe::text::atlas().pages()[0].width);
+    CHECK(fbe::text::atlas().pages()[0].dropped());
+    CHECK(fbe::text::atlas().pages()[0].pixels.capacity() == 0);
+    CHECK(fbe::text::atlas().pages()[0].dirty.empty());
+    // Dropped, it's never trimmed again.
+    fbe::text::atlas().trim();
+    CHECK(fbe::text::atlas().generation() == generation + 1);
     fbe::text::atlas().set_budget(std::size_t{ 16 } << 20U);
-    // Laid out again, it's rasterized again, on that page.
+    // Laid out again, it's rasterized again, on that page made again, all of it to upload.
+    const std::uint64_t version = fbe::text::atlas().pages()[0].version;
     REQUIRE(fbe::text::lay_out(font, "W", 1.0F, huge));
     CHECK(huge.generation == generation + 1);
-    CHECK(fbe::text::atlas().pages().size() == 1);
+    REQUIRE(fbe::text::atlas().pages().size() == 1);
+    const fbe::text::page_t& again = fbe::text::atlas().pages()[0];
+    CHECK_FALSE(again.dropped());
+    CHECK(again.dirty.width == again.width);
+    CHECK(again.dirty.height == again.height);
+    CHECK(again.version > version);
     CHECK(drawn(huge.glyphs[0]));
     fbe_text_free_font(font);
 }
@@ -463,10 +474,119 @@ TEST_CASE("a frame that needs more than the budget isn't rasterized again each f
     }
     CHECK(fbe::text::atlas().pages()[text_page].version == versions);
     if (once_page != text_page) {
-        CHECK(fbe::text::atlas().pages()[once_page].dirty.width ==
-              fbe::text::atlas().pages()[once_page].width);
+        CHECK(fbe::text::atlas().pages()[once_page].dropped());
     }
     fbe::text::atlas().set_budget(std::size_t{ 16 } << 20U);
     fbe_text_free_font(big);
     fbe_text_free_font(small);
+}
+
+TEST_CASE("a size past a float's lines and advances is refused, and one short of it is placed") {
+    const std::uint64_t font = opened("OpenSans-Regular.ttf", 20.0F);
+    // 100,000,000 pixels an em: each glyph's quad and place kept to the canvas's reach.
+    fbe::text::layout_t laid;
+    REQUIRE(fbe::text::lay_out(font, "WW\nW", 5e6F, laid));
+    REQUIRE(laid.glyphs.size() == 3);
+    for (const fbe::text::placed_glyph_t& glyph : laid.glyphs) {
+        CHECK(glyph.width > 0);
+        CHECK(glyph.width <= 16777216);
+        CHECK(glyph.height > 0);
+        CHECK(glyph.height <= 16777216);
+        CHECK(glyph.x >= -16777216);
+        CHECK(glyph.x <= 16777216);
+        CHECK(glyph.y >= -16777216);
+        CHECK(glyph.y <= 16777216);
+    }
+    // 3e38 pixels an em, a float's still, but not its line height.
+    CHECK_FALSE(fbe::text::lay_out(font, "W\nW", 1.5e37F, laid));
+    CHECK(std::string(fbe_error()) ==
+          "a font's size times its scale is past what its lines and advances can be");
+    const std::uint64_t vast = opened("OpenSans-Regular.ttf", 3e38F);
+    fbe_text_size_t size{};
+    CHECK_FALSE(fbe_text_measure(vast, "W", &size));
+    fbe_text_free_font(font);
+    fbe_text_free_font(vast);
+}
+
+TEST_CASE("a glyph past 2048 pixels across or down is rasterized smaller and drawn bigger") {
+    fbe::text::atlas().clear();
+    // H is 15 ems across and down: 6,000 pixels at 400.
+    const std::uint64_t font = own("FbeTestHuge-Regular.ttf", 400.0F);
+    fbe::text::layout_t laid;
+    REQUIRE(fbe::text::lay_out(font, "H", 1.0F, laid));
+    REQUIRE(laid.glyphs.size() == 1);
+    const fbe::text::placed_glyph_t& glyph = laid.glyphs[0];
+    CHECK(glyph.source.width <= 2048);
+    CHECK(glyph.source.height <= 2048);
+    CHECK(glyph.width > 5900);
+    CHECK(glyph.height > 5900);
+    CHECK(drawn(glyph));
+    std::size_t bytes = 0;
+    for (const fbe::text::page_t& page : fbe::text::atlas().pages()) {
+        bytes += page.pixels.size();
+    }
+    CHECK(bytes <= std::size_t{ 2050 } * 2050);
+    // After a, 200.4 pixels across, at another quarter, it's the same glyph.
+    REQUIRE(fbe::text::lay_out(font, "aH", 1.0F, laid));
+    REQUIRE(laid.glyphs.size() == 2);
+    CHECK(laid.glyphs[1].source.x == glyph.source.x);
+    CHECK(laid.glyphs[1].source.y == glyph.source.y);
+    fbe_text_free_font(font);
+}
+
+TEST_CASE("an sbix PNG FreeType can't read is passed over for the outline under it") {
+    // A PNG of a at 32 pixels an em; FreeType takes an sbix font as its bitmaps alone, unless
+    // it's told not to.
+    for (const float size : { 20.0F, 32.0F, 50.0F }) {
+        const std::uint64_t font = own("FbeTestSbix-Regular.ttf", size);
+        INFO("at " << size);
+        CHECK(fbe_text_has_glyphs(font, "a"));
+        fbe::text::layout_t laid;
+        REQUIRE(fbe::text::lay_out(font, "a", 1.0F, laid));
+        REQUIRE(laid.glyphs.size() == 1);
+        CHECK(fbe::text::atlas().pages()[laid.glyphs[0].page].format ==
+              fbe::text::page_format_t::COVERAGE);
+        CHECK(drawn(laid.glyphs[0]));
+        fbe_text_free_font(font);
+    }
+}
+
+TEST_CASE("a color glyph is rasterized once, at a whole pixel, without a made bolder") {
+    fbe::text::atlas().clear();
+    // a is half an em: at 33, 16.5 pixels, so what's after it is half a pixel across.
+    const std::uint64_t color = own("FbeTestColor-Regular.ttf", 33.0F);
+    fbe::text::layout_t alone;
+    REQUIRE(fbe::text::lay_out(color, "\xE2\x8C\x9A", 1.0F, alone));
+    REQUIRE(alone.glyphs.size() == 1);
+    REQUIRE(fbe::text::atlas().pages()[alone.glyphs[0].page].format ==
+            fbe::text::page_format_t::COLOR);
+    fbe::text::layout_t after;
+    REQUIRE(fbe::text::lay_out(color, "a\xE2\x8C\x9A", 1.0F, after));
+    REQUIRE(after.glyphs.size() == 2);
+    const fbe::text::placed_glyph_t& moved = after.glyphs[1];
+    CHECK(moved.source.x == alone.glyphs[0].source.x);
+    CHECK(moved.source.y == alone.glyphs[0].source.y);
+    CHECK(moved.page == alone.glyphs[0].page);
+    // At the nearest pixel, 16.5's 17.
+    CHECK(moved.x - alone.glyphs[0].x == 17);
+    // Bold, a face that isn't is made bolder, but not its color glyphs.
+    const std::string path = std::string(FBE_OWN_TEST_FONTS) + "/FbeTestColor-Regular.ttf";
+    const std::uint64_t bold =
+        fbe_text_load_font(path.c_str(), 0, 33.0F, static_cast<std::int32_t>(fbe::text::bold_bit));
+    REQUIRE(bold != 0);
+    fbe_text_set_system_fallback(bold, false);
+    fbe::text::layout_t bolder;
+    REQUIRE(fbe::text::lay_out(bold, "\xE2\x8C\x9A", 1.0F, bolder));
+    REQUIRE(bolder.glyphs.size() == 1);
+    CHECK(bolder.glyphs[0].source.x == alone.glyphs[0].source.x);
+    CHECK(bolder.glyphs[0].source.y == alone.glyphs[0].source.y);
+    // An outline's still moved a quarter, and made bolder.
+    fbe::text::layout_t letters;
+    REQUIRE(fbe::text::lay_out(color, "aa", 1.0F, letters));
+    REQUIRE(letters.glyphs.size() == 2);
+    CHECK(letters.glyphs[0].source.x != letters.glyphs[1].source.x);
+    REQUIRE(fbe::text::lay_out(bold, "a", 1.0F, bolder));
+    CHECK(bolder.glyphs[0].source.width > letters.glyphs[0].source.width);
+    fbe_text_free_font(color);
+    fbe_text_free_font(bold);
 }

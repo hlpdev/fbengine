@@ -1,11 +1,12 @@
 // The atlas: glyphs rasterized by FreeType at the sizes they're drawn at, each kept by its face,
 // index, size, style, and quarter of a pixel, on pages of rows, as tall as their tallest glyph,
-// that the canvas uploads.
+// that the canvas uploads; a page trimmed let go of until it's used again.
 
 #include "core/engine.hpp"
 #include "text/font.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -21,6 +22,10 @@ namespace {
 
 /// A page's size, which a glyph bigger than gets a page of its own size.
 constexpr std::int32_t page_size = 1024;
+
+/// The most pixels a glyph's bitmap is across or down, past which it's rasterized smaller and
+/// drawn bigger.
+constexpr double largest_side = 2048.0;
 
 /// What a glyph's kept by.
 struct glyph_key_t {
@@ -115,7 +120,8 @@ bool sized(const face_t& face, std::int32_t pixels) {
 }
 
 /// Whether FreeType loads `glyph` of `face`, as it's sized, in color or not, as something it
-/// draws: an outline, or a bitmap, not a PNG or SVG picture it can't.
+/// draws: an outline, or a bitmap, not a PNG or SVG picture it can't. A scalable face's strike it
+/// can't read is passed over for its outline.
 bool loads(const face_t& face, std::uint32_t glyph, bool colored) {
     // Hinted up and down only, so it's crisp and keeps its advance.
     auto flags = static_cast<std::uint32_t>(FT_LOAD_TARGET_LIGHT);
@@ -146,6 +152,11 @@ bool transformed(FT_GlyphSlot slot, std::int32_t pixels, bool bolder, bool slant
     return true;
 }
 
+/// `glyph` of `face`, `side` pixels across or down at `pixels` an em, made bolder and slanted as
+/// they say, rasterized small enough to fit, kept by `key`, and drawn bigger by as much.
+const glyph_t* shrunk(face_t& face, std::uint32_t glyph, std::int32_t pixels, bool bolder,
+                      bool slanted, const glyph_key_t& key, double side);
+
 } // namespace
 
 atlas_t& atlas() {
@@ -175,8 +186,9 @@ void atlas_t::trim() {
             if (m_used[index] || m_shelves[index].empty()) {
                 continue;
             }
-            std::ranges::fill(page.pixels, std::uint8_t{ 0 });
-            page.dirty = { .x = 0, .y = 0, .width = page.width, .height = page.height };
+            page.pixels.clear();
+            page.pixels.shrink_to_fit();
+            page.dirty = {};
             ++page.version;
             m_shelves[index].clear();
             m_bottoms[index] = 0;
@@ -210,7 +222,7 @@ bool atlas_t::place(page_format_t format, std::int32_t width, std::int32_t heigh
     const std::int32_t tall = height + 2;
     for (std::size_t index = 0; index < m_pages.size(); ++index) {
         const page_t& each = m_pages[index];
-        if (each.format != format || wide > each.width) {
+        if (each.dropped() || each.format != format || wide > each.width) {
             continue;
         }
         // A row as tall as it, or not much taller, or a new one under the rows there.
@@ -231,10 +243,22 @@ bool atlas_t::place(page_format_t format, std::int32_t width, std::int32_t heigh
             return true;
         }
     }
-    if (m_pages.size() >= 0xFFFFFFFFU) {
-        return fbe::fail("the atlas has as many pages as it can");
+    // A page trimmed made again, its number kept, all of it to upload; or a new one.
+    std::size_t index = 0;
+    while (index < m_pages.size() && !m_pages[index].dropped()) {
+        ++index;
     }
-    page_t made;
+    if (index == m_pages.size()) {
+        if (m_pages.size() >= 0xFFFFFFFFU) {
+            return fbe::fail("the atlas has as many pages as it can");
+        }
+        m_pages.emplace_back();
+        m_shelves.emplace_back();
+        m_bottoms.push_back(0);
+        m_used.push_back(false);
+    }
+    page_t& made = m_pages[index];
+    const bool again = made.version != 0;
     made.format = format;
     made.width = std::max(page_size, wide);
     made.height = std::max(page_size, tall);
@@ -242,11 +266,12 @@ bool atlas_t::place(page_format_t format, std::int32_t width, std::int32_t heigh
                            static_cast<std::size_t>(made.height) *
                            (format == page_format_t::COLOR ? 4U : 1U),
                        0);
-    m_pages.push_back(std::move(made));
-    m_shelves.push_back({ { .y = 0, .height = tall, .used = wide } });
-    m_bottoms.push_back(tall);
-    m_used.push_back(false);
-    page = static_cast<std::uint32_t>(m_pages.size() - 1);
+    made.dirty =
+        again ? rect_t{ .x = 0, .y = 0, .width = made.width, .height = made.height } : rect_t{};
+    made.version += again ? 1 : 0;
+    m_shelves[index] = { { .y = 0, .height = tall, .used = wide } };
+    m_bottoms[index] = tall;
+    page = static_cast<std::uint32_t>(index);
     place = { .x = 1, .y = 1, .width = width, .height = height };
     return true;
 }
@@ -281,6 +306,12 @@ const glyph_t* rasterized(face_t& face, std::uint32_t glyph, std::int32_t pixels
     if (const auto found = glyphs->find(key); found != glyphs->end()) {
         return &found->second;
     }
+    // A color glyph, or a bitmap font's, takes no made bolder or slant, nor a quarter's move, so
+    // it's kept once, as it's plainly asked for.
+    const glyph_key_t plain{ .face = face.id, .glyph = glyph, .pixels = pixels, .how = 0 };
+    if (const auto found = glyphs->find(plain); found != glyphs->end() && !found->second.shifted) {
+        return &found->second;
+    }
     FT_Face ft = face.ft;
     if (!sized(face, pixels)) {
         fbe::fail(std::format("FreeType couldn't size {} at {} pixels", face.family, pixels / 64));
@@ -290,17 +321,23 @@ const glyph_t* rasterized(face_t& face, std::uint32_t glyph, std::int32_t pixels
     // or SVG picture.
     FT_GlyphSlot slot = ft->glyph;
     bool loaded = false;
+    bool outline = false;
     for (const bool colored : { true, false }) {
-        if (colored && !FT_HAS_COLOR(ft)) {
+        if ((colored && !FT_HAS_COLOR(ft)) || !loads(face, glyph, colored)) {
             continue;
         }
-        if (!loads(face, glyph, colored)) {
-            continue;
+        outline = slot->format == FT_GLYPH_FORMAT_OUTLINE;
+        if (outline) {
+            transformed(slot, pixels, bolder, slanted, quarter);
+            FT_BBox box{};
+            FT_Outline_Get_CBox(&slot->outline, &box);
+            const auto side =
+                static_cast<double>(std::max(box.xMax - box.xMin, box.yMax - box.yMin)) / 64.0;
+            if (side > largest_side) {
+                return shrunk(face, glyph, pixels, bolder, slanted, key, side);
+            }
         }
-        loaded = slot->format == FT_GLYPH_FORMAT_BITMAP ||
-                 (slot->format == FT_GLYPH_FORMAT_OUTLINE &&
-                  transformed(slot, pixels, bolder, slanted, quarter) &&
-                  FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL) == 0);
+        loaded = !outline || FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL) == 0;
         if (loaded) {
             break;
         }
@@ -309,34 +346,66 @@ const glyph_t* rasterized(face_t& face, std::uint32_t glyph, std::int32_t pixels
         fbe::fail(std::format("FreeType couldn't rasterize {}'s glyph {}", face.family, glyph));
         return nullptr;
     }
+    const FT_Bitmap& bitmap = slot->bitmap;
+    const auto side = static_cast<double>(std::max(bitmap.width, bitmap.rows));
+    if (side > largest_side) {
+        return shrunk(face, glyph, pixels, bolder, slanted, key, side);
+    }
     glyph_t made;
     made.left = slot->bitmap_left;
     made.top = slot->bitmap_top;
-    if (!stored(slot->bitmap, made)) {
+    // COLR's layers are each loaded again as they're rendered, so its glyph's as plain as a
+    // bitmap's.
+    made.shifted = outline && bitmap.pixel_mode != FT_PIXEL_MODE_BGRA;
+    if (!stored(bitmap, made)) {
         return nullptr;
     }
+    return &glyphs->emplace(made.shifted ? key : plain, made).first->second;
+}
+
+namespace {
+
+const glyph_t* shrunk(face_t& face, std::uint32_t glyph, std::int32_t pixels, bool bolder,
+                      bool slanted, const glyph_key_t& key, double side) {
+    // A couple of pixels short, for what's hinted and rounded.
+    const auto smaller = static_cast<std::int32_t>(
+        std::floor(static_cast<double>(pixels) * (largest_side - 2.0) / side));
+    if (smaller < 64 || smaller >= pixels) {
+        fbe::fail(std::format("{}'s glyph {} is too big to rasterize", face.family, glyph));
+        return nullptr;
+    }
+    const glyph_t* small = rasterized(face, glyph, smaller, bolder, slanted, 0);
+    if (small == nullptr) {
+        return nullptr;
+    }
+    glyph_t made = *small;
+    made.scale = small->scale * static_cast<double>(pixels) / static_cast<double>(smaller);
+    made.shifted = false;
     return &glyphs->emplace(key, made).first->second;
 }
 
-bool draws(face_t& face, char32_t point) {
+} // namespace
+
+bool draws(face_t& face, char32_t point, std::int32_t pixels) {
     const FT_UInt glyph = FT_Get_Char_Index(face.ft, point);
     if (glyph == 0) {
         return false;
     }
-    if (const auto found = face.drawable.find(glyph); found != face.drawable.end()) {
+    const std::uint64_t at = (std::uint64_t{ glyph } << 32U) | static_cast<std::uint32_t>(pixels);
+    if (const auto found = face.drawable.find(at); found != face.drawable.end()) {
         return found->second;
     }
-    // At a size any face has, a strike of a bitmap font's or an outline's; an empty outline is
-    // only a space's, or what doesn't show.
+    // At the size it's laid out at, a strike's bitmap or an outline; an empty outline is only a
+    // space's, or what doesn't show.
     const auto shows = [&] {
         FT_GlyphSlot slot = face.ft->glyph;
         return slot->format != FT_GLYPH_FORMAT_OUTLINE || slot->outline.n_contours > 0 ||
                blank(point);
     };
     const bool can =
-        sized(face, 32 * 64) && ((FT_HAS_COLOR(face.ft) && loads(face, glyph, true) && shows()) ||
-                                 (loads(face, glyph, false) && shows()));
-    face.drawable.emplace(glyph, can);
+        sized(face, pixels) && ((FT_HAS_COLOR(face.ft) && loads(face, glyph, true) && shows()) ||
+                                (loads(face, glyph, false) && shows()));
+    face.drawable.emplace(at, can);
     return can;
 }
 
