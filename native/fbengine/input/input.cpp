@@ -12,6 +12,8 @@ namespace fbe {
 void input_event(const SDL_Event& event) {
     keyboard_event(event);
     mouse_event(event);
+    gamepad_event(event);
+    joystick_event(event);
 }
 
 SDL_Window* needed_window() {

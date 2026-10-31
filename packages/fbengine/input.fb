@@ -1,0 +1,7 @@
+// What input's modules share.
+
+Import std.core
+
+/// Input that can't start, or can't load.
+Public Class InputError Extends Error
+End Class

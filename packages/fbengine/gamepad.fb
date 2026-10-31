@@ -1,0 +1,218 @@
+// Gamepads: the ones SDL maps to its Xbox-like layout, whichever they are, as the last Flip read
+// them, so every call in a frame agrees.
+
+Import std.collections
+Import std.core
+Import std.ffi
+Import "./c/fbe_input"
+Import "./window"
+
+/// A gamepad's button, by where it is on the pad: SOUTH is Xbox's A, PlayStation's Cross, and
+/// Nintendo's B, so a game's "confirm" is the same place on every pad.
+Public Enum GamepadButton: Int32
+    /// The bottom face button: A, Cross, or Nintendo's B.
+    SOUTH = 0
+    /// The right face button: B, Circle, or Nintendo's A.
+    EAST = 1
+    /// The left face button: X, Square, or Nintendo's Y.
+    WEST = 2
+    /// The top face button: Y, Triangle, or Nintendo's X.
+    NORTH = 3
+    /// View, Back, Select, Share, or Minus.
+    BACK = 4
+    /// The Xbox, PS, or Home button, which the OS can take for itself.
+    GUIDE = 5
+    /// Menu, Start, Options, or Plus.
+    START = 6
+    LEFT_STICK = 7
+    RIGHT_STICK = 8
+    LEFT_SHOULDER = 9
+    RIGHT_SHOULDER = 10
+    DPAD_UP = 11
+    DPAD_DOWN = 12
+    DPAD_LEFT = 13
+    DPAD_RIGHT = 14
+    /// Xbox Series' Share, PS5's microphone, or the Switch Pro's Capture button.
+    MISC_1 = 15
+    /// The paddles under an Xbox Elite pad, or a DualSense Edge's.
+    RIGHT_PADDLE_1 = 16
+    LEFT_PADDLE_1 = 17
+    RIGHT_PADDLE_2 = 18
+    LEFT_PADDLE_2 = 19
+    /// A PlayStation pad's touchpad, pressed.
+    TOUCHPAD = 20
+    MISC_2 = 21
+    MISC_3 = 22
+    MISC_4 = 23
+    MISC_5 = 24
+    MISC_6 = 25
+End Enum
+
+/// A gamepad's axis: its sticks' -1 to 1, right and down positive, and its triggers' 0 to 1.
+Public Enum GamepadAxis: Int32
+    LEFT_X = 0
+    LEFT_Y = 1
+    RIGHT_X = 2
+    RIGHT_Y = 3
+    LEFT_TRIGGER = 4
+    RIGHT_TRIGGER = 5
+End Enum
+
+/// Which kind of pad a gamepad is, for the prompts a game shows.
+Public Enum GamepadType: Int32
+    UNKNOWN = 0
+    /// A pad SDL maps, of no kind it knows better.
+    STANDARD = 1
+    XBOX_360 = 2
+    /// Xbox One's and Series' pads.
+    XBOX_ONE = 3
+    PS3 = 4
+    PS4 = 5
+    PS5 = 6
+    SWITCH_PRO = 7
+    SWITCH_JOYCON_LEFT = 8
+    SWITCH_JOYCON_RIGHT = 9
+    /// Two Joy-Cons held as one pad.
+    SWITCH_JOYCON_PAIR = 10
+    GAMECUBE = 11
+End Enum
+
+/// How far a gamepad's sticks and triggers go before their axes aren't 0, from 0 to under 1.
+Public Struct DeadZones
+    /// A stick's, round, so a diagonal isn't pulled to the nearest axis.
+    Public Field Stick: Float32
+    /// A trigger's.
+    Public Field Trigger: Float32
+End Struct
+
+/// A gamepad SDL maps, which stays the same object while it's connected and after, though a pad
+/// that connects again is a new Gamepad; everything about one that's disconnected is "", False,
+/// or 0.
+Public Final Class Gamepad Implements Printable
+    Static Field known: Map<UInt64, Gamepad> = {}
+    Field id: UInt64
+
+    Private New(id: UInt64)
+        Self.id = id
+    End New
+
+    // The one Gamepad for SDL's device `id`.
+    @MainThread Package Static Method Of(id: UInt64): Gamepad
+        Local found = known.Get(id)
+        If found != Null Then Return found
+        Local pad = Gamepad(id)
+        known[id] = pad
+        Return pad
+    End Method
+
+    /// Whether it was connected when the last Flip read the OS's events.
+    @MainThread Public Method Connected(): Bool => fbe_input_gamepad_connected(id)
+
+    /// Its name, as SDL knows it, like "Xbox Series X Controller".
+    @MainThread Public Method Name(): String
+        Unsafe
+            Return fbe_input_gamepad_name(id).ToString()
+        End Unsafe
+    End Method
+
+    /// Which kind of pad it is.
+    @MainThread Public Method Type(): GamepadType
+        Local type = fbe_input_gamepad_type(id)
+        If type < 0 || type > GamepadType.GAMECUBE As Int32 Then Return GamepadType.STANDARD
+        Return type As GamepadType
+    End Method
+
+    /// Whether `button` was held when the last Flip read the OS's events.
+    @MainThread Public Method Down(button: GamepadButton): Bool
+        Return fbe_input_gamepad_down(id, button As Int32)
+    End Method
+
+    /// Whether the last Flip read `button` pressed.
+    @MainThread Public Method Hit(button: GamepadButton): Bool
+        Return fbe_input_gamepad_hits(id, button As Int32) > 0
+    End Method
+
+    /// How many times the last Flip read `button` pressed.
+    @MainThread Public Method Hits(button: GamepadButton): Int32
+        Return fbe_input_gamepad_hits(id, button As Int32)
+    End Method
+
+    /// Whether the last Flip read `button` released.
+    @MainThread Public Method Up(button: GamepadButton): Bool
+        Return fbe_input_gamepad_ups(id, button As Int32) > 0
+    End Method
+
+    /// `axis` past the dead zones: 0 inside them, going on smoothly to 1 at the edge.
+    @MainThread Public Method Axis(axis: GamepadAxis): Float32
+        Return fbe_input_gamepad_axis(id, axis As Int32)
+    End Method
+
+    /// `axis` as the pad says, with no dead zone.
+    @MainThread Public Method RawAxis(axis: GamepadAxis): Float32
+        Return fbe_input_gamepad_raw_axis(id, axis As Int32)
+    End Method
+
+    /// Rumbles its low frequency motor, the heavy one, and its high frequency one, from 0 to 1, for
+    /// `seconds`, replacing the rumble before; Rumble(0, 0, 0) stops it. False if it can't.
+    @MainThread Public Method Rumble(low: Float32, high: Float32, seconds: Float64): Bool
+        Return fbe_input_gamepad_rumble(id, low, high, seconds)
+    End Method
+
+    /// Rumbles the motors in its triggers, which Xbox One's and Series' pads have, from 0 to 1, for
+    /// `seconds`. False if it can't.
+    @MainThread Public Method RumbleTriggers(left: Float32, right: Float32, seconds: Float64): Bool
+        Return fbe_input_gamepad_rumble_triggers(id, left, right, seconds)
+    End Method
+
+    Public Method ToString(): String
+        Unsafe
+            Return fbe_input_gamepad_name(id).ToString()
+        End Unsafe
+    End Method
+End Class
+
+/// The gamepads connected, as the last Flip read them, in the order they connected. The first
+/// call starts SDL's gamepads, which can take a moment, so a game asks as it starts; none if they
+/// can't start.
+@MainThread Public Function Gamepads(): Gamepad[]
+    Local pads: Gamepad[] = []
+    For index = 0 To fbe_input_gamepad_count() - 1
+        pads.Add(Gamepad.Of(fbe_input_gamepad_at(index)))
+    End For
+    Return pads
+End Function
+
+/// The gamepads the last Flip read connecting, in order.
+@MainThread Public Function GamepadsConnected(): Gamepad[]
+    Local pads: Gamepad[] = []
+    For index = 0 To fbe_input_gamepads_added_count() - 1
+        pads.Add(Gamepad.Of(fbe_input_gamepad_added_at(index)))
+    End For
+    Return pads
+End Function
+
+/// The gamepads the last Flip read disconnecting, in order, as a game that pauses then wants.
+@MainThread Public Function GamepadsDisconnected(): Gamepad[]
+    Local pads: Gamepad[] = []
+    For index = 0 To fbe_input_gamepads_removed_count() - 1
+        pads.Add(Gamepad.Of(fbe_input_gamepad_removed_at(index)))
+    End For
+    Return pads
+End Function
+
+/// Forgets what the last Flip read of every gamepad and joystick, their presses, releases, and
+/// connections, until the next Flip; buttons held stay held.
+@MainThread Public Function FlushGamepads()
+    fbe_input_flush_gamepads()
+End Function
+
+/// Sets every gamepad's dead zones, 0.2 for sticks and 0.1 for triggers at first; panics for a
+/// zone outside 0 to under 1.
+@MainThread Public Function SetGamepadDeadZones(zones: DeadZones)
+    If !fbe_input_set_gamepad_dead_zones(zones.Stick, zones.Trigger) Then Panic(LastError())
+End Function
+
+/// Every gamepad's dead zones.
+@MainThread Public Function GamepadDeadZones(): DeadZones
+    Return DeadZones(fbe_input_gamepad_stick_dead_zone(), fbe_input_gamepad_trigger_dead_zone())
+End Function
