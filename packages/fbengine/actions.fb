@@ -270,6 +270,8 @@ Public Final Class Action Implements Printable
         // or, at its first since it was bound, rebound, or its set turned on, what its bindings
         // held then, each button's from where it is and how often it went down and up.
         Local held = fresh ? Reaches(beforeX, beforeY, twoAxis, press) : was
+        // Rebound or given another pad while it was Down, with nothing new holding it: let go.
+        Local letGo = fresh && was && !held
         fresh = False
         // Held through, it's pressed again only by a binding that held it alone, let go and
         // pressed again; a handover from one binding to another is a hold.
@@ -297,7 +299,16 @@ Public Final Class Action Implements Printable
         // What no one binding pressed by itself: an axis pushed far enough, or keys that press it
         // only together. Its Up is from its own Down, so rebinding it while it's held lets go.
         If !held && down && presses == 0 Then presses = 1
-        If was && !down && releases == 0 Then releases = 1
+        If (was && !down || letGo) && releases == 0 Then releases = 1
+        // From not Down to Down, as some order of its events gives: inputs pressing it together
+        // are one press, and a release before its first press isn't one, as it wasn't Down.
+        If !was && !held && down
+            If releases == 0
+                presses = 1
+            ElseIf presses < 2
+                releases = 0
+            End If
+        End If
         hits = presses
         up = releases > 0
 

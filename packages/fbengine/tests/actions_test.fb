@@ -754,3 +754,105 @@ Function TwoPadsOnOneButtonAreOneHold() Throws GraphicsError, InputError
     Flip()
     Expect(!jump.Down() && jump.Up())
 End Function
+
+// From not Down to Down in one Flip is one press, however many inputs pressed it: no order of
+// their events gives two.
+@Test
+Function InputsPressingTogetherAreOnePress() Throws GraphicsError, InputError
+    Try Opened()
+    Defer EndGraphics()
+    Local first = Try Simulate.ConnectGamepad("First")
+    Defer first.Unplug()
+    Local second = Try Simulate.ConnectGamepad("Second")
+    Defer second.Unplug()
+    Flip()
+    Local controls = ActionSet()
+    Local jump = controls.Add("jump")
+    jump.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    Local right = controls.Add("right")
+    right.Bind(Binding.OfKey(Key.D))
+    right.Bind(Binding.OfKey(Key.RIGHT))
+    right.Bind(Binding.OfKey(Key.A, -1.0))
+    Try Simulate.KeyDown(Key.A)
+    Flip()
+    first.SetButton(GamepadButton.SOUTH, True)
+    second.SetButton(GamepadButton.SOUTH, True)
+    // Left held, both right keys pressed: past it, once.
+    Try Simulate.KeyDown(Key.D)
+    Try Simulate.KeyDown(Key.RIGHT)
+    Flip()
+    Expect(jump.Down() && jump.Hits() == 1 && !jump.Up())
+    Expect(right.Down() && right.Hits() == 1 && !right.Up())
+    first.SetButton(GamepadButton.SOUTH, False)
+    second.SetButton(GamepadButton.SOUTH, False)
+    Try Simulate.KeyUp(Key.A)
+    Try Simulate.KeyUp(Key.D)
+    Try Simulate.KeyUp(Key.RIGHT)
+    Flip()
+End Function
+
+// A binding's release before the action's first press in a Flip lets go of nothing: it wasn't
+// Down.
+@Test
+Function AReleaseBeforeThePressIsNoUp() Throws GraphicsError
+    Try Opened()
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local steer = controls.Add("steer")
+    steer.Bind(Binding.OfKey(Key.D))
+    steer.Bind(Binding.OfKey(Key.A, -1.0))
+    Try Simulate.KeyDown(Key.D)
+    Try Simulate.KeyDown(Key.A)
+    Flip()
+    Expect(!steer.Down())
+    Try Simulate.KeyUp(Key.D)
+    Try Simulate.KeyUp(Key.A)
+    Try Simulate.KeyDown(Key.D)
+    Flip()
+    Expect(steer.Down() && steer.Hits() == 1 && !steer.Up())
+    Try Simulate.KeyUp(Key.D)
+    Flip()
+    Expect(!steer.Down() && steer.Up())
+End Function
+
+// Rebound, or given another pad, while it's Down, an action lets go; a press in the same Flip is a
+// Hit after that Up, not in place of it.
+@Test
+Function ALetGoAndAPressInOneFlipAreBoth() Throws GraphicsError, InputError
+    Try Opened()
+    Defer EndGraphics()
+    Local first = Try Simulate.ConnectGamepad("First")
+    Defer first.Unplug()
+    Local second = Try Simulate.ConnectGamepad("Second")
+    Defer second.Unplug()
+    Flip()
+    Local controls = ActionSet()
+    Local fire = controls.Add("fire")
+    fire.Bind(Binding.OfKey(Key.F))
+    Try Simulate.KeyDown(Key.F)
+    Flip()
+    Expect(fire.Down() && fire.Hits() == 1)
+    Expect(fire.Replace(Binding.OfKey(Key.F), Binding.OfKey(Key.G)))
+    Try Simulate.KeyDown(Key.G)
+    Flip()
+    Expect(fire.Down() && fire.Hits() == 1 && fire.Up())
+    Try Simulate.KeyUp(Key.F)
+    Try Simulate.KeyUp(Key.G)
+    Flip()
+    Expect(!fire.Down() && fire.Hits() == 0 && fire.Up())
+    // A player's set given pad 2, whose SOUTH is pressed, as pad 1's is held.
+    Local player = ActionSet()
+    player.SetGamepad(first.Device())
+    Local jump = player.Add("jump")
+    jump.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+    first.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Expect(jump.Down() && jump.Hits() == 1)
+    player.SetGamepad(second.Device())
+    second.SetButton(GamepadButton.SOUTH, True)
+    Flip()
+    Expect(jump.Down() && jump.Hits() == 1 && jump.Up())
+    first.SetButton(GamepadButton.SOUTH, False)
+    second.SetButton(GamepadButton.SOUTH, False)
+    Flip()
+End Function

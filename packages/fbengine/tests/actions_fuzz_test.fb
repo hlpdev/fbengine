@@ -1,0 +1,147 @@
+// Seeded presses and releases on an action's 2 or 3 bindings (keys, the mouse's left button, and
+// SOUTH over two pads), several a Flip, each Flip's Down, Hits, and Up checked against what some
+// order of its events would give, offscreen.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import std.text
+Import fbengine
+
+Global fuzzState: Int64 = 1
+
+// Park and Miller's, from a seed of 1 or more.
+Function FuzzNext(n: Int): Int
+    fuzzState = fuzzState * 48271 % 2147483647
+    Return (fuzzState % n) As Int
+End Function
+
+// Whether `x` and `y` reach the press point, as an action's bindings do.
+Function FuzzReaches(x: Float32, y: Float32, twoAxis: Bool, press: Float32): Bool
+    Local across = Clamp(x, -1.0, 1.0)
+    If !twoAxis Then Return across >= press
+    Local along = Clamp(y, -1.0, 1.0)
+    Return Min(Sqrt(across * across + along * along), 1.0) >= press
+End Function
+
+// 0 to 2 keys, 3 the mouse's left button, 4 SOUTH on any pad.
+Function FuzzBinding(source: Int, scale: Float32): Binding
+    Select source
+        Case 0
+            Return Binding.OfKey(Key.J, scale)
+        Case 1
+            Return Binding.OfKey(Key.K, scale)
+        Case 2
+            Return Binding.OfKey(Key.L, scale)
+        Case 3
+            Return Binding.OfMouseButton(MouseButton.LEFT, scale)
+        Default
+            Return Binding.OfGamepadButton(GamepadButton.SOUTH, scale)
+    End Select
+End Function
+
+// Presses or releases input `what`: 0 to 2 the keys, 3 the mouse's left button, 4 and 5 SOUTH on
+// each pad.
+Function FuzzSet(what: Int, down: Bool, pads: VirtualGamepad[]) Throws GraphicsError
+    Local keys = [Key.J, Key.K, Key.L]
+    If what <= 2
+        If down
+            Try Simulate.KeyDown(keys[what])
+        Else
+            Try Simulate.KeyUp(keys[what])
+        End If
+    ElseIf what == 3
+        If down
+            Try Simulate.MouseDown(MouseButton.LEFT)
+        Else
+            Try Simulate.MouseUp(MouseButton.LEFT)
+        End If
+    Else
+        pads[what - 4].SetButton(GamepadButton.SOUTH, down)
+    End If
+End Function
+
+// What's wrong with a Flip from `was` to `down` with `hits` and `up`, "" for nothing.
+Function Wrong(was: Bool, down: Bool, hits: Int32, up: Bool): String
+    If !was && !down && up != (hits > 0) Then Return "not Down to not Down, with Hits and Up apart"
+    If !was && down && hits < 1 Then Return "to Down with no Hit"
+    If !was && down && up && hits < 2 Then Return "to Down, an Up with {hits} Hit"
+    If !was && down && !up && hits != 1 Then Return "to Down, {hits} Hits and no Up"
+    If was && !down && !up Then Return "Down to not Down with no Up"
+    If was && down && up != (hits >= 1) Then Return "Down through, Hits {hits} and Up {up}"
+    Return ""
+End Function
+
+@Test
+Function SeededPressesAndReleasesGiveWhatSomeOrderWould() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local first = Try Simulate.ConnectGamepad("First")
+    Defer first.Unplug()
+    Local second = Try Simulate.ConnectGamepad("Second")
+    Defer second.Unplug()
+    Local pads = [first, second]
+    Flip()
+    Local scales: Float32[] = [1.0, 1.0, 1.0, -1.0, 0.25, 0.75, 2.0, -0.5]
+    Local wrong = 0
+    For seed = 1 To 60
+        fuzzState = seed * 7919
+        Local twoAxis = FuzzNext(3) == 0
+        Local sources: Int[] = []
+        Local weights: Float32[] = []
+        Local onX: Bool[] = []
+        Local count = 2 + FuzzNext(2)
+        While sources.Count < count
+            Local source = FuzzNext(5)
+            If sources.Contains(source) Then Continue
+            sources.Add(source)
+            weights.Add(scales[FuzzNext(scales.Count)])
+            onX.Add(!twoAxis || FuzzNext(2) == 0)
+        End While
+        If twoAxis && !onX.Contains(False) Then onX[onX.Count - 1] = False
+        Local controls = ActionSet()
+        Local action = controls.Add("fuzz")
+        For i = 0 To sources.Count - 1
+            If onX[i]
+                action.Bind(FuzzBinding(sources[i], weights[i]))
+            Else
+                action.BindY(FuzzBinding(sources[i], weights[i]))
+            End If
+        End For
+        Local held: Bool[] = [False, False, False, False, False, False]
+        For flip = 1 To 20
+            Local was = action.Down()
+            Local events = ""
+            For e = 1 To FuzzNext(6)
+                Local what = FuzzNext(6)
+                held[what] = !held[what]
+                Try FuzzSet(what, held[what], pads)
+                events += "{what}{held[what] ? "d" : "u"} "
+            End For
+            Flip()
+            Local x: Float32 = 0.0
+            Local y: Float32 = 0.0
+            For i = 0 To sources.Count - 1
+                Local on = sources[i] == 4 ? held[4] || held[5] : held[sources[i]]
+                If on && onX[i] Then x += weights[i]
+                If on && !onX[i] Then y += weights[i]
+            End For
+            Local why = Wrong(was, action.Down(), action.Hits(), action.Up())
+            If action.Down() != FuzzReaches(x, y, twoAxis, controls.PressPoint())
+                why = "Down isn't what the bindings hold"
+            End If
+            If why != ""
+                wrong += 1
+                Print("seed {seed}, Flip {flip}, {sources} {weights} {onX}, events {events}: {why}")
+            End If
+        End For
+        For what = 0 To 5
+            If held[what] Then Try FuzzSet(what, False, pads)
+        End For
+        Flip()
+        Flip()
+    End For
+    Expect(wrong == 0)
+End Function
