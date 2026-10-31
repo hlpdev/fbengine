@@ -118,6 +118,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build libvulkan1 mesa-vulkan-drivers
+          dpkg -L mesa-vulkan-drivers | grep -E 'icd|lvp'
           echo "VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd.*.json)" >> "$GITHUB_ENV"
 
       - name: Install MoltenVK (macOS)
@@ -133,6 +134,7 @@ jobs:
       - name: Build and test
         run: |
           echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
+          export VK_LOADER_DEBUG=error,warn,driver
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_FB_TESTS=OFF
           cmake --build build --parallel
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure
