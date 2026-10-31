@@ -15,10 +15,11 @@ Import "./window"
     Scheduler.Main.Step()
 End Function
 
-// A function OnFlip added, by the number it gave for it.
+// A function OnFlip added, by the number it gave for it, and whether it runs after the others.
 Struct FlipHook
     Field Id: Int
     Field Run: Func()
+    Field Late: Bool
 End Struct
 
 /// How long frames take, and the most there can be a second.
@@ -32,10 +33,12 @@ Public Final Class Frame
     /// Runs `hook` at every Flip, after the OS's events are read and before the coroutines
     /// resume, in the order hooks were added: how a package does its work each frame, as audio
     /// following a camera or physics moving entities, without the game calling it. Gives the
-    /// number RemoveOnFlip takes.
-    @MainThread Public Static Method OnFlip(hook: Func()): Int
+    /// number RemoveOnFlip takes. A `late` hook runs after every other, in the order late ones
+    /// were added, as audio following entities does, to hear them where the other hooks, as
+    /// physics', moved them that frame.
+    @MainThread Public Static Method OnFlip(hook: Func(), late: Bool = False): Int
         lastHook += 1
-        hooks.Add(FlipHook(lastHook, hook))
+        hooks.Add(FlipHook(lastHook, hook, late))
         Return lastHook
     End Method
 
@@ -49,12 +52,16 @@ Public Final Class Frame
         End For
     End Method
 
-    // Each hook as Flip found them, so one that adds or removes hooks changes the next Flip's.
+    // Each hook as Flip found them, so one that adds or removes hooks changes the next Flip's: the
+    // others, then the late ones.
     @MainThread Package Static Method RunHooks()
         Local running: FlipHook[] = []
         running.AddAll(hooks)
         For hook In running
-            hook.Run()
+            If !hook.Late Then hook.Run()
+        End For
+        For hook In running
+            If hook.Late Then hook.Run()
         End For
     End Method
 
