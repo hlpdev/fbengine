@@ -1,0 +1,235 @@
+// Typed references: a module of a game's files' res:// paths, by their folders and names, which a
+// game imports, so `Res.Textures.Wall` is a file's path, and a file that isn't there is a compile
+// error, not a failed load.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.text
+Import fbengine
+
+/// Writes the module of typed references to a game's files: each file's res:// path, by its
+/// folders and its name, as `Res.Textures.Walls.Stone` is "res://Textures/Walls/Stone.png" once
+/// the module's imported As Res. A file in res:// is a Const, a folder in it a Class of Static
+/// Properties, and a folder deeper a Property of the folder it's in. A name is its file's without
+/// its extension, each word capitalized, as "stone_wall.png" is StoneWall; one that two files
+/// would have, or a folder, or that's FutureBlitz's, has its extension too, as StonePng.
+/// Sidecars aren't named, nor what no res:// path can name, and of names that differ only in
+/// case, the first by its bytes is, as res:// finds it.
+///
+/// # Examples
+///
+/// ```
+/// # Import std.io
+/// # Import std.text
+/// Local game = Try TempDir()
+/// Try Dir.CreateAll(game.Path / "textures")
+/// Try File.WriteText(game.Path / "textures" / "wall.png", "")
+/// Expect((Try References.Of(game.Path)).Contains("\"res://textures/wall.png\""))
+/// ```
+Public Final Class References
+    Private New()
+    End New
+
+    /// Writes the module of the files in the folder `source`, all the way down, to the file at
+    /// `module`, as Of gives it. A folder that can't be listed throws its IOError.
+    @MainThread
+    Public Static Method Write(source: Path, module: Path) Throws IOError
+        Try File.WriteText(module, Try Of(source))
+    End Method
+
+    /// The module of the files in the folder `source`, all the way down, as Write writes it.
+    @MainThread
+    Public Static Method Of(source: Path): String Throws IOError
+        Local root = Try Listed(source, "res://")
+        Local text =
+            "// Typed references to the game's files in res://, written by fbengine_tools'\n" +
+            "// References: write them again when the files change, rather than editing them.\n\n" +
+            "Import std.core\n"
+        Local names = NamesOf(root, Null)
+        For at = 0 Until root.Files.Count
+            Local file = root.Files[at]
+            text += "\n/// {file.1}\nPublic Const {names[at]} = \"{Quoted(file.1)}\"\n"
+        End For
+        For at = 0 Until root.Folders.Count
+            Local folder = root.Folders[at]
+            Local named = names[root.Files.Count + at]
+            text += Try ClassOf(folder, named, named, True)
+        End For
+        Return text
+    End Method
+
+    // What's in the folder `path`, which is `res`, a res:// path, and in each folder in it.
+    Static Method Listed(path: Path, res: String): ListedFolder Throws IOError
+        Local folder = ListedFolder(res)
+        Local seen = Set<String>()
+        Local entries = Try Dir.Entries(path)
+        Local files = Set<String>()
+        For entry In entries
+            If entry.Kind == FileKind.FILE Then files.Add(Folded(entry.Name()))
+        End For
+        For entry In entries
+            Local name = entry.Name()
+            Local named = res == "res://" ? res + name : res + "/" + name
+            // What no res:// path names, and the second of two names that differ only in case.
+            If name.Contains("\\") || !seen.Add(Folded(name)) Then Continue
+            If (Try? Assets.Normalize(named)) == Null Then Continue
+            If entry.Kind == FileKind.DIRECTORY
+                folder.Folders.Add(Try Listed(entry.Path, named))
+            ElseIf entry.Kind == FileKind.FILE
+                // A file's sidecar, its import settings, isn't loaded.
+                Local folded = Folded(name)
+                If folded.EndsWith(".toml") && files.Contains(folded.Slice(0, folded.Length - 5))
+                    Continue
+                End If
+                folder.Files.Add((name, named))
+            End If
+        End For
+        Return folder
+    End Method
+
+    // The Class of `folder`, named `name`, its files and folders Static Properties for one in
+    // res://, and Properties for one deeper; then the Classes of the folders in it, each named
+    // `base`, its folders' names joined, then its own, then Folder.
+    Static Method ClassOf(folder: ListedFolder, name: String, base: String,
+                          top: Bool): String Throws IOError
+        Local names = NamesOf(folder, name)
+        Local scope = top ? "Public Static Property" : "Public Property"
+        Local text = "\n/// {folder.Path}/\nPublic Final Class {name}\n"
+        Local first = True
+        For at = 0 Until folder.Files.Count
+            Local file = folder.Files[at]
+            If !first Then text += "\n"
+            first = False
+            text += "    /// {file.1}\n    {scope} {names[at]}: String\n" +
+                    "        Get => \"{Quoted(file.1)}\"\n    End Property\n"
+        End For
+        Local inner = ""
+        For at = 0 Until folder.Folders.Count
+            Local deeper = folder.Folders[at]
+            Local member = names[folder.Files.Count + at]
+            Local kind = base + member + "Folder"
+            If !first Then text += "\n"
+            first = False
+            text += "    /// {deeper.Path}/\n    {scope} {member}: {kind}\n" +
+                    "        Get => {kind}()\n    End Property\n"
+            inner += Try ClassOf(deeper, kind, base + member, False)
+        End For
+        Return text + "End Class\n" + inner
+    End Method
+
+    // The names of `folder`'s files, then its folders', in its Class `owner`, or the module.
+    Static Method NamesOf(folder: ListedFolder, owner: String?): String[]
+        Local names: String[] = []
+        For file In folder.Files
+            names.Add(Identifier(Stem(file.0)))
+        End For
+        For deeper In folder.Folders
+            names.Add(Identifier(FileName(deeper.Path)))
+        End For
+        // A file whose name is another's, or is FutureBlitz's, or its Class's, has its extension
+        // too; then any that are still the same are numbered.
+        Local counts = Counter<String>()
+        For named In names
+            counts.Add(named)
+        End For
+        For at = 0 Until folder.Files.Count
+            Local named = names[at]
+            If counts[named] > 1 || Reserved(named) || named == owner
+                names[at] = Identifier(folder.Files[at].0)
+            End If
+        End For
+        Local taken = Set<String>()
+        For at = 0 Until names.Count
+            Local named = names[at]
+            If Reserved(named) || named == owner Then named += "Folder"
+            Local numbered = named
+            Local next = 2
+            While !taken.Add(numbered)
+                numbered = named + "{next}"
+                next += 1
+            End While
+            names[at] = numbered
+        End For
+        Return names
+    End Method
+
+    // `name` without its extension, unless it's all an extension, as ".hidden" is.
+    Static Method Stem(name: String): String
+        Local dot = -1
+        Local bytes = name.Bytes
+        For at = 0 Until bytes.Count
+            If bytes[at] == 0x2E Then dot = at
+        End For
+        If dot <= 0 Then Return name
+        Return String.FromUtf8(bytes[0..dot]) ?? name
+    End Method
+
+    // A res:// path's last name.
+    Static Method FileName(path: String): String
+        Local names = path.Split("/")
+        Return names[names.Count - 1]
+    End Method
+
+    // `name` as an identifier: its ASCII letters and digits, each run of them a word with its first
+    // letter capitalized, and N before one that starts with a digit; File for one with neither.
+    Static Method Identifier(name: String): String
+        Local made: UInt8[] = []
+        Local starting = True
+        For byte In name.Bytes
+            Local lower = byte >= 0x61 && byte <= 0x7A
+            Local upper = byte >= 0x41 && byte <= 0x5A
+            Local digit = byte >= 0x30 && byte <= 0x39
+            If !lower && !upper && !digit
+                starting = True
+                Continue
+            End If
+            made.Add(starting && lower ? (byte - 0x20) As UInt8 : byte)
+            starting = False
+        End For
+        If made.Count == 0 Then Return "File"
+        If made[0] >= 0x30 && made[0] <= 0x39 Then made.Insert(0, 0x4E As UInt8)
+        Return String.FromUtf8(made) ?? "File"
+    End Method
+
+    // Whether `name` is one of FutureBlitz's keywords, which can't be an identifier.
+    Static Method Reserved(name: String): Bool
+        Local words = ["Abstract", "Alias", "As", "Async", "Await", "Break", "ByRef", "Callback",
+                       "Case", "Catch", "Class", "Const", "Continue", "Default", "Defer", "Else",
+                       "ElseIf", "End", "Enum", "Extend", "Extends", "Extern", "False", "Field",
+                       "Final", "Finally", "For", "Func", "Function", "Global", "If", "Implements",
+                       "Import", "In", "Interface", "Is", "Local", "Lock", "Loop", "Method", "New",
+                       "Null", "Operator", "Override", "Package", "Parallel", "Private", "Property",
+                       "Protected", "Public", "ReadOnly", "Repeat", "Return", "Select", "Self",
+                       "Shared", "Static", "Struct", "Super", "Then", "ThreadLocal", "Throw",
+                       "Throws", "To", "True", "Try", "Unsafe", "Until", "Where", "While"]
+        Return words.Contains(name)
+    End Method
+
+    // `text` in a string literal: its braces doubled, which would interpolate.
+    Static Method Quoted(text: String): String
+        Return text.Replace("{{", "{{{{").Replace("}}", "}}}}")
+    End Method
+
+    // `name` with its ASCII letters in lower case, as res:// compares names.
+    Static Method Folded(name: String): String
+        Local folded: UInt8[] = []
+        For byte In name.Bytes
+            folded.Add(byte >= 0x41 && byte <= 0x5A ? (byte + 0x20) As UInt8 : byte)
+        End For
+        Return String.FromUtf8(folded) ?? name
+    End Method
+End Class
+
+// A folder as References lists it: its res:// path, its files' names and paths, and its folders.
+Final Class ListedFolder
+    Field Path: String
+    Field Files: (String, String)[]
+    Field Folders: ListedFolder[]
+
+    New(path: String)
+        Path = path
+        Files = []
+        Folders = []
+    End New
+End Class

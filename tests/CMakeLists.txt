@@ -456,3 +456,24 @@ if(MINGW)
 endif()
 catch_discover_tests(fbengine_tools_tests TEST_PREFIX "tools."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# Typed references: a module tests/tools/references writes of its files/, which a game builds and
+# prints from, and which a game that names a file that isn't there doesn't build with.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_references_games "${CMAKE_CURRENT_BINARY_DIR}/references_games")
+  add_test(NAME tools.references.write
+           COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/tools/references"
+                   -- "${fbengine_references_games}"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tools/references/files")
+  set_tests_properties(tools.references.write PROPERTIES FIXTURES_SETUP fbengine_references
+                       PASS_REGULAR_EXPRESSION "\nwritten\r?\n$")
+  add_test(NAME tools.references.game
+           COMMAND "${FBENGINE_FB}" --color never run "${fbengine_references_games}/game")
+  set_tests_properties(tools.references.game PROPERTIES FIXTURES_REQUIRED fbengine_references
+                       PASS_REGULAR_EXPRESSION
+                       "\nres://logo\.png\r?\nres://Textures/wall\.png\r?\nres://Textures/Walls/stone\.png\r?\n$")
+  add_test(NAME tools.references.typo
+           COMMAND "${FBENGINE_FB}" --color never run "${fbengine_references_games}/typo")
+  set_tests_properties(tools.references.typo PROPERTIES FIXTURES_REQUIRED fbengine_references
+                       PASS_REGULAR_EXPRESSION "error: Textures has no member named 'Wal'")
+endif()
