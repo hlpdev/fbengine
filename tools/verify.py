@@ -117,15 +117,19 @@ def this_target():
 
 def check_exports():
     step("exports")
+    # Other targets' DLLs, from CI's artifacts, are only checked on their own machines.
+    dlls = []
     for native in sorted((ROOT / "native").iterdir()):
-        # Other targets' DLLs, from CI's artifacts, are only checked on their own machines.
+        if not native.is_dir() or native.name == "common":
+            continue
         folder = ROOT / "packages" / native.name / "native" / this_target()
-        dlls = [file for file in folder.rglob("*") if file.suffix in (".dll", ".so", ".dylib")]
-        if not dlls:
+        found = [file for file in folder.rglob("*") if file.suffix in (".dll", ".so", ".dylib")]
+        if not found:
             fail(f"{native.name} has no built DLL in {folder.relative_to(ROOT)}")
-        for dll in dlls:
-            if run(["sh", "tools/check-exports.sh", dll.relative_to(ROOT).as_posix(), "fbe_"]) != 0:
-                fail(f"{dll.name} exports more than its C API")
+        dlls += found
+    names = [dll.relative_to(ROOT).as_posix() for dll in dlls]
+    if names and run(["sh", "tools/check-exports.sh", "fbe_", *names]) != 0:
+        fail("a DLL exports more than its C API, or two DLLs export one name")
 
 
 def check_bindings():
