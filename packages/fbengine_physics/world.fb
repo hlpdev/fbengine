@@ -248,9 +248,13 @@ Public Final Class PhysicsWorld
 
     /// The nearest body of the `layers`, a bit for each, but `ignore`, that a ray from `origin`
     /// along `direction`, which isn't 0, hits within `distance` meters, as a shot or a look at
-    /// what's ahead does, or Null for none. Casts never hit a sensor.
+    /// what's ahead does, or Null for none. It hits a mesh's triangles from their front only,
+    /// unless `backFaces`, as a ray from inside a room hits its walls, which face in, and one from
+    /// outside goes in; and a convex shape from inside it too, at 0 meters. Casts never hit a
+    /// sensor.
     @MainThread Public Method CastRay(origin: Vec3, direction: Vec3, distance: Float,
-                                      layers: UInt32 = ALL_LAYERS, ignore: Body? = Null): Hit?
+                                      layers: UInt32 = ALL_LAYERS, ignore: Body? = Null,
+                                      backFaces: Bool = False): Hit?
         Local world = Live("PhysicsWorld.CastRay")
         Local from = fbe_physics_vec3_t(origin.x, origin.y, origin.z)
         Local along = fbe_physics_vec3_t(direction.x, direction.y, direction.z)
@@ -259,7 +263,7 @@ Public Final Class PhysicsWorld
         Local found = False
         Unsafe
             found = fbe_physics_cast_ray(world, AddressOf(from), AddressOf(along), distance, layers,
-                                         skip, AddressOf(hit))
+                                         skip, backFaces, AddressOf(hit))
         End Unsafe
         If !found
             If LastError() != "the ray hits nothing" Then Panic("PhysicsWorld.CastRay: {LastError()}")
@@ -268,9 +272,10 @@ Public Final Class PhysicsWorld
         Return HitOf(hit)
     End Method
 
-    /// Every body CastRay's ray hits, nearest first.
+    /// Every body CastRay's ray hits, nearest first, as CastRay hits them.
     @MainThread Public Method CastRayAll(origin: Vec3, direction: Vec3, distance: Float,
-                                         layers: UInt32 = ALL_LAYERS, ignore: Body? = Null): Hit[]
+                                         layers: UInt32 = ALL_LAYERS, ignore: Body? = Null,
+                                         backFaces: Bool = False): Hit[]
         Local world = Live("PhysicsWorld.CastRayAll")
         Local from = fbe_physics_vec3_t(origin.x, origin.y, origin.z)
         Local along = fbe_physics_vec3_t(direction.x, direction.y, direction.z)
@@ -279,11 +284,11 @@ Public Final Class PhysicsWorld
         Local count = 0
         Unsafe
             count = fbe_physics_cast_ray_all(world, AddressOf(from), AddressOf(along), distance,
-                                             layers, skip, hits.Pointer(), 16)
+                                             layers, skip, backFaces, hits.Pointer(), 16)
             If count > 16
                 hits = Buffer<fbe_physics_hit_t>(count As Int64)
                 count = fbe_physics_cast_ray_all(world, AddressOf(from), AddressOf(along), distance,
-                                                 layers, skip, hits.Pointer(), count)
+                                                 layers, skip, backFaces, hits.Pointer(), count)
             End If
         End Unsafe
         If count < 0 Then Panic("PhysicsWorld.CastRayAll: {LastError()}")

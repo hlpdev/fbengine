@@ -56,11 +56,12 @@ Public Extern "C" Lib "fbengine_physics_native"
     Function fbe_physics_collides(world: UInt64, a: Int32, b: Int32): Bool
     Function fbe_physics_cast_ray(world: UInt64, origin: Ptr<fbe_physics_vec3_t>,
                                   direction: Ptr<fbe_physics_vec3_t>, distance: Float32,
-                                  layers: UInt32, ignore: UInt64, hit: Ptr<fbe_physics_hit_t>): Bool
+                                  layers: UInt32, ignore: UInt64, back_faces: Bool,
+                                  hit: Ptr<fbe_physics_hit_t>): Bool
     Function fbe_physics_cast_ray_all(world: UInt64, origin: Ptr<fbe_physics_vec3_t>,
                                       direction: Ptr<fbe_physics_vec3_t>, distance: Float32,
-                                      layers: UInt32, ignore: UInt64, hits: Ptr<fbe_physics_hit_t>,
-                                      capacity: Int32): Int32
+                                      layers: UInt32, ignore: UInt64, back_faces: Bool,
+                                      hits: Ptr<fbe_physics_hit_t>, capacity: Int32): Int32
     Function fbe_physics_cast_shape(world: UInt64, shape: UInt64, position: Ptr<fbe_physics_vec3_t>,
                                     rotation: Ptr<fbe_physics_quat_t>,
                                     motion: Ptr<fbe_physics_vec3_t>, layers: UInt32, ignore: UInt64,

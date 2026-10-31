@@ -146,17 +146,21 @@ FBE_PHYSICS_API bool fbe_physics_collides(uint64_t world, int32_t a, int32_t b);
 // Casts a ray from `origin` along `direction`, which isn't 0, as far as `distance`, from 0 on, at
 // the bodies of the `layers` (a bit for each), but `ignore`'s, and puts the nearest hit in `hit`;
 // false if it hits none, isn't a world, `ignore` is another world's, or a number's out of range,
-// when fbe_physics_error says why. Casts never hit a sensor.
+// when fbe_physics_error says why. It hits a mesh's triangles from the front only, unless
+// `back_faces`, so a ray from inside a room hits its walls, which face in, and one from outside
+// goes in; and a convex shape from inside too, at 0. Casts never hit a sensor.
 FBE_PHYSICS_API bool fbe_physics_cast_ray(uint64_t world, const fbe_physics_vec3_t* origin,
                                           const fbe_physics_vec3_t* direction, float distance,
-                                          uint32_t layers, uint64_t ignore, fbe_physics_hit_t* hit);
+                                          uint32_t layers, uint64_t ignore, bool back_faces,
+                                          fbe_physics_hit_t* hit);
 
 // As fbe_physics_cast_ray, but every hit, nearest first, up to `capacity` of them in `hits`,
 // giving how many there were, -1 if it isn't a world or a number's out of range.
 FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physics_vec3_t* origin,
                                                  const fbe_physics_vec3_t* direction,
                                                  float distance, uint32_t layers, uint64_t ignore,
-                                                 fbe_physics_hit_t* hits, int32_t capacity);
+                                                 bool back_faces, fbe_physics_hit_t* hits,
+                                                 int32_t capacity);
 
 // Sweeps `shape`, which has no mesh in it, its origin at `position` and turned by `rotation`, by
 // `motion`, at the bodies of the `layers` but `ignore`'s, and puts the first hit in `hit`, its

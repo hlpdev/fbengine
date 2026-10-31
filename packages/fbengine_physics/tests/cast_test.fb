@@ -157,16 +157,16 @@ Function TheCApiRefusesCastsItDoesntTake()
     Local hit = fbe_physics_hit_t(0, from, from, 0, -1)
     Unsafe
         Expect(!fbe_physics_cast_ray(world, AddressOf(from), AddressOf(nowhere), 10, ALL_LAYERS, 0,
-                                     AddressOf(hit)))
+                                     False, AddressOf(hit)))
         Expect(Error() == "a ray is from a finite origin along a finite direction that isn't 0")
         Expect(!fbe_physics_cast_ray(world, AddressOf(from), AddressOf(down), -1, ALL_LAYERS, 0,
-                                     AddressOf(hit)))
+                                     False, AddressOf(hit)))
         Expect(Error() == "a ray goes 0 meters or more, not -1")
         Expect(!fbe_physics_cast_ray(world, AddressOf(from), AddressOf(down), 10, ALL_LAYERS, 0,
-                                     AddressOf(hit)))
+                                     False, AddressOf(hit)))
         Expect(Error() == "the ray hits nothing")
         Expect(!fbe_physics_cast_ray(world, AddressOf(from), AddressOf(down), 10, ALL_LAYERS, world,
-                                     AddressOf(hit)))
+                                     False, AddressOf(hit)))
         Expect(Error() == "the body was freed")
     End Unsafe
     Expect(!fbe_physics_set_collides(world, 0, 32, True))
@@ -199,6 +199,56 @@ Function ACastPutsAShapesOriginWhereItsGiven() Throws ShapeError
     Local hit = world.CastShape(rock, Vec3(10, 0, 0), Quat(0, 0, 0, 1), Vec3(0, 5, 0))
     Expect(hit?.Body == ceiling)
     Expect(Near(hit?.Distance ?? 0, 1.8, 0.03), "it met the ceiling {hit?.Distance ?? 0} m on")
+End Function
+
+// A room of a mesh, 10 across, its walls, floor, and ceiling facing in, its middle at the origin.
+Function Room(world: PhysicsWorld): Body Throws ShapeError
+    Local corners: Vec3[] = []
+    For i = 0 To 7
+        corners.Add(Vec3((i & 1) == 0 ? -5.0 : 5.0, (i & 2) == 0 ? -5.0 : 5.0,
+                         (i & 4) == 0 ? -5.0 : 5.0))
+    End For
+    // Each side's corners, counter-clockwise seen from inside.
+    Local sides = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4],
+                   [1, 5, 7, 3]]
+    Local indices: Int32[] = []
+    For side In sides
+        indices.AddAll([side[0], side[1], side[2], side[0], side[2], side[3]])
+    End For
+    Return Body(world, Try Shape.Mesh(corners, indices), Motion.STATIC, Vec3(0, 0, 0))
+End Function
+
+// A ray hits a mesh's triangles from the front only, unless it's asked for their backs too: from
+// inside a room it hits a wall, which faces in, either way, and from outside it goes in through
+// the near wall's back, to the far wall, unless it hits backs.
+@Test
+Function ARayHitsTrianglesFromTheFrontUnlessAskedForTheirBacks() Throws ShapeError
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local room = Try Room(world)
+    For backs In [False, True]
+        // Off the middle, which is on the edge between a side's two triangles, which both hit.
+        Local middle = Vec3(0, 1.3, 0.7)
+        Local inside = world.CastRay(middle, Vec3(1, 0, 0), 20, ALL_LAYERS, Null, backs)
+        Expect(inside?.Body == room && Near(inside?.Distance ?? 0, 5))
+        Expect(Near(inside?.Normal ?? Vec3(0, 0, 0), Vec3(-1, 0, 0)))
+        Expect(world.CastRayAll(middle, Vec3(1, 0, 0), 20, ALL_LAYERS, Null, backs).Count == 1)
+        // Each side of the room, from outside it.
+        For direction In [Vec3(1, 0, 0), Vec3(-1, 0, 0), Vec3(0, 1, 0), Vec3(0, -1, 0),
+                          Vec3(0, 0, 1), Vec3(0, 0, -1)]
+            Local aside = Vec3(1.3, 2.1, 0.7)
+            Local from = direction * -10 + aside - direction * Dot(aside, direction)
+            Local hit = world.CastRay(from, direction, 30, ALL_LAYERS, Null, backs)
+            Expect(Near(hit?.Distance ?? 0, backs ? 5.0 : 15.0),
+                   "from {from}, backs {backs}: {hit?.Distance ?? 0} m")
+            Local all = world.CastRayAll(from, direction, 30, ALL_LAYERS, Null, backs)
+            Expect(all.Count == (backs ? 2 : 1))
+            Expect(Near(all[0].Distance, backs ? 5.0 : 15.0))
+        End For
+    End For
+    // As before, CastRay and CastRayAll's nearest agree.
+    Expect(world.CastRay(Vec3(-10, 1, 2), Vec3(1, 0, 0), 30)?.Distance ==
+           world.CastRayAll(Vec3(-10, 1, 2), Vec3(1, 0, 0), 30)[0].Distance)
 End Function
 
 // A cast's distance is finite however far it goes, and 0 from inside what it hits.
@@ -252,8 +302,7 @@ Function TheCApiRefusesCastsOfMeshesAndOtherWorldsBodies()
         Local origin = fbe_body_vec3_t(0, 0, 0)
         elsewhere = fbe_body_add(other, ball, 0, AddressOf(origin), AddressOf(still))
         Expect(!fbe_physics_cast_ray(world, AddressOf(at), AddressOf(down), 10, ALL_LAYERS,
-                                     elsewhere,
-                                     AddressOf(hit)))
+                                     elsewhere, False, AddressOf(hit)))
         Expect(Error() == "the ignored body is of another world")
     End Unsafe
 End Function

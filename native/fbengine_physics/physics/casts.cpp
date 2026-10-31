@@ -171,6 +171,16 @@ bool ray_of(const fbe_physics_vec3_t& origin, const fbe_physics_vec3_t& directio
     return true;
 }
 
+// How a ray hits: a convex shape from inside it too, at 0, and a mesh's triangles from their
+// front only, unless `back_faces`.
+JPH::RayCastSettings ray_settings(bool back_faces) {
+    JPH::RayCastSettings settings;
+    settings.mTreatConvexAsSolid = true;
+    settings.mBackFaceModeTriangles =
+        back_faces ? JPH::EBackFaceMode::CollideWithBackFaces : JPH::EBackFaceMode::IgnoreBackFaces;
+    return settings;
+}
+
 // What a ray going `distance` hit, which `world`'s body there's locked for.
 fbe_physics_hit_t hit_of(const world_t& world, const JPH::RRayCast& ray, float distance,
                          const JPH::RayCastResult& result) {
@@ -231,7 +241,7 @@ extern "C" {
 
 FBE_PHYSICS_API bool fbe_physics_cast_ray(uint64_t world, const fbe_physics_vec3_t* origin,
                                           const fbe_physics_vec3_t* direction, float distance,
-                                          uint32_t layers, uint64_t ignore,
+                                          uint32_t layers, uint64_t ignore, bool back_faces,
                                           fbe_physics_hit_t* hit) {
     using namespace fbe::physics;
     cast_t cast;
@@ -240,15 +250,11 @@ FBE_PHYSICS_API bool fbe_physics_cast_ray(uint64_t world, const fbe_physics_vec3
         return false;
     }
     const fp_mode_t mode;
-    // As Jolt's cast of a ray for its closest hit: into convex shapes from inside them, and into
-    // the backs of triangles.
-    JPH::RayCastSettings settings;
-    settings.mBackFaceModeTriangles = JPH::EBackFaceMode::CollideWithBackFaces;
     nearest_t<JPH::CastRayCollector> collector(ray_margin);
     const layer_mask_t mask(layers);
     const bodies_but_t bodies(cast.ignore);
     cast.world->system.GetNarrowPhaseQueryNoLock().CastRay(
-        ray, settings, collector, JPH::BroadPhaseLayerFilter(), mask, bodies);
+        ray, ray_settings(back_faces), collector, JPH::BroadPhaseLayerFilter(), mask, bodies);
     if (!collector.hit().has_value()) {
         return fail("the ray hits nothing");
     }
@@ -259,7 +265,8 @@ FBE_PHYSICS_API bool fbe_physics_cast_ray(uint64_t world, const fbe_physics_vec3
 FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physics_vec3_t* origin,
                                                  const fbe_physics_vec3_t* direction,
                                                  float distance, uint32_t layers, uint64_t ignore,
-                                                 fbe_physics_hit_t* hits, int32_t capacity) {
+                                                 bool back_faces, fbe_physics_hit_t* hits,
+                                                 int32_t capacity) {
     using namespace fbe::physics;
     cast_t cast;
     JPH::RRayCast ray;
@@ -271,7 +278,7 @@ FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physi
     const layer_mask_t mask(layers);
     const bodies_but_t bodies(cast.ignore);
     cast.world->system.GetNarrowPhaseQueryNoLock().CastRay(
-        ray, JPH::RayCastSettings(), collector, JPH::BroadPhaseLayerFilter(), mask, bodies);
+        ray, ray_settings(back_faces), collector, JPH::BroadPhaseLayerFilter(), mask, bodies);
     // Nearest first, and hits as near in the same order however Jolt's broad phase has them.
     std::ranges::sort(collector.mHits, nearer<JPH::RayCastResult>);
     const auto count =

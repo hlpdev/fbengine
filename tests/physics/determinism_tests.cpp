@@ -506,9 +506,10 @@ std::vector<std::uint64_t> hits_down(std::uint64_t world, std::uint64_t sphere,
     constexpr fbe_physics_quat_t unturned_cast{ .x = 0.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F };
     for (const fbe_physics_vec3_t& origin : from) {
         fbe_physics_hit_t found{};
-        hit.push_back(fbe_physics_cast_ray(world, &origin, &down, 10.0F, 0xFFFFFFFFU, 0, &found)
-                          ? found.body
-                          : 0);
+        hit.push_back(
+            fbe_physics_cast_ray(world, &origin, &down, 10.0F, 0xFFFFFFFFU, 0, false, &found)
+                ? found.body
+                : 0);
         hit.push_back(fbe_physics_cast_shape(world, sphere, &origin, &unturned_cast, &fall,
                                              0xFFFFFFFFU, 0, &found)
                           ? found.body
