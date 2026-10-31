@@ -234,13 +234,16 @@ Function WithNoOutputLeftItStaysLostAndTriesEachFlip() Throws AudioError, SoundE
 End Function
 
 // A device whose mix stalls, left started, as a lost output's is on CoreAudio and PulseAudio, is
-// Lost once it's mixed nothing for a quarter of a second, and made again at the next Flip, its
-// Channels going on where they were.
+// Lost once it's mixed nothing for a quarter of a second, four periods if they're longer, and made
+// again at the next Flip, its Channels going on where they were. At 100 ms a period, the device
+// mixes nothing between its first frames and the stall, as a fast one doesn't before its start
+// returns, which once read as no frames since it started.
 @Test
 Function AStalledMixIsLostAndMadeAgain() Throws AudioError, SoundError
-    Try Audio.Start(AudioDevice.SILENT, 48000, 2)
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 480000)))
+    Try Audio.Start(AudioDevice.SILENT, 48000, 2, "", 0.1)
     Defer Audio.Stop()
-    Local channel = (Try Sound.FromBytes(Wav(Constant(16384, 480000)))).Play()
+    Local channel = sound.Play()
     Expect(FramesPast(0) > 0)
     Flip(False)
     Expect(!Audio.Lost())
@@ -248,7 +251,7 @@ Function AStalledMixIsLostAndMadeAgain() Throws AudioError, SoundError
     Sleep(50.Milliseconds)
     Local frames = Audio.Frames()
     Expect(!Audio.Lost())
-    Sleep(400.Milliseconds)
+    Sleep(600.Milliseconds)
     Expect(Audio.Frames() == frames)
     Expect(Audio.Lost())
     Expect(Audio.Started())
