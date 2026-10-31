@@ -13,6 +13,7 @@
 #include "render/fbe_render.h"
 #include "scene/fbe_scene.h"
 #include "vfs/fbe_vfs.h"
+#include "text/fbe_text.h"
 #include "window/fbe_window.h"
 
 #endif

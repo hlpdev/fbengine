@@ -36,7 +36,11 @@ Public Final Class Ui
     Field root: Node
     Field theme: Theme
     Field scale: Float32 = 1.0
-    Field measure: Func(String, Style): Vec2
+    // A game's own measuring, which comes before its fonts'.
+    Field measure: (Func(String, Style): Vec2)? = Null
+    // Its fonts by the names styles give them, and each at the sizes styles ask for.
+    Field fonts: Map<String, Font>
+    Field sized: Map<String, Font>
     Field hovered: Weak<Widget>
     Field pressed: Weak<Widget>
     Field focused: Weak<Widget>
@@ -61,7 +65,8 @@ Public Final Class Ui
     @MainThread Public New(root: Node, theme: Theme? = Null)
         Self.root = root
         Self.theme = theme ?? Theme.Dark()
-        measure = EstimatedText
+        fonts = {}
+        sized = {}
         controls = ActionSet()
         ways = []
         held = [0.0, 0.0, 0.0, 0.0]
@@ -232,15 +237,49 @@ Public Final Class Ui
     /// How many of the window's units each of its own is.
     @MainThread Public Method Scale(): Float32 => scale
 
-    /// Sets how it measures text, in a style's font: fbengine's text, once there's a font, or
-    /// EstimatedText, at first.
-    @MainThread Public Method SetTextMeasure(measured: Func(String, Style): Vec2)
+    /// Sets the font a style's Font names, or with "", the one for styles whose font it hasn't,
+    /// which their text is measured in, as it's drawn, at each style's FontSize; Null takes it
+    /// away. With none, text is measured by EstimatedText.
+    @MainThread Public Method SetFont(name: String, font: Font?)
+        If font == Null
+            fonts.Remove(name)
+        Else
+            fonts[name] = font
+        End If
+        sized.Clear()
+        root.Invalidate()
+    End Method
+
+    /// The font `style`'s text is in: the one its Font names, or the one for "", at its
+    /// FontSize; Null when it has neither, or a FontSize of 0.
+    @MainThread Public Method FontFor(style: Style): Font?
+        Local named = fonts.Get(style.Font) != Null ? style.Font : ""
+        Local font = fonts.Get(named)
+        If font == Null || !(style.FontSize > 0.0) Then Return Null
+        If font.Size() == style.FontSize Then Return font
+        Local key = "{named}/{style.FontSize}"
+        Local made = sized.Get(key)
+        If made != Null Then Return made
+        Local resized = font.Sized(style.FontSize)
+        sized[key] = resized
+        Return resized
+    End Method
+
+    /// Sets how it measures text in a style, in place of its fonts, or with Null, by its fonts
+    /// again.
+    @MainThread Public Method SetTextMeasure(measured: (Func(String, Style): Vec2)?)
         measure = measured
         root.Invalidate()
     End Method
 
-    /// The size `text` takes in `style`'s font.
-    @MainThread Public Method MeasureText(text: String, style: Style): Vec2 => measure(text, style)
+    /// The size `text` takes in `style`: as SetTextMeasure set, or in its font (FontFor), or by
+    /// EstimatedText without one.
+    @MainThread Public Method MeasureText(text: String, style: Style): Vec2
+        Local measured = measure
+        If measured != Null Then Return measured(text, style)
+        Local font = FontFor(style)
+        Return font != Null ? font.Measure(text) : EstimatedText(text, style)
+    End Method
 
     /// The widget the pointer was over at the last Update, or Null.
     @MainThread Public Method Hovered(): Widget? => hovered

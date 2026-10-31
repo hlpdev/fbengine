@@ -54,7 +54,8 @@ if(FBENGINE_FB_TESTS)
     if(EXISTS "${package}/project.toml")
       cmake_path(GET package FILENAME name)
       add_test(NAME ${name}.package COMMAND "${FBENGINE_FB}" test "${package}")
-      set_tests_properties(${name}.package PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
+      set_tests_properties(${name}.package PROPERTIES ENVIRONMENT
+                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts")
     endif()
   endforeach()
 
@@ -483,6 +484,21 @@ target_link_libraries(fbengine_core_tests PRIVATE fbengine_native Catch2::Catch2
 fbengine_set_warnings(fbengine_core_tests)
 catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_native>")
+# text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
+# test fonts.
+file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")
+add_executable(fbengine_text_tests text/text_tests.cpp ${fbengine_text_sources}
+               "${PROJECT_SOURCE_DIR}/native/fbengine/core/core.cpp")
+target_include_directories(fbengine_text_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_compile_definitions(fbengine_text_tests PRIVATE FBE_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}"
+                           FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts")
+target_link_libraries(fbengine_text_tests PRIVATE SDL3::SDL3-static freetype fbengine_harfbuzz
+                      fbengine_sheenbidi Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_text_tests)
+catch_discover_tests(fbengine_text_tests TEST_PREFIX "text."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
 # fbengine_ui's panics, each by a run of tests/ui, which says it.
 if(FBENGINE_FB_TESTS)
   set(fbengine_ui_cases
