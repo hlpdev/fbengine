@@ -39,6 +39,13 @@ FBE_API int32_t fbe_input_key_hit_at(int32_t index);
 FBE_API int32_t fbe_input_keystroke_count(void);
 // The `index`th's kind, FBE_INPUT_KEYSTROKE_'s; -1 if there's no such keystroke.
 FBE_API int32_t fbe_input_keystroke_kind(int32_t index);
+// The modifiers held as it was typed, as of the key events before it, FBE_INPUT_MOD_'s bits, either
+// side's for each, and a modifier's own press holding it; 0 for no such keystroke.
+#define FBE_INPUT_MOD_SHIFT   1
+#define FBE_INPUT_MOD_CONTROL 2
+#define FBE_INPUT_MOD_ALT     4
+#define FBE_INPUT_MOD_SUPER   8
+FBE_API int32_t fbe_input_keystroke_mods(int32_t index);
 // Its key, for a press or a repeat; 0 for text, or no such keystroke.
 FBE_API int32_t fbe_input_keystroke_key(int32_t index);
 // Its text, UTF-8, for text; "" for a key, or no such keystroke.

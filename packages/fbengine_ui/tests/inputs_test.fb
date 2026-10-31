@@ -295,3 +295,46 @@ Function AFieldsKeysAreThePlatformsOwn() Throws GraphicsError
     Expect(field.Selection() == (0, 4))
     SetEditingKeys(had)
 End Function
+
+// A key's modifiers are those held as it went down: "a", then Ctrl down in the same frame, types
+// the "a" and selects nothing.
+@Test
+Function AFieldGoesByEachKeysOwnModifiers() Throws GraphicsError
+    Local field = TextField("text")
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Try Simulate.PressKey(Key.A)
+    Try Simulate.Text("a")
+    Try Simulate.KeyDown(Key.LEFT_CONTROL)
+    Frame(ui)
+    Expect(field.Text() == "texta" && field.Selection() == (5, 5))
+    // Ctrl's A, pressed with it held, selects all; Shift let go before Left moves without it.
+    Try Simulate.PressKey(Key.A)
+    Try Simulate.KeyUp(Key.LEFT_CONTROL)
+    Frame(ui)
+    Expect(field.Selection() == (0, 5))
+    Try Simulate.KeyDown(Key.LEFT_SHIFT)
+    Try Simulate.KeyUp(Key.LEFT_SHIFT)
+    Try Simulate.PressKey(Key.LEFT)
+    Frame(ui)
+    Expect(field.Selection() == (0, 0))
+End Function
+
+// At its most, a mark typed after a letter still joins it, as Thai's tone marks are typed.
+@Test
+Function AMarkAtTheMostJoinsTheClusterBeforeIt() Throws GraphicsError
+    Local field = TextField("")
+    field.SetMaxLength(1)
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    ui.Focus(field)
+    Frame(ui)
+    Try Typed(ui, "\u{E01}")
+    Try Typed(ui, "\u{E48}")
+    Expect(field.Text() == "\u{E01}\u{E48}" && field.Length() == 1 && field.Cursor() == 1)
+    // A letter of its own doesn't fit.
+    Try Typed(ui, "x")
+    Expect(field.Text() == "\u{E01}\u{E48}")
+End Function

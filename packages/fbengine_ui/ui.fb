@@ -54,8 +54,10 @@ Public Final Class Ui
     Field held: Float64[]
     Field back: Bool = False
     Field routed: ActionSet[] = []
-    // Whether it blocks its routed sets, while a widget has the focus.
+    // Whether it blocks its routed sets, while a widget has the focus, and its blocks, each its
+    // routed set's.
     Field blocking: Bool = False
+    Field blocks: ActionBlock?[] = []
     Field navigable: Bool = False
     Field strings: Strings? = Null
     // Its Strings' stamp when its widgets were last laid out by them.
@@ -97,21 +99,25 @@ Public Final Class Ui
 
     /// Blocks `actions` while one of its widgets has the focus (ActionSet.Block), from the moment
     /// it's given, and unblocks them as it goes, so the keys and gamepad buttons a menu takes don't
-    /// move the player too; when
-    /// they read again, what's held from the menu reads as Down with no Hit. Its block is apart
-    /// from SetEnabled, and from another Ui's.
+    /// move the player too; when they read again, what's held from the menu reads as Down with no
+    /// Hit. Its block is its own, apart from SetEnabled, the game's blocks, and another Ui's.
     @MainThread Public Method Route(actions: ActionSet)
         For each In routed
             If RefEquals(each, actions) Then Return
         End For
         routed.Add(actions)
-        If blocking Then actions.Block()
+        blocks.Add(blocking ? actions.Block() : Null)
     End Method
 
     /// Stops blocking `actions`, taking back its own block if it has one.
     @MainThread Public Method Unroute(actions: ActionSet)
-        Local had = routed.RemoveAll(Function(each: ActionSet) => RefEquals(each, actions))
-        If had > 0 && blocking Then actions.Unblock()
+        For i = routed.Count - 1 To 0 Step -1
+            If RefEquals(routed[i], actions)
+                blocks[i]?.Release()
+                routed.RemoveAt(i)
+                blocks.RemoveAt(i)
+            End If
+        End For
     End Method
 
     /// Lets the arrows, a gamepad's D-pad, and its left stick start the focus, at the first
@@ -127,9 +133,8 @@ Public Final Class Ui
 
     // Its blocks go with it.
     Method Destroy()
-        If !blocking Then Return
-        For each In routed
-            each.Unblock()
+        For each In blocks
+            each?.Release()
         End For
     End Method
 
@@ -344,8 +349,9 @@ Public Final Class Ui
     @MainThread Method Blocks()
         If WantsKeys() == blocking Then Return
         blocking = WantsKeys()
-        For each In routed
-            If blocking Then each.Block() Else each.Unblock()
+        For i = 0 To routed.Count - 1
+            blocks[i]?.Release()
+            blocks[i] = blocking ? routed[i].Block() : Null
         End For
     End Method
 
@@ -364,14 +370,15 @@ Public Final Class Ui
         End While
     End Method
 
-    // What a key or a gamepad's way that the focused widget didn't use does: Tab and the ways move
-    // the focus, and Escape is back.
-    @MainThread Method Navigate(key: Key)
+    // What a key or a gamepad's way that the focused widget didn't use does: Tab, with Shift held
+    // as it went down or not, and the ways move the focus, and Escape is back.
+    @MainThread Method Navigate(stroke: Keystroke)
+        Local key = stroke.Key
         Local way = key == Key.UP || key == Key.DOWN || key == Key.LEFT || key == Key.RIGHT
         If way && focused == Null && !navigable Then Return
         Select key
             Case Key.TAB
-                FocusNext(KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT))
+                FocusNext(stroke.Shift)
             Case Key.UP
                 MoveFocus(Direction.UP)
             Case Key.DOWN
@@ -409,7 +416,8 @@ Public Final Class Ui
             End If
             If !pressed Then Continue
             Local own = focused
-            If own == Null || !own.KeyTyped(keys[i]) Then Navigate(keys[i])
+            Local stroke = Keystroke(KeystrokeKind.PRESS, keys[i], "", False, False, False, False)
+            If own == Null || !own.KeyTyped(stroke) Then Navigate(stroke)
         End For
         Checked()
         Local own = focused
@@ -480,14 +488,14 @@ Public Final Class Ui
             Local own = focused
             Select stroke.Kind
                 Case KeystrokeKind.PRESS
-                    If own != Null && own.KeyTyped(stroke.Key) Then Continue
+                    If own != Null && own.KeyTyped(stroke) Then Continue
                     If own != Null && Activates(stroke.Key)
                         own.Activate()
                     Else
-                        Navigate(stroke.Key)
+                        Navigate(stroke)
                     End If
                 Case KeystrokeKind.REPEAT
-                    If own != Null && editing.Contains(stroke.Key) Then own.KeyTyped(stroke.Key)
+                    If own != Null && editing.Contains(stroke.Key) Then own.KeyTyped(stroke)
                 Default
                     If own != Null Then own.TextTyped(stroke.Text)
             End Select

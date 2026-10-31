@@ -119,12 +119,24 @@ Public Class Strings
         Return Filled(Get(key) ?? key, values ?? {})
     End Method
 
-    /// `count`'s text of `key`: the text of `key` and its category, as "apples.one", or of
-    /// "apples.other" when it hasn't that one, then of `key` itself, with `{count}` and its
-    /// `{name}`s filled from `values`.
+    /// `count`'s text of `key`, with `{count}` and its `{name}`s filled from `values`: its own, by
+    /// its own rule, of `key` and the category `count` is in, as "apples.one", or of "apples.other"
+    /// when it hasn't that one, then of `key` itself; else its fallback's, by its fallback's rule,
+    /// and on down; else the key.
     @MainThread Public Method Plural(key: String, count: Int64,
                                      values: Map<String, String>? = Null): String
-        Local text = Get("{key}.{PluralOf(count)}") ?? Get("{key}.other") ?? Get(key) ?? key
+        Local text = key
+        Local at: Strings? = Self
+        While at != Null
+            Local own = at.texts
+            Local found = own.Get("{key}.{at.PluralOf(count)}") ?? own.Get("{key}.other") ??
+                          own.Get(key)
+            If found != Null
+                text = found
+                Break
+            End If
+            at = at.fallback
+        End While
         Local filled: Map<String, String> = values?.Clone() ?? {}
         If filled.Get("count") == Null Then filled["count"] = "{count}"
         Return Filled(text, filled)

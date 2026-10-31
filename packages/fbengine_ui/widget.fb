@@ -116,9 +116,9 @@ Public Class Widget Extends Node
     /// don't.
     @MainThread Public Method Wheel(steps: Int32): Bool => False
 
-    /// A key went down, or repeated, while it had the focus: True if it used it, so it isn't the
-    /// focus's to move.
-    @MainThread Public Method KeyTyped(key: Key): Bool => False
+    /// A key went down, or repeated, while it had the focus, with the modifiers held as it did, as
+    /// `stroke` says: True if it used it, so it isn't the focus's to move.
+    @MainThread Public Method KeyTyped(stroke: Keystroke): Bool => False
 
     /// Text was typed while it had the focus.
     @MainThread Public Method TextTyped(text: String)

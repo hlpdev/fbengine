@@ -201,3 +201,26 @@ Function AChangeToAFallbackLaysTheUiOutAgain() Throws GraphicsError
     Frame(ui)
     Expect(options.Box().Size.x == options.TextSize("Options").x)
 End Function
+
+// A plural goes down the fallbacks one at a time, each by its own rule, its own "other" before
+// the next one's.
+@Test
+Function APluralsTextIsTheFirstStringsWithIt()
+    Local english = Strings("en")
+    english.Set("apples.one", r"{count} apple")
+    english.Set("apples.other", r"{count} apples")
+    // French's 0 is "one", English's "other".
+    Local french = Strings("fr")
+    french.SetPluralRule(
+        Function(count: Int64) => count == 0 || count == 1 || count == -1 ? "one" : "other")
+    french.SetFallback(english)
+    Expect(french.Plural("apples", 0) == "0 apples")
+    Expect(french.Plural("apples", 1) == "1 apple")
+    // Polish's own "other" is its text at 1, before English's "one".
+    Local polish = Strings("pl")
+    polish.SetPluralRule(Function(count: Int64) => count == 1 ? "one" : "other")
+    polish.Set("apples.other", r"{count} jabłek")
+    polish.SetFallback(english)
+    Expect(polish.Plural("apples", 1) == "1 jabłek")
+    Expect(polish.Plural("lemons", 1) == "lemons")
+End Function

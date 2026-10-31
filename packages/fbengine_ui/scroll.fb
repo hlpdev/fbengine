@@ -188,10 +188,10 @@ Public Class List Extends Widget
     /// or a gamepad's SOUTH.
     @MainThread Public Method Chosen(): Bool => chosen
 
-    @MainThread Public Override Method KeyTyped(key: Key): Bool
+    @MainThread Public Override Method KeyTyped(stroke: Keystroke): Bool
         If items.Count == 0 Then Return False
         Local to = selected
-        Select key
+        Select stroke.Key
             Case Key.UP
                 to = Max(selected - 1, 0)
             Case Key.DOWN

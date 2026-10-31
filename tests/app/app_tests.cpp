@@ -78,6 +78,12 @@ TEST_CASE("the player's languages are BCP 47's tags, the most preferred first, e
     // Without a country, an OS gives a script, as "zh-Hans".
     SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, "ZH_hans,pt_br");
     CHECK(fbe::languages() == std::vector<std::string>{ "zh-Hans", "pt-BR" });
+    // A script with the language, as macOS gives one, and a country after it.
+    SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, "zh-Hant_TW,sr-Latn_RS,es-419");
+    CHECK(fbe::languages() == std::vector<std::string>{ "zh-Hant-TW", "sr-Latn-RS", "es-419" });
+    // POSIX's C and POSIX aren't languages, and an encoding isn't a country's.
+    SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, "C,posix,POSIX,en_US.UTF-8");
+    CHECK(fbe::languages() == std::vector<std::string>{ "en-US" });
     SDL_SetHint(SDL_HINT_PREFERRED_LOCALES, nullptr);
     // The OS's own, whatever they are, are tags too.
     for (const std::string& tag : fbe::languages()) {

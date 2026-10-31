@@ -118,6 +118,9 @@ struct glyph_t {
 const glyph_t* rasterized(face_t& face, std::uint32_t glyph, std::int32_t pixels, bool bolder,
                           bool slanted, std::int32_t quarter);
 
+/// A premultiplied color's channel, straight, by its alpha; 0 where nothing's covered.
+std::uint8_t straight(std::uint8_t premultiplied, std::uint8_t alpha);
+
 /// A path given as UTF-8, as the OS takes it.
 std::filesystem::path native_path(std::string_view utf8);
 
