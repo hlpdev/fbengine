@@ -1,0 +1,157 @@
+// Hot reload: what changes in a watched folder is loaded again, taken in place by an Asset whose
+// Reload does, and let go of by the cache for the rest, and Reload loads a path again at once.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.test
+Import std.time
+Import fbengine
+
+// An image's width, which its Reload takes in place, and how many times it has.
+Class HotPicture Implements Asset
+    Field Width: UInt32
+    Field Reloads: Int
+
+    New(width: UInt32)
+        Width = width
+        Reloads = 0
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): HotPicture Throws IOError
+        Return HotPicture(load.Image().Width)
+    End Method
+
+    Method Reload(load: AssetLoad): Bool Throws IOError
+        Width = load.Image().Width
+        Reloads += 1
+        Return True
+    End Method
+End Class
+
+// One that isn't taken in place, as Asset's Reload has it.
+Class ColdPicture Implements Asset
+    Field Width: UInt32
+
+    New(width: UInt32)
+        Width = width
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): ColdPicture Throws IOError
+        Return ColdPicture(load.Image().Width)
+    End Method
+End Class
+
+// What's been reloaded so far.
+Global reloaded: AssetReload[] = []
+
+// Flips until `done` gives True, keeping what's reloaded meanwhile, or until a minute's gone by,
+// for a slow machine.
+Function FlipUntil(done: Func(): Bool)
+    Local since = Instant.Now()
+    While !done() && (Instant.Now() - since) < 60.Seconds
+        Flip()
+        Sleep(5.Milliseconds)
+        reloaded.AddAll(Assets.Reloaded())
+    End While
+End Function
+
+Function WritePng(folder: Path, name: String, side: Int) Throws IOError
+    Try File.WriteBytes(folder / name, Png.Encode(Image(side, side)))
+End Function
+
+@Test
+Function ReloadLoadsAPathAgain() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WritePng(folder.Path, "a.png", 2)
+    Assets.MountFolder("res://test-reload", folder.Path)
+    Defer Assets.Unmount("res://test-reload")
+    Local hot = Try Assets.Load<HotPicture>("res://test-reload/a.png")
+    Local cold = Try Assets.Load<ColdPicture>("res://test-reload/a.png")
+    Assets.Reloaded()
+    reloaded = []
+    Try WritePng(folder.Path, "a.png", 4)
+    Try Assets.Reload("res://Test-Reload/A.png")
+    FlipUntil(Function(): Bool => reloaded.Count >= 2)
+    Expect(reloaded.Count == 2)
+    For done In reloaded
+        Expect(done.Path == "res://test-reload/a.png")
+        Expect(done.Error == Null)
+    End For
+    // In place, so what holds it has the new one.
+    Expect(hot.Width == 4)
+    Expect(hot.Reloads == 1)
+    Expect(RefEquals(Try Assets.Find<HotPicture>("res://test-reload/a.png"), hot))
+    // The other's let go of, and the next Load makes a new one.
+    Expect((Try Assets.Find<ColdPicture>("res://test-reload/a.png")) == Null)
+    Local again = Try Assets.Load<ColdPicture>("res://test-reload/a.png")
+    Expect(!RefEquals(again, cold))
+    Expect(again.Width == 4)
+    Expect(cold.Width == 2)
+End Function
+
+@Test
+Function AWatchedFolderReloadsWhatChangesInIt() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try Dir.CreateAll(folder.Path / "sub")
+    Try WritePng(folder.Path, "a.png", 2)
+    Try WritePng(folder.Path / "sub", "b.png", 2)
+    Assets.MountFolder("res://test-watch", folder.Path)
+    Defer Assets.Unmount("res://test-watch")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Local a = Try Assets.Load<HotPicture>("res://test-watch/a.png")
+    Local b = Try Assets.Load<HotPicture>("res://test-watch/sub/b.png")
+    reloaded = []
+    Try WritePng(folder.Path, "a.png", 4)
+    FlipUntil(Function(): Bool => a.Width == 4)
+    Expect(a.Width == 4)
+    // A folder in it's watched too.
+    Try WritePng(folder.Path / "sub", "b.png", 8)
+    FlipUntil(Function(): Bool => b.Width == 8)
+    Expect(b.Width == 8)
+    // A sidecar's change loads its file again, with its new settings.
+    Local before = a.Reloads
+    Try File.WriteText(folder.Path / "a.png.toml", "srgb = false")
+    FlipUntil(Function(): Bool => a.Reloads > before)
+    Expect(a.Reloads > before)
+    // What doesn't load keeps what it had, and says why.
+    reloaded = []
+    Try File.WriteText(folder.Path / "a.png", "not an image")
+    FlipUntil(Function(): Bool => reloaded.Count > 0)
+    Expect(reloaded.Count > 0)
+    If reloaded.Count > 0 Then Expect(reloaded[0].Error?.Kind == IOErrorKind.INVALID_DATA)
+    Expect(a.Width == 4)
+End Function
+
+@Test
+Function AFolderMountedWhileWatchingIsWatched() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WritePng(folder.Path, "c.png", 2)
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Assets.MountFolder("res://test-later", folder.Path)
+    Defer Assets.Unmount("res://test-later")
+    Local c = Try Assets.Load<HotPicture>("res://test-later/c.png")
+    Try WritePng(folder.Path, "c.png", 4)
+    FlipUntil(Function(): Bool => c.Width == 4)
+    Expect(c.Width == 4)
+    // Once it stops, nothing more is.
+    Assets.StopWatching()
+    Try WritePng(folder.Path, "c.png", 8)
+    Local since = Instant.Now()
+    While (Instant.Now() - since) < 500.Milliseconds
+        Flip()
+        Sleep(5.Milliseconds)
+    End While
+    Expect(c.Width == 4)
+End Function
