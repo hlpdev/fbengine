@@ -248,28 +248,37 @@ Function AStepUpClimbsOntoWhatsLowEnough()
     Expect(Near(mover.Position(), Vec3(1.749, 0.751, 0)))
 End Function
 
+// How high a mover with no step height gets walking 30 frames up a ramp of `degrees`, from 1 up.
+Function Climbed(world: World, degrees: Float, maxSlope: Float?): Float
+    Local ramp = Floor()
+    Defer ramp.Free()
+    ramp.Turn(0, 0, Deg(degrees))
+    Local mover = Mover(world, Vec3(0, 1, 0))
+    Defer mover.Free()
+    If maxSlope != Null Then mover.SetMaxSlope(maxSlope)
+    For frame = 0 Until 30
+        mover.Translate(Vec3(0.1, -0.05, 0))
+        world.Collide()
+    End For
+    Return mover.Position().y
+End Function
+
 @Test
-Function ClimbingASlopeTakesAStepHeight()
+Function AMoverClimbsSlopesUpToItsMaxSlope()
     Local world = Fresh()
     Defer world.Free()
     world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
-    // A ramp rising 20 degrees toward +X.
-    Local ramp = Floor()
-    ramp.Turn(0, 0, Deg(20))
-    Local climbs: Float[] = []
-    For step In [0.0, 0.3]
-        Local mover = Mover(world, Vec3(0, 1, 0))
-        mover.SetStepHeight(step)
-        For frame = 0 Until 30
-            mover.Translate(Vec3(0.1, -0.05, 0))
-            world.Collide()
-        End For
-        climbs.Add(mover.Position().y)
-        mover.Free()
-    End For
-    // With none, it climbs no higher than it was, as a move falling a little can't rise.
-    Expect(climbs[0] < 1.0)
-    Expect(climbs[1] > 1.2)
+    Local mover = Pivot()
+    Expect(IsClose(mover.MaxSlope(), Deg(45), 0.0001))
+    mover.SetMaxSlope(Deg(60))
+    Expect(IsClose(mover.MaxSlope(), Deg(60), 0.0001))
+    mover.Free()
+    // A 20 degree ramp is ground, with no step height; a 60 degree one isn't, so the mover gets
+    // no higher than it was but for the skin, until the max slope says it's ground, and it climbs,
+    // slowly, against its fall.
+    Expect(Climbed(world, 20, Null) > 1.2)
+    Expect(Climbed(world, 60, Null) < 1.002)
+    Expect(Climbed(world, 60, Deg(70)) > 1.1)
 End Function
 
 @Test

@@ -102,9 +102,11 @@ good modern engine on its own. Every structural choice is checked against both.
     times (8 by default) stops where its last touch left it.
   - A mover already within its radius of a face, an edge, or a corner touches it only going
     further in, so one starting in a seam goes out of it, never through.
-  - No move raises a mover more than the move's own rise and its step height: sliding up a slope
-    or over an edge, and stepping up, all take a step height, and a step up lands on ground no
-    higher than it. A mover with none climbs only as far as its move does.
+  - A mover climbs ground, a slope within its max slope of level (45 degrees at first), as far as
+    the slope goes, as physics' Character does. Sliding along anything steeper, edges and corners
+    too, raises it no more than the move's own rise and its step height, so a tall mover isn't
+    thrown up over a ledge, and a step up lands on ground no higher than its step height. A step
+    height of 0 is ramps up to the max slope, and no steps.
 
 ## The renderer
 

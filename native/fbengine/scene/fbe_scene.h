@@ -573,9 +573,10 @@ FBE_API int32_t fbe_entity_can_see(uint64_t entity, uint64_t target);
 // and moving ones where their last move ended; their own moves aren't swept, so a moving door
 // pushes nothing, but a mover it closed on is pushed out of it on its next move, only as far as
 // nothing else is: one squeezed between two stays where it was. A mover already within its radius
-// of a face, an edge, or a corner touches it only going further in. No move raises a mover more
-// than the move's own rise and its step height. Each move is worked out on its own, so the order
-// entities are in changes nothing.
+// of a face, an edge, or a corner touches it only going further in. A slide along ground, within
+// the mover's max slope of level, may raise it as far as the slope goes; along anything steeper,
+// edges and corners too, no more than the move's own rise and its step height. Each move is worked
+// out on its own, so the order entities are in changes nothing.
 //
 // An entity's group, 0 for none, at first. Setting one forgets where its last move ended.
 FBE_API bool fbe_entity_set_collision_group(uint64_t entity, int32_t group);
@@ -592,10 +593,14 @@ FBE_API int32_t fbe_entity_collision_shape(uint64_t entity);
 FBE_API bool fbe_entity_set_collision_box(uint64_t entity, const fbe_aabb_t* box);
 FBE_API bool fbe_entity_collision_box(uint64_t entity, fbe_aabb_t* box);
 // How high a sliding mover steps up onto what blocks it, onto ground no higher, and how much
-// higher than its move rises a slide may take it, as up a slope or over an edge; 0, at first, for
-// neither.
+// higher than its move rises a slide along what's steeper than its max slope may take it, as over
+// an edge; 0, at first, for neither.
 FBE_API bool fbe_entity_set_step_height(uint64_t entity, float height);
 FBE_API float fbe_entity_step_height(uint64_t entity);
+// How steep a slope a mover climbs as ground, in radians from level, 0 to Pi / 2, Pi / 4 at
+// first; false for any other.
+FBE_API bool fbe_entity_set_max_slope(uint64_t entity, float radians);
+FBE_API float fbe_entity_max_slope(uint64_t entity);
 // Forgets where its last move ended, and what it touched, so its next move isn't swept, as a
 // teleport wants.
 FBE_API bool fbe_entity_reset_collisions(uint64_t entity);

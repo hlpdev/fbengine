@@ -65,8 +65,9 @@ End Struct
 /// swept itself, so a moving door pushes nothing, but a mover it closed on is pushed out of it on
 /// its next move, only as far as nothing else is: one squeezed between two stays where it was. A
 /// mover already within its radius of a face, an edge, or a corner touches it only going further
-/// in, and no move raises a mover more than the move's own rise and its StepHeight. Each move is
-/// worked out on its own, so their order changes nothing. Moving an entity by SetPosition is a move to sweep; ResetCollisions is a
+/// in. A slide along ground, within the mover's MaxSlope of level, may raise it as far as the
+/// slope goes; along anything steeper, edges and corners too, no more than the move's own rise and
+/// its StepHeight. Each move is worked out on its own, so their order changes nothing. Moving an entity by SetPosition is a move to sweep; ResetCollisions is a
 /// teleport.
 Extend Entity
     /// Puts the entity in a collision group, 1 to 1023, or none with 0, as at first; it forgets
@@ -150,10 +151,10 @@ Extend Entity
     End Method
 
     /// Sets how high a sliding mover steps up onto what blocks it going across, as stairs want:
-    /// it goes up, across, and back down, if that lands it on ground facing up, no higher than
-    /// the step, and gets it further. It's also how much higher than its move rises a slide may
-    /// take it, so climbing a slope or riding over an edge takes one. 0, at first, for neither.
-    /// Below 0 panics.
+    /// it goes up, across, and back down, if that lands it on ground, within its MaxSlope, no
+    /// higher than the step, and gets it further. It's also how much higher than its move rises a
+    /// slide along what's steeper than ground may take it, so riding over an edge takes one. 0, at
+    /// first, for neither: ramps up to its MaxSlope, and no steps. Below 0 panics.
     @MainThread @PanicsAtCaller
     Public Method SetStepHeight(height: Float)
         If !fbe_entity_set_step_height(Live("SetStepHeight"), height) Then Failed("SetStepHeight")
@@ -162,6 +163,18 @@ Extend Entity
     /// How high a sliding mover steps up.
     @MainThread @PanicsAtCaller
     Public Method StepHeight(): Float => fbe_entity_step_height(Live("StepHeight"))
+
+    /// Sets how steep a slope, in radians from level, a sliding mover climbs as ground, as a
+    /// ramp is: Deg(45) at first. Sliding along ground may raise it as far as the slope goes, and
+    /// a step up lands only on ground. Outside 0 to Pi / 2 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetMaxSlope(radians: Float)
+        If !fbe_entity_set_max_slope(Live("SetMaxSlope"), radians) Then Failed("SetMaxSlope")
+    End Method
+
+    /// How steep a slope a sliding mover climbs as ground, in radians from level.
+    @MainThread @PanicsAtCaller
+    Public Method MaxSlope(): Float => fbe_entity_max_slope(Live("MaxSlope"))
 
     /// Forgets where the entity's last move ended, and what it touched, so its next move isn't
     /// swept: how a game teleports a mover.

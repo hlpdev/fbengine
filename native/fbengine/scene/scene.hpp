@@ -57,6 +57,8 @@ struct collider_t {
     vec3_t box_min{ -1.0F, -1.0F, -1.0F };
     vec3_t box_max{ 1.0F, 1.0F, 1.0F };
     float step_height = 0.0F;
+    /// How steep, from level, what it climbs as ground is.
+    float max_slope = 0.78539816F;
     /// What picks hit it as, FBE_PICK_NONE for nothing.
     std::int32_t pick = 0;
     bool has_previous = false;

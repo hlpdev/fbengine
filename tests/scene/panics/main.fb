@@ -176,6 +176,8 @@ Select arguments[0]
         picker.Pick(1)
     Case "camera-pick-no-window"
         Camera().Pick(Vec2(1, 1))
+    Case "max-slope"
+        Pivot().SetMaxSlope(2)
     Default
         Panic("no case {arguments[0]}")
 End Select
