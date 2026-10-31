@@ -255,6 +255,36 @@ Function OnlyThePitchTimesTheDopplerEffectIsHeld() Throws AudioError, SoundError
     Expect(frames >= 300 && frames <= 500)
 End Function
 
+// A freed Emitter's Channels stay where it was, at rest, and their Doppler effect follows the
+// Listener: going toward them at 100 units a second, it hears them pitched up by
+// (343.3 + 100) / 343.3, as it would the Emitter's, so 4800 frames play in about 3700.
+@Test
+Function AFreedEmittersChannelsArePitchedAsTheListenerMoves() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 48000, 2)
+    Defer Audio.Stop()
+    Defer PutBack()
+    Local sound = Try Sound.FromBytes(Wav(Constant(16384, 4800)))
+    Local emitter = At(Vec3(0, 0, -10))
+    emitter.SetVelocity(Vec3(0, 0, 100))
+    Local channel = emitter.Play(sound)
+    emitter.Free()
+    Listener.SetVelocity(Vec3(0, 0, -100))
+    Local frames = Length(channel)
+    Expect(frames >= 3600 && frames <= 3950)
+    // Many freed with a Channel each, left among the remains until they finish, and pruned as the
+    // Listener moves.
+    For i = 1 To 100
+        Local short = At(Vec3(0, 0, -10))
+        short.Play(sound)
+        short.Free()
+    End For
+    For i = 1 To 50
+        Audio.Mix(100)
+    End For
+    Listener.SetVelocity(Vec3(0, 0, 0))
+    Expect(Audio.Playing() == 0)
+End Function
+
 // Rolled over, the Listener's up is down, so what's on its right is heard on its left: which way is
 // up reaches the mix through the mixing thread, by the next mix.
 @Test

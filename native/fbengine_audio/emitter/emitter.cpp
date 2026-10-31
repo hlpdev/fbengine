@@ -116,6 +116,22 @@ void pitch_channels(emitter_t& emitter) {
         [&](std::uint64_t channel) { return fbe::audio::set_doppler(channel, pitch); });
 }
 
+/// What freed emitters leave: each one's channels that were playing, at rest where it was, whose
+/// Doppler effect follows the listener until they finish. The main thread's, made once and never
+/// let go, as the emitters are.
+std::vector<std::unique_ptr<emitter_t>>& remains() {
+    static auto* made = new std::vector<std::unique_ptr<emitter_t>>();
+    return *made;
+}
+
+/// Pitches each freed emitter's channels again, letting go of those whose channels have finished.
+void pitch_remains() {
+    std::erase_if(remains(), [](const std::unique_ptr<emitter_t>& left) {
+        pitch_channels(*left);
+        return left->channels.size() == 0;
+    });
+}
+
 bool check_positive(float value, const char* what) {
     if (!std::isfinite(value) || value < 0.0F) {
         return fbe::audio::fail(std::format("an emitter's {} is 0 or more, not {}", what, value));
@@ -150,6 +166,7 @@ void join(emitter_t& emitter, std::uint64_t channel) {
 
 void pitch_every_emitter() {
     emitters().each([](emitter_t& emitter) { pitch_channels(emitter); });
+    pitch_remains();
 }
 
 } // namespace fbe::audio
@@ -165,10 +182,15 @@ FBE_AUDIO_API void fbe_emitter_free(uint64_t emitter) {
     if (found == nullptr) {
         return;
     }
-    // Its channels stay where it was, at rest.
-    found->velocity = {};
-    pitch_channels(*found);
+    // Its channels stay where it was, at rest, among the remains.
+    auto left = std::make_unique<emitter_t>(std::move(*found));
     emitters().remove(emitter);
+    left->velocity = {};
+    pitch_remains();
+    pitch_channels(*left);
+    if (left->channels.size() > 0) {
+        remains().push_back(std::move(left));
+    }
 }
 
 FBE_AUDIO_API void fbe_emitter_set_position(uint64_t emitter, float x, float y, float z) {
