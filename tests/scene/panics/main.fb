@@ -89,7 +89,38 @@ Select arguments[0]
         Local light = Light()
         light.Free()
         light.SetColor(Color.Red)
+    Case "segments"
+        Geometry.Sphere(2)
+    Case "triangle-index"
+        Triangle().Surface(0).AddTriangle(0, 1, 5)
+    Case "triangle-count"
+        Triangle().Surface(0).AddTriangles([0, 1, 2, 0])
+    Case "surface-index"
+        Triangle().Surface(1)
+    Case "vertex-index"
+        Triangle().Surface(0).Vertex(3)
+    Case "uv-set"
+        Triangle().Surface(0).VertexUv(0, 2)
+    Case "geometry-freed"
+        Local geometry = Geometry()
+        geometry.Free()
+        geometry.AddSurface()
+    Case "mesh-freed-geometry"
+        Local geometry = Geometry()
+        geometry.Free()
+        Mesh(geometry)
     Default
         Panic("no case {arguments[0]}")
 End Select
 Print("no panic")
+
+// A geometry of one surface with one triangle.
+Function Triangle(): Geometry
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    surface.AddVertex(Vec3(0, 0, 0))
+    surface.AddVertex(Vec3(1, 0, 0))
+    surface.AddVertex(Vec3(0, 1, 0))
+    surface.AddTriangle(0, 1, 2)
+    Return geometry
+End Function

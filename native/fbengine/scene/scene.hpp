@@ -3,6 +3,7 @@
 // What the scene's files share: the handle tables, and the entities' data, kept by field in arrays
 // indexed by slot, so what runs over many entities a frame reads only what it needs.
 
+#include "fbengine.h"
 #include "scene/math.hpp"
 
 #include <array>
@@ -16,10 +17,14 @@ namespace fbe::scene {
 /// No slot: no parent, no world.
 constexpr std::uint32_t none = UINT32_MAX;
 
-/// The slots of one kind of handle, each a 32-bit slot and a generation above it. A freed slot's
-/// generation goes up, so its old handles are caught, never taken for the next one made there.
+/// The slots of one kind of handle: a 32-bit slot, and above it a 24-bit generation and the kind's
+/// 8-bit tag, so a handle of another kind, as a World's given for an entity, is caught too. A freed
+/// slot's generation goes up, so its old handles are caught, never taken for the next one made
+/// there.
 class slots_t {
 public:
+    explicit slots_t(std::uint8_t tag) : m_tag(tag) {}
+
     /// A free slot, or a new one; its handle is handle(slot).
     std::uint32_t make();
     void free(std::uint32_t slot);
@@ -30,6 +35,7 @@ public:
     [[nodiscard]] std::uint32_t size() const;
 
 private:
+    std::uint8_t m_tag;
     std::vector<std::uint32_t> m_generations;
     std::vector<bool> m_live;
     std::vector<std::uint32_t> m_free;
@@ -43,9 +49,35 @@ struct world_t {
     std::array<float, 3> ambient{ 0.2158605F, 0.2158605F, 0.2158605F };
 };
 
+/// One surface of a geometry: its vertices, as the C API has them, and its triangles, three
+/// indices into them each, counterclockwise seen from the front.
+struct surface_t {
+    std::vector<fbe_vertex_t> vertices;
+    std::vector<std::uint32_t> indices;
+};
+
+/// A geometry: surfaces, shared by every mesh drawing it. It lives while the FB side holds its
+/// handle or a mesh draws it, which its references count.
+struct geometry_t {
+    std::vector<surface_t> surfaces;
+    std::uint32_t references = 0;
+    /// Goes up at every change, so what's worked out from it, as collision trees, knows when it's
+    /// stale.
+    std::uint64_t version = 0;
+    bool bounds_stale = true;
+    vec3_t bounds_min;
+    vec3_t bounds_max;
+};
+
+/// A mesh: the geometry it draws, by slot, or none.
+struct mesh_t {
+    std::uint32_t entity = none;
+    std::uint32_t geometry = none;
+};
+
 /// Every entity's data, a field to an array, indexed by slot.
 struct entities_t {
-    slots_t slots;
+    slots_t slots{ 2 };
     std::vector<std::int32_t> kind;
     std::vector<std::uint32_t> world;
     std::vector<std::uint32_t> parent;
@@ -110,7 +142,7 @@ struct light_t {
 };
 
 struct scene_t {
-    slots_t world_slots;
+    slots_t world_slots{ 1 };
     std::vector<world_t> worlds;
     std::uint32_t main_world = none;
     entities_t entities;
@@ -119,6 +151,9 @@ struct scene_t {
     std::uint64_t cameras_made = 0;
     /// Every light, in no order, each knowing its entity.
     std::vector<light_t> lights;
+    std::vector<mesh_t> meshes;
+    slots_t geometry_slots{ 3 };
+    std::vector<geometry_t> geometries;
     /// The handles freed since fbe_entity_freed last took them.
     std::vector<std::uint64_t> freed;
 };
@@ -145,6 +180,22 @@ void remove_camera(std::uint32_t entity);
 light_t* light_of(std::uint64_t handle);
 void add_light(std::uint32_t entity);
 void remove_light(std::uint32_t entity);
+void add_mesh(std::uint32_t entity);
+void remove_mesh(std::uint32_t entity);
+/// The live mesh a handle is for, or null, with fbe_error saying so.
+mesh_t* mesh_of(std::uint64_t handle);
+
+/// A new geometry, held once, as its handle is.
+std::uint32_t make_geometry();
+/// The live geometry a handle is for, or none, with fbe_error saying so.
+std::uint32_t geometry_slot(std::uint64_t handle);
+/// Holds a geometry once more, or lets it go once, freeing it after its last.
+void retain_geometry(std::uint32_t geometry);
+void release_geometry(std::uint32_t geometry);
+/// Marks a geometry changed.
+void touch_geometry(std::uint32_t geometry);
+/// The box around a geometry's vertices, nothing at the origin for none.
+void geometry_bounds(std::uint32_t geometry, vec3_t& min, vec3_t& max);
 
 /// Gives an entity a transform of nothing: at its parent's origin, unturned, at scale 1.
 void reset_transform(std::uint32_t entity);

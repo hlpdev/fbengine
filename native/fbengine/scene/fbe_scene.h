@@ -3,8 +3,9 @@
 
 // The scene: worlds, and the tree of entities in each.
 //
-// Worlds and entities are handles: a 32-bit slot and a 32-bit generation, 0 for none. A call on a
-// freed one fails, false or 0, and fbe_error says why. Every entity freed, by fbe_entity_free or
+// Worlds, entities, and geometry are handles: a 32-bit slot, a 24-bit generation, and an 8-bit tag
+// for its kind, 0 for none. A call on a freed one, or one of another kind, fails, false or 0, and
+// fbe_error says why. Every entity freed, by fbe_entity_free or
 // with its World, is queued for fbe_entity_freed, so the FB side lets go of what it kept for it.
 
 #include "../core/fbe_core.h"
@@ -17,6 +18,7 @@ extern "C" {
 #define FBE_ENTITY_PIVOT  0
 #define FBE_ENTITY_CAMERA 1
 #define FBE_ENTITY_LIGHT  2
+#define FBE_ENTITY_MESH   3
 
 // The space a transform is in: the entity's parent's, or the world's.
 #define FBE_SPACE_LOCAL 0
@@ -70,6 +72,17 @@ typedef struct fbe_mat4_t {
     float m[16];
 } fbe_mat4_t;
 
+typedef struct fbe_vec2_t {
+    float x;
+    float y;
+} fbe_vec2_t;
+
+// A box, from its least corner to its greatest.
+typedef struct fbe_aabb_t {
+    fbe_vec3_t min;
+    fbe_vec3_t max;
+} fbe_aabb_t;
+
 // The part of a target, the window or a texture, a camera draws to, in its units from its top
 // left.
 typedef struct fbe_viewport_t {
@@ -86,6 +99,16 @@ typedef struct fbe_color_t {
     float b;
     float a;
 } fbe_color_t;
+
+// A vertex of a surface: where it is, its normal, two sets of UVs, from the top left of a
+// texture, and its color and alpha, linear.
+typedef struct fbe_vertex_t {
+    fbe_vec3_t position;
+    fbe_vec3_t normal;
+    fbe_vec2_t uv0;
+    fbe_vec2_t uv1;
+    fbe_color_t color;
+} fbe_vertex_t;
 
 // Where an entity is and how it's turned, as the batches give and take them.
 typedef struct fbe_pose_t {
@@ -298,6 +321,82 @@ FBE_API float fbe_camera_fog_end(uint64_t camera);
 // How thick exponential fog is; false below 0.
 FBE_API bool fbe_camera_set_fog_density(uint64_t camera, float density);
 FBE_API float fbe_camera_fog_density(uint64_t camera);
+
+// Geometry: surfaces of vertices and triangles, counterclockwise seen from the front, which meshes
+// draw and share. A geometry lives while its handle is held, as fbe_geometry_create and
+// fbe_geometry_retain hold it, and fbe_geometry_release lets go, or a mesh draws it; a released
+// handle that a mesh still draws stays good, for fbe_mesh_geometry to give and retain again.
+FBE_API uint64_t fbe_geometry_create(void);
+FBE_API bool fbe_geometry_retain(uint64_t geometry);
+FBE_API bool fbe_geometry_release(uint64_t geometry);
+FBE_API bool fbe_geometry_alive(uint64_t geometry);
+// A new geometry with copies of another's surfaces, held once.
+FBE_API uint64_t fbe_geometry_clone(uint64_t geometry);
+// How many times the geometry has changed, which collision trees use to know they're stale.
+FBE_API uint64_t fbe_geometry_version(uint64_t geometry);
+
+FBE_API int32_t fbe_geometry_surface_count(uint64_t geometry);
+// Adds an empty surface at the end and gives its index, -1 for a freed geometry.
+FBE_API int32_t fbe_geometry_add_surface(uint64_t geometry);
+// Adds copies of another geometry's surfaces at the end, each turned by `transform`, and its
+// normals with it; `other` can be the geometry itself.
+FBE_API bool fbe_geometry_add(uint64_t geometry, uint64_t other, const fbe_mat4_t* transform);
+// Transforms every vertex, and its normal through the matrix's inverse transpose, made length 1;
+// one that flips turns the triangles too, so they still face out.
+FBE_API bool fbe_geometry_transform(uint64_t geometry, const fbe_mat4_t* transform);
+// Turns it inside out: every normal negated, and every triangle's winding.
+FBE_API bool fbe_geometry_flip(uint64_t geometry);
+// Gives every vertex the normal of the triangles around it, smoothing across vertices of a
+// surface at the same place, each triangle weighted by its angle at the vertex.
+FBE_API bool fbe_geometry_update_normals(uint64_t geometry);
+// The box around its vertices; nothing at the origin for none.
+FBE_API bool fbe_geometry_bounds(uint64_t geometry, fbe_aabb_t* bounds);
+// Scales and moves it to fill a box, centered, or keeping its shape with `uniform`; a flat axis
+// is moved, not scaled.
+FBE_API bool fbe_geometry_fit(uint64_t geometry, const fbe_aabb_t* box, bool uniform);
+// Every vertex's position, surface after surface, as physics' mesh shapes take them: writes up to
+// `capacity` and gives how many there are, -1 for a freed geometry.
+FBE_API int32_t fbe_geometry_positions(uint64_t geometry, fbe_vec3_t* positions, int32_t capacity);
+// Every triangle's three indices into what fbe_geometry_positions gives: writes up to `capacity`
+// indices and gives how many there are.
+FBE_API int32_t fbe_geometry_indices(uint64_t geometry, uint32_t* indices, int32_t capacity);
+
+// Primitive shapes, each one surface, new and held once, of radius 1 about the origin: a cube from
+// -1 to 1, flat-shaded, each face's UVs 0 to 1; a sphere of `segments` rings from pole to pole
+// and twice as many around, 3 to 100; a cylinder and a cone from y -1 to 1, `segments` around, 3
+// to 100, with caps when `capped`, the cone's point at the top; and a plane from -1 to 1 in X and
+// Z, facing up, `segments` squares along each side, 1 to 100. 0 for segments out of range.
+FBE_API uint64_t fbe_geometry_cube(void);
+FBE_API uint64_t fbe_geometry_sphere(int32_t segments);
+FBE_API uint64_t fbe_geometry_cylinder(int32_t segments, bool capped);
+FBE_API uint64_t fbe_geometry_cone(int32_t segments, bool capped);
+FBE_API uint64_t fbe_geometry_plane(int32_t segments);
+
+// A surface's vertices and triangles, by the geometry and the surface's index.
+// Adds `count` vertices and gives the first's index, -1 if it can't.
+FBE_API int32_t fbe_surface_add_vertices(uint64_t geometry, int32_t surface,
+                                         const fbe_vertex_t* vertices, int32_t count);
+// Adds `count` indices, three to a triangle, each of a vertex the surface has, and gives the first
+// triangle's index, -1 if it can't.
+FBE_API int32_t fbe_surface_add_triangles(uint64_t geometry, int32_t surface,
+                                          const uint32_t* indices, int32_t count);
+FBE_API int32_t fbe_surface_vertex_count(uint64_t geometry, int32_t surface);
+FBE_API int32_t fbe_surface_triangle_count(uint64_t geometry, int32_t surface);
+// Reads or sets `count` vertices from `first`; false if they aren't all there.
+FBE_API bool fbe_surface_vertices(uint64_t geometry, int32_t surface, int32_t first,
+                                  fbe_vertex_t* vertices, int32_t count);
+FBE_API bool fbe_surface_set_vertices(uint64_t geometry, int32_t surface, int32_t first,
+                                      const fbe_vertex_t* vertices, int32_t count);
+// Reads `count` triangles' indices from triangle `first`; false if they aren't all there.
+FBE_API bool fbe_surface_triangles(uint64_t geometry, int32_t surface, int32_t first,
+                                   uint32_t* indices, int32_t count);
+// Takes away a surface's triangles, and its vertices too with `vertices`.
+FBE_API bool fbe_surface_clear(uint64_t geometry, int32_t surface, bool vertices);
+
+// A mesh draws a geometry, or nothing with none; copies of a mesh draw the same one.
+FBE_API bool fbe_mesh_set_geometry(uint64_t mesh, uint64_t geometry);
+// The geometry a mesh draws, 0 for none; its handle is good while the mesh draws it.
+FBE_API uint64_t fbe_mesh_geometry(uint64_t mesh);
 
 // Copies an entity and everything under it, as the last child of `parent`, or at the top of
 // `world` when `parent` is 0; each copy has its original's name, transform, and settings, and

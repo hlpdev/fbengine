@@ -242,12 +242,15 @@ inline bool inverse_affine(const mat4_t& m, mat4_t& inverse) {
 }
 
 /// A normal turned by the matrix: through its 3x3's cofactor, the inverse transpose times the
-/// determinant, which a matrix that flattens an axis has too, then made length 1.
+/// determinant, which a matrix that flattens an axis has too, its sign the determinant's, so a
+/// mirror turns it with the surface, then made length 1.
 inline vec3_t transform_normal(const mat4_t& m, vec3_t n) {
     const vec3_t a = m.axis(0);
     const vec3_t b = m.axis(1);
     const vec3_t c = m.axis(2);
-    return normalize(cross(b, c) * n.x + cross(c, a) * n.y + cross(a, b) * n.z);
+    const vec3_t across = cross(b, c);
+    const vec3_t turned = normalize(across * n.x + cross(c, a) * n.y + cross(a, b) * n.z);
+    return dot(a, across) < 0.0F ? -turned : turned;
 }
 
 } // namespace fbe::scene

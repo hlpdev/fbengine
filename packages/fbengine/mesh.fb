@@ -1,0 +1,37 @@
+// Meshes: entities that draw a Geometry, which their copies share.
+
+Import std.core
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./geometry"
+Import "./window"
+
+/// An entity that draws a Geometry, in its transform; its copies draw the same one, so a hundred
+/// copies of a model are a hundred entities and one Geometry.
+Public Final Class Mesh Extends Entity
+    /// A new Mesh drawing `geometry`, or nothing for Null, the last child of `parent`, or at the
+    /// top of the current World when `parent` is Null.
+    @MainThread @PanicsAtCaller
+    Public New(geometry: Geometry?, parent: Entity? = Null)
+        Super.New(Create(parent, FBE_ENTITY_MESH))
+        SetGeometry(geometry)
+    End New
+
+    Package New(handle: UInt64)
+        Super.New(handle)
+    End New
+
+    Override Package Method KindName(): String => "Mesh"
+
+    /// Makes the mesh draw `geometry`, or nothing for Null.
+    @MainThread @PanicsAtCaller
+    Public Method SetGeometry(geometry: Geometry?)
+        Local mesh = Live("SetGeometry")
+        Local drawn: UInt64 = geometry != Null ? geometry.Live("SetGeometry") : 0
+        If !fbe_mesh_set_geometry(mesh, drawn) Then Panic(LastError())
+    End Method
+
+    /// The Geometry the mesh draws, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Geometry(): Geometry? => GeometryOf(fbe_mesh_geometry(Live("Geometry")))
+End Class

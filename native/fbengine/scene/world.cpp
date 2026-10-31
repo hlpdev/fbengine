@@ -19,7 +19,7 @@ namespace {
 
 /// The kinds fbe_entity_create takes.
 bool valid_kind(std::int32_t kind) {
-    return kind == FBE_ENTITY_PIVOT || kind == FBE_ENTITY_CAMERA || kind == FBE_ENTITY_LIGHT;
+    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_MESH;
 }
 
 /// Where an entity sits: its parent's children, or its world's roots.
@@ -188,22 +188,25 @@ std::uint32_t slots_t::make() {
 void slots_t::free(std::uint32_t slot) {
     m_live[slot] = false;
     // A slot whose generation would wrap is never used again, so no old handle comes back.
-    if (++m_generations[slot] != 0) {
+    if (++m_generations[slot] < (1U << 24U)) {
         m_free.push_back(slot);
     }
 }
 
 std::optional<std::uint32_t> slots_t::find(std::uint64_t handle) const {
     const auto slot = static_cast<std::uint32_t>(handle);
-    const auto generation = static_cast<std::uint32_t>(handle >> 32U);
-    if (slot >= m_generations.size() || !m_live[slot] || m_generations[slot] != generation) {
+    const auto generation = static_cast<std::uint32_t>(handle >> 32U) & 0xFFFFFFU;
+    const auto tag = static_cast<std::uint8_t>(handle >> 56U);
+    if (tag != m_tag || slot >= m_generations.size() || !m_live[slot] ||
+        m_generations[slot] != generation) {
         return std::nullopt;
     }
     return slot;
 }
 
 std::uint64_t slots_t::handle(std::uint32_t slot) const {
-    return (static_cast<std::uint64_t>(m_generations[slot]) << 32U) | slot;
+    return (static_cast<std::uint64_t>(m_tag) << 56U) |
+           (static_cast<std::uint64_t>(m_generations[slot]) << 32U) | slot;
 }
 
 std::uint32_t slots_t::size() const {

@@ -67,7 +67,7 @@ endif()
 
 # The scene, through fbengine's C API, with no window or GPU.
 add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.cpp
-               scene/camera_tests.cpp scene/light_tests.cpp)
+               scene/camera_tests.cpp scene/light_tests.cpp scene/geometry_tests.cpp)
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
 catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
@@ -101,7 +101,15 @@ if(FBENGINE_FB_TESTS)
       "cone=a spot light's cone is 0 <= inner <= outer <= Pi / 2"
       "fog-range=a fog's range is 0 <= start < end, finite, not 5 to 5"
       "fog-density=a fog's density is 0 or more"
-      "light-freed=SetColor on a Light that was freed")
+      "light-freed=SetColor on a Light that was freed"
+      "segments=a shape has 3 to 100 segments, not 2"
+      "triangle-index=the surface's vertices are 0 to 2, not 5"
+      "triangle-count=triangles take indices three at a time, not 4"
+      "surface-index=the geometry's surfaces are 0 to 0, not 1"
+      "vertex-index=the surface's vertices are 0 to 2, not 3 to 3"
+      "uv-set=a vertex's UV sets are 0 and 1, not 2"
+      "geometry-freed=AddSurface on a Geometry that was freed"
+      "mesh-freed-geometry=SetGeometry on a Geometry that was freed")
   foreach(case IN LISTS fbengine_scene_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)

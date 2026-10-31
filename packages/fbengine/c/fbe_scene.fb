@@ -4,6 +4,7 @@
 Public Const FBE_ENTITY_PIVOT: Int32 = 0
 Public Const FBE_ENTITY_CAMERA: Int32 = 1
 Public Const FBE_ENTITY_LIGHT: Int32 = 2
+Public Const FBE_ENTITY_MESH: Int32 = 3
 Public Const FBE_SPACE_LOCAL: Int32 = 0
 Public Const FBE_SPACE_WORLD: Int32 = 1
 Public Const FBE_AXIS_RIGHT: Int32 = 0
@@ -39,6 +40,16 @@ End Struct
     Public Field m: Float32[16]
 End Struct
 
+@CLayout Public Struct fbe_vec2_t
+    Public Field x: Float32
+    Public Field y: Float32
+End Struct
+
+@CLayout Public Struct fbe_aabb_t
+    Public Field min: fbe_vec3_t
+    Public Field max: fbe_vec3_t
+End Struct
+
 @CLayout Public Struct fbe_viewport_t
     Public Field x: Float32
     Public Field y: Float32
@@ -51,6 +62,14 @@ End Struct
     Public Field g: Float32
     Public Field b: Float32
     Public Field a: Float32
+End Struct
+
+@CLayout Public Struct fbe_vertex_t
+    Public Field position: fbe_vec3_t
+    Public Field normal: fbe_vec3_t
+    Public Field uv0: fbe_vec2_t
+    Public Field uv1: fbe_vec2_t
+    Public Field color: fbe_color_t
 End Struct
 
 @CLayout Public Struct fbe_pose_t
@@ -165,5 +184,42 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_camera_fog_end(camera: UInt64): Float32
     Function fbe_camera_set_fog_density(camera: UInt64, density: Float32): Bool
     Function fbe_camera_fog_density(camera: UInt64): Float32
+    Function fbe_geometry_create(): UInt64
+    Function fbe_geometry_retain(geometry: UInt64): Bool
+    Function fbe_geometry_release(geometry: UInt64): Bool
+    Function fbe_geometry_alive(geometry: UInt64): Bool
+    Function fbe_geometry_clone(geometry: UInt64): UInt64
+    Function fbe_geometry_version(geometry: UInt64): UInt64
+    Function fbe_geometry_surface_count(geometry: UInt64): Int32
+    Function fbe_geometry_add_surface(geometry: UInt64): Int32
+    Function fbe_geometry_add(geometry: UInt64, other: UInt64, transform: Ptr<fbe_mat4_t>): Bool
+    Function fbe_geometry_transform(geometry: UInt64, transform: Ptr<fbe_mat4_t>): Bool
+    Function fbe_geometry_flip(geometry: UInt64): Bool
+    Function fbe_geometry_update_normals(geometry: UInt64): Bool
+    Function fbe_geometry_bounds(geometry: UInt64, bounds: Ptr<fbe_aabb_t>): Bool
+    Function fbe_geometry_fit(geometry: UInt64, box: Ptr<fbe_aabb_t>, uniform: Bool): Bool
+    Function fbe_geometry_positions(geometry: UInt64, positions: Ptr<fbe_vec3_t>,
+                                    capacity: Int32): Int32
+    Function fbe_geometry_indices(geometry: UInt64, indices: Ptr<UInt32>, capacity: Int32): Int32
+    Function fbe_geometry_cube(): UInt64
+    Function fbe_geometry_sphere(segments: Int32): UInt64
+    Function fbe_geometry_cylinder(segments: Int32, capped: Bool): UInt64
+    Function fbe_geometry_cone(segments: Int32, capped: Bool): UInt64
+    Function fbe_geometry_plane(segments: Int32): UInt64
+    Function fbe_surface_add_vertices(geometry: UInt64, surface: Int32, vertices: Ptr<fbe_vertex_t>,
+                                      count: Int32): Int32
+    Function fbe_surface_add_triangles(geometry: UInt64, surface: Int32, indices: Ptr<UInt32>,
+                                       count: Int32): Int32
+    Function fbe_surface_vertex_count(geometry: UInt64, surface: Int32): Int32
+    Function fbe_surface_triangle_count(geometry: UInt64, surface: Int32): Int32
+    Function fbe_surface_vertices(geometry: UInt64, surface: Int32, first: Int32,
+                                  vertices: Ptr<fbe_vertex_t>, count: Int32): Bool
+    Function fbe_surface_set_vertices(geometry: UInt64, surface: Int32, first: Int32,
+                                      vertices: Ptr<fbe_vertex_t>, count: Int32): Bool
+    Function fbe_surface_triangles(geometry: UInt64, surface: Int32, first: Int32,
+                                   indices: Ptr<UInt32>, count: Int32): Bool
+    Function fbe_surface_clear(geometry: UInt64, surface: Int32, vertices: Bool): Bool
+    Function fbe_mesh_set_geometry(mesh: UInt64, geometry: UInt64): Bool
+    Function fbe_mesh_geometry(mesh: UInt64): UInt64
     Function fbe_entity_copy(entity: UInt64, world: UInt64, parent: UInt64): UInt64
 End Extern

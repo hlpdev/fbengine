@@ -79,6 +79,9 @@ TEST_CASE("a freed handle is never taken for the one made in its slot", "[scene]
     CHECK_FALSE(fbe_entity_alive(0));
     CHECK(fbe_entity_kind(0) == -1);
     CHECK(std::string_view(fbe_error()) == "no entity was given");
+    // A World's handle isn't an entity's, whatever their slots.
+    CHECK_FALSE(fbe_entity_alive(world.handle));
+    CHECK_FALSE(fbe_world_alive(second));
 }
 
 TEST_CASE("freeing an entity frees what's under it, and queues each", "[scene]") {
