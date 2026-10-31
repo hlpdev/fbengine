@@ -204,4 +204,6 @@ Function TheLastFramesCountersSayWhatItDid() Throws GraphicsError
     Expect(Gpu.Counters().Passes == 1)
     Expect(Gpu.Counters().Uploaded == 0)
     Expect(!Gpu.Lost())
+    Expect(Gpu.MemoryBudget() > 0)
+    Expect(Gpu.MemoryUsage() > 0)
 End Function

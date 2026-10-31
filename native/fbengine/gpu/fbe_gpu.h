@@ -76,6 +76,12 @@ FBE_API void fbe_gpu_stop(void);
 // fbe_gpu_start make it again, and with it everything on it, as nothing made before is left.
 FBE_API bool fbe_gpu_lost(void);
 
+// How many bytes of the GPU's own memory (its device-local heaps) the program can use, as the
+// driver says where it can (VK_EXT_memory_budget) or else most of the heaps' size, and how many it
+// uses, which counts against it; -1 before the GPU starts.
+FBE_API int64_t fbe_gpu_memory_budget(void);
+FBE_API int64_t fbe_gpu_memory_usage(void);
+
 // How many frames fbe_frame_flip has presented, which skips them while the window is minimized.
 // A headless window's are drawn into an image of its own, its size in pixels, which nothing shows.
 FBE_API int64_t fbe_gpu_presented(void);

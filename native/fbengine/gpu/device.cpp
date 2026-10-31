@@ -421,6 +421,11 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     if (has_extension(extensions, "VK_KHR_portability_subset")) {
         enabled.push_back("VK_KHR_portability_subset");
     }
+    // The driver's own memory budget, where it gives one, which VMA reads.
+    const bool budgets = has_extension(extensions, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    if (budgets) {
+        enabled.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    }
 
     VkPhysicalDeviceFeatures supported{};
     vkGetPhysicalDeviceFeatures(candidate.physical, &supported);
@@ -494,7 +499,10 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     current.timestamp_period = candidate.properties.limits.timestampPeriod;
 
     VmaAllocatorCreateInfo allocator_info{
-        .flags = flag<VmaAllocatorCreateFlags>(VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT),
+        .flags =
+            flag<VmaAllocatorCreateFlags>(VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT) |
+            (budgets ? flag<VmaAllocatorCreateFlags>(VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT)
+                     : 0U),
         .physicalDevice = current.physical,
         .device = current.device,
         .instance = vulkan,
@@ -556,6 +564,26 @@ void destroy_device() {
         vkDestroyDevice(current.device, nullptr);
     }
     current = {};
+}
+
+/// The sum over the GPU's own memory, its device-local heaps, of one of VMA's budgets' figures:
+/// the budget or the usage; -1 before the GPU starts.
+std::int64_t memory_of(VkDeviceSize VmaBudget::* figure) {
+    if (!started) {
+        return -1;
+    }
+    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> heaps{};
+    vmaGetHeapBudgets(current.allocator, heaps.data());
+    VkPhysicalDeviceMemoryProperties memory{};
+    vkGetPhysicalDeviceMemoryProperties(current.physical, &memory);
+    VkDeviceSize sum = 0;
+    for (std::uint32_t heap = 0; heap < memory.memoryHeapCount; ++heap) {
+        if ((memory.memoryHeaps[heap].flags &
+             flag<VkMemoryHeapFlags>(VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) != 0) {
+            sum += heaps[heap].*figure;
+        }
+    }
+    return static_cast<std::int64_t>(sum);
 }
 
 /// The kind of a device, as fbe_gpu.h numbers them.
@@ -769,6 +797,14 @@ FBE_API bool fbe_gpu_started(void) {
 
 FBE_API void fbe_gpu_stop(void) {
     fbe::gpu::stop();
+}
+
+FBE_API int64_t fbe_gpu_memory_budget(void) {
+    return memory_of(&VmaBudget::budget);
+}
+
+FBE_API int64_t fbe_gpu_memory_usage(void) {
+    return memory_of(&VmaBudget::usage);
 }
 
 FBE_API bool fbe_gpu_lost(void) {

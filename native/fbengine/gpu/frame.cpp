@@ -35,6 +35,8 @@ std::vector<carried_t> carried;
 fbe_gpu_counters_t counting{};
 fbe_gpu_counters_t counted{ .gpu_milliseconds = -1.0F };
 float gpu_time = -1.0F;
+/// Frames submitted at a Flip, which VMA counts too.
+std::uint32_t flips = 0;
 
 /// Reads how long the GPU took over the frame's last submit, once it's done with it.
 void read_timer(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame) {
@@ -282,6 +284,8 @@ bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
     }
     record_graph();
     age_transients();
+    // VMA reads the driver's memory budget again each frame.
+    vmaSetCurrentFrameIndex(gpu.allocator, ++flips);
     // What the frame did, which its submit ends, the GPU's time a frame or two behind.
     counted = counting;
     counted.transient_images = static_cast<std::int32_t>(transient_images());

@@ -107,6 +107,14 @@ Public Class Gpu
     /// again.
     @MainThread Public Static Method Lost(): Bool => fbe_gpu_lost()
 
+    /// How many bytes of the GPU's own memory the program can use, as the driver says where it
+    /// can, or else most of it; -1 before the GPU starts.
+    @MainThread Public Static Method MemoryBudget(): Int64 => fbe_gpu_memory_budget()
+
+    /// How many bytes of the GPU's own memory the program uses, which counts against its budget;
+    /// -1 before the GPU starts.
+    @MainThread Public Static Method MemoryUsage(): Int64 => fbe_gpu_memory_usage()
+
     /// What the last frame did, as a debug overlay shows it.
     @MainThread Public Static Method Counters(): GpuCounters
         Local counters = fbe_gpu_counters_t(0, 0, 0, 0, 0, 0, -1.0)

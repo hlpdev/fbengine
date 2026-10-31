@@ -365,3 +365,18 @@ TEST_CASE("a GPU that lacks what fbengine needs says what it lacks", "[gpu]") {
     CHECK(!fbe_gpu_started());
     stop_gpu();
 }
+
+TEST_CASE("the GPU's memory budget and usage are its own memory's", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    CHECK(fbe_gpu_memory_budget() == -1);
+    CHECK(fbe_gpu_memory_usage() == -1);
+    require(fbe_gpu_start());
+    const std::int64_t budget = fbe_gpu_memory_budget();
+    CHECK(budget > 0);
+    // The white texture and the frames' commands are made as it starts.
+    CHECK(fbe_gpu_memory_usage() > 0);
+    CHECK(fbe_gpu_memory_usage() <= budget);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_memory_budget() > 0);
+    stop_gpu();
+}
