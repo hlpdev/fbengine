@@ -142,7 +142,13 @@ jobs:
           export VK_LOADER_DEBUG=error,warn
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_FB_TESTS=OFF
           cmake --build build --parallel
-          DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure
+          DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure || {
+            if [ "$RUNNER_OS" = Windows ]; then
+              pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-gdb > /dev/null
+              gdb -batch -ex run -ex bt -ex 'info sharedlibrary' build/tests/fbengine_gpu_tests.exe
+            fi
+            exit 1
+          }
 
   format:
     name: format
