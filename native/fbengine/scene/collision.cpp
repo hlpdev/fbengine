@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <numbers>
 #include <vector>
 
 namespace fbe::scene {
@@ -25,8 +26,6 @@ namespace fbe::scene {
 namespace {
 
 constexpr float tiny = 1e-6F;
-/// A surface facing up at least this much is ground a mover can stand on after stepping up.
-constexpr float walkable = 0.7F;
 constexpr std::int32_t most_iterations = 64;
 constexpr float most_skin = 0.1F;
 
@@ -54,6 +53,8 @@ struct mover_t {
     float horizontal = 1.0F;
     float vertical = 1.0F;
     float step = 0.0F;
+    /// The least a normal faces up, its y in the world, on ground: its max slope's cosine.
+    float ground = 0.70710678F;
 };
 
 /// Where a move ended, and what it touched, with the targets' indices.
@@ -203,9 +204,16 @@ vec3_t unblocked(const nearby_t& nearby, vec3_t c, vec3_t v, float r) {
     return c + v * (found ? hit.time : 1.0F);
 }
 
+/// Whether a touch, by its normal in sphere space, is on ground the mover climbs: back in the
+/// world, within its max slope of up.
+bool on_ground(const mover_t& mover, vec3_t normal) {
+    const float squash = mover.horizontal / mover.vertical;
+    return normalize(vec3_t(normal.x, normal.y * squash, normal.z)).y >= mover.ground;
+}
+
 /// A move from `base` along `v` in sphere space, touching and sliding as the rules say, at most
-/// `iterations` times, never sliding higher than `ceiling`; gives where it ended and adds what it
-/// touched.
+/// `iterations` times, never sliding higher than `ceiling` but up ground; gives where it ended and
+/// adds what it touched.
 vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& nearby, vec3_t base,
              vec3_t v, float ceiling, std::vector<hit_t>& hits) {
     const float r = mover.horizontal;
@@ -230,6 +238,7 @@ vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& n
             break;
         }
         hits.push_back(hit);
+        const bool ground = on_ground(mover, hit.normal);
         // Just off what it touched, skin away. Touching it from the start, it may be in it, as
         // when it moved into the mover: pushed out only as far as nothing else is, so a mover
         // squeezed between two stays where it is, never pushed into either.
@@ -238,9 +247,10 @@ vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& n
         base = hit.point + (dot(out, out) > 0.0F ? out : hit.normal) * (r + skin);
         if (hit.time <= 0.0F) {
             base = unblocked(nearby, at, base - at, r);
-        } else {
-            // Nor does the skin raise it past what its move and step allow: still no nearer
-            // what it touched than its radius, since only the rise is taken off.
+        } else if (!ground) {
+            // Nor does the skin off what's steeper than ground raise it past what its move and
+            // step allow: still no nearer what it touched than its radius, since only the rise is
+            // taken off.
             base.y = std::fmin(base.y, std::fmax(ceiling, at.y));
         }
         const std::int32_t response =
@@ -264,9 +274,12 @@ vec3_t slide(const snapshot_t& snapshot, const mover_t& mover, const nearby_t& n
                 next = size > 0.0F ? next * (across / size) : vec3_t();
             }
         }
-        // Sliding up what it touched raises it no higher than its move and its step allow, so a
-        // tall mover sliding up an edge isn't thrown up by its slide.
-        next.y = std::fmin(next.y, std::fmax(ceiling - base.y, 0.0F));
+        // Up ground, a slide raises it as far as the slope goes; up anything steeper, edges and
+        // corners too, no higher than its move and its step allow, so a tall mover sliding up an
+        // edge isn't thrown up by its slide.
+        if (!ground) {
+            next.y = std::fmin(next.y, std::fmax(ceiling - base.y, 0.0F));
+        }
         if (dot(next, original) <= 0.0F) {
             break;
         }
@@ -292,14 +305,15 @@ result_t move(const snapshot_t& snapshot, const mover_t& mover) {
     const nearby_t nearby = gather(snapshot, mover, reach);
     const vec3_t start = into(mover.from);
     const vec3_t wanted = into(mover.to) - start;
-    // No slide takes a mover higher than its move rises, and its step height.
+    // No slide along what's steeper than ground takes a mover higher than its move rises, and its
+    // step height.
     const float step = mover.step * squash;
     const float ceiling = start.y + std::fmax(wanted.y, 0.0F) + step;
     std::vector<hit_t> hits;
     vec3_t end = slide(snapshot, mover, nearby, start, wanted, ceiling, hits);
 
     // Blocked going across: up the step, across, and back down, if that lands on ground no
-    // higher than the step and gets further.
+    // higher than the step, within its max slope, and gets further.
     if (step > 0.0F && !hits.empty() && across(start, end) + tiny < across(start, start + wanted)) {
         std::vector<hit_t> stepped;
         const vec3_t up =
@@ -312,9 +326,7 @@ result_t move(const snapshot_t& snapshot, const mover_t& mover) {
                                   ceiling, stepped);
         bool landed = false;
         for (std::size_t i = before_down; i < stepped.size(); ++i) {
-            const vec3_t normal = normalize(
-                vec3_t(stepped[i].normal.x, stepped[i].normal.y * squash, stepped[i].normal.z));
-            landed = landed || normal.y >= walkable;
+            landed = landed || on_ground(mover, stepped[i].normal);
         }
         if (landed && down.y <= ceiling + tiny && across(start, down) > across(start, end) + tiny) {
             end = down;
@@ -386,6 +398,7 @@ void collide(std::uint32_t world_slot) {
                 .horizontal = collider.horizontal,
                 .vertical = collider.vertical,
                 .step = collider.step_height,
+                .ground = std::cos(collider.max_slope),
             });
         }
 
@@ -572,6 +585,23 @@ FBE_API bool fbe_entity_set_step_height(uint64_t entity, float height) {
 FBE_API float fbe_entity_step_height(uint64_t entity) {
     const collider_t* found = collider_of(entity);
     return found != nullptr ? found->step_height : 0.0F;
+}
+
+FBE_API bool fbe_entity_set_max_slope(uint64_t entity, float radians) {
+    collider_t* found = collider_of(entity);
+    if (found == nullptr) {
+        return false;
+    }
+    if (std::isnan(radians) || radians < 0.0F || radians > std::numbers::pi_v<float> / 2.0F) {
+        return fbe::fail(std::format("a max slope is 0 to Pi / 2, not {}", radians));
+    }
+    found->max_slope = radians;
+    return true;
+}
+
+FBE_API float fbe_entity_max_slope(uint64_t entity) {
+    const collider_t* found = collider_of(entity);
+    return found != nullptr ? found->max_slope : 0.0F;
 }
 
 FBE_API bool fbe_entity_reset_collisions(uint64_t entity) {

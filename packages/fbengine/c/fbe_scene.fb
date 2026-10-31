@@ -324,6 +324,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_entity_collision_box(entity: UInt64, box: Ptr<fbe_aabb_t>): Bool
     Function fbe_entity_set_step_height(entity: UInt64, height: Float32): Bool
     Function fbe_entity_step_height(entity: UInt64): Float32
+    Function fbe_entity_set_max_slope(entity: UInt64, radians: Float32): Bool
+    Function fbe_entity_max_slope(entity: UInt64): Float32
     Function fbe_entity_reset_collisions(entity: UInt64): Bool
     Function fbe_entity_collisions(entity: UInt64, collisions: Ptr<fbe_collision_t>,
                                    capacity: Int32): Int32

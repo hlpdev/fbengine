@@ -138,7 +138,8 @@ if(FBENGINE_FB_TESTS)
       "collide-freed=Collide on a World that was freed"
       "pick-radius=Pick on the main World: a pick's radius is 0 or more, not -1"
       "pick-freed=Pick on a Pivot that was freed"
-      "camera-pick-no-window=Pick on a Camera: the camera's viewport has no size")
+      "camera-pick-no-window=Pick on a Camera: the camera's viewport has no size"
+      "max-slope=SetMaxSlope on a Pivot: a max slope is 0 to Pi / 2, not 2")
   foreach(case IN LISTS fbengine_scene_panics)
     string(FIND "${case}" "=" split)
     string(SUBSTRING "${case}" 0 ${split} name)
