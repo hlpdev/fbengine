@@ -1,0 +1,951 @@
+// res://: the game's files, from folders on the disk and pak files mounted over each other, which
+// the engine's loaders read on its workers, and a game reads as files are read.
+
+Import std.collections
+Import std.compress
+Import std.core
+Import std.ffi
+Import std.io
+Import std.text
+Import std.time
+Import "./c/fbe_assets"
+Import "./c/fbe_vfs"
+Import "./frame"
+Import "./jobs"
+Import "./loads"
+Import "./window"
+
+// An asset of the cache, as the index of every type's held assets has it: whether it's there
+// still, and its hold let go.
+Interface HeldAsset
+    // Whether its asset is made, and not gone.
+    Method Alive(): Bool
+
+    // Lets go of one of its holds, and gives whether that was the last, which takes it out of its
+    // type's cache, so the next load of its path loads it again.
+    Method Release(): Bool
+
+    // Its asset's Hash, by which the index has it.
+    Method HashOf(): UInt64
+End Interface
+
+// An asset of the cache: held weakly, so it goes with its last reference; how many of the loads
+// that gave it hold it; until it's made, the load it's made of, and why it failed, for each that
+// waited for it; whether its FromLoad is making it; and whether its last hold has been let go, after
+// which what waited for it loads it again.
+Final Class Cached<T> Implements HeldAsset
+    Where T: Asset & Class & Hashable
+    Field Key: String
+    Field Made: Weak<T>
+    Field Hash: UInt64
+    Field Holds: Int
+    Field Load: UInt64
+    Field Failure: IOError?
+    Field Making: Bool
+    Field Released: Bool
+    Field Reloading: Bool
+    Field Again: Bool
+
+    New(key: String, load: UInt64)
+        Key = key
+        Hash = 0
+        Holds = 0
+        Load = load
+        Failure = Null
+        Making = False
+        Released = False
+        Reloading = False
+        Again = False
+    End New
+
+    Method Alive(): Bool => Made != Null
+
+    Method Release(): Bool
+        Holds -= 1
+        If Holds > 0 Then Return False
+        Released = True
+        Local entries = TypedCache<T>.Of().Entries
+        Local kept = entries.Get(Key)
+        If kept != Null && RefEquals(kept, Self) Then entries.Remove(Key)
+        Return True
+    End Method
+
+    Method HashOf(): UInt64 => Hash
+End Class
+
+// What the cache does for every type's assets at once.
+Interface AnyCache
+    // Loads `key`'s asset again, if it has one, as a changed file's is.
+    Async Method Reload(key: String)
+End Interface
+
+// The cache of one type's assets, by normalized path, one a type, as a generic Class's Static Field
+// is; and how big it grows before what's gone is taken out of it.
+Final Class TypedCache<T> Implements AnyCache
+    Where T: Asset & Class & Hashable
+    Static Field shared: TypedCache<T>? = Null
+    Field Entries: Map<String, Cached<T>>
+    Field PruneAt: Int
+
+    New()
+        Entries = Map<String, Cached<T>>()
+        PruneAt = 64
+    End New
+
+    // T's cache.
+    Static Method Of(): TypedCache<T>
+        Local found = shared
+        If found != Null Then Return found
+        Local made = TypedCache<T>()
+        shared = made
+        Assets.Track(made)
+        Return made
+    End Method
+
+    // Loads `key`'s asset again, if it's made, on the workers; then its Reload takes it in place,
+    // or the cache lets go of it, so the next Load makes a new one. What doesn't load keeps what it
+    // had. One that's loading, or loading again, is loaded again once that's done, so the last
+    // change wins; and one let go of meanwhile, whose Free may have freed what it holds, isn't
+    // touched.
+    Async Method Reload(key: String)
+        Local cached = Entries.Get(key)
+        If cached == Null || cached.Released Then Return
+        If cached.Making || cached.Load != 0 || cached.Reloading
+            cached.Again = True
+            Return
+        End If
+        If cached.Made == Null Then Return
+        cached.Reloading = True
+        Local load = fbe_assets_load_async(T.LoadKind() As Int32, key, False, True)
+        If load == 0
+            cached.Reloading = False
+            Return
+        End If
+        Await Jobs.Finished(load)
+        Local loaded = AssetLoad(load)
+        cached.Reloading = False
+        Local current = Entries.Get(key)
+        Local made = cached.Made
+        If cached.Released || current == Null || !RefEquals(current, cached) || made == Null
+            Return
+        End If
+        If fbe_assets_failed(load)
+            Assets.Reported(AssetReload(key, False, Assets.LoadFailed(load, key)))
+        Else
+            Try
+                Local inPlace = Try made.Reload(loaded)
+                If inPlace
+                    // What it's made of now, and of what, may differ.
+                    Local hash = made.Hash()
+                    If hash != cached.Hash
+                        Assets.Unindex(cached)
+                        cached.Hash = hash
+                        Assets.Index(cached)
+                    End If
+                    Assets.Depends(key, load)
+                Else
+                    cached.Released = True
+                    Entries.Remove(key)
+                End If
+                Assets.Reported(AssetReload(key, inPlace, Null))
+            Catch e As IOError
+                Assets.Reported(AssetReload(key, False, e))
+            End Try
+        End If
+        If cached.Again && !cached.Released
+            cached.Again = False
+            Reload(key)
+        End If
+    End Method
+
+    // Takes out what's gone: made, and its asset let go, from here and the index.
+    Method Prune()
+        Entries.RemoveWhere(Function(key: String, cached: Cached<T>): Bool
+            Local gone = !cached.Making && cached.Load == 0 && cached.Made == Null
+            If gone Then Assets.Unindex(cached)
+            Return gone
+        End Function)
+        PruneAt = Max(64, Entries.Count * 2)
+    End Method
+End Class
+
+/// A file's asset loaded again, as hot reload does when the file, or its sidecar, changes.
+Public Struct AssetReload
+    /// Its res:// path, normalized.
+    Public Field Path: String
+    /// Whether its Reload took it in place; if not, the cache let go of it, so the next Load
+    /// makes a new one.
+    Public Field InPlace: Bool
+    /// Why it couldn't be loaded again, if it couldn't, which leaves it as it was.
+    Public Field Error: IOError?
+End Struct
+
+// The folders on the disk hot reload watches: a watcher of each, its folder, the res:// folders it
+// is, each with the folder on the disk of the mount that made it one; which watcher a folder has;
+// and the res:// paths that changed, by when they last did.
+Final Class FolderWatch
+    Field Watchers: FileWatcher?[]
+    Field Folders: Path[]
+    Field Places: (String, String)[][]
+    Field Watched: Map<String, Int>
+    Field Changed: Map<String, Instant>
+    Field Hook: Int
+
+    New()
+        Watchers = []
+        Folders = []
+        Places = []
+        Watched = Map<String, Int>()
+        Changed = Map<String, Instant>()
+        Hook = 0
+    End New
+End Class
+
+/// A file or a folder in a res:// folder, as Assets.Entries finds it.
+Public Struct AssetEntry Implements Printable
+    /// Its res:// path: its folder's, normalized, and its name.
+    Public Field Path: String
+    /// Its name, as its mount has it.
+    Public Field Name: String
+    /// FileKind.FILE or FileKind.DIRECTORY.
+    Public Field Kind: FileKind
+
+    Public Method ToString(): String => Path
+End Struct
+
+/// The game's files and assets, at res:// paths: "res://", then names with '/' or '\' between
+/// them, in any case, so "res://GFX\Map\door.png" and "res://gfx/map/DOOR.png" are one file on
+/// every OS. Folders and pak files are mounted at places in res://, a later mount over an earlier
+/// one, so a mod's folder can stand in for some of a game's pak: a file is the last mount's that
+/// has it, and a folder lists what every mount has in it. A path that goes above "res://", or has
+/// a name no file can have on every OS (with one of `: * ? " < > |` or a control character, a dot
+/// or a space at its end, or a Windows device's, as CON, nul.txt, or COM1), is an IOError of
+/// INVALID_PATH where a path can come from a game's data, and a panic where it's a mount's
+/// place. In a game's development builds, WatchFolders loads again what changes in its mounted
+/// folders, as it changes.
+///
+/// # Examples
+///
+/// ```
+/// Assets.MountFiles("res://config", {"settings.ini": "fov = 74".Bytes})
+/// Expect((Try Assets.ReadText("res://Config\\Settings.INI")) == "fov = 74")
+/// Expect(Assets.Unmount("res://config"))
+/// ```
+Public Final Class Assets
+    // Every type's assets the cache holds, by their Hash, so Release finds one at once, whatever
+    // type its Free is written in.
+    Static Field held: Map<UInt64, HeldAsset[]> = Map<UInt64, HeldAsset[]>()
+    // Every type's cache, for what's done to all of them; the mounts, each place's normalized path
+    // and, for a folder's, its folder on the disk; what hot reload watches, while it does; and
+    // what it reloaded that the game hasn't been told of.
+    Static Field caches: AnyCache[] = []
+    Static Field mounts: (String, Path?)[] = []
+    Static Field watch: FolderWatch? = Null
+    Static Field reloads: AssetReload[] = []
+    // The assets whose loads read a file besides their own, by its path, as a glTF's buffers.
+    Static Field dependents: Map<String, Set<String>> = Map<String, Set<String>>()
+
+    Private New()
+    End New
+
+    /// Mounts the folder on the disk at `folder` at `at`, over what's mounted. It's read as it's
+    /// asked, so it sees what changes in it, and is empty while it isn't there. A name is found in
+    /// any case: of the names in the folder that differ from it only in case, the first by its
+    /// bytes, as a pak of the folder would have it. Panics when `at` isn't a res:// path.
+    @MainThread @PanicsAtCaller
+    Public Static Method MountFolder(at: String, folder: Path)
+        If !fbe_vfs_mount_folder(at, folder.Text) Then Panic(LastError())
+        Local place = Mounted(at, folder)
+        Local watching = watch
+        If watching != Null Then Try? WatchTree(watching, folder, place, folder.Text, 0, False)
+    End Method
+
+    /// Mounts the pak file at `file` at `at`, over what's mounted, reading its index now. A pak is
+    /// a zip whose files are stored, not compressed, as ZipWriter makes one with ZipMethod.STORE,
+    /// and Zip64 where its sizes need it; of two entries with a name, the last is the file, and
+    /// one whose name goes above its root, or a link, isn't in it. A file that isn't there throws
+    /// an IOError of NOT_FOUND, and a zip that isn't a pak (with a compressed or encrypted file,
+    /// or a name that's a file's and a folder's) one of INVALID_DATA. Panics when `at` isn't a
+    /// res:// path.
+    @MainThread @PanicsAtCaller
+    Public Static Method MountPak(at: String, file: Path) Throws IOError
+        If !fbe_vfs_mount_pak(at, file.Text) Then Throw MountFailed(file.Text)
+        Mounted(at, Null)
+    End Method
+
+    /// Mounts `pak`, a pak in memory, as Embed gives one, at `at`, copying it. It throws as
+    /// MountPak does.
+    @MainThread @PanicsAtCaller
+    Public Static Method MountPakBytes(at: String, pak: UInt8[]) Throws IOError
+        Local mounted = False
+        Unsafe
+            If pak.Count == 0
+                // Nothing's read from it, but C takes a pointer.
+                Local none = Buffer<UInt8>(1)
+                mounted = fbe_vfs_mount_pak_bytes(at, none.Pointer(), 0)
+            Else
+                mounted = fbe_vfs_mount_pak_bytes(at, AddressOf(pak[0]), pak.Count)
+            End If
+        End Unsafe
+        If !mounted Then Throw MountFailed(Null)
+        Mounted(at, Null)
+    End Method
+
+    /// Mounts `files` in memory at `at`, by their paths in it, with '/' (or '\') between folders,
+    /// as EmbedFolder gives them, copying them. Panics when `at` isn't a res:// path, or the files
+    /// have a path that isn't a file's in a folder (empty, ending in '/', going above it, or with
+    /// a name no res:// path can have), or is a file's and a folder's too.
+    @MainThread @PanicsAtCaller
+    Public Static Method MountFiles(at: String, files: Map<String, UInt8[]>)
+        Local writer = ZipWriter()
+        For file In files
+            Local name = file.0.Replace("\\", "/")
+            // As EmbeddedSource has it, a path that names no file is a mistake.
+            Local named = !name.EndsWith("/") && fbe_vfs_normalize("res://" + name)
+            Unsafe
+                named = named && fbe_vfs_normalized().ToString() != "res://"
+            End Unsafe
+            If !named
+                Panic(
+                    "files mounted at {at} have '{file.0}', which isn't a file's path in a folder")
+            End If
+            writer.Add(name, file.1, ZipMethod.STORE)
+        End For
+        Try
+            MountPakBytes(at, writer.Finish())
+        Catch e As IOError
+            Panic("files mounted at {at} can't be: {e.Message}")
+        End Try
+    End Method
+
+    /// Takes out the last mount at `at`, and gives whether there was one. Panics when `at` isn't
+    /// a res:// path.
+    @MainThread @PanicsAtCaller
+    Public Static Method Unmount(at: String): Bool
+        If fbe_vfs_unmount(at)
+            Local place = Try? Normalize(at)
+            For i = mounts.Count - 1 To 0 Step -1
+                If mounts[i].0 == place
+                    Local folder = mounts[i].1
+                    mounts.RemoveAt(i)
+                    Local watching = watch
+                    If watching != Null && folder != Null && place != Null
+                        Unplace(watching, place, folder.Text)
+                    End If
+                    Break
+                End If
+            End For
+            Return True
+        End If
+        If fbe_vfs_failure() == FBE_VFS_INVALID_PATH Then Panic(LastError())
+        Return False
+    End Method
+
+    /// Watches the folders mounted with MountFolder, and those mounted after, for what changes in
+    /// them, all the way down, for a game's development builds. At each Flip, the assets of a file
+    /// that changed, or whose sidecar did, once neither has for a tenth of a second, are loaded
+    /// again on the workers, and so are those whose loads read it, as a glTF's do its buffers. A
+    /// `.toml` file is loaded again as its own file and as its stem's sidecar. Then each one's
+    /// Reload takes it in place, or the cache lets go of it, so the next Load makes a new one; one
+    /// that doesn't load keeps what it had. Reloaded gives what was. Unmount stops watching what it
+    /// takes out. It follows links, as the folder mount does. A folder that can't be watched
+    /// throws an IOError. On Windows, while it watches, a folder that holds a watched one can't be
+    /// renamed, since each folder has a watcher of its own until FutureBlitz's FileWatcher watches
+    /// a whole tree.
+    @MainThread
+    Public Static Method WatchFolders() Throws IOError
+        If watch != Null Then Return
+        Local made = FolderWatch()
+        watch = made
+        Try
+            For mount In mounts
+                Local folder = mount.1
+                If folder != Null Then Try WatchTree(made, folder, mount.0, folder.Text, 0, False)
+            End For
+        Catch e As IOError
+            StopWatching()
+            Throw e
+        End Try
+        made.Hook = Frame.OnFlip(PollWatchedFolders)
+    End Method
+
+    /// Stops watching the mounted folders, as WatchFolders did; what changed that wasn't loaded
+    /// again yet isn't.
+    @MainThread
+    Public Static Method StopWatching()
+        Local made = watch
+        If made == Null Then Return
+        For watcher In made.Watchers
+            If watcher != Null Then watcher.Close()
+        End For
+        If made.Hook != 0 Then Frame.RemoveOnFlip(made.Hook)
+        watch = Null
+    End Method
+
+    /// Loads the assets of the file at `path` again, as hot reload does when it changes, and
+    /// gives at once; Reloaded tells of each when it's done. It throws an IOError of INVALID_PATH
+    /// for a path that isn't a res:// path.
+    @MainThread
+    Public Static Method Reload(path: String) Throws IOError
+        ReloadPath(Try Normalize(path))
+    End Method
+
+    // Loads `key`'s assets again, of every type, and those whose loads read it.
+    @MainThread
+    Static Method ReloadPath(key: String)
+        For cache In caches
+            cache.Reload(key)
+        End For
+        Local reading = dependents.Get(key)
+        If reading == Null Then Return
+        For dependent In reading.ToArray()
+            For cache In caches
+                cache.Reload(dependent)
+            End For
+        End For
+    End Method
+
+    // Keeps what `load`, `key`'s, read besides its file, for hot reload to load it again when one
+    // of those changes.
+    @MainThread
+    Static Method Depends(key: String, load: UInt64)
+        For at = 0 Until fbe_assets_reads(load)
+            Local read = ""
+            Unsafe
+                read = fbe_assets_read(load, at As Int32).ToString()
+            End Unsafe
+            If read == key || read == "" Then Continue
+            Local reading = dependents.Get(read)
+            If reading == Null
+                Local made = Set<String>()
+                made.Add(key)
+                dependents[read] = made
+            Else
+                reading.Add(key)
+            End If
+        End For
+    End Method
+
+    /// What hot reload, or Reload, has loaded again since this was last asked, in the order each
+    /// was done.
+    @MainThread
+    Public Static Method Reloaded(): AssetReload[]
+        Local done = reloads
+        reloads = []
+        Return done
+    End Method
+
+    /// `path` as the engine compares it, and its cache keys it: "res://", then its names, with
+    /// '/' between them and ASCII letters in lower case, without "." and "..". One that isn't a
+    /// res:// path throws an IOError of INVALID_PATH, since a path can come from a game's data.
+    @MainThread
+    Public Static Method Normalize(path: String): String Throws IOError
+        If !fbe_vfs_normalize(path) Then Throw Failed(path)
+        Unsafe
+            Return fbe_vfs_normalized().ToString()
+        End Unsafe
+    End Method
+
+    /// The bytes of the file at `path`, from the last mount that has it. One that no mount has
+    /// throws an IOError of NOT_FOUND, a folder one of IS_A_DIRECTORY, a path that isn't a res://
+    /// path one of INVALID_PATH, and a pak's file it can't find in its pak one of INVALID_DATA.
+    @MainThread
+    Public Static Method ReadBytes(path: String): UInt8[] Throws IOError
+        Return Try Kept(path, fbe_vfs_read(path))
+    End Method
+
+    // The bytes the read that gave `size` kept, or its failure.
+    @MainThread
+    Static Method Kept(path: String, size: Int64): UInt8[] Throws IOError
+        If size < 0 Then Throw Failed(path)
+        Local bytes: UInt8[] = []
+        If size == 0 Then Return bytes
+        bytes.Resize(size As Int, 0)
+        Unsafe
+            fbe_vfs_read_copy(AddressOf(bytes[0]))
+        End Unsafe
+        Return bytes
+    End Method
+
+    /// The file's bytes as text, with U+FFFD for each one that doesn't start well-formed UTF-8, as
+    /// File.ReadText has it. It throws as ReadBytes does.
+    @MainThread
+    Public Static Method ReadText(path: String): String Throws IOError
+        // The engine makes it well-formed, so it's always a String.
+        Return String.FromUtf8(Try Kept(path, fbe_vfs_read_text(path))) ?? ""
+    End Method
+
+    /// What's at `path`, FileKind.FILE or FileKind.DIRECTORY, as a read finds it, or Null when
+    /// nothing is. It throws for a path that isn't a res:// path, or a mount that can't be read.
+    @MainThread
+    Public Static Method KindOf(path: String): FileKind? Throws IOError
+        Local kind = fbe_vfs_kind(path)
+        If kind < 0 Then Throw Failed(path)
+        If kind == FBE_VFS_FILE Then Return FileKind.FILE
+        If kind == FBE_VFS_FOLDER Then Return FileKind.DIRECTORY
+        Return Null
+    End Method
+
+    /// Whether there's a file at `path`, as KindOf finds it; an error is False.
+    @MainThread
+    Public Static Method Exists(path: String): Bool => (Try? KindOf(path)) == FileKind.FILE
+
+    /// Whether there's a folder at `path`, as KindOf finds it; an error is False.
+    @MainThread
+    Public Static Method DirExists(path: String): Bool => (Try? KindOf(path)) == FileKind.DIRECTORY
+
+    /// What's in the folder at `path`, from every mount that has it, and the mounts in it, by
+    /// their names in lower case. A name two mounts have is the last one's. A folder no mount has
+    /// throws an IOError of NOT_FOUND, a file one of NOT_A_DIRECTORY, and a path that isn't a
+    /// res:// path one of INVALID_PATH.
+    @MainThread
+    Public Static Method Entries(path: String): AssetEntry[] Throws IOError
+        Local count = fbe_vfs_list(path)
+        If count < 0 Then Throw Failed(path)
+        Local folder = Try Normalize(path)
+        Local entries: AssetEntry[] = []
+        For i = 0 Until count
+            Local name = ""
+            Unsafe
+                name = fbe_vfs_list_name(i).ToString()
+            End Unsafe
+            Local kind = fbe_vfs_list_kind(i) == FBE_VFS_FOLDER ? FileKind.DIRECTORY : FileKind.FILE
+            entries.Add(AssetEntry(folder == "res://" ? folder + name : folder + "/" + name, name,
+                                   kind))
+        End For
+        Return entries
+    End Method
+
+    /// The file at `path` loaded as a T now, read and decoded on this thread, and on the workers
+    /// what can be at once, as a glTF's images are. A file no mount has throws an IOError of
+    /// NOT_FOUND, one that isn't what a T is made from, or is broken, one of INVALID_DATA, and a
+    /// path that isn't a res:// path one of INVALID_PATH.
+    ///
+    /// The cache keeps one T of a path, however it's written, while anything holds it, and a
+    /// load of one it has gives it again, at once: each load holds it once, until its Free lets go
+    /// of that hold through Release, and it goes with its last hold, or its last reference. A load
+    /// of one that's still loading on the workers finishes that load here. What failed to load
+    /// isn't kept, so the next load tries again.
+    @MainThread
+    Public Static Method Load<T>(path: String): T Throws IOError
+        Where T: Asset & Class & Hashable
+        Local key = Try Normalize(path)
+        Local cached = TypedCache<T>.Of().Entries.Get(key)
+        If cached != Null && cached.Load != 0
+            // It's loading on the workers still, and is finished here, now.
+            fbe_assets_wait(cached.Load)
+        ElseIf cached == Null || cached.Made == Null
+            Local load = fbe_assets_load(T.LoadKind() As Int32, path, False, True)
+            If load == 0 Then Throw IOError(FailureKind(fbe_assets_load_failure()), LastError(),
+                                            path)
+            cached = Kept<T>(key, load)
+        End If
+        Return Try Held<T>(key, cached, path)
+    End Method
+
+    /// The file at `path` loaded as a T on the workers, while the game goes on: its Task is done on
+    /// the main thread once it's loaded, at a Flip, or at the main scheduler's next tick while
+    /// the main thread waits for it or awaits it without flipping. One the cache has is done at
+    /// once, and loads of one that's loading share that load, and the T it makes. `progress`, if
+    /// it's given, follows the load, as a loading screen's bar would. It throws as Load does.
+    @MainThread
+    Public Static Async Method LoadAsync<T>(path: String,
+                                            progress: LoadProgress? = Null): T Throws IOError
+        Where T: Asset & Class & Hashable
+        Local key = Try Normalize(path)
+        Local cached = TypedCache<T>.Of().Entries.Get(key)
+        If cached == Null || (cached.Load == 0 && cached.Made == Null)
+            Local load = fbe_assets_load_async(T.LoadKind() As Int32, path, False, True)
+            If load == 0 Then Throw IOError(FailureKind(fbe_assets_load_failure()), LastError(),
+                                            path)
+            cached = Kept<T>(key, load)
+        End If
+        If cached.Load != 0
+            If progress != Null Then progress.Add(cached.Load)
+            // One handed over already is done, and its ticket given.
+            If !fbe_assets_done(cached.Load) Then Await Jobs.Finished(cached.Load)
+        ElseIf progress != Null
+            // The cache had it: a load that's done.
+            progress.AddDone()
+        End If
+        Return Try Held<T>(key, cached, path)
+    End Method
+
+    /// The T the cache has of `path`, without holding it, or Null when there's none, as for a
+    /// file that isn't loaded, or is loading still, or whose T is gone. It throws an IOError of
+    /// INVALID_PATH for a path that isn't a res:// path.
+    @MainThread
+    Public Static Method Find<T>(path: String): T? Throws IOError
+        Where T: Asset & Class & Hashable
+        Local cached = TypedCache<T>.Of().Entries.Get(Try Normalize(path))
+        If cached == Null || cached.Released Then Return Null
+        Return cached.Made
+    End Method
+
+    /// Lets go of one hold of `asset`, of the loads that gave it, as its Free does, and gives
+    /// whether that was the last, after which its Free frees what it holds; one the cache doesn't
+    /// have, as an asset no load gave, gives True. It finds the asset by itself, whatever type its
+    /// Free is written in, as a base Class's is, at once however many the cache has.
+    @MainThread
+    Public Static Method Release<T>(asset: T): Bool
+        Where T: Asset & Class & Hashable
+        Local hash = asset.Hash()
+        Local bucket = held.Get(hash)
+        If bucket == Null Then Return True
+        // Its own type's entry, which is it; else, for a Free written in a base Class, the one of
+        // its Hash that's there, which is it, since a Class's Hash is its identity's, unless it
+        // has its own, and no two objects there at once have one identity's.
+        Local at = -1
+        For i = 0 Until bucket.Count
+            Local typed = bucket[i] As? Cached<T>
+            If typed == Null Then Continue
+            Local made = typed.Made
+            If made != Null && RefEquals(made, asset)
+                at = i
+                Break
+            End If
+        End For
+        If at < 0
+            For i = 0 Until bucket.Count
+                // T's own entries were compared by identity, and aren't it.
+                If (bucket[i] As? Cached<T>) != Null Then Continue
+                If bucket[i].Alive()
+                    at = i
+                    Break
+                End If
+            End For
+        End If
+        If at < 0 Then Return True
+        If !bucket[at].Release() Then Return False
+        bucket.RemoveAt(at)
+        If bucket.Count == 0 Then held.Remove(hash)
+        Return True
+    End Method
+
+    /// The import settings of the file at `path`, from its sidecar, its path with ".toml" after
+    /// it, as an S, whose Fields' defaults are what the sidecar leaves out, and all of them for a
+    /// file without one, as AssetLoad.Settings gives them. A sidecar that isn't TOML's UTF-8, or an
+    /// S's, throws an IOError of INVALID_DATA, and a path that isn't a res:// path one of
+    /// INVALID_PATH.
+    @MainThread
+    Public Static Method ReadSettings<S>(path: String): S Throws IOError
+        Local sidecar = (Try Normalize(path)) + ".toml"
+        Local text = ""
+        Try
+            Local bytes = ReadBytes(sidecar)
+            Local read = String.FromUtf8(bytes)
+            If read == Null || bytes.Contains(0)
+                Throw IOError(IOErrorKind.INVALID_DATA, "{sidecar} isn't TOML: it isn't UTF-8 text",
+                              sidecar)
+            End If
+            text = read
+        Catch e As IOError
+            If e.Kind != IOErrorKind.NOT_FOUND && e.Kind != IOErrorKind.IS_A_DIRECTORY Then Throw e
+        End Try
+        Return Try SettingsOf<S>(text, sidecar)
+    End Method
+
+    // Keeps `cache` with every type's.
+    @MainThread
+    Static Method Track(cache: AnyCache)
+        caches.Add(cache)
+    End Method
+
+    // Keeps what a reload did, for Reloaded.
+    @MainThread
+    Static Method Reported(reload: AssetReload)
+        reloads.Add(reload)
+    End Method
+
+    // Keeps a mount at `at`, of the folder `folder` or not, and gives its place, normalized.
+    @MainThread
+    Static Method Mounted(at: String, folder: Path?): String
+        Local place = (Try? Normalize(at)) ?? at
+        mounts.Add((place, folder))
+        Return place
+    End Method
+
+    // Watches `folder`, which is `place` in res://, of the mount of the folder `root`, and every
+    // folder in it, following links as the folder mount does, 32 deep at most. For a `fresh` one,
+    // just made, each file in it is taken as changed, since it may have been written before its
+    // folder was watched.
+    @MainThread
+    Static Method WatchTree(made: FolderWatch, folder: Path, place: String, root: String,
+                            depth: Int, fresh: Bool) Throws IOError
+        If depth > 32 || !Dir.Exists(folder) Then Return
+        Try WatchOne(made, folder, place, root)
+        For entry In Try Dir.Entries(folder)
+            Local kind = entry.Kind
+            If kind == FileKind.LINK && Dir.Exists(entry.Path) Then kind = FileKind.DIRECTORY
+            Local name = place == "res://" ? place + entry.Name() : place + "/" + entry.Name()
+            If kind == FileKind.DIRECTORY
+                Try WatchTree(made, entry.Path, name, root, depth + 1, fresh)
+            ElseIf fresh
+                Local key = Try? Normalize(name)
+                If key != Null Then made.Changed[key] = Instant.Now()
+            End If
+        End For
+    End Method
+
+    // Watches the one folder `folder`, which is `place` in res://, of the mount of `root`, as well
+    // as any other places it already is.
+    @MainThread
+    Static Method WatchOne(made: FolderWatch, folder: Path, place: String,
+                           root: String) Throws IOError
+        Local at = made.Watched.Get(folder.Text)
+        If at != Null
+            Local found = False
+            For known In made.Places[at]
+                If known.0 == place && known.1 == root Then found = True
+            End For
+            If !found Then made.Places[at].Add((place, root))
+            Return
+        End If
+        made.Watchers.Add(Try FileWatcher(folder))
+        made.Folders.Add(folder)
+        made.Places.Add([(place, root)])
+        made.Watched[folder.Text] = made.Watchers.Count - 1
+    End Method
+
+    // Stops watching `folder` and every folder in it, as when it's gone, or made again.
+    @MainThread
+    Static Method Unwatch(made: FolderWatch, folder: Path)
+        Local text = folder.Text
+        For at = 0 Until made.Watchers.Count
+            Local watched = made.Folders[at].Text
+            If watched == text || watched.StartsWith(text + "/") || watched.StartsWith(text + "\\")
+                Close(made, at)
+            End If
+        End For
+    End Method
+
+    // Takes `place`, the mount of `root`'s, and what's in it, from what's watched, closing each
+    // watcher no place needs any more.
+    @MainThread
+    Static Method Unplace(made: FolderWatch, place: String, root: String)
+        Local prefix = place == "res://" ? place : place + "/"
+        For at = 0 Until made.Watchers.Count
+            If made.Watchers[at] == Null Then Continue
+            Local kept: (String, String)[] = []
+            For known In made.Places[at]
+                Local under = known.0 == place || known.0.StartsWith(prefix)
+                If !(under && known.1 == root) Then kept.Add(known)
+            End For
+            made.Places[at] = kept
+            If kept.Count == 0 Then Close(made, at)
+        End For
+    End Method
+
+    // Closes watcher `at`, which watches nothing after.
+    @MainThread
+    Static Method Close(made: FolderWatch, at: Int)
+        Local watcher = made.Watchers[at]
+        If watcher == Null Then Return
+        watcher.Close()
+        made.Watchers[at] = Null
+        made.Places[at] = []
+        made.Watched.Remove(made.Folders[at].Text)
+    End Method
+
+    // Takes what the watchers saw, and loads again what's settled.
+    @MainThread
+    Static Method PollFolders()
+        Local made = watch
+        If made == Null Then Return
+        Local now = Instant.Now()
+        Local count = made.Watchers.Count
+        For at = 0 Until count
+            Local watcher = made.Watchers[at]
+            If watcher == Null Then Continue
+            Local event = watcher.TryNext()
+            While event != Null
+                Local name = event.Path.FileName()
+                Local places = made.Places[at]
+                // A folder taken out isn't watched; one made, or made again, is watched anew.
+                If event.Kind == FileEventKind.REMOVED || event.Kind == FileEventKind.CREATED
+                    Unwatch(made, event.Path)
+                End If
+                For place In places
+                    Local changed = place.0 == "res://" ? place.0 + name : place.0 + "/" + name
+                    Local key = Try? Normalize(changed)
+                    If key != Null Then made.Changed[key] = now
+                    If event.Kind == FileEventKind.CREATED && Dir.Exists(event.Path)
+                        Try? WatchTree(made, event.Path, changed, place.1, 0, True)
+                    End If
+                End For
+                If made.Watchers[at] == Null Then Break
+                event = watcher.TryNext()
+            End While
+        End For
+        // What hasn't changed for a tenth of a second is written whole, as a tool that writes a
+        // file in parts has it.
+        Local settled: String[] = []
+        For change In made.Changed
+            If now - change.1 >= 100.Milliseconds Then settled.Add(change.0)
+        End For
+        For path In settled
+            made.Changed.Remove(path)
+            ReloadPath(path)
+            // A sidecar's file is loaded again with its new settings.
+            If path.EndsWith(".toml")
+                Local bytes = path.Bytes
+                Local stem = String.FromUtf8(bytes[0..bytes.Count - 5])
+                If stem != Null Then ReloadPath(stem)
+            End If
+        End For
+    End Method
+
+    // A new entry of T's cache for `load`, which takes out what's gone from it now and then.
+    @MainThread
+    Static Method Kept<T>(key: String, load: UInt64): Cached<T>
+        Where T: Asset & Class & Hashable
+        Local typed = TypedCache<T>.Of()
+        If typed.Entries.Count >= typed.PruneAt Then typed.Prune()
+        Local cached = Cached<T>(key, load)
+        typed.Entries[key] = cached
+        Return cached
+    End Method
+
+    // The T of `cached`, made of its load the first time, once the load's done, and held once
+    // more. What failed is thrown to each that waited for it, and taken out of the cache; what
+    // was let go meanwhile, or is gone, is loaded again; and one that's being made, which its
+    // own FromLoad asks for, is made of itself, which it can't be.
+    @MainThread
+    Static Method Held<T>(key: String, cached: Cached<T>, path: String): T Throws IOError
+        Where T: Asset & Class & Hashable
+        Local failure = cached.Failure
+        If failure != Null Then Throw failure
+        If cached.Making
+            Throw IOError(IOErrorKind.INVALID_DATA, "{path} is made of itself, which it can't be",
+                          path)
+        End If
+        Local current = TypedCache<T>.Of().Entries.Get(key)
+        If cached.Released || current == Null || !RefEquals(current, cached)
+            Return Try Load<T>(path)
+        End If
+        Local made = cached.Made
+        If made != Null
+            cached.Holds += 1
+            Return made
+        End If
+        If cached.Load == 0
+            // What it made is gone already, so it's loaded again.
+            Forget<T>(key, cached)
+            Return Try Load<T>(path)
+        End If
+        // Being made, the entry keeps its load, so Prune leaves it while its FromLoad loads
+        // others.
+        Local loaded = AssetLoad(cached.Load)
+        cached.Making = True
+        Try
+            If fbe_assets_failed(loaded.Handle) Then Throw LoadFailed(loaded.Handle, path)
+            Local making = T.FromLoad(loaded)
+            cached.Making = False
+            cached.Load = 0
+            cached.Made = making
+            cached.Hash = making.Hash()
+            cached.Holds += 1
+            Index(cached)
+            Depends(key, loaded.Handle)
+            // What changed while it loaded is loaded again now.
+            If cached.Again
+                cached.Again = False
+                TypedCache<T>.Of().Reload(key)
+            End If
+            Return making
+        Catch e As IOError
+            cached.Making = False
+            cached.Load = 0
+            cached.Again = False
+            cached.Failure = e
+            Forget<T>(key, cached)
+            Throw e
+        End Try
+    End Method
+
+    // Takes `cached` out of T's cache, if it's still the entry of `key`.
+    @MainThread
+    Static Method Forget<T>(key: String, cached: Cached<T>)
+        Where T: Asset & Class & Hashable
+        Local entries = TypedCache<T>.Of().Entries
+        Local kept = entries.Get(key)
+        If kept != Null && RefEquals(kept, cached) Then entries.Remove(key)
+    End Method
+
+    // Puts a made asset in the index, by its Hash.
+    @MainThread
+    Static Method Index(cached: HeldAsset)
+        Local bucket = held.Get(cached.HashOf())
+        If bucket == Null
+            held[cached.HashOf()] = [cached]
+        Else
+            bucket.Add(cached)
+        End If
+    End Method
+
+    // Takes an asset that's gone out of the index.
+    @MainThread
+    Static Method Unindex(cached: HeldAsset)
+        Local bucket = held.Get(cached.HashOf())
+        If bucket == Null Then Return
+        For at = 0 Until bucket.Count
+            If RefEquals(bucket[at], cached)
+                bucket.RemoveAt(at)
+                Break
+            End If
+        End For
+        If bucket.Count == 0 Then held.Remove(cached.HashOf())
+    End Method
+
+    /// ReadBytes's Async twin, which reads the file on a worker. It reads the mounts there are
+    /// when it begins, whatever's mounted while it waits.
+    @MainThread
+    Public Static Async Method ReadBytesAsync(path: String): UInt8[] Throws IOError
+        Local load = fbe_assets_load_async(AssetKind.BYTES As Int32, path, False, False)
+        If load == 0 Then Throw IOError(FailureKind(fbe_assets_load_failure()), LastError(), path)
+        Await Jobs.Finished(load)
+        Local held = AssetLoad(load)
+        If fbe_assets_failed(load) Then Throw LoadFailed(load, path)
+        Return held.Bytes()
+    End Method
+
+    // The IOError of a load that failed.
+    @MainThread
+    Static Method LoadFailed(load: UInt64, path: String): IOError
+        Local message = ""
+        Unsafe
+            message = fbe_assets_error(load).ToString()
+        End Unsafe
+        Return IOError(FailureKind(fbe_assets_failure(load)), message, path)
+    End Method
+
+    // The IOError of a mount that just failed, of the pak at `path`; a panic for its place.
+    @MainThread @PanicsAtCaller
+    Static Method MountFailed(path: String?): IOError
+        If fbe_vfs_failure() == FBE_VFS_INVALID_PATH Then Panic(LastError())
+        Return Failed(path)
+    End Method
+
+    // The IOError of the call that just failed, about `path`.
+    @MainThread
+    Static Method Failed(path: String?): IOError
+        Local message = LastError()
+        Select fbe_vfs_failure()
+            Case FBE_VFS_NOT_FOUND
+                Return IOError(IOErrorKind.NOT_FOUND, message, path)
+            Case FBE_VFS_IS_A_FOLDER
+                Return IOError(IOErrorKind.IS_A_DIRECTORY, message, path)
+            Case FBE_VFS_NOT_A_FOLDER
+                Return IOError(IOErrorKind.NOT_A_DIRECTORY, message, path)
+            Case FBE_VFS_INVALID_PATH
+                Return IOError(IOErrorKind.INVALID_PATH, message, path)
+            Case FBE_VFS_INVALID_DATA
+                Return IOError(IOErrorKind.INVALID_DATA, message, path)
+        End Select
+        Return IOError(IOErrorKind.OTHER, message, path)
+    End Method
+End Class
+
+@MainThread Function PollWatchedFolders()
+    Assets.PollFolders()
+End Function

@@ -1,0 +1,267 @@
+// The scene's panics, each a mistake a game can make, which fb test can't catch: ctest runs this
+// with a case's name and checks it panics with the case's message.
+
+Import std.core
+Import std.math
+Import std.os
+Import fbengine
+
+Local arguments = Process.Arguments()
+If arguments.Count != 1 Then Panic("give the case to run")
+
+Local world = World()
+World.SetCurrent(world)
+Select arguments[0]
+    Case "freed-entity"
+        Local pivot = Pivot()
+        pivot.Free()
+        pivot.SetName("x")
+    Case "freed-with-parent"
+        Local parent = Pivot()
+        Local child = Pivot(parent)
+        parent.Free()
+        Print(child.Name())
+    Case "new-under-freed"
+        Local parent = Pivot()
+        parent.Free()
+        Pivot(parent)
+    Case "freed-world"
+        world.Free()
+        world.Roots()
+    Case "current-freed"
+        world.Free()
+        World.SetCurrent(world)
+    Case "free-main"
+        World.Main().Free()
+    Case "own-parent"
+        Local pivot = Pivot()
+        pivot.SetParent(pivot)
+    Case "under-itself"
+        Local top = Pivot()
+        Local bottom = Pivot(Pivot(top))
+        top.SetParent(bottom)
+    Case "child-out-of-range"
+        Local parent = Pivot()
+        Pivot(parent)
+        Pivot(parent)
+        parent.Child(2)
+    Case "data-freed"
+        Local pivot = Pivot()
+        pivot.Free()
+        pivot.Data<World>()
+    Case "poses-count"
+        Entity.SetPoses([Pivot() As Entity], [], Space.WORLD)
+    Case "poses-freed"
+        Local pivot = Pivot()
+        pivot.Free()
+        Entity.Poses([pivot As Entity], Space.WORLD)
+    Case "into-nothing"
+        Local flat = Pivot()
+        flat.SetScale(Vec3(1, 0, 1))
+        TransformPoint(Vec3.Zero(), Null, flat)
+    Case "turn-freed"
+        Local pivot = Pivot()
+        pivot.Free()
+        pivot.Turn(0, 1, 0)
+    Case "field-of-view"
+        Camera().SetFieldOfView(0)
+    Case "range"
+        Camera().SetRange(5, 1)
+    Case "viewport"
+        Camera().SetViewport(Rect(0, 0, 0, 10))
+    Case "no-window"
+        Camera().Project(Vec3(0, 0, -1))
+    Case "camera-freed"
+        Local camera = Camera()
+        camera.Free()
+        camera.SetOrder(1)
+    Case "intensity"
+        Light().SetIntensity(-1)
+    Case "light-range"
+        Light().SetRange(0)
+    Case "cone"
+        Light().SetCone(1, 0.5)
+    Case "fog-range"
+        Camera().SetFogRange(5, 5)
+    Case "fog-density"
+        Camera().SetFogDensity(-0.1)
+    Case "light-freed"
+        Local light = Light()
+        light.Free()
+        light.SetColor(Color.Red)
+    Case "segments"
+        Geometry.Sphere(2)
+    Case "triangle-index"
+        Triangle().Surface(0).AddTriangle(0, 1, 5)
+    Case "triangle-count"
+        Triangle().Surface(0).AddTriangles([0, 1, 2, 0])
+    Case "surface-index"
+        Triangle().Surface(1)
+    Case "vertex-index"
+        Triangle().Surface(0).Vertex(3)
+    Case "uv-set"
+        Triangle().Surface(0).VertexUv(0, 2)
+    Case "geometry-freed"
+        Local geometry = Geometry()
+        geometry.Free()
+        geometry.AddSurface()
+    Case "mesh-freed-geometry"
+        Local geometry = Geometry()
+        geometry.Free()
+        Mesh(geometry)
+    Case "shininess"
+        Material().SetShininess(2)
+    Case "alpha-cutoff"
+        Material().SetAlphaCutoff(-1)
+    Case "layer"
+        Material().SetLayer(8, LayerBlend.ADD)
+    Case "layer-uv-set"
+        Material().SetLayer(0, LayerBlend.ADD, 2)
+    Case "material-freed"
+        Local material = Material()
+        material.Free()
+        material.SetOrder(1)
+    Case "surface-freed-material"
+        Local material = Material()
+        material.Free()
+        Triangle().Surface(0).SetMaterial(material)
+    Case "collision-group"
+        Pivot().SetCollisionGroup(1024)
+    Case "collision-radius"
+        Pivot().SetCollisionRadius(0, 1)
+    Case "collision-box"
+        Pivot().SetCollisionBox(AABB(Vec3(1, 0, 0), Vec3(0, 1, 1)))
+    Case "step-height"
+        Pivot().SetStepHeight(-1)
+    Case "response-group"
+        world.SetCollisionResponse(0, 1, CollisionResponse.SLIDE)
+    Case "iterations"
+        world.SetCollisionIterations(0)
+    Case "skin"
+        world.SetCollisionSkin(1)
+    Case "collide-freed"
+        world.Free()
+        world.Collide()
+    Case "point-at-freed"
+        Local target = Pivot()
+        target.Free()
+        Pivot().PointAt(target)
+    Case "distance-freed"
+        Local target = Pivot()
+        target.Free()
+        Pivot().DistanceTo(target)
+    Case "yaw-freed"
+        Local target = Pivot()
+        target.Free()
+        Pivot().YawTo(target)
+    Case "pitch-freed"
+        Local target = Pivot()
+        target.Free()
+        Pivot().PitchTo(target)
+    Case "horizontal-no-window"
+        Camera().HorizontalFieldOfView()
+    Case "fit-backward"
+        Geometry.Cube().Fit(AABB(Vec3(1, 0, 0), Vec3(0, 1, 1)))
+    Case "material-alpha"
+        Material().SetAlpha(2)
+    Case "color-alpha"
+        Material().SetColor(Color(1, 1, 1, 1.5))
+    Case "mesh-alpha"
+        Mesh(Null).SetAlpha(-1)
+    Case "pick-radius"
+        World.Main().Pick(Vec3(0, 0, 0), Vec3(0, 0, 1), -1)
+    Case "pick-freed"
+        Local picker = Pivot()
+        picker.Free()
+        picker.Pick(1)
+    Case "camera-pick-no-window"
+        Camera().Pick(Vec2(1, 1))
+    Case "max-slope"
+        Pivot().SetMaxSlope(2)
+    Case "drawn-blend"
+        Local glowing = Mesh(Geometry.Cube())
+        Local glow = Material()
+        glow.SetBlend(Blend.ADD)
+        glowing.SetMaterial(glow)
+        glowing.DrawnBlend(99)
+    Case "screen-ray-freed"
+        Local gone = Camera()
+        gone.Free()
+        gone.ScreenRay(Vec2(1, 1))
+    Case "screen-ray-no-window"
+        Camera().ScreenRay(Vec2(1, 1))
+    Case "view-frustum-freed"
+        Local gone = Camera()
+        gone.Free()
+        gone.ViewFrustum()
+    Case "view-frustum-no-window"
+        Camera().ViewFrustum()
+    Case "camera-pick-freed"
+        Local gone = Camera()
+        gone.Free()
+        gone.Pick(Vec2(1, 1))
+    Case "sprite-scale"
+        Sprite().SetSpriteScale(Vec2(-1, 1))
+    Case "sprite-freed"
+        Local gone = Sprite()
+        gone.Free()
+        gone.SetHandle(Vec2(0, -1))
+    Case "tween-range"
+        Pivot().TweenedMatrix(2)
+    Case "view-tween-range"
+        Camera().TweenedViewMatrix(-1)
+    Case "capture-freed"
+        Local gone = World()
+        gone.Free()
+        gone.Capture()
+    Case "fixed-step-rate"
+        FixedStep(0)
+    Case "fixed-step-most"
+        FixedStep(60, 0)
+    Case "fixed-step-steps"
+        FixedStep(60).Steps(-1)
+    Case "fixed-step-infinite"
+        FixedStep(60).Steps(Inf)
+    Case "plane-segments"
+        GroundPlane(17)
+    Case "auto-fade"
+        Pivot().SetAutoFade(5, 1)
+    Case "mirror-freed"
+        Local gone = Mirror()
+        gone.Free()
+        gone.Reflection()
+    Case "intersects-freed"
+        Local gone = Mesh(Geometry.Cube())
+        gone.Free()
+        Mesh(Geometry.Cube()).Intersects(gone)
+    Case "draws-tween"
+        Local camera = Camera()
+        camera.SetViewport(Rect(0, 0, 100, 100))
+        camera.Draws(2)
+    Case "draws-no-window"
+        Camera().Draws()
+    Case "draw-projection-no-window"
+        Camera().DrawProjection()
+    Case "cull-box"
+        Geometry.Cube().SetCullBox(AABB(Vec3(1, 0, 0), Vec3(0, 1, 1)))
+    Case "terrain-size"
+        Terrain(0)
+    Case "terrain-corner"
+        Terrain(4).SetHeight(5, 0, 1)
+    Case "terrain-heights"
+        Terrain(2).SetHeights([1.0, 2.0])
+    Default
+        Panic("no case {arguments[0]}")
+End Select
+Print("no panic")
+
+// A geometry of one surface with one triangle.
+Function Triangle(): Geometry
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    surface.AddVertex(Vec3(0, 0, 0))
+    surface.AddVertex(Vec3(1, 0, 0))
+    surface.AddVertex(Vec3(0, 1, 0))
+    surface.AddTriangle(0, 1, 2)
+    Return geometry
+End Function

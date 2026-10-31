@@ -1,0 +1,371 @@
+// Materials: how surfaces look, as the data E5 draws them by, shared by every surface and Mesh
+// drawing in one; and a Mesh's own tint, which multiplies its materials' for it alone.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./geometry"
+Import "./light"
+Import "./mesh"
+Import "./window"
+Import "./world"
+
+/// How a material is lit.
+Public Enum Shading
+    /// Physically, as glTF's metal and roughness have it.
+    PBR = 0
+    /// Not at all: its color is what's drawn, as full-bright signs and screens want.
+    UNLIT = 1
+    /// Per vertex, as fixed-function hardware lit, for an old look.
+    VERTEX = 2
+End Enum
+
+/// How a material blends with what's drawn behind it.
+Public Enum Blend
+    /// Opaque, unless its alpha times its Mesh's is below 1; then ALPHA.
+    AUTO = 0
+    /// Opaque: it hides what's behind, its own and its textures' alpha left out; but a Mesh whose
+    /// own alpha is below 1 still blends it as ALPHA, so a Mesh fades whatever it draws in.
+    OPAQUE = 1
+    /// Laid over what's behind by its alpha, drawn far to near.
+    ALPHA = 2
+    /// Its light, scaled by its alpha, added to what's behind, as glows and flames want.
+    ADD = 3
+    /// What's behind multiplied by it, scaled by its alpha, as shadows and stains want.
+    MULTIPLY = 4
+End Enum
+
+/// How one of a material's texture layers combines with the layers under it.
+Public Enum LayerBlend
+    /// Multiplying them.
+    MULTIPLY = 0
+    /// Adding to them.
+    ADD = 1
+    /// Laid over them by its alpha.
+    ALPHA = 2
+    /// Multiplying them twice over, so its middle gray leaves them as they are, as a doubled
+    /// ambient layer under a lightmap wants.
+    MULTIPLY_2 = 3
+End Enum
+
+// One wrapper for each material the game holds, by its handle's slot.
+Global materials: Weak<Material>[] = []
+
+/// How surfaces look: color and alpha, shininess, how it's lit, how it blends, texture layers, and
+/// how and when it's drawn. Every surface and Mesh drawing in one shares it, so changing it changes
+/// them all, and Clone makes one of their own; a Mesh's tint changes it for that Mesh alone. It
+/// lives while the game holds it or something draws in it; Free lets go of it at once. New, it's
+/// white and opaque, PBR, blending AUTO, with no shininess, alpha cutoff, or vertex colors,
+/// one-sided, fogged, and in order 0, its 8 layers multiplying, each reading UV set 0.
+Public Final Class Material
+    Field handle: UInt64
+
+    /// A new Material, white.
+    @MainThread
+    Public New()
+        handle = fbe_material_create()
+        Keep(Self)
+    End New
+
+    /// A new Material of a color and alpha.
+    @MainThread
+    Public New(color: Color)
+        handle = fbe_material_create()
+        Keep(Self)
+        SetColor(color)
+    End New
+
+    // A wrapper for a handle C holds once for it.
+    Package New(handle: UInt64)
+        If handle == 0 Then Panic(LastError())
+        Self.handle = handle
+        Keep(Self)
+    End New
+
+    Method Destroy()
+        If handle != 0 Then fbe_material_release(handle)
+    End Method
+
+    /// Lets go of the material now; what draws in it keeps it. Using it after panics.
+    @MainThread @PanicsAtCaller
+    Public Method Free()
+        If !fbe_material_release(Live("Free")) Then Failed("Free")
+        Local gone: Material? = Null
+        materials[Slot(handle)] = gone
+        handle = 0
+    End Method
+
+    /// Whether Free let go of it.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// A Material of its own with these settings.
+    @MainThread @PanicsAtCaller
+    Public Method Clone(): Material => Material(fbe_material_clone(Live("Clone")))
+
+    /// Sets its color and alpha, linear: alpha too, so SetColor after SetAlpha sets the alpha
+    /// again. Colors take any finite value; an alpha outside 0 to 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetColor(color: Color)
+        Local material = Live("SetColor")
+        If !fbe_material_set_color(material, color.r, color.g, color.b, color.a)
+            Failed("SetColor")
+        End If
+    End Method
+
+    /// Its color and alpha.
+    @MainThread @PanicsAtCaller
+    Public Method Color(): Color
+        Local material = Live("Color")
+        Local found = fbe_color_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_material_color(material, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("Color")
+        Return ColorOf(found)
+    End Method
+
+    /// Sets its alpha alone, from 0, unseen, to 1, opaque. Outside 0 to 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetAlpha(alpha: Float)
+        Local material = Live("SetAlpha")
+        Local color = Color()
+        If !fbe_material_set_color(material, color.r, color.g, color.b, alpha)
+            Failed("SetAlpha")
+        End If
+    End Method
+
+    /// Its alpha.
+    @MainThread @PanicsAtCaller
+    Public Method Alpha(): Float => Color().a
+
+    /// Sets how sharp and bright its highlights are, from 0, none, to 1. Outside 0 to 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetShininess(shininess: Float)
+        If !fbe_material_set_shininess(Live("SetShininess"), shininess) Then Failed("SetShininess")
+    End Method
+
+    /// How sharp and bright its highlights are.
+    @MainThread @PanicsAtCaller
+    Public Method Shininess(): Float => fbe_material_shininess(Live("Shininess"))
+
+    /// Sets how it's lit.
+    @MainThread @PanicsAtCaller
+    Public Method SetShading(shading: Shading)
+        If !fbe_material_set_shading(Live("SetShading"), shading As Int32) Then Failed("SetShading")
+    End Method
+
+    /// How it's lit.
+    @MainThread @PanicsAtCaller
+    Public Method Shading(): Shading => fbe_material_shading(Live("Shading")) As Shading
+
+    /// Sets how it blends with what's behind it.
+    @MainThread @PanicsAtCaller
+    Public Method SetBlend(blend: Blend)
+        If !fbe_material_set_blend(Live("SetBlend"), blend As Int32) Then Failed("SetBlend")
+    End Method
+
+    /// How it blends with what's behind it.
+    @MainThread @PanicsAtCaller
+    Public Method Blend(): Blend => fbe_material_blend(Live("Blend")) As Blend
+
+    /// Sets the alpha below which a pixel isn't drawn at all, as a mask's holes want, from 0, for
+    /// none, to 1. Outside 0 to 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetAlphaCutoff(cutoff: Float)
+        If !fbe_material_set_alpha_cutoff(Live("SetAlphaCutoff"), cutoff)
+            Failed("SetAlphaCutoff")
+        End If
+    End Method
+
+    /// The alpha below which a pixel isn't drawn.
+    @MainThread @PanicsAtCaller
+    Public Method AlphaCutoff(): Float => fbe_material_alpha_cutoff(Live("AlphaCutoff"))
+
+    /// Sets whether vertices' colors and alphas multiply its own.
+    @MainThread @PanicsAtCaller
+    Public Method SetVertexColors(on: Bool)
+        If !fbe_material_set_vertex_colors(Live("SetVertexColors"), on)
+            Failed("SetVertexColors")
+        End If
+    End Method
+
+    /// Whether vertices' colors and alphas multiply its own.
+    @MainThread @PanicsAtCaller
+    Public Method VertexColors(): Bool => fbe_material_vertex_colors(Live("VertexColors"))
+
+    /// Sets whether its triangles are drawn from behind too.
+    @MainThread @PanicsAtCaller
+    Public Method SetTwoSided(on: Bool)
+        If !fbe_material_set_two_sided(Live("SetTwoSided"), on) Then Failed("SetTwoSided")
+    End Method
+
+    /// Whether its triangles are drawn from behind too.
+    @MainThread @PanicsAtCaller
+    Public Method TwoSided(): Bool => fbe_material_two_sided(Live("TwoSided"))
+
+    /// Sets whether cameras' fog covers it, as it does at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetFogged(on: Bool)
+        If !fbe_material_set_fogged(Live("SetFogged"), on) Then Failed("SetFogged")
+    End Method
+
+    /// Whether cameras' fog covers it.
+    @MainThread @PanicsAtCaller
+    Public Method Fogged(): Bool => fbe_material_fogged(Live("Fogged"))
+
+    /// Sets when it's drawn: 0, at first, with the scene; below 0 before the scene and above 0
+    /// after it, lower first, as skies and overlays want. How each order meets the others' depth
+    /// is the renderer's (E5).
+    @MainThread @PanicsAtCaller
+    Public Method SetOrder(order: Int)
+        If !fbe_material_set_order(Live("SetOrder"), order) Then Failed("SetOrder")
+    End Method
+
+    /// When it's drawn.
+    @MainThread @PanicsAtCaller
+    Public Method Order(): Int => fbe_material_order(Live("Order"))
+
+    /// Sets how a texture layer, 0 to 7, combines with the layers under it, and which of a
+    /// vertex's UV sets it reads, 0 or 1, as a lightmap's layer reads 1. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetLayer(layer: Int, blend: LayerBlend, uvSet: Int = 0)
+        If !fbe_material_set_layer(Live("SetLayer"), layer, blend As Int32, uvSet)
+            Failed("SetLayer")
+        End If
+    End Method
+
+    /// How a texture layer combines with the layers under it.
+    @MainThread @PanicsAtCaller
+    Public Method LayerBlend(layer: Int): LayerBlend
+        Local blend = fbe_material_layer_blend(Live("LayerBlend"), layer)
+        If blend < 0 Then Failed("LayerBlend")
+        Return blend As LayerBlend
+    End Method
+
+    /// Which UV set a texture layer reads.
+    @MainThread @PanicsAtCaller
+    Public Method LayerUvSet(layer: Int): Int
+        Local set = fbe_material_layer_uv_set(Live("LayerUvSet"), layer)
+        If set < 0 Then Failed("LayerUvSet")
+        Return set
+    End Method
+
+    // A panic naming the call, with what C said went wrong.
+    @PanicsAtCaller
+    Package Method Failed(call: String)
+        Panic("{call} on a Material: {LastError()}")
+    End Method
+
+    // The handle, or a panic naming the call for a Material that was freed.
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call} on a Material that was freed")
+        Return handle
+    End Method
+
+    Static Method Keep(material: Material)
+        Local slot = Slot(material.handle)
+        While materials.Count <= slot
+            materials.Add(Null)
+        End While
+        materials[slot] = material
+    End Method
+End Class
+
+/// The material a surface draws in.
+Extend Surface
+    /// Makes the surface draw in `material`, or the default, white and opaque, for Null.
+    @MainThread @PanicsAtCaller
+    Public Method SetMaterial(material: Material?)
+        Local geometry = Owner.Live("SetMaterial")
+        Local drawn: UInt64 = material != Null ? material.Live("SetMaterial") : 0
+        If !fbe_surface_set_material(geometry, Index, drawn) Then Owner.Failed("SetMaterial")
+    End Method
+
+    /// The material the surface draws in, or Null for the default.
+    @MainThread @PanicsAtCaller
+    Public Method Material(): Material?
+        Local geometry = Owner.Live("Material")
+        Local found = fbe_surface_material(geometry, Index)
+        If found == 0 && fbe_surface_vertex_count(geometry, Index) < 0 Then Owner.Failed("Material")
+        Return MaterialOf(found)
+    End Method
+End Extend
+
+/// A Mesh's material and tint.
+Extend Mesh
+    /// Makes the mesh draw every surface in `material` instead of their own, or their own again
+    /// for Null; its copies share it.
+    @MainThread @PanicsAtCaller
+    Public Method SetMaterial(material: Material?)
+        Local mesh = Live("SetMaterial")
+        Local drawn: UInt64 = material != Null ? material.Live("SetMaterial") : 0
+        If !fbe_mesh_set_material(mesh, drawn) Then Failed("SetMaterial")
+    End Method
+
+    /// The material the mesh draws every surface in, or Null when they draw in their own.
+    @MainThread @PanicsAtCaller
+    Public Method Material(): Material? => MaterialOf(fbe_mesh_material(Live("Material")))
+
+    /// Sets the mesh's own color and alpha, which multiply its materials' for it alone, white at
+    /// first: a copy tinted or faded is the only one that is. It sets alpha too, so SetColor after
+    /// SetAlpha sets the alpha again. Colors take any finite value; an alpha outside 0 to 1
+    /// panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetColor(color: Color)
+        If !fbe_mesh_set_tint(Live("SetColor"), color.r, color.g, color.b, color.a)
+            Failed("SetColor")
+        End If
+    End Method
+
+    /// The mesh's own color and alpha.
+    @MainThread @PanicsAtCaller
+    Public Method Color(): Color
+        Local mesh = Live("Color")
+        Local found = fbe_color_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_mesh_tint(mesh, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("Color")
+        Return ColorOf(found)
+    End Method
+
+    /// Sets the mesh's own alpha alone, which fades it whatever its materials' blends, as their
+    /// docs say: at 0 it isn't drawn, but it still collides and picks. Outside 0 to 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetAlpha(alpha: Float)
+        Local mesh = Live("SetAlpha")
+        Local tint = Color()
+        If !fbe_mesh_set_tint(mesh, tint.r, tint.g, tint.b, alpha) Then Failed("SetAlpha")
+    End Method
+
+    /// How the mesh's surface at `index` is drawn over what's behind it: its material's Blend,
+    /// the mesh's own or the surface's, with AUTO and OPAQUE settled by the alpha, as their docs
+    /// say. A surface the mesh's geometry doesn't have panics.
+    @MainThread @PanicsAtCaller
+    Public Method DrawnBlend(index: Int): Blend
+        Local blend = fbe_mesh_blend(Live("DrawnBlend"), index)
+        If blend < 0 Then Failed("DrawnBlend")
+        Return blend As Blend
+    End Method
+
+    /// The mesh's own alpha.
+    @MainThread @PanicsAtCaller
+    Public Method Alpha(): Float => Color().a
+End Extend
+
+/// The Material a handle is for, from its wrapper if the game still holds one, or a new one,
+/// which holds the handle once; Null for 0.
+Package Function MaterialOf(handle: UInt64): Material?
+    If handle == 0 Then Return Null
+    Local slot = Slot(handle)
+    If slot < materials.Count
+        Local kept = materials[slot]
+        If kept != Null && kept.handle == handle Then Return kept
+    End If
+    If !fbe_material_retain(handle) Then Panic("a material's handle went stale: {LastError()}")
+    Return Material(handle)
+End Function

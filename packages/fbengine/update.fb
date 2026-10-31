@@ -1,0 +1,114 @@
+// The scene's part of a frame: UpdateWorld steps it, CaptureWorld keeps where everything is for
+// drawing between steps, and FixedStep runs a game's logic at a fixed rate whatever the frame rate.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./collision"
+Import "./entity"
+Import "./transform"
+Import "./world"
+
+/// Steps the current World by `seconds`: its collisions now, and its animation once there is
+/// animation (E7's), which `seconds` advances.
+@MainThread @PanicsAtCaller
+Public Function UpdateWorld(seconds: Float64 = 0)
+    World.Current().Update(seconds)
+End Function
+
+/// Keeps where every entity of the current World is, so drawing can tween between then and later:
+/// a fixed step captures before each step, and draws its Tween between the last two.
+@MainThread @PanicsAtCaller
+Public Function CaptureWorld()
+    World.Current().Capture()
+End Function
+
+Extend World
+    /// Steps the World by `seconds`: its collisions now, and its animation once there is
+    /// animation, which `seconds` advances.
+    @MainThread @PanicsAtCaller
+    Public Method Update(seconds: Float64 = 0)
+        Collide()
+    End Method
+
+    /// Keeps where every entity of the World is, for drawing between then and later.
+    @MainThread @PanicsAtCaller
+    Public Method Capture()
+        If !fbe_world_capture(Live("Capture")) Then Failed("Capture")
+    End Method
+End Extend
+
+Extend Entity
+    /// The entity's matrix to the world `tween` of the way, 0 to 1, from where its World was
+    /// last captured to where it is now, everything above it tweened too: what drawing between
+    /// steps draws. One made since the capture is where it is.
+    @MainThread @PanicsAtCaller
+    Public Method TweenedMatrix(tween: Float): Mat4
+        Local entity = Live("TweenedMatrix")
+        Local found = fbe_mat4_t()
+        Local done = False
+        Unsafe
+            done = fbe_entity_tweened_matrix(entity, tween, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("TweenedMatrix")
+        Return MatOf(found)
+    End Method
+End Extend
+
+/// A game's logic at a fixed rate, however fast frames come: each frame runs as many steps as the
+/// time since holds, keeping what's left over, and draws its Tween between the last two steps.
+///
+///     Local logic = FixedStep(60)
+///     While !Window.Closed()
+///         For step = 1 To logic.Steps(Frame.Delta())
+///             CaptureWorld()
+///             UpdateGame(logic.Seconds())
+///             UpdateWorld(logic.Seconds())
+///         End For
+///         RenderWorld(logic.Tween())
+///         Flip()
+///     End While
+Public Final Class FixedStep
+    Private Field rate: Float64
+    Private Field most: Int
+    Private Field banked: Float64 = 0
+
+    /// Steps `rate` times a second, at most `most` in a frame, so a frame that stalled doesn't
+    /// run the game far behind trying to catch up: the time past those is dropped. A rate that
+    /// isn't above 0, or a most below 1, panics.
+    @PanicsAtCaller
+    Public New(rate: Float64, most: Int = 5)
+        If !(rate > 0 && IsFinite(rate))
+            Panic("FixedStep: a rate is above 0 steps a second, not {rate}")
+        End If
+        If most < 1 Then Panic("FixedStep: a frame takes at most 1 step or more, not {most}")
+        Self.rate = rate
+        Self.most = most
+    End New
+
+    /// How many steps to run for a frame that took `seconds`, as Frame.Delta() gives it. Below 0,
+    /// or not finite, panics.
+    @PanicsAtCaller
+    Public Method Steps(seconds: Float64): Int
+        If !(seconds >= 0 && IsFinite(seconds))
+            Panic("Steps on a FixedStep: a frame takes 0 seconds or more, finite, not {seconds}")
+        End If
+        banked += seconds * rate
+        // A frame long enough to overflow runs the most steps; what's past them is dropped.
+        If !IsFinite(banked) Then banked = most
+        // A hair over, so a frame of exactly two steps isn't one and a rounding.
+        Local whole = Floor(banked + 1e-9)
+        banked = Max(banked - whole, 0.0)
+        Return Min(whole, most As Float64) As Int
+    End Method
+
+    /// How far the frame is between the last step and the next, from 0 to 1, for drawing.
+    Public Method Tween(): Float => banked As Float
+
+    /// How long a step is, in seconds: 1 over the rate.
+    Public Method Seconds(): Float64 => 1.0 / rate
+
+    /// How many steps a second.
+    Public Method Rate(): Float64 => rate
+End Class

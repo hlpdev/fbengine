@@ -1,0 +1,96 @@
+// Drawing the scene: what each camera draws, as the renderer reads it from the scene once a frame,
+// and the projection it draws with.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_render"
+Import "./c/fbe_scene"
+Import "./camera"
+Import "./entity"
+Import "./geometry"
+Import "./material"
+Import "./transform"
+
+/// One thing a camera draws, as a debug overlay lists them.
+Public Struct Draw Implements Printable
+    /// The entity drawn.
+    Public Field Entity: Entity
+    /// The surface of its Mesh's Geometry, for a Mesh, else Null.
+    Public Field Surface: Surface?
+    /// The material it's drawn in, or Null for the default.
+    Public Field Material: Material?
+    /// The blend it's drawn with, AUTO and OPAQUE settled.
+    Public Field Blend: Blend
+    /// Its matrix to the world, tweened, or for a Sprite the quad's as the camera sees it.
+    Public Field Matrix: Mat4
+    /// Its color and alpha: its own times its fade.
+    Public Field Color: Color
+    /// How far in front of the camera its place is, or a Terrain's grid's middle.
+    Public Field Depth: Float
+
+    Public Method ToString(): String => "Draw of {Entity} with {Blend} at {Depth}"
+End Struct
+
+/// Room for as many draws as a camera's had at most, so Draws reads them in one go.
+Global drawRoom = 64
+
+Extend Camera
+    /// What the camera draws, `tween` of the way from its World's last capture to now, seen from
+    /// where it is then, in the order it draws them: by their materials' orders, lower first; in
+    /// an order, what's opaque first, by material, nearest first, then what blends, furthest
+    /// first; ties as the entities were made. Only showing meshes, sprites, ground planes, and
+    /// terrains it might see, with some alpha left after their fade; none for a hidden camera or
+    /// a viewport with no size. With no window open and no viewport of its own, or a tween outside
+    /// 0 to 1, it panics.
+    @MainThread @PanicsAtCaller
+    Public Method Draws(tween: Float = 1): Draw[]
+        Local camera = Live("Draws")
+        Local target = Target("Draws")
+        Local found = Buffer<fbe_draw_t>(drawRoom)
+        Local count = 0
+        Unsafe
+            count = fbe_render_draws(camera, target.x, target.y, tween, found.Pointer(), drawRoom)
+        End Unsafe
+        If count < 0 Then Failed("Draws")
+        If count > drawRoom
+            // More than there was room for: again, with room for them all, as from now on.
+            drawRoom = count
+            found = Buffer<fbe_draw_t>(count)
+            Unsafe
+                fbe_render_draws(camera, target.x, target.y, tween, found.Pointer(), count)
+            End Unsafe
+        End If
+        Local list: Draw[] = []
+        For draw In found.Slice(0, count)
+            Local entity = EntityOf(draw.entity)
+            If entity == Null Then Continue
+            Local surface: Surface? = Null
+            Local geometry = draw.geometry != 0 ? GeometryOf(draw.geometry) : Null
+            If geometry != Null Then surface = geometry.Surface(draw.surface)
+            Local m = draw.matrix
+            Local matrix = Mat4(Vec4(m[0], m[1], m[2], m[3]), Vec4(m[4], m[5], m[6], m[7]),
+                                Vec4(m[8], m[9], m[10], m[11]), Vec4(m[12], m[13], m[14], m[15]))
+            list.Add(Draw(entity, surface, MaterialOf(draw.material), draw.blend As Blend, matrix,
+                          Color(draw.color[0], draw.color[1], draw.color[2], draw.color[3]),
+                          draw.depth))
+        End For
+        Return list
+    End Method
+
+    /// The camera's projection as the engine draws with it: Vulkan's clip space, y down, and depth
+    /// reversed, 1 at its near plane and 0 at its far one, which Project and InView agree with.
+    /// With no window open and no viewport of its own, it panics.
+    @MainThread @PanicsAtCaller
+    Public Method DrawProjection(): Mat4
+        Local camera = Live("DrawProjection")
+        Local target = Target("DrawProjection")
+        Local found = fbe_mat4_t()
+        Local done = False
+        Unsafe
+            done = fbe_camera_draw_projection(camera, target.x, target.y, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("DrawProjection")
+        Return MatOf(found)
+    End Method
+End Extend
