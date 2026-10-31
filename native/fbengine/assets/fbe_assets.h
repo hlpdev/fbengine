@@ -71,6 +71,14 @@ FBE_API int32_t fbe_assets_failure(uint64_t load);
 FBE_API const char* fbe_assets_error(uint64_t load);
 // The res:// path the load read, normalized.
 FBE_API const char* fbe_assets_path(uint64_t load);
+// Whether the load's file has import settings: a sidecar beside it, its path with ".toml" after
+// it, which the load read with it.
+FBE_API bool fbe_assets_has_settings(uint64_t load);
+// The text of the load's sidecar, TOML, as UTF-8 with no NULs; "" for a load without one.
+FBE_API const char* fbe_assets_settings(uint64_t load);
+// Waits for a load on the workers to be done, and runs its hand-over, as fbe_frame_flip does, so
+// it's done when this returns; false for a load that's freed.
+FBE_API bool fbe_assets_wait(uint64_t load);
 // Lets go of the load and what it made; false if it's freed already, or never was.
 FBE_API bool fbe_assets_free(uint64_t load);
 // How many loads there are, not freed.

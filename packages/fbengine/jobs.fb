@@ -28,6 +28,9 @@ Public Final Class Jobs
 
     // A Task done once `ticket` is handed over, after its work has finished.
     @MainThread Package Static Method Finished(ticket: UInt64): Task<Bool>
+        // What waits for a ticket already waited for shares its source.
+        Local waited = waiting.Get(ticket)
+        If waited != Null Then Return waited.Task
         Local source = TaskSource<Bool>()
         waiting[ticket] = source
         If hook == 0 Then hook = Frame.OnFlip(HandOverJobs)

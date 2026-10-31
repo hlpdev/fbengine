@@ -77,7 +77,8 @@ FBE_API uint64_t fbe_assets_load_async(int32_t kind, const char* path, bool line
     }
     const uint64_t handle = assets::loads().add(load);
     fbe::jobs_t& jobs = fbe::jobs();
-    jobs.run([&jobs, load = std::move(load), handle] mutable {
+    assets::load_t& started = *load;
+    started.job = jobs.run([&jobs, load = std::move(load), handle] mutable {
         assets::run_load(*load, &jobs);
         // A load freed meanwhile is done all the same, and its ticket goes to no one.
         jobs.to_main([load = std::move(load), handle] {
@@ -118,6 +119,29 @@ FBE_API const char* fbe_assets_path(uint64_t load) {
     const assets::load_t* found = assets::loads().get(load);
     path = found != nullptr ? found->path.key() : "";
     return path.c_str();
+}
+
+FBE_API bool fbe_assets_has_settings(uint64_t load) {
+    const assets::load_t* found = assets::loads().get(load);
+    return found != nullptr && found->done && found->settings.has_value();
+}
+
+FBE_API const char* fbe_assets_settings(uint64_t load) {
+    const assets::load_t* found = assets::loads().get(load);
+    return found != nullptr && found->done && found->settings ? found->settings->c_str() : "";
+}
+
+FBE_API bool fbe_assets_wait(uint64_t load) {
+    const assets::load_t* found = assets::loads().get(load);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!found->done) {
+        fbe::jobs().wait(found->job);
+        // Its work for the main thread is queued now, and marks it done.
+        fbe::hand_over_jobs();
+    }
+    return true;
 }
 
 FBE_API bool fbe_assets_free(uint64_t load) {

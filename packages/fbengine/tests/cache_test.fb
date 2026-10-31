@@ -1,0 +1,242 @@
+// The cache: one asset of a path while anything holds it, held once a load and let go through
+// Release, as an engine type's Free does; and import settings from a file's sidecar.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine.c.fbe_assets
+
+Global made = 0
+
+// Import settings, as a texture's would be: what a sidecar leaves out is its Field's default.
+Struct SpriteSettings
+    Field Filter: String = "linear"
+    Field Mipmaps: Bool = True
+    Field Scale: Float64 = 1.0
+    Field AlphaCutoff: Float64 = 0.5
+End Struct
+
+// An Asset of an image load, which frees through the cache as an engine type does, and keeps its
+// file's import settings.
+Class Sprite Implements Asset
+    Field Width: UInt32
+    Field Settings: SpriteSettings
+    Field Freed: Bool
+
+    New(width: UInt32, settings: SpriteSettings)
+        Width = width
+        Settings = settings
+        Freed = False
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): Sprite Throws IOError
+        made += 1
+        Return Sprite(load.Image().Width, Try load.Settings<SpriteSettings>())
+    End Method
+
+    Method Free()
+        If !Assets.Release(Self) Then Return
+        Freed = True
+    End Method
+End Class
+
+// Another type of the same files, which the cache keeps apart.
+Class Outline Implements Asset
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): Outline Throws IOError => Outline()
+End Class
+
+Function MountSprites(at: String)
+    Assets.MountFiles(at, {"hero.png": Png.Encode(Image(16, 8)),
+                           "tiles/wall.png": Png.Encode(Image(32, 32)),
+                           "tiles/wall.png.toml":
+                           "filter = \"nearest\"\nscale = 2.5\nalpha_cutoff = 0.25\n".Bytes,
+                           "bad.png": Png.Encode(Image(1, 1)), "bad.png.toml": "filter = ".Bytes,
+                           "wrong.png": Png.Encode(Image(1, 1)),
+                           "wrong.png.toml": "scale = \"big\"".Bytes,
+                           "binary.png": Png.Encode(Image(1, 1)),
+                           "binary.png.toml": [0x61, 0x3D, 0xFF] As UInt8[],
+                           "typo.png": Png.Encode(Image(1, 1)),
+                           "typo.png.toml": "filtr = \"nearest\"".Bytes})
+End Function
+
+@Test
+Function APathGivesOneAssetHoweverItsWritten() Throws IOError
+    MountSprites("res://test-one")
+    Defer Assets.Unmount("res://test-one")
+    made = 0
+    Local first = Try Assets.Load<Sprite>("res://test-one/hero.png")
+    Local again = Try Assets.Load<Sprite>("RES://Test-One\\HERO.png")
+    Expect(RefEquals(first, again))
+    Expect(made == 1)
+    Local found = Try Assets.Find<Sprite>("res://test-one/./hero.png")
+    Expect(found != Null)
+    If found != Null Then Expect(RefEquals(found, first))
+    Expect((Try Assets.Find<Sprite>("res://test-one/tiles/wall.png")) == Null)
+    first.Free()
+    again.Free()
+End Function
+
+@Test
+Function EachLoadHoldsItOnceUntilItsFreed() Throws IOError
+    MountSprites("res://test-holds")
+    Defer Assets.Unmount("res://test-holds")
+    made = 0
+    Local first = Try Assets.Load<Sprite>("res://test-holds/hero.png")
+    Local second = Try Assets.Load<Sprite>("res://test-holds/hero.png")
+    first.Free()
+    // Another load still holds it.
+    Expect(!first.Freed)
+    Expect((Try Assets.Find<Sprite>("res://test-holds/hero.png")) != Null)
+    second.Free()
+    Expect(second.Freed)
+    Expect((Try Assets.Find<Sprite>("res://test-holds/hero.png")) == Null)
+    // The next load makes a new one.
+    Local third = Try Assets.Load<Sprite>("res://test-holds/hero.png")
+    Expect(!RefEquals(third, first))
+    Expect(made == 2)
+    third.Free()
+    // What no load gave is its own.
+    Local own = Sprite(1, SpriteSettings())
+    own.Free()
+    Expect(own.Freed)
+End Function
+
+Function LoadAndDrop(path: String) Throws IOError
+    Try Assets.Load<Sprite>(path)
+End Function
+
+@Test
+Function ItGoesWithItsLastReference() Throws IOError
+    MountSprites("res://test-last")
+    Defer Assets.Unmount("res://test-last")
+    made = 0
+    Try LoadAndDrop("res://test-last/hero.png")
+    Expect((Try Assets.Find<Sprite>("res://test-last/hero.png")) == Null)
+    Local again = Try Assets.Load<Sprite>("res://test-last/hero.png")
+    Expect(made == 2)
+    again.Free()
+End Function
+
+@Test
+Function LoadsOnTheWorkersShareOneLoadAndOneAsset() Throws IOError
+    MountSprites("res://test-share")
+    Defer Assets.Unmount("res://test-share")
+    made = 0
+    Local loads = fbe_assets_count()
+    Local first = Assets.LoadAsync<Sprite>("res://test-share/hero.png")
+    Local second = Assets.LoadAsync<Sprite>("res://test-share/HERO.PNG")
+    Expect(fbe_assets_count() == loads + 1)
+    Local a = Try first.Wait()
+    Local b = Try second.Wait()
+    Expect(RefEquals(a, b))
+    Expect(made == 1)
+    Expect(fbe_assets_count() == loads)
+    // One that's loaded is done at once, and held once more.
+    Local c = Try Assets.LoadAsync<Sprite>("res://test-share/hero.png").Wait()
+    Expect(RefEquals(a, c))
+    a.Free()
+    b.Free()
+    Expect(!c.Freed)
+    c.Free()
+    Expect(c.Freed)
+End Function
+
+@Test
+Function ALoadNowFinishesOneOnTheWorkers() Throws IOError
+    MountSprites("res://test-now")
+    Defer Assets.Unmount("res://test-now")
+    made = 0
+    Local later = Assets.LoadAsync<Sprite>("res://test-now/tiles/wall.png")
+    Local now = Try Assets.Load<Sprite>("res://test-now/tiles/wall.png")
+    Expect(now.Width == 32)
+    Local waited = Try later.Wait()
+    Expect(RefEquals(now, waited))
+    Expect(made == 1)
+    now.Free()
+    waited.Free()
+    Expect(waited.Freed)
+End Function
+
+@Test
+Function WhatFailsIsntKept() Throws IOError
+    Assets.MountFiles("res://test-fail", {"other.txt": "x".Bytes})
+    Expect(ExpectThrows<IOError>(Assets.Load<Sprite>("res://test-fail/late.png"))?.Kind ==
+           IOErrorKind.NOT_FOUND)
+    Local first = Assets.LoadAsync<Sprite>("res://test-fail/late.png")
+    Local second = Assets.LoadAsync<Sprite>("res://test-fail/late.png")
+    Expect(ExpectThrows<IOError>(first.Wait())?.Kind == IOErrorKind.NOT_FOUND)
+    Expect(ExpectThrows<IOError>(second.Wait())?.Kind == IOErrorKind.NOT_FOUND)
+    // Once it's there, it loads.
+    Assets.MountFiles("res://test-fail", {"late.png": Png.Encode(Image(4, 4))})
+    Defer Assets.Unmount("res://test-fail")
+    Local loaded = Try Assets.Load<Sprite>("res://test-fail/late.png")
+    Expect(loaded.Width == 4)
+    loaded.Free()
+    Expect(Assets.Unmount("res://test-fail"))
+End Function
+
+@Test
+Function TypesOfOneFileAreApart() Throws IOError
+    MountSprites("res://test-types")
+    Defer Assets.Unmount("res://test-types")
+    Local sprite = Try Assets.Load<Sprite>("res://test-types/hero.png")
+    Local outline = Try Assets.Load<Outline>("res://test-types/hero.png")
+    Expect((Try Assets.Find<Outline>("res://test-types/hero.png")) != Null)
+    Expect(sprite.Width == 16)
+    sprite.Free()
+    Expect(sprite.Freed)
+    Expect((Try Assets.Find<Outline>("res://test-types/hero.png")) != Null)
+    Expect(Assets.Release(outline))
+End Function
+
+@Test
+Function ASidecarGivesItsFilesImportSettings() Throws IOError
+    MountSprites("res://test-settings")
+    Defer Assets.Unmount("res://test-settings")
+    Local wall = Try Assets.Load<Sprite>("res://test-settings/Tiles/Wall.png")
+    Expect(wall.Settings.Filter == "nearest")
+    Expect(wall.Settings.Scale == 2.5)
+    // A snake_case key is its PascalCase Field's.
+    Expect(wall.Settings.AlphaCutoff == 0.25)
+    // What the sidecar leaves out is its default, and a file without one has them all.
+    Expect(wall.Settings.Mipmaps)
+    Local hero = Try Assets.Load<Sprite>("res://test-settings/hero.png")
+    Expect(hero.Settings.Filter == "linear")
+    Expect(hero.Settings.Scale == 1.0)
+    // Read without a load, as a tool would.
+    Local read = Try Assets.ReadSettings<SpriteSettings>("res://test-settings/tiles/wall.png")
+    Expect(read.Filter == "nearest")
+    Expect((Try Assets.ReadSettings<SpriteSettings>("res://test-settings/hero.png")).Scale == 1.0)
+    wall.Free()
+    hero.Free()
+End Function
+
+@Test
+Function ASidecarThatIsntSettingsDoesntLoad() Throws IOError
+    MountSprites("res://test-bad")
+    Defer Assets.Unmount("res://test-bad")
+    // Not TOML, a key's value of another type, not UTF-8, and a key that's no setting's.
+    For name In ["bad.png", "wrong.png", "binary.png", "typo.png"]
+        Local path = "res://test-bad/" + name
+        Local refused = ExpectThrows<IOError>(Assets.Load<Sprite>(path))
+        Expect(refused?.Kind == IOErrorKind.INVALID_DATA)
+        Expect(ExpectThrows<IOError>(Assets.ReadSettings<SpriteSettings>(path))?.Kind ==
+               IOErrorKind.INVALID_DATA)
+        // Nor is it kept.
+        Expect((Try Assets.Find<Sprite>(path)) == Null)
+    End For
+    Local bad = ExpectThrows<IOError>(Assets.Load<Sprite>("res://test-bad/bad.png"))
+    Expect(bad?.Path == "res://test-bad/bad.png.toml")
+    Local typo =
+        ExpectThrows<IOError>(Assets.ReadSettings<SpriteSettings>("res://test-bad/typo.png"))
+    Expect((typo?.Message ?? "").Contains("'filtr'"))
+End Function
