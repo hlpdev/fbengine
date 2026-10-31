@@ -570,9 +570,9 @@ void before_mix() {
         // what's read of it is what's heard.
         if (voice->quieting == quieting_t::PAUSING && !voice->pause_set) {
             voice->gains.silenced.store(true, std::memory_order_release);
-            ma_sound_set_stop_time_in_pcm_frames(
-                &voice->sound,
-                ma_engine_get_time_in_pcm_frames(engine()) + voice->gains.ramp_frames);
+            ma_sound_set_stop_time_in_pcm_frames(&voice->sound,
+                                                 ma_engine_get_time_in_pcm_frames(engine()) +
+                                                     voice->gains.ramp_frames);
             voice->pause_set = true;
         }
         if (voice->unlooped.exchange(false, std::memory_order_acq_rel)) {
