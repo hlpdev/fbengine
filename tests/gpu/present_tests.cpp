@@ -1,22 +1,24 @@
-// The GPU through fbengine's C API: starting it, and Flip presenting a headless window, which draws
-// into an image of its own, as a shown one's swapchain's. A swapchain needs a window on screen,
-// which no test opens.
+// The GPU through fbengine's C API: starting it, stopping it, and Flip presenting a headless
+// window, which draws into an image of its own, as a shown one's swapchain's. A swapchain needs a
+// window on screen, which no test opens. Each test ends by stopping the GPU, which has to leave
+// nothing behind.
+
+#include "gpu_testing.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <fbengine.h>
+#include <gpu/vulkan.hpp>
+#include <SDL3/SDL.h>
 #include <string>
 #include <string_view>
 
-namespace {
+using fbe::tests::require;
+using fbe::tests::set_variable;
+using fbe::tests::stop_gpu;
 
-/// Requires a call that can fail to have worked, saying fbe_error's why if it didn't.
-void require(bool worked) {
-    INFO(fbe_error());
-    REQUIRE(worked);
-}
+namespace {
 
 /// A headless window, open while it's in scope, with the GPU started.
 struct window_t {
@@ -34,18 +36,17 @@ struct window_t {
     }
 };
 
-/// Sets an environment variable, as the loader reads them, before Vulkan starts.
-void set_variable(const char* name, const char* value) {
-#ifdef _WIN32
-    REQUIRE(_putenv_s(name, value) == 0);
-#else
-    REQUIRE(setenv(name, value, 1) == 0);
-#endif
-}
-
 bool swapchain_is_windows_size() {
     return fbe_gpu_swapchain_width() == fbe_window_pixel_width() &&
            fbe_gpu_swapchain_height() == fbe_window_pixel_height();
+}
+
+/// What SDL logged while a test listened.
+std::string logged;
+
+void listen(void* /*user*/, int /*category*/, SDL_LogPriority /*priority*/, const char* message) {
+    logged += message;
+    logged += '\n';
 }
 
 } // namespace
@@ -64,7 +65,18 @@ TEST_CASE("the GPU starts on a device with what fbengine needs, with no window",
                  << (fbe_gpu_validating() ? ", validated" : ", not validated"));
     // Its device is set before it starts.
     CHECK(!fbe_gpu_set_device(-1));
-    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+}
+
+// CI sets FBE_GPU_VALIDATION where it installs the layers, so a run that should validate does.
+TEST_CASE("the GPU validates when FBE_GPU_VALIDATION is 1", "[gpu]") {
+    const char* setting = SDL_getenv("FBE_GPU_VALIDATION");
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_start());
+    if (setting != nullptr && std::string_view(setting) == "1") {
+        CHECK(fbe_gpu_validating());
+    }
+    stop_gpu();
 }
 
 // The loader's filter, which it takes even from an administrator, as its driver lists it doesn't.
@@ -84,16 +96,33 @@ TEST_CASE("with no driver, the GPU doesn't start, and says why each time", "[gpu
     fbe_frame_flip(false);
     CHECK(fbe_gpu_presented() == 0);
     fbe_window_close();
+    fbe_gpu_stop();
+}
+
+TEST_CASE("a start that fails is final, and frees what it made", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    // The device is made, and then its frames fail.
+    fbe::gpu::inject(fbe::gpu::fault_t::DEVICE);
+    CHECK(!fbe_gpu_start());
+    const std::string why = fbe_error();
+    CHECK(why.starts_with("couldn't make the GPU's frames"));
+    CHECK(!fbe_gpu_start());
+    CHECK(fbe_error() == why);
+    CHECK(!fbe_gpu_started());
+    CHECK(fbe::gpu::device() == nullptr);
+    stop_gpu();
 }
 
 TEST_CASE("a device that isn't there can't be picked", "[gpu]") {
     REQUIRE(fbe_window_set_headless(true));
     const std::int32_t count = fbe_gpu_device_count();
     CHECK(!fbe_gpu_set_device(count));
+    CHECK(std::string(fbe_error()) == "there's no GPU " + std::to_string(count));
     CHECK(!fbe_gpu_set_device(-2));
     CHECK(std::string_view(fbe_gpu_device_name(count)).empty());
     CHECK(fbe_gpu_set_device(0));
     CHECK(fbe_gpu_device() == 0);
+    fbe_gpu_stop();
 }
 
 TEST_CASE("a headless window opened before the GPU starts gets its image as it starts", "[gpu]") {
@@ -107,6 +136,24 @@ TEST_CASE("a headless window opened before the GPU starts gets its image as it s
     CHECK(swapchain_is_windows_size());
     fbe_window_close();
     CHECK(fbe_gpu_swapchain_width() == 0);
+    stop_gpu();
+}
+
+// SDL's offscreen video can't show a window, so it's headless to the GPU, whose start it doesn't
+// need, and which draws it into an image of its own.
+TEST_CASE("a window on SDL's offscreen video that isn't headless gets an image of its own",
+          "[gpu]") {
+    set_variable("SDL_VIDEO_DRIVER", "offscreen");
+    REQUIRE(!fbe_window_headless());
+    require(fbe_window_open(320, 200, FBE_WINDOW_WINDOWED));
+    CHECK(!fbe_gpu_started());
+    require(fbe_gpu_start());
+    CHECK(fbe_gpu_swapchain_headless());
+    const std::int64_t before = fbe_gpu_presented();
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before + 1);
+    fbe_window_close();
+    stop_gpu();
 }
 
 TEST_CASE("Flip presents with vsync and without", "[gpu]") {
@@ -121,7 +168,7 @@ TEST_CASE("Flip presents with vsync and without", "[gpu]") {
     CHECK(!fbe_gpu_swapchain_vsync());
     fbe_frame_flip(true);
     CHECK(fbe_gpu_swapchain_vsync());
-    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
 }
 
 TEST_CASE("the window's images follow its size and mode", "[gpu]") {
@@ -136,7 +183,7 @@ TEST_CASE("the window's images follow its size and mode", "[gpu]") {
     REQUIRE(fbe_window_set_mode(FBE_WINDOW_BORDERLESS));
     fbe_frame_flip(false);
     CHECK(swapchain_is_windows_size());
-    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
 }
 
 // Flip presents before it reads the OS's events, so the frame after the one that read them is the
@@ -153,7 +200,7 @@ TEST_CASE("a minimized window isn't presented", "[gpu]") {
     fbe_frame_flip(false);
     fbe_frame_flip(false);
     CHECK(fbe_gpu_presented() == before + 1);
-    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
 }
 
 TEST_CASE("a window opened again is presented again", "[gpu]") {
@@ -168,7 +215,72 @@ TEST_CASE("a window opened again is presented again", "[gpu]") {
     fbe_frame_flip(false);
     CHECK(fbe_gpu_presented() == before + 1);
     CHECK(swapchain_is_windows_size());
-    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
+}
+
+TEST_CASE("a stopped GPU frees everything, keeps the window, and starts again", "[gpu]") {
+    const window_t window(320, 200);
+    fbe_frame_flip(false);
+    stop_gpu();
+    CHECK(fbe_gpu_swapchain_width() == 0);
+    CHECK(fbe_window_is_open());
+    // Flip has nothing to present, and stopping again is nothing.
+    const std::int64_t before = fbe_gpu_presented();
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before);
+    fbe_gpu_stop();
+    require(fbe_gpu_start());
+    CHECK(swapchain_is_windows_size());
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before + 1);
+    stop_gpu();
+}
+
+// The fence and acquire semaphore a failed submit leaves are made again, or the next Flip with
+// that frame would wait forever.
+TEST_CASE("a frame whose submit fails doesn't stop the next ones", "[gpu]") {
+    const window_t window(320, 200);
+    fbe_frame_flip(false);
+    const std::int64_t before = fbe_gpu_presented();
+    fbe::gpu::inject(fbe::gpu::fault_t::SUBMIT);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before);
+    for (int i = 0; i < 4; ++i) {
+        fbe_frame_flip(false);
+    }
+    CHECK(fbe_gpu_presented() == before + 4);
+    stop_gpu();
+}
+
+TEST_CASE("a window's image whose view fails is gone, and the next Flip makes it again", "[gpu]") {
+    const window_t window(320, 200);
+    fbe_frame_flip(false);
+    REQUIRE(fbe_window_open(640, 480, FBE_WINDOW_WINDOWED));
+    const std::int64_t before = fbe_gpu_presented();
+    fbe::gpu::inject(fbe::gpu::fault_t::VIEW);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before);
+    CHECK(fbe_gpu_swapchain_width() == 0);
+    fbe_frame_flip(false);
+    CHECK(fbe_gpu_presented() == before + 1);
+    CHECK(swapchain_is_windows_size());
+    stop_gpu();
+}
+
+// SDL's offscreen video logs, as it loads Vulkan, when the driver has no headless surfaces, which
+// Windows' never have and fbengine never asks it for.
+TEST_CASE("starting the GPU logs nothing of headless surfaces", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    SDL_LogOutputFunction before = nullptr;
+    void* user = nullptr;
+    SDL_GetLogOutputFunction(&before, &user);
+    SDL_SetLogOutputFunction(listen, nullptr);
+    logged.clear();
+    const bool started = fbe_gpu_start();
+    SDL_SetLogOutputFunction(before, user);
+    require(started);
+    CHECK(!logged.contains("headless"));
+    stop_gpu();
 }
 
 // Not a check, a measure: what Flip costs the CPU for an empty frame, which the budget's 2 ms
@@ -187,5 +299,5 @@ TEST_CASE("an empty frame's Flip, timed", "[gpu]") {
         std::chrono::steady_clock::now() - start;
     WARN("an empty 1280x720 frame: " << spent.count() / frames << " ms a Flip on "
                                      << fbe_gpu_device_name(fbe_gpu_device()));
-    CHECK(fbe_gpu_validation_errors() == 0);
+    stop_gpu();
 }

@@ -67,9 +67,17 @@ Public Class Gpu
     /// -1 for the best.
     @MainThread Public Static Method Device(): Int32 => fbe_gpu_device()
 
-    /// Starts the GPU now, if it hasn't started, with a swapchain for the window if it's open.
+    /// Starts the GPU now, if it hasn't started, with a swapchain for the window if it's open. If it
+    /// can't, it never will, and throws why each time.
     @MainThread Public Static Method Start() Throws GraphicsError
         If !fbe_gpu_start() Then Throw GraphicsError(LastError())
+    End Method
+
+    /// Stops the GPU, if it's started, freeing everything it made, the window's swapchain first;
+    /// the window stays open, Flip presents nothing, and the GPU can start again, on the device
+    /// SetDevice says then.
+    @MainThread Public Static Method Stop()
+        fbe_gpu_stop()
     End Method
 
     /// Whether the GPU has started.
@@ -118,6 +126,7 @@ Public Class Gpu
     /// never when it's 0.
     @MainThread Public Static Method Validating(): Bool => fbe_gpu_validating()
 
-    /// How many errors the validation layers have found, each printed as it's found.
+    /// How many errors the validation layers have found since the program started, each printed
+    /// as it's found.
     @MainThread Public Static Method ValidationErrors(): Int32 => fbe_gpu_validation_errors()
 End Class

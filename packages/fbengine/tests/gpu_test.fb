@@ -7,9 +7,17 @@ Import std.os
 Import std.test
 Import std.text
 Import fbengine
+Import fbengine.c.fbe_core
 Import fbengine.c.fbe_gpu
 
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// What the last call that failed said.
+Function Why(): String
+    Unsafe
+        Return fbe_error().ToString()
+    End Unsafe
+End Function
 
 @Test
 Function TheDevicesSayWhatTheyLack() Throws GraphicsError
@@ -131,9 +139,34 @@ End Function
 Function TheDeviceCantBeSetToOneThatIsntThere() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Window.SetHeadless(True)
+    Gpu.Stop()
     Local count = (Try Gpu.Devices()).Count
     Expect(!fbe_gpu_set_device(count))
+    Expect(Why() == "there's no GPU {count}")
     Expect(!fbe_gpu_set_device(-2))
+    Expect(Why() == "there's no GPU -2")
+    Expect(fbe_gpu_set_device(-1))
+End Function
+
+@Test
+Function AStoppedGpuStartsAgainAndPresents() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Try Gpu.Start()
+    Flip()
+    Gpu.Stop()
+    Expect(!Gpu.Started())
+    Expect(Gpu.Name() == "")
+    Expect(Gpu.Pipelines() == 0)
+    Local before = Gpu.Presented()
+    Flip()
+    Expect(Gpu.Presented() == before)
+    Try Gpu.Start()
+    Flip()
+    Expect(Gpu.Presented() == before + 1)
+    Expect(Gpu.ValidationErrors() == 0)
 End Function
 
 @Test

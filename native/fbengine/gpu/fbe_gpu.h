@@ -35,9 +35,12 @@ FBE_API bool fbe_gpu_set_device(int32_t device);
 FBE_API int32_t fbe_gpu_device(void);
 
 // Starts the GPU, if it hasn't started, with a swapchain for the window if there is one; false if
-// it can't.
+// it can't, and then it never starts, saying why each time.
 FBE_API bool fbe_gpu_start(void);
 FBE_API bool fbe_gpu_started(void);
+// Stops the GPU, if it's started, freeing everything it made, the window's swapchain first; the
+// window stays open, and the GPU can start again.
+FBE_API void fbe_gpu_stop(void);
 
 // How many frames fbe_frame_flip has presented, which skips them while the window is minimized.
 // A headless window's are drawn into an image of its own, its size in pixels, which nothing shows.
@@ -61,9 +64,9 @@ FBE_API const char* fbe_gpu_pipeline_cache(void);
 // How many pipelines the GPU has made.
 FBE_API int32_t fbe_gpu_pipelines(void);
 
-// How many errors Vulkan's validation layers found since the GPU started, which are on in a debug
-// build of the DLL when the layers are there, or when FBE_GPU_VALIDATION is 1 (and off when it's
-// 0); each is printed as it's found.
+// How many errors Vulkan's validation layers have found since the program started, which are on
+// in a debug build of the DLL when the layers are there, or when FBE_GPU_VALIDATION is 1 (and off
+// when it's 0); each is printed as it's found.
 FBE_API int32_t fbe_gpu_validation_errors(void);
 FBE_API bool fbe_gpu_validating(void);
 

@@ -7,9 +7,10 @@ struct SDL_Window;
 
 namespace fbe {
 
-/// The window `opened` is open: one `on_screen` starts the GPU, which it needs to be seen, and a
-/// started GPU makes it a swapchain; false, with fbe_error's why, if that can't be done.
-bool gpu_window_opened(SDL_Window* opened, bool on_screen);
+/// The window `opened` is open: one that's shown, `unless_headless` and not on SDL's offscreen
+/// video, starts the GPU, which it needs to be seen, and a started GPU makes it its images; false,
+/// with fbe_error's why, if that can't be done.
+bool gpu_window_opened(SDL_Window* opened, bool unless_headless);
 
 /// The window is closing: its swapchain and surface go first.
 void gpu_window_closing();

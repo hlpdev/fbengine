@@ -2,6 +2,7 @@
 // with its golden image, pipelines made once, and the pipeline cache's file.
 
 #include "golden/golden.hpp"
+#include "gpu_testing.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -28,9 +29,7 @@ constexpr VkFormat rgba = VK_FORMAT_R8G8B8A8_UNORM;
 void start(const std::string& cache = "") {
     REQUIRE(fbe_window_set_headless(true));
     fbe_gpu_set_pipeline_cache(cache.c_str());
-    const bool started = fbe_gpu_start();
-    INFO(fbe_error());
-    REQUIRE(started);
+    fbe::tests::require(fbe_gpu_start());
 }
 
 /// A file of this test's in the system's temporary folder, gone as the test starts.
@@ -120,7 +119,7 @@ TEST_CASE("a triangle matches its golden image", "[gpu][golden]") {
     CHECK(frame.rgba[top] > 200);
     CHECK(frame.rgba[top + 2] < 50);
     fbe::golden::check("triangle", frame);
-    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe::tests::stop_gpu();
 }
 
 TEST_CASE("a pipeline described the same is made once", "[gpu]") {
@@ -142,7 +141,8 @@ TEST_CASE("a pipeline described the same is made once", "[gpu]") {
     CHECK(second != VK_NULL_HANDLE);
     CHECK(second != first);
     CHECK(fbe_gpu_pipelines() == before + 2);
-    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe::tests::stop_gpu();
+    CHECK(fbe_gpu_pipelines() == 0);
 }
 
 TEST_CASE("a pipeline isn't made before the GPU starts", "[gpu]") {
@@ -208,6 +208,25 @@ TEST_CASE("the pipeline cache is written at the Flip after pipelines are made", 
     fbe_frame_flip(false);
     CHECK(!fbe::gpu::unpack_pipeline_cache(read_file(path), properties).empty());
     CHECK(!std::filesystem::exists(std::filesystem::path(path) += ".partial"));
+    fbe::tests::stop_gpu();
+}
+
+// Stopping writes what's new first, so a program that stops its GPU keeps what it made.
+TEST_CASE("the pipelines are freed as the GPU stops, the cache written, and made again after",
+          "[gpu]") {
+    const std::filesystem::path path = scratch("stopped/pipelines.bin");
+    start(path.string());
+    const fbe::gpu::pipeline_desc_t desc{ .shader = &fbe::test_shaders::triangle, .color = rgba };
+    REQUIRE(fbe::gpu::pipeline(desc) != VK_NULL_HANDLE);
+    fbe::tests::stop_gpu();
+    CHECK(fbe_gpu_pipelines() == 0);
+    CHECK(std::filesystem::exists(path));
+    start(path.string());
+    CHECK(fbe::gpu::pipeline(desc) != VK_NULL_HANDLE);
+    CHECK(fbe_gpu_pipelines() == 1);
+    const fbe::golden::frame_t frame = draw_triangle({ .width = 128, .height = 128 });
+    fbe::golden::check("triangle", frame);
+    fbe::tests::stop_gpu();
 }
 
 TEST_CASE("a pipeline cache file that isn't whole is left, and pipelines are still made", "[gpu]") {
@@ -223,7 +242,7 @@ TEST_CASE("a pipeline cache file that isn't whole is left, and pipelines are sti
     fbe_frame_flip(false);
     CHECK(
         !fbe::gpu::unpack_pipeline_cache(read_file(path), fbe::gpu::device()->properties).empty());
-    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe::tests::stop_gpu();
 }
 
 TEST_CASE("a program's pipeline cache is in the user's cache folder by default", "[gpu]") {

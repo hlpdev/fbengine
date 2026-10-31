@@ -17,6 +17,7 @@
 #include <format>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -94,7 +95,9 @@ bool make_views(const fbe::gpu::device_t& gpu, VkFormat format) {
             },
         };
         VkImageView view = VK_NULL_HANDLE;
-        const VkResult result = vkCreateImageView(gpu.device, &info, nullptr, &view);
+        const VkResult result = fbe::gpu::faulted(fbe::gpu::fault_t::VIEW)
+                                    ? VK_ERROR_OUT_OF_HOST_MEMORY
+                                    : vkCreateImageView(gpu.device, &info, nullptr, &view);
         if (result != VK_SUCCESS) {
             return fbe::gpu::fail_vulkan("couldn't make the window's views", result);
         }
@@ -157,8 +160,10 @@ VkCompositeAlphaFlagBitsKHR composite_alpha(const VkSurfaceCapabilitiesKHR& capa
 }
 
 /// Makes the swapchain again for the window's size and `wait`, or none while the window has no
-/// pixels; false, with fbe_error's why, if it can't.
+/// pixels; false, with fbe_error's why, if it can't, leaving no images and the swapchain stale, so
+/// the next present tries again.
 bool make_swapchain(const fbe::gpu::device_t& gpu, bool wait) {
+    stale = true;
     VkSurfaceCapabilitiesKHR capabilities{
         .currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
     };
@@ -181,10 +186,10 @@ bool make_swapchain(const fbe::gpu::device_t& gpu, bool wait) {
     made_for = window_pixels();
     VkSwapchainKHR old = swapchain;
     swapchain = VK_NULL_HANDLE;
-    stale = false;
     vsync = wait;
     if (size.width == 0 || size.height == 0) {
         vkDestroySwapchainKHR(gpu.device, old, nullptr);
+        stale = false;
         return true;
     }
 
@@ -226,6 +231,7 @@ bool make_swapchain(const fbe::gpu::device_t& gpu, bool wait) {
     images.resize(count);
     vkGetSwapchainImagesKHR(gpu.device, swapchain, &count, images.data());
     if (!make_views(gpu, chosen.format)) {
+        destroy_images(gpu);
         return false;
     }
     for (std::uint32_t i = 0; i < count; ++i) {
@@ -235,21 +241,26 @@ bool make_swapchain(const fbe::gpu::device_t& gpu, bool wait) {
         VkSemaphore semaphore = VK_NULL_HANDLE;
         result = vkCreateSemaphore(gpu.device, &semaphore_info, nullptr, &semaphore);
         if (result != VK_SUCCESS) {
+            destroy_images(gpu);
             return fbe::gpu::fail_vulkan("couldn't make the swapchain's semaphores", result);
         }
         rendered.push_back(semaphore);
     }
     extent = size;
+    stale = false;
     return true;
 }
 
 /// Makes a headless window's image again for its size, or none while it has no pixels, and
-/// keeps `wait`, which nothing waits for; false, with fbe_error's why, if it can't.
+/// keeps `wait`, which nothing waits for; false, with fbe_error's why, if it can't, leaving no
+/// image and the next present to try again.
 bool make_headless(const fbe::gpu::device_t& gpu, bool wait) {
+    stale = true;
     destroy_images(gpu);
     made_for = window_pixels();
     vsync = wait;
     if (made_for.width == 0 || made_for.height == 0) {
+        stale = false;
         return true;
     }
     const VkImageCreateInfo image_info{
@@ -275,9 +286,11 @@ bool make_headless(const fbe::gpu::device_t& gpu, bool wait) {
     }
     images.push_back(headless);
     if (!make_views(gpu, headless_format)) {
+        destroy_images(gpu);
         return false;
     }
     extent = made_for;
+    stale = false;
     return true;
 }
 
@@ -286,9 +299,15 @@ bool make_images(const fbe::gpu::device_t& gpu, bool wait) {
     return surface != VK_NULL_HANDLE ? make_swapchain(gpu, wait) : make_headless(gpu, wait);
 }
 
+/// Whether the window is shown, as SDL's offscreen video's never are, though they're not headless.
+bool on_screen() {
+    const char* driver = SDL_GetCurrentVideoDriver();
+    return shown && (driver == nullptr || std::string_view(driver) != "offscreen");
+}
+
 /// A shown window's surface, if it hasn't one yet.
 bool create_surface(VkInstance vulkan) {
-    if (window == nullptr || !shown || surface != VK_NULL_HANDLE) {
+    if (window == nullptr || !on_screen() || surface != VK_NULL_HANDLE) {
         return true;
     }
     if (!SDL_Vulkan_CreateSurface(window, vulkan, nullptr, &surface)) {
@@ -364,8 +383,7 @@ void record(const fbe::gpu::device_t& gpu, VkCommandBuffer commands, std::uint32
     if (swapchain != VK_NULL_HANDLE) {
         fbe::gpu::barrier(commands, fbe::gpu::color_transition(
                                         images[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, output, write,
-                                        flag<VkPipelineStageFlags2>(VK_PIPELINE_STAGE_2_NONE), 0));
+                                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, output, write, output, 0));
     } else {
         fbe::gpu::barrier(commands, fbe::gpu::color_transition(
                                         images[index], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -424,17 +442,23 @@ bool start_with_window() {
     return window == nullptr || make_window(*device());
 }
 
+void stop_window() {
+    destroy_window();
+    made_for = {};
+    stale = false;
+}
+
 } // namespace fbe::gpu
 
 namespace fbe {
 
-bool gpu_window_opened(SDL_Window* opened, bool on_screen) {
+bool gpu_window_opened(SDL_Window* opened, bool unless_headless) {
     window = opened;
-    shown = on_screen;
+    shown = unless_headless;
     if (gpu::device() != nullptr) {
         return make_window(*gpu::device());
     }
-    return !on_screen || gpu::start_with_window();
+    return !on_screen() || gpu::start_with_window();
 }
 
 void gpu_window_closing() {
@@ -463,7 +487,7 @@ void gpu_present(bool wait) {
         return;
     }
 
-    const gpu::frame_t& frame = gpu.frames[gpu.frame];
+    gpu::frame_t& frame = gpu.frames[gpu.frame];
     vkWaitForFences(gpu.device, 1, &frame.done, VK_TRUE, UINT64_MAX);
     std::uint32_t index = 0;
     if (swapchain != VK_NULL_HANDLE) {
@@ -476,12 +500,18 @@ void gpu_present(bool wait) {
         if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
             return;
         }
-        stale = acquired == VK_SUBOPTIMAL_KHR;
+        stale = stale || acquired == VK_SUBOPTIMAL_KHR;
     }
     vkResetFences(gpu.device, 1, &frame.done);
     vkResetCommandPool(gpu.device, frame.pool, 0);
     record(gpu, frame.commands, index);
-    if (submit(gpu, frame, index) != VK_SUCCESS) {
+    const VkResult submitted = gpu::faulted(gpu::fault_t::SUBMIT) ? VK_ERROR_OUT_OF_HOST_MEMORY
+                                                                  : submit(gpu, frame, index);
+    if (submitted != VK_SUCCESS) {
+        // Nothing will signal the fence or wait on the acquire, so they're made again, and the
+        // image acquired and not presented goes with the swapchain.
+        gpu::remake_frame(gpu, frame);
+        stale = stale || swapchain != VK_NULL_HANDLE;
         return;
     }
     gpu.frame = (gpu.frame + 1) % gpu::frames_in_flight;
@@ -499,7 +529,7 @@ void gpu_present(bool wait) {
         .pImageIndices = &index,
     };
     const VkResult result = vkQueuePresentKHR(gpu.queue, &present);
-    stale = result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
+    stale = stale || result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR;
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
         ++presented;
     }

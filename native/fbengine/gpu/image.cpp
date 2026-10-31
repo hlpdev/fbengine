@@ -110,6 +110,15 @@ void destroy_image(image_t& image) {
     image = {};
 }
 
+void stop_immediate() {
+    const device_t* gpu = device();
+    vkDestroyFence(gpu->device, done, nullptr);
+    vkDestroyCommandPool(gpu->device, pool, nullptr);
+    done = VK_NULL_HANDLE;
+    pool = VK_NULL_HANDLE;
+    commands = VK_NULL_HANDLE;
+}
+
 bool run_now(const std::function<void(VkCommandBuffer)>& record) {
     const device_t* gpu = device();
     if (gpu == nullptr) {

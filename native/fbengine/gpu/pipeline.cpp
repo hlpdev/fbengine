@@ -433,6 +433,24 @@ void save_pipeline_cache() {
     write_file(path, pack_pipeline_cache(data, gpu->properties));
 }
 
+void stop_pipelines() {
+    const device_t* gpu = device();
+    save_pipeline_cache();
+    for (const auto& [desc, made] : pipelines()) {
+        vkDestroyPipeline(gpu->device, made, nullptr);
+    }
+    for (const auto& [shader, module] : modules()) {
+        vkDestroyShaderModule(gpu->device, module, nullptr);
+    }
+    pipelines().clear();
+    modules().clear();
+    vkDestroyPipelineLayout(gpu->device, layout, nullptr);
+    vkDestroyPipelineCache(gpu->device, cache, nullptr);
+    layout = VK_NULL_HANDLE;
+    cache = VK_NULL_HANDLE;
+    cached = 0;
+}
+
 std::vector<std::byte> pack_pipeline_cache(std::span<const std::byte> data,
                                            const VkPhysicalDeviceProperties& properties) {
     std::vector<std::byte> bytes;

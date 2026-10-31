@@ -61,8 +61,44 @@ VkInstance instance();
 device_t* device();
 
 /// Starts the GPU, making `surface` the swapchain's if there is one, which the device has to be
-/// able to present to; false, with fbe_error's why, if it can't.
+/// able to present to; false, with fbe_error's why, if it can't, and then it never starts.
 bool start(VkSurfaceKHR surface);
+
+/// Stops the GPU, if it's started, tearing everything down in order: the window's images and
+/// surface, the pipelines, the work-now commands, the frames, VMA, the device, the validation
+/// messenger, and the instance. It can start again.
+void stop();
+
+/// How many of VMA's allocations were left when the GPU last stopped, which is 0 unless something
+/// wasn't freed.
+std::uint32_t allocations_left();
+
+/// Makes a frame's fence, signaled, and its acquire semaphore again, after a submit that failed
+/// left them waiting on nothing; false, with fbe_error's why, if they can't be.
+bool remake_frame(const device_t& gpu, frame_t& frame);
+
+/// What each part of the GPU tears down as it stops: the window's images and surface, the
+/// pipelines and their cache, and the work-now commands.
+void stop_window();
+void stop_pipelines();
+void stop_immediate();
+
+/// Failures the tests make happen: the next time the GPU does that, it fails, as a driver can.
+enum class fault_t : std::uint8_t {
+    NONE,
+    /// Making an image's view.
+    VIEW,
+    /// Submitting a frame.
+    SUBMIT,
+    /// Making the device.
+    DEVICE,
+};
+
+/// Makes the next `fault` happen.
+void inject(fault_t fault);
+
+/// Whether `fault` is to happen now, which it then won't again.
+bool faulted(fault_t fault);
 
 /// Starts the GPU, if it hasn't started, with a surface and a swapchain for the window if there's
 /// one; false, with fbe_error's why, if it can't.

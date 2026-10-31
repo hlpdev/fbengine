@@ -29,6 +29,8 @@ struct candidate_t {
 };
 
 bool tried = false;
+/// Whether SDL has loaded Vulkan's loader for the instance, which stopping unloads.
+bool loaded = false;
 VkInstance vulkan = VK_NULL_HANDLE;
 /// Why Vulkan couldn't start, if it couldn't, which every call that needs it says again.
 std::string why_not;
@@ -39,6 +41,13 @@ std::int32_t wanted = -1;
 std::int32_t picked = -1;
 fbe::gpu::device_t current;
 bool started = false;
+/// Whether starting failed, which it then does every time, and why.
+bool failed = false;
+std::string why_failed;
+/// VMA's allocations left when the GPU last stopped.
+std::uint32_t leftovers = 0;
+/// The failure a test made happen next.
+fbe::gpu::fault_t injected = fbe::gpu::fault_t::NONE;
 
 bool validating = false;
 std::int32_t validation_errors = 0;
@@ -100,7 +109,13 @@ bool make_instance() {
     if (!fbe::start_video()) {
         return false;
     }
-    if (!SDL_Vulkan_LoadLibrary(nullptr)) {
+    // SDL's offscreen video logs, as it loads Vulkan, that the driver has no headless surfaces,
+    // which Windows' never have and fbengine never asks it for.
+    const SDL_LogPriority logging = SDL_GetLogPriority(SDL_LOG_CATEGORY_APPLICATION);
+    SDL_SetLogPriority(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_CRITICAL);
+    loaded = SDL_Vulkan_LoadLibrary(nullptr);
+    SDL_SetLogPriority(SDL_LOG_CATEGORY_APPLICATION, logging);
+    if (!loaded) {
         return fbe::fail_sdl("couldn't load Vulkan");
     }
     volkInitializeCustom(
@@ -456,7 +471,10 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         const VkSemaphoreCreateInfo semaphore_info{
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         };
-        VkResult result = vkCreateCommandPool(current.device, &pool_info, nullptr, &frame.pool);
+        VkResult result =
+            fbe::gpu::faulted(fbe::gpu::fault_t::DEVICE)
+                ? VK_ERROR_INITIALIZATION_FAILED
+                : vkCreateCommandPool(current.device, &pool_info, nullptr, &frame.pool);
         if (result == VK_SUCCESS) {
             const VkCommandBufferAllocateInfo commands_info{
                 .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -477,6 +495,31 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         }
     }
     return true;
+}
+
+/// Destroys what make_device made, whatever it got as far as: the frames, VMA (counting what's left
+/// in it, which it then keeps rather than fail), and the device.
+void destroy_device() {
+    if (current.device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(current.device);
+        for (const fbe::gpu::frame_t& frame : current.frames) {
+            vkDestroySemaphore(current.device, frame.acquired, nullptr);
+            vkDestroyFence(current.device, frame.done, nullptr);
+            vkDestroyCommandPool(current.device, frame.pool, nullptr);
+        }
+    }
+    if (current.allocator != VK_NULL_HANDLE) {
+        VmaTotalStatistics statistics{};
+        vmaCalculateStatistics(current.allocator, &statistics);
+        leftovers = statistics.total.statistics.allocationCount;
+        if (leftovers == 0) {
+            vmaDestroyAllocator(current.allocator);
+        }
+    }
+    if (current.device != VK_NULL_HANDLE) {
+        vkDestroyDevice(current.device, nullptr);
+    }
+    current = {};
 }
 
 /// The kind of a device, as fbe_gpu.h numbers them.
@@ -534,20 +577,82 @@ bool start(VkSurfaceKHR surface) {
     if (started) {
         return true;
     }
-    if (!list_devices(surface)) {
-        return false;
+    if (failed) {
+        return fail(why_failed);
     }
-    const std::int32_t index = pick();
-    if (index < 0) {
-        return false;
-    }
-    if (!make_device(candidates[static_cast<std::size_t>(index)], surface)) {
-        // What was made is left for the process to free; a GPU that failed once isn't retried.
+    const std::int32_t index = list_devices(surface) ? pick() : -1;
+    if (index < 0 || !make_device(candidates[static_cast<std::size_t>(index)], surface)) {
+        why_failed = fbe_error();
+        failed = true;
+        destroy_device();
         return false;
     }
     picked = index;
     started = true;
     start_pipeline_cache();
+    return true;
+}
+
+void stop() {
+    if (started) {
+        vkDeviceWaitIdle(current.device);
+        stop_window();
+        stop_pipelines();
+        stop_immediate();
+        destroy_device();
+        started = false;
+        picked = -1;
+    }
+    candidates.clear();
+    if (vulkan != VK_NULL_HANDLE) {
+        if (messenger != VK_NULL_HANDLE) {
+            vkDestroyDebugUtilsMessengerEXT(vulkan, messenger, nullptr);
+            messenger = VK_NULL_HANDLE;
+        }
+        vkDestroyInstance(vulkan, nullptr);
+        vulkan = VK_NULL_HANDLE;
+    }
+    if (loaded) {
+        SDL_Vulkan_UnloadLibrary();
+        loaded = false;
+    }
+    tried = false;
+    why_not.clear();
+}
+
+std::uint32_t allocations_left() {
+    return leftovers;
+}
+
+bool remake_frame(const device_t& gpu, frame_t& frame) {
+    vkDestroyFence(gpu.device, frame.done, nullptr);
+    vkDestroySemaphore(gpu.device, frame.acquired, nullptr);
+    frame.done = VK_NULL_HANDLE;
+    frame.acquired = VK_NULL_HANDLE;
+    const VkFenceCreateInfo fence_info{
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .flags = flag<VkFenceCreateFlags>(VK_FENCE_CREATE_SIGNALED_BIT),
+    };
+    const VkSemaphoreCreateInfo semaphore_info{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+    };
+    VkResult result = vkCreateFence(gpu.device, &fence_info, nullptr, &frame.done);
+    if (result == VK_SUCCESS) {
+        result = vkCreateSemaphore(gpu.device, &semaphore_info, nullptr, &frame.acquired);
+    }
+    return result == VK_SUCCESS ? true
+                                : fail_vulkan("couldn't make a frame's fences again", result);
+}
+
+void inject(fault_t fault) {
+    injected = fault;
+}
+
+bool faulted(fault_t fault) {
+    if (injected != fault || fault == fault_t::NONE) {
+        return false;
+    }
+    injected = fault_t::NONE;
     return true;
 }
 
@@ -598,6 +703,10 @@ FBE_API bool fbe_gpu_start(void) {
 
 FBE_API bool fbe_gpu_started(void) {
     return started;
+}
+
+FBE_API void fbe_gpu_stop(void) {
+    fbe::gpu::stop();
 }
 
 FBE_API int32_t fbe_gpu_validation_errors(void) {
