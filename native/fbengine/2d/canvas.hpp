@@ -29,4 +29,7 @@ struct glyph_t {
 bool draw_glyphs(std::uint64_t target, const fbe_2d_pen_t* pen, std::uint64_t page, bool coverage,
                  std::span<const glyph_t> glyphs);
 
+/// Trims the text atlas, as a frame's first canvas draw does, if this frame's hasn't yet.
+void trim_atlas();
+
 } // namespace fbe::canvas

@@ -245,4 +245,7 @@ void count_draws(std::uint64_t draws, std::uint64_t triangles);
 void count_passes(std::uint32_t passes, std::uint32_t barriers);
 void count_upload(std::uint64_t bytes);
 
+/// How many frames have been submitted, which tells one frame from the next.
+std::uint64_t submitted_frames();
+
 } // namespace fbe::gpu

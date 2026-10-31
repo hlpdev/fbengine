@@ -724,6 +724,16 @@ std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, st
     });
 }
 
+std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height,
+                                    std::int32_t format) {
+    return create({
+        .width = width,
+        .height = height,
+        .format = format,
+        .engine = true,
+    });
+}
+
 std::uint32_t pixel_size(std::int32_t format) {
     switch (format) {
     case FBE_TEXTURE_RGBA8:

@@ -45,6 +45,8 @@ Public Extern "C" Lib "fbengine_native"
                             count: Int32, filled: Bool): Bool
     Function fbe_2d_texture(target: UInt64, pen: Ptr<fbe_2d_pen_t>, texture: UInt64,
                             sprite: Ptr<fbe_2d_sprite_t>, x: Float32, y: Float32): Bool
+    Function fbe_2d_text(target: UInt64, pen: Ptr<fbe_2d_pen_t>, font: UInt64, text: CString,
+                         length: Int32, x: Int32, y: Int32): Bool
     Function fbe_2d_tile(target: UInt64, pen: Ptr<fbe_2d_pen_t>, texture: UInt64,
                          sprite: Ptr<fbe_2d_sprite_t>, x: Float32, y: Float32): Bool
 End Extern

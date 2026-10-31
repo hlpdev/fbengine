@@ -101,4 +101,8 @@ std::uint32_t pixel_size(std::int32_t format);
 std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, std::int32_t format,
                                    VkSampleCountFlagBits samples, bool depth);
 
+/// A texture the engine makes for itself, `width` by `height` of an FBE_TEXTURE_ format, without
+/// mipmaps, as create_engine_target's are.
+std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format);
+
 } // namespace fbe::texture

@@ -284,6 +284,10 @@ void count_upload(std::uint64_t bytes) {
     counting.uploaded += static_cast<std::int64_t>(bytes);
 }
 
+std::uint64_t submitted_frames() {
+    return flips;
+}
+
 bool submit_frame(VkSemaphore wait, VkSemaphore signal) {
     device_t& gpu = *device();
     frame_t& frame = gpu.frames[gpu.frame];

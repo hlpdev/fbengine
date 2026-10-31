@@ -13,6 +13,7 @@
 
 #include "2d/fbe_2d.h"
 #include "2d/shapes.hpp"
+#include "2d/text_standin.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/buffer.hpp"
@@ -218,6 +219,9 @@ void flush() {
     }
 }
 
+/// The frame the text atlas was last trimmed in, by its first canvas draw.
+std::uint64_t trimmed = UINT64_MAX;
+
 /// Forgets what the batch has, as a lost GPU or a stop does.
 void drop() {
     ready = false;
@@ -253,6 +257,7 @@ bool begin(std::uint64_t target, const fbe_2d_pen_t* pen, std::int32_t blend = p
     if (pen->blend < FBE_2D_SOLID || pen->blend > FBE_2D_MULTIPLY) {
         return fbe::fail(std::format("{} isn't a Blend", pen->blend));
     }
+    fbe::canvas::trim_atlas();
     if (pen->viewport_width < 0 || pen->viewport_height < 0) {
         return fbe::fail(std::format("a viewport is 0 by 0 or bigger, not {}x{}",
                                      pen->viewport_width, pen->viewport_height));
@@ -622,6 +627,14 @@ void add_rect(std::int64_t x, std::int64_t y, std::int64_t width, std::int64_t h
 } // namespace
 
 namespace fbe::canvas {
+
+void trim_atlas() {
+    const std::uint64_t frame = fbe::gpu::submitted_frames();
+    if (frame != trimmed) {
+        trimmed = frame;
+        fbe::text::atlas().trim();
+    }
+}
 
 bool draw_glyphs(std::uint64_t target, const fbe_2d_pen_t* pen, std::uint64_t page, bool coverage,
                  std::span<const glyph_t> glyphs) {
