@@ -118,7 +118,10 @@ Steps 3 to 7 done (2026-10-31, landed at 3698cf3).
    position, normal, entity, and triangle.
 10. Sprites and billboards as entities; `UpdateWorld(seconds)` and `FixedStep(rate)` with
     tweening.
-11. Loose ends and E4's review.
+11. Loose ends and E4's review: ground planes, mirrors, fading by distance, meshes crossing.
+12. Terrain: a heightmap entity made in code or from an image (E8's loading), its height and
+    normal at a point, collisions and picks against its grid, changed in place; its LOD drawing
+    is E5's.
 
 ### E5: Drawing the scene
 
