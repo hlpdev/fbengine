@@ -121,6 +121,19 @@ Function HooksRunAtEveryFlipInOrderUntilRemoved()
     Expect(said == "abb")
 End Function
 
+// Late hooks run after every other, in the order they were added, wherever they were added.
+@Test
+Function LateHooksRunAfterTheOthers()
+    said = ""
+    Local hooks = [Frame.OnFlip(SayA, late: True), Frame.OnFlip(SayB), Frame.OnFlip(SayH, True),
+                   Frame.OnFlip(SayC)]
+    Flip()
+    Expect(said == "bcah")
+    For hook In hooks
+        Frame.RemoveOnFlip(hook)
+    End For
+End Function
+
 // A hook runs before the coroutines waiting for the tick, so they see what it did that frame.
 @Test
 Function HooksRunBeforeCoroutinesResume()
@@ -147,4 +160,8 @@ End Function
 
 Function SayH()
     said += "h"
+End Function
+
+Function SayC()
+    said += "c"
 End Function
