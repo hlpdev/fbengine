@@ -35,6 +35,7 @@ include(cmake/assets.cmake)
 add_subdirectory(native/fbengine)
 add_subdirectory(native/fbengine_physics)
 add_subdirectory(native/fbengine_audio)
+add_subdirectory(native/fbengine_tools)
 
 if(FBENGINE_BUILD_TESTS)
   enable_testing()

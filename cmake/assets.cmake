@@ -24,6 +24,9 @@ set(KTX_FEATURE_VK_UPLOAD OFF CACHE BOOL "" FORCE)
 set(KTX_FEATURE_ETC_UNPACK OFF CACHE BOOL "" FORCE)
 set(KTX_FEATURE_LOADTEST_APPS "" CACHE STRING "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# The ASTC encoder in libktx's writer, the cooker's, for SSE4.1, as the engine's other code is
+# for x86-64's SSE4 at most, not AVX2.
+set(ASTCENC_ISA_SSE41 ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
   KTX
   GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
@@ -61,3 +64,14 @@ endif()
 # URI's base64 shorter than 4 characters, and end the process in a debug build; its own code is
 # built as a release's is, and the engine checks what they would.
 target_compile_definitions(fastgltf PRIVATE NDEBUG)
+
+# fbengine's DLLs are UCRT's (cmake/native.cmake), so libktx is built for UCRT too: its encoder's
+# sprintf_s is UCRT's, inlined from the headers, which msvcrt's has no export of. What links the
+# writer links UCRT, as the assets tests do.
+if(MINGW)
+  foreach(target IN ITEMS ktx_read ktx objUtil astcenc-sse4.1-static)
+    if(TARGET ${target})
+      target_compile_definitions(${target} PRIVATE _UCRT)
+    endif()
+  endforeach()
+endif()

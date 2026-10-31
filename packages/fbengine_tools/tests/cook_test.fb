@@ -1,0 +1,122 @@
+// The cooker: images cooked into KTX2s the engine loads as they are, and a game's folder cooked into
+// a pak, each file at its own path, by its sidecar's settings.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.jpeg
+Import std.image.png
+Import std.io
+Import std.test
+Import fbengine
+Import fbengine_tools
+
+// What the engine loaded of an image: its format and its mips.
+Class Loaded Implements Asset
+    Field Info: ImageInfo
+
+    New(info: ImageInfo)
+        Info = info
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): Loaded Throws IOError => Loaded(load.Image())
+End Class
+
+// The image the cooker made of a 64 by 32 PNG, as `settings` say, as the engine loads it.
+Function CookedInfo(settings: ImageSettings): ImageInfo Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "source.png", Png.Encode(Image(64, 32)))
+    Try Cooker.CookImage(folder.Path / "source.png", folder.Path / "cooked.png", settings)
+    Assets.MountFolder("res://test-cooked", folder.Path)
+    Defer Assets.Unmount("res://test-cooked")
+    Return (Try Assets.Load<Loaded>("res://test-cooked/cooked.png")).Info
+End Function
+
+@Test
+Function AnImageCooksToWhatTheGpuReads() Throws IOError
+    // BC7, sRGB, and its mips, from 64 across down to 1.
+    Local platform = Try CookedInfo(ImageSettings())
+    Expect(platform.Format == 146)
+    Expect(platform.Width == 64)
+    Expect(platform.Height == 32)
+    Expect(platform.Levels == 7)
+    Local linear = ImageSettings()
+    linear.Srgb = False
+    linear.Mipmaps = False
+    Local data = Try CookedInfo(linear)
+    Expect(data.Format == 145)
+    Expect(data.Levels == 1)
+    Local astc = ImageSettings()
+    astc.Compression = ImageCompression.ASTC
+    Expect((Try CookedInfo(astc)).Format == 158)
+    Local none = ImageSettings()
+    none.Compression = ImageCompression.NONE
+    Expect((Try CookedInfo(none)).Format == 43)
+    // UASTC is transcoded as it loads, to RGBA8 until the GPU says what it reads.
+    Local uastc = ImageSettings()
+    uastc.Compression = ImageCompression.UASTC
+    Local transcoded = Try CookedInfo(uastc)
+    Expect(transcoded.Format == 43)
+    Expect(transcoded.Levels == 7)
+End Function
+
+@Test
+Function WhatIsntAnImageDoesntCook() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteText(folder.Path / "notes.txt", "not an image")
+    Expect(ExpectThrows<IOError>(Cooker.CookImage(folder.Path / "notes.txt",
+                                                  folder.Path / "out.png",
+                                                  ImageSettings()))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(!File.Exists(folder.Path / "out.png"))
+End Function
+
+@Test
+Function AFolderCooksIntoAPakAtItsOwnPaths() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try Dir.CreateAll(source.Path / "Textures")
+    Try Dir.CreateAll(source.Path / "models")
+    Try File.WriteBytes(source.Path / "Textures" / "Wall.png", Png.Encode(Image(16, 16)))
+    Try File.WriteText(source.Path / "Textures" / "Wall.png.toml",
+                       "compression = \"astc\"\nmipmaps = false\n")
+    Try File.WriteBytes(source.Path / "hud.jpg", Jpeg.Encode(Image(8, 8)))
+    Try File.WriteText(source.Path / "readme.txt", "hello")
+    Try File.WriteText(source.Path / "models" / "door.gltf", "a model, as it is")
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
+
+    Try Assets.MountPak("res://test-pak", built.Path / "game.pak")
+    Defer Assets.Unmount("res://test-pak")
+    // Cooked at the path it had, as its sidecar says.
+    Local wall = (Try Assets.Load<Loaded>("res://test-pak/textures/wall.png")).Info
+    Expect(wall.Format == 158)
+    Expect(wall.Levels == 1)
+    Local hud = (Try Assets.Load<Loaded>("res://test-pak/hud.jpg")).Info
+    Expect(hud.Format == 146)
+    Expect(hud.Levels == 4)
+    // The rest as it is, the sidecar too, for the settings the game reads as it runs.
+    Expect((Try Assets.ReadText("res://test-pak/readme.txt")) == "hello")
+    Expect((Try Assets.ReadText("res://test-pak/models/door.gltf")) == "a model, as it is")
+    Local settings = Try Assets.ReadSettings<ImageSettings>("res://test-pak/textures/wall.png")
+    Expect(settings.Compression == ImageCompression.ASTC)
+    Expect(!settings.Mipmaps)
+End Function
+
+@Test
+Function AFolderWithABadSidecarWritesNoPak() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try File.WriteBytes(source.Path / "a.png", Png.Encode(Image(4, 4)))
+    Try File.WriteText(source.Path / "a.png.toml", "compresion = \"bc7\"")
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(!File.Exists(built.Path / "game.pak"))
+End Function

@@ -391,6 +391,10 @@ target_link_libraries(fbengine_stb_write PUBLIC fbengine_stb)
 target_link_libraries(fbengine_assets_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
                       fastgltf::fastgltf)
 fbengine_set_warnings(fbengine_assets_tests)
+# libktx is UCRT's here, as the DLLs are (cmake/assets.cmake).
+if(MINGW)
+  target_link_options(fbengine_assets_tests PRIVATE -mcrtdll=ucrt)
+endif()
 catch_discover_tests(fbengine_assets_tests TEST_PREFIX "assets."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
@@ -414,3 +418,32 @@ if(FBENGINE_FB_TESTS)
                          "panic: [^\n]*${said}[^\n]* at [^\n]*assets/panics/main\\.fb:")
   endforeach()
 endif()
+
+# fbengine's app area apart from its DLL: what it shows nothing for, and what a link opens, on
+# Windows read back through the shell; it opens nothing.
+add_executable(fbengine_app_tests app/app_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine/app/link.cpp")
+target_include_directories(fbengine_app_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_link_libraries(fbengine_app_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
+if(WIN32)
+  target_link_libraries(fbengine_app_tests PRIVATE shlwapi)
+endif()
+fbengine_set_warnings(fbengine_app_tests)
+catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# The cooker's C++, built into the tests from its own sources, which read back what it makes with
+# libktx, which is UCRT's here, as the DLLs are.
+add_executable(fbengine_tools_tests tools/cook_tests.cpp assets/files.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/image.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/stb.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp")
+target_include_directories(fbengine_tools_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_tools"
+                           "${PROJECT_SOURCE_DIR}/native/fbengine")
+target_link_libraries(fbengine_tools_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx)
+fbengine_set_warnings(fbengine_tools_tests)
+if(MINGW)
+  target_link_options(fbengine_tools_tests PRIVATE -mcrtdll=ucrt)
+endif()
+catch_discover_tests(fbengine_tools_tests TEST_PREFIX "tools."
+                     DL_PATHS "${fbengine_test_dll_paths}")
