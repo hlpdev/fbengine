@@ -65,18 +65,38 @@ if(FBENGINE_FB_TESTS)
                        PASS_REGULAR_EXPRESSION "Running hello[^\n]*\nfbengine ${PROJECT_VERSION}\r?\n$")
 endif()
 
-# fbengine_audio's own C++, where it's subtle: what's in its headers, with nothing to link.
-add_executable(fbengine_audio_tests audio/pool_tests.cpp)
+# fbengine_audio's own C++, where it's subtle: what's in its headers, and miniaudio's backends.
+add_executable(fbengine_audio_tests audio/pool_tests.cpp audio/backends_tests.cpp)
 target_include_directories(fbengine_audio_tests PRIVATE "${PROJECT_SOURCE_DIR}/native/fbengine_audio")
-target_link_libraries(fbengine_audio_tests PRIVATE Catch2::Catch2WithMain)
+target_link_libraries(fbengine_audio_tests PRIVATE fbengine_miniaudio Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_audio_tests)
 catch_discover_tests(fbengine_audio_tests TEST_PREFIX "audio."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
-# Playing a sound to miniaudio's null backend, as a game plays to its device.
+# On Windows, fbengine_audio_native's C API with OLE, on the null backend.
+if(WIN32)
+  add_executable(fbengine_audio_ole_tests audio/ole_tests.cpp)
+  target_link_libraries(fbengine_audio_ole_tests PRIVATE fbengine_audio_native ole32
+                        Catch2::Catch2WithMain)
+  fbengine_set_warnings(fbengine_audio_ole_tests)
+  catch_discover_tests(fbengine_audio_ole_tests TEST_PREFIX "audio."
+                       DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_audio_native>")
+endif()
+
+# Playing a sound to miniaudio's null backend, as a game plays to its device; and ending with the
+# audio started, as a program does and as a panic does, which ends at once, never waiting on its
+# device's thread.
 if(FBENGINE_FB_TESTS)
   add_test(NAME examples.sound
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/sound")
-  set_tests_properties(examples.sound PROPERTIES
+  set_tests_properties(examples.sound PROPERTIES TIMEOUT 60
                        PASS_REGULAR_EXPRESSION "Running sound[^\n]*\nplayed 0.25 seconds of tone.ogg\r?\n$")
+  add_test(NAME examples.audio_exit
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_exit")
+  set_tests_properties(examples.audio_exit PROPERTIES TIMEOUT 60
+                       PASS_REGULAR_EXPRESSION "Running audio_exit[^\n]*\nending with the audio started\r?\n$")
+  add_test(NAME examples.audio_panic
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_panic")
+  set_tests_properties(examples.audio_panic PROPERTIES TIMEOUT 60
+                       PASS_REGULAR_EXPRESSION "panic: a mistake, with the audio started at [^\n]*\n.*exited with code 101")
 endif()

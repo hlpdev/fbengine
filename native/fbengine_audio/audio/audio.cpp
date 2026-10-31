@@ -1,6 +1,7 @@
 // The mix: fbe_audio_start makes miniaudio's engine, on the OS's default device, on the null
 // backend, or on none, where fbe_audio_mix pulls each frame, as tests and offline renders do.
 
+#include "audio/backends.hpp"
 #include "audio/mixer.hpp"
 #include "bus/buses.hpp"
 #include "channel/voices.hpp"
@@ -15,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -84,18 +86,21 @@ void play(ma_device* device, void* output, const void* /*input*/, ma_uint32 fram
     playing->frames.fetch_add(frames, std::memory_order_relaxed);
 }
 
-/// Opens `made`'s device, on the null backend or the OS's default; false if it won't open.
+/// Opens `made`'s device, on the null backend or the OS's own; false if it won't open, as on a
+/// machine with no output for the OS's.
 bool open_device(mixer_t& made, std::int32_t kind, std::int32_t sample_rate,
                  std::int32_t channels) {
-    if (kind == null_device) {
-        const std::array<ma_backend, 1> backends = { ma_backend_null };
-        const ma_result result =
-            ma_context_init(backends.data(), backends.size(), nullptr, &made.context);
-        if (result != MA_SUCCESS) {
-            return fbe::audio::fail_ma("couldn't start the null backend", result);
-        }
-        made.has_context = true;
+    const std::vector<ma_backend> backends = kind == null_device
+                                                 ? std::vector<ma_backend>{ ma_backend_null }
+                                                 : fbe::audio::output_backends();
+    ma_result result = ma_context_init(backends.data(), static_cast<ma_uint32>(backends.size()),
+                                       nullptr, &made.context);
+    if (result != MA_SUCCESS) {
+        return fbe::audio::fail_ma(kind == null_device ? "couldn't start the null backend"
+                                                       : "there's no audio output to play to",
+                                   result);
     }
+    made.has_context = true;
 
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     config.playback.format = ma_format_f32;
@@ -103,8 +108,7 @@ bool open_device(mixer_t& made, std::int32_t kind, std::int32_t sample_rate,
     config.sampleRate = static_cast<ma_uint32>(sample_rate);
     config.dataCallback = play;
     config.pUserData = &made;
-    const ma_result result =
-        ma_device_init(made.has_context ? &made.context : nullptr, &config, &made.device);
+    result = ma_device_init(&made.context, &config, &made.device);
     if (result != MA_SUCCESS) {
         return fbe::audio::fail_ma("couldn't open the audio device", result);
     }
@@ -273,6 +277,8 @@ FBE_AUDIO_API bool fbe_audio_mix(float* samples, int32_t frames) {
     const ma_uint32 channels = ma_engine_get_channels(&mixer->engine);
     ma_silence_pcm_frames(ma_offset_pcm_frames_ptr_f32(samples, read, channels),
                           static_cast<ma_uint64>(frames) - read, ma_format_f32, channels);
+    // Clipped to -1 to 1, as a device's output is.
+    ma_clip_samples_f32(samples, samples, static_cast<ma_uint64>(frames) * channels);
     mixer->frames.fetch_add(frames, std::memory_order_relaxed);
     return true;
 }

@@ -29,6 +29,9 @@ configure_file("${fbengine_miniaudio_source}.in" "${fbengine_miniaudio_source}" 
 add_library(fbengine_miniaudio STATIC "${fbengine_miniaudio_source}")
 target_include_directories(fbengine_miniaudio SYSTEM PUBLIC "${miniaudio_SOURCE_DIR}")
 target_compile_definitions(fbengine_miniaudio PUBLIC MA_NO_MP3 MA_NO_ENCODING)
+# miniaudio's COM on Windows is apartment-threaded, as SDL's OLE, which a window's drag and drop
+# needs, is on the same thread; multithreaded, miniaudio's default, would make OleInitialize fail.
+target_compile_definitions(fbengine_miniaudio PRIVATE MA_COINIT_VALUE=2)
 set_target_properties(fbengine_miniaudio PROPERTIES POSITION_INDEPENDENT_CODE ON)
 find_package(Threads REQUIRED)
 target_link_libraries(fbengine_miniaudio PUBLIC Threads::Threads)

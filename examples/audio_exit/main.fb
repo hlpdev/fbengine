@@ -1,0 +1,8 @@
+// Ends with the audio started, as a game that never calls Audio.Stop does: the program ends at
+// once, its device's thread with it.
+
+Import std.core
+Import fbengine_audio
+
+Try Audio.Start(AudioDevice.SILENT)
+Print("ending with the audio started")

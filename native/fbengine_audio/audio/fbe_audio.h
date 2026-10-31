@@ -30,11 +30,11 @@ FBE_AUDIO_API const char* fbe_audio_version(void);
 // What the last call that failed on this thread says went wrong.
 FBE_AUDIO_API const char* fbe_audio_error(void);
 
-// Starts the mix on `device`: 0 the OS's default output, 1 miniaudio's null backend, which plays
-// to nothing at the pace a device would, or 2 none, where fbe_audio_mix makes each frame when it's
-// called. `sample_rate` is from 8000 to 384000 Hz and `channels` from 1 to 8, or 0 for the
-// device's own (48000 Hz and 2 with no device). False if it's started already, a value's out of
-// range, or the device won't start.
+// Starts the mix on `device`: 0 the OS's default output, on any of its backends but the null one,
+// 1 miniaudio's null backend, which plays to nothing at the pace a device would, or 2 none, where
+// fbe_audio_mix makes each frame when it's called. `sample_rate` is from 8000 to 384000 Hz and
+// `channels` from 1 to 8, or 0 for the device's own (48000 Hz and 2 with no device). False if it's
+// started already, a value's out of range, or the device won't start.
 FBE_AUDIO_API bool fbe_audio_start(int32_t device, int32_t sample_rate, int32_t channels);
 // Stops the mix, which finishes every channel, and lets the device go; stopped already, it does
 // nothing.
@@ -54,8 +54,8 @@ FBE_AUDIO_API int64_t fbe_audio_frames(void);
 FBE_AUDIO_API bool fbe_audio_set_volume(float volume);
 FBE_AUDIO_API float fbe_audio_volume(void);
 // Mixes the next `frames` frames into `samples`, which has room for frames times
-// fbe_audio_channels() floats, interleaved; false unless it's started with no device, or if
-// `frames` is negative.
+// fbe_audio_channels() floats, interleaved, clipped to -1 to 1 as a device's are; false unless it's
+// started with no device, or if `frames` is negative.
 FBE_AUDIO_API bool fbe_audio_mix(float* samples, int32_t frames);
 
 #ifdef __cplusplus

@@ -9,7 +9,7 @@ Import "./c/fbe_listener"
 /// game puts it where its camera is, each frame. Its place, rotation, and velocity are in
 /// std.math's axes, right-handed, Y up, and -Z forward, and in the game's units, and are kept while
 /// the audio's stopped.
-Public Class Listener
+Public Final Class Listener
     Static Field position: Vec3 = Vec3(0, 0, 0)
     Static Field rotation: Quat = Quat.Identity
     Static Field velocity: Vec3 = Vec3(0, 0, 0)
