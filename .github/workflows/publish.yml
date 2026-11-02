@@ -5,6 +5,8 @@ name: Publish
 # runs by hand, on the tag v<version>: `gh workflow run publish.yml --ref v0.1.0 -f
 # registry=staging`. Each target's DLLs are built first (native.yml), into the packages' target
 # archives; then fb's release adds each package from the registry, on each target, and runs it.
+# Published to futureblitz, it's posted last in the Discord server's releases channel, through the
+# webhook DISCORD_RELEASES_WEBHOOK, pinging the role DISCORD_RELEASES_ROLE.
 
 on:
   workflow_dispatch:
@@ -155,3 +157,39 @@ jobs:
           output="$(fb --color never run | tr -d '\r')"
           printf '%s\n' "$output"
           test "$(printf '%s\n' "$output" | tail -n 1)" = "fbengine $VERSION"
+
+  # The release's notes, when the tag has a GitHub release, else the package's page. Only the
+  # engine role is pinged.
+  discord:
+    name: discord
+    needs: [version, check]
+    if: inputs.registry == 'futureblitz'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Post it
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK }}
+          ROLE: ${{ vars.DISCORD_RELEASES_ROLE }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ -z "$WEBHOOK" ] || [ -z "$ROLE" ]; then
+            echo "::error::DISCORD_RELEASES_WEBHOOK or DISCORD_RELEASES_ROLE isn't set"
+            exit 1
+          fi
+          link="https://pkg.futureblitz.dev/packages/fbengine"
+          summary=""
+          if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            link="https://github.com/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
+            summary="$(gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" --json body -q .body \
+              | awk 'NF { print; next } { exit }' | head -c 1200)"
+          fi
+          content="$(printf '<@&%s> **fbengine %s** is out.' "$ROLE" "$VERSION")"
+          if [ -n "$summary" ]; then
+            content="$(printf '%s\n\n%s' "$content" "$summary")"
+          fi
+          content="$(printf '%s\n\nRelease notes: <%s>' "$content" "$link")"
+          jq -n --arg content "$content" --arg role "$ROLE" \
+            '{ content: $content, allowed_mentions: { parse: [], roles: [$role] } }' \
+            | curl -fsS -H 'Content-Type: application/json' -d @- "$WEBHOOK"
