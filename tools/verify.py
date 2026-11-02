@@ -9,7 +9,7 @@ file, clang-tidy on the C++ files that changed since --base (all of an area's wh
 changed), and `fb fmt --check` on the packages and examples. It ends with "everything passed", or
 how many checks failed; a landing's push waits on that line.
 
-Two verifies run at a time on a machine: each waits for its turn before it builds, since six at
+Four verifies run at a time on a machine: each waits for its turn before it builds, since six at
 once have left Windows unable to start programs, each failure a dialog on the user's screen. Its
 build folder is held the whole run, so a second verify of that folder is refused. --only runs
 just the tests matching a regular expression, in its turn, for what a fix touches; it never prints
@@ -39,7 +39,7 @@ FALLBACKS = {
 CLANG_FORMAT_VERSION = "19.1.5"
 failures = []
 # One lock for each verify that may run at a time on this machine.
-TURNS = ["turn.lock", "turn2.lock"]
+TURNS = ["turn.lock", "turn2.lock", "turn3.lock", "turn4.lock"]
 
 
 def step(name):
