@@ -9,7 +9,7 @@ file, clang-tidy on the C++ files that changed since --base (all of an area's wh
 changed), and `fb fmt --check` on the packages and examples. It ends with "everything passed", or
 how many checks failed; a landing's push waits on that line.
 
-One verify runs at a time on a machine: it waits for its turn before it builds, since several at
+Two verifies run at a time on a machine: each waits for its turn before it builds, since six at
 once have left Windows unable to start programs, each failure a dialog on the user's screen. Its
 build folder is held the whole run, so a second verify of that folder is refused. --only runs
 just the tests matching a regular expression, in its turn, for what a fix touches; it never prints
@@ -38,6 +38,8 @@ FALLBACKS = {
 # The clang-format CI pins (ci.yml), which every check formats with.
 CLANG_FORMAT_VERSION = "19.1.5"
 failures = []
+# One lock for each verify that may run at a time on this machine.
+TURNS = ["turn.lock", "turn2.lock"]
 
 
 def step(name):
@@ -83,15 +85,17 @@ def hold_build(build):
 
 
 def wait_for_turn():
-    """Waits until no other verify on this machine is running, and holds that until this one exits."""
-    file = lock_file("turn.lock")
+    """Waits for one of the machine's turns, and holds it until this verify exits."""
+    files = [lock_file(name) for name in TURNS]
     waited = False
-    while not try_lock(file):
+    while True:
+        for file in files:
+            if try_lock(file):
+                return file
         if not waited:
-            print("waiting for the other verify on this machine to finish", flush=True)
+            print("waiting for the other verifies on this machine to finish", flush=True)
             waited = True
         time.sleep(5)
-    return file
 
 
 def run(command, **options):
