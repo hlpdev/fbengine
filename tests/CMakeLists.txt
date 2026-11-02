@@ -545,7 +545,8 @@ add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp a
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
-               tools/pak_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/pak.cpp")
+               tools/pak_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/tools/atomic.cpp")
 target_include_directories(fbengine_tools_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_tools"
                            "${PROJECT_SOURCE_DIR}/native/fbengine")
@@ -598,13 +599,16 @@ if(FBENGINE_FB_TESTS)
            "${CMAKE_CURRENT_SOURCE_DIR}/jobs/ends")
   set_tests_properties(jobs.ends PROPERTIES TIMEOUT 180
                        PASS_REGULAR_EXPRESSION "
-each ended?
+each ended
+?
 $")
 endif()
 
 # A game whose build step is fbengine_tools', built each way in a folder of its own, one at a time,
 # as they share its build folder: its files as they are, then cooked into its pak.
 if(FBENGINE_FB_TESTS)
+  # The cooker's threads, which can't hold up a whole run if they ever hang again.
+  set_tests_properties(fbengine_tools.package PROPERTIES TIMEOUT 600)
   set(fbengine_game "${CMAKE_CURRENT_BINARY_DIR}/tools_game")
   file(COPY tools/game/main.fb tools/game/assets DESTINATION "${fbengine_game}")
   configure_file(tools/game/project.toml.in "${fbengine_game}/project.toml" @ONLY)

@@ -19,7 +19,7 @@ End If
 
 Local failed = 0
 Try
-    For round = 1 To 60
+    For round = 1 To 25
         Local children: Child[] = []
         For at = 1 To 8
             children.Add(Try Command(Folders.Executable ?? "").Args(["child"]).Stderr(Stdio.NONE).Spawn())

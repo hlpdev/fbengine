@@ -176,7 +176,14 @@ view_t vfs_t::view() const {
     return view_t(m_mounts);
 }
 
-result_t<bytes_t> view_t::read(const path_t& path) const {
+error_t too_big(std::string_view shown, std::uint64_t size) {
+    return {
+        .failure = failure_t::OTHER,
+        .message = std::format("{} is {} bytes, more than can be read at once", shown, size),
+    };
+}
+
+result_t<bytes_t> view_t::read(const path_t& path, std::uint64_t most) const {
     const error_t folder{
         .failure = failure_t::IS_A_FOLDER,
         .message = std::format("{} is a folder", path.text()),
@@ -197,7 +204,7 @@ result_t<bytes_t> view_t::read(const path_t& path) const {
         const std::size_t depth = mount.at.keys.size();
         const std::span<const std::string> names = std::span(path.names).subspan(depth);
         const std::span<const std::string> keys = std::span(path.keys).subspan(depth);
-        result_t<std::optional<bytes_t>> bytes = mount.source->read(names, keys);
+        result_t<std::optional<bytes_t>> bytes = mount.source->read(names, keys, most);
         if (!bytes) {
             return std::unexpected(std::move(bytes.error()));
         }

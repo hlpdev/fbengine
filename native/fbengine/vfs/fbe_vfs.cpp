@@ -11,6 +11,7 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -152,7 +153,9 @@ int64_t read(const char* path, bool text) {
         failed(parsed.error());
         return -1;
     }
-    vfs::result_t<vfs::bytes_t> bytes = vfs::files().read(*parsed);
+    // What fb's arrays hold, Int's range.
+    constexpr std::uint64_t most = std::numeric_limits<int32_t>::max();
+    vfs::result_t<vfs::bytes_t> bytes = vfs::files().read(*parsed, most);
     if (!bytes) {
         failed(bytes.error());
         return -1;
@@ -160,6 +163,11 @@ int64_t read(const char* path, bool text) {
     if (text) {
         const std::string well = vfs::well_formed(
             std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+        // U+FFFD is longer than a byte it stands for.
+        if (well.size() > most) {
+            failed(vfs::too_big(parsed->text(), well.size()));
+            return -1;
+        }
         read_bytes.assign(well.begin(), well.end());
     } else {
         read_bytes = std::move(*bytes);

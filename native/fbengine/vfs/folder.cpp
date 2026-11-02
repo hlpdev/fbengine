@@ -32,7 +32,8 @@ public:
     explicit folder_source_t(fs::path folder) : m_folder(std::move(folder)) {}
 
     result_t<std::optional<bytes_t>> read(std::span<const std::string> /*names*/,
-                                          std::span<const std::string> keys) override {
+                                          std::span<const std::string> keys,
+                                          std::uint64_t most) override {
         if (keys.empty()) {
             return std::optional<bytes_t>{};
         }
@@ -52,6 +53,9 @@ public:
                 .failure = failure_t::OTHER,
                 .message = std::format("couldn't read {}", utf8(file)),
             });
+        }
+        if (opened->size() > most) {
+            return std::unexpected(too_big(utf8(file), opened->size()));
         }
         try {
             if (faulted(fault_t::OUT_OF_MEMORY)) {

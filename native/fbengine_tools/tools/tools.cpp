@@ -5,13 +5,12 @@
 #include "tools/tools.hpp"
 
 #include "fbengine_tools.h"
+#include "tools/atomic.hpp"
 #include "vfs/disk.hpp"
 
 #include <format>
-#include <fstream>
 #include <memory>
 #include <span>
-#include <system_error>
 
 namespace {
 
@@ -62,35 +61,14 @@ std::expected<bytes_t, std::string> read_file(std::string_view path) {
 
 std::expected<void, std::string> write_file(std::string_view path,
                                             std::span<const std::uint8_t> bytes) {
-    const std::filesystem::path file = disk_path(path);
-    std::error_code error;
-    if (file.has_parent_path()) {
-        std::filesystem::create_directories(file.parent_path(), error);
+    atomic_file_t file;
+    if (std::expected<void, std::string> opened = file.open(path); !opened) {
+        return opened;
     }
-    // Beside it, by a name of the OS's own characters, as a std::filesystem::path's conversions
-    // from a char's would need codecvt; an ofstream that couldn't open stays good on MinGW, so
-    // that's asked too.
-    const std::filesystem::path written(
-        file.native() + std::filesystem::path::string_type{ '.', 'c', 'o', 'o', 'k' });
-    {
-        std::ofstream stream(written, std::ios::binary);
-        if (!stream.is_open()) {
-            return std::unexpected(std::format("couldn't write {}", path));
-        }
-        stream.write(reinterpret_cast<const char*>(bytes.data()),
-                     static_cast<std::streamsize>(bytes.size()));
-        stream.close();
-        if (stream.fail()) {
-            std::filesystem::remove(written, error);
-            return std::unexpected(std::format("couldn't write {}", path));
-        }
-    }
-    std::filesystem::rename(written, file, error);
-    if (error) {
-        std::filesystem::remove(written, error);
+    if (!file.write_at(0, bytes)) {
         return std::unexpected(std::format("couldn't write {}", path));
     }
-    return {};
+    return file.commit();
 }
 
 } // namespace fbe::tools

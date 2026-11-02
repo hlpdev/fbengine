@@ -485,7 +485,8 @@ Public Final Class Assets
 
     /// The bytes of the file at `path`, from the last mount that has it. One that no mount has
     /// throws an IOError of NOT_FOUND, a folder one of IS_A_DIRECTORY, a path that isn't a res://
-    /// path one of INVALID_PATH, and a pak's file it can't find in its pak one of INVALID_DATA.
+    /// path one of INVALID_PATH, a pak's file it can't find in its pak one of INVALID_DATA, and one
+    /// of more bytes than a UInt8[] holds one of OTHER.
     @MainThread
     Public Static Method ReadBytes(path: String): UInt8[] Throws IOError
         Return Try Kept(path, fbe_vfs_read(path))
@@ -495,6 +496,7 @@ Public Final Class Assets
     @MainThread
     Static Method Kept(path: String, size: Int64): UInt8[] Throws IOError
         If size < 0 Then Throw Failed(path)
+        // The engine refuses what an array doesn't hold.
         Local bytes: UInt8[] = []
         If size == 0 Then Return bytes
         bytes.Resize(size As Int, 0)
@@ -940,12 +942,12 @@ Public Final Class Assets
     /// when it begins, whatever's mounted while it waits.
     @MainThread
     Public Static Async Method ReadBytesAsync(path: String): UInt8[] Throws IOError
-        Local load = fbe_assets_load_async(AssetKind.BYTES As Int32, path, False, False)
+        Local load = fbe_assets_read_async(path)
         If load == 0 Then Throw IOError(FailureKind(fbe_assets_load_failure()), LastError(), path)
         Await Jobs.Finished(load)
         Local held = AssetLoad(load)
         If fbe_assets_failed(load) Then Throw LoadFailed(load, path)
-        Return held.Bytes()
+        Return Try held.Bytes()
     End Method
 
     // The IOError of a load that failed.

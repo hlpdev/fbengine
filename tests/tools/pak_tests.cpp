@@ -19,6 +19,10 @@
 #include <string>
 #include <string_view>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace {
 
 namespace tools = fbe::tools;
@@ -171,3 +175,153 @@ TEST_CASE("a pak that isn't finished leaves what was there", "[tools]") {
     files.mount(path("res://"), pak(to));
     REQUIRE(read(files, "res://a.txt") == test::bytes("alpha"));
 }
+
+TEST_CASE("a pak's names are what the engine's reader takes, so a finished pak always mounts",
+          "[tools]") {
+    const test::temp_folder_t folder;
+    folder.write("a.txt", "alpha");
+    const std::string from = utf8(folder.path / "a.txt");
+    const std::filesystem::path to = folder.path / "game.pak";
+    const std::unique_ptr<tools::pak_writer_t> writer = opened(to);
+    added(*writer, "A.txt", folder.path / "a.txt");
+    added(*writer, "foo", folder.path / "a.txt");
+    added(*writer, "bar/baz.txt", folder.path / "a.txt");
+    added(*writer, ".hidden/ok.txt", folder.path / "a.txt");
+    std::string deep;
+    for (int i = 0; i < 300; ++i) {
+        deep += "d/";
+    }
+    for (const std::string& name : {
+             std::string(5000, 'x'),
+             deep + "a.txt",
+             std::string("../evil.txt"),
+             std::string("C:/win.txt"),
+             std::string("con.txt"),
+             std::string("a:b.txt"),
+             std::string("trailing."),
+             std::string("/abs.txt"),
+             std::string("a/../b2.txt"),
+             std::string("x/."),
+             std::string("./dot.txt"),
+             std::string("bad\xFFutf8.txt"),
+             // Another's name, in some case, its folder's, and a folder of a file.
+             std::string("a.TXT"),
+             std::string("Foo/bar.txt"),
+             std::string("BAR"),
+         }) {
+        std::expected<void, tools::error_t> refused = writer->add(name, from);
+        INFO(name);
+        REQUIRE_FALSE(refused.has_value());
+        REQUIRE(refused.error().failure == vfs::failure_t::INVALID_DATA);
+    }
+    finished(*writer);
+    vfs::vfs_t files;
+    files.mount(path("res://"), pak(to));
+    REQUIRE(read(files, "res://a.txt") == test::bytes("alpha"));
+}
+
+TEST_CASE("a pak replaces one that's mounted, which goes on reading as it was", "[tools]") {
+    const test::temp_folder_t folder;
+    folder.write("old.txt", "old");
+    folder.write("new.txt", "new");
+    const std::filesystem::path to = folder.path / "game.pak";
+    const std::unique_ptr<tools::pak_writer_t> first = opened(to);
+    added(*first, "a.txt", folder.path / "old.txt");
+    finished(*first);
+    vfs::vfs_t mounted;
+    mounted.mount(path("res://"), pak(to));
+    const std::unique_ptr<tools::pak_writer_t> second = opened(to);
+    added(*second, "a.txt", folder.path / "new.txt");
+    finished(*second);
+    REQUIRE(read(mounted, "res://a.txt") == test::bytes("old"));
+    vfs::vfs_t again;
+    again.mount(path("res://"), pak(to));
+    REQUIRE(read(again, "res://a.txt") == test::bytes("new"));
+}
+
+TEST_CASE("two writers of one pak don't touch each other's files", "[tools]") {
+    const test::temp_folder_t folder;
+    folder.write("one.txt", "one");
+    folder.write("two.txt", "two");
+    const std::filesystem::path to = folder.path / "game.pak";
+    const std::unique_ptr<tools::pak_writer_t> first = opened(to);
+    const std::unique_ptr<tools::pak_writer_t> second = opened(to);
+    added(*first, "a.txt", folder.path / "one.txt");
+    added(*second, "a.txt", folder.path / "two.txt");
+    finished(*first);
+    {
+        vfs::vfs_t files;
+        files.mount(path("res://"), pak(to));
+        REQUIRE(read(files, "res://a.txt") == test::bytes("one"));
+    }
+    finished(*second);
+    vfs::vfs_t files;
+    files.mount(path("res://"), pak(to));
+    REQUIRE(read(files, "res://a.txt") == test::bytes("two"));
+}
+
+TEST_CASE("a folder where a pak goes is found as it opens, and a folder beside it is left",
+          "[tools]") {
+    const test::temp_folder_t folder;
+    std::filesystem::create_directories(folder.path / "game.pak");
+    const std::expected<std::unique_ptr<tools::pak_writer_t>, tools::error_t> refused =
+        tools::pak_writer_t::open(utf8(folder.path / "game.pak"));
+    REQUIRE_FALSE(refused.has_value());
+    // What a fixed name of the writer's used to be, which it took out.
+    std::filesystem::create_directories(folder.path / "other.pak.cook");
+    { const std::unique_ptr<tools::pak_writer_t> writer = opened(folder.path / "other.pak"); }
+    REQUIRE(std::filesystem::is_directory(folder.path / "other.pak.cook"));
+}
+
+TEST_CASE("a pak out of memory as it adds can only be let go of", "[tools]") {
+    const test::temp_folder_t folder;
+    folder.write("a.txt", "alpha");
+    const std::filesystem::path to = folder.path / "game.pak";
+    const std::unique_ptr<tools::pak_writer_t> writer = opened(to);
+    vfs::inject(vfs::fault_t::OUT_OF_MEMORY);
+    REQUIRE_THROWS((void)writer->add("a.txt", utf8(folder.path / "a.txt")));
+    vfs::inject(vfs::fault_t::NONE);
+    REQUIRE_FALSE(writer->finish().has_value());
+    REQUIRE_FALSE(std::filesystem::exists(to));
+}
+
+#ifndef _WIN32
+TEST_CASE("a pak keeps the mode of what it replaces, and goes through a link", "[tools]") {
+    const test::temp_folder_t folder;
+    folder.write("a.txt", "alpha");
+    folder.write("real.pak", "what was there");
+    std::filesystem::permissions(folder.path / "real.pak", std::filesystem::perms::owner_read |
+                                                               std::filesystem::perms::owner_write);
+    std::filesystem::create_symlink(folder.path / "real.pak", folder.path / "game.pak");
+    const std::unique_ptr<tools::pak_writer_t> writer = opened(folder.path / "game.pak");
+    added(*writer, "a.txt", folder.path / "a.txt");
+    finished(*writer);
+    REQUIRE(std::filesystem::is_symlink(folder.path / "game.pak"));
+    REQUIRE(std::filesystem::status(folder.path / "real.pak").permissions() ==
+            (std::filesystem::perms::owner_read | std::filesystem::perms::owner_write));
+    vfs::vfs_t files;
+    files.mount(path("res://"), pak(folder.path / "real.pak"));
+    REQUIRE(read(files, "res://a.txt") == test::bytes("alpha"));
+}
+#else
+TEST_CASE("a pak goes through a link", "[tools]") {
+    const test::temp_folder_t folder;
+    folder.write("a.txt", "alpha");
+    folder.write("real.pak", "what was there");
+    // Unprivileged where Windows' developer mode lets it; elsewhere there's no link to go through.
+    constexpr DWORD unprivileged = 0x2;
+    if (CreateSymbolicLinkW((folder.path / "game.pak").c_str(), (folder.path / "real.pak").c_str(),
+                            unprivileged) == 0) {
+        SUCCEED("no link can be made here");
+        return;
+    }
+    const std::unique_ptr<tools::pak_writer_t> writer = opened(folder.path / "game.pak");
+    added(*writer, "a.txt", folder.path / "a.txt");
+    finished(*writer);
+    REQUIRE((GetFileAttributesW((folder.path / "game.pak").c_str()) &
+             FILE_ATTRIBUTE_REPARSE_POINT) != 0);
+    vfs::vfs_t files;
+    files.mount(path("res://"), pak(folder.path / "real.pak"));
+    REQUIRE(read(files, "res://a.txt") == test::bytes("alpha"));
+}
+#endif

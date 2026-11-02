@@ -86,7 +86,7 @@ Public Final Class Cooker
     // CookModel, with `root` as res://, which the glTF's paths go no higher than.
     Static Method CookModelIn(from: Path, to: Path, root: Path,
                               settings: ModelSettings) Throws IOError
-        If !IsModel(from, Try Start(from, SNIFFED))
+        If !Try IsModel(from, Try Start(from, SNIFFED))
             Throw IOError(IOErrorKind.INVALID_DATA, "{from} isn't a glTF", from.Text)
         End If
         Local options = fbe_cook_model_t(settings.Optimize,
@@ -110,9 +110,13 @@ Public Final Class Cooker
     /// Assets.ReadSettings does, and so do a glTF the engine wouldn't load, two names that differ
     /// only in case, which res:// can't tell apart, and a folder more than 32 deep, as links that
     /// go round make one; and a file whose name no res:// path can have throws one of
-    /// INVALID_PATH. With a `cache`, a folder it keeps, an image or glTF is cooked again only when
-    /// its bytes, its settings, what it reads, or this package's version change, and what no file
-    /// uses any more is taken out of it.
+    /// INVALID_PATH, as does one with a '\', which res:// reads as between folders. A glTF that names
+    /// what's left out, as a hidden folder's image, throws one of INVALID_DATA, since it wouldn't
+    /// load from the pak, and so do a file and a folder, or two folders, whose names differ only in
+    /// case. A glTF of more than 2 GB can't be cooked, and throws one of OTHER; a binary glTF whose
+    /// JSON is more than 256 MB leaves the buffers it names in the pak. With a `cache`, a folder it
+    /// keeps, an image or glTF is cooked again only when its bytes, its settings, what it reads, or
+    /// this package's version change, and what no file uses any more is taken out of it.
     @MainThread
     Public Static Method CookFolder(source: Path, pak: Path, cache: Path? = Null) Throws IOError
         cooks += 1
@@ -126,6 +130,11 @@ Public Final Class Cooker
         // Names that differ only in case, which a case-sensitive disk keeps apart.
         Local seen = Map<String, String>()
         For file In files
+            If file.1.Contains("\\")
+                Throw IOError(IOErrorKind.INVALID_PATH,
+                              "{file.1} has a '\\', which res:// reads as between folders",
+                              file.0.Text)
+            End If
             Local other = seen.Get(Folded(file.1))
             If other != Null
                 Throw IOError(IOErrorKind.INVALID_DATA,
@@ -133,6 +142,26 @@ Public Final Class Cooker
                               source.Text)
             End If
             seen[Folded(file.1)] = file.1
+        End For
+        // Folders too, which can't then be a file's name, or spelled two ways.
+        Local folders = Map<String, String>()
+        For file In files
+            Local parts = file.1.Split("/")
+            Local folder = ""
+            For at = 0 Until parts.Count - 1
+                folder += (at == 0 ? "" : "/") + parts[at]
+                Local other = folders.Get(Folded(folder)) ?? seen.Get(Folded(folder))
+                If other != Null && other != folder
+                    Throw IOError(IOErrorKind.INVALID_DATA,
+                                  "{source} has {other} and {folder}, which res:// can't tell apart",
+                                  source.Text)
+                End If
+                If seen.Get(Folded(folder)) != Null
+                    Throw IOError(IOErrorKind.INVALID_DATA,
+                                  "{source} has {folder} as a file and a folder", source.Text)
+                End If
+                folders[Folded(folder)] = folder
+            End For
         End For
         Local output = OnDisk(pak)
         // What each file is, by its start, and the buffers the glTFs name, by their names folded,
@@ -147,9 +176,14 @@ Public Final Class Cooker
                 kind = CookedAs.ITSELF
                 If IsImage(start)
                     kind = CookedAs.IMAGE
-                ElseIf IsModel(file.0, start)
+                ElseIf Try IsModel(file.0, start)
                     kind = CookedAs.MODEL
-                    For named In BuffersOf(file.1, Try JsonOf(file.0, start), place)
+                    Local json = Try JsonOf(file.0, start)
+                    For named In UrisOf(file.1, json, place, "images")
+                        Try RefuseLeftOut(file.1, named)
+                    End For
+                    For named In BuffersOf(file.1, json, place)
+                        Try RefuseLeftOut(file.1, named)
                         buffers.Add(named)
                     End For
                 End If
@@ -250,11 +284,29 @@ Public Final Class Cooker
     // header and JSON chunk, up to MOST_JSON of it, and all of a glTF.
     Static Method JsonOf(path: Path, start: UInt8[]): UInt8[] Throws IOError
         If start.Count >= 20 && start[0..4] == "glTF".Bytes
-            Local length = (start[12] As Int) | ((start[13] As Int) << 8) |
-                           ((start[14] As Int) << 16) | ((start[15] As Int) << 24)
-            Return Try Start(path, 20 + Min(length, MOST_JSON))
+            Local length = JsonLength(start)
+            If length > MOST_JSON Then Return start
+            Return Try Start(path, 20 + (length As Int))
         End If
         Return Try File.ReadBytes(path)
+    End Method
+
+    // The length a binary glTF's header, in `bytes`, gives its JSON chunk, which a corrupt one can
+    // make anything a UInt32 holds.
+    Static Method JsonLength(bytes: UInt8[]): Int64
+        Return (bytes[12] As Int64) | ((bytes[13] As Int64) << 8) | ((bytes[14] As Int64) << 16) |
+               ((bytes[15] As Int64) << 24)
+    End Method
+
+    // Throws an IOError of INVALID_DATA for the glTF `name`, which names `named`, what the cooker
+    // leaves out, as it wouldn't load from the pak.
+    Static Method RefuseLeftOut(name: String, named: String) Throws IOError
+        For part In named.Split("/")
+            If LeftOut(part)
+                Throw IOError(IOErrorKind.INVALID_DATA,
+                              "{name} names {named}, which a pak leaves out", name)
+            End If
+        End For
     End Method
 
     // Adds the files in `folder`, which is `relative` from the folder cooked, and in each folder
@@ -284,8 +336,10 @@ Public Final Class Cooker
                 ElseIf File.Exists(entry.Path)
                     kind = FileKind.FILE
                 Else
-                    // One whose target isn't there is left out.
+                    // One whose target isn't there is left out; one the OS gives up following, as
+                    // macOS does past 32 links, Linux past 40, is links that go round.
                     Try Reachable(entry.Path)
+                    Try Followable(entry.Path)
                     Continue
                 End If
             End If
@@ -303,6 +357,20 @@ Public Final Class Cooker
     Static Method OnDisk(path: Path): String
         Local text = ((Try? path.Absolute()) ?? path).Text
         Return System.Platform == Platform.LINUX ? text : Folded(text)
+    End Method
+
+    // Throws an IOError of INVALID_DATA for the link at `path`, which isn't a folder or a file, when
+    // that's because the OS won't follow it, not because nothing's there.
+    Static Method Followable(path: Path) Throws IOError
+        Try
+            Try File.Metadata(path)
+        Catch e As IOError
+            If e.Kind != IOErrorKind.NOT_FOUND
+                Throw IOError(IOErrorKind.INVALID_DATA,
+                              "{path} can't be followed, as links that go round make one: {e.Message}",
+                              path.Text)
+            End If
+        End Try
     End Method
 
     // Throws, for `path`, which a listing has but the OS can't reach, an IOError of INVALID_DATA
@@ -337,13 +405,19 @@ Public Final Class Cooker
     // The buffers the glTF `name`, whose bytes are `bytes`, names by their paths, as names from
     // the folder cooked, folded, which `place` is mounted at.
     Static Method BuffersOf(name: String, bytes: UInt8[], place: String): String[]
+        Return UrisOf(name, bytes, place, "buffers")
+    End Method
+
+    // What the glTF `name`, whose JSON is in `bytes`, names by their paths in its array `array`, as
+    // names from the folder cooked, folded, which `place` is mounted at. One whose JSON can't be
+    // read names nothing, which the cook then refuses.
+    Static Method UrisOf(name: String, bytes: UInt8[], place: String, array: String): String[]
         Local json = bytes
         // A binary glTF's JSON is its first chunk's.
         If bytes.Count >= 20 && bytes[0..4] == "glTF".Bytes
-            Local length = (bytes[12] As Int) | ((bytes[13] As Int) << 8) |
-                           ((bytes[14] As Int) << 16) | ((bytes[15] As Int) << 24)
-            If 20 + length > bytes.Count Then Return []
-            json = bytes[20..20 + length]
+            Local length = JsonLength(bytes)
+            If length > MOST_JSON || 20 + length > bytes.Count Then Return []
+            json = bytes[20..20 + (length As Int)]
         End If
         Local text = String.FromUtf8(json)
         If text == Null Then Return []
@@ -355,8 +429,8 @@ Public Final Class Cooker
         For at = 0 Until names.Count - 1
             folder += names[at] + "/"
         End For
-        For buffer In (read["buffers"]?.AsArray() ?? [])
-            Local uri = buffer["uri"]?.AsString()
+        For item In (read[array]?.AsArray() ?? [])
+            Local uri = item["uri"]?.AsString()
             If uri == Null || uri.Contains(":") || uri.StartsWith("/") Then Continue
             Local normalized = Try? Assets.Normalize("{place}/{folder}{PercentDecoded(uri)}")
             If normalized != Null Then named.Add(normalized.Slice(place.Length + 1,
@@ -427,7 +501,7 @@ Public Final Class Cooker
 
     // Whether the file at `path` is a glTF: named .gltf or .glb, and a binary glTF by its bytes or
     // a JSON object, as the engine knows one.
-    Static Method IsModel(path: Path, bytes: UInt8[]): Bool
+    Static Method IsModel(path: Path, bytes: UInt8[]): Bool Throws IOError
         Local name = path.Text.ToLower()
         If !name.EndsWith(".gltf") && !name.EndsWith(".glb") Then Return False
         If bytes.Count >= 4 && bytes[0..4] == "glTF".Bytes Then Return True
@@ -439,6 +513,8 @@ Public Final Class Cooker
                 Return False
             End If
         End For
+        // Only white space, as far as this is of it, so the rest says.
+        If bytes.Count == SNIFFED Then Return Try IsModel(path, Try File.ReadBytes(path))
         Return False
     End Method
 

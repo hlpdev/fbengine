@@ -460,3 +460,114 @@ Function ACacheCooksOnlyWhatChanged() Throws IOError
     Try Cooker.CookFolder(source.Path, pak, cache)
     Expect((Try Dir.Entries(cache)).Count == 3)
 End Function
+
+@Test
+Function ACorruptBinaryGltfsJsonLengthIsInvalidData() Throws IOError
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Local lengths = [[0, 0, 0, 0x80] As UInt8[], [0xEB, 0xEB, 0xEB, 0xFF] As UInt8[],
+                     [0xFF, 0xFF, 0xFF, 0x7F] As UInt8[], [0xFF, 0xFF, 0xFF, 0xFF] As UInt8[]]
+    For length In lengths
+        Local source = Try TempDir()
+        Defer Try? source.Close()
+        Local bytes = "glTF".Bytes
+        bytes.AddAll([2, 0, 0, 0, 24, 0, 0, 0] As UInt8[])
+        bytes.AddAll(length)
+        bytes.AddAll("JSON".Bytes)
+        bytes.AddAll("{{  }}".Bytes)
+        Try File.WriteBytes(source.Path / "bad.glb", bytes)
+        Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path,
+                                                       built.Path / "game.pak"))?.Kind ==
+               IOErrorKind.INVALID_DATA)
+    End For
+End Function
+
+@Test
+Function AStaleWriteBesideThePakIsLeftOutOfIt() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Try File.WriteText(source.Path / "a.txt", "a")
+    Try File.WriteText(source.Path / ".fbe-0123456789ab.tmp", "a cook that was ended")
+    Try Cooker.CookFolder(source.Path, source.Path / "game.pak")
+    Try Assets.MountPak("res://test-stale", source.Path / "game.pak")
+    Defer Assets.Unmount("res://test-stale")
+    Expect((Try Assets.Entries("res://test-stale")).Count == 1)
+End Function
+
+@Test
+Function CookingOverAMountedPakLeavesItReading() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Try File.WriteText(source.Path / "a.txt", "old")
+    Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
+    Try Assets.MountPak("res://test-mounted", built.Path / "game.pak")
+    Defer Assets.Unmount("res://test-mounted")
+    Try File.WriteText(source.Path / "a.txt", "new")
+    Try Cooker.CookFolder(source.Path, built.Path / "game.pak")
+    Expect((Try Assets.ReadText("res://test-mounted/a.txt")) == "old")
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path))?.Kind ==
+           IOErrorKind.OTHER)
+End Function
+
+@Test
+Function AGltfNamingWhatsHiddenIsInvalidData() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Try WriteTriangle(source.Path, "tri")
+    Try Dir.CreateAll(source.Path / ".textures")
+    Try File.Move(source.Path / "tri.png", source.Path / ".textures" / "t.png")
+    Local text = Try File.ReadText(source.Path / "tri.gltf")
+    Try File.WriteText(source.Path / "tri.gltf", text.Replace("tri.png", ".textures/t.png"))
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    // And it doesn't load from the folder either, as it wouldn't from a pak.
+    Assets.MountFolder("res://test-hidden", source.Path)
+    Defer Assets.Unmount("res://test-hidden")
+    Expect(ExpectThrows<IOError>(Assets.Load<LoadedModel>("res://test-hidden/tri.gltf")) != Null)
+End Function
+
+@Test
+Function WhiteSpacePastWhatsSniffedStillMakesAGltf() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Try File.WriteText(source.Path / "spaced.gltf", " ".Repeated(300) + "{{}}")
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(source.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+End Function
+
+// Only a disk that keeps names apart by case can have these.
+@Test
+Function NamesACaseSensitiveDiskKeepsApartDontCook() Throws IOError
+    If System.Platform != Platform.LINUX Then Return
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    // A file and a folder.
+    Local first = Try TempDir()
+    Defer Try? first.Close()
+    Try File.WriteText(first.Path / "foo", "a file")
+    Try Dir.CreateAll(first.Path / "Foo")
+    Try File.WriteText(first.Path / "Foo" / "bar.txt", "in a folder")
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(first.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    // Two folders.
+    Local second = Try TempDir()
+    Defer Try? second.Close()
+    Try Dir.CreateAll(second.Path / "Foo")
+    Try Dir.CreateAll(second.Path / "foo")
+    Try File.WriteText(second.Path / "Foo" / "a", "a")
+    Try File.WriteText(second.Path / "foo" / "b", "b")
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(second.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    // A name with a backslash.
+    Local third = Try TempDir()
+    Defer Try? third.Close()
+    Try File.WriteText(third.Path / "a\\b.txt", "a")
+    Expect(ExpectThrows<IOError>(Cooker.CookFolder(third.Path, built.Path / "game.pak"))?.Kind ==
+           IOErrorKind.INVALID_PATH)
+End Function

@@ -117,10 +117,15 @@ Public Final Class AssetLoad
         Return size
     End Method
 
-    /// A copy of a bytes load's bytes; panics for another kind of load.
+    /// A copy of a bytes load's bytes; panics for another kind of load. One of more than a UInt8[]
+    /// holds, which BytesPointer can still reach, throws an IOError of OTHER.
     @MainThread @PanicsAtCaller
-    Public Method Bytes(): UInt8[]
+    Public Method Bytes(): UInt8[] Throws IOError
         Local size = Size()
+        If size > 2147483647
+            Throw IOError(IOErrorKind.OTHER,
+                          "{Path()} is {size} bytes, more than a UInt8[] holds", Path())
+        End If
         Local bytes: UInt8[] = []
         If size == 0 Then Return bytes
         bytes.Resize(size As Int, 0)

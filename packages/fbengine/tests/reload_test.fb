@@ -93,11 +93,11 @@ Class HotText Implements Asset
     Public Static Method LoadKind(): AssetKind => AssetKind.BYTES
 
     Public Static Method FromLoad(load: AssetLoad): HotText Throws IOError
-        Return HotText(String.FromUtf8(load.Bytes()) ?? "")
+        Return HotText(String.FromUtf8(Try load.Bytes()) ?? "")
     End Method
 
     Method Reload(load: AssetLoad): Bool Throws IOError
-        Text = String.FromUtf8(load.Bytes()) ?? ""
+        Text = String.FromUtf8(Try load.Bytes()) ?? ""
         Reloads += 1
         Return True
     End Method
@@ -438,6 +438,10 @@ Function UnmountingAFolderStopsWatchingIt() Throws IOError
     Try WritePng(other.Path, "a.png", 2)
     Assets.MountFolder("res://test-unmounted", other.Path)
     Defer Assets.Unmount("res://test-unmounted")
+    // FSEvents on a Mac tells of a write just before a watcher starts, as that one's, so that's
+    // let settle first.
+    FlipFor(500.Milliseconds)
+    reloaded = []
     Try WritePng(folder.Path, "a.png", 8)
     FlipFor(500.Milliseconds)
     Expect(reloaded.Count == 0)
