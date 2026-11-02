@@ -1,0 +1,36 @@
+name: Idea
+description: Something a package could do.
+labels: [feature, needs-triage]
+body:
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options:
+        - fbengine
+        - fbengine_audio
+        - fbengine_physics
+        - fbengine_ui
+        - fbengine_tools
+        - A new one
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What it's for
+      description: What your game needs, and what makes it hard today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: How it could work, with a sketch of the code you'd write.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Other ways
+      description: What you've tried instead, or how another engine does it.

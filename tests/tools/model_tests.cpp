@@ -15,7 +15,6 @@
 #include <fstream>
 #include <iterator>
 #include <meshoptimizer.h>
-#include <numeric>
 #include <random>
 #include <string>
 #include <vector>
@@ -36,7 +35,10 @@ struct grid_t {
     grid_t() {
         const std::size_t vertices = static_cast<std::size_t>((side + 1) * (side + 1)) + 1;
         std::vector<std::uint32_t> order(vertices);
-        std::ranges::iota(order, 0U);
+        // Apple clang's libc++ has no std::ranges::iota.
+        for (std::size_t at = 0; at < order.size(); ++at) {
+            order[at] = static_cast<std::uint32_t>(at);
+        }
         // Seeded, so each run shuffles the same.
         std::mt19937 random(7); // NOLINT(bugprone-random-generator-seed)
         std::ranges::shuffle(order, random);
