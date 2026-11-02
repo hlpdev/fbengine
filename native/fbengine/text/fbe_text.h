@@ -81,8 +81,9 @@ FBE_API bool fbe_text_clear_fallbacks(uint64_t font);
 FBE_API bool fbe_text_set_system_fallback(uint64_t font, bool on);
 FBE_API bool fbe_text_system_fallback(uint64_t font);
 
-// The size `text`, UTF-8, takes in `font`, its lines by '\n', into `size`: its widest line's
-// advance, and its lines times its line height; false if the handle isn't a font's.
+// The size `text`, UTF-8, which ends at its first NUL, takes in `font`, into `size`: its widest
+// line's advance, and its lines times its line height, a line broken at '\n', a vertical tab, NEL,
+// and Unicode's line and paragraph separators; false if the handle isn't a font's.
 FBE_API bool fbe_text_measure(uint64_t font, const char* text, fbe_text_size_t* size);
 // Whether `font`, with its fallbacks and the OS's, has a glyph for each character of `text`.
 FBE_API bool fbe_text_has_glyphs(uint64_t font, const char* text);

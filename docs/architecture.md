@@ -147,11 +147,12 @@ good modern engine on its own. Every structural choice is checked against both.
   rooms are lightmapped), fog, and alpha all go through the same pipelines, as specialization
   constants, so any mix of them draws in the same pass.
 - **Lights**: clustered forward, so the many small lights of a facility work, per pixel or per
-  vertex. The extract gives a camera's lights in its view's space, directional ones first, and
-  each of 16 by 9 by 24 clusters (the viewport's tiles, and depth slices spaced evenly in log
-  depth, or in depth for an orthographic camera) the point and spot lights whose range reaches
-  its box. A point or spot light ends at its range, as clustering needs; how it falls off before
-  is the shading model's. Shadows come with E6.
+  vertex. A point or spot light ends at its range, as clustering needs, and falls off inside it as
+  glTF's KHR_lights_punctual says, the inverse square windowed to 0 at the range, in every shading
+  model. PIXEL draws take the clusters' lights; VERTEX draws take lists of their own, the lights
+  that reach them, at most 8 in the tree's order, so a light by an off-screen vertex still lights
+  it. A mirrored world matrix is a pipeline key bit of its own, as the front face is baked into a
+  pipeline. Shadows come with E6.
 - **Order and depth**: material orders other than 0 neither test nor write depth and draw
   furthest first, behind the scene or over it, as Blitz's EntityOrder did; in order 0, opaque
   draws test and write depth, by pipeline, material, and nearest first, and what blends only

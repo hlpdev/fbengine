@@ -1,0 +1,76 @@
+name: Bug
+description: A package does something wrong.
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting it. A bug in the language, fb, or std goes to FutureBlitz's issues,
+        and a vulnerability to the Security tab, privately, as SECURITY.md says.
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options:
+        - fbengine
+        - fbengine_audio
+        - fbengine_physics
+        - fbengine_ui
+        - fbengine_tools
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what happened, and what you expected. A screenshot helps for drawing.
+    validations:
+      required: true
+  - type: textarea
+    id: program
+    attributes:
+      label: A program that shows it
+      description: The smallest .fb program, or project, that does it, if there is one.
+      placeholder: |
+        ```fb
+        Print("Hello, world!")
+        ```
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Errors, the program's output, or a stack trace.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: The packages' version
+      placeholder: "0.1.1"
+    validations:
+      required: true
+  - type: input
+    id: fb-version
+    attributes:
+      label: fb --version
+      placeholder: fb 1.0.1 (abc1234, windows-x64)
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Windows x64
+        - Linux x64
+        - Linux arm64
+        - macOS arm64
+        - macOS x64
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: OS version and GPU
+      description: The GPU and its driver, for drawing.
+      placeholder: Windows 11 24H2, an RTX 4070 on 566.14
