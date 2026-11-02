@@ -9,3 +9,6 @@ contact_links:
   - name: A package that breaks the package policy
     url: https://pkg.futureblitz.dev/policies/report
     about: Report a malicious or deceptive package on the package site.
+  - name: A question
+    url: https://discord.gg/4qSGuBnRe6
+    about: Ask in the Discord server's help forum, with the engine tag.
