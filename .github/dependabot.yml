@@ -1,0 +1,14 @@
+# Version updates once a month, in one pull request, as each runs CI on every target; security
+# updates come as soon as there's an advisory.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: [/, /.github/actions/install-fb]
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: [dependencies, area/ci]
+    commit-message:
+      prefix: ci

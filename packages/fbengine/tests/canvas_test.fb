@@ -1,0 +1,204 @@
+// 2D through the FB API, a Canvas drawing into a target and into the screen, in a headless window,
+// on the GPU ctest's tests use; a machine with no Vulkan sets FBENGINE_NO_GPU to 1 and skips them.
+
+Import std.core
+From std.image Import Image, Png
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import fbengine
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// The folder of HarfBuzz's test fonts, which ctest names, or "" when the tests run without them.
+Function TestFonts(): String => Env.Get("FBENGINE_TEST_FONTS") ?? ""
+
+@Test
+Function ACanvasKeepsItsPen() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(8, 8)
+    Local canvas = Canvas(target)
+    Expect(canvas.Color() == Color32(255, 255, 255, 255))
+    Expect(canvas.Origin() == Vec2i(0, 0))
+    Expect(canvas.Viewport() == Null)
+    Expect(canvas.Blend() == Blend2D.SOLID)
+    canvas.SetColor(Color32(10, 20, 30, 40))
+    canvas.SetOrigin(3, -2)
+    canvas.SetViewport(1, 2, 3, 4)
+    canvas.SetBlend(Blend2D.ADD)
+    Expect(canvas.Color() == Color32(10, 20, 30, 40))
+    Expect(canvas.Origin() == Vec2i(3, -2))
+    Expect(canvas.Viewport() == Rect(1, 2, 3, 4))
+    Expect(canvas.Blend() == Blend2D.ADD)
+    canvas.ResetViewport()
+    Expect(canvas.Viewport() == Null)
+End Function
+
+@Test
+Function ACanvasDrawsIntoItsTarget() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(8, 8)
+    Local canvas = Canvas(target)
+    canvas.SetColor(Color32(0, 0, 0, 255))
+    canvas.Clear()
+    canvas.SetColor(Color32(255, 0, 0, 255))
+    canvas.DrawRect(1, 1, 3, 2)
+    canvas.SetColor(Color32(0, 255, 0, 255))
+    canvas.Plot(7, 7)
+    canvas.DrawLine(0, 6, 3, 6)
+    canvas.SetColor(Color32(0, 0, 255, 255))
+    canvas.DrawPolygon([Vec2(5, 0), Vec2(8, 0), Vec2(8, 3), Vec2(5, 3)])
+    Local image = target.ToImage()
+    Expect(image[1, 1] == Color32(255, 0, 0, 255))
+    Expect(image[3, 2] == Color32(255, 0, 0, 255))
+    Expect(image[4, 2] == Color32(0, 0, 0, 255))
+    Expect(image[7, 7] == Color32(0, 255, 0, 255))
+    Expect(image[3, 6] == Color32(0, 255, 0, 255))
+    Expect(image[6, 1] == Color32(0, 0, 255, 255))
+    Expect(image[4, 1] == Color32(0, 0, 0, 255))
+End Function
+
+@Test
+Function TheScreensCanvasIsOneAndDrawsIntoTheScreen() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(32, 16)
+    Defer EndGraphics()
+    Local canvas = Screen.Canvas()
+    Expect(Screen.Canvas() == canvas)
+    canvas.SetColor(Color32(255, 128, 0, 255))
+    canvas.Clear()
+    canvas.SetColor(Color32(0, 0, 255, 255))
+    canvas.SetOrigin(10, 4)
+    canvas.DrawOval(0, 0, 8, 8)
+    canvas.SetOrigin(0, 0)
+    Local image = Try Screen.ToImage()
+    Expect(image[0, 0] == Color32(255, 128, 0, 255))
+    Expect(image[14, 8] == Color32(0, 0, 255, 255))
+    Expect(image[10, 4] == Color32(255, 128, 0, 255))
+End Function
+
+@Test
+Function ASpriteHasFramesAndAHandle() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local sheet = Try Texture(16, 8, TextureFormat.RGBA8, False)
+    Local sprite = Sprite2D(sheet)
+    Expect(sprite.Frames() == 1)
+    Expect(sprite.Width() == 16)
+    sprite.SetFrames(4, 4)
+    Expect(sprite.Frames() == 8)
+    Expect(sprite.Width() == 4 && sprite.Height() == 4)
+    sprite.MidHandle()
+    Expect(sprite.Handle() == Vec2(2, 2))
+    sprite.SetFrames(4, 4, 2, 3)
+    Expect(sprite.Frames() == 3)
+    sprite.SetRegion(1, 1, 5, 3)
+    Expect(sprite.Width() == 5 && sprite.Height() == 3 && sprite.Frames() == 1)
+    // An odd size's middle, at whole pixels.
+    sprite.MidHandle()
+    Expect(sprite.Handle() == Vec2(2, 1))
+    Expect(sprite.Texture() == sheet)
+End Function
+
+@Test
+Function ACanvasDrawsALoadedSprite() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    // Red, green, then blue, white, saved as a PNG and loaded.
+    Local image = Image.FromBytes(2, 2, [255 As UInt8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255,
+                                         255, 255, 255, 255])
+    Local folder = Try TempDir("fbengine-sprite-")
+    Defer Try? folder.Close()
+    Local path = folder.Path / "sprite.png"
+    Try File.WriteBytes(path, Png.Encode(image))
+    Local sprite = Try Sprite2D.Load(path)
+    Expect(sprite.Width() == 2)
+    Local target = Try Texture.Target(6, 4)
+    Local canvas = Canvas(target)
+    canvas.Draw(sprite, 1, 1)
+    // Mirrored across about its right edge, so it lands on 4 to 6.
+    sprite.SetHandle(2, 0)
+    canvas.SetScale(-1, 1)
+    canvas.Draw(sprite, 4, 0)
+    canvas.SetScale(1, 1)
+    sprite.SetHandle(0, 0)
+    sprite.SetFrames(1, 1)
+    canvas.Draw(sprite, 0, 3, 3)
+    Local drawn = target.ToImage()
+    Expect(drawn[1, 1] == Color32(255, 0, 0, 255))
+    Expect(drawn[2, 2] == Color32(255, 255, 255, 255))
+    Expect(drawn[4, 0] == Color32(0, 255, 0, 255))
+    Expect(drawn[5, 0] == Color32(255, 0, 0, 255))
+    Expect(drawn[0, 3] == Color32(255, 255, 255, 255))
+End Function
+
+@Test
+Function ACanvasTilesASprite() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local tile = Try Texture(2, 1, TextureFormat.RGBA8, False)
+    tile.WritePixels(0, 0, 2, 1, [255 As UInt8, 0, 0, 255, 0, 0, 255, 255])
+    tile.SetFilter(TextureFilter.NEAREST)
+    Local target = Try Texture.Target(5, 2)
+    Local canvas = Canvas(target)
+    canvas.Tile(Sprite2D(tile), 1, 0)
+    Local drawn = target.ToImage()
+    Expect(drawn[0, 0] == Color32(0, 0, 255, 255))
+    Expect(drawn[1, 1] == Color32(255, 0, 0, 255))
+    Expect(drawn[4, 0] == Color32(0, 0, 255, 255))
+End Function
+
+@Test
+Function ACanvasDrawsText() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    If TestFonts() == "" Then Skip("no test fonts here")
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(64, 24, TextureFormat.RGBA8_LINEAR)
+    Local canvas = Canvas(target)
+    Local font = Try Font.Load("{TestFonts()}/OpenSans-Regular.ttf", 16.0)
+    canvas.DrawText(font, "ab", 1, 1)
+    Local pixels = target.LockPixels()
+    Local lit = 0
+    For y = 0 To 23
+        For x = 0 To 63
+            If pixels.Get(x, y).r > 0 Then lit = lit + 1
+        End For
+    End For
+    Expect(lit > 20)
+    font.Free()
+End Function
+
+// Text ends at its first "\0": what's past it isn't drawn or measured.
+@Test
+Function TextEndsAtANul() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    If TestFonts() == "" Then Skip("no test fonts here")
+    Window.SetHeadless(True)
+    Local font = Try Font.Load("{TestFonts()}/OpenSans-Regular.ttf", 16.0)
+    Local cut = Try Texture.Target(128, 24, TextureFormat.RGBA8_LINEAR)
+    Canvas(cut).DrawText(font, "ab\0cdefgh", 1, 1)
+    Local whole = Try Texture.Target(128, 24, TextureFormat.RGBA8_LINEAR)
+    Canvas(whole).DrawText(font, "ab", 1, 1)
+    Local cutPixels = cut.LockPixels()
+    Local wholePixels = whole.LockPixels()
+    Local same = True
+    Local lit = 0
+    For y = 0 To 23
+        For x = 0 To 127
+            If cutPixels.Get(x, y).r != wholePixels.Get(x, y).r Then same = False
+            If cutPixels.Get(x, y).r > 0 Then lit = lit + 1
+        End For
+    End For
+    cutPixels.Unlock()
+    wholePixels.Unlock()
+    Expect(same)
+    Expect(lit > 20)
+    Local measured = font.Measure("ab\0cdefgh")
+    Expect(measured.x == font.Measure("ab").x && measured.y == font.Measure("ab").y)
+    Expect(measured.x < font.Measure("abcdefgh").x)
+    font.Free()
+End Function

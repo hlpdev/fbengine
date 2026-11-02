@@ -1,0 +1,406 @@
+// Textures: images on the GPU, which 2D draws and materials sample, made empty or from a
+// std.image Image, written a region at a time, with mipmaps made from their first level; targets,
+// textures drawn into; and clearing, copying, and reading them back.
+
+Import std.core
+Import std.ffi
+Import std.image
+Import std.io
+Import std.math
+Import "./c/fbe_texture"
+Import "./pixels"
+Import "./window"
+
+/// What a texture's pixels are.
+Public Enum TextureFormat
+    /// 8-bit red, green, blue, and alpha, its color sRGB, as an Image's is, sampled as linear
+    /// light, as lighting and blending want.
+    RGBA8 = 0
+    /// 8-bit red, green, blue, and alpha, sampled as they're stored, for data, as normal maps and
+    /// masks.
+    RGBA8_LINEAR = 1
+    /// One 8-bit channel, sampled as red.
+    R8 = 2
+    /// 16-bit floating-point red, green, blue, and alpha, for light brighter than white.
+    RGBA16F = 3
+End Enum
+
+/// How a texture's pixels are blended where it's drawn bigger or smaller than it is.
+Public Enum TextureFilter
+    /// Not at all: the nearest pixel, as pixel art wants.
+    NEAREST = 0
+    /// The four pixels around, and the two nearest mipmaps, smoothly.
+    LINEAR = 1
+End Enum
+
+/// How a texture's read past its edges.
+Public Enum TextureWrap
+    /// Repeating it.
+    REPEAT = 0
+    /// Its edge, stretched.
+    CLAMP = 1
+    /// Repeating it, every other time mirrored.
+    MIRROR = 2
+End Enum
+
+// One wrapper for each texture the game holds, by its handle's slot.
+Global textures: Weak<Texture>[] = []
+
+/// An image on the GPU, which 2D draws and materials sample: made transparent black, or from an
+/// Image, and written a region at a time, with mipmaps, smaller copies for drawing it small, made
+/// from its own pixels. It lives while the game holds it or a material draws with it; Free lets
+/// go of it at once. Stopping the GPU frees every texture. New, it's filtered LINEAR and wrapped
+/// REPEAT.
+Public Final Class Texture
+    Field handle: UInt64
+
+    /// A texture `width` by `height` pixels of `format`, transparent black, with mipmaps unless
+    /// `mipmaps` is False, starting the GPU if it hasn't; it throws when the GPU can't start, the
+    /// size is more than it takes, or it holds no more textures.
+    @MainThread
+    Public New(width: Int32, height: Int32, format: TextureFormat = TextureFormat.RGBA8,
+               mipmaps: Bool = True) Throws GraphicsError
+        handle = fbe_texture_create(width, height, format As Int32, mipmaps)
+        If handle == 0 Then Throw GraphicsError(LastError())
+        Keep(Self)
+    End New
+
+    // A wrapper for a handle C holds once for it.
+    Package New(handle: UInt64)
+        If handle == 0 Then Panic(LastError())
+        Self.handle = handle
+        Keep(Self)
+    End New
+
+    /// A texture of the pixels an image file decodes to, PNG, JPEG, BMP, TGA, GIF, QOI, or WebP,
+    /// RGBA8, with mipmaps unless `mipmaps` is False. It throws when the file can't be read or
+    /// decoded, or as New does.
+    @MainThread
+    Public Static Method Load(path: Path, mipmaps: Bool = True): Texture Throws GraphicsError,
+                                                                                IOError
+        Local image = Try Image.Load(path)
+        Return Try FromImage(image, mipmaps)
+    End Method
+
+    /// A texture of `image`'s pixels, RGBA8, with mipmaps unless `mipmaps` is False.
+    @MainThread
+    Public Static Method FromImage(image: Image, mipmaps: Bool = True): Texture Throws GraphicsError
+        Local texture = Try Texture(image.Width As Int32, image.Height As Int32,
+                                    TextureFormat.RGBA8,
+                                    mipmaps)
+        texture.Write(0, 0, image)
+        Return texture
+    End Method
+
+    /// A target: a texture `width` by `height` pixels drawn into, as the screen is and a camera's
+    /// can be, transparent black, with no mipmaps; drawing `samples` samples a pixel, 1, 2, 4, or
+    /// 8, which each pass smooths into its pixels; and with depth if `depth`. What's drawn into it
+    /// is in Vulkan's clip space, x right and y down from -1 to 1, with its depth reversed: 1 at
+    /// the near plane and 0, which it's cleared to, at the far, nearer drawn over farther, as the
+    /// engine's cameras project, and std.math's Perspective, near 0 and y up, doesn't. It throws
+    /// as New does, and when the GPU can't draw that format or that many samples.
+    @MainThread
+    Public Static Method Target(width: Int32, height: Int32,
+                                format: TextureFormat = TextureFormat.RGBA8, samples: Int32 = 1,
+                                depth: Bool = False): Texture Throws GraphicsError
+        Local handle = fbe_texture_create_target(width, height, format As Int32, samples, depth)
+        If handle == 0 Then Throw GraphicsError(LastError())
+        Return Texture(handle)
+    End Method
+
+    Method Destroy()
+        If handle != 0 Then fbe_texture_release(handle)
+    End Method
+
+    /// Lets go of the texture now; a material that draws with it keeps it. Using it after panics.
+    @MainThread @PanicsAtCaller
+    Public Method Free()
+        If !fbe_texture_release(Live("Free")) Then Panic(LastError())
+        Local gone: Texture? = Null
+        textures[Slot(handle)] = gone
+        handle = 0
+    End Method
+
+    /// Whether Free let go of it, or the GPU stopped, freeing it.
+    @MainThread Public Method Freed(): Bool => handle == 0 || fbe_texture_width(handle) < 0
+
+    /// How many pixels wide it is.
+    @MainThread @PanicsAtCaller
+    Public Method Width(): Int32 => Checked(fbe_texture_width(Live("Width")))
+
+    /// How many pixels high it is.
+    @MainThread @PanicsAtCaller
+    Public Method Height(): Int32 => Checked(fbe_texture_height(Live("Height")))
+
+    /// What its pixels are.
+    @MainThread @PanicsAtCaller
+    Public Method Format(): TextureFormat =>
+        Checked(fbe_texture_format(Live("Format"))) As TextureFormat
+
+    /// How many mipmap levels it has, the first its own size, each after half the one before, down
+    /// to a pixel; 1 without mipmaps.
+    @MainThread @PanicsAtCaller
+    Public Method Levels(): Int32 => Checked(fbe_texture_levels(Live("Levels")))
+
+    /// Writes `image`'s pixels into it with their top left at `x`, `y`, and makes its mipmaps
+    /// again, in turn with what else the frame does with it: what's drawn with it, drawn into it,
+    /// cleared, or copied before the write has it as it was, and what's after has the write. It
+    /// panics unless the texture is RGBA8 or RGBA8_LINEAR and the image is inside it.
+    @MainThread @PanicsAtCaller
+    Public Method Write(x: Int32, y: Int32, image: Image)
+        Local texture = Live("Write")
+        Local format = Format()
+        If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
+            Panic("an Image is written into an RGBA8 or RGBA8_LINEAR texture, not {format}")
+        End If
+        Local written = False
+        Unsafe
+            written = fbe_texture_write(texture, x, y, image.Width As Int32, image.Height As Int32,
+                                        image.Pixels.Pointer(), (image.Width * 4) As Int32)
+        End Unsafe
+        If !written Then Panic(LastError())
+    End Method
+
+    /// Writes `width` by `height` pixels at `x`, `y` from `bytes`, rows packed top first, in its
+    /// format's bytes: 4 a pixel for RGBA8, 1 for R8, and 8 for RGBA16F, half floats, little end
+    /// first; and makes its mipmaps again, in turn, as Write does. It panics unless there are that
+    /// many bytes and the region is inside it.
+    @MainThread @PanicsAtCaller
+    Public Method WritePixels(x: Int32, y: Int32, width: Int32, height: Int32, bytes: UInt8[])
+        Local texture = Live("WritePixels")
+        Local size = PixelSize(Format()) As Int64
+        Local needed = Bytes(width, height, Format())
+        If width < 1 || height < 1 || bytes.Count != needed
+            Panic("{width} by {height} pixels of {Format()} are {needed} bytes, not {bytes.Count}")
+        End If
+        Local buffer = Buffer<UInt8>.From(bytes)
+        Local written = False
+        Unsafe
+            written = fbe_texture_write(texture, x, y, width, height, buffer.Pointer(),
+                                        ((width As Int64) * size) As Int32)
+        End Unsafe
+        If !written Then Panic(LastError())
+    End Method
+
+    /// Sets how it's blended where it's drawn bigger or smaller than it is.
+    @MainThread @PanicsAtCaller
+    Public Method SetFilter(filter: TextureFilter)
+        If !fbe_texture_set_filter(Live("SetFilter"), filter As Int32) Then Panic(LastError())
+    End Method
+
+    /// How it's blended where it's drawn bigger or smaller than it is.
+    @MainThread @PanicsAtCaller
+    Public Method Filter(): TextureFilter =>
+        Checked(fbe_texture_filter(Live("Filter"))) As TextureFilter
+
+    /// Sets how it's read past its edges, across and down.
+    @MainThread @PanicsAtCaller
+    Public Method SetWrap(across: TextureWrap, down: TextureWrap)
+        If !fbe_texture_set_wrap(Live("SetWrap"), across As Int32, down As Int32)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// How it's read past its left and right edges.
+    @MainThread @PanicsAtCaller
+    Public Method WrapAcross(): TextureWrap =>
+        Checked(fbe_texture_wrap_u(Live("WrapAcross"))) As TextureWrap
+
+    /// How it's read past its top and bottom edges.
+    @MainThread @PanicsAtCaller
+    Public Method WrapDown(): TextureWrap =>
+        Checked(fbe_texture_wrap_v(Live("WrapDown"))) As TextureWrap
+
+    /// Whether it's a target, which is drawn into.
+    @MainThread @PanicsAtCaller
+    Public Method IsTarget(): Bool => fbe_texture_is_target(Live("IsTarget"))
+
+    /// How many samples a pixel a target draws, 1 for any other texture.
+    @MainThread @PanicsAtCaller
+    Public Method Samples(): Int32 => Checked(fbe_texture_samples(Live("Samples")))
+
+    /// Whether it's a target with depth.
+    @MainThread @PanicsAtCaller
+    Public Method HasDepth(): Bool => fbe_texture_has_depth(Live("HasDepth"))
+
+    /// Clears every pixel of it to `color`, and a target's depth to the farthest, after what the
+    /// frame does with it before.
+    @MainThread @PanicsAtCaller
+    Public Method Clear(color: Color)
+        If !fbe_texture_clear(Live("Clear"), color.r, color.g, color.b, color.a)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// Clears every pixel of it to transparent black, and a target's depth to the farthest.
+    @MainThread @PanicsAtCaller
+    Public Method Clear()
+        Clear(Color(0, 0, 0, 0))
+    End Method
+
+    /// Copies the pixels `width` by `height` at `fromX`, `fromY` of `source` into it at `x`, `y`,
+    /// as they are, after what the frame does with either before, and makes its mipmaps again: how
+    /// a frame drawn into the screen or a target is kept, as feedback effects and security
+    /// monitors want; from itself, regions that overlap copy as they were. It panics unless
+    /// their formats' pixels are the same size (RGBA8's and RGBA8_LINEAR's are), both regions are
+    /// in them, and it isn't a multisampled target.
+    @MainThread @PanicsAtCaller
+    Public Method CopyFrom(source: Texture, fromX: Int32, fromY: Int32, width: Int32, height: Int32,
+                           x: Int32 = 0, y: Int32 = 0)
+        If !fbe_texture_copy(Live("CopyFrom"), x, y, source.Live("CopyFrom"), fromX, fromY, width,
+                             height)
+            Panic(LastError())
+        End If
+    End Method
+
+    /// Its pixels at mipmap `level`, read back from the GPU after everything the frame's drawn so
+    /// far, which it waits for: rows top first, in its format's bytes, as WritePixels takes them.
+    /// It panics for a level whose bytes are more than an array holds, 2147483647, as a 16384 by
+    /// 16384 RGBA16F texture's first level's are, before reading any.
+    @MainThread @PanicsAtCaller
+    Public Method ReadPixels(level: Int32 = 0): UInt8[]
+        Local texture = Live("ReadPixels")
+        Local levels = Levels()
+        If level < 0 || level >= levels
+            Panic("the texture has {levels} levels, not {level + 1}")
+        End If
+        Local width = Max(Width() >> level, 1)
+        Local height = Max(Height() >> level, 1)
+        Local bytes = Bytes(width, height, Format())
+        If bytes > 2147483647
+            Panic("level {level}'s {bytes} bytes are more than an array holds")
+        End If
+        Local buffer = Buffer<UInt8>(bytes)
+        Local read = False
+        Unsafe
+            read = fbe_texture_read(texture, level, buffer.Pointer(), buffer.Count)
+        End Unsafe
+        If !read Then Panic(LastError())
+        Return buffer.ToArray()
+    End Method
+
+    /// Its pixels as an Image, read back as ReadPixels reads them; it panics unless it's RGBA8 or
+    /// RGBA8_LINEAR.
+    @MainThread @PanicsAtCaller
+    Public Method ToImage(): Image
+        Local format = Format()
+        If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
+            Panic("an Image is read from an RGBA8 or RGBA8_LINEAR texture, not {format}")
+        End If
+        Return Image.FromBytes(Width(), Height(), ReadPixels())
+    End Method
+
+    /// Its first level's pixels on the CPU, to read and write a pixel at a time: read back from the
+    /// GPU only when it's changed them since, which waits for the frame so far, and what's written
+    /// sent at Unlock, before the GPU next uses it. It panics unless it's RGBA8 or RGBA8_LINEAR,
+    /// and for a multisampled target, whose pixels are only drawn.
+    @MainThread @PanicsAtCaller
+    Public Method LockPixels(): Pixels
+        Local texture = Live("LockPixels")
+        Local format = Format()
+        If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
+            Panic("a texture's pixels are locked as RGBA8 or RGBA8_LINEAR, not {format}")
+        End If
+        Local data: Ptr<UInt8> = Null
+        Local stamp: Ptr<UInt64> = Null
+        Unsafe
+            data = fbe_texture_pixels(texture, Null)
+            stamp = fbe_texture_pixels_stamp(texture)
+        End Unsafe
+        If data == Null Then Panic(LastError())
+        Return Pixels(Self, data, stamp)
+    End Method
+
+    /// The pixel at `x`, `y`, through LockPixels, so a run of them reads the GPU back once.
+    @MainThread @PanicsAtCaller
+    Public Method ReadPixel(x: Int32, y: Int32): Color32 => LockPixels().Get(x, y)
+
+    /// Sets the pixel at `x`, `y` through LockPixels, sent to the GPU before it next uses the texture;
+    /// a run of them is sent once.
+    @MainThread @PanicsAtCaller
+    Public Method WritePixel(x: Int32, y: Int32, color: Color32)
+        Local pixels = LockPixels()
+        pixels.Set(x, y, color)
+        pixels.Unlock()
+    End Method
+
+    /// The pixels `width` by `height` at `x`, `y` of its first level as an Image, through
+    /// LockPixels, so a run of them reads the GPU back once. It panics as LockPixels does, and
+    /// unless the region's in it.
+    @MainThread @PanicsAtCaller
+    Public Method ToImage(x: Int32, y: Int32, width: Int32, height: Int32): Image
+        If x < 0 || y < 0 || width < 1 || height < 1 || x + width > Width() || y + height > Height()
+            Panic("a {width}x{height} region at {x}, {y} isn't in a {Width()}x{Height()} texture")
+        End If
+        Local pixels = LockPixels()
+        Local bytes: UInt8[] = []
+        bytes.Reserve((width * height * 4) As Int)
+        For row = y To y + height - 1
+            For column = x To x + width - 1
+                Local color = pixels.Get(column, row)
+                bytes.Add(color.r)
+                bytes.Add(color.g)
+                bytes.Add(color.b)
+                bytes.Add(color.a)
+            End For
+        End For
+        Return Image.FromBytes(width, height, bytes)
+    End Method
+
+    /// How many textures there are.
+    @MainThread Public Static Method Count(): Int32 => fbe_texture_count()
+
+    /// How many bytes `width` by `height` pixels of `format` are, as WritePixels takes them and
+    /// ReadPixels gives them: an Int64, as a big texture's can be more than an Int32 holds.
+    Public Static Method Bytes(width: Int32, height: Int32, format: TextureFormat): Int64
+        Return (width As Int64) * (height As Int64) * (PixelSize(format) As Int64)
+    End Method
+
+    // The handle, or a panic naming the call for a Texture that was freed.
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call} on a Texture that was freed")
+        Return handle
+    End Method
+
+    // A value a call gave for a live handle, or a panic for one the GPU's stopping freed.
+    @PanicsAtCaller
+    Static Method Checked(value: Int32): Int32
+        If value < 0 Then Panic("this Texture was freed, as the GPU stopped")
+        Return value
+    End Method
+
+    Static Method PixelSize(format: TextureFormat): Int32
+        Select format
+            Case TextureFormat.R8
+                Return 1
+            Case TextureFormat.RGBA16F
+                Return 8
+            Default
+                Return 4
+        End Select
+    End Method
+
+    Static Method Keep(texture: Texture)
+        Local slot = Slot(texture.handle)
+        While textures.Count <= slot
+            textures.Add(Null)
+        End While
+        textures[slot] = texture
+    End Method
+
+    Static Method Slot(handle: UInt64): Int => (handle & 0xFFFFFFFF) As Int
+End Class
+
+/// The Texture a handle is for, from its wrapper if the game still holds one, or a new one, which
+/// holds the handle once; Null for 0.
+Package Function TextureOf(handle: UInt64): Texture?
+    If handle == 0 Then Return Null
+    Local slot = (handle & 0xFFFFFFFF) As Int
+    If slot < textures.Count
+        Local kept = textures[slot]
+        If kept != Null && kept.handle == handle Then Return kept
+    End If
+    If !fbe_texture_retain(handle) Then Panic(LastError())
+    Return Texture(handle)
+End Function
