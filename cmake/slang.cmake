@@ -46,6 +46,8 @@ function(fbengine_add_shaders)
   cmake_parse_arguments(PARSE_ARGV 0 arg "" "NAMESPACE;HEADER" "TARGETS;SHADERS")
   cmake_path(GET arg_HEADER STEM stem)
   set(folder "${CMAKE_CURRENT_BINARY_DIR}/${stem}")
+  # slangc makes no folder for what it writes, and only Ninja makes one for a command's output.
+  file(MAKE_DIRECTORY "${folder}")
   set(shaders "")
   set(compiled "")
   foreach(source IN LISTS arg_SHADERS)

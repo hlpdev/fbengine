@@ -126,6 +126,8 @@ good modern engine on its own. Every structural choice is checked against both.
   textures), and buffer device addresses (shaders read buffers through addresses in push
   constants), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
   The window's images and the screen are sRGB, so drawing is in linear light.
+  A portability driver holds what it promises: on MoltenVK the bindless set is 1180 textures
+  against 16384 elsewhere, and samplers take no LOD bias, which SetLodBias keeps and doesn't draw.
 - **What it runs on** (the user, 2026-10-31): Vulkan 1.2 GPUs (2016 onward), Windows 10, Linux
   with glibc 2.28, macOS 13 on MoltenVK. **What it aims for** (the user, 2026-10-31): a scene of
   SCP:CB's scale in the high hundreds of fps, 500 or more at 1080p on the user's RTX 4080 and

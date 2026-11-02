@@ -103,9 +103,11 @@ jobs:
   # to use alone: lavapipe, from Mesa (MSYS2's UCRT64 on Windows, apt's on Linux), and MoltenVK on
   # macOS: the C++ tests, and the packages' and examples', which draw. Intel Macs aren't here: their
   # runners have no Metal for MoltenVK, and Homebrew's Mesa has no lavapipe, so an Intel Mac's are
-  # run by hand.
+  # run by hand. On Linux the packages' and examples' programs link native.yml's DLLs, as a
+  # release's do: fb links for an older glibc than this runner's, which what's built here needs.
   gpu:
     name: gpu ${{ matrix.target }}
+    needs: native
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -129,6 +131,11 @@ jobs:
         shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        if: runner.os == 'Linux'
+        with:
+          name: native-${{ matrix.target }}
 
       - name: Install MinGW and the Vulkan loader
         if: runner.os == 'Windows'
@@ -203,6 +210,7 @@ jobs:
           # Every target, so ctest finds every test it lists: the C++ tests, the packages', and the
           # examples'.
           cmake --build build --parallel
+          if [ "$RUNNER_OS" = Linux ]; then tar -xf native-${{ matrix.target }}.tar; fi
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure || {
             if [ "$RUNNER_OS" = Windows ]; then
               pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-gdb > /dev/null
