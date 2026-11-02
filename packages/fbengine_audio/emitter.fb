@@ -4,6 +4,7 @@ Import std.collections
 Import std.core
 Import std.ffi
 Import std.math
+Import fbengine
 Import "./audio"
 Import "./c/fbe_emitter"
 Import "./channel"
@@ -34,10 +35,8 @@ Public Final Class Emitter
     Field handle: UInt64
     Field position: Vec3
     Field velocity: Vec3
-    /// What it follows, where it was a frame ago, and whether it was anywhere yet.
-    Field follows: (Func(): Vec3)? = Null
-    Field followedFrom: Vec3
-    Field followedBefore: Bool = False
+    /// What it follows.
+    Field follows: Followed? = Null
 
     /// An Emitter at the origin, at rest, whose Channels are at their full volume within 1 unit
     /// and get quieter inversely beyond it, with a rolloff of 1, and are pitched as in the world.
@@ -70,11 +69,19 @@ Public Final Class Emitter
     /// Free stop it. While it follows, it's kept.
     @MainThread Public Method Follow(where: Func(): Vec3)
         Live()
-        If follows == Null Then followed.Add(Self)
-        follows = where
-        followedBefore = False
-        followEmitters = MoveFollowed
-        HookFlip()
+        Start(Followed(where, Null))
+    End Method
+
+    /// Moves it each frame, at Flip, to where `entity` is in the world, as Follow does for a
+    /// function: how a sound goes with what makes it. With `step`, the FixedStep the game's logic
+    /// runs at, it's where the entity is drawn, at the step's Tween, so it moves as smoothly as
+    /// what's seen, rather than a step at a time. An entity freed while it's followed is let go at
+    /// the next Flip, where it was, at rest; following a freed one panics.
+    @MainThread @PanicsAtCaller
+    Public Method Follow(entity: Entity, step: FixedStep? = Null)
+        Live()
+        If entity.Freed() Then Panic("an Emitter can't follow a {entity}")
+        Start(Followed(entity, step))
     End Method
 
     /// Stops following what it follows, and leaves it where it is, at rest.
@@ -163,6 +170,14 @@ Public Final Class Emitter
         If handle != 0 Then fbe_emitter_free(handle)
     End Method
 
+    // Follows `follow` from the next Flip on.
+    Method Start(follow: Followed)
+        If follows == Null Then followed.Add(Self)
+        follows = follow
+        followEmitters = MoveFollowed
+        HookFlip()
+    End Method
+
     // Its handle, or a panic once it's freed.
     @PanicsAtCaller
     Method Live(): UInt64
@@ -171,29 +186,58 @@ Public Final Class Emitter
     End Method
 End Class
 
-// Each Emitter that follows something, to where it is, in one call to fbengine_audio_native. Those
-// that Flip found following are asked, in the order they began, and one that stopped or was freed
-// while another was asked is left out.
+// Each Emitter that follows something, to where it is, in one call to fbengine_audio_native. The
+// functions of those that Flip found following are asked first, in the order they began, as they
+// can stop, free, or start any; then, with nothing of the game's left to run, where the entities
+// followed are, letting go of each one freed; and only those still following what they did when
+// Flip found them are placed.
 Function MoveFollowed()
     Local each: Emitter[] = []
     each.AddAll(followed)
     If each.Count == 0 Then Return
+    Local asked: Followed?[] = []
+    Local wheres: Vec3[] = []
+    For emitter In each
+        Local follow = emitter.follows
+        asked.Add(follow)
+        wheres.Add(Vec3(0, 0, 0))
+        If follow == Null || emitter.handle == 0 Then Continue
+        Local where = follow.where
+        If where == Null Then Continue
+        Local now = where()
+        CheckVector(now, "where an Emitter follows")
+        wheres[wheres.Count - 1] = now
+    End For
+    Local entities: Followed[] = []
+    Local at: Int[] = []
+    For i = 0 Until each.Count
+        Local follow = Still(each[i], asked[i])
+        If follow == Null Then Continue
+        Local entity = follow.entity
+        If entity == Null Then Continue
+        If entity.Freed()
+            each[i].Unfollow()
+            Continue
+        End If
+        entities.Add(follow)
+        at.Add(i)
+    End For
+    Local poses = PosesOf(entities)
+    For i = 0 Until poses.Count
+        wheres[at[i]] = poses[i].Position
+    End For
     Local handles = Buffer<UInt64>(each.Count)
     Local positions = Buffer<Float32>(each.Count * 3)
     Local velocities = Buffer<Float32>(each.Count * 3)
     Local placed = 0
-    For emitter In each
-        Local where = emitter.follows
-        If where == Null || emitter.handle == 0 Then Continue
-        Local now = where()
-        CheckVector(now, "where an Emitter follows")
-        If emitter.follows == Null || emitter.handle == 0 Then Continue
-        Local moving = Vec3(0, 0, 0)
-        If emitter.followedBefore Then moving = Moved(emitter.followedFrom, now)
+    For i = 0 Until each.Count
+        Local emitter = each[i]
+        Local follow = Still(emitter, asked[i])
+        If follow == Null Then Continue
+        Local now = wheres[i]
+        Local moving = follow.MovedTo(now)
         emitter.position = now
         emitter.velocity = moving
-        emitter.followedFrom = now
-        emitter.followedBefore = True
         handles[placed] = emitter.handle
         positions[placed * 3] = now.x
         positions[placed * 3 + 1] = now.y
@@ -207,4 +251,10 @@ Function MoveFollowed()
         fbe_emitter_place_all(handles.Pointer(), positions.Pointer(), velocities.Pointer(),
                               placed As Int32)
     End Unsafe
+End Function
+
+// What `emitter` followed when Flip found it, if it's live and follows that still.
+Function Still(emitter: Emitter, asked: Followed?): Followed?
+    If asked == Null || emitter.handle == 0 || !RefEquals(emitter.follows, asked) Then Return Null
+    Return asked
 End Function

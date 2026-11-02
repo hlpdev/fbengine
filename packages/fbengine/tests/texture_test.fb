@@ -1,0 +1,147 @@
+// Textures, made and written through the FB API, on the GPU ctest's tests use; a machine with no
+// Vulkan sets FBENGINE_NO_GPU to 1 and skips them.
+
+Import std.core
+Import std.image
+Import std.math
+Import std.os
+Import std.test
+Import fbengine
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+@Test
+Function ATextureIsTheSizeAndFormatAsked() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local before = Texture.Count()
+    Local texture = Try Texture(16, 4)
+    Expect(Texture.Count() == before + 1)
+    Expect(texture.Width() == 16)
+    Expect(texture.Height() == 4)
+    Expect(texture.Format() == TextureFormat.RGBA8)
+    Expect(texture.Levels() == 5)
+    Expect(texture.Filter() == TextureFilter.LINEAR)
+    Expect(texture.WrapAcross() == TextureWrap.REPEAT)
+    // A texture the game lets go of is freed, as this one is at the end of its line.
+    Expect((Try Texture(3, 3, TextureFormat.R8, False)).Levels() == 1)
+    Expect(Texture.Count() == before + 1)
+    texture.Free()
+    Expect(texture.Freed())
+    Expect(Texture.Count() == before)
+End Function
+
+@Test
+Function ATextureTooBigIsAGraphicsError()
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Expect(ExpectThrows<GraphicsError>(Texture(0, 4)) != Null)
+    Expect(ExpectThrows<GraphicsError>(Texture(1000000, 4)) != Null)
+End Function
+
+@Test
+Function AnImageIsATexturesPixels() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local image = Image(4, 2)
+    image.Fill(Color32.Red)
+    Local texture = Try Texture.FromImage(image)
+    Expect(texture.Width() == 4)
+    Expect(texture.Height() == 2)
+    Expect(texture.Levels() == 3)
+    // A smaller image, into a corner of it.
+    texture.Write(2, 1, Image(2, 1))
+    texture.WritePixels(0, 0, 1, 1, [0 As UInt8, 255, 0, 255])
+    Local gray = Try Texture(2, 1, TextureFormat.R8, False)
+    gray.WritePixels(0, 0, 2, 1, [10 As UInt8, 20])
+    Local bright = Try Texture(1, 1, TextureFormat.RGBA16F, False)
+    bright.WritePixels(0, 0, 1, 1, [0 As UInt8, 60, 0, 64, 0, 56, 0, 0])
+    Expect(Gpu.ValidationErrors() == 0)
+End Function
+
+@Test
+Function ATexturesFilterAndWrapsAreItsOwn() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local texture = Try Texture(8, 8)
+    texture.SetFilter(TextureFilter.NEAREST)
+    texture.SetWrap(TextureWrap.CLAMP, TextureWrap.MIRROR)
+    Expect(texture.Filter() == TextureFilter.NEAREST)
+    Expect(texture.WrapAcross() == TextureWrap.CLAMP)
+    Expect(texture.WrapDown() == TextureWrap.MIRROR)
+End Function
+
+@Test
+Function TheLodBiasAndAnisotropyAreEveryTextures() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Gpu.Start()
+    Defer Try? Gpu.SetLodBias(0.0)
+    Defer Try? Gpu.SetAnisotropy(1.0)
+    Try Gpu.SetLodBias(-0.4)
+    Try Gpu.SetAnisotropy(8.0)
+    Expect(Gpu.LodBias() == -0.4)
+    Expect(Gpu.Anisotropy() == 8.0)
+    Expect(Gpu.MaxAnisotropy() >= 1.0)
+End Function
+
+@Test
+Function StoppingTheGpuFreesEveryTexture() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local texture = Try Texture(4, 4)
+    Gpu.Stop()
+    Expect(texture.Freed())
+    Expect(Texture.Count() == 0)
+    Local again = Try Texture(4, 4)
+    Expect(!again.Freed())
+    Expect(Gpu.ValidationErrors() == 0)
+End Function
+
+@Test
+Function ALevelsBytesAreMoreThanAnInt32Holds()
+    // 16384 by 16384 RGBA16F pixels are 2 GiB, one more than Int32's most.
+    Expect(Texture.Bytes(16384, 16384, TextureFormat.RGBA16F) == 2147483648)
+    Expect(Texture.Bytes(4, 4, TextureFormat.R8) == 16)
+    Expect(Texture.Bytes(3, 2, TextureFormat.RGBA8) == 24)
+End Function
+
+@Test
+Function ATexturesPixelsAreLockedReadAndWritten() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local texture = Try Texture(4, 2, TextureFormat.RGBA8_LINEAR, False)
+    texture.Clear(Color(1, 0, 0, 1))
+    Local pixels = texture.LockPixels()
+    Expect(pixels.Width() == 4 && pixels.Height() == 2)
+    Expect(pixels.Get(3, 1) == Color32(255, 0, 0, 255))
+    pixels.Set(0, 0, Color32(0, 0, 255, 255))
+    pixels.Set(2, 1, Color32(0, 255, 0, 255))
+    pixels.Unlock()
+    Local image = texture.ToImage()
+    Expect(image[0, 0] == Color32(0, 0, 255, 255))
+    Expect(image[2, 1] == Color32(0, 255, 0, 255))
+    Expect(image[1, 0] == Color32(255, 0, 0, 255))
+    texture.WritePixel(1, 0, Color32(10, 20, 30, 40))
+    Expect(texture.ReadPixel(1, 0) == Color32(10, 20, 30, 40))
+    Expect(texture.ToImage()[1, 0] == Color32(10, 20, 30, 40))
+    Local part = texture.ToImage(1, 0, 2, 2)
+    Expect(part.Width == 2 && part.Height == 2)
+    Expect(part[0, 0] == Color32(10, 20, 30, 40))
+    Expect(part[1, 1] == Color32(0, 255, 0, 255))
+End Function
+
+@Test
+Function TheScreensPixelsAreLocked() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(8, 4)
+    Defer EndGraphics()
+    Screen.Texture()?.Clear(Color(0, 1, 0, 1))
+    Local pixels = Try Screen.LockPixels()
+    Expect(pixels.Get(7, 3) == Color32(0, 255, 0, 255))
+    pixels.Set(0, 0, Color32(255, 0, 0, 255))
+    pixels.Unlock()
+    Local image = Try Screen.ToImage()
+    Expect(image[0, 0] == Color32(255, 0, 0, 255))
+End Function

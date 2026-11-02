@@ -1,0 +1,133 @@
+// The screen and targets through the FB API, in a headless window, on the GPU ctest's tests use;
+// a machine with no Vulkan sets FBENGINE_NO_GPU to 1 and skips them.
+
+Import std.core
+Import std.image
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import fbengine
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+@Test
+Function TheScreenIsTheWindowsSizeAndKeepsItsPixels() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(160, 100)
+    Defer EndGraphics()
+    Try Gpu.Start()
+    Local screen = Screen.Texture()
+    Expect(screen != Null)
+    Expect(Screen.Width() == Window.PixelWidth())
+    Expect(Screen.Height() == Window.PixelHeight())
+    Expect(Screen.FollowsWindow())
+    Expect(screen?.IsTarget() == True)
+    Expect(screen?.HasDepth() == True)
+    screen?.Clear(Color32(255, 128, 0, 255).ToColor())
+    Flip()
+    Flip()
+    Local image = Try Screen.ToImage()
+    Expect(image[0, 0] == Color32(255, 128, 0, 255))
+    Expect(image[159, 99] == Color32(255, 128, 0, 255))
+    Expect(Gpu.ValidationErrors() == 0)
+End Function
+
+@Test
+Function TheScreensOwnSizeIsFittedIntoTheWindow() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(160, 100)
+    Defer EndGraphics()
+    Try Gpu.Start()
+    Defer Screen.SetSize(0, 0)
+    Screen.SetSize(64, 48)
+    Expect(Screen.Width() == 64)
+    Expect(!Screen.FollowsWindow())
+    Screen.SetScaling(Scaling.INTEGER, False)
+    Defer Screen.SetScaling(Scaling.FIT, True)
+    Expect(Screen.Scaling() == Scaling.INTEGER)
+    Expect(!Screen.Smooth())
+    Expect(Screen.Area() == Rect(16, 2, 128, 96))
+    Try Screen.SetSamples(4)
+    Defer Try? Screen.SetSamples(1)
+    Expect((Screen.Texture()?.Samples() ?? 0) == 4)
+End Function
+
+@Test
+Function AScreenshotIsAPng() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(32, 16)
+    Defer EndGraphics()
+    Try Gpu.Start()
+    Screen.Texture()?.Clear(Color32(0, 0, 255, 255).ToColor())
+    Local folder = Try TempDir("fbengine-screenshot-")
+    Defer Try? folder.Close()
+    Local path = folder.Path / "screen.png"
+    Try Screen.Save(path)
+    Local image = Try Image.Load(path)
+    Expect(image.Width == Window.PixelWidth())
+    Expect(image[3, 3] == Color32(0, 0, 255, 255))
+End Function
+
+@Test
+Function WithoutAWindowThereIsNoScreen()
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    EndGraphics()
+    Expect(Screen.Texture() == Null)
+    Expect(Screen.Width() == 0)
+    Expect(Screen.Area() == Null)
+    Expect(ExpectThrows<GraphicsError>(Screen.ToImage()) != Null)
+End Function
+
+@Test
+Function ATargetIsClearedCopiedAndReadBack() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(8, 8, TextureFormat.RGBA8, 4, True)
+    Expect(target.IsTarget())
+    Expect(target.Samples() == 4)
+    Expect(target.HasDepth())
+    target.Clear(Color(1, 0, 0, 1))
+    Local copy = Try Texture(4, 4, TextureFormat.RGBA8_LINEAR, False)
+    copy.CopyFrom(target, 2, 2, 4, 4)
+    Local image = copy.ToImage()
+    Expect(image[1, 1] == Color32(255, 0, 0, 255))
+    Local bytes = copy.ReadPixels()
+    Expect(bytes.Count == 64)
+    Expect(bytes[0] == 255 && bytes[1] == 0)
+    Local gray = Try Texture(2, 2, TextureFormat.R8, False)
+    gray.WritePixels(0, 0, 2, 2, [1 As UInt8, 2, 3, 4])
+    Expect(gray.ReadPixels() == [1 As UInt8, 2, 3, 4])
+End Function
+
+@Test
+Function AHeadlessWindowsScreenIsThereBeforeTheGpuStarts() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Gpu.Stop()
+    Window.SetHeadless(True)
+    Try Graphics(64, 32)
+    Defer EndGraphics()
+    Expect(Screen.Texture() != Null)
+    Expect(Gpu.Started())
+    Expect(Screen.Width() == Window.PixelWidth())
+    Local image = Try Screen.ToImage()
+    Expect(image.Width == Window.PixelWidth())
+End Function
+
+@Test
+Function AScreenshotIsOpaqueAsTheWindowShowsIt() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(32, 16)
+    Defer EndGraphics()
+    // A new screen's transparent black, and the window shows it black.
+    Local image = Try Screen.ToImage()
+    Expect(image[3, 3] == Color32(0, 0, 0, 255))
+    Screen.Texture()?.Clear(Color(0, 0, 1, 0.25))
+    image = Try Screen.ToImage()
+    Expect(image[3, 3] == Color32(0, 0, 255, 255))
+End Function

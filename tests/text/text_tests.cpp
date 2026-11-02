@@ -519,7 +519,7 @@ TEST_CASE("a glyph past 2048 pixels across or down is rasterized smaller and dra
     fbe::text::layout_t laid;
     REQUIRE(fbe::text::lay_out(font, "H", 1.0F, laid));
     REQUIRE(laid.glyphs.size() == 1);
-    const fbe::text::placed_glyph_t& glyph = laid.glyphs[0];
+    const fbe::text::placed_glyph_t glyph = laid.glyphs[0];
     CHECK(glyph.source.width <= 2048);
     CHECK(glyph.source.height <= 2048);
     CHECK(glyph.width > 5900);
