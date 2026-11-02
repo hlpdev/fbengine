@@ -42,8 +42,8 @@ Public Struct Draw Implements Printable
     /// How it meets the depth of what's drawn before it.
     Public Field DepthMode: DepthMode
     /// Its pipeline, which draws that share one share, as fbe_render.h lays out its bits: its
-    /// material's shading, blend, alpha cutoff, vertex colors, and sides, the camera's fog, and its
-    /// depth mode.
+    /// material's shading, blend, alpha cutoff, vertex colors, and sides, the camera's fog, its
+    /// depth mode, and whether its matrix mirrors it.
     Public Field Pipeline: UInt64
 
     Public Method ToString(): String => "Draw of {Entity} with {Blend} at {Depth}"
@@ -54,12 +54,13 @@ Global drawRoom = 64
 
 Extend Camera
     /// What the camera draws, `tween` of the way from its World's last capture to now, seen from
-    /// where it is then, in the order it draws them: by their materials' orders, lower first; in
-    /// an order, what's opaque first, by material, nearest first, then what blends, furthest
-    /// first; ties as the entities were made. Only showing meshes, sprites, ground planes, and
-    /// terrains it might see, with some alpha left after their fade; none for a hidden camera or
-    /// a viewport with no size. With no window open and no viewport of its own, or a tween outside
-    /// 0 to 1, it panics.
+    /// where it is then, in the order it draws them: by their materials' orders, lower first. In
+    /// order 0, the scene's, what's opaque first, by pipeline, by material, and nearest first, then
+    /// what blends, furthest first; in the others, all furthest first, what's opaque first at the
+    /// same depth. Ties as the entities were made, a mesh's surfaces in order. Only showing meshes,
+    /// sprites, ground planes, and terrains it might see, with some alpha left after their fade;
+    /// none for a hidden camera or a viewport with no size. With no window open and no viewport of
+    /// its own, or a tween outside 0 to 1, it panics.
     @MainThread @PanicsAtCaller
     Public Method Draws(tween: Float = 1): Draw[]
         Local camera = Live("Draws")

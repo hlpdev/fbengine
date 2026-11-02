@@ -24,8 +24,8 @@ bool finite(float r, float g, float b) {
     return std::isfinite(r) && std::isfinite(g) && std::isfinite(b);
 }
 
-/// The lights of a world in the tree's order, depth first, each parent before its children, by a
-/// stack of their own, so no tree is too deep.
+} // namespace
+
 void lights_in(const std::vector<std::uint32_t>& among, std::vector<std::uint32_t>& found) {
     const entities_t& entities = scene().entities;
     std::vector<std::uint32_t> stack(among.rbegin(), among.rend());
@@ -39,8 +39,6 @@ void lights_in(const std::vector<std::uint32_t>& among, std::vector<std::uint32_
         stack.insert(stack.end(), children.rbegin(), children.rend());
     }
 }
-
-} // namespace
 
 void add_light(std::uint32_t entity) {
     scene_t& s = scene();

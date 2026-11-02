@@ -261,9 +261,8 @@ struct camera_t {
     float fog_density = 0.02F;
 };
 
-/// A light: what kind, its color and its intensity, the range a point or spot light's falloff is
-/// measured by, and a spot light's cone, its angles from its axis to where it starts to fade and
-/// to where it's out.
+/// A light: what kind, its color and its intensity, the range where a point or spot light ends, and
+/// a spot light's cone, its angles from its axis to where it starts to fade and to where it's out.
 struct light_t {
     std::uint32_t entity = none;
     std::int32_t type = 0;
@@ -342,6 +341,9 @@ void renumber_cameras(const std::vector<std::pair<std::uint32_t, std::size_t>>& 
                       const std::vector<std::uint32_t>& copies);
 /// The live light a handle is for, or null, with fbe_error saying so.
 light_t* light_of(std::uint64_t handle);
+/// The lights among some entities and under them in the tree's order, depth first, each parent
+/// before its children, by a stack of their own, so no tree is too deep.
+void lights_in(const std::vector<std::uint32_t>& among, std::vector<std::uint32_t>& found);
 void add_light(std::uint32_t entity);
 void remove_light(std::uint32_t entity);
 void add_mesh(std::uint32_t entity);

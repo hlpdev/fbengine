@@ -23,10 +23,14 @@ namespace {
 using scene::camera_t;
 using scene::vec3_t;
 
-/// A light as drawing has it, and when it was made, which lights of a kind go by.
+/// A light as drawing has it, where it is in the world, when it was made, which lights of a kind
+/// go by, and its index in the lists' lights, once it has one.
 struct lit_t {
     fbe_draw_light_t draw{};
+    vec3_t place;
     std::uint64_t made = 0;
+    std::uint32_t index = scene::none;
+    bool wanted = false;
 };
 
 /// Where each of a camera's depth slices starts, its distance in front of it, and where the last
@@ -54,11 +58,12 @@ int slice_of(const camera_t& camera, float depth) {
                       FBE_CLUSTERS_DEEP - 1);
 }
 
-/// The column or row of `count` a point -1 to 1 across the viewport is in, clamped to them.
+/// The column or row of `count` a point -1 to 1 across the viewport is in, clamped to them, as a
+/// float, since a huge light's sides are further across than an int holds.
 int tile_of(float across, int count) {
-    return std::clamp(
-        static_cast<int>(std::floor((across + 1.0F) * 0.5F * static_cast<float>(count))), 0,
-        count - 1);
+    const float last = static_cast<float>(count) - 1.0F;
+    return static_cast<int>(
+        std::clamp(std::floor((across + 1.0F) * 0.5F * static_cast<float>(count)), 0.0F, last));
 }
 
 /// How far a point is from a box, squared, 0 inside it.
@@ -133,11 +138,154 @@ void clusters_reached(const camera_t& camera, const scene::view_t& view,
     }
 }
 
+/// Whether a light's sphere reaches what an item lit per vertex must have it reach: its box, or a
+/// ground plane, which goes on forever.
+bool reaches_item(const item_t& item, vec3_t center, float range) {
+    if (item.draw.kind == FBE_ENTITY_PLANE) {
+        return std::fabs(scene::dot(center - item.min, item.up)) <= range;
+    }
+    return apart_squared(center, item.min, item.max) <= range * range;
+}
+
+/// A camera's World's showing lights with some intensity, in its tree's order, each where it is
+/// between the steps, taken into the camera's view.
+std::vector<lit_t> lights_lit(std::uint32_t world, const scene::view_t& view,
+                              const scene::tweened_t& tweened) {
+    const scene::scene_t& s = scene::scene();
+    std::vector<std::uint32_t> found;
+    scene::lights_in(s.worlds[world].roots, found);
+    const scene::quat_t back = scene::inverse(view.rotation);
+    std::vector<lit_t> lit;
+    lit.reserve(found.size());
+    for (const std::uint32_t entity : found) {
+        const scene::light_t& light = s.lights[s.entities.component[entity]];
+        if (!scene::showing(entity) || light.intensity <= 0.0F) {
+            continue;
+        }
+        const scene::pose_t pose = tweened.pose(entity);
+        const vec3_t place = pose.matrix.axis(3);
+        const vec3_t offset = place - view.position;
+        const vec3_t seen = back * offset;
+        const vec3_t forward = pose.rotation * vec3_t(0.0F, 0.0F, -1.0F);
+        const vec3_t way = back * forward;
+        const float red = light.color[0] * light.intensity;
+        const float green = light.color[1] * light.intensity;
+        const float blue = light.color[2] * light.intensity;
+        lit_t one;
+        one.place = place;
+        one.made = s.entities.made[entity];
+        one.draw = {
+            .light = s.entities.slots.handle(entity),
+            .type = light.type,
+            .color = { red, green, blue },
+            .position = { seen.x, seen.y, seen.z },
+            .direction = { way.x, way.y, way.z },
+            .range = light.range,
+            .inner_cosine = std::cos(light.inner_cone),
+            .outer_cosine = std::cos(light.outer_cone),
+        };
+        lit.push_back(one);
+    }
+    return lit;
+}
+
 } // namespace
 
-} // namespace fbe::render
+bool read_lists(std::uint64_t camera, float target_width, float target_height, float tween,
+                lists_t& lists) {
+    std::uint32_t slot = scene::none;
+    scene::view_t view;
+    bool shows = false;
+    if (!drawn_view(camera, target_width, target_height, tween, slot, view, shows)) {
+        return false;
+    }
+    lists.draws.clear();
+    lists.lights.clear();
+    lists.cluster_lights.clear();
+    lists.draw_lights.clear();
+    lists.clusters.assign(FBE_CLUSTERS, fbe_cluster_t{ .first = 0, .count = 0 });
+    if (!shows) {
+        return true;
+    }
+    const scene::scene_t& s = scene::scene();
+    const camera_t& found = s.cameras[s.entities.component[slot]];
+    const scene::tweened_t tweened(tween);
+    const std::vector<item_t> items = extract(found, view, tweened);
+    std::vector<lit_t> lit = lights_lit(s.entities.world[slot], view, tweened);
+    // What's lit per vertex takes the first lights in the tree's order that reach it, as they're
+    // given here for now, so those it wants stay in the lights though no cluster has them.
+    lists.draws.reserve(items.size());
+    std::vector<std::uint32_t> by_tree;
+    for (const item_t& item : items) {
+        lists.draws.push_back(item.draw);
+        if (!item.vertex_lit) {
+            continue;
+        }
+        fbe_draw_t& draw = lists.draws.back();
+        draw.light_first = static_cast<std::uint32_t>(by_tree.size());
+        for (std::size_t at = 0; at < lit.size() && draw.light_count < FBE_DRAW_LIGHTS; ++at) {
+            if (lit[at].draw.type == FBE_LIGHT_DIRECTIONAL ||
+                reaches_item(item, lit[at].place, lit[at].draw.range)) {
+                lit[at].wanted = true;
+                by_tree.push_back(static_cast<std::uint32_t>(at));
+                ++draw.light_count;
+            }
+        }
+    }
+    std::vector<std::uint32_t> ordered(lit.size());
+    for (std::size_t at = 0; at < ordered.size(); ++at) {
+        ordered[at] = static_cast<std::uint32_t>(at);
+    }
+    std::ranges::sort(ordered, [&](std::uint32_t at_a, std::uint32_t at_b) {
+        const lit_t& a = lit[at_a];
+        const lit_t& b = lit[at_b];
+        const bool a_everywhere = a.draw.type == FBE_LIGHT_DIRECTIONAL;
+        const bool b_everywhere = b.draw.type == FBE_LIGHT_DIRECTIONAL;
+        return a_everywhere != b_everywhere ? a_everywhere : a.made < b.made;
+    });
+    // Directional lights light every cluster; each point and spot light, the clusters its range
+    // reaches, and it's left out when it reaches none and nothing lit per vertex wants it.
+    const auto starts = slice_starts(found);
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> reaches;
+    std::vector<std::uint32_t> reached;
+    for (const std::uint32_t at : ordered) {
+        lit_t& one = lit[at];
+        if (one.draw.type != FBE_LIGHT_DIRECTIONAL) {
+            const vec3_t center(one.draw.position[0], one.draw.position[1], one.draw.position[2]);
+            clusters_reached(found, view, starts, center, one.draw.range, reached);
+            if (reached.empty() && !one.wanted) {
+                continue;
+            }
+            for (const std::uint32_t cluster : reached) {
+                reaches.emplace_back(cluster, static_cast<std::uint32_t>(lists.lights.size()));
+            }
+        }
+        one.index = static_cast<std::uint32_t>(lists.lights.size());
+        lists.lights.push_back(one.draw);
+    }
+    lists.draw_lights.reserve(by_tree.size());
+    for (const std::uint32_t at : by_tree) {
+        lists.draw_lights.push_back(lit[at].index);
+    }
+    // Each cluster's lights together, in the lights' order.
+    for (const auto& [cluster, light] : reaches) {
+        ++lists.clusters[cluster].count;
+    }
+    std::uint32_t total = 0;
+    for (fbe_cluster_t& cluster : lists.clusters) {
+        cluster.first = total;
+        total += cluster.count;
+    }
+    lists.cluster_lights.resize(total);
+    std::array<std::uint32_t, FBE_CLUSTERS> next{};
+    for (const auto& [cluster, light] : reaches) {
+        const fbe_cluster_t& where = lists.clusters[cluster];
+        lists.cluster_lights[where.first + next[cluster]++] = light;
+    }
+    return true;
+}
 
-using fbe::scene::vec3_t;
+} // namespace fbe::render
 
 extern "C" {
 
@@ -147,104 +295,34 @@ FBE_API bool fbe_render_lights(uint64_t camera, float target_width, float target
                                int32_t index_capacity, int32_t* index_count) {
     *light_count = 0;
     *index_count = 0;
-    std::uint32_t slot = fbe::scene::none;
-    fbe::scene::view_t view;
-    bool shows = false;
-    if (!fbe::render::drawn_view(camera, target_width, target_height, tween, slot, view, shows)) {
+    fbe::render::lists_t lists;
+    if (!fbe::render::read_lists(camera, target_width, target_height, tween, lists)) {
         return false;
     }
     if (clusters != nullptr) {
-        std::fill(clusters, clusters + FBE_CLUSTERS, fbe_cluster_t{ .first = 0, .count = 0 });
+        std::ranges::copy(lists.clusters, clusters);
     }
-    if (!shows) {
-        return true;
-    }
-    const fbe::scene::scene_t& s = fbe::scene::scene();
-    const fbe::scene::camera_t& found = s.cameras[s.entities.component[slot]];
-    const std::uint32_t world = s.entities.world[slot];
-    // Each light where it is between the steps, taken into the camera's view.
-    const fbe::scene::tweened_t tweened(tween);
-    const fbe::scene::quat_t back = fbe::scene::inverse(view.rotation);
-    std::vector<fbe::render::lit_t> lit;
-    for (const fbe::scene::light_t& light : s.lights) {
-        if (s.entities.world[light.entity] != world || !fbe::scene::showing(light.entity) ||
-            light.intensity <= 0.0F) {
-            continue;
-        }
-        const fbe::scene::pose_t pose = tweened.pose(light.entity);
-        const vec3_t offset = pose.matrix.axis(3) - view.position;
-        const vec3_t place = back * offset;
-        const vec3_t forward = pose.rotation * vec3_t(0.0F, 0.0F, -1.0F);
-        const vec3_t way = back * forward;
-        const float red = light.color[0] * light.intensity;
-        const float green = light.color[1] * light.intensity;
-        const float blue = light.color[2] * light.intensity;
-        fbe::render::lit_t one;
-        one.made = s.entities.made[light.entity];
-        one.draw = {
-            .light = s.entities.slots.handle(light.entity),
-            .type = light.type,
-            .color = { red, green, blue },
-            .position = { place.x, place.y, place.z },
-            .direction = { way.x, way.y, way.z },
-            .range = light.range,
-            .inner_cosine = std::cos(light.inner_cone),
-            .outer_cosine = std::cos(light.outer_cone),
-        };
-        lit.push_back(one);
-    }
-    std::ranges::sort(lit, [](const fbe::render::lit_t& a, const fbe::render::lit_t& b) {
-        const bool a_everywhere = a.draw.type == FBE_LIGHT_DIRECTIONAL;
-        const bool b_everywhere = b.draw.type == FBE_LIGHT_DIRECTIONAL;
-        return a_everywhere != b_everywhere ? a_everywhere : a.made < b.made;
-    });
-    // Directional lights light every cluster; each point and spot light, the clusters its range
-    // reaches, and none at all when it reaches none.
-    const auto starts = fbe::render::slice_starts(found);
-    std::vector<fbe_draw_light_t> kept;
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> reaches;
-    std::vector<std::uint32_t> reached;
-    for (const fbe::render::lit_t& one : lit) {
-        if (one.draw.type != FBE_LIGHT_DIRECTIONAL) {
-            const vec3_t center(one.draw.position[0], one.draw.position[1], one.draw.position[2]);
-            fbe::render::clusters_reached(found, view, starts, center, one.draw.range, reached);
-            if (reached.empty()) {
-                continue;
-            }
-            for (const std::uint32_t cluster : reached) {
-                reaches.emplace_back(cluster, static_cast<std::uint32_t>(kept.size()));
-            }
-        }
-        kept.push_back(one.draw);
-    }
-    // Each cluster's lights together, in the lights' order.
-    std::array<std::uint32_t, FBE_CLUSTERS> counts{};
-    for (const auto& [cluster, light] : reaches) {
-        ++counts[cluster];
-    }
-    std::array<std::uint32_t, FBE_CLUSTERS> firsts{};
-    std::uint32_t total = 0;
-    for (std::size_t cluster = 0; cluster < FBE_CLUSTERS; ++cluster) {
-        firsts[cluster] = total;
-        total += counts[cluster];
-    }
-    if (clusters != nullptr) {
-        for (std::size_t cluster = 0; cluster < FBE_CLUSTERS; ++cluster) {
-            clusters[cluster] = { .first = firsts[cluster], .count = counts[cluster] };
-        }
-    }
-    std::array<std::uint32_t, FBE_CLUSTERS> next = firsts;
-    for (const auto& [cluster, light] : reaches) {
-        const std::uint32_t at = next[cluster]++;
-        if (std::cmp_less(at, index_capacity)) {
-            indices[at] = light;
-        }
-    }
-    const auto room = std::min(kept.size(), static_cast<std::size_t>(std::max(light_capacity, 0)));
-    std::copy(kept.begin(), kept.begin() + static_cast<std::ptrdiff_t>(room), lights);
-    *light_count = static_cast<std::int32_t>(kept.size());
-    *index_count = static_cast<std::int32_t>(total);
+    const auto index_room = std::min(lists.cluster_lights.size(),
+                                     static_cast<std::size_t>(std::max(index_capacity, 0)));
+    std::copy_n(lists.cluster_lights.begin(), index_room, indices);
+    const auto room =
+        std::min(lists.lights.size(), static_cast<std::size_t>(std::max(light_capacity, 0)));
+    std::copy_n(lists.lights.begin(), room, lights);
+    *light_count = static_cast<std::int32_t>(lists.lights.size());
+    *index_count = static_cast<std::int32_t>(lists.cluster_lights.size());
     return true;
+}
+
+FBE_API int32_t fbe_render_draw_lights(uint64_t camera, float target_width, float target_height,
+                                       float tween, uint32_t* indices, int32_t capacity) {
+    fbe::render::lists_t lists;
+    if (!fbe::render::read_lists(camera, target_width, target_height, tween, lists)) {
+        return -1;
+    }
+    const auto room =
+        std::min(lists.draw_lights.size(), static_cast<std::size_t>(std::max(capacity, 0)));
+    std::copy_n(lists.draw_lights.begin(), room, indices);
+    return static_cast<std::int32_t>(lists.draw_lights.size());
 }
 
 } // extern "C"

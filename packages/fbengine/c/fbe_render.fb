@@ -8,6 +8,7 @@ Public Const FBE_CLUSTERS_ACROSS: Int32 = 16
 Public Const FBE_CLUSTERS_UP: Int32 = 9
 Public Const FBE_CLUSTERS_DEEP: Int32 = 24
 Public Const FBE_CLUSTERS: Int32 = 3456
+Public Const FBE_DRAW_LIGHTS: Int32 = 8
 
 @CLayout Public Struct fbe_draw_t
     Public Field entity: UInt64
@@ -21,6 +22,8 @@ Public Const FBE_CLUSTERS: Int32 = 3456
     Public Field depth: Float32
     Public Field depth_mode: Int32
     Public Field pipeline: UInt64
+    Public Field light_first: UInt32
+    Public Field light_count: UInt32
 End Struct
 
 @CLayout Public Struct fbe_draw_light_t
@@ -47,4 +50,6 @@ Public Extern "C" Lib "fbengine_native"
                                light_count: Ptr<Int32>, clusters: Ptr<fbe_cluster_t>,
                                indices: Ptr<UInt32>, index_capacity: Int32,
                                index_count: Ptr<Int32>): Bool
+    Function fbe_render_draw_lights(camera: UInt64, target_width: Float32, target_height: Float32,
+                                    tween: Float32, indices: Ptr<UInt32>, capacity: Int32): Int32
 End Extern

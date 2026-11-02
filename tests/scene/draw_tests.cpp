@@ -429,3 +429,60 @@ TEST_CASE("a draw's depth mode and pipeline say how it's drawn, and order the sc
         fbe_material_release(material);
     }
 }
+
+TEST_CASE("a mirrored draw keys and sorts apart from an unmirrored one", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t plain = cube(world.handle, -2.0F, 0.0F, -6.0F);
+    const std::uint64_t mirrored = cube(world.handle, 2.0F, 0.0F, -9.0F);
+    fbe_entity_set_scale(mirrored, -1.0F, 1.0F, 1.0F, FBE_SPACE_WORLD);
+    const std::uint64_t twice = cube(world.handle, 0.0F, 0.0F, -12.0F);
+    fbe_entity_set_scale(twice, -1.0F, -1.0F, 1.0F, FBE_SPACE_WORLD);
+    const std::uint64_t nearer = cube(world.handle, 0.0F, 2.0F, -4.0F);
+    fbe_entity_set_scale(nearer, 1.0F, 1.0F, -1.0F, FBE_SPACE_WORLD);
+    const std::vector<fbe_draw_t> found = draws(camera);
+    REQUIRE(found.size() == 4);
+    // Unmirrored first though further, each pipeline nearest first; two flips aren't a mirror.
+    CHECK(found[0].entity == plain);
+    CHECK(found[1].entity == twice);
+    CHECK(found[2].entity == nearer);
+    CHECK(found[3].entity == mirrored);
+    constexpr std::uint64_t bit = 1ULL << 12U;
+    CHECK(found[1].pipeline == found[0].pipeline);
+    CHECK(found[3].pipeline == found[2].pipeline);
+    CHECK(found[2].pipeline == (found[0].pipeline | bit));
+    CHECK((found[0].pipeline & bit) == 0);
+}
+
+TEST_CASE("in an order but 0, what's opaque draws before what blends at its depth", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t geometry = fbe_geometry_cube();
+    fbe_mat4_t identity{};
+    identity.m[0] = 1.0F;
+    identity.m[5] = 1.0F;
+    identity.m[10] = 1.0F;
+    identity.m[15] = 1.0F;
+    fbe_geometry_add(geometry, geometry, &identity);
+    const std::uint64_t clouds = fbe_material_create();
+    fbe_material_set_blend(clouds, FBE_BLEND_ALPHA);
+    fbe_material_set_order(clouds, -1);
+    const std::uint64_t sky = fbe_material_create();
+    fbe_material_set_order(sky, -1);
+    fbe_surface_set_material(geometry, 0, clouds);
+    fbe_surface_set_material(geometry, 1, sky);
+    const std::uint64_t dome = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
+    fbe_mesh_set_geometry(dome, geometry);
+    fbe_geometry_release(geometry);
+    fbe_entity_set_position(dome, 0.0F, 0.0F, -5.0F, FBE_SPACE_WORLD);
+    const std::vector<fbe_draw_t> found = draws(camera);
+    REQUIRE(found.size() == 2);
+    CHECK(found[0].surface == 1);
+    CHECK(found[0].blend == FBE_BLEND_OPAQUE);
+    CHECK(found[1].surface == 0);
+    CHECK(found[1].blend == FBE_BLEND_ALPHA);
+    CHECK(found[0].depth_mode == FBE_DEPTH_NONE);
+    CHECK(found[1].depth_mode == FBE_DEPTH_NONE);
+    fbe_material_release(clouds);
+    fbe_material_release(sky);
+}

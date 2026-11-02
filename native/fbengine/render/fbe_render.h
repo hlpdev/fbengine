@@ -27,6 +27,9 @@ extern "C" {
 #define FBE_CLUSTERS_DEEP   24
 #define FBE_CLUSTERS        3456
 
+// The most lights an FBE_SHADING_VERTEX draw is lit by, as Blitz's first eight in the tree's order.
+#define FBE_DRAW_LIGHTS 8
+
 // NOLINTBEGIN(modernize-use-using)
 // One thing a camera draws: the entity, and its FBE_ENTITY_ kind; for a mesh, its geometry and
 // the surface of it, else 0 and -1 (a terrain is drawn from its own heights); the material it's
@@ -36,7 +39,10 @@ extern "C" {
 // its FBE_DEPTH_; and its pipeline, which draws that share one share: bits 0 and 1 its material's
 // FBE_SHADING_, 2 to 4 its FBE_BLEND_, 5 whether its material has an alpha cutoff, 6 whether it
 // takes vertex colors, 7 whether it's two-sided, 8 and 9 the camera's FBE_FOG_, or none when the
-// material isn't fogged, and 10 and 11 its FBE_DEPTH_; the default material is a new one's.
+// material isn't fogged, 10 and 11 its FBE_DEPTH_, and 12 whether its matrix mirrors it, its
+// determinant below 0, which turns its triangles' winding around; the default material is a new
+// one's. An FBE_SHADING_VERTEX draw has its own lights, `light_count` of fbe_render_draw_lights'
+// indices from `light_first`; any other, 0 of them, as it's lit by its clusters.
 typedef struct fbe_draw_t {
     uint64_t entity;
     int32_t kind;
@@ -49,13 +55,16 @@ typedef struct fbe_draw_t {
     float depth;
     int32_t depth_mode;
     uint64_t pipeline;
+    uint32_t light_first;
+    uint32_t light_count;
 } fbe_draw_t;
 
 // A light as drawing lights with it: the entity, and its FBE_LIGHT_ type; its color times its
 // intensity, linear; where it is and the way it shines, in the camera's view, x right, y up,
 // looking down -z, `tween` of the way, as the draws are; its range, where a point or spot light
 // ends; and the cosines of a spot light's cone, from its axis to where it starts to fade and to
-// where it's out.
+// where it's out. Every shading model falls off as glTF's KHR_lights_punctual does: a distance d
+// from a point or spot light, its color times clamp(1 - (d / range)^4, 0, 1)^2 / max(d^2, 0.0001).
 typedef struct fbe_draw_light_t {
     uint64_t light;
     int32_t type;
@@ -87,16 +96,26 @@ FBE_API int32_t fbe_render_draws(uint64_t camera, float target_width, float targ
 
 // What lights what a camera draws in a target of this size, `tween` of the way from its World's
 // last capture: its World's showing lights with an intensity above 0, the directional ones first,
-// then the point and spot lights that reach its view, each kind as they were made; and each of its
-// FBE_CLUSTERS clusters' point and spot lights, by their indices in the lights, the clusters across
-// fastest, then down from the top, then out from the near plane. Writes up to `light_capacity`
-// lights, `index_capacity` indices, and the clusters, unless `clusters` is null, and gives how many
-// lights there are in `light_count` and indices in `index_count`: none for a hidden camera or one
-// whose viewport has no size. False for a freed camera, or a tween outside 0 to 1.
+// then the point and spot lights that reach its view or light one of its FBE_SHADING_VERTEX draws,
+// each kind as they were made; and each of its FBE_CLUSTERS clusters' point and spot lights, those
+// whose range reaches its part of the view, perhaps with a few that only come near it, by their
+// indices in the lights, the clusters across fastest, then down from the top, then out from the
+// near plane. Writes up to `light_capacity` lights, `index_capacity` indices, and the clusters,
+// unless `clusters` is null, and gives how many lights there are in `light_count` and indices in
+// `index_count`: none for a hidden camera or one whose viewport has no size. False for a freed
+// camera, or a tween outside 0 to 1.
 FBE_API bool fbe_render_lights(uint64_t camera, float target_width, float target_height,
                                float tween, fbe_draw_light_t* lights, int32_t light_capacity,
                                int32_t* light_count, fbe_cluster_t* clusters, uint32_t* indices,
                                int32_t index_capacity, int32_t* index_count);
+
+// The lights of a camera's FBE_SHADING_VERTEX draws, by their indices in fbe_render_lights' lights,
+// each draw's together, from its `light_first`: the first FBE_DRAW_LIGHTS, in the tree's order, of
+// the lights whose range reaches its world bounds, or for a ground plane the plane, as directional
+// lights always do. Writes up to `capacity` and gives how many there are, -1 for a freed camera, or
+// a tween outside 0 to 1.
+FBE_API int32_t fbe_render_draw_lights(uint64_t camera, float target_width, float target_height,
+                                       float tween, uint32_t* indices, int32_t capacity);
 
 #ifdef __cplusplus
 }

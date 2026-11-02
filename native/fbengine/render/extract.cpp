@@ -25,16 +25,6 @@ using scene::mat4_t;
 using scene::none;
 using scene::vec3_t;
 
-/// A draw, and what it's sorted by.
-struct item_t {
-    fbe_draw_t draw{};
-    std::int32_t order = 0;
-    bool blended = false;
-    std::uint32_t material = none;
-    std::uint32_t entity = none;
-    std::uint64_t made = 0;
-};
-
 void put(fbe_draw_t& draw, const mat4_t& matrix, const std::array<float, 4>& tint, float fade) {
     std::ranges::copy(matrix.m, draw.matrix);
     draw.color[0] = tint[0];
@@ -58,6 +48,8 @@ item_t item_of(std::uint32_t entity, std::uint32_t material, const mat4_t& matri
     item.draw.material = material != none ? s.material_slots.handle(material) : 0;
     item.draw.blend = scene::drawn_blend(material, tint[3] * fade);
     item.blended = item.draw.blend != FBE_BLEND_OPAQUE;
+    item.mirrored = scene::dot(scene::cross(matrix.axis(0), matrix.axis(1)), matrix.axis(2)) < 0.0F;
+    item.vertex_lit = material != none && s.materials[material].shading == FBE_SHADING_VERTEX;
     put(item.draw, matrix, tint, fade);
     const vec3_t forward = view.rotation * vec3_t(0.0F, 0.0F, -1.0F);
     item.draw.depth = scene::dot(matrix.axis(3) - view.position, forward);
@@ -65,7 +57,7 @@ item_t item_of(std::uint32_t entity, std::uint32_t material, const mat4_t& matri
 }
 
 /// A draw's pipeline, as fbe_render.h lays its bits out, from its material, or a new one's for
-/// none, its blend and depth, and the camera's fog.
+/// none, its blend and depth, the camera's fog, and whether its matrix mirrors it.
 std::uint64_t pipeline_of(const item_t& item, const camera_t& camera) {
     const scene::scene_t& s = scene::scene();
     const scene::material_t standard;
@@ -78,7 +70,8 @@ std::uint64_t pipeline_of(const item_t& item, const camera_t& camera) {
            (static_cast<std::uint64_t>(material.vertex_colors ? 1 : 0) << 6U) |
            (static_cast<std::uint64_t>(material.two_sided ? 1 : 0) << 7U) |
            (static_cast<std::uint64_t>(fog) << 8U) |
-           (static_cast<std::uint64_t>(item.draw.depth_mode) << 10U);
+           (static_cast<std::uint64_t>(item.draw.depth_mode) << 10U) |
+           (static_cast<std::uint64_t>(item.mirrored ? 1 : 0) << 12U);
 }
 
 /// The eight corners of a box through a matrix.
@@ -92,7 +85,23 @@ std::array<vec3_t, 8> corners_of(const mat4_t& matrix, vec3_t min, vec3_t max) {
     return corners;
 }
 
-/// What a camera draws, in its order.
+/// Keeps the box around some corners on an item lit per vertex, what its lights must reach.
+void bound(item_t& item, const std::array<vec3_t, 8>& corners) {
+    if (!item.vertex_lit) {
+        return;
+    }
+    item.min = corners[0];
+    item.max = corners[0];
+    for (const vec3_t& corner : corners) {
+        item.min = vec3_t(std::fmin(item.min.x, corner.x), std::fmin(item.min.y, corner.y),
+                          std::fmin(item.min.z, corner.z));
+        item.max = vec3_t(std::fmax(item.max.x, corner.x), std::fmax(item.max.y, corner.y),
+                          std::fmax(item.max.z, corner.z));
+    }
+}
+
+} // namespace
+
 std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
                             const scene::tweened_t& tweened) {
     const scene::scene_t& s = scene::scene();
@@ -132,6 +141,7 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
             item_t item = item_of(mesh.entity, material, matrix, mesh.tint, fade, view);
             item.draw.geometry = s.geometry_slots.handle(mesh.geometry);
             item.draw.surface = static_cast<std::int32_t>(surface);
+            bound(item, corners);
             items.push_back(item);
         }
     }
@@ -150,7 +160,9 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
             continue;
         }
         const mat4_t matrix = scene::sprite_matrix(sprite.entity, own, view.rotation);
-        items.push_back(item_of(sprite.entity, sprite.material, matrix, sprite.tint, fade, view));
+        item_t item = item_of(sprite.entity, sprite.material, matrix, sprite.tint, fade, view);
+        bound(item, corners);
+        items.push_back(item);
     }
     for (const scene::plane_t& plane : s.planes) {
         float fade = 1.0F;
@@ -163,7 +175,10 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         if (!scene::plane_in_view(camera, view, matrix.axis(3), up)) {
             continue;
         }
-        items.push_back(item_of(plane.entity, plane.material, matrix, plane.tint, fade, view));
+        item_t item = item_of(plane.entity, plane.material, matrix, plane.tint, fade, view);
+        item.min = matrix.axis(3);
+        item.up = up;
+        items.push_back(item);
     }
     for (const scene::terrain_t& terrain : s.terrains) {
         float fade = 1.0F;
@@ -185,6 +200,7 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         const vec3_t middle = scene::transform_point(matrix, min + across * 0.5F);
         const vec3_t forward = view.rotation * vec3_t(0.0F, 0.0F, -1.0F);
         item.draw.depth = scene::dot(middle - view.position, forward);
+        bound(item, corners);
         items.push_back(item);
     }
     for (item_t& item : items) {
@@ -200,9 +216,9 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         item.draw.pipeline = pipeline_of(item, camera);
     }
     // By order. In the scene's, opaque by pipeline, material, and nearest first, then blended
-    // furthest first; in others, which don't meet depth, all furthest first. Ties as the entities
-    // were made, and a mesh's surfaces in order, so a frame draws as the last did whatever's freed
-    // between.
+    // furthest first; in others, which don't meet depth, all furthest first, what's opaque first
+    // at the same depth, or it would cover what blends over it. Ties as the entities were made, and
+    // a mesh's surfaces in order, so a frame draws as the last did whatever's freed between.
     std::ranges::sort(items, [](const item_t& a, const item_t& b) {
         if (a.order != b.order) {
             return a.order < b.order;
@@ -221,6 +237,9 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         if (a.draw.depth != b.draw.depth) {
             return far_first ? a.draw.depth > b.draw.depth : a.draw.depth < b.draw.depth;
         }
+        if (a.blended != b.blended) {
+            return !a.blended;
+        }
         if (a.made != b.made) {
             return a.made < b.made;
         }
@@ -228,8 +247,6 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
     });
     return items;
 }
-
-} // namespace
 
 bool drawn_view(std::uint64_t camera, float target_width, float target_height, float tween,
                 std::uint32_t& slot, scene::view_t& view, bool& shows) {
@@ -260,24 +277,14 @@ extern "C" {
 
 FBE_API int32_t fbe_render_draws(uint64_t camera, float target_width, float target_height,
                                  float tween, fbe_draw_t* draws, int32_t capacity) {
-    std::uint32_t slot = fbe::scene::none;
-    fbe::scene::view_t view;
-    bool shows = false;
-    if (!fbe::render::drawn_view(camera, target_width, target_height, tween, slot, view, shows)) {
+    fbe::render::lists_t lists;
+    if (!fbe::render::read_lists(camera, target_width, target_height, tween, lists)) {
         return -1;
     }
-    if (!shows) {
-        return 0;
-    }
-    const fbe::scene::scene_t& s = fbe::scene::scene();
-    const fbe::scene::camera_t& found = s.cameras[s.entities.component[slot]];
-    const fbe::scene::tweened_t tweened(tween);
-    const std::vector<fbe::render::item_t> items = fbe::render::extract(found, view, tweened);
-    const auto count = std::min(items.size(), static_cast<std::size_t>(std::max(capacity, 0)));
-    for (std::size_t i = 0; i < count; ++i) {
-        draws[i] = items[i].draw;
-    }
-    return static_cast<std::int32_t>(items.size());
+    const auto count =
+        std::min(lists.draws.size(), static_cast<std::size_t>(std::max(capacity, 0)));
+    std::copy_n(lists.draws.begin(), count, draws);
+    return static_cast<std::int32_t>(lists.draws.size());
 }
 
 } // extern "C"
