@@ -372,6 +372,62 @@ TEST_CASE("the LOD bias and anisotropy are every texture's, within their range",
     stop_gpu();
 }
 
+// A GPU whose samplers have no LOD bias, as Metal's through MoltenVK haven't, draws as with none,
+// and makes them with none, which the validation layers would find, though the setting's kept.
+TEST_CASE("a GPU with no LOD bias draws with none", "[gpu]") {
+    const std::vector<std::uint8_t> pixels = card();
+    const auto drawn = [&pixels] {
+        const std::uint64_t texture = make(8, 8, FBE_TEXTURE_RGBA8, true);
+        require(fbe_texture_write(texture, 0, 0, 8, 8, pixels.data(), 32));
+        return draw({ .width = 8, .height = 8 },
+                    { quad_of(texture, { -1.0F, -1.0F, 1.0F, 1.0F }, { 0.0F, 0.0F, 1.0F, 1.0F }) });
+    };
+    start();
+    const fbe::golden::frame_t before = drawn();
+    require(fbe_gpu_set_lod_bias(8.0F));
+    if (fbe::gpu::device()->max_lod_bias > 0.0F) {
+        CHECK(drawn().rgba != before.rgba);
+    }
+    stop_gpu();
+    fbe::gpu::inject(fbe::gpu::fault_t::NO_LOD_BIAS);
+    start();
+    CHECK(fbe::gpu::device()->max_lod_bias == 0.0F);
+    CHECK(fbe_gpu_lod_bias() == 8.0F);
+    CHECK(drawn().rgba == before.rgba);
+    require(fbe_gpu_set_lod_bias(-3.0F));
+    CHECK(drawn().rgba == before.rgba);
+    require(fbe_gpu_set_lod_bias(0.0F));
+    stop_gpu();
+}
+
+// Textures are as many as the device's set holds: past what it promises a set, as much as it says
+// it holds, and otherwise what it promises, as MoltenVK's on a Mac is, as long as that's what
+// fbengine needs.
+TEST_CASE("the textures are as many as the device's set holds", "[gpu]") {
+    fbe::gpu::inject(fbe::gpu::fault_t::PROMISED_DESCRIPTORS);
+    start();
+    CHECK(fbe::gpu::texture_capacity() == 1212 - fbe::gpu::sampler_slots);
+    const std::vector<std::uint8_t> pixels = card();
+    const std::uint64_t texture = make(8, 8, FBE_TEXTURE_RGBA8_LINEAR, false);
+    require(fbe_texture_write(texture, 0, 0, 8, 8, pixels.data(), 32));
+    CHECK(fbe::texture::read(texture, 0) == pixels);
+    stop_gpu();
+    // A device that isn't asked to pretend holds at least what fbengine needs.
+    start();
+    CHECK(fbe::gpu::texture_capacity() >= 1024);
+    stop_gpu();
+}
+
+TEST_CASE("a device whose set holds too few textures is refused", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    fbe::gpu::inject(fbe::gpu::fault_t::FEWEST_DESCRIPTORS);
+    CHECK(!fbe_gpu_start());
+    CHECK(
+        std::string(fbe_error()).ends_with("holds 1023 textures at once, and fbengine needs 1024"));
+    CHECK(!fbe_gpu_started());
+    stop_gpu();
+}
+
 // A submit that fails for want of memory keeps the frame's uploads, and their staging, for the
 // next submit, which runs them first: the pixels written before it arrive, and the textures are
 // as their uses expect.
