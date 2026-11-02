@@ -66,7 +66,7 @@ Public Final Class Ui
     Field strings: Strings? = Null
     // Its Strings' stamp when its widgets were last laid out by them.
     Field stamp: Int = 0
-    // Whether Draw's asked for the OS's font, with none of its own.
+    // Whether Draw's given it the engine's font, with none of its own.
     Field asked: Bool = False
 
     /// A Ui of the tree `root`, in `theme`, or Theme.Dark().
@@ -251,7 +251,7 @@ Public Final Class Ui
     /// Sets the font a style's Font names, or with "", the one for styles whose font it hasn't,
     /// which their text is measured in, as it's drawn, at each style's FontSize; Null takes it
     /// away. With none, text is measured by EstimatedText until the first Draw, which takes the
-    /// OS's UI font, as it's found (Font.SystemUI), for "".
+    /// engine's own font (Font.BuiltIn) for "", and lays it out by that.
     @MainThread Public Method SetFont(name: String, font: Font?)
         If font == Null
             fonts.Remove(name)
@@ -387,12 +387,14 @@ Public Final Class Ui
         paint.Finish()
     End Method
 
-    // The OS's font for "", the first time it draws with none.
+    // The engine's font for "", the first time it draws with none, laid out by it at once, so its
+    // first frame's as its next are.
     @MainThread Method Asked()
         If asked || fonts.Get("") != Null Then Return
         asked = True
-        Local found = Font.SystemUI(16.0)
-        If found != Null Then SetFont("", found)
+        SetFont("", Font.BuiltIn())
+        Local area = ShownArea()
+        root.Layout(Rect(0.0, 0.0, area.Width / scale, area.Height / scale))
     End Method
 
     // The part of the window the screen shows in, in the window's units; all of it before the GPU's

@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -593,4 +594,25 @@ TEST_CASE("a color glyph is rasterized once, at a whole pixel, without a made bo
     CHECK(bolder.glyphs[0].source.width > letters.glyphs[0].source.width);
     fbe_text_free_font(color);
     fbe_text_free_font(bold);
+}
+
+TEST_CASE("the engine's own font is in the DLL, a face read once, and refuses a bad size") {
+    fbe::text::atlas().clear();
+    const std::uint64_t font = fbe_text_embedded_font(16.0F, 0);
+    INFO(fbe_error());
+    REQUIRE(font != 0);
+    fbe_text_set_system_fallback(font, false);
+    const std::size_t open = fbe::text::faces_open();
+    const std::uint64_t again = fbe_text_embedded_font(40.0F, 0);
+    CHECK(fbe::text::faces_open() == open);
+    CHECK(fbe_text_has_glyphs(font, "Az09 \xC3\xA4\xC5\x82\xE2\x82\xAC"));
+    CHECK_FALSE(fbe_text_has_glyphs(font, "\xE6\x97\xA5"));
+    fbe::text::layout_t laid;
+    REQUIRE(fbe::text::lay_out(font, "Az", 1.0F, laid));
+    REQUIRE(laid.glyphs.size() == 2);
+    CHECK(drawn(laid.glyphs[0]));
+    CHECK(fbe_text_embedded_font(0.0F, 0) == 0);
+    CHECK(fbe_text_embedded_font(std::numeric_limits<float>::infinity(), 0) == 0);
+    fbe_text_free_font(font);
+    fbe_text_free_font(again);
 }

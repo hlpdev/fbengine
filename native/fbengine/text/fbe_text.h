@@ -55,6 +55,9 @@ FBE_API uint64_t fbe_text_system_font(const char* family, float size, int32_t st
 // The OS's own font for its UI, as Segoe UI is Windows'; 0, with fbe_error's why, when it has no
 // font at all.
 FBE_API uint64_t fbe_text_default_font(float size, int32_t style);
+// The engine's own font, a Latin subset of Noto Sans, the same on every machine, from no file; 0,
+// with fbe_error's why, for a size that isn't over 0 and finite.
+FBE_API uint64_t fbe_text_embedded_font(float size, int32_t style);
 // Another font of `font`'s face, at `size` and `style`, with its fallbacks; 0 with fbe_error's why.
 FBE_API uint64_t fbe_text_resize_font(uint64_t font, float size, int32_t style);
 // Frees a font; false if the handle isn't a font's.

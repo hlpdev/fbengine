@@ -1,7 +1,7 @@
 // A game's menus, HUD, and console on fbengine_ui: a main menu, its options, a HUD over the game,
 // and the console on the grave key, used by the mouse, the keyboard, and a gamepad, driven here by
 // Simulate, offscreen, as a test or a replay is. Each frame it draws them over the game's own
-// background, in the OS's UI font.
+// background, in the engine's own font.
 
 Import std.core
 Import std.math

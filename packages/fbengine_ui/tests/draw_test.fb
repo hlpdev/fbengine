@@ -6,6 +6,7 @@ From std.image Import Image
 Import std.math
 Import std.os
 Import std.test
+Import std.time
 Import fbengine
 Import fbengine_ui
 
@@ -290,17 +291,22 @@ Function TextIsDrawnWhereItsWidgetSaysAndNotPastIt() Throws GraphicsError, IOErr
 End Function
 
 @Test
-Function WithNoFontTheUiTakesTheOssOne() Throws GraphicsError
+Function WithNoFontTheUiTakesTheEnginesOwn() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Local label = Label("Hello")
     label.SetTranslates(False)
+    // Opened draws once, which lays it out by the font in that same frame.
     Local ui = Try Opened([label])
-    Local system = Font.SystemUI(16.0)
-    If system == Null Then Skip("this machine has no fonts")
     Local fonted = ui.FontFor(Style.Plain())
-    Expect(fonted != Null)
-    Drawn(ui)
+    Expect(fonted != Null && fonted.Family() == "Noto Sans")
+    Local size = Font.BuiltIn().Measure("Hello")
+    Expect(label.Box().Width == size.x && label.Box().Height == size.y)
     Expect(Marked(Try Pixels(), label.Box(), clear))
+    // A game's own font stays its own.
+    Local theirs = Try Opened([Label("x")])
+    theirs.SetFont("", Font.BuiltIn(30.0))
+    Drawn(theirs)
+    Expect(theirs.FontFor(Style.Plain())?.Size() == 16.0)
     EndGraphics()
 End Function
 
@@ -554,3 +560,31 @@ Class Crossed Extends Widget
         Expect(paint.Owner().Root().Visible())
     End Method
 End Class
+
+@Test
+Function AFieldsCursorBlinksFromWhenItLastMoved() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local field = TextField("")
+    field.SetSize(100.0, 24.0)
+    Local ui = Try Opened([field])
+    ui.Focus(field)
+    Drawn(ui)
+    Expect((Try Pixels())[0, 12] != clear)
+    // Off in the second half of each second, with no more than a second of frames to get there.
+    Local waited: Float64 = 0.0
+    Local off = False
+    While waited < 1.0 && !off
+        Sleep(20.Milliseconds)
+        Drawn(ui)
+        waited += Frame.Delta()
+        off = (Try Pixels())[0, 12] == clear
+    End While
+    Expect(off)
+    // A key moving it shows it again at once, there.
+    Try Simulate.Text("a")
+    Drawn(ui)
+    Local at = ui.MeasureText("a", field.CurrentStyle()).x
+    Expect(field.Cursor() == 1)
+    Expect((Try Pixels())[Round(at) As Int32, 2] != clear)
+    EndGraphics()
+End Function

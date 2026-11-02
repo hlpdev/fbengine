@@ -1,0 +1,46 @@
+// The engine's own font: a Latin subset of Noto Sans, in the DLL, so a game with none of its own
+// looks the same on every machine, with no file to ship (tools/make_default_font.py makes it).
+
+#include "core/engine.hpp"
+#include "fbengine.h"
+#include "text/font.hpp"
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <format>
+#include <memory>
+#include <vector>
+
+namespace {
+
+constexpr auto default_font = std::to_array<std::uint8_t>({
+#include "text/default_font.inc"
+});
+
+/// Its face, kept while a font has it, so its bytes are read once.
+std::weak_ptr<fbe::text::face_t> default_face;
+
+} // namespace
+
+extern "C" {
+
+FBE_API uint64_t fbe_text_embedded_font(float size, int32_t style) {
+    if (size <= 0.0F || !std::isfinite(size)) {
+        fbe::fail(std::format("a font's size is over 0, not {}", size));
+        return 0;
+    }
+    std::shared_ptr<fbe::text::face_t> face = default_face.lock();
+    if (face == nullptr) {
+        face = fbe::text::open_face(
+            std::vector<std::uint8_t>(default_font.begin(), default_font.end()), 0,
+            "the engine's font");
+        if (face == nullptr) {
+            return 0;
+        }
+        default_face = face;
+    }
+    return fbe::text::add_font(fbe::text::styled(face, size, static_cast<std::uint32_t>(style)));
+}
+
+} // extern "C"
