@@ -36,7 +36,7 @@ def main():
     assert not other_process_takes(name), "a held lock was taken"
     held.close()
     assert other_process_takes(name), "a lock let go of couldn't be taken"
-    assert len(set(verify.TURNS)) == 2, "two verifies at a time take two locks"
+    assert len(set(verify.TURNS)) == 4, "four verifies at a time take four locks"
     print("verify's locks hold")
 
 
