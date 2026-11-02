@@ -80,6 +80,8 @@ instead, and a lane keeps one turn going:
 - Before each step and after each push, it reads `to-<lane>.md`, where the coordinator writes
   findings and answers, each under a heading with its time. New entries come first, each fixed
   with a test, and the next report names the headings it handled.
-- Work it waits on from another lane is looked for on `origin/master` at each step's start. Only
-  when nothing at all is left that it can do does it end its turn, with a report saying what it
-  waits on.
+- Work it waits on from another lane is looked for on `origin/master` at each step's start. When
+  nothing is left that it can do, it reports what it waits on and doesn't end its turn: it waits
+  in it for `to-<lane>.md` to change (the Monitor tool, or a background until-loop on the file's
+  size), then reads the new entry and goes on, looking at `origin/master` again too. A lane that
+  ended its turn couldn't be started again until the user next typed.

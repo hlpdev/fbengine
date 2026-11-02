@@ -314,3 +314,69 @@ Function WithoutAWindowTextInputIsOff()
     StopTextInput()
     Expect(!TextInputActive())
 End Function
+
+// Keys and text in one list, as the OS gave them.
+@Test
+Function KeystrokesAreKeysAndTextInOrder() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    StartTextInput()
+    Try Simulate.KeyDown(Key.A)
+    Try Simulate.Text("a")
+    Try Simulate.KeyDown(Key.A, True)
+    Try Simulate.Text("a")
+    Try Simulate.KeyUp(Key.A)
+    Try Simulate.PressKey(Key.BACKSPACE)
+    Try Simulate.Text("é")
+    Flip()
+    Local strokes = Keystrokes()
+    Expect(strokes.Count == 6)
+    If strokes.Count < 6 Then Return
+    Expect(strokes[0].Kind == KeystrokeKind.PRESS && strokes[0].Key == Key.A &&
+           strokes[0].Text == "")
+    Expect(strokes[1].Kind == KeystrokeKind.TEXT && strokes[1].Text == "a")
+    Expect(strokes[1].Key == Key.UNKNOWN)
+    Expect(strokes[2].Kind == KeystrokeKind.REPEAT && strokes[2].Key == Key.A)
+    Expect(strokes[3].Kind == KeystrokeKind.TEXT)
+    Expect(strokes[4].Kind == KeystrokeKind.PRESS && strokes[4].Key == Key.BACKSPACE)
+    Expect(strokes[5].Text == "é")
+    // The next Flip's own, and a flush forgets them.
+    Try Simulate.PressKey(Key.B)
+    Flip()
+    Expect(Keystrokes().Count == 1)
+    FlushKeys()
+    Expect(Keystrokes().Count == 0)
+    Flip()
+    Expect(Keystrokes().Count == 0)
+    StopTextInput()
+End Function
+
+// Each keystroke's modifiers are what was held as it was typed, not at the frame's end.
+@Test
+Function AKeystrokesModifiersAreItsOwn() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    StartTextInput()
+    Try Simulate.Text("a")
+    Try Simulate.KeyDown(Key.LEFT_CONTROL)
+    Try Simulate.PressKey(Key.A)
+    Try Simulate.KeyDown(Key.RIGHT_SHIFT)
+    Try Simulate.KeyUp(Key.LEFT_CONTROL)
+    Try Simulate.Text("B")
+    Flip()
+    Local strokes = Keystrokes()
+    Expect(strokes.Count == 5)
+    If strokes.Count < 5 Then Return
+    Expect(strokes[0].Kind == KeystrokeKind.TEXT && !strokes[0].Control && !strokes[0].Shift)
+    // Ctrl's own press holds it.
+    Expect(strokes[1].Key == Key.LEFT_CONTROL && strokes[1].Control)
+    Expect(strokes[2].Key == Key.A && strokes[2].Control && !strokes[2].Shift)
+    Expect(strokes[3].Key == Key.RIGHT_SHIFT && strokes[3].Shift && strokes[3].Control)
+    Expect(strokes[4].Text == "B" && strokes[4].Shift && !strokes[4].Control)
+    Expect(!strokes[4].Alt && !strokes[4].Meta)
+    Try Simulate.KeyUp(Key.RIGHT_SHIFT)
+    Flip()
+    StopTextInput()
+End Function

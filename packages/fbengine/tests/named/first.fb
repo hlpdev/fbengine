@@ -1,0 +1,22 @@
+// An Asset type named Sprite, as another module's is, for the cache to keep apart.
+
+Import std.core
+Import std.io
+Import fbengine
+
+Public Class Sprite Implements Asset
+    Public Field Freed: Bool
+
+    New()
+        Freed = False
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): Sprite Throws IOError => Sprite()
+
+    Public Method Free()
+        If !Assets.Release(Self) Then Return
+        Freed = True
+    End Method
+End Class

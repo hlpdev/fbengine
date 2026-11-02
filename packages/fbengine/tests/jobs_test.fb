@@ -1,0 +1,108 @@
+// The engine's jobs: work on the workers finishes on the main thread, at the Flip after it's done,
+// each once.
+
+Import std.concurrent
+Import std.core
+Import std.os
+Import std.test
+Import std.time
+Import fbengine
+Import fbengine.c.fbe_jobs
+
+Global finished = 0
+
+Async Function CountWhenDone(task: Task)
+    Await task
+    finished += 1
+End Function
+
+// Flips until `count` have finished, or a minute has gone by, for a slow machine.
+Function FlipUntil(count: Int)
+    Local since = Instant.Now()
+    While finished < count && (Instant.Now() - since) < 60.Seconds
+        Flip()
+        Sleep(1.Milliseconds)
+    End While
+End Function
+
+@Test
+Function ThereIsAWorkerPerCoreLessOne()
+    Expect(Jobs.Workers() >= 1)
+    Expect(Jobs.Workers() == Max(System.CpuCount - 1, 1))
+End Function
+
+@Test
+Function FinishedWorkWaitsForTheMainThread()
+    finished = 0
+    CountWhenDone(Jobs.Simulate(Duration.Zero()))
+    // It's done on the worker long before this, but the main thread only hears at a Flip, or at a
+    // tick of its scheduler, and this one has had neither.
+    Sleep(100.Milliseconds)
+    Expect(finished == 0)
+    Flip()
+    Expect(finished == 1)
+    Flip()
+    Expect(finished == 1)
+End Function
+
+@Test
+Function ManyJobsEachFinishOnce()
+    finished = 0
+    For i = 1 To 500
+        CountWhenDone(Jobs.Simulate((i % 7 * 100 As Int64).Microseconds))
+    End For
+    FlipUntil(500)
+    Expect(finished == 500)
+    Flip()
+    Flip()
+    Expect(finished == 500)
+End Function
+
+@Test
+Function ASlowJobFinishesAtALaterFlip()
+    finished = 0
+    CountWhenDone(Jobs.Simulate(200.Milliseconds))
+    Flip()
+    Expect(finished == 0)
+    FlipUntil(1)
+    Expect(finished == 1)
+End Function
+
+// As at a game's start: a Wait, or a top-level Await (examples/loading), with no Flip.
+@Test
+Function AJobsTaskFinishesWithoutAFlip()
+    Local frames = Frame.Count()
+    Jobs.Simulate(10.Milliseconds).Wait()
+    Jobs.Simulate(Duration.Zero()).Wait()
+    Expect(Frame.Count() == frames)
+End Function
+
+// While it waits, the main thread sleeps between hand-overs: about one a millisecond, up to the
+// OS's timer, which is 16 ms on Windows before FutureBlitz 1.1, not one a tick of a scheduler with
+// nothing else to do.
+@Test
+Function AWaitHandsOverEachMillisecondAtMost()
+    Local before = fbe_jobs_hand_overs()
+    Jobs.Simulate(500.Milliseconds).Wait()
+    Local passes = fbe_jobs_hand_overs() - before
+    Expect(passes >= 25)
+    Expect(passes <= 600)
+End Function
+
+Async Function LevelScript()
+    // On the level's scheduler, inside its Tick.
+    Await NextTick()
+    Await Jobs.Simulate(10.Milliseconds)
+End Function
+
+// A level's scheduler that starts a load and is then paused, never ticked again, doesn't hold up a
+// Wait at the top level, which the main scheduler's hand-overs finish.
+@Test
+Function APausedSchedulersLoadDoesntHoldUpAWait()
+    Local level = Scheduler()
+    level.Run(LevelScript())
+    level.Tick(0.016)
+    Local frames = Frame.Count()
+    Jobs.Simulate(10.Milliseconds).Wait()
+    Expect(Frame.Count() == frames)
+End Function

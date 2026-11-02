@@ -95,6 +95,16 @@ Sint16 trigger_value(float value) {
     return static_cast<Sint16>(std::lround(scaled));
 }
 
+/// Sends what was set as SDL's events now, as a real device's are sent as they change: SDL reads
+/// a virtual device's state only when it updates, so a release and a press before the next Flip
+/// would otherwise be no change at all.
+bool sent(bool set) {
+    if (set) {
+        SDL_UpdateJoysticks();
+    }
+    return set;
+}
+
 } // namespace
 
 extern "C" {
@@ -145,7 +155,7 @@ FBE_API bool fbe_input_simulate_device_button(uint64_t device, int32_t button, b
     if (found == nullptr) {
         return fbe::fail("there's no such virtual device");
     }
-    return SDL_SetJoystickVirtualButton(found->joystick, button, down)
+    return sent(SDL_SetJoystickVirtualButton(found->joystick, button, down))
                ? true
                : fbe::fail_sdl(std::format("couldn't set button {}", button));
 }
@@ -158,7 +168,7 @@ FBE_API bool fbe_input_simulate_device_axis(uint64_t device, int32_t axis, float
     const bool trigger = found->gamepad && (axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ||
                                             axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
     const Sint16 raw = trigger ? trigger_value(value) : axis_value(value);
-    return SDL_SetJoystickVirtualAxis(found->joystick, axis, raw)
+    return sent(SDL_SetJoystickVirtualAxis(found->joystick, axis, raw))
                ? true
                : fbe::fail_sdl(std::format("couldn't set axis {}", axis));
 }
@@ -172,7 +182,7 @@ FBE_API bool fbe_input_simulate_device_hat(uint64_t device, int32_t hat, int32_t
     if (value < 0 || value > every_way) {
         return fbe::fail(std::format("{} isn't a hat's direction", value));
     }
-    return SDL_SetJoystickVirtualHat(found->joystick, hat, static_cast<Uint8>(value))
+    return sent(SDL_SetJoystickVirtualHat(found->joystick, hat, static_cast<Uint8>(value)))
                ? true
                : fbe::fail_sdl(std::format("couldn't set hat {}", hat));
 }

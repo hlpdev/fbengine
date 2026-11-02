@@ -509,6 +509,31 @@ End Function
     End Select
 End Function
 
+/// A block on an ActionSet, which ActionSet.Block gives: the set reads as off while it lasts.
+Public Final Class ActionBlock
+    Field actions: Weak<ActionSet>
+    Field released: Bool = False
+
+    Package New(actions: ActionSet)
+        Self.actions = actions
+    End New
+
+    Method Destroy()
+        Release()
+    End Method
+
+    /// Takes the block back, its own only, once; again, it does nothing.
+    @MainThread Public Method Release()
+        If released Then Return
+        released = True
+        Local own = actions
+        If own != Null Then own.Unblocked()
+    End Method
+
+    /// Whether it's been taken back.
+    @MainThread Public Method Released(): Bool => released
+End Class
+
 /// A game's Actions, read once a Flip, after the OS's events: one set for a game, or one for each
 /// player, each with its own gamepad. Its bindings save and load as TOML.
 Public Final Class ActionSet
@@ -516,6 +541,7 @@ Public Final Class ActionSet
     Field pad: Gamepad? = Null
     Field press: Float32 = 0.5
     Field enabled: Bool = True
+    Field blocks: Int = 0
     Field hook: Int = 0
 
     /// A set with no Actions, which every Flip reads from now on, until it's let go of.
@@ -595,8 +621,25 @@ Public Final Class ActionSet
         enabled = on
     End Method
 
-    /// Whether it's on.
+    /// Whether it's on, as SetEnabled set it, whether or not it's blocked.
     @MainThread Public Method Enabled(): Bool => enabled
+
+    /// A block on it, as a Ui takes while one of its widgets has the focus: it reads as off does
+    /// while any block lasts, whatever SetEnabled says, so a cutscene's SetEnabled(False) isn't
+    /// undone by a menu closing. Each block is its own, which its Release takes back, or its
+    /// going, once nothing holds it.
+    @MainThread Public Method Block(): ActionBlock
+        blocks += 1
+        Return ActionBlock(Self)
+    End Method
+
+    /// Whether anything blocks it.
+    @MainThread Public Method Blocked(): Bool => blocks > 0
+
+    // A block on it taken back.
+    Package Method Unblocked()
+        blocks -= 1
+    End Method
 
     /// Forgets the presses and releases the last Flip read of its Actions, until the next Flip;
     /// what's held stays held.
@@ -607,7 +650,7 @@ Public Final Class ActionSet
     End Method
 
     @MainThread Method Update()
-        If !enabled
+        If !enabled || blocks > 0
             For action In actions
                 action.Release()
             End For

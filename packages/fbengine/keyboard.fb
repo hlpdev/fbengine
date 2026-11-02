@@ -202,6 +202,52 @@ End Enum
     Return hit
 End Function
 
+/// What a Keystroke is.
+Public Enum KeystrokeKind
+    /// A key pressed.
+    PRESS
+    /// A key that went down again while it was held, the OS's repeat.
+    REPEAT
+    /// A piece of text typed, while text input was on.
+    TEXT
+End Enum
+
+/// A key that went down, or a piece of text typed, as the last Flip read it.
+Public Struct Keystroke
+    Public Field Kind: KeystrokeKind
+    /// The key, for a press or a repeat; Key.UNKNOWN for text.
+    Public Field Key: Key
+    /// The text, for text; "" for a key.
+    Public Field Text: String
+    /// Whether Shift, Ctrl, Alt (Option on a Mac), and Meta (the Windows key, or Command) were
+    /// held as it was typed, either side's, as of the keys that went down and up before it.
+    Public Field Shift: Bool
+    Public Field Control: Bool
+    Public Field Alt: Bool
+    Public Field Meta: Bool
+End Struct
+
+/// The keys the last Flip read go down, the OS's repeats included, and the text it read typed,
+/// in one list in the order the OS gave them, the first 1024 of a frame, as a text field reads
+/// them: "a" typed then Backspace leaves nothing, and Backspace then "a" leaves the "a".
+@MainThread Public Function Keystrokes(): Keystroke[]
+    Local strokes: Keystroke[] = []
+    For index = 0 To fbe_input_keystroke_count() - 1
+        Local kind = fbe_input_keystroke_kind(index)
+        If kind < 0 Then Break
+        Local mods = fbe_input_keystroke_mods(index)
+        Unsafe
+            strokes.Add(Keystroke(kind As KeystrokeKind, fbe_input_keystroke_key(index) As Key,
+                                  fbe_input_keystroke_text(index).ToString(),
+                                  (mods & FBE_INPUT_MOD_SHIFT) != 0,
+                                  (mods & FBE_INPUT_MOD_CONTROL) != 0,
+                                  (mods & FBE_INPUT_MOD_ALT) != 0,
+                                  (mods & FBE_INPUT_MOD_SUPER) != 0))
+        End Unsafe
+    End For
+    Return strokes
+End Function
+
 /// Forgets what the last Flip read of the keyboard, its presses, releases, and text, until the
 /// next Flip, as a menu that's just closed wants; the keys held stay held. An ActionSet read its
 /// Actions at the Flip already, which its own Flush forgets.

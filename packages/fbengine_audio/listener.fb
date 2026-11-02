@@ -1,0 +1,138 @@
+// The Listener: where sounds in the world are heard from.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./audio"
+Import "./c/fbe_listener"
+Import "./flip"
+
+/// Where sounds in the world, the Channels Emitters play, are heard from, which there's one of: a
+/// game puts it where its camera is, each frame. Its place, rotation, and velocity are in
+/// std.math's axes, right-handed, Y up, and -Z forward, and in the game's units, and are kept while
+/// the audio's stopped.
+Public Final Class Listener
+    Static Field position: Vec3 = Vec3(0, 0, 0)
+    Static Field rotation: Quat = Quat.Identity
+    Static Field velocity: Vec3 = Vec3(0, 0, 0)
+    /// What it follows.
+    Static Field follows: Followed? = Null
+
+    Private New()
+    End New
+
+    /// Puts it at `position`.
+    @MainThread Public Static Method SetPosition(position: Vec3)
+        CheckVector(position, "a Listener's position")
+        Listener.position = position
+        fbe_listener_set_position(position.x, position.y, position.z)
+    End Method
+
+    /// Where it is.
+    @MainThread Public Static Method Position(): Vec3 => position
+
+    /// Moves it each frame, at Flip, to where `where` says, turned as `turned` says, at the
+    /// velocity of the move over the frame: how it stays with the camera. Unfollow stops it.
+    @MainThread Public Static Method Follow(where: Func(): Vec3, turned: Func(): Quat)
+        Start(Followed(where, turned))
+    End Method
+
+    /// Moves it each frame, at Flip, to where `entity` is in the world, turned as it is, at the
+    /// velocity of the move over the frame: how it stays with a camera, which faces -Z with Y up as
+    /// it does. With `step`, the FixedStep the game's logic runs at, it's where the entity is drawn,
+    /// at the step's Tween, so it moves as smoothly as what's seen, rather than a step at a time. An
+    /// entity freed while it's followed is let go at the next Flip, where it was, at rest; following
+    /// a freed one panics.
+    @MainThread @PanicsAtCaller
+    Public Static Method Follow(entity: Entity, step: FixedStep? = Null)
+        If entity.Freed() Then Panic("the Listener can't follow a {entity}")
+        Start(Followed(entity, step))
+    End Method
+
+    /// Stops following, and leaves it where it is, at rest.
+    @MainThread Public Static Method Unfollow()
+        If follows == Null Then Return
+        follows = Null
+        SetVelocity(Vec3(0, 0, 0))
+    End Method
+
+    /// Whether it follows something.
+    @MainThread Public Static Method Following(): Bool => follows != Null
+
+    // Follows `follow` from the next Flip on.
+    Static Method Start(follow: Followed)
+        follows = follow
+        followListener = MoveListener
+        HookFlip()
+    End Method
+
+    // To where it follows, turned as that is, at the velocity of the move; the game's functions
+    // can have it stop, or follow something else, and an entity freed is let go of.
+    @MainThread Package Static Method MoveToFollowed()
+        Local follow = follows
+        If follow == Null Then Return
+        Local pose = Pose(Vec3(0, 0, 0), Quat.Identity)
+        Local where = follow.where
+        Local turned = follow.turned
+        If where != Null && turned != Null
+            pose = Pose(where(), turned())
+            CheckVector(pose.Position, "where the Listener follows")
+            If !RefEquals(follows, follow) Then Return
+        Else
+            Local entity = follow.entity
+            If entity == Null Then Return
+            If entity.Freed()
+                Unfollow()
+                Return
+            End If
+            pose = PosesOf([follow])[0]
+        End If
+        SetVelocity(follow.MovedTo(pose.Position))
+        SetPosition(pose.Position)
+        SetRotation(pose.Rotation)
+    End Method
+
+    /// Turns it by `rotation` from facing -Z with Y up, as a camera turned by it faces.
+    @MainThread Public Static Method SetRotation(rotation: Quat)
+        Local forward = Normalize(rotation) * Vec3(0, 0, -1)
+        Local up = Normalize(rotation) * Vec3(0, 1, 0)
+        CheckVector(forward, "a Listener's rotation")
+        Listener.rotation = rotation
+        fbe_listener_set_direction(forward.x, forward.y, forward.z, up.x, up.y, up.z)
+    End Method
+
+    /// How it's turned.
+    @MainThread Public Static Method Rotation(): Quat => rotation
+
+    /// Sets how fast it's moving, in units a second, which pitches what it hears by the Doppler
+    /// effect, as it moves toward an Emitter or away.
+    @MainThread Public Static Method SetVelocity(velocity: Vec3)
+        CheckVector(velocity, "a Listener's velocity")
+        Listener.velocity = velocity
+        fbe_listener_set_velocity(velocity.x, velocity.y, velocity.z)
+    End Method
+
+    /// How fast it's moving.
+    @MainThread Public Static Method Velocity(): Vec3 => velocity
+
+    /// Sets how many units a second sound goes, more than 0: 343.3, as it starts, is in the air in
+    /// meters, and a game whose units aren't meters gives its own.
+    @MainThread Public Static Method SetSpeedOfSound(unitsPerSecond: Float32)
+        If !fbe_listener_set_speed_of_sound(unitsPerSecond) Then Panic(LastError())
+    End Method
+
+    /// How many units a second sound goes.
+    @MainThread Public Static Method SpeedOfSound(): Float32 => fbe_listener_speed_of_sound()
+End Class
+
+// A vector that isn't a number is a mistake.
+@PanicsAtCaller
+Package Function CheckVector(vector: Vec3, what: String)
+    If !IsFinite(vector.x) || !IsFinite(vector.y) || !IsFinite(vector.z)
+        Panic("{what} is a vector of numbers, not {vector}")
+    End If
+End Function
+
+Function MoveListener()
+    Listener.MoveToFollowed()
+End Function

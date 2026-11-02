@@ -11,12 +11,25 @@
 #include <memory>
 #include <SDL3/SDL.h>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
 
 // The most presses a Flip keeps in order, for fbe_input_key_hit_at.
 constexpr std::size_t most_hits = 64;
+
+// The most keystrokes a Flip keeps, for fbe_input_keystroke_at.
+constexpr std::size_t most_keystrokes = 1024;
+
+// A key that went down, or a piece of text typed: FBE_INPUT_KEYSTROKE_'s kind.
+struct keystroke_t {
+    std::int32_t kind = FBE_INPUT_KEYSTROKE_PRESS;
+    std::int32_t key = 0;
+    std::string text;
+    /// The modifiers held as it was typed, FBE_INPUT_MOD_'s bits.
+    std::int32_t mods = 0;
+};
 
 // A key: whether it's held, and what the last Flip counted of it.
 struct key_t {
@@ -30,6 +43,13 @@ std::array<key_t, SDL_SCANCODE_COUNT> keys{};
 fbe::frame_counts_t counts;
 std::vector<std::int32_t> hit_order;
 std::string text;
+std::vector<keystroke_t> keystrokes;
+
+// The modifiers held as of the last key event read, which text typed after it was typed with.
+SDL_Keymod held_mods = SDL_KMOD_NONE;
+
+// The modifiers Simulate holds, which its key events say are held.
+SDL_Keymod simulated_mods = SDL_KMOD_NONE;
 
 // The IME's composition, which stays until it changes.
 std::string composition;
@@ -59,6 +79,53 @@ void zero_counts() {
     }
     hit_order.clear();
     text.clear();
+    keystrokes.clear();
+}
+
+/// SDL's modifiers as FBE_INPUT_MOD_'s bits, each side's as one.
+std::int32_t mods_of(SDL_Keymod mods) {
+    const auto held = static_cast<std::uint32_t>(mods);
+    std::uint32_t bits = 0;
+    bits |= (held & SDL_KMOD_SHIFT) != 0 ? std::uint32_t{ FBE_INPUT_MOD_SHIFT } : 0U;
+    bits |= (held & SDL_KMOD_CTRL) != 0 ? std::uint32_t{ FBE_INPUT_MOD_CONTROL } : 0U;
+    bits |= (held & SDL_KMOD_ALT) != 0 ? std::uint32_t{ FBE_INPUT_MOD_ALT } : 0U;
+    bits |= (held & SDL_KMOD_GUI) != 0 ? std::uint32_t{ FBE_INPUT_MOD_SUPER } : 0U;
+    return static_cast<std::int32_t>(bits);
+}
+
+void stroke(std::int32_t kind, std::int32_t key, std::string_view typed) {
+    if (keystrokes.size() < most_keystrokes) {
+        keystrokes.push_back({
+            .kind = kind,
+            .key = key,
+            .text = std::string(typed),
+            .mods = mods_of(held_mods),
+        });
+    }
+}
+
+/// The modifier a key is, or none.
+SDL_Keymod modifier_of(SDL_Scancode key) {
+    switch (key) {
+    case SDL_SCANCODE_LSHIFT:
+        return SDL_KMOD_LSHIFT;
+    case SDL_SCANCODE_RSHIFT:
+        return SDL_KMOD_RSHIFT;
+    case SDL_SCANCODE_LCTRL:
+        return SDL_KMOD_LCTRL;
+    case SDL_SCANCODE_RCTRL:
+        return SDL_KMOD_RCTRL;
+    case SDL_SCANCODE_LALT:
+        return SDL_KMOD_LALT;
+    case SDL_SCANCODE_RALT:
+        return SDL_KMOD_RALT;
+    case SDL_SCANCODE_LGUI:
+        return SDL_KMOD_LGUI;
+    case SDL_SCANCODE_RGUI:
+        return SDL_KMOD_RGUI;
+    default:
+        return SDL_KMOD_NONE;
+    }
 }
 
 /// Zeroes what was counted when this is the first event of a Flip.
@@ -73,16 +140,21 @@ void key_event(const SDL_KeyboardEvent& event) {
         return;
     }
     count();
+    // What's held as it went down or up, it as well, as SDL says.
+    held_mods = event.mod;
     key_t& key = state_of(event.scancode);
     if (event.down) {
         ++key.typed;
         // A key that's held already is the OS's repeat, whatever the event says.
-        if (!event.repeat && !key.down) {
+        const bool pressed = !event.repeat && !key.down;
+        if (pressed) {
             ++key.hits;
             if (hit_order.size() < most_hits) {
                 hit_order.push_back(event.scancode);
             }
         }
+        stroke(pressed ? FBE_INPUT_KEYSTROKE_PRESS : FBE_INPUT_KEYSTROKE_REPEAT, event.scancode,
+               "");
         key.down = true;
     } else if (key.down) {
         ++key.ups;
@@ -94,12 +166,20 @@ void key_event(const SDL_KeyboardEvent& event) {
 /// go up.
 void release_keys() {
     count();
+    held_mods = SDL_KMOD_NONE;
     for (key_t& key : keys) {
         if (key.down) {
             ++key.ups;
             key.down = false;
         }
     }
+}
+
+/// The `index`th keystroke the last Flip read, or nullptr.
+const keystroke_t* keystroke_at(std::int32_t index) {
+    const bool there =
+        counts.current() && index >= 0 && static_cast<std::size_t>(index) < keystrokes.size();
+    return there ? &keystrokes[static_cast<std::size_t>(index)] : nullptr;
 }
 
 /// Whether the event's window has text input on, which text counts only while.
@@ -166,6 +246,7 @@ void keyboard_event(const SDL_Event& event) {
         if (typing(event) && event.text.text != nullptr) {
             count();
             text += event.text.text;
+            stroke(FBE_INPUT_KEYSTROKE_TEXT, 0, event.text.text);
             clear_composition();
         }
         read_string(event.text.text);
@@ -211,6 +292,30 @@ FBE_API int32_t fbe_input_key_hit_at(int32_t index) {
     const bool there =
         counts.current() && index >= 0 && static_cast<std::size_t>(index) < hit_order.size();
     return there ? hit_order[static_cast<std::size_t>(index)] : 0;
+}
+
+FBE_API int32_t fbe_input_keystroke_count(void) {
+    return counts.current() ? static_cast<std::int32_t>(keystrokes.size()) : 0;
+}
+
+FBE_API int32_t fbe_input_keystroke_kind(int32_t index) {
+    const keystroke_t* found = keystroke_at(index);
+    return found != nullptr ? found->kind : -1;
+}
+
+FBE_API int32_t fbe_input_keystroke_mods(int32_t index) {
+    const keystroke_t* found = keystroke_at(index);
+    return found != nullptr ? found->mods : 0;
+}
+
+FBE_API int32_t fbe_input_keystroke_key(int32_t index) {
+    const keystroke_t* found = keystroke_at(index);
+    return found != nullptr ? found->key : 0;
+}
+
+FBE_API const char* fbe_input_keystroke_text(int32_t index) {
+    const keystroke_t* found = keystroke_at(index);
+    return found != nullptr ? found->text.c_str() : "";
 }
 
 FBE_API void fbe_input_flush_keys(void) {
@@ -325,6 +430,15 @@ FBE_API bool fbe_input_simulate_key(int32_t key, bool down, bool repeat) {
         return false;
     }
     const auto scancode = static_cast<SDL_Scancode>(key);
+    // A modifier's own event says it's held as it goes down, and not as it goes up, as SDL's do.
+    if (down) {
+        simulated_mods = static_cast<SDL_Keymod>(static_cast<std::uint32_t>(simulated_mods) |
+                                                 static_cast<std::uint32_t>(modifier_of(scancode)));
+    } else {
+        simulated_mods =
+            static_cast<SDL_Keymod>(static_cast<std::uint32_t>(simulated_mods) &
+                                    ~static_cast<std::uint32_t>(modifier_of(scancode)));
+    }
     SDL_Event pushed{};
     pushed.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
     pushed.key.timestamp = SDL_GetTicksNS();
@@ -332,6 +446,7 @@ FBE_API bool fbe_input_simulate_key(int32_t key, bool down, bool repeat) {
     pushed.key.scancode = scancode;
     pushed.key.key = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, true);
     pushed.key.down = down;
+    pushed.key.mod = simulated_mods;
     pushed.key.repeat = down && repeat;
     return fbe::push_event(pushed);
 }

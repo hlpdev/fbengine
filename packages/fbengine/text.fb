@@ -1,0 +1,269 @@
+// Fonts: TrueType and OpenType faces from files, bytes, and the OS's, at a size and a style, and
+// the size text takes in them, shaped as each script and direction is. Drawing text is the
+// canvas's.
+
+Import std.collections
+Import std.core
+Import std.ffi
+Import std.io
+Import std.math
+Import "./c/fbe_text"
+Import "./window"
+
+/// What a font's style asks for: bold and italic, which a face that isn't is made, though not its
+/// color glyphs, as emoji, or a bitmap font's, which are drawn as the font has them, and an
+/// underline, which the canvas draws.
+Public Struct FontStyle
+    Public Field Bold: Bool
+    Public Field Italic: Bool
+    Public Field Underline: Bool
+End Struct
+
+/// A font: a face of a font file, or of the OS's fonts, at a size, in the game's own units, as
+/// CSS's px are (the em's height), with a style. A glyph it hasn't is its fallbacks', each at its
+/// size and style, then the OS's fonts', as its system fallback is on, at first; an emoji is a
+/// color font's first, the OS's own emoji font among them, and a character with marks the first
+/// face's that has them all. The OS's fonts are listed the first time they're needed, by a lookup
+/// by family or a glyph no font has, on the main thread, which takes about 100 ms with a warm disk
+/// and 400 ms cold on a Windows PC with 119 families: ScanSystem does it at a loading screen. Text is laid out
+/// in runs of one script and one direction, each shaped as its script is, Arabic's joined and
+/// Hebrew's right to left, with its lines by "\n".
+///
+/// ```vb
+/// Local body = Try Font.Load("fonts/Inter.ttf", 16)
+/// Local title = body.Sized(32, FontStyle(True, False, False))
+/// Local size = title.Measure("Main menu")
+/// ```
+Public Final Class Font Implements Printable
+    Field handle: UInt64
+    Field metrics: fbe_text_metrics_t
+    Field fallbacks: Font[] = []
+
+    Package New(handle: UInt64)
+        Self.handle = handle
+        metrics = fbe_text_metrics_t(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        Local found = False
+        Unsafe
+            found = fbe_text_font_metrics(handle, AddressOf(metrics))
+        End Unsafe
+        If !found Then Panic(LastError())
+    End New
+
+    Method Destroy()
+        If handle != 0 Then fbe_text_free_font(handle)
+    End Method
+
+    /// The font file at `path`, TrueType, OpenType, or a collection of them, whose face `face`
+    /// it is, 0 for a file of one, at `size` and `style`. Throws an IOError for a file it can't
+    /// read, or one that isn't a font, or hasn't that face. Panics for a size that isn't over 0.
+    @MainThread Public Static Method Load(path: String, size: Float32, style: FontStyle? = Null,
+                                          face: Int32 = 0): Font Throws IOError
+        CheckSize("Font.Load", size)
+        Local bytes = Try File.ReadBytes(Path(path))
+        Return Try Loaded(bytes, path, size, style, face)
+    End Method
+
+    /// The font in `bytes`, a font file's, as Load reads one. Throws an IOError for bytes that
+    /// aren't a font, or haven't that face. Panics for a size that isn't over 0.
+    @MainThread Public Static Method FromBytes(bytes: UInt8[], size: Float32,
+                                               style: FontStyle? = Null,
+                                               face: Int32 = 0): Font Throws IOError
+        CheckSize("Font.FromBytes", size)
+        Return Try Loaded(bytes, "", size, style, face)
+    End Method
+
+    /// The OS's font of `family`, as "Arial", or of a family and a style as its fonts name them,
+    /// as "Segoe UI Semibold", the face nearest `style`, made bold or italic if none is; Null
+    /// when the OS, and the folders AddFolder added, have none of it. The first call lists the
+    /// OS's fonts, unless ScanSystem has. Panics for a size that isn't over 0.
+    @MainThread Public Static Method System(family: String, size: Float32,
+                                            style: FontStyle? = Null): Font?
+        CheckSize("Font.System", size)
+        Local made = fbe_text_system_font(family, size, Bits(style))
+        Return made != 0 ? Font(made) : Null
+    End Method
+
+    /// The OS's own font for its UI, as Segoe UI is Windows', or another of its fonts if it hasn't
+    /// that; Null when it has no fonts at all. Panics for a size that isn't over 0.
+    @MainThread Public Static Method SystemUI(size: Float32, style: FontStyle? = Null): Font?
+        CheckSize("Font.SystemUI", size)
+        Local made = fbe_text_default_font(size, Bits(style))
+        Return made != 0 ? Font(made) : Null
+    End Method
+
+    /// Lists the OS's fonts now, as a loading screen does, so the first lookup by family, or the
+    /// first glyph no font has, doesn't stop a frame for it.
+    @MainThread Public Static Method ScanSystem()
+        fbe_text_scan_system()
+    End Method
+
+    /// Adds a folder of font files, and those in the folders in it, as a game's own fonts, which
+    /// System finds by family before the OS's. Throws an IOError for a path that isn't a folder.
+    @MainThread Public Static Method AddFolder(path: String) Throws IOError
+        If !fbe_text_add_font_folder(path)
+            Throw IOError(IOErrorKind.NOT_FOUND, "{path} isn't a folder of fonts", path)
+        End If
+    End Method
+
+    /// The families System finds, the OS's and those of the folders added, each once, in order.
+    @MainThread Public Static Method Families(): String[]
+        Local families: String[] = []
+        For index = 0 To fbe_text_system_family_count() - 1
+            Unsafe
+                families.Add(fbe_text_system_family_at(index).ToString())
+            End Unsafe
+        End For
+        Return families
+    End Method
+
+    /// How many fonts there are, unfreed.
+    @MainThread Public Static Method Count(): Int32 => fbe_text_font_count()
+
+    /// Another font of its face, at `size`, and `style`, or its own for Null, with its fallbacks:
+    /// a title's from a body's, which reads its file only once. Panics for a size that isn't over 0.
+    @MainThread Public Method Sized(size: Float32, style: FontStyle? = Null): Font
+        CheckSize("Font.Sized", size)
+        Local made = fbe_text_resize_font(Checked(), size,
+                                          style == Null ? fbe_text_font_style(handle) : Bits(style))
+        If made == 0 Then Panic(LastError())
+        Local sized = Font(made)
+        sized.fallbacks = fallbacks.Clone()
+        Return sized
+    End Method
+
+    /// Its size, the em's height, in the game's units.
+    @MainThread Public Method Size(): Float32 => metrics.size
+
+    /// Its style.
+    @MainThread Public Method Style(): FontStyle
+        Local bits = fbe_text_font_style(Checked())
+        Return FontStyle((bits & FBE_TEXT_BOLD) != 0, (bits & FBE_TEXT_ITALIC) != 0,
+                         (bits & FBE_TEXT_UNDERLINE) != 0)
+    End Method
+
+    /// Its face's family, as "Open Sans".
+    @MainThread Public Method Family(): String
+        Unsafe
+            Return fbe_text_font_family(Checked()).ToString()
+        End Unsafe
+    End Method
+
+    /// Its face's style, as its font names it, "Regular" or "Bold Italic".
+    @MainThread Public Method StyleName(): String
+        Unsafe
+            Return fbe_text_font_style_name(Checked()).ToString()
+        End Unsafe
+    End Method
+
+    /// How far its glyphs reach above the baseline.
+    @MainThread Public Method Ascent(): Float32 => metrics.ascent
+
+    /// How far its glyphs reach below the baseline, a positive number.
+    @MainThread Public Method Descent(): Float32 => metrics.descent
+
+    /// The gap it asks between one line's bottom and the next's top.
+    @MainThread Public Method LineGap(): Float32 => metrics.line_gap
+
+    /// A line's height: its ascent, descent, and line gap.
+    @MainThread Public Method LineHeight(): Float32 => metrics.line_height
+
+    /// Where its underline goes, below the baseline, and how thick it is.
+    @MainThread Public Method UnderlinePosition(): Float32 => metrics.underline_position
+    @MainThread Public Method UnderlineThickness(): Float32 => metrics.underline_thickness
+
+    /// The size `text` takes: its widest line's advance, and its lines times its line height, a
+    /// line broken at "\n", a vertical tab, NEL, and Unicode's line and paragraph separators. The
+    /// text ends at its first "\0". Panics for a font so big its lines or advances are past a
+    /// Float32's.
+    @MainThread Public Method Measure(text: String): Vec2
+        Local size = fbe_text_size_t(0.0, 0.0)
+        Local measured = False
+        Unsafe
+            measured = fbe_text_measure(Checked(), text, AddressOf(size))
+        End Unsafe
+        If !measured Then Panic(LastError())
+        Return Vec2(size.width, size.height)
+    End Method
+
+    /// How wide `text` is, its widest line's advance.
+    @MainThread Public Method Width(text: String): Float32 => Measure(text).x
+
+    /// Whether it, its fallbacks, or the OS's fonts as its system fallback is on, have a glyph for
+    /// each character of `text`.
+    @MainThread Public Method Has(text: String): Bool => fbe_text_has_glyphs(Checked(), text)
+
+    /// Adds `font` after its fallbacks: its face gives the glyphs this font's hasn't, at this
+    /// font's size and style, and is kept while this font is. Panics for the font itself.
+    @MainThread Public Method AddFallback(font: Font)
+        If RefEquals(font, Self) Then Panic("Font.AddFallback: a font isn't its own fallback")
+        If !fbe_text_add_fallback(Checked(), font.Checked()) Then Panic(LastError())
+        If !fallbacks.Any(Function(each: Font) => RefEquals(each, font)) Then fallbacks.Add(font)
+    End Method
+
+    /// Takes its fallbacks away.
+    @MainThread Public Method ClearFallbacks()
+        fbe_text_clear_fallbacks(Checked())
+        fallbacks.Clear()
+    End Method
+
+    /// Its fallbacks, in order.
+    @MainThread Public Method Fallbacks(): Font[] => fallbacks.Clone()
+
+    /// Sets whether a glyph it and its fallbacks haven't is the OS's fonts', as it is at first.
+    @MainThread Public Method SetSystemFallback(on: Bool)
+        fbe_text_set_system_fallback(Checked(), on)
+    End Method
+
+    /// Whether a glyph it and its fallbacks haven't is the OS's fonts'.
+    @MainThread Public Method SystemFallback(): Bool => fbe_text_system_fallback(Checked())
+
+    /// Frees it now, rather than when nothing holds it; then it can't be used.
+    @MainThread Public Method Free()
+        If handle == 0 Then Return
+        fbe_text_free_font(handle)
+        handle = 0
+    End Method
+
+    Public Method ToString(): String
+        If handle == 0 Then Return "a freed font"
+        Return "{Family()} {StyleName()} at {Size()}"
+    End Method
+
+    // Its handle, for the canvas.
+    @MainThread Package Method Handle(): UInt64 => Checked()
+
+    // Its handle, panicking once it's freed.
+    Method Checked(): UInt64
+        If handle == 0 Then Panic("Font: it's been freed")
+        Return handle
+    End Method
+
+    @MainThread Static Method Loaded(bytes: UInt8[], named: String, size: Float32,
+                                     style: FontStyle?,
+                                     face: Int32): Font Throws IOError
+        Local copied = Buffer<UInt8>.From(bytes)
+        Local made: UInt64 = 0
+        Unsafe
+            made = fbe_text_load_font_bytes(copied.Pointer(), copied.Count, named, face, size,
+                                            Bits(style))
+        End Unsafe
+        If made == 0
+            Throw IOError(IOErrorKind.INVALID_DATA, LastError(), named == "" ? Null : named)
+        End If
+        Return Font(made)
+    End Method
+End Class
+
+// `style`'s FBE_TEXT_ bits, 0 for Null.
+Function Bits(style: FontStyle?): Int32
+    If style == Null Then Return 0
+    Local bits: Int32 = 0
+    If style.Bold Then bits = bits | FBE_TEXT_BOLD
+    If style.Italic Then bits = bits | FBE_TEXT_ITALIC
+    If style.Underline Then bits = bits | FBE_TEXT_UNDERLINE
+    Return bits
+End Function
+
+Function CheckSize(call: String, size: Float32)
+    If !(size > 0.0 && IsFinite(size)) Then Panic("{call}: a font's size is over 0, and finite, not {size}")
+End Function

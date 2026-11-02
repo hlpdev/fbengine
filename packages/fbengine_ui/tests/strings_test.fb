@@ -1,0 +1,226 @@
+// Strings, and a Ui's widgets showing their text, offscreen.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine_ui
+
+Function French(): Strings
+    Local french = Strings("fr")
+    french.Set("menu.play", "Jouer")
+    french.Set("menu.quit", "Quitter le jeu")
+    french.Set("score", r"{points} points, {name}")
+    french.Set("apples.one", r"{count} pomme")
+    french.Set("apples.other", r"{count} pommes")
+    // French's "one" is 0 and 1.
+    french.SetPluralRule(
+        Function(count: Int64) => count == 0 || count == 1 || count == -1 ? "one" : "other")
+    Return french
+End Function
+
+@Test
+Function StringsGiveAKeysTextWithItsValues()
+    Local french = French()
+    Expect(french.Language() == "fr")
+    Expect(french.Text("menu.play") == "Jouer")
+    Expect(french.Text("score", {"points": "12", "name": "Ada"}) == "12 points, Ada")
+    // A name with no value stays, and a key with no text is the key.
+    Expect(french.Text("score", {"points": "12"}) == r"12 points, {name}")
+    Expect(french.Text("menu.options") == "menu.options")
+    Expect(french.Get("menu.options") == Null)
+    Expect(french.Get("score") == r"{points} points, {name}")
+    Expect(french.Keys() == ["apples.one", "apples.other", "menu.play", "menu.quit", "score"])
+    // "{{" is a brace of its own.
+    french.Set("braces", r"{{points} and {points}")
+    Expect(french.Text("braces", {"points": "3"}) == r"{points} and 3")
+    Expect(french.Remove("braces"))
+    Expect(!french.Remove("braces"))
+End Function
+
+@Test
+Function PluralsGoByTheLanguagesRule()
+    Local french = French()
+    Expect(french.Plural("apples", 0) == "0 pomme")
+    Expect(french.Plural("apples", 1) == "1 pomme")
+    Expect(french.Plural("apples", 5) == "5 pommes")
+    // English's rule at first: 0 is "other".
+    Local english = Strings("en")
+    english.Set("apples.one", r"{count} apple")
+    english.Set("apples.other", r"{count} apples")
+    Expect(english.Plural("apples", 0) == "0 apples")
+    Expect(english.Plural("apples", 1) == "1 apple")
+    Expect(english.PluralOf(-1) == "one")
+    // A category it hasn't is "other"'s, then the key's own, then the key.
+    english.SetPluralRule(Function(count: Int64) => count == 2 ? "two" : "other")
+    Expect(english.Plural("apples", 2) == "2 apples")
+    english.Set("lives", r"{count} lives, {name}")
+    Expect(english.Plural("lives", 3, {"name": "Ada"}) == "3 lives, Ada")
+    Expect(english.Plural("coins", 3) == "coins")
+End Function
+
+@Test
+Function AKeyAStringsHasntIsItsFallbacks()
+    Local english = Strings("en")
+    english.Set("menu.play", "Play")
+    english.Set("menu.options", "Options")
+    Local french = French()
+    french.SetFallback(english)
+    Expect(french.Fallback() == english)
+    Expect(french.Text("menu.play") == "Jouer")
+    Expect(french.Text("menu.options") == "Options")
+    Expect(!french.Has("menu.options") && french.Has("menu.play"))
+    // Its own keys alone.
+    Expect(!french.Keys().Contains("menu.options"))
+    french.SetFallback(Null)
+    Expect(french.Text("menu.options") == "menu.options")
+End Function
+
+@Test
+Function StringsSaveAndLoadAsToml() Throws UIError
+    Local french = French()
+    Local loaded = Strings("fr")
+    Try loaded.Load(french.Save())
+    Expect(loaded.Keys() == french.Keys())
+    For key In french.Keys()
+        Expect(loaded.Get(key) == french.Get(key))
+    End For
+    // A table's keys are its key's, after a dot, as a translator writes them.
+    Try loaded.Load(
+        "title = \"Le jeu\"\n[menu]\nplay = \"Commencer\"\n[menu.sub]\nback = \"Retour\"\n")
+    Expect(loaded.Text("title") == "Le jeu")
+    Expect(loaded.Text("menu.play") == "Commencer")
+    Expect(loaded.Text("menu.sub.back") == "Retour")
+    Expect(loaded.Text("menu.quit") == "Quitter le jeu")
+End Function
+
+@Test
+Function LoadingWhatIsntStringsChangesNothing()
+    Local french = French()
+    Local before = french.Save()
+    Local said = ""
+    Try
+        Try french.Load("[menu]\nplay = \"Jouer!\"\nlives = 3\n")
+    Catch e As UIError
+        said = e.Message
+    End Try
+    Expect(said == "menu.lives's text is a string, not 3")
+    Try
+        Try french.Load("menu.play = ")
+    Catch e As UIError
+        said = e.Message
+    End Try
+    Expect(said.StartsWith("fr's strings aren't TOML"))
+    Expect(french.Save() == before)
+End Function
+
+Function Shown(root: Node): Ui Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Return ui
+End Function
+
+Function Frame(ui: Ui)
+    Flip()
+    ui.Update()
+End Function
+
+@Test
+Function AUisWidgetsShowItsStringsTextForTheirKeys() Throws GraphicsError
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    Local play = Button("menu.play")
+    Local quit = Label("menu.quit")
+    Local name = Label("menu.play")
+    name.SetTranslates(False)
+    Local field = TextField("menu.play", "menu.quit")
+    Local empty = TextField("", "menu.quit")
+    Local list = List(["menu.play", "menu.quit"])
+    root.Add(play)
+    root.Add(quit)
+    root.Add(name)
+    root.Add(field)
+    root.Add(empty)
+    root.Add(list)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Expect(play.ShownText() == "menu.play")
+    Local wide = quit.Box().Size.x
+    Local french = French()
+    ui.SetStrings(french)
+    Expect(ui.CurrentStrings() == french)
+    Frame(ui)
+    Expect(play.ShownText() == "Jouer")
+    Expect(play.Text() == "menu.play")
+    Expect(quit.ShownText() == "Quitter le jeu")
+    // Laid out by what it shows.
+    Expect(quit.Box().Size.x == quit.TextSize("Quitter le jeu").x)
+    Expect(quit.Box().Size.x != wide)
+    // A name isn't a key, nor what's typed; a placeholder is.
+    Expect(name.ShownText() == "menu.play")
+    Expect(field.Text() == "menu.play")
+    Expect(empty.ShownPlaceholder() == "Quitter le jeu")
+    Local item = list.Children()[0] As? Label
+    Expect(item?.ShownText() == "Jouer")
+    list.SetTranslates(False)
+    Expect(item?.ShownText() == "menu.play")
+    list.SetItems(["menu.quit"])
+    Local again = list.Children()[0] As? Label
+    Expect(again?.ShownText() == "menu.quit")
+    // A change to its Strings lays it out again at the next Update.
+    french.Set("menu.quit", "Quitter")
+    Frame(ui)
+    Expect(quit.Box().Size.x == quit.TextSize("Quitter").x)
+    ui.SetStrings(Null)
+    Frame(ui)
+    Expect(quit.ShownText() == "menu.quit")
+    Expect(quit.Box().Size.x == wide)
+End Function
+
+// A change to the Strings a Ui's fall back to is a change to them.
+@Test
+Function AChangeToAFallbackLaysTheUiOutAgain() Throws GraphicsError
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    Local options = Label("menu.options")
+    root.Add(options)
+    Local ui = Try Shown(root)
+    Defer EndGraphics()
+    Local english = Strings("en")
+    Local french = French()
+    french.SetFallback(english)
+    ui.SetStrings(french)
+    Frame(ui)
+    Expect(options.ShownText() == "menu.options")
+    english.Set("menu.options", "Options")
+    Frame(ui)
+    Expect(options.Box().Size.x == options.TextSize("Options").x)
+End Function
+
+// A plural goes down the fallbacks one at a time, each by its own rule, its own "other" before
+// the next one's.
+@Test
+Function APluralsTextIsTheFirstStringsWithIt()
+    Local english = Strings("en")
+    english.Set("apples.one", r"{count} apple")
+    english.Set("apples.other", r"{count} apples")
+    // French's 0 is "one", English's "other".
+    Local french = Strings("fr")
+    french.SetPluralRule(
+        Function(count: Int64) => count == 0 || count == 1 || count == -1 ? "one" : "other")
+    french.SetFallback(english)
+    Expect(french.Plural("apples", 0) == "0 apples")
+    Expect(french.Plural("apples", 1) == "1 apple")
+    // Polish's own "other" is its text at 1, before English's "one".
+    Local polish = Strings("pl")
+    polish.SetPluralRule(Function(count: Int64) => count == 1 ? "one" : "other")
+    polish.Set("apples.other", r"{count} jabłek")
+    polish.SetFallback(english)
+    Expect(polish.Plural("apples", 1) == "1 jabłek")
+    Expect(polish.Plural("lemons", 1) == "lemons")
+End Function

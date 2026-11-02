@@ -1,0 +1,194 @@
+// Loads: files in res:// made into Assets now, and on the workers with their progress, each load
+// let go once what it made has what it needs.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.test
+Import std.text
+Import std.time
+Import fbengine
+Import fbengine.c.fbe_assets
+
+// An Asset of an image load: its size and format, as a texture would take them.
+Class Picture Implements Asset
+    Field Width: UInt32
+    Field Height: UInt32
+    Field Format: UInt32
+
+    New(width: UInt32, height: UInt32, format: UInt32)
+        Width = width
+        Height = height
+        Format = format
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): Picture Throws IOError
+        Local image = load.Image()
+        If image.Width > 1000
+            Throw IOError(IOErrorKind.INVALID_DATA, "too wide for a picture", load.Path())
+        End If
+        Return Picture(image.Width, image.Height, image.Format)
+    End Method
+End Class
+
+// An Asset of a model load: how much is in it.
+Class Model Implements Asset
+    Field Info: ModelInfo
+
+    New(info: ModelInfo)
+        Info = info
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.MODEL
+
+    Public Static Method FromLoad(load: AssetLoad): Model Throws IOError => Model(load.Model())
+End Class
+
+// A triangle's glTF, its buffer a data URI: three positions and three indices.
+Function Triangle(): UInt8[]
+    // (0, 0, 0), (1, 0, 0), (0, 1, 0) as little-endian Float32s, 1 being 0x3F800000, then 0, 1, 2
+    // as UInt16s.
+    Local buffer = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0] As UInt8[]
+    Local uri = "data:application/octet-stream;base64,{Base64.Encode(buffer)}"
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":42,\"uri\":\"{uri}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}},{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"," +
+            "\"min\":[0,0,0],\"max\":[1,1,0]}},{{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}}]," +
+            "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}},\"indices\":1}}]}}]," +
+            "\"nodes\":[{{\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]}}").Bytes
+End Function
+
+Function MountTestFiles(at: String)
+    Assets.MountFiles(at,
+                      {"pic.png": Png.Encode(Image(4, 3)), "wide.png": Png.Encode(Image(1200, 1)),
+                       "triangle.gltf": Triangle(), "notes.txt": "plain text".Bytes})
+End Function
+
+@Test
+Function LoadMakesAnAssetNow() Throws IOError
+    MountTestFiles("res://test-load")
+    Defer Assets.Unmount("res://test-load")
+    Local loads = fbe_assets_count()
+    Local picture = Try Assets.Load<Picture>("res://Test-Load/PIC.png")
+    Expect(picture.Width == 4)
+    Expect(picture.Height == 3)
+    // RGBA8, sRGB.
+    Expect(picture.Format == 43)
+    Local model = Try Assets.Load<Model>("res://test-load/triangle.gltf")
+    Expect(model.Info.Meshes == 1)
+    Expect(model.Info.Primitives == 1)
+    Expect(model.Info.Nodes == 1)
+    Expect(model.Info.Scenes == 1)
+    // What the loads made is the Assets' now, so the loads are gone.
+    Expect(fbe_assets_count() == loads)
+End Function
+
+@Test
+Function LoadAsyncLoadsOnTheWorkersWithProgress() Throws IOError
+    MountTestFiles("res://test-async")
+    Defer Assets.Unmount("res://test-async")
+    Local progress = LoadProgress()
+    Expect(progress.Done())
+    Expect(progress.Fraction() == 1.0)
+    Local picture = Assets.LoadAsync<Picture>("res://test-async/pic.png", progress)
+    Local model = Assets.LoadAsync<Model>("res://test-async/triangle.gltf", progress)
+    Expect(progress.Count() == 2)
+    // Nothing's handed over before a Flip or a tick of the main scheduler.
+    Expect(!progress.Done())
+    Expect((Try model.Wait()).Info.Meshes == 1)
+    Expect((Try picture.Wait()).Width == 4)
+    Expect(progress.Done())
+    Expect(progress.Fraction() == 1.0)
+End Function
+
+@Test
+Function LoadsFinishAtAFlipToo() Throws IOError
+    MountTestFiles("res://test-flip")
+    Defer Assets.Unmount("res://test-flip")
+    Local progress = LoadProgress()
+    Local picture = Assets.LoadAsync<Picture>("res://test-flip/pic.png", progress)
+    // A minute at most, for a slow machine.
+    Local since = Instant.Now()
+    While !progress.Done() && (Instant.Now() - since) < 60.Seconds
+        Flip()
+        Sleep(1.Milliseconds)
+    End While
+    Expect(progress.Done())
+    Expect((Try picture.Wait()).Height == 3)
+End Function
+
+@Test
+Function ReadBytesAsyncReadsOnAWorker() Throws IOError
+    MountTestFiles("res://test-bytes")
+    Defer Assets.Unmount("res://test-bytes")
+    Expect((Try Assets.ReadBytesAsync("res://test-bytes/notes.txt").Wait()) == "plain text".Bytes)
+    Expect(ExpectThrows<IOError>(Assets.ReadBytesAsync("res://test-bytes/none").Wait())?.Kind ==
+           IOErrorKind.NOT_FOUND)
+End Function
+
+@Test
+Function WhatDoesntLoadThrowsItsKind() Throws IOError
+    MountTestFiles("res://test-fails")
+    Defer Assets.Unmount("res://test-fails")
+    Local loads = fbe_assets_count()
+    Expect(ExpectThrows<IOError>(Assets.Load<Picture>("res://test-fails/none.png"))?.Kind ==
+           IOErrorKind.NOT_FOUND)
+    Expect(
+        ExpectThrows<IOError>(
+            Assets.LoadAsync<Picture>("res://test-fails/none.png").Wait())?.Kind ==
+        IOErrorKind.NOT_FOUND)
+    Expect(ExpectThrows<IOError>(Assets.Load<Picture>("res://test-fails/notes.txt"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(ExpectThrows<IOError>(Assets.Load<Model>("res://test-fails/pic.png"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(ExpectThrows<IOError>(Assets.Load<Picture>("res://test-fails"))?.Kind ==
+           IOErrorKind.IS_A_DIRECTORY)
+    Expect(ExpectThrows<IOError>(Assets.Load<Picture>("textures/pic.png"))?.Kind ==
+           IOErrorKind.INVALID_PATH)
+    Expect(ExpectThrows<IOError>(Assets.LoadAsync<Picture>("res://../pic.png").Wait())?.Kind ==
+           IOErrorKind.INVALID_PATH)
+    // What the Asset itself refuses.
+    Local refused =
+        ExpectThrows<IOError>(Assets.LoadAsync<Picture>("res://test-fails/wide.png").Wait())
+    Expect(refused?.Kind == IOErrorKind.INVALID_DATA)
+    Expect(refused?.Path == "res://test-fails/wide.png")
+    // Failed loads are let go too.
+    Expect(fbe_assets_count() == loads)
+End Function
+
+// A load reads the mounts there were when it was asked for, even if it waits for a worker while
+// they're taken out.
+@Test
+Function ALoadReadsTheMountsThereWereWhenItWasAskedFor() Throws IOError
+    MountTestFiles("res://test-snapshot")
+    // Every worker busy, so the load waits for one.
+    Local busy: Task[] = []
+    For i = 1 To Jobs.Workers()
+        busy.Add(Jobs.Simulate(200.Milliseconds))
+    End For
+    Local model = Assets.LoadAsync<Model>("res://test-snapshot/triangle.gltf")
+    Local bytes = Assets.ReadBytesAsync("res://test-snapshot/notes.txt")
+    Expect(Assets.Unmount("res://test-snapshot"))
+    Expect((Try model.Wait()).Info.Meshes == 1)
+    Expect((Try bytes.Wait()) == "plain text".Bytes)
+    For task In busy
+        task.Wait()
+    End For
+End Function
+
+// A load that isn't made says how: a path that isn't a res:// path, and the rest, as for want of
+// memory.
+@Test
+Function ALoadThatIsntMadeSaysHow() Throws IOError
+    Expect(fbe_assets_load(AssetKind.IMAGE As Int32, "not a path", False, False) == 0)
+    Expect(fbe_assets_load_failure() == FBE_ASSETS_INVALID_PATH)
+    Expect(fbe_assets_load(99, "res://a.png", False, False) == 0)
+    Expect(fbe_assets_load_failure() == FBE_ASSETS_OTHER)
+    Expect(ExpectThrows<IOError>(Assets.Load<Picture>("not a path"))?.Kind ==
+           IOErrorKind.INVALID_PATH)
+End Function

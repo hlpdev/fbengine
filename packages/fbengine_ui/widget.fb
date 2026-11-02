@@ -1,0 +1,175 @@
+// Widgets: Nodes that show something, take input, and look as their theme says in their state.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./layout"
+Import "./theme"
+Import "./ui"
+
+/// A Node that shows something and takes input, styled by its Ui's theme by its style's name and
+/// its state. A widget's own class says what it does with the pointer, keys, and text, through
+/// the Methods its Ui calls, which a game's own widgets override as fbengine_ui's do.
+Public Class Widget Extends Node
+    Field styleName: String
+    Field enabled: Bool = True
+    Field focusable: Bool = False
+    Field state: WidgetState = WidgetState.NORMAL
+    Field style: Style
+    Field ui: Weak<Ui>
+    Field translates: Bool = True
+
+    /// A widget of the style `styleName`, as "button", named `name`.
+    @MainThread Public New(styleName: String, name: String = "")
+        Super.New(name)
+        Self.styleName = styleName
+        style = Style.Plain()
+    End New
+
+    /// The name of the style its theme gives it.
+    @MainThread Public Method StyleName(): String => styleName
+
+    /// Sets the name of the style its theme gives it, as "button.primary".
+    @MainThread Public Method SetStyleName(name: String)
+        styleName = name
+        Reflow()
+    End Method
+
+    /// Lets it be used, or not, as its theme's DISABLED state shows; one that isn't, or is in one
+    /// that isn't, takes no input and can't have the focus.
+    @MainThread Public Method SetEnabled(on: Bool)
+        enabled = on
+        Reflow()
+    End Method
+
+    /// Whether it's enabled itself, as SetEnabled set it.
+    @MainThread Public Method Enabled(): Bool => enabled
+
+    /// Whether it can be used: it and every Widget it's in are enabled, so a disabled panel's
+    /// widgets take no input, as a modal dialog wants of what's under it.
+    @MainThread Public Method EffectivelyEnabled(): Bool
+        Local at: Node? = Self
+        While at != Null
+            Local widget = at As? Widget
+            If widget != Null && !widget.enabled Then Return False
+            at = at.Parent()
+        End While
+        Return True
+    End Method
+
+    /// Whether it can have the keyboard's and the gamepad's focus, as a button can and a label
+    /// can't: it takes the focus, and can be used.
+    @MainThread Public Method Focusable(): Bool => focusable && EffectivelyEnabled()
+
+    /// Sets whether it can have the focus.
+    @MainThread Public Method SetFocusable(on: Bool)
+        focusable = on
+    End Method
+
+    /// What it's doing, as the last Ui.Update saw it.
+    @MainThread Public Method State(): WidgetState => state
+
+    /// Its style in its state, as the last Ui.Update gave it.
+    @MainThread Public Method CurrentStyle(): Style => style
+
+    /// The Ui it was last updated in, or Null.
+    @MainThread Public Method Owner(): Ui? => ui
+
+    /// Sets whether the text it's given is a key, which it shows its Ui's Strings' text for, when
+    /// they have it, as it does at first; text a player typed, or a name, isn't.
+    @MainThread Public Method SetTranslates(on: Bool)
+        translates = on
+        Reflow()
+    End Method
+
+    /// Whether it shows its Ui's Strings' text for the text it's given.
+    @MainThread Public Method Translates(): Bool => translates
+
+    /// What it shows for `text`: its Ui's Strings' text for it while it translates, when they have
+    /// it, else `text`.
+    @MainThread Public Method Translated(text: String): String
+        Local own = ui
+        If !translates || own == Null Then Return text
+        Return own.Translated(text)
+    End Method
+
+    /// The size `text` takes in its style's font, as its Ui measures it.
+    @MainThread Public Method TextSize(text: String): Vec2
+        Local own = ui
+        If own == Null Then Return EstimatedText(text, style)
+        Return own.MeasureText(text, style)
+    End Method
+
+    /// The pointer went down on it, at `point`, in the UI's units: True takes it, so it's this
+    /// widget's until it goes up, wherever it goes. Nothing at first.
+    @MainThread Public Method PointerDown(point: Vec2): Bool => False
+
+    /// The pointer it took moved, to `point`.
+    @MainThread Public Method PointerDrag(point: Vec2)
+    End Method
+
+    /// The pointer it took went up, at `point`, over it when `over`.
+    @MainThread Public Method PointerUp(point: Vec2, over: Bool)
+    End Method
+
+    /// The wheel turned `steps` notches up over it: True if it used them, so the widgets under it
+    /// don't.
+    @MainThread Public Method Wheel(steps: Int32): Bool => False
+
+    /// A key went down, or repeated, while it had the focus, with the modifiers held as it did, as
+    /// `stroke` says: True if it used it, so it isn't the focus's to move.
+    @MainThread Public Method KeyTyped(stroke: Keystroke): Bool => False
+
+    /// Text was typed while it had the focus.
+    @MainThread Public Method TextTyped(text: String)
+    End Method
+
+    /// It was activated while it had the focus, by Return, Space, or a gamepad's SOUTH.
+    @MainThread Public Method Activate()
+    End Method
+
+    /// It got the focus, or lost it.
+    @MainThread Public Method FocusChanged(focused: Bool)
+    End Method
+
+    /// Forgets what the last Update said it did, as each Update does before reading the input.
+    @MainThread Public Method Forget()
+    End Method
+
+    /// Whether it takes text while it has the focus, as a text field does, so its Ui turns the
+    /// window's text input on for it.
+    @MainThread Public Method TakesText(): Bool => False
+
+    /// Where its text's cursor is, in the UI's units from its box's left, which the IME's windows
+    /// go beside.
+    @MainThread Public Method TextCursorX(): Float32 => 0.0
+
+    // Gives it its Ui, its state, and its style, padding and all, for this Update.
+    @MainThread Package Method Restyle(owner: Ui, now: WidgetState)
+        ui = owner
+        state = EffectivelyEnabled() ? now : WidgetState.DISABLED
+        Local styled = owner.CurrentTheme().StyleOf(styleName, state)
+        If styled.Padding != Padding() Then SetPadding(styled.Padding)
+        If styled.Font != style.Font || styled.FontSize != style.FontSize Then Reflow()
+        style = styled
+    End Method
+End Class
+
+/// A text's size in a style's font when there's no font to measure it with, as before
+/// fbengine's text: each character half the font's size wide, and lines 1.25 times it high.
+Public Function EstimatedText(text: String, style: Style): Vec2
+    Local lines = 1
+    Local longest = 0
+    Local current = 0
+    For each In text.Chars
+        If each == '\n'
+            lines += 1
+            current = 0
+        Else
+            current += 1
+            longest = Max(longest, current)
+        End If
+    End For
+    Return Vec2((longest As Float32) * style.FontSize * 0.5,
+                (lines As Float32) * style.FontSize * 1.25)
+End Function

@@ -1,0 +1,250 @@
+// fbengine_audio, over its C API: the bindings in c/, one for each area's header in
+// native/fbengine_audio/, which tools/bindgen.sh makes and `Import fbengine_audio` leaves out
+// (they're fbengine_audio.c.fbe_<area>). Audio is the mix and the device it plays on.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_audio"
+Import "./c/fbe_channel"
+Import "./flip"
+
+/// Where the mix goes.
+Public Enum AudioDevice
+    /// The OS's default output, which follows it when it changes.
+    DEFAULT = 0
+    /// No sound at all, mixed at the pace a device would be, on miniaudio's null backend: for
+    /// servers, and tests that run as a game does.
+    SILENT = 1
+    /// No device: Audio.Mix makes each frame when it's called, as tests that check what's mixed
+    /// and offline renders want.
+    MANUAL = 2
+End Enum
+
+/// How a mono Channel's pan is heard on each side of a stereo mix, as a game whose sounds are
+/// positioned by hand, by setting each one's pan and volume each frame, wants it heard. A stereo
+/// sound's pan, or an Emitter's Channel's, is a balance; in a mix that isn't stereo, a pan does
+/// nothing.
+Public Enum PanLaw
+    /// Taking from the other side only: both sides at full in the middle, and one fading to
+    /// silence as it pans away, as a stereo sound's balance does.
+    BALANCE = 0
+    /// At constant power, the cosine and sine of (pan + 1) * Pi / 4: 0.707 each in the middle,
+    /// so a sound is as loud wherever it's panned.
+    CONSTANT_POWER = 1
+    /// Linearly, (1 - pan) / 2 and (1 + pan) / 2: half each in the middle.
+    LINEAR = 2
+End Enum
+
+/// A device that won't start.
+Public Class AudioError Extends Error
+End Class
+
+/// The mix, which sounds play into, and the device it plays on, which there's one of.
+Public Final Class Audio
+    Private New()
+    End New
+
+    /// The version of fbengine the program runs with, like "0.1.0", its DLL's.
+    Public Static Method Version(): String
+        Unsafe
+            Return fbe_audio_version().ToString()
+        End Unsafe
+    End Method
+
+    /// Starts the mix on `device`, at `sampleRate` frames a second, from 8000 to 384000, with
+    /// `channels`, from 1 to 8, or for either 0, the device's own: 48000 and 2 on MANUAL. It plays
+    /// on `output`, one of the names Outputs gives for the device, as a game's options let a player
+    /// pick, or its default for "", mixing `period` seconds at a time, from 0.001 to 1, or the
+    /// device's own for 0: shorter is heard sooner, at more work. On the default output, it follows
+    /// the OS's default when that changes, within about a second, at a Flip; when the output's lost,
+    /// the next Flip moves the mix to the default one, as Lost says. It throws AudioError when the
+    /// device won't start or has no output of that name, and panics when it's started already or a
+    /// value's out of range.
+    @MainThread Public Static Method Start(device: AudioDevice = AudioDevice.DEFAULT,
+                                           sampleRate: Int32 = 0, channels: Int32 = 0,
+                                           output: String = "",
+                                           period: Float64 = 0.0) Throws AudioError
+        If fbe_audio_started() Then Panic("the audio is started already; Stop it first")
+        If sampleRate != 0 && (sampleRate < 8000 || sampleRate > 384000)
+            Panic("a sample rate is 0, for the device's, or 8000 to 384000 Hz, not {sampleRate}")
+        End If
+
+        If channels < 0 || channels > 8
+            Panic("the audio has 0, for the device's, to 8 channels, not {channels}")
+        End If
+
+        If period != 0.0 && !(period >= 0.001 && period <= 1.0)
+            Panic("a period is 0, for the device's, or 0.001 to 1 seconds, not {period}")
+        End If
+
+        If !fbe_audio_start(device As Int32, sampleRate, channels, output, period)
+            Throw AudioError(LastError())
+        End If
+        HookFlip()
+    End Method
+
+    /// The names of `device`'s outputs, the speakers and headphones a player picks from, for
+    /// Start: the OS's for DEFAULT, the null backend's one for SILENT, and none for MANUAL. A
+    /// second of one name, as two of one model of headphones are, is "Headphones (2)". It throws
+    /// AudioError when there's no audio backend to ask, as on a machine with no output.
+    @MainThread Public Static Method Outputs(device: AudioDevice): String[] Throws AudioError
+        Local count = fbe_audio_list_outputs(device As Int32)
+        If count < 0 Then Throw AudioError(LastError())
+        Local names: String[] = []
+        For i = 0 Until count
+            Unsafe
+                names.Add(fbe_audio_output_name(i).ToString())
+            End Unsafe
+        End For
+        Return names
+    End Method
+
+    /// The seconds the device mixes at a time, which what's mixed is heard about that much later
+    /// than, or 0 when the audio's stopped or on MANUAL.
+    @MainThread Public Static Method Period(): Float64 => fbe_audio_period()
+
+    /// Stops the mix, which finishes every Channel, and lets its device go; stopped already, it does
+    /// nothing. Sounds stay loaded.
+    @MainThread Public Static Method Stop()
+        fbe_audio_stop()
+    End Method
+
+    /// Whether the mix is started.
+    @MainThread Public Static Method Started(): Bool => fbe_audio_started()
+
+    /// Whether the output the mix plays on was lost: its device stopped, as one does when its
+    /// output's unplugged, or it's mixed nothing for a quarter of a second, four of its periods if
+    /// they're longer (two seconds before it's mixed at all), as one whose output's gone does on
+    /// macOS and Linux, or whose driver's hung. Nothing's mixed, so Channels wait where they are.
+    /// At the next Flip, the device is made again on the default output, at the mix's rate and
+    /// channels, and the Channels go on where they were; it stays Lost until the Flip after, so a
+    /// game can tell the player, and Output names the output now. It's Lost for the Flip, too, that
+    /// moves a mix on the default output to a new default. A game that wants the one it named back
+    /// Starts on it again. With no output at all, it stays Lost, and each Flip tries the default
+    /// again. False when it's stopped or on MANUAL.
+    @MainThread Public Static Method Lost(): Bool => fbe_audio_lost()
+
+    /// The output in use, unplugged as the OS would unplug it, which stops the device, for a game's
+    /// tests. It throws AudioError unless the audio's started on a device.
+    @MainThread Public Static Method SimulateUnplug() Throws AudioError
+        If !fbe_audio_simulate(FBE_AUDIO_SIMULATE_UNPLUG) Then Throw AudioError(LastError())
+    End Method
+
+    /// Every output, unplugged as the OS would unplug them, so Flip has none to fall back to until
+    /// SimulatePlugIn. It throws AudioError unless the audio's started on a device.
+    @MainThread Public Static Method SimulateUnplugAll() Throws AudioError
+        If !fbe_audio_simulate(FBE_AUDIO_SIMULATE_UNPLUG_ALL) Then Throw AudioError(LastError())
+    End Method
+
+    /// The device's mix stalled, left started, as one whose output's gone is on macOS and Linux, or
+    /// whose driver's hung, for a game's tests: Lost once it's mixed nothing for long enough, and
+    /// made again at the Flip after. It throws AudioError unless the audio's started on a device.
+    @MainThread Public Static Method SimulateStall() Throws AudioError
+        If !fbe_audio_simulate(FBE_AUDIO_SIMULATE_STALL) Then Throw AudioError(LastError())
+    End Method
+
+    /// The OS's default output changed, as a player's choosing another does, for a game's tests: a
+    /// mix on the default output moves to it at the next Flip. It throws AudioError unless the
+    /// audio's started on a device.
+    @MainThread Public Static Method SimulateDefaultChange() Throws AudioError
+        If !fbe_audio_simulate(FBE_AUDIO_SIMULATE_DEFAULT_CHANGE) Then Throw AudioError(LastError())
+    End Method
+
+    /// Every output, plugged back in as the OS would, so the next Flip has the default to fall back
+    /// to; it starts nothing itself, as a named output that's back isn't started again. It throws
+    /// AudioError unless the audio's started on a device.
+    @MainThread Public Static Method SimulatePlugIn() Throws AudioError
+        If !fbe_audio_simulate(FBE_AUDIO_SIMULATE_PLUG_IN) Then Throw AudioError(LastError())
+    End Method
+
+    /// The device Start was given. Panics when it's stopped.
+    @MainThread Public Static Method Device(): AudioDevice
+        If !fbe_audio_started() Then Panic("the audio isn't started")
+        Return fbe_audio_device() As AudioDevice
+    End Method
+
+    /// The name of the output the mix plays on, "" when it's stopped, on MANUAL, or lost with none
+    /// to fall back to.
+    @MainThread Public Static Method Output(): String
+        Unsafe
+            Return fbe_audio_device_name().ToString()
+        End Unsafe
+    End Method
+
+    /// The mix's frames a second, 0 when it's stopped.
+    @MainThread Public Static Method SampleRate(): Int32 => fbe_audio_sample_rate()
+
+    /// The mix's channels, 2 for stereo, 0 when it's stopped.
+    @MainThread Public Static Method Channels(): Int32 => fbe_audio_channels()
+
+    /// How many frames have been mixed since it started, which a device's keeps adding to as it
+    /// plays, 0 when it's stopped.
+    @MainThread Public Static Method Frames(): Int64 => fbe_audio_frames()
+
+    /// Sets how every mono Channel's pan is heard, BALANCE as it starts; it's kept while the
+    /// audio's stopped.
+    @MainThread Public Static Method SetPanLaw(law: PanLaw)
+        fbe_channel_set_pan_law(law As Int32)
+    End Method
+
+    /// How mono Channels' pans are heard.
+    @MainThread Public Static Method PanLaw(): PanLaw => fbe_channel_pan_law() As PanLaw
+
+    /// How many Channels are playing, paused ones too.
+    @MainThread Public Static Method Playing(): Int32 => fbe_channel_count()
+
+    /// Multiplies the whole mix by `volume`, 0 or more: 1, as it starts, leaves it as it is, 0
+    /// silences it, and more than 1 makes it louder. It's kept while the audio's stopped.
+    @MainThread Public Static Method SetVolume(volume: Float32)
+        If !fbe_audio_set_volume(volume) Then Panic(LastError())
+    End Method
+
+    /// What the whole mix is multiplied by.
+    @MainThread Public Static Method Volume(): Float32 => fbe_audio_volume()
+
+    /// The next `frames` frames of the mix, Channels() samples each, one after another, from -1
+    /// to 1. Panics unless the audio's started on MANUAL, or when `frames` is negative.
+    @MainThread Public Static Method Mix(frames: Int32): Float32[]
+        If !fbe_audio_started() || fbe_audio_device() != AudioDevice.MANUAL As Int32
+            Panic("only audio started on AudioDevice.MANUAL is mixed by Mix")
+        End If
+
+        If frames < 0 Then Panic("a mix is 0 frames or more, not {frames}")
+        If frames == 0 Then Return []
+        Local samples = Buffer<Float32>((frames As Int64) * fbe_audio_channels())
+        Unsafe
+            If !fbe_audio_mix(samples.Pointer(), frames) Then Panic(LastError())
+        End Unsafe
+
+        Return samples.ToArray()
+    End Method
+End Class
+
+/// What the last call to fbengine_audio_native that failed says went wrong.
+Package Function LastError(): String
+    Unsafe
+        Return fbe_audio_error().ToString()
+    End Unsafe
+End Function
+
+// A volume, pan, pitch, or fade out of range is a mistake, finished Channel or not.
+@PanicsAtCaller
+Package Function CheckVolume(volume: Float32)
+    If !IsFinite(volume) || volume < 0.0 Then Panic("a volume is 0 or more, not {volume}")
+End Function
+
+@PanicsAtCaller
+Package Function CheckPan(pan: Float32)
+    If !(pan >= -1.0 && pan <= 1.0) Then Panic("a pan is -1, the left, to 1, the right, not {pan}")
+End Function
+
+@PanicsAtCaller
+Package Function CheckPitch(pitch: Float32)
+    If !(pitch >= 0.0625 && pitch <= 16.0) Then Panic("a pitch is 1/16 to 16, not {pitch}")
+End Function
+
+@PanicsAtCaller
+Package Function CheckFade(seconds: Float64)
+    If !IsFinite(seconds) || seconds < 0.0 Then Panic("a fade takes 0 seconds or more, not {seconds}")
+End Function

@@ -1,0 +1,105 @@
+// fbengine_audio's work at each Flip, in one of Frame.OnFlip's late hooks, after the others, as
+// physics', have moved what's followed: a device whose output was lost is made again on the default
+// output, then the Listener moves, then the Emitters, so each Emitter's Doppler effect is from
+// where the Listener is now.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./c/fbe_audio"
+
+/// What moves the Listener, and the Emitters, each frame, once something follows.
+Package Global followListener: (Func())? = Null
+Package Global followEmitters: (Func())? = Null
+Global hooked = False
+
+/// What an Emitter or the Listener follows, from a Follow to the next, or to Unfollow: where a
+/// function says, and how it's turned for the Listener, or where an entity is in the world, as it's
+/// drawn at `step`'s Tween when there's a step; and where that was a frame ago, for its velocity.
+Package Final Class Followed
+    Package Field where: (Func(): Vec3)? = Null
+    Package Field turned: (Func(): Quat)? = Null
+    Package Field entity: Entity? = Null
+    Package Field step: FixedStep? = Null
+    Field from: Vec3
+    Field before: Bool
+
+    Package New(where: Func(): Vec3, turned: (Func(): Quat)?)
+        Self.where = where
+        Self.turned = turned
+    End New
+
+    Package New(entity: Entity, step: FixedStep?)
+        Self.entity = entity
+        Self.step = step
+    End New
+
+    /// How fast it moved to `now` over the last frame, at rest the first time.
+    Package Method MovedTo(now: Vec3): Vec3
+        Local moving = before ? Moved(from, now) : Vec3(0, 0, 0)
+        from = now
+        before = True
+        Return moving
+    End Method
+End Class
+
+/// Has each Flip do fbengine_audio's work from now on, once.
+@MainThread Package Function HookFlip()
+    If hooked Then Return
+    hooked = True
+    Frame.OnFlip(EachFrame, late: True)
+End Function
+
+/// How fast something moved from `last` to `now` over the last frame, at rest when there was none,
+/// or when it moved too far for a Float32 to say how fast.
+Package Function Moved(last: Vec3, now: Vec3): Vec3
+    Local seconds = Frame.Delta()
+    If seconds <= 0.0 Then Return Vec3(0, 0, 0)
+    Local moving = (now - last) * ((1.0 / seconds) As Float)
+    If !IsFinite(moving.x) || !IsFinite(moving.y) || !IsFinite(moving.z) Then Return Vec3(0, 0, 0)
+    Return moving
+End Function
+
+/// Where each of the entities `follows` follow is in the world, and how it's turned: those with no
+/// step as they are, in one call, and the others as they're drawn at their step's Tween. Each
+/// follows an entity, none of them freed.
+@MainThread Package Function PosesOf(follows: Followed[]): Pose[]
+    Local still: Entity[] = []
+    For follow In follows
+        Local entity = follow.entity
+        If entity != Null && follow.step == Null Then still.Add(entity)
+    End For
+    Local found: Pose[] = still.Count > 0 ? Entity.Poses(still, Space.WORLD) : []
+    Local poses: Pose[] = []
+    Local next = 0
+    For follow In follows
+        Local entity = follow.entity
+        Local step = follow.step
+        If entity == Null Then Continue
+        If step == Null
+            poses.Add(found[next])
+            next += 1
+        Else
+            poses.Add(Tweened(entity, step.Tween()))
+        End If
+    End For
+    Return poses
+End Function
+
+// Where an entity is drawn `tween` of the way from its World's last capture to now, and how it's
+// turned there; one scaled to nothing on an axis has no turn its matrix can say, so it's turned
+// as it is now.
+Function Tweened(entity: Entity, tween: Float): Pose
+    Local matrix = entity.TweenedMatrix(tween)
+    If Determinant(matrix) == 0 Then Return Pose(matrix.w.xyz, entity.Rotation(Space.WORLD))
+    Local _, rotation, _ = matrix.Decompose()
+    Return Pose(matrix.w.xyz, rotation)
+End Function
+
+Function EachFrame()
+    fbe_audio_recover()
+    Local listener = followListener
+    If listener != Null Then listener()
+    Local emitters = followEmitters
+    If emitters != Null Then emitters()
+End Function

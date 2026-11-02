@@ -1,0 +1,149 @@
+// The simplest widgets: a label, a button, a toggle, and a progress bar.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./widget"
+
+/// Text, which takes no input: style "label".
+Public Class Label Extends Widget
+    Field text: String
+
+    /// A label showing `text`.
+    @MainThread Public New(text: String, name: String = "")
+        Super.New("label", name)
+        Self.text = text
+    End New
+
+    /// What it's given to show, a key while it translates.
+    @MainThread Public Method Text(): String => text
+
+    /// Shows `text`, or its Ui's Strings' text for it while it translates.
+    @MainThread Public Method SetText(shown: String)
+        If shown == text Then Return
+        text = shown
+        Reflow()
+    End Method
+
+    /// What it shows: its text, or its Ui's Strings' text for it.
+    @MainThread Public Method ShownText(): String => Translated(text)
+
+    @MainThread Public Override Method Measure(): Vec2 => TextSize(ShownText())
+End Class
+
+/// A button with text on it, which the pointer clicks, as Return, Space, or a gamepad's SOUTH
+/// do while it has the focus: style "button".
+Public Class Button Extends Widget
+    Field text: String
+    Field clicked: Int32 = 0
+    Field handlers: Func(Button)[] = []
+
+    /// A button showing `text`.
+    @MainThread Public New(text: String, name: String = "")
+        Super.New("button", name)
+        Self.text = text
+        SetFocusable(True)
+    End New
+
+    /// What it's given to show, a key while it translates.
+    @MainThread Public Method Text(): String => text
+
+    /// Shows `text`, or its Ui's Strings' text for it while it translates.
+    @MainThread Public Method SetText(shown: String)
+        If shown == text Then Return
+        text = shown
+        Reflow()
+    End Method
+
+    /// What it shows: its text, or its Ui's Strings' text for it.
+    @MainThread Public Method ShownText(): String => Translated(text)
+
+    /// Whether the last Ui.Update read it clicked.
+    @MainThread Public Method Clicked(): Bool => clicked > 0
+
+    /// Runs `handler` each time it's clicked, in the Ui.Update that reads the click, with the
+    /// button, so a handler needn't hold the button itself, which would keep it alive; what else
+    /// it holds that holds the button, as the menu it's in, it holds Weak, `Function[Weak menu]`.
+    @MainThread Public Method OnClick(handler: Func(Button))
+        handlers.Add(handler)
+    End Method
+
+    /// Clicks it, as the pointer or a key does.
+    @MainThread Public Method Click()
+        clicked += 1
+        For handler In handlers.Clone()
+            handler(Self)
+        End For
+    End Method
+
+    @MainThread Public Override Method Measure(): Vec2 => TextSize(ShownText())
+
+    @MainThread Public Override Method PointerDown(point: Vec2): Bool => True
+
+    @MainThread Public Override Method PointerUp(point: Vec2, over: Bool)
+        If over Then Click()
+    End Method
+
+    @MainThread Public Override Method Activate()
+        Click()
+    End Method
+
+    @MainThread Public Override Method Forget()
+        clicked = 0
+    End Method
+End Class
+
+/// A box that's on or off, with text beside it, which a click turns over: style "toggle".
+Public Class Toggle Extends Button
+    Field on: Bool
+    Field changed: Bool = False
+
+    /// A toggle showing `text`, `on` or off.
+    @MainThread Public New(text: String, on: Bool = False, name: String = "")
+        Super.New(text, name)
+        SetStyleName("toggle")
+        Self.on = on
+    End New
+
+    /// Whether it's on.
+    @MainThread Public Method On(): Bool => on
+
+    /// Turns it on or off, which isn't a change the game made by a click, so Changed stays False.
+    @MainThread Public Method SetOn(turned: Bool)
+        on = turned
+    End Method
+
+    /// Whether the last Ui.Update read a click turn it over.
+    @MainThread Public Method Changed(): Bool => changed
+
+    @MainThread Public Override Method Click()
+        on = !on
+        changed = True
+        Super.Click()
+    End Method
+
+    @MainThread Public Override Method Forget()
+        changed = False
+        Super.Forget()
+    End Method
+End Class
+
+/// A bar filled as far as its value goes, from 0 to 1, which takes no input: style "progress".
+Public Class Progress Extends Widget
+    Field value: Float32
+
+    /// A bar at `value`.
+    @MainThread Public New(value: Float32 = 0.0, name: String = "")
+        Super.New("progress", name)
+        SetValue(value)
+        SetContentSize(100.0, 8.0)
+    End New
+
+    /// How far it's filled, from 0 to 1.
+    @MainThread Public Method Value(): Float32 => value
+
+    /// Fills it to `fraction`, kept to 0 to 1; NaN is 0.
+    @MainThread Public Method SetValue(fraction: Float32)
+        value = IsNaN(fraction) ? 0.0 : Clamp(fraction, 0.0, 1.0)
+    End Method
+End Class
