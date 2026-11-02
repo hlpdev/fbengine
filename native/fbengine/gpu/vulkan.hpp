@@ -79,6 +79,8 @@ struct device_t {
     VkPhysicalDeviceProperties properties{};
     /// The most anisotropy its samplers take, 0 if it has none.
     float max_anisotropy = 0.0F;
+    /// The furthest its samplers bias a texture's mipmaps, 0 if they can't, as Metal's can't.
+    float max_lod_bias = 0.0F;
     /// How many bits of a timestamp its queue writes, 0 if it writes none, and how many
     /// nanoseconds one counts.
     std::uint32_t timestamp_bits = 0;
@@ -217,6 +219,13 @@ enum class fault_t : std::uint8_t {
     LACKS,
     /// Making a buffer to upload a texture through.
     UPLOAD,
+    /// Making the device, as if its samplers couldn't bias a texture's mipmaps.
+    NO_LOD_BIAS,
+    /// Making the bindless set, as if the device promised a set 1212 descriptors, as MoltenVK does
+    /// on a Mac, and said it held no more.
+    PROMISED_DESCRIPTORS,
+    /// Making the bindless set, as if the device held one texture fewer than fbengine needs.
+    FEWEST_DESCRIPTORS,
 };
 
 /// Makes the next `fault` happen.

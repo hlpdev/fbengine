@@ -105,7 +105,8 @@ FBE_API const char* fbe_gpu_pipeline_cache(void);
 FBE_API int32_t fbe_gpu_pipelines(void);
 
 // How far every texture's mipmaps are biased, added to the level the GPU picks: negative is
-// sharper, positive blurrier; false if it's not -16 to 16. The GPU's limit clamps it.
+// sharper, positive blurrier; false if it's not -16 to 16. The GPU's limit clamps it, and a GPU
+// whose samplers have none, as Metal's through MoltenVK, draws with no bias.
 FBE_API bool fbe_gpu_set_lod_bias(float bias);
 FBE_API float fbe_gpu_lod_bias(void);
 // The most anisotropy textures filtered LINEAR are sampled with, sharper at glancing angles: 1 for
