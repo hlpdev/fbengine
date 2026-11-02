@@ -1,6 +1,6 @@
 """Checks fbengine before a step lands: every lane's check, and every landing's.
 
-    python tools/verify.py [--build <folder>] [--base <ref>] [--no-build] [--no-tidy]
+    python tools/verify.py [--build <folder>] [--base <ref>] [--no-build] [--no-tidy] [--only <regex>]
 
 It builds (configuring the folder first if it's new), runs ctest (the C++ tests, the packages'
 `fb test`, and the examples, every test offscreen), checks each package's DLL exports only its C
@@ -9,17 +9,26 @@ file, clang-tidy on the C++ files that changed since --base (all of an area's wh
 changed), and `fb fmt --check` on the packages and examples. It ends with "everything passed", or
 how many checks failed; a landing's push waits on that line.
 
+One verify runs at a time on a machine: it waits for its turn before it builds, since several at
+once have left Windows unable to start programs, each failure a dialog on the user's screen. Its
+build folder is held the whole run, so a second verify of that folder is refused. --only runs
+just the tests matching a regular expression, in its turn, for what a fix touches; it never prints
+"everything passed", which only the whole check does.
+
 clang-format and clang-tidy come from $CLANG_FORMAT and $CLANG_TIDY, or PATH, or where the user's
 machine has them.
 """
 
 import argparse
+import hashlib
 import os
 import pathlib
 import platform
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FALLBACKS = {
@@ -38,6 +47,51 @@ def step(name):
 def fail(message):
     print(f"FAIL: {message}", flush=True)
     failures.append(message)
+
+
+def try_lock(file):
+    """Takes `file`'s first byte for this process, until it exits; if it could."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            file.seek(0)
+            msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def lock_file(name):
+    folder = pathlib.Path(tempfile.gettempdir()) / "fbengine-verify"
+    folder.mkdir(exist_ok=True)
+    # Kept open, as closing it lets go.
+    return (folder / name).open("a+b")
+
+
+def hold_build(build):
+    """Holds the build folder for this run, or refuses: two verifies of one folder undo each other."""
+    name = hashlib.sha256(str(build).lower().encode()).hexdigest()[:16]
+    file = lock_file(f"build-{name}.lock")
+    if not try_lock(file):
+        sys.exit(f"another verify is running in {build}")
+    return file
+
+
+def wait_for_turn():
+    """Waits until no other verify on this machine is running, and holds that until this one exits."""
+    file = lock_file("turn.lock")
+    waited = False
+    while not try_lock(file):
+        if not waited:
+            print("waiting for the other verify on this machine to finish", flush=True)
+            waited = True
+        time.sleep(5)
+    return file
 
 
 def run(command, **options):
@@ -101,11 +155,20 @@ def check_build(build):
     return True
 
 
-def check_tests(build):
+def check_tests(build, only=None):
     step("ctest")
     environment = dict(os.environ, SDL_VIDEO_DRIVER="offscreen")
-    if run(["ctest", "--test-dir", str(build), "--output-on-failure"], env=environment) != 0:
+    command = ["ctest", "--test-dir", str(build), "--output-on-failure"]
+    if only is not None:
+        command += ["--no-tests=error", "-R", only]
+    if run(command, env=environment) != 0:
         fail("ctest failed")
+
+
+def check_locks():
+    step("verify's locks")
+    if run([sys.executable, str(ROOT / "tools" / "verify_test.py")]) != 0:
+        fail("verify's locks don't hold")
 
 
 def this_target():
@@ -182,10 +245,23 @@ def main():
     parser.add_argument("--base", default="origin/master", help="what clang-tidy diffs against")
     parser.add_argument("--no-build", action="store_true", help="use the build as it is")
     parser.add_argument("--no-tidy", action="store_true", help="skip clang-tidy")
+    parser.add_argument("--only", help="build, and run only the tests this regular expression matches")
     options = parser.parse_args()
     build = (ROOT / options.build).resolve()
+    # Held until this process exits.
+    held = [hold_build(build), wait_for_turn()]
 
     built = options.no_build or check_build(build)
+    if options.only is not None:
+        if built:
+            check_tests(build, options.only)
+        if failures:
+            sys.exit(1)
+        print()
+        print("those tests passed; this isn't a landing's check")
+        del held
+        return
+    check_locks()
     if built:
         check_tests(build)
         check_exports()
@@ -202,6 +278,7 @@ def main():
             print(f"  {message}")
         sys.exit(1)
     print("everything passed")
+    del held
 
 
 if __name__ == "__main__":
