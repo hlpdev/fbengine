@@ -214,6 +214,20 @@ Function LinkFolder(link: Path, target: Path) Throws IOError
 End Function
 
 @Test
+Function ASourceFolderIsMountedAndWatched() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WritePng(folder.Path, "source.png", 2)
+    Try Assets.MountSource(folder.Path.Text)
+    Defer Assets.Unmount("res://")
+    Defer Assets.StopWatching()
+    Local picture = Try Assets.Load<HotPicture>("res://source.png")
+    Try WritePng(folder.Path, "source.png", 4)
+    FlipUntil(Function(): Bool => picture.Width == 4)
+    Expect(picture.Width == 4)
+End Function
+
+@Test
 Function ReloadLoadsAPathAgain() Throws IOError
     Local folder = Try TempDir()
     Defer Try? folder.Close()

@@ -403,6 +403,21 @@ TEST_CASE("a folder finds no name a pak wouldn't", "[vfs]") {
     }
 }
 
+TEST_CASE("a folder hides names starting with a dot, as a cooked pak has none", "[vfs]") {
+    const temp_folder_t folder;
+    folder.write("seen.txt", "seen");
+    folder.write(".DS_Store", "the OS's");
+    folder.write(".git/HEAD", "a repository's");
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    REQUIRE(read_failure(files, "res://.DS_Store") == vfs::failure_t::NOT_FOUND);
+    REQUIRE(read_failure(files, "res://.git/HEAD") == vfs::failure_t::NOT_FOUND);
+    const vfs::result_t<std::vector<vfs::entry_t>> listed = files.list(path("res://"));
+    REQUIRE(listed.has_value());
+    REQUIRE(listed->size() == 1);
+    REQUIRE(listed->front().name == "seen.txt");
+}
+
 TEST_CASE("a folder that isn't there is an empty mount", "[vfs]") {
     const temp_folder_t folder;
     vfs::vfs_t files;

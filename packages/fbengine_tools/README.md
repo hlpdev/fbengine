@@ -12,20 +12,40 @@ format by its bytes, not its name.
   `ModelSettings`) says `optimize = false`. A glTF the engine wouldn't load stops the cook.
 - Every other file, sidecars and buffers too, goes in the pak as it is.
 
+A game names its build step, and keeps its files in `assets/`:
+
 ```toml
 [dependencies]
 fbengine = "0.1"
 fbengine_tools = "0.1"
+
+[build]
+package = "fbengine_tools"
+program = "step/game.fb"
 ```
+
+Each build, the step writes the game's module `res`, its files' typed references and a `Mount`:
+
+```vb
+Import std.core
+Import fbengine
+Import "./res" As Res
+
+Try Res.Mount()
+Print(Try Assets.ReadText(Res.Readme))
+```
+
+A debug build's `Mount` mounts `assets/` at res://, and watches it, so what changes reloads as the
+game runs. A release build's cooks `assets/` into `build/<name>.pak`, which the game ships beside
+its executable, or in a macOS bundle's Resources, each file again only when it or its settings
+change. What's hidden, its name starting with '.', and Windows' Thumbs.db and desktop.ini, are left
+out. `Cooker` and `References` do the same for a game's own tools:
 
 ```vb
 Import std.io
-Import fbengine
 Import fbengine_tools
 
-Try Cooker.CookFolder(Path("game/res"), Path("build/game.pak"))
-// And in the game's release:
-Try Assets.MountPak("res://", Path("game.pak"))
+Try Cooker.CookFolder(Path("assets"), Path("build/game.pak"))
 ```
 
 Its References write typed references to a game's files: a module of each one's res:// path, by

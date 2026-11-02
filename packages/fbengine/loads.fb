@@ -3,7 +3,6 @@
 Import std.collections
 Import std.core
 Import std.data
-Import std.ffi
 Import std.text
 Import "./c/fbe_assets"
 

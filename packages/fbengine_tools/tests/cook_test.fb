@@ -139,6 +139,8 @@ Function AFolderCooksIntoAPakAtItsOwnPaths() Throws IOError
     Try File.WriteText(source.Path / "models" / "door.gltf", "a model, as it is")
     // What's hidden, which isn't the game's.
     Try File.WriteText(source.Path / ".DS_Store", "the OS's")
+    Try File.WriteText(source.Path / "Thumbs.db", "the OS's")
+    Try File.WriteText(source.Path / "models" / "Desktop.ini", "the OS's")
     Try Dir.CreateAll(source.Path / "models" / ".git")
     Try File.WriteText(source.Path / "models" / ".git" / "HEAD", "a repository's")
     Local built = Try TempDir()
@@ -158,6 +160,8 @@ Function AFolderCooksIntoAPakAtItsOwnPaths() Throws IOError
     Expect((Try Assets.ReadText("res://test-pak/readme.txt")) == "hello")
     Expect((Try Assets.ReadText("res://test-pak/models/door.gltf")) == "a model, as it is")
     Expect(!Assets.Exists("res://test-pak/.ds_store"))
+    Expect(!Assets.Exists("res://test-pak/thumbs.db"))
+    Expect(!Assets.Exists("res://test-pak/models/desktop.ini"))
     Expect(!Assets.DirExists("res://test-pak/models/.git"))
     Local settings = Try Assets.ReadSettings<ImageSettings>("res://test-pak/textures/wall.png")
     Expect(settings.Compression == ImageCompression.ASTC)
@@ -398,4 +402,61 @@ Function AModelsSidecarSaysHowItsImagesCook() Throws IOError
     Expect(settings.Images?.Quality == 2)
     Expect((Try Assets.ReadSettings<ModelSettings>("res://test-model-images/b.gltf")).Images ==
            Null)
+End Function
+
+// What the pak at `pak` has at `name`, mounted for the moment.
+Function InPak(pak: Path, name: String): UInt8[] Throws IOError
+    Try Assets.MountPak("res://test-cached", pak)
+    Defer Assets.Unmount("res://test-cached")
+    Return Try Assets.ReadBytes("res://test-cached/{name}")
+End Function
+
+// Writes over what `cache` keeps, so what's still "kept" in a pak wasn't cooked again.
+Function Marked(cache: Path) Throws IOError
+    For entry In Try Dir.Entries(cache)
+        Try File.WriteText(entry.Path, "kept")
+    End For
+End Function
+
+@Test
+Function ACacheCooksOnlyWhatChanged() Throws IOError
+    Local source = Try TempDir()
+    Defer Try? source.Close()
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    Local pak = built.Path / "game.pak"
+    Local cache = built.Path / "cache"
+    Try File.WriteBytes(source.Path / "a.png", Png.Encode(Image(4, 4)))
+    Try File.WriteBytes(source.Path / "b.png", Png.Encode(Image(8, 8)))
+    Try WriteTriangle(source.Path, "door")
+    Try Cooker.CookFolder(source.Path, pak, cache)
+    // The two PNGs, the door's PNG, and its binary glTF.
+    Expect((Try Dir.Entries(cache)).Count == 4)
+    Try Marked(cache)
+    Try Cooker.CookFolder(source.Path, pak, cache)
+    Expect((Try InPak(pak, "a.png")) == "kept".Bytes)
+    Expect((Try InPak(pak, "door.gltf")) == "kept".Bytes)
+    // Its settings changed, it's cooked again, and what it was isn't kept.
+    Try File.WriteText(source.Path / "a.png.toml", "mipmaps = false")
+    Try Cooker.CookFolder(source.Path, pak, cache)
+    Expect((Try InPak(pak, "a.png")) != "kept".Bytes)
+    Expect((Try InPak(pak, "b.png")) == "kept".Bytes)
+    Expect((Try Dir.Entries(cache)).Count == 4)
+    // Its bytes changed.
+    Try File.WriteBytes(source.Path / "b.png", Png.Encode(Image(16, 16)))
+    Try Cooker.CookFolder(source.Path, pak, cache)
+    Expect((Try InPak(pak, "b.png")) != "kept".Bytes)
+    // A glTF's buffer changed alone.
+    Try Marked(cache)
+    Local buffer = Try File.ReadBytes(source.Path / "door.bin")
+    // A UV.
+    buffer[75] = 0x3F
+    Try File.WriteBytes(source.Path / "door.bin", buffer)
+    Try Cooker.CookFolder(source.Path, pak, cache)
+    Expect((Try InPak(pak, "door.gltf")) != "kept".Bytes)
+    Expect((Try InPak(pak, "a.png")) == "kept".Bytes)
+    // What's gone isn't kept.
+    Try File.Delete(source.Path / "b.png")
+    Try Cooker.CookFolder(source.Path, pak, cache)
+    Expect((Try Dir.Entries(cache)).Count == 3)
 End Function

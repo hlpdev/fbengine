@@ -4,6 +4,7 @@
 
 Import std.collections
 Import std.core
+Import std.crypto
 Import std.data
 Import std.ffi
 Import std.io
@@ -12,6 +13,7 @@ Import std.text
 Import fbengine
 Import "./c/fbe_cook"
 Import "./c/fbe_tools"
+Import "./left_out"
 
 // What the cooker makes of a file in a folder: nothing, as of the pak itself; the file as it is; a
 // KTX2 of an image; or a binary glTF of a glTF.
@@ -101,15 +103,18 @@ Public Final Class Cooker
     /// images, PNGs and JPEGs by their bytes, by their sidecars' ImageSettings; its glTFs, named
     /// .gltf or .glb, by their ModelSettings, which leaves out the buffers they name, now in them;
     /// and every other file, sidecars too, as it is, but the pak itself, if it's in the folder,
-    /// and what's hidden, its name starting with '.', as .git and .DS_Store are. The pak is
+    /// and what isn't the game's: what's hidden, its name starting with '.', as .git and .DS_Store
+    /// are, and Windows' Thumbs.db and desktop.ini. The pak is
     /// written a file at a time, so it can be bigger than memory, and whole or not at all. A
     /// sidecar that isn't its file's settings throws an IOError of INVALID_DATA, as
     /// Assets.ReadSettings does, and so do a glTF the engine wouldn't load, two names that differ
     /// only in case, which res:// can't tell apart, and a folder more than 32 deep, as links that
     /// go round make one; and a file whose name no res:// path can have throws one of
-    /// INVALID_PATH.
+    /// INVALID_PATH. With a `cache`, a folder it keeps, an image or glTF is cooked again only when
+    /// its bytes, its settings, what it reads, or this package's version change, and what no file
+    /// uses any more is taken out of it.
     @MainThread
-    Public Static Method CookFolder(source: Path, pak: Path) Throws IOError
+    Public Static Method CookFolder(source: Path, pak: Path, cache: Path? = Null) Throws IOError
         cooks += 1
         Local place = "res://fbengine-cooking-{cooks}"
         Assets.MountFolder(place, source)
@@ -154,6 +159,8 @@ Public Final Class Cooker
         Local written = fbe_cook_pak_open(pak.Text)
         If written == 0 Then Throw ToolsFailed(pak.Text)
         Defer fbe_cook_pak_free(written)
+        // What this cook has of the cache, by file name.
+        Local used = Set<String>()
         For at = 0 Until files.Count
             Local file = files[at]
             Local kind = kinds[at]
@@ -161,16 +168,65 @@ Public Final Class Cooker
             Local from = file.0
             If kind == CookedAs.IMAGE
                 Local settings = Try Assets.ReadSettings<ImageSettings>("{place}/{file.1}")
-                from = scratch.Path / "cooked.ktx2"
-                Try CookImage(file.0, from, settings)
+                Local options = ImageOptions(settings)
+                Local key = "image {options.format} {options.srgb} {options.mipmaps} " +
+                            "{options.quality}"
+                Local kept = CachedAs(cache, key, [file.0], ".ktx2")
+                from = kept ?? (scratch.Path / "cooked.ktx2")
+                used.Add(from.FileName())
+                If kept == Null || !File.Exists(from) Then Try CookImage(file.0, from, settings)
             ElseIf kind == CookedAs.MODEL
                 Local settings = Try Assets.ReadSettings<ModelSettings>("{place}/{file.1}")
-                from = scratch.Path / "cooked.glb"
-                Try CookModelIn(file.0, from, source, settings)
+                Local images = ImageOptions(settings.Images ?? ImageSettings())
+                Local key = "model {settings.Optimize} {images.format} {images.srgb} " +
+                            "{images.mipmaps} {images.quality}"
+                Local reads = [file.0]
+                Local start = Try Start(file.0, SNIFFED)
+                For named In BuffersOf(file.1, Try JsonOf(file.0, start), place)
+                    // Those it names of the folder, each by its folded name.
+                    For other In files
+                        If Folded(other.1) == named Then reads.Add(other.0)
+                    End For
+                End For
+                Local kept = CachedAs(cache, key, reads, ".glb")
+                from = kept ?? (scratch.Path / "cooked.glb")
+                used.Add(from.FileName())
+                If kept == Null || !File.Exists(from)
+                    Try CookModelIn(file.0, from, source, settings)
+                End If
             End If
             If !fbe_cook_pak_add(written, file.1, from.Text) Then Throw ToolsFailed(file.0.Text)
         End For
         If !fbe_cook_pak_finish(written) Then Throw ToolsFailed(pak.Text)
+        If cache != Null && Dir.Exists(cache)
+            For entry In Try Dir.Entries(cache)
+                If !used.Contains(entry.Name()) Then Try File.Delete(entry.Path)
+            End For
+        End If
+    End Method
+
+    // Where `cache` keeps what's cooked of the files `reads`, by their bytes and `key`, the
+    // settings they're cooked by, with `extension`, making the folder; Null without a cache, or
+    // when one of them can't be read whole, which is cooked each time.
+    Static Method CachedAs(cache: Path?, key: String, reads: Path[], extension: String): Path?
+        If cache == Null Then Return Null
+        Try
+            Try Dir.CreateAll(cache)
+            Local hashes = "{key} {ToolsVersion()}".Bytes
+            For read In reads
+                hashes.AddAll(Blake3.Hash(Try File.ReadBytes(read)))
+            End For
+            Return cache / (Hex.Encode(Blake3.Hash(hashes)) + extension)
+        Catch e As IOError
+            Return Null
+        End Try
+    End Method
+
+    // This package's version, as its DLL says it.
+    Static Method ToolsVersion(): String
+        Unsafe
+            Return fbe_tools_version().ToString()
+        End Unsafe
     End Method
 
     // The first `count` bytes of the file at `path`, or all of them if it has fewer, read a part
@@ -219,7 +275,7 @@ Public Final Class Cooker
             Throw e
         End Try
         For entry In entries
-            If entry.Name().StartsWith(".") Then Continue
+            If LeftOut(entry.Name()) Then Continue
             Local name = relative == "" ? entry.Name() : relative + "/" + entry.Name()
             Local kind = entry.Kind
             If kind == FileKind.LINK
@@ -317,7 +373,7 @@ Public Final Class Cooker
         While at < bytes.Count
             If bytes[at] == 0x25 && at + 2 < bytes.Count && IsHex(bytes[at + 1]) &&
                IsHex(bytes[at + 2])
-                decoded.Add(((Hex(bytes[at + 1]) << 4) | Hex(bytes[at + 2])) As UInt8)
+                decoded.Add(((HexDigit(bytes[at + 1]) << 4) | HexDigit(bytes[at + 2])) As UInt8)
                 at += 3
             Else
                 decoded.Add(bytes[at])
@@ -332,7 +388,7 @@ Public Final Class Cooker
                (byte >= 0x61 && byte <= 0x66)
     End Method
 
-    Static Method Hex(byte: UInt8): Int
+    Static Method HexDigit(byte: UInt8): Int
         If byte <= 0x39 Then Return (byte As Int) - 0x30
         If byte <= 0x46 Then Return (byte As Int) - 0x41 + 10
         Return (byte As Int) - 0x61 + 10

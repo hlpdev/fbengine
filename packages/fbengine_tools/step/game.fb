@@ -1,0 +1,30 @@
+// The build step of a game on fbengine: what its project.toml names, with
+//
+//     [build]
+//     package = "fbengine_tools"
+//     program = "step/game.fb"
+//
+// which GameBuild does the work of. It's in a folder of its own, since a package's folder is its
+// modules, and in a Global's value, since fb publish builds every file of a library as a module,
+// whose top-level code would be an error, and fb test runs it, which is why it looks for what fb
+// gives a step.
+
+Import std.core
+Import std.io
+Import std.os
+Import fbengine_tools
+
+Function RunStep(): Bool
+    Local out = Env.Get("FB_BUILD_OUT")
+    If out == Null Then Return False
+    Try
+        GameBuild.Run(Env.Get("FB_BUILD_PACKAGE") ?? "", Path(Env.Get("FB_BUILD_FOLDER") ?? ""),
+                      Path(out), Env.Get("FB_BUILD_MODE") ?? "")
+    Catch e As IOError
+        Print(e.Message)
+        Process.Exit(1)
+    End Try
+    Return True
+End Function
+
+Global ran: Bool = RunStep()

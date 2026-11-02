@@ -592,6 +592,28 @@ if(FBENGINE_FB_TESTS)
   endforeach()
 endif()
 
+# A game whose build step is fbengine_tools', built each way in a folder of its own, one at a time,
+# as they share its build folder: its files as they are, then cooked into its pak.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_game "${CMAKE_CURRENT_BINARY_DIR}/tools_game")
+  file(COPY tools/game/main.fb tools/game/assets DESTINATION "${fbengine_game}")
+  configure_file(tools/game/project.toml.in "${fbengine_game}/project.toml" @ONLY)
+  add_test(NAME tools.game.debug COMMAND "${FBENGINE_FB}" --color never run "${fbengine_game}")
+  set_tests_properties(tools.game.debug PROPERTIES RESOURCE_LOCK fbengine_game
+                       PASS_REGULAR_EXPRESSION "\nhello\r?\nas it is\r?\n$")
+  add_test(NAME tools.game.release
+           COMMAND "${FBENGINE_FB}" --color never run --release "${fbengine_game}")
+  set_tests_properties(tools.game.release PROPERTIES RESOURCE_LOCK fbengine_game
+                       PASS_REGULAR_EXPRESSION "\nhello\r?\ncooked\r?\n$")
+  # One without its assets/, whose step fails, saying so.
+  set(fbengine_game_bare "${CMAKE_CURRENT_BINARY_DIR}/tools_game_bare")
+  file(COPY tools/game/main.fb DESTINATION "${fbengine_game_bare}")
+  configure_file(tools/game/project.toml.in "${fbengine_game_bare}/project.toml" @ONLY)
+  add_test(NAME tools.game.bare COMMAND "${FBENGINE_FB}" --color never build "${fbengine_game_bare}")
+  set_tests_properties(tools.game.bare PROPERTIES
+                       PASS_REGULAR_EXPRESSION "assets isn't there: it holds what game has at res://")
+endif()
+
 # fbengine_audio's own C++, where it's subtle: what's in its headers, and miniaudio's backends.
 add_executable(fbengine_audio_tests audio/pool_tests.cpp audio/backends_tests.cpp
                audio/channels_tests.cpp audio/outputs_tests.cpp)

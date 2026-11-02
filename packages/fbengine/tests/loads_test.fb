@@ -2,10 +2,12 @@
 // let go once what it made has what it needs.
 
 Import std.collections
+Import std.compress
 Import std.core
 Import std.image.image
 Import std.image.png
 Import std.io
+Import std.os
 Import std.test
 Import std.text
 Import std.time
@@ -191,4 +193,40 @@ Function ALoadThatIsntMadeSaysHow() Throws IOError
     Expect(fbe_assets_load_failure() == FBE_ASSETS_OTHER)
     Expect(ExpectThrows<IOError>(Assets.Load<Picture>("not a path"))?.Kind ==
            IOErrorKind.INVALID_PATH)
+End Function
+
+@Test
+Function AReleasesPakIsBesideTheExecutableOrInItsBundle() Throws IOError
+    Local name = "fbengine-test-release"
+    Local folder = Path(Folders.Executable ?? "").Parent()
+    Local writer = ZipWriter()
+    Local beside = folder / "{name}.pak"
+    Local resources = folder.Parent() / "Resources"
+    Expect(ExpectThrows<IOError>(Assets.MountRelease(name))?.Kind == IOErrorKind.NOT_FOUND)
+    // Where it was built, last.
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    writer.Add("built.txt", "built".Bytes, ZipMethod.STORE)
+    Try File.WriteBytes(built.Path / "game.pak", writer.Finish())
+    Try Assets.MountRelease(name, (built.Path / "game.pak").Text)
+    Expect((Try Assets.ReadText("res://built.txt")) == "built")
+    Expect(Assets.Unmount("res://"))
+    // A macOS bundle's Resources, the folder beside the executable's.
+    Local made = !Dir.Exists(resources)
+    Try Dir.CreateAll(resources)
+    Defer If made Then Try? Dir.RemoveAll(resources)
+    writer.Add("bundle.txt", "bundle".Bytes, ZipMethod.STORE)
+    Try File.WriteBytes(resources / "{name}.pak", writer.Finish())
+    Defer Try? File.Delete(resources / "{name}.pak")
+    Try Assets.MountRelease(name, (built.Path / "game.pak").Text)
+    Expect((Try Assets.ReadText("res://bundle.txt")) == "bundle")
+    Expect(Assets.Unmount("res://"))
+    // Beside it comes first.
+    writer.Add("beside.txt", "beside".Bytes, ZipMethod.STORE)
+    Try File.WriteBytes(beside, writer.Finish())
+    Defer Try? File.Delete(beside)
+    Try Assets.MountRelease(name)
+    Expect((Try Assets.ReadText("res://beside.txt")) == "beside")
+    Expect(!Assets.Exists("res://bundle.txt"))
+    Expect(Assets.Unmount("res://"))
 End Function

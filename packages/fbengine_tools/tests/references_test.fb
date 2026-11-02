@@ -25,6 +25,8 @@ Function AFoldersFilesAreAModuleOfTheirPaths() Throws IOError
     Try File.WriteText(game.Path / "models" / "{{a}}.txt", "")
     Try File.WriteText(game.Path / "models" / "nul.txt", "")
     Try File.WriteText(game.Path / ".DS_Store", "")
+    Try File.WriteText(game.Path / "Thumbs.db", "")
+    Try File.WriteText(game.Path / "models" / "desktop.ini", "")
     Try Dir.CreateAll(game.Path / "models" / ".git")
     Try File.WriteText(game.Path / "models" / ".git" / "HEAD", "")
     Local expected =

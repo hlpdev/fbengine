@@ -1,0 +1,77 @@
+// A game's build step: its typed references every build, its files cooked into a pak for a release,
+// and the way it mounts them.
+
+Import std.core
+Import std.io
+Import std.text
+Import "./cook"
+Import "./left_out"
+Import "./references"
+
+/// What a game's build step does, which `step/game.fb` runs, as its project.toml's `[build]` says.
+/// Its files are in `assets/`, beside its project.toml, and the step makes its module `res`, the
+/// typed references to them, with a `Mount` that mounts them at res://:
+///
+/// ```toml
+/// [build]
+/// package = "fbengine_tools"
+/// program = "step/game.fb"
+/// ```
+///
+/// A debug build mounts `assets/` itself, watching it, so what changes there reloads as the game
+/// runs. A release build cooks it into `build/<name>.pak`, which a game ships beside its executable,
+/// or in a macOS bundle's Resources, and mounts that, or where it was built, for `fb run --release`,
+/// whose executable is elsewhere. Each file is cooked again only when it or its settings change, as
+/// the step keeps what it cooked.
+Public Final Class GameBuild
+    Private New()
+    End New
+
+    /// Does the step for the game `name` in the folder `folder`, into its `out` folder, in `mode`,
+    /// "debug" or "release", as fb's FB_BUILD_ variables say them, printing what it reads for fb
+    /// to run it again when that changes. A game with no `assets/` throws an IOError of NOT_FOUND,
+    /// and one the cooker refuses throws as Cooker.CookFolder does.
+    @MainThread
+    Public Static Method Run(name: String, folder: Path, out: Path, mode: String) Throws IOError
+        Local assets = folder / "assets"
+        If !Dir.Exists(assets)
+            Throw IOError(IOErrorKind.NOT_FOUND,
+                          "{assets} isn't there: it holds what {name} has at res://", assets.Text)
+        End If
+        Print("fb:rerun-if-changed={assets}")
+        Try PrintLinks(assets, 0)
+        Local mount = "Try FbEngine.Assets.MountSource(\"{Literal(assets.Text)}\")"
+        If mode == "release"
+            // out is build/steps/<target>/<mode>/<package>/out, and the executable's in build.
+            Local build = out.Parent().Parent().Parent().Parent().Parent()
+            Local pak = build / "{name}.pak"
+            Try Cooker.CookFolder(assets, pak, out / "cook-cache")
+            mount = "Try FbEngine.Assets.MountRelease(\"{Literal(name)}\", " +
+                    "\"{Literal(pak.Text)}\")"
+        End If
+        Try Dir.CreateAll(out)
+        Try File.WriteText(out / "res.fb", Try References.OfGame(assets, mount))
+    End Method
+
+    // Prints each place a link in `folder` goes, as a place of its own for fb, which doesn't follow
+    // them in the folders it's told of.
+    Static Method PrintLinks(folder: Path, depth: Int) Throws IOError
+        If depth > 32 Then Return
+        For entry In Try Dir.Entries(folder)
+            If LeftOut(entry.Name()) Then Continue
+            If entry.Kind == FileKind.LINK
+                Print("fb:rerun-if-changed={entry.Path}")
+                If Dir.Exists(entry.Path) Then Try PrintLinks(entry.Path, depth + 1)
+            ElseIf entry.Kind == FileKind.DIRECTORY
+                Try PrintLinks(entry.Path, depth + 1)
+            End If
+        End For
+    End Method
+
+    // `text` as it's written between the quotes of a String.
+    Static Method Literal(text: String): String
+        Return text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("{{",
+                                                                        "{{{{").Replace("}}",
+                                                                                        "}}}}")
+    End Method
+End Class
