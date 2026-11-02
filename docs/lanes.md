@@ -57,8 +57,8 @@ fb is the installed release (`fb --version`); fb-bindgen is beside it.
   coordinator with a small program that shows it, never worked around in the engine.
 - **CI**: a lane never watches or polls CI; verify.py is its check. The coordinator watches
   landings.
-- **One test run at a time**: verify.py waits for its turn on this machine, and refuses a second
-  run in its build folder. Six at once (2026-11-02) left Windows unable to start programs, and each
+- **Two test runs at a time**: verify.py waits for one of this machine's two turns, and refuses a
+  second run in its build folder. Six at once (2026-11-02) left Windows unable to start programs, and each
   failure put an error dialog on the user's screen, 601 of them. So never run ctest yourself, and
   never start test programs in parallel: for what a fix touches, `python tools/verify.py --build
   ../build-<lane> --only "<regex>"`, or one test program, run once. Run it in the background, and
