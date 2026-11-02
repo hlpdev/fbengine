@@ -1,6 +1,9 @@
 // The GPU's instance and device: Vulkan loaded through SDL's loader, the devices it has and what
 // each lacks of what fbengine needs, the one picked, its queue, VMA, and the frames in flight.
 
+// VK_KHR_portability_subset's structures, which Vulkan's headers keep with its beta extensions.
+#define VK_ENABLE_BETA_EXTENSIONS
+
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/graph.hpp"
@@ -417,9 +420,18 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         enabled.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
         enabled.push_back(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
     }
-    // A portability driver's subset has to be asked for when it's there.
-    if (has_extension(extensions, "VK_KHR_portability_subset")) {
-        enabled.push_back("VK_KHR_portability_subset");
+    // A portability driver's subset has to be asked for when it's there, with what of it it has.
+    VkPhysicalDevicePortabilitySubsetFeaturesKHR portability{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR,
+    };
+    const bool subset = has_extension(extensions, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+    if (subset) {
+        enabled.push_back(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+        VkPhysicalDeviceFeatures2 has{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &portability,
+        };
+        vkGetPhysicalDeviceFeatures2(candidate.physical, &has);
     }
     // The driver's own memory budget, where it gives one, which VMA reads.
     const bool budgets = has_extension(extensions, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
@@ -431,6 +443,7 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     vkGetPhysicalDeviceFeatures(candidate.physical, &supported);
     VkPhysicalDeviceSynchronization2Features synchronization2{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES,
+        .pNext = subset ? &portability : nullptr,
         .synchronization2 = VK_TRUE,
     };
     VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering{
@@ -486,6 +499,9 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     current.max_anisotropy = supported.samplerAnisotropy == VK_TRUE
                                  ? candidate.properties.limits.maxSamplerAnisotropy
                                  : 0.0F;
+    const bool no_bias = fbe::gpu::faulted(fbe::gpu::fault_t::NO_LOD_BIAS) ||
+                         (subset && portability.samplerMipLodBias != VK_TRUE);
+    current.max_lod_bias = no_bias ? 0.0F : candidate.properties.limits.maxSamplerLodBias;
     current.begin_rendering = core13 ? vkCmdBeginRendering : vkCmdBeginRenderingKHR;
     current.end_rendering = core13 ? vkCmdEndRendering : vkCmdEndRenderingKHR;
     current.pipeline_barrier = core13 ? vkCmdPipelineBarrier2 : vkCmdPipelineBarrier2KHR;
