@@ -6,6 +6,7 @@ Import std.core
 Import std.math
 Import fbengine
 Import "./layout"
+Import "./painter"
 Import "./scroll"
 Import "./strings"
 Import "./theme"
@@ -20,10 +21,11 @@ Public Enum Direction
 End Enum
 
 /// A UI on the screen: a tree, its theme, and the widget the pointer's over, the one holding it,
-/// and the one with the focus. Update, once a frame after Flip, lays it out in the window, gives
-/// its widgets the input the Flip read, and styles each by its state; WantsPointer and
-/// WantsKeys say whether the game should leave the mouse and the keyboard to it, and Route blocks
-/// a game's ActionSet while a widget has the focus.
+/// and the one with the focus. Update, once a frame after Flip, lays it out in the part of the
+/// window the screen shows in, gives its widgets the input the Flip read, and styles each by its
+/// state; Draw, then, after what the game draws under it, draws it; WantsPointer and WantsKeys say
+/// whether the game should leave the mouse and the keyboard to it, and Route blocks a game's
+/// ActionSet while a widget has the focus.
 ///
 /// The focus moves by Tab and Shift+Tab, in the tree's order, and by the arrows, and a gamepad's
 /// D-pad or left stick, to the nearest widget that way, once the focused widget doesn't use them
@@ -64,6 +66,8 @@ Public Final Class Ui
     Field strings: Strings? = Null
     // Its Strings' stamp when its widgets were last laid out by them.
     Field stamp: Int = 0
+    // Whether Draw's asked for the OS's font, with none of its own.
+    Field asked: Bool = False
 
     /// A Ui of the tree `root`, in `theme`, or Theme.Dark().
     @MainThread Public New(root: Node, theme: Theme? = Null)
@@ -246,7 +250,8 @@ Public Final Class Ui
 
     /// Sets the font a style's Font names, or with "", the one for styles whose font it hasn't,
     /// which their text is measured in, as it's drawn, at each style's FontSize; Null takes it
-    /// away. With none, text is measured by EstimatedText.
+    /// away. With none, text is measured by EstimatedText until the first Draw, which takes the
+    /// OS's UI font, as it's found (Font.SystemUI), for "".
     @MainThread Public Method SetFont(name: String, font: Font?)
         If font == Null
             fonts.Remove(name)
@@ -335,12 +340,12 @@ Public Final Class Ui
             stamp = changed
             root.Invalidate()
         End If
-        Local bounds = Rect(0.0, 0.0, (Window.Width() As Float32) / scale,
-                            (Window.Height() As Float32) / scale)
+        Local area = ShownArea()
+        Local bounds = Rect(0.0, 0.0, area.Width / scale, area.Height / scale)
         Restyle(root)
         root.Layout(bounds)
 
-        Local point = Vec2(MouseX() / scale, MouseY() / scale)
+        Local point = Vec2((MouseX() - area.X) / scale, (MouseY() - area.Y) / scale)
         Local under = WidgetAt(root.NodeAt(point))
         hovered = under
         Pointer(point, under)
@@ -352,6 +357,54 @@ Public Final Class Ui
         Restyle(root)
         root.Layout(bounds)
         Blocks()
+    End Method
+
+    /// Draws its tree on the screen's canvas, or on `canvas`, which a texture's draws at a pixel to
+    /// each of its units over its scale, as it was last laid out, each widget by its Draw, in the
+    /// tree's order; what's hidden isn't. The canvas's pen is as it was after it; its origin moves
+    /// the UI, and its viewport clips it. On the screen, with no window or no GPU, it does nothing.
+    @MainThread Public Method Draw(canvas: Canvas? = Null)
+        Local screen = Screen.Canvas()
+        Local onto = canvas ?? screen
+        Local across = scale
+        Local down = scale
+        Local fontUnits: Float32 = 1.0
+        If RefEquals(onto, screen)
+            Local wide = Screen.Width()
+            Local high = Screen.Height()
+            Local area = ShownArea()
+            If wide <= 0 || high <= 0 || area.Width <= 0.0 || area.Height <= 0.0 Then Return
+            across = scale * ((wide As Float32) / area.Width)
+            down = scale * ((high As Float32) / area.Height)
+            // A font's size is the window's units to the screen's text, across.
+            fontUnits = down * (Window.Width() As Float32) / (wide As Float32)
+        Else
+            fontUnits = scale
+        End If
+        Asked()
+        Local paint = Painter(onto, Self, across, down, fontUnits)
+        paint.Paint(root)
+        paint.Finish()
+    End Method
+
+    // The OS's font for "", the first time it draws with none.
+    @MainThread Method Asked()
+        If asked || fonts.Get("") != Null Then Return
+        asked = True
+        Local found = Font.SystemUI(16.0)
+        If found != Null Then SetFont("", found)
+    End Method
+
+    // The part of the window the screen shows in, in the window's units; all of it before the GPU's
+    // started, or without a window.
+    @MainThread Method ShownArea(): Rect
+        Local whole = Rect(0.0, 0.0, Window.Width() As Float32, Window.Height() As Float32)
+        Local shown = Screen.Area()
+        If shown == Null || whole.Width <= 0.0 || whole.Height <= 0.0 Then Return whole
+        Local across = (Window.PixelWidth() As Float32) / whole.Width
+        Local down = (Window.PixelHeight() As Float32) / whole.Height
+        If across <= 0.0 || down <= 0.0 Then Return whole
+        Return Rect(shown.X / across, shown.Y / down, shown.Width / across, shown.Height / down)
     End Method
 
     // Blocks its routed sets while a widget has the focus, and unblocks them as it goes, so the
@@ -524,7 +577,9 @@ Public Final Class Ui
             End If
             Local box = own.Box()
             If typing
-                SetTextInputArea((box.X * scale) As Int32, (box.Y * scale) As Int32,
+                Local area = ShownArea()
+                SetTextInputArea((area.X + box.X * scale) As Int32,
+                                 (area.Y + box.Y * scale) As Int32,
                                  (box.Width * scale) As Int32, (box.Height * scale) As Int32,
                                  (own.TextCursorX() * scale) As Int32)
             End If

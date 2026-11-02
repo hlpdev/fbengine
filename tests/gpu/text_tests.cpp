@@ -326,8 +326,8 @@ TEST_CASE("a cleared atlas's pages are uploaded again, though their versions sta
 // Past its budget, the atlas is trimmed by a frame's first canvas draw, whatever it draws, and not
 // later in the frame, so the frame's text stays drawable: a page the last frame's text used is
 // kept, and one nothing's used since is dropped, its texture let go of, and made again, its number
-// kept, when a glyph's placed on it, all of it uploaded, so T where I was is T; text drawn after is
-// laid out again.
+// kept, when a glyph's placed on it, its new texture uploaded whole, as the page's `dirty` is only
+// that glyph, so T where I was is T; text drawn after is laid out again.
 TEST_CASE("the atlas is trimmed by a frame's first canvas draw, not during it", "[gpu]") {
     start();
     const std::uint64_t made = target(16, 8);

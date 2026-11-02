@@ -164,7 +164,8 @@ if(FBENGINE_FB_TESTS)
 
   add_test(NAME examples.menu
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/menu")
-  set_tests_properties(examples.menu PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+  set_tests_properties(examples.menu PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "Running menu[^\n]*\noptions open: True\r?\nvolume 0[.]65, fullscreen True, name Ada\r?\nmenu again: True\r?\nplaying: True, focus none\r?\na jump: score 100\r?\nconsole: [[]> give 50, gave 50[]], score 150, typed \" \"\r?\nclosed, a jump: score 250\r?\n$")
 endif()
 
@@ -534,6 +535,12 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- ${name})
     set_tests_properties(ui.${name} PROPERTIES PASS_REGULAR_EXPRESSION "${printed}" TIMEOUT 120)
   endforeach()
+  # The IME's composition, set before the window opens, drawn at a field's cursor.
+  add_test(NAME ui.composition
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- composition)
+  set_tests_properties(ui.composition PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "underlined True, cursor True, typed a" TIMEOUT 120)
 endif()
 
 # The cooker's C++, built into the tests from its own sources, which read back what it makes with

@@ -1,13 +1,17 @@
-// The simplest widgets: a label, a button, a toggle, and a progress bar.
+// The simplest widgets: a label, a button, a toggle, a progress bar, and an image.
 
 Import std.core
 Import std.math
 Import fbengine
+Import "./layout"
+Import "./painter"
 Import "./widget"
 
-/// Text, which takes no input: style "label".
+/// Text, which takes no input: style "label". It's at the left of its box unless SetTextAlign
+/// says, and in its middle down.
 Public Class Label Extends Widget
     Field text: String
+    Field textAlign: Align = Align.START
 
     /// A label showing `text`.
     @MainThread Public New(text: String, name: String = "")
@@ -28,7 +32,20 @@ Public Class Label Extends Widget
     /// What it shows: its text, or its Ui's Strings' text for it.
     @MainThread Public Method ShownText(): String => Translated(text)
 
+    /// Sets where across its box its text goes.
+    @MainThread Public Method SetTextAlign(where: Align)
+        textAlign = where
+    End Method
+
+    /// Where across its box its text goes.
+    @MainThread Public Method TextAlign(): Align => textAlign
+
     @MainThread Public Override Method Measure(): Vec2 => TextSize(ShownText())
+
+    @MainThread Public Override Method Draw(paint: Painter)
+        Super.Draw(paint)
+        paint.TextIn(ShownText(), ContentBox(), CurrentStyle(), textAlign)
+    End Method
 End Class
 
 /// A button with text on it, which the pointer clicks, as Return, Space, or a gamepad's SOUTH
@@ -78,6 +95,16 @@ Public Class Button Extends Widget
 
     @MainThread Public Override Method Measure(): Vec2 => TextSize(ShownText())
 
+    @MainThread Public Override Method Draw(paint: Painter)
+        Super.Draw(paint)
+        DrawFace(paint)
+    End Method
+
+    // What's on it: its text, in its middle.
+    @MainThread Method DrawFace(paint: Painter)
+        paint.TextIn(ShownText(), ContentBox(), CurrentStyle(), Align.CENTER)
+    End Method
+
     @MainThread Public Override Method PointerDown(point: Vec2): Bool => True
 
     @MainThread Public Override Method PointerUp(point: Vec2, over: Bool)
@@ -93,7 +120,8 @@ Public Class Button Extends Widget
     End Method
 End Class
 
-/// A box that's on or off, with text beside it, which a click turns over: style "toggle".
+/// A box that's on or off, with text beside it, which a click turns over: style "toggle", its box
+/// "toggle.box", and what's in it while it's on, "toggle.check".
 Public Class Toggle Extends Button
     Field on: Bool
     Field changed: Bool = False
@@ -116,6 +144,31 @@ Public Class Toggle Extends Button
     /// Whether the last Ui.Update read a click turn it over.
     @MainThread Public Method Changed(): Bool => changed
 
+    // Its box, a line of text high, and its text after it.
+    @MainThread Public Override Method Measure(): Vec2
+        Local line = TextSize("Ag").y
+        Local shown = ShownText()
+        If shown == "" Then Return Vec2(line, line)
+        Local size = TextSize(shown)
+        Return Vec2(line + line / 2.0 + size.x, Max(line, size.y))
+    End Method
+
+    @MainThread Override Method DrawFace(paint: Painter)
+        Local content = ContentBox()
+        Local line = TextSize("Ag").y
+        Local square = Rect(content.X, content.Y + (content.Height - line) / 2.0, line, line)
+        paint.Panel(square, PartStyle("box"))
+        If on
+            Local inset = line / 4.0
+            paint.Panel(Rect(square.X + inset, square.Y + inset, line - inset * 2.0,
+                             line - inset * 2.0), PartStyle("check"))
+        End If
+        Local after = line + line / 2.0
+        paint.TextIn(ShownText(), Rect(content.X + after, content.Y,
+                                       Max(content.Width - after, 0.0), content.Height),
+                     CurrentStyle())
+    End Method
+
     @MainThread Public Override Method Click()
         on = !on
         changed = True
@@ -128,7 +181,8 @@ Public Class Toggle Extends Button
     End Method
 End Class
 
-/// A bar filled as far as its value goes, from 0 to 1, which takes no input: style "progress".
+/// A bar filled as far as its value goes, from 0 to 1, which takes no input: style "progress", and
+/// what fills it, "progress.fill".
 Public Class Progress Extends Widget
     Field value: Float32
 
@@ -145,5 +199,105 @@ Public Class Progress Extends Widget
     /// Fills it to `fraction`, kept to 0 to 1; NaN is 0.
     @MainThread Public Method SetValue(fraction: Float32)
         value = IsNaN(fraction) ? 0.0 : Clamp(fraction, 0.0, 1.0)
+    End Method
+
+    @MainThread Public Override Method Draw(paint: Painter)
+        Super.Draw(paint)
+        Local content = ContentBox()
+        If value <= 0.0 Then Return
+        paint.Panel(Rect(content.X, content.Y, content.Width * value, content.Height),
+                    PartStyle("fill"))
+    End Method
+End Class
+
+/// How an ImageBox's image fits its box.
+Public Enum ImageFit
+    /// Stretched to fill it, whatever its shape.
+    STRETCH
+    /// As big as fits, keeping its shape, in its middle.
+    CONTAIN
+    /// As small as fills it, keeping its shape, in its middle, what's past it not drawn.
+    COVER
+    /// At its own size, a unit of the UI's to a pixel of its, in its middle, what's past it not
+    /// drawn.
+    NATURAL
+End Enum
+
+/// A picture, a frame of a Sprite2D or none, which takes no input and is as big as it is unless
+/// it's sized otherwise: style "image", its box drawn behind it. It's times its tint, white at
+/// first, and fits its box as SetFit says, stretched at first.
+Public Class ImageBox Extends Widget
+    Field sprite: Sprite2D?
+    Field frame: Int32 = 0
+    Field fit: ImageFit = ImageFit.STRETCH
+    Field tint: Color
+
+    /// A box showing `sprite`.
+    @MainThread Public New(sprite: Sprite2D? = Null, name: String = "")
+        Super.New("image", name)
+        Self.sprite = sprite
+        tint = Color.White
+    End New
+
+    /// What it shows.
+    @MainThread Public Method Sprite(): Sprite2D? => sprite
+
+    /// Shows `shown`, its first frame.
+    @MainThread Public Method SetSprite(shown: Sprite2D?)
+        sprite = shown
+        frame = 0
+        Reflow()
+    End Method
+
+    /// Which of its sprite's frames it shows.
+    @MainThread Public Method Frame(): Int32 => frame
+
+    /// Shows frame `shown` of its sprite. A frame it hasn't panics when it's drawn, as a Canvas's
+    /// does.
+    @MainThread Public Method SetFrame(shown: Int32)
+        frame = shown
+    End Method
+
+    /// How its image fits its box.
+    @MainThread Public Method Fit(): ImageFit => fit
+
+    /// Sets how its image fits its box.
+    @MainThread Public Method SetFit(how: ImageFit)
+        fit = how
+    End Method
+
+    /// What it multiplies its image by.
+    @MainThread Public Method Tint(): Color => tint
+
+    /// Multiplies its image by `color`, whose alpha fades it.
+    @MainThread Public Method SetTint(color: Color)
+        tint = color
+    End Method
+
+    @MainThread Public Override Method Measure(): Vec2
+        Local shown = sprite
+        If shown == Null Then Return Vec2(0.0, 0.0)
+        Return Vec2(shown.Width() As Float32, shown.Height() As Float32)
+    End Method
+
+    @MainThread Public Override Method Draw(paint: Painter)
+        Super.Draw(paint)
+        Local shown = sprite
+        If shown == Null Then Return
+        Local content = ContentBox()
+        Local wide = shown.Width() As Float32
+        Local high = shown.Height() As Float32
+        Local drawn = content
+        If fit != ImageFit.STRETCH
+            Local scale: Float32 = 1.0
+            If fit == ImageFit.CONTAIN Then scale = Min(content.Width / wide, content.Height / high)
+            If fit == ImageFit.COVER Then scale = Max(content.Width / wide, content.Height / high)
+            drawn = Rect(content.X + (content.Width - wide * scale) / 2.0,
+                         content.Y + (content.Height - high * scale) / 2.0, wide * scale,
+                         high * scale)
+        End If
+        paint.PushClip(content)
+        paint.Sprite(shown, drawn, tint, frame)
+        paint.PopClip()
     End Method
 End Class

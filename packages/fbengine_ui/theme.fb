@@ -209,6 +209,72 @@ Public Final Class Theme
         Local picked = StyleFields()
         picked.Background = Color.Hex("#2f4a7a")
         theme.SetFields("list.item.selected", picked)
+
+        Local bright = StyleFields()
+        bright.Background = Color.Hex("#4c8dff")
+        Local faint = StyleFields()
+        faint.Background = Color.Hex("#4a505a")
+        // What's filled and held, and what's filled in one that's disabled.
+        theme.SetFields("slider.fill", bright)
+        theme.SetFields("slider.fill", faint, WidgetState.DISABLED)
+        Local thumb = StyleFields()
+        thumb.Background = text
+        theme.SetFields("slider.thumb", thumb)
+        theme.SetFields("slider.thumb", faint, WidgetState.DISABLED)
+        Local bar = StyleFields()
+        bar.Background = Color.Hex("#2b3038")
+        bar.CornerRadius = 4.0
+        theme.SetFields("progress", bar)
+        theme.SetFields("progress.fill", bright)
+        theme.SetFields("progress.fill", faint, WidgetState.DISABLED)
+        theme.SetFields("scroll.thumb", faint)
+        Local box = StyleFields()
+        box.Background = Color.Hex("#14161a")
+        box.Border = Color.Hex("#4a505a")
+        box.BorderWidth = 1.0
+        box.CornerRadius = 3.0
+        theme.SetFields("toggle.box", box)
+        Local boxFocused = StyleFields()
+        boxFocused.Border = Color.Hex("#4c8dff")
+        boxFocused.BorderWidth = 1.0
+        theme.SetFields("toggle.box", boxFocused, WidgetState.FOCUSED)
+        // A toggle's text is beside its box, which shows the focus.
+        Local plain = StyleFields()
+        plain.BorderWidth = 0.0
+        theme.SetFields("toggle", plain, WidgetState.FOCUSED)
+        Local check = StyleFields()
+        check.Background = Color.Hex("#4c8dff")
+        check.BorderWidth = 0.0
+        check.CornerRadius = 2.0
+        theme.SetFields("toggle.check", check)
+        theme.SetFields("toggle.check", faint, WidgetState.DISABLED)
+        Local selection = StyleFields()
+        selection.Background = Color.Hex("#2f4a7a")
+        selection.BorderWidth = 0.0
+        selection.CornerRadius = 0.0
+        theme.SetFields("field.selection", selection)
+
+        theme.SetFields("console", panel)
+        theme.SetFields("console.field", field)
+        theme.SetFields("console.field", focused, WidgetState.FOCUSED)
+        theme.SetFields("console.field.selection", selection)
+        Local line = StyleFields()
+        line.Padding = Insets.Symmetric(0.0, 1.0)
+        line.Background = Color.Transparent
+        line.BorderWidth = 0.0
+        theme.SetFields("console.line", line)
+        Local view = StyleFields()
+        view.Background = Color.Transparent
+        view.BorderWidth = 0.0
+        view.Padding = Insets.All(0.0)
+        theme.SetFields("console.view", view)
+        theme.SetFields("debug", panel)
+        Local name = StyleFields()
+        name.Foreground = Color.Hex("#9aa1ab")
+        name.Background = Color.Transparent
+        name.BorderWidth = 0.0
+        name.Padding = Insets.All(0.0)
+        theme.SetFields("debug.name", name)
         Return theme
     End Method
 

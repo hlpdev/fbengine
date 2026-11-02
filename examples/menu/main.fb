@@ -1,6 +1,7 @@
 // A game's menus, HUD, and console on fbengine_ui: a main menu, its options, a HUD over the game,
 // and the console on the grave key, used by the mouse, the keyboard, and a gamepad, driven here by
-// Simulate, offscreen, as a test or a replay is. What it draws waits on fbengine's text.
+// Simulate, offscreen, as a test or a replay is. Each frame it draws them over the game's own
+// background, in the OS's UI font.
 
 Import std.core
 Import std.math
@@ -87,6 +88,13 @@ Function Main() Throws GraphicsError, InputError
         End If
         If jump.Hit() Then score += 100
         shown.SetText("score {score}")
+        // With no GPU, as on a machine without Vulkan, there's nothing to draw on.
+        If Screen.Texture() != Null
+            Local canvas = Screen.Canvas()
+            canvas.SetColor(Color32(24, 28, 36, 255))
+            canvas.Clear()
+            ui.Draw()
+        End If
     End Function
     frame()
 

@@ -6,10 +6,16 @@ Import std.math
 Import std.os
 Import std.text
 Import fbengine
+Import "./layout"
+Import "./painter"
 Import "./widget"
 
+// How many units wide a slider's thumb is.
+Const thumbWidth: Float32 = 8.0
+
 /// A value from Low to High, which dragging along it sets, as left and right, Home, End, and the
-/// pages do while it has the focus (up and down move the focus on): style "slider".
+/// pages do while it has the focus (up and down move the focus on): style "slider", what's below
+/// its value "slider.fill", and its thumb "slider.thumb".
 Public Class Slider Extends Widget
     Field low: Float32
     Field high: Float32
@@ -70,6 +76,20 @@ Public Class Slider Extends Widget
 
     /// Whether the last Ui.Update read the player change its value.
     @MainThread Public Method Changed(): Bool => changed
+
+    @MainThread Public Override Method Draw(paint: Painter)
+        Super.Draw(paint)
+        Local content = ContentBox()
+        // Its thumb's middle is where the pointer sets it to, kept inside it.
+        Local along = content.Width * Fraction()
+        If along > 0.0
+            paint.Panel(Rect(content.X, content.Y, along, content.Height), PartStyle("fill"))
+        End If
+        Local wide = Min(thumbWidth, content.Width)
+        Local left = Clamp(content.X + along - wide / 2.0, content.X,
+                           content.X + content.Width - wide)
+        paint.Panel(Rect(left, content.Y, wide, content.Height), PartStyle("thumb"))
+    End Method
 
     @MainThread Public Override Method PointerDown(point: Vec2): Bool
         SetFrom(point)
@@ -161,7 +181,11 @@ End Function
 /// words and to the ends, and select all, copy, cut, and paste; Return submits it. The pointer
 /// puts the cursor where it's pressed, and selects by dragging. Its cursor, selection, and most
 /// length are in grapheme clusters, what a player sees as one character each, so "e" and its
-/// accent, or an emoji and its skin tone, go together: style "field".
+/// accent, or an emoji and its skin tone, go together. While it has the focus, its cursor blinks,
+/// and it scrolls to keep it in view; and while the game draws the IME's composition
+/// (SetDrawsComposition), the composition's at its cursor, underlined. A cursor's place is the
+/// width of the text before it, so in text that changes direction it's only near: style "field",
+/// its selection "field.selection".
 Public Class TextField Extends Widget
     Field clusters: String[] = []
     Field text: String = ""
@@ -171,6 +195,11 @@ Public Class TextField Extends Widget
     Field limit: Int = 0
     Field changed: Bool = False
     Field submitted: Bool = False
+    // How far its text is scrolled left, in the UI's units, to show its cursor.
+    Field scrolled: Float32 = 0.0
+    // How long its cursor's been blinking, from when it last moved, or it got the focus.
+    Field blinking: Float64 = 0.0
+    Field blinkedAt: Int = 0
 
     /// A field holding `text`, which shows `placeholder` while it's empty.
     @MainThread Public New(text: String = "", placeholder: String = "", name: String = "")
@@ -257,7 +286,85 @@ Public Class TextField Extends Widget
     @MainThread Public Override Method TakesText(): Bool => True
 
     @MainThread Public Override Method TextCursorX(): Float32
-        Return Padding().Left + TextSize(Spanned(clusters, 0, cursor)).x
+        Return Padding().Left + CursorAt() - scrolled
+    End Method
+
+    @MainThread Public Override Method FocusChanged(focused: Bool)
+        blinking = 0.0
+    End Method
+
+    @MainThread Public Override Method Draw(paint: Painter)
+        Super.Draw(paint)
+        Local style = CurrentStyle()
+        Local content = ContentBox()
+        Local own = Owner()
+        Local focused = own != Null && own.Focused() != Null && RefEquals(own.Focused(), Self)
+        Local composing = focused && DrawsComposition() ? TextComposition() : Composition("", -1,
+                                                                                          -1)
+        Local line = TextSize("Ag").y
+        Local top = content.Y + (content.Height - line) / 2.0
+        Local left = content.X
+        paint.PushClip(content)
+        If text == "" && composing.Text == ""
+            paint.TextIn(ShownPlaceholder(), content, style, Align.START, Align.CENTER,
+                         Faded(style.Foreground))
+        Else
+            Local before = Spanned(clusters, 0, cursor)
+            Local at = TextSize(before).x
+            Local ahead = at
+            If composing.Text != "" Then ahead = TextSize(before + CharsOf(composing.Text,
+                                                                           composing.Start)).x
+            Kept(ahead, content.Width)
+            Local from, to = Selection()
+            If focused && from != to && composing.Text == ""
+                Local start = TextSize(Spanned(clusters, 0, from)).x
+                Local stop = TextSize(Spanned(clusters, 0, to)).x
+                paint.Panel(Rect(left + start - scrolled, top, stop - start, line),
+                            PartStyle("selection"))
+            End If
+            Local shown = text
+            If composing.Text != ""
+                shown = before + composing.Text + Spanned(clusters, cursor, clusters.Count)
+            End If
+            paint.Text(shown, left - scrolled, top, style)
+            If composing.Text != ""
+                Local ends = TextSize(before + composing.Text).x
+                paint.Fill(Rect(left + at - scrolled, top + line - 1.0, ends - at, 1.0),
+                           style.Foreground)
+            End If
+            If focused Then CursorDrawn(paint, left + ahead - scrolled, top, line)
+        End If
+        If focused && text == "" && composing.Text == "" Then CursorDrawn(paint, left, top, line)
+        paint.PopClip()
+    End Method
+
+    // Draws its cursor at `x`, while it's on, half of each second, from when it last moved.
+    @MainThread Method CursorDrawn(paint: Painter, x: Float32, top: Float32, line: Float32)
+        If blinkedAt != cursor
+            blinkedAt = cursor
+            blinking = 0.0
+        End If
+        Local on = Mod(blinking, 1.0) < 0.5
+        blinking += Frame.Delta()
+        If !on Then Return
+        Local pixel = 1.0 / paint.Across()
+        paint.Fill(Rect(x, top, pixel, line), CurrentStyle().Foreground)
+    End Method
+
+    // Scrolls as little as keeps `at`, a cursor's place in its text, in `wide`, and no farther than
+    // the text's end.
+    @MainThread Method Kept(at: Float32, wide: Float32)
+        If at - scrolled > wide - 1.0 Then scrolled = at - wide + 1.0
+        If at < scrolled Then scrolled = at
+        Local whole = TextSize(text).x
+        scrolled = Clamp(scrolled, 0.0, Max(Max(whole, at) + 1.0 - wide, 0.0))
+    End Method
+
+    // Where its cursor is in its text, and in view of `ContentBox`, its scroll kept to it.
+    @MainThread Method CursorAt(): Float32
+        Local at = TextSize(Spanned(clusters, 0, cursor)).x
+        Kept(at, ContentBox().Width)
+        Return at
     End Method
 
     @MainThread Public Override Method Measure(): Vec2
@@ -405,7 +512,7 @@ Public Class TextField Extends Widget
 
     // The grapheme cluster boundary nearest `x`, in the UI's units.
     @MainThread Method IndexAt(x: Float32): Int
-        Local along = x - ContentBox().X
+        Local along = x - ContentBox().X + scrolled
         Local best = 0
         Local nearest = Abs(along)
         For i = 1 To clusters.Count
@@ -464,6 +571,20 @@ Function Spanned(clusters: String[], from: Int, to: Int): String
         built.Append(clusters[i])
     End For
     Return built.ToString()
+End Function
+
+// `color` as a placeholder is, half as strong.
+Function Faded(color: Color): Color => Color(color.r, color.g, color.b, color.a / 2.0)
+
+// The first `count` characters of `text`, all of it for -1, as an IME says where its cursor is.
+Function CharsOf(text: String, count: Int32): String
+    If count < 0 Then Return text
+    Local chars: Char[] = []
+    For each In text.Chars
+        If chars.Count >= count Then Break
+        chars.Add(each)
+    End For
+    Return TextOf(chars, 0, chars.Count)
 End Function
 
 // Whether Shift is held, which a press selects to with.
