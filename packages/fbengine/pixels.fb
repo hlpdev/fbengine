@@ -1,0 +1,108 @@
+// A texture's pixels on the CPU, read and written a pixel at a time, which the GPU reads back once
+// and gets what's written once.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_texture"
+Import "./texture"
+Import "./window"
+
+/// A texture's first level's pixels on the CPU, as Texture.LockPixels gives them, to read and
+/// write a pixel at a time, cheaply: read back from the GPU only when the GPU's changed them since,
+/// and what's written sent to the GPU by Unlock, before the GPU next uses the texture, so drawing
+/// and writing keep their order. Once the GPU changes the texture, as drawing into it does, lock
+/// its pixels again for them as they are, and to write them. It keeps its texture, and panics once
+/// the texture's freed, or the GPU stops.
+Public Final Class Pixels
+    Field texture: Texture
+    Field data: Ptr<UInt8>
+    // Where the CPU copy's stamp is, and what it was when they were locked: it changes when the
+    // copy's freed.
+    Field stamp: Ptr<UInt64>
+    Field locked: UInt64
+    Field width: Int32
+    Field height: Int32
+    // The rectangle written since the last Unlock, empty while right isn't past left.
+    Field left: Int32 = 0
+    Field top: Int32 = 0
+    Field right: Int32 = 0
+    Field bottom: Int32 = 0
+
+    Package New(texture: Texture, data: Ptr<UInt8>, stamp: Ptr<UInt64>)
+        Self.texture = texture
+        Self.data = data
+        Self.stamp = stamp
+        Unsafe
+            locked = stamp[0]
+        End Unsafe
+        width = texture.Width()
+        height = texture.Height()
+    End New
+
+    /// How wide they are, in pixels.
+    @MainThread Public Method Width(): Int32 => width
+
+    /// How high they are, in pixels.
+    @MainThread Public Method Height(): Int32 => height
+
+    /// The pixel at `x`, `y`; it panics for one that isn't there.
+    @MainThread @PanicsAtCaller
+    Public Method Get(x: Int32, y: Int32): Color32
+        Local at = Index(x, y, "Get")
+        Unsafe
+            Return Color32(data[at], data[at + 1], data[at + 2], data[at + 3])
+        End Unsafe
+    End Method
+
+    /// Sets the pixel at `x`, `y`; it panics for one that isn't there.
+    @MainThread @PanicsAtCaller
+    Public Method Set(x: Int32, y: Int32, color: Color32)
+        Local at = Index(x, y, "Set")
+        Unsafe
+            data[at] = color.r
+            data[at + 1] = color.g
+            data[at + 2] = color.b
+            data[at + 3] = color.a
+        End Unsafe
+        If right <= left
+            left = x
+            top = y
+            right = x + 1
+            bottom = y + 1
+        Else
+            left = Min(left, x)
+            top = Min(top, y)
+            right = Max(right, x + 1)
+            bottom = Max(bottom, y + 1)
+        End If
+    End Method
+
+    /// Sends what was written since the last Unlock to the GPU, which gets it before it next uses
+    /// the texture; it panics if the GPU's changed the texture since they were locked, as what's
+    /// written would go over what it did.
+    @MainThread @PanicsAtCaller
+    Public Method Unlock()
+        If right <= left Then Return
+        If !fbe_texture_pixels_written(texture.Live("Unlock"), left, top, right - left,
+                                       bottom - top)
+            Panic(LastError())
+        End If
+        right = left
+    End Method
+
+    // The byte a pixel starts at; a panic naming `call` for one that isn't there, or once the
+    // copy's freed.
+    @PanicsAtCaller
+    Method Index(x: Int32, y: Int32, call: String): Int64
+        Local kept = False
+        Unsafe
+            kept = stamp[0] == locked
+        End Unsafe
+        If !kept Then Panic("{call} on Pixels whose Texture was freed")
+        If x < 0 || y < 0 || x >= width || y >= height
+            Panic("{x}, {y} isn't a pixel of a {width}x{height} texture")
+        End If
+        Return ((y As Int64) * (width As Int64) + (x As Int64)) * 4
+    End Method
+End Class

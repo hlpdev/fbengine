@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A vulnerability
+    url: https://github.com/hlpdev/fbengine/security/advisories/new
+    about: Report it privately, as SECURITY.md says.
+  - name: The language, fb, or std
+    url: https://github.com/hlpdev/FutureBlitz/issues/new/choose
+    about: FutureBlitz has its own issues.
+  - name: A package that breaks the package policy
+    url: https://pkg.futureblitz.dev/policies/report
+    about: Report a malicious or deceptive package on the package site.
+  - name: A question
+    url: https://discord.gg/4qSGuBnRe6
+    about: Ask in the Discord server's help forum, with the engine tag.

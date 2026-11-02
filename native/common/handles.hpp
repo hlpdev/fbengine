@@ -21,6 +21,7 @@ enum handle_kind_t : std::uint8_t {
     ENTITY_KIND = 2,
     GEOMETRY_KIND = 3,
     MATERIAL_KIND = 4,
+    TEXTURE_KIND = 5,
     // E7's animation, apart from the kinds assets' loads and the GPU's objects take.
     CLIP_KIND = 20,
     SKIN_KIND = 21,
