@@ -38,6 +38,10 @@ jobs_t::jobs_t(int workers) {
     for (int i = 0; i < count; ++i) {
         m_threads.emplace_back([this] { work_loop(); });
     }
+    // Each has started before this gives back, since a process that ends while a thread is still
+    // registering what it needs with winpthread hangs in its exit.
+    std::unique_lock lock(m_mutex);
+    m_all_started.wait(lock, [this, count] { return m_started == count; });
 }
 
 jobs_t::~jobs_t() {
@@ -251,6 +255,8 @@ void jobs_t::run(std::unique_lock<std::mutex>& lock, std::uint32_t slot) noexcep
 
 void jobs_t::work_loop() {
     std::unique_lock lock(m_mutex);
+    ++m_started;
+    m_all_started.notify_all();
     while (true) {
         if (const std::optional<std::uint32_t> slot = next_ready(lock)) {
             run(lock, *slot);

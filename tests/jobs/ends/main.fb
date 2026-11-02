@@ -1,0 +1,35 @@
+// A program that starts the job system and ends at once, while its threads may still be starting,
+// run many times at once by itself: each has to end, as a thread stopped as it registers a
+// thread_local hung the process's exit on Windows. A timeout in tests/CMakeLists.txt catches it.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.os
+Import std.time
+Import fbengine
+
+If Process.Arguments().Count > 0
+    // The DLL's thread_local error set, as a failed call does, its threads started, and a panic's
+    // exit.
+    Try? Assets.ReadBytes("res://nothing")
+    Jobs.Simulate(0.Seconds)
+    Panic("ended")
+End If
+
+Local failed = 0
+Try
+    For round = 1 To 60
+        Local children: Child[] = []
+        For at = 1 To 8
+            children.Add(Try Command(Folders.Executable ?? "").Args(["child"]).Stderr(Stdio.NONE).Spawn())
+        End For
+        For child In children
+            If child.Wait().Code != 101 Then failed += 1
+        End For
+    End For
+Catch e As IOError
+    Print("couldn't run itself: {e.Message}")
+    failed += 1
+End Try
+Print(failed == 0 ? "each ended" : "{failed} ended otherwise")

@@ -153,6 +153,9 @@ private:
     std::deque<job_t> m_queue;
     std::size_t m_unfinished = 0;
     bool m_stopping = false;
+    // How many threads have started, which the constructor waits for.
+    int m_started = 0;
+    std::condition_variable m_all_started;
     std::uint64_t m_searches = 0;
     // The jobs a search has still to look at.
     std::vector<job_t> m_search;

@@ -592,6 +592,16 @@ if(FBENGINE_FB_TESTS)
   endforeach()
 endif()
 
+# The job system's threads, started as the process ends, which mustn't hang its exit.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME jobs.ends COMMAND "${FBENGINE_FB}" --color never run
+           "${CMAKE_CURRENT_SOURCE_DIR}/jobs/ends")
+  set_tests_properties(jobs.ends PROPERTIES TIMEOUT 180
+                       PASS_REGULAR_EXPRESSION "
+each ended?
+$")
+endif()
+
 # A game whose build step is fbengine_tools', built each way in a folder of its own, one at a time,
 # as they share its build folder: its files as they are, then cooked into its pak.
 if(FBENGINE_FB_TESTS)
