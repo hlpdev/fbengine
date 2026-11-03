@@ -1,0 +1,7 @@
+[project]
+name = "stack_and_joints"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../../packages/fbengine" }
+fbengine_physics = { path = "../../../packages/fbengine_physics" }

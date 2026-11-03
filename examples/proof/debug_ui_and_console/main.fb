@@ -1,0 +1,256 @@
+// A game's debug UI and console: rows it asks for each frame, values it watches, sliders and
+// switches it tweaks with, and commands typed into a line, over the game. Driven by Simulate, it
+// prints what they did; with --watch, a window of them, which walks by itself until it's used.
+// Without a GPU, it prints that and stops where it needs the pixels, as a test skips it.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import fbengine
+Import fbengine_ui
+
+Class Game
+    Field speed: Float32 = 5.0
+    Field noclip: Bool = False
+    Field respawns: Int = 0
+    // A band across the game at this height, under the panel, or none under 0.
+    Field band: Int32 = -1
+    Field root: Node
+    Field panel: DebugPanel
+    Field console: Console
+    Field ui: Ui
+
+    New()
+        root = Node("root")
+        panel = DebugPanel()
+        console = Console()
+        ui = Ui(root)
+        root.SetArrangement(Arrangement.STACK)
+        panel.SetAnchors(Anchors.Point(1.0, 1.0))
+        root.Add(panel)
+        console.SetHeight(Sizing.Fraction(0.5))
+        console.SetAnchors(Anchors(0.0, 0.0, 1.0, 0.0))
+        console.SetVisible(False)
+        root.Add(console)
+    End New
+
+    // The game's commands, which hold it Weak, as its console's in it.
+    Method Commands()
+        Local game: Weak<Game> = Self
+        console.Register("speed", "sets the speed", Function(own: Console, words: String[])
+            Local asked = words.Count > 0 ? Float32.Parse(words[0]) : Null
+            Local held = game
+            If asked == Null || held == Null Then Return "speed what?"
+            held.speed = asked
+            Return "speed is {asked}"
+        End Function)
+        console.RegisterCommand("fail", "throws", Failing())
+    End Method
+
+    // A frame, its rows asked for after its Ui's Update, as each frame asks.
+    Method Step()
+        Flip()
+        If KeyHit(console.ToggleKey())
+            console.SetVisible(!console.Visible())
+            ui.Focus(console.Visible() ? console.Line() : Null)
+        End If
+        ui.Update()
+        panel.Watch("frame", "{Frame.Count()}")
+        speed = panel.Tweak("speed", 0.0, 20.0, speed)
+        noclip = panel.Switch("noclip", noclip)
+        If panel.Pressed("respawn") Then respawns += 1
+        If noclip Then panel.Watch("only with noclip", "on")
+        If Screen.Texture() != Null
+            Local canvas = Screen.Canvas()
+            canvas.SetColor(Color32(24, 28, 36, 255))
+            canvas.Clear()
+            // The game, under them.
+            canvas.SetColor(Color32(76, 141, 255, 255))
+            canvas.DrawRect(40 + (speed * 10.0) As Int32, 200, 32, 32)
+            If band >= 0 Then canvas.DrawRect(0, band, Screen.Width(), 4)
+            ui.Draw()
+        End If
+    End Method
+End Class
+
+// A command that can throw, whose message the console prints.
+Class Failing Implements ConsoleCommand
+    New()
+    End New
+
+    Public Method Run(console: Console, words: String[]): String Throws Error
+        Throw Error("it can't be done")
+    End Method
+End Class
+
+Function Proved() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Local game = Game()
+    game.Commands()
+    game.Step()
+    game.Step()
+    Print("rows {game.panel.Names()}")
+
+    // A watched row shows what it's given each frame.
+    Local shown = Row(game, "frame") As? Label
+    Local first = shown?.Text() ?? ""
+    Local firstFrame = "{Frame.Count()}"
+    game.Step()
+    Local second = shown?.Text() ?? ""
+    Print("a watched row's the frame's {first == firstFrame}, then the next's {second == "{Frame.Count()}" && second != first}")
+
+    // A switch by the mouse: a row comes with it, and goes with it.
+    Local toggle = Row(game, "noclip")
+    Local at = toggle.Box().Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    game.Step()
+    game.Step()
+    Print("noclip {game.noclip}, rows {game.panel.Names()}")
+    // The panel's grown, from its corner, so it's moved.
+    at = Row(game, "noclip").Box().Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    game.Step()
+    game.Step()
+    game.Step()
+    Print("noclip {game.noclip}, rows {game.panel.Names()}")
+
+    // A button, and a slider by the keyboard.
+    at = Row(game, "respawn").Box().Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    game.Step()
+    Print("respawns {game.respawns}")
+    Local slider = Row(game, "speed")
+    game.ui.Focus(slider)
+    game.Step()
+    Try Simulate.PressKey(Key.END)
+    game.Step()
+    Print("speed by End {game.speed}")
+
+    // The console: its key, a command, an error, help, a name finished by Tab, and what was run.
+    Try Simulate.PressKey(Key.GRAVE)
+    game.Step()
+    Try Simulate.Text("speed 7")
+    Try Simulate.PressKey(Key.RETURN)
+    game.Step()
+    Print("speed by command {game.speed}")
+    Try Simulate.Text("fail")
+    Try Simulate.PressKey(Key.RETURN)
+    game.Step()
+    Try Simulate.Text("nosuch")
+    Try Simulate.PressKey(Key.RETURN)
+    game.Step()
+    Try Simulate.Text("spe")
+    Try Simulate.PressKey(Key.TAB)
+    game.Step()
+    Print("finished \"{game.console.Line().Text()}\"")
+    game.console.Line().SetText("")
+    Try Simulate.PressKey(Key.UP)
+    game.Step()
+    Print("recalled \"{game.console.Line().Text()}\"")
+    game.console.Line().SetText("")
+    Print("printed {game.console.Lines()}")
+    Print("run {game.console.History()}")
+    Try Simulate.PressKey(Key.GRAVE)
+    game.Step()
+    Print("closed {!game.console.Visible()}, focus {game.ui.Focused() == Null ? "none" : "kept"}")
+
+    // The panel over the game: a band of the game's beside it, and under it, a pixel of the panel.
+    If Screen.Texture() == Null
+        Print("no GPU here")
+        Return
+    End If
+    Local box = game.panel.Box()
+    game.band = (box.Center.y As Int32)
+    game.Step()
+    Local image = Try Screen.ToImage()
+    Local y = game.band + 1
+    Print("the game's band beside the panel {image[(box.X As Int) - 2, y]}")
+    Print("the panel over it {image[(box.X As Int) + 2, y] != image[(box.X As Int) - 2, y]}, {image[(box.X As Int) + 2, y]}")
+End Function
+
+// The widget of `game`'s debug row `name`.
+Function Row(game: Game, name: String): Widget
+    Local row = game.panel.Find(name)
+    Local widget = row != Null ? row.Children()[1] As? Widget : Null
+    If widget == Null Then Panic("there's no row {name}")
+    Return widget
+End Function
+
+// A window of them, walking by itself until a key's pressed; or `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(1024, 576)
+    Defer EndGraphics()
+    Window.SetTitle("debug UI and console: Escape closes the console, or ends it")
+    Frame.SetLimit(60)
+    Local game = Game()
+    game.Commands()
+    game.console.Print("the console's key opens this; help lists its commands")
+    Local count = 0
+    Local waited: Float64 = 0.0
+    Local step = 0
+    Local byItself = True
+    While !Window.Closed() && (frames == 0 || count < frames)
+        If KeyHit(Key.ESCAPE)
+            If !game.console.Visible() Then Break
+            game.console.SetVisible(False)
+            game.ui.Focus(Null)
+        End If
+        If KeysHit().Count > 0 Then byItself = False
+        game.Step()
+        count += 1
+        Try Driven(arguments, count)
+        waited += Frame.Delta()
+        If byItself && (frames > 0 || waited >= 1.0)
+            waited = 0.0
+            Select step % 6
+                Case 0
+                    game.speed = 15.0
+                Case 1
+                    game.noclip = True
+                Case 2
+                    game.console.SetVisible(True)
+                    game.ui.Focus(game.console.Line())
+                Case 3
+                    game.console.Run("speed 3")
+                Case 4
+                    game.console.Run("help")
+                Default
+                    game.console.SetVisible(False)
+                    game.ui.Focus(Null)
+                    game.noclip = False
+            End Select
+            step += 1
+        End If
+    End While
+    Print("watched {count} frames")
+End Function
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try Watched(Asked(arguments), arguments)
+Else
+    Try Proved()
+End If

@@ -13,6 +13,19 @@ Async Function CountTicks(times: Int)
     End For
 End Function
 
+@Test
+Function FlipSaysWhetherItAskedToWait() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Flip(False)
+    Expect(!Frame.Vsync())
+    Flip()
+    Expect(Frame.Vsync())
+    Flip(False)
+    Expect(!Frame.Vsync())
+End Function
+
 // E1's done-when, in part: the coroutines waiting for the next tick resume once a frame.
 @Test
 Function CoroutinesResumeOncePerFlip() Throws GraphicsError

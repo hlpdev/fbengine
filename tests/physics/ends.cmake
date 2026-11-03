@@ -1,5 +1,5 @@
-# Runs PROGRAM, which makes a world on Jolt's most threads and ends at once, a few at a time for
-# RUNS rounds, so they start their threads on a busy machine, and fails if one doesn't end within
+# Runs PROGRAM, which starts threads, as a world on Jolt's most or a video does, and ends at once,
+# a few at a time for RUNS rounds, so they start them on a busy machine, and fails if one doesn't end within
 # 20 seconds, or ends any way but with 101, as it says it did. How many at a time is
 # $ENV{FBENGINE_ENDS_AT_ONCE}, or 2: CI's 8, at which fbengine_physics 5350470's job threads hung
 # about once in 300, is too many beside other test runs on a person's machine. DLLS is where its

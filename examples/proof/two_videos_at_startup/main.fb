@@ -1,0 +1,161 @@
+// Two videos at startup, MPEG-1 here: the first with its sound in the file, the second beside a
+// sound of its own, each into a texture, fitted to what it's drawn on, and a key skips one. Mixed on
+// no device, it prints what was shown at what's been heard. With --watch, a window plays them in
+// turn, for a person to see and hear; --frames, as a test runs it, keeps that headless and silent.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import fbengine
+Import fbengine_audio
+Import fbengine_video
+
+// A frame's sound at 25 frames a second and 44100 Hz.
+Const FRAME_OF_MIX: Int32 = 1764
+
+Function Named(color: Color32): String
+    If color.r > 200 && color.g > 200 && color.b > 200 Then Return "white"
+    If color.r > 200 && color.g < 60 && color.b < 60 Then Return "red"
+    If color.g > 200 && color.r < 60 && color.b < 60 Then Return "green"
+    If color.b > 200 && color.r < 60 && color.g < 60 Then Return "blue"
+    If color.r < 30 && color.g < 30 && color.b < 30 Then Return "black"
+    Return "{color}"
+End Function
+
+Function Loudest(mixed: Float32[]): Float32
+    Local loudest: Float32 = 0
+    For sample In mixed
+        loudest = Max(loudest, Abs(sample))
+    End For
+    Return loudest
+End Function
+
+// Plays `video` to its end, a frame's sound mixed at a time, saying at each quarter of a second past
+// each half what its texture shows, and how close its clock kept to its sound while that played.
+Function Played(video: Video) Throws GraphicsError
+    Local texture = Try video.Texture()
+    Local mark: Float64 = 0.25
+    Local furthest: Float64 = 0
+    Local loudest: Float32 = 0
+    video.Play()
+    For frame = 1 To 100
+        loudest = Max(loudest, Loudest(Audio.Mix(FRAME_OF_MIX)))
+        video.Update(1.0 / 25)
+        If video.Ended() Then Break
+        Flip(False)
+        Local heard = video.SoundChannel().Position()
+        If video.SoundChannel().Playing() Then furthest = Max(furthest, Abs(video.Time() - heard))
+        If heard >= mark
+            Print("at {mark} s of its sound, {Named(texture.ToImage()[32, 24])}")
+            mark += 0.5
+        End If
+    End For
+    Print("it ended {video.Ended()}, heard {loudest > 0.01}, its clock on its sound {furthest < 0.05}")
+End Function
+
+Function Proved() Throws VideoError, AudioError, SoundError, GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Try Graphics(320, 240)
+
+    Local first = Try Video.Load(Embed("colors.mpg"))
+    Print("the first: {first.Width()} by {first.Height()}, {first.Duration()} s, its own sound {first.HasSound()}")
+    Try Played(first)
+    first.Free()
+
+    Local second = Try Video.Load(Embed("silent.mpg"))
+    Print("the second: its own sound {second.HasSound()}, then one beside it")
+    second.SetSound(Try Sound.FromBytes(Embed("beside.ogg")))
+    Try Played(second)
+
+    // Fitted to something wider, its shape kept, with bars either side.
+    Local fit = second.Fit(200, 96)
+    Print("fitted to 200 by 96: {fit.Width} by {fit.Height}, at {fit.X}, {fit.Y}")
+    Local wide = Try Texture.Target(200, 96)
+    Local canvas = Canvas(wide)
+    canvas.Clear()
+    Try second.DrawFitted(canvas, 200, 96)
+    Flip(False)
+    Local drawn = wide.ToImage()
+    Print("its bars {Named(drawn[10, 48])}, {Named(drawn[190, 48])}, its middle {Named(drawn[100, 48])}")
+    wide.Free()
+    second.Free()
+
+    // Skipped half a second in, nothing's left of it to hear.
+    Local skipped = Try Video.Load(Embed("colors.mpg"))
+    skipped.Play()
+    For frame = 1 To 12
+        Audio.Mix(FRAME_OF_MIX)
+        skipped.Update(1.0 / 25)
+    End For
+    Local heard = Loudest(Audio.Mix(FRAME_OF_MIX))
+    skipped.Free()
+    Audio.Mix(FRAME_OF_MIX)
+    Print("skipped at half a second: heard {heard > 0.01}, then {Loudest(Audio.Mix(FRAME_OF_MIX)) > 0}")
+    Audio.Stop()
+    EndGraphics()
+End Function
+
+// The next video to play, the one after `which`.
+Function Opened(which: Int, beside: Sound): Video Throws VideoError
+    Local video = Try Video.Load(which == 0 ? Embed("colors.mpg") : Embed("silent.mpg"))
+    If which == 1 Then video.SetSound(beside)
+    video.Play()
+    Return video
+End Function
+
+// The videos in turn, until the window's closed or Escape's pressed, or for `count` frames if it's
+// not 0, then with a video skipped now and then, as no one's pressing Space.
+Function Watched(count: Int) Throws VideoError, AudioError, SoundError, GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    If count > 0 Then Window.SetHeadless(True)
+    Try Audio.Start(count > 0 ? AudioDevice.SILENT : AudioDevice.DEFAULT)
+    Try Graphics(640, 480)
+    Local canvas = Screen.Canvas()
+    Local beside = Try Sound.FromBytes(Embed("beside.ogg"))
+    Local which = 0
+    Local video = Try Opened(which, beside)
+    Local frames = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (count == 0 || frames < count)
+        video.Update(Frame.Delta())
+        canvas.Clear()
+        Try video.DrawFitted(canvas, Screen.Width(), Screen.Height())
+        Flip()
+        frames += 1
+        If video.Ended() || KeyHit(Key.SPACE) || (count > 0 && frames % 15 == 0)
+            video.Free()
+            which = 1 - which
+            video = Try Opened(which, beside)
+        End If
+    End While
+    video.Free()
+    Print("watched {frames} frames")
+    Audio.Stop()
+    EndGraphics()
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function FramesAsked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames") ?? arguments.Count
+    If at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+Try
+    If arguments.Contains("--watch")
+        Try Watched(FramesAsked(arguments))
+    Else
+        Try Proved()
+    End If
+Catch error As Error
+    Print("couldn't play them: {error.Message}")
+End Try

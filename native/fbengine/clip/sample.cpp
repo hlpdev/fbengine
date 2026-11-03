@@ -115,7 +115,7 @@ void sample(const channel_t& channel, float time, std::size_t& cursor, std::span
         return;
     }
     for (std::size_t i = 0; i < width; ++i) {
-        out[i] = from[i] + ((to[i] - from[i]) * s);
+        out[i] = scene::mix(from[i], to[i], s);
     }
 }
 

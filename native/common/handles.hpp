@@ -56,8 +56,13 @@ public:
             m_live[slot] = true;
             return slot;
         }
-        m_generations.push_back(1);
         m_live.push_back(true);
+        try {
+            m_generations.push_back(1);
+        } catch (...) {
+            m_live.pop_back();
+            throw;
+        }
         return static_cast<std::uint32_t>(m_generations.size() - 1);
     }
 

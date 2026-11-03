@@ -66,6 +66,17 @@ std::string out_of_range(const char* what, std::size_t size, std::int32_t first,
 
 /// Transforms a surface's vertices and normals, turning its triangles when the matrix flips.
 void transform_surface(surface_t& surface, const mat4_t& m) {
+    // A target's position moves as a direction does, and its normal so that, at any weight, the
+    // vertex's is what the transform makes of it; both while the vertices are as they were.
+    for (morph_target_t& target : surface.targets) {
+        for (vec3_t& moved : target.positions) {
+            moved = transform_vector(m, moved);
+        }
+        for (std::size_t i = 0; i < target.normals.size() && i < surface.vertices.size(); ++i) {
+            target.normals[i] =
+                transform_normal_move(m, vec(surface.vertices[i].normal), target.normals[i]);
+        }
+    }
     for (fbe_vertex_t& vertex : surface.vertices) {
         vertex.position = c_vec(transform_point(m, vec(vertex.position)));
         vertex.normal = c_vec(transform_normal(m, vec(vertex.normal)));
@@ -299,7 +310,7 @@ void remove_mesh(std::uint32_t entity) {
     }
     release_material(s.meshes[index].material);
     if (index != s.meshes.size() - 1) {
-        s.meshes[index] = s.meshes.back();
+        s.meshes[index] = std::move(s.meshes.back());
         s.entities.component[s.meshes[index].entity] = index;
     }
     s.meshes.pop_back();
@@ -434,6 +445,11 @@ FBE_API bool fbe_geometry_flip(uint64_t geometry) {
     for (surface_t& surface : scene().geometries[slot].surfaces) {
         for (fbe_vertex_t& vertex : surface.vertices) {
             vertex.normal = { .x = -vertex.normal.x, .y = -vertex.normal.y, .z = -vertex.normal.z };
+        }
+        for (fbe::scene::morph_target_t& target : surface.targets) {
+            for (fbe::scene::vec3_t& normal : target.normals) {
+                normal = -normal;
+            }
         }
         for (std::size_t i = 0; i + 2 < surface.indices.size(); i += 3) {
             std::swap(surface.indices[i + 1], surface.indices[i + 2]);
@@ -690,6 +706,7 @@ FBE_API bool fbe_surface_clear(uint64_t geometry, int32_t surface, bool vertices
     if (vertices) {
         found->vertices.clear();
         found->joints.clear();
+        found->targets.clear();
     }
     fbe::scene::touch_geometry(geometry_slot(geometry), true);
     return true;

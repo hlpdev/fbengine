@@ -160,3 +160,23 @@ Function AFreedMaskIsGone()
     a.Free()
     Expect(Mask.Count() == before && "{a}" == "a freed mask")
 End Function
+
+// A key color isn't solid, in a mask as in a sprite, and not in the image given; whole, by a region,
+// and frame by frame.
+@Test
+Function AMaskLeavesOutAKeyColor()
+    Local key = Color32(255, 0, 255, 255)
+    Local image = Image(4, 2)
+    image.Fill(key)
+    image[1, 0] = Color32(255, 0, 254, 255)
+    image[2, 1] = Color32(9, 9, 9, 255)
+    Expect(Mask.FromImage(image).SolidCount() == 8)
+    Local whole = Mask.FromImage(image, masked: key)
+    Expect(whole.SolidCount() == 2)
+    Expect(whole.Solid(1, 0) && whole.Solid(2, 1) && !whole.Solid(0, 0))
+    Expect(Mask.FromImage(image, 1, Rect(0.0, 0.0, 2.0, 2.0), key).SolidCount() == 1)
+    Local frames = Mask.Frames(image, 2, 2, masked: key)
+    Expect(frames.Count == 2)
+    Expect(frames[0].Solid(1, 0) && frames[1].Solid(0, 1) && frames[1].SolidCount() == 1)
+    Expect(image[0, 0] == key)
+End Function
