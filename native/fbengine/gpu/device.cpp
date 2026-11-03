@@ -53,6 +53,8 @@ std::string why_failed;
 std::uint32_t leftovers = 0;
 /// The failure a test made happen next.
 fbe::gpu::fault_t injected = fbe::gpu::fault_t::NONE;
+/// How many times the GPU's been stopped.
+std::uint64_t stops = 0;
 
 bool validating = false;
 std::int32_t validation_errors = 0;
@@ -637,9 +639,6 @@ const candidate_t* candidate_at(std::int32_t index) {
 
 namespace fbe::gpu {
 
-/// How many times the GPU's been stopped.
-std::uint64_t stops = 0;
-
 bool fail_vulkan(std::string_view doing, VkResult result) {
     return fail(std::format("{} (VkResult {})", doing, static_cast<int>(result)));
 }
@@ -838,7 +837,7 @@ FBE_API bool fbe_gpu_started(void) {
 }
 
 FBE_API uint64_t fbe_gpu_stops(void) {
-    return fbe::gpu::stops;
+    return stops;
 }
 
 FBE_API void fbe_gpu_stop(void) {

@@ -1352,8 +1352,9 @@ private:
             if (!finite(light.color) || !std::isfinite(light.intensity) || light.intensity < 0 ||
                 !std::isfinite(light.range) || light.range < 0 ||
                 (light.kind == light_kind_t::SPOT &&
-                 !(light.inner_cone >= 0 && light.inner_cone <= light.outer_cone &&
-                   light.outer_cone <= most_turn / 2))) {
+                 (!std::isfinite(light.inner_cone) || !std::isfinite(light.outer_cone) ||
+                  light.inner_cone < 0 || light.inner_cone > light.outer_cone ||
+                  light.outer_cone > most_turn / 2))) {
                 return fail(std::format("the light \"{}\" can't shine as it says", light.name));
             }
         }

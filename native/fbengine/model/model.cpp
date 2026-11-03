@@ -531,7 +531,7 @@ FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t 
         .wrap_u = fbe_texture_wrap_u(texture),
         .wrap_v = fbe_texture_wrap_v(texture),
     };
-    if (!(has == sampling) && other != nullptr) {
+    if (has != sampling && other != nullptr) {
         texture = fbe_model_texture(load, read.image, true);
         if (texture == 0) {
             return false;
