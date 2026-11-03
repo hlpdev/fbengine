@@ -1,0 +1,117 @@
+// Particles as a game's own code, over the engine's Sprites: a seeded emitter of sprites that rise,
+// slow, fade, turn, grow, and go, each frame, for smoke; none of it the engine's beyond the Sprite. It
+// prints how many there were, and where they went. It'll draw with --watch once the renderer draws
+// sprites.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+
+// One particle: its sprite, how it moves, and how long it has.
+Class Particle
+    Field Sprite: Sprite
+    Field Velocity: Vec3
+    Field Left: Float32
+    Field Life: Float32
+
+    New(sprite: Sprite, velocity: Vec3, life: Float32)
+        Self.Sprite = sprite
+        Velocity = velocity
+        Left = life
+        Life = life
+    End New
+End Class
+
+// A smoke emitter: `rate` a second, each living `life` seconds.
+Class Emitter
+    Field At: Vec3
+    Field Rate: Float32
+    Field LifeOf: Float32
+    Field Owed: Float32 = 0.0
+    Field Alive: Particle[] = []
+    Field Made: Int = 0
+    Field Dice: Random
+
+    New(at: Vec3, rate: Float32, life: Float32, seed: Int64)
+        At = at
+        Rate = rate
+        LifeOf = life
+        Dice = Random(seed)
+    End New
+
+    Method Step(seconds: Float32)
+        Owed += Rate * seconds
+        While Owed >= 1.0
+            Owed -= 1.0
+            Emit()
+        End While
+        For i = Alive.Count - 1 To 0 Step -1
+            Local each = Alive[i]
+            each.Left -= seconds
+            If each.Left <= 0.0
+                each.Sprite.Free()
+                Alive.RemoveAt(i)
+                Continue
+            End If
+            // It slows as it rises, and fades and grows as it goes.
+            each.Velocity = each.Velocity * (1.0 - 0.5 * seconds)
+            each.Sprite.Translate(each.Velocity * seconds)
+            Local gone = 1.0 - each.Left / each.Life
+            each.Sprite.SetColor(Color(0.6, 0.6, 0.6, 1.0 - gone))
+            each.Sprite.SetSpriteScale(Vec2(0.5 + gone, 0.5 + gone))
+            each.Sprite.SetSpriteRotation(gone * 2.0)
+        End For
+    End Method
+
+    Method Emit()
+        Local sprite = Sprite()
+        sprite.SetPosition(At)
+        sprite.SetViewMode(SpriteViewMode.BILLBOARD)
+        Alive.Add(Particle(sprite,
+                           Vec3((Dice.Float() - 0.5) As Float32, 2.0,
+                                (Dice.Float() - 0.5) As Float32), LifeOf))
+        Made += 1
+    End Method
+End Class
+
+Local world = World()
+World.SetCurrent(world)
+Local emitter = Emitter(Vec3(0, 0, 0), 20.0, 1.5, 42)
+
+// 60 frames a second, for a second: 20 made, none gone.
+For frame = 1 To 60
+    emitter.Step(1.0 / 60.0)
+End For
+Print("after 1 second, {emitter.Made} made, {emitter.Alive.Count} alive")
+Local oldest = emitter.Alive[0]
+Print("the oldest's risen {oldest.Sprite.Position().y > 1.0}, its alpha {oldest.Sprite.Color().a < 0.5 && oldest.Sprite.Color().a > 0.2}")
+Local newest = emitter.Alive[emitter.Alive.Count - 1]
+Print("the newest's nearly at the start {newest.Sprite.Position().y < 0.2}, almost opaque {newest.Sprite.Color().a > 0.9}")
+
+// On to a steady state: as many made as gone, at rate times life.
+For frame = 1 To 240
+    emitter.Step(1.0 / 60.0)
+End For
+Print("after 5 seconds, {emitter.Made} made, about 30 alive {Abs(emitter.Alive.Count - 30) <= 1}")
+
+// A camera sees each as it's turned to face it.
+Local camera = Camera()
+camera.SetViewport(Rect(0, 0, 800, 600))
+camera.SetPosition(Vec3(0, 1, 10))
+Print("drawn by a camera, each of them {camera.InView(emitter.Alive[0].Sprite.Position())}")
+
+// Seeded, so the same every run: where the first of a new one goes.
+Local first = Emitter(Vec3(0, 0, 0), 60.0, 1.0, 42)
+first.Step(1.0 / 60.0)
+Local again = Emitter(Vec3(10, 0, 0), 60.0, 1.0, 42)
+again.Step(1.0 / 60.0)
+Print("the same seed goes the same way {first.Alive[0].Velocity == again.Alive[0].Velocity}")
+
+// Ended: its sprites freed with its particles.
+emitter.Rate = 0.0
+For frame = 1 To 120
+    emitter.Step(1.0 / 60.0)
+End For
+Print("with the rate at 0, after 2 seconds, {emitter.Alive.Count} alive")
+world.Free()

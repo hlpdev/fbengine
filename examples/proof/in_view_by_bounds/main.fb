@@ -1,0 +1,55 @@
+// What a camera might see: an entity by the 8 corners of its bounds, a point, and a box, against the
+// camera's 6 planes, near and far included, with nothing hiding anything; and, apart from that,
+// whether one thing has a line of sight to another. It prints each. It'll draw with --watch once the
+// renderer draws meshes.
+
+Import std.core
+Import std.math
+Import fbengine
+
+Local world = World()
+World.SetCurrent(world)
+// Looking down -Z, seeing from 1 to 50.
+Local camera = Camera()
+camera.SetViewport(Rect(0, 0, 800, 600))
+camera.SetFieldOfView(Deg(90))
+camera.SetRange(1, 50)
+
+// Points: in front, behind, and at each end of its range.
+Print("in front {camera.InView(Vec3(0, 0, -10))}, behind {camera.InView(Vec3(0, 0, 10))}")
+Print("at its near end {camera.InView(Vec3(0, 0, -1))}, nearer {camera.InView(Vec3(0, 0, -0.5))}")
+Print("at its far end {camera.InView(Vec3(0, 0, -50))}, farther {camera.InView(Vec3(0, 0, -51))}")
+Print("past its top {camera.InView(Vec3(0, 11, -10))}, inside it {camera.InView(Vec3(0, 9, -10))}")
+
+// A box: whole, part of it in, and none of it.
+Print("a box inside {camera.InView(AABB(Vec3(-1, -1, -11), Vec3(1, 1, -9)))}")
+Print("a box half out {camera.InView(AABB(Vec3(10, -1, -11), Vec3(30, 1, -9)))}")
+Print("a box out {camera.InView(AABB(Vec3(30, -1, -11), Vec3(40, 1, -9)))}")
+
+// An entity, by its bounds: its middle out of view, but a corner in, counts.
+Local big = Mesh(Geometry.Cube())
+big.SetScale(Vec3(10, 1, 1))
+big.SetPosition(Vec3(18, 0, -10))
+Local bounds = big.Bounds()
+Print("its bounds are {bounds.Min.x:.0} to {bounds.Max.x:.0} across")
+Print("a long mesh with only its end in view {camera.InView(big)}, its middle {camera.InView(big.Position())}")
+big.SetPosition(Vec3(40, 0, -10))
+Print("moved out {camera.InView(big)}")
+// Something with no mesh goes by its place.
+Local place = Pivot()
+place.SetPosition(Vec3(0, 0, -10))
+Print("a pivot in view {camera.InView(place)}")
+
+// Nothing hides anything: a wall in front of it changes nothing.
+Local wall = Mesh(Geometry.Plane())
+wall.SetScale(Vec3(20, 1, 20))
+wall.Turn(Deg(90), 0, 0)
+wall.SetPosition(Vec3(0, 0, -5))
+wall.SetBlocksSight(True)
+Print("behind a wall {camera.InView(place)}")
+
+// Sight is the other question: that wall blocks it, until it doesn't.
+Print("a line of sight through the wall {camera.CanSee(place)}")
+wall.SetBlocksSight(False)
+Print("with it not blocking {camera.CanSee(place)}")
+world.Free()

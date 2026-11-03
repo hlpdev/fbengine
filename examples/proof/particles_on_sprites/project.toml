@@ -1,0 +1,6 @@
+[project]
+name = "particles_on_sprites"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../../packages/fbengine" }

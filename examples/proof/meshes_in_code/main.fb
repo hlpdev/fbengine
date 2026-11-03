@@ -1,0 +1,81 @@
+// A mesh made in code: surfaces of vertices with two sets of UVs, colors and alpha, and normals made
+// from its triangles; read back, changed, joined, cloned, and moved as a whole. It prints what each
+// did. It'll draw with --watch once the renderer draws meshes.
+
+Import std.core
+Import std.math
+Import fbengine
+
+Function Shown(at: Vec3): String => "{at.x:.2}, {at.y:.2}, {at.z:.2}"
+
+Local world = World()
+World.SetCurrent(world)
+
+// A quad, each corner with two sets of UVs, and a color.
+Local made = Geometry()
+Local surface = made.AddSurface()
+Local up = Vec3(0, 1, 0)
+Local a = surface.AddVertex(Vertex(Vec3(0, 0, 0), up, Vec2(0, 0), Vec2(0.5, 0.5),
+                                   Color(1, 0, 0, 1)))
+Local b = surface.AddVertex(Vertex(Vec3(0, 0, -2), up, Vec2(0, 1), Vec2(0.5, 0.75),
+                                   Color(0, 1, 0, 0.5)))
+Local c = surface.AddVertex(Vertex(Vec3(2, 0, -2), up, Vec2(1, 1), Vec2(0.75, 0.75),
+                                   Color(0, 0, 1, 1)))
+Local d = surface.AddVertex(Vertex(Vec3(2, 0, 0), up, Vec2(1, 0), Vec2(0.75, 0.5),
+                                   Color(1, 1, 1, 0)))
+surface.AddTriangle(a, c, b)
+surface.AddTriangle(a, d, c)
+Print("{made.SurfaceCount()} surface, {surface.VertexCount()} vertices, {surface.TriangleCount()} triangles")
+
+// What went in comes back.
+Local second = surface.Vertex(b)
+Print("its second UVs {second.Uv1}, first {second.Uv0}")
+Print("its color's alpha {second.Color.a}")
+
+// Normals, made from the triangles, whatever they were: a bent quad's are between its faces.
+surface.SetVertexNormal(a, Vec3(1, 0, 0))
+made.UpdateNormals()
+Print("made again {Shown(surface.VertexNormal(a))}")
+surface.SetVertexPosition(d, Vec3(2, 1, 0))
+made.UpdateNormals()
+Local leaning = surface.VertexNormal(d)
+Print("one corner lifted, it leans {leaning.x < 0.0 && leaning.y > 0.0}")
+surface.SetVertexPosition(d, Vec3(2, 0, 0))
+made.UpdateNormals()
+
+// Its size, and moving it as a whole.
+Local bounds = made.Bounds()
+Print("bounds {Shown(bounds.Min)} to {Shown(bounds.Max)}")
+made.Translate(Vec3(1, 0, 0))
+Print("moved: {Shown(made.Bounds().Min)}")
+made.Scale(Vec3(2, 1, 1))
+Print("scaled: {Shown(made.Bounds().Max)}")
+made.Rotate(Quat.FromEuler(0.0, Deg(90), 0.0))
+Print("turned, it's {made.Bounds().Max.x - made.Bounds().Min.x:.2} across")
+made.Fit(AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1)))
+Print("fitted: {Shown(made.Bounds().Min)} to {Shown(made.Bounds().Max)}")
+
+// Flipped: its triangles wound the other way, so a pick from above no longer meets it.
+Local mesh = Mesh(made)
+mesh.SetPickMode(PickMode.MESH)
+Local from = Vec3(0, 5, 0)
+Local to = Vec3(0, -5, 0)
+Local before = world.Pick(from, to) != Null
+made.Flip()
+Print("picked from above {before}, flipped {world.Pick(from, to) != Null}, from below {world.Pick(to, from) != Null}")
+made.Flip()
+
+// Joined, and cloned: the clone's its own.
+Local clone = made.Clone()
+clone.Translate(Vec3(10, 0, 0))
+Local joined = Geometry.Cube()
+Local vertices = joined.Surface(0).VertexCount()
+joined.Add(made)
+Print("a cube's {vertices} vertices, joined {joined.SurfaceCount()} surfaces")
+Print("the clone moved, the first didn't {Abs(made.Bounds().Max.x - 1.0) < 0.01 && clone.Bounds().Max.x > 10.0}")
+
+// A box for culling, of its own, not its vertices'.
+made.SetCullBox(AABB(Vec3(-100, -100, -100), Vec3(100, 100, 100)))
+Local cull = made.CullBox()
+Print("its cull box {cull != Null ? cull.Max.x : 0.0:.0}, bounds {made.Bounds().Max.x:.0}")
+world.Free()
