@@ -82,12 +82,14 @@ struct reached_t {
     float time = 0.0F;
 };
 
-/// A player: its entity, 0 for a free slot, its layers, the bones its clips move, the events they
-/// reached since the FB side took them, and whether an advance found its entity freed.
+/// A player: its entity, 0 for a free slot, its layers, the bones its clips move, the entities left
+/// to the game, the events they reached since the FB side took them, and whether an advance found
+/// its entity freed.
 struct player_t {
     std::uint64_t entity = 0;
     std::array<layer_t, FBE_PLAYER_LAYERS> layers;
     std::vector<bone_t> bones;
+    std::vector<std::uint64_t> released;
     std::vector<reached_t> events;
     bool orphaned = false;
 };
@@ -568,8 +570,9 @@ void pose(player_t& player, std::uint32_t root) {
         }
         for (std::size_t i = 0; i < count; ++i) {
             scratch.sums[i] = {};
-            scratch.allowed[i] =
-                scratch.slots[i] != scene::none && masked_in(layer, scratch.slots[i]);
+            scratch.allowed[i] = scratch.slots[i] != scene::none &&
+                                 masked_in(layer, scratch.slots[i]) &&
+                                 !std::ranges::contains(player.released, player.bones[i].entity);
         }
         sum_tracks(player, layer);
         lay_over(layer.weight, count);
@@ -920,6 +923,43 @@ FBE_API bool fbe_player_set_mask(uint64_t player, int32_t layer, const uint64_t*
     } catch (const std::bad_alloc&) {
         return fail("out of memory");
     }
+}
+
+FBE_API bool fbe_player_release(uint64_t player, uint64_t bone) {
+    std::uint32_t root = none;
+    player_t* found = fbe::anim::live_player(player, root);
+    if (found == nullptr || fbe::scene::entity_slot(bone) == none) {
+        return false;
+    }
+    if (std::ranges::contains(found->released, bone)) {
+        return true;
+    }
+    try {
+        // What was released and has been freed since isn't kept.
+        const fbe::scene::entities_t& entities = fbe::scene::scene().entities;
+        std::erase_if(found->released, [&](std::uint64_t released) {
+            return !entities.slots.find(released).has_value();
+        });
+        found->released.push_back(bone);
+        return true;
+    } catch (const std::bad_alloc&) {
+        return fail("out of memory");
+    }
+}
+
+FBE_API bool fbe_player_reclaim(uint64_t player, uint64_t bone) {
+    std::uint32_t root = none;
+    player_t* found = fbe::anim::live_player(player, root);
+    if (found == nullptr || fbe::scene::entity_slot(bone) == none) {
+        return false;
+    }
+    std::erase(found->released, bone);
+    return true;
+}
+
+FBE_API bool fbe_player_released(uint64_t player, uint64_t bone) {
+    const std::uint32_t slot = fbe::anim::player_slot(player);
+    return slot != none && std::ranges::contains(players().kept[slot].released, bone);
 }
 
 FBE_API bool fbe_player_advance(uint64_t world, float seconds) {

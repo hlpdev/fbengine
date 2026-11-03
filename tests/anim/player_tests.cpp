@@ -772,3 +772,48 @@ TEST_CASE("an advance hands over the players whose entities were freed, once eac
     CHECK(fbe_player_count() == before);
     fbe_world_free(world);
 }
+
+TEST_CASE("a bone released is the game's until it's reclaimed, and what's under it plays on") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t hips = pivot(world, 0, "hips");
+    const std::uint64_t arm = pivot(world, hips, "arm");
+    const std::uint64_t hand = pivot(world, arm, "hand");
+    const std::uint64_t player = fbe_player_create(hips);
+    const std::uint64_t clip = fbe_clip_create("", 0.0F);
+    const std::array<float, 1> times{ 0.0F };
+    const std::array<float, 3> place{ 4.0F, 0.0F, 0.0F };
+    for (const char* node : { "arm", "hand" }) {
+        fbe_clip_add_channel(clip, node, FBE_CLIP_TRANSLATION, FBE_CLIP_STEP, 3, times.data(),
+                             place.data(), 1);
+    }
+    fbe_player_play(player, 0, clip, FBE_PLAYER_LOOP, 1.0F);
+    CHECK(position(arm).x == 4.0F);
+    CHECK(!fbe_player_released(player, arm));
+    REQUIRE(fbe_player_release(player, arm));
+    CHECK(fbe_player_release(player, arm));
+    CHECK(fbe_player_released(player, arm));
+    fbe_entity_set_position(arm, 7.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL);
+    fbe_entity_set_position(hand, 1.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL);
+    fbe_player_advance(world, 0.1F);
+    CHECK(position(arm).x == 7.0F);
+    CHECK(position(hand).x == 4.0F);
+    // Reclaimed, it's moved again, from where the game left it.
+    fbe_player_set_weight(player, 0, 0.5F);
+    REQUIRE(fbe_player_reclaim(player, arm));
+    CHECK(fbe_player_reclaim(player, arm));
+    CHECK(!fbe_player_released(player, arm));
+    fbe_player_advance(world, 0.1F);
+    CHECK(position(arm).x == Catch::Approx(5.5F));
+    // What's refused.
+    const std::uint64_t gone = pivot(world, 0, "gone");
+    fbe_entity_free(gone);
+    CHECK(!fbe_player_release(player, gone));
+    CHECK(says("was freed"));
+    CHECK(!fbe_player_reclaim(player, gone));
+    CHECK(!fbe_player_released(player, gone));
+    CHECK(!fbe_player_release(world, arm));
+    fbe_player_free(player);
+    CHECK(!fbe_player_released(player, arm));
+    fbe_clip_release(clip);
+    fbe_world_free(world);
+}

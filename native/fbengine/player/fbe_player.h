@@ -15,6 +15,11 @@
 // entities it names and those under them. Each property a clip moves starts from where it was when
 // a clip began moving it, so a clip faded out leaves it there; what no clip moves is left as it is.
 //
+// What a player poses is the game's to change until it next poses: a head turned toward a target
+// after the world's update is drawn turned, and the next update poses it from its clip again. An
+// entity released is the game's for good: no clip moves it until it's reclaimed, when a clip moves
+// it again from where the game left it.
+//
 // Players are handles of their own kind; the entities and clips they're given are the scene's and
 // the clip area's.
 
@@ -79,6 +84,14 @@ FBE_API float fbe_player_weight(uint64_t player, int32_t layer);
 // plays. False too for an entity freed.
 FBE_API bool fbe_player_set_mask(uint64_t player, int32_t layer, const uint64_t* entities,
                                  int32_t count);
+
+// Leaves `bone`, an entity, to the game: none of the player's clips moves it, though they go on
+// moving what's under it, until it's reclaimed. Releasing one released, or reclaiming one that
+// isn't, changes nothing. False for a player or an entity freed, or a player whose entity is.
+FBE_API bool fbe_player_release(uint64_t player, uint64_t bone);
+FBE_API bool fbe_player_reclaim(uint64_t player, uint64_t bone);
+// Whether `bone` is released, false for a player or an entity freed.
+FBE_API bool fbe_player_released(uint64_t player, uint64_t bone);
 
 // Moves every player on an entity in `world` on by `seconds`, posing what each moves, as the
 // world's update does, and keeps the events each reached, for fbe_player_evented. A step past many

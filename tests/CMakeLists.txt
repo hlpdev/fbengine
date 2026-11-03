@@ -695,6 +695,7 @@ if(FBENGINE_FB_TESTS)
       "palette-unskinned=Palette on a Mesh skinned by nothing"
       "joint-twice=AddJoint on a Skin: the skin has a joint \"a\" already"
       "joint-out-of-range=JointName\\(0\\) on a Skin with 0 joints"
+      "release-freed=Release on a Pivot that was freed"
       "layer-out-of-range=Layer\\(16\\) on a Player: its layers are 0 to 15"
       "crossfade-negative=Crossfade on a Player: a fade takes 0 seconds or more, not -1"
       "weight-outside=SetWeight on a Player: a layer's weight is from 0 to 1, not 2"
