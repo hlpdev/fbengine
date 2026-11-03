@@ -1175,6 +1175,20 @@ FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t w
                   static_cast<std::uint32_t>(pitch));
 }
 
+FBE_API bool fbe_texture_set_alpha(uint64_t texture, bool alpha) {
+    texture_t* found = fbe::texture::find(texture);
+    if (found == nullptr) {
+        return false;
+    }
+    found->alpha = alpha;
+    return true;
+}
+
+FBE_API bool fbe_texture_alpha(uint64_t texture) {
+    const texture_t* found = fbe::texture::find(texture);
+    return found != nullptr && found->alpha;
+}
+
 FBE_API bool fbe_texture_set_filter(uint64_t texture, int32_t filter) {
     texture_t* found = fbe::texture::find(texture);
     if (found == nullptr) {

@@ -38,6 +38,7 @@ Public Const FBE_LAYER_MULTIPLY: Int32 = 0
 Public Const FBE_LAYER_ADD: Int32 = 1
 Public Const FBE_LAYER_ALPHA: Int32 = 2
 Public Const FBE_LAYER_MULTIPLY_2: Int32 = 3
+Public Const FBE_LAYER_BUMP: Int32 = 4
 Public Const FBE_MATERIAL_LAYERS: Int32 = 8
 Public Const FBE_RESPONSE_NONE: Int32 = 0
 Public Const FBE_RESPONSE_STOP: Int32 = 1
@@ -103,6 +104,13 @@ End Struct
     Public Field uv0: fbe_vec2_t
     Public Field uv1: fbe_vec2_t
     Public Field color: fbe_color_t
+End Struct
+
+Public Const FBE_NO_JOINT: Int32 = 65535
+
+@CLayout Public Struct fbe_vertex_joints_t
+    Public Field joints: UInt16[4]
+    Public Field weights: Float32[4]
 End Struct
 
 @CLayout Public Struct fbe_collision_t
@@ -202,6 +210,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_camera_set_clear_color(camera: UInt64, r: Float32, g: Float32, b: Float32,
                                         a: Float32): Bool
     Function fbe_camera_clear_color(camera: UInt64, color: Ptr<fbe_color_t>): Bool
+    Function fbe_camera_set_target(camera: UInt64, texture: UInt64): Bool
+    Function fbe_camera_target(camera: UInt64): UInt64
     Function fbe_camera_set_order(camera: UInt64, order: Int32): Bool
     Function fbe_camera_order(camera: UInt64): Int32
     Function fbe_world_cameras(world: UInt64, cameras: Ptr<UInt64>, capacity: Int32): Int32
@@ -267,6 +277,10 @@ Public Extern "C" Lib "fbengine_native"
                                       count: Int32): Int32
     Function fbe_surface_add_triangles(geometry: UInt64, surface: Int32, indices: Ptr<UInt32>,
                                        count: Int32): Int32
+    Function fbe_surface_set_joints(geometry: UInt64, surface: Int32,
+                                    joints: Ptr<fbe_vertex_joints_t>, count: Int32): Bool
+    Function fbe_surface_joints(geometry: UInt64, surface: Int32, joints: Ptr<fbe_vertex_joints_t>,
+                                capacity: Int32): Int32
     Function fbe_surface_vertex_count(geometry: UInt64, surface: Int32): Int32
     Function fbe_surface_triangle_count(geometry: UInt64, surface: Int32): Int32
     Function fbe_surface_vertices(geometry: UInt64, surface: Int32, first: Int32,
@@ -298,10 +312,22 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_material_vertex_colors(material: UInt64): Bool
     Function fbe_material_set_two_sided(material: UInt64, two_sided: Bool): Bool
     Function fbe_material_two_sided(material: UInt64): Bool
+    Function fbe_material_set_wireframe(material: UInt64, wireframe: Bool): Bool
+    Function fbe_material_wireframe(material: UInt64): Bool
     Function fbe_material_set_fogged(material: UInt64, fogged: Bool): Bool
     Function fbe_material_fogged(material: UInt64): Bool
     Function fbe_material_set_order(material: UInt64, order: Int32): Bool
     Function fbe_material_order(material: UInt64): Int32
+    Function fbe_material_set_texture(material: UInt64, layer: Int32, texture: UInt64): Bool
+    Function fbe_material_texture(material: UInt64, layer: Int32): UInt64
+    Function fbe_material_set_layer_uv(material: UInt64, layer: Int32, scale_u: Float32,
+                                       scale_v: Float32, angle: Float32, offset_u: Float32,
+                                       offset_v: Float32): Bool
+    Function fbe_material_layer_uv(material: UInt64, layer: Int32, values: Ptr<Float32>): Bool
+    Function fbe_material_set_layer_bump(material: UInt64, layer: Int32, m00: Float32, m01: Float32,
+                                         m10: Float32, m11: Float32, scale: Float32,
+                                         offset: Float32): Bool
+    Function fbe_material_layer_bump(material: UInt64, layer: Int32, values: Ptr<Float32>): Bool
     Function fbe_material_set_layer(material: UInt64, layer: Int32, blend: Int32,
                                     uv_set: Int32): Bool
     Function fbe_material_layer_blend(material: UInt64, layer: Int32): Int32

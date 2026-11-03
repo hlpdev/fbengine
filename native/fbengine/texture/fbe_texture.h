@@ -113,6 +113,10 @@ FBE_API bool fbe_texture_read(uint64_t texture, int32_t level, uint8_t* pixels, 
 
 // Its FBE_TEXTURE_ filter, and wraps in U, across, and V, down; false if one isn't an
 // FBE_TEXTURE_ one.
+// Whether its alpha's for blending, which a material blending FBE_BLEND_AUTO goes by, false at
+// first; false for a freed texture.
+FBE_API bool fbe_texture_set_alpha(uint64_t texture, bool alpha);
+FBE_API bool fbe_texture_alpha(uint64_t texture);
 FBE_API bool fbe_texture_set_filter(uint64_t texture, int32_t filter);
 FBE_API int32_t fbe_texture_filter(uint64_t texture);
 FBE_API bool fbe_texture_set_wrap(uint64_t texture, int32_t wrap_u, int32_t wrap_v);

@@ -110,6 +110,15 @@ Public Final Class Texture
                                     TextureFormat.RGBA8,
                                     mipmaps)
         texture.Write(0, 0, image)
+        // Its alpha's for blending if any pixel's isn't whole.
+        Local i = 3
+        While i < image.Pixels.Count
+            If image.Pixels[i] != 255
+                texture.SetAlpha(True)
+                Break
+            End If
+            i += 4
+        End While
         Return texture
     End Method
 
@@ -141,6 +150,17 @@ Public Final Class Texture
         textures[Slot(handle)] = gone
         handle = 0
     End Method
+
+    /// Sets whether its alpha's for blending, which a Material blending AUTO goes by. FromImage and
+    /// Load set it for an image with any alpha; otherwise it's False at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetAlpha(alpha: Bool)
+        If !fbe_texture_set_alpha(Live("SetAlpha"), alpha) Then Panic(LastError())
+    End Method
+
+    /// Whether its alpha's for blending.
+    @MainThread @PanicsAtCaller
+    Public Method Alpha(): Bool => fbe_texture_alpha(Live("Alpha"))
 
     /// Whether Free let go of it, or the GPU stopped, freeing it.
     @MainThread Public Method Freed(): Bool => handle == 0 || fbe_texture_width(handle) < 0
@@ -420,8 +440,10 @@ Package Function TextureOf(handle: UInt64): Texture?
     Local slot = (handle & 0xFFFFFFFF) As Int
     If slot < textures.Count
         Local kept = textures[slot]
-        If kept != Null && kept.handle == handle Then Return kept
+        // One that went with the GPU isn't there, though the game still holds its wrapper.
+        If kept != Null && kept.handle == handle Then Return kept.Freed() ? Null : kept
     End If
-    If !fbe_texture_retain(handle) Then Panic(LastError())
+    // One that went with the GPU isn't there.
+    If !fbe_texture_retain(handle) Then Return Null
     Return Texture(handle)
 End Function
