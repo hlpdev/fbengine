@@ -82,10 +82,10 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      HEADER test_shaders.hpp
                      SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang
                              gpu/shaders/shape.slang gpu/shaders/points.slang
-                             gpu/shaders/spheres.slang)
+                             gpu/shaders/spheres.slang gpu/shaders/poles.slang)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 300)
 
 # The scene's insides, built in from fbengine_internal: how moves are run, and their scratch.
 add_executable(fbengine_scene_internal_tests scene/moves_tests.cpp)
@@ -104,7 +104,7 @@ add_test(NAME gpu.golden_updates_only_from_passing_tests
                  "-DIMAGE=${CMAKE_CURRENT_SOURCE_DIR}/golden/failed_update.png"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/golden/failed_update.cmake")
 set_tests_properties(gpu.golden_updates_only_from_passing_tests PROPERTIES
-                     LABELS "gpu"
+                     LABELS "gpu" TIMEOUT 180
                      ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
 if(fbengine_test_dll_paths)
   set_property(TEST gpu.golden_updates_only_from_passing_tests PROPERTY ENVIRONMENT_MODIFICATION
@@ -1652,7 +1652,14 @@ catch_discover_tests(fbengine_effects_oom_tests TEST_PREFIX "scene." ADD_TAGS_AS
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
 
 add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
-target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
+target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain
+                      ${CMAKE_DL_LIBS})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(fbengine_anim_oom_tests PRIVATE
+                      "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
+  set_property(TARGET fbengine_anim_oom_tests APPEND PROPERTY LINK_DEPENDS
+               "${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
+endif()
 fbengine_set_warnings(fbengine_anim_oom_tests)
 catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"

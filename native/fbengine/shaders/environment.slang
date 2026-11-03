@@ -65,9 +65,7 @@ float3 sourceIn(float3 direction, float share)
     const float level = clamp(0.5 * log2(max(share / texel, 1e-6)), 0.0, maximum);
     const float rows = max(size.y / exp2(ceil(level)), 1.0);
     // Across it repeats, so it joins itself; down it stops at the poles, which repeating would wrap.
-    // At a pole there's no angle, which atan2 leaves to the GPU: every side of it reads one column.
-    const bool pole = direction.x == 0.0 && direction.z == 0.0;
-    const float across = pole ? 0.5 : (atan2(direction.z, direction.x) / (2.0 * PI)) + 0.5;
+    const float across = equirectangularAcross(direction);
     const float down = clamp(acos(clamp(direction.y, -1.0, 1.0)) / PI, 0.5 / rows, 1.0 - (0.5 / rows));
     return min(sampleTextureLevel(bake.source, bake.sampler, float2(across, down), level).rgb, float3(BRIGHTEST));
 }
