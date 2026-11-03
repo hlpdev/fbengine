@@ -141,6 +141,39 @@ struct Draw
     uint targetVertices;
 };
 
+// Reads through what a draw has the address of, each in a function of its own. Inlined, an optimizer
+// makes one access chain through the draw's address and this one, which SPIRV-Cross, as MoltenVK runs
+// it, writes as Metal that doesn't compile, adding the two indices.
+[noinline]
+Vertex vertexAt(Vertex* vertices, uint index)
+{
+    return vertices[index];
+}
+
+[noinline]
+Joints jointsAt(Joints* joints, uint index)
+{
+    return joints[index];
+}
+
+[noinline]
+float4x4 paletteAt(float4x4* palette, uint index)
+{
+    return palette[index];
+}
+
+[noinline]
+TargetVertex targetVertexAt(TargetVertex* targets, uint index)
+{
+    return targets[index];
+}
+
+[noinline]
+DrawnTarget drawnTargetAt(DrawnTarget* drawnTargets, uint index)
+{
+    return drawnTargets[index];
+}
+
 // A layer: its texture and sampler in the bindless set; how a bump layer scales the next layer's
 // light; what turns its UVs, with, in the first row's w, whether sampling its texture decodes sRGB,
 // and in the second's, whether it can't be sampled, so it leaves what's under it as it is; and what
@@ -402,7 +435,7 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
 {
     Camera* camera = push.camera;
     const Draw draw = camera.draws[instance];
-    const Vertex vertex = draw.vertices[index];
+    const Vertex vertex = vertexAt(draw.vertices, index);
     float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
     // Morphed first, as glTF has it, then skinned.
@@ -411,8 +444,9 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
         float3 morphed = normal;
         for (uint i = 0; i < draw.drawnTargetCount; ++i)
         {
-            const DrawnTarget drawn = draw.drawnTargets[i];
-            const TargetVertex moved = draw.targets[drawn.target * draw.targetVertices + index];
+            const DrawnTarget drawn = drawnTargetAt(draw.drawnTargets, i);
+            const TargetVertex moved =
+                targetVertexAt(draw.targets, drawn.target * draw.targetVertices + index);
             position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) *
                             drawn.weight;
             morphed += float3(moved.normal[0], moved.normal[1], moved.normal[2]) * drawn.weight;
@@ -428,7 +462,7 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
     // Skinned before its own matrix, in its mesh's space, as the palette is.
     if (draw.jointCount != 0)
     {
-        const Joints joints = draw.joints[index];
+        const Joints joints = jointsAt(draw.joints, index);
         float4x4 skin = float4x4(0.0);
         for (uint joint = 0; joint < 4; ++joint)
         {
@@ -442,7 +476,7 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
             else
             {
                 // One past the palette is a mistake in a model, never a read past its end.
-                skin += draw.palette[min(which, draw.jointCount - 1)] * weight;
+                skin += paletteAt(draw.palette, min(which, draw.jointCount - 1)) * weight;
             }
         }
         position = mul(skin, position);
