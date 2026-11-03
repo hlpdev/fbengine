@@ -1,0 +1,243 @@
+// The island: its ground, from noise, the mill and the far rock joined by a low causeway; the sea
+// around it, whose height is the tide's; a mill to walk into, blocked out in boxes for now; and Pip.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./flow"
+Import "./res" As Res
+
+// How many squares the ground has on a side, each a meter.
+Const SIDE: Int = 240
+// How high the causeway's top is, above the sea at slack water.
+Const CAUSEWAY_HEIGHT: Float = 0.5
+// How high the sea rises, by the time the tide's in.
+Const HIGH_WATER: Float = 1.6
+// Where things are, in meters from the ground's middle.
+Const MAIN_X: Float = -45.0
+Const FAR_X: Float = 70.0
+
+// A number from 0 to 1 for a lattice point, the same each time.
+Function Hash(x: Int, y: Int): Float
+    Local mixed: Int64 = (((x As Int64) * 73856093) ^ ((y As Int64) * 19349663)) & 0x7FFFFFFF
+    mixed = ((mixed ^ (mixed >> 13)) * 1274126177) & 0x7FFFFFFF
+    mixed = mixed ^ (mixed >> 16)
+    Return ((mixed & 0xFFFF) As Float) / 65535.0
+End Function
+
+// Value noise, smooth between the whole numbers, from 0 to 1.
+Function Noise(x: Float, y: Float): Float
+    Local left = Floor(x)
+    Local top = Floor(y)
+    Local u = x - left
+    Local v = y - top
+    u = u * u * (3.0 - 2.0 * u)
+    v = v * v * (3.0 - 2.0 * v)
+    Local a = Hash(left As Int, top As Int)
+    Local b = Hash((left As Int) + 1, top As Int)
+    Local c = Hash(left As Int, (top As Int) + 1)
+    Local d = Hash((left As Int) + 1, (top As Int) + 1)
+    Return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+End Function
+
+// Noise of a few octaves, from 0 to 1.
+Function Rough(x: Float, y: Float): Float
+    Return (Noise(x * 0.03, y * 0.03) * 0.57 + Noise(x * 0.09, y * 0.09) * 0.29 +
+            Noise(x * 0.27, y * 0.27) * 0.14)
+End Function
+
+// A rock's shape: 1 at its middle, past 0 inside its `radius`, below it outside, its edge broken.
+Function Mound(x: Float, z: Float, centerX: Float, centerZ: Float, radius: Float): Float
+    Local dx = x - centerX
+    Local dz = z - centerZ
+    Local edge = radius * (0.72 + Rough(x + 300.0, z + 300.0) * 0.56)
+    Return 1.0 - Sqrt(dx * dx + dz * dz) / edge
+End Function
+
+/// How high the ground is at (`x`, `z`), meters from its middle: under the sea, 0 at slack water,
+/// but for the main rock, the far one, and the causeway from one to the other.
+Public Function GroundHeight(x: Float, z: Float): Float
+    Local main = Mound(x, z, MAIN_X, 0.0, 72.0)
+    Local far = Mound(x, z, FAR_X, 8.0, 26.0)
+    Local land = Max(main, far)
+    Local height = land > 0.0 ? 0.6 + land * (5.0 + Rough(x, z) * 9.0) : land * 6.0
+    // The yard's flat, where the mill stands.
+    Local yard = Clamp(1.0 - (Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z) - 22.0) / 14.0, 0.0, 1.0)
+    height = height + (4.0 - height) * yard
+    // The causeway, straight from one to the other, a little above the water at slack.
+    If x > MAIN_X + 30.0 && x < FAR_X - 8.0
+        Local line = z - (x - MAIN_X) / (FAR_X - MAIN_X) * 8.0
+        Local road = Clamp(1.0 - (Abs(line) - 3.0) / 3.0, 0.0, 1.0)
+        height = Max(height, road * CAUSEWAY_HEIGHT + (1.0 - road) * height)
+    End If
+    Return height
+End Function
+
+/// The lowest the ground gets on the way from the main rock to the far one: what the sea has to top
+/// to cut them off.
+Public Function LowestCrossing(): Float
+    Local lowest = 1000.0
+    For step = 0 To 200
+        Local x = MAIN_X + (FAR_X - MAIN_X) * (step As Float) / 200.0
+        lowest = Min(lowest, GroundHeight(x, (x - MAIN_X) / (FAR_X - MAIN_X) * 8.0))
+    End For
+    Return lowest
+End Function
+
+/// How high the sea is `clock` seconds into the slack water: flat, then rising, so it tops the
+/// causeway as the flow says it floods.
+Public Function SeaHeight(clock: Float): Float
+    Local still = FLOOD_AT - 120.0
+    If clock <= still Then Return 0.0
+    If clock <= FLOOD_AT Then Return (clock - still) / 120.0 * CAUSEWAY_HEIGHT
+    Return CAUSEWAY_HEIGHT + (clock - FLOOD_AT) / (TIDE_IN_AT - FLOOD_AT) *
+           (HIGH_WATER - CAUSEWAY_HEIGHT)
+End Function
+
+// A material of `path`'s texture, kept in `held`, tinted `color`, each repeat of it `size` units of
+// UV across.
+@MainThread
+Function Textured(held: Texture[], path: String, color: Color,
+                  size: Float): Material Throws IOError
+    Local texture = Try Assets.Load<Texture>(path)
+    held.Add(texture)
+    Local material = Material(color)
+    material.SetTexture(0, texture)
+    If size != 1.0 Then material.SetLayerUv(0, UvTurn(Vec2(size, size), 0.0, Vec2(0.0, 0.0)))
+    Return material
+End Function
+
+// A box, its middle at (`x`, `y`, `z`) from the mill's floor, half `w`, `h`, and `d` across.
+@MainThread
+Function Box(parent: Entity, material: Material, x: Float, y: Float, z: Float, w: Float, h: Float,
+             d: Float)
+    Local box = Mesh(Geometry.Cube(), parent)
+    box.SetMaterial(material)
+    box.SetPosition(Vec3(x, y, z))
+    box.SetScale(Vec3(w, h, d))
+End Function
+
+// The mill, blocked out: walls with a door in the south one, a floor, a roof, the wheel by its east
+// wall, and the lamp on top.
+@MainThread
+Function BuildMill(held: Texture[]) Throws IOError
+    Local white = Color(1.0, 1.0, 1.0)
+    Local wood = Try Textured(held, Res.WoodAlbedo, white, 1.0)
+    Local iron = Try Textured(held, Res.IronAlbedo, white, 1.0)
+    Local stone = Try Textured(held, Res.RockAlbedo, Color(0.8, 0.8, 0.82), 0.5)
+    Local brass = Try Textured(held, Res.BrassAlbedo, white, 1.0)
+    Local mill = Pivot()
+    mill.SetPosition(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0), 0.0))
+    // Its floor, a little above the yard, so they don't fight.
+    Box(mill, stone, 0.0, 0.0, 0.0, 6.0, 0.1, 5.0)
+    Box(mill, stone, 0.0, 2.5, -5.0, 6.0, 2.5, 0.3)
+    Box(mill, stone, -6.0, 2.5, 0.0, 0.3, 2.5, 5.0)
+    Box(mill, stone, 6.0, 2.5, 0.0, 0.3, 2.5, 5.0)
+    Box(mill, stone, -4.0, 2.5, 5.0, 2.0, 2.5, 0.3)
+    Box(mill, stone, 4.0, 2.5, 5.0, 2.0, 2.5, 0.3)
+    Box(mill, stone, 0.0, 4.2, 5.0, 2.0, 0.8, 0.3)
+    Box(mill, wood, 0.0, 5.3, 0.0, 6.6, 0.3, 5.6)
+    // What the parts go on, inside.
+    Box(mill, iron, 3.5, 1.0, -3.0, 1.2, 1.0, 1.2)
+    Box(mill, brass, 3.5, 2.2, -3.0, 0.5, 0.2, 0.5)
+    // The wheel, on its axle, by the east wall.
+    Local wheel = Mesh(Geometry.Cylinder(16), mill)
+    wheel.SetMaterial(wood)
+    wheel.SetPosition(Vec3(8.0, 2.4, 0.0))
+    wheel.SetRotation(0.0, 0.0, 90.0)
+    wheel.SetScale(Vec3(3.0, 0.5, 3.0))
+    // The lamp on the roof, unlit until the water's back.
+    Local lamp = Mesh(Geometry.Sphere(10), mill)
+    lamp.SetMaterial(brass)
+    lamp.SetPosition(Vec3(0.0, 6.1, 0.0))
+    lamp.SetScale(Vec3(0.5, 0.5, 0.5))
+End Function
+
+/// The island and what's on it, in a World of its own, with its sun.
+Public Final Class Island
+    Field scene: World
+    Field sea: Mesh
+    Field model: Model
+    Field pip: Entity
+    Field held: Texture[]
+
+    New(scene: World, sea: Mesh, model: Model, pip: Entity, held: Texture[])
+        Self.scene = scene
+        Self.sea = sea
+        Self.model = model
+        Self.pip = pip
+        Self.held = held
+    End New
+
+    /// Makes it, from the game's files, which Res has mounted.
+    @MainThread
+    Public Static Method Make(): Island Throws IOError
+        Local scene = World()
+        World.SetCurrent(scene)
+        scene.SetAmbientLight(Color(0.42, 0.46, 0.52))
+        Local held: Texture[] = []
+
+        Local sun = Light(LightType.DIRECTIONAL)
+        sun.SetColor(Color(1.0, 0.92, 0.78))
+        sun.SetIntensity(1.1)
+        sun.SetRotation(-38.0, 150.0, 0.0)
+
+        Local ground = Terrain(SIDE)
+        ground.SetPosition(Vec3(-(SIDE As Float) / 2.0, 0.0, -(SIDE As Float) / 2.0))
+        Local heights: Float[] = []
+        For z = 0 To SIDE
+            For x = 0 To SIDE
+                heights.Add(GroundHeight((x - SIDE / 2) As Float, (z - SIDE / 2) As Float))
+            End For
+        End For
+        ground.SetHeights(heights)
+        ground.SetMaterial(Try Textured(held, Res.RockAlbedo, Color(1.0, 1.0, 1.0), 12.0))
+
+        Local sea = Mesh(Geometry.Plane(1))
+        sea.SetScale(Vec3(3000.0, 1.0, 3000.0))
+        Local water = Material(Color(0.07, 0.24, 0.3))
+        water.SetShininess(0.8)
+        sea.SetMaterial(water)
+
+        Try BuildMill(held)
+
+        Local model = Try Assets.Load<Model>(Res.Pip)
+        Local pip = Try model.Spawn()
+        pip.SetPosition(Vec3(MAIN_X + 2.0, GroundHeight(MAIN_X + 2.0, 13.0), 13.0))
+        // Facing the yard's view, as glTF's front is +Z.
+        pip.SetRotation(0.0, 20.0, 0.0)
+        pip.Player().Play(model.Clips()[0])
+        Return Island(scene, sea, model, pip, held)
+    End Method
+
+    /// The World it's in.
+    @MainThread Public Method Scene(): World => scene
+
+    /// Sets the sea's height for `clock` seconds into the slack water.
+    @MainThread
+    Public Method Update(clock: Float)
+        sea.SetPosition(Vec3(0.0, SeaHeight(clock), 0.0))
+    End Method
+
+    /// Frees it.
+    @MainThread
+    Public Method Free()
+        model.Free()
+        scene.Free()
+        For texture In held
+            texture.Free()
+        End For
+        held = []
+    End Method
+End Class
+
+/// What a camera's placed at, and pointed at, to see the island from above, its yard, Pip, and the
+/// mill's inside: (`name`, where it is, what it looks at).
+Public Function Views(): (String, Vec3, Vec3)[]
+    Local yardY = GroundHeight(MAIN_X, 14.0)
+    Return [("island", Vec3(10.0, 120.0, 150.0), Vec3(10.0, 0.0, 0.0)),
+            ("yard", Vec3(MAIN_X - 22.0, yardY + 5.0, 34.0), Vec3(MAIN_X, yardY + 2.0, 0.0)),
+            ("pip", Vec3(MAIN_X + 2.6, yardY + 0.9, 14.6), Vec3(MAIN_X + 2.0, yardY + 0.45, 13.0)),
+            ("mill_inside", Vec3(MAIN_X - 3.5, yardY + 1.7, 3.5),
+             Vec3(MAIN_X + 3.5, yardY + 1.0, -3.0))]
+End Function

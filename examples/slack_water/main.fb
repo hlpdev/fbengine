@@ -15,6 +15,8 @@ Import std.text
 Import fbengine
 Import fbengine_audio
 Import "./flow"
+Import "./island"
+Import "./res" As Res
 
 // A game's keys, bound to what they do.
 Final Class Controls
@@ -157,6 +159,49 @@ Function Framed(folder: Path) Throws GraphicsError, IOError
     End Function)
     If failure != "" Then Throw IOError(IOErrorKind.OTHER, failure)
     Print("saved {saved} frames, ended {ended}")
+    Try SaveViews(folder)
+End Function
+
+// The island, in `folder`, from each of its views, at slack water and at high tide.
+Function SaveViews(folder: Path) Throws GraphicsError, IOError
+    Window.SetHeadless(True)
+    Try Graphics(1280, 720)
+    Defer EndGraphics()
+    Try Res.Mount()
+    Defer Assets.StopWatching()
+    Local island = Try Island.Make()
+    Defer island.Free()
+    Local camera = Camera()
+    Local sky = Color(0.62, 0.72, 0.8)
+    camera.SetClearColor(sky)
+    camera.SetRange(0.1, 4000.0)
+    // The sea's far edge goes into the haze, with no line.
+    camera.SetFogMode(FogMode.LINEAR)
+    camera.SetFogColor(sky)
+    camera.SetFogRange(200.0, 1400.0)
+    Local saved = 0
+    For view In Views()
+        camera.SetPosition(view.1)
+        camera.PointAt(view.2)
+        island.Scene().Render()
+        Try Screen.Save(folder / "{view.0}.png")
+        saved += 1
+        Flip(False)
+    End For
+    island.Update(TIDE_IN_AT)
+    Local first = Views()[0]
+    camera.SetPosition(first.1)
+    camera.PointAt(first.2)
+    island.Scene().Render()
+    Try Screen.Save(folder / "island_high_tide.png")
+    saved += 1
+    Flip(False)
+    Print("saved {saved} views of the island")
+    // What the flow says of the tide is what's drawn: the causeway, dry, then cut.
+    Local crossing = LowestCrossing()
+    Print("the causeway's dry at slack water {crossing > SeaHeight(0.0)}")
+    Print("and under as it floods {crossing < SeaHeight(FLOOD_AT + 1.0)}")
+    Print("the mill's dry at high tide {GroundHeight(-45.0, 0.0) > SeaHeight(TIDE_IN_AT)}")
 End Function
 
 // Loads every asset the tools make from `folder`, as the game will, and says what they are.
