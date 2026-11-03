@@ -16,5 +16,9 @@ button selects what's under it, with Shift adds to that, or drags a handle: W mo
 scales, X switches between world and local axes, G snaps, or Control does the other way for a drag,
 and F looks at what's selected.
 
-The tree, the inspector, the asset browser, scenes on disk, and playing the game come in the steps
-after this one.
+In the tree, a click selects, with Shift adds to that, and a drag takes what's selected to under what
+it's let go on, or to the top of the scene on nothing. F2, or a double click, renames, Control D
+duplicates, H hides or shows, Delete takes out, and Control F finds by name, each through undo.
+
+The inspector, the asset browser, scenes on disk, and playing the game come in the steps after this
+one.

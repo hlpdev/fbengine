@@ -17,6 +17,7 @@ Import "./menu"
 Import "./project"
 Import "./scene"
 Import "./session"
+Import "./tree"
 Import "./view"
 
 /// fbengine's editor. Start opens its window; then each frame, Step, until Quitting, then Finish.
@@ -38,6 +39,8 @@ Public Final Class Editor
     Public Field Edited: EditedScene
     /// The view of it.
     Public ReadOnly Field View: SceneView
+    /// Its entities.
+    Public ReadOnly Field Tree: SceneTree
     Field project: GameProject? = Null
     Field dialog: Dialog? = Null
     Field welcome: Node
@@ -52,6 +55,7 @@ Public Final Class Editor
         Edits = History()
         Edited = EditedScene()
         View = SceneView(Edited, Edits)
+        Tree = SceneTree(Edited, Edits)
         Docked = Dock()
         Menus = MenuBar(Actions)
         welcome = Widget("welcome", "welcome")
@@ -72,6 +76,10 @@ Public Final Class Editor
         Shown.SetShortcuts(Function[Weak actions](stroke: Keystroke): Bool
             Local own = actions
             Return own != Null && own.Seen(stroke)
+        End Function)
+        Edits.OnChanged(Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Tree.MarkChanged()
         End Function)
         Edits.OnFailed(Function[Weak Self](edit: Edit, error: IOError)
             Self?.Said("Couldn't {edit.Name}", error.Message)
@@ -102,6 +110,7 @@ Public Final Class Editor
     /// One frame: what the window's read, what it does, and its UI drawn.
     Public Method Step()
         Flip()
+        Tree.Update()
         Shown.Update()
         Menus.Update()
         View.Update(Frame.Delta())
@@ -194,6 +203,7 @@ Public Final Class Editor
         Local old = Edited
         Edited = EditedScene()
         View.SetScene(Edited)
+        Tree.SetScene(Edited)
         old.Free()
     End Method
 
@@ -271,8 +281,9 @@ Public Final Class Editor
     Method AddPanes()
         View.SetWidth(Sizing.Fill())
         Docked.AddPane(Pane("scene", "Scene", View))
-        For each In [("tree", "Tree"), ("inspector", "Inspector"), ("assets", "Assets"),
-                     ("output", "Output")]
+        Tree.SetWidth(Sizing.Fill())
+        Docked.AddPane(Pane("tree", "Tree", Tree))
+        For each In [("inspector", "Inspector"), ("assets", "Assets"), ("output", "Output")]
             Local id, title = each
             Local content = Widget("pane", "pane." + id)
             Docked.AddPane(Pane(id, title, content))
@@ -375,6 +386,7 @@ Public Final Class Editor
             Local own = Self
             If own != Null Then own.Edits.Commit(MadeEdit("Add Cube", own.Edited, Function(): Entity
                 Local cube = Mesh(Geometry.Cube())
+                cube.SetName("Cube")
                 cube.SetMaterial(Material(Color(0.5, 0.5, 0.5)))
                 Return cube
             End Function))
@@ -383,9 +395,53 @@ Public Final Class Editor
             Local own = Self
             If own != Null Then own.Edits.Commit(MadeEdit("Add Light", own.Edited,
                                                           Function(): Entity
-                Return Light(LightType.POINT)
+                Local light = Light(LightType.POINT)
+                light.SetName("Light")
+                Return light
             End Function))
         End Function, Null, hasProject)
+        Local anySelected = Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Edited.Selected().Count > 0
+        End Function
+        Actions.Add("tree.rename", "Rename", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            Local selected = own.Edited.Selected()
+            If selected.Count > 0 Then own.Tree.BeginRename(selected[selected.Count - 1])
+        End Function, Shortcut(Key.F2, False, False, False), anySelected)
+        Actions.Add("tree.duplicate", "Duplicate", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(CopyEdit(own.Edited, own.Edited.SelectedTops()))
+        End Function, PrimaryKey(Key.D), anySelected)
+        Actions.Add("tree.hide", "Hide or Show", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            Local selected = own.Edited.Selected()
+            If selected.Count == 0 Then Return
+            own.Edits.Commit(HideEdit(selected, !selected[selected.Count - 1].Hidden()))
+        End Function, Shortcut(Key.H, False, False, False), Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Edited.Selected().Count > 0 && !own.View.Flying()
+        End Function)
+        Actions.Add("tree.delete", "Delete", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(RemoveEdit(own.Edited, own.Edited.SelectedTops()))
+        End Function, Shortcut(Key.DELETE, False, False, False), anySelected)
+        Actions.Add("tree.find", "Find", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            own.Docked.Show("tree")
+            own.Tree.FocusFind()
+        End Function, PrimaryKey(Key.F), hasProject)
+        Tree.OnRowMenu(Function[Weak Self](ui: Ui, point: Vec2)
+            Local own = Self
+            If own != Null
+                OpenMenu(ui, own.Actions,
+                         ["tree.rename", "tree.duplicate", "tree.hide", SEPARATOR, "tree.delete"],
+                         point)
+            End If
+        End Function)
         Docked.OnTabMenu(Function[Weak Self](ui: Ui, id: String, point: Vec2)
             Local own = Self
             If own != Null Then OpenMenu(ui, own.Actions, ["view.close", "view.close_others"],
@@ -395,7 +451,10 @@ Public Final Class Editor
 
     Method AddMenus()
         Menus.AddMenu("File", ["file.open", "file.close", SEPARATOR, "file.quit"])
-        Menus.AddMenu("Edit", ["edit.undo", "edit.redo", SEPARATOR, "select.none"])
+        Menus.AddMenu("Edit",
+                      ["edit.undo", "edit.redo", SEPARATOR, "tree.find", "tree.rename",
+                       "tree.duplicate", "tree.hide", "tree.delete",
+                       SEPARATOR, "select.none"])
         Menus.AddMenu("Add", ["add.cube", "add.light"])
         Menus.AddMenu("Tools",
                       ["tool.move", "tool.turn", "tool.scale", SEPARATOR, "tool.space",
@@ -460,11 +519,33 @@ Function EditorTheme(): Theme
     grabbing.Background = Color.Hex("#4c8dff")
     theme.SetFields("dock.splitter", grabbing, WidgetState.HOVERED)
     theme.SetFields("dock.splitter", grabbing, WidgetState.PRESSED)
+    Local row = StyleFields()
+    row.Padding = Insets.Symmetric(6.0, 2.0)
+    row.FontSize = 14.0
+    For name In ["tree.row", "tree.row.selected", "tree.row.hidden", "tree.row.selected.hidden"]
+        theme.SetFields(name, row)
+    End For
+    Local rowOver = StyleFields()
+    rowOver.Background = Color.Hex("#2b3038")
+    theme.SetFields("tree.row", rowOver, WidgetState.HOVERED)
+    theme.SetFields("tree.row.hidden", rowOver, WidgetState.HOVERED)
+    Local chosen = StyleFields()
+    chosen.Background = Color.Hex("#2f4a7a")
+    theme.SetFields("tree.row.selected", chosen)
+    theme.SetFields("tree.row.selected.hidden", chosen)
+    Local dim = StyleFields()
+    dim.Foreground = Color.Hex("#7d838c")
+    theme.SetFields("tree.row.hidden", dim)
+    theme.SetFields("tree.row.selected.hidden", dim)
+    Local tree = StyleFields()
+    tree.Background = Color.Hex("#14161a")
+    theme.SetFields("tree", tree)
     Local hint = StyleFields()
     hint.Background = Color(0.3, 0.55, 1.0, 0.3)
     hint.Border = Color.Hex("#4c8dff")
     hint.BorderWidth = 2.0
     theme.SetFields("dock.hint", hint)
+    theme.SetFields("tree.hint", hint)
     Local dialog = StyleFields()
     dialog.Background = Color.Hex("#1c1f24")
     dialog.Border = Color.Hex("#4c8dff")

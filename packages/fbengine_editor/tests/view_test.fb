@@ -257,12 +257,13 @@ Function WhatsAddedUndoes() Throws IOError, GraphicsError
     // The editor's own aren't among them.
     Expect(editor.Edited.Entities().Count == 1)
     editor.Edits.Undo()
-    Expect(cube.Hidden() && editor.Edited.Selected().Count == 0)
+    Expect(editor.Edited.IsRemoved(cube) && editor.Edited.Entities().Count == 0)
+    Expect(editor.Edited.Selected().Count == 0)
     editor.Step()
     Try ClickAt(editor, at)
     Expect(editor.Edited.Selected().Count == 0, "what was undone was picked")
     editor.Edits.Redo()
-    Expect(!cube.Hidden() && editor.Edited.IsSelected(cube))
+    Expect(!editor.Edited.IsRemoved(cube) && editor.Edited.IsSelected(cube))
     // And it's the same one, for what's made after it.
     Expect(editor.Edited.Entities().Count == 1)
     editor.Finish()

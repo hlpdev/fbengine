@@ -15,6 +15,7 @@ Import "./menu"
 Import "./project"
 Import "./scene"
 Import "./session"
+Import "./tree"
 Import "./view"
 
 Function Run() Throws IOError, GraphicsError
