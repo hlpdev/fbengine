@@ -1,0 +1,282 @@
+// A game's graphics settings: a LOD bias, as its texture detail is, anti-aliasing by the samples a
+// target or the screen draws, and wireframe, as its console's is. It prints what each did to the pixels
+// it reads; with --watch, a window of them, their keys changing them. A Mac's samplers have no bias.
+
+Import std.collections
+Import std.core
+From std.image Import Image
+Import std.math
+Import std.os
+Import fbengine
+
+// A square from -1 to 1 facing +Z, `away` wound to face -Z; each corner's first UVs across it, its
+// second all `second`, and its color `color`.
+Function Square(color: Color? = Null, second: Vec2? = Null, away: Bool = False): Geometry
+    Local tint = color ?? Color(1, 1, 1)
+    Local other = second ?? Vec2(0, 0)
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local facing = Vec3(0, 0, away ? -1.0 : 1.0)
+    Local a = surface.AddVertex(Vertex(Vec3(-1, 1, 0), facing, Vec2(0, 0), other, tint))
+    Local b = surface.AddVertex(Vertex(Vec3(1, 1, 0), facing, Vec2(1, 0), other, tint))
+    Local c = surface.AddVertex(Vertex(Vec3(1, -1, 0), facing, Vec2(1, 1), other, tint))
+    Local d = surface.AddVertex(Vertex(Vec3(-1, -1, 0), facing, Vec2(0, 1), other, tint))
+    If away
+        surface.AddTriangle(a, b, c)
+        surface.AddTriangle(a, c, d)
+    Else
+        surface.AddTriangle(a, c, b)
+        surface.AddTriangle(a, d, c)
+    End If
+    Return made
+End Function
+
+// Prints `what`, and `wanted` if the pixel's within 2 of it each way, as GPUs round; else the pixel.
+Function Check(what: String, got: Color32, wanted: Color32)
+    Local close = Abs((got.r As Int) - (wanted.r As Int)) <= 2 &&
+                  Abs((got.g As Int) - (wanted.g As Int)) <= 2 &&
+                  Abs((got.b As Int) - (wanted.b As Int)) <= 2
+    Print("{what}: {close ? wanted : got}")
+End Function
+
+// A shade of gray, as bytes.
+Function Gray(value: Int): Color32 => Color32(value As UInt8, value As UInt8, value As UInt8, 255)
+
+// A camera into a target 32 square that sees the square at z = -5 exactly, and clears to black.
+Function Flat(target: Texture): Camera
+    Local camera = Camera()
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(2)
+    camera.SetRange(0.1, 100)
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    Return camera
+End Function
+
+// A material of no lighting, white unless given.
+Function Plain(color: Color? = Null): Material
+    Local made = Material()
+    made.SetShading(Shading.UNLIT)
+    made.SetColor(color ?? Color(1, 1, 1))
+    Return made
+End Function
+
+// A checker of black and white, 64 square, a pixel each, with mipmaps.
+Function Checker(): Texture Throws GraphicsError
+    Local image = Image(64, 64)
+    For y = 0 To 63
+        For x = 0 To 63
+            image[x, y] = (x + y) % 2 == 0 ? Gray(255) : Gray(0)
+        End For
+    End For
+    Return Try Texture.FromImage(image, True)
+End Function
+
+// How far apart the darkest and the lightest of `image`'s reds are.
+Function Spread(image: Image): Int
+    Local low = 255
+    Local high = 0
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            Local red = image[x, y].r As Int
+            low = Min(low, red)
+            high = Max(high, red)
+        End For
+    End For
+    Return high - low
+End Function
+
+// How many of `image`'s pixels aren't all black or all red, as the edge of something red on black
+// that's smoothed is, and how many are red at all.
+Function Between(image: Image): Int
+    Local count = 0
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            Local red = image[x, y].r
+            If red != 0 && red != 255 Then count += 1
+        End For
+    End For
+    Return count
+End Function
+
+Function Reds(image: Image): Int
+    Local count = 0
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y].r > 128 Then count += 1
+        End For
+    End For
+    Return count
+End Function
+
+Function Proved() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(64, 64)
+    Defer EndGraphics()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+
+    // 7 texels a pixel, from 64 in 8 pixels through a UV scale, so each pixel's middle is a texel's: by
+    // itself, a mipmap past the checker, all gray; biased sharper, its first texels, every other one
+    // black and white; biased blurrier, the same gray.
+    Local target = Try Texture.Target(32, 32, TextureFormat.RGBA8, 1, True)
+    Local camera = Flat(target)
+    camera.SetOrthographicHeight(8)
+    Local checked = Plain()
+    checked.SetTexture(0, Try Checker())
+    checked.SetLayerUv(0, UvTurn(Vec2(8.0 / 7.0, 8.0 / 7.0), 0.0, Vec2(0, 0)))
+    Local small = Mesh(Square())
+    small.SetMaterial(checked)
+    small.SetPosition(Vec3(0, 0, -5))
+    camera.Render()
+    Local part = target.ToImage(12, 12, 8, 8)
+    Print("by itself, its pixels are within 8 of each other {Spread(part) <= 8}")
+    Try Gpu.SetLodBias(-3.0)
+    Print("the bias {Gpu.LodBias()}")
+    camera.Render()
+    Print("sharper, they're apart by over 64 {Spread(target.ToImage(12, 12, 8, 8)) > 64}")
+    Try Gpu.SetLodBias(3.0)
+    camera.Render()
+    Print("blurrier, within 8 {Spread(target.ToImage(12, 12, 8, 8)) <= 8}")
+    Try Gpu.SetLodBias(0.0)
+    small.Free()
+
+    // A square turned 30 degrees: at one sample a pixel its edge is all or nothing, at four it's
+    // smoothed; in a target, and on the screen.
+    Local diamond = Mesh(Square())
+    diamond.SetMaterial(Plain(Color(1, 0, 0)))
+    diamond.SetPosition(Vec3(0, 0, -5))
+    diamond.SetRotation(Quat.FromEuler(0.0, 0.0, Deg(30)))
+    diamond.SetScale(Vec3(0.5, 0.5, 1))
+    camera.SetOrthographicHeight(2)
+    camera.Render()
+    Print("1 sample, between {Between(target.ToImage())}")
+    Local smooth = Try Texture.Target(32, 32, TextureFormat.RGBA8, 4, True)
+    camera.SetRenderTarget(smooth)
+    camera.Render()
+    Print("4 samples {smooth.Samples()}, between over 10 {Between(smooth.ToImage()) > 10}")
+    Try Screen.SetSamples(4)
+    Print("the screen's {Screen.Samples()}")
+    Flip()
+    Local player = Flat(target)
+    player.SetRenderTarget(Null)
+    camera.Hide()
+    RenderWorld()
+    Print("on the screen, between over 10 {Between(Try Screen.ToImage()) > 10}")
+    Try Screen.SetSamples(1)
+    camera.Show()
+    player.Free()
+    diamond.Free()
+    camera.SetRenderTarget(target)
+
+    // Wireframe: its lines, fewer than it fills, and inside its triangles, what's behind.
+    Local solid = Plain(Color(1, 0, 0))
+    Local lined = Mesh(Square())
+    lined.SetMaterial(solid)
+    lined.SetPosition(Vec3(0, 0, -5))
+    lined.SetScale(Vec3(0.75, 0.75, 1))
+    camera.Render()
+    Local filled = Reds(target.ToImage())
+    Print("filled {filled}")
+    solid.SetWireframe(True)
+    camera.Render()
+    Local image = target.ToImage()
+    Local drawn = Reds(image)
+    Print("wireframe's lines, some {drawn > 0}, under half {drawn < filled / 2}")
+    Check("inside a triangle", image[12, 20], Gray(0))
+    Print("validation errors {Gpu.ValidationErrors()}")
+End Function
+
+// A window of a checkered floor and a turning cube: 1, 2, 3 its LOD bias, M its samples, W wireframe;
+// or `frames` frames offscreen, which press each.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("render settings: 1 2 3 bias, M samples, W wireframe, Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local camera = Camera()
+    camera.SetPosition(Vec3(0, 2, 0))
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    Local floor = Plain()
+    floor.SetTexture(0, Try Checker())
+    floor.SetLayerUv(0, UvTurn(Vec2(0.25, 0.25), 0.0, Vec2(0, 0)))
+    Local ground = Mesh(Geometry.Plane(4))
+    ground.SetMaterial(floor)
+    ground.SetScale(Vec3(20, 1, 20))
+    ground.SetPosition(Vec3(0, 0, -10))
+    Local shown = Plain(Color(0.8, 0.3, 0.1))
+    Local cube = Mesh(Geometry.Cube())
+    cube.SetMaterial(shown)
+    cube.SetPosition(Vec3(0, 1.5, -5))
+    Local font = Font.BuiltIn(18.0)
+    Local script = [Key.DIGIT_1, Key.DIGIT_3, Key.DIGIT_2, Key.M, Key.W, Key.M]
+    Local drew = False
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        If KeyHit(Key.DIGIT_1) Then Try Gpu.SetLodBias(-2.0)
+        If KeyHit(Key.DIGIT_2) Then Try Gpu.SetLodBias(0.0)
+        If KeyHit(Key.DIGIT_3) Then Try Gpu.SetLodBias(2.0)
+        If KeyHit(Key.M) Then Try Screen.SetSamples(Screen.Samples() == 1 ? 4 : 1)
+        If KeyHit(Key.W) Then shown.SetWireframe(!shown.Wireframe())
+        If frames > 0 && count <= script.Count Then Try Simulate.PressKey(script[count - 1])
+        time += frames > 0 ? 0.1 : Frame.Delta() As Float
+        cube.SetRotation(Quat.FromEuler(time * 0.5, time, 0.0))
+        RenderWorld()
+        // The first frame's scene, with nothing yet over it to find instead.
+        If frames > 0 && count == 1 Then drew = Try Drew()
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(230, 232, 235, 255))
+        canvas.DrawText(
+            font, "bias {Gpu.LodBias()}, {Screen.Samples()} samples, wireframe {shown.Wireframe()}",
+            16, 16)
+    End While
+    If frames > 0 Then Print("by its keys: bias {Gpu.LodBias()}, samples {Screen.Samples()}, wireframe {shown.Wireframe()}")
+    Print("drew {drew}")
+    Print("watched {count} frames")
+End Function
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
+
+Local arguments = Process.Arguments()
+If Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+ElseIf arguments.Contains("--watch")
+    Try Watched(Asked(arguments), arguments)
+Else
+    Try Proved()
+End If

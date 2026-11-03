@@ -91,15 +91,29 @@ Public Final Class Texture Implements Asset
 
     /// A texture of the pixels an image file decodes to, PNG, JPEG, BMP, TGA, GIF, QOI, or WebP,
     /// RGBA8, or HDR, as FromHdr makes it, with mipmaps unless `mipmaps` is False. It throws when
-    /// the file can't be read or decoded, or as New does.
+    /// the file can't be read or decoded, or as New does. Path gives the file it was loaded from.
     @MainThread
     Public Static Method Load(path: Path, mipmaps: Bool = True): Texture Throws GraphicsError,
                                                                                 IOError
+        Local made: Texture
         If path.Extension().ToLower() == ".hdr"
-            Return Try FromHdr(Try Hdr.Decode(Try File.ReadBytes(path)), mipmaps)
+            made = Try FromHdr(Try Hdr.Decode(Try File.ReadBytes(path)), mipmaps)
+        Else
+            made = Try FromImage(Try Image.Load(path), mipmaps)
         End If
-        Local image = Try Image.Load(path)
-        Return Try FromImage(image, mipmaps)
+        If !fbe_texture_set_path(made.Live("Load"), "{path}") Then Panic(LastError())
+        Return made
+    End Method
+
+    /// The file it was loaded from, as Load was given it, or Null for one that wasn't, as a game
+    /// finds what a surface is made of by its texture's name.
+    @MainThread @PanicsAtCaller
+    Public Method Path(): String?
+        Local found = ""
+        Unsafe
+            found = fbe_texture_path(Live("Path")).ToString()
+        End Unsafe
+        Return found != "" ? found : Null
     End Method
 
     /// A texture of `image`'s light, RGBA16F, with mipmaps unless `mipmaps` is False, for an

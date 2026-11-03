@@ -3,3 +3,4 @@ name = "binary_saves_and_maps"
 version = "0.1.0"
 
 [dependencies]
+fbengine = { path = "../../../packages/fbengine" }

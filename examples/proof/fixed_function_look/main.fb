@@ -1,0 +1,354 @@
+// The fixed-function look: a material's layers, each by its blend and UV set, on what's stored, each
+// stage clamped, as a room's (2 x ambient x vertex + lightmap) x diffuse is; lighting worked out at the
+// vertices, by range over distance, with the ambient light and eight lights at most; linear fog;
+// vertex colors, full bright, no fog, two sided, and forced alpha; a texture's alpha settling a blend;
+// orders; what blends sorted far to near; and sprites by each of their view modes. It prints each
+// pixel it reads, against what the sums come to; with --watch, a window of them turning.
+
+Import std.collections
+Import std.core
+From std.image Import Image
+Import std.math
+Import std.os
+Import fbengine
+
+// A square from -1 to 1 facing +Z, `away` wound to face -Z; each corner's first UVs across it, its
+// second all `second`, and its color `color`.
+Function Square(color: Color? = Null, second: Vec2? = Null, away: Bool = False): Geometry
+    Local tint = color ?? Color(1, 1, 1)
+    Local other = second ?? Vec2(0, 0)
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local facing = Vec3(0, 0, away ? -1.0 : 1.0)
+    Local a = surface.AddVertex(Vertex(Vec3(-1, 1, 0), facing, Vec2(0, 0), other, tint))
+    Local b = surface.AddVertex(Vertex(Vec3(1, 1, 0), facing, Vec2(1, 0), other, tint))
+    Local c = surface.AddVertex(Vertex(Vec3(1, -1, 0), facing, Vec2(1, 1), other, tint))
+    Local d = surface.AddVertex(Vertex(Vec3(-1, -1, 0), facing, Vec2(0, 1), other, tint))
+    If away
+        surface.AddTriangle(a, b, c)
+        surface.AddTriangle(a, c, d)
+    Else
+        surface.AddTriangle(a, c, b)
+        surface.AddTriangle(a, d, c)
+    End If
+    Return made
+End Function
+
+// A texture of a row of `pixels`, each exactly itself however it's scaled.
+Function Row(pixels: Color32[]): Texture Throws GraphicsError
+    Local image = Image(pixels.Count, 1)
+    For x = 0 To pixels.Count - 1
+        image[x, 0] = pixels[x]
+    End For
+    Local made = Try Texture.FromImage(image, False)
+    made.SetFilter(TextureFilter.NEAREST)
+    Return made
+End Function
+
+// Prints `what`, and `wanted` if the pixel's within 2 of it each way, as GPUs round; else the pixel.
+Function Check(what: String, got: Color32, wanted: Color32)
+    Local close = Abs((got.r As Int) - (wanted.r As Int)) <= 2 &&
+                  Abs((got.g As Int) - (wanted.g As Int)) <= 2 &&
+                  Abs((got.b As Int) - (wanted.b As Int)) <= 2
+    Print("{what}: {close ? wanted : got}")
+End Function
+
+// A shade of gray, as bytes.
+Function Gray(value: Int): Color32 => Color32(value As UInt8, value As UInt8, value As UInt8, 255)
+
+// A camera into a target 32 square that sees the square at z = -5 exactly, and clears to black.
+Function Flat(target: Texture): Camera
+    Local camera = Camera()
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(2)
+    camera.SetRange(0.1, 100)
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    Return camera
+End Function
+
+// A material of no lighting, white unless given.
+Function Plain(color: Color? = Null): Material
+    Local made = Material()
+    made.SetShading(Shading.UNLIT)
+    made.SetColor(color ?? Color(1, 1, 1))
+    Return made
+End Function
+
+// Draws a square in `material` at z = -5, and gives what it comes to.
+Function Drawn(camera: Camera, material: Material, geometry: Geometry? = Null): Image
+    Local mesh = Mesh(geometry ?? Square())
+    mesh.SetMaterial(material)
+    mesh.SetPosition(Vec3(0, 0, -5))
+    camera.Render()
+    Local read = camera.RenderTarget()?.ToImage() ?? Image(1, 1)
+    mesh.Free()
+    Return read
+End Function
+
+Function Proved() Throws GraphicsError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    world.SetAmbientLight(Color(0, 0, 0))
+    Local target = Try Texture.Target(32, 32, TextureFormat.RGBA8, 1, True)
+    Local camera = Flat(target)
+
+    // A room: 2 x 50 = 100, a lightmap of 60, 40, 30 added by its own UVs, then the diffuse, 200 on
+    // the left and 120 on the right: 160 x 200 / 255 = 125, 140 x 200 / 255 = 110, and so on.
+    Local room = Plain()
+    room.SetTexture(0, Try Row([Gray(50)]))
+    room.SetLayer(0, LayerBlend.MULTIPLY_2)
+    room.SetTexture(1, Try Row([Color32(60, 40, 30, 255), Gray(200)]))
+    room.SetLayer(1, LayerBlend.ADD, 1)
+    room.SetTexture(2, Try Row([Gray(200), Gray(120)]))
+    room.SetLayer(2, LayerBlend.MULTIPLY)
+    Local lit = Drawn(camera, room, Square(second: Vec2(0.25, 0.5)))
+    Check("a room's lightmap and diffuse, left", lit[8, 16], Color32(125, 110, 102, 255))
+    Check("and right, its lightmap's UVs its own", lit[24, 16], Color32(75, 66, 61, 255))
+    // Each stage's clamped: 2 x 200 is 255, however much is added, before the diffuse.
+    room.SetTexture(0, Try Row([Gray(200)]))
+    Check("a stage's clamped", Drawn(camera, room, Square(second: Vec2(0.25, 0.5)))[24, 16],
+          Gray(120))
+
+    // A layer over them by its alpha.
+    Local over = Plain(Color(1, 0, 0))
+    over.SetTexture(0, Try Row([Color32(0, 0, 255, 128)]))
+    over.SetLayer(0, LayerBlend.ALPHA)
+    Check("a layer by its alpha", Drawn(camera, over)[16, 16], Color32(127, 0, 128, 255))
+
+    // Full bright, and unlit without it, with no light and no ambient.
+    Check("full bright", Drawn(camera, Plain())[16, 16], Gray(255))
+    Local dark = Material()
+    dark.SetShading(Shading.VERTEX)
+    Check("lit, with no light", Drawn(camera, dark)[16, 16], Gray(0))
+
+    // Vertex colors, if it takes them.
+    Local painted = Square(Color(1, 0, 0))
+    Local colors = Plain()
+    Check("vertex colors left out", Drawn(camera, colors, painted)[16, 16], Gray(255))
+    colors.SetVertexColors(True)
+    Check("vertex colors", Drawn(camera, colors, painted)[16, 16], Color32(255, 0, 0, 255))
+
+    // Two sided: its back's not drawn unless it is.
+    Local sides = Plain()
+    Check("its back", Drawn(camera, sides, Square(away: True))[16, 16], Gray(0))
+    sides.SetTwoSided(True)
+    Check("its back, two sided", Drawn(camera, sides, Square(away: True))[16, 16], Gray(255))
+
+    // Linear fog, on what's stored: half way, half of 255; and out of it.
+    camera.SetFogMode(FogMode.LINEAR)
+    camera.SetFogColor(Color(0, 0, 0))
+    camera.SetFogRange(0, 10)
+    Local fogged = Plain()
+    Check("half way into fog", Drawn(camera, fogged)[16, 16], Gray(128))
+    fogged.SetFogged(False)
+    Check("out of the fog", Drawn(camera, fogged)[16, 16], Gray(255))
+    camera.SetFogMode(FogMode.NONE)
+
+    // A point light 4 in front of its middle, per vertex: every corner's sqrt(18) from it, so range 2
+    // falls 2 / sqrt(18) and faces 4 / sqrt(18), 4 / 9 of 255 all over; per pixel its middle'd be
+    // half. Within range, it doesn't fall: 4 / sqrt(18) of 255.
+    Local lamp = Light()
+    lamp.SetPosition(Vec3(0, 0, -1))
+    lamp.SetRange(2)
+    Local shaded = Material()
+    shaded.SetShading(Shading.VERTEX)
+    Local gouraud = Drawn(camera, shaded)
+    Check("per vertex, range over distance, its middle", gouraud[16, 16], Gray(113))
+    Check("and its corner", gouraud[1, 1], Gray(113))
+    lamp.SetRange(10)
+    Check("within its range", Drawn(camera, shaded)[16, 16], Gray(240))
+    lamp.Free()
+
+    // The ambient light, 0.214 in linear light being half of what's stored.
+    world.SetAmbientLight(Color(0.214, 0.214, 0.214))
+    Check("the ambient light", Drawn(camera, shaded)[16, 16], Gray(128))
+    world.SetAmbientLight(Color(0, 0, 0))
+
+    // Eight lights at most: each adds 0.01 in linear light, 0.09985 stored, by 4 / sqrt(18); 8 of
+    // them come to 192, where nine would 216.
+    Local lights: Light[] = []
+    For i = 1 To 9
+        Local each = Light()
+        each.SetPosition(Vec3(0, 0, -1))
+        each.SetRange(100)
+        each.SetColor(Color(0.01, 0.01, 0.01))
+        lights.Add(each)
+    End For
+    Check("nine lights, eight lighting", Drawn(camera, shaded)[16, 16], Gray(192))
+    For each In lights
+        each.Free()
+    End For
+
+    // Half alpha, forced, over black: the frame blends in linear light, so 188, not 128.
+    Local forced = Plain()
+    forced.SetBlend(Blend.ALPHA)
+    forced.SetAlpha(0.5)
+    Check("forced alpha", Drawn(camera, forced)[16, 16], Gray(188))
+
+    // AUTO, by the texture's alpha flag, which an image with any alpha sets: without it opaque, with
+    // it blended.
+    Local half = Try Row([Color32(255, 255, 255, 128)])
+    half.SetAlpha(False)
+    Local auto = Plain()
+    auto.SetTexture(0, half)
+    Local plate = Mesh(Square())
+    plate.SetMaterial(auto)
+    Print("AUTO without a texture's alpha {plate.DrawnBlend(0)}")
+    plate.Hide()
+    Check("so opaque", Drawn(camera, auto)[16, 16], Gray(255))
+    plate.Show()
+    half.SetAlpha(True)
+    Print("and with it {plate.DrawnBlend(0)}")
+    plate.Free()
+    Check("blended by the texture's alpha", Drawn(camera, auto)[16, 16], Gray(188))
+
+    // Orders: green behind the red by depth, but in a later order, draws over it, whatever its depth.
+    Local red = Mesh(Square())
+    red.SetMaterial(Plain(Color(1, 0, 0)))
+    red.SetPosition(Vec3(0, 0, -5))
+    Local green = Plain(Color(0, 1, 0))
+    Local behind = Mesh(Square())
+    behind.SetMaterial(green)
+    behind.SetPosition(Vec3(0, 0, -8))
+    camera.Render()
+    Check("behind by depth", target.ToImage()[16, 16], Color32(255, 0, 0, 255))
+    green.SetOrder(1)
+    camera.Render()
+    Check("later by its order", target.ToImage()[16, 16], Color32(0, 255, 0, 255))
+    red.Free()
+    behind.Free()
+
+    // What blends is drawn far to near, whichever was made first: half green over half red over black.
+    Local near = Mesh(Square())
+    Local nearMaterial = Plain(Color(0, 1, 0))
+    nearMaterial.SetBlend(Blend.ALPHA)
+    nearMaterial.SetAlpha(0.5)
+    near.SetMaterial(nearMaterial)
+    near.SetPosition(Vec3(0, 0, -5))
+    Local far = Mesh(Square())
+    Local farMaterial = Plain(Color(1, 0, 0))
+    farMaterial.SetBlend(Blend.ALPHA)
+    farMaterial.SetAlpha(0.5)
+    far.SetMaterial(farMaterial)
+    far.SetPosition(Vec3(0, 0, -8))
+    camera.Render()
+    Check("sorted far to near", target.ToImage()[16, 16], Color32(137, 188, 0, 255))
+    near.Free()
+    far.Free()
+
+    // A sprite by its view mode, the camera seeing it from a quarter turn round, a little off its
+    // face: parallel to the view it's whole; as it's turned, seen edge on, it's narrow; upright
+    // toward the camera, whole again, and what's turned about another axis stays upright.
+    Local sprite = Sprite(Plain(Color(0, 0, 1)))
+    sprite.SetPosition(Vec3(0, 0, -5))
+    sprite.SetRotation(Quat.FromEuler(0.0, Deg(80), 0.0))
+    For mode In [SpriteViewMode.BILLBOARD, SpriteViewMode.FIXED, SpriteViewMode.UPRIGHT]
+        sprite.SetViewMode(mode)
+        camera.Render()
+        Print("a sprite {mode}, {Across(target.ToImage())} across")
+    End For
+    sprite.Free()
+End Function
+
+// How many pixels of the middle row aren't black.
+Function Across(image: Image): Int
+    Local count = 0
+    For x = 0 To image.Width - 1
+        If image[x, 16] != Gray(0) Then count += 1
+    End For
+    Return count
+End Function
+
+// A window of a lit room and its layers, turning; or `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("the fixed-function look: Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    world.SetAmbientLight(Color(0.05, 0.05, 0.08))
+    Local camera = Camera()
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    camera.SetFogMode(FogMode.LINEAR)
+    camera.SetFogColor(Color(0.02, 0.02, 0.03))
+    camera.SetFogRange(4, 16)
+    Local room = Plain()
+    room.SetTexture(0, Try Row([Gray(50)]))
+    room.SetLayer(0, LayerBlend.MULTIPLY_2)
+    room.SetTexture(1, Try Row([Color32(60, 40, 30, 255), Gray(200)]))
+    room.SetLayer(1, LayerBlend.ADD, 1)
+    room.SetTexture(2, Try Row([Gray(200), Gray(120), Gray(200), Gray(120)]))
+    room.SetLayer(2, LayerBlend.MULTIPLY)
+    Local vertex = Material()
+    vertex.SetShading(Shading.VERTEX)
+    vertex.SetColor(Color(0.8, 0.6, 0.4))
+    Local walls = Mesh(Square(second: Vec2(0.25, 0.5)))
+    walls.SetMaterial(room)
+    walls.SetPosition(Vec3(-2.5, 0, -7))
+    Local crate = Mesh(Geometry.Cube())
+    crate.SetMaterial(vertex)
+    crate.SetPosition(Vec3(2, 0, -6))
+    Local lamp = Light()
+    lamp.SetRange(2)
+    Local glass = Plain(Color(0.2, 0.6, 0.9))
+    glass.SetBlend(Blend.ALPHA)
+    glass.SetAlpha(0.5)
+    Local pane = Mesh(Square())
+    pane.SetMaterial(glass)
+    pane.SetPosition(Vec3(0, 0, -5))
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        time += frames > 0 ? 0.1 : Frame.Delta() As Float
+        crate.SetRotation(Quat.FromEuler(time * 0.5, time, 0.0))
+        lamp.SetPosition(Vec3(2 + Sin(time) * 3.0, 1, -4 + Cos(time) * 2.0))
+        RenderWorld()
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
+
+Local arguments = Process.Arguments()
+If Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+ElseIf arguments.Contains("--watch")
+    Try Watched(Asked(arguments), arguments)
+Else
+    Try Proved()
+End If

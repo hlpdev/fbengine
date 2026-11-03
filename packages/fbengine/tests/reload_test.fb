@@ -405,23 +405,25 @@ Function AModelReloadsWhenItsBufferDoes() Throws IOError
     Try WriteTriangle(folder.Path, "tri", 1)
     Assets.MountFolder("res://test-buffer", folder.Path)
     Defer Assets.Unmount("res://test-buffer")
-    Try Assets.WatchFolders()
-    Defer Assets.StopWatching()
+    // Asked for first, with nothing watching, so nothing but this reloads it: FSEvents on a Mac can
+    // tell of the writes above at any time after a watcher starts, the probe's or not.
     Local model = Try Assets.Load<HotModel>("res://test-buffer/tri.gltf")
-    Try WatcherStarted(folder.Path, "res://test-buffer")
     reloaded = []
     Try Assets.Reload("res://test-buffer/tri.bin")
     FlipUntil(Function(): Bool => model.Reloads > 0)
-    Expect(model.Reloads > 0)
-    // Its write, told of late on a Mac, can be another reload of it, so they're counted by whose.
-    Expect(ReloadsOf("res://test-buffer/tri.gltf") > 0)
-    Expect(ReloadsOf("res://test-buffer/tri.gltf") == reloaded.Count)
+    Expect(model.Reloads == 1)
+    Expect(reloaded.Count == 1)
+    If reloaded.Count == 1 Then Expect(reloaded[0].Path == "res://test-buffer/tri.gltf")
     // And so it does when it's watched, and the buffer changes alone.
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Try WatcherStarted(folder.Path, "res://test-buffer")
+    Local reloads = model.Reloads
     Local before = Try File.ReadText(folder.Path / "tri.gltf")
     Try WriteTriangle(folder.Path, "tri", 2)
     Expect((Try File.ReadText(folder.Path / "tri.gltf")) == before)
-    FlipUntil(Function(): Bool => model.Reloads > 1)
-    Expect(model.Reloads > 1)
+    FlipUntil(Function(): Bool => model.Reloads > reloads)
+    Expect(model.Reloads > reloads)
 End Function
 
 // How many reloads of `path` there've been, whatever a test before it left to finish.
