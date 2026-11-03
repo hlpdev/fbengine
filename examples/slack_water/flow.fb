@@ -8,7 +8,7 @@ Import std.math
 
 /// The places along the island, each leading to the next: the mill's inside, its yard, the
 /// causeway, and the far rock.
-Public Enum Place
+Public Enum Area
     INSIDE = 0
     YARD = 1
     CAUSEWAY = 2
@@ -40,13 +40,13 @@ Public Const TIDE_IN_AT: Float = 600.0
 Const PIP_LAG: Float = 5.0
 
 // The name of a place, as a line says it.
-Public Function PlaceName(place: Place): String
+Public Function PlaceName(place: Area): String
     Select place
-        Case Place.INSIDE
+        Case Area.INSIDE
             Return "the mill"
-        Case Place.YARD
+        Case Area.YARD
             Return "the yard"
-        Case Place.CAUSEWAY
+        Case Area.CAUSEWAY
             Return "the causeway"
         Default
             Return "the far rock"
@@ -66,11 +66,11 @@ Public Function PartName(part: Part): String
 End Function
 
 // How many seconds it is from `place` to the next, away from the mill.
-Function LegSeconds(place: Place): Float
+Function LegSeconds(place: Area): Float
     Select place
-        Case Place.INSIDE
+        Case Area.INSIDE
             Return 20.0
-        Case Place.YARD
+        Case Area.YARD
             Return 40.0
         Default
             Return 60.0
@@ -81,16 +81,16 @@ End Function
 Public Final Class Flow
     Field say: Func(String)
     Field clock: Float = 0.0
-    Field at: Place = Place.INSIDE
+    Field at: Area = Area.INSIDE
     // Where you're walking to, and how long is left of it, or Null.
-    Field walkingTo: Place? = Null
+    Field walkingTo: Area? = Null
     Field walkLeft: Float = 0.0
     Field held: Part? = Null
-    Field pipAt: Place = Place.INSIDE
+    Field pipAt: Area = Area.INSIDE
     Field pipLeft: Float = 0.0
     Field pipHolds: Part? = Null
     // Where each part lies, by its number, or Null once something has it, or the sea does.
-    Field lying: Place?[]
+    Field lying: Area?[]
     Field fitted: Bool[]
     Field flooded: Bool = False
     Field sluiceOpen: Bool = False
@@ -98,7 +98,7 @@ Public Final Class Flow
 
     Public New(say: Func(String))
         Self.say = say
-        lying = [Place.YARD, Place.CAUSEWAY, Place.FAR_ROCK]
+        lying = [Area.YARD, Area.CAUSEWAY, Area.FAR_ROCK]
         fitted = [False, False, False]
     End New
 
@@ -106,7 +106,7 @@ Public Final Class Flow
     Public Method Clock(): Float => clock
 
     /// Where you are, or were last, while you're walking.
-    Public Method At(): Place => at
+    Public Method At(): Area => at
 
     /// Whether you're walking between places.
     Public Method Walking(): Bool => walkingTo != Null
@@ -128,6 +128,19 @@ Public Final Class Flow
 
     /// Whether the part's on the mill.
     Public Method Fitted(part: Part): Bool => fitted[part As Int]
+
+    /// Where a part lies, or Null once something has it, or the sea does.
+    Public Method Lying(part: Part): Area? => lying[part As Int]
+
+    /// Says you've come to `place` on your own feet, as the game in 3D does, and Pip sets off.
+    Public Method Arrive(place: Area)
+        If walkingTo != Null || place == at || ending != Ending.NONE Then Return
+        at = place
+        pipLeft = PIP_LAG
+        Say("you reach {PlaceName(at)}")
+        Local lies = LyingHere()
+        If lies != Null Then Say("{PartName(lies)} lies here")
+    End Method
 
     /// Whether the sluice is open.
     Public Method SluiceOpen(): Bool => sluiceOpen
@@ -151,7 +164,7 @@ Public Final Class Flow
         If pipAt != at || pipLeft > 0.0
             pipLeft -= seconds
             If pipLeft <= 0.0 && walkingTo == Null && pipAt != at
-                If flooded && (at As Int) >= (Place.CAUSEWAY As Int)
+                If flooded && (at As Int) >= (Area.CAUSEWAY As Int)
                     pipLeft = 0.0
                 Else
                     pipAt = at
@@ -165,9 +178,9 @@ Public Final Class Flow
 
     /// Walks toward the far rock, if there's a way and you're not walking.
     Public Method GoOut()
-        If walkingTo != Null || at == Place.FAR_ROCK Then Return
-        Local next = ((at As Int) + 1) As Place
-        If flooded && (next As Int) >= (Place.CAUSEWAY As Int)
+        If walkingTo != Null || at == Area.FAR_ROCK Then Return
+        Local next = ((at As Int) + 1) As Area
+        If flooded && (next As Int) >= (Area.CAUSEWAY As Int)
             Say("the causeway's under water")
             Return
         End If
@@ -178,9 +191,9 @@ Public Final Class Flow
 
     /// Walks back toward the mill, if there's a way and you're not walking.
     Public Method GoBack()
-        If walkingTo != Null || at == Place.INSIDE Then Return
-        Local next = ((at As Int) - 1) As Place
-        If flooded && at == Place.FAR_ROCK
+        If walkingTo != Null || at == Area.INSIDE Then Return
+        Local next = ((at As Int) - 1) As Area
+        If flooded && at == Area.FAR_ROCK
             Say("the causeway's under water")
             Return
         End If
@@ -192,7 +205,7 @@ Public Final Class Flow
     /// Takes what lies here, or fits what you're holding, or opens the sluice, as what's here lets.
     Public Method Use()
         If walkingTo != Null Then Return
-        If at == Place.INSIDE
+        If at == Area.INSIDE
             Local holding = held
             If holding != Null
                 fitted[holding As Int] = True
@@ -254,15 +267,15 @@ Public Final Class Flow
         Say("the causeway floods")
         For part = 0 Until lying.Count
             Local place = lying[part]
-            If place != Null && (place As Int) >= (Place.CAUSEWAY As Int) && at != place
+            If place != Null && (place As Int) >= (Area.CAUSEWAY As Int) && at != place
                 lying[part] = Null
             End If
         End For
         Local going = walkingTo
-        Local crossing = going != Null && ((going As Int) >= (Place.CAUSEWAY As Int) ||
-                                           (at As Int) >= (Place.CAUSEWAY As Int))
-        If crossing || at == Place.CAUSEWAY
-            at = Place.YARD
+        Local crossing = going != Null && ((going As Int) >= (Area.CAUSEWAY As Int) ||
+                                           (at As Int) >= (Area.CAUSEWAY As Int))
+        If crossing || at == Area.CAUSEWAY
+            at = Area.YARD
             walkingTo = Null
             Say("the water carries you back to the yard")
         End If
@@ -283,8 +296,8 @@ Public Final Class Flow
         End If
     End Method
 
-    // Says a line, with the time on the clock.
-    Method Say(line: String)
+    /// Says a line, with the time on the clock.
+    Public Method Say(line: String)
         Local whole = clock As Int
         Local seconds = whole % 60
         Local zero = seconds < 10 ? "0" : ""

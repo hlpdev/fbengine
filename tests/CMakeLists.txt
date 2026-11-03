@@ -398,13 +398,29 @@ if(FBENGINE_FB_TESTS)
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          PASS_REGULAR_EXPRESSION "${printed}\r?\n$" TIMEOUT 300)
   endforeach()
+  # And the same on the island, walked in 3D.
+  foreach(walk IN ITEMS "bright=the wheel turns, and the lamp burns bright\r?\nended BRIGHT"
+                        "dim=the wheel turns slowly, and the lamp burns, dimmer\r?\nended DIM"
+                        "dark=the wheel stands still, and the lamp stays dark\r?\nended DARK")
+    string(FIND "${walk}" "=" split)
+    string(SUBSTRING "${walk}" 0 ${split} name)
+    math(EXPR split "${split} + 1")
+    string(SUBSTRING "${walk}" ${split} -1 printed)
+    add_test(NAME examples.slack_water.walk3d_${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                     -- --walk3d ${name})
+    set_tests_properties(examples.slack_water.walk3d_${name} PROPERTIES RESOURCE_LOCK slack_water
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "${printed}\r?\n$"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  endforeach()
   # And to its best ending, saving what it looks like for a person to see, in its frames' folder.
   add_test(NAME examples.slack_water.frames
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                    -- --frames "${PROJECT_BINARY_DIR}/example-frames/slack_water")
   set_tests_properties(examples.slack_water.frames PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                       PASS_REGULAR_EXPRESSION "saved 3 frames, ended BRIGHT\r?\nsaved 5 views of the island\r?\nthe causeway's dry at slack water True\r?\nand under as it floods True\r?\nthe mill's dry at high tide True\r?\n$"
+                       PASS_REGULAR_EXPRESSION "saved 3 frames, ended BRIGHT\r?\nsaved 5 views of the island\r?\nthe causeway's dry at slack water True\r?\nand under as it floods True\r?\nthe mill's dry at high tide True\r?\n[^$]*saved 4 frames of a 3D walk, ended BRIGHT\r?\n$"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   # Its assets: what its tools make, here, and what's kept in the repository, each loaded as the game
   # loads them.

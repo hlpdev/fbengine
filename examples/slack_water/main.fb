@@ -1,10 +1,10 @@
 // Slack Water: you keep a tide-mill, and have one slack water to restart it, with Pip, your small
-// brass helper. For now it's its flow, in text, in a window: W goes out toward the far rock, S goes
-// back toward the mill, E takes, fits, and opens the sluice, Q hands things to Pip and takes them
-// back, Escape ends it. With `--walk <bright|dim|dark>`, as ctest runs it, it's offscreen, played
+// brass helper. WASD and the mouse walk the island, E takes, fits, and opens the sluice, Q hands
+// things to Pip and takes them back, Escape ends it. With `--walk <bright|dim|dark>`, as ctest runs it, it's offscreen, played
 // by key presses to that ending, ten steps a second, as fast as they go. With `--frames <folder>`,
 // the same to its bright ending, saving a PNG there at each moment that shows something. With
-// `--check <folder>`, it loads the assets its tools made there, and says what they are.
+// `--check <folder>`, it loads the assets its tools made there, and says what they are. With
+// `--walk3d <bright|dim|dark>`, it walks the island in 3D, by keys pressed, offscreen, to that ending.
 
 Import std.collections
 Import std.core
@@ -15,11 +15,12 @@ Import std.text
 Import fbengine
 Import fbengine_audio
 Import "./flow"
+Import "./game"
 Import "./island"
 Import "./res" As Res
 
-// A game's keys, bound to what they do.
-Final Class Controls
+// The text flow's keys, bound to what they do.
+Final Class TextControls
     Field Set: ActionSet
     Field Out: Action
     Field Back: Action
@@ -77,7 +78,7 @@ Function Walked(walk: String[], lines: String[], stepped: Func(Flow)): Ending Th
     Window.SetHeadless(True)
     Try Graphics(960, 540)
     Defer EndGraphics()
-    Local controls = Controls()
+    Local controls = TextControls()
     Local flow = Flow(Function(line: String)
         Print(line)
         lines.Add(line)
@@ -267,23 +268,204 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
     End If
 End Function
 
-// The game, in a window of its lines of text, for a person.
-Function Played() Throws GraphicsError
-    Try Graphics(960, 540)
+// What a 3D walk does, a thing at a time: walks to a Spot or a part by its name, presses E or Q, or
+// waits for the clock.
+Function Walk3dOf(name: String): String[]?
+    Select name
+        // The gear and the paddle first, the gear in Pip's hands; then the belt, in time.
+        Case "bright"
+            Return ["door", "gear", "E", "Q", "crossing", "E", "door", "inside", "E", "Q", "E", "E",
+                    "door", "crossing", "belt", "E", "crossing", "door", "inside", "E", "600"]
+        // The same, but never going for the belt.
+        Case "dim"
+            Return ["door", "gear", "E", "Q", "crossing", "E", "door", "inside", "E", "Q", "E", "E",
+                    "600"]
+        // Out to the far rock, as the causeway floods behind you.
+        Case "dark"
+            Return ["door", "crossing", "belt", "600"]
+        Default
+            Return Null
+    End Select
+End Function
+
+// Where a walk's step goes, or Null if it isn't a place.
+Function WalkTarget(island: Island, step: String): Vec2?
+    Select step
+        Case "inside"
+            Return island.PlaceOf(Spot.INSIDE)
+        Case "door"
+            Return island.PlaceOf(Spot.DOOR)
+        Case "crossing"
+            Return island.PlaceOf(Spot.CROSSING)
+        Case "gear"
+            Return island.PartSpot(Part.GEAR)
+        Case "belt"
+            Return island.PartSpot(Part.BELT)
+        Default
+            Return Null
+    End Select
+End Function
+
+// Walks `walk` to its end, by W, E, and Q pressed, offscreen, and gives how it ended. It turns you
+// to each place itself, as a person's mouse would; `stepped` hears of each step, with what's just
+// been done.
+Function Walked3d(island: Island, walk: String[],
+                  stepped: Func(Game, String)): Ending Throws GraphicsError
+    Local controls = Controls()
+    Local game = Game(island, Function(line: String)
+        Print(line)
+    End Function)
+    Defer game.Free()
+    Local next = 0
+    Local doing = ""
+    Local walking = False
+    While game.Story().Ended() == Ending.NONE
+        doing = ""
+        If next < walk.Count
+            Local step = walk[next]
+            Local target = WalkTarget(island, step)
+            Local until = Int.Parse(step)
+            If target != Null
+                Local here = game.Location()
+                Local dx = target.x - here.x
+                Local dz = target.y - here.y
+                // Within a step of it, or within reach of what lies there.
+                If dx * dx + dz * dz < 1.0
+                    If walking
+                        Try Simulate.KeyUp(Key.W)
+                        walking = False
+                    End If
+                    next += 1
+                Else
+                    game.Face(target.x, target.y)
+                    If !walking
+                        Try Simulate.KeyDown(Key.W)
+                        walking = True
+                    End If
+                End If
+            ElseIf until != Null
+                If game.Story().Clock() >= (until As Float) Then next += 1
+            ElseIf step == "Q"
+                If game.Story().PipHere()
+                    Try Simulate.PressKey(Key.Q)
+                    doing = step
+                    next += 1
+                End If
+            Else
+                Try Simulate.PressKey(Key.E)
+                doing = step
+                next += 1
+            End If
+        End If
+        Flip(False)
+        game.Step(controls, 0.1)
+        stepped(game, doing)
+    End While
+    If walking Then Try Simulate.KeyUp(Key.W)
+    stepped(game, "ended")
+    Return game.Story().Ended()
+End Function
+
+// Opens what a walk draws on, offscreen, and the island.
+Function Opened(): Island Throws GraphicsError, IOError
+    Window.SetHeadless(True)
+    Try Graphics(1280, 720)
+    Try Res.Mount()
+    Return Try Island.Make()
+End Function
+
+// A 3D walk, with nothing saved, as ctest runs one to each ending.
+Function Walked3dBy(walk: String[]): Ending Throws GraphicsError, IOError
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Return Try Walked3d(island, walk, Function(game: Game, doing: String)
+    End Function)
+End Function
+
+// The bright 3D walk, saving what you see at each moment that shows something.
+Function SaveWalk(folder: Path) Throws GraphicsError, IOError
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Local saved = 0
+    Local failure = ""
+    Local save = Function(game: Game, name: String)
+        game.View().SetRenderTarget(Null)
+        island.Scene().Render()
+        Try
+            Try Screen.Save(folder / "{name}.png")
+            saved += 1
+        Catch e As GraphicsError
+            failure = e.Message
+        Catch e As IOError
+            failure = e.Message
+        End Try
+    End Function
+    Local holding = False
+    Local carrying = False
+    Local fitted = False
+    Local ended = Try Walked3d(island, Walk3dOf("bright") ?? [], Function(game: Game, doing: String)
+        Local flow = game.Story()
+        If !holding && flow.Held() != Null
+            holding = True
+            save(game, "walk_holding")
+        End If
+        If !carrying && flow.PipHolds() != Null
+            carrying = True
+            game.FacePip()
+            save(game, "walk_pip_carrying")
+        End If
+        If !fitted && flow.Fitted(Part.PADDLE)
+            fitted = True
+            Local works = island.PlaceOf(Spot.WORKS)
+            game.Face(works.x, works.y)
+            game.Look(-0.1)
+            save(game, "walk_fitting")
+        End If
+        If doing == "ended"
+            // From outside, to see the lamp and the wheel.
+            Local view = Views()[1]
+            game.View().SetPosition(view.1)
+            game.View().PointAt(view.2)
+            save(game, "walk_lit")
+        End If
+    End Function)
+    If failure != "" Then Throw IOError(IOErrorKind.OTHER, failure)
+    Print("saved {saved} frames of a 3D walk, ended {ended}")
+End Function
+
+// The game, in a window, for a person: WASD and the mouse, E, Q, and Escape.
+Function Played() Throws GraphicsError, IOError, InputError
+    Try Graphics(1280, 720)
     Defer EndGraphics()
     Window.SetTitle("Slack Water")
+    Try SetMouseRelative(True)
     Frame.SetLimit(60)
+    Try Res.Mount()
+    Defer Assets.StopWatching()
+    Local island = Try Island.Make()
+    Defer island.Free()
     Local controls = Controls()
-    Local lines: String[] = []
-    Local flow = Flow(Function(line: String)
-        lines.Add(line)
+    Local last = ""
+    Local game = Game(island, Function(line: String)
+        last = line
     End Function)
+    Defer game.Free()
     Local font = Font.BuiltIn(20.0)
     While !Window.Closed() && !KeyHit(Key.ESCAPE)
         Flip()
-        controls.Apply(flow)
-        flow.Step(Frame.Delta() As Float)
-        If Screen.Texture() != Null Then Draw(flow, lines, font)
+        game.Step(controls, Frame.Delta() As Float)
+        If Screen.Texture() == Null Then Continue
+        island.Scene().Render()
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(236, 232, 220, 255))
+        Local flow = game.Story()
+        canvas.DrawText(font, "{flow.Left() As Int} seconds of slack water", 24, 20)
+        canvas.DrawText(font, last, 24, 48)
+        canvas.DrawText(font, game.Prompt(), 24, 680)
     End While
 End Function
 
@@ -300,6 +482,16 @@ If arguments.Count == 2 && arguments[0] == "--walk"
         End Function)
         Print("ended {ended}")
     End If
+ElseIf arguments.Count == 2 && arguments[0] == "--walk3d"
+    Local walk = Walk3dOf(arguments[1])
+    If walk == Null
+        PrintError("usage: slack_water [--walk3d <bright|dim|dark>]")
+        Process.Exit(2)
+    ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Print("ended {Try Walked3dBy(walk)}")
+    End If
 ElseIf arguments.Count == 2 && arguments[0] == "--check"
     Try Checked(Path(arguments[1]))
 ElseIf arguments.Count == 2 && arguments[0] == "--frames"
@@ -307,6 +499,7 @@ ElseIf arguments.Count == 2 && arguments[0] == "--frames"
         Print("no GPU here")
     Else
         Try Framed(Path(arguments[1]))
+        Try SaveWalk(Path(arguments[1]))
     End If
 ElseIf arguments.Count == 0
     Try Played()
