@@ -364,6 +364,70 @@ FBE_API float fbe_camera_gamma(uint64_t camera) {
     return found != nullptr ? found->gamma : 0.0F;
 }
 
+FBE_API bool fbe_camera_set_bloom(uint64_t camera, float intensity, float threshold) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!(intensity >= 0.0F) || !std::isfinite(intensity) || !(threshold >= 0.0F) ||
+        !std::isfinite(threshold)) {
+        return fbe::fail(
+            std::format("a camera's bloom's intensity and threshold are 0 or more, not "
+                        "{} and {}",
+                        intensity, threshold));
+    }
+    found->bloom_intensity = intensity;
+    found->bloom_threshold = threshold;
+    return true;
+}
+
+FBE_API float fbe_camera_bloom_intensity(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->bloom_intensity : 0.0F;
+}
+
+FBE_API float fbe_camera_bloom_threshold(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->bloom_threshold : 0.0F;
+}
+
+FBE_API bool fbe_camera_set_grade(uint64_t camera, const float* values) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    for (int at = 0; at < 10; ++at) {
+        if (!std::isfinite(values[at])) {
+            return fbe::fail("a camera's color grade is finite");
+        }
+    }
+    for (int at = 0; at < 3; ++at) {
+        if (values[at] < 0.0F || values[6 + at] <= 0.0F) {
+            return fbe::fail("a camera's color grade's slope is 0 or more, and its power above 0");
+        }
+    }
+    if (values[9] < 0.0F) {
+        return fbe::fail("a camera's color grade's saturation is 0 or more");
+    }
+    found->grade_slope = { values[0], values[1], values[2] };
+    found->grade_offset = { values[3], values[4], values[5] };
+    found->grade_power = { values[6], values[7], values[8] };
+    found->grade_saturation = values[9];
+    return true;
+}
+
+FBE_API bool fbe_camera_grade(uint64_t camera, float* values) {
+    const camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    std::ranges::copy(found->grade_slope, values);
+    std::ranges::copy(found->grade_offset, values + 3);
+    std::ranges::copy(found->grade_power, values + 6);
+    values[9] = found->grade_saturation;
+    return true;
+}
+
 FBE_API bool fbe_camera_set_fog_density(uint64_t camera, float density) {
     camera_t* found = camera_of(camera);
     if (found == nullptr) {

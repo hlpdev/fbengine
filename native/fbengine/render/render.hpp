@@ -4,6 +4,7 @@
 // and the lists read from the scene for it.
 
 #include "fbengine.h"
+#include "gpu/graph.hpp"
 #include "gpu/vulkan.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
@@ -56,6 +57,13 @@ bool read_lists(std::uint64_t camera, float target_width, float target_height, f
 /// Everything a camera draws from a view of it.
 void read_view(const scene::camera_t& camera, const scene::view_t& view,
                const scene::tweened_t& tweened, lists_t& lists);
+
+/// Adds the passes that bring a camera's HDR image to `into`, a target of `size`, `format`, and
+/// `samples`, in `scissor`, blending it by its alpha if the camera doesn't clear what's there;
+/// false, with fbe_error's why, if they can't be added.
+bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
+                     VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples,
+                     VkRect2D scissor);
 
 /// Draws a camera that's showing, in the frame's graph, as fbe_render_camera says.
 bool draw_camera(std::uint32_t slot, float tween);

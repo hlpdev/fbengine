@@ -2,6 +2,7 @@
 // lights, fog, order, cameras into textures, sprites, planes, terrains, and mirrors, each checked
 // by the pixels its formula says it draws, and a golden image of each.
 
+#include "engine_shaders.hpp"
 #include "fbengine.h"
 #include "golden/golden.hpp"
 #include "gpu_testing.hpp"
@@ -20,7 +21,9 @@
 #include <numbers>
 #include <span>
 #include <string>
+#include <string_view>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -3648,4 +3651,257 @@ TEST_CASE("culling sums targets, adds surfaces, goes every way, and takes skinne
     CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
     fbe_skin_release(skinned.skin);
     fbe_material_release(red);
+}
+
+namespace {
+
+/// The opcodes of SPIR-V this test goes by.
+constexpr std::uint32_t op_entry_point = 15;
+constexpr std::uint32_t op_function = 54;
+constexpr std::uint32_t op_function_end = 56;
+constexpr std::uint32_t op_function_call = 57;
+constexpr std::uint32_t op_kill = 252;
+
+/// Whether an opcode reads a texture by its neighbors, or asks for a derivative.
+bool reads_its_neighbors(std::uint32_t op) {
+    const bool implicit_sample = op == 87 || op == 89 || op == 91 || op == 93;
+    const bool derivative = op >= 207 && op <= 215;
+    return implicit_sample || derivative;
+}
+
+/// What walking a function finds, in its order, its calls' as they come.
+struct walked_t {
+    std::uint32_t before_kill = 0;
+    std::uint32_t after_kill = 0;
+    bool killed = false;
+};
+
+} // namespace
+
+// Pixels a discard's already ended aren't there for their neighbors' levels and derivatives, so
+// everything that needs them comes before it. It's the shader's order, which no driver's pixels
+// show.
+TEST_CASE("nothing in the scene's fragment shader reads by its neighbors after it discards",
+          "[gpu][scene]") {
+    const std::span<const std::uint32_t> code = fbe::shaders::scene.code;
+    std::unordered_map<std::uint32_t, std::size_t> functions;
+    std::uint32_t entry = 0;
+    for (std::size_t at = 5; at < code.size(); at += code[at] >> 16U) {
+        const std::uint32_t op = code[at] & 0xFFFFU;
+        if (op == op_function) {
+            functions[code[at + 2]] = at;
+        }
+        if (op == op_entry_point &&
+            std::string_view(reinterpret_cast<const char*>(&code[at + 3])) == "fragmentMain") {
+            entry = code[at + 2];
+        }
+    }
+    REQUIRE(functions.contains(entry));
+    walked_t walked;
+    const auto walk = [&](const auto& self, std::uint32_t function) -> void {
+        for (std::size_t at = functions.at(function);; at += code[at] >> 16U) {
+            const std::uint32_t op = code[at] & 0xFFFFU;
+            if (op == op_function_end) {
+                return;
+            }
+            if (op == op_function_call) {
+                self(self, code[at + 3]);
+            } else if (op == op_kill) {
+                walked.killed = true;
+            } else if (reads_its_neighbors(op)) {
+                (walked.killed ? walked.after_kill : walked.before_kill) += 1;
+            }
+        }
+    };
+    walk(walk, entry);
+    CHECK(walked.killed);
+    CHECK(walked.before_kill > 0);
+    CHECK(walked.after_kill == 0);
+}
+
+namespace {
+
+/// A wall at the camera's middle, `half` across at 3 away, of light as bright as it says, on black,
+/// and an HDR camera that clears to black.
+std::uint64_t glowing_square(const scene_t& scene, float light, float half) {
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_emissive(material, light, light, light));
+    wall(scene.world, -3.0F, half, material);
+    require(fbe_camera_set_hdr(scene.camera, true));
+    return material;
+}
+
+/// What light a stored byte is, in a target of sRGB.
+float linear_of(std::uint8_t stored_byte) {
+    const float encoded = static_cast<float>(stored_byte) / 255.0F;
+    return encoded <= 0.04045F ? encoded / 12.92F : std::pow((encoded + 0.055F) / 1.055F, 2.4F);
+}
+
+} // namespace
+
+TEST_CASE("a camera's bloom and grade settings are what they're set to", "[gpu][scene]") {
+    const scene_t scene;
+    CHECK(fbe_camera_bloom_intensity(scene.camera) == 0.0F);
+    CHECK(fbe_camera_bloom_threshold(scene.camera) == 1.0F);
+    CHECK(fbe_camera_set_bloom(scene.camera, 0.5F, 2.0F));
+    CHECK(fbe_camera_bloom_intensity(scene.camera) == 0.5F);
+    CHECK(fbe_camera_bloom_threshold(scene.camera) == 2.0F);
+    CHECK(!fbe_camera_set_bloom(scene.camera, -1.0F, 1.0F));
+    CHECK(!fbe_camera_set_bloom(scene.camera, 1.0F, -1.0F));
+    CHECK(!fbe_camera_set_bloom(scene.camera, std::nanf(""), 1.0F));
+    CHECK(fbe_camera_bloom_intensity(scene.camera) == 0.5F);
+    std::array<float, 10> grade{};
+    CHECK(fbe_camera_grade(scene.camera, grade.data()));
+    CHECK(grade == std::array{ 1.0F, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 1.0F });
+    const std::array wanted{ 2.0F, 1.0F, 0.5F, 0.1F, 0.0F, -0.1F, 1.0F, 2.0F, 0.5F, 0.5F };
+    CHECK(fbe_camera_set_grade(scene.camera, wanted.data()));
+    CHECK(fbe_camera_grade(scene.camera, grade.data()));
+    CHECK(grade == wanted);
+    for (const std::size_t at : { std::size_t{ 0 }, std::size_t{ 6 }, std::size_t{ 9 } }) {
+        std::array bad = wanted;
+        bad.at(at) = -1.0F;
+        CHECK(!fbe_camera_set_grade(scene.camera, bad.data()));
+        bad.at(at) = std::nanf("");
+        CHECK(!fbe_camera_set_grade(scene.camera, bad.data()));
+    }
+    std::array no_power = wanted;
+    no_power[7] = 0.0F;
+    CHECK(!fbe_camera_set_grade(scene.camera, no_power.data()));
+    CHECK(fbe_camera_grade(scene.camera, grade.data()));
+    CHECK(grade == wanted);
+}
+
+// Light that's even all over stays what it is through every level, so it's what its formula says:
+// nothing below its threshold's knee, and all that's past its threshold above it, added.
+TEST_CASE("bloom adds what's past its threshold", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = glowing_wall(scene, 0.25F, 0.25F, 0.25F);
+    require(fbe_camera_set_bloom(scene.camera, 1.0F, 1.0F));
+    // Below the knee, at 0.5 of the threshold: none of it.
+    const std::uint8_t quarter = srgb(0.25F);
+    CHECK(near(middle(scene.drawn()), { quarter, quarter, quarter }, 1));
+    // Past it: 2 is 1 past 1, half of it, so 2 + 1 of light, at a quarter's exposure, 0.75.
+    require(fbe_material_set_emissive(material, 2.0F, 2.0F, 2.0F));
+    require(fbe_camera_set_exposure(scene.camera, 0.25F));
+    const std::uint8_t lit = srgb(0.75F);
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }, 2));
+    // Half the intensity adds half.
+    require(fbe_camera_set_bloom(scene.camera, 0.5F, 1.0F));
+    const std::uint8_t less = srgb(0.625F);
+    CHECK(near(middle(scene.drawn()), { less, less, less }, 2));
+    // In the knee, at 0.75 of it: a little, (0.25 ^ 2 / 2) / 0.75 of 0.75.
+    require(fbe_camera_set_exposure(scene.camera, 1.0F));
+    require(fbe_camera_set_bloom(scene.camera, 1.0F, 1.0F));
+    require(fbe_material_set_emissive(material, 0.75F, 0.75F, 0.75F));
+    const std::uint8_t knee = srgb(0.75F + 0.03125F);
+    CHECK(near(middle(scene.drawn()), { knee, knee, knee }, 2));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
+// A bright square glows past its edges, less the further, the same each way, and nothing's added
+// where there's no bloom.
+TEST_CASE("bloom spreads a bright square's light around it", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = glowing_square(scene, 16.0F, 0.2F);
+    require(fbe_camera_set_exposure(scene.camera, 0.25F));
+    const fbe::golden::frame_t sharp = scene.drawn();
+    constexpr std::uint32_t mid = frame_size / 2;
+    CHECK(pixel(sharp, mid + 16, mid)[0] == 0);
+    require(fbe_camera_set_bloom(scene.camera, 1.0F, 1.0F));
+    const fbe::golden::frame_t glowing = scene.drawn();
+    const auto red = [&glowing](std::uint32_t x, std::uint32_t y) {
+        return pixel(glowing, x, y)[0];
+    };
+    CHECK(red(mid + 12, mid) > red(mid + 24, mid));
+    CHECK(red(mid + 24, mid) > red(mid + 48, mid));
+    CHECK(red(mid + 24, mid) > 0);
+    CHECK(std::abs(red(mid + 24, mid) - red(mid - 25, mid)) <= 6);
+    CHECK(std::abs(red(mid, mid + 24) - red(mid, mid - 25)) <= 6);
+    CHECK(std::abs(red(mid + 24, mid) - red(mid, mid + 24)) <= 6);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
+// One pixel a million times too bright, a firefly, comes to little more than its neighbors do, for
+// Karis's average; and a NaN or an infinity in the image blooms nothing, rather than all of it.
+TEST_CASE("a firefly doesn't blow bloom out", "[gpu][scene]") {
+    const scene_t scene;
+    // A wall on black, 2 across at 3 away, each of its map's texels under a pixel's width, nearest,
+    // so one hot texel's one pixel, as bright as a half float goes.
+    const std::uint64_t material = glowing_square(scene, 1.0F, 1.0F);
+    constexpr std::int32_t across = 128;
+    const std::uint64_t hot = fbe_texture_create(across, across, FBE_TEXTURE_RGBA16F, false);
+    require(hot != 0);
+    std::vector<float> texels(std::size_t{ across } * across * 4, 0.0F);
+    for (std::size_t at = 3; at < texels.size(); at += 4) {
+        texels[at] = 1.0F;
+    }
+    const std::size_t one = ((std::size_t{ 64 } * across) + 64) * 4;
+    texels[one] = 60000.0F;
+    texels[one + 1] = 60000.0F;
+    texels[one + 2] = 60000.0F;
+    require(fbe_texture_write_floats(hot, 0, 0, across, across, texels.data()));
+    require(fbe_texture_set_filter(hot, FBE_TEXTURE_NEAREST));
+    require(fbe_material_set_map(material, FBE_MAP_EMISSIVE, hot, 0));
+    require(fbe_camera_set_exposure(scene.camera, 0.1F));
+    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_NONE));
+    require(fbe_camera_set_bloom(scene.camera, 1.0F, 1.0F));
+    const fbe::golden::frame_t frame = scene.drawn();
+    constexpr std::uint32_t mid = frame_size / 2;
+    CHECK(pixel(frame, mid, mid)[0] == 255);
+    // Without Karis's average, 60000 through a few levels' weights would be hundreds, all white.
+    // With it, one sample of a group of four comes to about a third, a tenth of it here.
+    CHECK(linear_of(pixel(frame, mid + 8, mid)[0]) < 0.05F);
+    require(fbe_material_set_map(material, FBE_MAP_EMISSIVE, 0, 0));
+    fbe_texture_release(hot);
+    const std::uint64_t nan_map = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA16F, false);
+    require(nan_map != 0);
+    std::array<std::uint16_t, 16> halves{};
+    for (std::size_t at = 0; at < 4; ++at) {
+        halves.at(at * 4) = 0x7E00;
+        halves.at((at * 4) + 1) = 0x7E00;
+        halves.at((at * 4) + 2) = 0x7E00;
+        halves.at((at * 4) + 3) = 0x3C00;
+    }
+    std::array<std::uint8_t, 32> bytes{};
+    std::memcpy(bytes.data(), halves.data(), bytes.size());
+    require(fbe_texture_write(nan_map, 0, 0, 2, 2, bytes.data(), 16));
+    require(fbe_texture_set_filter(nan_map, FBE_TEXTURE_NEAREST));
+    require(fbe_material_set_map(material, FBE_MAP_EMISSIVE, nan_map, 0));
+    const fbe::golden::frame_t none = scene.drawn();
+    CHECK(pixel(none, mid + 8, mid)[0] == 0);
+    CHECK(pixel(none, mid, mid)[0] == 0);
+    fbe_texture_release(nan_map);
+    fbe_material_release(material);
+}
+
+// Each of a color decision list's parts, by its formula, in order, with gamma after.
+TEST_CASE("a color grade's what its formula says", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = glowing_wall(scene, 0.5F, 0.25F, 0.1F);
+    const auto seen = [&](const std::array<float, 10>& grade) {
+        require(fbe_camera_set_grade(scene.camera, grade.data()));
+        return middle(scene.drawn());
+    };
+    CHECK(near(seen({ 1, 1, 1, 0, 0, 0, 1, 1, 1, 1 }), { srgb(0.5F), srgb(0.25F), srgb(0.1F) }, 1));
+    CHECK(near(seen({ 2, 1, 0.5F, 0, 0, 0, 1, 1, 1, 1 }), { srgb(1.0F), srgb(0.25F), srgb(0.05F) },
+               1));
+    CHECK(near(seen({ 1, 1, 1, 0.1F, -0.1F, 0, 1, 1, 1, 1 }),
+               { srgb(0.6F), srgb(0.15F), srgb(0.1F) }, 1));
+    CHECK(near(seen({ 1, 1, 1, 0, 0, 0, 2, 1, 0.5F, 1 }),
+               { srgb(0.25F), srgb(0.25F), srgb(std::sqrt(0.1F)) }, 1));
+    // No saturation is its luma, all of it gray.
+    const float luma = (0.5F * 0.2126F) + (0.25F * 0.7152F) + (0.1F * 0.0722F);
+    CHECK(near(seen({ 1, 1, 1, 0, 0, 0, 1, 1, 1, 0 }), { srgb(luma), srgb(luma), srgb(luma) }, 1));
+    // Slope, then offset, then power, then saturation; each after the last.
+    const float slope_offset = (0.5F * 2.0F) + 0.0F;
+    CHECK(near(seen({ 2, 2, 2, -0.5F, -0.25F, 0, 2, 2, 2, 1 }),
+               { srgb((slope_offset - 0.5F) * (slope_offset - 0.5F)), srgb(0.0625F), srgb(0.04F) },
+               1));
+    // Not HDR, it isn't there.
+    require(fbe_camera_set_hdr(scene.camera, false));
+    CHECK(near(seen({ 2, 2, 2, 0, 0, 0, 1, 1, 1, 1 }), { srgb(0.5F), srgb(0.25F), srgb(0.1F) }, 1));
+    fbe_material_release(material);
 }

@@ -269,6 +269,11 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_camera_tonemap(camera: UInt64): Int32
     Function fbe_camera_set_gamma(camera: UInt64, gamma: Float32): Bool
     Function fbe_camera_gamma(camera: UInt64): Float32
+    Function fbe_camera_set_bloom(camera: UInt64, intensity: Float32, threshold: Float32): Bool
+    Function fbe_camera_bloom_intensity(camera: UInt64): Float32
+    Function fbe_camera_bloom_threshold(camera: UInt64): Float32
+    Function fbe_camera_set_grade(camera: UInt64, values: Ptr<Float32>): Bool
+    Function fbe_camera_grade(camera: UInt64, values: Ptr<Float32>): Bool
     Function fbe_camera_set_fog_mode(camera: UInt64, mode: Int32): Bool
     Function fbe_camera_fog_mode(camera: UInt64): Int32
     Function fbe_camera_set_fog_color(camera: UInt64, r: Float32, g: Float32, b: Float32): Bool

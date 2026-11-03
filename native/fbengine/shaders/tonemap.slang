@@ -1,6 +1,6 @@
-// What a camera's HDR image comes to in its target: its light through its exposure, a tonemap, and
-// its gamma, by a triangle over its viewport, which the scissor is. A target stored as sRGB encodes
-// what it's given, so all that's here is linear.
+// What a camera's HDR image comes to in its target: its light, with its bloom, through its exposure,
+// a tonemap, its color grade, and its gamma, by a triangle over its viewport, which the scissor is. A
+// target stored as sRGB encodes what it's given, so all that's here is linear.
 
 import bindless;
 
@@ -18,6 +18,15 @@ struct Tonemap
     float exposure;
     float gamma;
     uint kind;
+    uint bloom;
+    uint bloomSampler;
+    float bloomIntensity;
+    float2 spare;
+    /// The American Society of Cinematographers' color decision list: slope, with saturation in its
+    /// w, offset, and power.
+    float4 slope;
+    float4 offset;
+    float4 power;
 };
 
 [[vk::push_constant]]
@@ -69,7 +78,12 @@ float3 neutral(float3 light)
 float4 fragmentMain(float4 position : SV_Position) : SV_Target
 {
     const float4 texel = sampleTextureLevel(tonemap.image, tonemap.sampler, position.xy / tonemap.size, 0.0);
-    float3 color = wholeLight(texel.rgb) * tonemap.exposure;
+    float3 light = wholeLight(texel.rgb);
+    if (tonemap.bloomIntensity > 0.0)
+    {
+        light += sampleTextureLevel(tonemap.bloom, tonemap.bloomSampler, position.xy / tonemap.size, 0.0).rgb * tonemap.bloomIntensity;
+    }
+    float3 color = light * tonemap.exposure;
     if (tonemap.kind == tonemapReinhard)
     {
         color = color / (color + 1.0);
@@ -82,5 +96,8 @@ float4 fragmentMain(float4 position : SV_Position) : SV_Target
     {
         color = neutral(color);
     }
-    return float4(pow(max(color, float3(0.0)), 1.0 / tonemap.gamma), isnan(texel.a) ? 0.0 : texel.a);
+    color = pow(max((color * tonemap.slope.rgb) + tonemap.offset.rgb, float3(0.0)), tonemap.power.rgb);
+    const float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+    color = max(lerp(float3(luma), color, tonemap.slope.a), float3(0.0));
+    return float4(pow(color, 1.0 / tonemap.gamma), isnan(texel.a) ? 0.0 : texel.a);
 }

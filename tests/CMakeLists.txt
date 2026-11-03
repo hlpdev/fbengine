@@ -68,7 +68,8 @@ add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)
 target_include_directories(fbengine_gpu_tests SYSTEM PRIVATE "${stb_SOURCE_DIR}")
-target_include_directories(fbengine_gpu_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(fbengine_gpu_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                           "${PROJECT_BINARY_DIR}/native/fbengine/engine_shaders")
 target_compile_definitions(fbengine_gpu_tests PRIVATE
                            FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
                            FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"

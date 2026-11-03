@@ -246,6 +246,12 @@ Function ACameraDrawsHdrLight() Throws GraphicsError
     camera.SetGamma(2.0)
     Expect(camera.Hdr() && camera.Exposure() == 0.5)
     Expect(camera.Tonemap() == Tonemap.NEUTRAL && camera.Gamma() == 2.0)
+    Expect(camera.BloomIntensity() == 0.0 && camera.BloomThreshold() == 1.0)
+    camera.SetBloom(0.5, 2.0)
+    Expect(camera.BloomIntensity() == 0.5 && camera.BloomThreshold() == 2.0)
+    Local grade = ColorGrade(Vec3(2.0, 1.0, 0.5), Vec3(0.1, 0.0, -0.1), Vec3(1.0, 2.0, 0.5), 0.5)
+    camera.SetGrade(grade)
+    Expect(camera.Grade() == grade)
     World.SetCurrent(World.Main())
     world.Free()
 End Function

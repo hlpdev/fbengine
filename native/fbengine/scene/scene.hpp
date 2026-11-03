@@ -305,6 +305,13 @@ struct camera_t {
     float exposure = 1.0F;
     std::int32_t tonemap = FBE_TONEMAP_NONE;
     float gamma = 1.0F;
+    /// Its bloom, and its color grade.
+    float bloom_intensity = 0.0F;
+    float bloom_threshold = 1.0F;
+    std::array<float, 3> grade_slope{ 1.0F, 1.0F, 1.0F };
+    std::array<float, 3> grade_offset{ 0.0F, 0.0F, 0.0F };
+    std::array<float, 3> grade_power{ 1.0F, 1.0F, 1.0F };
+    float grade_saturation = 1.0F;
 };
 
 /// A light: what kind, its color and its intensity, the range where a point or spot light ends, and

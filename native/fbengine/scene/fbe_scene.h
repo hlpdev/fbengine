@@ -474,6 +474,21 @@ FBE_API int32_t fbe_camera_tonemap(uint64_t camera);
 FBE_API bool fbe_camera_set_gamma(uint64_t camera, float gamma);
 FBE_API float fbe_camera_gamma(uint64_t camera);
 
+// What an HDR camera's bright light does around it, its bloom: what's past `threshold`, 0 or more,
+// blurred out over much of its view, added to its light times `intensity`, 0 or more, before its
+// exposure. None at first, an intensity of 0, with a threshold of 1. A pixel far brighter than
+// those around it, a firefly, counts for about as much as they do, and doesn't flicker.
+FBE_API bool fbe_camera_set_bloom(uint64_t camera, float intensity, float threshold);
+FBE_API float fbe_camera_bloom_intensity(uint64_t camera);
+FBE_API float fbe_camera_bloom_threshold(uint64_t camera);
+// An HDR camera's color grade, after its tonemap and before its gamma, as a color decision list has
+// it: each channel times its slope, 0 or more, plus its offset, raised to its power, above 0; then
+// saturation, 0 or more, from its luma, 0 for gray and 1 as it was. As it is at first: slope 1,
+// offset 0, power 1, and saturation 1. `values` are ten, slope's three, offset's, power's, and
+// saturation, for setting and for reading.
+FBE_API bool fbe_camera_set_grade(uint64_t camera, const float* values);
+FBE_API bool fbe_camera_grade(uint64_t camera, float* values);
+
 // A camera's fog, which blends what it sees toward the fog's color with its depth in front of the
 // camera: FBE_FOG_NONE at first, black, linear from 1 to 100, at a density of 0.02.
 FBE_API bool fbe_camera_set_fog_mode(uint64_t camera, int32_t mode);
