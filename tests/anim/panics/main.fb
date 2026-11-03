@@ -52,6 +52,17 @@ Select arguments[0]
         skin.AddJoint("a", Mat4.Identity)
     Case "joint-out-of-range"
         Skin().JointName(0)
+    Case "release-freed"
+        Local bone = Pivot()
+        bone.Free()
+        Pivot().Player().Release(bone)
+    Case "weights-uneven"
+        Clip().AddWeights("a", [0, 1], [0, 0, 1])
+    Case "target-short"
+        Local surface = Geometry().AddSurface()
+        surface.AddMorphTarget([nothing])
+    Case "morphed-nothing"
+        Mesh(Null).MorphedPositions()
     Case "layer-out-of-range"
         Pivot().Player().Layer(16)
     Case "crossfade-negative"

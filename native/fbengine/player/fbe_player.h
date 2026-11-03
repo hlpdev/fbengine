@@ -4,9 +4,10 @@
 // Players: what plays clips on an entity and the entities under it, in layers, each over the ones
 // before it. A clip's nodes are bound to entities by name as it's played, or after it changes: the
 // entity itself if it has the name, else the first under it that has it, depth first, each parent
-// before its children, as fbe_entity_find finds them; a node no entity has is left out, as is an
-// entity freed since. A player lives while its handle is held; once its entity is freed it plays
-// nothing, and its calls fail.
+// before its children, as fbe_entity_find finds them; a node of "" is the entity itself, a node no
+// entity has is left out, as is an entity freed since. A clip's morph weights move a mesh's, and
+// are left out of any other entity. A player lives while its handle is held; once its entity is
+// freed it plays nothing, and its calls fail.
 //
 // A layer plays a clip, or more than one while a crossfade goes from one to the next, each at a
 // weight going where it's going over the crossfade's seconds. Its pose is their weighted mean,
@@ -14,6 +15,17 @@
 // it by its weight times its clips' together, 1 at most; a layer with a mask moves only the
 // entities it names and those under them. Each property a clip moves starts from where it was when
 // a clip began moving it, so a clip faded out leaves it there; what no clip moves is left as it is.
+// A mesh's morph weights go target by target, each by the clips whose channels reach it, so a
+// target no clip reaches is the game's to set.
+//
+// What a player poses is the game's to change until it next poses: a head turned toward a target
+// after the world's update is drawn turned, and the next pose, at the next update, Play, Crossfade,
+// or set_time, overrides it from its clip again, so turn it after every update, each fixed step's
+// too. An entity released is the game's for good: no clip moves it until it's reclaimed, when a
+// clip moves it again from where the game left it.
+//
+// A call out of memory says so and changes nothing, but a play or crossfade whose pose is what ran
+// out: its clip's playing, and false says it hasn't posed yet.
 //
 // Players are handles of their own kind; the entities and clips they're given are the scene's and
 // the clip area's.
@@ -80,8 +92,17 @@ FBE_API float fbe_player_weight(uint64_t player, int32_t layer);
 FBE_API bool fbe_player_set_mask(uint64_t player, int32_t layer, const uint64_t* entities,
                                  int32_t count);
 
+// Leaves `bone`, an entity, to the game: none of the player's clips moves it, though they go on
+// moving what's under it, until it's reclaimed. Releasing one released, or reclaiming one that
+// isn't, changes nothing. False for a player or an entity freed, or a player whose entity is.
+FBE_API bool fbe_player_release(uint64_t player, uint64_t bone);
+FBE_API bool fbe_player_reclaim(uint64_t player, uint64_t bone);
+// Whether `bone` is released, false for a player or an entity freed.
+FBE_API bool fbe_player_released(uint64_t player, uint64_t bone);
+
 // Moves every player on an entity in `world` on by `seconds`, posing what each moves, as the
-// world's update does, and keeps the events each reached, for fbe_player_evented. A step past many
+// world's update does, and keeps the events each reached, for fbe_player_evented; a player whose
+// entity is hidden, itself or by what's above it, waits until it's shown. A step past many
 // times round a loop reaches its events the first and the last time round only. False for a freed
 // world, or seconds below 0 or not finite.
 FBE_API bool fbe_player_advance(uint64_t world, float seconds);

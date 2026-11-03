@@ -14,6 +14,7 @@
 #include "gpu/fbe_gpu.h"
 #include "input/fbe_input.h"
 #include "jobs/fbe_jobs.h"
+#include "morph/fbe_morph.h"
 #include "player/fbe_player.h"
 #include "render/fbe_render.h"
 #include "scene/fbe_scene.h"

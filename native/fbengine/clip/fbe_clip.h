@@ -2,9 +2,10 @@
 #define FBE_CLIP_H
 
 // Clips: what moves the nodes of a hierarchy over time, each node by its name, so one plays on any
-// hierarchy with those names. A clip is made in code, a channel at a time, or from a model's file,
-// and every player of it shares it. It lives while its handle is held, as fbe_clip_create and
-// fbe_clip_retain hold it and fbe_clip_release lets go, or a player plays it.
+// hierarchy with those names, and the node named "" is whichever entity plays it, as a door's clip
+// has it, whatever the door's called. A clip is made in code, a channel at a time, or from a
+// model's file, and every player of it shares it. It lives while its handle is held, as
+// fbe_clip_create and fbe_clip_retain hold it and fbe_clip_release lets go, or a player plays it.
 //
 // A channel moves one property of one node through keys: their times, in seconds, rising, and
 // their values, as glTF has them. A rotation is x, y, z, w; morph weights are one a target. A
@@ -40,14 +41,15 @@ FBE_API bool fbe_clip_alive(uint64_t clip);
 // is 3 wide and a rotation 4; weights are as wide as they're given, 1 or more. False for a clip
 // freed, a property or interpolation that isn't one, no keys, times that aren't finite or fall,
 // values that aren't finite, a width that isn't the property's, or a node already moved in that
-// property.
+// property. Keys say where a node is, not how far it's moved, as glTF has it, so a door's clip, of
+// the node "", plays on a door wherever it stands if the door's under a pivot placed there.
 FBE_API bool fbe_clip_add_channel(uint64_t clip, const char* node, int32_t property,
                                   int32_t interpolation, int32_t width, const float* times,
                                   const float* values, int32_t keys);
 
 // A new clip of clip `index` of a model load's glTF, its channels' nodes by their names, so it
 // plays on the entities made from the model and on any others with those names; a channel of an
-// unnamed node moves nothing. 0 for a load that isn't a model load done and loaded, an index out
+// unnamed node is left out. 0 for a load that isn't a model load done and loaded, an index out
 // of range, or what's in the file: keys a clip made in code couldn't have, or one name's property
 // moved twice.
 FBE_API uint64_t fbe_clip_from_model(uint64_t load, int32_t index);

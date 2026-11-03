@@ -69,6 +69,8 @@ End Extend
 ///             CaptureWorld()
 ///             UpdateGame(logic.Seconds())
 ///             UpdateWorld(logic.Seconds())
+///             // What a clip poses is the game's until the next update's pose, so here, each step.
+///             head.PointAt(target)
 ///         End For
 ///         RenderWorld(logic.Tween())
 ///         Flip()

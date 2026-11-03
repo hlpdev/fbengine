@@ -43,6 +43,8 @@ REQUIRED_TESTS = ["examples.hello", "examples.arcade", "examples.arcade.idle", "
                   "examples.arcade.rules", "examples.arcade.watch", "examples.arcade.usage", "fbengine.package"]
 failures = []
 # One lock for each verify that may run at a time on this machine.
+# A build's jobs: each compile holds about a gigabyte, and several verifies build at once.
+BUILD_JOBS = 8
 TURNS = ["turn.lock", "turn2.lock", "turn3.lock", "turn4.lock"]
 
 
@@ -157,7 +159,7 @@ def check_build(build):
         if run(["cmake", "-S", ".", "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug"]) != 0:
             fail("cmake couldn't configure")
             return False
-    if run(["cmake", "--build", str(build)]) != 0:
+    if run(["cmake", "--build", str(build), "--parallel", str(BUILD_JOBS)]) != 0:
         fail("the build failed")
         return False
     return True
