@@ -158,6 +158,26 @@ if(FBENGINE_FB_TESTS)
     set_property(TEST examples.arcade.golden PROPERTY ENVIRONMENT_MODIFICATION
                  "PATH=path_list_prepend:${fbengine_test_dll_paths}")
   endif()
+  # E7's done-when: Khronos's sample models, skinned and morphed by their files, by numbers against
+  # tests/models/reference.py's, and their frames against their golden images.
+  add_test(NAME models.sample
+           COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/models"
+                   -- --frames "${PROJECT_BINARY_DIR}/example-frames/models")
+  set_tests_properties(models.sample PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       FIXTURES_SETUP model_frames TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "
+14 of 14 frames as worked out?
+$")
+  add_test(NAME models.golden
+           COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
+  set_tests_properties(models.golden PROPERTIES
+                       LABELS "gpu;golden" FIXTURES_REQUIRED model_frames
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
+  if(fbengine_test_dll_paths)
+    set_property(TEST models.golden PROPERTY ENVIRONMENT_MODIFICATION
+                 "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+  endif()
   add_test(NAME examples.arcade.rules COMMAND "${FBENGINE_FB}" test "${PROJECT_SOURCE_DIR}/examples/arcade")
   set_tests_properties(examples.arcade.rules PROPERTIES
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")

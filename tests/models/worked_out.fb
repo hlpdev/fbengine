@@ -1,0 +1,69 @@
+// Written by reference.py, from the glTF specification alone: where each frame should be.
+
+Import std.math
+
+// A frame of a sample model, and where it should be.
+Package Struct Worked
+    Package Field Folder: String
+    Package Field Node: String
+    Package Field Index: Int
+    Package Field Time: Float
+    Package Field Weight: Float
+    Package Field Camera: Vec3
+    Package Field Look: Vec3
+    Package Field Low: Vec3
+    Package Field High: Vec3
+    Package Field Mean: Vec3
+    Package Field Left: Int
+    Package Field Top: Int
+    Package Field Right: Int
+    Package Field Bottom: Int
+End Struct
+
+// Time and Weight are below 0 for none.
+Package Function WorkedOut(): Worked[]
+    Local frames: Worked[] = []
+    frames.Add(Worked("SimpleSkin", "node_0", 0, 0, -1, Vec3(0, 1, 6), Vec3(0, 1, 0),
+                      Vec3(-0.5, 0, 0), Vec3(0.5, 2, 0),
+                      Vec3(0, 1, 0), 109, 91, 146, 164))
+    frames.Add(Worked("SimpleSkin", "node_0", 1, 0.25, -1, Vec3(0, 1, 6), Vec3(0, 1, 0),
+                      Vec3(-0.8448, 0, 0), Vec3(0.5383, 2.1152, 0),
+                      Vec3(-0.0734, 0.9937, 0), 96, 86, 147, 164))
+    frames.Add(Worked("SimpleSkin", "node_0", 2, 1, -1, Vec3(0, 1, 6), Vec3(0, 1, 0),
+                      Vec3(-1, 0, 0), Vec3(0.5, 1.5, 0),
+                      Vec3(-0.2083, 0.8333, 0), 91, 109, 146, 164))
+    frames.Add(Worked("SimpleSkin", "node_0", 3, 4, -1, Vec3(0, 1, 6), Vec3(0, 1, 0),
+                      Vec3(-0.5, 0, 0), Vec3(1, 1.5, 0),
+                      Vec3(0.1667, 0.7917, 0), 109, 109, 164, 164))
+    frames.Add(Worked("SimpleMorph", "node_0", 0, -1, -1, Vec3(0.5, 1, 4), Vec3(0.5, 1, 0),
+                      Vec3(0, 0, 0), Vec3(1, 1.5, 0),
+                      Vec3(0.5, 0.5, 0), 100, 100, 155, 183))
+    frames.Add(Worked("SimpleMorph", "node_0", 1, 0.5, -1, Vec3(0.5, 1, 4), Vec3(0.5, 1, 0),
+                      Vec3(0, 0, 0), Vec3(1, 1, 0),
+                      Vec3(0.6667, 0.3333, 0), 100, 128, 155, 183))
+    frames.Add(Worked("SimpleMorph", "node_0", 2, 1.5, -1, Vec3(0.5, 1, 4), Vec3(0.5, 1, 0),
+                      Vec3(0, 0, 0), Vec3(1, 2, 0),
+                      Vec3(0.6667, 0.6667, 0), 100, 72, 155, 183))
+    frames.Add(Worked("SimpleMorph", "node_0", 3, 2.5, -1, Vec3(0.5, 1, 4), Vec3(0.5, 1, 0),
+                      Vec3(0, 0, 0), Vec3(1, 2, 0),
+                      Vec3(0.3333, 0.6667, 0), 100, 72, 155, 183))
+    frames.Add(Worked("RiggedSimple", "Cylinder", 0, 0.5, -1, Vec3(0, 0, 22), Vec3(0, 0, 0),
+                      Vec3(-1, -4.5751, -1), Vec3(1.6732, 4.5335, 1),
+                      Vec3(0.4111, -0.0531, -0.0001), 117, 81, 144, 176))
+    frames.Add(Worked("RiggedSimple", "Cylinder", 1, 1, -1, Vec3(0, 0, 22), Vec3(0, 0, 0),
+                      Vec3(-1, -4.5751, -1), Vec3(2.8665, 4.1005, 1),
+                      Vec3(0.8232, -0.2354, -0.0001), 117, 86, 156, 176))
+    frames.Add(Worked("RiggedSimple", "Cylinder", 2, 1.5, -1, Vec3(0, 0, 22), Vec3(0, 0, 0),
+                      Vec3(-1, -4.5751, -1), Vec3(1.933, 4.4772, 1),
+                      Vec3(0.4995, -0.0802, -0.0001), 117, 82, 147, 176))
+    frames.Add(Worked("MorphPrimitivesTest", "mesh", 0, -1, -1, Vec3(0, 1.2, 1.2), Vec3(0, 0, 0),
+                      Vec3(-0.5, 0, -0.5), Vec3(0.5, 0.1, 0.5),
+                      Vec3(0, 0.0563, 0), 45, 89, 210, 186))
+    frames.Add(Worked("MorphPrimitivesTest", "mesh", 1, -1, 1, Vec3(0, 1.2, 1.2), Vec3(0, 0, 0),
+                      Vec3(-0.5, 0, -0.5), Vec3(0.5, 0.2, 0.5),
+                      Vec3(0, 0.1125, 0), 45, 87, 210, 186))
+    frames.Add(Worked("MorphPrimitivesTest", "mesh", 2, -1, 0, Vec3(0, 1.2, 1.2), Vec3(0, 0, 0),
+                      Vec3(-0.5, 0, -0.5), Vec3(0.5, 0, 0.5),
+                      Vec3(0, 0, 0), 45, 89, 210, 186))
+    Return frames
+End Function

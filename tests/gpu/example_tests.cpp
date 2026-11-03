@@ -13,7 +13,9 @@
 #include <filesystem>
 #include <format>
 #include <stb_image.h>
+#include <string>
 #include <string_view>
+#include <utility>
 
 using fbe::tests::require;
 using fbe::tests::stop_gpu;
@@ -50,6 +52,27 @@ TEST_CASE("the arcade example's frames match their golden images", "[.example]")
         const std::filesystem::path path = std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /
                                            "arcade" / std::format("frame_{}.png", frame);
         fbe::golden::check(std::format("arcade_{}", frame), saved(path));
+    }
+    stop_gpu();
+}
+
+// Khronos's sample models' frames, as models.sample saves them; where they should be is that
+// test's.
+TEST_CASE("the sample models' frames match their golden images", "[.example]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_start());
+    for (const auto& [name, frames] : {
+             std::pair{ "SimpleSkin", 4 },
+             std::pair{ "SimpleMorph", 4 },
+             std::pair{ "RiggedSimple", 3 },
+             std::pair{ "MorphPrimitivesTest", 3 },
+         }) {
+        for (int frame = 0; frame < frames; ++frame) {
+            const std::string file = std::format("model_{}_{}", name, frame);
+            INFO("frame " << file);
+            fbe::golden::check(file, saved(std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /
+                                           "models" / (file + ".png")));
+        }
     }
     stop_gpu();
 }
