@@ -5,6 +5,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./entity"
 Import "./geometry"
@@ -74,6 +75,7 @@ End Struct
 Extend Entity
     /// Puts the entity in a collision group, 1 to 1023, or none with 0, as at first; it forgets
     /// where its last move ended. Others panic.
+    @Limits(0, 1023)
     @MainThread @PanicsAtCaller
     Public Method SetCollisionGroup(group: Int)
         If !fbe_entity_set_collision_group(Live("SetCollisionGroup"), group)
@@ -161,6 +163,7 @@ Extend Entity
     /// higher than the step, and gets it further. It's also how much higher than its move rises a
     /// slide along what's steeper than ground may take it, so riding over an edge takes one. 0, at
     /// first, for neither: ramps up to its MaxSlope, and no steps. Below 0 panics.
+    @Limits(0)
     @MainThread @PanicsAtCaller
     Public Method SetStepHeight(height: Float)
         If !fbe_entity_set_step_height(Live("SetStepHeight"), height) Then Failed("SetStepHeight")
@@ -173,6 +176,7 @@ Extend Entity
     /// Sets how steep a slope, in radians from level, a sliding mover climbs as ground, as a
     /// ramp is: Deg(45) at first. Sliding along ground may raise it as far as the slope goes, and
     /// a step up lands only on ground. Outside 0 to Pi / 2 panics.
+    @Limits(0, 1.5707963) @ShownInDegrees
     @MainThread @PanicsAtCaller
     Public Method SetMaxSlope(radians: Float)
         If !fbe_entity_set_max_slope(Live("SetMaxSlope"), radians) Then Failed("SetMaxSlope")
