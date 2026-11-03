@@ -101,9 +101,9 @@ End Function
 
 @Test
 Function AStateRestoresOnlyIntoItsWorldAsItWas()
-    Local world, player = Scene()
+    Local world, _ = Scene()
     Defer world.Free()
-    Local other, otherPlayer = Scene()
+    Local other, _ = Scene()
     Defer other.Free()
     Local saved = world.Save()
     // Another world's bodies aren't its.

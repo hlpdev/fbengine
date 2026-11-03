@@ -1,6 +1,5 @@
 // Characters: players and NPCs, moved by the game through a world.
 
-Import std.core
 Import std.math
 Import "./body"
 Import "./c/fbe_character"

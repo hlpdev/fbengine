@@ -1,6 +1,5 @@
 // What casts hit, and what touches what.
 
-Import std.core
 Import std.math
 Import "./body"
 

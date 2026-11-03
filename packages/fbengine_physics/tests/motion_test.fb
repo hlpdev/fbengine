@@ -1,8 +1,6 @@
 // How bodies are moved: a kinematic body driven to where it's put, continuous collisions for fast
 // bodies, and bodies kept awake.
 
-Import std.core
-Import std.ffi
 Import std.math
 Import std.test
 Import fbengine_physics

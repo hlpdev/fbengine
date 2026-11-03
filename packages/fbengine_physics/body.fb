@@ -1,11 +1,12 @@
 // Bodies: shapes at places in worlds, which steps move.
 
-Import std.core
 Import std.ffi
 Import std.math
+Import fbengine
 Import "./c/fbe_body"
 Import "./physics"
 Import "./shape"
+Import "./sync"
 Import "./world"
 
 /// How a Body moves.
@@ -25,7 +26,8 @@ End Enum
 /// nothing, until something touches it, or a call that moves it wakes it. It's in one of its
 /// world's 32 layers, 0 at first, which say what it collides with. A sensor is a body that collides
 /// with nothing, but notices what comes into it and leaves it, as a trigger does. Free, or freeing
-/// its world, frees it, and its joints.
+/// its world, frees it, and its joints. It's kept with an entity of fbengine's by Drive, as a crate
+/// is, or Follow, as a door is, or by making it of the entity.
 ///
 /// # Examples
 ///
@@ -51,6 +53,8 @@ Public Final Class Body
     Field shape: Shape
     // Whether it's a character's, which moves it, and frees it.
     ReadOnly Field character: Bool = False
+    // The entity it's kept with.
+    Field attachment: Attachment? = Null
 
     /// A body of `shape` in `world`, moving as `motion` says, at `position`, turned by `rotation`,
     /// and awake unless it's static. A dynamic body's shape has no mesh in it, and an inside to
@@ -72,6 +76,20 @@ Public Final Class Body
         world.Keep(handle, Self)
     End New
 
+    /// A body of `shape` in `world`, moving as `motion` says, where `entity` is in the world and
+    /// turned as it is, and kept with it from now on: a dynamic body drives it, as Drive does, a
+    /// kinematic one follows it, as Follow does, and a static one stays as it's made. The entity's
+    /// scale is the shape's to have.
+    @MainThread Public New(world: PhysicsWorld, shape: Shape, motion: Motion, entity: Entity)
+        Self.world = world
+        Self.shape = shape
+        handle = Added(world, shape, motion, entity.Position(Space.WORLD),
+                       entity.Rotation(Space.WORLD))
+        world.Keep(handle, Self)
+        If (motion As Int32) == FBE_BODY_DYNAMIC Then Drive(entity)
+        If (motion As Int32) == FBE_BODY_KINEMATIC Then Follow(entity)
+    End New
+
     // A character's body, which `handle` is, which its character made.
     @MainThread Package New(world: PhysicsWorld, shape: Shape, handle: UInt64)
         Self.world = world
@@ -86,6 +104,7 @@ Public Final Class Body
     @MainThread Public Method Free()
         If handle == 0 Then Return
         If character Then Panic("Body.Free: a character's body goes as its character goes")
+        If attachment != Null Then Detach()
         fbe_body_free(handle)
         Local in = world
         If in != Null
@@ -120,6 +139,126 @@ Public Final Class Body
         If !fbe_body_set_motion(Live("Body.SetMotion"), motion As Int32)
             Panic("Body.SetMotion: {LastError()}")
         End If
+        If (motion As Int32) != FBE_BODY_KINEMATIC && Following() Then Detach()
+    End Method
+
+    /// Makes the body drive `entity`, in place of anything it's kept with: the entity's put where
+    /// the body is in the world, and turned as it is, now, and whenever the body's moved, after each
+    /// Step and Update, as they end, and at each Flip, all such in one batch. Its scale stays its
+    /// own. What moves the entity itself lasts until the body next moves. The body of a Character
+    /// that's moved between steps moves its entity at the Flip, or at its world's Sync. Drawing
+    /// between steps is the scene's: a FixedStep captures its World before each Step.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// Import std.math
+    /// Import fbengine
+    /// Import fbengine_physics
+    ///
+    /// Local world = PhysicsWorld()
+    /// Local scene = World()
+    /// Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 5, 0))
+    /// Local shown = Pivot()
+    /// ball.Drive(shown)
+    /// world.Update(0.5)
+    /// Expect(shown.Position(Space.WORLD) == ball.Position())
+    /// world.Free()
+    /// scene.Free()
+    /// ```
+    @MainThread Public Method Drive(entity: Entity)
+        Local in = Attaching("Body.Drive")
+        entity.SetPosition(Position(), Space.WORLD)
+        entity.SetRotation(Rotation(), Space.WORLD)
+        Attach(in, entity, True)
+    End Method
+
+    /// Makes a kinematic body follow `entity`, in place of anything it's kept with: it's put where
+    /// the entity is in the world, turned as it is, now, and before each step, or the steps of an
+    /// Update, it's moved to where the entity is by the end of them, as MoveTo moves it, pushing what
+    /// it meets, all such in one batch. An entity that's gone further than MoveTo would take it, as
+    /// a teleport does, has its body put there at once. A body made dynamic stops following.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// Import std.math
+    /// Import fbengine
+    /// Import fbengine_physics
+    ///
+    /// Local world = PhysicsWorld()
+    /// Local scene = World()
+    /// Local door = Pivot()
+    /// Local body = Body(world, Shape.Box(Vec3(1, 2, 0.1)), Motion.KINEMATIC, Vec3(0, 0, 0))
+    /// body.Follow(door)
+    /// door.SetPosition(Vec3(0, 0.5, 0))
+    /// world.Step(1.0 / 60)
+    /// Expect(Distance(body.Position(), Vec3(0, 0.5, 0)) < 0.001)
+    /// world.Free()
+    /// scene.Free()
+    /// ```
+    @MainThread Public Method Follow(entity: Entity)
+        Local in = Attaching("Body.Follow")
+        If fbe_body_motion(handle) != FBE_BODY_KINEMATIC
+            Panic("Body.Follow: only a kinematic body follows an entity, as a door or a lift does")
+        End If
+        If character Then Panic("Body.Follow: a character's body goes as its character goes")
+        SetPosition(entity.Position(Space.WORLD))
+        SetRotation(entity.Rotation(Space.WORLD))
+        Attach(in, entity, False)
+    End Method
+
+    /// Stops the body driving or following its entity, each left where it is; one that followed
+    /// stops moving. One with none does nothing.
+    @MainThread Public Method Detach()
+        Live("Body.Detach")
+        Local attached = attachment
+        If attached == Null Then Return
+        attached.gone = True
+        attachment = Null
+        If !attached.driving
+            SetVelocity(Vec3(0, 0, 0))
+            SetAngularVelocity(Vec3(0, 0, 0))
+        End If
+    End Method
+
+    /// The entity the body drives or follows, or Null; one that's been freed lets go of it at its
+    /// world's next batch.
+    @MainThread Public Method Attached(): Entity?
+        Live("Body.Attached")
+        Local attached = attachment
+        Return attached != Null ? attached.entity : Null
+    End Method
+
+    /// Whether the body drives an entity.
+    @MainThread Public Method Driving(): Bool
+        Live("Body.Driving")
+        Local attached = attachment
+        Return attached != Null && attached.driving
+    End Method
+
+    /// Whether the body follows an entity.
+    @MainThread Public Method Following(): Bool
+        Live("Body.Following")
+        Local attached = attachment
+        Return attached != Null && !attached.driving
+    End Method
+
+    // Its world, for `call`.
+    @MainThread Method Attaching(call: String): PhysicsWorld
+        Live(call)
+        Local in = world
+        // A world that's gone has freed its bodies.
+        If in == Null Then Panic("{call}: this Body was freed")
+        Return in
+    End Method
+
+    // Keeps it with `entity` from now on, in place of what it was.
+    @MainThread Method Attach(in: PhysicsWorld, entity: Entity, driving: Bool)
+        Detach()
+        Local attached = Attachment(Self, entity, driving)
+        attachment = attached
+        in.Attach(attached)
     End Method
 
     /// Where the body is: its shape's origin, in the world.
@@ -405,6 +544,9 @@ Public Final Class Body
 
     // Its world's Free freed it.
     @MainThread Package Method Forget()
+        Local attached = attachment
+        If attached != Null Then attached.gone = True
+        attachment = Null
         handle = 0
     End Method
 End Class

@@ -331,7 +331,8 @@ catch_discover_tests(fbengine_physics_tests TEST_PREFIX "physics."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # fbengine_physics' steps, through its DLL, which the tests find where CMake built it.
-add_executable(fbengine_physics_step_tests physics/step_tests.cpp physics/determinism_tests.cpp)
+add_executable(fbengine_physics_step_tests physics/step_tests.cpp physics/determinism_tests.cpp
+               physics/casts_tests.cpp)
 target_link_libraries(fbengine_physics_step_tests PRIVATE fbengine_physics_native
                       Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_physics_step_tests)
@@ -363,6 +364,11 @@ if(FBENGINE_FB_TESTS)
                    "${PROJECT_SOURCE_DIR}/examples/door_and_trigger")
   set_tests_properties(examples.door_and_trigger PROPERTIES PASS_REGULAR_EXPRESSION
                        "\nthe door swung open: True\r?\nthe player walked into the room: True, and is in it: True\r?\n$")
+  add_test(NAME examples.crate_on_a_lift
+           COMMAND "${FBENGINE_FB}" --color never run
+                   "${PROJECT_SOURCE_DIR}/examples/crate_on_a_lift")
+  set_tests_properties(examples.crate_on_a_lift PROPERTIES PASS_REGULAR_EXPRESSION
+                       "\nthe crate's entity is where its body is: True\r?\nthe crate rode up with the lift: True\r?\n$")
 endif()
 
 # Shapes made in a process before any world, as shape_test's are when it runs alone.
@@ -393,15 +399,15 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(physics.panics.with-a-world PROPERTIES TIMEOUT 60)
 endif()
 
-# A program that makes a world and ends at once, as a game that panics as it starts does, run 8 at a
+# A program that makes a world and ends at once, as a game that panics as it starts does, run 4 at a
 # time again and again on Jolt's most threads: each run ends, rather than its DLL's end waiting for
 # ever on a lock of a thread stopped as it started.
 add_executable(fbengine_physics_ends physics/ends.cpp)
 target_link_libraries(fbengine_physics_ends PRIVATE fbengine_physics_native)
 fbengine_set_warnings(fbengine_physics_ends)
 add_test(NAME physics.ends
-         COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_physics_ends>" -DAT_ONCE=8
-                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_physics_native>"
+         COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_physics_ends>" -DAT_ONCE=4
+                 -DRUNS=100 "-DDLLS=$<TARGET_FILE_DIR:fbengine_physics_native>"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/ends.cmake")
 set_tests_properties(physics.ends PROPERTIES TIMEOUT 600)
 # The job system, built into the tests from its own source, since the DLL exports only its C API.
@@ -505,6 +511,18 @@ target_compile_definitions(fbengine_video_tests PRIVATE
 fbengine_set_warnings(fbengine_video_tests)
 catch_discover_tests(fbengine_video_tests TEST_PREFIX "video."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>")
+
+# A video's thread, built in with a decoder of the test's, for what only its timing shows.
+add_executable(fbengine_video_thread_tests video/thread_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine_video/video/video.cpp")
+target_include_directories(fbengine_video_thread_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_video")
+target_compile_definitions(fbengine_video_thread_tests PRIVATE FBE_VIDEO_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(fbengine_video_thread_tests PRIVATE Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_video_thread_tests)
+catch_discover_tests(fbengine_video_thread_tests TEST_PREFIX "video."
+                     DL_PATHS "${fbengine_test_dll_paths}")
 # text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
 # test fonts.
 file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")

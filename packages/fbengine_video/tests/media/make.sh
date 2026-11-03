@@ -26,8 +26,12 @@
 #               its video from there in packets of 2000 bytes, the first without a time and each
 #               after with the time of the first picture to start in it, and its sound's packets
 #               from 1 s on, as a stream joined after its start is.
-#   longpad.mpg: colors.mpg, then a thousand bare picture start codes, 3 bytes each, which make it
-#               42 s long, then a copy of its last sound packet at 6 s and one at 30 s.
+#   longpad.mpg: colors.mpg, then 20,000 bare picture start codes, 3 bytes each, which make it
+#               802 s long, then a copy of its last sound packet at 6 s, at 30 s, and at 650 s.
+#   late10.mpg: pictures, with a tone starting 10 s after the first of them.
+#   cut_neg.mpg: opencut.mpg with its video's times 1.7 s earlier, so its first picture's time,
+#               less its number's, is before 0.
+#   cut_pos.mpg: the same, all its times 0.7 s later, so it isn't.
 #   broken/:    videos that read or wrote outside the heap in pl_mpeg before its patches, one
 #               of them its issue #68's; and zero1.mpg and zerotail.mpg, colors.mpg with its
 #               first sound packet's data zeros, and a middle one's zeros from its last frame's

@@ -1,0 +1,414 @@
+// Bodies and entities kept together: bodies that drive entities, kinematic bodies that follow
+// them, in a batch at each step and each Flip, on no window; and shapes of fbengine's geometry.
+
+Import std.collections
+Import std.ffi
+Import std.math
+Import std.test
+Import fbengine
+Import fbengine_physics
+Import fbengine_physics.c.fbe_body
+Import fbengine_physics.c.fbe_physics
+Import fbengine_physics.c.fbe_shape
+
+Function Near(a: Vec3, b: Vec3, within: Float = 0.01): Bool => Distance(a, b) <= within
+
+Function Ground(world: PhysicsWorld): Body =>
+    Body(world, Shape.Box(Vec3(40, 1, 40)), Motion.STATIC, Vec3(0, -0.5, 0))
+
+@Test @MainThread
+Function ADynamicBodyDrivesItsEntity()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local scene = World()
+    Defer scene.Free()
+    Ground(world)
+    Local crate = Pivot()
+    crate.SetPosition(Vec3(1, 5, 2))
+    crate.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), 0.5))
+    crate.SetScale(Vec3(2, 2, 2))
+    Local body = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, crate)
+    Expect(body.Driving() && !body.Following() && body.Attached() == crate)
+    Expect(Near(body.Position(), Vec3(1, 5, 2)))
+    For i = 1 To 30
+        world.Update(1.0 / 60)
+        Expect(crate.Position(Space.WORLD) == body.Position(),
+               "at step {i}, it's at {crate.Position(Space.WORLD)}, its body at {body.Position()}")
+    End For
+    Expect(crate.Position(Space.WORLD).y < 5)
+    Expect(IsClose(crate.Rotation(Space.WORLD), body.Rotation()))
+    // Its scale is its own.
+    Expect(crate.Scale() == Vec3(2, 2, 2))
+    // A Step too.
+    world.Step(1.0 / 60)
+    Expect(crate.Position(Space.WORLD) == body.Position())
+    // Left alone once it's let go of, each where it is.
+    body.Detach()
+    Expect(body.Attached() == Null && !body.Driving())
+    Local left = crate.Position(Space.WORLD)
+    world.Step(1.0 / 60)
+    Expect(crate.Position(Space.WORLD) == left)
+    Expect(body.Position() != left)
+    body.Detach()
+End Function
+
+// A teleport, a world restored, and a Character's Move are caught up by Sync, or the next Flip.
+@Test @MainThread
+Function WhatMovesABodyBetweenStepsDrivesItsEntityAtSyncAndFlip() Throws PhysicsStateError
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local scene = World()
+    Defer scene.Free()
+    Local crate = Pivot()
+    Local body = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 10, 0))
+    body.Drive(crate)
+    Expect(crate.Position() == Vec3(0, 10, 0), "it's put there at once")
+    Local saved = world.Save()
+    body.SetPosition(Vec3(3, 4, 5))
+    Expect(crate.Position() == Vec3(0, 10, 0))
+    world.Sync()
+    Expect(crate.Position() == Vec3(3, 4, 5))
+    body.SetPosition(Vec3(6, 7, 8))
+    Flip(False)
+    Expect(crate.Position() == Vec3(6, 7, 8))
+    Try world.Restore(saved)
+    Expect(crate.Position() == Vec3(0, 10, 0))
+    Ground(world)
+    Local player = Pivot()
+    Local walker = Character(world, Shape.Capsule(1.8, 0.3), Vec3(20, 0.9, 0))
+    walker.Body().Drive(player)
+    Expect(Near(player.Position(), walker.Position(), 1e-5))
+    Expect(Near(walker.Body().Position(), walker.Position(), 1e-5))
+    walker.Move(Vec3(1, 0, 0), 0.5)
+    Expect(!Near(player.Position(), walker.Position(), 0.1))
+    world.Sync()
+    Expect(Near(player.Position(), walker.Position(), 1e-5))
+    Expect(Near(walker.Body().Position(), walker.Position(), 1e-5))
+End Function
+
+// A parent's put before its children, whichever was attached first, and however they're parented
+// after; so a child's in the world where its body is, and one whose parent the game moves stays
+// there, asleep or not.
+@Test @MainThread
+Function ADrivenEntityUnderAnotherIsWhereItsBodyIs()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local scene = World()
+    Defer scene.Free()
+    world.SetGravity(Vec3(0, 0, 0))
+    Local parent = Pivot()
+    Local child = Pivot(parent)
+    Local childBody = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 0, 5))
+    Local parentBody = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(9, 0, 0))
+    childBody.Drive(child)
+    parentBody.Drive(parent)
+    parentBody.SetVelocity(Vec3(1, 2, 3))
+    childBody.SetVelocity(Vec3(0, 1, 0))
+    For i = 1 To 5
+        world.Step(1.0 / 60)
+        Expect(parent.Position(Space.WORLD) == parentBody.Position())
+        Expect(Near(child.Position(Space.WORLD), childBody.Position(), 1e-5),
+               "at step {i}, {child.Position(Space.WORLD)}, not {childBody.Position()}")
+    End For
+    // Parented the other way round after, which the next batch notices.
+    child.SetParent(Null)
+    parent.SetParent(child)
+    For i = 1 To 5
+        world.Step(1.0 / 60)
+        Expect(child.Position(Space.WORLD) == childBody.Position())
+        Expect(Near(parent.Position(Space.WORLD), parentBody.Position(), 1e-5))
+    End For
+    // A body that sleeps, with a parent the game moves, stays where its body is.
+    Local holder = Pivot()
+    Local sleeper = Pivot(holder)
+    Local still = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(-9, 1, 1))
+    still.Drive(sleeper)
+    still.Sleep()
+    holder.SetPosition(Vec3(100, 0, 0))
+    world.Step(1.0 / 60)
+    Expect(Near(sleeper.Position(Space.WORLD), Vec3(-9, 1, 1), 1e-4))
+End Function
+
+// A kinematic body follows its entity by its velocities, pushing what it meets, and gets there by
+// the end of the steps an Update takes.
+@Test @MainThread
+Function AKinematicBodyFollowsItsEntity()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local scene = World()
+    Defer scene.Free()
+    world.SetGravity(Vec3(0, 0, 0))
+    Local door = Pivot()
+    door.SetPosition(Vec3(0, 1, 0))
+    Local body = Body(world, Shape.Box(Vec3(1, 2, 0.2)), Motion.KINEMATIC, door)
+    Expect(body.Following() && body.Attached() == door)
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(2, 1, 0))
+    // Pushed along X into the crate, a step at a time.
+    For i = 1 To 60
+        door.SetPosition(Vec3((i As Float) * 0.05, 1, 0))
+        world.Step(1.0 / 60)
+        Expect(Near(body.Position(), door.Position(Space.WORLD), 1e-3),
+               "at step {i}, it's at {body.Position()}, its entity at {door.Position()}")
+    End For
+    Expect(crate.Position().x > 3, "the crate's at {crate.Position()}")
+    // Turned, too.
+    door.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), 0.25))
+    world.Step(1.0 / 60)
+    Expect(IsClose(body.Rotation(), door.Rotation(Space.WORLD)))
+    // Over the steps an Update takes, the whole of the way by the end of them.
+    door.SetPosition(Vec3(0, 3, 0))
+    Expect(world.Update(2.0 / 60) == 2)
+    Expect(Near(body.Position(), Vec3(0, 3, 0), 1e-3), "it's at {body.Position()}")
+    // Too far for one step, as a teleport, it's put there, and doesn't fly off.
+    door.SetPosition(Vec3(5000, 3, 0))
+    world.Step(1.0 / 60)
+    Expect(body.Position() == Vec3(5000, 3, 0))
+    Expect(body.Velocity() == Vec3(0, 0, 0))
+    world.Step(1.0 / 60)
+    Expect(Near(body.Position(), Vec3(5000, 3, 0), 1e-3))
+    // Let go of, it stops where it's got to.
+    door.SetPosition(Vec3(5001, 3, 0))
+    world.Step(1.0 / 60)
+    body.Detach()
+    Expect(body.Velocity() == Vec3(0, 0, 0))
+    Local left = body.Position()
+    door.SetPosition(Vec3(0, 0, 0))
+    world.Step(1.0 / 60)
+    Expect(body.Position() == left)
+End Function
+
+@Test @MainThread
+Function WhatABodyIsKeptWithIsOneAtATime()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local scene = World()
+    Defer scene.Free()
+    Local first = Pivot()
+    Local second = Pivot()
+    second.SetPosition(Vec3(1, 2, 3))
+    Local body = Body(world, Shape.Sphere(0.5), Motion.KINEMATIC, first)
+    // A new one takes the place of the last.
+    body.Follow(second)
+    Expect(body.Attached() == second)
+    Expect(body.Position() == Vec3(1, 2, 3))
+    first.SetPosition(Vec3(9, 9, 9))
+    world.Step(1.0 / 60)
+    Expect(body.Position() == Vec3(1, 2, 3))
+    body.Drive(first)
+    Expect(body.Driving() && first.Position() == Vec3(1, 2, 3))
+    // A body made dynamic stops following.
+    body.Follow(second)
+    body.SetMotion(Motion.DYNAMIC)
+    Expect(!body.Following() && body.Attached() == Null)
+    // One made static of an entity is only where it is.
+    Local fixed = Body(world, Shape.Sphere(0.5), Motion.STATIC, second)
+    Expect(fixed.Position() == Vec3(1, 2, 3) && fixed.Attached() == Null)
+End Function
+
+// An entity or a body freed lets go of the other, and the batches go on without it.
+@Test @MainThread
+Function FreeingEitherLetsGoOfTheOther()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local scene = World()
+    Defer scene.Free()
+    Local staying = Pivot()
+    Local stayingBody = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, staying)
+    Local gone = Pivot()
+    Local goneBody = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, gone)
+    Local followed = Pivot()
+    Local followerBody = Body(world, Shape.Sphere(0.5), Motion.KINEMATIC, followed)
+    followed.SetPosition(Vec3(0, 0.1, 0))
+    world.Step(1.0 / 60)
+    Expect(followerBody.Velocity() != Vec3(0, 0, 0))
+    gone.Free()
+    followed.Free()
+    world.Step(1.0 / 60)
+    Expect(goneBody.Attached() == Null && followerBody.Attached() == Null)
+    Expect(followerBody.Velocity() == Vec3(0, 0, 0))
+    Expect(staying.Position(Space.WORLD) == stayingBody.Position())
+    Local other = Pivot()
+    Local otherBody = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, other)
+    Local left = other.Position(Space.WORLD)
+    otherBody.Free()
+    world.Step(1.0 / 60)
+    Expect(other.Position(Space.WORLD) == left)
+    Expect(staying.Position(Space.WORLD) == stayingBody.Position())
+    // Its world freed, its entities stay, and Flips go on.
+    Local brief = PhysicsWorld()
+    Local kept = Pivot()
+    Body(brief, Shape.Sphere(0.5), Motion.DYNAMIC, kept)
+    brief.Free()
+    Flip(False)
+    Expect(!kept.Freed())
+    // An entity freed with its parent, and a character freed with its body.
+    Local holder = Pivot()
+    Local held = Pivot(holder)
+    Local heldBody = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, held)
+    Local walker = Character(world, Shape.Capsule(1.8, 0.3), Vec3(20, 0.9, 0))
+    Local shown = Pivot()
+    walker.Body().Drive(shown)
+    holder.Free()
+    walker.Free()
+    world.Step(1.0 / 60)
+    Expect(heldBody.Attached() == Null)
+    Expect(!shown.Freed())
+    Expect(staying.Position(Space.WORLD) == stayingBody.Position())
+End Function
+
+// A world dropped unfreed, with a body kept with an entity and work for each Flip, goes.
+@MainThread Function WorldToDrop(): Entity
+    Local world = PhysicsWorld()
+    Local entity = Pivot()
+    Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, entity)
+    world.UpdateEachFrame()
+    Return entity
+End Function
+
+@Test @MainThread
+Function AWorldDroppedLeavesFlipsAndItsEntitiesAlone()
+    Local scene = World()
+    Defer scene.Free()
+    Local entity = WorldToDrop()
+    Flip(False)
+    Flip(False)
+    Expect(!entity.Freed())
+End Function
+
+// Drawing between steps is the scene's: a FixedStep's capture before each Step, and its Tween.
+@Test @MainThread
+Function ADrivenEntityTweensBetweenSteps()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local scene = World()
+    Defer scene.Free()
+    world.SetGravity(Vec3(0, 0, 0))
+    Local ball = Pivot()
+    Local body = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, ball)
+    body.SetVelocity(Vec3(60, 0, 0))
+    world.Step(1.0 / 60)
+    Local before = ball.Position(Space.WORLD)
+    CaptureWorld()
+    world.Step(1.0 / 60)
+    Local after = ball.Position(Space.WORLD)
+    Expect(after.x > before.x + 0.9)
+    Expect(Near(ball.TweenedMatrix(0.5).w.xyz, (before + after) * 0.5, 1e-4))
+End Function
+
+// A world that's updated at each Flip moves as long as it's asked to, and its entities with it,
+// with no calls of the game's.
+@Test @MainThread
+Function EachFlipCanUpdateAWorld()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local scene = World()
+    Defer scene.Free()
+    Local ball = Pivot()
+    ball.SetPosition(Vec3(0, 100, 0))
+    Local body = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, ball)
+    Expect(!world.UpdatesEachFrame())
+    Frame.SetLimit(100)
+    Defer Frame.SetLimit(0)
+    For i = 1 To 5
+        Flip(False)
+    End For
+    Expect(world.Steps() == 0 && ball.Position() == Vec3(0, 100, 0))
+    world.UpdateEachFrame()
+    Expect(world.UpdatesEachFrame())
+    For i = 1 To 10
+        Flip(False)
+    End For
+    Local steps = world.Steps()
+    Expect(steps > 0, "it took {steps} steps")
+    Expect(ball.Position().y < 100 && ball.Position(Space.WORLD) == body.Position())
+    world.UpdateEachFrame(False)
+    For i = 1 To 5
+        Flip(False)
+    End For
+    Expect(world.Steps() == steps)
+End Function
+
+// The batches, in C: what's read is what moved since, and what's followed takes only a kinematic
+// body of its own.
+@Test @MainThread
+Function TheCBatches()
+    Local world = fbe_physics_new(16)
+    Defer fbe_physics_free(world)
+    Local turned = fbe_body_quat_t(0, 0, 0, 1)
+    Local handles = Buffer<UInt64>(3)
+    Local shape = fbe_shape_sphere(0.1)
+    Defer fbe_shape_free(shape)
+    Local poses = Buffer<fbe_body_pose_t>(3)
+    Local moved = Buffer<Int32>(3)
+    For i = 0 To 2
+        Local at = fbe_body_vec3_t(i As Float32, 0, 0)
+        Unsafe
+            handles[i] = fbe_body_add(world, shape, FBE_BODY_KINEMATIC, AddressOf(at),
+                                      AddressOf(turned))
+        End Unsafe
+        poses[i] = fbe_body_pose_t(fbe_body_vec3_t(NaN, 0, 0), fbe_body_quat_t(0, 0, 0, 1))
+    End For
+    Local count = 0
+    Unsafe
+        count = fbe_body_poses_moved(handles.Pointer(), poses.Pointer(), moved.Pointer(), 3)
+    End Unsafe
+    Expect(count == 3 && moved[2] == 2 && poses[1].position.x == 1)
+    Unsafe
+        count = fbe_body_poses_moved(handles.Pointer(), poses.Pointer(), moved.Pointer(), 3)
+    End Unsafe
+    Expect(count == 0)
+    Local put = fbe_body_vec3_t(5, 0, 0)
+    Unsafe
+        fbe_body_set_position(handles[1], AddressOf(put))
+        count = fbe_body_poses_moved(handles.Pointer(), poses.Pointer(), moved.Pointer(), 3)
+    End Unsafe
+    Expect(count == 1 && moved[0] == 1 && poses[1].position.x == 5)
+    // What's followed moves by the next step.
+    poses[0] = fbe_body_pose_t(fbe_body_vec3_t(0, 1, 0), fbe_body_quat_t(0, 0, 0, 1))
+    Local ok = False
+    Unsafe
+        ok = fbe_body_follow(handles.Pointer(), poses.Pointer(), 3, 1.0 / 60)
+    End Unsafe
+    Expect(ok)
+    Expect(fbe_physics_step(world, 1.0 / 60, 1))
+    Local now = fbe_body_vec3_t(0, 0, 0)
+    Unsafe
+        fbe_body_position(handles[0], AddressOf(now))
+    End Unsafe
+    Expect(Abs(now.y - 1) < 0.001, "it's at {now.y}")
+    Unsafe
+        Expect(!fbe_body_follow(handles.Pointer(), poses.Pointer(), 3, 0))
+        Expect(!fbe_body_follow(handles.Pointer(), poses.Pointer(), 3, NaN))
+    End Unsafe
+    // One that isn't kinematic, or a pose that isn't one.
+    Expect(fbe_body_set_motion(handles[2], FBE_BODY_DYNAMIC))
+    Unsafe
+        Expect(!fbe_body_follow(handles.Pointer(), poses.Pointer(), 3, 1.0 / 60))
+    End Unsafe
+    poses[0] = fbe_body_pose_t(fbe_body_vec3_t(NaN, 1, 0), fbe_body_quat_t(0, 0, 0, 1))
+    Unsafe
+        Expect(!fbe_body_follow(handles.Pointer(), poses.Pointer(), 1, 1.0 / 60))
+    End Unsafe
+    // A body freed.
+    Expect(fbe_body_free(handles[2]))
+    Unsafe
+        Expect(fbe_body_poses_moved(handles.Pointer(), poses.Pointer(), moved.Pointer(), 3) == -1)
+    End Unsafe
+End Function
+
+@Test @MainThread
+Function ShapesAreMadeOfGeometry() Throws ShapeError
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local cube = Geometry.Cube()
+    Local mesh = Try Shape.Mesh(cube)
+    Local room = Body(world, mesh, Motion.STATIC, Vec3(0, 0, 0))
+    // A cube's faces face out: down onto its top, from above, a triangle of its dozen.
+    Local hit = world.CastRay(Vec3(0.3, 3, 0.2), Vec3(0, -1, 0), 10)
+    Expect(hit?.Body == room && Abs((hit?.Distance ?? 0) - 2) < 0.001)
+    Expect((hit?.Triangle ?? -1) >= 0 && (hit?.Triangle ?? 99) < 12)
+    Local hull = Try Shape.ConvexHull(cube)
+    Local rock = Body(world, hull, Motion.DYNAMIC, Vec3(10, 0, 0))
+    Expect(Abs(rock.Mass() - 8000) < 80, "a cube 2 across weighs {rock.Mass()}")
+    Expect(ExpectThrows<ShapeError>(Shape.Mesh(Geometry())) != Null)
+End Function

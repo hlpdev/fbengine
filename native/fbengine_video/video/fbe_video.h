@@ -63,8 +63,8 @@ FBE_VIDEO_API int32_t fbe_video_sound_channels(uint64_t video);
 // `capacity` bytes at `bytes`, if there's room for it, giving how many bytes it takes; -1 if it
 // isn't a video or has no sound. Its first sample is at the video's time 0, its first picture's,
 // however its stream was cut, and it's silent where its stream has a gap, as its packets' times
-// say, though a time more than the sound's own length and 5 seconds out is taken to be wrong; it
-// was decoded as the video was opened.
+// say, though a time more than the sound's own length and the video's, or 5 seconds if that's more,
+// or 10 minutes if that's less, out is taken to be wrong; it was decoded as the video was opened.
 FBE_VIDEO_API int64_t fbe_video_sound(uint64_t video, uint8_t* bytes, int64_t capacity);
 
 // Plays `video` from where its clock is, or pauses it there; false if it isn't a video. A video

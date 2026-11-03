@@ -24,7 +24,8 @@ End Class
 /// The rest of what the game sets isn't in it: bodies' motion, layer, shape, mass, friction,
 /// restitution, damping, gravity factor, and whether they're sensors or continuous; joints'
 /// limits and springs; characters' shape, mass, strength, slope, and step height; which layers
-/// collide; and the world's step rate and most steps. It's of the world's bodies, joints, and
+/// collide; the world's step rate and most steps; and what entities bodies are kept with, whose
+/// driven ones a Restore puts where their bodies are now. It's of the world's bodies, joints, and
 /// characters as they were, and restores only into the world while it has the same ones, saved
 /// by the same version of fbengine_physics. Bytes gives it to keep, and a state made of them
 /// again is the same state.

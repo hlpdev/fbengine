@@ -1,6 +1,5 @@
 // Joints: bodies held together, or to the world.
 
-Import std.core
 Import std.math
 Import "./body"
 Import "./c/fbe_joint"

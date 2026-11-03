@@ -97,6 +97,9 @@ struct video_t {
     // Which seek the thread's pictures are of, and where the next is to.
     std::uint64_t generation = 0;
     std::optional<seek_t> seek_to = seek_t{};
+    // Whether what's to come of the thread's next seek, queued or under way, is the next loop's,
+    // which a loop turned off lets go of.
+    bool seeking_next_loop = false;
     bool loop = false;
     // Whether the thread's decoded to the end, not looping.
     bool decoded_all = false;
@@ -143,6 +146,7 @@ struct video_t {
                 const bool found = decoder->seek(to.to, picture);
                 hold.lock();
                 if (of == generation) {
+                    seeking_next_loop = false;
                     decoded(found, std::move(picture), loop_of);
                 }
                 continue;
@@ -173,6 +177,13 @@ struct video_t {
                 }
                 ++loop_of;
             }
+            // A loop turned on as this reached the end goes on into the next.
+            if (!found && !looping && loop) {
+                spare.push_back(std::move(picture));
+                seek_to = seek_t{ .to = 0.0, .loop = loop_of + 1 };
+                seeking_next_loop = true;
+                continue;
+            }
             decoded(found, std::move(picture), loop_of);
         }
     }
@@ -199,6 +210,7 @@ struct video_t {
             ready.clear();
             ++generation;
             seek_to = to;
+            seeking_next_loop = false;
             decoded_all = false;
         }
         changed.notify_all();
@@ -219,8 +231,10 @@ struct video_t {
         }
     }
 
-    // Seeks to the picture the clock's at, if that's past the next picture a seek starts from,
-    // or a loop on, which decoding every picture between would be slow to get to.
+    // Seeks to the picture the clock's at, if that's past a picture a seek starts from after the
+    // next from the thread, or a loop on, which decoding every picture between would be slow to get
+    // to: what's decoded, or comes as soon by decoding on, is left to the thread, as a seek would
+    // keep the main thread waiting.
     void skip_ahead() {
         if (showing_next) {
             return;
@@ -239,17 +253,33 @@ struct video_t {
         const std::int64_t due =
             std::clamp(static_cast<std::int64_t>(std::floor((into * frame_rate) + 0.001)),
                        std::int64_t{ 0 }, frames - 1);
-        // Where the thread gets to as soon as a seek would: the next start, or into the next loop
-        // as far as its first, which two loops on is past.
-        std::int64_t start = decoder->next_start(shown.number);
-        if (start == std::numeric_limits<std::int64_t>::max()) {
-            if (!loop) {
+        // The last picture the thread's decoded, and how many loops on from it the clock is.
+        std::int64_t last = shown.number;
+        std::int64_t on = loops;
+        {
+            const std::scoped_lock hold(lock);
+            if (!ready.empty()) {
+                last = ready.back().number;
+                on -= ready.back().loop - shown.loop;
+            }
+        }
+        if (on < 0) {
+            return;
+        }
+        // Where the thread gets to as soon as a seek would: the next start after the next it
+        // decodes, or into the next loop as far as its first, which two loops on is past.
+        if (on < 2) {
+            const std::int64_t to = (on * frames) + due;
+            std::int64_t start = decoder->next_start(last + 1);
+            if (start == std::numeric_limits<std::int64_t>::max()) {
+                if (!loop) {
+                    return;
+                }
+                start = frames + std::min(decoder->next_start(0), frames);
+            }
+            if (to <= last + 1 || to < start) {
                 return;
             }
-            start = frames + std::min(decoder->next_start(0), frames);
-        }
-        if (loops < 2 && (loops * frames) + due < start) {
-            return;
         }
         restart(seek_t{ .to = into, .loop = shown.loop + loops });
         showing_next = true;
@@ -309,6 +339,7 @@ struct video_t {
             } else if (looping && decoded_all && !seek_to.has_value()) {
                 const std::int64_t last = ready.empty() ? shown.loop : ready.back().loop;
                 seek_to = seek_t{ .to = 0.0, .loop = last + 1 };
+                seeking_next_loop = true;
                 decoded_all = false;
             }
             loop = looping;
@@ -316,9 +347,16 @@ struct video_t {
         changed.notify_all();
     }
 
-    // Lets go of the pictures the thread's decoded of the loop after the one showing, and stops
-    // it, if it has any; the lock's held. A seek's pictures still to come are of the loop it says.
+    // Lets go of the pictures the thread's decoded of the loop after the one showing, or a seek
+    // to it, and stops it, if it has any; the lock's held. A seek's pictures still to come are of
+    // the loop it says.
     void end_loop() {
+        if (seeking_next_loop) {
+            seek_to.reset();
+            seeking_next_loop = false;
+            ++generation;
+            decoded_all = true;
+        }
         if (ready.empty()) {
             return;
         }

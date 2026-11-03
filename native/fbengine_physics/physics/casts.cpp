@@ -19,6 +19,7 @@
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <limits>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <vector>
 
@@ -141,13 +142,32 @@ private:
 // A ten thousandth of a ray past its nearest hit, a tenth of a millimeter in a meter.
 constexpr float ray_margin = 1e-4F;
 
-// How many floats apart two hits of a body are at most that are where its triangles share an edge
-// or a corner, which are as near to the bit, and a few more for rounding.
+// How many floats, or how many meters, apart two hits of a body are at most that are where its
+// triangles share an edge or a corner: rounding of how far along a ray a triangle is goes by the
+// triangle's size, not how far.
 constexpr std::uint32_t shared_ulps = 4;
+constexpr float shared_meters = 1e-5F;
 
 // How many floats `a` is past `b`, of fractions of a ray, 0 or more, which `a` isn't less than.
 std::uint32_t floats_apart(float a, float b) {
     return std::bit_cast<std::uint32_t>(a) - std::bit_cast<std::uint32_t>(b);
+}
+
+// Whether `found`, nearest first after `crossed`, of a ray going `distance`, is where the ray
+// crosses a surface it's kept a hit of, as the same body's within those, whoever's are between.
+bool crossed_already(const JPH::RayCastResult& found, std::span<const JPH::RayCastResult> crossed,
+                     float distance) {
+    const float near = shared_meters / distance;
+    for (const JPH::RayCastResult& kept : std::ranges::reverse_view(crossed)) {
+        if (floats_apart(found.mFraction, kept.mFraction) > shared_ulps &&
+            found.mFraction - kept.mFraction > near) {
+            return false;
+        }
+        if (kept.mBodyID == found.mBodyID) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // How far past Jolt's closest hit a swept shape's cast `length` long is cast again, as a fraction
@@ -300,12 +320,11 @@ FBE_PHYSICS_API int32_t fbe_physics_cast_ray_all(uint64_t world, const fbe_physi
     // Nearest first, and hits as near in the same order however Jolt's broad phase has them.
     std::ranges::sort(collector.mHits, nearer<JPH::RayCastResult>);
     // One hit where the ray crosses a surface: an edge or a corner its triangles share gives one
-    // of each, as near, to the bit, the first of which, as CastRay gives, is kept; surfaces of a
-    // body apart, however little, are each hit.
+    // of each, the first of which, as CastRay gives, is kept; surfaces of a body further apart are
+    // each hit.
     std::vector<JPH::RayCastResult> crossed;
     for (const JPH::RayCastResult& found : collector.mHits) {
-        if (crossed.empty() || found.mBodyID != crossed.back().mBodyID ||
-            floats_apart(found.mFraction, crossed.back().mFraction) > shared_ulps) {
+        if (!crossed_already(found, crossed, distance)) {
             crossed.push_back(found);
         }
     }

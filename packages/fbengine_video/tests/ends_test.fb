@@ -1,7 +1,6 @@
 // A video's end: its last frame shown, however its stream ends, played or seeked to; a loop
 // turned off near its end; and a clock moved on a long way at once.
 
-Import std.core
 Import std.math
 Import std.test
 Import std.time
@@ -164,31 +163,25 @@ Function AClockMovedOnByYearsIsExact() Throws VideoError
     End For
 End Function
 
-// A loop turned off before its thread's gone on into the next is left to end there, rather than
-// its thread seeking again: as quick as a frame is, not as a seek is, in a video of one group of
-// 120 pictures.
+// Looping turned on and off with the thread at the end, at once or as its seek to the next loop's
+// under way, as in a video of one group of 120 pictures, ends there all the same.
 @Test
-Function ALoopTurnedOffBeforeItsEndDoesntSeek() Throws VideoError
-    Local video = Try Video.Load(Embed("media/longgroup.mpg"))
-    Defer video.Free()
-    Local start = Instant.Now()
-    video.Seek(110.0 / 30)
-    Local seek = start.Elapsed
-    video.Seek(0)
-    video.SetLoop(True)
-    video.Play()
-    For i = 1 To 110
-        video.Update(1.0 / 30)
+Function ALoopTurnedOnAndOffAtTheEndEndsThere() Throws VideoError
+    For entry In [("count", Embed("media/count.mpg")), ("longgroup", Embed("media/longgroup.mpg"))]
+        Local name, bytes = entry
+        For wait In [0, 2, 5]
+            Local video = Try Video.Load(bytes)
+            Defer video.Free()
+            Local frames = FramesOf(video)
+            video.Seek(((frames - 1) As Float64) / video.FrameRate())
+            Sleep(20.Milliseconds)
+            video.SetLoop(True)
+            If wait > 0 Then Sleep((wait As Int64).Milliseconds)
+            video.SetLoop(False)
+            video.Play()
+            video.Update(1.0 / video.FrameRate())
+            Expect(video.Ended() && video.FrameNumber() == frames - 1,
+                   "{name}, {wait} ms between: it shows {video.FrameNumber()}, of {frames}")
+        End For
     End For
-    Sleep(100.Milliseconds)
-    start = Instant.Now()
-    video.SetLoop(False)
-    video.Update(1.0 / 30)
-    Local off = start.Elapsed
-    Expect(video.FrameNumber() == 111)
-    Expect(off * 4 < seek, "turning the loop off and a frame took {off}, a seek there {seek}")
-    For i = 112 To 120
-        video.Update(1.0 / 30)
-    End For
-    Expect(video.Ended() && video.FrameNumber() == 119)
 End Function

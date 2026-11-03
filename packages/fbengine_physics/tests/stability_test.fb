@@ -1,7 +1,6 @@
 // Jolt's own sample scenes stay stable: a pyramid, a wall, a chain, and a heavy box on a light one
 // stand or hang as they're built for ten seconds, and the ones that stand come to rest.
 
-Import std.core
 Import std.math
 Import std.test
 Import fbengine_physics

@@ -203,7 +203,7 @@ JPH::Body* find_body(std::uint64_t handle, world_t*& world);
 
 /// The handle of the body a character's Jolt body is, which `world` keeps until the character's
 /// freed, when drop_character_body frees it.
-std::uint64_t add_character_body(world_t& world, JPH::BodyID id);
+std::uint64_t add_character_body(world_t& world, JPH::BodyID id, float padding);
 void drop_character_body(std::uint64_t handle);
 
 /// The shape `handle` is, or nullptr, with fbe_physics_error() saying so, for one that's freed or

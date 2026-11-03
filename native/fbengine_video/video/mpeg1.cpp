@@ -39,6 +39,11 @@ constexpr std::int64_t samples_per_frame = 1152;
 constexpr std::uint32_t picture_start_code = 0x00000100U;
 constexpr std::uint32_t group_start_code = 0x000001B8U;
 
+// How much silence a sound's times can make, past its own frames, in seconds: the video's length,
+// but at least the one and at most the other.
+constexpr double fewest_silence = 5.0;
+constexpr double most_silence = 600.0;
+
 // How much of a stream pl_mpeg's decoders are given at a time.
 constexpr std::size_t chunk_size = std::size_t{ 64 } * 1024;
 
@@ -186,18 +191,21 @@ stream_t stream_of(std::span<const std::uint8_t> bytes) {
 }
 
 // A video's sound, decoded, its frames placed as its packets' times say, from its first
-// picture's: a time more than the frames' own length and 5 seconds either way is taken to be
-// wrong, so silence is no longer than what the video's bytes pay for, and its frame goes on from
-// the one before.
+// picture's: a time more than the frames' own length, and the video's, or 5 seconds if that's more,
+// or 10 minutes if that's less, either way is taken to be wrong, and its frame goes on from the one
+// before; so a file of little sound and many bare pictures is at most 10 minutes of silence.
 class sound_decoding_t {
 public:
-    sound_decoding_t(const stream_t& stream, double frame_rate) : m_stream(stream) {
-        // Its times are from the first picture's, or from the sound's own first if there's none.
-        m_start = stream.start >= 0.0
-                      ? stream.start - (static_cast<double>(stream.start_number) / frame_rate)
-                      : -1.0;
+    sound_decoding_t(const stream_t& stream, double frame_rate, double duration)
+        : m_stream(stream), m_duration(duration) {
+        // Its times are from the first picture's, which can be before a stream's own 0, or from the
+        // sound's own first if there's none.
+        if (stream.start >= 0.0) {
+            m_start = stream.start - (static_cast<double>(stream.start_number) / frame_rate);
+            return;
+        }
         for (const sound_packet_t& packet : stream.sound_packets) {
-            if (m_start < 0.0 && packet.time >= 0.0) {
+            if (packet.time >= 0.0) {
                 m_start = packet.time;
                 break;
             }
@@ -284,8 +292,8 @@ private:
             std::ranges::upper_bound(packets, start, {}, &sound_packet_t::offset) - 1;
         const auto index = static_cast<std::size_t>(packet - packets.begin());
         frame_t frame{ .samples = samples.count };
-        if (index != m_packet && packet->time >= 0.0) {
-            frame.time = packet->time - m_start;
+        if (index != m_packet && packet->time >= 0.0 && m_start.has_value()) {
+            frame.time = packet->time - *m_start;
         }
         m_packet = index;
         m_frames.push_back(frame);
@@ -304,7 +312,8 @@ private:
     // samples before the first picture left out; and after silence where a frame's a gap after
     // the frame before. False if that's more than a WAV holds.
     bool place(sound_t& sound) {
-        const double most = (static_cast<double>(m_decoded) / m_rate) + 5.0;
+        const double most = (static_cast<double>(m_decoded) / m_rate) +
+                            std::max(fewest_silence, std::min(m_duration, most_silence));
         // Where silence goes, by the samples kept before it, and how much; and how many of the
         // first samples are left out.
         std::vector<std::pair<std::int64_t, std::int64_t>> gaps;
@@ -376,7 +385,8 @@ private:
     }
 
     const stream_t& m_stream;
-    double m_start = -1.0;
+    double m_duration;
+    std::optional<double> m_start;
     std::int32_t m_rate = 0;
     // A WAV's header, still to be written, and the frames' samples after it.
     std::vector<std::uint8_t> m_wav;
@@ -414,7 +424,8 @@ public:
     // Decodes its sound, after which it keeps none of the sound's stream; false if it's more than
     // a WAV holds.
     bool decode_sound() {
-        if (m_stream.has_sound && !sound_decoding_t(m_stream, m_frame_rate).decode(m_sound)) {
+        if (m_stream.has_sound &&
+            !sound_decoding_t(m_stream, m_frame_rate, duration()).decode(m_sound)) {
             return false;
         }
         m_stream.sound = {};

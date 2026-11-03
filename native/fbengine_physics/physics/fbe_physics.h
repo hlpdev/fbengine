@@ -150,6 +150,8 @@ FBE_PHYSICS_API bool fbe_physics_collides(uint64_t world, int32_t a, int32_t b);
 // when fbe_physics_error says why. It hits a mesh's triangles from the front only, unless
 // `back_faces`, so a ray from inside a room hits its walls, which face in, and one from outside
 // goes in; and a convex shape from inside too, at 0. Casts never hit a sensor.
+// (Jolt's test of a ray against a triangle isn't watertight: a ray aimed just where triangles meet
+// can pass between them, which a small sphere's fbe_physics_cast_shape doesn't.)
 FBE_PHYSICS_API bool fbe_physics_cast_ray(uint64_t world, const fbe_physics_vec3_t* origin,
                                           const fbe_physics_vec3_t* direction, float distance,
                                           uint32_t layers, uint64_t ignore, bool back_faces,

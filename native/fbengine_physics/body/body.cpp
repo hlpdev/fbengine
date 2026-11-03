@@ -4,6 +4,7 @@
 #include "fbengine_physics.h"
 #include "physics/physics.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -13,6 +14,7 @@
 #include <Jolt/Physics/Body/BodyLockInterface.h>
 #include <Jolt/Physics/Body/MotionProperties.h>
 #include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -31,6 +33,8 @@ struct body_t {
     bool can_be_dynamic;
     // Whether it's a character's, which moves it.
     bool character = false;
+    // How far up a character's body Jolt keeps its body from where the character is.
+    float padding = 0.0F;
 
     [[nodiscard]] JPH::BodyInterface& bodies() const {
         return world->system.GetBodyInterfaceNoLock();
@@ -38,6 +42,11 @@ struct body_t {
 
     [[nodiscard]] JPH::Body& body() const {
         return *world->system.GetBodyLockInterfaceNoLock().TryGetBody(id);
+    }
+
+    // Its shape's origin, in the world.
+    [[nodiscard]] JPH::Vec3 position() const {
+        return JPH::Vec3(body().GetPosition()) - JPH::Vec3(0.0F, padding, 0.0F);
     }
 };
 
@@ -97,6 +106,20 @@ fbe_body_vec3_t vec3(JPH::Vec3Arg v) {
 // `q` as Jolt's, normalized, if it's finite and not 0; false, saying so, if it isn't.
 bool quat(const fbe_body_quat_t& q, JPH::Quat& made) {
     return normalized(q.x, q.y, q.z, q.w, made);
+}
+
+// Whether `moved`, going to `at`, turned by `turned`, over `seconds`, is within what Jolt keeps a
+// body to: its solver goes wrong past that, for a body it pushes too. Its velocities are as Jolt
+// works them out.
+bool within_most(const JPH::Body& moved, JPH::Vec3Arg at, JPH::QuatArg turned, float seconds) {
+    const JPH::Vec3 center = turned * moved.GetShape()->GetCenterOfMass();
+    const JPH::Vec3 way = at + center - moved.GetCenterOfMassPosition();
+    const JPH::Vec3 linear = way / seconds;
+    const JPH::Quat turn = turned * moved.GetRotation().Conjugated();
+    const JPH::Vec3 angular = turn.GetAngularVelocity(seconds);
+    const JPH::MotionProperties& motion = *moved.GetMotionProperties();
+    return linear.Length() <= motion.GetMaxLinearVelocity() &&
+           angular.Length() <= motion.GetMaxAngularVelocity();
 }
 
 // Why a shape that's `weighed` or not, and `must_be_static` or not, can't be dynamic, or nullptr
@@ -213,9 +236,10 @@ JPH::Body* find_body(std::uint64_t handle, world_t*& world) {
     return &found->body();
 }
 
-std::uint64_t add_character_body(world_t& world, JPH::BodyID id) {
+std::uint64_t add_character_body(world_t& world, JPH::BodyID id, float padding) {
     auto body = std::make_unique<body_t>(&world, id, world.bodies.size(), true, false);
     body->character = true;
+    body->padding = padding;
     const std::uint64_t handle = bodies().add(std::move(body));
     world.bodies.push_back(handle);
     return handle;
@@ -347,7 +371,7 @@ FBE_PHYSICS_API bool fbe_body_set_motion(uint64_t body, int32_t motion_type) {
 
 FBE_PHYSICS_API bool fbe_body_position(uint64_t body, fbe_body_vec3_t* position) {
     const fp_mode_t fp_mode;
-    return get_vec3(body, position, [](const body_t& b) { return b.bodies().GetPosition(b.id); });
+    return get_vec3(body, position, [](const body_t& b) { return b.position(); });
 }
 
 FBE_PHYSICS_API bool fbe_body_rotation(uint64_t body, fbe_body_quat_t* rotation) {
@@ -645,23 +669,81 @@ FBE_PHYSICS_API bool fbe_body_move_to(uint64_t body, const fbe_body_vec3_t* posi
     if (!std::isfinite(seconds) || seconds <= 0.0F) {
         return fail(std::format("a body's moved there over more than 0 seconds, not {}", seconds));
     }
-    // Its velocities, as Jolt works them out, which a time too short for the way makes faster than
-    // Jolt keeps a body, whose solver goes wrong past them, for a body it pushes too.
     const JPH::Body& moved = found->body();
-    const JPH::Vec3 center = turned * moved.GetShape()->GetCenterOfMass();
-    const JPH::Vec3 way = at + center - moved.GetCenterOfMassPosition();
-    const JPH::Vec3 linear = way / seconds;
-    const JPH::Quat turn = turned * moved.GetRotation().Conjugated();
-    const JPH::Vec3 angular = turn.GetAngularVelocity(seconds);
-    const JPH::MotionProperties& motion = *moved.GetMotionProperties();
-    if (!(linear.Length() <= motion.GetMaxLinearVelocity()) ||
-        !(angular.Length() <= motion.GetMaxAngularVelocity())) {
+    if (!within_most(moved, at, turned, seconds)) {
+        const JPH::MotionProperties& motion = *moved.GetMotionProperties();
         return fail(std::format("a body moved there over {} seconds is faster than its most, {} "
                                 "m/s and {} radians a second",
                                 seconds, motion.GetMaxLinearVelocity(),
                                 motion.GetMaxAngularVelocity()));
     }
     found->bodies().MoveKinematic(found->id, at, turned, seconds);
+    return true;
+}
+
+FBE_PHYSICS_API int32_t fbe_body_poses_moved(const uint64_t* bodies, fbe_body_pose_t* poses,
+                                             int32_t* moved, int32_t count) {
+    const fp_mode_t fp_mode;
+    const auto size = static_cast<std::size_t>(std::max(count, 0));
+    const std::span handles(bodies, size);
+    const std::span kept(poses, size);
+    const std::span changed(moved, size);
+    std::size_t changes = 0;
+    for (std::size_t i = 0; i < size; ++i) {
+        const body_t* found = find(handles[i]);
+        if (found == nullptr) {
+            return -1;
+        }
+        const fbe_body_vec3_t position = vec3(found->position());
+        const JPH::Quat turned = found->body().GetRotation();
+        const fbe_body_quat_t rotation{
+            .x = turned.GetX(),
+            .y = turned.GetY(),
+            .z = turned.GetZ(),
+            .w = turned.GetW(),
+        };
+        fbe_body_pose_t& pose = kept[i];
+        // A NaN kept, as none has been read yet, is never the same.
+        if (position.x != pose.position.x || position.y != pose.position.y ||
+            position.z != pose.position.z || rotation.x != pose.rotation.x ||
+            rotation.y != pose.rotation.y || rotation.z != pose.rotation.z ||
+            rotation.w != pose.rotation.w) {
+            pose = { .position = position, .rotation = rotation };
+            changed[changes] = static_cast<int32_t>(i);
+            ++changes;
+        }
+    }
+    return static_cast<int32_t>(changes);
+}
+
+FBE_PHYSICS_API bool fbe_body_follow(const uint64_t* bodies, const fbe_body_pose_t* poses,
+                                     int32_t count, float seconds) {
+    const fp_mode_t fp_mode;
+    if (!std::isfinite(seconds) || seconds <= 0.0F) {
+        return fail(std::format("a body's moved there over more than 0 seconds, not {}", seconds));
+    }
+    const auto size = static_cast<std::size_t>(std::max(count, 0));
+    const std::span handles(bodies, size);
+    const std::span given(poses, size);
+    for (std::size_t i = 0; i < size; ++i) {
+        const body_t* found = find_own(handles[i]);
+        JPH::Vec3 at;
+        JPH::Quat turned;
+        if (found == nullptr || !vec3(given[i].position, at) || !quat(given[i].rotation, turned)) {
+            return false;
+        }
+        if (!found->body().IsKinematic()) {
+            return fail("only a kinematic body is moved to where it's put");
+        }
+        if (within_most(found->body(), at, turned, seconds)) {
+            found->bodies().MoveKinematic(found->id, at, turned, seconds);
+        } else {
+            found->bodies().SetPositionAndRotation(found->id, at, turned,
+                                                   JPH::EActivation::Activate);
+            found->bodies().SetLinearAndAngularVelocity(found->id, JPH::Vec3::sZero(),
+                                                        JPH::Vec3::sZero());
+        }
+    }
     return true;
 }
 

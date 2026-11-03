@@ -1,7 +1,6 @@
 // Casts: rays, swept shapes, and overlaps, by layer, ignoring a body and every sensor.
 
 Import std.collections
-Import std.core
 Import std.ffi
 Import std.math
 Import std.test
@@ -41,7 +40,7 @@ End Function
 
 @Test
 Function ARayThatHitsNothingIsNull()
-    Local world, floor, crate = Scene()
+    Local world, _, _ = Scene()
     Defer world.Free()
     Expect(world.CastRay(Vec3(0, 10, 0), Vec3(0, 1, 0), 100) == Null)
     // Nor anything past its distance.
@@ -269,7 +268,7 @@ End Function
 // A cast's distance is finite however far it goes, and 0 from inside what it hits.
 @Test
 Function CastDistancesAreFinite()
-    Local world, floor, crate = Scene()
+    Local world, _, crate = Scene()
     Defer world.Free()
     Local far = world.CastRay(Vec3(0, 10, 0), Vec3(0, -1, 0), 1e20)
     Expect(far?.Body == crate)
@@ -324,7 +323,7 @@ End Function
 
 // Two triangles of `mesh`'s, a quad's from `a` to `d`, counter-clockwise seen from its front.
 Function Quad(corners: Vec3[], indices: Int32[], a: Vec3, b: Vec3, c: Vec3, d: Vec3)
-    Local base = corners.Count As Int32
+    Local base = corners.Count
     corners.AddAll([a, b, c, d])
     indices.AddAll([base, base + 1, base + 2, base, base + 2, base + 3])
 End Function

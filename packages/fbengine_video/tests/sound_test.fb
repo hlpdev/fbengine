@@ -71,18 +71,41 @@ Function ASoundPacketsTimeFarPastTheVideoIsIgnored() Throws VideoError
     Expect(Loudest(wav, 1.8, 1.95) > 0.05)
 End Function
 
-// Silence is no longer than the sound's own frames and 5 seconds: a video made 42 s long by a
-// thousand bare pictures, 3 bytes each, whose 2 s of sound has a packet more at 6 s and one at
-// 30 s, keeps the first, after silence, and takes the second's time to be wrong.
+// Silence is at most 10 minutes past the sound's own frames: a video made 802 s long by 20,000 bare
+// pictures, 3 bytes each, whose 2 s of sound has a packet more at 6 s, at 30 s, and at 650 s, keeps
+// the first two, after silence, and takes the third's time to be wrong.
 @Test
-Function SilenceIsNoLongerThanTheSoundsFramesAndFiveSeconds() Throws VideoError
+Function SilenceIsAtMostTenMinutes() Throws VideoError
     Local video = Try Video.Load(Embed("media/longpad.mpg"))
     Defer video.Free()
-    Expect(video.Duration() > 40)
+    Expect(video.Duration() > 800)
     Local wav = Buffer<UInt8>.From(video.Sound())
-    Expect(SecondsOf(wav) > 6.1 && SecondsOf(wav) < 6.3, "it's {SecondsOf(wav)} s long")
+    Expect(SecondsOf(wav) > 30.1 && SecondsOf(wav) < 30.5, "it's {SecondsOf(wav)} s long")
     Expect(Loudest(wav, 2.1, 5.9) < 0.001)
-    Expect(Loudest(wav, 6.0, 6.2) > 0.05)
+    Expect(Loudest(wav, 6.0, 6.1) > 0.05)
+    Expect(Loudest(wav, 6.2, 29.9) < 0.001)
+    Expect(Loudest(wav, 30.0, 30.1) > 0.05)
+End Function
+
+// A sound starting 10 s into its video, further than its own 2 s and 5 seconds, is at its time.
+@Test
+Function ASoundStartingFarIntoItsVideoIsAtItsTime() Throws VideoError
+    Local video = Try Video.Load(Embed("media/late10.mpg"))
+    Defer video.Free()
+    Local wav = Buffer<UInt8>.From(video.Sound())
+    Expect(Loudest(wav, 0, 9.9) < 0.001, "it's {Loudest(wav, 0, 9.9)} before it starts")
+    Expect(Loudest(wav, 10.1, 11.5) > 0.05)
+End Function
+
+// A first picture whose time, less its number's, is before a stream's 0 is a time all the same:
+// the same video with all its times 0.7 s later has the same sound.
+@Test
+Function APictureBeforeTheStreamsStartIsATime() Throws VideoError
+    Local earlier = Try Video.Load(Embed("media/cut_neg.mpg"))
+    Defer earlier.Free()
+    Local later = Try Video.Load(Embed("media/cut_pos.mpg"))
+    Defer later.Free()
+    Expect(earlier.Sound() == later.Sound())
 End Function
 
 // The gray of a frame of opengop.mpg, which is 16 and 4 times its number.

@@ -1,0 +1,235 @@
+// Bodies and entities kept together, a batch a frame: a body that drives its entity puts it where
+// the body is after each step, each Update, and each Flip, and a body that follows its entity is
+// moved toward where the entity is before each step. A driving body's pose is read each time, in
+// one call, and only those that moved are written, so what sleeps costs next to nothing.
+
+Import std.collections
+Import std.ffi
+Import std.math
+Import fbengine
+Import "./body"
+Import "./c/fbe_body"
+Import "./physics"
+Import "./world"
+
+/// A body kept with an entity, from Drive or Follow to Detach, or until either's freed.
+Package Final Class Attachment
+    Package ReadOnly Field body: Body
+    Package ReadOnly Field entity: Entity
+    Package ReadOnly Field driving: Bool
+    // Whether it's been let go of, which its world's lists notice at their next batch.
+    Package Field gone: Bool = False
+
+    Package New(body: Body, entity: Entity, driving: Bool)
+        Self.body = body
+        Self.entity = entity
+        Self.driving = driving
+    End New
+End Class
+
+/// A world's attachments, and the buffers of its batches, as long as its driving ones.
+Package Final Class Attachments
+    Field driving: Attachment[] = []
+    Field following: Attachment[] = []
+    // The driving bodies' handles, where each was when last read, and which of them moved; made
+    // again from `driving` when it's changed.
+    Field handles: Buffer<UInt64>
+    Field poses: Buffer<fbe_body_pose_t>
+    Field moved: Buffer<Int32>
+    Field stale: Bool = False
+
+    Package New()
+        handles = Buffer<UInt64>(0)
+        poses = Buffer<fbe_body_pose_t>(0)
+        moved = Buffer<Int32>(0)
+    End New
+
+    /// Keeps `attachment` from now on.
+    Package Method Add(attachment: Attachment)
+        If attachment.driving
+            driving.Add(attachment)
+            stale = True
+        Else
+            following.Add(attachment)
+        End If
+    End Method
+
+    /// Whether any body's kept with an entity.
+    Package Method Any(): Bool => driving.Count > 0 || following.Count > 0
+
+    /// Lets go of them all, as a world's freeing does.
+    Package Method Clear()
+        driving.Clear()
+        following.Clear()
+        stale = True
+    End Method
+
+    /// Puts each entity of a driving body whose pose changed where its body is, in the world, as
+    /// `call` says to now: parents before their children, however they came to be attached or
+    /// parented, and always those with a parent, which can have moved while their bodies didn't.
+    @MainThread Package Method Drive()
+        LetGoOfFreed(driving)
+        If driving.Count == 0 Then Return
+        Local depths: Int[] = []
+        Local ordered = True
+        Local nested = False
+        Local last = 0
+        For attached In driving
+            Local depth = DepthOf(attached.entity)
+            depths.Add(depth)
+            If depth < last Then ordered = False
+            If depth > 0 Then nested = True
+            last = depth
+        End For
+        If !ordered
+            driving = ParentsFirst(driving, depths)
+            depths = []
+            For attached In driving
+                depths.Add(DepthOf(attached.entity))
+            End For
+            stale = True
+        End If
+        If stale Then MakeBuffers()
+        Local count = driving.Count
+        If nested
+            For i = 0 To driving.Count - 1
+                If depths[i] > 0 Then Forget(i As Int64)
+            End For
+        End If
+        Local changed = 0
+        Unsafe
+            changed = fbe_body_poses_moved(handles.Pointer(), poses.Pointer(), moved.Pointer(),
+                                           count)
+        End Unsafe
+        If changed < 0 Then Panic("PhysicsWorld.Sync: {LastError()}")
+        If changed == 0 Then Return
+        Local entities: Entity[] = []
+        Local placed: Pose[] = []
+        For i = 0 To changed - 1
+            Local at = moved[i As Int64]
+            Local pose = poses[at As Int64]
+            entities.Add(driving[at].entity)
+            placed.Add(Pose(Vec3(pose.position.x, pose.position.y, pose.position.z),
+                            Quat(pose.rotation.x, pose.rotation.y, pose.rotation.z,
+                                 pose.rotation.w)))
+        End For
+        Entity.SetPoses(entities, placed, Space.WORLD)
+    End Method
+
+    /// Moves each following body toward where its entity is in the world, over the next `seconds`.
+    @MainThread Package Method Follow(seconds: Float)
+        LetGoOfFreed(following)
+        If following.Count == 0 Then Return
+        Local entities: Entity[] = []
+        Local bodies = Buffer<UInt64>(following.Count As Int64)
+        For i, attached In following
+            entities.Add(attached.entity)
+            bodies[i] = attached.body.Live("PhysicsWorld.Step")
+        End For
+        Local found = Entity.Poses(entities, Space.WORLD)
+        Local given = Buffer<fbe_body_pose_t>(following.Count As Int64)
+        For i, pose In found
+            given[i] = PoseOf(pose)
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_body_follow(bodies.Pointer(), given.Pointer(),
+                                   following.Count, seconds)
+        End Unsafe
+        If !done Then Panic("PhysicsWorld.Step: {LastError()}")
+    End Method
+
+    // Drops from `list` what's been let go of, and lets go of those whose entities were freed.
+    Method LetGoOfFreed(list: Attachment[])
+        Local kept = 0
+        For i, attached In list
+            If !attached.gone && attached.entity.Freed() Then attached.body.Detach()
+            If attached.gone Then Continue
+            If kept != i Then list[kept] = attached
+            kept += 1
+        End For
+        If kept == list.Count Then Return
+        While list.Count > kept
+            list.RemoveAt(list.Count - 1)
+        End While
+        stale = True
+    End Method
+
+    // New buffers for `driving`, each pose unread.
+    Method MakeBuffers()
+        Local count = driving.Count As Int64
+        handles = Buffer<UInt64>(count)
+        poses = Buffer<fbe_body_pose_t>(count)
+        moved = Buffer<Int32>(count)
+        For i, attached In driving
+            handles[i] = attached.body.Live("PhysicsWorld.Sync")
+            Forget(i As Int64)
+        End For
+        stale = False
+    End Method
+
+    // Has the next read find the pose at `index` changed.
+    Method Forget(index: Int64)
+        poses[index] = fbe_body_pose_t(fbe_body_vec3_t(NaN, 0, 0), fbe_body_quat_t(0, 0, 0, 1))
+    End Method
+End Class
+
+// `pose` as C takes it.
+Function PoseOf(pose: Pose): fbe_body_pose_t
+    Return fbe_body_pose_t(fbe_body_vec3_t(pose.Position.x, pose.Position.y, pose.Position.z),
+                           fbe_body_quat_t(pose.Rotation.x, pose.Rotation.y, pose.Rotation.z,
+                                           pose.Rotation.w))
+End Function
+
+// How many parents `entity` has.
+@MainThread Function DepthOf(entity: Entity): Int
+    Local depth = 0
+    Local above = entity.Parent()
+    While above != Null
+        depth += 1
+        above = above.Parent()
+    End While
+    Return depth
+End Function
+
+// `list`, each of whose depth is in `depths`, those of fewer parents first, otherwise in order.
+Function ParentsFirst(list: Attachment[], depths: Int[]): Attachment[]
+    Local sorted: Attachment[] = []
+    Local depth = 0
+    While sorted.Count < list.Count
+        For i, attached In list
+            If depths[i] == depth Then sorted.Add(attached)
+        End For
+        depth += 1
+    End While
+    Return sorted
+End Function
+
+// The worlds a Flip does work for, and whether it's been asked to.
+Global flipped: Weak<PhysicsWorld>[] = []
+Global hooked = False
+
+/// Has each Flip do `world`'s work from now on, until it has none.
+@MainThread Package Function FlipFor(world: PhysicsWorld)
+    If !hooked
+        hooked = True
+        Frame.OnFlip(EachFlip)
+    End If
+    Local weak: Weak<PhysicsWorld> = world
+    flipped.Add(weak)
+End Function
+
+// Each world's work, at a Flip, before the late hooks, as audio's, hear what it moved. A world
+// that's gone, or has none now, is left out from then on.
+@MainThread Function EachFlip()
+    Local kept: Weak<PhysicsWorld>[] = []
+    Local worlds = flipped
+    flipped = []
+    For weak In worlds
+        Local world = weak
+        If world != Null && world.AtFlip(Frame.Delta()) Then kept.Add(world)
+    End For
+    // What a world's work asked for meanwhile comes after.
+    kept.AddAll(flipped)
+    flipped = kept
+End Function

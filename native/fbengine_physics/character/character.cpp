@@ -192,7 +192,8 @@ FBE_PHYSICS_API uint64_t fbe_character_new(uint64_t world, uint64_t shape,
                          in->system.GetMaxBodies()));
         return 0;
     }
-    const std::uint64_t body = add_character_body(*in, character->GetInnerBodyID());
+    const std::uint64_t body =
+        add_character_body(*in, character->GetInnerBodyID(), character->GetCharacterPadding());
     character->SetUserData(body);
     character->SetCharacterVsCharacterCollision(&in->characters_vs);
     in->characters_vs.Add(character);

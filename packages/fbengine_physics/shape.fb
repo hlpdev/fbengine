@@ -3,6 +3,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import fbengine
 Import "./c/fbe_shape"
 Import "./physics"
 
@@ -108,6 +109,20 @@ Public Final Class Shape
         End Unsafe
         If handle == 0 Then Throw ShapeError(LastError())
         Return Shape(handle, ShapeKind.CONVEX_HULL)
+    End Method
+
+    /// The smallest convex shape around every place a vertex of `geometry` is, as ConvexHull(points)
+    /// makes one, as a prop's.
+    @MainThread Public Static Method ConvexHull(geometry: Geometry): Shape Throws ShapeError
+        Return Try ConvexHull(geometry.Positions())
+    End Method
+
+    /// A mesh of `geometry`'s triangles, as Mesh(vertices, indices) makes one: its surfaces' places
+    /// welded, so its triangles meet across its UVs' and normals' seams, each triangle's number its
+    /// number across its surfaces, in order, as a Hit's Triangle says. It's a copy, in the
+    /// geometry's own space, so scale what's scaled first.
+    @MainThread Public Static Method Mesh(geometry: Geometry): Shape Throws ShapeError
+        Return Try Mesh(geometry.Positions(), geometry.Indices())
     End Method
 
     /// A mesh of triangles, three of `indices` each into `vertices`, counter-clockwise seen from

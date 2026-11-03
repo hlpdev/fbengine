@@ -2,7 +2,6 @@
 // their bodies.
 
 Import std.core
-Import std.ffi
 Import std.math
 Import std.test
 Import fbengine_physics

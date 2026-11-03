@@ -12,6 +12,7 @@ Import "./joint"
 Import "./physics"
 Import "./shape"
 Import "./state"
+Import "./sync"
 
 /// A world of bodies, which Jolt moves on each time it's stepped: by Step, for the time a game
 /// says, or by Update, at a fixed rate for the time frames take, as most games want, since a
@@ -47,8 +48,14 @@ Public Final Class PhysicsWorld
     // What began and ended touching in the last Step, or the last Update's steps.
     Field began: Contact[] = []
     Field ended: Separation[] = []
-    // Whether Update is stepping it, so each step adds to what began and ended.
+    // Whether Update is stepping it, so each step adds to what began and ended, and its bodies and
+    // entities are kept together once, around them all.
     Field updating: Bool = False
+    // Its bodies kept with entities.
+    Field attachments: Attachments
+    // Whether each Flip updates it, and whether a Flip has work for it.
+    Field eachFrame: Bool = False
+    Field atFlips: Bool = False
 
     /// A world with no bodies and Earth's gravity, which keeps room for at most `maxBodies`, from 1
     /// to 1048576.
@@ -59,6 +66,7 @@ Public Final Class PhysicsWorld
         bodies = Map<UInt64, Body>()
         joints = Map<UInt64, Joint>()
         characters = Map<UInt64, Character>()
+        attachments = Attachments()
         Physics.ChooseThreads()
         handle = fbe_physics_new(maxBodies As UInt32)
         If handle == 0 Then Panic("PhysicsWorld: {LastError()}")
@@ -71,6 +79,7 @@ Public Final Class PhysicsWorld
         fbe_physics_free(handle)
         handle = 0
         ForgetAll()
+        attachments.Clear()
         bodies.Clear()
         joints.Clear()
         characters.Clear()
@@ -135,6 +144,7 @@ Public Final Class PhysicsWorld
         // What's out of range C says so of.
         If steps == 0 && seconds > 0 && seconds <= 1 Then steps = CollisionStepsFor(seconds)
         If steps == 0 Then steps = 1
+        If !updating && seconds > 0 && seconds <= 1 Then attachments.Follow(seconds As Float32)
         If !fbe_physics_step(world, seconds As Float32, steps)
             Panic("PhysicsWorld.Step: {LastError()}")
         End If
@@ -143,6 +153,7 @@ Public Final Class PhysicsWorld
             ended.Clear()
         End If
         TakeContacts()
+        If !updating Then attachments.Drive()
     End Method
 
     /// How many times the world's been stepped, by Step and by Update.
@@ -170,6 +181,14 @@ Public Final Class PhysicsWorld
         Local due = step * 0.999
         began.Clear()
         ended.Clear()
+        // Followers get to their entities by the end of the steps due.
+        Local stepsDue = 0
+        Local left = owed
+        While left >= due && stepsDue < mostSteps
+            left -= step
+            stepsDue += 1
+        End While
+        If stepsDue > 0 Then attachments.Follow((stepsDue * step) As Float32)
         updating = True
         While owed >= due && taken < mostSteps
             Step(step)
@@ -178,7 +197,52 @@ Public Final Class PhysicsWorld
         End While
         updating = False
         If owed >= due Then owed = 0
+        If taken > 0 Then attachments.Drive()
         Return taken
+    End Method
+
+    /// Puts the entities of the bodies that drive them where those bodies are now, in one batch, as
+    /// each Step, Update, and Flip do, for what moves a body between them, as a Character's Move or
+    /// SetPosition, to draw where it's gone in the same frame.
+    @MainThread Public Method Sync()
+        Live("PhysicsWorld.Sync")
+        attachments.Drive()
+    End Method
+
+    /// Has each Flip Update the world for the time the last frame took, so a game needn't, or stops
+    /// it. A game that steps it itself, as one that's deterministic must, leaves this off, as it is
+    /// at first.
+    @MainThread Public Method UpdateEachFrame(update: Bool = True)
+        Live("PhysicsWorld.UpdateEachFrame")
+        eachFrame = update
+        If update Then ListForFlips()
+    End Method
+
+    /// Whether each Flip updates the world.
+    @MainThread Public Method UpdatesEachFrame(): Bool
+        Live("PhysicsWorld.UpdatesEachFrame")
+        Return eachFrame
+    End Method
+
+    // Keeps `attachment`, whose body's in it, and works for it at each Flip.
+    @MainThread Package Method Attach(attachment: Attachment)
+        attachments.Add(attachment)
+        ListForFlips()
+    End Method
+
+    @MainThread Method ListForFlips()
+        If atFlips Then Return
+        atFlips = True
+        FlipFor(Self)
+    End Method
+
+    // Its work at a Flip, a frame of `seconds` after the last: whether it has any left.
+    @MainThread Package Method AtFlip(seconds: Float64): Bool
+        If handle == 0 Then Return False
+        If eachFrame Then Update(seconds)
+        attachments.Drive()
+        atFlips = eachFrame || attachments.Any()
+        Return atFlips
     End Method
 
     /// How far through the next step the time Update has been given is, from 0 up to 1, for
@@ -252,7 +316,10 @@ Public Final Class PhysicsWorld
     /// what's ahead does, or Null for none. It hits a mesh's triangles from their front only,
     /// unless `backFaces`, as a ray from inside a room hits its walls, which face in, and one from
     /// outside goes in; and a convex shape from inside it too, at 0 meters. Casts never hit a
-    /// sensor.
+    /// sensor. Jolt's test of a ray against a triangle is in floats, and isn't watertight, so a ray
+    /// aimed just where a mesh's triangles meet can pass between them, a few in a thousand of such
+    /// rays nearby and one in ten from 100 m. What mustn't, as a ground check, uses CastShape with
+    /// a Shape.Sphere(0.01), whose sweep doesn't.
     @MainThread Public Method CastRay(origin: Vec3, direction: Vec3, distance: Float,
                                       layers: UInt32 = ALL_LAYERS, ignore: Body? = Null,
                                       backFaces: Bool = False): Hit?
@@ -403,6 +470,7 @@ Public Final Class PhysicsWorld
         owed = carried
         began.Clear()
         ended.Clear()
+        attachments.Drive()
     End Method
 
     // What began and ended in the step just taken.

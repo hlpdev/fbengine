@@ -35,6 +35,12 @@ typedef struct fbe_body_quat_t {
     float w;
 } fbe_body_quat_t;
 
+// Where a body is, and how it's turned.
+typedef struct fbe_body_pose_t {
+    fbe_body_vec3_t position;
+    fbe_body_quat_t rotation;
+} fbe_body_pose_t;
+
 // NOLINTEND(modernize-macro-to-enum, modernize-use-using)
 
 // A new body of `shape` in `world`, moving as `motion` says, at `position`, turned by `rotation`,
@@ -157,6 +163,20 @@ FBE_PHYSICS_API int32_t fbe_body_touching(uint64_t body, uint64_t* bodies, int32
 // radians a second.
 FBE_PHYSICS_API bool fbe_body_move_to(uint64_t body, const fbe_body_vec3_t* position,
                                       const fbe_body_quat_t* rotation, float seconds);
+
+// Where each of `count` `bodies` is, into its place in `poses`, which holds where each was when
+// this last read it: the index of each that's changed goes in `moved`, in order, as a game keeps
+// entities with their bodies a batch a frame. Gives how many changed, or -1 if one isn't a body.
+FBE_PHYSICS_API int32_t fbe_body_poses_moved(const uint64_t* bodies, fbe_body_pose_t* poses,
+                                             int32_t* moved, int32_t count);
+
+// Moves each of `count` kinematic `bodies` as fbe_body_move_to does, to its place in `poses`, over
+// the next `seconds`, more than 0, as a game keeps bodies with their entities a batch a frame; one
+// that would be faster than Jolt moves a body is put there at once, and stops, as an entity
+// teleports. False, leaving the rest as they are, at the first that isn't a kinematic body of its
+// own, or at a number out of range.
+FBE_PHYSICS_API bool fbe_body_follow(const uint64_t* bodies, const fbe_body_pose_t* poses,
+                                     int32_t count, float seconds);
 
 // Whether `body`'s collisions are found along the way it moves in a step, not only where it ends
 // up, so a fast one, as a bullet, never passes through a thin wall, for a little more work: only a

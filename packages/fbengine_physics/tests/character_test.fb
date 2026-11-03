@@ -1,7 +1,5 @@
 // Characters: walking, falling, steps and walls, pushing, crouching, and their bodies.
 
-Import std.core
-Import std.ffi
 Import std.math
 Import std.test
 Import fbengine_physics
@@ -46,7 +44,7 @@ End Function
 
 @Test
 Function ACharacterInTheAirFallsAndLands()
-    Local world, floor, player = Standing()
+    Local world, _, player = Standing()
     Defer world.Free()
     player.SetPosition(Vec3(0, 3, 0))
     player.Move(Vec3(0, 0, 0), 1.0 / 60)
@@ -58,7 +56,7 @@ End Function
 
 @Test
 Function ACharacterWalksUpAStepButNotAWall()
-    Local world, floor, player = Standing()
+    Local world, _, player = Standing()
     Defer world.Free()
     // A step 0.3 high ahead, and a wall on it further on.
     Body(world, Shape.Box(Vec3(4, 0.3, 6)), Motion.STATIC, Vec3(0, 0.15, -4))
@@ -72,7 +70,7 @@ End Function
 
 @Test
 Function ACharacterDoesntClimbAStepHigherThanItsStepHeight()
-    Local world, floor, player = Standing()
+    Local world, _, player = Standing()
     Defer world.Free()
     player.SetStepHeight(0.1)
     Expect(Near(player.StepHeight(), 0.1))
@@ -92,7 +90,7 @@ End Function
 
 @Test
 Function ACharacterWalksUpASlopeNoSteeperThanItsMaxSlope() Throws ShapeError
-    Local world, floor, player = Standing()
+    Local world, _, player = Standing()
     Defer world.Free()
     Try Ramp(world, 30)
     Walk(world, player, Vec3(0, 0, -2), 2.5)
@@ -103,7 +101,7 @@ End Function
 
 @Test
 Function ACharacterDoesntWalkUpASlopeSteeperThanItsMaxSlope() Throws ShapeError
-    Local world, floor, player = Standing()
+    Local world, _, player = Standing()
     Defer world.Free()
     Try Ramp(world, 60)
     Walk(world, player, Vec3(0, 0, -2), 2.5)
@@ -113,7 +111,7 @@ End Function
 
 @Test
 Function ACharacterPushesADynamicBody()
-    Local world, floor, player = Standing()
+    Local world, _, player = Standing()
     Defer world.Free()
     // Too high to step onto.
     Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0.5, -1.5))
@@ -125,7 +123,7 @@ End Function
 
 @Test
 Function ACharacterCrouchesAndCantStandUnderATable()
-    Local world, floor, player = Standing()
+    Local world, _, player = Standing()
     Defer world.Free()
     Local crouched = Shape.Capsule(0.9, 0.3)
     Local standing = player.Shape()
@@ -141,7 +139,7 @@ End Function
 
 @Test
 Function CastsHitACharactersBody()
-    Local world, floor, player = Standing()
+    Local world, _, player = Standing()
     Defer world.Free()
     Local hit = world.CastRay(Vec3(0, 0.9, 5), Vec3(0, 0, -1), 10)
     Expect(hit?.Body == player.Body())
@@ -155,7 +153,7 @@ End Function
 
 @Test
 Function ACharactersSettingsAreItsOwn()
-    Local world, floor, player = Standing()
+    Local world, _, player = Standing()
     Defer world.Free()
     Expect(Near(player.MaxSlope(), 50 * Pi / 180, 0.001))
     Expect(Near(player.Mass(), 70))
@@ -173,7 +171,7 @@ End Function
 @Test @MainThread
 Function ACharacterAndItsBodyGoWithItsWorld()
     Local characters = fbe_character_count()
-    Local world, floor, player = Standing()
+    Local world, _, player = Standing()
     Local body = player.Body()
     Expect(fbe_character_count() == characters + 1)
     Expect(world.Bodies() == 2)

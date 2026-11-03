@@ -2,7 +2,6 @@
 // layers collide.
 
 Import std.collections
-Import std.core
 Import std.math
 Import std.test
 Import fbengine_physics
@@ -79,7 +78,7 @@ End Function
 
 @Test
 Function ASensorNoticesWhatComesInAndLeavesButStopsNothing()
-    Local world, floor = Floored()
+    Local world, _ = Floored()
     Defer world.Free()
     Local trigger = Body(world, Shape.Box(Vec3(2, 1, 2)), Motion.STATIC, Vec3(0, 5, 0))
     trigger.SetSensor(True)
@@ -143,7 +142,7 @@ Function ContactsComeInTheSameOrderEachRun()
 End Function
 
 Function Landings(): String[]
-    Local world, floor = Floored()
+    Local world, _ = Floored()
     Defer world.Free()
     Local balls: Body[] = []
     For i = 0 To 19

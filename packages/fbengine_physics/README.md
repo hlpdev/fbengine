@@ -29,7 +29,8 @@ world.Free()
 Bodies are static, dynamic, or kinematic, of boxes, spheres, capsules, cylinders, convex hulls,
 meshes, and compounds of them, in layers, held by joints, noticed by sensors, and found by casts;
 kinematic ones are driven where a game puts them, fast ones collide all along their way, and
-characters walk among them. A world is deterministic: made and stepped by the same calls in the
+characters walk among them. A body keeps an entity of fbengine's where it is with `Drive`, or goes
+where an entity is with `Follow`, a batch a frame. A world is deterministic: made and stepped by the same calls in the
 same order, it moves the same, bit for bit, on any number of threads, whatever floating point mode
 the game's thread is in, and `Save` and `Restore` take it back to where it was. Jolt is built to
 make it the same on every target, compiler, and build too, which is checked on Windows x64 so far.
