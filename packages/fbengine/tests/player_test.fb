@@ -225,7 +225,7 @@ Function BadGltf(): UInt8[]
             "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":8}},{{\"buffer\":0,\"byteOffset\":8,\"byteLength\":24}}]," +
             "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"," +
             "\"min\":[0.5],\"max\":[1]}},{{\"bufferView\":1,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}}]," +
-            "\"nodes\":[{{\"name\":\"hips\"}},{{}}],\"skins\":[{{\"joints\":[1]}}]," +
+            "\"nodes\":[{{\"name\":\"hips\"}},{{}}],\"skins\":[{{\"joints\":[1,1]}}]," +
             "\"animations\":[{{\"name\":\"walk\",\"samplers\":[{{\"input\":0,\"output\":1}}]," +
             "\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"translation\"}}}}]}}]}}").Bytes
 End Function
@@ -245,7 +245,7 @@ Class BadClip Implements Asset
     End Method
 End Class
 
-// An Asset of a bad rig's Skin, its joint a node with no name.
+// An Asset of a bad rig's Skin, its joints one node twice.
 Class BadSkin Implements Asset
     Field Bones: Skin
 
@@ -277,7 +277,7 @@ Function ABadModelsClipOrSkinThrowsAnIOError()
         Expect(False)
     Catch failure As IOError
         Expect(failure.Kind == IOErrorKind.INVALID_DATA)
-        Expect(failure.Message.Contains("no name"))
+        Expect(failure.Message.Contains("two joints"))
     End Try
 End Function
 

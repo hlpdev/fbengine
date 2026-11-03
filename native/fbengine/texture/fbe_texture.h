@@ -13,11 +13,13 @@ extern "C" {
 
 // What a texture's pixels are: 8-bit RGBA, its color sRGB, as images' is, and sampled as linear
 // light; 8-bit RGBA as it's stored, for data, as normal maps and masks; one 8-bit channel; and
-// 16-bit floating-point RGBA, for light brighter than white.
+// 16-bit floating-point RGBA, for light brighter than white; and one a file has, as BC7 or ASTC,
+// which fbe_texture_vulkan_format says, only sampled.
 #define FBE_TEXTURE_RGBA8        0
 #define FBE_TEXTURE_RGBA8_LINEAR 1
 #define FBE_TEXTURE_R8           2
 #define FBE_TEXTURE_RGBA16F      3
+#define FBE_TEXTURE_FROM_FILE    4
 
 // How a texture is filtered: its nearest pixel, or a blend of the four around, and of its two
 // nearest mipmaps.
@@ -117,6 +119,10 @@ FBE_API bool fbe_texture_read(uint64_t texture, int32_t level, uint8_t* pixels, 
 // first; false for a freed texture.
 FBE_API bool fbe_texture_set_alpha(uint64_t texture, bool alpha);
 FBE_API bool fbe_texture_alpha(uint64_t texture);
+// The file it was loaded from, "" for none and for a freed texture; the text is the texture's until
+// its path's set again or it's freed.
+FBE_API bool fbe_texture_set_path(uint64_t texture, const char* path);
+FBE_API const char* fbe_texture_path(uint64_t texture);
 FBE_API bool fbe_texture_set_filter(uint64_t texture, int32_t filter);
 FBE_API int32_t fbe_texture_filter(uint64_t texture);
 FBE_API bool fbe_texture_set_wrap(uint64_t texture, int32_t wrap_u, int32_t wrap_v);
@@ -125,6 +131,29 @@ FBE_API int32_t fbe_texture_wrap_v(uint64_t texture);
 
 // How many textures there are.
 FBE_API int32_t fbe_texture_count(void);
+
+// Starts the GPU, if it hasn't, so what image and model loads are asked for after this transcode a
+// Basis Universal KTX2 to what the device reads: BC7, ASTC 4x4, or else RGBA8. False if it can't.
+FBE_API bool fbe_texture_start_loads(void);
+// Makes a texture of an image load's image, a 2D one, held as fbe_texture_create's are, with its
+// file's levels, or a full chain made from its one level if `mipmaps` and its format can be blit;
+// an 8-bit RGBA image's color is linear unless `srgb`. Its format is an FBE_TEXTURE_ one, or
+// FBE_TEXTURE_FROM_FILE, whose pixels aren't written, cleared, copied, or read. Its alpha's for
+// blending if any pixel of an 8-bit RGBA image's isn't whole; a compressed one's is False, for
+// fbe_texture_set_alpha to say. 0 if it can't.
+FBE_API uint64_t fbe_texture_from_load(uint64_t load, bool srgb, bool mipmaps);
+// Puts an image load's image in place of what a texture has, as fbe_texture_from_load makes it,
+// waiting for the GPU to finish what it has, keeping its handle and how it's filtered and wrapped,
+// so what draws with it draws the new one; false, leaving it as it was, if it can't.
+FBE_API bool fbe_texture_reload(uint64_t texture, uint64_t load, bool srgb, bool mipmaps);
+// Makes a texture of the image at `index` of a model load's model, as fbe_texture_from_load makes
+// one, its color as the model's file says it reads it.
+FBE_API uint64_t fbe_texture_from_model(uint64_t load, int32_t index, bool mipmaps);
+// Whether the last fbe_texture_from_load, fbe_texture_from_model, or fbe_texture_reload failed for
+// what's in its file.
+FBE_API bool fbe_texture_load_invalid(void);
+// Its Vulkan format; 0 if the handle isn't a texture's.
+FBE_API uint32_t fbe_texture_vulkan_format(uint64_t texture);
 
 #ifdef __cplusplus
 }

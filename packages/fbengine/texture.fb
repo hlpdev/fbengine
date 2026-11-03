@@ -1,15 +1,18 @@
-// Textures: images on the GPU, which 2D draws and materials sample, made empty or from a
-// std.image Image, written a region at a time, with mipmaps made from their first level; targets,
-// textures drawn into; and clearing, copying, and reading them back.
+// Textures: images on the GPU, which 2D draws and materials sample, made empty, from a std.image
+// Image, or as Assets, from files in res://, written a region at a time, with mipmaps made from
+// their first level; targets, textures drawn into; and clearing, copying, and reading them back.
 
 Import std.core
 Import std.ffi
 Import std.image
 Import std.io
 Import std.math
+Import "./assets"
 Import std.text
 Import "./c/fbe_texture"
+Import "./loads"
 Import "./pixels"
+Import "./settings"
 Import "./window"
 
 /// What a texture's pixels are.
@@ -24,6 +27,9 @@ Public Enum TextureFormat
     R8 = 2
     /// 16-bit floating-point red, green, blue, and alpha, for light brighter than white.
     RGBA16F = 3
+    /// One an image file has, as BC7 or ASTC, which VulkanFormat says: only sampled, so it isn't
+    /// written, cleared, copied, or read.
+    FROM_FILE = 4
 End Enum
 
 /// How a texture's pixels are blended where it's drawn bigger or smaller than it is.
@@ -52,8 +58,18 @@ Global textures: Weak<Texture>[] = []
 /// from its own pixels. It lives while the game holds it or a material draws with it; Free lets
 /// go of it at once. Stopping the GPU frees every texture. New, it's filtered LINEAR and wrapped
 /// REPEAT.
-Public Final Class Texture
+///
+/// It's an Asset: `Assets.Load<Texture>("res://hero.ktx2")` makes one of a PNG, a JPEG, or a KTX2
+/// read through res://, with a file's own levels, or mipmaps made of its one level if it can have
+/// them and its ImageSettings say so, and the sRGB they say for a PNG's or JPEG's. A KTX2 of BC7 or
+/// ASTC 4x4 is that format, if the GPU samples it; of UASTC, what the GPU samples, BC7, ASTC 4x4,
+/// or RGBA8. Loading starts the GPU if it hasn't. Hot reload puts a changed file in its place, so
+/// what draws with it draws the new one, once what the GPU has of it is done.
+Public Final Class Texture Implements Asset
     Field handle: UInt64
+    // The path of the file it's of, in development, whose cook won't have its pixels, until a
+    // warning's said so.
+    Field cookedWithout: String = ""
 
     /// A texture `width` by `height` pixels of `format`, transparent black, with mipmaps unless
     /// `mipmaps` is False, starting the GPU if it hasn't; it throws when the GPU can't start, the
@@ -75,15 +91,29 @@ Public Final Class Texture
 
     /// A texture of the pixels an image file decodes to, PNG, JPEG, BMP, TGA, GIF, QOI, or WebP,
     /// RGBA8, or HDR, as FromHdr makes it, with mipmaps unless `mipmaps` is False. It throws when
-    /// the file can't be read or decoded, or as New does.
+    /// the file can't be read or decoded, or as New does. Path gives the file it was loaded from.
     @MainThread
     Public Static Method Load(path: Path, mipmaps: Bool = True): Texture Throws GraphicsError,
                                                                                 IOError
+        Local made: Texture
         If path.Extension().ToLower() == ".hdr"
-            Return Try FromHdr(Try Hdr.Decode(Try File.ReadBytes(path)), mipmaps)
+            made = Try FromHdr(Try Hdr.Decode(Try File.ReadBytes(path)), mipmaps)
+        Else
+            made = Try FromImage(Try Image.Load(path), mipmaps)
         End If
-        Local image = Try Image.Load(path)
-        Return Try FromImage(image, mipmaps)
+        If !fbe_texture_set_path(made.Live("Load"), "{path}") Then Panic(LastError())
+        Return made
+    End Method
+
+    /// The file it was loaded from, as Load was given it, or Null for one that wasn't, as a game
+    /// finds what a surface is made of by its texture's name.
+    @MainThread @PanicsAtCaller
+    Public Method Path(): String?
+        Local found = ""
+        Unsafe
+            found = fbe_texture_path(Live("Path")).ToString()
+        End Unsafe
+        Return found != "" ? found : Null
     End Method
 
     /// A texture of `image`'s light, RGBA16F, with mipmaps unless `mipmaps` is False, for an
@@ -138,14 +168,87 @@ Public Final Class Texture
         Return Texture(handle)
     End Method
 
+    /// Assets' kind of load for one, an image's, on a GPU started, so a KTX2 of UASTC is
+    /// transcoded to what it samples. A GPU that can't start is what FromLoad throws.
+    @MainThread
+    Public Static Method LoadKind(): AssetKind
+        fbe_texture_start_loads()
+        Return AssetKind.IMAGE
+    End Method
+
+    /// One of what `load` read: see Texture's own docs. It throws an IOError of INVALID_DATA for an
+    /// image no texture can be, as a cube map, and of OTHER when the GPU can't make it.
+    @MainThread
+    Public Static Method FromLoad(load: AssetLoad): Texture Throws IOError
+        Local settings = Try load.Settings<ImageSettings>()
+        Local handle = fbe_texture_from_load(load.Handle, settings.Srgb, settings.Mipmaps)
+        If handle == 0 Then Throw LoadError(load)
+        If settings.Alpha Then fbe_texture_set_alpha(handle, True)
+        Local made = Texture(handle)
+        If settings.ClampAcross || settings.ClampDown Then made.ClampedAs(settings)
+        If settings.Compression != ImageCompression.NONE && Assets.FromSource()
+            made.cookedWithout = load.Path()
+        End If
+        Return made
+    End Method
+
+    /// Takes the image `load` read in place of its own, keeping how it's filtered and wrapped, and
+    /// gives True, waiting for the GPU to finish what it's doing. It throws as FromLoad does, which
+    /// leaves it as it was.
+    @MainThread
+    Public Method Reload(load: AssetLoad): Bool Throws IOError
+        Local settings = Try load.Settings<ImageSettings>()
+        If !fbe_texture_reload(handle, load.Handle, settings.Srgb, settings.Mipmaps)
+            Throw LoadError(load)
+        End If
+        If settings.Alpha Then fbe_texture_set_alpha(handle, True)
+        If settings.ClampAcross || settings.ClampDown Then ClampedAs(settings)
+        Return True
+    End Method
+
+    /// Whether it's gone, freed as the GPU stopped, so Assets makes a new one.
+    @MainThread Public Method Stale(): Bool => Freed()
+
+    // Wraps as `settings` say.
+    @MainThread
+    Method ClampedAs(settings: ImageSettings)
+        SetWrap(settings.ClampAcross ? TextureWrap.CLAMP : TextureWrap.REPEAT,
+                settings.ClampDown ? TextureWrap.CLAMP : TextureWrap.REPEAT)
+    End Method
+
+    // A panic for a file's own format, which is only sampled, saying how to keep its pixels; and a
+    // warning, once, in development, for an image whose cook will be that, so what works here does
+    // in its release.
+    @PanicsAtCaller
+    Method CookedPixels(call: String)
+        If fbe_texture_format(Live(call)) == TextureFormat.FROM_FILE As Int32
+            Panic("{call} on a texture of a file's own format, which is only sampled: " +
+                  "`compression = \"none\"` in its sidecar keeps its pixels")
+        End If
+        If cookedWithout == "" Then Return
+        Print("warning: {call} reads {cookedWithout}'s pixels, which its release won't have: " +
+              "`compression = \"none\"` in its sidecar keeps them")
+        cookedWithout = ""
+    End Method
+
+    // Why what `load` read isn't a texture, as C said.
+    Static Method LoadError(load: AssetLoad): IOError
+        Local kind = fbe_texture_load_invalid() ? IOErrorKind.INVALID_DATA : IOErrorKind.OTHER
+        Return IOError(kind, "{load.Path()}: {LastError()}", load.Path())
+    End Method
+
     Method Destroy()
         If handle != 0 Then fbe_texture_release(handle)
     End Method
 
     /// Lets go of the texture now; a material that draws with it keeps it. Using it after panics.
+    /// One Assets gave is let go of once, and goes with the last of its loads' holds.
     @MainThread @PanicsAtCaller
     Public Method Free()
-        If !fbe_texture_release(Live("Free")) Then Panic(LastError())
+        Local held = Live("Free")
+        If !Assets.Release(Self) Then Return
+        // The GPU's stopping freed it, so there's only this to let go of.
+        If fbe_texture_width(held) >= 0 && !fbe_texture_release(held) Then Panic(LastError())
         Local gone: Texture? = Null
         textures[Slot(handle)] = gone
         handle = 0
@@ -177,6 +280,14 @@ Public Final Class Texture
     @MainThread @PanicsAtCaller
     Public Method Format(): TextureFormat =>
         Checked(fbe_texture_format(Live("Format"))) As TextureFormat
+
+    /// Vulkan's number for what its pixels are, as a file's AssetLoad.Image() says it.
+    @MainThread @PanicsAtCaller
+    Public Method VulkanFormat(): UInt32
+        Local format = Live("VulkanFormat")
+        Checked(fbe_texture_format(format))
+        Return fbe_texture_vulkan_format(format)
+    End Method
 
     /// How many mipmap levels it has, the first its own size, each after half the one before, down
     /// to a pixel; 1 without mipmaps.
@@ -301,6 +412,7 @@ Public Final Class Texture
     @MainThread @PanicsAtCaller
     Public Method ReadPixels(level: Int32 = 0): UInt8[]
         Local texture = Live("ReadPixels")
+        CookedPixels("ReadPixels")
         Local levels = Levels()
         If level < 0 || level >= levels
             Panic("the texture has {levels} levels, not {level + 1}")
@@ -324,6 +436,7 @@ Public Final Class Texture
     /// RGBA8_LINEAR.
     @MainThread @PanicsAtCaller
     Public Method ToImage(): Image
+        CookedPixels("ToImage")
         Local format = Format()
         If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
             Panic("an Image is read from an RGBA8 or RGBA8_LINEAR texture, not {format}")
@@ -338,6 +451,7 @@ Public Final Class Texture
     @MainThread @PanicsAtCaller
     Public Method LockPixels(): Pixels
         Local texture = Live("LockPixels")
+        CookedPixels("LockPixels")
         Local format = Format()
         If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
             Panic("a texture's pixels are locked as RGBA8 or RGBA8_LINEAR, not {format}")

@@ -1,0 +1,132 @@
+// Fonts as Assets: read through res://, at what their sidecars say, on HarfBuzz's own test fonts,
+// which ctest names in FBENGINE_TEST_FONTS.
+
+Import std.core
+Import std.io
+Import std.os
+Import std.test
+Import std.time
+Import fbengine
+Import "./gltfs"
+Import "./watching"
+
+Function Fonts(): String => Env.Get("FBENGINE_TEST_FONTS") ?? ""
+
+Function FontBytes(name: String): UInt8[] Throws IOError
+    Return Try File.ReadBytes(Path("{Fonts()}/{name}"))
+End Function
+
+@Test
+Function AFontFileIsAFontAtWhatItsSidecarSays() Throws IOError
+    If Fonts() == "" Then Skip("no fonts named")
+    Assets.MountFiles("res://fonts", {
+        "plain.ttf": Try FontBytes("OpenSans-Regular.ttf"),
+        "title.ttf": Try FontBytes("OpenSans-Regular.ttf"),
+        "title.ttf.toml": "size = 32\nbold = true\nunderline = true".Bytes,
+    })
+    Defer Assets.Unmount("res://fonts")
+    Local plain = Try Assets.Load<Font>("res://fonts/plain.ttf")
+    Defer plain.Free()
+    Expect(plain.Size() == 16.0)
+    Expect(!plain.Style().Bold)
+    Local title = Try Assets.Load<Font>("res://fonts/title.ttf")
+    Defer title.Free()
+    Expect(title.Size() == 32.0)
+    Expect(title.Style().Bold)
+    Expect(title.Style().Underline)
+    Expect(!title.Style().Italic)
+End Function
+
+@Test
+Function TheCacheHasOneFontOfAFile() Throws IOError
+    If Fonts() == "" Then Skip("no fonts named")
+    Assets.MountFiles("res://one-font", {"a.ttf": Try FontBytes("OpenSans-Regular.ttf")})
+    Defer Assets.Unmount("res://one-font")
+    Local first = Try Assets.Load<Font>("res://one-font/a.ttf")
+    Local second = Try Assets.LoadAsync<Font>("res://one-font/a.ttf").Wait()
+    Expect(RefEquals(first, second))
+    first.Free()
+    Expect(second.Size() == 16.0)
+    second.Free()
+    Expect(second.ToString() == "a freed font")
+End Function
+
+@Test
+Function WhatIsntAFontThrows()
+    Assets.MountFiles("res://not-font", {
+        "a.ttf": "not a font".Bytes,
+        "b.ttf": "not a font".Bytes,
+        "b.ttf.toml": "size = -1".Bytes,
+    })
+    Defer Assets.Unmount("res://not-font")
+    Expect(ExpectThrows<IOError>(Assets.Load<Font>("res://not-font/a.ttf"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(ExpectThrows<IOError>(Assets.Load<Font>("res://not-font/b.ttf"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+End Function
+
+@Test
+Function AChangedSidecarReloadsItsFontInPlace() Throws IOError
+    If Fonts() == "" Then Skip("no fonts named")
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.ttf", Try FontBytes("OpenSans-Regular.ttf"))
+    Assets.MountFolder("res://hot-font", folder.Path)
+    Defer Assets.Unmount("res://hot-font")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Local font = Try Assets.Load<Font>("res://hot-font/a.ttf")
+    Defer font.Free()
+    Local narrow = font.Measure("Main menu").x
+    Try WatcherStarted(folder.Path, "res://hot-font")
+    Try File.WriteText(folder.Path / "a.ttf.toml", "size = 48")
+    FlipUntil(Function(): Bool => font.Size() == 48.0)
+    Expect(font.Size() == 48.0)
+    Expect(font.Measure("Main menu").x > narrow)
+End Function
+
+Const ARABIC: String = "مرحبا"
+
+// A font's reload keeps its fallbacks, as its doc says.
+@Test
+Function AReloadedFontKeepsItsFallbacks() Throws IOError
+    If Fonts() == "" Then Skip("no fonts named")
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.ttf", Try FontBytes("OpenSans-Regular.ttf"))
+    Assets.MountFolder("res://file-fall", folder.Path)
+    Defer Assets.Unmount("res://file-fall")
+    Local font = Try Assets.Load<Font>("res://file-fall/a.ttf")
+    Defer font.Free()
+    font.SetSystemFallback(False)
+    font.AddFallback(Try Font.FromBytes(Try FontBytes("Mada-VF.ttf"), 20.0))
+    Expect(font.Has(ARABIC))
+    Try File.WriteText(folder.Path / "a.ttf.toml", "size = 48")
+    Try Assets.Reload("res://file-fall/a.ttf")
+    FlipUntil(Function(): Bool => font.Size() == 48.0)
+    Expect(font.Size() == 48.0)
+    Expect(!font.SystemFallback())
+    font.SetSystemFallback(False)
+    Expect(font.Has(ARABIC))
+End Function
+
+// A font that's another's fallback, reloaded.
+@Test
+Function AReloadedFallbackIsStillAFallback() Throws IOError
+    If Fonts() == "" Then Skip("no fonts named")
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "b.ttf", Try FontBytes("Mada-VF.ttf"))
+    Assets.MountFolder("res://file-fall2", folder.Path)
+    Defer Assets.Unmount("res://file-fall2")
+    Local fallback = Try Assets.Load<Font>("res://file-fall2/b.ttf")
+    Defer fallback.Free()
+    Local font = Try Font.FromBytes(Try FontBytes("OpenSans-Regular.ttf"), 20.0)
+    font.SetSystemFallback(False)
+    font.AddFallback(fallback)
+    Expect(font.Has(ARABIC))
+    Try File.WriteText(folder.Path / "b.ttf.toml", "size = 48")
+    Try Assets.Reload("res://file-fall2/b.ttf")
+    FlipUntil(Function(): Bool => fallback.Size() == 48.0)
+    Expect(font.Has(ARABIC))
+End Function

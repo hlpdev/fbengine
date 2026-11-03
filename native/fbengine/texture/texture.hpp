@@ -5,9 +5,11 @@
 // the frame graph's passes draw into, copy, and clear; and targets the engine makes for itself.
 
 #include "../../common/handles.hpp"
+#include "assets/image.hpp"
 #include "gpu/vulkan.hpp"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace fbe::texture {
@@ -47,6 +49,8 @@ struct texture_t {
     std::uint32_t references = 0;
     /// Whether its alpha's for blending, which a material blending AUTO goes by.
     bool alpha = false;
+    /// The file it was loaded from, "" for none.
+    std::string path;
     /// How many times its pixels have changed on the GPU, which a CPU copy of them was read at.
     std::uint64_t version = 0;
     /// Whether it's the engine's own, as the frame graph's transient targets' images are, which
@@ -116,5 +120,9 @@ std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, s
 /// draws samples, as an atlas page's new glyphs are. False, with fbe_error's why, if it can't.
 bool write_ahead(std::uint64_t handle, std::uint32_t x, std::uint32_t y, std::uint32_t width,
                  std::uint32_t height, const std::uint8_t* pixels, std::uint32_t pitch);
+
+/// What a Basis Universal KTX2 is transcoded to for the started device: BC7 if it samples that,
+/// else ASTC 4x4, else RGBA8, as it is without a started device.
+assets::transcode_t device_transcode();
 
 } // namespace fbe::texture

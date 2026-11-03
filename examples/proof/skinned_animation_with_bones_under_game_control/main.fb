@@ -1,0 +1,270 @@
+// A figure made in code: one skinned Mesh, a tube for a body and an arm and a short one for a head,
+// its bones entities a Player poses at a fraction of a frame, crossfades, and hands to the game: its
+// head turned to look after each update, and its arm released to stay for good. It prints what it
+// finds by numbers and draws into a texture; with --watch it plays in a window until that's closed
+// or Escape's pressed, or under --frames, as a test runs it, for that many with no window.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import fbengine
+
+// How wide the texture the proof draws into is.
+Const SIZE: Int = 128
+
+// A skinned Mesh and the bones that move it, under a Pivot that's the Player's.
+Class Figure
+    Public Field Body: Pivot
+    Public Field Skinned: Mesh
+    Public Field Spine: Pivot
+    Public Field Head: Pivot
+    Public Field Upper: Pivot
+    Public Field Lower: Pivot
+    Public Field Plays: Player
+    Public Field Stand: Clip
+    Public Field Wave: Clip
+
+    Public New()
+        Body = Pivot()
+        Spine = Bone("spine", Body, Vec3(0, 0.7, 0))
+        Head = Bone("head", Spine, Vec3(0, 0.9, 0))
+        Upper = Bone("upper", Spine, Vec3(0.3, 0.6, 0))
+        Lower = Bone("lower", Upper, Vec3(0.7, 0, 0))
+
+        Local geometry = Geometry()
+        Local surface = geometry.AddSurface()
+        Local joints: VertexJoints[] = []
+        // Its body, from its feet to its neck, all on its spine.
+        AddTube(surface, joints, Vec3(0, -0.7, 0), Vec3(0, 1.5, 0), 0.25, 0, 0)
+        // Its head, a short fat tube, on its head.
+        AddTube(surface, joints, Vec3(0, 1.5, 0), Vec3(0, 1.95, 0), 0.22, 1, 1)
+        // Its arm, from its shoulder to its hand, shared at its elbow.
+        AddTube(surface, joints, Vec3(0.2, 1.3, 0), Vec3(1.0, 1.3, 0), 0.1, 2, 3)
+        AddTube(surface, joints, Vec3(1.0, 1.3, 0), Vec3(1.7, 1.3, 0), 0.08, 3, 3)
+        surface.SetJoints(joints)
+
+        Skinned = Mesh(geometry, Body)
+        Local skin = Skin()
+        skin.AddJoint("spine", Mat4.Translation(Vec3(0, -0.7, 0)))
+        skin.AddJoint("head", Mat4.Translation(Vec3(0, -1.6, 0)))
+        skin.AddJoint("upper", Mat4.Translation(Vec3(-0.3, -1.3, 0)))
+        skin.AddJoint("lower", Mat4.Translation(Vec3(-1, -1.3, 0)))
+        Skinned.SetSkin(skin, Body)
+
+        // At 30 frames a second, as a model's made.
+        Stand = Clip("stand", 30)
+        Stand.AddRotations("upper", [0, 1], [Turned(-60), Turned(-60)])
+        Stand.AddRotations("lower", [0, 1], [Turned(0), Turned(20)])
+        Wave = Clip("wave", 30)
+        Wave.AddRotations("upper", [0, 1], [Turned(0), Turned(90)])
+        Wave.AddRotations("lower", [0, 1], [Turned(0), Turned(0)])
+        Plays = Body.Player()
+    End New
+
+    // Where its hand is, as its skin moves the vertex bound there.
+    Public Method Hand(): Vec3 => Skinned.Palette()[3].TransformPoint(Vec3(1.7, 1.3, 0))
+
+    // How far up its upper arm's turned, in degrees.
+    Public Method ArmAngle(): Float
+        Local along = Upper.Rotation() * Vec3(1, 0, 0)
+        Return Round(Atan2(along.y, along.x) * 180 / Pi * 100) / 100
+    End Method
+End Class
+
+Function Bone(name: String, parent: Entity, position: Vec3): Pivot
+    Local bone = Pivot(parent)
+    bone.SetName(name)
+    bone.SetPosition(position)
+    Return bone
+End Function
+
+// A turn about Z, in degrees: up, for an arm along +X.
+Function Turned(degrees: Float): Quat => Quat.FromAxisAngle(Vec3(0, 0, 1), Deg(degrees))
+
+// Adds a tube of 16 sides around the line from `from` to `to`, its vertices on joint `first` at its
+// start, going over to `last` by its end, in 5 rings.
+Function AddTube(surface: Surface, joints: VertexJoints[], from: Vec3, to: Vec3, radius: Float,
+                 first: Int, last: Int)
+    Local along = Normalize(to - from)
+    Local across = Abs(along.y) > 0.9 ? Vec3(1, 0, 0) : Vec3(0, 1, 0)
+    Local side = Normalize(Cross(along, across))
+    Local up = Cross(side, along)
+    Local start = surface.VertexCount()
+    For ring = 0 To 4
+        Local part = (ring As Float) / 4
+        Local center = from + (to - from) * part
+        For turn = 0 Until 16
+            Local angle = 2 * Pi * (turn As Float) / 16
+            Local out = up * Cos(angle) + side * Sin(angle)
+            surface.AddVertex(Vertex(center + out * radius, out))
+            joints.Add(VertexJoints(first As UInt16, last As UInt16, 0, 0,
+                                    Vec4(1 - part, part, 0, 0)))
+        End For
+    End For
+    For ring = 0 Until 4
+        For turn = 0 Until 16
+            Local next = (turn + 1) % 16
+            Local a = start + ring * 16 + turn
+            Local b = start + ring * 16 + next
+            Local c = a + 16
+            Local d = b + 16
+            surface.AddTriangles([a, c, b, b, c, d])
+        End For
+    End For
+End Function
+
+// To two places, with no -0.
+Function Rounded(value: Float): Float => Round(value * 100) / 100 + 0
+
+Function Shown(place: Vec3): String => "{Rounded(place.x)}, {Rounded(place.y)}, {Rounded(place.z)}"
+
+// The red a target of SIZE has at a place in the world, as `camera` sees it.
+Function RedAt(pixels: UInt8[], camera: Camera, place: Vec3): Int
+    Local seen = camera.Project(place)
+    If seen == Null Then Return -1
+    Local x = Clamp(seen.x As Int, 0, SIZE - 1)
+    Local y = Clamp(seen.y As Int, 0, SIZE - 1)
+    Return pixels[(y * SIZE + x) * 4] As Int
+End Function
+
+Function Proved() Throws GraphicsError
+    Window.SetHeadless(True)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local figure = Figure()
+    Local player = figure.Plays
+
+    // Bound, nothing's moved: the hand's where it was made.
+    Print("bound, its hand at {Shown(figure.Hand())}")
+
+    // A quarter turn over 30 frames: at frame 7.5, a fraction of a frame, it's 22.5 degrees up.
+    player.Play(figure.Wave, PlayMode.ONCE)
+    player.SetTime(7.5 / figure.Wave.FrameRate())
+    Print("at frame 7.5, at {figure.Wave.FrameRate()} a second, its arm's {figure.ArmAngle()} up")
+    player.SetTime(1)
+    Print("at its end, its hand at {Shown(figure.Hand())}")
+
+    // Crossfading into a Clip that holds the upper arm down: half way, half way there.
+    player.Crossfade(figure.Stand, 1)
+    UpdateWorld(0.5)
+    Print("half way through a crossfade, its arm's {figure.ArmAngle()} up")
+    UpdateWorld(0.6)
+    Print(
+        "after it, playing {player.Clip()?.Name() ?? "nothing"}, its arm's {figure.ArmAngle()} up")
+
+    // After the update, the game's: its head turned to look at something, which its palette has.
+    Local face = Vec3(0, 1.6, -1)
+    Print("its face, before, at {Shown(figure.Skinned.Palette()[1].TransformPoint(face))}")
+    figure.Head.PointAt(Vec3(5, 1.6, 0))
+    Print("its head turned, looking along {Shown(figure.Head.Forward())}, " +
+          "its face at {Shown(figure.Skinned.Palette()[1].TransformPoint(face))}")
+
+    // A bone no Clip moves stays as the game left it; one a Clip moves is posed again, unless it's
+    // released, which is the game's for good, until it's reclaimed.
+    UpdateWorld(0.1)
+    Print("after an update, its head still looks along {Shown(figure.Head.Forward())}")
+    figure.Upper.SetRotation(Turned(45))
+    Print("its arm turned by the game: {figure.ArmAngle()} up")
+    UpdateWorld(0.1)
+    Print("posed again by an update: {figure.ArmAngle()} up")
+    player.Release(figure.Upper)
+    figure.Upper.SetRotation(Turned(45))
+    UpdateWorld(0.1)
+    Print("released, it stays: {figure.ArmAngle()} up")
+    player.Reclaim(figure.Upper)
+    UpdateWorld(0.1)
+    Print("reclaimed, it's posed again: {figure.ArmAngle()} up")
+
+    // Drawn: its hand is where the numbers say it is, raised or bound.
+    Local target = Try Texture.Target(SIZE, SIZE, TextureFormat.RGBA8, 1, True)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    camera.SetPosition(Vec3(0, 1, 6))
+    Local red = Material()
+    red.SetShading(Shading.UNLIT)
+    red.SetColor(Color(1, 0, 0))
+    figure.Skinned.SetMaterial(red)
+    player.Stop()
+    player.Play(figure.Wave, PlayMode.ONCE)
+    player.SetTime(1)
+    Local raised = figure.Hand() - Vec3(0, 0.1, 0)
+    Local level = Vec3(1.6, 1.3, 0)
+    RenderWorld()
+    Local pixels = target.ReadPixels()
+    Print("drawn raised: red {RedAt(pixels, camera, raised)} at its hand, " +
+          "{RedAt(pixels, camera, level)} where it was")
+    Flip(False)
+    player.SetTime(0)
+    RenderWorld()
+    pixels = target.ReadPixels()
+    Print("drawn bound: red {RedAt(pixels, camera, level)} at its hand, " +
+          "{RedAt(pixels, camera, raised)} where it went")
+    Flip(False)
+End Function
+
+// The figure waving and standing in turn, crossfading, its head following something that flies
+// round it, in a window, or, for `frames`, that many with none.
+Function Watched(frames: Int) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Window.SetTitle("A figure crossfading between clips")
+    Try Graphics(1024, 576)
+    Defer EndGraphics()
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local figure = Figure()
+    figure.Skinned.SetMaterial(Material(Color(0.8, 0.7, 0.6)))
+    Local camera = Camera()
+    camera.SetPosition(Vec3(0, 1, 6))
+    camera.SetClearColor(Color(0.1, 0.12, 0.16))
+    world.SetAmbientLight(Color(0.25, 0.25, 0.3))
+    Local light = Light(LightType.POINT)
+    light.SetPosition(Vec3(4, 5, 4))
+    light.SetRange(30)
+    light.SetIntensity(60)
+    Local fly = Mesh(Geometry.Sphere())
+    fly.SetScale(Vec3(0.08, 0.08, 0.08))
+    figure.Plays.Play(figure.Stand, PlayMode.PING_PONG)
+    Local count = 0
+    Local waited: Float = 0
+    Local waving = False
+    Local age: Float = 0
+    While !Window.Closed() && (frames == 0 || count < frames)
+        If KeyHit(Key.ESCAPE) Then Break
+        Local delta = Frame.Delta() As Float
+        age += delta
+        waited += delta
+        count += 1
+        // Each 3 seconds, the other Clip, over a second.
+        If waited >= 3
+            waited = 0
+            waving = !waving
+            figure.Plays.Crossfade(waving ? figure.Wave : figure.Stand, 1, PlayMode.PING_PONG)
+        End If
+        fly.SetPosition(Vec3(Sin(age) * 3, 1.8 + Sin(age * 2) * 0.5, Cos(age) * 3))
+        UpdateWorld(delta)
+        // After the update, as a game does it, its head looks at what flies round it.
+        figure.Head.PointAt(fly)
+        RenderWorld()
+        Flip()
+    End While
+    Print("watched {count} frames")
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function FramesOf(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try Watched(FramesOf(arguments))
+Else
+    Try Proved()
+End If

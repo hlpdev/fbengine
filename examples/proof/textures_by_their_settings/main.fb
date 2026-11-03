@@ -1,0 +1,283 @@
+// Textures loaded by what their files and sidecars say: whether they're color, have alpha, have
+// mipmaps, and clamp; a strip's frames; PNG, JPEG, and BMP, whatever their names say, with a path
+// of backslashes in any case; a sound whose name says nothing; what the cooker makes of each format
+// a sidecar can choose; and a DDS, which is refused plainly, as converting one is a game's own. It
+// prints what each is; with --watch, a window of them, its strip going round.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.jpeg
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.text
+Import fbengine
+Import fbengine_audio
+Import fbengine_tools
+
+Function Filled(side: Int, color: Color32): Image
+    Local image = Image(side, side)
+    image.Fill(color)
+    Return image
+End Function
+
+// Adds `value`'s `count` bytes, little end first.
+Function AddInt(bytes: UInt8[], value: Int, count: Int)
+    For at = 0 Until count
+        bytes.Add(((value >> (at * 8)) & 0xFF) As UInt8)
+    End For
+End Function
+
+// A BMP, `side` across, of 24-bit pixels of one color: its headers, then rows padded to 4 bytes.
+Function Bmp(side: Int, red: Int, green: Int, blue: Int): UInt8[]
+    Local row = ((side * 3 + 3) / 4) * 4
+    Local bytes: UInt8[] = []
+    bytes.AddAll("BM".Bytes)
+    AddInt(bytes, 54 + row * side, 4)
+    AddInt(bytes, 0, 4)
+    AddInt(bytes, 54, 4)
+    AddInt(bytes, 40, 4)
+    AddInt(bytes, side, 4)
+    AddInt(bytes, side, 4)
+    AddInt(bytes, 1, 2)
+    AddInt(bytes, 24, 2)
+    AddInt(bytes, 0, 4)
+    AddInt(bytes, row * side, 4)
+    AddInt(bytes, 2835, 4)
+    AddInt(bytes, 2835, 4)
+    AddInt(bytes, 0, 4)
+    AddInt(bytes, 0, 4)
+    For y = 1 To side
+        For x = 1 To side
+            bytes.Add(blue As UInt8)
+            bytes.Add(green As UInt8)
+            bytes.Add(red As UInt8)
+        End For
+        For pad = side * 3 + 1 To row
+            bytes.Add(0)
+        End For
+    End For
+    Return bytes
+End Function
+
+// A WAV of a tenth of a second's silence.
+Function Wav(): UInt8[]
+    Local frames = 4800
+    Local bytes: UInt8[] = []
+    bytes.AddAll("RIFF".Bytes)
+    AddInt(bytes, 36 + frames * 2, 4)
+    bytes.AddAll("WAVEfmt ".Bytes)
+    AddInt(bytes, 16, 4)
+    AddInt(bytes, 1, 2)
+    AddInt(bytes, 1, 2)
+    AddInt(bytes, 48000, 4)
+    AddInt(bytes, 96000, 4)
+    AddInt(bytes, 2, 2)
+    AddInt(bytes, 16, 2)
+    bytes.AddAll("data".Bytes)
+    AddInt(bytes, frames * 2, 4)
+    For frame = 1 To frames * 2
+        bytes.Add(0)
+    End For
+    Return bytes
+End Function
+
+// A strip of four frames, red, green, blue, and white, each 8 across.
+Function Strip(): Image
+    Local strip = Image(32, 8)
+    Local colors = [Color32(255, 0, 0, 255), Color32(0, 255, 0, 255), Color32(0, 0, 255, 255),
+                    Color32(255, 255, 255, 255)]
+    For x = 0 To 31
+        For y = 0 To 7
+            strip[x, y] = colors[x / 8]
+        End For
+    End For
+    Return strip
+End Function
+
+// The game's files: names that say nothing of what's in them, sidecars, and folders.
+Function Files(): Map<String, UInt8[]>
+    Local faded = Filled(4, Color32(255, 255, 255, 255))
+    faded[0, 0] = Color32(255, 255, 255, 128)
+    Return {
+        "gfx/plain.png": Png.Encode(Filled(16, Color32(200, 0, 0, 255))),
+        "gfx/bare.png": Png.Encode(Filled(16, Color32(0, 200, 0, 255))),
+        "gfx/bare.png.toml": "mipmaps = false".Bytes,
+        "gfx/normal.png": Png.Encode(Filled(4, Color32(128, 128, 255, 255))),
+        "gfx/normal.png.toml": "srgb = false".Bytes,
+        "gfx/faded.png": Png.Encode(faded),
+        "gfx/clamped.png": Png.Encode(Filled(4, Color32(0, 0, 200, 255))),
+        "gfx/clamped.png.toml": "clamp_across = true\nclamp_down = true".Bytes,
+        "gfx/strip.png": Png.Encode(Strip()),
+        "gfx/photo.jpg": Jpeg.Encode(Filled(8, Color32(255, 255, 255, 255))),
+        "gfx/old.bmp": Bmp(4, 255, 128, 0),
+        "gfx/picture.pt": Png.Encode(Filled(4, Color32(255, 0, 255, 255))),
+        "gfx/scene.it": Jpeg.Encode(Filled(4, Color32(255, 255, 255, 255))),
+        "sfx/call.cwm": Wav(),
+        "gfx/old.dds": "DDS |  a header, and no more".Bytes,
+    }
+End Function
+
+Function Proved() Throws GraphicsError, IOError
+    Assets.MountFiles("res://game", Files())
+    Defer Assets.Unmount("res://game")
+
+    // Sounds need no GPU, and go by their bytes too.
+    Local call = Try Assets.Load<Sound>("res://game/sfx/call.cwm")
+    Print("a .cwm's sound of {call.Frames()} frames")
+
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+
+    // Mipmaps by default, as a Blitz texture has, and none by a sidecar's word.
+    Local plain = Try Assets.Load<Texture>("res://game/gfx/plain.png")
+    Print("by default {plain.Levels()} levels, {plain.Format()}, {plain.WrapAcross()}")
+    Local bare = Try Assets.Load<Texture>("res://game/gfx/bare.png")
+    Print("mipmaps = false, {bare.Levels()} level")
+
+    // Color or data, alpha, and clamping.
+    Local normal = Try Assets.Load<Texture>("res://game/gfx/normal.png")
+    Print("srgb = false, {normal.Format()}")
+    Local faded = Try Assets.Load<Texture>("res://game/gfx/faded.png")
+    Print("alpha in its pixels {faded.Alpha()}")
+    Print("alpha in a whole one {plain.Alpha()}")
+    Local clamped = Try Assets.Load<Texture>("res://game/gfx/clamped.png")
+    Print("clamped {clamped.WrapAcross()}, {clamped.WrapDown()}")
+
+    // A strip's frames, each drawn by its number.
+    Local strip = Sprite2D(Try Assets.Load<Texture>("res://game/gfx/strip.png"))
+    strip.SetFrames(8, 8)
+    Print("a strip of {strip.Frames()} frames")
+    Local target = Try Texture.Target(8, 8)
+    Local canvas = Canvas(target)
+    For frame = 0 To 3
+        canvas.Draw(strip, 0.0, 0.0, frame)
+        Print("frame {frame} {target.ReadPixel(4, 4)}")
+    End For
+
+    // JPEG and BMP, and names that say nothing, in any case, by backslashes.
+    Local photo = Try Assets.Load<Texture>("res://game/gfx/photo.jpg")
+    Print("a JPEG {photo.Width()} across, its red over 250 {photo.ReadPixel(4, 4).r > 250}")
+    Local old = Try Assets.Load<Texture>("res://game/gfx/old.bmp")
+    Print("a BMP {old.ReadPixel(1, 1)}")
+    Local picture = Try Assets.Load<Texture>("res://GAME\\GFX\\PICTURE.PT")
+    Print("a .pt {picture.ReadPixel(1, 1)}, by a path of backslashes")
+    Local scene = Try Assets.Load<Texture>("res://game/gfx/scene.it")
+    Print("a .it {scene.Width()} across")
+
+    // A DDS is refused, saying so; a game's own tools convert it.
+    Try
+        Try Assets.Load<Texture>("res://game/gfx/old.dds")
+        Print("a DDS loaded")
+    Catch e As IOError
+        Print("a DDS: {e.Kind}, says DDS {e.Message.Contains("DDS")}")
+    End Try
+
+    // What the cooker makes, by a sidecar's word, and the pak's, as a release reads them.
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local source = folder.Path / "game"
+    Try Dir.Create(source)
+    Local red = Png.Encode(Filled(16, Color32(255, 0, 0, 255)))
+    For choice In ["uastc", "bc7", "astc", "none"]
+        Try File.WriteBytes(source / "{choice}.png", red)
+        Try File.WriteText(source / "{choice}.png.toml", "compression = \"{choice}\"")
+    End For
+    Try File.WriteBytes(source / "platform.png", red)
+    Try File.WriteBytes(source / "old.dds", "DDS |".Bytes)
+    Try Cooker.CookFolder(source, folder.Path / "game.pak")
+    Try Assets.MountPak("res://pak", folder.Path / "game.pak")
+    Defer Assets.Unmount("res://pak")
+    For choice In ["platform", "uastc", "none"]
+        Local cooked = Try Assets.Load<Texture>("res://pak/{choice}.png")
+        canvas.Draw(Sprite2D(cooked), 0.0, 0.0)
+        Print("cooked {choice}, red {target.ReadPixel(4, 4).r > 240}, {cooked.Levels()} levels")
+    End For
+    // BC7 and ASTC are what a GPU samples, or an error that says what would load.
+    For choice In ["bc7", "astc"]
+        Try
+            Local cooked = Try Assets.Load<Texture>("res://pak/{choice}.png")
+            canvas.Draw(Sprite2D(cooked), 0.0, 0.0)
+            Print("cooked {choice}: sampled or said so {target.ReadPixel(4, 4).r > 240}")
+        Catch e As IOError
+            Print("cooked {choice}: sampled or said so {e.Message.Contains("uastc")}")
+        End Try
+    End For
+    Print("a cooked DDS is what it was {(Try Assets.ReadBytes("res://pak/old.dds")).Count == 5}")
+End Function
+
+// A window of each, its strip going round; or `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("textures by their settings: Escape ends it")
+    Frame.SetLimit(60)
+    Assets.MountFiles("res://game", Files())
+    Defer Assets.Unmount("res://game")
+    Local names = ["plain.png", "bare.png", "normal.png", "faded.png", "clamped.png", "photo.jpg",
+                   "old.bmp", "picture.pt", "scene.it"]
+    Local shown: Sprite2D[] = []
+    For name In names
+        shown.Add(Sprite2D(Try Assets.Load<Texture>("res://game/gfx/{name}")))
+    End For
+    Local strip = Sprite2D(Try Assets.Load<Texture>("res://game/gfx/strip.png"))
+    strip.SetFrames(8, 8)
+    Local font = Font.BuiltIn(16.0)
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        If Screen.Texture() == Null Then Continue
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(24, 28, 36, 255))
+        canvas.Clear()
+        canvas.SetColor(Color32(255, 255, 255, 255))
+        For at = 0 Until shown.Count
+            Local x = 16 + (at % 3) * 180
+            Local y = 16 + (at / 3) * 80
+            canvas.SetScale(3.0, 3.0)
+            canvas.Draw(shown[at], (x As Float) / 3.0, (y As Float) / 3.0)
+            canvas.SetScale(1.0, 1.0)
+            canvas.DrawText(font, names[at], x + 56, y + 8)
+        End For
+        canvas.SetScale(8.0, 8.0)
+        canvas.Draw(strip, 70.0, 10.0, (count / 20) % 4)
+        canvas.SetScale(1.0, 1.0)
+        canvas.DrawText(font, "a strip's frames", 560, 160)
+    End While
+    Print("watched {count} frames")
+End Function
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try Watched(Asked(arguments), arguments)
+Else
+    Try Proved()
+End If

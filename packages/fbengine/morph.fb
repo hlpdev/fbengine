@@ -1,5 +1,8 @@
 // Morph targets: how a Mesh's vertices move toward other shapes, each Surface's targets shared by
-// every Mesh drawing its Geometry, and each Mesh's weights its own, which Clips move.
+// every Mesh drawing its Geometry, and each Mesh's weights its own, which Clips move. A Surface is
+// drawn with at most 8 targets at once, of those that move it, those with the weights furthest from
+// 0: past 8, a target coming in or going out as the weights cross is a step in the shape, not a
+// slide. A Camera's view follows the weights; picks and collisions stay on the shape at rest.
 
 Import std.ffi
 Import std.math
@@ -89,7 +92,8 @@ Extend Mesh
         Return weights
     End Method
 
-    /// Where the vertices of the surface at `surface`, from 0, are as its weights move them now.
+    /// Where the vertices of the surface at `surface`, from 0, are as all its weights move them
+    /// now, however many are drawn.
     /// A mesh drawing nothing, or a surface out of range, panics.
     @MainThread @PanicsAtCaller
     Public Method MorphedPositions(surface: Int = 0): Vec3[] => Morphed(surface, False,

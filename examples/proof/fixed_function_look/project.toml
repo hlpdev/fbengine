@@ -1,0 +1,6 @@
+[project]
+name = "fixed_function_look"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../../packages/fbengine" }
