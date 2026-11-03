@@ -5,9 +5,14 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -148,4 +153,175 @@ TEST_CASE("a mesh's surfaces are drawn with blends its alpha settles", "[scene]"
     fbe_material_release(opaque);
     fbe_material_release(glow);
     fbe_geometry_release(geometry);
+}
+
+namespace {
+
+/// SPIR-V's words: its header, and an entry point of each model and name.
+std::vector<std::uint32_t>
+spirv_of(std::initializer_list<std::pair<std::uint32_t, std::string_view>> entries) {
+    std::vector<std::uint32_t> words{ 0x07230203, 0x00010500, 0, 1, 0 };
+    for (const auto& [model, name] : entries) {
+        const std::size_t name_words = (name.size() / 4) + 1;
+        words.push_back(static_cast<std::uint32_t>((3 + name_words) << 16U) | 15U);
+        words.push_back(model);
+        words.push_back(1);
+        std::vector<std::uint32_t> named(name_words, 0);
+        std::memcpy(named.data(), name.data(), name.size());
+        words.insert(words.end(), named.begin(), named.end());
+    }
+    return words;
+}
+
+std::vector<std::uint32_t> good_spirv() {
+    return spirv_of({
+        { 0, "vertexMain" },
+        { 4, "fragmentMain" },
+        { 0, "particleVertex" },
+        { 0, "shadowVertex" },
+        { 4, "shadowFragment" },
+    });
+}
+
+/// A cooked shader's bytes: for a version, and SPIR-V's words.
+std::vector<std::uint8_t> cooked(std::string_view version,
+                                 const std::vector<std::uint32_t>& words) {
+    std::vector<std::uint8_t> bytes;
+    const std::string_view magic = "FBESHADR";
+    bytes.insert(bytes.end(), magic.begin(), magic.end());
+    const auto length = static_cast<std::uint32_t>(version.size());
+    bytes.resize(bytes.size() + sizeof(length));
+    std::memcpy(bytes.data() + magic.size(), &length, sizeof(length));
+    bytes.insert(bytes.end(), version.begin(), version.end());
+    const std::size_t at = bytes.size();
+    bytes.resize(at + (words.size() * sizeof(std::uint32_t)));
+    std::memcpy(bytes.data() + at, words.data(), words.size() * sizeof(std::uint32_t));
+    return bytes;
+}
+
+std::uint64_t shader_of(const std::vector<std::uint8_t>& bytes) {
+    return fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()));
+}
+
+bool error_says(std::string_view what) {
+    return std::string_view(fbe_error()).contains(what);
+}
+
+} // namespace
+
+TEST_CASE("a shader's file is one cooked for this engine, with the scene's entry points") {
+    const std::uint64_t made = shader_of(cooked(fbe_version(), good_spirv()));
+    REQUIRE(made != 0);
+    CHECK(fbe_shader_alive(made));
+    CHECK(fbe_shader_release(made));
+    CHECK_FALSE(fbe_shader_alive(made));
+    CHECK_FALSE(fbe_shader_release(made));
+
+    CHECK(fbe_shader_create(nullptr, 4) == 0);
+    const std::string_view source = "float4 shade(Surface surface)";
+    CHECK(shader_of({ source.begin(), source.end() }) == 0);
+    CHECK(error_says("isn't a cooked shader"));
+    CHECK(shader_of(cooked("0.0.1", good_spirv())) == 0);
+    CHECK(error_says("cooked for fbengine 0.0.1"));
+    CHECK(shader_of(cooked(fbe_version(), spirv_of({ { 0, "vertexMain" } }))) == 0);
+    CHECK(error_says("hasn't the scene's fragmentMain"));
+    // One of each pass's short, as what's cooked by an older engine's sources would be.
+    CHECK(shader_of(cooked(fbe_version(),
+                           spirv_of({ { 0, "vertexMain" }, { 4, "fragmentMain" } }))) == 0);
+    CHECK(error_says("hasn't the scene's particleVertex"));
+    CHECK(shader_of(cooked(fbe_version(), spirv_of({ { 0, "vertexMain" },
+                                                     { 4, "fragmentMain" },
+                                                     { 0, "particleVertex" } }))) == 0);
+    CHECK(error_says("hasn't the scene's shadowVertex"));
+    CHECK(shader_of(cooked(fbe_version(), spirv_of({ { 0, "vertexMain" },
+                                                     { 4, "fragmentMain" },
+                                                     { 0, "particleVertex" },
+                                                     { 0, "shadowVertex" } }))) == 0);
+    CHECK(error_says("hasn't the scene's shadowFragment"));
+    // Named right, for the wrong stage.
+    CHECK(shader_of(cooked(fbe_version(), spirv_of({ { 4, "vertexMain" },
+                                                     { 0, "fragmentMain" },
+                                                     { 0, "particleVertex" },
+                                                     { 0, "shadowVertex" },
+                                                     { 4, "shadowFragment" } }))) == 0);
+    CHECK(error_says("hasn't the scene's vertexMain"));
+    // An instruction past its end, one of no length, part of a word, and what isn't SPIR-V.
+    std::vector<std::uint32_t> broken = good_spirv();
+    broken[5] = (1000U << 16U) | 15U;
+    CHECK(shader_of(cooked(fbe_version(), broken)) == 0);
+    broken[5] = 15U;
+    CHECK(shader_of(cooked(fbe_version(), broken)) == 0);
+    std::vector<std::uint8_t> cut = cooked(fbe_version(), good_spirv());
+    cut.pop_back();
+    CHECK(shader_of(cut) == 0);
+    cut.resize(10);
+    CHECK(shader_of(cut) == 0);
+    broken = good_spirv();
+    broken[0] = 1;
+    CHECK(shader_of(cooked(fbe_version(), broken)) == 0);
+    // A version said to be longer than the file.
+    std::vector<std::uint8_t> long_version = cooked(fbe_version(), good_spirv());
+    long_version[8] = 255;
+    long_version[11] = 127;
+    CHECK(shader_of(long_version) == 0);
+    CHECK(error_says("cut short"));
+}
+
+TEST_CASE("a material holds its shader, which goes with the last of what holds it") {
+    const std::uint64_t material = fbe_material_create();
+    const std::uint64_t shader = shader_of(cooked(fbe_version(), good_spirv()));
+    CHECK(fbe_material_shader(material) == 0);
+    CHECK(fbe_material_set_shader(material, shader));
+    CHECK(fbe_material_shader(material) == shader);
+    // A clone holds it too; the game letting go leaves it to them.
+    const std::uint64_t clone = fbe_material_clone(material);
+    CHECK(fbe_material_shader(clone) == shader);
+    CHECK(fbe_shader_release(shader));
+    CHECK(fbe_shader_alive(shader));
+    CHECK(fbe_material_release(material));
+    CHECK(fbe_shader_alive(shader));
+    // Set again, to the one it has, it isn't let go of.
+    CHECK(fbe_material_set_shader(clone, shader));
+    CHECK(fbe_shader_alive(shader));
+    CHECK(fbe_material_set_shader(clone, 0));
+    CHECK_FALSE(fbe_shader_alive(shader));
+    CHECK(fbe_material_shader(clone) == 0);
+    CHECK_FALSE(fbe_material_set_shader(clone, shader));
+    CHECK(fbe_material_release(clone));
+    CHECK_FALSE(fbe_material_set_shader(clone, 0));
+    CHECK(fbe_material_shader(clone) == 0);
+}
+
+TEST_CASE("a shader replaced stays itself, and refusing leaves it as it was") {
+    const std::vector<std::uint8_t> good = cooked(fbe_version(), good_spirv());
+    const std::uint64_t shader = shader_of(good);
+    CHECK(fbe_shader_replace(shader, good.data(), static_cast<std::int64_t>(good.size())));
+    const std::vector<std::uint8_t> bad{ 1, 2, 3 };
+    CHECK_FALSE(fbe_shader_replace(shader, bad.data(), 3));
+    CHECK(fbe_shader_alive(shader));
+    CHECK(fbe_shader_release(shader));
+    CHECK_FALSE(fbe_shader_replace(shader, good.data(), static_cast<std::int64_t>(good.size())));
+}
+
+TEST_CASE("a material's parameters are its own, 8 of them, of numbers") {
+    const std::uint64_t material = fbe_material_create();
+    std::array<float, 4> read{ 9.0F, 9.0F, 9.0F, 9.0F };
+    CHECK(fbe_material_parameter(material, 7, read.data()));
+    CHECK(read == std::array<float, 4>{ 0.0F, 0.0F, 0.0F, 0.0F });
+    CHECK(fbe_material_set_parameter(material, 7, 1.0F, 2.0F, 3.0F, 4.0F));
+    CHECK(fbe_material_parameter(material, 7, read.data()));
+    CHECK(read == std::array<float, 4>{ 1.0F, 2.0F, 3.0F, 4.0F });
+    CHECK_FALSE(fbe_material_set_parameter(material, 8, 0.0F, 0.0F, 0.0F, 0.0F));
+    CHECK_FALSE(fbe_material_set_parameter(material, -1, 0.0F, 0.0F, 0.0F, 0.0F));
+    CHECK_FALSE(fbe_material_parameter(material, 8, read.data()));
+    const float none = std::numeric_limits<float>::infinity();
+    CHECK_FALSE(fbe_material_set_parameter(material, 0, none, 0.0F, 0.0F, 0.0F));
+    const std::uint64_t clone = fbe_material_clone(material);
+    CHECK(fbe_material_set_parameter(material, 7, 5.0F, 5.0F, 5.0F, 5.0F));
+    CHECK(fbe_material_parameter(clone, 7, read.data()));
+    CHECK(read[0] == 1.0F);
+    fbe_material_release(clone);
+    fbe_material_release(material);
+    CHECK_FALSE(fbe_material_set_parameter(material, 0, 0.0F, 0.0F, 0.0F, 0.0F));
+    CHECK_FALSE(fbe_material_parameter(material, 0, read.data()));
 }

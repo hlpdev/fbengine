@@ -10,6 +10,10 @@ format by its bytes, not its name.
 - glTFs (named `.gltf` or `.glb`) become binary glTFs of one buffer. meshoptimizer orders their
   triangles and vertices for the GPU's caches and fetches, unless their sidecar (fbengine's
   `ModelSettings`) says `optimize = false`. A glTF the engine wouldn't load stops the cook.
+- Shaders (named `.slang`, but for a `.inc.slang`, which is what they include) are compiled, with
+  the engine's scene shader, into what `Assets.Load<Shader>` loads, in debug builds too. They need
+  Slang's `slangc`, of the one release the engine's are compiled with, on the PATH or named by
+  `FBENGINE_SLANGC`; a game with no shaders doesn't.
 - Every other file, sidecars and buffers too, goes in the pak as it is.
 
 A game names its build step, and keeps its files in `assets/`:

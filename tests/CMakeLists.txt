@@ -126,7 +126,7 @@ if(FBENGINE_FB_TESTS)
       cmake_path(GET package FILENAME name)
       add_test(NAME ${name}.package COMMAND "${FBENGINE_FB}" test "${package}")
       set_tests_properties(${name}.package PROPERTIES ENVIRONMENT
-                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
+                           "FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
     endif()
   endforeach()
 
@@ -419,6 +419,44 @@ if(FBENGINE_FB_TESTS)
                          PASS_REGULAR_EXPRESSION "\nno GPU here\r?\n$" TIMEOUT 120)
   endforeach()
 
+  # E6's materials with their own shaders, its build step compiling them with the pinned slangc.
+  set(fbengine_own_shaders "${PROJECT_SOURCE_DIR}/examples/proof/materials_with_their_own_shaders")
+  # Linear 0.5 is 187.5 in sRGB's bytes, either side of which is right; 0.25 is 137 and 0.125 is 99.
+  set(fbengine_own_shader_proof
+      "the scene's own: 137, 18[78], 255"
+      "a shader of its own: 255, 18[78], 137"
+      "its parameter: \\(1, 0[.]5, 0[.]25, 1\\), its shader's the one given True"
+      "under half of a black fog: 18[78], 13[67], 9[89]"
+      "whatever its shading: 255, 18[78], 137"
+      "its UVs, a half each: 18[789], 18[789], 0"
+      "its normal, toward the camera: 18[78], 18[78], 255"
+      "its vertices' color, a half each: 18[78], 18[78], 18[78]"
+      "what it would have drawn, with no layer: 137, 18[78], 255"
+      "its layer's texture, a half each: 18[789], 18[789], 18[789]"
+      "the light on it, the ambient's 0[.]25 each: 137, 137, 137"
+      "its alpha, below a cutoff: 0, 0, 0"
+      "and above one: 255, 255, 255"
+      "its vertices moved away: 0, 0, 0"
+      "and not: 137, 137, 137"
+      "with none again: 137, 18[78], 255, its shader none"
+      "nothing on the sun's way: True"
+      "its shadow, moved onto it: False"
+      "and away: True"
+      "shaders done")
+  list(JOIN fbengine_own_shader_proof "\r?\n" fbengine_own_shader_lines)
+  set(fbengine_own_shader_lines "\n${fbengine_own_shader_lines}\r?\n$")
+  add_test(NAME proof.materials_with_their_own_shaders
+           COMMAND "${FBENGINE_FB}" --color never run "${fbengine_own_shaders}")
+  set_tests_properties(proof.materials_with_their_own_shaders PROPERTIES TIMEOUT 300
+                       RESOURCE_LOCK fbengine_own_shaders
+                       ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "${fbengine_own_shader_lines}")
+  add_test(NAME proof.materials_with_their_own_shaders_watch
+           COMMAND "${FBENGINE_FB}" --color never run "${fbengine_own_shaders}" -- --watch --frames 40)
+  set_tests_properties(proof.materials_with_their_own_shaders_watch PROPERTIES TIMEOUT 300
+                       RESOURCE_LOCK fbengine_own_shaders
+                       ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "\nwatched 40 frames\r?\n$")
   # Section 6's item 14, its receiving side: what a game gets of a converter's glTF.
   fbengine_add_proof_of_numbers(models_as_a_converter_writes_them
       "nodes under the figure: Bip01, Bip01 Spine, Bip01 Head, Bip01 HeadNub, body#1"

@@ -2676,6 +2676,26 @@ TEST_CASE("a morphed mesh casts where its morph has it", "[gpu][scene]") {
     fbe_material_release(paint);
 }
 
+TEST_CASE("what casts is culled by its geometry's cull box, as what's drawn is", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    sun_from_right(scene.world);
+    const std::uint64_t quad = wall(scene.world, -5.0F, 3.0F, paint);
+    require(fbe_entity_set_position(quad, 5.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
+    CHECK(middle(scene.drawn())[0] == 0);
+    // A box far above where it is: it isn't looked for on the sun's way.
+    const fbe_aabb_t above{
+        .min = { .x = -1.0F, .y = 500.0F, .z = -1.0F },
+        .max = { .x = 1.0F, .y = 501.0F, .z = 1.0F },
+    };
+    require(fbe_geometry_set_cull_box(fbe_mesh_geometry(quad), &above));
+    CHECK(middle(scene.drawn())[0] != 0);
+    require(fbe_geometry_clear_cull_box(fbe_mesh_geometry(quad)));
+    CHECK(middle(scene.drawn())[0] == 0);
+    fbe_material_release(paint);
+}
+
 TEST_CASE("what faces away from a light casts as well as what faces it", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t paint = fbe_material_create();

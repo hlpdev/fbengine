@@ -126,6 +126,10 @@ struct material_t {
     bool wireframe = false;
     std::int32_t order = 0;
     std::array<layer_t, FBE_MATERIAL_LAYERS> layers{};
+    /// The shader of its own it draws with, which it holds, or 0 for the scene's, and what's for
+    /// that shader to read.
+    std::uint64_t shader = 0;
+    std::array<std::array<float, 4>, FBE_MATERIAL_PARAMETERS> parameters{};
 };
 
 /// A geometry: surfaces, shared by every mesh drawing it. It lives while the FB side holds its

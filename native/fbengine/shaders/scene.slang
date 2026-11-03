@@ -189,6 +189,8 @@ struct Material
     uint noAlpha;
     uint spare;
     Layer layers[8];
+    // What a shader of its own reads.
+    float4 parameters[8];
 };
 
 // fbe_draw_light_t, its floats loose.
@@ -382,15 +384,9 @@ float3 skinnedNormal(float4x4 skin, float3 normal)
     return whole(dot(a, across) < 0.0 ? -turned : turned);
 }
 
-[shader("vertex")]
-Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+// A vertex in its mesh's space: morphed first, as glTF has it, then skinned.
+void posed(Draw draw, uint index, inout float4 position, inout float3 normal)
 {
-    Camera* camera = push.camera;
-    const Draw draw = camera.draws[instance];
-    const Vertex vertex = vertexAt(draw.vertices, index);
-    float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
-    float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
-    // Morphed first, as glTF has it, then skinned.
     if (draw.drawnTargetCount != 0)
     {
         float3 morphed = normal;
@@ -434,6 +430,36 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
         position = mul(skin, position);
         normal = skinnedNormal(skin, normal);
     }
+}
+
+#ifdef FBE_OWN_SHADER
+#include "own_shader.slang"
+#include "fbe_game_shader.slang"
+#endif
+
+// Where a shader of its own moves a vertex to, if it does.
+void movedByItsShader(Draw draw, Vertex vertex, inout float4 position, inout float3 normal)
+{
+#ifdef FBE_MOVES_VERTICES
+    MovingVertex moving = { float2(vertex.uv0[0], vertex.uv0[1]), float2(vertex.uv1[0], vertex.uv1[1]),
+                            float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]),
+                            draw.material };
+    float3 moved = position.xyz;
+    move(moved, normal, moving);
+    position = float4(moved, position.w);
+#endif
+}
+
+[shader("vertex")]
+Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+{
+    Camera* camera = push.camera;
+    const Draw draw = camera.draws[instance];
+    const Vertex vertex = vertexAt(draw.vertices, index);
+    float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
+    posed(draw, index, position, normal);
+    movedByItsShader(draw, vertex, position, normal);
     const float4 place = mul(draw.toView, position);
     Corner corner;
     corner.position = mul(camera.projection, place);
@@ -794,6 +820,22 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
     }
     current.rgb *= lit;
     current = overLayers(material, corner.uv0, corner.uv1, current);
+#ifdef FBE_OWN_SHADER
+    float3 ownNormal = whole(corner.normal);
+    if (twoSided != 0 && !front)
+    {
+        ownNormal = -ownNormal;
+    }
+    Surface surface = { corner.place, ownNormal, corner.uv0, corner.uv1,
+                        encoded ? float4(toLinear(corner.color.rgb), corner.color.a) : corner.color,
+                        encoded ? float4(toLinear(saturate(current.rgb)), current.a) : current,
+                        corner.position.xy, draw.material };
+    current = shade(surface);
+    if (encoded)
+    {
+        current.rgb = toEncoded(current.rgb);
+    }
+#endif
     if (material.noAlpha != 0)
     {
         current.a = draw.color.a;
@@ -867,34 +909,11 @@ ShadowCorner shadowVertex(uint index : SV_VulkanVertexID, uint instance : SV_Vul
 {
     Camera* camera = push.camera;
     const Draw draw = camera.draws[instance];
-    const Vertex vertex = draw.vertices[index];
+    const Vertex vertex = vertexAt(draw.vertices, index);
     float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
-    for (uint i = 0; i < draw.drawnTargetCount; ++i)
-    {
-        const DrawnTarget drawn = draw.drawnTargets[i];
-        const TargetVertex moved = draw.targets[drawn.target * draw.targetVertices + index];
-        position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) * drawn.weight;
-    }
-    if (draw.jointCount != 0)
-    {
-        const Joints joints = draw.joints[index];
-        float4x4 skin = float4x4(0.0);
-        for (uint joint = 0; joint < 4; ++joint)
-        {
-            const uint which = (joints.joints[joint / 2] >> (16 * (joint % 2))) & 0xFFFF;
-            const float weight = joints.weights[joint];
-            if (which == noBone)
-            {
-                skin += float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
-                                 0.0, 1.0) * weight;
-            }
-            else
-            {
-                skin += draw.palette[min(which, draw.jointCount - 1)] * weight;
-            }
-        }
-        position = mul(skin, position);
-    }
+    float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
+    posed(draw, index, position, normal);
+    movedByItsShader(draw, vertex, position, normal);
     ShadowCorner corner;
     corner.position = mul(camera.projection, mul(draw.toView, position));
     corner.alpha = vertex.color[3];

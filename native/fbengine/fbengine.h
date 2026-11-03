@@ -20,6 +20,7 @@
 #include "player/fbe_player.h"
 #include "render/fbe_render.h"
 #include "scene/fbe_scene.h"
+#include "shader/fbe_shader.h"
 #include "skin/fbe_skin.h"
 #include "text/fbe_text.h"
 #include "texture/fbe_texture.h"

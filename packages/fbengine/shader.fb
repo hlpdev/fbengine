@@ -1,0 +1,143 @@
+// Materials' own shaders: Slang a game writes, compiled by its build step, drawn in the scene's
+// pipelines. fbengine_tools has what compiles one, and how to write one.
+
+Import std.core
+Import std.ffi
+Import std.io
+Import std.math
+Import "./assets"
+Import "./c/fbe_shader"
+Import "./loads"
+Import "./material"
+Import "./window"
+
+// One wrapper for each shader the game holds, by its handle's slot; it goes when the game lets go
+// of it, and a Material's Shader gets a new one.
+Global shaders: Weak<Shader>[] = []
+
+/// A shader of a game's own, for Materials to draw with: a `.slang` file in its assets, which its
+/// build step compiles (fbengine_tools' CookShader), so `Assets.Load<Shader>("res://water.slang")`
+/// loads what that made, and a change to the file reaches the game at its next build. A file that
+/// went round the build step, or that was compiled for another version of fbengine, throws an
+/// IOError of INVALID_DATA, saying so. It lives while the game holds it, or a Material draws with it;
+/// a game that wants it reloaded holds it, as Assets reloads only what's held.
+Public Final Class Shader Implements Asset
+    Field handle: UInt64
+
+    // A wrapper for a handle C made, which holds it once.
+    New(handle: UInt64)
+        Self.handle = handle
+        Keep(Self)
+    End New
+
+    /// Assets' kind of load for one: its file's bytes as they are.
+    @MainThread
+    Public Static Method LoadKind(): AssetKind => AssetKind.BYTES
+
+    /// One of what `load` read.
+    @MainThread
+    Public Static Method FromLoad(load: AssetLoad): Shader Throws IOError
+        Local made: UInt64 = 0
+        Unsafe
+            made = fbe_shader_create(load.BytesPointer(), load.Size())
+        End Unsafe
+        If made == 0 Then Throw IOError(IOErrorKind.INVALID_DATA, LastError(), load.Path())
+        Return Shader(made)
+    End Method
+
+    /// Takes the file `load` read in its place, for what draws with it from the next frame on, and
+    /// gives True. One that isn't a shader throws as FromLoad does, which leaves it as it was.
+    @MainThread
+    Public Method Reload(load: AssetLoad): Bool Throws IOError
+        Local done = False
+        Unsafe
+            done = fbe_shader_replace(Live("Reload"), load.BytesPointer(), load.Size())
+        End Unsafe
+        If !done Then Throw IOError(IOErrorKind.INVALID_DATA, LastError(), load.Path())
+        Return True
+    End Method
+
+    Method Destroy()
+        If handle != 0 Then fbe_shader_release(handle)
+    End Method
+
+    /// Lets go of the Shader now; Materials drawing with it keep it. Using it after panics. One
+    /// Assets gave is let go of once, and goes with the last of its loads' holds.
+    @MainThread @PanicsAtCaller
+    Public Method Free()
+        Local shader = Live("Free")
+        If !Assets.Release(Self) Then Return
+        fbe_shader_release(shader)
+        Local gone: Shader? = Null
+        shaders[Slot(handle)] = gone
+        handle = 0
+    End Method
+
+    /// Whether Free let go of it.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call} on a Shader that was freed")
+        Return handle
+    End Method
+
+    Static Method Slot(handle: UInt64): Int => (handle & 0xFFFFFFFF) As Int
+
+    Static Method Keep(shader: Shader)
+        Local slot = Slot(shader.handle)
+        While shaders.Count <= slot
+            shaders.Add(Null)
+        End While
+        shaders[slot] = shader
+    End Method
+End Class
+
+// The one wrapper of a handle a Material gave, 0 for none, which this holds if it's a new one.
+Function ShaderOf(handle: UInt64): Shader?
+    If handle == 0 Then Return Null
+    Local slot = (handle & 0xFFFFFFFF) As Int
+    If slot < shaders.Count
+        Local kept = shaders[slot]
+        If kept != Null && kept.handle == handle Then Return kept
+    End If
+    fbe_shader_retain(handle)
+    Return Shader(handle)
+End Function
+
+Extend Material
+    /// Has it draw with `shader`, which it holds, or as the scene's own does with Null. What it
+    /// draws is still its colors, layers, shading, blend, cutoff, and fog; the shader takes what
+    /// those make of each pixel, before its cutoff, fog, and blend.
+    @MainThread @PanicsAtCaller
+    Public Method SetShader(shader: Shader?)
+        Local drawn: UInt64 = shader != Null ? shader.Live("SetShader") : 0
+        If !fbe_material_set_shader(Live("SetShader"), drawn) Then Failed("SetShader")
+    End Method
+
+    /// The shader it draws with, Null for the scene's own.
+    @MainThread @PanicsAtCaller
+    Public Method Shader(): Shader? => ShaderOf(fbe_material_shader(Live("Shader")))
+
+    /// Sets a parameter for its shader to read, `surface.parameter(index)` there, from 0 to 7, each
+    /// four numbers, all 0 until they're set. An index outside that, or what isn't numbers, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetParameter(index: Int, value: Vec4)
+        If !fbe_material_set_parameter(Live("SetParameter"), index, value.x, value.y, value.z,
+                                       value.w)
+            Failed("SetParameter")
+        End If
+    End Method
+
+    /// A parameter. An index outside 0 to 7 panics.
+    @MainThread @PanicsAtCaller
+    Public Method Parameter(index: Int): Vec4
+        Local floats = Buffer<Float32>(4)
+        Local done = False
+        Unsafe
+            done = fbe_material_parameter(Live("Parameter"), index, floats.Pointer())
+        End Unsafe
+        If !done Then Failed("Parameter")
+        Return Vec4(floats[0], floats[1], floats[2], floats[3])
+    End Method
+End Extend

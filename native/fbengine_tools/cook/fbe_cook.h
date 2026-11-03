@@ -55,6 +55,13 @@ FBE_TOOLS_API bool fbe_cook_image(const char* from, const char* to,
 // can't, or the engine wouldn't load it, as fbe_tools_error says.
 FBE_TOOLS_API bool fbe_cook_model(const char* from, const char* to, const char* root,
                                   const fbe_cook_model_t* options);
+// The engine's shaders' sources, what a game's shader compiles with: how many there are, and each
+// one's file name and text; "" for one that isn't there.
+FBE_TOOLS_API int32_t fbe_cook_shader_source_count(void);
+FBE_TOOLS_API const char* fbe_cook_shader_source_name(int32_t index);
+FBE_TOOLS_API const char* fbe_cook_shader_source_text(int32_t index);
+// The release of Slang the engine's own shaders are compiled with, and a game's have to be.
+FBE_TOOLS_API const char* fbe_cook_slang_version(void);
 // A pak, its files stored as the engine's res:// reads them, written a file at a time, so it can
 // be bigger than memory: to a hidden file of its own beside `to`, making its folder, then put at
 // `to` whole by fbe_cook_pak_finish, which replaces a pak that's mounted, keeps its mode, and goes

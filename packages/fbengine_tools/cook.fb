@@ -16,13 +16,17 @@ Import "./c/fbe_tools"
 Import "./left_out"
 
 // What the cooker makes of a file in a folder: nothing, as of the pak itself; the file as it is; a
-// KTX2 of an image; or a binary glTF of a glTF.
+// KTX2 of an image; a binary glTF of a glTF; or a cooked shader of a .slang file.
 Enum CookedAs
     NOTHING
     ITSELF
     IMAGE
     MODEL
+    SHADER
 End Enum
+
+// What a cooked shader starts with, as the engine's shader area reads it.
+Const SHADER_MAGIC = "FBESHADR"
 
 // How much of a file's start tells what it is, and the most of a binary glTF's JSON that's read
 // for the buffers it names.
@@ -98,11 +102,117 @@ Public Final Class Cooker
         If !cooked Then Throw ToolsFailed(from.Text)
     End Method
 
+    /// Compiles the shader at `from`, a `.slang` file that writes a material's own `shade`, with
+    /// the engine's scene shader, into the file at `to`, which Assets.Load<Shader> loads, for this
+    /// version of fbengine only. It reads what it includes from beside it. It needs Slang's compiler,
+    /// of the one release the engine's are compiled with, from the environment's FBENGINE_SLANGC, or
+    /// slangc on the PATH: with none, or another release, it throws an IOError of NOT_FOUND saying
+    /// which to get. What Slang won't compile throws one of INVALID_DATA, with what Slang said.
+    ///
+    /// A shader writes `float4 shade(Surface surface)`, given what the material would draw there,
+    /// and for vertices of its own, says `#define FBE_MOVES_VERTICES` first and writes
+    /// `void move(inout float3 position, inout float3 normal, MovingVertex vertex)`. What's in a
+    /// Surface and a MovingVertex is `own_shader.slang`'s, which fbengine has with its shaders.
+    @MainThread
+    Public Static Method CookShader(from: Path, to: Path) Throws IOError
+        Local slangc = Try Slangc(from)
+        Local text = Try File.ReadText(from)
+        Local scratch = Try TempDir()
+        Defer Try? scratch.Close()
+        For at = 0 Until fbe_cook_shader_source_count()
+            Local name = ""
+            Local source = ""
+            Unsafe
+                name = fbe_cook_shader_source_name(at).ToString()
+                source = fbe_cook_shader_source_text(at).ToString()
+            End Unsafe
+            Try File.WriteText(scratch.Path / name, source)
+        End For
+        // Slang's errors say the game's file and its lines, not the scratch copy's.
+        Local where = from.Text.Replace("\\", "/")
+        Try File.WriteText(scratch.Path / "fbe_game_shader.slang", "#line 1 \"{where}\"\n{text}")
+        Try File.WriteText(scratch.Path / "fbe_own.slang",
+                           "#define FBE_OWN_SHADER\n#include \"scene.slang\"\n")
+        Local compiled = scratch.Path / "own.spv"
+        Local version = ""
+        Unsafe
+            version = fbe_cook_slang_version().ToString()
+        End Unsafe
+        Local command = Command(slangc)
+        For argument In [(scratch.Path / "fbe_own.slang").Text, "-target", "spirv", "-profile",
+                         "spirv_1_5", "-fvk-use-entrypoint-name", "-matrix-layout-column-major",
+                         "-O2", "-warnings-disable", "41012", "-I", scratch.Path.Text, "-I",
+                         from.Parent().Text, "-DFBENGINE_SLANG={version}", "-o", compiled.Text]
+            command.Arg(argument)
+        End For
+        Local ran = Try command.Output()
+        If ran.Status.Code != 0 || !File.Exists(compiled)
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{from} doesn't compile: {ran.ErrorText}", from.Text)
+        End If
+        Local cooked: UInt8[] = []
+        cooked.AddAll(SHADER_MAGIC.Bytes)
+        Local engine = ToolsVersion().Bytes
+        For shift In [0, 8, 16, 24]
+            cooked.Add(((engine.Count >> shift) & 0xFF) As UInt8)
+        End For
+        cooked.AddAll(engine)
+        cooked.AddAll(Try File.ReadBytes(compiled))
+        Try File.WriteBytes(to, cooked)
+    End Method
+
+    // Slang's compiler, of the release the engine's shaders are compiled with, for compiling `file`.
+    Static Method Slangc(file: Path): String Throws IOError
+        Local version = ""
+        Unsafe
+            version = fbe_cook_slang_version().ToString()
+        End Unsafe
+        Local slangc = Env.Get("FBENGINE_SLANGC") ?? "slangc"
+        Local told = "{file} is a shader, which needs Slang's slangc, release {version}, " +
+                     "from https://github.com/shader-slang/slang/releases, on the PATH or named " +
+                     "by FBENGINE_SLANGC"
+        Local command = Command(slangc)
+        command.Arg("-v")
+        Local said = ""
+        Try
+            Local ran = Try command.Output()
+            said = (ran.Text + ran.ErrorText).Trim()
+        Catch e As IOError
+            Throw IOError(IOErrorKind.NOT_FOUND, told, slangc)
+        End Try
+        If !said.Contains(version)
+            Throw IOError(IOErrorKind.NOT_FOUND, "{told}; {slangc} is release {said}", slangc)
+        End If
+        Return slangc
+    End Method
+
+    // Whether a file's a shader to compile, by its name; a `.inc.slang` is what they include.
+    Package Static Method IsShader(name: String): Bool
+        Return name.EndsWith(".slang") && !name.EndsWith(".inc.slang")
+    End Method
+
+    // Compiles each shader of the folder `source`, all the way down, into `into`, each at its path
+    // from the folder; gives how many. A debug build mounts them over the folder.
+    Package Static Method CookShadersInto(source: Path, into: Path): Int Throws IOError
+        Local files: (Path, String)[] = []
+        Try Listed(source, "", 0, files)
+        Local cooked = 0
+        For file In files
+            If !IsShader(file.1) Then Continue
+            Local to = into / file.1
+            Try Dir.CreateAll(to.Parent())
+            Try CookShader(file.0, to)
+            cooked += 1
+        End For
+        Return cooked
+    End Method
+
     /// Cooks the files in the folder `source`, all the way down, following links as its mount
     /// does, into the pak at `pak`, making its folder, each at its own path from the folder: its
     /// images, PNGs and JPEGs by their bytes, by their sidecars' ImageSettings; its glTFs, named
     /// .gltf or .glb, by their ModelSettings, which leaves out the buffers they name, now in them;
-    /// and every other file, sidecars too, as it is, but the pak itself, if it's in the folder,
+    /// its shaders, named .slang but for a .inc.slang, which is what they include, as CookShader
+    /// compiles them; and every other file, sidecars too, as it is, but the pak itself, if it's in the folder,
     /// and what isn't the game's: what's hidden, its name starting with '.', as .git and .DS_Store
     /// are, and Windows' Thumbs.db and desktop.ini. The pak is
     /// written a file at a time, so it can be bigger than memory, and whole or not at all. A
@@ -178,6 +288,8 @@ Public Final Class Cooker
                 kind = CookedAs.ITSELF
                 If IsImage(start)
                     kind = CookedAs.IMAGE
+                ElseIf IsShader(file.1)
+                    kind = CookedAs.SHADER
                 ElseIf Try IsModel(file.0, start)
                     kind = CookedAs.MODEL
                     Local json = Try JsonOf(file.0, start)
@@ -211,6 +323,16 @@ Public Final Class Cooker
                 from = kept ?? (scratch.Path / "cooked.ktx2")
                 used.Add(from.FileName())
                 If kept == Null || !File.Exists(from) Then Try CookImage(file.0, from, settings)
+            ElseIf kind == CookedAs.SHADER
+                // Kept by every .slang of the folder, whichever of them it includes.
+                Local reads = [file.0]
+                For other In files
+                    If other.1.EndsWith(".slang") && other.1 != file.1 Then reads.Add(other.0)
+                End For
+                Local kept = CachedAs(cache, "shader", reads, ".shader")
+                from = kept ?? (scratch.Path / "cooked.shader")
+                used.Add(from.FileName())
+                If kept == Null || !File.Exists(from) Then Try CookShader(file.0, from)
             ElseIf kind == CookedAs.MODEL
                 Local settings = Try Assets.ReadSettings<ModelSettings>("{place}/{file.1}")
                 Local images = ImageOptions(settings.Images ?? ImageSettings())
