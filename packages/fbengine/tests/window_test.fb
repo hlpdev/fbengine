@@ -2,6 +2,7 @@
 
 Import std.core
 Import std.test
+Import std.text
 Import fbengine
 
 @Test
@@ -107,4 +108,65 @@ Function FullscreenOnADisplayWithNoModesIsAtItsDesktopsMode() Throws GraphicsErr
     Expect(Window.Height() == main.Desktop.Height)
     Try Window.SetMode(WindowMode.WINDOWED)
     Expect(Window.Width() == 640)
+End Function
+
+@Test
+Function AWindowsSizedAndMoved() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Try Window.SetSize(800, 300)
+    Expect(Window.Width() == 800 && Window.Height() == 300,
+           "it's {Window.Width()} by {Window.Height()}")
+    Flip(False)
+    Expect(Screen.Width() == 800 && Screen.Height() == 300,
+           "its screen's {Screen.Width()} by {Screen.Height()}")
+    // Offscreen, nothing's moved, and that's no failure.
+    Local x = Window.X()
+    Local y = Window.Y()
+    Try Window.SetPosition(x + 20, y + 10)
+    Expect((Window.X() == x + 20 && Window.Y() == y + 10) || (Window.X() == x && Window.Y() == y),
+           "it's at {Window.X()}, {Window.Y()}")
+    Local refused = False
+    Try
+        Try Window.SetSize(0, 300)
+    Catch error As GraphicsError
+        refused = True
+        Expect(error.Message.Contains("more than 0"), error.Message)
+    End Try
+    Expect(refused && Window.Width() == 800)
+End Function
+
+@Test
+Function AFullscreenWindowsSizeIsItsModes() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Try Window.SetMode(WindowMode.BORDERLESS)
+    Local refused = False
+    Try
+        Try Window.SetSize(800, 300)
+    Catch error As GraphicsError
+        refused = True
+        Expect(error.Message.Contains("mode"), error.Message)
+    End Try
+    Expect(refused)
+End Function
+
+@Test
+Function NoWindowIsSizedOrMoved()
+    EndGraphics()
+    Expect(Window.X() == 0 && Window.Y() == 0)
+    Local refused = 0
+    Try
+        Try Window.SetSize(800, 300)
+    Catch error As GraphicsError
+        refused += 1
+    End Try
+    Try
+        Try Window.SetPosition(1, 2)
+    Catch error As GraphicsError
+        refused += 1
+    End Try
+    Expect(refused == 2)
 End Function

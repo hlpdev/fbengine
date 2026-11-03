@@ -123,9 +123,26 @@ FBE_API int32_t fbe_input_mouse_clicks(int32_t button);
 FBE_API void fbe_input_flush_mouse(void);
 // Puts the mouse at `x`, `y` in the window's units; false without a window.
 FBE_API bool fbe_input_move_mouse(float x, float y);
+// The OS's cursors.
+#define FBE_INPUT_CURSOR_ARROW 0
+#define FBE_INPUT_CURSOR_TEXT 1
+#define FBE_INPUT_CURSOR_WAIT 2
+#define FBE_INPUT_CURSOR_CROSSHAIR 3
+#define FBE_INPUT_CURSOR_HAND 4
+#define FBE_INPUT_CURSOR_MOVE 5
+#define FBE_INPUT_CURSOR_RESIZE_EW 6
+#define FBE_INPUT_CURSOR_RESIZE_NS 7
+#define FBE_INPUT_CURSOR_RESIZE_NWSE 8
+#define FBE_INPUT_CURSOR_RESIZE_NESW 9
+#define FBE_INPUT_CURSOR_NOT_ALLOWED 10
+
 // Shows or hides the mouse's cursor.
 FBE_API void fbe_input_set_cursor_visible(bool visible);
 FBE_API bool fbe_input_cursor_visible(void);
+// Sets which of the OS's cursors the mouse's is, one of FBE_INPUT_CURSOR_*, kept where the OS has
+// no such cursor, as offscreen; false, saying why, for one that isn't.
+FBE_API bool fbe_input_set_cursor(int32_t cursor);
+FBE_API int32_t fbe_input_cursor(void);
 // Relative mode, for mouse look: the cursor hidden and held in the window, and the mouse's
 // motion its own raw counts, unscaled by the OS's speed and acceleration; false without a window.
 // Headless, where there's no mouse to hold, it's only what was set.

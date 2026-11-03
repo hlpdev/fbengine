@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <format>
 #include <SDL3/SDL.h>
+#include <utility>
 
 namespace {
 
@@ -27,6 +28,17 @@ struct button_t {
 };
 
 std::array<button_t, most_buttons + 1> buttons{};
+
+// The OS's cursor for each of FBE_INPUT_CURSOR_*, and each once it's been made, which SDL keeps,
+// and which one was asked for.
+constexpr std::array<SDL_SystemCursor, 11> system_cursors{
+    SDL_SYSTEM_CURSOR_DEFAULT,   SDL_SYSTEM_CURSOR_TEXT,      SDL_SYSTEM_CURSOR_WAIT,
+    SDL_SYSTEM_CURSOR_CROSSHAIR, SDL_SYSTEM_CURSOR_POINTER,   SDL_SYSTEM_CURSOR_MOVE,
+    SDL_SYSTEM_CURSOR_EW_RESIZE, SDL_SYSTEM_CURSOR_NS_RESIZE, SDL_SYSTEM_CURSOR_NWSE_RESIZE,
+    SDL_SYSTEM_CURSOR_NESW_RESIZE, SDL_SYSTEM_CURSOR_NOT_ALLOWED,
+};
+std::array<SDL_Cursor*, system_cursors.size()> made_cursors{};
+std::int32_t current_cursor = FBE_INPUT_CURSOR_ARROW;
 fbe::frame_counts_t counts;
 
 // Where the mouse is, which stays until it moves, in the window `in`, by its ID: one closed is
@@ -293,6 +305,29 @@ FBE_API void fbe_input_set_cursor_visible(bool visible) {
 
 FBE_API bool fbe_input_cursor_visible(void) {
     return !fbe::video_started() || SDL_CursorVisible();
+}
+
+FBE_API bool fbe_input_set_cursor(int32_t cursor) {
+    if (cursor < 0 || std::cmp_greater_equal(cursor, system_cursors.size())) {
+        return fbe::fail(std::format("there's no cursor {}", cursor));
+    }
+    current_cursor = cursor;
+    // As for showing it. A driver with no such cursor, as offscreen, has only what's asked.
+    if (!fbe::start_video()) {
+        return true;
+    }
+    SDL_Cursor*& made = made_cursors[static_cast<std::size_t>(cursor)];
+    if (made == nullptr) {
+        made = SDL_CreateSystemCursor(system_cursors[static_cast<std::size_t>(cursor)]);
+    }
+    if (made != nullptr) {
+        SDL_SetCursor(made);
+    }
+    return true;
+}
+
+FBE_API int32_t fbe_input_cursor(void) {
+    return current_cursor;
 }
 
 FBE_API bool fbe_input_set_mouse_relative(bool relative) {

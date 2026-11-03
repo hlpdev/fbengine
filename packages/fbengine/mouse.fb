@@ -84,6 +84,38 @@ End Function
     If !fbe_input_move_mouse(x, y) Then Panic(LastError())
 End Function
 
+/// Which of the OS's cursors the mouse shows over the window.
+Public Enum MouseCursor: Int32
+    /// What it shows at first.
+    ARROW = 0
+    /// Over text that can be selected.
+    TEXT = 1
+    WAIT = 2
+    CROSSHAIR = 3
+    /// Over what a click follows, as a link.
+    HAND = 4
+    MOVE = 5
+    /// Over what's dragged left and right, as a split between panes.
+    RESIZE_EW = 6
+    /// Over what's dragged up and down.
+    RESIZE_NS = 7
+    /// Over what's dragged from its top left or bottom right.
+    RESIZE_NWSE = 8
+    /// Over what's dragged from its top right or bottom left.
+    RESIZE_NESW = 9
+    NOT_ALLOWED = 10
+End Enum
+
+/// Sets which of the OS's cursors the mouse shows, ARROW at first, as a window's other programs'
+/// do; where the OS has no such cursor, as offscreen, it keeps what it had, and ShownMouseCursor
+/// says what was asked.
+@MainThread Public Function SetMouseCursor(cursor: MouseCursor)
+    If !fbe_input_set_cursor(cursor As Int32) Then Panic(LastError())
+End Function
+
+/// Which cursor SetMouseCursor last asked for.
+@MainThread Public Function ShownMouseCursor(): MouseCursor => fbe_input_cursor() As MouseCursor
+
 /// Shows the mouse's cursor over the window, or hides it.
 @MainThread Public Function SetCursorVisible(visible: Bool)
     fbe_input_set_cursor_visible(visible)

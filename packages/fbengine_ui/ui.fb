@@ -94,6 +94,8 @@ Public Final Class Ui
     // The button that took the widget holding the pointer.
     Field pressedWith: MouseButton = MouseButton.LEFT
     Field shortcuts: (Func(Keystroke): Bool)? = Null
+    // Whether a widget's said what the cursor is.
+    Field cursorSet: Bool = False
 
     /// A Ui of the tree `root`, in `theme`, or Theme.Dark().
     @MainThread Public New(root: Node, theme: Theme? = Null)
@@ -447,6 +449,7 @@ Public Final Class Ui
         Restyle(popups)
         LaidOut(bounds)
         Blocks()
+        Cursors()
     End Method
 
     /// Draws its tree on the screen's canvas, or on `canvas`, which a texture's draws at a pixel to
@@ -486,6 +489,24 @@ Public Final Class Ui
         SetFont("", Font.BuiltIn())
         Local area = ShownArea()
         LaidOut(Rect(0.0, 0.0, area.Width / scale, area.Height / scale))
+    End Method
+
+    // The cursor the widget holding the pointer or under it says, or the first it's in; ARROW again
+    // when none says, if one did, and it's the game's until one says again.
+    @MainThread Method Cursors()
+        Local at: Widget? = pressed ?? hovered
+        Local wanted: MouseCursor? = Null
+        While at != Null && wanted == Null
+            wanted = at.PointerCursor()
+            at = WidgetAbove(at)
+        End While
+        If wanted != Null
+            If !cursorSet || ShownMouseCursor() != wanted Then SetMouseCursor(wanted)
+            cursorSet = True
+        ElseIf cursorSet
+            SetMouseCursor(MouseCursor.ARROW)
+            cursorSet = False
+        End If
     End Method
 
     // Its tree and what's over it laid out, what's opened at a point kept in `bounds`.

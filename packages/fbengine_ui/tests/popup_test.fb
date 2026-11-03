@@ -247,6 +247,10 @@ Class Holder Extends Widget
         SetSize(100.0, 40.0)
     End New
 
+    Public Field Showing: MouseCursor? = Null
+
+    @MainThread Public Override Method PointerCursor(): MouseCursor? => Showing
+
     @MainThread Public Override Method PointerDown(point: Vec2): Bool
         Said.Add("left down")
         Return taking.Contains(MouseButton.LEFT)
@@ -287,7 +291,8 @@ Function ARightOrMiddlePressGoesToAWidgetThatTakesIt() Throws GraphicsError
         Update(ui)
         Expect(ui.Pressed() == Null)
         Local said = holder.Said
-        Expect(said[0] == "{button} down" && said[1] == "drag" && said[said.Count - 1] == "up False",
+        Expect(said[0] == "{button} down" && said[1] == "drag" &&
+               said[said.Count - 1] == "up False",
                "it was told {said}")
         Expect(!said.Contains("left down"), "it was told {said}")
     End For
@@ -387,4 +392,35 @@ Function ShortcutsSeeTheKeysNoWidgetUses() Throws GraphicsError
     ui.SetShortcuts(Null)
     Try PressKey(ui, Key.TAB)
     Expect(seen.Count == 0 && ui.Focused() != Null)
+End Function
+
+@Test
+Function AWidgetSaysWhatTheCursorIsOverItAndHoldingIt() Throws GraphicsError
+    Local holder = Holder([MouseButton.LEFT])
+    holder.Showing = MouseCursor.RESIZE_EW
+    Local other = Holder([])
+    Local ui = Try Opened([holder, other])
+    Defer EndGraphics()
+    Defer SetMouseCursor(MouseCursor.ARROW)
+    // Left to the game until one says.
+    SetMouseCursor(MouseCursor.CROSSHAIR)
+    Try Simulate.MoveMouse(other.Box().Center.x, other.Box().Center.y)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.CROSSHAIR)
+    Try Simulate.MoveMouse(holder.Box().Center.x, holder.Box().Center.y)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.RESIZE_EW)
+    // Held, off it too.
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Update(ui)
+    Try Simulate.MoveMouse(other.Box().Center.x, other.Box().Center.y)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.RESIZE_EW)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.ARROW)
+    // And the game's again.
+    SetMouseCursor(MouseCursor.CROSSHAIR)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.CROSSHAIR)
 End Function

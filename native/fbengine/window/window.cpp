@@ -302,6 +302,50 @@ FBE_API int32_t fbe_window_mode(void) {
     return current_mode;
 }
 
+FBE_API int32_t fbe_window_x(void) {
+    int x = 0;
+    if (window != nullptr) {
+        SDL_GetWindowPosition(window, &x, nullptr);
+    }
+    return x;
+}
+
+FBE_API int32_t fbe_window_y(void) {
+    int y = 0;
+    if (window != nullptr) {
+        SDL_GetWindowPosition(window, nullptr, &y);
+    }
+    return y;
+}
+
+FBE_API bool fbe_window_set_position(int32_t x, int32_t y) {
+    if (window == nullptr) {
+        return fbe::fail("there's no window to move");
+    }
+    // A desktop that doesn't let a program move its windows is no failure: it's where it says.
+    if (SDL_SetWindowPosition(window, x, y)) {
+        SDL_SyncWindow(window);
+    }
+    return true;
+}
+
+FBE_API bool fbe_window_set_size(int32_t width, int32_t height) {
+    if (window == nullptr) {
+        return fbe::fail("there's no window to size");
+    }
+    if (width <= 0 || height <= 0) {
+        return fbe::fail(std::format("a window is more than 0 each way, not {} by {}", width, height));
+    }
+    if (current_mode != FBE_WINDOW_WINDOWED) {
+        return fbe::fail("a fullscreen window's size is its mode's");
+    }
+    if (!SDL_SetWindowSize(window, width, height)) {
+        return fbe::fail_sdl("couldn't resize the window");
+    }
+    SDL_SyncWindow(window);
+    return true;
+}
+
 FBE_API void fbe_window_set_resizable(bool on) {
     resizable = on;
     if (window != nullptr) {

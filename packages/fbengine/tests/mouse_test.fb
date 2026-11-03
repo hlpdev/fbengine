@@ -304,3 +304,17 @@ Function ANewWindowsMouseIsNowhereBeforeAnyFlip() Throws GraphicsError
     Expect(MouseX() == 5.0)
     Expect(MouseXSpeed() == 5.0)
 End Function
+
+@Test
+Function TheCursorsWhatWasAskedFor() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Defer SetMouseCursor(MouseCursor.ARROW)
+    Expect(ShownMouseCursor() == MouseCursor.ARROW)
+    For each In [MouseCursor.RESIZE_EW, MouseCursor.TEXT, MouseCursor.NOT_ALLOWED,
+                 MouseCursor.ARROW]
+        SetMouseCursor(each)
+        Expect(ShownMouseCursor() == each)
+    End For
+End Function
