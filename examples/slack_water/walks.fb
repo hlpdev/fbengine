@@ -12,14 +12,14 @@ Public Function WalkOf(name: String): String[]?
         // The gear and the paddle first, with Pip's hands too; then the belt, in time.
         Case "bright"
             Return ["W", "E", "Q", "W", "E", "S", "S", "E", "Q", "E", "E",
-                    "W", "W", "W", "E", "S", "S", "S", "E", "E", "600"]
+                    "W", "W", "W", "E", "S", "S", "S", "E", "E", "240"]
         // The same, but setting off too late for the belt.
         Case "dim"
             Return ["W", "E", "Q", "W", "E", "S", "S", "E", "Q", "E", "E", "E",
-                    "400", "W", "W", "S", "600"]
+                    "120", "W", "W", "S", "240"]
         // Out to the far rock, with nothing done, as the causeway floods behind you.
         Case "dark"
-            Return ["W", "W", "W", "600"]
+            Return ["W", "W", "W", "240"]
         Default
             Return Null
     End Select

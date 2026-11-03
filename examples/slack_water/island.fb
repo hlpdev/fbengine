@@ -6,15 +6,15 @@ Import std.core
 Import std.math
 Import fbengine
 Import "./flow"
+Import "./follow"
 Import "./ground"
+Import "./map"
 Import "./res" As Res
 
-// The mill's inside, half its width and depth, from its middle, its door's half width, and how high
-// its floor is above the yard.
-Const MILL_W: Float = 5.7
-Const MILL_D: Float = 4.7
-Const DOOR_W: Float = 2.0
+// How high the mill's floor is above the yard.
 Const FLOOR: Float = 0.1
+// How much smaller a part is in your hand, close to you, so it stays this side of a wall.
+Const HELD_SIZE: Float = 0.35
 
 /// The sky's color, which the fog goes into.
 Public Const SKY: Color = Color(0.62, 0.72, 0.8)
@@ -116,7 +116,10 @@ Public Final Class Island
     Field wheel: Mesh
     Field lamp: Mesh
     Field parts: Mesh[]
-    Field lampMaterial: Material? = Null
+    Field lampLight: Light? = Null
+    Field sizes: Vec3[] = []
+    Field pipHead: Entity
+    Field pipMesh: Mesh
 
     New(scene: World, ground: Terrain, sea: Mesh, model: Model, pip: Entity, held: Texture[],
         mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[])
@@ -130,10 +133,13 @@ Public Final Class Island
         Self.wheel = wheel
         Self.lamp = lamp
         Self.parts = parts
-        For number = 0 To 2
-            Local spot = PartSpot(number As Part)
-            parts[number].SetPosition(Vec3(spot.x, GroundHeight(spot.x, spot.y) + 0.15, spot.y))
+        pipHead = pip.Find("head") ?? pip
+        pipMesh = (pip.Find("pip") ?? pip) As Mesh
+        pip.Player().Release(pipHead)
+        For thing In parts
+            sizes.Add(thing.Scale())
         End For
+        Reset()
     End New
 
     /// Makes it, from the game's files, which Res has mounted.
@@ -185,6 +191,9 @@ Public Final Class Island
     /// Pip's root.
     @MainThread Public Method PipEntity(): Entity => pip
 
+    /// What's fitted is under.
+    @MainThread Public Method Works(): Entity => mill
+
     /// Plays Pip's clip at `index`: idle, walk, or carry.
     @MainThread
     Public Method PlayPip(index: Int)
@@ -199,12 +208,11 @@ Public Final Class Island
     Public Method PartSpot(part: Part): Vec2
         Select part
             Case Part.GEAR
-                Return Vec2(MAIN_X + 16.0, 11.0)
+                Return GearSpot()
             Case Part.PADDLE
-                Local at = CrossingX()
-                Return Vec2(at, CrossingZ(at))
+                Return PaddleSpot()
             Default
-                Return Vec2(FAR_X, 8.0)
+                Return BeltSpot()
         End Select
     End Method
 
@@ -213,49 +221,26 @@ Public Final Class Island
     Public Method PlaceOf(spot: Spot): Vec2
         Select spot
             Case Spot.INSIDE
-                Return Vec2(MAIN_X, 0.0)
+                Return MillSpot()
             Case Spot.DOOR
-                Return Vec2(MAIN_X, MILL_D + 3.0)
+                Return DoorSpot()
             Case Spot.YARD_EDGE
-                Return Vec2(MAIN_X + 24.0, 3.0)
+                Return Landing(False)
             Case Spot.WORKS
                 Return Vec2(MAIN_X + 3.5, -3.0)
             Case Spot.CROSSING
-                Local at = CrossingX()
-                Return Vec2(at, CrossingZ(at))
+                Return PaddleSpot()
             Default
-                Return Vec2(FAR_X, 8.0)
+                Return Landing(True)
         End Select
-    End Method
-
-    /// Which of the flow's places (`x`, `z`) is in: the mill's walls, the far rock past the
-    /// crossing, a stretch either side of the crossing, or the yard.
-    @MainThread
-    Public Method PlaceAt(x: Float, z: Float): Area
-        If Abs(x - MAIN_X) < MILL_W + 0.3 && Abs(z) < MILL_D + 0.3 Then Return Area.INSIDE
-        Local crossing = CrossingX()
-        If x > crossing + 6.0 Then Return Area.FAR_ROCK
-        If x > crossing - 6.0 Then Return Area.CAUSEWAY
-        Return Area.YARD
-    End Method
-
-    /// Whether walking onto (`x`, `z`) goes through the mill's walls, or anything else solid.
-    @MainThread
-    Public Method Blocked(x: Float, z: Float): Bool
-        Local dx = Abs(x - MAIN_X)
-        Local dz = z
-        // Its outer walls, as far as a person's width.
-        Local inWalls = dx < MILL_W + 0.9 && Abs(dz) < MILL_D + 0.9
-        Local inside = dx < MILL_W - 0.3 && Abs(dz) < MILL_D - 0.3
-        Local door = dx < DOOR_W - 0.3 && dz > 0.0
-        Return inWalls && !inside && !door
     End Method
 
     /// How high what you stand on is at (`x`, `z`): the mill's floor, or the ground.
     @MainThread
     Public Method FloorAt(x: Float, z: Float): Float
-        Local inside = Abs(x - MAIN_X) < MILL_W + 0.3 && Abs(z) < MILL_D + 0.3
-        Return GroundHeight(x, z) + (inside ? FLOOR : 0.0)
+        Local point = ground.SurfacePoint(Vec3(x, 100.0, z))
+        Local height = point != Null ? point.y : GroundHeight(x, z)
+        Return height + (InMill(x, z) ? FLOOR : 0.0)
     End Method
 
     /// How high the sea's drawn.
@@ -281,6 +266,7 @@ Public Final Class Island
         thing.SetParent(mill, False)
         thing.SetPosition(Vec3(3.5, 2.15 + ((part As Int) As Float) * 0.25, -3.0))
         thing.SetRotation(0.0, 0.0, 0.0)
+        thing.SetScale(sizes[part As Int])
     End Method
 
     /// Turns the wheel to `angle` radians about its axle.
@@ -292,16 +278,88 @@ Public Final Class Island
     /// Lights the lamp, bright, or dimmer.
     @MainThread
     Public Method LightLamp(bright: Bool)
-        If lampMaterial != Null Then Return
         Local glow = bright ? Color(3.0, 2.6, 1.6) : Color(1.4, 1.1, 0.6)
         Local material = Material(glow)
         material.SetShading(Shading.UNLIT)
         lamp.SetMaterial(material)
-        lampMaterial = material
-        Local light = Light(LightType.POINT, lamp)
+        Local light = lampLight ?? Light(LightType.POINT, lamp)
+        lampLight = light
         light.SetColor(glow)
         light.SetIntensity(bright ? 40.0 : 12.0)
         light.SetRange(bright ? 60.0 : 25.0)
+    End Method
+
+    /// Where the lamp is, in the world, and the wheel.
+    @MainThread Public Method LampAt(): Vec3 => lamp.Position(Space.WORLD)
+
+    @MainThread Public Method WheelAt(): Vec3 => wheel.Position(Space.WORLD)
+
+    /// Puts a part in your hand, at `hand`.
+    @MainThread
+    Public Method HoldPart(part: Part, hand: Entity)
+        Local thing = parts[part As Int]
+        thing.SetParent(hand, False)
+        thing.SetPosition(Vec3(0.09, -0.1, -0.2))
+        thing.SetScale(sizes[part As Int] * HELD_SIZE)
+        thing.Show()
+    End Method
+
+    /// Puts a part in Pip's hands.
+    @MainThread
+    Public Method GivePart(part: Part)
+        Local thing = parts[part As Int]
+        thing.SetParent(pip, False)
+        thing.SetPosition(Vec3(0.0, 0.5, 0.32))
+        thing.SetScale(sizes[part As Int])
+        thing.Show()
+    End Method
+
+    /// Puts it all back as it was at first, so another Game can begin on it: the parts where they lie,
+    /// and the lamp and wheel as they were.
+    @MainThread
+    Public Method Reset()
+        For number = 0 To 2
+            Local spot = PartSpot(number As Part)
+            Local thing = parts[number]
+            thing.SetParent(Null, False)
+            thing.SetPosition(Vec3(spot.x, GroundHeight(spot.x, spot.y) + 0.15, spot.y))
+            thing.SetRotation(0.0, 0.0, 0.0)
+            thing.SetScale(sizes[number])
+            thing.Show()
+        End For
+    End Method
+
+    /// Pip's clip playing, its name.
+    @MainThread
+    Public Method PipClipName(): String
+        Local clip = pip.Player().Clip()
+        Return clip != Null ? clip.Name() : ""
+    End Method
+
+    /// Sets how fast Pip's clip plays; at 0, it stands at `at` seconds of it.
+    @MainThread
+    Public Method SetPipPace(speed: Float, at: Float)
+        Local player = pip.Player()
+        player.SetSpeed(speed)
+        If speed == 0.0 Then player.SetTime(at)
+    End Method
+
+    /// Turns Pip's head, radians about Y, from how Pip's facing.
+    @MainThread
+    Public Method TurnPipHead(turn: Float)
+        pipHead.SetRotation(0.0, turn, 0.0)
+    End Method
+
+    /// How far Pip's head is turned.
+    @MainThread Public Method PipHeadTurned(): Quat => pipHead.Rotation()
+
+    /// How shut Pip's eyes are.
+    @MainThread Public Method PipBlink(): Float => pipMesh.MorphWeights()[0]
+
+    /// Shuts Pip's eyes, from 0 to 1.
+    @MainThread
+    Public Method BlinkPip(weight: Float)
+        pipMesh.SetMorphWeights([weight])
     End Method
 
     /// Frees it.
@@ -320,9 +378,16 @@ End Class
 /// mill's inside: (`name`, where it is, what it looks at).
 Public Function Views(): (String, Vec3, Vec3)[]
     Local yardY = GroundHeight(MAIN_X, 14.0)
-    Return [("island", Vec3(10.0, 120.0, 150.0), Vec3(10.0, 0.0, 0.0)),
+    Return [("island", Vec3(5.0, 120.0, 150.0), Vec3(5.0, 0.0, 0.0)),
             ("yard", Vec3(MAIN_X - 22.0, yardY + 5.0, 34.0), Vec3(MAIN_X, yardY + 2.0, 0.0)),
             ("pip", Vec3(MAIN_X + 2.6, yardY + 0.9, 14.6), Vec3(MAIN_X + 2.0, yardY + 0.45, 13.0)),
             ("mill_inside", Vec3(MAIN_X - 3.5, yardY + 1.7, 3.5),
              Vec3(MAIN_X + 3.5, yardY + 1.0, -3.0))]
+End Function
+
+/// Where to see the lit mill from: its southeast, with the wheel and the lamp both in sight, and where
+/// to look.
+Public Function LitView(): (Vec3, Vec3)
+    Local y = GroundHeight(MAIN_X, 14.0)
+    Return (Vec3(MAIN_X + 21.0, y + 6.0, 19.0), Vec3(MAIN_X + 3.0, y + 3.0, 0.0))
 End Function

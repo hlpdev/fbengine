@@ -43,6 +43,7 @@ Public Final Class Controls
     Public Field Set: ActionSet
     Public Field Move: Action
     Public Field Look: Action
+    Public Field Turn: Action
     Public Field Use: Action
     Public Field Hand: Action
 
@@ -58,6 +59,9 @@ Public Final Class Controls
         Look = Set.Add("look")
         Look.Bind(Binding.OfMouseAxis(MouseAxis.X))
         Look.BindY(Binding.OfMouseAxis(MouseAxis.Y))
+        Turn = Set.Add("turn")
+        Turn.Bind(Binding.OfGamepadAxis(GamepadAxis.RIGHT_X))
+        Turn.BindY(Binding.OfGamepadAxis(GamepadAxis.RIGHT_Y))
         Use = Set.Add("use")
         Use.Bind(Binding.OfKey(Key.E))
         Use.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
@@ -77,4 +81,7 @@ Public Final Class Controls
 
     /// How far the mouse has moved.
     @MainThread Public Method Looking(): Vec2 => Look.Vector()
+
+    /// How far a stick's held over, from -1 to 1 each way.
+    @MainThread Public Method Turning(): Vec2 => Turn.Vector()
 End Class

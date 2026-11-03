@@ -4,6 +4,8 @@
 
 Import std.collections
 Import std.core
+Import std.math
+Import "./map"
 
 /// The places along the island, each leading to the next: the mill's inside, its yard, the
 /// causeway, and the far rock.
@@ -35,9 +37,9 @@ End Enum
 
 // How many seconds the tide gives: until the water starts to rise, which is said; until the
 // causeway floods; and until the water's back.
-Public Const RISING_AT: Float64 = 300.0
-Public Const FLOOD_AT: Float64 = 420.0
-Public Const TIDE_IN_AT: Float64 = 600.0
+Public Const RISING_AT: Float64 = 70.0
+Public Const FLOOD_AT: Float64 = 130.0
+Public Const TIDE_IN_AT: Float64 = 240.0
 // How long Pip takes to catch up with you.
 Const PIP_LAG: Float64 = 5.0
 // How long a step is at most, however long a frame was, so what happens in a long one happens in
@@ -79,17 +81,8 @@ Public Function PartName(part: Part): String
     End Select
 End Function
 
-// How many seconds it is from `place` to the next, away from the mill.
-Function LegSeconds(place: Area): Float64
-    Select place
-        Case Area.INSIDE
-            Return 20.0
-        Case Area.YARD
-            Return 40.0
-        Default
-            Return 60.0
-    End Select
-End Function
+// How many seconds it is from `place` to the next, away from the mill, on foot, as the map has it.
+Function LegSeconds(place: Area): Float64 => (LegMeters(place As Int) / WALK_SPEED) As Float64
 
 // How many seconds of walking `place` is from the mill.
 Function Along(place: Area): Float64
@@ -100,9 +93,8 @@ Function Along(place: Area): Float64
     Return sum
 End Function
 
-// How many seconds of walking the middle of what floods is from the mill: the yard's edge to the
-// far rock's.
-Function FloodsMiddle(): Float64 => (Along(Area.YARD) + Along(Area.FAR_ROCK)) / 2.0
+// How many seconds of walking the middle of what floods is from the mill: where the paddle lies.
+Function FloodsMiddle(): Float64 => Along(Area.CAUSEWAY)
 
 // Seconds as minutes and seconds.
 Function Time(seconds: Float64): String
@@ -127,6 +119,10 @@ Public Final Class Flow
     Field pipAt: Area = Area.INSIDE
     Field pipLeft: Float64 = 0.0
     Field pipHolds: Part? = Null
+    // Whether the game in 3D says where Pip is, and whether Pip's near you, and where it said so last.
+    Field pipDriven: Bool = False
+    Field pipNear: Bool = False
+    Field pipCaughtAt: Area = Area.INSIDE
     // Where each part lies, by its number, or Null once something has it, or the sea does.
     Field lying: Area?[]
     Field fitted: Bool[]
@@ -153,7 +149,10 @@ Public Final Class Flow
     Public Method Walking(): Bool => walkingTo != Null
 
     /// Whether Pip's with you.
-    Public Method PipHere(): Bool => pipAt == at && pipLeft <= 0.0 && walkingTo == Null
+    Public Method PipHere(): Bool
+        If pipDriven Then Return pipNear
+        Return pipAt == at && pipLeft <= 0.0 && walkingTo == Null
+    End Method
 
     /// Where Pip is.
     Public Method PipAt(): Area => pipAt
@@ -204,15 +203,24 @@ Public Final Class Flow
     End Method
 
     /// Says you've come to `place` on your own feet, as the game in 3D does, on the far half of what
-    /// floods if `past`, and Pip sets off.
+    /// floods if `past`. What lies there it leaves for the game to say, when you can see it.
     Public Method Arrive(place: Area, past: Bool = False)
         pastMiddle = past
         If ending != Ending.NONE || walkingTo != Null || place == at Then Return
         at = place
-        pipLeft = PIP_LAG
         Say("you reach {PlaceName(at)}")
-        Local lies = LyingHere()
-        If lies != Null Then Say("{PartName(lies)} lies here")
+    End Method
+
+    /// Says where Pip is, and whether Pip's near you, as the game in 3D does, in place of Pip's walks
+    /// here.
+    Public Method PipArrive(place: Area, near: Bool)
+        pipDriven = True
+        pipAt = place
+        pipNear = near
+        If ending == Ending.NONE && near && place == at && pipCaughtAt != at
+            pipCaughtAt = at
+            Say("Pip catches up")
+        End If
     End Method
 
     /// Walks toward the far rock, if there's a way and you're not walking.
@@ -351,7 +359,7 @@ Public Final Class Flow
                 If lies != Null Then Say("{PartName(lies)} lies here")
             End If
         End If
-        If pipAt != at || pipLeft > 0.0
+        If !pipDriven && (pipAt != at || pipLeft > 0.0)
             pipLeft -= seconds
             If pipLeft <= 0.0 && walkingTo == Null && pipAt != at
                 // Pip doesn't cross what's flooded.
@@ -365,7 +373,7 @@ Public Final Class Flow
         End If
         If !warned && clock >= RISING_AT
             warned = True
-            Say("the water's rising: the causeway floods in two minutes")
+            Say("the water's rising: the causeway floods in a minute")
         End If
         If !flooded && clock >= FLOOD_AT Then Flood()
         If !toldWaiting && Settled()
@@ -406,7 +414,7 @@ Public Final Class Flow
     Method WalkedAlong(): Float64
         Local going = walkingTo
         If going == Null
-            If at == Area.CAUSEWAY && pastMiddle Then Return FloodsMiddle()
+            If at == Area.CAUSEWAY && pastMiddle Then Return FloodsMiddle() + 1.0
             Return Along(at)
         End If
         If (going As Int) > (at As Int) Then Return Along(going) - walkLeft
@@ -428,11 +436,11 @@ Public Final Class Flow
         Local here = WalkedAlong()
         If here > Along(Area.YARD) && here < Along(Area.FAR_ROCK)
             walkingTo = Null
-            at = here >= FloodsMiddle() ? Area.FAR_ROCK : Area.YARD
+            at = here > FloodsMiddle() ? Area.FAR_ROCK : Area.YARD
             pipLeft = PIP_LAG
             Say("the water carries you to {PlaceName(at)}")
         End If
-        // Pip goes as you would; past the water, Pip stays, with what Pip holds.
+        // Pip goes as you would; past the water, Pip stays, with what Pip holds. In 3D, the game says.
         If pipAt == Area.CAUSEWAY Then pipAt = at == Area.FAR_ROCK ? Area.FAR_ROCK : Area.YARD
     End Method
 

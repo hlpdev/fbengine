@@ -392,7 +392,9 @@ if(FBENGINE_FB_TESTS)
     set_tests_properties(examples.slack_water.walk_${name} PROPERTIES RESOURCE_LOCK slack_water
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          TIMEOUT 300)
-    # And the same on the island, walked in 3D.
+  endforeach()
+  # And on the island, walked in 3D: to each ending, then the road as it floods.
+  foreach(name IN ITEMS bright dim dark cut swept)
     add_test(NAME examples.slack_water.walk3d_${name}
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                      -- --walk3d ${name}
@@ -401,6 +403,12 @@ if(FBENGINE_FB_TESTS)
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   endforeach()
+  add_test(NAME examples.slack_water.feel
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --feel)
+  set_tests_properties(examples.slack_water.feel PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   # Its flow, and its tools' sounds and materials, by their numbers, with nothing drawn.
   add_test(NAME examples.slack_water.rules
            COMMAND "${FBENGINE_FB}" --color never test "${PROJECT_SOURCE_DIR}/examples/slack_water")

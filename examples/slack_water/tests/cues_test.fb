@@ -57,16 +57,16 @@ Function GullsStopAtTheFloodWhichSplashes()
     Local flow = Quiet()
     Local gulls = 0
     Local splashes = 0
-    For tick = 1 To 2000
+    For tick = 1 To 1000
         flow.Step(0.1)
         Local heard = cues.Step(flow, 0.0, 0.1)
         gulls += Count(heard, Cue.GULL)
         splashes += Count(heard, Cue.SPLASH)
     End For
-    // 200 s, at one each 5 to 14 s.
-    Expect(gulls >= 14 && gulls <= 40)
+    // 100 s, at one each 5 to 14 s.
+    Expect(gulls >= 7 && gulls <= 20)
     Expect(splashes == 0)
-    flow.Step(221.0)
+    flow.Step(FLOOD_AT - 100.0 + 1.0)
     Expect(flow.Flooded())
     Local after = cues.Step(flow, 0.0, 100.0)
     Expect(Count(after, Cue.SPLASH) == 1)
@@ -86,7 +86,7 @@ Function CreaksAreAtTheMill()
     Expect(creaks >= 3)
     Local outside = Cues()
     flow.GoOut()
-    flow.Step(21.0)
+    flow.Step(10.0)
     Expect(flow.At() == Area.YARD)
     creaks = 0
     For tick = 1 To 300
@@ -97,17 +97,18 @@ End Function
 
 @Test
 Function TheWindAndSeaRiseWithTheTide()
-    Expect(WindLevel(0.0) < WindLevel(300.0))
-    Expect(WindLevel(300.0) < WindLevel(600.0))
-    Expect(SeaLevel(0.0, False) == SeaLevel(300.0, False))
-    Expect(SeaLevel(300.0, False) < SeaLevel(450.0, False))
-    Expect(SeaLevel(450.0, False) < SeaLevel(600.0, False))
+    Expect(WindLevel(0.0) < WindLevel(RISING_AT))
+    Expect(WindLevel(RISING_AT) < WindLevel(TIDE_IN_AT))
+    Expect(SeaLevel(0.0, False) == SeaLevel(RISING_AT, False))
+    Expect(SeaLevel(RISING_AT, False) < SeaLevel(FLOOD_AT, False))
+    Expect(SeaLevel(FLOOD_AT, False) < SeaLevel(TIDE_IN_AT, False))
     // All of it at once, each at the tools' peak, doesn't clip.
-    Local loudest = (WindLevel(600.0) + SeaLevel(600.0, False)) * 0.7 + WheelLevel(1.0) * 0.7 +
+    Local loudest = (WindLevel(TIDE_IN_AT) + SeaLevel(TIDE_IN_AT, False)) * 0.7 +
+                    WheelLevel(1.0) * 0.7 +
                     CueLevel(Cue.STEP_1) * 0.7 + CueLevel(Cue.GULL) * 0.6 +
                     CueLevel(Cue.CREAK) * 0.6 + CueLevel(Cue.SPLASH) * 0.8
     Expect(loudest < 1.0)
-    Expect(SeaLevel(450.0, True) < SeaLevel(450.0, False))
+    Expect(SeaLevel(FLOOD_AT, True) < SeaLevel(FLOOD_AT, False))
 End Function
 
 @Test

@@ -1,15 +1,16 @@
 [0:01] you reach the yard
-[0:01] the gear lies here
-[0:06] Pip catches up
-[0:13] you reach the causeway
-[0:13] the sluice paddle lies here
-[0:16] you reach the far rock
-[0:16] the drive belt lies here
-[0:21] Pip catches up
-[5:00] the water's rising: the causeway floods in two minutes
-[7:00] the causeway floods
-[7:00] the sea takes the sluice paddle
-[7:00] the sea takes the drive belt
-[7:00] there's nothing left to do but wait for the tide
-[10:00] the tide comes in
-[10:00] the wheel stands still, and the lamp stays dark
+[0:02] Pip catches up
+[0:05] the gear lies here
+[0:11] you reach the causeway
+[0:11] Pip catches up
+[0:15] the sluice paddle lies here
+[0:21] you reach the far rock
+[0:22] Pip catches up
+[0:24] the drive belt lies here
+[1:10] the water's rising: the causeway floods in a minute
+[2:10] the causeway floods
+[2:10] the sea takes the sluice paddle
+[2:10] the sea takes the drive belt
+[2:10] there's nothing left to do but wait for the tide
+[4:00] the tide comes in
+[4:00] the wheel stands still, and the lamp stays dark
