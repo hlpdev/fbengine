@@ -716,6 +716,56 @@ TEST_CASE("an environment's directions are the image's", "[gpu]") {
     stop_gpu();
 }
 
+// Directions at a pole, and a float's rounding off it, which a map's corners are on a GPU that
+// divides by a reciprocal, as Metal's fast math does, each read one column; and one just far enough
+// off, its own, the way it's turned.
+TEST_CASE("every direction at a pole reads one column of an image", "[gpu]") {
+    start();
+    const auto across = [](float x, float y, float z) {
+        const std::uint64_t target = fbe_texture_create_target(1, 1, FBE_TEXTURE_RGBA16F, 1, false);
+        REQUIRE(target != 0);
+        VkPipeline pipeline = fbe::gpu::pipeline({
+            .shader = &fbe::test_shaders::poles,
+            .color = VK_FORMAT_R16G16B16A16_SFLOAT,
+        });
+        REQUIRE(pipeline != VK_NULL_HANDLE);
+        const std::array<float, 4> push{ x, y, z, 0.0F };
+        require(fbe::gpu::add_pass({
+            .name = "poles",
+            .colors = { {
+                .target = fbe::gpu::texture_resource(target),
+                .clear = true,
+            }, },
+            .record =
+                [push, pipeline](VkCommandBuffer commands) {
+                    vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
+                                       flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0, sizeof(push),
+                                       push.data());
+                    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                    vkCmdDraw(commands, 3, 1, 0, 0);
+                },
+        }));
+        const float found = read(target).at(0, 0)[0];
+        require(fbe_texture_release(target));
+        return found;
+    };
+    for (const float y : { 1.0F, -1.0F }) {
+        for (const float off : { 0.0F, 1.2e-7F, 1e-5F }) {
+            INFO("y " << y << ", off " << off);
+            CHECK(across(off, y, off) == 0.5F);
+            CHECK(across(-off, y, off) == 0.5F);
+            CHECK(across(off, y, -off) == 0.5F);
+            CHECK(across(-off, y, -off) == 0.5F);
+        }
+    }
+    // Far enough off, a texel of the largest map, it's the angle again: +X's middle, +Z's three
+    // quarters.
+    CHECK(std::abs(across(1e-3F, -1.0F, 0.0F) - 0.5F) < 0.001F);
+    CHECK(std::abs(across(0.0F, -1.0F, 1e-3F) - 0.75F) < 0.001F);
+    CHECK(std::abs(across(0.0F, 1.0F, -1e-3F) - 0.25F) < 0.001F);
+    stop_gpu();
+}
+
 // Texels on the map's edges are their mirrors', the same direction, so filtering across an edge
 // meets what's on the other side.
 TEST_CASE("an octahedral map's edges meet their mirrors", "[gpu]") {

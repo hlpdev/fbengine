@@ -82,7 +82,7 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      HEADER test_shaders.hpp
                      SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang
                              gpu/shaders/shape.slang gpu/shaders/points.slang
-                             gpu/shaders/spheres.slang)
+                             gpu/shaders/spheres.slang gpu/shaders/poles.slang)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
