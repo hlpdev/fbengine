@@ -1,0 +1,12 @@
+// What a setter says of itself to what edits it by reflection, as the editor's inspector does, rather
+// than what edits it knowing each one's rules, or finding them by a panic.
+
+/// What a setter of numbers takes: anything else panics.
+Public Attribute Limits(Low: Float = -1000000000.0, High: Float = 1000000000.0, Above: Bool = False)
+
+/// A setter of an angle, in radians, which people think of in degrees.
+Public Attribute ShownInDegrees
+
+/// A setter that editing by hand doesn't suit: what it sets is set some other way, or setting it
+/// loses what no undo would bring back.
+Public Attribute NotEdited

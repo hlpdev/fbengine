@@ -3,6 +3,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./entity"
 Import "./window"
@@ -66,6 +67,7 @@ Public Final Class Light Extends Entity
     End Method
 
     /// Sets how bright the light is, its color times this. Below 0 panics.
+    @Limits(0)
     @MainThread @PanicsAtCaller
     Public Method SetIntensity(intensity: Float)
         If !fbe_light_set_intensity(Live("SetIntensity"), intensity) Then Failed("SetIntensity")
@@ -80,6 +82,7 @@ Public Final Class Light Extends Entity
     /// `clamp(1 - (d / range)^4, 0, 1)^2 / max(d^2, 0.0001)`. Per vertex, Shading.VERTEX, it's where
     /// it starts to fall, `min(range / d, 1)`, with no end, as Blitz's LightRange. One not above 0
     /// panics.
+    @Limits(0, Above: True)
     @MainThread @PanicsAtCaller
     Public Method SetRange(range: Float)
         If !fbe_light_set_range(Live("SetRange"), range) Then Failed("SetRange")
