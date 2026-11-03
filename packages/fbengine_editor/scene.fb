@@ -1,0 +1,199 @@
+// The scene being edited: its World, what's selected in it, and what the editor keeps in it that
+// isn't the game's.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+Import "./history"
+
+/// A World being edited. The camera and the light the editor sees it by are in it, under Helpers,
+/// which isn't the game's: nothing else that's the editor's goes in it. What's selected is an order
+/// of entities, the last the one handles go by.
+Public Final Class EditedScene
+    /// What's in the scene.
+    Public ReadOnly Field Stage: World
+    /// What the editor keeps in Stage, which is no part of the scene.
+    Public ReadOnly Field Helpers: Entity
+    /// The camera it's seen by.
+    Public ReadOnly Field Viewer: Camera
+    /// What's lit by, when the scene has no light of its own to go by.
+    Public ReadOnly Field Lamp: Light
+    Field selected: Entity[] = []
+    Field changed: (Func())? = Null
+
+    Public New()
+        Stage = World()
+        World.SetCurrent(Stage)
+        Stage.SetAmbientLight(Color(0.2, 0.2, 0.24))
+        Helpers = Pivot()
+        Helpers.SetName("editor")
+        Viewer = Camera(Helpers)
+        Viewer.SetClearColor(Color(0.01, 0.012, 0.018))
+        Lamp = Light(LightType.DIRECTIONAL, Helpers)
+        Lamp.SetPosition(Vec3(4, 8, 6))
+        Lamp.PointAt(Vec3(0, 0, 0))
+    End New
+
+    /// Frees it and all that's in it.
+    Public Method Free()
+        selected.Clear()
+        Stage.Free()
+    End Method
+
+    /// Runs `handler` after each change to what's selected.
+    Public Method OnSelectionChanged(handler: (Func())?)
+        changed = handler
+    End Method
+
+    /// What's selected, in the order it was, the last the one handles go by.
+    Public Method Selected(): Entity[]
+        Local shown: Entity[] = []
+        For entity In selected
+            If !entity.Hidden() Then shown.Add(entity)
+        End For
+        Return shown
+    End Method
+
+    /// Whether `entity` is selected.
+    Public Method IsSelected(entity: Entity): Bool
+        For each In selected
+            If RefEquals(each, entity) Then Return True
+        End For
+        Return False
+    End Method
+
+    /// Selects `entity` alone, or Null for nothing.
+    Public Method SelectOnly(entity: Entity?)
+        selected.Clear()
+        If entity != Null Then selected.Add(entity)
+        Changed()
+    End Method
+
+    /// Selects `entity` too, or takes it out if it's selected.
+    Public Method ToggleSelected(entity: Entity)
+        For i = 0 To selected.Count - 1
+            If RefEquals(selected[i], entity)
+                selected.RemoveAt(i)
+                Changed()
+                Return
+            End If
+        End For
+        selected.Add(entity)
+        Changed()
+    End Method
+
+    /// What's in the scene, each entity and those under it, in the tree's order, without Helpers.
+    Public Method Entities(): Entity[]
+        Local all: Entity[] = []
+        For root In Stage.Roots()
+            If !RefEquals(root, Helpers) Then Collected(root, all)
+        End For
+        Return all
+    End Method
+
+    Method Collected(entity: Entity, into: Entity[])
+        into.Add(entity)
+        For child In entity.Children()
+            Collected(child, into)
+        End For
+    End Method
+
+    Method Changed()
+        Local handler = changed
+        If handler != Null Then handler()
+    End Method
+End Class
+
+/// An entity made in the scene, which undoing hides, as what's made after it may be holding it, and
+/// redoing shows.
+Public Final Class MadeEdit Extends Edit
+    Field scene: EditedScene
+    Field make: Func(): Entity
+    Field made: Entity? = Null
+
+    /// An edit named `name` that makes what `make` makes, and selects it.
+    Public New(name: String, into: EditedScene, making: Func(): Entity)
+        scene = into
+        make = making
+        Super.New(name)
+    End New
+
+    /// What it made, Null before it's applied.
+    Public Method Made(): Entity? => made
+
+    Public Override Method Apply()
+        Local entity = made
+        If entity == Null
+            entity = make()
+            made = entity
+        Else
+            entity.Show()
+        End If
+        scene.SelectOnly(entity)
+    End Method
+
+    Public Override Method Undo()
+        Local entity = made
+        If entity == Null Then Return
+        entity.Hide()
+        If scene.IsSelected(entity) Then scene.ToggleSelected(entity)
+    End Method
+End Class
+
+/// Entities moved, turned, or scaled, from where they were to where they are, each drag's steps one
+/// undo.
+Public Final Class TransformEdit Extends Edit
+    Field entities: Entity[]
+    Field before: EntityPlace[]
+    Field after: EntityPlace[]
+    Field drag: Int
+
+    /// `entities` going from `from` to `to`, in `drag`, a number for the drag it's a step of.
+    Public New(name: String, moving: Entity[], from: EntityPlace[], to: EntityPlace[], number: Int)
+        entities = moving
+        before = from
+        after = to
+        drag = number
+        Super.New(name)
+    End New
+
+    Public Override Method Apply()
+        For i = 0 To entities.Count - 1
+            after[i].PutOn(entities[i])
+        End For
+    End Method
+
+    Public Override Method Undo()
+        For i = 0 To entities.Count - 1
+            before[i].PutOn(entities[i])
+        End For
+    End Method
+
+    Public Override Method Merge(later: Edit): Bool
+        Local other = later As? TransformEdit
+        If other == Null || other.drag != drag Then Return False
+        after = other.after
+        Return True
+    End Method
+End Class
+
+/// Where an entity is in the world, how it's turned, and its own scale.
+Public Struct EntityPlace
+    Public Field Position: Vec3
+    Public Field Rotation: Quat
+    Public Field Scale: Vec3
+
+    /// Where `entity` is now.
+    Public Static Method Of(entity: Entity): EntityPlace
+        Return EntityPlace(entity.Position(Space.WORLD), entity.Rotation(Space.WORLD),
+                           entity.Scale())
+    End Method
+
+    /// Puts `entity` there.
+    Public Method PutOn(entity: Entity)
+        entity.SetPosition(Position, Space.WORLD)
+        entity.SetRotation(Rotation, Space.WORLD)
+        entity.SetScale(Scale)
+    End Method
+End Struct

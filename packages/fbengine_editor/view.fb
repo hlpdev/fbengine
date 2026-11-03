@@ -1,0 +1,545 @@
+// The scene view: a pane showing the scene through a camera of the editor's, rendered into a texture
+// as big as the pane, which it's flown and orbited around, selected in by a pick, and changed by
+// handles.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+Import fbengine_ui
+Import "./handles"
+Import "./history"
+Import "./scene"
+
+// How far a drag of a pixel turns the camera, and how much a wheel's notch dollies it.
+Const TURNING: Float = 0.005
+Const DOLLY: Float = 0.9
+// How far past a thing the camera starts, and flies at first, a second.
+Const FLYING: Float = 5.0
+// How far from an entity with no mesh a pick has it.
+Const MARKER: Float = 0.3
+
+/// How far a drag snaps by, on or off, as Control held says otherwise.
+Public Final Class Snapping
+    /// Whether it snaps, with Control not held.
+    Public Field On: Bool = False
+    /// How far a move goes, in meters.
+    Public Field Move: Float = 0.5
+    /// How far a turn goes, in radians.
+    Public Field Turn: Float = Pi / 12
+    /// How far a scale goes, times what it was.
+    Public Field Scale: Float = 0.1
+
+    Public New()
+    End New
+End Class
+
+/// What the pointer's doing in a view.
+Enum Dragging
+    NOTHING
+    LOOKING
+    ORBITING
+    PANNING
+    HANDLE
+End Enum
+
+/// The scene through a camera of its own, rendered by Render each frame into a texture it fits.
+/// The right button looks around, while W, A, S, D, Q, and E fly, Update each frame seeing to them;
+/// the middle one orbits what it's looking at, and with Shift, pans; the wheel dollies. The left
+/// button picks what's under it, with Shift, adds to what's selected, or drags a handle.
+Public Final Class SceneView Extends Widget
+    Field scene: EditedScene
+    Field history: History
+    Field overlay: Overlay
+    Field target: Texture? = Null
+    Field sprite: Sprite2D? = Null
+    Field yaw: Float = 0.6
+    Field pitch: Float = -0.45
+    Field focus: Vec3
+    Field distance: Float = 12.0
+    Field dragging: Dragging = Dragging.NOTHING
+    Field last: Vec2
+    // The handle held, and how it was when it was taken.
+    Field axis: Int = -1
+    Field lit: Int = -1
+    Field drags: Int = 0
+    Field moving: Entity[] = []
+    Field starts: EntityPlace[] = []
+    Field pivot: Vec3
+    Field turned: Quat
+    Field grabbed: Float = 0
+    Field grabbedOn: Vec3
+    Field grabbedAt: Vec2
+    /// What dragging a handle does.
+    Public Field Tool: HandleTool = HandleTool.MOVE
+    /// Which space the handles' axes are in.
+    Public Field Axes: HandleSpace = HandleSpace.WORLD
+    /// How far drags snap by.
+    Public ReadOnly Field Snap: Snapping
+
+    /// A view of `seen`, whose handles' edits go in `edits`.
+    Public New(seen: EditedScene, edits: History)
+        scene = seen
+        history = edits
+        overlay = Overlay(seen.Stage)
+        Snap = Snapping()
+        turned = Quat.Identity
+        Super.New("scene.view", "scene.view")
+        Placed()
+    End New
+
+    /// Shows `seen` in place of what it showed, from where it starts.
+    Public Method SetScene(seen: EditedScene)
+        scene = seen
+        yaw = 0.6
+        pitch = -0.45
+        focus = Vec3(0, 0, 0)
+        distance = 12.0
+        Let()
+        target = Null
+        Placed()
+    End Method
+
+    /// Frees what's its own.
+    Public Method Free()
+        Let()
+        overlay.Free()
+    End Method
+
+    /// Whether the right button's flying it, so keys are for that.
+    Public Method Flying(): Bool => dragging == Dragging.LOOKING
+
+    /// The camera that sees the scene.
+    Public Method Viewer(): Camera => scene.Viewer
+
+    /// What's over the scene.
+    Public Method Over(): Overlay => overlay
+
+    /// The texture it's rendered into, Null before the first Render.
+    Public Method Target(): Texture? => target
+
+    /// What the camera's looking at.
+    Public Method Focus(): Vec3 => focus
+
+    /// How far the camera is from what it's looking at.
+    Public Method ViewDistance(): Float => distance
+
+    /// Points the camera at `at`, from `away`, as it's turned.
+    Public Method LookAt(at: Vec3, away: Float)
+        focus = at
+        distance = Max(away, 0.1)
+        Placed()
+    End Method
+
+    /// Looks at what's selected, from far enough to see it.
+    Public Method FrameSelected()
+        Local selected = scene.Selected()
+        If selected.Count == 0 Then Return
+        Local middle = Vec3(0, 0, 0)
+        Local reach: Float = 1
+        For entity In selected
+            middle = middle + entity.Position(Space.WORLD)
+            reach = Max(reach, Length(entity.Scale(Space.WORLD)))
+        End For
+        LookAt(middle * (1.0 / (selected.Count As Float)), reach * 3)
+    End Method
+
+    /// Flies the camera, while the right button's held, and shows what the pointer's over.
+    Public Method Update(seconds: Float64)
+        If dragging == Dragging.LOOKING
+            Local way = Vec3(0, 0, 0)
+            If KeyDown(Key.W) Then way = way + Vec3.Forward
+            If KeyDown(Key.S) Then way = way + Vec3.Back
+            If KeyDown(Key.A) Then way = way + Vec3.Left
+            If KeyDown(Key.D) Then way = way + Vec3.Right
+            If KeyDown(Key.E) Then way = way + Vec3.Up
+            If KeyDown(Key.Q) Then way = way + Vec3.Down
+            If LengthSquared(way) > 0
+                Local fast = KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT) ? 3.0 : 1.0
+                Local gone = Normalize(way) * ((FLYING * fast * (seconds As Float)))
+                focus = focus + scene.Viewer.Rotation(Space.WORLD) * gone
+                Placed()
+            End If
+        End If
+        Local ui = Owner()
+        Local held = dragging == Dragging.HANDLE
+        If ui != Null && !held
+            Local under = ui.Hovered()
+            Local over = under != Null && RefEquals(under, Self)
+            lit = over ? HandleAt(Vec2(MouseX(), MouseY())) : -1
+        End If
+    End Method
+
+    /// Renders the scene, then what's over it, into the texture, which it makes to fit.
+    Public Method Render()
+        Fitted()
+        Local own = target
+        If own == Null Then Return
+        Local camera = scene.Viewer
+        Local over = overlay.Viewer
+        over.SetPosition(camera.Position(Space.WORLD))
+        over.SetRotation(camera.Rotation(Space.WORLD))
+        over.SetFieldOfView(camera.FieldOfView())
+        over.SetRange(camera.Near(), camera.Far())
+        overlay.FollowCamera(camera.Position(Space.WORLD))
+        Handled()
+        camera.Render()
+        over.Render()
+    End Method
+
+    /// The ray through a point in the UI's units, or Null off the view.
+    Public Method RayAt(point: Vec2): (Vec3, Vec3)?
+        If target == Null Then Return Null
+        Local at = InTexture(point)
+        Local camera = scene.Viewer
+        Local start = camera.Unproject(Vec3(at.x, at.y, camera.Near()))
+        Local finish = camera.Unproject(Vec3(at.x, at.y, camera.Far()))
+        If start == Null || finish == Null Then Return Null
+        Return (start, Normalize(finish - start))
+    End Method
+
+    /// What's under a point in the UI's units: the nearest mesh by its triangles, whatever pick mode
+    /// the game gave it, or a thing with no mesh by where it is; Null for nothing, and through what's
+    /// hidden.
+    Public Method PickAt(point: Vec2): Entity?
+        Local ray = RayAt(point)
+        If ray == Null Then Return Null
+        Local from, way = ray
+        Local entities = scene.Entities()
+        Local nearest: Float = Inf
+        Local found: Entity? = Null
+        Local modes: PickMode[] = []
+        For entity In entities
+            modes.Add(entity.PickMode())
+            entity.SetPickMode(entity Is Mesh ? PickMode.MESH : PickMode.NONE)
+        End For
+        Local far = scene.Viewer.Far()
+        Local hit = scene.Stage.Pick(from, from + way * far)
+        For i = 0 To entities.Count - 1
+            entities[i].SetPickMode(modes[i])
+        End For
+        If hit != Null
+            found = hit.Entity
+            nearest = Distance(from, hit.Point)
+        End If
+        For entity In entities
+            If entity Is Mesh || HiddenUnder(entity) Then Continue
+            Local place = entity.Position(Space.WORLD)
+            Local along = Dot(place - from, way)
+            If along > 0 && along < nearest && Distance(from + way * along, place) < MARKER
+                nearest = along
+                found = entity
+            End If
+        End For
+        Return found
+    End Method
+
+    /// The handle at a point in the UI's units, 0 to 2 for X, Y, and Z, 3 for the middle of the
+    /// scale's, or -1 for none.
+    Public Method HandleAt(point: Vec2): Int
+        Local selected = scene.Selected()
+        Local camera = scene.Viewer
+        If selected.Count == 0 || target == Null Then Return -1
+        Local place, turning = HandlePlace(selected)
+        Local origin = camera.Project(place)
+        If origin == Null Then Return -1
+        Local at = InTexture(point)
+        Local size = HandleSize(place)
+        Local axes = AxesOf(Tool == HandleTool.SCALE ? HandleSpace.LOCAL : Axes, turning)
+        Local best = -1
+        Local nearest = HANDLE_REACH
+        If Tool == HandleTool.SCALE && Length(at - Vec2(origin.x, origin.y)) < HANDLE_REACH * 1.5 Then Return 3
+        For i = 0 To 2
+            Local away = Tool == HandleTool.TURN ? FromRing(at, place, axes[i],
+                                                            size) : FromArrow(at, place, axes[i],
+                                                                              size)
+            If away < nearest
+                nearest = away
+                best = i
+            End If
+        End For
+        Return best
+    End Method
+
+    /// What it shows.
+    Public Override Method Draw(paint: Painter)
+        Super.Draw(paint)
+        Local own = sprite
+        If own != Null Then paint.Sprite(own, Box())
+    End Method
+
+    Public Override Method KeepsFocus(): Bool => False
+
+    Public Override Method PointerCursor(): MouseCursor? =>
+        dragging == Dragging.PANNING ? MouseCursor.MOVE : Null
+
+    Public Override Method PointerDown(point: Vec2): Bool
+        last = point
+        axis = HandleAt(point)
+        If axis >= 0
+            TakeHandle(point)
+            Return True
+        End If
+        Local picked = PickAt(point)
+        If KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT)
+            If picked != Null Then scene.ToggleSelected(picked)
+        Else
+            scene.SelectOnly(picked)
+        End If
+        Return True
+    End Method
+
+    Public Override Method PointerDownWith(button: MouseButton, point: Vec2): Bool
+        last = point
+        Local shifted = KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT)
+        If button == MouseButton.RIGHT
+            dragging = Dragging.LOOKING
+        ElseIf button == MouseButton.MIDDLE
+            dragging = shifted ? Dragging.PANNING : Dragging.ORBITING
+        Else
+            Return False
+        End If
+        Return True
+    End Method
+
+    Public Override Method PointerDrag(point: Vec2)
+        Local dx = point.x - last.x
+        Local dy = point.y - last.y
+        Select dragging
+            Case Dragging.LOOKING
+                // Around where the camera is, which orbiting isn't.
+                Local place = scene.Viewer.Position(Space.WORLD)
+                Turned(dx, dy)
+                focus = place + Facing() * distance
+                Placed()
+            Case Dragging.ORBITING
+                Turned(dx, dy)
+                Placed()
+            Case Dragging.PANNING
+                Local from = AtDistance(last)
+                Local to = AtDistance(point)
+                If from != Null && to != Null
+                    focus = focus + (from - to)
+                    Placed()
+                End If
+            Case Dragging.HANDLE
+                DragHandle(point)
+            Default
+                If axis < 0 Then Return
+        End Select
+        last = point
+    End Method
+
+    Public Override Method PointerUp(point: Vec2, over: Bool)
+        dragging = Dragging.NOTHING
+        axis = -1
+    End Method
+
+    Public Override Method Wheel(steps: Int32): Bool
+        distance = Max(distance * Exp((steps As Float) * Log(DOLLY)), 0.1)
+        Placed()
+        Return True
+    End Method
+
+    Method Let()
+        Local own = target
+        If own != Null Then own.Free()
+        target = Null
+        sprite = Null
+    End Method
+
+    Method Facing(): Vec3 => Rotation() * Vec3.Forward
+
+    Method Rotation(): Quat
+        Return Quat.FromAxisAngle(Vec3(0, 1, 0), yaw) * Quat.FromAxisAngle(Vec3(1, 0, 0), pitch)
+    End Method
+
+    Method Turned(dx: Float, dy: Float)
+        yaw -= dx * TURNING
+        pitch = Clamp(pitch - dy * TURNING, -1.55, 1.55)
+    End Method
+
+    // The camera, from its turn, its focus, and its distance.
+    Method Placed()
+        scene.Viewer.SetRotation(Rotation(), Space.WORLD)
+        scene.Viewer.SetPosition(focus - Facing() * distance, Space.WORLD)
+    End Method
+
+    // How many of the texture's pixels each of the UI's units is.
+    Method PixelsPerUnit(): Float32
+        Local ui = Owner()
+        Local units = ui != Null ? ui.Scale() : 1.0
+        Local width = Window.Width()
+        Return width > 0 ? units * (Window.PixelWidth() As Float32) / (width As Float32) : units
+    End Method
+
+    Method InTexture(point: Vec2): Vec2
+        Local box = Box()
+        Local pixels = PixelsPerUnit()
+        Return Vec2((point.x - box.X) * pixels, (point.y - box.Y) * pixels)
+    End Method
+
+    // Makes the texture as big as it's shown.
+    Method Fitted()
+        Local box = Box()
+        Local pixels = PixelsPerUnit()
+        Local wide = Max(Round(box.Width * pixels) As Int32, 0)
+        Local high = Max(Round(box.Height * pixels) As Int32, 0)
+        Local own = target
+        If wide == 0 || high == 0 || (own != Null && own.Width() == wide && own.Height() == high) Then Return
+        Let()
+        Try
+            Local made = Try Texture.Target(wide, high, TextureFormat.RGBA8, 1, True)
+            target = made
+            sprite = Sprite2D(made)
+            scene.Viewer.SetRenderTarget(made)
+            overlay.Viewer.SetRenderTarget(made)
+        Catch error As GraphicsError
+            PrintError("the scene view's texture: {error.Message}")
+        End Try
+    End Method
+
+    // Where a point of the view is at the distance of what the camera's looking at.
+    Method AtDistance(point: Vec2): Vec3?
+        Local at = InTexture(point)
+        Return scene.Viewer.Unproject(Vec3(at.x, at.y, distance))
+    End Method
+
+    // Where handles go for `selected`, and how they're turned: as the last of it is.
+    Method HandlePlace(selected: Entity[]): (Vec3, Quat)
+        Local last = selected[selected.Count - 1]
+        Return (last.Position(Space.WORLD), last.Rotation(Space.WORLD))
+    End Method
+
+    // How long a handle is, in the world, so it's as long in the view wherever it is.
+    Method HandleSize(place: Vec3): Float
+        Local camera = scene.Viewer
+        Local here = camera.Project(place)
+        If here == Null Then Return 1
+        Local up = camera.Unproject(Vec3(here.x, here.y - 110, here.z))
+        Return up != Null ? Distance(up, place) : 1.0
+    End Method
+
+    Method FromArrow(at: Vec2, place: Vec3, axis: Vec3, size: Float): Float
+        Local camera = scene.Viewer
+        Local start = camera.Project(place + axis * (size * 0.1))
+        Local finish = camera.Project(place + axis * (size * 1.05))
+        If start == Null || finish == Null Then Return Inf
+        Return FromSegment(at, Vec2(start.x, start.y), Vec2(finish.x, finish.y))
+    End Method
+
+    Method FromRing(at: Vec2, place: Vec3, axis: Vec3, size: Float): Float
+        Local camera = scene.Viewer
+        Local one = Abs(axis.y) < 0.9 ? Normalize(Cross(axis,
+                                                        Vec3(0, 1, 0))) : Normalize(Cross(axis,
+                                                                                          Vec3(1, 0,
+                                                                                               0)))
+        Local two = Cross(axis, one)
+        Local nearest = Inf
+        Local before: Vec3? = Null
+        For i = 0 To 48
+            Local angle = (i As Float) / 48 * 2 * Pi
+            Local now = camera.Project(place + (one * Cos(angle) + two * Sin(angle)) * size)
+            If before != Null && now != Null
+                nearest = Min(nearest,
+                              FromSegment(at, Vec2(before.x, before.y), Vec2(now.x, now.y)))
+            End If
+            before = now
+        End For
+        Return nearest
+    End Method
+
+    // Handles shown where they go.
+    Method Handled()
+        Local seen = scene
+        overlay.ShowMarks(scene.Entities(), Function(entity: Entity) => seen.IsSelected(entity))
+        Local selected = scene.Selected()
+        If selected.Count == 0
+            overlay.ShowHandles(Null, Vec3(0, 0, 0), Quat.Identity, 1)
+            overlay.SetLit(-1)
+            Return
+        End If
+        Local place, turning = HandlePlace(selected)
+        Local local = Tool == HandleTool.SCALE || Axes == HandleSpace.LOCAL
+        overlay.ShowHandles(Tool, place, local ? turning : Quat.Identity, HandleSize(place))
+        overlay.SetLit(dragging == Dragging.HANDLE ? axis : lit)
+    End Method
+
+    Method TakeHandle(point: Vec2)
+        Local selected = scene.Selected()
+        dragging = Dragging.HANDLE
+        drags += 1
+        moving = selected
+        starts = []
+        For entity In selected
+            starts.Add(EntityPlace.Of(entity))
+        End For
+        pivot, turned = HandlePlace(selected)
+        grabbedAt = point
+        Local ray = RayAt(point)
+        If ray == Null Then Return
+        Local from, way = ray
+        If axis == 3 Then Return
+        Local direction = Axis()
+        grabbed = AlongAxis(pivot, direction, from, way)
+        Local on = OnPlane(pivot, direction, from, way)
+        grabbedOn = on != Null ? on - pivot : Vec3(0, 0, 0)
+    End Method
+
+    Method Axis(): Vec3
+        If axis > 2 || axis < 0 Then Return Vec3(0, 1, 0)
+        Return AxesOf(Tool == HandleTool.SCALE ? HandleSpace.LOCAL : Axes, turned)[axis]
+    End Method
+
+    Method Snaps(): Bool
+        Local held = KeyDown(Key.LEFT_CONTROL) || KeyDown(Key.RIGHT_CONTROL)
+        Return Snap.On != held
+    End Method
+
+    Method DragHandle(point: Vec2)
+        Local ray = RayAt(point)
+        If ray == Null Then Return
+        Local from, way = ray
+        Local direction = Axis()
+        Local after: EntityPlace[] = []
+        Local name = "Move"
+        Select Tool
+            Case HandleTool.MOVE
+                Local along = AlongAxis(pivot, direction, from, way) - grabbed
+                If Snaps() Then along = Snapped(along, Snap.Move)
+                Local by = direction * along
+                For start In starts
+                    after.Add(EntityPlace(start.Position + by, start.Rotation, start.Scale))
+                End For
+            Case HandleTool.TURN
+                name = "Turn"
+                Local on = OnPlane(pivot, direction, from, way)
+                If on == Null Then Return
+                Local angle = AngleAround(direction, grabbedOn, on - pivot)
+                If Snaps() Then angle = Snapped(angle, Snap.Turn)
+                Local turn = Quat.FromAxisAngle(direction, angle)
+                For start In starts
+                    after.Add(EntityPlace(pivot + turn * (start.Position - pivot),
+                                          Normalize(turn * start.Rotation),
+                                          start.Scale))
+                End For
+            Default
+                name = "Scale"
+                Local along = (AlongAxis(pivot, direction, from, way) - grabbed) / HandleSize(pivot)
+                Local factor = 1 + (axis == 3 ? (point.x - grabbedAt.x) / 110.0 : along)
+                If Snaps() Then factor = Snapped(factor, Snap.Scale)
+                factor = Max(factor, 0.001)
+                Local times = Vec3(factor, factor, factor)
+                If axis < 3
+                    times = Vec3(axis == 0 ? factor : 1, axis == 1 ? factor : 1,
+                                 axis == 2 ? factor : 1)
+                End If
+                For start In starts
+                    Local size = Vec3(start.Scale.x * times.x, start.Scale.y * times.y,
+                                      start.Scale.z * times.z)
+                    after.Add(EntityPlace(start.Position, start.Rotation, size))
+                End For
+        End Select
+        history.Commit(TransformEdit(name, moving, starts, after, drags))
+    End Method
+End Class

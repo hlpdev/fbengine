@@ -9,10 +9,13 @@ Import "./commands"
 Import "./dialog"
 Import "./dock"
 Import "./editor"
+Import "./handles"
 Import "./history"
 Import "./menu"
 Import "./project"
+Import "./scene"
 Import "./session"
+Import "./view"
 
 Function Run() Throws IOError, GraphicsError
     Local arguments = Process.Arguments()

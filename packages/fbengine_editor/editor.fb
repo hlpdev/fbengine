@@ -11,10 +11,13 @@ Import fbengine_ui
 Import "./commands"
 Import "./dialog"
 Import "./dock"
+Import "./handles"
 Import "./history"
 Import "./menu"
 Import "./project"
+Import "./scene"
 Import "./session"
+Import "./view"
 
 /// fbengine's editor. Start opens its window; then each frame, Step, until Quitting, then Finish.
 /// Everything it does is a command in Actions, so a test runs them as its menus and keys do.
@@ -31,6 +34,10 @@ Public Final Class Editor
     Public ReadOnly Field Shown: Ui
     /// What's kept between runs.
     Public ReadOnly Field Kept: Session
+    /// The scene being edited.
+    Public Field Edited: EditedScene
+    /// The view of it.
+    Public ReadOnly Field View: SceneView
     Field project: GameProject? = Null
     Field dialog: Dialog? = Null
     Field welcome: Node
@@ -43,6 +50,8 @@ Public Final Class Editor
         Kept = Try Session(settings)
         Actions = Commands()
         Edits = History()
+        Edited = EditedScene()
+        View = SceneView(Edited, Edits)
         Docked = Dock()
         Menus = MenuBar(Actions)
         welcome = Widget("welcome", "welcome")
@@ -88,11 +97,13 @@ Public Final Class Editor
         Flip()
         Shown.Update()
         Menus.Update()
+        View.Update(Frame.Delta())
         Local showing = dialog
         If showing != Null Then showing.Update()
         Retitled()
         If Window.Closed() Then quitting = True
         If Screen.Texture() == Null Then Return
+        If Docked.Active("scene") && project != Null Then View.Render()
         Screen.Canvas().Clear()
         Shown.Draw()
     End Method
@@ -105,6 +116,8 @@ Public Final Class Editor
         CloseProject()
         If Window.Open() Then Kept.SetWindow(Window.X(), Window.Y(), Window.Width(),
                                              Window.Height())
+        View.Free()
+        Edited.Free()
         EndGraphics()
     End Method
 
@@ -131,6 +144,7 @@ Public Final Class Editor
         End Try
         If opened == Null Then Return
         project = opened
+        NewScene()
         Kept.AddRecent(opened.Folder.Text)
         Local saved = Kept.Kept(opened.Folder.Text)
         If saved == Null || !Docked.Restore(saved["layout"] ?? Value.Object()) Then DefaultLayout()
@@ -148,6 +162,7 @@ Public Final Class Editor
         open.Close()
         project = Null
         Docked.Clear()
+        NewScene()
         Edits.Clear()
         ShowWelcome()
     End Method
@@ -165,6 +180,15 @@ Public Final Class Editor
         Docked.Show("output")
         Docked.Move("output", "assets", DockSide.CENTER)
         Docked.Activate("scene")
+    End Method
+
+    // A scene with nothing in it, in place of what's there, with nothing to undo in it.
+    Method NewScene()
+        Edits.Clear()
+        Local old = Edited
+        Edited = EditedScene()
+        View.SetScene(Edited)
+        old.Free()
     End Method
 
     Method Said(title: String, text: String)
@@ -232,8 +256,9 @@ Public Final Class Editor
 
     // A pane for each thing, which the steps after this one fill.
     Method AddPanes()
-        For each In [("scene", "Scene"), ("tree", "Tree"), ("inspector", "Inspector"),
-                     ("assets", "Assets"),
+        View.SetWidth(Sizing.Fill())
+        Docked.AddPane(Pane("scene", "Scene", View))
+        For each In [("tree", "Tree"), ("inspector", "Inspector"), ("assets", "Assets"),
                      ("output", "Output")]
             Local id, title = each
             Local content = Widget("pane", "pane." + id)
@@ -299,6 +324,55 @@ Public Final Class Editor
             Local own = Self
             If own != Null Then own.DefaultLayout()
         End Function, Null, hasProject)
+        Local notFlying = Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Current() != Null && !own.View.Flying()
+        End Function
+        Actions.Add("tool.move", "Move", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.View.Tool = HandleTool.MOVE
+        End Function, Shortcut(Key.W, False, False, False), notFlying)
+        Actions.Add("tool.turn", "Turn", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.View.Tool = HandleTool.TURN
+        End Function, Shortcut(Key.E, False, False, False), notFlying)
+        Actions.Add("tool.scale", "Scale", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.View.Tool = HandleTool.SCALE
+        End Function, Shortcut(Key.R, False, False, False), notFlying)
+        Actions.Add("tool.space", "World or Local", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            own.View.Axes =
+                own.View.Axes == HandleSpace.WORLD ? HandleSpace.LOCAL : HandleSpace.WORLD
+        End Function, Shortcut(Key.X, False, False, False), notFlying)
+        Actions.Add("tool.snap", "Snap", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.View.Snap.On = !own.View.Snap.On
+        End Function, Shortcut(Key.G, False, False, False), notFlying)
+        Actions.Add("view.frame", "Frame Selected", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.View.FrameSelected()
+        End Function, Shortcut(Key.F, False, False, False), notFlying)
+        Actions.Add("select.none", "Select Nothing", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edited.SelectOnly(Null)
+        End Function, Shortcut(Key.ESCAPE, False, False, False), hasProject)
+        Actions.Add("add.cube", "Cube", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(MadeEdit("Add Cube", own.Edited, Function(): Entity
+                Local cube = Mesh(Geometry.Cube())
+                cube.SetMaterial(Material(Color(0.5, 0.5, 0.5)))
+                Return cube
+            End Function))
+        End Function, Null, hasProject)
+        Actions.Add("add.light", "Light", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(MadeEdit("Add Light", own.Edited,
+                                                          Function(): Entity
+                Return Light(LightType.POINT)
+            End Function))
+        End Function, Null, hasProject)
         Docked.OnTabMenu(Function[Weak Self](ui: Ui, id: String, point: Vec2)
             Local own = Self
             If own != Null Then OpenMenu(ui, own.Actions, ["view.close", "view.close_others"],
@@ -308,12 +382,17 @@ Public Final Class Editor
 
     Method AddMenus()
         Menus.AddMenu("File", ["file.open", "file.close", SEPARATOR, "file.quit"])
-        Menus.AddMenu("Edit", ["edit.undo", "edit.redo"])
+        Menus.AddMenu("Edit", ["edit.undo", "edit.redo", SEPARATOR, "select.none"])
+        Menus.AddMenu("Add", ["add.cube", "add.light"])
+        Menus.AddMenu("Tools",
+                      ["tool.move", "tool.turn", "tool.scale", SEPARATOR, "tool.space",
+                       "tool.snap"])
         Local views: String[] = []
         For pane In Docked.Panes()
             views.Add("view.{pane.Id}")
         End For
         views.Add(SEPARATOR)
+        views.Add("view.frame")
         views.Add("view.reset")
         Menus.AddMenu("View", views)
     End Method
