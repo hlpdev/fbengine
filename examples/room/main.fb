@@ -1,0 +1,191 @@
+// A room as old games lit theirs: baked into a lightmap, fogged, with a shiny crate under a lamp, a
+// pillar lit per vertex, a spot on a wall, glass, a sign, sparks, and a monitor showing what another
+// camera sees. It flies itself. With `-- --watch`, a window for a person to watch (tools/show.py plays
+// it), until it's closed or Escape; with `--frames <n>` after it, as ctest walks it, n steps of that,
+// headless, a step a frame, and with `--save <png>` after that, its last frame in a file.
+
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import fbengine
+
+// Says how it's run, and ends: anything else mustn't open a window, as watching does.
+Function Refuse()
+    PrintError("usage: room --watch [--frames <n> [--save <png>]]")
+    Process.Exit(2)
+End Function
+
+// A 2 by 2 texture of four colors, row by row, as stored.
+Function FourPixels(a: UInt8, b: UInt8, c: UInt8, d: UInt8): Texture Throws GraphicsError
+    Local texture = Try Texture(2, 2, TextureFormat.RGBA8, False)
+    texture.WritePixels(0, 0, 2, 2,
+                        [a, a, a, 255, b, b, b, 255, c, c, c, 255, d, d, d, 255])
+    Return texture
+End Function
+
+// What moves in the room.
+Class Room
+    Field eye: Camera
+    Field watcher: Camera
+    Field crate: Mesh
+    Field lamp: Light
+    Field spot: Light
+    Field sparks: Sprite[] = []
+    Field age: Float = 0
+
+    Public New() Throws GraphicsError
+        World.Current().SetAmbientLight(Color(0.05, 0.05, 0.05))
+        eye = Camera()
+        eye.SetRange(0.1, 60)
+        eye.SetClearColor(Color(0.02, 0.02, 0.04))
+        eye.SetFogMode(FogMode.LINEAR)
+        eye.SetFogRange(4, 30)
+        eye.SetFogColor(Color(0.05, 0.05, 0.08))
+        // The room's own material, as SCP:CB's: (2 x ambient + lightmap) x diffuse, on what's stored.
+        Local shell = Material()
+        shell.SetShading(Shading.UNLIT)
+        shell.SetTwoSided(True)
+        Local ambient = Try FourPixels(50, 50, 50, 50)
+        shell.SetTexture(0, ambient)
+        shell.SetLayer(0, LayerBlend.MULTIPLY_2)
+        Local baked = Try FourPixels(230, 60, 60, 20)
+        shell.SetTexture(1, baked)
+        shell.SetLayer(1, LayerBlend.ADD, 1)
+        Local checks = Try FourPixels(200, 120, 120, 200)
+        checks.SetFilter(TextureFilter.NEAREST)
+        shell.SetTexture(2, checks)
+        shell.SetLayerUv(2, UvTurn(Vec2(0.25, 0.25), 0, Vec2(0, 0)))
+        Local walls = Mesh(Geometry.Cube())
+        walls.SetMaterial(shell)
+        walls.SetPosition(Vec3(0, 0, -6))
+        walls.SetScale(Vec3(6, 3, 9))
+        // A wall the spot falls on.
+        Local painted = Material(Color(0.7, 0.7, 0.7))
+        Local panel = Mesh(Geometry.Cube())
+        panel.SetMaterial(painted)
+        panel.SetPosition(Vec3(3, 0, -13))
+        panel.SetScale(Vec3(2.5, 2.5, 0.05))
+        spot = Light(LightType.SPOT)
+        spot.SetPosition(Vec3(3, 0.5, -9))
+        spot.SetCone(0.25, 0.4)
+        spot.SetColor(Color(0.4, 0.6, 1))
+        spot.SetIntensity(16)
+        spot.SetRange(12)
+        // A shiny crate, and the lamp that swings over it.
+        Local wood = Material(Color(0.8, 0.6, 0.4))
+        wood.SetShininess(1)
+        crate = Mesh(Geometry.Cube())
+        crate.SetMaterial(wood)
+        crate.SetPosition(Vec3(-2.5, -2.3, -8))
+        crate.SetScale(Vec3(0.7, 0.7, 0.7))
+        lamp = Light(LightType.POINT)
+        lamp.SetColor(Color(1, 0.8, 0.6))
+        lamp.SetIntensity(12)
+        lamp.SetRange(9)
+        // A pillar lit per vertex.
+        Local old = Material(Color(0.4, 0.6, 0.4))
+        old.SetShading(Shading.VERTEX)
+        Local pillar = Mesh(Geometry.Cube())
+        pillar.SetMaterial(old)
+        pillar.SetPosition(Vec3(-4, -1, -11))
+        pillar.SetScale(Vec3(0.5, 2, 0.5))
+        // An exit sign, out of the fog, and a pane of glass.
+        Local sign = Material(Color(0.1, 0.9, 0.2))
+        sign.SetShading(Shading.UNLIT)
+        sign.SetFogged(False)
+        Local exit = Mesh(Geometry.Cube())
+        exit.SetMaterial(sign)
+        exit.SetPosition(Vec3(0, 2.3, -14.5))
+        exit.SetScale(Vec3(0.8, 0.3, 0.1))
+        Local glass = Material(Color(0.3, 0.5, 0.6, 0.35))
+        glass.SetShading(Shading.UNLIT)
+        Local pane = Mesh(Geometry.Cube())
+        pane.SetMaterial(glass)
+        pane.SetPosition(Vec3(1.5, -1.5, -6))
+        pane.SetScale(Vec3(0.8, 1.2, 0.02))
+        // A monitor on the wall, showing the crate from above.
+        Local shown = Try Texture.Target(128, 128, TextureFormat.RGBA8, 1, True)
+        watcher = Camera()
+        watcher.SetRenderTarget(shown)
+        watcher.SetOrder(-1)
+        watcher.SetPosition(Vec3(-2.5, 1.5, -5))
+        watcher.SetClearColor(Color(0.02, 0.02, 0.04))
+        Local screen = Material()
+        screen.SetShading(Shading.UNLIT)
+        screen.SetTexture(0, shown)
+        Local monitor = Mesh(Geometry.Cube())
+        monitor.SetMaterial(screen)
+        monitor.SetPosition(Vec3(-2.5, 1, -14.9))
+        monitor.SetScale(Vec3(1.5, 1.2, 0.05))
+        // Sparks, added, rising from the crate.
+        Local spark = Material(Color(1, 0.6, 0.2))
+        spark.SetShading(Shading.UNLIT)
+        spark.SetBlend(Blend.ADD)
+        spark.SetFogged(False)
+        For i = 1 To 64
+            Local made = Sprite(spark)
+            made.SetSpriteScale(Vec2(0.03, 0.03))
+            sparks.Add(made)
+        End For
+        Step(0)
+    End New
+
+    // Everything a step on, `seconds` of it.
+    Public Method Step(seconds: Float)
+        age += seconds
+        // Down the room and back, looking about.
+        Local along = Sin(age * 0.3)
+        eye.SetPosition(Vec3(Sin(age * 0.5) * 2, Sin(age * 0.7) * 0.5, -5 + (along * 4.5)))
+        eye.SetRotation(Sin(age * 0.4) * 0.15, Sin(age * 0.23) * 0.6, 0)
+        // The watcher turns from side to side, down at the crate.
+        watcher.SetRotation(-0.9, Sin(age * 0.6) * 0.5, 0)
+        crate.SetRotation(0, age * 0.2, 0)
+        lamp.SetPosition(Vec3(-2.5 + (Sin(age * 1.3) * 1.5), -0.3, -8 + (Cos(age * 1.3) * 1.5)))
+        spot.SetIntensity(16 + (Sin(age * 7) * 4))
+        For i, spark In sparks
+            Local phase = (i As Float) * 0.77
+            Local life = (age * 0.6 + phase) - Floor(age * 0.6 + phase)
+            spark.SetPosition(Vec3(-2.5 + (Sin(phase * 3) * life * 0.8), -1.5 + (life * 3),
+                                   -8 + (Cos(phase * 3) * life * 0.8)))
+        End For
+    End Method
+End Class
+
+Function Main() Throws GraphicsError, IOError
+    Local arguments = Process.Arguments()
+    Local count = arguments.Count
+    Local saved = count == 5 && arguments[3] == "--save"
+    Local walked = (count == 3 || saved) && arguments[0] == "--watch" && arguments[1] == "--frames"
+    Local frames = walked ? Int.Parse(arguments[2]) ?? 0 : 0
+    If !(count == 1 && arguments[0] == "--watch") && frames <= 0 Then Refuse()
+    If frames > 0 Then Window.SetHeadless(True)
+    Window.SetTitle("A room")
+    Try Graphics(1280, 720)
+    Defer EndGraphics()
+    Local room = Try Room()
+    Local logic = FixedUpdate(60)
+    If frames > 0
+        For frame = 1 To frames
+            CaptureWorld()
+            room.Step(1.0 / 60.0)
+            UpdateWorld(1.0 / 60.0)
+            RenderWorld()
+            If saved && frame == frames Then Try Screen.Save(Path(arguments[4]))
+            Flip(False)
+        End For
+        Print("watched {frames} frames, {Gpu.Counters().Draws} draws in the last")
+        Return
+    End If
+    While !Window.Closed() && !KeyDown(Key.ESCAPE)
+        For step = 1 To logic.Steps(Frame.Delta())
+            CaptureWorld()
+            room.Step(logic.Seconds() As Float)
+            UpdateWorld(logic.Seconds())
+        End For
+        RenderWorld(logic.Tween())
+        Flip()
+    End While
+End Function
+
+Try Main()
