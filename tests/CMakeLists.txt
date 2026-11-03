@@ -731,6 +731,53 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_panic")
   set_tests_properties(examples.audio_panic PROPERTIES TIMEOUT 60
                        PASS_REGULAR_EXPRESSION "panic: a mistake, with the audio started at [^\n]*\n.*exited with code 101")
+  # Section 6's item 15, by numbers, on no device and the null backend; --watch, for a person to
+  # hear, keeps to the null backend under --frames.
+  set(fbengine_sound_proof
+      "a Channel of a held 0.5: 0.5, 0.5"
+      "at half its volume: 0.25, 0.25"
+      "panned left: 0.5, 0"
+      "panned right: 0, 0.5"
+      "at pitch 2, a tenth of a second plays 0.2 of it"
+      "paused: 0, 0, playing True, paused True, held where it was True"
+      "resumed: 0.5, 0.5, on from there True"
+      "stopped: 0, 0, playing False"
+      "a finished Channel's volume, set: 0"
+      "64 at once at 44100 Hz: 64 playing, heard 0.5, 0.5"
+      "Ogg Vorbis decoded: streamed False, 0.25 seconds"
+      "heard True, then over True"
+      "Ogg Vorbis streamed: streamed True, 0.25 seconds"
+      "after twice its length: playing True, come round True, heard True"
+      "a stream of a held 0.5: 0.5, 0.5"
+      "at half its volume: 0.25, 0.25"
+      "panned left: 0.5, 0"
+      "paused: 0, 0, held where it was True"
+      "resumed: 0.5, 0.5"
+      "the first piece: 0.5, 0.5"
+      "half way through the crossfade: 0.375, 0.375"
+      "after it: 0.25, 0.25, the first playing False, the second True"
+      "following a car 1 ahead: 0.25, 0.25"
+      "2 ahead, twice as far: 0.125, 0.125"
+      "to the right: heard on the right"
+      "the camera turned toward it: heard ahead"
+      "the camera turned round: heard on the left"
+      "the car coming: moving toward the camera True"
+      "at half the speed of sound, a tenth of a second plays 0.2 of it"
+      "the car freed: following False, still heard True"
+      "on the null backend: played to its end True, frames mixed True"
+      )
+  list(JOIN fbengine_sound_proof "\r?\n" fbengine_sound_proof_lines)
+  add_test(NAME proof.streamed_and_positional_sound
+           COMMAND "${FBENGINE_FB}" --color never run
+                   "${PROJECT_SOURCE_DIR}/examples/proof/streamed_and_positional_sound")
+  set_tests_properties(proof.streamed_and_positional_sound PROPERTIES TIMEOUT 120
+                       PASS_REGULAR_EXPRESSION "\n${fbengine_sound_proof_lines}\r?\n$")
+  add_test(NAME proof.streamed_and_positional_sound_watch
+           COMMAND "${FBENGINE_FB}" --color never run
+                   "${PROJECT_SOURCE_DIR}/examples/proof/streamed_and_positional_sound"
+                   -- --watch --frames 960)
+  set_tests_properties(proof.streamed_and_positional_sound_watch PROPERTIES TIMEOUT 120
+                       PASS_REGULAR_EXPRESSION "\nwatched 960 frames\r?\n$")
   # 64 channels at 44100 Hz under a game's load, within the budget.
   add_test(NAME examples.audio_stress
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress")
