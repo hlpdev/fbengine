@@ -20,6 +20,8 @@ void add_component(std::uint32_t entity) {
         add_mesh(entity);
     } else if (entities.kind[entity] == FBE_ENTITY_SPRITE) {
         add_sprite(entity);
+    } else if (entities.kind[entity] == FBE_ENTITY_PARTICLES) {
+        add_particles(entity);
     } else if (entities.kind[entity] == FBE_ENTITY_PLANE) {
         add_plane(entity);
     } else if (entities.kind[entity] == FBE_ENTITY_TERRAIN) {
@@ -37,6 +39,8 @@ void remove_component(std::uint32_t entity) {
         remove_mesh(entity);
     } else if (scene().entities.kind[entity] == FBE_ENTITY_SPRITE) {
         remove_sprite(entity);
+    } else if (scene().entities.kind[entity] == FBE_ENTITY_PARTICLES) {
+        remove_particles(entity);
     } else if (scene().entities.kind[entity] == FBE_ENTITY_PLANE) {
         remove_plane(entity);
     } else if (scene().entities.kind[entity] == FBE_ENTITY_TERRAIN) {
@@ -75,6 +79,8 @@ void copy_component(std::uint32_t from, std::uint32_t to) {
         copy = scene().sprites[entities.component[from]];
         copy.entity = to;
         retain_material(copy.material);
+    } else if (entities.kind[from] == FBE_ENTITY_PARTICLES) {
+        copy_particles(from, to);
     } else if (entities.kind[from] == FBE_ENTITY_PLANE) {
         plane_t& copy = scene().planes[entities.component[to]];
         copy = scene().planes[entities.component[from]];

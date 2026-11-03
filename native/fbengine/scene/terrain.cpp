@@ -41,6 +41,53 @@ std::array<std::array<vec3_t, 3>, 2> square(const terrain_t& terrain, std::int32
 
 } // namespace
 
+vec3_t terrain_corner_normal(const terrain_t& terrain, std::int32_t x, std::int32_t z) {
+    const std::int32_t size = terrain.size;
+    const float across =
+        height_at(terrain, std::max(x - 1, 0), z) - height_at(terrain, std::min(x + 1, size), z);
+    const float along =
+        height_at(terrain, x, std::max(z - 1, 0)) - height_at(terrain, x, std::min(z + 1, size));
+    return normalize(vec3_t(across, 2.0F, along));
+}
+
+float terrain_coarse_rise(const terrain_t& terrain, vec3_t min, vec3_t max, float reach_scale) {
+    const auto size = static_cast<float>(terrain.size);
+    if (max.x < 0.0F || max.z < 0.0F || min.x > size || min.z > size) {
+        return 0.0F;
+    }
+    const auto from_x = static_cast<std::int32_t>(std::floor(std::fmax(min.x, 0.0F)));
+    const auto from_z = static_cast<std::int32_t>(std::floor(std::fmax(min.z, 0.0F)));
+    const auto to_x = static_cast<std::int32_t>(std::ceil(std::fmin(max.x, size)));
+    const auto to_z = static_cast<std::int32_t>(std::ceil(std::fmin(max.z, size)));
+    float most = 0.0F;
+    for (std::int32_t reach = terrain.size; reach > terrain_piece_cells; reach /= 2) {
+        const std::int32_t step = std::max(reach / terrain_piece_cells, 1);
+        float rise = 0.0F;
+        for (std::int32_t z = from_z; z <= to_z; ++z) {
+            for (std::int32_t x = from_x; x <= to_x; ++x) {
+                // Where it is on a coarse square, by the same two triangles.
+                const std::int32_t low_x = std::min(x / step * step, terrain.size - 1);
+                const std::int32_t low_z = std::min(z / step * step, terrain.size - 1);
+                const std::int32_t high_x = std::min(low_x + step, terrain.size);
+                const std::int32_t high_z = std::min(low_z + step, terrain.size);
+                const float u = static_cast<float>(x - low_x) / static_cast<float>(high_x - low_x);
+                const float v = static_cast<float>(z - low_z) / static_cast<float>(high_z - low_z);
+                const float a = height_at(terrain, low_x, low_z);
+                const float b = height_at(terrain, high_x, low_z);
+                const float c = height_at(terrain, low_x, high_z);
+                const float d = height_at(terrain, high_x, high_z);
+                const float coarse =
+                    v > u ? a + (v * (c - a)) + (u * (d - c)) : a + (u * (b - a)) + (v * (d - b));
+                rise = std::fmax(rise, coarse - height_at(terrain, x, z));
+            }
+        }
+        // It's only drawn this coarse from this far.
+        most =
+            std::fmax(most, rise / (terrain_whole_from * static_cast<float>(reach) * reach_scale));
+    }
+    return most;
+}
+
 terrain_t* terrain_of(std::uint64_t handle) {
     const std::uint32_t entity = entity_slot(handle);
     if (entity == none) {

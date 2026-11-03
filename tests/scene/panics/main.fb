@@ -12,6 +12,46 @@ If arguments.Count != 1 Then Panic("give the case to run")
 Local world = World()
 World.SetCurrent(world)
 Select arguments[0]
+    Case "particles-colors"
+        Particles().SetColors(Color(1, 1, 1, 2), Color(1, 1, 1, 1))
+    Case "particles-roll"
+        Particles().SetRoll(-1)
+    Case "decal-limit"
+        world.Decal(Mat4.Scale(Vec3(1, 1, 1)), 0, 2)
+    Case "sky-texture-brightness"
+        Local picture = Try? Texture(2, 2)
+        If picture == Null Then Panic("no texture")
+        world.SetSkyTexture(picture, -1)
+    Case "particles-capacity"
+        Particles(0)
+    Case "particles-rate"
+        Particles().SetRate(-1)
+    Case "particles-life"
+        Particles().SetLife(2, 1)
+    Case "particles-motion"
+        Particles().SetMotion(2, 1, 0)
+    Case "particles-forces"
+        Particles().SetForces(Vec3(0, 0, 0), -1)
+    Case "particles-sizes"
+        Particles().SetSizes(-1, 0)
+    Case "particles-burst"
+        Particles().Burst(-1)
+    Case "sky-brightness"
+        world.SetAtmosphere(Null, -1)
+    Case "sky-sun"
+        world.SetAtmosphere(Light(LightType.POINT))
+    Case "decal-box"
+        world.Decal(Mat4.Scale(Vec3(0, 1, 1)))
+    Case "shadow-atlas-limit"
+        SetShadowAtlasLimit(128)
+    Case "shadow-size"
+        Light().SetShadowSize(8)
+    Case "cascades"
+        Light().SetCascades(5)
+    Case "shadow-distance"
+        Light().SetShadowDistance(0)
+    Case "shadow-bias"
+        Light().SetShadowBias(-1, 0)
     Case "render-no-target"
         Camera()
         RenderWorld()

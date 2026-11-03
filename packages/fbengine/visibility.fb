@@ -66,6 +66,19 @@ Extend Entity
         Return AABB(VecOf(found.min), VecOf(found.max))
     End Method
 
+    /// Sets whether a Mesh or Terrain casts shadows, when it's opaque or cut out, in order 0, as
+    /// it does at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetCastsShadows(casts: Bool)
+        If !fbe_entity_set_casts_shadows(Live("SetCastsShadows"), casts)
+            Failed("SetCastsShadows")
+        End If
+    End Method
+
+    /// Whether a Mesh or Terrain casts shadows, when it's opaque or cut out, in order 0.
+    @MainThread @PanicsAtCaller
+    Public Method CastsShadows(): Bool => fbe_entity_casts_shadows(Live("CastsShadows"))
+
     /// Makes the entity block line of sight, or not, as it doesn't at first, while it's showing: a
     /// Mesh or a Terrain by its triangles, from either side, as walls and doors do; anything else
     /// by its pick shape, if its PickMode's ELLIPSOID or BOX, from outside it.

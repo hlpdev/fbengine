@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <ranges>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -44,6 +45,29 @@ std::unordered_map<std::uint64_t, geometry_buffers_t>& kept() {
 surface_buffers_t quad;
 bool registered = false;
 
+/// An emitter's particles on the GPU, by its entity's handle, and which of its lives they're of.
+struct particles_buffer_t {
+    gpu::buffer_t buffer;
+    std::uint64_t generation = UINT64_MAX;
+};
+
+/// A terrain's coarse pieces' errors, by its entity's handle, and what they're of.
+struct coarse_errors_t {
+    std::uint64_t version = UINT64_MAX;
+    std::int32_t size = 0;
+    std::vector<float> errors;
+};
+
+std::unordered_map<std::uint64_t, coarse_errors_t>& kept_coarse_errors() {
+    static std::unordered_map<std::uint64_t, coarse_errors_t> made;
+    return made;
+}
+
+std::unordered_map<std::uint64_t, particles_buffer_t>& kept_particles() {
+    static std::unordered_map<std::uint64_t, particles_buffer_t> made;
+    return made;
+}
+
 void free_surface(surface_buffers_t& surface) {
     gpu::free_buffer(surface.vertices);
     gpu::free_buffer(surface.indices);
@@ -63,6 +87,10 @@ void stop_buffers() {
     }
     kept().clear();
     free_surface(quad);
+    for (auto& [handle, particles] : kept_particles()) {
+        gpu::free_buffer(particles.buffer);
+    }
+    kept_particles().clear();
 }
 
 /// Bytes into a buffer, made anew unless it's their size: false, with fbe_error's why, if it can't.
@@ -95,10 +123,10 @@ bool send_surface(surface_buffers_t& out, std::span<const fbe_vertex_t> vertices
 }
 
 /// How many squares a side a terrain's piece has at most, however far it reaches.
-constexpr std::int32_t piece_cells = 16;
+constexpr std::int32_t piece_cells = scene::terrain_piece_cells;
 /// A piece this many times as far from the eye as it's wide is left whole, its squares then about
 /// this share of a piece's width of the view.
-constexpr float whole_from = 1.5F;
+constexpr float whole_from = scene::terrain_whole_from;
 
 struct piece_area_t {
     std::int32_t x = 0;
@@ -156,9 +184,66 @@ std::vector<std::uint32_t> piece_indices(std::uint32_t cells) {
     return indices;
 }
 
+/// How far over a terrain a piece of its grid can be at its most, where it's coarser: each grid
+/// corner of the terrain against the piece's triangle over it.
+float coarse_error(const scene::terrain_t& terrain, const piece_area_t& area, std::int32_t cells) {
+    float most = 0.0F;
+    for (std::int32_t z_cell = 0; z_cell < cells; ++z_cell) {
+        const std::int32_t z_from = grid_at(area.z, area.deep, cells, z_cell);
+        const std::int32_t z_to = grid_at(area.z, area.deep, cells, z_cell + 1);
+        for (std::int32_t x_cell = 0; x_cell < cells; ++x_cell) {
+            const std::int32_t x_from = grid_at(area.x, area.wide, cells, x_cell);
+            const std::int32_t x_to = grid_at(area.x, area.wide, cells, x_cell + 1);
+            const float a = height_of(terrain, x_from, z_from);
+            const float b = height_of(terrain, x_to, z_from);
+            const float c = height_of(terrain, x_from, z_to);
+            const float d = height_of(terrain, x_to, z_to);
+            const auto wide = static_cast<float>(std::max(x_to - x_from, 1));
+            const auto deep = static_cast<float>(std::max(z_to - z_from, 1));
+            for (std::int32_t z = z_from; z <= z_to; ++z) {
+                const float v = static_cast<float>(z - z_from) / deep;
+                for (std::int32_t x = x_from; x <= x_to; ++x) {
+                    const float u = static_cast<float>(x - x_from) / wide;
+                    // The two triangles of piece_indices' square.
+                    const float coarse = v > u ? a + (v * (c - a)) + (u * (d - c))
+                                               : a + (u * (b - a)) + (v * (d - b));
+                    most = std::fmax(most, coarse - height_of(terrain, x, z));
+                }
+            }
+        }
+    }
+    return most;
+}
+
+/// Each coarse piece's error, row by row, worked out again when its terrain changes.
+const std::vector<float>& coarse_errors(const scene::terrain_t& terrain, std::int32_t reach,
+                                        std::int32_t row) {
+    const std::uint64_t handle = scene::scene().entities.slots.handle(terrain.entity);
+    coarse_errors_t& kept_errors = kept_coarse_errors()[handle];
+    if (kept_errors.version != terrain.version || kept_errors.size != terrain.size) {
+        kept_errors.version = terrain.version;
+        kept_errors.size = terrain.size;
+        kept_errors.errors.clear();
+        for (std::int32_t z = 0; z < row; ++z) {
+            for (std::int32_t x = 0; x < row; ++x) {
+                const piece_area_t area{
+                    .x = x * reach,
+                    .z = z * reach,
+                    .wide = std::min(reach, terrain.size - (x * reach)),
+                    .deep = std::min(reach, terrain.size - (z * reach)),
+                };
+                const std::int32_t cells = std::min(std::max(area.wide, area.deep), piece_cells);
+                kept_errors.errors.push_back(coarse_error(terrain, area, cells));
+            }
+        }
+    }
+    return kept_errors.errors;
+}
+
 /// A piece's vertices in the frame's ring.
 bool piece_vertices(const scene::terrain_t& terrain, const piece_area_t& area, std::int32_t cells,
-                    float drop, std::vector<fbe_vertex_t>& vertices, gpu::slice_t& slice) {
+                    float drop, float lower, std::vector<fbe_vertex_t>& vertices,
+                    gpu::slice_t& slice) {
     vertices.clear();
     const auto make = [&](std::int32_t x, std::int32_t z, float lowered) {
         const std::int32_t size = terrain.size;
@@ -171,7 +256,7 @@ bool piece_vertices(const scene::terrain_t& terrain, const piece_area_t& area, s
         const auto fz = static_cast<float>(z);
         const float v = static_cast<float>(size) - fz;
         vertices.push_back({
-            .position = { .x = fx, .y = height_of(terrain, x, z) - lowered, .z = fz },
+            .position = { .x = fx, .y = height_of(terrain, x, z) - lowered - lower, .z = fz },
             .normal = { .x = normal.x, .y = normal.y, .z = normal.z },
             .uv0 = { .x = fx, .y = v },
             .uv1 = { .x = fx, .y = v },
@@ -335,8 +420,82 @@ const surface_buffers_t* sprite_quad() {
     return &quad;
 }
 
+VkDeviceAddress particles_buffer(scene::particles_t& particles) {
+    if (!registered) {
+        gpu::at_stop(stop_buffers);
+        registered = true;
+    }
+    const scene::scene_t& s = scene::scene();
+    particles_buffer_t& kept_one = kept_particles()[s.entities.slots.handle(particles.entity)];
+    if (kept_one.generation != particles.generation) {
+        gpu::free_buffer(kept_one.buffer);
+        kept_one.buffer = gpu::make_buffer(
+            static_cast<VkDeviceSize>(particles.capacity) * sizeof(scene::particle_t),
+            gpu::flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT));
+        if (kept_one.buffer.buffer == VK_NULL_HANDLE) {
+            return 0;
+        }
+        kept_one.generation = particles.generation;
+    }
+    if (!particles.pending.empty()) {
+        // Only what a slot had last; runs of slots one after another go as one, all as one write.
+        std::vector<bool> taken(static_cast<std::size_t>(particles.capacity));
+        std::vector<std::pair<std::uint32_t, scene::particle_t>> latest;
+        latest.reserve(particles.pending.size());
+        for (const auto& one : std::ranges::reverse_view(particles.pending)) {
+            if (!taken[one.first]) {
+                taken[one.first] = true;
+                latest.push_back(one);
+            }
+        }
+        std::ranges::reverse(latest);
+        std::vector<scene::particle_t> records;
+        std::vector<VkBufferCopy> regions;
+        records.reserve(latest.size());
+        std::uint32_t run_first = 0;
+        std::uint32_t run_next = UINT32_MAX;
+        std::size_t run_from = 0;
+        const auto end_run = [&] {
+            if (records.size() != run_from) {
+                regions.push_back({
+                    .srcOffset = VkDeviceSize{ run_from } * sizeof(scene::particle_t),
+                    .dstOffset = VkDeviceSize{ run_first } * sizeof(scene::particle_t),
+                    .size = VkDeviceSize{ records.size() - run_from } * sizeof(scene::particle_t),
+                });
+            }
+            run_from = records.size();
+        };
+        for (const auto& [slot, record] : latest) {
+            if (slot != run_next) {
+                end_run();
+                run_first = slot;
+            }
+            records.push_back(record);
+            run_next = slot + 1;
+        }
+        end_run();
+        if (!gpu::write_buffer_regions(kept_one.buffer, std::as_bytes(std::span(records)),
+                                       regions)) {
+            return 0;
+        }
+    }
+    particles.pending.clear();
+    return kept_one.buffer.address;
+}
+
 void forget_freed_geometries() {
     const scene::scene_t& s = scene::scene();
+    for (auto it = kept_particles().begin(); it != kept_particles().end();) {
+        if (!s.entities.slots.find(it->first)) {
+            gpu::free_buffer(it->second.buffer);
+            it = kept_particles().erase(it);
+        } else {
+            ++it;
+        }
+    }
+    std::erase_if(kept_coarse_errors(), [&s](const auto& kept_errors) {
+        return !s.entities.slots.find(kept_errors.first);
+    });
     for (auto it = kept().begin(); it != kept().end();) {
         if (!s.geometry_slots.find(it->first)) {
             for (surface_buffers_t& surface : it->second.surfaces) {
@@ -347,6 +506,70 @@ void forget_freed_geometries() {
             ++it;
         }
     }
+}
+
+bool terrain_coarse_pieces(const mat4_t& world, const scene::terrain_t& terrain,
+                           std::vector<terrain_piece_t>& pieces) {
+    vec3_t low;
+    vec3_t high;
+    scene::terrain_bounds(terrain, low, high);
+    const float drop = (high.y - low.y) + 1.0F;
+    // A shadow's a texel or so of the whole: an eighth of it a piece does, whatever its size.
+    const std::int32_t reach = std::max(terrain.size / 8, piece_cells);
+    const std::int32_t row = (terrain.size + reach - 1) / reach;
+    const std::vector<float>& errors = coarse_errors(terrain, reach, row);
+    std::array<gpu::slice_t, piece_cells + 1> grids{};
+    std::array<std::uint32_t, piece_cells + 1> grid_counts{};
+    const float most =
+        std::fmax(std::fmax(scene::length(world.axis(0)), scene::length(world.axis(1))),
+                  scene::length(world.axis(2)));
+    std::vector<fbe_vertex_t> vertices;
+    for (std::int32_t z = 0; z < row; ++z) {
+        for (std::int32_t x = 0; x < row; ++x) {
+            const piece_area_t area{
+                .x = x * reach,
+                .z = z * reach,
+                .wide = std::min(reach, terrain.size - (x * reach)),
+                .deep = std::min(reach, terrain.size - (z * reach)),
+            };
+            const std::int32_t cells = std::min(std::max(area.wide, area.deep), piece_cells);
+            auto& grid = grids[static_cast<std::size_t>(cells)];
+            if (grid.data == nullptr) {
+                const std::vector<std::uint32_t> indices =
+                    piece_indices(static_cast<std::uint32_t>(cells));
+                const auto bytes =
+                    static_cast<VkDeviceSize>(indices.size() * sizeof(std::uint32_t));
+                grid = gpu::frame_memory(bytes, 16);
+                if (grid.data == nullptr) {
+                    return false;
+                }
+                std::memcpy(grid.data, indices.data(), bytes);
+                grid_counts[static_cast<std::size_t>(cells)] =
+                    static_cast<std::uint32_t>(indices.size());
+            }
+            // Under the terrain wherever it's coarser than it, so it never shadows itself.
+            const float lower =
+                errors[(static_cast<std::size_t>(z) * static_cast<std::size_t>(row)) +
+                       static_cast<std::size_t>(x)];
+            gpu::slice_t slice;
+            if (!piece_vertices(terrain, area, cells, drop, lower, vertices, slice)) {
+                return false;
+            }
+            const float half = static_cast<float>(reach) * 0.5F;
+            const vec3_t middle(static_cast<float>(area.x) + half, (low.y + high.y) * 0.5F,
+                                static_cast<float>(area.z) + half);
+            const float tall = ((high.y - low.y) * 0.5F) + lower;
+            pieces.push_back({
+                .vertices = slice.address,
+                .indices = grid.buffer,
+                .index_offset = grid.offset,
+                .index_count = grid_counts[static_cast<std::size_t>(cells)],
+                .center = scene::transform_point(world, middle),
+                .radius = std::sqrt((half * half * 2.0F) + (tall * tall)) * most,
+            });
+        }
+    }
+    return true;
 }
 
 bool terrain_pieces(const scene::camera_t& camera, const scene::view_t& view, const item_t& item,
@@ -425,7 +648,7 @@ bool terrain_pieces(const scene::camera_t& camera, const scene::view_t& view, co
                 static_cast<std::uint32_t>(indices.size());
         }
         gpu::slice_t slice;
-        if (!piece_vertices(terrain, area, cells, drop, vertices, slice)) {
+        if (!piece_vertices(terrain, area, cells, drop, 0.0F, vertices, slice)) {
             return false;
         }
         pieces.push_back({

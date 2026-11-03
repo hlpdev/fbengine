@@ -24,7 +24,7 @@ namespace {
 
 /// The kinds fbe_entity_create takes.
 bool valid_kind(std::int32_t kind) {
-    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_TERRAIN;
+    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_PARTICLES;
 }
 
 /// Where an entity sits: its parent's children, or its world's roots.
@@ -74,6 +74,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.moved.push_back(true);
         entities.component.push_back(none);
         entities.blocks_sight.push_back(false);
+        entities.casts_shadows.push_back(true);
         entities.colliders.emplace_back();
         entities.pickable.push_back(none);
         entities.captured_position.emplace_back();
@@ -91,6 +92,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.name[entity].clear();
         entities.hidden[entity] = false;
         entities.blocks_sight[entity] = false;
+        entities.casts_shadows[entity] = true;
         entities.colliders[entity] = {};
         entities.captured[entity] = false;
         entities.fade_near[entity] = 0.0F;
@@ -342,6 +344,8 @@ FBE_API bool fbe_world_free(uint64_t world) {
         return fbe::fail("the main World stays; Clear empties it");
     }
     fbe_world_clear(world);
+    fbe::scene::release_texture(scene().worlds[slot].sky_texture);
+    scene().worlds[slot].sky_texture = 0;
     scene().world_slots.free(slot);
     return true;
 }
@@ -599,6 +603,7 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         entities.rotation[copy] = entities.rotation[original];
         entities.scale[copy] = entities.scale[original];
         entities.blocks_sight[copy] = entities.blocks_sight[original];
+        entities.casts_shadows[copy] = entities.casts_shadows[original];
         entities.fade_near[copy] = entities.fade_near[original];
         entities.fade_far[copy] = entities.fade_far[original];
         // A copy collides as its original does, from where it is, with nothing touched yet.

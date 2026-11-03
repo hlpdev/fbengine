@@ -172,6 +172,7 @@ std::vector<lit_t> lights_lit(std::uint32_t world, const scene::view_t& view,
             .range = light.range,
             .inner_cosine = std::cos(light.inner_cone),
             .outer_cosine = std::cos(light.outer_cone),
+            .shadow = -1,
         };
         lit.push_back(one);
     }
