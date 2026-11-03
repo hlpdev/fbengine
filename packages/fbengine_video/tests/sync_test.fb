@@ -528,21 +528,8 @@ Function DrawFittedLeavesACanvasAsItWasAndDrawsItsBarsSolid() Throws VideoError,
     Expect(drawn[100, 48].r > 50, "its middle is {drawn[100, 48]}")
 End Function
 
-// Whether `shown` is the `which`th of colors.mpg's: red, green, blue, and white.
-Function IsColor(shown: Color32, which: Int): Bool
-    Select which
-        Case 0
-            Return shown.r > 200 && shown.g < 60 && shown.b < 60
-        Case 1
-            Return shown.g > 200 && shown.r < 60 && shown.b < 60
-        Case 2
-            Return shown.b > 200 && shown.r < 60 && shown.g < 60
-    End Select
-    Return shown.r > 200 && shown.g > 200 && shown.b > 200
-End Function
-
-// What E12 was to do: a video plays into a texture with its sound in sync, every frame the frame
-// due at what's been mixed, and heard, of its sound.
+// What E12 was to do: a video plays into a texture with its sound in sync. Each frame's the one due
+// at what's been mixed of its sound, whatever the Updates between say, and in the texture.
 @Test @MainThread
 Function AVideoPlaysIntoATextureWithItsSoundInSync() Throws VideoError, AudioError, GraphicsError
     If NoGpu() Then Skip("no GPU here")
@@ -553,23 +540,44 @@ Function AVideoPlaysIntoATextureWithItsSoundInSync() Throws VideoError, AudioErr
     Defer video.Free()
     Local texture = Try video.Texture()
     video.Play()
-    Local seen = 0
-    // Frames of uneven times against the mix, half a second each of red, green, blue, and white.
-    For i = 1 To 24
-        Audio.Mix(frameOfMix * 2)
-        video.Update(0.02 + (i % 3 As Float64) * 0.03)
+    For i = 1 To 49
+        Audio.Mix(frameOfMix)
+        video.Update(0.02 + ((i % 3) As Float64) * 0.03)
         Flip(False)
         Local position = video.SoundChannel().Position()
-        Expect(Near(video.Time(), position), "at {i}, it's at {video.Time()}, its sound {position}")
+        // Thirteen frames of each color, as a frame's shown a thousandth of itself early.
+        Local due = Floor(position * 25 + 0.001) As Int64
+        Expect(video.FrameNumber() == due,
+               "at {position} s of sound it's frame {video.FrameNumber()}, not {due}")
         Local shown = texture.ToImage()[32, 24]
-        Local due = Floor(position / 0.5) As Int
-        // Away from where one color gives way to the next.
-        Local into = position - (due As Float64) * 0.5
-        If into > 0.05 && into < 0.45
-            Expect(IsColor(shown, due),
-                   "at {position} s of sound, the texture's {shown}, for color {due}")
-            seen += 1
-        End If
+        Expect(shown == video.Frame()[32, 24],
+               "the texture's {shown}, the frame {video.Frame()[32, 24]}")
     End For
-    Expect(seen > 12, "{seen} frames were checked")
+End Function
+
+// What's heard and what's seen, not only the clocks: late.mpg's tone begins at half a second, as
+// near as a frame to its first green picture, at 0.52 s. A sound decoded late, or pictures timed
+// early, would keep the clocks together and still be apart here.
+@Test @MainThread
+Function WhatsHeardAndWhatsSeenBeginTogether() Throws VideoError, AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local video = Try Video.Load(Embed("media/late.mpg"))
+    Defer video.Free()
+    video.Play()
+    Local mixed: Float64 = 0
+    Local heard: Float64 = -1
+    Local seen: Float64 = -1
+    For i = 1 To 150
+        Local sound = Audio.Mix(441)
+        For j = 0 To sound.Count - 1
+            If heard < 0 && Abs(sound[j]) > 0.02 Then heard = mixed + ((j / 2) As Float64) / 44100
+        End For
+        mixed += 0.01
+        video.Update(0.01)
+        Local shown = video.Frame()[32, 24]
+        If seen < 0 && shown.g > 200 && shown.r < 60 Then seen = mixed
+    End For
+    Expect(heard > 0 && seen > 0, "heard at {heard}, seen at {seen}")
+    Expect(Abs(heard - seen) <= 1.0 / 25, "heard at {heard} s, seen at {seen} s")
 End Function

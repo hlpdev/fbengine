@@ -163,6 +163,21 @@ bool read_touching(world_t& world, JPH::StateRecorder& state) {
     return !failed(state);
 }
 
+// What write_touching does, but for the handles, which are of the whole program, not of the world.
+void write_touching_of_world(const world_t& world, JPH::StateRecorder& state) {
+    state.Write(static_cast<std::uint64_t>(world.touching.size()));
+    for (const auto& [key, pair] : world.touching) {
+        state.Write(key);
+        state.Write(pair.a_id.GetIndexAndSequenceNumber());
+        state.Write(pair.b_id.GetIndexAndSequenceNumber());
+        state.Write(static_cast<std::uint64_t>(pair.parts.size()));
+        for (const auto& [part, kept] : pair.parts) {
+            state.Write(part);
+            state.Write(kept);
+        }
+    }
+}
+
 // Writes `value`'s bytes at `at`, moving it on.
 template <typename T>
 void put(std::uint8_t*& at, const T& value) {
@@ -276,6 +291,25 @@ FBE_PHYSICS_API int64_t fbe_physics_save(uint64_t world, double carried) {
     }
     save(*found, carried);
     return static_cast<int64_t>(found->saved.size());
+}
+
+FBE_PHYSICS_API bool fbe_physics_state_hash(uint64_t world, double carried, uint64_t* hash) {
+    using namespace fbe::physics;
+    const fp_mode_t fp_mode;
+    world_t* found = find_world(world);
+    if (found == nullptr) {
+        return false;
+    }
+    std::vector<std::uint8_t> held;
+    recorder_t state(held);
+    found->system.SaveState(state);
+    state.Write(found->steps);
+    state.Write(found->overflowed);
+    state.Write(carried);
+    write_touching_of_world(*found, state);
+    hash_characters(*found, state);
+    *hash = hash_of(held);
+    return true;
 }
 
 FBE_PHYSICS_API int64_t fbe_physics_saved(uint64_t world, uint8_t* bytes, int64_t capacity) {

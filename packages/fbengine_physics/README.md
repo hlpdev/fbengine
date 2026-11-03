@@ -32,7 +32,7 @@ kinematic ones are driven where a game puts them, fast ones collide all along th
 characters walk among them. A body keeps an entity of fbengine's where it is with `Drive`, or goes
 where an entity is with `Follow`, a batch a frame. A world is deterministic: made and stepped by the same calls in the
 same order, it moves the same, bit for bit, on any number of threads, whatever floating point mode
-the game's thread is in, and `Save` and `Restore` take it back to where it was. Jolt is built to
+the game's thread is in, `Save` and `Restore` take it back to where it was, and `StateHash` says, for a game in lockstep, whether two have gone apart. Jolt is built to
 make it the same on every target, compiler, and build too, which is checked on Windows x64 so far.
 
 Released with fbengine at the same version. Apache-2.0; Jolt, in its DLL, is MIT

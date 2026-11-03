@@ -430,14 +430,14 @@ if(FBENGINE_FB_TESTS)
   add_test(NAME examples.video_player
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/video_player")
   set_tests_properties(examples.video_player PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
-                       PASS_REGULAR_EXPRESSION "\nit played to its end: True, in [0-9]+ frames shown\r?\n$")
+                       PASS_REGULAR_EXPRESSION "\nit played to its end: True, in 52 frames shown\r?\n$")
   add_test(NAME examples.video_player.watch
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/video_player"
-                   -- --watch --steps 30)
+                   -- --watch --steps 120)
   set_tests_properties(examples.video_player.watch PROPERTIES
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "\nwatched 30 frames, looping: True, ended: False\r?\n$")
+                       PASS_REGULAR_EXPRESSION "\nwatched 52 frames, 53 shown, 1 loops, ended: False\r?\n$")
   add_test(NAME examples.video_player.usage
            COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DEXAMPLE=${PROJECT_SOURCE_DIR}/examples/video_player"
                    -P "${CMAKE_CURRENT_SOURCE_DIR}/video/player_usage.cmake")
@@ -545,7 +545,7 @@ target_link_libraries(fbengine_physics_ends PRIVATE fbengine_physics_native)
 fbengine_set_warnings(fbengine_physics_ends)
 add_test(NAME physics.ends
          COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_physics_ends>"
-                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_physics_native>"
+                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_physics_native>;${fbengine_test_dll_paths}"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/ends.cmake")
 set_tests_properties(physics.ends PROPERTIES TIMEOUT 600)
 # The job system, built into the tests from its own source, since the DLL exports only its C API.
@@ -670,7 +670,7 @@ target_compile_definitions(fbengine_video_ends PRIVATE
 fbengine_set_warnings(fbengine_video_ends)
 add_test(NAME video.ends
          COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_video_ends>"
-                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_video_native>"
+                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_video_native>;${fbengine_test_dll_paths}"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/ends.cmake")
 set_tests_properties(video.ends PROPERTIES TIMEOUT 600)
 

@@ -1,6 +1,9 @@
-// Jolt's own sample scenes stay stable: a pyramid, a wall, a chain, and a heavy box on a light one
-// stand or hang as they're built for ten seconds, and the ones that stand come to rest.
+// Jolt's own sample scenes stay stable: its Samples/Tests/General/{Pyramid,Wall,Stack,HeavyOnLight}Test
+// and Constraints/PointConstraintTest, built as they build them, each dropped through its gaps onto
+// its floor, stand or hang for twenty seconds, and the ones that stand come to rest as they do in
+// Jolt alone. A chain and a heavy box of our own too.
 
+Import std.core
 Import std.math
 Import std.test
 Import fbengine_physics
@@ -17,6 +20,13 @@ Function Floored(): PhysicsWorld
     Return world
 End Function
 
+// The floor Jolt's samples have.
+Function SampleFloor(): PhysicsWorld
+    Local world = PhysicsWorld()
+    Body(world, Shape.Box(Vec3(200, 2, 200)), Motion.STATIC, Vec3(0, -1, 0))
+    Return world
+End Function
+
 // Whether every one of `bodies` is no further than `within` from where `starts` says it began, and
 // asleep, saying which isn't if one isn't.
 Function Standing(bodies: Body[], starts: Vec3[], within: Float): Bool
@@ -30,44 +40,145 @@ Function Standing(bodies: Body[], starts: Vec3[], within: Float): Bool
     Return True
 End Function
 
+// The furthest any of `bodies` has gone sideways from where it began, how far any's tilted, as
+// the sine of half its tilt, and how many are awake, which is said. Dropped, they've only fallen.
+Function Settled(name: String, bodies: Body[], starts: Vec3[]): (Float, Float, Int)
+    Local sideways: Float = 0
+    Local tilt: Float = 0
+    Local awake = 0
+    For i = 0 To bodies.Count - 1
+        Local at = bodies[i].Position()
+        sideways = Max(sideways, Max(Abs(at.x - starts[i].x), Abs(at.z - starts[i].z)))
+        Local turned = bodies[i].Rotation()
+        tilt = Max(tilt, Sqrt(turned.x * turned.x + turned.z * turned.z))
+        If bodies[i].Active() Then awake += 1
+    End For
+    Print("{name}: {bodies.Count} bodies, {sideways} m sideways, tilted {tilt}, {awake} awake")
+    Return (sideways, tilt, awake)
+End Function
+
 @Test
-Function APyramidOfBoxesStands()
-    Local world = Floored()
+Function JoltsPyramidTestStands()
+    Local world = SampleFloor()
     Defer world.Free()
-    Local box = Shape.Box(Vec3(1, 1, 1))
+    Local box = Shape.Box(Vec3(2, 2, 2))
     Local boxes: Body[] = []
     Local starts: Vec3[] = []
-    For layer = 0 To 9
-        For i = 0 To 9 - layer
-            Local at = Vec3((i As Float) - ((9 - layer) As Float) / 2, 0.5 + (layer As Float), 0)
+    Local high = 15
+    For i = 0 To high - 1
+        For j = i / 2 To high - (i + 1) / 2 - 1
+            For k = i / 2 To high - (i + 1) / 2 - 1
+                Local half = (i % 2) == 1 ? 1.0 : 0.0
+                Local at = Vec3(((j * 2 - high) As Float) + half, 1 + 2.5 * (i As Float),
+                                ((k * 2 - high) As Float) + half)
+                boxes.Add(Body(world, box, Motion.DYNAMIC, at))
+                starts.Add(at)
+            End For
+        End For
+    End For
+    Expect(boxes.Count == 1240)
+    Run(world, 20.0)
+    Expect(!world.Overflowed())
+    Local sideways, tilt, awake = Settled("pyramid", boxes, starts)
+    Expect(sideways < 0.2 && tilt < 0.02 && awake == 0)
+End Function
+
+@Test
+Function JoltsWallTestStands()
+    Local world = SampleFloor()
+    Defer world.Free()
+    Local box = Shape.Box(Vec3(2, 2, 2))
+    Local boxes: Body[] = []
+    Local starts: Vec3[] = []
+    For i = 0 To 9
+        For j = i / 2 To 50 - (i + 1) / 2 - 1
+            Local at = Vec3((-50 + j * 2 + i % 2) As Float, (1 + i * 3) As Float, 0)
             boxes.Add(Body(world, box, Motion.DYNAMIC, at))
             starts.Add(at)
         End For
     End For
-    Run(world, 10.0)
-    // Each sinks its slop, 2 cm, into what's under it, a layer at a time.
-    Expect(Standing(boxes, starts, 0.25))
-    Expect(Abs(boxes[boxes.Count - 1].Position().x) < 0.05)
+    Expect(boxes.Count == 455)
+    Run(world, 20.0)
+    Local sideways, tilt, awake = Settled("wall", boxes, starts)
+    Expect(sideways < 0.25 && tilt < 0.02 && awake == 0)
+End Function
+
+// That doesn't sleep in Jolt alone either, so it's only that it stands.
+@Test
+Function JoltsStackTestStands()
+    Local world = SampleFloor()
+    Defer world.Free()
+    Local box = Shape.Box(Vec3(1, 2, 4))
+    Local turned = Quat(0, 0.70710678, 0, 0.70710678)
+    Local boxes: Body[] = []
+    Local starts: Vec3[] = []
+    For i = 0 To 9
+        Local at = Vec3(10, 1 + (i As Float) * 2.1, 0)
+        boxes.Add(Body(world, box, Motion.DYNAMIC, at, (i % 2) == 1 ? turned : Quat.Identity))
+        starts.Add(at)
+    End For
+    Run(world, 20.0)
+    Local sideways, tilt, awake = Settled("stack", boxes, starts)
+    Expect(sideways < 0.4 && tilt < 0.02)
 End Function
 
 @Test
-Function AWallOfBoxesStands()
-    Local world = Floored()
+Function JoltsHeavyOnLightTestStands()
+    Local world = SampleFloor()
     Defer world.Free()
-    Local brick = Shape.Box(Vec3(1, 0.5, 0.5))
-    Local bricks: Body[] = []
+    Local box = Shape.Box(Vec3(10, 10, 10))
+    Local boxes: Body[] = []
     Local starts: Vec3[] = []
-    For row = 0 To 7
-        // Each row's bricks half a brick along from the last's, one fewer, so none hangs off.
-        Local offset = (row % 2) == 0 ? 0.0 : 0.5
-        For i = 0 To 11 - (row % 2)
-            Local at = Vec3((i As Float) + offset - 6, 0.25 + (row As Float) * 0.5, 0)
-            bricks.Add(Body(world, brick, Motion.DYNAMIC, at))
-            starts.Add(at)
+    For i = 1 To 10
+        Local under = Vec3((-75 + i * 15) As Float, 10, 0)
+        Local light = Body(world, box, Motion.DYNAMIC, under)
+        light.SetMass(1000000)
+        boxes.Add(light)
+        starts.Add(under)
+        Local over = Vec3((-75 + i * 15) As Float, 30, 0)
+        Local heavy = Body(world, box, Motion.DYNAMIC, over)
+        heavy.SetMass(5000000 * (i As Float))
+        boxes.Add(heavy)
+        starts.Add(over)
+    End For
+    Run(world, 20.0)
+    Local sideways, tilt, awake = Settled("heavy on light", boxes, starts)
+    // Boxes 10 m wide, each heavy one pressing its light one aside as it settles, still on it.
+    Expect(sideways < 2.5 && tilt < 0.02 && awake == 0)
+    For i = 0 To 9
+        Local under = boxes[i * 2].Position()
+        Local over = boxes[i * 2 + 1].Position()
+        Expect(Abs(over.y - under.y - 10) < 0.25 && Abs(over.x - under.x) < 3.5, "{over} on {under}")
+    End For
+End Function
+
+// Fourteen capsules, swinging down from a static one, and never coming apart.
+@Test
+Function JoltsPointConstraintTestHolds()
+    Local world = SampleFloor()
+    Defer world.Free()
+    Local half: Float = 2.5
+    Local link = Shape.Capsule(2 * half, 1)
+    Local turned = Quat(0, 0, 0.70710678, 0.70710678)
+    Local position = Vec3(0, 50, 0)
+    Local before = Body(world, link, Motion.STATIC, position, turned)
+    Local links: Body[] = []
+    For i = 1 To 14
+        position = position + Vec3(2 * half, 0, 0)
+        Local segment = Body(world, link, Motion.DYNAMIC, position, turned)
+        Joint.Point(segment, before, position - Vec3(half, 0, 0))
+        before = segment
+        links.Add(segment)
+    End For
+    Local most: Float = 0
+    For step = 1 To 1200
+        world.Step(1.0 / 60)
+        For i = 1 To links.Count - 1
+            most = Max(most, Abs(Distance(links[i].Position(), links[i - 1].Position()) - 5))
         End For
     End For
-    Run(world, 10.0)
-    Expect(Standing(bricks, starts, 0.2))
+    Print("point constraint: its links {most} m from 5 m apart at most")
+    Expect(most < 0.7)
 End Function
 
 @Test

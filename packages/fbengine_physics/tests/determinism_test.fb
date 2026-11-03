@@ -117,3 +117,36 @@ Function AStateRestoresOnlyIntoItsWorldAsItWas()
     Expect(nothing?.Message == "that isn't a world's state")
     Expect(ExpectThrows<PhysicsStateError>(world.Restore(PhysicsState([]))) != Null)
 End Function
+
+@Test
+Function AlikeWorldsHashAlikeAndOneABitApartDoesnt()
+    Local kept, keptPlayer = Scene()
+    Frames(kept, keptPlayer, 0, 120)
+    Local hash = kept.StateHash()
+    // Freed, its handles go back to be used again, in another order, by the world after it.
+    kept.Free()
+    Local alike, alikePlayer = Scene()
+    Defer alike.Free()
+    Frames(alike, alikePlayer, 0, 120)
+    Expect(alike.StateHash() == hash, "two worlds made and stepped alike hash apart")
+    // Saved and restored, it's still as it was.
+    Local saved = alike.Save()
+    Local before = alike.StateHash()
+    Frames(alike, alikePlayer, 120, 30)
+    Expect(alike.StateHash() != before, "it stepped on and its hash stayed")
+    Try
+        Try alike.Restore(saved)
+    Catch error As PhysicsStateError
+        Fail(error.Message)
+    End Try
+    Expect(alike.StateHash() == before)
+    // A body a float's width along, and that's all.
+    Local apart, apartPlayer = Scene()
+    Defer apart.Free()
+    Frames(apart, apartPlayer, 0, 120)
+    Expect(apart.StateHash() == hash)
+    Local moved = apart.CastRayAll(Vec3(5.5, 20, 0.0), Vec3(0, -1, 0), 40)[0].Body
+    Local at = moved.Position()
+    moved.SetPosition(Vec3(at.x + 1e-6, at.y, at.z))
+    Expect(apart.StateHash() != hash, "a body moved a float's width and the hash stayed")
+End Function
