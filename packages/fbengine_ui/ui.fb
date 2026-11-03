@@ -96,6 +96,8 @@ Public Final Class Ui
     Field shortcuts: (Func(Keystroke): Bool)? = Null
     // Whether a widget's said what the cursor is.
     Field cursorSet: Bool = False
+    // Where the pointer was at the last Update.
+    Field lastPoint: Vec2
 
     /// A Ui of the tree `root`, in `theme`, or Theme.Dark().
     @MainThread Public New(root: Node, theme: Theme? = Null)
@@ -287,7 +289,8 @@ Public Final Class Ui
     End Method
 
     /// The button that took the widget holding the pointer, as Pressed says it: LEFT unless it was
-    /// a right or middle press, as its PointerDrag and PointerUp ask.
+    /// a right or middle press, as its PointerDownWith, PointerDrag and PointerUp ask, and LEFT with
+    /// none held.
     @MainThread Public Method PressedButton(): MouseButton => pressedWith
 
     /// Its theme.
@@ -398,9 +401,10 @@ Public Final Class Ui
     @MainThread Public Method Focused(): Widget? => focused
 
     /// Gives `widget` the focus, or takes it from the one that has it with Null; one that can't
-    /// have it, as a label can't or one that's disabled, leaves the focus where it is.
+    /// have it, as a label can't, one that's disabled, or one under a MODAL, leaves the focus where
+    /// it is.
     @MainThread Public Method Focus(widget: Widget?)
-        If widget != Null && !widget.Focusable() Then Return
+        If widget != Null && (!widget.Focusable() || UnderModal(widget)) Then Return
         Local had = focused
         If had != Null && widget != Null && RefEquals(had, widget) Then Return
         focused = widget
@@ -412,7 +416,7 @@ Public Final Class Ui
     /// Whether the game should leave the mouse to it: the pointer's over one of its widgets or
     /// popups, one's holding it, or a MENU or a MODAL is open.
     @MainThread Public Method WantsPointer(): Bool
-        Return hovered != Null || pressed != Null || overPopup >= 0 || Holding()
+        Return hovered != Null || pressed != Null || Holding()
     End Method
 
     /// Whether the game should leave the keyboard to it: one of its widgets has the focus, or a
@@ -438,6 +442,7 @@ Public Final Class Ui
         LaidOut(bounds)
 
         Local point = Vec2((MouseX() - area.X) / scale, (MouseY() - area.Y) / scale)
+        lastPoint = point
         Local under = Under(point)
         hovered = under
         Pointer(point, under)
@@ -531,6 +536,18 @@ Public Final Class Ui
     End Method
 
     @MainThread Method Opening(popup: Node, kind: PopupKind, at: Vec2?, closed: (Func())?)
+        If kind == PopupKind.MODAL
+            // What's under it has no more of the pointer, nor is a menu there still open.
+            For i = open.Count - 1 To 0 Step -1
+                If i < open.Count && open[i].kind == PopupKind.MENU Then Closing(i)
+            End For
+            Local holding = pressed
+            If holding != Null
+                pressed = Null
+                holding.PointerUp(lastPoint, False)
+                pressedWith = MouseButton.LEFT
+            End If
+        End If
         popups.Add(popup)
         open.Add(PopupOpen(popup, kind, at, closed, focused))
         If kind != PopupKind.TIP
@@ -544,6 +561,13 @@ Public Final Class Ui
 
     @MainThread Method Closing(index: Int)
         Local closing = open[index]
+        // What was to go back to what's closing goes back to what it was to.
+        For each In open
+            Local before: Widget? = each.before
+            If before != Null && !RefEquals(each, closing) && Showing(before, closing.popup)
+                each.before = closing.before
+            End If
+        End For
         open.RemoveAt(index)
         popups.Remove(closing.popup)
         If overPopup == index Then overPopup = -1
@@ -565,6 +589,15 @@ Public Final Class Ui
         For each In open
             If each.kind == PopupKind.MODAL Then Return True
             If each.kind == PopupKind.MENU && !modal Then Return True
+        End For
+        Return False
+    End Method
+
+    // Whether `widget` is out of reach of the top MODAL, as it's in what's under it.
+    @MainThread Method UnderModal(widget: Widget): Bool
+        For i = open.Count - 1 To 0 Step -1
+            If Showing(widget, open[i].popup) Then Return False
+            If open[i].kind == PopupKind.MODAL Then Return True
         End For
         Return False
     End Method
@@ -602,9 +635,9 @@ Public Final Class Ui
     // stays; True if that's used it up, so it goes no further.
     @MainThread Method Dismissed(): Bool
         Local any = False
-        Local inOne = overPopup >= 0
         For i = open.Count - 1 To 0 Step -1
             If overPopup == i Then Return False
+            // What a closed one called may have closed others.
             If i >= open.Count Then Continue
             If open[i].kind == PopupKind.MODAL Then Return True
             If open[i].kind == PopupKind.MENU
@@ -612,17 +645,18 @@ Public Final Class Ui
                 any = True
             End If
         End For
-        Return any && !inOne
+        Return any
     End Method
 
     // What Escape, or a gamepad's EAST, does that no widget used: closes the top MENU, or it's back.
     @MainThread Method Escaped()
         For i = open.Count - 1 To 0 Step -1
+            If open[i].kind == PopupKind.TIP Then Continue
             If open[i].kind == PopupKind.MENU
                 Closing(i)
                 Return
             End If
-            If open[i].kind == PopupKind.MODAL Then Break
+            Break
         End For
         back = True
     End Method
@@ -632,8 +666,9 @@ Public Final Class Ui
         Local seeing = shortcuts
         If seeing == Null || Holding() Then Return False
         Local held = stroke.Control || stroke.Alt || stroke.Meta
-        Local function = (stroke.Key As Int32) >= (Key.F1 As Int32) &&
-                         (stroke.Key As Int32) <= (Key.F12 As Int32)
+        Local key = stroke.Key As Int32
+        Local function = (key >= (Key.F1 As Int32) && key <= (Key.F12 As Int32)) ||
+                         (key >= (Key.F13 As Int32) && key <= (Key.F24 As Int32))
         If own != Null && own.TakesText() && !held && !function Then Return False
         Return seeing(stroke)
     End Method
@@ -746,6 +781,7 @@ Public Final Class Ui
         If gone != Null && (!gone.EffectivelyEnabled() || !InTheOpen(gone))
             pressed = Null
             gone.PointerUp(point, False)
+            pressedWith = MouseButton.LEFT
         End If
         // One held by the right or the middle button keeps it through the others' presses.
         Local other = pressed != Null && pressedWith != MouseButton.LEFT
@@ -753,12 +789,12 @@ Public Final Class Ui
             // The widget under it, or the first it's in, that takes it.
             Local taking: Widget? = Null
             Local at = under
+            pressedWith = MouseButton.LEFT
             While at != Null && taking == Null
                 If at.EffectivelyEnabled() && at.PointerDown(point) Then taking = at
                 at = WidgetAbove(at)
             End While
             pressed = taking
-            pressedWith = MouseButton.LEFT
             // A press focuses what it pressed, or nothing, as a click on the background does, but
             // for one that leaves it alone.
             If taking == Null || !taking.KeepsFocus()
@@ -773,10 +809,10 @@ Public Final Class Ui
             If pressed != Null || !MouseHit(button) || Dismissed() Then Continue
             // As the left button's, but for the focus staying where it is unless a widget takes it.
             Local at = under
+            pressedWith = button
             While at != Null && pressed == Null
                 If at.EffectivelyEnabled() && at.PointerDownWith(button, point)
                     pressed = at
-                    pressedWith = button
                     Local focusing: Widget? = at.KeepsFocus() ? Null : at
                     While focusing != Null && !focusing.Focusable()
                         focusing = WidgetAbove(focusing)
@@ -785,6 +821,7 @@ Public Final Class Ui
                 End If
                 at = WidgetAbove(at)
             End While
+            If pressed == Null Then pressedWith = MouseButton.LEFT
         End For
         Local holding = pressed
         If holding != Null && (MouseXSpeed() != 0.0 || MouseYSpeed() != 0.0)
@@ -793,13 +830,15 @@ Public Final Class Ui
         If holding != Null && !MouseDown(pressedWith)
             pressed = Null
             holding.PointerUp(point, Within(under, holding))
+            pressedWith = MouseButton.LEFT
         End If
     End Method
 
     // The wheel's notches, to the widget under the pointer that uses them, or the first it's in.
     @MainThread Method Wheel(under: Widget?)
         Local steps = MouseWheelSteps()
-        If steps == 0 Then Return
+        // Under a MENU, what it's over isn't for scrolling.
+        If steps == 0 || (overPopup < 0 && Holding()) Then Return
         Local at = under
         While at != Null
             If at.EffectivelyEnabled() && at.Wheel(steps) Then Return
@@ -902,7 +941,7 @@ Class PopupOpen
     ReadOnly Field at: Vec2?
     ReadOnly Field closed: (Func())?
     // What had the focus as it opened.
-    ReadOnly Field before: Weak<Widget>
+    Field before: Weak<Widget>
 
     New(popup: Node, kind: PopupKind, at: Vec2?, closed: (Func())?, before: Widget?)
         Self.popup = popup
