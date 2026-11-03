@@ -18,7 +18,7 @@ If Process.Arguments().Count > 0
 End If
 
 // Two at a time unless CI says, as 8 at once adds to the load of the other runs on a PC.
-Local together = Int.Parse(Env.Get("FBENGINE_JOBS_ENDS_TOGETHER") ?? "2") ?? 2
+Local together = Int.Parse(Env.Get("FBENGINE_ENDS_AT_ONCE") ?? "2") ?? 2
 Local failed = 0
 Try
     For round = 1 To 25

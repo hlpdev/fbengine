@@ -16,8 +16,6 @@ concurrency:
 
 env:
   FB_VERSION: 1.2.2
-  # tests/jobs/ends' children at once, more than a PC's verify starts.
-  FBENGINE_JOBS_ENDS_TOGETHER: "8"
 
 jobs:
   native:
