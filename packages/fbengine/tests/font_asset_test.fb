@@ -7,6 +7,7 @@ Import std.os
 Import std.test
 Import std.time
 Import fbengine
+Import "./watching"
 
 Function Fonts(): String => Env.Get("FBENGINE_TEST_FONTS") ?? ""
 
@@ -18,18 +19,6 @@ End Function
 Function FlipUntil(done: Func(): Bool)
     Local since = Instant.Now()
     While !done() && (Instant.Now() - since) < 30.Seconds
-        Flip()
-        Sleep(5.Milliseconds)
-    End While
-End Function
-
-// A recursive FileWatcher on a Mac is libuv's FSEvents, whose stream starts on a thread of its own a
-// moment after the watcher's made, seeing only what's after that, so what a test writes has to wait
-// for it.
-Function Started()
-    If System.Platform != Platform.MACOS Then Return
-    Local since = Instant.Now()
-    While (Instant.Now() - since) < 1.Seconds
         Flip()
         Sleep(5.Milliseconds)
     End While
@@ -97,7 +86,7 @@ Function AChangedSidecarReloadsItsFontInPlace() Throws IOError
     Local font = Try Assets.Load<Font>("res://hot-font/a.ttf")
     Defer font.Free()
     Local narrow = font.Measure("Main menu").x
-    Started()
+    Try WatcherStarted(folder.Path, "res://hot-font")
     Try File.WriteText(folder.Path / "a.ttf.toml", "size = 48")
     FlipUntil(Function(): Bool => font.Size() == 48.0)
     Expect(font.Size() == 48.0)

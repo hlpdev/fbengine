@@ -7,24 +7,13 @@ Import std.test
 Import std.time
 Import fbengine
 Import fbengine_audio
+Import "./watching"
 Import "./wav"
 
 // Flips until `done` says so, or 30 seconds have gone.
 Function FlipUntil(done: Func(): Bool)
     Local since = Instant.Now()
     While !done() && (Instant.Now() - since) < 30.Seconds
-        Flip()
-        Sleep(5.Milliseconds)
-    End While
-End Function
-
-// A recursive FileWatcher on a Mac is libuv's FSEvents, whose stream starts on a thread of its own a
-// moment after the watcher's made, seeing only what's after that, so what a test writes has to wait
-// for it.
-Function Started()
-    If System.Platform != Platform.MACOS Then Return
-    Local since = Instant.Now()
-    While (Instant.Now() - since) < 1.Seconds
         Flip()
         Sleep(5.Milliseconds)
     End While
@@ -99,7 +88,7 @@ Function AChangedFileReloadsItsSoundInPlace() Throws IOError
     sound.SetVolume(0.5)
     Local rate = sound.SampleRate()
     Local frames = sound.Frames()
-    Started()
+    Try WatcherStarted(folder.Path, "res://hot-sound")
     Try File.WriteBytesAtomic(folder.Path / "door.wav", Wav(Constant(0, 100)))
     FlipUntil(Function(): Bool => sound.Frames() != frames || sound.SampleRate() != rate)
     Expect(sound.Frames() != frames || sound.SampleRate() != rate)

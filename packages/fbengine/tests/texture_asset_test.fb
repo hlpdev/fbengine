@@ -12,6 +12,7 @@ Import std.os
 Import std.test
 Import std.time
 Import fbengine
+Import "./watching"
 
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
@@ -25,18 +26,6 @@ End Function
 Function FlipUntil(done: Func(): Bool)
     Local since = Instant.Now()
     While !done() && (Instant.Now() - since) < 30.Seconds
-        Flip()
-        Sleep(5.Milliseconds)
-    End While
-End Function
-
-// A recursive FileWatcher on a Mac is libuv's FSEvents, whose stream starts on a thread of its own a
-// moment after the watcher's made, seeing only what's after that, so what a test writes has to wait
-// for it.
-Function Started()
-    If System.Platform != Platform.MACOS Then Return
-    Local since = Instant.Now()
-    While (Instant.Now() - since) < 1.Seconds
         Flip()
         Sleep(5.Milliseconds)
     End While
@@ -195,7 +184,7 @@ Function AChangedFileReloadsItsTextureInPlace() Throws IOError, GraphicsError
     Local count = Texture.Count()
     Local pixels = texture.LockPixels()
     pixels.Unlock()
-    Started()
+    Try WatcherStarted(folder.Path, "res://hot")
     Try File.WriteBytesAtomic(folder.Path / "hero.png", Filled(4, Color32(0, 255, 0, 255)))
     FlipUntil(Function(): Bool => texture.Width() == 4)
     Expect(texture.Width() == 4)

@@ -13,6 +13,7 @@ Import std.test
 Import std.text
 Import std.time
 Import fbengine
+Import "./watching"
 
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
@@ -80,18 +81,6 @@ Function Door(x: Int = 1): UInt8[]
             "{{\"KHR_lights_punctual\":{{\"light\":0}}}}}},{{\"name\":\"eye\",\"camera\":0}}," +
             "{{\"name\":\"knob\"}}]," +
             "\"scenes\":[{{\"nodes\":[4]}},{{\"nodes\":[0]}}],\"scene\":1}}").Bytes
-End Function
-
-// A recursive FileWatcher on a Mac is libuv's FSEvents, whose stream starts on a thread of its own a
-// moment after the watcher's made, seeing only what's after that, so what a test writes has to wait
-// for it.
-Function Started()
-    If System.Platform != Platform.MACOS Then Return
-    Local since = Instant.Now()
-    While (Instant.Now() - since) < 1.Seconds
-        Flip()
-        Sleep(5.Milliseconds)
-    End While
 End Function
 
 @Test
@@ -251,8 +240,8 @@ Function AChangedFileMakesItsSpawnsAgain() Throws IOError
     Local root = Try model.Spawn()
     root.SetPosition(Vec3(5, 0, 0))
     Local texturesBefore = Texture.Count()
+    Try WatcherStarted(folder.Path, "res://hot-model")
     Local old = model.Geometries()[0]
-    Started()
     Try File.WriteBytesAtomic(folder.Path / "door.gltf", Door(2))
     FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
     Local geometry = model.Geometries()[0]
