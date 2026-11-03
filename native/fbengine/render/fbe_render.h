@@ -40,9 +40,13 @@ extern "C" {
 // FBE_SHADING_, 2 to 4 its FBE_BLEND_, 5 whether its material has an alpha cutoff, 6 whether it
 // takes vertex colors, 7 whether it's two-sided, 8 and 9 the camera's FBE_FOG_, or none when the
 // material isn't fogged, 10 and 11 its FBE_DEPTH_, and 12 whether its matrix mirrors it, its
-// determinant below 0, which turns its triangles' winding around; the default material is a new
-// one's. An FBE_SHADING_VERTEX draw has its own lights, `light_count` of fbe_render_draw_lights'
-// indices from `light_first`; any other, 0 of them, as it's lit by its clusters.
+// determinant below 0, which turns its triangles' winding around, 13 to 16 how many of its
+// material's layers have textures, and from 17 those layers', four bits each from the lowest, the
+// FBE_LAYER_ blend and over it the UV set; the default material is a new one's, but for a sprite,
+// which is full-bright with none. A target's format and samples aren't in it, since a camera's
+// draws all go into one target, and they're in the pipeline a pass makes of it. An
+// FBE_SHADING_VERTEX draw has its own lights, `light_count` of fbe_render_draw_lights' indices from
+// `light_first`; any other, 0 of them, as it's lit by its clusters.
 typedef struct fbe_draw_t {
     uint64_t entity;
     int32_t kind;
@@ -116,6 +120,17 @@ FBE_API bool fbe_render_lights(uint64_t camera, float target_width, float target
 // a tween outside 0 to 1.
 FBE_API int32_t fbe_render_draw_lights(uint64_t camera, float target_width, float target_height,
                                        float tween, uint32_t* indices, int32_t capacity);
+
+// Draws a camera into its target, `tween` of the way from its World's last capture, as a pass of
+// the frame, starting the GPU if nothing has, unless it's hidden: first it clears what it clears of
+// its viewport, then every showing mirror of its World reflects the whole scene into its viewport
+// and depth, no clip plane, as Blitz's did, then the scene, which covers that unless what's on the
+// mirror's plane lets it through. False, with fbe_error's why, for a freed camera, a tween outside
+// 0 to 1, a GPU that can't start, or with no target and no window.
+FBE_API bool fbe_render_camera(uint64_t camera, float tween);
+// Draws every one of a World's cameras, in their order; false as fbe_render_camera is, or for a
+// freed World.
+FBE_API bool fbe_render_world(uint64_t world, float tween);
 
 #ifdef __cplusplus
 }

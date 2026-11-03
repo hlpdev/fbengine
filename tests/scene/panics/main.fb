@@ -12,6 +12,18 @@ If arguments.Count != 1 Then Panic("give the case to run")
 Local world = World()
 World.SetCurrent(world)
 Select arguments[0]
+    Case "render-no-target"
+        Camera()
+        RenderWorld()
+    Case "render-bad-tween"
+        Camera()
+        RenderWorld(2)
+    Case "layer-uv-zero"
+        Material().SetLayerUv(0, UvTurn(Vec2(0, 1), 0, Vec2(0, 0)))
+    Case "layer-texture-out-of-range"
+        Material().SetTexture(8, Null)
+    Case "joints-wrong-count"
+        Geometry.Cube().Surface(0).SetJoints([VertexJoints(0, 0, 0, 0, Vec4(1, 0, 0, 0))])
     Case "freed-entity"
         Local pivot = Pivot()
         pivot.Free()

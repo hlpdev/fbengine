@@ -199,29 +199,35 @@ bool read_lists(std::uint64_t camera, float target_width, float target_height, f
     if (!drawn_view(camera, target_width, target_height, tween, slot, view, shows)) {
         return false;
     }
-    lists.draws.clear();
+    lists.items.clear();
     lists.lights.clear();
     lists.cluster_lights.clear();
     lists.draw_lights.clear();
     lists.clusters.assign(FBE_CLUSTERS, fbe_cluster_t{ .first = 0, .count = 0 });
-    if (!shows) {
-        return true;
+    if (shows) {
+        const scene::scene_t& s = scene::scene();
+        read_view(s.cameras[s.entities.component[slot]], view, scene::tweened_t(tween), lists);
     }
+    return true;
+}
+
+void read_view(const camera_t& camera, const scene::view_t& view, const scene::tweened_t& tweened,
+               lists_t& lists) {
     const scene::scene_t& s = scene::scene();
-    const camera_t& found = s.cameras[s.entities.component[slot]];
-    const scene::tweened_t tweened(tween);
-    const std::vector<item_t> items = extract(found, view, tweened);
-    std::vector<lit_t> lit = lights_lit(s.entities.world[slot], view, tweened);
+    lists.items = extract(camera, view, tweened);
+    lists.lights.clear();
+    lists.cluster_lights.clear();
+    lists.draw_lights.clear();
+    lists.clusters.assign(FBE_CLUSTERS, fbe_cluster_t{ .first = 0, .count = 0 });
+    std::vector<lit_t> lit = lights_lit(s.entities.world[camera.entity], view, tweened);
     // What's lit per vertex takes the first lights in the tree's order that reach it, as they're
     // given here for now, so those it wants stay in the lights though no cluster has them.
-    lists.draws.reserve(items.size());
     std::vector<std::uint32_t> by_tree;
-    for (const item_t& item : items) {
-        lists.draws.push_back(item.draw);
+    for (item_t& item : lists.items) {
         if (!item.vertex_lit) {
             continue;
         }
-        fbe_draw_t& draw = lists.draws.back();
+        fbe_draw_t& draw = item.draw;
         draw.light_first = static_cast<std::uint32_t>(by_tree.size());
         for (std::size_t at = 0; at < lit.size() && draw.light_count < FBE_DRAW_LIGHTS; ++at) {
             if (lit[at].draw.type == FBE_LIGHT_DIRECTIONAL ||
@@ -245,14 +251,14 @@ bool read_lists(std::uint64_t camera, float target_width, float target_height, f
     });
     // Directional lights light every cluster; each point and spot light, the clusters its range
     // reaches, and it's left out when it reaches none and nothing lit per vertex wants it.
-    const auto starts = slice_starts(found);
+    const auto starts = slice_starts(camera);
     std::vector<std::pair<std::uint32_t, std::uint32_t>> reaches;
     std::vector<std::uint32_t> reached;
     for (const std::uint32_t at : ordered) {
         lit_t& one = lit[at];
         if (one.draw.type != FBE_LIGHT_DIRECTIONAL) {
             const vec3_t center(one.draw.position[0], one.draw.position[1], one.draw.position[2]);
-            clusters_reached(found, view, starts, center, one.draw.range, reached);
+            clusters_reached(camera, view, starts, center, one.draw.range, reached);
             if (reached.empty() && !one.wanted) {
                 continue;
             }
@@ -282,7 +288,6 @@ bool read_lists(std::uint64_t camera, float target_width, float target_height, f
         const fbe_cluster_t& where = lists.clusters[cluster];
         lists.cluster_lights[where.first + next[cluster]++] = light;
     }
-    return true;
 }
 
 } // namespace fbe::render

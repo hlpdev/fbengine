@@ -74,11 +74,14 @@ extern "C" {
 
 // How a texture layer combines with the layers under it: multiplying them, adding to them,
 // laid over them by its alpha, or multiplying them twice over, so its middle gray leaves them as
-// they are, as a doubled ambient layer under a lightmap wants.
+// they are, as a doubled ambient layer under a lightmap wants; or not at all, but its red and green
+// shift the next layer's UVs and its blue scales that layer's light, as fbe_material_set_layer_bump
+// says, the environment bump old rooms use.
 #define FBE_LAYER_MULTIPLY   0
 #define FBE_LAYER_ADD        1
 #define FBE_LAYER_ALPHA      2
 #define FBE_LAYER_MULTIPLY_2 3
+#define FBE_LAYER_BUMP       4
 
 // How many texture layers a material has.
 #define FBE_MATERIAL_LAYERS 8
@@ -173,6 +176,13 @@ typedef struct fbe_vertex_t {
     fbe_vec2_t uv1;
     fbe_color_t color;
 } fbe_vertex_t;
+
+// A vertex's joints, beside its fbe_vertex_t: which four of its skin's joints move it, as glTF's
+// JOINTS_0 indexes them, and how much of each, as its WEIGHTS_0.
+typedef struct fbe_vertex_joints_t {
+    uint16_t joints[4];
+    float weights[4];
+} fbe_vertex_joints_t;
 
 // What a collision touched, as an entity's list of them gives it: the other entity; the point it
 // touched, on the other's surface, and that surface's normal there, both in the world; when in the
@@ -348,6 +358,10 @@ FBE_API bool fbe_camera_clears_color(uint64_t camera);
 FBE_API bool fbe_camera_clears_depth(uint64_t camera);
 FBE_API bool fbe_camera_set_clear_color(uint64_t camera, float r, float g, float b, float a);
 FBE_API bool fbe_camera_clear_color(uint64_t camera, fbe_color_t* color);
+// What a camera draws into: a target with depth, which it holds, or 0, as at first, for the
+// screen. Its viewport's in that target's pixels; false for another texture, or a freed one.
+FBE_API bool fbe_camera_set_target(uint64_t camera, uint64_t texture);
+FBE_API uint64_t fbe_camera_target(uint64_t camera);
 // When a camera draws among its World's: lower orders first, and those of one order in the order
 // they were made.
 FBE_API bool fbe_camera_set_order(uint64_t camera, int32_t order);
@@ -487,6 +501,14 @@ FBE_API int32_t fbe_surface_add_vertices(uint64_t geometry, int32_t surface,
 // triangle's index, -1 if it can't.
 FBE_API int32_t fbe_surface_add_triangles(uint64_t geometry, int32_t surface,
                                           const uint32_t* indices, int32_t count);
+// Sets a surface's vertices' joints, `count` of them, one for each vertex, or none with 0, which
+// drawing skins it by when its mesh has a skin; false for another count. Vertices added since or
+// cleared let go of them. Reading them writes up to `capacity` and gives how many there are, -1 for
+// a freed geometry.
+FBE_API bool fbe_surface_set_joints(uint64_t geometry, int32_t surface,
+                                    const fbe_vertex_joints_t* joints, int32_t count);
+FBE_API int32_t fbe_surface_joints(uint64_t geometry, int32_t surface, fbe_vertex_joints_t* joints,
+                                   int32_t capacity);
 FBE_API int32_t fbe_surface_vertex_count(uint64_t geometry, int32_t surface);
 FBE_API int32_t fbe_surface_triangle_count(uint64_t geometry, int32_t surface);
 // Reads or sets `count` vertices from `first`; false if they aren't all there.
@@ -542,6 +564,24 @@ FBE_API bool fbe_material_fogged(uint64_t material);
 // first, so a sky is behind everything and an overlay over it.
 FBE_API bool fbe_material_set_order(uint64_t material, int32_t order);
 FBE_API int32_t fbe_material_order(uint64_t material);
+// A texture layer's texture, which it holds, 0 for none, for layers 0 to FBE_MATERIAL_LAYERS - 1:
+// what's drawn is the lit color with each layer that has a texture over it, in order.
+FBE_API bool fbe_material_set_texture(uint64_t material, int32_t layer, uint64_t texture);
+FBE_API uint64_t fbe_material_texture(uint64_t material, int32_t layer);
+// What a layer's UVs go through: scaled down, so a scale of 2 looks twice as big, turned back by an
+// angle in radians, then moved back by an offset in UV units, as Blitz's ScaleTexture,
+// RotateTexture, and PositionTexture; false for a scale of 0, or anything not finite. Reading them
+// writes the five values in that order.
+FBE_API bool fbe_material_set_layer_uv(uint64_t material, int32_t layer, float scale_u,
+                                       float scale_v, float angle, float offset_u, float offset_v);
+FBE_API bool fbe_material_layer_uv(uint64_t material, int32_t layer, float* values);
+// What an FBE_LAYER_BUMP layer's map does to the next layer: its red and green, centered on middle
+// gray, -1 to 1, shift that layer's UVs by the matrix's u = m00 r + m10 g and v = m01 r + m11 g,
+// and its blue times `scale` plus `offset`, 0 to 1, scales that layer's color: as Direct3D's
+// BUMPENVMAPLUMINANCE, none of it at first. Reading it writes the six values in that order.
+FBE_API bool fbe_material_set_layer_bump(uint64_t material, int32_t layer, float m00, float m01,
+                                         float m10, float m11, float scale, float offset);
+FBE_API bool fbe_material_layer_bump(uint64_t material, int32_t layer, float* values);
 // A texture layer's FBE_LAYER_ blend and UV set, 0 or 1, for layers 0 to FBE_MATERIAL_LAYERS - 1.
 FBE_API bool fbe_material_set_layer(uint64_t material, int32_t layer, int32_t blend,
                                     int32_t uv_set);
@@ -592,7 +632,7 @@ FBE_API bool fbe_sprite_matrix(uint64_t sprite, uint64_t camera, fbe_mat4_t* mat
 
 // Ground planes: entities that are an infinite plane at their own y of 0, facing their +Y, which
 // collisions touch as that plane when their collision shape is FBE_COLLISION_AUTO or
-// FBE_COLLISION_MESH, and picks of FBE_PICK_MESH hit, both from above only; E5 draws them out to
+// FBE_COLLISION_MESH, and picks of FBE_PICK_MESH hit, both from above only; they're drawn out to
 // the camera's far plane. Their material, which they hold, 0 for none; their own color and alpha,
 // as a mesh's tint; and the grid they're drawn in, 1 to 16 segments a side, 1 at first.
 FBE_API bool fbe_plane_set_material(uint64_t plane, uint64_t material);
@@ -605,7 +645,7 @@ FBE_API int32_t fbe_plane_segments(uint64_t plane);
 // Terrains: a grid of squares, size by size, in their own space from (0, 0) to (size, size) across
 // X and Z, each corner at its own height up Y, 0 at first, two triangles a square facing up.
 // Collisions touch their triangles when their collision shape is FBE_COLLISION_AUTO or
-// FBE_COLLISION_MESH, and picks of FBE_PICK_MESH hit them, from above; E5 draws them. Made 1 square
+// FBE_COLLISION_MESH, and picks of FBE_PICK_MESH hit them, from above; they're drawn. Made 1 square
 // a side; a new size, 1 to 4096, makes every height 0 again.
 FBE_API bool fbe_terrain_set_size(uint64_t terrain, int32_t size);
 FBE_API int32_t fbe_terrain_size(uint64_t terrain);
@@ -624,9 +664,9 @@ FBE_API uint64_t fbe_terrain_material(uint64_t terrain);
 FBE_API bool fbe_terrain_set_tint(uint64_t terrain, float r, float g, float b, float a);
 FBE_API bool fbe_terrain_tint(uint64_t terrain, fbe_color_t* tint);
 
-// Mirrors: entities that reflect the scene through their own XZ plane, which E5 draws. The matrix
-// that reflects the world through a mirror's plane, which a camera's view takes first to draw
-// what's in it.
+// Mirrors: entities that reflect the scene through their own XZ plane, as fbe_render_camera draws
+// them. The matrix that reflects the world through a mirror's plane, which a camera's view takes
+// first to draw what's in it.
 FBE_API bool fbe_mirror_reflection(uint64_t mirror, fbe_mat4_t* matrix);
 
 // How far from a camera an entity fades out, for a mesh or a sprite: whole nearer than `start`, not

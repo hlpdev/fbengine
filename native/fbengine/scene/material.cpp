@@ -1,5 +1,5 @@
 // Materials as data: color and alpha, shininess, shading, blending, texture layers, and the flags
-// E5 draws them by; the surfaces and meshes that draw in them; and meshes' own tints.
+// drawing reads; the surfaces and meshes that draw in them; and meshes' own tints.
 
 #include "core/engine.hpp"
 #include "fbengine.h"
@@ -79,6 +79,13 @@ std::uint32_t material_slot(std::uint64_t handle) {
     return live_slot(scene().material_slots, handle, "material");
 }
 
+void release_texture(std::uint64_t texture) {
+    // Gone with the GPU, it has nothing to let go of.
+    if (texture != 0 && fbe_texture_width(texture) >= 0) {
+        fbe_texture_release(texture);
+    }
+}
+
 void retain_material(std::uint32_t material) {
     if (material != none) {
         ++scene().materials[material].references;
@@ -87,6 +94,10 @@ void retain_material(std::uint32_t material) {
 
 void release_material(std::uint32_t material) {
     if (material != none && --scene().materials[material].references == 0) {
+        for (layer_t& layer : scene().materials[material].layers) {
+            release_texture(layer.texture);
+            layer.texture = 0;
+        }
         scene().material_slots.free(material);
     }
 }
@@ -161,6 +172,11 @@ FBE_API uint64_t fbe_material_clone(uint64_t material) {
     const std::uint32_t copy = fbe::scene::make_material();
     scene().materials[copy] = original;
     scene().materials[copy].references = 1;
+    for (const fbe::scene::layer_t& layer : original.layers) {
+        if (layer.texture != 0) {
+            fbe_texture_retain(layer.texture);
+        }
+    }
     return scene().material_slots.handle(copy);
 }
 
@@ -309,13 +325,94 @@ FBE_API int32_t fbe_material_order(uint64_t material) {
     return found != nullptr ? found->order : 0;
 }
 
+FBE_API bool fbe_material_set_texture(uint64_t material, int32_t layer, uint64_t texture) {
+    layer_t* found = fbe::scene::layer_of(material, layer);
+    if (found == nullptr) {
+        return false;
+    }
+    if (texture != 0 && !fbe_texture_retain(texture)) {
+        return false;
+    }
+    fbe::scene::release_texture(found->texture);
+    found->texture = texture;
+    return true;
+}
+
+FBE_API uint64_t fbe_material_texture(uint64_t material, int32_t layer) {
+    const layer_t* found = fbe::scene::layer_of(material, layer);
+    return found != nullptr ? found->texture : 0;
+}
+
+FBE_API bool fbe_material_set_layer_uv(uint64_t material, int32_t layer, float scale_u,
+                                       float scale_v, float angle, float offset_u, float offset_v) {
+    layer_t* found = fbe::scene::layer_of(material, layer);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(scale_u) || !std::isfinite(scale_v) || scale_u == 0.0F || scale_v == 0.0F) {
+        return fbe::fail(
+            std::format("a layer's UV scale is finite and not 0, not ({}, {})", scale_u, scale_v));
+    }
+    if (!std::isfinite(angle) || !std::isfinite(offset_u) || !std::isfinite(offset_v)) {
+        return fbe::fail(std::format("a layer's UV angle and offset are finite, not {}, ({}, {})",
+                                     angle, offset_u, offset_v));
+    }
+    found->uv_scale = { scale_u, scale_v };
+    found->uv_angle = angle;
+    found->uv_offset = { offset_u, offset_v };
+    return true;
+}
+
+FBE_API bool fbe_material_layer_uv(uint64_t material, int32_t layer, float* values) {
+    const layer_t* found = fbe::scene::layer_of(material, layer);
+    if (found == nullptr) {
+        return false;
+    }
+    values[0] = found->uv_scale[0];
+    values[1] = found->uv_scale[1];
+    values[2] = found->uv_angle;
+    values[3] = found->uv_offset[0];
+    values[4] = found->uv_offset[1];
+    return true;
+}
+
+FBE_API bool fbe_material_set_layer_bump(uint64_t material, int32_t layer, float m00, float m01,
+                                         float m10, float m11, float scale, float offset) {
+    layer_t* found = fbe::scene::layer_of(material, layer);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(m00) || !std::isfinite(m01) || !std::isfinite(m10) || !std::isfinite(m11) ||
+        !std::isfinite(scale) || !std::isfinite(offset)) {
+        return fbe::fail("a bump layer's matrix, scale, and offset are finite");
+    }
+    found->bump = { m00, m01, m10, m11 };
+    found->bump_scale = scale;
+    found->bump_offset = offset;
+    return true;
+}
+
+FBE_API bool fbe_material_layer_bump(uint64_t material, int32_t layer, float* values) {
+    const layer_t* found = fbe::scene::layer_of(material, layer);
+    if (found == nullptr) {
+        return false;
+    }
+    values[0] = found->bump[0];
+    values[1] = found->bump[1];
+    values[2] = found->bump[2];
+    values[3] = found->bump[3];
+    values[4] = found->bump_scale;
+    values[5] = found->bump_offset;
+    return true;
+}
+
 FBE_API bool fbe_material_set_layer(uint64_t material, int32_t layer, int32_t blend,
                                     int32_t uv_set) {
     layer_t* found = fbe::scene::layer_of(material, layer);
     if (found == nullptr) {
         return false;
     }
-    if (blend < FBE_LAYER_MULTIPLY || blend > FBE_LAYER_MULTIPLY_2) {
+    if (blend < FBE_LAYER_MULTIPLY || blend > FBE_LAYER_BUMP) {
         return fbe::fail(std::format("{} isn't a LayerBlend", blend));
     }
     if (uv_set != 0 && uv_set != 1) {

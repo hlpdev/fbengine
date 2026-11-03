@@ -48,7 +48,7 @@ item_t item_of(std::uint32_t entity, std::uint32_t material, const mat4_t& matri
     item.draw.material = material != none ? s.material_slots.handle(material) : 0;
     item.draw.blend = scene::drawn_blend(material, tint[3] * fade);
     item.blended = item.draw.blend != FBE_BLEND_OPAQUE;
-    item.mirrored = scene::dot(scene::cross(matrix.axis(0), matrix.axis(1)), matrix.axis(2)) < 0.0F;
+    item.mirrored = scene::mirrors(matrix);
     item.vertex_lit = material != none && s.materials[material].shading == FBE_SHADING_VERTEX;
     put(item.draw, matrix, tint, fade);
     const vec3_t forward = view.rotation * vec3_t(0.0F, 0.0F, -1.0F);
@@ -57,21 +57,36 @@ item_t item_of(std::uint32_t entity, std::uint32_t material, const mat4_t& matri
 }
 
 /// A draw's pipeline, as fbe_render.h lays its bits out, from its material, or a new one's for
-/// none, its blend and depth, the camera's fog, and whether its matrix mirrors it.
+/// none, but a sprite's, which is full-bright with none; its blend and depth, the camera's fog,
+/// whether its matrix mirrors it, and the layers of its material that have textures.
 std::uint64_t pipeline_of(const item_t& item, const camera_t& camera) {
     const scene::scene_t& s = scene::scene();
     const scene::material_t standard;
     const scene::material_t& material =
         item.material != none ? s.materials[item.material] : standard;
     const std::int32_t fog = material.fogged ? camera.fog_mode : FBE_FOG_NONE;
-    return static_cast<std::uint64_t>(material.shading) |
+    const std::int32_t shading = item.material == none && item.draw.kind == FBE_ENTITY_SPRITE
+                                     ? FBE_SHADING_UNLIT
+                                     : material.shading;
+    std::uint64_t layers = 0;
+    std::uint64_t layer_count = 0;
+    for (const scene::layer_t& layer : material.layers) {
+        if (layer.texture != 0) {
+            const auto blend = static_cast<std::uint64_t>(layer.blend);
+            const auto uv_set = static_cast<std::uint64_t>(layer.uv_set);
+            layers |= (blend | (uv_set << 3U)) << (layer_count * 4U);
+            ++layer_count;
+        }
+    }
+    return static_cast<std::uint64_t>(shading) |
            (static_cast<std::uint64_t>(item.draw.blend) << 2U) |
            (static_cast<std::uint64_t>(material.alpha_cutoff > 0.0F ? 1 : 0) << 5U) |
            (static_cast<std::uint64_t>(material.vertex_colors ? 1 : 0) << 6U) |
            (static_cast<std::uint64_t>(material.two_sided ? 1 : 0) << 7U) |
            (static_cast<std::uint64_t>(fog) << 8U) |
            (static_cast<std::uint64_t>(item.draw.depth_mode) << 10U) |
-           (static_cast<std::uint64_t>(item.mirrored ? 1 : 0) << 12U);
+           (static_cast<std::uint64_t>(item.mirrored ? 1 : 0) << 12U) | (layer_count << 13U) |
+           (layers << 17U);
 }
 
 /// The eight corners of a box through a matrix.
@@ -282,9 +297,11 @@ FBE_API int32_t fbe_render_draws(uint64_t camera, float target_width, float targ
         return -1;
     }
     const auto count =
-        std::min(lists.draws.size(), static_cast<std::size_t>(std::max(capacity, 0)));
-    std::copy_n(lists.draws.begin(), count, draws);
-    return static_cast<std::int32_t>(lists.draws.size());
+        std::min(lists.items.size(), static_cast<std::size_t>(std::max(capacity, 0)));
+    for (std::size_t i = 0; i < count; ++i) {
+        draws[i] = lists.items[i].draw;
+    }
+    return static_cast<std::int32_t>(lists.items.size());
 }
 
 } // extern "C"

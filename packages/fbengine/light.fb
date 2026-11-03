@@ -1,4 +1,4 @@
-// Lights, as the data the renderer lights a World with: E5 draws them.
+// Lights, as the data the renderer lights a World with.
 
 Import std.core
 Import std.ffi

@@ -1,5 +1,5 @@
 // Lights as data: their type, color, intensity, range, and cone, the ambient light of each World,
-// and each camera's fog, which E5 draws.
+// and each camera's fog, which drawing reads.
 
 #include "core/engine.hpp"
 #include "fbengine.h"

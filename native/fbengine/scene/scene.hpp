@@ -70,16 +70,26 @@ struct collider_t {
 /// indices into them each, counterclockwise seen from the front.
 struct surface_t {
     std::vector<fbe_vertex_t> vertices;
+    /// Its vertices' joints, one for each, or none.
+    std::vector<fbe_vertex_joints_t> joints;
     std::vector<std::uint32_t> indices;
     /// The material it's drawn in, by slot, which it holds, or none for the default.
     std::uint32_t material = none;
 };
 
-/// One of a material's texture layers: how it blends with the layers under it, and which UV set
-/// it reads.
+/// One of a material's texture layers: how it blends with the layers under it, which UV set it
+/// reads, its texture, which it holds, 0 for none, what turns its UVs, and for a bump layer, what
+/// its map shifts the next layer's UVs by and how it scales that layer's light.
 struct layer_t {
     std::int32_t blend = 0;
     std::int32_t uv_set = 0;
+    std::uint64_t texture = 0;
+    std::array<float, 2> uv_scale{ 1.0F, 1.0F };
+    float uv_angle = 0.0F;
+    std::array<float, 2> uv_offset{ 0.0F, 0.0F };
+    std::array<float, 4> bump{ 0.0F, 0.0F, 0.0F, 0.0F };
+    float bump_scale = 0.0F;
+    float bump_offset = 1.0F;
 };
 
 /// A material: how surfaces look, shared by every surface and mesh drawing in it, which its
@@ -251,6 +261,8 @@ struct camera_t {
     bool clears_color = true;
     bool clears_depth = true;
     std::array<float, 4> clear_color{ 0.0F, 0.0F, 0.0F, 1.0F };
+    /// The texture it draws into, which it holds, or 0 for the screen.
+    std::uint64_t target = 0;
     std::int32_t order = 0;
     /// When it was made, which orders cameras of one order.
     std::uint64_t made = 0;
@@ -333,6 +345,8 @@ void remove_component(std::uint32_t entity);
 void copy_component(std::uint32_t from, std::uint32_t to);
 /// The live camera a handle is for, or null, with fbe_error saying so.
 camera_t* camera_of(std::uint64_t handle);
+/// Lets go of a texture a camera or material held, if it hasn't gone with the GPU.
+void release_texture(std::uint64_t texture);
 void add_camera(std::uint32_t entity);
 void remove_camera(std::uint32_t entity);
 /// Numbers a tree's copied cameras anew in the order their originals were made, so cameras of one

@@ -150,6 +150,10 @@ frame_t& recording_frame();
 /// Has `free` run once the GPU is done with the frame being recorded, and every frame before it.
 void after_frame(std::function<void()> free);
 
+/// Has `free` run each time the GPU stops, before it finishes what's freed after frames: what's
+/// kept on the GPU from frame to frame goes there. Asked for twice, it's still once.
+void at_stop(void (*free)());
+
 /// Records the frame graph, then ends the frame's commands, if any were recorded, and submits
 /// them, uploads first, waiting on `wait` and signaling `signal` if they're not VK_NULL_HANDLE, so
 /// the next frame in flight is recorded next; false, with fbe_error's why, if the submit failed,

@@ -679,10 +679,22 @@ bool start(VkSurfaceKHR surface) {
     return true;
 }
 
+namespace {
+
+std::vector<void (*)()>& stoppers() {
+    static std::vector<void (*)()> made;
+    return made;
+}
+
+} // namespace
+
 void stop() {
     if (started) {
         vkDeviceWaitIdle(current.device);
         stop_graph();
+        for (void (*free)() : stoppers()) {
+            free();
+        }
         stop_window();
         stop_frames();
         stop_textures();
@@ -760,6 +772,12 @@ bool faulted(fault_t fault) {
     }
     injected = fault_t::NONE;
     return true;
+}
+
+void at_stop(void (*free)()) {
+    if (std::ranges::find(stoppers(), free) == stoppers().end()) {
+        stoppers().push_back(free);
+    }
 }
 
 } // namespace fbe::gpu

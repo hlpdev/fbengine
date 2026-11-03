@@ -612,6 +612,33 @@ FBE_API bool fbe_surface_vertices(uint64_t geometry, int32_t surface, int32_t fi
     return true;
 }
 
+FBE_API bool fbe_surface_set_joints(uint64_t geometry, int32_t surface,
+                                    const fbe_vertex_joints_t* joints, int32_t count) {
+    surface_t* found = fbe::scene::surface_of(geometry, surface);
+    if (found == nullptr) {
+        return false;
+    }
+    if (count != 0 && std::cmp_not_equal(count, found->vertices.size())) {
+        return fbe::fail(std::format("a surface of {} vertices has as many joints, or none, not {}",
+                                     found->vertices.size(), count));
+    }
+    found->joints.assign(joints, joints + count);
+    fbe::scene::touch_geometry(geometry_slot(geometry), false);
+    return true;
+}
+
+FBE_API int32_t fbe_surface_joints(uint64_t geometry, int32_t surface, fbe_vertex_joints_t* joints,
+                                   int32_t capacity) {
+    const surface_t* found = fbe::scene::surface_of(geometry, surface);
+    if (found == nullptr) {
+        return -1;
+    }
+    const auto count =
+        std::min(found->joints.size(), static_cast<std::size_t>(std::max(capacity, 0)));
+    std::copy_n(found->joints.begin(), count, joints);
+    return static_cast<std::int32_t>(found->joints.size());
+}
+
 FBE_API bool fbe_surface_set_vertices(uint64_t geometry, int32_t surface, int32_t first,
                                       const fbe_vertex_t* vertices, int32_t count) {
     surface_t* found = fbe::scene::surface_of(geometry, surface);
@@ -653,6 +680,7 @@ FBE_API bool fbe_surface_clear(uint64_t geometry, int32_t surface, bool vertices
     found->indices.clear();
     if (vertices) {
         found->vertices.clear();
+        found->joints.clear();
     }
     fbe::scene::touch_geometry(geometry_slot(geometry), true);
     return true;

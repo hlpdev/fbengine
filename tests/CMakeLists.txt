@@ -61,7 +61,7 @@ FetchContent_MakeAvailable(stb)
 add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
                gpu/pipeline_tests.cpp gpu/texture_tests.cpp gpu/target_tests.cpp
                gpu/buffer_tests.cpp gpu/graph_tests.cpp gpu/canvas_tests.cpp
-               gpu/pixels_tests.cpp gpu/text_tests.cpp
+               gpu/pixels_tests.cpp gpu/text_tests.cpp gpu/scene_tests.cpp
                golden/golden.cpp golden/golden_tests.cpp golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)
@@ -250,6 +250,11 @@ catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
 # what it does.
 if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
+      "render-no-target=Render on a World: a camera with no target draws into the screen, and there's no window open"
+      "render-bad-tween=Render on a World: a tween is 0 to 1, not 2"
+      "layer-uv-zero=SetLayerUv on a Material: a layer's UV scale is finite and not 0, not \\(0, 1\\)"
+      "layer-texture-out-of-range=SetTexture on a Material: a material's layers are 0 to 7, not 8"
+      "joints-wrong-count=SetJoints on a Geometry: a surface of 24 vertices has as many joints, or none, not 1"
       "freed-entity=SetName on a Pivot that was freed"
       "freed-with-parent=Name on a Pivot that was freed"
       "new-under-freed=New on a Pivot that was freed"
