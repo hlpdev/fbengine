@@ -224,7 +224,8 @@ public:
     }
 
     result_t<std::optional<bytes_t>> read(std::span<const std::string> /*names*/,
-                                          std::span<const std::string> keys) override {
+                                          std::span<const std::string> keys,
+                                          std::uint64_t most) override {
         const std::optional<std::uint32_t> found = find(keys);
         if (!found || m_nodes[*found].folder) {
             return std::optional<bytes_t>{};
@@ -244,6 +245,9 @@ public:
         const std::uint64_t data = file.header + local_size + u16(header, 26) + u16(header, 28);
         if (data > size || file.size > size - data) {
             return invalid(std::format("{} is past its end", shown(file.path)));
+        }
+        if (file.size > most) {
+            return std::unexpected(too_big(shown(file.path), file.size));
         }
         try {
             if (faulted(fault_t::OUT_OF_MEMORY)) {

@@ -1,0 +1,138 @@
+// Files of more bytes than a UInt8[] holds, in a folder and a pak, which each read refuses as an
+// IOError before it allocates them. The files are sparse, so they take no room.
+
+Import std.collections
+Import std.core
+Import std.ffi
+Import std.io
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+
+// `value`'s `size` bytes, little-endian, after what `bytes` has.
+Function Put(bytes: UInt8[], value: Int64, size: Int)
+    For at = 0 Until size
+        bytes.Add(((value >> (8 * at)) & 0xFF) As UInt8)
+    End For
+End Function
+
+// A sparse file at `file`, `start`, then nothing for as far as `size`, then `tail`. Gives False
+// where the OS won't make one sparse, which would take the room.
+Function Sparse(file: Path, start: UInt8[], size: Int64, tail: UInt8[]): Bool Throws IOError
+    Try File.WriteBytes(file, start)
+    If System.Platform == Platform.WINDOWS
+        Local made = Try Command("fsutil").Args(["sparse", "setflag",
+                                                 file.Text.Replace("/", "\\")]).Output()
+        If !made.Status.Success Then Return False
+    End If
+    Local options = OpenOptions()
+    options.Write = True
+    Local stream = Try File.Open(file, options)
+    Defer stream.Close()
+    Try stream.Seek(size, SeekOrigin.START)
+    Try stream.Write(Buffer<UInt8>.From(tail.Count > 0 ? tail : [0] As UInt8[]))
+    Return True
+End Function
+
+// A pak at `file` of the one file big.bin of `size` bytes, stored, by Zip64's fields.
+Function BigPak(file: Path, size: Int64): Bool Throws IOError
+    Local name = "big.bin"
+    Local head: UInt8[] = []
+    Put(head, 0x04034B50, 4)
+    Put(head, 45, 2)
+    Put(head, 0, 2)
+    Put(head, 0, 2)
+    Put(head, 0, 2)
+    Put(head, 0x21, 2)
+    Put(head, 0, 4)
+    Put(head, 0xFFFFFFFF, 4)
+    Put(head, 0xFFFFFFFF, 4)
+    Put(head, name.Length, 2)
+    Put(head, 20, 2)
+    head.AddAll(name.Bytes)
+    Put(head, 1, 2)
+    Put(head, 16, 2)
+    Put(head, size, 8)
+    Put(head, size, 8)
+    Local directory = (head.Count As Int64) + size
+    Local tail: UInt8[] = []
+    Put(tail, 0x02014B50, 4)
+    Put(tail, 45, 2)
+    Put(tail, 45, 2)
+    Put(tail, 0, 2)
+    Put(tail, 0, 2)
+    Put(tail, 0, 2)
+    Put(tail, 0x21, 2)
+    Put(tail, 0, 4)
+    Put(tail, 0xFFFFFFFF, 4)
+    Put(tail, 0xFFFFFFFF, 4)
+    Put(tail, name.Length, 2)
+    Put(tail, 20, 2)
+    Put(tail, 0, 2)
+    Put(tail, 0, 2)
+    Put(tail, 0, 2)
+    Put(tail, 0, 4)
+    Put(tail, 0, 4)
+    tail.AddAll(name.Bytes)
+    Put(tail, 1, 2)
+    Put(tail, 16, 2)
+    Put(tail, size, 8)
+    Put(tail, size, 8)
+    Local central = tail.Count As Int64
+    Local record = directory + central
+    Put(tail, 0x06064B50, 4)
+    Put(tail, 44, 8)
+    Put(tail, 45, 2)
+    Put(tail, 45, 2)
+    Put(tail, 0, 4)
+    Put(tail, 0, 4)
+    Put(tail, 1, 8)
+    Put(tail, 1, 8)
+    Put(tail, central, 8)
+    Put(tail, directory, 8)
+    Put(tail, 0x07064B50, 4)
+    Put(tail, 0, 4)
+    Put(tail, record, 8)
+    Put(tail, 1, 4)
+    Put(tail, 0x06054B50, 4)
+    Put(tail, 0, 2)
+    Put(tail, 0, 2)
+    Put(tail, 0xFFFF, 2)
+    Put(tail, 0xFFFF, 2)
+    Put(tail, 0xFFFFFFFF, 4)
+    Put(tail, 0xFFFFFFFF, 4)
+    Put(tail, 0, 2)
+    Return Try Sparse(file, head, directory, tail)
+End Function
+
+// Each read of `path`, which has to be an IOError of OTHER.
+Function ExpectRefused(path: String)
+    Expect(ExpectThrows<IOError>(Assets.ReadBytes(path))?.Kind == IOErrorKind.OTHER)
+    Expect(ExpectThrows<IOError>(Assets.ReadText(path))?.Kind == IOErrorKind.OTHER)
+    Expect(ExpectThrows<IOError>(Assets.ReadBytesAsync(path).Wait())?.Kind == IOErrorKind.OTHER)
+End Function
+
+@Test
+Function WhatAnArrayDoesntHoldIsRefusedInAFolder() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local three: Int64 = 3_000_000_000
+    If !Try Sparse(folder.Path / "big.bin", [], three, []) Then Return
+    Assets.MountFolder("res://test-big", folder.Path)
+    Defer Assets.Unmount("res://test-big")
+    ExpectRefused("res://test-big/big.bin")
+End Function
+
+@Test
+Function WhatAnArrayDoesntHoldIsRefusedInAPak() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local sizes: Int64[] = [3_000_000_000, 4_400_000_000]
+    For size In sizes
+        If !Try BigPak(folder.Path / "big.pak", size) Then Return
+        Try Assets.MountPak("res://test-big-pak", folder.Path / "big.pak")
+        ExpectRefused("res://test-big-pak/big.bin")
+        Expect(Assets.Unmount("res://test-big-pak"))
+    End For
+End Function

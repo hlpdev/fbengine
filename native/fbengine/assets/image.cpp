@@ -341,7 +341,8 @@ file_kind_t kind_of(std::span<const std::uint8_t> bytes) {
     if (starts(bytes, glb_signature)) {
         return file_kind_t::GLB;
     }
-    // A glTF is a JSON object, after a byte order mark and white space, if it has them.
+    // A glTF is a JSON object. A byte order mark and white space before it say so here, for the
+    // error that fits, though fastgltf then refuses them.
     std::size_t at = starts(bytes, bom) ? bom.size() : 0;
     while (at < bytes.size() &&
            (bytes[at] == ' ' || bytes[at] == '\t' || bytes[at] == '\r' || bytes[at] == '\n')) {

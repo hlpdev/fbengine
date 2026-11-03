@@ -1,0 +1,64 @@
+// A game run from its files in `assets/`, by fbengine_tools' build step, as its project.toml says.
+// `fb run` reads them as they are, and reloads what changes as it runs; `fb run --release` reads them
+// cooked into its pak. With `--change <file>`, it writes over its hero there, and waits to see that
+// reload, as a game's developer saving a file would.
+
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.os
+Import std.time
+Import fbengine
+Import "./res" As Res
+
+// BC7's Vulkan formats, what the cooker makes of an image by default.
+Const BC7_LINEAR: UInt32 = 145
+Const BC7_SRGB: UInt32 = 146
+
+// An image's size and format, which its Reload takes in place, so what holds it has the new one.
+Class Picture Implements Asset
+    Field Width: UInt32
+    Field Format: UInt32
+    Field Reloads: Int
+
+    New(width: UInt32, format: UInt32)
+        Width = width
+        Format = format
+        Reloads = 0
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): Picture Throws IOError
+        Return Picture(load.Image().Width, load.Image().Format)
+    End Method
+
+    Method Reload(load: AssetLoad): Bool Throws IOError
+        Width = load.Image().Width
+        Format = load.Image().Format
+        Reloads += 1
+        Return True
+    End Method
+End Class
+
+Try
+    Res.Mount()
+    Print(Try Assets.ReadText(Res.Level))
+    Local hero = Try Assets.Load<Picture>(Res.Hero)
+    Local cooked = hero.Format == BC7_LINEAR || hero.Format == BC7_SRGB
+    Print(cooked ? "hero, cooked" : "hero, as it is")
+
+    Local arguments = Process.Arguments()
+    If arguments.Count == 2 && arguments[0] == "--change"
+        Try File.WriteBytesAtomic(Path(arguments[1]), Png.Encode(Image(8, 8)))
+        Local since = Instant.Now()
+        While hero.Reloads == 0 && (Instant.Now() - since) < 30.Seconds
+            Flip()
+            Sleep(5.Milliseconds)
+        End While
+        Print(hero.Reloads > 0 ? "hero reloaded, {hero.Width} wide" : "hero didn't reload")
+    End If
+Catch e As IOError
+    Print("couldn't read them: {e.Message}")
+End Try
