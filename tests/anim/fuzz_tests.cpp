@@ -1,19 +1,21 @@
 // Random calls on players, clips, and bones, from seeds that repeat: nothing they do breaks what's
-// posed, every transform staying numbers and every rotation length 1, and every call that's asked
-// about a freed thing failing rather than touching it.
+// posed, every transform and morph weight staying numbers and every rotation length 1, and every
+// call that's asked about a freed thing failing rather than touching it.
 
 #include "fbengine.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>
 #include <random>
+#include <utility>
 #include <vector>
 
 namespace {
 
-constexpr std::array<const char*, 4> nodes{ "", "a", "b", "c" };
+constexpr std::array<const char*, 5> nodes{ "", "a", "b", "c", "m" };
 
 std::uint64_t named_pivot(std::uint64_t world, std::uint64_t parent, const char* name) {
     const std::uint64_t made = fbe_entity_create(world, parent, FBE_ENTITY_PIVOT);
@@ -28,12 +30,15 @@ std::uint64_t random_clip(std::mt19937& random) {
     const std::uint64_t clip = fbe_clip_create("fuzz", 0.0F);
     for (const char* node : nodes) {
         for (const std::int32_t property :
-             { FBE_CLIP_TRANSLATION, FBE_CLIP_ROTATION, FBE_CLIP_SCALE }) {
+             { FBE_CLIP_TRANSLATION, FBE_CLIP_ROTATION, FBE_CLIP_SCALE, FBE_CLIP_WEIGHTS }) {
             if (random() % 2 == 0) {
                 continue;
             }
             const auto interpolation = static_cast<std::int32_t>(random() % 3);
-            const std::int32_t width = property == FBE_CLIP_ROTATION ? 4 : 3;
+            std::int32_t width = property == FBE_CLIP_ROTATION ? 4 : 3;
+            if (property == FBE_CLIP_WEIGHTS) {
+                width = 1 + static_cast<std::int32_t>(random() % 4);
+            }
             const std::int32_t keys = 1 + static_cast<std::int32_t>(random() % 5);
             std::vector<float> times;
             std::vector<float> values;
@@ -72,6 +77,14 @@ bool all_numbers(std::uint64_t entity) {
            std::abs(length - 1.0F) < 1e-3F;
 }
 
+/// Whether a mesh's weights are numbers, `tween` of the way from the capture.
+bool weights_are_numbers(std::uint64_t mesh, float tween) {
+    std::array<float, 16> out{};
+    const std::int32_t count = fbe_morph_weights(mesh, tween, out.data(), out.size());
+    return count >= 0 && std::cmp_less_equal(count, out.size()) &&
+           std::ranges::all_of(out, [](float weight) { return std::isfinite(weight); });
+}
+
 } // namespace
 
 TEST_CASE("random calls leave every pose in numbers") {
@@ -84,6 +97,8 @@ TEST_CASE("random calls leave every pose in numbers") {
         const std::uint64_t a = named_pivot(world, root, "a");
         const std::uint64_t b = named_pivot(world, a, "b");
         std::uint64_t c = named_pivot(world, a, "c");
+        const std::uint64_t m = fbe_entity_create(world, a, FBE_ENTITY_MESH);
+        fbe_entity_set_name(m, "m");
         const std::uint64_t player = fbe_player_create(root);
         std::array<std::uint64_t, 4> clips{};
         for (std::uint64_t& clip : clips) {
@@ -94,7 +109,7 @@ TEST_CASE("random calls leave every pose in numbers") {
             const auto layer = static_cast<std::int32_t>(random() % 3);
             const auto mode = static_cast<std::int32_t>(random() % 3);
             const float speed = (unit(random) * 4.0F) - 2.0F;
-            switch (random() % 12) {
+            switch (random() % 15) {
             case 0:
             case 1:
                 fbe_player_play(player, layer, clip, mode, speed);
@@ -132,6 +147,20 @@ TEST_CASE("random calls leave every pose in numbers") {
                 fbe_entity_free(c);
                 c = named_pivot(world, a, "c");
                 break;
+            case 11: {
+                std::array<float, 6> weights{};
+                std::ranges::generate(weights, [&] { return (unit(random) * 2.0F) - 1.0F; });
+                fbe_morph_set_weights(m, weights.data(), static_cast<std::int32_t>(random() % 7));
+                break;
+            }
+            case 12:
+                fbe_world_capture(world);
+                break;
+            case 13:
+                fbe_entity_set_position(random() % 2 == 0 ? a : m, unit(random), unit(random),
+                                        unit(random), FBE_SPACE_LOCAL);
+                fbe_entity_set_scale(b, unit(random) + 0.5F, 1.0F, 1.0F, FBE_SPACE_LOCAL);
+                break;
             default: {
                 const std::uint64_t part = fbe_clip_slice(clip, unit(random), 1.0F + unit(random));
                 fbe_player_play(player, layer, part, mode, speed);
@@ -141,11 +170,12 @@ TEST_CASE("random calls leave every pose in numbers") {
             }
             fbe_player_advance(world, unit(random) * 0.1F);
             fbe_player_clear_events(player);
-            for (const std::uint64_t entity : { root, a, b, c }) {
+            for (const std::uint64_t entity : { root, a, b, c, m }) {
                 bad += all_numbers(entity) ? 0 : 1;
             }
+            bad += weights_are_numbers(m, unit(random)) ? 0 : 1;
         }
-        CHECK(fbe_player_bone_count(player) <= 4);
+        CHECK(fbe_player_bone_count(player) <= 5);
         fbe_player_free(player);
         for (const std::uint64_t clip : clips) {
             fbe_clip_release(clip);

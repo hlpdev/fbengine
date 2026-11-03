@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <functional>
 #include <new>
+#include <span>
 #include <string_view>
 
 namespace {
@@ -227,4 +228,179 @@ TEST_CASE("morph targets' calls that run out of memory say so, and leave things 
               const std::array<float, 8> weights{};
               fbe_morph_set_weights(rig.mesh, weights.data(), weights.size());
           });
+}
+
+namespace {
+
+/// A clip of the first `count` targets of the mesh "face", and the rig's mesh named that.
+void face_clip(const rig_t& rig) {
+    fbe_entity_set_name(rig.mesh, "face");
+    const std::array<float, 8> held{};
+    const std::array<float, 1> at{ 0.0F };
+    fbe_clip_add_channel(rig.run, "face", FBE_CLIP_WEIGHTS, FBE_CLIP_STEP, held.size(), at.data(),
+                         held.data(), 1);
+}
+
+/// `call` starts rig.run on `layer`, as sweep runs it: while it hasn't installed it, the layer's as
+/// it was; a pose that fails after leaves it installed. Whichever, nothing else holds the clip once
+/// the player's freed.
+void sweep_starting(
+    std::int32_t layer, const std::function<bool(const rig_t&)>& call,
+    const std::function<void(const rig_t&)>& first = [](const rig_t&) {}) {
+    for (long which = 0; which < 2000; ++which) {
+        const rig_t rig;
+        first(rig);
+        const std::uint64_t before = fbe_player_clip(rig.player, layer);
+        allocated = 0;
+        failed = false;
+        failing = which;
+        const bool done = call(rig);
+        failing = -1;
+        const std::uint64_t now = fbe_player_clip(rig.player, layer);
+        if (!failed) {
+            CHECK(done);
+            CHECK(now == rig.run);
+            return;
+        }
+        CHECK(!done);
+        CHECK((now == before || now == rig.run));
+        CHECK(fbe_player_advance(rig.world, 0.1F));
+        CHECK(fbe_player_clip(rig.player, layer) == now);
+        CHECK(fbe_player_free(rig.player));
+        CHECK(fbe_clip_release(rig.run));
+        CHECK_FALSE(fbe_clip_alive(rig.run));
+    }
+    FAIL("a call never got to the end of its allocations");
+}
+
+} // namespace
+
+TEST_CASE("a clip that runs out of memory starting leaves the layer, and isn't held") {
+    const auto starts = [](std::int32_t layer) {
+        const auto play = [=](const rig_t& rig) {
+            return fbe_player_play(rig.player, layer, rig.run, FBE_PLAYER_LOOP, 1.0F);
+        };
+        const auto crossfade = [=](const rig_t& rig) {
+            return fbe_player_crossfade(rig.player, layer, rig.run, 1.0F, FBE_PLAYER_LOOP, 1.0F);
+        };
+        sweep_starting(layer, play);
+        sweep_starting(layer, crossfade);
+        sweep_starting(layer, play, face_clip);
+        sweep_starting(layer, crossfade, face_clip);
+    };
+    // One that's playing, and one that's never played, with no room for a track yet.
+    starts(0);
+    starts(1);
+}
+
+TEST_CASE("a pose of weights that runs out of memory says so, and leaves things working") {
+    sweep(
+        [](const rig_t& rig) {
+            return fbe_player_play(rig.player, 1, rig.run, FBE_PLAYER_LOOP, 1.0F);
+        },
+        face_clip);
+    sweep([](const rig_t& rig) { return fbe_player_advance(rig.world, 0.1F); },
+          [](const rig_t& rig) {
+              face_clip(rig);
+              fbe_player_play(rig.player, 1, rig.run, FBE_PLAYER_LOOP, 1.0F);
+          });
+}
+
+TEST_CASE("a pose of weights out of memory poses none of what it moves") {
+    for (long which = 0; which < 2000; ++which) {
+        const rig_t rig;
+        fbe_entity_set_name(rig.mesh, "first");
+        const std::uint64_t second = fbe_entity_create(rig.world, rig.body, FBE_ENTITY_MESH);
+        fbe_entity_set_name(second, "second");
+        const std::array<float, 8> held{ 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F };
+        const std::array<float, 1> at{ 0.0F };
+        for (const char* node : { "first", "second" }) {
+            fbe_clip_add_channel(rig.run, node, FBE_CLIP_WEIGHTS, FBE_CLIP_STEP, held.size(),
+                                 at.data(), held.data(), 1);
+        }
+        allocated = 0;
+        failed = false;
+        failing = which;
+        const bool done = fbe_player_play(rig.player, 1, rig.run, FBE_PLAYER_LOOP, 1.0F);
+        failing = -1;
+        const std::int32_t first_has = fbe_morph_weights(rig.mesh, 1.0F, nullptr, 0);
+        const std::int32_t second_has = fbe_morph_weights(second, 1.0F, nullptr, 0);
+        if (!failed) {
+            CHECK(done);
+            CHECK(first_has == 8);
+            CHECK(second_has == 8);
+            return;
+        }
+        CHECK(!done);
+        CHECK(first_has == 0);
+        CHECK(second_has == 0);
+    }
+    FAIL("a call never got to the end of its allocations");
+}
+
+TEST_CASE("a time set that runs out of memory leaves the time as it was") {
+    for (long which = 0; which < 2000; ++which) {
+        const rig_t rig;
+        fbe_player_set_time(rig.player, 0, 0.25F);
+        // A channel added has every track bind again in the next pose, which allocates.
+        fbe_clip_add_channel(rig.walk, "hips", FBE_CLIP_SCALE, FBE_CLIP_LINEAR, 3, times.data(),
+                             places.data(), 2);
+        allocated = 0;
+        failed = false;
+        failing = which;
+        const bool done = fbe_player_set_time(rig.player, 0, 0.75F);
+        failing = -1;
+        if (!failed) {
+            CHECK(which > 0);
+            CHECK(done);
+            CHECK(fbe_player_time(rig.player, 0) == 0.75F);
+            return;
+        }
+        CHECK(!done);
+        CHECK(fbe_player_time(rig.player, 0) == 0.25F);
+    }
+    FAIL("a call never got to the end of its allocations");
+}
+
+namespace {
+
+/// How many allocations a mesh's freeing makes, with another mesh, which moves into its place,
+/// holding `weights`.
+long allocations_freeing_with(std::span<const float> weights) {
+    const rig_t rig;
+    const std::uint64_t other = fbe_entity_create(rig.world, 0, FBE_ENTITY_MESH);
+    fbe_morph_set_weights(other, weights.data(), static_cast<std::int32_t>(weights.size()));
+    allocated = 0;
+    failing = 1000000;
+    CHECK(fbe_entity_free(rig.mesh));
+    failing = -1;
+    return allocated;
+}
+
+} // namespace
+
+TEST_CASE("freeing a mesh doesn't allocate what it can run out of") {
+    for (long which = 0; which < 50; ++which) {
+        const rig_t rig;
+        const std::uint64_t other = fbe_entity_create(rig.world, 0, FBE_ENTITY_MESH);
+        const std::array<float, 8> weights{ 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F };
+        fbe_morph_set_weights(other, weights.data(), weights.size());
+        allocated = 0;
+        failed = false;
+        failing = which;
+        const bool done = fbe_entity_free(rig.mesh);
+        failing = -1;
+        if (!failed) {
+            CHECK(done);
+            std::array<float, 8> out{};
+            CHECK(fbe_morph_weights(other, 1.0F, out.data(), out.size()) == 8);
+            CHECK(out == weights);
+            // What the mesh moved into its place holds isn't copied.
+            CHECK(allocations_freeing_with({}) == allocations_freeing_with(weights));
+            return;
+        }
+        CHECK(!done);
+        CHECK(fbe_entity_alive(rig.mesh));
+    }
+    FAIL("a call never got to the end of its allocations");
 }

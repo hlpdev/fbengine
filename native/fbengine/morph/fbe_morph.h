@@ -6,7 +6,8 @@
 // mesh drawing the geometry shares them; each mesh has its own weights, one a target, which clips
 // move and a copy starts with. A surface's vertices added since a target was added don't move in
 // it; vertices drawn are their positions plus each target's by its weight, and their normals the
-// same, back to length 1.
+// same, back to length 1, or the vertex's own where its targets cancel it out. A geometry moved or
+// scaled takes its targets with it, so a mesh's shape at any weight is the same shape moved.
 
 #include "../core/fbe_core.h"
 
@@ -15,9 +16,10 @@ extern "C" {
 #endif
 
 // Adds a target to surface `surface` of `geometry`: `positions`, what each of its vertices moves
-// by, three floats a vertex, and `normals`, the same of their normals, or null for none, `vertices`
-// of each, as many as the surface has. Gives the target's index, -1 for a freed geometry, a surface
-// out of range, a count that isn't the surface's vertices', or floats that aren't numbers.
+// by, three floats a vertex, and `normals`, the same of their normals, either null for none,
+// `vertices` of each, as many as the surface has. Gives the target's index, -1 for a freed
+// geometry, a surface out of range, a count that isn't the surface's vertices', or floats that
+// aren't numbers.
 FBE_API int32_t fbe_morph_add_target(uint64_t geometry, int32_t surface, const float* positions,
                                      const float* normals, int32_t vertices);
 // How many targets the surface has, -1 for a freed geometry or a surface out of range.

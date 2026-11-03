@@ -15,11 +15,17 @@
 // it by its weight times its clips' together, 1 at most; a layer with a mask moves only the
 // entities it names and those under them. Each property a clip moves starts from where it was when
 // a clip began moving it, so a clip faded out leaves it there; what no clip moves is left as it is.
+// A mesh's morph weights go target by target, each by the clips whose channels reach it, so a
+// target no clip reaches is the game's to set.
 //
 // What a player poses is the game's to change until it next poses: a head turned toward a target
-// after the world's update is drawn turned, and the next update poses it from its clip again. An
-// entity released is the game's for good: no clip moves it until it's reclaimed, when a clip moves
-// it again from where the game left it.
+// after the world's update is drawn turned, and the next pose, at the next update, Play, Crossfade,
+// or set_time, overrides it from its clip again, so turn it after every update, each fixed step's
+// too. An entity released is the game's for good: no clip moves it until it's reclaimed, when a
+// clip moves it again from where the game left it.
+//
+// A call out of memory says so and changes nothing, but a play or crossfade whose pose is what ran
+// out: its clip's playing, and false says it hasn't posed yet.
 //
 // Players are handles of their own kind; the entities and clips they're given are the scene's and
 // the clip area's.

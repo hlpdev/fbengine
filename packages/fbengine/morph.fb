@@ -9,13 +9,14 @@ Import "./mesh"
 
 Extend Surface
     /// Adds a morph target, and gives its index: `positions` is what each of the Surface's vertices
-    /// moves by at a weight of 1, and `normals`, if it's given, what its normal does. Vertices added
-    /// since don't move in it, and Clear(), which takes its vertices, takes its targets. Not one for
-    /// each vertex, or vectors that aren't numbers, panic.
+    /// moves by at a weight of 1, and `normals`, if it's given, what its normal does; [] for
+    /// `positions` is a target that only turns normals. Vertices added since don't move in it, and
+    /// Clear(), which takes its vertices, takes its targets. Not one for each vertex, or vectors
+    /// that aren't numbers, panic.
     @MainThread @PanicsAtCaller
     Public Method AddMorphTarget(positions: Vec3[], normals: Vec3[] = []): Int
         Local geometry = Owner.Live("AddMorphTarget")
-        If normals.Count != 0 && normals.Count != positions.Count
+        If positions.Count != 0 && normals.Count != 0 && normals.Count != positions.Count
             Panic("AddMorphTarget on a Surface: a normal for each position, not {normals.Count} " +
                   "for {positions.Count}")
         End If
@@ -23,7 +24,9 @@ Extend Surface
         Local turned = Flat(normals)
         Local index = -1
         Unsafe
-            If normals.Count == 0
+            If positions.Count == 0
+                index = fbe_morph_add_target(geometry, Index, Null, turned.Pointer(), normals.Count)
+            ElseIf normals.Count == 0
                 index = fbe_morph_add_target(geometry, Index, moved.Pointer(), Null,
                                              positions.Count)
             Else

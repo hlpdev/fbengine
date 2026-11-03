@@ -69,8 +69,8 @@ Function AClipMovesAMeshsWeights()
     UpdateWorld(0.5)
     Expect(IsClose(mesh.MorphWeights()[0], 0.5))
     UpdateWorld(0.5)
-    // It had none, so it has none, which is 0 for every target.
-    Expect(mesh.MorphWeights().Count == 0)
+    // It had none, which is 0 for every target.
+    Expect(Same(mesh.MorphWeights(), [0, 0]))
     Expect(mesh.MorphedPositions()[0] == Vec3(0, 0, 0))
 End Function
 
@@ -145,4 +145,54 @@ Function AClipMovesAnEntityAndAPartOfIt()
     UpdateWorld(1)
     Expect(IsClose(blades.Position(Space.WORLD), Vec3(1, 3, 0)))
     Expect(IsClose(blades.Rotation() * Vec3(1, 0, 0), Vec3(0, 1, 0)))
+End Function
+
+// A door's Clip says where it is: placed anywhere, it's under a Pivot placed there.
+@Test
+Function AClipOfAWholeEntityPlaysWhereItsParentsPlaced()
+    Local world = Fresh()
+    Defer world.Free()
+    Local swing = Clip("swing")
+    swing.AddPositions("", [0, 1], [Vec3(0, 0, 0), Vec3(0, 2, 0)])
+    Local place = Pivot()
+    place.SetPosition(Vec3(5, 0, 3))
+    Local door = Pivot(place)
+    door.Player().Play(swing, PlayMode.ONCE)
+    Expect(IsClose(door.Position(Space.WORLD), Vec3(5, 0, 3)))
+    UpdateWorld(1)
+    Expect(IsClose(door.Position(Space.WORLD), Vec3(5, 2, 3)))
+    // A door placed itself goes to the Clip's place, as glTF has it.
+    Local placed = Pivot()
+    placed.SetPosition(Vec3(5, 0, 3))
+    placed.Player().Play(swing, PlayMode.ONCE)
+    Expect(IsClose(placed.Position(), Vec3(0, 0, 0)))
+End Function
+
+// A target can turn normals alone, and its positions stay.
+@Test
+Function ATargetCanOnlyTurnNormals()
+    Local world = Fresh()
+    Defer world.Free()
+    Local geometry = Smile()
+    Local surface = geometry.Surface(0)
+    Local count = surface.VertexCount()
+    Local turned: Vec3[] = []
+    For i = 1 To count
+        turned.Add(Vec3(0, 1, 0))
+    End For
+    Local before = surface.MorphTargetCount()
+    Expect(surface.AddMorphTarget([], turned) == before)
+    Local mesh = Mesh(geometry)
+    Local weights: Float[] = []
+    For i = 1 To before
+        weights.Add(0)
+    End For
+    weights.Add(1)
+    mesh.SetMorphWeights(weights)
+    Local still = Mesh(geometry).MorphedPositions()
+    Local moved = mesh.MorphedPositions()
+    For i = 0 Until count
+        Expect(IsClose(moved[i], still[i]))
+        Expect(mesh.MorphedNormals()[i].y > 0.0)
+    End For
 End Function

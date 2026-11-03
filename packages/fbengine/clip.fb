@@ -21,7 +21,8 @@ End Enum
 /// What moves an entity and the entities under it over time: channels, each moving one entity's
 /// position, rotation, scale, or morph weights, found by its name, through keys at times in seconds
 /// from 0; the name "" is whichever entity plays it, as a door's Clip has it, whatever the door's
-/// called. A Player plays it on any entity whose tree has those names; every Player playing one shares it,
+/// called. Its keys say where the entity is, not how far it's moved, as glTF has it, so to play a
+/// door's Clip on a door wherever it stands, put the door under a Pivot placed there. A Player plays it on any entity whose tree has those names; every Player playing one shares it,
 /// so a channel added to it is added to them all. It lives while the game holds it, or a Player
 /// plays it.
 Public Final Class Clip

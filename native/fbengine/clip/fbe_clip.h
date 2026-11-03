@@ -41,7 +41,8 @@ FBE_API bool fbe_clip_alive(uint64_t clip);
 // is 3 wide and a rotation 4; weights are as wide as they're given, 1 or more. False for a clip
 // freed, a property or interpolation that isn't one, no keys, times that aren't finite or fall,
 // values that aren't finite, a width that isn't the property's, or a node already moved in that
-// property.
+// property. Keys say where a node is, not how far it's moved, as glTF has it, so a door's clip, of
+// the node "", plays on a door wherever it stands if the door's under a pivot placed there.
 FBE_API bool fbe_clip_add_channel(uint64_t clip, const char* node, int32_t property,
                                   int32_t interpolation, int32_t width, const float* times,
                                   const float* values, int32_t keys);

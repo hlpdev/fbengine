@@ -858,3 +858,16 @@ TEST_CASE("a player on a hidden entity waits until it's shown") {
     fbe_clip_release(clip);
     fbe_world_free(world);
 }
+
+TEST_CASE("a bone freed isn't released, whatever it was") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t root = pivot(world, 0, "root");
+    const std::uint64_t bone = pivot(world, root, "bone");
+    const std::uint64_t player = fbe_player_create(root);
+    CHECK(fbe_player_release(player, bone));
+    CHECK(fbe_player_released(player, bone));
+    CHECK(fbe_entity_free(bone));
+    CHECK_FALSE(fbe_player_released(player, bone));
+    fbe_player_free(player);
+    fbe_world_free(world);
+}

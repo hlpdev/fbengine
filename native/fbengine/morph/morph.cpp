@@ -75,7 +75,7 @@ std::span<const float> morph_weights(std::uint32_t mesh, float tween) {
     for (std::size_t i = 0; i < between.size(); ++i) {
         const float was = i < found.captured_weights.size() ? found.captured_weights[i] : 0.0F;
         const float now = i < found.weights.size() ? found.weights[i] : 0.0F;
-        between[i] = was + ((now - was) * tween);
+        between[i] = scene::mix(was, now, tween);
     }
     return between;
 }
@@ -85,6 +85,9 @@ std::span<const float> morph_weights(std::uint32_t mesh, float tween) {
 using fbe::fail;
 using fbe::scene::none;
 using fbe::scene::vec3_t;
+
+/// How short a morphed normal is before it's taken to be no normal at all.
+constexpr float smallest_normal = 1e-6F;
 
 extern "C" {
 
@@ -98,8 +101,7 @@ FBE_API int32_t fbe_morph_add_target(uint64_t geometry, int32_t surface, const f
     if (found == nullptr) {
         return -1;
     }
-    if (std::cmp_not_equal(vertices, found->vertices.size()) ||
-        (positions == nullptr && vertices > 0)) {
+    if (std::cmp_not_equal(vertices, found->vertices.size())) {
         fail(std::format("a target moves each of the surface's {} vertices, not {}",
                          found->vertices.size(), vertices));
         return -1;
@@ -112,7 +114,7 @@ FBE_API int32_t fbe_morph_add_target(uint64_t geometry, int32_t surface, const f
     }
     try {
         fbe::scene::morph_target_t made;
-        if (count > 0) {
+        if (positions != nullptr && count > 0) {
             made.positions = fbe::anim::vectors_of(positions, count);
         }
         if (normals != nullptr && count > 0) {
@@ -216,7 +218,13 @@ FBE_API int32_t fbe_morph_vertices(uint64_t mesh, int32_t surface, float* positi
                 normal = normal + turned;
             }
         }
-        normal = fbe::scene::normalize(normal);
+        // A target can cancel a normal, which leaves no way to face but the vertex's own.
+        const float size = fbe::scene::length(normal);
+        if (size > smallest_normal && std::isfinite(size)) {
+            normal = normal * (1.0F / size);
+        } else {
+            normal = { vertex.normal.x, vertex.normal.y, vertex.normal.z };
+        }
         if (!out_positions.empty()) {
             out_positions[i * 3] = position.x;
             out_positions[(i * 3) + 1] = position.y;
