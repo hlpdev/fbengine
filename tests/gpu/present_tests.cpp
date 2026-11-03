@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fbengine.h>
+#include <format>
 #include <gpu/image.hpp>
 #include <gpu/vulkan.hpp>
 #include <SDL3/SDL.h>
@@ -358,11 +359,27 @@ TEST_CASE("a GPU that lacks what fbengine needs says what it lacks", "[gpu]") {
     fbe::gpu::inject(fbe::gpu::fault_t::LACKS);
     CHECK(!fbe_gpu_start());
     const std::string why = fbe_error();
+    INFO(why);
     CHECK(why.starts_with("no GPU has what fbengine needs: "));
     CHECK(why.contains(fbe_gpu_device_name(0)));
     CHECK(why.ends_with("dynamic rendering"));
     CHECK(std::string_view(fbe_gpu_device_lacks(0)).ends_with("dynamic rendering"));
     CHECK(!fbe_gpu_started());
+    stop_gpu();
+}
+
+// The device asked for lacks it, once it's listed again as the GPU starts.
+TEST_CASE("a GPU asked for that lacks what fbengine needs says what it lacks", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_set_device(0));
+    fbe::gpu::inject(fbe::gpu::fault_t::LACKS);
+    CHECK(!fbe_gpu_start());
+    const std::string why = fbe_error();
+    INFO(why);
+    CHECK(why == std::format("the GPU {} lacks what fbengine needs: {}", fbe_gpu_device_name(0),
+                             fbe_gpu_device_lacks(0)));
+    CHECK(why.ends_with("dynamic rendering"));
+    require(fbe_gpu_set_device(-1));
     stop_gpu();
 }
 

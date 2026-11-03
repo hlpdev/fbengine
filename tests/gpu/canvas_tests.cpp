@@ -1995,12 +1995,38 @@ TEST_CASE("a frame of 11,100 shapes, timed", "[gpu]") {
 
 // Not a check, a measure: a 1280x720 frame of 10,000 sprites, turned and scaled, of 8 textures,
 // and of 4,000, into the screen, what the CPU spends drawing them, and the frame.
+namespace {
+
+/// The most test cards a device's set has room for in a frame's window, past the engine's own.
+std::size_t room_for_cards() {
+    constexpr std::size_t engines_own = 16;
+    return fbe::gpu::texture_capacity() - engines_own;
+}
+
+} // namespace
+
+// A set the size of a Mac's has room for what the timed frame asks, as any device's does.
+TEST_CASE("the timed frame's textures fit the smallest set there is", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_window_open(1280, 720, FBE_WINDOW_WINDOWED));
+    fbe::gpu::inject(fbe::gpu::fault_t::PROMISED_DESCRIPTORS);
+    require(fbe_gpu_start());
+    CHECK(fbe::gpu::texture_capacity() == 1180);
+    for (std::size_t at = 0; at < room_for_cards(); ++at) {
+        card();
+    }
+    fbe_window_close();
+    stop_gpu();
+}
+
 TEST_CASE("a frame of 10,000 sprites, timed", "[gpu]") {
-    for (const std::size_t count : { std::size_t{ 8 }, std::size_t{ 4000 } }) {
+    for (const std::size_t wanted : { std::size_t{ 8 }, std::size_t{ 4000 } }) {
         REQUIRE(fbe_window_set_headless(true));
         fbe_gpu_set_pipeline_cache("");
         require(fbe_window_open(1280, 720, FBE_WINDOW_WINDOWED));
         require(fbe_gpu_start());
+        // A Mac's set holds fewer than 4,000.
+        const std::size_t count = std::min(wanted, room_for_cards());
         std::vector<std::uint64_t> textures;
         textures.reserve(count);
         for (std::size_t at = 0; at < count; ++at) {

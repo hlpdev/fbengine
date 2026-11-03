@@ -61,7 +61,7 @@ FetchContent_MakeAvailable(stb)
 add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
                gpu/pipeline_tests.cpp gpu/texture_tests.cpp gpu/target_tests.cpp
                gpu/buffer_tests.cpp gpu/graph_tests.cpp gpu/canvas_tests.cpp
-               gpu/pixels_tests.cpp gpu/text_tests.cpp
+               gpu/pixels_tests.cpp gpu/text_tests.cpp gpu/example_tests.cpp
                golden/golden.cpp golden/golden_tests.cpp golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)
@@ -70,6 +70,7 @@ target_include_directories(fbengine_gpu_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DI
 target_compile_definitions(fbengine_gpu_tests PRIVATE
                            FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
                            FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+                           FBENGINE_EXAMPLE_FRAMES="${PROJECT_BINARY_DIR}/example-frames"
                            FBENGINE_GOLDEN_IMAGES="${CMAKE_CURRENT_SOURCE_DIR}/golden"
                            FBENGINE_GOLDEN_FAILURES="${PROJECT_BINARY_DIR}/golden-failures"
                            FBENGINE_GOLDEN_UPDATES="${PROJECT_BINARY_DIR}/golden-updates"
@@ -115,6 +116,52 @@ if(FBENGINE_FB_TESTS)
                            "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts")
     endif()
   endforeach()
+
+  # E3's arcade example, playing itself headless, the same every time, its pilot's run and a run
+  # with no one flying, saving the frames that examples.arcade.golden, a hidden test of
+  # fbengine_gpu_tests run after them, compares with their golden images, all on the tests' Vulkan.
+  # Its rules' tests; and anything else on its command line says how it's run and fails, with no
+  # window.
+  add_test(NAME examples.arcade
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/arcade"
+                   -- --frames "${PROJECT_BINARY_DIR}/example-frames/arcade")
+  set_tests_properties(examples.arcade PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       FIXTURES_SETUP arcade_frames TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "Running arcade[^\n]*\nscore 120, lives 3\r?\n$")
+  add_test(NAME examples.arcade.idle
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/arcade"
+                   -- --frames "${PROJECT_BINARY_DIR}/example-frames/arcade" --idle)
+  set_tests_properties(examples.arcade.idle PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       FIXTURES_SETUP arcade_frames TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "Running arcade[^\n]*\nscore 0, lives 0\r?\n$")
+  add_test(NAME examples.arcade.golden
+           COMMAND fbengine_gpu_tests "the arcade example's frames match their golden images")
+  set_tests_properties(examples.arcade.golden PROPERTIES
+                       LABELS "gpu;golden" FIXTURES_REQUIRED arcade_frames
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
+  if(fbengine_test_dll_paths)
+    set_property(TEST examples.arcade.golden PROPERTY ENVIRONMENT_MODIFICATION
+                 "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+  endif()
+  add_test(NAME examples.arcade.rules COMMAND "${FBENGINE_FB}" test "${PROJECT_SOURCE_DIR}/examples/arcade")
+  set_tests_properties(examples.arcade.rules PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
+  # Its --watch, which a person watches in a window (tools/show.py), walked here offscreen, a step
+  # each frame: the pilot's run again.
+  add_test(NAME examples.arcade.watch
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/arcade"
+                   -- --watch --steps 300)
+  set_tests_properties(examples.arcade.watch PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "\nwatched 300 steps, score 120, lives 3\r?\n$")
+  add_test(NAME examples.arcade.usage
+           COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DEXAMPLE=${PROJECT_SOURCE_DIR}/examples/arcade"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/arcade_usage.cmake")
+  set_tests_properties(examples.arcade.usage PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+                       TIMEOUT 600)
 
   # fb's own lines, building the program, come before what it prints.
   add_test(NAME examples.hello

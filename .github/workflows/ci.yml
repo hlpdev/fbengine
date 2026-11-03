@@ -219,6 +219,8 @@ jobs:
           # Every target, so ctest finds every test it lists: the C++ tests, the packages', and the
           # examples'.
           cmake --build build --parallel
+          # Tests registered only by a second configure would be skipped here without a word.
+          ctest --test-dir build -N -R '^examples\.arcade' --no-tests=error > /dev/null
           if [ "$RUNNER_OS" = Linux ]; then tar -xf native-${{ matrix.target }}.tar; fi
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure || {
             if [ "$RUNNER_OS" = Windows ]; then
