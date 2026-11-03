@@ -1,0 +1,161 @@
+// Particles: what an emitter spawns, moved on the GPU by a formula from when each was born, so a
+// million cost the CPU only those born that frame. And a sky behind what a World has that's opaque.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./light"
+Import "./material"
+Import "./texture"
+Import "./world"
+
+/// An entity that spawns particles along its forward axis, -Z. They're born as World.Update's steps
+/// come, and at Burst; once born each goes by itself, in the world, however the emitter moves after.
+Public Final Class Particles Extends Entity
+    /// A new Particles, holding `capacity` at once, 1 to 1048576, the last child of `parent`, or at
+    /// the top of the current World when `parent` is Null. New, it spawns 32 a second, each living 1
+    /// second, at speed 1, straight out, half-size 0.1, white and fading out.
+    @MainThread @PanicsAtCaller
+    Public New(capacity: Int = 1024, parent: Entity? = Null)
+        Super.New(Create(parent, FBE_ENTITY_PARTICLES))
+        SetCapacity(capacity)
+    End New
+
+    Package New(handle: UInt64)
+        Super.New(handle)
+    End New
+
+    Override Package Method KindName(): String => "Particles"
+
+    /// Sets how many it holds at once, 1 to 1048576, losing those it has; the oldest go first when
+    /// more are born. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetCapacity(capacity: Int)
+        If !fbe_particles_set_capacity(Live("SetCapacity"), capacity) Then Failed("SetCapacity")
+    End Method
+
+    /// How many it holds at once.
+    @MainThread @PanicsAtCaller
+    Public Method Capacity(): Int => fbe_particles_capacity(Live("Capacity"))
+
+    /// Makes them draw in `material`, whose first layers are their textures, each particle's color
+    /// over its life taken as vertex colors; or with Null, full-bright white, blending ALPHA. Its
+    /// Blend AUTO is ALPHA here.
+    @MainThread @PanicsAtCaller
+    Public Method SetMaterial(material: Material?)
+        Local drawn: UInt64 = material != Null ? material.Live("SetMaterial") : 0
+        If !fbe_particles_set_material(Live("SetMaterial"), drawn) Then Failed("SetMaterial")
+    End Method
+
+    /// What they draw in, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Material(): Material? => MaterialOf(fbe_particles_material(Live("Material")))
+
+    /// Sets how many are born a second, 0 or more, as World.Update's steps go by. Below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetRate(perSecond: Float)
+        If !fbe_particles_set_rate(Live("SetRate"), perSecond) Then Failed("SetRate")
+    End Method
+
+    /// How many are born a second.
+    @MainThread @PanicsAtCaller
+    Public Method Rate(): Float => fbe_particles_rate(Live("Rate"))
+
+    /// Sets how long each lives, chosen between these, in seconds, above 0, up to 512. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetLife(least: Float, most: Float)
+        If !fbe_particles_set_life(Live("SetLife"), least, most) Then Failed("SetLife")
+    End Method
+
+    /// Sets how they set off: a speed between these, out to `spread` radians off its forward axis,
+    /// up to Pi for all around, and a spin up to this each way, in radians a second. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetMotion(leastSpeed: Float, mostSpeed: Float, spread: Float, spin: Float = 0)
+        If !fbe_particles_set_motion(Live("SetMotion"), leastSpeed, mostSpeed, spread, spin)
+            Failed("SetMotion")
+        End If
+    End Method
+
+    /// Sets what acts on them after: gravity in the world, in units a second a second, and drag, 0
+    /// or more, of which 1 slows them to a little over a third in a second. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetForces(gravity: Vec3, drag: Float = 0)
+        If !fbe_particles_set_forces(Live("SetForces"), gravity.x, gravity.y, gravity.z, drag)
+            Failed("SetForces")
+        End If
+    End Method
+
+    /// Sets each one's half-size, from its birth to its death. Below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetSizes(start: Float, finish: Float)
+        If !fbe_particles_set_sizes(Live("SetSizes"), start, finish) Then Failed("SetSizes")
+    End Method
+
+    /// Sets each one's color and alpha, from its birth to its death.
+    @MainThread @PanicsAtCaller
+    Public Method SetColors(start: Color, finish: Color)
+        Local first = fbe_color_t()
+        first.r = start.r
+        first.g = start.g
+        first.b = start.b
+        first.a = start.a
+        Local last = fbe_color_t()
+        last.r = finish.r
+        last.g = finish.g
+        last.b = finish.b
+        last.a = finish.a
+        Local done = False
+        Unsafe
+            done = fbe_particles_set_colors(Live("SetColors"), AddressOf(first), AddressOf(last))
+        End Unsafe
+        If !done Then Failed("SetColors")
+    End Method
+
+    /// Sets what its random numbers follow from, so a run can be the same again.
+    @MainThread @PanicsAtCaller
+    Public Method SetSeed(seed: UInt32)
+        If !fbe_particles_set_seed(Live("SetSeed"), seed) Then Failed("SetSeed")
+    End Method
+
+    /// Spawns `count` of them now, as many as it holds at most. Below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method Burst(count: Int)
+        If !fbe_particles_burst(Live("Burst"), count) Then Failed("Burst")
+    End Method
+
+    /// How many are alive.
+    @MainThread @PanicsAtCaller
+    Public Method Alive(): Int => fbe_particles_alive(Live("Alive"))
+End Class
+
+Extend World
+    /// Sets the World's sky to the atmosphere, one scattering of the sun's light, marched per pixel,
+    /// behind what's opaque, with what's in an order below 0 behind it; the sun where `sun`, a
+    /// directional Light of this World, shines from, or straight up for Null. `brightness` scales
+    /// what it adds up to. Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetAtmosphere(sun: Light? = Null, brightness: Float = 20)
+        Local light: UInt64 = sun != Null ? sun.Live("SetAtmosphere") : 0
+        If !fbe_world_set_sky_atmosphere(Live("SetAtmosphere"), light, brightness)
+            Failed("SetAtmosphere")
+        End If
+    End Method
+
+    /// Sets the World's sky to an equirectangular texture, its top row straight up, its middle
+    /// straight ahead along -Z, behind what's opaque. `brightness` scales it.
+    @MainThread @PanicsAtCaller
+    Public Method SetSkyTexture(texture: Texture, brightness: Float = 1)
+        If !fbe_world_set_sky_texture(Live("SetSkyTexture"), texture.Live("SetSkyTexture"),
+                                      brightness)
+            Failed("SetSkyTexture")
+        End If
+    End Method
+
+    /// Leaves the World with no sky: behind what's opaque is each camera's clear color, as at first.
+    @MainThread @PanicsAtCaller
+    Public Method ClearSky()
+        If !fbe_world_clear_sky(Live("ClearSky")) Then Failed("ClearSky")
+    End Method
+End Extend

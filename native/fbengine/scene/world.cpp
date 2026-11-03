@@ -24,7 +24,7 @@ namespace {
 
 /// The kinds fbe_entity_create takes.
 bool valid_kind(std::int32_t kind) {
-    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_TERRAIN;
+    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_PARTICLES;
 }
 
 /// Where an entity sits: its parent's children, or its world's roots.
@@ -344,6 +344,8 @@ FBE_API bool fbe_world_free(uint64_t world) {
         return fbe::fail("the main World stays; Clear empties it");
     }
     fbe_world_clear(world);
+    fbe::scene::release_texture(scene().worlds[slot].sky_texture);
+    scene().worlds[slot].sky_texture = 0;
     scene().world_slots.free(slot);
     return true;
 }

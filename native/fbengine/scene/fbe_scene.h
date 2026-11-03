@@ -15,14 +15,15 @@ extern "C" {
 #endif
 
 // What an entity is.
-#define FBE_ENTITY_PIVOT   0
-#define FBE_ENTITY_CAMERA  1
-#define FBE_ENTITY_LIGHT   2
-#define FBE_ENTITY_MESH    3
-#define FBE_ENTITY_SPRITE  4
-#define FBE_ENTITY_PLANE   5
-#define FBE_ENTITY_MIRROR  6
-#define FBE_ENTITY_TERRAIN 7
+#define FBE_ENTITY_PIVOT     0
+#define FBE_ENTITY_CAMERA    1
+#define FBE_ENTITY_LIGHT     2
+#define FBE_ENTITY_MESH      3
+#define FBE_ENTITY_SPRITE    4
+#define FBE_ENTITY_PLANE     5
+#define FBE_ENTITY_MIRROR    6
+#define FBE_ENTITY_TERRAIN   7
+#define FBE_ENTITY_PARTICLES 8
 
 // The space a transform is in: the entity's parent's, or the world's.
 #define FBE_SPACE_LOCAL 0
@@ -689,6 +690,59 @@ FBE_API bool fbe_terrain_set_material(uint64_t terrain, uint64_t material);
 FBE_API uint64_t fbe_terrain_material(uint64_t terrain);
 FBE_API bool fbe_terrain_set_tint(uint64_t terrain, float r, float g, float b, float a);
 FBE_API bool fbe_terrain_tint(uint64_t terrain, fbe_color_t* tint);
+
+// Particles: entities that spawn them along their forward axis, each drawn as a quad facing the
+// camera, moved on the GPU by a formula from its birth, so its cost to the CPU is only its birth;
+// in the world, however the emitter moves after. Born as fbe_world_step_particles' steps come, and
+// at fbe_particles_burst. New, one holds 1024, born at 32 a second, living 1 second, speed 1
+// straight out, half-size 0.1, white fading out, in no material: full-bright and blending by alpha.
+// The oldest go first when more are born than it holds. FBE_BLEND_AUTO is alpha for them, and a
+// particle's color is taken as a vertex color.
+FBE_API bool fbe_world_step_particles(uint64_t world, float seconds);
+FBE_API bool fbe_particles_set_material(uint64_t particles, uint64_t material);
+FBE_API uint64_t fbe_particles_material(uint64_t particles);
+// How many at once, 1 to 1048576; setting it loses those it has.
+FBE_API bool fbe_particles_set_capacity(uint64_t particles, int32_t capacity);
+FBE_API int32_t fbe_particles_capacity(uint64_t particles);
+// How many are born a second, 0 or more.
+FBE_API bool fbe_particles_set_rate(uint64_t particles, float per_second);
+FBE_API float fbe_particles_rate(uint64_t particles);
+// How long each lives, chosen between these, in seconds, above 0, up to 512.
+FBE_API bool fbe_particles_set_life(uint64_t particles, float least, float most);
+// How each sets off: a speed between these, up to `spread` radians off its axis, 0 to Pi; and a
+// spin up to this each way, radians a second.
+FBE_API bool fbe_particles_set_motion(uint64_t particles, float least_speed, float most_speed,
+                                      float spread, float spin);
+// What acts on them after: gravity in the world, units a second a second, and drag, 0 or more, of
+// which 1 slows them to a little over a third in a second.
+FBE_API bool fbe_particles_set_forces(uint64_t particles, float x, float y, float z, float drag);
+// Each one's half-size from its birth to its death, and its color and alpha, linear.
+FBE_API bool fbe_particles_set_sizes(uint64_t particles, float start, float end);
+FBE_API bool fbe_particles_set_colors(uint64_t particles, const fbe_color_t* start,
+                                      const fbe_color_t* end);
+// What its random numbers follow from, which a run the same again sets.
+FBE_API bool fbe_particles_set_seed(uint64_t particles, uint32_t seed);
+// Spawns `count` now, as many as it holds at most, and how many are alive.
+FBE_API bool fbe_particles_burst(uint64_t particles, int32_t count);
+FBE_API int32_t fbe_particles_alive(uint64_t particles);
+
+// A World's sky, behind what's opaque and in front of each camera's clear color: the atmosphere,
+// one scattering marched per pixel, the sun along a directional light's way, or straight up with 0;
+// or an equirectangular texture, its middle straight ahead along -Z, which it holds; each times its
+// brightness, 0 or more. It covers what's in an order below 0, and what's opaque covers it; through
+// a mirror's plane is the mirror's reflection of it. Clearing goes back to no sky, as at first.
+FBE_API bool fbe_world_set_sky_atmosphere(uint64_t world, uint64_t sun, float brightness);
+FBE_API bool fbe_world_set_sky_texture(uint64_t world, uint64_t texture, float brightness);
+FBE_API bool fbe_world_clear_sky(uint64_t world);
+
+// A new geometry of what's opaque in a World's showing meshes, ground planes, and terrains inside a
+// box, a matrix from a cube of -1 to 1 to the world, on faces toward its +Z, clipped to it: its UVs
+// across its X and down its Y, in both sets, each vertex lifted `lift`, 0 or more, off its face. A
+// decal: bullet holes, stains, scorches, drawn by a mesh in a blended material, as they were when
+// it's made, a skinned mesh in its bind pose. Blended ones aren't what it's on, so another decal
+// isn't. Its handle's held as fbe_geometry_create's is; 0 for a freed World, or a box with no
+// inverse.
+FBE_API uint64_t fbe_geometry_decal(uint64_t world, const fbe_mat4_t* box, float lift);
 
 // Mirrors: entities that reflect the scene through their own XZ plane, as fbe_render_camera draws
 // them. The matrix that reflects the world through a mirror's plane, which a camera's view takes

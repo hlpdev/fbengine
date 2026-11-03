@@ -279,6 +279,68 @@ FBE_API int32_t fbe_world_lights(uint64_t world, uint64_t* lights, int32_t capac
     return static_cast<std::int32_t>(found.size());
 }
 
+FBE_API bool fbe_world_set_sky_atmosphere(uint64_t world, uint64_t sun, float brightness) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    if (slot == fbe::scene::none) {
+        return false;
+    }
+    if (sun != 0) {
+        const light_t* found = fbe::scene::light_of(sun);
+        if (found == nullptr) {
+            return false;
+        }
+        if (found->type != FBE_LIGHT_DIRECTIONAL) {
+            return fbe::fail("a sky's sun is a directional light");
+        }
+        if (fbe::scene::scene().entities.world[found->entity] != slot) {
+            return fbe::fail("a sky's sun is in its World");
+        }
+    }
+    if (!std::isfinite(brightness) || brightness < 0.0F) {
+        return fbe::fail(std::format("a sky's brightness is 0 or more, not {}", brightness));
+    }
+    fbe::scene::world_t& found = fbe::scene::scene().worlds[slot];
+    fbe::scene::release_texture(found.sky_texture);
+    found.sky_texture = 0;
+    found.sky = 1;
+    found.sky_light = sun;
+    found.sky_brightness = brightness;
+    return true;
+}
+
+FBE_API bool fbe_world_set_sky_texture(uint64_t world, uint64_t texture, float brightness) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    if (slot == fbe::scene::none) {
+        return false;
+    }
+    if (!std::isfinite(brightness) || brightness < 0.0F) {
+        return fbe::fail(std::format("a sky's brightness is 0 or more, not {}", brightness));
+    }
+    if (!fbe_texture_retain(texture)) {
+        return false;
+    }
+    fbe::scene::world_t& found = fbe::scene::scene().worlds[slot];
+    fbe::scene::release_texture(found.sky_texture);
+    found.sky_texture = texture;
+    found.sky = 2;
+    found.sky_light = 0;
+    found.sky_brightness = brightness;
+    return true;
+}
+
+FBE_API bool fbe_world_clear_sky(uint64_t world) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    if (slot == fbe::scene::none) {
+        return false;
+    }
+    fbe::scene::world_t& found = fbe::scene::scene().worlds[slot];
+    fbe::scene::release_texture(found.sky_texture);
+    found.sky_texture = 0;
+    found.sky = 0;
+    found.sky_light = 0;
+    return true;
+}
+
 FBE_API bool fbe_world_set_ambient(uint64_t world, float r, float g, float b) {
     const std::uint32_t slot = fbe::scene::world_slot(world);
     if (slot == fbe::scene::none) {

@@ -66,9 +66,11 @@ std::uint64_t pipeline_of(const item_t& item, const camera_t& camera) {
     const scene::material_t& material =
         item.material != none ? s.materials[item.material] : standard;
     const std::int32_t fog = material.fogged ? camera.fog_mode : FBE_FOG_NONE;
-    const std::int32_t shading = item.material == none && item.draw.kind == FBE_ENTITY_SPRITE
-                                     ? FBE_SHADING_UNLIT
-                                     : material.shading;
+    const bool particles = item.draw.kind == FBE_ENTITY_PARTICLES;
+    const std::int32_t shading =
+        item.material == none && (item.draw.kind == FBE_ENTITY_SPRITE || particles)
+            ? FBE_SHADING_UNLIT
+            : material.shading;
     std::uint64_t layers = 0;
     std::uint64_t layer_count = 0;
     for (const scene::layer_t& layer : material.layers) {
@@ -82,12 +84,13 @@ std::uint64_t pipeline_of(const item_t& item, const camera_t& camera) {
     return static_cast<std::uint64_t>(shading) |
            (static_cast<std::uint64_t>(item.draw.blend) << 2U) |
            (static_cast<std::uint64_t>(material.alpha_cutoff > 0.0F ? 1 : 0) << 5U) |
-           (static_cast<std::uint64_t>(material.vertex_colors ? 1 : 0) << 6U) |
+           (static_cast<std::uint64_t>(material.vertex_colors || particles ? 1 : 0) << 6U) |
            (static_cast<std::uint64_t>(material.two_sided ? 1 : 0) << 7U) |
            (static_cast<std::uint64_t>(fog) << 8U) |
            (static_cast<std::uint64_t>(item.draw.depth_mode) << 10U) |
            (static_cast<std::uint64_t>(item.mirrored ? 1 : 0) << 12U) | (layer_count << 13U) |
-           (layers << 17U) | (static_cast<std::uint64_t>(material.wireframe ? 1 : 0) << 49U);
+           (layers << 17U) | (static_cast<std::uint64_t>(material.wireframe ? 1 : 0) << 49U) |
+           (static_cast<std::uint64_t>(particles ? 1 : 0) << 50U);
 }
 
 /// The eight corners of a box through a matrix.
@@ -173,6 +176,35 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         }
         const mat4_t matrix = scene::sprite_matrix(sprite.entity, own, view.rotation);
         items.push_back(item_of(sprite.entity, sprite.material, matrix, sprite.tint, fade, view));
+    }
+    for (const scene::particles_t& particles : s.particles) {
+        float fade = 1.0F;
+        if (!seen(particles.entity, fade)) {
+            continue;
+        }
+        vec3_t min;
+        vec3_t max;
+        if (!scene::particles_bounds(particles, min, max)) {
+            continue;
+        }
+        const std::array<vec3_t, 8> corners = corners_of(mat4_t(), min, max);
+        if (!scene::in_view(camera, view, corners.data(), corners.size())) {
+            continue;
+        }
+        const std::array<float, 4> white{ 1.0F, 1.0F, 1.0F, 1.0F };
+        item_t item = item_of(particles.entity, particles.material, mat4_t(), white, fade, view);
+        // They're all but opaque if their material says so: they fade by their color.
+        const scene::material_t standard;
+        const scene::material_t& material =
+            particles.material != none ? s.materials[particles.material] : standard;
+        if (material.blend == FBE_BLEND_AUTO) {
+            item.draw.blend = FBE_BLEND_ALPHA;
+            item.blended = true;
+        }
+        const vec3_t forward = view.rotation * vec3_t(0.0F, 0.0F, -1.0F);
+        const vec3_t place = tweened.pose(particles.entity).matrix.axis(3);
+        item.draw.depth = scene::dot(place - view.position, forward);
+        items.push_back(item);
     }
     for (const scene::plane_t& plane : s.planes) {
         float fade = 1.0F;

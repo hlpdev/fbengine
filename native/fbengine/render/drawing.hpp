@@ -32,12 +32,49 @@ struct draw_data_t {
     VkDeviceAddress vertices;
     VkDeviceAddress joints;
     VkDeviceAddress palette;
+    VkDeviceAddress particles;
     std::uint32_t material;
     std::uint32_t light_first;
     std::uint32_t light_count;
     std::uint32_t joint_count;
 };
-static_assert(sizeof(draw_data_t) == 168, "the scene shader reads draws 168 bytes apart");
+static_assert(sizeof(draw_data_t) == 176, "the scene shader reads draws 176 bytes apart");
+
+/// An emitter's particles as the scene shader reads them: their address, gravity, drag, their
+/// colors and half-sizes from birth to death, its clock now, and when that wraps.
+struct particles_data_t {
+    VkDeviceAddress records;
+    std::array<float, 3> gravity;
+    float drag;
+    std::array<float, 4> color_start;
+    std::array<float, 4> color_end;
+    float size_start;
+    float size_end;
+    float now;
+    float wrap;
+};
+static_assert(sizeof(particles_data_t) == 72, "the scene shader reads an emitter of 72 bytes");
+
+/// A sky as its shader reads it: the view's axes in the world, its half-size at a distance of 1,
+/// what it is, its texture's index, the sun's way and how bright, its sampler, whether it's
+/// mirrored, and the mirrors' planes whose reflections show instead of it, each a normal and the
+/// eye's height off it.
+struct sky_data_t {
+    std::array<float, 4> right;
+    std::array<float, 4> up;
+    std::array<float, 4> forward;
+    std::array<float, 2> spread;
+    std::uint32_t mode;
+    std::uint32_t texture;
+    std::array<float, 3> sun;
+    float brightness;
+    std::uint32_t sampler;
+    float flip;
+    VkDeviceAddress mirrors;
+    std::uint32_t mirror_count;
+    std::uint32_t spare;
+};
+static_assert(sizeof(sky_data_t) == 104, "the sky shader reads a sky of 104 bytes");
 
 /// A layer as the scene shader reads it: its texture's and sampler's indices in the bindless set,
 /// how a bump layer scales the next layer's light, what turns its UVs, by rows, with in their last
@@ -121,6 +158,10 @@ struct batch_t {
     std::uint32_t index_count = 0;
     std::uint32_t first_draw = 0;
     std::uint32_t draws = 1;
+    /// Not by indices, as an emitter's particles aren't: this many vertices, for draw `first_draw`.
+    std::uint32_t vertex_count = 0;
+    /// For the sky: its address, which its shader takes in place of the camera's.
+    VkDeviceAddress sky = 0;
 };
 
 /// What a pass draws from one view of a camera: the camera's address, whether the view's mirrored

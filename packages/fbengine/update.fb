@@ -27,12 +27,14 @@ End Function
 
 Extend World
     /// Steps the World by `seconds`, 0 or more: the Players on its entities move on by them, it
-    /// collides, then their handlers hear the events they reached, which can free the World. Below
+    /// collides, its Particles spawn, then their handlers hear the events they reached, which can
+    /// free the World. Below
     /// 0, or not finite, panics.
     @MainThread @PanicsAtCaller
     Public Method Update(seconds: Float64 = 0)
         Animate(seconds)
         Collide()
+        If !fbe_world_step_particles(Live("Update"), seconds As Float) Then Failed("Update")
         HandEvents()
     End Method
 

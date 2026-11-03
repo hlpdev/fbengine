@@ -684,6 +684,24 @@ Function Made(handle: UInt64, call: String): Geometry
     Return Geometry(handle)
 End Function
 
+Extend World
+    /// Makes a Geometry of what's opaque in the World's showing Meshes, GroundPlanes, and Terrains
+    /// inside `box`, a matrix from a cube of -1 to 1 to where the box is, on the faces toward its +Z,
+    /// each triangle clipped to it, its UVs across the box's X and down its Y, lifted `lift` off the
+    /// faces so it isn't lost in them: a bullet hole, a stain, or a scorch, when a Mesh draws it in a
+    /// blended Material. It's as they were then, a skinned Mesh in its bind pose: parent the Mesh to
+    /// what it's on, for that to carry it. A box with no inverse panics.
+    @MainThread @PanicsAtCaller
+    Public Method Decal(box: Mat4, lift: Float = 0.002): Geometry
+        Local matrix = MatrixOf(box)
+        Local made: UInt64 = 0
+        Unsafe
+            made = fbe_geometry_decal(Live("Decal"), AddressOf(matrix), lift)
+        End Unsafe
+        Return Made(made, "Decal")
+    End Method
+End Extend
+
 /// The Geometry a handle is for, from its wrapper if the game still holds one, or a new one, which
 /// holds the handle once.
 Package Function GeometryOf(handle: UInt64): Geometry?

@@ -73,6 +73,10 @@ struct surface_buffers_t {
 /// fbe_error's why, or the geometry's been freed.
 const surface_buffers_t* surface_buffers(std::uint64_t geometry, std::size_t surface);
 
+/// An emitter's particles on the GPU, with what's been born since sent: their address, or 0, with
+/// fbe_error's why, if there's no memory for them.
+VkDeviceAddress particles_buffer(scene::particles_t& particles);
+
 /// The quad a sprite draws: -1 to 1 in x and y, facing +Z, UV 0, 0 at its top left.
 const surface_buffers_t* sprite_quad();
 

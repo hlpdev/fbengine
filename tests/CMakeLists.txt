@@ -556,7 +556,7 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                scene/material_tests.cpp scene/bvh_tests.cpp scene/collision_tests.cpp
                scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
                scene/plane_tests.cpp scene/draw_tests.cpp
-               scene/terrain_tests.cpp scene/clusters_tests.cpp
+               scene/terrain_tests.cpp scene/clusters_tests.cpp scene/effects_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
@@ -594,6 +594,16 @@ catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
 # what it does.
 if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
+      "particles-capacity=SetCapacity on a Particles: an emitter holds 1 to 1048576 particles, not 0"
+      "particles-rate=SetRate on a Particles: particles are born at 0 a second or more, not -1"
+      "particles-life=SetLife on a Particles: a particle lives above 0 seconds, the least to the most, up to 512, not 2 to 1"
+      "particles-motion=SetMotion on a Particles: a particle's speeds are 0 or more, least to most, its spread 0 to Pi from its axis, and its spin 0 or more, not 2 to 1, 0, 0"
+      "particles-forces=SetForces on a Particles: a particle's gravity is finite and its drag 0 or more, not -1"
+      "particles-sizes=SetSizes on a Particles: a particle's half-size is 0 or more, not -1 to 0"
+      "particles-burst=Burst on a Particles: a burst is 0 particles or more, not -1"
+      "sky-brightness=SetAtmosphere on a World: a sky's brightness is 0 or more, not -1"
+      "sky-sun=SetAtmosphere on a World: a sky's sun is a directional light"
+      "decal-box=Decal: a decal's box has an inverse"
       "shadow-size=SetShadowSize on a Light: a shadow's tile is 16 to 8192 texels a side, not 8"
       "cascades=SetCascades on a Light: a light has 1 to 4 cascades, not 5"
       "shadow-distance=SetShadowDistance on a Light: a shadow reaches a distance above 0, not 0"

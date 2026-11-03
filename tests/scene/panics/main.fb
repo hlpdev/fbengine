@@ -12,6 +12,26 @@ If arguments.Count != 1 Then Panic("give the case to run")
 Local world = World()
 World.SetCurrent(world)
 Select arguments[0]
+    Case "particles-capacity"
+        Particles(0)
+    Case "particles-rate"
+        Particles().SetRate(-1)
+    Case "particles-life"
+        Particles().SetLife(2, 1)
+    Case "particles-motion"
+        Particles().SetMotion(2, 1, 0)
+    Case "particles-forces"
+        Particles().SetForces(Vec3(0, 0, 0), -1)
+    Case "particles-sizes"
+        Particles().SetSizes(-1, 0)
+    Case "particles-burst"
+        Particles().Burst(-1)
+    Case "sky-brightness"
+        world.SetAtmosphere(Null, -1)
+    Case "sky-sun"
+        world.SetAtmosphere(Light(LightType.POINT))
+    Case "decal-box"
+        world.Decal(Mat4.Scale(Vec3(0, 1, 1)))
     Case "shadow-size"
         Light().SetShadowSize(8)
     Case "cascades"

@@ -27,6 +27,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -67,9 +68,11 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
         blends |= (packed & 7U) << (layer * 4U);
         sets |= (packed >> 3U) << layer;
     }
+    const bool particles = ((key >> 50U) & 1U) != 0;
+    const std::string_view lit_vertex = particles ? "particleVertex" : "vertexMain";
     gpu::pipeline_desc_t desc{
         .shader = &shaders::scene,
-        .vertex = shadows ? "shadowVertex" : "vertexMain",
+        .vertex = shadows ? "shadowVertex" : lit_vertex,
         .fragment = shadows ? "shadowFragment" : "fragmentMain",
         .color = format,
         .depth = texture::depth_format,
@@ -96,6 +99,18 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
         .constant_count = 9,
     };
     return desc;
+}
+
+/// The sky's pipeline, into a target: only what's still at the far plane takes it, and it writes no
+/// depth.
+gpu::pipeline_desc_t sky_desc(VkFormat format, VkSampleCountFlagBits samples) {
+    return {
+        .shader = &shaders::sky,
+        .color = format,
+        .depth = texture::depth_format,
+        .samples = samples,
+        .depth_test = true,
+    };
 }
 
 } // namespace
@@ -139,14 +154,31 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
         for (const batch_t& batch : view.batches) {
             if (bound != batch.key) {
                 bound = batch.key;
-                VkPipeline made = gpu::pipeline(
-                    desc_of(batch.key, pass.format, pass.samples, view.flipped, pass.shadows));
+                VkPipeline made =
+                    gpu::pipeline(batch.sky != 0 ? sky_desc(pass.format, pass.samples)
+                                                 : desc_of(batch.key, pass.format, pass.samples,
+                                                           view.flipped, pass.shadows));
                 usable = made != VK_NULL_HANDLE;
                 if (usable) {
                     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, made);
                 }
             }
             if (!usable) {
+                continue;
+            }
+            if (batch.sky != 0) {
+                // It takes its own address in place of the camera's, which the next draw has back.
+                vkCmdPushConstants(commands, layout, flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL),
+                                   0, sizeof(VkDeviceAddress), &batch.sky);
+                vkCmdDraw(commands, 3, 1, 0, 0);
+                vkCmdPushConstants(commands, layout, flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL),
+                                   0, sizeof(VkDeviceAddress), &view.camera);
+                gpu::count_draws(1, 1);
+                continue;
+            }
+            if (batch.vertex_count != 0) {
+                vkCmdDraw(commands, batch.vertex_count, 1, 0, batch.first_draw);
+                gpu::count_draws(1, batch.vertex_count / 3);
                 continue;
             }
             if (batch.indices != bound_indices || batch.index_offset != bound_offset) {
@@ -313,6 +345,71 @@ bool plane_grid(const scene::camera_t& camera, const scene::view_t& view, const 
     return true;
 }
 
+/// A world's sky as its shader reads it, from a view; its texture's added to `sampled`. The scene's
+/// view leaves to each mirror's reflection what's through its plane.
+sky_data_t sky_data(const scene::camera_t& camera, const scene::view_t& view,
+                    const scene::tweened_t& tweened, bool flipped, std::uint64_t target,
+                    std::vector<std::uint64_t>& sampled, bool& failed) {
+    const scene::scene_t& s = scene::scene();
+    const std::uint32_t world_slot = s.entities.world[camera.entity];
+    const scene::world_t& world = s.worlds[world_slot];
+    float half_width = 0.0F;
+    float half_height = 0.0F;
+    scene::half_extents(camera, view, half_width, half_height);
+    const bool spreads = camera.projection == FBE_PROJECTION_PERSPECTIVE;
+    const vec3_t right = view.rotation * vec3_t(1.0F, 0.0F, 0.0F);
+    const vec3_t up = view.rotation * vec3_t(0.0F, 1.0F, 0.0F);
+    const vec3_t forward = view.rotation * vec3_t(0.0F, 0.0F, -1.0F);
+    vec3_t sun(0.0F, 1.0F, 0.0F);
+    const auto light = world.sky_light != 0 ? s.entities.slots.find(world.sky_light) : std::nullopt;
+    if (light) {
+        // Toward it: against the way it shines.
+        sun = scene::normalize(tweened.pose(*light).matrix.axis(2));
+    }
+    std::vector<std::array<float, 4>> planes;
+    if (!flipped) {
+        for (std::uint32_t entity = 0; entity < s.entities.slots.size(); ++entity) {
+            if (s.entities.slots.find(s.entities.slots.handle(entity)) &&
+                s.entities.kind[entity] == FBE_ENTITY_MIRROR &&
+                s.entities.world[entity] == world_slot && scene::showing(entity)) {
+                const mat4_t mirror = tweened.pose(entity).matrix;
+                mat4_t into;
+                if (!scene::inverse_affine(mirror, into)) {
+                    continue;
+                }
+                const vec3_t normal =
+                    scene::normalize(scene::transform_normal(mirror, vec3_t(0.0F, 1.0F, 0.0F)));
+                const float height = scene::dot(view.position - mirror.axis(3), normal);
+                planes.push_back({ normal.x, normal.y, normal.z, height });
+            }
+        }
+    }
+    sky_data_t data{};
+    data.right = { right.x, right.y, right.z, 0.0F };
+    data.up = { up.x, up.y, up.z, 0.0F };
+    data.forward = { forward.x, forward.y, forward.z, 0.0F };
+    data.spread = { spreads ? half_width : 0.0F, spreads ? half_height : 0.0F };
+    data.mode = static_cast<std::uint32_t>(world.sky);
+    data.sun = { sun.x, sun.y, sun.z };
+    data.brightness = world.sky_brightness;
+    data.flip = flipped ? -1.0F : 1.0F;
+    data.mirrors = in_ring<std::array<float, 4>>(planes, failed).address;
+    data.mirror_count = static_cast<std::uint32_t>(planes.size());
+    const texture::texture_t* image = world.sky_texture != 0 && world.sky_texture != target
+                                          ? texture::find(world.sky_texture)
+                                          : nullptr;
+    if (image != nullptr) {
+        data.texture = texture::index_of(world.sky_texture);
+        data.sampler = texture::sampler_of(*image);
+        sampled.push_back(world.sky_texture);
+    } else {
+        data.texture = texture::white;
+        data.sampler =
+            gpu::sampler_index(FBE_TEXTURE_NEAREST, FBE_TEXTURE_REPEAT, FBE_TEXTURE_REPEAT);
+    }
+    return data;
+}
+
 /// One view of a camera into the frame's ring: its draws, materials, and lights, the textures its
 /// materials sample added to `sampled`. False, with fbe_error's why, if there's no memory.
 bool write_view(const scene::camera_t& camera, const scene::view_t& view,
@@ -330,7 +427,23 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
     const mat4_t view_matrix =
         scene::compose(back * -view.position, back, vec3_t(1.0F, 1.0F, 1.0F));
     out.batches.reserve(lists.items.size());
+    // The sky goes after what's opaque in the scene, and before all that blends and what's over it.
+    bool sky_owed = s.worlds[s.entities.world[camera.entity]].sky != 0;
+    const auto draw_sky = [&] {
+        sky_owed = false;
+        bool no_room = false;
+        const sky_data_t sky = sky_data(camera, view, tweened, flipped, target, sampled, no_room);
+        const std::array one_sky{ sky };
+        batch_t batch;
+        batch.key = UINT64_MAX;
+        batch.sky = in_ring<sky_data_t>(one_sky, no_room).address;
+        out.batches.push_back(batch);
+        return !no_room;
+    };
     for (const item_t& item : lists.items) {
+        if (sky_owed && (item.order > 0 || (item.order == 0 && item.blended)) && !draw_sky()) {
+            return false;
+        }
         const auto [index, added] =
             material_index.try_emplace(item.material, static_cast<std::uint32_t>(materials.size()));
         if (added) {
@@ -385,6 +498,35 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             if (!plane_grid(camera, view, item, plane.segments, data, batch)) {
                 return false;
             }
+        } else if (item.draw.kind == FBE_ENTITY_PARTICLES) {
+            scene::particles_t& particles =
+                scene::scene().particles[s.entities.component[item.entity]];
+            const VkDeviceAddress records = particles_buffer(particles);
+            if (records == 0) {
+                return false;
+            }
+            const std::array one_emitter{
+                particles_data_t{
+                    .records = records,
+                    .gravity = { particles.gravity.x, particles.gravity.y, particles.gravity.z },
+                    .drag = particles.drag,
+                    .color_start = particles.color_start,
+                    .color_end = particles.color_end,
+                    .size_start = particles.size_start,
+                    .size_end = particles.size_end,
+                    .now = scene::particles_clock(particles, tweened.tween()),
+                    .wrap = scene::particles_wrap,
+                },
+            };
+            bool no_room = false;
+            data.particles = in_ring<particles_data_t>(one_emitter, no_room).address;
+            if (no_room) {
+                return false;
+            }
+            batch.vertex_count = static_cast<std::uint32_t>(particles.capacity) * 6U;
+            draws.push_back(data);
+            out.batches.push_back(batch);
+            continue;
         } else if (item.draw.kind == FBE_ENTITY_TERRAIN) {
             const scene::terrain_t& terrain = s.terrains[s.entities.component[item.entity]];
             std::vector<terrain_piece_t> pieces;
@@ -418,6 +560,9 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             }
         }
         out.batches.push_back(batch);
+    }
+    if (sky_owed && !draw_sky()) {
+        return false;
     }
     std::uint32_t directional = 0;
     for (const fbe_draw_light_t& light : lists.lights) {

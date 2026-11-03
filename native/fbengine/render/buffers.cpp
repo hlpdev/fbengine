@@ -43,6 +43,17 @@ std::unordered_map<std::uint64_t, geometry_buffers_t>& kept() {
 surface_buffers_t quad;
 bool registered = false;
 
+/// An emitter's particles on the GPU, by its entity's handle, and which of its lives they're of.
+struct particles_buffer_t {
+    gpu::buffer_t buffer;
+    std::uint64_t generation = UINT64_MAX;
+};
+
+std::unordered_map<std::uint64_t, particles_buffer_t>& kept_particles() {
+    static std::unordered_map<std::uint64_t, particles_buffer_t> made;
+    return made;
+}
+
 void free_surface(surface_buffers_t& surface) {
     gpu::free_buffer(surface.vertices);
     gpu::free_buffer(surface.indices);
@@ -59,6 +70,10 @@ void stop_buffers() {
     }
     kept().clear();
     free_surface(quad);
+    for (auto& [handle, particles] : kept_particles()) {
+        gpu::free_buffer(particles.buffer);
+    }
+    kept_particles().clear();
 }
 
 /// Bytes into a buffer, made anew unless it's their size: false, with fbe_error's why, if it can't.
@@ -275,8 +290,52 @@ const surface_buffers_t* sprite_quad() {
     return &quad;
 }
 
+VkDeviceAddress particles_buffer(scene::particles_t& particles) {
+    if (!registered) {
+        gpu::at_stop(stop_buffers);
+        registered = true;
+    }
+    const scene::scene_t& s = scene::scene();
+    particles_buffer_t& kept_one = kept_particles()[s.entities.slots.handle(particles.entity)];
+    if (kept_one.generation != particles.generation) {
+        gpu::free_buffer(kept_one.buffer);
+        kept_one.buffer = gpu::make_buffer(
+            static_cast<VkDeviceSize>(particles.capacity) * sizeof(scene::particle_t),
+            gpu::flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT));
+        if (kept_one.buffer.buffer == VK_NULL_HANDLE) {
+            return 0;
+        }
+        kept_one.generation = particles.generation;
+    }
+    // Runs of slots one after another go at once.
+    std::size_t at = 0;
+    std::vector<scene::particle_t> run;
+    while (at < particles.pending.size()) {
+        const std::uint32_t first = particles.pending[at].first;
+        run.clear();
+        while (at < particles.pending.size() && particles.pending[at].first == first + run.size()) {
+            run.push_back(particles.pending[at].second);
+            ++at;
+        }
+        if (!gpu::write_buffer(kept_one.buffer, VkDeviceSize{ first } * sizeof(scene::particle_t),
+                               std::as_bytes(std::span(run)))) {
+            return 0;
+        }
+    }
+    particles.pending.clear();
+    return kept_one.buffer.address;
+}
+
 void forget_freed_geometries() {
     const scene::scene_t& s = scene::scene();
+    for (auto it = kept_particles().begin(); it != kept_particles().end();) {
+        if (!s.entities.slots.find(it->first)) {
+            gpu::free_buffer(it->second.buffer);
+            it = kept_particles().erase(it);
+        } else {
+            ++it;
+        }
+    }
     for (auto it = kept().begin(); it != kept().end();) {
         if (!s.geometry_slots.find(it->first)) {
             for (surface_buffers_t& surface : it->second.surfaces) {

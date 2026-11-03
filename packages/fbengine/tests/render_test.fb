@@ -250,3 +250,72 @@ Function ALightsShadowsAreWhatTheyreSetTo()
     Expect(!mesh.CastsShadows())
     Expect(Mesh(Geometry.Cube()).CastsShadows())
 End Function
+
+@Test
+Function ParticlesSpawnAsAWorldSteps()
+    Local world = Fresh()
+    Defer world.Free()
+    Local emitter = Particles(64)
+    Expect(emitter.Capacity() == 64)
+    Expect(emitter.Kind() == EntityKind.PARTICLES)
+    emitter.SetRate(10)
+    emitter.SetLife(2, 2)
+    emitter.SetMotion(1, 2, Pi / 4, 1)
+    emitter.SetForces(Vec3(0, -9.8, 0), 0.5)
+    emitter.SetSizes(0.1, 0.5)
+    emitter.SetColors(Color(1, 0, 0, 1), Color(1, 1, 0, 0))
+    emitter.SetSeed(5)
+    Expect(emitter.Rate() == 10)
+    UpdateWorld(1)
+    Expect(emitter.Alive() == 10)
+    emitter.Burst(4)
+    Expect(emitter.Alive() == 14)
+    emitter.SetRate(0)
+    UpdateWorld(3)
+    Expect(emitter.Alive() == 0)
+End Function
+
+@Test
+Function ParticlesAreFoundAgainAsWhatTheyAre()
+    Local world = Fresh()
+    Defer world.Free()
+    Local emitter = Particles(16)
+    Local copy = emitter.Copy()
+    Expect(copy.Kind() == EntityKind.PARTICLES)
+    Local sibling = (copy As Particles)
+    Expect(sibling.Capacity() == 16)
+End Function
+
+@Test
+Function ParticlesHoldTheirMaterial()
+    Local world = Fresh()
+    Defer world.Free()
+    Local emitter = Particles()
+    Expect(emitter.Material() == Null)
+    Local glow = Material()
+    emitter.SetMaterial(glow)
+    Expect(emitter.Material() == glow)
+    emitter.SetMaterial(Null)
+    Expect(emitter.Material() == Null)
+End Function
+
+@Test
+Function AWorldTakesASkyAndGoesBack()
+    Local world = Fresh()
+    Defer world.Free()
+    Local sun = Light(LightType.DIRECTIONAL)
+    world.SetAtmosphere(sun)
+    world.SetAtmosphere()
+    world.ClearSky()
+End Function
+
+@Test
+Function ADecalIsWhatsInItsBox()
+    Local world = Fresh()
+    Defer world.Free()
+    Mesh(Geometry.Cube())
+    Local box = Mat4.Translation(Vec3(0, 0, 1)) * Mat4.Scale(Vec3(0.5, 0.5, 0.5))
+    Local decal = world.Decal(box)
+    Expect(decal.SurfaceCount() == 1)
+    Expect(decal.Surface(0).VertexCount() > 0)
+End Function

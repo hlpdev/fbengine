@@ -28,6 +28,12 @@ struct world_t {
     std::vector<std::uint32_t> roots;
     std::int32_t count = 0;
     std::array<float, 3> ambient{ 0.2158605F, 0.2158605F, 0.2158605F };
+    /// Its sky: none, its atmosphere, or a texture, which it holds; the light whose way's the
+    /// sun's, by handle, 0 for straight up; and how bright.
+    std::int32_t sky = 0;
+    std::uint64_t sky_light = 0;
+    std::uint64_t sky_texture = 0;
+    float sky_brightness = 1.0F;
     /// Each pair of collision groups that collide, source in the high 16 bits and target in the
     /// low, and the FBE_RESPONSE_ the source makes; a game has a few.
     std::vector<std::pair<std::uint32_t, std::int32_t>> collisions;
@@ -196,6 +202,68 @@ struct terrain_t {
     mutable bool range_stale = false;
 };
 
+/// A particle as the GPU keeps it: where it was born, when, on its emitter's clock, how fast and
+/// which way, how long it lives, and how it's turned then and spins.
+struct particle_t {
+    std::array<float, 3> position{};
+    float birth = 0.0F;
+    std::array<float, 3> velocity{};
+    float life = 0.0F;
+    float roll = 0.0F;
+    float spin = 0.0F;
+};
+static_assert(sizeof(particle_t) == 40, "the scene shader reads particles 40 bytes apart");
+
+/// What an emitter's clock reaches before it starts again, which a float keeps to an
+/// eight-thousandth of a second, and a particle's life is at most half of.
+constexpr float particles_wrap = 1024.0F;
+
+/// The box what was born in a stretch of time can reach by its speed alone.
+struct bounds_slice_t {
+    bool any = false;
+    vec3_t low;
+    vec3_t high;
+};
+
+/// A particle emitter: how it's drawn and how they go, then its clock, what's been born and not yet
+/// sent to the GPU, each with its slot, when each slot's dies, and where they've been born lately.
+struct particles_t {
+    std::uint32_t entity = none;
+    std::uint32_t material = none;
+    std::int32_t capacity = 1024;
+    float rate = 32.0F;
+    float life_min = 1.0F;
+    float life_max = 1.0F;
+    float speed_min = 1.0F;
+    float speed_max = 1.0F;
+    float spread = 0.0F;
+    float spin = 0.0F;
+    vec3_t gravity;
+    float drag = 0.0F;
+    float size_start = 0.1F;
+    float size_end = 0.1F;
+    std::array<float, 4> color_start{ 1.0F, 1.0F, 1.0F, 1.0F };
+    std::array<float, 4> color_end{ 1.0F, 1.0F, 1.0F, 0.0F };
+    std::uint32_t random = 1;
+    float clock = 0.0F;
+    float captured_clock = 0.0F;
+    double total = 0.0;
+    /// How many times half the wrap has gone by, at each of which what's dead is cleared, since a
+    /// dead one's birth would otherwise come round again; and the longest life it's had since.
+    std::uint64_t sweeps = 0;
+    float longest = 1.0F;
+    float owed = 0.0F;
+    bool moved = false;
+    vec3_t last_place;
+    std::size_t next = 0;
+    std::uint64_t generation = 0;
+    std::vector<std::pair<std::uint32_t, particle_t>> pending;
+    std::vector<double> deaths;
+    std::array<bounds_slice_t, 9> slices{};
+    std::size_t slice = 0;
+    float slice_age = 0.0F;
+};
+
 /// Every entity's data, a field to an array, indexed by slot.
 struct entities_t {
     slots_t slots{ ENTITY_KIND };
@@ -330,6 +398,8 @@ struct scene_t {
     std::vector<mesh_t> meshes;
     std::vector<sprite_t> sprites;
     std::vector<plane_t> planes;
+    /// Every particle emitter, in no order, each knowing its entity.
+    std::vector<particles_t> particles;
     std::vector<terrain_t> terrains;
     slots_t geometry_slots{ GEOMETRY_KIND };
     std::vector<geometry_t> geometries;
@@ -423,6 +493,16 @@ void terrain_under(const terrain_t& terrain, vec3_t min, vec3_t max,
 /// The point on a terrain's surface over a point in its own space, and the surface's normal there;
 /// false off its grid.
 bool terrain_surface(const terrain_t& terrain, vec3_t local, vec3_t& point, vec3_t& normal);
+/// The live particle emitter a handle is for, or null, with fbe_error saying so.
+particles_t* particles_of(std::uint64_t handle);
+void add_particles(std::uint32_t entity);
+void remove_particles(std::uint32_t entity);
+void copy_particles(std::uint32_t from, std::uint32_t to);
+void capture_particles(std::uint32_t entity);
+/// An emitter's clock `tween` of the way from its capture to now.
+float particles_clock(const particles_t& found, float tween);
+/// The box in the world what's alive of an emitter's in: false for none lately.
+bool particles_bounds(const particles_t& found, vec3_t& min, vec3_t& max);
 void add_plane(std::uint32_t entity);
 void remove_plane(std::uint32_t entity);
 /// The live ground plane a handle is for, or null, with fbe_error saying so.
@@ -488,6 +568,9 @@ public:
     explicit tweened_t(float tween);
 
     [[nodiscard]] pose_t pose(std::uint32_t entity) const;
+    [[nodiscard]] float tween() const {
+        return m_tween;
+    }
 
 private:
     float m_tween;

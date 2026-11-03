@@ -64,9 +64,35 @@ struct Joints
     float weights[4];
 };
 
+// A particle, as its emitter wrote it when it was born.
+struct Particle
+{
+    float position[3];
+    float birth;
+    float velocity[3];
+    float life;
+    float roll;
+    float spin;
+};
+
+// An emitter: its particles, gravity, drag, their colors and half-sizes from birth to death, its clock
+// now, and when that starts again.
+struct Emitter
+{
+    Particle* records;
+    float gravity[3];
+    float drag;
+    float colorStart[4];
+    float colorEnd[4];
+    float sizeStart;
+    float sizeEnd;
+    float now;
+    float wrap;
+};
+
 // A draw: its matrix to the camera's view, what turns its normals there, its color and alpha, its
-// vertices, its joints and palette if it's skinned, its material's index, its own lights, and how
-// many matrices its palette has, 0 if it isn't skinned.
+// vertices, its joints and palette if it's skinned, its emitter if it's particles, its material's
+// index, its own lights, and how many matrices its palette has, 0 if it isn't skinned.
 struct Draw
 {
     float4x4 toView;
@@ -75,6 +101,7 @@ struct Draw
     Vertex* vertices;
     Joints* joints;
     float4x4* palette;
+    Emitter* emitter;
     uint material;
     uint lightFirst;
     uint lightCount;
@@ -357,6 +384,76 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
                      shininess, 1.0, diffuse, highlight);
         }
         corner.lit = saturate(diffuse + highlight);
+    }
+    return corner;
+}
+
+// A quad's two triangles, from its corners' bits: x, then y.
+static const uint quadCorners[6] = { 0, 1, 3, 0, 3, 2 };
+
+// A particle's quad, each corner from its vertex's number, wherever its formula has it now from its
+// birth, facing the camera. One dead, or not yet born, has all its corners at one point, which draws
+// nothing. It has no normal, as a sprite hasn't: only ambient light lights it.
+[shader("vertex")]
+Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+{
+    Camera* camera = push.camera;
+    const Draw draw = camera.draws[instance];
+    const Emitter emitter = draw.emitter[0];
+    const Particle particle = emitter.records[index / 6];
+    Corner corner;
+    corner.position = float4(0.0, 0.0, 0.0, 1.0);
+    corner.place = float3(0.0, 0.0, 0.0);
+    corner.normal = float3(0.0, 0.0, 0.0);
+    corner.uv0 = float2(0.0, 0.0);
+    corner.uv1 = float2(0.0, 0.0);
+    corner.color = float4(0.0, 0.0, 0.0, 0.0);
+    corner.lit = float3(1.0, 1.0, 1.0);
+    corner.draw = instance;
+    float age = emitter.now - particle.birth;
+    if (age < 0.0)
+    {
+        age += emitter.wrap;
+    }
+    if (age >= particle.life)
+    {
+        return corner;
+    }
+    const float3 born = float3(particle.position[0], particle.position[1], particle.position[2]);
+    const float3 going = float3(particle.velocity[0], particle.velocity[1], particle.velocity[2]);
+    const float3 gravity = float3(emitter.gravity[0], emitter.gravity[1], emitter.gravity[2]);
+    float3 place = born + going * age + gravity * (0.5 * age * age);
+    if (emitter.drag > 0.0)
+    {
+        // What drag leaves of its velocity, added up to now, and of what gravity's given it.
+        const float left = (1.0 - exp(-emitter.drag * age)) / emitter.drag;
+        place = born + going * left + gravity * ((age - left) / emitter.drag);
+    }
+    const float part = age / particle.life;
+    const float size = lerp(emitter.sizeStart, emitter.sizeEnd, part);
+    const float turned = particle.roll + particle.spin * age;
+    const float along = cos(turned);
+    const float across = sin(turned);
+    const uint bits = quadCorners[index % 6];
+    const float2 unit = float2(float(bits & 1) * 2.0 - 1.0, float(bits >> 1) * 2.0 - 1.0);
+    const float3 offset = float3(unit.x * along - unit.y * across, unit.x * across + unit.y * along, 0.0);
+    const float3 seen = mul(draw.toView, float4(place, 1.0)).xyz + offset * size;
+    corner.position = mul(camera.projection, float4(seen, 1.0));
+    corner.place = seen;
+    corner.uv0 = float2(unit.x * 0.5 + 0.5, 0.5 - unit.y * 0.5);
+    corner.uv1 = corner.uv0;
+    corner.color = lerp(float4(emitter.colorStart[0], emitter.colorStart[1], emitter.colorStart[2],
+                               emitter.colorStart[3]),
+                        float4(emitter.colorEnd[0], emitter.colorEnd[1], emitter.colorEnd[2],
+                               emitter.colorEnd[3]),
+                        part);
+    if (fixedLook())
+    {
+        corner.color.rgb = toEncoded(corner.color.rgb);
+    }
+    if (shading == shadingVertex)
+    {
+        corner.lit = saturate(toEncoded(camera.ambient));
     }
     return corner;
 }
