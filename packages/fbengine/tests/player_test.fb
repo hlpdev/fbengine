@@ -1,0 +1,339 @@
+// Clips made in code and Players posing entities with them: by time, by UpdateWorld, each of a
+// Clip's interpolations, and copies keeping poses of their own; with no window or GPU.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import std.text
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+// "hips" moving from x 0 to 4 over 2 seconds, and "head" turning a third of a turn about Y.
+Function Walk(): Clip
+    Local clip = Clip("walk", 30)
+    clip.AddPositions("hips", [0, 2], [Vec3(0, 0, 0), Vec3(4, 0, 0)])
+    clip.AddRotations("head", [0, 2], [Quat.Identity, Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(120))])
+    Return clip
+End Function
+
+// Hips at the top, a spine under them, and a head 1 above the spine.
+Function Body(): Pivot
+    Local hips = Pivot()
+    hips.SetName("hips")
+    Local spine = Pivot(hips)
+    spine.SetName("spine")
+    Local head = Pivot(spine)
+    head.SetName("head")
+    head.SetPosition(Vec3(0, 1, 0))
+    Return hips
+End Function
+
+@Test
+Function AClipSaysWhatItIs()
+    Local clip = Walk()
+    Expect(clip.Name() == "walk" && clip.FrameRate() == 30)
+    Expect(clip.Length() == 2 && clip.ChannelCount() == 2)
+    clip.AddScales("spine", [0, 3.5], [Vec3(1, 1, 1), Vec3(2, 2, 2)], Interpolation.STEP)
+    Expect(clip.Length() == 3.5 && clip.ChannelCount() == 3)
+    Expect(Clip().Name() == "" && Clip().FrameRate() == 0)
+    clip.Free()
+    Expect(clip.Freed())
+End Function
+
+@Test
+Function APlayerPosesWhatItsClipNamesAtATime()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Local head = hips.Child(0).Child(0)
+    Local player = hips.Player()
+    Expect(player.Clip() == Null && player.Time() == 0)
+    Local walk = Walk()
+    player.Play(walk, PlayMode.ONCE)
+    Expect(RefEquals(player.Clip(), walk))
+    player.SetTime(1)
+    Expect(player.Time() == 1)
+    Expect(IsClose(hips.Position(), Vec3(2, 0, 0)))
+    // Halfway there, a sixth of a turn to its left.
+    Expect(IsClose(head.Rotation() * Vec3(0, 0, -1), Vec3(-Sin(Deg(60)), 0, -Cos(Deg(60)))))
+    // What the clip doesn't move stays as it was, and what's under moves with it.
+    Expect(head.Position() == Vec3(0, 1, 0))
+    Expect(IsClose(head.Position(Space.WORLD), Vec3(2, 1, 0)))
+    // Before its start and after its end, it holds them.
+    player.SetTime(-1)
+    Expect(hips.Position() == Vec3(0, 0, 0))
+    player.SetTime(9)
+    Expect(hips.Position() == Vec3(4, 0, 0))
+    // Stopped, it leaves them where they are.
+    player.Stop()
+    Expect(player.Clip() == Null && hips.Position() == Vec3(4, 0, 0))
+End Function
+
+@Test
+Function AnEntityHasOnePlayer()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Expect(RefEquals(hips.Player(), hips.Player()))
+    Expect(RefEquals(hips.Player().Entity(), hips))
+    Local other = Body()
+    Expect(!RefEquals(other.Player(), hips.Player()))
+End Function
+
+@Test
+Function UpdateWorldMovesPlayersOnAndHoldsTheirEnd()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    hips.Player().Play(Walk(), PlayMode.ONCE)
+    UpdateWorld(0.5)
+    Expect(hips.Player().Time() == 0.5 && IsClose(hips.Position(), Vec3(1, 0, 0)))
+    world.Update(0.5)
+    Expect(IsClose(hips.Position(), Vec3(2, 0, 0)))
+    UpdateWorld(10)
+    Expect(hips.Player().Time() == 2 && hips.Position() == Vec3(4, 0, 0))
+    // Another World's Players stay where they are.
+    Local other = World()
+    Defer other.Free()
+    other.Update(1)
+    Expect(hips.Player().Time() == 2)
+End Function
+
+@Test
+Function EachInterpolationGoesBetweenKeysAsItSays()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Local clip = Clip()
+    clip.AddPositions("hips", [0, 1], [Vec3(0, 0, 0), Vec3(8, 0, 0)], Interpolation.STEP)
+    // No tangents: easing, 3s^2 - 2s^3 of the way, 0.15625 at a quarter.
+    clip.AddScales("spine", [0, 1], [Vec3(1, 1, 1), Vec3(9, 9, 9)],
+                   [Vec3(0, 0, 0), Vec3(0, 0, 0)], [Vec3(0, 0, 0), Vec3(0, 0, 0)])
+    hips.Player().Play(clip, PlayMode.ONCE)
+    hips.Player().SetTime(0.25)
+    Expect(hips.Position() == Vec3(0, 0, 0))
+    Expect(IsClose(hips.Child(0).Scale().x, 1 + 8 * 0.15625))
+    hips.Player().SetTime(1)
+    Expect(hips.Position() == Vec3(8, 0, 0))
+End Function
+
+@Test
+Function APlayedClipPlaysOnAfterItsFreed()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Local walk = Walk()
+    hips.Player().Play(walk)
+    walk.Free()
+    UpdateWorld(1)
+    Expect(IsClose(hips.Position(), Vec3(2, 0, 0)))
+End Function
+
+// A copy of a tree has a Player of its own, which plays the same Clip at a time of its own.
+@Test
+Function CopiesKeepPosesOfTheirOwn()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Local copy = hips.Copy()
+    Local walk = Walk()
+    hips.Player().Play(walk)
+    copy.Player().Play(walk)
+    hips.Player().SetTime(0.5)
+    copy.Player().SetTime(1.5)
+    Expect(IsClose(hips.Position(), Vec3(1, 0, 0)))
+    Expect(IsClose(copy.Position(), Vec3(3, 0, 0)))
+End Function
+
+// A channel added to a Clip that's playing is bound as it's posed next.
+@Test
+Function AChannelAddedWhileItPlaysIsPlayed()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Local walk = Walk()
+    hips.Player().Play(walk)
+    walk.AddScales("spine", [0], [Vec3(3, 3, 3)])
+    UpdateWorld(0.1)
+    Expect(hips.Child(0).Scale() == Vec3(3, 3, 3))
+End Function
+
+// A rig's glTF: a node "hips" and a skin of it, and a clip "walk" moving it from x 0 to 2 over a
+// second, its buffer a data URI of two times and two positions as little-endian Float32s.
+Function RigGltf(): UInt8[]
+    Local buffer = [0, 0, 0, 0, 0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0x40, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[]
+    Local uri = "data:application/octet-stream;base64,{Base64.Encode(buffer)}"
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":32,\"uri\":\"{uri}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":8}},{{\"buffer\":0,\"byteOffset\":8,\"byteLength\":24}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"," +
+            "\"min\":[0],\"max\":[1]}},{{\"bufferView\":1,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}}]," +
+            "\"nodes\":[{{\"name\":\"hips\"}}],\"skins\":[{{\"joints\":[0]}}]," +
+            "\"animations\":[{{\"name\":\"walk\",\"samplers\":[{{\"input\":0,\"output\":1}}]," +
+            "\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"translation\"}}}}]}}]}}").Bytes
+End Function
+
+// An Asset of a rig's model load: its first clip and skin.
+Class Rig Implements Asset
+    Field Walk: Clip
+    Field Bones: Skin
+
+    New(walk: Clip, bones: Skin)
+        Walk = walk
+        Bones = bones
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.MODEL
+
+    Public Static Method FromLoad(load: AssetLoad): Rig Throws IOError
+        Return Rig(Try Clip.FromModel(load, 0), Try Skin.FromModel(load, 0))
+    End Method
+End Class
+
+@Test
+Function AModelsClipAndSkinPlayOnEntitiesNamedAsItsNodes() Throws IOError
+    Assets.MountFiles("res://test-rig", {"rig.gltf": RigGltf()})
+    Defer Assets.Unmount("res://test-rig")
+    Local rig = Try Assets.Load<Rig>("res://test-rig/rig.gltf")
+    Expect(rig.Walk.Name() == "walk" && rig.Walk.Length() == 1 && rig.Walk.ChannelCount() == 1)
+    Expect(rig.Bones.JointCount() == 1 && rig.Bones.JointName(0) == "hips")
+    Local world = Fresh()
+    Defer world.Free()
+    Local body = Pivot()
+    Local mesh = Mesh(Null, body)
+    Local hips = Pivot(body)
+    hips.SetName("hips")
+    mesh.SetSkin(rig.Bones, body)
+    body.Player().Play(rig.Walk)
+    UpdateWorld(0.5)
+    Expect(IsClose(hips.Position(), Vec3(1, 0, 0)))
+    Expect(IsClose(mesh.Palette()[0].TransformPoint(Vec3(0, 0, 0)), Vec3(1, 0, 0)))
+End Function
+
+// A rig's glTF whose clip's two key times fall, 1 then 0.5.
+Function BadGltf(): UInt8[]
+    Local buffer = [0, 0, 0x80, 0x3F, 0, 0, 0, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0x40, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[]
+    Local uri = "data:application/octet-stream;base64,{Base64.Encode(buffer)}"
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":32,\"uri\":\"{uri}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":8}},{{\"buffer\":0,\"byteOffset\":8,\"byteLength\":24}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"," +
+            "\"min\":[0.5],\"max\":[1]}},{{\"bufferView\":1,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}}]," +
+            "\"nodes\":[{{\"name\":\"hips\"}},{{}}],\"skins\":[{{\"joints\":[1]}}]," +
+            "\"animations\":[{{\"name\":\"walk\",\"samplers\":[{{\"input\":0,\"output\":1}}]," +
+            "\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"translation\"}}}}]}}]}}").Bytes
+End Function
+
+// An Asset of a bad rig's Clip.
+Class BadClip Implements Asset
+    Field Walk: Clip
+
+    New(walk: Clip)
+        Walk = walk
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.MODEL
+
+    Public Static Method FromLoad(load: AssetLoad): BadClip Throws IOError
+        Return BadClip(Try Clip.FromModel(load, 0))
+    End Method
+End Class
+
+// An Asset of a bad rig's Skin, its joint a node with no name.
+Class BadSkin Implements Asset
+    Field Bones: Skin
+
+    New(bones: Skin)
+        Bones = bones
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.MODEL
+
+    Public Static Method FromLoad(load: AssetLoad): BadSkin Throws IOError
+        Return BadSkin(Try Skin.FromModel(load, 0))
+    End Method
+End Class
+
+@Test
+Function ABadModelsClipOrSkinThrowsAnIOError()
+    Assets.MountFiles("res://test-bad-rig", {"rig.gltf": BadGltf()})
+    Defer Assets.Unmount("res://test-bad-rig")
+    Try
+        Try Assets.Load<BadClip>("res://test-bad-rig/rig.gltf")
+        Expect(False)
+    Catch failure As IOError
+        Expect(failure.Kind == IOErrorKind.INVALID_DATA)
+        Expect(failure.Message.Contains("isn't after"))
+        Expect(failure.Path == "res://test-bad-rig/rig.gltf")
+    End Try
+    Try
+        Try Assets.Load<BadSkin>("res://test-bad-rig/rig.gltf")
+        Expect(False)
+    Catch failure As IOError
+        Expect(failure.Kind == IOErrorKind.INVALID_DATA)
+        Expect(failure.Message.Contains("no name"))
+    End Try
+End Function
+
+// Playing a walk each frame it walks, the Clip goes on.
+@Test
+Function PlayingAClipEachFrameGoesOn()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Local walk = Walk()
+    For frame = 1 To 30
+        hips.Player().Play(walk)
+        UpdateWorld(1.0 / 60)
+    End For
+    Expect(IsClose(hips.Player().Time(), 0.5, 0.001))
+    Expect(IsClose(hips.Position().x, 1, 0.002))
+End Function
+
+// What a level's NPCs kept, freed with their level, goes at the next update: its Players, and so
+// their Clips and C's own player.
+Global seenClips: Weak<Clip>[] = []
+Global seenPlayers: Weak<Player>[] = []
+
+Function PlayALevel()
+    Local level = World()
+    World.SetCurrent(level)
+    Local hips = Body()
+    Local walk = Walk()
+    Local player = hips.Player()
+    player.Play(walk)
+    seenClips.Add(walk)
+    seenPlayers.Add(player)
+    UpdateWorld(0.5)
+    level.Free()
+End Function
+
+@Test
+Function AFreedEntitysPlayerGoesWithWhatItKept()
+    UpdateWorld(0)
+    Local before = Player.Count()
+    PlayALevel()
+    Expect(seenClips[0] != Null && seenPlayers[0] != Null && Player.Count() == before + 1)
+    UpdateWorld(0.5)
+    Expect(seenClips[0] == Null && seenPlayers[0] == Null && Player.Count() == before)
+    seenClips.Clear()
+    seenPlayers.Clear()
+End Function
+
+// What a game holds, it can ask about, though its entity's gone.
+@Test
+Function APlayerAGameHoldsStaysToPanicAfterItsEntityGoes()
+    Local world = Fresh()
+    Local hips = Body()
+    Local player = hips.Player()
+    hips.Free()
+    UpdateWorld(0.5)
+    Expect(RefEquals(player.Entity(), hips))
+    world.Free()
+End Function

@@ -4,6 +4,7 @@
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "scene/scene.hpp"
+#include "skin/skin.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -593,6 +594,8 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         copies[i] = copy;
     }
     fbe::scene::renumber_cameras(tree, copies);
+    // Its meshes skinned as their originals, once the whole tree is there to find their roots in.
+    fbe::anim::copy_skins(tree, copies);
     return entities.slots.handle(copies[0]);
 }
 

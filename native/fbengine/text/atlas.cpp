@@ -243,7 +243,9 @@ bool atlas_t::place(page_format_t format, std::int32_t width, std::int32_t heigh
             return true;
         }
     }
-    // A page trimmed made again, its number kept, all of it to upload; or a new one.
+    // A page trimmed made again, its number kept; or a new one. Either's `dirty` is only what's
+    // written on it: nothing samples the rest, so the canvas uploads none of it, unless it makes
+    // the page's texture again, when it uploads all of it.
     std::size_t index = 0;
     while (index < m_pages.size() && !m_pages[index].dropped()) {
         ++index;
@@ -258,7 +260,6 @@ bool atlas_t::place(page_format_t format, std::int32_t width, std::int32_t heigh
         m_used.push_back(false);
     }
     page_t& made = m_pages[index];
-    const bool again = made.version != 0;
     made.format = format;
     made.width = std::max(page_size, wide);
     made.height = std::max(page_size, tall);
@@ -266,9 +267,7 @@ bool atlas_t::place(page_format_t format, std::int32_t width, std::int32_t heigh
                            static_cast<std::size_t>(made.height) *
                            (format == page_format_t::COLOR ? 4U : 1U),
                        0);
-    made.dirty =
-        again ? rect_t{ .x = 0, .y = 0, .width = made.width, .height = made.height } : rect_t{};
-    made.version += again ? 1 : 0;
+    made.dirty = {};
     m_shelves[index] = { { .y = 0, .height = tall, .used = wide } };
     m_bottoms[index] = tall;
     page = static_cast<std::uint32_t>(index);

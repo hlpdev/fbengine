@@ -2,8 +2,9 @@
 // points.
 
 Import std.core
-Import std.image
+From std.image Import Image
 Import std.math
+Import std.os
 Import std.test
 Import fbengine
 
@@ -67,6 +68,28 @@ Function MasksMeetWhereTheirSolidPixelsDoNotWhereTheyTouch()
     Local dot = Square(1)
     Expect(ring.Overlaps(Placement.At(0.0, 0.0), dot, Placement.At(4.0, 4.0)))
     Expect(!ring.Collides(0.0, 0.0, dot, 4.0, 4.0) && ring.Collides(0.0, 0.0, dot, 8.0, 4.0))
+End Function
+
+@Test
+Function AMaskIsMadeFromATexturesPixels() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(8, 8)
+    Local canvas = Canvas(target)
+    canvas.SetColor(Color32(0, 0, 0, 0))
+    canvas.Clear()
+    canvas.SetColor(Color32(255, 0, 0, 255))
+    canvas.DrawRect(2, 1, 3, 4)
+    canvas.SetColor(Color32(0, 255, 0, 100))
+    canvas.DrawRect(6, 6, 1, 1)
+    Local mask = Mask.FromTexture(target)
+    Expect(mask.Width() == 8 && mask.Height() == 8)
+    Expect(mask.SolidCount() == 13)
+    Expect(mask.Solid(2, 1) && mask.Solid(4, 4) && mask.Solid(6, 6) && !mask.Solid(5, 1))
+    // By a threshold, and of a region.
+    Expect(Mask.FromTexture(target, 101).SolidCount() == 12)
+    Local part = Mask.FromTexture(target, 1, Rect(2.0, 1.0, 2.0, 2.0))
+    Expect(part.Width() == 2 && part.SolidCount() == 4)
 End Function
 
 @Test

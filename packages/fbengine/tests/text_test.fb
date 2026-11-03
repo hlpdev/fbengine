@@ -183,3 +183,23 @@ Function TheOSsFontsCanBeListedFirst()
     Font.ScanSystem()
     Expect(Font.Families().Count >= 0)
 End Function
+
+@Test
+Function TheEnginesOwnFontNeedsNoFileAndMeasuresTheSameEverywhere()
+    Local font = Font.BuiltIn()
+    Expect(font.Family() == "Noto Sans")
+    Expect(font.Size() == 16.0)
+    Expect(
+        font.Has("The quick brown fox: Fr\u{e4}ulein, 100\u{20ac} \u{2014} \u{141}\u{f3}d\u{17a}"))
+    // Without the OS's fonts: only what it has, by its own numbers, on any machine.
+    font.SetSystemFallback(False)
+    Expect(!font.Has("\u{65e5}"))
+    Local size = font.Measure("Hello, world")
+    Expect(size.x == 90.09601)
+    Expect(size.y == 21.792002)
+    // Sized and bold are its face's, read once.
+    Local big = Font.BuiltIn(32.0, FontStyle(True, False, False))
+    Expect(big.Size() == 32.0 && (big.Style()?.Bold ?? False))
+    Expect(Abs(Font.BuiltIn(32.0).Measure("Hello").x - 2.0 * Font.BuiltIn().Measure("Hello").x) <
+           0.01)
+End Function

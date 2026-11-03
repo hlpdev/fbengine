@@ -6,6 +6,7 @@ Import std.ffi
 Import std.image
 Import std.math
 Import "./c/fbe_collide"
+Import "./texture"
 Import "./window"
 
 /// Where a mask is drawn, as the canvas draws a sprite: its handle at (X, Y), turned Rotation
@@ -81,6 +82,14 @@ Public Final Class Mask Implements Printable
         End Unsafe
         If made == 0 Then Panic(LastError())
         Return Mask(made)
+    End Method
+
+    /// A mask of `texture`'s pixels, read back from the GPU, so it's for a loading screen rather
+    /// than each frame, or of `region` of them, by `threshold` as FromImage's. Panics as FromImage
+    /// does, and for a texture that isn't RGBA8 or RGBA8_LINEAR.
+    @MainThread Public Static Method FromTexture(texture: Texture, threshold: Int32 = 1,
+                                                 region: Rect? = Null): Mask
+        Return FromImage(texture.ToImage(), threshold, region)
     End Method
 
     /// A mask of `width` by `height` RGBA8 pixels, rows from the top, as a texture's read back are,

@@ -1,0 +1,188 @@
+// Skins: how a Mesh's vertices follow the entities that are its bones, and the palette of matrices
+// a skinned Mesh is drawn with.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_skin"
+Import "./entity"
+Import "./loads"
+Import "./mesh"
+Import "./window"
+Import "./world"
+
+// One wrapper for each skin the game holds, by its handle's slot; it goes when the game lets go
+// of it, and a Mesh's Skin gets a new one.
+Global skins: Weak<Skin>[] = []
+
+/// How a Mesh's vertices follow the entities that are its bones: its joints, each a name and the
+/// inverse of its bind matrix, which takes the mesh's space to the joint's as it was when the
+/// vertices were made. Every Mesh skinned by one shares it, so a joint added to it is added to them
+/// all. It lives while the game holds it, or a Mesh is skinned by it.
+Public Final Class Skin
+    Field handle: UInt64
+
+    /// A new Skin, with no joints.
+    @MainThread
+    Public New()
+        handle = fbe_skin_create()
+        Keep(Self)
+    End New
+
+    // A wrapper for a handle C made, which holds it once.
+    New(handle: UInt64)
+        Self.handle = handle
+        Keep(Self)
+    End New
+
+    /// A Skin of the skin at `index`, from 0, of the glTF a model load decoded, its joints named as
+    /// their nodes, with their inverse binds. A load that isn't a model's, or an index outside 0 to
+    /// its model's Skins - 1, panics. What's wrong in the file, a joint whose node has no name, or the
+    /// name of one before it, throws an IOError of INVALID_DATA.
+    @MainThread @PanicsAtCaller
+    Public Static Method FromModel(load: AssetLoad, index: Int): Skin Throws IOError
+        Local handle = fbe_skin_from_model(load.Handle, index)
+        If handle != 0 Then Return Skin(handle)
+        If fbe_skin_model_invalid()
+            Throw IOError(IOErrorKind.INVALID_DATA, LastError(), load.Path())
+        End If
+        Panic("Skin.FromModel: {LastError()}")
+    End Method
+
+    Method Destroy()
+        If handle != 0 Then fbe_skin_release(handle)
+    End Method
+
+    /// Lets go of the Skin now; Meshes skinned by it keep it. Using it after panics.
+    @MainThread @PanicsAtCaller
+    Public Method Free()
+        If !fbe_skin_release(Live("Free")) Then Failed("Free")
+        Local gone: Skin? = Null
+        skins[Slot(handle)] = gone
+        handle = 0
+    End Method
+
+    /// Whether Free let go of it.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// Adds a joint named `name`, bound where `inverseBind` says: the inverse of the joint's matrix
+    /// in the mesh's space as the vertices were made. An empty name, a joint's already, or a matrix
+    /// that isn't numbers panics.
+    @MainThread @PanicsAtCaller
+    Public Method AddJoint(name: String, inverseBind: Mat4)
+        Local skin = Live("AddJoint")
+        Local floats = Buffer<Float32>(16)
+        Local columns = [inverseBind.x, inverseBind.y, inverseBind.z, inverseBind.w]
+        For column = 0 Until 4
+            For row = 0 Until 4
+                floats[column * 4 + row] = columns[column][row]
+            End For
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_skin_add_joint(skin, name, floats.Pointer())
+        End Unsafe
+        If !done Then Failed("AddJoint")
+    End Method
+
+    /// How many joints it has.
+    @MainThread @PanicsAtCaller
+    Public Method JointCount(): Int => fbe_skin_joint_count(Live("JointCount"))
+
+    /// The name of the joint at `index`, from 0. One outside 0 to JointCount() - 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method JointName(index: Int): String
+        Local skin = Live("JointName")
+        Local count = JointCount()
+        If index < 0 || index >= count
+            Panic("JointName({index}) on a Skin with {count} {count == 1 ? "joint" : "joints"}")
+        End If
+        Unsafe
+            Return fbe_skin_joint_name(skin, index).ToString()
+        End Unsafe
+    End Method
+
+    // A panic naming the call, with what C said went wrong.
+    @PanicsAtCaller
+    Package Method Failed(call: String)
+        Panic("{call} on a Skin: {LastError()}")
+    End Method
+
+    // The handle, or a panic naming the call for a Skin that was freed.
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call} on a Skin that was freed")
+        Return handle
+    End Method
+
+    Static Method Keep(skin: Skin)
+        Local slot = Slot(skin.handle)
+        While skins.Count <= slot
+            skins.Add(Null)
+        End While
+        skins[slot] = skin
+    End Method
+End Class
+
+Extend Mesh
+    /// Skins the mesh by `skin`: its vertices follow its joints, the entities of their names under
+    /// `root`, the root itself or the first under it with the name, depth first, as Find finds
+    /// them, bound as it's skinned or once the Skin changes. A joint no entity has, or one freed
+    /// since, stays where it was bound.
+    @MainThread @PanicsAtCaller
+    Public Method SetSkin(skin: Skin, root: Entity)
+        Local mesh = Live("SetSkin")
+        If !fbe_skin_attach(mesh, skin.Live("SetSkin"), root.Live("SetSkin")) Then Failed("SetSkin")
+    End Method
+
+    /// Draws the mesh as its vertices are again, skinned by nothing.
+    @MainThread @PanicsAtCaller
+    Public Method RemoveSkin()
+        If !fbe_skin_attach(Live("RemoveSkin"), 0, 0) Then Failed("RemoveSkin")
+    End Method
+
+    /// The Skin the mesh is skinned by, or Null; a copy of a skinned mesh is skinned by its
+    /// original's.
+    @MainThread @PanicsAtCaller
+    Public Method Skin(): Skin? => SkinOf(fbe_skin_of(Live("Skin")))
+
+    /// The matrices the mesh is drawn with, one a joint: the joint's matrix to the world times its
+    /// inverse bind, in the mesh's own space. A mesh skinned by nothing panics.
+    @MainThread @PanicsAtCaller
+    Public Method Palette(): Mat4[]
+        Local mesh = Live("Palette")
+        Local skin = fbe_skin_of(mesh)
+        If skin == 0 Then Panic("Palette on a Mesh skinned by nothing")
+        Local count = fbe_skin_joint_count(skin)
+        Local floats = Buffer<Float32>(count * 16)
+        Local written = 0
+        Unsafe
+            written = fbe_skin_palette(mesh, floats.Pointer(), count)
+        End Unsafe
+        If written < 0 Then Failed("Palette")
+        Local matrices: Mat4[] = []
+        For joint = 0 Until written
+            Local at = joint * 16
+            matrices.Add(Mat4(Vec4(floats[at], floats[at + 1], floats[at + 2], floats[at + 3]),
+                              Vec4(floats[at + 4], floats[at + 5], floats[at + 6], floats[at + 7]),
+                              Vec4(floats[at + 8], floats[at + 9], floats[at + 10],
+                                   floats[at + 11]),
+                              Vec4(floats[at + 12], floats[at + 13], floats[at + 14],
+                                   floats[at + 15])))
+        End For
+        Return matrices
+    End Method
+End Extend
+
+// The Skin a handle is for, from its wrapper if the game still holds one, or a new one, which holds
+// the handle once.
+Function SkinOf(handle: UInt64): Skin?
+    If handle == 0 Then Return Null
+    Local slot = Slot(handle)
+    If slot < skins.Count
+        Local kept = skins[slot]
+        If kept != Null && kept.handle == handle Then Return kept
+    End If
+    If !fbe_skin_retain(handle) Then Panic("a skin's handle went stale: {LastError()}")
+    Return Skin(handle)
+End Function

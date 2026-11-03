@@ -202,3 +202,23 @@ Function TextEndsAtANul() Throws GraphicsError, IOError
     Expect(measured.x < font.Measure("abcdefgh").x)
     font.Free()
 End Function
+
+@Test
+Function TheEnginesOwnFontDrawsWithNoFile() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(64, 24)
+    Local canvas = Canvas(target)
+    canvas.SetColor(Color32(0, 0, 0, 255))
+    canvas.Clear()
+    canvas.SetColor(Color32(255, 255, 255, 255))
+    canvas.DrawText(Font.BuiltIn(), "Hi", 2, 2)
+    Local image = target.ToImage()
+    Local lit = 0
+    For y = 0 To 23
+        For x = 0 To 63
+            If image[x, y].r > 128 Then lit += 1
+        End For
+    End For
+    Expect(lit > 20)
+End Function

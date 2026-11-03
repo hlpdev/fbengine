@@ -3,6 +3,7 @@
 
 #include "fbengine.h"
 #include "scene/scene.hpp"
+#include "skin/skin.hpp"
 
 #include <cstdint>
 
@@ -32,6 +33,7 @@ void remove_component(std::uint32_t entity) {
     } else if (scene().entities.kind[entity] == FBE_ENTITY_LIGHT) {
         remove_light(entity);
     } else if (scene().entities.kind[entity] == FBE_ENTITY_MESH) {
+        fbe::anim::forget_skin(entity);
         remove_mesh(entity);
     } else if (scene().entities.kind[entity] == FBE_ENTITY_SPRITE) {
         remove_sprite(entity);

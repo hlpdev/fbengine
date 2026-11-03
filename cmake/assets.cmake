@@ -186,6 +186,50 @@ configure_file("${ktx_SOURCE_DIR}/other_include/zstd_errors.h"
                "${fbengine_ktx_first}/zstd_errors.h" COPYONLY)
 target_include_directories(ktx BEFORE PRIVATE "${fbengine_ktx_first}")
 target_include_directories(ktx_read BEFORE PRIVATE "${fbengine_ktx_first}")
+# basisu's job pool, in libktx's encoder, which each UASTC cook makes one of, sets its kill flag
+# without its mutex as it goes, so a worker between its wait's check and its wait misses the
+# notify, and the pool's join waits for it forever, as a loaded machine's cooks do. The patched
+# copy sets it under the mutex, and is built in libktx's writer in place of basisu_enc.cpp, with
+# that file's options, finding its headers beside the original; the patch's text has to be there,
+# once, or configuring fails.
+set(fbengine_basisu_source "${ktx_SOURCE_DIR}/external/basisu/encoder/basisu_enc.cpp")
+file(READ "${fbengine_basisu_source}" fbengine_basisu)
+set(fbengine_basisu_from "\t\t// Notify all workers that they need to die right now.\n\t\tm_kill_flag = true;\n")
+set(fbengine_basisu_to
+    "\t\t// Notify all workers that they need to die right now.\n\t\t{\n\t\t\tstd::lock_guard<std::mutex> fbengine_lock(m_mutex);\n\t\t\tm_kill_flag = true;\n\t\t}\n")
+string(FIND "${fbengine_basisu}" "${fbengine_basisu_from}" fbengine_first)
+string(FIND "${fbengine_basisu}" "${fbengine_basisu_from}" fbengine_last REVERSE)
+if(fbengine_first EQUAL -1 OR NOT fbengine_first EQUAL fbengine_last)
+  message(FATAL_ERROR "basisu_enc.cpp doesn't have, once, what its patch expects")
+endif()
+string(REPLACE "${fbengine_basisu_from}" "${fbengine_basisu_to}" fbengine_basisu
+               "${fbengine_basisu}")
+set(fbengine_basisu_patched "${CMAKE_BINARY_DIR}/ktx-patched/basisu_enc.cpp")
+file(WRITE "${fbengine_basisu_patched}.in" "${fbengine_basisu}")
+configure_file("${fbengine_basisu_patched}.in" "${fbengine_basisu_patched}" COPYONLY)
+get_target_property(fbengine_ktx_sources ktx SOURCES)
+set(fbengine_ktx_patched_sources "")
+set(fbengine_basisu_found FALSE)
+foreach(fbengine_source IN LISTS fbengine_ktx_sources)
+  if(fbengine_source STREQUAL "${fbengine_basisu_source}" OR
+     fbengine_source STREQUAL "external/basisu/encoder/basisu_enc.cpp")
+    list(APPEND fbengine_ktx_patched_sources "${fbengine_basisu_patched}")
+    set(fbengine_basisu_found TRUE)
+  else()
+    list(APPEND fbengine_ktx_patched_sources "${fbengine_source}")
+  endif()
+endforeach()
+if(NOT fbengine_basisu_found)
+  message(FATAL_ERROR "libktx's writer doesn't build basisu_enc.cpp, which its patch replaces")
+endif()
+set_property(TARGET ktx PROPERTY SOURCES "${fbengine_ktx_patched_sources}")
+get_source_file_property(fbengine_basisu_options "${fbengine_basisu_source}" DIRECTORY
+                         "${ktx_SOURCE_DIR}" COMPILE_OPTIONS)
+if(fbengine_basisu_options)
+  set_source_files_properties("${fbengine_basisu_patched}" TARGET_DIRECTORY ktx PROPERTIES
+                              COMPILE_OPTIONS "${fbengine_basisu_options}")
+endif()
+target_include_directories(ktx PRIVATE "${ktx_SOURCE_DIR}/external/basisu/encoder")
 
 # basisu's job pool, in libktx's encoder, which each UASTC cook makes one of, sets its kill flag
 # without its mutex as it goes, so a worker between its wait's check and its wait misses the
