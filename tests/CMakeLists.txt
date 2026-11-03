@@ -762,6 +762,7 @@ if(FBENGINE_FB_TESTS)
                            "what falls rests on its floor 40[.]000, 0[.]251, 0[.]000"
                            "through the pane, to the floor 42[.]000, 0[.]251, 0[.]000"
                            "against the hidden wall 39[.]251, 1[.]000, 0[.]000"
+                           "inside the hidden wall 38[.]251, 1[.]000, 0[.]000"
                            "from under the floor 43[.]000, -0[.]251, 0[.]000"
                            "picked from above, past the pane, collision copy at y 0[.]000"
                            "turned, its wall's met at z 2[.]000 by collision, its lights 2"

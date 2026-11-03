@@ -289,6 +289,13 @@ Function Proved() Throws GraphicsError, IOError
     mover.Translate(Vec3(-3, 0, 0))
     world.Collide()
     Print("against the hidden wall {Fine(mover.Position())}")
+    // Inside it, by its other winding: it's closed both ways, from -2 to -1.
+    mover.SetPosition(Vec3(40 - 1.5, 1, 0))
+    mover.ResetCollisions()
+    world.Collide()
+    mover.Translate(Vec3(-3, 0, 0))
+    world.Collide()
+    Print("inside the hidden wall {Fine(mover.Position())}")
     // Its floor from below, by its other winding.
     mover.SetPosition(Vec3(40 + 3, -2, 0))
     mover.ResetCollisions()
