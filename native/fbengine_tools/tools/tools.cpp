@@ -61,6 +61,8 @@ std::expected<bytes_t, std::string> read_file(std::string_view path) {
 
 std::expected<void, std::string> write_file(std::string_view path,
                                             std::span<const std::uint8_t> bytes) {
+    // Not through an ofstream, whose filebuf has an mbstate_t of another size in this UCRT DLL than
+    // in the static libstdc++'s, which ends the program.
     atomic_file_t file;
     if (std::expected<void, std::string> opened = file.open(path); !opened) {
         return opened;
