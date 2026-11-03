@@ -267,7 +267,7 @@ Public Final Class Model Implements Asset
                 geometry = fbe_model_geometry(load.Handle, at, handles.Pointer(), info.Materials)
             End Unsafe
             If geometry == 0 Then Throw PartError()
-            geometries.Add(Geometry(geometry))
+            geometries.Add(Sourced(Geometry(geometry), "{load.Path()}#{at}"))
         End For
         For at = 0 Until info.Images
             If fbe_model_image_levels(load.Handle, at) == 0

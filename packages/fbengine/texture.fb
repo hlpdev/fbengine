@@ -184,6 +184,7 @@ Public Final Class Texture Implements Asset
         Local handle = fbe_texture_from_load(load.Handle, settings.Srgb, settings.Mipmaps)
         If handle == 0 Then Throw LoadError(load)
         If settings.Alpha Then fbe_texture_set_alpha(handle, True)
+        fbe_texture_set_path(handle, load.Path())
         Local made = Texture(handle)
         If settings.ClampAcross || settings.ClampDown Then made.ClampedAs(settings)
         If settings.Compression != ImageCompression.NONE && Assets.FromSource()

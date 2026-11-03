@@ -5,6 +5,7 @@ Import std.core
 Import std.io
 Import std.os
 Import fbengine
+Import "./browser"
 Import "./commands"
 Import "./dialog"
 Import "./dock"

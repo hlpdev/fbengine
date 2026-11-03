@@ -1,0 +1,341 @@
+// Scenes on disk: their text, by its lines; each thing back as it was; what can't be read leaving
+// nothing; and written whole or not at all. What has no GPU in it runs without one.
+
+Import std.collections
+Import std.core
+Import std.data
+Import std.image
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+// The text of a pivot named room, at 1, 2, 3, turned a quarter, with a cube under it and a hidden lamp.
+Function Room(): Entity
+    Local room = Pivot()
+    room.SetName("room")
+    room.SetPosition(Vec3(1, 2, 3))
+    room.SetRotation(Quat(0, 0.70710677, 0, 0.70710677))
+    Local cube = Mesh(Geometry.Cube(), room)
+    cube.SetName("crate")
+    cube.SetScale(Vec3(0.1, 2, 0.5))
+    cube.SetPickMode(PickMode.MESH)
+    cube.SetCollisionGroup(3)
+    Local lamp = Light(LightType.SPOT, room)
+    lamp.SetName("lamp")
+    lamp.SetColor(Color(1, 0.5, 0.25))
+    lamp.SetRange(7.5)
+    lamp.Hide()
+    Return room
+End Function
+
+@Test
+Function ASceneIsTextByItsLines() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local text = Try Scene.Text([Room()])
+    Expect(text.StartsWith("format = 1\n"))
+    Expect(text.Contains("[[entity]]\npath = \"room\"\nkind = \"PIVOT\"\nname = \"room\"\nposition = [1.0, 2.0, 3.0]\nrotation = [0.0, 0.7071068, 0.0, 0.7071068]\nscale = [1.0, 1.0, 1.0]\n"))
+    Expect(text.Contains("[[entity]]\npath = \"room/crate\"\nkind = \"MESH\"\nname = \"crate\"\nposition = [0.0, 0.0, 0.0]\nrotation = [0.0, 0.0, 0.0, 1.0]\nscale = [0.1, 2.0, 0.5]\npick = \"MESH\"\ngroup = 3\ngeometry = \"builtin:cube\"\n"))
+    Expect(text.Contains("path = \"room/lamp\"\nkind = \"LIGHT\"\nname = \"lamp\""))
+    Expect(text.Contains("hidden = true"))
+    Expect(text.Contains("light = \"SPOT\"\ncolor = [1.0, 0.5, 0.25, 1.0]"))
+    Expect(text.Contains("range = 7.5"))
+End Function
+
+@Test
+Function ASceneReadsBackAsItWas() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local text = Try Scene.Text([Room()])
+    Local again = Fresh()
+    Defer again.Free()
+    Local roots = Try Scene.FromText(text)
+    Expect(roots.Count == 1 && again.Roots().Count == 1)
+    Local room = roots[0]
+    Expect(room.Kind() == EntityKind.PIVOT && room.Name() == "room")
+    Expect(room.Position() == Vec3(1, 2, 3))
+    Expect(room.Rotation() == Quat(0, 0.7071068, 0, 0.7071068))
+    Expect(room.ChildCount() == 2)
+    Local crate = room.Child(0) As? Mesh
+    If crate == Null Then Panic("its first child's a Mesh")
+    Expect(crate.Name() == "crate" && crate.Scale() == Vec3(0.1, 2, 0.5))
+    Expect(crate.PickMode() == PickMode.MESH && crate.CollisionGroup() == 3)
+    Expect(crate.Geometry()?.Source() == "builtin:cube")
+    Expect(crate.Geometry()?.Surface(0)?.VertexCount() == 24)
+    Local lamp = room.Child(1) As? Light
+    If lamp == Null Then Panic("its second child's a Light")
+    Expect(lamp.Hidden() && lamp.LightType() == LightType.SPOT)
+    Expect(lamp.Color() == Color(1, 0.5, 0.25) && lamp.Range() == 7.5)
+    // Written again, the same to the byte.
+    Expect((Try Scene.Text(roots)) == text)
+End Function
+
+// One line of change changes one line, wherever it is, and another entity leaves the rest as they were.
+@Test
+Function AChangeChangesItsOwnLines() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local room = Room()
+    Local before = (Try Scene.Text([room])).Split("\n")
+    room.Child(0).SetPosition(Vec3(0.25, 0, 0))
+    Local after = (Try Scene.Text([room])).Split("\n")
+    Expect(before.Count == after.Count)
+    Local differ = 0
+    For i = 0 To before.Count - 1
+        If before[i] != after[i] Then differ += 1
+    End For
+    Expect(differ == 1)
+    // A new child first keeps the others' paths, so all but its own lines are there.
+    Local added = Pivot(room)
+    added.SetName("added")
+    Local more = (Try Scene.Text([room])).Split("\n")
+    Expect(more.Count > after.Count)
+    For line In after
+        Expect(more.Contains(line))
+    End For
+End Function
+
+@Test
+Function EachKindKeepsWhatItsSetTo() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Camera()
+    camera.SetName("view")
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(9)
+    camera.SetFieldOfView(Deg(45))
+    camera.SetRange(0.5, 90)
+    camera.SetClear(False, True)
+    camera.SetClearColor(Color(0.1, 0.2, 0.3))
+    camera.SetOrder(4)
+    camera.SetFogMode(FogMode.EXPONENTIAL)
+    camera.SetFogColor(Color(0.5, 0.25, 0.125))
+    camera.SetFogRange(2, 20)
+    camera.SetFogDensity(0.25)
+    Local material = Material(Color(0.25, 0.5, 0.75, 0.5))
+    material.SetShading(Shading.VERTEX)
+    material.SetBlend(Blend.ADD)
+    material.SetAlphaCutoff(0.25)
+    material.SetShininess(0.75)
+    material.SetVertexColors(True)
+    material.SetWireframe(True)
+    material.SetTwoSided(True)
+    material.SetFogged(False)
+    material.SetOrder(-2)
+    Local sprite = Sprite(material)
+    sprite.SetName("smoke")
+    sprite.SetColor(Color(0.5, 0.5, 1, 0.25))
+    sprite.SetViewMode(SpriteViewMode.UPRIGHT)
+    sprite.SetSpriteScale(Vec2(2, 3))
+    sprite.SetHandle(Vec2(0.5, 0.25))
+    sprite.SetSpriteRotation(0.5)
+    sprite.SetCollisionRadius(0.5, 2)
+    sprite.SetCollisionShape(CollisionShape.BOX)
+    sprite.SetCollisionBox(AABB(Vec3(-2, -1, -1), Vec3(1, 3, 1)))
+    sprite.SetBlocksSight(True)
+    Local same = Mesh(Geometry.Sphere(5))
+    same.SetName("one")
+    same.SetMaterial(material)
+    same.SetColor(Color(1, 0, 0, 0.5))
+    Local text = Try Scene.Text([camera, sprite, same])
+    Local again = Fresh()
+    Defer again.Free()
+    Local roots = Try Scene.FromText(text)
+    Local view = roots[0] As? Camera
+    If view == Null Then Panic("a Camera")
+    Expect(view.Projection() == Projection.ORTHOGRAPHIC && view.OrthographicHeight() == 9)
+    Expect(view.FieldOfView() == camera.FieldOfView())
+    Expect(view.Near() == 0.5 && view.Far() == 90 && !view.ClearsColor() && view.ClearsDepth())
+    Expect(view.ClearColor() == Color(0.1, 0.2, 0.3) && view.Order() == 4)
+    Expect(view.FogMode() == FogMode.EXPONENTIAL && view.FogColor() == Color(0.5, 0.25, 0.125))
+    Expect(view.FogStart() == 2 && view.FogEnd() == 20 && view.FogDensity() == 0.25)
+    Local smoke = roots[1] As? Sprite
+    If smoke == Null Then Panic("a Sprite")
+    Expect(smoke.Color() == Color(0.5, 0.5, 1, 0.25) && smoke.ViewMode() == SpriteViewMode.UPRIGHT)
+    Expect(smoke.SpriteScale() == Vec2(2, 3) && smoke.Handle() == Vec2(0.5, 0.25) && smoke.SpriteRotation() == 0.5)
+    Expect(smoke.CollisionRadius() == Vec2(0.5, 2) && smoke.CollisionShape() == CollisionShape.BOX)
+    Expect(smoke.CollisionBox() == AABB(Vec3(-2, -1, -1), Vec3(1, 3, 1)) && smoke.BlocksSight())
+    Local read = smoke.Material()
+    If read == Null Then Panic("its Material")
+    Expect(read.Color() == Color(0.25, 0.5, 0.75, 0.5) && read.Shading() == Shading.VERTEX && read.Blend() == Blend.ADD)
+    Expect(read.AlphaCutoff() == 0.25 && read.Shininess() == 0.75 && read.VertexColors() && read.Wireframe())
+    Expect(read.TwoSided() && !read.Fogged() && read.Order() == -2)
+    Local one = roots[2] As? Mesh
+    If one == Null Then Panic("a Mesh")
+    // One material, still one; a built-in by its segments.
+    Expect(one.Material() == read)
+    Expect(one.Geometry()?.Source() == "builtin:sphere:5" && one.Color() == Color(1, 0, 0, 0.5))
+    Expect((Try Scene.Text(roots)) == text)
+End Function
+
+// What's changed since it was built in is its vertices, each exactly; and two meshes of it, one
+// geometry; a surface's own material with it.
+@Test
+Function AGeometryChangedIsSavedByItsVertices() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local up = Vec3(0, 1, 0)
+    Local a = surface.AddVertex(Vertex(Vec3(0.1, 0, 0), up, Vec2(0, 0.25), Vec2(0.5, 0.75), Color(1, 0, 0, 0.5)))
+    Local b = surface.AddVertex(Vertex(Vec3(1, 0, 0), up, Vec2(1, 0), Vec2(0, 0), Color(0, 1, 0)))
+    Local c = surface.AddVertex(Vertex(Vec3(0, 0, 1), up, Vec2(0, 1), Vec2(0, 0), Color(0, 0, 1)))
+    surface.AddTriangle(a, c, b)
+    surface.SetMaterial(Material(Color(0.5, 0.5, 0.5)))
+    Expect(made.Source() == Null)
+    Local changed = Geometry.Cube()
+    Expect(changed.Source() == "builtin:cube")
+    changed.Translate(Vec3(1, 0, 0))
+    Expect(changed.Source() == Null)
+    Local first = Mesh(made)
+    Local second = Mesh(made)
+    second.SetName("second")
+    Local bent = Mesh(changed)
+    bent.SetName("bent")
+    Local text = Try Scene.Text([first, second, bent])
+    Local again = Fresh()
+    Defer again.Free()
+    Local roots = Try Scene.FromText(text)
+    Local one = roots[0] As? Mesh
+    Local two = roots[1] As? Mesh
+    Local three = roots[2] As? Mesh
+    If one == Null || two == Null || three == Null Then Panic("three Meshes")
+    Expect(one.Geometry() == two.Geometry())
+    Local read = one.Geometry()?.Surface(0)
+    If read == Null Then Panic("a surface")
+    Expect(read.VertexCount() == 3 && read.TriangleCount() == 1)
+    Expect(read.Vertex(0) == Vertex(Vec3(0.1, 0, 0), up, Vec2(0, 0.25), Vec2(0.5, 0.75), Color(1, 0, 0, 0.5)))
+    Expect(read.Triangle(0) == Vec3i(a, c, b))
+    Expect(read.Material()?.Color() == Color(0.5, 0.5, 0.5))
+    Local moved = three.Geometry()
+    If moved == Null Then Panic("a Geometry")
+    Expect(moved.Bounds().Max.x == 2.0 && moved.Surface(0).VertexCount() == 24)
+    Expect((Try Scene.Text(roots)) == text)
+End Function
+
+// Same names apart by order, names with a slash, and none at all.
+@Test
+Function PathsTellSameNamesApart() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local a = Pivot()
+    a.SetName("twin")
+    Local b = Pivot()
+    b.SetName("twin")
+    Local under = Pivot(b)
+    under.SetName("a/b")
+    Local none = Pivot(b)
+    Local text = Try Scene.Text([a, b])
+    Expect(text.Contains("path = \"twin\"\n") && text.Contains("path = \"twin#2\"\n"))
+    Expect(text.Contains("path = \"twin#2/a_b\"\n") && text.Contains("path = \"twin#2/entity\"\n"))
+    Local again = Fresh()
+    Defer again.Free()
+    Local roots = Try Scene.FromText(text)
+    Expect(roots.Count == 2 && roots[1].Child(0).Name() == "a/b" && roots[1].Child(1).Name() == "")
+    Expect(none.Name() == "")
+End Function
+
+Function Refused(text: String): String
+    Try
+        Try Scene.FromText(text)
+        Return "read"
+    Catch error As IOError
+        Expect(error.Kind == IOErrorKind.INVALID_DATA)
+        Return error.Message
+    End Try
+End Function
+
+// What's wrong says what, and leaves nothing behind it.
+@Test
+Function WhatIsntASceneLeavesNothing()
+    Local world = Fresh()
+    Defer world.Free()
+    Local good = "[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\n"
+    For each In [("format = 2\n", "format 2"), ("nonsense", "a scene"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\n", "twice"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"gone/b\"\nkind = \"PIVOT\"\n", "under"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"DRAGON\"\n", "DRAGON"),
+                 ("format = 1\n" + good + "[[entity]]\nkind = \"PIVOT\"\n", "no path"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"PIVOT\"\nposition = [1, 2]\n", "position"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"PIVOT\"\npick = \"NOSE\"\n", "NOSE"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"builtin:cheese\"\n", "cheese"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"geometry:nope\"\n", "nope"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"MESH\"\nmaterial = \"nope\"\n", "nope"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"res://none.glb\"\n", "isn't what")]
+        Local text, says = each
+        Local said = Refused(text)
+        Expect(said.Contains(says), said)
+        Expect(world.Roots().Count == 0, text)
+    End For
+End Function
+
+// What it hasn't a table for says so, and a file's as it was.
+@Test
+Function WhatCantBeHeldIsWrittenNotAtAll() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local folder = Try TempDir()
+    Local path = folder.Path / "a.scene"
+    Try Scene.Save(path, [Room()])
+    Local had = Try File.ReadText(path)
+    Expect(had.StartsWith("format = 1\n"))
+    Local plane = GroundPlane()
+    plane.SetName("ground")
+    Local error = ExpectThrows<IOError>(Scene.Save(path, [plane]))
+    Expect(error != Null && (error?.Message ?? "").Contains("ground is a PLANE"))
+    Expect((Try File.ReadText(path)) == had)
+    Local entries = Try Dir.Entries(folder.Path)
+    Expect(entries.Count == 1)
+    Try folder.Close()
+End Function
+
+// Loaded from res://, under a parent; and textures and a model's mesh by their paths, with a GPU.
+@Test
+Function ASceneLoadsFromResByPaths() Throws IOError, GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = Fresh()
+    Defer world.Free()
+    Local folder = Try TempDir()
+    Local image = Image(1, 1)
+    image[0, 0] = Color32(10, 200, 30, 255)
+    Try File.WriteBytes(folder.Path / "wall.png", Png.Encode(image))
+    Assets.MountFolder("res://scene-test", folder.Path)
+    Defer Assets.Unmount("res://scene-test")
+    Local texture = Try Assets.Load<Texture>("res://scene-test/wall.png")
+    Expect(texture.Path() == "res://scene-test/wall.png")
+    Local material = Material()
+    material.SetShading(Shading.UNLIT)
+    material.SetTexture(1, texture)
+    material.SetLayer(1, LayerBlend.ADD, 1)
+    material.SetLayerUv(1, UvTurn(Vec2(2, 3), 0.5, Vec2(0.25, 0.75)))
+    material.SetLayerBump(1, BumpShift(0.5, 0.25, 0.125, 1, 2, 3))
+    Local mesh = Mesh(Geometry.Cube())
+    mesh.SetName("wall")
+    mesh.SetMaterial(material)
+    Try Scene.Save(folder.Path / "first.scene", [mesh])
+    Local parent = Pivot()
+    Local roots = Try Scene.Load("res://scene-test/first.scene", parent)
+    Expect(roots.Count == 1 && parent.ChildCount() == 1 && RefEquals(parent.Child(0), roots[0]))
+    Local read = (roots[0] As? Mesh)?.Material()
+    If read == Null Then Panic("its Material")
+    Expect(read.Texture(1)?.Path() == "res://scene-test/wall.png" && read.Texture(1) == texture)
+    Expect(read.LayerBlend(1) == LayerBlend.ADD && read.LayerUvSet(1) == 1)
+    Expect(read.LayerUv(1) == UvTurn(Vec2(2, 3), 0.5, Vec2(0.25, 0.75)))
+    Expect(read.LayerBump(1) == BumpShift(0.5, 0.25, 0.125, 1, 2, 3))
+    // A texture from no file can't be named.
+    material.SetTexture(2, Try Texture(1, 1))
+    Expect(ExpectThrows<IOError>(Scene.Text([mesh])) != Null)
+    // A file that's not there.
+    Expect(ExpectThrows<IOError>(Scene.Load("res://scene-test/none.scene")) != Null)
+    Try folder.Close()
+End Function

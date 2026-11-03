@@ -375,6 +375,24 @@ FBE_API bool fbe_geometry_alive(uint64_t geometry) {
     return scene().geometry_slots.find(geometry).has_value();
 }
 
+FBE_API bool fbe_geometry_set_source(uint64_t geometry, const char* source) {
+    const std::uint32_t slot = geometry_slot(geometry);
+    if (slot == none || source == nullptr) {
+        return false;
+    }
+    scene().geometries[slot].source = source;
+    scene().geometries[slot].source_version = scene().geometries[slot].version;
+    return true;
+}
+
+FBE_API const char* fbe_geometry_source(uint64_t geometry) {
+    const std::uint32_t slot = geometry_slot(geometry);
+    if (slot == none || scene().geometries[slot].version != scene().geometries[slot].source_version) {
+        return "";
+    }
+    return scene().geometries[slot].source.c_str();
+}
+
 FBE_API uint64_t fbe_geometry_clone(uint64_t geometry) {
     const std::uint32_t slot = geometry_slot(geometry);
     if (slot == none) {

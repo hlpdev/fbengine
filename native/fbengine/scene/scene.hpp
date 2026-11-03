@@ -134,6 +134,9 @@ struct geometry_t {
     /// A box drawing culls it by instead of its bounds, as a skinned mesh's, whose vertices move
     /// out of them, wants.
     bool has_cull_box = false;
+    /// What it's known to be made of, a scene file's name for it, while it's as it was then.
+    std::string source;
+    std::uint64_t source_version = 0;
     vec3_t cull_min;
     vec3_t cull_max;
     /// Goes up when its triangles come or go, as against only moving, which a tree can be

@@ -1,0 +1,568 @@
+// The asset browser and scenes on disk, driven by Simulate's mouse and keys and by commands, offscreen:
+// res:// as rows, thumbnails, a model dragged into the scene, import settings' sidecars through undo,
+// what changes on disk seen, and scenes saved and opened.
+
+Import std.collections
+Import std.core
+From std.image Import Image, Png
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import std.time
+Import fbengine
+Import fbengine_editor
+Import fbengine_ui
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// A glTF of one triangle facing up: (0,0,0), (1,0,0), (0,0,1).
+Const TRIANGLE = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"name\":\"blade\",\"mesh\":0}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0}}]}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,0,1]}],\"bufferViews\":[{\"buffer\":0,\"byteLength\":36}],\"buffers\":[{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/\"}]}"
+
+Function Picture(red: UInt8): UInt8[]
+    Local image = Image(1, 1)
+    image[0, 0] = Color32(red, 20, 30, 255)
+    Return Png.Encode(image)
+End Function
+
+// A game's folder: a picture, a note, a picture's sidecar, and a folder with a model and what's broken.
+Function Game(at: Path): Path Throws IOError
+    Local folder = at / "game"
+    Try Dir.CreateAll(folder / "assets" / "sub")
+    Try File.WriteText(folder / "project.toml", "[project]\nname = \"game\"\nversion = \"0.1.0\"\n")
+    Try File.WriteBytes(folder / "assets" / "wall.png", Picture(200))
+    Try File.WriteText(folder / "assets" / "wall.png.toml", "quality = 3\n")
+    Try File.WriteText(folder / "assets" / "note.txt", "hello")
+    Try File.WriteText(folder / "assets" / "sub" / "ball.gltf", TRIANGLE)
+    Try File.WriteText(folder / "assets" / "sub" / "bad.gltf", "this isn't one")
+    Return folder
+End Function
+
+Function Started(settings: Path, folder: Path): Editor Throws IOError, GraphicsError
+    Window.SetHeadless(True)
+    Local editor = Try Editor(settings)
+    Try editor.Start(folder)
+    editor.Docked.Show("assets")
+    editor.Step()
+    editor.Step()
+    Return editor
+End Function
+
+Function Row(editor: Editor, path: String): Rect
+    Local row = editor.Files.RowOf(path)
+    If row == Null Then Panic("{path} has no row")
+    Return row.Box()
+End Function
+
+Function ClickAt(editor: Editor, at: Vec2) Throws GraphicsError
+    Try Simulate.MoveMouse(at.x, at.y)
+    editor.Step()
+    Try Simulate.Click(MouseButton.LEFT)
+    editor.Step()
+    editor.Step()
+End Function
+
+Function ClickOn(editor: Editor, name: String) Throws GraphicsError
+    Try ClickAt(editor, Found(editor, name).Box().Center)
+End Function
+
+Function Found(editor: Editor, name: String): Node
+    For popup In editor.Shown.Popups()
+        Local there = popup.Find(name)
+        If there != Null Then Return there
+    End For
+    Local found = editor.Shown.Root().Find(name)
+    If found == Null Then Panic("there's no {name}")
+    Return found
+End Function
+
+// Steps until `done`, for what a watcher tells of in its own time.
+Function StepUntil(editor: Editor, done: Func(): Bool)
+    Local since = Instant.Now()
+    While !done() && (Instant.Now() - since) < 60.Seconds
+        editor.Step()
+        Sleep(5.Milliseconds)
+    End While
+End Function
+
+@Test
+Function ItsRowsAreResByFoldersThenFiles() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path))
+    Defer editor.Finish()
+    // The folder first; a sidecar isn't a row of its own.
+    Expect(editor.Files.ShownPaths() == ["res://sub", "res://note.txt", "res://wall.png"], "{editor.Files.ShownPaths()}")
+    Try ClickAt(editor, Row(editor, "res://sub").Center)
+    Expect(editor.Files.IsOpen("res://sub"))
+    Expect(editor.Files.ShownPaths() == ["res://sub", "res://sub/bad.gltf", "res://sub/ball.gltf", "res://note.txt", "res://wall.png"] ||
+           editor.Files.ShownPaths() == ["res://sub", "res://sub/ball.gltf", "res://sub/bad.gltf", "res://note.txt", "res://wall.png"],
+           "{editor.Files.ShownPaths()}")
+    // What's under it's further in, and closed again, it's gone.
+    Expect(Found(editor, "assets.list").Children().Count == 5)
+    Local sub = Row(editor, "res://sub")
+    Try ClickAt(editor, sub.Center)
+    Expect(editor.Files.ShownPaths().Count == 3 && !editor.Files.IsOpen("res://sub"))
+    // Selected, one at a time.
+    Try ClickAt(editor, Row(editor, "res://note.txt").Center)
+    Expect(editor.Files.Selected() == "res://note.txt")
+    Expect((editor.Files.RowOf("res://note.txt") As? Widget)?.StyleName() == "tree.row.selected")
+    Try ClickAt(editor, Row(editor, "res://wall.png").Center)
+    Expect(editor.Files.Selected() == "res://wall.png")
+    Expect((editor.Files.RowOf("res://note.txt") As? Widget)?.StyleName() == "tree.row")
+End Function
+
+// An image is its own thumbnail, by its pixel; a model's seen in a world of its own, which leaves the
+// scene's as it was; what can't be read, or has no picture, has none.
+@Test
+Function ThumbnailsAreOfWhatTheFilesAre() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path))
+    Defer editor.Finish()
+    Local wall = editor.Files.ThumbOf("res://wall.png")
+    If wall == Null
+        Fail("a picture has a thumbnail")
+        Return
+    End If
+    Expect(wall.Texture().ReadPixel(0, 0) == Color32(200, 20, 30, 255))
+    Expect(editor.Files.RowOf("res://wall.png")?.Find("assets.thumb") != Null)
+    Expect(editor.Files.RowOf("res://note.txt")?.Find("assets.thumb") == Null)
+    Expect(editor.Files.ThumbOf("res://note.txt") == Null)
+    Local stage = World.Current()
+    Local before = editor.Edited.Stage.EntityCount()
+    Local ball = editor.Files.ThumbOf("res://sub/ball.gltf")
+    If ball == Null
+        Fail("a model has a thumbnail")
+        Return
+    End If
+    Expect(World.Current() == stage && editor.Edited.Stage.EntityCount() == before)
+    // Of a size, and more than the clear color; the same one the next time.
+    Local image = ball.Texture().ToImage()
+    Expect(image.Width == 64 && image.Height == 64)
+    Local drawn = 0
+    For y = 0 To 63
+        For x = 0 To 63
+            If image[x, y] != image[0, 0] Then drawn += 1
+        End For
+    End For
+    Expect(drawn > 40, "{drawn} pixels of the triangle")
+    Expect(RefEquals(editor.Files.ThumbOf("res://sub/ball.gltf"), ball))
+    Expect(editor.Files.ThumbOf("res://sub/bad.gltf") == Null)
+End Function
+
+// A model dragged to the scene is there, on the ground under the pointer, selected, through undo.
+@Test
+Function AModelDraggedIntoTheSceneIsPlacedThere() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path))
+    Defer editor.Finish()
+    editor.Files.SetOpen("res://sub", True)
+    editor.Step()
+    editor.View.LookAt(Vec3(0, 0, 0), 10.0)
+    editor.Step()
+    Local from = Row(editor, "res://sub/ball.gltf").Center
+    Local to = editor.View.Box().Center
+    // Not far enough, it's a click.
+    Try Simulate.MoveMouse(from.x, from.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MoveMouse(from.x + 2.0, from.y)
+    editor.Step()
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    Expect(editor.Edited.Entities().Count == 0 && !editor.Edits.CanUndo())
+    // Let go on the scene.
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MoveMouse(to.x, to.y)
+    editor.Step()
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    Local all = editor.Edited.Entities()
+    Expect(all.Count == 2, "{all}")
+    Local placed = all[0]
+    Expect(placed.Name() == "ball" && all[1].Name() == "blade")
+    Expect(editor.Edited.IsSelected(placed) && editor.Edits.UndoName() == "Add ball")
+    // On the ground: y 0, where the ray from the pointer meets it.
+    Local ray = editor.View.RayAt(to)
+    If ray == Null
+        Fail("the view has a ray")
+        Return
+    End If
+    Local start, way = ray
+    Local wanted = DropPlace(start, way)
+    Expect(IsClose(wanted.y, 0.0, 0.001))
+    Expect(IsClose(placed.Position(), wanted, 0.001))
+    // Its mesh knows where it's from.
+    Local mesh = all[1] As? Mesh
+    Expect(mesh != Null && mesh.Geometry()?.Source() == "res://sub/ball.gltf#0")
+    Expect(editor.Tree.RowOf(placed) != Null)
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(editor.Edited.Entities().Count == 0)
+    Expect(editor.Actions.Run("edit.redo"))
+    Expect(editor.Edited.Entities().Count == 2 && editor.Edited.IsSelected(placed))
+    // On the browser itself, a picture, and one that can't be read, nothing, or says why.
+    Local count = editor.Edited.Entities().Count
+    Local back = Row(editor, "res://sub/ball.gltf").Center
+    Try Simulate.MoveMouse(back.x, back.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MoveMouse(back.x + 20.0, back.y)
+    editor.Step()
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    Expect(editor.Edited.Entities().Count == count)
+    Local wall = Row(editor, "res://wall.png").Center
+    Try Simulate.MoveMouse(wall.x, wall.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MoveMouse(to.x, to.y)
+    editor.Step()
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    Expect(editor.Edited.Entities().Count == count)
+    Local bad = Row(editor, "res://sub/bad.gltf").Center
+    Try Simulate.MoveMouse(bad.x, bad.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MoveMouse(to.x, to.y)
+    editor.Step()
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    Expect(editor.Edited.Entities().Count == count && editor.ShowingDialog() != Null)
+End Function
+
+@Test
+Function WhereAModelLands()
+    Expect(DropPlace(Vec3(0, 10, 0), Normalize(Vec3(1, -1, 0))) == Vec3(10, 0, 0))
+    // Going up or level, 8 along; and too far, the same.
+    Expect(DropPlace(Vec3(0, 10, 0), Vec3(0, 1, 0)) == Vec3(0, 18, 0))
+    Expect(DropPlace(Vec3(0, 10, 0), Vec3(1, 0, 0)) == Vec3(8, 10, 0))
+    Expect(IsClose(DropPlace(Vec3(0, 10, 0), Normalize(Vec3(1000, -1, 0))).y, 10.0, 0.01))
+    Expect(NameOf("res://a/b.c.glb") == "b.c" && NameOf("res://x") == "x")
+End Function
+
+Function Sidecar(games: TempDir): String? Throws IOError
+    Local file = games.Path / "game" / "assets" / "wall.png.toml"
+    Return File.Exists(file) ? Try File.ReadText(file) : Null
+End Function
+
+// What's selected's import settings: each a sidecar's line, what's at its default left out, what else
+// it says kept, each through undo.
+@Test
+Function ImportSettingsAreEditedInTheSidecar() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path))
+    Defer editor.Finish()
+    editor.Files.Choose("res://wall.png")
+    editor.Step()
+    editor.Step()
+    Local srgb = Found(editor, "assets.srgb") As? Toggle
+    Local quality = Found(editor, "assets.quality") As? Slider
+    If srgb == Null || quality == Null
+        Fail("an image has its settings")
+        Return
+    End If
+    Expect(srgb.On() && quality.Value() == 3.0)
+    srgb.Click()
+    editor.Step()
+    editor.Step()
+    Expect((Try Sidecar(games)) == "quality = 3\nsrgb = false\n", "{Try Sidecar(games)}")
+    Expect(!(Try Assets.ReadSettings<ImageSettings>("res://wall.png")).Srgb)
+    Expect(editor.Edits.UndoName() == "Import Settings")
+    // Back to the default, its line's gone.
+    (Found(editor, "assets.srgb") As? Toggle)?.Click()
+    editor.Step()
+    Expect((Try Sidecar(games)) == "quality = 3\n", "{Try Sidecar(games)}")
+    // Each kind of field, read back as what it says.
+    (Found(editor, "assets.mipmaps") As? Toggle)?.Click()
+    editor.Step()
+    (Found(editor, "assets.alpha") As? Toggle)?.Click()
+    editor.Step()
+    (Found(editor, "assets.clamp_across") As? Toggle)?.Click()
+    editor.Step()
+    (Found(editor, "assets.clamp_down") As? Toggle)?.Click()
+    editor.Step()
+    (Found(editor, "assets.compression") As? Button)?.Click()
+    editor.Step()
+    Local read = Try Assets.ReadSettings<ImageSettings>("res://wall.png")
+    Expect(!read.Mipmaps && read.Alpha && read.ClampAcross && read.ClampDown)
+    Expect(read.Compression == ImageCompression.UASTC && read.Quality == 3)
+    // By the keyboard, the slider's a step of 1, its change one, kept when it's let go of.
+    Local slider = Found(editor, "assets.quality") As? Slider
+    If slider == Null Then Panic("its slider")
+    editor.Shown.Focus(slider)
+    editor.Step()
+    Try Simulate.PressKey(Key.RIGHT)
+    editor.Step()
+    editor.Step()
+    Expect((Try Assets.ReadSettings<ImageSettings>("res://wall.png")).Quality == 4)
+    // Undone, each back, to the file as it first was.
+    While editor.Edits.CanUndo()
+        editor.Actions.Run("edit.undo")
+    End While
+    Expect((Try Sidecar(games)) == "quality = 3\n", "{Try Sidecar(games)}")
+    // A file with no sidecar: its first change makes it, and undoing takes it away.
+    editor.Files.Choose("res://wall.png")
+    Try File.Delete(games.Path / "game" / "assets" / "wall.png.toml")
+    editor.Files.Choose(Null)
+    editor.Files.Choose("res://wall.png")
+    editor.Step()
+    (Found(editor, "assets.alpha") As? Toggle)?.Click()
+    editor.Step()
+    Expect((Try Sidecar(games)) == "alpha = true\n")
+    editor.Actions.Run("edit.undo")
+    Expect((Try Sidecar(games)) == Null)
+    // One that isn't TOML says so, and nothing to change it with breaks it.
+    Try File.WriteText(games.Path / "game" / "assets" / "wall.png.toml", "= nonsense")
+    editor.Files.Choose(Null)
+    editor.Files.Choose("res://wall.png")
+    editor.Step()
+    Expect(editor.Files.Problem() != "")
+    Expect((Try Sidecar(games)) == "= nonsense")
+    // A model's and a note's: its own, and none.
+    Try File.Delete(games.Path / "game" / "assets" / "wall.png.toml")
+    editor.Files.SetOpen("res://sub", True)
+    editor.Step()
+    editor.Files.Choose("res://sub/ball.gltf")
+    editor.Step()
+    Expect((Found(editor, "assets.optimize") As? Toggle)?.On() == True)
+    editor.Files.Choose("res://note.txt")
+    editor.Step()
+    Expect(!Found(editor, "assets.settings").Visible())
+End Function
+
+// A file that's changed, new, or gone on disk shows.
+@Test
+Function WhatChangesOnDiskIsSeen() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path))
+    Defer editor.Finish()
+    Local assets = games.Path / "game" / "assets"
+    Local thumb = editor.Files.ThumbOf("res://wall.png")
+    Expect(thumb?.Texture().ReadPixel(0, 0) == Color32(200, 20, 30, 255))
+    Try File.WriteBytes(assets / "wall.png", Picture(90))
+    StepUntil(editor, Function[Weak editor]() => (editor?.Files.Reloads() ?? 1) > 0)
+    Expect(editor.Files.Reloads() > 0)
+    Expect(editor.Files.ThumbOf("res://wall.png")?.Texture().ReadPixel(0, 0) == Color32(90, 20, 30, 255))
+    // New, and gone.
+    Try File.WriteText(assets / "new.txt", "new")
+    StepUntil(editor, Function[Weak editor]() => editor?.Files.RowOf("res://new.txt") != Null)
+    Expect(editor.Files.RowOf("res://new.txt") != Null)
+    editor.Files.Choose("res://new.txt")
+    Try File.Delete(assets / "new.txt")
+    StepUntil(editor, Function[Weak editor]() => editor?.Files.RowOf("res://new.txt") == Null)
+    Expect(editor.Files.RowOf("res://new.txt") == Null && editor.Files.Selected() == Null)
+    // A model dropped goes on being its file's: changed, what's under the spawn's made again.
+    editor.Files.SetOpen("res://sub", True)
+    editor.Step()
+    editor.View.LookAt(Vec3(0, 0, 0), 10.0)
+    editor.Step()
+    Local from = Row(editor, "res://sub/ball.gltf").Center
+    Local to = editor.View.Box().Center
+    Try Simulate.MoveMouse(from.x, from.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MoveMouse(to.x, to.y)
+    editor.Step()
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    Local placed = editor.Edited.Entities()[0]
+    Local reloads = editor.Files.Reloads()
+    Try File.WriteText(assets / "sub" / "ball.gltf", TRIANGLE.Replace("\"blade\"", "\"sharper\""))
+    StepUntil(editor, Function[Weak editor]() => (editor?.Files.Reloads() ?? reloads + 1) > reloads)
+    Expect(placed.ChildCount() == 1 && placed.Child(0).Name() == "sharper")
+    // Its folder let go of, a project closed, nothing's watched or held.
+    editor.CloseProject()
+    Expect(editor.Files.ShownPaths().Count == 0)
+End Function
+
+Function Text(file: Path): String Throws IOError => Try File.ReadText(file)
+
+// Saved whole, in folders it makes, without what's the editor's; opened again as it was, with nothing
+// to undo; kept between runs.
+@Test
+Function ScenesAreSavedAndOpened() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, game)
+    Expect(editor.SceneFile() == Null)
+    Expect(editor.Actions.Run("add.cube"))
+    Local cube = editor.Edited.Entities()[0]
+    cube.SetPosition(Vec3(1.5, 0.25, -2))
+    Expect(editor.Edits.Modified())
+    // With no file yet, Save asks where.
+    Expect(editor.Actions.Run("file.save"))
+    editor.Step()
+    Expect(editor.ShowingDialog() != Null)
+    Local field = Found(editor, "dialog.path") As? TextField
+    If field == Null Then Panic("its field")
+    field.SetText("res://levels/first.scene")
+    Try ClickOn(editor, "dialog.Save")
+    Local file = game / "assets" / "levels" / "first.scene"
+    Expect(File.Exists(file))
+    Expect(!editor.Edits.Modified() && editor.SceneFile() == "res://levels/first.scene")
+    Local text = Try Text(file)
+    Expect(text.Contains("path = \"Cube\"\nkind = \"MESH\"\nname = \"Cube\"\nposition = [1.5, 0.25, -2.0]"))
+    Expect(!text.Contains("editor"), "the editor's own was saved")
+    // What's changed and saved again, with the command's keys.
+    editor.Edits.Commit(RenameEdit(cube, "Crate"))
+    Expect(editor.Edits.Modified())
+    Expect(editor.Actions.Run("file.save"))
+    Expect(!editor.Edits.Modified() && (Try Text(file)).Contains("name = \"Crate\""))
+    // New, with what's changed asked about first, then what's there gone.
+    Expect(editor.Actions.Run("file.new_scene"))
+    editor.Step()
+    Expect(editor.ShowingDialog() == Null && editor.Edited.Entities().Count == 0 && editor.SceneFile() == Null)
+    // A double click on its row opens it, as it was.
+    editor.Step()
+    editor.Files.SetOpen("res://levels", True)
+    StepUntil(editor, Function[Weak editor]() => editor?.Files.RowOf("res://levels") != Null)
+    editor.Files.SetOpen("res://levels", True)
+    editor.Step()
+    Local row = Row(editor, "res://levels/first.scene").Center
+    Try Simulate.MoveMouse(row.x, row.y)
+    editor.Step()
+    Try Simulate.Click(MouseButton.LEFT, clicks: 1)
+    editor.Step()
+    Try Simulate.Click(MouseButton.LEFT, clicks: 2)
+    editor.Step()
+    editor.Step()
+    Expect(editor.SceneFile() == "res://levels/first.scene", "{editor.SceneFile() ?? "none"}")
+    Local all = editor.Edited.Entities()
+    Expect(all.Count == 1 && all[0].Name() == "Crate" && all[0].Position() == Vec3(1.5, 0.25, -2))
+    Expect((all[0] As? Mesh)?.Geometry()?.Source() == "builtin:cube")
+    Expect(World.Current() == editor.Edited.Stage && !editor.Edits.CanUndo() && !editor.Edits.Modified())
+    // Saved to the byte as it was read.
+    editor.Actions.Run("file.save")
+    Expect((Try Text(file)) == (text.Replace("\"Cube\"", "\"Crate\"")))
+    // Changed, an open asks; Cancel leaves it; Don't Save goes on.
+    editor.Edits.Commit(RenameEdit(all[0], "Changed"))
+    Expect(editor.Actions.Run("file.new_scene"))
+    editor.Step()
+    Expect(editor.ShowingDialog() != Null)
+    Try ClickOn(editor, "dialog.Cancel")
+    Expect(editor.Edited.Entities()[0].Name() == "Changed" && editor.SceneFile() != Null)
+    Expect(editor.Actions.Run("file.new_scene"))
+    editor.Step()
+    Try ClickOn(editor, "dialog.Save")
+    Expect((Try Text(file)).Contains("name = \"Changed\"") && editor.Edited.Entities().Count == 0)
+    editor.OpenScene("res://levels/first.scene")
+    editor.Edits.Commit(RenameEdit(editor.Edited.Entities()[0], "Lost"))
+    Expect(editor.Actions.Run("file.new_scene"))
+    editor.Step()
+    Try ClickOn(editor, "dialog.Don't Save")
+    Expect(editor.Edited.Entities().Count == 0 && !(Try Text(file)).Contains("Lost"))
+    // A scene that's kept is opened with its project next time.
+    editor.OpenScene("res://levels/first.scene")
+    editor.Finish()
+    Local again = Try Started(settings.Path, game)
+    Defer again.Finish()
+    Expect(again.SceneFile() == "res://levels/first.scene")
+    Expect(again.Edited.Entities()[0].Name() == "Changed")
+End Function
+
+// What can't be opened says why and leaves what's being edited; what can't be saved says why and
+// leaves the file.
+@Test
+Function WhatCantBeReadOrWrittenChangesNothing() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    Expect(editor.Actions.Run("add.cube"))
+    Local stage = editor.Edited.Stage
+    Try File.WriteText(game / "assets" / "bad.scene", "format = 1\n[[entity]]\npath = \"a\"\nkind = \"DRAGON\"\n")
+    editor.OpenScene("res://bad.scene")
+    editor.Step()
+    Expect(editor.ShowingDialog() != Null)
+    Expect(editor.Edited.Stage == stage && editor.Edited.Entities().Count == 1)
+    Expect(World.Current() == stage && editor.SceneFile() == Null && editor.Edits.CanUndo())
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    editor.OpenScene("res://none.scene")
+    editor.Step()
+    Expect(editor.ShowingDialog() != Null && editor.Edited.Entities().Count == 1)
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    // A plane can't be held: nothing's written.
+    editor.SaveScene("res://good.scene")
+    Local had = Try Text(game / "assets" / "good.scene")
+    Local ground = GroundPlane()
+    ground.SetName("ground")
+    editor.SaveScene()
+    editor.Step()
+    Expect(editor.ShowingDialog() != Null)
+    Expect((Try Text(game / "assets" / "good.scene")) == had)
+    ground.Free()
+    // A path that isn't one.
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    editor.SaveScene("not a res path")
+    editor.Step()
+    Expect(editor.ShowingDialog() != Null && editor.SceneFile() == "res://good.scene")
+End Function
+
+// A model's saved by where it's from, each thing under it by its path, and read back from it; so with
+// the editor gone a game's Scene.Load gives the same.
+@Test
+Function AGameReadsWhatTheEditorSaved() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, game)
+    editor.Files.SetOpen("res://sub", True)
+    editor.Step()
+    editor.View.LookAt(Vec3(0, 0, 0), 10.0)
+    editor.Step()
+    Local from = Row(editor, "res://sub/ball.gltf").Center
+    Local to = editor.View.Box().Center
+    Try Simulate.MoveMouse(from.x, from.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MoveMouse(to.x, to.y)
+    editor.Step()
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    Local place = editor.Edited.Entities()[0].Position()
+    editor.SaveScene("res://level.scene")
+    Local text = Try Text(game / "assets" / "level.scene")
+    Expect(text.Contains("geometry = \"res://sub/ball.gltf#0\""), text)
+    Expect(text.Contains("path = \"ball/blade\""), text)
+    editor.Finish()
+    Window.SetHeadless(True)
+    Try Graphics(320, 200)
+    Defer EndGraphics()
+    Local mount = Assets.MountFolder("res://", game / "assets")
+    Defer Assets.Unmount(mount)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local roots = Try Scene.Load("res://level.scene")
+    Expect(roots.Count == 1 && roots[0].Name() == "ball" && roots[0].Position() == place)
+    Local blade = roots[0].Child(0) As? Mesh
+    If blade == Null Then Panic("its mesh")
+    Expect(blade.Name() == "blade" && blade.Geometry()?.Source() == "res://sub/ball.gltf#0")
+    Expect(blade.Geometry()?.Surface(0)?.VertexCount() == 3)
+End Function

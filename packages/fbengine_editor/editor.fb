@@ -8,6 +8,7 @@ Import std.io
 Import std.math
 Import fbengine
 Import fbengine_ui
+Import "./browser"
 Import "./commands"
 Import "./dialog"
 Import "./dock"
@@ -41,11 +42,16 @@ Public Final Class Editor
     Public ReadOnly Field View: SceneView
     /// Its entities.
     Public ReadOnly Field Tree: SceneTree
+    /// Its files.
+    Public ReadOnly Field Files: AssetBrowser
     Field project: GameProject? = Null
     Field dialog: Dialog? = Null
     Field welcome: Node
     Field quitting: Bool = False
     Field titled: String = ""
+    // The file the scene's saved in, a res:// path and where that is on disk.
+    Field sceneFile: String? = Null
+    Field sceneDisk: Path? = Null
 
     /// An editor keeping what it keeps in `settings`, or the OS's folder for settings. It's an
     /// IOError if that can't be read.
@@ -56,6 +62,7 @@ Public Final Class Editor
         Edited = EditedScene()
         View = SceneView(Edited, Edits)
         Tree = SceneTree(Edited, Edits)
+        Files = AssetBrowser(Edits)
         Docked = Dock()
         Menus = MenuBar(Actions)
         welcome = Widget("welcome", "welcome")
@@ -111,6 +118,7 @@ Public Final Class Editor
     Public Method Step()
         Flip()
         Tree.Update()
+        Files.Update()
         Shown.Update()
         Menus.Update()
         View.Update(Frame.Delta())
@@ -162,9 +170,14 @@ Public Final Class Editor
         opened.Mount()
         project = opened
         NewScene()
+        Files.SetFolder(opened.Folder / "assets")
         Kept.AddRecent(opened.Folder.Text)
         Local saved = Kept.Kept(opened.Folder.Text)
         If saved == Null || !Docked.Restore(saved["layout"] ?? Value.Object()) Then DefaultLayout()
+        If saved != Null
+            Local scene = saved["scene"]?.AsString()
+            If scene != Null && Assets.Exists(scene) Then OpenScene(scene)
+        End If
         ShowWelcome()
     End Method
 
@@ -174,7 +187,10 @@ Public Final Class Editor
         If open == Null Then Return
         Local kept = Value.Object()
         kept["layout"] = Docked.Saved()
+        Local scene = sceneFile
+        If scene != Null Then kept["scene"] = Value(scene)
         Kept.Keep(open.Folder.Text, kept)
+        Files.SetFolder(Null)
         open.Close()
         project = Null
         Docked.Clear()
@@ -199,12 +215,132 @@ Public Final Class Editor
 
     // A scene with nothing in it, in place of what's there, with nothing to undo in it.
     Method NewScene()
+        Replaced(EditedScene())
+        sceneFile = Null
+        sceneDisk = Null
+    End Method
+
+    // `scene` in place of what's there, with nothing to undo in it.
+    Method Replaced(scene: EditedScene)
         Edits.Clear()
         Local old = Edited
-        Edited = EditedScene()
+        Edited = scene
         View.SetScene(Edited)
         Tree.SetScene(Edited)
         old.Free()
+        World.SetCurrent(Edited.Stage)
+    End Method
+
+    /// The scene being edited's file, a res:// path, or Null for one that's never been saved.
+    Public Method SceneFile(): String? => sceneFile
+
+    /// Reads the scene at `path`, a res:// path, in place of the one being edited; one that can't be
+    /// read says why in a dialog, leaving the one being edited as it is.
+    Public Method OpenScene(path: String)
+        Local open = project
+        If open == Null Then Return
+        Try
+            Local disk = Try DiskOf(open, path)
+            Replaced(Try LoadEdited(path))
+            sceneFile = path
+            sceneDisk = disk
+        Catch error As IOError
+            Said("Couldn't open that scene", error.Message)
+            Return
+        End Try
+        Tree.MarkChanged()
+    End Method
+
+    /// Saves the scene being edited in its file, whole or not at all, as `path`, a res:// path, if
+    /// that's given; one that can't be saved says why in a dialog, and is as it was.
+    Public Method SaveScene(path: String? = Null)
+        Local open = project
+        Local to = path ?? sceneFile
+        If open == Null || to == Null Then Return
+        Try
+            Local disk = DiskOf(open, to)
+            Local folder = disk.Parent()
+            If folder != Null Then Try Dir.CreateAll(folder)
+            Try SaveEdited(Edited, disk)
+            sceneFile = to
+            sceneDisk = disk
+            Edits.MarkSaved()
+        Catch error As IOError
+            Said("Couldn't save that scene", error.Message)
+        End Try
+    End Method
+
+    // `action`, after asking whether to save what's changed, if anything has.
+    Method Guarded(action: Func())
+        If !Edits.Modified()
+            action()
+            Return
+        End If
+        Local asking = Dialog("Save your changes?", "The scene's changed since it was saved.")
+        asking.AddButton("Cancel")
+        asking.AddButton("Don't Save", action)
+        asking.AddButton("Save", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            If own.sceneFile == Null
+                own.AskForSceneFile(action)
+            Else
+                own.SaveScene()
+                If !own.Edits.Modified() Then action()
+            End If
+        End Function)
+        Showed(asking)
+    End Method
+
+    // Asks for a res:// path to save at, then does `then`.
+    Method AskForSceneFile(after: (Func())? = Null)
+        Local asking = Dialog("Save the scene as", "Its path, under res://:")
+        Local field = TextField(sceneFile ?? "res://scene.scene", "", "dialog.path")
+        field.SetTranslates(False)
+        field.SetMinSize(420.0, 0.0)
+        asking.AddContent(field)
+        asking.AddButton("Cancel")
+        Local saving = asking.AddButton("Save", Function[Weak Self]()
+            Local own = Self
+            If own == Null || field.Text() == "" Then Return
+            own.SaveScene(field.Text())
+            If after != Null && !own.Edits.Modified() Then after()
+        End Function)
+        asking.SubmitWith(field, saving)
+        Showed(asking)
+    End Method
+
+    // Asks for a res:// path to open.
+    Method AskForScene()
+        Local asking = Dialog("Open a scene", "Its path, under res://:")
+        Local field = TextField("res://", "", "dialog.path")
+        field.SetTranslates(False)
+        field.SetMinSize(420.0, 0.0)
+        asking.AddContent(field)
+        asking.AddButton("Cancel")
+        Local opening = asking.AddButton("Open", Function[Weak Self]()
+            Self?.OpenScene(field.Text())
+        End Function)
+        asking.SubmitWith(field, opening)
+        Showed(asking)
+    End Method
+
+    // A model let go on the scene: it's spawned where it lands, selected, through undo; one that can't
+    // be read says why, changing nothing.
+    Method DropModel(path: String, point: Vec2)
+        Local ray = View.RayAt(point)
+        If ray == Null Then Return
+        Local from, way = ray
+        World.SetCurrent(Edited.Stage)
+        Try
+            Local model = Try Files.ModelOf(path)
+            Local spawned = Try model.Spawn()
+            spawned.SetName(NameOf(path))
+            spawned.SetPosition(DropPlace(from, way))
+            Edits.Commit(MadeEdit("Add {NameOf(path)}", Edited, Function(): Entity => spawned))
+        Catch error As IOError
+            Said("Couldn't add that model", error.Message)
+        End Try
     End Method
 
     Method Said(title: String, text: String)
@@ -283,7 +419,25 @@ Public Final Class Editor
         Docked.AddPane(Pane("scene", "Scene", View))
         Tree.SetWidth(Sizing.Fill())
         Docked.AddPane(Pane("tree", "Tree", Tree))
-        For each In [("inspector", "Inspector"), ("assets", "Assets"), ("output", "Output")]
+        Files.SetWidth(Sizing.Fill())
+        Docked.AddPane(Pane("assets", "Assets", Files))
+        Files.OnOpen(Function[Weak Self](path: String)
+            Local own = Self
+            If own != Null Then own.Guarded(Function[Weak Self]()
+                Self?.OpenScene(path)
+            End Function)
+        End Function)
+        Files.OnDrop(Function[Weak Self](point: Vec2): Bool
+            Local own = Self
+            Return own != Null && own.Docked.Active("scene") && own.View.Box().Contains(point)
+        End Function, Function[Weak Self](path: String, point: Vec2)
+            Self?.DropModel(path, point)
+        End Function)
+        Files.OnReloaded(Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Tree.MarkChanged()
+        End Function)
+        For each In [("inspector", "Inspector"), ("output", "Output")]
             Local id, title = each
             Local content = Widget("pane", "pane." + id)
             Docked.AddPane(Pane(id, title, content))
@@ -299,6 +453,27 @@ Public Final Class Editor
             Local own = Self
             If own != Null Then own.AskForFolder()
         End Function, PrimaryKey(Key.O))
+        Actions.Add("file.new_scene", "New Scene", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Guarded(Function[Weak Self]()
+                Self?.NewScene()
+            End Function)
+        End Function, PrimaryKey(Key.N), hasProject)
+        Actions.Add("file.open_scene", "Open Scene…", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Guarded(Function[Weak Self]()
+                Self?.AskForScene()
+            End Function)
+        End Function, Null, hasProject)
+        Actions.Add("file.save", "Save Scene", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            If own.sceneFile != Null Then own.SaveScene() Else own.AskForSceneFile()
+        End Function, PrimaryKey(Key.S), hasProject)
+        Actions.Add("file.save_as", "Save Scene As…", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.AskForSceneFile()
+        End Function, PrimaryKey(Key.S, True), hasProject)
         Actions.Add("file.close", "Close Project", Function[Weak Self]()
             Local own = Self
             If own != Null Then own.CloseProject()
@@ -454,7 +629,8 @@ Public Final Class Editor
     End Method
 
     Method AddMenus()
-        Menus.AddMenu("File", ["file.open", "file.close", SEPARATOR, "file.quit"])
+        Menus.AddMenu("File", ["file.open", "file.close", SEPARATOR, "file.new_scene", "file.open_scene",
+                               "file.save", "file.save_as", SEPARATOR, "file.quit"])
         Menus.AddMenu("Edit",
                       ["edit.undo", "edit.redo", SEPARATOR, "tree.find", "tree.rename",
                        "tree.duplicate", "tree.hide", "tree.delete",
