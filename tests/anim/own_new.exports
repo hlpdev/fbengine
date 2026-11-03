@@ -1,0 +1,2 @@
+# What this test exports on a Mac: nothing, as own_new.map says why, where weak symbols would
+# otherwise take the place of a library's own.
