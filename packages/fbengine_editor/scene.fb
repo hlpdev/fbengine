@@ -122,7 +122,7 @@ Public Final Class MadeEdit Extends Edit
     /// What it made, Null before it's applied.
     Public Method Made(): Entity? => made
 
-    Public Override Method Apply()
+    Public Override Method Apply() Throws IOError
         Local entity = made
         If entity == Null
             entity = make()
@@ -133,7 +133,7 @@ Public Final Class MadeEdit Extends Edit
         scene.SelectOnly(entity)
     End Method
 
-    Public Override Method Undo()
+    Public Override Method Undo() Throws IOError
         Local entity = made
         If entity == Null Then Return
         entity.Hide()
@@ -158,13 +158,13 @@ Public Final Class TransformEdit Extends Edit
         Super.New(name)
     End New
 
-    Public Override Method Apply()
+    Public Override Method Apply() Throws IOError
         For i = 0 To entities.Count - 1
             after[i].PutOn(entities[i])
         End For
     End Method
 
-    Public Override Method Undo()
+    Public Override Method Undo() Throws IOError
         For i = 0 To entities.Count - 1
             before[i].PutOn(entities[i])
         End For

@@ -2,20 +2,111 @@
 
 Import std.collections
 Import std.core
+Import std.math
+Import std.text
 Import fbengine
 Import fbengine_ui
 
+// How near a dialog goes to the window's edges, how wide it goes at most, and how tall its title,
+// its buttons, and the gaps between them are, more or less.
+Const EDGE: Float32 = 8.0
+Const WIDEST: Float32 = 560.0
+Const OTHERS: Float32 = 96.0
+
+// Text in lines that fit its width, broken between words where it can, and in them where it can't.
+Class WrappedText Extends Widget
+    Field text: String
+    Field wide: Float32 = WIDEST
+
+    New(shown: String)
+        text = shown
+        Super.New("dialog.text")
+        SetTranslates(False)
+    End New
+
+    // Sets how wide it goes.
+    Method SetWide(units: Float32)
+        If units == wide Then Return
+        wide = units
+        Reflow()
+    End Method
+
+    Public Override Method Measure(): Vec2
+        Local across: Float32 = 0
+        Local high: Float32 = 0
+        For line In Lines()
+            Local size = TextSize(line)
+            across = Max(across, size.x)
+            high += size.y
+        End For
+        Return Vec2(across, high)
+    End Method
+
+    Public Override Method Draw(paint: Painter)
+        Super.Draw(paint)
+        Local box = ContentBox()
+        Local y = box.Y
+        For line In Lines()
+            Local size = TextSize(line)
+            paint.TextIn(line, Rect(box.X, y, box.Width, size.y), CurrentStyle(), Align.START)
+            y += size.y
+        End For
+    End Method
+
+    // Each time, as what it's measured by can change, as the font does on the first frame drawn.
+    Method Lines(): String[]
+        Local lines: String[] = []
+        For word In text.Split(" ")
+            Local rest = word
+            While rest != ""
+                Local line = lines.Count > 0 ? lines[lines.Count - 1] : ""
+                Local joined = line == "" ? rest : "{line} {rest}"
+                If lines.Count > 0 && TextSize(joined).x <= wide
+                    lines[lines.Count - 1] = joined
+                    rest = ""
+                ElseIf TextSize(rest).x <= wide
+                    lines.Add(rest)
+                    rest = ""
+                Else
+                    // Longer than a line, as a path is: as much of it as fits, on a line of its own.
+                    Local fits = Fitting(rest)
+                    lines.Add(rest.Slice(0, fits))
+                    rest = rest.Slice(fits, rest.Length)
+                End If
+            End While
+        End For
+        Return lines
+    End Method
+
+    // How many of the first characters of `word`, at least 1, fit its width.
+    Method Fitting(word: String): Int
+        Local fits = 1
+        For length = 1 To word.Length
+            If TextSize(word.Slice(0, length)).x > wide Then Break
+            fits = length
+        End For
+        Return fits
+    End Method
+End Class
+
 /// A title, text, what else it's given, and a row of buttons, each of which closes it, over `ui`.
-/// Escape closes it too, Update, each frame after the Ui's, seeing to that.
+/// It keeps in the window, however long what it says is: its text is wrapped, and scrolls if it's
+/// still too tall. Escape closes it, Update, each frame after the Ui's, seeing to that.
 Public Final Class Dialog Extends Widget
+    Field said: WrappedText
+    Field scroller: ScrollView
     Field body: Node
     Field buttons: Node
     Field cancelled: (Func())? = Null
     Field shown: Weak<Ui>
+    Field submitting: TextField? = Null
+    Field submits: Button? = Null
 
     /// A dialog titled `title`, saying `text`. `cancelled`, if it's given, is what Escape does.
     Public New(title: String, text: String, onCancel: (Func())? = Null)
         cancelled = onCancel
+        said = WrappedText(text)
+        scroller = ScrollView("dialog.said")
         body = Node("dialog.body")
         buttons = Node("dialog.buttons")
         Super.New("dialog", "dialog")
@@ -25,9 +116,8 @@ Public Final Class Dialog Extends Widget
         heading.SetStyleName("dialog.title")
         heading.SetTranslates(False)
         Add(heading)
-        Local said = Label(text)
-        said.SetTranslates(False)
-        Add(said)
+        scroller.Add(said)
+        Add(scroller)
         body.SetGap(6.0)
         Add(body)
         buttons.SetArrangement(Arrangement.ROW)
@@ -53,9 +143,16 @@ Public Final Class Dialog Extends Widget
         Return button
     End Method
 
+    /// Makes Return in `field` click `button`.
+    Public Method SubmitWith(field: TextField, button: Button)
+        submitting = field
+        submits = button
+    End Method
+
     /// Shows it over `ui`.
     Public Method Show(ui: Ui)
         shown = ui
+        Fitted(ui)
         ui.OpenPopup(Self, PopupKind.MODAL)
     End Method
 
@@ -68,12 +165,32 @@ Public Final Class Dialog Extends Widget
         If ui != Null Then ui.ClosePopup(Self)
     End Method
 
-    /// Closes it if the last Ui.Update read Escape, and does what's to be done then.
+    /// Keeps it in the window, clicks what Return's for if it's been pressed, and closes it if the
+    /// last Ui.Update read Escape, and does what's to be done then.
     Public Method Update()
         Local ui = shown
-        If ui == Null || !Showing() || !ui.Back() Then Return
+        If ui == Null || !Showing() Then Return
+        Fitted(ui)
+        Local field = submitting
+        Local button = submits
+        If field != Null && button != Null && field.Submitted() Then button.Click()
+        If !Showing() || !ui.Back() Then Return
         Close()
         Local handler = cancelled
         If handler != Null Then handler()
+    End Method
+
+    // As big as there's room for: as wide as it can be, and its text as tall as what else it has
+    // leaves room for, before anything's been measured, so it doesn't move once it has.
+    Method Fitted(ui: Ui)
+        Local units = ui.Scale()
+        Local roomAcross = Max((Window.Width() As Float32) / units - EDGE * 2, 0.0)
+        Local roomDown = Max((Window.Height() As Float32) / units - EDGE * 2, 0.0)
+        SetMaxSize(roomAcross, roomDown)
+        Local padding = Padding()
+        Local across = Max(Min(roomAcross, WIDEST) - padding.Left - padding.Right, 40.0)
+        said.SetWide(across)
+        Local others = padding.Top + padding.Bottom + OTHERS + body.NaturalSize().y
+        scroller.SetMaxSize(across, Max(roomDown - others, 20.0))
     End Method
 End Class

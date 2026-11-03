@@ -43,6 +43,8 @@ Function Found(editor: Editor, name: String): Node
 End Function
 
 Function ClickOn(editor: Editor, name: String) Throws GraphicsError
+    // As a person does, some time after it's shown: the first frame a font's drawn in can move it.
+    editor.Step()
     Local at = Found(editor, name).Box().Center
     Try Simulate.MoveMouse(at.x, at.y)
     editor.Step()
@@ -308,4 +310,319 @@ Function ClosingTheWindowEndsIt() Throws IOError, GraphicsError
     Expect(editor.Quitting())
     editor.Finish()
     Expect(!Window.Open())
+End Function
+
+@Test
+Function AFailedOpenLeavesWhatsOpenAsItIs() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path, "mine"))
+    Local before = editor.Current()
+    Local scene = editor.Edited
+    Local value = 0
+    editor.Edits.Commit(EditOf("set", Function()
+        value = 1
+    End Function, Function()
+        value = 0
+    End Function))
+    editor.OpenFolder(games.Path / "nothing")
+    editor.Step()
+    Expect(editor.ShowingDialog() != Null)
+    Local open = editor.Current()
+    Expect(open != Null && before != Null && RefEquals(open, before), "it closed what was open")
+    Expect(editor.Edits.CanUndo(), "it lost what could be undone")
+    Expect(RefEquals(editor.Edited, scene), "it lost the scene")
+    Expect((Try Assets.ReadText("res://said.txt")) == "mine", "it unmounted its assets")
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    // One that opens does close it, with what could be undone.
+    editor.OpenFolder(Try Game(games.Path, "next"))
+    Expect(!editor.Edits.CanUndo(), "it kept the old project's edits")
+    Expect((Try Assets.ReadText("res://said.txt")) == "next")
+    // And closing too.
+    editor.Edits.Commit(EditOf("set", Function()
+        value = 1
+    End Function, Function()
+        value = 0
+    End Function))
+    editor.Step()
+    Expect(editor.Actions.Run("file.close"))
+    Expect(!editor.Edits.CanUndo(), "it kept the closed project's edits")
+    editor.Finish()
+End Function
+
+@Test
+Function ClosingAProjectOnlyTakesOutItsOwnMountAndWhatsLoaded() Throws IOError, ProjectError
+    Local games = Try TempDir()
+    Local first = Try GameProject.Check(Try Game(games.Path, "mine"))
+    Expect(!Assets.Exists("res://said.txt"), "Check mounted it")
+    first.Mount()
+    Expect((Try Assets.ReadText("res://said.txt")) == "mine")
+    Local other = Assets.MountFolder("res://", (Try Game(games.Path, "other")) / "assets")
+    first.Close()
+    Expect((Try Assets.ReadText("res://said.txt")) == "other", "it took out what's over it")
+    Expect(Assets.Unmount(other))
+    Expect(!Assets.Exists("res://said.txt"))
+    // Twice is once.
+    first.Close()
+    Expect(!Assets.Unmount(other))
+End Function
+
+@Test
+Function AProjectNeedsAName() Throws IOError
+    Local games = Try TempDir()
+    Try File.WriteText(games.Path / "project.toml", "[project]\nname = \"\"\n")
+    Local refused = False
+    Try
+        Try GameProject.Check(games.Path)
+    Catch error As ProjectError
+        refused = True
+    End Try
+    Expect(refused, "a project called nothing opened")
+End Function
+
+@Test
+Function ControlZInAFieldIsntTheScenes() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path, "field"))
+    Local value = 0
+    editor.Edits.Commit(EditOf("set", Function()
+        value = 1
+    End Function, Function()
+        value = 0
+    End Function))
+    Try Primary(Key.O)
+    editor.Step()
+    // Into a dialog's field: nothing goes to what's under it anyway; in the tree's, nor does it.
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    Local field = TextField("", "", "a.field")
+    field.SetAnchors(Anchors.Point(0.0, 0.0))
+    field.SetSize(200.0, 30.0)
+    editor.Shown.Root().Add(field)
+    editor.Step()
+    editor.Shown.Focus(field)
+    editor.Step()
+    Try Primary(Key.Z)
+    editor.Step()
+    Expect(value == 1, "Control Z in a field undid a scene's edit")
+    Try Primary(Key.Z, True)
+    editor.Step()
+    Expect(value == 1)
+    // Control S isn't the field's.
+    editor.Shown.Focus(Null)
+    editor.Step()
+    Try Primary(Key.Z)
+    editor.Step()
+    Expect(value == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function APlaceOffEveryDisplayIsntWhereItOpens() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local editor = Try Started(settings.Path)
+    Local opened = Window.X()
+    editor.Finish()
+    Try Dir.CreateAll(settings.Path)
+    Try File.WriteText(settings.Path / "fbengine_editor" / "preferences.txt",
+                       "window.x=99999999999\nwindow.y=-99999999999\nwindow.width=99999999999\nwindow.height=-5\n")
+    Local session = Try Session(settings.Path)
+    Local place = session.Window()
+    Expect(place.X == Null && place.Y == Null, "it took a place that wraps")
+    Expect(place.Width == 16384 && place.Height == 240, "it's {place.Width} by {place.Height}")
+    // In range, but where no display is.
+    session.SetWindow(100000, 100000, 800, 600)
+    editor = Try Started(settings.Path)
+    Expect(Window.Width() == 800)
+    Expect(Window.X() < 100000, "it opened off every display: {Window.X()} from {opened}")
+    Expect(Window.MinimumWidth() == 640 && Window.MinimumHeight() == 400)
+    editor.Finish()
+End Function
+
+@Test
+Function WhatCantBeReadIsAsIfItWerentThere() Throws IOError
+    Local settings = Try TempDir()
+    // The preferences a folder, and so unreadable: nothing's kept.
+    Try Dir.CreateAll(settings.Path / "fbengine_editor" / "preferences.txt")
+    Local session = Try Session(settings.Path)
+    Expect(session.Recent().Count == 0)
+    session.AddRecent("somewhere")
+    Expect(session.Recent().Count == 0)
+    Expect(session.Window().Width == 1280)
+    session.SetWindow(1, 2, 3, 4)
+End Function
+
+@Test
+Function WhatsRecentHasOneOfEachAndNothingEmpty() Throws IOError
+    Local settings = Try TempDir()
+    Local session = Try Session(settings.Path)
+    session.AddRecent("")
+    Expect(session.Recent().Count == 0)
+    session.AddRecent("C:/games/one")
+    session.AddRecent("C:/games/two")
+    session.AddRecent("C:/games/one")
+    Expect(session.Recent() == ["C:/games/one", "C:/games/two"], "it's {session.Recent()}")
+    // A folder's a folder in any case, on Windows.
+    session.AddRecent("C:/GAMES/ONE")
+    Local folded = System.Platform == Platform.WINDOWS
+    Expect(session.Recent().Count == (folded ? 2 : 3), "it's {session.Recent()}")
+    Local kept = Value.Object()
+    kept["a"] = Value(1)
+    session.Keep("C:/games/Case", kept)
+    Expect((session.Kept("C:/GAMES/CASE") != Null) == folded)
+End Function
+
+@Test
+Function WhatsKeptOfAnotherProjectWithTheSameHashIsntThisOnes() Throws IOError
+    Local settings = Try TempDir()
+    Local session = Try Session(settings.Path)
+    Local kept = Value.Object()
+    kept["a"] = Value(1)
+    // These two hash alike.
+    session.Keep("C:/games/dbftkhgcqfsw", kept)
+    Expect(session.Kept("C:/games/dbftkhgcqfsw") != Null)
+    Expect(session.Kept("C:/games/ufuwlzbxhxvj") == Null, "it took another project's for its own")
+End Function
+
+@Test
+Function AMenuShowsWhatCantRunAsDisabled() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path, "menus"))
+    Try ClickOn(editor, "menu.Edit")
+    Local undo = Found(editor, "edit.undo") As? Widget
+    Expect(undo != Null && !undo.Enabled(), "undo's enabled with nothing to undo")
+    Local none = Found(editor, "select.none") As? Widget
+    Expect(none != Null && none.Enabled())
+    editor.Finish()
+End Function
+
+@Test
+Function AnEditThatThrowsSaysWhyInADialog() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path, "failing"))
+    Expect(!editor.Edits.Commit(Refusing()))
+    editor.Step()
+    Expect(editor.ShowingDialog() != Null && !editor.Edits.CanUndo())
+    editor.Finish()
+End Function
+
+Class Refusing Extends Edit
+    New()
+        Super.New("refuse")
+    End New
+
+    Public Override Method Apply() Throws IOError
+        Throw IOError(IOErrorKind.OTHER, "no", "")
+    End Method
+End Class
+
+@Test
+Function AnotherDialogTakesThePlaceOfTheOneShowing() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path)
+    Expect(editor.Actions.Run("file.open"))
+    editor.Step()
+    Expect(editor.Shown.Popups().Count == 1)
+    Expect(editor.Actions.Run("file.open"))
+    editor.Step()
+    Expect(editor.Shown.Popups().Count == 1, "there are {editor.Shown.Popups().Count} open")
+    editor.Finish()
+End Function
+
+@Test
+Function ReturnInThePathsFieldOpensIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path, "returned")
+    Local editor = Try Started(settings.Path)
+    Expect(editor.Actions.Run("file.open"))
+    editor.Step()
+    Local field = Found(editor, "dialog.path") As? TextField
+    If field == Null
+        Fail("there's no field")
+        Return
+    End If
+    Expect(RefEquals(editor.Shown.Focused(), field), "it doesn't start in the field")
+    field.SetText(game.Text)
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+    Local open = editor.Current()
+    Expect(open != Null && open.Name == "returned")
+    Expect(editor.ShowingDialog() == Null)
+    editor.Finish()
+End Function
+
+@Test
+Function ADialogKeepsInASmallWindowWhateverItSays() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(320, 240)
+    Defer EndGraphics()
+    Local root = Node("root")
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Local long = ""
+    For i = 1 To 30
+        long += "aaaaaaaaa "
+    End For
+    Local unbroken = ""
+    For i = 1 To 300
+        unbroken += "x"
+    End For
+    For text In [long, unbroken]
+        Local dialog = Dialog("A Title", text)
+        Local ok = dialog.AddButton("OK")
+        dialog.Show(ui)
+        For frame = 1 To 3
+            Flip()
+            ui.Update()
+            dialog.Update()
+        End For
+        Local box = dialog.Box()
+        Expect(box.X >= 0 && box.Y >= 0 && box.X + box.Width <= 320 && box.Y + box.Height <= 240,
+               "it's {box}")
+        Local button = ok.Box()
+        Expect(button.X >= 0 && button.Y >= 0 && button.X + button.Width <= 320 &&
+               button.Y + button.Height <= 240, "OK's {button}")
+        dialog.Close()
+    End For
+End Function
+
+@Test
+Function ControlZWithAGroupOpenDoesNothing() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path, "group"))
+    Local value = 0
+    editor.Edits.Commit(EditOf("set", Function()
+        value = 1
+    End Function, Function()
+        value = 0
+    End Function))
+    editor.Edits.BeginGroup("group")
+    Try Primary(Key.Z)
+    editor.Step()
+    Expect(value == 1, "it undid through a group")
+    Try Primary(Key.Z, True)
+    editor.Step()
+    editor.Edits.EndGroup()
+    Try Primary(Key.Z)
+    editor.Step()
+    Expect(value == 0)
+    editor.Finish()
 End Function

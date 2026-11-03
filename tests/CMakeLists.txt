@@ -990,7 +990,10 @@ if(FBENGINE_FB_TESTS)
 endif()
 # What fbengine_editor panics for, each by a run of its panics/main.fb, which says it.
 if(FBENGINE_FB_TESTS)
-  foreach(case IN ITEMS "history-none;History: it keeps more than 0 edits"
+  foreach(case IN ITEMS "mark-in-an-edit;History.MarkSaved: an edit can't make another"
+                        "end-group-in-an-edit;History.EndGroup: an edit can't make another"
+                        "move-nan;Dock.Move: a share is a number"
+                        "history-none;History: it keeps more than 0 edits"
                         "commit-in-an-edit;History.Commit: an edit can't make another"
                         "undo-in-a-group;History.Undo: a group's begun"
                         "redo-in-a-group;History.Redo: a group's begun"

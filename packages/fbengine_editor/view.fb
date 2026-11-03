@@ -331,6 +331,7 @@ Public Final Class SceneView Extends Widget
     End Method
 
     Public Override Method PointerUp(point: Vec2, over: Bool)
+        If dragging == Dragging.HANDLE Then history.EndMerge()
         dragging = Dragging.NOTHING
         axis = -1
     End Method

@@ -7,9 +7,16 @@ Import std.core
 Import std.data
 Import std.io
 Import std.os
+Import std.text
 
 // How many recent projects are kept.
 Const RECENT = 8
+
+// Whether `value` can be a window's place.
+Function Fits(value: Int64): Bool => value >= -2147483648 && value <= 2147483647
+
+// `path` as it's compared: on Windows, whose files are found in any case, in one case.
+Function Folded(path: String): String => System.Platform == Platform.WINDOWS ? path.ToLower() : path
 
 /// The window's place and size as it was.
 Public Struct WindowPlace
@@ -20,13 +27,14 @@ Public Struct WindowPlace
 End Struct
 
 /// What's kept between runs. A file that can't be read, or has been changed to nonsense, is as if
-/// it weren't there; one that can't be written is only not kept.
+/// it weren't there, and is left as it is; one that can't be written is only not kept.
 Public Final Class Session
     Field folder: Path
-    Field preferences: Preferences
+    // Null when they can't be read, when nothing's kept in them.
+    Field preferences: Preferences?
 
     /// What's kept in `folder`, or the OS's folder for settings. It's an IOError if the OS doesn't
-    /// say where that is, or it can't be read.
+    /// say where that is.
     Public New(folder: Path? = Null) Throws IOError
         Local where = folder
         If where == Null
@@ -36,50 +44,63 @@ Public Final Class Session
             where = Path(config) / "fbengine_editor"
         End If
         Self.folder = where
-        preferences = Try Preferences("fbengine_editor", where)
+        preferences = Try? Preferences("fbengine_editor", where)
     End New
 
     /// The projects opened lately, the last first, as their folders' paths.
     Public Method Recent(): String[]
         Local recent: String[] = []
+        Local kept = preferences
+        If kept == Null Then Return recent
         For i = 0 Until RECENT
-            Local path = preferences.Get("recent.{i}")
-            If path != Null Then recent.Add(path)
+            Local path = kept.Get("recent.{i}")
+            If path != Null && path != "" Then recent.Add(path)
         End For
         Return recent
     End Method
 
     /// Puts `path` first in Recent.
     Public Method AddRecent(path: String)
+        Local kept = preferences
+        If kept == Null || path == "" Then Return
         Local recent = Recent()
-        recent.Remove(path)
+        recent = recent.Filter(Function(each: String) => Folded(each) != Folded(path))
         recent.Insert(0, path)
         For i = 0 Until RECENT
             If i < recent.Count
-                preferences.Set("recent.{i}", recent[i])
+                kept.Set("recent.{i}", recent[i])
             Else
-                preferences.Remove("recent.{i}")
+                kept.Remove("recent.{i}")
             End If
         End For
-        Try? preferences.Save()
+        Try? kept.Save()
     End Method
 
     /// The window's place, as it last was, or a size of 1280 by 720, with no place.
     Public Method Window(): WindowPlace
-        Local x = preferences.GetInt("window.x")
-        Local y = preferences.GetInt("window.y")
+        Local kept = preferences
+        If kept == Null Then Return WindowPlace(Null, Null, 1280, 720)
+        Local x = kept.GetInt("window.x")
+        Local y = kept.GetInt("window.y")
+        // A place past what a window's place can be is nonsense, not a place far away.
+        If x == Null || y == Null || !Fits(x) || !Fits(y)
+            x = Null
+            y = Null
+        End If
         Return WindowPlace(x != Null ? x As Int32 : Null, y != Null ? y As Int32 : Null,
-                           Clamp(preferences.GetInt("window.width", 1280), 320, 16384) As Int32,
-                           Clamp(preferences.GetInt("window.height", 720), 240, 16384) As Int32)
+                           Clamp(kept.GetInt("window.width", 1280), 320, 16384) As Int32,
+                           Clamp(kept.GetInt("window.height", 720), 240, 16384) As Int32)
     End Method
 
     /// Keeps the window's place.
     Public Method SetWindow(x: Int32, y: Int32, width: Int32, height: Int32)
-        preferences.SetInt("window.x", x)
-        preferences.SetInt("window.y", y)
-        preferences.SetInt("window.width", width)
-        preferences.SetInt("window.height", height)
-        Try? preferences.Save()
+        Local kept = preferences
+        If kept == Null Then Return
+        kept.SetInt("window.x", x)
+        kept.SetInt("window.y", y)
+        kept.SetInt("window.width", width)
+        kept.SetInt("window.height", height)
+        Try? kept.Save()
     End Method
 
     /// What's kept for the project at `path`, as Keep had it, or Null.
@@ -89,7 +110,9 @@ Public Final Class Session
         Local text = Try? File.ReadText(file)
         If text == Null Then Return Null
         Local value = Try? Toml.Read(text)
-        If value == Null || value["project"]?.AsString() != path Then Return Null
+        If value == Null Then Return Null
+        Local project = value["project"]?.AsString()
+        If project == Null || Folded(project) != Folded(path) Then Return Null
         Return value["kept"]
     End Method
 
@@ -104,7 +127,7 @@ Public Final Class Session
 
     Method FileFor(path: String): Path
         Local hash: Int64 = 7
-        For byte In path.Bytes
+        For byte In Folded(path).Bytes
             hash = (hash * 131 + (byte As Int64)) % 1000000000039
         End For
         Return folder / "projects" / "{hash}.toml"

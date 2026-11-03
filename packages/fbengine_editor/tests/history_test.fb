@@ -2,8 +2,10 @@
 
 Import std.collections
 Import std.core
+Import std.io
 Import std.os
 Import std.test
+Import std.text
 Import fbengine
 Import fbengine_editor
 
@@ -228,4 +230,246 @@ Function AKeyRunsItsCommand()
     Expect(commands.Seen(Keystroke(KeystrokeKind.REPEAT, Key.O, "", False, !mac, False, mac)) &&
            opens == 0)
     Expect("{Shortcut(Key.Z, True, True, False)}" == (mac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z"))
+End Function
+
+// An edit that adds its name to `order` as it applies, and takes the last off as it undoes, so it
+// knows which way it's run; or throws, while `failing[0]` says so.
+Class Ordered Extends Edit
+    Field order: String[]
+    Field failing: Bool[]
+
+    New(name: String, into: String[], failure: Bool[])
+        order = into
+        failing = failure
+        Super.New(name)
+    End New
+
+    Public Override Method Apply() Throws IOError
+        If failing[0] Then Throw IOError(IOErrorKind.OTHER, "it failed", Name)
+        order.Add(Name)
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        If failing[0] Then Throw IOError(IOErrorKind.OTHER, "it failed", Name)
+        Expect(order[order.Count - 1] == Name, "{Name} was undone out of order: {order}")
+        order.RemoveAt(order.Count - 1)
+    End Method
+End Class
+
+@Test
+Function AGroupUndoesInTheOtherOrder()
+    Local order: String[] = []
+    Local no = [False]
+    Local history = History()
+    history.BeginGroup("all")
+    history.Commit(Ordered("a", order, no))
+    history.Commit(Ordered("b", order, no))
+    history.Commit(Ordered("c", order, no))
+    history.EndGroup()
+    history.Undo()
+    Expect(order.Count == 0)
+    history.Redo()
+    Expect(order == ["a", "b", "c"], "it's {order}")
+End Function
+
+@Test
+Function AnEditThatThrowsIsKeptNowhereAndSaysSo()
+    Local order: String[] = []
+    Local failing = [False]
+    Local history = History()
+    Local told = ""
+    history.OnFailed(Function(edit: Edit, error: IOError)
+        told = "{edit.Name}: {error.Message}"
+    End Function)
+    Expect(history.Commit(Ordered("a", order, failing)))
+    history.Undo()
+    history.Redo()
+    failing[0] = True
+    // Not kept, and what there was to undo is there still.
+    Expect(!history.Commit(Ordered("b", order, failing)))
+    Expect(told.StartsWith("b: "), "it said {told}")
+    Expect(history.UndoName() == "a")
+    told = ""
+    // An undo that throws leaves it to undo.
+    Expect(!history.Undo())
+    Expect(told.StartsWith("a: ") && history.CanUndo() && !history.CanRedo(), "it said {told}")
+    failing[0] = False
+    Expect(history.Undo())
+    failing[0] = True
+    // A redo too, and a commit doesn't lose what's to redo.
+    Expect(!history.Redo() && history.CanRedo() && !history.CanUndo())
+    Expect(!history.Commit(Ordered("c", order, failing)) && history.CanRedo())
+    failing[0] = False
+    Expect(history.Redo() && order == ["a"], "it's {order}")
+    // And it can run again: nothing was left running.
+    Expect(history.Commit(Ordered("d", order, failing)))
+End Function
+
+// Applies as `middle` says: throws in the second of three.
+Class Failing Extends Edit
+    New()
+        Super.New("failing")
+    End New
+
+    Public Override Method Apply() Throws IOError
+        Throw IOError(IOErrorKind.OTHER, "no", "")
+    End Method
+End Class
+
+@Test
+Function AGroupThatThrowsGoingOnTakesBackWhatItDid()
+    Local order: String[] = []
+    Local no = [False]
+    Local failing = [False]
+    Local history = History()
+    history.BeginGroup("all")
+    history.Commit(Ordered("a", order, no))
+    history.Commit(Ordered("b", order, failing))
+    history.Commit(Ordered("c", order, no))
+    history.EndGroup()
+    history.Undo()
+    Expect(order.Count == 0)
+    // Redone, the second throws, and the first is taken back.
+    failing[0] = True
+    Expect(!history.Redo())
+    Expect(order.Count == 0 && history.CanRedo(), "it left {order}")
+End Function
+
+@Test
+Function NothingMergesAcrossAnUndoARedoOrAnEndedDrag()
+    Local sum = [0]
+    Local history = History()
+    // A merge, another's, undone: the first isn't merged into.
+    history.Commit(Adding(sum, 1, True))
+    history.Commit(EditOf("other", Function()
+    End Function, Function()
+    End Function))
+    history.Undo()
+    history.Commit(Adding(sum, 100, True))
+    Expect(sum[0] == 101)
+    history.Undo()
+    Expect(sum[0] == 1, "it merged across an undo: {sum[0]}")
+    history.Undo()
+    Expect(sum[0] == 0)
+    // Undone and redone, nor is it.
+    history.Clear()
+    history.Commit(Adding(sum, 1, True))
+    history.Undo()
+    history.Redo()
+    history.Commit(Adding(sum, 2, True))
+    history.Undo()
+    Expect(sum[0] == 1, "it merged across a redo: {sum[0]}")
+    // Two drags are two.
+    history.Clear()
+    sum[0] = 0
+    history.Commit(Adding(sum, 1, True))
+    history.Commit(Adding(sum, 1, True))
+    history.EndMerge()
+    history.Commit(Adding(sum, 5, True))
+    history.Commit(Adding(sum, 5, True))
+    history.Undo()
+    Expect(sum[0] == 2, "two drags were one undo: {sum[0]}")
+    history.Undo()
+    Expect(sum[0] == 0 && !history.CanUndo())
+End Function
+
+@Test
+Function InAGroupThereIsNothingToUndoOrRedo()
+    Local sum = [0]
+    Local history = History()
+    history.Commit(Adding(sum, 1))
+    history.Commit(Adding(sum, 2))
+    history.Undo()
+    history.BeginGroup("group")
+    Expect(!history.CanUndo() && !history.CanRedo())
+    Expect(history.UndoName() == Null && history.RedoName() == Null)
+    history.EndGroup()
+    Expect(history.CanUndo() && history.CanRedo())
+    Expect(history.UndoName() == "add 1" && history.RedoName() == "add 2")
+    // Nor inside an edit.
+    Local asked = True
+    history.Commit(EditOf("asking", Function()
+        asked = history.CanUndo() || history.CanRedo() || history.UndoName() != Null
+    End Function, Function()
+    End Function))
+    Expect(!asked, "inside an edit, it said there was something to undo")
+    // What it holds holds it.
+    history.Clear()
+End Function
+
+@Test
+Function AGroupWithEditsInItIsModifiedAndMarkingSavedWaitsForItsEnd()
+    Local sum = [0]
+    Local history = History()
+    history.BeginGroup("group")
+    Expect(!history.Modified(), "nothing's in it")
+    history.Commit(Adding(sum, 1))
+    Expect(history.Modified())
+    // Saved as it ends.
+    history.MarkSaved()
+    Expect(history.Modified())
+    history.Commit(Adding(sum, 2))
+    history.EndGroup()
+    Expect(!history.Modified(), "marked in a group, what the group ended with is what's saved")
+    history.Undo()
+    Expect(history.Modified())
+    history.Redo()
+    Expect(!history.Modified())
+    // With nothing in it, what's there.
+    history.Commit(Adding(sum, 4))
+    history.BeginGroup("empty")
+    history.MarkSaved()
+    history.EndGroup()
+    Expect(!history.Modified())
+End Function
+
+@Test
+Function ClearForgetsAGroupAndWhatWasSaved()
+    Local sum = [0]
+    Local history = History()
+    history.Commit(Adding(sum, 1))
+    history.MarkSaved()
+    history.Commit(Adding(sum, 1))
+    history.BeginGroup("group")
+    history.Commit(Adding(sum, 1))
+    history.Clear()
+    Expect(!history.Modified(), "what was saved is gone with what it was of")
+    Expect(!history.CanUndo())
+    // No group's open: its edits go alone, and undo doesn't panic.
+    history.Commit(Adding(sum, 5))
+    Expect(history.UndoName() == "add 5")
+    Expect(history.Modified())
+    Expect(history.Undo())
+    Expect(!history.Modified())
+End Function
+
+@Test
+Function TrimmingKeepsWhatWasSavedInItsPlace()
+    Local sum = [0]
+    Local history = History(3)
+    history.Commit(Adding(sum, 1))
+    history.Commit(Adding(sum, 1))
+    history.MarkSaved()
+    // One over: what was saved is one further back, and still there.
+    history.Commit(Adding(sum, 1))
+    history.Commit(Adding(sum, 1))
+    Expect(history.Modified())
+    history.Undo()
+    Expect(history.Modified(), "one undo got back to what was saved, two away")
+    history.Undo()
+    Expect(!history.Modified(), "two undos didn't get back to what was saved")
+End Function
+
+@Test
+Function AKeyWithSomethingElseHeldIsAnotherKey()
+    Local commands = Commands()
+    Local runs = 0
+    commands.Add("a", "A", Function()
+        runs += 1
+    End Function, Shortcut(Key.Z, True, False, False))
+    // Both Control and Meta, Alt too, aren't Primary alone.
+    Expect(!commands.Seen(Keystroke(KeystrokeKind.PRESS, Key.Z, "", False, True, False, True)))
+    Local mac = System.Platform == Platform.MACOS
+    Expect(!commands.Seen(Keystroke(KeystrokeKind.PRESS, Key.Z, "", False, !mac, True, mac)))
+    Expect(runs == 0)
 End Function

@@ -76,6 +76,10 @@ Public Final Class Dock Extends Node
     Field current: String = ""
     Field tabMenu: (Func(Ui, String, Vec2))? = Null
     Field hint: Node
+    // The Ui a drag's hint is over, while it's shown.
+    Field hinted: Weak<Ui>
+    // How many times it's been built, which a tab of before then is out of.
+    Field builds: Int = 0
     Field changed: (Func())? = Null
 
     Public New()
@@ -159,10 +163,7 @@ Public Final Class Dock Extends Node
         Needed("Hide", id)
         If !Showing(id) Then Return
         top = Without(top, id)
-        If current == id
-            Local shown = ShownPanes()
-            current = shown.Count > 0 ? shown[0] : ""
-        End If
+        If current == id Then current = FirstShowing()
         Rebuilt()
     End Method
 
@@ -179,9 +180,11 @@ Public Final Class Dock Extends Node
     End Method
 
     /// Puts the pane `id` against the pane `target`, on `side`, `share` of the room there, kept from 0
-    /// to 1, if it's beside it; False, doing nothing, if it's where that is, or the same pane.
+    /// to 1, if it's beside it; False, doing nothing, if it's where that is, or the same pane. Panics
+    /// for a share that isn't a number, or a pane it hasn't been given.
     @PanicsAtCaller
     Public Method Move(id: String, target: String, side: DockSide, share: Float32 = 0.5): Bool
+        If IsNaN(share) Then Panic("Dock.Move: a share is a number from 0 to 1, not {share}")
         Needed("Move", id)
         Needed("Move", target)
         If id == target || !Showing(target) Then Return False
@@ -219,12 +222,14 @@ Public Final Class Dock Extends Node
         Return Null
     End Method
 
-    /// The tree as a Value: a group's tabs and active, a split's across, ratio, first, and second.
-    /// With nothing shown, an empty Object.
+    /// The tree as a Value: a group's tabs and active, a split's across, ratio, first, and second,
+    /// and at the top, which pane's current. With nothing shown, an empty Object.
     Public Method Saved(): Value
         Local item = top
         If item == Null Then Return Value.Object()
-        Return Written(item)
+        Local value = Written(item)
+        value["current"] = Value(current)
+        Return value
     End Method
 
     /// Puts back the tree `saved` has, leaving out panes it hasn't been given, and any it's seen
@@ -234,8 +239,8 @@ Public Final Class Dock Extends Node
         Local item = Read(saved, seen, 0)
         If item == Null Then Return False
         top = item
-        Local shown = ShownPanes()
-        current = shown.Count > 0 ? shown[0] : ""
+        Local kept = saved["current"]?.AsString()
+        current = kept != Null && Active(kept) ? kept : FirstShowing()
         Rebuilt()
         Return True
     End Method
@@ -247,6 +252,15 @@ Public Final Class Dock Extends Node
         Rebuilt()
     End Method
 
+    // How many times it's been built.
+    Package Method Builds(): Int => builds
+
+    // Gives the tab of `id` the focus, as the one that had it's gone with the last build.
+    Package Method FocusTab(ui: Ui, id: String)
+        Local tab = Find("tab." + id) As? Widget
+        If tab != Null Then ui.Focus(tab)
+    End Method
+
     // The tab `id`'s been dragged to `point`: shows where it would go, or nothing.
     Package Method Over(ui: Ui, id: String, point: Vec2)
         Local at = Target(point)
@@ -255,6 +269,7 @@ Public Final Class Dock Extends Node
             ui.ClosePopup(hint)
             Return
         End If
+        hinted = ui
         hint.SetMargin(Insets(hintAt.X, hintAt.Y, 0.0, 0.0))
         hint.SetSize(hintAt.Width, hintAt.Height)
         If hint.Parent() == Null Then ui.OpenPopup(hint, PopupKind.TIP)
@@ -271,6 +286,12 @@ Public Final Class Dock Extends Node
 
     // The pane in `group` that the pane `id` goes against: another than itself, or Null for a group
     // that's all it.
+    // The pane a group of the tree shows first, or "" with none.
+    Method FirstShowing(): String
+        Local first = FirstGroup(top)
+        Return first != Null ? first.ids[first.active] : ""
+    End Method
+
     Method Against(group: TabsItem, id: String): String?
         For each In group.ids
             If each != id Then Return each
@@ -369,6 +390,8 @@ Public Final Class Dock Extends Node
             For i = 0 To tabs.ids.Count - 1
                 If tabs.ids[i] == id
                     tabs.ids.RemoveAt(i)
+                    // The one it shows goes on showing, or the one that takes its place.
+                    If i < tabs.active Then tabs.active -= 1
                     If tabs.active >= tabs.ids.Count Then tabs.active = Max(tabs.ids.Count - 1, 0)
                     Return tabs.ids.Count > 0 ? tabs : Null
                 End If
@@ -445,8 +468,12 @@ Public Final Class Dock Extends Node
                          first, second)
     End Method
 
-    // Shows the tree as it is now.
+    // Shows the tree as it is now, which ends a drag: its tab's gone.
     Method Rebuilt()
+        builds += 1
+        Local ui = hinted
+        If ui != Null Then ui.ClosePopup(hint)
+        hinted = Null
         For pane In panes
             pane.Content.Parent()?.Remove(pane.Content)
         End For
@@ -519,8 +546,9 @@ Class SplitNode Extends Node
     End Method
 
     Public Override Method ArrangeChildren(content: Rect)
-        Local room = (item.across ? content.Width : content.Height) - SPLITTER
-        Local least = Min(SMALLEST, Max(room, 0.0) / 2)
+        // A window too small for what's between them leaves them no room, not less.
+        Local room = Max((item.across ? content.Width : content.Height) - SPLITTER, 0.0)
+        Local least = Min(SMALLEST, room / 2)
         Local size = Clamp(Round(room * item.ratio), least, Max(room - least, least))
         If item.across
             first.Place(Rect(content.X, content.Y, size, content.Height))
@@ -562,10 +590,12 @@ Class DockTab Extends Button
     Field id: String
     Field from: Vec2
     Field dragging: Bool = False
+    Field built: Int
 
     New(owner: Dock, pane: Pane, active: Bool)
         dock = owner
         id = pane.Id
+        built = owner.Builds()
         Super.New(pane.Title, "tab." + pane.Id)
         SetStyleName(active ? "dock.tab.active" : "dock.tab")
         SetTranslates(False)
@@ -587,25 +617,33 @@ Class DockTab Extends Button
 
     Public Override Method PointerDrag(point: Vec2)
         If !dragging && Distance(point, from) < DRAGGED Then Return
-        dragging = True
         Local own = dock
         Local ui = Owner()
-        If own != Null && ui != Null Then own.Over(ui, id, point)
+        If own == Null || ui == Null || own.Builds() != built Then Return
+        dragging = True
+        own.Over(ui, id, point)
     End Method
 
     Public Override Method PointerUp(point: Vec2, over: Bool)
         Local own = dock
         Local ui = Owner()
-        If dragging
-            dragging = False
-            If own != Null && ui != Null Then own.Drop(ui, id, point)
-        ElseIf over && own != Null
+        Local wasDragging = dragging
+        dragging = False
+        // A rebuild since it was pressed ended the drag.
+        If own == Null || ui == Null || own.Builds() != built Then Return
+        If wasDragging
+            own.Drop(ui, id, point)
+        ElseIf over
             own.Activate(id)
+            own.FocusTab(ui, id)
         End If
     End Method
 
     Public Override Method Activate()
         Local own = dock
-        If own != Null Then own.Activate(id)
+        Local ui = Owner()
+        If own == Null Then Return
+        own.Activate(id)
+        If ui != Null Then own.FocusTab(ui, id)
     End Method
 End Class

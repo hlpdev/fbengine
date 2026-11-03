@@ -19,17 +19,17 @@ Public Final Class GameProject
     Public ReadOnly Field Name: String
     /// Its folder, absolute.
     Public ReadOnly Field Folder: Path
-    Field mounted: Bool = False
+    // Its mount of its assets, 0 for none.
+    Field mount: UInt64 = 0
 
-    Private New(name: String, folder: Path, mounted: Bool)
+    Private New(name: String, folder: Path)
         Name = name
         Folder = folder
-        Self.mounted = mounted
     End New
 
-    /// Opens the project in `folder`, mounting its assets/ at res://, if it has one. It's a
-    /// ProjectError for a folder that isn't there or has no project.toml with a name.
-    Public Static Method Open(folder: Path): GameProject Throws ProjectError
+    /// The project in `folder`, as yet changing nothing. It's a ProjectError for a folder that isn't
+    /// there, or has no project.toml with a name.
+    Public Static Method Check(folder: Path): GameProject Throws ProjectError
         Local absolute = folder
         Try
             absolute = Try folder.Absolute()
@@ -44,16 +44,22 @@ Public Final Class GameProject
         Catch error As Error
             Throw ProjectError("{absolute} isn't a game's project: {error.Message}")
         End Try
-        If name == Null Then Throw ProjectError("{manifest} has no project's name")
-        Local assets = absolute / "assets"
-        Local mounting = Dir.Exists(assets)
-        If mounting Then Assets.MountFolder("res://", assets)
-        Return GameProject(name, absolute, mounting)
+        If name == Null || name == "" Then Throw ProjectError("{manifest} has no project's name")
+        Return GameProject(name, absolute)
     End Method
 
-    /// Takes its assets back out of res://.
+    /// Mounts its assets/ at res://, if it has one.
+    Public Method Mount()
+        Local assets = Folder / "assets"
+        If mount == 0 && Dir.Exists(assets) Then mount = Assets.MountFolder("res://", assets)
+    End Method
+
+    /// Takes its own mount back out of res://, whatever's been mounted over it, and lets go of what
+    /// the cache has loaded from res://, so the next project's files aren't taken for this one's.
     Public Method Close()
-        If mounted Then Assets.Unmount("res://")
-        mounted = False
+        If mount == 0 Then Return
+        Assets.Unmount(mount)
+        Assets.ForgetLoaded("res://")
+        mount = 0
     End Method
 End Class

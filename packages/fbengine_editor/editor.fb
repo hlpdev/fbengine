@@ -73,6 +73,9 @@ Public Final Class Editor
             Local own = actions
             Return own != Null && own.Seen(stroke)
         End Function)
+        Edits.OnFailed(Function[Weak Self](edit: Edit, error: IOError)
+            Self?.Said("Couldn't {edit.Name}", error.Message)
+        End Function)
         AddPanes()
         AddCommands()
         AddMenus()
@@ -85,9 +88,13 @@ Public Final Class Editor
         Local place = Kept.Window()
         Window.SetResizable(True)
         Try Graphics(place.Width, place.Height)
+        Try Window.SetMinimumSize(640, 400)
         Local x = place.X
         Local y = place.Y
-        If x != Null && y != Null Then Try Window.SetPosition(x, y)
+        // Where a display that's gone was, it's left where it opened.
+        If x != Null && y != Null && Window.PlaceShows(x, y, place.Width, place.Height)
+            Try Window.SetPosition(x, y)
+        End If
         Retitled()
         If folder != Null Then OpenFolder(folder)
     End Method
@@ -131,18 +138,19 @@ Public Final Class Editor
     End Method
 
     /// Opens the project in `folder`, in place of the one open, and puts back what was open in it.
-    /// One that can't be says why in a dialog.
+    /// One that can't be says why in a dialog, leaving the one open as it is.
     Public Method OpenFolder(folder: Path)
-        CloseProject()
         Local opened: GameProject? = Null
         Try
-            opened = Try GameProject.Open(folder)
+            opened = Try GameProject.Check(folder)
         Catch error As ProjectError
+            // The one that's open stays open.
             Said("Couldn't open that project", error.Message)
-            ShowWelcome()
             Return
         End Try
         If opened == Null Then Return
+        CloseProject()
+        opened.Mount()
         project = opened
         NewScene()
         Kept.AddRecent(opened.Folder.Text)
@@ -194,8 +202,15 @@ Public Final Class Editor
     Method Said(title: String, text: String)
         Local says = Dialog(title, text)
         says.AddButton("OK")
-        dialog = says
-        says.Show(Shown)
+        Showed(says)
+    End Method
+
+    // Shows `showing`, in place of what dialog's showing.
+    Method Showed(showing: Dialog)
+        Local old = dialog
+        If old != Null Then old.Close()
+        dialog = showing
+        showing.Show(Shown)
     End Method
 
     // Asks for a project's folder.
@@ -206,12 +221,12 @@ Public Final Class Editor
         field.SetMinSize(420.0, 0.0)
         asking.AddContent(field)
         asking.AddButton("Cancel")
-        asking.AddButton("Open", Function[Weak Self]()
+        Local opening = asking.AddButton("Open", Function[Weak Self]()
             Local own = Self
             If own != Null && field.Text() != "" Then own.OpenFolder(Path(field.Text()))
         End Function)
-        dialog = asking
-        asking.Show(Shown)
+        asking.SubmitWith(field, opening)
+        Showed(asking)
     End Method
 
     // What's shown with no project: the ways to open one.

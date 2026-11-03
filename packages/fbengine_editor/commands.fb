@@ -15,8 +15,11 @@ Public Struct Shortcut Implements Printable
 
     /// Whether `stroke` is it.
     Public Method Matches(stroke: Keystroke): Bool
-        Local primary = System.Platform == Platform.MACOS ? stroke.Meta : stroke.Control
-        Return stroke.Key == Key && primary == Primary && stroke.Shift == Shift && stroke.Alt == Alt
+        Local mac = System.Platform == Platform.MACOS
+        Local primary = mac ? stroke.Meta : stroke.Control
+        Local other = mac ? stroke.Control : stroke.Meta
+        Return stroke.Key == Key && primary == Primary && !other && stroke.Shift == Shift &&
+               stroke.Alt == Alt
     End Method
 
     /// As a menu shows it, "Ctrl+Shift+Z".

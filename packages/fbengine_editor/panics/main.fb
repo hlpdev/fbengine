@@ -19,6 +19,17 @@ Local commands = Commands()
 Local dock = Dock()
 dock.AddPane(Pane("a", "A", Node()))
 Select Process.Arguments()[0]
+    Case "mark-in-an-edit"
+        history.Commit(EditOf("outer", Function()
+            history.MarkSaved()
+        End Function, Nothing))
+    Case "end-group-in-an-edit"
+        history.BeginGroup("group")
+        history.Commit(EditOf("outer", Function()
+            history.EndGroup()
+        End Function, Nothing))
+    Case "move-nan"
+        dock.Move("a", "a", DockSide.LEFT, 0.0 / Sin(0.0))
     Case "history-none"
         History(0)
     Case "commit-in-an-edit"
