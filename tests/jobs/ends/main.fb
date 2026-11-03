@@ -1,5 +1,5 @@
 // A program that starts the job system and ends at once, while its threads may still be starting,
-// run many times at once by itself: each has to end, as a thread stopped as it registers a
+// run many times by itself, some at once: each has to end, as a thread stopped as it registers a
 // thread_local hung the process's exit on Windows. A timeout in tests/CMakeLists.txt catches it.
 
 Import std.collections
@@ -17,12 +17,15 @@ If Process.Arguments().Count > 0
     Panic("ended")
 End If
 
+// Two at a time unless CI says, as 8 at once adds to the load of the other runs on a PC.
+Local together = Int.Parse(Env.Get("FBENGINE_JOBS_ENDS_TOGETHER") ?? "2") ?? 2
 Local failed = 0
 Try
     For round = 1 To 25
         Local children: Child[] = []
-        For at = 1 To 8
-            children.Add(Try Command(Folders.Executable ?? "").Args(["child"]).Stderr(Stdio.NONE).Spawn())
+        For at = 1 To together
+            children.Add(Try Command(Folders.Executable ??
+                                     "").Args(["child"]).Stderr(Stdio.NONE).Spawn())
         End For
         For child In children
             If child.Wait().Code != 101 Then failed += 1

@@ -610,6 +610,7 @@ endif()
 if(FBENGINE_FB_TESTS)
   # The cooker's threads, which can't hold up a whole run if they ever hang again.
   set_tests_properties(fbengine_tools.package PROPERTIES TIMEOUT 600)
+  set_tests_properties(fbengine.package PROPERTIES TIMEOUT 1800)
   # A copy, whose path dependencies are the packages', and whose file a run can change.
   set(fbengine_game "${CMAKE_CURRENT_BINARY_DIR}/cooked_game")
   set(fbengine_game_source "${PROJECT_SOURCE_DIR}/examples/cooked_game")

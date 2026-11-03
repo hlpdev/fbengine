@@ -5,6 +5,7 @@ Import std.core
 Import std.image.image
 Import std.image.png
 Import std.io
+Import std.os
 Import std.test
 Import std.text
 Import fbengine
@@ -60,4 +61,51 @@ Function AGameWithoutItsFolderSaysSo() Throws IOError
                                                        "debug"))
     Expect(failed?.Kind == IOErrorKind.NOT_FOUND)
     Expect((failed?.Message ?? "").Contains("assets"))
+End Function
+
+// Links `link` to the folder `target`, as a junction on Windows, which needs no privilege.
+Function LinkFolder(link: Path, target: Path) Throws IOError
+    If System.Platform == Platform.WINDOWS
+        Try Command("cmd").Args(["/c", "mklink", "/J", link.Text.Replace("/", "\\"),
+                                 target.Text.Replace("/", "\\")]).Output()
+    Else
+        Try Command("ln").Args(["-s", target.Text, link.Text]).Output()
+    End If
+End Function
+
+@Test
+Function TwoLinksThatGoRoundEndAsADebugBuildsStep() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try Dir.CreateAll(game.Path / "assets")
+    Try File.WriteText(game.Path / "assets" / "a.txt", "a")
+    Try LinkFolder(game.Path / "assets" / "one", game.Path / "assets")
+    Try LinkFolder(game.Path / "assets" / "two", game.Path / "assets")
+    // Its references throw for them, as the cook does; what it can't do is go on for ever.
+    Expect(ExpectThrows<IOError>(GameBuild.Run("game", game.Path, OutOf(game.Path, "debug"),
+                                               "debug"))?.Kind == IOErrorKind.INVALID_DATA)
+End Function
+
+@Test
+Function APakTakenAwayComesBackAndAStaleWriteGoes() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try Dir.CreateAll(game.Path / "assets")
+    Try File.WriteText(game.Path / "assets" / "a.txt", "a")
+    Local out = OutOf(game.Path, "release")
+    Local pak = game.Path / "build" / "game.pak"
+    Try GameBuild.Run("game", game.Path, out, "release")
+    Expect(File.Exists(out / "game.pak"))
+    Local first = Try File.ReadBytes(pak)
+    Try File.Delete(pak)
+    Try File.WriteText(game.Path / "build" / ".fbe-0123456789ab.tmp", "a cook that was ended")
+    Try File.WriteText(out / ".fbe-0123456789ab.tmp", "a cook that was ended")
+    Try GameBuild.Run("game", game.Path, out, "release")
+    Expect((Try File.ReadBytes(pak)) == first)
+    Expect(!File.Exists(game.Path / "build" / ".fbe-0123456789ab.tmp"))
+    Expect(!File.Exists(out / ".fbe-0123456789ab.tmp"))
+    // One that's changed is put right, and one that's the same left as it is.
+    Try File.WriteText(pak, "not this")
+    Try GameBuild.Run("game", game.Path, out, "release")
+    Expect((Try File.ReadBytes(pak)) == first)
 End Function

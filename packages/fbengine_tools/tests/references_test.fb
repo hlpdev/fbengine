@@ -93,3 +93,31 @@ Function AFolderBehindALinkIsInTheModule() Throws IOError
     Local made = Try References.Of(game.Path)
     Expect(made.Contains("Get => \"res://shared/door.png\""))
 End Function
+
+@Test
+Function AGltfsBufferIsntNamedAsARelease() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try File.WriteText(game.Path / "tri.gltf",
+                       "{{\"asset\":{{\"version\":\"2.0\"}}," +
+                       "\"buffers\":[{{\"uri\":\"tri.bin\",\"byteLength\":1}}]}}")
+    Try File.WriteText(game.Path / "tri.bin", "x")
+    Try File.WriteText(game.Path / "other.bin", "x")
+    Local made = Try References.Of(game.Path)
+    Expect(made.Contains("Public Const Tri = \"res://tri.gltf\""))
+    Expect(!made.Contains("tri.bin"))
+    Expect(made.Contains("Public Const Other = \"res://other.bin\""))
+End Function
+
+@Test
+Function NamesAGamesModuleHasOfItsOwnAreLeftForIt() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try File.WriteText(game.Path / "IOError.txt", "")
+    Try Dir.CreateAll(game.Path / "Mount")
+    Try File.WriteText(game.Path / "Mount" / "a.txt", "")
+    Local made = Try References.OfGame(game.Path, "Throw IOError(IOErrorKind.OTHER, \"\", \"\")")
+    Expect(made.Contains("Public Const IOErrorTxt = "))
+    Expect(!made.Contains("Public Const IOError = "))
+    Expect(made.Contains("Public Final Class MountFolder"))
+End Function

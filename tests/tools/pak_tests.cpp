@@ -325,3 +325,33 @@ TEST_CASE("a pak goes through a link", "[tools]") {
     REQUIRE(read(files, "res://a.txt") == test::bytes("alpha"));
 }
 #endif
+
+TEST_CASE("a file that isn't there leaves its name for one that is", "[tools]") {
+    const test::temp_folder_t folder;
+    folder.write("a.txt", "alpha");
+    const std::filesystem::path to = folder.path / "game.pak";
+    const std::unique_ptr<tools::pak_writer_t> writer = opened(to);
+    REQUIRE_FALSE(writer->add("a.txt", utf8(folder.path / "not there.txt")).has_value());
+    added(*writer, "a.txt", folder.path / "a.txt");
+    finished(*writer);
+    vfs::vfs_t files;
+    files.mount(path("res://"), pak(to));
+    REQUIRE(read(files, "res://a.txt") == test::bytes("alpha"));
+}
+
+#ifdef _WIN32
+TEST_CASE("a pak goes through a link to nothing yet", "[tools]") {
+    const test::temp_folder_t folder;
+    folder.write("a.txt", "alpha");
+    constexpr DWORD unprivileged = 0x2;
+    if (CreateSymbolicLinkW((folder.path / "game.pak").c_str(), (folder.path / "real.pak").c_str(),
+                            unprivileged) == 0) {
+        SUCCEED("no link can be made here");
+        return;
+    }
+    const std::unique_ptr<tools::pak_writer_t> writer = opened(folder.path / "game.pak");
+    added(*writer, "a.txt", folder.path / "a.txt");
+    finished(*writer);
+    REQUIRE(std::filesystem::exists(folder.path / "real.pak"));
+}
+#endif

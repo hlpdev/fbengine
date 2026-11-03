@@ -80,7 +80,7 @@ std::expected<std::unique_ptr<pak_writer_t>, error_t> pak_writer_t::open(std::st
 
 pak_writer_t::pak_writer_t(std::string to, bool zip64) : m_to(std::move(to)), m_zip64(zip64) {}
 
-std::expected<void, error_t> pak_writer_t::checked(std::string_view name) {
+std::expected<std::string, error_t> pak_writer_t::checked(std::string_view name) {
     const auto refused = [&](std::string_view why) {
         return std::unexpected(
             invalid(std::format("a pak's file can't be named '{}': {}", name, why)));
@@ -113,14 +113,15 @@ std::expected<void, error_t> pak_writer_t::checked(std::string_view name) {
     if (m_folders.contains(key)) {
         return refused("a folder has its name, in some case");
     }
-    key.clear();
-    for (std::size_t i = 0; i + 1 < path->keys.size(); ++i) {
-        key += path->keys[i];
-        m_folders.insert(key);
-        key += '/';
+    return key;
+}
+
+void pak_writer_t::reserve(std::string_view key) {
+    for (std::size_t slash = key.find('/'); slash != std::string_view::npos;
+         slash = key.find('/', slash + 1)) {
+        m_folders.emplace(key.substr(0, slash));
     }
-    m_files.insert(key + path->keys.back());
-    return {};
+    m_files.emplace(key);
 }
 
 std::expected<void, error_t> pak_writer_t::add(std::string_view name, std::string_view from) {
@@ -139,8 +140,9 @@ std::expected<void, error_t> pak_writer_t::copied(std::string_view name, std::st
     if (m_finished || m_failed) {
         return std::unexpected(other(std::format("{} is finished, or failed", m_to)));
     }
-    if (std::expected<void, error_t> fine = checked(name); !fine) {
-        return fine;
+    const std::expected<std::string, error_t> key = checked(name);
+    if (!key) {
+        return std::unexpected(key.error());
     }
     bool missing = false;
     const std::unique_ptr<vfs::read_file_t> source =
@@ -151,6 +153,7 @@ std::expected<void, error_t> pak_writer_t::copied(std::string_view name, std::st
             .message = std::format("couldn't read {}{}", from, missing ? ": it isn't there" : ""),
         });
     }
+    reserve(*key);
     entry_t entry{ .name = std::string(name), .header = m_offset, .size = source->size() };
     const bool big = m_zip64 || entry.size >= wide;
     bytes_t header;

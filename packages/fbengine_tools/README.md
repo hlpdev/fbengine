@@ -29,7 +29,7 @@ Each build, the step writes the game's module `res`, its files' typed references
 ```vb
 Import std.core
 Import fbengine
-Import "./res" As Res
+Import "./res" As Res    // or "../res", with main = "src/main.fb"
 
 Try Res.Mount()
 Print(Try Assets.ReadText(Res.Readme))
@@ -38,7 +38,7 @@ Print(Try Assets.ReadText(Res.Readme))
 A debug build's `Mount` mounts `assets/` at res://, and watches it, so what changes reloads as the
 game runs. A release build's cooks `assets/` into `build/<name>.pak`, which the game ships beside
 its executable, or in a macOS bundle's Resources, each file again only when it or its settings
-change. What's hidden, its name starting with '.', and Windows' Thumbs.db and desktop.ini, are left
+change; `fb build -o` needs that pak copied beside what it builds, each time. What's hidden, its name starting with '.', and Windows' Thumbs.db and desktop.ini, are left
 out. `Cooker` and `References` do the same for a game's own tools:
 
 ```vb

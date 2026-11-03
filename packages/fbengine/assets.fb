@@ -260,7 +260,8 @@ Public Final Class Assets
         If !fbe_vfs_mount_folder(at, folder.Text) Then Panic(LastError())
         Local place = Mounted(at, folder)
         Local watching = watch
-        If watching != Null Then Try? WatchTree(watching, folder, place, folder.Text, 0, False)
+        If watching != Null Then Try? WatchTree(watching, folder, place, folder.Text, 0,
+                                                Set<String>(), False)
     End Method
 
     /// Mounts the pak file at `file` at `at`, over what's mounted, reading its index now. A pak is
@@ -331,9 +332,11 @@ Public Final Class Assets
     End Method
 
     /// Mounts a release's files at res://: the pak `name`.pak beside the executable, or in a macOS
-    /// bundle's Resources, the folder beside the executable's, or else the pak at `built`, where
-    /// it was built, for a build whose executable is elsewhere, as `fb run`'s is, as a game's
-    /// module `res` from fbengine_tools' build step does. None throws an IOError of NOT_FOUND that
+    /// bundle's Resources on macOS, the folder beside the executable's, or else the pak at `built`,
+    /// where it was built, for a build whose executable is elsewhere, as `fb run`'s is, as a game's
+    /// module `res` from fbengine_tools' build step does. An executable built elsewhere with
+    /// `fb build -o` needs its pak copied beside it each time, and one beside it that's older than
+    /// `built` prints a warning, and is what's mounted. None throws an IOError of NOT_FOUND that
     /// names them, and one that isn't a pak throws as MountPak does.
     @MainThread
     Public Static Method MountRelease(name: String, built: String = "") Throws IOError
@@ -344,7 +347,14 @@ Public Final Class Assets
         Local folder = Path(executable).Parent()
         Local beside = folder / "{name}.pak"
         Local resources = folder.Parent() / "Resources" / "{name}.pak"
-        For pak In [beside, resources, Path(built)]
+        If StalePak(beside, Path(built))
+            Print("warning: {beside} is older than {built}, as this game's been built again: " +
+                  "copy that one here")
+        End If
+        Local paks = [beside]
+        If System.Platform == Platform.MACOS Then paks.Add(resources)
+        paks.Add(Path(built))
+        For pak In paks
             If pak.Text != "" && File.Exists(pak)
                 Try MountPak("res://", pak)
                 Return
@@ -386,9 +396,8 @@ Public Final Class Assets
     /// Reload takes it in place, or the cache lets go of it, so the next Load makes a new one; one
     /// that doesn't load keeps what it had. Reloaded gives what was. Unmount stops watching what it
     /// takes out. It follows links, as the folder mount does. A folder that can't be watched
-    /// throws an IOError. On Windows, while it watches, a folder that holds a watched one can't be
-    /// renamed, since each folder has a watcher of its own until FutureBlitz's FileWatcher watches
-    /// a whole tree.
+    /// throws an IOError. On Windows, while it watches, a mounted folder can't be renamed, nor one
+    /// that holds it, though what's in it can.
     @MainThread
     Public Static Method WatchFolders() Throws IOError
         If watch != Null Then Return
@@ -397,7 +406,8 @@ Public Final Class Assets
         Try
             For mount In mounts
                 Local folder = mount.1
-                If folder != Null Then Try WatchTree(made, folder, mount.0, folder.Text, 0, False)
+                If folder != Null Then Try WatchTree(made, folder, mount.0, folder.Text, 0,
+                                                     Set<String>(), False)
             End For
         Catch e As IOError
             StopWatching()
@@ -704,28 +714,45 @@ Public Final Class Assets
         Return place
     End Method
 
-    // Watches `folder`, which is `place` in res://, of the mount of the folder `root`, and every
-    // folder in it, following links as the folder mount does, 32 deep at most. For a `fresh` one,
-    // just made, each file in it is taken as changed, since it may have been written before its
-    // folder was watched.
+    // Watches `folder`, which is `place` in res://, of the mount of the folder `root`, with all
+    // that's in it, and what the links in it lead to, as the folder mount does, each with a watcher
+    // of its own, as a FileWatcher doesn't follow them, 32 deep at most. `within` has the real paths
+    // of the linked folders this is in, so links that go round end. For a `fresh` one, just linked,
+    // each file in it is taken as changed, since it may have been written before it was watched.
     @MainThread
     Static Method WatchTree(made: FolderWatch, folder: Path, place: String, root: String,
-                            depth: Int, fresh: Bool) Throws IOError
+                            depth: Int, within: Set<String>, fresh: Bool) Throws IOError
         If depth > 32 || !Dir.Exists(folder) Then Return
+        Local real = RealPath(folder).Text
+        If !within.Add(real) Then Return
         Try WatchOne(made, folder, place, root)
+        Try WatchLinks(made, folder, place, root, depth, within, fresh)
+        within.Remove(real)
+    End Method
+
+    // Watches what the links in `folder`, and in the folders in it, lead to, as WatchTree does.
+    @MainThread
+    Static Method WatchLinks(made: FolderWatch, folder: Path, place: String, root: String,
+                             depth: Int, within: Set<String>, fresh: Bool) Throws IOError
+        If depth > 32 Then Return
         For entry In Try Dir.Entries(folder)
             // What's hidden isn't in the mount.
             If entry.Name().StartsWith(".") Then Continue
-            Local kind = entry.Kind
-            If kind == FileKind.LINK && Dir.Exists(entry.Path) Then kind = FileKind.DIRECTORY
-            Local name = place == "res://" ? place + entry.Name() : place + "/" + entry.Name()
-            If kind == FileKind.DIRECTORY
-                Try WatchTree(made, entry.Path, name, root, depth + 1, fresh)
+            Local name = Joined(place, entry.Name())
+            If entry.Kind == FileKind.LINK && Dir.Exists(entry.Path)
+                Try WatchTree(made, entry.Path, name, root, depth + 1, within, fresh)
+            ElseIf entry.Kind == FileKind.DIRECTORY
+                Try WatchLinks(made, entry.Path, name, root, depth + 1, within, fresh)
             ElseIf fresh
                 Local key = Try? Normalize(name)
                 If key != Null Then made.Changed[key] = Instant.Now()
             End If
         End For
+    End Method
+
+    // `path`, a name or names with '/' between them, in the res:// folder `place`.
+    Static Method Joined(place: String, path: String): String
+        Return place == "res://" ? place + path : place + "/" + path
     End Method
 
     // Watches the one folder `folder`, which is `place` in res://, of the mount of `root`, as well
@@ -742,21 +769,21 @@ Public Final Class Assets
             If !found Then made.Places[at].Add((place, root))
             Return
         End If
-        made.Watchers.Add(Try FileWatcher(folder))
+        made.Watchers.Add(Try FileWatcher(folder, True))
         made.Folders.Add(folder)
         made.Places.Add([(place, root)])
         made.Watched[folder.Text] = made.Watchers.Count - 1
     End Method
 
-    // Stops watching `folder` and every folder in it, as when it's gone, or made again.
+    // Stops watching what's linked at `path` or in it, as when it's gone, or made again; its folder's
+    // own watcher goes on, whichever it's in.
     @MainThread
-    Static Method Unwatch(made: FolderWatch, folder: Path)
-        Local text = folder.Text
+    Static Method Unwatch(made: FolderWatch, path: Path, keeping: Int)
+        Local text = path.Text
         For at = 0 Until made.Watchers.Count
+            If at == keeping Then Continue
             Local watched = made.Folders[at].Text
-            If watched == text || watched.StartsWith(text + "/") || watched.StartsWith(text + "\\")
-                Close(made, at)
-            End If
+            If watched == text || watched.StartsWith(text + "/") Then Close(made, at)
         End For
     End Method
 
@@ -800,20 +827,7 @@ Public Final Class Assets
             If watcher == Null Then Continue
             Local event = watcher.TryNext()
             While event != Null
-                Local name = event.Path.FileName()
-                Local places = made.Places[at]
-                // A folder taken out isn't watched; one made, or made again, is watched anew.
-                If event.Kind == FileEventKind.REMOVED || event.Kind == FileEventKind.CREATED
-                    Unwatch(made, event.Path)
-                End If
-                For place In places
-                    Local changed = place.0 == "res://" ? place.0 + name : place.0 + "/" + name
-                    Local key = Try? Normalize(changed)
-                    If key != Null Then made.Changed[key] = now
-                    If event.Kind == FileEventKind.CREATED && Dir.Exists(event.Path)
-                        Try? WatchTree(made, event.Path, changed, place.1, 0, True)
-                    End If
-                End For
+                TookEvent(made, at, event, now)
                 If made.Watchers[at] == Null Then Break
                 event = watcher.TryNext()
             End While
@@ -834,6 +848,66 @@ Public Final Class Assets
                 If stem != Null Then ReloadPath(stem)
             End If
         End For
+    End Method
+
+    // Takes what watcher `at` saw at `now`: what's hidden isn't in the mount; what changed is the
+    // places' it's in; and a link taken out, or made, is watched no more, or anew.
+    @MainThread
+    Static Method TookEvent(made: FolderWatch, at: Int, event: FileEvent, now: Instant)
+        Local relative = event.Path.RelativeTo(made.Folders[at])
+        If relative == Null || relative.Text == "" || relative.Text == "." Then Return
+        Local names = relative.Text.Replace("\\", "/")
+        For name In names.Split("/")
+            If name.StartsWith(".") Then Return
+        End For
+        If event.Kind == FileEventKind.REMOVED || event.Kind == FileEventKind.CREATED
+            Unwatch(made, event.Path, at)
+        End If
+        Local link = False
+        If event.Kind == FileEventKind.CREATED
+            Local found = Try? File.Metadata(event.Path, False)
+            link = found != Null && found.Kind == FileKind.LINK && Dir.Exists(event.Path)
+        End If
+        For place In made.Places[at]
+            Local changed = Joined(place.0, names)
+            Local key = Try? Normalize(changed)
+            If key != Null Then made.Changed[key] = now
+            If link Then Try? WatchTree(made, event.Path, changed, place.1, 0, Set<String>(), True)
+        End For
+    End Method
+
+    /// The folder or file at `path`, through every link to it, as the OS has it, or `path` when the
+    /// OS can't say, as when nothing's there: the same for each way of reaching one.
+    @MainThread
+    Public Static Method RealPath(path: Path): Path
+        If !fbe_vfs_real_path(path.Text) Then Return path
+        Unsafe
+            Return Path(fbe_vfs_normalized().ToString())
+        End Unsafe
+    End Method
+
+    // How many folders hot reload is watching, for the tests.
+    @MainThread
+    Package Static Method Watching(): Int
+        Local made = watch
+        If made == Null Then Return 0
+        Local count = 0
+        For watcher In made.Watchers
+            If watcher != Null Then count += 1
+        End For
+        Return count
+    End Method
+
+    // Whether the pak at `built`, where the game was built, is newer than the one at `beside`, which
+    // is then what a game that's been built again in another place mounts, as `fb build -o` leaves
+    // it.
+    @MainThread
+    Package Static Method StalePak(beside: Path, built: Path): Bool
+        If built.Text == "" || beside.Text == built.Text Then Return False
+        Local theirs = Try? File.Metadata(beside)
+        Local newer = Try? File.Metadata(built)
+        If theirs == Null || newer == Null Then Return False
+        Return newer.Modified.UnixSeconds > theirs.Modified.UnixSeconds
     End Method
 
     // A new entry of T's cache for `load`, which takes out what's gone from it now and then.

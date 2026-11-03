@@ -47,8 +47,10 @@ private:
 
     pak_writer_t(std::string to, bool zip64);
 
-    // Whether `name` can be a file of it, which then is.
-    std::expected<void, error_t> checked(std::string_view name);
+    // The folded path of `name`, if it can be a file of it.
+    std::expected<std::string, error_t> checked(std::string_view name);
+    // Takes a file's folded path, and its folders', for one that's being added.
+    void reserve(std::string_view key);
     std::expected<void, error_t> copied(std::string_view name, std::string_view from);
     // Writes `bytes` where it is, and moves on past them; false, after which it writes nothing
     // more, if it can't.

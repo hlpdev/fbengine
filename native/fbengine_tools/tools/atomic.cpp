@@ -13,8 +13,10 @@
 #include <cstddef>
 #include <cstring>
 #include <format>
+#include <optional>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -22,6 +24,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <winioctl.h>
 #else
 #include <cerrno>
 #include <cstdio>
@@ -69,27 +72,64 @@ fs::path::string_type temporary_name() {
 }
 
 #ifdef _WIN32
-// The file a link at `path` leads to, or `path` when it isn't a link, or leads to nothing.
-fs::path linked_file(const fs::path& path) {
-    const DWORD attributes = GetFileAttributesW(path.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
-        return path;
-    }
-    HANDLE file = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                              OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+// What REPARSE_DATA_BUFFER's symbolic link part is, which MinGW's headers don't have outside the
+// driver kit's: the names go on past its first character, in the buffer the struct starts.
+struct symlink_data_t {
+    ULONG tag;
+    USHORT length;
+    USHORT reserved;
+    USHORT substitute_offset;
+    USHORT substitute_length;
+    USHORT print_offset;
+    USHORT print_length;
+    ULONG flags;
+    std::array<WCHAR, 1> names;
+};
+
+constexpr ULONG symlink_is_relative = 0x1;
+
+// Where the symbolic link at `path` leads, though nothing's there; nothing for what isn't one.
+std::optional<fs::path> link_target(const fs::path& path) {
+    HANDLE file = CreateFileW(
+        path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
-        return path;
+        return std::nullopt;
     }
-    const DWORD needed = GetFinalPathNameByHandleW(file, nullptr, 0, VOLUME_NAME_DOS);
-    std::wstring found(needed, L'\0');
-    const DWORD written = GetFinalPathNameByHandleW(file, found.data(), needed, VOLUME_NAME_DOS);
+    std::array<std::byte, MAXIMUM_REPARSE_DATA_BUFFER_SIZE> buffer{};
+    DWORD returned = 0;
+    const BOOL read = DeviceIoControl(file, FSCTL_GET_REPARSE_POINT, nullptr, 0, buffer.data(),
+                                      static_cast<DWORD>(buffer.size()), &returned, nullptr);
     CloseHandle(file);
-    if (needed == 0 || written == 0 || written >= needed) {
-        return path;
+    const auto* data = reinterpret_cast<const symlink_data_t*>(buffer.data());
+    if (read == 0 || returned < sizeof(symlink_data_t) || data->tag != IO_REPARSE_TAG_SYMLINK) {
+        return std::nullopt;
     }
-    found.resize(written);
-    return found;
+    const std::wstring target(reinterpret_cast<const wchar_t*>(buffer.data() +
+                                                               offsetof(symlink_data_t, names) +
+                                                               data->print_offset),
+                              data->print_length / sizeof(wchar_t));
+    const fs::path found(target);
+    return (data->flags & symlink_is_relative) != 0 ? path.parent_path() / found : found;
+}
+
+// The file a link at `path` leads to, through each link after it, which needn't be there yet, or
+// `path` when it isn't a link.
+fs::path linked_file(fs::path path) {
+    // As many links as Linux follows before it says there's a loop.
+    for (int links = 0; links < 40; ++links) {
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES ||
+            (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+            break;
+        }
+        std::optional<fs::path> target = link_target(path);
+        if (!target) {
+            break;
+        }
+        path = std::move(*target);
+    }
+    return path;
 }
 
 // FILE_RENAME_INFO as Windows 10 1709's SDK has it, with Flags in place of ReplaceIfExists, and
@@ -253,7 +293,13 @@ std::expected<void, std::string> atomic_file_t::commit() {
     if (struct stat replaced{}; ::stat(m_file.c_str(), &replaced) == 0) {
         fchmod(m_handle, replaced.st_mode & 07777U);
     }
+#ifdef __APPLE__
+    // macOS's fsync doesn't reach the disk's platters, and not every disk takes the full one.
+    done = fcntl(m_handle, F_FULLFSYNC) == 0 || fcntl(m_handle, F_BARRIERFSYNC) == 0 ||
+           fsync(m_handle) == 0;
+#else
     done = fsync(m_handle) == 0;
+#endif
     close();
     done = done && std::rename(m_temporary.c_str(), m_file.c_str()) == 0;
 #endif

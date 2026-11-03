@@ -7,6 +7,7 @@ Import std.core
 Import std.io
 Import std.text
 Import fbengine
+Import "./cook"
 Import "./left_out"
 
 /// Writes the module of typed references to a game's files: each file's res:// path, by its
@@ -18,7 +19,8 @@ Import "./left_out"
 /// files would have, or a folder, or that's FutureBlitz's own, a keyword or a built-in type, has
 /// its extension too, as StonePng. Sidecars aren't named, nor what's hidden, its name starting
 /// with '.', as .DS_Store's does, nor Windows' Thumbs.db and desktop.ini, which the cooker leaves
-/// out, nor what no res:// path can name;
+/// out, nor what a glTF names as a buffer, which a release has in it, nor what no res:// path can
+/// name;
 /// and of names that differ only in case, the first by its bytes is, as res:// finds it. It
 /// follows links, as the folder mount does, and a folder more than 32 deep, as links that go
 /// round make, throws an IOError of INVALID_DATA.
@@ -63,6 +65,7 @@ Public Final Class References
     // The module of the files in the folder `source`, its typed references after `start`.
     Static Method Module(source: Path, start: String): String Throws IOError
         Local root = Try Listed(source, "res://", 0)
+        Pruned(root, Try Cooker.BuffersIn(source))
         Local text =
             "// Typed references to the game's files in res://, written by fbengine_tools'\n" +
             "// References: write them again when the files change, rather than editing them.\n\n" +
@@ -82,6 +85,19 @@ Public Final Class References
             text += Try ClassOf(folder, names[root.Files.Count + at], True, classes)
         End For
         Return text
+    End Method
+
+    // Takes out of `folder`, and the folders in it, the files of `buffers`, by their names folded,
+    // which a release has in the glTFs that name them.
+    Static Method Pruned(folder: ListedFolder, buffers: Set<String>)
+        Local kept: (String, String)[] = []
+        For file In folder.Files
+            If !buffers.Contains(Folded(file.1).Slice(6, file.1.Length)) Then kept.Add(file)
+        End For
+        folder.Files = kept
+        For deeper In folder.Folders
+            Pruned(deeper, buffers)
+        End For
     End Method
 
     // What's in the folder `path`, which is `res`, a res:// path, `depth` folders deep, and in
@@ -243,7 +259,7 @@ Public Final Class References
     // types, which the module's own names would hide.
     Static Method Reserved(name: String): Bool
         // A game's module has these of its own.
-        If name == "Mount" || name == "FbEngine" Then Return True
+        If name == "Mount" || name == "FbEngine" || name == "IOError" Then Return True
         Local types = ["Bool", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32",
                        "UInt64", "CLong", "CULong", "CWChar", "Float32", "Float64", "String",
                        "CString", "Char", "Byte", "Int", "Long", "Float", "Double"]

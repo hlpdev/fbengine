@@ -403,6 +403,15 @@ TEST_CASE("a folder finds no name a pak wouldn't", "[vfs]") {
     }
 }
 
+TEST_CASE("well-formed text's size is counted before it's made", "[vfs]") {
+    // U+FFFD for each byte that doesn't start one, 3 bytes each, and what's fine as it is.
+    REQUIRE(vfs::well_formed_size("\xFF\xFF") == 6);
+    REQUIRE(vfs::well_formed("\xFF\xFF") == "\xEF\xBF\xBD\xEF\xBF\xBD");
+    REQUIRE(vfs::well_formed_size("a\xC3\xA9") == 3);
+    REQUIRE(vfs::well_formed("a\xC3\xA9") == "a\xC3\xA9");
+    REQUIRE(vfs::well_formed_size("\xF0\x9F\x98\x80") == 4);
+}
+
 TEST_CASE("a folder hides names starting with a dot, as a cooked pak has none", "[vfs]") {
     const temp_folder_t folder;
     folder.write("seen.txt", "seen");

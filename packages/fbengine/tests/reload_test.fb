@@ -506,3 +506,61 @@ Function AFileBehindALinkIsWatched() Throws IOError
     FlipUntil(Function(): Bool => picture.Width == 4)
     Expect(picture.Width == 4)
 End Function
+
+@Test
+Function WhatsHiddenIsntWatched() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local target = Try TempDir()
+    Defer Try? target.Close()
+    Assets.MountFolder("res://test-hidden-watch", folder.Path)
+    Defer Assets.Unmount("res://test-hidden-watch")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Local watching = Assets.Watching()
+    reloaded = []
+    // A hidden link has no watcher of its own, and what changes in a hidden folder is no one's.
+    Try LinkFolder(folder.Path / ".linked", target.Path)
+    Try Dir.CreateAll(folder.Path / ".hidden")
+    Try File.WriteText(folder.Path / ".hidden" / "x", "x")
+    FlipFor(500.Milliseconds)
+    Expect(Assets.Watching() == watching)
+    // A link that isn't has one.
+    Try LinkFolder(folder.Path / "linked", target.Path)
+    FlipUntil(Function(): Bool => Assets.Watching() == watching + 1)
+    Expect(Assets.Watching() == watching + 1)
+End Function
+
+@Test
+Function AFolderInAWatchedOneCanBeRenamedAndGoesOnBeingWatched() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try Dir.CreateAll(folder.Path / "sub" / "deeper")
+    Assets.MountFolder("res://test-renamed", folder.Path)
+    Defer Assets.Unmount("res://test-renamed")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Try File.Move(folder.Path / "sub", folder.Path / "sub2")
+    Try WritePng(folder.Path / "sub2" / "deeper", "b.png", 2)
+    Local picture = Try Assets.Load<HotPicture>("res://test-renamed/sub2/deeper/b.png")
+    Try WritePng(folder.Path / "sub2" / "deeper", "b.png", 4)
+    FlipUntil(Function(): Bool => picture.Width == 4)
+    Expect(picture.Width == 4)
+End Function
+
+@Test
+Function TwoLinksThatGoRoundEndWhenWatched() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try WritePng(folder.Path, "a.png", 2)
+    Try LinkFolder(folder.Path / "one", folder.Path)
+    Try LinkFolder(folder.Path / "two", folder.Path)
+    Assets.MountFolder("res://test-round", folder.Path)
+    Defer Assets.Unmount("res://test-round")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Local picture = Try Assets.Load<HotPicture>("res://test-round/a.png")
+    Try WritePng(folder.Path, "a.png", 4)
+    FlipUntil(Function(): Bool => picture.Width == 4)
+    Expect(picture.Width == 4)
+End Function

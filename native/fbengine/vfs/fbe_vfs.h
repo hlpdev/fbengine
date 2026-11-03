@@ -45,6 +45,9 @@ FBE_API bool fbe_vfs_normalize(const char* path);
 FBE_API const char* fbe_vfs_normalized(void);
 // What's at `path`, FBE_VFS_NONE, FBE_VFS_FILE, or FBE_VFS_FOLDER; -1 if it can't tell.
 FBE_API int32_t fbe_vfs_kind(const char* path);
+// The folder or file at `path` on the disk, UTF-8, through every link to it, or `path` when the OS
+// can't say, kept for fbe_vfs_normalized to give; false without the memory for it.
+FBE_API bool fbe_vfs_real_path(const char* path);
 // Reads the file at `path`, keeping its bytes for fbe_vfs_read_copy, of 2147483647 at most, as many
 // as an FB array holds, which more fails before they're allocated, and gives how many there are;
 // -1 if it can't.

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <system_error>
 #include <utility>
 
 namespace {
@@ -32,11 +33,29 @@ fbe::job_t job_of(std::uint32_t slot, std::uint32_t generation) {
 
 namespace fbe {
 
-jobs_t::jobs_t(int workers) {
+jobs_t::jobs_t(int workers, int fail_after) {
     const int count = std::max(workers, 1);
     m_threads.reserve(static_cast<std::size_t>(count));
-    for (int i = 0; i < count; ++i) {
-        m_threads.emplace_back([this] { work_loop(); });
+    try {
+        for (int i = 0; i < count; ++i) {
+            if (i == fail_after) {
+                throw std::system_error(
+                    std::make_error_code(std::errc::resource_unavailable_try_again));
+            }
+            m_threads.emplace_back([this] { work_loop(); });
+        }
+    } catch (...) {
+        // A thread that can't start: those that have are stopped, as a thread still joinable would
+        // end the program, and the caller is told.
+        {
+            const std::scoped_lock lock(m_mutex);
+            m_stopping = true;
+        }
+        m_ready.notify_all();
+        for (std::thread& thread : m_threads) {
+            thread.join();
+        }
+        throw;
     }
     // Each has started before this gives back, since a process that ends while a thread is still
     // registering what it needs with winpthread hangs in its exit.
