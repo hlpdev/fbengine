@@ -1,6 +1,8 @@
 // The display's modes, and the window as a game's settings choose it: windowed, fullscreen, or
 // borderless at the desktop's size, and a screen of its own size scaled into it. It prints what it
-// found; with --watch, a window that goes through each, and back.
+// found; with --watch, a window that lists the modes, goes through each, fullscreen at one of them,
+// and back. Offscreen there are no modes for fullscreen, so only a person's run shows a real one:
+// this requirement stays open until then.
 
 Import std.collections
 Import std.core
@@ -16,18 +18,16 @@ Function Proved() Throws GraphicsError
     Print("there's a display {displays.Count > 0}")
     Local main = displays[0]
     Print("its desktop's a size {main.Desktop.Width > 0 && main.Desktop.Height > 0}")
-    // Its modes for fullscreen, largest first; those a settings menu lists.
-    Local largestFirst = True
-    For i = 1 To main.Modes.Count - 1
-        If main.Modes[i].Width > main.Modes[i - 1].Width Then largestFirst = False
-    End For
-    Print("its modes go largest first {largestFirst}")
+    // Its modes for fullscreen, those a settings menu lists: offscreen has none, and --watch lists
+    // a real display's.
+    Print("its modes for fullscreen {main.Modes.Count}")
     Print("windowed at first {Window.Mode()}, {Window.Width()} by {Window.Height()}")
-    // A headless window stays as it is in each, as it has no display to fill; a real one's in --watch.
-    For mode In [WindowMode.BORDERLESS, WindowMode.FULLSCREEN, WindowMode.WINDOWED]
+    // Filling the screen, it's the desktop's size; windowed, its own again.
+    For mode In [WindowMode.BORDERLESS, WindowMode.WINDOWED, WindowMode.FULLSCREEN,
+                 WindowMode.WINDOWED]
         Try
             Try Window.SetMode(mode)
-            Print("asked for {mode}: {Window.Mode()}")
+            Print("asked for {mode}: {Window.Mode()}, {Window.Width()} by {Window.Height()}, the desktop's {Window.Width() == main.Desktop.Width && Window.Height() == main.Desktop.Height}")
         Catch e As GraphicsError
             Print("asked for {mode}: {e.Message}")
         End Try
@@ -47,7 +47,7 @@ Function Proved() Throws GraphicsError
 End Function
 
 // A window that goes through each mode, 3 seconds each, and back; or `frames` frames offscreen.
-Function Watched(frames: Int) Throws GraphicsError
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Window.SetHeadless(frames > 0)
     Try Graphics(800, 450)
     Defer EndGraphics()
@@ -55,6 +55,13 @@ Function Watched(frames: Int) Throws GraphicsError
     Frame.SetLimit(60)
     Local font = Font.BuiltIn(18.0)
     Local main = (Try Displays())[0]
+    // One of its modes for fullscreen, from the middle of the list, a game's setting's choice; and
+    // the first few, as a settings menu lists them.
+    Local chosen = main.Modes.Count > 0 ? main.Modes[main.Modes.Count / 2] : Null
+    Local listed: String[] = []
+    For i = 0 To Min(main.Modes.Count, 6) - 1
+        listed.Add("{main.Modes[i].Width}x{main.Modes[i].Height}")
+    End For
     Local modes = [WindowMode.WINDOWED, WindowMode.BORDERLESS, WindowMode.WINDOWED,
                    WindowMode.FULLSCREEN, WindowMode.WINDOWED]
     Local at = 0
@@ -64,12 +71,22 @@ Function Watched(frames: Int) Throws GraphicsError
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         Flip()
         count += 1
+        Try Driven(arguments, count)
         waited += frames > 0 ? 3.0 : Frame.Delta()
         If waited >= 3.0
             waited = 0.0
             at = (at + 1) % modes.Count
             Try
-                Try Window.SetMode(modes[at])
+                // Fullscreen takes the mode nearest the window's size, so that's asked for first.
+                If chosen != Null && modes[at] == WindowMode.FULLSCREEN
+                    EndGraphics()
+                    Try Graphics(chosen.Width, chosen.Height, WindowMode.FULLSCREEN)
+                ElseIf chosen != Null && Window.Width() != 800 && modes[at] == WindowMode.WINDOWED
+                    EndGraphics()
+                    Try Graphics(800, 450)
+                Else
+                    Try Window.SetMode(modes[at])
+                End If
                 said = ""
             Catch e As GraphicsError
                 said = e.Message
@@ -84,6 +101,8 @@ Function Watched(frames: Int) Throws GraphicsError
         canvas.DrawText(font,
                         "desktop {main.Desktop}, {main.Modes.Count} modes for fullscreen {said}",
                         16, 44)
+        canvas.DrawText(font, "{listed.Join(", ")}; going to {chosen?.ToString() ?? "none"}", 16,
+                        72)
         // A square a pixel from each corner, to see it's all shown.
         Local wide = Screen.Width()
         Local high = Screen.Height()
@@ -95,6 +114,15 @@ Function Watched(frames: Int) Throws GraphicsError
     Print("watched {count} frames")
 End Function
 
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
 // How many frames `arguments` asks for after --frames, 0 for no end.
 Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
@@ -104,7 +132,7 @@ End Function
 
 Local arguments = Process.Arguments()
 If arguments.Contains("--watch")
-    Try Watched(Asked(arguments))
+    Try Watched(Asked(arguments), arguments)
 Else
     Try Proved()
 End If

@@ -68,7 +68,7 @@ Function Proved() Throws GraphicsError
     ui.Focus(name)
     Step(ui)
     Print("a field's focus turns it on {TextInputActive()}")
-    Try Simulate.Text("Site 19 save, the long one")
+    Try Simulate.Text("Cabin 7 save, the long one")
     Step(ui)
     Print("the name \"{name.Text()}\", changed {name.Changed()}")
     Try Simulate.PressKey(Key.BACKSPACE)
@@ -97,7 +97,7 @@ Function Proved() Throws GraphicsError
 End Function
 
 // A window to type in; or `frames` frames offscreen, which type by themselves.
-Function Watched(frames: Int) Throws GraphicsError
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Window.SetHeadless(frames > 0)
     Try Graphics(800, 450)
     Defer EndGraphics()
@@ -115,11 +115,12 @@ Function Watched(frames: Int) Throws GraphicsError
     Local ui = Layout([title, name, line, said])
     ui.Focus(name)
     Local count = 0
-    Local script = "Site 19 save"
+    Local script = "Cabin 7 save"
     Local typed = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         Step(ui)
         count += 1
+        Try Driven(arguments, count)
         // Types for itself until a key's pressed, a letter every so often.
         If KeysHit().Count > 0 Then typed = script.Length
         If typed < script.Length && count % 8 == 0
@@ -134,6 +135,15 @@ Function Watched(frames: Int) Throws GraphicsError
     Print("watched {count} frames")
 End Function
 
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
 // How many frames `arguments` asks for after --frames, 0 for no end.
 Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
@@ -143,7 +153,7 @@ End Function
 
 Local arguments = Process.Arguments()
 If arguments.Contains("--watch")
-    Try Watched(Asked(arguments))
+    Try Watched(Asked(arguments), arguments)
 Else
     Try Proved()
 End If

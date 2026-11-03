@@ -147,8 +147,9 @@ Public Final Class Canvas
     /// Draws frame `frame` of `sprite` with its handle at `x`, `y`, rotated and scaled as set,
     /// sampled as its texture's filter says, clamped at its edges, times the color, which tints it
     /// and whose alpha, blended ALPHA, fades it; unrotated, at its own size, and at whole pixels,
-    /// its pixels are its texture's exactly. It panics for a frame the sprite hasn't, a sprite whose texture
-    /// is the target, or one that was freed.
+    /// its pixels are its texture's exactly, and a key color (Sprite2D.FromImage) leaves what's there
+    /// whatever its blend. It panics for a frame the sprite hasn't, a sprite whose texture is the
+    /// target, or one that was freed.
     @MainThread @PanicsAtCaller
     Public Method Draw(sprite: Sprite2D, x: Float32, y: Float32, frame: Int32 = 0)
         Local into = Into("Draw")

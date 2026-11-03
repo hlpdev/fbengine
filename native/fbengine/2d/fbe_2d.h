@@ -40,8 +40,9 @@ typedef struct fbe_2d_pen_t {
 // How a texture's drawn: the part of it, in its pixels from its top left, 0 by 0 for all of it;
 // its handle, the point of that part, in its pixels, that lands at the position drawn at, which
 // it's rotated and scaled about; its rotation, in radians, clockwise on the screen; and its scale
-// across and down, a negative one mirroring it. C has no `using`, so it's a typedef.
-// NOLINTNEXTLINE(modernize-use-using)
+// across and down, a negative one mirroring it; and whether a texel of no alpha leaves what's there
+// whatever the pen's blend, as a key color's do, 1 for yes and 0 for no. C has no `using`, so it's
+// a typedef. NOLINTNEXTLINE(modernize-use-using)
 typedef struct fbe_2d_sprite_t {
     float region_x;
     float region_y;
@@ -52,6 +53,7 @@ typedef struct fbe_2d_sprite_t {
     float rotation;
     float scale_x;
     float scale_y;
+    int32_t keyed;
 } fbe_2d_sprite_t;
 
 // Each draws into `target`, a texture that's a target or 0 for the screen, with `pen`; false if the

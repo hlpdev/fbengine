@@ -11,7 +11,7 @@ Import "./texture"
 Import "./window"
 
 // `image` with every pixel of exactly `key`'s red, green, and blue transparent black.
-Function Keyed(image: Image, key: Color32): Image
+Package Function Keyed(image: Image, key: Color32): Image
     Local bytes = image.ToBytes()
     For at = 0 To (bytes.Count / 4) - 1
         If bytes[at * 4] == key.r && bytes[at * 4 + 1] == key.g && bytes[at * 4 + 2] == key.b
@@ -45,6 +45,7 @@ Public Final Class Sprite2D
     Field first: Int32 = 0
     Field count: Int32 = 1
     Field handle: Vec2
+    Field keyed: Bool = False
 
     /// A sprite of all of `texture`.
     @MainThread Public New(texture: Texture)
@@ -62,7 +63,8 @@ Public Final Class Sprite2D
 
     /// A sprite of a texture of `image`, without mipmaps, as 2D draws it at its size; every pixel of
     /// exactly `masked`'s red, green, and blue is transparent, as art with a key color's background
-    /// wants, and `image` isn't changed. A keyed texture is sampled NEAREST, which SetFilter can
+    /// wants, whatever the Canvas's blend: on SOLID too, its key leaves what's there, by an alpha
+    /// test, and `image` isn't changed. A keyed texture is sampled NEAREST, which SetFilter can
     /// change, so its key color doesn't bleed into its edges when it's scaled. It throws when the GPU
     /// can't make the texture.
     @MainThread
@@ -71,7 +73,9 @@ Public Final Class Sprite2D
         If masked == Null Then Return Sprite2D(Try ImageTexture(image))
         Local made = Try ImageTexture(Keyed(image, masked))
         made.SetFilter(TextureFilter.NEAREST)
-        Return Sprite2D(made)
+        Local sprite = Sprite2D(made)
+        sprite.keyed = True
+        Return sprite
     End Method
 
     /// The texture it draws.
@@ -173,7 +177,7 @@ Public Final Class Sprite2D
         End If
         Return fbe_2d_sprite_t(x, y, width, height, handle.x As Float32, handle.y As Float32,
                                rotation,
-                               scaleX, scaleY)
+                               scaleX, scaleY, keyed ? 1 : 0)
     End Method
 
     // Its texture's handle, or a panic for one that was freed.

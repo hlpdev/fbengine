@@ -407,3 +407,276 @@ Function AThumbIsDraggedAndAPressBesideItBringsIt() Throws GraphicsError
     Local kept = short.NodeAt(Vec2(198.0, 5.0))
     Expect(kept != Null && !RefEquals(kept, short))
 End Function
+
+// A view of `count` rows in a view `height` tall, 200 across, in a Ui, laid out.
+Function Dragging(count: Int, height: Float32): (Node, ScrollView, Ui)
+    Local rows = Rows(count)
+    Local view = Viewed(rows, height)
+    view.SetWidth(Sizing.Fixed(200.0))
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(view)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Return (rows, view, ui)
+End Function
+
+Function Grown(rows: Node, by: Int)
+    For i = 1 To by
+        Local row = Node("more {i}")
+        row.SetHeight(Sizing.Fixed(20.0))
+        rows.Add(row)
+    End For
+End Function
+
+// Moves the pointer to `y` on the strip, a frame.
+Function MovedTo(ui: Ui, y: Float32) Throws GraphicsError
+    Try Simulate.MoveMouse(198.0, y)
+    Flip()
+    ui.Update()
+End Function
+
+Function Pressing(ui: Ui, y: Float32) Throws GraphicsError
+    Try Simulate.MoveMouse(198.0, y)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+End Function
+
+Function LetGo(ui: Ui) Throws GraphicsError
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+End Function
+
+// A drag past the end keeps only the end: what it shows growing after doesn't jump.
+@Test
+Function ADragPastTheEndKeepsOnlyTheEnd() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    Local rows, view, ui = Dragging(20, 100.0)
+    Try Pressing(ui, 2.0)
+    Try MovedTo(ui, 250.0)
+    Expect(view.Offset() == 300.0)
+    Try LetGo(ui)
+    Grown(rows, 200)
+    Flip()
+    ui.Update()
+    Expect(view.MaxOffset() == 4300.0)
+    Expect(view.Offset() == 300.0)
+    // Before the start, the same.
+    Try Pressing(ui, 2.0 + view.Offset() / view.MaxOffset() * 80.0)
+    Try MovedTo(ui, -500.0)
+    Expect(view.Offset() == 0.0)
+    Try LetGo(ui)
+    Expect(view.Offset() == 0.0)
+End Function
+
+// While it's held, the wheel's nothing to it, nor to what's under it.
+@Test
+Function TheWheelDoesNothingWhileTheThumbsHeld() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    Local rows, view, ui = Dragging(20, 100.0)
+    Try Pressing(ui, 2.0)
+    Try MovedTo(ui, 20.0)
+    Local held = view.Offset()
+    Expect(held > 0.0)
+    Try Simulate.Wheel(-2.0)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == held)
+    // Nor did it build up, for the next move.
+    Try MovedTo(ui, 20.5)
+    Expect(view.Offset() < held + 5.0 && view.Offset() > held)
+    Try LetGo(ui)
+    // Let go, it scrolls.
+    Local before = view.Offset()
+    Try Simulate.Wheel(-1.0)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == before + 40.0)
+    Expect(rows.Children().Count == 20)
+End Function
+
+// How tall the thumb of a view `tall` showing `extent` is, as it draws it.
+Function ThumbOf(tall: Float32, extent: Float32): Float32 => Max(tall * tall / extent, 16.0)
+
+// What it shows growing under a held thumb, it stays under the pointer, at the same part of it.
+@Test
+Function AHeldThumbStaysUnderThePointerAsWhatItShowsGrows() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    // 125 in 100: a thumb 80 tall, held 70 down it, 7/8ths.
+    Local rows, view, ui = Dragging(6, 100.0)
+    rows.Children()[0].SetHeight(Sizing.Fixed(25.0))
+    Flip()
+    ui.Update()
+    Expect(view.MaxOffset() == 25.0)
+    Try Pressing(ui, 70.0)
+    Expect(view.Offset() == 0.0)
+    Grown(rows, 44)
+    Flip()
+    ui.Update()
+    Expect(view.MaxOffset() == 905.0)
+    // Not moved: its thumb's smaller, with the pointer as far down it as it was.
+    Local tall = ThumbOf(100.0, 1005.0)
+    Local top = view.Offset() / view.MaxOffset() * (100.0 - tall)
+    Expect(IsClose(top + tall * 0.875, 70.0, 0.01))
+    // Moved, the same; and the bottom's in reach.
+    Try MovedTo(ui, 80.0)
+    top = view.Offset() / view.MaxOffset() * (100.0 - tall)
+    Expect(IsClose(top + tall * 0.875, 80.0, 0.01))
+    Try MovedTo(ui, 99.0)
+    Expect(view.Offset() == view.MaxOffset() ||
+           IsClose(view.Offset() / view.MaxOffset() * (100.0 - tall) + tall * 0.875, 99.0, 0.01))
+    Try LetGo(ui)
+    // Shrunk to nothing to scroll and grown again while held, it comes back under the pointer.
+    Try Pressing(ui, 90.0)
+    For i = rows.Children().Count - 1 To 2 Step -1
+        rows.Remove(rows.Children()[i])
+    End For
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == 0.0 && view.MaxOffset() == 0.0)
+    Grown(rows, 48)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() > 0.0)
+    Try LetGo(ui)
+End Function
+
+// SetOffset, as a console's Print is, does nothing while it's held, and goes on after.
+@Test
+Function ThePointerSaysWhereItsScrolledWhileItsHeld() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    Local rows, view, ui = Dragging(20, 100.0)
+    Try Pressing(ui, 2.0)
+    Try MovedTo(ui, 20.0)
+    Local held = view.Offset()
+    view.SetOffset(Inf)
+    Expect(view.Offset() == held)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == held)
+    Try LetGo(ui)
+    view.SetOffset(Inf)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == view.MaxOffset())
+    Expect(rows.Children().Count == 20)
+End Function
+
+// A press on a console's thumb leaves its line the focus, and a Print under a still pointer leaves
+// the view where the pointer has it.
+@Test
+Function AConsolesThumbLeavesItsLineTheFocus() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.STACK)
+    Local console = Console()
+    console.SetHeight(Sizing.Fraction(0.5))
+    console.SetAnchors(Anchors(0.0, 0.0, 1.0, 0.0))
+    root.Add(console)
+    Local ui = Ui(root)
+    For i = 1 To 100
+        console.Print("line {i}")
+    End For
+    ui.Focus(console.Line())
+    Flip()
+    ui.Update()
+    Local view = console.Children()[0] As? ScrollView
+    If view == Null Then Panic("a console's first child is its view")
+    Local box = view.ContentBox()
+    Expect(view.Offset() == view.MaxOffset())
+    // Dragged up from the bottom.
+    Try Simulate.MoveMouse(box.X + box.Width - 2.0, box.Y + box.Height - 2.0)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    Expect(RefEquals(ui.Pressed(), view))
+    Expect(RefEquals(ui.Focused(), console.Line()))
+    Try Simulate.MoveMouse(box.X + box.Width - 2.0, box.Y + box.Height / 2.0)
+    Flip()
+    ui.Update()
+    Local held = view.Offset()
+    Expect(held < view.MaxOffset() && held > 0.0)
+    console.Print("printed mid-drag")
+    Flip()
+    ui.Update()
+    Expect(view.Offset() < view.MaxOffset() - 5.0)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    Expect(RefEquals(ui.Focused(), console.Line()))
+    // A press beside its strip, on the lines, moves the focus as a press does.
+    Try Simulate.MoveMouse(box.X + 20.0, box.Y + 20.0)
+    Try Simulate.Click(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    Expect(!RefEquals(ui.Focused(), console.Line()))
+End Function
+
+// A view too short for its thumb to move leaves its strip to what it shows.
+@Test
+Function AViewWithNoRoomForItsThumbToMoveLeavesItsStrip() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    Local rows, view, ui = Dragging(20, 16.0)
+    Expect(view.MaxOffset() > 0.0)
+    Local under = view.NodeAt(Vec2(198.0, 5.0))
+    Expect(under != Null && !RefEquals(under, view))
+    Try Pressing(ui, 5.0)
+    Expect(ui.Pressed() == Null)
+    Try LetGo(ui)
+    // A unit taller, its thumb can move.
+    view.SetHeight(Sizing.Fixed(17.0))
+    Flip()
+    ui.Update()
+    Local strip = view.NodeAt(Vec2(198.0, 5.0))
+    Expect(strip != Null && RefEquals(strip, view))
+    Expect(rows.Children().Count == 20)
+End Function
+
+// While a view's thumb is held, the wheel's used up by it, so the view it's in doesn't scroll either.
+@Test
+Function TheWheelOverAHeldThumbDoesntScrollTheViewItsIn() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    Local inner = Viewed(Rows(20), 60.0)
+    inner.SetWidth(Sizing.Fixed(100.0))
+    Local column = Rows(20)
+    column.SetAlign(Align.START)
+    column.Insert(0, inner)
+    Local outer = Viewed(column, 100.0)
+    outer.SetWidth(Sizing.Fixed(200.0))
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(outer)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Expect(outer.MaxOffset() > 0.0)
+    Try Simulate.MoveMouse(98.0, 2.0)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    Expect(RefEquals(ui.Pressed(), inner))
+    Try Simulate.Wheel(-1.0)
+    Flip()
+    ui.Update()
+    Expect(inner.Offset() == 0.0 && outer.Offset() == 0.0)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+End Function

@@ -231,6 +231,56 @@ Function ASpritesKeyColorIsTransparent() Throws GraphicsError
     Expect(keyed.Texture().Filter() == TextureFilter.NEAREST)
 End Function
 
+// A key color leaves what's there on every blend, on a target and on the screen, drawn and tiled.
+@Test
+Function AKeyColorIsTransparentWhateverThePen() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(32, 32)
+    Defer EndGraphics()
+    Local image = Image(2, 1)
+    image[0, 0] = Color32(255, 0, 255, 255)
+    image[1, 0] = Color32(10, 200, 30, 255)
+    Local key = Color32(255, 0, 255, 255)
+    Local behind = Color32(40, 80, 120, 255)
+    Local sprite = Try Sprite2D.FromImage(image, key)
+    Local target = Try Texture.Target(4, 4)
+    Local canvas = Canvas(target)
+    For blend In [Blend2D.SOLID, Blend2D.ALPHA, Blend2D.ADD, Blend2D.MULTIPLY]
+        canvas.SetBlend(Blend2D.SOLID)
+        canvas.SetColor(behind)
+        canvas.Clear()
+        canvas.SetBlend(blend)
+        canvas.SetColor(Color32(255, 255, 255, 255))
+        canvas.Draw(sprite, 0, 0)
+        Local read = target.ToImage()
+        Expect(read[0, 0] == behind)
+        Expect(read[3, 3] == behind)
+        If blend == Blend2D.SOLID Then Expect(read[1, 0] == Color32(10, 200, 30, 255))
+    End For
+    // The default pen, as it comes, and its tiles.
+    Local fresh = Canvas(target)
+    fresh.SetColor(behind)
+    fresh.Clear()
+    fresh.SetColor(Color32(255, 255, 255, 255))
+    fresh.Tile(sprite, 0, 0)
+    Local tiled = target.ToImage()
+    Expect(tiled[0, 0] == behind && tiled[2, 0] == behind)
+    Expect(tiled[1, 0] == Color32(10, 200, 30, 255) && tiled[3, 3] == Color32(10, 200, 30, 255))
+    Flip()
+    Local screen = Screen.Canvas()
+    screen.SetColor(behind)
+    screen.Clear()
+    screen.SetColor(Color32(255, 255, 255, 255))
+    screen.Draw(sprite, 0, 0)
+    Local shown = Try Screen.ToImage()
+    Expect(shown[0, 0] == behind)
+    Expect(shown[1, 0] == Color32(10, 200, 30, 255))
+    // A sprite of it without a key draws its pink, on SOLID.
+    screen.Draw(Try Sprite2D.FromImage(image), 4, 0)
+    Expect((Try Screen.ToImage())[4, 0] == key)
+End Function
+
 @Test
 Function TheEnginesOwnFontDrawsWithNoFile() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")

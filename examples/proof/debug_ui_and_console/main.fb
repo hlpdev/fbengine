@@ -1,6 +1,7 @@
 // A game's debug UI and console: rows it asks for each frame, values it watches, sliders and
 // switches it tweaks with, and commands typed into a line, over the game. Driven by Simulate, it
 // prints what they did; with --watch, a window of them, which walks by itself until it's used.
+// Without a GPU, it prints that and stops where it needs the pixels, as a test skips it.
 
 Import std.collections
 Import std.core
@@ -13,6 +14,8 @@ Class Game
     Field speed: Float32 = 5.0
     Field noclip: Bool = False
     Field respawns: Int = 0
+    // A band across the game at this height, under the panel, or none under 0.
+    Field band: Int32 = -1
     Field root: Node
     Field panel: DebugPanel
     Field console: Console
@@ -65,6 +68,7 @@ Class Game
             // The game, under them.
             canvas.SetColor(Color32(76, 141, 255, 255))
             canvas.DrawRect(40 + (speed * 10.0) As Int32, 200, 32, 32)
+            If band >= 0 Then canvas.DrawRect(0, band, Screen.Width(), 4)
             ui.Draw()
         End If
     End Method
@@ -89,6 +93,14 @@ Function Proved() Throws GraphicsError
     game.Step()
     game.Step()
     Print("rows {game.panel.Names()}")
+
+    // A watched row shows what it's given each frame.
+    Local shown = Row(game, "frame") As? Label
+    Local first = shown?.Text() ?? ""
+    Local firstFrame = "{Frame.Count()}"
+    game.Step()
+    Local second = shown?.Text() ?? ""
+    Print("a watched row's the frame's {first == firstFrame}, then the next's {second == "{Frame.Count()}" && second != first}")
 
     // A switch by the mouse: a row comes with it, and goes with it.
     Local toggle = Row(game, "noclip")
@@ -147,6 +159,19 @@ Function Proved() Throws GraphicsError
     Try Simulate.PressKey(Key.GRAVE)
     game.Step()
     Print("closed {!game.console.Visible()}, focus {game.ui.Focused() == Null ? "none" : "kept"}")
+
+    // The panel over the game: a band of the game's beside it, and under it, a pixel of the panel.
+    If Screen.Texture() == Null
+        Print("no GPU here")
+        Return
+    End If
+    Local box = game.panel.Box()
+    game.band = (box.Center.y As Int32)
+    game.Step()
+    Local image = Try Screen.ToImage()
+    Local y = game.band + 1
+    Print("the game's band beside the panel {image[(box.X As Int) - 2, y]}")
+    Print("the panel over it {image[(box.X As Int) + 2, y] != image[(box.X As Int) - 2, y]}, {image[(box.X As Int) + 2, y]}")
 End Function
 
 // The widget of `game`'s debug row `name`.
@@ -158,11 +183,11 @@ Function Row(game: Game, name: String): Widget
 End Function
 
 // A window of them, walking by itself until a key's pressed; or `frames` frames offscreen.
-Function Watched(frames: Int) Throws GraphicsError
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Window.SetHeadless(frames > 0)
     Try Graphics(1024, 576)
     Defer EndGraphics()
-    Window.SetTitle("debug UI and console: Escape on no console ends it")
+    Window.SetTitle("debug UI and console: Escape closes the console, or ends it")
     Frame.SetLimit(60)
     Local game = Game()
     game.Commands()
@@ -172,10 +197,15 @@ Function Watched(frames: Int) Throws GraphicsError
     Local step = 0
     Local byItself = True
     While !Window.Closed() && (frames == 0 || count < frames)
-        If KeyHit(Key.ESCAPE) && !game.console.Visible() Then Break
+        If KeyHit(Key.ESCAPE)
+            If !game.console.Visible() Then Break
+            game.console.SetVisible(False)
+            game.ui.Focus(Null)
+        End If
         If KeysHit().Count > 0 Then byItself = False
         game.Step()
         count += 1
+        Try Driven(arguments, count)
         waited += Frame.Delta()
         If byItself && (frames > 0 || waited >= 1.0)
             waited = 0.0
@@ -202,6 +232,15 @@ Function Watched(frames: Int) Throws GraphicsError
     Print("watched {count} frames")
 End Function
 
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
 // How many frames `arguments` asks for after --frames, 0 for no end.
 Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
@@ -211,7 +250,7 @@ End Function
 
 Local arguments = Process.Arguments()
 If arguments.Contains("--watch")
-    Try Watched(Asked(arguments))
+    Try Watched(Asked(arguments), arguments)
 Else
     Try Proved()
 End If

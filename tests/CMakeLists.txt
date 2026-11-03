@@ -164,12 +164,21 @@ if(FBENGINE_FB_TESTS)
 
   # E14's proofs, each of a requirement: what each prints, line by line, and its --watch walked
   # offscreen. One that needs a GPU says so on a machine with none, and is skipped.
+  # A --watch, walked offscreen, with what a person would do at its frames, and how it ends.
+  function(fbengine_add_watched test folder driving printed)
+    add_test(NAME ${test}
+             COMMAND "${FBENGINE_FB}" --color never run "${folder}" -- --watch --frames 40 ${driving})
+    set_tests_properties(${test} PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "${printed}"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
+  endfunction()
   function(fbengine_add_proof_of_numbers name)
     list(JOIN ARGN "\r?\n" printed)
     add_test(NAME proof.${name}
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/proof/${name}")
     set_tests_properties(proof.${name} PROPERTIES
-                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;${fbengine_vulkan_environment}"
                          PASS_REGULAR_EXPRESSION "\n${printed}\r?\n$"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
   endfunction()
@@ -180,38 +189,59 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_FB}" --color never run "${folder}" -- --watch --frames 40)
     set_tests_properties(proof.${name}_watch PROPERTIES
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                         PASS_REGULAR_EXPRESSION "\nwatched 40 frames\r?\n$" TIMEOUT 120)
+                         PASS_REGULAR_EXPRESSION "\nwatched 40 frames\r?\n$"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
+    fbengine_add_watched(proof.${name}_escape "${folder}" "--press-at;1" "\nwatched 2 frames\r?\n$")
+    fbengine_add_watched(proof.${name}_close "${folder}" "--close-at;1" "\nwatched 2 frames\r?\n$")
   endfunction()
   fbengine_add_proof(frame_timing_and_input
-                     "frames 3, the clock went on True"
+                     "after a sleep of 20 ms, the clock's gone 15 or more True"
+                     "Flip[(]False[)] waits False"
+                     "Flip[(][)] waits True"
+                     "frames 3"
                      "10 frames at a limit of 100 took a tenth of a second or more True"
+                     "the last one's delta 9 ms or more True"
                      "W down True, hit True"
                      "then down True, hit False"
                      "then down False, up True"
                      "flushed, hit False"
+                     "of 10 binds, held alone 10"
                      "mouse 110, 45, speed 10, -5"
                      "hit True, wheel 2"
+                     "a button down True, hit True then False"
+                     "then down False"
                      "moved 200, 100, speed 0, 0"
                      "cursor shown False"
                      "relative True, speed 4, -2"
                      "focused False then True")
   fbengine_add_proof(sprites_over_a_scene
                      "the scene's middle is at 160, 90"
-                     "a frame's block, and what's keyed: drawn, behind"
-                     "the last frame's: drawn, behind"
-                     "scaled from its handle: drawn, drawn, behind"
-                     "turned a quarter: drawn, drawn, behind"
-                     "a rect, an oval's middle and corner, a line: drawn, drawn, behind, drawn"
+                     "a corner of the scene: [(]120, 130, 150, 255[)]"
+                     "a frame's block, and what's keyed: [(]255, 200, 80, 255[)], behind"
+                     "the last frame's: [(]255, 200, 80, 255[)], behind"
+                     "scaled from its handle: [(]255, 200, 80, 255[)], [(]255, 200, 80, 255[)], behind"
+                     "turned a quarter: [(]255, 200, 80, 255[)], [(]255, 200, 80, 255[)], behind"
+                     "a rect, an oval's middle and corner, a line: [(]200, 40, 40, 255[)], [(]200, 40, 40, 255[)], behind, [(]200, 40, 40, 255[)]"
                      "its width 41[.]46, of \"ScoreScore\" 82[.]91"
+                     "its ink's the pen's True, beside it False"
+                     "a font of a cell of 20: its ascent and descent 20[.]0"
+                     "its ink's the pen's True"
+                     "resized, its other key color: [(]50, 90, 200, 255[)], [(]50, 90, 200, 255[)], behind, behind"
+                     "its block's corner at its handle: [(]255, 200, 80, 255[)], [(]255, 200, 80, 255[)], behind, behind, behind"
+                     "frame 1 of a file: [(]255, 200, 80, 255[)], behind, behind"
                      "rects True, touching False"
                      "each frame's solid pixels 4, 16"
-                     "a block on a block True, off it False")
+                     "a block on a block True, off it False"
+                     "bounds apart by the key color: overlap True, collide False"
+                     "a rect on its key color False, on its block True")
   fbengine_add_proof(pixels_of_images_and_textures
                      "the image's red adds up to 30720"
                      "a pixel from the GPU [(]80, 144, 0, 255[)]"
                      "locked 32 by 32"
                      "as written [(]24, 32, 128, 255[)]"
                      "unlocked, from the GPU [(]24, 32, 128, 255[)]"
+                     "a plain texture's alpha from the GPU [(]255, 255, 255, 128[)]"
+                     "drawn over black [(]0, 0, 0, 255[)], [(]137, 137, 137, 255[)], [(]188, 188, 188, 255[)], [(]255, 255, 255, 255[)]"
                      "drawn, then read [(]255, 0, 0, 255[)]"
                      "a part of it 4 by 4: [(]255, 0, 0, 255[)], [(]104, 104, 128, 255[)]"
                      "the screen's [(]1, 2, 3, 255[)]"
@@ -219,11 +249,12 @@ if(FBENGINE_FB_TESTS)
   fbengine_add_proof(display_modes
                      "there's a display True"
                      "its desktop's a size True"
-                     "its modes go largest first True"
+                     "its modes for fullscreen 0"
                      "windowed at first WINDOWED, 640 by 360"
-                     "asked for BORDERLESS: BORDERLESS"
-                     "asked for FULLSCREEN: FULLSCREEN"
-                     "asked for WINDOWED: WINDOWED"
+                     "asked for BORDERLESS: BORDERLESS, 1024 by 768, the desktop's True"
+                     "asked for WINDOWED: WINDOWED, 640 by 360, the desktop's False"
+                     "asked for FULLSCREEN: FULLSCREEN, 1024 by 768, the desktop's True"
+                     "asked for WINDOWED: WINDOWED, 640 by 360, the desktop's False"
                      "the screen's 320 by 180, its own True"
                      "shown in 640 by 360 of the window"
                      "the window's again 640 by 360, True")
@@ -232,14 +263,15 @@ if(FBENGINE_FB_TESTS)
                      "on, typed \"a\", in order TEXT, PRESS"
                      "text input off without a field True"
                      "a field's focus turns it on True"
-                     "the name \"Site 19 save\", changed True"
-                     "edited \"ASite 19 sav\", cursor 1"
+                     "the name \"Cabin 7 save\", changed True"
+                     "edited \"ACabin 7 sav\", cursor 1"
                      "\"e\" and its accent are 1 long"
                      "the line has the focus True"
                      "submitted True: \"noclip on\""
                      "no focus, text input False")
   fbengine_add_proof(debug_ui_and_console
                      "rows [[]frame, speed, noclip, respawn[]]"
+                     "a watched row's the frame's True, then the next's True"
                      "noclip True, rows [[]frame, speed, noclip, respawn, only with noclip[]]"
                      "noclip False, rows [[]frame, speed, noclip, respawn[]]"
                      "respawns 1"
@@ -249,7 +281,26 @@ if(FBENGINE_FB_TESTS)
                      "recalled \"nosuch\""
                      "printed [[]> speed 7, speed is 7, > fail, fail: it can't be done, > nosuch, there's no command nosuch. help lists them[]]"
                      "run [[]speed 7, fail, nosuch[]]"
-                     "closed True, focus none")
+                     "closed True, focus none"
+                     "the game's band beside the panel [(]76, 141, 255, 255[)]"
+                     "the panel over it True, [(]28, 31, 36, 255[)]")
+
+  # A --watch's own keys, each pressed by the walk.
+  set_tests_properties(proof.frame_timing_and_input_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nby its keys: relative True, shown False, vsync False, moved True, flushed True\r?\nwatched 40 frames\r?\n$")
+  # Escape with the console open closes it, and a second ends the program.
+  fbengine_add_watched(proof.debug_ui_and_console_escape_console
+                       "${PROJECT_SOURCE_DIR}/examples/proof/debug_ui_and_console"
+                       "--press-at;4;--press-at;6" "\nwatched 7 frames\r?\n$")
+  # With no GPU, those that need one to make what they draw say so, and the rest draw nothing.
+  foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures)
+    add_test(NAME proof.${name}_no_gpu
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/proof/${name}"
+                     -- --watch --frames 2)
+    set_tests_properties(proof.${name}_no_gpu PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_NO_GPU=1"
+                         PASS_REGULAR_EXPRESSION "\nno GPU here\r?\n$" TIMEOUT 120)
+  endforeach()
 
   # Those with no --watch until the renderer draws meshes and sprites, or that have nothing to draw.
   fbengine_add_proof_of_numbers(swept_collisions
@@ -377,6 +428,18 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.menu_watch PROPERTIES
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "\nwatched 60 frames: options True, playing True, console True, menu again True\r?\n$")
+  # Escape and the close button end a --watch; on the menu's options Escape goes back, on the game to
+  # the menu, and on the menu, there already, it ends it.
+  set(fbengine_controls "${PROJECT_SOURCE_DIR}/examples/controls")
+  set(fbengine_menu "${PROJECT_SOURCE_DIR}/examples/menu")
+  fbengine_add_watched(examples.controls_escape "${fbengine_controls}" "--press-at;3" "\nwatched 4 frames, ")
+  fbengine_add_watched(examples.controls_close "${fbengine_controls}" "--close-at;3" "\nwatched 4 frames, ")
+  fbengine_add_watched(examples.menu_close "${fbengine_menu}" "--close-at;3" "\nwatched 3 frames: ")
+  fbengine_add_watched(examples.menu_escape_on_options "${fbengine_menu}" "--press-at;5" "\nwatched 40 frames: ")
+  fbengine_add_watched(examples.menu_escape_on_options_then_menu "${fbengine_menu}"
+                       "--press-at;5;--press-at;7" "\nwatched 7 frames: options True, playing False")
+  fbengine_add_watched(examples.menu_escape_on_game_then_menu "${fbengine_menu}"
+                       "--press-at;17;--press-at;19" "\nwatched 19 frames: options True, playing True")
 
   add_test(NAME examples.menu
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/menu")

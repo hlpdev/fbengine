@@ -1,6 +1,6 @@
-// Pixels by a game's own code: an image's and a texture's read and written one at a time, a
-// heightmap read from a mask, and a font's atlas written by hand, on the CPU then the GPU. It prints
-// what it read back, and how long a million took; with --watch, a window of a texture being painted.
+// Pixels by a game's own code: an image's read and written one at a time on the CPU, and a texture's,
+// a target's and a plain one's, locked, written, with alpha, and drawn from. It prints what it read
+// back, and whether a million were quick; with --watch, a window of a texture being painted.
 
 Import std.collections
 Import std.core
@@ -11,7 +11,7 @@ Import std.time
 Import fbengine
 
 Function Proved() Throws GraphicsError
-    // An image's, on the CPU, as a forest's heightmap is read.
+    // An image's, on the CPU, as a game reads a terrain's heights from one.
     Local map = Image(16, 16)
     For y = 0 To 15
         For x = 0 To 15
@@ -37,7 +37,7 @@ Function Proved() Throws GraphicsError
     Local texture = Try Texture.FromImage(map, False)
     Print("a pixel from the GPU {texture.ReadPixel(5, 9)}")
 
-    // Locked, written a pixel at a time, then drawn from.
+    // A target, locked and written a pixel at a time.
     Local locked = Try Texture.Target(32, 32)
     Local pixels = locked.LockPixels()
     Print("locked {pixels.Width()} by {pixels.Height()}")
@@ -49,6 +49,27 @@ Function Proved() Throws GraphicsError
     Print("as written {pixels.Get(3, 4)}")
     pixels.Unlock()
     Print("unlocked, from the GPU {locked.ReadPixel(3, 4)}")
+
+    // A plain texture, locked, an alpha ramp written, then drawn with ALPHA over a solid color, as a
+    // font's atlas written by hand is. Blending's in linear light on the canvas, so half alpha over
+    // black reads 188, sRGB's half, not 128, whatever a material's fixed-function look encodes.
+    Local blank = Image(4, 1)
+    blank.Fill(Color32(0, 0, 0, 0))
+    Local ramp = Try Texture.FromImage(blank, False)
+    Local written = ramp.LockPixels()
+    For x = 0 To 3
+        written.Set(x, 0, Color32(255, 255, 255, [0, 64, 128, 255][x] As UInt8))
+    End For
+    written.Unlock()
+    Print("a plain texture's alpha from the GPU {ramp.ReadPixel(2, 0)}")
+    Local over = Try Texture.Target(4, 1)
+    Local onto = Canvas(over)
+    onto.SetColor(Color32(0, 0, 0, 255))
+    onto.Clear()
+    onto.SetBlend(Blend2D.ALPHA)
+    onto.SetColor(Color32(255, 255, 255, 255))
+    onto.Draw(Sprite2D(ramp), 0.0, 0.0)
+    Print("drawn over black {over.ReadPixel(0, 0)}, {over.ReadPixel(1, 0)}, {over.ReadPixel(2, 0)}, {over.ReadPixel(3, 0)}")
 
     // What's drawn is read back too, and part of it as an image.
     Local canvas = Canvas(locked)
@@ -65,7 +86,7 @@ Function Proved() Throws GraphicsError
     screen.Clear()
     Print("the screen's {(Try Screen.ToImage())[0, 0]}")
 
-    // A lot at once: reading and writing a locked texture stays quick, and a run reads the GPU once.
+    // A lot at once: writing a locked texture stays quick.
     Local many = Try Texture.Target(1024, 1024)
     Local run = many.LockPixels()
     Local clock = Stopwatch.StartNew()
@@ -80,7 +101,11 @@ Function Proved() Throws GraphicsError
 End Function
 
 // A window of a texture being painted a pixel at a time; or `frames` frames offscreen.
-Function Watched(frames: Int) Throws GraphicsError
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
     Window.SetHeadless(frames > 0)
     Try Graphics(800, 450)
     Defer EndGraphics()
@@ -95,6 +120,7 @@ Function Watched(frames: Int) Throws GraphicsError
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         Flip()
         count += 1
+        Try Driven(arguments, count)
         Local pixels = paper.LockPixels()
         For i = 1 To 256
             Local x = at % 128
@@ -119,6 +145,15 @@ Function Watched(frames: Int) Throws GraphicsError
     Print("watched {count} frames")
 End Function
 
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
 // How many frames `arguments` asks for after --frames, 0 for no end.
 Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
@@ -128,7 +163,7 @@ End Function
 
 Local arguments = Process.Arguments()
 If arguments.Contains("--watch")
-    Try Watched(Asked(arguments))
+    Try Watched(Asked(arguments), arguments)
 Else
     Try Proved()
 End If
