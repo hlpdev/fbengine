@@ -60,6 +60,11 @@ jobs:
         env:
           SDL_VIDEO_DRIVER: offscreen
           FBENGINE_NO_GPU: '1'
+          # A runner's TEMP goes through an 8.3 short name, and fb 1.2.2's FileWatcher gets no
+          # events there; the next fb release fixes it, and these two lines go then.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          FBENGINE_ENDS_AT_ONCE: '8'
         run: |
           tar -xf native-${{ matrix.target }}.tar
           fb --version
