@@ -5,9 +5,7 @@
 
 Import std.collections
 Import std.core
-Import std.io
 Import std.math
-Import std.os
 Import fbengine
 
 Public Const WIDTH: Int32 = 320
@@ -18,6 +16,8 @@ Const FLOOR: Float32 = 224.0
 Const SHIP_Y: Float32 = 215.0
 // How far below the ground's top a rock is gone, the biggest turned at its widest.
 Const BELOW: Float32 = 18.0
+// How many steps a watched game's last moments last, once it's over: two seconds.
+Const OVER_STEPS: Int32 = 120
 
 // A sprite's colors: '.' is clear, and each other character its color here.
 Function ColorOf(pixel: Char): Color32
@@ -70,8 +70,8 @@ End Function
 
 // A texture of rows of characters, drawn as pixel art is, each texel a sharp square.
 Function TextureOf(rows: String[]): Texture Throws GraphicsError
-    Local width = rows[0].Chars.Count As Int32
-    Local height = rows.Count As Int32
+    Local width = rows[0].Chars.Count
+    Local height = rows.Count
     Local made = Try Texture(width, height, TextureFormat.RGBA8, False)
     made.WritePixels(0, 0, width, height, BytesOf(rows))
     made.SetFilter(TextureFilter.NEAREST)
@@ -233,7 +233,7 @@ Public Final Class Star
     End New
 End Class
 
-// The game: its sprites and their masks, and what's on the screen.
+// The game: its sprites and their masks, its font, and what's on the screen.
 Public Final Class Game
     Field ship: Sprite2D
     Field shipMask: Mask
@@ -241,6 +241,7 @@ Public Final Class Game
     Field rockMask: Mask
     Field flame: Sprite2D
     Field ground: Sprite2D
+    Field font: Font
     Field random: Random
     Field stars: Star[] = []
     Field rocks: Rock[] = []
@@ -249,6 +250,7 @@ Public Final Class Game
     Field shipX: Float32 = 160
     Field cooldown: Int32 = 0
     Field hurt: Int32 = 0
+    Field over: Int32 = 0
     Public Field Score: Int32 = 0
     Public Field Lives: Int32 = 3
     Public Field Frame: Int32 = 0
@@ -264,11 +266,12 @@ Public Final Class Game
         flame = Sprite2D(Try TextureOf(FlameRows()))
         flame.SetFrames(3, 4)
         ground = Sprite2D(Try TextureOf(GroundRows()))
+        font = Font.BuiltIn(12.0)
         random = Random(1979)
         For i = 1 To 70
-            stars.Add(Star(random.Float(0.0, WIDTH As Float) As Float32,
-                           random.Float(0.0, FLOOR As Float) As Float32,
-                           random.Float(0.2, 1.2) As Float32, random.Int(90, 255) As UInt8))
+            stars.Add(Star(random.Float(0.0, WIDTH As Float),
+                           random.Float(0.0, FLOOR As Float),
+                           random.Float(0.2, 1.2), random.Int(90, 255) As UInt8))
         End For
     End New
 
@@ -286,16 +289,16 @@ Public Final Class Game
         If hurt > 0 Then hurt -= 1
         // A rock every 25 frames, more as the score goes up.
         If Frame % Max(8, 25 - (Score / 100)) == 1
-            rocks.Add(Rock(random.Float(16.0, (WIDTH - 16) As Float) As Float32,
-                           random.Float(0.6, 1.6) As Float32,
-                           random.Float(-0.4, 0.4) As Float32, random.Float(-0.06, 0.06) As Float32,
+            rocks.Add(Rock(random.Float(16.0, (WIDTH - 16) As Float),
+                           random.Float(0.6, 1.6),
+                           random.Float(-0.4, 0.4), random.Float(-0.06, 0.06),
                            random.Chance(0.3) ? 1.5 : 1.0))
         End If
         For star In stars
             star.Y += star.Speed
             If star.Y >= FLOOR
                 star.Y -= FLOOR
-                star.X = random.Float(0.0, WIDTH As Float) As Float32
+                star.X = random.Float(0.0, WIDTH As Float)
             End If
         End For
         For bolt In bolts
@@ -316,6 +319,30 @@ Public Final Class Game
             spark.Life -= 1
         End For
         sparks.RemoveAll(Function(spark: Spark) => spark.Life <= 0)
+    End Method
+
+    // What's watched: a step of the pilot's, and a new game two seconds after one's over.
+    Public Method Watch()
+        If Lives == 0
+            over += 1
+            If over > OVER_STEPS Then StartAgain()
+        End If
+        Local move = Pilot()
+        Step(move.Across, move.Firing)
+    End Method
+
+    // Everything but the stars and the random numbers as it was, so the next game's a different one.
+    Method StartAgain()
+        rocks = []
+        bolts = []
+        sparks = []
+        shipX = 160
+        cooldown = 0
+        hurt = 0
+        over = 0
+        Score = 0
+        Lives = 3
+        Frame = 0
     End Method
 
     // Bolts against rocks, and rocks against the ship, pixel for pixel.
@@ -340,10 +367,10 @@ Public Final Class Game
         End For
         For falling In broken
             For i = 0 To 11
-                Local angle = random.Float(0, 2 * Pi) As Float32
-                Local speed = random.Float(0.5, 2.5) As Float32
+                Local angle = random.Float(0, 2 * Pi)
+                Local speed = random.Float(0.5, 2.5)
                 sparks.Add(Spark(falling.X, falling.Y, Cos(angle) * speed, Sin(angle) * speed,
-                                 random.Int(20, 40) As Int32))
+                                 random.Int(20, 40)))
             End For
             rocks.Remove(falling)
         End For
@@ -391,11 +418,11 @@ Public Final Class Game
         canvas.Tile(ground, 0, GROUND As Float32)
         canvas.ResetViewport()
         canvas.SetBlend(Blend2D.ALPHA)
-        // The score in seven segments, and the lives left as small ships, over a panel.
+        // The score, and the lives left as small ships, over a panel.
         canvas.SetColor(Color32(0, 0, 0, 140))
         canvas.DrawRect(0, 0, WIDTH, 14)
         canvas.SetColor(Color32(250, 230, 160, 255))
-        DrawNumber(canvas, Score, 4, 3)
+        canvas.DrawText(font, "{Score:06}", 4, 0)
         canvas.SetColor(Color32(255, 255, 255, 255))
         canvas.SetScale(0.6, 0.6)
         For life = 1 To Lives
@@ -441,27 +468,3 @@ Public Final Class Game
         Return Move(across, firing)
     End Method
 End Class
-
-// One of the seven segments' digits, 4 by 7 pixels at `x`, `y`.
-Function DrawDigit(canvas: Canvas, digit: Int32, x: Int32, y: Int32)
-    // Which segments each digit lights: top, top right, bottom right, bottom, bottom left, top
-    // left, middle.
-    Local lit = [0b0111111, 0b0000110, 0b1011011, 0b1001111, 0b1100110, 0b1101101, 0b1111101,
-                 0b0000111, 0b1111111, 0b1101111][digit]
-    If (lit & 1) != 0 Then canvas.DrawRect(x, y, 4, 1)
-    If (lit & 2) != 0 Then canvas.DrawRect(x + 3, y, 1, 4)
-    If (lit & 4) != 0 Then canvas.DrawRect(x + 3, y + 3, 1, 4)
-    If (lit & 8) != 0 Then canvas.DrawRect(x, y + 6, 4, 1)
-    If (lit & 16) != 0 Then canvas.DrawRect(x, y + 3, 1, 4)
-    If (lit & 32) != 0 Then canvas.DrawRect(x, y, 1, 4)
-    If (lit & 64) != 0 Then canvas.DrawRect(x, y + 3, 4, 1)
-End Function
-
-Function DrawNumber(canvas: Canvas, number: Int32, x: Int32, y: Int32)
-    Local text = "{number:06}"
-    Local at = x
-    For digit In text.Chars
-        DrawDigit(canvas, ((digit As Int32) - ('0' As Int32)), at, y)
-        at += 6
-    End For
-End Function

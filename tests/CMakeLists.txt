@@ -146,6 +146,17 @@ if(FBENGINE_FB_TESTS)
                  "PATH=path_list_prepend:${fbengine_test_dll_paths}")
   endif()
   add_test(NAME examples.arcade.rules COMMAND "${FBENGINE_FB}" test "${PROJECT_SOURCE_DIR}/examples/arcade")
+  set_tests_properties(examples.arcade.rules PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
+  # Its --watch, which a person watches in a window (tools/show.py), walked here offscreen, a step
+  # each frame: the pilot's run again.
+  add_test(NAME examples.arcade.watch
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/arcade"
+                   -- --watch --steps 300)
+  set_tests_properties(examples.arcade.watch PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "\nwatched 300 steps, score 120, lives 3\r?\n$")
   add_test(NAME examples.arcade.usage
            COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DEXAMPLE=${PROJECT_SOURCE_DIR}/examples/arcade"
                    -P "${CMAKE_CURRENT_SOURCE_DIR}/arcade_usage.cmake")

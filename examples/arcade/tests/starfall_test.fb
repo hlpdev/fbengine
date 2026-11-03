@@ -1,7 +1,10 @@
-// Starfall's rules that need no GPU.
+// Starfall's rules, on the GPU ctest's tests use only for what needs its sprites; a machine with no
+// Vulkan sets FBENGINE_NO_GPU to 1 and skips those.
 
 Import std.core
+Import std.os
 Import std.test
+Import fbengine
 Import arcade.starfall
 
 // A rock at (100, 100), its handle its middle: its pixels' columns are 92 to 107, and its first row
@@ -28,4 +31,25 @@ Function ABoltMeetsARockInThePixelsItsDrawnIn()
     // All 5 of its rows count: its last, 4 below its top, is what meets the rock's first row.
     Expect(BoltHits(mask, Bolt(98, 88), falling))
     Expect(!BoltHits(mask, Bolt(98, 87), falling))
+End Function
+
+// What --watch plays goes on by itself: two seconds on a game that's over, then another.
+@Test
+Function AWatchedGameStartsAgainAfterItsOver() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local game = Try Game()
+    Defer EndGraphics()
+    game.Watch()
+    Expect(game.Frame == 1)
+    game.Score = 50
+    game.Lives = 0
+    For step = 1 To 120
+        game.Watch()
+        Expect(game.Lives == 0)
+    End For
+    game.Watch()
+    Expect(game.Lives == 3)
+    Expect(game.Score == 0)
+    Expect(game.Frame == 1)
 End Function

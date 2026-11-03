@@ -40,7 +40,7 @@ FALLBACKS = {
 CLANG_FORMAT_VERSION = "19.1.5"
 # Tests ctest has to list, as one registered only by a second configure is skipped without a word.
 REQUIRED_TESTS = ["examples.hello", "examples.arcade", "examples.arcade.idle", "examples.arcade.golden",
-                  "examples.arcade.rules", "examples.arcade.usage", "fbengine.package"]
+                  "examples.arcade.rules", "examples.arcade.watch", "examples.arcade.usage", "fbengine.package"]
 failures = []
 # One lock for each verify that may run at a time on this machine.
 TURNS = ["turn.lock", "turn2.lock", "turn3.lock", "turn4.lock"]
