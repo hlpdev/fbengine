@@ -7,8 +7,8 @@ Import std.ffi
 Import std.image
 Import std.io
 Import std.math
-Import std.text
 Import "./assets"
+Import std.text
 Import "./c/fbe_texture"
 Import "./loads"
 Import "./pixels"

@@ -298,10 +298,6 @@ struct spec_t {
     bool bound = true;
 };
 
-VkFormat vk_format_of(const spec_t& spec) {
-    return spec.image != nullptr ? spec.vk_format : vk_format_of(spec.format);
-}
-
 /// The half float nearest `value`, from 0 to the largest finite one; NaN's 0.
 std::uint16_t half_of(float value) {
     constexpr float largest_half = 65504.0F;
@@ -318,6 +314,10 @@ std::uint16_t half_of(float value) {
     }
     return static_cast<std::uint16_t>((static_cast<std::uint32_t>(exponent + 15) << 10U) +
                                       (((bits & 0x7FFFFFU) + 0x1000U) >> 13U));
+}
+
+VkFormat vk_format_of(const spec_t& spec) {
+    return spec.image != nullptr ? spec.vk_format : vk_format_of(spec.format);
 }
 
 /// Whether the device can make a texture of `spec`; false, with fbe_error's why, if not.
