@@ -1,16 +1,18 @@
-"""Checks verify.py's locks: a second process can't take one that's held, and can once it's let go."""
+"""Checks verify.py's locks: a second process can't take one that's held, and can once it's let go;
+and what show.py finds to play."""
 
 import importlib.util
 import pathlib
 import subprocess
 import sys
+import tempfile
 import textwrap
 
 TOOLS = pathlib.Path(__file__).resolve().parent
 
 
-def load():
-    spec = importlib.util.spec_from_file_location("verify", TOOLS / "verify.py")
+def load(name="verify"):
+    spec = importlib.util.spec_from_file_location(name, TOOLS / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -28,7 +30,24 @@ def other_process_takes(name):
     return done.stdout.strip() == "True"
 
 
+def show_finds_what_has_a_watch():
+    show = load("show")
+    with tempfile.TemporaryDirectory() as folder:
+        show.ROOT = pathlib.Path(folder)
+        for name, text in [("b", 'x.Contains("--watch")'), ("a/deep", 'If y.Contains("--watch")'), ("c", "Print(1)")]:
+            (show.ROOT / "examples" / name).mkdir(parents=True)
+            (show.ROOT / "examples" / name / "main.fb").write_text(text, encoding="utf-8")
+        (show.ROOT / "examples" / "b" / "other.fb").write_text('"--watch"', encoding="utf-8")
+        assert show.watched() == ["a/deep", "b"], show.watched()
+    done = subprocess.run([sys.executable, str(TOOLS / "show.py"), "--list"], capture_output=True, text=True, check=True)
+    listed = done.stdout.split()
+    assert "menu" in listed and "proof/room_files" in listed, listed
+    assert "hello" not in listed, "an example with no --watch was listed"
+    print("show.py finds what has a --watch")
+
+
 def main():
+    show_finds_what_has_a_watch()
     verify = load()
     name = "verify-test.lock"
     held = verify.lock_file(name)
