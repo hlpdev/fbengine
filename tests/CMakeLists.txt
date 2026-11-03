@@ -784,6 +784,7 @@ if(FBENGINE_FB_TESTS)
                            "a lightmap alone [(]18[789], 10[345], 6[123], 255[)]"
                            "a file that isn't there is a slot with nothing [(]18[789], 10[345], 6[123], 255[)]"
                            "a texture's blend stays its first [(]20[012], [0-9]+, [45][0-9], 255[)]"
+                           "another folder's of the same name, the first's [(]20[012], 1?[0-9]+, 5[012], 255[)]"
                            "placed, showing True, the template False"
                            "what falls rests on its floor 40[.]000, 0[.]251, 0[.]000"
                            "through the pane, to the floor 42[.]000, 0[.]251, 0[.]000"

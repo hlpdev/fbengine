@@ -341,6 +341,10 @@ Function Proved() Throws GraphicsError, IOError
     // Its blend's the one it was first loaded for, flag 1's doubling, whatever a later file's flag says.
     Print("a texture's blend stays its first {Try Slots(folder.Path, kinds, camera, 0, "", 2, "flat.png")}")
 
+    // By the name without its folders, what's in another folder of that name is the first's.
+    Try Png1(folder.Path, "other/flat.png", [[Color32(255, 0, 0, 255)]])
+    Print("another folder's of the same name, the first's {Try Slots(folder.Path, kinds, camera, 0, "", 2, "other/flat.png")}")
+
     // Placed: a copy at a cell, its collision reached by what moves and what picks, by group.
     camera.Hide()
     Local placed = PlaceRoom(room, Vec3(40, 0, 0), 0.0, LEVEL)

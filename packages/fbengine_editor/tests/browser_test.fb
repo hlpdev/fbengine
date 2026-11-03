@@ -173,7 +173,7 @@ Function AModelDraggedIntoTheSceneIsPlacedThere() Throws IOError, GraphicsError
     editor.Step()
     Local from = Row(editor, "res://sub/ball.gltf").Center
     Local to = editor.View.Box().Center
-    // Not far enough, it's a click.
+    // A click, or let go short of the scene, adds nothing.
     Try Simulate.MoveMouse(from.x, from.y)
     editor.Step()
     Try Simulate.MouseDown(MouseButton.LEFT)
@@ -236,6 +236,7 @@ Function AModelDraggedIntoTheSceneIsPlacedThere() Throws IOError, GraphicsError
     Try Simulate.MouseUp(MouseButton.LEFT)
     editor.Step()
     Expect(editor.Edited.Entities().Count == count)
+    Expect(editor.ShowingDialog() == Null, "a picture isn't a model")
     Local bad = Row(editor, "res://sub/bad.gltf").Center
     Try Simulate.MoveMouse(bad.x, bad.y)
     editor.Step()
@@ -318,6 +319,27 @@ Function ImportSettingsAreEditedInTheSidecar() Throws IOError, GraphicsError
     editor.Step()
     editor.Step()
     Expect((Try Assets.ReadSettings<ImageSettings>("res://wall.png")).Quality == 4)
+    // By the mouse, nothing till it's let go of, then one change.
+    editor.Actions.Run("edit.undo")
+    editor.Step()
+    Local before = Try Sidecar(games)
+    Local bar = Found(editor, "assets.quality").Box()
+    Try Simulate.MoveMouse(bar.X + bar.Width * 0.5, bar.Center.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MoveMouse(bar.X + bar.Width * 0.25, bar.Center.y)
+    editor.Step()
+    editor.Step()
+    Expect((Try Sidecar(games)) == before, "a slider that's held has changed nothing yet")
+    Try Simulate.MoveMouse(bar.X + bar.Width * 0.76, bar.Center.y)
+    editor.Step()
+    editor.Step()
+    Expect((Try Sidecar(games)) == before, "a slider that's held has changed nothing yet")
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    editor.Step()
+    Expect((Try Assets.ReadSettings<ImageSettings>("res://wall.png")).Quality == 3)
     // Undone, each back, to the file as it first was.
     While editor.Edits.CanUndo()
         editor.Actions.Run("edit.undo")
@@ -351,6 +373,17 @@ Function ImportSettingsAreEditedInTheSidecar() Throws IOError, GraphicsError
     editor.Files.Choose("res://note.txt")
     editor.Step()
     Expect(!Found(editor, "assets.settings").Visible())
+End Function
+
+// How many of `image`'s pixels aren't what its corner is.
+Function Differing(image: Image): Int
+    Local count = 0
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != image[0, 0] Then count += 1
+        End For
+    End For
+    Return count
 End Function
 
 // A file that's changed, new, or gone on disk shows.
@@ -399,6 +432,18 @@ Function WhatChangesOnDiskIsSeen() Throws IOError, GraphicsError
     Try File.WriteText(assets / "sub" / "ball.gltf", TRIANGLE.Replace("\"blade\"", "\"sharper\""))
     StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
     Expect(placed.ChildCount() == 1 && placed.Child(0).Name() == "sharper")
+    // Its thumbnail's the file's as it is now: the triangle turned away from above is none of it drawn.
+    Local seen = editor.Files.ThumbOf("res://sub/ball.gltf")
+    If seen == Null Then Panic("a model's thumbnail")
+    Expect(Differing(seen.Texture().ToImage()) > 40)
+    reloads = editor.Files.Reloads()
+    Try File.WriteText(assets / "sub" / "ball.gltf",
+                       TRIANGLE.Replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA",
+                                        "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"))
+    StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
+    Local after = editor.Files.ThumbOf("res://sub/ball.gltf")
+    If after == Null Then Panic("a model's thumbnail")
+    Expect(Differing(after.Texture().ToImage()) == 0)
     // Its folder let go of, a project closed, nothing's watched or held.
     editor.CloseProject()
     Expect(editor.Files.ShownPaths().Count == 0)

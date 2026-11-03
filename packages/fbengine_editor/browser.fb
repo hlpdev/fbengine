@@ -16,11 +16,10 @@ Import "./project"
 Import "./scene"
 
 // How far a row's indented under its folder, how big a thumbnail is, in the UI's units and its
-// texture's pixels, how far a row's dragged before it's moving, and how often the disk's looked at.
+// texture's pixels, and how often the disk's looked at.
 Const INDENT: Float32 = 14.0
 Const THUMB: Float32 = 32.0
 Const THUMB_PIXELS: Int32 = 64
-Const DRAGGED: Float32 = 6.0
 Const LOOKS: Float64 = 0.5
 
 /// What kind of thing a file is, by its extension.
@@ -570,14 +569,12 @@ Final Class AssetRow Extends Widget
     Field Disk: Path
     Field isFolder: Bool
     Field dragging: Bool = False
-    Field from: Vec2
 
     New(owner: AssetBrowser, path: String, name: String, depth: Int, folder: Bool, disk: Path)
         browser = owner
         Res = path
         Disk = disk
         isFolder = folder
-        from = Vec2(0, 0)
         Super.New("tree.row", "assets.row")
         SetArrangement(Arrangement.ROW)
         SetGap(6.0)
@@ -601,7 +598,6 @@ Final Class AssetRow Extends Widget
     Public Override Method PointerDown(point: Vec2): Bool
         Local own = browser
         If own == Null Then Return False
-        from = point
         dragging = False
         If isFolder
             own.SetOpen(Res, !own.IsOpen(Res))
@@ -614,7 +610,6 @@ Final Class AssetRow Extends Widget
         Local own = browser
         Local ui = Owner()
         If own == Null || ui == Null || isFolder Then Return
-        If !dragging && Distance(point, from) < DRAGGED Then Return
         dragging = True
         own.DragOver(ui, Res, point)
     End Method
