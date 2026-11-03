@@ -103,10 +103,12 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     Local editor = Try Started(settings, games)
     Expect(editor.Inspector.Rows().Count == 0)
     Local own = "Name Hidden Position Rotation Scale PickMode CollisionShape StepHeight MaxSlope " +
-                "CollisionGroup BlocksSight CollisionRadius "
+                "CollisionGroup CastsShadows BlocksSight CollisionRadius "
     Local light = Light(LightType.SPOT)
     Selecting(editor, light)
-    Expect(Titles(editor) == own + "LightType Color Intensity Range Cone ", Titles(editor))
+    Expect(Titles(editor) ==
+           own + "LightType Color ShadowDistance Intensity Range ShadowSize Cascades " +
+           "Shadows Cone ShadowBias ", Titles(editor))
     Local camera = Camera()
     Selecting(editor, camera)
     Expect(Titles(editor) ==
@@ -1519,6 +1521,19 @@ Function LimitsAreTheSettersOwn() Throws IOError, GraphicsError
     Expect(Abs(camera.FieldOfView() - 0.01 * Pi / 180) < 0.00001, "it's {camera.FieldOfView()}")
     Try Entered(editor, "OrthographicHeight", "1e-39")
     Expect(camera.OrthographicHeight() > 0.0000001)
+    // What a light's shadows take.
+    Local shadowed = Light(LightType.DIRECTIONAL)
+    Selecting(editor, shadowed)
+    Try Entered(editor, "ShadowSize", "8")
+    Expect(shadowed.ShadowSize() != 8, "it took what's too small")
+    Try Entered(editor, "ShadowDistance", "0")
+    Expect(shadowed.ShadowDistance() > 0)
+    Try Entered(editor, "ShadowBias", "3", 1)
+    Expect(shadowed.ShadowNormalBias() == 3)
+    Local depthBias = shadowed.ShadowBias()
+    Try Entered(editor, "ShadowBias", "-1", 0)
+    Expect(shadowed.ShadowBias() == depthBias, "it took a bias below 0")
+    Selecting(editor, camera)
     // A camera's clearing goes one way at a time.
     Local depth = RowCalled(editor, "ClearsDepth") As? ToggleRow
     If depth == Null Then Panic("it's not a box")

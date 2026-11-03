@@ -64,7 +64,7 @@ Public Function MembersOf<E>(upTo: Int = 4096): E[]
         Try
             Local member = Try Load<E>(Value(at As Int64))
             Local name = Save(member).AsString()
-            If name == Null || name.Contains(" | ") Then Return []
+            If name == Null Then Return []
             all.Add(member)
         Catch error As ParseError
             // A number no member has, which there can be some of between those that are.

@@ -81,6 +81,7 @@ Public Final Class Light Extends Entity
     /// Sets how many texels a side its shadows' tiles have, 16 to 8192, 1024 at first: a directional
     /// light has one for each cascade and a point light six. Lights past what the atlas holds have
     /// no shadows, the last first. Others panic.
+    @Limits(16, 8192)
     @MainThread @PanicsAtCaller
     Public Method SetShadowSize(size: Int32)
         If !fbe_light_set_shadow_size(Live("SetShadowSize"), size) Then Failed("SetShadowSize")
@@ -110,6 +111,7 @@ Public Final Class Light Extends Entity
         fbe_light_shadow_normal_bias(Live("ShadowNormalBias"))
 
     /// Sets how many cascades a directional light's shadows have, 1 to 4, 3 at first. Others panic.
+    @Limits(1, 4)
     @MainThread @PanicsAtCaller
     Public Method SetCascades(cascades: Int32)
         If !fbe_light_set_cascades(Live("SetCascades"), cascades) Then Failed("SetCascades")
@@ -121,6 +123,7 @@ Public Final Class Light Extends Entity
 
     /// Sets how far from the camera a directional light's shadows reach, 100 at first, or its far
     /// plane. One not above 0 panics.
+    @Limits(0.000001)
     @MainThread @PanicsAtCaller
     Public Method SetShadowDistance(distance: Float)
         If !fbe_light_set_shadow_distance(Live("SetShadowDistance"), distance)

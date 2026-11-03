@@ -875,6 +875,7 @@ Public Final Class SceneInspector Extends Widget
         If lights != Null
             AddSection<Light>("Light", lights, Function(light: Light) => there(light), seen)
             AddCone(lights)
+            AddShadowBias(lights)
         End If
         Local cameras = EachIs<Camera>(entities)
         If cameras != Null
@@ -994,6 +995,16 @@ Public Final Class SceneInspector Extends Widget
                                      Function(index: Int, radius: Vec2)
             all[index].SetCollisionRadius(radius.x, radius.y)
         End Function, Function(index: Int) => !all[index].Freed(), Limits(0.000001)), history))
+    End Method
+
+    // A light's two biases, set as one.
+    Method AddShadowBias(lights: Light[])
+        Added(Vec2Row(Editable<Vec2>("ShadowBias", lights.Count,
+                                     Function(index: Int) => Vec2(lights[index].ShadowBias(),
+                                                                  lights[index].ShadowNormalBias()),
+                                     Function(index: Int, bias: Vec2)
+            lights[index].SetShadowBias(bias.x, bias.y)
+        End Function, Function(index: Int) => !lights[index].Freed(), Limits(0)), history))
     End Method
 
     // A spot's cone, set as one, inner within outer.
