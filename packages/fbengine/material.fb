@@ -184,13 +184,14 @@ Public Final Class Material
     @MainThread @PanicsAtCaller
     Public Method Alpha(): Float => Color().a
 
-    /// Sets how sharp and bright its highlights are, from 0, none, to 1. Outside 0 to 1 panics.
+    /// Sets how sharp and bright a VERTEX material's highlights are, 0 for none to 1, or it panics.
+    /// A PBR material's are its roughness's.
     @MainThread @PanicsAtCaller
     Public Method SetShininess(shininess: Float)
         If !fbe_material_set_shininess(Live("SetShininess"), shininess) Then Failed("SetShininess")
     End Method
 
-    /// How sharp and bright its highlights are.
+    /// How sharp and bright a VERTEX material's highlights are.
     @MainThread @PanicsAtCaller
     Public Method Shininess(): Float => fbe_material_shininess(Live("Shininess"))
 
@@ -363,7 +364,8 @@ Public Final Class Material
     End Method
 
     /// Sets a PBR material's map's Texture, which it holds, Null for none, and the UV set it reads,
-    /// 0 or 1, or it panics.
+    /// 0 or 1, or it panics; as it does for any but EMISSIVE that's stored as color, RGBA8: load
+    /// one with Texture.Load(path, format = TextureFormat.RGBA8_LINEAR).
     @MainThread @PanicsAtCaller
     Public Method SetMap(map: MaterialMap, texture: Texture?, uvSet: Int = 0)
         Local handle: UInt64 = texture != Null ? texture.Live("SetMap") : 0

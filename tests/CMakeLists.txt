@@ -82,7 +82,7 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      HEADER test_shaders.hpp
                      SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang
                              gpu/shaders/shape.slang gpu/shaders/points.slang
-                             gpu/shaders/spheres.slang)
+                             gpu/shaders/spheres.slang gpu/shaders/poles.slang)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
@@ -592,6 +592,9 @@ if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
       "render-no-target=Render on a World: a camera with no target draws into the screen, and there's no window open"
       "render-bad-tween=Render on a World: a tween is 0 to 1, not 2"
+      "lit-by-freed=LitBy on a World that was freed"
+      "map-as-color=SetMap on a Material: a material's metal-rough, normal, and occlusion maps are RGBA8_LINEAR"
+      "tangent-w=SetTangents on a Geometry: a tangent's w is 1 or -1, not 0.25"
       "layer-uv-zero=SetLayerUv on a Material: a layer's UV scale is finite and not 0, not \\(0, 1\\)"
       "layer-texture-out-of-range=SetTexture on a Material: a material's layers are 0 to 7, not 8"
       "joints-wrong-count=SetJoints on a Geometry: a surface of 24 vertices has as many joints, or none, not 1"

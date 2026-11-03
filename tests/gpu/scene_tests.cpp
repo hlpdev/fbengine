@@ -15,8 +15,11 @@
 #include <cstdint>
 #include <cstring>
 #include <gpu/graph.hpp>
+#include <limits>
 #include <numbers>
 #include <span>
+#include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -1685,10 +1688,11 @@ TEST_CASE("a PBR material's maps do as glTF's do", "[gpu][scene]") {
     wall(scene.world, -3.0F, 10.0F, material);
     const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
     require(fbe_material_set_metal_rough(material, 1.0F, 1.0F));
-    const std::uint64_t mixed = flat_texture(9, 128, 128, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    const std::uint64_t mixed = flat_texture(9, 64, 192, 255, FBE_TEXTURE_RGBA8_LINEAR);
     require(fbe_material_set_map(material, FBE_MAP_METAL_ROUGH, mixed, 0));
     const float half = 128.0F / 255.0F;
-    const std::uint8_t both = srgb(brdf(1.0F, half, half, 1.0F, 1.0F, 1.0F, 1.0F));
+    const std::uint8_t both =
+        srgb(brdf(1.0F, 192.0F / 255.0F, 64.0F / 255.0F, 1.0F, 1.0F, 1.0F, 1.0F));
     CHECK(near(middle(scene.drawn()), { both, both, both }, 3));
     require(fbe_material_set_map(material, FBE_MAP_METAL_ROUGH, 0, 0));
 
@@ -2139,23 +2143,35 @@ TEST_CASE("an HDR camera's target takes it in its own format", "[gpu][scene]") {
 // half float holds, and NaN is no light.
 TEST_CASE("an HDR camera's infinity is white, and its NaN black", "[gpu][scene]") {
     const scene_t scene;
-    const std::uint64_t material = glowing_wall(scene, 1e30F, 1e30F, 1e30F);
-    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_REINHARD));
-    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
-    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_ACES));
-    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
-    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_NEUTRAL));
-    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
-    const std::uint64_t not_a_number = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA16F, false);
-    require(not_a_number != 0);
-    const std::array<std::uint16_t, 16> halves{ 0x7E00, 0x7E00, 0x7E00, 0x3C00, 0x7E00, 0x7E00,
-                                                0x7E00, 0x3C00, 0x7E00, 0x7E00, 0x7E00, 0x3C00,
-                                                0x7E00, 0x7E00, 0x7E00, 0x3C00 };
-    std::array<std::uint8_t, 32> bytes{};
-    std::memcpy(bytes.data(), halves.data(), bytes.size());
-    require(fbe_texture_write(not_a_number, 0, 0, 2, 2, bytes.data(), 16));
+    const std::uint64_t material = glowing_wall(scene, 1.0F, 1.0F, 1.0F);
+    const auto of_halves = [](std::uint16_t half) {
+        const std::uint64_t texture = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA16F, false);
+        require(texture != 0);
+        std::array<std::uint16_t, 16> halves{};
+        for (std::size_t at = 0; at < 4; ++at) {
+            halves.at(at * 4) = half;
+            halves.at((at * 4) + 1) = half;
+            halves.at((at * 4) + 2) = half;
+            halves.at((at * 4) + 3) = 0x3C00;
+        }
+        std::array<std::uint8_t, 32> bytes{};
+        std::memcpy(bytes.data(), halves.data(), bytes.size());
+        require(fbe_texture_write(texture, 0, 0, 2, 2, bytes.data(), 16));
+        // Filtering's weights of 0 would make NaN of an infinity.
+        require(fbe_texture_set_filter(texture, FBE_TEXTURE_NEAREST));
+        return texture;
+    };
+    const std::uint64_t infinity = of_halves(0x7C00);
+    require(fbe_material_set_map(material, FBE_MAP_EMISSIVE, infinity, 0));
+    for (const std::int32_t tonemap :
+         { FBE_TONEMAP_REINHARD, FBE_TONEMAP_ACES, FBE_TONEMAP_NEUTRAL }) {
+        INFO("tonemap " << tonemap);
+        require(fbe_camera_set_tonemap(scene.camera, tonemap));
+        CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    }
+    fbe_texture_release(infinity);
+    const std::uint64_t not_a_number = of_halves(0x7E00);
     require(fbe_material_set_map(material, FBE_MAP_EMISSIVE, not_a_number, 0));
-    require(fbe_material_set_emissive(material, 1.0F, 1.0F, 1.0F));
     CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
     fbe_texture_release(not_a_number);
     fbe_material_release(material);
@@ -2220,5 +2236,589 @@ TEST_CASE("an HDR camera's image is kept from frame to frame", "[gpu][scene]") {
         (void)scene.drawn();
         CHECK(fbe::gpu::transient_images() == images);
     }
+    fbe_material_release(material);
+}
+
+namespace {
+
+/// Turns a sun so it shines from a way, unit length, not straight behind it.
+void shine_from(std::uint64_t sun, float x, float y, float z) {
+    const float across = std::hypot(x, y);
+    const float half = std::atan2(across, z) / 2.0F;
+    const float sine = across > 0.0F ? std::sin(half) / across : 0.0F;
+    require(
+        fbe_entity_set_rotation(sun, -y * sine, x * sine, 0.0F, std::cos(half), FBE_SPACE_WORLD));
+}
+
+/// A normal map of numbers, its X and Y what it's given, -1 to 1, and its Z up to length 1.
+std::uint64_t normal_map(float x, float y) {
+    const std::uint64_t map = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA16F, false);
+    require(map != 0);
+    const float z = std::sqrt(std::max(1.0F - (x * x) - (y * y), 0.0F));
+    std::array<float, 16> pixels{};
+    for (std::size_t at = 0; at < 4; ++at) {
+        pixels.at(at * 4) = (x + 1.0F) / 2.0F;
+        pixels.at((at * 4) + 1) = (y + 1.0F) / 2.0F;
+        pixels.at((at * 4) + 2) = (z + 1.0F) / 2.0F;
+        pixels.at((at * 4) + 3) = 1.0F;
+    }
+    require(fbe_texture_write_floats(map, 0, 0, 2, 2, pixels.data()));
+    return map;
+}
+
+/// What's in the middle of a mesh with its own tangents and with what a pixel makes of its UVs,
+/// which have to be the same, under lights from all sides. Its tangents go, the second time.
+void tangents_agree(const scene_t& scene, std::uint64_t mesh, std::uint64_t sun) {
+    std::vector<rgba_t> own;
+    const std::array<std::array<float, 3>, 4> ways{
+        std::array{ 0.6F, 0.0F, 0.8F },
+        std::array{ -0.6F, 0.0F, 0.8F },
+        std::array{ 0.0F, 0.6F, 0.8F },
+        std::array{ 0.0F, -0.6F, 0.8F },
+    };
+    for (const std::array<float, 3>& way : ways) {
+        shine_from(sun, way[0], way[1], way[2]);
+        own.push_back(middle(scene.drawn()));
+    }
+    require(fbe_surface_set_tangents(fbe_mesh_geometry(mesh), 0, nullptr, 0));
+    for (std::size_t at = 0; at < ways.size(); ++at) {
+        shine_from(sun, ways.at(at)[0], ways.at(at)[1], ways.at(at)[2]);
+        const rgba_t none = middle(scene.drawn());
+        INFO("way " << at << ": " << int{ own.at(at)[0] } << " and " << int{ none[0] });
+        CHECK(std::abs(own.at(at)[0] - none[0]) <= 1);
+    }
+}
+
+/// A wall with its own tangents in a material with a normal map tilted both ways, and a sun.
+struct mapped_wall_t {
+    std::uint64_t material = fbe_material_create();
+    std::uint64_t map = normal_map(0.5F, -0.3F);
+    std::uint64_t mesh = 0;
+    std::uint64_t sun = 0;
+
+    mapped_wall_t(const scene_t& scene, float half) {
+        mesh = wall(scene.world, -3.0F, half, material);
+        sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+        require(fbe_material_set_map(material, FBE_MAP_NORMAL, map, 0));
+        tangents_of(mesh, 1.0F);
+    }
+    mapped_wall_t(const mapped_wall_t&) = delete;
+    mapped_wall_t& operator=(const mapped_wall_t&) = delete;
+    mapped_wall_t(mapped_wall_t&&) = delete;
+    mapped_wall_t& operator=(mapped_wall_t&&) = delete;
+
+    ~mapped_wall_t() {
+        fbe_texture_release(map);
+        fbe_material_release(material);
+    }
+};
+
+/// A matrix, by columns, of a turn about Y and a scale across.
+fbe_mat4_t turned_y(float angle, float across) {
+    fbe_mat4_t m{};
+    m.m[0] = std::cos(angle) * across;
+    m.m[2] = -std::sin(angle) * across;
+    m.m[5] = 1.0F;
+    m.m[8] = std::sin(angle);
+    m.m[10] = std::cos(angle);
+    m.m[15] = 1.0F;
+    return m;
+}
+
+/// What's drawn in the middle of a target of half floats.
+std::array<float, 3> middle_light(const scene_t& scene, std::uint64_t floats) {
+    require(fbe_render_world(scene.world, 1.0F));
+    std::array<std::uint8_t, std::size_t{ 8 } * 8 * 8> bytes{};
+    require(fbe_texture_read(floats, 0, bytes.data(), sizeof(bytes)));
+    std::array<std::uint16_t, 3> halves{};
+    std::memcpy(halves.data(), &bytes[((std::size_t{ 4 } * 8) + 4) * 8], sizeof(halves));
+    const auto of = [](std::uint32_t half) {
+        const std::uint32_t exponent = (half >> 10U) & 0x1FU;
+        const float mantissa = static_cast<float>(half & 0x3FFU) / 1024.0F;
+        if (exponent == 31) {
+            return std::numeric_limits<float>::infinity();
+        }
+        const float value = exponent == 0
+                                ? std::ldexp(mantissa, -14)
+                                : std::ldexp(1.0F + mantissa, static_cast<int>(exponent) - 15);
+        return (half & 0x8000U) != 0 ? -value : value;
+    };
+    return { of(halves[0]), of(halves[1]), of(halves[2]) };
+}
+
+} // namespace
+
+// R1: stored as color it's decoded, which tilts a flat normal 40 degrees, so it's refused; the same
+// numbers either way it's allowed.
+TEST_CASE("a map that holds numbers can't be stored as color", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    const std::uint64_t color = flat_texture(128, 128, 255, 255, FBE_TEXTURE_RGBA8);
+    const std::uint64_t numbers = flat_texture(128, 128, 255, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    const std::uint64_t one_channel = fbe_texture_create(2, 2, FBE_TEXTURE_R8, false);
+    const std::uint64_t floats =
+        normal_map((128.0F / 255.0F * 2.0F) - 1.0F, (128.0F / 255.0F * 2.0F) - 1.0F);
+    for (const std::int32_t map : { FBE_MAP_METAL_ROUGH, FBE_MAP_NORMAL, FBE_MAP_OCCLUSION }) {
+        INFO("map " << map);
+        CHECK(!fbe_material_set_map(material, map, color, 0));
+        CHECK(std::string(fbe_error()).contains("aren't colors"));
+        CHECK(fbe_material_map(material, map) == 0);
+        CHECK(fbe_material_set_map(material, map, numbers, 0));
+        CHECK(fbe_material_set_map(material, map, floats, 0));
+        CHECK(fbe_material_set_map(material, map, 0, 0));
+    }
+    CHECK(!fbe_material_set_map(material, FBE_MAP_NORMAL, one_channel, 0));
+    CHECK(!fbe_material_set_map(material, FBE_MAP_METAL_ROUGH, one_channel, 0));
+    CHECK(fbe_material_set_map(material, FBE_MAP_OCCLUSION, one_channel, 0));
+    CHECK(fbe_material_set_map(material, FBE_MAP_OCCLUSION, 0, 0));
+    CHECK(fbe_material_set_map(material, FBE_MAP_EMISSIVE, color, 0));
+    CHECK(fbe_material_set_map(material, FBE_MAP_EMISSIVE, 0, 0));
+    // The same pixel from each that's allowed.
+    wall(scene.world, -3.0F, 10.0F, material);
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    shine_from(sun, 0.6F, 0.0F, 0.8F);
+    require(fbe_material_set_map(material, FBE_MAP_NORMAL, numbers, 0));
+    const rgba_t bytes = middle(scene.drawn());
+    require(fbe_material_set_map(material, FBE_MAP_NORMAL, floats, 0));
+    CHECK(near(middle(scene.drawn()), { bytes[0], bytes[1], bytes[2] }, 1));
+    for (const std::uint64_t texture : { color, numbers, one_channel, floats }) {
+        fbe_texture_release(texture);
+    }
+    fbe_material_release(material);
+}
+
+// R2, R4: what moves a surface's vertices moves its tangents, as its UVs say they should be.
+TEST_CASE("a surface's tangents go with its geometry", "[gpu][scene]") {
+    SECTION("turned") {
+        const scene_t scene;
+        const mapped_wall_t made(scene, 2.0F);
+        const fbe_mat4_t turn = turned_y(0.6F, 1.0F);
+        require(fbe_geometry_transform(fbe_mesh_geometry(made.mesh), &turn));
+        tangents_agree(scene, made.mesh, made.sun);
+    }
+    SECTION("mirrored") {
+        const scene_t scene;
+        const mapped_wall_t made(scene, 2.0F);
+        const fbe_mat4_t mirror = turned_y(0.0F, -1.0F);
+        require(fbe_geometry_transform(fbe_mesh_geometry(made.mesh), &mirror));
+        std::array<fbe_vertex_tangent_t, 4> found{};
+        CHECK(fbe_surface_tangents(fbe_mesh_geometry(made.mesh), 0, found.data(), 4) == 4);
+        CHECK(found[0].x == -1.0F);
+        CHECK(found[0].w == -1.0F);
+        tangents_agree(scene, made.mesh, made.sun);
+    }
+    SECTION("added to another") {
+        const scene_t scene;
+        const mapped_wall_t made(scene, 2.0F);
+        const std::uint64_t whole = fbe_geometry_create();
+        const fbe_mat4_t turn = turned_y(0.6F, 1.0F);
+        require(fbe_geometry_add(whole, fbe_mesh_geometry(made.mesh), &turn));
+        require(fbe_mesh_set_geometry(made.mesh, whole));
+        fbe_geometry_release(whole);
+        tangents_agree(scene, made.mesh, made.sun);
+    }
+    SECTION("flipped") {
+        const scene_t scene;
+        const mapped_wall_t made(scene, 2.0F);
+        require(fbe_geometry_flip(fbe_mesh_geometry(made.mesh)));
+        require(fbe_entity_set_rotation(made.mesh, 0.0F, 1.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        std::array<fbe_vertex_tangent_t, 4> found{};
+        CHECK(fbe_surface_tangents(fbe_mesh_geometry(made.mesh), 0, found.data(), 4) == 4);
+        CHECK(found[0].w == -1.0F);
+        tangents_agree(scene, made.mesh, made.sun);
+    }
+}
+
+// R3: a bone that mirrors, two-sided since it turns the surface around.
+TEST_CASE("a bone that mirrors turns a surface's bitangent", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    const skinned_wall_t made = skinned_wall(scene.world, material, -3.0F, 2.0F);
+    all_on(made.geometry, 1, 1.0F);
+    tangents_of(made.mesh, 1.0F);
+    const std::uint64_t map = normal_map(0.5F, -0.3F);
+    require(fbe_material_set_map(material, FBE_MAP_NORMAL, map, 0));
+    require(fbe_material_set_two_sided(material, true));
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    require(fbe_entity_set_scale(made.moving, -1.0F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+    tangents_agree(scene, made.mesh, sun);
+    fbe_texture_release(map);
+    fbe_skin_release(made.skin);
+    fbe_material_release(material);
+}
+
+// R5: glTF's back face has -xT -yB -zN: all of it turned around, so what's tilted toward its right
+// on its front, seen from behind, is tilted away from the same world's way.
+TEST_CASE("a two-sided surface's back turns its normal map around with it", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_two_sided(material, true));
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 2.0F, material);
+    // Turned half way about Y: its back's to the eye, its tangent's -X, and its bitangent's +Y.
+    require(fbe_entity_set_rotation(mesh, 0.0F, 1.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    const std::uint64_t right = normal_map(0.7F, 0.0F);
+    const std::uint64_t up = normal_map(0.0F, 0.7F);
+    const auto seen = [&](float x, float y) {
+        shine_from(sun, x, y, 0.8F);
+        return int{ middle(scene.drawn())[0] };
+    };
+    for (const bool own : { true, false }) {
+        INFO("its own tangents: " << own);
+        if (own) {
+            tangents_of(mesh, 1.0F);
+        } else {
+            require(fbe_surface_set_tangents(fbe_mesh_geometry(mesh), 0, nullptr, 0));
+        }
+        // -xT, and T's -X: toward +X.
+        require(fbe_material_set_map(material, FBE_MAP_NORMAL, right, 0));
+        CHECK(seen(0.6F, 0.0F) > seen(-0.6F, 0.0F) + 10);
+        // -yB, and B's +Y: toward -Y.
+        require(fbe_material_set_map(material, FBE_MAP_NORMAL, up, 0));
+        CHECK(seen(0.0F, -0.6F) > seen(0.0F, 0.6F) + 10);
+    }
+    fbe_texture_release(right);
+    fbe_texture_release(up);
+    fbe_material_release(material);
+}
+
+// R6: its own tangents go with what turns a map's UVs, as what a pixel makes of them does; on its
+// second UV set, they aren't that set's.
+TEST_CASE("a surface's tangents turn with a normal map's UVs", "[gpu][scene]") {
+    for (const auto& [scale_u, scale_v, angle] : {
+             std::tuple{ 1.0F, 1.0F, 0.7F },
+             std::tuple{ -1.0F, 1.0F, 0.0F },
+             std::tuple{ 2.0F, 0.5F, 0.0F },
+             std::tuple{ -1.0F, 2.0F, 2.1F },
+         }) {
+        INFO("scale " << scale_u << ", " << scale_v << ", angle " << angle);
+        const scene_t scene;
+        const mapped_wall_t made(scene, 2.0F);
+        require(fbe_material_set_map_uv(made.material, FBE_MAP_NORMAL, scale_u, scale_v, angle,
+                                        0.25F, 0.0F));
+        tangents_agree(scene, made.mesh, made.sun);
+    }
+    const scene_t scene;
+    const mapped_wall_t made(scene, 2.0F);
+    const std::uint64_t geometry = fbe_mesh_geometry(made.mesh);
+    std::array<fbe_vertex_t, 4> vertices{};
+    require(fbe_surface_vertices(geometry, 0, 0, vertices.data(), 4));
+    for (fbe_vertex_t& vertex : vertices) {
+        vertex.uv1 = { .x = vertex.uv0.y, .y = vertex.uv0.x };
+    }
+    require(fbe_surface_set_vertices(geometry, 0, 0, vertices.data(), 4));
+    require(fbe_material_set_map(made.material, FBE_MAP_NORMAL, made.map, 1));
+    tangents_agree(scene, made.mesh, made.sun);
+}
+
+// R7: what a tangent can't be, and a w that's only a way.
+TEST_CASE("a tangent's finite, and its w a way", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 1.0F);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    const auto refused = [&](float x, float w) {
+        const std::array<fbe_vertex_tangent_t, 4> tangents{
+            fbe_vertex_tangent_t{ .x = 1.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F },
+            fbe_vertex_tangent_t{ .x = 1.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F },
+            fbe_vertex_tangent_t{ .x = 1.0F, .y = 0.0F, .z = 0.0F, .w = 1.0F },
+            fbe_vertex_tangent_t{ .x = x, .y = 0.0F, .z = 0.0F, .w = w },
+        };
+        return !fbe_surface_set_tangents(geometry, 0, tangents.data(), 4) &&
+               fbe_surface_tangents(geometry, 0, nullptr, 0) == 0;
+    };
+    CHECK(refused(std::nanf(""), 1.0F));
+    CHECK(refused(std::numeric_limits<float>::infinity(), 1.0F));
+    CHECK(refused(1.0F, 0.25F));
+    CHECK(refused(1.0F, 0.0F));
+    CHECK(refused(1.0F, std::nanf("")));
+    CHECK(!refused(1.0F, -1.0F));
+}
+
+// R8: more base color than there is light comes to as much as there is: never less than none, as
+// Fresnel past 1 was, nor all multiple scattering's division.
+TEST_CASE("a base color past white gives back all there is", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t floats = fbe_texture_create_target(8, 8, FBE_TEXTURE_RGBA16F, 1, true);
+    require(floats != 0);
+    require(fbe_camera_set_target(scene.camera, floats));
+    const std::uint64_t material = fbe_material_create();
+    wall(scene.world, -3.0F, 10.0F, material);
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    require(fbe_material_set_metal_rough(material, 0.5F, 1.0F));
+    require(fbe_material_set_color(material, 1.0F, 1.0F, 1.0F, 1.0F));
+    const std::array<float, 3> white = middle_light(scene, floats);
+    require(fbe_material_set_color(material, 4.0F, 4.0F, 4.0F, 1.0F));
+    const std::array<float, 3> past = middle_light(scene, floats);
+    CHECK(past[0] > 0.0F);
+    CHECK(std::abs(past[0] - white[0]) < 0.001F);
+    fbe_entity_free(sun);
+    const std::uint64_t source = even_light(1.0F, 1.0F, 1.0F);
+    const std::uint64_t environment = fbe_environment_bake(source, 16, 16);
+    REQUIRE(environment != 0);
+    fbe_texture_release(source);
+    require(fbe_world_set_environment(scene.world, environment, 1.0F));
+    require(fbe_material_set_metal_rough(material, 1.0F, 1.0F));
+    require(fbe_material_set_color(material, 2.0F, 2.0F, 2.0F, 1.0F));
+    const std::array<float, 3> furnace = middle_light(scene, floats);
+    CHECK(std::abs(furnace[0] - 1.0F) < 0.02F);
+    require(fbe_camera_set_target(scene.camera, scene.target));
+    fbe_texture_release(floats);
+    fbe_environment_free(environment);
+    fbe_material_release(material);
+}
+
+// R9: a scale that great's as tilted as can be, not nothing; and a UV scale that small's refused.
+TEST_CASE("a normal scale past what a square holds tilts all the way", "[gpu][scene]") {
+    const scene_t scene;
+    const mapped_wall_t made(scene, 10.0F);
+    const std::uint64_t right = normal_map(0.5F, 0.0F);
+    require(fbe_material_set_map(made.material, FBE_MAP_NORMAL, right, 0));
+    shine_from(made.sun, 0.6F, 0.0F, 0.8F);
+    require(fbe_material_set_normal_scale(made.material, 1e6F));
+    const rgba_t far_enough = middle(scene.drawn());
+    require(fbe_material_set_normal_scale(made.material, 1e30F));
+    CHECK(near(middle(scene.drawn()), { far_enough[0], far_enough[1], far_enough[2] }, 1));
+    CHECK(far_enough[0] > 0);
+    CHECK(!fbe_material_set_map_uv(made.material, FBE_MAP_NORMAL, 1e-40F, 1.0F, 0.0F, 0.0F, 0.0F));
+    CHECK(!fbe_material_set_layer_uv(made.material, 0, 1.0F, 1e-40F, 0.0F, 0.0F, 0.0F));
+    fbe_texture_release(right);
+}
+
+// R10: an entity scaled small has short tangents, whose map's as good.
+TEST_CASE("a normal map tilts a surface however small it's scaled", "[gpu][scene]") {
+    const scene_t scene;
+    const mapped_wall_t made(scene, 2.0F);
+    shine_from(made.sun, 0.6F, 0.0F, 0.8F);
+    const rgba_t whole = middle(scene.drawn());
+    constexpr float small = 5e-5F;
+    require(fbe_camera_set_range(scene.camera, 1e-6F, 1.0F));
+    require(fbe_entity_set_scale(made.mesh, small, small, small, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(made.mesh, 0.0F, 0.0F, -3.0F * small, FBE_SPACE_WORLD));
+    CHECK(near(middle(scene.drawn()), { whole[0], whole[1], whole[2] }, 1));
+    require(fbe_material_set_map(made.material, FBE_MAP_NORMAL, 0, 0));
+    CHECK(!near(middle(scene.drawn()), { whole[0], whole[1], whole[2] }, 10));
+}
+
+// T2: its eye in the world's too. A mirror turned half up reflects the sky straight above, in a
+// world where the eye's along +X.
+TEST_CASE("a smooth metal reflects the world's way, under a turned camera", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_metal_rough(material, 1.0F, 0.0F));
+    const std::uint64_t mesh = wall(scene.world, 0.0F, 10.0F, material);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    std::array<fbe_vertex_t, 4> vertices{};
+    require(fbe_surface_vertices(geometry, 0, 0, vertices.data(), 4));
+    const float root = std::numbers::sqrt2_v<float> / 2.0F;
+    for (fbe_vertex_t& vertex : vertices) {
+        vertex.normal = { .x = 0.0F, .y = root, .z = root };
+    }
+    require(fbe_surface_set_vertices(geometry, 0, 0, vertices.data(), 4));
+    const std::uint64_t source = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA16F, false);
+    REQUIRE(source != 0);
+    std::vector<float> pixels;
+    for (std::int32_t y = 0; y < 4; ++y) {
+        for (std::int32_t x = 0; x < 4; ++x) {
+            const float lit = y < 2 ? 1.0F : 0.0F;
+            pixels.insert(pixels.end(), { lit, lit, lit, 1.0F });
+        }
+    }
+    require(fbe_texture_write_floats(source, 0, 0, 4, 4, pixels.data()));
+    const std::uint64_t environment = fbe_environment_bake(source, 32, 16);
+    REQUIRE(environment != 0);
+    fbe_texture_release(source);
+    require(fbe_world_set_environment(scene.world, environment, 1.0F));
+    // Facing +X, both of them turned a quarter about Y, with the eye off along +X.
+    const float half = std::numbers::pi_v<float> / 4.0F;
+    require(
+        fbe_entity_set_rotation(mesh, 0.0F, std::sin(half), 0.0F, std::cos(half), FBE_SPACE_WORLD));
+    require(fbe_entity_set_rotation(scene.camera, 0.0F, std::sin(half), 0.0F, std::cos(half),
+                                    FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(scene.camera, 3.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    CHECK(middle(scene.drawn())[0] > srgb(0.95F));
+    fbe_environment_free(environment);
+    fbe_material_release(material);
+}
+
+// T3: occlusion's of an environment's light as well as ambient's.
+TEST_CASE("occlusion darkens an environment", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    wall(scene.world, -3.0F, 10.0F, material);
+    const std::uint64_t source = even_light(1.0F, 1.0F, 1.0F);
+    const std::uint64_t environment = fbe_environment_bake(source, 16, 16);
+    REQUIRE(environment != 0);
+    fbe_texture_release(source);
+    require(fbe_world_set_environment(scene.world, environment, 1.0F));
+    const std::uint64_t half = flat_texture(128, 9, 9, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    require(fbe_material_set_map(material, FBE_MAP_OCCLUSION, half, 0));
+    const std::uint8_t darkened = srgb(128.0F / 255.0F);
+    CHECK(near(middle(scene.drawn()), { darkened, darkened, darkened }, 3));
+    fbe_texture_release(half);
+    fbe_environment_free(environment);
+    fbe_material_release(material);
+}
+
+// T4: a tangent's a direction along the surface, which scale takes with it, as a normal's isn't. On
+// the diagonal under a scale across, as the UVs go.
+TEST_CASE("a surface's scale takes its tangents along it", "[gpu][scene]") {
+    const scene_t scene;
+    const mapped_wall_t made(scene, 2.0F);
+    const std::uint64_t geometry = fbe_mesh_geometry(made.mesh);
+    std::array<fbe_vertex_t, 4> vertices{};
+    require(fbe_surface_vertices(geometry, 0, 0, vertices.data(), 4));
+    for (fbe_vertex_t& vertex : vertices) {
+        vertex.uv0 = {
+            .x = vertex.position.x + vertex.position.y,
+            .y = vertex.position.y - vertex.position.x,
+        };
+    }
+    require(fbe_surface_set_vertices(geometry, 0, 0, vertices.data(), 4));
+    const float root = std::numbers::sqrt2_v<float> / 2.0F;
+    const fbe_vertex_tangent_t diagonal{ .x = root, .y = root, .z = 0.0F, .w = -1.0F };
+    const std::array tangents{ diagonal, diagonal, diagonal, diagonal };
+    require(fbe_surface_set_tangents(geometry, 0, tangents.data(), 4));
+    require(fbe_entity_set_scale(made.mesh, 1.0F, 4.0F, 1.0F, FBE_SPACE_WORLD));
+    tangents_agree(scene, made.mesh, made.sun);
+}
+
+// T5.
+TEST_CASE("a surface's tangents go with its vertices when it's cleared", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 1.0F);
+    tangents_of(mesh, 1.0F);
+    require(fbe_surface_clear(fbe_mesh_geometry(mesh), 0, false));
+    CHECK(fbe_surface_tangents(fbe_mesh_geometry(mesh), 0, nullptr, 0) == 4);
+    require(fbe_surface_clear(fbe_mesh_geometry(mesh), 0, true));
+    CHECK(fbe_surface_tangents(fbe_mesh_geometry(mesh), 0, nullptr, 0) == 0);
+}
+
+// T6: what a camera's drawing into can't be read, as a map or a layer: it's no map.
+TEST_CASE("a camera drawing into its own material's map draws as with none", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t target = fbe_texture_create_target(8, 8, FBE_TEXTURE_RGBA8_LINEAR, 1, true);
+    require(target != 0);
+    require(fbe_camera_set_target(scene.camera, target));
+    const std::uint64_t material = fbe_material_create();
+    wall(scene.world, -3.0F, 10.0F, material);
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    shine_from(sun, 0.6F, 0.0F, 0.8F);
+    const auto seen = [&] {
+        require(fbe_render_world(scene.world, 1.0F));
+        const fbe::golden::frame_t frame = scene_t::read(target);
+        return pixel(frame, 4, 4);
+    };
+    const rgba_t none = seen();
+    require(fbe_material_set_map(material, FBE_MAP_NORMAL, target, 0));
+    CHECK(near(seen(), { none[0], none[1], none[2] }, 1));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    require(fbe_material_set_map(material, FBE_MAP_NORMAL, 0, 0));
+    require(fbe_camera_set_target(scene.camera, scene.target));
+    fbe_texture_release(target);
+    fbe_material_release(material);
+}
+
+// T7: an environment a stopped GPU lost lights nothing, and stays set till it's set again.
+TEST_CASE("an environment a stopped GPU lost lights nothing", "[gpu][scene]") {
+    const std::uint64_t world = fbe_world_create();
+    require(fbe_world_set_ambient(world, 0.0F, 0.0F, 0.0F));
+    const std::uint64_t camera = fbe_entity_create(world, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t first = fbe_texture_create_target(16, 16, FBE_TEXTURE_RGBA8, 1, true);
+    require(fbe_camera_set_target(camera, first));
+    const std::uint64_t material = fbe_material_create();
+    wall(world, -3.0F, 10.0F, material);
+    const std::uint64_t source = even_light(1.0F, 1.0F, 1.0F);
+    const std::uint64_t environment = fbe_environment_bake(source, 16, 8);
+    REQUIRE(environment != 0);
+    fbe_texture_release(source);
+    require(fbe_world_set_environment(world, environment, 1.0F));
+    require(fbe_render_world(world, 1.0F));
+    CHECK(near(pixel(scene_t::read(first), 8, 8), { 255, 255, 255 }, 3));
+    stop_gpu();
+    const std::uint64_t second = fbe_texture_create_target(16, 16, FBE_TEXTURE_RGBA8, 1, true);
+    require(fbe_camera_set_target(camera, second));
+    require(fbe_camera_set_clear_color(camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    require(fbe_render_world(world, 1.0F));
+    CHECK(near(pixel(scene_t::read(second), 8, 8), { 0, 0, 0 }));
+    CHECK(fbe_world_environment(world) == environment);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_environment_free(environment);
+    fbe_world_free(world);
+    std::array<std::uint64_t, 16> some{};
+    while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+    fbe_texture_release(second);
+    fbe_material_release(material);
+    stop_gpu();
+}
+
+// T7: through a mirror's flipped view, a surface's tangents and an environment are as they should
+// be without it: what's reflected from below looks as what's above does from there, seen the same
+// way.
+TEST_CASE("tangents and an environment hold through a mirror's view", "[gpu][scene]") {
+    const auto draw = [](bool mirrored) {
+        const scene_t scene;
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_metal_rough(material, 0.0F, 0.6F));
+        const std::uint64_t map = normal_map(0.5F, 0.0F);
+        require(fbe_material_set_map(material, FBE_MAP_NORMAL, map, 0));
+        // A wall facing +Z, which only its reflection shows, below the plane, from a camera below.
+        const std::uint64_t mesh = wall(scene.world, -3.0F, 2.0F, material);
+        tangents_of(mesh, 1.0F);
+        const std::uint64_t source = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA16F, false);
+        REQUIRE(source != 0);
+        std::vector<float> pixels;
+        for (std::int32_t y = 0; y < 4; ++y) {
+            for (std::int32_t x = 0; x < 4; ++x) {
+                const float lit = x < 2 ? 1.0F : 0.0F;
+                pixels.insert(pixels.end(), { lit, lit, lit, 1.0F });
+            }
+        }
+        require(fbe_texture_write_floats(source, 0, 0, 4, 4, pixels.data()));
+        const std::uint64_t environment = fbe_environment_bake(source, 16, 32);
+        REQUIRE(environment != 0);
+        fbe_texture_release(source);
+        require(fbe_world_set_environment(scene.world, environment, 1.0F));
+        if (mirrored) {
+            // A plane at y = 0, with the wall above it and the eye below looking at its reflection.
+            require(fbe_entity_set_position(mesh, 0.0F, 3.0F, -3.0F, FBE_SPACE_WORLD));
+            require(fbe_entity_set_position(scene.camera, 0.0F, -3.0F, 0.0F, FBE_SPACE_WORLD));
+            const std::uint64_t mirror = fbe_entity_create(scene.world, 0, FBE_ENTITY_MIRROR);
+            require(fbe_entity_set_position(mirror, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        }
+        const rgba_t seen = middle(scene.drawn());
+        CHECK(fbe_gpu_validation_errors() == 0);
+        fbe_environment_free(environment);
+        fbe_texture_release(map);
+        fbe_material_release(material);
+        return seen;
+    };
+    const rgba_t direct = draw(false);
+    const rgba_t reflected = draw(true);
+    CHECK(int{ reflected[0] } > 0);
+    INFO("direct " << int{ direct[0] } << ", reflected " << int{ reflected[0] });
+    CHECK(reflected[0] != 0);
+    CHECK(std::abs(direct[0] - reflected[0]) <= 3);
+}
+
+// A sprite has no normal, so nothing but ambient light lights it in a PBR material: no direction to
+// find an environment's light or a sun's by, which isn't the NaN of finding one.
+TEST_CASE("what has no normal is lit only by ambient light", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_color(material, 1.0F, 0.5F, 0.25F, 1.0F));
+    const std::uint64_t sprite = fbe_entity_create(scene.world, 0, FBE_ENTITY_SPRITE);
+    require(fbe_entity_set_position(sprite, 0.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    require(fbe_sprite_set_material(sprite, material));
+    require(fbe_world_set_ambient(scene.world, 0.5F, 0.5F, 0.5F));
+    light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    const std::uint64_t source = even_light(4.0F, 4.0F, 4.0F);
+    const std::uint64_t environment = fbe_environment_bake(source, 16, 8);
+    REQUIRE(environment != 0);
+    fbe_texture_release(source);
+    require(fbe_world_set_environment(scene.world, environment, 1.0F));
+    CHECK(near(middle(scene.drawn()), { srgb(0.5F), srgb(0.25F), srgb(0.125F) }));
+    fbe_environment_free(environment);
     fbe_material_release(material);
 }

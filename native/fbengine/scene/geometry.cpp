@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -81,7 +82,17 @@ void transform_surface(surface_t& surface, const mat4_t& m) {
         vertex.position = c_vec(transform_point(m, vec(vertex.position)));
         vertex.normal = c_vec(transform_normal(m, vec(vertex.normal)));
     }
-    if (dot(cross(m.axis(0), m.axis(1)), m.axis(2)) < 0.0F) {
+    const bool mirrors = dot(cross(m.axis(0), m.axis(1)), m.axis(2)) < 0.0F;
+    for (fbe_vertex_tangent_t& tangent : surface.tangents) {
+        const vec3_t along = transform_vector(m, vec3_t(tangent.x, tangent.y, tangent.z));
+        tangent = {
+            .x = along.x,
+            .y = along.y,
+            .z = along.z,
+            .w = mirrors ? -tangent.w : tangent.w,
+        };
+    }
+    if (mirrors) {
         for (std::size_t i = 0; i + 2 < surface.indices.size(); i += 3) {
             std::swap(surface.indices[i + 1], surface.indices[i + 2]);
         }
@@ -446,6 +457,10 @@ FBE_API bool fbe_geometry_flip(uint64_t geometry) {
         for (fbe_vertex_t& vertex : surface.vertices) {
             vertex.normal = { .x = -vertex.normal.x, .y = -vertex.normal.y, .z = -vertex.normal.z };
         }
+        // Its bitangent stays where it was, across a normal turned around.
+        for (fbe_vertex_tangent_t& tangent : surface.tangents) {
+            tangent.w = -tangent.w;
+        }
         for (fbe::scene::morph_target_t& target : surface.targets) {
             for (fbe::scene::vec3_t& normal : target.normals) {
                 normal = -normal;
@@ -640,6 +655,15 @@ FBE_API bool fbe_surface_set_tangents(uint64_t geometry, int32_t surface,
         return fbe::fail(
             std::format("a surface of {} vertices has as many tangents, or none, not {}",
                         found->vertices.size(), count));
+    }
+    for (const fbe_vertex_tangent_t& tangent :
+         std::span(tangents, static_cast<std::size_t>(count))) {
+        if (!std::isfinite(tangent.x) || !std::isfinite(tangent.y) || !std::isfinite(tangent.z)) {
+            return fbe::fail("a surface's tangents are finite");
+        }
+        if (tangent.w != 1.0F && tangent.w != -1.0F) {
+            return fbe::fail(std::format("a tangent's w is 1 or -1, not {}", tangent.w));
+        }
     }
     found->tangents.assign(tangents, tangents + count);
     fbe::scene::touch_geometry(geometry_slot(geometry), false);

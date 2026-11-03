@@ -8,7 +8,11 @@ import bindless;
 static const float PI = 3.14159265358979;
 /// The smallest GGX alpha, so a mirror's highlight stays finite: a roughness of 0.045.
 static const float SMOOTHEST = 0.002;
-/// How short a vector's square has to be for it to have no direction to speak of.
+/// How near a pole a direction's across, squared, to be at it: 0.0001 radians, well inside a texel of
+/// the largest map.
+static const float POLE = 1e-8;
+/// How short a vector's square has to be, as a part of what it came from, for it to have no direction
+/// to speak of.
 static const float DEGENERATE = 1e-8;
 
 /// What a surface is at a point, as glTF's metal-rough material says.
@@ -48,16 +52,22 @@ public float3 normalFromMap(float3 normal, float4 tangent, float3 texel, float s
     const float3 n = normalize(normal);
     const float3 along = tangent.xyz - (n * dot(n, tangent.xyz));
     const float alongSquared = dot(along, along);
-    if (alongSquared < DEGENERATE)
+    // So too for NaN, which isn't above anything: as a part of it, as an entity scaled small has
+    // tangents short all over.
+    if (!(alongSquared > DEGENERATE * dot(tangent.xyz, tangent.xyz)))
     {
         return n;
     }
     const float3 t = along / sqrt(alongSquared);
-    const float3 b = cross(n, t) * tangent.w;
+    const float3 b = cross(n, t) * (tangent.w < 0.0 ? -1.0 : 1.0);
     const float3 mapped = ((texel * 2.0) - 1.0) * float3(scale, scale, 1.0);
-    const float3 turned = (t * mapped.x) + (b * mapped.y) + (n * mapped.z);
-    const float turnedSquared = dot(turned, turned);
-    return turnedSquared < DEGENERATE ? n : turned / sqrt(turnedSquared);
+    // As a part of its largest, so however great its scale, its square's in range.
+    const float largest = max(abs(mapped.x), max(abs(mapped.y), abs(mapped.z)));
+    if (!(largest > 0.0))
+    {
+        return n;
+    }
+    return normalize((t * (mapped.x / largest)) + (b * (mapped.y / largest)) + (n * (mapped.z / largest)));
 }
 
 /// A tangent for a surface with none, along its UVs' u, from how its place and UVs change over a
@@ -158,6 +168,19 @@ public float3 directionOfOctahedral(float2 at)
         across = (1.0 - abs(from.yx)) * signs;
     }
     return normalize(float3(across.x, up, across.y));
+}
+
+/// How far across an equirectangular image `direction`, a unit vector, is, y up, 0 to 1, +X at its
+/// middle. At a pole there's no angle: a direction a float's rounding away from one has one that's
+/// anything, as a map's corners do on a driver that divides by a reciprocal, so all of them across
+/// it read its one middle column.
+public float equirectangularAcross(float3 direction)
+{
+    if (dot(direction.xz, direction.xz) < POLE)
+    {
+        return 0.5;
+    }
+    return (atan2(direction.z, direction.x) / (2.0 * PI)) + 0.5;
 }
 
 /// An octahedral texture in `direction` at a whole `level`. Its texels are baked with the first and

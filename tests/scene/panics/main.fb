@@ -12,6 +12,22 @@ If arguments.Count != 1 Then Panic("give the case to run")
 Local world = World()
 World.SetCurrent(world)
 Select arguments[0]
+    Case "lit-by-freed"
+        Local freed = World()
+        freed.Free()
+        freed.LitBy()
+    Case "map-as-color"
+        Window.SetHeadless(True)
+        Local color = Try Texture(2, 2, TextureFormat.RGBA8, False)
+        Material().SetMap(MaterialMap.NORMAL, color)
+    Case "tangent-w"
+        Local geometry = Geometry.Cube()
+        Local surface = geometry.Surface(0)
+        Local tangents: Vec4[] = []
+        For i = 1 To surface.VertexCount()
+            tangents.Add(Vec4(1.0, 0.0, 0.0, 0.25))
+        End For
+        surface.SetTangents(tangents)
     Case "render-no-target"
         Camera()
         RenderWorld()

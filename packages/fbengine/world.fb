@@ -57,6 +57,7 @@ Public Final Class World
     @MainThread @PanicsAtCaller
     Public Method Free()
         If !fbe_world_free(Live("Free")) Then Failed("Free")
+        lighting = Null
         DropFreed()
         worlds[Slot(handle)] = Null
         handle = 0
@@ -127,7 +128,11 @@ Public Final Class World
     End Method
 
     /// The Environment it's lit by, or Null.
-    @MainThread Public Method LitBy(): Environment? => lighting
+    @MainThread @PanicsAtCaller
+    Public Method LitBy(): Environment?
+        Live("LitBy")
+        Return lighting
+    End Method
 
     /// What its Environment's light is times.
     @MainThread @PanicsAtCaller

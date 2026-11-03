@@ -300,6 +300,12 @@ float3 toEye(Camera* camera, float3 place)
     return camera.perspective != 0 ? normalize(-place) : float3(0.0, 0.0, 1.0);
 }
 
+// -1 if a matrix's turn and scale mirror what it's given, and 1 if they don't.
+float mirroring(float4x4 m)
+{
+    return dot(cross(m[0].xyz, m[1].xyz), m[2].xyz) < 0.0 ? -1.0 : 1.0;
+}
+
 // A normal through a skin's matrix: the cofactors of its turn and scale, so a bone scaled along one
 // axis leans a normal as it should, its sign the determinant's, which whole() then makes length 1.
 float3 skinnedNormal(float4x4 skin, float3 normal)
@@ -320,6 +326,13 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
     const Vertex vertex = draw.vertices[index];
     float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
+    const bool tangents = !fixedLook() && draw.hasTangents != 0;
+    float4 tangent = float4(0.0, 0.0, 0.0, 0.0);
+    if (tangents)
+    {
+        const Tangent stored = draw.tangents[index];
+        tangent = float4(stored.xyzw[0], stored.xyzw[1], stored.xyzw[2], stored.xyzw[3]);
+    }
     // Skinned before its own matrix, in its mesh's space, as the palette is.
     if (draw.jointCount != 0)
     {
@@ -342,6 +355,8 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
         }
         position = mul(skin, position);
         normal = skinnedNormal(skin, normal);
+        // A bone that mirrors turns its bitangent with it, as it does its normal.
+        tangent = float4(mul(skin, float4(tangent.xyz, 0.0)).xyz, tangent.w * mirroring(skin));
     }
     const float4 place = mul(draw.toView, position);
     Corner corner;
@@ -358,33 +373,9 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
     }
     corner.draw = instance;
     corner.lit = float3(1.0, 1.0, 1.0);
-    corner.tangent = float4(0.0, 0.0, 0.0, 0.0);
-    if (!fixedLook() && draw.hasTangents != 0)
-    {
-        const Tangent tangent = draw.tangents[index];
-        float3 along = float3(tangent.xyzw[0], tangent.xyzw[1], tangent.xyzw[2]);
-        if (draw.jointCount != 0)
-        {
-            const Joints joints = draw.joints[index];
-            float4x4 skin = float4x4(0.0);
-            for (uint joint = 0; joint < 4; ++joint)
-            {
-                const uint which = (joints.joints[joint / 2] >> (16 * (joint % 2))) & 0xFFFF;
-                skin += (which == noBone
-                             ? float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0)
-                             : draw.palette[min(which, draw.jointCount - 1)]) *
-                        joints.weights[joint];
-            }
-            along = mul(skin, float4(along, 0.0)).xyz;
-        }
-        const float3 viewed = mul(draw.toView, float4(along, 0.0)).xyz;
-        // A mirror turns its bitangent with it.
-        const float3 x = draw.toView[0].xyz;
-        const float3 y = draw.toView[1].xyz;
-        const float3 z = draw.toView[2].xyz;
-        const float mirrored = dot(cross(x, y), z) < 0.0 ? -1.0 : 1.0;
-        corner.tangent = float4(viewed, tangent.xyzw[3] * mirrored);
-    }
+    corner.tangent = tangents ? float4(mul(draw.toView, float4(tangent.xyz, 0.0)).xyz,
+                                       tangent.w * mirroring(draw.toView))
+                              : float4(0.0, 0.0, 0.0, 0.0);
     if (shading == shadingVertex)
     {
         // Lit here, by the draw's own lights, and clamped here, before any texture.
@@ -415,6 +406,19 @@ float4 mapTexel(Layer map, Corner corner)
     return sampleTexture(map.texture, map.sampler, mapUv(map, corner));
 }
 
+// A surface's own tangent as a normal map's UVs go, which what turns them makes another: what its
+// u and v are along, in terms of the UVs the tangent's of, so it's what a pixel makes of its UVs,
+// its bitangent turned around by a turn that mirrors them.
+float4 tangentThrough(Layer map, float3 normal, float4 tangent)
+{
+    const float2 u = map.uvAcross.xy;
+    const float2 v = map.uvDown.xy;
+    const float3 bitangent = cross(normal, tangent.xyz) * (tangent.w < 0.0 ? -1.0 : 1.0);
+    const float across = (u.x * v.y) - (u.y * v.x);
+    return float4(((tangent.xyz * v.y) + (bitangent * v.x)) / across,
+                  (tangent.w < 0.0 ? -1.0 : 1.0) * (across < 0.0 ? -1.0 : 1.0));
+}
+
 // What a pixel looks like, shaded by pbr.slang: its base color by its environment and ambient light,
 // each directional light, and its cluster's, what it emits on top.
 float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 baseColor, bool front)
@@ -422,10 +426,8 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     const float3 place = corner.place;
     const float3 eye = toEye(camera, place);
     float3 normal = whole(corner.normal);
-    if (twoSided != 0 && !front)
-    {
-        normal = -normal;
-    }
+    // How much light it gives back of what falls on it, which no more than all of it can be.
+    const float3 reflecting = saturate(baseColor);
     float metallic = material.metallic;
     float roughness = material.roughness;
     float occlusion = 1.0;
@@ -448,18 +450,25 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     if (hasNormal && (material.maps & (1 << mapNormal)) != 0)
     {
         const Layer map = material.mapLayers[mapNormal];
-        const float4 tangent = corner.tangent.w != 0.0 ? corner.tangent
-                                                       : tangentFromDerivatives(normal, place, mapUv(map, corner));
+        // A surface's own tangents are its first UV set's.
+        const float4 tangent = corner.tangent.w != 0.0 && map.bump.x == 0.0
+                                   ? tangentThrough(map, normal, corner.tangent)
+                                   : tangentFromDerivatives(normal, place, mapUv(map, corner));
         normal = normalFromMap(normal, tangent, mapTexel(map, corner).rgb, material.normalScale);
     }
+    // Seen from behind, the whole frame's turned around, as its map says of its front.
+    if (twoSided != 0 && !front)
+    {
+        normal = -normal;
+    }
     // No normal, as a sprite's: only ambient light lights that.
-    float3 color = baseColor * camera.ambient * occlusion;
+    float3 color = reflecting * camera.ambient * occlusion;
     if (!hasNormal)
     {
         return color + emissive;
     }
     Surface surface;
-    surface.baseColor = baseColor;
+    surface.baseColor = reflecting;
     surface.metallic = saturate(metallic);
     surface.roughness = saturate(roughness);
     surface.normal = normal;
@@ -592,13 +601,14 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
     {
         current.a = draw.color.a;
     }
-    if (alphaTest != 0 && current.a < material.cutoff)
-    {
-        discard;
-    }
+    // Before it's discarded, as maps' levels and a tangent's derivatives need their neighbors.
     if (!encoded)
     {
         current.rgb = pixelShaded(camera, material, corner, current.rgb, front);
+    }
+    if (alphaTest != 0 && current.a < material.cutoff)
+    {
+        discard;
     }
     if (fog != 0)
     {

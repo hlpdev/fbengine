@@ -74,16 +74,20 @@ Public Final Class Texture
     End New
 
     /// A texture of the pixels an image file decodes to, PNG, JPEG, BMP, TGA, GIF, QOI, or WebP,
-    /// RGBA8, or HDR, as FromHdr makes it, with mipmaps unless `mipmaps` is False. It throws when
-    /// the file can't be read or decoded, or as New does.
-    @MainThread
-    Public Static Method Load(path: Path, mipmaps: Bool = True): Texture Throws GraphicsError,
-                                                                                IOError
+    /// or HDR, as FromHdr makes it, with mipmaps unless `mipmaps` is False. Its `format`, RGBA8 or
+    /// RGBA8_LINEAR, says whether it's a color, decoded from sRGB when it's read, or numbers, as a
+    /// normal map's are; it's left out for an HDR file. It panics for another format, and throws
+    /// when the file can't be read or decoded, or as New does.
+    @MainThread @PanicsAtCaller
+    Public Static Method Load(path: Path, mipmaps: Bool = True,
+                              format: TextureFormat =
+                              TextureFormat.RGBA8): Texture Throws GraphicsError,
+                                                                   IOError
         If path.Extension().ToLower() == ".hdr"
             Return Try FromHdr(Try Hdr.Decode(Try File.ReadBytes(path)), mipmaps)
         End If
         Local image = Try Image.Load(path)
-        Return Try FromImage(image, mipmaps)
+        Return Try FromImage(image, mipmaps, format)
     End Method
 
     /// A texture of `image`'s light, RGBA16F, with mipmaps unless `mipmaps` is False, for an
@@ -103,12 +107,17 @@ Public Final Class Texture
         Return texture
     End Method
 
-    /// A texture of `image`'s pixels, RGBA8, with mipmaps unless `mipmaps` is False.
-    @MainThread
-    Public Static Method FromImage(image: Image, mipmaps: Bool = True): Texture Throws GraphicsError
-        Local texture = Try Texture(image.Width As Int32, image.Height As Int32,
-                                    TextureFormat.RGBA8,
-                                    mipmaps)
+    /// A texture of `image`'s pixels, with mipmaps unless `mipmaps` is False. Its `format`, RGBA8 or
+    /// RGBA8_LINEAR, says whether it's a color, decoded from sRGB when it's read, or numbers, as a
+    /// normal map's are. It panics for another format.
+    @MainThread @PanicsAtCaller
+    Public Static Method FromImage(image: Image, mipmaps: Bool = True,
+                                   format: TextureFormat =
+                                   TextureFormat.RGBA8): Texture Throws GraphicsError
+        If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
+            Panic("an Image is an RGBA8 or RGBA8_LINEAR texture, not {format}")
+        End If
+        Local texture = Try Texture(image.Width As Int32, image.Height As Int32, format, mipmaps)
         texture.Write(0, 0, image)
         // Its alpha's for blending if any pixel's isn't whole.
         Local i = 3

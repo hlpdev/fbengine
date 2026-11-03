@@ -61,15 +61,15 @@ extern "C" {
 #define FBE_FOG_EXPONENTIAL         2
 #define FBE_FOG_EXPONENTIAL_SQUARED 3
 
-// How a material is lit: physically, as glTF's metal and roughness have it; not at all, its color
-// as it is; or per vertex, as fixed-function hardware lit, for an old look. UNLIT and VERTEX are
-// that fixed-function look, working on what's stored, sRGB's encoded values: 50 doubled is 100.
 #define FBE_MATERIAL_MAPS   4
 #define FBE_MAP_METAL_ROUGH 0
 #define FBE_MAP_NORMAL      1
 #define FBE_MAP_OCCLUSION   2
 #define FBE_MAP_EMISSIVE    3
 
+// How a material is lit: physically, as glTF's metal and roughness have it; not at all, its color
+// as it is; or per vertex, as fixed-function hardware lit, for an old look. UNLIT and VERTEX are
+// that fixed-function look, working on what's stored, sRGB's encoded values: 50 doubled is 100.
 #define FBE_SHADING_PBR    0
 #define FBE_SHADING_UNLIT  1
 #define FBE_SHADING_VERTEX 2
@@ -542,6 +542,14 @@ FBE_API uint64_t fbe_geometry_cylinder(int32_t segments, bool capped);
 FBE_API uint64_t fbe_geometry_cone(int32_t segments, bool capped);
 FBE_API uint64_t fbe_geometry_plane(int32_t segments);
 
+// A surface's tangents, one for each of its vertices, or none, each finite and its w 1 or -1:
+// vertices added since or cleared let go of them. Reading them gives how many there are, and writes
+// as many as `capacity`.
+FBE_API bool fbe_surface_set_tangents(uint64_t geometry, int32_t surface,
+                                      const fbe_vertex_tangent_t* tangents, int32_t count);
+FBE_API int32_t fbe_surface_tangents(uint64_t geometry, int32_t surface,
+                                     fbe_vertex_tangent_t* tangents, int32_t capacity);
+
 // A surface's vertices and triangles, by the geometry and the surface's index.
 // Adds `count` vertices and gives the first's index, -1 if it can't.
 FBE_API int32_t fbe_surface_add_vertices(uint64_t geometry, int32_t surface,
@@ -554,12 +562,6 @@ FBE_API int32_t fbe_surface_add_triangles(uint64_t geometry, int32_t surface,
 // drawing skins it by when its mesh has a skin; false for another count. A vertex with no weight
 // at all is on FBE_NO_JOINT, whole. Vertices added since or cleared let go of them. Reading them
 // writes up to `capacity` and gives how many there are, -1 for a freed geometry.
-// A surface's tangents, one for each of its vertices, or none: vertices added since or cleared let
-// go of them. Reading them gives how many there are, and writes as many as `capacity`.
-FBE_API bool fbe_surface_set_tangents(uint64_t geometry, int32_t surface,
-                                      const fbe_vertex_tangent_t* tangents, int32_t count);
-FBE_API int32_t fbe_surface_tangents(uint64_t geometry, int32_t surface,
-                                     fbe_vertex_tangent_t* tangents, int32_t capacity);
 FBE_API bool fbe_surface_set_joints(uint64_t geometry, int32_t surface,
                                     const fbe_vertex_joints_t* joints, int32_t count);
 FBE_API int32_t fbe_surface_joints(uint64_t geometry, int32_t surface, fbe_vertex_joints_t* joints,
@@ -665,10 +667,13 @@ FBE_API float fbe_material_occlusion_strength(uint64_t material);
 // roughness and its blue its metalness; FBE_MAP_NORMAL is tangent space, +Y up, from a surface's
 // tangents, or, for one with none, what its UVs and places make of a pixel; FBE_MAP_OCCLUSION's red
 // is how much of its environment and ambient light reach it; and FBE_MAP_EMISSIVE multiplies what
-// it emits. All but the emissive map are linear, RGBA8_LINEAR, and it's RGBA8.
+// it emits. All but the emissive map hold no color, so are RGBA8_LINEAR or RGBA16F, and an
+// occlusion map can be R8, or setting them's false; an emissive map is RGBA8 as a rule.
 //
 // A map's texture, which it holds, 0 for none, and the UV set it reads, 0 or 1; and what its UVs go
-// through, as a layer's do.
+// through, as a layer's do. A surface's own tangents go with its UV set 0, and turn with what its
+// normal map's UVs go through, as what a pixel makes of UVs does; on UV set 1, it's what a pixel
+// makes of them.
 FBE_API bool fbe_material_set_map(uint64_t material, int32_t map, uint64_t texture, int32_t uv_set);
 FBE_API uint64_t fbe_material_map(uint64_t material, int32_t map);
 FBE_API int32_t fbe_material_map_uv_set(uint64_t material, int32_t map);

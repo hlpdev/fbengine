@@ -300,14 +300,14 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_geometry_cylinder(segments: Int32, capped: Bool): UInt64
     Function fbe_geometry_cone(segments: Int32, capped: Bool): UInt64
     Function fbe_geometry_plane(segments: Int32): UInt64
-    Function fbe_surface_add_vertices(geometry: UInt64, surface: Int32, vertices: Ptr<fbe_vertex_t>,
-                                      count: Int32): Int32
-    Function fbe_surface_add_triangles(geometry: UInt64, surface: Int32, indices: Ptr<UInt32>,
-                                       count: Int32): Int32
     Function fbe_surface_set_tangents(geometry: UInt64, surface: Int32,
                                       tangents: Ptr<fbe_vertex_tangent_t>, count: Int32): Bool
     Function fbe_surface_tangents(geometry: UInt64, surface: Int32,
                                   tangents: Ptr<fbe_vertex_tangent_t>, capacity: Int32): Int32
+    Function fbe_surface_add_vertices(geometry: UInt64, surface: Int32, vertices: Ptr<fbe_vertex_t>,
+                                      count: Int32): Int32
+    Function fbe_surface_add_triangles(geometry: UInt64, surface: Int32, indices: Ptr<UInt32>,
+                                       count: Int32): Int32
     Function fbe_surface_set_joints(geometry: UInt64, surface: Int32,
                                     joints: Ptr<fbe_vertex_joints_t>, count: Int32): Bool
     Function fbe_surface_joints(geometry: UInt64, surface: Int32, joints: Ptr<fbe_vertex_joints_t>,

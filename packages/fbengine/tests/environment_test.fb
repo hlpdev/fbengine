@@ -96,3 +96,24 @@ Function ASurfaceHasTangents()
     surface.SetTangents([])
     Expect(surface.Tangents().Count == 0)
 End Function
+
+// A normal map from a file holds numbers, as it's loaded to; and it's color at first.
+@Test
+Function AFileLoadsAsColorOrAsNumbers() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Local image = Image.FromBytes(1, 1, [128, 128, 255, 255])
+    Local path = folder.Path / "flat.png"
+    Try File.WriteBytes(path, Png.Encode(image))
+    Local color = Try Texture.Load(path, False)
+    Expect(color.Format() == TextureFormat.RGBA8)
+    Local numbers = Try Texture.Load(path, False, TextureFormat.RGBA8_LINEAR)
+    Expect(numbers.Format() == TextureFormat.RGBA8_LINEAR)
+    Expect(numbers.ReadPixels()[0] == 128)
+    Local material = Material()
+    material.SetMap(MaterialMap.NORMAL, numbers)
+    Expect(material.Map(MaterialMap.NORMAL) == numbers)
+    Local made = Try Texture.FromImage(image, False, TextureFormat.RGBA8_LINEAR)
+    Expect(made.Format() == TextureFormat.RGBA8_LINEAR)
+End Function

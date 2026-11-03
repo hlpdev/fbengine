@@ -486,6 +486,26 @@ TEST_CASE("what has no direction shades finitely", "[gpu]") {
     no_direction.radiance[3] = 1.0F;
     no_direction.texel = { 0.5F, 0.5F, 0.5F, 1.0F };
     CHECK(draw(no_direction).values == plain.values);
+    // NaN's no direction either; nor is a tangent short all over a mistake, as a part of itself.
+    spheres_t nan_tangent = lit;
+    nan_tangent.radiance[3] = 3.0F;
+    nan_tangent.environment.intensity = std::numeric_limits<float>::quiet_NaN();
+    nan_tangent.texel = { 0.75F, 0.75F, 1.0F, 1.0F };
+    CHECK(draw(nan_tangent).values == plain.values);
+    spheres_t short_tangent = lit;
+    short_tangent.radiance[3] = 3.0F;
+    short_tangent.environment.intensity = 1e-5F;
+    short_tangent.texel = { 0.75F, 0.5F, 1.0F, 1.0F };
+    spheres_t long_tangent = short_tangent;
+    long_tangent.environment.intensity = 1.0F;
+    CHECK(draw(short_tangent).values == draw(long_tangent).values);
+    // A scale that great's a square past what a float holds, as far over as a tilt goes.
+    spheres_t greatest = lit;
+    greatest.radiance[3] = 1.0F;
+    greatest.texel = { 0.75F, 0.5F, 1.0F, 1e30F };
+    for (const float value : draw(greatest).values) {
+        CHECK(std::isfinite(value));
+    }
 
     // A texel pointing straight into the surface, and a light behind it: head on, the view and the
     // light are opposite. The BRDF there, with the normal as its halfway: all of Fresnel, GGX's
@@ -713,6 +733,56 @@ TEST_CASE("an environment's directions are the image's", "[gpu]") {
     const vec3_t found = octahedral_direction(brightest_x, brightest_y, 32);
     INFO(found[0] << ", " << found[1] << ", " << found[2]);
     CHECK(found[0] > 0.9);
+    stop_gpu();
+}
+
+// Directions at a pole, and a float's rounding off it, which a map's corners are on a GPU that
+// divides by a reciprocal, as Metal's fast math does, each read one column; and one just far enough
+// off, its own, the way it's turned.
+TEST_CASE("every direction at a pole reads one column of an image", "[gpu]") {
+    start();
+    const auto across = [](float x, float y, float z) {
+        const std::uint64_t target = fbe_texture_create_target(1, 1, FBE_TEXTURE_RGBA16F, 1, false);
+        REQUIRE(target != 0);
+        VkPipeline pipeline = fbe::gpu::pipeline({
+            .shader = &fbe::test_shaders::poles,
+            .color = VK_FORMAT_R16G16B16A16_SFLOAT,
+        });
+        REQUIRE(pipeline != VK_NULL_HANDLE);
+        const std::array<float, 4> push{ x, y, z, 0.0F };
+        require(fbe::gpu::add_pass({
+            .name = "poles",
+            .colors = { {
+                .target = fbe::gpu::texture_resource(target),
+                .clear = true,
+            }, },
+            .record =
+                [push, pipeline](VkCommandBuffer commands) {
+                    vkCmdPushConstants(commands, fbe::gpu::pipeline_layout(),
+                                       flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0, sizeof(push),
+                                       push.data());
+                    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                    vkCmdDraw(commands, 3, 1, 0, 0);
+                },
+        }));
+        const float found = read(target).at(0, 0)[0];
+        require(fbe_texture_release(target));
+        return found;
+    };
+    for (const float y : { 1.0F, -1.0F }) {
+        for (const float off : { 0.0F, 1.2e-7F, 1e-5F }) {
+            INFO("y " << y << ", off " << off);
+            CHECK(across(off, y, off) == 0.5F);
+            CHECK(across(-off, y, off) == 0.5F);
+            CHECK(across(off, y, -off) == 0.5F);
+            CHECK(across(-off, y, -off) == 0.5F);
+        }
+    }
+    // Far enough off, a texel of the largest map, it's the angle again: +X's middle, +Z's three
+    // quarters.
+    CHECK(std::abs(across(1e-3F, -1.0F, 0.0F) - 0.5F) < 0.001F);
+    CHECK(std::abs(across(0.0F, -1.0F, 1e-3F) - 0.75F) < 0.001F);
+    CHECK(std::abs(across(0.0F, 1.0F, -1e-3F) - 0.25F) < 0.001F);
     stop_gpu();
 }
 
