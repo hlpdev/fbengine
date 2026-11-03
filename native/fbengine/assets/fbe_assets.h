@@ -55,7 +55,8 @@ typedef struct fbe_model_info_t {
 // Loads the file at `path` as `kind` now, on this thread and the workers, an image's color linear
 // if `linear`, and its sidecar too if `settings`, and gives the load, done, which can have
 // failed; 0 if `path` isn't a res:// path, or `kind` isn't a kind. It reads the mounts there are
-// as it's asked for, whatever's mounted while it runs.
+// as it's asked for, whatever's mounted while it runs, and a Basis Universal KTX2 is transcoded to
+// what the started GPU samples, BC7, ASTC 4x4, or RGBA8, and RGBA8 if the GPU isn't started.
 FBE_API uint64_t fbe_assets_load(int32_t kind, const char* path, bool linear, bool settings);
 // Starts loading the file at `path` on the workers, and gives the load, which the hand-over
 // after it's done gives the FB side as its ticket; 0 as fbe_assets_load gives it.

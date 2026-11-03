@@ -139,9 +139,16 @@ TEST_CASE("a PNG decodes to RGBA8, sRGB unless it's asked not to be", "[assets]"
     REQUIRE(std::ranges::equal(rgb.texels.bytes(), std::vector<std::uint8_t>{ 1, 2, 3, 255 }));
 }
 
-TEST_CASE("a 16-bit PNG keeps its 16 bits", "[assets]") {
-    const assets::image_t image =
-        decoded(test::png16(2, 1, { 0x1234, 0x5678, 0x9ABC, 0xFFFF, 0, 1, 2, 0x8000 }));
+TEST_CASE("a 16-bit PNG of color is its high bytes, and of data keeps its 16 bits", "[assets]") {
+    const bytes_t png = test::png16(2, 1, { 0x1234, 0x5678, 0x9ABC, 0xFFFF, 0, 1, 2, 0x8000 });
+    const assets::image_t color = decoded(png);
+    REQUIRE(color.format == assets::formats::rgba8_srgb);
+    REQUIRE(color.levels[0].size == 8);
+    REQUIRE(std::vector<std::uint8_t>(color.texels.data(), color.texels.data() + 8) ==
+            std::vector<std::uint8_t>{ 0x12, 0x56, 0x9A, 0xFF, 0, 0, 0, 0x80 });
+    auto linear = assets::decode_image(png, { .srgb = false }, "wide");
+    REQUIRE(linear.has_value());
+    const assets::image_t image = std::move(*linear);
     REQUIRE(image.format == assets::formats::rgba16);
     REQUIRE(image.levels[0].size == 16);
     std::vector<std::uint16_t> wide(8);
@@ -441,7 +448,7 @@ TEST_CASE("an image's texels are the decoder's own, not a copy", "[assets]") {
 TEST_CASE("a KTX2's sample of 32 bits or more isn't loaded", "[assets]") {
     // The review's, whose samples libktx would shift 1 by 119, 26 in a Zstd one, and a cube map's.
     for (const std::string_view name :
-         { "dfd_cube_0.ktx2", "dfd_uastc_119.ktx2", "dfd_zstd_26.ktx2" }) {
+         { "dfd_cube_0.ktx2", "dfd_uastc_119.ktx2", "dfd_zstd_26.ktx2", "assert_crash.ktx2" }) {
         INFO(name);
         REQUIRE(failure(fixture(name)) == assets::failure_t::INVALID_DATA);
     }
@@ -454,4 +461,32 @@ TEST_CASE("a KTX2's sample of 32 bits or more isn't loaded", "[assets]") {
     // The first sample's bit length, its word's third byte, at the block's 24th byte.
     wide[dfd + 4 + 24 + 2] = 32;
     REQUIRE(message(wide).contains("32 bits"));
+}
+
+TEST_CASE("a BMP decodes, whatever it's called, and a DDS is refused, saying so", "[assets]") {
+    // A BMP's headers, 1 by 1, 24 bits, then its pixel, blue first, padded to 4 bytes.
+    bytes_t bmp(58, 0);
+    bmp[0] = 'B';
+    bmp[1] = 'M';
+    bmp[2] = 58;
+    bmp[10] = 54;
+    bmp[14] = 40;
+    bmp[18] = 1;
+    bmp[22] = 1;
+    bmp[26] = 1;
+    bmp[28] = 24;
+    bmp[34] = 4;
+    bmp[54] = 3;
+    bmp[55] = 2;
+    bmp[56] = 1;
+    const assets::image_t image = decoded(bmp);
+    REQUIRE(image.format == assets::formats::rgba8_srgb);
+    REQUIRE(image.width == 1);
+    REQUIRE(image.texels[0] == 1);
+    REQUIRE(image.texels[1] == 2);
+    REQUIRE(image.texels[2] == 3);
+    REQUIRE(image.texels[3] == 255);
+    const bytes_t dds{ 'D', 'D', 'S', ' ', 0, 0, 0, 0 };
+    REQUIRE(message(dds).contains("DDS"));
+    REQUIRE(failure(dds) == assets::failure_t::INVALID_DATA);
 }

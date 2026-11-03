@@ -460,8 +460,9 @@ bool terrain_coarse_pieces(const mat4_t& world, const scene::terrain_t& terrain,
                     static_cast<std::uint32_t>(indices.size());
             }
             // Under the terrain wherever it's coarser than it, so it never shadows itself.
-            const auto at = static_cast<std::size_t>((z * row) + x);
-            const float lower = errors[at];
+            const float lower =
+                errors[(static_cast<std::size_t>(z) * static_cast<std::size_t>(row)) +
+                       static_cast<std::size_t>(x)];
             gpu::slice_t slice;
             if (!piece_vertices(terrain, area, cells, drop, lower, vertices, slice)) {
                 return false;

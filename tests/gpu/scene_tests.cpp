@@ -2289,7 +2289,8 @@ int reds_above(const fbe::golden::frame_t& frame, int above) {
     int count = 0;
     for (std::uint32_t y = 0; y < frame.height; ++y) {
         for (std::uint32_t x = 0; x < frame.width; ++x) {
-            count += static_cast<int>(pixel(frame, x, y)[0]) > above ? 1 : 0;
+            const int red = pixel(frame, x, y)[0];
+            count += red > above ? 1 : 0;
         }
     }
     return count;

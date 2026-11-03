@@ -171,6 +171,9 @@ fbengine_patch_text("\t\t\t++idx;\n\t\t\t_host = view.substr(idx, hostEnd - idx)
                     "\t\t\tif (idx < view.size()) ++idx;\n\t\t\t_host = view.substr(idx, hostEnd - idx);")
 fbengine_patch_text("\t\tidx = nextSlash; // Path includes this slash"
                     "\t\tidx = nextSlash == std::string::npos ? view.size() : nextSlash; // Path includes this slash")
+# An empty version, which it reads the first character of.
+fbengine_patch_text("\t\tif (assetInfo[\"version\"].get_string().get(version) != SUCCESS) FASTGLTF_UNLIKELY {"
+                    "\t\tif (assetInfo[\"version\"].get_string().get(version) != SUCCESS || version.empty()) FASTGLTF_UNLIKELY {")
 file(WRITE "${fbengine_fastgltf_patched}/fastgltf.cpp.in" "${fbengine_text}")
 configure_file("${fbengine_fastgltf_patched}/fastgltf.cpp.in"
                "${fbengine_fastgltf_patched}/fastgltf.cpp" COPYONLY)

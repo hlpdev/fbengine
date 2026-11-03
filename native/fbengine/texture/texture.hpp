@@ -5,6 +5,7 @@
 // the frame graph's passes draw into, copy, and clear; and targets the engine makes for itself.
 
 #include "../../common/handles.hpp"
+#include "assets/image.hpp"
 #include "gpu/vulkan.hpp"
 
 #include <cstdint>
@@ -106,9 +107,11 @@ std::uint32_t pixel_size(std::int32_t format);
 std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, std::int32_t format,
                                    VkSampleCountFlagBits samples, bool depth);
 
-/// A texture the engine makes for itself, `width` by `height` of an FBE_TEXTURE_ format, without
-/// mipmaps, as create_engine_target's are; 0, with fbe_error's why, without a started GPU.
-std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format);
+/// A texture the engine makes for itself, `width` by `height` of an FBE_TEXTURE_ format, with room
+/// for mipmaps if it says, as create_engine_target's are; 0, with fbe_error's why, without a
+/// started GPU.
+std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format,
+                                    bool mipmaps = false);
 
 /// Writes `width` by `height` pixels at `x`, `y` into level 0 of a texture without mipmaps, rows
 /// `pitch` bytes apart, in the frame's uploads, before its commands, even where a pass of the
@@ -116,5 +119,9 @@ std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, s
 /// draws samples, as an atlas page's new glyphs are. False, with fbe_error's why, if it can't.
 bool write_ahead(std::uint64_t handle, std::uint32_t x, std::uint32_t y, std::uint32_t width,
                  std::uint32_t height, const std::uint8_t* pixels, std::uint32_t pitch);
+
+/// What a Basis Universal KTX2 is transcoded to for the started device: BC7 if it samples that,
+/// else ASTC 4x4, else RGBA8, as it is without a started device.
+assets::transcode_t device_transcode();
 
 } // namespace fbe::texture

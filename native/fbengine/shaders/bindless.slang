@@ -47,3 +47,9 @@ public uint textureLevels(uint index)
     textures[NonUniformResourceIndex(index)].GetDimensions(0, width, height, levels);
     return levels;
 }
+
+/// Texture `index` at `uv`, level `level` of it, through sampler `sampler`.
+public float4 sampleTextureLevel(uint index, uint sampler, float2 uv, float level)
+{
+    return textures[NonUniformResourceIndex(index)].SampleLevel(samplers[NonUniformResourceIndex(sampler)], uv, level);
+}

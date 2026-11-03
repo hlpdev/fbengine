@@ -43,6 +43,12 @@ Public Interface Asset
     Method Reload(load: AssetLoad): Bool Throws IOError
         Return False
     End Method
+
+    /// Whether what it holds has gone by itself, as a Texture's does when the GPU stops, so the
+    /// cache lets go of it, and the next Load makes a new one. False unless its type says otherwise.
+    Method Stale(): Bool
+        Return False
+    End Method
 End Interface
 
 /// An image a load decoded: its Vulkan format, its size in texels, and how many layers, faces (6

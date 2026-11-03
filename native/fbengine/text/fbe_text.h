@@ -62,6 +62,10 @@ FBE_API uint64_t fbe_text_embedded_font(float size, int32_t style);
 FBE_API uint64_t fbe_text_resize_font(uint64_t font, float size, int32_t style);
 // Frees a font; false if the handle isn't a font's.
 FBE_API bool fbe_text_free_font(uint64_t font);
+// Puts `made`'s face, size, and style in `font`, keeping its handle, so what falls back to it does
+// still, and its own fallbacks and whether it falls back on the OS's fonts; `made` is freed. False
+// if either isn't a font.
+FBE_API bool fbe_text_replace_font(uint64_t font, uint64_t made);
 // How many fonts there are, unfreed.
 FBE_API int32_t fbe_text_font_count(void);
 

@@ -11,6 +11,7 @@ Import "./entity"
 Import "./geometry"
 Import "./material"
 Import "./transform"
+Import "./window"
 Import "./world"
 
 /// How a Draw meets the depth what's drawn before it left.

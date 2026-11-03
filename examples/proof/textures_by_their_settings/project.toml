@@ -1,0 +1,8 @@
+[project]
+name = "textures_by_their_settings"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../../packages/fbengine" }
+fbengine_audio = { path = "../../../packages/fbengine_audio" }
+fbengine_tools = { path = "../../../packages/fbengine_tools" }
