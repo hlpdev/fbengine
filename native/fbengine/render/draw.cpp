@@ -25,6 +25,7 @@
 #include <engine_shaders.hpp>
 #include <format>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -486,11 +487,11 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                     data.joint_count = palette->second.second;
                 }
             }
-            if (surface->target_count != 0) {
+            if (!surface->target_moves.empty()) {
                 std::array<anim::drawn_target_t, anim::drawn_targets> strongest;
                 const std::size_t count =
                     anim::strongest_targets(anim::morph_weights(item.entity, tweened.tween()),
-                                            surface->target_count, strongest);
+                                            surface->target_moves, strongest);
                 if (count != 0) {
                     bool no_room = false;
                     data.drawn_targets =
@@ -760,7 +761,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
 
 extern "C" {
 
-FBE_API bool fbe_render_camera(uint64_t camera, float tween) {
+FBE_API bool fbe_render_camera(uint64_t camera, float tween) try {
     std::uint32_t slot = fbe::scene::none;
     fbe::scene::view_t view;
     bool shows = false;
@@ -770,9 +771,11 @@ FBE_API bool fbe_render_camera(uint64_t camera, float tween) {
     }
     fbe::render::forget_freed_geometries();
     return (fbe_gpu_started() || fbe_gpu_start()) && fbe::render::draw_camera(slot, tween);
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
-FBE_API bool fbe_render_world(uint64_t world, float tween) {
+FBE_API bool fbe_render_world(uint64_t world, float tween) try {
     const std::int32_t count = fbe_world_cameras(world, nullptr, 0);
     if (count < 0) {
         return false;
@@ -781,6 +784,8 @@ FBE_API bool fbe_render_world(uint64_t world, float tween) {
     fbe_world_cameras(world, cameras.data(), count);
     return std::ranges::all_of(
         cameras, [tween](std::uint64_t camera) { return fbe_render_camera(camera, tween); });
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
 } // extern "C"

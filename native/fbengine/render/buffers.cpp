@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <new>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -49,7 +50,7 @@ void free_surface(surface_buffers_t& surface) {
     gpu::free_buffer(surface.joints);
     gpu::free_buffer(surface.targets);
     surface.index_count = 0;
-    surface.target_count = 0;
+    surface.target_moves.clear();
     surface.vertex_count = 0;
 }
 
@@ -218,35 +219,48 @@ struct target_vertex_t {
 };
 static_assert(sizeof(target_vertex_t) == 24, "the scene shader reads these 24 bytes apart");
 
-/// Sends a surface's morph targets, if it has any and it has vertices drawn.
+/// Sends a surface's morph targets, if it has any and it has vertices drawn, saying which move it.
 bool send_targets(surface_buffers_t& buffers, const scene::surface_t& from) {
-    buffers.target_count = 0;
+    buffers.target_moves.clear();
     buffers.vertex_count = 0;
     if (from.targets.empty() || buffers.vertices.buffer == VK_NULL_HANDLE) {
         gpu::free_buffer(buffers.targets);
         return true;
     }
     const std::size_t vertices = from.vertices.size();
-    std::vector<target_vertex_t> flat(vertices * from.targets.size());
-    for (std::size_t t = 0; t < from.targets.size(); ++t) {
-        const scene::morph_target_t& target = from.targets[t];
-        const std::span<target_vertex_t> row = std::span(flat).subspan(t * vertices, vertices);
-        for (std::size_t i = 0; i < std::min(vertices, target.positions.size()); ++i) {
-            row[i].position = {
-                target.positions[i].x,
-                target.positions[i].y,
-                target.positions[i].z,
-            };
+    try {
+        std::vector<target_vertex_t> flat(vertices * from.targets.size());
+        buffers.target_moves.assign(from.targets.size(), 0);
+        const auto moved = [](const scene::vec3_t& by) {
+            return by.x != 0.0F || by.y != 0.0F || by.z != 0.0F;
+        };
+        for (std::size_t t = 0; t < from.targets.size(); ++t) {
+            const scene::morph_target_t& target = from.targets[t];
+            const std::span<target_vertex_t> row = std::span(flat).subspan(t * vertices, vertices);
+            const std::size_t positions = std::min(vertices, target.positions.size());
+            const std::size_t normals = std::min(vertices, target.normals.size());
+            for (std::size_t i = 0; i < positions; ++i) {
+                const scene::vec3_t& by = target.positions[i];
+                row[i].position = { by.x, by.y, by.z };
+            }
+            for (std::size_t i = 0; i < normals; ++i) {
+                const scene::vec3_t& by = target.normals[i];
+                row[i].normal = { by.x, by.y, by.z };
+            }
+            const bool moves =
+                std::ranges::any_of(std::span(target.positions).first(positions), moved) ||
+                std::ranges::any_of(std::span(target.normals).first(normals), moved);
+            buffers.target_moves[t] = moves ? 1 : 0;
         }
-        for (std::size_t i = 0; i < std::min(vertices, target.normals.size()); ++i) {
-            row[i].normal = { target.normals[i].x, target.normals[i].y, target.normals[i].z };
+        if (!send(buffers.targets, std::as_bytes(std::span(flat)),
+                  gpu::flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))) {
+            buffers.target_moves.clear();
+            return false;
         }
+    } catch (const std::bad_alloc&) {
+        buffers.target_moves.clear();
+        return fail("out of memory");
     }
-    if (!send(buffers.targets, std::as_bytes(std::span(flat)),
-              gpu::flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))) {
-        return false;
-    }
-    buffers.target_count = static_cast<std::uint32_t>(from.targets.size());
     buffers.vertex_count = static_cast<std::uint32_t>(vertices);
     return true;
 }
@@ -265,7 +279,6 @@ const surface_buffers_t* surface_buffers(std::uint64_t geometry, std::size_t sur
     // an edit between two cameras would pair new indices with old vertices. It's the next's.
     const std::int64_t frame = fbe_frame_count();
     if (buffers.version != found.version && buffers.frame != frame) {
-        buffers.frame = frame;
         // Surfaces gone go; each that's left is sent again.
         for (std::size_t i = found.surfaces.size(); i < buffers.surfaces.size(); ++i) {
             free_surface(buffers.surfaces[i]);
@@ -291,6 +304,7 @@ const surface_buffers_t* surface_buffers(std::uint64_t geometry, std::size_t sur
         }
         buffers.version = found.version;
     }
+    buffers.frame = frame;
     // One added since, in the frame it's waiting for.
     static const surface_buffers_t none_yet;
     return surface < buffers.surfaces.size() ? &buffers.surfaces[surface] : &none_yet;

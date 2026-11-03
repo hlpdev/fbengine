@@ -67,9 +67,10 @@ struct surface_buffers_t {
     std::uint32_t index_count = 0;
     /// Its vertices' joints, for a surface that has them.
     gpu::buffer_t joints;
-    /// What each of its morph targets moves each of its vertices by, the first target's first.
+    /// What each of its morph targets moves each of its vertices by, the first target's first, for
+    /// each whether it moves any, and how many vertices each has.
     gpu::buffer_t targets;
-    std::uint32_t target_count = 0;
+    std::vector<std::uint8_t> target_moves;
     std::uint32_t vertex_count = 0;
 };
 

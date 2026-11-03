@@ -1,6 +1,8 @@
 // Morph targets: how a Mesh's vertices move toward other shapes, each Surface's targets shared by
 // every Mesh drawing its Geometry, and each Mesh's weights its own, which Clips move. A Surface is
-// drawn with at most 8 targets at once, those with the weights furthest from 0.
+// drawn with at most 8 targets at once, of those that move it, those with the weights furthest from
+// 0: past 8, a target coming in or going out as the weights cross is a step in the shape, not a
+// slide. A Camera's view follows the weights; picks and collisions stay on the shape at rest.
 
 Import std.ffi
 Import std.math

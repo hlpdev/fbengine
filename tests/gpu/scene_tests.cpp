@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstddef>
@@ -1475,6 +1476,7 @@ TEST_CASE("a wireframe material draws lines, where the device can", "[gpu][scene
     fbe_material_release(red);
 }
 
+// Its culling is the scene's as it is now, so that follows an edit at once; what's drawn waits.
 TEST_CASE("a geometry edited between two cameras is the next frame's, for both", "[gpu][scene]") {
     const scene_t scene;
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
@@ -1780,6 +1782,69 @@ fbe::golden::frame_t drawn_baked(const scene_t& scene, const shape_t& shape, std
     return frame;
 }
 
+/// What's at a place on the plane `z` in front of the camera covers the clear, which is bluer than
+/// any shape's: by the view's 60 degrees up, at 128 pixels, worked out from the place alone.
+bool covered(const fbe::golden::frame_t& frame, float x, float y, float z) {
+    const float per = 64.0F / (std::tan(std::numbers::pi_v<float> / 6.0F) * -z);
+    const rgba_t at = pixel(frame, static_cast<std::uint32_t>(64.0F + (x * per)),
+                            static_cast<std::uint32_t>(64.0F - (y * per)));
+    return at[2] <= at[0] + 10;
+}
+
+/// An arm at 8 away, `up` degrees at its shoulder and `bent` more at its elbow, is where its bones
+/// say: on the line from its shoulder to its elbow to its hand, and not 1.2 to either side of it,
+/// its radius being 0.5.
+void check_arm_where(const fbe::golden::frame_t& frame, float up, float bent, float forearm) {
+    const auto turn = [](float degrees) {
+        const float radians = degrees * std::numbers::pi_v<float> / 180.0F;
+        return std::array<float, 2>{ std::cos(radians), std::sin(radians) };
+    };
+    const std::array<float, 2> shoulder{ -2.0F, 0.0F };
+    const std::array<float, 2> upper = turn(up);
+    const std::array<float, 2> lower = turn(up + bent);
+    const float elbow_x = shoulder[0] + (2.0F * upper[0]);
+    const float elbow_y = shoulder[1] + (2.0F * upper[1]);
+    const std::array<float, 2> elbow{ elbow_x, elbow_y };
+    const auto check_along = [&](std::array<float, 2> from, std::array<float, 2> along,
+                                 float length, std::array<float, 2> other) {
+        for (const float part : { 0.2F, 0.5F, 0.8F }) {
+            const float x = from[0] + (along[0] * length * part);
+            const float y = from[1] + (along[1] * length * part);
+            CAPTURE(x, y);
+            CHECK(covered(frame, x, y, -8.0F));
+            // On whichever side the other part of the arm isn't.
+            const float side =
+                (((other[0] * -along[1]) + (other[1] * along[0])) > 0.0F) ? -1.2F : 1.2F;
+            CHECK_FALSE(covered(frame, x - (along[1] * side), y + (along[0] * side), -8.0F));
+        }
+    };
+    check_along(shoulder, upper, 2.0F, lower);
+    check_along(elbow, lower, forearm, std::array<float, 2>{ -upper[0], -upper[1] });
+}
+
+/// A ball at 6 away, `lift` higher at its top and `wide` wider in X, has its silhouette where that
+/// puts it, 3 pixels in and 5 out for its widening a little in the view.
+void check_ball_where(const fbe::golden::frame_t& frame, float lift, float wide) {
+    const float per = 64.0F / (std::tan(std::numbers::pi_v<float> / 6.0F) * 6.0F);
+    const float across = (1.0F + wide) * per;
+    const float top = 64.0F - ((1.0F + lift) * per);
+    const float bottom = 64.0F + per;
+    const auto at = [&](float x, float y) {
+        const rgba_t found =
+            pixel(frame, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
+        return found[2] <= found[0] + 10;
+    };
+    const float widest = 64.0F;
+    CHECK(at(64.0F - across + 3.0F, widest));
+    CHECK(at(64.0F + across - 3.0F, widest));
+    CHECK_FALSE(at(64.0F - across - 5.0F, widest));
+    CHECK_FALSE(at(64.0F + across + 5.0F, widest));
+    CHECK(at(64.0F, top + 3.0F));
+    CHECK(at(64.0F, bottom - 3.0F));
+    CHECK_FALSE(at(64.0F, top - 5.0F));
+    CHECK_FALSE(at(64.0F, bottom + 5.0F));
+}
+
 /// `frame` is the same picture as `reference` but for a few pixels at edges, where a vertex's
 /// rounding can tip one.
 void check_same_picture(const fbe::golden::frame_t& reference, const fbe::golden::frame_t& frame) {
@@ -1797,15 +1862,18 @@ TEST_CASE("a skinned arm matches its reference frames", "[gpu][scene][golden]") 
     const std::uint64_t geometry = geometry_of(shape);
     set_arm_joints(geometry, shape);
     const arm_t arm(scene.world, geometry);
+    float at = 0.0F;
     for (const auto& [name, step] : {
              std::pair{ "anim_arm_start", 0.0F },
              std::pair{ "anim_arm_half", 0.5F },
              std::pair{ "anim_arm_end", 0.5F },
          }) {
         CAPTURE(name);
+        at += step;
         require(fbe_player_advance(scene.world, step));
         const fbe::golden::frame_t frame = scene.drawn();
         fbe::golden::check(name, frame);
+        check_arm_where(frame, -45.0F * at, 90.0F * at, 2.0F);
         check_same_picture(
             drawn_baked(scene, skinned(shape, arm.mesh, geometry), arm.mesh, arm.root), frame);
     }
@@ -1830,15 +1898,18 @@ TEST_CASE("a morphing ball matches its reference frames", "[gpu][scene][golden]"
                                  keys.data(), 2));
     const std::uint64_t player = fbe_player_create(mesh);
     require(fbe_player_play(player, 0, clip, FBE_PLAYER_ONCE, 1.0F));
+    float at = 0.0F;
     for (const auto& [name, step] : {
              std::pair{ "anim_ball_start", 0.0F },
              std::pair{ "anim_ball_half", 0.5F },
              std::pair{ "anim_ball_end", 0.5F },
          }) {
         CAPTURE(name);
+        at += step;
         require(fbe_player_advance(scene.world, step));
         const fbe::golden::frame_t frame = scene.drawn();
         fbe::golden::check(name, frame);
+        check_ball_where(frame, 0.8F * at, 0.6F * at);
         check_same_picture(drawn_baked(scene, morphed(shape, mesh), mesh, place), frame);
     }
     fbe_player_free(player);
@@ -1867,6 +1938,7 @@ TEST_CASE("an arm both morphed and skinned is morphed first", "[gpu][scene][gold
     require(fbe_player_advance(scene.world, 1.0F));
     const fbe::golden::frame_t frame = scene.drawn();
     fbe::golden::check("anim_both", frame);
+    check_arm_where(frame, -45.0F, 90.0F, 3.0F);
     const shape_t baked = skinned(morphed(shape, arm.mesh), arm.mesh, geometry);
     check_same_picture(drawn_baked(scene, baked, arm.mesh, arm.root), frame);
     fbe_geometry_release(geometry);
@@ -1888,9 +1960,9 @@ TEST_CASE("a surface is drawn with the 8 targets weighted most", "[gpu][scene]")
     const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
     const std::uint64_t mesh = wall(scene.world, -3.0F, 0.2F, red);
     const std::uint64_t geometry = fbe_mesh_geometry(mesh);
-    // Eight that move nothing, and a ninth that takes it out of the middle.
+    // Eight that hardly move it, and a ninth that takes it out of the middle.
     for (int i = 0; i < 8; ++i) {
-        add_lift(geometry, 0.0F);
+        add_lift(geometry, 0.001F);
     }
     add_lift(geometry, 1.0F);
     // The ninth alone moves it.
@@ -1915,7 +1987,7 @@ TEST_CASE("a surface is drawn with the 8 targets weighted most", "[gpu][scene]")
     // What reads its vertices has them all.
     std::array<float, 12> positions{};
     require(fbe_morph_vertices(mesh, 0, positions.data(), nullptr, 4) == 4);
-    CHECK(positions[1] == -0.2F + 1.0F);
+    CHECK(positions[1] == Catch::Approx(-0.2F + 1.0F + 0.008F));
     fbe_material_release(red);
 }
 
@@ -2063,4 +2135,201 @@ TEST_CASE(
     require(fbe_morph_set_weights(mesh, both.data(), 2));
     // Nearly along Y, it hardly faces a light in front of it.
     CHECK(middle(scene.drawn())[0] < lit[0] / 4);
+}
+
+TEST_CASE("morphed normals of different lengths light as they are back at length 1") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.0F, 30.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 1.0F, 0);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    // The left two corners' normals lean hard, so they're far longer than the right two's.
+    std::array<fbe_vertex_t, 4> vertices{};
+    require(fbe_surface_vertices(geometry, 0, 0, vertices.data(), 4));
+    std::array<float, 12> leaning{};
+    for (std::size_t i = 0; i < 4; ++i) {
+        if (vertices.at(i).position.x < 0.0F) {
+            leaning.at(i * 3) = -10.0F;
+        }
+    }
+    require(fbe_morph_add_target(geometry, 0, nullptr, leaning.data(), 4) == 0);
+    const std::array<float, 1> one{ 1.0F };
+    require(fbe_morph_set_weights(mesh, one.data(), 1));
+    const fbe::golden::frame_t frame = scene.drawn();
+    // The same, by what reading its vertices has, as plain vertices.
+    std::array<float, 12> normals{};
+    require(fbe_morph_vertices(mesh, 0, nullptr, normals.data(), 4) == 4);
+    for (std::size_t i = 0; i < 4; ++i) {
+        const std::span<const float> normal = std::span(normals).subspan(i * 3, 3);
+        vertices.at(i).normal = { .x = normal[0], .y = normal[1], .z = normal[2] };
+    }
+    require(fbe_surface_set_vertices(geometry, 0, 0, vertices.data(), 4));
+    const std::array<float, 1> none{ 0.0F };
+    require(fbe_morph_set_weights(mesh, none.data(), 1));
+    check_same_picture(scene.drawn(), frame);
+}
+
+TEST_CASE("a morphed normal too long for a float lights the vertex's own, as reading it has it") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.0F, 30.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 1.0F, 0);
+    const rgba_t lit = middle(scene.drawn());
+    CHECK(lit[0] > 40);
+    const std::array<float, 12> up{ 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0 };
+    require(fbe_morph_add_target(fbe_mesh_geometry(mesh), 0, nullptr, up.data(), 4) == 0);
+    const std::array<float, 1> huge{ 1e20F };
+    require(fbe_morph_set_weights(mesh, huge.data(), 1));
+    std::array<float, 12> normals{};
+    require(fbe_morph_vertices(mesh, 0, nullptr, normals.data(), 4) == 4);
+    CHECK(normals[2] == 1.0F);
+    CHECK(near(middle(scene.drawn()), { lit[0], lit[1], lit[2] }));
+}
+
+TEST_CASE("an edit between cameras waits for the next frame, the first having sent nothing") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t second_target =
+        fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 1, true);
+    const std::uint64_t second = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+    require(fbe_camera_set_target(second, second_target));
+    require(fbe_camera_set_clear_color(second, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.1F, red);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    // Sent in a frame before, so this frame's first camera sends nothing.
+    require(fbe_render_camera(scene.camera, 1.0F));
+    fbe_frame_flip(false);
+    const auto both_saw_it = [&] {
+        CHECK(middle(scene_t::read(scene.target)) == rgba_t{ 255, 0, 0, 255 });
+        CHECK(middle(scene_t::read(second_target)) == rgba_t{ 255, 0, 0, 255 });
+    };
+    // Its vertices moved aside between the two.
+    require(fbe_render_camera(scene.camera, 1.0F));
+    std::array<fbe_vertex_t, 4> vertices{};
+    require(fbe_surface_vertices(geometry, 0, 0, vertices.data(), 4));
+    for (fbe_vertex_t& vertex : vertices) {
+        vertex.position.x += 1.0F;
+    }
+    require(fbe_surface_set_vertices(geometry, 0, 0, vertices.data(), 4));
+    require(fbe_render_camera(second, 1.0F));
+    both_saw_it();
+    fbe_frame_flip(false);
+    require(fbe_render_camera(scene.camera, 1.0F));
+    CHECK(middle(scene_t::read(scene.target)) == rgba_t{ 0, 0, 255, 255 });
+    fbe_frame_flip(false);
+    // And a target moved between them, the same way.
+    for (fbe_vertex_t& vertex : vertices) {
+        vertex.position.x -= 1.0F;
+    }
+    require(fbe_surface_set_vertices(geometry, 0, 0, vertices.data(), 4));
+    add_lift(geometry, 0.01F);
+    const std::array<float, 1> one{ 1.0F };
+    require(fbe_morph_set_weights(mesh, one.data(), 1));
+    require(fbe_render_camera(scene.camera, 1.0F));
+    fbe_frame_flip(false);
+    require(fbe_render_camera(scene.camera, 1.0F));
+    const std::array<float, 16> aside{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1 };
+    fbe_mat4_t matrix{};
+    std::ranges::copy(aside, std::begin(matrix.m));
+    require(fbe_geometry_transform(geometry, &matrix));
+    require(fbe_render_camera(second, 1.0F));
+    both_saw_it();
+    fbe_frame_flip(false);
+    fbe_entity_free(second);
+    std::array<std::uint64_t, 16> some{};
+    while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+    fbe_texture_release(second_target);
+    fbe_material_release(red);
+}
+
+TEST_CASE("targets that move nothing leave room for those that do") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.2F, red);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    // As a glTF body's surface has them: eight of the face's, empty here, one all 0, and one its
+    // own.
+    for (int i = 0; i < 7; ++i) {
+        require(fbe_morph_add_target(geometry, 0, nullptr, nullptr, 4) >= 0);
+    }
+    add_lift(geometry, 0.0F);
+    add_lift(geometry, 1.0F);
+    const std::array<float, 9> weights{ 2, 2, 2, 2, 2, 2, 2, 2, 1 };
+    require(fbe_morph_set_weights(mesh, weights.data(), 9));
+    CHECK(middle(scene.drawn()) == rgba_t{ 0, 0, 255, 255 });
+    fbe_material_release(red);
+}
+
+TEST_CASE("an entity's in view as far as its weights take it, as it's drawn") {
+    const scene_t scene;
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.2F, red);
+    require(fbe_entity_set_position(mesh, 0.0F, 50.0F, -3.0F, FBE_SPACE_WORLD));
+    add_lift(fbe_mesh_geometry(mesh), -50.0F);
+    CHECK(fbe_camera_entity_in_view(scene.camera, frame_size, frame_size, mesh) == 0);
+    const std::array<float, 1> one{ 1.0F };
+    require(fbe_morph_set_weights(mesh, one.data(), 1));
+    CHECK(fbe_camera_entity_in_view(scene.camera, frame_size, frame_size, mesh) == 1);
+    fbe_material_release(red);
+}
+
+TEST_CASE("culling sums targets, adds surfaces, goes every way, and takes skinned morphs along") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    // Two targets of 30 each bring it down from 60.
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.2F, red);
+    require(fbe_entity_set_position(mesh, 0.0F, 60.0F, -3.0F, FBE_SPACE_WORLD));
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    add_lift(geometry, -30.0F);
+    add_lift(geometry, -30.0F);
+    const std::array<float, 2> both{ 1.0F, 1.0F };
+    require(fbe_morph_set_weights(mesh, both.data(), 2));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    require(fbe_entity_set_hidden(mesh, true));
+    // In X, by a weight below 0, from the side.
+    const std::uint64_t side = wall(scene.world, -3.0F, 0.2F, red);
+    require(fbe_entity_set_position(side, 50.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    const std::array<float, 12> over{ 50, 0, 0, 50, 0, 0, 50, 0, 0, 50, 0, 0 };
+    require(fbe_morph_add_target(fbe_mesh_geometry(side), 0, over.data(), nullptr, 4) == 0);
+    const std::array<float, 1> back{ -1.0F };
+    require(fbe_morph_set_weights(side, back.data(), 1));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    require(fbe_entity_set_hidden(side, true));
+    // In Z, by a weight below 0, from past the camera's far: a target that goes away, taken back.
+    require(fbe_camera_set_range(scene.camera, 0.1F, 100.0F));
+    const std::uint64_t far_off = wall(scene.world, -200.0F, 0.2F, red);
+    const std::array<float, 12> away{ 0, 0, -197, 0, 0, -197, 0, 0, -197, 0, 0, -197 };
+    require(fbe_morph_add_target(fbe_mesh_geometry(far_off), 0, away.data(), nullptr, 4) == 0);
+    require(fbe_morph_set_weights(far_off, back.data(), 1));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    require(fbe_entity_set_hidden(far_off, true));
+    // Its second surface's target, its first having none.
+    const std::uint64_t two = wall(scene.world, -3.0F, 0.2F, red);
+    require(fbe_entity_set_position(two, 0.0F, 50.0F, -3.0F, FBE_SPACE_WORLD));
+    const std::uint64_t two_geometry = fbe_mesh_geometry(two);
+    const std::int32_t second = fbe_geometry_add_surface(two_geometry);
+    std::array<fbe_vertex_t, 4> same{};
+    require(fbe_surface_vertices(two_geometry, 0, 0, same.data(), 4));
+    fbe_surface_add_vertices(two_geometry, second, same.data(), 4);
+    const std::array<std::uint32_t, 6> triangles{ 0, 1, 2, 0, 2, 3 };
+    fbe_surface_add_triangles(two_geometry, second, triangles.data(), 6);
+    const std::array<float, 12> down{ 0, -50, 0, 0, -50, 0, 0, -50, 0, 0, -50, 0 };
+    require(fbe_morph_add_target(two_geometry, second, down.data(), nullptr, 4) == 0);
+    const std::array<float, 1> one{ 1.0F };
+    require(fbe_morph_set_weights(two, one.data(), 1));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    require(fbe_entity_set_hidden(two, true));
+    // Skinned and morphed: its joints far above, its morph bringing it down.
+    const skinned_wall_t skinned = skinned_wall(scene.world, red, -3.0F, 0.2F);
+    require(fbe_entity_set_position(skinned.still, 0.0F, 50.0F, -3.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(skinned.moving, 0.0F, 50.0F, -3.0F, FBE_SPACE_WORLD));
+    all_on(skinned.geometry, 0, 1.0F);
+    add_lift(skinned.geometry, -50.0F);
+    require(fbe_morph_set_weights(skinned.mesh, one.data(), 1));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    fbe_skin_release(skinned.skin);
+    fbe_material_release(red);
 }

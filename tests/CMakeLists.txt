@@ -1376,8 +1376,9 @@ catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
 add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_anim_oom_tests)
-catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim."
-                     DL_PATHS "${fbengine_test_dll_paths}")
+catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths}"
+                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
 
 # A program of the whole of it, as a game would write it.
 if(FBENGINE_FB_TESTS)

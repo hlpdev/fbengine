@@ -317,10 +317,12 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
                             drawn.weight;
             morphed += float3(moved.normal[0], moved.normal[1], moved.normal[2]) * drawn.weight;
         }
-        // Targets that cancel a normal leave no way to face but the vertex's own.
-        if (dot(morphed, morphed) > smallestNormalSquared)
+        // Length 1 here, so what's between vertices is as a morph has it, unless targets cancel it
+        // or send it past what a float holds: that leaves no way to face but the vertex's own.
+        const float squared = dot(morphed, morphed);
+        if (squared > smallestNormalSquared && !isinf(squared))
         {
-            normal = morphed;
+            normal = morphed / sqrt(squared);
         }
     }
     // Skinned before its own matrix, in its mesh's space, as the palette is.

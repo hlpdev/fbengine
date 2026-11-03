@@ -80,13 +80,13 @@ std::span<const float> morph_weights(std::uint32_t mesh, float tween) {
     return between;
 }
 
-std::size_t strongest_targets(std::span<const float> weights, std::size_t targets,
+std::size_t strongest_targets(std::span<const float> weights, std::span<const std::uint8_t> moves,
                               std::array<drawn_target_t, drawn_targets>& drawn) {
     std::size_t count = 0;
-    const std::size_t last = std::min(weights.size(), targets);
+    const std::size_t last = std::min(weights.size(), moves.size());
     for (std::size_t t = 0; t < last; ++t) {
         const float strength = std::abs(weights[t]);
-        if (strength <= 0.0F) {
+        if (strength <= 0.0F || moves[t] == 0) {
             continue;
         }
         // Kept strongest first, each after any as strong, so the earlier stays.
