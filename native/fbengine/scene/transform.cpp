@@ -196,8 +196,9 @@ void mark_moved(std::uint32_t entity) {
     if (entities.moved[entity]) {
         return;
     }
-    // By a stack of its own, so no tree is too deep.
-    std::vector<std::uint32_t> stack{ entity };
+    // By a stack of its own, so no tree is too deep, kept for the next.
+    thread_local std::vector<std::uint32_t> stack;
+    stack.assign(1, entity);
     while (!stack.empty()) {
         const std::uint32_t at = stack.back();
         stack.pop_back();
