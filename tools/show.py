@@ -13,7 +13,7 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # The examples with a --watch.
-WATCHED = ["arcade", "menu", "controls", "proof/frame_timing_and_input",
+WATCHED = ["arcade", "menu", "controls", "proof/frame_timing_and_input", "cooked_game",
            "proof/sprites_over_a_scene", "proof/pixels_of_images_and_textures",
            "proof/display_modes", "proof/text_input", "proof/debug_ui_and_console",
            "proof/in_view_by_bounds", "proof/swept_collisions", "proof/picks", "proof/scene_trees",
@@ -22,7 +22,8 @@ WATCHED = ["arcade", "menu", "controls", "proof/frame_timing_and_input",
            "proof/cameras_and_viewports", "proof/camera_into_a_texture", "proof/bump",
            "proof/render_settings", "proof/gamma", "proof/streamed_and_positional_sound",
            "proof/seeded_random", "proof/ini_settings", "proof/procedural_map", "proof/room_files",
-           "cooked_game", "proof/textures_by_their_settings"]
+           "proof/textures_by_their_settings",
+           "proof/skinned_animation_with_bones_under_game_control"]
 
 
 def stop(process):

@@ -1633,6 +1633,43 @@ if(FBENGINE_FB_TESTS)
                    "${PROJECT_SOURCE_DIR}/examples/proof/streamed_and_positional_sound")
   set_tests_properties(proof.streamed_and_positional_sound PROPERTIES TIMEOUT 120
                        PASS_REGULAR_EXPRESSION "\n${fbengine_sound_proof_lines}\r?\n$")
+  # Section 6's item 13, by numbers and drawn into a texture, and its --watch with no window.
+  set(fbengine_skin_proof
+      "bound, its hand at 1.7, 1.3, 0"
+      "at frame 7.5, at 30 a second, its arm's 22.5 up"
+      "at its end, its hand at 0.3, 2.7, 0"
+      "half way through a crossfade, its arm's 15 up"
+      "after it, playing stand, its arm's -60 up"
+      "its face, before, at 0, 1.6, -1"
+      "its head turned, looking along 1, 0, 0, its face at 1, 1.6, 0"
+      "after an update, its head still looks along 1, 0, 0"
+      "its arm turned by the game: 45 up"
+      "posed again by an update: -60 up"
+      "released, it stays: 45 up"
+      "reclaimed, it's posed again: -60 up"
+      "drawn raised: red 255 at its hand, 0 where it was"
+      "drawn bound: red 255 at its hand, 0 where it went"
+      )
+  list(JOIN fbengine_skin_proof "?
+" fbengine_skin_proof_lines)
+  add_test(NAME proof.skinned_animation_with_bones_under_game_control
+           COMMAND "${FBENGINE_FB}" --color never run
+                   "${PROJECT_SOURCE_DIR}/examples/proof/skinned_animation_with_bones_under_game_control")
+  set_tests_properties(proof.skinned_animation_with_bones_under_game_control PROPERTIES TIMEOUT 120
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "
+${fbengine_skin_proof_lines}?
+$")
+  add_test(NAME proof.skinned_animation_with_bones_under_game_control_watch
+           COMMAND "${FBENGINE_FB}" --color never run
+                   "${PROJECT_SOURCE_DIR}/examples/proof/skinned_animation_with_bones_under_game_control"
+                   -- --watch --frames 300)
+  set_tests_properties(proof.skinned_animation_with_bones_under_game_control_watch PROPERTIES
+                       TIMEOUT 120
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "
+watched 300 frames?
+$")
   add_test(NAME proof.streamed_and_positional_sound_watch
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/proof/streamed_and_positional_sound"
@@ -1679,8 +1716,9 @@ catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
 add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_anim_oom_tests)
-catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim."
-                     DL_PATHS "${fbengine_test_dll_paths}")
+catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths}"
+                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
 
 # A program of the whole of it, as a game would write it.
 if(FBENGINE_FB_TESTS)
