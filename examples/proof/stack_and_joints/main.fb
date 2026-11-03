@@ -1,0 +1,330 @@
+// A stack and what joints do, each piece a body driving an entity: a pyramid that stands, a heavy
+// block held out on a chain and let go into it, a door a motor swings on its hinge, a lift a motor
+// runs up its rail with a crate on it, and a fan a motor turns. It prints how that went, twice over,
+// to show it goes the same. With --watch, a window plays it again and again, drawn on the canvas
+// until the scene draws; --frames, as a test runs it, keeps that headless.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import fbengine
+Import fbengine_physics
+
+// Steps at 60 a second before the block's let go, and between the door's and the lift's turns.
+Const HELD: Int32 = 180
+Const TURN: Int32 = 240
+Const LINKS: Int32 = 5
+Const LINK: Float = 1.2
+
+// A box and the entity its body drives.
+Class Piece
+    ReadOnly Field entity: Entity
+    ReadOnly Field body: Body
+    ReadOnly Field size: Vec3
+    ReadOnly Field start: Vec3
+    ReadOnly Field color: Color32
+
+    New(world: PhysicsWorld, size: Vec3, motion: Motion, start: Vec3, color: Color32)
+        entity = Pivot()
+        entity.SetPosition(start)
+        body = Body(world, Shape.Box(size), motion, entity)
+        Self.size = size
+        Self.start = start
+        Self.color = color
+    End New
+
+    Method Moved(): Float => Distance(entity.Position(Space.WORLD), start)
+End Class
+
+Function Added(pieces: Piece[], piece: Piece): Piece
+    pieces.Add(piece)
+    Return piece
+End Function
+
+// A pyramid six high at the middle of the floor.
+Function Pyramid(world: PhysicsWorld, pieces: Piece[]): Piece[]
+    Local stack: Piece[] = []
+    For layer = 0 To 5
+        For i = 0 To 5 - layer
+            Local at = Vec3((i As Float) - ((5 - layer) As Float) / 2, 0.5 + (layer As Float), 0)
+            Local warm = Color32((200 - layer * 15) As UInt8, (120 + i * 12) As UInt8, 70, 255)
+            Local box = Piece(world, Vec3(1, 1, 1), Motion.DYNAMIC, at, warm)
+            box.body.SetMass(50)
+            stack.Add(Added(pieces, box))
+        End For
+    End For
+    Return stack
+End Function
+
+Class Scene
+    ReadOnly Field stage: World
+    ReadOnly Field world: PhysicsWorld
+    ReadOnly Field pieces: Piece[] = []
+    ReadOnly Field stack: Piece[]
+    ReadOnly Field links: Piece[] = []
+    ReadOnly Field block: Piece
+    ReadOnly Field hold: Joint
+    ReadOnly Field door: Piece
+    ReadOnly Field hinge: Joint
+    ReadOnly Field lift: Piece
+    ReadOnly Field rail: Joint
+    ReadOnly Field crate: Piece
+    ReadOnly Field fan: Piece
+    Field steps: Int32 = 0
+
+    New()
+        stage = World()
+        World.SetCurrent(stage)
+        world = PhysicsWorld()
+        Local gray = Color32(90, 95, 105, 255)
+        Added(pieces, Piece(world, Vec3(30, 1, 30), Motion.STATIC, Vec3(0, -0.5, 0), gray))
+        stack = Pyramid(world, pieces)
+
+        // Links straight out from a hook, the block at their end, which a fixed joint holds there.
+        Local hook = Vec3(0, 8.5, 1)
+        Local steel = Color32(170, 175, 185, 255)
+        Local linkSize = Vec3(0.12, 0.12, LINK - 0.1)
+        Local above: Body? = Null
+        For i = 0 Until LINKS
+            Local along = (i As Float) * LINK
+            Local link = Piece(world, linkSize, Motion.DYNAMIC, hook + Vec3(0, 0, along + LINK / 2),
+                               steel)
+            Added(pieces, link)
+            link.body.SetMass(100)
+            Joint.Point(link.body, above, hook + Vec3(0, 0, along))
+            links.Add(link)
+            above = link.body
+        End For
+        Local end = hook + Vec3(0, 0, (LINKS As Float) * LINK)
+        block = Piece(world, Vec3(1.6, 1.6, 1.6), Motion.DYNAMIC, end + Vec3(0, 0, 0.8),
+                      Color32(210, 60, 50, 255))
+        Added(pieces, block)
+        block.body.SetMass(1000)
+        Joint.Point(block.body, above, end)
+        hold = Joint.Fixed(block.body, Null)
+
+        // A door on its left edge, a quarter turn either way.
+        door = Piece(world, Vec3(2, 3, 0.2), Motion.DYNAMIC, Vec3(9, 1.6, 0),
+                     Color32(70, 120, 200, 255))
+        Added(pieces, door)
+        door.body.SetMass(20)
+        hinge = Joint.Hinge(door.body, Null, Vec3(8, 1.6, 0), Vec3(0, 1, 0))
+        hinge.SetLimits(-Pi / 2, Pi / 2)
+
+        // A lift on a rail up from the floor, with a crate on it.
+        lift = Piece(world, Vec3(3, 0.5, 3), Motion.DYNAMIC, Vec3(-8, 0.5, 8),
+                     Color32(80, 170, 110, 255))
+        Added(pieces, lift)
+        lift.body.SetMass(100)
+        rail = Joint.Slider(lift.body, Null, Vec3(0, 1, 0))
+        rail.SetLimits(0, 4)
+        crate = Piece(world, Vec3(1, 1, 1), Motion.DYNAMIC, Vec3(-8, 1.25, 8),
+                      Color32(190, 150, 90, 255))
+        Added(pieces, crate)
+        crate.body.SetMass(50)
+
+        // A fan's blade, turning about its middle.
+        fan = Piece(world, Vec3(4, 0.4, 0.2), Motion.DYNAMIC, Vec3(-8, 3, 0),
+                    Color32(200, 190, 80, 255))
+        Added(pieces, fan)
+        Joint.Hinge(fan.body, Null, Vec3(-8, 3, 0), Vec3(0, 0, 1)).SetMotorSpeed(2, 500)
+        world.Optimize()
+    End New
+
+    // On by `seconds` of time, the motors told where to go next, and the block let go when it's due.
+    Method Update(seconds: Float64)
+        For step = 1 To world.Update(seconds)
+            Scheduled()
+            steps += 1
+        End For
+    End Method
+
+    Method Scheduled()
+        If steps % TURN == 0
+            Local out = (steps / TURN) % 2 == 0
+            hinge.SetMotorTarget(out ? Pi / 2 : -Pi / 2, 400)
+            door.body.Wake()
+            rail.SetMotorTarget(out ? 4.0 : 0.0, 6000)
+            lift.body.Wake()
+        End If
+        If steps == HELD
+            hold.SetEnabled(False)
+            block.body.Wake()
+        End If
+    End Method
+
+    Method Free()
+        world.Free()
+        stage.Free()
+    End Method
+End Class
+
+// Where every piece has been left and how fast it's going, to the bit.
+Function Left(scene: Scene): String
+    Local left = ""
+    For piece In scene.pieces
+        left += " {piece.entity.Position(Space.WORLD)} {piece.entity.Rotation(Space.WORLD)} {piece.body.Velocity()}"
+    End For
+    Return left
+End Function
+
+// One run, saying how it goes if `saying`, of where it ends.
+Function Run(saying: Bool): String
+    Local scene = Scene()
+    Defer scene.Free()
+    For frame = 1 To HELD
+        scene.Update(1.0 / 60)
+    End For
+    If saying
+        Local standing = True
+        For piece In scene.stack
+            standing = standing && piece.Moved() < 0.25 && !piece.body.Active()
+        End For
+        Print("the stack stands, at rest: {standing}")
+        Print("the block's held where it was: {scene.block.Moved() < 0.05}")
+        Print("the door's opened a quarter turn: {Abs(scene.hinge.Position() - Pi / 2) < 0.1}")
+        Print("the lift's 4 m up: {Abs(scene.rail.Position() - 4) < 0.15}")
+        Print("the crate's on it: {Abs(scene.crate.body.Position().y - scene.lift.body.Position().y - 0.75) < 0.05}")
+        Print("the fan's turning at its motor's speed: {Abs(scene.fan.body.AngularVelocity().z - 2) < 0.1}")
+    End If
+    For frame = 1 To 180
+        scene.Update(1.0 / 60)
+    End For
+    If saying
+        Local knocked = 0
+        For piece In scene.stack
+            If piece.Moved() > 0.5 Then knocked += 1
+        End For
+        Print("let go, the block's knocked at least five of the stack away: {knocked >= 5}")
+        Local together = True
+        For i = 1 Until LINKS
+            Local apart = Distance(scene.links[i].body.Position(),
+                                   scene.links[i - 1].body.Position())
+            together = together && Abs(apart - LINK) < 0.1
+        End For
+        Print("the chain's held together: {together}")
+        Print("the door's swung back: {Abs(scene.hinge.Position() + Pi / 2) < 0.2}")
+        Print("the lift's come back down: {scene.rail.Position() < 0.2}")
+        Local onBodies = True
+        For piece In scene.pieces
+            onBodies = onBodies && piece.entity.Position(Space.WORLD) == piece.body.Position()
+        End For
+        Print("every entity's on its body: {onBodies}")
+    End If
+    Return Left(scene)
+End Function
+
+// A face of a piece to draw, as far from the camera as it says.
+Class Face
+    ReadOnly Field far: Float
+    ReadOnly Field points: Vec2[]
+    ReadOnly Field color: Color32
+
+    New(far: Float, points: Vec2[], color: Color32)
+        Self.far = far
+        Self.points = points
+        Self.color = color
+    End New
+End Class
+
+Function Shaded(color: Color32, normal: Vec3): Color32
+    Local light = 0.55 + 0.45 * Max(Dot(normal, Normalize(Vec3(0.4, 0.8, 0.45))), 0.0)
+    Return Color32((color.r * light) As UInt8, (color.g * light) As UInt8,
+                   (color.b * light) As UInt8, 255)
+End Function
+
+// The faces of `piece` that face `camera`, unless a corner's behind it.
+Function FacesOf(piece: Piece, camera: Camera, faces: Face[])
+    Local eye = camera.Position(Space.WORLD)
+    Local at = piece.entity.Position(Space.WORLD)
+    Local turned = piece.entity.Rotation(Space.WORLD)
+    Local half = piece.size * 0.5
+    Local axes = [turned * Vec3(half.x, 0, 0), turned * Vec3(0, half.y, 0),
+                  turned * Vec3(0, 0, half.z)]
+    For axis = 0 To 2
+        Local across = axes[(axis + 1) % 3]
+        Local up = axes[(axis + 2) % 3]
+        For side = -1 To 1 Step 2
+            Local out = axes[axis] * (side As Float)
+            Local middle = at + out
+            If Dot(out, eye - middle) <= 0 Then Continue
+            Local points: Vec2[] = []
+            For corner In [-across - up, across - up, across + up, -across + up]
+                Local shown = camera.Project(middle + corner)
+                If shown != Null Then points.Add(Vec2(shown.x, shown.y))
+            End For
+            If points.Count == 4
+                faces.Add(Face(Distance(eye, middle), points, Shaded(piece.color, Normalize(out))))
+            End If
+        End For
+    End For
+End Function
+
+// What the camera sees, farthest first.
+Function Draw(canvas: Canvas, scene: Scene, camera: Camera)
+    Local faces: Face[] = []
+    For piece In scene.pieces
+        FacesOf(piece, camera, faces)
+    End For
+    faces.Sort(Function(a: Face, b: Face) => a.far > b.far)
+    For face In faces
+        canvas.SetColor(face.color)
+        canvas.DrawPolygon(face.points)
+    End For
+End Function
+
+// The scene again and again, until the window's closed or Escape's pressed, or for `count` frames
+// if it's not 0, a new one every 12 seconds, or every 15 frames of a walk, the camera going around.
+Function Watched(count: Int) Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    If count > 0 Then Window.SetHeadless(True)
+    Try Graphics(960, 600)
+    Local canvas = Screen.Canvas()
+    Local scene = Scene()
+    Local camera = Camera()
+    Local frames = 0
+    Local turning: Float = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (count == 0 || frames < count)
+        Local seconds = Frame.Delta()
+        scene.Update(seconds)
+        turning += (seconds * 0.1) As Float
+        camera.SetPosition(Vec3(Sin(turning) * 30, 12, Cos(turning) * 30))
+        camera.PointAt(Vec3(0, 3, 0))
+        canvas.SetColor(Color32(24, 26, 32, 255))
+        canvas.Clear()
+        Draw(canvas, scene, camera)
+        Flip()
+        frames += 1
+        If scene.steps >= 720 || (count > 0 && frames % 15 == 0)
+            scene.Free()
+            scene = Scene()
+            camera = Camera()
+        End If
+    End While
+    scene.Free()
+    Print("watched {frames} frames")
+    EndGraphics()
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function FramesAsked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames") ?? arguments.Count
+    If at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try
+        Try Watched(FramesAsked(arguments))
+    Catch error As GraphicsError
+        Print("couldn't draw it: {error.Message}")
+    End Try
+Else
+    Local first = Run(True)
+    Print("twice over, it all ends alike: {first == Run(False)}")
+End If
