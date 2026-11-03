@@ -1,12 +1,12 @@
 // Particles as a game's own code, over the engine's Sprites: a seeded emitter of sprites that rise,
 // slow, fade, turn, grow, and go, each frame, for smoke; none of it the engine's beyond the Sprite. It
-// prints how many there were, and where they went. It'll draw with --watch once the renderer draws
-// sprites.
+// prints how many there were, and where they went; with --watch, a window of its smoke.
 
 Import std.collections
 Import std.core
 Import std.math
 Import fbengine
+Import std.os
 
 // One particle: its sprite, how it moves, and how long it has.
 Class Particle
@@ -75,43 +75,117 @@ Class Emitter
     End Method
 End Class
 
-Local world = World()
-World.SetCurrent(world)
-Local emitter = Emitter(Vec3(0, 0, 0), 20.0, 1.5, 42)
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
 
-// 60 frames a second, for a second: 20 made, none gone.
-For frame = 1 To 60
-    emitter.Step(1.0 / 60.0)
-End For
-Print("after 1 second, {emitter.Made} made, {emitter.Alive.Count} alive")
-Local oldest = emitter.Alive[0]
-Print("the oldest's risen {oldest.Sprite.Position().y > 1.0}, its alpha {oldest.Sprite.Color().a < 0.5 && oldest.Sprite.Color().a > 0.2}")
-Local newest = emitter.Alive[emitter.Alive.Count - 1]
-Print("the newest's nearly at the start {newest.Sprite.Position().y < 0.2}, almost opaque {newest.Sprite.Color().a > 0.9}")
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
 
-// On to a steady state: as many made as gone, at rate times life.
-For frame = 1 To 240
-    emitter.Step(1.0 / 60.0)
-End For
-Print("after 5 seconds, {emitter.Made} made, about 30 alive {Abs(emitter.Alive.Count - 30) <= 1}")
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
 
-// A camera sees each as it's turned to face it.
-Local camera = Camera()
-camera.SetViewport(Rect(0, 0, 800, 600))
-camera.SetPosition(Vec3(0, 1, 10))
-Print("drawn by a camera, each of them {camera.InView(emitter.Alive[0].Sprite.Position())}")
+// A window's camera at `at`, looking at `looking`, over almost black.
+Function Watching(at: Vec3, looking: Vec3): Camera
+    Local camera = Camera()
+    camera.SetPosition(at)
+    camera.PointAt(looking)
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    Return camera
+End Function
 
-// Seeded, so the same every run: where the first of a new one goes.
-Local first = Emitter(Vec3(0, 0, 0), 60.0, 1.0, 42)
-first.Step(1.0 / 60.0)
-Local again = Emitter(Vec3(10, 0, 0), 60.0, 1.0, 42)
-again.Step(1.0 / 60.0)
-Print("the same seed goes the same way {first.Alive[0].Velocity == again.Alive[0].Velocity}")
+// A window of its smoke, going up from two emitters; or `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("particles on sprites: Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local left = Emitter(Vec3(-2, -1.5, -6), 20.0, 1.5, 42)
+    Local right = Emitter(Vec3(2, -1.5, -6), 40.0, 2.0, 7)
+    Watching(Vec3(0, 0, 0), Vec3(0, 0, -6))
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        Local seconds = frames > 0 ? 0.1 : Frame.Delta() As Float
+        time += seconds
+        left.Step(seconds)
+        right.Step(seconds)
+        RenderWorld()
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
 
-// Ended: its sprites freed with its particles.
-emitter.Rate = 0.0
-For frame = 1 To 120
-    emitter.Step(1.0 / 60.0)
-End For
-Print("with the rate at 0, after 2 seconds, {emitter.Alive.Count} alive")
-world.Free()
+Local arguments = Process.Arguments()
+If !arguments.Contains("--watch")
+    Local world = World()
+    World.SetCurrent(world)
+    Local emitter = Emitter(Vec3(0, 0, 0), 20.0, 1.5, 42)
+
+    // 60 frames a second, for a second: 20 made, none gone.
+    For frame = 1 To 60
+        emitter.Step(1.0 / 60.0)
+    End For
+    Print("after 1 second, {emitter.Made} made, {emitter.Alive.Count} alive")
+    Local oldest = emitter.Alive[0]
+    Print("the oldest's risen {oldest.Sprite.Position().y > 1.0}, its alpha {oldest.Sprite.Color().a < 0.5 && oldest.Sprite.Color().a > 0.2}")
+    Local newest = emitter.Alive[emitter.Alive.Count - 1]
+    Print("the newest's nearly at the start {newest.Sprite.Position().y < 0.2}, almost opaque {newest.Sprite.Color().a > 0.9}")
+
+    // On to a steady state: as many made as gone, at rate times life.
+    For frame = 1 To 240
+        emitter.Step(1.0 / 60.0)
+    End For
+    Print(
+        "after 5 seconds, {emitter.Made} made, about 30 alive {Abs(emitter.Alive.Count - 30) <= 1}")
+
+    // A camera sees each as it's turned to face it.
+    Local camera = Camera()
+    camera.SetViewport(Rect(0, 0, 800, 600))
+    camera.SetPosition(Vec3(0, 1, 10))
+    Print("drawn by a camera, each of them {camera.InView(emitter.Alive[0].Sprite.Position())}")
+
+    // Seeded, so the same every run: where the first of a new one goes.
+    Local first = Emitter(Vec3(0, 0, 0), 60.0, 1.0, 42)
+    first.Step(1.0 / 60.0)
+    Local again = Emitter(Vec3(10, 0, 0), 60.0, 1.0, 42)
+    again.Step(1.0 / 60.0)
+    Print("the same seed goes the same way {first.Alive[0].Velocity == again.Alive[0].Velocity}")
+
+    // Ended: its sprites freed with its particles.
+    emitter.Rate = 0.0
+    For frame = 1 To 120
+        emitter.Step(1.0 / 60.0)
+    End For
+    Print("with the rate at 0, after 2 seconds, {emitter.Alive.Count} alive")
+    world.Free()
+ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+Else
+    Try Watched(Asked(arguments), arguments)
+End If

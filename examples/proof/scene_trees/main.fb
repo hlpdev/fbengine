@@ -1,81 +1,186 @@
 // The scene as a tree: parents and children, what's inherited, names and finding by them, children
 // in the order they were made, copying a whole tree, hiding and showing, and every way of moving. It
-// prints what each did. It'll draw with --watch once the renderer draws meshes.
+// prints what each did; with --watch, a window of a turning room, its door swinging, a copy beside it,
+// a part hiding and showing.
 
 Import std.core
 Import std.math
 Import fbengine
+Import std.collections
+Import std.os
 
 Function Shown(at: Vec3): String => "{at.x:.2}, {at.y:.2}, {at.z:.2}"
 
-Local world = World()
-World.SetCurrent(world)
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
 
-// A room, its door, and the door's handle, by names.
-Local room = Pivot()
-room.SetName("room")
-room.SetPosition(Vec3(10, 0, 0))
-Local door = Mesh(Geometry.Cube(), room)
-door.SetName("door")
-door.SetPosition(Vec3(2, 0, 0))
-Local handle = Pivot(door)
-handle.SetName("handle")
-handle.SetPosition(Vec3(0, 1, 0))
-Local lamp = Pivot(room)
-lamp.SetName("lamp")
-Print("the room has {room.ChildCount()}, first {room.Child(0).Name()}, then {room.Child(1).Name()}")
-Print("the handle's parent {handle.Parent()?.Name() ?? "none"}, the room's {room.Parent()?.Name() ?? "none"}")
-Print(
-    "found under the room {room.Find("handle") == handle}, not there {room.Find("window") == Null}")
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
 
-// Where it is: its own place, and through its parents.
-Print("the handle's own place {Shown(handle.Position())}, in the world {Shown(handle.Position(Space.WORLD))}")
-room.Turn(0, Deg(90), 0)
-Print("the room turned a quarter: {Shown(handle.Position(Space.WORLD))}")
-room.SetRotation(0, 0, 0)
-room.SetScale(Vec3(2, 2, 2))
-Print("scaled twice: {Shown(handle.Position(Space.WORLD))}")
-room.SetScale(Vec3(1, 1, 1))
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
 
-// Between parents: where it is in the world kept, or not.
-handle.SetParent(lamp)
-Print("under the lamp, world kept: {Shown(handle.Position(Space.WORLD))}, own {Shown(handle.Position())}")
-handle.SetParent(door, False)
-Print("back, own kept: {Shown(handle.Position())}, world {Shown(handle.Position(Space.WORLD))}")
-handle.SetPosition(Vec3(0, 1, 0))
+// A material of no lighting.
+Function Painted(color: Color): Material
+    Local made = Material()
+    made.SetShading(Shading.UNLIT)
+    made.SetColor(color)
+    Return made
+End Function
 
-// Moving: along its own axes or the world's, by turning, and pointing at something.
-Local mover = Pivot()
-mover.Turn(0, Deg(90), 0)
-mover.Move(Vec3(0, 0, -1))
-Print("moved forward, turned a quarter: {Shown(mover.Position())}")
-mover.SetPosition(Vec3(0, 0, 0))
-mover.Translate(Vec3(0, 0, -1))
-Print("translated, whichever way it faces: {Shown(mover.Position())}")
-mover.SetPosition(Vec3(0, 0, 0))
-mover.PointAt(Vec3(0, 0, 5))
-Local forward = mover.Forward()
-Print("pointed at +Z, forward is {Shown(forward)}")
-Print("distance to the door {mover.DistanceTo(door):.2}")
+// A window's camera at `at`, looking at `looking`, over almost black.
+Function Watching(at: Vec3, looking: Vec3): Camera
+    Local camera = Camera()
+    camera.SetPosition(at)
+    camera.PointAt(looking)
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    Return camera
+End Function
 
-// A copy of a whole tree: its children and names, and its own after that.
-Local copy = room.Copy()
-copy.SetPosition(Vec3(-10, 0, 0))
-Print("a copy has {copy.ChildCount()}, its handle {copy.Find("handle") != Null}, not the same one {copy.Find("handle") != handle}")
-Print("in its order: {copy.Child(0).Name()}, {copy.Child(1).Name()}")
-Print("its handle in the world {Shown((copy.Find("handle") ?? copy).Position(Space.WORLD))}, the first's {Shown(handle.Position(Space.WORLD))}")
+// A window of a room of a door and its handle, a copy of it, each turning, a part of it blinking; or
+// `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("scene trees: Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local room = Mesh(Geometry.Cube())
+    room.SetName("room")
+    room.SetScale(Vec3(1, 0.1, 1))
+    room.SetMaterial(Painted(Color(0.2, 0.2, 0.3)))
+    Local door = Mesh(Geometry.Cube(), room)
+    door.SetName("door")
+    door.SetPosition(Vec3(0, 6, 0))
+    door.SetScale(Vec3(0.3, 5, 0.1))
+    door.SetMaterial(Painted(Color(0.7, 0.4, 0.2)))
+    Local handle = Mesh(Geometry.Sphere(), door)
+    handle.SetName("handle")
+    handle.SetPosition(Vec3(0.8, 0, 2))
+    handle.SetScale(Vec3(0.3, 0.1, 1))
+    handle.SetMaterial(Painted(Color(0.9, 0.9, 0.3)))
+    room.SetPosition(Vec3(-2.5, 0, -7))
+    Local copy = room.Copy()
+    copy.SetPosition(Vec3(2.5, 0, -7))
+    Local shut = copy.Find("door")
+    Watching(Vec3(0, 3, 0), Vec3(0, 0.5, -7))
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        Local seconds = frames > 0 ? 0.1 : Frame.Delta() As Float
+        time += seconds
+        room.SetRotation(Quat.FromEuler(0.0, time * 0.7, 0.0))
+        copy.SetRotation(Quat.FromEuler(0.0, -time * 0.5, 0.0))
+        door.SetRotation(Quat.FromEuler(0.0, Sin(time) * 0.8, 0.0))
+        If shut != Null
+            If (Floor(time) As Int) % 2 == 0 Then shut.Hide() Else shut.Show()
+        End If
+        RenderWorld()
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
 
-// Hiding: what's in it goes too, but keeps its own say for when it's shown.
-door.Hide()
-room.Hide()
-Print("room hidden: the room's showing {room.Showing()}, the lamp's {lamp.Showing()}, hidden itself {lamp.Hidden()}")
-room.Show()
-Print("room shown: the lamp's {lamp.Showing()}, the door's still {door.Showing()}")
-door.Show()
-Print("door shown: the handle's {handle.Showing()}, the copy's door was never hidden {(copy.Find("door") ?? copy).Showing()}")
+Local arguments = Process.Arguments()
+If !arguments.Contains("--watch")
+    Local world = World()
+    World.SetCurrent(world)
 
-// Freeing a tree frees what's in it, and the copy stays.
-Local handleOfCopy = copy.Find("handle")
-room.Free()
-Print("freed: the room {room.Freed()}, its handle {handle.Freed()}, the copy's {handleOfCopy?.Freed() ?? True}")
-world.Free()
+    // A room, its door, and the door's handle, by names.
+    Local room = Pivot()
+    room.SetName("room")
+    room.SetPosition(Vec3(10, 0, 0))
+    Local door = Mesh(Geometry.Cube(), room)
+    door.SetName("door")
+    door.SetPosition(Vec3(2, 0, 0))
+    Local handle = Pivot(door)
+    handle.SetName("handle")
+    handle.SetPosition(Vec3(0, 1, 0))
+    Local lamp = Pivot(room)
+    lamp.SetName("lamp")
+    Print("the room has {room.ChildCount()}, first {room.Child(0).Name()}, then {room.Child(1).Name()}")
+    Print("the handle's parent {handle.Parent()?.Name() ?? "none"}, the room's {room.Parent()?.Name() ?? "none"}")
+    Print(
+        "found under the room {room.Find("handle") == handle}, not there {room.Find("window") == Null}")
+
+    // Where it is: its own place, and through its parents.
+    Print("the handle's own place {Shown(handle.Position())}, in the world {Shown(handle.Position(Space.WORLD))}")
+    room.Turn(0, Deg(90), 0)
+    Print("the room turned a quarter: {Shown(handle.Position(Space.WORLD))}")
+    room.SetRotation(0, 0, 0)
+    room.SetScale(Vec3(2, 2, 2))
+    Print("scaled twice: {Shown(handle.Position(Space.WORLD))}")
+    room.SetScale(Vec3(1, 1, 1))
+
+    // Between parents: where it is in the world kept, or not.
+    handle.SetParent(lamp)
+    Print("under the lamp, world kept: {Shown(handle.Position(Space.WORLD))}, own {Shown(handle.Position())}")
+    handle.SetParent(door, False)
+    Print("back, own kept: {Shown(handle.Position())}, world {Shown(handle.Position(Space.WORLD))}")
+    handle.SetPosition(Vec3(0, 1, 0))
+
+    // Moving: along its own axes or the world's, by turning, and pointing at something.
+    Local mover = Pivot()
+    mover.Turn(0, Deg(90), 0)
+    mover.Move(Vec3(0, 0, -1))
+    Print("moved forward, turned a quarter: {Shown(mover.Position())}")
+    mover.SetPosition(Vec3(0, 0, 0))
+    mover.Translate(Vec3(0, 0, -1))
+    Print("translated, whichever way it faces: {Shown(mover.Position())}")
+    mover.SetPosition(Vec3(0, 0, 0))
+    mover.PointAt(Vec3(0, 0, 5))
+    Local forward = mover.Forward()
+    Print("pointed at +Z, forward is {Shown(forward)}")
+    Print("distance to the door {mover.DistanceTo(door):.2}")
+
+    // A copy of a whole tree: its children and names, and its own after that.
+    Local copy = room.Copy()
+    copy.SetPosition(Vec3(-10, 0, 0))
+    Print("a copy has {copy.ChildCount()}, its handle {copy.Find("handle") != Null}, not the same one {copy.Find("handle") != handle}")
+    Print("in its order: {copy.Child(0).Name()}, {copy.Child(1).Name()}")
+    Print("its handle in the world {Shown((copy.Find("handle") ?? copy).Position(Space.WORLD))}, the first's {Shown(handle.Position(Space.WORLD))}")
+
+    // Hiding: what's in it goes too, but keeps its own say for when it's shown.
+    door.Hide()
+    room.Hide()
+    Print("room hidden: the room's showing {room.Showing()}, the lamp's {lamp.Showing()}, hidden itself {lamp.Hidden()}")
+    room.Show()
+    Print("room shown: the lamp's {lamp.Showing()}, the door's still {door.Showing()}")
+    door.Show()
+    Print("door shown: the handle's {handle.Showing()}, the copy's door was never hidden {(copy.Find("door") ?? copy).Showing()}")
+
+    // Freeing a tree frees what's in it, and the copy stays.
+    Local handleOfCopy = copy.Find("handle")
+    room.Free()
+    Print("freed: the room {room.Freed()}, its handle {handle.Freed()}, the copy's {handleOfCopy?.Freed() ?? True}")
+    world.Free()
+ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+Else
+    Try Watched(Asked(arguments), arguments)
+End If

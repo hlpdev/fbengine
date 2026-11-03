@@ -1,11 +1,13 @@
 // Swept collisions: something moving is stopped or slid by what it hits, whatever the size of its
 // step: falling, walking into a wall, up a step, as a tall ellipsoid or a ball, against meshes, boxes,
-// and other movers, with what it touched reported. It prints where each ended up. It'll draw with
-// --watch once the renderer draws meshes.
+// and other movers, with what it touched reported. It prints where each ended up; with --watch, a
+// window of a ball walking round a room, sliding along its walls.
 
 Import std.core
 Import std.math
 Import fbengine
+Import std.collections
+Import std.os
 
 Const MOVER = 1
 Const LEVEL = 2
@@ -41,101 +43,203 @@ Function Mover(world: World, at: Vec3, wide: Float, tall: Float): Pivot
     Return mover
 End Function
 
-Local world = World()
-World.SetCurrent(world)
-world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
-Local floor = Floor()
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
 
-// Falling, by one step far past the floor: it isn't missed, and rests on its radius.
-Local ball = Mover(world, Vec3(0, 5, 0), 0.5, 0.5)
-ball.Translate(Vec3(0, -100, 0))
-world.Collide()
-Print("a ball falls 100 and rests at {Shown(ball.Position())}")
-Local touched = ball.Collisions()
-Print("it touched {touched.Count}, the floor {touched[0].Other == floor}, facing {Shown(touched[0].Normal)}, at {Shown(touched[0].Point)}")
-Print("what it hit has it too {floor.Collisions().Count == 1 && floor.Collided(MOVER) == ball}")
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
 
-// A tall one rests on its height, not its width: radii scaled up and down.
-Local tall = Mover(world, Vec3(4, 5, 4), 0.5, 1.5)
-tall.Translate(Vec3(0, -100, 0))
-world.Collide()
-Print("a tall one rests at {Shown(tall.Position())}")
-tall.Free()
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
 
-// Into a wall at an angle: it slides along it, losing what went into it.
-Local wall = Block(Vec3(0, 2, -5), Vec3(20, 4, 1))
-Local walker = Mover(world, Vec3(0, 1, 0), 0.5, 0.5)
-walker.Translate(Vec3(3, 0, -10))
-world.Collide()
-Print("sliding along a wall ends at {Shown(walker.Position())}")
-Print("touching the wall {walker.Collided(LEVEL) != Null}, facing {Shown(walker.Collisions()[0].Normal)}")
-walker.Free()
+// A material of no lighting.
+Function Painted(color: Color): Material
+    Local made = Material()
+    made.SetShading(Shading.UNLIT)
+    made.SetColor(color)
+    Return made
+End Function
 
-// The same with STOP: it stays where it touched.
-world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.STOP)
-Local stopper = Mover(world, Vec3(0, 1, 0), 0.5, 0.5)
-stopper.Translate(Vec3(3, 0, -10))
-world.Collide()
-Print("stopping at it ends at {Shown(stopper.Position())}")
-stopper.Free()
+// A window's camera at `at`, looking at `looking`, over almost black.
+Function Watching(at: Vec3, looking: Vec3): Camera
+    Local camera = Camera()
+    camera.SetPosition(at)
+    camera.PointAt(looking)
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    Return camera
+End Function
 
-// With no response, it goes through.
-world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.NONE)
-Local ghost = Mover(world, Vec3(0, 1, 0), 0.5, 0.5)
-ghost.Translate(Vec3(0, 0, -10))
-world.Collide()
-Print("with none it ends at {Shown(ghost.Position())}, touching {ghost.Collisions().Count}")
-ghost.Free()
-wall.Free()
+// A window of a ball sliding round a walled floor, what it's touching lit; or `frames` frames
+// offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("swept collisions: Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Local floor = Floor()
+    floor.SetMaterial(Painted(Color(0.15, 0.15, 0.2)))
+    Local walls = [Block(Vec3(0, 1, -10), Vec3(20, 2, 1)), Block(Vec3(0, 1, 10), Vec3(20, 2, 1)),
+                   Block(Vec3(-10, 1, 0), Vec3(1, 2, 20)), Block(Vec3(10, 1, 0), Vec3(1, 2, 20)),
+                   Block(Vec3(3, 1, 2), Vec3(6, 2, 2))]
+    Local plain = Painted(Color(0.4, 0.4, 0.5))
+    Local touching = Painted(Color(0.9, 0.5, 0.1))
+    For wall In walls
+        wall.SetMaterial(plain)
+    End For
+    Local mover = Mover(world, Vec3(0, 1, 0), 0.8, 0.8)
+    Local ball = Mesh(Geometry.Sphere(), mover)
+    ball.SetScale(Vec3(0.8, 0.8, 0.8))
+    ball.SetMaterial(Painted(Color(0.2, 0.7, 0.9)))
+    Watching(Vec3(0, 18, 14), Vec3(0, 0, 0))
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        Local seconds = frames > 0 ? 0.1 : Frame.Delta() As Float
+        time += seconds
+        mover.Translate(Vec3(Cos(time * 0.7), -0.2, Sin(time * 0.5)) * (12.0 * seconds))
+        world.Collide()
+        For wall In walls
+            wall.SetMaterial(plain)
+        End For
+        For hit In mover.Collisions()
+            Local wall = hit.Other As? Mesh
+            If wall != Null && !RefEquals(wall, floor) Then wall.SetMaterial(touching)
+        End For
+        RenderWorld()
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
 
-// A slope: gravity slides a ball down, but not with SLIDE_HORIZONTAL, which stays where it's put.
-Local ramp = Mesh(Geometry.Plane(2))
-ramp.SetScale(Vec3(10, 1, 10))
-ramp.SetPosition(Vec3(30, 0, 0))
-ramp.Turn(0, 0, Deg(20))
-ramp.SetCollisionGroup(LEVEL)
-world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
-Local slider = Mover(world, Vec3(30, 2, 0), 0.5, 0.5)
-slider.Translate(Vec3(0, -3, 0))
-world.Collide()
-Local sliddenX = slider.Position().x
-slider.Free()
-world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE_HORIZONTAL)
-Local stander = Mover(world, Vec3(30, 2, 0), 0.5, 0.5)
-stander.Translate(Vec3(0, -3, 0))
-world.Collide()
-Print("on a slope, sliding moves it across {Abs(sliddenX - 30.0) > 0.05}, standing {Abs(stander.Position().x - 30.0) < 0.01}")
-stander.Free()
-ramp.Free()
+Local arguments = Process.Arguments()
+If !arguments.Contains("--watch")
+    Local world = World()
+    World.SetCurrent(world)
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Local floor = Floor()
 
-// Up a step: one no higher than its step height it climbs; a higher one stops it.
-world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
-Local step = Block(Vec3(0, 0.15, -3), Vec3(4, 0.3, 2))
-Local climber = Mover(world, Vec3(0, 0.51, 0), 0.5, 0.5)
-climber.SetStepHeight(0.4)
-climber.Translate(Vec3(0, 0, -3))
-world.Collide()
-Print("over a step of 0.3 it reaches z {climber.Position().z:.2}, y {climber.Position().y:.2}")
-climber.SetStepHeight(0.1)
-climber.SetPosition(Vec3(0, 0.51, 0))
-climber.ResetCollisions()
-world.Collide()
-climber.Translate(Vec3(0, 0, -3))
-world.Collide()
-Print("with a step height of 0.1 it stops at z {climber.Position().z:.2}")
-climber.Free()
-step.Free()
+    // Falling, by one step far past the floor: it isn't missed, and rests on its radius.
+    Local ball = Mover(world, Vec3(0, 5, 0), 0.5, 0.5)
+    ball.Translate(Vec3(0, -100, 0))
+    world.Collide()
+    Print("a ball falls 100 and rests at {Shown(ball.Position())}")
+    Local touched = ball.Collisions()
+    Print("it touched {touched.Count}, the floor {touched[0].Other == floor}, facing {Shown(touched[0].Normal)}, at {Shown(touched[0].Point)}")
+    Print("what it hit has it too {floor.Collisions().Count == 1 && floor.Collided(MOVER) == ball}")
 
-// A mover against a mover: an ellipsoid, each by the other's radius.
-world.SetCollisionResponse(MOVER, OTHER, CollisionResponse.STOP)
-Local rock = Pivot()
-rock.SetCollisionGroup(OTHER)
-rock.SetCollisionRadius(1)
-rock.SetPosition(Vec3(0, 5, -5))
-ball.SetPosition(Vec3(0, 5, 0))
-ball.ResetCollisions()
-world.Collide()
-ball.Translate(Vec3(0, 0, -10))
-world.Collide()
-Print("a ball into a rock stops at z {ball.Position().z:.2}, having hit it {ball.Collided(OTHER) == rock}")
-world.Free()
+    // A tall one rests on its height, not its width: radii scaled up and down.
+    Local tall = Mover(world, Vec3(4, 5, 4), 0.5, 1.5)
+    tall.Translate(Vec3(0, -100, 0))
+    world.Collide()
+    Print("a tall one rests at {Shown(tall.Position())}")
+    tall.Free()
+
+    // Into a wall at an angle: it slides along it, losing what went into it.
+    Local wall = Block(Vec3(0, 2, -5), Vec3(20, 4, 1))
+    Local walker = Mover(world, Vec3(0, 1, 0), 0.5, 0.5)
+    walker.Translate(Vec3(3, 0, -10))
+    world.Collide()
+    Print("sliding along a wall ends at {Shown(walker.Position())}")
+    Print("touching the wall {walker.Collided(LEVEL) != Null}, facing {Shown(walker.Collisions()[0].Normal)}")
+    walker.Free()
+
+    // The same with STOP: it stays where it touched.
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.STOP)
+    Local stopper = Mover(world, Vec3(0, 1, 0), 0.5, 0.5)
+    stopper.Translate(Vec3(3, 0, -10))
+    world.Collide()
+    Print("stopping at it ends at {Shown(stopper.Position())}")
+    stopper.Free()
+
+    // With no response, it goes through.
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.NONE)
+    Local ghost = Mover(world, Vec3(0, 1, 0), 0.5, 0.5)
+    ghost.Translate(Vec3(0, 0, -10))
+    world.Collide()
+    Print("with none it ends at {Shown(ghost.Position())}, touching {ghost.Collisions().Count}")
+    ghost.Free()
+    wall.Free()
+
+    // A slope: gravity slides a ball down, but not with SLIDE_HORIZONTAL, which stays where it's put.
+    Local ramp = Mesh(Geometry.Plane(2))
+    ramp.SetScale(Vec3(10, 1, 10))
+    ramp.SetPosition(Vec3(30, 0, 0))
+    ramp.Turn(0, 0, Deg(20))
+    ramp.SetCollisionGroup(LEVEL)
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Local slider = Mover(world, Vec3(30, 2, 0), 0.5, 0.5)
+    slider.Translate(Vec3(0, -3, 0))
+    world.Collide()
+    Local sliddenX = slider.Position().x
+    slider.Free()
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE_HORIZONTAL)
+    Local stander = Mover(world, Vec3(30, 2, 0), 0.5, 0.5)
+    stander.Translate(Vec3(0, -3, 0))
+    world.Collide()
+    Print("on a slope, sliding moves it across {Abs(sliddenX - 30.0) > 0.05}, standing {Abs(stander.Position().x - 30.0) < 0.01}")
+    stander.Free()
+    ramp.Free()
+
+    // Up a step: one no higher than its step height it climbs; a higher one stops it.
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Local step = Block(Vec3(0, 0.15, -3), Vec3(4, 0.3, 2))
+    Local climber = Mover(world, Vec3(0, 0.51, 0), 0.5, 0.5)
+    climber.SetStepHeight(0.4)
+    climber.Translate(Vec3(0, 0, -3))
+    world.Collide()
+    Print("over a step of 0.3 it reaches z {climber.Position().z:.2}, y {climber.Position().y:.2}")
+    climber.SetStepHeight(0.1)
+    climber.SetPosition(Vec3(0, 0.51, 0))
+    climber.ResetCollisions()
+    world.Collide()
+    climber.Translate(Vec3(0, 0, -3))
+    world.Collide()
+    Print("with a step height of 0.1 it stops at z {climber.Position().z:.2}")
+    climber.Free()
+    step.Free()
+
+    // A mover against a mover: an ellipsoid, each by the other's radius.
+    world.SetCollisionResponse(MOVER, OTHER, CollisionResponse.STOP)
+    Local rock = Pivot()
+    rock.SetCollisionGroup(OTHER)
+    rock.SetCollisionRadius(1)
+    rock.SetPosition(Vec3(0, 5, -5))
+    ball.SetPosition(Vec3(0, 5, 0))
+    ball.ResetCollisions()
+    world.Collide()
+    ball.Translate(Vec3(0, 0, -10))
+    world.Collide()
+    Print("a ball into a rock stops at z {ball.Position().z:.2}, having hit it {ball.Collided(OTHER) == rock}")
+    world.Free()
+ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+Else
+    Try Watched(Asked(arguments), arguments)
+End If

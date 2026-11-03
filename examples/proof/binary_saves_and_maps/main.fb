@@ -1,10 +1,14 @@
 // A game's saves and maps, as binary files, through std: ints, floats, bools, and strings with their
-// lengths, in folders it makes, lists, and cleans up. It prints what it read back.
+// lengths, in folders it makes, lists, and cleans up. It prints what it read back; with --watch, a
+// window of a map read back from its file, each room lit by its light, saved again as it changes.
 
 Import std.collections
 Import std.core
 Import std.io
+Import std.math
 Import std.text
+Import std.os
+Import fbengine
 
 // A room of a map: a name, where it is, and which doors it has.
 Struct Room
@@ -101,4 +105,113 @@ Function Main() Throws IOError
     Print("its folder removed, it's there {Dir.Exists(folder)}")
 End Function
 
-Try Main()
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
+
+// A file's rooms.
+Function Loaded(path: Path): Room[] Throws IOError
+    Local file = Try File.Open(path)
+    Defer file.Close()
+    Local reader = BinaryReader(file)
+    Try reader.ReadText(4)
+    Try reader.ReadInt64()
+    Try reader.ReadFloat64()
+    Local rooms: Room[] = []
+    For i = 1 To Try reader.ReadInt32()
+        Local name = Try ReadName(reader)
+        Local x = Try reader.ReadInt32()
+        Local z = Try reader.ReadInt32()
+        Local light = Try reader.ReadFloat32()
+        Local doors = Try reader.ReadUInt8()
+        Local locked = Try reader.ReadBool()
+        rooms.Add(Room(name, x, z, light, doors, locked))
+    End For
+    Return rooms
+End Function
+
+// A window of a map saved and read back each second, its rooms' lights moving; or `frames` frames
+// offscreen, saving each.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("binary saves and maps: Escape ends it")
+    Frame.SetLimit(60)
+    Local folder = (Try Dir.Temp()) / "fbengine_proof_map"
+    Try Dir.CreateAll(folder)
+    Defer Try? Dir.RemoveAll(folder)
+    Local path = folder / "map.bin"
+    Local font = Font.BuiltIn(18.0)
+    Local rooms = [Room("lobby", 0, 0, 0.75, 3, False), Room("tunnel", 8, 4, 0.25, 2, True),
+                   Room("vault", 16, 8, 0.5, 1, True), Room("hall", 4, 10, 1.0, 4, False)]
+    Local read: Room[] = []
+    Local count = 0
+    Local waited: Float = 1.0
+    Local time: Float = 0.0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        Local seconds = frames > 0 ? 1.0 : Frame.Delta() As Float
+        time += seconds
+        waited += seconds
+        If waited >= 1.0
+            waited = 0.0
+            For i = 0 To rooms.Count - 1
+                Local room = rooms[i]
+                rooms[i] = Room(room.Name, room.X, room.Z, Fract(room.Light + 0.13), room.Doors,
+                                room.Locked)
+            End For
+            Try Saved(path, rooms, count As Int64, time As Float64)
+            read = Try Loaded(path)
+        End If
+        If Screen.Texture() == Null Then Continue
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(24, 28, 36, 255))
+        canvas.Clear()
+        For room In read
+            Local shade = (room.Light * 255.0) As UInt8
+            canvas.SetColor(Color32(shade, shade, room.Locked ? 60 : shade, 255))
+            canvas.DrawRect(room.X * 30 + 40, room.Z * 30 + 40, 100, 60)
+            canvas.SetColor(Color32(230, 232, 235, 255))
+            canvas.DrawText(font, "{room.Name}, {room.Doors} doors", room.X * 30 + 40,
+                            room.Z * 30 + 104)
+        End For
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
+
+Local arguments = Process.Arguments()
+If !arguments.Contains("--watch")
+    Try Main()
+ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+Else
+    Try Watched(Asked(arguments), arguments)
+End If

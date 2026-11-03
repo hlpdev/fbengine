@@ -1,5 +1,6 @@
 // A route over a map's waypoints, through std.algo.search's A*: the cheapest by distance, a door
-// closing that sends it the long way, no way at all, and a graph that grows. It prints each. The
+// closing that sends it the long way, no way at all, and a graph that grows. It prints each; with
+// --watch, a window of a grid whose walls move, its route found again each time. The
 // graph, and what a step costs, are the game's: here, waypoints by their indexes, so nothing holds
 // anything in a cycle.
 
@@ -7,6 +8,8 @@ Import std.algo.search
 Import std.collections
 Import std.core
 Import std.math
+Import std.os
+Import fbengine
 
 Class Graph
     Field Names: String[] = []
@@ -55,54 +58,141 @@ Class Graph
     End Method
 End Class
 
-// A lobby, and two ways to the vault: short through a door, long round by a hall.
-Local map = Graph()
-Local lobby = map.Add("lobby", 0.0, 0.0)
-Local door = map.Add("door", 4.0, 0.0)
-Local vault = map.Add("vault", 8.0, 0.0)
-Local hall = map.Add("hall", 0.0, 6.0)
-Local bend = map.Add("bend", 8.0, 6.0)
-map.Link(lobby, door)
-map.Link(door, vault)
-map.Link(lobby, hall)
-map.Link(hall, bend)
-map.Link(bend, vault)
-Print(map.Route(lobby, vault))
-Print("the door closed: {map.Route(lobby, vault, [door])}")
-Print("both closed: {map.Route(lobby, vault, [door, hall])}")
-Print("to itself: {map.Route(lobby, lobby)}")
-
-// A room with no link has no way; linked, it has one.
-Local attic = map.Add("attic", 8.0, 9.0)
-Print("to a room with no link: {map.Route(lobby, attic)}")
-map.Link(bend, attic)
-Print("linked: {map.Route(lobby, attic)}")
-
-// A diagonal's shorter than two sides, so it takes it.
-Local corner = map.Add("corner", 3.0, 0.0)
-Local top = map.Add("top", 3.0, 4.0)
-Local start = map.Add("start", 0.0, 0.0)
-map.Link(start, corner)
-map.Link(corner, top)
-map.Link(start, top)
-Print(map.Route(start, top))
-
-// A grid of 40 by 40, its middle row walled but for its end: the long way's found.
-Local grid = Graph()
-For y = 0 To 39
-    For x = 0 To 39
-        grid.Add("{x},{y}", x As Float32, y As Float32)
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
     End For
-End For
-For y = 0 To 39
-    For x = 0 To 39
-        If x < 39 Then grid.Link(y * 40 + x, y * 40 + x + 1)
-        If y < 39 Then grid.Link(y * 40 + x, (y + 1) * 40 + x)
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
     End For
-End For
-Local walled: Int[] = []
-For x = 0 To 38
-    walled.Add(20 * 40 + x)
-End For
-Print("over the grid, straight: {grid.Path(0, 39 * 40, [])?.Cost ?? -1.0}")
-Print("over the grid, walled but for its end: {grid.Path(0, 39 * 40, walled)?.Cost ?? -1.0}")
+    Return False
+End Function
+
+// A window of a grid, a wall moving across it, and the way through; or `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("pathfinding over a graph: Escape ends it")
+    Frame.SetLimit(60)
+    Local grid = Graph()
+    For y = 0 To 17
+        For x = 0 To 31
+            grid.Add("", x As Float32, y As Float32)
+        End For
+    End For
+    For y = 0 To 17
+        For x = 0 To 31
+            If x < 31 Then grid.Link(y * 32 + x, y * 32 + x + 1)
+            If y < 17 Then grid.Link(y * 32 + x, (y + 1) * 32 + x)
+        End For
+    End For
+    Local count = 0
+    Local time: Float = 0.0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        time += frames > 0 ? 0.25 : Frame.Delta() As Float
+        // A wall across the middle, its gap going up and down.
+        Local gap = ((Sin(time) + 1.0) * 8.0) As Int
+        Local closed: Int[] = []
+        For y = 0 To 17
+            If y != gap Then closed.Add(y * 32 + 16)
+        End For
+        Local path = grid.Path(0, 17 * 32 + 31, closed)
+        If Screen.Texture() == Null Then Continue
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(24, 28, 36, 255))
+        canvas.Clear()
+        canvas.SetColor(Color32(200, 60, 60, 255))
+        For each In closed
+            canvas.DrawRect((each % 32) * 25 + 1, (each / 32) * 25 + 1, 23, 23)
+        End For
+        canvas.SetColor(Color32(80, 200, 120, 255))
+        If path != Null
+            For each In path.Nodes
+                canvas.DrawRect((each % 32) * 25 + 6, (each / 32) * 25 + 6, 13, 13)
+            End For
+        End If
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
+
+Local arguments = Process.Arguments()
+If !arguments.Contains("--watch")
+    // A lobby, and two ways to the vault: short through a door, long round by a hall.
+    Local map = Graph()
+    Local lobby = map.Add("lobby", 0.0, 0.0)
+    Local door = map.Add("door", 4.0, 0.0)
+    Local vault = map.Add("vault", 8.0, 0.0)
+    Local hall = map.Add("hall", 0.0, 6.0)
+    Local bend = map.Add("bend", 8.0, 6.0)
+    map.Link(lobby, door)
+    map.Link(door, vault)
+    map.Link(lobby, hall)
+    map.Link(hall, bend)
+    map.Link(bend, vault)
+    Print(map.Route(lobby, vault))
+    Print("the door closed: {map.Route(lobby, vault, [door])}")
+    Print("both closed: {map.Route(lobby, vault, [door, hall])}")
+    Print("to itself: {map.Route(lobby, lobby)}")
+
+    // A room with no link has no way; linked, it has one.
+    Local attic = map.Add("attic", 8.0, 9.0)
+    Print("to a room with no link: {map.Route(lobby, attic)}")
+    map.Link(bend, attic)
+    Print("linked: {map.Route(lobby, attic)}")
+
+    // A diagonal's shorter than two sides, so it takes it.
+    Local corner = map.Add("corner", 3.0, 0.0)
+    Local top = map.Add("top", 3.0, 4.0)
+    Local start = map.Add("start", 0.0, 0.0)
+    map.Link(start, corner)
+    map.Link(corner, top)
+    map.Link(start, top)
+    Print(map.Route(start, top))
+
+    // A grid of 40 by 40, its middle row walled but for its end: the long way's found.
+    Local grid = Graph()
+    For y = 0 To 39
+        For x = 0 To 39
+            grid.Add("{x},{y}", x As Float32, y As Float32)
+        End For
+    End For
+    For y = 0 To 39
+        For x = 0 To 39
+            If x < 39 Then grid.Link(y * 40 + x, y * 40 + x + 1)
+            If y < 39 Then grid.Link(y * 40 + x, (y + 1) * 40 + x)
+        End For
+    End For
+    Local walled: Int[] = []
+    For x = 0 To 38
+        walled.Add(20 * 40 + x)
+    End For
+    Print("over the grid, straight: {grid.Path(0, 39 * 40, [])?.Cost ?? -1.0}")
+    Print("over the grid, walled but for its end: {grid.Path(0, 39 * 40, walled)?.Cost ?? -1.0}")
+ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+Else
+    Try Watched(Asked(arguments), arguments)
+End If

@@ -1,55 +1,161 @@
 // What a camera might see: an entity by the 8 corners of its bounds, a point, and a box, against the
 // camera's 6 planes, near and far included, with nothing hiding anything; and, apart from that,
-// whether one thing has a line of sight to another. It prints each. It'll draw with --watch once the
-// renderer draws meshes.
+// whether one thing has a line of sight to another. It prints each; with --watch, a window of cubes
+// orbiting a watching camera, seen from above, green while they're in its view.
 
 Import std.core
 Import std.math
 Import fbengine
+Import std.collections
+Import std.os
 
-Local world = World()
-World.SetCurrent(world)
-// Looking down -Z, seeing from 1 to 50.
-Local camera = Camera()
-camera.SetViewport(Rect(0, 0, 800, 600))
-camera.SetFieldOfView(Deg(90))
-camera.SetRange(1, 50)
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
 
-// Points: in front, behind, and at each end of its range.
-Print("in front {camera.InView(Vec3(0, 0, -10))}, behind {camera.InView(Vec3(0, 0, 10))}")
-Print("at its near end {camera.InView(Vec3(0, 0, -1))}, nearer {camera.InView(Vec3(0, 0, -0.5))}")
-Print("at its far end {camera.InView(Vec3(0, 0, -50))}, farther {camera.InView(Vec3(0, 0, -51))}")
-Print("past its top {camera.InView(Vec3(0, 11, -10))}, inside it {camera.InView(Vec3(0, 9, -10))}")
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
 
-// A box: whole, part of it in, and none of it.
-Print("a box inside {camera.InView(AABB(Vec3(-1, -1, -11), Vec3(1, 1, -9)))}")
-Print("a box half out {camera.InView(AABB(Vec3(10, -1, -11), Vec3(30, 1, -9)))}")
-Print("a box out {camera.InView(AABB(Vec3(30, -1, -11), Vec3(40, 1, -9)))}")
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
 
-// An entity, by its bounds: its middle out of view, but a corner in, counts.
-Local big = Mesh(Geometry.Cube())
-big.SetScale(Vec3(10, 1, 1))
-big.SetPosition(Vec3(18, 0, -10))
-Local bounds = big.Bounds()
-Print("its bounds are {bounds.Min.x:.0} to {bounds.Max.x:.0} across")
-Print("a long mesh with only its end in view {camera.InView(big)}, its middle {camera.InView(big.Position())}")
-big.SetPosition(Vec3(40, 0, -10))
-Print("moved out {camera.InView(big)}")
-// Something with no mesh goes by its place.
-Local place = Pivot()
-place.SetPosition(Vec3(0, 0, -10))
-Print("a pivot in view {camera.InView(place)}")
+// A material of no lighting.
+Function Painted(color: Color): Material
+    Local made = Material()
+    made.SetShading(Shading.UNLIT)
+    made.SetColor(color)
+    Return made
+End Function
 
-// Nothing hides anything: a wall in front of it changes nothing.
-Local wall = Mesh(Geometry.Plane())
-wall.SetScale(Vec3(20, 1, 20))
-wall.Turn(Deg(90), 0, 0)
-wall.SetPosition(Vec3(0, 0, -5))
-wall.SetBlocksSight(True)
-Print("behind a wall {camera.InView(place)}")
+// A window's camera at `at`, looking at `looking`, over almost black.
+Function Watching(at: Vec3, looking: Vec3): Camera
+    Local camera = Camera()
+    camera.SetPosition(at)
+    camera.PointAt(looking)
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    Return camera
+End Function
 
-// Sight is the other question: that wall blocks it, until it doesn't.
-Print("a line of sight through the wall {camera.CanSee(place)}")
-wall.SetBlocksSight(False)
-Print("with it not blocking {camera.CanSee(place)}")
-world.Free()
+// A window from above of cubes going round a camera, green while it might see them; or `frames` frames
+// offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("in view by bounds: Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local watching = Camera()
+    watching.SetViewport(Rect(0, 0, 800, 600))
+    watching.SetFieldOfView(Deg(60))
+    watching.SetRange(1, 12)
+    watching.Hide()
+    Local marker = Mesh(Geometry.Cone())
+    marker.SetRotation(Quat.FromEuler(Deg(-90), 0.0, 0.0))
+    marker.SetMaterial(Painted(Color(1, 1, 1)))
+    Local inView = Painted(Color(0.2, 0.9, 0.3))
+    Local outOf = Painted(Color(0.7, 0.15, 0.15))
+    Local cubes: Mesh[] = []
+    For i = 0 To 11
+        Local cube = Mesh(Geometry.Cube())
+        cube.SetScale(Vec3(0.6, 0.6, 0.6))
+        cubes.Add(cube)
+    End For
+    Watching(Vec3(0, 25, 0.01), Vec3(0, 0, 0))
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        Local seconds = frames > 0 ? 0.1 : Frame.Delta() As Float
+        time += seconds
+        For i = 0 To cubes.Count - 1
+            Local turn = time * 0.4 + (i As Float) * Tau / 12.0
+            Local reach = 5.0 + ((i % 3) As Float) * 4.0
+            cubes[i].SetPosition(Vec3(Cos(turn) * reach, 0, Sin(turn) * reach))
+            watching.Show()
+            cubes[i].SetMaterial(watching.InView(cubes[i]) ? inView : outOf)
+            watching.Hide()
+        End For
+        RenderWorld()
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
+
+Local arguments = Process.Arguments()
+If !arguments.Contains("--watch")
+    Local world = World()
+    World.SetCurrent(world)
+    // Looking down -Z, seeing from 1 to 50.
+    Local camera = Camera()
+    camera.SetViewport(Rect(0, 0, 800, 600))
+    camera.SetFieldOfView(Deg(90))
+    camera.SetRange(1, 50)
+
+    // Points: in front, behind, and at each end of its range.
+    Print("in front {camera.InView(Vec3(0, 0, -10))}, behind {camera.InView(Vec3(0, 0, 10))}")
+    Print(
+        "at its near end {camera.InView(Vec3(0, 0, -1))}, nearer {camera.InView(Vec3(0, 0, -0.5))}")
+    Print(
+        "at its far end {camera.InView(Vec3(0, 0, -50))}, farther {camera.InView(Vec3(0, 0, -51))}")
+    Print("past its top {camera.InView(Vec3(0, 11, -10))}, inside it {camera.InView(Vec3(0, 9, -10))}")
+
+    // A box: whole, part of it in, and none of it.
+    Print("a box inside {camera.InView(AABB(Vec3(-1, -1, -11), Vec3(1, 1, -9)))}")
+    Print("a box half out {camera.InView(AABB(Vec3(10, -1, -11), Vec3(30, 1, -9)))}")
+    Print("a box out {camera.InView(AABB(Vec3(30, -1, -11), Vec3(40, 1, -9)))}")
+
+    // An entity, by its bounds: its middle out of view, but a corner in, counts.
+    Local big = Mesh(Geometry.Cube())
+    big.SetScale(Vec3(10, 1, 1))
+    big.SetPosition(Vec3(18, 0, -10))
+    Local bounds = big.Bounds()
+    Print("its bounds are {bounds.Min.x:.0} to {bounds.Max.x:.0} across")
+    Print("a long mesh with only its end in view {camera.InView(big)}, its middle {camera.InView(big.Position())}")
+    big.SetPosition(Vec3(40, 0, -10))
+    Print("moved out {camera.InView(big)}")
+    // Something with no mesh goes by its place.
+    Local place = Pivot()
+    place.SetPosition(Vec3(0, 0, -10))
+    Print("a pivot in view {camera.InView(place)}")
+
+    // Nothing hides anything: a wall in front of it changes nothing.
+    Local wall = Mesh(Geometry.Plane())
+    wall.SetScale(Vec3(20, 1, 20))
+    wall.Turn(Deg(90), 0, 0)
+    wall.SetPosition(Vec3(0, 0, -5))
+    wall.SetBlocksSight(True)
+    Print("behind a wall {camera.InView(place)}")
+
+    // Sight is the other question: that wall blocks it, until it doesn't.
+    Print("a line of sight through the wall {camera.CanSee(place)}")
+    wall.SetBlocksSight(False)
+    Print("with it not blocking {camera.CanSee(place)}")
+    world.Free()
+ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+Else
+    Try Watched(Asked(arguments), arguments)
+End If

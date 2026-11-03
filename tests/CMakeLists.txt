@@ -252,6 +252,11 @@ if(FBENGINE_FB_TESTS)
     fbengine_add_watched(proof.${name}_escape "${folder}" "--press-at;1" "\nwatched 2 frames\r?\n$")
     fbengine_add_watched(proof.${name}_close "${folder}" "--close-at;1" "\nwatched 2 frames\r?\n$")
   endfunction()
+  function(fbengine_add_drawn_proof name)
+    fbengine_add_proof(${name} ${ARGN})
+    set_tests_properties(proof.${name}_watch PROPERTIES
+                         PASS_REGULAR_EXPRESSION "\ndrew True\r?\nwatched 40 frames\r?\n$")
+  endfunction()
   fbengine_add_proof(frame_timing_and_input
                      "after a sleep of 20 ms, the clock's gone 15 or more True"
                      "Flip[(]False[)] waits False"
@@ -274,7 +279,8 @@ if(FBENGINE_FB_TESTS)
                      "focused False then True")
   fbengine_add_proof(sprites_over_a_scene
                      "the scene's middle is at 160, 90"
-                     "a corner of the scene: [(]120, 130, 150, 255[)]"
+                     "the mesh's middle, and off it: [(]120, 130, 150, 255[)], behind"
+                     "2D over the mesh, and the mesh beside it: [(]10, 200, 30, 255[)], [(]120, 130, 150, 255[)]"
                      "a frame's block, and what's keyed: [(]255, 200, 80, 255[)], behind"
                      "the last frame's: [(]255, 200, 80, 255[)], behind"
                      "scaled from its handle: [(]255, 200, 80, 255[)], [(]255, 200, 80, 255[)], behind"
@@ -360,117 +366,221 @@ if(FBENGINE_FB_TESTS)
                          PASS_REGULAR_EXPRESSION "\nno GPU here\r?\n$" TIMEOUT 120)
   endforeach()
 
-  # Those with no --watch until the renderer draws meshes and sprites, or that have nothing to draw.
-  fbengine_add_proof_of_numbers(swept_collisions
-                                "a ball falls 100 and rests at 0[.]00, 0[.]50, 0[.]00"
-                                "it touched 1, the floor True, facing 0[.]00, 1[.]00, 0[.]00, at 0[.]00, 0[.]00, 0[.]00"
-                                "what it hit has it too True"
-                                "a tall one rests at 4[.]00, 1[.]50, 4[.]00"
-                                "sliding along a wall ends at 3[.]00, 1[.]00, -4[.]00"
-                                "touching the wall True, facing 0[.]00, 0[.]00, 1[.]00"
-                                "stopping at it ends at 1[.]20, 1[.]00, -4[.]00"
-                                "with none it ends at 0[.]00, 1[.]00, -10[.]00, touching 0"
-                                "on a slope, sliding moves it across True, standing True"
-                                "over a step of 0[.]3 it reaches z -3[.]00, y 0[.]80"
-                                "with a step height of 0[.]1 it stops at z -1[.]55"
-                                "a ball into a rock stops at z -3[.]50, having hit it True")
-  fbengine_add_proof_of_numbers(picks
-                                "down onto the floor: floor at 1[.]00, 0[.]00, 3[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
-                                "down onto the ball: ball at 2[.]00, 1[.]50, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]35 along"
-                                "down onto the crate: crate at -3[.]00, 2[.]00, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]30 along"
-                                "the floor's surface True, a triangle True"
-                                "the ball's surface True"
-                                "through what isn't pickable: floor at 0[.]00, 0[.]00, 3[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
-                                "from under the floor: nothing"
-                                "ignoring the ball: floor at 2[.]00, 0[.]00, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
-                                "with the ball hidden: floor at 2[.]00, 0[.]00, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
-                                "a line beside the ball: nothing"
-                                "a line of radius 0[.]5 beside it: ball at 2[.]40, 1[.]30, 0[.]00, facing 0[.]80, 0[.]60, 0[.]00, 0[.]97 along"
-                                "ahead of something: ball at 2[.]00, 1[.]00, 0[.]50, facing 0[.]00, 0[.]00, 1[.]00, 0[.]45 along"
-                                "ahead, not far enough: nothing"
-                                "the camera's middle: ball at 2[.]00, 1[.]00, 0[.]50, facing 0[.]00, 0[.]00, 1[.]00, 0[.]01 along"
-                                "high in its view: nothing")
-  fbengine_add_proof_of_numbers(in_view_by_bounds
-                                "in front True, behind False"
-                                "at its near end True, nearer False"
-                                "at its far end True, farther False"
-                                "past its top False, inside it True"
-                                "a box inside True"
-                                "a box half out True"
-                                "a box out False"
-                                "its bounds are 8 to 28 across"
-                                "a long mesh with only its end in view True, its middle False"
-                                "moved out False"
-                                "a pivot in view True"
-                                "behind a wall True"
-                                "a line of sight through the wall False"
-                                "with it not blocking True")
-  fbengine_add_proof_of_numbers(scene_trees
-                                "the room has 2, first door, then lamp"
-                                "the handle's parent door, the room's none"
-                                "found under the room True, not there True"
-                                "the handle's own place 0[.]00, 1[.]00, 0[.]00, in the world 12[.]00, 1[.]00, 0[.]00"
-                                "the room turned a quarter: 10[.]00, 1[.]00, -2[.]00"
-                                "scaled twice: 14[.]00, 2[.]00, 0[.]00"
-                                "under the lamp, world kept: 12[.]00, 1[.]00, 0[.]00, own 2[.]00, 1[.]00, 0[.]00"
-                                "back, own kept: 2[.]00, 1[.]00, 0[.]00, world 14[.]00, 1[.]00, 0[.]00"
-                                "moved forward, turned a quarter: -1[.]00, 0[.]00, 0[.]00"
-                                "translated, whichever way it faces: 0[.]00, 0[.]00, -1[.]00"
-                                "pointed at [+]Z, forward is -?0[.]00, -?0[.]00, 1[.]00"
-                                "distance to the door 12[.]00"
-                                "a copy has 2, its handle True, not the same one True"
-                                "in its order: door, lamp"
-                                "its handle in the world -8[.]00, 1[.]00, 0[.]00, the first's 12[.]00, 1[.]00, 0[.]00"
-                                "room hidden: the room's showing False, the lamp's False, hidden itself False"
-                                "room shown: the lamp's True, the door's still False"
-                                "door shown: the handle's True, the copy's door was never hidden True"
-                                "freed: the room True, its handle True, the copy's False")
-  fbengine_add_proof_of_numbers(meshes_in_code
-                                "1 surface, 4 vertices, 2 triangles"
-                                "its second UVs [(]0[.]5, 0[.]75[)], first [(]0, 1[)]"
-                                "its color's alpha 0[.]5"
-                                "made again 0[.]00, 1[.]00, 0[.]00"
-                                "one corner lifted, it leans True"
-                                "bounds 0[.]00, 0[.]00, -2[.]00 to 2[.]00, 0[.]00, 0[.]00"
-                                "moved: 1[.]00, 0[.]00, -2[.]00"
-                                "scaled: 6[.]00, 0[.]00, 0[.]00"
-                                "turned, it's 2[.]00 across"
-                                "fitted: -1[.]00, 0[.]00, -1[.]00 to 1[.]00, 0[.]00, 1[.]00"
-                                "picked from above True, flipped False, from below True"
-                                "a cube's 24 vertices, joined 2 surfaces"
-                                "the clone moved, the first didn't True"
-                                "its cull box 100, bounds 1")
-  fbengine_add_proof_of_numbers(binary_saves_and_maps
-                                "the file's 75 bytes"
-                                "its magic MAP1"
-                                "seed 1234567890123, time 61[.]5"
-                                "2 rooms"
-                                "lobby at 0, 0, light 0[.]75, doors 3, locked False"
-                                "tunnel, .+ at -8, 16, light 0[.]25, doors 2, locked True"
-                                "reading past the end throws True"
-                                "its first bytes 77, 65, 80, 49"
-                                "the seed's low byte 203, as 1234567890123 % 256 is 203"
-                                "in its folder: options[.]bin, slot 1/"
-                                "deleted, it's there False"
-                                "its folder removed, it's there False")
-  fbengine_add_proof_of_numbers(pathfinding_over_a_graph
-                                "lobby door vault, 8[.]00 long"
-                                "the door closed: lobby hall bend vault, 20[.]00 long"
-                                "both closed: no way"
-                                "to itself: lobby, 0[.]00 long"
-                                "to a room with no link: no way"
-                                "linked: lobby hall bend attic, 17[.]00 long"
-                                "start top, 5[.]00 long"
-                                "over the grid, straight: 39"
-                                "over the grid, walled but for its end: 117")
-  fbengine_add_proof_of_numbers(particles_on_sprites
-                                "after 1 second, 20 made, 20 alive"
-                                "the oldest's risen True, its alpha True"
-                                "the newest's nearly at the start True, almost opaque True"
-                                "after 5 seconds, 100 made, about 30 alive True"
-                                "drawn by a camera, each of them True"
-                                "the same seed goes the same way True"
-                                "with the rate at 0, after 2 seconds, 0 alive")
+  # Those that draw: what each prints, and its --watch, which has to have drawn something.
+  fbengine_add_drawn_proof(swept_collisions
+                           "a ball falls 100 and rests at 0[.]00, 0[.]50, 0[.]00"
+                           "it touched 1, the floor True, facing 0[.]00, 1[.]00, 0[.]00, at 0[.]00, 0[.]00, 0[.]00"
+                           "what it hit has it too True"
+                           "a tall one rests at 4[.]00, 1[.]50, 4[.]00"
+                           "sliding along a wall ends at 3[.]00, 1[.]00, -4[.]00"
+                           "touching the wall True, facing 0[.]00, 0[.]00, 1[.]00"
+                           "stopping at it ends at 1[.]20, 1[.]00, -4[.]00"
+                           "with none it ends at 0[.]00, 1[.]00, -10[.]00, touching 0"
+                           "on a slope, sliding moves it across True, standing True"
+                           "over a step of 0[.]3 it reaches z -3[.]00, y 0[.]80"
+                           "with a step height of 0[.]1 it stops at z -1[.]55"
+                           "a ball into a rock stops at z -3[.]50, having hit it True")
+  fbengine_add_drawn_proof(picks
+                           "down onto the floor: floor at 1[.]00, 0[.]00, 3[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
+                           "down onto the ball: ball at 2[.]00, 1[.]50, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]35 along"
+                           "down onto the crate: crate at -3[.]00, 2[.]00, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]30 along"
+                           "the floor's surface True, a triangle True"
+                           "the ball's surface True"
+                           "through what isn't pickable: floor at 0[.]00, 0[.]00, 3[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
+                           "from under the floor: nothing"
+                           "ignoring the ball: floor at 2[.]00, 0[.]00, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
+                           "with the ball hidden: floor at 2[.]00, 0[.]00, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
+                           "a line beside the ball: nothing"
+                           "a line of radius 0[.]5 beside it: ball at 2[.]40, 1[.]30, 0[.]00, facing 0[.]80, 0[.]60, 0[.]00, 0[.]97 along"
+                           "ahead of something: ball at 2[.]00, 1[.]00, 0[.]50, facing 0[.]00, 0[.]00, 1[.]00, 0[.]45 along"
+                           "ahead, not far enough: nothing"
+                           "the camera's middle: ball at 2[.]00, 1[.]00, 0[.]50, facing 0[.]00, 0[.]00, 1[.]00, 0[.]01 along"
+                           "high in its view: nothing")
+  fbengine_add_drawn_proof(in_view_by_bounds
+                           "in front True, behind False"
+                           "at its near end True, nearer False"
+                           "at its far end True, farther False"
+                           "past its top False, inside it True"
+                           "a box inside True"
+                           "a box half out True"
+                           "a box out False"
+                           "its bounds are 8 to 28 across"
+                           "a long mesh with only its end in view True, its middle False"
+                           "moved out False"
+                           "a pivot in view True"
+                           "behind a wall True"
+                           "a line of sight through the wall False"
+                           "with it not blocking True")
+  fbengine_add_drawn_proof(scene_trees
+                           "the room has 2, first door, then lamp"
+                           "the handle's parent door, the room's none"
+                           "found under the room True, not there True"
+                           "the handle's own place 0[.]00, 1[.]00, 0[.]00, in the world 12[.]00, 1[.]00, 0[.]00"
+                           "the room turned a quarter: 10[.]00, 1[.]00, -2[.]00"
+                           "scaled twice: 14[.]00, 2[.]00, 0[.]00"
+                           "under the lamp, world kept: 12[.]00, 1[.]00, 0[.]00, own 2[.]00, 1[.]00, 0[.]00"
+                           "back, own kept: 2[.]00, 1[.]00, 0[.]00, world 14[.]00, 1[.]00, 0[.]00"
+                           "moved forward, turned a quarter: -1[.]00, 0[.]00, 0[.]00"
+                           "translated, whichever way it faces: 0[.]00, 0[.]00, -1[.]00"
+                           "pointed at [+]Z, forward is -?0[.]00, -?0[.]00, 1[.]00"
+                           "distance to the door 12[.]00"
+                           "a copy has 2, its handle True, not the same one True"
+                           "in its order: door, lamp"
+                           "its handle in the world -8[.]00, 1[.]00, 0[.]00, the first's 12[.]00, 1[.]00, 0[.]00"
+                           "room hidden: the room's showing False, the lamp's False, hidden itself False"
+                           "room shown: the lamp's True, the door's still False"
+                           "door shown: the handle's True, the copy's door was never hidden True"
+                           "freed: the room True, its handle True, the copy's False")
+  fbengine_add_drawn_proof(meshes_in_code
+                           "1 surface, 4 vertices, 2 triangles"
+                           "its second UVs [(]0[.]5, 0[.]75[)], first [(]0, 1[)]"
+                           "its color's alpha 0[.]5"
+                           "made again 0[.]00, 1[.]00, 0[.]00"
+                           "one corner lifted, it leans True"
+                           "bounds 0[.]00, 0[.]00, -2[.]00 to 2[.]00, 0[.]00, 0[.]00"
+                           "moved: 1[.]00, 0[.]00, -2[.]00"
+                           "scaled: 6[.]00, 0[.]00, 0[.]00"
+                           "turned, it's 2[.]00 across"
+                           "fitted: -1[.]00, 0[.]00, -1[.]00 to 1[.]00, 0[.]00, 1[.]00"
+                           "picked from above True, flipped False, from below True"
+                           "a cube's 24 vertices, joined 2 surfaces"
+                           "the clone moved, the first didn't True"
+                           "its cull box 100, bounds 1")
+  fbengine_add_drawn_proof(binary_saves_and_maps
+                           "the file's 75 bytes"
+                           "its magic MAP1"
+                           "seed 1234567890123, time 61[.]5"
+                           "2 rooms"
+                           "lobby at 0, 0, light 0[.]75, doors 3, locked False"
+                           "tunnel, .+ at -8, 16, light 0[.]25, doors 2, locked True"
+                           "reading past the end throws True"
+                           "its first bytes 77, 65, 80, 49"
+                           "the seed's low byte 203, as 1234567890123 % 256 is 203"
+                           "in its folder: options[.]bin, slot 1/"
+                           "deleted, it's there False"
+                           "its folder removed, it's there False")
+  fbengine_add_drawn_proof(pathfinding_over_a_graph
+                           "lobby door vault, 8[.]00 long"
+                           "the door closed: lobby hall bend vault, 20[.]00 long"
+                           "both closed: no way"
+                           "to itself: lobby, 0[.]00 long"
+                           "to a room with no link: no way"
+                           "linked: lobby hall bend attic, 17[.]00 long"
+                           "start top, 5[.]00 long"
+                           "over the grid, straight: 39"
+                           "over the grid, walled but for its end: 117")
+  fbengine_add_drawn_proof(particles_on_sprites
+                           "after 1 second, 20 made, 20 alive"
+                           "the oldest's risen True, its alpha True"
+                           "the newest's nearly at the start True, almost opaque True"
+                           "after 5 seconds, 100 made, about 30 alive True"
+                           "drawn by a camera, each of them True"
+                           "the same seed goes the same way True"
+                           "with the rate at 0, after 2 seconds, 0 alive")
+
+  fbengine_add_drawn_proof(fixed_function_look
+                           "a room's lightmap and diffuse, left: [(]125, 110, 102, 255[)]"
+                           "and right, its lightmap's UVs its own: [(]75, 66, 61, 255[)]"
+                           "a stage's clamped: [(]120, 120, 120, 255[)]"
+                           "a layer by its alpha: [(]127, 0, 128, 255[)]"
+                           "full bright: [(]255, 255, 255, 255[)]"
+                           "lit, with no light: [(]0, 0, 0, 255[)]"
+                           "vertex colors left out: [(]255, 255, 255, 255[)]"
+                           "vertex colors: [(]255, 0, 0, 255[)]"
+                           "its back: [(]0, 0, 0, 255[)]"
+                           "its back, two sided: [(]255, 255, 255, 255[)]"
+                           "half way into fog: [(]128, 128, 128, 255[)]"
+                           "out of the fog: [(]255, 255, 255, 255[)]"
+                           "per vertex, range over distance, its middle: [(]113, 113, 113, 255[)]"
+                           "and its corner: [(]113, 113, 113, 255[)]"
+                           "within its range: [(]240, 240, 240, 255[)]"
+                           "the ambient light: [(]128, 128, 128, 255[)]"
+                           "nine lights, eight lighting: [(]192, 192, 192, 255[)]"
+                           "forced alpha: [(]188, 188, 188, 255[)]"
+                           "AUTO without a texture's alpha OPAQUE"
+                           "so opaque: [(]255, 255, 255, 255[)]"
+                           "and with it ALPHA"
+                           "blended by the texture's alpha: [(]188, 188, 188, 255[)]"
+                           "behind by depth: [(]255, 0, 0, 255[)]"
+                           "later by its order: [(]0, 255, 0, 255[)]"
+                           "sorted far to near: [(]137, 188, 0, 255[)]"
+                           "a sprite BILLBOARD, 32 across"
+                           "a sprite FIXED, [56] across"
+                           "a sprite UPRIGHT, 32 across")
+  fbengine_add_drawn_proof(cameras_and_viewports
+                           "the left camera's middle: [(]255, 0, 0, 255[)]"
+                           "its clear: [(]0, 0, 255, 255[)]"
+                           "the right camera's middle: [(]255, 0, 0, 255[)]"
+                           "its clear: [(]0, 255, 0, 255[)]"
+                           "at 60 degrees, 4 from its middle: [(]255, 0, 0, 255[)]"
+                           "at 90 degrees, the same place: [(]0, 0, 255, 255[)]"
+                           "at 15 degrees, its corner: [(]255, 0, 0, 255[)]"
+                           "past its range: [(]0, 0, 255, 255[)]"
+                           "the other's range is its own: [(]255, 0, 0, 255[)]"
+                           "in the other's fog: [(]128, 128, 128, 255[)]"
+                           "in its own, none: [(]0, 0, 0, 255[)]"
+                           "the overlay: [(]255, 255, 0, 255[)]"
+                           "the world under it: [(]255, 0, 0, 255[)]"
+                           "its clear under it: [(]0, 0, 255, 255[)]"
+                           "a hidden camera's part stays: [(]0, 0, 255, 255[)]"
+                           "the other's changes: [(]255, 0, 255, 255[)]")
+  fbengine_add_drawn_proof(camera_into_a_texture
+                           "the monitor's middle on the screen: [(]255, 0, 0, 255[)]"
+                           "its corner: [(]0, 0, 255, 255[)]"
+                           "the frame, copied: [(]255, 0, 0, 255[)]"
+                           "the screen goes on: [(]0, 0, 0, 255[)]"
+                           "and the copy stays: [(]255, 0, 0, 255[)]"
+                           "drawn back at half: [(]188, 0, 0, 255[)]"
+                           "cleared: [(]10, 20, 30, 255[)]"
+                           "drawn into: [(]200, 100, 50, 255[)]"
+                           "a part copied: [(]200, 100, 50, 255[)]"
+                           "beside it: [(]0, 0, 0, 0[)]"
+                           "over itself: [(]200, 100, 50, 255[)]")
+  fbengine_add_drawn_proof(bump
+                           "a flat map's left: [(]255, 0, 0, 255[)]"
+                           "its right: [(]0, 255, 0, 255[)]"
+                           "shifted a quarter across: [(]0, 255, 0, 255[)]"
+                           "by its green: [(]0, 255, 0, 255[)]"
+                           "by M01, down: [(]0, 0, 255, 255[)]"
+                           "half its light, by its blue: [(]0, 128, 0, 255[)]"
+                           "all of it, offset by half: [(]0, 255, 0, 255[)]"
+                           "its matrix moves a texel or so back True")
+  # A Mac's samplers have no LOD bias.
+  if(APPLE)
+    set(fbengine_lod_bias False)
+  else()
+    set(fbengine_lod_bias True)
+  endif()
+  fbengine_add_drawn_proof(render_settings
+                           "by itself, its pixels are within 8 of each other True"
+                           "the bias -3"
+                           "sharper, they're apart by over 64 ${fbengine_lod_bias}"
+                           "blurrier, within 8 True"
+                           "1 sample, between 0"
+                           "4 samples 4, between over 10 True"
+                           "the screen's 4"
+                           "on the screen, between over 10 True"
+                           "filled 576"
+                           "wireframe's lines, some True, under half True"
+                           "inside a triangle: [(]0, 0, 0, 255[)]"
+                           "validation errors 0")
+  fbengine_add_drawn_proof(gamma
+                           "the sum for adding half 121"
+                           "brighter: [(]121, 121, 121, 255[)]"
+                           "black stays: [(]0, 0, 0, 255[)]"
+                           "white stays: [(]255, 255, 255, 255[)]"
+                           "the sum for multiplying by 128 46"
+                           "darker: [(]46, 46, 46, 255[)]"
+                           "black stays, darkened: [(]0, 0, 0, 255[)]"
+                           "white comes to the gray: [(]128, 128, 128, 255[)]"
+                           "by a curve: [(]160, 160, 160, 255[)]"
+                           "its ends stay: [(]0, 0, 0, 255[)]"
+                           "and the other: [(]255, 255, 255, 255[)]")
+  # Their --watch's own keys, each pressed by the walk.
+  set_tests_properties(proof.render_settings_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nby its keys: bias 0, samples 1, wireframe True\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.gamma_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nby its keys: gamma 1[.]25\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
 
   # Their --watch, which a person watches in a window (tools/show.py), walked here offscreen, a step
   # each frame.
