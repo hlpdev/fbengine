@@ -834,3 +834,27 @@ TEST_CASE("a node of no name is the entity that plays the clip, whatever it's ca
     fbe_clip_release(clip);
     fbe_world_free(world);
 }
+
+TEST_CASE("a player on a hidden entity waits until it's shown") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t body = pivot(world, 0, "body");
+    const std::uint64_t hips = pivot(world, body, "hips");
+    const std::uint64_t player = fbe_player_create(hips);
+    const std::uint64_t clip = sliding(0.0F, 2.0F, 2.0F);
+    fbe_clip_add_event(clip, "half", 1.0F);
+    fbe_player_play(player, 0, clip, FBE_PLAYER_ONCE, 1.0F);
+    fbe_entity_set_hidden(body, true);
+    fbe_player_advance(world, 1.5F);
+    CHECK(fbe_player_time(player, 0) == 0.0F);
+    CHECK(fbe_player_event_count(player) == 0);
+    // Asked to, it poses all the same.
+    fbe_player_set_time(player, 0, 0.5F);
+    CHECK(position(hips).x == Catch::Approx(0.5F));
+    fbe_entity_set_hidden(body, false);
+    fbe_player_advance(world, 0.75F);
+    CHECK(fbe_player_time(player, 0) == Catch::Approx(1.25F));
+    CHECK(fbe_player_event_count(player) == 1);
+    fbe_player_free(player);
+    fbe_clip_release(clip);
+    fbe_world_free(world);
+}

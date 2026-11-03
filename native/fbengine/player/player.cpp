@@ -220,7 +220,7 @@ void note_still_moved(player_t& player) {
         for (const track_t& track : layer.tracks) {
             const std::vector<channel_t>& channels = kept_clip(track.clip).clip.channels;
             for (std::size_t c = 0; c < track.bound.size(); ++c) {
-                if (track.bound[c].bone != scene::none) {
+                if (track.bound[c].bone < moved.size()) {
                     moved[track.bound[c].bone][static_cast<std::size_t>(channels[c].property)] =
                         true;
                 }
@@ -279,6 +279,13 @@ void bind(player_t& player, track_t& track, std::uint32_t root) {
         return !entities.slots.find(bone.entity).has_value();
     });
     if (erased > 0) {
+        // Each is out of date until it's bound again, should running out of memory stop that here.
+        for (layer_t& layer : player.layers) {
+            for (track_t& other : layer.tracks) {
+                other.version = UINT64_MAX;
+                other.bound.clear();
+            }
+        }
         for (layer_t& layer : player.layers) {
             for (track_t& other : layer.tracks) {
                 bind_channels(player, other, root);
@@ -724,10 +731,15 @@ FBE_API uint64_t fbe_player_create(uint64_t entity) {
     try {
         auto& made = players();
         const std::uint32_t slot = made.slots.make();
-        if (slot == made.kept.size()) {
-            made.kept.emplace_back();
-        } else {
-            made.kept[slot] = {};
+        try {
+            if (slot == made.kept.size()) {
+                made.kept.emplace_back();
+            } else {
+                made.kept[slot] = {};
+            }
+        } catch (...) {
+            made.slots.free(slot);
+            throw;
         }
         made.kept[slot].entity = entity;
         return made.slots.handle(slot);
@@ -844,8 +856,12 @@ FBE_API bool fbe_player_stop(uint64_t player, int32_t layer, float seconds) {
     }
     if (seconds == 0.0F) {
         fbe::anim::clear(*on);
-        fbe::anim::note_still_moved(*found);
-        return true;
+        try {
+            fbe::anim::note_still_moved(*found);
+            return true;
+        } catch (const std::bad_alloc&) {
+            return fail("out of memory");
+        }
     }
     for (track_t& going : on->tracks) {
         going.target = 0.0F;
@@ -886,8 +902,12 @@ FBE_API bool fbe_player_set_time(uint64_t player, int32_t layer, float time) {
     }
     track->time = fbe::anim::placed(*track, time, track->backward);
     track->started = true;
-    fbe::anim::pose(*found, root);
-    return true;
+    try {
+        fbe::anim::pose(*found, root);
+        return true;
+    } catch (const std::bad_alloc&) {
+        return fail("out of memory");
+    }
 }
 
 FBE_API float fbe_player_time(uint64_t player, int32_t layer) {
@@ -1028,7 +1048,7 @@ FBE_API bool fbe_player_advance(uint64_t world, float seconds) {
                 }
                 continue;
             }
-            if (entities.world[*root] != in) {
+            if (entities.world[*root] != in || !fbe::scene::showing(*root)) {
                 continue;
             }
             bool playing = false;

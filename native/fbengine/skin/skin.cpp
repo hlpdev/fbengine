@@ -18,6 +18,7 @@
 #include <new>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -111,24 +112,29 @@ void copy_skins(const std::vector<std::pair<std::uint32_t, std::size_t>>& origin
                 const std::vector<std::uint32_t>& copies) {
     const scene::entities_t& entities = scene::scene().entities;
     for (std::size_t i = 0; i < originals.size(); ++i) {
-        const skinned_t* original = skinned_of(entities.slots.handle(originals[i].first));
-        if (original == nullptr) {
-            continue;
+        // Run out of memory, a copy is skinned by nothing, and fbe_error says why.
+        try {
+            const skinned_t* original = skinned_of(entities.slots.handle(originals[i].first));
+            if (original == nullptr) {
+                continue;
+            }
+            skinned_t copy;
+            copy.mesh = entities.slots.handle(copies[i]);
+            copy.skin = original->skin;
+            copy.root = original->root;
+            const auto root = entities.slots.find(original->root);
+            const auto copied = std::ranges::find_if(
+                originals, [&](const auto& entity) { return root && entity.first == *root; });
+            if (copied != originals.end()) {
+                copy.root = entities.slots.handle(
+                    copies[static_cast<std::size_t>(copied - originals.begin())]);
+            }
+            bind(copy);
+            skins().skinned.push_back(std::move(copy));
+            ++skins().kept[skins().skinned.back().skin].references;
+        } catch (const std::bad_alloc&) {
+            fail("out of memory");
         }
-        skinned_t copy;
-        copy.mesh = entities.slots.handle(copies[i]);
-        copy.skin = original->skin;
-        copy.root = original->root;
-        const auto root = entities.slots.find(original->root);
-        const auto copied = std::ranges::find_if(
-            originals, [&](const auto& entity) { return root && entity.first == *root; });
-        if (copied != originals.end()) {
-            copy.root =
-                entities.slots.handle(copies[static_cast<std::size_t>(copied - originals.begin())]);
-        }
-        ++skins().kept[copy.skin].references;
-        bind(copy);
-        skins().skinned.push_back(std::move(copy));
     }
 }
 
@@ -179,15 +185,25 @@ using fbe::scene::none;
 extern "C" {
 
 FBE_API uint64_t fbe_skin_create(void) {
-    auto& made = skins();
-    const std::uint32_t slot = made.slots.make();
-    if (slot == made.kept.size()) {
-        made.kept.emplace_back();
-    } else {
-        made.kept[slot] = {};
+    try {
+        auto& made = skins();
+        const std::uint32_t slot = made.slots.make();
+        try {
+            if (slot == made.kept.size()) {
+                made.kept.emplace_back();
+            } else {
+                made.kept[slot] = {};
+            }
+        } catch (...) {
+            made.slots.free(slot);
+            throw;
+        }
+        made.kept[slot].references = 1;
+        return made.slots.handle(slot);
+    } catch (const std::bad_alloc&) {
+        fail("out of memory");
+        return 0;
     }
-    made.kept[slot].references = 1;
-    return made.slots.handle(slot);
 }
 
 FBE_API bool fbe_skin_model_invalid(void) {
@@ -279,11 +295,11 @@ FBE_API bool fbe_skin_add_joint(uint64_t skin, const char* name, const float* in
         return false;
     }
     fbe::anim::skin_t& found = skins().kept[slot];
-    const std::string named = name != nullptr ? name : "";
-    if (named.empty()) {
+    if (name == nullptr || *name == '\0') {
         return fail("a joint has a name");
     }
-    if (std::ranges::find(found.joints, named) != found.joints.end()) {
+    const std::string_view named = name;
+    if (std::ranges::contains(found.joints, named)) {
         return fail(std::format("the skin has a joint \"{}\" already", named));
     }
     if (inverse_bind == nullptr) {
@@ -295,10 +311,19 @@ FBE_API bool fbe_skin_add_joint(uint64_t skin, const char* name, const float* in
     }
     mat4_t matrix;
     std::ranges::copy(given, matrix.m.begin());
-    found.joints.push_back(named);
-    found.inverse_binds.push_back(matrix);
-    ++found.version;
-    return true;
+    try {
+        found.inverse_binds.push_back(matrix);
+        try {
+            found.joints.emplace_back(named);
+        } catch (...) {
+            found.inverse_binds.pop_back();
+            throw;
+        }
+        ++found.version;
+        return true;
+    } catch (const std::bad_alloc&) {
+        return fail("out of memory");
+    }
 }
 
 FBE_API int32_t fbe_skin_joint_count(uint64_t skin) {
@@ -329,26 +354,36 @@ FBE_API bool fbe_skin_attach(uint64_t mesh, uint64_t skin, uint64_t root) {
         if (slot == none || fbe::scene::entity_slot(root) == none) {
             return false;
         }
-        ++skins().kept[slot].references;
     }
     fbe::anim::skinned_t* found = fbe::anim::skinned_of(mesh);
-    if (found != nullptr) {
-        fbe::anim::release_skin(found->skin);
-        if (slot == none) {
+    if (slot == none) {
+        if (found != nullptr) {
+            fbe::anim::release_skin(found->skin);
             std::erase_if(skins().skinned,
                           [&](const fbe::anim::skinned_t& each) { return each.mesh == mesh; });
-            return true;
         }
-    } else if (slot == none) {
         return true;
-    } else {
-        found = &skins().skinned.emplace_back();
-        found->mesh = mesh;
     }
-    found->skin = slot;
-    found->root = root;
-    fbe::anim::bind(*found);
-    return true;
+    try {
+        // All that can run out of memory first, so running out leaves the mesh as it was.
+        fbe::anim::skinned_t made;
+        made.mesh = mesh;
+        made.skin = slot;
+        made.root = root;
+        fbe::anim::bind(made);
+        if (found == nullptr) {
+            skins().skinned.push_back(std::move(made));
+            ++skins().kept[slot].references;
+        } else {
+            // Held first, as it can be the one let go of.
+            ++skins().kept[slot].references;
+            fbe::anim::release_skin(found->skin);
+            *found = std::move(made);
+        }
+        return true;
+    } catch (const std::bad_alloc&) {
+        return fail("out of memory");
+    }
 }
 
 FBE_API uint64_t fbe_skin_of(uint64_t mesh) {
@@ -374,13 +409,18 @@ FBE_API int32_t fbe_skin_palette(uint64_t mesh, float* matrices, int32_t capacit
         fail(std::format("the mesh's palette is {} joints", count));
         return -1;
     }
-    const std::span<const mat4_t> palette =
-        fbe::anim::skin_palette(slot, fbe::scene::tweened_t(1.0F));
-    const std::span<float> out(matrices, matrices != nullptr ? count * 16 : 0);
-    for (std::size_t i = 0; i < palette.size(); ++i) {
-        std::ranges::copy(palette[i].m, out.subspan(i * 16, 16).begin());
+    try {
+        const std::span<const mat4_t> palette =
+            fbe::anim::skin_palette(slot, fbe::scene::tweened_t(1.0F));
+        const std::span<float> out(matrices, matrices != nullptr ? count * 16 : 0);
+        for (std::size_t i = 0; i < palette.size(); ++i) {
+            std::ranges::copy(palette[i].m, out.subspan(i * 16, 16).begin());
+        }
+        return static_cast<int32_t>(count);
+    } catch (const std::bad_alloc&) {
+        fail("out of memory");
+        return -1;
     }
-    return static_cast<int32_t>(count);
 }
 
 } // extern "C"

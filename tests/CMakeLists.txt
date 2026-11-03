@@ -707,12 +707,28 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 # E7's animation: sampling, apart from the DLL, and the clip, player, and skin areas through
 # fbengine's C API, with no window or GPU.
 add_executable(fbengine_anim_tests anim/sample_tests.cpp anim/clip_tests.cpp anim/player_tests.cpp
-               anim/skin_tests.cpp anim/model_tests.cpp anim/morph_tests.cpp
+               anim/skin_tests.cpp anim/model_tests.cpp anim/morph_tests.cpp anim/fuzz_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
 target_link_libraries(fbengine_anim_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_anim_tests)
 catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
+
+# Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as
+# operator new is this test's.
+add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
+target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_anim_oom_tests)
+catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# A program of the whole of it, as a game would write it.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME examples.animation
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/animation")
+  set_tests_properties(examples.animation PROPERTIES PASS_REGULAR_EXPRESSION
+                       "Running animation[^\n]*\nstep in walk\r?\nwalked to 1.5\r?\nwaving at 0.5\r?\nlooking ahead\r?\nstep in walk\r?\nstopped: still\r?\n$")
+endif()
 
 # Animation's panics, each a case of tests/anim/panics run on its own, which has to panic saying
 # what it does.

@@ -34,7 +34,8 @@ End Struct
 Global players: Player?[] = []
 Global playersByHandle: Player?[] = []
 
-/// What plays Clips on an entity and the entities under it: the one its Player() gives. Each of a
+/// What plays Clips on an entity and the entities under it: the one its Player() gives. While its
+/// entity's hidden, by Hide on it or on what's above it, it waits, where it is. Each of a
 /// Clip's channels moves the entity of its name, the entity itself or the first under it with the
 /// name, depth first, as Find finds them, bound as it's played or once the Clip changes; a name no
 /// entity has is left out. UpdateWorld moves it on by its seconds.

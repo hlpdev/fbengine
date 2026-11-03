@@ -95,7 +95,8 @@ FBE_API bool fbe_player_reclaim(uint64_t player, uint64_t bone);
 FBE_API bool fbe_player_released(uint64_t player, uint64_t bone);
 
 // Moves every player on an entity in `world` on by `seconds`, posing what each moves, as the
-// world's update does, and keeps the events each reached, for fbe_player_evented. A step past many
+// world's update does, and keeps the events each reached, for fbe_player_evented; a player whose
+// entity is hidden, itself or by what's above it, waits until it's shown. A step past many
 // times round a loop reaches its events the first and the last time round only. False for a freed
 // world, or seconds below 0 or not finite.
 FBE_API bool fbe_player_advance(uint64_t world, float seconds);
