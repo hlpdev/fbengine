@@ -28,6 +28,9 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_player_weight(player: UInt64, layer: Int32): Float32
     Function fbe_player_set_mask(player: UInt64, layer: Int32, entities: Ptr<UInt64>,
                                  count: Int32): Bool
+    Function fbe_player_release(player: UInt64, bone: UInt64): Bool
+    Function fbe_player_reclaim(player: UInt64, bone: UInt64): Bool
+    Function fbe_player_released(player: UInt64, bone: UInt64): Bool
     Function fbe_player_advance(world: UInt64, seconds: Float32): Bool
     Function fbe_player_evented(players: Ptr<UInt64>, capacity: Int32): Int32
     Function fbe_player_event_count(player: UInt64): Int32

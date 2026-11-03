@@ -3,11 +3,31 @@
 // a 3D entity, a quad facing the camera.
 
 Import std.core
+From std.image Import Image
 Import std.io
 Import std.math
 Import "./c/fbe_2d"
 Import "./texture"
 Import "./window"
+
+// `image` with every pixel of exactly `key`'s red, green, and blue transparent black.
+Package Function Keyed(image: Image, key: Color32): Image
+    Local bytes = image.ToBytes()
+    For at = 0 To (bytes.Count / 4) - 1
+        If bytes[at * 4] == key.r && bytes[at * 4 + 1] == key.g && bytes[at * 4 + 2] == key.b
+            bytes[at * 4] = 0
+            bytes[at * 4 + 1] = 0
+            bytes[at * 4 + 2] = 0
+            bytes[at * 4 + 3] = 0
+        End If
+    End For
+    Return Image.FromBytes(image.Width, image.Height, bytes)
+End Function
+
+// A texture of `image`, without mipmaps; here, as in Sprite2D, Texture is its Method.
+Function ImageTexture(image: Image): Texture Throws GraphicsError
+    Return Try Texture.FromImage(image, False)
+End Function
 
 // A texture of an image file's, without mipmaps; here, as in Sprite2D, Texture is its Method.
 Function LoadedTexture(path: Path): Texture Throws GraphicsError, IOError
@@ -28,6 +48,7 @@ Public Final Class Sprite2D
     // Whether its handle follows a frame's middle, as MidHandle puts it, for a texture that changes
     // size under it.
     Field midHandled: Bool = False
+    Field keyed: Bool = False
 
     /// A sprite of all of `texture`.
     @MainThread Public New(texture: Texture)
@@ -41,6 +62,23 @@ Public Final Class Sprite2D
     @MainThread
     Public Static Method Load(path: Path): Sprite2D Throws GraphicsError, IOError
         Return Sprite2D(Try LoadedTexture(path))
+    End Method
+
+    /// A sprite of a texture of `image`, without mipmaps, as 2D draws it at its size; every pixel of
+    /// exactly `masked`'s red, green, and blue is transparent, as art with a key color's background
+    /// wants, whatever the Canvas's blend: on SOLID too, its key leaves what's there, by an alpha
+    /// test, and `image` isn't changed. A keyed texture is sampled NEAREST, which SetFilter can
+    /// change, so its key color doesn't bleed into its edges when it's scaled. It throws when the GPU
+    /// can't make the texture.
+    @MainThread
+    Public Static Method FromImage(image: Image,
+                                   masked: Color32? = Null): Sprite2D Throws GraphicsError
+        If masked == Null Then Return Sprite2D(Try ImageTexture(image))
+        Local made = Try ImageTexture(Keyed(image, masked))
+        made.SetFilter(TextureFilter.NEAREST)
+        Local sprite = Sprite2D(made)
+        sprite.keyed = True
+        Return sprite
     End Method
 
     /// The texture it draws.
@@ -157,7 +195,7 @@ Public Final Class Sprite2D
         End If
         Return fbe_2d_sprite_t(x, y, width, height, Handle().x As Float32, Handle().y As Float32,
                                rotation,
-                               scaleX, scaleY)
+                               scaleX, scaleY, keyed ? 1 : 0)
     End Method
 
     // Its texture's handle, or a panic for one that was freed.

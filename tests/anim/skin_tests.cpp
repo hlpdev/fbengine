@@ -225,6 +225,17 @@ TEST_CASE("a copy of a skinned mesh alone follows its original's bones") {
     CHECK(through(palette, 0, 0.0F, 1.0F, 0.0F)[1] == Catch::Approx(2.0F));
 }
 
+TEST_CASE("a mesh skinned again by the skin only it holds keeps it") {
+    const leg_t leg;
+    const std::uint64_t only = fbe_skin_create();
+    fbe_skin_add_joint(only, "hips", moving(0, 0, 0).data());
+    REQUIRE(fbe_skin_attach(leg.mesh, only, leg.body));
+    fbe_skin_release(only);
+    REQUIRE(fbe_skin_attach(leg.mesh, only, leg.body));
+    CHECK(fbe_skin_alive(only));
+    CHECK(fbe_skin_joint_count(only) == 1);
+}
+
 TEST_CASE("a joint's name asked for after the skin changes is its name") {
     const leg_t leg;
     for (int joint = 0; joint < 40; ++joint) {

@@ -767,3 +767,38 @@ TEST_CASE("a glTF's buffer there isn't the memory for fails as OTHER", "[assets]
     // Once.
     REQUIRE(assets::decode_model(path("res://test.glb"), glb, vfs::view_t(), {}).has_value());
 }
+
+TEST_CASE("a sparse morph target with no buffer view decodes", "[assets]") {
+    builder_t built;
+    const int positions = built.positions({ 0, 0, 0, 1, 0, 0, 0, 1, 0 });
+    bytes_t indices;
+    test::append<std::uint16_t>(indices, { 2 });
+    built.buffer.resize((built.buffer.size() + 3) / 4 * 4, 0);
+    const std::size_t index_at = built.buffer.size();
+    built.buffer.insert(built.buffer.end(), indices.begin(), indices.end());
+    built.views.push_back(R"({"buffer":0,"byteOffset":)" + std::to_string(index_at) +
+                          R"(,"byteLength":2})");
+    const std::size_t index_view = built.views.size() - 1;
+    bytes_t values;
+    test::append<float>(values, { 7, 8, 9 });
+    built.buffer.resize((built.buffer.size() + 3) / 4 * 4, 0);
+    const std::size_t value_at = built.buffer.size();
+    built.buffer.insert(built.buffer.end(), values.begin(), values.end());
+    built.views.push_back(R"({"buffer":0,"byteOffset":)" + std::to_string(value_at) +
+                          R"(,"byteLength":12})");
+    const std::size_t value_view = built.views.size() - 1;
+    built.accessors.push_back(
+        R"({"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[7,8,9],"sparse":{"count":1,"indices":{"bufferView":)" +
+        std::to_string(index_view) + R"(,"componentType":5123},"values":{"bufferView":)" +
+        std::to_string(value_view) + R"(}}})");
+    const std::size_t moved = built.accessors.size() - 1;
+    const std::string rest =
+        R"(,"meshes":[{"weights":[1],"primitives":[{"attributes":{"POSITION":)" +
+        std::to_string(positions) + R"(},"targets":[{"POSITION":)" + std::to_string(moved) +
+        R"(}]}]}],"nodes":[{"name":"body","mesh":0}])";
+    const assets::model_t model = decoded(built.json(rest, built.data_uri()));
+    const assets::morph_target_t& target = model.meshes[0].primitives[0].targets.at(0);
+    REQUIRE(target.positions.size() == 3);
+    CHECK(target.positions[0] == assets::vec3_t{ 0, 0, 0 });
+    CHECK(target.positions[2] == assets::vec3_t{ 7, 8, 9 });
+}

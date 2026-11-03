@@ -19,8 +19,10 @@ Public Enum Interpolation
 End Enum
 
 /// What moves an entity and the entities under it over time: channels, each moving one entity's
-/// position, rotation, or scale, found by its name, through keys at times in seconds from 0. A
-/// Player plays it on any entity whose tree has those names; every Player playing one shares it,
+/// position, rotation, scale, or morph weights, found by its name, through keys at times in seconds
+/// from 0; the name "" is whichever entity plays it, as a door's Clip has it, whatever the door's
+/// called. Its keys say where the entity is, not how far it's moved, as glTF has it, so to play a
+/// door's Clip on a door wherever it stands, put the door under a Pivot placed there. A Player plays it on any entity whose tree has those names; every Player playing one shares it,
 /// so a channel added to it is added to them all. It lives while the game holds it, or a Player
 /// plays it.
 Public Final Class Clip
@@ -189,19 +191,57 @@ Public Final Class Clip
         Add(node, FBE_CLIP_SCALE, Interpolation.CUBIC, times, keys, "AddScales")
     End Method
 
-    // A channel of `values`, each key's floats after the last's, or a panic naming the call.
+    /// Moves `node`'s morph weights through a key at each of `times`, `weights` being each key's
+    /// after the last's, as many a key as the Mesh's targets it moves, as AddPositions moves a
+    /// position. Weights that don't come out the same for each key panic.
+    @MainThread @PanicsAtCaller
+    Public Method AddWeights(node: String, times: Float[], weights: Float[],
+                             interpolation: Interpolation = Interpolation.LINEAR)
+        Local wide = WeightsWide(times, weights.Count, "AddWeights")
+        Pair(times, weights.Count / wide, interpolation, "AddWeights")
+        Add(node, FBE_CLIP_WEIGHTS, interpolation, times, Floats(weights), "AddWeights", wide)
+    End Method
+
+    /// Moves `node`'s morph weights on glTF's cubic spline, as AddPositions with tangents moves one,
+    /// each key's weights and tangents after the last's.
+    @MainThread @PanicsAtCaller
+    Public Method AddWeights(node: String, times: Float[], weights: Float[], inTangents: Float[],
+                             outTangents: Float[])
+        Local wide = WeightsWide(times, weights.Count, "AddWeights")
+        Tangents(times, weights.Count / wide, inTangents.Count / wide, outTangents.Count / wide,
+                 "AddWeights")
+        If inTangents.Count % wide != 0 || outTangents.Count % wide != 0
+            Panic("AddWeights on a Clip: a key's tangents are as wide as its weights, {wide}")
+        End If
+        Local keys: Float[] = []
+        For key = 0 Until times.Count
+            For at = key * wide Until (key + 1) * wide
+                keys.Add(inTangents[at])
+            End For
+            For at = key * wide Until (key + 1) * wide
+                keys.Add(weights[at])
+            End For
+            For at = key * wide Until (key + 1) * wide
+                keys.Add(outTangents[at])
+            End For
+        End For
+        Add(node, FBE_CLIP_WEIGHTS, Interpolation.CUBIC, times, Floats(keys), "AddWeights", wide)
+    End Method
+
+    // A channel of `values`, each key's floats after the last's, `width` a key for weights, or a
+    // panic naming the call.
     @PanicsAtCaller
     Method Add(node: String, property: Int32, interpolation: Interpolation, times: Float[],
-               values: Buffer<Float32>, call: String)
+               values: Buffer<Float32>, call: String, width: Int32 = 0)
         Local clip = Live(call)
         Local keys = Buffer<Float32>(times.Count)
         For i = 0 Until times.Count
             keys[i] = times[i]
         End For
-        Local width: Int32 = property == FBE_CLIP_ROTATION ? 4 : 3
+        Local wide: Int32 = width != 0 ? width : (property == FBE_CLIP_ROTATION ? 4 : 3)
         Local done = False
         Unsafe
-            done = fbe_clip_add_channel(clip, node, property, interpolation As Int32, width,
+            done = fbe_clip_add_channel(clip, node, property, interpolation As Int32, wide,
                                         keys.Pointer(), values.Pointer(), times.Count)
         End Unsafe
         If !done Then Failed(call)
@@ -260,6 +300,25 @@ Function Interleaved<T>(ins: T[], values: T[], outs: T[]): T[]
         keys.Add(outs[i])
     End For
     Return keys
+End Function
+
+// How many weights a key has, or a panic naming the call when they don't come out even.
+@PanicsAtCaller
+Function WeightsWide(times: Float[], weights: Int, call: String): Int32
+    If times.Count == 0 || weights == 0 Then Return 1
+    If weights % times.Count != 0
+        Panic("{call} on a Clip: as many weights for each key's time, not {weights} for " +
+              "{times.Count}")
+    End If
+    Return (weights / times.Count) As Int32
+End Function
+
+Function Floats(values: Float[]): Buffer<Float32>
+    Local floats = Buffer<Float32>(values.Count)
+    For i = 0 Until values.Count
+        floats[i] = values[i]
+    End For
+    Return floats
 End Function
 
 Function Vectors(vectors: Vec3[]): Buffer<Float32>

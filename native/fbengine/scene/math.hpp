@@ -102,6 +102,10 @@ inline vec3_t cross(vec3_t a, vec3_t b) {
 inline float length(vec3_t v) {
     return std::sqrt(dot(v, v));
 }
+/// `t` of the way from `a` to `b`, which overflows only if they do.
+inline float mix(float a, float b, float t) {
+    return (a * (1.0F - t)) + (b * t);
+}
 /// The direction of `v`, or zero for a zero `v`.
 inline vec3_t normalize(vec3_t v) {
     const float size = length(v);
@@ -271,21 +275,33 @@ inline bool inverse_affine(const mat4_t& m, mat4_t& inverse) {
     return true;
 }
 
+/// Whether a matrix mirrors what it moves, which turns its triangles' fronts to the back.
+inline bool mirrors(const mat4_t& m) {
+    return dot(cross(m.axis(0), m.axis(1)), m.axis(2)) < 0.0F;
+}
+
+/// A vector by a matrix's normal matrix, at whatever length that leaves it.
+inline vec3_t by_normal_matrix(const mat4_t& m, vec3_t n) {
+    const vec3_t a = m.axis(0);
+    const vec3_t b = m.axis(1);
+    const vec3_t c = m.axis(2);
+    return cross(b, c) * n.x + cross(c, a) * n.y + cross(a, b) * n.z;
+}
+
 /// A normal turned by the matrix: through its 3x3's cofactor, the inverse transpose times the
 /// determinant, which a matrix that flattens an axis has too, its sign the determinant's, so a
 /// mirror turns it with the surface, then made length 1.
 inline vec3_t transform_normal(const mat4_t& m, vec3_t n) {
-    const vec3_t a = m.axis(0);
-    const vec3_t b = m.axis(1);
-    const vec3_t c = m.axis(2);
-    const vec3_t across = cross(b, c);
-    const vec3_t turned = normalize(across * n.x + cross(c, a) * n.y + cross(a, b) * n.z);
-    return dot(a, across) < 0.0F ? -turned : turned;
+    const vec3_t turned = normalize(by_normal_matrix(m, n));
+    return mirrors(m) ? -turned : turned;
 }
 
-/// Whether a matrix mirrors what it moves, which turns its triangles' fronts to the back.
-inline bool mirrors(const mat4_t& m) {
-    return dot(cross(m.axis(0), m.axis(1)), m.axis(2)) < 0.0F;
+/// What a morph target's `moved`, which moves the normal `n`, becomes under a matrix, so that for
+/// any weight, `n` and it make what the matrix makes of the normal they made before.
+inline vec3_t transform_normal_move(const mat4_t& m, vec3_t n, vec3_t moved) {
+    const float size = length(by_normal_matrix(m, n));
+    const vec3_t turned = by_normal_matrix(m, moved) * (size > 0.0F ? 1.0F / size : 1.0F);
+    return mirrors(m) ? -turned : turned;
 }
 
 } // namespace fbe::scene

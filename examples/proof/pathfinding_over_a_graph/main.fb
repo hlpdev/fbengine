@@ -1,0 +1,108 @@
+// A route over a map's waypoints, through std.algo.search's A*: the cheapest by distance, a door
+// closing that sends it the long way, no way at all, and a graph that grows. It prints each. The
+// graph, and what a step costs, are the game's: here, waypoints by their indexes, so nothing holds
+// anything in a cycle.
+
+Import std.algo.search
+Import std.collections
+Import std.core
+Import std.math
+
+Class Graph
+    Field Names: String[] = []
+    Field Places: Vec2[] = []
+    Field Links: Int[][] = []
+
+    New()
+    End New
+
+    // Adds a waypoint, and gives its index.
+    Method Add(name: String, x: Float32, y: Float32): Int
+        Names.Add(name)
+        Places.Add(Vec2(x, y))
+        Links.Add([])
+        Return Names.Count - 1
+    End Method
+
+    // Links two waypoints, both ways.
+    Method Link(a: Int, b: Int)
+        Links[a].Add(b)
+        Links[b].Add(a)
+    End Method
+
+    // The cheapest route from `from` to `to`, by distance, past `closed` ones, or Null.
+    Method Path(from: Int, to: Int, closed: Int[]): Path<Int, Float32>?
+        Local steps = Function(at: Int): (Int, Float32)[]
+            Local found: (Int, Float32)[] = []
+            For next In Links[at]
+                If !closed.Contains(next) Then found.Add((next, Distance(Places[at], Places[next])))
+            End For
+            Return found
+        End Function
+        Local guess = Function(at: Int): Float32 => Distance(Places[at], Places[to])
+        Return AStar(from, steps, guess, Function(at: Int) => at == to)
+    End Method
+
+    // That route, as its names and its length.
+    Method Route(from: Int, to: Int, closed: Int[] = []): String
+        Local path = Path(from, to, closed)
+        If path == Null Then Return "no way"
+        Local names: String[] = []
+        For each In path.Nodes
+            names.Add(Names[each])
+        End For
+        Return "{names.Join(" ")}, {path.Cost:.2} long"
+    End Method
+End Class
+
+// A lobby, and two ways to the vault: short through a door, long round by a hall.
+Local map = Graph()
+Local lobby = map.Add("lobby", 0.0, 0.0)
+Local door = map.Add("door", 4.0, 0.0)
+Local vault = map.Add("vault", 8.0, 0.0)
+Local hall = map.Add("hall", 0.0, 6.0)
+Local bend = map.Add("bend", 8.0, 6.0)
+map.Link(lobby, door)
+map.Link(door, vault)
+map.Link(lobby, hall)
+map.Link(hall, bend)
+map.Link(bend, vault)
+Print(map.Route(lobby, vault))
+Print("the door closed: {map.Route(lobby, vault, [door])}")
+Print("both closed: {map.Route(lobby, vault, [door, hall])}")
+Print("to itself: {map.Route(lobby, lobby)}")
+
+// A room with no link has no way; linked, it has one.
+Local attic = map.Add("attic", 8.0, 9.0)
+Print("to a room with no link: {map.Route(lobby, attic)}")
+map.Link(bend, attic)
+Print("linked: {map.Route(lobby, attic)}")
+
+// A diagonal's shorter than two sides, so it takes it.
+Local corner = map.Add("corner", 3.0, 0.0)
+Local top = map.Add("top", 3.0, 4.0)
+Local start = map.Add("start", 0.0, 0.0)
+map.Link(start, corner)
+map.Link(corner, top)
+map.Link(start, top)
+Print(map.Route(start, top))
+
+// A grid of 40 by 40, its middle row walled but for its end: the long way's found.
+Local grid = Graph()
+For y = 0 To 39
+    For x = 0 To 39
+        grid.Add("{x},{y}", x As Float32, y As Float32)
+    End For
+End For
+For y = 0 To 39
+    For x = 0 To 39
+        If x < 39 Then grid.Link(y * 40 + x, y * 40 + x + 1)
+        If y < 39 Then grid.Link(y * 40 + x, (y + 1) * 40 + x)
+    End For
+End For
+Local walled: Int[] = []
+For x = 0 To 38
+    walled.Add(20 * 40 + x)
+End For
+Print("over the grid, straight: {grid.Path(0, 39 * 40, [])?.Cost ?? -1.0}")
+Print("over the grid, walled but for its end: {grid.Path(0, 39 * 40, walled)?.Cost ?? -1.0}")

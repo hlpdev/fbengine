@@ -114,6 +114,10 @@ Public Class Widget Extends Node
     @MainThread Public Method PointerUp(point: Vec2, over: Bool)
     End Method
 
+    /// Whether a press it takes leaves the focus where it is, as a scrollbar's does, rather than
+    /// moving it to the first widget that can have it from here up. False at first.
+    @MainThread Public Method KeepsFocus(): Bool => False
+
     /// The wheel turned `steps` notches up over it: True if it used them, so the widgets under it
     /// don't.
     @MainThread Public Method Wheel(steps: Int32): Bool => False
