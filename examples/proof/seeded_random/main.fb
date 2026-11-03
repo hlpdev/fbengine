@@ -167,6 +167,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             sum += each
         End For
         Print("its bars {least}, {most}, {sum}")
+        Print("the foot of its first {(Try Screen.ToImage())[26, 429]}")
     End If
     Print("drew {Try Drew()}")
     Print("watched {count} frames")

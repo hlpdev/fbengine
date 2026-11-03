@@ -387,7 +387,8 @@ FBE_API bool fbe_geometry_set_source(uint64_t geometry, const char* source) {
 
 FBE_API const char* fbe_geometry_source(uint64_t geometry) {
     const std::uint32_t slot = geometry_slot(geometry);
-    if (slot == none || scene().geometries[slot].version != scene().geometries[slot].source_version) {
+    if (slot == none ||
+        scene().geometries[slot].version != scene().geometries[slot].source_version) {
         return "";
     }
     return scene().geometries[slot].source.c_str();

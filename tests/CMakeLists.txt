@@ -716,7 +716,7 @@ if(FBENGINE_FB_TESTS)
   fbengine_add_drawn_proof(ini_settings
                            "its own key 3"
                            "its sections [[]version, window, keys, room ambience[]]"
-                           "a key with a space, in a section with one GFX\map\a[.]rmesh"
+                           "a key with a space, in a section with one GFX.map.a[.]rmesh"
                            "width 1280, height 720"
                            "fullscreen True, vsync False"
                            "title \"  a game  \""
@@ -826,7 +826,7 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(proof.ini_settings_watch PROPERTIES
                        PASS_REGULAR_EXPRESSION "\nthe volume 3\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
   set_tests_properties(proof.seeded_random_watch PROPERTIES
-                       PASS_REGULAR_EXPRESSION "\nits bars 217, 284, 8000\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
+                       PASS_REGULAR_EXPRESSION "\nits bars 217, 284, 8000\r?\nthe foot of its first [(]76, 141, 255, 255[)]\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
   set_tests_properties(proof.procedural_map_watch PROPERTIES
                        PASS_REGULAR_EXPRESSION "\nits last seed 5, 103 rooms of 103, in the world 103\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
   set_tests_properties(proof.room_files_watch PROPERTIES
