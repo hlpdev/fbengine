@@ -5,11 +5,35 @@
 Public Const FBE_PHYSICS_MAX_BODIES: Int32 = 1048576
 Public Const FBE_PHYSICS_MAX_COLLISION_STEPS: Int32 = 16
 Public Const FBE_PHYSICS_MAX_THREADS: Int32 = 31
+Public Const FBE_PHYSICS_LAYERS: Int32 = 32
 
 @CLayout Public Struct fbe_physics_vec3_t
     Public Field x: Float32
     Public Field y: Float32
     Public Field z: Float32
+End Struct
+
+@CLayout Public Struct fbe_physics_quat_t
+    Public Field x: Float32
+    Public Field y: Float32
+    Public Field z: Float32
+    Public Field w: Float32
+End Struct
+
+@CLayout Public Struct fbe_physics_hit_t
+    Public Field body: UInt64
+    Public Field position: fbe_physics_vec3_t
+    Public Field normal: fbe_physics_vec3_t
+    Public Field distance: Float32
+    Public Field triangle: Int32
+End Struct
+
+@CLayout Public Struct fbe_physics_contact_t
+    Public Field a: UInt64
+    Public Field b: UInt64
+    Public Field position: fbe_physics_vec3_t
+    Public Field normal: fbe_physics_vec3_t
+    Public Field speed: Float32
 End Struct
 
 Public Extern "C" Lib "fbengine_physics_native"
@@ -27,5 +51,30 @@ Public Extern "C" Lib "fbengine_physics_native"
     Function fbe_physics_gravity(world: UInt64, gravity: Ptr<fbe_physics_vec3_t>): Bool
     Function fbe_physics_step(world: UInt64, seconds: Float32, collision_steps: Int32): Bool
     Function fbe_physics_steps(world: UInt64): Int64
+    Function fbe_physics_moves(world: UInt64): Int64
     Function fbe_physics_overflowed(world: UInt64): Bool
+    Function fbe_physics_set_collides(world: UInt64, a: Int32, b: Int32, collides: Bool): Bool
+    Function fbe_physics_collides(world: UInt64, a: Int32, b: Int32): Bool
+    Function fbe_physics_cast_ray(world: UInt64, origin: Ptr<fbe_physics_vec3_t>,
+                                  direction: Ptr<fbe_physics_vec3_t>, distance: Float32,
+                                  layers: UInt32, ignore: UInt64, back_faces: Bool,
+                                  hit: Ptr<fbe_physics_hit_t>): Bool
+    Function fbe_physics_cast_ray_all(world: UInt64, origin: Ptr<fbe_physics_vec3_t>,
+                                      direction: Ptr<fbe_physics_vec3_t>, distance: Float32,
+                                      layers: UInt32, ignore: UInt64, back_faces: Bool,
+                                      hits: Ptr<fbe_physics_hit_t>, capacity: Int32): Int32
+    Function fbe_physics_cast_shape(world: UInt64, shape: UInt64, position: Ptr<fbe_physics_vec3_t>,
+                                    rotation: Ptr<fbe_physics_quat_t>,
+                                    motion: Ptr<fbe_physics_vec3_t>, layers: UInt32, ignore: UInt64,
+                                    hit: Ptr<fbe_physics_hit_t>): Bool
+    Function fbe_physics_overlap(world: UInt64, shape: UInt64, position: Ptr<fbe_physics_vec3_t>,
+                                 rotation: Ptr<fbe_physics_quat_t>, layers: UInt32, ignore: UInt64,
+                                 bodies: Ptr<UInt64>, capacity: Int32): Int32
+    Function fbe_physics_save(world: UInt64, carried: Float64): Int64
+    Function fbe_physics_saved(world: UInt64, bytes: Ptr<UInt8>, capacity: Int64): Int64
+    Function fbe_physics_restore(world: UInt64, bytes: Ptr<UInt8>, size: Int64,
+                                 carried: Ptr<Float64>): Bool
+    Function fbe_physics_began(world: UInt64, contacts: Ptr<fbe_physics_contact_t>,
+                               capacity: Int32): Int32
+    Function fbe_physics_ended(world: UInt64, pairs: Ptr<UInt64>, capacity: Int32): Int32
 End Extern

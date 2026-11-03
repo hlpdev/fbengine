@@ -1,0 +1,47 @@
+// What casts hit, and what touches what.
+
+Import std.math
+Import "./body"
+
+/// Every layer, for a cast that hits a body of any.
+Public Const ALL_LAYERS: UInt32 = 0xFFFFFFFF
+
+/// What a cast hit: a Body, the point it hit it at, and its surface's normal there, how far along
+/// the cast that was, in meters, and the number of the mesh's triangle it hit, as Shape.Mesh
+/// numbers them, or -1 for a shape that isn't a mesh.
+Public Struct Hit
+    /// The body hit.
+    Public Field Body: Body
+    /// Where it was hit, in the world.
+    Public Field Position: Vec3
+    /// Its surface's normal where it was hit, out of it.
+    Public Field Normal: Vec3
+    /// How far along the cast it was hit, in meters.
+    Public Field Distance: Float
+    /// The mesh's triangle hit, or -1.
+    Public Field Triangle: Int32
+End Struct
+
+/// Two bodies that began touching, as a ball meets the floor or a player walks into a sensor:
+/// where, the normal from A to B, and how fast they came together along it, in meters a second,
+/// as an impact's sound would be loud for.
+Public Struct Contact
+    /// One of the two.
+    Public Field A: Body
+    /// The other.
+    Public Field B: Body
+    /// Where they touched, in the world.
+    Public Field Position: Vec3
+    /// The normal from A to B.
+    Public Field Normal: Vec3
+    /// How fast they came together, in meters a second.
+    Public Field Speed: Float
+End Struct
+
+/// Two bodies that stopped touching, as a player leaves a sensor.
+Public Struct Separation
+    /// One of the two.
+    Public Field A: Body
+    /// The other.
+    Public Field B: Body
+End Struct

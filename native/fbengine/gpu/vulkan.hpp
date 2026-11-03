@@ -67,6 +67,12 @@ struct frame_t {
     bool timed = false;
 };
 
+/// A device's name, as far as its NUL, for std::format: libc++'s takes a char array whole, NULs and
+/// all, and fbe_error's C string would end at the first of them, before what's said of the device.
+inline std::string_view name_of(const VkPhysicalDeviceProperties& properties) {
+    return properties.deviceName;
+}
+
 /// The device the GPU started on, and what it draws with. Vulkan 1.3's names for dynamic
 /// rendering and synchronization2 or 1.2's extensions', whichever the device has.
 struct device_t {
@@ -79,6 +85,8 @@ struct device_t {
     VkPhysicalDeviceProperties properties{};
     /// The most anisotropy its samplers take, 0 if it has none.
     float max_anisotropy = 0.0F;
+    /// Whether it can draw triangles as lines.
+    bool wireframe = false;
     /// The furthest its samplers bias a texture's mipmaps, 0 if they can't, as Metal's can't.
     float max_lod_bias = 0.0F;
     /// How many bits of a timestamp its queue writes, 0 if it writes none, and how many
@@ -149,6 +157,10 @@ frame_t& recording_frame();
 
 /// Has `free` run once the GPU is done with the frame being recorded, and every frame before it.
 void after_frame(std::function<void()> free);
+
+/// Has `free` run each time the GPU stops, before it finishes what's freed after frames: what's
+/// kept on the GPU from frame to frame goes there. Asked for twice, it's still once.
+void at_stop(void (*free)());
 
 /// Records the frame graph, then ends the frame's commands, if any were recorded, and submits
 /// them, uploads first, waiting on `wait` and signaling `signal` if they're not VK_NULL_HANDLE, so

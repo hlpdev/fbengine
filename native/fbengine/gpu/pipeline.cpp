@@ -55,6 +55,9 @@ struct hash_t {
         mix(static_cast<std::size_t>(desc.blend));
         mix(static_cast<std::size_t>(desc.depth_test) | (std::size_t{ desc.depth_write } << 1U));
         mix(static_cast<std::size_t>(desc.depth_compare));
+        for (std::uint32_t i = 0; i < desc.constant_count; ++i) {
+            mix(static_cast<std::size_t>(desc.constants[i]));
+        }
         return hash;
     }
 };
@@ -275,18 +278,35 @@ VkPipeline make_pipeline(const fbe::gpu::device_t& gpu, const fbe::gpu::pipeline
     }
     const std::string vertex(desc.vertex);
     const std::string fragment(desc.fragment);
+    std::array<VkSpecializationMapEntry, 16> entries{};
+    for (std::uint32_t i = 0; i < desc.constant_count; ++i) {
+        entries[i] = {
+            .constantID = i,
+            .offset = i * static_cast<std::uint32_t>(sizeof(std::uint32_t)),
+            .size = sizeof(std::uint32_t),
+        };
+    }
+    const VkSpecializationInfo specialization{
+        .mapEntryCount = desc.constant_count,
+        .pMapEntries = entries.data(),
+        .dataSize = desc.constant_count * sizeof(std::uint32_t),
+        .pData = desc.constants.data(),
+    };
+    const VkSpecializationInfo* constants = desc.constant_count > 0 ? &specialization : nullptr;
     const std::array stages{
         VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = VK_SHADER_STAGE_VERTEX_BIT,
             .module = module,
             .pName = vertex.c_str(),
+            .pSpecializationInfo = constants,
         },
         VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
             .module = module,
             .pName = fragment.c_str(),
+            .pSpecializationInfo = constants,
         },
     };
     const VkPipelineVertexInputStateCreateInfo vertex_input{

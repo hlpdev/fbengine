@@ -136,6 +136,58 @@ Function ACanvasDrawsALoadedSprite() Throws GraphicsError, IOError
     Expect(drawn[0, 3] == Color32(255, 255, 255, 255))
 End Function
 
+// A sprite placed is drawn as if turned and scaled as the placement says, whatever's set, which
+// stays as it is, and a frame of it is the one asked for.
+@Test
+Function ACanvasDrawsASpritePlaced() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local sheet = Try Texture(4, 2, TextureFormat.RGBA8, False)
+    sheet.WritePixels(0, 0, 4, 2, [255 As UInt8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255,
+                                   255, 255, 255, 255, 255, 255, 0, 255, 0, 255, 255, 255,
+                                   255, 0, 255, 255, 40, 40, 40, 255])
+    sheet.SetFilter(TextureFilter.NEAREST)
+    Local sprite = Sprite2D(sheet)
+    sprite.SetFrames(2, 2)
+    sprite.SetHandle(1, 1)
+    Local placed = Try Texture.Target(32, 32)
+    Local canvas = Canvas(placed)
+    canvas.SetRotation(1)
+    canvas.SetScale(7, 7)
+    canvas.Draw(sprite, Placement(16, 16, 0.5, 3, -2), 1)
+    Expect(canvas.Rotation() == 1 && canvas.Scale() == Vec2(7, 7))
+    Local set = Try Texture.Target(32, 32)
+    Local other = Canvas(set)
+    other.SetRotation(0.5)
+    other.SetScale(3, -2)
+    other.Draw(sprite, 16, 16, 1)
+    Local drawn = placed.ToImage()
+    Local wanted = set.ToImage()
+    Local lit = 0
+    For y = 0 To 31
+        For x = 0 To 31
+            Expect(drawn[x, y] == wanted[x, y])
+            If drawn[x, y].a > 0 Then lit = lit + 1
+        End For
+    End For
+    Expect(lit > 0)
+    // And a Mask placed the same covers its pixels.
+    Local mask = Mask.FromImage(sheet.ToImage())
+    mask.SetHandle(2, 1)
+    Local whole = Try Texture.Target(32, 32)
+    Local all = Sprite2D(sheet)
+    all.SetHandle(2, 1)
+    Local at = Placement(16, 16, 0.5, 3, 2)
+    Canvas(whole).Draw(all, at)
+    Local covered = whole.ToImage()
+    For y = 0 To 31
+        For x = 0 To 31
+            Local middle = Vec2((x As Float32) + 0.5, (y As Float32) + 0.5)
+            Expect((covered[x, y].a > 0) == mask.Contains(at, middle))
+        End For
+    End For
+End Function
+
 @Test
 Function ACanvasTilesASprite() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")

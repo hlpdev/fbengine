@@ -214,6 +214,18 @@ Function LinkFolder(link: Path, target: Path) Throws IOError
     End If
 End Function
 
+// A recursive FileWatcher on a Mac is libuv's FSEvents, whose stream starts on a thread of its own a
+// moment after the watcher's made, seeing only what's after that, so what a test writes has to wait
+// for it.
+Function Started()
+    If System.Platform != Platform.MACOS Then Return
+    Local since = Instant.Now()
+    While (Instant.Now() - since) < 1.Seconds
+        Flip()
+        Sleep(5.Milliseconds)
+    End While
+End Function
+
 @Test
 Function ASourceFolderIsMountedAndWatched() Throws IOError
     Local folder = Try TempDir()
@@ -417,6 +429,7 @@ Function AModelReloadsWhenItsBufferDoes() Throws IOError
     If reloaded.Count == 1 Then Expect(reloaded[0].Path == "res://test-buffer/tri.gltf")
     // And so it does when it's watched, and the buffer changes alone.
     Local before = Try File.ReadText(folder.Path / "tri.gltf")
+    Started()
     Try WriteTriangle(folder.Path, "tri", 2)
     Expect((Try File.ReadText(folder.Path / "tri.gltf")) == before)
     FlipUntil(Function(): Bool => model.Reloads > 1)
@@ -444,6 +457,7 @@ Function UnmountingAFolderStopsWatchingIt() Throws IOError
     Try WatcherStarted(folder.Path, "res://test-unmounted")
     Expect(Assets.Unmount("res://test-unmounted"))
     reloaded = []
+    Started()
     Try WritePng(folder.Path, "a.png", 4)
     FlipFor(500.Milliseconds)
     Expect(ReloadsOf("res://test-unmounted/a.png") == 0)
@@ -539,6 +553,7 @@ Function WhatsHiddenIsntWatched() Throws IOError
     // A hidden link has no watcher of its own, and what changes in a hidden folder is no one's.
     Try LinkFolder(folder.Path / ".linked", target.Path)
     Try Dir.CreateAll(folder.Path / ".hidden")
+    Started()
     Try File.WriteText(folder.Path / ".hidden" / "x", "x")
     FlipFor(500.Milliseconds)
     Expect(Assets.Watching() == watching)
@@ -559,6 +574,7 @@ Function AFolderInAWatchedOneCanBeRenamedAndGoesOnBeingWatched() Throws IOError
     Defer Assets.StopWatching()
     Try WatcherStarted(folder.Path, "res://test-renamed")
     Try File.Move(folder.Path / "sub", folder.Path / "sub2")
+    Started()
     Try WritePng(folder.Path / "sub2" / "deeper", "b.png", 2)
     Local picture = Try Assets.Load<HotPicture>("res://test-renamed/sub2/deeper/b.png")
     Try WritePng(folder.Path / "sub2" / "deeper", "b.png", 4)

@@ -1,0 +1,470 @@
+// Starfall, an arcade game on fbengine's 2D: rocks fall, turning, through a field of stars, and
+// the ship over the ground slides left and right and fires bolts up at them. A bolt that meets a
+// rock, pixel for pixel, breaks it into sparks and scores; a rock that meets the ship takes one of
+// its three lives. Its sprites are drawn from strings of pixels here, so it needs no files.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+
+Public Const WIDTH: Int32 = 320
+Public Const HEIGHT: Int32 = 240
+// Where the ground's top is, and the ship's middle above it, its engines' flames just over it.
+Const GROUND: Int32 = 224
+Const FLOOR: Float32 = 224.0
+Const SHIP_Y: Float32 = 215.0
+// How far below the ground's top a rock is gone, the biggest turned at its widest.
+Const BELOW: Float32 = 18.0
+// How many steps a watched game's last moments last, once it's over: two seconds.
+Const OVER_STEPS: Int32 = 120
+
+// A sprite's colors: '.' is clear, and each other character its color here.
+Function ColorOf(pixel: Char): Color32
+    Select pixel
+        Case '1'
+            Return Color32(120, 200, 255, 255)
+        Case '2'
+            Return Color32(40, 110, 220, 255)
+        Case '3'
+            Return Color32(250, 250, 255, 255)
+        Case '4'
+            Return Color32(255, 150, 40, 255)
+        Case '5'
+            Return Color32(90, 70, 60, 255)
+        Case '6'
+            Return Color32(150, 120, 95, 255)
+        Case '7'
+            Return Color32(200, 175, 140, 255)
+        Case '8'
+            Return Color32(255, 90, 20, 255)
+        Case '9'
+            Return Color32(255, 230, 120, 255)
+        Case 'a'
+            Return Color32(70, 160, 70, 255)
+        Case 'b'
+            Return Color32(120, 210, 90, 255)
+        Case 'c'
+            Return Color32(110, 80, 55, 255)
+        Case 'd'
+            Return Color32(80, 58, 40, 255)
+        Default
+            Return Color32(0, 0, 0, 0)
+    End Select
+End Function
+
+// The RGBA bytes of rows of characters, as a texture's and a mask's are.
+Function BytesOf(rows: String[]): UInt8[]
+    Local bytes: UInt8[] = []
+    For row In rows
+        For pixel In row.Chars
+            Local color = ColorOf(pixel)
+            bytes.Add(color.r)
+            bytes.Add(color.g)
+            bytes.Add(color.b)
+            bytes.Add(color.a)
+        End For
+    End For
+    Return bytes
+End Function
+
+// A texture of rows of characters, drawn as pixel art is, each texel a sharp square.
+Function TextureOf(rows: String[]): Texture Throws GraphicsError
+    Local width = rows[0].Chars.Count
+    Local height = rows.Count
+    Local made = Try Texture(width, height, TextureFormat.RGBA8, False)
+    made.WritePixels(0, 0, width, height, BytesOf(rows))
+    made.SetFilter(TextureFilter.NEAREST)
+    Return made
+End Function
+
+Function ShipRows(): String[]
+    Return [
+        "......121......",
+        ".....12221.....",
+        ".....12321.....",
+        "....1223221....",
+        "....1222221....",
+        ".1.122222221.1.",
+        ".1122222222211.",
+        "112222222222211",
+        "1..11.....11..1",
+        "...44.....44..."
+    ]
+End Function
+
+Function RockRows(): String[]
+    Return [
+        ".....5555.......",
+        "...55666655.....",
+        "..5666776665....",
+        ".566677766665...",
+        ".5666666666665..",
+        "56666666677665..",
+        "566676666776665.",
+        "5666776666666655",
+        "5666776666666665",
+        ".566666667766665",
+        ".56666666776665.",
+        "..5666666666665.",
+        "..556666666665..",
+        "...5566666655...",
+        ".....555555.....",
+        "................"
+    ]
+End Function
+
+// Two frames of the engines' flame, one above the other.
+Function FlameRows(): String[]
+    Return [
+        "898",
+        ".9.",
+        "898",
+        "898",
+        "88.",
+        ".8.",
+        "8.8",
+        ".8."
+    ]
+End Function
+
+Function GroundRows(): String[]
+    Return [
+        "aaaaaaaabbaaaaaa",
+        "abbaaaaaaaaaabba",
+        "cccccccccccccccc",
+        "cdccccdcccccdccc",
+        "ccccccccdccccccc",
+        "cccdcccccccdcccc",
+        "ccccccccccccccdc",
+        "cdccccdccccccccc",
+        "ccccccccccdccccc",
+        "ccdccccccccccccc",
+        "cccccccdcccccccd",
+        "cccccccccccccccc",
+        "cdccccccccdccccc",
+        "ccccdccccccccccc",
+        "cccccccccccccdcc",
+        "ccccccdccccccccc"
+    ]
+End Function
+
+Public Final Class Rock
+    Public Field X: Float32 = 0
+    Public Field Y: Float32 = 0
+    Public Field Speed: Float32 = 0
+    Public Field Drift: Float32 = 0
+    Public Field Angle: Float32 = 0
+    Public Field Spin: Float32 = 0
+    Public Field Size: Float32 = 1
+
+    Public New(x: Float32, speed: Float32, drift: Float32, spin: Float32, size: Float32)
+        X = x
+        Y = -12
+        Speed = speed
+        Drift = drift
+        Spin = spin
+        Size = size
+    End New
+
+    Public Method Placed(): Placement => Placement(X, Y, Angle, Size, Size)
+End Class
+
+Public Final Class Bolt
+    Public Field X: Float32 = 0
+    Public Field Y: Float32 = 0
+
+    Public New(x: Float32, y: Float32)
+        X = x
+        Y = y
+    End New
+
+    // The column it's drawn in, and its first row of the 5 it's drawn in.
+    Public Method Column(): Int32 => X As Int32
+    Public Method Top(): Int32 => Y As Int32
+End Class
+
+// A rock's mask, which needs no GPU, as its sprite does.
+Public Function RockMask(): Mask
+    Local mask = Mask.FromPixels(BytesOf(RockRows()), 16, 16)
+    mask.SetHandle(8, 8)
+    Return mask
+End Function
+
+// Whether a bolt meets a rock: the pixels it's drawn in against the rock's where it's drawn.
+Public Function BoltHits(mask: Mask, bolt: Bolt, falling: Rock): Bool
+    Return mask.CollidesRect(falling.Placed(),
+                             Rect(bolt.Column() As Float32, bolt.Top() As Float32, 1, 5))
+End Function
+
+// What the ship's asked to do in a frame: move, and fire.
+Public Struct Move
+    Public Field Across: Float32
+    Public Field Firing: Bool
+End Struct
+
+Public Final Class Spark
+    Public Field X: Float32 = 0
+    Public Field Y: Float32 = 0
+    Public Field Across: Float32 = 0
+    Public Field Down: Float32 = 0
+    Public Field Life: Int32 = 0
+
+    Public New(x: Float32, y: Float32, across: Float32, down: Float32, life: Int32)
+        X = x
+        Y = y
+        Across = across
+        Down = down
+        Life = life
+    End New
+End Class
+
+Public Final Class Star
+    Public Field X: Float32 = 0
+    Public Field Y: Float32 = 0
+    Public Field Speed: Float32 = 0
+    Public Field Bright: UInt8 = 0
+
+    Public New(x: Float32, y: Float32, speed: Float32, bright: UInt8)
+        X = x
+        Y = y
+        Speed = speed
+        Bright = bright
+    End New
+End Class
+
+// The game: its sprites and their masks, its font, and what's on the screen.
+Public Final Class Game
+    Field ship: Sprite2D
+    Field shipMask: Mask
+    Field rock: Sprite2D
+    Field rockMask: Mask
+    Field flame: Sprite2D
+    Field ground: Sprite2D
+    Field font: Font
+    Field random: Random
+    Field stars: Star[] = []
+    Field rocks: Rock[] = []
+    Field bolts: Bolt[] = []
+    Field sparks: Spark[] = []
+    Field shipX: Float32 = 160
+    Field cooldown: Int32 = 0
+    Field hurt: Int32 = 0
+    Field over: Int32 = 0
+    Public Field Score: Int32 = 0
+    Public Field Lives: Int32 = 3
+    Public Field Frame: Int32 = 0
+
+    Public New() Throws GraphicsError
+        ship = Sprite2D(Try TextureOf(ShipRows()))
+        ship.SetHandle(7, 5)
+        shipMask = Mask.FromPixels(BytesOf(ShipRows()), 15, 10)
+        shipMask.SetHandle(7, 5)
+        rock = Sprite2D(Try TextureOf(RockRows()))
+        rock.SetHandle(8, 8)
+        rockMask = RockMask()
+        flame = Sprite2D(Try TextureOf(FlameRows()))
+        flame.SetFrames(3, 4)
+        ground = Sprite2D(Try TextureOf(GroundRows()))
+        font = Font.BuiltIn(12.0)
+        random = Random(1979)
+        For i = 1 To 70
+            stars.Add(Star(random.Float(0.0, WIDTH As Float),
+                           random.Float(0.0, FLOOR As Float),
+                           random.Float(0.2, 1.2), random.Int(90, 255) As UInt8))
+        End For
+    End New
+
+    // A step: the ship moved `across` pixels, firing if `firing`, then everything else moved and
+    // met.
+    Public Method Step(across: Float32, firing: Bool)
+        Frame += 1
+        shipX = Clamp(shipX + across, 10, (WIDTH - 10) As Float32)
+        If cooldown > 0 Then cooldown -= 1
+        If firing && cooldown == 0 && Lives > 0
+            bolts.Add(Bolt(shipX - 5, SHIP_Y - 6))
+            bolts.Add(Bolt(shipX + 5, SHIP_Y - 6))
+            cooldown = 12
+        End If
+        If hurt > 0 Then hurt -= 1
+        // A rock every 25 frames, more as the score goes up.
+        If Frame % Max(8, 25 - (Score / 100)) == 1
+            rocks.Add(Rock(random.Float(16.0, (WIDTH - 16) As Float),
+                           random.Float(0.6, 1.6),
+                           random.Float(-0.4, 0.4), random.Float(-0.06, 0.06),
+                           random.Chance(0.3) ? 1.5 : 1.0))
+        End If
+        For star In stars
+            star.Y += star.Speed
+            If star.Y >= FLOOR
+                star.Y -= FLOOR
+                star.X = random.Float(0.0, WIDTH As Float)
+            End If
+        End For
+        For bolt In bolts
+            bolt.Y -= 5
+        End For
+        bolts.RemoveAll(Function(bolt: Bolt) => bolt.Y < -8)
+        For falling In rocks
+            falling.Y += falling.Speed
+            falling.X += falling.Drift
+            falling.Angle += falling.Spin
+        End For
+        Meet()
+        rocks.RemoveAll(Function(falling: Rock) => falling.Y > FLOOR + BELOW)
+        For spark In sparks
+            spark.X += spark.Across
+            spark.Y += spark.Down
+            spark.Down += 0.08
+            spark.Life -= 1
+        End For
+        sparks.RemoveAll(Function(spark: Spark) => spark.Life <= 0)
+    End Method
+
+    // What's watched: a step of the pilot's, and a new game two seconds after one's over.
+    Public Method Watch()
+        If Lives == 0
+            over += 1
+            If over > OVER_STEPS Then StartAgain()
+        End If
+        Local move = Pilot()
+        Step(move.Across, move.Firing)
+    End Method
+
+    // Everything but the stars and the random numbers as it was, so the next game's a different one.
+    Method StartAgain()
+        rocks = []
+        bolts = []
+        sparks = []
+        shipX = 160
+        cooldown = 0
+        hurt = 0
+        over = 0
+        Score = 0
+        Lives = 3
+        Frame = 0
+    End Method
+
+    // Bolts against rocks, and rocks against the ship, pixel for pixel.
+    Method Meet()
+        Local broken: Rock[] = []
+        Local spent: Bolt[] = []
+        For falling In rocks
+            For bolt In bolts
+                If !spent.Contains(bolt) && BoltHits(rockMask, bolt, falling)
+                    broken.Add(falling)
+                    spent.Add(bolt)
+                    Score += falling.Size > 1.0 ? 20 : 10
+                    Break
+                End If
+            End For
+            If hurt == 0 && Lives > 0 && !broken.Contains(falling) &&
+               shipMask.Collides(Placement.At(shipX, SHIP_Y), rockMask, falling.Placed())
+                broken.Add(falling)
+                Lives -= 1
+                hurt = 90
+            End If
+        End For
+        For falling In broken
+            For i = 0 To 11
+                Local angle = random.Float(0, 2 * Pi)
+                Local speed = random.Float(0.5, 2.5)
+                sparks.Add(Spark(falling.X, falling.Y, Cos(angle) * speed, Sin(angle) * speed,
+                                 random.Int(20, 40)))
+            End For
+            rocks.Remove(falling)
+        End For
+        For bolt In spent
+            bolts.Remove(bolt)
+        End For
+    End Method
+
+    // Draws the frame into the screen.
+    Public Method Draw()
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(8, 10, 24, 255))
+        canvas.Clear()
+        For star In stars
+            canvas.SetColor(Color32(star.Bright, star.Bright, 255, 255))
+            canvas.Plot(star.X As Int32, star.Y As Int32)
+        End For
+        canvas.SetColor(Color32(255, 255, 255, 255))
+        canvas.SetBlend(Blend2D.ALPHA)
+        For falling In rocks
+            canvas.Draw(rock, falling.Placed())
+        End For
+        // The bolts and the sparks glow, added to what's under them.
+        canvas.SetBlend(Blend2D.ADD)
+        canvas.SetColor(Color32(255, 220, 120, 255))
+        For bolt In bolts
+            canvas.DrawLine(bolt.Column(), bolt.Top(), bolt.Column(), bolt.Top() + 4)
+        End For
+        For spark In sparks
+            Local glow = Min(255, spark.Life * 8) As UInt8
+            canvas.SetColor(Color32(glow, (glow / 2) As UInt8, 40, 255))
+            canvas.DrawOval(spark.X As Int32, spark.Y As Int32, 2, 2)
+        End For
+        // The ship, blinking while it's hurt, its flame flickering.
+        canvas.SetColor(Color32(255, 255, 255, 255))
+        If Lives > 0 && (hurt / 6) % 2 == 0
+            canvas.Draw(flame, shipX - 5, SHIP_Y + 5, (Frame / 4) % 2)
+            canvas.Draw(flame, shipX + 3, SHIP_Y + 5, ((Frame / 4) + 1) % 2)
+            canvas.SetBlend(Blend2D.ALPHA)
+            canvas.Draw(ship, shipX, SHIP_Y)
+        End If
+        // The ground, tiled under a viewport of its own, which rocks fall behind.
+        canvas.SetBlend(Blend2D.SOLID)
+        canvas.SetViewport(0, GROUND, WIDTH, HEIGHT - GROUND)
+        canvas.Tile(ground, 0, GROUND As Float32)
+        canvas.ResetViewport()
+        canvas.SetBlend(Blend2D.ALPHA)
+        // The score, and the lives left as small ships, over a panel.
+        canvas.SetColor(Color32(0, 0, 0, 140))
+        canvas.DrawRect(0, 0, WIDTH, 14)
+        canvas.SetColor(Color32(250, 230, 160, 255))
+        canvas.DrawText(font, "{Score:06}", 4, 0)
+        canvas.SetColor(Color32(255, 255, 255, 255))
+        canvas.SetScale(0.6, 0.6)
+        For life = 1 To Lives
+            canvas.Draw(ship, (WIDTH - (life * 12)) As Float32, 7)
+        End For
+        canvas.SetScale(1, 1)
+        canvas.SetBlend(Blend2D.SOLID)
+        If Lives == 0
+            canvas.SetColor(Color32(220, 60, 60, 255))
+            canvas.DrawRect(WIDTH / 2 - 40, HEIGHT / 2 - 2, 80, 4)
+        End If
+    End Method
+
+    // Whether a rock's crossing the ground's top, its middle just above it.
+    Public Method RockCrossing(): Bool
+        For falling In rocks
+            If falling.Y >= FLOOR - 2 && falling.Y < FLOOR Then Return True
+        End For
+        Return False
+    End Method
+
+    // The pilot that plays the attract mode: under the lowest rock it can reach, firing when it's
+    // under one, and away from one about to land on it.
+    Public Method Pilot(): Move
+        Local target: Rock? = Null
+        For falling In rocks
+            If falling.Y < SHIP_Y - 20 && (target == Null || falling.Y > target.Y)
+                target = falling
+            End If
+        End For
+        Local across: Float32 = 0
+        Local firing = False
+        If target != Null
+            Local gap = target.X - shipX
+            across = Clamp(gap, -2.0, 2.0) As Float32
+            firing = Abs(gap) < 8
+        End If
+        For falling In rocks
+            If falling.Y > SHIP_Y - 40 && Abs(falling.X - shipX) < 14
+                across = falling.X > shipX ? -2.5 : 2.5
+            End If
+        End For
+        Return Move(across, firing)
+    End Method
+End Class

@@ -1,0 +1,139 @@
+// A video's sound: its first sample at the video's time 0, however late it starts, or however its
+// stream was cut, a gap in it kept as silence, and a time that can't be right ignored.
+
+Import std.core
+Import std.ffi
+Import std.image
+Import std.math
+Import std.test
+Import fbengine_video
+
+// The left channel's sample at `seconds` of a WAV of two channels at 44100 Hz.
+Function SampleAt(wav: Buffer<UInt8>, seconds: Float64): Float
+    Local at = 44 + (Floor(seconds * 44100) As Int64) * 8
+    Local bits = (wav[at] As UInt32) | ((wav[at + 1] As UInt32) << 8) |
+                 ((wav[at + 2] As UInt32) << 16) | ((wav[at + 3] As UInt32) << 24)
+    Return Float32.FromBits(bits)
+End Function
+
+// The loudest sample from `from` to `to` seconds.
+Function Loudest(wav: Buffer<UInt8>, from: Float64, to: Float64): Float
+    Local most: Float = 0
+    Local t = from
+    While t < to
+        most = Max(most, Abs(SampleAt(wav, t)))
+        t += 1.0 / 4410
+    End While
+    Return most
+End Function
+
+Function SecondsOf(wav: Buffer<UInt8>): Float64 => ((wav.Count - 44) As Float64) / (44100 * 8)
+
+@Test
+Function ASoundStartingLateIsSilentUntilThen() Throws VideoError
+    Local video = Try Video.Load(Embed("media/late.mpg"))
+    Defer video.Free()
+    Local wav = Buffer<UInt8>.From(video.Sound())
+    Expect(Loudest(wav, 0, 0.45) < 0.001, "it's {Loudest(wav, 0, 0.45)} before it starts")
+    Expect(Loudest(wav, 0.6, 1.9) > 0.05)
+    Expect(SecondsOf(wav) > 1.9 && SecondsOf(wav) < 2.1, "it's {SecondsOf(wav)} s long")
+End Function
+
+// Packets of sound gone from 0.8 s to 1.3 s leave silence there, and the rest at its times.
+@Test
+Function AGapInASoundIsSilence() Throws VideoError
+    Local video = Try Video.Load(Embed("media/gap.mpg"))
+    Defer video.Free()
+    Local wav = Buffer<UInt8>.From(video.Sound())
+    Expect(Loudest(wav, 0.1, 0.75) > 0.05)
+    Expect(Loudest(wav, 0.95, 1.28) < 0.001, "it's {Loudest(wav, 0.95, 1.28)} in the gap")
+    Expect(Loudest(wav, 1.45, 1.85) > 0.05)
+    Expect(SecondsOf(wav) > 1.9 && SecondsOf(wav) < 2.1, "it's {SecondsOf(wav)} s long")
+End Function
+
+// The sound's decoded once, as the video opens, and each Sound is the same.
+@Test
+Function ASoundIsTheSameEachTime() Throws VideoError
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    Local first = video.Sound()
+    Expect(video.Sound() == first)
+End Function
+
+// A packet whose time says it's 26 hours on, in a video of 2 seconds, is taken to be wrong, and its
+// sound goes on from the packet before's.
+@Test
+Function ASoundPacketsTimeFarPastTheVideoIsIgnored() Throws VideoError
+    Local video = Try Video.Load(Embed("media/longsound.mpg"))
+    Defer video.Free()
+    Local wav = Buffer<UInt8>.From(video.Sound())
+    Expect(SecondsOf(wav) > 1.9 && SecondsOf(wav) < 2.1, "it's {SecondsOf(wav)} s long")
+    Expect(Loudest(wav, 1.8, 1.95) > 0.05)
+End Function
+
+// Silence is at most 10 minutes past the sound's own frames: a video made 802 s long by 20,000 bare
+// pictures, 3 bytes each, whose 2 s of sound has a packet more at 6 s, at 30 s, and at 650 s, keeps
+// the first two, after silence, and takes the third's time to be wrong.
+@Test
+Function SilenceIsAtMostTenMinutes() Throws VideoError
+    Local video = Try Video.Load(Embed("media/longpad.mpg"))
+    Defer video.Free()
+    Expect(video.Duration() > 800)
+    Local wav = Buffer<UInt8>.From(video.Sound())
+    Expect(SecondsOf(wav) > 30.1 && SecondsOf(wav) < 30.5, "it's {SecondsOf(wav)} s long")
+    Expect(Loudest(wav, 2.1, 5.9) < 0.001)
+    Expect(Loudest(wav, 6.0, 6.1) > 0.05)
+    Expect(Loudest(wav, 6.2, 29.9) < 0.001)
+    Expect(Loudest(wav, 30.0, 30.1) > 0.05)
+End Function
+
+// A sound starting 10 s into its video, further than its own 2 s and 5 seconds, is at its time.
+@Test
+Function ASoundStartingFarIntoItsVideoIsAtItsTime() Throws VideoError
+    Local video = Try Video.Load(Embed("media/late10.mpg"))
+    Defer video.Free()
+    Local wav = Buffer<UInt8>.From(video.Sound())
+    Expect(Loudest(wav, 0, 9.9) < 0.001, "it's {Loudest(wav, 0, 9.9)} before it starts")
+    Expect(Loudest(wav, 10.1, 11.5) > 0.05)
+End Function
+
+// A first picture whose time, less its number's, is before a stream's 0 is a time all the same:
+// the same video with all its times 0.7 s later has the same sound.
+@Test
+Function APictureBeforeTheStreamsStartIsATime() Throws VideoError
+    Local earlier = Try Video.Load(Embed("media/cut_neg.mpg"))
+    Defer earlier.Free()
+    Local later = Try Video.Load(Embed("media/cut_pos.mpg"))
+    Defer later.Free()
+    Expect(earlier.Sound() == later.Sound())
+End Function
+
+// The gray of a frame of opengop.mpg, which is 16 and 4 times its number.
+Function Counted(video: Video): Int => Round((video.Frame()[32, 24].r As Float) / 4.66) As Int
+
+// opencut.mpg is opengop.mpg cut at its third group of pictures, which is open, so its first two
+// pictures are made from pictures it hasn't, and the first picture whose time it says is its
+// 22nd: its sound is placed from its first picture all the same, so it plays with its pictures as
+// the whole video's does, each sample the whole's 22 frames on.
+@Test
+Function ACutVideosSoundPlaysWithItsPictures() Throws VideoError
+    Local cut = Try Video.Load(Embed("media/opencut.mpg"))
+    Defer cut.Free()
+    Local whole = Try Video.Load(Embed("media/opengop.mpg"))
+    Defer whole.Free()
+    For frame In [2, 10, 27]
+        cut.Seek((frame As Float64) / 25)
+        Expect(Counted(cut) == frame + 22, "its frame {frame} is the whole's {Counted(cut)}")
+    End For
+    Local part = Buffer<UInt8>.From(cut.Sound())
+    Local all = Buffer<UInt8>.From(whole.Sound())
+    // 22 frames of 1764 samples of 8 bytes.
+    Local on = 22 * 1764 * 8
+    Expect(part.Count > 44 && part.Count + on <= all.Count,
+           "its sound is {part.Count} bytes, the whole's {all.Count}")
+    Local same = True
+    For i = 44 To part.Count - 1
+        If part[i] != all[i + on] Then same = False
+    End For
+    Expect(same)
+End Function

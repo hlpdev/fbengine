@@ -1,0 +1,119 @@
+// Determinism through the FB API: worlds made and stepped alike stay alike, bit for bit, and a
+// world restored from a state steps on exactly as it did.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine_physics
+
+// A scene of crates, balls, a hinged door, a sensor, and a character walking, stepped by Update
+// for `frames` frames of uneven times.
+Function Scene(): (PhysicsWorld, Character)
+    Local world = PhysicsWorld()
+    Body(world, Shape.Box(Vec3(30, 1, 30)), Motion.STATIC, Vec3(0, -0.5, 0))
+    Local crate = Shape.Box(Vec3(1, 1, 1))
+    Local ball = Shape.Sphere(0.4)
+    For i = 0 To 29
+        Body(world, crate, Motion.DYNAMIC,
+             Vec3(((i % 3) As Float) * 1.05, 0.5 + ((i / 9) As Float) * 1.02,
+                  (((i / 3) % 3) As Float) * 1.05))
+        Body(world, ball, Motion.DYNAMIC, Vec3(((i % 6) As Float) - 2, 6 + ((i / 6) As Float), 1))
+    End For
+    Local door = Body(world, Shape.Box(Vec3(1, 2, 0.1)), Motion.DYNAMIC, Vec3(5.5, 1, 0))
+    Joint.Hinge(door, Null, Vec3(5, 1, 0), Vec3(0, 1, 0))
+    Body(world, Shape.Box(Vec3(2, 2, 2)), Motion.STATIC, Vec3(-4, 1, 0)).SetSensor(True)
+    Local player = Character(world, Shape.Capsule(1.8, 0.3), Vec3(-6, 0.9, 4))
+    Return (world, player)
+End Function
+
+Function Frames(world: PhysicsWorld, player: Character, from: Int, frames: Int)
+    For frame = from To from + frames - 1
+        player.Move(Vec3(1, player.OnGround() ? 0.0 : -3.0, -0.5), 1.0 / 60)
+        // Frames of 13 to 23 ms, as a real game's are.
+        world.Update(0.013 + ((frame % 5) As Float64) * 0.0025)
+    End For
+End Function
+
+// Where each body that's touched one in a ray down the scene is, and how fast it goes.
+Function Bodies(world: PhysicsWorld): String
+    Local said = ""
+    For x = -8 To 8
+        For hit In world.CastRayAll(Vec3(x As Float, 20, 0.5), Vec3(0, -1, 0), 40)
+            said += " {hit.Body.Position()} {hit.Body.Velocity()} {hit.Body.Rotation()}"
+        End For
+    End For
+    Return said
+End Function
+
+Function Positions(world: PhysicsWorld, player: Character): String
+    Local said = "{player.Position()} {player.Ground()}"
+    For contact In world.Began()
+        said += " {contact.Position}"
+    End For
+    Return said
+End Function
+
+@Test
+Function WorldsMadeAndSteppedAlikeStayAlikeBitForBit()
+    Local first, firstPlayer = Scene()
+    Defer first.Free()
+    Local second, secondPlayer = Scene()
+    Defer second.Free()
+    For round = 0 To 9
+        Frames(first, firstPlayer, round * 30, 30)
+        Frames(second, secondPlayer, round * 30, 30)
+        Expect(Positions(first, firstPlayer) == Positions(second, secondPlayer))
+    End For
+    // Every body is where the other world's is, as fast, to the bit.
+    Expect(Bodies(first) == Bodies(second))
+    Expect(first.Steps() == second.Steps())
+End Function
+
+@Test
+Function AWorldRestoredStepsOnExactlyAsItDid() Throws PhysicsStateError
+    Local world, player = Scene()
+    Defer world.Free()
+    Frames(world, player, 0, 60)
+    Local saved = world.Save()
+    Local steps = world.Steps()
+    Frames(world, player, 60, 90)
+    Local went = world.Save().Bytes()
+    Local where = player.Position()
+    Try world.Restore(saved)
+    Expect(world.Steps() == steps)
+    Frames(world, player, 60, 90)
+    Expect(player.Position() == where)
+    Expect(world.Save().Bytes() == went)
+End Function
+
+@Test
+Function AStatesBytesAreTheSameState() Throws PhysicsStateError
+    Local world, player = Scene()
+    Defer world.Free()
+    Frames(world, player, 0, 20)
+    Local saved = world.Save()
+    Expect(saved.Size() > 0)
+    Local kept = PhysicsState(saved.Bytes())
+    Frames(world, player, 20, 20)
+    Try world.Restore(kept)
+    Expect(world.Save().Bytes() == saved.Bytes())
+End Function
+
+@Test
+Function AStateRestoresOnlyIntoItsWorldAsItWas()
+    Local world, _ = Scene()
+    Defer world.Free()
+    Local other, _ = Scene()
+    Defer other.Free()
+    Local saved = world.Save()
+    // Another world's bodies aren't its.
+    Local error = ExpectThrows<PhysicsStateError>(other.Restore(saved))
+    Expect(error?.Message ==
+           "the state is of other bodies, joints, or characters than the world has")
+    // Nor are its own, once it has another.
+    Body(world, Shape.Sphere(1), Motion.DYNAMIC, Vec3(10, 10, 10))
+    Expect(ExpectThrows<PhysicsStateError>(world.Restore(saved)) != Null)
+    Local nothing = ExpectThrows<PhysicsStateError>(world.Restore(PhysicsState([1, 2, 3])))
+    Expect(nothing?.Message == "that isn't a world's state")
+    Expect(ExpectThrows<PhysicsStateError>(world.Restore(PhysicsState([]))) != Null)
+End Function

@@ -32,6 +32,9 @@ set(JPH_USE_CPU_COMPUTE OFF CACHE BOOL "" FORCE)
 foreach(option USE_AVX USE_AVX2 USE_AVX512 USE_LZCNT USE_TZCNT USE_F16C USE_FMADD)
   set(${option} OFF CACHE BOOL "" FORCE)
 endforeach()
+# A world given the same calls steps the same on every target, compiler, and build, as replays
+# and games played in lockstep over a network need, for about 8% of Jolt's speed.
+set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
   JoltPhysics
   GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
@@ -50,3 +53,9 @@ target_include_directories(fbengine_physics_native PUBLIC "${CMAKE_CURRENT_SOURC
 target_compile_definitions(fbengine_physics_native PRIVATE FBE_PHYSICS_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_physics_native PRIVATE Jolt)
+# What it works out for Jolt rounds the same everywhere: no multiply and add fused into one.
+if(MSVC)
+  target_compile_options(fbengine_physics_native PRIVATE /fp:precise)
+else()
+  target_compile_options(fbengine_physics_native PRIVATE -ffp-contract=off)
+endif()

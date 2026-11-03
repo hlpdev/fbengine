@@ -6,6 +6,7 @@
 #include "gpu/shader.hpp"
 #include "gpu/vulkan.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -49,6 +50,10 @@ struct pipeline_desc_t {
     bool depth_write = false;
     /// Depth is reversed, 1 near and 0 far, so nearer passes by default.
     VkCompareOp depth_compare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    /// The shader's first `constant_count` specialization constants, by their ids from 0, which
+    /// make one shader a family of pipelines, each as fast as if it were written for what it draws.
+    std::array<std::uint32_t, 16> constants{};
+    std::uint32_t constant_count = 0;
 
     bool operator==(const pipeline_desc_t&) const = default;
 };

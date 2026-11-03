@@ -425,8 +425,9 @@ TEST_CASE("a device whose set holds too few textures is refused", "[gpu]") {
     REQUIRE(fbe_window_set_headless(true));
     fbe::gpu::inject(fbe::gpu::fault_t::FEWEST_DESCRIPTORS);
     CHECK(!fbe_gpu_start());
-    CHECK(
-        std::string(fbe_error()).ends_with("holds 1023 textures at once, and fbengine needs 1024"));
+    const std::string why = fbe_error();
+    INFO(why);
+    CHECK(why.ends_with("holds 1023 textures at once, and fbengine needs 1024"));
     CHECK(!fbe_gpu_started());
     stop_gpu();
 }

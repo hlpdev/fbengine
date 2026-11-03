@@ -1,0 +1,7 @@
+[project]
+name = "crate_on_a_lift"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../packages/fbengine" }
+fbengine_physics = { path = "../../packages/fbengine_physics" }

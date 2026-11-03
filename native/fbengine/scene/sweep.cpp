@@ -57,7 +57,8 @@ bool lowest_root(double a, double b, double c, double below, double& root) {
     return false;
 }
 
-/// Whether a point on a triangle's plane is inside it.
+} // namespace
+
 bool inside(const triangle_t& triangle, vec3_t p) {
     const auto& c = triangle.corners;
     // A hair past each edge counts, so a point on an edge or a corner its neighbours share is in
@@ -68,8 +69,6 @@ bool inside(const triangle_t& triangle, vec3_t p) {
     };
     return within(0, 1) && within(1, 2) && within(2, 0);
 }
-
-} // namespace
 
 bool plane_under(const mat4_t& matrix, vec3_t min, vec3_t max,
                  std::array<std::array<vec3_t, 3>, 2>& triangles) {
