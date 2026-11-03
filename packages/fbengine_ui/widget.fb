@@ -4,12 +4,14 @@ Import std.core
 Import std.math
 Import fbengine
 Import "./layout"
+Import "./painter"
 Import "./theme"
 Import "./ui"
 
 /// A Node that shows something and takes input, styled by its Ui's theme by its style's name and
 /// its state. A widget's own class says what it does with the pointer, keys, and text, through
-/// the Methods its Ui calls, which a game's own widgets override as fbengine_ui's do.
+/// the Methods its Ui calls, which a game's own widgets override as fbengine_ui's do, and its Draw
+/// how it looks.
 Public Class Widget Extends Node
     Field styleName: String
     Field enabled: Bool = True
@@ -130,6 +132,24 @@ Public Class Widget Extends Node
 
     /// It got the focus, or lost it.
     @MainThread Public Method FocusChanged(focused: Bool)
+    End Method
+
+    /// Draws it, before what's in it: its box, as its style says, which is all a Widget of its own
+    /// shows; a game's widget draws more after Super.Draw.
+    @MainThread Public Method Draw(paint: Painter)
+        paint.Panel(Box(), style)
+    End Method
+
+    /// Draws what goes over what's in it, as a scroll bar. Nothing at first.
+    @MainThread Public Method DrawOver(paint: Painter)
+    End Method
+
+    /// The style of `part` of it in its state, as Theme.PartOf says, so "slider.thumb", or a kind's
+    /// own, "slider.volume.thumb". What's a part of it, a game's widget names too.
+    @MainThread Public Method PartStyle(part: String): Style
+        Local own = ui
+        If own == Null Then Return style
+        Return own.CurrentTheme().PartOf(styleName, part, state)
     End Method
 
     /// Forgets what the last Update said it did, as each Update does before reading the input.

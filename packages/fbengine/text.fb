@@ -83,6 +83,17 @@ Public Final Class Font Implements Printable
         Return made != 0 ? Font(made) : Null
     End Method
 
+    /// The engine's own font, at `size`, 16 at first: a Latin subset of Noto Sans in fbengine's
+    /// DLL, so it needs no file, and looks and measures the same on every machine, as a console, a
+    /// debug UI, or a game with no font of its own wants. A character it hasn't is the OS's fonts',
+    /// as any font's is. Panics for a size that isn't over 0.
+    @MainThread Public Static Method BuiltIn(size: Float32 = 16.0, style: FontStyle? = Null): Font
+        CheckSize("Font.BuiltIn", size)
+        Local made = fbe_text_embedded_font(size, Bits(style))
+        If made == 0 Then Panic(LastError())
+        Return Font(made)
+    End Method
+
     /// The OS's own font for its UI, as Segoe UI is Windows', or another of its fonts if it hasn't
     /// that; Null when it has no fonts at all. Panics for a size that isn't over 0.
     @MainThread Public Static Method SystemUI(size: Float32, style: FontStyle? = Null): Font?

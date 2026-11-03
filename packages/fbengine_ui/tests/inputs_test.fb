@@ -12,6 +12,8 @@ Function Near(a: Float32, b: Float32): Bool => Abs(a - b) < 0.001
 
 // A window, and a Ui of a column holding `widget`, laid out.
 Function Holding(widget: Widget): Ui Throws GraphicsError
+    // These tests press a PC's editing keys, whatever this OS's are; the one for a Mac's says so.
+    SetEditingKeys(EditingKeys.PC)
     Window.SetHeadless(True)
     Try Graphics(400, 300)
     Local root = Node("root")
@@ -358,4 +360,100 @@ Function APasteAtTheMostIsCutQuickly() Throws GraphicsError
     Try Typed(ui, long.ToString())
     Expect(field.Text() == "abxxxxxxxx" && field.Length() == 10)
     Expect(timer.Elapsed.TotalSeconds < 0.2)
+End Function
+
+@Test
+Function AFieldTakesNoLineBreaksFromSetText() Throws GraphicsError
+    Local field = TextField("one\ntwo\r\tthree")
+    Expect(field.Text() == "onetwothree")
+    field.SetText("a\nb")
+    Expect(field.Text() == "ab" && field.Cursor() == 2)
+End Function
+
+@Test
+Function APressInALongFieldMeasuresLittle() Throws GraphicsError
+    Local long = StringBuilder()
+    For i = 1 To 5000
+        long.Append('x')
+    End For
+    Local field = TextField(long.ToString())
+    field.SetSize(300.0, 24.0)
+    Local ui = Try Holding(field)
+    Defer EndGraphics()
+    Local count = 0
+    // Each character 10 across, by no font at all.
+    ui.SetTextMeasure(Function(text: String, style: Style)
+        count += 1
+        Return Vec2((text.Length As Float32) * 10.0, 20.0)
+    End Function)
+    Frame(ui)
+    ui.Focus(field)
+    Frame(ui)
+    // A frame with nothing new measures nothing.
+    Frame(ui)
+    count = 0
+    Frame(ui)
+    Expect(count == 0)
+    // It's scrolled to its end: a click finds the nearest boundary, in a few measures, not 5,000.
+    Local box = field.ContentBox()
+    Try Simulate.MoveMouse(box.X + 104.0, box.Y + 5.0)
+    Try Simulate.Click(MouseButton.LEFT)
+    count = 0
+    Frame(ui)
+    Expect(count < 40)
+    Local shown = field.TextCursorX() - field.Padding().Left
+    Expect(Abs(shown - 104.0) <= 5.0)
+    // Its text changing forgets what it measured, so the widths are the new text's: W's wider.
+    ui.SetTextMeasure(Function(text: String, style: Style)
+        Local wide: Float32 = 0.0
+        For each In text.Chars
+            wide += each == 'W' ? 30.0 : 10.0
+        End For
+        Return Vec2(wide, 20.0)
+    End Function)
+    field.SetText("ab")
+    Expect(field.TextCursorX() - field.Padding().Left == 20.0)
+    field.SetText("WW")
+    Expect(field.TextCursorX() - field.Padding().Left == 60.0)
+    ui.SetTextMeasure(Null)
+End Function
+
+@Test
+Function ASliderWithNoRangeLeavesTheKeysToTheFocus() Throws GraphicsError
+    Local first = Slider(5.0, 5.0, 5.0)
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.ROW)
+    Local second = Button("next")
+    root.Add(first)
+    root.Add(second)
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    Local ui = Ui(root)
+    Frame(ui)
+    ui.Focus(first)
+    Frame(ui)
+    Try Keys(ui, [Key.RIGHT])
+    Expect(ui.Focused() != Null && RefEquals(ui.Focused(), second))
+End Function
+
+@Test
+Function ASlidersHighIsReachablePastItsLastStep() Throws GraphicsError
+    Local slider = Slider(0.0, 10.0, 0.0)
+    slider.SetStep(3.0)
+    slider.SetValue(10.0)
+    Expect(slider.Value() == 10.0)
+    slider.SetValue(9.4)
+    Expect(slider.Value() == 9.0)
+    slider.SetValue(9.6)
+    Expect(slider.Value() == 10.0)
+    slider.SetValue(0.0)
+    Local ui = Try Holding(slider)
+    Defer EndGraphics()
+    ui.Focus(slider)
+    Frame(ui)
+    Try Keys(ui, [Key.END])
+    Expect(slider.Value() == 10.0)
+    Try Keys(ui, [Key.LEFT])
+    Expect(slider.Value() == 6.0)
 End Function

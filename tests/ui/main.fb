@@ -1,10 +1,126 @@
 // fbengine_ui's cases that need a process of their own, which ctest runs by name and checks
-// against what they print: what panics.
+// against what they print: what panics, and what's set before the window opens.
 
 Import std.core
 Import std.math
 Import std.os
+Import fbengine
 Import fbengine_ui
+
+// A field that draws the IME's composition at its cursor, read back: each line says what's where.
+Function Composing() Throws GraphicsError, IOError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("underlined True, cursor True, typed a")
+        Return
+    End If
+    SetDrawsComposition(True)
+    Window.SetHeadless(True)
+    Try Graphics(200, 100)
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.STACK)
+    Local field = TextField("a")
+    field.SetTranslates(False)
+    field.SetSize(150.0, 16.0)
+    field.SetAnchors(Anchors.Point(0.0, 0.0))
+    root.Add(field)
+    Local ui = Ui(root, Theme())
+    ui.SetFont("",
+               Try Font.Load("{Env.Get("FBENGINE_OWN_TEST_FONTS") ?? ""}/FbeTestText-Regular.ttf",
+                             16.0))
+    Local frame = Function()
+        Flip()
+        ui.Update()
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(0, 0, 0, 255))
+        canvas.Clear()
+        ui.Draw()
+    End Function
+    frame()
+    ui.Focus(field)
+    frame()
+    // "bb" after the a: its underline from a's 8 pixels to 9.6 of each b more, and the cursor after
+    // the first b, in the gap between its box and the next's.
+    Try Simulate.Composition("bb", 1, 0)
+    frame()
+    Local image = Try Screen.ToImage()
+    Local black = Color32(0, 0, 0, 255)
+    Local underlined = image[8, 15] != black && image[26, 15] != black
+    Local before = image[7, 15] == black
+    Local after = image[28, 15] == black
+    // At 17.6, so column 18, in the row above any glyph.
+    Local cursor = image[18, 1] != black && image[20, 1] == black
+    Print("underlined {underlined && before && after}, cursor {cursor}, typed {field.Text()}")
+    // A screen half the window's size: its underline's still a pixel, on any row.
+    Screen.SetSize(100, 50)
+    field.SetMargin(Insets(0.0, 3.0, 0.0, 0.0))
+    frame()
+    frame()
+    image = Try Screen.ToImage()
+    Local shown = False
+    // Below the glyphs' baseline, 3 + 12.8 units down, so 8 pixels.
+    For y = 8 To 12
+        If image[5, y] != black && image[8, y] != black && image[12, y] != black Then shown = True
+    End For
+    Print("half size, underlined {shown}")
+    EndGraphics()
+End Function
+
+// A composition doesn't follow the focus into another field: its text input stops and starts.
+Function ComposingMoved() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("composing bb, then none")
+        Return
+    End If
+    SetDrawsComposition(True)
+    Window.SetHeadless(True)
+    Try Graphics(200, 100)
+    Local root = Node("root")
+    Local first = TextField("a")
+    Local second = TextField("b")
+    root.Add(first)
+    root.Add(second)
+    Local ui = Ui(root)
+    ui.Focus(first)
+    Flip()
+    ui.Update()
+    Try Simulate.Composition("bb")
+    Flip()
+    ui.Update()
+    Local had = TextComposition().Text
+    ui.Focus(second)
+    ui.Update()
+    Flip()
+    ui.Update()
+    Print("composing {had}, then {TextComposition().Text == "" ? "none" : "kept"}")
+    EndGraphics()
+End Function
+
+// A widget that ends a clip it didn't push.
+Class PopsTooMany Extends Widget
+    New()
+        Super.New("panel", "greedy")
+        SetSize(10.0, 10.0)
+    End New
+
+    @MainThread Public Override Method Draw(paint: Painter)
+        paint.PopClip()
+    End Method
+End Class
+
+Function PoppedTooMany() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Panic("Painter.PopClip: Node \"greedy\" ends a clip it didn't push")
+    End If
+    Window.SetHeadless(True)
+    Try Graphics(100, 100)
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(PopsTooMany())
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    ui.Draw()
+End Function
 
 Local arguments = Process.Arguments()
 Local name = arguments.Count > 0 ? arguments[0] : ""
@@ -85,6 +201,12 @@ Select name
         Local french = Strings("fr")
         french.SetFallback(english)
         english.SetFallback(french)
+    Case "composition"
+        Try Composing()
+    Case "composition-moved"
+        Try ComposingMoved()
+    Case "pop-clip-too-many"
+        Try PoppedTooMany()
     Default
         Panic("no case {name}")
 End Select
