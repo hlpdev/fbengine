@@ -160,6 +160,21 @@ Public Final Class Geometry
         Return found != "" ? found : Null
     End Method
 
+    // What a scene file calls it, or "".
+    @MainThread
+    Package Method SceneId(): String
+        Local found = ""
+        Unsafe
+            found = fbe_geometry_scene_id(Live("SceneId")).ToString()
+        End Unsafe
+        Return found
+    End Method
+
+    @MainThread
+    Package Method SetSceneId(id: String)
+        fbe_geometry_set_scene_id(Live("SetSceneId"), id)
+    End Method
+
     /// Lets go of the geometry now; Meshes drawing it keep it. Using it after panics.
     @MainThread @PanicsAtCaller
     Public Method Free()
@@ -692,14 +707,14 @@ Public Struct Surface
     End Method
 End Struct
 
-/// A new Geometry for a handle a call made, or a panic naming the call when it made none.
-@PanicsAtCaller
 // `geometry`, known to be made of what `source` says.
 Package Function Sourced(geometry: Geometry, source: String): Geometry
     If !fbe_geometry_set_source(geometry.Live("Source"), source) Then Panic(LastError())
     Return geometry
 End Function
 
+/// A new Geometry for a handle a call made, or a panic naming the call when it made none.
+@PanicsAtCaller
 Function Made(handle: UInt64, call: String): Geometry
     If handle == 0 Then Panic("{call}: {LastError()}")
     Return Geometry(handle)

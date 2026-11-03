@@ -16,41 +16,57 @@ Import "./assets"
 Import "./material"
 Import "./mesh"
 Import "./model"
+Import "./morph"
 Import "./pick"
 Import "./sprite"
 Import "./texture"
 Import "./transform"
 Import "./visibility"
+Import "./window"
 Import "./world"
 
 Const FORMAT: Int32 = 1
 
-// A number as the shortest text its Float32 is, which a Float32 of it reads back exactly.
-Function Number(value: Float32): Value => Value(Double.Parse("{value}") ?? 0.0)
+// What a file can say of an entity, whatever it is, and of each kind.
+Const EVERY_ENTITY = ["path", "kind", "name", "position", "rotation", "scale", "hidden", "pick",
+                      "blocks_sight", "group", "shape", "radius", "box", "step_height", "max_slope",
+                      "auto_fade", "components"]
+Const OF_MESH = ["geometry", "material", "color", "morph"]
+Const OF_LIGHT = ["light", "color", "intensity", "range", "cone"]
+Const OF_CAMERA = ["projection", "field_of_view", "height", "range", "clear", "clear_depth",
+                   "clear_color", "order", "fog", "fog_color", "fog_range", "fog_density"]
+Const OF_SPRITE = ["material", "color", "view", "size", "handle", "turn"]
+Const OF_DOCUMENT = ["format", "material", "geometry", "entity"]
+Const OF_MATERIAL = ["id", "color", "shading", "blend", "alpha_cutoff", "shininess", "vertex_colors",
+                     "wireframe", "two_sided", "fogged", "order", "layers"]
+Const OF_LAYER = ["layer", "texture", "blend", "uv_set", "uv", "bump"]
+Const OF_GEOMETRY = ["id", "source", "surfaces", "cull_box"]
+Const OF_SURFACE = ["material", "vertices", "triangles"]
 
-Function Numbers(values: Float32[]): Value
+// A number as the shortest text its Float32 is, which a Float32 of it reads back exactly.
+Function Number(value: Float32): Value Throws IOError
+    Local read = Double.Parse("{value}")
+    If read == Null || !IsFinite(value)
+        Throw IOError(IOErrorKind.INVALID_DATA, "{value} can't be a number in a scene")
+    End If
+    Return Value(read)
+End Function
+
+Function Numbers(values: Float32[]): Value Throws IOError
     Local made = Value.Array()
     For each In values
-        made.Add(Number(each))
+        made.Add(Try Number(each))
     End For
     Return made
 End Function
 
-Function Three(v: Vec3): Value => Numbers([v.x, v.y, v.z])
+Function Three(v: Vec3): Value Throws IOError => Try Numbers([v.x, v.y, v.z])
 
-Function Four(c: Color): Value => Numbers([c.r, c.g, c.b, c.a])
+Function Four(c: Color): Value Throws IOError => Try Numbers([c.r, c.g, c.b, c.a])
 
-// FNV-1a's number of `text`, an id that's the same for the same text, so what's in a file stays by its
-// name when what's around it changes.
-Function HashOf(text: String): UInt64
-    Local hash: UInt64 = 2166136261
-    For byte In text.Bytes
-        hash = ((hash ^ (byte As UInt64)) * 16777619) & 0xFFFFFFFF
-    End For
-    Return hash
-End Function
-
-// What's being written: what's in it, and the ids it's given what's shared.
+// What's being written: what's in it, and the ids it's given what's shared. What's in a file keeps its
+// id from one save to the next, on the thing itself; what's new takes its id from its first user's
+// path and what it is to that, so what's around it changing doesn't change it.
 Class Writing
     Field Document: Value
     Field Entities: Value
@@ -59,6 +75,8 @@ Class Writing
     Field MaterialIds: Map<UInt64, String>
     Field GeometryIds: Map<UInt64, String>
     Field Taken: Set<String>
+    Field Claims: Map<String, UInt64>
+    Field Uses: Map<UInt64, Int>
 
     New()
         Document = Value.Object()
@@ -67,7 +85,43 @@ Class Writing
         MaterialIds = {}
         GeometryIds = {}
         Taken = Set<String>()
+        Claims = {}
+        Uses = {}
     End New
+
+    // How often each geometry's used, and the ids what's in the file has already: first come, first
+    // served, before anything's given a new one.
+    Method Looked(entity: Entity)
+        Local mesh = entity As? Mesh
+        If mesh != Null
+            Local geometry = mesh.Geometry()
+            If geometry != Null
+                Local handle = geometry.Live("Save")
+                Uses[handle] = (Uses.Get(handle) ?? 0) + 1
+                Claim(geometry.SceneId(), handle)
+                If geometry.Source() == Null
+                    For surface In geometry.Surfaces()
+                        ClaimOf(surface.Material())
+                    End For
+                End If
+            End If
+            ClaimOf(mesh.Material())
+        End If
+        ClaimOf((entity As? Sprite)?.Material())
+        For child In entity.Children()
+            Looked(child)
+        End For
+    End Method
+
+    Method ClaimOf(material: Material?)
+        If material != Null Then Claim(material.SceneId(), material.Live("Save"))
+    End Method
+
+    Method Claim(id: String, handle: UInt64)
+        If id == "" || Claims.Get(id) != Null Then Return
+        Claims[id] = handle
+        Taken.Add(id)
+    End Method
 
     // `base`, or the first of `base`-2 and on that nothing has yet.
     Method Unique(base: String): String
@@ -81,47 +135,66 @@ Class Writing
         Return id
     End Method
 
-    Method MaterialId(material: Material): String Throws IOError
+    // The id of what's kept `kept`, if it's first to it, else a new one from `base`.
+    Method IdOf(kept: String, handle: UInt64, base: String): String
+        If kept != "" && Claims.Get(kept) == handle Then Return kept
+        Return Unique(base)
+    End Method
+
+    // The id of `material`, whose first user is at `user`, and it's `slot` to that.
+    Method MaterialId(material: Material, user: String, slot: String): String Throws IOError
         Local handle = material.Live("Save")
         Local had = MaterialIds.Get(handle)
         If had != Null Then Return had
+        Local id = IdOf(material.SceneId(), handle, "{user}.{slot}")
+        material.SetSceneId(id)
         Local table = Value.Object()
-        table["id"] = Value("")
-        table["color"] = Four(material.Color())
+        table["id"] = Value(id)
+        table["color"] = Try Four(material.Color())
         table["shading"] = Value("{material.Shading()}")
         table["blend"] = Value("{material.Blend()}")
-        If material.AlphaCutoff() != 0.0 Then table["alpha_cutoff"] = Number(material.AlphaCutoff())
-        If material.Shininess() != 0.0 Then table["shininess"] = Number(material.Shininess())
+        If material.AlphaCutoff() != 0.0 Then table["alpha_cutoff"] = Try Number(material.AlphaCutoff())
+        If material.Shininess() != 0.0 Then table["shininess"] = Try Number(material.Shininess())
         If material.VertexColors() Then table["vertex_colors"] = Value(True)
         If material.Wireframe() Then table["wireframe"] = Value(True)
         If material.TwoSided() Then table["two_sided"] = Value(True)
         If !material.Fogged() Then table["fogged"] = Value(False)
         If material.Order() != 0 Then table["order"] = Value(material.Order() As Int32)
+        Local plain = Material()
+        Defer plain.Free()
         Local layers = Value.Array()
         For at = 0 To 7
             Local texture = material.Texture(at)
-            If texture == Null Then Continue
-            Local path = texture.Path()
-            If path == Null
-                Throw IOError(IOErrorKind.INVALID_DATA,
-                              "layer {at} of a material has a texture from no file, which a scene can't name")
+            Local turn = material.LayerUv(at)
+            Local bump = material.LayerBump(at)
+            If texture == Null && material.LayerBlend(at) == plain.LayerBlend(at) &&
+               material.LayerUvSet(at) == plain.LayerUvSet(at) && turn == plain.LayerUv(at) &&
+               bump == plain.LayerBump(at)
+                Continue
             End If
             Local layer = Value.Object()
             layer["layer"] = Value(at As Int32)
-            layer["texture"] = Value(path)
+            If texture != Null
+                Local path = texture.Path()
+                If path == Null
+                    Throw IOError(IOErrorKind.INVALID_DATA,
+                                  "{user}: layer {at} of its material has a texture from no file, which a scene can't name")
+                End If
+                If !path.StartsWith("res://")
+                    Throw IOError(IOErrorKind.INVALID_DATA,
+                                  "{user}: layer {at} of its material has a texture from {path}, which isn't under res://, so nothing else would find it")
+                End If
+                layer["texture"] = Value(path)
+            End If
             layer["blend"] = Value("{material.LayerBlend(at)}")
             layer["uv_set"] = Value(material.LayerUvSet(at) As Int32)
-            Local turn = material.LayerUv(at)
-            layer["uv"] = Numbers([turn.Scale.x, turn.Scale.y, turn.Angle, turn.Offset.x,
-                                   turn.Offset.y])
-            Local bump = material.LayerBump(at)
-            layer["bump"] = Numbers([bump.M00, bump.M01, bump.M10, bump.M11, bump.Scale,
-                                     bump.Offset])
+            layer["uv"] = Try Numbers([turn.Scale.x, turn.Scale.y, turn.Angle, turn.Offset.x,
+                                       turn.Offset.y])
+            layer["bump"] = Try Numbers([bump.M00, bump.M01, bump.M10, bump.M11, bump.Scale,
+                                         bump.Offset])
             layers.Add(layer)
         End For
         If layers.Count > 0 Then table["layers"] = layers
-        Local id = Unique("m{HashOf("{table}")}")
-        table["id"] = Value(id)
         Local all = Materials ?? Value.Array()
         Materials = all
         all.Add(table)
@@ -129,56 +202,91 @@ Class Writing
         Return id
     End Method
 
-    // What a mesh's made of: a file's or built in by the text it says, or a table of its vertices.
-    Method GeometryValue(geometry: Geometry): Value Throws IOError
+    // What a mesh at `user` is made of: a file's by the text it says; built in by the same, if it's
+    // its own, and else, and for what's neither, a table: of what it's made of, or of its vertices.
+    Method GeometryValue(geometry: Geometry, user: String): Value Throws IOError
         Local source = geometry.Source()
-        If source != Null Then Return Value(source)
         Local handle = geometry.Live("Save")
+        If source != Null
+            If !source.StartsWith("builtin:") && !source.StartsWith("res://")
+                Throw IOError(IOErrorKind.INVALID_DATA,
+                              "{user}: its mesh is from {source}, which isn't under res://, so nothing else would find it")
+            End If
+            If !source.StartsWith("builtin:") || (Uses.Get(handle) ?? 0) <= 1 Then Return Value(source)
+        End If
         Local had = GeometryIds.Get(handle)
         If had != Null Then Return Value("geometry:{had}")
+        Local id = IdOf(geometry.SceneId(), handle, "{user}.geometry")
+        geometry.SetSceneId(id)
+        GeometryIds[handle] = id
         Local table = Value.Object()
-        table["id"] = Value("")
-        Local surfaces = Value.Array()
-        For surface In geometry.Surfaces()
-            Local one = Value.Object()
-            Local drawn = surface.Material()
-            If drawn != Null Then one["material"] = Value(Try MaterialId(drawn))
-            Local vertices = Value.Array()
-            For at = 0 To surface.VertexCount() - 1
-                Local v = surface.Vertex(at)
-                vertices.Add(Numbers([v.Position.x, v.Position.y, v.Position.z, v.Normal.x,
-                                      v.Normal.y, v.Normal.z,
-                                      v.Uv0.x, v.Uv0.y, v.Uv1.x, v.Uv1.y, v.Color.r, v.Color.g,
-                                      v.Color.b,
-                                      v.Color.a]))
-            End For
-            one["vertices"] = vertices
-            Local triangles = Value.Array()
-            For at = 0 To surface.TriangleCount() - 1
-                Local corners = surface.Triangle(at)
-                triangles.Add(Value(corners.x As Int32))
-                triangles.Add(Value(corners.y As Int32))
-                triangles.Add(Value(corners.z As Int32))
-            End For
-            one["triangles"] = triangles
-            surfaces.Add(one)
-        End For
-        table["surfaces"] = surfaces
-        Local id = Unique("g{HashOf("{table}")}")
         table["id"] = Value(id)
+        If source != Null
+            table["source"] = Value(source)
+        Else
+            Local box = geometry.CullBox()
+            If box != Null
+                table["cull_box"] = Try Numbers([box.Min.x, box.Min.y, box.Min.z, box.Max.x, box.Max.y,
+                                                 box.Max.z])
+            End If
+            Local surfaces = Value.Array()
+            Local number = 0
+            For surface In geometry.Surfaces()
+                If surface.MorphTargetCount() > 0
+                    Throw IOError(IOErrorKind.INVALID_DATA,
+                                  "{user}: its mesh has morph targets and has changed since its file, which a scene can't hold yet")
+                End If
+                Local one = Value.Object()
+                Local drawn = surface.Material()
+                If drawn != Null
+                    one["material"] = Value(Try MaterialId(drawn, user, "surface{number}"))
+                End If
+                Local vertices = Value.Array()
+                For at = 0 To surface.VertexCount() - 1
+                    Local v = surface.Vertex(at)
+                    vertices.Add(Try Numbers([v.Position.x, v.Position.y, v.Position.z, v.Normal.x,
+                                              v.Normal.y, v.Normal.z,
+                                              v.Uv0.x, v.Uv0.y, v.Uv1.x, v.Uv1.y, v.Color.r, v.Color.g,
+                                              v.Color.b,
+                                              v.Color.a]))
+                End For
+                one["vertices"] = vertices
+                Local triangles = Value.Array()
+                For at = 0 To surface.TriangleCount() - 1
+                    Local corners = surface.Triangle(at)
+                    triangles.Add(Value(corners.x As Int32))
+                    triangles.Add(Value(corners.y As Int32))
+                    triangles.Add(Value(corners.z As Int32))
+                End For
+                one["triangles"] = triangles
+                surfaces.Add(one)
+                number += 1
+            End For
+            table["surfaces"] = surfaces
+        End If
         Local all = Geometries ?? Value.Array()
         Geometries = all
         all.Add(table)
-        GeometryIds[handle] = id
         Return Value("geometry:{id}")
     End Method
 
-    // `entity` as a table under its path, and what's under it after it.
-    Method Entity(entity: Entity, parent: String, siblings: Map<String, Int>) Throws IOError
+    // `entity` as a table under its path, and what's under it after it. Its id among `siblings` is its
+    // name, or that with the first of #2 and on that none of them has.
+    Method Entity(entity: Entity, parent: String, siblings: Set<String>) Throws IOError
         Local base = entity.Name() != "" ? entity.Name().Replace("/", "_") : "entity"
-        Local seen = (siblings.Get(base) ?? 0) + 1
-        siblings[base] = seen
-        Local path = parent + (parent != "" ? "/" : "") + base + (seen > 1 ? "#{seen}" : "")
+        Local id = base
+        Local seen = 1
+        While siblings.Contains(id)
+            seen += 1
+            id = "{base}#{seen}"
+        End While
+        siblings.Add(id)
+        Local path = parent + (parent != "" ? "/" : "") + id
+        Local strays = entity.Strays()
+        If strays.Count > 0
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{path}: its file says {strays.Join(", ")}, which saving would lose")
+        End If
         Local table = Value.Object()
         table["path"] = Value(path)
         Local kind = entity.Kind()
@@ -189,10 +297,10 @@ Class Writing
         End If
         table["kind"] = Value("{kind}")
         If entity.Name() != "" Then table["name"] = Value(entity.Name())
-        table["position"] = Three(entity.Position())
+        table["position"] = Try Three(entity.Position())
         Local turn = entity.Rotation()
-        table["rotation"] = Numbers([turn.x, turn.y, turn.z, turn.w])
-        table["scale"] = Three(entity.Scale())
+        table["rotation"] = Try Numbers([turn.x, turn.y, turn.z, turn.w])
+        table["scale"] = Try Three(entity.Scale())
         If entity.Hidden() Then table["hidden"] = Value(True)
         If entity.PickMode() != PickMode.NONE Then table["pick"] = Value("{entity.PickMode()}")
         If entity.BlocksSight() Then table["blocks_sight"] = Value(True)
@@ -201,55 +309,69 @@ Class Writing
             table["shape"] = Value("{entity.CollisionShape()}")
         End If
         Local radius = entity.CollisionRadius()
-        If radius != Vec2(1, 1) Then table["radius"] = Numbers([radius.x, radius.y])
+        If radius != Vec2(1, 1) Then table["radius"] = Try Numbers([radius.x, radius.y])
         Local box = entity.CollisionBox()
         If box != AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1))
-            table["box"] = Numbers([box.Min.x, box.Min.y, box.Min.z, box.Max.x, box.Max.y,
-                                    box.Max.z])
+            table["box"] = Try Numbers([box.Min.x, box.Min.y, box.Min.z, box.Max.x, box.Max.y,
+                                        box.Max.z])
         End If
+        If entity.StepHeight() != 0.0 Then table["step_height"] = Try Number(entity.StepHeight())
+        If entity.MaxSlope() != DEFAULT_SLOPE Then table["max_slope"] = Try Number(entity.MaxSlope())
+        Local fade = entity.AutoFade()
+        If fade != Vec2(0, 0) Then table["auto_fade"] = Try Numbers([fade.x, fade.y])
         Local mesh = entity As? Mesh
         If mesh != Null
             Local geometry = mesh.Geometry()
-            If geometry != Null Then table["geometry"] = Try GeometryValue(geometry)
+            If geometry != Null Then table["geometry"] = Try GeometryValue(geometry, path)
             Local drawn = mesh.Material()
-            If drawn != Null Then table["material"] = Value(Try MaterialId(drawn))
-            If mesh.Color() != Color(1, 1, 1, 1) Then table["color"] = Four(mesh.Color())
+            If drawn != Null Then table["material"] = Value(Try MaterialId(drawn, path, "material"))
+            If mesh.Color() != Color(1, 1, 1, 1) Then table["color"] = Try Four(mesh.Color())
+            Local weights = mesh.MorphWeights()
+            If weights.Any(Function(each: Float) => each != 0.0) Then table["morph"] = Try Numbers(weights)
         End If
         Local light = entity As? Light
         If light != Null
             table["light"] = Value("{light.LightType()}")
-            table["color"] = Four(light.Color())
-            table["intensity"] = Number(light.Intensity())
-            table["range"] = Number(light.Range())
-            table["cone"] = Numbers([light.InnerCone(), light.OuterCone()])
+            table["color"] = Try Four(light.Color())
+            table["intensity"] = Try Number(light.Intensity())
+            table["range"] = Try Number(light.Range())
+            table["cone"] = Try Numbers([light.InnerCone(), light.OuterCone()])
         End If
         Local camera = entity As? Camera
         If camera != Null
             table["projection"] = Value("{camera.Projection()}")
-            table["field_of_view"] = Number(camera.FieldOfView())
-            table["height"] = Number(camera.OrthographicHeight())
-            table["range"] = Numbers([camera.Near(), camera.Far()])
+            table["field_of_view"] = Try Number(camera.FieldOfView())
+            table["height"] = Try Number(camera.OrthographicHeight())
+            table["range"] = Try Numbers([camera.Near(), camera.Far()])
             table["clear"] = Value(camera.ClearsColor())
             table["clear_depth"] = Value(camera.ClearsDepth())
-            table["clear_color"] = Four(camera.ClearColor())
+            table["clear_color"] = Try Four(camera.ClearColor())
             If camera.Order() != 0 Then table["order"] = Value(camera.Order() As Int32)
             table["fog"] = Value("{camera.FogMode()}")
-            table["fog_color"] = Four(camera.FogColor())
-            table["fog_range"] = Numbers([camera.FogStart(), camera.FogEnd()])
-            table["fog_density"] = Number(camera.FogDensity())
+            table["fog_color"] = Try Four(camera.FogColor())
+            table["fog_range"] = Try Numbers([camera.FogStart(), camera.FogEnd()])
+            table["fog_density"] = Try Number(camera.FogDensity())
         End If
         Local sprite = entity As? Sprite
         If sprite != Null
             Local drawn = sprite.Material()
-            If drawn != Null Then table["material"] = Value(Try MaterialId(drawn))
-            table["color"] = Four(sprite.Color())
+            If drawn != Null Then table["material"] = Value(Try MaterialId(drawn, path, "material"))
+            table["color"] = Try Four(sprite.Color())
             table["view"] = Value("{sprite.ViewMode()}")
-            table["size"] = Numbers([sprite.SpriteScale().x, sprite.SpriteScale().y])
-            table["handle"] = Numbers([sprite.Handle().x, sprite.Handle().y])
-            table["turn"] = Number(sprite.SpriteRotation())
+            table["size"] = Try Numbers([sprite.SpriteScale().x, sprite.SpriteScale().y])
+            table["handle"] = Try Numbers([sprite.Handle().x, sprite.Handle().y])
+            table["turn"] = Try Number(sprite.SpriteRotation())
+        End If
+        Local names = entity.ComponentNames()
+        If names.Count > 0
+            Local components = Value.Object()
+            For name In names
+                components[name] = entity.Component(name) ?? Value()
+            End For
+            table["components"] = components
         End If
         Entities.Add(table)
-        Local under: Map<String, Int> = {}
+        Local under = Set<String>()
         For child In entity.Children()
             Try Self.Entity(child, path, under)
         End For
@@ -257,7 +379,8 @@ Class Writing
 End Class
 
 // What's being read: what's in the file by its ids, and what's been made, to be freed if it can't be
-// finished.
+// finished. Tolerant, what can't be loaded stands in as something that keeps its reference, and it's
+// noted, so a file whose assets have gone can still be opened and saved.
 Class Reading
     Field Materials: Map<String, Material>
     Field MaterialTables: Map<String, Value>
@@ -266,19 +389,29 @@ Class Reading
     Field Models: Map<String, Model>
     Field Made: Map<String, Entity>
     Field Roots: Entity[] = []
+    Field Tolerant: Bool
+    Field Problems: String[] = []
 
-    New(document: Value) Throws IOError
+    New(document: Value, tolerant: Bool) Throws IOError
+        Tolerant = tolerant
         Materials = {}
         MaterialTables = {}
         Geometries = {}
         GeometryTables = {}
         Models = {}
         Made = {}
-        For each In Items(document, "material")
-            MaterialTables[Try Required(each, "id", "a material")] = each
+        Try Only(document, OF_DOCUMENT, "the file")
+        For each In Try Items(document, "material", "the file")
+            Local id = Try Required(each, "id", "a material")
+            If MaterialTables.Get(id) != Null Then Throw Wrong("the material {id} is in it twice")
+            Try Only(each, OF_MATERIAL, "the material {id}")
+            MaterialTables[id] = each
         End For
-        For each In Items(document, "geometry")
-            GeometryTables[Try Required(each, "id", "a geometry")] = each
+        For each In Try Items(document, "geometry", "the file")
+            Local id = Try Required(each, "id", "a geometry")
+            If GeometryTables.Get(id) != Null Then Throw Wrong("the geometry {id} is in it twice")
+            Try Only(each, OF_GEOMETRY, "the geometry {id}")
+            GeometryTables[id] = each
         End For
     End New
 
@@ -304,34 +437,43 @@ Class Reading
         Local table = MaterialTables.Get(id)
         If table == Null Then Throw Wrong("{at}: there's no material {id}")
         Local made = Material()
-        Local where = "the material {id}"
-        made.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), where))
+        made.SetSceneId(id)
+        Local where = "{at}: the material {id}"
+        made.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), where, True))
         made.SetShading(Try Named<Shading>(table, "shading", Shading.PBR,
                                            [Shading.PBR, Shading.UNLIT, Shading.VERTEX], where))
         made.SetBlend(Try Named<Blend>(table, "blend", Blend.AUTO,
                                        [Blend.AUTO, Blend.OPAQUE, Blend.ALPHA, Blend.ADD,
                                         Blend.MULTIPLY], where))
-        made.SetAlphaCutoff(Try FloatOf(table, "alpha_cutoff", 0.0, where))
-        made.SetShininess(Try FloatOf(table, "shininess", 0.0, where))
+        Local cutoff = Try FloatOf(table, "alpha_cutoff", 0.0, where)
+        Try Must(cutoff >= 0.0 && cutoff <= 1.0, where, "alpha_cutoff", "is 0 to 1")
+        made.SetAlphaCutoff(cutoff)
+        Local shininess = Try FloatOf(table, "shininess", 0.0, where)
+        Try Must(shininess >= 0.0 && shininess <= 1.0, where, "shininess", "is 0 to 1")
+        made.SetShininess(shininess)
         made.SetVertexColors(Try BoolOf(table, "vertex_colors", False, where))
         made.SetWireframe(Try BoolOf(table, "wireframe", False, where))
         made.SetTwoSided(Try BoolOf(table, "two_sided", False, where))
         made.SetFogged(Try BoolOf(table, "fogged", True, where))
         made.SetOrder(Try IntOf(table, "order", 0, where))
-        For layer In Items(table, "layers")
+        For layer In Try Items(table, "layers", where)
+            Try Only(layer, OF_LAYER, where)
             Local index = Try IntOf(layer, "layer", -1, where)
             If index < 0 || index > 7 Then Throw Wrong("{where}: a layer's 0 to 7, not {index}")
-            made.SetTexture(index, Try Assets.Load<Texture>(Try Required(layer, "texture", where)))
+            Local path = Try TextOf(layer, "texture", where)
+            If path != Null Then made.SetTexture(index, Try TextureOf(path, where))
+            Local uvSet = Try IntOf(layer, "uv_set", 0, where)
+            Try Must(uvSet == 0 || uvSet == 1, where, "uv_set", "is 0 or 1")
             made.SetLayer(index, Try Named<LayerBlend>(layer, "blend", LayerBlend.MULTIPLY,
                                                        [LayerBlend.MULTIPLY, LayerBlend.ADD,
                                                         LayerBlend.ALPHA,
                                                         LayerBlend.MULTIPLY_2, LayerBlend.BUMP],
-                                                       where),
-                          Try IntOf(layer, "uv_set", 0, where))
+                                                       where), uvSet)
             Local uv = Try FloatsOf(layer, "uv", 5, where)
-            If uv != Null Then made.SetLayerUv(index,
-                                               UvTurn(Vec2(uv[0], uv[1]), uv[2],
-                                                      Vec2(uv[3], uv[4])))
+            If uv != Null
+                Try Must(uv[0] != 0.0 && uv[1] != 0.0, where, "uv", "has a scale that isn't 0")
+                made.SetLayerUv(index, UvTurn(Vec2(uv[0], uv[1]), uv[2], Vec2(uv[3], uv[4])))
+            End If
             Local bump = Try FloatsOf(layer, "bump", 6, where)
             If bump != Null
                 made.SetLayerBump(index,
@@ -342,7 +484,24 @@ Class Reading
         Return made
     End Method
 
+    // The texture of the file at `path`, or if it can't be and that's allowed, one that says it's lost.
+    Method TextureOf(path: String, at: String): Texture Throws IOError
+        Try
+            Return Try Assets.Load<Texture>(path)
+        Catch error As IOError
+            If !Tolerant Then Throw Wrong("{at}: {error.Message}")
+            Problems.Add("{at}: {error.Message}")
+            Try
+                Return Try Texture.Lost(path)
+            Catch lost As GraphicsError
+                Throw Wrong("{at}: {lost.Message}")
+            End Try
+        End Try
+    End Method
+
+    // What's built in is a mesh's own, and what's in a table or a file is shared.
     Method GeometryOf(source: String, at: String): Geometry Throws IOError
+        If source.StartsWith("builtin:") Then Return Try Builtin(source, at)
         Local had = Geometries.Get(source)
         If had != Null Then Return had
         Local made = Try Making(source, at)
@@ -351,59 +510,93 @@ Class Reading
     End Method
 
     Method Making(source: String, at: String): Geometry Throws IOError
-        If source.StartsWith("builtin:") Then Return Try Builtin(source, at)
         If source.StartsWith("geometry:")
-            Local id = source.Split(":")[1]
+            Local id = source.Slice(9, source.Length)
             Local table = GeometryTables.Get(id)
             If table == Null Then Throw Wrong("{at}: there's no geometry {id}")
+            Local from = Try TextOf(table, "source", "the geometry {id}")
+            If from != Null
+                Local whole = from.StartsWith("builtin:") ? Try Builtin(from, at) : Try Making(from, at)
+                whole.SetSceneId(id)
+                Return whole
+            End If
             Local made = Geometry()
-            For one In Items(table, "surfaces")
+            made.SetSceneId(id)
+            Local where = "{at}: the geometry {id}"
+            For one In Try Items(table, "surfaces", where)
+                Try Only(one, OF_SURFACE, where)
                 Local surface = made.AddSurface()
-                Local material = one["material"]?.AsString()
+                Local material = Try TextOf(one, "material", where)
                 If material != Null Then surface.SetMaterial(Try MaterialOf(material, at))
                 Local vertices: Vertex[] = []
-                For row In Items(one, "vertices")
+                For row In Try Items(one, "vertices", where)
                     Local f: Float32[] = []
-                    For each In row.AsArray() ?? [Value()]
-                        f.Add((each.AsDouble() ?? 0.0) As Float32)
+                    Local numbers = row.AsArray()
+                    If numbers == Null Then Throw Wrong("{where}: a vertex is 14 numbers")
+                    For each In numbers
+                        Local number = each.AsDouble()
+                        If number == Null || !IsFinite(number As Float32)
+                            Throw Wrong("{where}: a vertex is 14 finite numbers")
+                        End If
+                        f.Add(number As Float32)
                     End For
-                    If f.Count != 14 Then Throw Wrong("{at}: a vertex is 14 numbers, not {f.Count}")
+                    If f.Count != 14 Then Throw Wrong("{where}: a vertex is 14 numbers, not {f.Count}")
                     vertices.Add(Vertex(Vec3(f[0], f[1], f[2]), Vec3(f[3], f[4], f[5]),
                                         Vec2(f[6], f[7]),
                                         Vec2(f[8], f[9]), Color(f[10], f[11], f[12], f[13])))
                 End For
                 surface.AddVertices(vertices)
-                Local corners = Items(one, "triangles")
-                If corners.Count % 3 != 0 Then Throw Wrong("{at}: triangles are 3 indexes each")
+                Local corners = Try Items(one, "triangles", where)
+                If corners.Count % 3 != 0 Then Throw Wrong("{where}: triangles are 3 indexes each")
                 For i = 0 To corners.Count / 3 - 1
                     Local a = corners[i * 3].AsInt() ?? -1
                     Local b = corners[i * 3 + 1].AsInt() ?? -1
                     Local c = corners[i * 3 + 2].AsInt() ?? -1
                     Local most = vertices.Count
                     If a < 0 || b < 0 || c < 0 || a >= most || b >= most || c >= most
-                        Throw Wrong("{at}: a triangle's index isn't one of its {most} vertices")
+                        Throw Wrong("{where}: a triangle's index isn't one of its {most} vertices")
                     End If
                     surface.AddTriangle(a, b, c)
                 End For
             End For
+            Local box = Try FloatsOf(table, "cull_box", 6, where)
+            If box != Null
+                Try Must(box[0] <= box[3] && box[1] <= box[4] && box[2] <= box[5], where, "cull_box",
+                         "has its least corner first")
+                made.SetCullBox(AABB(Vec3(box[0], box[1], box[2]), Vec3(box[3], box[4], box[5])))
+            End If
             Return made
         End If
-        // A model's, as res://door.glb#0, by its mesh's number.
+        // A model's, as res://door.glb#0, by its mesh's number, after the last #.
         Local marked = source.Split("#")
-        If marked.Count != 2 Then Throw Wrong("{at}: {source} isn't what a mesh can be made of")
-        Local path = marked[0]
-        Local index = Int.Parse(marked[1])
+        If marked.Count < 2 Then Throw Wrong("{at}: {source} isn't what a mesh can be made of")
+        Local index = Int.Parse(marked[marked.Count - 1])
+        marked.RemoveAt(marked.Count - 1)
+        Local path = marked.Join("#")
         If index == Null Then Throw Wrong("{at}: {source} says no mesh of its file")
         Local model = Models.Get(path)
         If model == Null
-            model = Try Assets.Load<Model>(path)
+            Try
+                model = Try Assets.Load<Model>(path)
+            Catch error As IOError
+                If !Tolerant Then Throw Wrong("{at}: {error.Message}")
+                Return Lost(source, at, error.Message)
+            End Try
             Models[path] = model
         End If
         Local parts = model.Geometries()
         If index < 0 || index >= parts.Count
-            Throw Wrong("{at}: {path} has {parts.Count} meshes, not one numbered {index}")
+            Local says = "{path} has {parts.Count} meshes, not one numbered {index}"
+            If !Tolerant Then Throw Wrong("{at}: {says}")
+            Return Lost(source, at, says)
         End If
         Return parts[index]
+    End Method
+
+    // What's drawn for a mesh of a file that's lost, keeping what it's from.
+    Method Lost(source: String, at: String, says: String): Geometry
+        Problems.Add("{at}: {says}")
+        Return Sourced(Geometry.Cube(), source)
     End Method
 
     // What's at the top of the scene goes under this.
@@ -423,21 +616,25 @@ Class Reading
             parent = Under
         End If
         Local kind = Try Required(table, "kind", path)
+        Local own: String[] = []
         Local made: Entity
         Select kind
             Case "PIVOT"
                 made = Pivot(parent)
             Case "MESH"
-                Local source = table["geometry"]?.AsString()
-                made = source != Null ? Mesh(Try GeometryOf(source, path),
-                                             parent) : Mesh(Geometry(), parent)
+                own = OF_MESH
+                Local source = Try TextOf(table, "geometry", path)
+                made = source != Null ? Mesh(Try GeometryOf(source, path), parent) : Mesh(Null, parent)
             Case "LIGHT"
+                own = OF_LIGHT
                 made = Light(Try Named<LightType>(table, "light", LightType.POINT,
                                                   [LightType.DIRECTIONAL, LightType.POINT,
                                                    LightType.SPOT], path), parent)
             Case "CAMERA"
+                own = OF_CAMERA
                 made = Camera(parent)
             Case "SPRITE"
+                own = OF_SPRITE
                 made = Sprite(Null, parent)
             Default
                 Throw Wrong("{path} is a {kind}, which a scene can't hold")
@@ -445,10 +642,16 @@ Class Reading
         Made[path] = made
         If parent == Under Then Roots.Add(made)
         Try Fill(made, table, path)
+        // What this doesn't know is kept from being lost by a save, which refuses it.
+        Local strays: String[] = []
+        For key In table.Keys()
+            If !EVERY_ENTITY.Contains(key) && !own.Contains(key) Then strays.Add(key)
+        End For
+        made.SetStrays(strays)
     End Method
 
     Method Fill(made: Entity, table: Value, path: String) Throws IOError
-        Local name = table["name"]?.AsString()
+        Local name = Try TextOf(table, "name", path)
         If name != Null Then made.SetName(name)
         made.SetPosition(Try VecOf(table, "position", Vec3(0, 0, 0), path))
         Local turn = Try FloatsOf(table, "rotation", 4, path)
@@ -459,64 +662,115 @@ Class Reading
                                              [PickMode.NONE, PickMode.ELLIPSOID, PickMode.BOX,
                                               PickMode.MESH], path))
         made.SetBlocksSight(Try BoolOf(table, "blocks_sight", False, path))
-        made.SetCollisionGroup(Try IntOf(table, "group", 0, path))
+        Local group = Try IntOf(table, "group", 0, path)
+        Try Must(group >= 0 && group <= 1023, path, "group", "is 0 to 1023")
+        made.SetCollisionGroup(group)
         made.SetCollisionShape(Try Named<CollisionShape>(table, "shape", CollisionShape.AUTO,
                                                          [CollisionShape.AUTO,
                                                           CollisionShape.ELLIPSOID,
                                                           CollisionShape.BOX, CollisionShape.MESH],
                                                          path))
         Local radius = Try FloatsOf(table, "radius", 2, path)
-        If radius != Null Then made.SetCollisionRadius(radius[0], radius[1])
+        If radius != Null
+            Try Must(radius[0] > 0.0 && radius[1] > 0.0, path, "radius", "is above 0")
+            made.SetCollisionRadius(radius[0], radius[1])
+        End If
         Local box = Try FloatsOf(table, "box", 6, path)
-        If box != Null Then made.SetCollisionBox(AABB(Vec3(box[0], box[1], box[2]),
-                                                      Vec3(box[3], box[4], box[5])))
+        If box != Null
+            Try Must(box[0] <= box[3] && box[1] <= box[4] && box[2] <= box[5], path, "box",
+                     "has its least corner first")
+            made.SetCollisionBox(AABB(Vec3(box[0], box[1], box[2]), Vec3(box[3], box[4], box[5])))
+        End If
+        Local step = Try FloatOf(table, "step_height", 0.0, path)
+        Try Must(step >= 0.0, path, "step_height", "is 0 or more")
+        made.SetStepHeight(step)
+        Local slope = Try FloatOf(table, "max_slope", DEFAULT_SLOPE, path)
+        Try Must(slope >= 0.0 && slope <= 1.5707964, path, "max_slope", "is 0 to Pi / 2")
+        made.SetMaxSlope(slope)
+        Local fade = Try FloatsOf(table, "auto_fade", 2, path)
+        If fade != Null
+            Try Must((fade[0] == 0.0 && fade[1] == 0.0) || (fade[0] >= 0.0 && fade[0] < fade[1]), path,
+                     "auto_fade", "is 0 <= start < end, or 0 and 0")
+            made.SetAutoFade(fade[0], fade[1])
+        End If
+        Local components = table["components"]
+        If components != Null
+            Try Must(components.IsObject, path, "components", "is a table")
+            For key In components.Keys()
+                made.SetComponent(key, components[key])
+            End For
+        End If
         Local mesh = made As? Mesh
         If mesh != Null
-            Local material = table["material"]?.AsString()
+            Local material = Try TextOf(table, "material", path)
             If material != Null Then mesh.SetMaterial(Try MaterialOf(material, path))
-            mesh.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), path))
+            mesh.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), path, True))
+            Local weights = Try FloatsOf(table, "morph", -1, path)
+            If weights != Null Then mesh.SetMorphWeights(weights)
         End If
         Local light = made As? Light
         If light != Null
-            light.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), path))
-            light.SetIntensity(Try FloatOf(table, "intensity", 1.0, path))
-            light.SetRange(Try FloatOf(table, "range", 10.0, path))
+            light.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), path, False))
+            Local intensity = Try FloatOf(table, "intensity", 1.0, path)
+            Try Must(intensity >= 0.0, path, "intensity", "is 0 or more")
+            light.SetIntensity(intensity)
+            Local range = Try FloatOf(table, "range", 10.0, path)
+            Try Must(range > 0.0, path, "range", "is above 0")
+            light.SetRange(range)
             Local cone = Try FloatsOf(table, "cone", 2, path)
-            If cone != Null Then light.SetCone(cone[0], cone[1])
+            If cone != Null
+                Try Must(cone[0] >= 0.0 && cone[1] >= cone[0] && cone[1] <= 1.5707964, path, "cone",
+                         "is 0 <= inner <= outer <= Pi / 2")
+                light.SetCone(cone[0], cone[1])
+            End If
         End If
         Local camera = made As? Camera
         If camera != Null
             camera.SetProjection(Try Named<Projection>(table, "projection", Projection.PERSPECTIVE,
                                                        [Projection.PERSPECTIVE,
                                                         Projection.ORTHOGRAPHIC], path))
-            camera.SetFieldOfView(Try FloatOf(table, "field_of_view", camera.FieldOfView(), path))
-            camera.SetOrthographicHeight(Try FloatOf(table, "height", camera.OrthographicHeight(),
-                                                     path))
+            Local view = Try FloatOf(table, "field_of_view", camera.FieldOfView(), path)
+            Try Must(view > 0.0 && view < 3.1415927, path, "field_of_view", "is between 0 and Pi")
+            camera.SetFieldOfView(view)
+            Local height = Try FloatOf(table, "height", camera.OrthographicHeight(), path)
+            Try Must(height > 0.0 && IsFinite(2.0 / height), path, "height", "is above 0")
+            camera.SetOrthographicHeight(height)
             Local range = Try FloatsOf(table, "range", 2, path)
-            If range != Null Then camera.SetRange(range[0], range[1])
+            If range != Null
+                Try Must(range[0] > 0.0 && range[0] < range[1], path, "range", "is 0 < near < far")
+                camera.SetRange(range[0], range[1])
+            End If
             camera.SetClear(Try BoolOf(table, "clear", True, path),
                             Try BoolOf(table, "clear_depth", True, path))
-            camera.SetClearColor(Try ColorOf(table, "clear_color", camera.ClearColor(), path))
+            camera.SetClearColor(Try ColorOf(table, "clear_color", camera.ClearColor(), path, False))
             camera.SetOrder(Try IntOf(table, "order", 0, path))
             camera.SetFogMode(Try Named<FogMode>(table, "fog", FogMode.NONE,
                                                  [FogMode.NONE, FogMode.LINEAR, FogMode.EXPONENTIAL,
                                                   FogMode.EXPONENTIAL_SQUARED], path))
-            camera.SetFogColor(Try ColorOf(table, "fog_color", camera.FogColor(), path))
+            camera.SetFogColor(Try ColorOf(table, "fog_color", camera.FogColor(), path, False))
             Local fog = Try FloatsOf(table, "fog_range", 2, path)
-            If fog != Null Then camera.SetFogRange(fog[0], fog[1])
-            camera.SetFogDensity(Try FloatOf(table, "fog_density", camera.FogDensity(), path))
+            If fog != Null
+                Try Must(fog[0] >= 0.0 && fog[1] > fog[0], path, "fog_range", "is 0 <= start < end")
+                camera.SetFogRange(fog[0], fog[1])
+            End If
+            Local density = Try FloatOf(table, "fog_density", camera.FogDensity(), path)
+            Try Must(density >= 0.0, path, "fog_density", "is 0 or more")
+            camera.SetFogDensity(density)
         End If
         Local sprite = made As? Sprite
         If sprite != Null
-            Local material = table["material"]?.AsString()
+            Local material = Try TextOf(table, "material", path)
             If material != Null Then sprite.SetMaterial(Try MaterialOf(material, path))
-            sprite.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), path))
+            sprite.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), path, True))
             sprite.SetViewMode(Try Named<SpriteViewMode>(table, "view", SpriteViewMode.BILLBOARD,
                                                          [SpriteViewMode.BILLBOARD,
                                                           SpriteViewMode.FIXED,
                                                           SpriteViewMode.UPRIGHT], path))
             Local size = Try FloatsOf(table, "size", 2, path)
-            If size != Null Then sprite.SetSpriteScale(Vec2(size[0], size[1]))
+            If size != Null
+                Try Must(size[0] >= 0.0 && size[1] >= 0.0, path, "size", "is 0 or more")
+                sprite.SetSpriteScale(Vec2(size[0], size[1]))
+            End If
             Local handle = Try FloatsOf(table, "handle", 2, path)
             If handle != Null Then sprite.SetHandle(Vec2(handle[0], handle[1]))
             sprite.SetSpriteRotation(Try FloatOf(table, "turn", 0.0, path))
@@ -524,16 +778,45 @@ Class Reading
     End Method
 End Class
 
+// A sliding mover's MaxSlope at first.
+Const DEFAULT_SLOPE: Float32 = 0.7853982
+
 // What's in `table`'s array `key`, none if it hasn't one.
-Function Items(table: Value, key: String): Value[]
-    Local none: Value[] = []
-    Return table[key]?.AsArray() ?? none
+Function Items(table: Value, key: String, at: String): Value[] Throws IOError
+    Local item = table[key]
+    If item == Null
+        Local none: Value[] = []
+        Return none
+    End If
+    Local read = item.AsArray()
+    If read == Null Then Throw Wrong("{at}'s {key} isn't a list")
+    Return read
 End Function
 
 Function Wrong(message: String): IOError => IOError(IOErrorKind.INVALID_DATA, "a scene: {message}")
 
+Function Must(holds: Bool, at: String, key: String, says: String) Throws IOError
+    If !holds Then Throw Wrong("{at}'s {key} {says}")
+End Function
+
+// That `table` says nothing but `keys`, for what a save would otherwise lose without a word.
+Function Only(table: Value, keys: String[], at: String) Throws IOError
+    If !table.IsObject Then Throw Wrong("{at} isn't a table")
+    For key In table.Keys()
+        If !keys.Contains(key) Then Throw Wrong("{at} says {key}, which a scene hasn't")
+    End For
+End Function
+
+Function TextOf(table: Value, key: String, at: String): String? Throws IOError
+    Local item = table[key]
+    If item == Null Then Return Null
+    Local read = item.AsString()
+    If read == Null Then Throw Wrong("{at}'s {key} isn't text")
+    Return read
+End Function
+
 Function Required(table: Value, key: String, at: String): String Throws IOError
-    Local text = table[key]?.AsString()
+    Local text = Try TextOf(table, key, at)
     If text == Null Then Throw Wrong("{at} has no {key}")
     Return text
 End Function
@@ -542,7 +825,7 @@ Function FloatOf(table: Value, key: String, otherwise: Float32, at: String): Flo
     Local item = table[key]
     If item == Null Then Return otherwise
     Local read = item.AsDouble()
-    If read == Null Then Throw Wrong("{at}'s {key} isn't a number")
+    If read == Null || !IsFinite(read As Float32) Then Throw Wrong("{at}'s {key} isn't a finite number")
     Return read As Float32
 End Function
 
@@ -550,7 +833,9 @@ Function IntOf(table: Value, key: String, otherwise: Int, at: String): Int Throw
     Local item = table[key]
     If item == Null Then Return otherwise
     Local read = item.AsInt()
-    If read == Null Then Throw Wrong("{at}'s {key} isn't a whole number")
+    If read == Null || read < -2147483648 || read > 2147483647
+        Throw Wrong("{at}'s {key} isn't a whole number")
+    End If
     Return read
 End Function
 
@@ -562,15 +847,20 @@ Function BoolOf(table: Value, key: String, otherwise: Bool, at: String): Bool Th
     Return read
 End Function
 
+// `count` finite numbers, or as many as there are if that's below 0.
 Function FloatsOf(table: Value, key: String, count: Int, at: String): Float32[]? Throws IOError
     Local item = table[key]
     If item == Null Then Return Null
     Local read = item.AsArray()
-    If read == Null || read.Count != count Then Throw Wrong("{at}'s {key} isn't {count} numbers")
+    If read == Null || (count >= 0 && read.Count != count)
+        Throw Wrong("{at}'s {key} isn't {count} numbers")
+    End If
     Local made: Float32[] = []
     For each In read
         Local number = each.AsDouble()
-        If number == Null Then Throw Wrong("{at}'s {key} isn't {count} numbers")
+        If number == Null || !IsFinite(number As Float32)
+            Throw Wrong("{at}'s {key} isn't finite numbers")
+        End If
         made.Add(number As Float32)
     End For
     Return made
@@ -581,15 +871,19 @@ Function VecOf(table: Value, key: String, otherwise: Vec3, at: String): Vec3 Thr
     Return read != Null ? Vec3(read[0], read[1], read[2]) : otherwise
 End Function
 
-Function ColorOf(table: Value, key: String, otherwise: Color, at: String): Color Throws IOError
+// With `alpha`, its alpha's kept to 0 to 1, for what panics at else.
+Function ColorOf(table: Value, key: String, otherwise: Color, at: String,
+                 alpha: Bool): Color Throws IOError
     Local read = Try FloatsOf(table, key, 4, at)
-    Return read != Null ? Color(read[0], read[1], read[2], read[3]) : otherwise
+    If read == Null Then Return otherwise
+    If alpha Then Try Must(read[3] >= 0.0 && read[3] <= 1.0, at, key, "has an alpha of 0 to 1")
+    Return Color(read[0], read[1], read[2], read[3])
 End Function
 
 // The one of `all` whose name's what `key` says.
 Function Named<E: Printable>(table: Value, key: String, otherwise: E, all: E[],
                              at: String): E Throws IOError
-    Local text = table[key]?.AsString()
+    Local text = Try TextOf(table, key, at)
     If text == Null Then Return otherwise
     For each In all
         If "{each}" == text Then Return each
@@ -600,9 +894,24 @@ End Function
 // What's built in, by what Geometry's own factories call it.
 Function Builtin(source: String, at: String): Geometry Throws IOError
     Local parts = source.Split(":")
-    Local segments = parts.Count > 2 ? Int.Parse(parts[2]) ?? 16 : 16
-    Local capped = parts.Count > 3 ? parts[3] == "capped" : True
-    Select parts[1]
+    Local shape = parts[1]
+    Local segments = 16
+    If parts.Count > 2
+        Local read = Int.Parse(parts[2])
+        If read == Null Then Throw Wrong("{at}: {source} says no number of segments")
+        segments = read
+    End If
+    Local capped = parts.Count <= 3 || parts[3] == "capped"
+    If parts.Count > 4 || (parts.Count == 4 && parts[3] != "capped" && parts[3] != "open") ||
+       (shape == "cube" && parts.Count > 2) ||
+       ((shape == "sphere" || shape == "plane") && parts.Count > 3)
+        Throw Wrong("{at}: {source} isn't built in")
+    End If
+    Local least = shape == "plane" ? 1 : 3
+    If shape != "cube" && (segments < least || segments > 100)
+        Throw Wrong("{at}: {source} has {least} to 100 segments")
+    End If
+    Select shape
         Case "cube"
             Return Geometry.Cube()
         Case "sphere"
@@ -618,15 +927,31 @@ Function Builtin(source: String, at: String): Geometry Throws IOError
     End Select
 End Function
 
+/// What Scene.Open made: what's at its top, and what it couldn't load, each naming its entity.
+Public Final Class OpenedScene
+    /// What's at its top, in order.
+    Public ReadOnly Field Roots: Entity[]
+    /// What couldn't be loaded, and stands in as something that keeps its reference.
+    Public ReadOnly Field Problems: String[]
+
+    Package New(roots: Entity[], problems: String[])
+        Roots = roots
+        Problems = problems
+    End New
+End Class
+
 /// Scenes on disk: entities as a text file, which the editor writes and a game reads, one table to a
-/// thing, each entity's named by its path of names under its tree, so a change is a change to the
-/// lines of what changed, and two people's changes merge.
+/// thing, each entity's named by its path of names under its tree, so a change to an entity is a change
+/// to its own lines, and what's named after it, as a material whose first user it is, keeps its id. A
+/// same-named sibling put before another takes its #n, and so changes those paths; and a Geometry's
+/// vertices are a line to each array of them, so two edits of those don't merge.
 ///
-/// A scene holds Pivots, Meshes, Lights, Cameras, and Sprites, with what each is set to; a Mesh by what
-/// it's made of: a file's mesh, as a model's that hasn't changed since it loaded, by its res:// path
-/// and number; built in, as Geometry.Cube's is; or else by its vertices, in the file. What's drawn in
-/// a Material by a table of it, its textures by the files they're from. A Skin and a game's own Data
-/// aren't saved, so a model's skinned Mesh loads in its bind pose.
+/// A scene holds Pivots, Meshes, Lights, Cameras, and Sprites, with what each is set to, and each one's
+/// components, whatever they're for; a Mesh by what it's made of: a file's mesh, as a model's that
+/// hasn't changed since it loaded, by its res:// path and number; built in, as Geometry.Cube's is; or
+/// else by its vertices, in the file. What's drawn in a Material by a table of it, its textures by the
+/// res:// files they're from. A Skin and a game's own SetData aren't saved, so a model's skinned Mesh
+/// loads in its bind pose. docs/scene-files.md has the format.
 ///
 /// ```vb
 /// Local roots = Try Scene.Load("res://levels/first.scene")
@@ -636,10 +961,14 @@ Public Final Class Scene
     End New
 
     /// `roots`, and all under each, as a scene's text. It's an IOError of INVALID_DATA for what can't
-    /// be held: a kind of entity it hasn't, or a texture from no file.
+    /// be held: a kind of entity it hasn't, a texture or model from no res:// file, a number that isn't
+    /// finite, or what the file it came from said that it doesn't know.
     @MainThread Public Static Method Text(roots: Entity[]): String Throws IOError
         Local writing = Writing()
-        Local siblings: Map<String, Int> = {}
+        For root In roots
+            writing.Looked(root)
+        End For
+        Local siblings = Set<String>()
         For root In roots
             Try writing.Entity(root, "", siblings)
         End For
@@ -668,6 +997,18 @@ Public Final Class Scene
     /// The scene `text` is, as Load makes it.
     @MainThread Public Static Method FromText(text: String,
                                               parent: Entity? = Null): Entity[] Throws IOError
+        Return (Try Reading_(text, parent, False)).Roots
+    End Method
+
+    /// The scene in the file at `path`, as an editor wants it: as Load, but a texture or model that
+    /// can't be loaded stands in as a plain one, keeping its reference for saving again, and is said
+    /// in Problems. What's wrong with the file itself is still an IOError.
+    @MainThread Public Static Method Open(path: String,
+                                          parent: Entity? = Null): OpenedScene Throws IOError
+        Return Try Reading_(Try Assets.ReadText(path), parent, True)
+    End Method
+
+    Private Static Method Reading_(text: String, parent: Entity?, tolerant: Bool): OpenedScene Throws IOError
         Local document: Value? = Null
         Try
             document = Try Toml.Read(text)
@@ -677,10 +1018,10 @@ Public Final Class Scene
         If document == Null Then Throw Wrong("it's empty")
         Local format = document["format"]?.AsInt()
         If format != FORMAT Then Throw Wrong("it's of format {format ?? 0}, not {FORMAT}")
-        Local reading = Try Reading(document)
+        Local reading = Try Reading(document, tolerant)
         reading.Under = parent
         Try
-            For table In Items(document, "entity")
+            For table In Try Items(document, "entity", "the file")
                 Try reading.Entity(table)
             End For
         Catch error As IOError
@@ -688,6 +1029,6 @@ Public Final Class Scene
             Throw error
         End Try
         reading.LetGo()
-        Return reading.Roots
+        Return OpenedScene(reading.Roots, reading.Problems)
     End Method
 End Class

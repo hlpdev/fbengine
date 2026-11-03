@@ -43,7 +43,7 @@ Function ASceneIsTextByItsLines() Throws IOError
     Defer world.Free()
     Local text = Try Scene.Text([Room()])
     Expect(text.StartsWith("format = 1\n"))
-    Expect(text.Contains("[[entity]]\npath = \"room\"\nkind = \"PIVOT\"\nname = \"room\"\nposition = [1.0, 2.0, 3.0]\nrotation = [0.0, 0.7071068, 0.0, 0.7071068]\nscale = [1.0, 1.0, 1.0]\n"))
+    Expect(text.Contains("[[entity]]\npath = \"room\"\nkind = \"PIVOT\"\nname = \"room\"\nposition = [1.0, 2.0, 3.0]\nrotation = [0.0, 0.70710677, 0.0, 0.70710677]\nscale = [1.0, 1.0, 1.0]\n"))
     Expect(text.Contains("[[entity]]\npath = \"room/crate\"\nkind = \"MESH\"\nname = \"crate\"\nposition = [0.0, 0.0, 0.0]\nrotation = [0.0, 0.0, 0.0, 1.0]\nscale = [0.1, 2.0, 0.5]\npick = \"MESH\"\ngroup = 3\ngeometry = \"builtin:cube\"\n"))
     Expect(text.Contains("path = \"room/lamp\"\nkind = \"LIGHT\"\nname = \"lamp\""))
     Expect(text.Contains("hidden = true"))
@@ -63,7 +63,7 @@ Function ASceneReadsBackAsItWas() Throws IOError
     Local room = roots[0]
     Expect(room.Kind() == EntityKind.PIVOT && room.Name() == "room")
     Expect(room.Position() == Vec3(1, 2, 3))
-    Expect(room.Rotation() == Quat(0, 0.7071068, 0, 0.7071068))
+    Expect(room.Rotation() == Quat(0, 0.70710677, 0, 0.70710677))
     Expect(room.ChildCount() == 2)
     Local crate = room.Child(0) As? Mesh
     If crate == Null Then Panic("its first child's a Mesh")
@@ -353,5 +353,428 @@ Function ASceneLoadsFromResByPaths() Throws IOError, GraphicsError
     Expect(ExpectThrows<IOError>(Scene.Text([mesh])) != Null)
     // A file that's not there.
     Expect(ExpectThrows<IOError>(Scene.Load("res://scene-test/none.scene")) != Null)
+    Try folder.Close()
+End Function
+
+// Each of what a setter would panic at is the file's fault, and says so, leaving nothing.
+@Test
+Function WhatASetterWouldPanicAtIsRefused()
+    Local world = Fresh()
+    Defer world.Free()
+    Local top = "format = 1\n"
+    Local entity = "[[entity]]\npath = \"b\"\nkind = "
+    Local material = "[[entity]]\npath = \"b\"\nkind = \"MESH\"\nmaterial = \"m\"\n[[material]]\nid = \"m\"\n"
+    For each In [("\"PIVOT\"\ngroup = 1024\n", "group"), ("\"PIVOT\"\ngroup = -1\n", "group"),
+                 ("\"PIVOT\"\nradius = [0.0, 1.0]\n", "radius"),
+                 ("\"PIVOT\"\nradius = [1.0, -1.0]\n", "radius"),
+                 ("\"PIVOT\"\nbox = [1.0, 0.0, 0.0, 0.0, 1.0, 1.0]\n", "box"),
+                 ("\"PIVOT\"\nstep_height = -1.0\n", "step_height"),
+                 ("\"PIVOT\"\nmax_slope = 2.0\n", "max_slope"),
+                 ("\"PIVOT\"\nauto_fade = [2.0, 1.0]\n", "auto_fade"),
+                 ("\"PIVOT\"\nposition = [inf, 0.0, 0.0]\n", "position"),
+                 ("\"PIVOT\"\nscale = [nan, 1.0, 1.0]\n", "scale"),
+                 ("\"PIVOT\"\nposition = [1e300, 0.0, 0.0]\n", "position"),
+                 ("\"LIGHT\"\nintensity = -1.0\n", "intensity"),
+                 ("\"LIGHT\"\nrange = 0.0\n", "range"),
+                 ("\"LIGHT\"\ncone = [1.0, 0.5]\n", "cone"),
+                 ("\"LIGHT\"\ncone = [0.0, 2.0]\n", "cone"),
+                 ("\"CAMERA\"\nfield_of_view = 4.0\n", "field_of_view"),
+                 ("\"CAMERA\"\nfield_of_view = 0.0\n", "field_of_view"),
+                 ("\"CAMERA\"\nheight = 0.0\n", "height"),
+                 ("\"CAMERA\"\nrange = [2.0, 1.0]\n", "range"),
+                 ("\"CAMERA\"\nfog_range = [2.0, 1.0]\n", "fog_range"),
+                 ("\"CAMERA\"\nfog_density = -1.0\n", "fog_density"),
+                 ("\"SPRITE\"\nsize = [-1.0, 1.0]\n", "size"),
+                 ("\"SPRITE\"\ncolor = [1.0, 1.0, 1.0, 2.0]\n", "color"),
+                 ("\"MESH\"\ncolor = [1.0, 1.0, 1.0, -1.0]\n", "color"),
+                 ("\"MESH\"\ngeometry = \"builtin:sphere:1\"\n", "segments"),
+                 ("\"MESH\"\ngeometry = \"builtin:plane:0\"\n", "segments"),
+                 ("\"MESH\"\ngeometry = \"builtin:cone:101\"\n", "segments"),
+                 ("\"MESH\"\ngeometry = \"builtin:sphere:abc\"\n", "segments"),
+                 ("\"MESH\"\ngeometry = \"builtin:cube:5\"\n", "built in"),
+                 ("\"MESH\"\ngeometry = \"builtin:cone:5:lid\"\n", "built in"),
+                 ("\"MESH\"\ngeometry = 5\n", "geometry"), ("\"MESH\"\nmaterial = 5\n", "material"),
+                 ("\"PIVOT\"\nname = 5\n", "name"), ("\"PIVOT\"\npick = 5\n", "pick"),
+                 ("\"PIVOT\"\ncomponents = 5\n", "components")]
+        Local kind, says = each
+        Local said = Refused(top + entity + kind)
+        Expect(said.Contains(says), "{kind}: {said}")
+        Expect(world.Roots().Count == 0, kind)
+    End For
+    For each In [("alpha_cutoff = 2.0\n", "alpha_cutoff"), ("shininess = 2.0\n", "shininess"),
+                 ("color = [1.0, 1.0, 1.0, 2.0]\n", "color"), ("layers = 5\n", "layers"),
+                 ("cheese = 5\n", "cheese"),
+                 ("[[material.layers]]\nlayer = 0\nuv_set = 5\n", "uv_set"),
+                 ("[[material.layers]]\nlayer = 0\nuv = [0.0, 1.0, 0.0, 0.0, 0.0]\n", "uv"),
+                 ("[[material.layers]]\nlayer = 0\nbump = [inf, 0.0, 0.0, 0.0, 0.0, 0.0]\n", "bump"),
+                 ("[[material.layers]]\nlayer = 8\n", "a layer's"),
+                 ("[[material.layers]]\nlayer = 0\ntexture = 5\n", "texture")]
+        Local line, says = each
+        Local said = Refused(top + material + line)
+        Expect(said.Contains(says), "{line}: {said}")
+        Expect(world.Roots().Count == 0, line)
+    End For
+    Local shape = "[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"geometry:g\"\n[[geometry]]\nid = \"g\"\n"
+    For each In [("surfaces = 5\n", "surfaces"), ("[[geometry.surfaces]]\nvertices = [[\"a\"]]\n", "vertex"),
+                 ("[[geometry.surfaces]]\nvertices = [5]\n", "vertex"),
+                 ("[[geometry.surfaces]]\nvertices = [[inf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]\n", "vertex"),
+                 ("[[geometry.surfaces]]\ntriangles = [1, 2, 3]\n", "index"),
+                 ("cull_box = [1.0, 0.0, 0.0, 0.0, 1.0, 1.0]\n", "cull_box"), ("wat = 1\n", "wat")]
+        Local line, says = each
+        Local said = Refused(top + shape + line)
+        Expect(said.Contains(says), "{line}: {said}")
+        Expect(world.Roots().Count == 0, line)
+    End For
+    // Twice the same id; what's not a list; what the file says that a scene hasn't.
+    For each In [("[[material]]\nid = \"a\"\n[[material]]\nid = \"a\"\n", "twice"),
+                 ("[[geometry]]\nid = \"a\"\n[[geometry]]\nid = \"a\"\n", "twice"),
+                 ("material = 5\n", "material"), ("geometry = 5\n", "geometry"), ("entity = 5\n", "entity"),
+                 ("cheese = 5\n", "cheese")]
+        Local line, says = each
+        Local said = Refused(top + line)
+        Expect(said.Contains(says), "{line}: {said}")
+    End For
+End Function
+
+// Twin, twin, and one named as the second would be: each its own id, each back as it was.
+@Test
+Function ANameThatLooksLikeASecondOfANameKeepsItsOwn() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local roots: Entity[] = []
+    For name In ["twin", "twin", "twin#2", "twin#2", "twin"]
+        Local made = Pivot()
+        made.SetName(name)
+        roots.Add(made)
+    End For
+    Local text = Try Scene.Text(roots)
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    Expect(read.Count == 5)
+    For at = 0 To 4
+        Expect(read[at].Name() == roots[at].Name(), "{at}")
+    End For
+    Expect((Try Scene.Text(read)) == text)
+End Function
+
+// Any rotation's text reads back the same, and is what's written again.
+@Test
+Function ARotationReadBackIsWrittenTheSame() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local seed: UInt64 = 12345
+    Local next = Function(): Float32
+        seed = (seed * 1664525 + 1013904223) & 0xFFFFFFFF
+        Return ((seed >> 8) As Float32) / 8388608.0 - 1.0
+    End Function
+    Local roots: Entity[] = []
+    For at = 1 To 1000
+        Local made = Pivot()
+        made.SetRotation(Quat(next(), next(), next(), next()))
+        roots.Add(made)
+    End For
+    Local text = Try Scene.Text(roots)
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    Expect((Try Scene.Text(read)) == text)
+    For at = 0 To 999
+        Expect(read[at].Rotation() == roots[at].Rotation(), "{at}")
+    End For
+End Function
+
+// A surface's material or a cull box set on what's built in isn't what's built in any more.
+@Test
+Function ABuiltInGivenAMaterialOrCullBoxIsSavedWhole() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local cube = Geometry.Cube()
+    cube.Surface(0).SetMaterial(Material(Color(0.5, 0.25, 0.125)))
+    Expect(cube.Source() == Null)
+    Local boxed = Geometry.Sphere(5)
+    boxed.SetCullBox(AABB(Vec3(-2, -3, -4), Vec3(2, 3, 4)))
+    Expect(boxed.Source() == Null)
+    Local one = Mesh(cube)
+    Local two = Mesh(boxed)
+    Local text = Try Scene.Text([one, two])
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    Expect((read[0] As? Mesh)?.Geometry()?.Surface(0)?.Material()?.Color() == Color(0.5, 0.25, 0.125))
+    Expect((read[1] As? Mesh)?.Geometry()?.CullBox() == AABB(Vec3(-2, -3, -4), Vec3(2, 3, 4)))
+    Expect((Try Scene.Text(read)) == text)
+End Function
+
+// A component no one here knows goes through as it is, nested and all, and with a copy; what else the
+// file says that a save would lose stops the save, and names it.
+@Test
+Function ComponentsAreKeptAndStrayKeysRefuseTheSave() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local crate = Pivot()
+    crate.SetName("crate")
+    Local body = Value.Object()
+    body["mass"] = Value(2.5)
+    Local inner = Value.Object()
+    inner["layers"] = Value([Value(1 As Int32), Value(2 As Int32)])
+    body["filter"] = inner
+    crate.SetComponent("body", body)
+    crate.SetComponent("anything", Value("at all"))
+    Expect(crate.ComponentNames() == ["anything", "body"])
+    Local copy = crate.Copy()
+    Local copied = copy.Component("body")
+    If copied == Null Then Panic("its component, copied")
+    Expect(copied["mass"]?.AsDouble() == 2.5)
+    copy.Free()
+    crate.SetComponent("gone", Value(True))
+    crate.SetComponent("gone", Null)
+    Expect(crate.Component("gone") == Null && crate.ComponentNames().Count == 2)
+    Local text = Try Scene.Text([crate])
+    Expect(text.Contains("[entity.components.body]\nmass = 2.5\n"), text)
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    Expect(read[0].Component("anything")?.AsString() == "at all")
+    Local kept = read[0].Component("body")
+    If kept == Null Then Panic("its component")
+    Expect(kept.Path("filter.layers")?.Count == 2)
+    Expect((Try Scene.Text(read)) == text)
+    Local strays = Try Scene.FromText("format = 1\n[[entity]]\npath = \"p\"\nkind = \"PIVOT\"\nfuture = 1\nintensity = 2.0\n")
+    Local error = ExpectThrows<IOError>(Scene.Text(strays))
+    Expect((error?.Message ?? "").Contains("entity: its file says future, intensity"), error?.Message ?? "")
+End Function
+
+// What's been left out, each away from what it is at first.
+@Test
+Function WhatCameLaterIsSavedToo() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local mover = Pivot()
+    mover.SetStepHeight(0.5)
+    mover.SetMaxSlope(0.25)
+    mover.SetAutoFade(2, 9)
+    Local lamp = Light(LightType.SPOT)
+    lamp.SetIntensity(3.5)
+    lamp.SetCone(0.25, 0.75)
+    Local material = Material()
+    material.SetLayer(2, LayerBlend.ADD, 1)
+    material.SetLayerUv(3, UvTurn(Vec2(2, 3), 0.5, Vec2(0.25, 0.75)))
+    material.SetLayerBump(4, BumpShift(0.5, 0.25, 0.125, 1, 2, 3))
+    Local mesh = Mesh(Null)
+    mesh.SetMaterial(material)
+    Local text = Try Scene.Text([mover, lamp, mesh])
+    Expect(!text.Contains("[[geometry]]") && !text.Contains("geometry ="))
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    Expect(read[0].StepHeight() == 0.5 && read[0].MaxSlope() == 0.25 && read[0].AutoFade() == Vec2(2, 9))
+    Local light = read[1] As? Light
+    Expect(light?.Intensity() == 3.5 && light?.InnerCone() == 0.25 && light?.OuterCone() == 0.75)
+    Local kept = read[2] As? Mesh
+    Expect(kept?.Geometry() == Null)
+    Local layers = kept?.Material()
+    If layers == Null Then Panic("its material")
+    Expect(layers.LayerBlend(2) == LayerBlend.ADD && layers.LayerUvSet(2) == 1)
+    Expect(layers.LayerUv(3) == UvTurn(Vec2(2, 3), 0.5, Vec2(0.25, 0.75)))
+    Expect(layers.LayerBump(4) == BumpShift(0.5, 0.25, 0.125, 1, 2, 3))
+    Expect((Try Scene.Text(read)) == text)
+    // What's at first isn't said.
+    Local plain = Try Scene.Text([Pivot()])
+    Expect(!plain.Contains("step_height") && !plain.Contains("max_slope") && !plain.Contains("auto_fade"))
+End Function
+
+// Two cubes are two; one cube two meshes draw is one, by the file's saying so.
+@Test
+Function BuiltInsAreSharedOnlyIfTheyWere() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local a = Mesh(Geometry.Cube())
+    a.SetName("a")
+    Local b = Mesh(Geometry.Cube())
+    b.SetName("b")
+    Local same = Geometry.Sphere(5)
+    Local c = Mesh(same)
+    c.SetName("c")
+    Local d = Mesh(same)
+    d.SetName("d")
+    Local text = Try Scene.Text([a, b, c, d])
+    Expect(text.Contains("id = \"c.geometry\"\nsource = \"builtin:sphere:5\"\n"), text)
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    Local crate = (read[0] As? Mesh)?.Geometry()
+    If crate == Null Then Panic("a geometry")
+    crate.Translate(Vec3(1, 0, 0))
+    Expect((read[1] As? Mesh)?.Geometry()?.Bounds()?.Max?.x == 1.0, "the other's its own")
+    Expect((read[2] As? Mesh)?.Geometry() == (read[3] As? Mesh)?.Geometry())
+    Expect((read[2] As? Mesh)?.Geometry()?.Source() == "builtin:sphere:5")
+End Function
+
+// One material's color changes its one line, and what's named for it stays; ids come from their first
+// user, and stay when that's renamed or what's around them changes.
+@Test
+Function IdsStayWhatTheyWere() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local shared = Material(Color(0.5, 0.5, 0.5))
+    Local one = Mesh(Geometry.Cube())
+    one.SetName("one")
+    one.SetMaterial(shared)
+    Local two = Mesh(Geometry.Cube())
+    two.SetName("two")
+    two.SetMaterial(shared)
+    Local before = (Try Scene.Text([one, two])).Split("\n")
+    Expect(before.Contains("material = \"one.material\""))
+    shared.SetColor(Color(0.25, 0.5, 0.5))
+    Local after = (Try Scene.Text([one, two])).Split("\n")
+    Expect(before.Count == after.Count)
+    Local differ = 0
+    For i = 0 To before.Count - 1
+        If before[i] != after[i] Then differ += 1
+    End For
+    Expect(differ == 1, "{differ}")
+    // Renamed, and read back, it keeps its id.
+    one.SetName("renamed")
+    Local text = Try Scene.Text([one, two])
+    Expect(text.Contains("id = \"one.material\""), text)
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    read[0].SetName("again")
+    Expect((Try Scene.Text(read)).Contains("id = \"one.material\""))
+    // A new one that'd take that name gets its own, whichever comes first.
+    Local other = Mesh(Geometry.Cube())
+    other.SetName("one")
+    other.SetMaterial(Material(Color(1, 0, 0)))
+    Local both = Try Scene.Text([other, read[0], read[1]])
+    Expect(both.Contains("id = \"one.material-2\"") && both.Contains("id = \"one.material\"\ncolor = [0.25"), both)
+    Local third = Fresh()
+    Defer third.Free()
+    Expect((Try Scene.FromText(both)).Count == 3)
+End Function
+
+// One geometry's numbers are a line an array, as std's Toml writes them, until it writes long ones an
+// element a line, when this comes out in favor of: one vertex changing at most 2 lines.
+@Test
+Function VerticesAreALineToAnArrayForNow() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    surface.AddVertex(Vertex(Vec3(0, 0, 0), Vec3(0, 1, 0), Vec2(0, 0), Vec2(0, 0)))
+    surface.AddVertex(Vertex(Vec3(1, 0, 0), Vec3(0, 1, 0), Vec2(0, 0), Vec2(0, 0)))
+    Local text = Try Scene.Text([Mesh(made)])
+    Expect(text.Contains("vertices = [[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0], [1.0,"), text)
+End Function
+
+// Names of anything come back, in a path that can be told from another.
+@Test
+Function ANameCanBeAnything() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local names = ["say \"hi\"", "two\nlines", "back\\slash", "hash#1", "caf\u{e9} \u{1F600}", "a/b", "tab\there"]
+    Local roots: Entity[] = []
+    For name In names
+        Local made = Pivot()
+        made.SetName(name)
+        Local under = Pivot(made)
+        under.SetName(name)
+        roots.Add(made)
+    End For
+    Local text = Try Scene.Text(roots)
+    Local again = Fresh()
+    Defer again.Free()
+    Local read = Try Scene.FromText(text)
+    For at = 0 To names.Count - 1
+        Expect(read[at].Name() == names[at] && read[at].Child(0).Name() == names[at], names[at])
+    End For
+    Expect((Try Scene.Text(read)) == text)
+End Function
+
+// A same-named sibling put first takes the first's id, and so shifts the others': say so, as it is.
+@Test
+Function ASameNamedSiblingPutFirstShiftsTheOthers() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local room = Pivot()
+    room.SetName("room")
+    Local old = Pivot(room)
+    old.SetName("twin")
+    old.SetPosition(Vec3(1, 0, 0))
+    Expect((Try Scene.Text([room])).Contains("path = \"room/twin\"\nkind = \"PIVOT\"\nname = \"twin\"\nposition = [1.0, 0.0, 0.0]"))
+    Local added = Pivot(room)
+    added.SetName("twin")
+    old.SetParent(Null)
+    old.SetParent(room)
+    Local text = Try Scene.Text([room])
+    Expect(text.Contains("path = \"room/twin#2\"\nkind = \"PIVOT\"\nname = \"twin\"\nposition = [1.0, 0.0, 0.0]"), text)
+End Function
+
+// A folder, or a file that can't be replaced, is as it was, and leaves nothing beside it.
+@Test
+Function SavedWholeOrNotAtAll() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local folder = Try TempDir()
+    Local there = folder.Path / "there.scene"
+    Try Dir.CreateAll(there)
+    Expect(ExpectThrows<IOError>(Scene.Save(there, [Room()])) != Null)
+    Expect(Dir.Exists(there))
+    Expect((Try Dir.Entries(folder.Path)).Count == 1)
+    Try folder.Close()
+End Function
+
+// A texture from outside res:// can't be named, and says who wanted it.
+@Test
+Function WhatsOutsideResIsRefusedNamingItsEntity() Throws IOError, GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = Fresh()
+    Defer world.Free()
+    Local folder = Try TempDir()
+    Local image = Image(1, 1)
+    image[0, 0] = Color32(10, 200, 30, 255)
+    Local file = folder.Path / "wall.png"
+    Try File.WriteBytes(file, Png.Encode(image))
+    Local material = Material()
+    material.SetTexture(0, Try Texture.Load(file))
+    Local room = Pivot()
+    room.SetName("room")
+    Local wall = Mesh(Geometry.Cube(), room)
+    wall.SetName("wall")
+    wall.SetMaterial(material)
+    Local error = ExpectThrows<IOError>(Scene.Text([room]))
+    Expect((error?.Message ?? "").Contains("room/wall") && (error?.Message ?? "").Contains("res://"), error?.Message ?? "")
+    Try folder.Close()
+End Function
+
+// What's lost: strictly, an error naming what wanted it; opened, it stands in, keeping its reference.
+// A # in a file's name is split at the last.
+@Test
+Function ALostAssetBlocksALoadNotAnOpen() Throws IOError, GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = Fresh()
+    Defer world.Free()
+    Local folder = Try TempDir()
+    Assets.MountFolder("res://lost-test", folder.Path)
+    Defer Assets.Unmount("res://lost-test")
+    Local text = "format = 1\n[[material]]\nid = \"m\"\n[[material.layers]]\nlayer = 0\ntexture = \"res://lost-test/gone.png\"\n[[entity]]\npath = \"wall\"\nkind = \"MESH\"\ngeometry = \"res://lost-test/gone#1.glb#0\"\nmaterial = \"m\"\n"
+    Try File.WriteText(folder.Path / "a.scene", text)
+    Local error = ExpectThrows<IOError>(Scene.Load("res://lost-test/a.scene"))
+    Expect((error?.Message ?? "").Contains("wall") && (error?.Message ?? "").Contains("gone"), error?.Message ?? "")
+    Expect(world.Roots().Count == 0)
+    Local opened = Try Scene.Open("res://lost-test/a.scene")
+    Expect(opened.Roots.Count == 1 && opened.Problems.Count == 2, "{opened.Problems}")
+    Expect(opened.Problems[0].Contains("wall"), "{opened.Problems}")
+    Local mesh = opened.Roots[0] As? Mesh
+    Expect(mesh?.Geometry()?.Source() == "res://lost-test/gone#1.glb#0")
+    Expect(mesh?.Material()?.Texture(0)?.Path() == "res://lost-test/gone.png")
+    Local again = Try Scene.Text(opened.Roots)
+    Expect(again.Contains("geometry = \"res://lost-test/gone#1.glb#0\"") && again.Contains("texture = \"res://lost-test/gone.png\""), again)
+    // A file itself that's wrong is wrong either way.
+    Try File.WriteText(folder.Path / "b.scene", "nonsense")
+    Expect(ExpectThrows<IOError>(Scene.Open("res://lost-test/b.scene")) != Null)
     Try folder.Close()
 End Function

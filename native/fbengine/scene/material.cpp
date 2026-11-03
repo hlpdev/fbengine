@@ -183,6 +183,7 @@ FBE_API uint64_t fbe_material_clone(uint64_t material) {
     const std::uint32_t copy = fbe::scene::make_material();
     scene().materials[copy] = original;
     scene().materials[copy].references = 1;
+    scene().materials[copy].scene_id.clear();
     for (const fbe::scene::layer_t& layer : original.layers) {
         if (layer.texture != 0) {
             fbe_texture_retain(layer.texture);
@@ -350,6 +351,20 @@ FBE_API int32_t fbe_material_order(uint64_t material) {
     return found != nullptr ? found->order : 0;
 }
 
+FBE_API bool fbe_material_set_scene_id(uint64_t material, const char* id) {
+    material_t* found = material_of(material);
+    if (found == nullptr || id == nullptr) {
+        return false;
+    }
+    found->scene_id = id;
+    return true;
+}
+
+FBE_API const char* fbe_material_scene_id(uint64_t material) {
+    const material_t* found = material_of(material);
+    return found != nullptr ? found->scene_id.c_str() : "";
+}
+
 FBE_API bool fbe_material_set_texture(uint64_t material, int32_t layer, uint64_t texture) {
     layer_t* found = fbe::scene::layer_of(material, layer);
     if (found == nullptr) {
@@ -473,6 +488,8 @@ FBE_API bool fbe_surface_set_material(uint64_t geometry, int32_t surface, uint64
     fbe::scene::retain_material(slot);
     fbe::scene::release_material(found.material);
     found.material = slot;
+    // Not what its source says any more.
+    scene().geometries[geometry_slot].source.clear();
     return true;
 }
 

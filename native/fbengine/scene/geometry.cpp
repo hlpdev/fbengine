@@ -394,6 +394,20 @@ FBE_API const char* fbe_geometry_source(uint64_t geometry) {
     return scene().geometries[slot].source.c_str();
 }
 
+FBE_API bool fbe_geometry_set_scene_id(uint64_t geometry, const char* id) {
+    const std::uint32_t slot = geometry_slot(geometry);
+    if (slot == none || id == nullptr) {
+        return false;
+    }
+    scene().geometries[slot].scene_id = id;
+    return true;
+}
+
+FBE_API const char* fbe_geometry_scene_id(uint64_t geometry) {
+    const std::uint32_t slot = geometry_slot(geometry);
+    return slot != none ? scene().geometries[slot].scene_id.c_str() : "";
+}
+
 FBE_API uint64_t fbe_geometry_clone(uint64_t geometry) {
     const std::uint32_t slot = geometry_slot(geometry);
     if (slot == none) {
@@ -789,6 +803,8 @@ FBE_API bool fbe_geometry_set_cull_box(uint64_t geometry, const fbe_aabb_t* box)
     found.has_cull_box = true;
     found.cull_min = { box->min.x, box->min.y, box->min.z };
     found.cull_max = { box->max.x, box->max.y, box->max.z };
+    // Not what its source says any more.
+    found.source.clear();
     return true;
 }
 

@@ -267,6 +267,21 @@ Public Final Class Material
     @MainThread @PanicsAtCaller
     Public Method Order(): Int => fbe_material_order(Live("Order"))
 
+    // What a scene file calls it, or "".
+    @MainThread
+    Package Method SceneId(): String
+        Local found = ""
+        Unsafe
+            found = fbe_material_scene_id(Live("SceneId")).ToString()
+        End Unsafe
+        Return found
+    End Method
+
+    @MainThread
+    Package Method SetSceneId(id: String)
+        fbe_material_set_scene_id(Live("SetSceneId"), id)
+    End Method
+
     /// Sets a texture layer's texture, 0 to 7, or none with Null: what's drawn is the lit color
     /// with each layer that has a texture over it, in order. A layer out of range or a freed
     /// texture panics.

@@ -89,6 +89,16 @@ Public Final Class Texture Implements Asset
         Keep(Self)
     End New
 
+    // What's drawn for a texture of a file that can't be loaded: a pixel of magenta, that keeps saying
+    // it's from `path`.
+    @MainThread
+    Package Static Method Lost(path: String): Texture Throws GraphicsError
+        Local made = Try Texture(1, 1, TextureFormat.RGBA8, False)
+        made.WritePixels(0, 0, 1, 1, [255, 0, 255, 255])
+        fbe_texture_set_path(made.handle, path)
+        Return made
+    End Method
+
     /// A texture of the pixels an image file decodes to, PNG, JPEG, BMP, TGA, GIF, QOI, or WebP,
     /// RGBA8, or HDR, as FromHdr makes it, with mipmaps unless `mipmaps` is False. It throws when
     /// the file can't be read or decoded, or as New does. Path gives the file it was loaded from.
