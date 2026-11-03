@@ -1,6 +1,12 @@
 // The golden image harness: PNGs through stb, compared within a tolerance; and, updating, written
 // once a test that drew them has passed.
 
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include "golden.hpp"
 
 #include <algorithm>
@@ -43,6 +49,22 @@ std::vector<std::pair<std::filesystem::path, std::filesystem::path>> written;
 class golden_listener_t : public Catch::EventListenerBase {
 public:
     using Catch::EventListenerBase::EventListenerBase;
+
+    void testRunStarting(const Catch::TestRunInfo& /*info*/) override {
+#ifdef _WIN32
+        // A crash ends the run with its code, where nothing waits for a dialog no one can close.
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#endif
+    }
+
+    /// A test that failed left the GPU running, which ending the process with hung on CI's Windows,
+    /// so a run ends as one that passed does, with its report out.
+    void testRunEnded(const Catch::TestRunStats& /*stats*/) override {
+        if (fbe_gpu_started()) {
+            std::fputs("stopped the GPU a test left running\n", stderr);
+            fbe_gpu_stop();
+        }
+    }
 
     void testCaseStarting(const Catch::TestCaseInfo& /*info*/) override {
         written.clear();
