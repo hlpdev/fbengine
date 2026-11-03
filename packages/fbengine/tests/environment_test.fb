@@ -2,6 +2,8 @@
 // FBENGINE_NO_GPU to 1 and skips them.
 
 Import std.core
+Import std.image
+Import std.io
 Import std.os
 Import std.test
 Import fbengine
@@ -22,4 +24,41 @@ Function AnEnvironmentIsBakedAndFreed() Throws GraphicsError
     Expect(Environment.Count() == before + 1)
     baked.Free()
     Expect(Environment.Count() == before)
+End Function
+
+// An HDR image's light is a texture's as half floats, as near as they hold it, which bakes.
+@Test
+Function AnHdrImageIsATextureThatBakes() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local image = HdrImage(4, 2)
+    image[0, 0] = Color(4.0, 70000.0, -1.0, 1.0)
+    Local sky = Try Texture.FromHdr(image, False)
+    Expect(sky.Format() == TextureFormat.RGBA16F)
+    Expect(sky.Levels() == 1)
+    Local bytes = sky.ReadPixels()
+    // 4 is 0x4080, 65504 0x7BFF, and 1 0x3C00, little end first.
+    Expect(bytes[0] == 0x80 && bytes[1] == 0x40)
+    Expect(bytes[2] == 0xFF && bytes[3] == 0x7B)
+    Expect(bytes[4] == 0 && bytes[5] == 0)
+    Expect(bytes[6] == 0 && bytes[7] == 0x3C)
+    Expect((Try Environment.Bake(sky, 16, 4)).Levels() == 2)
+End Function
+
+// The doc's example: Load takes a file of Radiance's HDR as HDR, and bakes it.
+@Test
+Function AnHdrFileLoadsAsLight() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Local image = HdrImage(8, 4)
+    image[0, 0] = Color(4.0, 4.0, 4.0, 1.0)
+    Local path = folder.Path / "SKY.HDR"
+    Try File.WriteBytes(path, Hdr.Encode(image))
+    Local sky = Try Texture.Load(path)
+    Expect(sky.Format() == TextureFormat.RGBA16F)
+    Expect(sky.Levels() == 4)
+    Local bytes = sky.ReadPixels()
+    Expect(bytes[0] == 0x80 && bytes[1] == 0x40)
+    Expect((Try Environment.Bake(sky, 16, 4)).Levels() == 2)
 End Function

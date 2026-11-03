@@ -144,6 +144,8 @@ struct added_t {
     std::uint32_t first = 0;
     std::uint32_t count = 0;
     bool kept = true;
+    /// Whether anything needs it, whether or not it can be recorded.
+    bool needed = true;
     std::int32_t level = 0;
 };
 
@@ -173,6 +175,10 @@ struct carried_t {
     std::function<void(VkCommandBuffer)> record;
 };
 std::vector<carried_t> carriable;
+/// What to tell of the passes the last recording recorded, once their submit's known.
+std::vector<std::function<void(fbe::gpu::settled_t)>> awaiting;
+/// Whether their submit failed.
+bool awaiting_missed = false;
 bool recording = false;
 /// What sends a batch held back to the graph, and drops it, and whether it's sending it.
 void (*held_back)() = nullptr;
@@ -726,6 +732,30 @@ void flush_held_back() {
 }
 
 /// Empties the graph for the next passes, keeping its lists' room.
+/// Tells the passes the last recording recorded what came of them.
+void settle_awaiting(fbe::gpu::settled_t how) {
+    const std::vector<std::function<void(fbe::gpu::settled_t)>> telling = std::move(awaiting);
+    awaiting.clear();
+    awaiting_missed = false;
+    for (const std::function<void(fbe::gpu::settled_t)>& settled : telling) {
+        settled(how);
+    }
+}
+
+/// Tells the passes the last recording recorded, and those added since, that they'll never run.
+void give_up_passes() {
+    settle_awaiting(fbe::gpu::settled_t::GIVEN_UP);
+    std::vector<std::function<void(fbe::gpu::settled_t)>> telling;
+    for (added_t& pass : added) {
+        if (pass.pass.settled) {
+            telling.push_back(std::move(pass.pass.settled));
+        }
+    }
+    for (const std::function<void(fbe::gpu::settled_t)>& settled : telling) {
+        settled(fbe::gpu::settled_t::GIVEN_UP);
+    }
+}
+
 void empty() {
     resources.clear();
     by_handle().clear();
@@ -881,6 +911,7 @@ bool record_graph() {
     if (recording) {
         return true;
     }
+    settle_awaiting(awaiting_missed ? settled_t::MISSED : settled_t::RAN);
     flush_held_back();
     if (added.empty()) {
         empty();
@@ -889,6 +920,9 @@ bool record_graph() {
     recording = true;
     recorded = {};
     drop_unneeded();
+    for (added_t& pass : added) {
+        pass.needed = pass.kept;
+    }
     const std::int32_t levels = level_passes();
     const bool made = give_images();
     // A pass that uses a transient target that has no image is dropped, and so is one that needs
@@ -920,10 +954,29 @@ bool record_graph() {
         }
         carriable.push_back(std::move(carry));
     }
+    std::vector<std::pair<std::function<void(settled_t)>, settled_t>> telling;
+    for (added_t& pass : added) {
+        if (!pass.pass.settled) {
+            continue;
+        }
+        if (pass.kept) {
+            awaiting.push_back(std::move(pass.pass.settled));
+        } else {
+            telling.emplace_back(std::move(pass.pass.settled),
+                                 pass.needed ? settled_t::MISSED : settled_t::GIVEN_UP);
+        }
+    }
     count_passes(static_cast<std::uint32_t>(recorded.passes.size()), recorded.barriers);
     empty();
     recording = false;
+    for (const auto& [settled, how] : telling) {
+        settled(how);
+    }
     return made;
+}
+
+void miss_passes() {
+    awaiting_missed = true;
 }
 
 void carry_passes() {
@@ -949,6 +1002,7 @@ void drop_passes() {
         drop_held();
     }
     if (!recording) {
+        give_up_passes();
         empty();
     }
 }
@@ -977,6 +1031,7 @@ void stop_graph() {
     if (drop_held != nullptr) {
         drop_held();
     }
+    give_up_passes();
     empty();
     // Stopping frees every texture, transient targets' too.
     pool.clear();

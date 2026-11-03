@@ -10,7 +10,8 @@ struct Spheres
     Environment environment;
     /// The light's direction, unit length, and whether there's an environment to read.
     float4 toLight;
-    /// What the light gives, and whether the normal comes from `texel`.
+    /// What the light gives, and the normal map's tangent's w: +X its tangent, 0 for no normal map,
+    /// and 2 for a tangent of no length.
     float4 radiance;
     /// The base color, and the metallic if it isn't below 0.
     float4 baseColor;
@@ -40,7 +41,7 @@ float4 fragmentMain(float4 position : SV_Position) : SV_Target
     const float2 which = floor(cell);
     const float2 from = ((cell - which) * 2.0) - 1.0;
     const float squared = dot(from, from);
-    if (squared > 0.99)
+    if (squared >= 1.0)
     {
         return float4(0.0);
     }
@@ -51,9 +52,10 @@ float4 fragmentMain(float4 position : SV_Position) : SV_Target
     surface.normal = normalize(float3(from.x, -from.y, sqrt(1.0 - squared)));
     surface.occlusion = spheres.grid.w;
     surface.emissive = spheres.emissive.rgb;
-    if (spheres.radiance.w > 0.0)
+    if (spheres.radiance.w != 0.0)
     {
-        surface.normal = normalFromMap(surface.normal, float4(1.0, 0.0, 0.0, 1.0), spheres.texel.xyz, spheres.texel.w);
+        const float4 tangent = spheres.radiance.w == 2.0 ? float4(0.0, 0.0, 0.0, 1.0) : float4(1.0, 0.0, 0.0, spheres.radiance.w);
+        surface.normal = normalFromMap(surface.normal, tangent, spheres.texel.xyz, spheres.texel.w);
     }
     const float3 view = float3(0.0, 0.0, 1.0);
     float3 color = surface.emissive + shadePunctual(surface, view, spheres.toLight.xyz, spheres.radiance.rgb);

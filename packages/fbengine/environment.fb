@@ -7,7 +7,7 @@ Import "./window"
 /// The light around a scene, baked on the GPU from an image of it, for glTF's metal-rough materials
 /// to read as image-based lighting. It lives while the game holds it; Free lets go of it at once.
 ///
-///     Local sky = Try Texture.Load("res://sky.hdr")
+///     Local sky = Try Texture.Load(Path("sky.hdr"))
 ///     Local environment = Try Environment.Bake(sky)
 Public Final Class Environment
     Field handle: UInt64
@@ -23,9 +23,11 @@ Public Final Class Environment
     /// Bakes `source`, an image of the light all around, y up, +X at its middle and the sky along
     /// its top, in the frame's commands, so what's drawn after it reads it: its specular light
     /// `size` texels across, a power of 2 from 16 to 2048, each texel taking `samples` samples, 1 to
-    /// 4096, which take the time the GPU takes. Mipmaps on `source` make few samples less noisy. It
-    /// panics for a size or samples out of range, or a source that was freed, and throws when the
-    /// GPU can't bake it. Stopping the GPU loses what it baked.
+    /// 4096, which take the time the GPU takes: a big bake's submitted a part at a time, which it
+    /// waits for, so the GPU's never kept long. Mipmaps on `source` make few samples less noisy, and
+    /// a small sun count for what it should; its light past 8192 is read as 8192. A frame that fails
+    /// to run it runs it in the next. It panics for a size or samples out of range, or a source that
+    /// was freed, and throws when the GPU can't bake it. Stopping the GPU loses what it baked.
     @MainThread @PanicsAtCaller
     Public Static Method Bake(source: Texture, size: Int32 = 256,
                               samples: Int32 = 256): Environment Throws GraphicsError

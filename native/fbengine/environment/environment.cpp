@@ -1,6 +1,7 @@
 // Environments: passes of the frame's graph drawing a full-screen triangle of
-// shaders/environment.slang into a target, a level of what's baked at a time, copied into its
-// texture; and the split sum's table, baked once for all of them each time the GPU starts.
+// shaders/environment.slang into a target, a tile of a level of what's baked at a time, copied into
+// its texture, and done again in the next frame if a frame doesn't run them; and the split sum's
+// table, baked once for all of them each time the GPU starts.
 
 #include "environment/environment.hpp"
 
@@ -16,8 +17,10 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <format>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -37,8 +40,14 @@ constexpr std::uint32_t table_samples = 1024;
 /// The smallest level of specular light that's read, in texels across.
 constexpr std::uint32_t smallest_level = 4;
 
+/// The most samples a draw or a submit of a bake takes, so a big one doesn't keep the GPU longer
+/// than a driver lets it, as Windows' 2 seconds would on a weak one.
+constexpr std::uint64_t submit_samples = std::uint64_t{ 1 } << 25U;
+
 /// What environment.slang's Bake is.
 struct bake_t {
+    float offset_x = 0.0F;
+    float offset_y = 0.0F;
     std::uint32_t source = 0;
     std::uint32_t sampler = 0;
     float roughness = 0.0F;
@@ -52,12 +61,17 @@ struct environment_t {
     std::uint32_t levels = 0;
 };
 
-/// What's baked, by its handle's slot.
+/// What's baked, by its handle's slot; and the samples of bakes in the frame so far, the frame they
+/// were counted in, the most a submit takes, and the most a draw's taken.
 struct baked_t {
     fbe::handle_slots_t slots{ fbe::ENVIRONMENT_KIND };
     std::vector<environment_t> environments;
     std::int32_t count = 0;
     std::uint64_t table = 0;
+    std::uint64_t spent = 0;
+    std::uint64_t spent_in = 0;
+    std::uint64_t budget = submit_samples;
+    std::uint64_t largest_draw = 0;
 };
 
 baked_t& baked() {
@@ -65,27 +79,55 @@ baked_t& baked() {
     return state;
 }
 
-/// What a level of a bake is: where its pixels go, and how they're drawn.
-struct level_t {
+/// Lets go of a texture, unless a stopped GPU freed it.
+void release(std::uint64_t texture) {
+    if (texture != 0 && fbe::texture::find(texture) != nullptr) {
+        fbe_texture_release(texture);
+    }
+}
+
+/// A bake's hold on its source, for its tiles to read however often they're done again: one for
+/// each tile still to run, and one for the bake while it adds them.
+struct hold_t {
+    std::uint64_t source = 0;
+    std::uint32_t holders = 1;
+};
+
+void let_go(const std::shared_ptr<hold_t>& hold) {
+    if (hold != nullptr && --hold->holders == 0) {
+        release(hold->source);
+    }
+}
+
+/// What's drawn at once of a level of a bake: where its pixels go, and how they're drawn.
+struct tile_t {
     std::string_view entry;
-    fbe::gpu::resource_t source = fbe::gpu::no_resource;
+    std::uint64_t source = 0;
     std::uint64_t into = 0;
     std::uint32_t level = 0;
     std::uint32_t size = 0;
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
     float roughness = 0.0F;
     std::uint32_t samples = 0;
+    std::shared_ptr<hold_t> hold;
 };
 
-/// Adds the passes that draw `what` into a target, and copy it into its texture's level; false,
-/// with fbe_error's why, if they can't be.
-bool bake_level(const level_t& what) {
+/// Adds the passes that draw `what` into a target, and copy it into its place in its texture's
+/// level, doing them again if they don't run; false, with fbe_error's why, if they can't be added.
+bool bake_tile(const tile_t& what) {
     const fbe::gpu::resource_t into = fbe::gpu::texture_resource(what.into);
+    const fbe::gpu::resource_t source =
+        what.source != 0 ? fbe::gpu::texture_resource(what.source) : fbe::gpu::no_resource;
     const fbe::gpu::resource_t target = fbe::gpu::transient_resource({
-        .width = what.size,
-        .height = what.size,
+        .width = what.width,
+        .height = what.height,
         .format = FBE_TEXTURE_RGBA16F,
     });
-    if (into == fbe::gpu::no_resource || target == fbe::gpu::no_resource) {
+    if (into == fbe::gpu::no_resource || target == fbe::gpu::no_resource ||
+        (what.source != 0 && source == fbe::gpu::no_resource)) {
         return false;
     }
     VkPipeline pipeline = fbe::gpu::pipeline({
@@ -97,22 +139,23 @@ bool bake_level(const level_t& what) {
         return false;
     }
     std::vector<std::pair<fbe::gpu::resource_t, fbe::gpu::use_t>> uses;
-    if (what.source != fbe::gpu::no_resource) {
-        uses.emplace_back(what.source, fbe::gpu::use_t::SAMPLED);
+    if (source != fbe::gpu::no_resource) {
+        uses.emplace_back(source, fbe::gpu::use_t::SAMPLED);
     }
     const bool drawn = fbe::gpu::add_pass({
         .name = "environment",
         .colors = { { .target = target, .clear = true } },
         .uses = std::move(uses),
         .record =
-            [what, pipeline](VkCommandBuffer commands) {
+            [what, source, pipeline](VkCommandBuffer commands) {
                 VkDescriptorSet set = fbe::gpu::bindless_set();
                 vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         fbe::gpu::pipeline_layout(), 0, 1, &set, 0, nullptr);
                 const bake_t push{
-                    .source = what.source != fbe::gpu::no_resource
-                                  ? fbe::gpu::resource_index(what.source)
-                                  : 0,
+                    .offset_x = static_cast<float>(what.x),
+                    .offset_y = static_cast<float>(what.y),
+                    .source =
+                        source != fbe::gpu::no_resource ? fbe::gpu::resource_index(source) : 0,
                     .sampler = fbe::gpu::sampler_2d_index(FBE_TEXTURE_LINEAR, true),
                     .roughness = what.roughness,
                     .samples = what.samples,
@@ -141,20 +184,65 @@ bool bake_level(const level_t& what) {
                                             flag<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT),
                                         .mipLevel = what.level,
                                         .layerCount = 1, },
-                    .extent = { .width = what.size, .height = what.size, .depth = 1 },
+                    .dstOffset = { .x = static_cast<std::int32_t>(what.x),
+                                   .y = static_cast<std::int32_t>(what.y), },
+                    .extent = { .width = what.width, .height = what.height, .depth = 1 },
                 };
                 vkCmdCopyImage(commands, fbe::gpu::resource_image(target),
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fbe::gpu::resource_image(into),
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
             },
+        .settled =
+            [what](fbe::gpu::settled_t how) {
+                // A frame that didn't run it leaves its pixels unbaked, which the next frame's
+                // adding it again bakes, unless what it's baked into was freed since.
+                if (how != fbe::gpu::settled_t::MISSED || !bake_tile(what)) {
+                    let_go(what.hold);
+                }
+            },
     });
 }
 
-/// Lets go of a texture, unless a stopped GPU freed it.
-void release(std::uint64_t texture) {
-    if (texture != 0 && fbe::texture::find(texture) != nullptr) {
-        fbe_texture_release(texture);
+/// Adds the passes that draw a level, `tile`'s whole size, in as many tiles as the budget says,
+/// with a submit between them each time it's spent; false, with fbe_error's why, if they can't be
+/// added.
+bool bake_level(const tile_t& level) {
+    baked_t& state = baked();
+    const auto most =
+        static_cast<std::uint32_t>(std::sqrt(static_cast<double>(state.budget / level.samples)));
+    const std::uint32_t side = std::clamp(most, 1U, level.size);
+    for (std::uint32_t y = 0; y < level.size; y += side) {
+        for (std::uint32_t x = 0; x < level.size; x += side) {
+            tile_t tile = level;
+            tile.x = x;
+            tile.y = y;
+            tile.width = std::min(side, level.size - x);
+            tile.height = std::min(side, level.size - y);
+            const std::uint64_t samples = std::uint64_t{ tile.width } * tile.height * level.samples;
+            if (state.spent_in != fbe::gpu::submitted_frames()) {
+                state.spent_in = fbe::gpu::submitted_frames();
+                state.spent = 0;
+            }
+            if (state.spent != 0 && state.spent + samples > state.budget) {
+                // A submit that fails is passes missed, which are added again.
+                fbe::gpu::finish_frame();
+                state.spent = 0;
+                if (fbe::gpu::lost()) {
+                    return fbe::gpu::fail_lost();
+                }
+            }
+            state.spent += samples;
+            state.largest_draw = std::max(state.largest_draw, samples);
+            if (tile.hold != nullptr) {
+                ++tile.hold->holders;
+            }
+            if (!bake_tile(tile)) {
+                let_go(tile.hold);
+                return false;
+            }
+        }
     }
+    return true;
 }
 
 /// The split sum's table, baked if it isn't yet since the GPU started; false, with fbe_error's why,
@@ -215,6 +303,15 @@ bool shader_data(std::uint64_t environment, shader_data_t& into) {
     return true;
 }
 
+void set_sample_budget(std::uint64_t samples) {
+    baked().budget = samples != 0 ? samples : submit_samples;
+    baked().largest_draw = 0;
+}
+
+std::uint64_t largest_draw() {
+    return baked().largest_draw;
+}
+
 } // namespace fbe::environment
 
 extern "C" {
@@ -254,21 +351,26 @@ FBE_API uint64_t fbe_environment_bake(uint64_t source, int32_t size, int32_t sam
         irradiance != 0
             ? fbe::texture::create_engine_texture(width, width, FBE_TEXTURE_RGBA16F, true)
             : 0;
-    const fbe::gpu::resource_t resource = fbe::gpu::texture_resource(source);
+    if (!fbe_texture_retain(source)) {
+        return 0;
+    }
+    const auto hold = std::make_shared<hold_t>(hold_t{ .source = source });
     const auto failed = [&] {
         release(irradiance);
         release(specular);
+        let_go(hold);
         return std::uint64_t{ 0 };
     };
-    if (specular == 0 || resource == fbe::gpu::no_resource) {
+    if (specular == 0) {
         return failed();
     }
     if (!bake_level({
             .entry = "irradianceMain",
-            .source = resource,
+            .source = source,
             .into = irradiance,
             .size = irradiance_size,
             .samples = taken,
+            .hold = hold,
         })) {
         return failed();
     }
@@ -281,18 +383,20 @@ FBE_API uint64_t fbe_environment_bake(uint64_t source, int32_t size, int32_t sam
             std::min(static_cast<float>(level) / static_cast<float>(levels), 1.0F);
         if (!bake_level({
                 .entry = "specularMain",
-                .source = resource,
+                .source = source,
                 .into = specular,
                 .level = level,
                 .size = width >> level,
                 .roughness = roughness,
                 .samples = taken,
+                .hold = hold,
             })) {
             return failed();
         }
     }
     fbe::texture::changed_on_gpu(irradiance);
     fbe::texture::changed_on_gpu(specular);
+    let_go(hold);
     baked_t& state = baked();
     const std::uint32_t slot = state.slots.make();
     if (slot >= state.environments.size()) {

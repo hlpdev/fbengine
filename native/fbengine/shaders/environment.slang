@@ -8,9 +8,14 @@ import bindless;
 import pbr;
 
 static const float PI = 3.14159265358979;
+/// The brightest a source is read: past half floats' mipmaps' and sums' reach, one texel of the sun,
+/// or an infinity, would be all a bake holds.
+static const float BRIGHTEST = 8192.0;
 
 struct Bake
 {
+    /// Where in the level being drawn the target's first pixel is, as a big bake's drawn in tiles.
+    float2 offset;
     uint source;
     uint sampler;
     /// The roughness of the specular light being baked.
@@ -34,7 +39,7 @@ float4 vertexMain(uint index : SV_VulkanVertexID) : SV_Position
 /// The direction of the octahedral map's texel a pixel is.
 float3 directionOfPixel(float4 position)
 {
-    return directionOfOctahedral((position.xy - 0.5) / max(bake.size - 1.0, 1.0));
+    return directionOfOctahedral((position.xy + bake.offset - 0.5) / max(bake.size - 1.0, 1.0));
 }
 
 /// Hammersley's `index`th of `count` points.
@@ -58,13 +63,13 @@ float3 sourceIn(float3 direction, float share)
     const float maximum = float(textureLevels(bake.source)) - 1.0;
     const float texel = 4.0 * PI / (size.x * size.y);
     const float level = clamp(0.5 * log2(max(share / texel, 1e-6)), 0.0, maximum);
-    const float rows = size.y / exp2(ceil(level));
+    const float rows = max(size.y / exp2(ceil(level)), 1.0);
     // Across it repeats, so it joins itself; down it stops at the poles, which repeating would wrap.
     // At a pole there's no angle, which atan2 leaves to the GPU: every side of it reads one column.
     const bool pole = direction.x == 0.0 && direction.z == 0.0;
     const float across = pole ? 0.5 : (atan2(direction.z, direction.x) / (2.0 * PI)) + 0.5;
     const float down = clamp(acos(clamp(direction.y, -1.0, 1.0)) / PI, 0.5 / rows, 1.0 - (0.5 / rows));
-    return min(sampleTextureLevel(bake.source, bake.sampler, float2(across, down), level).rgb, float3(1e6));
+    return min(sampleTextureLevel(bake.source, bake.sampler, float2(across, down), level).rgb, float3(BRIGHTEST));
 }
 
 /// The diffuse light for a normal: the light around it weighted by the cosine, over pi, so an even
@@ -103,12 +108,16 @@ float3 ggxHalfway(float2 xi, float alpha)
 float4 specularMain(float4 position : SV_Position) : SV_Target
 {
     const float3 normal = directionOfPixel(position);
+    const float alpha = bake.roughness * bake.roughness;
+    // What GGX's peak covers of the sphere, and what a texel does, which the lobe has to fill, so a
+    // sun smaller than a texel isn't missed by a lobe narrower than one.
+    const float lobe = 4.0 * PI * alpha * alpha;
+    const float least = max((4.0 * PI / (bake.size * bake.size)) - lobe, 0.0);
     if (bake.roughness <= 0.0)
     {
-        return float4(sourceIn(normal, 0.0), 1.0);
+        return float4(sourceIn(normal, least), 1.0);
     }
     const float3x3 frame = frameOf(normal);
-    const float alpha = bake.roughness * bake.roughness;
     float3 sum = float3(0.0);
     float weights = 0.0;
     for (uint index = 0; index < bake.samples; ++index)
@@ -118,11 +127,12 @@ float4 specularMain(float4 position : SV_Position) : SV_Target
         if (local.z > 0.0)
         {
             const float pdf = max(ggxDistribution(halfway.z, alpha) * 0.25, 1e-4);
-            sum += sourceIn(mul(local, frame), 1.0 / (float(bake.samples) * pdf)) * local.z;
+            sum += sourceIn(mul(local, frame), max(1.0 / (float(bake.samples) * pdf), least)) * local.z;
             weights += local.z;
         }
     }
-    return float4(sum / max(weights, 1e-4), 1.0);
+    // A few samples can all fall below the horizon at the roughest.
+    return float4(weights > 0.0 ? sum / weights : sourceIn(normal, max(lobe, least)), 1.0);
 }
 
 /// The split sum's table, nDotV across and roughness down: what Fresnel's first term's multiplied
@@ -130,8 +140,8 @@ float4 specularMain(float4 position : SV_Position) : SV_Target
 [shader("fragment")]
 float4 tableMain(float4 position : SV_Position) : SV_Target
 {
-    const float nDotV = position.x / bake.size;
-    const float roughness = position.y / bake.size;
+    const float nDotV = (position.x + bake.offset.x) / bake.size;
+    const float roughness = (position.y + bake.offset.y) / bake.size;
     const float alpha = max(roughness * roughness, 0.002);
     const float3 view = float3(sqrt(max(1.0 - (nDotV * nDotV), 0.0)), 0.0, nDotV);
     float2 sum = float2(0.0);

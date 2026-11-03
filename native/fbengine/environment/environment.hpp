@@ -20,4 +20,9 @@ struct shader_data_t {
 /// isn't one's or the GPU's stopped since it was baked.
 bool shader_data(std::uint64_t environment, shader_data_t& into);
 
+/// Sets the most samples a draw or a submit of a bake takes, 0 for what it is at first, and forgets
+/// the most one's taken, which largest_draw says, for tests.
+void set_sample_budget(std::uint64_t samples);
+std::uint64_t largest_draw();
+
 } // namespace fbe::environment

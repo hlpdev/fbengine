@@ -8,6 +8,8 @@ import bindless;
 static const float PI = 3.14159265358979;
 /// The smallest GGX alpha, so a mirror's highlight stays finite: a roughness of 0.045.
 static const float SMOOTHEST = 0.002;
+/// How short a vector's square has to be for it to have no direction to speak of.
+static const float DEGENERATE = 1e-8;
 
 /// What a surface is at a point, as glTF's metal-rough material says.
 public struct Surface
@@ -39,14 +41,23 @@ public struct Environment
 /// The shading normal from a tangent-space normal map's texel, as stored, 0 to 1: `normal` and
 /// `tangent` are the interpolated vertex's, whose tangent.w says which way its bitangent goes, as
 /// MikkTSpace and glTF have it, +Y up; `scale` scales the map's X and Y, as glTF's normalTexture's
-/// does.
+/// does. A tangent along the normal or of no length, as a model can have, or a texel with no
+/// direction, leaves the normal as it is.
 public float3 normalFromMap(float3 normal, float4 tangent, float3 texel, float scale = 1.0)
 {
     const float3 n = normalize(normal);
-    const float3 t = normalize(tangent.xyz - (n * dot(n, tangent.xyz)));
+    const float3 along = tangent.xyz - (n * dot(n, tangent.xyz));
+    const float alongSquared = dot(along, along);
+    if (alongSquared < DEGENERATE)
+    {
+        return n;
+    }
+    const float3 t = along / sqrt(alongSquared);
     const float3 b = cross(n, t) * tangent.w;
     const float3 mapped = ((texel * 2.0) - 1.0) * float3(scale, scale, 1.0);
-    return normalize((t * mapped.x) + (b * mapped.y) + (n * mapped.z));
+    const float3 turned = (t * mapped.x) + (b * mapped.y) + (n * mapped.z);
+    const float turnedSquared = dot(turned, turned);
+    return turnedSquared < DEGENERATE ? n : turned / sqrt(turnedSquared);
 }
 
 /// How much of the light Fresnel reflects at normal incidence: 4% for a dielectric, its base color
@@ -76,7 +87,9 @@ public float smithVisibility(float nDotL, float nDotV, float alpha)
 
 /// What a light from `toLight`, a unit vector, adds where its `radiance` arrives (its color and
 /// intensity, attenuated), seen from `view`, a unit vector: glTF's BRDF, Lambert's diffuse and GGX's
-/// specular, Fresnel by Schlick.
+/// specular, Fresnel by Schlick, with Smith's height-correlated visibility, as Khronos's viewer has
+/// it, where its specification writes the separable form. A light straight against the view has no
+/// halfway, and takes the normal's.
 public float3 shadePunctual(Surface surface, float3 view, float3 toLight, float3 radiance)
 {
     const float nDotL = saturate(dot(surface.normal, toLight));
@@ -84,7 +97,9 @@ public float3 shadePunctual(Surface surface, float3 view, float3 toLight, float3
     {
         return float3(0.0);
     }
-    const float3 halfway = normalize(view + toLight);
+    const float3 both = view + toLight;
+    const float bothSquared = dot(both, both);
+    const float3 halfway = bothSquared < DEGENERATE ? surface.normal : both / sqrt(bothSquared);
     const float nDotV = saturate(dot(surface.normal, view));
     const float nDotH = saturate(dot(surface.normal, halfway));
     const float vDotH = saturate(dot(view, halfway));
@@ -161,7 +176,8 @@ public float3 shadeEnvironment(Surface surface, float3 view, Environment environ
     const float3 single = (fresnel * split.x) + split.y;
     const float lost = 1.0 - (split.x + split.y);
     const float3 average = f0 + ((1.0 - f0) / 21.0);
-    const float3 multiple = lost * single * average / (1.0 - (average * lost));
+    // A table that isn't baked yet loses everything, and white metal would divide by nothing.
+    const float3 multiple = lost * single * average / max(1.0 - (average * lost), 1e-4);
     const float3 diffuse = surface.baseColor * (1.0 - surface.metallic) * (1.0 - single - multiple);
     const float3 light = (single * specularLight) + ((multiple + diffuse) * diffuseLight);
     return light * surface.occlusion * environment.intensity;

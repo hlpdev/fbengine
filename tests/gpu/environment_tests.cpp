@@ -19,9 +19,11 @@
 #include <gpu/graph.hpp>
 #include <gpu/pipeline.hpp>
 #include <gpu/vulkan.hpp>
+#include <limits>
 #include <numbers>
 #include <string>
 #include <texture/texture.hpp>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -46,6 +48,9 @@ float from_half(std::uint32_t half) {
     const std::uint32_t sign = (half & 0x8000U) << 16U;
     const std::uint32_t exponent = (half >> 10U) & 0x1FU;
     const std::uint32_t mantissa = half & 0x3FFU;
+    if (exponent == 31) {
+        return std::bit_cast<float>(sign | 0x7F800000U | (mantissa << 13U));
+    }
     if (exponent == 0) {
         const float small = std::ldexp(static_cast<float>(mantissa), -24);
         return sign != 0 ? -small : small;
@@ -181,6 +186,11 @@ floats_t draw(spheres_t spheres, std::uint64_t environment = 0, std::int32_t siz
     return read_back;
 }
 
+vec3_t cross(const vec3_t& a, const vec3_t& b) {
+    return { (a[1] * b[2]) - (a[2] * b[1]), (a[2] * b[0]) - (a[0] * b[2]),
+             (a[0] * b[1]) - (a[1] * b[0]) };
+}
+
 double dot(const vec3_t& a, const vec3_t& b) {
     return (a[0] * b[0]) + (a[1] * b[1]) + (a[2] * b[2]);
 }
@@ -190,7 +200,8 @@ vec3_t normalized(const vec3_t& a) {
     return { a[0] / length, a[1] / length, a[2] / length };
 }
 
-/// glTF's BRDF times the cosine, for one channel, as the specification writes it.
+/// glTF's BRDF times the cosine, for one channel, as the specification writes it but for Smith's
+/// visibility, height-correlated as Khronos's viewer has it, where it writes the separable form.
 double shaded(double base, double metallic, double roughness, const vec3_t& normal,
               const vec3_t& view, const vec3_t& light, double radiance) {
     const double n_dot_l = std::clamp(dot(normal, light), 0.0, 1.0);
@@ -220,7 +231,7 @@ bool normal_at(std::uint32_t x, std::uint32_t y, vec3_t& normal) {
     const double from_x = (((static_cast<double>(x) + 0.5) / grid_size) * 2.0) - 1.0;
     const double from_y = (((static_cast<double>(y) + 0.5) / grid_size) * 2.0) - 1.0;
     const double squared = (from_x * from_x) + (from_y * from_y);
-    if (squared > 0.99) {
+    if (squared >= 1.0) {
         return false;
     }
     normal = normalized({ from_x, -from_y, std::sqrt(1.0 - squared) });
@@ -239,6 +250,115 @@ vec3_t octahedral_direction(std::uint32_t x, std::uint32_t y, std::uint32_t size
         down = (1.0 - std::abs(from_x)) * (from_y >= 0.0 ? 1.0 : -1.0);
     }
     return normalized({ across, up, down });
+}
+
+/// A smooth lobe of light, and what it integrates to.
+const vec3_t lobe_axis = normalized({ 0.6, 0.5, -0.6 });
+
+double lobe(const vec3_t& direction) {
+    const double along = std::max(dot(direction, lobe_axis), 0.0);
+    return 4.0 * along * along;
+}
+
+/// The lobe as an equirectangular image, +X at its middle and y up.
+std::uint64_t lobe_source(std::int32_t width, std::int32_t height) {
+    return source_of(width, height, true, [width, height](std::int32_t x, std::int32_t y) {
+        const double phi = (((static_cast<double>(x) + 0.5) / width) - 0.5) * 2.0 * pi;
+        const double theta = ((static_cast<double>(y) + 0.5) / height) * pi;
+        const auto value = static_cast<float>(lobe(
+            { std::cos(phi) * std::sin(theta), std::cos(theta), std::sin(phi) * std::sin(theta) }));
+        return std::array<float, 3>{ value, value, value };
+    });
+}
+
+/// A `local` direction, z along `normal`, in the world, in the frame environment.slang's is.
+vec3_t in_frame_of(const vec3_t& normal, const vec3_t& local) {
+    const vec3_t other =
+        std::abs(normal[1]) < 0.999 ? vec3_t{ 0.0, 1.0, 0.0 } : vec3_t{ 1.0, 0.0, 0.0 };
+    const vec3_t across = normalized(cross(other, normal));
+    const vec3_t up = cross(normal, across);
+    return { (across[0] * local[0]) + (up[0] * local[1]) + (normal[0] * local[2]),
+             (across[1] * local[0]) + (up[1] * local[1]) + (normal[1] * local[2]),
+             (across[2] * local[0]) + (up[2] * local[1]) + (normal[2] * local[2]) };
+}
+
+constexpr int quadrature_steps = 200;
+
+double lobe_irradiance(const vec3_t& normal) {
+    double sum = 0.0;
+    for (int ring = 0; ring < quadrature_steps; ++ring) {
+        const double u = (ring + 0.5) / quadrature_steps;
+        for (int spoke = 0; spoke < quadrature_steps; ++spoke) {
+            const double angle = 2.0 * pi * (spoke + 0.5) / quadrature_steps;
+            sum +=
+                lobe(in_frame_of(normal, { std::sqrt(u) * std::cos(angle),
+                                           std::sqrt(u) * std::sin(angle), std::sqrt(1.0 - u) }));
+        }
+    }
+    return sum / (quadrature_steps * quadrature_steps);
+}
+
+/// The lobe through GGX's distribution around `normal`, seen along it, weighted by the cosine.
+double lobe_specular(const vec3_t& normal, double roughness) {
+    if (roughness <= 0.0) {
+        return lobe(normal);
+    }
+    const double squared = roughness * roughness * roughness * roughness;
+    double sum = 0.0;
+    double weights = 0.0;
+    for (int ring = 0; ring < quadrature_steps; ++ring) {
+        const double u = (ring + 0.5) / quadrature_steps;
+        const double up_squared = (1.0 - u) / (1.0 + ((squared - 1.0) * u));
+        const double up = std::sqrt(up_squared);
+        const double out = std::sqrt(std::max(1.0 - up_squared, 0.0));
+        for (int spoke = 0; spoke < quadrature_steps; ++spoke) {
+            const double angle = 2.0 * pi * (spoke + 0.5) / quadrature_steps;
+            const vec3_t local{ 2.0 * up * out * std::cos(angle), 2.0 * up * out * std::sin(angle),
+                                (2.0 * up_squared) - 1.0 };
+            if (local[2] > 0.0) {
+                sum += lobe(in_frame_of(normal, local)) * local[2];
+                weights += local[2];
+            }
+        }
+    }
+    return sum / weights;
+}
+
+/// Every texel of what an environment's baked: its table, its diffuse light, and its specular
+/// light's levels.
+std::vector<floats_t> all_of(std::uint64_t environment) {
+    std::vector<floats_t> all;
+    all.push_back(read(fbe_environment_table(environment)));
+    all.push_back(read(fbe_environment_irradiance(environment)));
+    const std::uint64_t specular = fbe_environment_specular(environment);
+    for (std::int32_t level = 0; level < fbe_texture_levels(specular); ++level) {
+        all.push_back(read(specular, static_cast<std::uint32_t>(level)));
+    }
+    return all;
+}
+
+/// The average red light over the sphere of an octahedral map, its texels on the map's edges, each
+/// covering a solid angle of 1 / r^3 of the map's own area, r how far out the octahedron is there.
+double average_light(const floats_t& frame) {
+    const std::uint32_t last = frame.width - 1;
+    double sum = 0.0;
+    double angle = 0.0;
+    for (std::uint32_t y = 0; y <= last; ++y) {
+        for (std::uint32_t x = 0; x <= last; ++x) {
+            const double from_x = ((static_cast<double>(x) / last) * 2.0) - 1.0;
+            const double from_y = ((static_cast<double>(y) / last) * 2.0) - 1.0;
+            const double up = 1.0 - std::abs(from_x) - std::abs(from_y);
+            const double out_x = std::min(std::abs(from_x), 1.0 - std::abs(from_y));
+            const double out_y = std::min(std::abs(from_y), 1.0 - std::abs(from_x));
+            const double squared = (out_x * out_x) + (out_y * out_y) + (up * up);
+            const double edges =
+                ((x == 0 || x == last) ? 0.5 : 1.0) * ((y == 0 || y == last) ? 0.5 : 1.0);
+            const double weight = edges / std::pow(squared, 1.5);
+            sum += frame.at(x, y)[0] * weight;
+            angle += weight;
+        }
+    }
+    return sum / angle;
 }
 
 } // namespace
@@ -284,12 +404,12 @@ TEST_CASE("a punctual light shades as glTF's BRDF says", "[gpu]") {
     stop_gpu();
 }
 
-// A flat map's the normal itself; a tilted one's what the tangent frame makes of it, its green up
-// the bitangent, and its scale scales the tilt.
+// A flat map's the normal itself; a tilted one's what the tangent frame makes of it, red along the
+// tangent, green along the bitangent, which the tangent's w says the way of, and its scale scales
+// the tilt.
 TEST_CASE("a normal map's texel turns the normal in the tangent frame", "[gpu]") {
     start();
     const vec3_t view{ 0.0, 0.0, 1.0 };
-    const vec3_t light = normalized({ 0.0, 0.0, 1.0 });
     const spheres_t lit{
         .radiance = { 1.0F, 1.0F, 1.0F, 0.0F },
         .base_color = { 0.5F, 0.5F, 0.5F, 0.0F },
@@ -298,60 +418,137 @@ TEST_CASE("a normal map's texel turns the normal in the tangent frame", "[gpu]")
     flat.radiance[3] = 1.0F;
     CHECK(draw(flat).values == draw(lit).values);
 
-    spheres_t tilted = lit;
-    tilted.radiance[3] = 1.0F;
-    tilted.texel = { 0.75F, 0.5F, 1.0F, 1.0F };
-    const floats_t frame = draw(tilted);
-    tilted.texel = { 0.625F, 0.5F, 1.0F, 2.0F };
-    const floats_t scaled = draw(tilted);
-    // The middle pixel's normal is about +Z, its tangent about +X; a texel of 0.75 red tilts it
-    // half a tangent that way, and 0.625 scaled by 2 the same.
     const std::uint32_t middle = grid_size / 2;
     vec3_t normal{};
     REQUIRE(normal_at(middle, middle, normal));
     const vec3_t tangent = normalized(
         { 1.0 - (normal[0] * normal[0]), -normal[0] * normal[1], -normal[0] * normal[2] });
-    const vec3_t turned = normalized({
-        (tangent[0] * 0.5) + normal[0],
-        (tangent[1] * 0.5) + normal[1],
-        (tangent[2] * 0.5) + normal[2],
-    });
-    const double wanted = shaded(0.5, 0.0, 0.5, turned, view, light, 1.0);
-    CHECK(std::abs(frame.at(middle, middle)[0] - wanted) < 0.002);
-    CHECK(std::abs(scaled.at(middle, middle)[0] - wanted) < 0.002);
+    const vec3_t bitangent = cross(normal, tangent);
+    // The middle pixel seen under a light off to a side, so a turn the wrong way is seen.
+    const auto middle_under = [&](vec3_t light, spheres_t spheres) {
+        spheres.to_light = { static_cast<float>(light[0]), static_cast<float>(light[1]),
+                             static_cast<float>(light[2]), 0.0F };
+        return draw(spheres).at(middle, middle)[0];
+    };
+    const auto turned = [&normal](const vec3_t& along, double by) {
+        return normalized({ normal[0] + (along[0] * by), normal[1] + (along[1] * by),
+                            normal[2] + (along[2] * by) });
+    };
+    for (const float w : { 1.0F, -1.0F }) {
+        INFO("w " << w);
+        spheres_t tilted = lit;
+        tilted.radiance[3] = w;
+        const vec3_t side = normalized({ 0.5, 0.0, 0.8 });
+        tilted.texel = { 0.75F, 0.5F, 1.0F, 1.0F };
+        const double along_tangent = shaded(0.5, 0.0, 0.5, turned(tangent, 0.5), view, side, 1.0);
+        CHECK(std::abs(middle_under(side, tilted) - along_tangent) < 0.002);
+        tilted.texel = { 0.625F, 0.5F, 1.0F, 2.0F };
+        CHECK(std::abs(middle_under(side, tilted) - along_tangent) < 0.002);
+
+        const vec3_t above = normalized({ 0.0, 0.5, 0.8 });
+        tilted.texel = { 0.5F, 0.75F, 1.0F, 1.0F };
+        const double along_bitangent =
+            shaded(0.5, 0.0, 0.5, turned(bitangent, 0.5 * w), view, above, 1.0);
+        CHECK(std::abs(middle_under(above, tilted) - along_bitangent) < 0.002);
+    }
+    stop_gpu();
+}
+
+// What has no direction leaves the normal as it was, or shades as the normal says: a tangent of no
+// length, a texel of no direction, and a light straight against the view, all finite.
+TEST_CASE("what has no direction shades finitely", "[gpu]") {
+    start();
+    const spheres_t lit{
+        .radiance = { 1.0F, 1.0F, 1.0F, 0.0F },
+        .base_color = { 0.5F, 0.5F, 0.5F, 0.0F },
+    };
+    const floats_t plain = draw(lit);
+    spheres_t no_tangent = lit;
+    no_tangent.radiance[3] = 2.0F;
+    no_tangent.texel = { 0.75F, 0.75F, 1.0F, 1.0F };
+    CHECK(draw(no_tangent).values == plain.values);
+    spheres_t no_direction = lit;
+    no_direction.radiance[3] = 1.0F;
+    no_direction.texel = { 0.5F, 0.5F, 0.5F, 1.0F };
+    CHECK(draw(no_direction).values == plain.values);
+
+    // A texel pointing straight into the surface, and a light behind it: head on, the view and the
+    // light are opposite. The BRDF there, with the normal as its halfway: all of Fresnel, GGX's
+    // peak, 1 / (pi alpha^2), and Smith's 0.5 / alpha, at an alpha of 0.25.
+    constexpr std::int32_t odd = 65;
+    const floats_t against = draw(
+        {
+            .to_light = { 0.0F, 0.0F, -1.0F, 0.0F },
+            .radiance = { 1.0F, 1.0F, 1.0F, 1.0F },
+            .base_color = { 0.5F, 0.5F, 0.5F, 0.0F },
+            .texel = { 0.5F, 0.5F, 0.0F, 1.0F },
+        },
+        0, odd);
+    for (const float value : against.values) {
+        CHECK(std::isfinite(value));
+    }
+    const double peak = (0.5 / 0.25) / (pi * 0.25 * 0.25);
+    CHECK(std::abs(against.at(32, 32)[0] - peak) < 0.01 * peak);
+    stop_gpu();
+}
+
+// A table that isn't baked is all zeros, as it was for a bake a frame that failed lost: white metal
+// divides by what multiple scattering gives back, which has to stay finite.
+TEST_CASE("shading through an empty table is finite", "[gpu]") {
+    start();
+    const std::uint64_t environment =
+        fbe_environment_bake(even_source({ 1.0F, 1.0F, 1.0F }), 16, 4);
+    REQUIRE(environment != 0);
+    const std::uint64_t empty = source_of(
+        128, 128, false, [](std::int32_t, std::int32_t) { return std::array<float, 3>{}; });
+    // Everything's at rest for the pass, which doesn't declare what it reads.
+    CHECK(read(empty).values[0] == 0.0F);
+    spheres_t spheres{
+        .base_color = { 1.0F, 1.0F, 1.0F, 1.0F },
+    };
+    REQUIRE(fbe::environment::shader_data(environment, spheres.environment));
+    spheres.environment.table = fbe::texture::index_of(empty);
+    spheres.to_light[3] = 1.0F;
+    for (const float value : draw(spheres).values) {
+        CHECK(std::isfinite(value));
+    }
     stop_gpu();
 }
 
 TEST_CASE("an even environment's light is its own color", "[gpu]") {
     start();
     const std::array<float, 3> color{ 0.25F, 0.5F, 2.0F };
-    const std::uint64_t source = even_source(color);
-    const std::uint64_t environment = fbe_environment_bake(source, 16, 16);
-    INFO(fbe_error());
-    REQUIRE(environment != 0);
-    // What's baked is in the frame's commands, which hold their source however it's let go of.
-    require(fbe_texture_release(source));
-    CHECK(fbe_environment_levels(environment) == 2);
-    const auto check_all = [&color](const floats_t& frame) {
-        for (std::uint32_t y = 0; y < frame.height; ++y) {
-            for (std::uint32_t x = 0; x < frame.width; ++x) {
-                const std::array<float, 4> pixel = frame.at(x, y);
-                for (std::size_t channel = 0; channel < 3; ++channel) {
-                    CHECK(std::abs(pixel.at(channel) - color.at(channel)) <=
-                          0.005F * color.at(channel));
+    // At one sample it all has to come from that one, which at the roughest is below the horizon.
+    for (const std::int32_t samples : { 16, 1 }) {
+        INFO(samples << " samples");
+        const std::uint64_t source = even_source(color);
+        const std::uint64_t environment = fbe_environment_bake(source, 16, samples);
+        INFO(fbe_error());
+        REQUIRE(environment != 0);
+        // What's baked is in the frame's commands, which hold their source however it's let go of.
+        require(fbe_texture_release(source));
+        CHECK(fbe_environment_levels(environment) == 2);
+        const auto check_all = [&color](const floats_t& frame) {
+            for (std::uint32_t y = 0; y < frame.height; ++y) {
+                for (std::uint32_t x = 0; x < frame.width; ++x) {
+                    const std::array<float, 4> pixel = frame.at(x, y);
+                    for (std::size_t channel = 0; channel < 3; ++channel) {
+                        CHECK(std::abs(pixel.at(channel) - color.at(channel)) <=
+                              0.005F * color.at(channel));
+                    }
                 }
             }
+        };
+        check_all(read(fbe_environment_irradiance(environment)));
+        const std::uint64_t specular = fbe_environment_specular(environment);
+        CHECK(fbe_texture_width(specular) == 16);
+        REQUIRE(fbe_texture_levels(specular) == 5);
+        for (std::uint32_t level = 0; level < 5; ++level) {
+            INFO("level " << level);
+            check_all(read(specular, level));
         }
-    };
-    check_all(read(fbe_environment_irradiance(environment)));
-    const std::uint64_t specular = fbe_environment_specular(environment);
-    CHECK(fbe_texture_width(specular) == 16);
-    REQUIRE(fbe_texture_levels(specular) == 5);
-    for (std::uint32_t level = 0; level < 5; ++level) {
-        INFO("level " << level);
-        check_all(read(specular, level));
+        CHECK(fbe_environment_free(environment));
     }
-    CHECK(fbe_environment_free(environment));
     stop_gpu();
 }
 
@@ -376,6 +573,16 @@ TEST_CASE("the split sum's table holds no more light than there is", "[gpu]") {
             CHECK(pixel[0] + pixel[1] <= 1.01F);
         }
     }
+    // The integrals themselves, by quadrature in doubles, in the middles of their texels.
+    for (const auto& [x, y, scaled, added] :
+         { std::tuple{ 63U, 63U, 0.8363, 0.0232 }, std::tuple{ 95U, 95U, 0.6359, 0.0017 },
+           std::tuple{ 31U, 95U, 0.7195, 0.0289 } }) {
+        INFO(x << ", " << y);
+        CHECK(std::abs(table.at(x, y)[0] - scaled) < 0.004);
+        CHECK(std::abs(table.at(x, y)[1] - added) < 0.004);
+    }
+    // Near grazing, where half a texel's the most, as far from what it isn't.
+    CHECK(std::abs(table.at(3, 95)[0] - 0.8682) < 0.003);
     // Head on, a rough surface reflects less at once than a smooth one.
     CHECK(table.at(127, 127)[0] + table.at(127, 127)[1] <
           table.at(127, 40)[0] + table.at(127, 40)[1]);
@@ -430,6 +637,21 @@ TEST_CASE("occlusion and emission are what they should be", "[gpu]") {
     });
     CHECK(glowing.at(middle, middle)[0] == 0.25F);
     CHECK(glowing.at(middle, middle)[2] == 4.0F);
+
+    // What a punctual light adds is the same however occluded, with everything else on.
+    const auto added_by_light = [&](float occlusion) {
+        spheres_t spheres{
+            .to_light = { 0.0F, 0.0F, 1.0F, 1.0F },
+            .grid = { 0.5F, 1.0F, 1.0F, occlusion },
+            .emissive = { 0.25F, 0.25F, 0.25F, 0.0F },
+        };
+        const float unlit = draw(spheres, environment).at(middle, middle)[0];
+        spheres.radiance = { 2.0F, 2.0F, 2.0F, 0.0F };
+        return draw(spheres, environment).at(middle, middle)[0] - unlit;
+    };
+    const float unoccluded = added_by_light(1.0F);
+    CHECK(unoccluded > 0.1F);
+    CHECK(std::abs(added_by_light(0.5F) - unoccluded) < 0.002F);
     stop_gpu();
 }
 
@@ -525,7 +747,18 @@ TEST_CASE("an environment ignores the LOD bias", "[gpu]") {
     REQUIRE(biased != 0);
     CHECK(read(fbe_environment_specular(plain)).values ==
           read(fbe_environment_specular(biased)).values);
+    // And shading through it doesn't either, through the sampler that has none, which a driver that
+    // doesn't bias a level it's given wouldn't show.
+    fbe::environment::shader_data_t data{};
+    REQUIRE(fbe::environment::shader_data(plain, data));
+    CHECK(data.sampler == fbe::gpu::sampler_2d_index(FBE_TEXTURE_LINEAR, false));
+    const spheres_t spheres{
+        .base_color = { 1.0F, 1.0F, 1.0F, 1.0F },
+        .grid = { 0.4F, 1.0F, 1.0F, 1.0F },
+    };
+    const floats_t under_bias = draw(spheres, plain);
     require(fbe_gpu_set_lod_bias(0.0F));
+    CHECK(draw(spheres, plain).values == under_bias.values);
     stop_gpu();
 }
 
@@ -578,6 +811,252 @@ TEST_CASE("an environment freed before its frame runs is baked and gone", "[gpu]
     fbe_frame_flip(false);
     CHECK(fbe_texture_count() == held - 1);
     CHECK(!fbe_gpu_lost());
+    stop_gpu();
+}
+
+// A bake's done once its frame has run: one that fails to, for a submit or a target that can't be
+// made, is done by the next, the table too, as if nothing had happened, its source held.
+TEST_CASE("a bake whose frame fails is baked by the next", "[gpu]") {
+    const auto bake_it = [] {
+        const std::uint64_t source = lobe_source(64, 32);
+        const std::uint64_t environment = fbe_environment_bake(source, 16, 8);
+        REQUIRE(environment != 0);
+        require(fbe_texture_release(source));
+        return environment;
+    };
+    start();
+    const std::vector<floats_t> undisturbed = all_of(bake_it());
+    stop_gpu();
+    for (const fbe::gpu::fault_t fault : { fbe::gpu::fault_t::SUBMIT, fbe::gpu::fault_t::VIEW }) {
+        INFO("fault " << static_cast<int>(fault));
+        start();
+        const std::int32_t textures = fbe_texture_count();
+        const std::uint64_t environment = bake_it();
+        fbe::gpu::inject(fault);
+        fbe::gpu::finish_frame();
+        // Twice running, and the frame's own submit.
+        fbe::gpu::inject(fault);
+        fbe_frame_flip(false);
+        fbe_frame_flip(false);
+        const std::vector<floats_t> baked = all_of(environment);
+        REQUIRE(baked.size() == undisturbed.size());
+        for (std::size_t at = 0; at < baked.size(); ++at) {
+            INFO("texture " << at);
+            CHECK(baked[at].values == undisturbed[at].values);
+        }
+        // Done, and it's let go of its source.
+        fbe_frame_flip(false);
+        CHECK(fbe_texture_count() == textures);
+        stop_gpu();
+    }
+}
+
+// What's let go of while a bake's being done again is no trouble, nor is a GPU that goes.
+TEST_CASE("a bake that never runs leaves nothing behind", "[gpu]") {
+    start();
+    {
+        const std::uint64_t source = even_source({ 1.0F, 1.0F, 1.0F });
+        const std::uint64_t environment = fbe_environment_bake(source, 16, 4);
+        REQUIRE(environment != 0);
+        require(fbe_texture_release(source));
+        CHECK(fbe_environment_free(environment));
+        fbe::gpu::inject(fbe::gpu::fault_t::SUBMIT);
+        CHECK(!fbe::gpu::finish_frame());
+        fbe_frame_flip(false);
+        fbe_frame_flip(false);
+    }
+    {
+        // Stopped with it to do.
+        const std::uint64_t source = even_source({ 1.0F, 1.0F, 1.0F });
+        const std::uint64_t environment = fbe_environment_bake(source, 16, 4);
+        REQUIRE(environment != 0);
+        require(fbe_texture_release(source));
+        stop_gpu();
+        CHECK(fbe_environment_free(environment));
+    }
+    start();
+    {
+        // Lost with it to do.
+        const std::uint64_t source = even_source({ 1.0F, 1.0F, 1.0F });
+        const std::uint64_t environment = fbe_environment_bake(source, 16, 4);
+        REQUIRE(environment != 0);
+        fbe::gpu::inject(fbe::gpu::fault_t::LOST);
+        fbe_frame_flip(false);
+        CHECK(fbe_gpu_lost());
+        CHECK(fbe_environment_bake(source, 16, 4) == 0);
+        CHECK(fbe_environment_free(environment));
+    }
+    stop_gpu();
+}
+
+// Each level holds the light there is, a sun smaller than its texels too, and even over the sphere
+// comes to what the source's does.
+TEST_CASE("every level of a bake holds the source's light", "[gpu]") {
+    start();
+    const auto is_sun = [](std::int32_t x, std::int32_t y) {
+        return x >= 300 && x < 304 && y >= 200 && y < 204;
+    };
+    const std::uint64_t sky = source_of(1024, 512, true, [&is_sun](std::int32_t x, std::int32_t y) {
+        return std::array<float, 3>{ is_sun(x, y) ? 1000.0F : 0.0F, 0.0F, 0.0F };
+    });
+    double wanted = 0.0;
+    for (std::int32_t y = 200; y < 204; ++y) {
+        wanted += 4.0 * 1000.0 * std::sin(pi * (y + 0.5) / 512.0) * (2.0 * pi / 1024.0) *
+                  (pi / 512.0) / (4.0 * pi);
+    }
+    const std::uint64_t environment = fbe_environment_bake(sky, 64, 256);
+    REQUIRE(environment != 0);
+    const std::uint64_t specular = fbe_environment_specular(environment);
+    // The last, 4 texels across, is too few to add up this way, and the lobe's test has it.
+    for (std::int32_t level = 0; level < fbe_environment_levels(environment); ++level) {
+        INFO("level " << level);
+        const double average = average_light(read(specular, static_cast<std::uint32_t>(level)));
+        CHECK(std::abs(average - wanted) < 0.1 * wanted);
+    }
+    const double diffuse = average_light(read(fbe_environment_irradiance(environment)));
+    CHECK(std::abs(diffuse - wanted) < 0.1 * wanted);
+    stop_gpu();
+}
+
+// One texel of infinity, as anything past 65504 is in a half float, doesn't take a bake with it.
+TEST_CASE("a source's light is bounded", "[gpu]") {
+    start();
+    const std::uint64_t texture = fbe_texture_create(16, 8, FBE_TEXTURE_RGBA16F, false);
+    REQUIRE(texture != 0);
+    std::vector<std::uint16_t> pixels(std::size_t{ 16 } * 8 * 4, to_half(0.5F));
+    const std::size_t sun = ((std::size_t{ 3 } * 16) + 8) * 4;
+    pixels[sun] = 0x7C00;
+    pixels[sun + 1] = 0x7C00;
+    pixels[sun + 2] = 0x7C00;
+    std::vector<std::uint8_t> bytes(pixels.size() * sizeof(std::uint16_t));
+    std::memcpy(bytes.data(), pixels.data(), bytes.size());
+    require(fbe_texture_write(texture, 0, 0, 16, 8, bytes.data(), 16 * 8));
+    const std::uint64_t environment = fbe_environment_bake(texture, 16, 16);
+    REQUIRE(environment != 0);
+    for (const floats_t& frame : all_of(environment)) {
+        for (const float value : frame.values) {
+            CHECK(std::isfinite(value));
+            CHECK(value <= 8192.0F);
+        }
+    }
+    stop_gpu();
+}
+
+// A big bake's drawn in tiles, a submit between them, which come to the same pixels.
+TEST_CASE("no draw of a bake takes more samples than its budget", "[gpu]") {
+    start();
+    const std::uint64_t source = lobe_source(64, 32);
+    const std::uint64_t whole = fbe_environment_bake(source, 32, 16);
+    REQUIRE(whole != 0);
+    CHECK(fbe::environment::largest_draw() == std::uint64_t{ 128 } * 128 * 1024);
+    const std::vector<floats_t> drawn = all_of(whole);
+    fbe::environment::set_sample_budget(4096);
+    const std::uint64_t tiled = fbe_environment_bake(source, 32, 16);
+    REQUIRE(tiled != 0);
+    CHECK(fbe::environment::largest_draw() == 4096);
+    fbe::environment::set_sample_budget(0);
+    const std::vector<floats_t> in_tiles = all_of(tiled);
+    REQUIRE(in_tiles.size() == drawn.size());
+    for (std::size_t at = 0; at < drawn.size(); ++at) {
+        INFO("texture " << at);
+        CHECK(in_tiles[at].values == drawn[at].values);
+    }
+    stop_gpu();
+}
+
+// The bake and its reading against a smooth lobe of light, whose integrals are known by quadrature
+// here, rather than from what the bake made of them, as the golden image's are.
+TEST_CASE("a bake and its reading are what a lobe of light integrates to", "[gpu]") {
+    start();
+    const std::uint64_t environment = fbe_environment_bake(lobe_source(1024, 512), 64, 4096);
+    REQUIRE(environment != 0);
+    const floats_t irradiance = read(fbe_environment_irradiance(environment));
+    for (const auto& [x, y] : { std::pair{ 3U, 5U }, std::pair{ 15U, 15U }, std::pair{ 25U, 6U },
+                                std::pair{ 9U, 27U }, std::pair{ 28U, 28U } }) {
+        INFO("irradiance " << x << ", " << y);
+        const double wanted = lobe_irradiance(octahedral_direction(x, y, 32));
+        CHECK(std::abs(irradiance.at(x, y)[0] - wanted) < 0.01);
+    }
+    const std::uint64_t specular = fbe_environment_specular(environment);
+    const std::int32_t levels = fbe_environment_levels(environment);
+    for (std::int32_t level = 0; level <= levels; ++level) {
+        const floats_t frame = read(specular, static_cast<std::uint32_t>(level));
+        const std::uint32_t last = frame.width - 1;
+        const double roughness = static_cast<double>(level) / levels;
+        for (const auto& [x, y] :
+             { std::pair{ last / 5, last / 3 }, std::pair{ last / 2, last / 2 },
+               std::pair{ last * 4 / 5, last / 5 }, std::pair{ last / 4, last * 7 / 8 } }) {
+            INFO("level " << level << ", " << x << ", " << y);
+            const double wanted = lobe_specular(octahedral_direction(x, y, frame.width), roughness);
+            CHECK(std::abs(frame.at(x, y)[0] - wanted) < 0.01);
+        }
+    }
+    // A white metal mirror reads the light along the reflection, all but where the map's folds run
+    // through its texels.
+    const floats_t mirror = draw(
+        {
+            .base_color = { 1.0F, 1.0F, 1.0F, 1.0F },
+            .grid = { 0.0F, 1.0F, 1.0F, 1.0F },
+        },
+        environment);
+    double sum = 0.0;
+    int count = 0;
+    for (std::uint32_t y = 0; y < grid_size; ++y) {
+        for (std::uint32_t x = 0; x < grid_size; ++x) {
+            vec3_t normal{};
+            if (normal_at(x, y, normal)) {
+                const double twice = 2.0 * normal[2];
+                const vec3_t reflected{ twice * normal[0], twice * normal[1],
+                                        (twice * normal[2]) - 1.0 };
+                const double away = std::abs(mirror.at(x, y)[0] - lobe(reflected));
+                INFO(x << ", " << y);
+                CHECK(away < 0.07);
+                sum += away;
+                ++count;
+            }
+        }
+    }
+    CHECK(sum / count < 0.005);
+    stop_gpu();
+}
+
+// Floats go in as half floats, as near as they can.
+TEST_CASE("floats are written as half floats", "[gpu]") {
+    start();
+    const std::uint64_t texture = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA16F, false);
+    REQUIRE(texture != 0);
+    const float inf = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const std::array<float, 16> values{
+        0.5F,  4.0F,  1000.0F, 1.0F,     70000.0F, inf,  -1.0F, nan,
+        6e-5F, 1e-6F, 1e-9F,   65504.0F, 1.5F,     1.0F, 0.1F,  1.0F
+    };
+    require(fbe_texture_write_floats(texture, 0, 0, 2, 2, values.data()));
+    const floats_t back = read(texture);
+    const std::array<float, 16> wanted{ 0.5F,
+                                        4.0F,
+                                        1000.0F,
+                                        1.0F,
+                                        65504.0F,
+                                        65504.0F,
+                                        0.0F,
+                                        0.0F,
+                                        from_half(0x03EFU),
+                                        from_half(0x0011U),
+                                        0.0F,
+                                        65504.0F,
+                                        1.5F,
+                                        1.0F,
+                                        from_half(0x2E66U),
+                                        1.0F };
+    for (std::size_t at = 0; at < wanted.size(); ++at) {
+        INFO("value " << at);
+        CHECK(back.values[at] == wanted.at(at));
+    }
+    const std::uint64_t bytes = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA8, false);
+    CHECK(!fbe_texture_write_floats(bytes, 0, 0, 2, 2, values.data()));
+    CHECK(!fbe_texture_write_floats(texture, 1, 1, 2, 2, values.data()));
+    CHECK(!fbe_texture_write_floats(texture, 0, 0, 2, 2, nullptr));
     stop_gpu();
 }
 
