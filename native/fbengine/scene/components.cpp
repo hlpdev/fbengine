@@ -53,6 +53,9 @@ void copy_component(std::uint32_t from, std::uint32_t to) {
         copy = scene().cameras[entities.component[from]];
         copy.entity = to;
         copy.made = made;
+        if (copy.target != 0) {
+            fbe_texture_retain(copy.target);
+        }
     } else if (entities.kind[from] == FBE_ENTITY_LIGHT) {
         light_t& copy = scene().lights[entities.component[to]];
         copy = scene().lights[entities.component[from]];

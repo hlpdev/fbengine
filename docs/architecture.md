@@ -148,6 +148,12 @@ good modern engine on its own. Every structural choice is checked against both.
   for a retro look). Texture layers with blend modes and their own UV sets, lightmaps (SCP:CB's
   rooms are lightmapped), fog, and alpha all go through the same pipelines, as specialization
   constants, so any mix of them draws in the same pass.
+  UNLIT and VERTEX are the fixed-function look, so they work in encoded values: layers, ADD, ×2,
+  and fog on what's stored, with only the final color converted to linear for the target; PBR is
+  linear throughout. VERTEX's light is `min(range / distance, 1)` with no end, clamped per vertex
+  before texturing, from the first 8 shown lights in the tree's order; PIXEL and PBR keep
+  KHR_lights_punctual's window, which clusters need. Range means each in its model. A Texture has
+  an alpha flag, which AUTO blending honors.
 - **Lights**: clustered forward, so the many small lights of a facility work, per pixel or per
   vertex. A point or spot light ends at its range, as clustering needs, and falls off inside it as
   glTF's KHR_lights_punctual says, the inverse square windowed to 0 at the range, in every shading
@@ -155,6 +161,11 @@ good modern engine on its own. Every structural choice is checked against both.
   that reach them, at most 8 in the tree's order, so a light by an off-screen vertex still lights
   it. A mirrored world matrix is a pipeline key bit of its own, as the front face is baked into a
   pipeline. Shadows come with E6.
+- **Order and depth**: material orders other than 0 neither test nor write depth and draw
+  furthest first, behind the scene or over it, as Blitz's EntityOrder did; in order 0, opaque
+  draws test and write depth, by pipeline, material, and nearest first, and what blends only
+  tests it, furthest first. Each draw carries its pipeline key (shading, blend, alpha cutoff,
+  vertex colors, sides, fog, depth), which a texture layer's part joins when textures land.
 - **Render to texture**: any Camera can render into a Texture (security monitors, mirrors,
   portals), and post effects run per camera.
 - **2D** draws after 3D, in the same frame graph, into the window or into a Texture; pixel

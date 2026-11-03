@@ -3,6 +3,7 @@
 Import std.core
 Import std.math
 Import std.test
+Import std.os
 Import fbengine
 
 Function Fresh(): World
@@ -105,4 +106,126 @@ Function ACameraDrawsFromWhereItIsBetweenSteps()
     Local draws = camera.Draws(0.5)
     Expect(draws.Count == 1 && IsClose(draws[0].Depth, 1, 0.001))
     Expect(IsClose(draws[0].Matrix.TransformPoint(Vec3.Zero()), Vec3(0, 0, -2), 0.001))
+End Function
+
+@Test
+Function ADrawSaysHowItMeetsDepth()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Looking()
+    Local sky = Material()
+    sky.SetOrder(-1)
+    Local dome = Mesh(Geometry.Cube())
+    dome.SetMaterial(sky)
+    dome.SetPosition(Vec3(0, 0, -3))
+    Local box = Mesh(Geometry.Cube())
+    box.SetPosition(Vec3(0, 0, -6))
+    Local draws = camera.Draws()
+    Expect(draws.Count == 2 && draws[0].Entity == dome && draws[1].Entity == box)
+    Expect(draws[0].DepthMode == DepthMode.NONE && draws[1].DepthMode == DepthMode.TEST_AND_WRITE)
+    Expect(draws[0].Pipeline != draws[1].Pipeline)
+End Function
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// A pixel's red and blue of a 32 pixel wide target's bytes.
+Function Red(pixels: UInt8[], x: Int, y: Int): Int => pixels[(y * 32 + x) * 4] As Int
+Function Blue(pixels: UInt8[], x: Int, y: Int): Int => pixels[(y * 32 + x) * 4 + 2] As Int
+
+@Test
+Function RenderWorldDrawsEveryCameraIntoItsTarget() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = Fresh()
+    Defer world.Free()
+    Local target = Try Texture.Target(32, 32, TextureFormat.RGBA8, 1, True)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 1))
+    Expect(camera.RenderTarget() == target)
+    Local red = Material()
+    red.SetShading(Shading.UNLIT)
+    red.SetColor(Color(1, 0, 0))
+    Local cube = Mesh(Geometry.Cube())
+    cube.SetMaterial(red)
+    cube.SetPosition(Vec3(0, 0, -6))
+    world.SetAmbientLight(Color(0, 0, 0))
+    RenderWorld()
+    Local pixels = target.ReadPixels()
+    Expect(Red(pixels, 16, 16) == 255 && Blue(pixels, 16, 16) == 0)
+    Expect(Red(pixels, 1, 1) == 0 && Blue(pixels, 1, 1) == 255)
+    // A camera's own, with a texture layer of black multiplied over it.
+    camera.SetClearColor(Color(0, 1, 0))
+    Local layer = Try Texture(2, 2, TextureFormat.RGBA8, False)
+    layer.Clear(Color(0, 0, 0))
+    red.SetTexture(0, layer)
+    Expect(red.Texture(0) == layer)
+    red.SetLayer(0, LayerBlend.MULTIPLY)
+    camera.Render()
+    pixels = target.ReadPixels()
+    Expect(Red(pixels, 16, 16) == 0)
+    Expect(pixels[(1 * 32 + 1) * 4 + 1] == 255)
+    camera.SetRenderTarget(Null)
+    Expect(camera.RenderTarget() == Null)
+End Function
+
+@Test
+Function ALayersUvAndBumpAreWhatTheyreSetTo()
+    Local material = Material()
+    material.SetLayerUv(1, UvTurn(Vec2(2, 3), 0.5, Vec2(0.25, 0.75)))
+    Local uv = material.LayerUv(1)
+    Expect(uv.Scale == Vec2(2, 3) && uv.Angle == 0.5 && uv.Offset == Vec2(0.25, 0.75))
+    material.SetLayer(0, LayerBlend.BUMP)
+    Expect(material.LayerBlend(0) == LayerBlend.BUMP)
+    material.SetLayerBump(0, BumpShift(-0.012, -0.012, 0.012, 0.012, 1, 0.5))
+    Local bump = material.LayerBump(0)
+    Expect(bump.M00 == -0.012 && bump.M11 == 0.012 && bump.Scale == 1 && bump.Offset == 0.5)
+    Expect(material.Texture(0) == Null)
+End Function
+
+@Test
+Function ASurfacesJointsAreOneForEachVertex()
+    Local geometry = Geometry.Cube()
+    Local surface = geometry.Surface(0)
+    Local joints: VertexJoints[] = []
+    For i = 1 To surface.VertexCount()
+        joints.Add(VertexJoints(1, 2, 3, 4, Vec4(0.5, 0.25, 0.25, 0)))
+    End For
+    surface.SetJoints(joints)
+    Local read = surface.Joints()
+    Expect(read.Count == joints.Count)
+    Expect(read[0].Joint2 == 3 && read[0].Weights.x == 0.5)
+    surface.SetJoints([])
+    Expect(surface.Joints().Count == 0)
+End Function
+
+@Test
+Function ACameraTargetGoneWithTheGpuIsNull() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = Fresh()
+    Defer world.Free()
+    Local target = Try Texture.Target(16, 16, TextureFormat.RGBA8, 1, True)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    Gpu.Stop()
+    Expect(camera.RenderTarget() == Null)
+    Local material = Material()
+    Local layer = Try Texture(2, 2, TextureFormat.RGBA8, False)
+    material.SetTexture(0, layer)
+    Gpu.Stop()
+    Expect(material.Texture(0) == Null)
+End Function
+
+@Test
+Function ATexturesAlphaAndAWireframeAreWhatTheyreSetTo() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local texture = Try Texture(2, 2, TextureFormat.RGBA8, False)
+    Expect(!texture.Alpha())
+    texture.SetAlpha(True)
+    Expect(texture.Alpha())
+    Local material = Material()
+    material.SetWireframe(True)
+    Expect(material.Wireframe())
 End Function

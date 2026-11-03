@@ -1,0 +1,55 @@
+// Starfall's rules, on the GPU ctest's tests use only for what needs its sprites; a machine with no
+// Vulkan sets FBENGINE_NO_GPU to 1 and skips those.
+
+Import std.core
+Import std.os
+Import std.test
+Import fbengine
+Import arcade.starfall
+
+// A rock at (100, 100), its handle its middle: its pixels' columns are 92 to 107, and its first row
+// is 92, with pixels in columns 97 to 100.
+Function Rock100(): Rock
+    Local falling = Rock(100, 0, 0, 0, 1)
+    falling.Y = 100
+    Return falling
+End Function
+
+@Test
+Function ABoltMeetsARockInThePixelsItsDrawnIn()
+    Local mask = RockMask()
+    Local falling = Rock100()
+    // Its middle row reaches both edges: a bolt in the last column hits, one just past it doesn't,
+    // though it's less than a pixel past where the bolt's own position is.
+    Expect(BoltHits(mask, Bolt(107, 98), falling))
+    Expect(BoltHits(mask, Bolt(107.9, 98), falling))
+    Expect(!BoltHits(mask, Bolt(108, 98), falling))
+    Expect(!BoltHits(mask, Bolt(108.9, 98), falling))
+    // Just left of the first column.
+    Expect(BoltHits(mask, Bolt(92, 98), falling))
+    Expect(!BoltHits(mask, Bolt(91.9, 98), falling))
+    // All 5 of its rows count: its last, 4 below its top, is what meets the rock's first row.
+    Expect(BoltHits(mask, Bolt(98, 88), falling))
+    Expect(!BoltHits(mask, Bolt(98, 87), falling))
+End Function
+
+// What --watch plays goes on by itself: two seconds on a game that's over, then another.
+@Test
+Function AWatchedGameStartsAgainAfterItsOver() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local game = Try Game()
+    Defer EndGraphics()
+    game.Watch()
+    Expect(game.Frame == 1)
+    game.Score = 50
+    game.Lives = 0
+    For step = 1 To 120
+        game.Watch()
+        Expect(game.Lives == 0)
+    End For
+    game.Watch()
+    Expect(game.Lives == 3)
+    Expect(game.Score == 0)
+    Expect(game.Frame == 1)
+End Function

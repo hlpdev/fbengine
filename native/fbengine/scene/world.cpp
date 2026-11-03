@@ -276,7 +276,9 @@ bool place(std::uint64_t world, std::uint64_t parent, std::uint32_t& world_index
 } // namespace
 
 scene_t& scene() {
-    static scene_t the_scene;
+    // Never freed, as the job system isn't: on Linux and macOS another thread's exit() ends statics
+    // with moves still reading it on the workers.
+    static scene_t& the_scene = *new scene_t();
     return the_scene;
 }
 
@@ -609,6 +611,16 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         copies[i] = copy;
     }
     fbe::scene::renumber_cameras(tree, copies);
+    // Made anew in the order their originals were, so what goes by that goes as it did for them.
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> made;
+    made.reserve(copies.size());
+    for (std::size_t i = 0; i < copies.size(); ++i) {
+        made.emplace_back(entities.made[tree[i].first], copies[i]);
+    }
+    std::ranges::sort(made);
+    for (const auto& [when, copy] : made) {
+        entities.made[copy] = ++entities.mades;
+    }
     // Its meshes skinned as their originals, once the whole tree is there to find their roots in.
     fbe::anim::copy_skins(tree, copies);
     return entities.slots.handle(copies[0]);

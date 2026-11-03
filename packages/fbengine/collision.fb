@@ -69,8 +69,8 @@ End Struct
 /// of a face, an edge, or a corner touches it only going further in. A slide along ground, within
 /// the mover's MaxSlope of level, may raise it as far as the slope goes; along anything steeper,
 /// edges and corners too, no more than the move's own rise and its StepHeight. Each move is worked
-/// out on its own, so their order changes nothing. Moving an entity by SetPosition is a move to
-/// sweep; ResetCollisions is a teleport.
+/// out on its own; what it touches at one time goes by the order those entities were made. Moving
+/// an entity by SetPosition is a move to sweep; ResetCollisions is a teleport.
 Extend Entity
     /// Puts the entity in a collision group, 1 to 1023, or none with 0, as at first; it forgets
     /// where its last move ended. Others panic.

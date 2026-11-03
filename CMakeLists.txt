@@ -37,6 +37,7 @@ include(cmake/text.cmake)
 
 add_subdirectory(native/fbengine)
 add_subdirectory(native/fbengine_physics)
+add_subdirectory(native/fbengine_video)
 add_subdirectory(native/fbengine_tools)
 add_subdirectory(native/fbengine_audio)
 

@@ -74,6 +74,10 @@ End Extend
 ///         RenderWorld(logic.Tween())
 ///         Flip()
 ///     End While
+///
+/// A physics world's Step goes after UpdateWorld, as `UpdateGame`'s last, so what a body drives is
+/// where its body is for the next capture; UpdateWorld's collisions moving a driven entity last
+/// only until its body next moves.
 Public Final Class FixedStep
     Private Field rate: Float64
     Private Field most: Int

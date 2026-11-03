@@ -77,17 +77,27 @@ struct morph_target_t {
 /// into them each, counterclockwise seen from the front, and its morph targets.
 struct surface_t {
     std::vector<fbe_vertex_t> vertices;
+    /// Its vertices' joints, one for each, or none.
+    std::vector<fbe_vertex_joints_t> joints;
     std::vector<std::uint32_t> indices;
     std::vector<morph_target_t> targets;
     /// The material it's drawn in, by slot, which it holds, or none for the default.
     std::uint32_t material = none;
 };
 
-/// One of a material's texture layers: how it blends with the layers under it, and which UV set
-/// it reads.
+/// One of a material's texture layers: how it blends with the layers under it, which UV set it
+/// reads, its texture, which it holds, 0 for none, what turns its UVs, and for a bump layer, what
+/// its map shifts the next layer's UVs by and how it scales that layer's light.
 struct layer_t {
     std::int32_t blend = 0;
     std::int32_t uv_set = 0;
+    std::uint64_t texture = 0;
+    std::array<float, 2> uv_scale{ 1.0F, 1.0F };
+    float uv_angle = 0.0F;
+    std::array<float, 2> uv_offset{ 0.0F, 0.0F };
+    std::array<float, 4> bump{ 0.0F, 0.0F, 0.0F, 0.0F };
+    float bump_scale = 0.0F;
+    float bump_offset = 1.0F;
 };
 
 /// A material: how surfaces look, shared by every surface and mesh drawing in it, which its
@@ -102,6 +112,7 @@ struct material_t {
     bool vertex_colors = false;
     bool two_sided = false;
     bool fogged = true;
+    bool wireframe = false;
     std::int32_t order = 0;
     std::array<layer_t, FBE_MATERIAL_LAYERS> layers{};
 };
@@ -263,6 +274,8 @@ struct camera_t {
     bool clears_color = true;
     bool clears_depth = true;
     std::array<float, 4> clear_color{ 0.0F, 0.0F, 0.0F, 1.0F };
+    /// The texture it draws into, which it holds, or 0 for the screen.
+    std::uint64_t target = 0;
     std::int32_t order = 0;
     /// When it was made, which orders cameras of one order.
     std::uint64_t made = 0;
@@ -273,9 +286,8 @@ struct camera_t {
     float fog_density = 0.02F;
 };
 
-/// A light: what kind, its color and its intensity, the range a point or spot light's falloff is
-/// measured by, and a spot light's cone, its angles from its axis to where it starts to fade and
-/// to where it's out.
+/// A light: what kind, its color and its intensity, the range where a point or spot light ends, and
+/// a spot light's cone, its angles from its axis to where it starts to fade and to where it's out.
 struct light_t {
     std::uint32_t entity = none;
     std::int32_t type = 0;
@@ -340,12 +352,20 @@ std::uint32_t world_slot(std::uint64_t handle);
 
 /// Gives a new entity what its kind keeps, as a camera's settings.
 void add_component(std::uint32_t entity);
+/// How many pieces a long line over a terrain is tried in, a few squares each: in float first,
+/// since a line can be longer than an int counts.
+inline int terrain_line_pieces(float span) {
+    return static_cast<int>(std::fmin(std::fmax(std::ceil(span / 4.0F), 1.0F), 4096.0F));
+}
+
 /// Lets go of what an entity's kind kept, as it's freed.
 void remove_component(std::uint32_t entity);
 /// Gives a copy what its original's kind keeps.
 void copy_component(std::uint32_t from, std::uint32_t to);
 /// The live camera a handle is for, or null, with fbe_error saying so.
 camera_t* camera_of(std::uint64_t handle);
+/// Lets go of a texture a camera or material held, if it hasn't gone with the GPU.
+void release_texture(std::uint64_t texture);
 void add_camera(std::uint32_t entity);
 void remove_camera(std::uint32_t entity);
 /// Numbers a tree's copied cameras anew in the order their originals were made, so cameras of one
@@ -354,6 +374,22 @@ void renumber_cameras(const std::vector<std::pair<std::uint32_t, std::size_t>>& 
                       const std::vector<std::uint32_t>& copies);
 /// The live light a handle is for, or null, with fbe_error saying so.
 light_t* light_of(std::uint64_t handle);
+/// How a World's moves are run: by what's worth it, here or on the job system's workers, or, for
+/// tests, all here or all on the workers.
+enum class move_path_t : std::uint8_t {
+    AS_WORTH,
+    HERE,
+    WORKERS,
+};
+void set_move_path(move_path_t path);
+/// The most of anything moves' scratch has kept for the next; how many scratches there are; and
+/// how many of the last World's moves ran here, not on the workers.
+std::size_t move_scratch_kept();
+std::size_t move_scratch_count();
+std::size_t moves_run_here();
+/// The lights among some entities and under them in the tree's order, depth first, each parent
+/// before its children, by a stack of their own, so no tree is too deep.
+void lights_in(const std::vector<std::uint32_t>& among, std::vector<std::uint32_t>& found);
 void add_light(std::uint32_t entity);
 void remove_light(std::uint32_t entity);
 void add_mesh(std::uint32_t entity);

@@ -372,7 +372,7 @@ std::int32_t pick() {
         const candidate_t& candidate = candidates[static_cast<std::size_t>(wanted)];
         if (!candidate.lacks.empty()) {
             fbe::fail(std::format("the GPU {} lacks what fbengine needs: {}",
-                                  candidate.properties.deviceName, candidate.lacks));
+                                  fbe::gpu::name_of(candidate.properties), candidate.lacks));
             return -1;
         }
         return wanted;
@@ -397,7 +397,7 @@ std::int32_t pick() {
     std::string why;
     for (const candidate_t& candidate : candidates) {
         why += std::format("{}{} lacks {}", why.empty() ? "" : "; ",
-                           candidate.properties.deviceName, candidate.lacks);
+                           fbe::gpu::name_of(candidate.properties), candidate.lacks);
     }
     fbe::fail(std::format("no GPU has what fbengine needs: {}", why));
     return -1;
@@ -492,10 +492,12 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     if (made != VK_SUCCESS) {
         current.device = VK_NULL_HANDLE;
         return fbe::gpu::fail_vulkan(
-            std::format("couldn't start the GPU {}", candidate.properties.deviceName), made);
+            std::format("couldn't start the GPU {}", fbe::gpu::name_of(candidate.properties)),
+            made);
     }
     volkLoadDevice(current.device);
     vkGetDeviceQueue(current.device, current.family, 0, &current.queue);
+    current.wireframe = supported.fillModeNonSolid == VK_TRUE;
     current.max_anisotropy = supported.samplerAnisotropy == VK_TRUE
                                  ? candidate.properties.limits.maxSamplerAnisotropy
                                  : 0.0F;
@@ -679,10 +681,22 @@ bool start(VkSurfaceKHR surface) {
     return true;
 }
 
+namespace {
+
+std::vector<void (*)()>& stoppers() {
+    static std::vector<void (*)()> made;
+    return made;
+}
+
+} // namespace
+
 void stop() {
     if (started) {
         vkDeviceWaitIdle(current.device);
         stop_graph();
+        for (void (*free)() : stoppers()) {
+            free();
+        }
         stop_window();
         stop_frames();
         stop_textures();
@@ -760,6 +774,12 @@ bool faulted(fault_t fault) {
     }
     injected = fault_t::NONE;
     return true;
+}
+
+void at_stop(void (*free)()) {
+    if (std::ranges::find(stoppers(), free) == stoppers().end()) {
+        stoppers().push_back(free);
+    }
 }
 
 } // namespace fbe::gpu

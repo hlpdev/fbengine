@@ -212,7 +212,7 @@ bool start_bindless() {
     if (capacity < fewest_textures ||
         vulkan12.maxPerStageDescriptorUpdateAfterBindSamplers < sampler_slots) {
         return fail(std::format("the GPU {} holds {} textures at once, and fbengine needs {}",
-                                gpu.properties.deviceName, capacity, fewest_textures));
+                                name_of(gpu.properties), capacity, fewest_textures));
     }
     VkResult result = vkCreateDescriptorSetLayout(gpu.device, &layout_info, nullptr, &layout);
     if (result != VK_SUCCESS) {

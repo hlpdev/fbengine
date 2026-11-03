@@ -1,4 +1,4 @@
-// Materials: how surfaces look, as the data E5 draws them by, shared by every surface and Mesh
+// Materials: how surfaces look, as the data they're drawn by, shared by every surface and Mesh
 // drawing in one; and a Mesh's own tint, which multiplies its materials' for it alone.
 
 Import std.core
@@ -8,6 +8,7 @@ Import "./c/fbe_scene"
 Import "./geometry"
 Import "./light"
 Import "./mesh"
+Import "./texture"
 Import "./window"
 Import "./world"
 
@@ -15,15 +16,18 @@ Import "./world"
 Public Enum Shading
     /// Physically, as glTF's metal and roughness have it.
     PBR = 0
-    /// Not at all: its color is what's drawn, as full-bright signs and screens want.
+    /// Not at all: its color is what's drawn, as full-bright signs and screens want. Its textures,
+    /// doublings, adds, and fog work on what's stored, as VERTEX's do: 50 doubled is 100.
     UNLIT = 1
-    /// Per vertex, as fixed-function hardware lit, for an old look.
+    /// Per vertex, as fixed-function hardware lit, for an old look: by the first eight shown Lights
+    /// in the tree's order, whatever they reach, on what's stored, as UNLIT's are.
     VERTEX = 2
 End Enum
 
 /// How a material blends with what's drawn behind it.
 Public Enum Blend
-    /// Opaque, unless its alpha times its Mesh's is below 1; then ALPHA.
+    /// Opaque, unless its alpha times its Mesh's is below 1, or, with no alpha cutoff, a layer's
+    /// Texture has Alpha; then ALPHA.
     AUTO = 0
     /// Opaque: it hides what's behind, its own and its textures' alpha left out; but a Mesh whose
     /// own alpha is below 1 still blends it as ALPHA, so a Mesh fades whatever it draws in.
@@ -47,7 +51,33 @@ Public Enum LayerBlend
     /// Multiplying them twice over, so its middle gray leaves them as they are, as a doubled
     /// ambient layer under a lightmap wants.
     MULTIPLY_2 = 3
+    /// Not at all, but its red and green shift the next layer's UVs and its blue scales that
+    /// layer's light, as SetLayerBump says: the environment bump old rooms use.
+    BUMP = 4
 End Enum
+
+/// What a texture layer's UVs go through.
+Public Struct UvTurn
+    /// Scaled down by this, so 2 looks twice as big. Neither is 0.
+    Public Field Scale: Vec2
+    /// Turned back by this, in radians.
+    Public Field Angle: Float
+    /// Moved back by this, in UV units.
+    Public Field Offset: Vec2
+End Struct
+
+/// What a BUMP layer's map does to the next layer.
+Public Struct BumpShift
+    /// Its red and green, centered on middle gray, -1 to 1, shift that layer's UVs by
+    /// u = M00 r + M10 g and v = M01 r + M11 g.
+    Public Field M00: Float
+    Public Field M01: Float
+    Public Field M10: Float
+    Public Field M11: Float
+    /// Its blue times this plus Offset, 0 to 1, scales that layer's color.
+    Public Field Scale: Float
+    Public Field Offset: Float
+End Struct
 
 // One wrapper for each material the game holds, by its handle's slot.
 Global materials: Weak<Material>[] = []
@@ -195,6 +225,16 @@ Public Final Class Material
     @MainThread @PanicsAtCaller
     Public Method VertexColors(): Bool => fbe_material_vertex_colors(Live("VertexColors"))
 
+    /// Sets whether its triangles are drawn as lines, where the GPU can; filled, where it can't.
+    @MainThread @PanicsAtCaller
+    Public Method SetWireframe(on: Bool)
+        If !fbe_material_set_wireframe(Live("SetWireframe"), on) Then Failed("SetWireframe")
+    End Method
+
+    /// Whether its triangles are drawn as lines.
+    @MainThread @PanicsAtCaller
+    Public Method Wireframe(): Bool => fbe_material_wireframe(Live("Wireframe"))
+
     /// Sets whether its triangles are drawn from behind too.
     @MainThread @PanicsAtCaller
     Public Method SetTwoSided(on: Bool)
@@ -216,8 +256,8 @@ Public Final Class Material
     Public Method Fogged(): Bool => fbe_material_fogged(Live("Fogged"))
 
     /// Sets when it's drawn: 0, at first, with the scene; below 0 before the scene and above 0
-    /// after it, lower first, as skies and overlays want. How each order meets the others' depth
-    /// is the renderer's (E5).
+    /// after it, lower first, as skies and overlays want. Orders but 0 neither test nor write
+    /// depth, and are drawn furthest first, so a sky is behind everything and an overlay over it.
     @MainThread @PanicsAtCaller
     Public Method SetOrder(order: Int)
         If !fbe_material_set_order(Live("SetOrder"), order) Then Failed("SetOrder")
@@ -226,6 +266,62 @@ Public Final Class Material
     /// When it's drawn.
     @MainThread @PanicsAtCaller
     Public Method Order(): Int => fbe_material_order(Live("Order"))
+
+    /// Sets a texture layer's texture, 0 to 7, or none with Null: what's drawn is the lit color
+    /// with each layer that has a texture over it, in order. A layer out of range or a freed
+    /// texture panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetTexture(layer: Int, texture: Texture?)
+        Local handle: UInt64 = texture != Null ? texture.Live("SetTexture") : 0
+        If !fbe_material_set_texture(Live("SetTexture"), layer, handle) Then Failed("SetTexture")
+    End Method
+
+    /// A texture layer's texture, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Texture(layer: Int): Texture? => TextureOf(fbe_material_texture(Live("Texture"),
+                                                                                  layer))
+
+    /// Sets what a texture layer's UVs go through. A scale of 0, or anything not finite, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetLayerUv(layer: Int, uv: UvTurn)
+        If !fbe_material_set_layer_uv(Live("SetLayerUv"), layer, uv.Scale.x, uv.Scale.y, uv.Angle,
+                                      uv.Offset.x, uv.Offset.y)
+            Failed("SetLayerUv")
+        End If
+    End Method
+
+    /// What a texture layer's UVs go through.
+    @MainThread @PanicsAtCaller
+    Public Method LayerUv(layer: Int): UvTurn
+        Local values = Buffer<Float>(5)
+        Local done = False
+        Unsafe
+            done = fbe_material_layer_uv(Live("LayerUv"), layer, values.Pointer())
+        End Unsafe
+        If !done Then Failed("LayerUv")
+        Return UvTurn(Vec2(values[0], values[1]), values[2], Vec2(values[3], values[4]))
+    End Method
+
+    /// Sets what a BUMP layer's map does to the next layer. Anything not finite panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetLayerBump(layer: Int, bump: BumpShift)
+        If !fbe_material_set_layer_bump(Live("SetLayerBump"), layer, bump.M00, bump.M01, bump.M10,
+                                        bump.M11, bump.Scale, bump.Offset)
+            Failed("SetLayerBump")
+        End If
+    End Method
+
+    /// What a BUMP layer's map does to the next layer.
+    @MainThread @PanicsAtCaller
+    Public Method LayerBump(layer: Int): BumpShift
+        Local values = Buffer<Float>(6)
+        Local done = False
+        Unsafe
+            done = fbe_material_layer_bump(Live("LayerBump"), layer, values.Pointer())
+        End Unsafe
+        If !done Then Failed("LayerBump")
+        Return BumpShift(values[0], values[1], values[2], values[3], values[4], values[5])
+    End Method
 
     /// Sets how a texture layer, 0 to 7, combines with the layers under it, and which of a
     /// vertex's UV sets it reads, 0 or 1, as a lightmap's layer reads 1. Others panic.
