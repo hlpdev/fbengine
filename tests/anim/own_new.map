@@ -1,0 +1,11 @@
+# operator new and its forms, as Itanium's C++ names them, kept out of a test's dynamic symbols, so
+# what's opened at run time, as the Vulkan loader opens a driver and a validation layer, keeps its
+# own: an allocation of this test's failing inside one of those, which aren't written to survive it,
+# breaks them, not what's being tested. Windows' DLLs have their own already.
+{
+  local:
+    _Znwm;
+    _Znam;
+    _ZnwmRKSt9nothrow_t;
+    _ZnamRKSt9nothrow_t;
+};

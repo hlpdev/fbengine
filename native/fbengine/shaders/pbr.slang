@@ -8,6 +8,9 @@ import bindless;
 static const float PI = 3.14159265358979;
 /// The smallest GGX alpha, so a mirror's highlight stays finite: a roughness of 0.045.
 static const float SMOOTHEST = 0.002;
+/// How near a pole a direction's across, squared, to be at it: 0.0001 radians, well inside a texel of
+/// the largest map.
+static const float POLE = 1e-8;
 /// How short a vector's square has to be for it to have no direction to speak of.
 static const float DEGENERATE = 1e-8;
 
@@ -138,6 +141,19 @@ public float3 directionOfOctahedral(float2 at)
         across = (1.0 - abs(from.yx)) * signs;
     }
     return normalize(float3(across.x, up, across.y));
+}
+
+/// How far across an equirectangular image `direction`, a unit vector, is, y up, 0 to 1, +X at its
+/// middle. At a pole there's no angle: a direction a float's rounding away from one has one that's
+/// anything, as a map's corners do on a driver that divides by a reciprocal, so all of them across
+/// it read its one middle column.
+public float equirectangularAcross(float3 direction)
+{
+    if (dot(direction.xz, direction.xz) < POLE)
+    {
+        return 0.5;
+    }
+    return (atan2(direction.z, direction.x) / (2.0 * PI)) + 0.5;
 }
 
 /// An octahedral texture in `direction` at a whole `level`. Its texels are baked with the first and
