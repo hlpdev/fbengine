@@ -126,7 +126,7 @@ if(FBENGINE_FB_TESTS)
       cmake_path(GET package FILENAME name)
       add_test(NAME ${name}.package COMMAND "${FBENGINE_FB}" test "${package}")
       set_tests_properties(${name}.package PROPERTIES ENVIRONMENT
-                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
     endif()
   endforeach()
 

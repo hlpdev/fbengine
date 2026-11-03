@@ -226,7 +226,8 @@ Public Final Class Editor
         Local asking = Dialog("Open a project", "The folder with its project.toml:")
         Local field = TextField("", "", "dialog.path")
         field.SetTranslates(False)
-        field.SetMinSize(420.0, 0.0)
+        // As wide whatever's typed, which scrolls, so the dialog stays where it is.
+        field.SetWidth(Sizing.Fixed(420.0))
         asking.AddContent(field)
         asking.AddButton("Cancel")
         Local opening = asking.AddButton("Open", Function[Weak Self]()

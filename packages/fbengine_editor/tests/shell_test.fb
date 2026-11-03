@@ -626,3 +626,29 @@ Function ControlZWithAGroupOpenDoesNothing() Throws IOError, GraphicsError
     Expect(value == 0)
     editor.Finish()
 End Function
+
+@Test
+Function WhatsTypedForAFolderLeavesTheDialogWhereItIs() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local editor = Try Editor(settings.Path)
+    Window.SetHeadless(True)
+    Try editor.Start()
+    editor.Step()
+    Expect(editor.Actions.Run("file.open"))
+    editor.Step()
+    editor.Step()
+    Local field = Found(editor, "dialog.path") As? TextField
+    If field == Null Then Panic("there's no field")
+    Local open = Found(editor, "dialog.Open").Box()
+    Local long = ""
+    For i = 1 To 40
+        long += "a long folder name/"
+    End For
+    field.SetText(long)
+    editor.Step()
+    Expect(Found(editor, "dialog.Open").Box() == open,
+           "it went from {open} to {Found(editor, "dialog.Open").Box()}")
+    Expect(field.Box().Width == 420, "it's {field.Box()}")
+    editor.Finish()
+End Function
