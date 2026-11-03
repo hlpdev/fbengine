@@ -106,6 +106,8 @@ End Struct
     Public Field color: fbe_color_t
 End Struct
 
+Public Const FBE_NO_JOINT: Int32 = 65535
+
 @CLayout Public Struct fbe_vertex_joints_t
     Public Field joints: UInt16[4]
     Public Field weights: Float32[4]
@@ -310,6 +312,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_material_vertex_colors(material: UInt64): Bool
     Function fbe_material_set_two_sided(material: UInt64, two_sided: Bool): Bool
     Function fbe_material_two_sided(material: UInt64): Bool
+    Function fbe_material_set_wireframe(material: UInt64, wireframe: Bool): Bool
+    Function fbe_material_wireframe(material: UInt64): Bool
     Function fbe_material_set_fogged(material: UInt64, fogged: Bool): Bool
     Function fbe_material_fogged(material: UInt64): Bool
     Function fbe_material_set_order(material: UInt64, order: Int32): Bool

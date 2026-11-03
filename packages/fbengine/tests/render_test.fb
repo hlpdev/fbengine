@@ -198,3 +198,34 @@ Function ASurfacesJointsAreOneForEachVertex()
     surface.SetJoints([])
     Expect(surface.Joints().Count == 0)
 End Function
+
+@Test
+Function ACameraTargetGoneWithTheGpuIsNull() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = Fresh()
+    Defer world.Free()
+    Local target = Try Texture.Target(16, 16, TextureFormat.RGBA8, 1, True)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    Gpu.Stop()
+    Expect(camera.RenderTarget() == Null)
+    Local material = Material()
+    Local layer = Try Texture(2, 2, TextureFormat.RGBA8, False)
+    material.SetTexture(0, layer)
+    Gpu.Stop()
+    Expect(material.Texture(0) == Null)
+End Function
+
+@Test
+Function ATexturesAlphaAndAWireframeAreWhatTheyreSetTo() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local texture = Try Texture(2, 2, TextureFormat.RGBA8, False)
+    Expect(!texture.Alpha())
+    texture.SetAlpha(True)
+    Expect(texture.Alpha())
+    Local material = Material()
+    material.SetWireframe(True)
+    Expect(material.Wireframe())
+End Function

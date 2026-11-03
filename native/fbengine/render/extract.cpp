@@ -7,6 +7,7 @@
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
+#include "skin/skin.hpp"
 
 #include <algorithm>
 #include <array>
@@ -86,7 +87,7 @@ std::uint64_t pipeline_of(const item_t& item, const camera_t& camera) {
            (static_cast<std::uint64_t>(fog) << 8U) |
            (static_cast<std::uint64_t>(item.draw.depth_mode) << 10U) |
            (static_cast<std::uint64_t>(item.mirrored ? 1 : 0) << 12U) | (layer_count << 13U) |
-           (layers << 17U);
+           (layers << 17U) | (static_cast<std::uint64_t>(material.wireframe ? 1 : 0) << 49U);
 }
 
 /// The eight corners of a box through a matrix.
@@ -98,21 +99,6 @@ std::array<vec3_t, 8> corners_of(const mat4_t& matrix, vec3_t min, vec3_t max) {
                            (corner & 4U) != 0 ? max.z : min.z));
     }
     return corners;
-}
-
-/// Keeps the box around some corners on an item lit per vertex, what its lights must reach.
-void bound(item_t& item, const std::array<vec3_t, 8>& corners) {
-    if (!item.vertex_lit) {
-        return;
-    }
-    item.min = corners[0];
-    item.max = corners[0];
-    for (const vec3_t& corner : corners) {
-        item.min = vec3_t(std::fmin(item.min.x, corner.x), std::fmin(item.min.y, corner.y),
-                          std::fmin(item.min.z, corner.z));
-        item.max = vec3_t(std::fmax(item.max.x, corner.x), std::fmax(item.max.y, corner.y),
-                          std::fmax(item.max.z, corner.z));
-    }
 }
 
 } // namespace
@@ -142,7 +128,19 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         if (!geometry.has_cull_box) {
             scene::geometry_bounds(mesh.geometry, min, max);
         }
-        const std::array<vec3_t, 8> corners = corners_of(matrix, min, max);
+        std::array<vec3_t, 8> corners = corners_of(matrix, min, max);
+        // Skinned, it's where its joints are: its bind pose's whole size around them.
+        vec3_t joints_min;
+        vec3_t joints_max;
+        if (!geometry.has_cull_box &&
+            anim::skin_joints_box(mesh.entity, tweened, joints_min, joints_max)) {
+            const float most =
+                std::fmax(std::fmax(scene::length(matrix.axis(0)), scene::length(matrix.axis(1))),
+                          scene::length(matrix.axis(2)));
+            const float reach = scene::length(max - min) * most;
+            const vec3_t grown(reach, reach, reach);
+            corners = corners_of(mat4_t(), joints_min - grown, joints_max + grown);
+        }
         if (!scene::in_view(camera, view, corners.data(), corners.size())) {
             continue;
         }
@@ -156,13 +154,6 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
             item_t item = item_of(mesh.entity, material, matrix, mesh.tint, fade, view);
             item.draw.geometry = s.geometry_slots.handle(mesh.geometry);
             item.draw.surface = static_cast<std::int32_t>(surface);
-            if (item.vertex_lit) {
-                // What its lights reach is its own vertices, whatever box it's culled by.
-                vec3_t own_min;
-                vec3_t own_max;
-                scene::surface_bounds(mesh.geometry, surface, own_min, own_max);
-                bound(item, corners_of(matrix, own_min, own_max));
-            }
             items.push_back(item);
         }
     }
@@ -181,9 +172,7 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
             continue;
         }
         const mat4_t matrix = scene::sprite_matrix(sprite.entity, own, view.rotation);
-        item_t item = item_of(sprite.entity, sprite.material, matrix, sprite.tint, fade, view);
-        bound(item, corners);
-        items.push_back(item);
+        items.push_back(item_of(sprite.entity, sprite.material, matrix, sprite.tint, fade, view));
     }
     for (const scene::plane_t& plane : s.planes) {
         float fade = 1.0F;
@@ -196,10 +185,7 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         if (!scene::plane_in_view(camera, view, matrix.axis(3), up)) {
             continue;
         }
-        item_t item = item_of(plane.entity, plane.material, matrix, plane.tint, fade, view);
-        item.min = matrix.axis(3);
-        item.up = up;
-        items.push_back(item);
+        items.push_back(item_of(plane.entity, plane.material, matrix, plane.tint, fade, view));
     }
     for (const scene::terrain_t& terrain : s.terrains) {
         float fade = 1.0F;
@@ -221,7 +207,6 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         const vec3_t middle = scene::transform_point(matrix, min + across * 0.5F);
         const vec3_t forward = view.rotation * vec3_t(0.0F, 0.0F, -1.0F);
         item.draw.depth = scene::dot(middle - view.position, forward);
-        bound(item, corners);
         items.push_back(item);
     }
     for (item_t& item : items) {

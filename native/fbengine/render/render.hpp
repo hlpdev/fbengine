@@ -15,8 +15,7 @@
 
 namespace fbe::render {
 
-/// A draw, what it's sorted by, and what a light must reach to light it per vertex: its world box,
-/// or a ground plane's place, in `min`, and the plane's up.
+/// A draw, and what it's sorted by.
 struct item_t {
     fbe_draw_t draw{};
     std::int32_t order = 0;
@@ -26,9 +25,6 @@ struct item_t {
     std::uint32_t material = scene::none;
     std::uint32_t entity = scene::none;
     std::uint64_t made = 0;
-    scene::vec3_t min;
-    scene::vec3_t max;
-    scene::vec3_t up;
 };
 
 /// What a camera draws and what lights it, as fbe_render.h has them.

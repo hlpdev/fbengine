@@ -16,15 +16,18 @@ Import "./world"
 Public Enum Shading
     /// Physically, as glTF's metal and roughness have it.
     PBR = 0
-    /// Not at all: its color is what's drawn, as full-bright signs and screens want.
+    /// Not at all: its color is what's drawn, as full-bright signs and screens want. Its textures,
+    /// doublings, adds, and fog work on what's stored, as VERTEX's do: 50 doubled is 100.
     UNLIT = 1
-    /// Per vertex, as fixed-function hardware lit, for an old look.
+    /// Per vertex, as fixed-function hardware lit, for an old look: by the first eight shown Lights
+    /// in the tree's order, whatever they reach, on what's stored, as UNLIT's are.
     VERTEX = 2
 End Enum
 
 /// How a material blends with what's drawn behind it.
 Public Enum Blend
-    /// Opaque, unless its alpha times its Mesh's is below 1; then ALPHA.
+    /// Opaque, unless its alpha times its Mesh's is below 1, or, with no alpha cutoff, a layer's
+    /// Texture has Alpha; then ALPHA.
     AUTO = 0
     /// Opaque: it hides what's behind, its own and its textures' alpha left out; but a Mesh whose
     /// own alpha is below 1 still blends it as ALPHA, so a Mesh fades whatever it draws in.
@@ -221,6 +224,16 @@ Public Final Class Material
     /// Whether vertices' colors and alphas multiply its own.
     @MainThread @PanicsAtCaller
     Public Method VertexColors(): Bool => fbe_material_vertex_colors(Live("VertexColors"))
+
+    /// Sets whether its triangles are drawn as lines, where the GPU can; filled, where it can't.
+    @MainThread @PanicsAtCaller
+    Public Method SetWireframe(on: Bool)
+        If !fbe_material_set_wireframe(Live("SetWireframe"), on) Then Failed("SetWireframe")
+    End Method
+
+    /// Whether its triangles are drawn as lines.
+    @MainThread @PanicsAtCaller
+    Public Method Wireframe(): Bool => fbe_material_wireframe(Live("Wireframe"))
 
     /// Sets whether its triangles are drawn from behind too.
     @MainThread @PanicsAtCaller

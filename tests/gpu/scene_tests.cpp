@@ -53,7 +53,10 @@ struct scene_t {
     /// What's been drawn into the target since it was last cleared, once its camera's drawn.
     [[nodiscard]] fbe::golden::frame_t drawn(float tween = 1.0F) const {
         require(fbe_render_world(world, tween));
-        return read(target);
+        fbe::golden::frame_t frame = read(target);
+        // A frame of its own, since what's changed in a geometry waits for the next.
+        fbe_frame_flip(false);
+        return frame;
     }
 
     static fbe::golden::frame_t read(std::uint64_t texture) {
@@ -86,6 +89,14 @@ std::uint8_t srgb(float linear) {
                               ? clamped * 12.92F
                               : (1.055F * std::pow(clamped, 1.0F / 2.4F)) - 0.055F;
     return static_cast<std::uint8_t>(std::lround(encoded * 255.0F));
+}
+
+/// How tight the scene shader's highlight is.
+constexpr float highlight_power = 100.0F;
+
+/// What's stored for an encoded value 0 to 1, as UNLIT and VERTEX work in.
+std::uint8_t stored(float encoded) {
+    return static_cast<std::uint8_t>(std::lround(std::clamp(encoded, 0.0F, 1.0F) * 255.0F));
 }
 
 /// Whether a pixel's within a couple of bytes of what's expected, its alpha aside.
@@ -238,25 +249,23 @@ TEST_CASE("layers go over the lit color, each as its blend says, by its UV set",
     CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
     // Multiplying by a quarter.
     require(fbe_material_set_texture(material, 0, quarter));
-    const std::uint8_t q = srgb(64.0F / 255.0F);
-    CHECK(near(middle(scene.drawn()), { q, q, q }));
+    CHECK(near(middle(scene.drawn()), { 64, 64, 64 }, 1));
     // Twice over a half leaves it.
     require(fbe_material_set_texture(material, 1, half));
     require(fbe_material_set_layer(material, 1, FBE_LAYER_MULTIPLY_2, 0));
-    const std::uint8_t qq = srgb(64.0F / 255.0F * 2.0F * 128.0F / 255.0F);
-    CHECK(near(middle(scene.drawn()), { qq, qq, qq }));
+    CHECK(near(middle(scene.drawn()), { 64, 64, 64 }, 1));
     // Adding a half.
     require(fbe_material_set_layer(material, 1, FBE_LAYER_ADD, 0));
-    const std::uint8_t added = srgb((64.0F + 128.0F) / 255.0F);
-    CHECK(near(middle(scene.drawn()), { added, added, added }));
+    CHECK(near(middle(scene.drawn()), { 192, 192, 192 }, 1));
     // Laid over by its alpha: half red, half what's under.
     require(fbe_material_set_texture(material, 1, red));
     require(fbe_material_set_layer(material, 1, FBE_LAYER_ALPHA, 0));
     const float over = 128.0F / 255.0F;
     const float under = 64.0F / 255.0F;
-    const std::uint8_t r = srgb((under * (1.0F - over)) + over);
-    const std::uint8_t g = srgb(under * (1.0F - over));
-    CHECK(near(middle(scene.drawn()), { r, g, g }));
+    CHECK(near(middle(scene.drawn()),
+               { stored((under * (1.0F - over)) + over), stored(under * (1.0F - over)),
+                 stored(under * (1.0F - over)) },
+               1));
     // A layer with no texture isn't there; the one above moves down.
     require(fbe_material_set_texture(material, 0, 0));
     require(fbe_material_set_layer(material, 1, FBE_LAYER_MULTIPLY, 0));
@@ -330,16 +339,38 @@ TEST_CASE("a bump layer shifts the next layer's UVs and scales its light", "[gpu
     CHECK(pixel(scene.drawn(), left, row) == rgba_t{ 255, 0, 0, 255 });
     require(fbe_material_set_layer_bump(material, 0, 0.25F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F));
     CHECK(pixel(scene.drawn(), left, row) == rgba_t{ 0, 255, 0, 255 });
-    // Its blue, about half, doubled less a half: about a half of the next layer's light.
+    // Its blue, about half, scaled by 1 and offset by none: half the next layer's light.
     require(fbe_material_set_layer_bump(material, 0, 0.25F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F));
-    const float blue = 128.0F / 255.0F;
-    CHECK(near(pixel(scene.drawn(), left, row), { 0, srgb(blue), 0 }));
+    CHECK(near(pixel(scene.drawn(), left, row), { 0, 128, 0 }, 1));
     std::array<float, 6> values{};
     require(fbe_material_layer_bump(material, 0, values.data()));
     CHECK(values[0] == 0.25F);
     CHECK(values[4] == 1.0F);
     fbe_texture_release(texture);
     fbe_texture_release(bump);
+    fbe_material_release(material);
+}
+
+TEST_CASE("a bump map's flat middle gray shifts nothing, in either format", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
+    const std::uint64_t texture = fbe_texture_create(2, 1, FBE_TEXTURE_RGBA8, false);
+    const std::array<std::uint8_t, 8> pixels{ 255, 0, 0, 255, 0, 255, 0, 255 };
+    require(fbe_texture_write(texture, 0, 0, 2, 1, pixels.data(), 8));
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_NEAREST));
+    require(fbe_material_set_layer(material, 0, FBE_LAYER_BUMP, 0));
+    require(fbe_material_set_layer_bump(material, 0, 100.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F));
+    require(fbe_material_set_texture(material, 1, texture));
+    wall(scene.world, -1.0F, 2.0F, material);
+    for (const std::int32_t format : { FBE_TEXTURE_RGBA8, FBE_TEXTURE_RGBA8_LINEAR }) {
+        const std::uint64_t bump = flat_texture(128, 128, 128, 255, format);
+        require(fbe_material_set_texture(material, 0, bump));
+        CAPTURE(format);
+        CHECK(pixel(scene.drawn(), (frame_size * 3) / 8, frame_size / 2) ==
+              rgba_t{ 255, 0, 0, 255 });
+        fbe_texture_release(bump);
+    }
+    fbe_texture_release(texture);
     fbe_material_release(material);
 }
 
@@ -407,42 +438,117 @@ TEST_CASE("a one-sided surface shows only its front, a two-sided one both, mirro
     fbe_material_release(material);
 }
 
-TEST_CASE("point lights fall off as glTF's, in every lit shading model", "[gpu][scene]") {
+TEST_CASE("point lights fall off per pixel as glTF's", "[gpu][scene]") {
     const scene_t scene;
-    for (const std::int32_t shading : { FBE_SHADING_PBR, FBE_SHADING_VERTEX }) {
-        const std::uint64_t material = fbe_material_create();
-        require(fbe_material_set_shading(material, shading));
-        const std::uint64_t mesh = wall(scene.world, -6.0F, 20.0F, material);
-        // 2 straight in front of the wall's middle, range 8.
-        const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, -4.0F, 8.0F);
-        require(fbe_light_set_intensity(lamp, 2.0F));
-        const float expected = 2.0F * falloff(2.0F, 8.0F);
-        const fbe::golden::frame_t frame = scene.drawn();
-        CAPTURE(shading);
-        if (shading != FBE_SHADING_VERTEX) {
-            CHECK(near(middle(frame), { srgb(expected), srgb(expected), srgb(expected) }));
-        }
-        // Out of its range: nothing but the ambient, which there isn't.
-        require(fbe_entity_set_position(lamp, 0.0F, 0.0F, 2.5F, FBE_SPACE_WORLD));
-        CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
-        fbe_entity_free(lamp);
-        fbe_entity_free(mesh);
-        fbe_material_release(material);
-    }
+    const std::uint64_t material = fbe_material_create();
+    wall(scene.world, -6.0F, 20.0F, material);
+    // 2 straight in front of the wall's middle, range 8.
+    const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, -4.0F, 8.0F);
+    require(fbe_light_set_intensity(lamp, 2.0F));
+    const float expected = 2.0F * falloff(2.0F, 8.0F);
+    CHECK(near(middle(scene.drawn()), { srgb(expected), srgb(expected), srgb(expected) }));
+    // Past its range: nothing but the ambient, which there isn't.
+    require(fbe_light_set_range(lamp, 1.5F));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    fbe_material_release(material);
 }
 
-TEST_CASE("per vertex lighting is worked out at the vertices, and takes the draw's lights",
-          "[gpu][scene]") {
+TEST_CASE("per vertex lighting falls off as range over distance, with no end", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_shading(material, FBE_SHADING_VERTEX));
+    // A small wall, all its vertices about as far from the lamp.
+    wall(scene.world, -1.0F, 0.05F, material);
+    const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, -1.0F, 1.5F);
+    // At 3, half: what's stored.
+    require(fbe_entity_set_position(lamp, 0.0F, 0.0F, 2.0F, FBE_SPACE_WORLD));
+    CHECK(near(middle(scene.drawn()), { 128, 128, 128 }, 1));
+    // At 1.2, inside its range, all of it.
+    require(fbe_entity_set_position(lamp, 0.0F, 0.0F, 0.2F, FBE_SPACE_WORLD));
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }, 1));
+    // Clamped at the vertices, before any texture: a second lamp adds nothing past white.
+    const std::uint64_t half = flat_texture(128, 128, 128, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    require(fbe_material_set_texture(material, 0, half));
+    light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.2F, 1.5F);
+    CHECK(near(middle(scene.drawn()), { 128, 128, 128 }, 1));
+    fbe_texture_release(half);
+    fbe_material_release(material);
+}
+
+TEST_CASE("per vertex lighting is worked out at the vertices", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = fbe_material_create();
     require(fbe_material_set_shading(material, FBE_SHADING_VERTEX));
     wall(scene.world, -3.0F, 10.0F, material);
-    // Far from every corner of a big wall: lit per vertex it's about black, where per pixel it'd
-    // be bright in the middle.
-    light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, -2.5F, 3.0F);
-    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }, 1));
+    // Close to the middle of a big wall: per pixel it's bright there, per vertex as its far
+    // corners.
+    light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, -2.5F, 1.0F);
+    const std::uint8_t dim = middle(scene.drawn())[0];
     require(fbe_material_set_shading(material, FBE_SHADING_PBR));
-    CHECK(middle(scene.drawn())[0] > 200);
+    const std::uint8_t bright = middle(scene.drawn())[0];
+    CHECK(dim < 40);
+    CHECK(bright > dim + 40);
+    fbe_material_release(material);
+}
+
+TEST_CASE("a highlight's where a surface turns its light to the eye, as its shininess says",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    wall(scene.world, -3.0F, 10.0F, material);
+    // A sun from the eye's side, whose reflection comes back to the eye at the wall's middle, past
+    // white with a highlight, and falls away from it at the wall's edge of the view.
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    require(fbe_light_set_intensity(sun, 0.25F));
+    const float plain = 0.25F;
+    CHECK(near(middle(scene.drawn()), { srgb(plain), srgb(plain), srgb(plain) }));
+    require(fbe_material_set_shininess(material, 1.0F));
+    const fbe::golden::frame_t shiny = scene.drawn();
+    const float highlight = 0.25F + 0.25F;
+    CHECK(near(middle(shiny), { srgb(highlight), srgb(highlight), srgb(highlight) }));
+    // At the view's edge, the way halfway to the eye is 15 degrees off the normal, and 100 powers
+    // of that cosine are about 0.03 of it.
+    const float off = 0.25F * std::pow(std::cos(0.2618F), highlight_power);
+    const std::uint8_t edge = srgb(plain + off);
+    CHECK(near(pixel(shiny, 1, frame_size / 2), { edge, edge, edge }, 3));
+    fbe_material_release(material);
+}
+
+TEST_CASE("a layer's UVs turn and scale as Blitz's did", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
+    // Across: red then green. Down: red then blue.
+    const rgba_t reds{ 255, 0, 0, 255 };
+    const rgba_t greens{ 0, 255, 0, 255 };
+    const rgba_t blues{ 0, 0, 255, 255 };
+    const rgba_t whites{ 255, 255, 255, 255 };
+    const std::uint64_t texture = four_pixels(reds, greens, blues, whites);
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_NEAREST));
+    require(fbe_texture_set_wrap(texture, FBE_TEXTURE_CLAMP, FBE_TEXTURE_CLAMP));
+    require(fbe_material_set_texture(material, 0, texture));
+    // 1.15 high at a distance of 1, so a wall half 0.5 fills all but the view's edges.
+    wall(scene.world, -1.0F, 0.5F, material);
+    const std::uint32_t low = (frame_size * 3) / 8;
+    const std::uint32_t high = (frame_size * 5) / 8;
+    fbe::golden::frame_t frame = scene.drawn();
+    CHECK(pixel(frame, low, low) == reds);
+    CHECK(pixel(frame, high, low) == greens);
+    CHECK(pixel(frame, low, high) == blues);
+    // Scaled to 2, it looks twice as big: from the wall's UV 0 to 0.5, all of it in the first
+    // texel.
+    require(fbe_material_set_layer_uv(material, 0, 2.0F, 2.0F, 0.0F, 0.0F, 0.0F));
+    frame = scene.drawn();
+    CHECK(pixel(frame, low, low) == reds);
+    CHECK(pixel(frame, high, low) == reds);
+    CHECK(pixel(frame, low, high) == reds);
+    // Turned a quarter: u = cos(-a) x + sin(-a) y, v = -sin(-a) x + cos(-a) y, around UV 0: at a
+    // quarter turn, u = -v0 and v = u0, so clamped to the first column, the row by its u.
+    require(fbe_material_set_layer_uv(material, 0, 1.0F, 1.0F, 1.5707964F, 0.0F, 0.0F));
+    frame = scene.drawn();
+    CHECK(pixel(frame, low, low) == reds);
+    CHECK(pixel(frame, high, low) == blues);
+    CHECK(pixel(frame, low, high) == reds);
+    fbe_texture_release(texture);
     fbe_material_release(material);
 }
 
@@ -497,20 +603,30 @@ TEST_CASE("fog thickens with depth, each mode by its formula", "[gpu][scene]") {
     require(fbe_camera_set_fog_range(scene.camera, 2.0F, 12.0F));
     require(fbe_camera_set_fog_density(scene.camera, 0.1F));
     const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
-    wall(scene.world, -7.0F, 50.0F, red);
+    const std::uint64_t mesh = wall(scene.world, -7.0F, 50.0F, red);
     const float depth = 7.0F;
+    // On what's stored for UNLIT, in linear light for PBR.
     const auto check_mode = [&](std::int32_t mode, float thick) {
         require(fbe_camera_set_fog_mode(scene.camera, mode));
         CAPTURE(mode);
-        CHECK(near(middle(scene.drawn()), { srgb(1.0F - thick), srgb(thick), 0 }));
+        CHECK(near(middle(scene.drawn()), { stored(1.0F - thick), stored(thick), 0 }));
     };
     check_mode(FBE_FOG_NONE, 0.0F);
-    check_mode(FBE_FOG_LINEAR, (depth - 2.0F) / 10.0F);
+    const float linear_fog = (depth - 2.0F) / 10.0F;
+    check_mode(FBE_FOG_LINEAR, linear_fog);
     check_mode(FBE_FOG_EXPONENTIAL, 1.0F - std::exp(-0.1F * depth));
     check_mode(FBE_FOG_EXPONENTIAL_SQUARED, 1.0F - std::exp(-(0.1F * depth) * (0.1F * depth)));
     // A material that isn't fogged.
     require(fbe_material_set_fogged(red, false));
     CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+    // PBR's, lit by ambient alone, in linear light.
+    const std::uint64_t lit = fbe_material_create();
+    require(fbe_material_set_color(lit, 1.0F, 0.0F, 0.0F, 1.0F));
+    require(fbe_world_set_ambient(scene.world, 1.0F, 1.0F, 1.0F));
+    require(fbe_mesh_set_material(mesh, lit));
+    require(fbe_camera_set_fog_mode(scene.camera, FBE_FOG_LINEAR));
+    CHECK(near(middle(scene.drawn()), { srgb(1.0F - linear_fog), srgb(linear_fog), 0 }));
+    fbe_material_release(lit);
     fbe_material_release(red);
 }
 
@@ -528,8 +644,13 @@ TEST_CASE("blends draw over what's behind them, and what adds fades in fog", "[g
     check_blend(FBE_BLEND_ALPHA, { 0.375F, 0.375F, 0.125F });
     // Its light, scaled by its alpha, added.
     check_blend(FBE_BLEND_ADD, { 0.5F, 0.5F, 0.25F });
-    // What's behind multiplied by it, scaled by its alpha.
-    check_blend(FBE_BLEND_MULTIPLY, { 0.1875F, 0.1875F, 0.125F });
+    // What's behind multiplied by it, scaled by its alpha, on what's stored: 0.735 stored for 0.5.
+    const auto of_stored = [](float encoded) {
+        return encoded <= 0.04045F ? encoded / 12.92F : std::pow((encoded + 0.055F) / 1.055F, 2.4F);
+    };
+    const float half_stored = (1.055F * std::pow(0.5F, 1.0F / 2.4F)) - 0.055F;
+    const float scaled = 0.25F * of_stored(1.0F - (0.5F * (1.0F - half_stored)));
+    check_blend(FBE_BLEND_MULTIPLY, { scaled, scaled, 0.25F * of_stored(0.5F) });
     // In whole fog, what adds adds nothing, what multiplies leaves what's behind, and what's laid
     // over by alpha lays the fog's color over.
     require(fbe_camera_set_fog_mode(scene.camera, FBE_FOG_LINEAR));
@@ -691,7 +812,6 @@ TEST_CASE("sprites draw in bulk, as instances of one quad, facing the camera", "
     fbe::golden::frame_t frame = scene.drawn();
     CHECK(middle(frame) == rgba_t{ 0, 255, 0, 255 });
     CHECK(pixel(frame, 2, 2) == rgba_t{ 0, 0, 0, 255 });
-    fbe_frame_flip(false);
     // A thousand, added, in one draw of the pass.
     const std::uint64_t spark = unlit(0.1F, 0.0F, 0.0F, 1.0F);
     require(fbe_material_set_blend(spark, FBE_BLEND_ADD));
@@ -703,7 +823,6 @@ TEST_CASE("sprites draw in bulk, as instances of one quad, facing the camera", "
     }
     frame = scene.drawn();
     CHECK(middle(frame)[0] == 255);
-    fbe_frame_flip(false);
     fbe_gpu_counters_t counters{};
     require(fbe_gpu_counters(&counters));
     CHECK(counters.triangles >= 2000);
@@ -766,7 +885,6 @@ TEST_CASE("a terrain's drawn from its heights, finer where it's near", "[gpu][sc
     CHECK(near_it[1] > near_it[2]);
     CHECK(pixel(frame, frame_size / 2, 2) == rgba_t{ 0, 0, 255, 255 });
     fbe::golden::check("scene_terrain", frame, { .channel = 2, .share = 0.01 });
-    fbe_frame_flip(false);
     fbe_gpu_counters_t counters{};
     require(fbe_gpu_counters(&counters));
     // Whole, it'd be 2 x 256 x 256 triangles.
@@ -829,9 +947,9 @@ TEST_CASE("a lightmapped, fogged, lit room matches its golden image", "[gpu][sce
     require(fbe_camera_set_fog_color(scene.camera, 0.05F, 0.05F, 0.08F));
     require(fbe_world_set_ambient(scene.world, 0.05F, 0.05F, 0.05F));
     // The room's material, as SCP:CB's: a doubled ambient, a lightmap added on set 1, the diffuse
-    // multiplied on set 0.
+    // multiplied on set 0. (2 x 50 + lightmap) x diffuse, on what's stored.
     const std::uint64_t room = unlit(1.0F, 1.0F, 1.0F);
-    const std::uint64_t ambient = flat_texture(8, 8, 8, 255);
+    const std::uint64_t ambient = flat_texture(50, 50, 50, 255);
     const rgba_t light_gray{ 200, 200, 200, 255 };
     const rgba_t dark_gray{ 120, 120, 120, 255 };
     const std::uint64_t diffuse = four_pixels(light_gray, dark_gray, dark_gray, light_gray);
@@ -851,49 +969,65 @@ TEST_CASE("a lightmapped, fogged, lit room matches its golden image", "[gpu][sce
     require(fbe_material_set_two_sided(room, true));
     const std::uint64_t shell = cube(scene.world, 0.0F, 0.0F, -6.0F, room);
     require(fbe_entity_set_scale(shell, 6.0F, 3.0F, 9.0F, FBE_SPACE_WORLD));
-    // A lit crate and its lamp, a VERTEX pillar, an unlit sign, and glass.
+    // Its lightmap's UVs its own, its set 1 across its faces differently from set 0.
+    const std::uint64_t shell_geometry = fbe_mesh_geometry(shell);
+    const std::int32_t shell_vertices = fbe_surface_vertex_count(shell_geometry, 0);
+    std::vector<fbe_vertex_t> corners(static_cast<std::size_t>(shell_vertices));
+    require(fbe_surface_vertices(shell_geometry, 0, 0, corners.data(), shell_vertices));
+    for (fbe_vertex_t& corner : corners) {
+        corner.uv1 = { .x = corner.uv0.y * 0.5F, .y = 1.0F - corner.uv0.x };
+    }
+    require(fbe_surface_set_vertices(shell_geometry, 0, 0, corners.data(), shell_vertices));
+    // A lit wall the spot falls on, off to the right.
+    const std::uint64_t painted = fbe_material_create();
+    require(fbe_material_set_color(painted, 0.7F, 0.7F, 0.7F, 1.0F));
+    wall(scene.world, -11.0F, 2.8F, painted);
+    const std::uint64_t spot = light(scene.world, FBE_LIGHT_SPOT, 0.8F, 0.3F, -7.0F, 12.0F);
+    require(fbe_light_set_cone(spot, 0.25F, 0.4F));
+    require(fbe_light_set_color(spot, 0.4F, 0.6F, 1.0F));
+    require(fbe_light_set_intensity(spot, 16.0F));
+    // A shiny crate, its lamp in front, seen from its near face, and a VERTEX pillar by the lamp.
     const std::uint64_t crate = fbe_material_create();
     require(fbe_material_set_color(crate, 0.8F, 0.6F, 0.4F, 1.0F));
-    require(fbe_material_set_shininess(crate, 0.5F));
-    const std::uint64_t box = cube(scene.world, -2.0F, -2.0F, -7.0F, crate);
-    require(fbe_entity_set_rotation(box, 0.0F, 0.38268F, 0.0F, 0.92388F, FBE_SPACE_WORLD));
-    const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, -1.0F, 1.0F, -4.0F, 8.0F);
+    require(fbe_material_set_shininess(crate, 1.0F));
+    const std::uint64_t box = cube(scene.world, -1.6F, -1.9F, -6.0F, crate);
+    require(fbe_entity_set_scale(box, 1.0F, 1.0F, 0.2F, FBE_SPACE_WORLD));
+    const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, -1.1F, -1.3F, -3.0F, 8.0F);
     require(fbe_light_set_color(lamp, 1.0F, 0.8F, 0.6F));
     require(fbe_light_set_intensity(lamp, 12.0F));
-    const std::uint64_t spot = light(scene.world, FBE_LIGHT_SPOT, 3.0F, 2.5F, -8.0F, 12.0F);
-    require(fbe_entity_set_rotation(spot, -0.70711F, 0.0F, 0.0F, 0.70711F, FBE_SPACE_WORLD));
-    require(fbe_light_set_cone(spot, 0.3F, 0.5F));
-    require(fbe_light_set_color(spot, 0.4F, 0.6F, 1.0F));
-    require(fbe_light_set_intensity(spot, 20.0F));
     const std::uint64_t retro = fbe_material_create();
     require(fbe_material_set_shading(retro, FBE_SHADING_VERTEX));
-    const std::uint64_t pillar = cube(scene.world, 3.0F, -1.0F, -8.0F, retro);
-    require(fbe_entity_set_scale(pillar, 0.5F, 2.0F, 0.5F, FBE_SPACE_WORLD));
+    require(fbe_material_set_color(retro, 0.3F, 0.5F, 0.3F, 1.0F));
+    const std::uint64_t pillar = wall(scene.world, -5.0F, 1.0F, retro);
+    require(fbe_entity_set_position(pillar, 1.9F, -1.7F, -5.0F, FBE_SPACE_WORLD));
+    const std::uint64_t by_pillar = light(scene.world, FBE_LIGHT_POINT, 1.9F, -1.7F, -4.6F, 0.3F);
+    require(fbe_light_set_intensity(by_pillar, 0.2F));
+    // An unlit sign out of the fog, and glass.
     const std::uint64_t sign = unlit(0.1F, 0.9F, 0.2F);
     require(fbe_material_set_fogged(sign, false));
     const std::uint64_t exit = cube(scene.world, 0.0F, 2.2F, -12.0F, sign);
     require(fbe_entity_set_scale(exit, 0.8F, 0.3F, 0.1F, FBE_SPACE_WORLD));
     const std::uint64_t glass = unlit(0.3F, 0.5F, 0.6F, 0.35F);
-    const std::uint64_t pane = cube(scene.world, 1.0F, -1.8F, -6.0F, glass);
-    require(fbe_entity_set_scale(pane, 0.6F, 1.0F, 0.02F, FBE_SPACE_WORLD));
+    const std::uint64_t pane = cube(scene.world, 0.7F, -1.8F, -4.5F, glass);
+    require(fbe_entity_set_scale(pane, 0.4F, 0.7F, 0.02F, FBE_SPACE_WORLD));
     // And a monitor on the wall, showing the crate from above.
     const std::uint64_t monitor = fbe_texture_create_target(64, 64, FBE_TEXTURE_RGBA8, 1, true);
     const std::uint64_t watching = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
     require(fbe_camera_set_target(watching, monitor));
     require(fbe_camera_set_order(watching, -1));
-    require(fbe_entity_set_position(watching, -2.0F, 2.0F, -3.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(watching, -1.6F, 1.5F, -3.0F, FBE_SPACE_WORLD));
     require(fbe_entity_set_rotation(watching, -0.25882F, 0.0F, 0.0F, 0.96593F, FBE_SPACE_WORLD));
     const std::uint64_t screen = unlit(1.0F, 1.0F, 1.0F);
     require(fbe_material_set_texture(screen, 0, monitor));
     const std::uint64_t tv = wall(scene.world, -14.9F, 1.5F, screen);
-    require(fbe_entity_set_position(tv, -2.0F, 1.0F, -14.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(tv, -3.5F, 2.0F, -14.0F, FBE_SPACE_WORLD));
     fbe::golden::check("scene_room", scene.drawn());
     fbe_entity_free(watching);
     fbe_texture_release(monitor);
     for (const std::uint64_t texture : { ambient, diffuse, lightmap }) {
         fbe_texture_release(texture);
     }
-    for (const std::uint64_t material : { room, crate, retro, sign, glass, screen }) {
+    for (const std::uint64_t material : { room, crate, retro, sign, glass, screen, painted }) {
         fbe_material_release(material);
     }
 }
@@ -1042,5 +1176,327 @@ TEST_CASE("a skinned surface moves by its skin's joints, before its own matrix",
     const auto half_way = static_cast<std::uint32_t>(64.0F + (32.0F * across_view));
     CHECK(pixel(scene.drawn(), half_way, 64) == rgba_t{ 255, 0, 0, 255 });
     fbe_skin_release(skin);
+    fbe_material_release(red);
+}
+
+TEST_CASE("UNLIT and VERTEX work on what's stored", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const auto stored_by = [&](std::int32_t shading, std::array<std::uint64_t, 3> layers,
+                               std::array<std::int32_t, 3> blends) {
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shading(material, shading));
+        for (std::int32_t i = 0; i < 3; ++i) {
+            const auto at = static_cast<std::size_t>(i);
+            require(fbe_material_set_texture(material, i, layers[at]));
+            require(fbe_material_set_layer(material, i, blends[at], 0));
+        }
+        const std::uint64_t mesh = wall(scene.world, -3.0F, 10.0F, material);
+        const rgba_t found = middle(scene.drawn());
+        fbe_entity_free(mesh);
+        fbe_material_release(material);
+        return found;
+    };
+    const std::uint64_t fifty = flat_texture(50, 50, 50, 255);
+    const std::uint64_t sixty = flat_texture(60, 60, 60, 255);
+    const std::uint64_t two_hundred = flat_texture(200, 200, 200, 255);
+    const std::uint64_t middling = flat_texture(128, 128, 128, 255);
+    require(fbe_world_set_ambient(scene.world, 1.0F, 1.0F, 1.0F));
+    for (const std::int32_t shading : { FBE_SHADING_UNLIT, FBE_SHADING_VERTEX }) {
+        CAPTURE(shading);
+        // Ambient 50 doubled is 100.
+        CHECK(near(stored_by(shading, { fifty, 0, 0 }, { FBE_LAYER_MULTIPLY_2, 0, 0 }),
+                   { 100, 100, 100 }, 1));
+        // (2 x 50 + lightmap 60) x diffuse 200 is 125.
+        CHECK(near(stored_by(shading, { fifty, sixty, two_hundred },
+                             { FBE_LAYER_MULTIPLY_2, FBE_LAYER_ADD, FBE_LAYER_MULTIPLY }),
+                   { 125, 125, 125 }, 1));
+        // 128 doubled over white is clamped to white.
+        CHECK(near(stored_by(shading, { middling, 0, 0 }, { FBE_LAYER_MULTIPLY_2, 0, 0 }),
+                   { 255, 255, 255 }, 1));
+    }
+    for (const std::uint64_t texture : { fifty, sixty, two_hundred, middling }) {
+        fbe_texture_release(texture);
+    }
+}
+
+TEST_CASE("a texture's alpha flag blends a material that's AUTO", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t material = unlit(1.0F, 1.0F, 1.0F);
+    const std::uint64_t half = flat_texture(255, 255, 255, 128);
+    require(fbe_material_set_texture(material, 0, half));
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 10.0F, material);
+    // Opaque till it's said.
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 255, 255, 255 });
+    CHECK_FALSE(fbe_texture_alpha(half));
+    require(fbe_texture_set_alpha(half, true));
+    CHECK(fbe_texture_alpha(half));
+    const float over = 128.0F / 255.0F;
+    CHECK(near(middle(scene.drawn()), { srgb(over), srgb(over), 255 }));
+    CHECK(fbe_mesh_blend(mesh, 0) == FBE_BLEND_ALPHA);
+    // A cutoff takes it as a mask instead.
+    require(fbe_material_set_alpha_cutoff(material, 0.25F));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 255, 255, 255 });
+    fbe_texture_release(half);
+    fbe_material_release(material);
+}
+
+namespace {
+
+/// A small wall on a skin of two joints, by name under `bones`, each where the mesh is.
+struct skinned_wall_t {
+    std::uint64_t mesh = 0;
+    std::uint64_t geometry = 0;
+    std::uint64_t skin = 0;
+    std::uint64_t still = 0;
+    std::uint64_t moving = 0;
+};
+
+skinned_wall_t skinned_wall(std::uint64_t world, std::uint64_t material, float z, float half) {
+    skinned_wall_t made;
+    made.mesh = wall(world, z, half, material);
+    made.geometry = fbe_mesh_geometry(made.mesh);
+    const std::uint64_t bones = fbe_entity_create(world, 0, FBE_ENTITY_PIVOT);
+    made.still = fbe_entity_create(world, bones, FBE_ENTITY_PIVOT);
+    made.moving = fbe_entity_create(world, bones, FBE_ENTITY_PIVOT);
+    require(fbe_entity_set_name(made.still, "still"));
+    require(fbe_entity_set_name(made.moving, "moving"));
+    require(fbe_entity_set_position(made.still, 0.0F, 0.0F, z, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(made.moving, 0.0F, 0.0F, z, FBE_SPACE_WORLD));
+    made.skin = fbe_skin_create();
+    std::array<float, 16> inverse_bind{};
+    inverse_bind[0] = 1.0F;
+    inverse_bind[5] = 1.0F;
+    inverse_bind[10] = 1.0F;
+    inverse_bind[15] = 1.0F;
+    require(fbe_skin_add_joint(made.skin, "still", inverse_bind.data()));
+    require(fbe_skin_add_joint(made.skin, "moving", inverse_bind.data()));
+    require(fbe_skin_attach(made.mesh, made.skin, bones));
+    return made;
+}
+
+void all_on(std::uint64_t geometry, std::uint16_t joint, float weight) {
+    std::array<fbe_vertex_joints_t, 4> joints{};
+    for (fbe_vertex_joints_t& vertex : joints) {
+        vertex.joints[0] = joint;
+        vertex.weights[0] = weight;
+    }
+    require(fbe_surface_set_joints(geometry, 0, joints.data(), 4));
+}
+
+} // namespace
+
+TEST_CASE("a joint past the palette is its last, never a read past it", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const skinned_wall_t made = skinned_wall(scene.world, red, -3.0F, 0.1F);
+    all_on(made.geometry, 65000, 1.0F);
+    require(fbe_entity_set_position(made.moving, 1.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    const fbe::golden::frame_t frame = scene.drawn();
+    // As the last joint: moved 1 across.
+    CHECK(middle(frame) == rgba_t{ 0, 0, 255, 255 });
+    const float across_view = 1.0F / std::numbers::sqrt3_v<float>;
+    CHECK(pixel(frame, static_cast<std::uint32_t>(64.0F + (64.0F * across_view)), 64) ==
+          rgba_t{ 255, 0, 0, 255 });
+    fbe_skin_release(made.skin);
+    fbe_material_release(red);
+}
+
+TEST_CASE("a vertex with no weight stays where it is", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const skinned_wall_t made = skinned_wall(scene.world, red, -3.0F, 0.1F);
+    all_on(made.geometry, 1, 0.0F);
+    std::array<fbe_vertex_joints_t, 4> read_back{};
+    REQUIRE(fbe_surface_joints(made.geometry, 0, read_back.data(), 4) == 4);
+    CHECK(read_back[0].joints[0] == FBE_NO_JOINT);
+    CHECK(read_back[0].weights[0] == 1.0F);
+    require(fbe_entity_set_position(made.moving, 1.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    fbe_skin_release(made.skin);
+    fbe_material_release(red);
+}
+
+TEST_CASE("a skinned mesh moved into view by its joints is drawn", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    // Its bind pose far behind the camera, its joints in front of it.
+    const skinned_wall_t made = skinned_wall(scene.world, red, 50.0F, 0.1F);
+    all_on(made.geometry, 1, 1.0F);
+    require(fbe_entity_set_position(made.moving, 0.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    fbe_skin_release(made.skin);
+    fbe_material_release(red);
+}
+
+TEST_CASE("a skinned normal leans as a bone scaled along an axis has it", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    // A surface whose normal leans at 45 degrees, on a bone scaled by 4 across.
+    const skinned_wall_t made = skinned_wall(scene.world, material, -3.0F, 0.1F);
+    std::array<fbe_vertex_t, 4> vertices{};
+    require(fbe_surface_vertices(made.geometry, 0, 0, vertices.data(), 4));
+    const float lean = std::numbers::sqrt2_v<float> / 2.0F;
+    for (fbe_vertex_t& vertex : vertices) {
+        vertex.normal = { .x = lean, .y = 0.0F, .z = lean };
+    }
+    require(fbe_surface_set_vertices(made.geometry, 0, 0, vertices.data(), 4));
+    all_on(made.geometry, 1, 1.0F);
+    require(fbe_entity_set_scale(made.moving, 4.0F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    (void)sun;
+    // The cofactor's (1/4, 0, 1) direction: its normal's z of 1 over the length of that.
+    const float x = lean / 4.0F;
+    const float facing = lean / std::sqrt((x * x) + (lean * lean));
+    CHECK(near(middle(scene.drawn()), { srgb(facing), srgb(facing), srgb(facing) }));
+    fbe_skin_release(made.skin);
+    fbe_material_release(material);
+}
+
+TEST_CASE("a mirror scaled to nothing reflects nothing", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    cube(scene.world, 0.0F, 2.0F, -8.0F, red);
+    const std::uint64_t mirror = fbe_entity_create(scene.world, 0, FBE_ENTITY_MIRROR);
+    const fbe::golden::frame_t both = scene.drawn();
+    CHECK(pixel(both, frame_size / 2, 80)[0] == 255);
+    require(fbe_entity_set_scale(mirror, 1.0F, 0.0F, 1.0F, FBE_SPACE_WORLD));
+    const fbe::golden::frame_t without = scene.drawn();
+    CHECK(pixel(without, frame_size / 2, 80) == rgba_t{ 0, 0, 255, 255 });
+    fbe_material_release(red);
+}
+
+TEST_CASE("a viewport past the device's limits draws what it can, and no validation error",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 1.0F, 0.0F, 1.0F));
+    require(fbe_camera_set_viewport(scene.camera, 0.0F, 0.0F, 100000.0F, 100000.0F));
+    CHECK(pixel(scene.drawn(), 5, 5) == rgba_t{ 0, 255, 0, 255 });
+    CHECK(fbe_gpu_validation_errors() == 0);
+    require(fbe_camera_set_viewport(scene.camera, -3e9F, -3e9F, 6e9F, 6e9F));
+    CHECK(pixel(scene.drawn(), 5, 5) == rgba_t{ 0, 255, 0, 255 });
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("a layer sampling what's drawn into leaves what's under it, by its blend",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t material = unlit(0.25F, 0.25F, 0.25F);
+    const float expected_linear = 0.25F;
+    wall(scene.world, -3.0F, 10.0F, material);
+    require(fbe_material_set_texture(material, 0, scene.target));
+    for (const std::int32_t blend :
+         { FBE_LAYER_MULTIPLY, FBE_LAYER_ADD, FBE_LAYER_ALPHA, FBE_LAYER_MULTIPLY_2 }) {
+        require(fbe_material_set_layer(material, 0, blend, 0));
+        CAPTURE(blend);
+        CHECK(near(middle(scene.drawn()),
+                   { srgb(expected_linear), srgb(expected_linear), srgb(expected_linear) }));
+    }
+    // A bump layer's gray shifts nothing.
+    const std::uint64_t texture = fbe_texture_create(2, 1, FBE_TEXTURE_RGBA8, false);
+    const std::array<std::uint8_t, 8> pixels{ 255, 0, 0, 255, 0, 255, 0, 255 };
+    require(fbe_texture_write(texture, 0, 0, 2, 1, pixels.data(), 8));
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_NEAREST));
+    require(fbe_material_set_color(material, 1.0F, 1.0F, 1.0F, 1.0F));
+    require(fbe_material_set_layer(material, 0, FBE_LAYER_BUMP, 0));
+    require(fbe_material_set_layer_bump(material, 0, 100.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F));
+    require(fbe_material_set_texture(material, 1, texture));
+    fbe_texture_release(texture);
+    const std::uint64_t small = wall(scene.world, -1.0F, 2.0F, material);
+    (void)small;
+    CHECK(pixel(scene.drawn(), (frame_size * 3) / 8, frame_size / 2) == rgba_t{ 255, 0, 0, 255 });
+    fbe_material_release(material);
+}
+
+TEST_CASE("a sky in an order below 0 hides a mirror's reflection", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    cube(scene.world, 0.0F, 2.0F, -8.0F, red);
+    fbe_entity_create(scene.world, 0, FBE_ENTITY_MIRROR);
+    CHECK(pixel(scene.drawn(), frame_size / 2, 80)[0] == 255);
+    const std::uint64_t sky = unlit(0.0F, 0.0F, 1.0F);
+    require(fbe_material_set_order(sky, -1));
+    wall(scene.world, -50.0F, 200.0F, sky);
+    CHECK(pixel(scene.drawn(), frame_size / 2, 80) == rgba_t{ 0, 0, 255, 255 });
+    fbe_material_release(red);
+    fbe_material_release(sky);
+}
+
+TEST_CASE("vertices added let go of a surface's joints", "[gpu][scene]") {
+    const std::uint64_t geometry = fbe_geometry_cube();
+    const std::int32_t count = fbe_surface_vertex_count(geometry, 0);
+    std::vector<fbe_vertex_joints_t> joints(static_cast<std::size_t>(count));
+    require(fbe_surface_set_joints(geometry, 0, joints.data(), count));
+    CHECK(fbe_surface_joints(geometry, 0, nullptr, 0) == count);
+    std::array<fbe_vertex_t, 1> one{};
+    REQUIRE(fbe_surface_add_vertices(geometry, 0, one.data(), 1) == count);
+    CHECK(fbe_surface_joints(geometry, 0, nullptr, 0) == 0);
+    fbe_geometry_release(geometry);
+}
+
+TEST_CASE("a wireframe material draws lines, where the device can", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.5F, red);
+    (void)mesh;
+    // A quarter of the way along the wall's bottom edge's height: inside a triangle, off its lines.
+    const auto reds = [&] {
+        const fbe::golden::frame_t frame = scene.drawn();
+        int count = 0;
+        for (std::size_t at = 0; at < frame.rgba.size(); at += 4) {
+            count += frame.rgba[at] > 128 ? 1 : 0;
+        }
+        return count;
+    };
+    const int filled = reds();
+    CHECK(fbe_material_set_wireframe(red, true));
+    CHECK(fbe_material_wireframe(red));
+    const int lined = reds();
+    CHECK(fbe_gpu_validation_errors() == 0);
+    if (fbe::gpu::device()->wireframe) {
+        CHECK(lined < filled / 2);
+        CHECK(lined > 0);
+    }
+    fbe_material_release(red);
+}
+
+TEST_CASE("a geometry edited between two cameras is the next frame's, for both", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t second_target =
+        fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 1, true);
+    const std::uint64_t second = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+    require(fbe_camera_set_target(second, second_target));
+    require(fbe_camera_set_clear_color(second, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.1F, red);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    require(fbe_render_camera(scene.camera, 1.0F));
+    // Moved off to the side, between them: the second draws as the first did.
+    std::array<fbe_vertex_t, 4> vertices{};
+    require(fbe_surface_vertices(geometry, 0, 0, vertices.data(), 4));
+    for (fbe_vertex_t& vertex : vertices) {
+        vertex.position.x += 1.0F;
+    }
+    require(fbe_surface_set_vertices(geometry, 0, 0, vertices.data(), 4));
+    require(fbe_render_camera(second, 1.0F));
+    CHECK(middle(scene_t::read(scene.target)) == rgba_t{ 255, 0, 0, 255 });
+    CHECK(middle(scene_t::read(second_target)) == rgba_t{ 255, 0, 0, 255 });
+    // The next frame, both have it.
+    fbe_frame_flip(false);
+    require(fbe_render_camera(second, 1.0F));
+    CHECK(middle(scene_t::read(second_target)) == rgba_t{ 0, 0, 255, 255 });
+    fbe_entity_free(second);
+    std::array<std::uint64_t, 16> some{};
+    while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+    fbe_texture_release(second_target);
     fbe_material_release(red);
 }

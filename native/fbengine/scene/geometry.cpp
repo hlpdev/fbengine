@@ -250,47 +250,22 @@ void geometry_bounds(std::uint32_t geometry, vec3_t& min, vec3_t& max) {
         bool any = false;
         vec3_t low;
         vec3_t high;
-        for (surface_t& surface : found.surfaces) {
-            surface.bounds_min = vec3_t();
-            surface.bounds_max = vec3_t();
-            if (!surface.vertices.empty()) {
-                surface.bounds_min = vec(surface.vertices[0].position);
-                surface.bounds_max = surface.bounds_min;
-            }
+        for (const surface_t& surface : found.surfaces) {
             for (const fbe_vertex_t& vertex : surface.vertices) {
                 const vec3_t p = vec(vertex.position);
-                const vec3_t& least = surface.bounds_min;
-                const vec3_t& most = surface.bounds_max;
-                surface.bounds_min = { std::fmin(least.x, p.x), std::fmin(least.y, p.y),
-                                       std::fmin(least.z, p.z) };
-                surface.bounds_max = { std::fmax(most.x, p.x), std::fmax(most.y, p.y),
-                                       std::fmax(most.z, p.z) };
-            }
-            if (!surface.vertices.empty()) {
-                low = any ? vec3_t(std::fmin(low.x, surface.bounds_min.x),
-                                   std::fmin(low.y, surface.bounds_min.y),
-                                   std::fmin(low.z, surface.bounds_min.z))
-                          : surface.bounds_min;
-                high = any ? vec3_t(std::fmax(high.x, surface.bounds_max.x),
-                                    std::fmax(high.y, surface.bounds_max.y),
-                                    std::fmax(high.z, surface.bounds_max.z))
-                           : surface.bounds_max;
-                any = true;
+                if (!any) {
+                    low = p;
+                    high = p;
+                    any = true;
+                }
+                low = { std::fmin(low.x, p.x), std::fmin(low.y, p.y), std::fmin(low.z, p.z) };
+                high = { std::fmax(high.x, p.x), std::fmax(high.y, p.y), std::fmax(high.z, p.z) };
             }
         }
         found.bounds_min = low;
         found.bounds_max = high;
         found.bounds_stale = false;
     }
-    min = found.bounds_min;
-    max = found.bounds_max;
-}
-
-void surface_bounds(std::uint32_t geometry, std::size_t surface, vec3_t& min, vec3_t& max) {
-    vec3_t whole_min;
-    vec3_t whole_max;
-    geometry_bounds(geometry, whole_min, whole_max);
-    const surface_t& found = scene().geometries[geometry].surfaces[surface];
     min = found.bounds_min;
     max = found.bounds_max;
 }
@@ -583,6 +558,7 @@ FBE_API int32_t fbe_surface_add_vertices(uint64_t geometry, int32_t surface,
     }
     const auto first = static_cast<std::int32_t>(found->vertices.size());
     found->vertices.insert(found->vertices.end(), vertices, vertices + count);
+    found->joints.clear();
     fbe::scene::touch_geometry(geometry_slot(geometry), false);
     return first;
 }
@@ -648,6 +624,14 @@ FBE_API bool fbe_surface_set_joints(uint64_t geometry, int32_t surface,
                                      found->vertices.size(), count));
     }
     found->joints.assign(joints, joints + count);
+    // One with no weight at all would take its triangles with it: it's on no bone.
+    for (fbe_vertex_joints_t& vertex : found->joints) {
+        if (vertex.weights[0] == 0.0F && vertex.weights[1] == 0.0F && vertex.weights[2] == 0.0F &&
+            vertex.weights[3] == 0.0F) {
+            vertex.joints[0] = FBE_NO_JOINT;
+            vertex.weights[0] = 1.0F;
+        }
+    }
     fbe::scene::touch_geometry(geometry_slot(geometry), false);
     return true;
 }

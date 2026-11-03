@@ -27,7 +27,7 @@ extern "C" {
 #define FBE_CLUSTERS_DEEP   24
 #define FBE_CLUSTERS        3456
 
-// The most lights an FBE_SHADING_VERTEX draw is lit by, as Blitz's first eight in the tree's order.
+// The most lights an FBE_SHADING_VERTEX draw is lit by: Blitz's first eight in the tree's order.
 #define FBE_DRAW_LIGHTS 8
 
 // NOLINTBEGIN(modernize-use-using)
@@ -42,11 +42,11 @@ extern "C" {
 // material isn't fogged, 10 and 11 its FBE_DEPTH_, and 12 whether its matrix mirrors it, its
 // determinant below 0, which turns its triangles' winding around, 13 to 16 how many of its
 // material's layers have textures, and from 17 those layers', four bits each from the lowest, the
-// FBE_LAYER_ blend and over it the UV set; the default material is a new one's, but for a sprite,
-// which is full-bright with none. A target's format and samples aren't in it, since a camera's
-// draws all go into one target, and they're in the pipeline a pass makes of it. An
-// FBE_SHADING_VERTEX draw has its own lights, `light_count` of fbe_render_draw_lights' indices from
-// `light_first`; any other, 0 of them, as it's lit by its clusters.
+// FBE_LAYER_ blend and over it the UV set, and 49 whether it's wireframe; the default material is a
+// new one's, but for a sprite, which is full-bright with none. A target's format and samples aren't
+// in it, since a camera's draws all go into one target, and they're in the pipeline a pass makes of
+// it. An FBE_SHADING_VERTEX draw has its own lights, `light_count` of fbe_render_draw_lights'
+// indices from `light_first`; any other, 0 of them, as it's lit by its clusters.
 typedef struct fbe_draw_t {
     uint64_t entity;
     int32_t kind;
@@ -67,8 +67,10 @@ typedef struct fbe_draw_t {
 // intensity, linear; where it is and the way it shines, in the camera's view, x right, y up,
 // looking down -z, `tween` of the way, as the draws are; its range, where a point or spot light
 // ends; and the cosines of a spot light's cone, from its axis to where it starts to fade and to
-// where it's out. Every shading model falls off as glTF's KHR_lights_punctual does: a distance d
-// from a point or spot light, its color times clamp(1 - (d / range)^4, 0, 1)^2 / max(d^2, 0.0001).
+// where it's out. Per pixel, a distance d from a point or spot light has its color times glTF's
+// KHR_lights_punctual falloff, clamp(1 - (d / range)^4, 0, 1)^2 / max(d^2, 0.0001), which ends at
+// its range, as clusters need; per vertex, FBE_SHADING_VERTEX, min(range / d, 1), with no end, as
+// fixed-function hardware's: each model's range means its own.
 typedef struct fbe_draw_light_t {
     uint64_t light;
     int32_t type;
@@ -114,20 +116,21 @@ FBE_API bool fbe_render_lights(uint64_t camera, float target_width, float target
                                int32_t* light_count, fbe_cluster_t* clusters, uint32_t* indices,
                                int32_t index_capacity, int32_t* index_count);
 
-// The lights of a camera's FBE_SHADING_VERTEX draws, by their indices in fbe_render_lights' lights,
-// each draw's together, from its `light_first`: the first FBE_DRAW_LIGHTS, in the tree's order, of
-// the lights whose range reaches its world bounds, or for a ground plane the plane, as directional
-// lights always do. Writes up to `capacity` and gives how many there are, -1 for a freed camera, or
-// a tween outside 0 to 1.
+// The lights of a camera's FBE_SHADING_VERTEX draws, by their indices in fbe_render_lights' lights:
+// the first FBE_DRAW_LIGHTS of its World's showing lights, in the tree's order, directional ones
+// among them, whatever they reach, which every such draw takes, from its `light_first`. Writes up
+// to `capacity` and gives how many there are, -1 for a freed camera, or a tween outside 0 to 1.
 FBE_API int32_t fbe_render_draw_lights(uint64_t camera, float target_width, float target_height,
                                        float tween, uint32_t* indices, int32_t capacity);
 
 // Draws a camera into its target, `tween` of the way from its World's last capture, as a pass of
 // the frame, starting the GPU if nothing has, unless it's hidden: first it clears what it clears of
-// its viewport, then every showing mirror of its World reflects the whole scene into its viewport
-// and depth, no clip plane, as Blitz's did, then the scene, which covers that unless what's on the
-// mirror's plane lets it through. False, with fbe_error's why, for a freed camera, a tween outside
-// 0 to 1, a GPU that can't start, or with no target and no window.
+// its viewport, then every showing mirror of its World with an inverse reflects the whole scene
+// into its viewport and depth, no clip plane, as Blitz's did, then the scene, which covers that
+// unless what's on the mirror's plane lets it through. An order below 0 draws after the
+// reflections, so a sky hides them: a mirror's game leaves its sky out of what's opaque. False,
+// with fbe_error's why, for a freed camera, a tween outside 0 to 1, a GPU that can't start, or with
+// no target and no window.
 FBE_API bool fbe_render_camera(uint64_t camera, float tween);
 // Draws every one of a World's cameras, in their order; false as fbe_render_camera is, or for a
 // freed World.

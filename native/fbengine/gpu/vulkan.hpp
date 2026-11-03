@@ -79,6 +79,8 @@ struct device_t {
     VkPhysicalDeviceProperties properties{};
     /// The most anisotropy its samplers take, 0 if it has none.
     float max_anisotropy = 0.0F;
+    /// Whether it can draw triangles as lines.
+    bool wireframe = false;
     /// The furthest its samplers bias a texture's mipmaps, 0 if they can't, as Metal's can't.
     float max_lod_bias = 0.0F;
     /// How many bits of a timestamp its queue writes, 0 if it writes none, and how many

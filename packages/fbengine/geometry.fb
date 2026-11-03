@@ -516,8 +516,8 @@ Public Struct Surface
     End Method
 
     /// Sets its vertices' joints, one for each, or none with an empty list, which drawing skins it
-    /// by when its Mesh has a skin. Vertices added since or cleared let go of them. Another count
-    /// panics.
+    /// by when its Mesh has a skin. A vertex with no weight at all stays where it is. Vertices added
+    /// since or cleared let go of them. Another count panics.
     @MainThread @PanicsAtCaller
     Public Method SetJoints(joints: VertexJoints[])
         Local geometry = Owner.Live("SetJoints")

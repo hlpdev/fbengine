@@ -118,7 +118,18 @@ std::int32_t drawn_blend(std::uint32_t material, float alpha) {
     const material_t drawn = material != none ? scene().materials[material] : material_t();
     switch (drawn.blend) {
     case FBE_BLEND_AUTO:
-        return drawn.color[3] * alpha < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
+        if (drawn.color[3] * alpha < 1.0F) {
+            return FBE_BLEND_ALPHA;
+        }
+        // A cutoff takes a texture's alpha as a mask instead.
+        if (drawn.alpha_cutoff <= 0.0F) {
+            for (const layer_t& layer : drawn.layers) {
+                if (layer.texture != 0 && fbe_texture_alpha(layer.texture)) {
+                    return FBE_BLEND_ALPHA;
+                }
+            }
+        }
+        return FBE_BLEND_OPAQUE;
     case FBE_BLEND_OPAQUE:
         // An opaque material's own alpha is left out, but what draws in it still fades.
         return alpha < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
@@ -295,6 +306,20 @@ FBE_API bool fbe_material_set_two_sided(uint64_t material, bool two_sided) {
 FBE_API bool fbe_material_two_sided(uint64_t material) {
     const material_t* found = material_of(material);
     return found != nullptr && found->two_sided;
+}
+
+FBE_API bool fbe_material_set_wireframe(uint64_t material, bool wireframe) {
+    material_t* found = material_of(material);
+    if (found == nullptr) {
+        return false;
+    }
+    found->wireframe = wireframe;
+    return true;
+}
+
+FBE_API bool fbe_material_wireframe(uint64_t material) {
+    const material_t* found = material_of(material);
+    return found != nullptr && found->wireframe;
 }
 
 FBE_API bool fbe_material_set_fogged(uint64_t material, bool fogged) {

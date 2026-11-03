@@ -28,9 +28,10 @@ namespace {
 using scene::mat4_t;
 using scene::vec3_t;
 
-/// A geometry's surfaces on the GPU, and the version of it they're of.
+/// A geometry's surfaces on the GPU, the version of it they're of, and the frame they were sent in.
 struct geometry_buffers_t {
     std::uint64_t version = UINT64_MAX;
+    std::int64_t frame = -1;
     std::vector<surface_buffers_t> surfaces;
 };
 
@@ -217,7 +218,11 @@ const surface_buffers_t* surface_buffers(std::uint64_t geometry, std::size_t sur
     }
     const scene::geometry_t& found = s.geometries[*slot];
     geometry_buffers_t& buffers = kept()[geometry];
-    if (buffers.version != found.version) {
+    // Once a frame: what's written goes to every draw of the frame, those recorded before too, so
+    // an edit between two cameras would pair new indices with old vertices. It's the next's.
+    const std::int64_t frame = fbe_frame_count();
+    if (buffers.version != found.version && buffers.frame != frame) {
+        buffers.frame = frame;
         // Surfaces gone go; each that's left is sent again.
         for (std::size_t i = found.surfaces.size(); i < buffers.surfaces.size(); ++i) {
             free_surface(buffers.surfaces[i]);
@@ -240,7 +245,9 @@ const surface_buffers_t* surface_buffers(std::uint64_t geometry, std::size_t sur
         }
         buffers.version = found.version;
     }
-    return &buffers.surfaces[surface];
+    // One added since, in the frame it's waiting for.
+    static const surface_buffers_t none_yet;
+    return surface < buffers.surfaces.size() ? &buffers.surfaces[surface] : &none_yet;
 }
 
 const surface_buffers_t* sprite_quad() {

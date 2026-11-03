@@ -57,13 +57,15 @@ extern "C" {
 #define FBE_FOG_EXPONENTIAL_SQUARED 3
 
 // How a material is lit: physically, as glTF's metal and roughness have it; not at all, its color
-// as it is; or per vertex, as fixed-function hardware lit, for an old look.
+// as it is; or per vertex, as fixed-function hardware lit, for an old look. UNLIT and VERTEX are
+// that fixed-function look, working on what's stored, sRGB's encoded values: 50 doubled is 100.
 #define FBE_SHADING_PBR    0
 #define FBE_SHADING_UNLIT  1
 #define FBE_SHADING_VERTEX 2
 
 // How a material blends with what's drawn behind it: AUTO, opaque unless its alpha times its
-// mesh's is below 1, then alpha; OPAQUE, which leaves its own and its textures' alpha out, though
+// mesh's is below 1, or, with no alpha cutoff, a layer's texture has alpha (fbe_texture_set_alpha),
+// then alpha; OPAQUE, which leaves its own and its textures' alpha out, though
 // its mesh's alpha below 1 still blends it as alpha, so a mesh fades whatever it draws in; alpha;
 // adding its light, scaled by its alpha; or multiplying what's behind, scaled by its alpha.
 #define FBE_BLEND_AUTO     0
@@ -178,7 +180,9 @@ typedef struct fbe_vertex_t {
 } fbe_vertex_t;
 
 // A vertex's joints, beside its fbe_vertex_t: which four of its skin's joints move it, as glTF's
-// JOINTS_0 indexes them, and how much of each, as its WEIGHTS_0.
+// JOINTS_0 indexes them, and how much of each, as its WEIGHTS_0. FBE_NO_JOINT is no bone, which
+// leaves it as it is; one past its palette is drawn as the palette's last.
+#define FBE_NO_JOINT 0xFFFF
 typedef struct fbe_vertex_joints_t {
     uint16_t joints[4];
     float weights[4];
@@ -408,8 +412,9 @@ FBE_API bool fbe_light_color(uint64_t light, fbe_color_t* color);
 // False below 0.
 FBE_API bool fbe_light_set_intensity(uint64_t light, float intensity);
 FBE_API float fbe_light_intensity(uint64_t light);
-// How far a point or spot light reaches: nothing past it is lit by it, and how it falls off
-// before is the shading model's. False unless above 0.
+// How far a point or spot light reaches, in its shading model's meaning: per pixel, where it ends,
+// the inverse square windowed to 0 there; per vertex, FBE_SHADING_VERTEX, where it starts to fall,
+// as range over distance, with no end. False unless above 0.
 FBE_API bool fbe_light_set_range(uint64_t light, float range);
 FBE_API float fbe_light_range(uint64_t light);
 // A spot light's cone: the angle from its axis where it starts to fade, and where it's out;
@@ -502,9 +507,9 @@ FBE_API int32_t fbe_surface_add_vertices(uint64_t geometry, int32_t surface,
 FBE_API int32_t fbe_surface_add_triangles(uint64_t geometry, int32_t surface,
                                           const uint32_t* indices, int32_t count);
 // Sets a surface's vertices' joints, `count` of them, one for each vertex, or none with 0, which
-// drawing skins it by when its mesh has a skin; false for another count. Vertices added since or
-// cleared let go of them. Reading them writes up to `capacity` and gives how many there are, -1 for
-// a freed geometry.
+// drawing skins it by when its mesh has a skin; false for another count. A vertex with no weight
+// at all is on FBE_NO_JOINT, whole. Vertices added since or cleared let go of them. Reading them
+// writes up to `capacity` and gives how many there are, -1 for a freed geometry.
 FBE_API bool fbe_surface_set_joints(uint64_t geometry, int32_t surface,
                                     const fbe_vertex_joints_t* joints, int32_t count);
 FBE_API int32_t fbe_surface_joints(uint64_t geometry, int32_t surface, fbe_vertex_joints_t* joints,
@@ -556,6 +561,9 @@ FBE_API bool fbe_material_vertex_colors(uint64_t material);
 // Whether triangles are drawn from behind too.
 FBE_API bool fbe_material_set_two_sided(uint64_t material, bool two_sided);
 FBE_API bool fbe_material_two_sided(uint64_t material);
+// Whether its triangles are drawn as lines, where the GPU can; filled, where it can't.
+FBE_API bool fbe_material_set_wireframe(uint64_t material, bool wireframe);
+FBE_API bool fbe_material_wireframe(uint64_t material);
 // Whether cameras' fog covers it.
 FBE_API bool fbe_material_set_fogged(uint64_t material, bool fogged);
 FBE_API bool fbe_material_fogged(uint64_t material);

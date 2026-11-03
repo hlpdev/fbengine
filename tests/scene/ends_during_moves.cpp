@@ -3,6 +3,10 @@
 // with the workers still reading them, so what they read has to outlive it. Each round's a process
 // of its own, at another moment in the moves, and each has to end with its exit's code.
 
+// Windows ends a process's threads first, and has no fork: tests/CMakeLists.txt builds this
+// elsewhere.
+#ifndef _WIN32
+
 #include "fbengine.h"
 
 #include <array>
@@ -61,3 +65,5 @@ int main() {
     std::puts("ended");
     return 0;
 }
+
+#endif

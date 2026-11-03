@@ -41,7 +41,8 @@ using scene::vec3_t;
 
 /// A draw as the scene shader reads it: its matrix to the camera's view; the rows of what turns
 /// its normals there; its color and alpha; its vertices' address; its joints' and palette's, if
-/// it's skinned; its material's index in the camera's; its own lights; and whether it's skinned.
+/// it's skinned; its material's index in the camera's; its own lights; and how many matrices its
+/// palette has, 0 if it isn't skinned.
 struct draw_data_t {
     std::array<float, 16> to_view;
     std::array<std::array<float, 4>, 3> normals;
@@ -52,12 +53,13 @@ struct draw_data_t {
     std::uint32_t material;
     std::uint32_t light_first;
     std::uint32_t light_count;
-    std::uint32_t skinned;
+    std::uint32_t joint_count;
 };
 static_assert(sizeof(draw_data_t) == 168, "the scene shader reads draws 168 bytes apart");
 
 /// A layer as the scene shader reads it: its texture's and sampler's indices in the bindless set,
-/// how a bump layer scales the next layer's light, what turns its UVs, by rows, and a bump layer's
+/// how a bump layer scales the next layer's light, what turns its UVs, by rows, with in their last
+/// places whether sampling it decodes sRGB and whether it can't be sampled, and a bump layer's
 /// matrix.
 struct layer_data_t {
     std::uint32_t texture;
@@ -171,6 +173,8 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
         .color = format,
         .depth = texture::depth_format,
         .samples = samples,
+        .polygon = ((key >> 49U) & 1U) != 0 && gpu::device()->wireframe ? VK_POLYGON_MODE_LINE
+                                                                        : VK_POLYGON_MODE_FILL,
         .cull = two_sided ? flag<VkCullModeFlags>(VK_CULL_MODE_NONE)
                           : flag<VkCullModeFlags>(VK_CULL_MODE_BACK_BIT),
         .front = mirrored != flipped ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE,
@@ -269,8 +273,8 @@ gpu::slice_t in_ring(std::span<const Item> found, bool& failed) {
 
 /// What a material is as the scene shader reads it, its layers those with textures, in order, as
 /// its draws' pipeline key has them, and the textures it samples added to `sampled`. A layer can't
-/// sample what the pass draws into, so draws white instead, as a layer does whose texture has gone
-/// with the GPU.
+/// sample what the pass draws into, so leaves what's under it as it is, as a layer does whose
+/// texture has gone with the GPU.
 material_data_t material_data(std::uint32_t material, std::uint64_t target,
                               std::vector<std::uint64_t>& sampled) {
     const scene::material_t standard;
@@ -307,8 +311,12 @@ material_data_t material_data(std::uint32_t material, std::uint64_t target,
         const float down = 1.0F / layer.uv_scale[1];
         const float cosine = std::cos(-layer.uv_angle);
         const float sine = std::sin(-layer.uv_angle);
-        out.uv_across = { across * cosine, across * sine, -layer.uv_offset[0], 0.0F };
-        out.uv_down = { -down * sine, down * cosine, -layer.uv_offset[1], 0.0F };
+        const bool decodes = image != nullptr && image->format == FBE_TEXTURE_RGBA8;
+        const float neutral = image != nullptr ? 0.0F : 1.0F;
+        const float across_u = across * cosine;
+        const float across_v = across * sine;
+        out.uv_across = { across_u, across_v, -layer.uv_offset[0], decodes ? 1.0F : 0.0F };
+        out.uv_down = { -down * sine, down * cosine, -layer.uv_offset[1], neutral };
     }
     return data;
 }
@@ -424,7 +432,7 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
     draws.reserve(lists.items.size());
     std::vector<material_data_t> materials;
     std::unordered_map<std::uint32_t, std::uint32_t> material_index;
-    std::unordered_map<std::uint32_t, VkDeviceAddress> palettes;
+    std::unordered_map<std::uint32_t, std::pair<VkDeviceAddress, std::uint32_t>> palettes;
     const scene::quat_t back = scene::inverse(view.rotation);
     const mat4_t view_matrix =
         scene::compose(back * -view.position, back, vec3_t(1.0F, 1.0F, 1.0F));
@@ -453,21 +461,22 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                 // Each mesh's once, however many surfaces it has, its surfaces one after another
                 // or apart.
                 const auto [palette, fresh] =
-                    palettes.try_emplace(item.entity, VkDeviceAddress{ 0 });
+                    palettes.try_emplace(item.entity, std::pair{ VkDeviceAddress{ 0 }, 0U });
                 if (fresh) {
                     const std::span<const mat4_t> poses = anim::skin_palette(item.entity, tweened);
                     if (!poses.empty()) {
                         bool no_room = false;
-                        palette->second = in_ring<mat4_t>(poses, no_room).address;
+                        palette->second = { in_ring<mat4_t>(poses, no_room).address,
+                                            static_cast<std::uint32_t>(poses.size()) };
                         if (no_room) {
                             return false;
                         }
                     }
                 }
-                if (palette->second != 0) {
+                if (palette->second.first != 0) {
                     data.joints = surface->joints.address;
-                    data.palette = palette->second;
-                    data.skinned = 1;
+                    data.palette = palette->second.first;
+                    data.joint_count = palette->second.second;
                 }
             }
         } else if (item.draw.kind == FBE_ENTITY_SPRITE) {
@@ -561,12 +570,12 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
 }
 
 /// A view as a mirror's plane reflects it: the eye, and its turn as a whole camera has it, its
-/// right turned to its left, which a projection flipped across gives back.
-scene::view_t reflected_view(const scene::view_t& view, const mat4_t& mirror) {
+/// right turned to its left, which a projection flipped across gives back. False for a mirror
+/// scaled to nothing, which has no plane to reflect through.
+bool reflected_view(const scene::view_t& view, const mat4_t& mirror, scene::view_t& reflected) {
     mat4_t into;
-    scene::view_t reflected = view;
     if (!scene::inverse_affine(mirror, into)) {
-        return reflected;
+        return false;
     }
     const auto reflect_point = [&](vec3_t p) {
         vec3_t local = scene::transform_point(into, p);
@@ -578,12 +587,13 @@ scene::view_t reflected_view(const scene::view_t& view, const mat4_t& mirror) {
         local.y = -local.y;
         return scene::normalize(scene::transform_vector(mirror, local));
     };
+    reflected = view;
     reflected.position = reflect_point(view.position);
     const vec3_t right = reflect_way(view.rotation * vec3_t(1.0F, 0.0F, 0.0F));
     const vec3_t up = reflect_way(view.rotation * vec3_t(0.0F, 1.0F, 0.0F));
     const vec3_t back = reflect_way(view.rotation * vec3_t(0.0F, 0.0F, 1.0F));
     reflected.rotation = scene::from_axes(-right, up, back);
-    return reflected;
+    return true;
 }
 
 } // namespace
@@ -624,7 +634,10 @@ bool draw_camera(std::uint32_t slot, float tween) {
         if (s.entities.slots.find(s.entities.slots.handle(entity)) &&
             s.entities.kind[entity] == FBE_ENTITY_MIRROR && s.entities.world[entity] == world &&
             scene::showing(entity)) {
-            const scene::view_t reflected = reflected_view(view, tweened.pose(entity).matrix);
+            scene::view_t reflected;
+            if (!reflected_view(view, tweened.pose(entity).matrix, reflected)) {
+                continue;
+            }
             lists_t lists;
             read_view(camera, reflected, tweened, lists);
             view_batches_t batches;
@@ -641,24 +654,39 @@ bool draw_camera(std::uint32_t slot, float tween) {
         return false;
     }
     pass->views.push_back(std::move(batches));
-    const auto left = static_cast<std::int32_t>(std::floor(view.x));
-    const auto top = static_cast<std::int32_t>(std::floor(view.y));
-    const auto right = std::min(static_cast<std::int32_t>(std::ceil(view.x + view.width)),
-                                static_cast<std::int32_t>(target_width));
-    const auto bottom = std::min(static_cast<std::int32_t>(std::ceil(view.y + view.height)),
-                                 static_cast<std::int32_t>(target_height));
-    const std::int32_t from_x = std::max(left, 0);
-    const std::int32_t from_y = std::max(top, 0);
+    // The pixels it covers, in float first, since a viewport can be further out than an int counts,
+    // and the viewport itself no further than the device takes: past that, it's cut there.
+    const auto most_x = static_cast<float>(target_width);
+    const auto most_y = static_cast<float>(target_height);
+    const float left = std::clamp(std::floor(view.x), 0.0F, most_x);
+    const float top = std::clamp(std::floor(view.y), 0.0F, most_y);
+    const float right = std::clamp(std::ceil(view.x + view.width), left, most_x);
+    const float bottom = std::clamp(std::ceil(view.y + view.height), top, most_y);
+    const VkPhysicalDeviceLimits& limits = gpu::device()->properties.limits;
+    const float least_place = limits.viewportBoundsRange[0];
+    const float most_place = limits.viewportBoundsRange[1];
+    const float viewport_x = std::clamp(view.x, least_place, most_place);
+    const float viewport_y = std::clamp(view.y, least_place, most_place);
     pass->viewport = {
-        .x = view.x,
-        .y = view.y,
-        .width = view.width,
-        .height = view.height,
+        .x = viewport_x,
+        .y = viewport_y,
+        .width = std::min({
+            view.width,
+            static_cast<float>(limits.maxViewportDimensions[0]),
+            most_place - viewport_x,
+        }),
+        .height = std::min({
+            view.height,
+            static_cast<float>(limits.maxViewportDimensions[1]),
+            most_place - viewport_y,
+        }),
         .minDepth = 0.0F,
         .maxDepth = 1.0F,
     };
-    const auto scissor_width = static_cast<std::uint32_t>(std::max(right - from_x, 0));
-    const auto scissor_height = static_cast<std::uint32_t>(std::max(bottom - from_y, 0));
+    const auto from_x = static_cast<std::int32_t>(left);
+    const auto from_y = static_cast<std::int32_t>(top);
+    const auto scissor_width = static_cast<std::uint32_t>(right - left);
+    const auto scissor_height = static_cast<std::uint32_t>(bottom - top);
     pass->scissor = {
         .offset = { .x = from_x, .y = from_y },
         .extent = { .width = scissor_width, .height = scissor_height },

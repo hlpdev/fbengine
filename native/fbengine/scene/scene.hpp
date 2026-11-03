@@ -72,9 +72,6 @@ struct surface_t {
     std::vector<fbe_vertex_t> vertices;
     /// Its vertices' joints, one for each, or none.
     std::vector<fbe_vertex_joints_t> joints;
-    /// The box around its vertices, worked out with its geometry's.
-    vec3_t bounds_min;
-    vec3_t bounds_max;
     std::vector<std::uint32_t> indices;
     /// The material it's drawn in, by slot, which it holds, or none for the default.
     std::uint32_t material = none;
@@ -107,6 +104,7 @@ struct material_t {
     bool vertex_colors = false;
     bool two_sided = false;
     bool fogged = true;
+    bool wireframe = false;
     std::int32_t order = 0;
     std::array<layer_t, FBE_MATERIAL_LAYERS> layers{};
 };
@@ -342,8 +340,6 @@ std::uint32_t world_slot(std::uint64_t handle);
 
 /// Gives a new entity what its kind keeps, as a camera's settings.
 void add_component(std::uint32_t entity);
-/// The box around a surface's own vertices, whatever box its geometry's culled by.
-void surface_bounds(std::uint32_t geometry, std::size_t surface, vec3_t& min, vec3_t& max);
 /// How many pieces a long line over a terrain is tried in, a few squares each: in float first,
 /// since a line can be longer than an int counts.
 inline int terrain_line_pieces(float span) {

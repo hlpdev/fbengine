@@ -23,11 +23,10 @@ namespace {
 using scene::camera_t;
 using scene::vec3_t;
 
-/// A light as drawing has it, where it is in the world, when it was made, which lights of a kind
+/// A light as drawing has it, when it was made, which lights of a kind
 /// go by, and its index in the lists' lights, once it has one.
 struct lit_t {
     fbe_draw_light_t draw{};
-    vec3_t place;
     std::uint64_t made = 0;
     std::uint32_t index = scene::none;
     bool wanted = false;
@@ -138,15 +137,6 @@ void clusters_reached(const camera_t& camera, const scene::view_t& view,
     }
 }
 
-/// Whether a light's sphere reaches what an item lit per vertex must have it reach: its box, or a
-/// ground plane, which goes on forever.
-bool reaches_item(const item_t& item, vec3_t center, float range) {
-    if (item.draw.kind == FBE_ENTITY_PLANE) {
-        return std::fabs(scene::dot(center - item.min, item.up)) <= range;
-    }
-    return apart_squared(center, item.min, item.max) <= range * range;
-}
-
 /// A camera's World's showing lights with some intensity, in its tree's order, each where it is
 /// between the steps, taken into the camera's view.
 std::vector<lit_t> lights_lit(std::uint32_t world, const scene::view_t& view,
@@ -172,7 +162,6 @@ std::vector<lit_t> lights_lit(std::uint32_t world, const scene::view_t& view,
         const float green = light.color[1] * light.intensity;
         const float blue = light.color[2] * light.intensity;
         lit_t one;
-        one.place = place;
         one.made = s.entities.made[entity];
         one.draw = {
             .light = s.entities.slots.handle(entity),
@@ -220,22 +209,21 @@ void read_view(const camera_t& camera, const scene::view_t& view, const scene::t
     lists.draw_lights.clear();
     lists.clusters.assign(FBE_CLUSTERS, fbe_cluster_t{ .first = 0, .count = 0 });
     std::vector<lit_t> lit = lights_lit(s.entities.world[camera.entity], view, tweened);
-    // What's lit per vertex takes the first lights in the tree's order that reach it, as they're
-    // given here for now, so those it wants stay in the lights though no cluster has them.
-    std::vector<std::uint32_t> by_tree;
+    // What's lit per vertex takes the first lights in the tree's order, all of it the same ones,
+    // whatever they reach, as fixed-function hardware's did, so they stay in the lights though no
+    // cluster has them.
+    const std::size_t per_vertex = std::min<std::size_t>(lit.size(), FBE_DRAW_LIGHTS);
+    bool any_per_vertex = false;
     for (item_t& item : lists.items) {
-        if (!item.vertex_lit) {
-            continue;
+        if (item.vertex_lit) {
+            item.draw.light_first = 0;
+            item.draw.light_count = static_cast<std::uint32_t>(per_vertex);
+            any_per_vertex = true;
         }
-        fbe_draw_t& draw = item.draw;
-        draw.light_first = static_cast<std::uint32_t>(by_tree.size());
-        for (std::size_t at = 0; at < lit.size() && draw.light_count < FBE_DRAW_LIGHTS; ++at) {
-            if (lit[at].draw.type == FBE_LIGHT_DIRECTIONAL ||
-                reaches_item(item, lit[at].place, lit[at].draw.range)) {
-                lit[at].wanted = true;
-                by_tree.push_back(static_cast<std::uint32_t>(at));
-                ++draw.light_count;
-            }
+    }
+    if (any_per_vertex) {
+        for (std::size_t at = 0; at < per_vertex; ++at) {
+            lit[at].wanted = true;
         }
     }
     std::vector<std::uint32_t> ordered(lit.size());
@@ -269,9 +257,11 @@ void read_view(const camera_t& camera, const scene::view_t& view, const scene::t
         one.index = static_cast<std::uint32_t>(lists.lights.size());
         lists.lights.push_back(one.draw);
     }
-    lists.draw_lights.reserve(by_tree.size());
-    for (const std::uint32_t at : by_tree) {
-        lists.draw_lights.push_back(lit[at].index);
+    if (any_per_vertex) {
+        lists.draw_lights.reserve(per_vertex);
+        for (std::size_t at = 0; at < per_vertex; ++at) {
+            lists.draw_lights.push_back(lit[at].index);
+        }
     }
     // Each cluster's lights together, in the lights' order.
     for (const auto& [cluster, light] : reaches) {

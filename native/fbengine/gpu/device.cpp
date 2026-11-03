@@ -496,6 +496,7 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     }
     volkLoadDevice(current.device);
     vkGetDeviceQueue(current.device, current.family, 0, &current.queue);
+    current.wireframe = supported.fillModeNonSolid == VK_TRUE;
     current.max_anisotropy = supported.samplerAnisotropy == VK_TRUE
                                  ? candidate.properties.limits.maxSamplerAnisotropy
                                  : 0.0F;

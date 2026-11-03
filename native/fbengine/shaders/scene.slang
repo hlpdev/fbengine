@@ -3,10 +3,15 @@
 // mix of them draws in one pass. Everything's read through addresses: the push constants give the
 // camera's, which gives its draws', materials', and lights'; each draw, by its instance, gives its
 // vertices'. Lighting is in the camera's view, x right, y up, looking down -z.
+//
+// PBR works in linear light. UNLIT and VERTEX are the fixed-function look, which worked on what was
+// stored: their colors, textures, adds, doublings, and fog are all in encoded values, sRGB's, each
+// stage clamped to 0 to 1, as its stages were, and only the color they end with is made linear for
+// the target. A room's 50 doubled is 100, as it was, not linear light's 71.
 
 import bindless;
 
-// A pipeline's constants, render/draw.cpp's constants_of's order: its FBE_SHADING_; its FBE_BLEND_;
+// A pipeline's constants, render/draw.cpp's desc_of's order: its FBE_SHADING_; its FBE_BLEND_;
 // whether it has an alpha cutoff, takes vertex colors, and is two-sided; its FBE_FOG_; how many
 // layers it has, each layer's FBE_LAYER_ in four bits from the lowest, and each layer's UV set in
 // a bit.
@@ -39,6 +44,8 @@ static const uint clustersUp = 9;
 static const uint clustersDeep = 24;
 // How tight a highlight is, as fixed-function hardware's was.
 static const float highlightPower = 100.0;
+// A vertex's joint that's no bone, which leaves it as it is.
+static const uint noBone = 0xFFFF;
 
 // fbe_vertex_t, its floats loose, so nothing's aligned past them.
 struct Vertex
@@ -58,7 +65,8 @@ struct Joints
 };
 
 // A draw: its matrix to the camera's view, what turns its normals there, its color and alpha, its
-// vertices, its joints and palette if it's skinned, its material's index, and its own lights.
+// vertices, its joints and palette if it's skinned, its material's index, its own lights, and how
+// many matrices its palette has, 0 if it isn't skinned.
 struct Draw
 {
     float4x4 toView;
@@ -70,12 +78,13 @@ struct Draw
     uint material;
     uint lightFirst;
     uint lightCount;
-    // Whether it's skinned, by its joints and palette.
-    uint skinned;
+    uint jointCount;
 };
 
-// A layer: its texture and sampler in the bindless set, what turns its UVs, and for a bump layer,
-// what its map shifts the next layer's UVs by and how it scales that layer's light.
+// A layer: its texture and sampler in the bindless set; how a bump layer scales the next layer's
+// light; what turns its UVs, with, in the first row's w, whether sampling its texture decodes sRGB,
+// and in the second's, whether it can't be sampled, so it leaves what's under it as it is; and what
+// a bump layer's map shifts the next layer's UVs by.
 struct Layer
 {
     uint texture;
@@ -164,8 +173,41 @@ struct Corner
     nointerpolation uint draw : DRAW;
 };
 
+// Whether this pipeline's the fixed-function look, in encoded values.
+bool fixedLook()
+{
+    return shading == shadingUnlit || shading == shadingVertex;
+}
+
+// Linear light as sRGB stores it, and back.
+float3 toEncoded(float3 linear)
+{
+    const float3 positive = max(linear, float3(0.0, 0.0, 0.0));
+    const float3 low = positive * 12.92;
+    const float3 high = 1.055 * pow(positive, float3(1.0 / 2.4, 1.0 / 2.4, 1.0 / 2.4)) - 0.055;
+    return float3(positive.r <= 0.0031308 ? low.r : high.r, positive.g <= 0.0031308 ? low.g : high.g,
+                  positive.b <= 0.0031308 ? low.b : high.b);
+}
+
+float3 toLinear(float3 encoded)
+{
+    const float3 low = encoded / 12.92;
+    const float3 high = pow((encoded + 0.055) / 1.055, float3(2.4, 2.4, 2.4));
+    return float3(encoded.r <= 0.04045 ? low.r : high.r, encoded.g <= 0.04045 ? low.g : high.g,
+                  encoded.b <= 0.04045 ? low.b : high.b);
+}
+
+// A normal made whole, or none where it has none, as a sprite's: only ambient light lights that.
+float3 whole(float3 normal)
+{
+    const float squared = dot(normal, normal);
+    return squared > 0.0 ? normal / sqrt(squared) : normal;
+}
+
 // The light that reaches a place from a light, on a normal: what falls on it, and what its
-// highlight adds. Every shading model's, so a light looks as its glTF says wherever it falls.
+// highlight adds. Per pixel, as glTF's KHR_lights_punctual has it, which ends at its range, as
+// clusters need; per vertex, as fixed-function hardware's did, whole within its range and falling as
+// range over distance past it, with no end, in encoded values.
 void addLight(Light light, float3 place, float3 normal, float3 eye, float shininess,
               inout float3 diffuse, inout float3 highlight)
 {
@@ -181,9 +223,16 @@ void addLight(Light light, float3 place, float3 normal, float3 eye, float shinin
         const float squared = dot(to, to);
         const float apart = sqrt(squared);
         way = apart > 0.0 ? to / apart : float3(0.0, 0.0, 1.0);
-        const float part = apart / light.range;
-        const float window = saturate(1.0 - part * part * part * part);
-        falling = window * window / max(squared, 0.0001);
+        if (shading == shadingVertex)
+        {
+            falling = min(light.range / max(apart, 0.0001), 1.0);
+        }
+        else
+        {
+            const float part = apart / light.range;
+            const float window = saturate(1.0 - part * part * part * part);
+            falling = window * window / max(squared, 0.0001);
+        }
         if (light.type == int(lightSpot))
         {
             const float3 shining = float3(light.direction[0], light.direction[1], light.direction[2]);
@@ -193,26 +242,37 @@ void addLight(Light light, float3 place, float3 normal, float3 eye, float shinin
         }
     }
     const float facing = saturate(dot(normal, way));
-    const float3 color = float3(light.color[0], light.color[1], light.color[2]) * falling;
+    const float3 linear = float3(light.color[0], light.color[1], light.color[2]);
+    const float3 color = (shading == shadingVertex ? toEncoded(linear) : linear) * falling;
     diffuse += color * facing;
     if (shininess > 0.0 && facing > 0.0)
     {
-        const float3 half = normalize(way + eye);
-        highlight += color * shininess * pow(saturate(dot(normal, half)), highlightPower);
+        const float3 between = way + eye;
+        const float length = dot(between, between);
+        if (length > 0.0)
+        {
+            const float aligned = saturate(dot(normal, between / sqrt(length)));
+            highlight += color * shininess * pow(aligned, highlightPower);
+        }
     }
-}
-
-// A normal made whole, or none where it has none, as a sprite's: only ambient light lights that.
-float3 whole(float3 normal)
-{
-    const float squared = dot(normal, normal);
-    return squared > 0.0 ? normal / sqrt(squared) : normal;
 }
 
 // The direction to the eye from a place, by how the camera projects.
 float3 toEye(Camera* camera, float3 place)
 {
     return camera.perspective != 0 ? normalize(-place) : float3(0.0, 0.0, 1.0);
+}
+
+// A normal through a skin's matrix: the cofactors of its turn and scale, so a bone scaled along one
+// axis leans a normal as it should, its sign the determinant's, which whole() then makes length 1.
+float3 skinnedNormal(float4x4 skin, float3 normal)
+{
+    const float3 a = float3(skin[0][0], skin[1][0], skin[2][0]);
+    const float3 b = float3(skin[0][1], skin[1][1], skin[2][1]);
+    const float3 c = float3(skin[0][2], skin[1][2], skin[2][2]);
+    const float3 across = cross(b, c);
+    const float3 turned = across * normal.x + cross(c, a) * normal.y + cross(a, b) * normal.z;
+    return whole(dot(a, across) < 0.0 ? -turned : turned);
 }
 
 [shader("vertex")]
@@ -224,17 +284,27 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
     float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     float3 normal = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
     // Skinned before its own matrix, in its mesh's space, as the palette is.
-    if (draw.skinned != 0)
+    if (draw.jointCount != 0)
     {
         const Joints joints = draw.joints[index];
         float4x4 skin = float4x4(0.0);
         for (uint joint = 0; joint < 4; ++joint)
         {
             const uint which = (joints.joints[joint / 2] >> (16 * (joint % 2))) & 0xFFFF;
-            skin += draw.palette[which] * joints.weights[joint];
+            const float weight = joints.weights[joint];
+            if (which == noBone)
+            {
+                skin += float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                                 0.0, 1.0) * weight;
+            }
+            else
+            {
+                // One past the palette is a mistake in a model, never a read past its end.
+                skin += draw.palette[min(which, draw.jointCount - 1)] * weight;
+            }
         }
         position = mul(skin, position);
-        normal = mul(float3x3(skin), normal);
+        normal = skinnedNormal(skin, normal);
     }
     const float4 place = mul(draw.toView, position);
     Corner corner;
@@ -245,22 +315,26 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
     corner.uv0 = float2(vertex.uv0[0], vertex.uv0[1]);
     corner.uv1 = float2(vertex.uv1[0], vertex.uv1[1]);
     corner.color = float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]);
+    if (fixedLook())
+    {
+        corner.color.rgb = toEncoded(corner.color.rgb);
+    }
     corner.draw = instance;
     corner.lit = float3(1.0, 1.0, 1.0);
     if (shading == shadingVertex)
     {
-        // Lit here, by the draw's own lights.
+        // Lit here, by the draw's own lights, and clamped here, before any texture.
         const float3 unit = whole(corner.normal);
         const float3 eye = toEye(camera, place.xyz);
         const float shininess = camera.materials[draw.material].shininess;
-        float3 diffuse = camera.ambient;
+        float3 diffuse = toEncoded(camera.ambient);
         float3 highlight = float3(0.0, 0.0, 0.0);
         for (uint i = 0; i < draw.lightCount; ++i)
         {
             addLight(camera.lights[camera.drawLights[draw.lightFirst + i]], place.xyz, unit, eye,
                      shininess, diffuse, highlight);
         }
-        corner.lit = diffuse + highlight;
+        corner.lit = saturate(diffuse + highlight);
     }
     return corner;
 }
@@ -303,7 +377,12 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
     Camera* camera = push.camera;
     const Draw draw = camera.draws[corner.draw];
     const Material material = camera.materials[draw.material];
+    const bool encoded = fixedLook();
     float4 current = material.color * draw.color;
+    if (encoded)
+    {
+        current.rgb = toEncoded(material.color.rgb) * toEncoded(draw.color.rgb);
+    }
     if (vertexColors != 0)
     {
         current *= corner.color;
@@ -313,7 +392,7 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
         current.a = draw.color.a;
     }
     float3 lit = corner.lit;
-    if (shading != shadingVertex && shading != shadingUnlit)
+    if (!encoded)
     {
         float3 normal = whole(corner.normal);
         if (twoSided != 0 && !front)
@@ -333,12 +412,24 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
         const float2 raw = ((layerSets >> i) & 1) != 0 ? corner.uv1 : corner.uv0;
         const float3 uv = float3(raw, 1.0);
         const float2 turned = float2(dot(layer.uvAcross.xyz, uv), dot(layer.uvDown.xyz, uv)) + shift;
-        const float4 texel = sampleTexture(layer.texture, layer.sampler, turned);
+        float4 texel = sampleTexture(layer.texture, layer.sampler, turned);
+        // A map's offsets and every fixed-function color are what's stored.
+        if (layer.uvAcross.w != 0.0 && (encoded || kind == layerBump))
+        {
+            texel.rgb = toEncoded(texel.rgb);
+        }
+        // One that can't be sampled leaves what's under it as it is.
+        if (layer.uvDown.w != 0.0)
+        {
+            const float none = kind == layerAdd ? 0.0 : (kind == layerBump ? 128.0 / 255.0 : 1.0);
+            const float halved = kind == layerMultiply2 ? 128.0 / 255.0 : none;
+            texel = float4(halved, halved, halved, kind == layerAlpha ? 0.0 : 1.0);
+        }
         if (kind == layerBump)
         {
-            // Shifts the next layer's UVs by its red and green, centered on middle gray, through
+            // Shifts the next layer's UVs by its red and green, about middle gray's byte, through
             // its matrix, and scales its light by its blue.
-            const float2 by = texel.rg * 2.0 - 1.0;
+            const float2 by = (floor(texel.rg * 255.0 + float2(0.5, 0.5)) - float2(128.0, 128.0)) / 127.0;
             shift = float2(layer.bump.x * by.x + layer.bump.z * by.y,
                            layer.bump.y * by.x + layer.bump.w * by.y);
             light = saturate(texel.b * layer.luminanceScale + layer.luminanceOffset);
@@ -362,6 +453,10 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
         else if (kind == layerAlpha)
         {
             current.rgb = lerp(current.rgb, color, texel.a);
+        }
+        if (encoded)
+        {
+            current.rgb = saturate(current.rgb);
         }
     }
     if (material.noAlpha != 0)
@@ -401,13 +496,18 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
         }
         else
         {
-            current.rgb = lerp(current.rgb, camera.fogColor.rgb, thick);
+            const float3 fogColor = encoded ? toEncoded(camera.fogColor.rgb) : camera.fogColor.rgb;
+            current.rgb = lerp(current.rgb, fogColor, thick);
         }
     }
     if (blend == blendMultiply)
     {
         // Scaled by its alpha: none of it leaves what's behind as it is.
         current.rgb = lerp(float3(1.0, 1.0, 1.0), current.rgb, current.a);
+    }
+    if (encoded)
+    {
+        current.rgb = toLinear(saturate(current.rgb));
     }
     if (blend == blendOpaque)
     {
