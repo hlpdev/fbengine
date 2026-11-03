@@ -51,6 +51,11 @@ extern "C" {
 
 // How a camera's fog thickens with depth in front of it: not at all; linearly from its start to
 // its end; as e to the minus (density x depth); or as e to the minus (density x depth) squared.
+#define FBE_TONEMAP_NONE     0
+#define FBE_TONEMAP_REINHARD 1
+#define FBE_TONEMAP_ACES     2
+#define FBE_TONEMAP_NEUTRAL  3
+
 #define FBE_FOG_NONE                0
 #define FBE_FOG_LINEAR              1
 #define FBE_FOG_EXPONENTIAL         2
@@ -451,6 +456,23 @@ FBE_API float fbe_world_environment_intensity(uint64_t world);
 // Color.Gray, sRGB's half gray, at first.
 FBE_API bool fbe_world_set_ambient(uint64_t world, float r, float g, float b);
 FBE_API bool fbe_world_ambient(uint64_t world, fbe_color_t* color);
+
+// Whether a camera draws into an HDR image of its target's size, of half floats, whose light past
+// white is kept, rather than into its target, false at first; and what that light comes to in its
+// target, each only for one that's HDR: first times its exposure, 0 or more, 1 at first; then
+// through an FBE_TONEMAP_, NONE at first, where a target stored as bytes clamps it at white, and
+// Khronos's NEUTRAL or ACES's filmic curve are what glTF's and film's looks want; and raised to one
+// over its gamma, above 0, 1 at first, as a game's brightness setting wants. A target stored as
+// sRGB then encodes it. It's blended by its alpha over what's in a target it doesn't clear; what
+// multiplies what's behind it, which isn't in its image, draws black there.
+FBE_API bool fbe_camera_set_hdr(uint64_t camera, bool hdr);
+FBE_API bool fbe_camera_hdr(uint64_t camera);
+FBE_API bool fbe_camera_set_exposure(uint64_t camera, float exposure);
+FBE_API float fbe_camera_exposure(uint64_t camera);
+FBE_API bool fbe_camera_set_tonemap(uint64_t camera, int32_t tonemap);
+FBE_API int32_t fbe_camera_tonemap(uint64_t camera);
+FBE_API bool fbe_camera_set_gamma(uint64_t camera, float gamma);
+FBE_API float fbe_camera_gamma(uint64_t camera);
 
 // A camera's fog, which blends what it sees toward the fog's color with its depth in front of the
 // camera: FBE_FOG_NONE at first, black, linear from 1 to 100, at a density of 0.02.

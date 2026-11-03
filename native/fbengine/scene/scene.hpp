@@ -297,6 +297,11 @@ struct camera_t {
     float fog_start = 1.0F;
     float fog_end = 100.0F;
     float fog_density = 0.02F;
+    /// Whether it draws into an HDR image, and what that comes to in its target.
+    bool hdr = false;
+    float exposure = 1.0F;
+    std::int32_t tonemap = FBE_TONEMAP_NONE;
+    float gamma = 1.0F;
 };
 
 /// A light: what kind, its color and its intensity, the range where a point or spot light ends, and

@@ -215,6 +215,62 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
     return desc;
 }
 
+/// What shaders/tonemap.slang's Tonemap is.
+struct tonemap_data_t {
+    float width;
+    float height;
+    std::uint32_t image;
+    std::uint32_t sampler;
+    float exposure;
+    float gamma;
+    std::uint32_t kind;
+};
+
+/// Adds the pass that brings a camera's HDR image to its target, in `scissor`, blending it by its
+/// alpha if the camera doesn't clear what's there; false, with fbe_error's why, if it can't be.
+bool add_tonemap_pass(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
+                      const VkExtent2D size, const VkFormat format,
+                      const VkSampleCountFlagBits samples, const VkRect2D scissor) {
+    VkPipeline pipeline = gpu::pipeline({
+        .shader = &shaders::tonemap,
+        .color = format,
+        .samples = samples,
+        .blend = camera.clears_color ? gpu::blend_t::NONE : gpu::blend_t::PREMULTIPLIED,
+    });
+    if (pipeline == VK_NULL_HANDLE) {
+        return false;
+    }
+    const tonemap_data_t data{
+        .width = static_cast<float>(size.width),
+        .height = static_cast<float>(size.height),
+        .sampler = gpu::sampler_2d_index(FBE_TEXTURE_NEAREST, false),
+        .exposure = camera.exposure,
+        .gamma = camera.gamma,
+        .kind = static_cast<std::uint32_t>(camera.tonemap),
+    };
+    return gpu::add_pass({
+        .name = "tonemap",
+        .colors = { {
+            .target = into,
+        }, },
+        .uses = { { image, gpu::use_t::SAMPLED } },
+        .record =
+            [data, image, pipeline, scissor](VkCommandBuffer commands) {
+                VkDescriptorSet set = gpu::bindless_set();
+                VkPipelineLayout layout = gpu::pipeline_layout();
+                vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set,
+                                        0, nullptr);
+                tonemap_data_t push = data;
+                push.image = gpu::resource_index(image);
+                vkCmdPushConstants(commands, layout, flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0,
+                                   sizeof(push), &push);
+                vkCmdSetScissor(commands, 0, 1, &scissor);
+                vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                vkCmdDraw(commands, 3, 1, 0, 0);
+            },
+    });
+}
+
 /// Records a pass's draws.
 void record(VkCommandBuffer commands, const recorded_pass_t& pass) {
     if (pass.clear_color || pass.clear_depth) {
@@ -672,7 +728,8 @@ bool draw_camera(std::uint32_t slot, float tween) {
     }
     const auto width = static_cast<float>(found->width);
     const auto height = static_cast<float>(found->height);
-    const VkFormat format = found->vk_format;
+    const VkFormat target_format = found->vk_format;
+    const VkFormat format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : target_format;
     const VkSampleCountFlagBits samples = found->samples;
     const std::uint32_t target_width = found->width;
     const std::uint32_t target_height = found->height;
@@ -760,7 +817,9 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const bool whole = from_x == 0 && from_y == 0 && pass->scissor.extent.width == target_width &&
                        pass->scissor.extent.height == target_height;
     const std::array<float, 4> clear_rgba = camera.clear_color;
-    pass->clear_color = camera.clears_color && !whole;
+    // An HDR image is all the camera's, so all of it's cleared: to nothing, if what's in its target
+    // shows through.
+    pass->clear_color = camera.clears_color && !whole && !camera.hdr;
     pass->clear_depth = camera.clears_depth && !whole;
     pass->clear_rgba = clear_rgba;
     std::ranges::sort(sampled);
@@ -778,18 +837,33 @@ bool draw_camera(std::uint32_t slot, float tween) {
     if (into == gpu::no_resource) {
         return false;
     }
-    return gpu::add_pass({
+    const gpu::resource_t image = camera.hdr ? gpu::transient_resource({
+                                                   .width = target_width,
+                                                   .height = target_height,
+                                                   .format = FBE_TEXTURE_RGBA16F,
+                                                   .samples = static_cast<std::uint32_t>(samples),
+                                               })
+                                             : into;
+    if (image == gpu::no_resource) {
+        return false;
+    }
+    const bool drawn = gpu::add_pass({
         .name = "camera",
         .colors = { {
-            .target = into,
-            .clear = camera.clears_color && whole,
-            .rgba = clear_rgba,
+            .target = image,
+            .clear = camera.hdr || (camera.clears_color && whole),
+            .rgba = camera.clears_color ? clear_rgba : std::array<float, 4>{},
         }, },
         .depth = into,
         .clear_depth = camera.clears_depth && whole,
         .uses = std::move(uses),
         .record = [pass](VkCommandBuffer commands) { record(commands, *pass); },
     });
+    if (!drawn || !camera.hdr) {
+        return drawn;
+    }
+    return add_tonemap_pass(camera, image, into, { .width = target_width, .height = target_height },
+                            target_format, samples, pass->scissor);
 }
 
 } // namespace fbe::render

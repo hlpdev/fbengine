@@ -299,6 +299,71 @@ FBE_API float fbe_camera_fog_end(uint64_t camera) {
     return found != nullptr ? found->fog_end : 0.0F;
 }
 
+FBE_API bool fbe_camera_set_hdr(uint64_t camera, bool hdr) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    found->hdr = hdr;
+    return true;
+}
+
+FBE_API bool fbe_camera_hdr(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr && found->hdr;
+}
+
+FBE_API bool fbe_camera_set_exposure(uint64_t camera, float exposure) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!(exposure >= 0.0F) || !std::isfinite(exposure)) {
+        return fbe::fail(std::format("a camera's exposure is 0 or more, not {}", exposure));
+    }
+    found->exposure = exposure;
+    return true;
+}
+
+FBE_API float fbe_camera_exposure(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->exposure : 0.0F;
+}
+
+FBE_API bool fbe_camera_set_tonemap(uint64_t camera, int32_t tonemap) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (tonemap < FBE_TONEMAP_NONE || tonemap > FBE_TONEMAP_NEUTRAL) {
+        return fbe::fail(std::format("there's no tonemap {}", tonemap));
+    }
+    found->tonemap = tonemap;
+    return true;
+}
+
+FBE_API int32_t fbe_camera_tonemap(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->tonemap : -1;
+}
+
+FBE_API bool fbe_camera_set_gamma(uint64_t camera, float gamma) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!(gamma > 0.0F) || !std::isfinite(gamma)) {
+        return fbe::fail(std::format("a camera's gamma is above 0, not {}", gamma));
+    }
+    found->gamma = gamma;
+    return true;
+}
+
+FBE_API float fbe_camera_gamma(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->gamma : 0.0F;
+}
+
 FBE_API bool fbe_camera_set_fog_density(uint64_t camera, float density) {
     camera_t* found = camera_of(camera);
     if (found == nullptr) {

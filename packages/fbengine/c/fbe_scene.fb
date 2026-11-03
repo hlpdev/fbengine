@@ -22,6 +22,10 @@ Public Const FBE_PROJECTION_ORTHOGRAPHIC: Int32 = 1
 Public Const FBE_LIGHT_DIRECTIONAL: Int32 = 0
 Public Const FBE_LIGHT_POINT: Int32 = 1
 Public Const FBE_LIGHT_SPOT: Int32 = 2
+Public Const FBE_TONEMAP_NONE: Int32 = 0
+Public Const FBE_TONEMAP_REINHARD: Int32 = 1
+Public Const FBE_TONEMAP_ACES: Int32 = 2
+Public Const FBE_TONEMAP_NEUTRAL: Int32 = 3
 Public Const FBE_FOG_NONE: Int32 = 0
 Public Const FBE_FOG_LINEAR: Int32 = 1
 Public Const FBE_FOG_EXPONENTIAL: Int32 = 2
@@ -257,6 +261,14 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_world_environment_intensity(world: UInt64): Float32
     Function fbe_world_set_ambient(world: UInt64, r: Float32, g: Float32, b: Float32): Bool
     Function fbe_world_ambient(world: UInt64, color: Ptr<fbe_color_t>): Bool
+    Function fbe_camera_set_hdr(camera: UInt64, hdr: Bool): Bool
+    Function fbe_camera_hdr(camera: UInt64): Bool
+    Function fbe_camera_set_exposure(camera: UInt64, exposure: Float32): Bool
+    Function fbe_camera_exposure(camera: UInt64): Float32
+    Function fbe_camera_set_tonemap(camera: UInt64, tonemap: Int32): Bool
+    Function fbe_camera_tonemap(camera: UInt64): Int32
+    Function fbe_camera_set_gamma(camera: UInt64, gamma: Float32): Bool
+    Function fbe_camera_gamma(camera: UInt64): Float32
     Function fbe_camera_set_fog_mode(camera: UInt64, mode: Int32): Bool
     Function fbe_camera_fog_mode(camera: UInt64): Int32
     Function fbe_camera_set_fog_color(camera: UInt64, r: Float32, g: Float32, b: Float32): Bool

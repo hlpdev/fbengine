@@ -229,3 +229,23 @@ Function ATexturesAlphaAndAWireframeAreWhatTheyreSetTo() Throws GraphicsError
     material.SetWireframe(True)
     Expect(material.Wireframe())
 End Function
+
+// A Camera's HDR settings, through to its target: light past white, exposed and tonemapped.
+@Test
+Function ACameraDrawsHdrLight() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = World()
+    World.SetCurrent(world)
+    Local camera = Camera()
+    Expect(!camera.Hdr() && camera.Exposure() == 1.0)
+    Expect(camera.Tonemap() == Tonemap.NONE && camera.Gamma() == 1.0)
+    camera.SetHdr(True)
+    camera.SetExposure(0.5)
+    camera.SetTonemap(Tonemap.NEUTRAL)
+    camera.SetGamma(2.0)
+    Expect(camera.Hdr() && camera.Exposure() == 0.5)
+    Expect(camera.Tonemap() == Tonemap.NEUTRAL && camera.Gamma() == 2.0)
+    World.SetCurrent(World.Main())
+    world.Free()
+End Function

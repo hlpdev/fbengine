@@ -13,6 +13,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <gpu/graph.hpp>
 #include <numbers>
 #include <span>
 #include <vector>
@@ -1975,4 +1977,248 @@ TEST_CASE("a scene of PBR spheres matches its golden image", "[gpu][scene][golde
         fbe_material_release(material);
     }
     fbe_environment_free(environment);
+}
+
+namespace {
+
+/// A wall as bright as it says, in nothing but what it emits, in front of an HDR camera.
+std::uint64_t glowing_wall(const scene_t& scene, float r, float g, float b) {
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_emissive(material, r, g, b));
+    wall(scene.world, -3.0F, 10.0F, material);
+    require(fbe_camera_set_hdr(scene.camera, true));
+    return material;
+}
+
+/// Narkowicz's fit, with its exposure of 0.6, as tonemap.slang has it.
+float aces(float light) {
+    const float x = light * 0.6F;
+    return std::clamp((x * ((x * 2.51F) + 0.03F)) / ((x * ((x * 2.43F) + 0.59F)) + 0.14F), 0.0F,
+                      1.0F);
+}
+
+/// Khronos's PBR Neutral of a gray, as its reference has it.
+float neutral(float light) {
+    const float offset = light < 0.08F ? light - (6.25F * light * light) : 0.04F;
+    const float color = light - offset;
+    const float start = 0.8F - 0.04F;
+    if (color < start) {
+        return color;
+    }
+    const float left = 1.0F - start;
+    const float peak = 1.0F - (left * left / (color + left - start));
+    return peak;
+}
+
+} // namespace
+
+TEST_CASE("a camera's HDR settings are what they're set to", "[gpu][scene]") {
+    const scene_t scene;
+    CHECK(!fbe_camera_hdr(scene.camera));
+    CHECK(fbe_camera_exposure(scene.camera) == 1.0F);
+    CHECK(fbe_camera_tonemap(scene.camera) == FBE_TONEMAP_NONE);
+    CHECK(fbe_camera_gamma(scene.camera) == 1.0F);
+    CHECK(fbe_camera_set_hdr(scene.camera, true));
+    CHECK(fbe_camera_hdr(scene.camera));
+    CHECK(fbe_camera_set_exposure(scene.camera, 0.5F));
+    CHECK(fbe_camera_exposure(scene.camera) == 0.5F);
+    CHECK(!fbe_camera_set_exposure(scene.camera, -1.0F));
+    CHECK(!fbe_camera_set_exposure(scene.camera, std::nanf("")));
+    CHECK(fbe_camera_exposure(scene.camera) == 0.5F);
+    CHECK(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_ACES));
+    CHECK(fbe_camera_tonemap(scene.camera) == FBE_TONEMAP_ACES);
+    CHECK(!fbe_camera_set_tonemap(scene.camera, -1));
+    CHECK(!fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_NEUTRAL + 1));
+    CHECK(fbe_camera_set_gamma(scene.camera, 2.2F));
+    CHECK(fbe_camera_gamma(scene.camera) == 2.2F);
+    CHECK(!fbe_camera_set_gamma(scene.camera, 0.0F));
+    CHECK(!fbe_camera_set_gamma(scene.camera, std::nanf("")));
+    CHECK(!fbe_camera_set_hdr(scene.world, true));
+}
+
+// Light past white stays what it was until it's exposed: drawn straight into bytes, it's white
+// however it's dimmed after.
+TEST_CASE("an HDR camera keeps light past white for its exposure", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = glowing_wall(scene, 4.0F, 2.0F, 8.0F);
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    require(fbe_camera_set_exposure(scene.camera, 0.0625F));
+    CHECK(near(middle(scene.drawn()), { srgb(0.25F), srgb(0.125F), srgb(0.5F) }));
+    require(fbe_camera_set_exposure(scene.camera, 0.0F));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    // Not HDR, there's no exposure to speak of.
+    require(fbe_camera_set_hdr(scene.camera, false));
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
+// Each by its formula, in the test, at light under white and past it.
+TEST_CASE("a tonemap's what its formula says", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = glowing_wall(scene, 0.0F, 0.0F, 0.0F);
+    const auto seen = [&](float light) {
+        require(fbe_material_set_emissive(material, light, light, light));
+        return middle(scene.drawn())[0];
+    };
+    for (const float light : { 0.05F, 0.5F, 1.0F, 4.0F, 100.0F }) {
+        INFO("light " << light);
+        require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_NONE));
+        CHECK(std::abs(seen(light) - srgb(light)) <= 1);
+        require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_REINHARD));
+        CHECK(std::abs(seen(light) - srgb(light / (light + 1.0F))) <= 1);
+        require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_ACES));
+        CHECK(std::abs(seen(light) - srgb(aces(light))) <= 1);
+        require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_NEUTRAL));
+        CHECK(std::abs(seen(light) - srgb(neutral(light))) <= 1);
+    }
+    // Exposure goes before it: 2 times 0.5 is 1 through Reinhard.
+    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_REINHARD));
+    require(fbe_camera_set_exposure(scene.camera, 2.0F));
+    CHECK(std::abs(seen(0.5F) - srgb(0.5F)) <= 1);
+    fbe_material_release(material);
+}
+
+// Neutral's whole point: a color under its compression comes out as it went in, but for its offset,
+// and a saturated one past it goes toward white, unlike clamping.
+TEST_CASE("the neutral tonemap keeps a color's hue and goes to white past it", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = glowing_wall(scene, 0.6F, 0.3F, 0.1F);
+    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_NEUTRAL));
+    CHECK(near(middle(scene.drawn()), { srgb(0.56F), srgb(0.26F), srgb(0.06F) }));
+    require(fbe_material_set_emissive(material, 50.0F, 0.0F, 0.0F));
+    const rgba_t bright = middle(scene.drawn());
+    CHECK(bright[0] > 240);
+    CHECK(bright[1] > 40);
+    CHECK(bright[1] == bright[2]);
+    fbe_material_release(material);
+}
+
+// Last of all, and a brightness setting's: raised to one over it, in linear, before sRGB's
+// encoding.
+TEST_CASE("a camera's gamma is the last it does", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = glowing_wall(scene, 0.25F, 0.25F, 0.25F);
+    require(fbe_camera_set_gamma(scene.camera, 2.0F));
+    const std::uint8_t half = srgb(0.5F);
+    CHECK(near(middle(scene.drawn()), { half, half, half }));
+    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_REINHARD));
+    require(fbe_material_set_emissive(material, 1.0F, 1.0F, 1.0F));
+    const std::uint8_t reinhard = srgb(std::sqrt(0.5F));
+    CHECK(near(middle(scene.drawn()), { reinhard, reinhard, reinhard }));
+    fbe_material_release(material);
+}
+
+// A target of half floats keeps what's past white; one stored as written isn't encoded.
+TEST_CASE("an HDR camera's target takes it in its own format", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = glowing_wall(scene, 4.0F, 0.5F, 0.0F);
+    const std::uint64_t floats = fbe_texture_create_target(8, 8, FBE_TEXTURE_RGBA16F, 1, true);
+    require(floats != 0);
+    require(fbe_camera_set_target(scene.camera, floats));
+    require(fbe_render_world(scene.world, 1.0F));
+    std::array<std::uint16_t, std::size_t{ 8 } * 8 * 4> halves{};
+    std::array<std::uint8_t, sizeof(halves)> read_bytes{};
+    require(fbe_texture_read(floats, 0, read_bytes.data(), sizeof(halves)));
+    std::memcpy(halves.data(), read_bytes.data(), sizeof(halves));
+    CHECK(halves[((std::size_t{ 4 } * 8) + 4) * 4] == 0x4400);
+    CHECK(halves[(((std::size_t{ 4 } * 8) + 4) * 4) + 1] == 0x3800);
+    const std::uint64_t linear = fbe_texture_create_target(8, 8, FBE_TEXTURE_RGBA8_LINEAR, 1, true);
+    require(linear != 0);
+    require(fbe_camera_set_target(scene.camera, linear));
+    require(fbe_render_world(scene.world, 1.0F));
+    const fbe::golden::frame_t frame = scene_t::read(linear);
+    CHECK(near(pixel(frame, 4, 4), { 255, 128, 0 }, 1));
+    require(fbe_camera_set_target(scene.camera, scene.target));
+    fbe_texture_release(floats);
+    fbe_texture_release(linear);
+    fbe_material_release(material);
+}
+
+// No light's so bright a tonemap makes nothing of it, or NaN of it: an infinity's as bright as a
+// half float holds, and NaN is no light.
+TEST_CASE("an HDR camera's infinity is white, and its NaN black", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = glowing_wall(scene, 1e30F, 1e30F, 1e30F);
+    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_REINHARD));
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_ACES));
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    require(fbe_camera_set_tonemap(scene.camera, FBE_TONEMAP_NEUTRAL));
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    const std::uint64_t not_a_number = fbe_texture_create(2, 2, FBE_TEXTURE_RGBA16F, false);
+    require(not_a_number != 0);
+    const std::array<std::uint16_t, 16> halves{ 0x7E00, 0x7E00, 0x7E00, 0x3C00, 0x7E00, 0x7E00,
+                                                0x7E00, 0x3C00, 0x7E00, 0x7E00, 0x7E00, 0x3C00,
+                                                0x7E00, 0x7E00, 0x7E00, 0x3C00 };
+    std::array<std::uint8_t, 32> bytes{};
+    std::memcpy(bytes.data(), halves.data(), bytes.size());
+    require(fbe_texture_write(not_a_number, 0, 0, 2, 2, bytes.data(), 16));
+    require(fbe_material_set_map(material, FBE_MAP_EMISSIVE, not_a_number, 0));
+    require(fbe_material_set_emissive(material, 1.0F, 1.0F, 1.0F));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    fbe_texture_release(not_a_number);
+    fbe_material_release(material);
+}
+
+// Its viewport's its own: what's outside's left, by another camera's or the last's; and one that
+// doesn't clear lets what's in the target through where it draws nothing, or through its alpha.
+TEST_CASE("an HDR camera shares its target as any camera does", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    require(fbe_camera_set_order(scene.camera, 0));
+    const fbe::golden::frame_t blue = scene.drawn();
+    CHECK(near(middle(blue), { 0, 0, 255 }));
+    // A second, HDR, in the left half, clearing its own.
+    const std::uint64_t left = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+    require(fbe_camera_set_target(left, scene.target));
+    require(fbe_camera_set_order(left, 1));
+    require(fbe_camera_set_hdr(left, true));
+    require(fbe_camera_set_viewport(left, 0.0F, 0.0F, frame_size / 2.0F,
+                                    static_cast<float>(frame_size)));
+    require(fbe_camera_set_clear_color(left, 1.0F, 0.0F, 0.0F, 1.0F));
+    const fbe::golden::frame_t both = scene.drawn();
+    CHECK(near(pixel(both, 16, frame_size / 2), { 255, 0, 0 }));
+    CHECK(near(pixel(both, frame_size - 16, frame_size / 2), { 0, 0, 255 }));
+    // Clearing nothing: half-see-through red over what the first camera drew there, the same over
+    // blue, so three quarters red and a quarter blue, and only that half.
+    require(fbe_camera_set_clear(left, false, true));
+    const std::uint64_t halfway = unlit(1.0F, 0.0F, 0.0F, 0.5F);
+    require(fbe_material_set_blend(halfway, FBE_BLEND_ALPHA));
+    wall(scene.world, -3.0F, 10.0F, halfway);
+    const fbe::golden::frame_t over = scene.drawn();
+    CHECK(near(pixel(over, 16, frame_size / 2), { srgb(0.75F), 0, srgb(0.25F) }, 3));
+    CHECK(near(pixel(over, frame_size - 16, frame_size / 2), { srgb(0.5F), 0, srgb(0.5F) }, 3));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(halfway);
+}
+
+TEST_CASE("an HDR camera draws into a multisampled target", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t target = fbe_texture_create_target(32, 32, FBE_TEXTURE_RGBA8, 4, true);
+    require(target != 0);
+    require(fbe_camera_set_target(scene.camera, target));
+    const std::uint64_t material = glowing_wall(scene, 2.0F, 0.0F, 0.0F);
+    require(fbe_camera_set_exposure(scene.camera, 0.25F));
+    require(fbe_render_world(scene.world, 1.0F));
+    const fbe::golden::frame_t frame = scene_t::read(target);
+    CHECK(near(pixel(frame, 16, 16), { srgb(0.5F), 0, 0 }, 3));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    require(fbe_camera_set_target(scene.camera, scene.target));
+    fbe_texture_release(target);
+    fbe_material_release(material);
+}
+
+// A frame's HDR image is a transient target: a frame after a frame asks for the one it had.
+TEST_CASE("an HDR camera's image is kept from frame to frame", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = glowing_wall(scene, 0.5F, 0.5F, 0.5F);
+    (void)scene.drawn();
+    const std::uint32_t images = fbe::gpu::transient_images();
+    CHECK(images > 0);
+    for (int frame = 0; frame < 4; ++frame) {
+        (void)scene.drawn();
+        CHECK(fbe::gpu::transient_images() == images);
+    }
+    fbe_material_release(material);
 }
