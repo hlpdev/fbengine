@@ -36,7 +36,8 @@ Public Enum Tonemap
     NONE = 0
     /// Reinhard's, light over light plus one, which never quite reaches white.
     REINHARD = 1
-    /// Narkowicz's fit of ACES's filmic curve, with its contrast and its colors toward white.
+    /// Narkowicz's fit of ACES's filmic curve, with its contrast and its colors toward white, after
+    /// the exposure of 0.6 he says matches ACES's own, which isn't in his fit: light of 1 is 0.673.
     ACES = 2
     /// Khronos's PBR Neutral, which leaves a base color as it is, as a product's picture wants.
     NEUTRAL = 3
@@ -287,7 +288,10 @@ Public Final Class Camera Extends Entity
 
     /// Sets whether it draws into an HDR image of its target's size, of half floats, whose light
     /// past white is kept, rather than into its target: False at first. Exposure, its Tonemap, and
-    /// gamma are only what an HDR camera's image comes to in its target.
+    /// gamma are only what an HDR camera's image comes to in its target. All it draws goes through
+    /// them, UNLIT and VERTEX materials and its clear color too: white's 0.869 through NEUTRAL, 0.673
+    /// through ACES, and 0.5 through REINHARD, so what has to stay white wants NONE, or a camera of
+    /// its own. What multiplies what's behind it, in a camera that doesn't clear, draws nothing.
     @MainThread @PanicsAtCaller
     Public Method SetHdr(hdr: Bool)
         If !fbe_camera_set_hdr(Live("SetHdr"), hdr) Then Failed("SetHdr")
@@ -297,7 +301,7 @@ Public Final Class Camera Extends Entity
     @MainThread @PanicsAtCaller
     Public Method Hdr(): Bool => fbe_camera_hdr(Live("Hdr"))
 
-    /// Sets what an HDR camera's light is multiplied by, 1 at first. Below 0 panics.
+    /// Sets what an HDR camera's light is multiplied by, 1 at first. Below 0, or not finite, panics.
     @MainThread @PanicsAtCaller
     Public Method SetExposure(exposure: Float)
         If !fbe_camera_set_exposure(Live("SetExposure"), exposure) Then Failed("SetExposure")
@@ -318,7 +322,7 @@ Public Final Class Camera Extends Entity
     Public Method Tonemap(): Tonemap => fbe_camera_tonemap(Live("Tonemap")) As Tonemap
 
     /// Sets what an HDR camera's color's raised to one over, last of all, as a game's brightness
-    /// setting wants: 1 at first. 0 or below panics.
+    /// setting wants: 1 at first. 0 or below, or too small to take one over, or not finite, panics.
     @MainThread @PanicsAtCaller
     Public Method SetGamma(gamma: Float)
         If !fbe_camera_set_gamma(Live("SetGamma"), gamma) Then Failed("SetGamma")

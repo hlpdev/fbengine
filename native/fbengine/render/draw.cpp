@@ -808,13 +808,16 @@ bool draw_camera(std::uint32_t slot, float tween) {
     if (into == gpu::no_resource) {
         return false;
     }
-    const gpu::resource_t image = camera.hdr ? gpu::transient_resource({
-                                                   .width = target_width,
-                                                   .height = target_height,
-                                                   .format = FBE_TEXTURE_RGBA16F,
-                                                   .samples = static_cast<std::uint32_t>(samples),
-                                               })
-                                             : into;
+    const gpu::transient_t image_target{
+        .width = target_width,
+        .height = target_height,
+        .format = FBE_TEXTURE_RGBA16F,
+        .samples = static_cast<std::uint32_t>(samples),
+    };
+    if (camera.hdr && !gpu::reserve_transient(image_target)) {
+        return false;
+    }
+    const gpu::resource_t image = camera.hdr ? gpu::transient_resource(image_target) : into;
     if (image == gpu::no_resource) {
         return false;
     }

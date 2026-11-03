@@ -111,6 +111,16 @@ Select arguments[0]
         Light().SetCone(1, 0.5)
     Case "fog-range"
         Camera().SetFogRange(5, 5)
+    Case "exposure-negative"
+        Camera().SetExposure(-1.0)
+    Case "gamma-zero"
+        Camera().SetGamma(0.0)
+    Case "tonemap-range"
+        Camera().SetTonemap((arguments.Count + 8) As Tonemap)
+    Case "exposure-freed"
+        Local gone = Camera()
+        gone.Free()
+        gone.SetExposure(1.0)
     Case "fog-density"
         Camera().SetFogDensity(-0.1)
     Case "light-freed"

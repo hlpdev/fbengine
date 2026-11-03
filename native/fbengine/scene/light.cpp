@@ -352,7 +352,8 @@ FBE_API bool fbe_camera_set_gamma(uint64_t camera, float gamma) {
     if (found == nullptr) {
         return false;
     }
-    if (!(gamma > 0.0F) || !std::isfinite(gamma)) {
+    // What it's raised to is one over it, which too small a gamma's isn't a number.
+    if (!(gamma > 0.0F) || !std::isfinite(gamma) || !std::isfinite(1.0F / gamma)) {
         return fbe::fail(std::format("a camera's gamma is above 0, not {}", gamma));
     }
     found->gamma = gamma;

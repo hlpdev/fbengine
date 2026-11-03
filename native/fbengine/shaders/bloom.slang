@@ -6,9 +6,6 @@
 
 import bindless;
 
-/// The brightest a half float holds, what its infinity's taken as.
-static const float brightest = 65504.0;
-
 struct Bloom
 {
     /// What's read's texel, in UVs.
@@ -45,12 +42,10 @@ Corner vertexMain(uint index : SV_VulkanVertexID)
     return corner;
 }
 
-/// A texel of the source as a number: no NaN, which is no light, nor anything past what's held.
+/// A texel of the source as a number.
 float3 sourceAt(float2 uv)
 {
-    const float3 light = sampleTextureLevel(bloom.source, bloom.sampler, uv, 0.0).rgb;
-    return float3(isnan(light.r) ? 0.0 : min(light.r, brightest), isnan(light.g) ? 0.0 : min(light.g, brightest),
-                  isnan(light.b) ? 0.0 : min(light.b, brightest));
+    return wholeLight(sampleTextureLevel(bloom.source, bloom.sampler, uv, 0.0).rgb);
 }
 
 /// How bright a color is, as the threshold goes by.

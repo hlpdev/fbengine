@@ -129,6 +129,11 @@ bool in_graph(std::uint64_t handle);
 /// twice, or its targets don't match.
 bool add_pass(pass_t pass);
 
+/// Makes sure there's an image for a transient target of `target`, which a pass that asks for one
+/// in the frame's graph then has: false, with fbe_error's why, if it can't be made now, where what
+/// asks can say so, rather than the frame dropping its passes when it's recorded.
+bool reserve_transient(const transient_t& target);
+
 /// A texture's or transient target's index in the bindless set, which a pass's `record` gives its
 /// shaders to sample it by, its format, and its texture's handle; while the graph's recorded only.
 std::uint32_t resource_index(resource_t resource);

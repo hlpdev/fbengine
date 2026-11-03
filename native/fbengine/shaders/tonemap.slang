@@ -7,9 +7,6 @@ import bindless;
 static const uint tonemapReinhard = 1;
 static const uint tonemapAces = 2;
 static const uint tonemapNeutral = 3;
-/// The brightest a half float holds, what its infinity's taken as.
-static const float brightest = 65504.0;
-
 struct Tonemap
 {
     float2 size;
@@ -39,15 +36,8 @@ float4 vertexMain(uint index : SV_VulkanVertexID) : SV_Position
     return float4((at * 2.0) - 1.0, 0.0, 1.0);
 }
 
-/// What a tonemap's given, as a number: no NaN, which is no light, nor anything past what's held.
-float3 wholeLight(float3 light)
-{
-    return float3(isnan(light.r) ? 0.0 : clamp(light.r, 0.0, brightest),
-                  isnan(light.g) ? 0.0 : clamp(light.g, 0.0, brightest),
-                  isnan(light.b) ? 0.0 : clamp(light.b, 0.0, brightest));
-}
-
-/// Narkowicz's fit of ACES's filmic curve, as he gives it, with its exposure of 0.6.
+/// Narkowicz's fit of ACES's filmic curve, after the exposure of 0.6 he says matches ACES's own, which
+/// his fit doesn't have: light of 1 is 0.673.
 float3 aces(float3 light)
 {
     const float3 x = light * 0.6;
@@ -77,13 +67,18 @@ float3 neutral(float3 light)
 [shader("fragment")]
 float4 fragmentMain(float4 position : SV_Position) : SV_Target
 {
-    const float4 texel = sampleTextureLevel(tonemap.image, tonemap.sampler, position.xy / tonemap.size, 0.0);
+    const float2 uv = position.xy / tonemap.size;
+    const float4 texel = sampleTextureLevel(tonemap.image, tonemap.sampler, uv, 0.0);
+    const float alpha = isNotANumber(texel.a) ? 0.0 : saturate(texel.a);
     float3 light = wholeLight(texel.rgb);
     if (tonemap.bloomIntensity > 0.0)
     {
-        light += sampleTextureLevel(tonemap.bloom, tonemap.bloomSampler, position.xy / tonemap.size, 0.0).rgb * tonemap.bloomIntensity;
+        light += sampleTextureLevel(tonemap.bloom, tonemap.bloomSampler, uv, 0.0).rgb * tonemap.bloomIntensity;
     }
-    float3 color = light * tonemap.exposure;
+    // What's blended over nothing is its color times its alpha, and a curve's of its color: so it's
+    // what's under the alpha that goes through it, unless there's no alpha at all, as what adds has.
+    const bool partly = alpha > 0.0 && alpha < 1.0;
+    float3 color = wholeLight(wholeLight(partly ? light / alpha : light) * tonemap.exposure);
     if (tonemap.kind == tonemapReinhard)
     {
         color = color / (color + 1.0);
@@ -99,5 +94,6 @@ float4 fragmentMain(float4 position : SV_Position) : SV_Target
     color = pow(max((color * tonemap.slope.rgb) + tonemap.offset.rgb, float3(0.0)), tonemap.power.rgb);
     const float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
     color = max(lerp(float3(luma), color, tonemap.slope.a), float3(0.0));
-    return float4(pow(color, 1.0 / tonemap.gamma), isnan(texel.a) ? 0.0 : texel.a);
+    color = wholeLight(pow(color, 1.0 / tonemap.gamma));
+    return float4(partly ? color * alpha : color, alpha);
 }

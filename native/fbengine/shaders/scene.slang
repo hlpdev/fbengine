@@ -371,7 +371,7 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
         // Length 1 here, so what's between vertices is as a morph has it, unless targets cancel it
         // or send it past what a float holds: that leaves no way to face but the vertex's own.
         const float squared = dot(morphed, morphed);
-        if (squared > smallestNormalSquared && !isinf(squared))
+        if (squared > smallestNormalSquared && !isInfinite(squared))
         {
             normal = morphed / sqrt(squared);
         }
@@ -686,6 +686,8 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
             current.rgb = lerp(current.rgb, fogColor, thick);
         }
     }
+    // A float image doesn't clamp what's blended by it, as bytes do.
+    current.a = isNotANumber(current.a) ? 0.0 : saturate(current.a);
     if (blend == blendMultiply)
     {
         // Scaled by its alpha: none of it leaves what's behind as it is.

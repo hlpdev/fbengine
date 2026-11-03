@@ -1203,8 +1203,8 @@ TEST_CASE("PBR spheres match their golden image", "[gpu][golden]") {
             .grid = { -1.0F, 5.0F, 5.0F, 1.0F },
         },
         environment, 200);
-    // Tonemapped to what a golden image holds, as the frame's tonemap will be in E6's step 3: a
-    // plain Reinhard's, then sRGB's curve.
+    // Tonemapped to what a golden image holds, by the test itself, not by a camera's: a plain
+    // Reinhard's, then sRGB's curve.
     fbe::golden::frame_t golden{ .width = frame.width, .height = frame.height };
     golden.rgba.reserve(std::size_t{ frame.width } * frame.height * 4);
     for (std::uint32_t y = 0; y < frame.height; ++y) {

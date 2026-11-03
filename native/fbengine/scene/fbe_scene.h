@@ -49,13 +49,13 @@ extern "C" {
 #define FBE_LIGHT_POINT       1
 #define FBE_LIGHT_SPOT        2
 
-// How a camera's fog thickens with depth in front of it: not at all; linearly from its start to
-// its end; as e to the minus (density x depth); or as e to the minus (density x depth) squared.
 #define FBE_TONEMAP_NONE     0
 #define FBE_TONEMAP_REINHARD 1
 #define FBE_TONEMAP_ACES     2
 #define FBE_TONEMAP_NEUTRAL  3
 
+// How a camera's fog thickens with depth in front of it: not at all; linearly from its start to
+// its end; as e to the minus (density x depth); or as e to the minus (density x depth) squared.
 #define FBE_FOG_NONE                0
 #define FBE_FOG_LINEAR              1
 #define FBE_FOG_EXPONENTIAL         2
@@ -464,7 +464,12 @@ FBE_API bool fbe_world_ambient(uint64_t world, fbe_color_t* color);
 // Khronos's NEUTRAL or ACES's filmic curve are what glTF's and film's looks want; and raised to one
 // over its gamma, above 0, 1 at first, as a game's brightness setting wants. A target stored as
 // sRGB then encodes it. It's blended by its alpha over what's in a target it doesn't clear; what
-// multiplies what's behind it, which isn't in its image, draws black there.
+// multiplies what's behind it, which isn't in its image, draws nothing there.
+//
+// All it draws goes through this: UNLIT's and VERTEX's fixed-function look, which then isn't what's
+// stored, and its clear color. White's 0.869 through NEUTRAL, 0.673 through ACES, and 0.5 through
+// REINHARD, so what has to stay white wants NONE, or its own camera; and an exposure of 0 clears to
+// black.
 FBE_API bool fbe_camera_set_hdr(uint64_t camera, bool hdr);
 FBE_API bool fbe_camera_hdr(uint64_t camera);
 FBE_API bool fbe_camera_set_exposure(uint64_t camera, float exposure);

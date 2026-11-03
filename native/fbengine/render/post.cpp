@@ -79,6 +79,7 @@ void record_triangle(VkCommandBuffer commands, VkPipeline pipeline, const Push& 
                        sizeof(push), &push);
     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdDraw(commands, 3, 1, 0, 0);
+    gpu::count_draws(1, 1);
 }
 
 /// Adds a pass of bloom's into a new target of `size`, reading `source` of `source_size` and, on
@@ -91,12 +92,16 @@ gpu::resource_t add_bloom_pass(std::string_view entry, const scene::camera_t& ca
         .fragment = entry,
         .color = hdr_format,
     });
-    const gpu::resource_t target = gpu::transient_resource({
+    const gpu::transient_t level{
         .width = size.width,
         .height = size.height,
         .format = FBE_TEXTURE_RGBA16F,
-    });
-    if (pipeline == VK_NULL_HANDLE || target == gpu::no_resource) {
+    };
+    if (pipeline == VK_NULL_HANDLE || !gpu::reserve_transient(level)) {
+        return gpu::no_resource;
+    }
+    const gpu::resource_t target = gpu::transient_resource(level);
+    if (target == gpu::no_resource) {
         return gpu::no_resource;
     }
     std::vector<std::pair<gpu::resource_t, gpu::use_t>> uses{ { source, gpu::use_t::SAMPLED } };
@@ -197,7 +202,7 @@ bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::
         .bloom_sampler = gpu::sampler_2d_index(FBE_TEXTURE_LINEAR, false),
         .bloom_intensity = bloom != gpu::no_resource ? camera.bloom_intensity : 0.0F,
         .slope = { camera.grade_slope[0], camera.grade_slope[1], camera.grade_slope[2],
-                   camera.grade_saturation },
+                   camera.grade_saturation, },
         .offset = { camera.grade_offset[0], camera.grade_offset[1], camera.grade_offset[2], 0.0F },
         .power = { camera.grade_power[0], camera.grade_power[1], camera.grade_power[2], 0.0F },
     };
