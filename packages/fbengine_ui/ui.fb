@@ -391,6 +391,9 @@ Public Final Class Ui
         Return font != Null ? font.Measure(text) : EstimatedText(text, style)
     End Method
 
+    /// Where the pointer was at the last Update, in the UI's units, which is what its widgets are told.
+    @MainThread Public Method PointerPoint(): Vec2 => lastPoint
+
     /// The widget the pointer was over at the last Update, or Null.
     @MainThread Public Method Hovered(): Widget? => hovered
 
