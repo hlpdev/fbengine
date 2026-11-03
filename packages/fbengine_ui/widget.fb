@@ -144,12 +144,12 @@ Public Class Widget Extends Node
     @MainThread Public Method DrawOver(paint: Painter)
     End Method
 
-    /// The style of `part` of it in its state: the style named after its own and `part`, as
-    /// "slider.thumb", and so a kind of its own. What's a part of it, a game's widget names too.
+    /// The style of `part` of it in its state, as Theme.PartOf says, so "slider.thumb", or a kind's
+    /// own, "slider.volume.thumb". What's a part of it, a game's widget names too.
     @MainThread Public Method PartStyle(part: String): Style
         Local own = ui
         If own == Null Then Return style
-        Return own.CurrentTheme().StyleOf("{styleName}.{part}", state)
+        Return own.CurrentTheme().PartOf(styleName, part, state)
     End Method
 
     /// Forgets what the last Update said it did, as each Update does before reading the input.

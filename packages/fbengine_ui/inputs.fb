@@ -5,6 +5,7 @@ Import std.core
 Import std.math
 Import std.os
 Import std.text
+Import std.time
 Import fbengine
 Import "./layout"
 Import "./painter"
@@ -61,7 +62,8 @@ Public Class Slider Extends Widget
     End Method
 
     /// Sets the step its value goes by from its low, 0 at first for none, so the arrows move it a
-    /// twentieth of its range.
+    /// twentieth of its range. Its high stays reachable, whether a step lands on it or not, as the
+    /// last value, by End, or from what's nearer to it than to a step.
     @MainThread Public Method SetStep(step: Float32)
         If !(step >= 0.0 && IsFinite(step)) Then Panic("Slider.SetStep: a step is 0 or more, not {step}")
         stepping = step
@@ -86,8 +88,9 @@ Public Class Slider Extends Widget
             paint.Panel(Rect(content.X, content.Y, along, content.Height), PartStyle("fill"))
         End If
         Local wide = Min(thumbWidth, content.Width)
-        Local left = Clamp(content.X + along - wide / 2.0, content.X,
-                           content.X + content.Width - wide)
+        // Not Clamp, whose ends can round the wrong way round where it's as narrow as its thumb.
+        Local left = Max(content.X, Min(content.X + along - wide / 2.0,
+                                        content.X + content.Width - wide))
         paint.Panel(Rect(left, content.Y, wide, content.Height), PartStyle("thumb"))
     End Method
 
@@ -101,6 +104,8 @@ Public Class Slider Extends Widget
     End Method
 
     @MainThread Public Override Method KeyTyped(stroke: Keystroke): Bool
+        // With nowhere to go, the keys are the focus's.
+        If high == low Then Return False
         Local by = stepping > 0.0 ? stepping : (high - low) / 20.0
         // A page is a tenth of its range, or a step if that's more.
         Local page = Max((high - low) / 10.0, stepping)
@@ -145,8 +150,9 @@ Public Class Slider Extends Widget
     Method Kept(set: Float32): Float32
         If IsNaN(set) Then Return low
         Local kept = Clamp(set, low, high)
-        If stepping > 0.0 Then kept = Min(low + Round((kept - low) / stepping) * stepping, high)
-        Return kept
+        If stepping <= 0.0 Then Return kept
+        Local stepped = Min(low + Round((kept - low) / stepping) * stepping, high)
+        Return high - kept < Abs(kept - stepped) ? high : stepped
     End Method
 End Class
 
@@ -197,12 +203,20 @@ Public Class TextField Extends Widget
     Field submitted: Bool = False
     // How far its text is scrolled left, in the UI's units, to show its cursor.
     Field scrolled: Float32 = 0.0
-    // How long its cursor's been blinking, from when it last moved, or it got the focus.
-    Field blinking: Float64 = 0.0
-    Field blinkedAt: Int = 0
+    // How long its cursor's been blinking, and where it was.
+    Field blinking: Stopwatch
+    Field blinkedAt: Float32 = 0.0
+    // Its prefixes' widths and a line's height, as its font and size were.
+    Field widths: Map<Int, Float32>
+    Field keptLine: Float32 = -1.0
+    Field keptFont: String = ""
+    Field keptSize: Float32 = 0.0
+    Field keptStamp: Int = 0
 
     /// A field holding `text`, which shows `placeholder` while it's empty.
     @MainThread Public New(text: String = "", placeholder: String = "", name: String = "")
+        widths = {}
+        blinking = Stopwatch.StartNew()
         Super.New("field", name)
         Self.placeholder = placeholder
         SetFocusable(True)
@@ -212,10 +226,10 @@ Public Class TextField Extends Widget
     /// What it holds.
     @MainThread Public Method Text(): String => text
 
-    /// Holds `held`, cut to its most, with its cursor at the end; not a change the player made, so
-    /// Changed stays False.
+    /// Holds `held`, a line's text, without its line breaks and tabs, cut to its most, with its
+    /// cursor at the end; not a change the player made, so Changed stays False.
     @MainThread Public Method SetText(held: String)
-        clusters = Clusters(held)
+        clusters = Clusters(OneLine(held))
         If limit > 0 && clusters.Count > limit Then clusters = clusters[0..limit]
         cursor = clusters.Count
         anchor = cursor
@@ -290,7 +304,7 @@ Public Class TextField Extends Widget
     End Method
 
     @MainThread Public Override Method FocusChanged(focused: Bool)
-        blinking = 0.0
+        blinking = Stopwatch.StartNew()
     End Method
 
     @MainThread Public Override Method Draw(paint: Painter)
@@ -301,54 +315,49 @@ Public Class TextField Extends Widget
         Local focused = own != Null && own.Focused() != Null && RefEquals(own.Focused(), Self)
         Local composing = focused && DrawsComposition() ? TextComposition() : Composition("", -1,
                                                                                           -1)
-        Local line = TextSize("Ag").y
+        Local line = LineHeight()
         Local top = content.Y + (content.Height - line) / 2.0
         Local left = content.X
         paint.PushClip(content)
         If text == "" && composing.Text == ""
             paint.TextIn(ShownPlaceholder(), content, style, Align.START, Align.CENTER,
                          Faded(style.Foreground))
-        Else
-            Local before = Spanned(clusters, 0, cursor)
-            Local at = TextSize(before).x
-            Local ahead = at
-            If composing.Text != "" Then ahead = TextSize(before + CharsOf(composing.Text,
-                                                                           composing.Start)).x
-            Kept(ahead, content.Width)
+            If focused Then CursorDrawn(paint, left, top, line)
+        ElseIf composing.Text == ""
+            Kept(WidthTo(cursor), content.Width)
             Local from, to = Selection()
-            If focused && from != to && composing.Text == ""
-                Local start = TextSize(Spanned(clusters, 0, from)).x
-                Local stop = TextSize(Spanned(clusters, 0, to)).x
-                paint.Panel(Rect(left + start - scrolled, top, stop - start, line),
+            If focused && from != to
+                Local start = WidthTo(from)
+                paint.Panel(Rect(left + start - scrolled, top, WidthTo(to) - start, line),
                             PartStyle("selection"))
             End If
-            Local shown = text
-            If composing.Text != ""
-                shown = before + composing.Text + Spanned(clusters, cursor, clusters.Count)
-            End If
-            paint.Text(shown, left - scrolled, top, style)
-            If composing.Text != ""
-                Local ends = TextSize(before + composing.Text).x
-                paint.Fill(Rect(left + at - scrolled, top + line - 1.0, ends - at, 1.0),
-                           style.Foreground)
-            End If
-            If focused Then CursorDrawn(paint, left + ahead - scrolled, top, line)
+            paint.Text(text, left - scrolled, top, style)
+            If focused Then CursorDrawn(paint, left + WidthTo(cursor) - scrolled, top, line)
+        Else
+            Local before = Spanned(clusters, 0, cursor)
+            Local at = WidthTo(cursor)
+            Local ahead = TextSize(before + CharsOf(composing.Text, composing.Start)).x
+            Kept(ahead, content.Width)
+            paint.Text(before + composing.Text + Spanned(clusters, cursor, clusters.Count),
+                       left - scrolled, top, style)
+            // A pixel of the target's high, whatever a unit is of them.
+            paint.Fill(Rect(left + at - scrolled, top + line - 1.0 / paint.Down(),
+                            TextSize(before + composing.Text).x - at, 1.0 / paint.Down()),
+                       style.Foreground)
+            CursorDrawn(paint, left + ahead - scrolled, top, line)
         End If
-        If focused && text == "" && composing.Text == "" Then CursorDrawn(paint, left, top, line)
         paint.PopClip()
     End Method
 
-    // Draws its cursor at `x`, while it's on, half of each second, from when it last moved.
+    // Draws its cursor at `x`, while it's on, half of each second, from when it last moved on the
+    // screen, as a composition moves it too, or it got the focus.
     @MainThread Method CursorDrawn(paint: Painter, x: Float32, top: Float32, line: Float32)
-        If blinkedAt != cursor
-            blinkedAt = cursor
-            blinking = 0.0
+        If blinkedAt != x
+            blinkedAt = x
+            blinking = Stopwatch.StartNew()
         End If
-        Local on = Mod(blinking, 1.0) < 0.5
-        blinking += Frame.Delta()
-        If !on Then Return
-        Local pixel = 1.0 / paint.Across()
-        paint.Fill(Rect(x, top, pixel, line), CurrentStyle().Foreground)
+        If Mod(blinking.Elapsed.TotalSeconds, 1.0) >= 0.5 Then Return
+        paint.Fill(Rect(x, top, 1.0 / paint.Across(), line), CurrentStyle().Foreground)
     End Method
 
     // Scrolls as little as keeps `at`, a cursor's place in its text, in `wide`, and no farther than
@@ -356,20 +365,53 @@ Public Class TextField Extends Widget
     @MainThread Method Kept(at: Float32, wide: Float32)
         If at - scrolled > wide - 1.0 Then scrolled = at - wide + 1.0
         If at < scrolled Then scrolled = at
-        Local whole = TextSize(text).x
-        scrolled = Clamp(scrolled, 0.0, Max(Max(whole, at) + 1.0 - wide, 0.0))
+        scrolled = Clamp(scrolled, 0.0, Max(Max(WidthTo(clusters.Count), at) + 1.0 - wide, 0.0))
     End Method
 
     // Where its cursor is in its text, and in view of `ContentBox`, its scroll kept to it.
     @MainThread Method CursorAt(): Float32
-        Local at = TextSize(Spanned(clusters, 0, cursor)).x
+        Local at = WidthTo(cursor)
         Kept(at, ContentBox().Width)
         Return at
     End Method
 
+    // How wide its first `count` grapheme clusters are, kept until its text, font, or size changes,
+    // so a frame that changes none of them measures nothing.
+    @MainThread Method WidthTo(count: Int): Float32
+        Keeping()
+        Local kept = widths.Get(count)
+        If kept != Null Then Return kept
+        Local width = TextSize(Spanned(clusters, 0, count)).x
+        widths[count] = width
+        Return width
+    End Method
+
+    // How high a line of it is, kept as WidthTo's are.
+    @MainThread Method LineHeight(): Float32
+        Keeping()
+        If keptLine < 0.0 Then keptLine = TextSize("Ag").y
+        Return keptLine
+    End Method
+
+    // Forgets what's kept once its font or size is another.
+    @MainThread Method Keeping()
+        Local style = CurrentStyle()
+        Local measuring = Owner()?.MeasureStamp() ?? 0
+        If style.Font == keptFont && style.FontSize == keptSize && measuring == keptStamp Then Return
+        keptFont = style.Font
+        keptSize = style.FontSize
+        keptStamp = measuring
+        Forgotten()
+    End Method
+
+    @MainThread Method Forgotten()
+        widths.Clear()
+        keptLine = -1.0
+    End Method
+
     @MainThread Public Override Method Measure(): Vec2
-        Local shown = text != "" ? text : ShownPlaceholder()
-        Return Vec2(TextSize(shown).x, TextSize("Ag").y)
+        Return Vec2(text != "" ? WidthTo(clusters.Count) : TextSize(ShownPlaceholder()).x,
+                    LineHeight())
     End Method
 
     @MainThread Public Override Method PointerDown(point: Vec2): Bool
@@ -384,11 +426,8 @@ Public Class TextField Extends Widget
 
     @MainThread Public Override Method TextTyped(typed: String)
         // A line's text, without what the OS's keys type that isn't text.
-        Local kept: Char[] = []
-        For each In typed.Chars
-            If each != '\n' && each != '\r' && each != '\t' Then kept.Add(each)
-        End For
-        If kept.Count > 0 Then Put(TextOf(kept, 0, kept.Count))
+        Local kept = OneLine(typed)
+        If kept != "" Then Put(kept)
     End Method
 
     @MainThread Public Override Method KeyTyped(stroke: Keystroke): Bool
@@ -510,19 +549,22 @@ Public Class TextField Extends Widget
         If !extending Then anchor = cursor
     End Method
 
-    // The grapheme cluster boundary nearest `x`, in the UI's units.
+    // The grapheme cluster boundary nearest `x`, in the UI's units: by halves, as what's before a
+    // boundary is only wider the later it is.
     @MainThread Method IndexAt(x: Float32): Int
         Local along = x - ContentBox().X + scrolled
-        Local best = 0
-        Local nearest = Abs(along)
-        For i = 1 To clusters.Count
-            Local width = TextSize(Spanned(clusters, 0, i)).x
-            If Abs(along - width) < nearest
-                nearest = Abs(along - width)
-                best = i
+        Local low = 0
+        Local high = clusters.Count
+        While low < high
+            Local middle = (low + high) / 2
+            If WidthTo(middle) < along
+                low = middle + 1
+            Else
+                high = middle
             End If
-        End For
-        Return best
+        End While
+        If low > 0 && along - WidthTo(low - 1) <= WidthTo(low) - along Then Return low - 1
+        Return low
     End Method
 
     // The start of the word before `at`: past the spaces before it, then its letters.
@@ -551,6 +593,7 @@ Public Class TextField Extends Widget
 
     @MainThread Method Rebuilt()
         text = Spanned(clusters, 0, clusters.Count)
+        Forgotten()
         Reflow()
     End Method
 End Class
@@ -571,6 +614,15 @@ Function Spanned(clusters: String[], from: Int, to: Int): String
         built.Append(clusters[i])
     End For
     Return built.ToString()
+End Function
+
+// `text` as a field holds it, without its line breaks and tabs.
+Function OneLine(text: String): String
+    Local kept: Char[] = []
+    For each In text.Chars
+        If each != '\n' && each != '\r' && each != '\t' Then kept.Add(each)
+    End For
+    Return TextOf(kept, 0, kept.Count)
 End Function
 
 // `color` as a placeholder is, half as strong.

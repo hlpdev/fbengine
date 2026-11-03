@@ -225,7 +225,8 @@ End Enum
 
 /// A picture, a frame of a Sprite2D or none, which takes no input and is as big as it is unless
 /// it's sized otherwise: style "image", its box drawn behind it. It's times its tint, white at
-/// first, and fits its box as SetFit says, stretched at first.
+/// first, and fits its box as SetFit says, stretched at first. While its sprite's texture is freed,
+/// it shows nothing, and measures nothing.
 Public Class ImageBox Extends Widget
     Field sprite: Sprite2D?
     Field frame: Int32 = 0
@@ -276,14 +277,14 @@ Public Class ImageBox Extends Widget
 
     @MainThread Public Override Method Measure(): Vec2
         Local shown = sprite
-        If shown == Null Then Return Vec2(0.0, 0.0)
+        If shown == Null || shown.Texture().Freed() Then Return Vec2(0.0, 0.0)
         Return Vec2(shown.Width() As Float32, shown.Height() As Float32)
     End Method
 
     @MainThread Public Override Method Draw(paint: Painter)
         Super.Draw(paint)
         Local shown = sprite
-        If shown == Null Then Return
+        If shown == Null || shown.Texture().Freed() Then Return
         Local content = ContentBox()
         Local wide = shown.Width() As Float32
         Local high = shown.Height() As Float32

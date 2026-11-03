@@ -1,6 +1,7 @@
 // Painting: a Ui's tree drawn on a Canvas, in the UI's units, each box and clip on whole pixels, so
 // boxes that touch in the layout touch on the screen.
 
+Import std.collections
 Import std.core
 Import std.math
 Import fbengine
@@ -37,6 +38,9 @@ Public Final Class Painter
     Field origin: Vec2i
     Field outer: Clip?
     Field clips: Clip[] = []
+    // How many clips a Draw found, which it can't pop, and what it's drawing.
+    Field floor: Int = 0
+    Field drawing: Node?
     // The canvas's pen, as it's given back.
     Field hadColor: Color32
     Field hadBlend: Blend2D
@@ -92,7 +96,7 @@ Public Final Class Painter
         PushClip(node.Box())
         If !Current().Empty()
             Local widget = node As? Widget
-            If widget != Null Then widget.Draw(Self)
+            If widget != Null Then Drawn(widget, False)
             Local clipping = node.Clips()
             If clipping Then PushClip(node.ContentBox())
             If !Current().Empty()
@@ -101,9 +105,27 @@ Public Final Class Painter
                 End For
             End If
             If clipping Then PopClip()
-            If widget != Null Then widget.DrawOver(Self)
+            If widget != Null Then Drawn(widget, True)
         End If
         PopClip()
+    End Method
+
+    // Draws `widget`, what goes `over` it or not, and takes away a clip it left pushed, so what's
+    // drawn after it isn't clipped by it.
+    @MainThread Method Drawn(widget: Widget, over: Bool)
+        Local had = floor
+        floor = clips.Count
+        drawing = widget
+        If over
+            widget.DrawOver(Self)
+        Else
+            widget.Draw(Self)
+        End If
+        If clips.Count > floor
+            clips.RemoveRange(floor, clips.Count - floor)
+            Applied()
+        End If
+        floor = had
     End Method
 
     /// The canvas, for what these Methods don't draw: its pen's as they left it, its positions in
@@ -120,11 +142,12 @@ Public Final Class Painter
     /// The Ui it's painting.
     @MainThread Public Method Owner(): Ui => ui
 
-    /// The target's column `x`, in the UI's units, is in.
-    @MainThread Public Method PixelX(x: Float32): Int32 => Round(x * across) As Int32
+    /// The target's column `x`, in the UI's units, is in, kept to 536,870,912 pixels either way,
+    /// and NaN's 0.
+    @MainThread Public Method PixelX(x: Float32): Int32 => Pixel(x * across)
 
-    /// The target's row `y`, in the UI's units, is in.
-    @MainThread Public Method PixelY(y: Float32): Int32 => Round(y * down) As Int32
+    /// The target's row `y`, in the UI's units, is in, as PixelX's is.
+    @MainThread Public Method PixelY(y: Float32): Int32 => Pixel(y * down)
 
     /// Draws only in `box` as well, as PopClip ends.
     @MainThread Public Method PushClip(box: Rect)
@@ -139,9 +162,13 @@ Public Final Class Painter
         Applied()
     End Method
 
-    /// Ends the last PushClip.
-    @MainThread Public Method PopClip()
-        If clips.Count == 0 Then Panic("Painter.PopClip: there's no PushClip it ends")
+    /// Ends the last PushClip. It panics for one the widget drawing didn't push; one it leaves
+    /// pushed ends as its Draw does.
+    @MainThread @PanicsAtCaller
+    Public Method PopClip()
+        If clips.Count <= floor
+            Panic("Painter.PopClip: {drawing?.ToString() ?? "this"} ends a clip it didn't push")
+        End If
         clips.RemoveAt(clips.Count - 1)
         Applied()
     End Method
@@ -243,12 +270,16 @@ Public Final Class Painter
         Local rows = box.Bottom - box.Top
         Local round = Clamp(radius, 0.0, (Min(wide, rows) As Float32) / 2.0)
         Local corner = Ceil(round) As Int32
-        For row = 0 To corner - 1
+        // Only the rows in the clip: a box can be far bigger than the target.
+        Local clip = Current()
+        For row = Max(clip.Top - box.Top, 0) To Min(clip.Bottom - box.Top, corner) - 1
             Local inset = RowInset(row, round)
             canvas.DrawRect(box.Left + inset, box.Top + row, wide - inset * 2, 1)
-            If rows - 1 - row != row
-                canvas.DrawRect(box.Left + inset, box.Bottom - 1 - row, wide - inset * 2, 1)
-            End If
+        End For
+        For row = Max(box.Bottom - clip.Bottom, 0) To Min(box.Bottom - clip.Top, corner) - 1
+            If rows - 1 - row == row Then Continue
+            Local inset = RowInset(row, round)
+            canvas.DrawRect(box.Left + inset, box.Bottom - 1 - row, wide - inset * 2, 1)
         End For
         If rows > corner * 2
             canvas.DrawRect(box.Left, box.Top + corner, wide, rows - corner * 2)
@@ -267,9 +298,13 @@ Public Final Class Painter
         Local round = Clamp(radius, 0.0, (Min(wide, rows) As Float32) / 2.0)
         Local within = Max(round - (thick As Float32), 0.0)
         Local corner = Max(Ceil(round) As Int32, thick)
-        For row = 0 To corner - 1
+        Local clip = Current()
+        For row = Max(clip.Top - box.Top, 0) To Min(clip.Bottom - box.Top, corner) - 1
             RingRows(box, row, 1, round, within, thick)
-            RingRows(box, rows - 1 - row, 1, round, within, thick)
+        End For
+        For row = Max(box.Bottom - clip.Bottom, 0) To Min(box.Bottom - clip.Top, corner) - 1
+            // A pill's middle row is the top's already.
+            If rows - 1 - row != row Then RingRows(box, rows - 1 - row, 1, round, within, thick)
         End For
         If rows > corner * 2 Then RingRows(box, corner, rows - corner * 2, round, within, thick)
     End Method
@@ -293,6 +328,12 @@ Public Final Class Painter
         canvas.DrawRect(box.Right - inside, top, inside - outside, count)
     End Method
 End Class
+
+// `value` as a whole pixel: kept to where a box's two sides still subtract in an Int32, and NaN's 0.
+Function Pixel(value: Float32): Int32
+    If IsNaN(value) Then Return 0
+    Return Round(Clamp(value, -536870912.0, 536870912.0)) As Int32
+End Function
 
 // Whether `color` shows at all.
 Function Shows(color: Color): Bool => color.a > 0.0

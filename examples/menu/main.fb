@@ -1,80 +1,99 @@
 // A game's menus, HUD, and console on fbengine_ui: a main menu, its options, a HUD over the game,
 // and the console on the grave key, used by the mouse, the keyboard, and a gamepad, driven here by
 // Simulate, offscreen, as a test or a replay is. Each frame it draws them over the game's own
-// background, in the engine's own font.
+// background, in the engine's own font. With --watch, a window for a person to watch, which walks
+// through them by itself, as they can too (tools/show.py plays it); Escape on the main menu, or
+// closing it, ends it.
 
+Import std.collections
 Import std.core
 Import std.math
+Import std.os
 Import fbengine
 Import fbengine_ui
 
-Global score: Int = 0
+// The game: its widgets, its UI, and what it does with them each frame.
+Class Game
+    Field score: Int = 0
+    Field screen: Node
+    Field menu: Node
+    Field play: Button
+    Field options: Button
+    Field settings: Node
+    Field volume: Slider
+    Field fullscreen: Toggle
+    Field name: TextField
+    Field back: Button
+    Field hud: Node
+    Field shown: Label
+    Field console: Console
+    Field controls: ActionSet
+    Field jump: Action
+    Field ui: Ui
 
-Function Main() Throws GraphicsError, InputError
-    Window.SetHeadless(True)
-    Try Graphics(640, 360)
-    Defer EndGraphics()
+    New()
+        // The main menu, and its options, in the middle of the screen; the HUD at its top left.
+        screen = Node("screen")
+        menu = Column("menu", screen)
+        play = Button("Play")
+        options = Button("Options")
+        settings = Column("options", screen)
+        volume = Slider(0.0, 1.0, 0.5)
+        fullscreen = Toggle("Fullscreen")
+        name = TextField("", "your name")
+        back = Button("Back")
+        hud = Node("hud")
+        shown = Label("score 0")
+        console = Console()
+        controls = ActionSet()
+        jump = controls.Add("jump")
+        ui = Ui(screen)
+        screen.SetArrangement(Arrangement.STACK)
+        menu.Add(play)
+        menu.Add(options)
+        menu.Add(Button("Quit"))
+        settings.SetVisible(False)
+        volume.SetStep(0.05)
+        settings.Add(volume)
+        settings.Add(fullscreen)
+        settings.Add(name)
+        settings.Add(back)
+        hud.SetAnchors(Anchors.Point(0.0, 0.0))
+        hud.SetPadding(Insets.All(8.0))
+        hud.SetVisible(False)
+        shown.SetTranslates(False)
+        hud.Add(shown)
+        screen.Add(hud)
+        console.SetHeight(Sizing.Fraction(0.5))
+        console.SetAnchors(Anchors(0.0, 0.0, 1.0, 0.0))
+        console.SetVisible(False)
+        screen.Add(console)
+        // The game's controls, which the UI blocks while one of its widgets has the focus.
+        jump.Bind(Binding.OfKey(Key.SPACE))
+        jump.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+        ui.Route(controls)
+        ui.SetNavigable(True)
+    End New
 
-    // The main menu, and its options, in the middle of the screen; the HUD at its top left.
-    Local screen = Node("screen")
-    screen.SetArrangement(Arrangement.STACK)
-    Local menu = Column("menu", screen)
-    Local play = Button("Play")
-    Local options = Button("Options")
-    Local quit = Button("Quit")
-    menu.Add(play)
-    menu.Add(options)
-    menu.Add(quit)
-    Local settings = Column("options", screen)
-    settings.SetVisible(False)
-    Local volume = Slider(0.0, 1.0, 0.5)
-    volume.SetStep(0.05)
-    Local fullscreen = Toggle("Fullscreen")
-    Local name = TextField("", "your name")
-    Local back = Button("Back")
-    settings.Add(volume)
-    settings.Add(fullscreen)
-    settings.Add(name)
-    settings.Add(back)
-    Local hud = Node("hud")
-    hud.SetAnchors(Anchors.Point(0.0, 0.0))
-    hud.SetPadding(Insets.All(8.0))
-    hud.SetVisible(False)
-    Local shown = Label("score 0")
-    shown.SetTranslates(False)
-    hud.Add(shown)
-    screen.Add(hud)
-    Local console = Console()
-    console.SetHeight(Sizing.Fraction(0.5))
-    console.SetAnchors(Anchors(0.0, 0.0, 1.0, 0.0))
-    console.SetVisible(False)
-    console.Register("give", "adds to the score", Function(own: Console, words: String[])
-        Local points = words.Count > 0 ? Int.Parse(words[0]) : Null
-        If points == Null Then Return "give how many?"
-        score += points
-        Return "gave {points}"
-    End Function)
-    screen.Add(console)
+    // The console's command, which holds the game Weak, as the console's in it.
+    Method Commands()
+        Local game: Weak<Game> = Self
+        console.Register("give", "adds to the score", Function(own: Console, words: String[])
+            Local points = words.Count > 0 ? Int.Parse(words[0]) : Null
+            If points == Null Then Return "give how many?"
+            Local held = game
+            If held != Null Then held.score += points
+            Return "gave {points}"
+        End Function)
+    End Method
 
-    // The game's controls, which the UI blocks while one of its widgets has the focus.
-    Local controls = ActionSet()
-    Local jump = controls.Add("jump")
-    jump.Bind(Binding.OfKey(Key.SPACE))
-    jump.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
-    Local ui = Ui(screen)
-    ui.Route(controls)
-    ui.SetNavigable(True)
-    Local pad = Try Simulate.ConnectGamepad("Player One")
-    Defer pad.Unplug()
-
-    // Each frame: the console's key, the UI, then what its widgets read.
-    Local frame = Function()
+    // A frame: the console's key, the UI, what `walked` does in a person's place, then what its
+    // widgets read, and it's drawn.
+    Method Step(walked: Func()? = Null)
         Flip()
-        If KeyHit(console.ToggleKey())
-            console.SetVisible(!console.Visible())
-            ui.Focus(console.Visible() ? console.Line() : Null)
-        End If
+        If KeyHit(console.ToggleKey()) Then ToggleConsole()
         ui.Update()
+        If walked != Null Then walked()
         If options.Clicked() || back.Clicked() || ui.Back() && settings.Visible()
             menu.SetVisible(!menu.Visible())
             settings.SetVisible(!settings.Visible())
@@ -95,73 +114,191 @@ Function Main() Throws GraphicsError, InputError
             canvas.Clear()
             ui.Draw()
         End If
-    End Function
-    frame()
+    End Method
+
+    Method ToggleConsole()
+        console.SetVisible(!console.Visible())
+        ui.Focus(console.Visible() ? console.Line() : Null)
+    End Method
+
+    // Back to the main menu, as the walk starts again.
+    Method ToMenu()
+        hud.SetVisible(False)
+        menu.SetVisible(True)
+        ui.SetNavigable(True)
+        ui.Focus(Null)
+    End Method
+
+    // Step `step` of the walk, or False past its last; each what a person would do.
+    Method Walk(step: Int): Bool
+        Select step
+            Case 0, 1
+                ui.FocusNext()
+            Case 2
+                options.Click()
+            Case 3
+                ui.FocusNext()
+            Case 4, 5, 6
+                volume.SetValue(volume.Value() + 0.15)
+            Case 7
+                ui.FocusNext()
+                fullscreen.Click()
+            Case 8
+                ui.FocusNext()
+            Case 9
+                name.SetText("A")
+            Case 10
+                name.SetText("Ad")
+            Case 11
+                name.SetText("Ada")
+            Case 12
+                name.SelectAll()
+            Case 13
+                back.Click()
+            Case 14
+                play.Click()
+            Case 15, 16
+                score += 100
+            Case 17
+                ToggleConsole()
+            Case 18
+                console.Line().SetText("give 50")
+            Case 19
+                console.Line().SetText("")
+                console.Run("give 50")
+            Case 20
+                console.Run("help")
+            Case 21
+                ToggleConsole()
+            Case 22
+                ToMenu()
+                volume.SetValue(0.5)
+            Default
+                Return False
+        End Select
+        Return True
+    End Method
+End Class
+
+Function Played() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+    Local game = Game()
+    game.Commands()
+    Local pad = Try Simulate.ConnectGamepad("Player One")
+    Defer pad.Unplug()
+    game.Step()
 
     // The mouse opens the options.
-    Local at = options.Box().Center
+    Local at = game.options.Box().Center
     Try Simulate.MoveMouse(at.x, at.y)
     Try Simulate.Click(MouseButton.LEFT)
-    frame()
-    Print("options open: {settings.Visible()}")
+    game.Step()
+    Print("options open: {game.settings.Visible()}")
 
     // The keyboard sets them, and Escape goes back.
     Try Simulate.PressKey(Key.TAB)
-    frame()
+    game.Step()
     For i = 1 To 3
         Try Simulate.PressKey(Key.RIGHT)
-        frame()
+        game.Step()
     End For
     Try Simulate.PressKey(Key.DOWN)
-    frame()
+    game.Step()
     Try Simulate.PressKey(Key.SPACE)
-    frame()
+    game.Step()
     Try Simulate.PressKey(Key.TAB)
-    frame()
+    game.Step()
     Try Simulate.Text("Ada")
-    frame()
-    Print("volume {volume.Value():.2}, fullscreen {fullscreen.On()}, name {name.Text()}")
+    game.Step()
+    Print("volume {game.volume.Value():.2}, fullscreen {game.fullscreen.On()}, name {game.name.Text()}")
     Try Simulate.PressKey(Key.ESCAPE)
-    frame()
-    Print("menu again: {menu.Visible()}")
+    game.Step()
+    Print("menu again: {game.menu.Visible()}")
 
     // A gamepad plays: the D-pad to Play, SOUTH to press it, and SOUTH again to jump.
     pad.SetButton(GamepadButton.DPAD_DOWN, True)
-    frame()
+    game.Step()
     pad.SetButton(GamepadButton.DPAD_DOWN, False)
     pad.SetButton(GamepadButton.SOUTH, True)
-    frame()
-    Print("playing: {hud.Visible()}, focus {ui.Focused() == Null ? "none" : "taken"}")
+    game.Step()
+    Print("playing: {game.hud.Visible()}, focus {game.ui.Focused() == Null ? "none" : "taken"}")
     pad.SetButton(GamepadButton.SOUTH, False)
     pad.SetButton(GamepadButton.SOUTH, True)
-    frame()
-    Print("a jump: {shown.Text()}")
+    game.Step()
+    Print("a jump: {game.shown.Text()}")
 
     // The console, on the grave key: a command, and Space typed, not jumped.
     Try Simulate.PressKey(Key.GRAVE)
-    frame()
+    game.Step()
     Try Simulate.Text("give 50")
     Try Simulate.PressKey(Key.RETURN)
-    frame()
+    game.Step()
     Try Simulate.PressKey(Key.SPACE)
     Try Simulate.Text(" ")
-    frame()
-    Print("console: {console.Lines()}, {shown.Text()}, typed \"{console.Line().Text()}\"")
+    game.Step()
+    Print("console: {game.console.Lines()}, {game.shown.Text()}, typed \"{game.console.Line().Text()}\"")
     Try Simulate.PressKey(Key.GRAVE)
-    frame()
+    game.Step()
     pad.SetButton(GamepadButton.SOUTH, False)
-    frame()
+    game.Step()
     pad.SetButton(GamepadButton.SOUTH, True)
-    frame()
-    Print("closed, a jump: {shown.Text()}")
+    game.Step()
+    Print("closed, a jump: {game.shown.Text()}")
     pad.SetButton(GamepadButton.SOUTH, False)
-    frame()
-    ui.Unroute(controls)
+    game.Step()
+    game.ui.Unroute(game.controls)
 End Function
 
-// A column of `screen`'s, in its middle, its widgets 8 apart.
+// A window for a person to watch, walking a step every 0.7 seconds, to its end; or `frames` frames,
+// offscreen, a step each, as a test walks it.
+Function Watched(frames: Int) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(1024, 576)
+    Defer EndGraphics()
+    Frame.SetLimit(60)
+    Local game = Game()
+    game.Commands()
+    Local step = 0
+    Local waited: Float64 = 0.0
+    Local count = 0
+    Local sawOptions = False
+    Local sawPlaying = False
+    Local sawConsole = False
+    Local sawMenu = False
+    While !Window.Closed() && (frames == 0 || count < frames)
+        // Escape's the options' way back, the console's and the game's to the menu, then the end.
+        If KeyHit(Key.ESCAPE) && game.menu.Visible() Then Break
+        If KeyHit(Key.ESCAPE) && game.hud.Visible() Then game.ToMenu()
+        waited += Frame.Delta()
+        count += 1
+        Local stepping = frames > 0 || waited >= 0.7
+        game.Step(Function()
+            If !stepping Then Return
+            If !game.Walk(step) Then step = -1
+            step += 1
+        End Function)
+        If stepping Then waited = 0.0
+        sawOptions = sawOptions || game.settings.Visible()
+        sawPlaying = sawPlaying || game.hud.Visible()
+        sawConsole = sawConsole || game.console.Visible()
+        sawMenu = sawMenu || sawPlaying && game.menu.Visible()
+    End While
+    game.ui.Unroute(game.controls)
+    Print("watched {count} frames: options {sawOptions}, playing {sawPlaying}, console {sawConsole}, menu again {sawMenu}")
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// A panel of `screen`'s, in its middle, its widgets 8 apart.
 Function Column(name: String, screen: Node): Node
-    Local column = Node(name)
+    Local column = Widget("panel", name)
     column.SetAnchors(Anchors.Point(0.5, 0.5))
     column.SetGap(8.0)
     column.SetAlign(Align.STRETCH)
@@ -169,4 +306,9 @@ Function Column(name: String, screen: Node): Node
     Return column
 End Function
 
-Try Main()
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try Watched(Asked(arguments))
+Else
+    Try Played()
+End If

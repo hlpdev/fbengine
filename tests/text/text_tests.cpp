@@ -615,4 +615,18 @@ TEST_CASE("the engine's own font is in the DLL, a face read once, and refuses a 
     CHECK(fbe_text_embedded_font(std::numeric_limits<float>::infinity(), 0) == 0);
     fbe_text_free_font(font);
     fbe_text_free_font(again);
+    // A font made for one call, over and over: one face, kept, and its glyphs not rasterized again.
+    const std::uint64_t first = fbe_text_embedded_font(16.0F, 0);
+    REQUIRE(fbe::text::lay_out(first, "Az", 1.0F, laid));
+    fbe_text_free_font(first);
+    const std::size_t faces = fbe::text::faces_open();
+    const std::uint32_t page = laid.glyphs[0].page;
+    const std::uint64_t version = fbe::text::atlas().pages()[page].version;
+    for (int each = 0; each < 20; ++each) {
+        const std::uint64_t temporary = fbe_text_embedded_font(16.0F, 0);
+        REQUIRE(fbe::text::lay_out(temporary, "Az", 1.0F, laid));
+        fbe_text_free_font(temporary);
+        CHECK(fbe::text::faces_open() == faces);
+    }
+    CHECK(fbe::text::atlas().pages()[page].version == version);
 }

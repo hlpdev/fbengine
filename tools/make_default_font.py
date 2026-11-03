@@ -6,9 +6,11 @@ of Noto Sans Regular, its hinting and every table a game's text doesn't need lef
 Its source, under the SIL Open Font License (packages/fbengine/notices/noto-sans.txt), is Noto Sans
 2.015, at
 https://github.com/notofonts/notofonts.github.io/raw/28b15b4b43b7bed62b5cf6e6b0b5ff5846270535/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf
-It needs fontTools.
+whose SHA-256 it checks. It needs fontTools 4.68.0 (`pip install fonttools==4.68.0`), as nothing else
+of the engine's does but tests/fonts/make_fonts.py; the build uses only what it wrote.
 """
 
+import hashlib
 import io
 import pathlib
 import sys
@@ -17,6 +19,7 @@ from fontTools import subset
 from fontTools.ttLib import TTFont
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+SOURCE_SHA256 = "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823"
 
 # Basic Latin, Latin-1, Latin Extended-A, the punctuation games print, the euro, the trademark, the
 # arrows, and the replacement character.
@@ -25,7 +28,10 @@ RANGES = [(0x20, 0x7E), (0xA0, 0x17F), (0x2010, 0x2027), (0x2030, 0x203A), (0x20
 
 
 def main():
-    font = TTFont(sys.argv[1])
+    source = pathlib.Path(sys.argv[1]).read_bytes()
+    if hashlib.sha256(source).hexdigest() != SOURCE_SHA256:
+        sys.exit(f"{sys.argv[1]} isn't Noto Sans 2.015's file")
+    font = TTFont(io.BytesIO(source))
     options = subset.Options()
     options.hinting = False
     options.layout_features = ["kern", "liga", "mark", "mkmk", "ccmp", "locl"]

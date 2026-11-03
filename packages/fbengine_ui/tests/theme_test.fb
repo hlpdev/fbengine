@@ -245,3 +245,22 @@ Function ANormalTableIsAMistake()
                "button.normal: normal isn't a state; a name's own fields are its normal ones")
     End For
 End Function
+
+@Test
+Function AThemeMakesAStyleOnceUntilItChanges() Throws UIError
+    Local theme = Theme.Dark()
+    Local had = theme.StylesMade()
+    Local style = theme.StyleOf("list.item", WidgetState.HOVERED)
+    Expect(theme.StylesMade() == had + 1)
+    For i = 1 To 1000
+        Expect(theme.StyleOf("list.item", WidgetState.HOVERED) == style)
+    End For
+    Expect(theme.StylesMade() == had + 1)
+    // A change is seen at once, by SetFields and Load both.
+    Local under = StyleFields()
+    under.Background = Color.Hex("#112233")
+    theme.SetFields("list.item", under, WidgetState.HOVERED)
+    Expect(theme.StyleOf("list.item", WidgetState.HOVERED).Background == Color.Hex("#112233"))
+    Try theme.Load("[list.item.hovered]\nbackground = \"#445566\"\n")
+    Expect(theme.StyleOf("list.item", WidgetState.HOVERED).Background == Color.Hex("#445566"))
+End Function

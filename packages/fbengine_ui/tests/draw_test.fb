@@ -302,11 +302,24 @@ Function WithNoFontTheUiTakesTheEnginesOwn() Throws GraphicsError
     Local size = Font.BuiltIn().Measure("Hello")
     Expect(label.Box().Width == size.x && label.Box().Height == size.y)
     Expect(Marked(Try Pixels(), label.Box(), clear))
-    // A game's own font stays its own.
-    Local theirs = Try Opened([Label("x")])
-    theirs.SetFont("", Font.BuiltIn(30.0))
-    Drawn(theirs)
-    Expect(theirs.FontFor(Style.Plain())?.Size() == 16.0)
+    // With its font taken away, it takes the engine's again, and draws.
+    ui.SetFont("", Null)
+    Drawn(ui)
+    Expect(ui.FontFor(Style.Plain())?.Family() == "Noto Sans")
+    Expect(Marked(Try Pixels(), label.Box(), clear))
+    EndGraphics()
+End Function
+
+@Test
+Function AFontSetBeforeTheFirstDrawIsKept() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    If Fonts() == "" Then Skip("no test fonts")
+    Window.SetHeadless(True)
+    Try Graphics(200, 200)
+    Local ui = Ui(Label("x"), Plain())
+    ui.SetFont("", Try Font.Load("{Fonts()}/OpenSans-Regular.ttf", 16.0))
+    Drawn(ui)
+    Expect(ui.FontFor(Style.Plain())?.Family() == "Open Sans")
     EndGraphics()
 End Function
 
@@ -503,9 +516,14 @@ Function DarksPartsAllShow() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Local theme = Theme.Dark()
     For name In ["slider.fill", "slider.thumb", "progress", "progress.fill", "toggle.box",
-                 "toggle.check", "scroll.thumb", "field.selection", "console",
-                 "console.field.selection", "debug"]
+                 "toggle.check", "scroll.thumb", "field.selection", "console", "debug"]
         Expect(theme.StyleOf(name).Background.a > 0.0)
+    End For
+    Expect(theme.PartOf("console.field", "selection").Background ==
+           theme.StyleOf("field.selection").Background)
+    // Focused, what's in a slider has no border of its own.
+    For part In ["fill", "thumb"]
+        Expect(theme.PartOf("slider", part, WidgetState.FOCUSED).BorderWidth == 0.0)
     End For
     // A disabled slider's fill goes faint, and a toggle shows the focus on its box.
     Expect(theme.StyleOf("slider.fill", WidgetState.DISABLED).Background !=
@@ -519,12 +537,37 @@ Function DarksPartsAllShow() Throws GraphicsError
     Local console = Console()
     console.SetSize(180.0, 80.0)
     console.Print("hello")
-    Local ui = Try Opened([list, Button("OK"), console])
+    Local button = Button("OK")
+    button.SetTranslates(False)
+    Local ui = Try Opened([list, button, console])
     ui.SetTheme(theme)
     list.SetSelected(1)
     Drawn(ui)
     Drawn(ui)
-    Expect(Marked(Try Pixels(), console.Box(), clear))
+    Local image = Try Pixels()
+    // The picked item's own background, and the button's, not only the console's.
+    Local items = list.Children()
+    Local picked = items[1].Box()
+    Expect(image[(picked.X + 1.0) As Int32, (picked.Y + 1.0) As Int32] ==
+           theme.StyleOf("list.item.selected").Background.ToColor32())
+    Local first = items[0].Box()
+    Expect(image[(first.X + 1.0) As Int32, (first.Y + 1.0) As Int32] !=
+           theme.StyleOf("list.item.selected").Background.ToColor32())
+    Local on = button.Box()
+    Expect(image[(on.X + 6.0) As Int32, (on.Y + 2.0) As Int32] ==
+           theme.StyleOf("button").Background.ToColor32())
+    // "hello"'s drawn in the console's output, above its line.
+    Expect(console.Lines() == ["hello"])
+    Local line = console.Line().Box()
+    Local box = console.Box()
+    Local panel = theme.StyleOf("console").Background.ToColor32()
+    Local found = False
+    For y = (box.Y + 3.0) As Int32 To (line.Y As Int32) - 1
+        For x = (box.X + 13.0) As Int32 To (box.X + 40.0) As Int32
+            If image[x, y] != panel Then found = True
+        End For
+    End For
+    Expect(found)
     EndGraphics()
 End Function
 
@@ -539,7 +582,10 @@ Function AGamesWidgetDrawsWithAPainter() Throws GraphicsError
     Expect(image[10, 10] == Solid("#00ff00"))
     // Its clip's what it pushed, then what it had, and its pen's its own.
     Expect(image[14, 10] == Solid("#00ff00") && image[15, 10] == clear)
-    Expect(ui.Hovered() == Null || !RefEquals(ui.Hovered(), widget) || True)
+    // What it draws after PopClip is clipped by its box again, not by what it pushed.
+    Expect(image[1, 19] == Solid("#0000ff"))
+    Expect(image[0, 19] == Solid("#0000ff"))
+    Expect(ui.Root().Visible())
     Expect(Widget("x").PartStyle("y") == Widget("x").CurrentStyle())
     EndGraphics()
 End Function
@@ -554,6 +600,7 @@ Class Crossed Extends Widget
         paint.PushClip(Rect(5.0, 5.0, 10.0, 10.0))
         paint.Fill(Box(), Color.Hex("#00ff00"))
         paint.PopClip()
+        paint.Fill(Rect(0.0, 19.0, 2.0, 1.0), Color.Hex("#0000ff"))
         Expect(paint.Across() == 1.0 && paint.Down() == 1.0)
         Expect(paint.PixelX(2.5) == 3 && paint.PixelY(2.4) == 2)
         Expect(RefEquals(paint.Target(), Screen.Canvas()))
@@ -586,5 +633,350 @@ Function AFieldsCursorBlinksFromWhenItLastMoved() Throws GraphicsError
     Local at = ui.MeasureText("a", field.CurrentStyle()).x
     Expect(field.Cursor() == 1)
     Expect((Try Pixels())[Round(at) As Int32, 2] != clear)
+    EndGraphics()
+End Function
+
+@Test
+Function ASliderAsNarrowAsItsThumbDraws() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local slider = Slider(0.0, 1.0, 0.5)
+    slider.SetSize(8.0, 16.0)
+    slider.SetMargin(Insets(0.2, 0.0, 0.0, 0.0))
+    Local ui = Try Opened([slider])
+    Local image = Try Pixels()
+    Expect(image[4, 8] == Solid("#0000ff"))
+    Expect(image[8, 8] == clear)
+    Expect(ui.Root().Visible())
+    EndGraphics()
+End Function
+
+@Test
+Function AKindKeepsItsParentsPartsAndCanHaveItsOwn() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local slider = Slider(0.0, 1.0, 0.5)
+    slider.SetStyleName("slider.volume")
+    slider.SetSize(40.0, 8.0)
+    Local ui = Try Opened([slider])
+    Local image = Try Pixels()
+    Expect(image[0, 0] == Solid("#00ff00") && image[20, 0] == Solid("#0000ff"))
+    Expect(image[39, 0] == Solid("#101010"))
+    ui.CurrentTheme().SetStyle("slider.volume.thumb", Filled("#ff00ff"))
+    Drawn(ui)
+    image = Try Pixels()
+    Expect(image[20, 0] == Solid("#ff00ff") && image[0, 0] == Solid("#00ff00"))
+    // Under Dark, too, its fill and thumb aren't its track.
+    Local dark = Theme.Dark()
+    Expect(dark.PartOf("slider.volume", "fill").Background !=
+           dark.StyleOf("slider.volume").Background)
+    Expect(dark.PartOf("slider.volume", "thumb").Background ==
+           dark.StyleOf("slider.thumb").Background)
+    EndGraphics()
+End Function
+
+Class LeavesAClip Extends Widget
+    New()
+        Super.New("panel")
+    End New
+
+    @MainThread Public Override Method Draw(paint: Painter)
+        paint.PushClip(Rect(0.0, 0.0, 1.0, 1.0))
+    End Method
+End Class
+
+@Test
+Function AClipLeftPushedEndsWithItsDraw() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local after = Sized(Widget("panel"), 20.0, 10.0)
+    Local ui = Try Opened([Sized(LeavesAClip(), 20.0, 10.0), after])
+    Local box = after.Box()
+    Expect((Try Pixels())[(box.X + 19.0) As Int32, (box.Y + 9.0) As Int32] == Solid("#ff0000"))
+    Expect(ui.Root().Visible())
+    EndGraphics()
+End Function
+
+@Test
+Function TextStaysInItsBoxOnAStretchedScreen() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    If Fonts() == "" Then Skip("no test fonts")
+    Local label = Label("WWWWWWWWWW")
+    label.SetTranslates(False)
+    Local ui = Try Opened([label], 800, 200)
+    ui.SetFont("", Try Font.Load("{Fonts()}/OpenSans-Regular.ttf", 16.0))
+    Screen.SetSize(400, 200)
+    Screen.SetScaling(Scaling.STRETCH)
+    Drawn(ui)
+    Drawn(ui)
+    Drawn(ui)
+    Local box = label.Box()
+    // In the screen's pixels, half the window's across: it reaches its box's end, and not past.
+    Local right = (box.Width / 2.0) As Int32
+    Local image = Try Pixels()
+    Expect(Marked(image, Rect((right - 8) As Float32, 0.0, 8.0, box.Height), clear))
+    Expect(!Marked(image, Rect((right + 2) As Float32, 0.0, 40.0, box.Height), clear))
+    // At half its size, as it's half as wide, not cut off at the box at its full size: its W is 6
+    // pixels tall or so, not 12, on the screen's rows that are the window's.
+    Local top, bottom = MarkedRows(image, Rect(0.0, 0.0, (right As Float32), 40.0), clear)
+    Expect(bottom - top + 1 <= 8)
+    Screen.SetSize(0, 0)
+    Screen.SetScaling(Scaling.FIT)
+    EndGraphics()
+End Function
+
+@Test
+Function APillsBorderIsEvenInItsMiddleRow() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local panel = Sized(Widget("pill"), 41.0, 21.0)
+    Local ui = Try Opened([panel])
+    Local style = Filled("#000000")
+    style.Background = Color.Transparent
+    style.Border = Color(1.0, 0.0, 0.0, 0.5)
+    style.BorderWidth = 1.0
+    style.CornerRadius = 99.0
+    ui.CurrentTheme().SetStyle("pill", style)
+    Drawn(ui)
+    Local image = Try Pixels()
+    Local along = image[20, 0]
+    Expect(along != clear)
+    Expect(image[0, 10] == along && image[40, 10] == along)
+    EndGraphics()
+End Function
+
+Class FarBoxes Extends Widget
+    New()
+        Super.New("panel")
+    End New
+
+    @MainThread Public Override Method Draw(paint: Painter)
+        Local red = Color.Hex("#ff0000")
+        paint.Fill(Rect(1e10, -3e9, 5.0, 5.0), red)
+        paint.Fill(Rect(0.0, 0.0, NaN, NaN), red)
+        Local style = Filled("#00ff00")
+        style.CornerRadius = 1e9
+        style.Border = Color.Hex("#0000ff")
+        style.BorderWidth = 2.0
+        paint.Panel(Rect(-1e9, -1e9, 3e9, 3e9), style)
+        Expect(paint.PixelX(1e20) == 536870912 && paint.PixelX(-1e20) == -536870912)
+        Expect(paint.PixelY(NaN) == 0)
+    End Method
+End Class
+
+@Test
+Function AHugeOrNaNBoxDraws() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local far = Sized(FarBoxes(), 20.0, 20.0)
+    Local huge = Sized(Widget("panel"), 3e9, 3e9)
+    Local ui = Try Opened([far, huge])
+    Local image = Try Pixels()
+    // The far box's middle covers it, each row of it not drawn but those in view.
+    Expect(image[10, 10] == Solid("#00ff00"))
+    Expect(image[10, 100] == Solid("#ff0000"))
+    Expect(ui.Root().Visible())
+    EndGraphics()
+End Function
+
+@Test
+Function TwoDrawsAFrameDontHalveTheBlink() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local field = TextField("")
+    field.SetSize(100.0, 24.0)
+    Local ui = Try Opened([field])
+    Local watch = Stopwatch.StartNew()
+    ui.Focus(field)
+    Local off = False
+    While !off && watch.Elapsed.TotalSeconds < 3.0
+        Drawn(ui)
+        ui.Draw()
+        off = (Try Pixels())[0, 12] == clear
+        // Never before half a second has gone.
+        If off Then Expect(watch.Elapsed.TotalSeconds >= 0.5)
+    End While
+    Expect(off)
+    EndGraphics()
+End Function
+
+@Test
+Function ATextureFreedShowsNothing() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(200, 200)
+    Local texture = Try Halved(20, 10, Solid("#ff0000"), Solid("#00ff00"))
+    Local box = ImageBox(Sprite2D(texture))
+    // One that keeps its size, so it's drawn; and one that measures its image, so measures nothing.
+    Local sized = ImageBox(Sprite2D(texture))
+    sized.SetSize(20.0, 10.0)
+    Local ui = Try Opened([sized, box])
+    Expect((Try Pixels())[0, 0] == Solid("#ff0000"))
+    texture.Free()
+    box.SetSprite(box.Sprite())
+    Drawn(ui)
+    Drawn(ui)
+    Expect((Try Pixels())[0, 0] == clear)
+    Expect(box.Box().Width == 0.0)
+    EndGraphics()
+End Function
+
+// The text drawn in `box`'s rows: its first and last marked, -1 for none.
+Function MarkedRows(image: Image, box: Rect, background: Color32): (Int32, Int32)
+    Local first: Int32 = -1
+    Local last: Int32 = -1
+    For y = box.Y As Int32 To ((box.Y + box.Height) As Int32) - 1
+        For x = box.X As Int32 To ((box.X + box.Width) As Int32) - 1
+            If image[x, y] != background
+                If first < 0 Then first = y
+                last = y
+            End If
+        End For
+    End For
+    Return (first, last)
+End Function
+
+@Test
+Function TextIsDrawnAtItsUisScaleOnScreenAndTarget() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    If Fonts() == "" Then Skip("no test fonts")
+    Local label = Label("H")
+    label.SetTranslates(False)
+    Local ui = Try Opened([label], 300, 300)
+    ui.SetFont("", Try Font.Load("{Fonts()}/OpenSans-Regular.ttf", 16.0))
+    Drawn(ui)
+    Drawn(ui)
+    Local top, bottom = MarkedRows(Try Pixels(), Rect(0.0, 0.0, 100.0, 100.0), clear)
+    Local tall = bottom - top + 1
+    Expect(tall >= 9 && tall <= 15)
+    ui.SetScale(2.0)
+    Drawn(ui)
+    Drawn(ui)
+    top, bottom = MarkedRows(Try Pixels(), Rect(0.0, 0.0, 100.0, 100.0), clear)
+    Local twice = bottom - top + 1
+    Expect(twice >= tall * 2 - 2 && twice <= tall * 2 + 2)
+    // On a target too.
+    Local target = Try Texture.Target(100, 100)
+    Local canvas = Canvas(target)
+    canvas.SetColor(clear)
+    canvas.Clear()
+    ui.Draw(canvas)
+    top, bottom = MarkedRows(target.ToImage(), Rect(0.0, 0.0, 100.0, 100.0), clear)
+    Expect(bottom - top + 1 == twice)
+    EndGraphics()
+End Function
+
+@Test
+Function ThePensRotationAndScaleAreGivenBack() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(200, 200)
+    Local box = ImageBox(Sprite2D(Try Halved(20, 10, Solid("#ff0000"), Solid("#ff0000"))))
+    Local ui = Try Opened([box])
+    Local target = Try Texture.Target(64, 64)
+    Local canvas = Canvas(target)
+    canvas.SetColor(clear)
+    canvas.Clear()
+    canvas.SetRotation(1.0)
+    canvas.SetScale(2.0, 3.0)
+    ui.Draw(canvas)
+    Expect(canvas.Rotation() == 1.0 && canvas.Scale() == Vec2(2.0, 3.0))
+    // Drawn straight, whatever the pen was.
+    Local image = target.ToImage()
+    Expect(image[0, 0] == Solid("#ff0000") && image[19, 9] == Solid("#ff0000"))
+    Expect(image[20, 0] == clear && image[0, 10] == clear)
+    EndGraphics()
+End Function
+
+@Test
+Function AnImageBoxLeavesASpritesHandleOutAndCanBeNatural() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Graphics(200, 200)
+    Local red = Solid("#ff0000")
+    Local sprite = Sprite2D(Try Halved(20, 10, red, red))
+    sprite.SetHandle(5.0, 5.0)
+    Local handled = ImageBox(sprite)
+    handled.SetSize(40.0, 20.0)
+    Local natural = ImageBox(Sprite2D(Try Halved(20, 10, red, red)))
+    natural.SetSize(40.0, 40.0)
+    natural.SetFit(ImageFit.NATURAL)
+    Local ui = Try Opened([handled, natural])
+    Local image = Try Pixels()
+    Expect(image[0, 0] == red && image[39, 19] == red && image[40, 0] == clear)
+    // In the middle of its box, at its size: 10 in, and 15 down.
+    Local y = natural.Box().Y As Int32
+    Expect(image[9, y + 20] == clear && image[10, y + 15] == red && image[29, y + 24] == red)
+    Expect(image[30, y + 20] == clear && image[10, y + 14] == clear && image[10, y + 25] == clear)
+    Expect(ui.Root().Visible())
+    EndGraphics()
+End Function
+
+@Test
+Function ARadiusAndABorderAreScaledByTheUi() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local panel = Sized(Widget("scaled"), 40.0, 40.0)
+    Local ui = Try Opened([panel], 200, 200)
+    Local style = Filled("#00ff00")
+    style.CornerRadius = 8.0
+    style.Border = Color.Hex("#ff0000")
+    style.BorderWidth = 2.0
+    ui.CurrentTheme().SetStyle("scaled", style)
+    ui.SetScale(2.0)
+    Drawn(ui)
+    Drawn(ui)
+    Local image = Try Pixels()
+    // A border of 4 pixels, and a radius of 16.
+    Expect(image[3, 40] == Solid("#ff0000") && image[4, 40] == Solid("#00ff00"))
+    Expect(image[4, 4] == clear)
+    EndGraphics()
+End Function
+
+@Test
+Function LabelsTextGoesWhereItsAlignSays() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    If Fonts() == "" Then Skip("no test fonts")
+    Local label = Label("Hi")
+    label.SetTranslates(False)
+    label.SetSize(100.0, 24.0)
+    label.SetTextAlign(Align.END)
+    Local ui = Try Opened([label], 300, 200)
+    ui.SetFont("", Try Font.Load("{Fonts()}/OpenSans-Regular.ttf", 16.0))
+    Drawn(ui)
+    Drawn(ui)
+    Local image = Try Pixels()
+    Expect(Marked(image, Rect(80.0, 0.0, 20.0, 24.0), clear))
+    Expect(!Marked(image, Rect(0.0, 0.0, 70.0, 24.0), clear))
+    label.SetTextAlign(Align.START)
+    Drawn(ui)
+    image = Try Pixels()
+    Expect(Marked(image, Rect(0.0, 0.0, 20.0, 24.0), clear))
+    Expect(!Marked(image, Rect(30.0, 0.0, 70.0, 24.0), clear))
+    EndGraphics()
+End Function
+
+@Test
+Function TheIMEsAreaIsWhereTheFieldShows() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    // A screen shown with bars, 50 down, and a field 10 in.
+    Local field = TextField("")
+    field.SetSize(50.0, 20.0)
+    field.SetMargin(Insets(10.0, 0.0, 0.0, 0.0))
+    Local ui = Try Opened([field], 400, 300)
+    Screen.SetSize(100, 50)
+    Screen.SetScaling(Scaling.FIT)
+    Drawn(ui)
+    ui.Focus(field)
+    Drawn(ui)
+    Local area = TextInputArea()
+    Expect(area.X == 10 && area.Y == 50 && area.Width == 50 && area.Height == 20)
+    // Scaled: its box's place and size, in the window's units.
+    ui.SetScale(2.0)
+    Drawn(ui)
+    Drawn(ui)
+    area = TextInputArea()
+    Expect(area.X == 20 && area.Y == 50 && area.Width == 100 && area.Height == 40)
+    // With bars at its sides, 100 across.
+    ui.SetScale(1.0)
+    Try Graphics(600, 200)
+    Drawn(ui)
+    Drawn(ui)
+    area = TextInputArea()
+    Expect(area.X == 110 && area.Y == 0)
+    Screen.SetSize(0, 0)
     EndGraphics()
 End Function

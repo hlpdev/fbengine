@@ -66,8 +66,10 @@ Public Final Class Ui
     Field strings: Strings? = Null
     // Its Strings' stamp when its widgets were last laid out by them.
     Field stamp: Int = 0
-    // Whether Draw's given it the engine's font, with none of its own.
-    Field asked: Bool = False
+    // How many times what it measures text by has changed.
+    Field measures: Int = 0
+    // The widget it started the window's text input for.
+    Field typingFor: Weak<Widget>
 
     /// A Ui of the tree `root`, in `theme`, or Theme.Dark().
     @MainThread Public New(root: Node, theme: Theme? = Null)
@@ -260,6 +262,7 @@ Public Final Class Ui
         End If
         sized.Clear()
         recent.Clear()
+        measures += 1
         root.Invalidate()
     End Method
 
@@ -289,8 +292,12 @@ Public Final Class Ui
     /// again.
     @MainThread Public Method SetTextMeasure(measured: (Func(String, Style): Vec2)?)
         measure = measured
+        measures += 1
         root.Invalidate()
     End Method
+
+    // How many times what it measures text by has changed, past which what's measured is old.
+    @MainThread Package Method MeasureStamp(): Int => measures
 
     /// The size `text` takes in `style`: as SetTextMeasure set, or in its font (FontFor), or by
     /// EstimatedText without one.
@@ -376,8 +383,9 @@ Public Final Class Ui
             If wide <= 0 || high <= 0 || area.Width <= 0.0 || area.Height <= 0.0 Then Return
             across = scale * ((wide As Float32) / area.Width)
             down = scale * ((high As Float32) / area.Height)
-            // A font's size is the window's units to the screen's text, across.
-            fontUnits = down * (Window.Width() As Float32) / (wide As Float32)
+            // A font's size is the window's units to the screen's text, across; under STRETCH, by
+            // the narrower way, so text stays in the boxes measured for it.
+            fontUnits = Min(across, down) * (Window.Width() As Float32) / (wide As Float32)
         Else
             fontUnits = scale
         End If
@@ -387,11 +395,10 @@ Public Final Class Ui
         paint.Finish()
     End Method
 
-    // The engine's font for "", the first time it draws with none, laid out by it at once, so its
-    // first frame's as its next are.
+    // The engine's font for "", as it draws with none, laid out by it at once, so its first frame's
+    // as its next are.
     @MainThread Method Asked()
-        If asked || fonts.Get("") != Null Then Return
-        asked = True
+        If fonts.Get("") != Null Then Return
         SetFont("", Font.BuiltIn())
         Local area = ShownArea()
         root.Layout(Rect(0.0, 0.0, area.Width / scale, area.Height / scale))
@@ -573,9 +580,16 @@ Public Final Class Ui
         Local own = focused
         Local wants = own != Null && own.TakesText()
         If wants && own != Null
+            // Another field's composition goes with its focus, not into this one.
+            Local had = typingFor
+            If typing && (had == Null || !RefEquals(had, own))
+                StopTextInput()
+                typing = False
+            End If
             If !typing && Window.Open()
                 StartTextInput()
                 typing = True
+                typingFor = own
             End If
             Local box = own.Box()
             If typing

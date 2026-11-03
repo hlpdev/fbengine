@@ -50,7 +50,76 @@ Function Composing() Throws GraphicsError, IOError
     // At 17.6, so column 18, in the row above any glyph.
     Local cursor = image[18, 1] != black && image[20, 1] == black
     Print("underlined {underlined && before && after}, cursor {cursor}, typed {field.Text()}")
+    // A screen half the window's size: its underline's still a pixel, on any row.
+    Screen.SetSize(100, 50)
+    field.SetMargin(Insets(0.0, 3.0, 0.0, 0.0))
+    frame()
+    frame()
+    image = Try Screen.ToImage()
+    Local shown = False
+    // Below the glyphs' baseline, 3 + 12.8 units down, so 8 pixels.
+    For y = 8 To 12
+        If image[5, y] != black && image[8, y] != black && image[12, y] != black Then shown = True
+    End For
+    Print("half size, underlined {shown}")
     EndGraphics()
+End Function
+
+// A composition doesn't follow the focus into another field: its text input stops and starts.
+Function ComposingMoved() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("composing bb, then none")
+        Return
+    End If
+    SetDrawsComposition(True)
+    Window.SetHeadless(True)
+    Try Graphics(200, 100)
+    Local root = Node("root")
+    Local first = TextField("a")
+    Local second = TextField("b")
+    root.Add(first)
+    root.Add(second)
+    Local ui = Ui(root)
+    ui.Focus(first)
+    Flip()
+    ui.Update()
+    Try Simulate.Composition("bb")
+    Flip()
+    ui.Update()
+    Local had = TextComposition().Text
+    ui.Focus(second)
+    ui.Update()
+    Flip()
+    ui.Update()
+    Print("composing {had}, then {TextComposition().Text == "" ? "none" : "kept"}")
+    EndGraphics()
+End Function
+
+// A widget that ends a clip it didn't push.
+Class PopsTooMany Extends Widget
+    New()
+        Super.New("panel", "greedy")
+        SetSize(10.0, 10.0)
+    End New
+
+    @MainThread Public Override Method Draw(paint: Painter)
+        paint.PopClip()
+    End Method
+End Class
+
+Function PoppedTooMany() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Panic("Painter.PopClip: Node \"greedy\" ends a clip it didn't push")
+    End If
+    Window.SetHeadless(True)
+    Try Graphics(100, 100)
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(PopsTooMany())
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    ui.Draw()
 End Function
 
 Local arguments = Process.Arguments()
@@ -134,6 +203,10 @@ Select name
         english.SetFallback(french)
     Case "composition"
         Try Composing()
+    Case "composition-moved"
+        Try ComposingMoved()
+    Case "pop-clip-too-many"
+        Try PoppedTooMany()
     Default
         Panic("no case {name}")
 End Select

@@ -145,10 +145,14 @@ End Function
 /// that sets later, and every name keeps "default"'s, its disabled state's faded text and all.
 Public Final Class Theme
     Field fields: Map<String, StyleFields>
+    // The Styles made since its fields last changed, as a list of 1,000 items asks for each frame.
+    Field made: Map<String, Style>
+    Field resolved: Int = 0
 
     /// A theme with no styles, so every widget looks as Style.Plain does.
     @MainThread Public New()
         fields = {}
+        made = {}
     End New
 
     /// fbengine_ui's own theme: light text on dark panels, buttons that light up under the mouse
@@ -212,13 +216,16 @@ Public Final Class Theme
 
         Local bright = StyleFields()
         bright.Background = Color.Hex("#4c8dff")
+        bright.BorderWidth = 0.0
         Local faint = StyleFields()
         faint.Background = Color.Hex("#4a505a")
+        faint.BorderWidth = 0.0
         // What's filled and held, and what's filled in one that's disabled.
         theme.SetFields("slider.fill", bright)
         theme.SetFields("slider.fill", faint, WidgetState.DISABLED)
         Local thumb = StyleFields()
         thumb.Background = text
+        thumb.BorderWidth = 0.0
         theme.SetFields("slider.thumb", thumb)
         theme.SetFields("slider.thumb", faint, WidgetState.DISABLED)
         Local bar = StyleFields()
@@ -257,7 +264,7 @@ Public Final Class Theme
         theme.SetFields("console", panel)
         theme.SetFields("console.field", field)
         theme.SetFields("console.field", focused, WidgetState.FOCUSED)
-        theme.SetFields("console.field.selection", selection)
+        theme.SetFields("console.selection", selection)
         Local line = StyleFields()
         line.Padding = Insets.Symmetric(0.0, 1.0)
         line.Background = Color.Transparent
@@ -293,6 +300,7 @@ Public Final Class Theme
         CheckName("Theme.SetFields", name)
         CheckFields("Theme.SetFields", set)
         // Nothing set is no fields of its own, as Load reads an empty table.
+        made.Clear()
         If Empty(set)
             fields.Remove(Key(name, state))
             Return
@@ -314,17 +322,52 @@ Public Final Class Theme
     /// The Style a widget of style `name` has in `state`: Style.Plain, then the fields "default"
     /// sets, and each name down to `name`, in its normal state and then in `state`.
     @MainThread Public Method StyleOf(name: String, state: WidgetState = WidgetState.NORMAL): Style
-        Local made = Style.Plain()
+        Local key = Key(name, state)
+        Local kept = made.Get(key)
+        If kept != Null Then Return kept
         Local lineage = Lineage(name)
-        For i = lineage.Count - 1 To 0 Step -1
-            Local normal = fields.Get(Key(lineage[i], WidgetState.NORMAL))
-            If normal != Null Then made = normal.Over(made)
+        lineage.Reverse()
+        Local style = Merged(lineage, state)
+        made[key] = style
+        Return style
+    End Method
+
+    /// The Style of `part`, as "thumb", of a widget of style `name` in `state`: Style.Plain, then
+    /// what `name` itself has, then each name down to `name`'s own of that part, so a kind
+    /// "slider.volume" keeps "slider.thumb", and "slider.volume.thumb" wins over it.
+    @MainThread Public Method PartOf(name: String, part: String,
+                                     state: WidgetState = WidgetState.NORMAL): Style
+        Local key = Key("{name}+{part}", state)
+        Local kept = made.Get(key)
+        If kept != Null Then Return kept
+        Local lineage = Lineage(name)
+        lineage.Reverse()
+        Local names = lineage.Clone()
+        For each In lineage
+            If each != "default" Then names.Add("{each}.{part}")
+        End For
+        Local style = Merged(names, state)
+        made[key] = style
+        Return style
+    End Method
+
+    /// How many Styles it's made, rather than found made since its fields last changed, as a test
+    /// or a profile asks.
+    @MainThread Public Method StylesMade(): Int => resolved
+
+    // Style.Plain, with the fields each of `names` sets over it, in its normal state and `state`.
+    @MainThread Method Merged(names: String[], state: WidgetState): Style
+        resolved += 1
+        Local style = Style.Plain()
+        For each In names
+            Local normal = fields.Get(Key(each, WidgetState.NORMAL))
+            If normal != Null Then style = normal.Over(style)
             If state != WidgetState.NORMAL
-                Local stated = fields.Get(Key(lineage[i], state))
-                If stated != Null Then made = stated.Over(made)
+                Local stated = fields.Get(Key(each, state))
+                If stated != Null Then style = stated.Over(style)
             End If
         End For
-        Return made
+        Return style
     End Method
 
     /// The names it has styles for, in order.
@@ -419,6 +462,7 @@ Public Final Class Theme
             End For
         End For
         fields = loaded
+        made.Clear()
     End Method
 End Class
 
