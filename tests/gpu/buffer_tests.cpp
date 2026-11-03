@@ -94,6 +94,27 @@ TEST_CASE("a buffer refuses what isn't in it, and sizes and uses it can't have",
     stop_gpu();
 }
 
+// Nothing but its barriers keeps one write after the last, in a frame and from the frame before.
+TEST_CASE("a buffer written again is written in order", "[gpu]") {
+    start();
+    fbe::gpu::buffer_t buffer = fbe::gpu::make_buffer(16, storage);
+    const std::array<std::uint32_t, 4> first{ 1, 2, 3, 4 };
+    const std::array<std::uint32_t, 4> second{ 5, 6, 7, 8 };
+    const std::array<std::uint32_t, 4> third{ 9, 10, 11, 12 };
+    require(fbe::gpu::write_buffer(buffer, 0, std::as_bytes(std::span(first))));
+    require(fbe::gpu::write_buffer(buffer, 0, std::as_bytes(std::span(second))));
+    fbe_frame_flip(false);
+    require(fbe::gpu::write_buffer(buffer, 0, std::as_bytes(std::span(third))));
+    const std::vector<std::byte> read = fbe::gpu::read_buffer(buffer);
+    REQUIRE(read.size() == 16);
+    std::array<std::uint32_t, 4> back{};
+    std::memcpy(back.data(), read.data(), sizeof(back));
+    CHECK(back == third);
+    fbe::gpu::free_buffer(buffer);
+    fbe_gpu_stop();
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
 // A buffer written and freed in one frame is freed once the GPU's done with it, so its copy runs.
 TEST_CASE("a freed buffer lives until its frame's done", "[gpu]") {
     start();

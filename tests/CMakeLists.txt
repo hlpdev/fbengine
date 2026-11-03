@@ -1737,6 +1737,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                       "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
   set_property(TARGET fbengine_anim_oom_tests APPEND PROPERTY LINK_DEPENDS
                "${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
+elseif(APPLE)
+  target_link_options(fbengine_anim_oom_tests PRIVATE
+                      "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.exports")
+  set_property(TARGET fbengine_anim_oom_tests APPEND PROPERTY LINK_DEPENDS
+               "${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.exports")
 endif()
 fbengine_set_warnings(fbengine_anim_oom_tests)
 # A deadlock is a failure too, as an allocation failing inside a layer's lock was.
