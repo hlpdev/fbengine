@@ -577,6 +577,13 @@ FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, f
             fbe::scene::transform_normal(m, fbe::scene::vec3_t(0.0F, 1.0F, 0.0F));
         return fbe::scene::plane_in_view(*found, view, m.axis(3), up) ? 1 : 0;
     }
+    if (s.entities.kind[slot] == FBE_ENTITY_PARTICLES) {
+        fbe_aabb_t box{};
+        if (!fbe_entity_bounds(entity, &box)) {
+            return -1;
+        }
+        return fbe_camera_box_in_view(camera, target_width, target_height, &box);
+    }
     if (s.entities.kind[slot] == FBE_ENTITY_SPRITE || s.entities.kind[slot] == FBE_ENTITY_TERRAIN) {
         // A sprite's quad stays in its box however it turns; a terrain's grid is in its own.
         fbe::scene::vec3_t min;

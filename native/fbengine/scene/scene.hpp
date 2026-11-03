@@ -33,6 +33,8 @@ struct world_t {
     std::int32_t sky = 0;
     std::uint64_t sky_light = 0;
     std::uint64_t sky_texture = 0;
+    /// Which way the sun is, kept from the last it was looked at, so one freed leaves it there.
+    vec3_t sky_sun{ 0.0F, 1.0F, 0.0F };
     float sky_brightness = 1.0F;
     /// Each pair of collision groups that collide, source in the high 16 bits and target in the
     /// low, and the FBE_RESPONSE_ the source makes; a game has a few.
@@ -130,6 +132,9 @@ struct material_t {
 /// handle or a mesh draws it, which its references count.
 struct geometry_t {
     std::vector<surface_t> surfaces;
+    /// How much of its way to the eye it's drawn nearer, as a decal on a terrain is, so what it's
+    /// on doesn't come up through it where it's coarser, far off.
+    float eye_pull = 0.0F;
     std::uint32_t references = 0;
     /// Goes up at every change, so what's worked out from it, as collision trees, knows when it's
     /// stale.
@@ -189,6 +194,11 @@ struct plane_t {
     std::int32_t segments = 1;
 };
 
+/// How many squares across a terrain's piece draws, at most, and how many of its widths away one's
+/// drawn whole rather than as four finer ones.
+constexpr std::int32_t terrain_piece_cells = 16;
+constexpr float terrain_whole_from = 1.5F;
+
 /// A terrain: its grid's size, its corners' heights row by row along Z, and how it's drawn; its
 /// version goes up at every change.
 struct terrain_t {
@@ -241,6 +251,7 @@ struct particles_t {
     float speed_max = 1.0F;
     float spread = 0.0F;
     float spin = 0.0F;
+    float roll = 0.0F;
     vec3_t gravity;
     float drag = 0.0F;
     float size_start = 0.1F;
@@ -255,6 +266,12 @@ struct particles_t {
     /// dead one's birth would otherwise come round again; and the longest life it's had since.
     std::uint64_t sweeps = 0;
     float longest = 1.0F;
+    /// When the last of what was born with a longer life than it has now dies, and the latest any
+    /// dies.
+    double long_until = 0.0;
+    double latest_death = 0.0;
+    /// How many of its slots have had one.
+    std::int32_t born = 0;
     float owed = 0.0F;
     bool moved = false;
     vec3_t last_place;
@@ -506,6 +523,15 @@ void capture_particles(std::uint32_t entity);
 float particles_clock(const particles_t& found, float tween);
 /// The box in the world what's alive of an emitter's in: false for none lately.
 bool particles_bounds(const particles_t& found, vec3_t& min, vec3_t& max);
+/// Whether a color's channels are finite, which can be any, and its alpha 0 to 1: false, with
+/// fbe_error saying why, naming `what` it's a color of.
+bool valid_color(float r, float g, float b, float a, const char* what);
+/// How far a terrain's coarser pieces can come up over what's in a box, in its own space, as a part
+/// of how far off they're drawn, a square `reach_scale` wide: what's on it wants to be that much
+/// nearer.
+float terrain_coarse_rise(const terrain_t& terrain, vec3_t min, vec3_t max, float reach_scale);
+/// The normal of a terrain's surface at a corner of its grid, in its own space.
+vec3_t terrain_corner_normal(const terrain_t& terrain, std::int32_t x, std::int32_t z);
 void add_plane(std::uint32_t entity);
 void remove_plane(std::uint32_t entity);
 /// The live ground plane a handle is for, or null, with fbe_error saying so.

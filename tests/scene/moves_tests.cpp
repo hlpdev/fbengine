@@ -203,3 +203,30 @@ TEST_CASE("moves on the workers keep to scratches made before they start", "[sce
     CHECK(fbe::scene::move_scratch_count() == count);
     CHECK(first == second);
 }
+
+TEST_CASE("a decal leaves a far mesh's tree unmade", "[scene][decal]") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t mesh = fbe_entity_create(world, 0, FBE_ENTITY_MESH);
+    const std::uint64_t geometry = fbe_geometry_cube();
+    REQUIRE(fbe_mesh_set_geometry(mesh, geometry));
+    REQUIRE(fbe_entity_set_position(mesh, 1000.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    fbe_mat4_t box{};
+    box.m[0] = 1.0F;
+    box.m[5] = 1.0F;
+    box.m[10] = 1.0F;
+    box.m[15] = 1.0F;
+    const std::uint64_t made = fbe_geometry_decal(world, &box, 0.0F, 1.3F);
+    REQUIRE(made != 0);
+    const std::uint32_t slot = fbe::scene::geometry_slot(geometry);
+    CHECK(fbe::scene::scene().geometries[slot].tree_version == UINT64_MAX);
+    // And it's made for what's near, the check that says so.
+    REQUIRE(fbe_entity_set_position(mesh, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    const std::uint64_t near_one = fbe_geometry_decal(world, &box, 0.0F, 1.3F);
+    CHECK(fbe::scene::scene().geometries[slot].tree_version != UINT64_MAX);
+    fbe_geometry_release(made);
+    fbe_geometry_release(near_one);
+    fbe_geometry_release(geometry);
+    fbe_world_free(world);
+    std::array<std::uint64_t, 4> some{};
+    while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+}

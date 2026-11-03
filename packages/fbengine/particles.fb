@@ -13,6 +13,8 @@ Import "./world"
 
 /// An entity that spawns particles along its forward axis, -Z. They're born as World.Update's steps
 /// come, and at Burst; once born each goes by itself, in the world, however the emitter moves after.
+/// Hiding or freeing the emitter takes what's alive from what's drawn at once. Those that blend aren't
+/// sorted among themselves, they cast no shadows, and only ambient light lights them, as a sprite.
 Public Final Class Particles Extends Entity
     /// A new Particles, holding `capacity` at once, 1 to 1048576, the last child of `parent`, or at
     /// the top of the current World when `parent` is Null. New, it spawns 32 a second, each living 1
@@ -93,7 +95,8 @@ Public Final Class Particles Extends Entity
         If !fbe_particles_set_sizes(Live("SetSizes"), start, finish) Then Failed("SetSizes")
     End Method
 
-    /// Sets each one's color and alpha, from its birth to its death.
+    /// Sets each one's color and alpha, from its birth to its death. A color that isn't finite, or an
+    /// alpha outside 0 to 1, panics.
     @MainThread @PanicsAtCaller
     Public Method SetColors(start: Color, finish: Color)
         Local first = fbe_color_t()
@@ -111,6 +114,13 @@ Public Final Class Particles Extends Entity
             done = fbe_particles_set_colors(Live("SetColors"), AddressOf(first), AddressOf(last))
         End Unsafe
         If !done Then Failed("SetColors")
+    End Method
+
+    /// Sets how far each's turned at its birth, up to `most` radians each way, 0 to Pi, 0 at first.
+    /// Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetRoll(most: Float)
+        If !fbe_particles_set_roll(Live("SetRoll"), most) Then Failed("SetRoll")
     End Method
 
     /// Sets what its random numbers follow from, so a run can be the same again.
@@ -133,8 +143,8 @@ End Class
 Extend World
     /// Sets the World's sky to the atmosphere, one scattering of the sun's light, marched per pixel,
     /// behind what's opaque, with what's in an order below 0 behind it; the sun where `sun`, a
-    /// directional Light of this World, shines from, or straight up for Null. `brightness` scales
-    /// what it adds up to. Others panic.
+    /// directional Light of this World, shines from, or straight up for Null. Freed, the sky stays as
+    /// it last was. `brightness` scales what it adds up to. Others panic.
     @MainThread @PanicsAtCaller
     Public Method SetAtmosphere(sun: Light? = Null, brightness: Float = 20)
         Local light: UInt64 = sun != Null ? sun.Live("SetAtmosphere") : 0
@@ -144,7 +154,8 @@ Extend World
     End Method
 
     /// Sets the World's sky to an equirectangular texture, its top row straight up, its middle
-    /// straight ahead along -Z, behind what's opaque. `brightness` scales it.
+    /// straight ahead along -Z, behind what's opaque, wrapping around the world however it's set,
+    /// and stopping at its top and bottom. `brightness` scales it, and below 0 panics.
     @MainThread @PanicsAtCaller
     Public Method SetSkyTexture(texture: Texture, brightness: Float = 1)
         If !fbe_world_set_sky_texture(Live("SetSkyTexture"), texture.Live("SetSkyTexture"),

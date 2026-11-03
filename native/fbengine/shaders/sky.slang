@@ -21,10 +21,12 @@ struct Sky
     uint sampler;
     // Whether it's mirrored across, as a reflection's view is.
     float flip;
-    // The planes of mirrors whose reflections show instead of it: a normal and the eye's height off it.
+    // Every mirror's plane: a normal and the true eye's height off it. And which is this view's own,
+    // if it's a reflection: this view draws only what's through its plane before any other's; the
+    // scene's, numbered past them all, only what's through none.
     float4* mirrors;
     uint mirrorCount;
-    uint spare;
+    uint ownMirror;
 };
 
 struct Push
@@ -64,8 +66,10 @@ static const float mieShape = 0.76;
 // How far along a ray from a place to where it leaves a sphere about the world's middle.
 float leaving(float3 place, float3 way, float radius)
 {
+    // Its squares are far past what a float keeps of their difference: the difference, by its factors.
     const float along = dot(place, way);
-    const float left = along * along - dot(place, place) + radius * radius;
+    const float from = length(place);
+    const float left = along * along - (from - radius) * (from + radius);
     return left > 0.0 ? -along + sqrt(left) : 0.0;
 }
 
@@ -73,7 +77,8 @@ float leaving(float3 place, float3 way, float radius)
 float toGround(float3 place, float3 way)
 {
     const float along = dot(place, way);
-    const float left = along * along - dot(place, place) + groundRadius * groundRadius;
+    const float from = length(place);
+    const float left = along * along - (from - groundRadius) * (from + groundRadius);
     return along < 0.0 && left > 0.0 ? -along - sqrt(left) : -1.0;
 }
 
@@ -135,10 +140,32 @@ float4 fragmentMain(Corner corner) : SV_Target
     const float2 spread = sky.spread * corner.across;
     const float3 toward = sky.right.xyz * (spread.x * sky.flip) + sky.up.xyz * spread.y + sky.forward.xyz;
     const float3 way = normalize(toward);
-    for (uint i = 0; i < sky.mirrorCount; ++i)
+    if (sky.mirrorCount != 0)
     {
-        const float4 mirror = sky.mirrors[i];
-        if (mirror.w * dot(mirror.xyz, way) < 0.0)
+        // The way the true eye looks through this pixel: a reflection's own way, reflected back.
+        float3 seen = way;
+        if (sky.ownMirror < sky.mirrorCount)
+        {
+            const float3 own = sky.mirrors[sky.ownMirror].xyz;
+            seen = way - own * (2.0 * dot(way, own));
+        }
+        uint first = sky.mirrorCount;
+        float nearest = 0.0;
+        for (uint i = 0; i < sky.mirrorCount; ++i)
+        {
+            const float4 mirror = sky.mirrors[i];
+            const float toward = dot(mirror.xyz, seen);
+            if (mirror.w * toward < 0.0)
+            {
+                const float apart = -mirror.w / toward;
+                if (first == sky.mirrorCount || apart < nearest)
+                {
+                    first = i;
+                    nearest = apart;
+                }
+            }
+        }
+        if (first != sky.ownMirror)
         {
             discard;
         }

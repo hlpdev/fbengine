@@ -349,14 +349,17 @@ bool plane_grid(const scene::camera_t& camera, const scene::view_t& view, const 
     return true;
 }
 
-/// A world's sky as its shader reads it, from a view; its texture's added to `sampled`. The scene's
-/// view leaves to each mirror's reflection what's through its plane.
+/// A world's sky as its shader reads it, from a view, the `own`th of as many as the mirrors' planes
+/// and the scene's last; its texture's added to `sampled`. Each view keeps to what's through its
+/// mirror's plane before any other's, and the scene's to what's through none.
 sky_data_t sky_data(const scene::camera_t& camera, const scene::view_t& view,
-                    const scene::tweened_t& tweened, bool flipped, std::uint64_t target,
+                    const scene::tweened_t& tweened, std::size_t own,
+                    std::span<const std::array<float, 4>> planes, std::uint64_t target,
                     std::vector<std::uint64_t>& sampled, bool& failed) {
     const scene::scene_t& s = scene::scene();
     const std::uint32_t world_slot = s.entities.world[camera.entity];
-    const scene::world_t& world = s.worlds[world_slot];
+    scene::world_t& world = scene::scene().worlds[world_slot];
+    const bool flipped = own != planes.size();
     float half_width = 0.0F;
     float half_height = 0.0F;
     scene::half_extents(camera, view, half_width, half_height);
@@ -364,30 +367,12 @@ sky_data_t sky_data(const scene::camera_t& camera, const scene::view_t& view,
     const vec3_t right = view.rotation * vec3_t(1.0F, 0.0F, 0.0F);
     const vec3_t up = view.rotation * vec3_t(0.0F, 1.0F, 0.0F);
     const vec3_t forward = view.rotation * vec3_t(0.0F, 0.0F, -1.0F);
-    vec3_t sun(0.0F, 1.0F, 0.0F);
     const auto light = world.sky_light != 0 ? s.entities.slots.find(world.sky_light) : std::nullopt;
     if (light) {
-        // Toward it: against the way it shines.
-        sun = scene::normalize(tweened.pose(*light).matrix.axis(2));
+        // Toward it: against the way it shines, as shading has it, and kept for when it's gone.
+        world.sky_sun = tweened.pose(*light).rotation * vec3_t(0.0F, 0.0F, 1.0F);
     }
-    std::vector<std::array<float, 4>> planes;
-    if (!flipped) {
-        for (std::uint32_t entity = 0; entity < s.entities.slots.size(); ++entity) {
-            if (s.entities.slots.find(s.entities.slots.handle(entity)) &&
-                s.entities.kind[entity] == FBE_ENTITY_MIRROR &&
-                s.entities.world[entity] == world_slot && scene::showing(entity)) {
-                const mat4_t mirror = tweened.pose(entity).matrix;
-                mat4_t into;
-                if (!scene::inverse_affine(mirror, into)) {
-                    continue;
-                }
-                const vec3_t normal =
-                    scene::normalize(scene::transform_normal(mirror, vec3_t(0.0F, 1.0F, 0.0F)));
-                const float height = scene::dot(view.position - mirror.axis(3), normal);
-                planes.push_back({ normal.x, normal.y, normal.z, height });
-            }
-        }
-    }
+    const vec3_t sun = world.sky_sun;
     sky_data_t data{};
     data.right = { right.x, right.y, right.z, 0.0F };
     data.up = { up.x, up.y, up.z, 0.0F };
@@ -399,12 +384,14 @@ sky_data_t sky_data(const scene::camera_t& camera, const scene::view_t& view,
     data.flip = flipped ? -1.0F : 1.0F;
     data.mirrors = in_ring<std::array<float, 4>>(planes, failed).address;
     data.mirror_count = static_cast<std::uint32_t>(planes.size());
+    data.own_mirror = static_cast<std::uint32_t>(own);
     const texture::texture_t* image = world.sky_texture != 0 && world.sky_texture != target
                                           ? texture::find(world.sky_texture)
                                           : nullptr;
     if (image != nullptr) {
         data.texture = texture::index_of(world.sky_texture);
-        data.sampler = texture::sampler_of(*image);
+        // Around the world, but never over its top, whatever it's set to for anything else.
+        data.sampler = gpu::sampler_index(image->filter, FBE_TEXTURE_REPEAT, FBE_TEXTURE_CLAMP);
         sampled.push_back(world.sky_texture);
     } else {
         data.texture = texture::white;
@@ -419,6 +406,7 @@ sky_data_t sky_data(const scene::camera_t& camera, const scene::view_t& view,
 bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                 const scene::tweened_t& tweened, const lists_t& lists, bool flipped,
                 std::uint64_t target, const shadow_frame_t& shadows, std::size_t shadow_view,
+                std::span<const std::array<float, 4>> mirror_planes,
                 std::vector<std::uint64_t>& sampled, view_batches_t& out) {
     const scene::scene_t& s = scene::scene();
     out.flipped = flipped;
@@ -436,7 +424,8 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
     const auto draw_sky = [&] {
         sky_owed = false;
         bool no_room = false;
-        const sky_data_t sky = sky_data(camera, view, tweened, flipped, target, sampled, no_room);
+        const sky_data_t sky =
+            sky_data(camera, view, tweened, shadow_view, mirror_planes, target, sampled, no_room);
         const std::array one_sky{ sky };
         batch_t batch;
         batch.key = UINT64_MAX;
@@ -467,6 +456,16 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             data.vertices = surface->vertices.address;
             batch.indices = surface->indices.buffer;
             batch.index_count = surface->index_count;
+            // All of it nearer the eye by a part of how far it is: on the same pixels, just nearer.
+            const auto drawn_slot = s.geometry_slots.find(item.draw.geometry);
+            if (drawn_slot && s.geometries[*drawn_slot].eye_pull > 0.0F) {
+                const float kept = 1.0F - s.geometries[*drawn_slot].eye_pull;
+                for (std::size_t column = 0; column < 4; ++column) {
+                    for (std::size_t row = 0; row < 3; ++row) {
+                        data.to_view[(column * 4) + row] *= kept;
+                    }
+                }
+            }
             if (surface->joints.buffer != VK_NULL_HANDLE) {
                 // Each mesh's once, however many surfaces it has, its surfaces one after another
                 // or apart.
@@ -545,7 +544,11 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             if (no_room) {
                 return false;
             }
-            batch.vertex_count = static_cast<std::uint32_t>(particles.capacity) * 6U;
+            // Only those slots that have had one: a million held and one born draws one.
+            batch.vertex_count = static_cast<std::uint32_t>(particles.born) * 6U;
+            if (batch.vertex_count == 0) {
+                continue;
+            }
             draws.push_back(data);
             out.batches.push_back(batch);
             continue;
@@ -756,13 +759,19 @@ bool draw_camera(std::uint32_t slot, float tween) {
     // the scene, which covers it unless what's on the mirror's plane lets it through.
     const std::uint32_t world = s.entities.world[slot];
     std::vector<scene::view_t> views;
+    std::vector<std::array<float, 4>> mirror_planes;
     for (std::uint32_t entity = 0; entity < s.entities.slots.size(); ++entity) {
         if (s.entities.slots.find(s.entities.slots.handle(entity)) &&
             s.entities.kind[entity] == FBE_ENTITY_MIRROR && s.entities.world[entity] == world &&
             scene::showing(entity)) {
             scene::view_t reflected;
-            if (reflected_view(view, tweened.pose(entity).matrix, reflected)) {
+            const mat4_t mirror = tweened.pose(entity).matrix;
+            if (reflected_view(view, mirror, reflected)) {
                 views.push_back(reflected);
+                const vec3_t normal =
+                    scene::normalize(scene::transform_normal(mirror, vec3_t(0.0F, 1.0F, 0.0F)));
+                const float above = scene::dot(view.position - mirror.axis(3), normal);
+                mirror_planes.push_back({ normal.x, normal.y, normal.z, above });
             }
         }
     }
@@ -778,7 +787,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
         read_view(camera, views[at], tweened, lists);
         view_batches_t batches;
         if (!write_view(camera, views[at], tweened, lists, at + 1 != views.size(), target, shadows,
-                        at, sampled, batches)) {
+                        at, mirror_planes, sampled, batches)) {
             return false;
         }
         pass->views.push_back(std::move(batches));

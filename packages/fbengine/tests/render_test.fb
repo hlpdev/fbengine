@@ -318,6 +318,8 @@ Function ADecalIsWhatsInItsBox()
     Local decal = world.Decal(box)
     Expect(decal.SurfaceCount() == 1)
     Expect(decal.Surface(0).VertexCount() > 0)
+    // Its limit's in what it's on: head on or not at all.
+    Expect(world.Decal(box, 0, 0.5).Surface(0).VertexCount() > 0)
 End Function
 
 @Test
@@ -326,4 +328,30 @@ Function ShadowsAtlasHasALimit()
     Defer SetShadowAtlasLimit(limit)
     SetShadowAtlasLimit(1024)
     Expect(ShadowAtlasLimit() == 1024)
+End Function
+
+@Test
+Function AWorldTakesASkyTexture()
+    Local world = Fresh()
+    Defer world.Free()
+    Local picture = Texture(2, 2)
+    world.SetSkyTexture(picture, 0.5)
+    world.ClearSky()
+End Function
+
+@Test
+Function AStepPastAFloatStillSteps()
+    Local world = Fresh()
+    Defer world.Free()
+    Local emitter = Particles(16)
+    emitter.SetRate(1000)
+    UpdateWorld(1e39)
+    Expect(emitter.Alive() == 16)
+End Function
+
+@Test
+Function AParticlesRollIsSet()
+    Local world = Fresh()
+    Defer world.Free()
+    Particles().SetRoll(Pi)
 End Function

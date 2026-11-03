@@ -12,6 +12,14 @@ If arguments.Count != 1 Then Panic("give the case to run")
 Local world = World()
 World.SetCurrent(world)
 Select arguments[0]
+    Case "particles-colors"
+        Particles().SetColors(Color(1, 1, 1, 2), Color(1, 1, 1, 1))
+    Case "particles-roll"
+        Particles().SetRoll(-1)
+    Case "decal-limit"
+        world.Decal(Mat4.Scale(Vec3(1, 1, 1)), 0, 2)
+    Case "sky-texture-brightness"
+        world.SetSkyTexture(Texture(2, 2), -1)
     Case "particles-capacity"
         Particles(0)
     Case "particles-rate"

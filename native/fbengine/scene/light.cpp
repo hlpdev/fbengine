@@ -305,6 +305,13 @@ FBE_API bool fbe_world_set_sky_atmosphere(uint64_t world, uint64_t sun, float br
     found.sky = 1;
     found.sky_light = sun;
     found.sky_brightness = brightness;
+    found.sky_sun = fbe::scene::vec3_t(0.0F, 1.0F, 0.0F);
+    if (sun != 0) {
+        const std::uint32_t entity = fbe::scene::entity_slot(sun);
+        fbe::scene::update_world(entity);
+        found.sky_sun = fbe::scene::scene().entities.world_rotation[entity] *
+                        fbe::scene::vec3_t(0.0F, 0.0F, 1.0F);
+    }
     return true;
 }
 

@@ -34,7 +34,9 @@ Extend World
     Public Method Update(seconds: Float64 = 0)
         Animate(seconds)
         Collide()
-        If !fbe_world_step_particles(Live("Update"), seconds As Float) Then Failed("Update")
+        // A step past what a Float holds counts for what its particles do with one anyway.
+        Local counted: Float = seconds < 1000000 ? seconds As Float : 1000000
+        If !fbe_world_step_particles(Live("Update"), counted) Then Failed("Update")
         HandEvents()
     End Method
 

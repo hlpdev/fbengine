@@ -64,9 +64,9 @@ struct particles_data_t {
 static_assert(sizeof(particles_data_t) == 72, "the scene shader reads an emitter of 72 bytes");
 
 /// A sky as its shader reads it: the view's axes in the world, its half-size at a distance of 1,
-/// what it is, its texture's index, the sun's way and how bright, its sampler, whether it's
-/// mirrored, and the mirrors' planes whose reflections show instead of it, each a normal and the
-/// eye's height off it.
+/// what /// it is, its texture's index, the sun's way and how bright, its sampler, whether it's
+/// mirrored, every mirror's plane, a normal and the true eye's height off it, and which of them
+/// this view's the reflection in, or their count for the scene's own.
 struct sky_data_t {
     std::array<float, 4> right;
     std::array<float, 4> up;
@@ -80,7 +80,7 @@ struct sky_data_t {
     float flip;
     VkDeviceAddress mirrors;
     std::uint32_t mirror_count;
-    std::uint32_t spare;
+    std::uint32_t own_mirror;
 };
 static_assert(sizeof(sky_data_t) == 104, "the sky shader reads a sky of 104 bytes");
 

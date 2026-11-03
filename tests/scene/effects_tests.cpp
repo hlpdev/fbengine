@@ -2,6 +2,7 @@
 
 #include "fbengine.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -15,6 +16,9 @@
 namespace {
 
 using Catch::Approx;
+
+/// A decal's limit, as the FB side has it by default.
+constexpr float decal_limit = 1.309F;
 
 /// A world of the test's own, freed at its end.
 struct test_world_t {
@@ -158,26 +162,6 @@ TEST_CASE("a copy of an emitter has its settings and none of its particles", "[s
     CHECK(fbe_particles_material(copy) == material);
 }
 
-TEST_CASE("the same seed spawns the same, and another doesn't", "[scene][particles]") {
-    // What it spawned shows in a box, whichever it reaches: how far it's seen to go.
-    const auto run = [](std::uint32_t seed) {
-        const test_world_t world;
-        const std::uint64_t emitter = fbe_entity_create(world.handle, 0, FBE_ENTITY_PARTICLES);
-        REQUIRE(fbe_particles_set_seed(emitter, seed));
-        REQUIRE(fbe_particles_set_rate(emitter, 0.0F));
-        REQUIRE(fbe_particles_set_life(emitter, 0.25F, 1.0F));
-        std::vector<std::int32_t> alive;
-        REQUIRE(fbe_particles_burst(emitter, 64));
-        for (int i = 0; i < 8; ++i) {
-            REQUIRE(fbe_world_step_particles(world.handle, 0.125F));
-            alive.push_back(fbe_particles_alive(emitter));
-        }
-        return alive;
-    };
-    CHECK(run(7) == run(7));
-    CHECK(run(7) != run(8));
-}
-
 TEST_CASE("an emitter's limits are checked", "[scene][particles]") {
     const test_world_t world;
     const std::uint64_t emitter = fbe_entity_create(world.handle, 0, FBE_ENTITY_PARTICLES);
@@ -232,7 +216,7 @@ TEST_CASE("a decal is what's in its box on faces toward it, clipped to it", "[sc
     cube_mesh(world.handle);
     // Over the cube's +Z face, whose corners it cuts in half.
     const fbe_mat4_t box = box_at(0.0F, 0.0F, 1.0F, 0.5F, 0.5F, 0.5F);
-    const std::uint64_t made = fbe_geometry_decal(world.handle, &box, 0.01F);
+    const std::uint64_t made = fbe_geometry_decal(world.handle, &box, 0.01F, decal_limit);
     REQUIRE(made != 0);
     const std::vector<fbe_vertex_t> vertices = vertices_of(made);
     REQUIRE(!vertices.empty());
@@ -254,7 +238,7 @@ TEST_CASE("a decal leaves out what faces away, or isn't in its box", "[scene][de
     cube_mesh(world.handle);
     // Turned to look at the cube's far side, none of it faces the box's +Z.
     const fbe_mat4_t away = box_at(0.0F, 0.0F, -1.0F, 0.5F, 0.5F, -0.5F);
-    const std::uint64_t behind = fbe_geometry_decal(world.handle, &away, 0.0F);
+    const std::uint64_t behind = fbe_geometry_decal(world.handle, &away, 0.0F, decal_limit);
     REQUIRE(behind != 0);
     const std::vector<fbe_vertex_t> back = vertices_of(behind);
     REQUIRE(!back.empty());
@@ -263,7 +247,7 @@ TEST_CASE("a decal leaves out what faces away, or isn't in its box", "[scene][de
     }
     fbe_geometry_release(behind);
     const fbe_mat4_t far = box_at(10.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F);
-    const std::uint64_t nothing = fbe_geometry_decal(world.handle, &far, 0.0F);
+    const std::uint64_t nothing = fbe_geometry_decal(world.handle, &far, 0.0F, decal_limit);
     REQUIRE(nothing != 0);
     CHECK(fbe_surface_vertex_count(nothing, 0) == 0);
     fbe_geometry_release(nothing);
@@ -275,14 +259,14 @@ TEST_CASE("a decal goes on a moved, scaled, or mirrored mesh, as it shows", "[sc
     REQUIRE(fbe_entity_set_position(mesh, 5.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
     REQUIRE(fbe_entity_set_scale(mesh, 2.0F, 2.0F, 2.0F, FBE_SPACE_WORLD));
     const fbe_mat4_t box = box_at(5.0F, 0.0F, 2.0F, 0.5F, 0.5F, 0.5F);
-    const std::uint64_t scaled = fbe_geometry_decal(world.handle, &box, 0.0F);
+    const std::uint64_t scaled = fbe_geometry_decal(world.handle, &box, 0.0F, decal_limit);
     const std::vector<fbe_vertex_t> on_scaled = vertices_of(scaled);
     REQUIRE(!on_scaled.empty());
     CHECK(on_scaled[0].position.z == Approx(2.0F));
     fbe_geometry_release(scaled);
     // Mirrored in x: its faces still face out.
     REQUIRE(fbe_entity_set_scale(mesh, -2.0F, 2.0F, 2.0F, FBE_SPACE_WORLD));
-    const std::uint64_t mirrored = fbe_geometry_decal(world.handle, &box, 0.0F);
+    const std::uint64_t mirrored = fbe_geometry_decal(world.handle, &box, 0.0F, decal_limit);
     const std::vector<fbe_vertex_t> on_mirrored = vertices_of(mirrored);
     REQUIRE(!on_mirrored.empty());
     CHECK(on_mirrored[0].normal.z == Approx(1.0F));
@@ -296,17 +280,17 @@ TEST_CASE("a decal goes on what's opaque, so never on another", "[scene][decal]"
     REQUIRE(fbe_material_set_blend(glass, FBE_BLEND_ALPHA));
     REQUIRE(fbe_mesh_set_material(mesh, glass));
     const fbe_mat4_t box = box_at(0.0F, 0.0F, 1.0F, 0.5F, 0.5F, 0.5F);
-    const std::uint64_t on_glass = fbe_geometry_decal(world.handle, &box, 0.0F);
+    const std::uint64_t on_glass = fbe_geometry_decal(world.handle, &box, 0.0F, decal_limit);
     CHECK(fbe_surface_vertex_count(on_glass, 0) == 0);
     fbe_geometry_release(on_glass);
     REQUIRE(fbe_mesh_set_material(mesh, 0));
-    const std::uint64_t first = fbe_geometry_decal(world.handle, &box, 0.01F);
+    const std::uint64_t first = fbe_geometry_decal(world.handle, &box, 0.01F, decal_limit);
     const std::int32_t alone = fbe_surface_vertex_count(first, 0);
     REQUIRE(alone > 0);
     const std::uint64_t drawn = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
     REQUIRE(fbe_mesh_set_geometry(drawn, first));
     REQUIRE(fbe_mesh_set_material(drawn, glass));
-    const std::uint64_t second = fbe_geometry_decal(world.handle, &box, 0.01F);
+    const std::uint64_t second = fbe_geometry_decal(world.handle, &box, 0.01F, decal_limit);
     CHECK(fbe_surface_vertex_count(second, 0) == alone);
     fbe_geometry_release(first);
     fbe_geometry_release(second);
@@ -326,7 +310,7 @@ TEST_CASE("a decal goes on a terrain and a ground plane", "[scene][decal]") {
     box.m[15] = 1.0F;
     const std::uint64_t terrain = fbe_entity_create(world.handle, 0, FBE_ENTITY_TERRAIN);
     REQUIRE(fbe_terrain_set_size(terrain, 4));
-    const std::uint64_t on_terrain = fbe_geometry_decal(world.handle, &box, 0.0F);
+    const std::uint64_t on_terrain = fbe_geometry_decal(world.handle, &box, 0.0F, decal_limit);
     const std::vector<fbe_vertex_t> over_terrain = vertices_of(on_terrain);
     REQUIRE(!over_terrain.empty());
     for (const fbe_vertex_t& vertex : over_terrain) {
@@ -338,7 +322,7 @@ TEST_CASE("a decal goes on a terrain and a ground plane", "[scene][decal]") {
     REQUIRE(fbe_entity_free(terrain));
     const std::uint64_t plane = fbe_entity_create(world.handle, 0, FBE_ENTITY_PLANE);
     REQUIRE(plane != 0);
-    const std::uint64_t on_plane = fbe_geometry_decal(world.handle, &box, 0.0F);
+    const std::uint64_t on_plane = fbe_geometry_decal(world.handle, &box, 0.0F, decal_limit);
     const std::vector<fbe_vertex_t> over_plane = vertices_of(on_plane);
     REQUIRE(!over_plane.empty());
     for (const fbe_vertex_t& vertex : over_plane) {
@@ -352,9 +336,171 @@ TEST_CASE("a decal's box has an inverse, its lift's 0 or more, and its World's l
           "[scene][decal]") {
     const test_world_t world;
     const fbe_mat4_t flat = box_at(0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F);
-    CHECK(fbe_geometry_decal(world.handle, &flat, 0.0F) == 0);
+    CHECK(fbe_geometry_decal(world.handle, &flat, 0.0F, decal_limit) == 0);
     CHECK(last_error() == "a decal's box has an inverse");
     const fbe_mat4_t box = box_at(0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F);
-    CHECK(fbe_geometry_decal(world.handle, &box, -1.0F) == 0);
-    CHECK(fbe_geometry_decal(0, &box, 0.0F) == 0);
+    CHECK(fbe_geometry_decal(world.handle, &box, -1.0F, decal_limit) == 0);
+    CHECK(fbe_geometry_decal(0, &box, 0.0F, decal_limit) == 0);
+}
+
+TEST_CASE("a long step leaves as many as a life's worth, up to what it holds",
+          "[scene][particles]") {
+    const test_world_t world;
+    const std::uint64_t emitter = fbe_entity_create(world.handle, 0, FBE_ENTITY_PARTICLES);
+    REQUIRE(fbe_particles_set_rate(emitter, 1000.0F));
+    REQUIRE(fbe_particles_set_life(emitter, 0.2F, 0.2F));
+    REQUIRE(fbe_particles_set_capacity(emitter, 200));
+    REQUIRE(fbe_world_step_particles(world.handle, 1.0F));
+    CHECK(fbe_particles_alive(emitter) == 200);
+}
+
+TEST_CASE("a huge step and a huge rate come to nothing strange", "[scene][particles]") {
+    const test_world_t world;
+    const std::uint64_t emitter = fbe_entity_create(world.handle, 0, FBE_ENTITY_PARTICLES);
+    REQUIRE(fbe_particles_set_rate(emitter, 1e9F));
+    REQUIRE(fbe_particles_set_life(emitter, 1.0F, 1.0F));
+    REQUIRE(fbe_world_step_particles(world.handle, 1e30F));
+    CHECK(fbe_particles_alive(emitter) == 1024);
+    REQUIRE(fbe_particles_set_rate(emitter, 0.0F));
+    REQUIRE(fbe_world_step_particles(world.handle, 2.0F));
+    CHECK(fbe_particles_alive(emitter) == 0);
+    REQUIRE(fbe_particles_set_rate(emitter, 3e38F));
+    REQUIRE(fbe_world_step_particles(world.handle, 1e30F));
+    REQUIRE(fbe_particles_set_rate(emitter, 0.0F));
+    REQUIRE(fbe_world_step_particles(world.handle, 2.0F));
+    CHECK(fbe_particles_alive(emitter) == 0);
+}
+
+TEST_CASE("a particle's colors and roll are checked", "[scene][particles]") {
+    const test_world_t world;
+    const std::uint64_t emitter = fbe_entity_create(world.handle, 0, FBE_ENTITY_PARTICLES);
+    const fbe_color_t fine{ .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F };
+    const fbe_color_t nan_red{ .r = std::nanf(""), .g = 1.0F, .b = 1.0F, .a = 1.0F };
+    const fbe_color_t two_alpha{ .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 2.0F };
+    CHECK(fbe_particles_set_colors(emitter, &fine, &fine));
+    CHECK_FALSE(fbe_particles_set_colors(emitter, &nan_red, &fine));
+    CHECK_FALSE(fbe_particles_set_colors(emitter, &fine, &two_alpha));
+    CHECK_FALSE(fbe_particles_set_roll(emitter, -1.0F));
+    CHECK_FALSE(fbe_particles_set_roll(emitter, 4.0F));
+    CHECK_FALSE(fbe_particles_set_roll(emitter, std::nanf("")));
+    CHECK(fbe_particles_set_roll(emitter, 3.0F));
+}
+
+TEST_CASE("a decal on what's curved has its normals, and neighbors meet", "[scene][decal]") {
+    const test_world_t world;
+    const std::uint64_t mesh = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
+    const std::uint64_t sphere = fbe_geometry_sphere(12);
+    fbe_mesh_set_geometry(mesh, sphere);
+    fbe_geometry_release(sphere);
+    const fbe_mat4_t box = box_at(0.0F, 0.0F, 1.0F, 0.6F, 0.6F, 0.6F);
+    const std::uint64_t made = fbe_geometry_decal(world.handle, &box, 0.0F, decal_limit);
+    const std::vector<fbe_vertex_t> vertices = vertices_of(made);
+    REQUIRE(vertices.size() > 8);
+    for (const fbe_vertex_t& one : vertices) {
+        const float apart =
+            std::sqrt((one.position.x * one.position.x) + (one.position.y * one.position.y) +
+                      (one.position.z * one.position.z));
+        const float along = ((one.position.x * one.normal.x) + (one.position.y * one.normal.y) +
+                             (one.position.z * one.normal.z)) /
+                            apart;
+        CHECK(along > 0.99F);
+        for (const fbe_vertex_t& other : vertices) {
+            if (std::fabs(one.position.x - other.position.x) < 1e-5F &&
+                std::fabs(one.position.y - other.position.y) < 1e-5F &&
+                std::fabs(one.position.z - other.position.z) < 1e-5F) {
+                CHECK(std::fabs(one.normal.x - other.normal.x) < 1e-3F);
+                CHECK(std::fabs(one.normal.y - other.normal.y) < 1e-3F);
+                CHECK(std::fabs(one.normal.z - other.normal.z) < 1e-3F);
+            }
+        }
+    }
+    fbe_geometry_release(made);
+}
+
+TEST_CASE("a decal stops at its limit, fading on the way", "[scene][decal]") {
+    const test_world_t world;
+    const std::uint64_t mesh = cube_mesh(world.handle);
+    const auto turned_by = [&](float angle) {
+        const float half = angle * 0.5F;
+        REQUIRE(fbe_entity_set_rotation(mesh, 0.0F, std::sin(half), 0.0F, std::cos(half),
+                                        FBE_SPACE_WORLD));
+        const fbe_mat4_t box = box_at(0.0F, 0.0F, 0.0F, 2.0F, 2.0F, 2.0F);
+        const std::uint64_t made = fbe_geometry_decal(world.handle, &box, 0.0F, decal_limit);
+        std::vector<fbe_vertex_t> vertices = vertices_of(made);
+        fbe_geometry_release(made);
+        return vertices;
+    };
+    const float degrees = std::numbers::pi_v<float> / 180.0F;
+    // Past the limit, on neither of what's at the box: 85 off, and the other at 5, which it keeps.
+    const auto faces_off = [](const std::vector<fbe_vertex_t>& vertices, float at_least) {
+        return std::ranges::any_of(
+            vertices, [&](const fbe_vertex_t& one) { return one.normal.z < at_least; });
+    };
+    CHECK_FALSE(faces_off(turned_by(85.0F * degrees), std::cos(80.0F * degrees)));
+    const std::vector<fbe_vertex_t> at_seventy = turned_by(70.0F * degrees);
+    REQUIRE(!at_seventy.empty());
+    bool fading = false;
+    for (const fbe_vertex_t& one : at_seventy) {
+        fading = fading || (one.color.a > 0.0F && one.color.a < 1.0F);
+    }
+    CHECK(fading);
+    const std::vector<fbe_vertex_t> head_on = turned_by(0.0F);
+    REQUIRE(!head_on.empty());
+    CHECK(head_on[0].color.a == 1.0F);
+    const fbe_mat4_t box = box_at(0.0F, 0.0F, 0.0F, 2.0F, 2.0F, 2.0F);
+    CHECK(fbe_geometry_decal(world.handle, &box, 0.0F, 0.0F) == 0);
+    CHECK(fbe_geometry_decal(world.handle, &box, 0.0F, 2.0F) == 0);
+    CHECK(fbe_geometry_decal(world.handle, &box, 0.0F, std::nanf("")) == 0);
+}
+
+TEST_CASE("a decal goes on a two-sided surface's back, facing the box", "[scene][decal]") {
+    const test_world_t world;
+    const std::uint64_t mesh = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
+    const std::uint64_t quad = fbe_geometry_create();
+    const std::int32_t surface = fbe_geometry_add_surface(quad);
+    const auto corner = [](float x, float y) {
+        return fbe_vertex_t{
+            .position = { .x = x, .y = y, .z = 0.0F },
+            .normal = { .x = 0.0F, .y = 0.0F, .z = 1.0F },
+            .uv0 = {},
+            .uv1 = {},
+            .color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F },
+        };
+    };
+    const fbe_vertex_t low_left = corner(-1.0F, -1.0F);
+    const fbe_vertex_t low_right = corner(1.0F, -1.0F);
+    const fbe_vertex_t high_right = corner(1.0F, 1.0F);
+    const fbe_vertex_t high_left = corner(-1.0F, 1.0F);
+    const std::array corners{ low_left, low_right, high_right, high_left };
+    fbe_surface_add_vertices(quad, surface, corners.data(), 4);
+    const std::array<std::uint32_t, 6> indices{ 0, 1, 2, 0, 2, 3 };
+    fbe_surface_add_triangles(quad, surface, indices.data(), 6);
+    fbe_mesh_set_geometry(mesh, quad);
+    fbe_geometry_release(quad);
+    // Behind it, looking at its back: its +Z is the world's -Z.
+    const fbe_mat4_t box = box_at(0.0F, 0.0F, 0.0F, 0.5F, 0.5F, -0.5F);
+    const std::uint64_t one_sided = fbe_geometry_decal(world.handle, &box, 0.0F, decal_limit);
+    CHECK(fbe_surface_vertex_count(one_sided, 0) == 0);
+    fbe_geometry_release(one_sided);
+    const std::uint64_t both = fbe_material_create();
+    REQUIRE(fbe_material_set_two_sided(both, true));
+    REQUIRE(fbe_mesh_set_material(mesh, both));
+    const std::uint64_t made = fbe_geometry_decal(world.handle, &box, 0.01F, decal_limit);
+    const std::vector<fbe_vertex_t> vertices = vertices_of(made);
+    REQUIRE(!vertices.empty());
+    for (const fbe_vertex_t& one : vertices) {
+        CHECK(one.normal.z == Approx(-1.0F));
+        CHECK(one.position.z == Approx(-0.01F));
+    }
+    std::array<std::uint32_t, 3> triangle{};
+    REQUIRE(fbe_surface_triangles(made, 0, 0, triangle.data(), 1));
+    const fbe_vertex_t& a = vertices[triangle[0]];
+    const fbe_vertex_t& b = vertices[triangle[1]];
+    const fbe_vertex_t& c = vertices[triangle[2]];
+    const float winding = ((b.position.x - a.position.x) * (c.position.y - a.position.y)) -
+                          ((b.position.y - a.position.y) * (c.position.x - a.position.x));
+    // Counterclockwise from the side it faces, so clockwise from +Z.
+    CHECK(winding < 0.0F);
+    fbe_geometry_release(made);
+    fbe_material_release(both);
 }

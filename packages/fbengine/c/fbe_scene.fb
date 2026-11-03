@@ -398,13 +398,15 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_particles_set_sizes(particles: UInt64, start: Float32, end: Float32): Bool
     Function fbe_particles_set_colors(particles: UInt64, start: Ptr<fbe_color_t>,
                                       end: Ptr<fbe_color_t>): Bool
+    Function fbe_particles_set_roll(particles: UInt64, most: Float32): Bool
     Function fbe_particles_set_seed(particles: UInt64, seed: UInt32): Bool
     Function fbe_particles_burst(particles: UInt64, count: Int32): Bool
     Function fbe_particles_alive(particles: UInt64): Int32
     Function fbe_world_set_sky_atmosphere(world: UInt64, sun: UInt64, brightness: Float32): Bool
     Function fbe_world_set_sky_texture(world: UInt64, texture: UInt64, brightness: Float32): Bool
     Function fbe_world_clear_sky(world: UInt64): Bool
-    Function fbe_geometry_decal(world: UInt64, box: Ptr<fbe_mat4_t>, lift: Float32): UInt64
+    Function fbe_geometry_decal(world: UInt64, box: Ptr<fbe_mat4_t>, lift: Float32,
+                                limit: Float32): UInt64
     Function fbe_mirror_reflection(mirror: UInt64, matrix: Ptr<fbe_mat4_t>): Bool
     Function fbe_entity_set_auto_fade(entity: UInt64, start: Float32, end: Float32): Bool
     Function fbe_entity_auto_fade(entity: UInt64, fade: Ptr<fbe_vec2_t>): Bool

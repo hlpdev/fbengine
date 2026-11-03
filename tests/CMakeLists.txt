@@ -814,6 +814,10 @@ catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
 # what it does.
 if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
+      "particles-colors=SetColors on a Particles: a particle's alpha is 0 to 1, not 2"
+      "particles-roll=SetRoll on a Particles: a particle's roll is up to 0 to Pi each way, not -1"
+      "decal-limit=Decal: a decal's limit is above 0 and up to Pi / 2, not 2"
+      "sky-texture-brightness=SetSkyTexture on a World: a sky's brightness is 0 or more, not -1"
       "particles-capacity=SetCapacity on a Particles: an emitter holds 1 to 1048576 particles, not 0"
       "particles-rate=SetRate on a Particles: particles are born at 0 a second or more, not -1"
       "particles-life=SetLife on a Particles: a particle lives above 0 seconds, the least to the most, up to 512, not 2 to 1"
@@ -1640,6 +1644,13 @@ catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
 
 # Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as
 # operator new is this test's.
+add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp)
+target_link_libraries(fbengine_effects_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_effects_oom_tests)
+catch_discover_tests(fbengine_effects_oom_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths}"
+                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+
 add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_anim_oom_tests)

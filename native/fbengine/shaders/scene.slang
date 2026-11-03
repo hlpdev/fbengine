@@ -467,13 +467,18 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
     const float3 born = float3(particle.position[0], particle.position[1], particle.position[2]);
     const float3 going = float3(particle.velocity[0], particle.velocity[1], particle.velocity[2]);
     const float3 gravity = float3(emitter.gravity[0], emitter.gravity[1], emitter.gravity[2]);
-    float3 place = born + going * age + gravity * (0.5 * age * age);
-    if (emitter.drag > 0.0)
+    // What drag leaves of its velocity, added up to now, and of what gravity's given it. With little
+    // of it, the exact forms lose themselves in rounding: the first of their series, which with none
+    // is what no drag has.
+    const float dragged = emitter.drag * age;
+    float left = age * (1.0 - dragged * (0.5 - dragged / 6.0));
+    float fell = age * age * (0.5 - dragged * (1.0 / 6.0 - dragged / 24.0));
+    if (dragged >= 0.01)
     {
-        // What drag leaves of its velocity, added up to now, and of what gravity's given it.
-        const float left = (1.0 - exp(-emitter.drag * age)) / emitter.drag;
-        place = born + going * left + gravity * ((age - left) / emitter.drag);
+        left = (1.0 - exp(-dragged)) / emitter.drag;
+        fell = (age - left) / emitter.drag;
     }
+    const float3 place = born + going * left + gravity * fell;
     const float part = age / particle.life;
     const float size = lerp(emitter.sizeStart, emitter.sizeEnd, part);
     const float turned = particle.roll + particle.spin * age;

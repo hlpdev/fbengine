@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <ranges>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -122,10 +123,10 @@ bool send_surface(surface_buffers_t& out, std::span<const fbe_vertex_t> vertices
 }
 
 /// How many squares a side a terrain's piece has at most, however far it reaches.
-constexpr std::int32_t piece_cells = 16;
+constexpr std::int32_t piece_cells = scene::terrain_piece_cells;
 /// A piece this many times as far from the eye as it's wide is left whole, its squares then about
 /// this share of a piece's width of the view.
-constexpr float whole_from = 1.5F;
+constexpr float whole_from = scene::terrain_whole_from;
 
 struct piece_area_t {
     std::int32_t x = 0;
@@ -436,18 +437,45 @@ VkDeviceAddress particles_buffer(scene::particles_t& particles) {
         }
         kept_one.generation = particles.generation;
     }
-    // Runs of slots one after another go at once.
-    std::size_t at = 0;
-    std::vector<scene::particle_t> run;
-    while (at < particles.pending.size()) {
-        const std::uint32_t first = particles.pending[at].first;
-        run.clear();
-        while (at < particles.pending.size() && particles.pending[at].first == first + run.size()) {
-            run.push_back(particles.pending[at].second);
-            ++at;
+    if (!particles.pending.empty()) {
+        // Only what a slot had last; runs of slots one after another go as one, all as one write.
+        std::vector<bool> taken(static_cast<std::size_t>(particles.capacity));
+        std::vector<std::pair<std::uint32_t, scene::particle_t>> latest;
+        latest.reserve(particles.pending.size());
+        for (const auto& one : std::ranges::reverse_view(particles.pending)) {
+            if (!taken[one.first]) {
+                taken[one.first] = true;
+                latest.push_back(one);
+            }
         }
-        if (!gpu::write_buffer(kept_one.buffer, VkDeviceSize{ first } * sizeof(scene::particle_t),
-                               std::as_bytes(std::span(run)))) {
+        std::ranges::reverse(latest);
+        std::vector<scene::particle_t> records;
+        std::vector<VkBufferCopy> regions;
+        records.reserve(latest.size());
+        std::uint32_t run_first = 0;
+        std::uint32_t run_next = UINT32_MAX;
+        std::size_t run_from = 0;
+        const auto end_run = [&] {
+            if (records.size() != run_from) {
+                regions.push_back({
+                    .srcOffset = VkDeviceSize{ run_from } * sizeof(scene::particle_t),
+                    .dstOffset = VkDeviceSize{ run_first } * sizeof(scene::particle_t),
+                    .size = VkDeviceSize{ records.size() - run_from } * sizeof(scene::particle_t),
+                });
+            }
+            run_from = records.size();
+        };
+        for (const auto& [slot, record] : latest) {
+            if (slot != run_next) {
+                end_run();
+                run_first = slot;
+            }
+            records.push_back(record);
+            run_next = slot + 1;
+        }
+        end_run();
+        if (!gpu::write_buffer_regions(kept_one.buffer, std::as_bytes(std::span(records)),
+                                       regions)) {
             return 0;
         }
     }

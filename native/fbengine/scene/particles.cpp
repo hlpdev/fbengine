@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <new>
 #include <numbers>
 #include <ranges>
 #include <utility>
@@ -23,6 +24,8 @@ namespace fbe::scene {
 namespace {
 
 constexpr std::int32_t most_particles = 1048576;
+/// The most a step counts for: past a life's length it changes nothing but the clock's place.
+constexpr float most_step = 1000000.0F;
 
 float next_random(particles_t& found) {
     // xorshift32, so a seed's run is the same on every machine.
@@ -62,13 +65,15 @@ void spawn(particles_t& found, vec3_t place, quat_t turn, float ago) {
         .birth = birth,
         .velocity = { velocity.x, velocity.y, velocity.z },
         .life = life,
-        .roll = next_random(found) * 2.0F * std::numbers::pi_v<float>,
+        .roll = between(found, -found.roll, found.roll),
         .spin = between(found, -found.spin, found.spin),
     };
     const auto slot = static_cast<std::uint32_t>(found.next);
-    found.next = (found.next + 1) % static_cast<std::size_t>(found.capacity);
     found.pending.emplace_back(slot, made);
+    found.next = (found.next + 1) % static_cast<std::size_t>(found.capacity);
+    found.born = std::min(found.born + 1, found.capacity);
     found.deaths[slot] = found.total + life - ago;
+    found.latest_death = std::fmax(found.latest_death, found.deaths[slot]);
     // Where it can reach by its speed, for the box what's alive is in.
     const float reach = speed * life;
     const vec3_t low(place.x - reach, place.y - reach, place.z - reach);
@@ -108,17 +113,28 @@ void trim_pending(particles_t& found) {
 void sweep(particles_t& found) {
     for (std::size_t slot = 0; slot < found.deaths.size(); ++slot) {
         if (found.deaths[slot] != 0.0 && found.deaths[slot] <= found.total) {
-            found.deaths[slot] = 0.0;
             found.pending.emplace_back(static_cast<std::uint32_t>(slot), particle_t{});
+            found.deaths[slot] = 0.0;
         }
     }
 }
 
-void make_room(particles_t& found) {
-    found.deaths.assign(static_cast<std::size_t>(found.capacity), 0.0);
+/// Forgets what it has, its slots' deaths made ready first, as what can run out of memory.
+void make_room(particles_t& found, std::int32_t capacity) {
+    std::vector<double> deaths(static_cast<std::size_t>(capacity), 0.0);
+    found.deaths = std::move(deaths);
+    found.capacity = capacity;
     found.pending.clear();
     found.next = 0;
+    found.born = 0;
     ++found.generation;
+}
+
+/// Its slots' deaths, which a new emitter only has once it's first wanted.
+void ready_slots(particles_t& found) {
+    if (found.deaths.size() != static_cast<std::size_t>(found.capacity)) {
+        make_room(found, found.capacity);
+    }
 }
 
 void step_one(particles_t& found, float seconds) {
@@ -138,24 +154,36 @@ void step_one(particles_t& found, float seconds) {
     }
     // A slice of where they're born, each a part of the longest life, so a slice goes when all it
     // has are dead: one more than that, since the last it had was born as it ended.
+    // Once all that had a longer life than it has now are dead, its slices go by the life it has.
+    if (found.longest > found.life_max && found.total >= found.long_until) {
+        found.longest = found.life_max;
+    }
     found.slice_age += seconds;
-    if (found.slice_age >= found.longest / static_cast<float>(found.slices.size() - 1)) {
-        found.slice_age = 0.0F;
+    const float slice_length = found.longest / static_cast<float>(found.slices.size() - 1);
+    const float passed = std::floor(found.slice_age / slice_length);
+    const auto turns =
+        static_cast<std::size_t>(std::fmin(passed, static_cast<float>(found.slices.size())));
+    for (std::size_t at = 0; at < turns; ++at) {
         found.slice = (found.slice + 1) % found.slices.size();
         found.slices[found.slice].any = false;
     }
+    found.slice_age -= passed * slice_length;
     if (!showing(found.entity)) {
         return;
     }
-    found.owed += found.rate * seconds;
-    const auto count =
-        static_cast<std::int32_t>(std::fmin(found.owed, static_cast<float>(found.capacity)));
+    // Only what's born at the end of the step, a life long at most, can live to its end.
+    const float window = std::fmin(seconds, found.life_max);
+    const auto most = static_cast<float>(found.capacity);
+    found.owed = std::fmin(found.owed + (found.rate * window), most + 1.0F);
+    const auto count = static_cast<std::int32_t>(std::fmin(found.owed, most));
     found.owed -= std::floor(found.owed);
+    const float start = seconds > 0.0F ? 1.0F - (window / seconds) : 0.0F;
+    const vec3_t across = now - from;
     for (std::int32_t i = 0; i < count; ++i) {
-        // Evenly along the step, and from where the entity went: no clumps where it was each step.
+        // Evenly along it, and from where the entity went: no clumps where it was each step.
         const float part = (static_cast<float>(i) + 0.5F) / static_cast<float>(count);
-        const vec3_t across = now - from;
-        spawn(found, from + across * part, turn, seconds * (1.0F - part));
+        const float along_step = start + ((1.0F - start) * part);
+        spawn(found, from + across * along_step, turn, window * (1.0F - part));
     }
     trim_pending(found);
 }
@@ -181,7 +209,6 @@ void add_particles(std::uint32_t entity) {
     made.entity = entity;
     // Each its own, from when it was made.
     made.random = static_cast<std::uint32_t>(s.entities.made[entity] * 2654435761ULL) | 1U;
-    make_room(made);
     s.particles.push_back(std::move(made));
 }
 
@@ -209,11 +236,18 @@ void copy_particles(std::uint32_t from, std::uint32_t to) {
     copy.captured_clock = 0.0F;
     copy.total = 0.0;
     copy.sweeps = 0;
+    copy.long_until = 0.0;
+    copy.latest_death = 0.0;
+    copy.longest = copy.life_max;
     copy.owed = 0.0F;
     copy.slices = {};
     copy.slice = 0;
     copy.slice_age = 0.0F;
-    make_room(copy);
+    copy.deaths.clear();
+    copy.pending.clear();
+    copy.next = 0;
+    copy.born = 0;
+    ++copy.generation;
     retain_material(copy.material);
 }
 
@@ -270,7 +304,7 @@ using fbe::scene::scene;
 
 extern "C" {
 
-FBE_API bool fbe_world_step_particles(uint64_t world, float seconds) {
+FBE_API bool fbe_world_step_particles(uint64_t world, float seconds) try {
     const std::uint32_t slot = fbe::scene::world_slot(world);
     if (slot == fbe::scene::none) {
         return false;
@@ -280,10 +314,13 @@ FBE_API bool fbe_world_step_particles(uint64_t world, float seconds) {
     }
     for (particles_t& found : scene().particles) {
         if (scene().entities.world[found.entity] == slot) {
-            fbe::scene::step_one(found, seconds);
+            fbe::scene::ready_slots(found);
+            fbe::scene::step_one(found, std::fmin(seconds, fbe::scene::most_step));
         }
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
 FBE_API bool fbe_particles_set_material(uint64_t particles, uint64_t material) {
@@ -311,7 +348,7 @@ FBE_API uint64_t fbe_particles_material(uint64_t particles) {
                : 0;
 }
 
-FBE_API bool fbe_particles_set_capacity(uint64_t particles, int32_t capacity) {
+FBE_API bool fbe_particles_set_capacity(uint64_t particles, int32_t capacity) try {
     particles_t* found = fbe::scene::particles_of(particles);
     if (found == nullptr) {
         return false;
@@ -320,9 +357,10 @@ FBE_API bool fbe_particles_set_capacity(uint64_t particles, int32_t capacity) {
         return fbe::fail(std::format("an emitter holds 1 to {} particles, not {}",
                                      fbe::scene::most_particles, capacity));
     }
-    found->capacity = capacity;
-    fbe::scene::make_room(*found);
+    fbe::scene::make_room(*found, capacity);
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
 FBE_API int32_t fbe_particles_capacity(uint64_t particles) {
@@ -362,7 +400,11 @@ FBE_API bool fbe_particles_set_life(uint64_t particles, float least, float most)
     }
     found->life_min = least;
     found->life_max = most;
-    found->longest = std::fmax(found->longest, most);
+    if (most >= found->longest) {
+        found->longest = most;
+    } else {
+        found->long_until = found->latest_death;
+    }
     return true;
 }
 
@@ -422,8 +464,24 @@ FBE_API bool fbe_particles_set_colors(uint64_t particles, const fbe_color_t* sta
     if (found == nullptr) {
         return false;
     }
+    if (!fbe::scene::valid_color(start->r, start->g, start->b, start->a, "a particle's") ||
+        !fbe::scene::valid_color(end->r, end->g, end->b, end->a, "a particle's")) {
+        return false;
+    }
     found->color_start = { start->r, start->g, start->b, start->a };
     found->color_end = { end->r, end->g, end->b, end->a };
+    return true;
+}
+
+FBE_API bool fbe_particles_set_roll(uint64_t particles, float most) {
+    particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    if (std::isnan(most) || most < 0.0F || most > std::numbers::pi_v<float>) {
+        return fbe::fail(std::format("a particle's roll is up to 0 to Pi each way, not {}", most));
+    }
+    found->roll = most;
     return true;
 }
 
@@ -436,7 +494,7 @@ FBE_API bool fbe_particles_set_seed(uint64_t particles, uint32_t seed) {
     return true;
 }
 
-FBE_API bool fbe_particles_burst(uint64_t particles, int32_t count) {
+FBE_API bool fbe_particles_burst(uint64_t particles, int32_t count) try {
     particles_t* found = fbe::scene::particles_of(particles);
     if (found == nullptr) {
         return false;
@@ -448,11 +506,21 @@ FBE_API bool fbe_particles_burst(uint64_t particles, int32_t count) {
     fbe::scene::update_world(entity);
     const fbe::scene::vec3_t place = scene().entities.world_matrix[entity].axis(3);
     const fbe::scene::quat_t turn = scene().entities.world_rotation[entity];
+    fbe::scene::ready_slots(*found);
+    // Born when what's drawn between steps starts from, so it shows all the way from there, even in
+    // a pause that never gets to the clock: if that's within its least life, or it'd be dead.
+    float since = found->clock - found->captured_clock;
+    if (since < 0.0F) {
+        since += fbe::scene::particles_wrap;
+    }
+    const float ago = scene().entities.captured[entity] && since < found->life_min ? since : 0.0F;
     for (std::int32_t i = 0; i < std::min(count, found->capacity); ++i) {
-        fbe::scene::spawn(*found, place, turn, 0.0F);
+        fbe::scene::spawn(*found, place, turn, ago);
     }
     fbe::scene::trim_pending(*found);
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
 FBE_API int32_t fbe_particles_alive(uint64_t particles) {
