@@ -206,6 +206,10 @@ jobs:
       # work, which a test requires when FBE_GPU_VALIDATION is 1.
       - name: Build and test
         env:
+          # As the test job's: fb 1.2.2's FileWatcher and a runner's 8.3 TEMP.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          FBENGINE_ENDS_AT_ONCE: '8'
           SDL_VIDEO_DRIVER: offscreen
           FBE_GPU_VALIDATION: '1'
         run: |
