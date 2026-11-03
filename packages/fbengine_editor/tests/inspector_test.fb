@@ -7,6 +7,8 @@ Import std.io
 Import std.math
 Import std.os
 Import std.test
+Import std.text
+Import std.time
 Import fbengine
 Import fbengine_editor
 Import fbengine_ui
@@ -724,5 +726,311 @@ Function ItsRowsAreInItsPane() Throws IOError, GraphicsError
     editor.Step()
     editor.Step()
     Expect(FieldOf(editor, "Name").Text() == camera.Name())
+    editor.Finish()
+End Function
+
+// A door, as a game's program would say it.
+Class Door
+    @Limits(0, 10)
+    Public Field Speed: Float = 2.5
+    Public Field Label: String = "door"
+    Public Field Open: Bool = False
+    Public Field Panels: Int = 3
+    Public Field Way: Swing = Swing.OUTWARD
+    Public Field At: Vec3
+    Public Field Shade: Color
+    Public Field Corner: Vec2
+    Public Field Parts: Int[] = []
+    @ShownInDegrees
+    Public Field Swings: Float = 0
+End Class
+
+Enum Swing
+    INWARD
+    OUTWARD
+End Enum
+
+Class Latch
+    Public Field Keyed: Bool = True
+End Class
+
+Function KnowingKinds(editor: Editor)
+    Components.Clear()
+    Components.Add<Door>("Door")
+    Components.Add<Latch>("Latch")
+    editor.Kinds.Set(Components.Kinds())
+    Components.Clear()
+    editor.Step()
+    editor.Step()
+End Function
+
+Function Adding(editor: Editor, name: String) Throws GraphicsError
+    Local row = RowCalled(editor, "AddComponent") As? ButtonRow
+    If row == Null Then Panic("there's no way to add one")
+    row.Pressing().Click()
+    editor.Step()
+    editor.Step()
+    Local popups = editor.Shown.Popups()
+    Expect(popups.Count == 1, "its list didn't open")
+    Local item = popups[0].Find("inspector.kind.{name}")
+    Local button = item As? Button
+    If button == Null Then Panic("{name} isn't in its list")
+    button.Click()
+    editor.Step()
+    editor.Step()
+    Expect(editor.Shown.Popups().Count == 0, "its list stayed open")
+End Function
+
+@Test
+Function NoProgramKnowsNoKinds() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Expect(editor.Kinds.Kinds().Count == 0 && !editor.Kinds.Running())
+    Selecting(editor, Pivot())
+    Expect(editor.Inspector.RowOf("AddComponent") == Null, "there's a way to add what there isn't")
+    editor.Finish()
+End Function
+
+@Test
+Function AComponentIsAddedAndEditedAndTakenOffThroughUndo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Adding(editor, "Door")
+    Expect(ComponentsOf(pivot).Count == 1 && ComponentsOf(pivot)[0].Kind == "Door")
+    Expect(editor.Edits.UndoName() == "Add Door")
+    // A row for each Field, by what it is.
+    Expect(FieldOf(editor, "Speed").Text() == "2.5", FieldOf(editor, "Speed").Text())
+    Expect(FieldOf(editor, "Label").Text() == "door")
+    Expect(FieldOf(editor, "Panels").Text() == "3")
+    Expect(FieldOf(editor, "At", 2).Text() == "0")
+    Expect(FieldOf(editor, "Corner", 1).Text() == "0")
+    Expect(RowCalled(editor, "Shade").Parts().Count == 4)
+    Expect((RowCalled(editor, "Open") As? ToggleRow) != Null)
+    Expect((RowCalled(editor, "Parts") As? NoteRow) != Null, "there's an editor for what has none")
+    Local way = RowCalled(editor, "Way") As? ChoiceRow<String>
+    If way == Null Then Panic("it's not a list")
+    Expect(way.Chooser().Text() == "OUTWARD")
+    // Edited, it's the data that changes, by what it says it takes.
+    Try Entered(editor, "Speed", "4")
+    Local data = ComponentsOf(pivot)[0]
+    Expect(data.Values["Speed"]?.AsDouble() == 4, "{data.Values}")
+    Try Entered(editor, "Speed", "11")
+    Expect(data.Values["Speed"]?.AsDouble() == 4, "it took what's past its @Limits")
+    Try Entered(editor, "Label", "gate")
+    Expect(data.Values["Label"]?.AsString() == "gate")
+    Try Entered(editor, "Panels", "5")
+    Expect(data.Values["Panels"]?.AsInt() == 5)
+    Try Entered(editor, "At", "7", 1)
+    Local at = data.Values["At"] ?? Value()
+    Expect(at["y"]?.AsDouble() == 7 && at["x"]?.AsDouble() == 0, "{at}")
+    way.Choose(0)
+    editor.Step()
+    Expect(data.Values["Way"]?.AsString() == "INWARD")
+    Try Entered(editor, "Swings", "90")
+    Local swings = data.Values["Swings"]?.AsDouble() ?? 0
+    Expect(Abs(swings - Pi / 2) < 0.001, "@ShownInDegrees keeps radians: {swings}")
+    Expect(editor.Edits.UndoName() == "Set Swings")
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(data.Values["Way"]?.AsString() == "OUTWARD")
+    // Taken off, and back in its place, as it was.
+    Try Adding(editor, "Latch")
+    Local remove = RowCalled(editor, "Door") As? ButtonRow
+    If remove == Null Then Panic("there's no way to take it off")
+    remove.Pressing().Click()
+    editor.Step()
+    editor.Step()
+    Expect(ComponentsOf(pivot).Count == 1 && ComponentsOf(pivot)[0].Kind == "Latch")
+    Expect(editor.Inspector.RowOf("Speed") == Null, "its rows outlived it")
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    editor.Step()
+    Expect(ComponentsOf(pivot)[0].Kind == "Door" && RefEquals(ComponentsOf(pivot)[0], data))
+    Expect(FieldOf(editor, "Speed").Text() == "4")
+    // Added, undone, it's gone.
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    editor.Step()
+    Expect(ComponentsOf(pivot).Count == 1)
+    editor.Finish()
+End Function
+
+@Test
+Function ManySelectedShareWhatTheyAllHave() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local one = Pivot()
+    Local two = Pivot()
+    Selecting(editor, one)
+    Try Adding(editor, "Door")
+    editor.Edited.ToggleSelected(two)
+    editor.Step()
+    editor.Step()
+    // Only the one has it.
+    Expect(editor.Inspector.RowOf("Speed") == Null, "it shows what only one has")
+    // Added to both, it's only added to what hasn't one.
+    Local had = ComponentsOf(one)[0]
+    Try Adding(editor, "Door")
+    Expect(ComponentsOf(one).Count == 1 && RefEquals(ComponentsOf(one)[0], had))
+    Expect(ComponentsOf(two).Count == 1)
+    Try Entered(editor, "Speed", "8")
+    Expect(ComponentsOf(one)[0].Values["Speed"]?.AsDouble() == 8)
+    Expect(ComponentsOf(two)[0].Values["Speed"]?.AsDouble() == 8)
+    Expect(editor.Actions.Run("edit.undo") && editor.Actions.Run("edit.undo"))
+    editor.Step()
+    Expect(ComponentsOf(one).Count == 1 && ComponentsOf(two).Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function ACopyHasItsOwn() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local parent = Pivot()
+    Local child = Pivot(parent)
+    Selecting(editor, child)
+    Try Adding(editor, "Latch")
+    Selecting(editor, parent)
+    Try Adding(editor, "Door")
+    Try Entered(editor, "Speed", "6")
+    Expect(editor.Actions.Run("tree.duplicate"))
+    editor.Step()
+    editor.Step()
+    Local copy = editor.Edited.Selected()[0]
+    Expect(ComponentsOf(copy).Count == 1 &&
+           !RefEquals(ComponentsOf(copy)[0], ComponentsOf(parent)[0]))
+    Expect(ComponentsOf(copy)[0].Values["Speed"]?.AsDouble() == 6)
+    Expect(ComponentsOf(copy.Child(0))[0].Kind == "Latch", "what's under it hasn't its own")
+    // Each its own from here.
+    Try Entered(editor, "Speed", "1")
+    Expect(ComponentsOf(parent)[0].Values["Speed"]?.AsDouble() == 6)
+    editor.Finish()
+End Function
+
+@Test
+Function WhatTheProjectDoesntKnowStaysAsItIs() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Adding(editor, "Door")
+    editor.Kinds.Set([])
+    editor.Step()
+    editor.Step()
+    Expect((RowCalled(editor, "Door.unknown") As? NoteRow) != Null)
+    Expect(editor.Inspector.RowOf("Speed") == Null)
+    Expect(ComponentsOf(pivot).Count == 1, "what it can't read of went")
+    Expect(editor.Inspector.RowOf("AddComponent") == Null)
+    editor.Finish()
+End Function
+
+@Test
+Function ComponentsOfWhatsFreedDoNothing() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Adding(editor, "Door")
+    Local remove = RowCalled(editor, "Door") As? ButtonRow
+    If remove == Null Then Panic("there's no way to take it off")
+    remove.Pressing().Click()
+    editor.Step()
+    pivot.Free()
+    editor.Step()
+    While editor.Edits.CanUndo()
+        Expect(editor.Actions.Run("edit.undo"))
+    End While
+    While editor.Edits.CanRedo()
+        Expect(editor.Actions.Run("edit.redo"))
+    End While
+    editor.Step()
+    editor.Finish()
+End Function
+
+// Where the packages are, up from where the tests run; Null if that's not in the repository.
+Function Packages(): Path? Throws IOError
+    Local at: Path? = Try Dir.Current()
+    While at != Null
+        If File.Exists(at / "packages/fbengine/project.toml") Then Return at / "packages"
+        Local up = at.Parent()
+        If up == Null || up == at Then Return Null
+        at = up
+    End While
+    Return Null
+End Function
+
+@Test
+Function AGamesProgramSaysItsKinds() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local packages = Try Packages()
+    If packages == Null Then Skip("the packages aren't up from here")
+    Local fb = Env.Get("FBENGINE_NO_FB")
+    If fb == "1" Then Skip("no fb here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = games.Path / "game"
+    Try Dir.CreateAll(folder / "components")
+    Local dependency = packages / "fbengine"
+    Try File.WriteText(
+        folder / "project.toml",
+        "[project]\nname = \"game\"\nversion = \"0.0.1\"\ntype = \"executable\"\n\n" +
+        "[dependencies]\nfbengine = {{ path = \"{dependency.Text.Replace("\\", "/")}\" }}\n")
+    Try File.WriteText(folder / "door.fb",
+                       "Public Class Door\n    Public Field Speed: Float = 2.5\nEnd Class\n")
+    Try File.WriteText(folder / "main.fb", "Print(\"the game\")\n")
+    Try File.WriteText(folder / "components/main.fb",
+                       "Import fbengine\nImport \"../door\"\n\nComponents.Add<Door>(\"Door\")\nTry Components.Describe()\n")
+    Window.SetHeadless(True)
+    Local editor = Try Editor(settings.Path)
+    Try editor.Start(folder)
+    Expect(editor.Kinds.Running() || editor.ShowingDialog() != Null, "it didn't start the program")
+    Local watch = Stopwatch.StartNew()
+    While editor.Kinds.Running() && watch.Elapsed.TotalSeconds < 120
+        editor.Step()
+    End While
+    editor.Step()
+    Expect(!editor.Kinds.Running(), "it never ended")
+    Expect(editor.ShowingDialog() == Null, "it failed")
+    Expect(editor.Kinds.Kinds().Count == 1 && editor.Kinds.Kinds()[0].Name == "Door")
+    Selecting(editor, Pivot())
+    Try Adding(editor, "Door")
+    Expect(FieldOf(editor, "Speed").Text() == "2.5")
+    // A program that fails says so, and leaves none.
+    Try File.WriteText(folder / "components/main.fb", "This isn't FutureBlitz\n")
+    Local second = folder
+    editor.CloseProject()
+    editor.OpenFolder(second)
+    watch = Stopwatch.StartNew()
+    While editor.Kinds.Running() && watch.Elapsed.TotalSeconds < 120
+        editor.Step()
+    End While
+    editor.Step()
+    Expect(editor.Kinds.Kinds().Count == 0)
+    Expect(editor.ShowingDialog() != Null, "nothing said it failed")
+    // One that's running is stopped when the project goes.
+    Try File.WriteText(folder / "components/main.fb", "Import std.time\nSleepFor(60)\n")
+    editor.CloseProject()
+    editor.OpenFolder(second)
+    editor.CloseProject()
+    Expect(!editor.Kinds.Running(), "it's still running")
     editor.Finish()
 End Function

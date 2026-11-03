@@ -1,0 +1,244 @@
+// A game's components as the editor has them: as data, kept on what's in the scene, and what kinds
+// there are, which the game's own program says, as the editor can't run a game's code in itself.
+
+Import std.collections
+Import std.core
+Import std.data
+Import std.io
+Import std.os
+Import fbengine
+Import "./history"
+
+// What a game's program is, under its folder, and where it's told to write what it says.
+Const COMPONENTS_PROGRAM = "components/main.fb"
+Const DESCRIBE_TO = "FBENGINE_COMPONENTS_TO"
+
+/// A component on an entity, as data: its kind's name, and what its Fields have, which are its kind's
+/// first values until they're edited.
+Public Final Class ComponentData
+    /// What kind it is.
+    Public ReadOnly Field Kind: String
+    /// What's been set of its Fields.
+    Public Field Values: Value
+
+    /// One of the kind `kind`, with every Field at what it is at first.
+    Public New(kind: ComponentKind)
+        Kind = kind.Name
+        Values = Value.Object()
+        For field In kind.Fields
+            Values[field.Name] = field.First
+        End For
+    End New
+
+    // One the same as `other`.
+    Package New(other: ComponentData)
+        Kind = other.Kind
+        Values = other.Values.Clone()
+    End New
+End Class
+
+// What the editor keeps on an entity with SetData, which goes as the entity does.
+Final Class EntityComponents
+    Package Field Items: ComponentData[] = []
+End Class
+
+/// What components `entity` has, in order, as a scene being saved reads them.
+@MainThread @PanicsAtCaller
+Public Function ComponentsOf(entity: Entity): ComponentData[]
+    Local kept = entity.Data<EntityComponents>()
+    Return kept != Null ? kept.Items.Clone() : []
+End Function
+
+// Gives `entity` what `from` has, as a copy of it, and what's under it what's under `from` has.
+Package Function CopyComponents(from: Entity, entity: Entity)
+    Local kept = from.Data<EntityComponents>()
+    If kept != Null
+        Local made = EntityComponents()
+        For item In kept.Items
+            made.Items.Add(ComponentData(item))
+        End For
+        entity.SetData(made)
+    End If
+    For i = 0 Until Min(from.ChildCount(), entity.ChildCount())
+        CopyComponents(from.Child(i), entity.Child(i))
+    End For
+End Function
+
+/// A component of one kind put on each entity without one, taken off again on undoing.
+Public Final Class AddComponentEdit Extends Edit
+    Field entities: Entity[]
+    Field kind: ComponentKind
+    Field added: (Entity, ComponentData)[] = []
+
+    /// One of `adding` on each of `going` that hasn't one.
+    Public New(going: Entity[], adding: ComponentKind)
+        entities = going
+        kind = adding
+        Super.New("Add {adding.Name}")
+    End New
+
+    Public Override Method Apply() Throws IOError
+        If added.Count == 0
+            For entity In entities
+                If entity.Freed() Then Continue
+                Local has = False
+                For item In ComponentsOf(entity)
+                    If item.Kind == kind.Name Then has = True
+                End For
+                If !has Then added.Add((entity, ComponentData(kind)))
+            End For
+        End If
+        For each In added
+            If each.0.Freed() Then Continue
+            Local kept = each.0.Data<EntityComponents>() ?? EntityComponents()
+            kept.Items.Add(each.1)
+            each.0.SetData(kept)
+        End For
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        For each In added
+            If each.0.Freed() Then Continue
+            Local kept = each.0.Data<EntityComponents>()
+            If kept != Null Then kept.Items = kept.Items.Filter(Function(item: ComponentData) => !RefEquals(item, each.1))
+        End For
+    End Method
+
+    Public Override Method ChangesTree(): Bool => False
+End Class
+
+/// The component of a kind taken off each entity, each back in its place on undoing.
+Public Final Class RemoveComponentEdit Extends Edit
+    Field entities: Entity[]
+    Field name: String
+    Field removed: (Entity, ComponentData, Int)[] = []
+
+    /// What's called `kind` off each of `going`.
+    Public New(going: Entity[], kind: String)
+        entities = going
+        name = kind
+        Super.New("Remove {kind}")
+    End New
+
+    Public Override Method Apply() Throws IOError
+        removed = []
+        For entity In entities
+            If entity.Freed() Then Continue
+            Local kept = entity.Data<EntityComponents>()
+            If kept == Null Then Continue
+            For i = 0 Until kept.Items.Count
+                If kept.Items[i].Kind == name
+                    removed.Add((entity, kept.Items[i], i))
+                    kept.Items.RemoveAt(i)
+                    Break
+                End If
+            End For
+        End For
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        For each In removed
+            If each.0.Freed() Then Continue
+            Local kept = each.0.Data<EntityComponents>()
+            If kept != Null Then kept.Items.Insert(Min(each.2, kept.Items.Count), each.1)
+        End For
+    End Method
+
+    Public Override Method ChangesTree(): Bool => False
+End Class
+
+/// What kinds of component a game has: what its components/main.fb says, run by fb beside the editor,
+/// with none if it has none. Update, each frame, sees to it finishing.
+Public Final Class GameComponents
+    Field kinds: ComponentKind[] = []
+    Field child: Child? = Null
+    Field folder: TempDir? = Null
+    Field failed: String? = Null
+    Field changes: Int = 0
+
+    /// What it knows of, as of the last that finished.
+    Public Method Kinds(): ComponentKind[] => kinds.Clone()
+
+    /// The kind called `name`, or Null.
+    Public Method Find(name: String): ComponentKind?
+        For kind In kinds
+            If kind.Name == name Then Return kind
+        End For
+        Return Null
+    End Method
+
+    /// How many times what it knows has changed.
+    Public Method Changes(): Int => changes
+
+    /// Whether its program's still running.
+    Public Method Running(): Bool => child != Null
+
+    /// What went wrong with its program, once, then Null.
+    Public Method TakeFailure(): String?
+        Local had = failed
+        failed = Null
+        Return had
+    End Method
+
+    /// Starts `game`'s program in place of any that's running, and forgets what it knew. With no
+    /// program, it knows of none. It's run by `fb`, which has to be on the PATH.
+    Public Method Start(game: Path)
+        Stop()
+        Set([])
+        Local program = game / COMPONENTS_PROGRAM
+        If !File.Exists(program) Then Return
+        Try
+            Local temp = Try TempDir()
+            folder = temp
+            Local command = Command("fb")
+            command.Args(["--color", "never", "run", program.Text])
+            command.Folder(game.Text)
+            command.Env(DESCRIBE_TO, (temp.Path / "kinds.json").Text)
+            command.Stdin(Stdio.NONE)
+            command.Stdout(Stdio.NONE)
+            command.Stderr(Stdio.NONE)
+            child = Try command.Spawn()
+        Catch error As IOError
+            failed = "Couldn't run fb on {program.Text}: {error.Message}"
+        End Try
+    End Method
+
+    /// Stops its program, knowing what it knows.
+    Public Method Stop()
+        Local running = child
+        child = Null
+        folder = Null
+        If running == Null Then Return
+        Try
+            Try running.Kill()
+        Catch error As IOError
+            // It's ended by itself.
+        End Try
+    End Method
+
+    /// Sees whether its program's ended, and takes what it says.
+    Public Method Update()
+        Local running = child
+        If running == Null Then Return
+        Local ended = running.TryWait()
+        If ended == Null Then Return
+        child = Null
+        Try
+            If !ended.Success Then Throw IOError(IOErrorKind.OTHER, "it ended with {ended}")
+            Local temp = folder
+            If temp == Null Then Return
+            Set(Try Json.Read<ComponentKind[]>(Try File.ReadText(temp.Path / "kinds.json")))
+        Catch error As IOError
+            failed = "The game's {COMPONENTS_PROGRAM} didn't say its components: {error.Message}"
+        Catch error As ParseError
+            failed = "The game's {COMPONENTS_PROGRAM} didn't say its components: {error.Message}"
+        End Try
+        folder = Null
+    End Method
+
+    /// Knows of `known`, in place of what it knew.
+    Public Method Set(known: ComponentKind[])
+        kinds = known
+        changes += 1
+    End Method
+End Class

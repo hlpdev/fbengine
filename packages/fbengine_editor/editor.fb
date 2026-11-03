@@ -9,6 +9,7 @@ Import std.math
 Import fbengine
 Import fbengine_ui
 Import "./commands"
+Import "./component"
 Import "./dialog"
 Import "./dock"
 Import "./handles"
@@ -44,6 +45,8 @@ Public Final Class Editor
     Public ReadOnly Field Tree: SceneTree
     /// What's selected and its properties.
     Public ReadOnly Field Inspector: SceneInspector
+    /// What kinds of component the project has.
+    Public ReadOnly Field Kinds: GameComponents
     Field project: GameProject? = Null
     Field dialog: Dialog? = Null
     Field welcome: Node
@@ -59,7 +62,8 @@ Public Final Class Editor
         Edited = EditedScene()
         View = SceneView(Edited, Edits)
         Tree = SceneTree(Edited, Edits)
-        Inspector = SceneInspector(Edited, Edits)
+        Kinds = GameComponents()
+        Inspector = SceneInspector(Edited, Edits, Kinds)
         Docked = Dock()
         Menus = MenuBar(Actions)
         welcome = Widget("welcome", "welcome")
@@ -115,6 +119,9 @@ Public Final Class Editor
     Public Method Step()
         Flip()
         Tree.Update()
+        Kinds.Update()
+        Local failure = Kinds.TakeFailure()
+        If failure != Null Then Said("Couldn't read the game's components", failure)
         Inspector.Update()
         Shown.Update()
         Menus.Update()
@@ -167,6 +174,7 @@ Public Final Class Editor
         opened.Mount()
         project = opened
         NewScene()
+        Kinds.Start(opened.Folder)
         Kept.AddRecent(opened.Folder.Text)
         Local saved = Kept.Kept(opened.Folder.Text)
         If saved == Null || !Docked.Restore(saved["layout"] ?? Value.Object()) Then DefaultLayout()
@@ -182,6 +190,8 @@ Public Final Class Editor
         Kept.Keep(open.Folder.Text, kept)
         open.Close()
         project = Null
+        Kinds.Stop()
+        Kinds.Set([])
         Docked.Clear()
         NewScene()
         ShowWelcome()

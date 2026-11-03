@@ -66,6 +66,17 @@ good modern engine on its own. Every structural choice is checked against both.
   `CameraPick` returns the same `Entity` object the game made, and `==` and Map keys work.
   `Free()` frees the engine object and drops the table's entry; the wrapper stays, and using it
   panics ("this Mesh was freed").
+- **What edits the API reads it by reflection** (E13): a property is what has both an `X()` and a
+  `SetX()` of one type, and a setter says what it takes by attributes, `@Limits`, `@ShownInDegrees`,
+  and `@NotEdited`, the one place for its rule, since a setter panics for what it can't take and the
+  editor can't catch that.
+- **Components are data** (E13): FutureBlitz has no reflection at run time and no loading of a game's
+  code, so the editor can't see a game's Classes. A component is a Class Load can make from nothing;
+  `Components.Add<T>(name)` describes it by reflection; a game's components/main.fb ends with
+  `Components.Describe()`, which the editor runs by fb, as it runs the game; the editor edits plain
+  Values, which a scene keeps; and `Components.Attach(entity, name, values)` makes one as a scene
+  loads, which `entity.Data<T>()` gives back, one of each type. fbengine_physics's bodies are one of
+  these, so fbengine never names it.
 - Engine Classes are Final, and a game attaches its own object with `entity.SetData(obj)` and
   `entity.Data()`, rather than extending `Entity` (the user, 2026-10-31). That keeps the wrapper
   table simple, and picks hand back the game's object through it.

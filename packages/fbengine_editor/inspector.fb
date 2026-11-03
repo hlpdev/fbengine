@@ -7,6 +7,7 @@ Import std.math
 Import std.text
 Import fbengine
 Import fbengine_ui
+Import "./component"
 Import "./history"
 Import "./scene"
 
@@ -142,19 +143,20 @@ Function Pairs<T, V>(things: T[], alive: Func(T): Bool): Editable<V>[]
     Return found
 End Function
 
-// Every member of an Enum, in order.
-Function Members<E>(): E[]
-    Local all: E[] = []
-    Local at: Int64 = 0
-    While True
+// A Field of each of `items`, as what Load makes of what's kept, or what it is at first.
+Function Stored<V>(field: ComponentField, items: ComponentData[], bounds: Limits): Editable<V>
+    Local name = field.Name
+    Local first = field.First
+    Return Editable<V>(name, items.Count, Function(index: Int): V
         Try
-            all.Add(Try Load<E>(Value(at)))
-        Catch error As Error
-            Break
+            Return Try Load<V>(items[index].Values[name] ?? first)
+        Catch error As ParseError
+            Panic(
+                "what's kept of {name} is what a Field of it saved, and it's not: {error.Message}")
         End Try
-        at += 1
-    End While
-    Return all
+    End Function, Function(index: Int, value: V)
+        items[index].Values[name] = Save(value)
+    End Function, Function(index: Int) => True, bounds, field.Degrees)
 End Function
 
 // `all` as what they all are, or Null if one isn't.
@@ -324,6 +326,35 @@ Public Final Class FieldsRow<V> Extends PropertyRow
     End Method
 End Class
 
+/// A row with a button, doing what `action` does: taking a component off, or adding one.
+Public Final Class ButtonRow Extends PropertyRow
+    Field button: Button
+
+    /// A row called `title`, with a button saying `text`, which runs `action` with its Ui and where
+    /// it is.
+    Public New(title: String, text: String, action: Func(Button))
+        button = Button(text, "inspector.{title}.button")
+        Super.New(title)
+        button.SetTranslates(False)
+        button.OnClick(action)
+        Add(button)
+    End New
+
+    /// Its button.
+    Public Method Pressing(): Button => button
+End Class
+
+/// A row that only says something, for a Field nothing here edits.
+Public Final Class NoteRow Extends PropertyRow
+    /// A row called `title`, saying `text`.
+    Public New(title: String, text: String)
+        Super.New(title)
+        Local note = Label(text, "inspector.note")
+        note.SetTranslates(False)
+        Add(note)
+    End New
+End Class
+
 /// A row with a box to tick, what's selected going all one way.
 Public Final Class ToggleRow Extends PropertyRow
     Field edited: Editable<Bool>
@@ -466,11 +497,17 @@ Public Final Class SceneInspector Extends Widget
     Field rows: PropertyRow[] = []
     Field entities: Entity[] = []
     Field materials: Material[] = []
+    Field kinds: GameComponents
+    Field knownKinds: Int = 0
+    Field shownData: ComponentData[] = []
+    Field menu: Node? = Null
 
-    /// The inspector of what's selected in `seen`, whose edits go in `edits`.
-    Public New(seen: EditedScene, edits: History)
+    /// The inspector of what's selected in `seen`, whose edits go in `edits`, of what components
+    /// `known` knows.
+    Public New(seen: EditedScene, edits: History, known: GameComponents)
         scene = seen
         history = edits
+        kinds = known
         scroller = ScrollView("inspector.scroller")
         list = Node("inspector.list")
         Super.New("inspector", "inspector")
@@ -506,7 +543,8 @@ Public Final Class SceneInspector Extends Widget
     /// which lays out what's shown.
     Public Method Update()
         Local selected = scene.Selected()
-        If !SameAs(selected, entities) || !SameMaterials(MaterialsOf(selected))
+        If !SameAs(selected, entities) || !SameMaterials(MaterialsOf(selected)) ||
+           knownKinds != kinds.Changes() || !SameData(DataOf(selected))
             For row In rows
                 row.Close(True)
             End For
@@ -522,6 +560,25 @@ Public Final Class SceneInspector Extends Widget
         If one.Count != other.Count Then Return False
         For i = 0 Until one.Count
             If !RefEquals(one[i], other[i]) Then Return False
+        End For
+        Return True
+    End Method
+
+    // What components all of `selected` have, in order.
+    Method DataOf(selected: Entity[]): ComponentData[]
+        Local all: ComponentData[] = []
+        For entity In selected
+            For item In ComponentsOf(entity)
+                all.Add(item)
+            End For
+        End For
+        Return all
+    End Method
+
+    Method SameData(others: ComponentData[]): Bool
+        If others.Count != shownData.Count Then Return False
+        For i = 0 Until others.Count
+            If !RefEquals(others[i], shownData[i]) Then Return False
         End For
         Return True
     End Method
@@ -567,6 +624,8 @@ Public Final Class SceneInspector Extends Widget
         rows = []
         entities = scene.Selected()
         materials = MaterialsOf(entities)
+        shownData = DataOf(entities)
+        knownKinds = kinds.Changes()
         If entities.Count == 0
             Local nothing = Label("Nothing's selected", "inspector.nothing")
             nothing.SetTranslates(False)
@@ -585,6 +644,102 @@ Public Final Class SceneInspector Extends Widget
                                  Function(material: Material) => !material.Freed(),
                                  Set<String>())
         End If
+        AddComponents()
+    End Method
+
+    // Each kind of component all that's selected has, and a way to add what's known.
+    Method AddComponents()
+        Local all = entities
+        If all.Count == 0 Then Return
+        For item In ComponentsOf(all[0])
+            Local together: ComponentData[] = []
+            For entity In all
+                For other In ComponentsOf(entity)
+                    If other.Kind == item.Kind Then together.Add(other)
+                End For
+            End For
+            If together.Count != all.Count Then Continue
+            Local name = item.Kind
+            Added(ButtonRow(name, "Remove", Function[Weak Self](pressed: Button)
+                Local own = Self
+                If own != Null Then own.history.Commit(RemoveComponentEdit(own.entities, name))
+            End Function))
+            AddFields(name, together)
+        End For
+        If kinds.Kinds().Count == 0 Then Return
+        Added(ButtonRow("AddComponent", "Add…", Function[Weak Self](pressed: Button)
+            Self?.ChoosingKind(pressed)
+        End Function))
+    End Method
+
+    // A row for each Field of what's called `name`, each of `items`, one an entity selected.
+    Method AddFields(name: String, items: ComponentData[])
+        Local kind = kinds.Find(name)
+        If kind == Null
+            // The game's program doesn't say it now, so what it has stays as it is.
+            Added(NoteRow("{name}.unknown", "This project doesn't say what a {name} is"))
+            Return
+        End If
+        For field In kind.Fields
+            AddField(field, items)
+        End For
+    End Method
+
+    Method AddField(field: ComponentField, items: ComponentData[])
+        Local bounds = Limits(field.Low, field.High, field.Above)
+        Local first = field.First
+        If field.Members.Count > 0
+            Added(ChoiceRow<String>(Stored<String>(field, items, bounds), history, field.Members))
+        ElseIf first.IsBool
+            Added(ToggleRow(Stored<Bool>(field, items, bounds), history))
+        ElseIf first.IsInteger
+            Added(WholeRow(Stored<Int>(field, items, bounds), history))
+        ElseIf first.IsNumber
+            Added(NumberRow(Stored<Float>(field, items, bounds), history))
+        ElseIf first.IsString
+            Added(TextRow(Stored<String>(field, items, bounds), history))
+        ElseIf first.IsObject && first.Count == 3 && first["x"] != Null && first["z"] != Null
+            Added(Vec3Row(Stored<Vec3>(field, items, bounds), history))
+        ElseIf first.IsObject && first.Count == 2 && first["x"] != Null && first["y"] != Null
+            Added(Vec2Row(Stored<Vec2>(field, items, bounds), history))
+        ElseIf first.IsObject && first["r"] != Null && first["a"] != Null
+            Added(ColorRow(Stored<Color>(field, items, bounds), history))
+        Else
+            Added(NoteRow(field.Name, "Edited in its own program"))
+        End If
+    End Method
+
+    // The list of what can be added, under `pressed`.
+    Method ChoosingKind(pressed: Button)
+        Local ui = Owner()
+        If ui == Null Then Return
+        Local column = Widget("menu", "inspector.kinds")
+        For kind In kinds.Kinds()
+            Local item = Button(kind.Name, "inspector.kind.{kind.Name}")
+            item.SetTranslates(False)
+            item.SetStyleName("menu.item")
+            item.OnClick(Function[Weak Self](chosen: Button)
+                Local own = Self
+                If own == Null Then Return
+                own.ClosingMenu()
+                own.history.Commit(AddComponentEdit(own.entities, kind))
+            End Function)
+            column.Add(item)
+        End For
+        Local box = pressed.Box()
+        menu = column
+        ui.OpenPopupAt(column, Vec2(box.X, box.Y + box.Height), PopupKind.MENU,
+                       Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.menu = Null
+        End Function)
+    End Method
+
+    Method ClosingMenu()
+        Local ui = Owner()
+        Local open = menu
+        If ui != Null && open != Null Then ui.ClosePopup(open)
+        menu = Null
     End Method
 
     // What's particular to one kind, when all that's selected is of it.
@@ -662,7 +817,7 @@ Public Final Class SceneInspector Extends Widget
 
     Method AddChoices<T, E: Printable>(things: T[], alive: Func(T): Bool, seen: Set<String>)
         For each In Pairs<T, E>(things, alive)
-            If seen.Add(each.Name) Then Added(ChoiceRow<E>(each, history, Members<E>()))
+            If seen.Add(each.Name) Then Added(ChoiceRow<E>(each, history, MembersOf<E>()))
         End For
     End Method
 

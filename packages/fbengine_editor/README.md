@@ -27,4 +27,22 @@ what it takes. What's typed takes on Return or going elsewhere, Escape leaves it
 one undo. What differs between what's selected shows nothing, and what's typed there goes to all of it,
 that part of it alone.
 
+A game's components show there too: Classes of its own, kept on an entity as `Entity.Data<T>()` gives
+back, each edited as data, by what its Public Fields are. The editor can't run a game's code in itself,
+so a game's `components/main.fb` says what kinds it has, and the editor runs it, by `fb` on the PATH, as
+a project opens:
+
+```
+Import fbengine
+Import fbengine_physics
+Import "../door"
+
+Components.Add<Door>("Door")
+AddBodyComponent()
+Try Components.Describe()
+```
+
+A game with no such program just has none. `@Limits` and `@ShownInDegrees` on a Field say what they
+say on a setter, and `@Skip` leaves one out. fbengine_physics's "Body" is one of these.
+
 The asset browser, scenes on disk, and playing the game come in the steps after this one.
