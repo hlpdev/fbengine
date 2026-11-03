@@ -39,6 +39,17 @@ enum class use_t : std::uint8_t {
     MIPMAPPED,
 };
 
+/// What came of a pass, as its `settled` is told.
+enum class settled_t : std::uint8_t {
+    /// A submit took it.
+    RAN,
+    /// Nothing of it happened, and it can happen yet: a transient target it needs couldn't be made,
+    /// or the submit it was recorded for failed.
+    MISSED,
+    /// It never will: the GPU's lost or stopping, or nothing needed it.
+    GIVEN_UP,
+};
+
 /// A target a pass draws into: cleared to `rgba`, linear, as the pass begins, or drawn on as it is.
 struct color_t {
     resource_t target = no_resource;
@@ -54,7 +65,9 @@ struct color_t {
 /// as a copy, records outside drawing. Its name, which lasts, as a literal does, is what
 /// recorded_t says. A pass that's `carried`, as a write of pixels into a texture is, goes into the
 /// graph again if the submit it was recorded for fails, as the frame's uploads are carried; it
-/// uses textures only, and what it records stays good until a submit runs it.
+/// uses textures only, and what it records stays good until a submit runs it. `settled`, if it has
+/// one, is told what came of it, once, outside the graph's recording, so it can add passes: as a
+/// transient target's id isn't good in another frame, it's what does a pass that uses one again.
 struct pass_t {
     std::string_view name;
     std::vector<color_t> colors;
@@ -64,6 +77,7 @@ struct pass_t {
     std::vector<std::pair<resource_t, use_t>> uses;
     std::function<void(VkCommandBuffer)> record;
     bool carried = false;
+    std::function<void(settled_t)> settled;
 };
 
 /// A live texture, by its handle, at rest as it is between frames' commands; the same resource
@@ -120,6 +134,9 @@ bool add_pass(pass_t pass);
 std::uint32_t resource_index(resource_t resource);
 VkFormat resource_format(resource_t resource);
 std::uint64_t resource_texture(resource_t resource);
+/// Its image, for a pass's commands: the frame's, however its texture's been let go of since it was
+/// added; a transient's once the graph's recording.
+VkImage resource_image(resource_t resource);
 
 /// Records the passes added since the graph was last recorded into the frame's commands, and
 /// empties it; false, with fbe_error's why, if a transient target couldn't be made, whose passes
@@ -128,6 +145,10 @@ bool record_graph();
 
 /// Drops the passes added since the graph was last recorded, unrecorded, as a lost GPU runs none.
 void drop_passes();
+
+/// Says the submit of what the graph last recorded failed, which their `settled` are told as it's
+/// next recorded, once the frame that failed is put right: what they do can begin a frame.
+void miss_passes();
 
 /// Adds the carried passes the graph last recorded to it again, first, after the submit they were
 /// recorded for failed.

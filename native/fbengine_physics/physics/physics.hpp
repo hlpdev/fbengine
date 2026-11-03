@@ -227,6 +227,7 @@ inline bool failed(const JPH::StateRecorder& state) {
 /// Saves `world`'s characters' states into `state`, in their handles' order, or restores them from
 /// it; false if it isn't of the same characters, or ends too soon.
 void save_characters(const world_t& world, JPH::StateRecorder& state);
+void hash_characters(const world_t& world, JPH::StateRecorder& state);
 bool restore_characters(const world_t& world, JPH::StateRecorder& state);
 
 /// Notes, as a step begins, which of the pairs `world` keeps while their bodies sleep are awake.

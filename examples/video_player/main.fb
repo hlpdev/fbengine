@@ -1,6 +1,9 @@
 // A video plays, fitted to the screen with its shape kept, its sound through fbengine_audio and its
-// clock kept to that. With no arguments it's headless, with nothing heard, and says how it went;
-// `--watch` plays it over and over in a real window until it's closed or Escape's pressed.
+// clock kept to that. With no arguments it's headless, with nothing heard, and says how it went.
+// With `-- --watch`, as tools/show.py runs it, it plays over and over in a real window until it's
+// closed or Escape's pressed, or with `--steps <n>` after it, as ctest walks it, headless, a 25th of
+// a second of sound mixed a frame, until it's gone around once, at most n frames, saying how far it
+// got.
 
 Import std.collections
 Import std.core
@@ -11,26 +14,42 @@ Import fbengine_audio
 Import fbengine_video
 
 Function Run() Throws VideoError, GraphicsError, AudioError
-    Local watching = Process.Arguments().Contains("--watch")
-    If !watching Then Window.SetHeadless(True)
-    Try Audio.Start(watching ? AudioDevice.DEFAULT : AudioDevice.MANUAL)
+    Local arguments = Process.Arguments()
+    Local count = arguments.Count
+    Local walked = count == 3 && arguments[0] == "--watch" && arguments[1] == "--steps"
+    Local steps = walked ? Int.Parse(arguments[2]) ?? 0 : 0
+    Local watching = (count == 1 && arguments[0] == "--watch") || steps > 0
+    If count != 0 && !watching
+        PrintError("usage: video_player [--watch [--steps <n>]]")
+        Process.Exit(2)
+    End If
+    If !watching || steps > 0 Then Window.SetHeadless(True)
+    Local real = watching && steps == 0
+    Try Audio.Start(real ? AudioDevice.DEFAULT : AudioDevice.MANUAL)
     Local video = Try Video.Load(Embed("colors.mpg"))
     video.SetLoop(watching)
     video.Play()
     Try Graphics(640, 480)
     Local canvas = Screen.Canvas()
     Local frames = 0
+    Local loops = 0
+    Local last = video.Time()
     While !video.Ended() && !Window.Closed() && !KeyHit(Key.ESCAPE)
-        If !watching Then Audio.Mix(1920)
-        video.Update(watching ? Frame.Delta() : 1.0 / 25)
+        If !real Then Audio.Mix(1920)
+        video.Update(real ? Frame.Delta() : 1.0 / 25)
         Try video.DrawFitted(canvas, Screen.Width(), Screen.Height())
         Flip()
         frames += 1
+        If video.Time() < last Then loops += 1
+        last = video.Time()
         // A headless run's frames are a 25th of a second each, of its 2 s of video, however long
         // they take.
         If !watching && frames > 600 Then Break
+        If frames == steps || (steps > 0 && (video.FramesShown() > 52 || loops > 0)) Then Break
     End While
-    If !watching
+    If steps > 0
+        Print("watched {frames} frames, {video.FramesShown()} shown, {loops} loops, ended: {video.Ended()}")
+    ElseIf !watching
         Print("it played to its end: {video.Ended()}, in {video.FramesShown()} frames shown")
     End If
     video.Free()

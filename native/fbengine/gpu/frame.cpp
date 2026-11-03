@@ -164,6 +164,7 @@ bool submit(const fbe::gpu::device_t& gpu, fbe::gpu::frame_t& frame, VkSemaphore
     frame.timed = result == VK_SUCCESS && frame.timer != VK_NULL_HANDLE;
     if (result != VK_SUCCESS) {
         fbe::gpu::lose(result);
+        fbe::gpu::miss_passes();
         // Nothing will signal the fence or wait on the acquire, so they're made again, once the
         // GPU's done with everything before.
         vkDeviceWaitIdle(gpu.device);

@@ -7,6 +7,7 @@ Import std.ffi
 Import std.image
 Import std.io
 Import std.math
+Import std.text
 Import "./assets"
 Import "./c/fbe_texture"
 Import "./loads"
@@ -89,13 +90,33 @@ Public Final Class Texture Implements Asset
     End New
 
     /// A texture of the pixels an image file decodes to, PNG, JPEG, BMP, TGA, GIF, QOI, or WebP,
-    /// RGBA8, with mipmaps unless `mipmaps` is False. It throws when the file can't be read or
-    /// decoded, or as New does.
+    /// RGBA8, or HDR, as FromHdr makes it, with mipmaps unless `mipmaps` is False. It throws when
+    /// the file can't be read or decoded, or as New does.
     @MainThread
     Public Static Method Load(path: Path, mipmaps: Bool = True): Texture Throws GraphicsError,
                                                                                 IOError
+        If path.Extension().ToLower() == ".hdr"
+            Return Try FromHdr(Try Hdr.Decode(Try File.ReadBytes(path)), mipmaps)
+        End If
         Local image = Try Image.Load(path)
         Return Try FromImage(image, mipmaps)
+    End Method
+
+    /// A texture of `image`'s light, RGBA16F, with mipmaps unless `mipmaps` is False, for an
+    /// Environment to bake. A half float holds up to 65504: what's brighter is that, and what's
+    /// less than none, or NaN, is 0. It throws as New does.
+    @MainThread
+    Public Static Method FromHdr(image: HdrImage,
+                                 mipmaps: Bool = True): Texture Throws GraphicsError
+        Local texture = Try Texture(image.Width As Int32, image.Height As Int32,
+                                    TextureFormat.RGBA16F, mipmaps)
+        Local written = False
+        Unsafe
+            written = fbe_texture_write_floats(texture.Live("FromHdr"), 0, 0, image.Width As Int32,
+                                               image.Height As Int32, image.Pixels.Pointer())
+        End Unsafe
+        If !written Then Panic(LastError())
+        Return texture
     End Method
 
     /// A texture of `image`'s pixels, RGBA8, with mipmaps unless `mipmaps` is False.

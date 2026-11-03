@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -299,6 +300,24 @@ struct spec_t {
 
 VkFormat vk_format_of(const spec_t& spec) {
     return spec.image != nullptr ? spec.vk_format : vk_format_of(spec.format);
+}
+
+/// The half float nearest `value`, from 0 to the largest finite one; NaN's 0.
+std::uint16_t half_of(float value) {
+    constexpr float largest_half = 65504.0F;
+    // NaN compares false, and is left at 0.
+    const float light = value > 0.0F ? std::min(value, largest_half) : 0.0F;
+    const auto bits = std::bit_cast<std::uint32_t>(light);
+    const auto exponent = static_cast<std::int32_t>(bits >> 23U) - 127;
+    if (exponent < -24) {
+        return 0;
+    }
+    if (exponent < -14) {
+        // Subnormal in a half, in units of 2^-24.
+        return static_cast<std::uint16_t>(std::lround(std::ldexp(light, 24)));
+    }
+    return static_cast<std::uint16_t>((static_cast<std::uint32_t>(exponent + 15) << 10U) +
+                                      (((bits & 0x7FFFFFU) + 0x1000U) >> 13U));
 }
 
 /// Whether the device can make a texture of `spec`; false, with fbe_error's why, if not.
@@ -996,8 +1015,8 @@ std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, st
     });
 }
 
-std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height,
-                                    std::int32_t format) {
+std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format,
+                                    bool mipmaps) {
     if (gpu::device() == nullptr) {
         fbe::fail("the GPU isn't started");
         return 0;
@@ -1006,6 +1025,7 @@ std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height,
         .width = width,
         .height = height,
         .format = format,
+        .mipmaps = mipmaps,
         .engine = true,
     });
 }
@@ -1371,6 +1391,31 @@ FBE_API bool fbe_texture_release(uint64_t texture) {
         }
     });
     return true;
+}
+
+FBE_API bool fbe_texture_write_floats(uint64_t texture, int32_t x, int32_t y, int32_t width,
+                                      int32_t height, const float* pixels) {
+    const texture_t* found = fbe::texture::find(texture);
+    if (found == nullptr) {
+        return false;
+    }
+    if (found->format != FBE_TEXTURE_RGBA16F) {
+        return fbe::fail("floats are written into an RGBA16F texture");
+    }
+    if (!inside(*found, x, y, width, height)) {
+        return false;
+    }
+    if (pixels == nullptr) {
+        return fbe::fail("there are no pixels to write");
+    }
+    std::vector<std::uint16_t> halves(static_cast<std::size_t>(width) *
+                                      static_cast<std::size_t>(height) * 4);
+    for (std::size_t at = 0; at < halves.size(); ++at) {
+        halves[at] = half_of(pixels[at]);
+    }
+    std::vector<std::uint8_t> bytes(halves.size() * sizeof(std::uint16_t));
+    std::memcpy(bytes.data(), halves.data(), bytes.size());
+    return fbe_texture_write(texture, x, y, width, height, bytes.data(), width * 8);
 }
 
 FBE_API int32_t fbe_texture_width(uint64_t texture) {

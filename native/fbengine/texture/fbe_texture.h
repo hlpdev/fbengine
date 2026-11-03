@@ -62,6 +62,12 @@ FBE_API int32_t fbe_texture_height(uint64_t texture);
 FBE_API int32_t fbe_texture_format(uint64_t texture);
 FBE_API int32_t fbe_texture_levels(uint64_t texture);
 
+// As fbe_texture_write, for an RGBA16F texture, from floats, 4 a pixel, rows packed: what a half
+// float can't hold is the nearest it can, from 0, for no less light than none, to
+// 65504, and NaN's 0. False too if it's another format.
+FBE_API bool fbe_texture_write_floats(uint64_t texture, int32_t x, int32_t y, int32_t width,
+                                      int32_t height, const float* pixels);
+
 // Replaces the pixels `width` by `height` at `x`, `y` from its top left with `pixels`, rows
 // `pitch` bytes apart, in its format's bytes (4 a pixel for RGBA8, 1 for R8, 8 for RGBA16F), and
 // makes its mipmaps again, in turn with what else the frame does with it: drawing with it or into

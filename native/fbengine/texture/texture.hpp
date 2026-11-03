@@ -105,9 +105,11 @@ std::uint32_t pixel_size(std::int32_t format);
 std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, std::int32_t format,
                                    VkSampleCountFlagBits samples, bool depth);
 
-/// A texture the engine makes for itself, `width` by `height` of an FBE_TEXTURE_ format, without
-/// mipmaps, as create_engine_target's are; 0, with fbe_error's why, without a started GPU.
-std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format);
+/// A texture the engine makes for itself, `width` by `height` of an FBE_TEXTURE_ format, with room
+/// for mipmaps if it says, as create_engine_target's are; 0, with fbe_error's why, without a
+/// started GPU.
+std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format,
+                                    bool mipmaps = false);
 
 /// Writes `width` by `height` pixels at `x`, `y` into level 0 of a texture without mipmaps, rows
 /// `pitch` bytes apart, in the frame's uploads, before its commands, even where a pass of the
