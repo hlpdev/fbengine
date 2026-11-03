@@ -13,6 +13,10 @@
 #include <span>
 #include <string_view>
 
+#ifdef __linux__
+#include <dlfcn.h>
+#endif
+
 namespace {
 
 /// Which of this thread's allocations fails, -1 for none, how many there have been, and whether
@@ -404,6 +408,17 @@ TEST_CASE("freeing a mesh doesn't allocate what it can run out of") {
     }
     FAIL("a call never got to the end of its allocations");
 }
+
+#ifdef __linux__
+// What's failing is this test's own: a library opened at run time, as a driver or a validation
+// layer is, gets libstdc++'s operator new, and throwing inside one, which it can't survive, is no
+// test of the engine. Windows' DLLs have their own already. As own_new.map has it.
+TEST_CASE("what's opened at run time keeps its own operator new") {
+    using new_t = void* (*)(std::size_t);
+    const auto mine = static_cast<new_t>(&::operator new);
+    CHECK(reinterpret_cast<void*>(mine) != dlsym(RTLD_DEFAULT, "_Znwm"));
+}
+#endif
 
 TEST_CASE("drawing what runs out of memory says so, and the next frame draws", "[gpu]") {
     // Started, with what every frame needs made.

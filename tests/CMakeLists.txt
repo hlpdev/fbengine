@@ -1652,7 +1652,14 @@ catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
 # Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as
 # operator new is this test's.
 add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
-target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
+target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain
+                      ${CMAKE_DL_LIBS})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(fbengine_anim_oom_tests PRIVATE
+                      "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
+  set_property(TARGET fbengine_anim_oom_tests APPEND PROPERTY LINK_DEPENDS
+               "${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
+endif()
 fbengine_set_warnings(fbengine_anim_oom_tests)
 catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
