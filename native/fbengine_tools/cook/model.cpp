@@ -537,6 +537,42 @@ std::expected<void, std::string> read_buffers(gltf::Asset& asset, const vfs::pat
 
 } // namespace
 
+namespace {
+
+/// Which of `one`'s names differ in `other`, saying what they are; "" for none.
+template <typename List, typename Name>
+std::string name_differs(const List& one, const List& other, std::string_view what, Name name_of) {
+    if (one.size() != other.size()) {
+        return std::format("how many {} it has", what);
+    }
+    for (std::size_t i = 0; i < one.size(); ++i) {
+        if (name_of(one[i]) != name_of(other[i])) {
+            return std::format("the name of its {} {}", what, i);
+        }
+    }
+    return "";
+}
+
+/// What of `a`'s names differ in `b`, which was cooked from it, saying which; "" for none.
+std::string name_changed(const assets::model_t& a, const assets::model_t& b) {
+    const auto named = [](const auto& part) { return std::string_view(part.name); };
+    const auto itself = [](const std::string& name) { return std::string_view(name); };
+    const std::array found{
+        name_differs(a.materials, b.materials, "materials", named),
+        name_differs(a.nodes, b.nodes, "nodes", named),
+        name_differs(a.meshes, b.meshes, "meshes", named),
+        name_differs(a.scenes, b.scenes, "scenes", named),
+        name_differs(a.skins, b.skins, "skins", named),
+        name_differs(a.clips, b.clips, "clips", named),
+        name_differs(a.image_names, b.image_names, "images", itself),
+    };
+    const auto first =
+        std::ranges::find_if(found, [](const std::string& one) { return !one.empty(); });
+    return first != found.end() ? *first : "";
+}
+
+} // namespace
+
 std::expected<bytes_t, error_t> cook_model(std::span<const std::uint8_t> bytes,
                                            const vfs::path_t& path, const vfs::view_t& files,
                                            const fbe_cook_model_t& options) {
@@ -566,7 +602,21 @@ std::expected<bytes_t, error_t> cook_model(std::span<const std::uint8_t> bytes,
         return std::unexpected(other(read.error()));
     }
     cooker_t cooker(asset, options, rates);
-    return cooker.cook();
+    std::expected<bytes_t, error_t> cooked = cooker.cook();
+    if (!cooked) {
+        return cooked;
+    }
+    // What's written is read back as the engine will, so a cook can't say it worked when it didn't.
+    assets::result_t<assets::model_t> again =
+        assets::decode_model(path, *cooked, files, { .images = false });
+    if (!again) {
+        return std::unexpected(other(
+            std::format("the engine wouldn't load what it cooked: {}", again.error().message)));
+    }
+    if (const std::string changed = name_changed(*checked, *again); !changed.empty()) {
+        return std::unexpected(other(std::format("cooking it changed {}", changed)));
+    }
+    return cooked;
 }
 
 } // namespace fbe::tools

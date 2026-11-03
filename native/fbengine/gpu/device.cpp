@@ -115,10 +115,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL on_validation(VkDebugUtilsMessageSeverityFlagBits
     if (error) {
         ++validation_errors;
     }
-    // std::println needs MinGW's libstdc++exp, which the DLL doesn't link.
-    const std::string line =
-        std::format("Vulkan validation {}: {}\n", error ? "error" : "warning", data->pMessage);
-    std::fputs(line.c_str(), stderr);
+    // Nothing that can throw or allocate: this is inside the layer, holding its locks, and what's
+    // thrown through it never lets them go.
+    // NOLINTNEXTLINE(modernize-use-std-print): that allocates, and needs MinGW's libstdc++exp.
+    std::fprintf(stderr, "Vulkan validation %s: %s\n", error ? "error" : "warning", data->pMessage);
     return VK_FALSE;
 }
 

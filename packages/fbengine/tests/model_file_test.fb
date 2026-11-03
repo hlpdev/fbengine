@@ -589,3 +589,33 @@ Function ASpawnsMeshesMorphAsTheFileSays() Throws IOError
     Local weights = mesh.MorphWeights()
     Expect(IsClose(weights[0], 1.0, 0.01) && IsClose(weights[1], 0.5, 0.01))
 End Function
+
+// What its file calls its materials and images: a name, a URI, and an image inside it with neither.
+@Test
+Function ItsFilesNamesForMaterialsAndImagesReachIt() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local image = Image(2, 2)
+    image.Fill(Color32(255, 0, 0, 255))
+    Local png = Png.Encode(image)
+    Local file = Gltf(1, "\"materials\":[{{\"name\":\"brush\",\"pbrMetallicRoughness\":" +
+                      "{{\"baseColorTexture\":{{\"index\":0}}}}}},{{\"pbrMetallicRoughness\":" +
+                      "{{\"baseColorTexture\":{{\"index\":1}}}}}},{{\"pbrMetallicRoughness\":" +
+                      "{{\"baseColorTexture\":{{\"index\":2}}}}}}]," +
+                      "\"textures\":[{{\"source\":0}},{{\"source\":1}},{{\"source\":2}}]," +
+                      "\"images\":[{{\"name\":\"old\\\\name.bmp\",\"uri\":\"a.png\"}}," +
+                      "{{\"uri\":\"maps/b.png\"}},{{\"uri\":\"{PngUri(Color32(0, 255, 0, 255))}\"}}]," +
+                      "\"nodes\":[{{\"name\":\"a\",\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+    Assets.MountFiles("res://file-names", {"a.gltf": file, "a.png": png, "maps/b.png": png})
+    Defer Assets.Unmount("res://file-names")
+    Local model = Try Assets.Load<Model>("res://file-names/a.gltf")
+    Defer model.Free()
+    Expect(model.MaterialName(0) == "brush")
+    Expect(model.MaterialName(1) == "")
+    Expect(model.TextureName(0) == "old\\name.bmp")
+    Expect(model.TextureName(1) == "maps/b.png")
+    Expect(model.TextureName(2) == "")
+    Expect(model.TextureNameOf(0) == "old\\name.bmp")
+    Expect(model.TextureNameOf(1) == "maps/b.png")
+    Expect(model.TextureNameOf(0, ModelMap.NORMAL) == "")
+End Function

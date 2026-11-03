@@ -167,6 +167,49 @@ function(fbengine_patch_text from to)
   set(fbengine_text "${patched}" PARENT_SCOPE)
 endfunction()
 fbengine_patch_text("\t\tif (view[idx] == '[') {" "\t\tif (idx < view.size() && view[idx] == '[') {")
+# Its escaping for what it writes, which skips the character after each escape, so a\b and a"" come
+# out corrupted or as JSON that doesn't parse, and leaves control characters raw, which no parser
+# takes. A cook is what writes these. The original stays, unused, as what comes after it has to.
+fbengine_patch_text("\tstatic void escapeString(std::string& string) {\n\t\tstd::size_t i = 0;"
+                    "\tstatic void escapeString(std::string& string) {
+\t\tstd::string out;
+\t\tout.reserve(string.size());
+\t\tfor (const char c : string) {
+\t\t\tconst auto byte = static_cast<unsigned char>(c);
+\t\t\tif (c == '\"') {
+\t\t\t\tout += \"\\\\\\\"\";
+\t\t\t} else if (c == '\\\\') {
+\t\t\t\tout += \"\\\\\\\\\";
+\t\t\t} else if (byte < 0x20) {
+\t\t\t\tconstexpr std::string_view digits = \"0123456789abcdef\";
+\t\t\t\tout += \"\\\\u00\";
+\t\t\t\tout += digits[byte >> 4U];
+\t\t\t\tout += digits[byte & 15U];
+\t\t\t} else {
+\t\t\t\tout += c;
+\t\t\t}
+\t\t}
+\t\tstring = std::move(out);
+\t}
+
+\t// A URI's percents, which its reader decodes, so it reads back as it was.
+\tstatic std::string percentsKept(std::string_view uri) {
+\t\tstd::string out;
+\t\tfor (const char c : uri) {
+\t\t\tif (c == '%') {
+\t\t\t\tout += \"%25\";
+\t\t\t} else {
+\t\t\t\tout += c;
+\t\t\t}
+\t\t}
+\t\treturn out;
+\t}
+
+\t[[maybe_unused]] static void escapeStringAsItWas(std::string& string) {\n\t\tstd::size_t i = 0;")
+fbengine_patch_text("fg::escapeString(uri.uri.string()) + '\"' + ','"
+                    "fg::escapeString(fg::percentsKept(uri.uri.string())) + '\"' + ','")
+fbengine_patch_text("fg::escapeString(uri.uri.string()) + '\"';"
+                    "fg::escapeString(fg::percentsKept(uri.uri.string())) + '\"';")
 fbengine_patch_text("\t\t\t++idx;\n\t\t\t_host = view.substr(idx, hostEnd - idx);"
                     "\t\t\tif (idx < view.size()) ++idx;\n\t\t\t_host = view.substr(idx, hostEnd - idx);")
 fbengine_patch_text("\t\tidx = nextSlash; // Path includes this slash"

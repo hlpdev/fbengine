@@ -711,6 +711,13 @@ private:
         }
 
         model.images.resize(count);
+        model.image_names.reserve(count);
+        for (const gltf::Image& image : m_asset.images) {
+            const auto* uri = std::get_if<gltf::sources::URI>(&image.data);
+            model.image_names.emplace_back(!image.name.empty() || uri == nullptr
+                                               ? std::string(image.name)
+                                               : std::string(uri->uri.string()));
+        }
         if (!m_options.images) {
             return {};
         }
