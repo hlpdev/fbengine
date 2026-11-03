@@ -396,7 +396,7 @@ if(FBENGINE_FB_TESTS)
                            "a wall, then a rock: touching 2, level True, other True"
                            "a door moved across the move, this frame: 0[.]000, 1[.]000, -3[.]999"
                            "by UpdateWorld: 0[.]000, 0[.]501, 0[.]000, touching 1"
-                           "into a box: 38[.]499, 1[.]000, 0[.]000")
+                           "into a box: 138[.]499, 1[.]000, 0[.]000")
   fbengine_add_drawn_proof(picks
                            "down onto the floor: floor at 1[.]00, 0[.]00, 3[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
                            "down onto the ball: ball at 2[.]00, 1[.]50, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]35 along"
@@ -499,6 +499,15 @@ if(FBENGINE_FB_TESTS)
                            "a cube's 24 vertices, joined 2 surfaces"
                            "the clone moved, the first didn't True"
                            "its cull box 100, bounds 1"
+                           "a vertex's whole color [(]0, 1, 0, 0[.]5[)]"
+                           "VertexPosition 0[.]000, 0[.]000, -2[.]000"
+                           "SetVertexNormal 1[.]000, 0[.]000, 0[.]000"
+                           "turned a quarter: -2[.]000, 0[.]000, -?0[.]000"
+                           "flipped, a normal -?0[.]000, -1[.]000, -?0[.]000, was up"
+                           "a clone's vertex -2[.]000, 0[.]000, -?0[.]000, 0[.]000, 1[.]000, 0[.]000, [(]0, 1[)], [(]0[.]5, 0[.]75[)], [(]0, 1, 0, 0[.]5[)]"
+                           "joined: its last surface has 3 vertices, 1 triangles, -2[.]000, 0[.]000, -?0[.]000, 0[.]000, 1[.]000, 0[.]000, [(]0, 1[)], [(]0[.]5, 0[.]75[)], [(]0, 1, 0, 0[.]5[)]"
+                           "added by a matrix: 5[.]000, 0[.]000, 0[.]000"
+                           "a surface's material read back True"
                            "in view [(]255, 0, 0, 255[)]"
                            "its cull box out of view [(]0, 0, 255, 255[)]"
                            "in its surface's material [(]10, 200, 30, 255[)]"

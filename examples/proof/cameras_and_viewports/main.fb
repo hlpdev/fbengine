@@ -195,7 +195,8 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         badge.SetRotation(Quat.FromEuler(0.0, 0.0, time))
         World.SetCurrent(world)
         RenderWorld()
-        If frames > 0 && !drew Then drew = Try Drew()
+        // The first frame's scene, with nothing yet over it to find instead.
+        If frames > 0 && count == 1 Then drew = Try Drew()
         World.SetCurrent(overlay)
         RenderWorld()
     End While

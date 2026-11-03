@@ -130,6 +130,11 @@ End Function
 // To a thousandth.
 Function Fine(at: Vec3): String => "{at.x:.3}, {at.y:.3}, {at.z:.3}"
 
+// A vertex as a line, its place and normal to a thousandth.
+Function Whole(vertex: Vertex): String
+    Return "{Fine(vertex.Position)}, {Fine(vertex.Normal)}, {vertex.Uv0}, {vertex.Uv1}, {vertex.Color}"
+End Function
+
 // A vertex in full, turned, flipped, cloned, and joined, and a surface's material.
 Function InFull()
     Local world = World()
@@ -156,10 +161,10 @@ Function InFull()
     Print("flipped, a normal {Fine(surface.VertexNormal(a))}, was up")
     made.Flip()
     Local clone = made.Clone()
-    Print("a clone's vertex {clone.Surface(0).Vertex(b)}")
+    Print("a clone's vertex {Whole(clone.Surface(0).Vertex(b))}")
     Local joined = Geometry.Cube()
     joined.Add(made)
-    Print("joined: its last surface has {joined.Surface(1).VertexCount()} vertices, {joined.Surface(1).TriangleCount()} triangles, {joined.Surface(1).Vertex(b)}")
+    Print("joined: its last surface has {joined.Surface(1).VertexCount()} vertices, {joined.Surface(1).TriangleCount()} triangles, {Whole(joined.Surface(1).Vertex(b))}")
     Local placed = Geometry()
     placed.Add(made, Mat4.Translation(Vec3(5, 0, 0)))
     Print("added by a matrix: {Fine(placed.Bounds().Max)}")
@@ -286,6 +291,7 @@ If !arguments.Contains("--watch")
     Local cull = made.CullBox()
     Print("its cull box {cull != Null ? cull.Max.x : 0.0:.0}, bounds {made.Bounds().Max.x:.0}")
     world.Free()
+    InFull()
     Try Drawn()
 ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
     Print("no GPU here")

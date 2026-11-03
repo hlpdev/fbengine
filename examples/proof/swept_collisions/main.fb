@@ -280,10 +280,10 @@ Function Contacts()
 
     // A box shape, the shape the sample's header says it hits.
     Local crate = Pivot()
-    crate.SetPosition(Vec3(40, 1, 0))
+    crate.SetPosition(Vec3(140, 1, 0))
     crate.SetCollisionShape(CollisionShape.BOX)
     crate.SetCollisionGroup(LEVEL)
-    Local at = Mover(world, Vec3(35, 1, 0), 0.5, 0.5)
+    Local at = Mover(world, Vec3(135, 1, 0), 0.5, 0.5)
     at.Translate(Vec3(10, 0, 0))
     world.Collide()
     Print("into a box: {Fine(at.Position())}")

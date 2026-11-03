@@ -112,7 +112,8 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             marker.Hide()
         End If
         RenderWorld()
-        If frames > 0 && !drew Then drew = Try Drew()
+        // The first frame's scene, with nothing yet over it to find instead.
+        If frames > 0 && count == 1 Then drew = Try Drew()
         Local canvas = Screen.Canvas()
         canvas.SetBlend(Blend2D.ALPHA)
         canvas.SetColor(Color32(230, 232, 235, 255))
