@@ -67,6 +67,12 @@ struct frame_t {
     bool timed = false;
 };
 
+/// A device's name, as far as its NUL, for std::format: libc++'s takes a char array whole, NULs and
+/// all, and fbe_error's C string would end at the first of them, before what's said of the device.
+inline std::string_view name_of(const VkPhysicalDeviceProperties& properties) {
+    return properties.deviceName;
+}
+
 /// The device the GPU started on, and what it draws with. Vulkan 1.3's names for dynamic
 /// rendering and synchronization2 or 1.2's extensions', whichever the device has.
 struct device_t {

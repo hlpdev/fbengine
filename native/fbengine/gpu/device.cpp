@@ -372,7 +372,7 @@ std::int32_t pick() {
         const candidate_t& candidate = candidates[static_cast<std::size_t>(wanted)];
         if (!candidate.lacks.empty()) {
             fbe::fail(std::format("the GPU {} lacks what fbengine needs: {}",
-                                  candidate.properties.deviceName, candidate.lacks));
+                                  fbe::gpu::name_of(candidate.properties), candidate.lacks));
             return -1;
         }
         return wanted;
@@ -397,7 +397,7 @@ std::int32_t pick() {
     std::string why;
     for (const candidate_t& candidate : candidates) {
         why += std::format("{}{} lacks {}", why.empty() ? "" : "; ",
-                           candidate.properties.deviceName, candidate.lacks);
+                           fbe::gpu::name_of(candidate.properties), candidate.lacks);
     }
     fbe::fail(std::format("no GPU has what fbengine needs: {}", why));
     return -1;
@@ -492,7 +492,8 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     if (made != VK_SUCCESS) {
         current.device = VK_NULL_HANDLE;
         return fbe::gpu::fail_vulkan(
-            std::format("couldn't start the GPU {}", candidate.properties.deviceName), made);
+            std::format("couldn't start the GPU {}", fbe::gpu::name_of(candidate.properties)),
+            made);
     }
     volkLoadDevice(current.device);
     vkGetDeviceQueue(current.device, current.family, 0, &current.queue);

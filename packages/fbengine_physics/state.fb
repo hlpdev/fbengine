@@ -1,0 +1,72 @@
+// A world's state, which its steps change, saved and restored.
+
+Import std.collections
+Import std.core
+
+/// A state that can't be restored into a world: another world's, one of other bodies, joints, or
+/// characters than the world has now, one another version of fbengine_physics saved, or bytes
+/// that aren't a world's state at all, as a state changed in a file or a message is.
+Public Class PhysicsStateError Extends Error
+End Class
+
+/// All of a world's state that its steps change, as PhysicsWorld.Save took it, which
+/// PhysicsWorld.Restore puts back, so its steps go on exactly as they went on from where it was
+/// saved, as rewinding a game played over a network, or a replay, needs. It holds:
+///
+/// - the world's gravity, its steps, the time Update carries, and what touches what;
+/// - each body's position, rotation, and velocities, the forces and torques added since its last
+///   step, whether it sleeps and how long it's been still, and whether it can sleep;
+/// - whether each joint's enabled, its motor's speed or target, and how hard it pushed in the
+///   last step;
+/// - the contacts between bodies, as Jolt keeps them from step to step;
+/// - each character's position, rotation, and velocity, what it stands on, and what it hit.
+///
+/// The rest of what the game sets isn't in it: bodies' motion, layer, shape, mass, friction,
+/// restitution, damping, gravity factor, and whether they're sensors or continuous; joints'
+/// limits and springs; characters' shape, mass, strength, slope, and step height; which layers
+/// collide; the world's step rate and most steps; and what entities bodies are kept with, all of
+/// which a Restore puts where their bodies are now. It's of the world's bodies, joints, and
+/// characters as they were, and restores only into the world while it has the same ones, saved
+/// by the same version of fbengine_physics. Bytes gives it to keep, and a state made of them
+/// again is the same state.
+///
+/// # Examples
+///
+/// ```
+/// Import std.math
+/// Import fbengine_physics
+///
+/// Local world = PhysicsWorld()
+/// Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 10, 0))
+/// Local saved = world.Save()
+/// world.Update(0.5)
+/// Local fallen = ball.Position()
+/// Try world.Restore(saved)
+/// Expect(ball.Position() == Vec3(0, 10, 0))
+/// world.Update(0.5)
+/// Expect(ball.Position() == fallen)
+/// world.Free()
+/// ```
+Public Final Class PhysicsState
+    ReadOnly Field bytes: UInt8[]
+
+    /// The state `bytes` are, as Bytes gave them.
+    Public New(bytes: UInt8[])
+        Local copied: UInt8[] = []
+        copied.AddAll(bytes)
+        Self.bytes = copied
+    End New
+
+    /// The state's bytes, to keep, as a file or a message does, and make a PhysicsState of again.
+    Public Method Bytes(): UInt8[]
+        Local copied: UInt8[] = []
+        copied.AddAll(bytes)
+        Return copied
+    End Method
+
+    /// How many bytes the state takes.
+    Public Method Size(): Int64 => bytes.Count As Int64
+
+    // Its bytes, as they are.
+    Package Method Kept(): UInt8[] => bytes
+End Class

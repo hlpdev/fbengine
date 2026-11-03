@@ -1,0 +1,36 @@
+// What fbengine_video panics for, one a run, by its argument, of a video at the path it's given,
+// which ctest checks the message of.
+
+Import std.core
+Import std.math
+Import std.os
+Import fbengine_audio
+Import fbengine_video
+
+Function Run(which: String, path: String) Throws VideoError, AudioError
+    Local video = Try Video.Open(path)
+    Select which
+        Case "update-huge"
+            video.Play()
+            video.Update(2e9)
+        Case "update-huge-with-sound"
+            Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+            video.Play()
+            Audio.Mix(100)
+            video.Update(2e9)
+        Case "volume-negative"
+            video.SetVolume(-1)
+        Case "volume-infinite"
+            video.SetVolume(Inf)
+        Case "fit-nothing"
+            video.Fit(0, 480)
+    End Select
+    Print("{which} didn't panic")
+End Function
+
+Local arguments = Process.Arguments()
+Try
+    Try Run(arguments[0], arguments[1])
+Catch error As Error
+    Print("{arguments[0]} threw: {error.Message}")
+End Try

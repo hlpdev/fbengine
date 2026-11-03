@@ -1,0 +1,238 @@
+// Joints: bodies held together, or to the world.
+
+Import std.math
+Import "./body"
+Import "./c/fbe_joint"
+Import "./physics"
+Import "./world"
+
+/// What a Joint is.
+Public Enum JointKind
+    /// Welded: Joint.Fixed.
+    FIXED = 1
+    /// A ball in a socket: Joint.Point.
+    POINT = 2
+    /// A door on its hinges: Joint.Hinge.
+    HINGE = 3
+    /// A drawer: Joint.Slider.
+    SLIDER = 4
+    /// A rod, or with limits a rope: Joint.Distance.
+    DISTANCE = 5
+End Enum
+
+/// Two bodies of a world held together, or with B Null a body held to the world itself, as a door
+/// to its frame or a lamp to its chain. Each is made where its bodies are, with points and axes in
+/// the world's space, so it holds them as they are; a hinge, a slider, and a distance joint take
+/// limits, springs, and, but for the distance joint, a motor. Free, or freeing either body or the
+/// world, frees it.
+///
+/// # Examples
+///
+/// ```
+/// Import std.math
+/// Import fbengine_physics
+///
+/// Local world = PhysicsWorld()
+/// Local door = Body(world, Shape.Box(Vec3(1, 2, 0.1)), Motion.DYNAMIC, Vec3(0.5, 1, 0))
+/// // Hung on its left edge, turning about Y, a quarter turn either way.
+/// Local hinge = Joint.Hinge(door, Null, Vec3(0, 1, 0), Vec3(0, 1, 0))
+/// hinge.SetLimits(-Pi / 2, Pi / 2)
+/// door.AddImpulseAt(Vec3(0, 0, -50), Vec3(1, 1, 0))
+/// For i = 1 To 60
+///     world.Step(1.0 / 60)
+/// End For
+/// Expect(hinge.Position() > 0)
+/// world.Free()
+/// ```
+Public Final Class Joint
+    Field handle: UInt64
+    ReadOnly Field kind: JointKind
+    ReadOnly Field a: Body
+    ReadOnly Field b: Body?
+
+    Private New(handle: UInt64, kind: JointKind, a: Body, b: Body?, call: String)
+        If handle == 0 Then Panic("Joint.{call}: {LastError()}")
+        Self.handle = handle
+        Self.kind = kind
+        Self.a = a
+        Self.b = b
+        a.World().KeepJoint(handle, Self)
+    End New
+
+    /// Welds `a` to `b`, or with `b` Null to the world, as they are, so neither moves on the other.
+    /// Either moves, and both are of one world.
+    @MainThread Public Static Method Fixed(a: Body, b: Body?): Joint
+        Return Joint(fbe_joint_fixed(a.Live("Joint.Fixed"), Other(b, "Joint.Fixed")),
+                     JointKind.FIXED,
+                     a, b, "Fixed")
+    End Method
+
+    /// Holds `a` and `b` together at `point`, about which either turns any way, as a ball in a
+    /// socket, a chain's links, or a ragdoll's shoulder.
+    @MainThread Public Static Method Point(a: Body, b: Body?, point: Vec3): Joint
+        Local at = fbe_joint_vec3_t(point.x, point.y, point.z)
+        Local made: UInt64 = 0
+        Local first = a.Live("Joint.Point")
+        Local second = Other(b, "Joint.Point")
+        Unsafe
+            made = fbe_joint_point(first, second, AddressOf(at))
+        End Unsafe
+        Return Joint(made, JointKind.POINT, a, b, "Point")
+    End Method
+
+    /// Holds `a` and `b` together at `point`, about which either turns only about `axis`, as a door
+    /// on its hinges; its Position is how far `b` is turned from `a` since it was made, in radians
+    /// by the right-hand rule about the axis, or with `b` Null, how far `a` is turned.
+    @MainThread Public Static Method Hinge(a: Body, b: Body?, point: Vec3, axis: Vec3): Joint
+        Local at = fbe_joint_vec3_t(point.x, point.y, point.z)
+        Local about = fbe_joint_vec3_t(axis.x, axis.y, axis.z)
+        Local made: UInt64 = 0
+        Local first = a.Live("Joint.Hinge")
+        Local second = Other(b, "Joint.Hinge")
+        Unsafe
+            made = fbe_joint_hinge(first, second, AddressOf(at), AddressOf(about))
+        End Unsafe
+        Return Joint(made, JointKind.HINGE, a, b, "Hinge")
+    End Method
+
+    /// Lets `a` and `b` slide on each other only along `axis`, never turning, as a drawer, or a
+    /// lift on its rails; its Position is how far `b` has slid along the axis from `a` since it was
+    /// made, in meters, or with `b` Null, how far `a` has.
+    @MainThread Public Static Method Slider(a: Body, b: Body?, axis: Vec3): Joint
+        Local along = fbe_joint_vec3_t(axis.x, axis.y, axis.z)
+        Local made: UInt64 = 0
+        Local first = a.Live("Joint.Slider")
+        Local second = Other(b, "Joint.Slider")
+        Unsafe
+            made = fbe_joint_slider(first, second, AddressOf(along))
+        End Unsafe
+        Return Joint(made, JointKind.SLIDER, a, b, "Slider")
+    End Method
+
+    /// Keeps `pointA` on `a` and `pointB` on `b` as far apart as they are, as a rod does, or with
+    /// limits a rope; its Position is how far apart they are, in meters.
+    @MainThread Public Static Method Distance(a: Body, b: Body?, pointA: Vec3, pointB: Vec3): Joint
+        Local onA = fbe_joint_vec3_t(pointA.x, pointA.y, pointA.z)
+        Local onB = fbe_joint_vec3_t(pointB.x, pointB.y, pointB.z)
+        Local made: UInt64 = 0
+        Local first = a.Live("Joint.Distance")
+        Local second = Other(b, "Joint.Distance")
+        Unsafe
+            made = fbe_joint_distance(first, second, AddressOf(onA), AddressOf(onB))
+        End Unsafe
+        Return Joint(made, JointKind.DISTANCE, a, b, "Distance")
+    End Method
+
+    /// Frees the joint, letting its bodies go; using it after panics. Freeing one that's freed
+    /// already does nothing.
+    @MainThread Public Method Free()
+        If handle == 0 Then Return
+        fbe_joint_free(handle)
+        Local in = a.World()
+        in.DropJoint(handle)
+        handle = 0
+    End Method
+
+    /// Whether Free, or freeing a body of it or its world, has freed the joint.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// What the joint is.
+    @MainThread Public Method Kind(): JointKind
+        Live("Joint.Kind")
+        Return kind
+    End Method
+
+    /// The first body the joint holds.
+    @MainThread Public Method A(): Body
+        Live("Joint.A")
+        Return a
+    End Method
+
+    /// The second body the joint holds, or Null for the world.
+    @MainThread Public Method B(): Body?
+        Live("Joint.B")
+        Return b
+    End Method
+
+    /// Holds a hinge between `low` and `high` radians from how it was made, from -Pi to 0 and from
+    /// 0 to Pi; a slider between `low` and `high` meters, at most 0 and at least 0; or a distance
+    /// joint's points between `low` and `high` meters apart, from 0 on.
+    @MainThread Public Method SetLimits(low: Float, high: Float)
+        If !fbe_joint_set_limits(Live("Joint.SetLimits"), low, high)
+            Panic("Joint.SetLimits: {LastError()}")
+        End If
+    End Method
+
+    /// Makes a hinge's, a slider's, or a distance joint's limits springs, of `frequency` a second,
+    /// or 0 for none, rigid, as at first, damped by `damping`, from 0 on: 0 bounces on, and 1
+    /// comes to rest without bouncing, as a car's suspension does.
+    @MainThread Public Method SetSpring(frequency: Float, damping: Float)
+        If !fbe_joint_set_spring(Live("Joint.SetSpring"), frequency, damping)
+            Panic("Joint.SetSpring: {LastError()}")
+        End If
+    End Method
+
+    /// Drives a hinge at `speed` radians a second, or a slider at `speed` meters a second, with at
+    /// most `strength` newton meters or newtons, more than 0, as a fan's motor or a conveyor does.
+    @MainThread Public Method SetMotorSpeed(speed: Float, strength: Float)
+        Motor(FBE_JOINT_MOTOR_SPEED, speed, strength, "SetMotorSpeed")
+    End Method
+
+    /// Drives a hinge to `position` radians from how it was made, or a slider to `position` meters,
+    /// with at most `strength`, as an automatic door does, holding it there.
+    @MainThread Public Method SetMotorTarget(position: Float, strength: Float)
+        Motor(FBE_JOINT_MOTOR_POSITION, position, strength, "SetMotorTarget")
+    End Method
+
+    /// Stops a hinge's or a slider's motor, letting it turn or slide freely.
+    @MainThread Public Method StopMotor()
+        Motor(FBE_JOINT_MOTOR_OFF, 0, 0, "StopMotor")
+    End Method
+
+    /// A hinge's turn, in radians, a slider's slide, in meters, or how far apart a distance joint's
+    /// points are, in meters.
+    @MainThread Public Method Position(): Float
+        Local at: Float = 0
+        Local ok = False
+        Unsafe
+            ok = fbe_joint_position(Live("Joint.Position"), AddressOf(at))
+        End Unsafe
+        If !ok Then Panic("Joint.Position: {LastError()}")
+        Return at
+    End Method
+
+    /// Turns the joint off, letting its bodies go until it's on again, or on, waking them.
+    @MainThread Public Method SetEnabled(enabled: Bool)
+        fbe_joint_set_enabled(Live("Joint.SetEnabled"), enabled)
+    End Method
+
+    /// Whether the joint's on, as it is at first.
+    @MainThread Public Method Enabled(): Bool => fbe_joint_enabled(Live("Joint.Enabled"))
+
+    @MainThread Method Motor(mode: Int32, target: Float, strength: Float, call: String)
+        If !fbe_joint_set_motor(Live("Joint.{call}"), mode, target, strength)
+            Panic("Joint.{call}: {LastError()}")
+        End If
+    End Method
+
+    // Whether it holds `body`.
+    @MainThread Package Method Joins(body: Body): Bool => a == body || b == body
+
+    // A body of it, or its world, freed it.
+    @MainThread Package Method Forget()
+        handle = 0
+    End Method
+
+    // The joint's handle, for `call`, which panics once it's freed.
+    @MainThread Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call}: this Joint was freed")
+        Return handle
+    End Method
+End Class
+
+// The handle of a joint's second body, 0 for the world.
+@MainThread Function Other(b: Body?, call: String): UInt64
+    Local body = b
+    If body == Null Then Return 0
+    Return body.Live(call)
+End Function

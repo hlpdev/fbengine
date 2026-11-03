@@ -66,6 +66,20 @@ Function AFixedUpdateRunsWhatTheFramesHold()
     Expect(slow.Steps(0.25) == 2 && IsClose(slow.Tween(), 0.5, 0.0001))
 End Function
 
+// However fast frames come, it's the rate's steps a second, and a hitch runs no more than its most.
+@Test
+Function AFixedUpdateIsItsRateAtAFasterDisplay()
+    Local logic = FixedUpdate(60)
+    Local steps = 0
+    For frame = 1 To 144
+        Local these = logic.Steps(1.0 / 144)
+        Expect(these <= 1)
+        steps += these
+    End For
+    Expect(Abs(steps - 60) <= 1)
+    Expect(logic.Steps(10) == 5)
+End Function
+
 @Test
 Function AFixedUpdateTakesAFrameTooLongToCount()
     Local logic = FixedUpdate(60)

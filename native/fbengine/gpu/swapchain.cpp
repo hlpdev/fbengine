@@ -344,8 +344,8 @@ bool make_window(const fbe::gpu::device_t& gpu) {
         VkBool32 presents = VK_FALSE;
         vkGetPhysicalDeviceSurfaceSupportKHR(gpu.physical, gpu.family, surface, &presents);
         if (presents != VK_TRUE) {
-            return fbe::fail(
-                std::format("the GPU {} can't present to the window", gpu.properties.deviceName));
+            return fbe::fail(std::format("the GPU {} can't present to the window",
+                                         fbe::gpu::name_of(gpu.properties)));
         }
     }
     fbe::gpu::update_screen(window_pixels());

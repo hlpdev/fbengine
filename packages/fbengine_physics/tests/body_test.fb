@@ -1,6 +1,5 @@
 // Bodies: how each motion moves, what they rest on, forces and impulses, and their worlds.
 
-Import std.core
 Import std.math
 Import std.test
 Import fbengine_physics

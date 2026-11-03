@@ -1,0 +1,32 @@
+// A crate falls onto a lift that a game moves, and rides up on it: a body that drives an entity, as
+// what's drawn follows what's simulated, and a kinematic body that follows an entity, pushing what
+// it meets, each kept with it a batch a frame.
+
+Import std.core
+Import std.math
+Import fbengine
+Import fbengine_physics
+
+Local world = PhysicsWorld()
+Local scene = World()
+World.SetCurrent(scene)
+
+// The lift is the game's to move; its body goes with it.
+Local lift = Pivot()
+Body(world, Shape.Box(Vec3(4, 0.5, 4)), Motion.KINEMATIC, lift)
+
+// The crate is the physics' to move; its entity goes with it.
+Local crate = Pivot()
+crate.SetPosition(Vec3(0, 3, 0))
+Local body = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, crate)
+
+For frame = 1 To 120
+    If frame > 60 Then lift.Translate(Vec3(0, 2.0 / 60, 0))
+    world.Update(1.0 / 60)
+End For
+
+Print("the crate's entity is where its body is: {crate.Position(Space.WORLD) == body.Position()}")
+Print(
+    "the crate rode up with the lift: {Abs(crate.Position().y - lift.Position().y - 0.75) < 0.05}")
+world.Free()
+scene.Free()

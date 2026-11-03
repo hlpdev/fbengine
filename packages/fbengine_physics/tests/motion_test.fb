@@ -1,0 +1,156 @@
+// How bodies are moved: a kinematic body driven to where it's put, continuous collisions for fast
+// bodies, and bodies kept awake.
+
+Import std.math
+Import std.test
+Import fbengine_physics
+Import fbengine_physics.c.fbe_body
+Import fbengine_physics.c.fbe_physics
+Import fbengine_physics.c.fbe_shape
+
+Function Near(a: Float, b: Float, within: Float = 0.01): Bool => Abs(a - b) <= within
+
+Function Near(a: Vec3, b: Vec3, within: Float = 0.01): Bool => Distance(a, b) <= within
+
+Function Run(world: PhysicsWorld, seconds: Float64)
+    For i = 1 To Round(seconds * 60) As Int
+        world.Step(1.0 / 60)
+    End For
+End Function
+
+@Test
+Function MoveToTakesAKinematicBodyThereInItsTime()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local lift = Body(world, Shape.Box(Vec3(2, 0.2, 2)), Motion.KINEMATIC, Vec3(0, 0, 0))
+    Local turned = Quat.FromAxisAngle(Vec3(0, 1, 0), Pi / 8)
+    lift.MoveTo(Vec3(0, 1, 0), turned, 1.0 / 60)
+    Expect(Near(lift.Velocity(), Vec3(0, 60, 0), 0.1))
+    world.Step(1.0 / 60)
+    Expect(Near(lift.Position(), Vec3(0, 1, 0), 0.001))
+    Expect(IsClose(lift.Rotation(), turned))
+    lift.SetVelocity(Vec3(0, 0, 0))
+    lift.SetAngularVelocity(Vec3(0, 0, 0))
+    world.Step(1.0 / 60)
+    Expect(Near(lift.Position(), Vec3(0, 1, 0), 0.001))
+End Function
+
+// A lift moved step by step carries what's on it up, which teleporting it wouldn't.
+@Test
+Function ALiftMovedStepByStepCarriesWhatsOnIt()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local lift = Body(world, Shape.Box(Vec3(4, 0.2, 4)), Motion.KINEMATIC, Vec3(0, 0, 0))
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0.6, 0))
+    Run(world, 0.5)
+    For i = 1 To 120
+        lift.MoveTo(Vec3(0, (i As Float) * 0.025, 0), Quat(0, 0, 0, 1), 1.0 / 60)
+        world.Step(1.0 / 60)
+    End For
+    Expect(Near(lift.Position().y, 3, 0.001))
+    Expect(crate.Position().y > 3.4, "the crate's at {crate.Position()}")
+End Function
+
+// A ball at 200 m/s passes through a wall 5 cm thick between steps, unless it's continuous.
+@Test
+Function AContinuousBodyNeverPassesThroughAThinWall()
+    For continuous = 0 To 1
+        Local world = PhysicsWorld()
+        world.SetGravity(Vec3(0, 0, 0))
+        Body(world, Shape.Box(Vec3(0.05, 4, 4)), Motion.STATIC, Vec3(5, 0, 0))
+        Local bullet = Body(world, Shape.Sphere(0.05), Motion.DYNAMIC, Vec3(0, 0, 0))
+        Expect(!bullet.Continuous())
+        If continuous == 1 Then bullet.SetContinuous(True)
+        Expect(bullet.Continuous() == (continuous == 1))
+        bullet.SetVelocity(Vec3(200, 0, 0))
+        Run(world, 0.25)
+        If continuous == 1
+            Expect(bullet.Position().x < 5, "a continuous bullet is at {bullet.Position()}")
+        Else
+            Expect(bullet.Position().x > 5, "a discrete bullet is at {bullet.Position()}")
+        End If
+        world.Free()
+    End For
+End Function
+
+@Test
+Function ABodyThatCantSleepStaysAwake()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Body(world, Shape.Box(Vec3(20, 1, 20)), Motion.STATIC, Vec3(0, -0.5, 0))
+    Local watched = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0.5, 0))
+    Local other = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(3, 0.5, 0))
+    Expect(watched.CanSleep())
+    watched.SetCanSleep(False)
+    Expect(!watched.CanSleep())
+    Run(world, 3.0)
+    Expect(watched.Active())
+    Expect(!other.Active())
+    watched.SetCanSleep(True)
+    Run(world, 3.0)
+    Expect(!watched.Active())
+End Function
+
+@Test @MainThread
+Function TheCApiRefusesMovesItDoesntTake()
+    Local world = fbe_physics_new(10)
+    Defer fbe_physics_free(world)
+    Local ball = fbe_shape_sphere(1)
+    Defer fbe_shape_free(ball)
+    Local at = fbe_body_vec3_t(0, 0, 0)
+    Local unturned = fbe_body_quat_t(0, 0, 0, 1)
+    Unsafe
+        Local wall = fbe_body_add(world, ball, FBE_BODY_STATIC, AddressOf(at), AddressOf(unturned))
+        Local crate = fbe_body_add(world, ball, FBE_BODY_DYNAMIC, AddressOf(at),
+                                   AddressOf(unturned))
+        Local lift = fbe_body_add(world, ball, FBE_BODY_KINEMATIC, AddressOf(at),
+                                  AddressOf(unturned))
+        Expect(!fbe_body_move_to(crate, AddressOf(at), AddressOf(unturned), 1))
+        Expect(Error() == "only a kinematic body is moved to where it's put")
+        Expect(!fbe_body_move_to(lift, AddressOf(at), AddressOf(unturned), 0))
+        Expect(Error() == "a body's moved there over more than 0 seconds, not 0")
+        Expect(!fbe_body_set_continuous(wall, True))
+        Expect(!fbe_body_set_can_sleep(wall, False))
+        Expect(Error() == "a static body doesn't move, so it has no sleep")
+        Expect(!fbe_body_continuous(wall) && !fbe_body_can_sleep(wall))
+        // A time too short for the way is faster than Jolt moves a body, whose solver goes wrong
+        // past it: a meter in a thousandth of a second, or less, or a radian in a 60th.
+        Local there = fbe_body_vec3_t(1, 0, 0)
+        For seconds In [1e-40, 1e-30, 1e-19, 1e-18, 1e-17, 1e-15, 1e-3]
+            Expect(!fbe_body_move_to(lift, AddressOf(there), AddressOf(unturned), seconds),
+                   "a meter in {seconds} s")
+        End For
+        Expect(Error() == "a body moved there over 0.001 seconds is faster than its most, 500 m/s and 47.12389 radians a second",
+               Error())
+        Local radian = fbe_body_quat_t(0, Sin(0.5), 0, Cos(0.5))
+        For seconds In [1e-15, 1.0 / 60]
+            Expect(!fbe_body_move_to(lift, AddressOf(at), AddressOf(radian), seconds),
+                   "a radian in {seconds} s")
+        End For
+        // A meter in a 60th of a second, or a radian in a tenth, isn't, and the world steps on,
+        // pushing the crate the lift's in.
+        Expect(fbe_body_move_to(lift, AddressOf(there), AddressOf(unturned), 1.0 / 60))
+        Expect(fbe_body_move_to(lift, AddressOf(at), AddressOf(radian), 0.1))
+        Expect(fbe_physics_step(world, 1.0 / 60, 1))
+        // A kinematic body, or a sensor, has no collisions to find along its way, and a body made
+        // either stops finding them.
+        Expect(!fbe_body_set_continuous(lift, True))
+        Expect(
+            Error() ==
+            "a kinematic body goes where it's moved, so it has no collisions to find along its way")
+        Expect(fbe_body_set_continuous(lift, False))
+        Expect(fbe_body_set_continuous(crate, True) && fbe_body_continuous(crate))
+        Expect(fbe_body_set_sensor(crate, True) && !fbe_body_continuous(crate))
+        Expect(!fbe_body_set_continuous(crate, True))
+        Expect(Error() ==
+               "a sensor collides with nothing, so it has no collisions to find along its way")
+        Expect(fbe_body_set_sensor(crate, False) && fbe_body_set_continuous(crate, True))
+        Expect(fbe_body_set_motion(crate, FBE_BODY_KINEMATIC) && !fbe_body_continuous(crate))
+    End Unsafe
+End Function
+
+@MainThread Function Error(): String
+    Unsafe
+        Return fbe_physics_error().ToString()
+    End Unsafe
+End Function
