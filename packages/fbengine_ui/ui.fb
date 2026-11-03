@@ -280,7 +280,8 @@ Public Final Class Ui
     /// Sets what sees each key pressed or repeating that the widget with the focus doesn't use,
     /// before that key activates it or moves the focus, as an app's Ctrl+S; True says it used it.
     /// Keys typed into a widget that takes text don't come here, only those with Control, Alt, or
-    /// Meta held and the function keys, and none do under a MODAL. Null, at first, for none.
+    /// Meta held and the function keys, and none do while a MENU or a MODAL is open. Null, at first,
+    /// for none.
     @MainThread Public Method SetShortcuts(seeing: (Func(Keystroke): Bool)?)
         shortcuts = seeing
     End Method
@@ -629,7 +630,7 @@ Public Final Class Ui
     // Gives `stroke` to what sees the keys, as SetShortcuts says; whether it used it.
     @MainThread Method Shortcut(stroke: Keystroke, own: Widget?): Bool
         Local seeing = shortcuts
-        If seeing == Null || Holding(True) Then Return False
+        If seeing == Null || Holding() Then Return False
         Local held = stroke.Control || stroke.Alt || stroke.Meta
         Local function = (stroke.Key As Int32) >= (Key.F1 As Int32) &&
                          (stroke.Key As Int32) <= (Key.F12 As Int32)

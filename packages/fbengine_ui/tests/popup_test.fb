@@ -424,3 +424,24 @@ Function AWidgetSaysWhatTheCursorIsOverItAndHoldingIt() Throws GraphicsError
     Update(ui)
     Expect(ShownMouseCursor() == MouseCursor.CROSSHAIR)
 End Function
+
+@Test
+Function ShortcutsWaitForAMenu() Throws GraphicsError
+    Local ui = Try Opened([Button("Under")])
+    Defer EndGraphics()
+    Local seen = 0
+    ui.SetShortcuts(Function(stroke: Keystroke): Bool
+        seen += 1
+        Return True
+    End Function)
+    Local menu = Menu([Button("Item")])
+    ui.OpenPopupAt(menu, Vec2(100, 100))
+    Update(ui)
+    Try PressKey(ui, Key.W)
+    Expect(seen == 0)
+    // Escape's the menu's, not a shortcut's.
+    Try PressKey(ui, Key.ESCAPE)
+    Expect(seen == 0 && ui.Popups().Count == 0)
+    Try PressKey(ui, Key.ESCAPE)
+    Expect(seen == 1)
+End Function
