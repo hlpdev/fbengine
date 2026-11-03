@@ -60,6 +60,9 @@ FBE_API uint64_t fbe_assets_load(int32_t kind, const char* path, bool linear, bo
 // Starts loading the file at `path` on the workers, and gives the load, which the hand-over
 // after it's done gives the FB side as its ticket; 0 as fbe_assets_load gives it.
 FBE_API uint64_t fbe_assets_load_async(int32_t kind, const char* path, bool linear, bool settings);
+// A bytes load of the file at `path` on the workers, as fbe_assets_load_async's, of 2147483647
+// bytes at most, as many as an FB array holds, which more fails before they're allocated.
+FBE_API uint64_t fbe_assets_read_async(const char* path);
 // How the last fbe_assets_load or fbe_assets_load_async that gave 0 failed, FBE_ASSETS_INVALID_PATH
 // for a path that isn't a res:// path and FBE_ASSETS_OTHER for the rest, as for want of memory.
 FBE_API int32_t fbe_assets_load_failure(void);

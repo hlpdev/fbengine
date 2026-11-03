@@ -66,7 +66,7 @@ void read_sidecar(load_t& load) {
 }
 
 void run_load_here(load_t& load, jobs_t* jobs) {
-    result_t<bytes_t> bytes = load.files.read(load.path);
+    result_t<bytes_t> bytes = load.files.read(load.path, load.options.most);
     if (!bytes) {
         load.error = std::move(bytes.error());
         load.progress = 1;

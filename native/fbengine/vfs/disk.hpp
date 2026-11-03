@@ -27,6 +27,11 @@ std::string utf8(const std::filesystem::path& path);
 /// `bytes` as well-formed UTF-8: U+FFFD for each byte that doesn't start a well-formed sequence,
 /// as std.io's ReadText has it.
 std::string well_formed(std::string_view bytes);
+/// How many bytes well_formed gives of `bytes`, found without making them.
+std::uint64_t well_formed_size(std::string_view bytes);
+/// The folder or file at `path`, through every link to it, as the OS has it, or `path` when it
+/// can't say, as when nothing's there: the same for each way of reaching one.
+std::filesystem::path real_path(const std::filesystem::path& path);
 
 /// When a folder last changed, on the disk's clock, and whether that was long enough before now
 /// that any change since has changed it again, however coarse the disk's clock is.

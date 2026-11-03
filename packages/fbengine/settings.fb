@@ -1,8 +1,6 @@
 // Import settings: what a file's sidecar, its path with ".toml" after it, says of how it's cooked
 // and loaded, one Struct a kind of file, whose keys are its Fields' names in snake_case.
 
-Import std.core
-
 /// What the cooker makes of an image: whatever the platforms the game's built for read best,
 /// which is BC7 on every desktop; Basis Universal's UASTC, which a GPU's own format is transcoded
 /// from as it loads; BC7; ASTC 4x4; or its texels as they are.

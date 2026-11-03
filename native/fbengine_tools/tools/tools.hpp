@@ -39,8 +39,8 @@ std::filesystem::path disk_path(std::string_view utf8);
 /// The bytes of the file at `path`, a UTF-8 path on the disk, or why it can't be read.
 std::expected<bytes_t, std::string> read_file(std::string_view path);
 
-/// Writes `bytes` to the file at `path`, a UTF-8 path on the disk, making its folder, whole or
-/// not at all: to a file beside it, then renamed over it. It gives why it can't, if it can't.
+/// Writes `bytes` to the file at `path`, a UTF-8 path on the disk, as an atomic_file_t does. It
+/// gives why it can't, if it can't.
 std::expected<void, std::string> write_file(std::string_view path,
                                             std::span<const std::uint8_t> bytes);
 

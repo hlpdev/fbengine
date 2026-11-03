@@ -65,6 +65,9 @@ result_t<path_t> parse(std::string_view text);
 /// res:// path, which it is as it is.
 result_t<path_t> resolve(const path_t& base, std::string_view relative);
 
+/// The error of a file of `size` bytes, named `shown`, past what a read takes.
+error_t too_big(std::string_view shown, std::uint64_t size);
+
 /// A name folded, as paths are compared.
 std::string fold(std::string_view name);
 
@@ -89,9 +92,11 @@ public:
     source_t(source_t&&) = delete;
     source_t& operator=(source_t&&) = delete;
 
-    /// The bytes of the file at `path`, whose names are `names` as written and `keys` folded.
+    /// The bytes of the file at `path`, whose names are `names` as written and `keys` folded. One
+    /// of more than `most` bytes is OTHER, found before they're allocated.
     virtual result_t<std::optional<bytes_t>> read(std::span<const std::string> names,
-                                                  std::span<const std::string> keys) = 0;
+                                                  std::span<const std::string> keys,
+                                                  std::uint64_t most) = 0;
     virtual result_t<kind_t> kind(std::span<const std::string> names,
                                   std::span<const std::string> keys) = 0;
     /// What's in the folder there, in any order, or nullopt when there's no folder there.
@@ -122,9 +127,9 @@ public:
     /// No mounts.
     view_t() = default;
 
-    /// The file's bytes. One that no mount has is NOT_FOUND, and a folder, res:// too,
-    /// IS_A_FOLDER.
-    [[nodiscard]] result_t<bytes_t> read(const path_t& path) const;
+    /// The file's bytes. One that no mount has is NOT_FOUND, a folder, res:// too, IS_A_FOLDER,
+    /// and one of more than `most` bytes OTHER, before they're allocated.
+    [[nodiscard]] result_t<bytes_t> read(const path_t& path, std::uint64_t most = UINT64_MAX) const;
     [[nodiscard]] result_t<kind_t> kind(const path_t& path) const;
     /// What's in the folder, sorted by folded names. A folder no mount has is NOT_FOUND, and a
     /// file NOT_A_FOLDER.
@@ -155,8 +160,9 @@ public:
     /// The mounts there are now.
     [[nodiscard]] view_t view() const;
 
-    [[nodiscard]] result_t<bytes_t> read(const path_t& path) const {
-        return view().read(path);
+    [[nodiscard]] result_t<bytes_t> read(const path_t& path,
+                                         std::uint64_t most = UINT64_MAX) const {
+        return view().read(path, most);
     }
     [[nodiscard]] result_t<kind_t> kind(const path_t& path) const {
         return view().kind(path);
