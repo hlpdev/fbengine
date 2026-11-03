@@ -143,7 +143,8 @@ Function JoltsHeavyOnLightTestStands()
     End For
     Run(world, 20.0)
     Local sideways, tilt, awake = Settled("heavy on light", boxes, starts)
-    // Boxes 10 m wide, each heavy one pressing its light one aside as it settles, still on it.
+    // Boxes 10 m wide, each heavy one pressing its light one aside as it settles, still on it. It's
+    // Jolt's: alone, with its sample's densities, it goes 1.67453 m too, so this pins it, not judges it.
     Expect(sideways < 2.5 && tilt < 0.02 && awake == 0)
     For i = 0 To 9
         Local under = boxes[i * 2].Position()

@@ -264,6 +264,9 @@ FBE_API const char* fbe_entity_name(uint64_t entity);
 // With `keep_world`, it stays where it is in the world and its local transform changes; without,
 // its local transform stays. False if the parent is the entity or under it.
 FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_world);
+// Puts an entity at `index` among what's beside it, 0 first, which moves nothing, so its transform,
+// what's under it, and its collisions don't know. False if `index` isn't one of its siblings'.
+FBE_API bool fbe_entity_set_sibling_index(uint64_t entity, int32_t index);
 // An entity's parent, 0 at the top of its World.
 FBE_API uint64_t fbe_entity_parent(uint64_t entity);
 // How many children an entity has, -1 for a freed one.

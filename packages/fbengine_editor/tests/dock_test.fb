@@ -1,0 +1,453 @@
+// Panes that dock, driven by Simulate's mouse, offscreen.
+
+Import std.collections
+Import std.core
+Import std.data
+Import std.math
+Import std.test
+Import fbengine
+Import fbengine_editor
+Import fbengine_ui
+
+// A window, and a Ui of a dock filling it with panes a, b, c, and d, none shown.
+Function Docked(): (Ui, Dock) Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(800, 600)
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.STACK)
+    Local dock = Dock()
+    dock.SetAnchors(Anchors.Fill())
+    root.Add(dock)
+    For id In ["a", "b", "c", "d"]
+        dock.AddPane(Pane(id, id, Widget("pane", id)))
+    End For
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Return (ui, dock)
+End Function
+
+Function Update(ui: Ui)
+    Flip()
+    ui.Update()
+End Function
+
+Function Tab(ui: Ui, id: String): Node
+    Local found = ui.Root().Find("tab." + id)
+    If found == Null Then Panic("there's no tab {id}")
+    Return found
+End Function
+
+// Drags from `from` to `to`, in steps, and lets go.
+Function Drag(ui: Ui, from: Vec2, to: Vec2) Throws GraphicsError
+    Try Simulate.MoveMouse(from.x, from.y)
+    Update(ui)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Update(ui)
+    Try Simulate.MouseMotion(to.x - from.x, to.y - from.y)
+    Update(ui)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Update(ui)
+End Function
+
+@Test
+Function PanesShowAndHide() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    Expect(dock.ShownPanes().Count == 0 && dock.CurrentPane() == "")
+    dock.Show("a")
+    dock.Show("b")
+    Update(ui)
+    Expect(dock.ShownPanes() == ["a", "b"] && dock.CurrentPane() == "b")
+    Expect(dock.Active("b") && !dock.Active("a"))
+    // Only what's active is in the tree, filling what's under the tabs.
+    Expect(ui.Root().Find("b") != Null && ui.Root().Find("a") == Null)
+    Local shown = ui.Root().Find("b")
+    If shown != Null
+        Expect(shown.Box().Width == 800 && shown.Box().Height > 500, "it's {shown.Box()}")
+    End If
+    dock.Hide("b")
+    Update(ui)
+    Expect(dock.ShownPanes() == ["a"] && dock.CurrentPane() == "a")
+    Expect(ui.Root().Find("a") != Null)
+    dock.Hide("a")
+    Update(ui)
+    Expect(dock.ShownPanes().Count == 0)
+    Expect(ui.Root().Find("tab.a") == Null)
+End Function
+
+@Test
+Function APaneMovesBesideAnother() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    dock.Show("b")
+    Expect(dock.Move("b", "a", DockSide.LEFT))
+    Update(ui)
+    Local a = ui.Root().Find("a")
+    Local b = ui.Root().Find("b")
+    If a == Null || b == Null
+        Fail("both are shown")
+        Return
+    End If
+    Expect(b.Box().X == 0 && a.Box().X > 390, "b's at {b.Box()}, a at {a.Box()}")
+    Expect(dock.SplitRatio("b") == 0.5)
+    // A share of the room, whichever side it's on.
+    dock.Show("d")
+    Expect(dock.Move("d", "b", DockSide.LEFT, 0.25) && dock.SplitRatio("d") == 0.5)
+    dock.Hide("d")
+    dock.Move("b", "a", DockSide.RIGHT, 0.25)
+    Expect(dock.SplitRatio("a") == 0.75)
+    dock.Move("b", "a", DockSide.LEFT)
+    // Under it, and what it leaves is taken up.
+    dock.Show("c")
+    Expect(dock.Move("c", "a", DockSide.BOTTOM))
+    Update(ui)
+    Local c = ui.Root().Find("c")
+    If c == Null
+        Fail("it's shown")
+        Return
+    End If
+    Expect(c.Box().Y > 300 && c.Box().X > 390, "c's at {c.Box()}")
+    dock.Hide("b")
+    Update(ui)
+    a = ui.Root().Find("a")
+    If a != Null Then Expect(a.Box().X == 0, "a's at {a.Box()}")
+    // Into another's tabs.
+    Expect(dock.Move("c", "a", DockSide.CENTER))
+    Expect(dock.ShownPanes() == ["a", "c"])
+    Update(ui)
+    Expect(ui.Root().Find("a") == Null && ui.Root().Find("c") != Null)
+    // What's where it is stays.
+    Expect(!dock.Move("c", "a", DockSide.CENTER) && !dock.Move("a", "a", DockSide.LEFT))
+    Expect(!dock.Move("a", "d", DockSide.LEFT), "against one with no tab")
+End Function
+
+@Test
+Function DraggingWhatsBetweenTwoSidesResizesThem() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    dock.Show("b")
+    dock.Move("b", "a", DockSide.RIGHT)
+    Update(ui)
+    Local a = ui.Root().Find("a")
+    If a == Null
+        Fail("it's shown")
+        Return
+    End If
+    Local between = a.Box().X + a.Box().Width + 2
+    Try Simulate.MoveMouse(between, 300)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.RESIZE_EW)
+    Try Drag(ui, Vec2(between, 300), Vec2(200, 300))
+    Expect(Abs(a.Box().Width - 197) < 3, "a's {a.Box()}")
+    // No smaller than the least a side goes.
+    Try Drag(ui, Vec2(a.Box().Width + 2, 300), Vec2(2, 300))
+    Expect(a.Box().Width == 80, "a's {a.Box()}")
+    Try Drag(ui, Vec2(a.Box().Width + 2, 300), Vec2(799, 300))
+    Expect(a.Box().Width == 715, "a's {a.Box()}")
+    // And so what's kept is that, not what the pointer went to.
+    Local ratio = dock.SplitRatio("a") ?? 0
+    Expect(Abs(ratio - 715.0 / 795.0) < 0.001, "it's {ratio}")
+    Try Simulate.MoveMouse(400, 300)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.ARROW)
+End Function
+
+@Test
+Function DraggingATabMovesItsPane() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    dock.Show("b")
+    Update(ui)
+    Local from = Tab(ui, "b").Box().Center
+    // Dropped on the right of the group it's in.
+    Try Simulate.MoveMouse(from.x, from.y)
+    Update(ui)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Update(ui)
+    Try Simulate.MouseMotion(780 - from.x, 300 - from.y)
+    Update(ui)
+    // Where it'd go shows, and takes nothing of the pointer.
+    Expect(ui.Popups().Count == 1, "no hint's shown")
+    Local hint = ui.Popups()[0].Box()
+    Expect(hint.X == 400 && hint.Width == 400, "the hint's {hint}")
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Update(ui)
+    Expect(ui.Popups().Count == 0, "the hint's left")
+    Local b = ui.Root().Find("b")
+    If b != Null Then Expect(b.Box().X > 390, "b's {b.Box()}")
+    Expect(dock.CurrentPane() == "b" && dock.SplitRatio("a") == 0.5)
+    // And onto the other's tabs.
+    from = Tab(ui, "b").Box().Center
+    Try Drag(ui, from, Tab(ui, "a").Box().Center)
+    Expect(ui.Popups().Count == 0)
+    Expect(dock.SplitRatio("a") == Null, "the split's still there")
+    Expect(dock.ShownPanes() == ["a", "b"])
+End Function
+
+@Test
+Function ALonePanesTabDraggedOntoItsOwnGroupStaysAsItIs() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    Update(ui)
+    Local before = "{dock.Saved()}"
+    Local from = Tab(ui, "a").Box().Center
+    Try Simulate.MoveMouse(from.x, from.y)
+    Update(ui)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Update(ui)
+    Try Simulate.MouseMotion(780 - from.x, 300 - from.y)
+    Update(ui)
+    Expect(ui.Popups().Count == 0, "a hint shows where nothing would go")
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Update(ui)
+    Expect("{dock.Saved()}" == before, "it's {dock.Saved()}")
+End Function
+
+@Test
+Function AClickOnATabShowsIt() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    dock.Show("b")
+    Update(ui)
+    Local tab = Tab(ui, "a").Box().Center
+    Try Simulate.MoveMouse(tab.x, tab.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    Update(ui)
+    Expect(dock.Active("a") && dock.CurrentPane() == "a")
+    Expect(ui.Root().Find("a") != Null && ui.Root().Find("b") == Null)
+End Function
+
+@Test
+Function ARightPressOnATabAsksForItsMenu() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    dock.Show("b")
+    Update(ui)
+    Local asked = ""
+    Local at = Vec2(0, 0)
+    dock.OnTabMenu(Function(own: Ui, id: String, point: Vec2)
+        asked = id
+        at = point
+    End Function)
+    Local tab = Tab(ui, "a").Box().Center
+    Try Simulate.MoveMouse(tab.x, tab.y)
+    Try Simulate.Click(MouseButton.RIGHT)
+    Update(ui)
+    Expect(asked == "a" && at == tab, "it asked for {asked} at {at}")
+    Expect(dock.CurrentPane() == "a")
+End Function
+
+@Test
+Function ALayoutComesBackAsItWas() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    dock.Show("b")
+    dock.Show("c")
+    dock.Move("c", "a", DockSide.BOTTOM)
+    dock.Activate("a")
+    Local saved = dock.Saved()
+    dock.Clear()
+    Expect(dock.ShownPanes().Count == 0)
+    Expect(dock.Restore(saved))
+    Update(ui)
+    Expect(dock.ShownPanes() == ["a", "b", "c"])
+    Expect(dock.Active("a") && !dock.Active("b") && dock.Active("c"))
+    Expect(dock.SplitRatio("a") == 0.5)
+    Expect("{dock.Saved()}" == "{saved}")
+    // Through its text too.
+    Local read = Try? Toml.Read(Toml.Write(saved))
+    Expect(read != Null && dock.Restore(read) && "{dock.Saved()}" == "{saved}")
+End Function
+
+@Test
+Function ALayoutLeavesOutWhatItCantHave() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("d")
+    // Gone, once over, and nonsense.
+    Local gone = Value.Object()
+    gone["across"] = Value(True)
+    gone["ratio"] = Value(7.0)
+    Local first = Value.Object()
+    first["tabs"] = Value([Value("gone"), Value("a"), Value("a"), Value(3)])
+    first["active"] = Value(99)
+    gone["first"] = first
+    Local second = Value.Object()
+    second["tabs"] = Value([Value("b")])
+    gone["second"] = second
+    Expect(dock.Restore(gone))
+    Expect(dock.ShownPanes() == ["a", "b"], "it has {dock.ShownPanes()}")
+    Expect(dock.Active("a") && dock.SplitRatio("a") == 1.0)
+    Update(ui)
+    // Each side keeps the least it goes.
+    Local a = ui.Root().Find("a")
+    If a != Null Then Expect(a.Box().Width == 715, "a's {a.Box()}")
+    // With nothing left, it's left as it was.
+    Local nothing = Value.Object()
+    nothing["tabs"] = Value([Value("gone")])
+    Expect(!dock.Restore(nothing) && !dock.Restore(Value.Object()) && !dock.Restore(Value(3)))
+    Expect(dock.ShownPanes() == ["a", "b"])
+End Function
+
+@Test
+Function ATabTakenAwayLeavesTheSameShowing() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    For id In ["a", "b", "c", "d"]
+        dock.Show(id)
+    End For
+    dock.Activate("c")
+    // One before it, and it still shows.
+    dock.Hide("a")
+    Expect(dock.Active("c"), "taking a away showed another")
+    Update(ui)
+    Expect(ui.Root().Find("c") != Null)
+    // Dragged away, the same.
+    dock.Show("a")
+    dock.Activate("c")
+    Expect(dock.Move("b", "c", DockSide.LEFT))
+    dock.Activate("c")
+    Expect(dock.Active("c"))
+    // The last one's tab taken, the one before it shows, and it's current.
+    dock.Clear()
+    dock.Show("a")
+    dock.Show("b")
+    Expect(dock.CurrentPane() == "b")
+    dock.Hide("b")
+    Expect(dock.Active("a") && dock.CurrentPane() == "a")
+End Function
+
+@Test
+Function TheCurrentPaneShowsAndIsKept() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    dock.Show("b")
+    dock.Show("c")
+    dock.Move("c", "a", DockSide.RIGHT)
+    dock.Activate("a")
+    Expect(dock.CurrentPane() == "a")
+    Local saved = dock.Saved()
+    dock.Clear()
+    Expect(dock.CurrentPane() == "")
+    Expect(dock.Restore(saved))
+    Expect(dock.CurrentPane() == "a", "it's {dock.CurrentPane()}")
+    Expect(dock.Active(dock.CurrentPane()))
+    // What's current goes, and it's one that's showing, not only one with a tab.
+    dock.Activate("b")
+    dock.Hide("b")
+    Expect(dock.Active(dock.CurrentPane()), "it's {dock.CurrentPane()}, which doesn't show")
+    // One saved that's not showing there isn't taken.
+    saved["current"] = Value("d")
+    Expect(dock.Restore(saved) && dock.Active(dock.CurrentPane()), "it's {dock.CurrentPane()}")
+End Function
+
+@Test
+Function ARebuildEndsADrag() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    dock.Show("b")
+    dock.Show("c")
+    dock.Move("c", "a", DockSide.RIGHT)
+    Update(ui)
+    Local from = Tab(ui, "b").Box().Center
+    Try Simulate.MoveMouse(from.x, from.y)
+    Update(ui)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Update(ui)
+    Try Simulate.MouseMotion(600 - from.x, 300 - from.y)
+    Update(ui)
+    Expect(ui.Popups().Count == 1)
+    // What's dragged is hidden, and it stays so: the hint goes, and letting go puts nothing back.
+    dock.Hide("b")
+    Expect(ui.Popups().Count == 0, "the hint outlived the drag")
+    Update(ui)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Update(ui)
+    Expect(!dock.Showing("b") && ui.Popups().Count == 0, "it has {dock.ShownPanes()}")
+    // And a drag after it goes as it should.
+    dock.Show("b")
+    Update(ui)
+    from = Tab(ui, "b").Box().Center
+    Try Drag(ui, from, Vec2(780, 300))
+    Expect(ui.Popups().Count == 0)
+End Function
+
+@Test
+Function TheKeyboardLeavesTheFocusOnATabItShows() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    dock.Show("b")
+    Update(ui)
+    Local tab = Tab(ui, "a") As? Widget
+    If tab == Null
+        Fail("a tab's a widget")
+        Return
+    End If
+    ui.Focus(tab)
+    Update(ui)
+    Try Simulate.PressKey(Key.RETURN)
+    Update(ui)
+    Update(ui)
+    Expect(dock.Active("a"))
+    Local focused = ui.Focused()
+    Expect(focused != Null && RefEquals(focused, Tab(ui, "a")), "the focus went from the tab")
+    // A click too.
+    Local other = Tab(ui, "b").Box().Center
+    Try Simulate.MoveMouse(other.x, other.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    Update(ui)
+    Update(ui)
+    focused = ui.Focused()
+    Expect(focused != Null && RefEquals(focused, Tab(ui, "b")), "the focus went from the tab")
+End Function
+
+@Test
+Function AWindowTooSmallLeavesNoSideLessThanNothing() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    dock.Show("a")
+    dock.Show("b")
+    dock.Move("b", "a", DockSide.RIGHT)
+    Try Window.SetSize(3, 3)
+    Update(ui)
+    Update(ui)
+    Local a = ui.Root().Find("a")
+    Local b = ui.Root().Find("b")
+    If a == Null || b == Null
+        Fail("both are shown")
+        Return
+    End If
+    Expect(a.Box().Width >= 0 && b.Box().Width >= 0, "they're {a.Box()} and {b.Box()}")
+    Try Window.SetSize(800, 600)
+    Update(ui)
+    Update(ui)
+    Expect(a.Box().Width > 300 && b.Box().Width > 300, "they're {a.Box()} and {b.Box()}")
+End Function
+
+@Test
+Function ARatioThatIsntANumberIsAHalf() Throws GraphicsError
+    Local ui, dock = Try Docked()
+    Defer EndGraphics()
+    Local saved = Value.Object()
+    saved["across"] = Value(True)
+    saved["ratio"] = Value(0.0 / Sin(0.0))
+    Local first = Value.Object()
+    first["tabs"] = Value([Value("a")])
+    saved["first"] = first
+    Local second = Value.Object()
+    second["tabs"] = Value([Value("b")])
+    saved["second"] = second
+    Expect(dock.Restore(saved))
+    Expect(dock.SplitRatio("a") == 0.5, "it's {dock.SplitRatio("a") ?? -1}")
+End Function
