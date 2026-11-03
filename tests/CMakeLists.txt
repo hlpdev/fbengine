@@ -130,6 +130,24 @@ if(FBENGINE_FB_TESTS)
     endif()
   endforeach()
 
+  # A program that ends with the GPU going, each way it can, and has to end: Windows' ending a process
+  # with it going seems to have waited for good on CI. An end of its own stops the GPU first, and says
+  # so; a panic and Process.Exit end by the runtime's _Exit, past what the engine can hook.
+  if(WIN32)
+    foreach(case IN ITEMS ends panics exits)
+      add_test(NAME gpu.ends.${case}
+               COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/gpu/ends"
+                       -- ${case})
+      set_tests_properties(gpu.ends.${case} PROPERTIES
+                           LABELS "gpu" TIMEOUT 120
+                           ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_SAY_THE_END=1;${fbengine_vulkan_environment}")
+    endforeach()
+    set_tests_properties(gpu.ends.ends PROPERTIES
+                         PASS_REGULAR_EXPRESSION "stopped the GPU as the process ended")
+    set_tests_properties(gpu.ends.panics PROPERTIES
+                         PASS_REGULAR_EXPRESSION "panic: the program panics")
+  endif()
+
   # E3's arcade example, playing itself headless, the same every time, its pilot's run and a run
   # with no one flying, saving the frames that examples.arcade.golden, a hidden test of
   # fbengine_gpu_tests run after them, compares with their golden images, all on the tests' Vulkan.
@@ -1478,7 +1496,8 @@ endif()
 if(FBENGINE_FB_TESTS)
   # The cooker's threads, which can't hold up a whole run if they ever hang again.
   set_tests_properties(fbengine_tools.package PROPERTIES TIMEOUT 600)
-  set_tests_properties(fbengine.package PROPERTIES TIMEOUT 1800)
+  # 40 seconds here; one that hangs shouldn't take the job's hour with it.
+  set_tests_properties(fbengine.package PROPERTIES TIMEOUT 600)
   # A copy, whose path dependencies are the packages', and whose file a run can change.
   set(fbengine_game "${CMAKE_CURRENT_BINARY_DIR}/cooked_game")
   set(fbengine_game_source "${PROJECT_SOURCE_DIR}/examples/cooked_game")
