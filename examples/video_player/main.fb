@@ -1,0 +1,44 @@
+// A video plays, fitted to the screen with its shape kept, its sound through fbengine_audio and its
+// clock kept to that. With no arguments it's headless, with nothing heard, and says how it went;
+// `--watch` plays it over and over in a real window until it's closed or Escape's pressed.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import fbengine
+Import fbengine_audio
+Import fbengine_video
+
+Function Run() Throws VideoError, GraphicsError, AudioError
+    Local watching = Process.Arguments().Contains("--watch")
+    If !watching Then Window.SetHeadless(True)
+    Try Audio.Start(watching ? AudioDevice.DEFAULT : AudioDevice.MANUAL)
+    Local video = Try Video.Load(Embed("colors.mpg"))
+    video.SetLoop(watching)
+    video.Play()
+    Try Graphics(640, 480)
+    Local canvas = Screen.Canvas()
+    Local frames = 0
+    While !video.Ended() && !Window.Closed() && !KeyHit(Key.ESCAPE)
+        If !watching Then Audio.Mix(1920)
+        video.Update(watching ? Frame.Delta() : 1.0 / 25)
+        Try video.DrawFitted(canvas, Screen.Width(), Screen.Height())
+        Flip()
+        frames += 1
+        // A headless run's frames are a 25th of a second each, of its 2 s of video, however long
+        // they take.
+        If !watching && frames > 600 Then Break
+    End While
+    If !watching
+        Print("it played to its end: {video.Ended()}, in {video.FramesShown()} frames shown")
+    End If
+    video.Free()
+    Audio.Stop()
+End Function
+
+Try
+    Try Run()
+Catch error As Error
+    Print("couldn't play it: {error.Message}")
+End Try

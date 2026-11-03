@@ -1,0 +1,187 @@
+// A video's end: its last frame shown, however its stream ends, played or seeked to; a loop
+// turned off near its end; and a clock moved on a long way at once.
+
+Import std.math
+Import std.test
+Import std.time
+Import fbengine_video
+
+// Videos whose streams end in each way: B-frames last, closed groups, three B-frames, a picture
+// of a B-frame cut short, P-frames only, and a larger one with sound.
+Function Endings(): (String, UInt8[])[] => [("cgop", Embed("media/cgop.mpg")),
+                                            ("ntsc", Embed("media/ntsc.mpg")),
+                                            ("busy", Embed("media/busy.mpg")),
+                                            ("cutb", Embed("media/cutb.mpg")),
+                                            ("countb", Embed("media/countb.mpg")),
+                                            ("count", Embed("media/count.mpg"))]
+
+Function FramesOf(video: Video): Int64 => Round(video.Duration() * video.FrameRate()) As Int64
+
+@Test
+Function EveryVideoShowsItsLastFrameThenEnds() Throws VideoError
+    For entry In Endings()
+        Local name, bytes = entry
+        Local video = Try Video.Load(bytes)
+        Defer video.Free()
+        Local frames = FramesOf(video)
+        video.Play()
+        Local last: Int64 = -1
+        Local updates = 0
+        While !video.Ended() && updates < frames * 2
+            last = video.FrameNumber()
+            video.Update(1.0 / video.FrameRate())
+            updates += 1
+        End While
+        Expect(video.Ended(), "{name} hasn't ended after {updates} frames")
+        Expect(last == frames - 1, "{name}'s last frame shown is {last}, of {frames}")
+    End For
+End Function
+
+// A game waiting for Ended after a seek to the end, or near it, stops.
+@Test
+Function ASeekToTheEndShowsTheLastFrameAndEnds() Throws VideoError
+    For entry In Endings()
+        Local name, bytes = entry
+        Local video = Try Video.Load(bytes)
+        Defer video.Free()
+        Local frames = FramesOf(video)
+        video.Seek(1.0)
+        video.Seek(video.Duration())
+        Expect(video.FrameNumber() == frames - 1,
+               "{name}: Seek(Duration()) shows frame {video.FrameNumber()}, of {frames}")
+        Expect(video.Ended(), "{name} hasn't ended at its end")
+        For back = 1 To 5
+            video.Seek(((frames - back) As Float64) / video.FrameRate())
+            Expect(video.FrameNumber() == frames - back,
+                   "{name}: {back} from the end shows {video.FrameNumber()}, of {frames}")
+            video.Play()
+            Local updates = 0
+            While !video.Ended() && updates < 10
+                video.Update(1.0 / video.FrameRate())
+                updates += 1
+            End While
+            Expect(video.Ended() && video.FrameNumber() == frames - 1,
+                   "{name}: {back} from the end, after {updates} frames, shows {video.FrameNumber()}")
+        End For
+    End For
+End Function
+
+// Its thread has gone on into the next loop by the time looping's turned off, as in a game.
+@Test
+Function ALoopTurnedOffNearItsEndEndsThere() Throws VideoError
+    For off In [49, 48, 47]
+        Local video = Try Video.Load(Embed("media/count.mpg"))
+        Defer video.Free()
+        video.SetLoop(True)
+        video.Play()
+        For i = 1 To off
+            video.Update(1.0 / 25)
+        End For
+        Expect(video.FrameNumber() == off)
+        Sleep(100.Milliseconds)
+        video.SetLoop(False)
+        For i = off + 1 To 50
+            video.Update(1.0 / 25)
+            If i < 50 Then Expect(video.FrameNumber() == i,
+                                  "off at {off}, it shows {video.FrameNumber()} at {i}")
+        End For
+        Expect(video.Ended(), "off at {off}, it goes on to frame {video.FrameNumber()}")
+    End For
+End Function
+
+// A clock moved on ten minutes at once seeks there, rather than decoding every frame between.
+@Test
+Function AClockMovedOnALongWaySeeksThere() Throws VideoError
+    Local video = Try Video.Load(Embed("media/count.mpg"))
+    Defer video.Free()
+    video.SetLoop(True)
+    video.Play()
+    Local start = Instant.Now()
+    video.Update(600.52)
+    Expect(start.Elapsed < 500.Milliseconds, "it took {start.Elapsed}")
+    Expect(video.FrameNumber() == 13, "it shows {video.FrameNumber()}")
+    Expect(Abs(video.Time() - 0.52) < 0.001, "its time is {video.Time()}")
+    // And plays on from there, into the next loop.
+    For i = 14 To 60
+        video.Update(1.0 / 25)
+        Expect(video.FrameNumber() == i % 50)
+    End For
+    // Not looping, it ends at its last frame.
+    Local once = Try Video.Load(Embed("media/countb.mpg"))
+    Defer once.Free()
+    once.Play()
+    once.Update(1.0)
+    start = Instant.Now()
+    once.Update(600)
+    Expect(start.Elapsed < 500.Milliseconds, "it took {start.Elapsed}")
+    Expect(once.Ended() && once.FrameNumber() == 49)
+End Function
+
+// Its thread has gone on into the next loop, which turning looping off lets go of; turned on
+// again at once, the video loops on as if it never was off.
+@Test
+Function ALoopTurnedOffAndOnAgainAtItsEndGoesOn() Throws VideoError
+    For off In [49, 48, 47]
+        Local video = Try Video.Load(Embed("media/count.mpg"))
+        Defer video.Free()
+        video.SetLoop(True)
+        video.Play()
+        For i = 1 To off
+            video.Update(1.0 / 25)
+        End For
+        Sleep(100.Milliseconds)
+        video.SetLoop(False)
+        video.SetLoop(True)
+        For i = off + 1 To 56
+            video.Update(1.0 / 25)
+            Expect(video.FrameNumber() == i % 50,
+                   "off and on at {off}, it shows {video.FrameNumber()} at {i}")
+        End For
+        Expect(!video.Ended())
+    End For
+End Function
+
+// A clock moved on by years, as far as it moves at a time, is as exact as at the start.
+@Test
+Function AClockMovedOnByYearsIsExact() Throws VideoError
+    Local video = Try Video.Load(Embed("media/count.mpg"))
+    Defer video.Free()
+    video.SetLoop(True)
+    video.Play()
+    Local start = Instant.Now()
+    video.Update(999999600.52)
+    Expect(video.FrameNumber() == 13, "it shows {video.FrameNumber()}")
+    For i = 1 To 100
+        video.Update(1e9)
+    End For
+    Expect(start.Elapsed < 2000.Milliseconds, "it took {start.Elapsed}")
+    Expect(video.FrameNumber() == 13, "it shows {video.FrameNumber()}")
+    Expect(Abs(video.Time() - 0.52) < 0.001, "its time is {video.Time()}")
+    For i = 14 To 60
+        video.Update(1.0 / 25)
+        Expect(video.FrameNumber() == i % 50, "it shows {video.FrameNumber()} at {i}")
+    End For
+End Function
+
+// Looping turned on and off with the thread at the end, at once or as its seek to the next loop's
+// under way, as in a video of one group of 120 pictures, ends there all the same.
+@Test
+Function ALoopTurnedOnAndOffAtTheEndEndsThere() Throws VideoError
+    For entry In [("count", Embed("media/count.mpg")), ("longgroup", Embed("media/longgroup.mpg"))]
+        Local name, bytes = entry
+        For wait In [0, 2, 5]
+            Local video = Try Video.Load(bytes)
+            Defer video.Free()
+            Local frames = FramesOf(video)
+            video.Seek(((frames - 1) As Float64) / video.FrameRate())
+            Sleep(20.Milliseconds)
+            video.SetLoop(True)
+            If wait > 0 Then Sleep((wait As Int64).Milliseconds)
+            video.SetLoop(False)
+            video.Play()
+            video.Update(1.0 / video.FrameRate())
+            Expect(video.Ended() && video.FrameNumber() == frames - 1,
+                   "{name}, {wait} ms between: it shows {video.FrameNumber()}, of {frames}")
+        End For
+    End For
+End Function

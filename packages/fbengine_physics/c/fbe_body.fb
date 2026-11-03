@@ -18,6 +18,11 @@ End Struct
     Public Field w: Float32
 End Struct
 
+@CLayout Public Struct fbe_body_pose_t
+    Public Field position: fbe_body_vec3_t
+    Public Field rotation: fbe_body_quat_t
+End Struct
+
 Public Extern "C" Lib "fbengine_physics_native"
     Function fbe_body_add(world: UInt64, shape: UInt64, motion: Int32,
                           position: Ptr<fbe_body_vec3_t>, rotation: Ptr<fbe_body_quat_t>): UInt64
@@ -55,4 +60,22 @@ Public Extern "C" Lib "fbengine_physics_native"
     Function fbe_body_active(body: UInt64): Bool
     Function fbe_body_wake(body: UInt64): Bool
     Function fbe_body_sleep(body: UInt64): Bool
+    Function fbe_body_layer(body: UInt64): Int32
+    Function fbe_body_set_layer(body: UInt64, layer: Int32): Bool
+    Function fbe_body_sensor(body: UInt64): Bool
+    Function fbe_body_set_sensor(body: UInt64, sensor: Bool): Bool
+    Function fbe_body_touching(body: UInt64, bodies: Ptr<UInt64>, capacity: Int32): Int32
+    Function fbe_body_move_to(body: UInt64, position: Ptr<fbe_body_vec3_t>,
+                              rotation: Ptr<fbe_body_quat_t>, seconds: Float32): Bool
+    Function fbe_body_poses_moved(bodies: Ptr<UInt64>, poses: Ptr<fbe_body_pose_t>,
+                                  moved: Ptr<Int32>, count: Int32): Int32
+    Function fbe_body_follow(bodies: Ptr<UInt64>, poses: Ptr<fbe_body_pose_t>,
+                             kept: Ptr<fbe_body_pose_t>, count: Int32, seconds: Float32,
+                             step: Float32): Bool
+    Function fbe_body_teleport(body: UInt64, position: Ptr<fbe_body_vec3_t>,
+                               rotation: Ptr<fbe_body_quat_t>): Bool
+    Function fbe_body_continuous(body: UInt64): Bool
+    Function fbe_body_set_continuous(body: UInt64, continuous: Bool): Bool
+    Function fbe_body_can_sleep(body: UInt64): Bool
+    Function fbe_body_set_can_sleep(body: UInt64, can_sleep: Bool): Bool
 End Extern

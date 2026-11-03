@@ -14,7 +14,13 @@
 namespace fbe::physics {
 
 /// The kinds of fbengine_physics' handles, in its range of architecture.md's, 96 to 127.
-enum handle_kind_t : std::uint8_t { WORLD_KIND = 96, SHAPE_KIND = 97, BODY_KIND = 98 };
+enum handle_kind_t : std::uint8_t {
+    WORLD_KIND = 96,
+    SHAPE_KIND = 97,
+    BODY_KIND = 98,
+    JOINT_KIND = 99,
+    CHARACTER_KIND = 100,
+};
 
 /// The objects of one kind, each owned by its slot, by handle.
 template <typename T>

@@ -1,0 +1,113 @@
+// Jolt's own sample scenes stay stable: a pyramid, a wall, a chain, and a heavy box on a light one
+// stand or hang as they're built for ten seconds, and the ones that stand come to rest.
+
+Import std.math
+Import std.test
+Import fbengine_physics
+
+Function Run(world: PhysicsWorld, seconds: Float64)
+    For i = 1 To Round(seconds * 60) As Int
+        world.Step(1.0 / 60)
+    End For
+End Function
+
+Function Floored(): PhysicsWorld
+    Local world = PhysicsWorld()
+    Body(world, Shape.Box(Vec3(60, 1, 60)), Motion.STATIC, Vec3(0, -0.5, 0))
+    Return world
+End Function
+
+// Whether every one of `bodies` is no further than `within` from where `starts` says it began, and
+// asleep, saying which isn't if one isn't.
+Function Standing(bodies: Body[], starts: Vec3[], within: Float): Bool
+    For i = 0 To bodies.Count - 1
+        Local moved = Distance(bodies[i].Position(), starts[i])
+        If moved > within || bodies[i].Active()
+            Fail("body {i} moved {moved} m, to {bodies[i].Position()}, and is awake: {bodies[i].Active()}")
+            Return False
+        End If
+    End For
+    Return True
+End Function
+
+@Test
+Function APyramidOfBoxesStands()
+    Local world = Floored()
+    Defer world.Free()
+    Local box = Shape.Box(Vec3(1, 1, 1))
+    Local boxes: Body[] = []
+    Local starts: Vec3[] = []
+    For layer = 0 To 9
+        For i = 0 To 9 - layer
+            Local at = Vec3((i As Float) - ((9 - layer) As Float) / 2, 0.5 + (layer As Float), 0)
+            boxes.Add(Body(world, box, Motion.DYNAMIC, at))
+            starts.Add(at)
+        End For
+    End For
+    Run(world, 10.0)
+    // Each sinks its slop, 2 cm, into what's under it, a layer at a time.
+    Expect(Standing(boxes, starts, 0.25))
+    Expect(Abs(boxes[boxes.Count - 1].Position().x) < 0.05)
+End Function
+
+@Test
+Function AWallOfBoxesStands()
+    Local world = Floored()
+    Defer world.Free()
+    Local brick = Shape.Box(Vec3(1, 0.5, 0.5))
+    Local bricks: Body[] = []
+    Local starts: Vec3[] = []
+    For row = 0 To 7
+        // Each row's bricks half a brick along from the last's, one fewer, so none hangs off.
+        Local offset = (row % 2) == 0 ? 0.0 : 0.5
+        For i = 0 To 11 - (row % 2)
+            Local at = Vec3((i As Float) + offset - 6, 0.25 + (row As Float) * 0.5, 0)
+            bricks.Add(Body(world, brick, Motion.DYNAMIC, at))
+            starts.Add(at)
+        End For
+    End For
+    Run(world, 10.0)
+    Expect(Standing(bricks, starts, 0.2))
+End Function
+
+@Test
+Function AChainHangsFromItsHookWithItsLinksTogether()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    // Twenty links of 0.5 m along X, each held to the last at their ends, the first to the world.
+    Local link = Shape.Capsule(0.5, 0.05)
+    Local turned = Quat.FromAxisAngle(Vec3(0, 0, 1), Pi / 2)
+    Local links: Body[] = []
+    For i = 0 To 19
+        Local made = Body(world, link, Motion.DYNAMIC, Vec3(0.25 + (i As Float) * 0.5, 10, 0),
+                          turned)
+        Local joint = (i As Float) * 0.5
+        If i == 0
+            Joint.Point(made, Null, Vec3(0, 10, 0))
+        Else
+            Joint.Point(made, links[i - 1], Vec3(joint, 10, 0))
+        End If
+        links.Add(made)
+    End For
+    Run(world, 10.0)
+    // It's swung down to hang from its hook, the links still end to end.
+    Local last = links[19].Position()
+    Expect(last.y < 1, "its end is at {last}")
+    For i = 1 To 19
+        Local apart = Distance(links[i].Position(), links[i - 1].Position())
+        Expect(Abs(apart - 0.5) < 0.05, "links {i - 1} and {i} are {apart} apart")
+    End For
+    Expect(Distance(links[0].Position(), Vec3(0, 10, 0)) < 0.3)
+End Function
+
+@Test
+Function AHeavyBoxOnALightOneStands()
+    Local world = Floored()
+    Defer world.Free()
+    Local light = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0.5, 0))
+    light.SetMass(10)
+    Local heavy = Body(world, Shape.Box(Vec3(2, 2, 2)), Motion.DYNAMIC, Vec3(0, 2, 0))
+    heavy.SetMass(1000)
+    Run(world, 10.0)
+    Expect(Standing([light, heavy], [Vec3(0, 0.5, 0), Vec3(0, 2, 0)], 0.1))
+End Function
