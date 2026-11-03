@@ -130,6 +130,10 @@ FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t col
 // How many times `world` has been stepped, -1 if it isn't a world.
 FBE_PHYSICS_API int64_t fbe_physics_steps(uint64_t world);
 
+// How many times something's moved `world`'s bodies, a step or a call that puts one somewhere, so
+// what reads where they are knows when nothing's changed; -1 if it isn't a world.
+FBE_PHYSICS_API int64_t fbe_physics_moves(uint64_t world);
+
 // Whether `world`'s last step ran out of room for the pairs of bodies touching or their contacts,
 // and so left some out, as a world of too many touching bodies for its size does. Which it left
 // out depends on its threads, so a step that overflows isn't deterministic.

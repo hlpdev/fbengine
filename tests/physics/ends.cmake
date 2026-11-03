@@ -1,9 +1,9 @@
-# Runs PROGRAM, which makes a world on Jolt's most threads and ends at once, a few at a time for RUNS
-# rounds, so they start their threads on a busy machine, and fails if one doesn't end within 20
-# seconds, or ends any way but with 101, as it says it did. How many at a time is
-# $ENV{FBENGINE_ENDS_AT_ONCE}, or 2: CI's 8, at which fbengine_physics 5350470's job threads hung about
-# once in 300, is too many beside other test runs on a person's machine. DLLS is where its DLL is,
-# which Windows finds on the PATH.
+# Runs PROGRAM, which makes a world on Jolt's most threads and ends at once, a few at a time for
+# RUNS rounds, so they start their threads on a busy machine, and fails if one doesn't end within
+# 20 seconds, or ends any way but with 101, as it says it did. How many at a time is
+# $ENV{FBENGINE_ENDS_AT_ONCE}, or 2: CI's 8, at which fbengine_physics 5350470's job threads hung
+# about once in 300, is too many beside other test runs on a person's machine. DLLS is where its
+# DLL is, which Windows finds on the PATH.
 set(AT_ONCE 2)
 if(DEFINED ENV{FBENGINE_ENDS_AT_ONCE})
   set(AT_ONCE "$ENV{FBENGINE_ENDS_AT_ONCE}")

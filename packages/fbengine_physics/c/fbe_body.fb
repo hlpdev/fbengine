@@ -69,8 +69,11 @@ Public Extern "C" Lib "fbengine_physics_native"
                               rotation: Ptr<fbe_body_quat_t>, seconds: Float32): Bool
     Function fbe_body_poses_moved(bodies: Ptr<UInt64>, poses: Ptr<fbe_body_pose_t>,
                                   moved: Ptr<Int32>, count: Int32): Int32
-    Function fbe_body_follow(bodies: Ptr<UInt64>, poses: Ptr<fbe_body_pose_t>, count: Int32,
-                             seconds: Float32): Bool
+    Function fbe_body_follow(bodies: Ptr<UInt64>, poses: Ptr<fbe_body_pose_t>,
+                             kept: Ptr<fbe_body_pose_t>, count: Int32, seconds: Float32,
+                             step: Float32): Bool
+    Function fbe_body_teleport(body: UInt64, position: Ptr<fbe_body_vec3_t>,
+                               rotation: Ptr<fbe_body_quat_t>): Bool
     Function fbe_body_continuous(body: UInt64): Bool
     Function fbe_body_set_continuous(body: UInt64, continuous: Bool): Bool
     Function fbe_body_can_sleep(body: UInt64): Bool

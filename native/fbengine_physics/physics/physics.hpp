@@ -167,6 +167,8 @@ struct world_t {
     std::vector<fbe_physics_contact_t> began;
     std::vector<std::uint64_t> ended;
     std::int64_t steps = 0;
+    // How many times something's moved its bodies: a step, or a call that puts one somewhere.
+    std::int64_t moves = 0;
     bool overflowed = false;
     // Bodies added and taken out since the last step or optimize, which Jolt's broad phase keeps
     // room for until one.

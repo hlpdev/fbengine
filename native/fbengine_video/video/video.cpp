@@ -323,6 +323,8 @@ struct video_t {
         restart(seek_t{ .to = seconds, .loop = 0 });
         clock = seconds;
         clock_loop = 0;
+        // To a looping video's end is the next loop's start, as the clock moved there would be.
+        move_clock(0.0);
         ended = false;
         showing_next = true;
         show_due();

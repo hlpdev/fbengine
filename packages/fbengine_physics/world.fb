@@ -13,6 +13,7 @@ Import "./physics"
 Import "./shape"
 Import "./state"
 Import "./sync"
+Import fbengine
 
 /// A world of bodies, which Jolt moves on each time it's stepped: by Step, for the time a game
 /// says, or by Update, at a fixed rate for the time frames take, as most games want, since a
@@ -144,7 +145,9 @@ Public Final Class PhysicsWorld
         // What's out of range C says so of.
         If steps == 0 && seconds > 0 && seconds <= 1 Then steps = CollisionStepsFor(seconds)
         If steps == 0 Then steps = 1
-        If !updating && seconds > 0 && seconds <= 1 Then attachments.Follow(seconds As Float32)
+        If !updating && seconds > 0 && seconds <= 1
+            attachments.Follow(seconds As Float32, seconds As Float32)
+        End If
         If !fbe_physics_step(world, seconds As Float32, steps)
             Panic("PhysicsWorld.Step: {LastError()}")
         End If
@@ -153,7 +156,7 @@ Public Final Class PhysicsWorld
             ended.Clear()
         End If
         TakeContacts()
-        If !updating Then attachments.Drive()
+        If !updating Then attachments.Drive(fbe_physics_moves(world))
     End Method
 
     /// How many times the world's been stepped, by Step and by Update.
@@ -168,7 +171,9 @@ Public Final Class PhysicsWorld
     /// Steps the world for `seconds` of time, from 0 on, as a frame took: as many steps of a
     /// StepRate()th of a second as are due, carrying what's left over to the next Update. It takes
     /// at most MaxSteps() of them, dropping the rest of the time, so a slow frame never makes the
-    /// next one slower. Gives how many steps it took.
+    /// next one slower. Gives how many steps it took. It keeps entities that bodies drive where
+    /// they are, in one batch at its end, and captures their Worlds before its last step, so
+    /// RenderWorld(world.Alpha()) draws them between its last two steps.
     @MainThread Public Method Update(seconds: Float64): Int32
         Live("PhysicsWorld.Update")
         If !(seconds >= 0 && seconds < 1e9)
@@ -188,16 +193,21 @@ Public Final Class PhysicsWorld
             left -= step
             stepsDue += 1
         End While
-        If stepsDue > 0 Then attachments.Follow((stepsDue * step) As Float32)
+        If stepsDue > 0 Then attachments.Follow((stepsDue * step) As Float32, step As Float32)
         updating = True
         While owed >= due && taken < mostSteps
+            // What's drawn between steps is from where the last began.
+            If taken == stepsDue - 1
+                attachments.DriveIfMoved(fbe_physics_moves(handle))
+                attachments.CaptureWorlds()
+            End If
             Step(step)
             owed -= step
             taken += 1
         End While
         updating = False
         If owed >= due Then owed = 0
-        If taken > 0 Then attachments.Drive()
+        If taken > 0 Then attachments.Drive(fbe_physics_moves(handle))
         Return taken
     End Method
 
@@ -205,9 +215,13 @@ Public Final Class PhysicsWorld
     /// each Step, Update, and Flip do, for what moves a body between them, as a Character's Move or
     /// SetPosition, to draw where it's gone in the same frame.
     @MainThread Public Method Sync()
-        Live("PhysicsWorld.Sync")
-        attachments.Drive()
+        attachments.Drive(fbe_physics_moves(Live("PhysicsWorld.Sync")))
     End Method
+
+    // How many entities' poses its batches have written, and what's moved its bodies, for tests.
+    @MainThread Package Method Writes(): Int64 => attachments.writes
+
+    @MainThread Package Method Moves(): Int64 => fbe_physics_moves(Live("PhysicsWorld.Moves"))
 
     /// Has each Flip Update the world for the time the last frame took, so a game needn't, or stops
     /// it. A game that steps it itself, as one that's deterministic must, leaves this off, as it is
@@ -224,10 +238,18 @@ Public Final Class PhysicsWorld
         Return eachFrame
     End Method
 
+    // What's kept with `entity`, or Null.
+    @MainThread Package Method AttachmentOf(entity: Entity): Attachment? => attachments.Of(entity)
+
     // Keeps `attachment`, whose body's in it, and works for it at each Flip.
     @MainThread Package Method Attach(attachment: Attachment)
         attachments.Add(attachment)
         ListForFlips()
+    End Method
+
+    // Lets go of `attachment`.
+    @MainThread Package Method LetGo(attachment: Attachment)
+        attachments.Drop(attachment)
     End Method
 
     @MainThread Method ListForFlips()
@@ -240,14 +262,36 @@ Public Final Class PhysicsWorld
     @MainThread Package Method AtFlip(seconds: Float64): Bool
         If handle == 0 Then Return False
         If eachFrame Then Update(seconds)
-        attachments.Drive()
+        attachments.DriveIfMoved(fbe_physics_moves(handle))
         atFlips = eachFrame || attachments.Any()
         Return atFlips
     End Method
 
     /// How far through the next step the time Update has been given is, from 0 up to 1, for
-    /// drawing what moves between its last two steps. After SetStepRate raises the rate, it can
-    /// read 1 until the next Update takes the steps now due.
+    /// drawing what moves between its last two steps, as an entity's TweenedMatrix or RenderWorld
+    /// takes it. After SetStepRate raises the rate, it can read 1 until the next Update takes the
+    /// steps now due.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// Import std.math
+    /// Import fbengine
+    /// Import fbengine_physics
+    ///
+    /// Local world = PhysicsWorld()
+    /// Local ball = Pivot()
+    /// Local body = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, ball)
+    /// body.SetVelocity(Vec3(60, 0, 0))
+    /// world.SetGravity(Vec3(0, 0, 0))
+    /// // A frame of a 144th of a second, which takes no step at first.
+    /// world.Update(1.0 / 60)
+    /// world.Update(1.0 / 144)
+    /// // A step moves it a meter; it's drawn as far between the last two as the time's gone on.
+    /// Expect(Abs(ball.TweenedMatrix(world.Alpha() As Float).w.x - (world.Alpha() As Float)) < 0.01)
+    /// world.Free()
+    /// ball.Free()
+    /// ```
     @MainThread Public Method Alpha(): Float64
         Live("PhysicsWorld.Alpha")
         Return Clamp(owed * (rate As Float64), 0.0, 1.0)
@@ -470,7 +514,8 @@ Public Final Class PhysicsWorld
         owed = carried
         began.Clear()
         ended.Clear()
-        attachments.Drive()
+        attachments.Drive(fbe_physics_moves(world))
+        attachments.FollowersToBodies()
     End Method
 
     // What began and ended in the step just taken.

@@ -301,6 +301,22 @@ TEST_CASE("a loop turned off as the thread seeks to the next ends at the end") {
     CHECK(fbe_video_frame_number(video.get()) == 1);
 }
 
+// A seek to a looping video's end is the next loop's start, whose frames go on by the clock, though
+// looping's turned off then.
+TEST_CASE("a seek to a looping video's end keeps its clock in the loop it shows") {
+    control_t control;
+    const video_handle_t video(control);
+    fbe_video_set_loop(video.get(), true);
+    fbe_video_seek(video.get(), static_cast<double>(frames) * frame);
+    let_it_decode();
+    fbe_video_set_loop(video.get(), false);
+    fbe_video_play(video.get());
+    CHECK(fbe_video_frame_number(video.get()) == 0);
+    REQUIRE(fbe_video_update(video.get(), frame));
+    CHECK(fbe_video_frame_number(video.get()) == 1);
+    CHECK(std::abs(fbe_video_time(video.get()) - frame) < 1e-6);
+}
+
 // Looping turned off as the thread starts the next loop by itself ends this one.
 TEST_CASE("a loop turned off as the thread starts the next by itself ends at the end") {
     control_t control;

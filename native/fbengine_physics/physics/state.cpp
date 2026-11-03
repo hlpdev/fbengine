@@ -302,7 +302,11 @@ FBE_PHYSICS_API bool fbe_physics_restore(uint64_t world, const uint8_t* bytes, i
         return fail("that isn't a world's state");
     }
     const std::span held = held_by(std::span(bytes, static_cast<std::size_t>(size)));
-    return !held.empty() && restore(*found, held, *carried);
+    if (held.empty() || !restore(*found, held, *carried)) {
+        return false;
+    }
+    ++found->moves;
+    return true;
 }
 
 } // extern "C"

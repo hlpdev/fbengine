@@ -395,6 +395,16 @@ if(FBENGINE_FB_TESTS)
     set_tests_properties(physics.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
                          "panic: PhysicsWorld\\.Step: [^\n]*${said}" TIMEOUT 60)
   endforeach()
+  # Two bodies of a world keeping one entity.
+  foreach(case IN ITEMS "drive-taken;Drive" "follow-taken;Follow")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME physics.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/physics/panics"
+                     -- ${name})
+    set_tests_properties(physics.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
+                         "panic: Body\\.${said}: another body of this world already keeps" TIMEOUT 60)
+  endforeach()
   # A world still alive as a panic ends the program, which then exits as a panic does.
   add_test(NAME physics.panics.with-a-world
            COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}"

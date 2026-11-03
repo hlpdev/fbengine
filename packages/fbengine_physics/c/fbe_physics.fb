@@ -51,6 +51,7 @@ Public Extern "C" Lib "fbengine_physics_native"
     Function fbe_physics_gravity(world: UInt64, gravity: Ptr<fbe_physics_vec3_t>): Bool
     Function fbe_physics_step(world: UInt64, seconds: Float32, collision_steps: Int32): Bool
     Function fbe_physics_steps(world: UInt64): Int64
+    Function fbe_physics_moves(world: UInt64): Int64
     Function fbe_physics_overflowed(world: UInt64): Bool
     Function fbe_physics_set_collides(world: UInt64, a: Int32, b: Int32, collides: Bool): Bool
     Function fbe_physics_collides(world: UInt64, a: Int32, b: Int32): Bool

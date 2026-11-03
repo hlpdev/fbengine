@@ -239,6 +239,7 @@ FBE_PHYSICS_API bool fbe_character_move(uint64_t character, const fbe_character_
     update.mWalkStairsStepUp = JPH::Vec3(0.0F, found->step_height, 0.0F);
     update.mStickToFloorStepDown = JPH::Vec3(0.0F, -found->step_height * stick_down_of_step, 0.0F);
     const filters_t filters(*found);
+    ++found->world->moves;
     moving.ExtendedUpdate(seconds, found->world->system.GetGravity(), update, filters.broad_phase,
                           filters.objects, filters.bodies, filters.shapes, step_memory());
     return true;
@@ -265,6 +266,7 @@ FBE_PHYSICS_API bool fbe_character_set_position(uint64_t character,
         return fail("a character's position is finite");
     }
     found->character->SetPosition(vec3(*position));
+    ++found->world->moves;
     return true;
 }
 

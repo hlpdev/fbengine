@@ -94,8 +94,8 @@ Public Final Class Video
         Return Try Load(bytes)
     End Method
 
-    /// Frees the video, stopping its thread; using it after panics. Freeing one that's freed
-    /// already does nothing.
+    /// Frees the video, stopping its thread and its sound, and freeing its Texture; using it after
+    /// panics. Freeing one that's freed already does nothing.
     @MainThread Public Method Free()
         If handle == 0 Then Return
         channel.Stop()
@@ -112,7 +112,9 @@ Public Final Class Video
 
     // A video dropped unfreed frees itself.
     Method Destroy()
-        If handle != 0 Then fbe_video_free(handle)
+        If handle == 0 Then Return
+        channel.Stop()
+        fbe_video_free(handle)
     End Method
 
     /// Whether Free has freed the video.
@@ -174,6 +176,7 @@ Public Final Class Video
         Live("Video.SetVolume")
         If !(volume >= 0) Then Panic("Video.SetVolume: a volume is 0 or more, not {volume}")
         Self.volume = volume
+        If !channel.Playing() Then Return
         Local playing = Played()
         If playing != Null Then channel.SetVolume(playing.Volume() * volume)
     End Method
@@ -188,6 +191,7 @@ Public Final Class Video
     @MainThread Public Method SetBus(bus: Bus?)
         Live("Video.SetBus")
         Self.bus = bus
+        If !channel.Playing() Then Return
         Local playing = Played()
         If playing != Null Then channel.SetBus(bus ?? playing.Bus())
     End Method
@@ -201,10 +205,10 @@ Public Final Class Video
     /// The video's whole sound, as a WAV file of 32-bit float samples at its rate, whose first
     /// sample is at the video's time 0, its first frame's, however its stream was cut, as it plays
     /// with the video, or as a game plays it itself, with SetVolume(0): silent until a sound that
-    /// starts later starts, and where its stream has
-    /// a gap, though a time in it more than the sound's own length and the video's, or 5 seconds
-    /// if that's more, or 10 minutes if that's less, out is taken to be wrong. It's decoded once, as
-    /// the video's opened. A video without sound has none to give.
+    /// starts later starts, and where its stream has a gap, though a time in it more than the
+    /// sound's own length and the video's, or 5 seconds if that's more, or 10 minutes if that's
+    /// less, out is taken to be wrong. It's decoded once, as the video's opened. A video without
+    /// sound has none to give.
     @MainThread Public Method Sound(): UInt8[]
         Local video = Live("Video.Sound")
         Local size = fbe_video_sound(video, Null, 0)
@@ -254,6 +258,8 @@ Public Final Class Video
         Local moving = seconds
         // What's out of range C says so of.
         If fbe_video_playing(video) && seconds >= 0 && IsFinite(seconds)
+            // The audio stopped finishes its sound, and started again, it starts again.
+            If soundStarted && !Audio.Started() Then soundStarted = False
             If !soundStarted Then SoundFromClock()
             moving = ClockStep(seconds, before)
         End If
@@ -396,11 +402,10 @@ Public Final Class Video
 
     // Plays its sound from where the clock is, if the audio's started and it has one.
     @MainThread Method SoundFromClock()
+        soundStarted = False
+        If !Audio.Started() Then Return
         Local playing = Played()
-        If playing == Null || !Audio.Started()
-            soundStarted = False
-            Return
-        End If
+        If playing == Null Then Return
         soundStarted = True
         If !channel.Playing()
             channel = playing.Play(True)

@@ -104,7 +104,7 @@ Public Final Class Body
     @MainThread Public Method Free()
         If handle == 0 Then Return
         If character Then Panic("Body.Free: a character's body goes as its character goes")
-        If attachment != Null Then Detach()
+        LetGo(False)
         fbe_body_free(handle)
         Local in = world
         If in != Null
@@ -139,15 +139,21 @@ Public Final Class Body
         If !fbe_body_set_motion(Live("Body.SetMotion"), motion As Int32)
             Panic("Body.SetMotion: {LastError()}")
         End If
-        If (motion As Int32) != FBE_BODY_KINEMATIC && Following() Then Detach()
+        // It goes on as it was moving.
+        If (motion As Int32) != FBE_BODY_KINEMATIC && Following() Then LetGo(False)
     End Method
 
     /// Makes the body drive `entity`, in place of anything it's kept with: the entity's put where
     /// the body is in the world, and turned as it is, now, and whenever the body's moved, after each
     /// Step and Update, as they end, and at each Flip, all such in one batch. Its scale stays its
-    /// own. What moves the entity itself lasts until the body next moves. The body of a Character
-    /// that's moved between steps moves its entity at the Flip, or at its world's Sync. Drawing
-    /// between steps is the scene's: a FixedStep captures its World before each Step.
+    /// own. What moves an entity at the top of its World lasts until the body next moves; one with
+    /// a parent is put back by the next batch, so it's where its body is however its parent moves.
+    /// The body of a Character that's moved between steps moves its entity at the Flip, or at its
+    /// world's Sync. Another body in this world keeping it panics; one in another world each
+    /// overwrites, as the last to step says. A frame's order is a Capture, the game's logic,
+    /// UpdateWorld, then Step, as UpdateEachFrame does at the Flip: UpdateWorld's Collide moving a
+    /// driven entity lasts only until its body next moves. Update draws between steps by Alpha; a
+    /// FixedStep that calls Step does by its own capture and Tween.
     ///
     /// # Examples
     ///
@@ -158,6 +164,7 @@ Public Final Class Body
     ///
     /// Local world = PhysicsWorld()
     /// Local scene = World()
+    /// World.SetCurrent(scene)
     /// Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 5, 0))
     /// Local shown = Pivot()
     /// ball.Drive(shown)
@@ -167,7 +174,7 @@ Public Final Class Body
     /// scene.Free()
     /// ```
     @MainThread Public Method Drive(entity: Entity)
-        Local in = Attaching("Body.Drive")
+        Local in = Attaching("Body.Drive", entity)
         entity.SetPosition(Position(), Space.WORLD)
         entity.SetRotation(Rotation(), Space.WORLD)
         Attach(in, entity, True)
@@ -176,8 +183,13 @@ Public Final Class Body
     /// Makes a kinematic body follow `entity`, in place of anything it's kept with: it's put where
     /// the entity is in the world, turned as it is, now, and before each step, or the steps of an
     /// Update, it's moved to where the entity is by the end of them, as MoveTo moves it, pushing what
-    /// it meets, all such in one batch. An entity that's gone further than MoveTo would take it, as
-    /// a teleport does, has its body put there at once. A body made dynamic stops following.
+    /// it meets, all such in one batch. An entity that's gone further in a step than Jolt moves a
+    /// body, 500 m/s, or 8.3 m in a 60th of a second, has its body put there at once, whatever the
+    /// frame took; under that it's moved, as fast as it went, flinging what it meets, so a jump
+    /// uses Teleport too. A body made dynamic stops following, going on as it was moving. Another
+    /// body in this world keeping it panics. It reads the entity before each step, so a body that
+    /// follows an entity under one a body drives lags that by a step: what rides a moving body is
+    /// a joint, or part of a compound.
     ///
     /// # Examples
     ///
@@ -188,6 +200,7 @@ Public Final Class Body
     ///
     /// Local world = PhysicsWorld()
     /// Local scene = World()
+    /// World.SetCurrent(scene)
     /// Local door = Pivot()
     /// Local body = Body(world, Shape.Box(Vec3(1, 2, 0.1)), Motion.KINEMATIC, Vec3(0, 0, 0))
     /// body.Follow(door)
@@ -198,7 +211,7 @@ Public Final Class Body
     /// scene.Free()
     /// ```
     @MainThread Public Method Follow(entity: Entity)
-        Local in = Attaching("Body.Follow")
+        Local in = Attaching("Body.Follow", entity)
         If fbe_body_motion(handle) != FBE_BODY_KINEMATIC
             Panic("Body.Follow: only a kinematic body follows an entity, as a door or a lift does")
         End If
@@ -212,11 +225,32 @@ Public Final Class Body
     /// stops moving. One with none does nothing.
     @MainThread Public Method Detach()
         Live("Body.Detach")
+        LetGo(True)
+    End Method
+
+    /// Puts the body at `position`, turned to `rotation`, at once, stopped, and awake unless it's
+    /// static: a jump, which passes through what's between and pushes nothing, as a level's start
+    /// is. A game jumping a followed entity Teleports its body with it, as a move under Follow's
+    /// most would fling what it meets.
+    @MainThread Public Method Teleport(position: Vec3, rotation: Quat)
+        Local at = BodyVec3(position)
+        Local turned = fbe_body_quat_t(rotation.x, rotation.y, rotation.z, rotation.w)
+        Local ok = False
+        Unsafe
+            ok = fbe_body_teleport(Live("Body.Teleport"), AddressOf(at), AddressOf(turned))
+        End Unsafe
+        If !ok Then Panic("Body.Teleport: {LastError()}")
+    End Method
+
+    // Lets go of what it's kept with, stopping it if it followed and `stopping`.
+    @MainThread Method LetGo(stopping: Bool)
         Local attached = attachment
         If attached == Null Then Return
-        attached.gone = True
         attachment = Null
-        If !attached.driving
+        Local in = world
+        If in != Null Then in.LetGo(attached)
+        attached.gone = True
+        If stopping && !attached.driving
             SetVelocity(Vec3(0, 0, 0))
             SetAngularVelocity(Vec3(0, 0, 0))
         End If
@@ -244,18 +278,22 @@ Public Final Class Body
         Return attached != Null && !attached.driving
     End Method
 
-    // Its world, for `call`.
-    @MainThread Method Attaching(call: String): PhysicsWorld
+    // Its world, for `call` to keep it with `entity`, which no other of its bodies is.
+    @MainThread Method Attaching(call: String, entity: Entity): PhysicsWorld
         Live(call)
         Local in = world
         // A world that's gone has freed its bodies.
         If in == Null Then Panic("{call}: this Body was freed")
+        Local kept = in.AttachmentOf(entity)
+        If kept != Null && kept.body != Self
+            Panic("{call}: another body of this world already keeps {entity}")
+        End If
         Return in
     End Method
 
     // Keeps it with `entity` from now on, in place of what it was.
     @MainThread Method Attach(in: PhysicsWorld, entity: Entity, driving: Bool)
-        Detach()
+        LetGo(True)
         Local attached = Attachment(Self, entity, driving)
         attachment = attached
         in.Attach(attached)
@@ -545,8 +583,12 @@ Public Final Class Body
     // Its world's Free freed it.
     @MainThread Package Method Forget()
         Local attached = attachment
-        If attached != Null Then attached.gone = True
         attachment = Null
+        If attached != Null
+            attached.gone = True
+            Local in = world
+            If in != Null Then in.LetGo(attached)
+        End If
         handle = 0
     End Method
 End Class

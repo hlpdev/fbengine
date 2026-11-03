@@ -9,6 +9,7 @@ Import fbengine_physics
 
 Local world = PhysicsWorld()
 Local scene = World()
+World.SetCurrent(scene)
 
 // The lift is the game's to move; its body goes with it.
 Local lift = Pivot()

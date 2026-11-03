@@ -122,6 +122,26 @@ bool within_most(const JPH::Body& moved, JPH::Vec3Arg at, JPH::QuatArg turned, f
            angular.Length() <= motion.GetMaxAngularVelocity();
 }
 
+// Whether `a` is `b`, which a NaN, as a pose not given yet has, never is.
+bool same_pose(const fbe_body_pose_t& a, const fbe_body_pose_t& b) {
+    return a.position.x == b.position.x && a.position.y == b.position.y &&
+           a.position.z == b.position.z && a.rotation.x == b.rotation.x &&
+           a.rotation.y == b.rotation.y && a.rotation.z == b.rotation.z &&
+           a.rotation.w == b.rotation.w;
+}
+
+// Puts `found` at `at`, turned by `turned`, at once, stopped.
+void put(const body_t& found, JPH::Vec3Arg at, JPH::QuatArg turned) {
+    const bool still = found.body().IsStatic();
+    found.bodies().SetPositionAndRotation(
+        found.id, at, turned, still ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+    if (!still) {
+        found.bodies().SetLinearAndAngularVelocity(found.id, JPH::Vec3::sZero(),
+                                                   JPH::Vec3::sZero());
+    }
+    ++found.world->moves;
+}
+
 // Why a shape that's `weighed` or not, and `must_be_static` or not, can't be dynamic, or nullptr
 // if it can.
 const char* not_dynamic(bool weighed, bool must_be_static) {
@@ -389,6 +409,7 @@ FBE_PHYSICS_API bool fbe_body_set_position(uint64_t body, const fbe_body_vec3_t*
     const fp_mode_t fp_mode;
     return find_own(body) != nullptr && push(body, position, [](const body_t& b, JPH::Vec3Arg v) {
                b.bodies().SetPosition(b.id, v, JPH::EActivation::Activate);
+               ++b.world->moves;
            });
 }
 
@@ -400,6 +421,7 @@ FBE_PHYSICS_API bool fbe_body_set_rotation(uint64_t body, const fbe_body_quat_t*
         return false;
     }
     found->bodies().SetRotation(found->id, turned, JPH::EActivation::Activate);
+    ++found->world->moves;
     return true;
 }
 
@@ -703,12 +725,9 @@ FBE_PHYSICS_API int32_t fbe_body_poses_moved(const uint64_t* bodies, fbe_body_po
             .w = turned.GetW(),
         };
         fbe_body_pose_t& pose = kept[i];
-        // A NaN kept, as none has been read yet, is never the same.
-        if (position.x != pose.position.x || position.y != pose.position.y ||
-            position.z != pose.position.z || rotation.x != pose.rotation.x ||
-            rotation.y != pose.rotation.y || rotation.z != pose.rotation.z ||
-            rotation.w != pose.rotation.w) {
-            pose = { .position = position, .rotation = rotation };
+        const fbe_body_pose_t now{ .position = position, .rotation = rotation };
+        if (!same_pose(now, pose)) {
+            pose = now;
             changed[changes] = static_cast<int32_t>(i);
             ++changes;
         }
@@ -717,14 +736,17 @@ FBE_PHYSICS_API int32_t fbe_body_poses_moved(const uint64_t* bodies, fbe_body_po
 }
 
 FBE_PHYSICS_API bool fbe_body_follow(const uint64_t* bodies, const fbe_body_pose_t* poses,
-                                     int32_t count, float seconds) {
+                                     fbe_body_pose_t* kept, int32_t count, float seconds,
+                                     float step) {
     const fp_mode_t fp_mode;
-    if (!std::isfinite(seconds) || seconds <= 0.0F) {
-        return fail(std::format("a body's moved there over more than 0 seconds, not {}", seconds));
+    if (!std::isfinite(seconds) || seconds <= 0.0F || !std::isfinite(step) || step <= 0.0F) {
+        return fail(std::format(
+            "a body's moved there over more than 0 seconds, not {} in steps of {}", seconds, step));
     }
     const auto size = static_cast<std::size_t>(std::max(count, 0));
     const std::span handles(bodies, size);
     const std::span given(poses, size);
+    const std::span last(kept, size);
     for (std::size_t i = 0; i < size; ++i) {
         const body_t* found = find_own(handles[i]);
         JPH::Vec3 at;
@@ -735,15 +757,30 @@ FBE_PHYSICS_API bool fbe_body_follow(const uint64_t* bodies, const fbe_body_pose
         if (!found->body().IsKinematic()) {
             return fail("only a kinematic body is moved to where it's put");
         }
-        if (within_most(found->body(), at, turned, seconds)) {
+        const bool same = same_pose(given[i], last[i]);
+        last[i] = given[i];
+        if (same && !found->body().IsActive()) {
+            continue;
+        }
+        if (within_most(found->body(), at, turned, step)) {
             found->bodies().MoveKinematic(found->id, at, turned, seconds);
         } else {
-            found->bodies().SetPositionAndRotation(found->id, at, turned,
-                                                   JPH::EActivation::Activate);
-            found->bodies().SetLinearAndAngularVelocity(found->id, JPH::Vec3::sZero(),
-                                                        JPH::Vec3::sZero());
+            put(*found, at, turned);
         }
     }
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_body_teleport(uint64_t body, const fbe_body_vec3_t* position,
+                                       const fbe_body_quat_t* rotation) {
+    const fp_mode_t fp_mode;
+    const body_t* found = find_own(body);
+    JPH::Vec3 at;
+    JPH::Quat turned;
+    if (found == nullptr || !vec3(*position, at) || !quat(*rotation, turned)) {
+        return false;
+    }
+    put(*found, at, turned);
     return true;
 }
 

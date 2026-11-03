@@ -347,7 +347,13 @@ FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t col
     found->overflowed = errors != JPH::EPhysicsUpdateError::None;
     found->changes = 0;
     ++found->steps;
+    ++found->moves;
     return true;
+}
+
+FBE_PHYSICS_API int64_t fbe_physics_moves(uint64_t world) {
+    const world_t* found = find_world(world);
+    return found != nullptr ? found->moves : -1;
 }
 
 FBE_PHYSICS_API int64_t fbe_physics_steps(uint64_t world) {
