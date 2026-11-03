@@ -1,0 +1,25 @@
+// Environments through the FB API, on the GPU ctest's tests use; a machine with no Vulkan sets
+// FBENGINE_NO_GPU to 1 and skips them.
+
+Import std.core
+Import std.os
+Import std.test
+Import fbengine
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+@Test
+Function AnEnvironmentIsBakedAndFreed() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local sky = Try Texture(4, 2, TextureFormat.RGBA16F, False)
+    Local before = Environment.Count()
+    Local baked = Try Environment.Bake(sky, 16, 4)
+    Expect(Environment.Count() == before + 1)
+    Expect(baked.Levels() == 2)
+    // One the game lets go of is freed, as this one is at the end of its line.
+    Expect((Try Environment.Bake(sky, 32, 4)).Levels() == 3)
+    Expect(Environment.Count() == before + 1)
+    baked.Free()
+    Expect(Environment.Count() == before)
+End Function

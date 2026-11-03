@@ -727,8 +727,8 @@ std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, st
     });
 }
 
-std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height,
-                                    std::int32_t format) {
+std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format,
+                                    bool mipmaps) {
     if (gpu::device() == nullptr) {
         fbe::fail("the GPU isn't started");
         return 0;
@@ -737,6 +737,7 @@ std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height,
         .width = width,
         .height = height,
         .format = format,
+        .mipmaps = mipmaps,
         .engine = true,
     });
 }

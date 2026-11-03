@@ -120,6 +120,9 @@ bool add_pass(pass_t pass);
 std::uint32_t resource_index(resource_t resource);
 VkFormat resource_format(resource_t resource);
 std::uint64_t resource_texture(resource_t resource);
+/// Its image, for a pass's commands: the frame's, however its texture's been let go of since it was
+/// added; a transient's once the graph's recording.
+VkImage resource_image(resource_t resource);
 
 /// Records the passes added since the graph was last recorded into the frame's commands, and
 /// empties it; false, with fbe_error's why, if a transient target couldn't be made, whose passes

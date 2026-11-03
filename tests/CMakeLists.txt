@@ -61,6 +61,7 @@ FetchContent_MakeAvailable(stb)
 add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
                gpu/pipeline_tests.cpp gpu/texture_tests.cpp gpu/target_tests.cpp
                gpu/buffer_tests.cpp gpu/graph_tests.cpp gpu/canvas_tests.cpp
+               gpu/environment_tests.cpp
                gpu/pixels_tests.cpp gpu/text_tests.cpp gpu/example_tests.cpp
                golden/golden.cpp golden/golden_tests.cpp golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
@@ -79,7 +80,8 @@ fbengine_set_warnings(fbengine_gpu_tests)
 fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      HEADER test_shaders.hpp
                      SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang
-                             gpu/shaders/shape.slang gpu/shaders/points.slang)
+                             gpu/shaders/shape.slang gpu/shaders/points.slang
+                             gpu/shaders/spheres.slang)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")

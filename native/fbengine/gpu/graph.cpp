@@ -873,6 +873,10 @@ std::uint64_t resource_texture(resource_t resource) {
     return resource < resources.size() ? resources[resource].handle : 0;
 }
 
+VkImage resource_image(resource_t resource) {
+    return resource < resources.size() ? resources[resource].texture.image : VK_NULL_HANDLE;
+}
+
 bool record_graph() {
     if (recording) {
         return true;
