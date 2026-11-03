@@ -657,3 +657,168 @@ Function WhatsSelectedAndWhatHasNoMeshAreMarked() Throws IOError, GraphicsError
     Expect(editor.Edited.Entities().Count == 2)
     editor.Finish()
 End Function
+
+@Test
+Function TurnsAndScalesSnapToo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    editor.View.Snap.On = True
+    Try Simulate.PressKey(Key.R)
+    editor.Step()
+    // A drag of 0.47, to the tenth.
+    Local middle = Shown(editor, Vec3(0, 1, 0))
+    Try Drag(editor, middle, middle + Vec2(52, 0))
+    Expect(Abs(cube.Scale().x - 1.5) < 0.0001, "it's {cube.Scale()}")
+    editor.Edits.Undo()
+    // Off, it's as far as it's dragged.
+    editor.View.Snap.On = False
+    Try Drag(editor, middle, middle + Vec2(52, 0))
+    Expect(Abs(cube.Scale().x - 1.5) > 0.01, "it's {cube.Scale()}")
+    editor.Edits.Undo()
+    // A turn, to the fifteenth of a degree's twelfth, from a ring.
+    editor.View.Snap.On = True
+    Try Simulate.PressKey(Key.E)
+    editor.Step()
+    Local grab = Vec2(0, 0)
+    Local found = False
+    For i = 0 To 63
+        Local angle = (i As Float) / 64 * 2 * Pi
+        For r = 1 To 60
+            Local at = Shown(editor,
+                             Vec3(Cos(angle) * (r As Float) * 0.1, 1,
+                                  Sin(angle) * (r As Float) * 0.1))
+            If editor.View.HandleAt(at) == 1
+                grab = at
+                found = True
+                Break
+            End If
+        End For
+        If found Then Break
+    End For
+    Expect(found, "there's no Y ring")
+    Try Drag(editor, grab, grab + Vec2(120, 40))
+    Local turned = cube.Rotation(Space.WORLD)
+    // A turn about Y's half angle is its w's and its y's.
+    Local angle = Atan2(turned.y, turned.w) * 2
+    Local steps = angle / (Pi / 12)
+    Expect(Abs(angle) > 0.01, "it hasn't turned")
+    Expect(Abs(steps - Round(steps)) < 0.001, "it's {angle}, off the steps")
+    editor.Finish()
+End Function
+
+@Test
+Function TheCameraDoesntGoOverTheTop() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local center = editor.View.Box().Center
+    For way In [8000, -8000]
+        Try Drag(editor, center, center + Vec2(0, way As Float32), MouseButton.MIDDLE)
+        Expect(editor.View.Viewer().Up().y > 0, "it's upside down: {editor.View.Viewer().Up()}")
+    End For
+    editor.Finish()
+End Function
+
+@Test
+Function ShiftFliesFasterAndTheGridComesToo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local view = editor.View
+    Local camera = view.Viewer()
+    Local center = view.Box().Center
+    Try Simulate.MoveMouse(center.x, center.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.RIGHT)
+    editor.Step()
+    Local start = camera.Position(Space.WORLD)
+    Try Simulate.KeyDown(Key.W)
+    editor.Step()
+    Local before = camera.Position(Space.WORLD)
+    view.Update(1.0)
+    Local slow = Distance(camera.Position(Space.WORLD), before)
+    Try Simulate.KeyDown(Key.LEFT_SHIFT)
+    editor.Step()
+    before = camera.Position(Space.WORLD)
+    view.Update(1.0)
+    Local fast = Distance(camera.Position(Space.WORLD), before)
+    Expect(Abs(fast / slow - 3) < 0.01, "it went {slow}, then {fast}")
+    // Flown far, the grid's still under it, on its tenths.
+    view.Update(20.0)
+    Try Simulate.KeyUp(Key.LEFT_SHIFT)
+    Try Simulate.KeyUp(Key.W)
+    Try Simulate.MouseUp(MouseButton.RIGHT)
+    editor.Step()
+    editor.Step()
+    Local at = camera.Position(Space.WORLD)
+    Expect(Distance(at, start) > 100, "it's only gone {Distance(at, start)}")
+    Local grid = view.Over().Grid.Position()
+    Expect(Abs(grid.x - at.x) <= 5 && Abs(grid.z - at.z) <= 5 && grid.y == 0,
+           "the grid's at {grid}, the camera at {at}")
+    Expect(grid.x == Round(grid.x / 10) * 10, "the grid's at {grid}")
+    editor.Finish()
+End Function
+
+@Test
+Function FramingStandsFarEnoughFromWhatsBig() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    editor.View.FrameSelected()
+    Local near = editor.View.ViewDistance()
+    cube.SetScale(Vec3(20, 20, 20))
+    editor.View.FrameSelected()
+    Expect(editor.View.ViewDistance() > near * 5, "it's {near}, then {editor.View.ViewDistance()}")
+    // With nothing selected, it stays.
+    Local stays = editor.View.ViewDistance()
+    editor.Edited.SelectOnly(Null)
+    editor.View.FrameSelected()
+    Expect(editor.View.ViewDistance() == stays)
+    editor.Finish()
+End Function
+
+@Test
+Function MarksGoWithWhatTheyMarkAndAHandleLightsUp() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local target = editor.View.Target()
+    If target == Null
+        Fail("there's no texture")
+        Return
+    End If
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    Local over = editor.View.Over()
+    editor.Step()
+    Local marked = over.Viewer.Draws().Count
+    editor.Edited.SelectOnly(Null)
+    editor.Step()
+    Expect(over.Viewer.Draws().Count < marked, "what marked it, and its handles, stayed: {marked}")
+    // Selected again, and the pointer on an arrow.
+    editor.Edited.SelectOnly(cube)
+    Try Simulate.MoveMouse(0, 0)
+    editor.Step()
+    editor.Step()
+    Local plain = target.ToImage()
+    Local arrow = Shown(editor, Vec3(0.5, 1, 0))
+    Try Simulate.MoveMouse(arrow.x, arrow.y)
+    editor.Step()
+    editor.Step()
+    Local lit = target.ToImage()
+    Local differ = 0
+    For x = 0 To lit.Width - 1
+        For y = 0 To lit.Height - 1
+            If lit[x, y] != plain[x, y] Then differ += 1
+        End For
+    End For
+    Expect(differ > 10, "only {differ} pixels changed under the pointer")
+    editor.Finish()
+End Function

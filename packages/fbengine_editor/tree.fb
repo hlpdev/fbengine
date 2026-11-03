@@ -241,7 +241,6 @@ Public Final Class SceneTree Extends Widget
         Local going = Going(point)
         If going == Null Then Return
         history.Commit(ReparentEdit(scene, going, TargetAt(point)))
-        history.EndMerge()
     End Method
 
     // Whether the point's on what it can be dropped on.
@@ -338,7 +337,6 @@ Public Final Class SceneTree Extends Widget
         Local name = editing.Text()
         If keeping && name != "" && name != entity.Name()
             history.Commit(RenameEdit(entity, name))
-            history.EndMerge()
         End If
     End Method
 

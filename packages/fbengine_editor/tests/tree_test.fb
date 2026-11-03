@@ -614,3 +614,84 @@ Function WhatsTakenOutIsntPickedOrInTheSceneAndANewSceneHasNoneOfIt() Throws IOE
     Expect(cube.Freed() && editor.Tree.ShownEntities().Count == 0)
     editor.Finish()
 End Function
+
+@Test
+Function SeveralTakenOutComeBackInTheirOrder() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Edited.ToggleSelected(all["e"])
+    editor.Actions.Run("tree.delete")
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c ", "it shows {Names(editor)}")
+    editor.Edits.Undo()
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c d e ", "they came back as {Names(editor)}")
+    Expect(editor.Edited.Selected().Count == 2)
+    editor.Finish()
+End Function
+
+@Test
+Function TakingOutWhatsSelectedSaysSo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    Local told = 0
+    editor.Edited.OnSelectionChanged(Function()
+        told += 1
+    End Function)
+    // What wasn't selected isn't news.
+    editor.Edited.TakeOut(all["e"])
+    Expect(told == 0, "it was told {told} times")
+    editor.Edited.TakeOut(all["d"])
+    Expect(told == 1 && editor.Edited.Selected().Count == 0, "it was told {told} times")
+    editor.Edited.OnSelectionChanged(Null)
+    editor.Finish()
+End Function
+
+@Test
+Function ARebuildWhileDraggingEndsItsHint() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    editor.Step()
+    Try Dragging(editor, OnName(editor, all["d"]), OnName(editor, all["e"]))
+    Expect(editor.Shown.Popups().Count == 1)
+    editor.Tree.MarkChanged()
+    editor.Step()
+    Expect(editor.Shown.Popups().Count == 0, "the hint outlived the row")
+    Try Letting(editor)
+    Expect(all["d"].Parent() == Null, "a drag that was ended went on")
+    editor.Finish()
+End Function
+
+@Test
+Function OnlyWhatsInTheSceneRenames() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Tree.BeginRename(editor.Edited.Helpers)
+    Expect(!editor.Tree.Renaming())
+    editor.Edited.TakeOut(all["d"])
+    editor.Tree.BeginRename(all["d"])
+    Expect(!editor.Tree.Renaming())
+    all["e"].Free()
+    editor.Tree.BeginRename(all["e"])
+    Expect(!editor.Tree.Renaming())
+    editor.Finish()
+End Function

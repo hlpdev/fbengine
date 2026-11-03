@@ -82,12 +82,13 @@ Public Final Class EditedScene
 
     /// Whether `entity` is in the scene, and not the editor's.
     Public Method Has(entity: Entity): Bool
+        If entity.Freed() Then Return False
         Local at: Entity? = entity
         While at != Null
             If RefEquals(at, Helpers) Then Return False
             at = at.Parent()
         End While
-        Return !entity.Freed()
+        Return True
     End Method
 
     /// What's beside each other under `parent`, or at the top of the scene with Null, in order.
