@@ -1,0 +1,50 @@
+// A seeded generator of Blitz3D's numbers, as a game whose maps come from seeds needs, in the game's
+// own code: Park-Miller's, with a multiplier of 48271 by Schrage's method, its floats and whole numbers
+// worked out as Blitz's were, so a seed gives what it always gave. std.math's Random is another
+// generator, PCG32, and gives other numbers.
+
+// What its stream is at: from 1 to 2147483646, but as Seed says.
+Public Class ParkMiller
+    Field state: Int32 = 0x1234
+
+    Public New()
+    End New
+
+    /// Starts its stream at `seed`, its low 31 bits, 0 being 1. A seed of 2147483647, which is what
+    /// all ones come to, then gives 0 for good, as it did in Blitz.
+    Public Method Seed(seed: Int32)
+        Local masked = seed & 0x7FFFFFFF
+        state = masked != 0 ? masked : 1
+    End Method
+
+    /// Where its stream is.
+    Public Method State(): Int32 => state
+
+    /// The next number above 0 and below 1, by its low 16 bits.
+    Public Method Next(): Float32
+        state = 48271 * (state % 44488) - 3399 * (state / 44488)
+        If state < 0 Then state += 2147483647
+        Return ((state & 65535) As Float32) / 65536.0 + 0.5 / 65536.0
+    End Method
+
+    /// The next number from `from` to `to`.
+    Public Method NextFloat(from: Float32, to: Float32): Float32 => Next() * (to - from) + from
+
+    /// The next whole number from `from` to `to`, both in it, in either order.
+    Public Method NextInt(from: Int32, to: Int32): Int32
+        If to < from Then Return NextInt(to, from)
+        Return (Next() * ((to - from + 1) As Float32)) As Int32 + from
+    End Method
+End Class
+
+/// The number a seed in words comes to: each character's code shifted by its place, up to 23 bits and
+/// around, XORed together.
+Public Function SeedOfWords(words: String): Int32
+    Local made: Int32 = 0
+    Local shift = 0
+    For byte In words.Bytes
+        made = made ^ ((byte As Int32) << shift)
+        shift = (shift + 1) % 24
+    End For
+    Return made
+End Function

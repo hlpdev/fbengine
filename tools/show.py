@@ -21,7 +21,8 @@ WATCHED = ["arcade", "menu", "controls", "proof/frame_timing_and_input",
            "proof/binary_saves_and_maps", "proof/fixed_function_look",
            "proof/cameras_and_viewports", "proof/camera_into_a_texture", "proof/bump",
            "proof/render_settings", "proof/gamma",
-           "proof/streamed_and_positional_sound"]
+           "proof/streamed_and_positional_sound", "proof/seeded_random",
+           "proof/ini_settings", "proof/procedural_map", "proof/room_files"]
 
 
 def stop(process):
