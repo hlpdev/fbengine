@@ -34,7 +34,8 @@ End Struct
 Global players: Player?[] = []
 Global playersByHandle: Player?[] = []
 
-/// What plays Clips on an entity and the entities under it: the one its Player() gives. Each of a
+/// What plays Clips on an entity and the entities under it: the one its Player() gives. While its
+/// entity's hidden, by Hide on it or on what's above it, it waits, where it is. Each of a
 /// Clip's channels moves the entity of its name, the entity itself or the first under it with the
 /// name, depth first, as Find finds them, bound as it's played or once the Clip changes; a name no
 /// entity has is left out. UpdateWorld moves it on by its seconds.
@@ -46,6 +47,11 @@ Global playersByHandle: Player?[] = []
 /// one faded out leaves it there; what no Clip moves is left as it is, for the game to move. Once
 /// its entity's freed, using it panics, and the next update lets go of what it kept, unless the game
 /// holds it.
+///
+/// What it poses is the game's to change until it next poses: after UpdateWorld, a game can turn a
+/// head toward a target with PointAt, or Turn it on top of what its Clip gave, and that's what's
+/// drawn, and what's under it follows; the next UpdateWorld poses it from its Clip again. A bone the
+/// game keeps for itself, it Releases.
 Public Final Class Player
     Field handle: UInt64
     Field owner: Entity
@@ -131,6 +137,25 @@ Public Final Class Player
     /// How fast layer 0 plays its Clip.
     @MainThread @PanicsAtCaller
     Public Method Speed(): Float => Layer(0).Speed()
+
+    /// Leaves `bone` to the game: none of its Clips moves it until Reclaim, though they go on moving
+    /// what's under it. Freed, or its entity freed, panics.
+    @MainThread @PanicsAtCaller
+    Public Method Release(bone: Entity)
+        If !fbe_player_release(Live("Release"), bone.Live("Release")) Then Failed("Release")
+    End Method
+
+    /// Has its Clips move `bone` again, from where the game left it.
+    @MainThread @PanicsAtCaller
+    Public Method Reclaim(bone: Entity)
+        If !fbe_player_reclaim(Live("Reclaim"), bone.Live("Reclaim")) Then Failed("Reclaim")
+    End Method
+
+    /// Whether `bone` is left to the game.
+    @MainThread @PanicsAtCaller
+    Public Method Released(bone: Entity): Bool
+        Return fbe_player_released(Live("Released"), bone.Live("Released"))
+    End Method
 
     /// Calls `handler` with each event its Clips reach, on any layer, in the order they're reached,
     /// as UpdateWorld moves them on, once the World's moved and collided; Null stops, even within a

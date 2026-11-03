@@ -1,0 +1,6 @@
+[project]
+name = "in_view_by_bounds"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../../packages/fbengine" }
