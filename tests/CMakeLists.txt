@@ -384,6 +384,17 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/video_player")
   set_tests_properties(examples.video_player PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
                        PASS_REGULAR_EXPRESSION "\nit played to its end: True, in [0-9]+ frames shown\r?\n$")
+  add_test(NAME examples.video_player.watch
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/video_player"
+                   -- --watch --steps 30)
+  set_tests_properties(examples.video_player.watch PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "\nwatched 30 frames, looping: True, ended: False\r?\n$")
+  add_test(NAME examples.video_player.usage
+           COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DEXAMPLE=${PROJECT_SOURCE_DIR}/examples/video_player"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/video/player_usage.cmake")
+  set_tests_properties(examples.video_player.usage PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
   add_test(NAME examples.crate_on_a_lift
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/crate_on_a_lift")
@@ -553,6 +564,18 @@ target_link_libraries(fbengine_video_thread_tests PRIVATE Catch2::Catch2WithMain
 fbengine_set_warnings(fbengine_video_thread_tests)
 catch_discover_tests(fbengine_video_thread_tests TEST_PREFIX "video."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# A program that opens a video and ends at once, its thread decoding, run again and again.
+add_executable(fbengine_video_ends video/ends.cpp)
+target_link_libraries(fbengine_video_ends PRIVATE fbengine_video_native)
+target_compile_definitions(fbengine_video_ends PRIVATE
+                           FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
+fbengine_set_warnings(fbengine_video_ends)
+add_test(NAME video.ends
+         COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_video_ends>"
+                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_video_native>"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/ends.cmake")
+set_tests_properties(video.ends PROPERTIES TIMEOUT 600)
 
 # What fbengine_video panics for, each by a run of tests/video/panics, which says it.
 if(FBENGINE_FB_TESTS)

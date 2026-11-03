@@ -527,3 +527,49 @@ Function DrawFittedLeavesACanvasAsItWasAndDrawsItsBarsSolid() Throws VideoError,
     Expect(drawn[10, 48].a == 255 && drawn[10, 48].r == 0, "its bars are {drawn[10, 48]}")
     Expect(drawn[100, 48].r > 50, "its middle is {drawn[100, 48]}")
 End Function
+
+// Whether `shown` is the `which`th of colors.mpg's: red, green, blue, and white.
+Function IsColor(shown: Color32, which: Int): Bool
+    Select which
+        Case 0
+            Return shown.r > 200 && shown.g < 60 && shown.b < 60
+        Case 1
+            Return shown.g > 200 && shown.r < 60 && shown.b < 60
+        Case 2
+            Return shown.b > 200 && shown.r < 60 && shown.g < 60
+    End Select
+    Return shown.r > 200 && shown.g > 200 && shown.b > 200
+End Function
+
+// What E12 was to do: a video plays into a texture with its sound in sync, every frame the frame
+// due at what's been mixed, and heard, of its sound.
+@Test @MainThread
+Function AVideoPlaysIntoATextureWithItsSoundInSync() Throws VideoError, AudioError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    Local texture = Try video.Texture()
+    video.Play()
+    Local seen = 0
+    // Frames of uneven times against the mix, half a second each of red, green, blue, and white.
+    For i = 1 To 24
+        Audio.Mix(frameOfMix * 2)
+        video.Update(0.02 + (i % 3 As Float64) * 0.03)
+        Flip(False)
+        Local position = video.SoundChannel().Position()
+        Expect(Near(video.Time(), position), "at {i}, it's at {video.Time()}, its sound {position}")
+        Local shown = texture.ToImage()[32, 24]
+        Local due = Floor(position / 0.5) As Int
+        // Away from where one color gives way to the next.
+        Local into = position - (due As Float64) * 0.5
+        If into > 0.05 && into < 0.45
+            Expect(IsColor(shown, due),
+                   "at {position} s of sound, the texture's {shown}, for color {due}")
+            seen += 1
+        End If
+    End For
+    Expect(seen > 12, "{seen} frames were checked")
+End Function
