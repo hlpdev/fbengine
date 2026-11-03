@@ -87,7 +87,7 @@ End Function
 
 /// res:// as a tree, each file with a thumbnail where it has one: a click selects, a double click on a
 /// scene asks OnOpen, a model dragged and let go asks OnDrop, and what's selected shows its import
-/// settings under it, each change a sidecar written through undo. Update, each frame before the Ui's,
+/// settings beside them, each change a sidecar written through undo. Update, each frame before the Ui's,
 /// looks at the disk now and then, and takes what's been loaded again.
 Public Final Class AssetBrowser Extends Widget
     Field history: History
@@ -132,9 +132,13 @@ Public Final Class AssetBrowser Extends Widget
         models = {}
         looked = Stopwatch.StartNew()
         Super.New("assets", "assets")
+        // Side by side, so showing a file's settings doesn't move its row.
+        SetArrangement(Arrangement.ROW)
+        scroller.SetWidth(Sizing.Fill())
         scroller.SetHeight(Sizing.Fill())
         scroller.Add(list)
         Add(scroller)
+        settings.SetWidth(Sizing.Fixed(240.0))
         settings.SetGap(4.0)
         settings.SetVisible(False)
         Add(settings)
@@ -148,7 +152,8 @@ Public Final Class AssetBrowser Extends Widget
         Forgotten()
         root = folder
         open.Clear()
-        shownList = ""
+        // Nothing it could list.
+        shownList = "|"
         selected = Null
         selectedDisk = Null
         If watching
@@ -313,10 +318,14 @@ Public Final Class AssetBrowser Extends Widget
         Try
             Local model = Try Assets.Load<Model>(path)
             Defer model.Free()
-            Local spawned = Try model.Spawn()
+            Try model.Spawn()
             Local target = Try Texture.Target(THUMB_PIXELS, THUMB_PIXELS, TextureFormat.RGBA8, 1,
                                               True)
-            Local box = spawned.Bounds()
+            Local box = AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1))
+            If model.Geometries().Count > 0 Then box = model.Geometries()[0].Bounds()
+            For each In model.Geometries()
+                box = box.Union(each.Bounds())
+            End For
             Local middle = (box.Min + box.Max) * 0.5
             Local reach = Max(Length(box.Max - box.Min), 0.001)
             Local camera = Camera()
@@ -474,7 +483,8 @@ Public Final Class AssetBrowser Extends Widget
         Local toggle = Toggle(title, on, "assets.{key}")
         toggle.SetTranslates(False)
         toggle.OnClick(Function[Weak Self](pressed: Button)
-            Self?.Changed(key, toggle.On() != fallback ? Value(toggle.On()) : Null)
+            Local now = (pressed As? Toggle)?.On() ?? fallback
+            Self?.Changed(key, now != fallback ? Value(now) : Null)
         End Function)
         settings.Add(toggle)
     End Method

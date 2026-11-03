@@ -52,6 +52,7 @@ Public Final Class Editor
     // The file the scene's saved in, a res:// path and where that is on disk.
     Field sceneFile: String? = Null
     Field sceneDisk: Path? = Null
+    Field retired: EditedScene[] = []
 
     /// An editor keeping what it keeps in `settings`, or the OS's folder for settings. It's an
     /// IOError if that can't be read.
@@ -118,6 +119,7 @@ Public Final Class Editor
     Public Method Step()
         Flip()
         Tree.Update()
+        Retired()
         Files.Update()
         Shown.Update()
         Menus.Update()
@@ -140,6 +142,7 @@ Public Final Class Editor
         CloseProject()
         If Window.Open() Then Kept.SetWindow(Window.X(), Window.Y(), Window.Width(),
                                              Window.Height())
+        Retired()
         View.Free()
         Edited.Free()
         EndGraphics()
@@ -227,8 +230,17 @@ Public Final Class Editor
         Edited = scene
         View.SetScene(Edited)
         Tree.SetScene(Edited)
-        old.Free()
+        // It goes after the tree's next Update, as this can be in the UI's own, with rows of it laid out.
+        retired.Add(old)
         World.SetCurrent(Edited.Stage)
+    End Method
+
+    // Lets go of the scenes replaced.
+    Method Retired()
+        For each In retired
+            each.Free()
+        End For
+        retired.Clear()
     End Method
 
     /// The scene being edited's file, a res:// path, or Null for one that's never been saved.

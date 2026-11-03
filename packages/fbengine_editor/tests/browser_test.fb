@@ -17,8 +17,8 @@ Import fbengine_ui
 
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
-// A glTF of one triangle facing up: (0,0,0), (1,0,0), (0,0,1).
-Const TRIANGLE = "{{\"asset\":{{\"version\":\"2.0\"}},\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"name\":\"blade\",\"mesh\":0}}],\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}}}}]}}],\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,0,1]}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}],\"buffers\":[{{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/\"}}]}}"
+// A glTF of one triangle facing up: (0,0,0), (0,0,1), (1,0,0).
+Const TRIANGLE = "{{\"asset\":{{\"version\":\"2.0\"}},\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"name\":\"blade\",\"mesh\":0}}],\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}}}}]}}],\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,0,1]}}],\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}],\"buffers\":[{{\"byteLength\":36,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA\"}}]}}"
 
 Function Picture(red: UInt8): UInt8[]
     Local image = Image(1, 1)
@@ -208,6 +208,7 @@ Function AModelDraggedIntoTheSceneIsPlacedThere() Throws IOError, GraphicsError
     // Its mesh knows where it's from.
     Local mesh = all[1] As? Mesh
     Expect(mesh != Null && mesh.Geometry()?.Source() == "res://sub/ball.gltf#0")
+    editor.Step()
     Expect(editor.Tree.RowOf(placed) != Null)
     Expect(editor.Actions.Run("edit.undo"))
     Expect(editor.Edited.Entities().Count == 0)
@@ -244,7 +245,9 @@ Function AModelDraggedIntoTheSceneIsPlacedThere() Throws IOError, GraphicsError
     editor.Step()
     Try Simulate.MouseUp(MouseButton.LEFT)
     editor.Step()
-    Expect(editor.Edited.Entities().Count == count && editor.ShowingDialog() != Null)
+    editor.Step()
+    Expect(editor.Edited.Entities().Count == count, "{editor.Edited.Entities()}")
+    Expect(editor.ShowingDialog() != Null)
 End Function
 
 @Test
