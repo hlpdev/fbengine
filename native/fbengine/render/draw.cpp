@@ -8,6 +8,7 @@
 #include "gpu/graph.hpp"
 #include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
+#include "morph/morph.hpp"
 #include "render/render.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
@@ -24,6 +25,7 @@
 #include <engine_shaders.hpp>
 #include <format>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -41,8 +43,9 @@ using scene::vec3_t;
 
 /// A draw as the scene shader reads it: its matrix to the camera's view; the rows of what turns
 /// its normals there; its color and alpha; its vertices' address; its joints' and palette's, if
-/// it's skinned; its material's index in the camera's; its own lights; and how many matrices its
-/// palette has, 0 if it isn't skinned.
+/// it's skinned; its morph targets' and the ones it's drawn with, if it's morphed; its material's
+/// index in the camera's; its own lights; how many matrices its palette has, 0 if it isn't skinned;
+/// and how many targets it's drawn with, and how many vertices each has.
 struct draw_data_t {
     std::array<float, 16> to_view;
     std::array<std::array<float, 4>, 3> normals;
@@ -50,12 +53,17 @@ struct draw_data_t {
     VkDeviceAddress vertices;
     VkDeviceAddress joints;
     VkDeviceAddress palette;
+    VkDeviceAddress targets;
+    VkDeviceAddress drawn_targets;
     std::uint32_t material;
     std::uint32_t light_first;
     std::uint32_t light_count;
     std::uint32_t joint_count;
+    std::uint32_t drawn_target_count;
+    std::uint32_t target_vertices;
 };
-static_assert(sizeof(draw_data_t) == 168, "the scene shader reads draws 168 bytes apart");
+static_assert(sizeof(draw_data_t) == 192, "the scene shader reads draws 192 bytes apart");
+static_assert(sizeof(anim::drawn_target_t) == 8, "the scene shader reads targets 8 bytes apart");
 
 /// A layer as the scene shader reads it: its texture's and sampler's indices in the bindless set,
 /// how a bump layer scales the next layer's light, what turns its UVs, by rows, with in their last
@@ -479,6 +487,24 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                     data.joint_count = palette->second.second;
                 }
             }
+            if (!surface->target_moves.empty()) {
+                std::array<anim::drawn_target_t, anim::drawn_targets> strongest;
+                const std::size_t count =
+                    anim::strongest_targets(anim::morph_weights(item.entity, tweened.tween()),
+                                            surface->target_moves, strongest);
+                if (count != 0) {
+                    bool no_room = false;
+                    data.drawn_targets =
+                        in_ring<anim::drawn_target_t>(std::span(strongest).first(count), no_room)
+                            .address;
+                    if (no_room) {
+                        return false;
+                    }
+                    data.targets = surface->targets.address;
+                    data.drawn_target_count = static_cast<std::uint32_t>(count);
+                    data.target_vertices = surface->vertex_count;
+                }
+            }
         } else if (item.draw.kind == FBE_ENTITY_SPRITE) {
             const surface_buffers_t* quad = sprite_quad();
             if (quad == nullptr) {
@@ -735,7 +761,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
 
 extern "C" {
 
-FBE_API bool fbe_render_camera(uint64_t camera, float tween) {
+FBE_API bool fbe_render_camera(uint64_t camera, float tween) try {
     std::uint32_t slot = fbe::scene::none;
     fbe::scene::view_t view;
     bool shows = false;
@@ -745,9 +771,11 @@ FBE_API bool fbe_render_camera(uint64_t camera, float tween) {
     }
     fbe::render::forget_freed_geometries();
     return (fbe_gpu_started() || fbe_gpu_start()) && fbe::render::draw_camera(slot, tween);
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
-FBE_API bool fbe_render_world(uint64_t world, float tween) {
+FBE_API bool fbe_render_world(uint64_t world, float tween) try {
     const std::int32_t count = fbe_world_cameras(world, nullptr, 0);
     if (count < 0) {
         return false;
@@ -756,6 +784,8 @@ FBE_API bool fbe_render_world(uint64_t world, float tween) {
     fbe_world_cameras(world, cameras.data(), count);
     return std::ranges::all_of(
         cameras, [tween](std::uint64_t camera) { return fbe_render_camera(camera, tween); });
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
 } // extern "C"

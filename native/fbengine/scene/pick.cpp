@@ -406,6 +406,30 @@ void compact_pickables() {
 
 } // namespace
 
+bool pick_shape_blocks(std::uint32_t world, vec3_t a, vec3_t b, std::uint32_t first,
+                       std::uint32_t second) {
+    scene_t& s = scene();
+    const segment_t segment(a, b - a);
+    for (pickable_t& entry : s.pickables) {
+        if (entry.entity == none || entry.world != world || entry.entity == first ||
+            entry.entity == second ||
+            (entry.mode != FBE_PICK_ELLIPSOID && entry.mode != FBE_PICK_BOX) ||
+            s.entities.kind[entry.entity] == FBE_ENTITY_MESH ||
+            s.entities.kind[entry.entity] == FBE_ENTITY_TERRAIN ||
+            !s.entities.blocks_sight[entry.entity] || !refresh(entry) ||
+            !crosses_box(segment, entry.min, entry.max, 1.0F) || !showing(entry.entity)) {
+            continue;
+        }
+        hit_t hit;
+        bool found = false;
+        pick_entity(entry.entity, a, b - a, 0.0F, hit, found);
+        if (found) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void pickable_changed(std::uint32_t entity) {
     scene_t& s = scene();
     std::uint32_t& index = s.entities.pickable[entity];

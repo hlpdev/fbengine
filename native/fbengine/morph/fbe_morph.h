@@ -7,7 +7,11 @@
 // move and a copy starts with. A surface's vertices added since a target was added don't move in
 // it; vertices drawn are their positions plus each target's by its weight, and their normals the
 // same, back to length 1, or the vertex's own where its targets cancel it out. A geometry moved or
-// scaled takes its targets with it, so a mesh's shape at any weight is the same shape moved.
+// scaled takes its targets with it, so a mesh's shape at any weight is the same shape moved. A
+// surface is drawn with at most 8 targets at once, of those that move it, those with the weights
+// furthest from 0; what reads its vertices apart from drawing has them all. Past 8, a target coming
+// in or going out as the weights cross is a step in the shape, not a slide. A view's culling and
+// fbe_camera_entity_in_view follow the weights; picks and collisions stay on the shape at rest.
 
 #include "../core/fbe_core.h"
 

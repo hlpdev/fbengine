@@ -1475,6 +1475,20 @@ FBE_API bool fbe_texture_set_alpha(uint64_t texture, bool alpha) {
     return true;
 }
 
+FBE_API bool fbe_texture_set_path(uint64_t texture, const char* path) {
+    texture_t* found = fbe::texture::find(texture);
+    if (found == nullptr || path == nullptr) {
+        return false;
+    }
+    found->path = path;
+    return true;
+}
+
+FBE_API const char* fbe_texture_path(uint64_t texture) {
+    const texture_t* found = fbe::texture::find(texture);
+    return found != nullptr ? found->path.c_str() : "";
+}
+
 FBE_API bool fbe_texture_alpha(uint64_t texture) {
     const texture_t* found = fbe::texture::find(texture);
     return found != nullptr && found->alpha;
