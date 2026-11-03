@@ -180,11 +180,10 @@ Public Final Class GameComponents
         Return had
     End Method
 
-    /// Starts `game`'s program in place of any that's running, and forgets what it knew. With no
-    /// program, it knows of none. It's run by `fb`, which has to be on the PATH.
+    /// Starts `game`'s program in place of any that's running. With none, it stays as it is. It's
+    /// run by `fb`, which has to be on the PATH.
     Public Method Start(game: Path)
         Stop()
-        Set([])
         Local program = game / COMPONENTS_PROGRAM
         If !File.Exists(program) Then Return
         Try

@@ -13,16 +13,14 @@ Import "./scene"
 
 // How wide a row's title is.
 Const TITLE_WIDTH: Float32 = 110.0
-// How far any number goes.
-Const FURTHEST: Float = 1000000000.0
+
 // What shows in a field while what's selected differ.
 Const MIXED = "—"
 // Radians to the degrees they're shown in.
 Const DEGREES: Float = 180.0 / Pi
 
-// Whether `value` is in `bounds`, and a number 32-bit floats can still multiply together in a matrix.
+// Whether `value` is in `bounds`, which a NaN isn't.
 Function Takes(bounds: Limits, value: Float): Bool
-    If !IsFinite(value) || Abs(value) > FURTHEST Then Return False
     Return (bounds.Above ? value > bounds.Low : value >= bounds.Low) && value <= bounds.High
 End Function
 
@@ -213,7 +211,7 @@ Public Class PropertyRow Extends Widget
     Package Method Update(ui: Ui?)
     End Method
 
-    // Finishes what's being typed, as what it's editing is about to go, if `keep`, and then lets go.
+    // Finishes what's being typed if `keep`, as what it's editing is about to go.
     Package Method Close(keep: Bool)
     End Method
 End Class
@@ -276,7 +274,6 @@ Public Final Class FieldsRow<V> Extends PropertyRow
 
     Override Package Method Close(keep: Bool)
         For part = 0 Until entries.Count
-            entries[part].OnLeaving(Null)
             If keep Then Took(part)
         End For
     End Method
@@ -591,17 +588,12 @@ Public Final Class SceneInspector Extends Widget
         Return True
     End Method
 
-    // Each material drawn in by `selected`, once.
+    // Each material drawn in by `selected`, one for each.
     Method MaterialsOf(selected: Entity[]): Material[]
         Local all: Material[] = []
         For entity In selected
             Local material = MaterialOf(entity)
-            If material == Null || material.Freed() Then Continue
-            Local known = False
-            For each In all
-                If RefEquals(each, material) Then known = True
-            End For
-            If !known Then all.Add(material)
+            If material != Null Then all.Add(material)
         End For
         Return all
     End Method

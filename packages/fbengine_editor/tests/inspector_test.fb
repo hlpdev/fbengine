@@ -52,6 +52,10 @@ Function FieldOf(editor: Editor, title: String, part: Int = 0): TextField
     Return RowCalled(editor, title).Parts()[part]
 End Function
 
+// Whether there's a row called `title`, as a test of a Widget itself would print all it's in if it
+// fails.
+Function Shows(editor: Editor, title: String): Bool => editor.Inspector.RowOf(title) != Null
+
 // Types `text` in place of what's in a field, not yet taken.
 Function Typing(editor: Editor, field: TextField, text: String) Throws GraphicsError
     // A field takes text once a frame's seen it focused.
@@ -151,6 +155,24 @@ Function ANumberTypedIsOneUndo() Throws IOError, GraphicsError
 End Function
 
 @Test
+Function ANumbersShownAsMuchAsItsWorthReading() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local pivot = Pivot()
+    pivot.SetPosition(Vec3(1.23456789, -0.00001, 0.1))
+    Selecting(editor, pivot)
+    Expect(FieldOf(editor, "Position", 0).Text() == "1.2346", FieldOf(editor, "Position", 0).Text())
+    Expect(FieldOf(editor, "Position", 1).Text() == "0", FieldOf(editor, "Position", 1).Text())
+    Expect(FieldOf(editor, "Position", 2).Text() == "0.1", FieldOf(editor, "Position", 2).Text())
+    // Going through what's shown keeps what there is, past what's shown.
+    Try Entered(editor, "Position", "1.2346", 0)
+    Expect(!editor.Edits.CanUndo() && pivot.Position().x != 1.2346, "it rounded what's there")
+    editor.Finish()
+End Function
+
+@Test
 Function ClickingElsewhereTakesWhatsTyped() Throws IOError, GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Local settings = Try TempDir()
@@ -220,6 +242,9 @@ Function WhatCantBeIsntTaken() Throws IOError, GraphicsError
     Try Entered(editor, "Intensity", "2.0")
     Expect(!editor.Edits.CanUndo(), "the same value made an edit")
     Expect(FieldOf(editor, "Intensity").Text() == "2")
+    // An entity's scale goes to 0 no more than a handle takes it.
+    Try Entered(editor, "Scale", "0", 0)
+    Expect(light.Scale().x == 1, "it took a scale of nothing")
     // At the edges of what it takes.
     Try Entered(editor, "Intensity", "0")
     Expect(light.Intensity() == 0)
@@ -553,11 +578,19 @@ Function AMaterialSharedIsEditedOnce() Throws IOError, GraphicsError
     editor.Step()
     editor.Step()
     Expect(FieldOf(editor, "Shininess").Text() == "0.125", FieldOf(editor, "Shininess").Text())
+    // The game letting go of it, what draws in it still has it, and that's what's edited.
+    other.Free()
+    editor.Step()
+    editor.Step()
+    Expect(FieldOf(editor, "Shininess").Text() == "0.125", FieldOf(editor, "Shininess").Text())
+    Try Entered(editor, "Shininess", "0.5")
+    Local drawn = one.Material()
+    Expect(drawn != Null && drawn.Shininess() == 0.5)
     // One with none has no such section.
     one.SetMaterial(Null)
     editor.Step()
     editor.Step()
-    Expect(editor.Inspector.RowOf("Shininess") == Null)
+    Expect(!Shows(editor, "Shininess"))
     editor.Finish()
 End Function
 
@@ -789,7 +822,7 @@ Function NoProgramKnowsNoKinds() Throws IOError, GraphicsError
     Local editor = Try Started(settings, games)
     Expect(editor.Kinds.Kinds().Count == 0 && !editor.Kinds.Running())
     Selecting(editor, Pivot())
-    Expect(editor.Inspector.RowOf("AddComponent") == Null, "there's a way to add what there isn't")
+    Expect(!Shows(editor, "AddComponent"), "there's a way to add what there isn't")
     editor.Finish()
 End Function
 
@@ -840,6 +873,22 @@ Function AComponentIsAddedAndEditedAndTakenOffThroughUndo() Throws IOError, Grap
     Expect(editor.Actions.Run("edit.undo"))
     Expect(editor.Actions.Run("edit.undo"))
     Expect(data.Values["Way"]?.AsString() == "OUTWARD")
+    // Undone and redone, it's the one it was, with what it had.
+    Expect(editor.Actions.Run("edit.undo") && editor.Actions.Run("edit.undo"))
+    Local stepsBack = 0
+    While editor.Edits.CanUndo()
+        Expect(editor.Actions.Run("edit.undo"))
+        stepsBack += 1
+    End While
+    Expect(ComponentsOf(pivot).Count == 0)
+    For i = 1 To stepsBack
+        Expect(editor.Actions.Run("edit.redo"))
+    End For
+    Expect(ComponentsOf(pivot).Count == 1 && RefEquals(ComponentsOf(pivot)[0], data),
+           "it made another")
+    editor.Step()
+    editor.Step()
+    Expect(FieldOf(editor, "Speed").Text() == "4", FieldOf(editor, "Speed").Text())
     // Taken off, and back in its place, as it was.
     Try Adding(editor, "Latch")
     Local remove = RowCalled(editor, "Door") As? ButtonRow
@@ -848,7 +897,7 @@ Function AComponentIsAddedAndEditedAndTakenOffThroughUndo() Throws IOError, Grap
     editor.Step()
     editor.Step()
     Expect(ComponentsOf(pivot).Count == 1 && ComponentsOf(pivot)[0].Kind == "Latch")
-    Expect(editor.Inspector.RowOf("Speed") == Null, "its rows outlived it")
+    Expect(!Shows(editor, "Speed"), "its rows outlived it")
     Expect(editor.Actions.Run("edit.undo"))
     editor.Step()
     editor.Step()
@@ -877,7 +926,7 @@ Function ManySelectedShareWhatTheyAllHave() Throws IOError, GraphicsError
     editor.Step()
     editor.Step()
     // Only the one has it.
-    Expect(editor.Inspector.RowOf("Speed") == Null, "it shows what only one has")
+    Expect(!Shows(editor, "Speed"), "it shows what only one has")
     // Added to both, it's only added to what hasn't one.
     Local had = ComponentsOf(one)[0]
     Try Adding(editor, "Door")
@@ -934,9 +983,14 @@ Function WhatTheProjectDoesntKnowStaysAsItIs() Throws IOError, GraphicsError
     editor.Step()
     editor.Step()
     Expect((RowCalled(editor, "Door.unknown") As? NoteRow) != Null)
-    Expect(editor.Inspector.RowOf("Speed") == Null)
+    Expect(!Shows(editor, "Speed"))
     Expect(ComponentsOf(pivot).Count == 1, "what it can't read of went")
-    Expect(editor.Inspector.RowOf("AddComponent") == Null)
+    Expect(!Shows(editor, "AddComponent"))
+    // Closing the project, it knows of none.
+    KnowingKinds(editor)
+    Expect(editor.Kinds.Kinds().Count == 2)
+    Expect(editor.Actions.Run("file.close"))
+    Expect(editor.Kinds.Kinds().Count == 0, "it kept what the project said")
     editor.Finish()
 End Function
 
@@ -1025,6 +1079,19 @@ Function AGamesProgramSaysItsKinds() Throws IOError, GraphicsError
     End While
     editor.Step()
     Expect(editor.Kinds.Kinds().Count == 0)
+    Expect(editor.ShowingDialog() != Null, "nothing said it failed")
+    // One that says them, then fails, has failed.
+    Try File.WriteText(folder / "components/main.fb",
+                       "Import std.os\nImport fbengine\nImport \"../door\"\n\nComponents.Add<Door>(\"Door\")\n" +
+                       "Try Components.Describe()\nSystem.Exit(1)\n")
+    editor.CloseProject()
+    editor.OpenFolder(second)
+    watch = Stopwatch.StartNew()
+    While editor.Kinds.Running() && watch.Elapsed.TotalSeconds < 120
+        editor.Step()
+    End While
+    editor.Step()
+    Expect(editor.Kinds.Kinds().Count == 0, "it took what a failed program said")
     Expect(editor.ShowingDialog() != Null, "nothing said it failed")
     // One that's running is stopped when the project goes.
     Try File.WriteText(folder / "components/main.fb", "Import std.time\nSleepFor(60)\n")
