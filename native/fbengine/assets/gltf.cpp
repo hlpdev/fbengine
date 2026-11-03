@@ -22,9 +22,11 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <numbers>
 #include <optional>
 #include <simdjson.h>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 
@@ -169,6 +171,9 @@ public:
             if (!decoded) {
                 return std::unexpected(std::move(decoded.error()));
             }
+            if (!all_finite(*decoded)) {
+                return fail("a mesh has a vertex whose numbers aren't finite");
+            }
             model.meshes.push_back(std::move(*decoded));
         }
         for (const gltf::Material& material : m_asset.materials) {
@@ -183,6 +188,7 @@ public:
             });
         }
         decode_nodes(model);
+        name_nodes(model);
         for (const gltf::Skin& skin : m_asset.skins) {
             model.skins.push_back(decode_skin(skin));
         }
@@ -195,6 +201,9 @@ public:
             model.clips.push_back(std::move(*clip));
         }
         decode_cameras_and_lights(model);
+        if (result_t<void> placed = check_entities(model); !placed) {
+            return std::unexpected(std::move(placed.error()));
+        }
         {
             const std::scoped_lock lock(m_reads_mutex);
             std::ranges::sort(m_reads);
@@ -1273,6 +1282,90 @@ private:
             floats.insert(floats.end(), value.begin(), value.end());
         }
         return floats;
+    }
+
+    // Whether every number of a mesh's vertices is finite, as the scene's bounds and picking need.
+    static bool all_finite(const mesh_t& mesh) {
+        const auto finite = [](const auto& values) {
+            return std::ranges::all_of(values, [](const auto& value) {
+                return std::ranges::all_of(value, [](float part) { return std::isfinite(part); });
+            });
+        };
+        return std::ranges::all_of(mesh.primitives, [&](const primitive_t& primitive) {
+            return finite(primitive.positions) && finite(primitive.normals) &&
+                   finite(primitive.tangents) && finite(primitive.uv0) && finite(primitive.uv1) &&
+                   finite(primitive.colors) && finite(primitive.weights) &&
+                   std::ranges::all_of(primitive.targets, [&](const morph_target_t& target) {
+                       return finite(target.positions) && finite(target.normals) &&
+                              finite(target.tangents);
+                   });
+        });
+    }
+
+    // Gives every node a name of its own, which clips and skins find it by: node_<index> for one
+    // with none, and for the second of a name, the name with #2 after it, and so on.
+    static void name_nodes(model_t& model) {
+        std::unordered_set<std::string> taken;
+        for (const node_t& node : model.nodes) {
+            taken.insert(node.name);
+        }
+        std::unordered_set<std::string> seen;
+        for (std::size_t at = 0; at < model.nodes.size(); ++at) {
+            std::string& name = model.nodes[at].name;
+            if (name.empty()) {
+                name = std::format("node_{}", at);
+                for (std::size_t again = 2; taken.contains(name); ++again) {
+                    name = std::format("node_{}#{}", at, again);
+                }
+                taken.insert(name);
+            } else if (seen.contains(name)) {
+                const std::string first = name;
+                for (std::size_t again = 2; taken.contains(name); ++again) {
+                    name = std::format("{}#{}", first, again);
+                }
+                taken.insert(name);
+            }
+            seen.insert(name);
+        }
+    }
+
+    // What entities can't be, of what's on its nodes: it's refused here, so a file that loads
+    // spawns.
+    result_t<void> check_entities(const model_t& model) const {
+        constexpr float most_turn = std::numbers::pi_v<float>;
+        const auto finite = [](const auto& values) {
+            return std::ranges::all_of(values, [](float part) { return std::isfinite(part); });
+        };
+        // What a camera with no nearest starts from: fbe_camera_set_range's new camera's.
+        constexpr float new_nearest = 0.1F;
+        for (const camera_t& camera : model.cameras) {
+            const bool shaped = camera.orthographic
+                                    ? camera.magnification[1] > 0 && finite(camera.magnification)
+                                    : camera.fov > 0 && camera.fov < most_turn;
+            const float nearest = camera.z_near > 0 ? camera.z_near : new_nearest;
+            if (!shaped || !std::isfinite(camera.z_near) || !std::isfinite(camera.z_far) ||
+                camera.z_near < 0 || (camera.z_far > 0 && camera.z_far <= nearest)) {
+                return fail(std::format("the camera \"{}\" can't see as it says", camera.name));
+            }
+        }
+        for (const light_t& light : model.lights) {
+            if (!finite(light.color) || !std::isfinite(light.intensity) || light.intensity < 0 ||
+                !std::isfinite(light.range) || light.range < 0 ||
+                (light.kind == light_kind_t::SPOT &&
+                 (!std::isfinite(light.inner_cone) || !std::isfinite(light.outer_cone) ||
+                  light.inner_cone < 0 || light.inner_cone > light.outer_cone ||
+                  light.outer_cone > most_turn / 2))) {
+                return fail(std::format("the light \"{}\" can't shine as it says", light.name));
+            }
+        }
+        for (const node_t& node : model.nodes) {
+            const auto& turn = node.rotation;
+            if (!finite(node.translation) || !finite(turn) || !finite(node.scale) ||
+                (turn[0] == 0 && turn[1] == 0 && turn[2] == 0 && turn[3] == 0)) {
+                return fail(std::format("the node \"{}\" can't be placed as it says", node.name));
+            }
+        }
+        return {};
     }
 
     void decode_cameras_and_lights(model_t& model) const {

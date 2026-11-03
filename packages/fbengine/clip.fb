@@ -43,7 +43,7 @@ Public Final Class Clip
 
     /// A Clip of the clip at `index`, from 0, of the glTF a model load decoded, each channel's
     /// entity found by its node's name, so it plays on entities named as the model's nodes; a
-    /// channel of a node with no name moves nothing. A load that isn't a model's, or an index
+    /// node of no name is named as decoding names it, node_<index>, and a second of a name <name>#2. A load that isn't a model's, or an index
     /// outside 0 to its model's Clips - 1, panics. What's wrong in the file, keys a Clip made in code
     /// couldn't have or one name's property moved twice, throws an IOError of INVALID_DATA.
     @MainThread @PanicsAtCaller

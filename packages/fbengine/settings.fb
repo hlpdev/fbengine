@@ -2,8 +2,9 @@
 // and loaded, one Struct a kind of file, whose keys are its Fields' names in snake_case.
 
 /// What the cooker makes of an image: whatever the platforms the game's built for read best,
-/// which is BC7 on every desktop; Basis Universal's UASTC, which a GPU's own format is transcoded
-/// from as it loads; BC7; ASTC 4x4; or its texels as they are.
+/// which is UASTC for now; Basis Universal's UASTC, which a GPU's own format is transcoded from as
+/// it loads, on any GPU; BC7 and ASTC 4x4, which a GPU without them can't load; or its texels as
+/// they are.
 Public Enum ImageCompression
     PLATFORM = 0
     UASTC = 1
@@ -29,6 +30,30 @@ Public Struct ImageSettings
     Public Field Compression: ImageCompression = ImageCompression.PLATFORM
     /// How hard the cooker's encoder works: 0, fastest, to 4, best.
     Public Field Quality: Int32 = 2
+    /// Whether it's clamped at its left and right edges, and at its top and bottom, rather than
+    /// repeated, as Texture.SetWrap sets.
+    Public Field ClampAcross: Bool = False
+    Public Field ClampDown: Bool = False
+    /// Whether its alpha's for blending, as a Material blending AUTO goes by (Texture.SetAlpha),
+    /// when it's a KTX2 of a compressed format, whose blocks aren't read to see. What isn't
+    /// compressed is seen, whatever this says.
+    Public Field Alpha: Bool = False
+End Struct
+
+/// A font's import settings, from its sidecar, as `title.ttf.toml` is title.ttf's:
+///
+/// ```toml
+/// size = 32
+/// bold = true
+/// ```
+Public Struct FontSettings
+    /// Its em's height, in the game's units; Font.Sized makes others.
+    Public Field Size: Float32 = 16.0
+    Public Field Bold: Bool = False
+    Public Field Italic: Bool = False
+    Public Field Underline: Bool = False
+    /// Which face of a collection it is, from 0.
+    Public Field Face: Int32 = 0
 End Struct
 
 /// A glTF's import settings, from its sidecar, as `door.gltf.toml` is door.gltf's:

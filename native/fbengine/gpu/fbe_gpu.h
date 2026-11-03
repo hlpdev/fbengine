@@ -68,6 +68,8 @@ FBE_API int32_t fbe_gpu_device(void);
 // it can't, and then it never starts, saying why each time.
 FBE_API bool fbe_gpu_start(void);
 FBE_API bool fbe_gpu_started(void);
+// How many times it's been stopped, so what was made before can tell that it's gone.
+FBE_API uint64_t fbe_gpu_stops(void);
 // Stops the GPU, if it's started, freeing everything it made, the window's swapchain first; the
 // window stays open, and the GPU can start again.
 FBE_API void fbe_gpu_stop(void);

@@ -238,6 +238,10 @@ enum class fault_t : std::uint8_t {
     PROMISED_DESCRIPTORS,
     /// Making the bindless set, as if the device held one texture fewer than fbengine needs.
     FEWEST_DESCRIPTORS,
+    /// Choosing what files' images are transcoded to, as if the device read no compressed format.
+    NO_COMPRESSED,
+    /// Making a texture of a file's image, as if the device couldn't sample its format.
+    NO_FILE_FORMAT,
 };
 
 /// Makes the next `fault` happen.

@@ -1,0 +1,108 @@
+// Sounds as Assets: OGG, WAV, and FLAC read through res://, kept by the cache, and reloaded in place.
+
+Import std.core
+Import std.io
+Import std.os
+Import std.test
+Import std.time
+Import fbengine
+Import fbengine_audio
+Import "./watching"
+Import "./wav"
+
+// Flips until `done` says so, or 30 seconds have gone.
+Function FlipUntil(done: Func(): Bool)
+    Local since = Instant.Now()
+    While !done() && (Instant.Now() - since) < 30.Seconds
+        Flip()
+        Sleep(5.Milliseconds)
+    End While
+End Function
+
+@Test
+Function EachKindOfSoundFileIsASound() Throws IOError
+    Assets.MountFiles("res://sounds", {
+        "tone.wav": Embed("data/tone.wav"),
+        "tone.flac": Embed("data/tone.flac"),
+        "tone.ogg": Embed("data/tone.ogg"),
+    })
+    Defer Assets.Unmount("res://sounds")
+    For name In ["tone.wav", "tone.flac", "tone.ogg"]
+        Local sound = Try Assets.Load<Sound>("res://sounds/{name}")
+        Expect(sound.Frames() > 0)
+        Expect(!sound.Streamed())
+        sound.Free()
+        Expect(sound.Freed())
+    End For
+End Function
+
+@Test
+Function ASidecarSaysASoundIsStreamed() Throws IOError
+    Assets.MountFiles("res://music", {
+        "song.ogg": Embed("data/tone.ogg"),
+        "song.ogg.toml": "streamed = true".Bytes,
+    })
+    Defer Assets.Unmount("res://music")
+    Local sound = Try Assets.Load<Sound>("res://music/song.ogg")
+    Defer sound.Free()
+    Expect(sound.Streamed())
+End Function
+
+@Test
+Function TheCacheHasOneSoundOfAFile() Throws IOError
+    Assets.MountFiles("res://one", {"tone.ogg": Embed("data/tone.ogg")})
+    Defer Assets.Unmount("res://one")
+    Local first = Try Assets.Load<Sound>("res://one/tone.ogg")
+    Local second = Try Assets.Load<Sound>("res://ONE/tone.ogg")
+    Expect(RefEquals(first, second))
+    first.Free()
+    Expect(!second.Freed())
+    second.Free()
+    Expect(second.Freed())
+    Local third = Try Assets.LoadAsync<Sound>("res://one/tone.ogg").Wait()
+    Expect(!RefEquals(first, third))
+    third.Free()
+End Function
+
+@Test
+Function WhatIsntASoundThrows()
+    Assets.MountFiles("res://notes", {"a.ogg": "not a sound".Bytes, "b.ogg": "".Bytes})
+    Defer Assets.Unmount("res://notes")
+    Expect(ExpectThrows<IOError>(Assets.Load<Sound>("res://notes/a.ogg"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(ExpectThrows<IOError>(Assets.Load<Sound>("res://notes/b.ogg"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+End Function
+
+@Test
+Function AChangedFileReloadsItsSoundInPlace() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "door.wav", Embed("data/tone.wav"))
+    Assets.MountFolder("res://hot-sound", folder.Path)
+    Defer Assets.Unmount("res://hot-sound")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Local sound = Try Assets.Load<Sound>("res://hot-sound/door.wav")
+    Defer sound.Free()
+    sound.SetVolume(0.5)
+    Local rate = sound.SampleRate()
+    Local frames = sound.Frames()
+    Try WatcherStarted(folder.Path, "res://hot-sound")
+    Try File.WriteBytesAtomic(folder.Path / "door.wav", Wav(Constant(0, 100)))
+    FlipUntil(Function(): Bool => sound.Frames() != frames || sound.SampleRate() != rate)
+    Expect(sound.Frames() != frames || sound.SampleRate() != rate)
+    Expect(sound.Volume() == 0.5)
+    // What doesn't load leaves it as it was.
+    Local now = sound.Frames()
+    Try File.WriteBytesAtomic(folder.Path / "door.wav", "not a sound".Bytes)
+    Local failed = False
+    FlipUntil(Function(): Bool
+        For reload In Assets.Reloaded()
+            If reload.Error != Null Then failed = True
+        End For
+        Return failed
+    End Function)
+    Expect(failed)
+    Expect(sound.Frames() == now)
+End Function

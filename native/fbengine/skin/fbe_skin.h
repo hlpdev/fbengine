@@ -28,7 +28,7 @@ FBE_API bool fbe_skin_alive(uint64_t skin);
 
 // A new skin of skin `index` of a model load's glTF, its joints by their nodes' names, with its
 // inverse binds; 0 for a load that isn't a model load done and loaded, an index out of range, or
-// what's in the file: a joint whose node has no name, or the name of one before it, or inverse
+// what's in the file: a joint that's the node of one before it, or inverse
 // binds that aren't one a joint, or numbers.
 FBE_API uint64_t fbe_skin_from_model(uint64_t load, int32_t index);
 // Whether the last fbe_skin_from_model gave 0 for what's in the file, rather than how it was asked.

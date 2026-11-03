@@ -412,9 +412,10 @@ Function AModelReloadsWhenItsBufferDoes() Throws IOError
     reloaded = []
     Try Assets.Reload("res://test-buffer/tri.bin")
     FlipUntil(Function(): Bool => model.Reloads > 0)
-    Expect(model.Reloads == 1)
-    Expect(reloaded.Count == 1)
-    If reloaded.Count == 1 Then Expect(reloaded[0].Path == "res://test-buffer/tri.gltf")
+    Expect(model.Reloads > 0)
+    // Its write, told of late on a Mac, can be another reload of it, so they're counted by whose.
+    Expect(ReloadsOf("res://test-buffer/tri.gltf") > 0)
+    Expect(ReloadsOf("res://test-buffer/tri.gltf") == reloaded.Count)
     // And so it does when it's watched, and the buffer changes alone.
     Local before = Try File.ReadText(folder.Path / "tri.gltf")
     Try WriteTriangle(folder.Path, "tri", 2)
