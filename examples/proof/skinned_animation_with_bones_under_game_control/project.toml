@@ -1,0 +1,6 @@
+[project]
+name = "skinned_animation_with_bones_under_game_control"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../../packages/fbengine" }
