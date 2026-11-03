@@ -3,4 +3,5 @@ name = "ui_cases"
 version = "0.1.0"
 
 [dependencies]
+fbengine = { path = "../../packages/fbengine" }
 fbengine_ui = { path = "../../packages/fbengine_ui" }
