@@ -729,6 +729,12 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/falling_boxes")
   set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION
                        "\n200 boxes fell, 200 came to rest, 100 on others\r?\n$")
+  fbengine_add_watched(examples.falling_boxes.watch "${PROJECT_SOURCE_DIR}/examples/falling_boxes" ""
+                       "\n201 drawn, the highest box's mesh has fallen: True\r?\nwatched 40 frames\r?\n$")
+  fbengine_add_watched(examples.falling_boxes.escape "${PROJECT_SOURCE_DIR}/examples/falling_boxes"
+                       "--press-at;1" "\nwatched 2 frames\r?\n$")
+  fbengine_add_watched(examples.falling_boxes.close "${PROJECT_SOURCE_DIR}/examples/falling_boxes"
+                       "--close-at;1" "\nwatched 2 frames\r?\n$")
   add_test(NAME examples.door_and_trigger
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/door_and_trigger")
@@ -749,28 +755,7 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DEXAMPLE=${PROJECT_SOURCE_DIR}/examples/video_player"
                    -P "${CMAKE_CURRENT_SOURCE_DIR}/video/player_usage.cmake")
   set_tests_properties(examples.video_player.usage PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
-  # E14's proofs of this lane's: what each prints, line by line, and its --watch walked offscreen.
-  function(fbengine_add_lane_proof name)
-    list(JOIN ARGN "?
-" printed)
-    set(folder "${PROJECT_SOURCE_DIR}/examples/proof/${name}")
-    add_test(NAME proof.${name} COMMAND "${FBENGINE_FB}" --color never run "${folder}")
-    set_tests_properties(proof.${name} PROPERTIES
-                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                         PASS_REGULAR_EXPRESSION "
-${printed}?
-$"
-                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
-    add_test(NAME proof.${name}_watch
-             COMMAND "${FBENGINE_FB}" --color never run "${folder}" -- --watch --frames 40)
-    set_tests_properties(proof.${name}_watch PROPERTIES
-                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                         PASS_REGULAR_EXPRESSION "
-watched 40 frames?
-$"
-                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
-  endfunction()
-  fbengine_add_lane_proof(two_videos_at_startup
+  fbengine_add_proof(two_videos_at_startup
                           "the first: 64 by 48, 2.08 s, its own sound True"
                           "at 0.25 s of its sound, red"
                           "at 0.75 s of its sound, green"
@@ -786,7 +771,10 @@ $"
                           "fitted to 200 by 96: 128 by 96, at 36, 0"
                           "its bars black, black, its middle white"
                           "skipped at half a second: heard True, then False")
-  fbengine_add_lane_proof(stack_and_joints
+  fbengine_add_watched(proof.two_videos_at_startup_skipped
+                       "${PROJECT_SOURCE_DIR}/examples/proof/two_videos_at_startup" "--skip-at;10"
+                       "\nthe 2th video, at its frame [0-9]+\r?\nwatched 40 frames\r?\n$")
+  fbengine_add_proof(stack_and_joints
                           "the stack stands, at rest: True"
                           "the block's held where it was: True"
                           "the door's opened a quarter turn: True"
@@ -799,6 +787,9 @@ $"
                           "the lift's come back down: True"
                           "every entity's on its body: True"
                           "twice over, it all ends alike: True")
+  fbengine_add_watched(proof.stack_and_joints_drawn "${PROJECT_SOURCE_DIR}/examples/proof/stack_and_joints"
+                       "--again-at;20"
+                       "\n32 of 32 pieces drawn\r?\nthe block's drawn red: True\r?\nwatched 40 frames\r?\n$")
   add_test(NAME examples.crate_on_a_lift
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/crate_on_a_lift")
