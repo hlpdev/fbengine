@@ -4,6 +4,12 @@ Import std.math
 Import fbengine
 Import "./flow"
 
+// How fast a stick held all the way over turns you, in radians a second.
+Const TURN_SPEED: Float = 2.4
+
+/// How far a stick held over by `stick` turns you in `seconds`, in radians.
+Public Function StickTurn(stick: Float, seconds: Float): Float => stick * TURN_SPEED * seconds
+
 /// The text flow's keys and buttons, bound to what they do.
 Public Final Class TextControls
     Public Field Set: ActionSet

@@ -17,7 +17,7 @@
 [0:32] the sluice can be opened now
 [0:32] you open the sluice, and wait for the water
 [0:33] you reach the yard
-[0:35] Pip catches up
+[0:34] Pip catches up
 [0:43] you reach the causeway
 [0:44] Pip catches up
 [0:54] you reach the far rock

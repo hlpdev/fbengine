@@ -5,6 +5,7 @@ Import std.collections
 Import std.core
 Import std.math
 Import "./flow"
+Import "./ground"
 
 /// A sound played once, when something happens.
 Public Enum Cue
@@ -14,6 +15,18 @@ Public Enum Cue
     GULL = 3
     CREAK = 4
     SPLASH = 5
+    FLOOR_1 = 6
+    FLOOR_2 = 7
+    WADE_1 = 8
+    WADE_2 = 9
+End Enum
+
+/// What you're walking on.
+Public Enum Surface
+    ROCK = 0
+    ROAD = 1
+    FLOOR = 2
+    SHALLOWS = 3
 End Enum
 
 // How far you walk to a step, in meters, and how far a move can be before it's the water carrying you.
@@ -25,29 +38,39 @@ Const GULL_AT_LEAST: Float = 5.0
 Const GULL_MORE: Float = 9.0
 Const CREAK_AT_LEAST: Float = 3.0
 Const CREAK_MORE: Float = 5.0
+// How far off a gull calls, at least, and how much further it can be, and how many tries it takes to
+// find water there.
+Const GULL_NEAREST: Float = 25.0
+Const GULL_FURTHER: Float = 25.0
+Const GULL_TRIES: Int = 16
 
 // How much of the mix what's all around you takes, and the wheel, so that with everything at its
 // loudest at once, it doesn't clip.
-Const AMBIENCE: Float = 0.21
+Const AMBIENCE: Float = 0.4
 Const WHEEL: Float = 0.25
+// How far a low-pass opens when it's as good as none, how low it goes from inside the mill, where the
+// wind's and sea's own are around 200 Hz, and how long it takes between.
+Const OPEN_CUTOFF: Float = 18000.0
+Const MUFFLED_CUTOFF: Float = 350.0
+Const CUTOFF_SECONDS: Float = 0.3
 
 /// How loud a cue plays.
 Public Function CueLevel(cue: Cue): Float
     Select cue
         Case Cue.GULL
-            Return 0.14
+            Return 0.3
         Case Cue.CREAK
-            Return 0.17
+            Return 0.2
         Case Cue.SPLASH
-            Return 0.28
+            Return 0.3
         Default
-            Return 0.14
+            Return 0.25
     End Select
 End Function
 
-/// How loud the wind is, by the tide's clock: it rises with the storm.
-Public Function WindLevel(clock: Float64): Float
-    Return (0.35 + 0.5 * (Min(clock / TIDE_IN_AT, 1.0) As Float)) * AMBIENCE
+/// How loud the wind is, by the tide's clock: it rises with the storm; and less inside the mill.
+Public Function WindLevel(clock: Float64, inside: Bool): Float
+    Return (0.35 + 0.5 * (Min(clock / TIDE_IN_AT, 1.0) As Float)) * (inside ? 0.5 : 1.0) * AMBIENCE
 End Function
 
 /// How loud the sea is, by the tide's clock, as it comes in, and less inside the mill.
@@ -56,16 +79,27 @@ Public Function SeaLevel(clock: Float64, inside: Bool): Float
     Return (0.3 + 0.6 * rising) * (inside ? 0.45 : 1.0) * AMBIENCE
 End Function
 
-/// The low-pass on what's outside, in hertz, muffled while you're inside the mill, and 0 for none.
-Public Function OutsideLowPass(inside: Bool): Float => inside ? 900.0 : 0.0
+/// The low-pass on what's outside, in hertz, as low as it goes while you're inside the mill.
+Public Function OutsideCutoff(inside: Bool): Float => inside ? MUFFLED_CUTOFF : OPEN_CUTOFF
 
-/// How fast the wheel turns, as how it ended says: 0 until the water's back, 1 for all three fitted.
+/// A low-pass at `from`, `seconds` further on toward `to`, evenly by its octaves, so it doesn't click.
+Public Function CutoffToward(from: Float, to: Float, seconds: Float): Float
+    If from == to Then Return to
+    Local whole = Log2((OPEN_CUTOFF / MUFFLED_CUTOFF) As Float64) As Float
+    Local octaves = whole * Min(seconds / CUTOFF_SECONDS, 1.0)
+    Local next = from * (Exp(((to > from ? octaves : -octaves) * 0.6931472) As Float64) As Float)
+    If (to > from && next >= to) || (to < from && next <= to) Then Return to
+    Return next
+End Function
+
+/// How fast the wheel turns, as how it ended says: 0 until the water's back, 1 for all three fitted;
+/// it's drawn and heard at this.
 Public Function WheelSpeed(ended: Ending): Float
     Select ended
         Case Ending.BRIGHT
             Return 1.0
         Case Ending.DIM
-            Return 0.4
+            Return 0.6
         Default
             Return 0.0
     End Select
@@ -74,13 +108,35 @@ End Function
 /// How loud the wheel is, turning at `speed`.
 Public Function WheelLevel(speed: Float): Float => (0.3 + 0.7 * speed) * WHEEL
 
-/// What's to be played, as the game goes on: steps by how far you've walked, never the same one
-/// twice running; gulls until the flood; creaks inside the mill, or from the turning wheel; and the
-/// splash of the flood.
+/// What you're on at (`x`, `z`), `inside` the mill or not, with the sea at `sea`.
+Public Function SurfaceAt(x: Float, z: Float, inside: Bool, sea: Float): Surface
+    If inside Then Return Surface.FLOOR
+    If GroundHeight(x, z) < sea Then Return Surface.SHALLOWS
+    Return OnRoad(x, z) ? Surface.ROAD : Surface.ROCK
+End Function
+
+/// How high a surface's steps play.
+Public Function StepPitch(surface: Surface): Float => surface == Surface.ROAD ? 0.85 : 1.0
+
+// The steps that a surface can be.
+Function StepsOn(surface: Surface): Cue[]
+    Select surface
+        Case Surface.FLOOR
+            Return [Cue.FLOOR_1, Cue.FLOOR_2]
+        Case Surface.SHALLOWS
+            Return [Cue.WADE_1, Cue.WADE_2]
+        Default
+            Return [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3]
+    End Select
+End Function
+
+/// What's to be played, as the game goes on: steps by how far you've walked, by what you're on, never
+/// the same one twice running; gulls until the flood; creaks inside the mill, or from the turning
+/// wheel; and the splash of the flood.
 Public Final Class Cues
     Field state: UInt32 = 2463534242
     Field walked: Float = 0.0
-    Field foot: Int = 0
+    Field lastStep: Cue = Cue.STEP_1
     Field untilGull: Float
     Field untilCreak: Float
     Field flooded: Bool = False
@@ -90,14 +146,15 @@ Public Final Class Cues
         untilCreak = CREAK_AT_LEAST + Random() * CREAK_MORE
     End New
 
-    /// What to play now, `seconds` on, with you `moved` meters further.
-    Public Method Step(flow: Flow, moved: Float, seconds: Float): Cue[]
+    /// What to play now, `seconds` on, with you `moved` meters further, on `surface`, and `inside` the
+    /// mill or not.
+    Public Method Step(flow: Flow, moved: Float, seconds: Float, surface: Surface,
+                       inside: Bool): Cue[]
         Local cues: Cue[] = []
         If moved <= FARTHEST_MOVE Then walked += moved
         If walked >= STRIDE
             walked -= STRIDE
-            cues.Add(foot As Cue)
-            foot = (foot + 1) % 3
+            cues.Add(NextStep(surface))
         End If
         If !flow.Flooded()
             untilGull -= seconds
@@ -106,7 +163,7 @@ Public Final Class Cues
                 untilGull = GULL_AT_LEAST + Random() * GULL_MORE
             End If
         End If
-        If flow.At() == Area.INSIDE || WheelSpeed(flow.Ended()) > 0.0
+        If inside || WheelSpeed(flow.Ended()) > 0.0
             untilCreak -= seconds
             If untilCreak <= 0.0
                 cues.Add(Cue.CREAK)
@@ -118,6 +175,28 @@ Public Final Class Cues
             cues.Add(Cue.SPLASH)
         End If
         Return cues
+    End Method
+
+    /// Where a gull calls from, heard at (`x`, `z`): off in any direction, over the water, if it can.
+    Public Method GullAt(x: Float, z: Float): Vec2
+        Local at = Vec2(x, z)
+        For attempt = 1 To GULL_TRIES
+            Local bearing = Random() * 6.28318
+            Local away = GULL_NEAREST + Random() * GULL_FURTHER
+            at = Vec2(x + (Sin(bearing As Float64) As Float) * away,
+                      z + (Cos(bearing As Float64) As Float) * away)
+            If GroundHeight(at.x, at.y) < 0.0 Then Return at
+        End For
+        Return at
+    End Method
+
+    // Which step's next, on `surface`, any but the last.
+    Method NextStep(surface: Surface): Cue
+        Local bank = StepsOn(surface)
+        Local index = ((Random() * 65535.0) As Int) % bank.Count
+        If bank[index] == lastStep Then index = (index + 1) % bank.Count
+        lastStep = bank[index]
+        Return lastStep
     End Method
 
     // A number from 0 to 1, the same each game, so a test hears what a person does.

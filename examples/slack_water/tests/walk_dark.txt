@@ -7,9 +7,9 @@
 [0:21] the sluice paddle lies here
 [0:26] Pip catches up
 [0:26] you set off for the far rock
-[0:35] you reach the far rock
-[0:35] the drive belt lies here
-[0:40] Pip catches up
+[0:36] you reach the far rock
+[0:36] the drive belt lies here
+[0:41] Pip catches up
 [1:10] the water's rising: the causeway floods in a minute
 [2:10] the causeway floods
 [2:10] the sea takes the sluice paddle

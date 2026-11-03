@@ -1,5 +1,6 @@
-// The game's sounds in its world: streamed wind and sea all around, rising with the tide; gulls
-// over the water, creaks and the wheel at the mill, and your own steps, as its Cues say.
+// The game's sounds in its world: streamed wind and sea all around, rising with the tide, muffled from
+// inside the mill; gulls over the water, creaks at the mill, the wheel at the wheel, the flood's splash
+// on the road, and your own steps, by what you're on, as its Cues say.
 
 Import std.core
 Import std.io
@@ -11,12 +12,18 @@ Import "./flow"
 Import "./game"
 Import "./ground"
 Import "./island"
+Import "./map"
 Import "./res" As Res
 
-// How far from you a gull calls, and how near and far something at the mill is heard.
-Const GULL_AWAY: Float = 25.0
+// How near something's at its full level, and how far it's heard; a gull's nearer and falls off less,
+// as it's far off, and it's high, as gulls are.
 Const NEAR: Float = 3.0
 Const FAR: Float = 60.0
+Const GULL_NEAR: Float = 15.0
+Const GULL_ROLLOFF: Float = 0.3
+Const GULL_HIGH: Float = 12.0
+// How long the wheel takes to be heard.
+Const WHEEL_FADE: Float64 = 1.0
 
 /// What's playing, for a Game, from the Listener at your eyes.
 Public Final Class Soundscape
@@ -28,13 +35,20 @@ Public Final Class Soundscape
     Field windPlays: Channel
     Field seaPlays: Channel
     Field wheelPlays: Channel?
-    // What's outside the mill: the wind, the sea, and gulls.
+    // What's outside the mill: the wind, the sea, gulls, the wheel, and the splash.
     Field outside: Bus
+    Field cutoff: Float
     Field atMill: Emitter
+    Field atWheel: Emitter
+    Field onRoad: Emitter
     Field overhead: Emitter
     Field fromX: Float
     Field fromZ: Float
     Field played: Int[]
+    // What the wind and sea are at, 0 for none, to hear the rest by itself.
+    Field beds: Float = 1.0
+    // How far through the door the wind's and sea's levels are, from 0, outside, to 1, inside.
+    Field indoors: Float = 0.0
 
     New(sounds: Sound[], wind: Sound, sea: Sound, wheel: Sound, game: Game, island: Island)
         Self.sounds = sounds
@@ -42,30 +56,50 @@ Public Final Class Soundscape
         Self.sea = sea
         Self.wheel = wheel
         cues = Cues()
-        played = [0, 0, 0, 0, 0, 0]
+        played = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         For number = 0 Until sounds.Count
             sounds[number].SetVolume(CueLevel(number As Cue))
         End For
         outside = Bus()
+        cutoff = OutsideCutoff(False)
+        outside.SetLowPass(cutoff)
         wind.SetBus(outside)
         sea.SetBus(outside)
+        wheel.SetBus(outside)
         sounds[Cue.GULL As Int].SetBus(outside)
+        sounds[Cue.SPLASH As Int].SetBus(outside)
         wind.SetLoop(True)
         sea.SetLoop(True)
         wheel.SetLoop(True)
+        // They start at their levels, not at 1.
+        wind.SetVolume(WindLevel(0.0, True))
+        sea.SetVolume(SeaLevel(0.0, True))
         windPlays = wind.Play()
         seaPlays = sea.Play()
         Local works = island.PlaceOf(Spot.WORKS)
-        atMill = Emitter()
-        atMill.SetPosition(Vec3(works.x, GroundHeight(works.x, works.y) + 2.0, works.y))
-        atMill.SetRange(NEAR, FAR)
-        overhead = Emitter()
-        overhead.SetRange(NEAR, FAR)
+        atMill = MadeEmitter(Vec3(works.x, GroundHeight(works.x, works.y) + 2.0, works.y))
+        atWheel = MadeEmitter(island.WheelAt())
+        Local middle = PaddleSpot()
+        onRoad = MadeEmitter(Vec3(middle.x, GroundHeight(middle.x, middle.y) + 1.0, middle.y))
+        onRoad.SetRange(GULL_NEAR, FAR * 2.0)
+        overhead = MadeEmitter(Vec3(0.0, GULL_HIGH, 0.0))
+        overhead.SetRange(GULL_NEAR, FAR * 2.0)
+        overhead.SetRolloff(GULL_ROLLOFF)
         Local start = game.Location()
         fromX = start.x
         fromZ = start.y
         Listener.Follow(game.View())
     End New
+
+    // An Emitter at `place`, with no Doppler effect, as nothing here goes fast enough to want it.
+    @MainThread
+    Static Method MadeEmitter(place: Vec3): Emitter
+        Local made = Emitter()
+        made.SetPosition(place)
+        made.SetRange(NEAR, FAR)
+        made.SetDoppler(0.0)
+        Return made
+    End Method
 
     /// Starts it for `game`; the audio's to be started already.
     @MainThread
@@ -73,7 +107,9 @@ Public Final Class Soundscape
         // By Cue's numbers.
         Local sounds = [Try Assets.Load<Sound>(Res.Step1), Try Assets.Load<Sound>(Res.Step2),
                         Try Assets.Load<Sound>(Res.Step3), Try Assets.Load<Sound>(Res.Gull),
-                        Try Assets.Load<Sound>(Res.Creak), Try Assets.Load<Sound>(Res.Splash)]
+                        Try Assets.Load<Sound>(Res.Creak), Try Assets.Load<Sound>(Res.Splash),
+                        Try Assets.Load<Sound>(Res.Floor1), Try Assets.Load<Sound>(Res.Floor2),
+                        Try Assets.Load<Sound>(Res.Wade1), Try Assets.Load<Sound>(Res.Wade2)]
         Return Soundscape(sounds, Try Assets.Load<Sound>(Res.Wind), Try Assets.Load<Sound>(Res.Sea),
                           Try Assets.Load<Sound>(Res.Wheel), game, island)
     End Method
@@ -103,6 +139,31 @@ Public Final Class Soundscape
         Return plays != Null ? plays.Pitch() : 0.0
     End Method
 
+    /// Where a creak's heard from, the wheel, and the flood's splash.
+    @MainThread Public Method MillAt(): Vec3 => atMill.Position()
+
+    @MainThread Public Method WheelAt(): Vec3 => atWheel.Position()
+
+    @MainThread Public Method SplashAt(): Vec3 => onRoad.Position()
+
+    /// Whether what's outside the mill goes through the bus that muffles it.
+    @MainThread
+    Public Method OutsideOnItsBus(): Bool
+        Local all = [wind, sea, wheel, sounds[Cue.GULL As Int], sounds[Cue.SPLASH As Int]]
+        For sound In all
+            If sound.Bus() != outside Then Return False
+        End For
+        Return True
+    End Method
+
+    /// Sets what the wind and sea are at, 0 for none, to hear the rest by itself.
+    @MainThread
+    Public Method SetBeds(level: Float)
+        beds = level
+        windPlays.SetVolume(WindLevel(0.0, False) * beds)
+        seaPlays.SetVolume(SeaLevel(0.0, False) * beds)
+    End Method
+
     /// Moves it on `seconds`, as `game` has.
     @MainThread
     Public Method Update(game: Game, seconds: Float)
@@ -112,19 +173,59 @@ Public Final Class Soundscape
         Local dz = here.y - fromZ
         fromX = here.x
         fromZ = here.y
-        For cue In cues.Step(flow, Sqrt(dx * dx + dz * dz), seconds)
+        Local inside = InMill(here.x, here.y)
+        Local surface = SurfaceAt(here.x, here.y, inside, SeaHeight(flow.Clock()))
+        For cue In cues.Step(flow, Sqrt(dx * dx + dz * dz), seconds, surface, inside)
+            sounds[cue As Int].SetPitch(
+                cue == Cue.GULL || cue == Cue.CREAK || cue == Cue.SPLASH ? 1.0 : StepPitch(surface))
             Play(cue, here)
         End For
-        windPlays.SetVolume(WindLevel(flow.Clock()))
-        seaPlays.SetVolume(SeaLevel(flow.Clock(), flow.At() == Area.INSIDE))
-        outside.SetLowPass(OutsideLowPass(flow.At() == Area.INSIDE))
+        Surroundings(flow.Clock(), inside, seconds)
         Local speed = WheelSpeed(flow.Ended())
         If speed > 0.0 && wheelPlays == Null
-            Local plays = atMill.Play(wheel)
-            plays.SetVolume(WheelLevel(speed))
-            plays.SetPitch(0.6 + 0.4 * speed)
-            wheelPlays = plays
+            // At its level and pitch from its first sample.
+            wheel.SetVolume(WheelLevel(speed))
+            wheel.SetPitch(speed)
+            wheelPlays = atWheel.Play(wheel, False, WHEEL_FADE)
         End If
+    End Method
+
+    /// Sets the wind and sea for `clock`, heard from `inside` the mill or not, the low-pass moving
+    /// toward what suits, `seconds` on.
+    @MainThread
+    Public Method Surroundings(clock: Float64, inside: Bool, seconds: Float)
+        // Their levels move as the low-pass does, so going through the door doesn't click.
+        Local goal = inside ? 1.0 : 0.0
+        Local most = seconds * 5.0
+        indoors += Clamp(goal - indoors, -most, most)
+        Local wind = WindLevel(clock, False) +
+                     (WindLevel(clock, True) - WindLevel(clock, False)) * indoors
+        Local sea = SeaLevel(clock, False) +
+                    (SeaLevel(clock, True) - SeaLevel(clock, False)) * indoors
+        windPlays.SetVolume(wind * beds)
+        seaPlays.SetVolume(sea * beds)
+        cutoff = CutoffToward(cutoff, OutsideCutoff(inside), seconds)
+        outside.SetLowPass(cutoff)
+    End Method
+
+    /// Plays a cue where it happens: steps at you, a gull out over the water, a creak at the mill, and
+    /// the splash on the road.
+    @MainThread
+    Public Method Play(cue: Cue, here: Vec2)
+        played[cue As Int] += 1
+        Local sound = sounds[cue As Int]
+        Select cue
+            Case Cue.GULL
+                Local at = cues.GullAt(here.x, here.y)
+                overhead.SetPosition(Vec3(at.x, GULL_HIGH, at.y))
+                overhead.Play(sound)
+            Case Cue.CREAK
+                atMill.Play(sound)
+            Case Cue.SPLASH
+                onRoad.Play(sound)
+            Default
+                sound.Play()
+        End Select
     End Method
 
     /// Stops it, and lets its sounds go.
@@ -136,6 +237,8 @@ Public Final Class Soundscape
         Local plays = wheelPlays
         If plays != Null Then plays.Stop()
         atMill.Free()
+        atWheel.Free()
+        onRoad.Free()
         overhead.Free()
         For sound In sounds
             sound.Free()
@@ -144,21 +247,5 @@ Public Final Class Soundscape
         sea.Free()
         wheel.Free()
         outside.Free()
-    End Method
-
-    // Plays a cue where it happens: your steps at you, a gull out over the water, a creak at the mill.
-    @MainThread
-    Method Play(cue: Cue, here: Vec2)
-        played[cue As Int] += 1
-        Local sound = sounds[cue As Int]
-        Select cue
-            Case Cue.GULL
-                overhead.SetPosition(Vec3(here.x + GULL_AWAY, 15.0, here.y - GULL_AWAY))
-                overhead.Play(sound)
-            Case Cue.CREAK
-                atMill.Play(sound)
-            Default
-                sound.Play()
-        End Select
     End Method
 End Class

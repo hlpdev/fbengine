@@ -2,11 +2,13 @@
 [0:02] Pip catches up
 [0:05] the gear lies here
 [0:11] you reach the causeway
+[0:11] Pip catches up
 [1:10] the water's rising: the causeway floods in a minute
 [2:10] the causeway floods
 [2:10] the sea takes the sluice paddle
 [2:10] the sea takes the drive belt
 [2:10] the water carries you to the yard
 [2:10] there's nothing left to do but wait for the tide
+[2:10] Pip catches up
 [4:00] the tide comes in
 [4:00] the wheel stands still, and the lamp stays dark

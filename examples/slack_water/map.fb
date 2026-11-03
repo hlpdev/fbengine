@@ -45,6 +45,18 @@ End Function
 /// Where the belt lies, on the far rock.
 Public Function BeltSpot(): Vec2 => Vec2(FAR_X, FAR_Z)
 
+/// Where the road's ends are.
+Public Function RoadEnd(far: Bool): Vec2
+    Local x = far ? ROAD_EAST : ROAD_WEST
+    Return Vec2(x, RoadZ(x))
+End Function
+
+/// Where the water leaves Pip, on the mill's side, or the far side: a little further in than you.
+Public Function PipLanding(far: Bool): Vec2
+    Local x = far ? ROAD_EAST + LANDING + 2.0 : ROAD_WEST - LANDING - 2.0
+    Return Vec2(x, RoadZ(x))
+End Function
+
 /// Where the water leaves someone on the mill's side, or the far side.
 Public Function Landing(far: Bool): Vec2
     Local x = far ? ROAD_EAST + LANDING : ROAD_WEST - LANDING
@@ -58,15 +70,22 @@ Function Apart(one: Vec2, two: Vec2): Float
     Return Sqrt(dx * dx + dy * dy)
 End Function
 
-/// How many meters it is from the mill's middle out its door to the gear, from the gear to the
-/// paddle, and from the paddle to the belt: the flow's walks.
+/// How many meters it is from the mill's middle out its door to the gear, from the gear by the road's
+/// end to the paddle, and from the paddle by the road's other end to the belt: the flow's walks.
 Public Function LegMeters(leg: Int): Float
     Select leg
         Case 0
             Return Apart(MillSpot(), DoorSpot()) + Apart(DoorSpot(), GearSpot())
         Case 1
-            Return Apart(GearSpot(), PaddleSpot())
+            Return Apart(GearSpot(), RoadEnd(False)) + Apart(RoadEnd(False), PaddleSpot())
         Default
-            Return Apart(PaddleSpot(), BeltSpot())
+            Return Apart(PaddleSpot(), RoadEnd(True)) + Apart(RoadEnd(True), BeltSpot())
     End Select
+End Function
+
+/// How many meters it is from the mill's middle to the road's end, on the mill's side or the far one.
+Public Function ToRoadEnd(far: Bool): Float
+    Local west = LegMeters(0) + Apart(GearSpot(), RoadEnd(False))
+    Return far ? west + Apart(RoadEnd(False), PaddleSpot()) + Apart(PaddleSpot(),
+                                                                    RoadEnd(True)) : west
 End Function

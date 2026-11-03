@@ -275,6 +275,9 @@ Public Final Class Island
         wheel.SetRotation(angle, 0.0, ToRadians(90.0))
     End Method
 
+    /// How far the wheel's turned.
+    @MainThread Public Method WheelTurned(): Quat => wheel.Rotation()
+
     /// Lights the lamp, bright, or dimmer.
     @MainThread
     Public Method LightLamp(bright: Bool)

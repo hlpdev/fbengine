@@ -84,14 +84,17 @@ End Function
 // How many seconds it is from `place` to the next, away from the mill, on foot, as the map has it.
 Function LegSeconds(place: Area): Float64 => (LegMeters(place As Int) / WALK_SPEED) As Float64
 
-// How many seconds of walking `place` is from the mill.
-Function Along(place: Area): Float64
+/// How many seconds of walking `place` is from the mill.
+Public Function Along(place: Area): Float64
     Local sum: Float64 = 0.0
     For leg = 0 Until place As Int
         sum += LegSeconds(leg As Area)
     End For
     Return sum
 End Function
+
+// How many seconds of walking the road's end is from the mill.
+Public Function RoadEndAlong(far: Bool): Float64 => (ToRoadEnd(far) / WALK_SPEED) As Float64
 
 // How many seconds of walking the middle of what floods is from the mill: where the paddle lies.
 Function FloodsMiddle(): Float64 => Along(Area.CAUSEWAY)
@@ -168,6 +171,9 @@ Public Final Class Flow
 
     /// What the clock on the screen says: until the flood, then until the tide.
     Public Method ClockLine(): String
+        If !flooded && clock >= RISING_AT
+            Return "the water's rising: {Time(FloodLeft())} until the causeway floods"
+        End If
         If !flooded Then Return "{Time(FloodLeft())} until the causeway floods"
         If ending == Ending.NONE Then Return "{Time(TideLeft())} until the tide's in"
         Return "the tide's in"
@@ -434,11 +440,16 @@ Public Final Class Flow
             End If
         End For
         Local here = WalkedAlong()
-        If here > Along(Area.YARD) && here < Along(Area.FAR_ROCK)
+        Local going = walkingTo
+        If here > RoadEndAlong(False) && here < RoadEndAlong(True)
             walkingTo = Null
             at = here > FloodsMiddle() ? Area.FAR_ROCK : Area.YARD
             pipLeft = PIP_LAG
             Say("the water carries you to {PlaceName(at)}")
+        ElseIf going != Null && going == Area.CAUSEWAY
+            // Still on a rock, setting off for it: you turn back.
+            walkingTo = Null
+            Say("the causeway's under water")
         End If
         // Pip goes as you would; past the water, Pip stays, with what Pip holds. In 3D, the game says.
         If pipAt == Area.CAUSEWAY Then pipAt = at == Area.FAR_ROCK ? Area.FAR_ROCK : Area.YARD

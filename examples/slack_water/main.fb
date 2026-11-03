@@ -2,11 +2,13 @@
 // brass helper. WASD and the mouse walk the island, E takes, fits, and opens the sluice, Q hands
 // things to Pip and takes them back, Escape ends it. With `--walk <bright|dim|dark> [<kept>]`, as ctest
 // runs it, it's offscreen, played by key presses to that ending, ten steps a second, as fast as they
-// go, and what it said is compared with what's kept; `--walk3d` does the same on the island, in 3D.
-// With `--frames <folder>`, the same to its bright ending, saving a PNG there at each moment that shows
-// something, and checking what's drawn. With `--check <folder>`, it loads the assets its tools made
-// there, and checks what they are; with `--match <made> <kept>`, that two folders of them are the same.
-// Whatever a check finds wrong is its exit code.
+// go, and what it said is compared with what's kept; `--walk3d <bright|dim|dark|cut|swept|wing|far_end>
+// [<kept>]` does the same on the island, in 3D, checking how it stands at every step. With `--frames
+// <folder>`, the same to its bright ending, saving a PNG there at each moment that shows something, and
+// checking what's drawn. `--feel` tries its keys, mouse, and gamepad, and `--hear` what's in its mix.
+// With `--check <folder>`, it loads the assets its tools made there, and checks what they are; with
+// `--match <made> <kept>`, that two folders of them are the same. Whatever a check finds wrong is its
+// exit code.
 
 Import std.collections
 Import std.core
@@ -258,7 +260,8 @@ Function Checked(folder: Path) Throws GraphicsError, IOError
     Assets.MountFolder("res://made", folder)
     Defer Assets.Unmount("res://made")
     Local soundsGood = True
-    For name In ["wind", "sea", "gull", "creak", "wheel", "step_1", "step_2", "step_3", "splash"]
+    For name In ["wind", "sea", "gull", "creak", "wheel", "step_1", "step_2", "step_3", "floor_1",
+                 "floor_2", "wade_1", "wade_2", "splash"]
         Local sound = Try Assets.Load<Sound>("res://made/{name}.wav")
         Local fault = SoundFault(Try Assets.ReadBytes("res://made/{name}.wav"))
         If fault != Null
@@ -434,9 +437,16 @@ Function Walk3dOf(name: String): String[]?
         // the flooded road, which holds you back.
         Case "cut"
             Return ["door", "crossing", "E", "shore", "131", "crossing", "240"]
-        // Standing on the road near its mill end as it floods, which takes you the short way.
+        // Standing on the road near its mill end as it floods, Pip with you, which takes you the short
+        // way.
         Case "swept"
             Return ["door", "near_west", "240"]
+        // Beside the road, in its span, too deep once it floods.
+        Case "wing"
+            Return ["door", "crossing", "wing", "240"]
+        // Just past the road's far end as it floods, which takes you nowhere.
+        Case "far_end"
+            Return ["door", "crossing", "far_end", "240"]
         Default
             Return Null
     End Select
@@ -454,7 +464,11 @@ Function WalkTarget(island: Island, step: String): Vec2?
         Case "shore"
             Return Landing(False)
         Case "near_west"
-            Return Vec2(ROAD_WEST + 3.0, RoadZ(ROAD_WEST + 3.0))
+            Return Vec2(ROAD_WEST + 6.0, RoadZ(ROAD_WEST + 6.0))
+        Case "wing"
+            Return Vec2(15.0, RoadZ(15.0) - 3.8)
+        Case "far_end"
+            Return Vec2(ROAD_EAST + 0.8, RoadZ(ROAD_EAST + 0.8))
         Case "gear"
             Return island.PartSpot(Part.GEAR)
         Case "belt"
@@ -478,9 +492,10 @@ Function Fault(game: Game, island: Island): String?
             Return "Pip's at {pip.x}, {pip.y}, not {PlaceName(flow.PipAt())}"
         End If
     End If
-    Local dx = here.x - pip.x
-    Local dz = here.y - pip.y
-    If flow.PipHere() && dx * dx + dz * dz > PIP_NEAR * PIP_NEAR Then Return "Pip's too far to be here"
+    If flow.PipHere() && !PipWithYou(pip.x, pip.y, here.x, here.y)
+        Return "Pip's too far to be here"
+    End If
+    If game.EyeAt() <= SeaHeight(flow.Clock()) Then Return "your eyes are under the sea"
     If flow.Flooded() && (OnRoad(here.x, here.y) || OnRoad(pip.x, pip.y))
         Return "someone's on the flooded road"
     End If
@@ -527,11 +542,16 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     Defer Audio.Stop()
     Local scape = Try Soundscape.Make(game, island)
     Defer scape.Free()
+    // Before anything's said its level, it's already not loud.
+    Checks("it starts quiet, before its first step", PeakOf(Audio.Mix(1024)) < 0.2)
+    Local mixedFrom = Audio.Frames()
+    Local steps = 0
     Local loudest: Float = 0.0
     Local next = 0
     Local doing = ""
     Local walking = False
     Local fault: String? = Null
+    Local flooded = False
     While game.Story().Ended() == Ending.NONE
         doing = ""
         If next < walk.Count
@@ -573,9 +593,17 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
         Flip(False)
         game.Step(controls, 0.1)
         scape.Update(game, 0.1)
-        For sample In Audio.Mix(256)
-            loudest = Max(loudest, Abs(sample))
-        End For
+        // Mixed at the pace it's played, a tenth of a second a step.
+        loudest = Max(loudest, PeakOf(Audio.Mix(4410)))
+        steps += 1
+        If !flooded && game.Story().Flooded()
+            flooded = True
+            Local you = game.Location()
+            Local pip = game.PipLocation()
+            Local apart = Sqrt((you.x - pip.x) * (you.x - pip.x) +
+                               (you.y - pip.y) * (you.y - pip.y))
+            If apart < 1.0 Then fault = "you and Pip landed on one spot"
+        End If
         If fault == Null
             fault = Fault(game, island)
             If fault != Null Then Print("{game.Story().Clock()}: {fault}")
@@ -586,45 +614,225 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     stepped(game, "ended")
     Checks("it stood as the flow says, all along", fault == Null)
     Heard(scape, game.Story(), loudest)
-    // Once it's ended, nothing more can happen, nor is anything offered.
+    Flip(False)
+    Checks("you hear from where you see", IsClose(Listener.Position(), game.View().Position(), 1.0))
+    Checks("its mix went at the pace of the game",
+           Audio.Frames() - mixedFrom == (steps As Int64) * 4410)
+    // Once it's ended, nothing more can happen, nor is anything offered, though the wheel goes round.
     Local said = lines.Count
     Local ended = game.Story().Ended()
+    Local wheelWas = island.WheelTurned()
     Try Simulate.PressKey(Key.E)
     Try Simulate.PressKey(Key.Q)
     Flip(False)
     game.Step(controls, 0.1)
     Checks("nothing's done after the end", lines.Count == said && game.Story().Ended() == ended)
     Checks("nothing's offered after the end", game.Prompt() == "")
+    Checks("the wheel turns only if it was mended",
+           (WheelSpeed(ended) > 0.0) == (island.WheelTurned() != wheelWas))
+    // Walking out of the mill, after the end, is hearing outside.
+    If InMill(game.Location().x, game.Location().y)
+        Local door = DoorSpot()
+        Try WalkedTo(game, controls, door.x, door.y + 3.0, 100)
+        For step = 1 To 10
+            Flip(False)
+            game.Step(controls, 0.1)
+            scape.Update(game, 0.1)
+        End For
+        Checks("out of the door, after the end, it's not muffled",
+               scape.OutsideNow() == OutsideCutoff(False))
+        Checks("nor quieter", IsClose(scape.SeaNow(), SeaLevel(game.Story().Clock(), False), 0.001))
+    End If
     Return ended
 End Function
 
-// What the wheel's pitch should be by how it ended, 0 if it's still.
-Function WheelPitchOf(ended: Ending): Float
-    Select ended
-        Case Ending.BRIGHT
-            Return 1.0
-        Case Ending.DIM
-            Return 0.76
-        Default
-            Return 0.0
-    End Select
+// The largest of `samples`, either way.
+Function PeakOf(samples: Float[]): Float
+    Local peak = 0.0
+    For sample In samples
+        peak = Max(peak, Abs(sample))
+    End For
+    Return peak
+End Function
+
+// How loud `samples` are, on average.
+Function RmsOf(samples: Float[]): Float
+    Local sum = 0.0
+    For sample In samples
+        sum += sample * sample
+    End For
+    Return Sqrt(sum / Max(samples.Count As Float, 1.0))
+End Function
+
+// How much `samples` change, from a sample to the next on the same channel, on average: how much of
+// their highs there are.
+Function HighsOf(samples: Float[]): Float
+    Local sum = 0.0
+    For at = 2 Until samples.Count
+        Local step = samples[at] - samples[at - 2]
+        sum += step * step
+    End For
+    Return Sqrt(sum / Max(samples.Count As Float, 1.0))
 End Function
 
 // Whether what a walk heard is what it should be: the wind and sea all along, your feet, and the
-// flood; the wheel by how it ended; and something in the mix itself.
+// flood; the wheel by how it ended; and a mix that's not silent, and doesn't clip.
 Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
     Checks("the wind and sea are streamed, and playing", scape.AroundYou())
-    Checks("at their levels for the tide",
-           IsClose(scape.WindNow(), WindLevel(flow.Clock()), 0.001) &&
-           IsClose(scape.SeaNow(), SeaLevel(flow.Clock(), flow.At() == Area.INSIDE), 0.001))
     Checks("your steps are heard", scape.Played(Cue.STEP_1) > 0 && scape.Played(Cue.STEP_2) > 0 &&
            scape.Played(Cue.STEP_3) > 0)
     Checks("the flood splashes, once", scape.Played(Cue.SPLASH) == 1)
-    Checks("the wheel turns by how it ended",
-           IsClose(scape.WheelPitch(), WheelPitchOf(flow.Ended()), 0.001))
-    Checks("what's outside is muffled only from inside the mill",
-           scape.OutsideNow() == OutsideLowPass(flow.At() == Area.INSIDE))
-    Checks("the mix isn't silent, and doesn't clip", loudest > 0.01 && loudest < 1.0)
+    Checks("the wheel's pitch is its speed",
+           IsClose(scape.WheelPitch(), WheelSpeed(flow.Ended()), 0.001))
+    Print("its loudest was {loudest}")
+    Checks("the mix isn't silent, and doesn't clip", loudest > 0.05 && loudest < 1.0)
+End Function
+
+// Hears what's in the mix by itself, offscreen: each cue in its band, with the wind and sea at
+// nothing; that an emitter's fainter from further, and to its side; that nothing's left playing; that
+// what's outside is muffled from inside, with no click at the door; and the gulls over the wind.
+Function Listened() Throws GraphicsError, IOError, AudioError
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Local game = Game(island, Function(line: String)
+    End Function)
+    Defer game.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local scape = Try Soundscape.Make(game, island)
+    Defer scape.Free()
+    Listener.Unfollow()
+    Local rate = 44100
+    // A settled bed's what's left to measure against: the first second's what it opens with.
+    Local door = DoorSpot()
+    Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    Audio.Mix(rate)
+    Local bed = RmsOf(Audio.Mix(rate))
+    Checks("the wind and sea are heard at slack water", bed > 0.005)
+    // A gull, off over the water, over them.
+    Local gullOver = 0
+    For call = 1 To 6
+        scape.Play(Cue.GULL, door)
+        If PeakOf(Audio.Mix(rate)) > 1.5 * bed Then gullOver += 1
+    End For
+    Checks("a gull's heard over them", gullOver >= 3)
+    scape.SetBeds(0.0)
+    Audio.Mix(rate)
+    Audio.Mix(rate)
+    Checks("with the beds at nothing, it's silent", PeakOf(Audio.Mix(1024)) < 0.0005)
+    // Each cue, by itself, in its band, from nearby.
+    Local mill = scape.MillAt()
+    Local road = scape.SplashAt()
+    For cue In [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3, Cue.FLOOR_1, Cue.FLOOR_2, Cue.WADE_1,
+                Cue.WADE_2,
+                Cue.CREAK, Cue.SPLASH]
+        Local near = cue == Cue.SPLASH ? road : mill
+        Listener.SetPosition(Vec3(near.x, near.y, near.z + 1.0))
+        scape.Play(cue, door)
+        Local peak = PeakOf(Audio.Mix(rate))
+        Checks("cue {cue As Int} reaches the mix", peak > 0.05 && peak < 0.5)
+    End For
+    // A gull, out over the water, heard from where you stand.
+    Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    scape.Play(Cue.GULL, door)
+    Local gullPeak = PeakOf(Audio.Mix(rate))
+    Checks("a gull reaches the mix", gullPeak > 0.01 && gullPeak < 0.5)
+    Checks("what's outside is on its bus", scape.OutsideOnItsBus())
+    Local works = island.PlaceOf(Spot.WORKS)
+    Checks("a creak's at the mill's works",
+           IsClose(mill.x, works.x, 0.01) && IsClose(mill.z, works.y, 0.01))
+    // Fainter from further.
+    Listener.SetPosition(Vec3(mill.x, mill.y, mill.z + 5.0))
+    scape.Play(Cue.CREAK, door)
+    Local nearPeak = PeakOf(Audio.Mix(rate))
+    Listener.SetPosition(Vec3(mill.x, mill.y, mill.z + 50.0))
+    scape.Play(Cue.CREAK, door)
+    Local farPeak = PeakOf(Audio.Mix(rate))
+    Checks("a creak's fainter from further", nearPeak > 2.0 * farPeak && farPeak >= 0.0)
+    // And to its side.
+    Listener.SetPosition(Vec3(mill.x - 6.0, mill.y, mill.z))
+    scape.Play(Cue.CREAK, door)
+    Local mixed = Audio.Mix(rate)
+    Local leftPeak = 0.0
+    Local rightPeak = 0.0
+    For at = 0 Until mixed.Count / 2
+        leftPeak = Max(leftPeak, Abs(mixed[at * 2]))
+        rightPeak = Max(rightPeak, Abs(mixed[at * 2 + 1]))
+    End For
+    Checks("a creak to your right's on your right", rightPeak > 1.5 * leftPeak)
+    // Nothing's left playing, some seconds after: nothing's looping that shouldn't.
+    For second = 1 To 3
+        Audio.Mix(rate)
+    End For
+    Checks("only the wind and sea play on", Audio.Playing() == 2)
+    // The wheel's where it's drawn, and heard outside.
+    Local wheel = scape.WheelAt()
+    Local drawn = island.WheelAt()
+    Checks("the wheel's heard where it's drawn", IsClose(wheel, drawn, 0.001))
+    // Muffled from inside, on the bus: quieter, and with far less of its highs.
+    scape.SetBeds(1.0)
+    Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Local outsideMix = Audio.Mix(rate)
+    For step = 1 To 60
+        scape.Surroundings(0.0, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Local insideMix = Audio.Mix(rate)
+    Local lower = 20.0 * Log10((RmsOf(outsideMix) / Max(RmsOf(insideMix), 0.00001)) As Float64)
+    Print("from inside, it's {lower} dB lower")
+    Checks("from inside, it's at least 6 dB lower", lower >= 6.0)
+    Checks("and has less of its highs", HighsOf(outsideMix) > 2.0 * HighsOf(insideMix))
+    // A splash goes through it too.
+    scape.SetBeds(0.0)
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Listener.SetPosition(Vec3(road.x, road.y, road.z + 1.0))
+    scape.Play(Cue.SPLASH, door)
+    Local openSplash = HighsOf(Audio.Mix(rate))
+    For step = 1 To 60
+        scape.Surroundings(0.0, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    scape.Play(Cue.SPLASH, door)
+    Checks("the splash is muffled from inside", openSplash > 2.0 * HighsOf(Audio.Mix(rate)))
+    // Through the door and back, a frame at a time, with no click: no sample's step stands out.
+    scape.SetBeds(1.0)
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    // Over as long as its waves take.
+    Local largestBefore = 0.0
+    For step = 1 To 240
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        largestBefore = Max(largestBefore, LargestStep(Audio.Mix(735)))
+    End For
+    Local largestDuring = 0.0
+    For flip In [True, False, True, False]
+        For step = 1 To 30
+            scape.Surroundings(0.0, flip, 1.0 / 60.0)
+            largestDuring = Max(largestDuring, LargestStep(Audio.Mix(735)))
+        End For
+    End For
+    Print("the largest step's {largestBefore}, and {largestDuring} through the door")
+    Checks("the door doesn't click", largestDuring <= 1.5 * largestBefore)
+End Function
+
+// The largest change from a sample to the next on the same channel.
+Function LargestStep(samples: Float[]): Float
+    Local largest = 0.0
+    For at = 2 Until samples.Count
+        largest = Max(largest, Abs(samples[at] - samples[at - 2]))
+    End For
+    Return largest
 End Function
 
 // Opens what a walk draws on, offscreen, and the island.
@@ -835,6 +1043,15 @@ Function Felt() Throws GraphicsError, IOError, InputError
     Flip(False)
     Checks("a stick turns you the same at 30 and at 120 steps a second",
            turned[0] > 1.0 && IsClose(turned[0], turned[1], 0.01))
+    // You stand on what's drawn, where it's between its grid's points too.
+    Local onDrawn = True
+    For step = 0 To 40
+        Local x = MAIN_X + 20.0 + (step As Float) * 0.77
+        Local z = 3.3 + (step As Float) * 0.13
+        Local drawn = island.GroundDrawnAt(x, z)
+        If drawn == Null || Abs(island.FloorAt(x, z) - drawn) > 0.0001 Then onDrawn = False
+    End For
+    Checks("what you stand on is what's drawn", onDrawn)
     // With nothing near, E says so.
     Local door = DoorSpot()
     Try WalkedTo(game, controls, door.x, door.y, 80)
@@ -914,22 +1131,22 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
     While !Window.Closed() && !KeyHit(Key.ESCAPE)
         Flip()
         Local seconds = FrameStep(Frame.Delta()) As Float
-        If Moved(game, controls, seconds) Then scape.Update(game, seconds)
+        scape.Update(game, Moved(game, controls, seconds) ? seconds : 0.0)
         If Screen.Texture() == Null Then Continue
         island.Scene().Render()
         Local canvas = Screen.Canvas()
         canvas.SetColor(Color32(236, 232, 220, 255))
         Local flow = game.Story()
         canvas.DrawText(font, flow.ClockLine(), 24, 20)
-        canvas.DrawText(font, last, 24, 48)
+        canvas.DrawText(font, Untimed(last), 24, 48)
         canvas.DrawText(font, game.Prompt(), 24, 680)
     End While
 End Function
 
 Local arguments = Process.Arguments()
-Const USAGE =
-    "usage: slack_water [--walk <bright|dim|dark> [<kept>] | --walk3d <bright|dim|dark> " +
-    "[<kept>] | --frames <folder> | --check <folder> | --match <made> <kept>]"
+Const USAGE = "usage: slack_water [--walk <bright|dim|dark> [<kept>] | --walk3d " +
+              "<bright|dim|dark|cut|swept|wing|far_end> [<kept>] | --feel | --hear | " +
+              "--frames <folder> | --check <folder> | --match <made> <kept>]"
 If arguments.Count >= 2 && arguments.Count <= 3 && arguments[0] == "--walk"
     Local walk = WalkOf(arguments[1])
     If walk == Null
@@ -953,6 +1170,12 @@ ElseIf arguments.Count >= 2 && arguments.Count <= 3 && arguments[0] == "--walk3d
         Local lines: String[] = []
         Print("ended {Try Walked3dBy(walk, lines)}")
         If arguments.Count == 3 Then Try Pinned(lines, Path(arguments[2]), False)
+    End If
+ElseIf arguments.Count == 1 && arguments[0] == "--hear"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try Listened()
     End If
 ElseIf arguments.Count == 1 && arguments[0] == "--feel"
     If Env.Get("FBENGINE_NO_GPU") == "1"

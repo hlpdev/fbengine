@@ -7,6 +7,7 @@ Import std.core
 Import std.math
 Import fbengine
 Import "./controls"
+Import "./cues"
 Import "./flow"
 Import "./follow"
 Import "./ground"
@@ -16,13 +17,10 @@ Import "./map"
 // How high your eyes are, and how near a part has to be to take it.
 Const EYE_HEIGHT: Float = 1.6
 Const REACH: Float = 3.5
-// How fast the mouse turns you, in radians a unit, and a stick held all the way over, in radians a
-// second.
+// How fast the mouse turns you, in radians a unit, and how fast the wheel's drawn turning, in radians a
+// second, at full speed.
 Const LOOK_SPEED: Float = 0.003
-Const TURN_SPEED: Float = 2.4
-
-/// How far a stick held over by `stick` turns you in `seconds`, in radians.
-Public Function StickTurn(stick: Float, seconds: Float): Float => stick * TURN_SPEED * seconds
+Const WHEEL_TURNS: Float = 1.2
 
 /// The game: its flow, its island, you, and Pip.
 Public Final Class Game
@@ -123,17 +121,22 @@ Public Final Class Game
         If controls.HandHit() && flow.Ended() == Ending.NONE Then flow.Hand()
         Local flooded = flow.Flooded()
         flow.Step(seconds As Float64)
-        // The water carried you to the nearer side, if you were on the road, and Pip to Pip's.
+        // The water carries you to the nearer shore, if it reached you, and Pip to Pip's.
         If flow.Flooded() != flooded
-            If OnRoad(x, z)
-                Local side = Landing(flow.At() == Area.FAR_ROCK)
+            Local sea = SeaHeight(flow.Clock())
+            If SweptAt(x, z, sea)
+                Local far = NearerFar(x, z)
+                Local side = Landing(far)
                 x = side.x
                 z = side.y
+                place = far ? Area.FAR_ROCK : Area.YARD
+                flow.Arrive(place, far)
+            ElseIf flow.At() != place
                 place = flow.At()
             End If
             Local pipIs = pip.Location()
-            If OnRoad(pipIs.x, pipIs.y)
-                Local side = Landing(NearerFar(pipIs.x, pipIs.y))
+            If SweptAt(pipIs.x, pipIs.y, sea)
+                Local side = PipLanding(NearerFar(pipIs.x, pipIs.y))
                 pip.Put(side.x, side.y)
                 pipPlace = PlaceAt(side.x, side.y)
             End If
@@ -146,7 +149,7 @@ Public Final Class Game
         // The wheel turns once the water's back to it, and the lamp's lit by how it ended.
         Local ended = flow.Ended()
         If ended == Ending.BRIGHT || ended == Ending.DIM
-            wheelTurn += seconds * (ended == Ending.BRIGHT ? 1.2 : 0.4)
+            wheelTurn += seconds * WheelSpeed(ended) * WHEEL_TURNS
             island.TurnWheel(wheelTurn)
             island.LightLamp(ended == Ending.BRIGHT)
         End If
@@ -200,7 +203,7 @@ Public Final Class Game
             If !Blocked(x, nextZ) && CanWade(x, z, x, nextZ, clock, flooded) Then z = nextZ
         End If
         place = PlaceHeld(place, x, z)
-        flow.Arrive(place, OnRoad(x, z) && NearerFar(x, z))
+        flow.Arrive(place, NearerFar(x, z))
     End Method
 
     // Takes what's within reach, or does what the mill's inside lets, as E does, or says why not.
@@ -257,8 +260,7 @@ Public Final Class Game
         Local dx = x - at.x
         Local dz = z - at.y
         pipPlace = PlaceHeld(pipPlace, at.x, at.y)
-        Local near = dx * dx + dz * dz <= PIP_NEAR * PIP_NEAR && InMill(at.x, at.y) == InMill(x, z)
-        flow.PipArrive(pipPlace, near)
+        flow.PipArrive(pipPlace, PipWithYou(at.x, at.y, x, z))
         Local entity = island.PipEntity()
         entity.SetPosition(Vec3(at.x, island.FloorAt(at.x, at.y), at.y))
         entity.SetRotation(0.0, pip.Facing(), 0.0)

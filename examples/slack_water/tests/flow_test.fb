@@ -117,14 +117,14 @@ End Function
 // Setting off from each place just before the flood.
 @Test
 Function WhereTheFloodLeavesYouIsWhichSideIsNearer()
-    // From the far rock, just gone: back there.
+    // From the far rock, onto the road: back there.
     Local lines: String[] = []
     Local fromFar = Told(lines)
     For step = 1 To 3
         fromFar.GoOut()
         Arrive(fromFar)
     End For
-    RunTo(fromFar, FLOOD_AT - 0.1)
+    RunTo(fromFar, FLOOD_AT - 6.0)
     fromFar.GoBack()
     RunTo(fromFar, FLOOD_AT + 1.0)
     Expect(fromFar.At() == Area.FAR_ROCK)
@@ -251,7 +251,7 @@ End Function
 Function ItDoesntWaitOnceItsSettled()
     Local lines: String[] = []
     Local flow = Told(lines)
-    // All three fitted, and open, the clock's ten minutes go by in far less.
+    // All three fitted, and open, the clock's last minutes go by in far less.
     Expect(Played("bright", flow) < 180.0)
     Expect(flow.Ended() == Ending.BRIGHT)
     Local fitted = -1
@@ -561,9 +561,170 @@ End Function
 // A stick turns you the same, however many steps a second are.
 @Test
 Function AStickTurnsBySeconds()
-    Local at30 = 0.0
-    For step = 1 To 30
-        at30 += 0.5 * 2.4 * (1.0 / 30.0)
+    For rate In [30, 120]
+        Local turned = 0.0
+        For step = 1 To rate
+            turned += StickTurn(0.5, 1.0 / (rate As Float))
+        End For
+        Expect(Abs(turned - 1.2) < 0.001)
     End For
-    Expect(Abs(at30 - 1.2) < 0.001)
+End Function
+
+// Pip's with you when it's near, and on your side of the wall.
+@Test
+Function PipsWithYouByDistanceAndWalls()
+    Expect(PipWithYou(0.0, 0.0, 3.0, 0.0))
+    Expect(!PipWithYou(0.0, 0.0, 5.0, 0.0))
+    // A step apart, with the mill's wall between.
+    Expect(!PipWithYou(MAIN_X, MILL_D + 0.5, MAIN_X, MILL_D - 0.5))
+End Function
+
+// The rocks' places, flooding out from each, over all of its land, aren't anything else.
+@Test
+Function EachRocksLandIsItsOwn()
+    For start In [(Vec2(MAIN_X, 12.0), Area.YARD), (Vec2(FAR_X, FAR_Z), Area.FAR_ROCK)]
+        Local seen = Set<Int>()
+        Local waiting: Vec2[] = [start.0]
+        While waiting.Count > 0
+            Local at = waiting[waiting.Count - 1]
+            waiting.RemoveAt(waiting.Count - 1)
+            Local key = ((at.x As Int) + 200) * 1000 + (at.y As Int) + 200
+            If seen.Contains(key) Then Continue
+            seen.Add(key)
+            If GroundHeight(at.x, at.y) <= 0.0 || OnRoad(at.x, at.y) || InMill(at.x, at.y) Then Continue
+            If Abs(at.x) > 118.0 || Abs(at.y) > 118.0 Then Continue
+            Expect(PlaceAt(at.x, at.y) == start.1)
+            waiting.Add(Vec2(at.x + 1.0, at.y))
+            waiting.Add(Vec2(at.x - 1.0, at.y))
+            waiting.Add(Vec2(at.x, at.y + 1.0))
+            waiting.Add(Vec2(at.x, at.y - 1.0))
+        End While
+        Expect(seen.Count > 500)
+    End For
+End Function
+
+// The flow's places, in seconds of walking, are the map's, by every leg, and its road's ends.
+@Test
+Function EveryLegIsTheMaps()
+    Local along = 0.0 As Float64
+    Local places = [Area.INSIDE, Area.YARD, Area.CAUSEWAY, Area.FAR_ROCK]
+    For leg = 0 To 2
+        Expect(Abs(Along(places[leg]) - along) < 0.001)
+        along += (LegMeters(leg) / WALK_SPEED) As Float64
+    End For
+    Expect(Abs(Along(Area.FAR_ROCK) - along) < 0.001)
+    Expect(Abs(RoadEndAlong(False) - (ToRoadEnd(False) / WALK_SPEED) As Float64) < 0.001)
+    Expect(Abs(RoadEndAlong(True) - RoadEndAlong(False) -
+               ((ROAD_EAST - ROAD_WEST) / WALK_SPEED) As Float64) < 0.2)
+    Expect(RoadEndAlong(False) < Along(Area.CAUSEWAY))
+    Expect(RoadEndAlong(True) > Along(Area.CAUSEWAY))
+End Function
+
+// Setting off for the road, still on a rock, as it floods, turns you back, and says why.
+@Test
+Function TheFloodTurnsYouBackFromTheRoad()
+    Local lines: String[] = []
+    Local flow = Told(lines)
+    flow.GoOut()
+    Arrive(flow)
+    RunTo(flow, FLOOD_AT - 0.5)
+    flow.GoOut()
+    RunTo(flow, FLOOD_AT + 0.5)
+    Expect(flow.At() == Area.YARD)
+    Expect(!flow.Walking())
+    Expect(lines.Contains("[2:10] the causeway's under water"))
+End Function
+
+// The clock says it's rising, while it is.
+@Test
+Function TheClockSaysItsRising()
+    Local flow = Told([])
+    RunTo(flow, RISING_AT + 1.0)
+    Expect(flow.ClockLine().StartsWith("the water's rising"))
+    RunTo(flow, FLOOD_AT + 0.1)
+    Expect(!flow.ClockLine().StartsWith("the water's rising"))
+End Function
+
+// Along the mill's south wall, you're outside; only in its door do you linger.
+@Test
+Function TheMillsWallHasNoInsideOut()
+    Expect(PlaceHeld(Area.INSIDE, MAIN_X + 4.0, 5.7) == Area.YARD)
+    Expect(PlaceHeld(Area.INSIDE, MAIN_X, MILL_D + 0.8) == Area.INSIDE)
+End Function
+
+// Beside the road, too deep, the flood takes you as on it; on a rock it doesn't.
+@Test
+Function TheFloodSweepsBesideTheRoad()
+    Local sea = SeaHeight(FLOOD_AT)
+    Expect(SweptAt(PaddleSpot().x, PaddleSpot().y, sea))
+    Expect(SweptAt(15.0, RoadZ(15.0) - 5.5, sea))
+    Expect(!SweptAt(MAIN_X, 12.0, sea))
+    Expect(!SweptAt(ROAD_EAST + 3.0, RoadZ(ROAD_EAST + 3.0), sea))
+End Function
+
+@Test
+Function YouAndPipLandApart()
+    For far In [False, True]
+        Local one = Landing(far)
+        Local two = PipLanding(far)
+        Expect(Abs(two.x - one.x) >= 1.9 && Abs(two.x - one.x) <= 2.1)
+        Expect(GroundHeight(two.x, two.y) > SeaHeight(TIDE_IN_AT))
+    End For
+End Function
+
+// Pip reaches you from every side of the mill, by a way not much longer than the way there is.
+@Test
+Function PipGoesAroundTheMill()
+    Local spots = [Vec2(MAIN_X, 10.0), Vec2(MAIN_X, -9.0), Vec2(MAIN_X - 10.0, 0.0),
+                   Vec2(MAIN_X + 14.0, 0.0), Vec2(MAIN_X - 10.0, 0.0), Vec2(MAIN_X + 12.0, -8.0)]
+    For from In spots
+        For to In spots
+            If from == to Then Continue
+            Local pip = Follower(from.x, from.y)
+            Local walked = 0.0
+            For step = 1 To 600
+                pip.Step(to.x, to.y, 0.1, 0.0, False)
+                walked += pip.Moved()
+            End For
+            Local at = pip.Location()
+            Local dx = at.x - to.x
+            Local dz = at.y - to.y
+            Expect(dx * dx + dz * dz <= PIP_NEAR * PIP_NEAR)
+            Local straight = Sqrt((to.x - from.x) * (to.x - from.x) +
+                                  (to.y - from.y) * (to.y - from.y))
+            Expect(walked < 1.5 * (straight + 14.0))
+        End For
+    End For
+End Function
+
+// With the flood between you, Pip goes to its shore, above the tide, and stays there.
+@Test
+Function PipWaitsAcrossTheFlood()
+    For far In [False, True]
+        Local start = Landing(far)
+        Local you = Landing(!far)
+        Local pip = Follower(start.x + (far ? -1.0 : 1.0), start.y)
+        For step = 1 To 600
+            pip.Step(you.x, you.y, 0.1, TIDE_IN_AT, True)
+        End For
+        Expect(pip.Moved() == 0.0)
+        Expect(pip.Clip(False) == PipClip.IDLE)
+        Local at = pip.Location()
+        Expect(GroundHeight(at.x, at.y) > SeaHeight(TIDE_IN_AT))
+    End For
+End Function
+
+// Near, but through the wall or the door's line, Pip doesn't stop.
+@Test
+Function PipDoesntStallAcrossAWall()
+    For pair In [(Vec2(MAIN_X, 3.2), Vec2(MAIN_X, 5.1)),
+                 (Vec2(MAIN_X - 2.0, 3.8), Vec2(MAIN_X - 2.0, 5.7))]
+        Local you = pair.0
+        Local pip = Follower(pair.1.x, pair.1.y)
+        For step = 1 To 50
+            pip.Step(you.x, you.y, 0.1, 0.0, False)
+        End For
+        Local at = pip.Location()
+        Expect(PipWithYou(at.x, at.y, you.x, you.y))
+    End For
 End Function

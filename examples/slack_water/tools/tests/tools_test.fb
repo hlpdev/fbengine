@@ -28,7 +28,9 @@ End Function
 
 @Test
 Function EverySoundIsItsOwn()
-    Local sounds = [Wind(), Sea(), Gull(), Creak(), Wheel(), Step(5), Step(6), Step(7), Splash()]
+    Local sounds = [Wind(), Sea(), Gull(), Creak(), Wheel(), Step(5), Step(6), Step(7),
+                    FloorStep(9),
+                    FloorStep(10), Wade(11), Wade(12), Splash()]
     For one = 0 Until sounds.Count
         For two = one + 1 Until sounds.Count
             Expect(sounds[one] != sounds[two])
@@ -50,7 +52,8 @@ End Function
 
 @Test
 Function NothingClips()
-    For sound In [Wind(), Sea(), Gull(), Creak(), Wheel(), Step(5), Step(6), Step(7), Splash()]
+    For sound In [Wind(), Sea(), Gull(), Creak(), Wheel(), Step(5), Step(6), Step(7), FloorStep(9),
+                  FloorStep(10), Wade(11), Wade(12), Splash()]
         For sample In sound
             Expect(Abs(sample) < 1.0)
         End For

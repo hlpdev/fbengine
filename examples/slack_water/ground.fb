@@ -136,6 +136,8 @@ End Function
 Public Function PlaceHeld(current: Area, x: Float, z: Float): Area
     Local at = PlaceAt(x, z)
     If at == current Then Return at
+    // The mill's only got its door to linger in; along a wall, you're outside.
+    If current == Area.INSIDE && Abs(x - MAIN_X) >= DOOR_W Then Return at
     If PlaceAt(x - LINGER, z) == current || PlaceAt(x + LINGER, z) == current Then Return current
     If PlaceAt(x, z - LINGER) == current || PlaceAt(x, z + LINGER) == current Then Return current
     Return at
@@ -143,6 +145,13 @@ End Function
 
 /// Whether someone on the road at (`x`, `z`) is nearer the far rock's shore than the mill's.
 Public Function NearerFar(x: Float, z: Float): Bool => x - ROAD_WEST > ROAD_EAST - x
+
+/// Whether the flood takes someone at (`x`, `z`), with the sea at `sea`: on the road, or too deep beside
+/// it, in its span.
+Public Function SweptAt(x: Float, z: Float, sea: Float): Bool
+    If OnRoad(x, z) Then Return True
+    Return x > ROAD_WEST && x < ROAD_EAST && GroundHeight(x, z) < sea - WADE
+End Function
 
 /// Whether walking onto (`x`, `z`) goes through the mill's walls, or anything else solid.
 Public Function Blocked(x: Float, z: Float): Bool

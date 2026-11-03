@@ -10,12 +10,12 @@
 [0:26] Pip catches up
 [0:26] you pick up the sluice paddle
 [0:26] you set off for the yard
-[0:36] you reach the yard
-[0:41] Pip catches up
-[0:41] you set off for the mill
-[0:47] you reach the mill
-[0:52] Pip catches up
-[0:52] you fit the sluice paddle
+[0:37] you reach the yard
+[0:42] Pip catches up
+[0:42] you set off for the mill
+[0:48] you reach the mill
+[0:53] Pip catches up
+[0:53] you fit the sluice paddle
 [0:53] you take the gear from Pip
 [0:53] you fit the gear
 [0:53] the sluice can be opened now
@@ -33,9 +33,9 @@
 [1:34] Pip catches up
 [1:34] you pick up the drive belt
 [1:34] you set off for the causeway
-[1:43] you reach the causeway
-[1:48] Pip catches up
-[1:48] you set off for the yard
+[1:44] you reach the causeway
+[1:49] Pip catches up
+[1:49] you set off for the yard
 [1:59] you reach the yard
 [2:04] Pip catches up
 [2:04] you set off for the mill

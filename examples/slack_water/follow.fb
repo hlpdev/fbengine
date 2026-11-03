@@ -3,6 +3,7 @@
 
 Import std.core
 Import std.math
+Import "./flow"
 Import "./ground"
 Import "./map"
 
@@ -48,6 +49,91 @@ Public Function BlinkWeight(seconds: Float): Float
     Return 1.0 - Abs(into - halfway) / halfway
 End Function
 
+/// Whether Pip at (`pipX`, `pipZ`) is with you at (`x`, `z`): near, and on your side of the mill's wall.
+Public Function PipWithYou(pipX: Float, pipZ: Float, x: Float, z: Float): Bool
+    Local dx = x - pipX
+    Local dz = z - pipZ
+    Return dx * dx + dz * dz <= PIP_NEAR * PIP_NEAR && InMill(pipX, pipZ) == InMill(x, z)
+End Function
+
+// A box to go around, across and along: the mill, with room to pass its walls and wheel, or its works.
+Struct Box
+    Field West: Float
+    Field East: Float
+    Field South: Float
+    Field North: Float
+End Struct
+
+Function MillBox(): Box
+    Return Box(MAIN_X - MILL_W - 1.2, MAIN_X + 9.5, -MILL_D - 1.2, MILL_D + 1.2)
+End Function
+
+Function WorksBox(): Box => Box(MAIN_X + 1.7, MAIN_X + 5.3, -4.8, -1.2)
+
+// Whether a straight line from one place to another goes through `box`.
+Function Crosses(box: Box, fromX: Float, fromZ: Float, toX: Float, toZ: Float): Bool
+    Local enter = 0.0
+    Local leave = 1.0
+    Local dx = toX - fromX
+    Local dz = toZ - fromZ
+    If Abs(dx) < 0.0001
+        If fromX <= box.West + 0.01 || fromX >= box.East - 0.01 Then Return False
+    Else
+        Local a = (box.West + 0.01 - fromX) / dx
+        Local b = (box.East - 0.01 - fromX) / dx
+        enter = Max(enter, Min(a, b))
+        leave = Min(leave, Max(a, b))
+    End If
+    If Abs(dz) < 0.0001
+        If fromZ <= box.South + 0.01 || fromZ >= box.North - 0.01 Then Return False
+    Else
+        Local a = (box.South + 0.01 - fromZ) / dz
+        Local b = (box.North - 0.01 - fromZ) / dz
+        enter = Max(enter, Min(a, b))
+        leave = Min(leave, Max(a, b))
+    End If
+    Return enter < leave
+End Function
+
+// Where to go next, from (`x`, `z`) to (`toX`, `toZ`), with `box` between: to the corner of it that's
+// in sight, from which the way around is shortest.
+Function AroundBox(box: Box, x: Float, z: Float, toX: Float, toZ: Float): Vec2
+    Local corners = [Vec2(box.West, box.South), Vec2(box.East, box.South),
+                     Vec2(box.East, box.North),
+                     Vec2(box.West, box.North)]
+    Local best = Vec2(toX, toZ)
+    Local shortest = 1000000.0
+    For first = 0 To 3
+        Local corner = corners[first]
+        If Crosses(box, x, z, corner.x, corner.y) Then Continue
+        Local leading = Length(x - corner.x, z - corner.y)
+        // At it already, it's on to the next.
+        If leading < 0.05 Then Continue
+        // Each way around from it, until you're in sight.
+        For way In [1, 3]
+            Local along = leading
+            Local at = first
+            For hop = 0 To 3
+                Local here = corners[at]
+                If !Crosses(box, here.x, here.y, toX, toZ)
+                    along += Length(toX - here.x, toZ - here.y)
+                    If along < shortest
+                        shortest = along
+                        best = corner
+                    End If
+                    Break
+                End If
+                Local next = corners[(at + way) % 4]
+                along += Length(next.x - here.x, next.y - here.y)
+                at = (at + way) % 4
+            End For
+        End For
+    End For
+    Return best
+End Function
+
+Function Length(x: Float, z: Float): Float => Sqrt(x * x + z * z)
+
 /// Pip, going after you.
 Public Final Class Follower
     Field x: Float
@@ -89,52 +175,75 @@ Public Final Class Follower
         Return moved / Max(seconds, 0.001) / (holding ? CARRY_STRIDE : WALK_STRIDE)
     End Method
 
-    /// Moves it on `seconds` toward (`toX`, `toZ`), `clock` seconds in.
+    /// Moves it on `seconds` toward (`toX`, `toZ`), `clock` seconds in. With the road flooded between
+    /// you, it goes to its own shore's landing, above the tide, and stays.
     Public Method Step(toX: Float, toZ: Float, seconds: Float, clock: Float64, flooded: Bool)
-        Local dx = toX - x
-        Local dz = toZ - z
-        Local apart = Sqrt(dx * dx + dz * dz)
-        If !walking && apart > STARTS_AT Then walking = True
-        If walking && apart < STOPS_AT Then walking = False
         moved = 0.0
+        Local apart = Length(toX - x, toZ - z)
+        Local stops = STOPS_AT
+        Local starts = STARTS_AT
+        Local goalX = toX
+        Local goalZ = toZ
+        If flooded && (PlaceAt(x, z) == Area.FAR_ROCK) != (PlaceAt(toX, toZ) == Area.FAR_ROCK)
+            Local side = PipLanding(PlaceAt(x, z) == Area.FAR_ROCK)
+            goalX = side.x
+            goalZ = side.y
+            apart = Length(goalX - x, goalZ - z)
+            stops = 0.1
+            starts = 0.2
+        End If
+        // Near isn't near through a wall.
+        If InMill(x, z) == InMill(goalX, goalZ)
+            If !walking && apart > starts Then walking = True
+            If walking && apart < stops Then walking = False
+        Else
+            walking = True
+        End If
         If !walking Then Return
-        Local aim = Aim(toX, toZ)
-        Local aimX = aim.x - x
-        Local aimZ = aim.y - z
-        Local toAim = Sqrt(aimX * aimX + aimZ * aimZ)
+        Local aim = Aim(goalX, goalZ)
+        Local toAim = Length(aim.x - x, aim.y - z)
         If toAim < 0.001 Then Return
         Local reach = PIP_SPEED * seconds
         // To where it stops short of you, if it's you it's aiming at.
-        If aim.x == toX && aim.y == toZ
-            If toAim - STOPS_AT < 0.01
+        If aim.x == goalX && aim.y == goalZ
+            If toAim - stops < 0.01
                 walking = False
                 Return
             End If
-            reach = Min(reach, toAim - STOPS_AT)
+            reach = Min(reach, toAim - stops)
         End If
         reach = Min(reach, toAim)
         Local fromX = x
         Local fromZ = z
-        Slide(aimX / toAim * reach, aimZ / toAim * reach, clock, flooded)
-        // Square against something, in line with where it's going: around it.
-        If x == fromX && z == fromZ Then Slide(aimZ / toAim * reach, -aimX / toAim * reach, clock,
-                                               flooded)
-        If x == fromX && z == fromZ Then Slide(-aimZ / toAim * reach, aimX / toAim * reach, clock,
-                                               flooded)
-        Local wentX = x - fromX
-        Local wentZ = z - fromZ
-        moved = Sqrt(wentX * wentX + wentZ * wentZ)
-        If moved > 0.0 Then facing = Atan2(wentX, wentZ)
+        Slide((aim.x - x) / toAim * reach, (aim.y - z) / toAim * reach, clock, flooded)
+        moved = Length(x - fromX, z - fromZ)
+        If moved > 0.0 Then facing = Atan2(x - fromX, z - fromZ)
     End Method
 
-    // Where it's going next: to you, unless the mill's wall is between you, when it's to the door.
+    // Where it's going next: to you if it can see you; through the door if the mill's wall is between
+    // you; around the mill, or its works, if they are.
     Method Aim(toX: Float, toZ: Float): Vec2
-        If InMill(x, z) == InMill(toX, toZ) Then Return Vec2(toX, toZ)
-        Local outside = MILL_D + 1.5
-        If !InMill(x, z) && Abs(x - MAIN_X) < DOOR_W - 0.5 && z > 0.0
-            Return Vec2(MAIN_X, MILL_D - 1.0)
+        Local mill = MillBox()
+        If InMill(x, z) || InMill(toX, toZ)
+            If InMill(x, z) != InMill(toX, toZ)
+                If !InMill(x, z) && Abs(x - MAIN_X) < DOOR_W - 0.5 && z > 0.0 && z < MILL_D + 2.0
+                    Return Vec2(MAIN_X, MILL_D - 1.0)
+                End If
+                If InMill(x, z) Then Return Vec2(MAIN_X, MILL_D + 1.5)
+                If Crosses(mill, x, z, MAIN_X, MILL_D + 1.5)
+                    Return AroundBox(mill, x, z, MAIN_X, MILL_D + 1.5)
+                End If
+                Return Vec2(MAIN_X, MILL_D + 1.5)
+            End If
+            If Crosses(WorksBox(), x, z, toX, toZ) Then Return AroundBox(WorksBox(), x, z, toX, toZ)
+            Return Vec2(toX, toZ)
         End If
-        Return Vec2(MAIN_X, outside)
+        // In the doorway, out of it first.
+        If Abs(x - MAIN_X) < DOOR_W && z > 0.0 && z < mill.North
+            Return Vec2(MAIN_X, mill.North + 0.2)
+        End If
+        If Crosses(mill, x, z, toX, toZ) Then Return AroundBox(mill, x, z, toX, toZ)
+        Return Vec2(toX, toZ)
     End Method
 
     // Each way it can go by itself, so a wall slides it along.

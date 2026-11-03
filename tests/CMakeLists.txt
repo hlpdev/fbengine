@@ -394,7 +394,7 @@ if(FBENGINE_FB_TESTS)
                          TIMEOUT 300)
   endforeach()
   # And on the island, walked in 3D: to each ending, then the road as it floods.
-  foreach(name IN ITEMS bright dim dark cut swept)
+  foreach(name IN ITEMS bright dim dark cut swept wing far_end)
     add_test(NAME examples.slack_water.walk3d_${name}
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                      -- --walk3d ${name}
@@ -403,6 +403,12 @@ if(FBENGINE_FB_TESTS)
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   endforeach()
+  add_test(NAME examples.slack_water.hear
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --hear)
+  set_tests_properties(examples.slack_water.hear PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   add_test(NAME examples.slack_water.feel
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                    -- --feel)
@@ -433,7 +439,7 @@ if(FBENGINE_FB_TESTS)
                    -- "${PROJECT_BINARY_DIR}/example-frames/slack_water_made")
   set_tests_properties(examples.slack_water.tools PROPERTIES
                        FIXTURES_SETUP slack_water_made TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "15 textures\r?\n9 sounds\r?\n8 joints in Pip\r?\n$")
+                       PASS_REGULAR_EXPRESSION "15 textures\r?\n13 sounds\r?\n8 joints in Pip\r?\n$")
   foreach(checked IN ITEMS "made=${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
                            "kept=${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
     string(FIND "${checked}" "=" split)

@@ -72,12 +72,14 @@ instead); saves; depth of field.
 - **A third ending, DARK.** The page has two endings, as it has the sluice opened either way. Something
   has to happen when the tide comes in with the sluice shut: the wheel stands still, and the lamp stays
   dark.
-- **The clock's two times.** It says the time until the flood, 2:10, then until the tide, 4:00, each
-  named, and warns at 1:10, when the water starts to rise.
+- **The clock's two times.** It says the time until the flood, which is 2:10 at first, and the water
+  rising in its last minute; then the time until the tide, 1:50 from the flood. The lines it says
+  aren't stamped on the screen.
 - **Its pace.** About four minutes, not ten, with a road of about 10 s to cross, 42 m at 4 m/s, between
   the rocks. Walked straight, by someone who knows the way, the last part's fitted at about 1:25, the
   belt off the road about 55 s before the flood; a first time may not make it. The text flow's walks
-  and the island in 3D go by one map, examples/slack_water/map.fb, so they can't drift.
+  and the island in 3D go by one map, examples/slack_water/map.fb, so a walk's length, and where the
+  road starts and ends along it, are the same in both, though only 3D has its width.
 - **The flood.** Whoever's on the road at 2:10 goes to the nearer shore. Everything lying on it or
   past it is the sea's, even where you're standing, and Pip, past the water, stays there with whatever
   Pip holds.

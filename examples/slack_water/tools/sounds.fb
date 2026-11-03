@@ -195,6 +195,32 @@ Public Function Step(seed: UInt32): Float[]
     Return Leveled(made, 0.7)
 End Function
 
+// A step on the mill's boards: a low knock, a seed for each of two.
+Public Function FloorStep(seed: UInt32): Float[]
+    Local hiss = Hiss(seed)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(0.16)
+        Local t = (at As Float) / (RATE As Float)
+        Local knock = Sine(t * TAU * 140.0) * Decay(-t * 30.0)
+        made.Add(knock + low.Next(hiss.Next(), 0.1) * Decay(-t * 60.0))
+    End For
+    Return Leveled(made, 0.7)
+End Function
+
+// A step in the shallows: a wash of noise, a seed for each of two.
+Public Function Wade(seed: UInt32): Float[]
+    Local hiss = Hiss(seed)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(0.35)
+        Local t = (at As Float) / (RATE As Float)
+        Local swell = Sine(Min(t / 0.35, 1.0) * TAU / 2.0)
+        made.Add(low.Next(hiss.Next(), 0.2 + 0.25 * swell) * swell)
+    End For
+    Return Leveled(made, 0.6)
+End Function
+
 // A splash: noise, bright at first, darkening and dying away.
 Public Function Splash(): Float[]
     Local hiss = Hiss(8)
@@ -219,5 +245,9 @@ Public Function WriteSounds(folder: Path) Throws IOError
     Try WriteWav(folder / "step_1.wav", Step(5))
     Try WriteWav(folder / "step_2.wav", Step(6))
     Try WriteWav(folder / "step_3.wav", Step(7))
+    Try WriteWav(folder / "floor_1.wav", FloorStep(9))
+    Try WriteWav(folder / "floor_2.wav", FloorStep(10))
+    Try WriteWav(folder / "wade_1.wav", Wade(11))
+    Try WriteWav(folder / "wade_2.wav", Wade(12))
     Try WriteWav(folder / "splash.wav", Splash())
 End Function
