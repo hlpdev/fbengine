@@ -85,6 +85,7 @@ Public Final Class SceneView Extends Widget
     // The size of texture that couldn't be made, not to try it every frame.
     Field failedWide: Int32 = 0
     Field failedHigh: Int32 = 0
+    Field failures: Int = 0
     /// What dragging a handle does.
     Public Field Tool: HandleTool = HandleTool.MOVE
     /// Which space the handles' axes are in.
@@ -129,6 +130,9 @@ Public Final Class SceneView Extends Widget
         Let()
         overlay.Free()
     End Method
+
+    /// How many times a texture couldn't be made.
+    Public Method TextureFailures(): Int => failures
 
     /// The handle lit as under the pointer, as HandleAt numbers them, -1 for none.
     Public Method LitHandle(): Int => lit
@@ -458,6 +462,7 @@ Public Final Class SceneView Extends Widget
         Catch error As GraphicsError
             failedWide = wide
             failedHigh = high
+            failures += 1
             PrintError("the scene view's texture: {error.Message}")
         End Try
     End Method

@@ -54,6 +54,17 @@ Function OnHandle(editor: Editor, from: Vec3, axis: Vec3, handle: Int): Vec2
     Panic("there's no handle {handle} along {axis}")
 End Function
 
+// How far along `axis` from `from` the pointer first has handle `handle`.
+Function Along(editor: Editor, from: Vec3, axis: Vec3, handle: Int): Float
+    Local scale = editor.Shown.Scale()
+    For i = 1 To 400
+        Local along = (i As Float) * 0.02
+        Local at = Shown(editor, from + axis * along)
+        If editor.View.HandleAt(at * (1.0 / scale)) == handle Then Return along + 0.05
+    End For
+    Panic("there's no handle {handle} along {axis}")
+End Function
+
 // Where a turn's handle `handle` is on the ring around `axis`, `one` being across it, and where it
 // is `turn` radians on around.
 Function OnRing(editor: Editor, from: Vec3, axis: Vec3, one: Vec3, handle: Int, turn: Float): (Vec2,
@@ -958,16 +969,20 @@ Function NoKeyChangesADragWhileItsHeld() Throws IOError, GraphicsError
     Expect(editor.Edits.UndoName() == "Move")
     Try Letting(editor)
     Expect(!view.HandleHeld())
-    // The tool's as it was taken even set from outside, mid-drag, as a script might.
+    // The tool and axes are as they were taken even set from outside, mid-drag, as a script might.
+    cube.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), 0.7))
     Try Simulate.MoveMouse(0, 0)
     editor.Step()
     Local again = OnHandle(editor, cube.Position(), Vec3(1, 0, 0), 0)
     Try Held(editor, again, again + Vec2(30, 0))
+    Local z = cube.Position().z
     view.Tool = HandleTool.SCALE
     view.Axes = HandleSpace.LOCAL
     Try Simulate.MouseMotion(30, 0)
     editor.Step()
     Expect(cube.Scale() == Vec3(1, 1, 1) && editor.Edits.UndoName() == "Move")
+    Expect(cube.Position().z == z, "it went by its own axes: {cube.Position()}")
+    view.Axes = HandleSpace.WORLD
     Try Letting(editor)
     // Keys run again after.
     view.Tool = HandleTool.MOVE
@@ -1006,8 +1021,6 @@ Function UndoWaitsForADragToEnd() Throws IOError, GraphicsError
     editor.Step()
     editor.Step()
     Expect(cube.Position() == second, "it undid under the drag: {cube.Position()}")
-    Try Primary(Key.Z, True)
-    editor.Step()
     Try Simulate.MouseMotion(20, 0)
     editor.Step()
     Try Letting(editor)
@@ -1020,6 +1033,23 @@ Function UndoWaitsForADragToEnd() Throws IOError, GraphicsError
     Expect(editor.Actions.Run("edit.redo") && !editor.Edited.IsRemoved(cube))
     Expect(editor.Actions.Run("edit.redo") && editor.Actions.Run("edit.redo") &&
            cube.Position() == third)
+    // Redo waits too, with something to redo, held and not yet moved.
+    Expect(editor.Actions.Run("edit.undo"))
+    Local undone = cube.Position()
+    Try Simulate.MoveMouse(0, 0)
+    editor.Step()
+    Local press = OnHandle(editor, undone, Vec3(1, 0, 0), 0)
+    Try Simulate.MoveMouse(press.x, press.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Expect(editor.View.HandleHeld())
+    Try Primary(Key.Z, True)
+    editor.Step()
+    editor.Step()
+    Expect(cube.Position() == undone, "it redid under the drag: {cube.Position()}")
+    Expect(editor.Edits.CanRedo())
+    Try Letting(editor)
     editor.Finish()
 End Function
 
@@ -1288,9 +1318,11 @@ Function NoChangeIsNoEdit() Throws IOError, GraphicsError
     editor.Edits.Clear()
     editor.View.Snap.On = True
     Local tip = OnHandle(editor, Vec3(0, 1, 0), Vec3(1, 0, 0), 0)
-    // Under half a step.
-    Try Drag(editor, tip, tip + Vec2(2, 0))
-    Expect(!editor.Edits.CanUndo() && !editor.Edits.Modified())
+    // Under half a step, in one step and in several.
+    For steps In [1, 4]
+        Try Drag(editor, tip, tip + Vec2(2, 0), MouseButton.LEFT, steps)
+        Expect(!editor.Edits.CanUndo() && !editor.Edits.Modified(), "in {steps}, there's an edit")
+    End For
     // Away and back, in one drag: nothing either.
     Local far = Shown(editor, Vec3(2.5, 1, 0))
     Try Held(editor, tip, far)
@@ -1299,6 +1331,12 @@ Function NoChangeIsNoEdit() Throws IOError, GraphicsError
     editor.Step()
     Expect(!editor.Edits.CanUndo() && !editor.Edits.Modified(), "there's an edit that does nothing")
     Expect(cube.Position() == Vec3(0, 1, 0))
+    // Still there, a little further, nothing either.
+    Try Simulate.MouseMotion(1, 0)
+    editor.Step()
+    Expect(!editor.Edits.CanUndo(), "there's an edit that does nothing")
+    Try Simulate.MouseMotion(-1, 0)
+    editor.Step()
     // And away again, one edit, undoing to the start.
     Try Simulate.MouseMotion(far.x - tip.x, far.y - tip.y)
     editor.Step()
@@ -1380,6 +1418,9 @@ Function ATextureThatCantBeMadeLeavesTheOneThereIs() Throws IOError, GraphicsErr
     editor.View.FitTexture(100000, 100)
     Expect(RefEquals(editor.View.Target(), target) && !target.Freed(),
            "it let go of the one it had")
+    Expect(editor.View.TextureFailures() == 1)
+    editor.View.FitTexture(100000, 100)
+    Expect(editor.View.TextureFailures() == 1, "it tried what can't be made again")
     editor.Step()
     Expect(RefEquals(editor.View.Target(), target))
     editor.View.FitTexture(64, 48)
@@ -1475,11 +1516,9 @@ Function ATurnFollowsThePointerRoundWhateverItsTurned() Throws IOError, Graphics
     Local turn = Normalize(cube.Rotation(Space.WORLD) * Inverse(start))
     Local axis = Normalize(Vec3(turn.x, turn.y, turn.z))
     Expect(Abs(Abs(axis.y) - 1) < 0.01, "it turned about {axis}, not Y")
+    // The pointer went from X toward -Z, which about Y is positive, by the right-hand rule.
     Local angle = 2 * Atan2(turn.y, turn.w)
-    Expect(Abs(Abs(angle) - 0.8) < 0.1, "it turned {angle}")
-    // By the right-hand rule, as the ring's way around has it: X toward -Z is positive about Y.
-    Local fromX = turn * Vec3(1, 0, 0)
-    Expect(angle > 0 ? fromX.z < 0 : fromX.z > 0, "it turned the other way: {fromX}")
+    Expect(Abs(angle - 0.8) < 0.1, "it turned {angle}, not the way the pointer went")
     editor.Edits.Undo()
     // In its own axes: around its own Y, which stays where it is.
     Try Simulate.PressKey(Key.X)
@@ -1509,15 +1548,22 @@ Function EachScaleHandleScalesItsOwnAxisOfWhatsTurned() Throws IOError, Graphics
     editor.Step()
     // In the world's axes, it's still by its own.
     Expect(editor.View.Axes == HandleSpace.WORLD)
-    Local x = OnHandle(editor, Vec3(0, 1, 0), turned * Vec3(1, 0, 0), 0)
-    Try Drag(editor, x, x + Normalize(x - Shown(editor, Vec3(0, 1, 0))) * 60)
-    Expect(cube.Scale().x > 1.1 && cube.Scale().y == 1 && cube.Scale().z == 1,
-           "it's {cube.Scale()}")
+    Local length = editor.View.HandleLength()
+    Local xWay = turned * Vec3(1, 0, 0)
+    Local xFrom = Along(editor, Vec3(0, 1, 0), xWay, 0)
+    Try Drag(editor, Shown(editor, Vec3(0, 1, 0) + xWay * xFrom),
+             Shown(editor, Vec3(0, 1, 0) + xWay * (xFrom + 1)))
+    Expect(Abs(cube.Scale().x - (1 + 1 / length)) < 0.03,
+           "it's {cube.Scale()}, of a length of {length}")
+    Expect(cube.Scale().y == 1 && cube.Scale().z == 1, "it's {cube.Scale()}")
     editor.Edits.Undo()
-    Local z = OnHandle(editor, Vec3(0, 1, 0), turned * Vec3(0, 0, 1), 2)
-    Try Drag(editor, z, z + Normalize(z - Shown(editor, Vec3(0, 1, 0))) * 60)
-    Expect(cube.Scale().z > 1.1 && cube.Scale().x == 1 && cube.Scale().y == 1,
-           "it's {cube.Scale()}")
+    Local zWay = turned * Vec3(0, 0, 1)
+    Local zFrom = Along(editor, Vec3(0, 1, 0), zWay, 2)
+    Try Drag(editor, Shown(editor, Vec3(0, 1, 0) + zWay * zFrom),
+             Shown(editor, Vec3(0, 1, 0) + zWay * (zFrom + 1)))
+    Expect(Abs(cube.Scale().z - (1 + 1 / length)) < 0.03,
+           "it's {cube.Scale()}, of a length of {length}")
+    Expect(cube.Scale().x == 1 && cube.Scale().y == 1, "it's {cube.Scale()}")
     editor.Finish()
 End Function
 
@@ -1553,10 +1599,13 @@ Function WhatsSelectedShowsThroughWhatsInFrontOfIt() Throws IOError, GraphicsErr
     Local camera = editor.View.Viewer().Position(Space.WORLD)
     Local front = Cube(editor, Lerp(Vec3(0, 1, 0), camera, 0.4))
     front.SetScale(Vec3(3, 3, 3))
-    editor.Edited.SelectOnly(Null)
+    // Handles at another, so what's there's only the outline.
+    Local elsewhere = Cube(editor, Vec3(-6, 1, 6))
+    editor.Edited.SelectOnly(elsewhere)
     editor.Step()
     Local plain = target.ToImage()
     editor.Edited.SelectOnly(behind)
+    editor.Edited.ToggleSelected(elsewhere)
     editor.Step()
     Local outlined = target.ToImage()
     Local at = Shown(editor, Vec3(0, 1, 0))
@@ -1595,6 +1644,11 @@ Function AtAnotherScaleItsPointerAndHandlesAreWhereTheyShow() Throws IOError, Gr
     editor.Step()
     editor.Step()
     Expect(editor.View.LitHandle() == 0, "it's lit as {editor.View.LitHandle()}")
+    // Its reach is in the UI's units: 6 of them off it, 12 in the window, still has it.
+    Local start = Shown(editor, Vec3(0.3, 1, 0))
+    Local across = Normalize(tip - start)
+    Local off = tip + Vec2(-across.y, across.x) * 12
+    Expect(editor.View.HandleAt(off * 0.5) == 0, "12 window units from the arrow it's not had")
     // And as long on the screen, in the UI's units, as at a scale of 1.
     Local middle = Shown(editor, Vec3(0, 1, 0))
     Local length = Distance(middle,
@@ -1605,5 +1659,23 @@ Function AtAnotherScaleItsPointerAndHandlesAreWhereTheyShow() Throws IOError, Gr
     // Dragged, it goes along.
     Try Drag(editor, tip, Shown(editor, Vec3(3, 1, 0)))
     Expect(Abs(cube.Position().x - 2.2) < 0.1, "it's at {cube.Position()}")
+    editor.Finish()
+End Function
+
+@Test
+Function ACopyStillThereIsntFreedWhenItsEditsForgotten() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    Local short = History(1)
+    Local copying = CopyEdit(editor.Edited, [cube])
+    short.Commit(copying)
+    Local copy = copying.Copies()[0]
+    short.Commit(EditOf("other", Function()
+    End Function, Function()
+    End Function))
+    Expect(!copy.Freed(), "it's in the scene, and it was freed")
     editor.Finish()
 End Function
