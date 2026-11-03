@@ -126,6 +126,14 @@ foreach(fbengine_patch RANGE 0 5 3)
 endforeach()
 target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_fastgltf_patched}")
 
+# libktx's own zstd_errors.h is in a folder it includes as a system's, after what a Mac's compiler
+# may find of Homebrew's zstd, whose header no longer has ZSTD_getErrorCode. A copy comes first in
+# its targets, as a folder of its own, since CMake keeps a system's folder a system's.
+set(fbengine_ktx_first "${CMAKE_BINARY_DIR}/ktx-first")
+configure_file("${ktx_SOURCE_DIR}/other_include/zstd_errors.h"
+               "${fbengine_ktx_first}/zstd_errors.h" COPYONLY)
+target_include_directories(ktx BEFORE PRIVATE "${fbengine_ktx_first}")
+target_include_directories(ktx_read BEFORE PRIVATE "${fbengine_ktx_first}")
 # basisu's job pool, in libktx's encoder, which each UASTC cook makes one of, sets its kill flag
 # without its mutex as it goes, so a worker between its wait's check and its wait misses the
 # notify, and the pool's join waits for it forever, as a loaded machine's cooks do. The patched

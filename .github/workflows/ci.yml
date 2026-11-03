@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FB_VERSION: 1.0.1
+  FB_VERSION: 1.2.2
 
 jobs:
   native:
@@ -60,6 +60,11 @@ jobs:
         env:
           SDL_VIDEO_DRIVER: offscreen
           FBENGINE_NO_GPU: '1'
+          # A runner's TEMP goes through an 8.3 short name, and fb 1.2.2's FileWatcher gets no
+          # events there; the next fb release fixes it, and these two lines go then.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          FBENGINE_ENDS_AT_ONCE: '8'
         run: |
           tar -xf native-${{ matrix.target }}.tar
           fb --version
@@ -103,9 +108,11 @@ jobs:
   # to use alone: lavapipe, from Mesa (MSYS2's UCRT64 on Windows, apt's on Linux), and MoltenVK on
   # macOS: the C++ tests, and the packages' and examples', which draw. Intel Macs aren't here: their
   # runners have no Metal for MoltenVK, and Homebrew's Mesa has no lavapipe, so an Intel Mac's are
-  # run by hand.
+  # run by hand. On Linux the packages' and examples' programs link native.yml's DLLs, as a
+  # release's do: fb links for an older glibc than this runner's, which what's built here needs.
   gpu:
     name: gpu ${{ matrix.target }}
+    needs: native
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -129,6 +136,11 @@ jobs:
         shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        if: runner.os == 'Linux'
+        with:
+          name: native-${{ matrix.target }}
 
       - name: Install MinGW and the Vulkan loader
         if: runner.os == 'Windows'
@@ -194,6 +206,10 @@ jobs:
       # work, which a test requires when FBE_GPU_VALIDATION is 1.
       - name: Build and test
         env:
+          # As the test job's: fb 1.2.2's FileWatcher and a runner's 8.3 TEMP.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          FBENGINE_ENDS_AT_ONCE: '8'
           SDL_VIDEO_DRIVER: offscreen
           FBE_GPU_VALIDATION: '1'
         run: |
@@ -203,6 +219,7 @@ jobs:
           # Every target, so ctest finds every test it lists: the C++ tests, the packages', and the
           # examples'.
           cmake --build build --parallel
+          if [ "$RUNNER_OS" = Linux ]; then tar -xf native-${{ matrix.target }}.tar; fi
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure || {
             if [ "$RUNNER_OS" = Windows ]; then
               pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-gdb > /dev/null

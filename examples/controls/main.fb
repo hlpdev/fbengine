@@ -1,16 +1,17 @@
 // A game's controls: actions bound to keys, the mouse, and a gamepad, with the player's own
 // bindings loaded over the game's, driven here by Simulate, offscreen, as a test or a replay is.
+// With --watch, a window for a person to watch, where a square walks a circle by itself until they
+// move it (tools/show.py plays it); Escape, or closing it, ends it.
 
+Import std.collections
 Import std.core
+Import std.math
+Import std.os
 Import fbengine
 
-Function Main() Throws GraphicsError, InputError
-    Window.SetHeadless(True)
-    Try Graphics(640, 360)
-    Defer EndGraphics()
-
-    // The game's own bindings.
-    Local controls = ActionSet()
+// The game's own bindings, and the player's over them: they jump with Return, as their settings
+// file says.
+Function Bound(controls: ActionSet): (Action, Action) Throws InputError
     Local jump = controls.Add("jump")
     jump.Bind(Binding.OfKey(Key.SPACE))
     jump.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
@@ -21,9 +22,16 @@ Function Main() Throws GraphicsError, InputError
     move.BindY(Binding.OfKey(Key.S))
     move.BindY(Binding.OfKey(Key.W, -1.0))
     move.BindY(Binding.OfGamepadAxis(GamepadAxis.LEFT_Y))
-
-    // The player's: they jump with Return, as their settings file says.
     Try controls.Load("jump = [{{ key = \"RETURN\" }}, {{ gamepad_button = \"SOUTH\" }}]")
+    Return (jump, move)
+End Function
+
+Function Played() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+    Local controls = ActionSet()
+    Local jump, move = Try Bound(controls)
 
     Local pad = Try Simulate.ConnectGamepad("Player One")
     Try Simulate.KeyDown(Key.W)
@@ -39,4 +47,66 @@ Function Main() Throws GraphicsError, InputError
     pad.Unplug()
 End Function
 
-Try Main()
+// A window for a person to watch, to its end, or `frames` frames, offscreen, as a test walks it.
+Function Watched(frames: Int) Throws GraphicsError, InputError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Frame.SetLimit(60)
+    Local controls = ActionSet()
+    Local jump, move = Try Bound(controls)
+    Local font = Font.BuiltIn(18.0)
+    Local x: Float32 = 400.0
+    Local y: Float32 = 225.0
+    Local seconds: Float32 = 0.0
+    Local flash: Float32 = 0.0
+    Local count = 0
+    Local moved = False
+    Local jumped = False
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        // A test's frames are a step each, of a quarter of a second, to see it all.
+        Local delta = frames > 0 ? 0.25 : Frame.Delta() As Float32
+        seconds += delta
+        // The player's, or by itself, a circle, and a jump every 2 seconds.
+        Local way = move.Vector()
+        Local byItself = way.x == 0.0 && way.y == 0.0
+        If byItself Then way = Vec2(Cos(seconds), Sin(seconds))
+        x = Clamp(x + way.x * 160.0 * delta, 20.0, 780.0)
+        y = Clamp(y + way.y * 160.0 * delta, 60.0, 430.0)
+        moved = moved || x != 400.0
+        Local leapt = jump.Hit() || byItself && Mod(seconds, 2.0) < delta
+        If leapt
+            flash = 0.3
+            jumped = True
+        End If
+        flash = Max(flash - delta, 0.0)
+        If Screen.Texture() == Null Then Continue
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(24, 28, 36, 255))
+        canvas.Clear()
+        canvas.SetColor(flash > 0.0 ? Color32(255, 200, 80, 255) : Color32(76, 141, 255, 255))
+        canvas.DrawRect((x As Int32) - 16, (y As Int32) - 16, 32, 32)
+        canvas.SetColor(Color32(230, 232, 235, 255))
+        canvas.DrawText(font,
+                        "move: W A S D, or a gamepad's left stick. jump: Return, or its SOUTH",
+                        12, 8)
+        canvas.DrawText(font, byItself ? "walking by itself" : "you have it", 12, 32)
+    End While
+    Print("watched {count} frames, moved {moved}, jumped {jumped}")
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try Watched(Asked(arguments))
+Else
+    Try Played()
+End If

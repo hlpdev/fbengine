@@ -1,0 +1,359 @@
+// Painting: a Ui's tree drawn on a Canvas, in the UI's units, each box and clip on whole pixels, so
+// boxes that touch in the layout touch on the screen.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+Import "./layout"
+Import "./theme"
+Import "./ui"
+Import "./widget"
+
+// A rectangle of the target's pixels, [Left, Right) by [Top, Bottom).
+Struct Clip
+    Field Left: Int32
+    Field Top: Int32
+    Field Right: Int32
+    Field Bottom: Int32
+
+    Method Empty(): Bool => Right <= Left || Bottom <= Top
+
+    Method Within(other: Clip): Clip
+        Return Clip(Max(Left, other.Left), Max(Top, other.Top), Min(Right, other.Right),
+                    Min(Bottom, other.Bottom))
+    End Method
+End Struct
+
+/// What a Widget's Draw draws with: a Ui's canvas, in the Ui's units, which it puts on the target's
+/// whole pixels. A widget draws only in its box, what its children draw only in that too, and in
+/// its content box where it Clips; a game's widgets clip more with PushClip. Colors blend over
+/// what's there by their alpha.
+Public Final Class Painter
+    Field canvas: Canvas
+    Field ui: Ui
+    Field across: Float32
+    Field down: Float32
+    Field fontUnits: Float32
+    Field origin: Vec2i
+    Field outer: Clip?
+    Field clips: Clip[] = []
+    // How many clips a Draw found, which it can't pop, and what it's drawing.
+    Field floor: Int = 0
+    Field drawing: Node?
+    // The canvas's pen, as it's given back.
+    Field hadColor: Color32
+    Field hadBlend: Blend2D
+    Field hadViewport: Rect?
+    Field hadRotation: Float32
+    Field hadScale: Vec2
+
+    // Painting on `canvas`, `across` and `down` of its pixels a unit of `ui`'s, each unit of a
+    // font's size `fontUnits` of a unit there as `canvas` draws text.
+    Package New(canvas: Canvas, ui: Ui, across: Float32, down: Float32, fontUnits: Float32)
+        Self.canvas = canvas
+        Self.ui = ui
+        Self.across = across
+        Self.down = down
+        Self.fontUnits = fontUnits
+        origin = canvas.Origin()
+        hadColor = canvas.Color()
+        hadBlend = canvas.Blend()
+        hadViewport = canvas.Viewport()
+        hadRotation = canvas.Rotation()
+        hadScale = canvas.Scale()
+        Local viewport = hadViewport
+        If viewport != Null
+            // In the target's pixels, its origin not added; a Clip's are from the origin.
+            outer = Clip((viewport.X As Int32) - origin.x As Int32,
+                         (viewport.Y As Int32) - origin.y As Int32,
+                         ((viewport.X + viewport.Width) As Int32) - origin.x As Int32,
+                         ((viewport.Y + viewport.Height) As Int32) - origin.y As Int32)
+        End If
+        canvas.SetBlend(Blend2D.ALPHA)
+        canvas.SetRotation(0.0)
+        canvas.SetScale(1.0, 1.0)
+    End New
+
+    // Gives the canvas its pen back.
+    @MainThread Package Method Finish()
+        canvas.SetColor(hadColor)
+        canvas.SetBlend(hadBlend)
+        canvas.SetRotation(hadRotation)
+        canvas.SetScale(hadScale.x, hadScale.y)
+        Local viewport = hadViewport
+        If viewport != Null
+            canvas.SetViewport(viewport.X As Int32, viewport.Y As Int32, viewport.Width As Int32,
+                               viewport.Height As Int32)
+        Else
+            canvas.ResetViewport()
+        End If
+    End Method
+
+    // Paints `node` and what's in it.
+    @MainThread Package Method Paint(node: Node)
+        If !node.Visible() Then Return
+        PushClip(node.Box())
+        If !Current().Empty()
+            Local widget = node As? Widget
+            If widget != Null Then Drawn(widget, False)
+            Local clipping = node.Clips()
+            If clipping Then PushClip(node.ContentBox())
+            If !Current().Empty()
+                For child In node.Children()
+                    Paint(child)
+                End For
+            End If
+            If clipping Then PopClip()
+            If widget != Null Then Drawn(widget, True)
+        End If
+        PopClip()
+    End Method
+
+    // Draws `widget`, what goes `over` it or not, and takes away a clip it left pushed, so what's
+    // drawn after it isn't clipped by it.
+    @MainThread Method Drawn(widget: Widget, over: Bool)
+        Local had = floor
+        floor = clips.Count
+        drawing = widget
+        If over
+            widget.DrawOver(Self)
+        Else
+            widget.Draw(Self)
+        End If
+        If clips.Count > floor
+            clips.RemoveRange(floor, clips.Count - floor)
+            Applied()
+        End If
+        floor = had
+    End Method
+
+    /// The canvas, for what these Methods don't draw: its pen's as they left it, its positions in
+    /// its pixels (Across and Down say how many a unit is), and a widget that changes its color,
+    /// rotation, or scale sets them back. Its blend is ALPHA, and its viewport the clip.
+    @MainThread Public Method Target(): Canvas => canvas
+
+    /// How many of the target's pixels a unit of the Ui's is across.
+    @MainThread Public Method Across(): Float32 => across
+
+    /// How many of the target's pixels a unit of the Ui's is down.
+    @MainThread Public Method Down(): Float32 => down
+
+    /// The Ui it's painting.
+    @MainThread Public Method Owner(): Ui => ui
+
+    /// The target's column `x`, in the UI's units, is in, kept to 536,870,912 pixels either way,
+    /// and NaN's 0.
+    @MainThread Public Method PixelX(x: Float32): Int32 => Pixel(x * across)
+
+    /// The target's row `y`, in the UI's units, is in, as PixelX's is.
+    @MainThread Public Method PixelY(y: Float32): Int32 => Pixel(y * down)
+
+    /// Draws only in `box` as well, as PopClip ends.
+    @MainThread Public Method PushClip(box: Rect)
+        Local within = PixelBox(box)
+        If clips.Count > 0
+            within = within.Within(clips[clips.Count - 1])
+        Else
+            Local given = outer
+            If given != Null Then within = within.Within(given)
+        End If
+        clips.Add(within)
+        Applied()
+    End Method
+
+    /// Ends the last PushClip. It panics for one the widget drawing didn't push; one it leaves
+    /// pushed ends as its Draw does.
+    @MainThread @PanicsAtCaller
+    Public Method PopClip()
+        If clips.Count <= floor
+            Panic("Painter.PopClip: {drawing?.ToString() ?? "this"} ends a clip it didn't push")
+        End If
+        clips.RemoveAt(clips.Count - 1)
+        Applied()
+    End Method
+
+    /// Fills `box` with `color`.
+    @MainThread Public Method Fill(box: Rect, color: Color)
+        If !Shows(color) Then Return
+        canvas.SetColor(color.ToColor32())
+        Local pixels = PixelBox(box)
+        canvas.DrawRect(pixels.Left, pixels.Top, pixels.Right - pixels.Left,
+                        pixels.Bottom - pixels.Top)
+    End Method
+
+    /// Draws `box` as `style` says: its background, and over it its border, its corners rounded,
+    /// each to the nearest pixel, a border of any width at least 1.
+    @MainThread Public Method Panel(box: Rect, style: Style)
+        Local pixels = PixelBox(box)
+        If pixels.Empty() Then Return
+        Local radius = style.CornerRadius * Min(across, down)
+        If Shows(style.Background)
+            canvas.SetColor(style.Background.ToColor32())
+            Filled(pixels, radius)
+        End If
+        If style.BorderWidth > 0.0 && Shows(style.Border)
+            canvas.SetColor(style.Border.ToColor32())
+            Local wide = Max(Round(style.BorderWidth * Min(across, down)) As Int32, 1)
+            Ring(pixels, radius, wide)
+        End If
+    End Method
+
+    /// Draws `text` in `style`'s font and `color`, or its Foreground, its top left at `x`, `y`;
+    /// nothing while the Ui has no font for it.
+    @MainThread Public Method Text(text: String, x: Float32, y: Float32, style: Style,
+                                   color: Color? = Null)
+        Local shown = color ?? style.Foreground
+        If text == "" || !Shows(shown) Then Return
+        Local font = ui.FontFor(Sized(style))
+        If font == Null Then Return
+        canvas.SetColor(shown.ToColor32())
+        canvas.DrawText(font, text, PixelX(x), PixelY(y))
+    End Method
+
+    /// Draws `text` in `style` in `box`, where `horizontal` and `vertical` say, as the Ui measures
+    /// it; its lines all start at one x. STRETCH is START.
+    @MainThread Public Method TextIn(text: String, box: Rect, style: Style,
+                                     horizontal: Align = Align.START,
+                                     vertical: Align = Align.CENTER, color: Color? = Null)
+        If text == "" Then Return
+        Local size = ui.MeasureText(text, style)
+        Text(text, Placed(box.X, box.Width, size.x, horizontal),
+             Placed(box.Y, box.Height, size.y, vertical), style, color)
+    End Method
+
+    /// Draws frame `frame` of `sprite` filling `box`, times `tint`, or as it is, stretched as it has
+    /// to be; its handle's left out of it.
+    @MainThread Public Method Sprite(sprite: Sprite2D, box: Rect, tint: Color? = Null,
+                                     frame: Int32 = 0)
+        Local times = tint ?? Color.White
+        If !Shows(times) Then Return
+        Local pixels = PixelBox(box)
+        If pixels.Empty() Then Return
+        Local scaleX = ((pixels.Right - pixels.Left) As Float32) / (sprite.Width() As Float32)
+        Local scaleY = ((pixels.Bottom - pixels.Top) As Float32) / (sprite.Height() As Float32)
+        canvas.SetColor(times.ToColor32())
+        canvas.SetScale(scaleX, scaleY)
+        Local handle = sprite.Handle()
+        canvas.Draw(sprite, (pixels.Left As Float32) + handle.x * scaleX,
+                    (pixels.Top As Float32) + handle.y * scaleY, frame)
+        canvas.SetScale(1.0, 1.0)
+    End Method
+
+    // `box` on the target's whole pixels.
+    Method PixelBox(box: Rect): Clip
+        Return Clip(PixelX(box.X), PixelY(box.Y),
+                    PixelX(box.X + box.Width), PixelY(box.Y + box.Height))
+    End Method
+
+    Method Current(): Clip => clips[clips.Count - 1]
+
+    // Sets the canvas's viewport to the clip, or to what it was given.
+    @MainThread Method Applied()
+        If clips.Count == 0 Then Return
+        Local clip = Current()
+        canvas.SetViewport(clip.Left + origin.x As Int32, clip.Top + origin.y As Int32,
+                           Max(clip.Right - clip.Left, 0), Max(clip.Bottom - clip.Top, 0))
+    End Method
+
+    // `style` at the size its font's drawn at, for this canvas.
+    Method Sized(style: Style): Style
+        Local sized = style
+        sized.FontSize = style.FontSize * fontUnits
+        Return sized
+    End Method
+
+    // Fills `box`, its corners rounded by `radius` pixels: a run of rows for each row of its
+    // corners, and one for those between.
+    @MainThread Method Filled(box: Clip, radius: Float32)
+        Local wide = box.Right - box.Left
+        Local rows = box.Bottom - box.Top
+        Local round = Clamp(radius, 0.0, (Min(wide, rows) As Float32) / 2.0)
+        Local corner = Ceil(round) As Int32
+        // Only the rows in the clip: a box can be far bigger than the target.
+        Local clip = Current()
+        For row = Max(clip.Top - box.Top, 0) To Min(clip.Bottom - box.Top, corner) - 1
+            Local inset = RowInset(row, round)
+            canvas.DrawRect(box.Left + inset, box.Top + row, wide - inset * 2, 1)
+        End For
+        For row = Max(box.Bottom - clip.Bottom, 0) To Min(box.Bottom - clip.Top, corner) - 1
+            If rows - 1 - row == row Then Continue
+            Local inset = RowInset(row, round)
+            canvas.DrawRect(box.Left + inset, box.Bottom - 1 - row, wide - inset * 2, 1)
+        End For
+        If rows > corner * 2
+            canvas.DrawRect(box.Left, box.Top + corner, wide, rows - corner * 2)
+        End If
+    End Method
+
+    // Draws the `thick` pixels inside `box`'s edge, its corners rounded by `radius` pixels, each
+    // pixel once, so a border with alpha is even.
+    @MainThread Method Ring(box: Clip, radius: Float32, thick: Int32)
+        Local wide = box.Right - box.Left
+        Local rows = box.Bottom - box.Top
+        If thick * 2 >= wide || thick * 2 >= rows
+            Filled(box, radius)
+            Return
+        End If
+        Local round = Clamp(radius, 0.0, (Min(wide, rows) As Float32) / 2.0)
+        Local within = Max(round - (thick As Float32), 0.0)
+        Local corner = Max(Ceil(round) As Int32, thick)
+        Local clip = Current()
+        For row = Max(clip.Top - box.Top, 0) To Min(clip.Bottom - box.Top, corner) - 1
+            RingRows(box, row, 1, round, within, thick)
+        End For
+        For row = Max(box.Bottom - clip.Bottom, 0) To Min(box.Bottom - clip.Top, corner) - 1
+            // A pill's middle row is the top's already.
+            If rows - 1 - row != row Then RingRows(box, rows - 1 - row, 1, round, within, thick)
+        End For
+        If rows > corner * 2 Then RingRows(box, corner, rows - corner * 2, round, within, thick)
+    End Method
+
+    // `count` rows of a ring from row `row`, all as that one is: all of it where it's above or
+    // below what it rings, and two runs beside it.
+    @MainThread Method RingRows(box: Clip, row: Int32, count: Int32, round: Float32,
+                                within: Float32,
+                                thick: Int32)
+        Local wide = box.Right - box.Left
+        Local rows = box.Bottom - box.Top
+        Local outside = RowInset(Min(row, rows - 1 - row), round)
+        Local top = box.Top + row
+        If row < thick || row >= rows - thick
+            canvas.DrawRect(box.Left + outside, top, wide - outside * 2, count)
+            Return
+        End If
+        Local inside = thick + RowInset(Min(row, rows - 1 - row) - thick, within)
+        If inside <= outside Then Return
+        canvas.DrawRect(box.Left + outside, top, inside - outside, count)
+        canvas.DrawRect(box.Right - inside, top, inside - outside, count)
+    End Method
+End Class
+
+// `value` as a whole pixel: kept to where a box's two sides still subtract in an Int32, and NaN's 0.
+Function Pixel(value: Float32): Int32
+    If IsNaN(value) Then Return 0
+    Return Round(Clamp(value, -536870912.0, 536870912.0)) As Int32
+End Function
+
+// Whether `color` shows at all.
+Function Shows(color: Color): Bool => color.a > 0.0
+
+// How many pixels in from its side a rounded corner of `radius` pixels starts, `row` rows from its
+// top or bottom: the first whose middle is inside the corner's circle.
+Function RowInset(row: Int32, radius: Float32): Int32
+    Local up = radius - ((row As Float32) + 0.5)
+    If up <= 0.0 Then Return 0
+    Return Ceil(radius - Sqrt(radius * radius - up * up) - 0.5) As Int32
+End Function
+
+// Where something `size` long goes in `length` from `from`, as `where` says.
+Function Placed(from: Float32, length: Float32, size: Float32, where: Align): Float32
+    Select where
+        Case Align.CENTER
+            Return from + (length - size) / 2.0
+        Case Align.END
+            Return from + length - size
+        Default
+            Return from
+    End Select
+End Function

@@ -58,8 +58,7 @@ VkSamplerAddressMode address_mode(std::int32_t wrap) {
 /// with fbe_error's why, if one can't be made, leaving the old ones as they were.
 bool make_samplers(const fbe::gpu::device_t& gpu) {
     std::array<VkSampler, fbe::gpu::sampler_slots> made{};
-    const float bias = std::clamp(lod_bias, -gpu.properties.limits.maxSamplerLodBias,
-                                  gpu.properties.limits.maxSamplerLodBias);
+    const float bias = std::clamp(lod_bias, -gpu.max_lod_bias, gpu.max_lod_bias);
     const float most = std::min(anisotropy, gpu.max_anisotropy);
     std::array<VkDescriptorImageInfo, fbe::gpu::sampler_slots> infos{};
     const auto make = [&](std::int32_t filter, std::int32_t u, std::int32_t v, float biased,
@@ -140,9 +139,13 @@ bool start_bindless() {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES,
         .driverID = VK_DRIVER_ID_MESA_LLVMPIPE,
     };
+    VkPhysicalDeviceVulkan11Properties vulkan11{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES,
+        .pNext = &vulkan12,
+    };
     VkPhysicalDeviceProperties2 properties{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
-        .pNext = &vulkan12,
+        .pNext = &vulkan11,
     };
     vkGetPhysicalDeviceProperties2(gpu.physical, &properties);
     capacity = std::min({
@@ -150,14 +153,9 @@ bool start_bindless() {
         vulkan12.maxDescriptorSetUpdateAfterBindSampledImages,
         vulkan12.maxPerStageDescriptorUpdateAfterBindSampledImages,
     });
-    if (capacity < fewest_textures ||
-        vulkan12.maxPerStageDescriptorUpdateAfterBindSamplers < sampler_slots) {
-        return fail(std::format("the GPU {} holds {} textures at once, and fbengine needs {}",
-                                gpu.properties.deviceName, capacity, fewest_textures));
-    }
 
     const auto every_stage = flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL);
-    const std::array bindings{
+    std::array bindings{
         VkDescriptorSetLayoutBinding{
             .binding = sampler_binding,
             .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
@@ -193,6 +191,29 @@ bool start_bindless() {
         .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
+    // Past the descriptors a set is promised, the device has to say it holds them, which MoltenVK
+    // doesn't for what its other limits say; if it doesn't, the textures are what's promised.
+    const bool fewest_fault = faulted(fault_t::FEWEST_DESCRIPTORS);
+    const bool promised_fault = faulted(fault_t::PROMISED_DESCRIPTORS);
+    std::uint32_t promised = vulkan11.maxPerSetDescriptors;
+    if (promised_fault || fewest_fault) {
+        promised = fewest_fault ? fewest_textures + sampler_slots - 1 : 1212;
+    }
+    if (capacity + sampler_slots > promised) {
+        VkDescriptorSetLayoutSupport support{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_SUPPORT,
+        };
+        vkGetDescriptorSetLayoutSupport(gpu.device, &layout_info, &support);
+        if (support.supported != VK_TRUE || promised_fault || fewest_fault) {
+            capacity = promised > sampler_slots ? promised - sampler_slots : 0;
+            bindings.at(1).descriptorCount = capacity;
+        }
+    }
+    if (capacity < fewest_textures ||
+        vulkan12.maxPerStageDescriptorUpdateAfterBindSamplers < sampler_slots) {
+        return fail(std::format("the GPU {} holds {} textures at once, and fbengine needs {}",
+                                gpu.properties.deviceName, capacity, fewest_textures));
+    }
     VkResult result = vkCreateDescriptorSetLayout(gpu.device, &layout_info, nullptr, &layout);
     if (result != VK_SUCCESS) {
         return fail_vulkan("couldn't make the bindless set's layout", result);

@@ -26,6 +26,7 @@ Public Extern "C" Lib "fbengine_native"
                                       size: Float32, style: Int32): UInt64
     Function fbe_text_system_font(family: CString, size: Float32, style: Int32): UInt64
     Function fbe_text_default_font(size: Float32, style: Int32): UInt64
+    Function fbe_text_embedded_font(size: Float32, style: Int32): UInt64
     Function fbe_text_resize_font(font: UInt64, size: Float32, style: Int32): UInt64
     Function fbe_text_free_font(font: UInt64): Bool
     Function fbe_text_font_count(): Int32

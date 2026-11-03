@@ -6,12 +6,14 @@ Import std.math
 Import fbengine
 Import "./controls"
 Import "./layout"
+Import "./painter"
 Import "./widget"
 
 /// A view of what's in it, its one child, which it lays out as tall as that wants and its own
 /// width, and shows from Offset down: the wheel scrolls it, and ScrollIntoView brings a part of
-/// it into view. A child outside the view isn't found by NodeAt, as it isn't drawn: style
-/// "scroll".
+/// it into view. A child outside the view isn't found by NodeAt, as it isn't drawn; a thumb at its
+/// right shows where it's scrolled to while what it shows is taller than it: style "scroll", its
+/// thumb "scroll.thumb".
 Public Class ScrollView Extends Widget
     Field offset: Float32 = 0.0
     // The offset asked for, which each Layout keeps to what it shows.
@@ -75,6 +77,15 @@ Public Class ScrollView Extends Widget
             child.Place(Rect(content.X + margin.Left, content.Y + margin.Top - offset,
                              Max(content.Width - margin.Horizontal(), 0.0), tall))
         End For
+    End Method
+
+    @MainThread Public Override Method DrawOver(paint: Painter)
+        Local farthest = MaxOffset()
+        If farthest <= 0.0 Then Return
+        Local content = ContentBox()
+        Local tall = Max(view * view / extent, Min(16.0, view))
+        Local top = content.Y + (view - tall) * offset / farthest
+        paint.Panel(Rect(content.X + content.Width - 4.0, top, 4.0, tall), PartStyle("thumb"))
     End Method
 
     // What it shows is only in its content box.
