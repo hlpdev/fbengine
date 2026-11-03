@@ -45,19 +45,8 @@ fbe::golden::frame_t saved(const std::filesystem::path& path) {
 TEST_CASE("the editor's frames match their golden images", "[.example]") {
     REQUIRE(fbe_window_set_headless(true));
     require(fbe_gpu_start());
-    for (const std::string_view frame : {
-             "welcome",
-             "nothing_selected",
-             "move",
-             "turn",
-             "scale",
-             "component",
-             "light",
-             "camera",
-             "many",
-             "menu",
-             "dialog",
-         }) {
+    for (const std::string_view frame : { "welcome", "nothing_selected", "move", "turn", "scale",
+                                          "inspector", "menu", "dialog" }) {
         INFO("frame " << frame);
         const std::filesystem::path path = std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /
                                            "editor" / std::format("frame_{}.png", frame);
