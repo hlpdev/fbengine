@@ -24,6 +24,7 @@ import hashlib
 import os
 import pathlib
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,9 @@ FALLBACKS = {
 }
 # The clang-format CI pins (ci.yml), which every check formats with.
 CLANG_FORMAT_VERSION = "19.1.5"
+# Tests ctest has to list, as one registered only by a second configure is skipped without a word.
+REQUIRED_TESTS = ["examples.hello", "examples.arcade", "examples.arcade.idle", "examples.arcade.golden",
+                  "examples.arcade.rules", "examples.arcade.usage", "fbengine.package"]
 failures = []
 # One lock for each verify that may run at a time on this machine.
 TURNS = ["turn.lock", "turn2.lock", "turn3.lock", "turn4.lock"]
@@ -161,6 +165,10 @@ def check_build(build):
 
 def check_tests(build, only=None):
     step("ctest")
+    listed = re.findall(r"Test +#\d+: (\S+)", output(["ctest", "--test-dir", str(build), "-N"]))
+    for name in REQUIRED_TESTS:
+        if name not in listed:
+            fail(f"ctest doesn't list {name}")
     environment = dict(os.environ, SDL_VIDEO_DRIVER="offscreen")
     command = ["ctest", "--test-dir", str(build), "--output-on-failure"]
     if only is not None:

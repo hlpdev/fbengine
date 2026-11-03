@@ -1,0 +1,31 @@
+// Starfall's rules that need no GPU.
+
+Import std.core
+Import std.test
+Import arcade.starfall
+
+// A rock at (100, 100), its handle its middle: its pixels' columns are 92 to 107, and its first row
+// is 92, with pixels in columns 97 to 100.
+Function Rock100(): Rock
+    Local falling = Rock(100, 0, 0, 0, 1)
+    falling.Y = 100
+    Return falling
+End Function
+
+@Test
+Function ABoltMeetsARockInThePixelsItsDrawnIn()
+    Local mask = RockMask()
+    Local falling = Rock100()
+    // Its middle row reaches both edges: a bolt in the last column hits, one just past it doesn't,
+    // though it's less than a pixel past where the bolt's own position is.
+    Expect(BoltHits(mask, Bolt(107, 98), falling))
+    Expect(BoltHits(mask, Bolt(107.9, 98), falling))
+    Expect(!BoltHits(mask, Bolt(108, 98), falling))
+    Expect(!BoltHits(mask, Bolt(108.9, 98), falling))
+    // Just left of the first column.
+    Expect(BoltHits(mask, Bolt(92, 98), falling))
+    Expect(!BoltHits(mask, Bolt(91.9, 98), falling))
+    // All 5 of its rows count: its last, 4 below its top, is what meets the rock's first row.
+    Expect(BoltHits(mask, Bolt(98, 88), falling))
+    Expect(!BoltHits(mask, Bolt(98, 87), falling))
+End Function

@@ -6,7 +6,6 @@
 #include "golden/golden.hpp"
 #include "gpu_testing.hpp"
 
-#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +13,7 @@
 #include <filesystem>
 #include <format>
 #include <stb_image.h>
+#include <string_view>
 
 using fbe::tests::require;
 using fbe::tests::stop_gpu;
@@ -39,12 +39,13 @@ fbe::golden::frame_t saved(const std::filesystem::path& path) {
 
 } // namespace
 
-// The arcade example's frames 1, 150, and 300. The GPU started here is the one the example drew
-// on, as ctest gives both the same Vulkan, which says how strictly they're compared.
+// The arcade example's frames: its pilot's run's 1, 150, and 300; and with no one flying, a rock
+// crossing the ground and the game's end. The GPU started here is the one the example drew on, as
+// ctest gives both the same Vulkan, which says how strictly they're compared.
 TEST_CASE("the arcade example's frames match their golden images", "[.example]") {
     REQUIRE(fbe_window_set_headless(true));
     require(fbe_gpu_start());
-    for (const int frame : std::array{ 1, 150, 300 }) {
+    for (const std::string_view frame : { "1", "150", "300", "ground", "over" }) {
         INFO("frame " << frame);
         const std::filesystem::path path = std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /
                                            "arcade" / std::format("frame_{}.png", frame);

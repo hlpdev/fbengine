@@ -6,6 +6,7 @@ Import std.core
 Import std.ffi
 Import std.math
 Import "./c/fbe_2d"
+Import "./collide"
 Import "./sprite2d"
 Import "./text"
 Import "./texture"
@@ -146,6 +147,22 @@ Public Final Class Canvas
         Local done = False
         Unsafe
             done = fbe_2d_texture(into, AddressOf(used), texture, AddressOf(drawn), x, y)
+        End Unsafe
+        If !done Then Panic(LastError())
+    End Method
+
+    /// Draws frame `frame` of `sprite` placed as `at` says, as a Mask placed the same collides:
+    /// its handle at (X, Y), turned and scaled by `at` and not as set, which it leaves as they are;
+    /// otherwise as the other Draw, whose panics it has.
+    @MainThread @PanicsAtCaller
+    Public Method Draw(sprite: Sprite2D, at: Placement, frame: Int32 = 0)
+        Local into = Into("Draw")
+        Local drawn = sprite.Drawn(frame, at.Rotation, at.ScaleX, at.ScaleY)
+        Local texture = sprite.Live()
+        Local used = pen
+        Local done = False
+        Unsafe
+            done = fbe_2d_texture(into, AddressOf(used), texture, AddressOf(drawn), at.X, at.Y)
         End Unsafe
         If !done Then Panic(LastError())
     End Method
