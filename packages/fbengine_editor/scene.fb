@@ -242,8 +242,6 @@ Public Final Class MadeEdit Extends Edit
         If entity == Null
             entity = make()
             made = entity
-        ElseIf entity.Freed()
-            Return
         ElseIf where != Null
             scene.PutBack(entity, where)
         End If

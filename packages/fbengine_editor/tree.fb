@@ -569,7 +569,6 @@ Class TreeRow Extends Widget
 
     // Hidden itself, dim; hidden by what it's in, less so.
     Package Method Styled(scene: EditedScene)
-        If entity.Freed() Then Return
         Local selected = scene.IsSelected(entity)
         If entity.Hidden()
             SetStyleName(selected ? "tree.row.selected.hidden" : "tree.row.hidden")
@@ -679,7 +678,6 @@ Class TreeRow Extends Widget
     Public Override Method PointerCancelled(point: Vec2)
         Local own = tree
         Local ui = Owner()
-        dragging = False
         If own == Null || ui == Null Then Return
         own.Holding(Null)
         own.DragCancelled(ui)

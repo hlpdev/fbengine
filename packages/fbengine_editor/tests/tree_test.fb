@@ -674,8 +674,25 @@ Function ARebuildWhileDraggingEndsItsHint() Throws IOError, GraphicsError
     editor.Tree.MarkChanged()
     editor.Step()
     Expect(editor.Shown.Popups().Count == 0, "the hint outlived the row")
+    // Moving on doesn't begin it again.
+    Try Simulate.MouseMotion(4, 0)
+    editor.Step()
+    Expect(editor.Shown.Popups().Count == 0, "the drag began again")
     Try Letting(editor)
     Expect(all["d"].Parent() == Null, "a drag that was ended went on")
+    // Let go back on its row, it's not a click on it.
+    editor.Edited.SelectOnly(all["d"])
+    editor.Edited.ToggleSelected(all["e"])
+    editor.Step()
+    Local on = OnName(editor, all["d"])
+    Local there = OnName(editor, all["e"])
+    Try Dragging(editor, on, there)
+    editor.Tree.MarkChanged()
+    editor.Step()
+    Try Simulate.MouseMotion(on.x - there.x, on.y - there.y)
+    editor.Step()
+    Try Letting(editor)
+    Expect(editor.Edited.Selected().Count == 2, "letting go selected only it")
     editor.Finish()
 End Function
 
@@ -696,6 +713,9 @@ Function OnlyWhatsInTheSceneRenames() Throws IOError, GraphicsError
     Expect(!editor.Tree.Renaming())
     editor.Finish()
 End Function
+
+// Whether `entity` has a row, as a test of a Widget itself would print all it's in if it fails.
+Function Rowed(editor: Editor, entity: Entity): Bool => editor.Tree.RowOf(entity) != Null
 
 // A click on what's named `name`, in a popup or under the root.
 Function ClickNamed(editor: Editor, name: String) Throws GraphicsError
@@ -750,6 +770,137 @@ Function OpeningAProjectOverOneWithRowsLetsThemGo() Throws IOError, GraphicsErro
 End Function
 
 @Test
+Function ClosingAProjectLetsGoOfItsRowsAtOnce() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Named(editor)
+    Expect(editor.Tree.RowsMade() == 5)
+    Expect(editor.Actions.Run("file.close"))
+    Expect(editor.Tree.RowsMade() == 0, "its rows are still there, of what's freed")
+    Expect(editor.Tree.ShownEntities().Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function ARowOfWhatsFreedDoesNothingBeforeItsGone() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local row = editor.Tree.RowOf(all["e"])
+    If row == Null Then Panic("it has no row")
+    Local box = row.Box()
+    all["e"].Free()
+    // Before the tree's next Update finds it, as what's freed within one Ui.Update is.
+    row.SetStyleName("tree.row.hidden")
+    editor.Shown.Update()
+    Expect(!row.PointerDown(box.Center), "a press took what's freed")
+    Expect(!row.PointerDownWith(MouseButton.RIGHT, box.Center), "a right press took what's freed")
+    editor.Step()
+    Expect(Names(editor) == "a b c d ", "it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function ARowHeldStaysWhileItsScrolledAway() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Many(editor, 500)
+    Local row = editor.Tree.RowOf(all[0])
+    If row == Null Then Panic("it has no row")
+    Local on = row.Box().Center
+    Try Simulate.MoveMouse(on.x, on.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.Wheel(-60)
+    editor.Step()
+    editor.Step()
+    Local held = editor.Tree.RowOf(all[0])
+    Expect(held != Null && RefEquals(held, row), "what's held was let go of")
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    editor.Step()
+    editor.Step()
+    Expect(!Rowed(editor, all[0]), "it stayed once let go of")
+    editor.Finish()
+End Function
+
+@Test
+Function ARowHeldDoesntNoticeAHandlesDrag() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local d = all["d"]
+    editor.Edited.SelectOnly(d)
+    editor.Step()
+    Try Dragging(editor, OnName(editor, d), OnName(editor, all["e"]))
+    Expect(editor.Shown.Popups().Count == 1)
+    For step = 1 To 2
+        editor.Edits.Commit(TransformEdit("Move", [d], [LocalPlace.Of(d)],
+                                          [EntityPlace(Vec3(step As Float, 0, 0), Quat.Identity,
+                                                       Vec3(1, 1, 1))], 1))
+        editor.Step()
+        Expect(editor.Shown.Popups().Count == 1, "a drag's step ended the row's")
+    End For
+    editor.Edits.Undo()
+    editor.Step()
+    Expect(editor.Shown.Popups().Count == 1, "its undo ended the row's")
+    Try Letting(editor)
+    Local parent = d.Parent()
+    Expect(parent != Null && RefEquals(parent, all["e"]), "the row's drag didn't go on")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsNeverBeenShownStillRenamesAndFinds() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local first = Try Started(settings, games)
+    first.Docked.Hide("tree")
+    first.Finish()
+    Local second = Try Editor(settings.Path)
+    Try second.Start(games.Path / "game")
+    second.Step()
+    second.Step()
+    Expect(!second.Docked.Showing("tree"), "it's kept as closed")
+    Try Primary(Key.F)
+    second.Step()
+    second.Step()
+    second.Step()
+    Local focused = second.Shown.Focused()
+    Expect(focused != Null && RefEquals(focused, second.Tree.FindField()),
+           "find hasn't the keyboard")
+    second.Finish()
+End Function
+
+@Test
+Function MovedInTheTreeFromWhatsFreedStaysWhereItIs() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local c = all["c"]
+    all["b"].SetPosition(Vec3(5, 0, 0))
+    editor.Edits.Commit(ReparentEdit(editor.Edited, [c], Null))
+    Local place = c.Position()
+    all["b"].Free()
+    Expect(!c.Freed())
+    Expect(editor.Edits.Undo())
+    Expect(c.Position() == place, "it went where it was under what's gone: {c.Position()}")
+    editor.Finish()
+End Function
+
+@Test
 Function ACopyFreedInItsOwnFrameLeavesNoRow() Throws IOError, GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Local settings = Try TempDir()
@@ -762,7 +913,7 @@ Function ACopyFreedInItsOwnFrameLeavesNoRow() Throws IOError, GraphicsError
     editor.Step()
     editor.Step()
     Local copy = editor.Edited.Selected()[0]
-    Expect(editor.Tree.RowOf(copy) != Null)
+    Expect(Rowed(editor, copy))
     // Undone, then something else in the one frame, which forgets it for good.
     Try Primary(Key.Z)
     Try Simulate.PressKey(Key.H)
@@ -1087,7 +1238,7 @@ Function OnlyTheRowsInViewAreMade() Throws IOError, GraphicsError
     Expect(editor.Tree.ShownEntities().Count == 10000)
     Local most = (Window.Height() / 22) + 3
     Expect(editor.Tree.RowsMade() <= most, "it made {editor.Tree.RowsMade()} of what fit in {most}")
-    Expect(editor.Tree.RowOf(all[9999]) == Null)
+    Expect(!Rowed(editor, all[9999]))
     // Selected, it's scrolled to, and it's there.
     editor.Edited.SelectOnly(all[9999])
     editor.Step()
@@ -1102,8 +1253,8 @@ Function OnlyTheRowsInViewAreMade() Throws IOError, GraphicsError
     editor.Edited.SelectOnly(all[0])
     editor.Step()
     editor.Step()
-    Expect(editor.Tree.RowOf(all[0]) != Null, "the first isn't in view")
-    Expect(editor.Tree.RowOf(all[9999]) == Null, "what's far away's still made")
+    Expect(Rowed(editor, all[0]), "the first isn't in view")
+    Expect(!Rowed(editor, all[9999]), "what's far away's still made")
     // The down key goes by what's shown.
     editor.Shown.Focus(editor.Tree)
     Try Simulate.PressKey(Key.DOWN)
@@ -1154,7 +1305,7 @@ Function RenamingWhatsOutOfViewScrollsToIt() Throws IOError, GraphicsError
     editor.Edited.SelectOnly(top)
     editor.Step()
     editor.Step()
-    Expect(editor.Tree.RowOf(all[400]) == Null)
+    Expect(!Rowed(editor, all[400]))
     editor.Tree.BeginRename(all[400])
     editor.Step()
     editor.Step()
