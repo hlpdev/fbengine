@@ -784,3 +784,79 @@ TEST_CASE("files' images are transcoded to what the started GPU samples", "[gpu]
     CHECK(asked() == assets::transcode_t::RGBA8);
     stop_gpu();
 }
+
+TEST_CASE("a file's 8-bit image's alpha is seen, and a reload's is the new one's", "[gpu]") {
+    start();
+    std::vector<std::uint8_t> clear(64, 0xFF);
+    clear[3] = 0x80;
+    const std::vector<std::uint8_t> whole(64, 0xFF);
+    const std::uint64_t seen = image_load(block_image(assets::formats::rgba8, 64), clear);
+    const std::uint64_t solid = image_load(block_image(assets::formats::rgba8, 64), whole);
+    const std::uint64_t texture = fbe_texture_from_load(seen, true, false);
+    REQUIRE(texture != 0);
+    CHECK(fbe_texture_alpha(texture));
+    REQUIRE(fbe_texture_reload(texture, solid, true, false));
+    CHECK(!fbe_texture_alpha(texture));
+    CHECK(fbe_texture_release(texture));
+    CHECK(fbe_assets_free(seen));
+    CHECK(fbe_assets_free(solid));
+    stop_gpu();
+}
+
+TEST_CASE("a target isn't reloaded", "[gpu]") {
+    start();
+    const std::vector<std::uint8_t> bytes(64, 0xFF);
+    const std::uint64_t load = image_load(block_image(assets::formats::rgba8, 64), bytes);
+    const std::uint64_t target = fbe_texture_create_target(8, 8, FBE_TEXTURE_RGBA8, 1, false);
+    REQUIRE(target != 0);
+    CHECK(!fbe_texture_reload(target, load, true, true));
+    CHECK(fbe_texture_is_target(target));
+    CHECK(fbe_texture_width(target) == 8);
+    CHECK(fbe_texture_release(target));
+    CHECK(fbe_assets_free(load));
+    stop_gpu();
+}
+
+TEST_CASE("a reload needs no free slot, with the bindless set full", "[gpu]") {
+    start();
+    const std::vector<std::uint8_t> bytes(64, 0xFF);
+    const std::uint64_t load = image_load(block_image(assets::formats::rgba8, 64), bytes);
+    std::vector<std::uint64_t> held;
+    while (true) {
+        const std::uint64_t texture = fbe_texture_create(1, 1, FBE_TEXTURE_RGBA8, false);
+        if (texture == 0) {
+            break;
+        }
+        held.push_back(texture);
+    }
+    REQUIRE(!held.empty());
+    REQUIRE(fbe_texture_reload(held.back(), load, true, true));
+    CHECK(fbe_texture_width(held.back()) == 4);
+    // And it leaves none taken, nor adds one.
+    CHECK(fbe_texture_create(1, 1, FBE_TEXTURE_RGBA8, false) == 0);
+    REQUIRE(fbe_texture_release(held.back()));
+    REQUIRE(fbe::gpu::finish_frame());
+    for (std::size_t at = 0; at + 1 < held.size(); ++at) {
+        CHECK(fbe_texture_release(held[at]));
+    }
+    CHECK(fbe_assets_free(load));
+    stop_gpu();
+}
+
+TEST_CASE("a file's own format says how to keep its pixels", "[gpu]") {
+    start();
+    if (!samples_format(VK_FORMAT_BC7_SRGB_BLOCK)) {
+        stop_gpu();
+        SKIP("this GPU doesn't sample BC7");
+    }
+    const std::vector<std::uint8_t> bytes(16, 0x40);
+    const std::uint64_t load = image_load(block_image(assets::formats::bc7_srgb, 16), bytes);
+    const std::uint64_t texture = fbe_texture_from_load(load, true, true);
+    REQUIRE(texture != 0);
+    std::array<std::uint8_t, 16> read{};
+    CHECK(!fbe_texture_read(texture, 0, read.data(), 16));
+    CHECK(std::string(fbe_error()).contains("compression = \"none\""));
+    CHECK(fbe_texture_release(texture));
+    CHECK(fbe_assets_free(load));
+    stop_gpu();
+}

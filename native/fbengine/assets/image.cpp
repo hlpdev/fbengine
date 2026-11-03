@@ -80,7 +80,7 @@ result_t<image_t> decode_stb(std::span<const std::uint8_t> bytes, const image_op
         return std::unexpected(invalid(name, std::format("is {} by {}, past the {} an image can be",
                                                          width, height, most_side)));
     }
-    const bool wide = stbi_is_16_bit_from_memory(data, size) != 0;
+    bool wide = stbi_is_16_bit_from_memory(data, size) != 0;
     void* decoded = wide ? static_cast<void*>(stbi_load_16_from_memory(
                                data, size, &width, &height, &channels, static_cast<int>(rgba)))
                          : static_cast<void*>(stbi_load_from_memory(
@@ -95,6 +95,18 @@ result_t<image_t> decode_stb(std::span<const std::uint8_t> bytes, const image_op
     std::uint32_t format = formats::rgba16;
     if (!wide) {
         format = options.srgb ? formats::rgba8_srgb : formats::rgba8;
+    } else if (options.srgb) {
+        // There's no 16-bit sRGB format, and its values as they are would draw too bright, so a
+        // color's are its high bytes, as a cooked one's are.
+        format = formats::rgba8_srgb;
+        const std::size_t count = std::size_t{ static_cast<std::uint32_t>(width) } *
+                                  static_cast<std::uint32_t>(height) * 4;
+        auto* narrow = static_cast<std::uint8_t*>(decoded);
+        const auto* wider = static_cast<const std::uint16_t*>(decoded);
+        for (std::size_t at = 0; at < count; ++at) {
+            narrow[at] = static_cast<std::uint8_t>(wider[at] >> 8U);
+        }
+        wide = false;
     }
     const auto across = static_cast<std::uint32_t>(width);
     const auto high = static_cast<std::uint32_t>(height);
@@ -151,6 +163,10 @@ result_t<void> check_dfd(std::span<const std::uint8_t> bytes, std::uint32_t offs
     constexpr std::uint32_t compressed = 128;
     if ((u32(bytes, offset + block + 8) & 0xFFU) >= compressed) {
         return {};
+    }
+    // Blocks of more than a texel are a compressed model's, which libktx asserts of the rest.
+    if (u32(bytes, offset + block + 12) != 0) {
+        return std::unexpected(invalid(name, "has blocks of more than a texel, uncompressed"));
     }
     const std::uint32_t block_size = u32(bytes, offset + block + 4) >> 16U;
     const std::uint32_t end = std::min(length, block + block_size);

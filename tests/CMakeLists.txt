@@ -842,7 +842,7 @@ if(FBENGINE_FB_TESTS)
   file(COPY "${fbengine_game_source}/assets" DESTINATION "${fbengine_game}")
   file(CONFIGURE OUTPUT "${fbengine_game}/project.toml" CONTENT "${fbengine_game_project}" @ONLY)
   # Intel Macs have no Vulkan to draw with, which the game says, in place of what it drew.
-  set(fbengine_game_red "drew red\r?\n")
+  set(fbengine_game_red "drew red\r?\ndrew a green crate\r?\n")
   set(fbengine_game_blue "hero reloaded, 8 wide\r?\ndrew blue\r?\n")
   if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
     set(fbengine_game_red "no GPU[^\n]*\n")

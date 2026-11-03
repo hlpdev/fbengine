@@ -290,6 +290,11 @@ struct spec_t {
     /// first if `mipmaps`, in place of being cleared.
     const fbe::assets::image_t* image = nullptr;
     VkFormat vk_format = VK_FORMAT_UNDEFINED;
+    /// Whether its alpha's for blending.
+    bool alpha = false;
+    /// Whether its view goes in the bindless set, as a slot past the set's end, a reload's,
+    /// doesn't.
+    bool bound = true;
 };
 
 VkFormat vk_format_of(const spec_t& spec) {
@@ -424,6 +429,7 @@ bool make(std::uint32_t slot, const spec_t& spec) {
         .wrap_u = FBE_TEXTURE_REPEAT,
         .wrap_v = FBE_TEXTURE_REPEAT,
         .references = 1,
+        .alpha = spec.alpha,
         .engine = spec.engine,
         .target = spec.target,
         .samples = spec.samples,
@@ -559,7 +565,9 @@ bool make(std::uint32_t slot, const spec_t& spec) {
                                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, transfer,
                                         transfer_write));
     }
-    fbe::gpu::write_texture(slot, texture.view);
+    if (spec.bound) {
+        fbe::gpu::write_texture(slot, texture.view);
+    }
     live[slot] = true;
     textures_made += spec.engine ? 0 : 1;
     return true;
@@ -721,7 +729,8 @@ bool inside(const texture_t& texture, std::int32_t x, std::int32_t y, std::int32
 /// False, with fbe_error's why, for a texture of a format a file has, which is only sampled.
 bool has_pixels(const texture_t& texture) {
     return texture.format != FBE_TEXTURE_FROM_FILE ||
-           fbe::fail("a texture of a file's own format is only sampled");
+           fbe::fail("a texture of a file's own format is only sampled: `compression = \"none\"` "
+                     "in its sidecar keeps its pixels");
 }
 
 /// A format a file's image can be: its FBE_TEXTURE_ format, and how many texels a side its blocks
@@ -816,6 +825,21 @@ const fbe::assets::image_t* image_of(std::uint64_t handle) {
     return &load->image;
 }
 
+/// Whether any pixel of an 8-bit RGBA image's first level isn't whole. What's compressed is taken
+/// to be whole, as its blocks would have to be decoded to say, unless its settings say otherwise.
+bool has_alpha(const fbe::assets::image_t& image, std::int32_t format) {
+    if (format != FBE_TEXTURE_RGBA8 && format != FBE_TEXTURE_RGBA8_LINEAR) {
+        return false;
+    }
+    const fbe::assets::level_t& level = image.levels.front();
+    for (std::size_t at = 3; at < level.size; at += 4) {
+        if (image.texels[level.offset + at] != 255) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// What a texture of a file's image is, starting the GPU if it hasn't; nothing, with fbe_error's
 /// why, if it can't be one.
 std::optional<spec_t> spec_of(const fbe::assets::image_t& image, bool srgb, bool mipmaps) {
@@ -847,8 +871,8 @@ std::optional<spec_t> spec_of(const fbe::assets::image_t& image, bool srgb, bool
         flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
     if (fbe::gpu::faulted(fbe::gpu::fault_t::NO_FILE_FORMAT) ||
         (support.optimalTilingFeatures & sampled) != sampled) {
-        fbe::fail(std::format("this GPU doesn't sample the image's Vulkan format {}; a KTX2 of "
-                              "UASTC is transcoded to what a GPU samples",
+        fbe::fail(std::format("this GPU doesn't sample the image's Vulkan format {}: its sidecar's "
+                              "`compression = \"uastc\"` is transcoded to what any GPU samples",
                               image.format));
         return std::nullopt;
     }
@@ -869,6 +893,7 @@ std::optional<spec_t> spec_of(const fbe::assets::image_t& image, bool srgb, bool
                    (support.optimalTilingFeatures & blitted) == blitted,
         .image = &image,
         .vk_format = vk_format,
+        .alpha = has_alpha(image, format->format),
     };
 }
 
@@ -1486,8 +1511,12 @@ FBE_API uint64_t fbe_texture_from_model(uint64_t load, int32_t index, bool mipma
 }
 
 FBE_API bool fbe_texture_reload(uint64_t texture, uint64_t load, bool srgb, bool mipmaps) {
-    if (fbe::texture::find(texture) == nullptr) {
+    const texture_t* reloaded = fbe::texture::find(texture);
+    if (reloaded == nullptr) {
         return false;
+    }
+    if (reloaded->target) {
+        return fbe::fail("a target is drawn into, not reloaded");
     }
     const fbe::assets::image_t* image = image_of(load);
     if (image == nullptr) {
@@ -1506,17 +1535,25 @@ FBE_API bool fbe_texture_reload(uint64_t texture, uint64_t load, bool srgb, bool
     if (idle != VK_SUCCESS) {
         return fbe::gpu::fail_vulkan("the GPU couldn't finish", idle);
     }
-    // Finishing the frame can make transient targets' images, as can what's below take a slot.
+    // Finishing the frame can make transient targets' images.
     if (fbe::texture::find(texture) == nullptr) {
         return false;
     }
-    const std::uint32_t scratch = take_slot();
-    if (scratch == UINT32_MAX) {
-        return false;
-    }
+    // It's made in a slot of its own, past the others, which may be the bindless set's last, so
+    // it doesn't go in the set, and it's gone again below.
+    const auto scratch = static_cast<std::uint32_t>(textures.size());
+    textures.emplace_back();
+    generations.push_back(1);
+    live.push_back(false);
+    const auto give_back = [] {
+        textures.pop_back();
+        generations.pop_back();
+        live.pop_back();
+    };
     spec->engine = true;
+    spec->bound = false;
     if (!make(scratch, *spec)) {
-        free_slots.push_back(scratch);
+        give_back();
         return false;
     }
     const auto slot = static_cast<std::uint32_t>(texture);
@@ -1530,13 +1567,8 @@ FBE_API bool fbe_texture_reload(uint64_t texture, uint64_t load, bool srgb, bool
     made.engine = held.engine;
     std::swap(held, made);
     fbe::gpu::write_texture(slot, held.view);
-    fbe::gpu::write_texture(scratch, textures[fbe::texture::white].view);
     destroy(made);
-    live[scratch] = false;
-    ++generations[scratch];
-    if (generations[scratch] < (1U << 24U)) {
-        free_slots.push_back(scratch);
-    }
+    give_back();
     drop_copy(slot);
     return true;
 }

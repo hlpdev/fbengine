@@ -66,6 +66,9 @@ Global textures: Weak<Texture>[] = []
 /// what draws with it draws the new one, once what the GPU has of it is done.
 Public Final Class Texture Implements Asset
     Field handle: UInt64
+    // The path of the file it's of, in development, whose cook won't have its pixels, until a
+    // warning's said so.
+    Field cookedWithout: String = ""
 
     /// A texture `width` by `height` pixels of `format`, transparent black, with mipmaps unless
     /// `mipmaps` is False, starting the GPU if it hasn't; it throws when the GPU can't start, the
@@ -145,7 +148,12 @@ Public Final Class Texture Implements Asset
         Local settings = Try load.Settings<ImageSettings>()
         Local handle = fbe_texture_from_load(load.Handle, settings.Srgb, settings.Mipmaps)
         If handle == 0 Then Throw LoadError(load)
-        Return Texture(handle)
+        If settings.Alpha Then fbe_texture_set_alpha(handle, True)
+        Local made = Texture(handle)
+        If settings.Compression != ImageCompression.NONE && Assets.FromSource()
+            made.cookedWithout = load.Path()
+        End If
+        Return made
     End Method
 
     /// Takes the image `load` read in place of its own, keeping how it's filtered and wrapped, and
@@ -157,11 +165,27 @@ Public Final Class Texture Implements Asset
         If !fbe_texture_reload(handle, load.Handle, settings.Srgb, settings.Mipmaps)
             Throw LoadError(load)
         End If
+        If settings.Alpha Then fbe_texture_set_alpha(handle, True)
         Return True
     End Method
 
     /// Whether it's gone, freed as the GPU stopped, so Assets makes a new one.
     @MainThread Public Method Stale(): Bool => Freed()
+
+    // A panic for a file's own format, which is only sampled, saying how to keep its pixels; and a
+    // warning, once, in development, for an image whose cook will be that, so what works here does
+    // in its release.
+    @PanicsAtCaller
+    Method CookedPixels(call: String)
+        If fbe_texture_format(Live(call)) == TextureFormat.FROM_FILE As Int32
+            Panic("{call} on a texture of a file's own format, which is only sampled: " +
+                  "`compression = \"none\"` in its sidecar keeps its pixels")
+        End If
+        If cookedWithout == "" Then Return
+        Print("warning: {call} reads {cookedWithout}'s pixels, which its release won't have: " +
+              "`compression = \"none\"` in its sidecar keeps them")
+        cookedWithout = ""
+    End Method
 
     // Why what `load` read isn't a texture, as C said.
     Static Method LoadError(load: AssetLoad): IOError
@@ -179,7 +203,8 @@ Public Final Class Texture Implements Asset
     Public Method Free()
         Local held = Live("Free")
         If !Assets.Release(Self) Then Return
-        If !fbe_texture_release(held) Then Panic(LastError())
+        // The GPU's stopping freed it, so there's only this to let go of.
+        If fbe_texture_width(held) >= 0 && !fbe_texture_release(held) Then Panic(LastError())
         Local gone: Texture? = Null
         textures[Slot(handle)] = gone
         handle = 0
@@ -343,6 +368,7 @@ Public Final Class Texture Implements Asset
     @MainThread @PanicsAtCaller
     Public Method ReadPixels(level: Int32 = 0): UInt8[]
         Local texture = Live("ReadPixels")
+        CookedPixels("ReadPixels")
         Local levels = Levels()
         If level < 0 || level >= levels
             Panic("the texture has {levels} levels, not {level + 1}")
@@ -366,6 +392,7 @@ Public Final Class Texture Implements Asset
     /// RGBA8_LINEAR.
     @MainThread @PanicsAtCaller
     Public Method ToImage(): Image
+        CookedPixels("ToImage")
         Local format = Format()
         If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
             Panic("an Image is read from an RGBA8 or RGBA8_LINEAR texture, not {format}")
@@ -380,6 +407,7 @@ Public Final Class Texture Implements Asset
     @MainThread @PanicsAtCaller
     Public Method LockPixels(): Pixels
         Local texture = Live("LockPixels")
+        CookedPixels("LockPixels")
         Local format = Format()
         If format != TextureFormat.RGBA8 && format != TextureFormat.RGBA8_LINEAR
             Panic("a texture's pixels are locked as RGBA8 or RGBA8_LINEAR, not {format}")

@@ -89,6 +89,29 @@ Function UncompressedKeepsItsOwnMips() Throws IOError, GraphicsError
 End Function
 
 @Test
+Function ACompressedTexturesAlphaIsWhatItsSidecarSays() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Defer Gpu.Stop()
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "source.png", RedPng(16))
+    Local settings = ImageSettings()
+    settings.Compression = ImageCompression.UASTC
+    Try Cooker.CookImage(folder.Path / "source.png", folder.Path / "plain.png", settings)
+    Try Cooker.CookImage(folder.Path / "source.png", folder.Path / "see.png", settings)
+    Try File.WriteText(folder.Path / "see.png.toml", "alpha = true")
+    Assets.MountFolder("res://cooked-alpha", folder.Path)
+    Defer Assets.Unmount("res://cooked-alpha")
+    Local plain = Try Assets.Load<Texture>("res://cooked-alpha/plain.png")
+    Defer plain.Free()
+    Expect(!plain.Alpha())
+    Local see = Try Assets.Load<Texture>("res://cooked-alpha/see.png")
+    Defer see.Free()
+    Expect(see.Alpha())
+End Function
+
+@Test
 Function APaksFilesAreTexturesAndModels() Throws IOError, GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Window.SetHeadless(True)
@@ -120,4 +143,5 @@ Function APaksFilesAreTexturesAndModels() Throws IOError, GraphicsError
     Defer model.Free()
     Expect((Try model.Spawn()).Find("only") != Null)
     Expect(model.TextureOf(0) != Null)
+    Expect(model.Materials()[0].Texture(0) != Null)
 End Function

@@ -7,21 +7,13 @@ Import std.os
 Import std.test
 Import std.time
 Import fbengine
+Import "./gltfs"
 Import "./watching"
 
 Function Fonts(): String => Env.Get("FBENGINE_TEST_FONTS") ?? ""
 
 Function FontBytes(name: String): UInt8[] Throws IOError
     Return Try File.ReadBytes(Path("{Fonts()}/{name}"))
-End Function
-
-// Flips until `done` says so, or 30 seconds have gone.
-Function FlipUntil(done: Func(): Bool)
-    Local since = Instant.Now()
-    While !done() && (Instant.Now() - since) < 30.Seconds
-        Flip()
-        Sleep(5.Milliseconds)
-    End While
 End Function
 
 @Test
@@ -91,4 +83,50 @@ Function AChangedSidecarReloadsItsFontInPlace() Throws IOError
     FlipUntil(Function(): Bool => font.Size() == 48.0)
     Expect(font.Size() == 48.0)
     Expect(font.Measure("Main menu").x > narrow)
+End Function
+
+Const ARABIC: String = "مرحبا"
+
+// A font's reload keeps its fallbacks, as its doc says.
+@Test
+Function AReloadedFontKeepsItsFallbacks() Throws IOError
+    If Fonts() == "" Then Skip("no fonts named")
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.ttf", Try FontBytes("OpenSans-Regular.ttf"))
+    Assets.MountFolder("res://file-fall", folder.Path)
+    Defer Assets.Unmount("res://file-fall")
+    Local font = Try Assets.Load<Font>("res://file-fall/a.ttf")
+    Defer font.Free()
+    font.SetSystemFallback(False)
+    font.AddFallback(Try Font.FromBytes(Try FontBytes("Mada-VF.ttf"), 20.0))
+    Expect(font.Has(ARABIC))
+    Try File.WriteText(folder.Path / "a.ttf.toml", "size = 48")
+    Try Assets.Reload("res://file-fall/a.ttf")
+    FlipUntil(Function(): Bool => font.Size() == 48.0)
+    Expect(font.Size() == 48.0)
+    Expect(!font.SystemFallback())
+    font.SetSystemFallback(False)
+    Expect(font.Has(ARABIC))
+End Function
+
+// A font that's another's fallback, reloaded.
+@Test
+Function AReloadedFallbackIsStillAFallback() Throws IOError
+    If Fonts() == "" Then Skip("no fonts named")
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "b.ttf", Try FontBytes("Mada-VF.ttf"))
+    Assets.MountFolder("res://file-fall2", folder.Path)
+    Defer Assets.Unmount("res://file-fall2")
+    Local fallback = Try Assets.Load<Font>("res://file-fall2/b.ttf")
+    Defer fallback.Free()
+    Local font = Try Font.FromBytes(Try FontBytes("OpenSans-Regular.ttf"), 20.0)
+    font.SetSystemFallback(False)
+    font.AddFallback(fallback)
+    Expect(font.Has(ARABIC))
+    Try File.WriteText(folder.Path / "b.ttf.toml", "size = 48")
+    Try Assets.Reload("res://file-fall2/b.ttf")
+    FlipUntil(Function(): Bool => fallback.Size() == 48.0)
+    Expect(font.Has(ARABIC))
 End Function

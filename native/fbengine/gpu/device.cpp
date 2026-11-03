@@ -637,6 +637,9 @@ const candidate_t* candidate_at(std::int32_t index) {
 
 namespace fbe::gpu {
 
+/// How many times the GPU's been stopped.
+std::uint64_t stops = 0;
+
 bool fail_vulkan(std::string_view doing, VkResult result) {
     return fail(std::format("{} (VkResult {})", doing, static_cast<int>(result)));
 }
@@ -694,6 +697,7 @@ std::vector<void (*)()>& stoppers() {
 
 void stop() {
     if (started) {
+        ++stops;
         vkDeviceWaitIdle(current.device);
         stop_graph();
         for (void (*free)() : stoppers()) {
@@ -831,6 +835,10 @@ FBE_API bool fbe_gpu_start(void) {
 
 FBE_API bool fbe_gpu_started(void) {
     return started;
+}
+
+FBE_API uint64_t fbe_gpu_stops(void) {
+    return fbe::gpu::stops;
 }
 
 FBE_API void fbe_gpu_stop(void) {

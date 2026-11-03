@@ -244,6 +244,7 @@ Public Final Class Assets
     Static Field caches: AnyCache[] = []
     Static Field mounts: (String, Path?)[] = []
     Static Field watch: FolderWatch? = Null
+    Static Field fromSource: Bool = False
     Static Field reloads: AssetReload[] = []
     // The assets whose loads read a file besides their own, by its path, as a glTF's buffers.
     Static Field dependents: Map<String, Set<String>> = Map<String, Set<String>>()
@@ -331,7 +332,12 @@ Public Final Class Assets
     Public Static Method MountSource(folder: String) Throws IOError
         MountFolder("res://", Path(folder))
         Try WatchFolders()
+        fromSource = True
     End Method
+
+    // Whether the game runs from its files as they are, not cooked, as a debug build's does.
+    @MainThread
+    Package Static Method FromSource(): Bool => fromSource
 
     /// Mounts a release's files at res://: the pak `name`.pak beside the executable, or in a macOS
     /// bundle's Resources on macOS, the folder beside the executable's, or else the pak at `built`,
@@ -377,6 +383,7 @@ Public Final Class Assets
                 If mounts[i].0 == place
                     Local folder = mounts[i].1
                     mounts.RemoveAt(i)
+                    If place == "res://" Then fromSource = False
                     Local watching = watch
                     If watching != Null && folder != Null && place != Null
                         Unplace(watching, place, folder.Text)
@@ -458,6 +465,10 @@ Public Final Class Assets
     // of those changes.
     @MainThread
     Static Method Depends(key: String, load: UInt64)
+        // What it read before it was loaded again, which it doesn't depend on now if it isn't below.
+        For reading In dependents
+            reading.1.Remove(key)
+        End For
         For at = 0 Until fbe_assets_reads(load)
             Local read = ""
             Unsafe

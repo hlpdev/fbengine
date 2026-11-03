@@ -6,6 +6,7 @@ Import std.ffi
 Import std.io
 Import "./assets"
 Import "./c/fbe_model"
+Import "./c/fbe_gpu"
 Import "./c/fbe_scene"
 Import "./c/fbe_texture"
 Import "./clip"
@@ -13,6 +14,7 @@ Import "./entity"
 Import "./geometry"
 Import "./loads"
 Import "./material"
+Import "./player"
 Import "./skin"
 Import "./texture"
 Import "./window"
@@ -50,13 +52,19 @@ End Class
 /// Hot reload puts a changed file in its place, and what each Spawn made is made again from it,
 /// under the root that Spawn gave, which stays where it is.
 ///
-/// The renderer's materials don't take textures until E5's step does, so what a material reads
-/// for now is for TextureOf to say.
+/// Its Materials read their base colors' Textures, drawn as a glTF unlit one's are, or as the
+/// renderer lights its PBR ones; what they read for their other maps, TextureOf says.
 Public Final Class Model Implements Asset
     Field load: AssetLoad
     Field geometries: Geometry[]
     Field materials: Material[]
-    Field textures: Texture[]
+    // Null for an image no material reads, as a KTX2's PNG fallback, so they're by the file's
+    // indices.
+    Field textures: Texture?[]
+    // Textures of images two materials read with different samplers, past the first's.
+    Field others: Texture[]
+    // How many times the GPU had stopped when it was made.
+    Field stops: UInt64
     Field skins: Skin[]
     Field clips: Clip[]
     Field roots: Spawned[]
@@ -67,6 +75,8 @@ Public Final Class Model Implements Asset
         geometries = []
         materials = []
         textures = []
+        others = []
+        stops = fbe_gpu_stops()
         skins = []
         clips = []
         roots = []
@@ -92,16 +102,29 @@ Public Final Class Model Implements Asset
 
     /// Takes the file `load` read in place of its own, and makes what each Spawn made again from
     /// it, under its root, which stays; what's under a root is freed, a game's own entities there
-    /// too. It gives True. It throws as FromLoad does, which leaves it as it was.
+    /// too. A Player on a root goes on, each clip it plays the new file's of that name, where it
+    /// was, or stopped for none. It gives True. It throws as FromLoad does, and an IOError of
+    /// INVALID_DATA for a file without a scene a Spawn was of, which leaves it as it was.
     @MainThread
     Public Method Reload(load: AssetLoad): Bool Throws IOError
         Local made = Model(load)
         Try made.Build()
+        Try
+            Try made.CanSpawn(roots)
+        Catch e As IOError
+            made.FreeParts()
+            Throw e
+        End Try
         Local before = Model(Self.load)
         before.Took(Self)
         Took(made)
+        stops = made.stops
         made.Emptied()
         Local failure: IOError? = Null
+        Local taken: Clip?[] = []
+        For clip In before.clips
+            taken.Add(Named(clip.Name()))
+        End For
         For spawned In before.roots
             Local root = spawned.Alive()
             If root == Null Then Continue
@@ -112,16 +135,19 @@ Public Final Class Model Implements Asset
             Catch e As IOError
                 failure = e
             End Try
+            Local player = PlayerOn(root)
+            If player != Null Then player.ReplaceClips(before.clips, taken)
         End For
         before.FreeParts()
         If failure != Null Then Throw failure
         Return True
     End Method
 
-    /// Whether it's gone, its Textures freed as the GPU stopped, so Assets makes a new one.
+    /// Whether it's gone, the GPU stopped since it was made, so Assets makes a new one, and a hot
+    /// reload of it doesn't start the GPU again.
     @MainThread
     Public Method Stale(): Bool
-        Return freed || (textures.Count > 0 && textures[0].Freed())
+        Return freed || fbe_gpu_stops() != stops
     End Method
 
     /// Lets go of what it holds; what it's spawned keeps what it draws. Using it after panics. One
@@ -181,9 +207,9 @@ Public Final Class Model Implements Asset
         Return materials.Clone()
     End Method
 
-    /// Its images' Textures, by the file's indices.
+    /// Its images' Textures, by the file's indices, Null for an image no material reads.
     @MainThread @PanicsAtCaller
-    Public Method Textures(): Texture[]
+    Public Method Textures(): Texture?[]
         Live("Textures")
         Return textures.Clone()
     End Method
@@ -244,9 +270,28 @@ Public Final Class Model Implements Asset
             geometries.Add(Geometry(geometry))
         End For
         For at = 0 Until info.Images
+            If fbe_model_image_levels(load.Handle, at) == 0
+                textures.Add(Null)
+                Continue
+            End If
             Local texture = fbe_model_texture(load.Handle, at, True)
             If texture == 0 Then Throw PartError()
             textures.Add(Texture(texture))
+        End For
+        Local read = Buffer<UInt64>(info.Images As Int64 + 1)
+        For at = 0 Until info.Images
+            Local texture = textures[at]
+            read[at] = texture != Null ? texture.Live("FromLoad") : 0
+        End For
+        For at = 0 Until info.Materials
+            Local bound = False
+            Local other: UInt64 = 0
+            Unsafe
+                bound = fbe_model_material_textures(load.Handle, at, handles[at], read.Pointer(),
+                                                    info.Images, AddressOf(other))
+            End Unsafe
+            If !bound Then Throw PartError()
+            If other != 0 Then others.Add(Texture(other))
         End For
         For at = 0 Until info.Skins
             skins.Add(Try Skin.FromModel(load, at))
@@ -254,6 +299,40 @@ Public Final Class Model Implements Asset
         For at = 0 Until info.Clips
             clips.Add(Try Clip.FromModel(load, at))
         End For
+        // What its Textures were made of is theirs now.
+        fbe_model_drop_images(load.Handle)
+    End Method
+
+    // Throws what its Spawns would, of each of `spawned`, each tried under a Pivot, in its root's
+    // World, then freed.
+    @MainThread
+    Method CanSpawn(spawned: Spawned[]) Throws IOError
+        For each In spawned
+            Local root = each.Alive()
+            If root == Null Then Continue
+            If each.Scene >= Scenes()
+                Throw IOError(IOErrorKind.INVALID_DATA,
+                              "{load.Path()} has {Scenes()} scenes, and a Spawn's of scene " +
+                              "{each.Scene}", load.Path())
+            End If
+            Local trial = Pivot(root)
+            Try
+                Try SpawnInto(trial, each.Scene)
+            Catch e As IOError
+                trial.Free()
+                Throw e
+            End Try
+            trial.Free()
+        End For
+    End Method
+
+    // Its Clip of `name`, if it has one.
+    @MainThread
+    Method Named(name: String): Clip?
+        For clip In clips
+            If clip.Name() == name Then Return clip
+        End For
+        Return Null
     End Method
 
     // Why a part couldn't be made, as C said.
@@ -301,6 +380,7 @@ Public Final Class Model Implements Asset
         geometries = other.geometries
         materials = other.materials
         textures = other.textures
+        others = other.others
         skins = other.skins
         clips = other.clips
         roots = other.roots
@@ -312,6 +392,7 @@ Public Final Class Model Implements Asset
         geometries = []
         materials = []
         textures = []
+        others = []
         skins = []
         clips = []
         roots = []
@@ -327,6 +408,9 @@ Public Final Class Model Implements Asset
             If !material.Freed() Then material.Free()
         End For
         For texture In textures
+            If texture != Null && !texture.Freed() Then texture.Free()
+        End For
+        For texture In others
             If !texture.Freed() Then texture.Free()
         End For
         For skin In skins

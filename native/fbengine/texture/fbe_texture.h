@@ -128,7 +128,9 @@ FBE_API bool fbe_texture_start_loads(void);
 // Makes a texture of an image load's image, a 2D one, held as fbe_texture_create's are, with its
 // file's levels, or a full chain made from its one level if `mipmaps` and its format can be blit;
 // an 8-bit RGBA image's color is linear unless `srgb`. Its format is an FBE_TEXTURE_ one, or
-// FBE_TEXTURE_FROM_FILE, whose pixels aren't written, cleared, copied, or read. 0 if it can't.
+// FBE_TEXTURE_FROM_FILE, whose pixels aren't written, cleared, copied, or read. Its alpha's for
+// blending if any pixel of an 8-bit RGBA image's isn't whole; a compressed one's is False, for
+// fbe_texture_set_alpha to say. 0 if it can't.
 FBE_API uint64_t fbe_texture_from_load(uint64_t load, bool srgb, bool mipmaps);
 // Puts an image load's image in place of what a texture has, as fbe_texture_from_load makes it,
 // waiting for the GPU to finish what it has, keeping its handle and how it's filtered and wrapped,

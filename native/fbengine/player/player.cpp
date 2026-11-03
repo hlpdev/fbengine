@@ -793,6 +793,55 @@ FBE_API bool fbe_player_crossfade(uint64_t player, int32_t layer, uint64_t clip,
     }
 }
 
+FBE_API bool fbe_player_replace_clips(uint64_t player, const uint64_t* from, const uint64_t* to,
+                                      int32_t count) {
+    std::uint32_t root = none;
+    player_t* found = fbe::anim::live_player(player, root);
+    if (found == nullptr) {
+        return false;
+    }
+    if (count < 0 || (count > 0 && (from == nullptr || to == nullptr))) {
+        return fail("no clips were given");
+    }
+    try {
+        for (std::int32_t at = 0; at < count; ++at) {
+            const std::uint32_t was = fbe::anim::clip_slot(from[at]);
+            const std::uint32_t now = to[at] != 0 ? fbe::anim::clip_slot(to[at]) : none;
+            if (was == none || (to[at] != 0 && now == none)) {
+                return false;
+            }
+            for (fbe::anim::layer_t& layer : found->layers) {
+                for (std::size_t t = layer.tracks.size(); t-- > 0;) {
+                    fbe::anim::track_t& track = layer.tracks[t];
+                    if (track.clip != was) {
+                        continue;
+                    }
+                    if (now != none) {
+                        fbe::anim::retain_clip(now);
+                        track.clip = now;
+                        track.time = std::min(track.time, fbe::anim::length_of(track));
+                    } else {
+                        layer.tracks.erase(layer.tracks.begin() + static_cast<std::ptrdiff_t>(t));
+                    }
+                    fbe::anim::release_clip(was);
+                }
+            }
+        }
+        // What's under its entity's new, so every bone's found again, and none is left of what's
+        // gone: where each began is where it was made.
+        found->bones.clear();
+        for (fbe::anim::layer_t& layer : found->layers) {
+            for (fbe::anim::track_t& track : layer.tracks) {
+                fbe::anim::bind_channels(*found, track, root);
+            }
+        }
+        fbe::anim::pose(*found, root);
+        return true;
+    } catch (const std::bad_alloc&) {
+        return fail("out of memory");
+    }
+}
+
 FBE_API bool fbe_player_stop(uint64_t player, int32_t layer, float seconds) {
     player_t* found = nullptr;
     std::uint32_t root = none;

@@ -70,6 +70,32 @@ Public Final Class Player
         If handle != 0 Then fbe_player_free(handle)
     End Method
 
+    // Puts each of `to` in place of what's at its index in `from`, or stops that for Null, and
+    // binds what plays again, to what's under its entity now.
+    @MainThread @PanicsAtCaller
+    Package Method ReplaceClips(from: Clip[], to: Clip?[])
+        Local was = Buffer<UInt64>(from.Count As Int64 + 1)
+        Local now = Buffer<UInt64>(from.Count As Int64 + 1)
+        For at = 0 Until from.Count
+            was[at] = from[at].Live("ReplaceClips")
+            Local taking = to[at]
+            now[at] = taking != Null ? taking.Live("ReplaceClips") : 0
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_player_replace_clips(Live("ReplaceClips"), was.Pointer(), now.Pointer(),
+                                            from.Count)
+        End Unsafe
+        If !done Then Failed("ReplaceClips")
+        For layer = 0 Until currents.Count
+            Local current = currents[layer]
+            If current == Null Then Continue
+            For at = 0 Until from.Count
+                If RefEquals(current, from[at]) Then currents[layer] = to[at]
+            End For
+        End For
+    End Method
+
     /// How many Players there are, whose entities' freeing an update hasn't yet found.
     @MainThread Public Static Method Count(): Int64 => fbe_player_count()
 
@@ -278,6 +304,14 @@ Public Struct PlayerLayer
         If !done Then owner.Failed("SetMask")
     End Method
 End Struct
+
+// The Player on `entity`, if it has one, which asking for one would make it.
+Package Function PlayerOn(entity: Entity): Player?
+    Local slot = Slot(entity.Live("PlayerOn"))
+    If slot >= players.Count Then Return Null
+    Local kept = players[slot]
+    Return kept != Null && RefEquals(kept.owner, entity) ? kept : Null
+End Function
 
 Extend Entity
     /// The Player that plays Clips on the entity and the entities under it, made the first time

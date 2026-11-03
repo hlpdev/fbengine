@@ -57,6 +57,11 @@ FBE_API bool fbe_player_crossfade(uint64_t player, int32_t layer, uint64_t clip,
 // Fades out what the layer plays over `seconds`, or with 0 stops it at once, leaving what it moved
 // where it is. False too for seconds below 0 or not finite.
 FBE_API bool fbe_player_stop(uint64_t player, int32_t layer, float seconds);
+// Puts the clip `to[i]` wherever any layer plays `from[i]`, for `count` of them, keeping where it
+// is, within its new length, how it goes on, and its weight, or stops it for a `to[i]` of 0; and
+// binds them again, finding what they move under its entity as it is now, as a reload makes it.
+FBE_API bool fbe_player_replace_clips(uint64_t player, const uint64_t* from, const uint64_t* to,
+                                      int32_t count);
 // The clip the layer played last, which it plays or fades in, 0 for none, as when it's stopping.
 FBE_API uint64_t fbe_player_clip(uint64_t player, int32_t layer);
 // Whether the layer plays its clip: false once a ONCE clip is at its end, or it's stopping.

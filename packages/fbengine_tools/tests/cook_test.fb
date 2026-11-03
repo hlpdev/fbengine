@@ -87,9 +87,10 @@ End Function
 
 @Test
 Function AnImageCooksToWhatTheGpuReads() Throws IOError
-    // BC7, sRGB, and its mips, from 64 across down to 1.
+    // UASTC, transcoded to RGBA8 until the GPU says what it reads, sRGB, and its mips, from 64
+    // across down to 1.
     Local platform = Try CookedInfo(ImageSettings())
-    Expect(platform.Format == 146)
+    Expect(platform.Format == 43)
     Expect(platform.Width == 64)
     Expect(platform.Height == 32)
     Expect(platform.Levels == 7)
@@ -97,7 +98,7 @@ Function AnImageCooksToWhatTheGpuReads() Throws IOError
     linear.Srgb = False
     linear.Mipmaps = False
     Local data = Try CookedInfo(linear)
-    Expect(data.Format == 145)
+    Expect(data.Format == 37)
     Expect(data.Levels == 1)
     Local astc = ImageSettings()
     astc.Compression = ImageCompression.ASTC
@@ -154,7 +155,7 @@ Function AFolderCooksIntoAPakAtItsOwnPaths() Throws IOError
     Expect(wall.Format == 158)
     Expect(wall.Levels == 1)
     Local hud = (Try Assets.Load<Loaded>("res://test-pak/hud.jpg")).Info
-    Expect(hud.Format == 146)
+    Expect(hud.Format == 43)
     Expect(hud.Levels == 4)
     // The rest as it is, the sidecar too, for the settings the game reads as it runs.
     Expect((Try Assets.ReadText("res://test-pak/readme.txt")) == "hello")

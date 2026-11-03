@@ -487,6 +487,7 @@ TEST_CASE("hostile glTFs fail as they should, here and on a job", "[assets]") {
     };
     const std::vector<hostile_t> cases = {
         // Indices validate would read, and sizes whose products wrap round.
+        { .name = "skin_365.gltf", .failure = failure_t::INVALID_DATA },
         { .name = "anim_input_oob.gltf", .failure = failure_t::INVALID_DATA },
         { .name = "anim_output_oob.gltf", .failure = failure_t::INVALID_DATA },
         { .name = "anim_sampler_oob.gltf", .failure = failure_t::INVALID_DATA },

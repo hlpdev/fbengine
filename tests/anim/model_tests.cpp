@@ -210,8 +210,8 @@ TEST_CASE("what's wrong in a model's file is said apart from a mistake in asking
     fbe_assets_free(bad);
 }
 
-TEST_CASE("a model moving one name's property twice, or a skin of unnamed joints, is refused") {
-    // Two nodes named "a", each moved; two named "b", one a joint, the other too; and one unnamed.
+TEST_CASE("nodes of no name, or of one name, are told apart, and a clip moves each once") {
+    // Two nodes named "a", each moved; and two unnamed.
     constexpr std::string_view twice = R"({
         "asset": {"version": "2.0"},
         "buffers": [{"byteLength": 216, "uri": "rig.bin"}],
@@ -238,19 +238,24 @@ TEST_CASE("a model moving one name's property twice, or a skin of unnamed joints
     const std::uint64_t load =
         fbe_assets_load(FBE_ASSETS_MODEL, "res://anim-rig/rig.gltf", false, false);
     REQUIRE(!fbe_assets_failed(load));
-    CHECK(fbe_clip_from_model(load, 0) == 0);
-    CHECK(fbe_clip_model_invalid());
-    CHECK(says("moves the position of \"a\" twice"));
-    // Unnamed nodes move nothing, so they're no clash, nor are a name's other properties.
+    const std::uint64_t each = fbe_clip_from_model(load, 0);
+    CHECK(each != 0);
+    fbe_clip_release(each);
+    // Each node has a name of its own, node_2 and a#2, which are no clash, nor are a name's other
+    // properties.
     const std::uint64_t fine = fbe_clip_from_model(load, 1);
+    INFO(fbe_error());
     CHECK(fine != 0);
     CHECK(!fbe_clip_model_invalid());
     fbe_clip_release(fine);
-    CHECK(fbe_skin_from_model(load, 0) == 0);
-    CHECK(fbe_skin_model_invalid());
-    CHECK(says("two joints named \"a\""));
-    CHECK(fbe_skin_from_model(load, 1) == 0);
-    CHECK(fbe_skin_model_invalid());
-    CHECK(says("a node with no name"));
+    const std::uint64_t both = fbe_skin_from_model(load, 0);
+    REQUIRE(both != 0);
+    CHECK(std::string(fbe_skin_joint_name(both, 0)) == "a");
+    CHECK(std::string(fbe_skin_joint_name(both, 1)) == "a#2");
+    fbe_skin_release(both);
+    const std::uint64_t unnamed = fbe_skin_from_model(load, 1);
+    REQUIRE(unnamed != 0);
+    CHECK(std::string(fbe_skin_joint_name(unnamed, 0)) == "node_2");
+    fbe_skin_release(unnamed);
     fbe_assets_free(load);
 }

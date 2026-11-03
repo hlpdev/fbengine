@@ -86,6 +86,26 @@ Function ASidecarSaysWhatATextureIs() Throws IOError, GraphicsError
 End Function
 
 @Test
+Function APngsAlphaIsSeen() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local clear = Image(2, 2)
+    clear.Fill(Color32(255, 0, 0, 255))
+    clear[1, 1] = Color32(255, 0, 0, 128)
+    Assets.MountFiles("res://alpha", {
+        "clear.png": Png.Encode(clear),
+        "whole.png": Filled(2, Color32(255, 0, 0, 255)),
+    })
+    Defer Assets.Unmount("res://alpha")
+    Local see = Try Assets.Load<Texture>("res://alpha/clear.png")
+    Defer see.Free()
+    Expect(see.Alpha())
+    Local solid = Try Assets.Load<Texture>("res://alpha/whole.png")
+    Defer solid.Free()
+    Expect(!solid.Alpha())
+End Function
+
+@Test
 Function TheCacheHasOneTextureOfAFile() Throws IOError, GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Window.SetHeadless(True)

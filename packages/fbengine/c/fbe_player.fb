@@ -16,6 +16,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_player_crossfade(player: UInt64, layer: Int32, clip: UInt64, seconds: Float32,
                                   mode: Int32, speed: Float32): Bool
     Function fbe_player_stop(player: UInt64, layer: Int32, seconds: Float32): Bool
+    Function fbe_player_replace_clips(player: UInt64, from: Ptr<UInt64>, to: Ptr<UInt64>,
+                                      count: Int32): Bool
     Function fbe_player_clip(player: UInt64, layer: Int32): UInt64
     Function fbe_player_playing(player: UInt64, layer: Int32): Bool
     Function fbe_player_set_time(player: UInt64, layer: Int32, time: Float32): Bool

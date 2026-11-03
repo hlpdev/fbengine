@@ -2,8 +2,9 @@
 // and loaded, one Struct a kind of file, whose keys are its Fields' names in snake_case.
 
 /// What the cooker makes of an image: whatever the platforms the game's built for read best,
-/// which is BC7 on every desktop; Basis Universal's UASTC, which a GPU's own format is transcoded
-/// from as it loads; BC7; ASTC 4x4; or its texels as they are.
+/// which is UASTC for now; Basis Universal's UASTC, which a GPU's own format is transcoded from as
+/// it loads, on any GPU; BC7 and ASTC 4x4, which a GPU without them can't load; or its texels as
+/// they are.
 Public Enum ImageCompression
     PLATFORM = 0
     UASTC = 1
@@ -29,6 +30,10 @@ Public Struct ImageSettings
     Public Field Compression: ImageCompression = ImageCompression.PLATFORM
     /// How hard the cooker's encoder works: 0, fastest, to 4, best.
     Public Field Quality: Int32 = 2
+    /// Whether its alpha's for blending, as a Material blending AUTO goes by (Texture.SetAlpha),
+    /// when it's a KTX2 of a compressed format, whose blocks aren't read to see. What isn't
+    /// compressed is seen, whatever this says.
+    Public Field Alpha: Bool = False
 End Struct
 
 /// A font's import settings, from its sidecar, as `title.ttf.toml` is title.ttf's:

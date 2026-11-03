@@ -96,15 +96,17 @@ Public Final Class Font Implements Printable, Asset
         Return Try Loaded(Try load.Bytes(), load.Path(), settings.Size, style, settings.Face)
     End Method
 
-    /// Takes the font file `load` read in place of its own, keeping its fallbacks, and gives True;
-    /// Sized's fonts stay as they were. It throws as FromLoad does, which leaves it as it was.
+    /// Takes the font file `load` read in place of its own, keeping its handle, so what falls back
+    /// to it does still, its own fallbacks, and whether it falls back on the OS's fonts, and gives
+    /// True; Sized's fonts stay as they were. It throws as FromLoad does, which leaves it as it was.
     @MainThread
     Public Method Reload(load: AssetLoad): Bool Throws IOError
         Local made = Try FromLoad(load)
-        If handle != 0 Then fbe_text_free_font(handle)
-        handle = made.handle
-        metrics = made.metrics
+        If !fbe_text_replace_font(handle, made.handle) Then Panic(LastError())
         made.handle = 0
+        Unsafe
+            fbe_text_font_metrics(handle, AddressOf(metrics))
+        End Unsafe
         Return True
     End Method
 

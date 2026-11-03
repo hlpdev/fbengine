@@ -172,6 +172,45 @@ Function AModelsImagesAreItsTextures() Throws IOError
 End Function
 
 @Test
+Function AModelsMaterialDrawsItsBaseColorsTexture() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://drawn", {"door.gltf": Door()})
+    Defer Assets.Unmount("res://drawn")
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local model = Try Assets.Load<Model>("res://drawn/door.gltf")
+    Defer model.Free()
+    Local paint = model.Materials()[0]
+    Local read = paint.Texture(0)
+    Expect(read != Null && RefEquals(read, model.TextureOf(0)))
+    Expect(paint.LayerBlend(0) == LayerBlend.MULTIPLY)
+    Expect(paint.LayerUvSet(0) == 0)
+    // A red image, a white material, and no lights' look, drawn: its triangle over the clear.
+    paint.SetColor(Color(1, 1, 1))
+    paint.SetAlphaCutoff(0)
+    paint.SetShading(Shading.UNLIT)
+    Local root = Try model.Spawn()
+    root.SetPosition(Vec3(-1, -2, -8))
+    Local target = Try Texture.Target(32, 32, TextureFormat.RGBA8, 1, True)
+    Defer target.Free()
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 1))
+    camera.Render()
+    Local image = target.ToImage()
+    Local red = False
+    For y = 0 Until 32
+        For x = 0 Until 32
+            If image[x, y] == Color32(255, 0, 0, 255) Then red = True
+        End For
+    End For
+    Expect(red)
+    Expect(image[1, 1] == Color32(0, 0, 255, 255))
+End Function
+
+@Test
 Function TheCacheHasOneModelOfAFile() Throws IOError
     If NoGpu() Then Skip("no GPU here")
     Window.SetHeadless(True)

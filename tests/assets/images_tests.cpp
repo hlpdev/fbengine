@@ -139,9 +139,16 @@ TEST_CASE("a PNG decodes to RGBA8, sRGB unless it's asked not to be", "[assets]"
     REQUIRE(std::ranges::equal(rgb.texels.bytes(), std::vector<std::uint8_t>{ 1, 2, 3, 255 }));
 }
 
-TEST_CASE("a 16-bit PNG keeps its 16 bits", "[assets]") {
-    const assets::image_t image =
-        decoded(test::png16(2, 1, { 0x1234, 0x5678, 0x9ABC, 0xFFFF, 0, 1, 2, 0x8000 }));
+TEST_CASE("a 16-bit PNG of color is its high bytes, and of data keeps its 16 bits", "[assets]") {
+    const bytes_t png = test::png16(2, 1, { 0x1234, 0x5678, 0x9ABC, 0xFFFF, 0, 1, 2, 0x8000 });
+    const assets::image_t color = decoded(png);
+    REQUIRE(color.format == assets::formats::rgba8_srgb);
+    REQUIRE(color.levels[0].size == 8);
+    REQUIRE(std::vector<std::uint8_t>(color.texels.data(), color.texels.data() + 8) ==
+            std::vector<std::uint8_t>{ 0x12, 0x56, 0x9A, 0xFF, 0, 0, 0, 0x80 });
+    auto linear = assets::decode_image(png, { .srgb = false }, "wide");
+    REQUIRE(linear.has_value());
+    const assets::image_t image = std::move(*linear);
     REQUIRE(image.format == assets::formats::rgba16);
     REQUIRE(image.levels[0].size == 16);
     std::vector<std::uint16_t> wide(8);
@@ -441,7 +448,7 @@ TEST_CASE("an image's texels are the decoder's own, not a copy", "[assets]") {
 TEST_CASE("a KTX2's sample of 32 bits or more isn't loaded", "[assets]") {
     // The review's, whose samples libktx would shift 1 by 119, 26 in a Zstd one, and a cube map's.
     for (const std::string_view name :
-         { "dfd_cube_0.ktx2", "dfd_uastc_119.ktx2", "dfd_zstd_26.ktx2" }) {
+         { "dfd_cube_0.ktx2", "dfd_uastc_119.ktx2", "dfd_zstd_26.ktx2", "assert_crash.ktx2" }) {
         INFO(name);
         REQUIRE(failure(fixture(name)) == assets::failure_t::INVALID_DATA);
     }
