@@ -14,7 +14,8 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Under examples/, so the editor, which is a package, is by its way there.
 # The examples with a --watch.
-WATCHED = ["arcade", "menu", "controls", "cooked_game", "proof/frame_timing_and_input",
+WATCHED = ["arcade", "menu", "controls", "room", "cooked_game",
+           "proof/frame_timing_and_input",
            "proof/sprites_over_a_scene", "proof/pixels_of_images_and_textures",
            "proof/display_modes", "proof/text_input", "proof/debug_ui_and_console",
            "proof/in_view_by_bounds", "proof/swept_collisions", "proof/picks", "proof/scene_trees",

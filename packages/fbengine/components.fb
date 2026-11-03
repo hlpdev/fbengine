@@ -59,7 +59,6 @@ Global registered: Registered[] = []
 /// of an @Open or a @Flags Enum, which has more values than members. FutureBlitz has no way to list an
 /// Enum's members yet, so one numbered below 0 or from `upTo` on isn't found.
 Public Function MembersOf<E>(upTo: Int = 4096): E[]
-    If !IsEnum<E>() Then Return []
     Local all: E[] = []
     For at = 0 Until upTo
         Try

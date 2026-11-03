@@ -1,16 +1,22 @@
 // Drawing the scene on the GPU, through the C API: materials, their layers and shading models,
+// Its culling is the scene's as it is now, so that follows an edit at once; what's drawn waits.
 // lights, fog, order, cameras into textures, sprites, planes, terrains, and mirrors, each checked
 // by the pixels its formula says it draws, and a golden image of each.
 
 #include "fbengine.h"
 #include "golden/golden.hpp"
+#include "gpu/buffer.hpp"
+#include "gpu/vulkan.hpp"
 #include "gpu_testing.hpp"
+#include "render/drawing.hpp"
 #include "render/render.hpp"
+#include "texture/texture.hpp"
 
 #include <algorithm>
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1476,7 +1482,6 @@ TEST_CASE("a wireframe material draws lines, where the device can", "[gpu][scene
     fbe_material_release(red);
 }
 
-// Its culling is the scene's as it is now, so that follows an edit at once; what's drawn waits.
 TEST_CASE("a geometry edited between two cameras is the next frame's, for both", "[gpu][scene]") {
     const scene_t scene;
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
@@ -1508,6 +1513,1568 @@ TEST_CASE("a geometry edited between two cameras is the next frame's, for both",
     while (fbe_entity_freed(some.data(), some.size()) != 0) {}
     fbe_texture_release(second_target);
     fbe_material_release(red);
+}
+
+namespace {
+
+/// The pixel a place in the world is at, as a camera sees it.
+std::array<std::uint32_t, 2> pixel_at(std::uint64_t camera, float x, float y, float z) {
+    fbe_vec3_t found{};
+    REQUIRE(fbe_camera_project(camera, frame_size, frame_size, x, y, z, &found) == 1);
+    REQUIRE(found.x >= 0.0F);
+    REQUIRE(found.y >= 0.0F);
+    REQUIRE(found.x < static_cast<float>(frame_size));
+    REQUIRE(found.y < static_cast<float>(frame_size));
+    return { static_cast<std::uint32_t>(found.x), static_cast<std::uint32_t>(found.y) };
+}
+
+rgba_t pixel_of(const fbe::golden::frame_t& frame, std::array<std::uint32_t, 2> at) {
+    return pixel(frame, at[0], at[1]);
+}
+
+/// A sun from the right, toward -X and -Z, whose shadows are on, of intensity 1.
+std::uint64_t sun_from_right(std::uint64_t world) {
+    const std::uint64_t sun = light(world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    const float half = std::numbers::pi_v<float> / 8.0F;
+    require(
+        fbe_entity_set_rotation(sun, 0.0F, std::sin(half), 0.0F, std::cos(half), FBE_SPACE_WORLD));
+    require(fbe_light_set_shadows(sun, true));
+    return sun;
+}
+
+constexpr float sun_facing = 0.70710678F;
+
+} // namespace
+
+TEST_CASE("a directional light's shadow falls where it should, and nowhere else", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    const std::uint64_t sun = sun_from_right(scene.world);
+    // Out of the camera's sight, off to the right, on the sun's way to the wall's middle.
+    cube(scene.world, 5.0F, 0.0F, -5.0F, paint);
+    const std::uint8_t lit = srgb(sun_facing);
+    const fbe::golden::frame_t frame = scene.drawn();
+    CHECK(near(middle(frame), { 0, 0, 0 }));
+    // On either side, away from its edges, no surface shadows itself.
+    int wrong = 0;
+    for (std::uint32_t y = 0; y < frame_size; y += 3) {
+        for (std::uint32_t x = 0; x < 24; x += 3) {
+            wrong += near(pixel(frame, x, y), { lit, lit, lit }) ? 0 : 1;
+            wrong += near(pixel(frame, frame_size - 1 - x, y), { lit, lit, lit }) ? 0 : 1;
+        }
+    }
+    CHECK(wrong == 0);
+    fbe::golden::check("scene_shadow_sun", frame);
+    // With them off, it's all lit.
+    require(fbe_light_set_shadows(sun, false));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    fbe_material_release(paint);
+}
+
+TEST_CASE("what's turned to a light isn't shadowed by itself, at any angle", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    const std::uint64_t box = cube(scene.world, 0.0F, 0.0F, -6.0F, paint);
+    sun_from_right(scene.world);
+    // Its near face, turned, is lit evenly across.
+    for (const float turn : { 0.0F, 0.2F, 0.5F }) {
+        require(fbe_entity_set_rotation(box, 0.0F, std::sin(turn * 0.5F), 0.0F,
+                                        std::cos(turn * 0.5F), FBE_SPACE_WORLD));
+        const fbe::golden::frame_t frame = scene.drawn();
+        const float facing = std::cos((std::numbers::pi_v<float> / 4.0F) - turn);
+        CAPTURE(turn);
+        CHECK(near(middle(frame), { srgb(facing), srgb(facing), srgb(facing) }));
+    }
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a directional light's cascades reach as far as it says", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_range(scene.camera, 0.5F, 400.0F));
+    const std::uint64_t paint = fbe_material_create();
+    const std::uint64_t far_wall = wall(scene.world, -150.0F, 400.0F, paint);
+    const std::uint64_t sun = sun_from_right(scene.world);
+    // A big block, on the sun's way to the far wall's middle, out of sight.
+    const std::uint64_t block = cube(scene.world, 100.0F, 0.0F, -50.0F, paint);
+    require(fbe_entity_set_scale(block, 8.0F, 8.0F, 8.0F, FBE_SPACE_WORLD));
+    require(fbe_light_set_shadow_distance(sun, 300.0F));
+    for (const std::int32_t cascades : { 1, 2, 3, 4 }) {
+        require(fbe_light_set_cascades(sun, cascades));
+        CAPTURE(cascades);
+        CHECK(near(middle(scene.drawn()), { 0, 0, 0 }, 3));
+    }
+    // Past where they reach, it's lit.
+    require(fbe_light_set_shadow_distance(sun, 100.0F));
+    const std::uint8_t lit = srgb(sun_facing);
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    // Nearer, in the first cascade, a small block's shadow is sharp enough to see.
+    require(fbe_light_set_shadow_distance(sun, 100.0F));
+    require(fbe_entity_set_position(far_wall, 0.0F, 0.0F, -6.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(block, 3.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_scale(block, 0.25F, 0.25F, 0.25F, FBE_SPACE_WORLD));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }, 3));
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a spot light's shadow falls from where it is", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_entity_set_position(scene.camera, 4.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    const std::uint64_t spot = light(scene.world, FBE_LIGHT_SPOT, 0.0F, 0.0F, -2.0F, 30.0F);
+    require(fbe_light_set_cone(spot, 0.5F, 0.7F));
+    require(fbe_light_set_intensity(spot, 30.0F));
+    require(fbe_light_set_shadows(spot, true));
+    // On its axis, half way to the wall: out of the camera's sight.
+    cube(scene.world, 0.0F, 0.0F, -6.0F, paint);
+    const fbe::golden::frame_t frame = scene.drawn();
+    CHECK(near(pixel_of(frame, pixel_at(scene.camera, 0.0F, 0.0F, -10.0F)), { 0, 0, 0 }));
+    // The cube's shadow's twice its size on the wall, and just past that it's lit.
+    CHECK(pixel_of(frame, pixel_at(scene.camera, 0.0F, 3.0F, -10.0F))[0] > 100);
+    fbe::golden::check("scene_shadow_spot", frame);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a point light's shadows fall on all six of its sides", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    require(fbe_material_set_two_sided(paint, true));
+    // A room around it, and a block along each axis.
+    const std::uint64_t room = cube(scene.world, 0.0F, 0.0F, 0.0F, paint);
+    require(fbe_entity_set_scale(room, 10.0F, 10.0F, 10.0F, FBE_SPACE_WORLD));
+    fbe_entity_set_casts_shadows(room, false);
+    const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.0F, 30.0F);
+    require(fbe_light_set_intensity(lamp, 100.0F));
+    require(fbe_light_set_shadows(lamp, true));
+    const std::array<float, 3> right{ 1.0F, 0.0F, 0.0F };
+    const std::array<float, 3> left{ -1.0F, 0.0F, 0.0F };
+    const std::array<float, 3> up{ 0.0F, 1.0F, 0.0F };
+    const std::array<float, 3> down{ 0.0F, -1.0F, 0.0F };
+    const std::array<float, 3> near_way{ 0.0F, 0.0F, 1.0F };
+    const std::array<float, 3> far_way{ 0.0F, 0.0F, -1.0F };
+    const std::array ways{ right, left, up, down, near_way, far_way };
+    for (const auto& way : ways) {
+        const std::uint64_t block =
+            cube(scene.world, way[0] * 4.0F, way[1] * 4.0F, way[2] * 4.0F, paint);
+        require(fbe_entity_set_scale(block, 0.5F, 0.5F, 0.5F, FBE_SPACE_WORLD));
+    }
+    for (const auto& way : ways) {
+        CAPTURE(way[0], way[1], way[2]);
+        // From off to the side of the lamp, looking at what's along that way: where it falls, and a
+        // little past that. The block's in the way of nothing, seen from here.
+        const float side_x = way[1] != 0.0F ? 3.0F : 0.0F;
+        const float side_y = way[1] != 0.0F ? 0.0F : 3.0F;
+        const std::array<float, 2> side{ side_x, side_y };
+        require(fbe_entity_set_position(scene.camera, side[0], side[1], 0.0F, FBE_SPACE_WORLD));
+        // Turned from -Z to the way.
+        const float x = way[1];
+        const float y = -way[0];
+        const float w = -way[2];
+        const float size = std::sqrt((x * x) + (y * y) + ((w + 1.0F) * (w + 1.0F)));
+        if (way[2] > 0.5F) {
+            require(fbe_entity_set_rotation(scene.camera, 0.0F, 1.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        } else {
+            require(fbe_entity_set_rotation(scene.camera, x / size, y / size, 0.0F,
+                                            (w + 1.0F) / size, FBE_SPACE_WORLD));
+        }
+        const fbe::golden::frame_t frame = scene.drawn();
+        const std::array<std::uint32_t, 2> dark =
+            pixel_at(scene.camera, way[0] * 10.0F, way[1] * 10.0F, way[2] * 10.0F);
+        CHECK(near(pixel_of(frame, dark), { 0, 0, 0 }, 3));
+        // A way along the wall, toward the camera's side: past the shadow, and lit.
+        const std::array<std::uint32_t, 2> lit =
+            pixel_at(scene.camera, (way[0] * 10.0F) + (side[0] * 0.8F),
+                     (way[1] * 10.0F) + (side[1] * 0.8F), way[2] * 10.0F);
+        CHECK(pixel_of(frame, lit)[0] > 60);
+    }
+    fbe_material_release(paint);
+}
+
+TEST_CASE("only what casts does, and only what's lit per pixel has shadows", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    const std::uint64_t receiver = wall(scene.world, -10.0F, 30.0F, paint);
+    sun_from_right(scene.world);
+    const std::uint64_t caster_paint = fbe_material_create();
+    const std::uint64_t block = cube(scene.world, 5.0F, 0.0F, -5.0F, caster_paint);
+    const std::uint8_t lit = srgb(sun_facing);
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    // Told not to.
+    CHECK(fbe_entity_casts_shadows(block));
+    require(fbe_entity_set_casts_shadows(block, false));
+    CHECK_FALSE(fbe_entity_casts_shadows(block));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    require(fbe_entity_set_casts_shadows(block, true));
+    // What blends doesn't cast, nor what's in an order but 0.
+    require(fbe_material_set_blend(caster_paint, FBE_BLEND_ALPHA));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    require(fbe_material_set_blend(caster_paint, FBE_BLEND_AUTO));
+    require(fbe_material_set_order(caster_paint, 1));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    require(fbe_material_set_order(caster_paint, 0));
+    // Hidden, it doesn't.
+    fbe_entity_set_hidden(block, true);
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    fbe_entity_set_hidden(block, false);
+    // A cut-out's hole lets it through.
+    const std::uint64_t see_through = flat_texture(255, 255, 255, 0);
+    require(fbe_material_set_texture(caster_paint, 0, see_through));
+    require(fbe_material_set_alpha_cutoff(caster_paint, 0.5F));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    const std::uint64_t solid = flat_texture(255, 255, 255, 255);
+    require(fbe_material_set_texture(caster_paint, 0, solid));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    // VERTEX is the fixed-function look, with none; its light's where it falls.
+    const std::uint64_t old = fbe_material_create();
+    require(fbe_material_set_shading(old, FBE_SHADING_VERTEX));
+    require(fbe_mesh_set_material(receiver, old));
+    CHECK(middle(scene.drawn())[0] > 100);
+    fbe_texture_release(see_through);
+    fbe_texture_release(solid);
+    fbe_material_release(old);
+    fbe_material_release(paint);
+    fbe_material_release(caster_paint);
+}
+
+TEST_CASE("a terrain casts, and a skinned mesh where its joints have it", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    sun_from_right(scene.world);
+    // A slab of terrain stood on end, by a turn, between the sun and the wall.
+    const std::uint64_t terrain = fbe_entity_create(scene.world, 0, FBE_ENTITY_TERRAIN);
+    require(fbe_terrain_set_size(terrain, 32));
+    require(fbe_entity_set_scale(terrain, 0.25F, 1.0F, 0.25F, FBE_SPACE_WORLD));
+    const float half = std::numbers::pi_v<float> * 0.25F;
+    require(fbe_entity_set_rotation(terrain, std::sin(half), 0.0F, 0.0F, std::cos(half),
+                                    FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(terrain, 1.0F, 4.0F, -5.0F, FBE_SPACE_WORLD));
+    const std::uint8_t lit = srgb(sun_facing);
+    require(fbe_entity_set_casts_shadows(terrain, false));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
+    require(fbe_entity_set_casts_shadows(terrain, true));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }, 3));
+    fbe_entity_set_hidden(terrain, true);
+    // A mesh bound far off, its joint on the sun's way.
+    const skinned_wall_t made = skinned_wall(scene.world, paint, 50.0F, 2.0F);
+    all_on(made.geometry, 1, 1.0F);
+    require(fbe_entity_set_position(made.moving, 5.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
+    const std::uint64_t two_sided = fbe_material_create();
+    require(fbe_material_set_two_sided(two_sided, true));
+    require(fbe_mesh_set_material(made.mesh, two_sided));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }, 3));
+    fbe_skin_release(made.skin);
+    fbe_material_release(two_sided);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("more shadows than the atlas holds lose some, with no error", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    cube(scene.world, 5.0F, 0.0F, -5.0F, paint);
+    const std::uint64_t sun = sun_from_right(scene.world);
+    require(fbe_light_set_shadow_size(sun, 2048));
+    for (int i = 0; i < 12; ++i) {
+        const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 200.0F, -5.0F, 1.0F);
+        require(fbe_light_set_shadows(lamp, true));
+        require(fbe_light_set_shadow_size(lamp, 8192));
+    }
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    CHECK_FALSE(fbe_light_set_shadow_size(sun, 8));
+    CHECK_FALSE(fbe_light_set_cascades(sun, 5));
+    CHECK_FALSE(fbe_light_set_shadow_distance(sun, 0.0F));
+    CHECK_FALSE(fbe_light_set_shadow_bias(sun, -1.0F, 0.0F));
+    fbe_material_release(paint);
+}
+
+TEST_CASE("two cameras each have their shadows in a frame", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    cube(scene.world, 5.0F, 0.0F, -5.0F, paint);
+    sun_from_right(scene.world);
+    const std::uint64_t second_target =
+        fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 1, true);
+    const std::uint64_t second = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+    require(fbe_camera_set_target(second, second_target));
+    const fbe::golden::frame_t frame = scene.drawn();
+    CHECK(near(middle(frame), { 0, 0, 0 }));
+    CHECK(near(middle(scene_t::read(second_target)), { 0, 0, 0 }));
+    fbe_entity_free(second);
+    std::array<std::uint64_t, 16> some{};
+    while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+    fbe_texture_release(second_target);
+    fbe_material_release(paint);
+}
+
+namespace {
+
+/// An emitter, that spawns nothing by itself, at a place, of still white particles.
+std::uint64_t still_emitter(std::uint64_t world, float x, float y, float z, float half) {
+    const std::uint64_t emitter = fbe_entity_create(world, 0, FBE_ENTITY_PARTICLES);
+    require(fbe_particles_set_capacity(emitter, 16));
+    require(fbe_particles_set_rate(emitter, 0.0F));
+    require(fbe_particles_set_motion(emitter, 0.0F, 0.0F, 0.0F, 0.0F));
+    require(fbe_particles_set_sizes(emitter, half, half));
+    const fbe_color_t white{ .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F };
+    require(fbe_particles_set_colors(emitter, &white, &white));
+    require(fbe_particles_set_life(emitter, 10.0F, 10.0F));
+    require(fbe_entity_set_position(emitter, x, y, z, FBE_SPACE_WORLD));
+    return emitter;
+}
+
+/// How many pixels a unit is at a distance of 1, in a new camera's view: 60 degrees up and down.
+constexpr float pixels_at_1 = (frame_size / 2.0F) * std::numbers::sqrt3_v<float>;
+
+/// How many pixels aren't black.
+int lit_pixels(const fbe::golden::frame_t& frame) {
+    int count = 0;
+    for (std::size_t at = 0; at < frame.rgba.size(); at += 4) {
+        if (frame.rgba[at] != 0 || frame.rgba[at + 1] != 0 || frame.rgba[at + 2] != 0) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+/// The middle of what's lit, in pixels, x and y.
+std::array<float, 2> lit_middle(const fbe::golden::frame_t& frame) {
+    float across = 0.0F;
+    float down = 0.0F;
+    int count = 0;
+    for (std::uint32_t y = 0; y < frame.height; ++y) {
+        for (std::uint32_t x = 0; x < frame.width; ++x) {
+            if (pixel(frame, x, y)[0] != 0) {
+                across += static_cast<float>(x) + 0.5F;
+                down += static_cast<float>(y) + 0.5F;
+                ++count;
+            }
+        }
+    }
+    require(count != 0);
+    return { across / static_cast<float>(count), down / static_cast<float>(count) };
+}
+
+/// A sky of four pixels' colors: up to the left and right, down to the left and right.
+std::uint64_t sky_texture(rgba_t a, rgba_t b, rgba_t c, rgba_t d) {
+    const std::uint64_t texture = four_pixels(a, b, c, d);
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_NEAREST));
+    return texture;
+}
+
+/// Turns an entity about X, so its -Z comes up by `radians`.
+void pitch(std::uint64_t entity, float radians) {
+    require(fbe_entity_set_rotation(entity, std::sin(radians / 2.0F), 0.0F, 0.0F,
+                                    std::cos(radians / 2.0F), FBE_SPACE_WORLD));
+}
+
+} // namespace
+
+TEST_CASE("a particle draws a square facing the camera, as big as its size says", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+    CHECK(lit_pixels(scene.drawn()) == 0);
+    require(fbe_particles_burst(emitter, 1));
+    const fbe::golden::frame_t frame = scene.drawn();
+    // A half-size of 1 at a depth of 4.
+    CHECK(near(middle(frame), { 255, 255, 255 }));
+    const auto side = static_cast<int>(pixels_at_1 / 2.0F);
+    CHECK(lit_pixels(frame) >= (side - 2) * (side - 2));
+    CHECK(lit_pixels(frame) <= (side + 2) * (side + 2));
+}
+
+TEST_CASE("a particle moves by its formula: velocity, gravity, and drag", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const float depth = 8.0F;
+    const float to_pixels = pixels_at_1 / depth;
+    const auto seen_at = [&](float x, float y) {
+        const float across = (frame_size / 2.0F) + (x * to_pixels);
+        const float down = (frame_size / 2.0F) - (y * to_pixels);
+        return std::array{ across, down };
+    };
+    const auto close_to = [](std::array<float, 2> a, std::array<float, 2> b) {
+        return std::fabs(a[0] - b[0]) < 1.0F && std::fabs(a[1] - b[1]) < 1.0F;
+    };
+
+    SECTION("gravity, and its velocity along its forward axis") {
+        const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -depth, 0.5F);
+        // Its forward axis the world's +X.
+        const float half = std::numbers::pi_v<float> / 4.0F;
+        require(fbe_entity_set_rotation(emitter, 0.0F, -std::sin(half), 0.0F, std::cos(half),
+                                        FBE_SPACE_WORLD));
+        require(fbe_particles_set_motion(emitter, 2.0F, 2.0F, 0.0F, 0.0F));
+        require(fbe_particles_set_forces(emitter, 0.0F, -4.0F, 0.0F, 0.0F));
+        require(fbe_particles_burst(emitter, 1));
+        require(fbe_world_step_particles(scene.world, 1.0F));
+        CHECK(close_to(lit_middle(scene.drawn()), seen_at(2.0F, -2.0F)));
+    }
+    SECTION("drag") {
+        const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -depth, 0.5F);
+        const float half = std::numbers::pi_v<float> / 4.0F;
+        require(fbe_entity_set_rotation(emitter, 0.0F, -std::sin(half), 0.0F, std::cos(half),
+                                        FBE_SPACE_WORLD));
+        require(fbe_particles_set_motion(emitter, 4.0F, 4.0F, 0.0F, 0.0F));
+        require(fbe_particles_set_forces(emitter, 0.0F, -2.0F, 0.0F, 1.0F));
+        require(fbe_particles_burst(emitter, 1));
+        require(fbe_world_step_particles(scene.world, 2.0F));
+        const float left = 1.0F - std::exp(-2.0F);
+        CHECK(close_to(lit_middle(scene.drawn()), seen_at(4.0F * left, -2.0F * (2.0F - left))));
+    }
+}
+
+TEST_CASE("a particle's color and size go from its birth to its death", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+    require(fbe_particles_set_life(emitter, 2.0F, 2.0F));
+    require(fbe_particles_set_sizes(emitter, 1.0F, 0.0F));
+    const fbe_color_t red{ .r = 1.0F, .g = 0.0F, .b = 0.0F, .a = 1.0F };
+    const fbe_color_t none{ .r = 1.0F, .g = 0.0F, .b = 0.0F, .a = 0.0F };
+    require(fbe_particles_set_colors(emitter, &red, &none));
+    require(fbe_particles_burst(emitter, 1));
+    const int whole = lit_pixels(scene.drawn());
+    require(fbe_world_step_particles(scene.world, 1.0F));
+    const fbe::golden::frame_t half = scene.drawn();
+    // Half its width each way, a quarter of the pixels; half its alpha over black, blended linear.
+    CHECK(std::abs(lit_pixels(half) - (whole / 4)) < whole / 16);
+    CHECK(near(middle(half), { srgb(0.5F), 0, 0 }));
+}
+
+TEST_CASE("what's dead draws nothing, and comes back at no turn of the clock", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+    require(fbe_particles_set_life(emitter, 1.0F, 1.0F));
+    require(fbe_particles_burst(emitter, 1));
+    CHECK(lit_pixels(scene.drawn()) != 0);
+    require(fbe_world_step_particles(scene.world, 1.5F));
+    CHECK(lit_pixels(scene.drawn()) == 0);
+    // The clock comes round to when it was born, 1024 seconds on: past its half and its end.
+    for (int i = 0; i < 3; ++i) {
+        require(fbe_world_step_particles(scene.world, 341.0F));
+        (void)scene.drawn();
+    }
+    require(fbe_world_step_particles(scene.world, 0.0F));
+    CHECK(lit_pixels(scene.drawn()) == 0);
+    require(fbe_world_step_particles(scene.world, 0.75F));
+    CHECK(lit_pixels(scene.drawn()) == 0);
+    // And one born across the clock's turn still shows, its age right.
+    require(fbe_world_step_particles(scene.world, 1020.0F));
+    (void)scene.drawn();
+    require(fbe_particles_set_life(emitter, 10.0F, 10.0F));
+    require(fbe_particles_burst(emitter, 1));
+    require(fbe_world_step_particles(scene.world, 8.0F));
+    CHECK(lit_pixels(scene.drawn()) != 0);
+}
+
+TEST_CASE("a particle stays where it was born when its emitter moves on", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -8.0F, 1.0F);
+    require(fbe_particles_burst(emitter, 1));
+    (void)scene.drawn();
+    require(fbe_entity_set_position(emitter, 4.0F, 0.0F, -8.0F, FBE_SPACE_WORLD));
+    const std::array<float, 2> at = lit_middle(scene.drawn());
+    CHECK(std::fabs(at[0] - (frame_size / 2.0F)) < 1.0F);
+}
+
+TEST_CASE("a step's particles spawn along where the emitter went", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, -4.0F, 0.0F, -8.0F, 0.25F);
+    require(fbe_particles_set_rate(emitter, 4.0F));
+    require(fbe_world_step_particles(scene.world, 0.0F));
+    require(fbe_entity_set_position(emitter, 4.0F, 0.0F, -8.0F, FBE_SPACE_WORLD));
+    require(fbe_world_step_particles(scene.world, 1.0F));
+    const fbe::golden::frame_t frame = scene.drawn();
+    // Evenly: at -3, -1, 1, and 3, and none at the middle.
+    const auto at = [&](float x) {
+        return pixel(frame, static_cast<std::uint32_t>(64.0F + (x * pixels_at_1 / 8.0F)), 64)[0];
+    };
+    CHECK(at(-3.0F) == 255);
+    CHECK(at(-1.0F) == 255);
+    CHECK(at(1.0F) == 255);
+    CHECK(at(3.0F) == 255);
+    CHECK(at(0.0F) == 0);
+    CHECK(at(-2.0F) == 0);
+}
+
+TEST_CASE("drawing between steps shows what's born only once it has been", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+    require(fbe_particles_set_rate(emitter, 2.0F));
+    require(fbe_world_capture(scene.world));
+    require(fbe_world_step_particles(scene.world, 1.0F));
+    // One at a quarter of the step and one at three quarters.
+    CHECK(lit_pixels(scene.drawn(0.0F)) == 0);
+    CHECK(lit_pixels(scene.drawn(0.5F)) != 0);
+    CHECK(lit_pixels(scene.drawn(1.0F)) != 0);
+}
+
+TEST_CASE("an emitter out of view has no draw, and comes back with what it had", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, 10.0F, 1.0F);
+    require(fbe_particles_burst(emitter, 1));
+    std::array<fbe_draw_t, 4> draws{};
+    const auto count = [&] {
+        return fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 4);
+    };
+    CHECK(count() == 0);
+    (void)scene.drawn();
+    // Its box moves as what's born goes, and the camera can turn to it.
+    pitch(scene.camera, std::numbers::pi_v<float>);
+    CHECK(count() == 1);
+    CHECK(draws[0].kind == FBE_ENTITY_PARTICLES);
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+}
+
+TEST_CASE("particles take a material's textures and blend, and fog", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+    require(fbe_particles_burst(emitter, 1));
+
+    SECTION("AUTO's alpha, the square's color and texture together") {
+        const std::uint64_t material = fbe_material_create();
+        require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
+        const std::uint64_t texture = flat_texture(255, 0, 0, 128);
+        require(fbe_material_set_texture(material, 0, texture));
+        require(fbe_particles_set_material(emitter, material));
+        const rgba_t seen = middle(scene.drawn());
+        CHECK(seen[0] > 100);
+        CHECK(seen[2] > 100);
+        fbe_texture_release(texture);
+        fbe_material_release(material);
+    }
+    SECTION("ADD") {
+        const std::uint64_t material = unlit(1.0F, 0.0F, 0.0F);
+        require(fbe_material_set_blend(material, FBE_BLEND_ADD));
+        require(fbe_particles_set_material(emitter, material));
+        CHECK(near(middle(scene.drawn()), { 255, 0, 255 }));
+        fbe_material_release(material);
+    }
+    SECTION("OPAQUE, its alpha left out, and drawing depth") {
+        const std::uint64_t material = unlit(0.0F, 1.0F, 0.0F);
+        require(fbe_material_set_blend(material, FBE_BLEND_OPAQUE));
+        require(fbe_particles_set_material(emitter, material));
+        const fbe_color_t faint{ .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 0.1F };
+        require(fbe_particles_set_colors(emitter, &faint, &faint));
+        CHECK(near(middle(scene.drawn()), { 0, 255, 0 }));
+        fbe_material_release(material);
+    }
+    SECTION("a mesh in front covers them, whatever the order they're made in") {
+        const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+        wall(scene.world, -2.0F, 4.0F, red);
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        fbe_material_release(red);
+    }
+}
+
+TEST_CASE("a mirror's reflection has particles too", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 2.0F, -8.0F, 1.0F);
+    require(fbe_particles_burst(emitter, 1));
+    fbe_entity_create(scene.world, 0, FBE_ENTITY_MIRROR);
+    const fbe::golden::frame_t frame = scene.drawn();
+    CHECK(near(pixel(frame, 64, 48), { 255, 255, 255 }));
+    CHECK(near(pixel(frame, 64, 80), { 255, 255, 255 }));
+}
+
+TEST_CASE("an emitter freed lets its buffer go, and a new one on its slot starts clean",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t first = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+    require(fbe_particles_burst(first, 8));
+    CHECK(lit_pixels(scene.drawn()) != 0);
+    require(fbe_entity_free(first));
+    (void)scene.drawn();
+    const std::uint64_t second = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+    require(fbe_particles_burst(second, 1));
+    require(fbe_entity_set_position(second, 0.0F, 0.0F, -4.0F, FBE_SPACE_WORLD));
+    CHECK(lit_pixels(scene.drawn()) != 0);
+    // Set to hold another many, its old ones are gone.
+    require(fbe_particles_set_capacity(second, 32));
+    CHECK(lit_pixels(scene.drawn()) == 0);
+    require(fbe_entity_free(second));
+    (void)scene.drawn();
+}
+
+TEST_CASE("a million particles draw", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 0.5F);
+    require(fbe_particles_set_capacity(emitter, 1048576));
+    // What it holds is a million quads' worth of draw; what's born's a few.
+    require(fbe_particles_burst(emitter, 1));
+    CHECK(fbe_particles_alive(emitter) == 1);
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+}
+
+TEST_CASE("a texture's sky is behind what's opaque, along each pixel's way", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const rgba_t red{ 255, 0, 0, 255 };
+    const rgba_t green{ 0, 255, 0, 255 };
+    const rgba_t blue{ 0, 0, 255, 255 };
+    const rgba_t white{ 255, 255, 255, 255 };
+    const std::uint64_t texture = sky_texture(red, green, blue, white);
+    require(fbe_world_set_sky_texture(scene.world, texture, 1.0F));
+    const fbe::golden::frame_t frame = scene.drawn();
+    // Straight ahead's the texture's middle: up to the left, up to the right, and so on.
+    CHECK(near(pixel(frame, 32, 32), { 255, 0, 0 }));
+    CHECK(near(pixel(frame, 96, 32), { 0, 255, 0 }));
+    CHECK(near(pixel(frame, 32, 96), { 0, 0, 255 }));
+    CHECK(near(pixel(frame, 96, 96), { 255, 255, 255 }));
+    // Turned around, what's up to the left is behind where it was, so across the back's the seam.
+    SECTION("turned") {
+        require(fbe_entity_set_rotation(scene.camera, 0.0F, 1.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        const fbe::golden::frame_t behind = scene.drawn();
+        CHECK(near(pixel(behind, 32, 32), { 0, 255, 0 }));
+        CHECK(near(pixel(behind, 96, 32), { 255, 0, 0 }));
+    }
+    SECTION("what's opaque covers it, what blends goes over it, and an order below 0 is under it") {
+        const std::uint64_t solid = unlit(1.0F, 1.0F, 0.0F);
+        wall(scene.world, -4.0F, 1.0F, solid);
+        const std::uint64_t over = unlit(0.0F, 0.0F, 0.0F, 0.5F);
+        require(fbe_material_set_blend(over, FBE_BLEND_ALPHA));
+        const std::uint64_t pane = wall(scene.world, -8.0F, 200.0F, over);
+        (void)pane;
+        const std::uint64_t under = unlit(1.0F, 0.0F, 1.0F);
+        require(fbe_material_set_order(under, -1));
+        wall(scene.world, -30.0F, 200.0F, under);
+        const fbe::golden::frame_t seen = scene.drawn();
+        CHECK(near(middle(seen), { 255, 255, 0 }));
+        // Half of it left in encoded values at most: red's dimmed, and none of magenta's blue.
+        const rgba_t dimmed = pixel(seen, 16, 16);
+        CHECK(dimmed[0] > 0);
+        CHECK(dimmed[0] < 255);
+        CHECK(dimmed[2] == 0);
+        fbe_material_release(solid);
+        fbe_material_release(over);
+        fbe_material_release(under);
+    }
+    SECTION("clearing it goes back to the clear color") {
+        require(fbe_world_clear_sky(scene.world));
+        CHECK(lit_pixels(scene.drawn()) == 0);
+    }
+    SECTION("its brightness scales it") {
+        require(fbe_world_set_sky_texture(scene.world, texture, 0.0F));
+        CHECK(lit_pixels(scene.drawn()) == 0);
+    }
+    fbe_texture_release(texture);
+}
+
+TEST_CASE("a sky keeps to its camera's viewport", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t texture = flat_texture(255, 255, 255, 255);
+    require(fbe_world_set_sky_texture(scene.world, texture, 1.0F));
+    require(fbe_camera_set_viewport(scene.camera, 0.0F, 0.0F, 64.0F, 128.0F));
+    const fbe::golden::frame_t frame = scene.drawn();
+    CHECK(near(pixel(frame, 32, 64), { 255, 255, 255 }));
+    CHECK(near(pixel(frame, 96, 64), { 0, 0, 0 }));
+    fbe_texture_release(texture);
+}
+
+TEST_CASE("a sky holds its texture, and one that's its camera's target isn't sampled",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t texture = flat_texture(0, 255, 0, 255);
+    require(fbe_world_set_sky_texture(scene.world, texture, 1.0F));
+    // The sky has it now, whatever the game does.
+    fbe_texture_release(texture);
+    CHECK(near(middle(scene.drawn()), { 0, 255, 0 }));
+    require(fbe_world_set_sky_texture(scene.world, scene.target, 1.0F));
+    // Draws what can't be sampled as white, and no validation error.
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    require(fbe_world_clear_sky(scene.world));
+}
+
+TEST_CASE("through a mirror's plane is its reflection of the sky", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const rgba_t red{ 255, 0, 0, 255 };
+    const rgba_t blue{ 0, 0, 255, 255 };
+    const std::uint64_t texture = sky_texture(red, red, blue, blue);
+    require(fbe_world_set_sky_texture(scene.world, texture, 1.0F));
+    const std::uint64_t mirror = fbe_entity_create(scene.world, 0, FBE_ENTITY_MIRROR);
+    require(fbe_entity_set_position(mirror, 0.0F, -1.0F, 0.0F, FBE_SPACE_WORLD));
+    const fbe::golden::frame_t frame = scene.drawn();
+    // Above: the sky's top; below the mirror's horizon: its top again, reflected, not its bottom.
+    CHECK(near(pixel(frame, 64, 16), { 255, 0, 0 }));
+    CHECK(near(pixel(frame, 64, 112), { 255, 0, 0 }));
+    // With no mirror, its bottom.
+    require(fbe_entity_free(mirror));
+    CHECK(near(pixel(scene.drawn(), 64, 112), { 0, 0, 255 }));
+    fbe_texture_release(texture);
+}
+
+TEST_CASE("the atmosphere is blue above, bright by the sun, and dark once it's set",
+          "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    require(fbe_world_set_sky_atmosphere(scene.world, 0, 20.0F));
+    pitch(scene.camera, std::numbers::pi_v<float> / 4.0F);
+    const rgba_t noon = middle(scene.drawn());
+    CHECK(noon[2] > noon[1]);
+    CHECK(noon[1] > noon[0]);
+    CHECK(noon[3] == 255);
+    const std::uint64_t sun = fbe_entity_create(scene.world, 0, FBE_ENTITY_LIGHT);
+    require(fbe_light_set_type(sun, FBE_LIGHT_DIRECTIONAL));
+
+    SECTION("the sun low ahead makes the sky by it warmer and brighter than the sky behind it") {
+        // Low ahead along the camera's -Z, so shining back along +Z and a little down.
+        pitch(sun, std::numbers::pi_v<float> + 0.1F);
+        require(fbe_world_set_sky_atmosphere(scene.world, sun, 20.0F));
+        pitch(scene.camera, 0.1F);
+        const rgba_t toward = middle(scene.drawn());
+        pitch(scene.camera, std::numbers::pi_v<float> - 0.1F);
+        const rgba_t away = middle(scene.drawn());
+        CHECK(toward[0] > away[0]);
+        CHECK(static_cast<float>(toward[0]) / static_cast<float>(toward[2] + 1) >
+              static_cast<float>(away[0]) / static_cast<float>(away[2] + 1));
+    }
+    SECTION("the sun under the ground leaves it dark") {
+        // Shining up.
+        pitch(sun, 1.0F);
+        require(fbe_world_set_sky_atmosphere(scene.world, sun, 20.0F));
+        const rgba_t night = middle(scene.drawn());
+        CHECK(night[2] < noon[2] / 4);
+    }
+}
+
+TEST_CASE("a decal draws on what it was made of, in a blended material", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t white = unlit(1.0F, 1.0F, 1.0F);
+    wall(scene.world, -4.0F, 4.0F, white);
+    // A half-size of 1 at a depth of 4: about 28 pixels each way around the middle.
+    std::array<float, 16> box{};
+    box[0] = 1.0F;
+    box[5] = 1.0F;
+    box[10] = 1.0F;
+    box[12] = 0.0F;
+    box[13] = 0.0F;
+    box[14] = -4.0F;
+    box[15] = 1.0F;
+    fbe_mat4_t matrix{};
+    std::ranges::copy(box, matrix.m);
+    const std::uint64_t geometry = fbe_geometry_decal(scene.world, &matrix, 0.01F, 1.309F);
+    REQUIRE(geometry != 0);
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F, 0.5F);
+    require(fbe_material_set_blend(red, FBE_BLEND_ALPHA));
+    const std::uint64_t mesh = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+    require(fbe_mesh_set_geometry(mesh, geometry));
+    require(fbe_mesh_set_material(mesh, red));
+    const fbe::golden::frame_t frame = scene.drawn();
+    const rgba_t on = middle(frame);
+    CHECK(on[0] == 255);
+    CHECK(on[1] < 255);
+    CHECK(on[1] > 0);
+    CHECK(near(pixel(frame, 64 + 40, 64), { 255, 255, 255 }));
+    fbe_geometry_release(geometry);
+    fbe_material_release(red);
+    fbe_material_release(white);
+}
+
+namespace {
+
+/// How many pixels' red is above a value.
+int reds_above(const fbe::golden::frame_t& frame, int above) {
+    int count = 0;
+    for (std::uint32_t y = 0; y < frame.height; ++y) {
+        for (std::uint32_t x = 0; x < frame.width; ++x) {
+            const int red = pixel(frame, x, y)[0];
+            count += red > above ? 1 : 0;
+        }
+    }
+    return count;
+}
+
+/// Turns an entity by an angle about an axis of length 1.
+void turn_about(std::uint64_t entity, float x, float y, float z, float angle) {
+    const float half = angle * 0.5F;
+    const float part = std::sin(half);
+    require(fbe_entity_set_rotation(entity, x * part, y * part, z * part, std::cos(half),
+                                    FBE_SPACE_WORLD));
+}
+
+/// A floor facing +Y of many small squares, so no one triangle's big.
+std::uint64_t grid_floor(std::uint64_t world, float y, int cells, float cell,
+                         std::uint64_t material) {
+    const std::uint64_t geometry = fbe_geometry_create();
+    const std::int32_t surface = fbe_geometry_add_surface(geometry);
+    std::vector<fbe_vertex_t> vertices;
+    std::vector<std::uint32_t> indices;
+    const float half = static_cast<float>(cells) * cell * 0.5F;
+    for (int z = 0; z <= cells; ++z) {
+        for (int x = 0; x <= cells; ++x) {
+            const float across = (static_cast<float>(x) * cell) - half;
+            const float along = (static_cast<float>(z) * cell) - half;
+            vertices.push_back({
+                .position = { .x = across, .y = 0.0F, .z = along },
+                .normal = { .x = 0.0F, .y = 1.0F, .z = 0.0F },
+                .uv0 = { .x = 0.0F, .y = 0.0F },
+                .uv1 = { .x = 0.0F, .y = 0.0F },
+                .color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F },
+            });
+        }
+    }
+    const auto squares = static_cast<std::uint32_t>(cells);
+    const std::uint32_t row = squares + 1;
+    for (std::uint32_t z = 0; z < squares; ++z) {
+        for (std::uint32_t x = 0; x < squares; ++x) {
+            const std::uint32_t a = (z * row) + x;
+            const std::uint32_t b = a + 1;
+            const std::uint32_t c = a + row;
+            const std::uint32_t d = c + 1;
+            indices.insert(indices.end(), { a, c, d, a, d, b });
+        }
+    }
+    fbe_surface_add_vertices(geometry, surface, vertices.data(),
+                             static_cast<std::int32_t>(vertices.size()));
+    fbe_surface_add_triangles(geometry, surface, indices.data(),
+                              static_cast<std::int32_t>(indices.size()));
+    const std::uint64_t mesh = fbe_entity_create(world, 0, FBE_ENTITY_MESH);
+    require(fbe_mesh_set_geometry(mesh, geometry));
+    fbe_geometry_release(geometry);
+    require(fbe_mesh_set_material(mesh, material));
+    require(fbe_entity_set_position(mesh, 0.0F, y, 0.0F, FBE_SPACE_WORLD));
+    return mesh;
+}
+
+/// A wall whose vertices all have this alpha.
+std::uint64_t alpha_wall(std::uint64_t world, float x, float z, float half, float alpha,
+                         std::uint64_t material) {
+    const std::uint64_t geometry = fbe_geometry_create();
+    const std::int32_t surface = fbe_geometry_add_surface(geometry);
+    const auto corner = [&](float across, float up) {
+        return fbe_vertex_t{
+            .position = { .x = across * half, .y = up * half, .z = 0.0F },
+            .normal = { .x = 0.0F, .y = 0.0F, .z = 1.0F },
+            .uv0 = { .x = 0.0F, .y = 0.0F },
+            .uv1 = { .x = 0.0F, .y = 0.0F },
+            .color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = alpha },
+        };
+    };
+    const fbe_vertex_t low_left = corner(-1.0F, -1.0F);
+    const fbe_vertex_t low_right = corner(1.0F, -1.0F);
+    const fbe_vertex_t high_right = corner(1.0F, 1.0F);
+    const fbe_vertex_t high_left = corner(-1.0F, 1.0F);
+    const std::array vertices{ low_left, low_right, high_right, high_left };
+    fbe_surface_add_vertices(geometry, surface, vertices.data(), 4);
+    const std::array<std::uint32_t, 6> indices{ 0, 1, 2, 0, 2, 3 };
+    fbe_surface_add_triangles(geometry, surface, indices.data(), 6);
+    const std::uint64_t mesh = fbe_entity_create(world, 0, FBE_ENTITY_MESH);
+    require(fbe_mesh_set_geometry(mesh, geometry));
+    fbe_geometry_release(geometry);
+    require(fbe_mesh_set_material(mesh, material));
+    require(fbe_entity_set_position(mesh, x, 0.0F, z, FBE_SPACE_WORLD));
+    return mesh;
+}
+
+/// A wall, a block on the sun's way to its middle, and the sun: where a shadow's easy to look for.
+struct shadowed_wall_t {
+    const scene_t& scene;
+    std::uint64_t paint = fbe_material_create();
+    std::uint64_t sun = 0;
+
+    explicit shadowed_wall_t(const scene_t& in) : scene(in) {
+        wall(scene.world, -10.0F, 30.0F, paint);
+        cube(scene.world, 5.0F, 0.0F, -5.0F, paint);
+        sun = sun_from_right(scene.world);
+    }
+    shadowed_wall_t(const shadowed_wall_t&) = delete;
+    shadowed_wall_t& operator=(const shadowed_wall_t&) = delete;
+    shadowed_wall_t(shadowed_wall_t&&) = delete;
+    shadowed_wall_t& operator=(shadowed_wall_t&&) = delete;
+
+    ~shadowed_wall_t() {
+        fbe_material_release(paint);
+    }
+
+    /// Whether the wall's middle's in shadow.
+    [[nodiscard]] bool shadowed() const {
+        return middle(scene.drawn())[0] < srgb(sun_facing) / 2;
+    }
+};
+
+} // namespace
+
+TEST_CASE("a big caster keeps its shadow, however far past the near plane it goes",
+          "[gpu][scene]") {
+    SECTION("a point light's, flat to a face and across one") {
+        const float half = GENERATE(5.0F, 8.0F, 20.0F, 100.0F);
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -6.0F, 200.0F, paint);
+        wall(scene.world, -3.0F, half, paint);
+        const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.0F, 100.0F);
+        require(fbe_light_set_intensity(lamp, 300.0F));
+        require(fbe_light_set_shadows(lamp, true));
+        require(fbe_camera_set_range(scene.camera, 0.1F, 50.0F));
+        require(fbe_entity_set_position(scene.camera, 3.0F, 0.0F, -4.0F, FBE_SPACE_WORLD));
+        CHECK(middle(scene.drawn())[0] == 0);
+        if (half > 4.0F) {
+            require(fbe_entity_set_position(scene.camera, 8.0F, 0.0F, -4.0F, FBE_SPACE_WORLD));
+            CHECK(middle(scene.drawn())[0] == 0);
+        }
+        fbe_material_release(paint);
+    }
+    SECTION("a spot light's, the wall's far end behind it") {
+        const float half = GENERATE(12.0F, 40.0F, 100.0F);
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -6.0F, 200.0F, paint);
+        wall(scene.world, -3.0F, half, paint);
+        const std::uint64_t spot = light(scene.world, FBE_LIGHT_SPOT, 0.0F, 0.0F, 0.0F, 100.0F);
+        require(fbe_light_set_intensity(spot, 300.0F));
+        require(fbe_light_set_cone(spot, 0.3F, 0.5F));
+        require(fbe_light_set_shadows(spot, true));
+        const float sixty = std::numbers::pi_v<float> / 3.0F;
+        turn_about(spot, 0.0F, 1.0F, 0.0F, -sixty);
+        require(fbe_camera_set_range(scene.camera, 0.1F, 50.0F));
+        require(fbe_entity_set_position(scene.camera, 6.0F * std::tan(sixty), 0.0F, -4.0F,
+                                        FBE_SPACE_WORLD));
+        CHECK(middle(scene.drawn())[0] == 0);
+        fbe_material_release(paint);
+    }
+    SECTION("a directional light's, far bigger than its cascade") {
+        const float half = GENERATE(6.0F, 20.0F, 100.0F, 1000.0F);
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -10.0F, 2000.0F, paint);
+        wall(scene.world, -5.0F, half, paint);
+        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, -6.0F, FBE_SPACE_WORLD));
+        sun_from_right(scene.world);
+        CHECK(middle(scene.drawn())[0] == 0);
+        fbe_material_release(paint);
+    }
+    SECTION("far up the sun's way, past its tile's near plane altogether") {
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -10.0F, 30.0F, paint);
+        sun_from_right(scene.world);
+        cube(scene.world, 505.0F, 0.0F, 495.0F, paint);
+        CHECK(middle(scene.drawn())[0] == 0);
+        fbe_material_release(paint);
+    }
+    SECTION("with no depth clamp, each cascade's near plane goes back to what casts") {
+        const scene_t scene;
+        require(fbe_gpu_started() || fbe_gpu_start());
+        fbe::gpu::device()->depth_clamp = false;
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -10.0F, 2000.0F, paint);
+        wall(scene.world, -5.0F, 100.0F, paint);
+        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, -6.0F, FBE_SPACE_WORLD));
+        sun_from_right(scene.world);
+        CHECK(middle(scene.drawn())[0] == 0);
+        fbe::gpu::device()->depth_clamp = true;
+        fbe_material_release(paint);
+    }
+}
+
+TEST_CASE("a directional light's cascades end where its shadows do", "[gpu][scene]") {
+    SECTION("past them, it's lit, not by the next light's") {
+        const scene_t scene;
+        require(fbe_camera_set_range(scene.camera, 0.5F, 400.0F));
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -60.0F, 300.0F, paint);
+        const std::uint64_t first = sun_from_right(scene.world);
+        require(fbe_light_set_shadow_distance(first, 10.0F));
+        const std::uint64_t second =
+            light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+        turn_about(second, 0.0F, 1.0F, 0.0F, -std::numbers::pi_v<float> / 4.0F);
+        require(fbe_light_set_shadows(second, true));
+        require(fbe_light_set_shadow_distance(second, 300.0F));
+        const std::uint64_t block = cube(scene.world, -20.0F, 0.0F, -40.0F, paint);
+        require(fbe_entity_set_scale(block, 8.0F, 8.0F, 8.0F, FBE_SPACE_WORLD));
+        // The first's shadows end at 10; the wall's at 60, in only the second's shadow.
+        CHECK(
+            near(middle(scene.drawn()), { srgb(sun_facing), srgb(sun_facing), srgb(sun_facing) }));
+        require(fbe_light_set_shadows(second, false));
+        CHECK(near(middle(scene.drawn()),
+                   { srgb(sun_facing * 2.0F), srgb(sun_facing * 2.0F), srgb(sun_facing * 2.0F) }));
+        fbe_material_release(paint);
+    }
+    SECTION("the last of them, not the camera's record after it") {
+        const scene_t scene;
+        require(fbe_camera_set_range(scene.camera, 0.1F, 100.0F));
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -0.8F, 30.0F, paint);
+        const std::uint64_t sun = sun_from_right(scene.world);
+        require(fbe_light_set_shadow_distance(sun, 0.5F));
+        const std::uint64_t block = cube(scene.world, 6.0F, 0.0F, 5.2F, paint);
+        require(fbe_entity_set_scale(block, 4.0F, 4.0F, 4.0F, FBE_SPACE_WORLD));
+        const fbe::golden::frame_t frame = scene.drawn();
+        CHECK(reds_above(frame, srgb(sun_facing) - 5) == frame_size * frame_size);
+        fbe_material_release(paint);
+    }
+    SECTION("ending before the near plane, it has none, and no slices running backward") {
+        const scene_t scene;
+        const shadowed_wall_t over(scene);
+        require(fbe_camera_set_range(scene.camera, 2.0F, 100.0F));
+        require(fbe_light_set_shadow_distance(over.sun, 1.0F));
+        CHECK_FALSE(over.shadowed());
+        CHECK(fbe_gpu_validation_errors() == 0);
+    }
+}
+
+TEST_CASE("a terrain doesn't shadow itself, however coarsely it casts", "[gpu][scene]") {
+    const std::int32_t size = GENERATE(128, 256, 512, 1024);
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    const std::uint64_t terrain = fbe_entity_create(scene.world, 0, FBE_ENTITY_TERRAIN);
+    require(fbe_terrain_set_size(terrain, size));
+    // Rolling hills, a wave of 40 squares, 4 high: slopes under 20 degrees, a sun at 60.
+    std::vector<float> heights;
+    for (std::int32_t z = 0; z <= size; ++z) {
+        for (std::int32_t x = 0; x <= size; ++x) {
+            heights.push_back(2.0F * std::sin(static_cast<float>(x) * 0.157F) *
+                              std::cos(static_cast<float>(z) * 0.157F));
+        }
+    }
+    require(fbe_terrain_set_heights(terrain, heights.data(),
+                                    static_cast<std::int32_t>(heights.size())));
+    require(fbe_terrain_set_material(terrain, paint));
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    turn_about(sun, 1.0F, 0.0F, 0.0F, -std::numbers::pi_v<float> / 3.0F);
+    require(fbe_light_set_shadows(sun, true));
+    require(fbe_camera_set_range(scene.camera, 0.1F, 300.0F));
+    const float middle_place = static_cast<float>(size) * 0.5F;
+    require(
+        fbe_entity_set_position(scene.camera, middle_place, 12.0F, middle_place, FBE_SPACE_WORLD));
+    turn_about(scene.camera, 1.0F, 0.0F, 0.0F, -1.2F);
+    const fbe::golden::frame_t with = scene.drawn();
+    require(fbe_light_set_shadows(sun, false));
+    const fbe::golden::frame_t without = scene.drawn();
+    CHECK(fbe::golden::compare(without, with, 12).pixels < 200);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a terrain of any size casts, each of its pieces", "[gpu][scene]") {
+    SECTION("whole") {
+        const std::int32_t size = GENERATE(1, 8, 15, 16, 17, 20, 32, 100);
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -10.0F, 30.0F, paint);
+        sun_from_right(scene.world);
+        const std::uint64_t terrain = fbe_entity_create(scene.world, 0, FBE_ENTITY_TERRAIN);
+        require(fbe_terrain_set_size(terrain, size));
+        const float scale = 8.0F / static_cast<float>(size);
+        require(fbe_entity_set_scale(terrain, scale, 1.0F, scale, FBE_SPACE_WORLD));
+        const float half = std::numbers::pi_v<float> * 0.25F;
+        require(fbe_entity_set_rotation(terrain, std::sin(half), 0.0F, 0.0F, std::cos(half),
+                                        FBE_SPACE_WORLD));
+        require(fbe_entity_set_position(terrain, 1.0F, 4.0F, -5.0F, FBE_SPACE_WORLD));
+        CHECK(middle(scene.drawn())[0] == 0);
+        fbe_material_release(paint);
+    }
+    SECTION("only its last corner on the sun's way") {
+        const std::int32_t size = GENERATE(20, 100, 150);
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -10.0F, 30.0F, paint);
+        sun_from_right(scene.world);
+        const std::uint64_t terrain = fbe_entity_create(scene.world, 0, FBE_ENTITY_TERRAIN);
+        require(fbe_terrain_set_size(terrain, size));
+        const float half = std::numbers::pi_v<float> * 0.25F;
+        require(fbe_entity_set_rotation(terrain, std::sin(half), 0.0F, 0.0F, std::cos(half),
+                                        FBE_SPACE_WORLD));
+        // Stood on its edge, mirrored so all the rest of it's off the camera's way, with only its
+        // last squares, (size, size), around where the sun's way to the wall's middle crosses.
+        const auto far_corner = static_cast<float>(size);
+        require(fbe_entity_set_scale(terrain, -1.0F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+        require(fbe_entity_set_position(terrain, 4.0F + far_corner, far_corner - 1.0F, -5.0F,
+                                        FBE_SPACE_WORLD));
+        CHECK(middle(scene.drawn())[0] == 0);
+        fbe_material_release(paint);
+    }
+}
+
+TEST_CASE("an atlas full of some lights' tiles keeps what it can of the others'", "[gpu][scene]") {
+    SECTION("a sun alone, too big for it, shrinks") {
+        const scene_t scene;
+        const shadowed_wall_t over(scene);
+        require(fbe_light_set_shadow_size(over.sun, 8192));
+        CHECK(over.shadowed());
+    }
+    SECTION("a lamp too big doesn't take the sun's place") {
+        const scene_t scene;
+        const shadowed_wall_t over(scene);
+        const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, -9.0F, 3.0F);
+        require(fbe_light_set_intensity(lamp, 0.0001F));
+        require(fbe_light_set_shadows(lamp, true));
+        require(fbe_light_set_shadow_size(lamp, 8192));
+        CHECK(over.shadowed());
+    }
+    SECTION("lamps out of reach of what's seen have no tiles at all") {
+        const scene_t scene;
+        const shadowed_wall_t over(scene);
+        for (int i = 0; i < 12; ++i) {
+            const std::uint64_t lamp =
+                light(scene.world, FBE_LIGHT_POINT, 500.0F + (static_cast<float>(i) * 50.0F), 0.0F,
+                      0.0F, 5.0F);
+            require(fbe_light_set_shadows(lamp, true));
+            require(fbe_light_set_shadow_size(lamp, 2048));
+        }
+        CHECK(over.shadowed());
+        CHECK(fbe::render::shadow_atlas_side() == 2048);
+    }
+    SECTION("the nearest lamp keeps its shadow, wherever it is in the tree") {
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -10.0F, 60.0F, paint);
+        // Far off in the view, each taking all its share of the atlas, and made first.
+        for (int i = 0; i < 12; ++i) {
+            const std::uint64_t far =
+                light(scene.world, FBE_LIGHT_POINT, (static_cast<float>(i) - 4.0F) * 12.0F, 0.0F,
+                      -60.0F, 6.0F);
+            require(fbe_light_set_shadows(far, true));
+            require(fbe_light_set_shadow_size(far, 1024));
+        }
+        cube(scene.world, 2.0F, 0.0F, -7.0F, paint);
+        require(fbe_entity_set_position(scene.camera, 4.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        const std::uint64_t near_lamp =
+            light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, -4.0F, 20.0F);
+        require(fbe_light_set_intensity(near_lamp, 30.0F));
+        require(fbe_light_set_shadows(near_lamp, true));
+        require(fbe_light_set_shadow_size(near_lamp, 1024));
+        CHECK(middle(scene.drawn())[0] == 0);
+        CHECK(fbe_gpu_validation_errors() == 0);
+        fbe_material_release(paint);
+    }
+}
+
+TEST_CASE("a morphed mesh casts where its morph has it", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    sun_from_right(scene.world);
+    // Well above the sun's way to the wall's middle, until its morph brings it down.
+    const std::uint64_t quad = wall(scene.world, -5.0F, 3.0F, paint);
+    require(fbe_entity_set_position(quad, 5.0F, 30.0F, -5.0F, FBE_SPACE_WORLD));
+    std::array<float, 12> down{};
+    for (std::size_t corner = 0; corner < 4; ++corner) {
+        down[(corner * 3) + 1] = -30.0F;
+    }
+    require(fbe_morph_add_target(fbe_mesh_geometry(quad), 0, down.data(), nullptr, 4) == 0);
+    CHECK(middle(scene.drawn())[0] != 0);
+    const std::array<float, 1> weights{ 1.0F };
+    require(fbe_morph_set_weights(quad, weights.data(), 1));
+    (void)scene.drawn();
+    CHECK(middle(scene.drawn())[0] == 0);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("what faces away from a light casts as well as what faces it", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    sun_from_right(scene.world);
+    const std::uint64_t quad = wall(scene.world, -5.0F, 3.0F, paint);
+    require(fbe_entity_set_position(quad, 5.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
+    CHECK(middle(scene.drawn())[0] == 0);
+    turn_about(quad, 0.0F, 1.0F, 0.0F, std::numbers::pi_v<float>);
+    CHECK(middle(scene.drawn())[0] == 0);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a mirror's reflection has shadows of its own, outside the camera's cascades",
+          "[gpu][scene]") {
+    const auto seen = [](bool caster) {
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+        require(fbe_camera_set_field_of_view(scene.camera, 0.7F));
+        const std::uint64_t back_wall = wall(scene.world, 25.0F, 30.0F, paint);
+        turn_about(back_wall, 0.0F, 1.0F, 0.0F, std::numbers::pi_v<float>);
+        const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+        turn_about(sun, 0.0F, 1.0F, 0.0F,
+                   std::numbers::pi_v<float> + (std::numbers::pi_v<float> / 4.0F));
+        require(fbe_light_set_shadows(sun, true));
+        require(fbe_light_set_shadow_distance(sun, 40.0F));
+        require(fbe_camera_set_range(scene.camera, 0.1F, 100.0F));
+        if (caster) {
+            // Whichever way's the sun's, one's on it.
+            cube(scene.world, 5.0F, 0.0F, 20.0F, paint);
+            cube(scene.world, -5.0F, 0.0F, 20.0F, paint);
+        }
+        const std::uint64_t mirror = fbe_entity_create(scene.world, 0, FBE_ENTITY_MIRROR);
+        turn_about(mirror, 1.0F, 0.0F, 0.0F, std::numbers::pi_v<float> / 2.0F);
+        require(fbe_entity_set_position(mirror, 0.0F, 0.0F, -2.5F, FBE_SPACE_WORLD));
+        const rgba_t found = middle(scene.drawn());
+        fbe_material_release(paint);
+        return found;
+    };
+    CHECK(seen(false)[0] > 100);
+    CHECK(seen(true)[0] == 0);
+}
+
+TEST_CASE("a cut-out casts as it's drawn", "[gpu][scene]") {
+    const auto check = [](bool drawn, auto&& set_up) {
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        wall(scene.world, -10.0F, 30.0F, paint);
+        sun_from_right(scene.world);
+        const std::uint64_t caster_paint = fbe_material_create();
+        require(fbe_material_set_color(caster_paint, 1.0F, 0.0F, 0.0F, 1.0F));
+        require(fbe_material_set_alpha_cutoff(caster_paint, 0.5F));
+        set_up(scene.world, caster_paint);
+        const rgba_t on_wall = middle(scene.drawn());
+        require(fbe_entity_set_position(scene.camera, 5.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        const rgba_t head_on = middle(scene.drawn());
+        CHECK((head_on[1] == 0) == drawn);
+        CHECK((on_wall[0] == 0) == drawn);
+        fbe_material_release(paint);
+        fbe_material_release(caster_paint);
+    };
+    const auto with_texture = [](std::uint64_t material, std::int32_t layer, std::uint8_t alpha) {
+        const std::uint64_t texture = flat_texture(255, 255, 255, alpha);
+        require(fbe_material_set_texture(material, layer, texture));
+        fbe_texture_release(texture);
+    };
+    SECTION("OPAQUE leaves its texture's alpha out") {
+        check(true, [&](std::uint64_t world, std::uint64_t material) {
+            with_texture(material, 0, 0);
+            require(fbe_material_set_blend(material, FBE_BLEND_OPAQUE));
+            alpha_wall(world, 5.0F, -5.0F, 3.0F, 1.0F, material);
+        });
+    }
+    SECTION("vertex colors' alpha") {
+        check(false, [&](std::uint64_t world, std::uint64_t material) {
+            require(fbe_material_set_vertex_colors(material, true));
+            alpha_wall(world, 5.0F, -5.0F, 3.0F, 0.0F, material);
+        });
+    }
+    SECTION("a vertex's alpha, with no vertex colors, isn't anything") {
+        check(true, [&](std::uint64_t world, std::uint64_t material) {
+            alpha_wall(world, 5.0F, -5.0F, 3.0F, 0.0F, material);
+        });
+    }
+    SECTION("a second layer's alpha") {
+        check(false, [&](std::uint64_t world, std::uint64_t material) {
+            with_texture(material, 0, 255);
+            with_texture(material, 1, 0);
+            alpha_wall(world, 5.0F, -5.0F, 3.0F, 1.0F, material);
+        });
+    }
+    SECTION("an ALPHA layer leaves alpha as it is") {
+        check(true, [&](std::uint64_t world, std::uint64_t material) {
+            with_texture(material, 0, 0);
+            require(fbe_material_set_layer(material, 0, FBE_LAYER_ALPHA, 0));
+            alpha_wall(world, 5.0F, -5.0F, 3.0F, 1.0F, material);
+        });
+    }
+    SECTION("its first layer's") {
+        check(false, [&](std::uint64_t world, std::uint64_t material) {
+            with_texture(material, 0, 0);
+            alpha_wall(world, 5.0F, -5.0F, 3.0F, 1.0F, material);
+        });
+    }
+}
+
+TEST_CASE("a surface far turned from its light isn't shadowed by itself", "[gpu][scene]") {
+    const float degrees = GENERATE(5.0F, 10.0F, 20.0F, 45.0F, 70.0F);
+    const std::int32_t size = GENERATE(256, 1024);
+    const float distance = GENERATE(30.0F, 200.0F);
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    grid_floor(scene.world, -2.0F, 60, 8.0F, paint);
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    const float radians = degrees * std::numbers::pi_v<float> / 180.0F;
+    turn_about(sun, 1.0F, 0.0F, 0.0F, -radians);
+    require(fbe_light_set_shadows(sun, true));
+    require(fbe_light_set_shadow_size(sun, size));
+    require(fbe_light_set_shadow_distance(sun, distance));
+    require(fbe_camera_set_range(scene.camera, 0.1F, 300.0F));
+    turn_about(scene.camera, 1.0F, 0.0F, 0.0F, -0.25F);
+    const int expected = srgb(std::sin(radians));
+    const fbe::golden::frame_t frame = scene.drawn();
+    int wrong = 0;
+    for (std::uint32_t y = frame.height / 2; y < frame.height; ++y) {
+        for (std::uint32_t x = 0; x < frame.width; ++x) {
+            wrong += std::abs(pixel(frame, x, y)[0] - expected) >= 3 ? 1 : 0;
+        }
+    }
+    CHECK(wrong == 0);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a shadow starts at what casts it, and ends where it should", "[gpu][scene]") {
+    // A thin wall on a floor, the sun 45 degrees over it along +X, seen from straight above.
+    const auto seen = [](float depth_bias) {
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        grid_floor(scene.world, 0.0F, 40, 1.0F, paint);
+        const std::uint64_t thin = wall(scene.world, -6.0F, 1.0F, paint);
+        turn_about(thin, 0.0F, 1.0F, 0.0F, std::numbers::pi_v<float> * 0.5F);
+        require(fbe_entity_set_position(thin, 1.0F, 1.0F, -6.0F, FBE_SPACE_WORLD));
+        const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+        require(fbe_entity_point_at(sun, 1.0F, -1.0F, 0.0F, 0.0F));
+        require(fbe_light_set_shadows(sun, true));
+        require(fbe_light_set_shadow_distance(sun, 30.0F));
+        require(fbe_light_set_shadow_size(sun, 2048));
+        require(fbe_light_set_shadow_bias(sun, depth_bias, 1.5F));
+        require(fbe_entity_set_position(scene.camera, 1.5F, 8.0F, -6.0F, FBE_SPACE_WORLD));
+        turn_about(scene.camera, 1.0F, 0.0F, 0.0F, -std::numbers::pi_v<float> * 0.5F);
+        const fbe::golden::frame_t frame = scene.drawn();
+        fbe_material_release(paint);
+        return frame;
+    };
+    // The floor at x, seen from 8 over x = 1.5.
+    const auto at = [](float x) {
+        return static_cast<std::uint32_t>(64.0F + ((x - 1.5F) * pixels_at_1 / 8.0F));
+    };
+    const fbe::golden::frame_t right = seen(0.02F);
+    CHECK(pixel(right, at(1.15F), 64)[0] < 8);
+    CHECK(pixel(right, at(2.8F), 64)[0] < 8);
+    CHECK(pixel(right, at(3.3F), 64)[0] > 100);
+    // Compared too far off the floor, it comes away from the block's foot.
+    CHECK(pixel(seen(1.0F), at(1.15F), 64)[0] > 100);
+}
+
+TEST_CASE("a faded-out caster doesn't cast for the camera it's faded from", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    sun_from_right(scene.world);
+    const std::uint64_t block = cube(scene.world, 5.0F, 0.0F, -5.0F, paint);
+    require(fbe_entity_set_auto_fade(block, 1.0F, 8.0F));
+    // Too far off for it, and another camera that isn't, in one World's drawing.
+    require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 10.0F, FBE_SPACE_WORLD));
+    const std::uint64_t other_target =
+        fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 1, true);
+    const std::uint64_t other = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+    require(fbe_camera_set_target(other, other_target));
+    CHECK(fbe_entity_fade(block, scene.camera) == 0.0F);
+    CHECK(fbe_entity_fade(block, other) > 0.0F);
+    const fbe::golden::frame_t far_off = scene.drawn();
+    CHECK(near(middle(far_off), { srgb(sun_facing), srgb(sun_facing), srgb(sun_facing) }));
+    CHECK(middle(scene_t::read(other_target))[0] == 0);
+    require(fbe_entity_free(other));
+    fbe_texture_release(other_target);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a point light's faces meet with no leak, at any size", "[gpu][scene]") {
+    const std::int32_t size = GENERATE(32, 64, 128, 256, 1024);
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    grid_floor(scene.world, -3.0F, 40, 1.0F, paint);
+    const std::uint64_t slab = grid_floor(scene.world, -1.0F, 19, 1.0F, paint);
+    require(fbe_entity_set_position(slab, 10.0F, -1.0F, 0.0F, FBE_SPACE_WORLD));
+    const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.0F, 100.0F);
+    require(fbe_light_set_intensity(lamp, 300.0F));
+    require(fbe_light_set_shadows(lamp, true));
+    require(fbe_light_set_shadow_size(lamp, size));
+    require(fbe_camera_set_range(scene.camera, 0.1F, 50.0F));
+    require(fbe_entity_set_position(scene.camera, 3.0F, -2.0F, 0.0F, FBE_SPACE_WORLD));
+    turn_about(scene.camera, 1.0F, 0.0F, 0.0F, -std::numbers::pi_v<float> / 2.0F);
+    CHECK(reds_above(scene.drawn(), 20) == 0);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a point light's face filters on past its edge", "[gpu][scene]") {
+    // A strip only the next face looks straight at, and a pixel of the floor just inside this one,
+    // whose filter reaches it. With no offset, so it's the filter that does.
+    const auto seen = [](bool strip) {
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        grid_floor(scene.world, -3.0F, 40, 1.0F, paint);
+        if (strip) {
+            const std::uint64_t over = grid_floor(scene.world, -1.0F, 1, 1.0F, paint);
+            require(fbe_entity_set_scale(over, 0.2F, 1.0F, 40.0F, FBE_SPACE_WORLD));
+            require(fbe_entity_set_position(over, 1.1F, -1.0F, 0.0F, FBE_SPACE_WORLD));
+        }
+        const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.0F, 100.0F);
+        require(fbe_light_set_intensity(lamp, 15.0F));
+        require(fbe_light_set_shadows(lamp, true));
+        require(fbe_light_set_shadow_size(lamp, 32));
+        require(fbe_light_set_shadow_bias(lamp, 0.02F, 0.0F));
+        require(fbe_camera_set_range(scene.camera, 0.1F, 50.0F));
+        require(fbe_entity_set_position(scene.camera, 2.97F, -2.0F, 0.0F, FBE_SPACE_WORLD));
+        turn_about(scene.camera, 1.0F, 0.0F, 0.0F, -std::numbers::pi_v<float> / 2.0F);
+        const rgba_t found = middle(scene.drawn());
+        fbe_material_release(paint);
+        return found[0];
+    };
+    CHECK(seen(true) + 8 < seen(false));
+}
+
+TEST_CASE("with no normal offset, a surface's held off itself by its depth bias", "[gpu][scene]") {
+    const auto wrong_with = [](float depth_bias) {
+        const scene_t scene;
+        const std::uint64_t paint = fbe_material_create();
+        const std::uint64_t slope = wall(scene.world, -10.0F, 30.0F, paint);
+        turn_about(slope, 0.0F, 1.0F, 0.0F, 0.35F);
+        const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+        require(fbe_light_set_shadows(sun, true));
+        require(fbe_light_set_shadow_bias(sun, depth_bias, 0.0F));
+        const fbe::golden::frame_t frame = scene.drawn();
+        const int lit = srgb(std::cos(0.35F));
+        int wrong = 0;
+        for (std::uint32_t y = 0; y < frame.height; ++y) {
+            for (std::uint32_t x = 0; x < frame.width; ++x) {
+                wrong += std::abs(pixel(frame, x, y)[0] - lit) > 3 ? 1 : 0;
+            }
+        }
+        fbe_material_release(paint);
+        return wrong;
+    };
+    CHECK(wrong_with(0.2F) == 0);
+    CHECK(wrong_with(0.0F) > 100);
+}
+
+TEST_CASE("a spot light's wide cone is shadowed right to its side", "[gpu][scene]") {
+    const float x = GENERATE(5.0F, 10.0F, 16.0F, 25.0F);
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -1.0F, 200.0F, paint);
+    wall(scene.world, -0.5F, 30.0F, paint);
+    const std::uint64_t spot = light(scene.world, FBE_LIGHT_SPOT, 0.0F, 0.0F, 0.0F, 100.0F);
+    require(fbe_light_set_intensity(spot, 100000.0F));
+    require(fbe_light_set_cone(spot, 1.4F, std::numbers::pi_v<float> / 2.0F));
+    require(fbe_light_set_shadows(spot, true));
+    require(fbe_camera_set_range(scene.camera, 0.05F, 50.0F));
+    require(fbe_entity_set_position(scene.camera, x, 0.0F, -0.7F, FBE_SPACE_WORLD));
+    INFO("at x " << x);
+    CHECK(middle(scene.drawn())[0] == 0);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a directional light's shadow doesn't crawl as the camera moves, anywhere",
+          "[gpu][scene]") {
+    const float origin = GENERATE(0.0F, 2000.0F, 20000.0F);
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    require(fbe_camera_set_projection(scene.camera, FBE_PROJECTION_ORTHOGRAPHIC));
+    require(fbe_camera_set_orthographic_height(scene.camera, 8.0F));
+    require(fbe_camera_set_range(scene.camera, 1.0F, 200.0F));
+    wall(scene.world, origin - 60.0F, 30.0F, paint);
+    const std::uint64_t sun = sun_from_right(scene.world);
+    require(fbe_light_set_cascades(sun, 1));
+    require(fbe_light_set_shadow_distance(sun, 150.0F));
+    require(fbe_light_set_shadow_size(sun, 256));
+    const std::uint64_t block = cube(scene.world, 5.13F, 0.37F, origin - 55.0F, paint);
+    turn_about(block, 0.3F, 0.6F, 0.74162F, 0.5F);
+    require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, origin, FBE_SPACE_WORLD));
+    const fbe::golden::frame_t first = scene.drawn();
+    std::size_t most = 0;
+    for (int step = 1; step <= 30; ++step) {
+        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F,
+                                        origin - (static_cast<float>(step) * 0.37F),
+                                        FBE_SPACE_WORLD));
+        most = std::max(most, fbe::golden::compare(first, scene.drawn(), 2).pixels);
+    }
+    CHECK(most == 0);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("the shadow atlas stays at its largest, then goes", "[gpu][scene]") {
+    const scene_t scene;
+    const shadowed_wall_t over(scene);
+    const std::uint64_t other = fbe_world_create();
+    const std::uint64_t other_target =
+        fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 1, true);
+    const std::uint64_t other_camera = fbe_entity_create(other, 0, FBE_ENTITY_CAMERA);
+    require(fbe_camera_set_target(other_camera, other_target));
+    const std::uint64_t other_sun = sun_from_right(other);
+    require(fbe_light_set_shadow_size(other_sun, 128));
+    for (int frame = 0; frame < 4; ++frame) {
+        require(fbe_render_world(scene.world, 1.0F));
+        CHECK(fbe::render::shadow_atlas_side() == 2048);
+        require(fbe_render_world(other, 1.0F));
+        CHECK(fbe::render::shadow_atlas_side() == 2048);
+        fbe_frame_flip(false);
+    }
+    // Nothing wants so much of it now, then nothing wants it.
+    require(fbe_light_set_shadow_size(over.sun, 128));
+    for (int frame = 0; frame < 130; ++frame) {
+        require(fbe_render_world(scene.world, 1.0F));
+        fbe_frame_flip(false);
+    }
+    CHECK(fbe::render::shadow_atlas_side() == 256);
+    require(fbe_light_set_shadows(over.sun, false));
+    for (int frame = 0; frame < 130; ++frame) {
+        require(fbe_render_world(scene.world, 1.0F));
+        fbe_frame_flip(false);
+    }
+    CHECK(fbe::render::shadow_atlas_side() == 0);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_world_free(other);
+    std::array<std::uint64_t, 16> some{};
+    while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+    fbe_texture_release(other_target);
+}
+
+TEST_CASE("the shadow atlas keeps to its limit, and a smaller one for no memory", "[gpu][scene]") {
+    const scene_t scene;
+    const shadowed_wall_t over(scene);
+    SECTION("its limit") {
+        CHECK(fbe_render_shadow_atlas_limit() == 4096);
+        CHECK_FALSE(fbe_render_set_shadow_atlas_limit(128));
+        CHECK_FALSE(fbe_render_set_shadow_atlas_limit(16384));
+        require(fbe_render_set_shadow_atlas_limit(1024));
+        CHECK(over.shadowed());
+        CHECK(fbe::render::shadow_atlas_side() == 1024);
+        require(fbe_render_set_shadow_atlas_limit(4096));
+    }
+    SECTION("the GPU refusing it") {
+        require(fbe_gpu_started() || fbe_gpu_start());
+        fbe::render::refuse_shadow_atlas(1024);
+        CHECK(over.shadowed());
+        CHECK(fbe::render::shadow_atlas_side() == 512);
+    }
+    SECTION("the GPU refusing all of it: no shadows, and the camera draws") {
+        require(fbe_gpu_started() || fbe_gpu_start());
+        fbe::render::refuse_shadow_atlas(256);
+        CHECK_FALSE(over.shadowed());
+        CHECK(fbe::render::shadow_atlas_side() == 0);
+    }
+}
+
+TEST_CASE("R32F is the engine's", "[gpu][scene]") {
+    const scene_t scene;
+    CHECK(fbe_texture_create(2, 2, fbe::texture::shadow_format, false) == 0);
+    CHECK(fbe_texture_create_target(2, 2, fbe::texture::shadow_format, 1, false) == 0);
+}
+
+TEST_CASE("a light too small to have a tile has no shadow, and no bad matrix", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -4.0F, 20.0F, paint);
+    SECTION("a range of next to nothing") {
+        const float range = GENERATE(0.0001F, 0.01F, 0.02F);
+        const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.0F, range);
+        require(fbe_light_set_shadows(lamp, true));
+        CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    }
+    SECTION("a cone of nothing") {
+        const std::uint64_t spot = light(scene.world, FBE_LIGHT_SPOT, 0.0F, 0.0F, 0.0F, 20.0F);
+        require(fbe_light_set_cone(spot, 0.0F, 0.0F));
+        require(fbe_light_set_shadows(spot, true));
+        (void)scene.drawn();
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a camera with no pixels draws no shadows", "[gpu][scene]") {
+    const scene_t scene;
+    const shadowed_wall_t over(scene);
+    require(fbe_camera_set_viewport(scene.camera, 1000.0F, 1000.0F, 64.0F, 64.0F));
+    (void)scene.drawn();
+    CHECK(fbe::render::shadow_atlas_side() == 0);
 }
 
 namespace {
@@ -2332,4 +3899,631 @@ TEST_CASE("culling sums targets, adds surfaces, goes every way, and takes skinne
     CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
     fbe_skin_release(skinned.skin);
     fbe_material_release(red);
+}
+
+namespace {
+
+/// A sky of a texture of `width` by `height` of bytes from a function of the column and row.
+template <typename Color>
+std::uint64_t sky_of(std::int32_t width, std::int32_t height, Color&& color) {
+    const std::uint64_t texture = fbe_texture_create(width, height, FBE_TEXTURE_RGBA8, false);
+    require(texture != 0);
+    std::vector<std::uint8_t> pixels;
+    for (std::int32_t y = 0; y < height; ++y) {
+        for (std::int32_t x = 0; x < width; ++x) {
+            const rgba_t one = color(x, y);
+            pixels.insert(pixels.end(), one.begin(), one.end());
+        }
+    }
+    require(fbe_texture_write(texture, 0, 0, width, height, pixels.data(), width * 4));
+    return texture;
+}
+
+/// A mirror facing +Y turned to face +Z, at a depth.
+std::uint64_t wall_mirror(std::uint64_t world, float depth) {
+    const std::uint64_t mirror = fbe_entity_create(world, 0, FBE_ENTITY_MIRROR);
+    turn_about(mirror, 1.0F, 0.0F, 0.0F, std::numbers::pi_v<float> / 2.0F);
+    require(fbe_entity_set_position(mirror, 0.0F, 0.0F, depth, FBE_SPACE_WORLD));
+    return mirror;
+}
+
+std::uint64_t floor_mirror(std::uint64_t world, float height) {
+    const std::uint64_t mirror = fbe_entity_create(world, 0, FBE_ENTITY_MIRROR);
+    require(fbe_entity_set_position(mirror, 0.0F, height, 0.0F, FBE_SPACE_WORLD));
+    return mirror;
+}
+
+/// The atmosphere's one scattering, worked out here in doubles, as the sky shader has it.
+struct reference_sky_t {
+    static constexpr double ground = 6360000.0;
+    static constexpr double air = 6420000.0;
+    static constexpr double rayleigh_height = 7994.0;
+    static constexpr double mie_height = 1200.0;
+    static constexpr double mie_scatter = 21e-6;
+    static constexpr double mie_shape = 0.76;
+
+    struct way_t {
+        double x;
+        double y;
+        double z;
+    };
+
+    static double dot(way_t a, way_t b) {
+        return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
+    }
+
+    static double leaving(way_t place, way_t way) {
+        const double along = dot(place, way);
+        const double left = (along * along) - dot(place, place) + (air * air);
+        return left > 0.0 ? -along + std::sqrt(left) : 0.0;
+    }
+
+    static double to_ground(way_t place, way_t way) {
+        const double along = dot(place, way);
+        const double left = (along * along) - dot(place, place) + (ground * ground);
+        return along < 0.0 && left > 0.0 ? -along - std::sqrt(left) : -1.0;
+    }
+
+    /// Red, green, or blue, by its Rayleigh scattering, seen along a way with the sun along
+    /// another.
+    static double seen(way_t way, way_t sun, double rayleigh_scatter,
+                       const std::array<double, 3>& all_rayleigh, std::size_t channel,
+                       double brightness) {
+        const way_t eye{ .x = 0.0, .y = ground + 1000.0, .z = 0.0 };
+        const double hit = to_ground(eye, way);
+        const double travel = hit >= 0.0 ? hit : leaving(eye, way);
+        const double length = travel / 8.0;
+        double rayleigh = 0.0;
+        double mie = 0.0;
+        double rayleigh_depth = 0.0;
+        double mie_depth = 0.0;
+        for (int i = 0; i < 8; ++i) {
+            const double t = (static_cast<double>(i) + 0.5) * length;
+            const double at_x = eye.x + (way.x * t);
+            const double at_y = eye.y + (way.y * t);
+            const double at_z = eye.z + (way.z * t);
+            const way_t place{ .x = at_x, .y = at_y, .z = at_z };
+            const double height = std::sqrt(dot(place, place)) - ground;
+            const double thin_r = std::exp(-std::max(height, 0.0) / rayleigh_height) * length;
+            const double thin_m = std::exp(-std::max(height, 0.0) / mie_height) * length;
+            rayleigh_depth += thin_r;
+            mie_depth += thin_m;
+            if (to_ground(place, sun) >= 0.0) {
+                continue;
+            }
+            const double sun_length = leaving(place, sun) / 4.0;
+            double sun_r = 0.0;
+            double sun_m = 0.0;
+            for (int j = 0; j < 4; ++j) {
+                const double s = (static_cast<double>(j) + 0.5) * sun_length;
+                const double up_x = place.x + (sun.x * s);
+                const double up_y = place.y + (sun.y * s);
+                const double up_z = place.z + (sun.z * s);
+                const way_t up{ .x = up_x, .y = up_y, .z = up_z };
+                const double above = std::sqrt(dot(up, up)) - ground;
+                sun_r += std::exp(-std::max(above, 0.0) / rayleigh_height) * sun_length;
+                sun_m += std::exp(-std::max(above, 0.0) / mie_height) * sun_length;
+            }
+            const double tau = (all_rayleigh[channel] * (rayleigh_depth + sun_r)) +
+                               (mie_scatter * 1.1 * (mie_depth + sun_m));
+            const double through = std::exp(-tau);
+            rayleigh += through * thin_r;
+            mie += through * thin_m;
+        }
+        const double cosine = dot(way, sun);
+        const double pi = std::numbers::pi;
+        const double phase_r = 3.0 / (16.0 * pi) * (1.0 + (cosine * cosine));
+        const double g = mie_shape;
+        const double phase_m =
+            3.0 / (8.0 * pi) * ((1.0 - (g * g)) * (1.0 + (cosine * cosine))) /
+            ((2.0 + (g * g)) * std::pow(std::max(1.0 + (g * g) - (2.0 * g * cosine), 0.0001), 1.5));
+        return ((rayleigh * rayleigh_scatter * phase_r) + (mie * mie_scatter * phase_m)) *
+               brightness;
+    }
+
+    /// What's stored for all three channels.
+    static std::array<std::uint8_t, 3> stored_for(way_t way, way_t sun, double brightness) {
+        const std::array<double, 3> all{ 5.8e-6, 13.5e-6, 33.1e-6 };
+        std::array<std::uint8_t, 3> found{};
+        for (std::size_t channel = 0; channel < 3; ++channel) {
+            found[channel] =
+                srgb(static_cast<float>(seen(way, sun, all[channel], all, channel, brightness)));
+        }
+        return found;
+    }
+};
+
+} // namespace
+
+TEST_CASE("each mirror's reflection has the sky only through its own plane", "[gpu][scene]") {
+    const bool floor_first = GENERATE(true, false);
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t texture =
+        sky_texture({ 255, 0, 0, 255 }, { 255, 0, 0, 255 }, { 0, 0, 255, 255 }, { 0, 0, 255, 255 });
+    require(fbe_world_set_sky_texture(scene.world, texture, 1.0F));
+    if (floor_first) {
+        floor_mirror(scene.world, -1.0F);
+        wall_mirror(scene.world, -10.0F);
+    } else {
+        wall_mirror(scene.world, -10.0F);
+        floor_mirror(scene.world, -1.0F);
+    }
+    const fbe::golden::frame_t frame = scene.drawn();
+    // Well down: the floor's first, and looks back up. Just down: the wall's first, whose
+    // reflection goes on down. Up: the wall's, on up.
+    CHECK(near(pixel(frame, 64, 112), { 255, 0, 0 }));
+    CHECK(near(pixel(frame, 64, 70), { 0, 0, 255 }));
+    CHECK(near(pixel(frame, 64, 16), { 255, 0, 0 }));
+    fbe_texture_release(texture);
+}
+
+TEST_CASE("a sky's sun is where it's shading from, whatever's above it", "[gpu][scene]") {
+    const auto seen_with = [](auto&& place_it) {
+        const scene_t scene;
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+        place_it(scene, sun);
+        require(fbe_world_set_sky_atmosphere(scene.world, sun, 20.0F));
+        return scene.drawn();
+    };
+    const auto parented = [](float x, float y, float z, float pitch_by) {
+        return [=](const scene_t& scene, std::uint64_t sun) {
+            const std::uint64_t above = fbe_entity_create(scene.world, 0, FBE_ENTITY_PIVOT);
+            require(fbe_entity_set_parent(sun, above, false));
+            pitch(sun, pitch_by);
+            require(fbe_entity_set_scale(above, x, y, z, FBE_SPACE_WORLD));
+        };
+    };
+    const auto alone = [](float pitch_by) {
+        return [=](const scene_t& /*scene*/, std::uint64_t sun) { pitch(sun, pitch_by); };
+    };
+    SECTION("scaled to nothing") {
+        const fbe::golden::frame_t expected = seen_with(alone(0.4F));
+        const fbe::golden::frame_t found = seen_with(parented(0.0F, 0.0F, 0.0F, 0.4F));
+        CHECK(fbe::golden::compare(expected, found, 2).pixels == 0);
+    }
+    SECTION("scaled through itself") {
+        const fbe::golden::frame_t expected = seen_with(alone(0.0F));
+        const fbe::golden::frame_t found = seen_with(parented(1.0F, 1.0F, -1.0F, 0.0F));
+        CHECK(fbe::golden::compare(expected, found, 2).pixels == 0);
+    }
+}
+
+TEST_CASE("a sky's texture stops at its top and bottom, however it's set to wrap", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t texture = sky_of(4, 2, [](std::int32_t /*x*/, std::int32_t y) {
+        return y == 0 ? rgba_t{ 255, 255, 255, 255 } : rgba_t{ 0, 0, 0, 255 };
+    });
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_LINEAR));
+    require(fbe_texture_set_wrap(texture, FBE_TEXTURE_REPEAT, FBE_TEXTURE_REPEAT));
+    require(fbe_world_set_sky_texture(scene.world, texture, 1.0F));
+    pitch(scene.camera, std::numbers::pi_v<float> / 2.0F);
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    fbe_texture_release(texture);
+}
+
+TEST_CASE("a sky stays as it was when its sun's freed", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    pitch(sun, std::numbers::pi_v<float> + 0.1F);
+    require(fbe_world_set_sky_atmosphere(scene.world, sun, 20.0F));
+    pitch(scene.camera, 0.1F);
+    const fbe::golden::frame_t low = scene.drawn();
+    require(fbe_entity_free(sun));
+    CHECK(fbe::golden::compare(low, scene.drawn(), 1).pixels == 0);
+    // Which isn't noon's.
+    require(fbe_world_set_sky_atmosphere(scene.world, 0, 20.0F));
+    CHECK(fbe::golden::compare(low, scene.drawn(), 8).pixels > 100);
+}
+
+TEST_CASE("a sky's columns are at the angles they should be", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t texture = sky_of(256, 2, [](std::int32_t x, std::int32_t /*y*/) {
+        const auto column = static_cast<std::uint8_t>(x);
+        return rgba_t{ column, column, column, 255 };
+    });
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_NEAREST));
+    require(fbe_world_set_sky_texture(scene.world, texture, 1.0F));
+    const fbe::golden::frame_t frame = scene.drawn();
+    const float half = std::tan(1.0471976F / 2.0F);
+    for (const std::uint32_t x : { 4U, 20U, 40U, 60U, 70U, 90U, 110U, 124U }) {
+        const float across = (((static_cast<float>(x) + 0.5F) / 64.0F) - 1.0F) * half;
+        const float column =
+            (0.5F + (std::atan(across) / (2.0F * std::numbers::pi_v<float>))) * 256.0F;
+        INFO("at " << x);
+        CHECK(std::fabs(static_cast<float>(pixel(frame, x, 1)[0]) - column) <= 1.5F);
+    }
+    fbe_texture_release(texture);
+}
+
+TEST_CASE("a reflection's sky is the other way around", "[gpu][scene]") {
+    const scene_t scene;
+    const rgba_t red{ 255, 0, 0, 255 };
+    const rgba_t green{ 0, 255, 0, 255 };
+    const rgba_t blue{ 0, 0, 255, 255 };
+    const rgba_t white{ 255, 255, 255, 255 };
+    const std::uint64_t texture = sky_texture(red, green, blue, white);
+    require(fbe_world_set_sky_texture(scene.world, texture, 1.0F));
+    wall_mirror(scene.world, -10.0F);
+    const fbe::golden::frame_t frame = scene.drawn();
+    // Off a wall ahead, what's to the right goes on right, behind: the texture's far right, up or
+    // down; so the left's its far left.
+    CHECK(near(pixel(frame, 96, 32), { 0, 255, 0 }));
+    CHECK(near(pixel(frame, 32, 32), { 255, 0, 0 }));
+    CHECK(near(pixel(frame, 96, 96), { 255, 255, 255 }));
+    CHECK(near(pixel(frame, 32, 96), { 0, 0, 255 }));
+    fbe_texture_release(texture);
+}
+
+TEST_CASE("the atmosphere is what its formula says", "[gpu][scene]") {
+    const scene_t scene;
+    using way_t = reference_sky_t::way_t;
+    const auto check_at = [&](float looking, way_t sun, double brightness, int within = 3) {
+        pitch(scene.camera, looking);
+        const rgba_t found = middle(scene.drawn());
+        // The middle pixel's own way: half a pixel right of the view's axis, and half a pixel down.
+        const double off = 0.5 / 64.0 * std::tan(1.0471976 / 2.0);
+        const auto angle = static_cast<double>(looking);
+        const double up = std::cos(angle) * -off;
+        const double ahead = std::sin(angle) * off;
+        const double y = std::sin(angle) + up;
+        const double z = -std::cos(angle) + ahead;
+        const double long_as = std::sqrt((off * off) + (y * y) + (z * z));
+        const way_t way{ .x = off / long_as, .y = y / long_as, .z = z / long_as };
+        const std::array<std::uint8_t, 3> expected =
+            reference_sky_t::stored_for(way, sun, brightness);
+        INFO(static_cast<int>(found[0])
+             << "," << static_cast<int>(found[1]) << "," << static_cast<int>(found[2])
+             << " against " << static_cast<int>(expected[0]) << "," << static_cast<int>(expected[1])
+             << "," << static_cast<int>(expected[2]));
+        CHECK(near(found, expected, within));
+    };
+    const way_t noon{ .x = 0.0, .y = 1.0, .z = 0.0 };
+    SECTION("zenith, and near the horizon, at noon") {
+        require(fbe_world_set_sky_atmosphere(scene.world, 0, 20.0F));
+        check_at(std::numbers::pi_v<float> / 2.0F, noon, 20.0);
+        check_at(0.05F, noon, 20.0);
+        check_at(-0.2F, noon, 20.0);
+    }
+    SECTION("a brightness scales it") {
+        require(fbe_world_set_sky_atmosphere(scene.world, 0, 5.0F));
+        check_at(std::numbers::pi_v<float> / 2.0F, noon, 5.0);
+    }
+    SECTION("a sun just under the horizon") {
+        const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+        // Toward the sun is its +Z: straight ahead and down, a little.
+        pitch(sun, std::numbers::pi_v<float> - 0.05F);
+        require(fbe_world_set_sky_atmosphere(scene.world, sun, 20.0F));
+        const way_t under{ .x = 0.0, .y = -std::sin(0.05), .z = -std::cos(0.05) };
+        check_at(0.3F, under, 20.0);
+        check_at(1.2F, under, 20.0);
+    }
+    SECTION("a sun barely under the horizon, looked at, and bright: the ground's in its way") {
+        const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+        pitch(sun, std::numbers::pi_v<float> - 0.01F);
+        require(fbe_world_set_sky_atmosphere(scene.world, sun, 2000.0F));
+        const way_t under{ .x = 0.0, .y = -std::sin(0.01), .z = -std::cos(0.01) };
+        // So bright, what a float loses this close to the horizon shows.
+        check_at(0.02F, under, 2000.0, 8);
+        check_at(-0.05F, under, 2000.0, 8);
+    }
+}
+
+TEST_CASE("the same seed draws the same particles, and another doesn't", "[gpu][scene]") {
+    const auto seen = [](std::uint32_t seed) {
+        const scene_t scene;
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -8.0F, 0.1F);
+        require(fbe_particles_set_seed(emitter, seed));
+        require(fbe_particles_set_motion(emitter, 0.5F, 2.0F, 1.2F, 3.0F));
+        require(fbe_particles_set_roll(emitter, 1.0F));
+        require(fbe_particles_set_rate(emitter, 40.0F));
+        require(fbe_world_step_particles(scene.world, 0.5F));
+        require(fbe_world_step_particles(scene.world, 0.5F));
+        return scene.drawn();
+    };
+    const fbe::golden::frame_t first = seen(7);
+    CHECK(fbe::golden::compare(first, seen(7), 0).pixels == 0);
+    CHECK(fbe::golden::compare(first, seen(8), 0).pixels > 20);
+}
+
+TEST_CASE("a little drag goes as no drag does", "[gpu][scene]") {
+    const auto at_with = [](float drag) {
+        const scene_t scene;
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -8.0F, 0.3F);
+        const float half = std::numbers::pi_v<float> / 4.0F;
+        require(fbe_entity_set_rotation(emitter, 0.0F, -std::sin(half), 0.0F, std::cos(half),
+                                        FBE_SPACE_WORLD));
+        require(fbe_particles_set_motion(emitter, 2.0F, 2.0F, 0.0F, 0.0F));
+        require(fbe_particles_set_forces(emitter, 0.0F, -2.0F, 0.0F, drag));
+        require(fbe_particles_burst(emitter, 1));
+        require(fbe_world_step_particles(scene.world, 1.0F));
+        return lit_middle(scene.drawn());
+    };
+    const std::array<float, 2> none = at_with(0.0F);
+    for (const float drag : { 1e-3F, 1e-6F, 1e-8F }) {
+        const std::array<float, 2> found = at_with(drag);
+        INFO("drag " << drag);
+        CHECK(std::fabs(found[0] - none[0]) < 1.0F);
+        CHECK(std::fabs(found[1] - none[1]) < 1.0F);
+    }
+}
+
+TEST_CASE("particles that held off go as one staging write", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -8.0F, 0.1F);
+    require(fbe_particles_set_capacity(emitter, 256));
+    require(fbe_particles_set_life(emitter, 1.0F, 512.0F));
+    require(fbe_world_step_particles(scene.world, 256.0F));
+    require(fbe_particles_burst(emitter, 256));
+    (void)scene.drawn();
+    // At half the clock's way, those dead are cleared, scattered all through its slots.
+    require(fbe_world_step_particles(scene.world, 257.0F));
+    const std::int32_t alive = fbe_particles_alive(emitter);
+    CHECK(alive > 8);
+    CHECK(alive < 248);
+    const std::uint64_t before = fbe::gpu::staging_buffers_made();
+    (void)scene.drawn();
+    CHECK(fbe::gpu::staging_buffers_made() - before == 1);
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+TEST_CASE("a particle's turned as it's told, no more", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+    const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
+    const std::uint64_t texture =
+        sky_texture({ 255, 0, 0, 255 }, { 255, 0, 0, 255 }, { 0, 255, 0, 255 }, { 0, 255, 0, 255 });
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_NEAREST));
+    require(fbe_material_set_texture(paint, 0, texture));
+    require(fbe_particles_set_material(emitter, paint));
+    require(fbe_particles_set_capacity(emitter, 1));
+    require(fbe_particles_burst(emitter, 1));
+    const fbe::golden::frame_t still = scene.drawn();
+    CHECK(near(pixel(still, 64, 48), { 255, 0, 0 }));
+    CHECK(near(pixel(still, 64, 80), { 0, 255, 0 }));
+    // Now any way at all: over enough of them, one's the wrong way up.
+    require(fbe_particles_set_roll(emitter, std::numbers::pi_v<float>));
+    bool upside_down = false;
+    for (int i = 0; i < 16 && !upside_down; ++i) {
+        require(fbe_particles_burst(emitter, 1));
+        upside_down = near(pixel(scene.drawn(), 64, 48), { 0, 255, 0 });
+    }
+    CHECK(upside_down);
+    fbe_texture_release(texture);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("an emitter draws out of view once its long lives are over", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, 50.0F, 0.1F);
+    require(fbe_particles_set_forces(emitter, 0.0F, -0.1F, 0.0F, 0.0F));
+    require(fbe_particles_set_life(emitter, 512.0F, 512.0F));
+    require(fbe_particles_burst(emitter, 1));
+    std::array<fbe_draw_t, 2> draws{};
+    const auto count = [&] {
+        return fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 2);
+    };
+    // Falling for all that time, it could be anywhere.
+    CHECK(count() == 1);
+    require(fbe_particles_set_life(emitter, 1.0F, 1.0F));
+    require(fbe_particles_set_rate(emitter, 2.0F));
+    require(fbe_world_step_particles(scene.world, 100.0F));
+    CHECK(count() == 1);
+    require(fbe_world_step_particles(scene.world, 500.0F));
+    require(fbe_world_step_particles(scene.world, 2.0F));
+    CHECK(count() == 0);
+}
+
+TEST_CASE("a burst between steps shows while they're drawn between", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+    require(fbe_world_capture(scene.world));
+    require(fbe_world_step_particles(scene.world, 1.0F));
+    require(fbe_particles_burst(emitter, 1));
+    CHECK(reds_above(scene.drawn(0.5F), 0) != 0);
+    CHECK(reds_above(scene.drawn(0.0F), 0) != 0);
+    CHECK(reds_above(scene.drawn(1.0F), 0) != 0);
+    // With its capture long gone, it's still born: it's never dead on arrival.
+    require(fbe_world_step_particles(scene.world, 100.0F));
+    const std::int32_t before = fbe_particles_alive(emitter);
+    require(fbe_particles_burst(emitter, 1));
+    CHECK(fbe_particles_alive(emitter) == before + 1);
+}
+
+TEST_CASE("an emitter's in view by what it's spread to", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -10.0F, 0.5F);
+    require(fbe_particles_burst(emitter, 1));
+    require(fbe_entity_set_position(emitter, 0.0F, 0.0F, 100.0F, FBE_SPACE_WORLD));
+    CHECK(fbe_camera_entity_in_view(scene.camera, 128.0F, 128.0F, emitter) == 1);
+    fbe_aabb_t box{};
+    require(fbe_entity_bounds(emitter, &box));
+    CHECK(box.min.z < -9.0F);
+    CHECK(box.max.z > -11.0F);
+}
+
+TEST_CASE("an emitter draws as many as it's had, not as many as it holds", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+    require(fbe_particles_set_capacity(emitter, 1048576));
+    require(fbe_particles_burst(emitter, 1));
+    (void)scene.drawn();
+    fbe_gpu_counters_t counters{};
+    fbe_gpu_counters(&counters);
+    CHECK(counters.triangles == 2);
+    require(fbe_particles_burst(emitter, 3));
+    (void)scene.drawn();
+    fbe_gpu_counters(&counters);
+    CHECK(counters.triangles == 8);
+}
+
+TEST_CASE("a clock's turn is the same to what's drawn between steps", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, -4.0F, 0.0F, -8.0F, 0.25F);
+    // Up to a tenth of a second from its turn.
+    require(fbe_world_step_particles(scene.world, 1023.9F));
+    require(fbe_world_capture(scene.world));
+    // Two born as the step goes across it, a quarter of the way and three quarters: at -2 and 2.
+    require(fbe_particles_set_rate(emitter, 10.0F));
+    require(fbe_entity_set_position(emitter, 4.0F, 0.0F, -8.0F, FBE_SPACE_WORLD));
+    require(fbe_world_step_particles(scene.world, 0.2F));
+    const auto lit_at = [&](const fbe::golden::frame_t& frame, float x) {
+        return pixel(frame, static_cast<std::uint32_t>(64.0F + (x * pixels_at_1 / 8.0F)), 64)[0] !=
+               0;
+    };
+    const fbe::golden::frame_t early = scene.drawn(0.5F);
+    CHECK(lit_at(early, -2.0F));
+    CHECK_FALSE(lit_at(early, 2.0F));
+    const fbe::golden::frame_t late = scene.drawn(0.9F);
+    CHECK(lit_at(late, -2.0F));
+    CHECK(lit_at(late, 2.0F));
+}
+
+TEST_CASE("an emitter's box goes where its particles can", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    SECTION("falling into view from out of it") {
+        const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 40.0F, -8.0F, 1.0F);
+        require(fbe_particles_set_forces(emitter, 0.0F, -20.0F, 0.0F, 0.0F));
+        require(fbe_particles_burst(emitter, 1));
+        CHECK(reds_above(scene.drawn(), 0) == 0);
+        require(fbe_world_step_particles(scene.world, 2.0F));
+        CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    }
+    SECTION("in its last ninth of a life, its emitter gone from there") {
+        const std::uint64_t emitter = still_emitter(scene.world, 0.0F, 0.0F, -4.0F, 1.0F);
+        require(fbe_particles_set_life(emitter, 9.0F, 9.0F));
+        // At the end of its first slice, the last born in it.
+        require(fbe_world_step_particles(scene.world, 0.99F));
+        require(fbe_particles_burst(emitter, 1));
+        require(fbe_entity_set_position(emitter, 0.0F, 0.0F, 500.0F, FBE_SPACE_WORLD));
+        for (int i = 0; i < 17; ++i) {
+            require(fbe_world_step_particles(scene.world, 0.5F));
+        }
+        CHECK(fbe_particles_alive(emitter) == 1);
+        CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+        // And none after, once what it's left has gone by.
+        require(fbe_world_step_particles(scene.world, 12.0F));
+        std::array<fbe_draw_t, 2> draws{};
+        CHECK(fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 2) == 0);
+    }
+}
+
+TEST_CASE("a decal's parented to what it's on, keeping its place, it follows", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t white = unlit(1.0F, 1.0F, 1.0F);
+    const std::uint64_t receiver = wall(scene.world, -8.0F, 2.0F, white);
+    fbe_mat4_t box{};
+    box.m[0] = 0.5F;
+    box.m[5] = 0.5F;
+    box.m[10] = 0.5F;
+    box.m[14] = -8.0F;
+    box.m[15] = 1.0F;
+    const std::uint64_t geometry = fbe_geometry_decal(scene.world, &box, 0.01F, 1.3F);
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t mesh = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+    require(fbe_mesh_set_geometry(mesh, geometry));
+    require(fbe_mesh_set_material(mesh, red));
+    fbe_geometry_release(geometry);
+    require(fbe_entity_set_parent(mesh, receiver, true));
+    CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+    require(fbe_entity_set_position(receiver, 1.5F, 0.0F, -8.0F, FBE_SPACE_WORLD));
+    const fbe::golden::frame_t moved = scene.drawn();
+    CHECK(near(middle(moved), { 255, 255, 255 }));
+    CHECK(near(pixel_of(moved, pixel_at(scene.camera, 1.5F, 0.0F, -8.0F)), { 255, 0, 0 }));
+    fbe_material_release(white);
+    fbe_material_release(red);
+}
+
+TEST_CASE("a decal stays on a bumpy terrain from however far off", "[gpu][scene]") {
+    const float distance = GENERATE(30.0F, 80.0F, 200.0F, 500.0F);
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    require(fbe_camera_set_range(scene.camera, 1.0F, 2000.0F));
+    const std::uint64_t white = unlit(1.0F, 1.0F, 1.0F);
+    const std::uint64_t terrain = fbe_entity_create(scene.world, 0, FBE_ENTITY_TERRAIN);
+    const std::int32_t size = 512;
+    require(fbe_terrain_set_size(terrain, size));
+    std::vector<float> heights;
+    std::uint32_t state = 99;
+    for (std::int32_t z = 0; z <= size; ++z) {
+        for (std::int32_t x = 0; x <= size; ++x) {
+            state ^= state << 13U;
+            state ^= state >> 17U;
+            state ^= state << 5U;
+            heights.push_back(0.5F * static_cast<float>(state >> 8U) / 16777216.0F);
+        }
+    }
+    require(fbe_terrain_set_heights(terrain, heights.data(),
+                                    static_cast<std::int32_t>(heights.size())));
+    require(fbe_terrain_set_material(terrain, white));
+    // Over the middle, facing up, 40 across.
+    fbe_mat4_t box{};
+    box.m[0] = 20.0F;
+    box.m[6] = -20.0F;
+    box.m[9] = 20.0F;
+    box.m[12] = 256.0F;
+    box.m[14] = 256.0F;
+    box.m[15] = 1.0F;
+    const std::uint64_t geometry = fbe_geometry_decal(scene.world, &box, 0.01F, 1.309F);
+    REQUIRE(geometry != 0);
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F, 0.99F);
+    require(fbe_material_set_blend(red, FBE_BLEND_ALPHA));
+    const std::uint64_t mesh = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+    require(fbe_mesh_set_geometry(mesh, geometry));
+    require(fbe_mesh_set_material(mesh, red));
+    require(fbe_entity_set_position(scene.camera, 256.0F, distance * 0.7F,
+                                    256.0F + (distance * 0.7F), FBE_SPACE_WORLD));
+    require(fbe_entity_point_at(scene.camera, 256.0F, 0.0F, 256.0F, 0.0F));
+    const auto reds_in = [](const fbe::golden::frame_t& frame) {
+        int count = 0;
+        for (std::size_t at = 0; at < frame.rgba.size(); at += 4) {
+            count += frame.rgba[at] > 200 && frame.rgba[at + 1] < 60 ? 1 : 0;
+        }
+        return count;
+    };
+    const int shown = reds_in(scene.drawn());
+    // Depth left out, it's all there: how many pixels it has.
+    require(fbe_material_set_order(red, 1));
+    const int all = reds_in(scene.drawn());
+    CHECK(all > 0);
+    CHECK(static_cast<float>(shown) >= static_cast<float>(all) * 0.98F);
+    fbe_geometry_release(geometry);
+    fbe_material_release(white);
+    fbe_material_release(red);
+}
+
+TEST_CASE("each particle sets off at a speed between its least and most", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t emitter = still_emitter(scene.world, -3.0F, 0.0F, -12.0F, 0.15F);
+    require(fbe_particles_set_capacity(emitter, 256));
+    const float half = std::numbers::pi_v<float> / 4.0F;
+    require(fbe_entity_set_rotation(emitter, 0.0F, -std::sin(half), 0.0F, std::cos(half),
+                                    FBE_SPACE_WORLD));
+    require(fbe_particles_set_motion(emitter, 2.0F, 6.0F, 0.0F, 0.0F));
+    require(fbe_particles_burst(emitter, 256));
+    require(fbe_world_step_particles(scene.world, 1.0F));
+    const fbe::golden::frame_t frame = scene.drawn();
+    // All on one line, from -1 to 3: spread along all of it, and none off it.
+    const auto column_of = [](float x) {
+        return static_cast<int>(64.0F + (x * pixels_at_1 / 12.0F));
+    };
+    int least = frame_size;
+    int most = -1;
+    for (int x = 0; x < frame_size; ++x) {
+        if (pixel(frame, static_cast<std::uint32_t>(x), 64)[0] != 0) {
+            least = std::min(least, x);
+            most = std::max(most, x);
+        }
+    }
+    CHECK(std::abs(least - column_of(-1.0F)) <= 3);
+    CHECK(std::abs(most - column_of(3.0F)) <= 3);
 }

@@ -8,6 +8,13 @@ Import fbengine
 
 Window.SetHeadless(True)
 Local which = Process.Arguments()[0]
+// A glTF of a material and no more, for what panics of a Model's.
+Function Model(): Model Throws IOError
+    Assets.MountFiles("res://panic-model",
+                      {"a.gltf": "{{\"asset\":{{\"version\":\"2.0\"}},\"materials\":[{{\"name\":\"m\"}}]}}".Bytes})
+    Return Try Assets.Load<Model>("res://panic-model/a.gltf")
+End Function
+
 Select which
     Case "files-empty"
         Assets.MountFiles("res://mf", {"": "x".Bytes})
@@ -25,5 +32,38 @@ Select which
         Assets.MountFiles("data://mf", {"a.txt": "x".Bytes})
     Case "folder-place"
         Assets.MountFolder("res://a/../..", Path("."))
+    Case "model-material-high"
+        Local model = Try Model()
+        model.MaterialName(1)
+    Case "model-material-low"
+        Local model = Try Model()
+        model.MaterialName(-1)
+    Case "model-texture-high"
+        Local model = Try Model()
+        model.TextureName(0)
+    Case "model-texture-low"
+        Local model = Try Model()
+        model.TextureName(-1)
+    Case "model-texture-of-high"
+        Local model = Try Model()
+        model.TextureNameOf(1)
+    Case "model-texture-of-low"
+        Local model = Try Model()
+        model.TextureNameOf(-1)
+    Case "model-map-high"
+        Local model = Try Model()
+        model.TextureOf(1)
+    Case "model-freed"
+        Local model = Try Model()
+        model.Free()
+        model.MaterialName(0)
+    Case "model-freed-texture"
+        Local model = Try Model()
+        model.Free()
+        model.TextureName(0)
+    Case "model-freed-texture-of"
+        Local model = Try Model()
+        model.Free()
+        model.TextureNameOf(0)
 End Select
 Print("{which} didn't panic")

@@ -2,16 +2,26 @@
 // sources, whose operator new fails the allocation it's told to: nothing a call throws gets out of
 // it, a call that fails says "out of memory", and what it was called on works after.
 
+#include "core/engine.hpp"
 #include "fbengine.h"
+#include "gpu/buffer.hpp"
+#include "gpu/vulkan.hpp"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <new>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
+
+#ifdef __linux__
+#include <dlfcn.h>
+#endif
 
 #ifdef __linux__
 #include <dlfcn.h>
@@ -467,5 +477,85 @@ TEST_CASE("drawing what runs out of memory says so, and the next frame draws", "
             REQUIRE(fbe_morph_set_weights(rig.mesh, one.data(), 1));
         });
     }
+    // When a run asks for the layers, they're what said there were none.
+    // NOLINTNEXTLINE(clang-diagnostic-deprecated-declarations): only read here.
+    const char* wanted = std::getenv("FBE_GPU_VALIDATION");
+    if (wanted != nullptr && std::string_view(wanted) == "1") {
+        CHECK(fbe_gpu_validating());
+    }
     fbe_gpu_stop();
+    CHECK(fbe_gpu_validation_errors() == 0);
+}
+
+// Growing a string is inside libstdc++, which keeps its own operator new from this test's, so what
+// fails here is what the same path takes: more than a string holds.
+TEST_CASE("saying what failed, when it can't be kept, says so and doesn't throw") {
+    const std::string kept;
+    const std::string_view too_long(kept.data(), kept.max_size() + 1);
+    CHECK_FALSE(fbe::fail(too_long));
+    CHECK(std::string_view(fbe_error()) == "out of memory");
+    CHECK_FALSE(fbe::fail("said"));
+    CHECK(std::string_view(fbe_error()) == "said");
+}
+
+namespace {
+
+/// A buffer's made, written, and let go of with each allocation of it failing in turn, in a frame
+/// that's begun, which is all of what could leave one with nothing to free it.
+void sweep_buffer(const std::function<bool()>& call) {
+    for (long which = 0; which < 2000; ++which) {
+        allocated = 0;
+        failed = false;
+        failing = which;
+        bool done = false;
+        bool threw = false;
+        try {
+            done = call();
+        } catch (const std::bad_alloc&) {
+            threw = true;
+        }
+        failing = -1;
+        if (!failed) {
+            CHECK(done);
+            return;
+        }
+        CHECK((threw || !done));
+    }
+    FAIL("a call never got to the end of its allocations");
+}
+
+} // namespace
+
+TEST_CASE("a buffer's made and written out of memory leave nothing to find at the end", "[gpu]") {
+    REQUIRE(fbe_window_set_headless(true));
+    REQUIRE(fbe_gpu_start());
+    const std::array<std::byte, 16> bytes{};
+    const auto usage = static_cast<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    std::vector<fbe::gpu::buffer_t> made;
+    // Room, so what's made isn't lost by this test's keeping it failing.
+    made.reserve(2000);
+    // In a frame of its own, begun inside the call, as a buffer's first of a frame is.
+    fbe_frame_flip(false);
+    sweep_buffer([&] {
+        const fbe::gpu::buffer_t buffer = fbe::gpu::make_buffer(16, usage);
+        made.push_back(buffer);
+        return buffer.buffer != VK_NULL_HANDLE;
+    });
+    fbe_frame_flip(false);
+    for (fbe::gpu::buffer_t& buffer : made) {
+        fbe::gpu::free_buffer(buffer);
+    }
+    fbe::gpu::buffer_t written = fbe::gpu::make_buffer(16, usage);
+    sweep_buffer([&] { return fbe::gpu::write_buffer(written, 0, bytes); });
+    fbe_frame_flip(false);
+    sweep_buffer([&] { return !fbe::gpu::read_buffer(written).empty(); });
+    // More than a ring holds, so it grows, from one that's there, which goes once the frame's done.
+    REQUIRE(fbe::gpu::frame_memory(16, 16).data != nullptr);
+    sweep_buffer([&] {
+        return fbe::gpu::frame_memory(std::size_t{ 64 } * 1024 * 1024, 16).data != nullptr;
+    });
+    fbe_frame_flip(false);
+    fbe::gpu::free_buffer(written);
+    fbe_gpu_stop();
+    CHECK(fbe_gpu_validation_errors() == 0);
 }

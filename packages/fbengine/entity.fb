@@ -10,6 +10,7 @@ Import "./camera"
 Import "./light"
 Import "./mesh"
 Import "./mirror"
+Import "./particles"
 Import "./plane"
 Import "./sprite"
 Import "./terrain"
@@ -34,6 +35,8 @@ Public Enum EntityKind
     MIRROR = 6
     /// A Terrain, a grid of heights.
     TERRAIN = 7
+    /// A Particles, which spawns them.
+    PARTICLES = 8
 End Enum
 
 // One wrapper for each live entity, by its handle's slot.
@@ -321,6 +324,8 @@ Package Function EntityOf(handle: UInt64): Entity?
             Return Mirror(handle)
         Case FBE_ENTITY_TERRAIN
             Return Terrain(handle)
+        Case FBE_ENTITY_PARTICLES
+            Return Particles(handle)
     End Select
     Panic("an entity of kind {kind} has no wrapper")
 End Function

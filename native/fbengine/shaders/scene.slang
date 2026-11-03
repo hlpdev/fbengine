@@ -44,6 +44,8 @@ static const uint clustersUp = 9;
 static const uint clustersDeep = 24;
 // How tight a highlight is, as fixed-function hardware's was.
 static const float highlightPower = 100.0;
+// How many times over a surface turned from a light is moved further off it, at most.
+static const float mostTurned = 3.0;
 // How short a morphed normal is, squared, before it's taken to be no normal at all.
 static const float smallestNormalSquared = 1e-12;
 
@@ -67,6 +69,32 @@ struct Joints
     float weights[4];
 };
 
+// A particle, as its emitter wrote it when it was born.
+struct Particle
+{
+    float position[3];
+    float birth;
+    float velocity[3];
+    float life;
+    float roll;
+    float spin;
+};
+
+// An emitter: its particles, gravity, drag, their colors and half-sizes from birth to death, its clock
+// now, and when that starts again.
+struct Emitter
+{
+    Particle* records;
+    float gravity[3];
+    float drag;
+    float colorStart[4];
+    float colorEnd[4];
+    float sizeStart;
+    float sizeEnd;
+    float now;
+    float wrap;
+};
+
 // What a morph target moves a vertex by, and its normal.
 struct TargetVertex
 {
@@ -83,7 +111,7 @@ struct DrawnTarget
 
 // A draw: its matrix to the camera's view, what turns its normals there, its color and alpha, its
 // vertices, its joints and palette if it's skinned, its morph targets and which it's drawn with if
-// it's morphed, its material's index, its own lights, how many matrices its palette has, 0 if it
+// it's morphed, its emitter if it's particles, its material's index, its own lights, how many matrices its palette has, 0 if it
 // isn't skinned, and how many targets it's drawn with, and how many vertices each has.
 struct Draw
 {
@@ -95,6 +123,7 @@ struct Draw
     float4x4* palette;
     TargetVertex* targets;
     DrawnTarget* drawnTargets;
+    Emitter* emitter;
     uint material;
     uint lightFirst;
     uint lightCount;
@@ -173,13 +202,32 @@ struct Light
     float range;
     float innerCosine;
     float outerCosine;
-    uint spare;
+    int shadow;
 };
 
 struct Cluster
 {
     uint first;
     uint count;
+};
+
+// A shadow's tile: from the view to the light's clip space; its texels in the atlas, from and to; its
+// biases, in depth, world units, and along the normal, in world units at a distance of 1, or a level
+// light's anywhere; what a world unit's depth comes to in the tile's; where a cascade ends; whether
+// it's level, a directional light's; a texel of the atlas in UV; and, of a cascade, how many of its
+// light's come after it, and whether it's a face of six around its light.
+struct Shadow
+{
+    float4x4 fromView;
+    float4 rect;
+    float bias;
+    float normalBias;
+    float depthPer;
+    float split;
+    uint level;
+    float inverseSide;
+    uint left;
+    uint face;
 };
 
 // A camera's frame: how its view goes to clip space; its viewport in the target's pixels; its fog;
@@ -206,6 +254,10 @@ struct Camera
     Cluster* clusters;
     uint* clusterLights;
     uint* drawLights;
+    Shadow* shadows;
+    uint shadowAtlas;
+    uint shadowSpare;
+    float4 worldRows[3];
 };
 
 struct Push
@@ -263,7 +315,7 @@ float3 whole(float3 normal)
 // highlight adds. Per pixel, as glTF's KHR_lights_punctual has it, which ends at its range, as
 // clusters need; per vertex, as fixed-function hardware's did, whole within its range and falling as
 // range over distance past it, with no end, in encoded values.
-void addLight(Light light, float3 place, float3 normal, float3 eye, float shininess,
+void addLight(Light light, float3 place, float3 normal, float3 eye, float shininess, float reached,
               inout float3 diffuse, inout float3 highlight)
 {
     float3 way;
@@ -298,7 +350,7 @@ void addLight(Light light, float3 place, float3 normal, float3 eye, float shinin
     }
     const float facing = saturate(dot(normal, way));
     const float3 linear = float3(light.color[0], light.color[1], light.color[2]);
-    const float3 color = (shading == shadingVertex ? toEncoded(linear) : linear) * falling;
+    const float3 color = (shading == shadingVertex ? toEncoded(linear) : linear) * falling * reached;
     diffuse += color * facing;
     if (shininess > 0.0 && facing > 0.0)
     {
@@ -408,11 +460,201 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
         for (uint i = 0; i < draw.lightCount; ++i)
         {
             addLight(camera.lights[camera.drawLights[draw.lightFirst + i]], place.xyz, unit, eye,
-                     shininess, diffuse, highlight);
+                     shininess, 1.0, diffuse, highlight);
         }
         corner.lit = saturate(diffuse + highlight);
     }
     return corner;
+}
+
+// A quad's two triangles, from its corners' bits: x, then y.
+static const uint quadCorners[6] = { 0, 1, 3, 0, 3, 2 };
+
+// A particle's quad, each corner from its vertex's number, wherever its formula has it now from its
+// birth, facing the camera. One dead, or not yet born, has all its corners at one point, which draws
+// nothing. It has no normal, as a sprite hasn't: only ambient light lights it.
+[shader("vertex")]
+Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+{
+    Camera* camera = push.camera;
+    const Draw draw = camera.draws[instance];
+    const Emitter emitter = draw.emitter[0];
+    const Particle particle = emitter.records[index / 6];
+    Corner corner;
+    corner.position = float4(0.0, 0.0, 0.0, 1.0);
+    corner.place = float3(0.0, 0.0, 0.0);
+    corner.normal = float3(0.0, 0.0, 0.0);
+    corner.uv0 = float2(0.0, 0.0);
+    corner.uv1 = float2(0.0, 0.0);
+    corner.color = float4(0.0, 0.0, 0.0, 0.0);
+    corner.lit = float3(1.0, 1.0, 1.0);
+    corner.draw = instance;
+    float age = emitter.now - particle.birth;
+    if (age < 0.0)
+    {
+        age += emitter.wrap;
+    }
+    if (age >= particle.life)
+    {
+        return corner;
+    }
+    const float3 born = float3(particle.position[0], particle.position[1], particle.position[2]);
+    const float3 going = float3(particle.velocity[0], particle.velocity[1], particle.velocity[2]);
+    const float3 gravity = float3(emitter.gravity[0], emitter.gravity[1], emitter.gravity[2]);
+    // What drag leaves of its velocity, added up to now, and of what gravity's given it. With little
+    // of it, the exact forms lose themselves in rounding: the first of their series, which with none
+    // is what no drag has.
+    const float dragged = emitter.drag * age;
+    float left = age * (1.0 - dragged * (0.5 - dragged / 6.0));
+    float fell = age * age * (0.5 - dragged * (1.0 / 6.0 - dragged / 24.0));
+    if (dragged >= 0.01)
+    {
+        left = (1.0 - exp(-dragged)) / emitter.drag;
+        fell = (age - left) / emitter.drag;
+    }
+    const float3 place = born + going * left + gravity * fell;
+    const float part = age / particle.life;
+    const float size = lerp(emitter.sizeStart, emitter.sizeEnd, part);
+    const float turned = particle.roll + particle.spin * age;
+    const float along = cos(turned);
+    const float across = sin(turned);
+    const uint bits = quadCorners[index % 6];
+    const float2 unit = float2(float(bits & 1) * 2.0 - 1.0, float(bits >> 1) * 2.0 - 1.0);
+    const float3 offset = float3(unit.x * along - unit.y * across, unit.x * across + unit.y * along, 0.0);
+    const float3 seen = mul(draw.toView, float4(place, 1.0)).xyz + offset * size;
+    corner.position = mul(camera.projection, float4(seen, 1.0));
+    corner.place = seen;
+    corner.uv0 = float2(unit.x * 0.5 + 0.5, 0.5 - unit.y * 0.5);
+    corner.uv1 = corner.uv0;
+    corner.color = lerp(float4(emitter.colorStart[0], emitter.colorStart[1], emitter.colorStart[2],
+                               emitter.colorStart[3]),
+                        float4(emitter.colorEnd[0], emitter.colorEnd[1], emitter.colorEnd[2],
+                               emitter.colorEnd[3]),
+                        part);
+    if (fixedLook())
+    {
+        corner.color.rgb = toEncoded(corner.color.rgb);
+    }
+    if (shading == shadingVertex)
+    {
+        corner.lit = saturate(toEncoded(camera.ambient));
+    }
+    return corner;
+}
+
+// How much of a light reaches a place past what casts its shadow, from its tile: 0 to 1, a bilinear
+// filter over the 4 by 4 texels around it, in the tile, each one compared.
+float shadowIn(Camera* camera, Shadow shadow, float3 place, float3 normal, float facing)
+{
+    // A texel's size is its tile's depth's, perspective's; a surface turned from the light goes
+    // through more of the tile's depth across one, so it's moved further off.
+    const float depth = shadow.level != 0 ? 1.0 : max(mul(shadow.fromView, float4(place, 1.0)).w, 0.0);
+    const float turned = 1.0 + min(sqrt(max(1.0 - facing * facing, 0.0)) / max(facing, 0.0001), mostTurned);
+    const float offset = shadow.normalBias * depth * turned;
+    const float4 clip = mul(shadow.fromView, float4(place + normal * offset, 1.0));
+    if (clip.w <= 0.0)
+    {
+        return 1.0;
+    }
+    const float3 seen = clip.xyz / clip.w;
+    // A face's tile is all there is that way, so what's moved off its edge has the edge's texels.
+    const bool outside = abs(seen.x) > 1.0 || abs(seen.y) > 1.0;
+    if (seen.z < 0.0 || (outside && shadow.face == 0))
+    {
+        return 1.0;
+    }
+    const float size = shadow.rect.z - shadow.rect.x + 1.0;
+    const float2 inTile = clamp(seen.xy, float2(-1.0, -1.0), float2(1.0, 1.0));
+    const float2 at = shadow.rect.xy + (inTile * 0.5 + float2(0.5, 0.5)) * size - float2(0.5, 0.5);
+    const float2 base = floor(at);
+    const float2 part = at - base;
+    const float bias = shadow.level != 0 ? shadow.bias * shadow.depthPer
+                                         : shadow.bias * shadow.depthPer / max(clip.w * clip.w, 0.000001);
+    float reached = 0.0;
+    for (int y = -1; y <= 2; ++y)
+    {
+        const float across = y == -1 ? 1.0 - part.y : (y == 2 ? part.y : 1.0);
+        for (int x = -1; x <= 2; ++x)
+        {
+            const float along = x == -1 ? 1.0 - part.x : (x == 2 ? part.x : 1.0);
+            const int2 texel = clamp(int2(base) + int2(x, y), int2(shadow.rect.xy), int2(shadow.rect.zw));
+            const float nearest = loadTexel(camera.shadowAtlas, texel).r;
+            reached += nearest > seen.z + bias ? 0.0 : across * along;
+        }
+    }
+    return reached / 9.0;
+}
+
+// How much of a light reaches a place, by whichever of its tiles it's in.
+float shadowOf(Camera* camera, Light light, float3 place, float3 normal, float facing)
+{
+    if (light.shadow < 0)
+    {
+        return 1.0;
+    }
+    uint first = uint(light.shadow);
+    if (light.type == int(lightDirectional))
+    {
+        const float depth = -place.z;
+        Shadow shadow = camera.shadows[first];
+        while (depth >= shadow.split)
+        {
+            if (shadow.left == 0)
+            {
+                return 1.0;
+            }
+            first += 1;
+            shadow = camera.shadows[first];
+        }
+        return shadowIn(camera, shadow, place, normal, facing);
+    }
+    const float3 from = place - float3(light.position[0], light.position[1], light.position[2]);
+    if (camera.shadows[first].face == 0)
+    {
+        return shadowIn(camera, camera.shadows[first], place, normal, facing);
+    }
+    // Six, along the world's axes.
+    const float3 world = float3(dot(camera.worldRows[0].xyz, from), dot(camera.worldRows[1].xyz, from),
+                                dot(camera.worldRows[2].xyz, from));
+    const float3 size = abs(world);
+    uint face = world.z < 0.0 ? 5 : 4;
+    if (size.x >= size.y && size.x >= size.z)
+    {
+        face = world.x < 0.0 ? 1 : 0;
+    }
+    else if (size.y >= size.z)
+    {
+        face = world.y < 0.0 ? 3 : 2;
+    }
+    return shadowIn(camera, camera.shadows[first + face], place, normal, facing);
+}
+
+// How much of a light reaches a place, or none, without looking at its shadows, if the place is past
+// its range or cone or turned away.
+float reachedBy(Camera* camera, Light light, float3 place, float3 normal)
+{
+    if (light.shadow < 0)
+    {
+        return 1.0;
+    }
+    float3 way = -float3(light.direction[0], light.direction[1], light.direction[2]);
+    if (light.type != int(lightDirectional))
+    {
+        const float3 to = float3(light.position[0], light.position[1], light.position[2]) - place;
+        const float squared = dot(to, to);
+        if (squared >= light.range * light.range)
+        {
+            return 0.0;
+        }
+        const float3 away = squared > 0.0 ? to / sqrt(squared) : float3(0.0, 0.0, 1.0);
+        if (light.type == int(lightSpot) && dot(away, way) <= light.outerCosine)
+        {
+            return 0.0;
+        }
+        way = away;
+    }
+    const float facing = dot(normal, way);
+    return facing > 0.0 ? shadowOf(camera, light, place, normal, facing) : 0.0;
 }
 
 // What lights a pixel per pixel: the ambient light, every directional light, and its cluster's.
@@ -436,48 +678,33 @@ float3 pixelLit(Camera* camera, float2 pixel, float3 place, float3 normal, float
     const Cluster cluster = camera.clusters[column + clustersAcross * (row + clustersUp * slice)];
     for (uint i = 0; i < cluster.count; ++i)
     {
-        addLight(camera.lights[camera.clusterLights[cluster.first + i]], place, normal, eye,
-                 shininess, diffuse, highlight);
+        const Light light = camera.lights[camera.clusterLights[cluster.first + i]];
+        addLight(light, place, normal, eye, shininess, reachedBy(camera, light, place, normal), diffuse,
+                 highlight);
     }
     // The directional lights, which no cluster lists, come first in the lights.
     for (uint i = 0; i < camera.directional; ++i)
     {
-        addLight(camera.lights[i], place, normal, eye, shininess, diffuse, highlight);
+        const Light light = camera.lights[i];
+        addLight(light, place, normal, eye, shininess, reachedBy(camera, light, place, normal), diffuse,
+                 highlight);
     }
     return diffuse + highlight;
 }
 
-[shader("fragment")]
-float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
+// The alpha a draw starts with, before its layers, as its pipeline has it.
+float startingAlpha(Material material, Draw draw, float vertexAlpha)
 {
-    Camera* camera = push.camera;
-    const Draw draw = camera.draws[corner.draw];
-    const Material material = camera.materials[draw.material];
-    const bool encoded = fixedLook();
-    float4 current = material.color * draw.color;
-    if (encoded)
-    {
-        current.rgb = toEncoded(material.color.rgb) * toEncoded(draw.color.rgb);
-    }
-    if (vertexColors != 0)
-    {
-        current *= corner.color;
-    }
     if (material.noAlpha != 0)
     {
-        current.a = draw.color.a;
+        return draw.color.a;
     }
-    float3 lit = corner.lit;
-    if (!encoded)
-    {
-        float3 normal = whole(corner.normal);
-        if (twoSided != 0 && !front)
-        {
-            normal = -normal;
-        }
-        lit = pixelLit(camera, corner.position.xy, corner.place, normal, material.shininess);
-    }
-    current.rgb *= lit;
+    return material.color.a * draw.color.a * (vertexColors != 0 ? vertexAlpha : 1.0);
+}
+
+// A material's layers over a color.
+float4 overLayers(Material material, float2 uv0, float2 uv1, float4 current)
+{
     // Each layer over what's under it, the lit color first, as fixed-function stages were.
     float2 shift = float2(0.0, 0.0);
     float light = 1.0;
@@ -485,12 +712,12 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
     {
         const Layer layer = material.layers[i];
         const uint kind = (layerBlends >> (4 * i)) & 15;
-        const float2 raw = ((layerSets >> i) & 1) != 0 ? corner.uv1 : corner.uv0;
+        const float2 raw = ((layerSets >> i) & 1) != 0 ? uv1 : uv0;
         const float3 uv = float3(raw, 1.0);
         const float2 turned = float2(dot(layer.uvAcross.xyz, uv), dot(layer.uvDown.xyz, uv)) + shift;
         float4 texel = sampleTexture(layer.texture, layer.sampler, turned);
         // A map's offsets and every fixed-function color are what's stored.
-        if (layer.uvAcross.w != 0.0 && (encoded || kind == layerBump))
+        if (layer.uvAcross.w != 0.0 && (fixedLook() || kind == layerBump))
         {
             texel.rgb = toEncoded(texel.rgb);
         }
@@ -530,11 +757,43 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
         {
             current.rgb = lerp(current.rgb, color, texel.a);
         }
-        if (encoded)
+        if (fixedLook())
         {
             current.rgb = saturate(current.rgb);
         }
     }
+    return current;
+}
+
+[shader("fragment")]
+float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
+{
+    Camera* camera = push.camera;
+    const Draw draw = camera.draws[corner.draw];
+    const Material material = camera.materials[draw.material];
+    const bool encoded = fixedLook();
+    float4 current = material.color * draw.color;
+    if (encoded)
+    {
+        current.rgb = toEncoded(material.color.rgb) * toEncoded(draw.color.rgb);
+    }
+    if (vertexColors != 0)
+    {
+        current.rgb *= corner.color.rgb;
+    }
+    current.a = startingAlpha(material, draw, corner.color.a);
+    float3 lit = corner.lit;
+    if (!encoded)
+    {
+        float3 normal = whole(corner.normal);
+        if (twoSided != 0 && !front)
+        {
+            normal = -normal;
+        }
+        lit = pixelLit(camera, corner.position.xy, corner.place, normal, material.shininess);
+    }
+    current.rgb *= lit;
+    current = overLayers(material, corner.uv0, corner.uv1, current);
     if (material.noAlpha != 0)
     {
         current.a = draw.color.a;
@@ -590,4 +849,79 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
         current.a = 1.0;
     }
     return current;
+}
+
+// A shadow's tile: what's nearest the light, kept as its depth, drawn with the camera's projection the
+// light's whole matrix to clip space, and each draw's matrix its own to the world.
+struct ShadowCorner
+{
+    float4 position : SV_Position;
+    float2 uv0 : TEXCOORD0;
+    float2 uv1 : TEXCOORD1;
+    float alpha : ALPHA;
+    nointerpolation uint draw : DRAW;
+};
+
+[shader("vertex")]
+ShadowCorner shadowVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+{
+    Camera* camera = push.camera;
+    const Draw draw = camera.draws[instance];
+    const Vertex vertex = draw.vertices[index];
+    float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    for (uint i = 0; i < draw.drawnTargetCount; ++i)
+    {
+        const DrawnTarget drawn = draw.drawnTargets[i];
+        const TargetVertex moved = draw.targets[drawn.target * draw.targetVertices + index];
+        position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) * drawn.weight;
+    }
+    if (draw.jointCount != 0)
+    {
+        const Joints joints = draw.joints[index];
+        float4x4 skin = float4x4(0.0);
+        for (uint joint = 0; joint < 4; ++joint)
+        {
+            const uint which = (joints.joints[joint / 2] >> (16 * (joint % 2))) & 0xFFFF;
+            const float weight = joints.weights[joint];
+            if (which == noBone)
+            {
+                skin += float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                                 0.0, 1.0) * weight;
+            }
+            else
+            {
+                skin += draw.palette[min(which, draw.jointCount - 1)] * weight;
+            }
+        }
+        position = mul(skin, position);
+    }
+    ShadowCorner corner;
+    corner.position = mul(camera.projection, mul(draw.toView, position));
+    corner.alpha = vertex.color[3];
+    corner.uv0 = float2(vertex.uv0[0], vertex.uv0[1]);
+    corner.uv1 = float2(vertex.uv1[0], vertex.uv1[1]);
+    corner.draw = instance;
+    return corner;
+}
+
+[shader("fragment")]
+float shadowFragment(ShadowCorner corner) : SV_Target
+{
+    if (alphaTest != 0)
+    {
+        // Cut out as it's drawn, by the same alpha.
+        Camera* camera = push.camera;
+        const Draw draw = camera.draws[corner.draw];
+        const Material material = camera.materials[draw.material];
+        const float4 start = float4(1.0, 1.0, 1.0, startingAlpha(material, draw, corner.alpha));
+        const float alpha = material.noAlpha != 0
+                                ? draw.color.a
+                                : overLayers(material, corner.uv0, corner.uv1, start).a;
+        if (alpha < material.cutoff)
+        {
+            discard;
+        }
+    }
+    // Nearer than the near plane, it's held there, and still casts, by the pipeline where it can.
+    return saturate(corner.position.z);
 }

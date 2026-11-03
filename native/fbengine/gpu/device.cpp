@@ -115,10 +115,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL on_validation(VkDebugUtilsMessageSeverityFlagBits
     if (error) {
         ++validation_errors;
     }
-    // std::println needs MinGW's libstdc++exp, which the DLL doesn't link.
-    const std::string line =
-        std::format("Vulkan validation {}: {}\n", error ? "error" : "warning", data->pMessage);
-    std::fputs(line.c_str(), stderr);
+    // Nothing that can throw or allocate: this is inside the layer, holding its locks, and what's
+    // thrown through it never lets them go.
+    // NOLINTNEXTLINE(modernize-use-std-print): that allocates, and needs MinGW's libstdc++exp.
+    std::fprintf(stderr, "Vulkan validation %s: %s\n", error ? "error" : "warning", data->pMessage);
     return VK_FALSE;
 }
 
@@ -466,11 +466,13 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         .timelineSemaphore = VK_TRUE,
         .bufferDeviceAddress = VK_TRUE,
     };
-    // Anisotropic filtering, wireframes, and files' compressed textures, where the device has them.
+    // Anisotropic filtering, wireframes, depth clamping, and files' compressed textures, where the
+    // device has them.
     const VkPhysicalDeviceFeatures2 features{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         .pNext = &vulkan12,
         .features = {
+            .depthClamp = supported.depthClamp,
             .fillModeNonSolid = supported.fillModeNonSolid,
             .samplerAnisotropy = supported.samplerAnisotropy,
             .textureCompressionASTC_LDR = supported.textureCompressionASTC_LDR,
@@ -502,6 +504,7 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     volkLoadDevice(current.device);
     vkGetDeviceQueue(current.device, current.family, 0, &current.queue);
     current.wireframe = supported.fillModeNonSolid == VK_TRUE;
+    current.depth_clamp = supported.depthClamp == VK_TRUE;
     current.max_anisotropy = supported.samplerAnisotropy == VK_TRUE
                                  ? candidate.properties.limits.maxSamplerAnisotropy
                                  : 0.0F;
