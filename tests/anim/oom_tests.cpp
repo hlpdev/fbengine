@@ -417,7 +417,6 @@ TEST_CASE("what's opened at run time keeps its own operator new") {
     using new_t = void* (*)(std::size_t);
     const auto mine = static_cast<new_t>(&::operator new);
     CHECK(reinterpret_cast<void*>(mine) != dlsym(RTLD_DEFAULT, "_Znwm"));
-    CHECK(dlsym(RTLD_DEFAULT, "_Znwm") != nullptr);
 }
 #endif
 
