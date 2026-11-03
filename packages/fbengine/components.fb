@@ -1,0 +1,160 @@
+// Components: what a game puts on an entity from a scene, each a Class of its own Public Fields, known
+// by a name, described for what edits them, and made from what's saved.
+
+Import std.collections
+Import std.core
+Import std.data
+Import std.io
+Import std.os
+Import "./attributes"
+Import "./entity"
+
+// Where Components.Describe writes, if it's set, as the editor does when it runs a game's program.
+Const DESCRIBE_TO = "FBENGINE_COMPONENTS_TO"
+
+/// A Field of a kind of component.
+Public Struct ComponentField
+    /// What it's called.
+    Public Field Name: String
+    /// What it is at first, as what's saved of it is: a Bool, a number, a String, the name of an
+    /// Enum's member, or an Object of a Struct's Fields.
+    Public Field First: Value
+    /// An Enum's members' names, in order, or none.
+    Public Field Members: String[]
+    /// What its @Limits says.
+    Public Field Low: Float
+    /// What its @Limits says.
+    Public Field High: Float
+    /// What its @Limits says.
+    Public Field Above: Bool
+    /// Whether it's @ShownInDegrees.
+    Public Field Degrees: Bool
+End Struct
+
+/// A kind of component: what it's called, and what it has.
+Public Struct ComponentKind
+    /// What it's called.
+    Public Field Name: String
+    /// Its Fields, in order.
+    Public Field Fields: ComponentField[]
+End Struct
+
+// A kind of component, and how to put one on an entity from what's saved: what went wrong, or Null.
+Class Registered
+    Field kind: ComponentKind
+    Field attach: Func(Entity, Value): String?
+
+    New(kind: ComponentKind, attach: Func(Entity, Value): String?)
+        Self.kind = kind
+        Self.attach = attach
+    End New
+End Class
+
+Global registered: Registered[] = []
+
+/// Every member of an Enum, in order, as Load takes each by its number; none of anything else.
+Public Function MembersOf<E>(): E[]
+    Local all: E[] = []
+    For at = 0 To 255
+        Try
+            Local member = Try Load<E>(Value(at As Int64))
+            If !Save(member).IsString Then Return []
+            all.Add(member)
+        Catch error As ParseError
+            Break
+        End Try
+    End For
+    Return all
+End Function
+
+// What's known of `T` by its Public Fields, what they are at first as Load makes them from nothing.
+Function Described<T: Class>(name: String): ComponentKind
+    Local made: T
+    Try
+        made = Try Load<T>(Value.Object())
+    Catch error As ParseError
+        Panic("Components.Add: a {name} can't be made from nothing: {error.Message}")
+    End Try
+    Local fields: ComponentField[] = []
+    For Field f: F In T
+        Where f Has Set
+        If f.Has(Skip) Then Continue
+        Local first = Save(f.Get(made))
+        Local members: String[] = []
+        If first.IsString
+            For member In MembersOf<F>()
+                members.Add(Save(member).AsString() ?? "")
+            End For
+        End If
+        Local limits = f.Attribute(Limits) ?? Limits()
+        fields.Add(ComponentField(f.Name, first, members, limits.Low, limits.High, limits.Above,
+                                  f.Has(ShownInDegrees)))
+    End For
+    Return ComponentKind(name, fields)
+End Function
+
+/// The kinds of component a game has. A game's program adds each at its start, and Attach makes one
+/// from what's saved, as a scene loading does. So the editor, which can't run a game's code in itself,
+/// knows them, a game's small program, its components/main.fb, adds them and ends with Describe.
+///
+/// A component is a Class Load can make from nothing, each Public Field a value it can Save, what
+/// Load leaves it at being what a new one has. `@Skip` leaves a Field out; `@Limits` and
+/// `@ShownInDegrees` on a Field say what they say on a setter.
+Public Final Class Components
+    /// Adds `T` as the kind called `name`. Panics for a name that's there, or if Load can't make one
+    /// from nothing.
+    @MainThread @PanicsAtCaller
+    Public Static Method Add<T: Class>(name: String)
+        For each In registered
+            If each.kind.Name == name Then Panic("Components.Add: there's a {name} already")
+        End For
+        registered.Add(Registered(Described<T>(name),
+                                  Function(entity: Entity, values: Value): String?
+            Try
+                entity.SetData<T>(Try Load<T>(values))
+            Catch error As ParseError
+                Return error.Message
+            End Try
+            Return Null
+        End Function))
+    End Method
+
+    /// The kinds there are, in the order they were added.
+    @MainThread Public Static Method Kinds(): ComponentKind[]
+        Local kinds: ComponentKind[] = []
+        For each In registered
+            kinds.Add(each.kind)
+        End For
+        Return kinds
+    End Method
+
+    /// Lets go of every kind, as a test that added some does.
+    @MainThread Public Static Method Clear()
+        registered.Clear()
+    End Method
+
+    /// Puts a new component of the kind called `name` on `entity`, as Entity.Data gives it back, made
+    /// from `values`, what's in an Object of its Fields. Gives what went wrong: a kind there isn't, or
+    /// what can't be loaded; Null if it went well.
+    @MainThread @PanicsAtCaller
+    Public Static Method Attach(entity: Entity, name: String, values: Value): String?
+        For each In registered
+            If each.kind.Name == name Then Return each.attach(entity, values)
+        End For
+        Return "there's no kind of component called {name}"
+    End Method
+
+    /// The kinds there are as JSON, as ComponentKind[] reads back.
+    @MainThread Public Static Method Description(): String => Json.Write(Kinds())
+
+    /// Says what kinds there are, as a game's components/main.fb ends with: printed, or for the editor,
+    /// which runs it, where it asks.
+    @MainThread Public Static Method Describe() Throws IOError
+        Local to = Env.Get(DESCRIBE_TO)
+        If to != Null && to != ""
+            Try File.WriteText(Path(to), Description())
+        Else
+            Print(Description())
+        End If
+    End Method
+End Class

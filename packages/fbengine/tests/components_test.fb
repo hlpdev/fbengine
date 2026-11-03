@@ -1,0 +1,139 @@
+// Components: what's known of a kind by reflection, and one made from what's saved.
+
+Import std.collections
+Import std.core
+Import std.data
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import fbengine
+
+Enum Swing
+    INWARD
+    OUTWARD
+End Enum
+
+Class Hinge
+    @Limits(0, 10, Above: True)
+    Public Field Speed: Float = 2.5
+    Public Field Name: String = "door"
+    Public Field Open: Bool = False
+    Public Field Panels: Int = 3
+    Public Field Way: Swing = Swing.OUTWARD
+    @ShownInDegrees
+    Public Field Angle: Float = 0
+    @Skip
+    Public Field Cached: Int = 7
+    Field secret: Int = 9
+
+    Public Method Secret(): Int => secret
+End Class
+
+Class Placed
+    Public Field At: Vec3
+End Class
+
+Class NeedsSomething
+    Public Field Needed: String
+
+    Public Method OnLoaded() Throws ParseError
+        If Needed == "" Then Throw ParseError(ParseErrorKind.MISSING, "it needs something")
+    End Method
+End Class
+
+Function FieldOf(kind: ComponentKind, name: String): ComponentField
+    For field In kind.Fields
+        If field.Name == name Then Return field
+    End For
+    Panic("{kind.Name} has no {name}")
+End Function
+
+@Test
+Function AKindIsDescribedByItsPublicFields()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Hinge>("Hinge")
+    Local kind = Components.Kinds()[0]
+    Expect(kind.Name == "Hinge")
+    Local names = ""
+    For field In kind.Fields
+        names += field.Name + " "
+    End For
+    // Not what's kept to itself, nor what's @Skip.
+    Expect(names == "Speed Name Open Panels Way Angle ", names)
+    Expect(FieldOf(kind, "Speed").First.AsDouble() == 2.5)
+    Expect(FieldOf(kind, "Name").First.AsString() == "door")
+    Expect(FieldOf(kind, "Open").First.AsBool() == False)
+    Expect(FieldOf(kind, "Panels").First.AsInt() == 3)
+    Local way = FieldOf(kind, "Way")
+    Expect(way.First.AsString() == "OUTWARD")
+    Expect(way.Members.Count == 2 && way.Members[0] == "INWARD" && way.Members[1] == "OUTWARD")
+    // A String has no members, however it's saved.
+    Expect(FieldOf(kind, "Name").Members.Count == 0)
+    Local speed = FieldOf(kind, "Speed")
+    Expect(speed.Low == 0 && speed.High == 10 && speed.Above,
+           "{speed.Low} {speed.High} {speed.Above}")
+    Local panels = FieldOf(kind, "Panels")
+    Expect(panels.Low < -1000 && panels.High > 1000 && !panels.Above)
+    Expect(FieldOf(kind, "Angle").Degrees && !speed.Degrees)
+End Function
+
+@Test
+Function ItsDescriptionReadsBack() Throws IOError, ParseError
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Hinge>("Hinge")
+    Components.Add<Placed>("Placed")
+    Local kinds = Try Json.Read<ComponentKind[]>(Components.Description())
+    Expect(kinds.Count == 2 && kinds[0].Name == "Hinge" && kinds[1].Name == "Placed")
+    Expect(FieldOf(kinds[0], "Way").Members[1] == "OUTWARD")
+    Expect(FieldOf(kinds[0], "Speed").Above)
+    // A Struct is an Object of its Fields.
+    Local at = FieldOf(kinds[1], "At").First
+    Expect(at.IsObject && at["x"]?.AsDouble() == 0, "{at}")
+    // Where it's asked, it's written there.
+    Local temp = Try TempDir()
+    Local to = temp.Path / "kinds.json"
+    Env.Set("FBENGINE_COMPONENTS_TO", to.Text)
+    Defer Env.Unset("FBENGINE_COMPONENTS_TO")
+    Try Components.Describe()
+    Expect((Try File.ReadText(to)) == Components.Description())
+End Function
+
+@Test
+Function AttachMakesOneFromWhatsSaved()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Hinge>("Hinge")
+    Local pivot = Pivot()
+    Local values = Value.Object()
+    values["Speed"] = Value(7.0)
+    values["Way"] = Value("INWARD")
+    Expect(Components.Attach(pivot, "Hinge", values) == Null)
+    Local hinge = pivot.Data<Hinge>()
+    If hinge == Null Then Panic("it isn't on it")
+    Expect(hinge.Speed == 7 && hinge.Way == Swing.INWARD)
+    // What isn't saved is what a new one has, private or not.
+    Expect(hinge.Panels == 3 && hinge.Name == "door" && hinge.Secret() == 9 && hinge.Cached == 7)
+    // What it can't be says so, and leaves what's there.
+    Local bad = Value.Object()
+    bad["Way"] = Value("SIDEWAYS")
+    Local said = Components.Attach(pivot, "Hinge", bad)
+    Expect(said != Null, "it took a member there isn't")
+    Local still = pivot.Data<Hinge>()
+    Expect(still != Null && still.Speed == 7)
+    Expect(Components.Attach(pivot, "Nothing", values) ==
+           "there's no kind of component called Nothing")
+End Function
+
+@Test
+Function MembersAreAnEnumsOnly()
+    Expect(MembersOf<Swing>().Count == 2)
+    Expect(MembersOf<Float>().Count == 0)
+    Expect(MembersOf<Int>().Count == 0)
+    Expect(MembersOf<Bool>().Count == 0)
+End Function
