@@ -1202,6 +1202,17 @@ Function ARingEdgeOnTurnsByHowFarItsDragged() Throws IOError, GraphicsError
     Try Drag(editor, grab, grab + Vec2(50, 0))
     Local turned = cube.Rotation(Space.WORLD)
     Expect(Abs(turned.y) > 0.01, "it hasn't turned: {turned}")
+    // Still edge-on, it goes on as what it was taken as, the tool set from outside, as a script might.
+    Try Held(editor, grab, grab + Vec2(20, 0))
+    Local partway = cube.Rotation(Space.WORLD)
+    editor.View.Tool = HandleTool.MOVE
+    Try Simulate.MouseMotion(30, 0)
+    editor.Step()
+    Local further = cube.Rotation(Space.WORLD)
+    Expect(further != partway, "it stopped turning at {partway}")
+    Expect(cube.Position(Space.WORLD) == Vec3(0, 0, 0), "it moved: {cube.Position(Space.WORLD)}")
+    Try Letting(editor)
+    Expect(editor.Edits.UndoName() == "Turn")
     editor.Finish()
 End Function
 

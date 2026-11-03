@@ -33,6 +33,7 @@ Public Class Widget Extends Node
 
     /// Sets the name of the style its theme gives it, as "button.primary".
     @MainThread Public Method SetStyleName(name: String)
+        If name == styleName Then Return
         styleName = name
         Reflow()
     End Method
@@ -117,6 +118,12 @@ Public Class Widget Extends Node
 
     /// The pointer it took went up, at `point`, over it when `over`.
     @MainThread Public Method PointerUp(point: Vec2, over: Bool)
+    End Method
+
+    /// What it took the pointer for was called off, as a MODAL opening does: the button's still
+    /// down, and nothing's been let go of. Its PointerUp, over nothing, at first.
+    @MainThread Public Method PointerCancelled(point: Vec2)
+        PointerUp(point, False)
     End Method
 
     /// Whether a press it takes leaves the focus where it is, as a scrollbar's does, rather than

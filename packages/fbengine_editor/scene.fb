@@ -142,17 +142,25 @@ Public Final Class EditedScene
     End Method
 
     /// Puts `entity` at `place`, whatever's beside it there now, its transform under its parent as it
-    /// is, as what's before it there is what was.
+    /// is, as what's before it there is what was; if it, or what it was under, has been freed, it
+    /// stays as it is.
     Public Method PutBack(entity: Entity, place: TreePlace)
         Local parent = place.Parent
-        // Its own parent again wouldn't move it, nor anything else, so each goes out and comes back.
-        entity.SetParent(removed, False)
+        If entity.Freed() || (parent != Null && parent.Freed()) Then Return
         entity.SetParent(parent, False)
-        Local siblings = SiblingsOf(parent)
-        For i = place.Index To siblings.Count - 2
-            siblings[i].SetParent(removed, False)
-            siblings[i].SetParent(parent, False)
+        // At the top of the scene, Helpers has a place too.
+        Local all = parent != Null ? parent.Children() : Stage.Roots()
+        Local index = place.Index
+        For i = 0 Until all.Count
+            If parent == Null && RefEquals(all[i], Helpers) && i <= index Then index += 1
         End For
+        entity.SetSiblingIndex(Min(index, all.Count - 1))
+    End Method
+
+    /// Selects `entities` that are still there, in place of what's selected, in that order.
+    Public Method SelectAll(entities: Entity[])
+        selected = entities.Filter(Function(each: Entity) => !each.Freed())
+        Changed()
     End Method
 
     /// Whether `entity` is selected.
@@ -234,6 +242,8 @@ Public Final Class MadeEdit Extends Edit
         If entity == Null
             entity = make()
             made = entity
+        ElseIf entity.Freed()
+            Return
         ElseIf where != Null
             scene.PutBack(entity, where)
         End If
@@ -242,7 +252,7 @@ Public Final Class MadeEdit Extends Edit
 
     Public Override Method Undo() Throws IOError
         Local entity = made
-        If entity != Null Then place = scene.TakeOut(entity)
+        If entity != Null && !entity.Freed() Then place = scene.TakeOut(entity)
     End Method
 
     // Undone for good, nothing can put it back.
@@ -267,11 +277,11 @@ Public Final Class RenameEdit Extends Edit
     End New
 
     Public Override Method Apply() Throws IOError
-        entity.SetName(to)
+        If !entity.Freed() Then entity.SetName(to)
     End Method
 
     Public Override Method Undo() Throws IOError
-        entity.SetName(from)
+        If !entity.Freed() Then entity.SetName(from)
     End Method
 End Class
 
@@ -293,12 +303,14 @@ Public Final Class HideEdit Extends Edit
 
     Public Override Method Apply() Throws IOError
         For entity In entities
+            If entity.Freed() Then Continue
             If hiding Then entity.Hide() Else entity.Show()
         End For
     End Method
 
     Public Override Method Undo() Throws IOError
         For i = 0 To entities.Count - 1
+            If entities[i].Freed() Then Continue
             If before[i] Then entities[i].Hide() Else entities[i].Show()
         End For
     End Method
@@ -309,6 +321,7 @@ Public Final Class RemoveEdit Extends Edit
     Field scene: EditedScene
     Field entities: Entity[]
     Field places: TreePlace[] = []
+    Field selection: Entity[] = []
 
     /// `going` taken out of `from`.
     Public New(from: EditedScene, going: Entity[])
@@ -318,9 +331,10 @@ Public Final Class RemoveEdit Extends Edit
     End New
 
     Public Override Method Apply() Throws IOError
+        selection = scene.Selected()
         places = []
         For entity In entities
-            places.Add(scene.TakeOut(entity))
+            places.Add(entity.Freed() ? TreePlace(Null, 0) : scene.TakeOut(entity))
         End For
     End Method
 
@@ -336,19 +350,17 @@ Public Final Class RemoveEdit Extends Edit
         For i = entities.Count - 1 To 0 Step -1
             scene.PutBack(entities[i], places[i])
         End For
-        scene.SelectOnly(Null)
-        For entity In entities
-            scene.ToggleSelected(entity)
-        End For
+        scene.SelectAll(selection)
     End Method
 End Class
 
-/// Copies of entities, and all under them, beside them, selected in their place.
+/// Copies of entities, and all under them, last among what's beside them, selected in their place.
 Public Final Class CopyEdit Extends Edit
     Field scene: EditedScene
     Field entities: Entity[]
     Field copies: Entity[] = []
     Field places: TreePlace[] = []
+    Field selection: Entity[] = []
 
     /// Copies of `copying` in `from`.
     Public New(from: EditedScene, copying: Entity[])
@@ -369,32 +381,30 @@ Public Final Class CopyEdit Extends Edit
     Public Method Copies(): Entity[] => copies.Clone()
 
     Public Override Method Apply() Throws IOError
+        selection = scene.Selected()
         If copies.Count == 0
             For entity In entities
+                If entity.Freed() Then Continue
                 Local copy = entity.Copy(entity.Parent())
-                copy.SetName("{entity.Name()} copy")
+                Local name = entity.Name()
+                copy.SetName(name != "" ? "{name} copy" : "{entity.Kind()} copy")
                 copies.Add(copy)
             End For
         Else
-            For i = 0 To copies.Count - 1
+            // The last first, as each was taken out with those after it still there.
+            For i = copies.Count - 1 To 0 Step -1
                 scene.PutBack(copies[i], places[i])
             End For
         End If
-        scene.SelectOnly(Null)
-        For copy In copies
-            scene.ToggleSelected(copy)
-        End For
+        scene.SelectAll(copies)
     End Method
 
     Public Override Method Undo() Throws IOError
         places = []
         For copy In copies
-            places.Add(scene.TakeOut(copy))
+            places.Add(copy.Freed() ? TreePlace(Null, 0) : scene.TakeOut(copy))
         End For
-        scene.SelectOnly(Null)
-        For entity In entities
-            scene.ToggleSelected(entity)
-        End For
+        scene.SelectAll(selection)
     End Method
 End Class
 
@@ -417,22 +427,30 @@ Public Final Class ReparentEdit Extends Edit
     Public Override Method Apply() Throws IOError
         places = []
         locals = []
+        Local under = target
         For entity In entities
+            If entity.Freed() || (under != Null && under.Freed())
+                places.Add(TreePlace(Null, 0))
+                locals.Add(LocalPlace(Vec3(0, 0, 0), Quat.Identity, Vec3(1, 1, 1)))
+                Continue
+            End If
             places.Add(scene.PlaceOf(entity))
             locals.Add(LocalPlace.Of(entity))
-            entity.SetParent(target, True)
+            entity.SetParent(under, True)
         End For
     End Method
 
     Public Override Method Undo() Throws IOError
         For i = entities.Count - 1 To 0 Step -1
+            Local parent = places[i].Parent
+            If entities[i].Freed() || (parent != Null && parent.Freed()) Then Continue
             scene.PutBack(entities[i], places[i])
             locals[i].PutOn(entities[i])
         End For
     End Method
 End Class
 
-/// Where an entity is under its parent, exactly, as moving it and back would round it.
+/// Where an entity is under its parent, as going through the world and back would round it.
 Public Struct LocalPlace
     Public Field Position: Vec3
     Public Field Rotation: Quat
@@ -500,6 +518,8 @@ Public Final Class TransformEdit Extends Edit
     End Method
 
     Public Override Method IsNothing(): Bool => nothing
+
+    Public Override Method ChangesTree(): Bool => False
 End Class
 
 /// Where an entity is in the world, how it's turned, and its own scale.

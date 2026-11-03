@@ -30,6 +30,10 @@ Public Class Edit
     /// once it's merged. False at first.
     Public Method IsNothing(): Bool => False
 
+    /// Whether it changes what a tree of the scene shows: which there are, their names, or where
+    /// they are in it.
+    Public Method ChangesTree(): Bool => True
+
     /// The History's let go of it, for good, `applied` as it is now: it won't be run again, so what
     /// only it could put back can go. Nothing at first.
     Public Method Forgotten(applied: Bool)
@@ -69,6 +73,13 @@ Class GroupEdit Extends Edit
     End Method
 
     Method Empty(): Bool => edits.Count == 0
+
+    Public Override Method ChangesTree(): Bool
+        For edit In edits
+            If edit.ChangesTree() Then Return True
+        End For
+        Return False
+    End Method
 
     Public Override Method Forgotten(applied: Bool)
         For i = edits.Count - 1 To 0 Step -1
@@ -111,6 +122,7 @@ Public Function EditOf(name: String, applying: Func(), undoing: Func()): Edit =>
 /// The edits made, in order, which undo and redo go back and on through, and whether it's as it was
 /// when last saved.
 Public Final Class History
+    Field treeChanged: Bool = True
     Field done: Edit[] = []
     Field undone: Edit[] = []
     // How many of `done` were there when it was saved, -1 when no undoing gets back there.
@@ -205,7 +217,7 @@ Public Final Class History
         done.RemoveAt(done.Count - 1)
         undone.Add(edit)
         sealed = True
-        Changed()
+        Changed(edit)
         Return True
     End Method
 
@@ -220,7 +232,7 @@ Public Final Class History
         If !Ran(edit, True) Then Return False
         undone.RemoveAt(undone.Count - 1)
         done.Add(edit)
-        Changed()
+        Changed(edit)
         Return True
     End Method
 
@@ -256,6 +268,9 @@ Public Final Class History
         Local open = group
         Return saved != done.Count || (open != Null && !open.Empty())
     End Method
+
+    /// Whether what OnChanged last said changed what a tree of the scene shows.
+    Public Method TreeChanged(): Bool => treeChanged
 
     /// Forgets every edit, as what they were of has gone: nothing's modified.
     @PanicsAtCaller
@@ -310,7 +325,7 @@ Public Final Class History
             done.RemoveAt(0)
             If saved >= 0 Then saved -= 1
         End If
-        Changed()
+        Changed(edit)
     End Method
 
     // Lets go of all of `edits`, the last made first.
@@ -321,7 +336,8 @@ Public Final Class History
         edits.Clear()
     End Method
 
-    Method Changed()
+    Method Changed(edit: Edit? = Null)
+        treeChanged = edit == Null || edit.ChangesTree()
         Local handler = changed
         If handler != Null Then handler()
     End Method
