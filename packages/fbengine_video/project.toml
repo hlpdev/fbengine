@@ -8,6 +8,12 @@ readme = "README.md"
 repository = "https://github.com/hlpdev/fbengine"
 keywords = ["engine", "game", "video", "mpeg", "cutscene"]
 
+# Its frames go into fbengine's textures, and its sound through fbengine_audio. By path for now, as
+# fbengine_audio's are.
+[dependencies]
+fbengine = { path = "../fbengine" }
+fbengine_audio = { path = "../fbengine_audio" }
+
 # fbengine_video's own DLL, native/fbengine_video, built for each target into native/<target>/,
 # with pl_mpeg in it.
 [native]

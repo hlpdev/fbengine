@@ -364,6 +364,10 @@ if(FBENGINE_FB_TESTS)
                    "${PROJECT_SOURCE_DIR}/examples/door_and_trigger")
   set_tests_properties(examples.door_and_trigger PROPERTIES PASS_REGULAR_EXPRESSION
                        "\nthe door swung open: True\r?\nthe player walked into the room: True, and is in it: True\r?\n$")
+  add_test(NAME examples.video_player
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/video_player")
+  set_tests_properties(examples.video_player PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+                       PASS_REGULAR_EXPRESSION "\nit played to its end: True, in [0-9]+ frames shown\r?\n$")
   add_test(NAME examples.crate_on_a_lift
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/crate_on_a_lift")
@@ -399,15 +403,15 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(physics.panics.with-a-world PROPERTIES TIMEOUT 60)
 endif()
 
-# A program that makes a world and ends at once, as a game that panics as it starts does, run 4 at a
-# time again and again on Jolt's most threads: each run ends, rather than its DLL's end waiting for
+# A program that makes a world and ends at once, as a game that panics as it starts does, run a few
+# at a time, ends.cmake says how many, again and again on Jolt's most threads: each run ends, rather than its DLL's end waiting for
 # ever on a lock of a thread stopped as it started.
 add_executable(fbengine_physics_ends physics/ends.cpp)
 target_link_libraries(fbengine_physics_ends PRIVATE fbengine_physics_native)
 fbengine_set_warnings(fbengine_physics_ends)
 add_test(NAME physics.ends
-         COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_physics_ends>" -DAT_ONCE=4
-                 -DRUNS=100 "-DDLLS=$<TARGET_FILE_DIR:fbengine_physics_native>"
+         COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_physics_ends>"
+                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_physics_native>"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/ends.cmake")
 set_tests_properties(physics.ends PROPERTIES TIMEOUT 600)
 # The job system, built into the tests from its own source, since the DLL exports only its C API.

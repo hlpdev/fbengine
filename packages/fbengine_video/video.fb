@@ -4,9 +4,16 @@
 
 Import std.core
 Import std.ffi
-Import std.image
+From std.image Import Image
 Import std.io
+Import std.math
+Import fbengine
+Import fbengine_audio
 Import "./c/fbe_video"
+
+// How far the clock and the sound's mix can be apart, in seconds, before the sound's taken to have
+// stalled, as a device lost does, and is put where the clock is.
+Const mostDrift: Float64 = 0.25
 
 /// A video that can't be opened: a file that can't be read, bytes that aren't a video of a format
 /// fbengine_video decodes, an MPEG-1 program stream, or one whose sound is longer than a WAV
@@ -18,7 +25,9 @@ End Class
 /// audio layer II. It's decoded on a thread of its own, a few frames ahead of where it plays, into
 /// frames in memory, and plays by a clock the game moves on with Update, by the time each frame of
 /// the game took, showing each of its frames as it falls due; Seek puts the clock anywhere. Its
-/// Sound is a WAV a game plays beside it. Free, or dropping it, frees it.
+/// sound plays with it through fbengine_audio while the audio's started, and its clock keeps to
+/// what's been mixed of that, or of a Sound of the game's that SetSound gives it. Its Texture has
+/// its frame, for a game to draw, as Draw and DrawFitted do. Free, or dropping it, frees it.
 ///
 /// # Examples
 ///
@@ -39,6 +48,22 @@ Public Final Class Video
     Field handle: UInt64
     ReadOnly Field width: Int32
     ReadOnly Field height: Int32
+    // Its own sound, made of its WAV once it's played; a Sound of the game's it plays in place of
+    // that; and the Channel either plays on.
+    Field own: Sound? = Null
+    Field given: Sound? = Null
+    Field channel: Channel
+    Field volume: Float32 = 1
+    Field bus: Bus? = Null
+    // Whether its sound's been started since it was last playing, and how far it was mixed to.
+    Field soundStarted: Bool = False
+    Field mixed: Float64 = -1
+    // Its texture, once it's asked for, the image it's written through, and FramesShown at the
+    // last write; and what draws it.
+    Field texture: Texture? = Null
+    Field through: Image? = Null
+    Field written: Int64 = -1
+    Field sprite: Sprite2D? = Null
 
     Private New(handle: UInt64)
         Self.handle = handle
@@ -73,6 +98,14 @@ Public Final Class Video
     /// already does nothing.
     @MainThread Public Method Free()
         If handle == 0 Then Return
+        channel.Stop()
+        Local made = texture
+        If made != Null Then made.Free()
+        texture = Null
+        sprite = Null
+        Local ownSound = own
+        If ownSound != Null Then ownSound.Free()
+        own = Null
         fbe_video_free(handle)
         handle = 0
     End Method
@@ -113,9 +146,62 @@ Public Final Class Video
     @MainThread Public Method SoundChannels(): Int32 =>
         fbe_video_sound_channels(Live("Video.SoundChannels"))
 
+    /// Plays `sound`, a Sound of the game's, as a Stream of music, with the video, in place of its
+    /// own, and keeps the video's clock to it, or goes back to its own with Null.
+    @MainThread Public Method SetSound(sound: Sound?)
+        Local video = Live("Video.SetSound")
+        channel.Stop()
+        given = sound
+        If fbe_video_playing(video) Then SoundFromClock()
+    End Method
+
+    /// The Sound SetSound gave it, or Null for its own.
+    @MainThread Public Method GivenSound(): Sound?
+        Live("Video.GivenSound")
+        Return given
+    End Method
+
+    /// The Channel its sound plays on, finished when none is playing, as when it's paused for long
+    /// enough to have been sought, or the audio isn't started.
+    @MainThread Public Method SoundChannel(): Channel
+        Live("Video.SoundChannel")
+        Return channel
+    End Method
+
+    /// Sets the volume its sound plays at, 0 or more, times the Sound's own: 0 for none, so a game
+    /// can play Sound's WAV itself.
+    @MainThread Public Method SetVolume(volume: Float32)
+        Live("Video.SetVolume")
+        If !(volume >= 0) Then Panic("Video.SetVolume: a volume is 0 or more, not {volume}")
+        Self.volume = volume
+        Local playing = Played()
+        If playing != Null Then channel.SetVolume(playing.Volume() * volume)
+    End Method
+
+    /// The volume its sound plays at, 1 at first.
+    @MainThread Public Method Volume(): Float32
+        Live("Video.Volume")
+        Return volume
+    End Method
+
+    /// Moves its sound into `bus`, or as the Sound says with Null.
+    @MainThread Public Method SetBus(bus: Bus?)
+        Live("Video.SetBus")
+        Self.bus = bus
+        Local playing = Played()
+        If playing != Null Then channel.SetBus(bus ?? playing.Bus())
+    End Method
+
+    /// The Bus SetBus put its sound in.
+    @MainThread Public Method Bus(): Bus?
+        Live("Video.Bus")
+        Return bus
+    End Method
+
     /// The video's whole sound, as a WAV file of 32-bit float samples at its rate, whose first
-    /// sample is at the video's time 0, its first frame's, however its stream was cut, for a game
-    /// to play beside it: silent until a sound that starts later starts, and where its stream has
+    /// sample is at the video's time 0, its first frame's, however its stream was cut, as it plays
+    /// with the video, or as a game plays it itself, with SetVolume(0): silent until a sound that
+    /// starts later starts, and where its stream has
     /// a gap, though a time in it more than the sound's own length and the video's, or 5 seconds
     /// if that's more, or 10 minutes if that's less, out is taken to be wrong. It's decoded once, as
     /// the video's opened. A video without sound has none to give.
@@ -130,14 +216,17 @@ Public Final Class Video
         Return wav.ToArray()
     End Method
 
-    /// Plays the video from where its clock is, or from its start if it's ended.
+    /// Plays the video from where its clock is, or from its start if it's ended, with its sound.
     @MainThread Public Method Play()
         fbe_video_play(Live("Video.Play"))
+        SoundFromClock()
+        WriteTexture()
     End Method
 
-    /// Pauses the video where its clock is.
+    /// Pauses the video where its clock is, and its sound.
     @MainThread Public Method Pause()
         fbe_video_pause(Live("Video.Pause"))
+        channel.Pause()
     End Method
 
     /// Whether the video's playing: not paused, and not ended.
@@ -155,15 +244,44 @@ Public Final Class Video
     /// showing the frame due then, and waiting for its thread to decode it if it's behind; more
     /// than 31 years at once panics, as a mistake, like a time in nanoseconds. A video that isn't
     /// looping ends as its clock passes its last frame; a looping one's clock is as exact however
-    /// long it plays.
+    /// long it plays. While its sound plays, the clock goes to what's been mixed of it instead,
+    /// holding back if it's ahead, so sound and pictures stay together however frames take; if the
+    /// mix stalls for more than a quarter of a second, as a device lost does, the clock goes on by
+    /// `seconds` and the sound's put where it is when the mix goes on. Its Texture has the new frame.
     @MainThread Public Method Update(seconds: Float64)
-        If !fbe_video_update(Live("Video.Update"), seconds) Then Panic("Video.Update: {LastError()}")
+        Local video = Live("Video.Update")
+        Local before = fbe_video_time(video)
+        Local moving = seconds
+        // What's out of range C says so of.
+        If fbe_video_playing(video) && seconds >= 0 && IsFinite(seconds)
+            If !soundStarted Then SoundFromClock()
+            moving = ClockStep(seconds, before)
+        End If
+        If !fbe_video_update(video, moving) Then Panic("Video.Update: {LastError()}")
+        If fbe_video_ended(video)
+            channel.Stop()
+        ElseIf fbe_video_looping(video) && soundStarted
+            // A loop's start is the sound's, which isn't quite as long.
+            If fbe_video_time(video) < before || moving >= fbe_video_duration(video)
+                SoundFromClock()
+            End If
+        End If
+        WriteTexture()
     End Method
 
     /// Puts the video's clock at `seconds`, from 0 to its Duration, showing the frame due then, as
-    /// a scrub along it or a sound's position does.
+    /// a scrub along it or a sound's position does, with its sound if it's playing.
     @MainThread Public Method Seek(seconds: Float64)
-        If !fbe_video_seek(Live("Video.Seek"), seconds) Then Panic("Video.Seek: {LastError()}")
+        Local video = Live("Video.Seek")
+        If !fbe_video_seek(video, seconds) Then Panic("Video.Seek: {LastError()}")
+        If fbe_video_playing(video)
+            SoundFromClock()
+        Else
+            // Started again from the clock when it next plays.
+            channel.Stop()
+            soundStarted = False
+        End If
+        WriteTexture()
     End Method
 
     /// Where the video's clock is, from 0 to its Duration.
@@ -202,12 +320,158 @@ Public Final Class Video
         If !ok Then Panic("Video.FrameInto: {LastError()}")
     End Method
 
+    /// A texture of the video's size, RGBA8 with no mipmaps, clamped at its edges, with the frame the
+    /// video shows, written as each new one's shown, as Update and Seek move it: a game draws it, as
+    /// on a Mesh's material, as Draw does. It's the same one each time, the video's, freed with it,
+    /// made at the first ask, which starts the GPU if it hasn't; it throws when the GPU can't.
+    @MainThread Public Method Texture(): Texture Throws GraphicsError
+        Live("Video.Texture")
+        Local made = texture
+        If made != Null && !made.Freed() Then Return made
+        Local fresh = Try TextureFor(width, height)
+        texture = fresh
+        sprite = Null
+        written = -1
+        WriteTexture()
+        Return fresh
+    End Method
+
+    /// Draws the frame the video shows stretched to fill `width` by `height` with its top left at
+    /// `x`, `y`, tinted by `canvas`'s color, whose scale it leaves as it was; a Canvas that's blended
+    /// SOLID, as at first, draws it as it is.
+    @MainThread Public Method Draw(canvas: Canvas, x: Float32, y: Float32, width: Float32,
+                                   height: Float32) Throws GraphicsError
+        Live("Video.Draw")
+        Local fresh = Try Texture()
+        Local drawn = sprite ?? Sprite2D(fresh)
+        sprite = drawn
+        Local scale = canvas.Scale()
+        canvas.SetScale(width / (Self.width As Float32), height / (Self.height As Float32))
+        canvas.Draw(drawn, x, y)
+        canvas.SetScale(scale.x, scale.y)
+    End Method
+
+    /// Draws the frame the video shows as large as fits in `width` by `height` with its top left at
+    /// the origin, its shape kept, with black in the bars either side of it, or above and below,
+    /// as Fit says, as a cutscene does on a screen of another shape.
+    @MainThread Public Method DrawFitted(canvas: Canvas, width: Int32,
+                                         height: Int32) Throws GraphicsError
+        Live("Video.DrawFitted")
+        Local fitted = Fit(width As Float, height As Float)
+        Local color = canvas.Color()
+        canvas.SetColor(Color32(0, 0, 0, 255))
+        canvas.DrawRect(0, 0, width, height)
+        canvas.SetColor(color)
+        Try Draw(canvas, fitted.X, fitted.Y, fitted.Width, fitted.Height)
+    End Method
+
+    /// The largest rectangle of the video's shape in `width` by `height`, more than 0, centered in
+    /// it, where DrawFitted draws.
+    @MainThread Public Method Fit(width: Float, height: Float): Rect
+        Live("Video.Fit")
+        If !(width > 0 && height > 0)
+            Panic("Video.Fit: a video's fitted into more than 0 by 0, not {width} by {height}")
+        End If
+        Local scale = Min(width / (Self.width As Float), height / (Self.height As Float))
+        Local across = (Self.width As Float) * scale
+        Local down = (Self.height As Float) * scale
+        Return Rect((width - across) / 2, (height - down) / 2, across, down)
+    End Method
+
+    // How far to move a playing video's clock from `now`, for a frame of `seconds`: to what's been
+    // mixed of its sound, if that's moved since the last, which is a quarter of a second or less
+    // from the clock; and by `seconds` while it hasn't, or there's no sound playing.
+    @MainThread Method ClockStep(seconds: Float64, now: Float64): Float64
+        If !channel.Playing() || channel.Paused() Then Return seconds
+        Local position = channel.Position()
+        If position == mixed Then Return seconds
+        mixed = position
+        If Abs(position - now) > mostDrift
+            // The mix stalled, and the sound's behind, or was sought and hasn't been mixed yet.
+            SeekSound(now + seconds)
+            Return seconds
+        End If
+        Return Max(position - now, 0.0)
+    End Method
+
+    // Plays its sound from where the clock is, if the audio's started and it has one.
+    @MainThread Method SoundFromClock()
+        Local playing = Played()
+        If playing == Null || !Audio.Started()
+            soundStarted = False
+            Return
+        End If
+        soundStarted = True
+        If !channel.Playing()
+            channel = playing.Play(True)
+            channel.SetVolume(playing.Volume() * volume)
+            Local into = bus
+            If into != Null Then channel.SetBus(into)
+        End If
+        SeekSound(fbe_video_time(handle))
+        channel.Resume()
+    End Method
+
+    // Puts its sound at `seconds`, or stops it there's none there, which a shorter sound doesn't
+    // have, until the video next plays it.
+    @MainThread Method SeekSound(seconds: Float64)
+        Local playing = Played()
+        mixed = -1
+        If playing == Null || seconds >= playing.Length()
+            channel.Stop()
+            Return
+        End If
+        channel.Seek(seconds)
+    End Method
+
+    // The Sound it plays, its own, made once, if SetSound gave none; Null for none.
+    @MainThread Method Played(): Sound?
+        Local sound = given
+        If sound != Null Then Return sound
+        Local made = own
+        If made != Null Then Return made
+        If !fbe_video_has_sound(handle) Then Return Null
+        Local bytes = Sound()
+        Local fresh = SoundOf(bytes)
+        own = fresh
+        Return fresh
+    End Method
+
+    // Writes its frame into its texture, if it has one and a new frame's shown.
+    @MainThread Method WriteTexture()
+        Local into = texture
+        If into == Null || into.Freed() Then Return
+        Local shown = fbe_video_frames_shown(handle)
+        If shown == written Then Return
+        written = shown
+        Local kept = through ?? Image(width, height)
+        through = kept
+        FrameInto(kept)
+        into.Write(0, 0, kept)
+    End Method
+
     // The video's handle, for `call`, which panics once it's freed.
     @MainThread Package Method Live(call: String): UInt64
         If handle == 0 Then Panic("{call}: this Video was freed")
         Return handle
     End Method
 End Class
+
+// A video's texture. Outside Video, whose Texture is a Method.
+@MainThread Function TextureFor(width: Int32, height: Int32): Texture Throws GraphicsError
+    Local made = Try Texture(width, height, TextureFormat.RGBA8, False)
+    made.SetWrap(TextureWrap.CLAMP, TextureWrap.CLAMP)
+    Return made
+End Function
+
+// The Sound of a WAV a video made. Outside Video, whose Sound is a Method.
+@MainThread Function SoundOf(bytes: UInt8[]): Sound?
+    Try
+        Return Try Sound.FromBytes(bytes)
+    Catch error As SoundError
+        Return Null
+    End Try
+End Function
 
 /// The version of fbengine_video the program runs with, like "0.1.0", its DLL's, which is
 /// fbengine's.

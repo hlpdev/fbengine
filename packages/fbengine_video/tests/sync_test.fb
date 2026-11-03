@@ -1,0 +1,228 @@
+// A video's sound through fbengine_audio, on MANUAL's mix, which each test moves on itself, with
+// its clock kept to it; and a video's texture, and what draws it, on the GPU ctest's tests use.
+
+Import std.core
+Import std.ffi
+From std.image Import Image
+Import std.math
+Import std.os
+Import std.test
+Import fbengine
+Import fbengine_audio
+Import fbengine_video
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// colors.mpg's rate, a frame of it at 25 a second in samples.
+Const frameOfMix: Int32 = 1764
+
+Function Near(a: Float64, b: Float64, within: Float64 = 0.03): Bool => Abs(a - b) <= within
+
+@Test @MainThread
+Function ASoundPlaysWithItsVideoAndItsClockKeepsToTheMix() Throws VideoError, AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    video.Play()
+    Expect(Audio.Playing() == 1 && video.SoundChannel().Playing())
+    // Frames shorter than the mix: the clock goes as far as what's mixed.
+    For i = 1 To 10
+        Local sound = Audio.Mix(frameOfMix)
+        Expect(i < 3 || Abs(sound[0]) + Abs(sound[100]) > 0, "silent at mix {i}")
+        video.Update(0.001)
+        Expect(Near(video.Time(), (i As Float64) * 0.04), "at {i}, its clock's {video.Time()}")
+    End For
+    // Frames longer than the mix: it waits for what's mixed.
+    For i = 1 To 5
+        Audio.Mix(frameOfMix / 2)
+        video.Update(1.0)
+        Expect(Near(video.Time(), 0.4 + (i As Float64) * 0.02),
+               "at {i}, its clock's {video.Time()}")
+    End For
+End Function
+
+// A device lost, or a game's own stall: the clock goes on by a frame's time, and the sound's put
+// where it is when the mix goes on, not the clock back where the sound is.
+@Test @MainThread
+Function AMixThatStallsLeavesTheClockGoing() Throws VideoError, AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    video.Play()
+    Audio.Mix(frameOfMix)
+    For i = 1 To 20
+        video.Update(0.04)
+    End For
+    Local on = video.Time()
+    Expect(Near(on, 0.8, 0.09), "its clock's {on}")
+    Audio.Mix(frameOfMix)
+    video.Update(0.04)
+    Expect(video.Time() >= on, "its clock went back, from {on} to {video.Time()}")
+    Audio.Mix(frameOfMix)
+    video.Update(0.04)
+    Expect(Near(video.SoundChannel().Position(), video.Time(), 0.1),
+           "its sound's at {video.SoundChannel().Position()}, its clock at {video.Time()}")
+End Function
+
+@Test @MainThread
+Function PausingSeekingAndEndingGoForItsSoundToo() Throws VideoError, AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    video.Play()
+    Audio.Mix(frameOfMix)
+    video.Pause()
+    Expect(video.SoundChannel().Paused())
+    video.Play()
+    Expect(!video.SoundChannel().Paused())
+    video.Seek(1.0)
+    Audio.Mix(100)
+    Expect(Near(video.SoundChannel().Position(), 1.0, 0.01),
+           "its sound's at {video.SoundChannel().Position()}")
+    // Past the sound's 2 s, in a video of 2.08 s, there's none.
+    video.Seek(2.04)
+    Expect(!video.SoundChannel().Playing())
+    Audio.Mix(100)
+    video.Update(0.1)
+    Expect(video.Ended() && Audio.Playing() == 0)
+    // Ended, it plays from the start, with its sound.
+    video.Play()
+    Expect(video.SoundChannel().Playing() && Near(video.Time(), 0))
+    Audio.Mix(frameOfMix)
+    Expect(Near(video.SoundChannel().Position(), 0.04, 0.01))
+    // Sought while paused, it starts from there when it plays.
+    video.Pause()
+    video.Seek(1.5)
+    Expect(!video.SoundChannel().Playing())
+    video.Play()
+    Audio.Mix(100)
+    Expect(Near(video.SoundChannel().Position(), 1.5, 0.01))
+    // Freed, it stops.
+    video.Free()
+    Expect(Audio.Playing() == 0)
+End Function
+
+// Its sound's a little shorter than its pictures: each loop's starts again with them.
+@Test @MainThread
+Function ALoopingVideosSoundStartsEachLoopAgain() Throws VideoError, AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    video.SetLoop(True)
+    video.Play()
+    For i = 1 To 75
+        Audio.Mix(frameOfMix)
+        video.Update(0.04)
+    End For
+    Expect(video.SoundChannel().Playing())
+    Expect(Near(video.Time(), 0.92, 0.1), "its clock's {video.Time()}")
+    Expect(Near(video.SoundChannel().Position(), video.Time(), 0.1),
+           "its sound's at {video.SoundChannel().Position()}, its clock at {video.Time()}")
+End Function
+
+// A video with no sound of its own, beside a sound stream of the game's.
+@Test @MainThread
+Function AVideoPlaysBesideAGivenSound() Throws VideoError, AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local colors = Try Video.Load(Embed("media/colors.mpg"))
+    Defer colors.Free()
+    Local music = Try Sound.StreamBytes(colors.Sound())
+    Defer music.Free()
+    Local video = Try Video.Load(Embed("media/silent.mpg"))
+    Defer video.Free()
+    Expect(!video.HasSound())
+    video.Play()
+    Expect(Audio.Playing() == 0 && !video.SoundChannel().Playing())
+    video.SetSound(music)
+    Expect(video.GivenSound() == music && Audio.Playing() == 1)
+    For i = 1 To 5
+        Audio.Mix(frameOfMix)
+        video.Update(0.001)
+    End For
+    Expect(Near(video.Time(), 0.2), "its clock's {video.Time()}")
+    video.SetVolume(0.5)
+    Expect(video.Volume() == 0.5 && video.SoundChannel().Volume() == 0.5)
+    video.SetSound(Null)
+    Expect(Audio.Playing() == 0)
+End Function
+
+// With the audio not started it plays by its frames, and starts its sound when the audio's started.
+@Test @MainThread
+Function AVideoPlaysWithoutTheAudioUntilItsStarted() Throws VideoError, AudioError
+    Expect(!Audio.Started())
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    video.Play()
+    video.Update(0.5)
+    Expect(Near(video.Time(), 0.5) && !video.SoundChannel().Playing())
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    video.Update(0.04)
+    Expect(video.SoundChannel().Playing())
+    Audio.Mix(100)
+    Expect(Near(video.SoundChannel().Position(), 0.5, 0.05),
+           "its sound's at {video.SoundChannel().Position()}")
+End Function
+
+@Test
+Function AVideoFitsWithItsShapeKept() Throws VideoError
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    // 64 by 48 in a wide screen, and a tall one.
+    Expect(video.Fit(200, 96) == Rect(36, 0, 128, 96))
+    Expect(video.Fit(64, 480) == Rect(0, 216, 64, 48))
+    Expect(video.Fit(640, 480) == Rect(0, 0, 640, 480))
+End Function
+
+@Test @MainThread
+Function AVideosTextureHasItsFrame() Throws VideoError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    Local texture = Try video.Texture()
+    Expect((Try video.Texture()) == texture, "it's the same one each time")
+    Expect(texture.Width() == 64 && texture.Height() == 48 && texture.Levels() == 1)
+    Expect(texture.WrapAcross() == TextureWrap.CLAMP)
+    Local before = texture.ToImage()[32, 24]
+    Expect(before.r > 200 && before.g < 50, "at first it's {before}, not red")
+    video.Play()
+    // Half a second on, green.
+    video.Update(0.6)
+    Flip(False)
+    Local after = texture.ToImage()[32, 24]
+    Expect(after.g > 200 && after.r < 50, "half a second on it's {after}, not green")
+    Expect(texture.ToImage()[32, 24] == video.Frame()[32, 24])
+    video.Seek(1.2)
+    Flip(False)
+    Local sought = texture.ToImage()[32, 24]
+    Expect(sought.b > 200 && sought.r < 50, "at 1.2 s it's {sought}, not blue")
+    // Freed with it.
+    video.Free()
+    Expect(texture.Freed())
+End Function
+
+@Test @MainThread
+Function AVideoDrawsLetterboxed() Throws VideoError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    Local target = Try Texture.Target(200, 96)
+    Defer target.Free()
+    Local canvas = Canvas(target)
+    canvas.Clear()
+    Try video.DrawFitted(canvas, 200, 96)
+    Flip(False)
+    Local drawn = target.ToImage()
+    // Bars either side, 36 wide, black, and the video between them.
+    Expect(drawn[10, 48].r == 0 && drawn[190, 48].r == 0, "its bars are {drawn[10, 48]}")
+    Expect(drawn[100, 48].r > 200, "its middle is {drawn[100, 48]}")
+    Expect(drawn[40, 48].r > 200 && drawn[160, 48].r > 200)
+    Expect(canvas.Scale() == Vec2(1, 1) && canvas.Color() == Color32(255, 255, 255, 255))
+End Function
