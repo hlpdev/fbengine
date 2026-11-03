@@ -4,6 +4,7 @@
 // and the lists read from the scene for it.
 
 #include "fbengine.h"
+#include "gpu/graph.hpp"
 #include "gpu/vulkan.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
@@ -57,6 +58,13 @@ bool read_lists(std::uint64_t camera, float target_width, float target_height, f
 void read_view(const scene::camera_t& camera, const scene::view_t& view,
                const scene::tweened_t& tweened, lists_t& lists);
 
+/// Adds the passes that bring a camera's HDR image to `into`, a target of `size`, `format`, and
+/// `samples`, in `scissor`, blending it by its alpha if the camera doesn't clear what's there;
+/// false, with fbe_error's why, if they can't be added.
+bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
+                     VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples,
+                     VkRect2D scissor);
+
 /// Draws a camera that's showing, in the frame's graph, as fbe_render_camera says.
 bool draw_camera(std::uint32_t slot, float tween);
 
@@ -67,6 +75,8 @@ struct surface_buffers_t {
     std::uint32_t index_count = 0;
     /// Its vertices' joints, for a surface that has them.
     gpu::buffer_t joints;
+    /// Its vertices' tangents, for a surface that has them.
+    gpu::buffer_t tangents;
     /// What each of its morph targets moves each of its vertices by, the first target's first, for
     /// each whether it moves any, and how many vertices each has.
     gpu::buffer_t targets;

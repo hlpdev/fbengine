@@ -36,6 +36,9 @@ struct world_t {
     /// Which way the sun is, kept from the last it was looked at, so one freed leaves it there.
     vec3_t sky_sun{ 0.0F, 1.0F, 0.0F };
     float sky_brightness = 1.0F;
+    /// The environment its PBR materials are lit by, 0 for none, and what its light's times.
+    std::uint64_t environment = 0;
+    float environment_intensity = 1.0F;
     /// Each pair of collision groups that collide, source in the high 16 bits and target in the
     /// low, and the FBE_RESPONSE_ the source makes; a game has a few.
     std::vector<std::pair<std::uint32_t, std::int32_t>> collisions;
@@ -90,6 +93,8 @@ struct surface_t {
     std::vector<fbe_vertex_t> vertices;
     /// Its vertices' joints, one for each, or none.
     std::vector<fbe_vertex_joints_t> joints;
+    /// Its vertices' tangents, one for each, or none.
+    std::vector<fbe_vertex_tangent_t> tangents;
     std::vector<std::uint32_t> indices;
     std::vector<morph_target_t> targets;
     /// The material it's drawn in, by slot, which it holds, or none for the default.
@@ -126,6 +131,14 @@ struct material_t {
     bool wireframe = false;
     std::int32_t order = 0;
     std::array<layer_t, FBE_MATERIAL_LAYERS> layers{};
+    /// What a PBR material is beyond its color, and its maps, by FBE_MAP_, as layers but for their
+    /// blend and bump.
+    float metallic = 0.0F;
+    float roughness = 1.0F;
+    std::array<float, 3> emissive{ 0.0F, 0.0F, 0.0F };
+    float normal_scale = 1.0F;
+    float occlusion_strength = 1.0F;
+    std::array<layer_t, FBE_MATERIAL_MAPS> maps{};
 };
 
 /// A geometry: surfaces, shared by every mesh drawing it. It lives while the FB side holds its
@@ -412,6 +425,18 @@ struct camera_t {
     float fog_start = 1.0F;
     float fog_end = 100.0F;
     float fog_density = 0.02F;
+    /// Whether it draws into an HDR image, and what that comes to in its target.
+    bool hdr = false;
+    float exposure = 1.0F;
+    std::int32_t tonemap = FBE_TONEMAP_NONE;
+    float gamma = 1.0F;
+    /// Its bloom, and its color grade.
+    float bloom_intensity = 0.0F;
+    float bloom_threshold = 1.0F;
+    std::array<float, 3> grade_slope{ 1.0F, 1.0F, 1.0F };
+    std::array<float, 3> grade_offset{ 0.0F, 0.0F, 0.0F };
+    std::array<float, 3> grade_power{ 1.0F, 1.0F, 1.0F };
+    float grade_saturation = 1.0F;
 };
 
 /// A light: what kind, its color and its intensity, the range where a point or spot light ends, and

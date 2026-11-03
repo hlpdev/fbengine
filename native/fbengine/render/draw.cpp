@@ -3,6 +3,7 @@
 // geometry and pipeline go together as instances, each instance a draw of the list.
 
 #include "core/engine.hpp"
+#include "environment/environment.hpp"
 #include "fbengine.h"
 #include "gpu/buffer.hpp"
 #include "gpu/graph.hpp"
@@ -210,10 +211,43 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
     }
 }
 
+/// A layer or a map as the scene shader reads it, what it samples added to `sampled`.
+layer_data_t layer_data(const scene::layer_t& layer, std::uint64_t target,
+                        std::vector<std::uint64_t>& sampled) {
+    layer_data_t out{};
+    const texture::texture_t* image =
+        layer.texture != target ? texture::find(layer.texture) : nullptr;
+    if (image != nullptr) {
+        out.texture = texture::index_of(layer.texture);
+        out.sampler = texture::sampler_of(*image);
+        sampled.push_back(layer.texture);
+    } else {
+        out.texture = texture::white;
+        out.sampler =
+            gpu::sampler_index(FBE_TEXTURE_NEAREST, FBE_TEXTURE_REPEAT, FBE_TEXTURE_REPEAT);
+    }
+    out.luminance_scale = layer.bump_scale;
+    out.luminance_offset = layer.bump_offset;
+    out.bump = layer.bump;
+    // As Blitz's: scaled down by its scale, so 2 looks twice as big, turned back by its angle,
+    // and moved back by its offset.
+    const float across = 1.0F / layer.uv_scale[0];
+    const float down = 1.0F / layer.uv_scale[1];
+    const float cosine = std::cos(-layer.uv_angle);
+    const float sine = std::sin(-layer.uv_angle);
+    const bool decodes = image != nullptr && image->format == FBE_TEXTURE_RGBA8;
+    const float neutral = image != nullptr ? 0.0F : 1.0F;
+    const float across_u = across * cosine;
+    const float across_v = across * sine;
+    out.uv_across = { across_u, across_v, -layer.uv_offset[0], decodes ? 1.0F : 0.0F };
+    out.uv_down = { -down * sine, down * cosine, -layer.uv_offset[1], neutral };
+    return out;
+}
+
 /// What a material is as the scene shader reads it, its layers those with textures, in order, as
 /// its draws' pipeline key has them, and the textures it samples added to `sampled`. A layer can't
 /// sample what the pass draws into, so leaves what's under it as it is, as a layer does whose
-/// texture has gone with the GPU.
+/// texture has gone with the GPU; and a map that can't is no map.
 material_data_t material_data(std::uint32_t material, std::uint64_t target,
                               std::vector<std::uint64_t>& sampled) {
     const scene::material_t standard;
@@ -226,36 +260,24 @@ material_data_t material_data(std::uint32_t material, std::uint64_t target,
     data.no_alpha = found.blend == FBE_BLEND_OPAQUE ? 1U : 0U;
     std::size_t at = 0;
     for (const scene::layer_t& layer : found.layers) {
-        if (layer.texture == 0) {
-            continue;
+        if (layer.texture != 0) {
+            data.layers[at++] = layer_data(layer, target, sampled);
         }
-        layer_data_t& out = data.layers[at++];
-        const texture::texture_t* image =
-            layer.texture != target ? texture::find(layer.texture) : nullptr;
-        if (image != nullptr) {
-            out.texture = texture::index_of(layer.texture);
-            out.sampler = texture::sampler_of(*image);
-            sampled.push_back(layer.texture);
-        } else {
-            out.texture = texture::white;
-            out.sampler =
-                gpu::sampler_index(FBE_TEXTURE_NEAREST, FBE_TEXTURE_REPEAT, FBE_TEXTURE_REPEAT);
+    }
+    data.metallic = found.metallic;
+    data.roughness = found.roughness;
+    data.normal_scale = found.normal_scale;
+    data.occlusion_strength = found.occlusion_strength;
+    data.emissive = found.emissive;
+    for (std::size_t map = 0; map < found.maps.size(); ++map) {
+        const scene::layer_t& layer = found.maps.at(map);
+        if (layer.texture != 0 && layer.texture != target &&
+            texture::find(layer.texture) != nullptr) {
+            data.map_layers.at(map) = layer_data(layer, target, sampled);
+            // Its UV set's in what the pipeline key is for layers; here, the unused place.
+            data.map_layers.at(map).bump[0] = static_cast<float>(layer.uv_set);
+            data.maps |= 1U << map;
         }
-        out.luminance_scale = layer.bump_scale;
-        out.luminance_offset = layer.bump_offset;
-        out.bump = layer.bump;
-        // As Blitz's: scaled down by its scale, so 2 looks twice as big, turned back by its angle,
-        // and moved back by its offset.
-        const float across = 1.0F / layer.uv_scale[0];
-        const float down = 1.0F / layer.uv_scale[1];
-        const float cosine = std::cos(-layer.uv_angle);
-        const float sine = std::sin(-layer.uv_angle);
-        const bool decodes = image != nullptr && image->format == FBE_TEXTURE_RGBA8;
-        const float neutral = image != nullptr ? 0.0F : 1.0F;
-        const float across_u = across * cosine;
-        const float across_v = across * sine;
-        out.uv_across = { across_u, across_v, -layer.uv_offset[0], decodes ? 1.0F : 0.0F };
-        out.uv_down = { -down * sine, down * cosine, -layer.uv_offset[1], neutral };
     }
     return data;
 }
@@ -504,6 +526,10 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                     }
                 }
             }
+            if (surface->tangents.buffer != VK_NULL_HANDLE) {
+                data.tangents = surface->tangents.address;
+                data.has_tangents = 1U;
+            }
             if (surface->joints.buffer != VK_NULL_HANDLE) {
                 // Each mesh's once, however many surfaces it has, its surfaces one after another
                 // or apart.
@@ -694,6 +720,24 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
     }
     data.flipped = flipped ? 1U : 0U;
     data.directional = directional;
+    const scene::world_t& world = s.worlds[s.entities.world[camera.entity]];
+    if (world.environment != 0 && environment::shader_data(world.environment, data.environment)) {
+        data.environment.intensity = world.environment_intensity;
+        data.has_environment = 1U;
+        for (const std::uint64_t texture : {
+                 fbe_environment_irradiance(world.environment),
+                 fbe_environment_specular(world.environment),
+                 fbe_environment_table(world.environment),
+             }) {
+            sampled.push_back(texture);
+        }
+    }
+    const vec3_t right = view.rotation * vec3_t(1.0F, 0.0F, 0.0F);
+    const vec3_t up = view.rotation * vec3_t(0.0F, 1.0F, 0.0F);
+    const vec3_t back_way = view.rotation * vec3_t(0.0F, 0.0F, 1.0F);
+    data.to_world[0] = { right.x, up.x, back_way.x, 0.0F };
+    data.to_world[1] = { right.y, up.y, back_way.y, 0.0F };
+    data.to_world[2] = { right.z, up.z, back_way.z, 0.0F };
     bool failed = false;
     data.draws = in_ring<draw_data_t>(draws, failed).address;
     data.materials = in_ring<material_data_t>(materials, failed).address;
@@ -774,7 +818,8 @@ bool draw_camera(std::uint32_t slot, float tween) {
     }
     const auto width = static_cast<float>(found->width);
     const auto height = static_cast<float>(found->height);
-    const VkFormat format = found->vk_format;
+    const VkFormat target_format = found->vk_format;
+    const VkFormat format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : target_format;
     const VkSampleCountFlagBits samples = found->samples;
     const std::uint32_t target_width = found->width;
     const std::uint32_t target_height = found->height;
@@ -871,7 +916,9 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const bool whole = from_x == 0 && from_y == 0 && pass->scissor.extent.width == target_width &&
                        pass->scissor.extent.height == target_height;
     const std::array<float, 4> clear_rgba = camera.clear_color;
-    pass->clear_color = camera.clears_color && !whole;
+    // An HDR image is all the camera's, so all of it's cleared: to nothing, if what's in its target
+    // shows through.
+    pass->clear_color = camera.clears_color && !whole && !camera.hdr;
     pass->clear_depth = camera.clears_depth && !whole;
     pass->clear_rgba = clear_rgba;
     std::ranges::sort(sampled);
@@ -889,18 +936,36 @@ bool draw_camera(std::uint32_t slot, float tween) {
     if (into == gpu::no_resource) {
         return false;
     }
-    return gpu::add_pass({
+    const gpu::transient_t image_target{
+        .width = target_width,
+        .height = target_height,
+        .format = FBE_TEXTURE_RGBA16F,
+        .samples = static_cast<std::uint32_t>(samples),
+    };
+    if (camera.hdr && !gpu::reserve_transient(image_target)) {
+        return false;
+    }
+    const gpu::resource_t image = camera.hdr ? gpu::transient_resource(image_target) : into;
+    if (image == gpu::no_resource) {
+        return false;
+    }
+    const bool drawn = gpu::add_pass({
         .name = "camera",
         .colors = { {
-            .target = into,
-            .clear = camera.clears_color && whole,
-            .rgba = clear_rgba,
+            .target = image,
+            .clear = camera.hdr || (camera.clears_color && whole),
+            .rgba = camera.clears_color ? clear_rgba : std::array<float, 4>{},
         }, },
         .depth = into,
         .clear_depth = camera.clears_depth && whole,
         .uses = std::move(uses),
         .record = [pass](VkCommandBuffer commands) { record_pass(commands, *pass); },
     });
+    if (!drawn || !camera.hdr) {
+        return drawn;
+    }
+    return add_post_passes(camera, image, into, { .width = target_width, .height = target_height },
+                           target_format, samples, pass->scissor);
 }
 
 } // namespace fbe::render

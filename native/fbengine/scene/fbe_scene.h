@@ -51,12 +51,23 @@ extern "C" {
 #define FBE_LIGHT_POINT       1
 #define FBE_LIGHT_SPOT        2
 
+#define FBE_TONEMAP_NONE     0
+#define FBE_TONEMAP_REINHARD 1
+#define FBE_TONEMAP_ACES     2
+#define FBE_TONEMAP_NEUTRAL  3
+
 // How a camera's fog thickens with depth in front of it: not at all; linearly from its start to
 // its end; as e to the minus (density x depth); or as e to the minus (density x depth) squared.
 #define FBE_FOG_NONE                0
 #define FBE_FOG_LINEAR              1
 #define FBE_FOG_EXPONENTIAL         2
 #define FBE_FOG_EXPONENTIAL_SQUARED 3
+
+#define FBE_MATERIAL_MAPS   4
+#define FBE_MAP_METAL_ROUGH 0
+#define FBE_MAP_NORMAL      1
+#define FBE_MAP_OCCLUSION   2
+#define FBE_MAP_EMISSIVE    3
 
 // How a material is lit: physically, as glTF's metal and roughness have it; not at all, its color
 // as it is; or per vertex, as fixed-function hardware lit, for an old look. UNLIT and VERTEX are
@@ -187,6 +198,15 @@ typedef struct fbe_instance_t {
     fbe_mat4_t matrix;
     fbe_color_t color;
 } fbe_instance_t;
+
+// A vertex's tangent, beside its fbe_vertex_t, for normal maps, as glTF's TANGENT has it: along its
+// UVs' u, its bitangent the way of w, +1 or -1, across its normal and tangent.
+typedef struct fbe_vertex_tangent_t {
+    float x;
+    float y;
+    float z;
+    float w;
+} fbe_vertex_tangent_t;
 
 // A vertex's joints, beside its fbe_vertex_t: which four of its skin's joints move it, as glTF's
 // JOINTS_0 indexes them, and how much of each, as its WEIGHTS_0. FBE_NO_JOINT is no bone, which
@@ -457,10 +477,54 @@ FBE_API float fbe_light_outer_cone(uint64_t light);
 // A World's lights, hidden ones too, in the tree's order, depth first: writes up to `capacity` and
 // gives how many there are, -1 for a freed World.
 FBE_API int32_t fbe_world_lights(uint64_t world, uint64_t* lights, int32_t capacity);
+// The environment a World's PBR materials are lit by, as well as its lights and ambient light, its
+// light times `intensity`, 0 or more: 0 for none, which it is at first. It isn't held: one that's
+// freed, or that a stopped GPU lost, lights nothing.
+FBE_API bool fbe_world_set_environment(uint64_t world, uint64_t environment, float intensity);
+FBE_API uint64_t fbe_world_environment(uint64_t world);
+FBE_API float fbe_world_environment_intensity(uint64_t world);
+
 // A World's ambient light, which lights everything a little from everywhere: std.math's
 // Color.Gray, sRGB's half gray, at first.
 FBE_API bool fbe_world_set_ambient(uint64_t world, float r, float g, float b);
 FBE_API bool fbe_world_ambient(uint64_t world, fbe_color_t* color);
+
+// Whether a camera draws into an HDR image of its target's size, of half floats, whose light past
+// white is kept, rather than into its target, false at first; and what that light comes to in its
+// target, each only for one that's HDR: first times its exposure, 0 or more, 1 at first; then
+// through an FBE_TONEMAP_, NONE at first, where a target stored as bytes clamps it at white, and
+// Khronos's NEUTRAL or ACES's filmic curve are what glTF's and film's looks want; and raised to one
+// over its gamma, above 0, 1 at first, as a game's brightness setting wants. A target stored as
+// sRGB then encodes it. It's blended by its alpha over what's in a target it doesn't clear; what
+// multiplies what's behind it, which isn't in its image, draws nothing there.
+//
+// All it draws goes through this: UNLIT's and VERTEX's fixed-function look, which then isn't what's
+// stored, and its clear color. White's 0.869 through NEUTRAL, 0.673 through ACES, and 0.5 through
+// REINHARD, so what has to stay white wants NONE, or its own camera; and an exposure of 0 clears to
+// black.
+FBE_API bool fbe_camera_set_hdr(uint64_t camera, bool hdr);
+FBE_API bool fbe_camera_hdr(uint64_t camera);
+FBE_API bool fbe_camera_set_exposure(uint64_t camera, float exposure);
+FBE_API float fbe_camera_exposure(uint64_t camera);
+FBE_API bool fbe_camera_set_tonemap(uint64_t camera, int32_t tonemap);
+FBE_API int32_t fbe_camera_tonemap(uint64_t camera);
+FBE_API bool fbe_camera_set_gamma(uint64_t camera, float gamma);
+FBE_API float fbe_camera_gamma(uint64_t camera);
+
+// What an HDR camera's bright light does around it, its bloom: what's past `threshold`, 0 or more,
+// blurred out over much of its view, added to its light times `intensity`, 0 or more, before its
+// exposure. None at first, an intensity of 0, with a threshold of 1. A pixel far brighter than
+// those around it, a firefly, counts for about as much as they do, and doesn't flicker.
+FBE_API bool fbe_camera_set_bloom(uint64_t camera, float intensity, float threshold);
+FBE_API float fbe_camera_bloom_intensity(uint64_t camera);
+FBE_API float fbe_camera_bloom_threshold(uint64_t camera);
+// An HDR camera's color grade, after its tonemap and before its gamma, as a color decision list has
+// it: each channel times its slope, 0 or more, plus its offset, raised to its power, above 0; then
+// saturation, 0 or more, from its luma, 0 for gray and 1 as it was. As it is at first: slope 1,
+// offset 0, power 1, and saturation 1. `values` are ten, slope's three, offset's, power's, and
+// saturation, for setting and for reading.
+FBE_API bool fbe_camera_set_grade(uint64_t camera, const float* values);
+FBE_API bool fbe_camera_grade(uint64_t camera, float* values);
 
 // A camera's fog, which blends what it sees toward the fog's color with its depth in front of the
 // camera: FBE_FOG_NONE at first, black, linear from 1 to 100, at a density of 0.02.
@@ -530,6 +594,14 @@ FBE_API uint64_t fbe_geometry_cylinder(int32_t segments, bool capped);
 FBE_API uint64_t fbe_geometry_cone(int32_t segments, bool capped);
 FBE_API uint64_t fbe_geometry_plane(int32_t segments);
 
+// A surface's tangents, one for each of its vertices, or none, each finite and its w 1 or -1:
+// vertices added since or cleared let go of them. Reading them gives how many there are, and writes
+// as many as `capacity`.
+FBE_API bool fbe_surface_set_tangents(uint64_t geometry, int32_t surface,
+                                      const fbe_vertex_tangent_t* tangents, int32_t count);
+FBE_API int32_t fbe_surface_tangents(uint64_t geometry, int32_t surface,
+                                     fbe_vertex_tangent_t* tangents, int32_t capacity);
+
 // A surface's vertices and triangles, by the geometry and the surface's index.
 // Adds `count` vertices and gives the first's index, -1 if it can't.
 // A geometry's levels of detail: what a mesh draws of it where it's small in its camera's view,
@@ -587,7 +659,8 @@ FBE_API uint64_t fbe_material_clone(uint64_t material);
 // Its color and alpha, linear: any finite color, and alpha 0 to 1.
 FBE_API bool fbe_material_set_color(uint64_t material, float r, float g, float b, float a);
 FBE_API bool fbe_material_color(uint64_t material, fbe_color_t* color);
-// How sharp and bright its highlights are, 0 for none to 1; false outside.
+// How sharp and bright an FBE_SHADING_VERTEX material's highlights are, 0 for none to 1; false
+// outside. A PBR material's are its roughness's.
 FBE_API bool fbe_material_set_shininess(uint64_t material, float shininess);
 FBE_API float fbe_material_shininess(uint64_t material);
 FBE_API bool fbe_material_set_shading(uint64_t material, int32_t shading);
@@ -637,6 +710,38 @@ FBE_API bool fbe_material_set_layer(uint64_t material, int32_t layer, int32_t bl
                                     int32_t uv_set);
 FBE_API int32_t fbe_material_layer_blend(uint64_t material, int32_t layer);
 FBE_API int32_t fbe_material_layer_uv_set(uint64_t material, int32_t layer);
+
+// What an FBE_SHADING_PBR material is beyond its color, which with its layers is its base color:
+// how much of a metal it is and how rough, each 0 to 1, a dielectric as rough as can be at first;
+// what it emits, linear, any finite color 0 or more, none at first; how far its normal map's X and
+// Y turn its normal, any finite amount, 1 at first; and how much its occlusion map darkens its
+// light from its environment and ambient light, 0 to 1, 1 at first.
+FBE_API bool fbe_material_set_metal_rough(uint64_t material, float metallic, float roughness);
+FBE_API float fbe_material_metallic(uint64_t material);
+FBE_API float fbe_material_roughness(uint64_t material);
+FBE_API bool fbe_material_set_emissive(uint64_t material, float r, float g, float b);
+FBE_API bool fbe_material_emissive(uint64_t material, fbe_color_t* color);
+FBE_API bool fbe_material_set_normal_scale(uint64_t material, float scale);
+FBE_API float fbe_material_normal_scale(uint64_t material);
+FBE_API bool fbe_material_set_occlusion_strength(uint64_t material, float strength);
+FBE_API float fbe_material_occlusion_strength(uint64_t material);
+// An FBE_SHADING_PBR material's maps, as glTF's: FBE_MAP_METAL_ROUGH's green multiplies its
+// roughness and its blue its metalness; FBE_MAP_NORMAL is tangent space, +Y up, from a surface's
+// tangents, or, for one with none, what its UVs and places make of a pixel; FBE_MAP_OCCLUSION's red
+// is how much of its environment and ambient light reach it; and FBE_MAP_EMISSIVE multiplies what
+// it emits. All but the emissive map hold no color, so are RGBA8_LINEAR or RGBA16F, and an
+// occlusion map can be R8, or setting them's false; an emissive map is RGBA8 as a rule.
+//
+// A map's texture, which it holds, 0 for none, and the UV set it reads, 0 or 1; and what its UVs go
+// through, as a layer's do. A surface's own tangents go with its UV set 0, and turn with what its
+// normal map's UVs go through, as what a pixel makes of UVs does; on UV set 1, it's what a pixel
+// makes of them.
+FBE_API bool fbe_material_set_map(uint64_t material, int32_t map, uint64_t texture, int32_t uv_set);
+FBE_API uint64_t fbe_material_map(uint64_t material, int32_t map);
+FBE_API int32_t fbe_material_map_uv_set(uint64_t material, int32_t map);
+FBE_API bool fbe_material_set_map_uv(uint64_t material, int32_t map, float scale_u, float scale_v,
+                                     float angle, float offset_u, float offset_v);
+FBE_API bool fbe_material_map_uv(uint64_t material, int32_t map, float* values);
 
 // The material a surface draws in, which it holds, 0 for the default one.
 FBE_API bool fbe_surface_set_material(uint64_t geometry, int32_t surface, uint64_t material);
