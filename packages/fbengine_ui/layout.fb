@@ -210,6 +210,17 @@ Public Class Node Implements Printable
         Reflow()
     End Method
 
+    /// Takes out all its children at once.
+    @MainThread Public Method RemoveAll()
+        If children.Count == 0 Then Return
+        For child In children
+            child.parent = Null
+            child.Reflow()
+        End For
+        children.Clear()
+        Reflow()
+    End Method
+
     /// Takes `child` out of its children; False if it isn't one.
     @MainThread Public Method Remove(child: Node): Bool
         For i = 0 To children.Count - 1

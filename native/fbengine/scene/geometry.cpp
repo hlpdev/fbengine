@@ -415,6 +415,7 @@ FBE_API uint64_t fbe_geometry_clone(uint64_t geometry) {
     }
     std::vector<surface_t> surfaces = scene().geometries[slot].surfaces;
     // Its cull box too, read before making the copy moves the geometries.
+    const float eye_pull = scene().geometries[slot].eye_pull;
     const bool has_cull_box = scene().geometries[slot].has_cull_box;
     const fbe::scene::vec3_t cull_min = scene().geometries[slot].cull_min;
     const fbe::scene::vec3_t cull_max = scene().geometries[slot].cull_max;
@@ -422,6 +423,7 @@ FBE_API uint64_t fbe_geometry_clone(uint64_t geometry) {
     const std::uint32_t copy = fbe::scene::make_geometry();
     fbe::scene::geometry_t& made = scene().geometries[copy];
     made.surfaces = std::move(surfaces);
+    made.eye_pull = eye_pull;
     made.has_cull_box = has_cull_box;
     made.cull_min = cull_min;
     made.cull_max = cull_max;

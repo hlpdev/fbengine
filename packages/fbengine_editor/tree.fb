@@ -15,23 +15,34 @@ Import "./scene"
 Const INDENT: Float32 = 14.0
 Const OPENER: Float32 = 14.0
 Const DRAGGED: Float32 = 6.0
+// How high a row is.
+Const ROW_HEIGHT: Float32 = 22.0
 
 /// A scene's entities, what's under each shown unless it's closed: a click selects, with Shift adds
 /// to that, a double click, or F2, renames in place, a drag takes what's selected to under what it's
 /// let go on, or to the top of the scene on nothing, and the right button asks OnRowMenu. The arrows
 /// move what's selected, close, and open. Typing in its field at the top shows only what's named
-/// that, Return going to the next. Update, each frame before the Ui's, sees to all that.
+/// that, Return going to the next. Only the rows in view are made, each the same height, however
+/// many there are. Update, each frame before the Ui's, sees to all that.
 Public Final Class SceneTree Extends Widget
     Field scene: EditedScene
     Field history: History
     Field find: TextField
     Field scroller: ScrollView
     Field list: Node
+    // What's above and below what's in view, as tall as what isn't made.
+    Field above: Node
+    Field below: Node
+    Field lines: TreeLine[] = []
     Field rows: TreeRow[] = []
+    Field first: Int = 0
+    Field held: Weak<TreeRow>
     Field closed: Entity[] = []
     Field dirty: Bool = True
     // What a double click's to rename: at the next Update, as the press goes on to focus what it's on.
     Field pendingRename: Entity? = Null
+    Field lastPressed: Entity? = Null
+    Field focusingFind: Bool = False
     Field reselected: Bool = False
     Field scrolling: Bool = False
     Field finding: String = ""
@@ -48,24 +59,34 @@ Public Final Class SceneTree Extends Widget
         find = TextField("", "Find by name", "tree.find")
         scroller = ScrollView("tree.scroller")
         list = Node("tree.list")
+        above = Node("tree.above")
+        below = Node("tree.below")
         hint = Widget("tree.hint", "tree.hint")
         Super.New("tree", "tree")
         SetFocusable(True)
         find.SetTranslates(False)
         Add(find)
         scroller.SetHeight(Sizing.Fill())
+        list.SetGap(0.0)
         scroller.Add(list)
         Add(scroller)
         hint.SetAnchors(Anchors.Point(0.0, 0.0))
         Watching()
     End New
 
-    /// Shows `seen` in place of what it showed.
+    /// Shows `seen` in place of what it showed: what it showed is gone, at once, as `seen`'s may be
+    /// about to free it.
     Public Method SetScene(seen: EditedScene)
+        Finished(False)
         scene = seen
         closed = []
+        lastPressed = Null
+        pendingRename = Null
         find.SetText("")
         finding = ""
+        lines = []
+        rows = []
+        list.RemoveAll()
         Watching()
         MarkChanged()
     End Method
@@ -80,16 +101,19 @@ Public Final Class SceneTree Extends Widget
         menu = handler
     End Method
 
-    /// What it shows, row by row, as their entities.
+    /// What it shows, in order, as their entities, in view or not.
     Public Method ShownEntities(): Entity[]
         Local shown: Entity[] = []
-        For row In rows
-            shown.Add(row.entity)
+        For line In lines
+            If !line.Entity.Freed() Then shown.Add(line.Entity)
         End For
         Return shown
     End Method
 
-    /// The row of `entity`, or Null if it isn't showing.
+    /// How many rows it's made: those in view, whatever it shows.
+    Public Method RowsMade(): Int => rows.Count
+
+    /// The row of `entity`, or Null if it isn't in view.
     Public Method RowOf(entity: Entity): Widget?
         For row In rows
             If RefEquals(row.entity, entity) Then Return row
@@ -116,9 +140,13 @@ Public Final Class SceneTree Extends Widget
         MarkChanged()
     End Method
 
-    /// Puts the keyboard in its field, to find by name.
+    /// Puts the keyboard in its field, to find by name, by the next Update if it can't yet, as a pane
+    /// just opened can't.
     Public Method FocusFind()
-        Owner()?.Focus(find)
+        Local ui = Owner()
+        If ui != Null Then ui.Focus(find)
+        Local focused = ui?.Focused()
+        focusingFind = focused == Null || !RefEquals(focused, find)
     End Method
 
     /// The field it finds by.
@@ -127,23 +155,36 @@ Public Final Class SceneTree Extends Widget
     /// Whether a row's being renamed.
     Public Method Renaming(): Bool => field != Null
 
-    /// The field `entity`'s being renamed in, or Null.
+    /// The field a row's being renamed in, or Null.
     Public Method RenameField(): TextField? => field
 
-    /// Shows a field on `entity`'s row, holding its name, which Return, or going elsewhere, takes as
-    /// its new name, and Escape leaves as it was.
+    /// Shows a field on `entity`'s row, scrolled to it, holding its name, which Return, or going
+    /// elsewhere, takes as its new name, and Escape leaves as it was; a rename going on finishes first.
     Public Method BeginRename(entity: Entity)
+        Finished(True)
         If !scene.Has(entity) Then Return
         Reveal(entity)
         If dirty Then Rebuilt()
+        ScrollTo(entity)
+        Windowed(False)
         Local row = RowOf(entity)
-        If row == Null Then Return
+        If row == Null
+            // Its place isn't laid out yet.
+            pendingRename = IndexOf(entity) >= 0 ? entity : Null
+            Return
+        End If
         Local editing = TextField(entity.Name(), "", "tree.rename")
         editing.SetTranslates(False)
         row.Add(editing)
         renaming = entity
         field = editing
         Owner()?.Focus(editing)
+    End Method
+
+    /// Renames `entity` by the next Update, as a press that's going on, or a pane just opened, would
+    /// take the keyboard from it.
+    Public Method RenameSoon(entity: Entity)
+        pendingRename = entity
     End Method
 
     /// Shows what's changed, and sees to its field, what's found, and a rename, each frame before the
@@ -154,14 +195,14 @@ Public Final Class SceneTree Extends Widget
         For row In rows
             If row.entity.Freed() Then dirty = True
         End For
-        If dirty && renaming != Null
-            Local going = renaming
-            If going != Null && going.Freed() Then Finished(False)
-        End If
+        Local going = renaming
+        If dirty && going != Null Then Finished(!going.Freed())
         Renames(ui)
         If find.Text() != finding
             finding = find.Text()
             dirty = True
+            // Found under what's closed, it's shown again where it is.
+            If finding == "" Then reselected = True
         End If
         If reselected
             reselected = False
@@ -170,46 +211,42 @@ Public Final Class SceneTree Extends Widget
                 Reveal(selected[selected.Count - 1])
                 scrolling = True
             End If
-            For row In rows
-                row.Styled(scene)
-            End For
+            If !dirty
+                For row In rows
+                    row.Styled(scene)
+                End For
+            End If
         End If
         If dirty
             Rebuilt()
         ElseIf scrolling
-            // The row's place is known, as it's been laid out.
+            // Where it is is known, as it's been laid out.
             scrolling = False
             Local selected = scene.Selected()
-            If selected.Count > 0
-                Local row = RowOf(selected[selected.Count - 1])
-                If row != Null Then scroller.ScrollIntoView(row.Box())
-            End If
+            If selected.Count > 0 Then ScrollTo(selected[selected.Count - 1])
         End If
+        Windowed(False)
         Local asked = pendingRename
         If asked != Null
             pendingRename = Null
             BeginRename(asked)
         End If
-        If find.Submitted() && rows.Count > 0 Then FindNext()
+        If focusingFind Then FocusFind()
+        If find.Submitted() && lines.Count > 0 Then FindNext()
     End Method
 
     Public Override Method KeyTyped(stroke: Keystroke): Bool
-        Local selected = scene.Selected()
-        Local at = -1
-        If selected.Count > 0
-            For i = 0 To rows.Count - 1
-                If RefEquals(rows[i].entity, selected[selected.Count - 1]) Then at = i
-            End For
-        End If
+        Rechecked()
+        Local at = SelectedLine()
         Select stroke.Key
             Case Key.UP
-                If rows.Count > 0 Then scene.SelectOnly(rows[Max(at - 1, 0)].entity)
+                If lines.Count > 0 Then scene.SelectOnly(lines[Max(at - 1, 0)].Entity)
             Case Key.DOWN
-                If rows.Count > 0 Then scene.SelectOnly(rows[Min(at + 1, rows.Count - 1)].entity)
+                If lines.Count > 0 Then scene.SelectOnly(lines[Min(at + 1, lines.Count - 1)].Entity)
             Case Key.LEFT
-                If at >= 0 Then SetOpen(rows[at].entity, False)
+                If at >= 0 Then SetOpen(lines[at].Entity, False)
             Case Key.RIGHT
-                If at >= 0 Then SetOpen(rows[at].entity, True)
+                If at >= 0 Then SetOpen(lines[at].Entity, True)
             Default
                 Return False
         End Select
@@ -248,10 +285,18 @@ Public Final Class SceneTree Extends Widget
         ui.ClosePopup(hint)
         Local going = Going(point)
         If going == Null Then Return
-        history.Commit(ReparentEdit(scene, going, TargetAt(point)))
+        Local target = TargetAt(point)
+        // What it went under shows.
+        If target != Null Then SetOpen(target, True)
+        history.Commit(ReparentEdit(scene, going, target))
     End Method
 
-    // Whether the point's on what it can be dropped on.
+    // A row's drag was called off.
+    Package Method DragCancelled(ui: Ui)
+        ui.ClosePopup(hint)
+    End Method
+
+    // The row at `point`, or Null.
     Method RowAt(point: Vec2): TreeRow?
         For row In rows
             If row.Box().Contains(point) Then Return row
@@ -310,14 +355,44 @@ Public Final Class SceneTree Extends Widget
     End Method
 
     Method FindNext()
+        Rechecked()
+        If lines.Count > 0 Then scene.SelectOnly(lines[(SelectedLine() + 1) % lines.Count].Entity)
+    End Method
+
+    // Which line the last of what's selected is, or -1.
+    Method SelectedLine(): Int
         Local selected = scene.Selected()
-        Local at = -1
-        If selected.Count > 0
-            For i = 0 To rows.Count - 1
-                If RefEquals(rows[i].entity, selected[selected.Count - 1]) Then at = i
-            End For
+        Return selected.Count > 0 ? IndexOf(selected[selected.Count - 1]) : -1
+    End Method
+
+    Method IndexOf(entity: Entity): Int
+        For i = 0 Until lines.Count
+            If RefEquals(lines[i].Entity, entity) Then Return i
+        End For
+        Return -1
+    End Method
+
+    // Shows lines again if one's been freed, which only those in view are checked for each frame.
+    Method Rechecked()
+        For line In lines
+            If line.Entity.Freed()
+                Rebuilt()
+                Return
+            End If
+        End For
+    End Method
+
+    // Scrolls as little as brings `entity` into view.
+    Method ScrollTo(entity: Entity)
+        Local at = IndexOf(entity)
+        If at < 0 Then Return
+        Local top = (at As Float32) * ROW_HEIGHT
+        Local view = scroller.Box().Height
+        If top < scroller.Offset()
+            scroller.SetOffset(top)
+        ElseIf top + ROW_HEIGHT > scroller.Offset() + view
+            scroller.SetOffset(top + ROW_HEIGHT - view)
         End If
-        scene.SelectOnly(rows[(at + 1) % rows.Count].entity)
     End Method
 
     Method Renames(ui: Ui?)
@@ -339,56 +414,102 @@ Public Final Class SceneTree Extends Widget
         field = Null
         renaming = Null
         If editing == Null || entity == Null Then Return
-        editing.Parent()?.Remove(editing)
+        // The keyboard comes back here, unless it went elsewhere by a click.
         Local ui = Owner()
-        If ui != Null && ui.Focused() == Null Then ui.Focus(Self)
+        Local focused = ui?.Focused()
+        Local had = focused != Null && RefEquals(focused, editing)
+        editing.Parent()?.Remove(editing)
+        If ui != Null && had Then ui.Focus(Self)
         Local name = editing.Text()
         If keeping && name != "" && name != entity.Name()
             history.Commit(RenameEdit(entity, name))
         End If
     End Method
 
-    // Shows the rows, which ends a drag or a rename: their rows are gone.
+    // Finds what it shows, which ends a drag.
     Method Rebuilt()
         dirty = False
         Local ui = hinted
         If ui != Null Then ui.ClosePopup(hint)
         hinted = Null
-        field = Null
-        renaming = Null
-        For child In list.Children()
-            list.Remove(child)
+        lines = []
+        For row In rows
+            row.DragEnded()
         End For
-        rows = []
         If finding != ""
             Local wanted = finding.ToLower()
             For entity In scene.Entities()
-                If NameOf(entity).ToLower().Contains(wanted) Then Added(entity, 0)
+                If entity.Name().ToLower().Contains(wanted) Then lines.Add(TreeLine(entity, 0))
             End For
-            Return
+        Else
+            For entity In scene.SiblingsOf(Null)
+                Walked(entity, 0)
+            End For
         End If
-        For entity In scene.SiblingsOf(Null)
-            Walked(entity, 0)
-        End For
+        Windowed(True)
     End Method
 
     Method Walked(entity: Entity, depth: Int)
-        Added(entity, depth)
+        lines.Add(TreeLine(entity, depth))
         If !IsOpen(entity) Then Return
         For child In entity.Children()
             Walked(child, depth + 1)
         End For
     End Method
 
-    Method Added(entity: Entity, depth: Int)
-        Local row = TreeRow(Self, entity, depth)
-        row.Styled(scene)
-        rows.Add(row)
-        list.Add(row)
+    // Makes the rows in view, keeping those there are; `again` when what's shown has changed. A row
+    // being held stays where it is until it's let go, as the pointer's its.
+    Method Windowed(again: Bool)
+        Local view = scroller.Box().Height
+        If view <= 0.0 Then view = Window.Open() ? Window.Height() As Float32 : 0.0
+        Local count = Ceil(view / ROW_HEIGHT) As Int + 2
+        Local start = Min(Floor(scroller.Offset() / ROW_HEIGHT) As Int, Max(lines.Count - count, 0))
+        Local last = Min(start + count, lines.Count) - 1
+        If !again && (held != Null || (start == first && last - start + 1 == rows.Count)) Then Return
+        Local made: TreeRow[] = []
+        For i = start To last
+            Local line = lines[i]
+            // Freed, the next Update finds what's there now.
+            If line.Entity.Freed()
+                dirty = True
+                Continue
+            End If
+            Local row: TreeRow? = Null
+            For each In rows
+                If RefEquals(each.entity, line.Entity) && each.Depth() == line.Depth Then row = each
+            End For
+            Local shown = row ?? TreeRow(Self, line.Entity, line.Depth)
+            shown.Styled(scene)
+            made.Add(shown)
+        End For
+        first = start
+        Local same = made.Count == rows.Count && list.Children().Count == rows.Count + 2
+        For i = 0 Until made.Count
+            If same && !RefEquals(made[i], rows[i]) Then same = False
+        End For
+        If same && above.Parent() != Null && !again Then Return
+        rows = made
+        above.SetHeight(Sizing.Fixed((start As Float32) * ROW_HEIGHT))
+        below.SetHeight(Sizing.Fixed((Max(lines.Count - last - 1, 0) As Float32) * ROW_HEIGHT))
+        If same Then Return
+        list.RemoveAll()
+        list.Add(above)
+        For row In rows
+            list.Add(row)
+        End For
+        list.Add(below)
     End Method
 
-    Package Method RenameSoon(entity: Entity)
-        pendingRename = entity
+    Method Holding(row: TreeRow?)
+        held = row
+    End Method
+
+    // Says `entity` was pressed; whether it was the last pressed before this, so a double click's all
+    // on it.
+    Package Method Pressed(entity: Entity): Bool
+        Local last = lastPressed
+        lastPressed = entity
+        Return last != Null && RefEquals(last, entity)
     End Method
 
     Package Method IsSelected(entity: Entity): Bool => scene.IsSelected(entity)
@@ -401,6 +522,12 @@ Public Final Class SceneTree Extends Widget
         scene.ToggleSelected(entity)
     End Method
 End Class
+
+// What's shown on a line of the tree, made a row while it's in view.
+Struct TreeLine
+    Public Field Entity: Entity
+    Public Field Depth: Int
+End Struct
 
 // What a row calls an entity: its name, or with none, what it is.
 Function NameOf(entity: Entity): String
@@ -418,6 +545,10 @@ Class TreeRow Extends Widget
     // Whether the press was on what was selected already, so letting go selects only it.
     Field wasSelected: Bool = False
     Field opening: Bool = False
+    // Whether Shift was down at the press.
+    Field shifted: Bool = False
+    // Whether its drag was ended, so it takes another press to begin one.
+    Field ended: Bool = False
 
     New(owner: SceneTree, shown: Entity, indent: Int)
         entity = shown
@@ -425,18 +556,32 @@ Class TreeRow Extends Widget
         depth = indent
         Super.New("tree.row", "tree.row")
         SetTranslates(False)
+        SetHeight(Sizing.Fixed(ROW_HEIGHT))
     End New
 
+    Package Method Depth(): Int => depth
+
+    // What's shown changed under its drag.
+    Package Method DragEnded()
+        If dragging Then ended = True
+        dragging = False
+    End Method
+
+    // Hidden itself, dim; hidden by what it's in, less so.
     Package Method Styled(scene: EditedScene)
         Local selected = scene.IsSelected(entity)
         If entity.Hidden()
             SetStyleName(selected ? "tree.row.selected.hidden" : "tree.row.hidden")
+        ElseIf !entity.Showing()
+            SetStyleName(selected ? "tree.row.selected.under" : "tree.row.under")
         Else
             SetStyleName(selected ? "tree.row.selected" : "tree.row")
         End If
     End Method
 
     Public Override Method Measure(): Vec2
+        // Freed in this frame, it's gone by the next.
+        If entity.Freed() Then Return Vec2(0, 0)
         Local size = TextSize(NameOf(entity))
         Return Vec2(Left() + size.x, size.y)
     End Method
@@ -451,6 +596,7 @@ Class TreeRow Extends Widget
 
     Public Override Method Draw(paint: Painter)
         Super.Draw(paint)
+        If entity.Freed() Then Return
         Local box = ContentBox()
         If entity.ChildCount() > 0
             Local own = tree
@@ -469,10 +615,12 @@ Class TreeRow Extends Widget
 
     Public Override Method PointerDown(point: Vec2): Bool
         Local own = tree
-        If own == Null Then Return False
+        If own == Null || entity.Freed() Then Return False
         from = point
         dragging = False
+        ended = False
         opening = False
+        own.Holding(Self)
         // Its opener.
         Local box = ContentBox()
         Local at = point.x - box.X - (depth As Float32) * INDENT
@@ -482,19 +630,22 @@ Class TreeRow Extends Widget
             Return True
         End If
         wasSelected = own.IsSelected(entity)
-        If KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT)
+        shifted = KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT)
+        If shifted
             own.Toggle(entity)
         ElseIf !wasSelected
             own.SelectAlone(entity)
         End If
-        If MouseDoubleClick(MouseButton.LEFT) Then own.RenameSoon(entity)
+        // Two quick clicks, each on another, aren't a double click on either.
+        Local again = own.Pressed(entity)
+        If !shifted && again && MouseDoubleClick(MouseButton.LEFT) Then own.RenameSoon(entity)
         Return True
     End Method
 
     Public Override Method PointerDownWith(button: MouseButton, point: Vec2): Bool
         Local own = tree
         Local ui = Owner()
-        If button != MouseButton.RIGHT || own == Null || ui == Null Then Return False
+        If button != MouseButton.RIGHT || own == Null || ui == Null || entity.Freed() Then Return False
         If !own.IsSelected(entity) Then own.SelectAlone(entity)
         own.RowMenu(ui, point)
         Return False
@@ -503,7 +654,7 @@ Class TreeRow Extends Widget
     Public Override Method PointerDrag(point: Vec2)
         Local own = tree
         Local ui = Owner()
-        If opening || own == Null || ui == Null Then Return
+        If opening || ended || own == Null || ui == Null Then Return
         If !dragging && Distance(point, from) < DRAGGED Then Return
         dragging = True
         own.DragOver(ui, point)
@@ -513,13 +664,23 @@ Class TreeRow Extends Widget
         Local own = tree
         Local ui = Owner()
         If own == Null || ui == Null Then Return
+        own.Holding(Null)
         If dragging
             dragging = False
             own.Dropped(ui, point)
-        ElseIf over && wasSelected && !opening && !own.Renaming() && !KeyDown(Key.LEFT_SHIFT) &&
-               !KeyDown(Key.RIGHT_SHIFT)
+        ElseIf over && wasSelected && !opening && !ended && !own.Renaming() && !shifted &&
+               !entity.Freed()
             own.SelectAlone(entity)
         End If
+    End Method
+
+    // Called off, its drag goes nowhere.
+    Public Override Method PointerCancelled(point: Vec2)
+        Local own = tree
+        Local ui = Owner()
+        If own == Null || ui == Null Then Return
+        own.Holding(Null)
+        own.DragCancelled(ui)
     End Method
 
     Method Left(): Float32 => (depth As Float32) * INDENT + OPENER

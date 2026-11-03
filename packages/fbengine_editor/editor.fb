@@ -90,7 +90,7 @@ Public Final Class Editor
         End Function)
         Edits.OnChanged(Function[Weak Self]()
             Local own = Self
-            If own != Null Then own.Tree.MarkChanged()
+            If own != Null && own.Edits.TreeChanged() Then own.Tree.MarkChanged()
         End Function)
         Edits.OnFailed(Function[Weak Self](edit: Edit, error: IOError)
             Self?.Said("Couldn't {edit.Name}", error.Message)
@@ -474,7 +474,8 @@ Public Final Class Editor
         Local asking = Dialog("Open a project", "The folder with its project.toml:")
         Local field = TextField("", "", "dialog.path")
         field.SetTranslates(False)
-        field.SetMinSize(420.0, 0.0)
+        // As wide whatever's typed, which scrolls, so the dialog stays where it is.
+        field.SetWidth(Sizing.Fixed(420.0))
         asking.AddContent(field)
         asking.AddButton("Cancel")
         Local opening = asking.AddButton("Open", Function[Weak Self]()
@@ -699,13 +700,20 @@ Public Final Class Editor
         End Function, Null, hasProject)
         Local anySelected = Function[Weak Self](): Bool
             Local own = Self
-            Return own != Null && own.Edited.Selected().Count > 0 && !own.View.HandleHeld()
+            Return own != Null && own.Edited.Selected().Count > 0 && !own.View.HandleHeld() &&
+                   !own.Tree.Renaming()
         End Function
         Actions.Add("tree.rename", "Rename", Function[Weak Self]()
             Local own = Self
             If own == Null Then Return
             Local selected = own.Edited.Selected()
-            If selected.Count > 0 Then own.Tree.BeginRename(selected[selected.Count - 1])
+            If selected.Count == 0 Then Return
+            If own.Docked.Showing("tree") && own.Docked.Active("tree")
+                own.Tree.BeginRename(selected[selected.Count - 1])
+            Else
+                own.Docked.Show("tree")
+                own.Tree.RenameSoon(selected[selected.Count - 1])
+            End If
         End Function, Shortcut(Key.F2, False, False, False), anySelected)
         Actions.Add("tree.duplicate", "Duplicate", Function[Weak Self]()
             Local own = Self
@@ -719,7 +727,8 @@ Public Final Class Editor
             own.Edits.Commit(HideEdit(selected, !selected[selected.Count - 1].Hidden()))
         End Function, Shortcut(Key.H, False, False, False), Function[Weak Self](): Bool
             Local own = Self
-            Return own != Null && own.Edited.Selected().Count > 0 && !own.View.Busy()
+            Return own != Null && own.Edited.Selected().Count > 0 && !own.View.Busy() &&
+                   !own.Tree.Renaming()
         End Function)
         Actions.Add("tree.delete", "Delete", Function[Weak Self]()
             Local own = Self
@@ -730,7 +739,10 @@ Public Final Class Editor
             If own == Null Then Return
             own.Docked.Show("tree")
             own.Tree.FocusFind()
-        End Function, PrimaryKey(Key.F), hasProject)
+        End Function, PrimaryKey(Key.F), Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Current() != Null && !own.Tree.Renaming()
+        End Function)
         Tree.OnRowMenu(Function[Weak Self](ui: Ui, point: Vec2)
             Local own = Self
             If own != Null
@@ -821,21 +833,28 @@ Function EditorTheme(): Theme
     Local row = StyleFields()
     row.Padding = Insets.Symmetric(6.0, 2.0)
     row.FontSize = 14.0
-    For name In ["tree.row", "tree.row.selected", "tree.row.hidden", "tree.row.selected.hidden"]
+    For name In ["tree.row", "tree.row.selected", "tree.row.hidden", "tree.row.selected.hidden",
+                 "tree.row.under", "tree.row.selected.under"]
         theme.SetFields(name, row)
     End For
     Local rowOver = StyleFields()
     rowOver.Background = Color.Hex("#2b3038")
     theme.SetFields("tree.row", rowOver, WidgetState.HOVERED)
     theme.SetFields("tree.row.hidden", rowOver, WidgetState.HOVERED)
+    theme.SetFields("tree.row.under", rowOver, WidgetState.HOVERED)
     Local chosen = StyleFields()
     chosen.Background = Color.Hex("#2f4a7a")
     theme.SetFields("tree.row.selected", chosen)
     theme.SetFields("tree.row.selected.hidden", chosen)
+    theme.SetFields("tree.row.selected.under", chosen)
     Local dim = StyleFields()
     dim.Foreground = Color.Hex("#7d838c")
     theme.SetFields("tree.row.hidden", dim)
     theme.SetFields("tree.row.selected.hidden", dim)
+    Local underDim = StyleFields()
+    underDim.Foreground = Color.Hex("#a3a8b0")
+    theme.SetFields("tree.row.under", underDim)
+    theme.SetFields("tree.row.selected.under", underDim)
     Local tree = StyleFields()
     tree.Background = Color.Hex("#14161a")
     theme.SetFields("tree", tree)

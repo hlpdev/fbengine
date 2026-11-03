@@ -758,3 +758,95 @@ Function APopupsStateIsItsPointersThatUpdate() Throws GraphicsError
     Update(ui)
     Expect(item.State() == WidgetState.HOVERED, "it's {item.State()}")
 End Function
+
+// Says how it was let go.
+Class LettingGo Extends Widget
+    Public Field Ups: Int = 0
+    Public Field Cancels: Int = 0
+
+    New()
+        Super.New("box", "letting")
+        SetSize(100.0, 100.0)
+    End New
+
+    @MainThread Public Override Method PointerDown(point: Vec2): Bool => True
+
+    @MainThread Public Override Method PointerUp(point: Vec2, over: Bool)
+        Ups += 1
+    End Method
+End Class
+
+// As LettingGo, but tells a drag called off from one let go.
+Class CallsOff Extends LettingGo
+    New()
+        Super.New()
+    End New
+
+    @MainThread Public Override Method PointerCancelled(point: Vec2)
+        Cancels += 1
+    End Method
+End Class
+
+@Test
+Function AModalCallsOffAPress() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    For calling In [False, True]
+        Local widget = calling ? CallsOff() : LettingGo()
+        Local root = Node("root")
+        root.Add(widget)
+        Local ui = Ui(root)
+        ui.Update()
+        Try Simulate.MoveMouse(50.0, 50.0)
+        Flip()
+        ui.Update()
+        Try Simulate.MouseDown(MouseButton.LEFT)
+        Flip()
+        ui.Update()
+        Expect(ui.Pressed() != Null, "it wasn't pressed")
+        ui.OpenPopup(Widget("box", "over"), PopupKind.MODAL)
+        Expect(ui.Pressed() == Null, "the modal left it held")
+        // At first, a PointerUp over nothing; with its own, only that.
+        Expect(widget.Ups == (calling ? 0 : 1), "{widget.Ups} ups")
+        Expect(widget.Cancels == (calling ? 1 : 0), "{widget.Cancels} cancels")
+        Try Simulate.MouseUp(MouseButton.LEFT)
+        Flip()
+        ui.Update()
+        Expect(widget.Ups == (calling ? 0 : 1), "letting go after told it again")
+    End For
+    EndGraphics()
+End Function
+
+// Counts how many times it's measured, which only a layout does.
+Class CountsMeasures Extends Widget
+    Public Field Measures: Int = 0
+
+    New()
+        Super.New("box", "counted")
+    End New
+
+    @MainThread Public Override Method Measure(): Vec2
+        Measures += 1
+        Return Vec2(10.0, 10.0)
+    End Method
+End Class
+
+@Test
+Function TheSameStyleNameAgainCostsNoLayout() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Local counted = CountsMeasures()
+    Local root = Node("root")
+    root.Add(counted)
+    Local ui = Ui(root)
+    ui.Update()
+    ui.Update()
+    Local before = counted.Measures
+    counted.SetStyleName("box")
+    ui.Update()
+    Expect(counted.Measures == before, "the same name laid it out again")
+    counted.SetStyleName("label")
+    ui.Update()
+    Expect(counted.Measures > before, "another name didn't")
+    EndGraphics()
+End Function

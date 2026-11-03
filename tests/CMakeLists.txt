@@ -126,7 +126,7 @@ if(FBENGINE_FB_TESTS)
       cmake_path(GET package FILENAME name)
       add_test(NAME ${name}.package COMMAND "${FBENGINE_FB}" test "${package}")
       set_tests_properties(${name}.package PROPERTIES ENVIRONMENT
-                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
     endif()
   endforeach()
 
@@ -846,6 +846,12 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.controls_watch PROPERTIES
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "\nwatched 30 frames, moved True, jumped True\r?\n$")
+  add_test(NAME examples.room_watch
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/room"
+                   -- --watch --frames 30)
+  set_tests_properties(examples.room_watch PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "\nwatched 30 frames, [0-9]+ draws in the last\r?\n$")
   add_test(NAME examples.menu_watch
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/menu"
                    -- --watch --frames 60)
@@ -916,7 +922,7 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                scene/material_tests.cpp scene/bvh_tests.cpp scene/collision_tests.cpp
                scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
                scene/plane_tests.cpp scene/draw_tests.cpp
-               scene/terrain_tests.cpp scene/clusters_tests.cpp
+               scene/terrain_tests.cpp scene/clusters_tests.cpp scene/effects_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
@@ -954,6 +960,25 @@ catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
 # what it does.
 if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
+      "particles-colors=SetColors on a Particles: a particle's alpha is 0 to 1, not 2"
+      "particles-roll=SetRoll on a Particles: a particle's roll is up to 0 to Pi each way, not -1"
+      "decal-limit=Decal: a decal's limit is above 0 and up to Pi / 2, not 2"
+      "sky-texture-brightness=SetSkyTexture on a World: a sky's brightness is 0 or more, not -1"
+      "particles-capacity=SetCapacity on a Particles: an emitter holds 1 to 1048576 particles, not 0"
+      "particles-rate=SetRate on a Particles: particles are born at 0 a second or more, not -1"
+      "particles-life=SetLife on a Particles: a particle lives above 0 seconds, the least to the most, up to 512, not 2 to 1"
+      "particles-motion=SetMotion on a Particles: a particle's speeds are 0 or more, least to most, its spread 0 to Pi from its axis, and its spin 0 or more, not 2 to 1, 0, 0"
+      "particles-forces=SetForces on a Particles: a particle's gravity is finite and its drag 0 or more, not -1"
+      "particles-sizes=SetSizes on a Particles: a particle's half-size is 0 or more, not -1 to 0"
+      "particles-burst=Burst on a Particles: a burst is 0 particles or more, not -1"
+      "sky-brightness=SetAtmosphere on a World: a sky's brightness is 0 or more, not -1"
+      "sky-sun=SetAtmosphere on a World: a sky's sun is a directional light"
+      "decal-box=Decal: a decal's box has an inverse"
+      "shadow-atlas-limit=SetShadowAtlasLimit: a shadow atlas's side is at most 256 to 8192, not 128"
+      "shadow-size=SetShadowSize on a Light: a shadow's tile is 16 to 8192 texels a side, not 8"
+      "cascades=SetCascades on a Light: a light has 1 to 4 cascades, not 5"
+      "shadow-distance=SetShadowDistance on a Light: a shadow reaches a distance above 0, not 0"
+      "shadow-bias=SetShadowBias on a Light: a shadow's biases are 0 or more, not -1 and 0"
       "render-no-target=Render on a World: a camera with no target draws into the screen, and there's no window open"
       "render-bad-tween=Render on a World: a tween is 0 to 1, not 2"
       "layer-uv-zero=SetLayerUv on a Material: a layer's UV scale is finite and not 0, not \\(0, 1\\)"
@@ -1780,6 +1805,13 @@ catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
 
 # Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as
 # operator new is this test's.
+add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp)
+target_link_libraries(fbengine_effects_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_effects_oom_tests)
+catch_discover_tests(fbengine_effects_oom_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths}"
+                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+
 add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain
                       ${CMAKE_DL_LIBS})

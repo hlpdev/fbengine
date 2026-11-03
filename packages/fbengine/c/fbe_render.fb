@@ -35,6 +35,7 @@ End Struct
     Public Field range: Float32
     Public Field inner_cosine: Float32
     Public Field outer_cosine: Float32
+    Public Field shadow: Int32
 End Struct
 
 @CLayout Public Struct fbe_cluster_t
@@ -53,5 +54,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_render_draw_lights(camera: UInt64, target_width: Float32, target_height: Float32,
                                     tween: Float32, indices: Ptr<UInt32>, capacity: Int32): Int32
     Function fbe_render_camera(camera: UInt64, tween: Float32): Bool
+    Function fbe_render_set_shadow_atlas_limit(side: Int32): Bool
+    Function fbe_render_shadow_atlas_limit(): Int32
     Function fbe_render_world(world: UInt64, tween: Float32): Bool
 End Extern

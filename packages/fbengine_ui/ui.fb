@@ -547,7 +547,7 @@ Public Final Class Ui
             Local holding = pressed
             If holding != Null
                 pressed = Null
-                holding.PointerUp(lastPoint, False)
+                holding.PointerCancelled(lastPoint)
                 pressedWith = MouseButton.LEFT
             End If
         End If
