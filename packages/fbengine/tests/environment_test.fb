@@ -4,6 +4,7 @@
 Import std.core
 Import std.image
 Import std.io
+Import std.math
 Import std.os
 Import std.test
 Import fbengine
@@ -37,8 +38,8 @@ Function AnHdrImageIsATextureThatBakes() Throws GraphicsError
     Expect(sky.Format() == TextureFormat.RGBA16F)
     Expect(sky.Levels() == 1)
     Local bytes = sky.ReadPixels()
-    // 4 is 0x4080, 65504 0x7BFF, and 1 0x3C00, little end first.
-    Expect(bytes[0] == 0x80 && bytes[1] == 0x40)
+    // 4 is 0x4400, 65504 0x7BFF, and 1 0x3C00, little end first.
+    Expect(bytes[0] == 0 && bytes[1] == 0x44)
     Expect(bytes[2] == 0xFF && bytes[3] == 0x7B)
     Expect(bytes[4] == 0 && bytes[5] == 0)
     Expect(bytes[6] == 0 && bytes[7] == 0x3C)
@@ -59,6 +60,6 @@ Function AnHdrFileLoadsAsLight() Throws GraphicsError, IOError
     Expect(sky.Format() == TextureFormat.RGBA16F)
     Expect(sky.Levels() == 4)
     Local bytes = sky.ReadPixels()
-    Expect(bytes[0] == 0x80 && bytes[1] == 0x40)
+    Expect(bytes[0] == 0 && bytes[1] == 0x44)
     Expect((Try Environment.Bake(sky, 16, 4)).Levels() == 2)
 End Function

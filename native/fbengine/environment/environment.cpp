@@ -209,7 +209,7 @@ bool bake_tile(const tile_t& what) {
 bool bake_level(const tile_t& level) {
     baked_t& state = baked();
     const auto most =
-        static_cast<std::uint32_t>(std::sqrt(static_cast<double>(state.budget / level.samples)));
+        static_cast<std::uint32_t>(std::sqrt(static_cast<double>(state.budget) / level.samples));
     const std::uint32_t side = std::clamp(most, 1U, level.size);
     for (std::uint32_t y = 0; y < level.size; y += side) {
         for (std::uint32_t x = 0; x < level.size; x += side) {

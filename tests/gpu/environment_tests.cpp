@@ -187,8 +187,11 @@ floats_t draw(spheres_t spheres, std::uint64_t environment = 0, std::int32_t siz
 }
 
 vec3_t cross(const vec3_t& a, const vec3_t& b) {
-    return { (a[1] * b[2]) - (a[2] * b[1]), (a[2] * b[0]) - (a[0] * b[2]),
-             (a[0] * b[1]) - (a[1] * b[0]) };
+    return {
+        (a[1] * b[2]) - (a[2] * b[1]),
+        (a[2] * b[0]) - (a[0] * b[2]),
+        (a[0] * b[1]) - (a[1] * b[0]),
+    };
 }
 
 double dot(const vec3_t& a, const vec3_t& b) {
@@ -253,10 +256,8 @@ vec3_t octahedral_direction(std::uint32_t x, std::uint32_t y, std::uint32_t size
 }
 
 /// A smooth lobe of light, and what it integrates to.
-const vec3_t lobe_axis = normalized({ 0.6, 0.5, -0.6 });
-
 double lobe(const vec3_t& direction) {
-    const double along = std::max(dot(direction, lobe_axis), 0.0);
+    const double along = std::max(dot(direction, normalized({ 0.6, 0.5, -0.6 })), 0.0);
     return 4.0 * along * along;
 }
 
@@ -277,9 +278,11 @@ vec3_t in_frame_of(const vec3_t& normal, const vec3_t& local) {
         std::abs(normal[1]) < 0.999 ? vec3_t{ 0.0, 1.0, 0.0 } : vec3_t{ 1.0, 0.0, 0.0 };
     const vec3_t across = normalized(cross(other, normal));
     const vec3_t up = cross(normal, across);
-    return { (across[0] * local[0]) + (up[0] * local[1]) + (normal[0] * local[2]),
-             (across[1] * local[0]) + (up[1] * local[1]) + (normal[1] * local[2]),
-             (across[2] * local[0]) + (up[2] * local[1]) + (normal[2] * local[2]) };
+    return {
+        (across[0] * local[0]) + (up[0] * local[1]) + (normal[0] * local[2]),
+        (across[1] * local[0]) + (up[1] * local[1]) + (normal[1] * local[2]),
+        (across[2] * local[0]) + (up[2] * local[1]) + (normal[2] * local[2]),
+    };
 }
 
 constexpr int quadrature_steps = 200;
@@ -290,9 +293,11 @@ double lobe_irradiance(const vec3_t& normal) {
         const double u = (ring + 0.5) / quadrature_steps;
         for (int spoke = 0; spoke < quadrature_steps; ++spoke) {
             const double angle = 2.0 * pi * (spoke + 0.5) / quadrature_steps;
-            sum +=
-                lobe(in_frame_of(normal, { std::sqrt(u) * std::cos(angle),
-                                           std::sqrt(u) * std::sin(angle), std::sqrt(1.0 - u) }));
+            sum += lobe(in_frame_of(normal, {
+                                                std::sqrt(u) * std::cos(angle),
+                                                std::sqrt(u) * std::sin(angle),
+                                                std::sqrt(1.0 - u),
+                                            }));
         }
     }
     return sum / (quadrature_steps * quadrature_steps);
@@ -313,8 +318,11 @@ double lobe_specular(const vec3_t& normal, double roughness) {
         const double out = std::sqrt(std::max(1.0 - up_squared, 0.0));
         for (int spoke = 0; spoke < quadrature_steps; ++spoke) {
             const double angle = 2.0 * pi * (spoke + 0.5) / quadrature_steps;
-            const vec3_t local{ 2.0 * up * out * std::cos(angle), 2.0 * up * out * std::sin(angle),
-                                (2.0 * up_squared) - 1.0 };
+            const vec3_t local{
+                2.0 * up * out * std::cos(angle),
+                2.0 * up * out * std::sin(angle),
+                (2.0 * up_squared) - 1.0,
+            };
             if (local[2] > 0.0) {
                 sum += lobe(in_frame_of(normal, local)) * local[2];
                 weights += local[2];
@@ -426,13 +434,20 @@ TEST_CASE("a normal map's texel turns the normal in the tangent frame", "[gpu]")
     const vec3_t bitangent = cross(normal, tangent);
     // The middle pixel seen under a light off to a side, so a turn the wrong way is seen.
     const auto middle_under = [&](vec3_t light, spheres_t spheres) {
-        spheres.to_light = { static_cast<float>(light[0]), static_cast<float>(light[1]),
-                             static_cast<float>(light[2]), 0.0F };
+        spheres.to_light = {
+            static_cast<float>(light[0]),
+            static_cast<float>(light[1]),
+            static_cast<float>(light[2]),
+            0.0F,
+        };
         return draw(spheres).at(middle, middle)[0];
     };
     const auto turned = [&normal](const vec3_t& along, double by) {
-        return normalized({ normal[0] + (along[0] * by), normal[1] + (along[1] * by),
-                            normal[2] + (along[2] * by) });
+        return normalized({
+            normal[0] + (along[0] * by),
+            normal[1] + (along[1] * by),
+            normal[2] + (along[2] * by),
+        });
     };
     for (const float w : { 1.0F, -1.0F }) {
         INFO("w " << w);
@@ -574,15 +589,17 @@ TEST_CASE("the split sum's table holds no more light than there is", "[gpu]") {
         }
     }
     // The integrals themselves, by quadrature in doubles, in the middles of their texels.
-    for (const auto& [x, y, scaled, added] :
-         { std::tuple{ 63U, 63U, 0.8363, 0.0232 }, std::tuple{ 95U, 95U, 0.6359, 0.0017 },
-           std::tuple{ 31U, 95U, 0.7195, 0.0289 } }) {
+    for (const auto& [x, y, scaled, added] : {
+             std::tuple{ 63U, 63U, 0.8363, 0.0232 },
+             std::tuple{ 95U, 95U, 0.6359, 0.0017 },
+             std::tuple{ 31U, 95U, 0.7195, 0.0289 },
+         }) {
         INFO(x << ", " << y);
         CHECK(std::abs(table.at(x, y)[0] - scaled) < 0.004);
         CHECK(std::abs(table.at(x, y)[1] - added) < 0.004);
     }
-    // Near grazing, where half a texel's the most, as far from what it isn't.
-    CHECK(std::abs(table.at(3, 95)[0] - 0.8682) < 0.003);
+    // Near grazing and smooth, where half a texel across is 0.012 of it, and samples aren't noisy.
+    CHECK(std::abs(table.at(8, 12)[0] - 0.3008) < 0.006);
     // Head on, a rough surface reflects less at once than a smooth one.
     CHECK(table.at(127, 127)[0] + table.at(127, 127)[1] <
           table.at(127, 40)[0] + table.at(127, 40)[1]);
@@ -971,8 +988,13 @@ TEST_CASE("a bake and its reading are what a lobe of light integrates to", "[gpu
     const std::uint64_t environment = fbe_environment_bake(lobe_source(1024, 512), 64, 4096);
     REQUIRE(environment != 0);
     const floats_t irradiance = read(fbe_environment_irradiance(environment));
-    for (const auto& [x, y] : { std::pair{ 3U, 5U }, std::pair{ 15U, 15U }, std::pair{ 25U, 6U },
-                                std::pair{ 9U, 27U }, std::pair{ 28U, 28U } }) {
+    for (const auto& [x, y] : {
+             std::pair{ 3U, 5U },
+             std::pair{ 15U, 15U },
+             std::pair{ 25U, 6U },
+             std::pair{ 9U, 27U },
+             std::pair{ 28U, 28U },
+         }) {
         INFO("irradiance " << x << ", " << y);
         const double wanted = lobe_irradiance(octahedral_direction(x, y, 32));
         CHECK(std::abs(irradiance.at(x, y)[0] - wanted) < 0.01);
@@ -983,9 +1005,12 @@ TEST_CASE("a bake and its reading are what a lobe of light integrates to", "[gpu
         const floats_t frame = read(specular, static_cast<std::uint32_t>(level));
         const std::uint32_t last = frame.width - 1;
         const double roughness = static_cast<double>(level) / levels;
-        for (const auto& [x, y] :
-             { std::pair{ last / 5, last / 3 }, std::pair{ last / 2, last / 2 },
-               std::pair{ last * 4 / 5, last / 5 }, std::pair{ last / 4, last * 7 / 8 } }) {
+        for (const auto& [x, y] : {
+                 std::pair{ last / 5, last / 3 },
+                 std::pair{ last / 2, last / 2 },
+                 std::pair{ last * 4 / 5, last / 5 },
+                 std::pair{ last / 4, last * 7 / 8 },
+             }) {
             INFO("level " << level << ", " << x << ", " << y);
             const double wanted = lobe_specular(octahedral_direction(x, y, frame.width), roughness);
             CHECK(std::abs(frame.at(x, y)[0] - wanted) < 0.01);
@@ -1006,8 +1031,11 @@ TEST_CASE("a bake and its reading are what a lobe of light integrates to", "[gpu
             vec3_t normal{};
             if (normal_at(x, y, normal)) {
                 const double twice = 2.0 * normal[2];
-                const vec3_t reflected{ twice * normal[0], twice * normal[1],
-                                        (twice * normal[2]) - 1.0 };
+                const vec3_t reflected{
+                    twice * normal[0],
+                    twice * normal[1],
+                    (twice * normal[2]) - 1.0,
+                };
                 const double away = std::abs(mirror.at(x, y)[0] - lobe(reflected));
                 INFO(x << ", " << y);
                 CHECK(away < 0.07);
@@ -1029,26 +1057,28 @@ TEST_CASE("floats are written as half floats", "[gpu]") {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const std::array<float, 16> values{
         0.5F,  4.0F,  1000.0F, 1.0F,     70000.0F, inf,  -1.0F, nan,
-        6e-5F, 1e-6F, 1e-9F,   65504.0F, 1.5F,     1.0F, 0.1F,  1.0F
+        6e-5F, 1e-6F, 1e-9F,   65504.0F, 1.5F,     1.0F, 0.1F,  1.0F,
     };
     require(fbe_texture_write_floats(texture, 0, 0, 2, 2, values.data()));
     const floats_t back = read(texture);
-    const std::array<float, 16> wanted{ 0.5F,
-                                        4.0F,
-                                        1000.0F,
-                                        1.0F,
-                                        65504.0F,
-                                        65504.0F,
-                                        0.0F,
-                                        0.0F,
-                                        from_half(0x03EFU),
-                                        from_half(0x0011U),
-                                        0.0F,
-                                        65504.0F,
-                                        1.5F,
-                                        1.0F,
-                                        from_half(0x2E66U),
-                                        1.0F };
+    const std::array<float, 16> wanted{
+        0.5F,
+        4.0F,
+        1000.0F,
+        1.0F,
+        65504.0F,
+        65504.0F,
+        0.0F,
+        0.0F,
+        from_half(0x03EFU),
+        from_half(0x0011U),
+        0.0F,
+        65504.0F,
+        1.5F,
+        1.0F,
+        from_half(0x2E66U),
+        1.0F,
+    };
     for (std::size_t at = 0; at < wanted.size(); ++at) {
         INFO("value " << at);
         CHECK(back.values[at] == wanted.at(at));
