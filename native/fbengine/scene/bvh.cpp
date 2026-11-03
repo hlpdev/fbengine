@@ -35,34 +35,63 @@ vec3_t greatest(vec3_t a, vec3_t b) {
 /// through an edge two triangles share crosses one of them, however it rounds.
 constexpr float edge_slack = 1e-5F;
 
+struct wide_t {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+};
+
+wide_t wide_of(vec3_t v) {
+    return { .x = v.x, .y = v.y, .z = v.z };
+}
+
+wide_t operator-(wide_t a, wide_t b) {
+    return { .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z };
+}
+
+double wide_dot(wide_t a, wide_t b) {
+    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
+}
+
+wide_t wide_cross(wide_t a, wide_t b) {
+    return {
+        .x = (a.y * b.z) - (a.z * b.y),
+        .y = (a.z * b.x) - (a.x * b.z),
+        .z = (a.x * b.y) - (a.y * b.x),
+    };
+}
+
 } // namespace
 
 float crosses_triangle(vec3_t a, vec3_t delta, const vec3_t* corners, bool& front) {
-    const vec3_t edge1 = corners[1] - corners[0];
-    const vec3_t edge2 = corners[2] - corners[0];
-    const vec3_t across = cross(delta, edge2);
-    const float determinant = dot(edge1, across);
-    if (std::fabs(determinant) < 1e-12F) {
+    // In double, as however long a segment is, floats round where it crosses.
+    const wide_t edge1 = wide_of(corners[1]) - wide_of(corners[0]);
+    const wide_t edge2 = wide_of(corners[2]) - wide_of(corners[0]);
+    const wide_t along = wide_of(delta);
+    const wide_t across = wide_cross(along, edge2);
+    const double determinant = wide_dot(edge1, across);
+    if (std::fabs(determinant) < 1e-12) {
         return -1.0F;
     }
-    const float inverse = 1.0F / determinant;
-    const vec3_t offset = a - corners[0];
-    const float u = dot(offset, across) * inverse;
-    if (u < -edge_slack || u > 1.0F + edge_slack) {
+    const double inverse = 1.0 / determinant;
+    const wide_t offset = wide_of(a) - wide_of(corners[0]);
+    const double u = wide_dot(offset, across) * inverse;
+    const double slack = edge_slack;
+    if (u < -slack || u > 1.0 + slack) {
         return -1.0F;
     }
-    const vec3_t up = cross(offset, edge1);
-    const float v = dot(delta, up) * inverse;
-    if (v < -edge_slack || u + v > 1.0F + edge_slack) {
+    const wide_t up = wide_cross(offset, edge1);
+    const double v = wide_dot(along, up) * inverse;
+    if (v < -slack || u + v > 1.0 + slack) {
         return -1.0F;
     }
-    const float time = dot(edge2, up) * inverse;
-    if (time < 0.0F || time > 1.0F) {
+    const double time = wide_dot(edge2, up) * inverse;
+    if (time < 0.0 || time > 1.0) {
         return -1.0F;
     }
     // A segment meeting a counterclockwise triangle's front goes against its normal.
-    front = determinant > 0.0F;
-    return time;
+    front = determinant > 0.0;
+    return static_cast<float>(time);
 }
 
 void bvh_t::build(const std::vector<surface_t>& surfaces) {

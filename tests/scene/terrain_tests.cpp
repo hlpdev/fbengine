@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <numbers>
 #include <random>
 #include <vector>
 
@@ -433,4 +434,100 @@ TEST_CASE("a line longer than an int counts still finds a terrain", "[scene]") {
     fbe_pick_t hit{};
     CHECK(fbe_world_pick(world.handle, &from, &to, 0.0F, 0, &hit) == 1);
     CHECK(hit.entity == terrain);
+}
+
+namespace {
+
+/// How many of a scan's lines through a turned flat grid miss it, straight along Y and slanted,
+/// from `half` above and below it, the grid `out` from the origin.
+int missed_on_a_slant(std::uint64_t world, float out, float half) {
+    const float turn = 25.0F * std::numbers::pi_v<float> / 180.0F;
+    const float c = std::cos(turn);
+    const float s = std::sin(turn);
+    std::mt19937 random(5); // NOLINT(bugprone-random-generator-seed)
+    std::uniform_real_distribution<float> where(-6.0F, 6.0F);
+    int missed = 0;
+    for (int i = 0; i < 2000; ++i) {
+        const float x = where(random);
+        const float z = where(random);
+        const float wx = (c * x) + out;
+        const float wy = s * x;
+        const float wz = z + out;
+        for (const float lean : { 0.0F, 0.3F }) {
+            const fbe_vec3_t from{ .x = wx - (half * lean), .y = wy + half, .z = wz };
+            const fbe_vec3_t to{ .x = wx + (half * lean), .y = wy - half, .z = wz };
+            fbe_pick_t hit{};
+            missed += fbe_world_pick(world, &from, &to, 0.0F, 0, &hit) == 1 ? 0 : 1;
+        }
+    }
+    return missed;
+}
+
+} // namespace
+
+TEST_CASE("a long line onto a turned terrain hits it", "[scene]") {
+    struct scan_t {
+        float y_scale;
+        float out;
+        float half;
+    };
+    const std::array scans{
+        scan_t{ .y_scale = 0.001F, .out = 0.0F, .half = 1000.0F },
+        scan_t{ .y_scale = 1.0F, .out = 1000000.0F, .half = 1000.0F },
+        scan_t{ .y_scale = 1.0F, .out = 0.0F, .half = 1000000.0F },
+    };
+    for (const scan_t& scan : scans) {
+        const test_world_t world;
+        const std::uint64_t terrain = fbe_entity_create(world.handle, 0, FBE_ENTITY_TERRAIN);
+        REQUIRE(fbe_terrain_set_size(terrain, 16));
+        REQUIRE(fbe_entity_set_pick_mode(terrain, FBE_PICK_MESH));
+        const float half_turn = 25.0F * std::numbers::pi_v<float> / 360.0F;
+        REQUIRE(fbe_entity_set_rotation(terrain, 0.0F, 0.0F, std::sin(half_turn),
+                                        std::cos(half_turn), FBE_SPACE_WORLD));
+        REQUIRE(fbe_entity_set_scale(terrain, 1.0F, scan.y_scale, 1.0F, FBE_SPACE_LOCAL));
+        // Its middle at the scan's place.
+        const float back = 8.0F * std::cos(2.0F * half_turn);
+        const float down = 8.0F * std::sin(2.0F * half_turn);
+        REQUIRE(fbe_entity_set_position(terrain, scan.out - back, -down, scan.out - 8.0F,
+                                        FBE_SPACE_WORLD));
+        CAPTURE(scan.y_scale, scan.out, scan.half);
+        CHECK(missed_on_a_slant(world.handle, scan.out, scan.half) == 0);
+    }
+}
+
+TEST_CASE("a long line onto a turned mesh hits it", "[scene]") {
+    for (const float half : { 10000.0F, 100000.0F, 1000000.0F }) {
+        const test_world_t world;
+        const std::uint64_t mesh = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
+        const std::uint64_t geometry = fbe_geometry_plane(32);
+        REQUIRE(fbe_mesh_set_geometry(mesh, geometry));
+        fbe_geometry_release(geometry);
+        REQUIRE(fbe_entity_set_pick_mode(mesh, FBE_PICK_MESH));
+        const float half_turn = 25.0F * std::numbers::pi_v<float> / 360.0F;
+        REQUIRE(fbe_entity_set_rotation(mesh, 0.0F, 0.0F, std::sin(half_turn), std::cos(half_turn),
+                                        FBE_SPACE_WORLD));
+        REQUIRE(fbe_entity_set_scale(mesh, 16.0F, 1.0F, 16.0F, FBE_SPACE_LOCAL));
+        CAPTURE(half);
+        CHECK(missed_on_a_slant(world.handle, 0.0F, half) == 0);
+    }
+}
+
+TEST_CASE("a line of sight longer than an int counts is still blocked by a terrain", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t terrain = fbe_entity_create(world.handle, 0, FBE_ENTITY_TERRAIN);
+    REQUIRE(fbe_terrain_set_size(terrain, 16));
+    // Low on the left, high on the right, which a level line at 3 goes through in the middle.
+    std::vector<float> heights(std::size_t{ 17 } * 17);
+    for (std::size_t i = 0; i < heights.size(); ++i) {
+        heights[i] = i % 17 < 8 ? 0.0F : 10.0F;
+    }
+    REQUIRE(fbe_terrain_set_heights(terrain, heights.data(),
+                                    static_cast<std::int32_t>(heights.size())));
+    REQUIRE(fbe_entity_set_position(terrain, -8.0F, 0.0F, -8.0F, FBE_SPACE_WORLD));
+    REQUIRE(fbe_entity_set_blocks_sight(terrain, true));
+    const std::uint64_t eye = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    REQUIRE(fbe_entity_set_position(eye, -6e9F, 3.0F, 0.5F, FBE_SPACE_WORLD));
+    CHECK(fbe_entity_can_see_point(eye, 6e9F, 3.0F, 0.5F) == 0);
+    REQUIRE(fbe_entity_set_position(eye, -6e9F, 20.0F, 0.5F, FBE_SPACE_WORLD));
+    CHECK(fbe_entity_can_see_point(eye, 6e9F, 20.0F, 0.5F) == 1);
 }

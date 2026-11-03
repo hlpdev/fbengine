@@ -985,3 +985,41 @@ TEST_CASE("a copied tree's movers touch ties as its original's do", "[scene]") {
     CHECK(original.x == copied.x);
     CHECK(original.y == copied.y);
 }
+
+TEST_CASE("a free child under a blocked parent goes back with it, whichever was made first",
+          "[scene]") {
+    const auto run = [](bool parent_first) {
+        const test_world_t world;
+        fbe_world_set_collision(world.handle, 1, 2, FBE_RESPONSE_SLIDE);
+        const std::uint64_t wall = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+        fbe_entity_set_collision_group(wall, 2);
+        fbe_entity_set_collision_shape(wall, FBE_COLLISION_BOX);
+        const fbe_vec3_t low{ .x = 10.0F, .y = -5.0F, .z = -1.0F };
+        const fbe_vec3_t high{ .x = 12.0F, .y = 5.0F, .z = 1.0F };
+        const fbe_aabb_t extent{ .min = low, .max = high };
+        fbe_entity_set_collision_box(wall, &extent);
+        const auto pivot = [&](float x, float z) {
+            const std::uint64_t made = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+            fbe_entity_set_collision_group(made, 1);
+            fbe_entity_set_collision_radius(made, 0.5F, 0.5F);
+            fbe_entity_set_position(made, x, 0.0F, z, FBE_SPACE_WORLD);
+            return made;
+        };
+        // Its child's off to the side, with nothing in its way.
+        const std::uint64_t first = pivot(9.0F, parent_first ? 0.0F : 5.0F);
+        const std::uint64_t second = pivot(9.0F, parent_first ? 5.0F : 0.0F);
+        const std::uint64_t parent = parent_first ? first : second;
+        const std::uint64_t child = parent_first ? second : first;
+        fbe_entity_set_parent(child, parent, true);
+        fbe_world_collide(world.handle);
+        fbe_entity_translate(parent, 0.8F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+        fbe_world_collide(world.handle);
+        return std::pair{ position(parent), position(child) };
+    };
+    const auto [first_parent, first_child] = run(true);
+    const auto [second_parent, second_child] = run(false);
+    CHECK(first_parent.x == second_parent.x);
+    CHECK(first_child.x == second_child.x);
+    CHECK(first_parent.x < 9.6F);
+    CHECK(first_child.x == first_parent.x);
+}

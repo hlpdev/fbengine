@@ -475,3 +475,68 @@ TEST_CASE("a VERTEX ground plane has the lights that reach its plane", "[render]
     CHECK(got.of(0) == std::vector<std::uint64_t>{ by_it });
     fbe_material_release(retro);
 }
+
+TEST_CASE("a VERTEX mesh's lights reach its vertices, whatever box it's culled by", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t retro = fbe_material_create();
+    fbe_material_set_shading(retro, FBE_SHADING_VERTEX);
+    const std::uint64_t floor = mesh_in(world.handle, retro);
+    const std::uint64_t geometry = fbe_mesh_geometry(floor);
+    const fbe_vec3_t low{ .x = -0.01F, .y = -1.0F, .z = -1.0F };
+    const fbe_vec3_t high{ .x = 0.01F, .y = 1.0F, .z = 1.0F };
+    const fbe_aabb_t box{ .min = low, .max = high };
+    REQUIRE(fbe_geometry_set_cull_box(geometry, &box));
+    REQUIRE(fbe_entity_set_position(floor, 0.0F, -1.0F, -10.0F, FBE_SPACE_WORLD));
+    REQUIRE(fbe_entity_set_scale(floor, 100.0F, 0.1F, 10.0F, FBE_SPACE_WORLD));
+    const std::uint64_t lamp = light(world.handle, FBE_LIGHT_POINT, 100.0F, -0.5F, -10.0F, 5.0F);
+    const per_vertex_t got = per_vertex(camera);
+    REQUIRE(got.draws.size() == 1);
+    CHECK(got.of(0) == std::vector<std::uint64_t>{ lamp });
+    fbe_material_release(retro);
+}
+
+TEST_CASE("each surface of a VERTEX mesh has the lights that reach it", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    fbe_camera_set_range(camera, 0.5F, 200.0F);
+    const std::uint64_t retro = fbe_material_create();
+    fbe_material_set_shading(retro, FBE_SHADING_VERTEX);
+    // Two cubes' surfaces 40 apart in one geometry.
+    const std::uint64_t geometry = fbe_geometry_cube();
+    fbe_mat4_t moved{};
+    moved.m[0] = 1.0F;
+    moved.m[5] = 1.0F;
+    moved.m[10] = 1.0F;
+    moved.m[15] = 1.0F;
+    moved.m[12] = 40.0F;
+    const std::uint64_t other = fbe_geometry_cube();
+    REQUIRE(fbe_geometry_add(geometry, other, &moved));
+    fbe_geometry_release(other);
+    const std::uint64_t mesh = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
+    REQUIRE(fbe_mesh_set_geometry(mesh, geometry));
+    REQUIRE(fbe_mesh_set_material(mesh, retro));
+    REQUIRE(fbe_entity_set_position(mesh, -20.0F, 0.0F, -60.0F, FBE_SPACE_WORLD));
+    // Eight lamps by the first, one by the second, made after them.
+    std::vector<std::uint64_t> by_first;
+    by_first.reserve(8);
+    for (int i = 0; i < 8; ++i) {
+        by_first.push_back(light(world.handle, FBE_LIGHT_POINT, -20.0F, 2.0F, -60.0F, 3.0F));
+    }
+    const std::uint64_t by_second = light(world.handle, FBE_LIGHT_POINT, 20.0F, 2.0F, -60.0F, 3.0F);
+    const per_vertex_t got = per_vertex(camera);
+    REQUIRE(got.draws.size() >= 2);
+    bool second_seen = false;
+    for (std::size_t draw = 0; draw < got.draws.size(); ++draw) {
+        const std::vector<std::uint64_t> lights = got.of(draw);
+        if (got.draws[draw].surface == 0) {
+            CHECK(lights == by_first);
+        } else {
+            CHECK(lights == std::vector<std::uint64_t>{ by_second });
+            second_seen = true;
+        }
+    }
+    CHECK(second_seen);
+    fbe_geometry_release(geometry);
+    fbe_material_release(retro);
+}

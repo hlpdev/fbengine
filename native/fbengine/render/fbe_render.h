@@ -90,11 +90,12 @@ typedef struct fbe_cluster_t {
 // What a camera draws in a target of this size, `tween` of the way from its World's last capture
 // to now, in the order it draws them: by their materials' orders, lower first. In order 0, the
 // scene's, what's opaque first, by pipeline, by material, and nearest first, then what blends,
-// furthest first; in the others, all furthest first. Ties as the entities were made, a mesh's
-// surfaces in order. Only the showing meshes, sprites, ground planes, and terrains of its World it
-// might see, with some alpha left after their fade; none for a hidden camera or one whose viewport
-// has no size, which it sees from where it is `tween` of the way. Writes up to `capacity` and gives
-// how many there are, -1 for a freed camera, or a tween outside 0 to 1.
+// furthest first; in the others, all furthest first, what's opaque first at one depth. Ties as the
+// entities were made, a mesh's surfaces in order. Only the showing meshes, sprites, ground planes,
+// and terrains of its World it might see, with some alpha left after their fade; none for a hidden
+// camera or one whose viewport has no size, which it sees from where it is `tween` of the way.
+// Writes up to `capacity` and gives how many there are, -1 for a freed camera, or a tween outside 0
+// to 1.
 FBE_API int32_t fbe_render_draws(uint64_t camera, float target_width, float target_height,
                                  float tween, fbe_draw_t* draws, int32_t capacity);
 

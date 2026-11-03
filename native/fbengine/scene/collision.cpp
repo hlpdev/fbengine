@@ -9,7 +9,6 @@
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "jobs/jobs.hpp"
-#include "scene/kept.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
 #include "scene/sweep.hpp"
@@ -90,47 +89,6 @@ struct snapshot_t {
     std::vector<target_t> targets;
 };
 
-/// How moves are run: by what's worth it, or, for tests, one way.
-move_path_t move_path = move_path_t::AS_WORTH;
-
-/// Runs `work` for each move, the first few here, timed, and the rest here too unless they'd take
-/// longer than waking the job system's workers costs, a few to a job, waiting for them all: an
-/// open field's move takes half a microsecond, a crowded room's two, and a long one over a terrain
-/// many, so how many there are doesn't say which is worth it. Each reads the snapshot, the trees,
-/// world matrices, and terrains' ranges worked out before it, and the scene's arrays those are
-/// found through, which nothing changes while the main thread waits here, and writes only its own
-/// result and its thread's scratch, so the moves come out the same whatever runs them in whatever
-/// order.
-template <typename Work>
-void for_each_move(std::size_t count, Work&& work) {
-    constexpr std::size_t grain = 16;
-    constexpr double waking_seconds = 0.0001;
-    const auto run = [&work](std::size_t begin, std::size_t end) {
-        for (std::size_t i = begin; i < end; ++i) {
-            work(i);
-        }
-    };
-    const std::size_t first = move_path == move_path_t::WORKERS ? 0 : std::min(count, grain);
-    const auto started = std::chrono::steady_clock::now();
-    run(0, first);
-    const std::size_t rest = count - first;
-    if (rest == 0) {
-        return;
-    }
-    if (move_path != move_path_t::WORKERS) {
-        const std::chrono::duration<double> taken = std::chrono::steady_clock::now() - started;
-        const double each = taken.count() / static_cast<double>(first);
-        if (move_path == move_path_t::HERE || each * static_cast<double>(rest) < waking_seconds) {
-            run(first, count);
-            return;
-        }
-    }
-    jobs_t& engine = jobs();
-    engine.wait(engine.run_for(rest, grain, [&run, first](std::size_t begin, std::size_t end) {
-        run(first + begin, first + end);
-    }));
-}
-
 std::uint32_t pair_of(std::int32_t source, std::int32_t target) {
     return (static_cast<std::uint32_t>(source) << 16U) | static_cast<std::uint32_t>(target);
 }
@@ -165,14 +123,75 @@ struct nearby_t {
     /// What finding them uses, kept with them so a move's gather doesn't allocate again.
     std::vector<std::uint32_t> indices;
     std::vector<std::array<vec3_t, 3>> under;
+    std::vector<std::uint32_t> stack;
 };
 
 /// The most of anything a thread's scratch keeps past a move, so one long sweep over a big terrain
 /// doesn't hold its memory on every worker from then on.
 constexpr std::size_t kept_past_a_move = std::size_t{ 1 } << 16U;
 
-/// Each thread's scratch, kept for its next move.
-thread_local nearby_t* nearby_scratch = nullptr;
+/// How moves are run: by what's worth it, or, for tests, one way; and how many the last World's
+/// moves ran here.
+move_path_t move_path = move_path_t::AS_WORTH;
+std::size_t moves_here = 0;
+
+/// What moves keep between them, so gathering doesn't allocate again, the first for those run here
+/// and one for each range on the workers, made here before they start. Never freed, since a job
+/// reads it, and not thread_local, as jobs.hpp says.
+std::vector<nearby_t>& move_scratches() {
+    static std::vector<nearby_t>& made = *new std::vector<nearby_t>(1);
+    return made;
+}
+
+/// Runs `work` for each move and a scratch of its own: here, a look at the clock every few, until
+/// more time's gone than waking the job system's workers costs, then the rest on them, a few to a
+/// job, waiting for them all. An open field's move takes half a microsecond, a crowded room's two,
+/// and a long one over a terrain many, and they can come in any order, so neither how many there
+/// are nor how the first went says which is worth it. Each reads the snapshot, the trees, world
+/// matrices, and terrains' ranges worked out before it, and the scene's arrays those are found
+/// through, which nothing changes while the main thread waits here, and writes only its own result
+/// and its scratch, so the moves come out the same whatever runs them in whatever order.
+template <typename Work>
+void for_each_move(std::size_t count, Work&& work) {
+    constexpr std::size_t grain = 16;
+    constexpr std::size_t moves_a_look = 4;
+    constexpr double waking_seconds = 0.0001;
+    std::vector<nearby_t>& scratches = move_scratches();
+    std::size_t first = 0;
+    if (move_path != move_path_t::WORKERS) {
+        const auto started = std::chrono::steady_clock::now();
+        while (first < count) {
+            work(first, scratches[0]);
+            ++first;
+            if (move_path == move_path_t::AS_WORTH && first % moves_a_look == 0) {
+                const std::chrono::duration<double> taken =
+                    std::chrono::steady_clock::now() - started;
+                if (taken.count() > waking_seconds) {
+                    break;
+                }
+            }
+        }
+    }
+    moves_here = first;
+    const std::size_t rest = count - first;
+    if (rest == 0) {
+        return;
+    }
+    jobs_t& engine = jobs();
+    const std::size_t most = std::size_t{ 4 } * (static_cast<std::size_t>(engine.workers()) + 1);
+    const std::size_t ranges = std::clamp<std::size_t>(rest / grain, 1, most);
+    if (scratches.size() < ranges + 1) {
+        scratches.resize(ranges + 1);
+    }
+    engine.wait(engine.run_for(ranges, 1, [&](std::size_t begin, std::size_t end) {
+        for (std::size_t range = begin; range < end; ++range) {
+            const std::size_t last = first + ((range + 1) * rest / ranges);
+            for (std::size_t i = first + (range * rest / ranges); i < last; ++i) {
+                work(i, scratches[range + 1]);
+            }
+        }
+    }));
+}
 
 template <typename Item>
 void keep_some(std::vector<Item>& scratch) {
@@ -286,7 +305,7 @@ void gather(const snapshot_t& snapshot, const mover_t& mover, float reach, nearb
             // targets come in their order.
             const bvh_t& tree = scene().geometries[target.geometry].tree;
             nearby.indices.clear();
-            tree.overlapping(local_min, local_max,
+            tree.overlapping(local_min, local_max, nearby.stack,
                              [&](std::uint32_t triangle) { nearby.indices.push_back(triangle); });
             std::ranges::sort(nearby.indices);
             for (const std::uint32_t triangle : nearby.indices) {
@@ -521,15 +540,13 @@ float across(vec3_t from, vec3_t to) {
     return std::sqrt(((to.x - from.x) * (to.x - from.x)) + ((to.z - from.z) * (to.z - from.z)));
 }
 
-result_t move(const snapshot_t& snapshot, const mover_t& mover) {
+result_t move(const snapshot_t& snapshot, const mover_t& mover, nearby_t& nearby) {
     const float squash = mover.horizontal / mover.vertical;
     const auto into = [squash](vec3_t p) { return vec3_t(p.x, p.y * squash, p.z); };
     const auto out = [squash](vec3_t p) { return vec3_t(p.x, p.y / squash, p.z); };
     const float reach = length(mover.to - mover.from) +
                         std::fmax(mover.horizontal, mover.vertical) +
                         snapshot.world->collision_skin;
-    // Each mover's own while it moves, kept for the next, so gathering doesn't allocate again.
-    nearby_t& nearby = kept_by_thread(nearby_scratch);
     gather(snapshot, mover, reach, nearby);
     const vec3_t start = into(mover.from);
     const vec3_t wanted = into(mover.to) - start;
@@ -569,6 +586,7 @@ result_t move(const snapshot_t& snapshot, const mover_t& mover) {
     keep_some(nearby.ellipsoids);
     keep_some(nearby.indices);
     keep_some(nearby.under);
+    keep_some(nearby.stack);
     result_t result;
     result.end = out(end);
     for (const hit_t& hit : hits) {
@@ -699,10 +717,13 @@ void collide(std::uint32_t world_slot) {
         movers, {}, [&entities](const mover_t& mover) { return entities.made[mover.entity]; });
 
     std::vector<result_t> results(movers.size());
-    for_each_move(movers.size(), [&](std::size_t i) { results[i] = move(snapshot, movers[i]); });
+    for_each_move(movers.size(), [&](std::size_t i, nearby_t& nearby) {
+        results[i] = move(snapshot, movers[i], nearby);
+    });
 
-    // Parents first, since moving one takes its children with it, and each child's end is where
-    // it is in the world once its parent's at its own; those of one depth don't meet.
+    // Parents first, since moving one takes its children with it: a blocked child's set to its end
+    // in the world once its parent's at its own, and one that wasn't blocked stays where it is
+    // under its parent, going back with a parent that was. Those of one depth don't meet.
     std::vector<std::uint32_t> applying(movers.size());
     for (std::size_t i = 0; i < applying.size(); ++i) {
         applying[i] = static_cast<std::uint32_t>(i);
@@ -746,13 +767,26 @@ void set_move_path(move_path_t path) {
 }
 
 std::size_t move_scratch_kept() {
-    const nearby_t& scratch = kept_by_thread(nearby_scratch);
-    return std::max({
-        scratch.triangles.capacity(),
-        scratch.ellipsoids.capacity(),
-        scratch.indices.capacity(),
-        scratch.under.capacity(),
-    });
+    std::size_t most = 0;
+    for (const nearby_t& scratch : move_scratches()) {
+        most = std::max({
+            most,
+            scratch.triangles.capacity(),
+            scratch.ellipsoids.capacity(),
+            scratch.indices.capacity(),
+            scratch.under.capacity(),
+            scratch.stack.capacity(),
+        });
+    }
+    return most;
+}
+
+std::size_t move_scratch_count() {
+    return move_scratches().size();
+}
+
+std::size_t moves_run_here() {
+    return moves_here;
 }
 
 } // namespace fbe::scene

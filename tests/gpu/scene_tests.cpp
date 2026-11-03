@@ -988,26 +988,11 @@ TEST_CASE("the GPU stopped and started again draws what's left, with new texture
     stop_gpu();
 }
 
-namespace {
-
-/// The two matrices a test's mesh is skinned by.
-std::array<fbe::scene::mat4_t, 2>& skin_matrices() {
-    static std::array<fbe::scene::mat4_t, 2> made;
-    return made;
-}
-
-std::span<const fbe::scene::mat4_t> test_palette(std::uint32_t /*mesh*/,
-                                                 const fbe::scene::tweened_t& /*tweened*/) {
-    return skin_matrices();
-}
-
-} // namespace
-
-TEST_CASE("a skinned surface moves by its palette, before its own matrix", "[gpu][scene]") {
+TEST_CASE("a skinned surface moves by its skin's joints, before its own matrix", "[gpu][scene]") {
     const scene_t scene;
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
     const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
-    // Small, in the middle, and all on the second joint, which moves it off to the side.
+    // Small, in the middle, and all on its second joint, which starts where it is.
     const std::uint64_t mesh = wall(scene.world, -3.0F, 0.1F, red);
     const std::uint64_t geometry = fbe_mesh_geometry(mesh);
     std::array<fbe_vertex_joints_t, 4> joints{};
@@ -1020,14 +1005,27 @@ TEST_CASE("a skinned surface moves by its palette, before its own matrix", "[gpu
     std::array<fbe_vertex_joints_t, 4> read_back{};
     CHECK(fbe_surface_joints(geometry, 0, read_back.data(), 4) == 4);
     CHECK(read_back[2].joints[0] == 1);
-    skin_matrices()[0] = fbe::scene::mat4_t();
-    skin_matrices()[1] = fbe::scene::mat4_t();
-    // With no source, it's where its vertices are.
-    fbe::render::set_palette_source(nullptr);
+    const std::uint64_t bones = fbe_entity_create(scene.world, 0, FBE_ENTITY_PIVOT);
+    const std::uint64_t still = fbe_entity_create(scene.world, bones, FBE_ENTITY_PIVOT);
+    const std::uint64_t moving = fbe_entity_create(scene.world, bones, FBE_ENTITY_PIVOT);
+    require(fbe_entity_set_name(still, "still"));
+    require(fbe_entity_set_name(moving, "moving"));
+    const std::uint64_t skin = fbe_skin_create();
+    // Bound at the mesh's own middle, so a joint where the mesh is leaves it where it is.
+    std::array<float, 16> inverse_bind{};
+    inverse_bind[0] = 1.0F;
+    inverse_bind[5] = 1.0F;
+    inverse_bind[10] = 1.0F;
+    inverse_bind[15] = 1.0F;
+    require(fbe_skin_add_joint(skin, "still", inverse_bind.data()));
+    require(fbe_skin_add_joint(skin, "moving", inverse_bind.data()));
+    require(fbe_entity_set_position(still, 0.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(moving, 0.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
+    // With no skin, it's where its vertices are; with one, as its joints are.
     CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
-    fbe::render::set_palette_source(test_palette);
+    require(fbe_skin_attach(mesh, skin, bones));
     CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
-    skin_matrices()[1].at(3, 0) = 1.0F;
+    require(fbe_entity_set_position(moving, 1.0F, 0.0F, -3.0F, FBE_SPACE_WORLD));
     const fbe::golden::frame_t moved = scene.drawn();
     CHECK(middle(moved) == rgba_t{ 0, 0, 255, 255 });
     // 1 across at a distance of 3, in a view 3.46 across there, is 0.29 of the way to its right.
@@ -1043,6 +1041,6 @@ TEST_CASE("a skinned surface moves by its palette, before its own matrix", "[gpu
     require(fbe_surface_set_joints(geometry, 0, joints.data(), 4));
     const auto half_way = static_cast<std::uint32_t>(64.0F + (32.0F * across_view));
     CHECK(pixel(scene.drawn(), half_way, 64) == rgba_t{ 255, 0, 0, 255 });
-    fbe::render::set_palette_source(nullptr);
+    fbe_skin_release(skin);
     fbe_material_release(red);
 }

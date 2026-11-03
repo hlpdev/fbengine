@@ -246,18 +246,28 @@ fbengine_set_warnings(fbengine_scene_tests)
 if(NOT MSVC)
   target_compile_options(fbengine_scene_tests PRIVATE -ffp-contract=off)
 endif()
-# A program that ends at once with its moves' workers still running: it has to end.
-add_executable(fbengine_scene_ends scene/ends_main.cpp)
+# A program that ends at once after its moves, its workers still running: it has to end.
+add_executable(fbengine_scene_ends scene/ends_after_moves.cpp)
 target_link_libraries(fbengine_scene_ends PRIVATE fbengine_native)
 fbengine_set_warnings(fbengine_scene_ends)
-add_test(NAME scene.ends_with_workers_running COMMAND fbengine_scene_ends)
-set_tests_properties(scene.ends_with_workers_running PROPERTIES
+add_test(NAME scene.ends_after_moves COMMAND fbengine_scene_ends)
+set_tests_properties(scene.ends_after_moves PROPERTIES
                      PASS_REGULAR_EXPRESSION "moved" TIMEOUT 60)
-set_property(TEST scene.ends_with_workers_running PROPERTY ENVIRONMENT_MODIFICATION
+set_property(TEST scene.ends_after_moves PROPERTY ENVIRONMENT_MODIFICATION
              "PATH=path_list_prepend:$<TARGET_FILE_DIR:fbengine_native>")
 if(fbengine_test_dll_paths)
-  set_property(TEST scene.ends_with_workers_running APPEND PROPERTY ENVIRONMENT_MODIFICATION
+  set_property(TEST scene.ends_after_moves APPEND PROPERTY ENVIRONMENT_MODIFICATION
                "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+endif()
+# Another thread's exit() during moves, on systems where that ends statics under them: it has to
+# end with its code, however far they've got.
+if(UNIX)
+  add_executable(fbengine_scene_ends_during scene/ends_during_moves.cpp)
+  target_link_libraries(fbengine_scene_ends_during PRIVATE fbengine_native)
+  fbengine_set_warnings(fbengine_scene_ends_during)
+  add_test(NAME scene.ends_during_moves COMMAND fbengine_scene_ends_during)
+  set_tests_properties(scene.ends_during_moves PROPERTIES
+                       PASS_REGULAR_EXPRESSION "ended" TIMEOUT 300)
 endif()
 catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")

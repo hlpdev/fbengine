@@ -44,6 +44,27 @@ std::vector<std::uint32_t> walk(int count) {
     fbe_world_set_collision(world, mover_group, level_group, FBE_RESPONSE_SLIDE);
     const std::uint64_t floor = fbe_entity_create(world, 0, FBE_ENTITY_PLANE);
     fbe_entity_set_collision_group(floor, level_group);
+    // Two terrains and a mesh among them, whose triangles a move's scratch finds, so a scratch that
+    // kept what the last move or the last terrain had would show.
+    for (const float place : { 0.0F, 16.0F }) {
+        const std::uint64_t terrain = fbe_entity_create(world, 0, FBE_ENTITY_TERRAIN);
+        fbe_terrain_set_size(terrain, 16);
+        fbe_entity_set_collision_group(terrain, level_group);
+        fbe_entity_set_position(terrain, place, place / 16.0F, 0.0F, FBE_SPACE_WORLD);
+        std::vector<float> heights(std::size_t{ 17 } * 17);
+        for (std::size_t i = 0; i < heights.size(); ++i) {
+            const float height = (i % 2 == 0) ? 0.3F : 0.1F;
+            heights[i] = place > 0.0F ? height * 3.0F : height;
+        }
+        fbe_terrain_set_heights(terrain, heights.data(), static_cast<std::int32_t>(heights.size()));
+    }
+    const std::uint64_t mesh = fbe_entity_create(world, 0, FBE_ENTITY_MESH);
+    const std::uint64_t sphere = fbe_geometry_sphere(12);
+    fbe_mesh_set_geometry(mesh, sphere);
+    fbe_geometry_release(sphere);
+    fbe_entity_set_collision_group(mesh, level_group);
+    fbe_entity_set_collision_shape(mesh, FBE_COLLISION_MESH);
+    fbe_entity_set_position(mesh, 6.0F, 1.0F, 3.0F, FBE_SPACE_WORLD);
     std::mt19937 random(5); // NOLINT(bugprone-random-generator-seed)
     std::uniform_real_distribution<float> pace(-0.1F, 0.1F);
     std::vector<std::uint64_t> movers;
@@ -133,4 +154,52 @@ TEST_CASE("a long sweep leaves no more than a cap in a thread's scratch", "[scen
     fbe_world_collide(world);
     CHECK(fbe::scene::move_scratch_kept() <= std::size_t{ 1 } << 16U);
     free_world(world);
+}
+
+TEST_CASE("cheap moves first don't keep long ones from the workers", "[scene]") {
+    const std::uint64_t world = fbe_world_create();
+    fbe_world_set_collision(world, mover_group, level_group, FBE_RESPONSE_SLIDE);
+    const auto pivot = [&](float x, float y, float z) {
+        const std::uint64_t made = fbe_entity_create(world, 0, FBE_ENTITY_PIVOT);
+        fbe_entity_set_collision_group(made, mover_group);
+        fbe_entity_set_collision_radius(made, 0.5F, 0.5F);
+        fbe_entity_set_position(made, x, y, z, FBE_SPACE_WORLD);
+        return made;
+    };
+    // Made first, in an open field, far from it all.
+    std::vector<std::uint64_t> cheap;
+    cheap.reserve(16);
+    for (int i = 0; i < 16; ++i) {
+        cheap.push_back(pivot(-1000.0F - (3.0F * static_cast<float>(i)), 1.0F, -1000.0F));
+    }
+    const std::uint64_t terrain = fbe_entity_create(world, 0, FBE_ENTITY_TERRAIN);
+    fbe_terrain_set_size(terrain, 256);
+    fbe_entity_set_collision_group(terrain, level_group);
+    std::vector<std::uint64_t> heavy;
+    heavy.reserve(150);
+    for (int i = 0; i < 150; ++i) {
+        heavy.push_back(pivot(1.0F, 1.0F, 1.0F));
+    }
+    fbe_world_collide(world);
+    for (const std::uint64_t mover : cheap) {
+        fbe_entity_translate(mover, 0.01F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+    }
+    for (const std::uint64_t mover : heavy) {
+        fbe_entity_set_position(mover, 255.0F, 1.0F, 255.0F, FBE_SPACE_WORLD);
+    }
+    fbe_world_collide(world);
+    // A long sweep takes more than waking the workers does, so it's soon past the cheap ones.
+    CHECK(fbe::scene::moves_run_here() < 16 + 16);
+    free_world(world);
+}
+
+TEST_CASE("moves on the workers keep to scratches made before they start", "[scene]") {
+    const path_t path(fbe::scene::move_path_t::WORKERS);
+    const std::vector<std::uint32_t> first = walk(200);
+    const std::size_t count = fbe::scene::move_scratch_count();
+    CHECK(count > 1);
+    // As many as there were ranges, and no more for another run of them.
+    const std::vector<std::uint32_t> second = walk(200);
+    CHECK(fbe::scene::move_scratch_count() == count);
+    CHECK(first == second);
 }

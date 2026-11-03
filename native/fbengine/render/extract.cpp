@@ -156,7 +156,13 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
             item_t item = item_of(mesh.entity, material, matrix, mesh.tint, fade, view);
             item.draw.geometry = s.geometry_slots.handle(mesh.geometry);
             item.draw.surface = static_cast<std::int32_t>(surface);
-            bound(item, corners);
+            if (item.vertex_lit) {
+                // What its lights reach is its own vertices, whatever box it's culled by.
+                vec3_t own_min;
+                vec3_t own_max;
+                scene::surface_bounds(mesh.geometry, surface, own_min, own_max);
+                bound(item, corners_of(matrix, own_min, own_max));
+            }
             items.push_back(item);
         }
     }

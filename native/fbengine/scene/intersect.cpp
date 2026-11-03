@@ -130,6 +130,7 @@ bool meshes_cross(std::uint32_t first, std::uint32_t second) {
     const mat4_t across = into * s.entities.world_matrix[second];
     const bvh_t& here = geometry_tree(a);
     const bvh_t& there = geometry_tree(b);
+    std::vector<std::uint32_t> stack;
     for (std::uint32_t t = 0; t < there.triangle_count(); ++t) {
         const vec3_t* corners = there.corners(t);
         const std::array<vec3_t, 3> moved{
@@ -140,7 +141,7 @@ bool meshes_cross(std::uint32_t first, std::uint32_t second) {
         const vec3_t min = least(least(moved[0], moved[1]), moved[2]);
         const vec3_t max = greatest(greatest(moved[0], moved[1]), moved[2]);
         bool found = false;
-        here.overlapping(min, max, [&](std::uint32_t other) {
+        here.overlapping(min, max, stack, [&](std::uint32_t other) {
             if (found) {
                 return;
             }

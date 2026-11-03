@@ -250,22 +250,47 @@ void geometry_bounds(std::uint32_t geometry, vec3_t& min, vec3_t& max) {
         bool any = false;
         vec3_t low;
         vec3_t high;
-        for (const surface_t& surface : found.surfaces) {
+        for (surface_t& surface : found.surfaces) {
+            surface.bounds_min = vec3_t();
+            surface.bounds_max = vec3_t();
+            if (!surface.vertices.empty()) {
+                surface.bounds_min = vec(surface.vertices[0].position);
+                surface.bounds_max = surface.bounds_min;
+            }
             for (const fbe_vertex_t& vertex : surface.vertices) {
                 const vec3_t p = vec(vertex.position);
-                if (!any) {
-                    low = p;
-                    high = p;
-                    any = true;
-                }
-                low = { std::fmin(low.x, p.x), std::fmin(low.y, p.y), std::fmin(low.z, p.z) };
-                high = { std::fmax(high.x, p.x), std::fmax(high.y, p.y), std::fmax(high.z, p.z) };
+                const vec3_t& least = surface.bounds_min;
+                const vec3_t& most = surface.bounds_max;
+                surface.bounds_min = { std::fmin(least.x, p.x), std::fmin(least.y, p.y),
+                                       std::fmin(least.z, p.z) };
+                surface.bounds_max = { std::fmax(most.x, p.x), std::fmax(most.y, p.y),
+                                       std::fmax(most.z, p.z) };
+            }
+            if (!surface.vertices.empty()) {
+                low = any ? vec3_t(std::fmin(low.x, surface.bounds_min.x),
+                                   std::fmin(low.y, surface.bounds_min.y),
+                                   std::fmin(low.z, surface.bounds_min.z))
+                          : surface.bounds_min;
+                high = any ? vec3_t(std::fmax(high.x, surface.bounds_max.x),
+                                    std::fmax(high.y, surface.bounds_max.y),
+                                    std::fmax(high.z, surface.bounds_max.z))
+                           : surface.bounds_max;
+                any = true;
             }
         }
         found.bounds_min = low;
         found.bounds_max = high;
         found.bounds_stale = false;
     }
+    min = found.bounds_min;
+    max = found.bounds_max;
+}
+
+void surface_bounds(std::uint32_t geometry, std::size_t surface, vec3_t& min, vec3_t& max) {
+    vec3_t whole_min;
+    vec3_t whole_max;
+    geometry_bounds(geometry, whole_min, whole_max);
+    const surface_t& found = scene().geometries[geometry].surfaces[surface];
     min = found.bounds_min;
     max = found.bounds_max;
 }

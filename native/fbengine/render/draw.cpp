@@ -12,6 +12,7 @@
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
+#include "skin/skin.hpp"
 #include "texture/texture.hpp"
 
 #include <algorithm>
@@ -137,9 +138,6 @@ struct recorded_pass_t {
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
 };
-
-/// What gives the palettes meshes are skinned by, once there's a skin area to.
-palette_source_t palette_source = nullptr;
 
 gpu::blend_t blend_of(std::uint64_t key) {
     switch ((key >> 2U) & 7U) {
@@ -451,13 +449,13 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             data.vertices = surface->vertices.address;
             batch.indices = surface->indices.buffer;
             batch.index_count = surface->index_count;
-            if (surface->joints.buffer != VK_NULL_HANDLE && palette_source != nullptr) {
+            if (surface->joints.buffer != VK_NULL_HANDLE) {
                 // Each mesh's once, however many surfaces it has, its surfaces one after another
                 // or apart.
                 const auto [palette, fresh] =
                     palettes.try_emplace(item.entity, VkDeviceAddress{ 0 });
                 if (fresh) {
-                    const std::span<const mat4_t> poses = palette_source(item.entity, tweened);
+                    const std::span<const mat4_t> poses = anim::skin_palette(item.entity, tweened);
                     if (!poses.empty()) {
                         bool no_room = false;
                         palette->second = in_ring<mat4_t>(poses, no_room).address;
@@ -589,10 +587,6 @@ scene::view_t reflected_view(const scene::view_t& view, const mat4_t& mirror) {
 }
 
 } // namespace
-
-void set_palette_source(palette_source_t source) {
-    palette_source = source;
-}
 
 bool draw_camera(std::uint32_t slot, float tween) {
     const scene::scene_t& s = scene::scene();

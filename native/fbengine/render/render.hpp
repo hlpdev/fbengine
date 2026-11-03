@@ -11,7 +11,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <span>
 #include <vector>
 
 namespace fbe::render {
@@ -73,12 +72,6 @@ struct surface_buffers_t {
     /// Its vertices' joints, for a surface that has them.
     gpu::buffer_t joints;
 };
-
-/// What gives the palette a mesh is skinned by, by its slot, as the frame's poses are: a matrix a
-/// joint in the mesh's own space, or none for a mesh with no skin.
-using palette_source_t = std::span<const scene::mat4_t> (*)(std::uint32_t mesh,
-                                                            const scene::tweened_t& tweened);
-void set_palette_source(palette_source_t source);
 
 /// A geometry's surface on the GPU, sent if it's changed since; null if it can't be, with
 /// fbe_error's why, or the geometry's been freed.

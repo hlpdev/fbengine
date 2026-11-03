@@ -47,6 +47,39 @@ vec3_t stretch(const mat4_t& m) {
 void sweep_from(vec3_t from, vec3_t along, float enter, float radius, const triangle_t& triangle,
                 hit_t& hit, bool& found) {
     const vec3_t n = triangle.normal;
+    if (radius <= 0.0F) {
+        // A line meets a face only where it crosses its plane, from in front: worked out in double,
+        // as however far off the line starts, floats round that onto one side or the other.
+        const auto wide = [](float v) { return static_cast<double>(v); };
+        const vec3_t c = triangle.corners[0];
+        const double before = (wide(n.x) * (wide(from.x) - wide(c.x))) +
+                              (wide(n.y) * (wide(from.y) - wide(c.y))) +
+                              (wide(n.z) * (wide(from.z) - wide(c.z)));
+        const double approach =
+            (wide(n.x) * wide(along.x)) + (wide(n.y) * wide(along.y)) + (wide(n.z) * wide(along.z));
+        if (before < 0.0 || approach >= 0.0) {
+            return;
+        }
+        const double time = before / -approach;
+        if (time > 1.0 || (found && time >= wide(hit.time))) {
+            return;
+        }
+        const vec3_t point(static_cast<float>(wide(from.x) + (wide(along.x) * time)),
+                           static_cast<float>(wide(from.y) + (wide(along.y) * time)),
+                           static_cast<float>(wide(from.z) + (wide(along.z) * time)));
+        if (inside(triangle, point)) {
+            hit = {
+                .time = static_cast<float>(time),
+                .point = point,
+                .normal = n,
+                .target = triangle.target,
+                .origin = triangle.origin,
+                .from_mesh = triangle.from_mesh,
+            };
+            found = true;
+        }
+        return;
+    }
     const float closing = dot(n, along);
     const float began = dot(n, from - triangle.corners[0]);
     if (began < 0.0F) {
@@ -148,9 +181,7 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
         const vec3_t b = transform_point(into, from + along);
         const vec3_t margin = stretch(into) * radius;
         const float span = std::fmax(std::fabs(b.x - a.x), std::fabs(b.z - a.z));
-        // In float first, since a line can be longer than an int counts.
-        const int pieces =
-            static_cast<int>(std::fmin(std::fmax(std::ceil(span / 4.0F), 1.0F), 4096.0F));
+        const int pieces = terrain_line_pieces(span);
         std::vector<std::array<vec3_t, 3>> under;
         const segment_t segment(a, b - a);
         for (int piece = 0; piece < pieces; ++piece) {

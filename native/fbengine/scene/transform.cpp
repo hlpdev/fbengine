@@ -3,7 +3,6 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
-#include "scene/kept.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
 
@@ -144,8 +143,7 @@ pose_t tweened_t::pose(std::uint32_t entity) const {
     }
     // Up to the first already worked out, then down again, each from its parent, its local
     // transform part way from its capture, as update_world does it; the chain kept for the next.
-    thread_local std::vector<std::uint32_t>* kept = nullptr;
-    std::vector<std::uint32_t>& chain = kept_by_thread(kept);
+    static std::vector<std::uint32_t>& chain = *new std::vector<std::uint32_t>();
     chain.clear();
     for (std::uint32_t at = entity; at != none && s.posed[at] != m_stamp;
          at = entities.parent[at]) {
@@ -199,7 +197,7 @@ void mark_moved(std::uint32_t entity) {
         return;
     }
     // By a stack of its own, so no tree is too deep, kept for the next.
-    thread_local std::vector<std::uint32_t> stack;
+    static std::vector<std::uint32_t>& stack = *new std::vector<std::uint32_t>();
     stack.assign(1, entity);
     while (!stack.empty()) {
         const std::uint32_t at = stack.back();

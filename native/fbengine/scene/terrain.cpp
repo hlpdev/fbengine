@@ -88,7 +88,7 @@ bool terrain_blocks(const terrain_t& terrain, vec3_t a, vec3_t b) {
     // In pieces of a few squares each, as picks go, so a long line tries only the squares near it.
     const vec3_t across = b - a;
     const float span = std::fmax(std::fabs(across.x), std::fabs(across.z));
-    const int pieces = std::clamp(static_cast<int>(std::ceil(span / 4.0F)), 1, 4096);
+    const int pieces = terrain_line_pieces(span);
     std::vector<std::array<vec3_t, 3>> under;
     for (int piece = 0; piece < pieces; ++piece) {
         const vec3_t p0 = a + across * (static_cast<float>(piece) / static_cast<float>(pieces));

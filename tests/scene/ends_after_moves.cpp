@@ -1,6 +1,6 @@
-// A program whose moves went to the job system's workers, then ends at once with its workers still
-// running, as a panic ends one: it has to end, whatever its workers have kept. ctest gives it a
-// timeout, and looks for what it prints.
+// A program whose moves went to the job system's workers, then, after they've finished, ends at
+// once, its workers waiting for more, as a panic ends one: it has to end, whatever they've kept.
+// ctest gives it a timeout, and looks for what it prints.
 
 #include "fbengine.h"
 
