@@ -412,11 +412,13 @@ FBE_API bool fbe_light_set_color(uint64_t light, float r, float g, float b);
 FBE_API bool fbe_light_color(uint64_t light, fbe_color_t* color);
 // Whether a light has shadows, off at first, on what's drawn per pixel: UNLIT and VERTEX, the
 // fixed-function look, have none. Its side of a tile in texels, 16 to 8192, 1024 at first, of which
-// a point light has six and a directional light one for each of its cascades; lights past what the
-// device's atlas holds have none, the last in the tree's order first. How far from a surface
-// it's compared: in depth, world units, 0.02 at first, and along its normal, in texels, 1.5 at
-// first; each 0 or more. A directional light's cascades, 1 to 4, 3 at first, reaching this far from
-// the camera, 100 at first, or its far plane.
+// a point light has six and a directional light one for each of its cascades, and each of a
+// mirror's reflections its own. The atlas has its directional lights first, then what's nearest the
+// camera; a light it has no room for at its size shrinks to a quarter of it, then goes without, and
+// a light that reaches nothing the camera sees has no tiles. How far from a surface it's compared:
+// in depth, world units, 0.02 at first, and along its normal, in texels, 1.5 at first; each 0 or
+// more. A directional light's cascades, 1 to 4, 3 at first, reaching this far from the camera, 100
+// at first, or its far plane.
 FBE_API bool fbe_light_set_shadows(uint64_t light, bool shadows);
 FBE_API bool fbe_light_shadows(uint64_t light);
 FBE_API bool fbe_light_set_shadow_size(uint64_t light, int32_t size);

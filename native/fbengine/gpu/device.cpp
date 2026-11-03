@@ -464,11 +464,12 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         .timelineSemaphore = VK_TRUE,
         .bufferDeviceAddress = VK_TRUE,
     };
-    // Anisotropic filtering and wireframes, where the device has them.
+    // Anisotropic filtering, wireframes, and depth clamping, where the device has them.
     const VkPhysicalDeviceFeatures2 features{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         .pNext = &vulkan12,
         .features = {
+            .depthClamp = supported.depthClamp,
             .fillModeNonSolid = supported.fillModeNonSolid,
             .samplerAnisotropy = supported.samplerAnisotropy,
         },
@@ -498,6 +499,7 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     volkLoadDevice(current.device);
     vkGetDeviceQueue(current.device, current.family, 0, &current.queue);
     current.wireframe = supported.fillModeNonSolid == VK_TRUE;
+    current.depth_clamp = supported.depthClamp == VK_TRUE;
     current.max_anisotropy = supported.samplerAnisotropy == VK_TRUE
                                  ? candidate.properties.limits.maxSamplerAnisotropy
                                  : 0.0F;

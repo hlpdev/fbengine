@@ -49,6 +49,18 @@ struct particles_buffer_t {
     std::uint64_t generation = UINT64_MAX;
 };
 
+/// A terrain's coarse pieces' errors, by its entity's handle, and what they're of.
+struct coarse_errors_t {
+    std::uint64_t version = UINT64_MAX;
+    std::int32_t size = 0;
+    std::vector<float> errors;
+};
+
+std::unordered_map<std::uint64_t, coarse_errors_t>& kept_coarse_errors() {
+    static std::unordered_map<std::uint64_t, coarse_errors_t> made;
+    return made;
+}
+
 std::unordered_map<std::uint64_t, particles_buffer_t>& kept_particles() {
     static std::unordered_map<std::uint64_t, particles_buffer_t> made;
     return made;
@@ -167,9 +179,66 @@ std::vector<std::uint32_t> piece_indices(std::uint32_t cells) {
     return indices;
 }
 
+/// How far over a terrain a piece of its grid can be at its most, where it's coarser: each grid
+/// corner of the terrain against the piece's triangle over it.
+float coarse_error(const scene::terrain_t& terrain, const piece_area_t& area, std::int32_t cells) {
+    float most = 0.0F;
+    for (std::int32_t z_cell = 0; z_cell < cells; ++z_cell) {
+        const std::int32_t z_from = grid_at(area.z, area.deep, cells, z_cell);
+        const std::int32_t z_to = grid_at(area.z, area.deep, cells, z_cell + 1);
+        for (std::int32_t x_cell = 0; x_cell < cells; ++x_cell) {
+            const std::int32_t x_from = grid_at(area.x, area.wide, cells, x_cell);
+            const std::int32_t x_to = grid_at(area.x, area.wide, cells, x_cell + 1);
+            const float a = height_of(terrain, x_from, z_from);
+            const float b = height_of(terrain, x_to, z_from);
+            const float c = height_of(terrain, x_from, z_to);
+            const float d = height_of(terrain, x_to, z_to);
+            const auto wide = static_cast<float>(std::max(x_to - x_from, 1));
+            const auto deep = static_cast<float>(std::max(z_to - z_from, 1));
+            for (std::int32_t z = z_from; z <= z_to; ++z) {
+                const float v = static_cast<float>(z - z_from) / deep;
+                for (std::int32_t x = x_from; x <= x_to; ++x) {
+                    const float u = static_cast<float>(x - x_from) / wide;
+                    // The two triangles of piece_indices' square.
+                    const float coarse = v > u ? a + (v * (c - a)) + (u * (d - c))
+                                               : a + (u * (b - a)) + (v * (d - b));
+                    most = std::fmax(most, coarse - height_of(terrain, x, z));
+                }
+            }
+        }
+    }
+    return most;
+}
+
+/// Each coarse piece's error, row by row, worked out again when its terrain changes.
+const std::vector<float>& coarse_errors(const scene::terrain_t& terrain, std::int32_t reach,
+                                        std::int32_t row) {
+    const std::uint64_t handle = scene::scene().entities.slots.handle(terrain.entity);
+    coarse_errors_t& kept_errors = kept_coarse_errors()[handle];
+    if (kept_errors.version != terrain.version || kept_errors.size != terrain.size) {
+        kept_errors.version = terrain.version;
+        kept_errors.size = terrain.size;
+        kept_errors.errors.clear();
+        for (std::int32_t z = 0; z < row; ++z) {
+            for (std::int32_t x = 0; x < row; ++x) {
+                const piece_area_t area{
+                    .x = x * reach,
+                    .z = z * reach,
+                    .wide = std::min(reach, terrain.size - (x * reach)),
+                    .deep = std::min(reach, terrain.size - (z * reach)),
+                };
+                const std::int32_t cells = std::min(std::max(area.wide, area.deep), piece_cells);
+                kept_errors.errors.push_back(coarse_error(terrain, area, cells));
+            }
+        }
+    }
+    return kept_errors.errors;
+}
+
 /// A piece's vertices in the frame's ring.
 bool piece_vertices(const scene::terrain_t& terrain, const piece_area_t& area, std::int32_t cells,
-                    float drop, std::vector<fbe_vertex_t>& vertices, gpu::slice_t& slice) {
+                    float drop, float lower, std::vector<fbe_vertex_t>& vertices,
+                    gpu::slice_t& slice) {
     vertices.clear();
     const auto make = [&](std::int32_t x, std::int32_t z, float lowered) {
         const std::int32_t size = terrain.size;
@@ -182,7 +251,7 @@ bool piece_vertices(const scene::terrain_t& terrain, const piece_area_t& area, s
         const auto fz = static_cast<float>(z);
         const float v = static_cast<float>(size) - fz;
         vertices.push_back({
-            .position = { .x = fx, .y = height_of(terrain, x, z) - lowered, .z = fz },
+            .position = { .x = fx, .y = height_of(terrain, x, z) - lowered - lower, .z = fz },
             .normal = { .x = normal.x, .y = normal.y, .z = normal.z },
             .uv0 = { .x = fx, .y = v },
             .uv1 = { .x = fx, .y = v },
@@ -336,6 +405,9 @@ void forget_freed_geometries() {
             ++it;
         }
     }
+    std::erase_if(kept_coarse_errors(), [&s](const auto& kept_errors) {
+        return !s.entities.slots.find(kept_errors.first);
+    });
     for (auto it = kept().begin(); it != kept().end();) {
         if (!s.geometry_slots.find(it->first)) {
             for (surface_buffers_t& surface : it->second.surfaces) {
@@ -356,15 +428,10 @@ bool terrain_coarse_pieces(const mat4_t& world, const scene::terrain_t& terrain,
     const float drop = (high.y - low.y) + 1.0F;
     // A shadow's a texel or so of the whole: an eighth of it a piece does, whatever its size.
     const std::int32_t reach = std::max(terrain.size / 8, piece_cells);
-    const std::int32_t cells = std::min(reach, piece_cells);
     const std::int32_t row = (terrain.size + reach - 1) / reach;
-    const std::vector<std::uint32_t> indices = piece_indices(static_cast<std::uint32_t>(cells));
-    const auto bytes = static_cast<VkDeviceSize>(indices.size() * sizeof(std::uint32_t));
-    const gpu::slice_t grid = gpu::frame_memory(bytes, 16);
-    if (grid.data == nullptr) {
-        return false;
-    }
-    std::memcpy(grid.data, indices.data(), bytes);
+    const std::vector<float>& errors = coarse_errors(terrain, reach, row);
+    std::array<gpu::slice_t, piece_cells + 1> grids{};
+    std::array<std::uint32_t, piece_cells + 1> grid_counts{};
     const float most =
         std::fmax(std::fmax(scene::length(world.axis(0)), scene::length(world.axis(1))),
                   scene::length(world.axis(2)));
@@ -377,23 +444,37 @@ bool terrain_coarse_pieces(const mat4_t& world, const scene::terrain_t& terrain,
                 .wide = std::min(reach, terrain.size - (x * reach)),
                 .deep = std::min(reach, terrain.size - (z * reach)),
             };
-            const std::int32_t own = std::min(std::max(area.wide, area.deep), cells);
-            if (own != cells) {
-                continue;
+            const std::int32_t cells = std::min(std::max(area.wide, area.deep), piece_cells);
+            auto& grid = grids[static_cast<std::size_t>(cells)];
+            if (grid.data == nullptr) {
+                const std::vector<std::uint32_t> indices =
+                    piece_indices(static_cast<std::uint32_t>(cells));
+                const auto bytes =
+                    static_cast<VkDeviceSize>(indices.size() * sizeof(std::uint32_t));
+                grid = gpu::frame_memory(bytes, 16);
+                if (grid.data == nullptr) {
+                    return false;
+                }
+                std::memcpy(grid.data, indices.data(), bytes);
+                grid_counts[static_cast<std::size_t>(cells)] =
+                    static_cast<std::uint32_t>(indices.size());
             }
+            // Under the terrain wherever it's coarser than it, so it never shadows itself.
+            const auto at = static_cast<std::size_t>((z * row) + x);
+            const float lower = errors[at];
             gpu::slice_t slice;
-            if (!piece_vertices(terrain, area, cells, drop, vertices, slice)) {
+            if (!piece_vertices(terrain, area, cells, drop, lower, vertices, slice)) {
                 return false;
             }
             const float half = static_cast<float>(reach) * 0.5F;
             const vec3_t middle(static_cast<float>(area.x) + half, (low.y + high.y) * 0.5F,
                                 static_cast<float>(area.z) + half);
-            const float tall = (high.y - low.y) * 0.5F;
+            const float tall = ((high.y - low.y) * 0.5F) + lower;
             pieces.push_back({
                 .vertices = slice.address,
                 .indices = grid.buffer,
                 .index_offset = grid.offset,
-                .index_count = static_cast<std::uint32_t>(indices.size()),
+                .index_count = grid_counts[static_cast<std::size_t>(cells)],
                 .center = scene::transform_point(world, middle),
                 .radius = std::sqrt((half * half * 2.0F) + (tall * tall)) * most,
             });
@@ -478,7 +559,7 @@ bool terrain_pieces(const scene::camera_t& camera, const scene::view_t& view, co
                 static_cast<std::uint32_t>(indices.size());
         }
         gpu::slice_t slice;
-        if (!piece_vertices(terrain, area, cells, drop, vertices, slice)) {
+        if (!piece_vertices(terrain, area, cells, drop, 0.0F, vertices, slice)) {
             return false;
         }
         pieces.push_back({

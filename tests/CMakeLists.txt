@@ -604,6 +604,7 @@ if(FBENGINE_FB_TESTS)
       "sky-brightness=SetAtmosphere on a World: a sky's brightness is 0 or more, not -1"
       "sky-sun=SetAtmosphere on a World: a sky's sun is a directional light"
       "decal-box=Decal: a decal's box has an inverse"
+      "shadow-atlas-limit=SetShadowAtlasLimit: a shadow atlas's side is at most 256 to 8192, not 128"
       "shadow-size=SetShadowSize on a Light: a shadow's tile is 16 to 8192 texels a side, not 8"
       "cascades=SetCascades on a Light: a light has 1 to 4 cascades, not 5"
       "shadow-distance=SetShadowDistance on a Light: a shadow reaches a distance above 0, not 0"

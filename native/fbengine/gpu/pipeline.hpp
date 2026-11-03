@@ -48,6 +48,8 @@ struct pipeline_desc_t {
     blend_t blend = blend_t::NONE;
     bool depth_test = false;
     bool depth_write = false;
+    /// Holds depth to the depth range instead of clipping there, where gpu::device()->depth_clamp.
+    bool depth_clamp = false;
     /// Depth is reversed, 1 near and 0 far, so nearer passes by default.
     VkCompareOp depth_compare = VK_COMPARE_OP_GREATER_OR_EQUAL;
     /// The shader's first `constant_count` specialization constants, by their ids from 0, which

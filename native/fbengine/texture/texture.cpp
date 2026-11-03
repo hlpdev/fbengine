@@ -134,7 +134,7 @@ VkFormat vk_format_of(std::int32_t format) {
         return VK_FORMAT_R8_UNORM;
     case FBE_TEXTURE_RGBA16F:
         return VK_FORMAT_R16G16B16A16_SFLOAT;
-    case FBE_TEXTURE_R32F:
+    case fbe::texture::shadow_format:
         return VK_FORMAT_R32_SFLOAT;
     default:
         return VK_FORMAT_UNDEFINED;
@@ -539,7 +539,7 @@ bool valid_wrap(std::int32_t wrap) {
 /// Whether a new texture can be `width` by `height` of `format`, starting the GPU if it hasn't;
 /// false, with fbe_error's why, if not.
 bool checked(std::int32_t width, std::int32_t height, std::int32_t format) {
-    if (fbe::texture::pixel_size(format) == 0) {
+    if (fbe::texture::pixel_size(format) == 0 || format == fbe::texture::shadow_format) {
         return fbe::fail(std::format("{} isn't a TextureFormat", format));
     }
     if (!fbe::gpu::start_with_window()) {
@@ -759,7 +759,7 @@ std::uint32_t pixel_size(std::int32_t format) {
     switch (format) {
     case FBE_TEXTURE_RGBA8:
     case FBE_TEXTURE_RGBA8_LINEAR:
-    case FBE_TEXTURE_R32F:
+    case shadow_format:
         return 4;
     case FBE_TEXTURE_R8:
         return 1;

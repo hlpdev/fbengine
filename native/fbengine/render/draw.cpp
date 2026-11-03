@@ -79,12 +79,14 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
         .samples = samples,
         .polygon = ((key >> 49U) & 1U) != 0 && gpu::device()->wireframe ? VK_POLYGON_MODE_LINE
                                                                         : VK_POLYGON_MODE_FILL,
-        .cull = two_sided ? flag<VkCullModeFlags>(VK_CULL_MODE_NONE)
-                          : flag<VkCullModeFlags>(VK_CULL_MODE_BACK_BIT),
+        // A room's shell, its back to the light, casts as well as its front would.
+        .cull = two_sided || shadows ? flag<VkCullModeFlags>(VK_CULL_MODE_NONE)
+                                     : flag<VkCullModeFlags>(VK_CULL_MODE_BACK_BIT),
         .front = mirrored != flipped ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .blend = blend_of(key),
         .depth_test = depth_mode != FBE_DEPTH_NONE,
         .depth_write = depth_mode == FBE_DEPTH_TEST_AND_WRITE,
+        .depth_clamp = shadows && gpu::device()->depth_clamp,
         .constants = {
             static_cast<std::uint32_t>(key & 3U),
             static_cast<std::uint32_t>((key >> 2U) & 7U),
@@ -414,7 +416,7 @@ sky_data_t sky_data(const scene::camera_t& camera, const scene::view_t& view,
 /// materials sample added to `sampled`. False, with fbe_error's why, if there's no memory.
 bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                 const scene::tweened_t& tweened, const lists_t& lists, bool flipped,
-                std::uint64_t target, const shadow_frame_t& shadows,
+                std::uint64_t target, const shadow_frame_t& shadows, std::size_t shadow_view,
                 std::vector<std::uint64_t>& sampled, view_batches_t& out) {
     const scene::scene_t& s = scene::scene();
     out.flipped = flipped;
@@ -600,9 +602,10 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
     data.materials = in_ring<material_data_t>(materials, failed).address;
     std::vector<fbe_draw_light_t> lights = lists.lights;
     for (fbe_draw_light_t& light : lights) {
-        const auto first = shadows.firsts.find(light.light);
-        light.shadow =
-            first != shadows.firsts.end() ? static_cast<std::int32_t>(first->second) : -1;
+        const std::unordered_map<std::uint64_t, std::uint32_t>& firsts =
+            shadows.firsts[shadow_view];
+        const auto first = firsts.find(light.light);
+        light.shadow = first != firsts.end() ? static_cast<std::int32_t>(first->second) : -1;
     }
     data.lights = in_ring<fbe_draw_light_t>(lights, failed).address;
     data.clusters = in_ring<fbe_cluster_t>(lists.clusters, failed).address;
@@ -688,41 +691,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
         return true;
     }
     const scene::tweened_t tweened(tween);
-    // Its shadows first, so what lights it has them.
-    shadow_frame_t shadows;
-    if (!draw_shadows(camera, view, tweened, shadows)) {
-        return false;
-    }
     auto pass = std::make_shared<recorded_pass_t>();
-    std::vector<std::uint64_t> sampled;
-    // Blitz's order: every mirror's reflection of the scene, into the same viewport and depth, then
-    // the scene, which covers it unless what's on the mirror's plane lets it through.
-    const std::uint32_t world = s.entities.world[slot];
-    for (std::uint32_t entity = 0; entity < s.entities.slots.size(); ++entity) {
-        if (s.entities.slots.find(s.entities.slots.handle(entity)) &&
-            s.entities.kind[entity] == FBE_ENTITY_MIRROR && s.entities.world[entity] == world &&
-            scene::showing(entity)) {
-            scene::view_t reflected;
-            if (!reflected_view(view, tweened.pose(entity).matrix, reflected)) {
-                continue;
-            }
-            lists_t lists;
-            read_view(camera, reflected, tweened, lists);
-            view_batches_t batches;
-            if (!write_view(camera, reflected, tweened, lists, true, target, shadows, sampled,
-                            batches)) {
-                return false;
-            }
-            pass->views.push_back(std::move(batches));
-        }
-    }
-    lists_t lists;
-    read_view(camera, view, tweened, lists);
-    view_batches_t batches;
-    if (!write_view(camera, view, tweened, lists, false, target, shadows, sampled, batches)) {
-        return false;
-    }
-    pass->views.push_back(std::move(batches));
     // The pixels it covers, in float first, since a viewport can be further out than an int counts,
     // and the viewport itself no further than the device takes: past that, it's cut there.
     const auto most_x = static_cast<float>(target_width);
@@ -762,6 +731,37 @@ bool draw_camera(std::uint32_t slot, float tween) {
     };
     if (pass->scissor.extent.width == 0 || pass->scissor.extent.height == 0) {
         return true;
+    }
+    // Blitz's order: every mirror's reflection of the scene, into the same viewport and depth, then
+    // the scene, which covers it unless what's on the mirror's plane lets it through.
+    const std::uint32_t world = s.entities.world[slot];
+    std::vector<scene::view_t> views;
+    for (std::uint32_t entity = 0; entity < s.entities.slots.size(); ++entity) {
+        if (s.entities.slots.find(s.entities.slots.handle(entity)) &&
+            s.entities.kind[entity] == FBE_ENTITY_MIRROR && s.entities.world[entity] == world &&
+            scene::showing(entity)) {
+            scene::view_t reflected;
+            if (reflected_view(view, tweened.pose(entity).matrix, reflected)) {
+                views.push_back(reflected);
+            }
+        }
+    }
+    views.push_back(view);
+    // Its shadows first, so what lights it has them.
+    shadow_frame_t shadows;
+    if (!draw_shadows(camera, views, tweened, shadows)) {
+        return false;
+    }
+    std::vector<std::uint64_t> sampled;
+    for (std::size_t at = 0; at < views.size(); ++at) {
+        lists_t lists;
+        read_view(camera, views[at], tweened, lists);
+        view_batches_t batches;
+        if (!write_view(camera, views[at], tweened, lists, at + 1 != views.size(), target, shadows,
+                        at, sampled, batches)) {
+            return false;
+        }
+        pass->views.push_back(std::move(batches));
     }
     pass->format = format;
     pass->samples = samples;
@@ -813,6 +813,7 @@ FBE_API bool fbe_render_camera(uint64_t camera, float tween) {
         return false;
     }
     fbe::render::forget_freed_geometries();
+    fbe::render::forget_unused_atlas();
     return (fbe_gpu_started() || fbe_gpu_start()) && fbe::render::draw_camera(slot, tween);
 }
 
@@ -823,8 +824,12 @@ FBE_API bool fbe_render_world(uint64_t world, float tween) {
     }
     std::vector<std::uint64_t> cameras(static_cast<std::size_t>(count));
     fbe_world_cameras(world, cameras.data(), count);
-    return std::ranges::all_of(
+    // Nothing can change what casts between them, so they share it.
+    fbe::render::keep_shadow_casters(true);
+    const bool drawn = std::ranges::all_of(
         cameras, [tween](std::uint64_t camera) { return fbe_render_camera(camera, tween); });
+    fbe::render::keep_shadow_casters(false);
+    return drawn;
 }
 
 } // extern "C"

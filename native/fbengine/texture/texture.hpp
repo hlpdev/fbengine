@@ -68,6 +68,8 @@ struct texture_t {
 
 /// A target's depth's format.
 constexpr VkFormat depth_format = VK_FORMAT_D32_SFLOAT;
+/// A float of red alone, as a shadow's depth is kept: a format only the engine's own textures have.
+constexpr std::int32_t shadow_format = 4;
 
 /// The live texture a handle is for, or nullptr, with fbe_error's why. The pool it's in grows as
 /// textures are made, which recording the frame graph can do, so the pointer's good only until

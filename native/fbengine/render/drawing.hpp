@@ -145,7 +145,10 @@ struct shadow_data_t {
     float split;
     std::uint32_t level;
     float inverse_side;
-    std::array<float, 2> spare;
+    /// Of a cascade, how many of its light's come after it.
+    std::uint32_t left;
+    /// Whether it's one of six, a face of what's all around its light.
+    std::uint32_t face;
 };
 static_assert(sizeof(shadow_data_t) == 112, "the scene shader reads shadows 112 bytes apart");
 
@@ -225,12 +228,25 @@ struct shadow_frame_t {
     std::uint64_t atlas = 0;
     std::vector<shadow_data_t> records;
     std::vector<scene::mat4_t> world_to_clip;
-    std::unordered_map<std::uint64_t, std::uint32_t> firsts;
+    /// A view's first record for each light it has, by handle: a directional light's cascades are
+    /// a view's own, the others' shared.
+    std::vector<std::unordered_map<std::uint64_t, std::uint32_t>> firsts;
 };
 
-/// Draws a camera's World's shadows from its view, as a pass of the frame: false, with fbe_error's
-/// why, if there's no memory for them.
-bool draw_shadows(const scene::camera_t& camera, const scene::view_t& view,
+/// Draws a camera's World's shadows for its views, the reflections' then its own, as a pass of the
+/// frame: false, with fbe_error's why, if there's no memory for what lists them. With no memory for
+/// the atlas, it's smaller, or there are none.
+bool draw_shadows(const scene::camera_t& camera, std::span<const scene::view_t> views,
                   const scene::tweened_t& tweened, shadow_frame_t& frame);
+
+/// Keeps what casts between the cameras a World's drawing has, or stops.
+void keep_shadow_casters(bool keep);
+
+/// Lets go of the atlas, once it's gone a while unused or bigger than it's been wanted.
+void forget_unused_atlas();
+
+/// The atlas's side, 0 with none; and, for tests, the side from which the GPU's taken to refuse it.
+std::uint32_t shadow_atlas_side();
+void refuse_shadow_atlas(std::uint32_t side);
 
 } // namespace fbe::render

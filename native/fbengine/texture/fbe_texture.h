@@ -18,7 +18,6 @@ extern "C" {
 #define FBE_TEXTURE_RGBA8_LINEAR 1
 #define FBE_TEXTURE_R8           2
 #define FBE_TEXTURE_RGBA16F      3
-#define FBE_TEXTURE_R32F         4
 
 // How a texture is filtered: its nearest pixel, or a blend of the four around, and of its two
 // nearest mipmaps.
@@ -62,7 +61,7 @@ FBE_API int32_t fbe_texture_format(uint64_t texture);
 FBE_API int32_t fbe_texture_levels(uint64_t texture);
 
 // Replaces the pixels `width` by `height` at `x`, `y` from its top left with `pixels`, rows
-// `pitch` bytes apart, in its format's bytes (4 a pixel for RGBA8 and R32F, 1 for R8, 8 for
+// `pitch` bytes apart, in its format's bytes (4 a pixel for RGBA8, 1 for R8, 8 for
 // RGBA16F), and
 // makes its mipmaps again, in turn with what else the frame does with it: drawing with it or into
 // it, clearing, and copying before the write see it as it was, and after, the write. False if the

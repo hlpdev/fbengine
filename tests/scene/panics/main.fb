@@ -32,6 +32,8 @@ Select arguments[0]
         world.SetAtmosphere(Light(LightType.POINT))
     Case "decal-box"
         world.Decal(Mat4.Scale(Vec3(0, 1, 1)))
+    Case "shadow-atlas-limit"
+        SetShadowAtlasLimit(128)
     Case "shadow-size"
         Light().SetShadowSize(8)
     Case "cascades"

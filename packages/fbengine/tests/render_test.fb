@@ -319,3 +319,11 @@ Function ADecalIsWhatsInItsBox()
     Expect(decal.SurfaceCount() == 1)
     Expect(decal.Surface(0).VertexCount() > 0)
 End Function
+
+@Test
+Function ShadowsAtlasHasALimit()
+    Local limit = ShadowAtlasLimit()
+    Defer SetShadowAtlasLimit(limit)
+    SetShadowAtlasLimit(1024)
+    Expect(ShadowAtlasLimit() == 1024)
+End Function

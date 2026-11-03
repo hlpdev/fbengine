@@ -134,6 +134,10 @@ FBE_API int32_t fbe_render_draw_lights(uint64_t camera, float target_width, floa
 // with fbe_error's why, for a freed camera, a tween outside 0 to 1, a GPU that can't start, or with
 // no target and no window.
 FBE_API bool fbe_render_camera(uint64_t camera, float tween);
+// The most a side of the atlas shadows share can be, 256 to 8192, 4096 at first, up to what the
+// device goes to. It's as big as they need up to there, and let go of once they're gone.
+FBE_API bool fbe_render_set_shadow_atlas_limit(int32_t side);
+FBE_API int32_t fbe_render_shadow_atlas_limit(void);
 // Draws every one of a World's cameras, in their order; false as fbe_render_camera is, or for a
 // freed World.
 FBE_API bool fbe_render_world(uint64_t world, float tween);
