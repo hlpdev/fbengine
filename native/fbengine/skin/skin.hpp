@@ -24,6 +24,11 @@ void copy_skins(const std::vector<std::pair<std::uint32_t, std::size_t>>& origin
 /// Lets go of the skin of a mesh, by its slot, as it's freed.
 void forget_skin(std::uint32_t mesh);
 
+/// The box in the world around the joints a mesh in slot `mesh` is skinned by, `tweened` as
+/// drawing's poses are: false for a mesh skinned by nothing, or with none of its joints there.
+bool skin_joints_box(std::uint32_t mesh, const scene::tweened_t& tweened, scene::vec3_t& min,
+                     scene::vec3_t& max);
+
 /// The palette the mesh in slot `mesh` is drawn with, `tweened` as drawing's poses are: a matrix a
 /// joint, the joint's matrix to the world times its inverse bind, in the mesh's space. Empty for a
 /// mesh skinned by nothing; valid until the next call for that mesh, or its skin changes.

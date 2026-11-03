@@ -1,4 +1,4 @@
-// Lights, as the data the renderer lights a World with: E5 draws them.
+// Lights, as the data the renderer lights a World with.
 
 Import std.core
 Import std.ffi
@@ -75,14 +75,17 @@ Public Final Class Light Extends Entity
     @MainThread @PanicsAtCaller
     Public Method Intensity(): Float => fbe_light_intensity(Live("Intensity"))
 
-    /// Sets the distance a point or spot light's falloff is measured by; how it falls off with
-    /// it, and whether the light ends there, is its shading model's. One not above 0 panics.
+    /// Sets how far a point or spot light reaches, in its shading model's meaning. Per pixel, it's
+    /// where it ends, a distance d away falling as glTF's KHR_lights_punctual,
+    /// `clamp(1 - (d / range)^4, 0, 1)^2 / max(d^2, 0.0001)`. Per vertex, Shading.VERTEX, it's where
+    /// it starts to fall, `min(range / d, 1)`, with no end, as Blitz's LightRange. One not above 0
+    /// panics.
     @MainThread @PanicsAtCaller
     Public Method SetRange(range: Float)
         If !fbe_light_set_range(Live("SetRange"), range) Then Failed("SetRange")
     End Method
 
-    /// The distance a point or spot light's falloff is measured by.
+    /// How far a point or spot light reaches.
     @MainThread @PanicsAtCaller
     Public Method Range(): Float => fbe_light_range(Live("Range"))
 

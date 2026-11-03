@@ -9,6 +9,30 @@ Import "./transform"
 Import "./window"
 Import "./world"
 
+/// A vertex's joints, beside its Vertex: which four of its skin's joints move it, and how much of
+/// each.
+Public Struct VertexJoints
+    Public Field Joint0: UInt16
+    Public Field Joint1: UInt16
+    Public Field Joint2: UInt16
+    Public Field Joint3: UInt16
+    /// How much of each, in x, y, z, and w.
+    Public Field Weights: Vec4
+End Struct
+
+Function CJointsOf(joints: VertexJoints): fbe_vertex_joints_t
+    Local made = fbe_vertex_joints_t()
+    made.joints[0] = joints.Joint0
+    made.joints[1] = joints.Joint1
+    made.joints[2] = joints.Joint2
+    made.joints[3] = joints.Joint3
+    made.weights[0] = joints.Weights.x
+    made.weights[1] = joints.Weights.y
+    made.weights[2] = joints.Weights.z
+    made.weights[3] = joints.Weights.w
+    Return made
+End Function
+
 /// A vertex of a surface: where it is, its normal, two sets of UVs, from the top left of a
 /// texture, as the second set a lightmap's are, and its color and alpha, linear, which multiply
 /// what's drawn when its material's VertexColors is on. A vertex made from fewer has a zero normal
@@ -489,6 +513,45 @@ Public Struct Surface
             vertices.Add(VertexOf(vertex))
         End For
         Return vertices
+    End Method
+
+    /// Sets its vertices' joints, one for each, or none with an empty list, which drawing skins it
+    /// by when its Mesh has a skin. A vertex with no weight at all stays where it is. Vertices added
+    /// since or cleared let go of them. Another count panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetJoints(joints: VertexJoints[])
+        Local geometry = Owner.Live("SetJoints")
+        Local taken = Buffer<fbe_vertex_joints_t>(joints.Count)
+        For i, one In joints
+            taken[i] = CJointsOf(one)
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_surface_set_joints(geometry, Index, taken.Pointer(), joints.Count As Int32)
+        End Unsafe
+        If !done Then Owner.Failed("SetJoints")
+    End Method
+
+    /// Its vertices' joints, one for each, or none.
+    @MainThread @PanicsAtCaller
+    Public Method Joints(): VertexJoints[]
+        Local geometry = Owner.Live("Joints")
+        Local count = 0
+        Unsafe
+            count = fbe_surface_joints(geometry, Index, Null, 0)
+        End Unsafe
+        If count < 0 Then Owner.Failed("Joints")
+        Local found = Buffer<fbe_vertex_joints_t>(count)
+        Unsafe
+            fbe_surface_joints(geometry, Index, found.Pointer(), count)
+        End Unsafe
+        Local joints: VertexJoints[] = []
+        For one In found
+            joints.Add(VertexJoints(one.joints[0], one.joints[1], one.joints[2], one.joints[3],
+                                    Vec4(one.weights[0], one.weights[1], one.weights[2],
+                                         one.weights[3])))
+        End For
+        Return joints
     End Method
 
     /// Sets vertices from `first` in one call. Ones it doesn't have panic.

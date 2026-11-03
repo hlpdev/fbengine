@@ -62,6 +62,7 @@ add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
                gpu/pipeline_tests.cpp gpu/texture_tests.cpp gpu/target_tests.cpp
                gpu/buffer_tests.cpp gpu/graph_tests.cpp gpu/canvas_tests.cpp
                gpu/pixels_tests.cpp gpu/text_tests.cpp gpu/example_tests.cpp
+               gpu/scene_tests.cpp
                golden/golden.cpp golden/golden_tests.cpp golden/stb.cpp)
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)
@@ -83,6 +84,16 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+
+# The scene's insides, built in from fbengine_internal: how moves are run, and their scratch.
+add_executable(fbengine_scene_internal_tests scene/moves_tests.cpp)
+target_link_libraries(fbengine_scene_internal_tests PRIVATE volk Vulkan::Headers
+                      Catch2::Catch2WithMain fbengine_internal)
+target_include_directories(fbengine_scene_internal_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine")
+fbengine_set_warnings(fbengine_scene_internal_tests)
+catch_discover_tests(fbengine_scene_internal_tests TEST_PREFIX "scene.internal."
+                     DL_PATHS "${fbengine_test_dll_paths}")
 
 # A golden image update takes only a passing test's images: the hidden test that fails after its
 # check, run updating, has to leave its image unwritten.
@@ -275,10 +286,37 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                scene/material_tests.cpp scene/bvh_tests.cpp scene/collision_tests.cpp
                scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
                scene/plane_tests.cpp scene/draw_tests.cpp
-               scene/terrain_tests.cpp
+               scene/terrain_tests.cpp scene/clusters_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
+# bvh.cpp, built here too, rounds as the DLL's does.
+if(NOT MSVC)
+  target_compile_options(fbengine_scene_tests PRIVATE -ffp-contract=off)
+endif()
+# A program that ends at once after its moves, its workers still running: it has to end.
+add_executable(fbengine_scene_ends scene/ends_after_moves.cpp)
+target_link_libraries(fbengine_scene_ends PRIVATE fbengine_native)
+fbengine_set_warnings(fbengine_scene_ends)
+add_test(NAME scene.ends_after_moves COMMAND fbengine_scene_ends)
+set_tests_properties(scene.ends_after_moves PROPERTIES
+                     PASS_REGULAR_EXPRESSION "moved" TIMEOUT 60)
+set_property(TEST scene.ends_after_moves PROPERTY ENVIRONMENT_MODIFICATION
+             "PATH=path_list_prepend:$<TARGET_FILE_DIR:fbengine_native>")
+if(fbengine_test_dll_paths)
+  set_property(TEST scene.ends_after_moves APPEND PROPERTY ENVIRONMENT_MODIFICATION
+               "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+endif()
+# Another thread's exit() during moves, on systems where that ends statics under them: it has to
+# end with its code, however far they've got.
+if(UNIX)
+  add_executable(fbengine_scene_ends_during scene/ends_during_moves.cpp)
+  target_link_libraries(fbengine_scene_ends_during PRIVATE fbengine_native)
+  fbengine_set_warnings(fbengine_scene_ends_during)
+  add_test(NAME scene.ends_during_moves COMMAND fbengine_scene_ends_during)
+  set_tests_properties(scene.ends_during_moves PROPERTIES
+                       PASS_REGULAR_EXPRESSION "ended" TIMEOUT 300)
+endif()
 catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
 
@@ -286,6 +324,11 @@ catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
 # what it does.
 if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
+      "render-no-target=Render on a World: a camera with no target draws into the screen, and there's no window open"
+      "render-bad-tween=Render on a World: a tween is 0 to 1, not 2"
+      "layer-uv-zero=SetLayerUv on a Material: a layer's UV scale is finite and not 0, not \\(0, 1\\)"
+      "layer-texture-out-of-range=SetTexture on a Material: a material's layers are 0 to 7, not 8"
+      "joints-wrong-count=SetJoints on a Geometry: a surface of 24 vertices has as many joints, or none, not 1"
       "freed-entity=SetName on a Pivot that was freed"
       "freed-with-parent=Name on a Pivot that was freed"
       "new-under-freed=New on a Pivot that was freed"
@@ -357,10 +400,10 @@ if(FBENGINE_FB_TESTS)
       "tween-range=TweenedMatrix on a Pivot: a tween is 0 to 1, not 2"
       "view-tween-range=TweenedViewMatrix on a Camera: a tween is 0 to 1, not -1"
       "capture-freed=Capture on a World that was freed"
-      "fixed-step-rate=FixedStep: a rate is above 0 steps a second, not 0"
-      "fixed-step-most=FixedStep: a frame takes at most 1 step or more, not 0"
-      "fixed-step-steps=Steps on a FixedStep: a frame takes 0 seconds or more, finite, not -1"
-      "fixed-step-infinite=Steps on a FixedStep: a frame takes 0 seconds or more, finite, not Inf"
+      "fixed-step-rate=FixedUpdate: a rate is above 0 steps a second, not 0"
+      "fixed-step-most=FixedUpdate: a frame takes at most 1 step or more, not 0"
+      "fixed-step-steps=Steps on a FixedUpdate: a frame takes 0 seconds or more, finite, not -1"
+      "fixed-step-infinite=Steps on a FixedUpdate: a frame takes 0 seconds or more, finite, not Inf"
       "plane-segments=SetSegments on a GroundPlane: a ground plane has 1 to 16 segments, not 17"
       "auto-fade=SetAutoFade on a Pivot: a fade is 0 <= start < end, finite, or 0 and 0 for none, not 5 to 1"
       "mirror-freed=Reflection on a Mirror that was freed"

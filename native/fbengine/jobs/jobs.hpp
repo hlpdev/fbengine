@@ -175,7 +175,11 @@ int engine_workers();
 /// The engine's jobs, started the first time they're asked for, and never stopped: on Windows a
 /// DLL's statics end after the OS has ended its threads, and on Linux and macOS exit() ends a
 /// library's statics while its threads still run. So the workers run until the program ends, and
-/// a job never touches a static that has a destructor.
+/// what a job reads is never destructed, as the scene isn't. A job touches no thread_local of the
+/// engine's either, even a plain pointer: on MinGW its first touch on a thread goes through
+/// pthread_setspecific, where a hang at exit was seen; what a job keeps between jobs is in arrays
+/// the job's given a place in. A job that runs out of memory ends the process, as std::terminate
+/// does, under run's noexcept.
 jobs_t& jobs();
 
 /// Runs the work the engine's jobs handed to the main thread, which hands the FB side the tickets
