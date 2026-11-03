@@ -684,6 +684,7 @@ Function ThumbnailsComeAFewAFrameAndSmall() Throws IOError, GraphicsError
         steps += 1
         If steps % 3 == 0 Then Sleep(30.Milliseconds)
         editor.Step()
+        Expect(editor.Files.ThumbsLoading() <= 2)
         most = Max(most, editor.Files.ThumbsMade() - was)
         was = editor.Files.ThumbsMade()
     End While
@@ -791,7 +792,8 @@ Function AModelReloadedKeepsItsEntitiesAndWhatsUnderThem() Throws IOError, Graph
     Expect(RefEquals(spawned.Child(0), blade) && spawned.ChildCount() == 1)
     Expect(blade.Name() == "mine" && blade.Position() == Vec3(3, 0, 0))
     Expect(blade.ChildCount() == 1 && RefEquals(blade.Child(0), own))
-    Expect((blade As? Mesh)?.Geometry() == model.Geometries()[0])
+    Local drawn = (blade As? Mesh)?.Geometry()
+    Expect(drawn != Null && RefEquals(drawn, model.Geometries()[0]))
     Expect(editor.Actions.Run("edit.undo"))
     Expect(blade.Name() == "blade")
     Expect(editor.Actions.Run("edit.redo"))

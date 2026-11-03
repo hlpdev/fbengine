@@ -16,14 +16,13 @@ Import "./project"
 Import "./scene"
 
 // How far a row's indented under its folder, how big a thumbnail is, in the UI's units and its
-// texture's pixels, how often the disk's looked at, how many thumbnails are begun and made in a
-// frame, and loading at a time.
+// texture's pixels, how often the disk's looked at, and how many thumbnails are loading at a time,
+// which is the most that can be made in a frame.
 Const INDENT: Float32 = 14.0
 Const THUMB: Float32 = 32.0
 Const THUMB_PIXELS: Int32 = 64
 Const LOOKS: Float64 = 0.5
 Const THUMBS_A_FRAME: Int = 2
-Const THUMBS_LOADING: Int = 4
 
 Const WATCH_FAILED = "what changes on disk won't be seen: "
 
@@ -413,6 +412,9 @@ Public Final Class AssetBrowser Extends Widget
     /// How many thumbnails it holds now.
     Public Method ThumbsHeld(): Int => held.Count
 
+    /// How many files it's loading for thumbnails now.
+    Public Method ThumbsLoading(): Int => loading
+
     /// How many thumbnails it's made since it was made.
     Public Method ThumbsMade(): Int => made
 
@@ -499,19 +501,17 @@ Public Final Class AssetBrowser Extends Widget
 
     // This frame's worth: what's loaded made thumbnails, and more begun.
     Method Thumbed()
-        Local count = Min(landed.Count, THUMBS_A_FRAME)
-        For at = 1 To count
-            Local key, texture, model, failure = landed[0]
-            landed.RemoveAt(0)
+        Local arrived = landed
+        landed = []
+        For each In arrived
+            Local key, texture, model, failure = each
             pending.Remove(key)
             Landed(key, texture, model, failure)
         End For
-        Local begun = 0
-        While queue.Count > 0 && loading < THUMBS_LOADING && begun < THUMBS_A_FRAME
+        While queue.Count > 0 && loading < THUMBS_A_FRAME
             Local key = queue[0]
             queue.RemoveAt(0)
             loading += 1
-            begun += 1
             Flown(key, flights)
         End While
     End Method
