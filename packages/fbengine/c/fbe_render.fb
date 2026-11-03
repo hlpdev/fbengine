@@ -35,6 +35,7 @@ End Struct
     Public Field range: Float32
     Public Field inner_cosine: Float32
     Public Field outer_cosine: Float32
+    Public Field shadow: Int32
 End Struct
 
 @CLayout Public Struct fbe_cluster_t

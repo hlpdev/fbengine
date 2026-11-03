@@ -5,6 +5,7 @@ Public Const FBE_TEXTURE_RGBA8: Int32 = 0
 Public Const FBE_TEXTURE_RGBA8_LINEAR: Int32 = 1
 Public Const FBE_TEXTURE_R8: Int32 = 2
 Public Const FBE_TEXTURE_RGBA16F: Int32 = 3
+Public Const FBE_TEXTURE_R32F: Int32 = 4
 Public Const FBE_TEXTURE_NEAREST: Int32 = 0
 Public Const FBE_TEXTURE_LINEAR: Int32 = 1
 Public Const FBE_TEXTURE_REPEAT: Int32 = 0

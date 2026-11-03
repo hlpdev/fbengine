@@ -330,6 +330,10 @@ catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
 # what it does.
 if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
+      "shadow-size=SetShadowSize on a Light: a shadow's tile is 16 to 8192 texels a side, not 8"
+      "cascades=SetCascades on a Light: a light has 1 to 4 cascades, not 5"
+      "shadow-distance=SetShadowDistance on a Light: a shadow reaches a distance above 0, not 0"
+      "shadow-bias=SetShadowBias on a Light: a shadow's biases are 0 or more, not -1 and 0"
       "render-no-target=Render on a World: a camera with no target draws into the screen, and there's no window open"
       "render-bad-tween=Render on a World: a tween is 0 to 1, not 2"
       "layer-uv-zero=SetLayerUv on a Material: a layer's UV scale is finite and not 0, not \\(0, 1\\)"

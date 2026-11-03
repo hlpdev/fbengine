@@ -23,6 +23,12 @@ public float4 sampleTextureGrad(uint index, uint sampler, float2 uv, float2 acro
                                                                across, down);
 }
 
+/// Texture `index`'s first level's texel at `at`, as it's stored.
+public float4 loadTexel(uint index, int2 at)
+{
+    return textures[NonUniformResourceIndex(index)].Load(int3(at, 0));
+}
+
 /// Texture `index`'s first level's size, in texels.
 public float2 textureSize(uint index)
 {

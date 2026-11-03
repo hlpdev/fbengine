@@ -72,6 +72,7 @@ Class Room
         spot.SetColor(Color(0.4, 0.6, 1))
         spot.SetIntensity(16)
         spot.SetRange(12)
+        spot.SetShadows(True)
         // A shiny crate, and the lamp that swings over it.
         Local wood = Material(Color(0.8, 0.6, 0.4))
         wood.SetShininess(1)
@@ -83,6 +84,7 @@ Class Room
         lamp.SetColor(Color(1, 0.8, 0.6))
         lamp.SetIntensity(12)
         lamp.SetRange(9)
+        lamp.SetShadows(True)
         // A pillar lit per vertex.
         Local old = Material(Color(0.4, 0.6, 0.4))
         old.SetShading(Shading.VERTEX)

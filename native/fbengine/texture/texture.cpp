@@ -134,6 +134,8 @@ VkFormat vk_format_of(std::int32_t format) {
         return VK_FORMAT_R8_UNORM;
     case FBE_TEXTURE_RGBA16F:
         return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case FBE_TEXTURE_R32F:
+        return VK_FORMAT_R32_SFLOAT;
     default:
         return VK_FORMAT_UNDEFINED;
     }
@@ -757,6 +759,7 @@ std::uint32_t pixel_size(std::int32_t format) {
     switch (format) {
     case FBE_TEXTURE_RGBA8:
     case FBE_TEXTURE_RGBA8_LINEAR:
+    case FBE_TEXTURE_R32F:
         return 4;
     case FBE_TEXTURE_R8:
         return 1;

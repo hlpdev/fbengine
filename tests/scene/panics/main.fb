@@ -12,6 +12,14 @@ If arguments.Count != 1 Then Panic("give the case to run")
 Local world = World()
 World.SetCurrent(world)
 Select arguments[0]
+    Case "shadow-size"
+        Light().SetShadowSize(8)
+    Case "cascades"
+        Light().SetCascades(5)
+    Case "shadow-distance"
+        Light().SetShadowDistance(0)
+    Case "shadow-bias"
+        Light().SetShadowBias(-1, 0)
     Case "render-no-target"
         Camera()
         RenderWorld()

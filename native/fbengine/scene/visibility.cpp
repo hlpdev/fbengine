@@ -128,6 +128,20 @@ FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds) {
     return true;
 }
 
+FBE_API bool fbe_entity_set_casts_shadows(uint64_t entity, bool casts) {
+    const std::uint32_t slot = fbe::scene::entity_slot(entity);
+    if (slot == none) {
+        return false;
+    }
+    scene().entities.casts_shadows[slot] = casts;
+    return true;
+}
+
+FBE_API bool fbe_entity_casts_shadows(uint64_t entity) {
+    const std::uint32_t slot = fbe::scene::entity_slot(entity);
+    return slot != none && scene().entities.casts_shadows[slot];
+}
+
 FBE_API bool fbe_entity_set_blocks_sight(uint64_t entity, bool blocks) {
     const std::uint32_t slot = entity_slot(entity);
     if (slot == none) {

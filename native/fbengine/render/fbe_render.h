@@ -80,6 +80,7 @@ typedef struct fbe_draw_light_t {
     float range;
     float inner_cosine;
     float outer_cosine;
+    int32_t shadow;
 } fbe_draw_light_t;
 
 // A cluster's lights: `count` of the light indices from `first`.

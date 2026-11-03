@@ -409,6 +409,24 @@ FBE_API bool fbe_light_set_type(uint64_t light, int32_t type);
 FBE_API int32_t fbe_light_type(uint64_t light);
 FBE_API bool fbe_light_set_color(uint64_t light, float r, float g, float b);
 FBE_API bool fbe_light_color(uint64_t light, fbe_color_t* color);
+// Whether a light has shadows, off at first, on what's drawn per pixel: UNLIT and VERTEX, the
+// fixed-function look, have none. Its side of a tile in texels, 16 to 8192, 1024 at first, of which
+// a point light has six and a directional light one for each of its cascades; lights past what the
+// device's atlas holds have none, the last in the tree's order first. How far from a surface
+// it's compared: in depth, world units, 0.02 at first, and along its normal, in texels, 1.5 at
+// first; each 0 or more. A directional light's cascades, 1 to 4, 3 at first, reaching this far from
+// the camera, 100 at first, or its far plane.
+FBE_API bool fbe_light_set_shadows(uint64_t light, bool shadows);
+FBE_API bool fbe_light_shadows(uint64_t light);
+FBE_API bool fbe_light_set_shadow_size(uint64_t light, int32_t size);
+FBE_API int32_t fbe_light_shadow_size(uint64_t light);
+FBE_API bool fbe_light_set_shadow_bias(uint64_t light, float depth, float normal);
+FBE_API float fbe_light_shadow_bias(uint64_t light);
+FBE_API float fbe_light_shadow_normal_bias(uint64_t light);
+FBE_API bool fbe_light_set_cascades(uint64_t light, int32_t cascades);
+FBE_API int32_t fbe_light_cascades(uint64_t light);
+FBE_API bool fbe_light_set_shadow_distance(uint64_t light, float distance);
+FBE_API float fbe_light_shadow_distance(uint64_t light);
 // False below 0.
 FBE_API bool fbe_light_set_intensity(uint64_t light, float intensity);
 FBE_API float fbe_light_intensity(uint64_t light);
@@ -717,6 +735,9 @@ FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds);
 // Whether an entity blocks line of sight: a mesh by its triangles, from either side, while it's
 // showing. No entity blocks it at first.
 FBE_API bool fbe_entity_set_blocks_sight(uint64_t entity, bool blocks);
+// Whether a mesh or terrain casts shadows, when it's opaque or cut out, in order 0: true at first.
+FBE_API bool fbe_entity_set_casts_shadows(uint64_t entity, bool casts);
+FBE_API bool fbe_entity_casts_shadows(uint64_t entity);
 FBE_API bool fbe_entity_blocks_sight(uint64_t entity);
 // Whether nothing that blocks sight in its World is between an entity's position and a point,
 // or another entity's position; the two themselves don't block it, and an entity in another

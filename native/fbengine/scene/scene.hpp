@@ -210,6 +210,8 @@ struct entities_t {
     std::vector<std::uint32_t> component;
     /// Whether it blocks line of sight, by its triangles for a mesh.
     std::vector<bool> blocks_sight;
+    /// Whether it casts shadows.
+    std::vector<bool> casts_shadows;
     std::vector<collider_t> colliders;
     /// Its entry in scene_t's pickables, or none.
     std::vector<std::uint32_t> pickable;
@@ -284,6 +286,15 @@ struct light_t {
     float range = 10.0F;
     float inner_cone = 0.0F;
     float outer_cone = 0.78539816F;
+    /// Its shadows: whether it has them, a tile's side in texels, how far off a surface they're
+    /// compared, in depth, world units, and along the normal, texels, and a directional light's
+    /// cascades, and how far from the camera they reach.
+    bool shadows = false;
+    std::int32_t shadow_size = 1024;
+    float shadow_bias = 0.02F;
+    float shadow_normal_bias = 1.5F;
+    std::int32_t cascades = 3;
+    float shadow_distance = 100.0F;
 };
 
 /// Where an entity is in the world: its matrix, and its turn and scale, a mirror in the scale's

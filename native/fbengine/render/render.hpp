@@ -86,7 +86,15 @@ struct terrain_piece_t {
     VkBuffer indices = VK_NULL_HANDLE;
     VkDeviceSize index_offset = 0;
     std::uint32_t index_count = 0;
+    /// The sphere it's within, in the world, where a shadow's asked for it.
+    scene::vec3_t center;
+    float radius = 0.0F;
 };
+
+/// A terrain in coarse pieces, all of them, whatever's seen, for shadows: false, with fbe_error's
+/// why, if there's no memory for them.
+bool terrain_coarse_pieces(const scene::mat4_t& world, const scene::terrain_t& terrain,
+                           std::vector<terrain_piece_t>& pieces);
 
 /// The pieces of a terrain a view sees, nearer ones finer: false, with fbe_error's why, if there's
 /// no memory for them.

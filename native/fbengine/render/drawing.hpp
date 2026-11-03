@@ -1,0 +1,195 @@
+#pragma once
+
+// What drawing a camera and drawing its shadows share: what the scene shader reads, the frame's
+// ring, and a pass's draws.
+
+#include "fbengine.h"
+#include "gpu/buffer.hpp"
+#include "gpu/vulkan.hpp"
+#include "scene/camera.hpp"
+#include "scene/math.hpp"
+#include "scene/scene.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <span>
+#include <unordered_map>
+#include <vector>
+
+namespace fbe::render {
+
+/// A draw as the scene shader reads it: its matrix to the camera's view; the rows of what turns
+/// its normals there; its color and alpha; its vertices' address; its joints' and palette's, if
+/// it's skinned; its material's index in the camera's; its own lights; and how many matrices its
+/// palette has, 0 if it isn't skinned.
+struct draw_data_t {
+    std::array<float, 16> to_view;
+    std::array<std::array<float, 4>, 3> normals;
+    std::array<float, 4> color;
+    VkDeviceAddress vertices;
+    VkDeviceAddress joints;
+    VkDeviceAddress palette;
+    std::uint32_t material;
+    std::uint32_t light_first;
+    std::uint32_t light_count;
+    std::uint32_t joint_count;
+};
+static_assert(sizeof(draw_data_t) == 168, "the scene shader reads draws 168 bytes apart");
+
+/// A layer as the scene shader reads it: its texture's and sampler's indices in the bindless set,
+/// how a bump layer scales the next layer's light, what turns its UVs, by rows, with in their last
+/// places whether sampling it decodes sRGB and whether it can't be sampled, and a bump layer's
+/// matrix.
+struct layer_data_t {
+    std::uint32_t texture;
+    std::uint32_t sampler;
+    float luminance_scale;
+    float luminance_offset;
+    std::array<float, 4> uv_across;
+    std::array<float, 4> uv_down;
+    std::array<float, 4> bump;
+};
+static_assert(sizeof(layer_data_t) == 64, "the scene shader reads layers 64 bytes apart");
+
+/// A material as the scene shader reads it.
+struct material_data_t {
+    std::array<float, 4> color;
+    float shininess;
+    float cutoff;
+    std::uint32_t no_alpha;
+    std::uint32_t spare;
+    std::array<layer_data_t, FBE_MATERIAL_LAYERS> layers;
+};
+static_assert(sizeof(material_data_t) == 544, "the scene shader reads materials 544 bytes apart");
+
+/// A camera as the scene shader reads it.
+struct camera_data_t {
+    std::array<float, 16> projection;
+    std::array<float, 4> viewport;
+    std::array<float, 4> fog_color;
+    float fog_start;
+    float fog_end;
+    float fog_density;
+    float slice_scale;
+    std::array<float, 3> ambient;
+    float slice_bias;
+    std::uint32_t perspective;
+    std::uint32_t flipped;
+    std::uint32_t directional;
+    std::uint32_t spare;
+    VkDeviceAddress draws;
+    VkDeviceAddress materials;
+    VkDeviceAddress lights;
+    VkDeviceAddress clusters;
+    VkDeviceAddress cluster_lights;
+    VkDeviceAddress draw_lights;
+    VkDeviceAddress shadows;
+    std::uint32_t shadow_atlas;
+    std::uint32_t shadow_spare;
+    std::array<std::array<float, 4>, 3> world_rows;
+};
+static_assert(sizeof(camera_data_t) == 256, "the scene shader reads a camera of 256 bytes");
+static_assert(sizeof(fbe_draw_light_t) == 64, "the scene shader reads lights 64 bytes apart");
+static_assert(sizeof(fbe_vertex_t) == 56, "the scene shader reads vertices 56 bytes apart");
+
+/// A shadow's tile as the scene shader reads it: from the view to the light's clip space; its
+/// pixels in the atlas, from and to; its biases, depth's in the world and along the normal; what a
+/// world's depth comes to in the tile's; where a cascade ends; whether it's level, a directional
+/// light's; and a texel of the atlas in UV.
+struct shadow_data_t {
+    std::array<float, 16> from_view;
+    std::array<float, 4> rect;
+    float bias;
+    float normal_bias;
+    float depth_per;
+    float split;
+    std::uint32_t level;
+    float inverse_side;
+    std::array<float, 2> spare;
+};
+static_assert(sizeof(shadow_data_t) == 112, "the scene shader reads shadows 112 bytes apart");
+
+/// Draws of one pipeline and one piece of geometry: their pipeline key, their indices, and which
+/// of the list's draws, one after another, as instances.
+struct batch_t {
+    std::uint64_t key = 0;
+    VkBuffer indices = VK_NULL_HANDLE;
+    VkDeviceSize index_offset = 0;
+    std::uint32_t index_count = 0;
+    std::uint32_t first_draw = 0;
+    std::uint32_t draws = 1;
+};
+
+/// What a pass draws from one view of a camera: the camera's address, whether the view's mirrored
+/// across, as a reflection's is, turning every triangle's front to its back, and its batches.
+struct view_batches_t {
+    VkDeviceAddress camera = 0;
+    bool flipped = false;
+    std::vector<batch_t> batches;
+    /// A tile of its own, as a shadow's, in place of the pass's.
+    bool has_viewport = false;
+    VkViewport viewport{};
+    VkRect2D scissor{};
+};
+
+/// A pass's draws, into a target: what to clear of its viewport first, where the pass's own
+/// clearing would clear more of the target than that.
+struct recorded_pass_t {
+    std::vector<view_batches_t> views;
+    VkViewport viewport{};
+    VkRect2D scissor{};
+    bool clear_color = false;
+    bool clear_depth = false;
+    std::array<float, 4> clear_rgba{};
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    /// Whether it's a shadow pass, by the shader's own entry points for that.
+    bool shadows = false;
+};
+
+/// `found` in the frame's ring, or with `failed` set if there's no memory for it. An empty list is
+/// still one zeroed item, since a shader's loads from an address aren't all behind what stops them
+/// on every driver: lavapipe's reach a null one with no lane active.
+template <typename Item>
+gpu::slice_t in_ring(std::span<const Item> found, bool& failed) {
+    const std::size_t bytes = std::max(found.size_bytes(), sizeof(Item));
+    const gpu::slice_t slice = gpu::frame_memory(bytes, 16);
+    if (slice.data == nullptr) {
+        failed = true;
+        return {};
+    }
+    std::memset(slice.data, 0, bytes);
+    if (!found.empty()) {
+        std::memcpy(slice.data, found.data(), found.size_bytes());
+    }
+    return slice;
+}
+
+/// What a material is as the scene shader reads it, its layers those with textures, in order, as
+/// its draws' pipeline key has them, and the textures it samples added to `sampled`. A layer can't
+/// sample what the pass draws into, so leaves what's under it as it is, as a layer does whose
+/// texture has gone with the GPU.
+material_data_t material_data(std::uint32_t material, std::uint64_t target,
+                              std::vector<std::uint64_t>& sampled);
+
+/// Records a pass's draws.
+void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass);
+
+/// A camera's shadows this frame: the atlas, 0 for none, its tiles as the shader reads them but for
+/// their matrices, which are from each view, what those are from, and each shadowed light's first.
+struct shadow_frame_t {
+    std::uint64_t atlas = 0;
+    std::vector<shadow_data_t> records;
+    std::vector<scene::mat4_t> world_to_clip;
+    std::unordered_map<std::uint64_t, std::uint32_t> firsts;
+};
+
+/// Draws a camera's World's shadows from its view, as a pass of the frame: false, with fbe_error's
+/// why, if there's no memory for them.
+bool draw_shadows(const scene::camera_t& camera, const scene::view_t& view,
+                  const scene::tweened_t& tweened, shadow_frame_t& frame);
+
+} // namespace fbe::render

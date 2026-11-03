@@ -229,3 +229,24 @@ Function ATexturesAlphaAndAWireframeAreWhatTheyreSetTo() Throws GraphicsError
     material.SetWireframe(True)
     Expect(material.Wireframe())
 End Function
+
+@Test
+Function ALightsShadowsAreWhatTheyreSetTo()
+    Local world = Fresh()
+    Defer world.Free()
+    Local light = Light(LightType.DIRECTIONAL)
+    Expect(!light.Shadows() && light.ShadowSize() == 1024 && light.Cascades() == 3)
+    light.SetShadows(True)
+    light.SetShadowSize(512)
+    light.SetShadowBias(0.5, 2)
+    light.SetCascades(2)
+    light.SetShadowDistance(50)
+    Expect(light.Shadows() && light.ShadowSize() == 512 && light.Cascades() == 2)
+    Expect(light.ShadowBias() == 0.5 && light.ShadowNormalBias() == 2)
+    Expect(light.ShadowDistance() == 50)
+    Local mesh = Mesh(Geometry.Cube())
+    Expect(mesh.CastsShadows())
+    mesh.SetCastsShadows(False)
+    Expect(!mesh.CastsShadows())
+    Expect(Mesh(Geometry.Cube()).CastsShadows())
+End Function

@@ -8,6 +8,7 @@
 #include "gpu/graph.hpp"
 #include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
+#include "render/drawing.hpp"
 #include "render/render.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
@@ -39,108 +40,6 @@ using scene::mat4_t;
 using scene::none;
 using scene::vec3_t;
 
-/// A draw as the scene shader reads it: its matrix to the camera's view; the rows of what turns
-/// its normals there; its color and alpha; its vertices' address; its joints' and palette's, if
-/// it's skinned; its material's index in the camera's; its own lights; and how many matrices its
-/// palette has, 0 if it isn't skinned.
-struct draw_data_t {
-    std::array<float, 16> to_view;
-    std::array<std::array<float, 4>, 3> normals;
-    std::array<float, 4> color;
-    VkDeviceAddress vertices;
-    VkDeviceAddress joints;
-    VkDeviceAddress palette;
-    std::uint32_t material;
-    std::uint32_t light_first;
-    std::uint32_t light_count;
-    std::uint32_t joint_count;
-};
-static_assert(sizeof(draw_data_t) == 168, "the scene shader reads draws 168 bytes apart");
-
-/// A layer as the scene shader reads it: its texture's and sampler's indices in the bindless set,
-/// how a bump layer scales the next layer's light, what turns its UVs, by rows, with in their last
-/// places whether sampling it decodes sRGB and whether it can't be sampled, and a bump layer's
-/// matrix.
-struct layer_data_t {
-    std::uint32_t texture;
-    std::uint32_t sampler;
-    float luminance_scale;
-    float luminance_offset;
-    std::array<float, 4> uv_across;
-    std::array<float, 4> uv_down;
-    std::array<float, 4> bump;
-};
-static_assert(sizeof(layer_data_t) == 64, "the scene shader reads layers 64 bytes apart");
-
-/// A material as the scene shader reads it.
-struct material_data_t {
-    std::array<float, 4> color;
-    float shininess;
-    float cutoff;
-    std::uint32_t no_alpha;
-    std::uint32_t spare;
-    std::array<layer_data_t, FBE_MATERIAL_LAYERS> layers;
-};
-static_assert(sizeof(material_data_t) == 544, "the scene shader reads materials 544 bytes apart");
-
-/// A camera as the scene shader reads it.
-struct camera_data_t {
-    std::array<float, 16> projection;
-    std::array<float, 4> viewport;
-    std::array<float, 4> fog_color;
-    float fog_start;
-    float fog_end;
-    float fog_density;
-    float slice_scale;
-    std::array<float, 3> ambient;
-    float slice_bias;
-    std::uint32_t perspective;
-    std::uint32_t flipped;
-    std::uint32_t directional;
-    std::uint32_t spare;
-    VkDeviceAddress draws;
-    VkDeviceAddress materials;
-    VkDeviceAddress lights;
-    VkDeviceAddress clusters;
-    VkDeviceAddress cluster_lights;
-    VkDeviceAddress draw_lights;
-};
-static_assert(sizeof(camera_data_t) == 192, "the scene shader reads a camera of 192 bytes");
-static_assert(sizeof(fbe_draw_light_t) == 64, "the scene shader reads lights 64 bytes apart");
-static_assert(sizeof(fbe_vertex_t) == 56, "the scene shader reads vertices 56 bytes apart");
-
-/// Draws of one pipeline and one piece of geometry: their pipeline key, their indices, and which
-/// of the list's draws, one after another, as instances.
-struct batch_t {
-    std::uint64_t key = 0;
-    VkBuffer indices = VK_NULL_HANDLE;
-    VkDeviceSize index_offset = 0;
-    std::uint32_t index_count = 0;
-    std::uint32_t first_draw = 0;
-    std::uint32_t draws = 1;
-};
-
-/// What a pass draws from one view of a camera: the camera's address, whether the view's mirrored
-/// across, as a reflection's is, turning every triangle's front to its back, and its batches.
-struct view_batches_t {
-    VkDeviceAddress camera = 0;
-    bool flipped = false;
-    std::vector<batch_t> batches;
-};
-
-/// A pass's draws, into a target: what to clear of its viewport first, where the pass's own
-/// clearing would clear more of the target than that.
-struct recorded_pass_t {
-    std::vector<view_batches_t> views;
-    VkViewport viewport{};
-    VkRect2D scissor{};
-    bool clear_color = false;
-    bool clear_depth = false;
-    std::array<float, 4> clear_rgba{};
-    VkFormat format = VK_FORMAT_UNDEFINED;
-    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
-};
-
 gpu::blend_t blend_of(std::uint64_t key) {
     switch ((key >> 2U) & 7U) {
     case FBE_BLEND_ALPHA:
@@ -156,7 +55,7 @@ gpu::blend_t blend_of(std::uint64_t key) {
 
 /// The scene shader's pipeline for a key, as fbe_render.h lays its bits out, into a target.
 gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFlagBits samples,
-                             bool flipped) {
+                             bool flipped, bool shadows) {
     const auto depth_mode = static_cast<std::int32_t>((key >> 10U) & 3U);
     const bool two_sided = ((key >> 7U) & 1U) != 0;
     const bool mirrored = ((key >> 12U) & 1U) != 0;
@@ -170,6 +69,8 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
     }
     gpu::pipeline_desc_t desc{
         .shader = &shaders::scene,
+        .vertex = shadows ? "shadowVertex" : "vertexMain",
+        .fragment = shadows ? "shadowFragment" : "fragmentMain",
         .color = format,
         .depth = texture::depth_format,
         .samples = samples,
@@ -197,8 +98,9 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
     return desc;
 }
 
-/// Records a pass's draws.
-void record(VkCommandBuffer commands, const recorded_pass_t& pass) {
+} // namespace
+
+void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
     if (pass.clear_color || pass.clear_depth) {
         std::array<VkClearAttachment, 2> clears{};
         std::uint32_t count = 0;
@@ -219,9 +121,15 @@ void record(VkCommandBuffer commands, const recorded_pass_t& pass) {
     VkPipelineLayout layout = gpu::pipeline_layout();
     vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0,
                             nullptr);
-    vkCmdSetViewport(commands, 0, 1, &pass.viewport);
-    vkCmdSetScissor(commands, 0, 1, &pass.scissor);
+    if (!pass.shadows) {
+        vkCmdSetViewport(commands, 0, 1, &pass.viewport);
+        vkCmdSetScissor(commands, 0, 1, &pass.scissor);
+    }
     for (const view_batches_t& view : pass.views) {
+        if (view.has_viewport) {
+            vkCmdSetViewport(commands, 0, 1, &view.viewport);
+            vkCmdSetScissor(commands, 0, 1, &view.scissor);
+        }
         vkCmdPushConstants(commands, layout, flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL), 0,
                            sizeof(VkDeviceAddress), &view.camera);
         std::optional<std::uint64_t> bound;
@@ -231,8 +139,8 @@ void record(VkCommandBuffer commands, const recorded_pass_t& pass) {
         for (const batch_t& batch : view.batches) {
             if (bound != batch.key) {
                 bound = batch.key;
-                VkPipeline made =
-                    gpu::pipeline(desc_of(batch.key, pass.format, pass.samples, view.flipped));
+                VkPipeline made = gpu::pipeline(
+                    desc_of(batch.key, pass.format, pass.samples, view.flipped, pass.shadows));
                 usable = made != VK_NULL_HANDLE;
                 if (usable) {
                     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, made);
@@ -251,24 +159,6 @@ void record(VkCommandBuffer commands, const recorded_pass_t& pass) {
             gpu::count_draws(1, std::uint64_t{ batch.index_count } / 3 * batch.draws);
         }
     }
-}
-
-/// `found` in the frame's ring, or with `failed` set if there's no memory for it. An empty list is
-/// still one zeroed item, since a shader's loads from an address aren't all behind what stops them
-/// on every driver: lavapipe's reach a null one with no lane active.
-template <typename Item>
-gpu::slice_t in_ring(std::span<const Item> found, bool& failed) {
-    const std::size_t bytes = std::max(found.size_bytes(), sizeof(Item));
-    const gpu::slice_t slice = gpu::frame_memory(bytes, 16);
-    if (slice.data == nullptr) {
-        failed = true;
-        return {};
-    }
-    std::memset(slice.data, 0, bytes);
-    if (!found.empty()) {
-        std::memcpy(slice.data, found.data(), found.size_bytes());
-    }
-    return slice;
 }
 
 /// What a material is as the scene shader reads it, its layers those with textures, in order, as
@@ -320,6 +210,8 @@ material_data_t material_data(std::uint32_t material, std::uint64_t target,
     }
     return data;
 }
+
+namespace {
 
 /// What a draw is as the scene shader reads it, but for its vertices and material.
 draw_data_t draw_data(const fbe_draw_t& draw, const mat4_t& view) {
@@ -425,7 +317,8 @@ bool plane_grid(const scene::camera_t& camera, const scene::view_t& view, const 
 /// materials sample added to `sampled`. False, with fbe_error's why, if there's no memory.
 bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                 const scene::tweened_t& tweened, const lists_t& lists, bool flipped,
-                std::uint64_t target, std::vector<std::uint64_t>& sampled, view_batches_t& out) {
+                std::uint64_t target, const shadow_frame_t& shadows,
+                std::vector<std::uint64_t>& sampled, view_batches_t& out) {
     const scene::scene_t& s = scene::scene();
     out.flipped = flipped;
     std::vector<draw_data_t> draws;
@@ -560,10 +453,35 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
     bool failed = false;
     data.draws = in_ring<draw_data_t>(draws, failed).address;
     data.materials = in_ring<material_data_t>(materials, failed).address;
-    data.lights = in_ring<fbe_draw_light_t>(lists.lights, failed).address;
+    std::vector<fbe_draw_light_t> lights = lists.lights;
+    for (fbe_draw_light_t& light : lights) {
+        const auto first = shadows.firsts.find(light.light);
+        light.shadow =
+            first != shadows.firsts.end() ? static_cast<std::int32_t>(first->second) : -1;
+    }
+    data.lights = in_ring<fbe_draw_light_t>(lights, failed).address;
     data.clusters = in_ring<fbe_cluster_t>(lists.clusters, failed).address;
     data.cluster_lights = in_ring<std::uint32_t>(lists.cluster_lights, failed).address;
     data.draw_lights = in_ring<std::uint32_t>(lists.draw_lights, failed).address;
+    // Its shadows' matrices from this view, as its lights are in it.
+    if (shadows.atlas != 0) {
+        mat4_t to_world;
+        scene::inverse_affine(view_matrix, to_world);
+        std::vector<shadow_data_t> records = shadows.records;
+        for (std::size_t i = 0; i < records.size(); ++i) {
+            const mat4_t from_view = shadows.world_to_clip[i] * to_world;
+            records[i].from_view = from_view.m;
+        }
+        data.shadows = in_ring<shadow_data_t>(records, failed).address;
+        data.shadow_atlas = texture::index_of(shadows.atlas);
+        sampled.push_back(shadows.atlas);
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            const vec3_t row(to_world.at(0, static_cast<int>(axis)),
+                             to_world.at(1, static_cast<int>(axis)),
+                             to_world.at(2, static_cast<int>(axis)));
+            data.world_rows[axis] = { row.x, row.y, row.z, 0.0F };
+        }
+    }
     const std::array one{ data };
     out.camera = in_ring<camera_data_t>(one, failed).address;
     return !failed;
@@ -625,6 +543,11 @@ bool draw_camera(std::uint32_t slot, float tween) {
         return true;
     }
     const scene::tweened_t tweened(tween);
+    // Its shadows first, so what lights it has them.
+    shadow_frame_t shadows;
+    if (!draw_shadows(camera, view, tweened, shadows)) {
+        return false;
+    }
     auto pass = std::make_shared<recorded_pass_t>();
     std::vector<std::uint64_t> sampled;
     // Blitz's order: every mirror's reflection of the scene, into the same viewport and depth, then
@@ -641,7 +564,8 @@ bool draw_camera(std::uint32_t slot, float tween) {
             lists_t lists;
             read_view(camera, reflected, tweened, lists);
             view_batches_t batches;
-            if (!write_view(camera, reflected, tweened, lists, true, target, sampled, batches)) {
+            if (!write_view(camera, reflected, tweened, lists, true, target, shadows, sampled,
+                            batches)) {
                 return false;
             }
             pass->views.push_back(std::move(batches));
@@ -650,7 +574,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
     lists_t lists;
     read_view(camera, view, tweened, lists);
     view_batches_t batches;
-    if (!write_view(camera, view, tweened, lists, false, target, sampled, batches)) {
+    if (!write_view(camera, view, tweened, lists, false, target, shadows, sampled, batches)) {
         return false;
     }
     pass->views.push_back(std::move(batches));
@@ -727,7 +651,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
         .depth = into,
         .clear_depth = camera.clears_depth && whole,
         .uses = std::move(uses),
-        .record = [pass](VkCommandBuffer commands) { record(commands, *pass); },
+        .record = [pass](VkCommandBuffer commands) { record_pass(commands, *pass); },
     });
 }
 

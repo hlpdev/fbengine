@@ -117,6 +117,95 @@ FBE_API bool fbe_light_color(uint64_t light, fbe_color_t* color) {
     return true;
 }
 
+FBE_API bool fbe_light_set_shadows(uint64_t light, bool shadows) {
+    light_t* found = fbe::scene::light_of(light);
+    if (found == nullptr) {
+        return false;
+    }
+    found->shadows = shadows;
+    return true;
+}
+
+FBE_API bool fbe_light_shadows(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr && found->shadows;
+}
+
+FBE_API bool fbe_light_set_shadow_size(uint64_t light, int32_t size) {
+    light_t* found = fbe::scene::light_of(light);
+    if (found == nullptr) {
+        return false;
+    }
+    if (size < 16 || size > 8192) {
+        return fbe::fail(std::format("a shadow's tile is 16 to 8192 texels a side, not {}", size));
+    }
+    found->shadow_size = size;
+    return true;
+}
+
+FBE_API int32_t fbe_light_shadow_size(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr ? found->shadow_size : 0;
+}
+
+FBE_API bool fbe_light_set_shadow_bias(uint64_t light, float depth, float normal) {
+    light_t* found = fbe::scene::light_of(light);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(depth) || !std::isfinite(normal) || depth < 0.0F || normal < 0.0F) {
+        return fbe::fail(
+            std::format("a shadow's biases are 0 or more, not {} and {}", depth, normal));
+    }
+    found->shadow_bias = depth;
+    found->shadow_normal_bias = normal;
+    return true;
+}
+
+FBE_API float fbe_light_shadow_bias(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr ? found->shadow_bias : 0.0F;
+}
+
+FBE_API float fbe_light_shadow_normal_bias(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr ? found->shadow_normal_bias : 0.0F;
+}
+
+FBE_API bool fbe_light_set_cascades(uint64_t light, int32_t cascades) {
+    light_t* found = fbe::scene::light_of(light);
+    if (found == nullptr) {
+        return false;
+    }
+    if (cascades < 1 || cascades > 4) {
+        return fbe::fail(std::format("a light has 1 to 4 cascades, not {}", cascades));
+    }
+    found->cascades = cascades;
+    return true;
+}
+
+FBE_API int32_t fbe_light_cascades(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr ? found->cascades : 0;
+}
+
+FBE_API bool fbe_light_set_shadow_distance(uint64_t light, float distance) {
+    light_t* found = fbe::scene::light_of(light);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(distance) || distance <= 0.0F) {
+        return fbe::fail(std::format("a shadow reaches a distance above 0, not {}", distance));
+    }
+    found->shadow_distance = distance;
+    return true;
+}
+
+FBE_API float fbe_light_shadow_distance(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr ? found->shadow_distance : 0.0F;
+}
+
 FBE_API bool fbe_light_set_intensity(uint64_t light, float intensity) {
     light_t* found = light_of(light);
     if (found == nullptr) {

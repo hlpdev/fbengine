@@ -23,6 +23,8 @@ Public Enum TextureFormat
     R8 = 2
     /// 16-bit floating-point red, green, blue, and alpha, for light brighter than white.
     RGBA16F = 3
+    /// A 32-bit float of red alone, as a shadow's depth is kept.
+    R32F = 4
 End Enum
 
 /// How a texture's pixels are blended where it's drawn bigger or smaller than it is.
@@ -396,6 +398,8 @@ Public Final Class Texture
                 Return 1
             Case TextureFormat.RGBA16F
                 Return 8
+            Case TextureFormat.R32F
+                Return 4
             Default
                 Return 4
         End Select

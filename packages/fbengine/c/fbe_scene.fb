@@ -232,6 +232,17 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_light_type(light: UInt64): Int32
     Function fbe_light_set_color(light: UInt64, r: Float32, g: Float32, b: Float32): Bool
     Function fbe_light_color(light: UInt64, color: Ptr<fbe_color_t>): Bool
+    Function fbe_light_set_shadows(light: UInt64, shadows: Bool): Bool
+    Function fbe_light_shadows(light: UInt64): Bool
+    Function fbe_light_set_shadow_size(light: UInt64, size: Int32): Bool
+    Function fbe_light_shadow_size(light: UInt64): Int32
+    Function fbe_light_set_shadow_bias(light: UInt64, depth: Float32, normal: Float32): Bool
+    Function fbe_light_shadow_bias(light: UInt64): Float32
+    Function fbe_light_shadow_normal_bias(light: UInt64): Float32
+    Function fbe_light_set_cascades(light: UInt64, cascades: Int32): Bool
+    Function fbe_light_cascades(light: UInt64): Int32
+    Function fbe_light_set_shadow_distance(light: UInt64, distance: Float32): Bool
+    Function fbe_light_shadow_distance(light: UInt64): Float32
     Function fbe_light_set_intensity(light: UInt64, intensity: Float32): Bool
     Function fbe_light_intensity(light: UInt64): Float32
     Function fbe_light_set_range(light: UInt64, range: Float32): Bool
@@ -387,6 +398,8 @@ Public Extern "C" Lib "fbengine_native"
                                     box: Ptr<fbe_aabb_t>): Int32
     Function fbe_entity_bounds(entity: UInt64, bounds: Ptr<fbe_aabb_t>): Bool
     Function fbe_entity_set_blocks_sight(entity: UInt64, blocks: Bool): Bool
+    Function fbe_entity_set_casts_shadows(entity: UInt64, casts: Bool): Bool
+    Function fbe_entity_casts_shadows(entity: UInt64): Bool
     Function fbe_entity_blocks_sight(entity: UInt64): Bool
     Function fbe_entity_can_see_point(entity: UInt64, x: Float32, y: Float32, z: Float32): Int32
     Function fbe_entity_can_see(entity: UInt64, target: UInt64): Int32
