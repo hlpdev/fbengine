@@ -3,6 +3,7 @@
 
 Import std.core
 Import std.image
+Import std.io
 Import std.math
 Import std.os
 Import std.test
