@@ -39,7 +39,62 @@ End Function
 Function Shown(editor: Editor, point: Vec3): Vec2
     Local at = editor.View.Viewer().Project(point)
     If at == Null Then Panic("{point} is behind the camera")
-    Return Vec2(editor.View.Box().X + at.x, editor.View.Box().Y + at.y)
+    // The texture's in pixels, at the UI's scale, and its box in the UI's units.
+    Local scale = editor.Shown.Scale()
+    Return Vec2(editor.View.Box().X * scale + at.x, editor.View.Box().Y * scale + at.y)
+End Function
+
+// Where along `axis` from `from` the pointer has handle `handle`, in the window.
+Function OnHandle(editor: Editor, from: Vec3, axis: Vec3, handle: Int): Vec2
+    Local scale = editor.Shown.Scale()
+    For i = 1 To 400
+        Local at = Shown(editor, from + axis * ((i As Float) * 0.02))
+        If editor.View.HandleAt(at * (1.0 / scale)) == handle Then Return at
+    End For
+    Panic("there's no handle {handle} along {axis}")
+End Function
+
+// Where a turn's handle `handle` is on the ring around `axis`, `one` being across it, and where it
+// is `turn` radians on around.
+Function OnRing(editor: Editor, from: Vec3, axis: Vec3, one: Vec3, handle: Int, turn: Float): (Vec2,
+                                                                                               Vec2)
+    Local two = Cross(axis, one)
+    For i = 0 To 63
+        Local angle = (i As Float) / 64 * 2 * Pi
+        For r = 1 To 80
+            Local radius = (r As Float) * 0.08
+            Local at = Shown(editor, from + (one * Cos(angle) + two * Sin(angle)) * radius)
+            If editor.View.HandleAt(at) == handle
+                Local on = angle + turn
+                Return (at, Shown(editor, from + (one * Cos(on) + two * Sin(on)) * radius))
+            End If
+        End For
+    End For
+    Panic("there's no ring {handle} around {axis}")
+End Function
+
+// A press at `from`, and a move to `to`, left held.
+Function Held(editor: Editor, from: Vec2, to: Vec2) Throws GraphicsError
+    Try Simulate.MoveMouse(from.x, from.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MouseMotion(to.x - from.x, to.y - from.y)
+    editor.Step()
+End Function
+
+Function Letting(editor: Editor) Throws GraphicsError
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+End Function
+
+Function Primary(key: Key, shift: Bool = False) Throws GraphicsError
+    Local held = System.Platform == Platform.MACOS ? Key.LEFT_SUPER : Key.LEFT_CONTROL
+    Try Simulate.KeyDown(held)
+    If shift Then Try Simulate.KeyDown(Key.LEFT_SHIFT)
+    Try Simulate.PressKey(key)
+    If shift Then Try Simulate.KeyUp(Key.LEFT_SHIFT)
+    Try Simulate.KeyUp(held)
 End Function
 
 Function ClickAt(editor: Editor, at: Vec2) Throws GraphicsError
@@ -72,8 +127,15 @@ Function TheSumsAHandlesDraggedBy()
     Expect(Snapped(0.74, 0.5) == 0.5 && Snapped(0.76, 0.5) == 1.0 && Snapped(-0.76, 0.5) == -1.0)
     Expect(Snapped(0.74, 0) == 0.74)
     // X through the origin, against a line down at x = 3.
-    Expect(Abs(AlongAxis(Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(3, 5, 0), Vec3(0, -1, 0)) - 3) < 0.001)
-    Expect(AlongAxis(Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(3, 5, 0), Vec3(1, 0, 0)) == 0, "parallel")
+    Local along = AlongAxis(Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(3, 5, 0), Vec3(0, -1, 0))
+    Expect(along != Null && Abs(along - 3) < 0.001)
+    Expect(AlongAxis(Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(3, 5, 0), Vec3(1, 0, 0)) == Null,
+           "parallel")
+    // Near enough parallel that it'd be half a kilometer away, either way.
+    Expect(AlongAxis(Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 1, -10), Vec3(0.9998, 0, 0.02)) == Null)
+    Expect(AlongAxis(Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(0, 1, -10), Vec3(0.9998, 0, -0.02)) == Null)
+    // Behind where the ray starts.
+    Expect(AlongAxis(Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(3, 5, 0), Vec3(0, 1, 0)) == Null)
     Local on = OnPlane(Vec3(0, 2, 0), Vec3(0, 1, 0), Vec3(1, 5, 1), Vec3(0, -1, 0))
     Expect(on != Null && Near(on, Vec3(1, 2, 1)))
     Expect(OnPlane(Vec3(0, 2, 0), Vec3(0, 1, 0), Vec3(1, 5, 1), Vec3(1, 0, 0)) == Null, "along it")
@@ -800,10 +862,16 @@ Function MarksGoWithWhatTheyMarkAndAHandleLightsUp() Throws IOError, GraphicsErr
     Local cube = Cube(editor, Vec3(0, 1, 0))
     Local over = editor.View.Over()
     editor.Step()
-    Local marked = over.Viewer.Draws().Count
-    editor.Edited.SelectOnly(Null)
+    // Two outlined, then one: one mark less, and the handles as they were.
+    Local other = Cube(editor, Vec3(3, 1, 0))
+    editor.Edited.ToggleSelected(cube)
     editor.Step()
-    Expect(over.Viewer.Draws().Count < marked, "what marked it, and its handles, stayed: {marked}")
+    Local marked = over.Viewer.Draws().Count
+    editor.Edited.SelectOnly(cube)
+    editor.Step()
+    Expect(over.Viewer.Draws().Count == marked - 1,
+           "it was {marked}, and it's {over.Viewer.Draws().Count}")
+    Expect(!other.Freed())
     // Selected again, and the pointer on an arrow.
     editor.Edited.SelectOnly(cube)
     Try Simulate.MoveMouse(0, 0)
@@ -822,5 +890,720 @@ Function MarksGoWithWhatTheyMarkAndAHandleLightsUp() Throws IOError, GraphicsErr
         End For
     End For
     Expect(differ > 10, "only {differ} pixels changed under the pointer")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsUnderWhatElseIsSelectedMovesOnce() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local parent = Cube(editor, Vec3(0, 1, 0))
+    Local child = Mesh(Geometry.Cube(), parent)
+    child.SetPosition(Vec3(2, 0, 0))
+    // The child selected first: the parent's the one handles go by.
+    editor.Edited.SelectOnly(child)
+    editor.Edited.ToggleSelected(parent)
+    editor.Step()
+    Local world = child.Position(Space.WORLD)
+    Local local = child.Position()
+    Local tip = OnHandle(editor, Vec3(0, 1, 0), Vec3(1, 0, 0), 0)
+    Try Drag(editor, tip, Shown(editor, Vec3(2, 1, 0)))
+    Local gone = parent.Position().x
+    Expect(gone > 0.5, "it went {gone}")
+    Expect(child.Position() == local, "the child's own place changed: {child.Position()}")
+    Expect(Abs(child.Position(Space.WORLD).x - world.x - gone) < 0.001, "it moved twice")
+    editor.Edits.Undo()
+    Expect(parent.Position() == Vec3(0, 1, 0) && child.Position() == local)
+    // Scaled, once.
+    Try Simulate.PressKey(Key.R)
+    editor.Step()
+    editor.Step()
+    Local middle = Shown(editor, Vec3(0, 1, 0))
+    Try Drag(editor, middle, middle + Vec2(55, 0))
+    Local grown = parent.Scale().x
+    Expect(grown > 1.2 && child.Scale().x == 1, "the parent's {grown}, the child's {child.Scale()}")
+    editor.Finish()
+End Function
+
+@Test
+Function NoKeyChangesADragWhileItsHeld() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local view = editor.View
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    Local from = OnHandle(editor, Vec3(0, 1, 0), Vec3(1, 0, 0), 0)
+    Try Held(editor, from, Shown(editor, Vec3(1.5, 1, 0)))
+    Local moved = cube.Position()
+    Expect(moved.x > 0.5)
+    Expect(view.HandleHeld() && view.Busy())
+    For key In [Key.R, Key.E, Key.X, Key.G, Key.ESCAPE, Key.H, Key.DELETE]
+        Try Simulate.PressKey(key)
+        editor.Step()
+        editor.Step()
+    End For
+    Expect(view.Tool == HandleTool.MOVE, "the tool's {view.Tool}")
+    Expect(view.Axes == HandleSpace.WORLD && !view.Snap.On)
+    Expect(editor.Edited.IsSelected(cube), "Escape let go of what's held")
+    Expect(!cube.Hidden() && !editor.Edited.IsRemoved(cube))
+    // And it goes on along what it was, under its name.
+    Try Simulate.MouseMotion(30, 0)
+    editor.Step()
+    Expect(cube.Position().y == moved.y && cube.Position().z == moved.z,
+           "it's at {cube.Position()}")
+    Expect(cube.Scale() == Vec3(1, 1, 1), "it scaled")
+    Expect(editor.Edits.UndoName() == "Move")
+    Try Letting(editor)
+    Expect(!view.HandleHeld())
+    // The tool's as it was taken even set from outside, mid-drag, as a script might.
+    Try Simulate.MoveMouse(0, 0)
+    editor.Step()
+    Local again = OnHandle(editor, cube.Position(), Vec3(1, 0, 0), 0)
+    Try Held(editor, again, again + Vec2(30, 0))
+    view.Tool = HandleTool.SCALE
+    view.Axes = HandleSpace.LOCAL
+    Try Simulate.MouseMotion(30, 0)
+    editor.Step()
+    Expect(cube.Scale() == Vec3(1, 1, 1) && editor.Edits.UndoName() == "Move")
+    Try Letting(editor)
+    // Keys run again after.
+    view.Tool = HandleTool.MOVE
+    Try Simulate.PressKey(Key.R)
+    editor.Step()
+    Expect(view.Tool == HandleTool.SCALE, "R didn't pick scale")
+    Try Simulate.PressKey(Key.E)
+    editor.Step()
+    Expect(view.Tool == HandleTool.TURN, "E didn't pick turn")
+    Try Simulate.PressKey(Key.W)
+    editor.Step()
+    Expect(view.Tool == HandleTool.MOVE, "W didn't pick move")
+    editor.Finish()
+End Function
+
+@Test
+Function UndoWaitsForADragToEnd() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    // One drag done, another held, and two undos, then motion.
+    Local from = OnHandle(editor, Vec3(0, 1, 0), Vec3(1, 0, 0), 0)
+    Try Drag(editor, from, Shown(editor, Vec3(1.5, 1, 0)))
+    Local first = cube.Position()
+    Try Simulate.MoveMouse(0, 0)
+    editor.Step()
+    Local on = OnHandle(editor, first, Vec3(1, 0, 0), 0)
+    Try Held(editor, on, on + Vec2(40, 0))
+    Local second = cube.Position()
+    Try Primary(Key.Z)
+    editor.Step()
+    editor.Step()
+    Try Primary(Key.Z)
+    editor.Step()
+    editor.Step()
+    Expect(cube.Position() == second, "it undid under the drag: {cube.Position()}")
+    Try Primary(Key.Z, True)
+    editor.Step()
+    Try Simulate.MouseMotion(20, 0)
+    editor.Step()
+    Try Letting(editor)
+    Local third = cube.Position()
+    // Each's there to undo, and the Add under them, and to redo.
+    Expect(editor.Actions.Run("edit.undo") && cube.Position() == first, "it's at {cube.Position()}")
+    Expect(editor.Actions.Run("edit.undo") && cube.Position() == Vec3(0, 1, 0),
+           "it's at {cube.Position()}")
+    Expect(editor.Actions.Run("edit.undo") && editor.Edited.IsRemoved(cube))
+    Expect(editor.Actions.Run("edit.redo") && !editor.Edited.IsRemoved(cube))
+    Expect(editor.Actions.Run("edit.redo") && editor.Actions.Run("edit.redo") &&
+           cube.Position() == third)
+    editor.Finish()
+End Function
+
+@Test
+Function ADragNearlyAlongAnArrowStaysNear() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 0, 0))
+    // Orbited nearly down the X arrow.
+    editor.Edited.SelectOnly(cube)
+    Local center = editor.View.Box().Center
+    // From where it starts, 0.6 about Y, to about a quarter turn, and level.
+    Try Drag(editor, center, center + Vec2(-192, -90), MouseButton.MIDDLE)
+    editor.Step()
+    Local camera = editor.View.Viewer()
+    Local arrow = Abs(Dot(Normalize(camera.Forward()), Vec3(1, 0, 0)))
+    Expect(arrow > 0.9, "it's not looking along the arrow: {arrow}")
+    Local dragged = False
+    For step = 0 To 30
+        Local at = Shown(editor, Vec3(0.05 + (step As Float) * 0.04, 0, 0))
+        If editor.View.HandleAt(at) != 0 Then Continue
+        Try Held(editor, at, at + Vec2(3, 2))
+        For wiggle = 1 To 6
+            Try Simulate.MouseMotion(4, -3)
+            editor.Step()
+            Expect(Length(cube.Position()) < 50, "it went to {cube.Position()}")
+        End For
+        Try Letting(editor)
+        dragged = True
+        Break
+    End For
+    Expect(dragged, "the arrow was never under the pointer")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsUndoneForGoodIsFreed() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    editor.Actions.Run("add.cube")
+    Local first = editor.Edited.Selected()[0]
+    editor.Edits.Undo()
+    Expect(editor.Edited.Entities().Count == 0 && !first.Freed(), "it could still come back")
+    // Something else, and it can't.
+    editor.Actions.Run("add.light")
+    Expect(editor.Edited.Entities().Count == 1 && first.Freed(),
+           "what can't come back is still there")
+    // Taken out, then undone past: it's there, and what's taken out for good isn't kept.
+    Local light = editor.Edited.Selected()[0]
+    editor.Edits.Commit(RemoveEdit(editor.Edited, [light]))
+    editor.Edits.Undo()
+    Expect(!light.Freed())
+    editor.Actions.Run("add.cube")
+    Expect(!light.Freed(), "undone, a delete that's forgotten frees nothing")
+    // A copy undone and forgotten goes, with what's left beside it.
+    editor.Edited.SelectOnly(light)
+    Local copying = CopyEdit(editor.Edited, [light])
+    editor.Edits.Commit(copying)
+    Local copy = copying.Copies()[0]
+    editor.Edits.Undo()
+    editor.Actions.Run("add.cube")
+    Expect(copy.Freed() && !light.Freed())
+    // Trimmed off the far end: what's in the scene stays, what was deleted goes.
+    Local short = History(1)
+    Local kept = Cube(editor, Vec3(1, 1, 1))
+    Local going = Cube(editor, Vec3(2, 2, 2))
+    short.Commit(RemoveEdit(editor.Edited, [going]))
+    Expect(!going.Freed())
+    short.Commit(MadeEdit("Made", editor.Edited, Function(): Entity => kept))
+    Expect(going.Freed(), "deleted for good, it stayed")
+    short.Commit(EditOf("other", Function()
+    End Function, Function()
+    End Function))
+    Expect(!kept.Freed(), "made and kept, it was freed")
+    editor.Finish()
+End Function
+
+@Test
+Function TheLampsOnlyOnWithNoLightOfTheScenes() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Expect(!editor.Edited.Lamp.Hidden())
+    editor.Actions.Run("add.light")
+    Local light = editor.Edited.Selected()[0]
+    editor.Step()
+    Expect(editor.Edited.Lamp.Hidden(), "the lamp's on with the scene's own")
+    light.Hide()
+    editor.Step()
+    Expect(!editor.Edited.Lamp.Hidden(), "a hidden light lights nothing")
+    light.Show()
+    editor.Step()
+    editor.Edits.Undo()
+    editor.Step()
+    Expect(!editor.Edited.Lamp.Hidden(), "undone, there's no light")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsFreedLetsGo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    cube.Free()
+    editor.Step()
+    editor.Step()
+    Expect(editor.Edited.Selected().Count == 0)
+    Local other = Cube(editor, Vec3(0, 1, 0))
+    Local from = OnHandle(editor, Vec3(0, 1, 0), Vec3(1, 0, 0), 0)
+    Try Held(editor, from, from + Vec2(30, 0))
+    Expect(editor.View.HandleHeld())
+    other.Free()
+    editor.Step()
+    Try Simulate.MouseMotion(30, 0)
+    editor.Step()
+    Expect(!editor.View.HandleHeld(), "the drag went on with nothing to drag")
+    Try Letting(editor)
+    // What undoes it passes over what's gone.
+    editor.Edits.Undo()
+    editor.Edits.Redo()
+    editor.Finish()
+End Function
+
+@Test
+Function ARingEdgeOnTurnsByHowFarItsDragged() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 0, 0))
+    Try Simulate.PressKey(Key.E)
+    editor.Step()
+    // Level, so the Y ring's a line across the middle of the view.
+    Local center = editor.View.Box().Center
+    Try Drag(editor, center, center + Vec2(0, -90), MouseButton.MIDDLE)
+    editor.Step()
+    Local middle = Shown(editor, Vec3(0, 0, 0))
+    Local grab = Vec2(0, 0)
+    For x = 10 To 200
+        If editor.View.HandleAt(middle + Vec2(x As Float32, 0)) == 1 Then grab = middle + Vec2(x As Float32, 0)
+    End For
+    Expect(grab.x != 0, "there's no ring to the right of the middle")
+    Try Drag(editor, grab, grab + Vec2(50, 0))
+    Local turned = cube.Rotation(Space.WORLD)
+    Expect(Abs(turned.y) > 0.01, "it hasn't turned: {turned}")
+    editor.Finish()
+End Function
+
+@Test
+Function FramingSeesAllThatsSelected() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local left = Cube(editor, Vec3(-50, 1, 0))
+    Local right = Cube(editor, Vec3(50, 1, 0))
+    editor.Edited.SelectOnly(left)
+    editor.Edited.ToggleSelected(right)
+    editor.Step()
+    Try Simulate.PressKey(Key.F)
+    editor.Step()
+    editor.Step()
+    Local box = editor.View.Box()
+    For entity In [left, right]
+        Local at = Shown(editor, entity.Position(Space.WORLD))
+        Expect(box.Contains(at), "{at} isn't in {box}")
+    End For
+    // A mesh with a big geometry at a scale of 1, from outside it.
+    Local big = Mesh(Geometry.Cube())
+    Local huge = Geometry.Cube()
+    For i = 0 To 0
+        huge.Add(Geometry.Cube(), Mat4.Scale(Vec3(40, 40, 40)))
+    End For
+    big.SetGeometry(huge)
+    editor.Edited.SelectOnly(big)
+    editor.View.FrameSelected()
+    Expect(editor.View.ViewDistance() > 69, "it's inside it, at {editor.View.ViewDistance()}")
+    // Not past where the camera sees.
+    big.SetScale(Vec3(1000000, 1000000, 1000000))
+    editor.View.FrameSelected()
+    Expect(editor.View.ViewDistance() < editor.View.Viewer().Far())
+    editor.Finish()
+End Function
+
+@Test
+Function HandlesGoWithWhatShows() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local parent = Cube(editor, Vec3(0, 1, 0))
+    Local child = Mesh(Geometry.Cube(), parent)
+    child.SetPosition(Vec3(3, 0, 0))
+    editor.Edited.SelectOnly(child)
+    editor.Step()
+    Local tip = OnHandle(editor, Vec3(3, 1, 0), Vec3(1, 0, 0), 0)
+    parent.Hide()
+    Expect(editor.View.HandleAt(tip) == -1, "a hidden thing's handle's there")
+    // Selected still, for what it's selected for.
+    Expect(editor.Edited.IsSelected(child))
+    // A light under what's hidden has no mark, and isn't picked.
+    Local lamp = Light(LightType.POINT, parent)
+    lamp.SetPosition(Vec3(-3, 0, 0))
+    Expect(editor.View.Over().ShowMarks(editor.Edited.Entities(),
+                                        Function(entity: Entity) => False) == 0)
+    editor.Step()
+    Expect(editor.View.PickAt(Shown(editor, Vec3(-3, 1, 0))) == Null, "what's hidden was picked")
+    parent.Show()
+    editor.Step()
+    Expect(editor.View.Over().ShowMarks(editor.Edited.Entities(),
+                                        Function(entity: Entity) => False) == 1)
+    editor.Finish()
+End Function
+
+@Test
+Function AnUndoUnderAParentIsExact() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local parent = Pivot()
+    parent.SetRotation(Quat.FromAxisAngle(Normalize(Vec3(1, 2, 3)), 0.7))
+    parent.SetScale(Vec3(2, 3, 4))
+    Local child = Mesh(Geometry.Cube(), parent)
+    child.SetPosition(Vec3(0.1, 0.2, 0.3))
+    child.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), 0.3))
+    child.SetScale(Vec3(0.7, 0.7, 0.7))
+    editor.Edited.SelectOnly(child)
+    editor.Step()
+    Local position = child.Position()
+    Local rotation = child.Rotation()
+    Local scale = child.Scale()
+    Local world = child.Position(Space.WORLD)
+    Local tip = OnHandle(editor, world, Vec3(1, 0, 0), 0)
+    Try Drag(editor, tip, tip + Vec2(50, 0))
+    Expect(child.Position() != position)
+    editor.Edits.Undo()
+    Expect(child.Position() == position && child.Rotation() == rotation && child.Scale() == scale,
+           "it's at {child.Position()}, {child.Rotation()}, {child.Scale()}")
+    // Its own scale, under a parent's: a local handle's, not the world's.
+    Try Simulate.PressKey(Key.R)
+    editor.Step()
+    editor.Step()
+    Local middle = Shown(editor, world)
+    Try Drag(editor, middle, middle + Vec2(55, 0))
+    Expect(Abs(child.Scale().y / 0.7 - child.Scale().x / 0.7) < 0.001 && child.Scale().x > 0.8,
+           "it's {child.Scale()}")
+    Expect(Abs(child.Scale().x - 0.7 * (1 + 55.0 / 110)) < 0.01, "it's {child.Scale()}")
+    editor.Finish()
+End Function
+
+@Test
+Function NoChangeIsNoEdit() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    editor.Edits.Clear()
+    editor.View.Snap.On = True
+    Local tip = OnHandle(editor, Vec3(0, 1, 0), Vec3(1, 0, 0), 0)
+    // Under half a step.
+    Try Drag(editor, tip, tip + Vec2(2, 0))
+    Expect(!editor.Edits.CanUndo() && !editor.Edits.Modified())
+    // Away and back, in one drag: nothing either.
+    Local far = Shown(editor, Vec3(2.5, 1, 0))
+    Try Held(editor, tip, far)
+    Expect(editor.Edits.CanUndo() && cube.Position().x > 0.5)
+    Try Simulate.MouseMotion(tip.x - far.x, tip.y - far.y)
+    editor.Step()
+    Expect(!editor.Edits.CanUndo() && !editor.Edits.Modified(), "there's an edit that does nothing")
+    Expect(cube.Position() == Vec3(0, 1, 0))
+    // And away again, one edit, undoing to the start.
+    Try Simulate.MouseMotion(far.x - tip.x, far.y - tip.y)
+    editor.Step()
+    Try Letting(editor)
+    Expect(editor.Edits.CanUndo())
+    editor.Edits.Undo()
+    Expect(!editor.Edits.CanUndo() && cube.Position() == Vec3(0, 1, 0))
+    editor.Finish()
+End Function
+
+@Test
+Function TheWheelStaysInWhatTheCameraSees() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local center = editor.View.Box().Center
+    Try Simulate.MoveMouse(center.x, center.y)
+    editor.Step()
+    Try Simulate.Wheel(-1000)
+    editor.Step()
+    Local away = editor.View.ViewDistance()
+    Expect(IsFinite(away) && away < editor.View.Viewer().Far(), "it's {away}")
+    Try Simulate.Wheel(1000)
+    editor.Step()
+    Expect(editor.View.ViewDistance() == 0.1)
+    editor.Finish()
+End Function
+
+@Test
+Function GroundIsPickedByItsSurface() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local ground = GroundPlane()
+    ground.SetPosition(Vec3(0, -1, 0))
+    editor.Step()
+    // Far from where it is.
+    Local at = Shown(editor, Vec3(6, -1, 4))
+    Expect(editor.View.PickAt(at) != Null, "the ground wasn't picked")
+    Expect(ground.PickMode() == PickMode.NONE, "its mode's changed")
+    // Nor is it marked, until it's selected.
+    Expect(editor.View.Over().ShowMarks(editor.Edited.Entities(),
+                                        Function(entity: Entity) => False) == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function AHeldDragEndsWithItsScene() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Cube(editor, Vec3(0, 1, 0))
+    Local from = OnHandle(editor, Vec3(0, 1, 0), Vec3(1, 0, 0), 0)
+    Try Held(editor, from, from + Vec2(30, 0))
+    Expect(editor.View.HandleHeld())
+    editor.OpenFolder(games.Path / "game")
+    Expect(!editor.View.HandleHeld())
+    Try Simulate.MouseMotion(30, 0)
+    editor.Step()
+    Try Letting(editor)
+    Expect(!editor.Edits.CanUndo() && editor.Edited.Entities().Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function ATextureThatCantBeMadeLeavesTheOneThereIs() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local target = editor.View.Target()
+    If target == Null
+        Fail("there's no texture")
+        Return
+    End If
+    editor.View.FitTexture(100000, 100)
+    Expect(RefEquals(editor.View.Target(), target) && !target.Freed(),
+           "it let go of the one it had")
+    editor.Step()
+    Expect(RefEquals(editor.View.Target(), target))
+    editor.View.FitTexture(64, 48)
+    Local small = editor.View.Target()
+    Expect(small != Null && small.Width() == 64, "a size that can be made wasn't")
+    editor.Finish()
+End Function
+
+@Test
+Function TheRightButtonTakesTheKeysFromAField() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    editor.Shown.Focus(editor.Tree.FindField())
+    editor.Step()
+    Local center = editor.View.Box().Center
+    Try Simulate.MoveMouse(center.x, center.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.RIGHT)
+    editor.Step()
+    Expect(editor.Shown.Focused() == Null, "the field's still got them")
+    Try Simulate.Text("w")
+    editor.Step()
+    Expect(editor.Tree.FindField().Text() == "", "it typed while flying")
+    Try Simulate.MouseUp(MouseButton.RIGHT)
+    editor.Step()
+    editor.Finish()
+End Function
+
+@Test
+Function ToolKeysWaitForTheirPane() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    Local focus = editor.View.Focus()
+    editor.Docked.Hide("scene")
+    editor.Step()
+    For key In [Key.E, Key.R, Key.X, Key.G, Key.F]
+        Try Simulate.PressKey(key)
+        editor.Step()
+    End For
+    Expect(editor.View.Tool == HandleTool.MOVE && editor.View.Axes == HandleSpace.WORLD &&
+           !editor.View.Snap.On)
+    Expect(editor.View.Focus() == focus && !cube.Freed())
+    editor.Finish()
+End Function
+
+@Test
+Function ItOnlyRendersWhileItShows() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local target = editor.View.Target()
+    If target == Null
+        Fail("there's no texture")
+        Return
+    End If
+    Local before = target.ToImage()[4, 4]
+    editor.Docked.Hide("scene")
+    editor.Step()
+    editor.View.Viewer().SetClearColor(Color(1, 0, 0))
+    editor.Step()
+    editor.Step()
+    Expect(target.ToImage()[4, 4] == before, "it rendered with nothing showing it")
+    editor.Docked.Show("scene")
+    editor.Step()
+    editor.Step()
+    editor.Step()
+    Local shown = editor.View.Target()
+    Expect(shown != Null && shown.ToImage()[4, 4].r > 200, "shown again, it didn't render")
+    editor.Finish()
+End Function
+
+@Test
+Function ATurnFollowsThePointerRoundWhateverItsTurned() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    Local start = Normalize(Quat.FromAxisAngle(Normalize(Vec3(1, 0, 1)), 0.6))
+    cube.SetRotation(start)
+    Try Simulate.PressKey(Key.E)
+    editor.Step()
+    editor.Step()
+    // In the world, around Y: what was under the pointer's gone where it is.
+    Local grab, to = OnRing(editor, Vec3(0, 1, 0), Vec3(0, 1, 0), Vec3(1, 0, 0), 1, 0.8)
+    Try Drag(editor, grab, to)
+    Local turn = Normalize(cube.Rotation(Space.WORLD) * Inverse(start))
+    Local axis = Normalize(Vec3(turn.x, turn.y, turn.z))
+    Expect(Abs(Abs(axis.y) - 1) < 0.01, "it turned about {axis}, not Y")
+    Local angle = 2 * Atan2(turn.y, turn.w)
+    Expect(Abs(Abs(angle) - 0.8) < 0.1, "it turned {angle}")
+    // By the right-hand rule, as the ring's way around has it: X toward -Z is positive about Y.
+    Local fromX = turn * Vec3(1, 0, 0)
+    Expect(angle > 0 ? fromX.z < 0 : fromX.z > 0, "it turned the other way: {fromX}")
+    editor.Edits.Undo()
+    // In its own axes: around its own Y, which stays where it is.
+    Try Simulate.PressKey(Key.X)
+    editor.Step()
+    editor.Step()
+    Local own = cube.Rotation(Space.WORLD) * Vec3(0, 1, 0)
+    Local across = cube.Rotation(Space.WORLD) * Vec3(1, 0, 0)
+    Local onOwn, toOwn = OnRing(editor, Vec3(0, 1, 0), own, across, 1, 0.8)
+    Try Drag(editor, onOwn, toOwn)
+    Local now = cube.Rotation(Space.WORLD)
+    Expect(Length(now * Vec3(0, 1, 0) - own) < 0.01, "its Y moved")
+    Expect(Length(now * Vec3(1, 0, 0) - across) > 0.2, "its X didn't")
+    editor.Finish()
+End Function
+
+@Test
+Function EachScaleHandleScalesItsOwnAxisOfWhatsTurned() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    Local turned = Quat.FromAxisAngle(Vec3(0, 1, 0), 0.5)
+    cube.SetRotation(turned)
+    Try Simulate.PressKey(Key.R)
+    editor.Step()
+    editor.Step()
+    // In the world's axes, it's still by its own.
+    Expect(editor.View.Axes == HandleSpace.WORLD)
+    Local x = OnHandle(editor, Vec3(0, 1, 0), turned * Vec3(1, 0, 0), 0)
+    Try Drag(editor, x, x + Normalize(x - Shown(editor, Vec3(0, 1, 0))) * 60)
+    Expect(cube.Scale().x > 1.1 && cube.Scale().y == 1 && cube.Scale().z == 1,
+           "it's {cube.Scale()}")
+    editor.Edits.Undo()
+    Local z = OnHandle(editor, Vec3(0, 1, 0), turned * Vec3(0, 0, 1), 2)
+    Try Drag(editor, z, z + Normalize(z - Shown(editor, Vec3(0, 1, 0))) * 60)
+    Expect(cube.Scale().z > 1.1 && cube.Scale().x == 1 && cube.Scale().y == 1,
+           "it's {cube.Scale()}")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsOverTheSceneSeesItAsItsCameraDoes() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local camera = editor.View.Viewer()
+    camera.SetFieldOfView(1.1)
+    camera.SetRange(0.5, 700)
+    editor.Step()
+    Local over = editor.View.Over().Viewer
+    Expect(over.FieldOfView() == 1.1 && over.Near() == 0.5 && over.Far() == 700)
+    Expect(over.Position(Space.WORLD) == camera.Position(Space.WORLD))
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsSelectedShowsThroughWhatsInFrontOfIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local target = editor.View.Target()
+    If target == Null
+        Fail("there's no texture")
+        Return
+    End If
+    // A big cube right in front of a small one, seen through which only its outline can be.
+    Local behind = Cube(editor, Vec3(0, 1, 0))
+    Local camera = editor.View.Viewer().Position(Space.WORLD)
+    Local front = Cube(editor, Lerp(Vec3(0, 1, 0), camera, 0.4))
+    front.SetScale(Vec3(3, 3, 3))
+    editor.Edited.SelectOnly(Null)
+    editor.Step()
+    Local plain = target.ToImage()
+    editor.Edited.SelectOnly(behind)
+    editor.Step()
+    Local outlined = target.ToImage()
+    Local at = Shown(editor, Vec3(0, 1, 0))
+    Local box = editor.View.Box()
+    Local x = (at.x - box.X) As Int32
+    Local y = (at.y - box.Y) As Int32
+    Local differ = 0
+    For dx = -25 To 25
+        For dy = -25 To 25
+            If outlined[x + dx, y + dy] != plain[x + dx, y + dy] Then differ += 1
+        End For
+    End For
+    Expect(differ > 5, "only {differ} pixels show it through what's in front")
+    editor.Finish()
+End Function
+
+@Test
+Function AtAnotherScaleItsPointerAndHandlesAreWhereTheyShow() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    editor.Shown.SetScale(2.0)
+    editor.Step()
+    editor.Step()
+    Local box = editor.View.Box()
+    Local target = editor.View.Target()
+    Expect(target != Null && target.Width() == Round(box.Width * 2) As Int32,
+           "it's not at the UI's scale")
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    editor.Step()
+    // Lit over the arrow, at the point the pointer's at.
+    Local tip = Shown(editor, Vec3(0.8, 1, 0))
+    Expect(editor.View.HandleAt(tip * 0.5) == 0, "the arrow's not under the pointer")
+    Try Simulate.MoveMouse(tip.x, tip.y)
+    editor.Step()
+    editor.Step()
+    Expect(editor.View.LitHandle() == 0, "it's lit as {editor.View.LitHandle()}")
+    // And as long on the screen, in the UI's units, as at a scale of 1.
+    Local middle = Shown(editor, Vec3(0, 1, 0))
+    Local length = Distance(middle,
+                            Shown(editor,
+                                  Vec3(0, 1, 0) +
+                                  editor.View.Viewer().Up() * editor.View.HandleLength()))
+    Expect(Abs(length - HANDLE_LENGTH * 2) < 2, "it's {length} long on the window")
+    // Dragged, it goes along.
+    Try Drag(editor, tip, Shown(editor, Vec3(3, 1, 0)))
+    Expect(Abs(cube.Position().x - 2.2) < 0.1, "it's at {cube.Position()}")
     editor.Finish()
 End Function

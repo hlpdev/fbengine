@@ -18,7 +18,7 @@ Public Final Class EditedScene
     Public ReadOnly Field Helpers: Entity
     /// The camera it's seen by.
     Public ReadOnly Field Viewer: Camera
-    /// What's lit by, when the scene has no light of its own to go by.
+    /// What it's lit by while the scene has no light of its own showing.
     Public ReadOnly Field Lamp: Light
     Field selected: Entity[] = []
     Field changed: (Func())? = Null
@@ -53,10 +53,14 @@ Public Final Class EditedScene
     End Method
 
     /// What's selected, in the order it was, the last the one handles go by.
-    Public Method Selected(): Entity[] => selected.Clone()
+    Public Method Selected(): Entity[]
+        Forgetting()
+        Return selected.Clone()
+    End Method
 
     /// What's selected without what's under anything else that is: what acting on them all acts on.
     Public Method SelectedTops(): Entity[]
+        Forgetting()
         Local tops: Entity[] = []
         For entity In selected
             Local above = entity.Parent()
@@ -68,6 +72,17 @@ Public Final Class EditedScene
             If !under Then tops.Add(entity)
         End For
         Return tops
+    End Method
+
+    /// Shows the editor's lamp while the scene has no light of its own showing, and hides it else.
+    Public Method KeepLamp()
+        Local own = False
+        For light In Stage.Lights()
+            If !RefEquals(light, Lamp) && light.Showing() Then own = True
+        End For
+        If own != Lamp.Hidden()
+            If own Then Lamp.Hide() Else Lamp.Show()
+        End If
     End Method
 
     /// Whether `entity` is under what's been taken out of the scene.
@@ -117,6 +132,7 @@ Public Final Class EditedScene
         Local place = PlaceOf(entity)
         entity.SetParent(removed, False)
         Local had = selected.Count
+        Forgetting()
         selected = selected.Filter(Function[Weak Self](each: Entity): Bool
             Local own = Self
             Return own == Null || !own.IsRemoved(each)
@@ -176,6 +192,11 @@ Public Final Class EditedScene
         Return all
     End Method
 
+    // Lets go of what's selected that's been freed.
+    Method Forgetting()
+        selected = selected.Filter(Function(each: Entity) => !each.Freed())
+    End Method
+
     Method Collected(entity: Entity, into: Entity[])
         into.Add(entity)
         For child In entity.Children()
@@ -222,6 +243,12 @@ Public Final Class MadeEdit Extends Edit
     Public Override Method Undo() Throws IOError
         Local entity = made
         If entity != Null Then place = scene.TakeOut(entity)
+    End Method
+
+    // Undone for good, nothing can put it back.
+    Public Override Method Forgotten(applied: Bool)
+        Local entity = made
+        If !applied && entity != Null && !entity.Freed() Then entity.Free()
     End Method
 End Class
 
@@ -297,6 +324,14 @@ Public Final Class RemoveEdit Extends Edit
         End For
     End Method
 
+    // Done for good, nothing can put them back.
+    Public Override Method Forgotten(applied: Bool)
+        If !applied Then Return
+        For entity In entities
+            If !entity.Freed() Then entity.Free()
+        End For
+    End Method
+
     Public Override Method Undo() Throws IOError
         For i = entities.Count - 1 To 0 Step -1
             scene.PutBack(entities[i], places[i])
@@ -321,6 +356,14 @@ Public Final Class CopyEdit Extends Edit
         entities = copying
         Super.New("Duplicate")
     End New
+
+    // Undone for good, nothing can put them back.
+    Public Override Method Forgotten(applied: Bool)
+        If applied Then Return
+        For copy In copies
+            If !copy.Freed() Then copy.Free()
+        End For
+    End Method
 
     /// The copies, in order; none before it's applied.
     Public Method Copies(): Entity[] => copies.Clone()
@@ -416,31 +459,35 @@ Public Struct TreePlace
 End Struct
 
 /// Entities moved, turned, or scaled, from where they were to where they are, each drag's steps one
-/// undo.
+/// undo, none if it ends where it began.
 Public Final Class TransformEdit Extends Edit
     Field entities: Entity[]
-    Field before: EntityPlace[]
+    Field before: LocalPlace[]
     Field after: EntityPlace[]
     Field drag: Int
+    Field nothing: Bool
 
-    /// `entities` going from `from` to `to`, in `drag`, a number for the drag it's a step of.
-    Public New(name: String, moving: Entity[], from: EntityPlace[], to: EntityPlace[], number: Int)
+    /// `entities` going from `from`, exactly, to `to`, in `drag`, a number for the drag it's a step
+    /// of, which `same` says leaves them where they began.
+    Public New(name: String, moving: Entity[], from: LocalPlace[], to: EntityPlace[], number: Int,
+               same: Bool = False)
         entities = moving
         before = from
         after = to
         drag = number
+        nothing = same
         Super.New(name)
     End New
 
     Public Override Method Apply() Throws IOError
         For i = 0 To entities.Count - 1
-            after[i].PutOn(entities[i])
+            If !entities[i].Freed() Then after[i].PutOn(entities[i])
         End For
     End Method
 
     Public Override Method Undo() Throws IOError
-        For i = 0 To entities.Count - 1
-            before[i].PutOn(entities[i])
+        For i = entities.Count - 1 To 0 Step -1
+            If !entities[i].Freed() Then before[i].PutOn(entities[i])
         End For
     End Method
 
@@ -448,8 +495,11 @@ Public Final Class TransformEdit Extends Edit
         Local other = later As? TransformEdit
         If other == Null || other.drag != drag Then Return False
         after = other.after
+        nothing = other.nothing
         Return True
     End Method
+
+    Public Override Method IsNothing(): Bool => nothing
 End Class
 
 /// Where an entity is in the world, how it's turned, and its own scale.

@@ -14,7 +14,7 @@ Import "./scene"
 // How far a drag of a pixel turns the camera, and how much a wheel's notch dollies it.
 Const TURNING: Float = 0.005
 Const DOLLY: Float = 0.9
-// How far past a thing the camera starts, and flies at first, a second.
+// How fast the camera flies, in meters a second.
 Const FLYING: Float = 5.0
 // How far from an entity with no mesh a pick has it.
 Const MARKER: Float = 0.3
@@ -46,7 +46,8 @@ End Enum
 /// The scene through a camera of its own, rendered by Render each frame into a texture it fits.
 /// The right button looks around, while W, A, S, D, Q, and E fly, Update each frame seeing to them;
 /// the middle one orbits what it's looking at, and with Shift, pans; the wheel dollies. The left
-/// button picks what's under it, with Shift, adds to what's selected, or drags a handle.
+/// button picks what's under it, with Shift, adds it to what's selected or takes it out, or drags a
+/// handle.
 Public Final Class SceneView Extends Widget
     Field scene: EditedScene
     Field history: History
@@ -70,6 +71,20 @@ Public Final Class SceneView Extends Widget
     Field grabbed: Float = 0
     Field grabbedOn: Vec3
     Field grabbedAt: Vec2
+    // Whether what it was grabbed at's known yet, which edge-on it isn't until it's dragged.
+    Field grabbing: Bool = False
+    // A ring taken edge-on turns by how far it's dragged across till it can tell, and goes on from
+    // there.
+    Field turnedAcross: Float = 0
+    // The tool and the axes as it was taken, whatever they're set to while it's held.
+    Field heldTool: HandleTool = HandleTool.MOVE
+    Field heldAxes: HandleSpace = HandleSpace.WORLD
+    // How the drag's moved them, and its edit, unless it's back where it began.
+    Field moved: Bool = False
+    Field befores: LocalPlace[] = []
+    // The size of texture that couldn't be made, not to try it every frame.
+    Field failedWide: Int32 = 0
+    Field failedHigh: Int32 = 0
     /// What dragging a handle does.
     Public Field Tool: HandleTool = HandleTool.MOVE
     /// Which space the handles' axes are in.
@@ -90,6 +105,15 @@ Public Final Class SceneView Extends Widget
 
     /// Shows `seen` in place of what it showed, from where it starts.
     Public Method SetScene(seen: EditedScene)
+        If dragging == Dragging.HANDLE Then history.EndMerge()
+        dragging = Dragging.NOTHING
+        axis = -1
+        lit = -1
+        moving = []
+        starts = []
+        befores = []
+        failedWide = 0
+        failedHigh = 0
         scene = seen
         yaw = 0.6
         pitch = -0.45
@@ -106,8 +130,25 @@ Public Final Class SceneView Extends Widget
         overlay.Free()
     End Method
 
+    /// The handle lit as under the pointer, as HandleAt numbers them, -1 for none.
+    Public Method LitHandle(): Int => lit
+
+    /// How long a handle is in the world, at where it is now, 0 with nothing to handle.
+    Public Method HandleLength(): Float
+        Local selected = Handling()
+        If selected.Count == 0 Then Return 0
+        Local place, turning = HandlePlace(selected)
+        Return HandleSize(place)
+    End Method
+
     /// Whether the right button's flying it, so keys are for that.
     Public Method Flying(): Bool => dragging == Dragging.LOOKING
+
+    /// Whether a handle's held, so nothing else changes what it's changing.
+    Public Method HandleHeld(): Bool => dragging == Dragging.HANDLE
+
+    /// Whether the pointer's doing anything in it, so keys that'd change that wait.
+    Public Method Busy(): Bool => dragging != Dragging.NOTHING
 
     /// The camera that sees the scene.
     Public Method Viewer(): Camera => scene.Viewer
@@ -135,13 +176,20 @@ Public Final Class SceneView Extends Widget
     Public Method FrameSelected()
         Local selected = scene.Selected()
         If selected.Count == 0 Then Return
-        Local middle = Vec3(0, 0, 0)
-        Local reach: Float = 1
+        Local low = Vec3(Inf, Inf, Inf)
+        Local high = Vec3(-Inf, -Inf, -Inf)
         For entity In selected
-            middle = middle + entity.Position(Space.WORLD)
-            reach = Max(reach, Length(entity.Scale(Space.WORLD)))
+            For corner In CornersOf(entity)
+                low = Vec3(Min(low.x, corner.x), Min(low.y, corner.y), Min(low.z, corner.z))
+                high = Vec3(Max(high.x, corner.x), Max(high.y, corner.y), Max(high.z, corner.z))
+            End For
         End For
-        LookAt(middle * (1.0 / (selected.Count As Float)), reach * 3)
+        Local camera = scene.Viewer
+        // The way its view's narrowest, so all of it's seen both ways.
+        Local narrowest = Min(camera.FieldOfView(), camera.HorizontalFieldOfView())
+        Local radius = Length(high - low) / 2
+        Local away = radius / Sin(narrowest / 2) * 1.1
+        LookAt((low + high) * 0.5, Min(away, camera.Far() - radius))
     End Method
 
     /// Flies the camera, while the right button's held, and shows what the pointer's over.
@@ -166,7 +214,7 @@ Public Final Class SceneView Extends Widget
         If ui != Null && !held
             Local under = ui.Hovered()
             Local over = under != Null && RefEquals(under, Self)
-            lit = over ? HandleAt(Vec2(MouseX(), MouseY())) : -1
+            lit = over ? HandleAt(ui.PointerPoint()) : -1
         End If
     End Method
 
@@ -182,6 +230,7 @@ Public Final Class SceneView Extends Widget
         over.SetFieldOfView(camera.FieldOfView())
         over.SetRange(camera.Near(), camera.Far())
         overlay.FollowCamera(camera.Position(Space.WORLD))
+        scene.KeepLamp()
         Handled()
         camera.Render()
         over.Render()
@@ -211,7 +260,7 @@ Public Final Class SceneView Extends Widget
         Local modes: PickMode[] = []
         For entity In entities
             modes.Add(entity.PickMode())
-            entity.SetPickMode(entity Is Mesh ? PickMode.MESH : PickMode.NONE)
+            entity.SetPickMode(HasSurface(entity) ? PickMode.MESH : PickMode.NONE)
         End For
         Local far = scene.Viewer.Far()
         Local hit = scene.Stage.Pick(from, from + way * far)
@@ -223,7 +272,7 @@ Public Final Class SceneView Extends Widget
             nearest = Distance(from, hit.Point)
         End If
         For entity In entities
-            If entity Is Mesh || HiddenUnder(entity) Then Continue
+            If HasSurface(entity) || HiddenUnder(entity) Then Continue
             Local place = entity.Position(Space.WORLD)
             Local along = Dot(place - from, way)
             If along > 0 && along < nearest && Distance(from + way * along, place) < MARKER
@@ -237,7 +286,7 @@ Public Final Class SceneView Extends Widget
     /// The handle at a point in the UI's units, 0 to 2 for X, Y, and Z, 3 for the middle of the
     /// scale's, or -1 for none.
     Public Method HandleAt(point: Vec2): Int
-        Local selected = scene.Selected()
+        Local selected = Handling()
         Local camera = scene.Viewer
         If selected.Count == 0 || target == Null Then Return -1
         Local place, turning = HandlePlace(selected)
@@ -247,8 +296,9 @@ Public Final Class SceneView Extends Widget
         Local size = HandleSize(place)
         Local axes = AxesOf(Tool == HandleTool.SCALE ? HandleSpace.LOCAL : Axes, turning)
         Local best = -1
-        Local nearest = HANDLE_REACH
-        If Tool == HandleTool.SCALE && Length(at - Vec2(origin.x, origin.y)) < HANDLE_REACH * 1.5 Then Return 3
+        Local reach = HANDLE_REACH * PixelsPerUnit()
+        Local nearest = reach
+        If Tool == HandleTool.SCALE && Length(at - Vec2(origin.x, origin.y)) < reach * 1.5 Then Return 3
         For i = 0 To 2
             Local away = Tool == HandleTool.TURN ? FromRing(at, place, axes[i],
                                                             size) : FromArrow(at, place, axes[i],
@@ -290,6 +340,8 @@ Public Final Class SceneView Extends Widget
     End Method
 
     Public Override Method PointerDownWith(button: MouseButton, point: Vec2): Bool
+        // What it does next with the keys isn't typing, in a field that had them.
+        Owner()?.Focus(Null)
         last = point
         Local shifted = KeyDown(Key.LEFT_SHIFT) || KeyDown(Key.RIGHT_SHIFT)
         If button == MouseButton.RIGHT
@@ -337,7 +389,8 @@ Public Final Class SceneView Extends Widget
     End Method
 
     Public Override Method Wheel(steps: Int32): Bool
-        distance = Max(distance * Exp((steps As Float) * Log(DOLLY)), 0.1)
+        distance = Clamp(distance * Exp((steps As Float) * Log(DOLLY)), 0.1,
+                         scene.Viewer.Far() * 0.5)
         Placed()
         Return True
     End Method
@@ -386,18 +439,53 @@ Public Final Class SceneView Extends Widget
         Local pixels = PixelsPerUnit()
         Local wide = Max(Round(box.Width * pixels) As Int32, 0)
         Local high = Max(Round(box.Height * pixels) As Int32, 0)
+        FitTexture(wide, high)
+    End Method
+
+    /// Makes the texture `wide` by `high`, unless it is already, or that's what it couldn't be: one
+    /// that can't be made leaves the one it has showing, and isn't tried again every frame.
+    Public Method FitTexture(wide: Int32, high: Int32)
         Local own = target
         If wide == 0 || high == 0 || (own != Null && own.Width() == wide && own.Height() == high) Then Return
-        Let()
+        If wide == failedWide && high == failedHigh Then Return
         Try
             Local made = Try Texture.Target(wide, high, TextureFormat.RGBA8, 1, True)
+            Let()
             target = made
             sprite = Sprite2D(made)
             scene.Viewer.SetRenderTarget(made)
             overlay.Viewer.SetRenderTarget(made)
         Catch error As GraphicsError
+            failedWide = wide
+            failedHigh = high
             PrintError("the scene view's texture: {error.Message}")
         End Try
+    End Method
+
+    // What handles act on: what's selected that shows.
+    Method Handling(): Entity[]
+        Return scene.Selected().Filter(Function(entity: Entity) => !HiddenUnder(entity))
+    End Method
+
+    // The corners of what `entity` takes up in the world, near enough to see it all by; with no
+    // surface, a little around where it is.
+    Method CornersOf(entity: Entity): Vec3[]
+        Local place = entity.Position(Space.WORLD)
+        Local mesh = entity As? Mesh
+        Local geometry = mesh?.Geometry()
+        If geometry == Null Then Return [place - Vec3(0.5, 0.5, 0.5), place + Vec3(0.5, 0.5, 0.5)]
+        Local box = geometry.Bounds()
+        Local turned = entity.Rotation(Space.WORLD)
+        Local size = entity.Scale(Space.WORLD)
+        Local corners: Vec3[] = []
+        For x In [box.Min.x, box.Max.x]
+            For y In [box.Min.y, box.Max.y]
+                For z In [box.Min.z, box.Max.z]
+                    corners.Add(place + turned * Vec3(x * size.x, y * size.y, z * size.z))
+                End For
+            End For
+        End For
+        Return corners
     End Method
 
     // Where a point of the view is at the distance of what the camera's looking at.
@@ -417,7 +505,7 @@ Public Final Class SceneView Extends Widget
         Local camera = scene.Viewer
         Local here = camera.Project(place)
         If here == Null Then Return 1
-        Local up = camera.Unproject(Vec3(here.x, here.y - 110, here.z))
+        Local up = camera.Unproject(Vec3(here.x, here.y - HANDLE_LENGTH * PixelsPerUnit(), here.z))
         Return up != Null ? Distance(up, place) : 1.0
     End Method
 
@@ -454,7 +542,7 @@ Public Final Class SceneView Extends Widget
     Method Handled()
         Local seen = scene
         overlay.ShowMarks(scene.Entities(), Function(entity: Entity) => seen.IsSelected(entity))
-        Local selected = scene.Selected()
+        Local selected = Handling()
         If selected.Count == 0
             overlay.ShowHandles(Null, Vec3(0, 0, 0), Quat.Identity, 1)
             overlay.SetLit(-1)
@@ -467,29 +555,53 @@ Public Final Class SceneView Extends Widget
     End Method
 
     Method TakeHandle(point: Vec2)
-        Local selected = scene.Selected()
+        Local selected = Handling()
         dragging = Dragging.HANDLE
         drags += 1
-        moving = selected
+        heldTool = Tool
+        heldAxes = Axes
+        moved = False
+        // What's under what else is moving moves with that, not twice over.
+        moving = scene.SelectedTops().Filter(Function(entity: Entity) => !HiddenUnder(entity))
         starts = []
-        For entity In selected
+        befores = []
+        For entity In moving
             starts.Add(EntityPlace.Of(entity))
+            befores.Add(LocalPlace.Of(entity))
         End For
         pivot, turned = HandlePlace(selected)
         grabbedAt = point
+        grabbing = False
+        turnedAcross = 0
+        Grabbed(point)
+    End Method
+
+    // Says what the handle's taken at, unless the ray's too near along it to say yet.
+    Method Grabbed(point: Vec2)
+        If axis == 3
+            grabbing = True
+            Return
+        End If
         Local ray = RayAt(point)
         If ray == Null Then Return
         Local from, way = ray
-        If axis == 3 Then Return
         Local direction = Axis()
-        grabbed = AlongAxis(pivot, direction, from, way)
-        Local on = OnPlane(pivot, direction, from, way)
-        grabbedOn = on != Null ? on - pivot : Vec3(0, 0, 0)
+        If heldTool == HandleTool.TURN
+            Local on = OnPlane(pivot, direction, from, way)
+            If on == Null Then Return
+            grabbedOn = on - pivot
+            grabbing = True
+        Else
+            Local along = AlongAxis(pivot, direction, from, way)
+            If along == Null Then Return
+            grabbed = along
+            grabbing = True
+        End If
     End Method
 
     Method Axis(): Vec3
         If axis > 2 || axis < 0 Then Return Vec3(0, 1, 0)
-        Return AxesOf(Tool == HandleTool.SCALE ? HandleSpace.LOCAL : Axes, turned)[axis]
+        Return AxesOf(heldTool == HandleTool.SCALE ? HandleSpace.LOCAL : heldAxes, turned)[axis]
     End Method
 
     Method Snaps(): Bool
@@ -498,26 +610,52 @@ Public Final Class SceneView Extends Widget
     End Method
 
     Method DragHandle(point: Vec2)
+        // What it's dragging has been freed: the drag's over.
+        For entity In moving
+            If entity.Freed()
+                dragging = Dragging.NOTHING
+                axis = -1
+                moving = []
+                Return
+            End If
+        End For
+        If !grabbing
+            Grabbed(point)
+            If !grabbing && heldTool != HandleTool.TURN Then Return
+        End If
         Local ray = RayAt(point)
         If ray == Null Then Return
         Local from, way = ray
         Local direction = Axis()
         Local after: EntityPlace[] = []
         Local name = "Move"
-        Select Tool
+        Local same = False
+        Select heldTool
             Case HandleTool.MOVE
-                Local along = AlongAxis(pivot, direction, from, way) - grabbed
+                Local reached = AlongAxis(pivot, direction, from, way)
+                // Too near along it to say: stays at the last it could.
+                If reached == Null Then Return
+                Local along = reached - grabbed
                 If Snaps() Then along = Snapped(along, Snap.Move)
+                same = along == 0
                 Local by = direction * along
                 For start In starts
                     after.Add(EntityPlace(start.Position + by, start.Rotation, start.Scale))
                 End For
             Case HandleTool.TURN
                 name = "Turn"
-                Local on = OnPlane(pivot, direction, from, way)
-                If on == Null Then Return
-                Local angle = AngleAround(direction, grabbedOn, on - pivot)
+                Local angle = turnedAcross
+                If grabbing
+                    Local on = OnPlane(pivot, direction, from, way)
+                    // Edge-on since: stays at the last it could.
+                    If on == Null Then Return
+                    angle += AngleAround(direction, grabbedOn, on - pivot)
+                Else
+                    angle = (point.x - grabbedAt.x) / HANDLE_LENGTH
+                    turnedAcross = angle
+                End If
                 If Snaps() Then angle = Snapped(angle, Snap.Turn)
+                same = angle == 0
                 Local turn = Quat.FromAxisAngle(direction, angle)
                 For start In starts
                     after.Add(EntityPlace(pivot + turn * (start.Position - pivot),
@@ -526,10 +664,17 @@ Public Final Class SceneView Extends Widget
                 End For
             Default
                 name = "Scale"
-                Local along = (AlongAxis(pivot, direction, from, way) - grabbed) / HandleSize(pivot)
-                Local factor = 1 + (axis == 3 ? (point.x - grabbedAt.x) / 110.0 : along)
+                Local factor: Float = 1
+                If axis == 3
+                    factor = 1 + (point.x - grabbedAt.x) / HANDLE_LENGTH
+                Else
+                    Local reached = AlongAxis(pivot, direction, from, way)
+                    If reached == Null Then Return
+                    factor = 1 + (reached - grabbed) / HandleSize(pivot)
+                End If
                 If Snaps() Then factor = Snapped(factor, Snap.Scale)
                 factor = Max(factor, 0.001)
+                same = factor == 1
                 Local times = Vec3(factor, factor, factor)
                 If axis < 3
                     times = Vec3(axis == 0 ? factor : 1, axis == 1 ? factor : 1,
@@ -541,6 +686,9 @@ Public Final Class SceneView Extends Widget
                     after.Add(EntityPlace(start.Position, start.Rotation, size))
                 End For
         End Select
-        history.Commit(TransformEdit(name, moving, starts, after, drags))
+        // No change is no edit; back where it began, what there was goes, as the edit merged says.
+        If same && !moved Then Return
+        history.Commit(TransformEdit(name, moving, befores, after, drags, same))
+        moved = !same
     End Method
 End Class

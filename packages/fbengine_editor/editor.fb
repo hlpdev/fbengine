@@ -312,14 +312,14 @@ Public Final Class Editor
             If own != Null Then own.Edits.Undo()
         End Function, PrimaryKey(Key.Z), Function[Weak Self](): Bool
             Local own = Self
-            Return own != Null && own.Edits.CanUndo()
+            Return own != Null && own.Edits.CanUndo() && !own.View.HandleHeld()
         End Function, True)
         Actions.Add("edit.redo", "Redo", Function[Weak Self]()
             Local own = Self
             If own != Null Then own.Edits.Redo()
         End Function, PrimaryKey(Key.Z, True), Function[Weak Self](): Bool
             Local own = Self
-            Return own != Null && own.Edits.CanRedo()
+            Return own != Null && own.Edits.CanRedo() && !own.View.HandleHeld()
         End Function, True)
         For pane In Docked.Panes()
             Local id = pane.Id
@@ -350,7 +350,8 @@ Public Final Class Editor
         End Function, Null, hasProject)
         Local notFlying = Function[Weak Self](): Bool
             Local own = Self
-            Return own != Null && own.Current() != Null && !own.View.Flying()
+            Return own != Null && own.Current() != Null && !own.View.Busy() &&
+                   own.Docked.Active("scene")
         End Function
         Actions.Add("tool.move", "Move", Function[Weak Self]()
             Local own = Self
@@ -381,7 +382,10 @@ Public Final Class Editor
         Actions.Add("select.none", "Select Nothing", Function[Weak Self]()
             Local own = Self
             If own != Null Then own.Edited.SelectOnly(Null)
-        End Function, Shortcut(Key.ESCAPE, False, False, False), hasProject)
+        End Function, Shortcut(Key.ESCAPE, False, False, False), Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Current() != Null && !own.View.HandleHeld()
+        End Function)
         Actions.Add("add.cube", "Cube", Function[Weak Self]()
             Local own = Self
             If own != Null Then own.Edits.Commit(MadeEdit("Add Cube", own.Edited, Function(): Entity
@@ -402,7 +406,7 @@ Public Final Class Editor
         End Function, Null, hasProject)
         Local anySelected = Function[Weak Self](): Bool
             Local own = Self
-            Return own != Null && own.Edited.Selected().Count > 0
+            Return own != Null && own.Edited.Selected().Count > 0 && !own.View.HandleHeld()
         End Function
         Actions.Add("tree.rename", "Rename", Function[Weak Self]()
             Local own = Self
@@ -422,7 +426,7 @@ Public Final Class Editor
             own.Edits.Commit(HideEdit(selected, !selected[selected.Count - 1].Hidden()))
         End Function, Shortcut(Key.H, False, False, False), Function[Weak Self](): Bool
             Local own = Self
-            Return own != Null && own.Edited.Selected().Count > 0 && !own.View.Flying()
+            Return own != Null && own.Edited.Selected().Count > 0 && !own.View.Busy()
         End Function)
         Actions.Add("tree.delete", "Delete", Function[Weak Self]()
             Local own = Self

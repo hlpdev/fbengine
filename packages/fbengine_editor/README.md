@@ -12,7 +12,7 @@ and keys run, with undo and redo.
 
 In the scene view, the right button looks around, while W, A, S, D, Q, and E fly, faster with Shift;
 the middle button orbits what it's looking at, and with Shift, pans; the wheel dollies. The left
-button selects what's under it, with Shift adds to that, or drags a handle: W moves, E turns, R
+button selects what's under it, with Shift adds it to that or takes it out, or drags a handle: W moves, E turns, R
 scales, X switches between world and local axes, G snaps, or Control does the other way for a drag,
 and F looks at what's selected.
 

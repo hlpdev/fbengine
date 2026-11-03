@@ -25,6 +25,15 @@ Public Class Edit
     /// Takes `later`, the edit made after it, into itself, as a drag's steps are one undo; True if
     /// it did, so `later` isn't kept. `later` has been applied. False at first.
     Public Method Merge(later: Edit): Bool => False
+
+    /// Whether it comes to no change now, as a drag back to where it began does, so it's not kept
+    /// once it's merged. False at first.
+    Public Method IsNothing(): Bool => False
+
+    /// The History's let go of it, for good, `applied` as it is now: it won't be run again, so what
+    /// only it could put back can go. Nothing at first.
+    Public Method Forgotten(applied: Bool)
+    End Method
 End Class
 
 // An edit of two functions.
@@ -60,6 +69,12 @@ Class GroupEdit Extends Edit
     End Method
 
     Method Empty(): Bool => edits.Count == 0
+
+    Public Override Method Forgotten(applied: Bool)
+        For i = edits.Count - 1 To 0 Step -1
+            edits[i].Forgotten(applied)
+        End For
+    End Method
 
     // All of them or none: one that throws takes those before it back.
     Public Override Method Apply() Throws IOError
@@ -246,8 +261,8 @@ Public Final Class History
     @PanicsAtCaller
     Public Method Clear()
         Check("Clear")
-        done.Clear()
-        undone.Clear()
+        Forget(undone, False)
+        Forget(done, True)
         saved = 0
         group = Null
         depth = 0
@@ -287,12 +302,23 @@ Public Final Class History
         sealed = False
         If saved > done.Count Then saved = -1
         If !merged Then done.Add(edit)
-        undone.Clear()
+        // Merged back to where it began, there's nothing to undo of it.
+        If merged && done[done.Count - 1].IsNothing() Then done.RemoveAt(done.Count - 1)
+        Forget(undone, False)
         If done.Count > most
+            done[0].Forgotten(True)
             done.RemoveAt(0)
             If saved >= 0 Then saved -= 1
         End If
         Changed()
+    End Method
+
+    // Lets go of all of `edits`, the last made first.
+    Method Forget(edits: Edit[], applied: Bool)
+        For i = edits.Count - 1 To 0 Step -1
+            edits[i].Forgotten(applied)
+        End For
+        edits.Clear()
     End Method
 
     Method Changed()

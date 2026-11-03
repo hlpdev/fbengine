@@ -150,6 +150,14 @@ Public Final Class SceneTree Extends Widget
     /// Ui's Update, which lays out what's shown.
     Public Method Update()
         Local ui = Owner()
+        // What's been freed by anything else has no row.
+        For row In rows
+            If row.entity.Freed() Then dirty = True
+        End For
+        If dirty && renaming != Null
+            Local going = renaming
+            If going != Null && going.Freed() Then Finished(False)
+        End If
         Renames(ui)
         If find.Text() != finding
             finding = find.Text()

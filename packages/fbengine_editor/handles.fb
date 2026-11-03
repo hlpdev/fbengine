@@ -21,8 +21,11 @@ Public Enum HandleSpace
     LOCAL
 End Enum
 
-/// How close in pixels the pointer has to be to a handle to have it.
+/// How close, in the UI's units, the pointer has to be to a handle to have it.
 Public Const HANDLE_REACH: Float = 8.0
+
+/// How long a handle is, in the UI's units.
+Public Const HANDLE_LENGTH: Float = 110.0
 
 /// `value` to the nearest of `step`, or as it is with a step of 0.
 Public Function Snapped(value: Float, step: Float): Float
@@ -31,14 +34,17 @@ Public Function Snapped(value: Float, step: Float): Float
 End Function
 
 /// How far along the line from `origin` through `axis`, a unit long, is the nearest it gets to the
-/// line from `from` through `way`; 0 if they're as good as parallel.
-Public Function AlongAxis(origin: Vec3, axis: Vec3, from: Vec3, way: Vec3): Float
+/// ray from `from` along `way`; Null if they're near enough parallel, under about 1.8 degrees apart,
+/// that it could be anywhere, or that nearest place is behind where the ray starts.
+Public Function AlongAxis(origin: Vec3, axis: Vec3, from: Vec3, way: Vec3): Float?
     Local across = origin - from
     Local a = Dot(axis, way)
     Local b = Dot(way, way)
     Local bottom = Dot(axis, axis) * b - a * a
-    If Abs(bottom) < 0.000001 * b Then Return 0
-    Return (a * Dot(way, across) - b * Dot(axis, across)) / bottom
+    If bottom < 0.001 * Dot(axis, axis) * b Then Return Null
+    Local along = (a * Dot(way, across) - b * Dot(axis, across)) / bottom
+    Local onRay = Dot(way, across + axis * along) / b
+    Return onRay > 0 ? along : Null
 End Function
 
 /// Where the line from `from` through `way` meets the plane through `point` facing `normal`, or
@@ -225,7 +231,7 @@ Public Final Class Overlay
         For entity In entities
             Local mesh = entity As? Mesh
             Local chosen = selected(entity)
-            If (mesh != Null && !chosen) || HiddenUnder(entity) Then Continue
+            If (HasSurface(entity) && !chosen) || HiddenUnder(entity) Then Continue
             Local mark = MarkAt(used)
             used += 1
             mark.Show()
@@ -256,6 +262,12 @@ Public Final Class Overlay
         Grid.SetPosition(Vec3(Round(at.x / 10) * 10, 0, Round(at.z / 10) * 10))
     End Method
 End Class
+
+/// Whether `entity` is seen, and picked, by a surface of its own, not by a mark at its place.
+Public Function HasSurface(entity: Entity): Bool
+    Local kind = entity.Kind()
+    Return kind == EntityKind.MESH || kind == EntityKind.PLANE || kind == EntityKind.TERRAIN
+End Function
 
 // Whether `entity` is hidden, by itself or what it's in.
 Package Function HiddenUnder(entity: Entity): Bool
