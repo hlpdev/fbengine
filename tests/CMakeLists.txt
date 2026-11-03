@@ -396,12 +396,27 @@ catch_discover_tests(fbengine_physics_tests TEST_PREFIX "physics."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
 # fbengine_physics' steps, through its DLL, which the tests find where CMake built it.
-add_executable(fbengine_physics_step_tests physics/step_tests.cpp)
+add_executable(fbengine_physics_step_tests physics/step_tests.cpp physics/determinism_tests.cpp
+               physics/casts_tests.cpp)
 target_link_libraries(fbengine_physics_step_tests PRIVATE fbengine_physics_native
                       Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_physics_step_tests)
 catch_discover_tests(fbengine_physics_step_tests TEST_PREFIX "physics."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_physics_native>")
+
+# fbengine_physics' own C++, built into its test, for what only its insides show.
+file(GLOB fbengine_physics_sources CONFIGURE_DEPENDS
+     "${PROJECT_SOURCE_DIR}/native/fbengine_physics/*/*.cpp")
+add_executable(fbengine_physics_internal_tests physics/contacts_tests.cpp
+               ${fbengine_physics_sources} physics/float_mode_tests.cpp)
+target_include_directories(fbengine_physics_internal_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_physics")
+target_compile_definitions(fbengine_physics_internal_tests PRIVATE FBE_PHYSICS_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(fbengine_physics_internal_tests PRIVATE Jolt Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_physics_internal_tests)
+catch_discover_tests(fbengine_physics_internal_tests TEST_PREFIX "physics."
+                     DL_PATHS "${fbengine_test_dll_paths}")
 
 # fbengine_physics' examples, checked against what they print.
 if(FBENGINE_FB_TESTS)
@@ -409,6 +424,20 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/falling_boxes")
   set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION
                        "\n200 boxes fell, 200 came to rest, 100 on others\r?\n$")
+  add_test(NAME examples.door_and_trigger
+           COMMAND "${FBENGINE_FB}" --color never run
+                   "${PROJECT_SOURCE_DIR}/examples/door_and_trigger")
+  set_tests_properties(examples.door_and_trigger PROPERTIES PASS_REGULAR_EXPRESSION
+                       "\nthe door swung open: True\r?\nthe player walked into the room: True, and is in it: True\r?\n$")
+  add_test(NAME examples.video_player
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/video_player")
+  set_tests_properties(examples.video_player PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+                       PASS_REGULAR_EXPRESSION "\nit played to its end: True, in [0-9]+ frames shown\r?\n$")
+  add_test(NAME examples.crate_on_a_lift
+           COMMAND "${FBENGINE_FB}" --color never run
+                   "${PROJECT_SOURCE_DIR}/examples/crate_on_a_lift")
+  set_tests_properties(examples.crate_on_a_lift PROPERTIES PASS_REGULAR_EXPRESSION
+                       "\nthe crate's entity is where its body is: True\r?\nthe crate rode up with the lift: True\r?\n$")
 endif()
 
 # Shapes made in a process before any world, as shape_test's are when it runs alone.
@@ -427,11 +456,39 @@ if(FBENGINE_FB_TESTS)
     add_test(NAME physics.panics.${name}
              COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/physics/panics"
                      -- ${name})
+    # A minute, past which a run's taken to hang as it ends.
     set_tests_properties(physics.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
-                         "panic: PhysicsWorld\\.Step: [^\n]*${said}")
+                         "panic: PhysicsWorld\\.Step: [^\n]*${said}" TIMEOUT 60)
   endforeach()
+  # Two bodies of a world keeping one entity.
+  foreach(case IN ITEMS "drive-taken;Drive" "follow-taken;Follow")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME physics.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/physics/panics"
+                     -- ${name})
+    set_tests_properties(physics.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
+                         "panic: Body\\.${said}: another body of this world already keeps" TIMEOUT 60)
+  endforeach()
+  # A world still alive as a panic ends the program, which then exits as a panic does.
+  add_test(NAME physics.panics.with-a-world
+           COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}"
+                   "-DPROGRAM=${CMAKE_CURRENT_SOURCE_DIR}/physics/panics" -DCASE=with-a-world
+                   -DCODE=101 -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/exits.cmake")
+  set_tests_properties(physics.panics.with-a-world PROPERTIES TIMEOUT 60)
 endif()
 
+# A program that makes a world and ends at once, as a game that panics as it starts does, run a few
+# at a time, ends.cmake says how many, again and again on Jolt's most threads: each run ends, rather than its DLL's end waiting for
+# ever on a lock of a thread stopped as it started.
+add_executable(fbengine_physics_ends physics/ends.cpp)
+target_link_libraries(fbengine_physics_ends PRIVATE fbengine_physics_native)
+fbengine_set_warnings(fbengine_physics_ends)
+add_test(NAME physics.ends
+         COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_physics_ends>"
+                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_physics_native>"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/ends.cmake")
+set_tests_properties(physics.ends PROPERTIES TIMEOUT 600)
 # The job system, built into the tests from its own source, since the DLL exports only its C API.
 add_executable(fbengine_jobs_tests jobs/jobs_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/jobs/jobs.cpp")
@@ -525,6 +582,43 @@ fbengine_set_warnings(fbengine_app_tests)
 catch_discover_tests(fbengine_app_tests TEST_PREFIX "app."
                      DL_PATHS "${fbengine_test_dll_paths}")
 
+# fbengine_video, through its DLL, against its test videos with bytes changed at random.
+add_executable(fbengine_video_tests video/mutation_tests.cpp)
+target_link_libraries(fbengine_video_tests PRIVATE fbengine_video_native Catch2::Catch2WithMain)
+target_compile_definitions(fbengine_video_tests PRIVATE
+                           FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
+fbengine_set_warnings(fbengine_video_tests)
+catch_discover_tests(fbengine_video_tests TEST_PREFIX "video."
+                     DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_video_native>")
+
+# A video's thread, built in with a decoder of the test's, for what only its timing shows.
+add_executable(fbengine_video_thread_tests video/thread_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine_video/video/video.cpp")
+target_include_directories(fbengine_video_thread_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine_video")
+target_compile_definitions(fbengine_video_thread_tests PRIVATE FBE_VIDEO_BUILDING
+                           FBE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(fbengine_video_thread_tests PRIVATE Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_video_thread_tests)
+catch_discover_tests(fbengine_video_thread_tests TEST_PREFIX "video."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# What fbengine_video panics for, each by a run of tests/video/panics, which says it.
+if(FBENGINE_FB_TESTS)
+  foreach(case IN ITEMS "update-huge;Update: a video's clock moves on by 0 to a billion"
+                        "update-huge-with-sound;Update: a video's clock moves on by 0 to a billion"
+                        "volume-negative;SetVolume: a volume is 0 or more"
+                        "volume-infinite;SetVolume: a volume is 0 or more"
+                        "fit-nothing;Fit: a video's fitted into more than 0 by 0")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME video.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/video/panics"
+                     -- ${name} "${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media/colors.mpg")
+    set_tests_properties(video.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
+                         "panic: Video\\.${said}" TIMEOUT 60)
+  endforeach()
+endif()
 # text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
 # test fonts.
 file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")

@@ -3,8 +3,6 @@
 // (they're fbengine_physics.c.fbe_<area>).
 
 Import std.core
-Import std.ffi
-Import std.math
 Import std.os
 Import "./c/fbe_physics"
 
