@@ -3,14 +3,17 @@
 // back toward the mill, E takes, fits, and opens the sluice, Q hands things to Pip and takes them
 // back, Escape ends it. With `--walk <bright|dim|dark>`, as ctest runs it, it's offscreen, played
 // by key presses to that ending, ten steps a second, as fast as they go. With `--frames <folder>`,
-// the same to its bright ending, saving a PNG there at each moment that shows something.
+// the same to its bright ending, saving a PNG there at each moment that shows something. With
+// `--check <folder>`, it loads the assets its tools made there, and says what they are.
 
 Import std.collections
 Import std.core
 Import std.io
 Import std.math
 Import std.os
+Import std.text
 Import fbengine
+Import fbengine_audio
 Import "./flow"
 
 // A game's keys, bound to what they do.
@@ -156,6 +159,69 @@ Function Framed(folder: Path) Throws GraphicsError, IOError
     Print("saved {saved} frames, ended {ended}")
 End Function
 
+// Loads every asset the tools make from `folder`, as the game will, and says what they are.
+Function Checked(folder: Path) Throws GraphicsError, IOError
+    Assets.MountFolder("res://made", folder)
+    Defer Assets.Unmount("res://made")
+    For name In ["wind", "sea", "gull", "creak", "wheel", "step_1", "step_2", "step_3", "splash"]
+        Local sound = Try Assets.Load<Sound>("res://made/{name}.wav")
+        If sound.Frames() == 0 Then Print("{name} is silent")
+        sound.Free()
+    End For
+    Print("the sounds load")
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+    For material In ["rock", "sand", "wood", "brass", "iron"]
+        Local albedo = Try Assets.Load<Texture>("res://made/{material}_albedo.png")
+        Local normal = Try Assets.Load<Texture>("res://made/{material}_normal.png")
+        Local rough = Try Assets.Load<Texture>("res://made/{material}_rough.png")
+        Print("{material}: {albedo.Width()} across, {albedo.Format()}, {normal.Format()}, " +
+              "{rough.Format()}")
+        albedo.Free()
+        normal.Free()
+        rough.Free()
+    End For
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local pip = Try Assets.Load<Model>("res://made/pip.gltf")
+    Defer pip.Free()
+    Local root = Try pip.Spawn()
+    Local mesh = root.Find("pip")
+    Local clips: String[] = []
+    For clip In pip.Clips()
+        clips.Add(clip.Name())
+    End For
+    Print("Pip: {pip.Skins()[0].JointCount()} joints, clips {", ".Join(clips)}")
+    If mesh Is Mesh
+        Local drawn = mesh As Mesh
+        Local geometry = pip.Geometries()[0]
+        Print("{geometry.SurfaceCount()} surfaces, " +
+              "{geometry.Surface(0).MorphTargetCount()} morph target, " +
+              "{drawn.Palette().Count} bones in its palette")
+        Local bounds = geometry.Bounds()
+        Print("0.8 m high {IsClose(bounds.Max.y, 0.8, 0.001)}, on the ground " +
+              "{IsClose(bounds.Min.y, 0.0, 0.001)}")
+        // A clip moves it, and the blink shuts its eyes: their tops come down.
+        Local player = root.Player()
+        player.Play(pip.Clips()[1])
+        UpdateWorld(0.1)
+        Local leg = root.Find("leg_r")
+        Print("walking, its leg's turned {leg != Null && leg.Rotation().x != 0.0}")
+        Local open = drawn.MorphedPositions(1)
+        drawn.SetMorphWeights([1.0] As Float[])
+        Local shut = drawn.MorphedPositions(1)
+        Local moved = False
+        For at = 0 Until open.Count
+            If shut[at].y < open[at].y Then moved = True
+        End For
+        Print("blinking, its eyes shut {moved}")
+    End If
+End Function
+
 // The game, in a window of its lines of text, for a person.
 Function Played() Throws GraphicsError
     Try Graphics(960, 540)
@@ -180,7 +246,8 @@ Local arguments = Process.Arguments()
 If arguments.Count == 2 && arguments[0] == "--walk"
     Local walk = WalkOf(arguments[1])
     If walk == Null
-        PrintError("usage: slack_water [--walk <bright|dim|dark> | --frames <folder>]")
+        PrintError(
+            "usage: slack_water [--walk <bright|dim|dark> | --frames <folder> | --check <folder>]")
         Process.Exit(2)
     Else
         Local lines: String[] = []
@@ -188,6 +255,8 @@ If arguments.Count == 2 && arguments[0] == "--walk"
         End Function)
         Print("ended {ended}")
     End If
+ElseIf arguments.Count == 2 && arguments[0] == "--check"
+    Try Checked(Path(arguments[1]))
 ElseIf arguments.Count == 2 && arguments[0] == "--frames"
     If Env.Get("FBENGINE_NO_GPU") == "1"
         Print("no GPU here")
@@ -197,6 +266,7 @@ ElseIf arguments.Count == 2 && arguments[0] == "--frames"
 ElseIf arguments.Count == 0
     Try Played()
 Else
-    PrintError("usage: slack_water [--walk <bright|dim|dark> | --frames <folder>]")
+    PrintError(
+        "usage: slack_water [--walk <bright|dim|dark> | --frames <folder> | --check <folder>]")
     Process.Exit(2)
 End If

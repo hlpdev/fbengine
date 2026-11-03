@@ -205,7 +205,7 @@ Public Final Class Flow
                 Say("you open the sluice, and wait for the water")
                 Return
             End If
-            Say("there's nothing to do here yet")
+            Say(sluiceOpen ? "the sluice is open" : "there's nothing to do here yet")
             Return
         End If
         Local lies = LyingHere()

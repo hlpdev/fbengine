@@ -1,0 +1,27 @@
+// Makes every asset Slack Water has from nothing but this code, so its history is their provenance:
+// its textures, its sounds, and Pip. `fb run tools -- assets`, from the game's folder, writes them
+// into its assets/, which are kept in the repository so a build needs no step of its own for them;
+// the same seeds make the same files, on a machine's own floating point.
+
+Import std.core
+Import std.io
+Import std.os
+Import "./pip"
+Import "./sounds"
+Import "./textures"
+
+Local arguments = Process.Arguments()
+If arguments.Count != 1
+    PrintError("usage: slack_water_tools <folder>")
+    Process.Exit(2)
+End If
+Try
+    Local folder = Path(arguments[0])
+    Try Dir.CreateAll(folder)
+    Print("{Try WriteTextures(folder)} textures")
+    Print("{Try WriteSounds(folder)} sounds")
+    Print("{Try WritePip(folder)} joints in Pip")
+Catch e As IOError
+    PrintError("couldn't write them: {e.Message}")
+    Process.Exit(1)
+End Try

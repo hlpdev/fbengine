@@ -1,0 +1,182 @@
+// The game's materials as PBR maps made from noise that tiles: wet rock, sand, oiled wood, brass, and
+// iron, each an albedo, a normal map, and a roughness map, as PNGs with what their sidecars say.
+
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+
+// A number from 0 to 1 for a lattice point, the same each time.
+Function Hash(x: Int, y: Int, seed: Int): Float
+    Local mixed: Int64 = (((x As Int64) * 73856093) ^ ((y As Int64) * 19349663) ^
+                          ((seed As Int64) * 83492791)) & 0x7FFFFFFF
+    mixed = ((mixed ^ (mixed >> 13)) * 1274126177) & 0x7FFFFFFF
+    mixed = mixed ^ (mixed >> 16)
+    Return ((mixed & 0xFFFF) As Float) / 65535.0
+End Function
+
+// Value noise at (`x`, `y`), each from 0 to 1 across the tile, of `cells` cells a side, smooth
+// between them, and the same at opposite edges.
+Function Noise(x: Float, y: Float, cells: Int, seed: Int): Float
+    Local across = x * (cells As Float)
+    Local down = y * (cells As Float)
+    Local left = Floor(across) As Int
+    Local top = Floor(down) As Int
+    Local u = across - (left As Float)
+    Local v = down - (top As Float)
+    u = u * u * (3.0 - 2.0 * u)
+    v = v * v * (3.0 - 2.0 * v)
+    Local wrap = Function(at: Int): Int => ((at % cells) + cells) % cells
+    Local a = Hash(wrap(left), wrap(top), seed)
+    Local b = Hash(wrap(left + 1), wrap(top), seed)
+    Local c = Hash(wrap(left), wrap(top + 1), seed)
+    Local d = Hash(wrap(left + 1), wrap(top + 1), seed)
+    Return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+End Function
+
+// Noise of `octaves`, each twice as fine and half as strong, from 0 to 1.
+Function Layered(x: Float, y: Float, cells: Int, octaves: Int, seed: Int): Float
+    Local sum = 0.0
+    Local weight = 0.5
+    Local total = 0.0
+    Local size = cells
+    For octave = 1 To octaves
+        sum += Noise(x, y, size, seed + octave) * weight
+        total += weight
+        weight *= 0.5
+        size *= 2
+    End For
+    Return sum / total
+End Function
+
+Function Byte(value: Float): UInt8 => Clamp(value * 255.0 + 0.5, 0.0, 255.0) As UInt8
+
+// How a material's made: its height, color, and roughness at a point of the tile.
+Interface Maker
+    Method Height(x: Float, y: Float): Float
+    Method Albedo(x: Float, y: Float, height: Float): (Float, Float, Float)
+    Method Roughness(x: Float, y: Float, height: Float): Float
+End Interface
+
+Final Class Rock Implements Maker
+    Method Height(x: Float, y: Float): Float => Layered(x, y, 4, 5, 11)
+
+    Method Albedo(x: Float, y: Float, height: Float): (Float, Float, Float)
+        Local fleck = Layered(x, y, 32, 2, 12)
+        Local shade = 0.18 + height * 0.28 + fleck * 0.05
+        Return (shade * 1.02, shade, shade * 0.95)
+    End Method
+
+    // Wet in its low places, as what the tide left is.
+    Method Roughness(x: Float, y: Float, height: Float): Float
+        Return Clamp(0.25 + (height - 0.35) * 1.4, 0.2, 0.9)
+    End Method
+End Class
+
+Final Class Sand Implements Maker
+    Method Height(x: Float, y: Float): Float
+        Return Layered(x, y, 6, 3, 21) * 0.6 + Noise(x, y, 64, 22) * 0.4
+    End Method
+
+    Method Albedo(x: Float, y: Float, height: Float): (Float, Float, Float)
+        Local shade = 0.42 + height * 0.2
+        Return (shade * 1.05, shade * 0.92, shade * 0.7)
+    End Method
+
+    Method Roughness(x: Float, y: Float, height: Float): Float => 0.85
+End Class
+
+Final Class Wood Implements Maker
+    // Its grain runs down, bent a little.
+    Method Height(x: Float, y: Float): Float
+        Local bent = x + (Layered(x, y, 3, 2, 31) - 0.5) * 0.12
+        Local rings = Noise(bent, y, 2, 32) * 0.3 + Noise(bent, y * 0.25, 16, 33) * 0.7
+        Return rings
+    End Method
+
+    Method Albedo(x: Float, y: Float, height: Float): (Float, Float, Float)
+        Local shade = 0.2 + height * 0.25
+        Return (shade * 1.2, shade * 0.8, shade * 0.45)
+    End Method
+
+    Method Roughness(x: Float, y: Float, height: Float): Float => 0.5 + (1.0 - height) * 0.2
+End Class
+
+Final Class Brass Implements Maker
+    Method Height(x: Float, y: Float): Float => Layered(x, y, 8, 3, 41) * 0.2
+
+    Method Albedo(x: Float, y: Float, height: Float): (Float, Float, Float)
+        Local tarnish = Layered(x, y, 5, 3, 42) * 0.25
+        Return (0.88 - tarnish, 0.68 - tarnish, 0.32 - tarnish * 0.5)
+    End Method
+
+    Method Roughness(x: Float, y: Float, height: Float): Float
+        Return 0.25 + Layered(x, y, 5, 3, 42) * 0.3
+    End Method
+End Class
+
+Final Class Iron Implements Maker
+    Method Height(x: Float, y: Float): Float => Layered(x, y, 6, 4, 51) * 0.5
+
+    // Rust where it's pitted.
+    Method Albedo(x: Float, y: Float, height: Float): (Float, Float, Float)
+        Local rust = Clamp((Layered(x, y, 4, 4, 52) - 0.5) * 4.0, 0.0, 1.0)
+        Return (0.3 + rust * 0.2, 0.3 - rust * 0.12, 0.31 - rust * 0.2)
+    End Method
+
+    Method Roughness(x: Float, y: Float, height: Float): Float
+        Return 0.4 + Clamp((Layered(x, y, 4, 4, 52) - 0.5) * 4.0, 0.0, 1.0) * 0.5
+    End Method
+End Class
+
+// Writes `name`'s three maps in `folder`, `side` across, with what's data's sidecars.
+Function WriteMaterial(folder: Path, name: String, side: Int, maker: Maker,
+                       strength: Float) Throws IOError
+    Local heights: Float[] = []
+    For y = 0 Until side
+        For x = 0 Until side
+            heights.Add(maker.Height((x As Float) / (side As Float),
+                                     (y As Float) / (side As Float)))
+        End For
+    End For
+    Local albedo = Image(side, side)
+    Local normal = Image(side, side)
+    Local rough = Image(side, side)
+    For y = 0 Until side
+        For x = 0 Until side
+            Local u = (x As Float) / (side As Float)
+            Local v = (y As Float) / (side As Float)
+            Local height = heights[y * side + x]
+            Local r, g, b = maker.Albedo(u, v, height)
+            albedo[x, y] = Color32(Byte(r), Byte(g), Byte(b), 255)
+            // Its slope, across the tile's edges too, as glTF's normals have it, +Y up.
+            Local dx = heights[y * side + (x + 1) % side] -
+                       heights[y * side + (x + side - 1) % side]
+            Local dy = heights[((y + 1) % side) * side + x] -
+                       heights[((y + side - 1) % side) * side + x]
+            Local nx = -dx * strength
+            Local ny = dy * strength
+            Local length = Sqrt(nx * nx + ny * ny + 1.0)
+            normal[x, y] = Color32(Byte(nx / length * 0.5 + 0.5), Byte(ny / length * 0.5 + 0.5),
+                                   Byte(1.0 / length * 0.5 + 0.5), 255)
+            // glTF's: roughness in green, and metalness, in blue, left for its material to say.
+            rough[x, y] = Color32(255, Byte(maker.Roughness(u, v, height)), 255, 255)
+        End For
+    End For
+    Try File.WriteBytes(folder / "{name}_albedo.png", Png.Encode(albedo))
+    Try File.WriteBytes(folder / "{name}_normal.png", Png.Encode(normal))
+    Try File.WriteText(folder / "{name}_normal.png.toml", "srgb = false\n")
+    Try File.WriteBytes(folder / "{name}_rough.png", Png.Encode(rough))
+    Try File.WriteText(folder / "{name}_rough.png.toml", "srgb = false\n")
+End Function
+
+/// Writes every material's maps in `folder`, and gives how many files of them there are.
+Public Function WriteTextures(folder: Path): Int Throws IOError
+    Try WriteMaterial(folder, "rock", 256, Rock(), 12.0)
+    Try WriteMaterial(folder, "sand", 256, Sand(), 3.0)
+    Try WriteMaterial(folder, "wood", 128, Wood(), 5.0)
+    Try WriteMaterial(folder, "brass", 128, Brass(), 2.0)
+    Try WriteMaterial(folder, "iron", 128, Iron(), 4.0)
+    Return 5 * 3
+End Function

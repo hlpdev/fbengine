@@ -1,0 +1,196 @@
+// The game's sounds, synthesized: wind and sea from filtered noise, gulls, creaks, the wheel, steps,
+// and a splash, as mono 16-bit WAVs of 22050 samples a second.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+
+Const RATE: Int = 22050
+Const TAU: Float = 6.283185307179586
+
+// Noise from a seed, the same each time, from -1 to 1.
+Final Class Hiss
+    Field state: UInt32
+
+    New(seed: UInt32)
+        state = seed | 1
+    End New
+
+    Method Next(): Float
+        state = state ^ (state << 13)
+        state = state ^ (state >> 17)
+        state = state ^ (state << 5)
+        Return ((state & 0xFFFF) As Float) / 32767.5 - 1.0
+    End Method
+End Class
+
+// A one-pole low-pass, `amount` from 0, closed, to 1, open.
+Final Class Smooth
+    Field held: Float = 0.0
+
+    Method Next(input: Float, amount: Float): Float
+        held += (input - held) * amount
+        Return held
+    End Method
+End Class
+
+// `samples` with their last `fade` seconds faded over their first, so they loop without a click.
+Function Looped(samples: Float[], fade: Float): Float[]
+    Local count = (fade * (RATE As Float)) As Int
+    Local whole = samples.Count - count
+    Local looped: Float[] = []
+    For at = 0 Until whole
+        If at < count
+            Local mix = (at As Float) / (count As Float)
+            looped.Add(samples[at] * mix + samples[whole + at] * (1.0 - mix))
+        Else
+            looped.Add(samples[at])
+        End If
+    End For
+    Return looped
+End Function
+
+// Writes `samples`, from -1 to 1, as a WAV.
+Function WriteWav(path: Path, samples: Float[]) Throws IOError
+    Local bytes: UInt8[] = []
+    Local int = Function(value: Int, count: Int)
+        For at = 0 Until count
+            bytes.Add(((value >> (at * 8)) & 0xFF) As UInt8)
+        End For
+    End Function
+    Local text = Function(value: String)
+        For byte In value.Bytes
+            bytes.Add(byte)
+        End For
+    End Function
+    text("RIFF")
+    int(36 + samples.Count * 2, 4)
+    text("WAVEfmt ")
+    int(16, 4)
+    int(1, 2)
+    int(1, 2)
+    int(RATE, 4)
+    int(RATE * 2, 4)
+    int(2, 2)
+    int(16, 2)
+    text("data")
+    int(samples.Count * 2, 4)
+    For sample In samples
+        Local level = (Clamp(sample, -1.0, 1.0) * 32767.0) As Int
+        int(level & 0xFFFF, 2)
+    End For
+    Try File.WriteBytes(path, bytes)
+End Function
+
+// How many samples `seconds` are.
+Function Samples(seconds: Float): Int => (seconds * (RATE As Float)) As Int
+
+// Wind: noise, swelling, through a filter that opens as it does.
+Function Wind(): Float[]
+    Local hiss = Hiss(1)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(7.0)
+        Local t = (at As Float) / (RATE As Float)
+        Local swell = 0.55 + 0.25 * Sin(t * 0.9) + 0.2 * Sin(t * 2.3 + 1.0)
+        made.Add(low.Next(hiss.Next(), 0.02 + swell * 0.05) * (0.8 + swell) * 2.0)
+    End For
+    Return Looped(made, 1.0)
+End Function
+
+// The sea: darker noise, in slow waves.
+Function Sea(): Float[]
+    Local hiss = Hiss(2)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(7.0)
+        Local t = (at As Float) / (RATE As Float)
+        Local crest = 0.5 + 0.5 * Sin(t * TAU / 3.0)
+        Local wave = crest * crest
+        made.Add(low.Next(hiss.Next(), 0.015 + wave * 0.06) * (0.5 + wave) * 2.5)
+    End For
+    Return Looped(made, 1.0)
+End Function
+
+// A gull's call: a falling cry, twice.
+Function Gull(): Float[]
+    Local made: Float[] = []
+    Local phase = 0.0
+    For at = 0 Until Samples(0.7)
+        Local t = (at As Float) / (RATE As Float)
+        Local part = Fract(t / 0.35)
+        Local pitch = 1500.0 - part * 500.0 + Sin(t * 70.0) * 60.0
+        phase += pitch * TAU / (RATE As Float)
+        Local envelope = Sin(part * 3.14159) * 0.5
+        made.Add((Sin(phase) + 0.4 * Sin(phase * 2.0)) * envelope)
+    End For
+    Return made
+End Function
+
+// Wood creaking: a low tone in stutters.
+Function Creak(): Float[]
+    Local hiss = Hiss(3)
+    Local made: Float[] = []
+    Local phase = 0.0
+    For at = 0 Until Samples(0.5)
+        Local t = (at As Float) / (RATE As Float)
+        phase += (180.0 + t * 90.0) * TAU / (RATE As Float)
+        Local stutter = Fract(t * 22.0) < 0.35 ? 1.0 : 0.15
+        Local fade = Sin(t / 0.5 * 3.14159)
+        made.Add((Sin(phase) * 0.6 + hiss.Next() * 0.1) * stutter * fade * 0.7)
+    End For
+    Return made
+End Function
+
+// The wheel: a slow thump, and water, turning once in its length.
+Function Wheel(): Float[]
+    Local hiss = Hiss(4)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(2.0)
+        Local t = (at As Float) / (RATE As Float)
+        Local beat = Fract(t * 2.0)
+        Local thump = Sin(beat * TAU * 3.0) * Exp(-beat * 9.0) * 0.8
+        made.Add(thump + low.Next(hiss.Next(), 0.1) * 0.5)
+    End For
+    Return made
+End Function
+
+// A step on rock: a click and a little noise, a seed for each of three.
+Function Step(seed: UInt32): Float[]
+    Local hiss = Hiss(seed)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(0.14)
+        Local t = (at As Float) / (RATE As Float)
+        made.Add(low.Next(hiss.Next(), 0.25) * Exp(-t * 38.0) * 1.6)
+    End For
+    Return made
+End Function
+
+// A splash: noise opening and dying away.
+Function Splash(): Float[]
+    Local hiss = Hiss(8)
+    Local low = Smooth()
+    Local made: Float[] = []
+    For at = 0 Until Samples(0.9)
+        Local t = (at As Float) / (RATE As Float)
+        made.Add(low.Next(hiss.Next(), 0.5 * Exp(-t * 4.0) + 0.03) * Exp(-t * 4.5) * 1.1)
+    End For
+    Return made
+End Function
+
+/// Writes every sound in `folder`, and gives how many there are.
+Public Function WriteSounds(folder: Path): Int Throws IOError
+    Try WriteWav(folder / "wind.wav", Wind())
+    Try WriteWav(folder / "sea.wav", Sea())
+    Try WriteWav(folder / "gull.wav", Gull())
+    Try WriteWav(folder / "creak.wav", Creak())
+    Try WriteWav(folder / "wheel.wav", Wheel())
+    Try WriteWav(folder / "step_1.wav", Step(5))
+    Try WriteWav(folder / "step_2.wav", Step(6))
+    Try WriteWav(folder / "step_3.wav", Step(7))
+    Try WriteWav(folder / "splash.wav", Splash())
+    Return 9
+End Function

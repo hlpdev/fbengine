@@ -400,6 +400,29 @@ if(FBENGINE_FB_TESTS)
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "saved 3 frames, ended BRIGHT\r?\n$"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
+  # Its assets: what its tools make, here, and what's kept in the repository, each loaded as the game
+  # loads them.
+  add_test(NAME examples.slack_water.tools
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water/tools"
+                   -- "${PROJECT_BINARY_DIR}/example-frames/slack_water_made")
+  set_tests_properties(examples.slack_water.tools PROPERTIES
+                       FIXTURES_SETUP slack_water_made TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "15 textures\r?\n9 sounds\r?\n7 joints in Pip\r?\n$")
+  foreach(checked IN ITEMS "made=${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
+                           "kept=${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
+    string(FIND "${checked}" "=" split)
+    string(SUBSTRING "${checked}" 0 ${split} name)
+    math(EXPR split "${split} + 1")
+    string(SUBSTRING "${checked}" ${split} -1 folder)
+    add_test(NAME examples.slack_water.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                     -- --check "${folder}")
+    set_tests_properties(examples.slack_water.${name} PROPERTIES
+                         FIXTURES_REQUIRED slack_water_made
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120
+                         PASS_REGULAR_EXPRESSION "the sounds load\r?\nrock: 256 across, RGBA8, RGBA8_LINEAR, RGBA8_LINEAR\r?\nsand: 256 across, RGBA8, RGBA8_LINEAR, RGBA8_LINEAR\r?\nwood: 128 across, RGBA8, RGBA8_LINEAR, RGBA8_LINEAR\r?\nbrass: 128 across, RGBA8, RGBA8_LINEAR, RGBA8_LINEAR\r?\niron: 128 across, RGBA8, RGBA8_LINEAR, RGBA8_LINEAR\r?\nPip: 7 joints, clips idle, walk, carry\r?\n2 surfaces, 1 morph target, 7 bones in its palette\r?\n0[.]8 m high True, on the ground True\r?\nwalking, its leg's turned True\r?\nblinking, its eyes shut True\r?\n$")
+  endforeach()
   foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures
           textures_by_their_settings)
     add_test(NAME proof.${name}_no_gpu
