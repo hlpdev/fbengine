@@ -2,6 +2,7 @@
 
 Import std.core
 Import std.test
+Import std.text
 Import fbengine
 
 @Test
@@ -107,4 +108,121 @@ Function FullscreenOnADisplayWithNoModesIsAtItsDesktopsMode() Throws GraphicsErr
     Expect(Window.Height() == main.Desktop.Height)
     Try Window.SetMode(WindowMode.WINDOWED)
     Expect(Window.Width() == 640)
+End Function
+
+@Test
+Function AWindowsSizedAndMoved() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Try Window.SetSize(800, 300)
+    Expect(Window.Width() == 800 && Window.Height() == 300,
+           "it's {Window.Width()} by {Window.Height()}")
+    Flip(False)
+    Expect(Screen.Width() == 800 && Screen.Height() == 300,
+           "its screen's {Screen.Width()} by {Screen.Height()}")
+    // Offscreen, nothing's moved, and that's no failure.
+    Local x = Window.X()
+    Local y = Window.Y()
+    Try Window.SetPosition(x + 20, y + 10)
+    Expect((Window.X() == x + 20 && Window.Y() == y + 10) || (Window.X() == x && Window.Y() == y),
+           "it's at {Window.X()}, {Window.Y()}")
+    Local refused = False
+    Try
+        Try Window.SetSize(0, 300)
+    Catch error As GraphicsError
+        refused = True
+        Expect(error.Message.Contains("1 to 16384"), error.Message)
+    End Try
+    Expect(refused && Window.Width() == 800)
+End Function
+
+@Test
+Function AFullscreenWindowsSizeIsItsModes() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Try Window.SetMode(WindowMode.BORDERLESS)
+    Local refused = False
+    Try
+        Try Window.SetSize(800, 300)
+    Catch error As GraphicsError
+        refused = True
+        Expect(error.Message.Contains("mode"), error.Message)
+    End Try
+    Expect(refused)
+End Function
+
+@Test
+Function NoWindowIsSizedOrMoved()
+    EndGraphics()
+    Expect(Window.X() == 0 && Window.Y() == 0)
+    Local refused = 0
+    Try
+        Try Window.SetSize(800, 300)
+    Catch error As GraphicsError
+        refused += 1
+    End Try
+    Try
+        Try Window.SetPosition(1, 2)
+    Catch error As GraphicsError
+        refused += 1
+    End Try
+    Expect(refused == 2)
+End Function
+
+@Test
+Function AWindowIsnSizedPastWhatItCanBeOpenedAt() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Local refused = 0
+    For size In [(16385, 100), (100, 16385), (0, 100), (100, -1)]
+        Try
+            Try Window.SetSize(size.0, size.1)
+        Catch error As GraphicsError
+            refused += 1
+            Expect(error.Message.Contains("1 to 16384"), error.Message)
+        End Try
+    End For
+    Expect(refused == 4 && Window.Width() == 640)
+End Function
+
+@Test
+Function AWindowHasAMinimumSize() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Expect(Window.MinimumWidth() == 0 && Window.MinimumHeight() == 0)
+    Try Window.SetMinimumSize(200, 100)
+    Expect(Window.MinimumWidth() == 200 && Window.MinimumHeight() == 100)
+    Local refused = False
+    Try
+        Try Window.SetMinimumSize(-1, 100)
+    Catch error As GraphicsError
+        refused = True
+    End Try
+    Expect(refused && Window.MinimumWidth() == 200)
+    EndGraphics()
+    Expect(Window.MinimumWidth() == 0)
+    refused = False
+    Try
+        Try Window.SetMinimumSize(10, 10)
+    Catch error As GraphicsError
+        refused = True
+    End Try
+    Expect(refused, "it set the least of no window")
+End Function
+
+@Test
+Function APlaceShowsIfItsOnADisplay() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Expect(Window.PlaceShows(10, 10, 640, 480))
+    Expect(!Window.PlaceShows(100000, 100000, 640, 480))
+    Expect(!Window.PlaceShows(-100000, 10, 640, 480))
+    // Only a sliver on it is off it.
+    Expect(!Window.PlaceShows(-636, 10, 640, 480))
+    Expect(!Window.PlaceShows(10, 10, 0, 480))
 End Function

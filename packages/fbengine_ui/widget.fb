@@ -106,6 +106,11 @@ Public Class Widget Extends Node
     /// widget's until it goes up, wherever it goes. Nothing at first.
     @MainThread Public Method PointerDown(point: Vec2): Bool => False
 
+    /// A right or middle button went down on it, at `point`: True takes the pointer, as
+    /// PointerDown does, until that button goes up, with its PointerDrag and PointerUp, which
+    /// Ui.PressedButton tells from the left's. Nothing at first, so it goes to what it's in.
+    @MainThread Public Method PointerDownWith(button: MouseButton, point: Vec2): Bool => False
+
     /// The pointer it took moved, to `point`.
     @MainThread Public Method PointerDrag(point: Vec2)
     End Method
@@ -117,6 +122,10 @@ Public Class Widget Extends Node
     /// Whether a press it takes leaves the focus where it is, as a scrollbar's does, rather than
     /// moving it to the first widget that can have it from here up. False at first.
     @MainThread Public Method KeepsFocus(): Bool => False
+
+    /// The cursor the mouse shows while it's over it or holding it, or Null, at first, for what
+    /// it's in to say; with none, the Ui leaves the cursor to the game.
+    @MainThread Public Method PointerCursor(): MouseCursor? => Null
 
     /// The wheel turned `steps` notches up over it: True if it used them, so the widgets under it
     /// don't.

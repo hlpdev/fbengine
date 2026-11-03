@@ -1,0 +1,164 @@
+// A menu bar, and menus of commands, in the popups over a Ui: a menu bar's, or at the pointer, as a
+// context menu is.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+Import fbengine_ui
+Import "./commands"
+
+/// In a list of a menu's entries, a line between two groups.
+Public Const SEPARATOR = "-"
+
+// A command in a menu: its title, and its shortcut on the right, which a click or Return runs.
+Class MenuItem Extends Widget
+    Field command: EditorCommand
+    Field keys: String
+
+    New(given: EditorCommand)
+        command = given
+        Local shortcut = given.Keys
+        keys = shortcut != Null ? "{shortcut}" : ""
+        Super.New("menu.item", given.Id)
+        SetFocusable(True)
+        SetTranslates(False)
+        SetEnabled(given.Enabled())
+    End New
+
+    Public Override Method Measure(): Vec2
+        Local title = TextSize(command.Title)
+        If keys == "" Then Return title
+        Local shortcut = TextSize(keys)
+        Return Vec2(title.x + 32.0 + shortcut.x, Max(title.y, shortcut.y))
+    End Method
+
+    Public Override Method Draw(paint: Painter)
+        Super.Draw(paint)
+        paint.TextIn(command.Title, ContentBox(), CurrentStyle(), Align.START)
+        If keys != "" Then paint.TextIn(keys, ContentBox(), CurrentStyle(), Align.END)
+    End Method
+
+    Public Override Method PointerDown(point: Vec2): Bool => True
+
+    Public Override Method PointerUp(point: Vec2, over: Bool)
+        If over Then Chosen()
+    End Method
+
+    Public Override Method Activate()
+        Chosen()
+    End Method
+
+    Method Chosen()
+        Local ui = Owner()
+        Local menu = Parent()
+        If ui != Null && menu != Null Then ui.ClosePopup(menu)
+        command.Run()
+    End Method
+End Class
+
+// `entries` as a menu's column, of what `commands` has of them.
+Function Column(commands: Commands, entries: String[]): Widget
+    Local menu = Widget("menu", "menu")
+    For entry In entries
+        If entry == SEPARATOR
+            Local line = Widget("menu.separator")
+            line.SetHeight(Sizing.Fixed(1.0))
+            menu.Add(line)
+        Else
+            Local command = commands.Find(entry)
+            If command == Null Then Panic("a menu's entry {entry} isn't a command")
+            menu.Add(MenuItem(command))
+        End If
+    End For
+    Return menu
+End Function
+
+/// Opens a menu of `entries`, each a command's id or SEPARATOR, over `ui` with its top left at
+/// `at`, kept in the window; `closed` is called as it closes. A command that can't run now shows
+/// and can't be chosen. It closes as one's chosen, and as a MENU popup does otherwise. Panics for
+/// an entry `commands` doesn't have.
+@PanicsAtCaller
+Public Function OpenMenu(ui: Ui, commands: Commands, entries: String[], at: Vec2,
+                         closed: (Func())? = Null): Node
+    Local menu = Column(commands, entries)
+    ui.OpenPopupAt(menu, at, PopupKind.MENU, closed)
+    Return menu
+End Function
+
+/// The row of menus at the top of an editor: a click on a title opens its menu under it, and while
+/// one's open, the pointer over another title opens that one instead. Update, each frame after the
+/// Ui's, does that.
+Public Final Class MenuBar Extends Widget
+    Field commands: Commands
+    Field titles: MenuTitle[] = []
+    Field open: Node? = Null
+    Field openFrom: MenuTitle? = Null
+
+    Public New(given: Commands)
+        commands = given
+        Super.New("menubar", "menubar")
+        SetArrangement(Arrangement.ROW)
+        SetHeight(Sizing.Fit())
+    End New
+
+    /// Adds a menu called `title`, of `entries`, each a command's id or SEPARATOR, after the others.
+    Public Method AddMenu(title: String, entries: String[])
+        Local made = MenuTitle(title, entries)
+        titles.Add(made)
+        Add(made)
+    End Method
+
+    /// Whether a menu of it's open.
+    Public Method IsOpen(): Bool => open != Null
+
+    /// Moves the menu to the title under the pointer, if it's open and that's another one.
+    Public Method Update()
+        Local ui = Owner()
+        Local from = openFrom
+        If ui == Null || open == Null || from == Null Then Return
+        Local over = ui.Hovered() As? MenuTitle
+        If over == Null || RefEquals(over, from) Then Return
+        Local shown = open
+        If shown != Null Then ui.ClosePopup(shown)
+        Opened(ui, over)
+    End Method
+
+    Method Opened(ui: Ui, title: MenuTitle)
+        Local box = title.Box()
+        openFrom = title
+        open = OpenMenu(ui, commands, title.entries, Vec2(box.X, box.Y + box.Height),
+                        Function[Weak Self]()
+            Self?.Closed()
+        End Function)
+    End Method
+
+    Method Closed()
+        open = Null
+        openFrom = Null
+    End Method
+End Class
+
+// A menu's title in a bar.
+Class MenuTitle Extends Button
+    Field entries: String[]
+
+    New(title: String, given: String[])
+        entries = given
+        Super.New(title, "menu." + title)
+        SetStyleName("menubar.title")
+        SetTranslates(False)
+    End New
+
+    Public Override Method PointerUp(point: Vec2, over: Bool)
+        Local ui = Owner()
+        Local bar = Parent() As? MenuBar
+        If over && ui != Null && bar != Null Then bar.Opened(ui, Self)
+    End Method
+
+    Public Override Method Activate()
+        Local ui = Owner()
+        Local bar = Parent() As? MenuBar
+        If ui != Null && bar != Null Then bar.Opened(ui, Self)
+    End Method
+End Class

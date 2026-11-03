@@ -1,34 +1,138 @@
 // Two hundred boxes fall onto a floor, in columns two high, and come to rest, stepped at 60 a
-// second for the 60th of a second each frame takes.
+// second for the 60th of a second each frame takes. With --watch, a window shows them fall, again
+// and again, each box a mesh its body drives; --frames, as a test runs it, keeps that headless and
+// says what was drawn.
 
+Import std.collections
 Import std.core
 Import std.math
+Import std.os
+Import fbengine
 Import fbengine_physics
 
-Local world = PhysicsWorld()
-Body(world, Shape.Box(Vec3(40, 1, 40)), Motion.STATIC, Vec3(0, -0.5, 0))
-Local box = Shape.Box(Vec3(1, 1, 1))
-Local boxes: Body[] = []
-For x = 0 To 9
-    For z = 0 To 9
-        For y = 0 To 1
-            Local at = Vec3((x As Float) * 1.5 - 7, 2 + (y As Float) * 1.5, (z As Float) * 1.5 - 7)
-            boxes.Add(Body(world, box, Motion.DYNAMIC, at))
+Class Fall
+    ReadOnly Field stage: World
+    ReadOnly Field world: PhysicsWorld
+    ReadOnly Field camera: Camera
+    ReadOnly Field boxes: Body[] = []
+
+    New()
+        stage = World()
+        World.SetCurrent(stage)
+        stage.SetAmbientLight(Color(0.2, 0.2, 0.24))
+        Local sun = Light(LightType.DIRECTIONAL)
+        sun.SetPosition(Vec3(10, 20, 12))
+        sun.PointAt(Vec3(0, 0, 0))
+        camera = Camera()
+        camera.SetClearColor(Color(0.01, 0.012, 0.018))
+        camera.SetPosition(Vec3(0, 12, 26))
+        camera.PointAt(Vec3(0, 1, 0))
+        world = PhysicsWorld()
+        Local cube = Geometry.Cube()
+        Local floor = Mesh(cube)
+        floor.SetMaterial(Material(Color(0.13, 0.14, 0.18)))
+        // The cube's 2 across.
+        floor.SetScale(Vec3(20, 0.5, 20))
+        floor.SetPosition(Vec3(0, -0.5, 0))
+        Body(world, Shape.Box(Vec3(40, 1, 40)), Motion.STATIC, floor)
+        Local box = Shape.Box(Vec3(1, 1, 1))
+        Local material = Material(Color(0.64, 0.25, 0.06))
+        For x = 0 To 9
+            For z = 0 To 9
+                For y = 0 To 1
+                    Local mesh = Mesh(cube)
+                    mesh.SetMaterial(material)
+                    mesh.SetScale(Vec3(0.5, 0.5, 0.5))
+                    mesh.SetPosition(Vec3((x As Float) * 1.5 - 7, 2 + (y As Float) * 1.5,
+                                          (z As Float) * 1.5 - 7))
+                    boxes.Add(Body(world, box, Motion.DYNAMIC, mesh))
+                End For
+            End For
         End For
+        box.Free()
+        world.Optimize()
+    End New
+
+    Method Free()
+        world.Free()
+        stage.Free()
+    End Method
+End Class
+
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(frames > 0)
+    Try Graphics(960, 600)
+    Defer EndGraphics()
+    Window.SetTitle("falling boxes: Escape ends it")
+    Frame.SetLimit(60)
+    Local fall = Fall()
+    Local count = 0
+    Local seconds: Float64 = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        Local delta = frames > 0 ? 1.0 / 60 : Frame.Delta()
+        seconds += delta
+        If seconds > 8
+            fall.Free()
+            fall = Fall()
+            seconds = 0
+        End If
+        fall.world.Update(delta)
+        RenderWorld()
+    End While
+    If count == frames
+        Local highest: Float = 0
+        For body In fall.boxes
+            Local attached = body.Attached()
+            If attached != Null Then highest = Max(highest, attached.Position(Space.WORLD).y)
+        End For
+        Print(
+            "{fall.camera.Draws().Count} drawn, the highest box's mesh has fallen: {highest < 3.5}")
+    End If
+    fall.Free()
+    Print("watched {count} frames")
+End Function
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
     End For
-End For
-box.Free()
-world.Optimize()
+End Function
 
-For frame = 1 To 600
-    world.Update(1.0 / 60)
-End For
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
 
-Local resting = 0
-Local stacked = 0
-For body In boxes
-    If !body.Active() Then resting += 1
-    If body.Position().y > 1 Then stacked += 1
-End For
-Print("{boxes.Count} boxes fell, {resting} came to rest, {stacked} on others")
-world.Free()
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try
+        Try Watched(Asked(arguments), arguments)
+    Catch error As GraphicsError
+        Print("couldn't draw it: {error.Message}")
+    End Try
+Else
+    Local fall = Fall()
+    For frame = 1 To 600
+        fall.world.Update(1.0 / 60)
+    End For
+    Local resting = 0
+    Local stacked = 0
+    For body In fall.boxes
+        If !body.Active() Then resting += 1
+        If body.Position().y > 1 Then stacked += 1
+    End For
+    Print("{fall.boxes.Count} boxes fell, {resting} came to rest, {stacked} on others")
+    fall.Free()
+End If

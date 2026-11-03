@@ -1,0 +1,760 @@
+// Popups over a Ui's tree, a widget's right and middle presses, and the keys no widget uses, driven
+// by Simulate's mouse and keys, offscreen.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import std.test
+Import fbengine
+Import fbengine_ui
+
+// A window, and a Ui of a column at its top left holding `widgets`, laid out.
+Function Opened(widgets: Widget[]): Ui Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.STACK)
+    Local column = Node("column")
+    column.SetAlignSelf(Align.START)
+    column.SetAlign(Align.START)
+    column.SetGap(10.0)
+    column.SetPadding(Insets.All(10.0))
+    For widget In widgets
+        column.Add(widget)
+    End For
+    root.Add(column)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Return ui
+End Function
+
+Function Update(ui: Ui)
+    Flip()
+    ui.Update()
+End Function
+
+Function ClickAt(ui: Ui, point: Vec2, button: MouseButton = MouseButton.LEFT) Throws GraphicsError
+    Try Simulate.MoveMouse(point.x, point.y)
+    Try Simulate.Click(button)
+    Update(ui)
+End Function
+
+Function PressKey(ui: Ui, key: Key) Throws GraphicsError
+    Try Simulate.PressKey(key)
+    Update(ui)
+End Function
+
+// A column of `buttons`, as a menu is, with a background of its own.
+Function Menu(buttons: Button[]): Node
+    Local menu = Node("menu")
+    menu.SetAnchors(Anchors.Point(0.0, 0.0))
+    For button In buttons
+        menu.Add(button)
+    End For
+    Return menu
+End Function
+
+@Test
+Function APopupGetsThePointerBeforeTheTree() Throws GraphicsError
+    Local under = Button("Under")
+    Local ui = Try Opened([under])
+    Defer EndGraphics()
+    Local item = Button("Item")
+    item.SetSize(100.0, 40.0)
+    Local menu = Menu([item])
+    menu.SetMargin(Insets(under.Box().X, under.Box().Y, 0.0, 0.0))
+    ui.OpenPopup(menu)
+    Update(ui)
+    Expect(ui.Popups().Count == 1 && RefEquals(ui.Popups()[0], menu))
+    Expect(item.Box().Contains(under.Box().Center))
+    Try ClickAt(ui, under.Box().Center)
+    Expect(item.Clicked() && !under.Clicked())
+End Function
+
+@Test
+Function APressOutsideAMenuClosesItAndGoesNoFurther() Throws GraphicsError
+    Local under = Button("Under")
+    Local ui = Try Opened([under])
+    Defer EndGraphics()
+    Local item = Button("Item")
+    Local closes = 0
+    ui.OpenPopupAt(Menu([item]), Vec2(300, 200), PopupKind.MENU, Function()
+        closes += 1
+    End Function)
+    Update(ui)
+    Expect(ui.WantsPointer() && ui.WantsKeys())
+    Try ClickAt(ui, under.Box().Center)
+    Expect(ui.Popups().Count == 0 && closes == 1)
+    Expect(!under.Clicked(), "the press that closed it went on to what's under it")
+    Expect(ui.Focused() == Null)
+    // Then what's under it gets the next.
+    Try ClickAt(ui, under.Box().Center)
+    Expect(under.Clicked())
+    Expect(closes == 1)
+End Function
+
+@Test
+Function APressInALowerMenuClosesThoseOverIt() Throws GraphicsError
+    Local ui = Try Opened([Button("Under")])
+    Defer EndGraphics()
+    Local first = Button("First")
+    Local second = Button("Second")
+    Local lower = Menu([first])
+    Local upper = Menu([second])
+    ui.OpenPopupAt(lower, Vec2(100, 100))
+    ui.OpenPopupAt(upper, Vec2(250, 200))
+    Update(ui)
+    Try ClickAt(ui, first.Box().Center)
+    Expect(first.Clicked())
+    Expect(ui.Popups().Count == 1 && RefEquals(ui.Popups()[0], lower))
+    Expect(upper.Parent() == Null)
+End Function
+
+@Test
+Function AModalKeepsThePointerAndTheKeysFromWhatsUnderIt() Throws GraphicsError
+    Local under = Button("Under")
+    Local ui = Try Opened([under])
+    Defer EndGraphics()
+    Local seen = 0
+    ui.SetShortcuts(Function(stroke: Keystroke): Bool
+        seen += 1
+        Return True
+    End Function)
+    Local ok = Button("OK")
+    Local dialog = Menu([ok])
+    dialog.SetAnchors(Anchors.Point(0.5, 0.5))
+    ui.OpenPopup(dialog, PopupKind.MODAL)
+    Update(ui)
+    Expect(ui.Focused() == ok, "its first widget has the focus")
+    Expect(ui.WantsPointer() && ui.WantsKeys())
+    Try ClickAt(ui, under.Box().Center)
+    Expect(!under.Clicked() && ui.Popups().Count == 1)
+    Expect(ui.Hovered() == Null)
+    Expect(ui.Focused() == ok, "a press under it took the focus")
+    // No shortcuts, and Tab stays in it.
+    Try PressKey(ui, Key.F5)
+    Expect(seen == 0)
+    Try PressKey(ui, Key.TAB)
+    Expect(ui.Focused() == ok)
+    // Escape's for it to close on.
+    Try PressKey(ui, Key.ESCAPE)
+    Expect(ui.Back() && ui.Popups().Count == 1)
+    Try ClickAt(ui, ok.Box().Center)
+    Expect(ok.Clicked())
+    Expect(ui.ClosePopup(dialog))
+    Expect(!ui.ClosePopup(dialog))
+    Update(ui)
+    Try ClickAt(ui, under.Box().Center)
+    Expect(under.Clicked())
+End Function
+
+@Test
+Function EscapeClosesTheTopMenuAndTheFocusGoesBack() Throws GraphicsError
+    Local under = Button("Under")
+    Local ui = Try Opened([under])
+    Defer EndGraphics()
+    ui.Focus(under)
+    Local first = Button("First")
+    Local second = Button("Second")
+    ui.OpenPopupAt(Menu([first, second]), Vec2(100, 100))
+    Update(ui)
+    Expect(ui.Focused() == first)
+    Try PressKey(ui, Key.TAB)
+    Expect(ui.Focused() == second)
+    Try PressKey(ui, Key.TAB)
+    Expect(ui.Focused() == first, "Tab went out of the menu")
+    Try PressKey(ui, Key.ESCAPE)
+    Expect(ui.Popups().Count == 0 && !ui.Back())
+    Expect(ui.Focused() == under)
+    // With nothing open, it's back, as it was.
+    Try PressKey(ui, Key.ESCAPE)
+    Expect(ui.Back())
+End Function
+
+@Test
+Function ATipLetsThePointerThrough() Throws GraphicsError
+    Local under = Button("Under")
+    Local ui = Try Opened([under])
+    Defer EndGraphics()
+    ui.Focus(under)
+    Local tip = Menu([Button("Tip")])
+    ui.OpenPopupAt(tip, Vec2(under.Box().X, under.Box().Y), PopupKind.TIP)
+    Update(ui)
+    Expect(ui.Focused() == under, "a tip took the focus")
+    Try ClickAt(ui, under.Box().Center)
+    Expect(under.Clicked())
+    Expect(ui.Popups().Count == 1, "a press closed a tip")
+    Try PressKey(ui, Key.ESCAPE)
+    Expect(ui.Popups().Count == 1 && ui.Back())
+    Expect(ui.ClosePopup(tip))
+End Function
+
+@Test
+Function APopupAtAPointIsKeptInTheWindow() Throws GraphicsError
+    Local ui = Try Opened([Button("Under")])
+    Defer EndGraphics()
+    Local item = Button("Item")
+    item.SetSize(100.0, 40.0)
+    Local menu = Menu([item])
+    ui.OpenPopupAt(menu, Vec2(390, 290))
+    Update(ui)
+    Expect(menu.Box().X == 300 && menu.Box().Y == 260, "it's at {menu.Box()}")
+    ui.ClosePopup(menu)
+    // One too big starts at the top left.
+    item.SetSize(900.0, 40.0)
+    ui.OpenPopupAt(menu, Vec2(50, 50))
+    Update(ui)
+    Expect(menu.Box().X == 0 && menu.Box().Y == 50, "it's at {menu.Box()}")
+    ui.ClosePopup(menu)
+End Function
+
+@Test
+Function APopupsDrawnOverTheTree() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Local under = Button("Under")
+    under.SetSize(100.0, 100.0)
+    Local ui = Try Opened([under])
+    Defer EndGraphics()
+    Local theme = Theme.Dark()
+    Local red = Style.Plain()
+    red.Background = Color.Hex("#ff0000")
+    Local blue = Style.Plain()
+    blue.Background = Color.Hex("#0000ff")
+    theme.SetStyle("button", red)
+    theme.SetStyle("widget", blue)
+    ui.SetTheme(theme)
+    Local over = Widget("widget")
+    over.SetSize(30.0, 30.0)
+    ui.OpenPopupAt(over, Vec2(40, 40), PopupKind.TIP)
+    Update(ui)
+    ui.Draw()
+    Local shown = Try Screen.ToImage()
+    Expect(shown[20, 20].r > 200, "the tree's {shown[20, 20]}")
+    Expect(shown[50, 50].b > 200, "the popup's {shown[50, 50]}")
+End Function
+
+// A widget that takes what `taking` says, saying what it's been given.
+Class Holder Extends Widget
+    Field taking: MouseButton[]
+    Public Field Said: String[] = []
+
+    New(takes: MouseButton[])
+        taking = takes
+        Super.New("holder")
+        SetSize(100.0, 40.0)
+    End New
+
+    Public Field Showing: MouseCursor? = Null
+
+    @MainThread Public Override Method PointerCursor(): MouseCursor? => Showing
+
+    @MainThread Public Override Method PointerDown(point: Vec2): Bool
+        Said.Add("left down")
+        Return taking.Contains(MouseButton.LEFT)
+    End Method
+
+    @MainThread Public Override Method PointerDownWith(button: MouseButton, point: Vec2): Bool
+        Said.Add("{button} down")
+        Return taking.Contains(button)
+    End Method
+
+    @MainThread Public Override Method PointerDrag(point: Vec2)
+        Said.Add("drag")
+    End Method
+
+    @MainThread Public Override Method PointerUp(point: Vec2, over: Bool)
+        Said.Add("up {over}")
+    End Method
+End Class
+
+@Test
+Function ARightOrMiddlePressGoesToAWidgetThatTakesIt() Throws GraphicsError
+    For button In [MouseButton.RIGHT, MouseButton.MIDDLE]
+        Local holder = Holder([button])
+        Local ui = Try Opened([holder])
+        Defer EndGraphics()
+        Local at = holder.Box().Center
+        Try Simulate.MoveMouse(at.x, at.y)
+        Try Simulate.MouseDown(button)
+        Update(ui)
+        Expect(ui.Pressed() == holder && ui.PressedButton() == button)
+        // Dragged off it, it's still its own.
+        Try Simulate.MoveMouse(at.x + 200, at.y)
+        Try Simulate.MouseMotion(200, 0)
+        Try Simulate.Click(MouseButton.LEFT)
+        Update(ui)
+        Expect(ui.Pressed() == holder && ui.PressedButton() == button)
+        Try Simulate.MouseUp(button)
+        Update(ui)
+        Expect(ui.Pressed() == Null)
+        Local said = holder.Said
+        Expect(said[0] == "{button} down" && said[1] == "drag" &&
+               said[said.Count - 1] == "up False",
+               "it was told {said}")
+        Expect(!said.Contains("left down"), "it was told {said}")
+    End For
+End Function
+
+@Test
+Function ARightPressNoWidgetTakesLeavesTheFocus() Throws GraphicsError
+    Local field = TextField()
+    Local holder = Holder([])
+    Local ui = Try Opened([field, holder])
+    Defer EndGraphics()
+    ui.Focus(field)
+    Try ClickAt(ui, holder.Box().Center, MouseButton.RIGHT)
+    Expect(holder.Said == ["{MouseButton.RIGHT} down"], "it was told {holder.Said}")
+    Expect(ui.Pressed() == Null)
+    Expect(ui.Focused() == field, "a right press nothing took moved the focus")
+    // The left button's, as it was.
+    holder.Said.Clear()
+    Try ClickAt(ui, holder.Box().Center)
+    Expect(holder.Said == ["left down"], "it was told {holder.Said}")
+    Expect(ui.Focused() == Null)
+End Function
+
+@Test
+Function ARightPressOutsideAMenuClosesIt() Throws GraphicsError
+    Local holder = Holder([MouseButton.RIGHT])
+    Local ui = Try Opened([holder])
+    Defer EndGraphics()
+    ui.OpenPopupAt(Menu([Button("Item")]), Vec2(300, 200))
+    Update(ui)
+    Try ClickAt(ui, holder.Box().Center, MouseButton.RIGHT)
+    Expect(ui.Popups().Count == 0)
+    Expect(holder.Said.Count == 0, "it was told {holder.Said}")
+End Function
+
+@Test
+Function ShortcutsSeeTheKeysNoWidgetUses() Throws GraphicsError
+    Local field = TextField()
+    Local button = Button("Button")
+    Local ui = Try Opened([field, button])
+    Defer EndGraphics()
+    Local seen: Key[] = []
+    Local using = True
+    ui.SetShortcuts(Function(stroke: Keystroke): Bool
+        seen.Add(stroke.Key)
+        Return using
+    End Function)
+    // With nothing focused.
+    Try PressKey(ui, Key.S)
+    Expect(seen == [Key.S])
+    seen.Clear()
+    // Before what a key would do: Tab doesn't move the focus when it's used.
+    Try PressKey(ui, Key.TAB)
+    Expect(seen == [Key.TAB] && ui.Focused() == Null)
+    seen.Clear()
+    // A key a widget doesn't use, before it activates it, or after, if it isn't used.
+    ui.Focus(button)
+    Try PressKey(ui, Key.RETURN)
+    Expect(seen == [Key.RETURN] && !button.Clicked())
+    seen.Clear()
+    using = False
+    Try PressKey(ui, Key.RETURN)
+    Expect(seen == [Key.RETURN] && button.Clicked())
+    seen.Clear()
+    using = True
+    // Into a field, a plain key is typing; Control's, and a function key, aren't.
+    ui.Focus(field)
+    Try PressKey(ui, Key.S)
+    Expect(seen.Count == 0, "it saw {seen}")
+    Try PressKey(ui, Key.F5)
+    Expect(seen == [Key.F5])
+    seen.Clear()
+    Try Simulate.KeyDown(Key.LEFT_CONTROL)
+    Update(ui)
+    // Control's own, as any key's, for it to leave alone.
+    Expect(seen == [Key.LEFT_CONTROL])
+    seen.Clear()
+    Try Simulate.PressKey(Key.S)
+    Update(ui)
+    Expect(seen == [Key.S])
+    seen.Clear()
+    // One the field uses, it doesn't see.
+    Try Simulate.PressKey(Key.A)
+    Update(ui)
+    Expect(seen.Count == 0, "it saw {seen}")
+    Try Simulate.KeyUp(Key.LEFT_CONTROL)
+    // Repeats too.
+    ui.Focus(Null)
+    Try Simulate.KeyDown(Key.Z)
+    Update(ui)
+    Try Simulate.KeyDown(Key.Z, True)
+    Update(ui)
+    Expect(seen == [Key.Z, Key.Z], "it saw {seen}")
+    Try Simulate.KeyUp(Key.Z)
+    seen.Clear()
+    // And none, again.
+    ui.SetShortcuts(Null)
+    Try PressKey(ui, Key.TAB)
+    Expect(seen.Count == 0 && ui.Focused() != Null)
+End Function
+
+@Test
+Function AWidgetSaysWhatTheCursorIsOverItAndHoldingIt() Throws GraphicsError
+    Local holder = Holder([MouseButton.LEFT])
+    holder.Showing = MouseCursor.RESIZE_EW
+    Local other = Holder([])
+    Local ui = Try Opened([holder, other])
+    Defer EndGraphics()
+    Defer SetMouseCursor(MouseCursor.ARROW)
+    // Left to the game until one says.
+    SetMouseCursor(MouseCursor.CROSSHAIR)
+    Try Simulate.MoveMouse(other.Box().Center.x, other.Box().Center.y)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.CROSSHAIR)
+    Try Simulate.MoveMouse(holder.Box().Center.x, holder.Box().Center.y)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.RESIZE_EW)
+    // Held, off it too.
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Update(ui)
+    Try Simulate.MoveMouse(other.Box().Center.x, other.Box().Center.y)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.RESIZE_EW)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.ARROW)
+    // And the game's again.
+    SetMouseCursor(MouseCursor.CROSSHAIR)
+    Update(ui)
+    Expect(ShownMouseCursor() == MouseCursor.CROSSHAIR)
+End Function
+
+@Test
+Function ShortcutsWaitForAMenu() Throws GraphicsError
+    Local ui = Try Opened([Button("Under")])
+    Defer EndGraphics()
+    Local seen = 0
+    ui.SetShortcuts(Function(stroke: Keystroke): Bool
+        seen += 1
+        Return True
+    End Function)
+    Local menu = Menu([Button("Item")])
+    ui.OpenPopupAt(menu, Vec2(100, 100))
+    Update(ui)
+    Try PressKey(ui, Key.W)
+    Expect(seen == 0)
+    // Escape's the menu's, not a shortcut's.
+    Try PressKey(ui, Key.ESCAPE)
+    Expect(seen == 0 && ui.Popups().Count == 0)
+    Try PressKey(ui, Key.ESCAPE)
+    Expect(seen == 1)
+End Function
+
+// A widget that counts the wheel's notches, and what's said of the pointer.
+Class Wheeled Extends Holder
+    Public Field Notches: Int = 0
+    Public Field During: MouseButton = MouseButton.LEFT
+    Public Field Downs: MouseButton[] = []
+
+    New()
+        Super.New([MouseButton.LEFT, MouseButton.RIGHT])
+    End New
+
+    @MainThread Public Override Method Wheel(steps: Int32): Bool
+        Notches += steps
+        Return True
+    End Method
+
+    @MainThread Public Override Method PointerDownWith(button: MouseButton, point: Vec2): Bool
+        Local ui = Owner()
+        If ui != Null Then Downs.Add(ui.PressedButton())
+        Return True
+    End Method
+End Class
+
+@Test
+Function NoWheelGoesToTheTreeUnderAMenu() Throws GraphicsError
+    Local under = Wheeled()
+    Local ui = Try Opened([under])
+    Defer EndGraphics()
+    Local at = under.Box().Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    Try Simulate.Wheel(2)
+    Update(ui)
+    Expect(under.Notches == 2)
+    ui.OpenPopupAt(Menu([Button("Item")]), Vec2(300, 200))
+    Update(ui)
+    Try Simulate.Wheel(2)
+    Update(ui)
+    Expect(under.Notches == 2, "the wheel went under the menu")
+End Function
+
+@Test
+Function AModalTakesThePointerFromWhatsHoldingIt() Throws GraphicsError
+    Local holder = Holder([MouseButton.LEFT])
+    Local ui = Try Opened([holder])
+    Defer EndGraphics()
+    Local at = holder.Box().Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    Update(ui)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Update(ui)
+    Expect(RefEquals(ui.Pressed(), holder))
+    ui.OpenPopup(Menu([Button("OK")]), PopupKind.MODAL)
+    Expect(ui.Pressed() == Null)
+    Expect(holder.Said[holder.Said.Count - 1] == "up False", "it was told {holder.Said}")
+    Local told = holder.Said.Count
+    Try Simulate.MouseMotion(10, 10)
+    Update(ui)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Update(ui)
+    Expect(holder.Said.Count == told, "it went on being told: {holder.Said}")
+End Function
+
+@Test
+Function NothingUnderAModalGetsTheFocus() Throws GraphicsError
+    Local field = TextField()
+    Local ui = Try Opened([field])
+    Defer EndGraphics()
+    Local ok = Button("OK")
+    Local dialog = Menu([ok])
+    ui.OpenPopup(dialog, PopupKind.MODAL)
+    Update(ui)
+    ui.Focus(field)
+    Expect(RefEquals(ui.Focused(), ok), "it went under the modal")
+    Update(ui)
+    Try Simulate.Text("typed")
+    Update(ui)
+    Expect(field.Text() == "", "it typed under a modal")
+    // A MENU over it has it, and with it gone, the modal again.
+    Local item = Button("Item")
+    Local menu = Menu([item])
+    ui.OpenPopupAt(menu, Vec2(100, 100))
+    Expect(RefEquals(ui.Focused(), item))
+    ui.ClosePopup(menu)
+    Expect(RefEquals(ui.Focused(), ok))
+    ui.ClosePopup(dialog)
+    ui.Focus(field)
+    Expect(RefEquals(ui.Focused(), field))
+End Function
+
+@Test
+Function TheFocusGoesBackPastAPopupClosedFirst() Throws GraphicsError
+    Local field = TextField()
+    Local ui = Try Opened([field])
+    Defer EndGraphics()
+    ui.Focus(field)
+    Update(ui)
+    Local one = Menu([Button("One")])
+    Local two = Menu([Button("Two")])
+    ui.OpenPopup(one, PopupKind.MODAL)
+    ui.OpenPopup(two, PopupKind.MODAL)
+    ui.ClosePopup(one)
+    ui.ClosePopup(two)
+    Expect(RefEquals(ui.Focused(), field), "the focus went elsewhere")
+End Function
+
+@Test
+Function AModalClosesTheMenusUnderIt() Throws GraphicsError
+    Local ui = Try Opened([Button("Under")])
+    Defer EndGraphics()
+    Local closes = 0
+    ui.OpenPopupAt(Menu([Button("Item")]), Vec2(100, 100), PopupKind.MENU, Function()
+        closes += 1
+    End Function)
+    Local tip = Menu([Button("Tip")])
+    ui.OpenPopupAt(tip, Vec2(200, 100), PopupKind.TIP)
+    Local dialog = Menu([Button("OK")])
+    ui.OpenPopup(dialog, PopupKind.MODAL)
+    Expect(closes == 1 && ui.Popups().Count == 2, "there are {ui.Popups().Count}")
+    Expect(ui.ClosePopup(tip) && ui.ClosePopup(dialog))
+End Function
+
+@Test
+Function PressedButtonsWhatsHoldingItOnly() Throws GraphicsError
+    Local holder = Wheeled()
+    Local ui = Try Opened([holder])
+    Defer EndGraphics()
+    Local at = holder.Box().Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    Update(ui)
+    // It's so as the widget's asked.
+    Try Simulate.MouseDown(MouseButton.RIGHT)
+    Update(ui)
+    Expect(holder.Downs == [MouseButton.RIGHT], "it was {holder.Downs}")
+    Expect(ui.PressedButton() == MouseButton.RIGHT)
+    Try Simulate.MouseUp(MouseButton.RIGHT)
+    Update(ui)
+    Expect(ui.PressedButton() == MouseButton.LEFT, "it stayed {ui.PressedButton()}")
+    // A press nothing takes doesn't leave it.
+    Local other = Holder([])
+    other.SetAnchors(Anchors.Point(1.0, 1.0))
+    ui.Root().Add(other)
+    Update(ui)
+    Local off = other.Box().Center
+    Try Simulate.MoveMouse(off.x, off.y)
+    Try Simulate.Click(MouseButton.MIDDLE)
+    Update(ui)
+    Expect(ui.PressedButton() == MouseButton.LEFT)
+End Function
+
+@Test
+Function TheLeftButtonDoesntTakeWhatTheRightsHolding() Throws GraphicsError
+    Local holder = Holder([MouseButton.RIGHT, MouseButton.LEFT])
+    Local ui = Try Opened([holder])
+    Defer EndGraphics()
+    Local at = holder.Box().Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    Update(ui)
+    Try Simulate.MouseDown(MouseButton.RIGHT)
+    Update(ui)
+    Try Simulate.Click(MouseButton.LEFT)
+    Update(ui)
+    Expect(!holder.Said.Contains("left down"), "it was told {holder.Said}")
+    Expect(ui.PressedButton() == MouseButton.RIGHT && RefEquals(ui.Pressed(), holder))
+    Try Simulate.MouseUp(MouseButton.RIGHT)
+    Update(ui)
+End Function
+
+@Test
+Function EveryFunctionKeyIsAShortcutInAField() Throws GraphicsError
+    Local field = TextField()
+    Local ui = Try Opened([field])
+    Defer EndGraphics()
+    ui.Focus(field)
+    Local seen: Key[] = []
+    ui.SetShortcuts(Function(stroke: Keystroke): Bool
+        seen.Add(stroke.Key)
+        Return True
+    End Function)
+    For key In [Key.F1, Key.F12, Key.F13, Key.F24]
+        Try PressKey(ui, key)
+    End For
+    Expect(seen == [Key.F1, Key.F12, Key.F13, Key.F24], "it saw {seen}")
+End Function
+
+@Test
+Function EscapeGoesToTheTopThatHasTheFocus() Throws GraphicsError
+    Local ui = Try Opened([Button("Under")])
+    Defer EndGraphics()
+    // A MENU over a MODAL, a TIP over that: the menu, then Back; never what's under the modal.
+    Local below = Menu([Button("Below")])
+    Local dialog = Menu([Button("OK")])
+    ui.OpenPopupAt(below, Vec2(10, 10))
+    ui.OpenPopup(dialog, PopupKind.MODAL)
+    Local menu = Menu([Button("Item")])
+    ui.OpenPopupAt(menu, Vec2(100, 100))
+    Local tip = Menu([Button("Tip")])
+    ui.OpenPopupAt(tip, Vec2(200, 100), PopupKind.TIP)
+    Update(ui)
+    Try PressKey(ui, Key.ESCAPE)
+    Expect(!ui.Back() && menu.Parent() == Null, "it didn't close the menu")
+    Try PressKey(ui, Key.ESCAPE)
+    Expect(ui.Back() && dialog.Parent() != Null)
+    Expect(ui.Popups().Count == 2)
+End Function
+
+@Test
+Function AGamepadsEastClosesTheTopMenu() Throws GraphicsError, InputError
+    Local ui = Try Opened([Button("Under")])
+    Defer EndGraphics()
+    Local pad = Try Simulate.ConnectGamepad()
+    Defer pad.Unplug()
+    Update(ui)
+    Local menu = Menu([Button("Item")])
+    ui.OpenPopupAt(menu, Vec2(100, 100))
+    Update(ui)
+    pad.SetButton(GamepadButton.EAST, True)
+    Update(ui)
+    Expect(!ui.Back() && menu.Parent() == Null, "EAST didn't close it")
+    pad.SetButton(GamepadButton.EAST, False)
+    Update(ui)
+    pad.SetButton(GamepadButton.EAST, True)
+    Update(ui)
+    Expect(ui.Back())
+End Function
+
+@Test
+Function TheArrowsStayInAPopupAndStartTheFocusThere() Throws GraphicsError
+    Local under = Button("Under")
+    Local ui = Try Opened([under])
+    Defer EndGraphics()
+    Local first = Button("First")
+    Local second = Button("Second")
+    Local menu = Menu([first, second])
+    ui.OpenPopupAt(menu, Vec2(100, 100))
+    Update(ui)
+    Try PressKey(ui, Key.DOWN)
+    Expect(RefEquals(ui.Focused(), second), "it's elsewhere")
+    // Up past the first, not to what's under it.
+    Try PressKey(ui, Key.UP)
+    Try PressKey(ui, Key.UP)
+    Expect(RefEquals(ui.Focused(), first), "it left the menu")
+    // With nothing focused, in a menu, they start it, as they don't otherwise.
+    ui.Focus(Null)
+    Try PressKey(ui, Key.DOWN)
+    Expect(ui.Focused() != Null, "the arrows didn't start the focus in a menu")
+    ui.ClosePopup(menu)
+    ui.Focus(Null)
+    Try PressKey(ui, Key.DOWN)
+    Expect(ui.Focused() == Null)
+End Function
+
+@Test
+Function WhatAClosedMenuCallsCanCloseOthers() Throws GraphicsError
+    Local ui = Try Opened([Button("Under")])
+    Defer EndGraphics()
+    // The pointer in the middle one, the top one closing the bottom one as it closes.
+    Local bottom = Menu([Button("Bottom")])
+    Local item = Button("Middle")
+    Local middle = Menu([item])
+    ui.OpenPopupAt(bottom, Vec2(10, 200))
+    ui.OpenPopupAt(middle, Vec2(100, 100))
+    ui.OpenPopupAt(Menu([Button("Top")]), Vec2(300, 200), PopupKind.MENU, Function()
+        ui.ClosePopup(bottom)
+    End Function)
+    Update(ui)
+    Local at = item.Box().Center
+    Try ClickAt(ui, at)
+    Expect(item.Clicked(), "the press went astray as what was under it moved")
+    Expect(ui.Popups().Count == 1 && RefEquals(ui.Popups()[0], middle))
+    // With one between, which the press closes too, as the bottom one moves them all down.
+    ui.ClosePopup(middle)
+    Local low = Menu([Button("Low")])
+    Local pressedOn = Button("On")
+    Local on = Menu([pressedOn])
+    Local between = Menu([Button("Between")])
+    ui.OpenPopupAt(low, Vec2(10, 200))
+    ui.OpenPopupAt(on, Vec2(100, 100))
+    ui.OpenPopupAt(between, Vec2(10, 10))
+    ui.OpenPopupAt(Menu([Button("Top")]), Vec2(300, 200), PopupKind.MENU, Function()
+        ui.ClosePopup(low)
+    End Function)
+    Update(ui)
+    Try ClickAt(ui, pressedOn.Box().Center)
+    Expect(pressedOn.Clicked(), "the press went astray")
+    Expect(between.Parent() == Null, "what's over what was pressed stayed open")
+    Expect(ui.Popups().Count == 1 && RefEquals(ui.Popups()[0], on))
+    ui.ClosePopup(on)
+    ui.OpenPopupAt(middle, Vec2(100, 100))
+    // Outside everything, with one closing all the others.
+    Local other = Menu([Button("Other")])
+    ui.OpenPopupAt(other, Vec2(300, 200), PopupKind.MENU, Function()
+        ui.ClosePopup(middle)
+    End Function)
+    Update(ui)
+    Try ClickAt(ui, Vec2(390, 290))
+    Expect(ui.Popups().Count == 0)
+End Function
+
+@Test
+Function APopupsStateIsItsPointersThatUpdate() Throws GraphicsError
+    Local ui = Try Opened([Button("Under")])
+    Defer EndGraphics()
+    Local item = Button("Item")
+    item.SetSize(100.0, 40.0)
+    ui.OpenPopupAt(Menu([item]), Vec2(200, 100), PopupKind.MENU)
+    Update(ui)
+    ui.Focus(Null)
+    Update(ui)
+    Expect(item.State() == WidgetState.NORMAL, "it's {item.State()}")
+    // In the Update that reads the pointer there, as the tree's are, not the one after.
+    Try Simulate.MoveMouse(item.Box().Center.x, item.Box().Center.y)
+    Update(ui)
+    Expect(item.State() == WidgetState.HOVERED, "it's {item.State()}")
+End Function

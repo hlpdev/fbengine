@@ -1,0 +1,295 @@
+// What's drawn over a scene and isn't in it: a grid, and the handles that move, turn, and scale
+// what's selected, in a World of their own, drawn after the scene into the same texture; and the
+// sums a handle's dragged by, which don't need any of that.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+
+/// What dragging a handle does.
+Public Enum HandleTool
+    MOVE
+    TURN
+    SCALE
+End Enum
+
+/// Which space a handle's axes are in.
+Public Enum HandleSpace
+    WORLD
+    /// The last selected's own.
+    LOCAL
+End Enum
+
+/// How close, in the UI's units, the pointer has to be to a handle to have it.
+Public Const HANDLE_REACH: Float = 8.0
+
+/// How long a handle is, in the UI's units.
+Public Const HANDLE_LENGTH: Float = 110.0
+
+/// `value` to the nearest of `step`, or as it is with a step of 0.
+Public Function Snapped(value: Float, step: Float): Float
+    If step <= 0 Then Return value
+    Return Round(value / step) * step
+End Function
+
+/// How far along the line from `origin` through `axis`, a unit long, is the nearest it gets to the
+/// ray from `from` along `way`; Null if they're near enough parallel, under about 1.8 degrees apart,
+/// that it could be anywhere, or that nearest place is behind where the ray starts.
+Public Function AlongAxis(origin: Vec3, axis: Vec3, from: Vec3, way: Vec3): Float?
+    Local across = origin - from
+    Local a = Dot(axis, way)
+    Local b = Dot(way, way)
+    Local bottom = Dot(axis, axis) * b - a * a
+    If bottom < 0.001 * Dot(axis, axis) * b Then Return Null
+    Local along = (a * Dot(way, across) - b * Dot(axis, across)) / bottom
+    Local onRay = Dot(way, across + axis * along) / b
+    Return onRay > 0 ? along : Null
+End Function
+
+/// Where the line from `from` through `way` meets the plane through `point` facing `normal`, or
+/// Null for one that's as good as along it.
+Public Function OnPlane(point: Vec3, normal: Vec3, from: Vec3, way: Vec3): Vec3?
+    Local facing = Dot(normal, Normalize(way))
+    If Abs(facing) < 0.02 Then Return Null
+    Return from + way * (Dot(normal, point - from) / Dot(normal, way))
+End Function
+
+/// The angle from `start` to `now`, seen around `axis`, by the right-hand rule, -Pi to Pi.
+Public Function AngleAround(axis: Vec3, start: Vec3, now: Vec3): Float
+    Return Atan2(Dot(Cross(start, now), axis), Dot(start, now))
+End Function
+
+/// How far `point` is from the line from `a` to `b`, in a plane.
+Public Function FromSegment(point: Vec2, a: Vec2, b: Vec2): Float
+    Local along = b - a
+    Local length = Dot(along, along)
+    Local part = length > 0 ? Clamp(Dot(point - a, along) / length, 0.0, 1.0) : 0.0
+    Return Length(point - (a + along * part))
+End Function
+
+/// The axes of `space`, for a rotation of `turned`: X, Y, and Z in the world, or as it's turned.
+Public Function AxesOf(space: HandleSpace, turned: Quat): Vec3[]
+    If space == HandleSpace.WORLD Then Return [Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0, 1)]
+    Return [turned * Vec3(1, 0, 0), turned * Vec3(0, 1, 0), turned * Vec3(0, 0, 1)]
+End Function
+
+// A flat ring around Y, of a radius of 1, `width` across.
+Function Ring(width: Float): Geometry
+    Local ring = Geometry()
+    Local surface = ring.AddSurface()
+    Local count = 64
+    For i = 0 To count - 1
+        Local angle = (i As Float) / (count As Float) * 2 * Pi
+        Local x = Cos(angle)
+        Local z = Sin(angle)
+        surface.AddVertex(Vec3(x * (1 - width), 0, z * (1 - width)))
+        surface.AddVertex(Vec3(x * (1 + width), 0, z * (1 + width)))
+    End For
+    For i = 0 To count - 1
+        Local next = (i + 1) % count
+        surface.AddTriangles([i * 2, i * 2 + 1, next * 2, next * 2, i * 2 + 1, next * 2 + 1])
+    End For
+    Return ring
+End Function
+
+// Lines on the ground, `apart`, `lines` of them each way from the middle, `width` across.
+Function GridLines(lines: Int, apart: Float, width: Float): Geometry
+    Local grid = Geometry()
+    Local surface = grid.AddSurface()
+    Local reach = (lines As Float) * apart
+    Local half = width / 2
+    For i = -lines To lines
+        Local at = (i As Float) * apart
+        For across In [True, False]
+            Local a = across ? Vec3(-reach, 0, at - half) : Vec3(at - half, 0, -reach)
+            Local b = across ? Vec3(reach, 0, at - half) : Vec3(at - half, 0, reach)
+            Local c = across ? Vec3(reach, 0, at + half) : Vec3(at + half, 0, reach)
+            Local d = across ? Vec3(-reach, 0, at + half) : Vec3(at + half, 0, -reach)
+            Local first = surface.AddVertex(a)
+            surface.AddVertex(b)
+            surface.AddVertex(c)
+            surface.AddVertex(d)
+            surface.AddTriangles([first, first + 1, first + 2, first, first + 2, first + 3])
+        End For
+    End For
+    Return grid
+End Function
+
+// What it's drawn in, unlit, whichever way it faces: over the scene if `over`.
+Function Flat(color: Color, over: Bool): Material
+    Local material = Material(color)
+    material.SetShading(Shading.UNLIT)
+    material.SetTwoSided(True)
+    If over Then material.SetOrder(1)
+    If color.a < 1 Then material.SetBlend(Blend.ALPHA)
+    Return material
+End Function
+
+/// The World of what's over a scene, and the camera that sees it as the scene's sees the scene.
+Public Final Class Overlay
+    /// What's in it.
+    Public ReadOnly Field Stage: World
+    /// What sees it.
+    Public ReadOnly Field Viewer: Camera
+    /// The grid, on the ground: its fine lines, and every tenth.
+    Public ReadOnly Field Grid: Entity
+    Field fine: Mesh
+    Field coarse: Mesh
+    // The handles of each tool, as X, Y, and Z, and a tool's own: its middle.
+    Field arrows: Pivot
+    Field rings: Pivot
+    Field scales: Pivot
+    Field materials: Material[] = []
+    Field colors: Color[] = []
+    // What marks what's selected, and what has no mesh of its own to see: a mesh each, kept to use
+    // again, and what they're drawn in.
+    Field marks: Mesh[] = []
+    Field block: Geometry
+    Field marking: Material
+    Field outlining: Material
+
+    Public New(back: World)
+        Stage = World()
+        World.SetCurrent(Stage)
+        Stage.SetAmbientLight(Color(1, 1, 1))
+        Viewer = Camera()
+        Viewer.SetClear(False, False)
+        Grid = Pivot()
+        fine = Mesh(GridLines(20, 1, 0.012), Grid)
+        fine.SetMaterial(Flat(Color(0.5, 0.5, 0.55, 0.35), False))
+        coarse = Mesh(GridLines(3, 10, 0.04), Grid)
+        coarse.SetMaterial(Flat(Color(0.7, 0.7, 0.75, 0.6), False))
+        block = Geometry.Cube()
+        marking = Wire(Color(0.6, 0.6, 0.65), False)
+        outlining = Wire(Color(1, 0.6, 0.15), True)
+        arrows = Pivot()
+        rings = Pivot()
+        scales = Pivot()
+        colors = [Color(0.95, 0.25, 0.25), Color(0.3, 0.85, 0.3), Color(0.3, 0.5, 1.0),
+                  Color(0.9, 0.9, 0.9)]
+        For color In colors
+            materials.Add(Flat(color, True))
+        End For
+        Local stem = Geometry.Cylinder(12)
+        Local tip = Geometry.Cone(16)
+        Local ring = Ring(0.012)
+        // Up Y, as the shapes are; then each turned to its axis.
+        Local turns = [Quat.FromAxisAngle(Vec3(0, 0, 1), -Pi / 2), Quat.Identity,
+                       Quat.FromAxisAngle(Vec3(1, 0, 0), Pi / 2)]
+        For i = 0 To 2
+            Local arrow = Pivot(arrows)
+            arrow.SetRotation(turns[i])
+            Shaped(stem, arrow, materials[i], Vec3(0, 0.45, 0), Vec3(0.012, 0.45, 0.012))
+            Shaped(tip, arrow, materials[i], Vec3(0, 0.95, 0), Vec3(0.05, 0.1, 0.05))
+            Local scale = Pivot(scales)
+            scale.SetRotation(turns[i])
+            Shaped(stem, scale, materials[i], Vec3(0, 0.45, 0), Vec3(0.012, 0.45, 0.012))
+            Shaped(block, scale, materials[i], Vec3(0, 0.95, 0), Vec3(0.045, 0.045, 0.045))
+            Local around = Pivot(rings)
+            around.SetRotation(turns[i])
+            Shaped(ring, around, materials[i], Vec3(0, 0, 0), Vec3(1, 1, 1))
+        End For
+        Shaped(block, scales, materials[3], Vec3(0, 0, 0), Vec3(0.06, 0.06, 0.06))
+        World.SetCurrent(back)
+    End New
+
+    /// Frees it and all that's in it.
+    Public Method Free()
+        Stage.Free()
+    End Method
+
+    /// Shows `tool`'s handles at `at`, turned by `turned`, `size` long; or none with Null.
+    Public Method ShowHandles(tool: HandleTool?, at: Vec3, turned: Quat, size: Float)
+        Local shown = [(arrows, HandleTool.MOVE), (rings, HandleTool.TURN),
+                       (scales, HandleTool.SCALE)]
+        For each In shown
+            Local handles, mine = each
+            If tool == mine
+                handles.Show()
+                handles.SetPosition(at)
+                handles.SetRotation(turned)
+                handles.SetScale(Vec3(size, size, size))
+            Else
+                handles.Hide()
+            End If
+        End For
+    End Method
+
+    /// Shows handle `axis` brighter as it's under the pointer, 0 to 2 for X, Y, and Z, and 3 for
+    /// the middle; -1 for none.
+    Public Method SetLit(axis: Int)
+        For i = 0 To materials.Count - 1
+            materials[i].SetColor(i == axis ? Color(1, 0.9, 0.2) : colors[i])
+        End For
+    End Method
+
+    /// Marks what's in `entities` that shows: what has no mesh, as a small box at its place, and what
+    /// `selected` says, in its own shape, however far behind something it is. Says how many it marked.
+    Public Method ShowMarks(entities: Entity[], selected: Func(Entity): Bool): Int
+        Local used = 0
+        For entity In entities
+            Local mesh = entity As? Mesh
+            Local chosen = selected(entity)
+            If (HasSurface(entity) && !chosen) || HiddenUnder(entity) Then Continue
+            Local mark = MarkAt(used)
+            used += 1
+            mark.Show()
+            mark.SetGeometry(mesh != Null ? mesh.Geometry() : block)
+            mark.SetMaterial(chosen ? outlining : marking)
+            mark.SetPosition(entity.Position(Space.WORLD))
+            mark.SetRotation(entity.Rotation(Space.WORLD))
+            mark.SetScale(mesh != Null ? entity.Scale(Space.WORLD) : Vec3(0.15, 0.15, 0.15))
+        End For
+        For i = used To marks.Count - 1
+            marks[i].Hide()
+        End For
+        Return used
+    End Method
+
+    Method MarkAt(index: Int): Mesh
+        If index < marks.Count Then Return marks[index]
+        Local back = World.Current()
+        World.SetCurrent(Stage)
+        Local made = Mesh(block)
+        World.SetCurrent(back)
+        marks.Add(made)
+        Return made
+    End Method
+
+    /// The grid under where the camera is, on the tenths, so it goes on as far as it's flown.
+    Public Method FollowCamera(at: Vec3)
+        Grid.SetPosition(Vec3(Round(at.x / 10) * 10, 0, Round(at.z / 10) * 10))
+    End Method
+End Class
+
+/// Whether `entity` is seen, and picked, by a surface of its own, not by a mark at its place.
+Public Function HasSurface(entity: Entity): Bool
+    Local kind = entity.Kind()
+    Return kind == EntityKind.MESH || kind == EntityKind.PLANE || kind == EntityKind.TERRAIN
+End Function
+
+// Whether `entity` is hidden, by itself or what it's in.
+Package Function HiddenUnder(entity: Entity): Bool
+    Local at: Entity? = entity
+    While at != Null
+        If at.Hidden() Then Return True
+        at = at.Parent()
+    End While
+    Return False
+End Function
+
+// Lines of what it's on, over the scene if `over`.
+Function Wire(color: Color, over: Bool): Material
+    Local material = Flat(color, over)
+    material.SetWireframe(True)
+    Return material
+End Function
+
+// A shape of `geometry` under `parent`.
+Function Shaped(geometry: Geometry, parent: Entity, material: Material, at: Vec3, size: Vec3)
+    Local mesh = Mesh(geometry, parent)
+    mesh.SetMaterial(material)
+    mesh.SetPosition(at)
+    mesh.SetScale(size)
+End Function

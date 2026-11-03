@@ -17,6 +17,18 @@ Public Const FBE_INPUT_MOD_SUPER: Int32 = 8
     Public Field cursor: Int32
 End Struct
 
+Public Const FBE_INPUT_CURSOR_ARROW: Int32 = 0
+Public Const FBE_INPUT_CURSOR_TEXT: Int32 = 1
+Public Const FBE_INPUT_CURSOR_WAIT: Int32 = 2
+Public Const FBE_INPUT_CURSOR_CROSSHAIR: Int32 = 3
+Public Const FBE_INPUT_CURSOR_HAND: Int32 = 4
+Public Const FBE_INPUT_CURSOR_MOVE: Int32 = 5
+Public Const FBE_INPUT_CURSOR_RESIZE_EW: Int32 = 6
+Public Const FBE_INPUT_CURSOR_RESIZE_NS: Int32 = 7
+Public Const FBE_INPUT_CURSOR_RESIZE_NWSE: Int32 = 8
+Public Const FBE_INPUT_CURSOR_RESIZE_NESW: Int32 = 9
+Public Const FBE_INPUT_CURSOR_NOT_ALLOWED: Int32 = 10
+
 Public Extern "C" Lib "fbengine_native"
     Function fbe_input_key_down(key: Int32): Bool
     Function fbe_input_key_hits(key: Int32): Int32
@@ -58,6 +70,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_input_move_mouse(x: Float32, y: Float32): Bool
     Function fbe_input_set_cursor_visible(visible: Bool)
     Function fbe_input_cursor_visible(): Bool
+    Function fbe_input_set_cursor(cursor: Int32): Bool
+    Function fbe_input_cursor(): Int32
     Function fbe_input_set_mouse_relative(relative: Bool): Bool
     Function fbe_input_mouse_relative(): Bool
     Function fbe_input_gamepad_count(): Int32

@@ -58,6 +58,25 @@ FBE_API float fbe_window_scale(void);
 FBE_API bool fbe_window_set_mode(int32_t mode);
 FBE_API int32_t fbe_window_mode(void);
 
+// Where the window's top left is on the desktop, in its units, 0 without a window.
+FBE_API int32_t fbe_window_x(void);
+FBE_API int32_t fbe_window_y(void);
+
+// Moves the window, if the desktop lets it, or sizes a windowed one, more than 0 each way, in the
+// desktop's units; false, saying why, without a window, for a fullscreen one's size, or if the OS
+// won't size it.
+FBE_API bool fbe_window_set_position(int32_t x, int32_t y);
+FBE_API bool fbe_window_set_size(int32_t width, int32_t height);
+
+// Whether a window there, that big, would be on a display, at least a little of it.
+FBE_API bool fbe_window_place_shows(int32_t x, int32_t y, int32_t width, int32_t height);
+
+// The least the window can be sized to, by a person or by a call, in the desktop's units, 0 for no
+// least; false, saying why, without a window, or if the OS refuses.
+FBE_API bool fbe_window_set_minimum_size(int32_t width, int32_t height);
+FBE_API int32_t fbe_window_minimum_width(void);
+FBE_API int32_t fbe_window_minimum_height(void);
+
 // Whether the window can be resized, which can be set before it's open.
 FBE_API void fbe_window_set_resizable(bool resizable);
 FBE_API bool fbe_window_resizable(void);

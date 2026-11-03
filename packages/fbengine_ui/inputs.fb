@@ -438,6 +438,8 @@ Public Class TextField Extends Widget
         Local ends = mac && stroke.Meta
         Local command = mac ? stroke.Meta : stroke.Control
         Local extending = stroke.Shift
+        // Its own undo, when it has one: nobody else's while the keys are its.
+        If command && stroke.Key == Key.Z Then Return True
         Local from, to = Selection()
         Select stroke.Key
             Case Key.LEFT
