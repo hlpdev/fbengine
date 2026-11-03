@@ -78,7 +78,8 @@ Extend Entity
     @MainThread @PanicsAtCaller
     Public Method Occluder(): Bool => fbe_entity_occluder(Live("Occluder"))
 
-    /// Sets whether a Mesh or Terrain casts shadows, when it's opaque or cut out, in order 0, as
+    /// Sets whether a Mesh, Instances, or Terrain casts shadows, when it's opaque or cut out, in
+    /// order 0, as
     /// it does at first.
     @MainThread @PanicsAtCaller
     Public Method SetCastsShadows(casts: Bool)

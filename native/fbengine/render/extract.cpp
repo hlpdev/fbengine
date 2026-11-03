@@ -120,7 +120,45 @@ std::array<vec3_t, 8> corners_of(const mat4_t& matrix, vec3_t min, vec3_t max) {
     return corners;
 }
 
+/// The largest of a matrix's axes.
+float largest_axis(const mat4_t& matrix) {
+    return std::fmax(std::fmax(scene::length(matrix.axis(0)), scene::length(matrix.axis(1))),
+                     scene::length(matrix.axis(2)));
+}
+
 } // namespace
+
+std::uint32_t mesh_lod(const scene::mesh_t& mesh, const mat4_t& matrix,
+                       const scene::tweened_t& tweened, const camera_t& camera,
+                       const scene::view_t& view) {
+    const scene::geometry_t& geometry = scene::scene().geometries[mesh.geometry];
+    if (geometry.lods.empty()) {
+        return mesh.geometry;
+    }
+    vec3_t min = geometry.cull_min;
+    vec3_t max = geometry.cull_max;
+    if (!geometry.has_cull_box) {
+        scene::geometry_bounds(mesh.geometry, min, max);
+        anim::grow_by_targets(mesh.geometry, anim::morph_weights(mesh.entity, tweened.tween()), min,
+                              max);
+    }
+    const vec3_t both = min + max;
+    vec3_t center = scene::transform_point(matrix, both * 0.5F);
+    // Skinned, it's where its joints are.
+    vec3_t joints_min;
+    vec3_t joints_max;
+    if (!geometry.has_cull_box &&
+        anim::skin_joints_box(mesh.entity, tweened, joints_min, joints_max)) {
+        const vec3_t both_joints = joints_min + joints_max;
+        center = both_joints * 0.5F;
+    }
+    float half_width = 0.0F;
+    float half_height = 0.0F;
+    scene::half_extents(camera, view, half_width, half_height);
+    return scene::lod_for(mesh.geometry, center,
+                          scene::length(max - min) * 0.5F * largest_axis(matrix), camera,
+                          view.position, half_height);
+}
 
 std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
                             const scene::tweened_t& tweened) {
@@ -131,6 +169,10 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
     float half_height = 0.0F;
     scene::half_extents(camera, view, half_width, half_height);
     const bool occludes = camera.occlusion && fill_occlusion(camera, view, tweened, frustum);
+    // What's in another material order doesn't meet depth, so nothing's in front of it.
+    const auto meets_depth = [&s](std::uint32_t material) {
+        return material == none || s.materials[material].order == 0;
+    };
     std::vector<item_t> items;
     items.reserve(s.meshes.size() + s.sprites.size() + s.particles.size() + s.planes.size() +
                   s.terrains.size() + s.instances.size());
@@ -162,25 +204,16 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         vec3_t joints_max;
         if (!geometry.has_cull_box &&
             anim::skin_joints_box(mesh.entity, tweened, joints_min, joints_max)) {
-            const float most =
-                std::fmax(std::fmax(scene::length(matrix.axis(0)), scene::length(matrix.axis(1))),
-                          scene::length(matrix.axis(2)));
-            const float reach = scene::length(max - min) * most;
+            const float reach = scene::length(max - min) * largest_axis(matrix);
             const vec3_t grown(reach, reach, reach);
             corners = corners_of(mat4_t(), joints_min - grown, joints_max + grown);
         }
-        if (!scene::in_frustum(frustum, corners.data(), corners.size()) ||
-            (occludes && occluded(corners.data(), corners.size()))) {
+        if (!scene::in_frustum(frustum, corners.data(), corners.size())) {
             continue;
         }
+        const bool behind = occludes && occluded(corners.data(), corners.size());
         // What its size in the view has it draw, of its levels of detail.
-        const vec3_t both = min + max;
-        const float mesh_scale =
-            std::fmax(std::fmax(scene::length(matrix.axis(0)), scene::length(matrix.axis(1))),
-                      scene::length(matrix.axis(2)));
-        const std::uint32_t drawn = scene::lod_for(
-            mesh.geometry, scene::transform_point(matrix, both * 0.5F),
-            scene::length(max - min) * 0.5F * mesh_scale, camera, frustum.eye, half_height);
+        const std::uint32_t drawn = mesh_lod(mesh, matrix, tweened, camera, view);
         if (drawn == none) {
             continue;
         }
@@ -191,6 +224,9 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
             }
             const std::uint32_t material =
                 mesh.material != none ? mesh.material : surfaces[surface].material;
+            if (behind && meets_depth(material)) {
+                continue;
+            }
             item_t item = item_of(mesh.entity, material, matrix, mesh.tint, fade, frustum);
             item.draw.geometry = s.geometry_slots.handle(drawn);
             item.draw.surface = static_cast<std::int32_t>(surface);
@@ -213,7 +249,7 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         if (!scene::box_in_frustum(frustum, min, max)) {
             continue;
         }
-        if (occludes) {
+        if (occludes && meets_depth(sprite.material)) {
             const std::array<vec3_t, 8> corners = corners_of(mat4_t(), min, max);
             if (occluded(corners.data(), corners.size())) {
                 continue;
@@ -234,7 +270,7 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
             !scene::box_in_frustum(frustum, min, max)) {
             continue;
         }
-        if (occludes) {
+        if (occludes && meets_depth(particles.material)) {
             const std::array<vec3_t, 8> corners = corners_of(mat4_t(), min, max);
             if (occluded(corners.data(), corners.size())) {
                 continue;
@@ -264,25 +300,34 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         }
         const mat4_t matrix = tweened.pose(found.entity).matrix;
         const std::array<vec3_t, 8> corners = corners_of(matrix, min, max);
-        if (!scene::in_frustum(frustum, corners.data(), corners.size()) ||
-            (occludes && occluded(corners.data(), corners.size()))) {
+        if (!scene::in_frustum(frustum, corners.data(), corners.size())) {
             continue;
         }
+        const bool behind = occludes && occluded(corners.data(), corners.size());
         const std::array<float, 4> white{ 1.0F, 1.0F, 1.0F, 1.0F };
-        const std::vector<scene::surface_t>& surfaces = s.geometries[found.geometry].surfaces;
         const vec3_t both = min + max;
         const vec3_t middle = scene::transform_point(matrix, both * 0.5F);
-        for (std::size_t surface = 0; surface < surfaces.size(); ++surface) {
-            if (surfaces[surface].indices.empty()) {
-                continue;
+        for (const std::uint32_t level :
+             scene::instances_levels(found, matrix, camera, frustum.eye, half_height)) {
+            const std::vector<scene::surface_t>& surfaces = s.geometries[level].surfaces;
+            for (std::size_t surface = 0; surface < surfaces.size(); ++surface) {
+                if (surfaces[surface].indices.empty()) {
+                    continue;
+                }
+                const std::uint32_t material =
+                    found.material != none ? found.material : surfaces[surface].material;
+                if (behind && meets_depth(material)) {
+                    continue;
+                }
+                item_t item = item_of(found.entity, material, matrix, white, fade, frustum);
+                // Any of them with an alpha has them all blend, unless its material says.
+                item.draw.blend = scene::drawn_blend(material, found.faded != 0 ? 0.5F : fade);
+                item.blended = item.draw.blend != FBE_BLEND_OPAQUE;
+                item.draw.geometry = s.geometry_slots.handle(level);
+                item.draw.surface = static_cast<std::int32_t>(surface);
+                item.draw.depth = scene::dot(middle - frustum.eye, frustum.normals[0]);
+                items.push_back(item);
             }
-            const std::uint32_t material =
-                found.material != none ? found.material : surfaces[surface].material;
-            item_t item = item_of(found.entity, material, matrix, white, fade, frustum);
-            item.draw.geometry = s.geometry_slots.handle(found.geometry);
-            item.draw.surface = static_cast<std::int32_t>(surface);
-            item.draw.depth = scene::dot(middle - frustum.eye, frustum.normals[0]);
-            items.push_back(item);
         }
     }
     for (const scene::plane_t& plane : s.planes) {
@@ -310,7 +355,8 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         scene::terrain_bounds(terrain, min, max);
         const std::array<vec3_t, 8> corners = corners_of(matrix, min, max);
         if (!scene::in_frustum(frustum, corners.data(), corners.size()) ||
-            (occludes && occluded(corners.data(), corners.size()))) {
+            (occludes && meets_depth(terrain.material) &&
+             occluded(corners.data(), corners.size()))) {
             continue;
         }
         item_t item =

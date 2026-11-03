@@ -577,9 +577,16 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             std::ranges::copy(item.draw.matrix, world.m.begin());
             // What's in view of its clusters, those one after another going together.
             batch_t* running = nullptr;
+            const auto level = s.geometry_slots.find(item.draw.geometry);
+            float half_width = 0.0F;
+            float half_height = 0.0F;
+            scene::half_extents(camera, view, half_width, half_height);
             for (const scene::instance_cluster_t& cluster : scene::instance_clusters(found)) {
                 const std::array<vec3_t, 8> corners = cluster_corners(world, cluster);
-                if (!scene::in_frustum(frustum, corners.data(), corners.size())) {
+                if (!scene::in_frustum(frustum, corners.data(), corners.size()) ||
+                    !level.has_value() ||
+                    scene::cluster_lod(found, cluster, world, camera, frustum.eye, half_height) !=
+                        *level) {
                     running = nullptr;
                     continue;
                 }

@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -38,6 +39,9 @@ vec3_t place_of(const fbe_instance_t& instance) {
 /// Puts instances in an order where those near each other are together: along a curve through
 /// their places, as Morton's goes through a grid.
 void put_in_order(instances_t& found, const fbe_instance_t* given, std::size_t count) {
+    std::vector<fbe_instance_t> items(count);
+    std::vector<std::uint32_t> slots(count);
+    std::vector<std::uint32_t> indices(count);
     vec3_t low(0.0F, 0.0F, 0.0F);
     vec3_t high(0.0F, 0.0F, 0.0F);
     for (std::size_t i = 0; i < count; ++i) {
@@ -52,7 +56,10 @@ void put_in_order(instances_t& found, const fbe_instance_t* given, std::size_t c
     const auto part = [](float at, float from, float to) {
         const float wide = to - from;
         const float along = wide > 0.0F ? (at - from) / wide : 0.0F;
-        return static_cast<std::uint32_t>(std::clamp(along, 0.0F, 1.0F) * 1023.0F);
+        // What's no number or goes on forever is somewhere: its order's all that hangs on it.
+        return std::isfinite(along)
+                   ? static_cast<std::uint32_t>(std::clamp(along, 0.0F, 1.0F) * 1023.0F)
+                   : 0U;
     };
     std::vector<std::pair<std::uint32_t, std::uint32_t>> order(count);
     for (std::size_t i = 0; i < count; ++i) {
@@ -63,14 +70,49 @@ void put_in_order(instances_t& found, const fbe_instance_t* given, std::size_t c
                      static_cast<std::uint32_t>(i) };
     }
     std::ranges::sort(order);
-    found.items.resize(count);
-    found.slots.resize(count);
-    found.indices.resize(count);
+    std::size_t faded = 0;
     for (std::size_t at = 0; at < count; ++at) {
         const std::uint32_t index = order[at].second;
-        found.items[at] = given[index];
-        found.slots[index] = static_cast<std::uint32_t>(at);
-        found.indices[at] = index;
+        items[at] = given[index];
+        slots[index] = static_cast<std::uint32_t>(at);
+        indices[at] = index;
+        faded += given[index].color.a < 1.0F ? 1U : 0U;
+    }
+    found.items.swap(items);
+    found.slots.swap(slots);
+    found.indices.swap(indices);
+    found.faded = faded;
+}
+
+/// A cluster's box and biggest, from its instances and its geometry's box's middle and half.
+void work_out_cluster(const instances_t& found, instance_cluster_t& cluster, vec3_t middle,
+                      vec3_t reach) {
+    const float geometry_radius = length(reach);
+    cluster.radius = 0.0F;
+    for (std::uint32_t at = cluster.first; at < cluster.first + cluster.count; ++at) {
+        mat4_t matrix;
+        std::ranges::copy(found.items[at].matrix.m, matrix.m.begin());
+        // Its box's middle through the matrix, and how far its corners go from it each way.
+        const vec3_t center = transform_point(matrix, middle);
+        const vec3_t x = matrix.axis(0) * reach.x;
+        const vec3_t y = matrix.axis(1) * reach.y;
+        const vec3_t z = matrix.axis(2) * reach.z;
+        const vec3_t out(std::fabs(x.x) + std::fabs(y.x) + std::fabs(z.x),
+                         std::fabs(x.y) + std::fabs(y.y) + std::fabs(z.y),
+                         std::fabs(x.z) + std::fabs(y.z) + std::fabs(z.z));
+        const vec3_t from = center - out;
+        const vec3_t to = center + out;
+        cluster.low = at == cluster.first ? from
+                                          : vec3_t(std::fmin(cluster.low.x, from.x),
+                                                   std::fmin(cluster.low.y, from.y),
+                                                   std::fmin(cluster.low.z, from.z));
+        cluster.high = at == cluster.first ? to
+                                           : vec3_t(std::fmax(cluster.high.x, to.x),
+                                                    std::fmax(cluster.high.y, to.y),
+                                                    std::fmax(cluster.high.z, to.z));
+        const float scale = std::fmax(std::fmax(length(matrix.axis(0)), length(matrix.axis(1))),
+                                      length(matrix.axis(2)));
+        cluster.radius = std::fmax(cluster.radius, geometry_radius * scale);
     }
 }
 
@@ -115,6 +157,8 @@ void copy_instances(std::uint32_t from, std::uint32_t to) {
     instances_t& copy = s.instances[s.entities.component[to]];
     copy = s.instances[s.entities.component[from]];
     copy.entity = to;
+    copy.all_changed = true;
+    copy.changed.clear();
     if (copy.geometry != none) {
         retain_geometry(copy.geometry);
     }
@@ -124,54 +168,75 @@ void copy_instances(std::uint32_t from, std::uint32_t to) {
 const std::vector<instance_cluster_t>& instance_clusters(instances_t& found) {
     const scene_t& s = scene();
     const std::uint64_t version = found.geometry != none ? s.geometries[found.geometry].version : 0;
-    if (!found.clusters_stale && found.clusters_geometry == found.geometry &&
-        found.clusters_version == version) {
-        return found.clusters;
-    }
-    found.clusters_stale = false;
-    found.clusters_geometry = found.geometry;
-    found.clusters_version = version;
-    found.clusters.clear();
-    if (found.geometry == none) {
+    const bool whole = found.clusters_stale || found.clusters_geometry != found.geometry ||
+                       found.clusters_version != version;
+    if (!whole && found.stale_clusters.empty()) {
         return found.clusters;
     }
     vec3_t low;
     vec3_t high;
-    geometry_bounds(found.geometry, low, high);
+    if (found.geometry != none) {
+        geometry_bounds(found.geometry, low, high);
+    }
     const vec3_t both = low + high;
     const vec3_t across = high - low;
     const vec3_t middle = both * 0.5F;
     const vec3_t reach = across * 0.5F;
-    const auto count = static_cast<std::uint32_t>(found.items.size());
-    for (std::uint32_t first = 0; first < count; first += cluster_size) {
-        instance_cluster_t cluster;
-        cluster.first = first;
-        cluster.count = std::min(cluster_size, count - first);
-        for (std::uint32_t at = first; at < first + cluster.count; ++at) {
-            mat4_t matrix;
-            std::ranges::copy(found.items[at].matrix.m, matrix.m.begin());
-            // Its box's middle through the matrix, and how far its corners go from it each way.
-            const vec3_t center = transform_point(matrix, middle);
-            const vec3_t x = matrix.axis(0) * reach.x;
-            const vec3_t y = matrix.axis(1) * reach.y;
-            const vec3_t z = matrix.axis(2) * reach.z;
-            const vec3_t out(std::fabs(x.x) + std::fabs(y.x) + std::fabs(z.x),
-                             std::fabs(x.y) + std::fabs(y.y) + std::fabs(z.y),
-                             std::fabs(x.z) + std::fabs(y.z) + std::fabs(z.z));
-            const vec3_t from = center - out;
-            const vec3_t to = center + out;
-            cluster.low = at == first ? from
-                                      : vec3_t(std::fmin(cluster.low.x, from.x),
-                                               std::fmin(cluster.low.y, from.y),
-                                               std::fmin(cluster.low.z, from.z));
-            cluster.high = at == first ? to
-                                       : vec3_t(std::fmax(cluster.high.x, to.x),
-                                                std::fmax(cluster.high.y, to.y),
-                                                std::fmax(cluster.high.z, to.z));
+    if (!whole) {
+        for (const std::uint32_t at : found.stale_clusters) {
+            work_out_cluster(found, found.clusters[at], middle, reach);
         }
-        found.clusters.push_back(cluster);
+        found.stale_clusters.clear();
+        return found.clusters;
     }
+    std::vector<instance_cluster_t> clusters;
+    if (found.geometry != none) {
+        const auto count = static_cast<std::uint32_t>(found.items.size());
+        clusters.reserve((count / cluster_size) + 1);
+        for (std::uint32_t first = 0; first < count; first += cluster_size) {
+            instance_cluster_t cluster;
+            cluster.first = first;
+            cluster.count = std::min(cluster_size, count - first);
+            work_out_cluster(found, cluster, middle, reach);
+            clusters.push_back(cluster);
+        }
+    }
+    found.clusters.swap(clusters);
+    found.clusters_stale = false;
+    found.clusters_geometry = found.geometry;
+    found.clusters_version = version;
+    found.stale_clusters.clear();
     return found.clusters;
+}
+
+std::uint32_t cluster_lod(const instances_t& found, const instance_cluster_t& cluster,
+                          const mat4_t& matrix, const camera_t& camera, vec3_t eye,
+                          float half_height) {
+    if (scene().geometries[found.geometry].lods.empty()) {
+        return found.geometry;
+    }
+    const float scale = std::fmax(std::fmax(length(matrix.axis(0)), length(matrix.axis(1))),
+                                  length(matrix.axis(2)));
+    const vec3_t both = cluster.low + cluster.high;
+    const float apart = length(transform_point(matrix, both * 0.5F) - eye) -
+                        (length(cluster.high - cluster.low) * 0.5F * scale);
+    return lod_at(found.geometry, std::fmax(apart, 0.0F), cluster.radius * scale, camera,
+                  half_height);
+}
+
+std::vector<std::uint32_t> instances_levels(instances_t& found, const mat4_t& matrix,
+                                            const camera_t& camera, vec3_t eye, float half_height) {
+    if (scene().geometries[found.geometry].lods.empty()) {
+        return { found.geometry };
+    }
+    std::vector<std::uint32_t> levels;
+    for (const instance_cluster_t& cluster : instance_clusters(found)) {
+        const std::uint32_t level = cluster_lod(found, cluster, matrix, camera, eye, half_height);
+        if (level != none && std::ranges::find(levels, level) == levels.end()) {
+            levels.push_back(level);
+        }
+    }
+    return levels;
 }
 
 bool instances_bounds(instances_t& found, vec3_t& min, vec3_t& max) {
@@ -250,7 +315,7 @@ FBE_API uint64_t fbe_instances_material(uint64_t instances) {
                : 0;
 }
 
-FBE_API bool fbe_instances_set(uint64_t instances, const fbe_instance_t* all, int32_t count) {
+FBE_API bool fbe_instances_set(uint64_t instances, const fbe_instance_t* all, int32_t count) try {
     instances_t* found = fbe::scene::instances_of(instances);
     if (found == nullptr) {
         return false;
@@ -261,8 +326,12 @@ FBE_API bool fbe_instances_set(uint64_t instances, const fbe_instance_t* all, in
     }
     fbe::scene::put_in_order(*found, all, static_cast<std::size_t>(count));
     found->clusters_stale = true;
+    found->all_changed = true;
+    found->changed.clear();
     ++found->version;
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
 FBE_API int32_t fbe_instances_count(uint64_t instances) {
@@ -279,9 +348,35 @@ FBE_API bool fbe_instances_set_one(uint64_t instances, int32_t index, const fbe_
         return fbe::fail(
             std::format("an Instances has {} of them, not one at {}", found->items.size(), index));
     }
-    found->items[found->slots[static_cast<std::size_t>(index)]] = *one;
-    found->clusters_stale = true;
+    const std::uint32_t place = found->slots[static_cast<std::size_t>(index)];
+    found->faded -= found->items[place].color.a < 1.0F ? 1U : 0U;
+    found->faded += one->color.a < 1.0F ? 1U : 0U;
+    found->items[place] = *one;
     ++found->version;
+    // Only what's changed goes again, unless so much has that it may as well all.
+    if (!found->all_changed) {
+        if (found->changed.size() >= found->items.size() / 4) {
+            found->all_changed = true;
+            found->changed.clear();
+        } else {
+            try {
+                found->changed.push_back(place);
+            } catch (const std::bad_alloc&) {
+                found->all_changed = true;
+                found->changed.clear();
+            }
+        }
+    }
+    if (!found->clusters_stale) {
+        const std::uint32_t cluster = place / fbe::scene::cluster_size;
+        if (found->stale_clusters.empty() || found->stale_clusters.back() != cluster) {
+            try {
+                found->stale_clusters.push_back(cluster);
+            } catch (const std::bad_alloc&) {
+                found->clusters_stale = true;
+            }
+        }
+    }
     return true;
 }
 

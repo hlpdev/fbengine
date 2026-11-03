@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <new>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -387,7 +388,7 @@ FBE_API bool fbe_geometry_alive(uint64_t geometry) {
     return scene().geometry_slots.find(geometry).has_value();
 }
 
-FBE_API uint64_t fbe_geometry_clone(uint64_t geometry) {
+FBE_API uint64_t fbe_geometry_clone(uint64_t geometry) try {
     const std::uint32_t slot = geometry_slot(geometry);
     if (slot == none) {
         return 0;
@@ -395,29 +396,33 @@ FBE_API uint64_t fbe_geometry_clone(uint64_t geometry) {
     std::vector<surface_t> surfaces = scene().geometries[slot].surfaces;
     // Its cull box too, read before making the copy moves the geometries.
     const float eye_pull = scene().geometries[slot].eye_pull;
-    const std::vector<fbe::scene::lod_t> lods = scene().geometries[slot].lods;
+    std::vector<fbe::scene::lod_t> lods = scene().geometries[slot].lods;
     const bool has_cull_box = scene().geometries[slot].has_cull_box;
     const fbe::scene::vec3_t cull_min = scene().geometries[slot].cull_min;
     const fbe::scene::vec3_t cull_max = scene().geometries[slot].cull_max;
-    fbe::scene::retain_materials(surfaces);
     const std::uint32_t copy = fbe::scene::make_geometry();
+    fbe::scene::retain_materials(surfaces);
     fbe::scene::geometry_t& made = scene().geometries[copy];
     made.surfaces = std::move(surfaces);
     made.eye_pull = eye_pull;
     made.has_cull_box = has_cull_box;
     made.cull_min = cull_min;
     made.cull_max = cull_max;
-    made.lods = lods;
-    for (const fbe::scene::lod_t& lod : lods) {
+    made.lods = std::move(lods);
+    for (const fbe::scene::lod_t& lod : made.lods) {
         if (lod.geometry != none) {
             fbe::scene::retain_geometry(lod.geometry);
             ++scene().geometries[lod.geometry].lod_uses;
         }
     }
     return scene().geometry_slots.handle(copy);
+} catch (const std::bad_alloc&) {
+    fbe::fail("out of memory");
+    return 0;
 }
 
-FBE_API bool fbe_geometry_set_lod(uint64_t geometry, int32_t level, uint64_t coarser, float share) {
+FBE_API bool fbe_geometry_set_lod(uint64_t geometry, int32_t level, uint64_t coarser,
+                                  float share) try {
     const std::uint32_t slot = geometry_slot(geometry);
     if (slot == none) {
         return false;
@@ -456,6 +461,8 @@ FBE_API bool fbe_geometry_set_lod(uint64_t geometry, int32_t level, uint64_t coa
         ++scene().geometries[coarser_slot].lod_uses;
     }
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
 FBE_API int32_t fbe_geometry_lod_count(uint64_t geometry) {

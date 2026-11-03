@@ -500,7 +500,7 @@ VkDeviceAddress particles_buffer(scene::particles_t& particles) {
     return kept_one.buffer.address;
 }
 
-VkDeviceAddress instances_buffer(const scene::instances_t& instances) {
+VkDeviceAddress instances_buffer(scene::instances_t& instances) {
     if (!registered) {
         gpu::at_stop(stop_buffers);
         registered = true;
@@ -511,6 +511,7 @@ VkDeviceAddress instances_buffer(const scene::instances_t& instances) {
         return kept_one.buffer.address;
     }
     const std::size_t count = std::max<std::size_t>(instances.items.size(), 1);
+    bool all = instances.all_changed;
     if (kept_one.count != count || kept_one.buffer.buffer == VK_NULL_HANDLE) {
         gpu::free_buffer(kept_one.buffer);
         kept_one.buffer =
@@ -520,28 +521,62 @@ VkDeviceAddress instances_buffer(const scene::instances_t& instances) {
             return 0;
         }
         kept_one.count = count;
+        all = true;
     }
-    std::vector<instance_data_t> records;
-    records.reserve(instances.items.size());
-    for (const fbe_instance_t& one : instances.items) {
+    const auto record_of = [](const fbe_instance_t& one) {
         const float* m = one.matrix.m;
         const std::array<float, 4> across{ m[0], m[4], m[8], m[12] };
         const std::array<float, 4> up{ m[1], m[5], m[9], m[13] };
         const std::array<float, 4> back{ m[2], m[6], m[10], m[14] };
-        records.push_back({
+        return instance_data_t{
             .rows = { across, up, back },
             .color = { one.color.r, one.color.g, one.color.b, one.color.a },
-        });
+        };
+    };
+    std::vector<instance_data_t> records;
+    if (all) {
+        records.reserve(instances.items.size());
+        for (const fbe_instance_t& one : instances.items) {
+            records.push_back(record_of(one));
+        }
+        if (!records.empty() &&
+            !gpu::write_buffer(kept_one.buffer, 0, std::as_bytes(std::span(records)))) {
+            return 0;
+        }
+    } else {
+        // Each once, in runs: a million held and one moved sends the one.
+        std::vector<std::uint32_t> places = instances.changed;
+        std::ranges::sort(places);
+        const auto [last, end] = std::ranges::unique(places);
+        places.erase(last, end);
+        records.reserve(places.size());
+        std::vector<VkBufferCopy> regions;
+        for (const std::uint32_t place : places) {
+            if (!regions.empty() && regions.back().dstOffset + regions.back().size ==
+                                        VkDeviceSize{ place } * sizeof(instance_data_t)) {
+                regions.back().size += sizeof(instance_data_t);
+            } else {
+                regions.push_back({
+                    .srcOffset = VkDeviceSize{ records.size() } * sizeof(instance_data_t),
+                    .dstOffset = VkDeviceSize{ place } * sizeof(instance_data_t),
+                    .size = sizeof(instance_data_t),
+                });
+            }
+            records.push_back(record_of(instances.items[place]));
+        }
+        if (!gpu::write_buffer_regions(kept_one.buffer, std::as_bytes(std::span(records)),
+                                       regions)) {
+            return 0;
+        }
     }
-    if (!records.empty() &&
-        !gpu::write_buffer(kept_one.buffer, 0, std::as_bytes(std::span(records)))) {
-        return 0;
-    }
+    instances.all_changed = false;
+    instances.changed.clear();
     kept_one.version = instances.version;
     return kept_one.buffer.address;
 }
 
 void forget_freed_geometries() {
+    forget_freed_occluders();
     const scene::scene_t& s = scene::scene();
     for (auto it = kept_instances().begin(); it != kept_instances().end();) {
         if (!s.entities.slots.find(it->first)) {

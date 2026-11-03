@@ -3,7 +3,8 @@
 
 // Drawing the scene: what each camera draws, and what lights it, read from the scene into lists
 // once a frame, so drawing never reads the live scene, and a render thread could take drawing
-// over without the API changing.
+// over without the API changing. Meshes, sprites, emitters, Instances, ground planes, and terrains
+// it might see go in them, past what's wholly behind its occluders, in material order 0.
 
 #include "../core/fbe_core.h"
 

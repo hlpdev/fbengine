@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <new>
 
 namespace fbe::scene {
 
@@ -90,7 +91,7 @@ using fbe::scene::vec3_t;
 
 extern "C" {
 
-FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds) {
+FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds) try {
     const std::uint32_t slot = entity_slot(entity);
     if (slot == none) {
         return false;
@@ -139,6 +140,8 @@ FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds) {
     }
     *bounds = { .min = fbe::scene::c_vec(min), .max = fbe::scene::c_vec(max) };
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
 FBE_API bool fbe_entity_set_occluder(uint64_t entity, bool occluder) {

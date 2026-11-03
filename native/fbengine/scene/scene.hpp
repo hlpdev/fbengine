@@ -128,14 +128,15 @@ struct material_t {
     std::array<layer_t, FBE_MATERIAL_LAYERS> layers{};
 };
 
-/// A geometry: surfaces, shared by every mesh drawing it. It lives while the FB side holds its
-/// handle or a mesh draws it, which its references count.
+/// A level of detail of a geometry.
 struct lod_t {
     /// The geometry it draws, by slot, which it holds, or none for nothing.
     std::uint32_t geometry = none;
     float share = 0.0F;
 };
 
+/// A geometry: surfaces, shared by every mesh drawing it. It lives while the FB side holds its
+/// handle or a mesh draws it, which its references count.
 struct geometry_t {
     std::vector<surface_t> surfaces;
     /// How much of its way to the eye it's drawn nearer, as a decal on a terrain is, so what it's
@@ -299,6 +300,8 @@ struct instance_cluster_t {
     std::uint32_t count = 0;
     vec3_t low;
     vec3_t high;
+    /// The biggest sphere one of them is in, which is what its size in a view goes by.
+    float radius = 0.0F;
 };
 
 /// An Instances entity: what it draws, in, and its instances, in an order where those near each
@@ -316,6 +319,13 @@ struct instances_t {
     std::uint32_t clusters_geometry = none;
     std::uint64_t clusters_version = 0;
     bool clusters_stale = true;
+    /// Which clusters have changed, if not all of them have.
+    std::vector<std::uint32_t> stale_clusters;
+    /// How many of them have an alpha under 1.
+    std::size_t faded = 0;
+    /// Where in `items` they've changed since they went to the GPU, if not all of them have.
+    std::vector<std::uint32_t> changed;
+    bool all_changed = true;
 };
 
 /// Every entity's data, a field to an array, indexed by slot.
@@ -562,11 +572,22 @@ void copy_instances(std::uint32_t from, std::uint32_t to);
 const std::vector<instance_cluster_t>& instance_clusters(instances_t& found);
 /// The box its instances are in, in its space: false for none.
 bool instances_bounds(instances_t& found, vec3_t& min, vec3_t& max);
+/// Which of its geometry's levels of detail a cluster draws, by the size of the biggest of it where
+/// it's nearest, none for nothing.
+std::uint32_t cluster_lod(const instances_t& found, const instance_cluster_t& cluster,
+                          const mat4_t& matrix, const camera_t& camera, vec3_t eye,
+                          float half_height);
+/// The levels some cluster of it draws.
+std::vector<std::uint32_t> instances_levels(instances_t& found, const mat4_t& matrix,
+                                            const camera_t& camera, vec3_t eye, float half_height);
 /// The geometry to draw of one with levels of detail, by slot, or none for nothing, at a place and
 /// size in the world, from an eye, by how the camera's view spreads: half its height at a depth of
 /// 1, or in world units.
 std::uint32_t lod_for(std::uint32_t geometry, vec3_t center, float radius, const camera_t& camera,
                       vec3_t eye, float half_height);
+/// As lod_for, at a distance from the eye.
+std::uint32_t lod_at(std::uint32_t geometry, float distance, float radius, const camera_t& camera,
+                     float half_height);
 /// The live particle emitter a handle is for, or null, with fbe_error saying so.
 particles_t* particles_of(std::uint64_t handle);
 void add_particles(std::uint32_t entity);

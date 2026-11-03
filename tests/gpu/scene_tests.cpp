@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <numbers>
 #include <span>
 #include <utility>
@@ -4795,13 +4796,6 @@ TEST_CASE("a mesh draws what its size in the view has it, of its geometry's leve
         require(fbe_camera_set_target(scene.camera, scene.target));
         fbe_texture_release(small);
     }
-    SECTION("its shadow's the level's too, and past the last, none") {
-        const std::uint64_t behind = wall(scene.world, -90.0F, 200.0F, fine_paint);
-        (void)behind;
-        require(fbe_camera_set_range(scene.camera, 0.5F, 400.0F));
-        (void)scene.drawn();
-        CHECK(fbe_gpu_validation_errors() == 0);
-    }
     SECTION("its levels go, and it's itself") {
         require(fbe_geometry_clear_lods(fine));
         CHECK(fbe_geometry_lod_count(fine) == 0);
@@ -5018,10 +5012,20 @@ TEST_CASE("culling by occluders changes no pixel", "[gpu][scene]") {
         return static_cast<float>(state >> 8U) / 16777216.0F;
     };
     int culled_scenes = 0;
-    for (int round = 0; round < 24; ++round) {
+    const std::uint64_t round_geometry = fbe_geometry_cylinder(16, true);
+    const std::uint64_t ball_geometry = fbe_geometry_sphere(12);
+    for (int round = 0; round < 32; ++round) {
         const scene_t scene;
         require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
         require(fbe_camera_set_range(scene.camera, 0.5F, 200.0F));
+        // Seen flat, and across a mirror, some of them.
+        if (round % 4 == 1) {
+            require(fbe_camera_set_projection(scene.camera, FBE_PROJECTION_ORTHOGRAPHIC));
+            require(fbe_camera_set_orthographic_height(scene.camera, 30.0F));
+        }
+        if (round % 4 == 2) {
+            wall_mirror(scene.world, -45.0F);
+        }
         std::vector<std::uint64_t> paints;
         paints.reserve(6);
         for (int i = 0; i < 6; ++i) {
@@ -5034,9 +5038,32 @@ TEST_CASE("culling by occluders changes no pixel", "[gpu][scene]") {
             require(fbe_entity_set_position(blocker, (next() - 0.5F) * 10.0F,
                                             (next() - 0.5F) * 10.0F, -3.0F - (next() * 15.0F),
                                             FBE_SPACE_WORLD));
-            turn_about(blocker, 0.0F, 1.0F, 0.0F, (next() - 0.5F) * 1.2F);
+            // Head on, some of them, which rounds as nothing else does.
+            const float turned = (next() - 0.5F) * 1.2F;
+            turn_about(blocker, 0.0F, 1.0F, 0.0F, round % 2 == 0 ? turned : 0.0F);
             require(fbe_entity_set_occluder(blocker, true));
         }
+        // Of welded triangles, whose outlines aren't edges of theirs.
+        for (const std::uint64_t welded : { round_geometry, ball_geometry }) {
+            const std::uint64_t made = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+            require(fbe_mesh_set_geometry(made, welded));
+            require(fbe_mesh_set_material(made, paints[0]));
+            require(fbe_entity_set_position(made, (next() - 0.5F) * 10.0F, (next() - 0.5F) * 10.0F,
+                                            -4.0F - (next() * 10.0F), FBE_SPACE_WORLD));
+            const float size = 1.0F + (next() * 3.0F);
+            require(fbe_entity_set_scale(made, size, size, size, FBE_SPACE_WORLD));
+            require(fbe_entity_set_occluder(made, true));
+        }
+        // What's over the scene shows whatever's in front.
+        const std::uint64_t over = unlit(next(), next(), next());
+        require(fbe_material_set_order(over, 1));
+        for (int i = 0; i < 4; ++i) {
+            const std::uint64_t block =
+                cube(scene.world, (next() - 0.5F) * 10.0F, (next() - 0.5F) * 10.0F,
+                     -5.0F - (next() * 30.0F), over);
+            require(fbe_entity_set_scale(block, 0.5F, 0.5F, 0.5F, FBE_SPACE_WORLD));
+        }
+        fbe_material_release(over);
         for (int i = 0; i < 60; ++i) {
             const std::uint64_t block =
                 cube(scene.world, (next() - 0.5F) * 30.0F, (next() - 0.5F) * 30.0F,
@@ -5059,8 +5086,655 @@ TEST_CASE("culling by occluders changes no pixel", "[gpu][scene]") {
             fbe_material_release(paint);
         }
     }
+    fbe_geometry_release(round_geometry);
+    fbe_geometry_release(ball_geometry);
     // It'd pass by doing nothing, so it has to have done something.
     CHECK(culled_scenes > 12);
+}
+
+namespace {
+
+/// Whether a camera draws an entity.
+bool draws_entity(std::uint64_t camera, std::uint64_t entity) {
+    std::array<fbe_draw_t, 64> draws{};
+    const std::int32_t count = fbe_render_draws(camera, 128.0F, 128.0F, 1.0F, draws.data(), 64);
+    return std::ranges::any_of(
+        std::span(draws).first(static_cast<std::size_t>(std::min(count, 64))),
+        [&](const fbe_draw_t& draw) { return draw.entity == entity; });
+}
+
+/// A number from 0 up to 1, the next of a sequence.
+float next_of(std::uint32_t& state) {
+    state ^= state << 13U;
+    state ^= state >> 17U;
+    state ^= state << 5U;
+    return static_cast<float>(state >> 8U) / 16777216.0F;
+}
+
+/// A turn about Y, then about X in what that's turned.
+void set_yaw_then_pitch(std::uint64_t entity, float yaw, float pitch) {
+    const float sy = std::sin(yaw * 0.5F);
+    const float cy = std::cos(yaw * 0.5F);
+    const float sx = std::sin(pitch * 0.5F);
+    const float cx = std::cos(pitch * 0.5F);
+    require(fbe_entity_set_rotation(entity, cy * sx, sy * cx, -sy * sx, cy * cx, FBE_SPACE_WORLD));
+}
+
+} // namespace
+
+TEST_CASE("what's in another order isn't culled by what's in front", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t blue = unlit(0.0F, 0.0F, 1.0F);
+    const std::uint64_t blocker = wall(scene.world, -5.0F, 30.0F, blue);
+    require(fbe_entity_set_occluder(blocker, true));
+    const std::uint64_t over = unlit(1.0F, 0.0F, 0.0F);
+    require(fbe_material_set_order(over, 1));
+    const std::uint64_t scene_paint = unlit(0.0F, 1.0F, 0.0F);
+    SECTION("a mesh's material") {
+        const std::uint64_t made = cube(scene.world, 0.0F, 0.0F, -20.0F, over);
+        CHECK(draws_entity(scene.camera, made));
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        require(fbe_mesh_set_material(made, scene_paint));
+        CHECK_FALSE(draws_entity(scene.camera, made));
+    }
+    SECTION("a surface's, the rest of it culled") {
+        const std::uint64_t made = cube(scene.world, 0.0F, 0.0F, -20.0F);
+        const std::uint64_t geometry = fbe_geometry_cube();
+        require(fbe_surface_set_material(geometry, 0, over));
+        require(fbe_mesh_set_geometry(made, geometry));
+        CHECK(draws_entity(scene.camera, made));
+        require(fbe_surface_set_material(geometry, 0, scene_paint));
+        CHECK_FALSE(draws_entity(scene.camera, made));
+        fbe_geometry_release(geometry);
+    }
+    SECTION("a sprite's") {
+        const std::uint64_t made = fbe_entity_create(scene.world, 0, FBE_ENTITY_SPRITE);
+        require(fbe_entity_set_position(made, 0.0F, 0.0F, -20.0F, FBE_SPACE_WORLD));
+        require(fbe_sprite_set_material(made, over));
+        CHECK(draws_entity(scene.camera, made));
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        require(fbe_sprite_set_material(made, scene_paint));
+        CHECK_FALSE(draws_entity(scene.camera, made));
+    }
+    SECTION("an emitter's") {
+        const std::uint64_t made = still_emitter(scene.world, 0.0F, 0.0F, -20.0F, 1.0F);
+        require(fbe_particles_burst(made, 1));
+        require(fbe_particles_set_material(made, over));
+        CHECK(draws_entity(scene.camera, made));
+        require(fbe_particles_set_material(made, scene_paint));
+        CHECK_FALSE(draws_entity(scene.camera, made));
+    }
+    SECTION("an Instances'") {
+        const std::uint64_t made = cubes_at(scene.world, over, { instance_at(0.0F, 0.0F, -20.0F) });
+        CHECK(draws_entity(scene.camera, made));
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        require(fbe_instances_set_material(made, scene_paint));
+        CHECK_FALSE(draws_entity(scene.camera, made));
+    }
+    SECTION("a terrain's") {
+        const std::uint64_t made = fbe_entity_create(scene.world, 0, FBE_ENTITY_TERRAIN);
+        require(fbe_entity_set_position(made, -1.0F, -1.0F, -21.0F, FBE_SPACE_WORLD));
+        require(fbe_terrain_set_material(made, over));
+        CHECK(draws_entity(scene.camera, made));
+        require(fbe_terrain_set_material(made, scene_paint));
+        CHECK_FALSE(draws_entity(scene.camera, made));
+    }
+    fbe_material_release(blue);
+    fbe_material_release(over);
+    fbe_material_release(scene_paint);
+}
+
+TEST_CASE("a big occluder culls neither itself nor what's flush to it", "[gpu][scene]") {
+    const float yaw = GENERATE(0.0F, 0.5F, std::numbers::pi_v<float> * 0.5F);
+    const scene_t scene;
+    require(fbe_camera_set_range(scene.camera, 0.1F, 5000.0F));
+    const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
+    std::uint32_t state = 4242;
+    SECTION("a floor, from above") {
+        const std::uint64_t floor_block = cube(scene.world, 0.0F, 0.0F, 0.0F, paint);
+        require(fbe_entity_set_scale(floor_block, 1000.0F, 1.0F, 1000.0F, FBE_SPACE_WORLD));
+        set_yaw_then_pitch(floor_block, yaw, 0.0F);
+        require(fbe_entity_set_occluder(floor_block, true));
+        const std::uint64_t flush = cube(scene.world, 0.0F, 0.9F, 0.0F, paint);
+        require(fbe_entity_set_scale(flush, 5.0F, 0.1F, 5.0F, FBE_SPACE_WORLD));
+        set_yaw_then_pitch(flush, yaw, 0.0F);
+        set_yaw_then_pitch(scene.camera, yaw, -std::numbers::pi_v<float> * 0.5F);
+        int culled = 0;
+        for (int round = 0; round < 300; ++round) {
+            const float x = (next_of(state) - 0.5F) * 1200.0F;
+            const float z = (next_of(state) - 0.5F) * 1200.0F;
+            const float apart = next_of(state);
+            require(fbe_entity_set_position(scene.camera, x, 1.5F + (apart * apart * 400.0F), z,
+                                            FBE_SPACE_WORLD));
+            require(fbe_entity_set_position(flush, x, 0.9F, z, FBE_SPACE_WORLD));
+            culled += draws_entity(scene.camera, floor_block) ? 0 : 1;
+            culled += draws_entity(scene.camera, flush) ? 0 : 1;
+        }
+        CHECK(culled == 0);
+    }
+    SECTION("a wall, head on") {
+        const std::uint64_t block = cube(scene.world, 0.0F, 0.0F, 0.0F, paint);
+        require(fbe_entity_set_scale(block, 1000.0F, 1000.0F, 1.0F, FBE_SPACE_WORLD));
+        set_yaw_then_pitch(block, yaw, 0.0F);
+        require(fbe_entity_set_occluder(block, true));
+        set_yaw_then_pitch(scene.camera, yaw, 0.0F);
+        const float sine = std::sin(yaw);
+        const float cosine = std::cos(yaw);
+        int culled = 0;
+        for (int round = 0; round < 300; ++round) {
+            const float along = (next_of(state) - 0.5F) * 1200.0F;
+            const float up = (next_of(state) - 0.5F) * 1200.0F;
+            const float apart = next_of(state);
+            const float out = 1.5F + (apart * apart * 400.0F);
+            require(fbe_entity_set_position(scene.camera, (along * cosine) + (out * sine), up,
+                                            (out * cosine) - (along * sine), FBE_SPACE_WORLD));
+            culled += draws_entity(scene.camera, block) ? 0 : 1;
+        }
+        CHECK(culled == 0);
+    }
+    fbe_material_release(paint);
+}
+
+TEST_CASE("an Instances' normals are a mesh's with its matrix", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t paint = fbe_material_create();
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    turn_about(sun, 0.3F, 1.0F, 0.2F, 0.9F);
+    const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -6.0F, paint);
+    set_yaw_then_pitch(mesh, 0.7F, 0.4F);
+    require(fbe_entity_set_scale(mesh, 2.0F, 0.5F, 1.0F, FBE_SPACE_WORLD));
+    const fbe::golden::frame_t by_mesh = scene.drawn();
+    fbe_mat4_t matrix{};
+    require(fbe_entity_matrix(mesh, FBE_SPACE_WORLD, &matrix));
+    require(fbe_entity_set_hidden(mesh, true));
+    fbe_instance_t same = instance_at(0.0F, 0.0F, 0.0F);
+    same.matrix = matrix;
+    cubes_at(scene.world, paint, { same });
+    const fbe::golden::frame_t by_instance = scene.drawn();
+    CHECK(reds_above(by_mesh, 0) > 500);
+    CHECK(fbe::golden::compare(by_mesh, by_instance, 2).pixels == 0);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("what an occluder doesn't vouch for doesn't occlude", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t behind = cube(scene.world, 0.0F, 0.0F, -20.0F, paint);
+    SECTION("a wireframe's mostly holes") {
+        const std::uint64_t lines = unlit(1.0F, 0.0F, 0.0F);
+        const std::uint64_t blocker = wall(scene.world, -5.0F, 1.0F, lines);
+        require(fbe_entity_set_occluder(blocker, true));
+        CHECK_FALSE(draws_entity(scene.camera, behind));
+        require(fbe_material_set_wireframe(lines, true));
+        CHECK(draws_entity(scene.camera, behind));
+        fbe_material_release(lines);
+    }
+    SECTION("what a camera can fade out") {
+        const std::uint64_t blocker = wall(scene.world, -5.0F, 1.0F, paint);
+        require(fbe_entity_set_occluder(blocker, true));
+        CHECK_FALSE(draws_entity(scene.camera, behind));
+        require(fbe_entity_set_auto_fade(blocker, 1.0F, 100.0F));
+        CHECK(draws_entity(scene.camera, behind));
+    }
+    SECTION("what morph targets move") {
+        const std::uint64_t blocker = wall(scene.world, -5.0F, 1.0F, paint);
+        require(fbe_entity_set_occluder(blocker, true));
+        CHECK_FALSE(draws_entity(scene.camera, behind));
+        add_lift(fbe_mesh_geometry(blocker), 50.0F);
+        const std::array one{ 1.0F };
+        require(fbe_morph_set_weights(blocker, one.data(), 1));
+        CHECK(draws_entity(scene.camera, behind));
+    }
+    SECTION("what joints move") {
+        const std::uint64_t blocker = wall(scene.world, -5.0F, 1.0F, paint);
+        require(fbe_entity_set_occluder(blocker, true));
+        CHECK_FALSE(draws_entity(scene.camera, behind));
+        require(fbe_entity_free(blocker));
+        const skinned_wall_t skinned = skinned_wall(scene.world, paint, -5.0F, 1.0F);
+        all_on(skinned.geometry, 0, 1.0F);
+        require(fbe_entity_set_occluder(skinned.mesh, true));
+        CHECK(draws_entity(scene.camera, behind));
+        fbe_skin_release(skinned.skin);
+    }
+    SECTION("what's past what a view rasterizes") {
+        const std::uint64_t many = fbe_geometry_sphere(100);
+        REQUIRE(fbe_surface_triangle_count(many, 0) > 16384);
+        const std::uint64_t blocker = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+        require(fbe_mesh_set_geometry(blocker, many));
+        fbe_geometry_release(many);
+        require(fbe_mesh_set_material(blocker, paint));
+        require(fbe_entity_set_position(blocker, 0.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
+        require(fbe_entity_set_occluder(blocker, true));
+        CHECK(draws_entity(scene.camera, behind));
+        // What fits still does.
+        const std::uint64_t small = wall(scene.world, -8.0F, 3.0F, paint);
+        require(fbe_entity_set_occluder(small, true));
+        CHECK_FALSE(draws_entity(scene.camera, behind));
+    }
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a slit between curved occluders shows what's behind it", "[gpu][scene]") {
+    // Two cylinders, whose sides' edges are all shared, a part of a pixel apart on the buffer: at
+    // a depth of 10, a pixel's 10 tan 30 over 128.
+    const float across = GENERATE(0.3F, 0.5F, 0.9F);
+    const float pixel_wide = 10.0F * std::tan(std::numbers::pi_v<float> / 6.0F) / 128.0F;
+    const float slit = across * pixel_wide;
+    const scene_t scene;
+    require(fbe_camera_set_range(scene.camera, 0.5F, 200.0F));
+    const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t round = fbe_geometry_cylinder(16, true);
+    const auto pillar = [&](float x) {
+        const std::uint64_t made = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+        require(fbe_mesh_set_geometry(made, round));
+        require(fbe_mesh_set_material(made, paint));
+        require(fbe_entity_set_position(made, x, 0.0F, -10.0F, FBE_SPACE_WORLD));
+        require(fbe_entity_set_scale(made, 1.0F, 30.0F, 1.0F, FBE_SPACE_WORLD));
+        require(fbe_entity_set_occluder(made, true));
+        return made;
+    };
+    const std::uint64_t left = pillar(-1.0F - (slit * 0.5F));
+    const std::uint64_t right = pillar(1.0F + (slit * 0.5F));
+    // Its seam, which isn't welded, away from the slit.
+    turn_about(left, 0.0F, 1.0F, 0.0F, std::numbers::pi_v<float>);
+    const std::uint64_t behind = cube(scene.world, 0.0F, 0.0F, -60.0F, paint);
+    require(fbe_entity_set_scale(behind, 0.002F, 0.5F, 0.01F, FBE_SPACE_WORLD));
+    CHECK(draws_entity(scene.camera, behind));
+    // Closed, the pair of them does hide it: it isn't that nothing welded occludes.
+    require(fbe_entity_set_position(left, -0.8F, 0.0F, -10.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_position(right, 0.8F, 0.0F, -10.0F, FBE_SPACE_WORLD));
+    CHECK_FALSE(draws_entity(scene.camera, behind));
+    fbe_geometry_release(round);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a mesh draws, casts, and occludes the same level", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_range(scene.camera, 0.5F, 1000.0F));
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 300.0F, paint);
+    const std::uint64_t sun = sun_from_right(scene.world);
+    require(fbe_light_set_shadow_distance(sun, 400.0F));
+    const float half_height = std::tan(1.0471976F / 2.0F);
+    const auto share_at = [&](float distance) {
+        return std::numbers::sqrt2_v<float> / (half_height * distance);
+    };
+    SECTION("skinned, it's where its joints are") {
+        // It's nothing past a distance of 20, from its joints, out of sight, its shadow where
+        // the camera sees.
+        const skinned_wall_t skinned = skinned_wall(scene.world, paint, -5.0F, 1.0F);
+        all_on(skinned.geometry, 0, 1.0F);
+        require(fbe_geometry_set_lod(skinned.geometry, 0, 0, share_at(20.0F)));
+        require(fbe_entity_set_position(skinned.still, 5.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
+        require(fbe_entity_set_position(skinned.moving, 5.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
+        // Near its joints, however far its entity is.
+        require(fbe_entity_set_position(skinned.mesh, 0.0F, 0.0F, -500.0F, FBE_SPACE_WORLD));
+        CHECK(middle(scene.drawn())[0] == 0);
+        // Far from them, however near its entity is, it neither draws nor casts.
+        require(fbe_entity_set_position(scene.camera, 5.0F, 0.0F, 200.0F, FBE_SPACE_WORLD));
+        require(fbe_entity_set_position(skinned.mesh, 5.0F, 0.0F, 190.0F, FBE_SPACE_WORLD));
+        CHECK_FALSE(draws_entity(scene.camera, skinned.mesh));
+        CHECK(pixel_of(scene.drawn(), pixel_at(scene.camera, 0.0F, 0.0F, -10.0F))[0] != 0);
+        fbe_skin_release(skinned.skin);
+    }
+    SECTION("each camera of a world, its shadow a level of another shape") {
+        // A cube whose shadow's on the wall's middle, a coarser one's well above it.
+        const std::uint64_t fine = fbe_geometry_cube();
+        const std::uint64_t coarse = fbe_geometry_cube();
+        fbe_mat4_t up{};
+        up.m[0] = 1.0F;
+        up.m[5] = 1.0F;
+        up.m[10] = 1.0F;
+        up.m[13] = 10.0F;
+        up.m[15] = 1.0F;
+        require(fbe_geometry_transform(coarse, &up));
+        const float cube_share = std::numbers::sqrt3_v<float> / (half_height * 20.0F);
+        require(fbe_geometry_set_lod(fine, 0, coarse, cube_share));
+        const std::uint64_t mesh = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+        require(fbe_mesh_set_geometry(mesh, fine));
+        require(fbe_mesh_set_material(mesh, paint));
+        require(fbe_entity_set_position(mesh, 5.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
+        CHECK(middle(scene.drawn())[0] == 0);
+        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 40.0F, FBE_SPACE_WORLD));
+        CHECK(middle(scene.drawn())[0] != 0);
+        // Two cameras of one fbe_render_world, either way around, each with its own.
+        const std::uint64_t other_target =
+            fbe_texture_create_target(frame_size, frame_size, FBE_TEXTURE_RGBA8, 1, true);
+        const std::uint64_t other = fbe_entity_create(scene.world, 0, FBE_ENTITY_CAMERA);
+        require(fbe_camera_set_target(other, other_target));
+        require(fbe_camera_set_range(other, 0.5F, 1000.0F));
+        for (const float far_one : { 40.0F, 0.0F }) {
+            require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, far_one, FBE_SPACE_WORLD));
+            require(fbe_entity_set_position(other, 0.0F, 0.0F, 40.0F - far_one, FBE_SPACE_WORLD));
+            require(fbe_render_world(scene.world, 1.0F));
+            const fbe::golden::frame_t first = scene_t::read(scene.target);
+            const fbe::golden::frame_t second = scene_t::read(other_target);
+            fbe_frame_flip(false);
+            CAPTURE(far_one);
+            CHECK((middle(first)[0] == 0) == (far_one == 0.0F));
+            CHECK((middle(second)[0] == 0) == (far_one != 0.0F));
+        }
+        fbe_texture_release(other_target);
+        fbe_geometry_release(fine);
+        fbe_geometry_release(coarse);
+    }
+    SECTION("an occluder blocks with the level it draws") {
+        // Its level's small, so what its own bigger shape would have hidden shows.
+        const std::uint64_t fine = fbe_geometry_cube();
+        const std::uint64_t coarse = fbe_geometry_cube();
+        fbe_mat4_t small{};
+        small.m[0] = 0.01F;
+        small.m[5] = 0.01F;
+        small.m[10] = 0.01F;
+        small.m[15] = 1.0F;
+        require(fbe_geometry_transform(coarse, &small));
+        const float cube_share = std::numbers::sqrt3_v<float> / (half_height * 2.0F);
+        require(fbe_geometry_set_lod(fine, 0, coarse, cube_share));
+        const std::uint64_t mesh = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+        require(fbe_mesh_set_geometry(mesh, fine));
+        require(fbe_mesh_set_material(mesh, paint));
+        require(fbe_entity_set_position(mesh, 0.0F, 0.0F, -4.0F, FBE_SPACE_WORLD));
+        require(fbe_entity_set_occluder(mesh, true));
+        const std::uint64_t behind = cube(scene.world, 0.0F, 0.0F, -8.0F, paint);
+        require(fbe_entity_set_scale(behind, 0.1F, 0.1F, 0.1F, FBE_SPACE_WORLD));
+        CHECK(draws_entity(scene.camera, behind));
+        fbe_geometry_release(fine);
+        fbe_geometry_release(coarse);
+    }
+    fbe_material_release(paint);
+}
+
+TEST_CASE("only occluders in view spend what a view rasterizes, and it's bounded", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t behind = cube(scene.world, 0.0F, 0.0F, -20.0F, paint);
+    SECTION("what's behind the camera spends none of it") {
+        const std::uint64_t many = fbe_geometry_sphere(40);
+        const auto one = static_cast<std::int64_t>(fbe_surface_triangle_count(many, 0));
+        std::int64_t triangles = 0;
+        while (triangles <= 17000) {
+            const std::uint64_t made = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+            require(fbe_mesh_set_geometry(made, many));
+            require(fbe_mesh_set_material(made, paint));
+            require(fbe_entity_set_position(made, 0.0F, 0.0F, 3.0F, FBE_SPACE_WORLD));
+            require(fbe_entity_set_occluder(made, true));
+            triangles += one;
+        }
+        // As big, further than they are, so past what's left of it were they counted.
+        const std::uint64_t ahead = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+        require(fbe_mesh_set_geometry(ahead, many));
+        require(fbe_mesh_set_material(ahead, paint));
+        require(fbe_entity_set_position(ahead, 0.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
+        require(fbe_entity_set_scale(ahead, 2.0F, 2.0F, 2.0F, FBE_SPACE_WORLD));
+        require(fbe_entity_set_occluder(ahead, true));
+        fbe_geometry_release(many);
+        CHECK_FALSE(draws_entity(scene.camera, behind));
+    }
+    SECTION("what fills the view spends so many pixels and no more") {
+        for (int i = 0; i < 200; ++i) {
+            const std::uint64_t made =
+                wall(scene.world, -1.0F - (static_cast<float>(i) * 0.01F), 500.0F, paint);
+            require(fbe_entity_set_occluder(made, true));
+        }
+        CHECK_FALSE(draws_entity(scene.camera, behind));
+        CHECK(fbe::render::occluder_pixels() > 2000000);
+        CHECK(fbe::render::occluder_pixels() < 2097152 + 40000);
+    }
+    fbe_material_release(paint);
+}
+
+TEST_CASE("a box wider than an int counts isn't culled by the cast", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_range(scene.camera, 0.1F, 100.0F));
+    const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t blocker = wall(scene.world, -0.15F, 0.02F, paint);
+    require(fbe_entity_set_occluder(blocker, true));
+    const std::uint64_t wide = cube(scene.world, 0.0F, 0.0F, -0.21F, paint);
+    require(fbe_entity_set_scale(wide, 4000000.0F, 0.01F, 0.01F, FBE_SPACE_WORLD));
+    CHECK(draws_entity(scene.camera, wide));
+    fbe_material_release(paint);
+}
+
+TEST_CASE("what's next to what in an occluder is worked out once for its shape", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t blocker = wall(scene.world, -5.0F, 1.0F, paint);
+    require(fbe_entity_set_occluder(blocker, true));
+    const std::uint64_t other = unlit(0.0F, 1.0F, 0.0F);
+    (void)scene.drawn();
+    const std::uint64_t worked_out = fbe::render::occluder_edges_worked_out();
+    const std::size_t kept = fbe::render::occluder_edges_kept();
+    (void)scene.drawn();
+    CHECK(fbe::render::occluder_edges_worked_out() == worked_out);
+    // Its version goes up with its materials, which don't change its shape.
+    const std::uint64_t geometry = fbe_mesh_geometry(blocker);
+    require(fbe_surface_set_material(geometry, 0, other));
+    (void)scene.drawn();
+    CHECK(fbe::render::occluder_edges_worked_out() == worked_out);
+    // Another triangle does.
+    const std::array<std::uint32_t, 3> again{ 0, 1, 2 };
+    require(fbe_surface_add_triangles(geometry, 0, again.data(), 3) >= 0);
+    (void)scene.drawn();
+    CHECK(fbe::render::occluder_edges_worked_out() == worked_out + 1);
+    // Freed, it's forgotten.
+    CHECK(fbe::render::occluder_edges_kept() == kept);
+    require(fbe_entity_free(blocker));
+    (void)scene.drawn();
+    CHECK(fbe::render::occluder_edges_kept() == kept - 1);
+    fbe_material_release(paint);
+    fbe_material_release(other);
+}
+
+TEST_CASE("an Instances with an alpha blends, and doesn't cast", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t white = unlit(1.0F, 1.0F, 1.0F);
+    fbe_instance_t one = instance_at(0.0F, 0.0F, -4.0F);
+    const std::uint64_t made =
+        cubes_at(scene.world, white, { one, instance_at(9.0F, 0.0F, -4.0F) });
+    const auto blend_now = [&] {
+        std::array<fbe_draw_t, 4> draws{};
+        REQUIRE(fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 4) == 1);
+        return draws[0].blend;
+    };
+    CHECK(blend_now() == FBE_BLEND_OPAQUE);
+    CHECK(near(middle(scene.drawn()), { 255, 255, 255 }));
+    one.color.a = 0.5F;
+    require(fbe_instances_set_one(made, 0, &one));
+    CHECK(blend_now() == FBE_BLEND_ALPHA);
+    CHECK(near(middle(scene.drawn()), { srgb(0.5F), srgb(0.5F), srgb(0.5F) }));
+    SECTION("none of it, none") {
+        one.color.a = 0.0F;
+        require(fbe_instances_set_one(made, 0, &one));
+        CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    }
+    SECTION("as set all at once") {
+        require(fbe_instances_set(made, &one, 1));
+        CHECK(blend_now() == FBE_BLEND_ALPHA);
+    }
+    SECTION("back to whole, it's opaque") {
+        one.color.a = 1.0F;
+        require(fbe_instances_set_one(made, 0, &one));
+        CHECK(blend_now() == FBE_BLEND_OPAQUE);
+    }
+    SECTION("said to add by its material, it does") {
+        require(fbe_material_set_blend(white, FBE_BLEND_ADD));
+        CHECK(blend_now() == FBE_BLEND_ADD);
+    }
+    SECTION("it casts only whole") {
+        const std::uint64_t lit = fbe_material_create();
+        wall(scene.world, -10.0F, 30.0F, lit);
+        sun_from_right(scene.world);
+        const std::uint64_t caster = cubes_at(scene.world, lit, { instance_at(5.0F, 0.0F, -5.0F) });
+        require(fbe_entity_set_hidden(made, true));
+        CHECK(middle(scene.drawn())[0] == 0);
+        fbe_instance_t faded = instance_at(5.0F, 0.0F, -5.0F);
+        faded.color.a = 0.5F;
+        require(fbe_instances_set(caster, &faded, 1));
+        CHECK(middle(scene.drawn())[0] != 0);
+        fbe_material_release(lit);
+    }
+    fbe_material_release(white);
+}
+
+TEST_CASE("an Instances' clusters share a shadow's draw, and one set sends one", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -30.0F, 60.0F, paint);
+    const std::uint64_t sun = sun_from_right(scene.world);
+    require(fbe_light_set_cascades(sun, 4));
+    std::vector<fbe_instance_t> all;
+    all.reserve(10000);
+    for (int row = 0; row < 100; ++row) {
+        for (int column = 0; column < 100; ++column) {
+            all.push_back(instance_at(static_cast<float>(column) * 0.05F, -1.0F,
+                                      -5.0F - (static_cast<float>(row) * 0.05F), 0.01F));
+        }
+    }
+    const std::uint64_t made = cubes_at(scene.world, paint, all);
+    const std::int64_t casting = draws_of(scene);
+    require(fbe_entity_set_casts_shadows(made, false));
+    const std::int64_t not_casting = draws_of(scene);
+    CHECK(casting > not_casting);
+    CHECK(casting - not_casting <= 16);
+    require(fbe_entity_set_casts_shadows(made, true));
+    (void)scene.drawn();
+    (void)scene.drawn();
+    fbe_gpu_counters_t counters{};
+    require(fbe_gpu_counters(&counters));
+    CHECK(counters.uploaded == 0);
+    const auto one_record = static_cast<std::int64_t>(sizeof(fbe::render::instance_data_t));
+    // One moved sends that one, and its cluster's box goes with it, there and back.
+    const fbe_instance_t moved = instance_at(100.0F, 0.0F, -5.0F);
+    require(fbe_instances_set_one(made, 7, &moved));
+    (void)scene.drawn();
+    require(fbe_gpu_counters(&counters));
+    CHECK(counters.uploaded == one_record);
+    fbe_aabb_t box{};
+    require(fbe_entity_bounds(made, &box));
+    CHECK(box.max.x > 99.0F);
+    fbe_instance_t got{};
+    require(fbe_instances_get(made, 7, &got));
+    CHECK(got.matrix.m[12] == 100.0F);
+    const fbe_instance_t back = all[7];
+    require(fbe_instances_set_one(made, 7, &back));
+    require(fbe_entity_bounds(made, &box));
+    CHECK(box.max.x < 6.0F);
+    (void)scene.drawn();
+    require(fbe_gpu_counters(&counters));
+    CHECK(counters.uploaded == one_record);
+    CHECK(fbe_gpu_validation_errors() == 0);
+    // Most of them moved send them all, once.
+    for (int i = 0; i < 3000; ++i) {
+        require(fbe_instances_set_one(made, i, &all[static_cast<std::size_t>(i)]));
+    }
+    (void)scene.drawn();
+    require(fbe_gpu_counters(&counters));
+    CHECK(counters.uploaded == one_record * 10000);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("an Instances takes what it's given, of a place or how many", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t made = cubes_at(scene.world, paint, {});
+    SECTION("no number, or one going on forever, in a place") {
+        std::array<fbe_instance_t, 4> all{};
+        all.fill(instance_at(0.0F, 0.0F, -4.0F));
+        all[1].matrix.m[12] = std::nanf("");
+        all[2].matrix.m[13] = std::numeric_limits<float>::infinity();
+        all[3].matrix.m[14] = -std::numeric_limits<float>::infinity();
+        require(fbe_instances_set(made, all.data(), 4));
+        CHECK(fbe_instances_count(made) == 4);
+        fbe_instance_t got{};
+        require(fbe_instances_get(made, 0, &got));
+        CHECK(got.matrix.m[14] == -4.0F);
+        CHECK(fbe_gpu_validation_errors() == 0);
+    }
+    SECTION("past the most") {
+        CHECK_FALSE(fbe_instances_set(made, nullptr, 4194305));
+        CHECK_FALSE(fbe_instances_set(made, nullptr, -1));
+        CHECK(fbe_instances_count(made) == 0);
+    }
+    fbe_material_release(paint);
+}
+
+TEST_CASE("an Instances' clusters draw the level their size in the view has", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_range(scene.camera, 0.5F, 1000.0F));
+    const std::uint64_t paint = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t coarse_paint = unlit(0.0F, 1.0F, 0.0F);
+    const std::uint64_t fine = fbe_geometry_cube();
+    const std::uint64_t coarse = fbe_geometry_cube();
+    require(fbe_surface_set_material(fine, 0, paint));
+    require(fbe_surface_set_material(coarse, 0, coarse_paint));
+    const float half_height = std::tan(1.0471976F / 2.0F);
+    const auto share_at = [&](float distance) {
+        return std::numbers::sqrt3_v<float> / (half_height * distance);
+    };
+    require(fbe_geometry_set_lod(fine, 0, coarse, share_at(50.0F)));
+    require(fbe_geometry_set_lod(fine, 1, 0, share_at(200.0F)));
+    const std::uint64_t made = fbe_entity_create(scene.world, 0, FBE_ENTITY_INSTANCES);
+    require(fbe_instances_set_geometry(made, fine));
+    const auto group_at = [](std::vector<fbe_instance_t>& into, float z) {
+        for (int i = 0; i < 128; ++i) {
+            into.push_back(instance_at(static_cast<float>(i) * 0.001F, 0.0F, z));
+        }
+    };
+    const auto geometries = [&] {
+        std::array<fbe_draw_t, 4> draws{};
+        const std::int32_t count =
+            fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 4);
+        std::vector<std::uint64_t> found;
+        found.reserve(static_cast<std::size_t>(count));
+        for (std::int32_t i = 0; i < count; ++i) {
+            found.push_back(draws[static_cast<std::size_t>(i)].geometry);
+        }
+        return found;
+    };
+    std::vector<fbe_instance_t> all;
+    SECTION("near, its own; further, the coarser; past that, nothing") {
+        group_at(all, -10.0F);
+        require(fbe_instances_set(made, all.data(), 128));
+        CHECK(geometries() == std::vector{ fine });
+        CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+        require(fbe_entity_set_position(made, 0.0F, 0.0F, -90.0F, FBE_SPACE_WORLD));
+        CHECK(geometries() == std::vector{ coarse });
+        CHECK(near(middle(scene.drawn()), { 0, 255, 0 }));
+        require(fbe_entity_set_position(made, 0.0F, 0.0F, -390.0F, FBE_SPACE_WORLD));
+        CHECK(geometries().empty());
+    }
+    SECTION("each cluster its own") {
+        group_at(all, -10.0F);
+        group_at(all, -100.0F);
+        require(fbe_instances_set(made, all.data(), 256));
+        const std::vector<std::uint64_t> found = geometries();
+        CHECK(found.size() == 2);
+        CHECK(std::ranges::count(found, fine) == 1);
+        CHECK(std::ranges::count(found, coarse) == 1);
+        fbe_gpu_counters_t counters{};
+        (void)scene.drawn();
+        require(fbe_gpu_counters(&counters));
+        CHECK(counters.triangles == std::int64_t{ 128 } * 12 * 2);
+    }
+    SECTION("its shadow's the level's too, a Null one's none") {
+        const std::uint64_t lit = fbe_material_create();
+        wall(scene.world, -10.0F, 300.0F, lit);
+        const std::uint64_t sun = sun_from_right(scene.world);
+        require(fbe_light_set_shadow_distance(sun, 800.0F));
+        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 300.0F, FBE_SPACE_WORLD));
+        std::vector<fbe_instance_t> one{ instance_at(5.0F, 0.0F, -5.0F) };
+        require(fbe_instances_set(made, one.data(), 1));
+        CHECK(middle(scene.drawn())[0] != 0);
+        fbe_material_release(lit);
+    }
+    fbe_geometry_release(fine);
+    fbe_geometry_release(coarse);
+    fbe_material_release(paint);
+    fbe_material_release(coarse_paint);
 }
 
 TEST_CASE("an emitter's and an Instances' bounds are what they've spread to", "[gpu][scene]") {

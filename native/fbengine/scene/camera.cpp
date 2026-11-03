@@ -141,13 +141,18 @@ bool in_view(const camera_t& camera, const view_t& view, const vec3_t* points, s
 
 std::uint32_t lod_for(std::uint32_t geometry, vec3_t center, float radius, const camera_t& camera,
                       vec3_t eye, float half_height) {
+    return lod_at(geometry, length(center - eye), radius, camera, half_height);
+}
+
+std::uint32_t lod_at(std::uint32_t geometry, float distance, float radius, const camera_t& camera,
+                     float half_height) {
     const std::vector<lod_t>& lods = scene().geometries[geometry].lods;
     if (lods.empty()) {
         return geometry;
     }
     float share = radius / half_height;
     if (camera.projection == FBE_PROJECTION_PERSPECTIVE) {
-        share /= std::fmax(length(center - eye), camera.nearest);
+        share /= std::fmax(distance, camera.nearest);
     }
     std::uint32_t drawn = geometry;
     for (const lod_t& lod : lods) {

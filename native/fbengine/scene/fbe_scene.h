@@ -182,7 +182,8 @@ typedef struct fbe_vertex_t {
 } fbe_vertex_t;
 
 // An instance of an Instances entity: where it is, in the entity's space, and its color and alpha,
-// which multiply its material's and its geometry's vertex colors.
+// which multiply its material's and its geometry's vertex colors. Any alpha under 1 has the whole
+// entity blend, as a mesh's does, unless its material says how, and not cast.
 typedef struct fbe_instance_t {
     fbe_mat4_t matrix;
     fbe_color_t color;
@@ -530,8 +531,6 @@ FBE_API uint64_t fbe_geometry_cylinder(int32_t segments, bool capped);
 FBE_API uint64_t fbe_geometry_cone(int32_t segments, bool capped);
 FBE_API uint64_t fbe_geometry_plane(int32_t segments);
 
-// A surface's vertices and triangles, by the geometry and the surface's index.
-// Adds `count` vertices and gives the first's index, -1 if it can't.
 // A geometry's levels of detail: what a mesh draws of it where it's small in its camera's view,
 // `share` being how much of the view's height its bounds' sphere takes at its distance. Each level
 // is a geometry it holds, or, with 0, drawing nothing, and has a share below the one before it. A
@@ -717,7 +716,10 @@ FBE_API bool fbe_terrain_tint(uint64_t terrain, fbe_color_t* tint);
 // Instances: an entity that draws a geometry many times over, each with its own matrix and color,
 // in bulk, those out of view going a cluster at a time. It holds its geometry and material, 0 for
 // none, when it draws its geometry's surfaces' materials. A matrix mustn't mirror: it'd show its
-// back. A skin or a morph isn't drawn, and what blends isn't sorted among itself.
+// back. A skin or a morph isn't drawn, and what blends isn't sorted among itself. Its geometry's
+// levels of detail go by each cluster, as big as the biggest of it where it's nearest. It draws and
+// casts, but it's one thing to the rest of the world: FBE_COLLISION's automatic shape is an
+// ellipsoid at the entity's place, a mesh pick finds none of it, and only its entity's picked.
 FBE_API bool fbe_instances_set_geometry(uint64_t instances, uint64_t geometry);
 FBE_API uint64_t fbe_instances_geometry(uint64_t instances);
 FBE_API bool fbe_instances_set_material(uint64_t instances, uint64_t material);

@@ -515,9 +515,10 @@ Corner instanceVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
     const float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
                                    dot(one.rows[2], start), 1.0);
-    const float3 a = one.rows[0].xyz;
-    const float3 b = one.rows[1].xyz;
-    const float3 c = one.rows[2].xyz;
+    // Its matrix's columns, whose cofactors turn a normal.
+    const float3 a = float3(one.rows[0].x, one.rows[1].x, one.rows[2].x);
+    const float3 b = float3(one.rows[0].y, one.rows[1].y, one.rows[2].y);
+    const float3 c = float3(one.rows[0].z, one.rows[1].z, one.rows[2].z);
     const float3 x = cross(b, c);
     const float3 given = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
     const float3 turned = x * given.x + cross(c, a) * given.y + cross(a, b) * given.z;

@@ -11,7 +11,8 @@ Import "./material"
 Import "./window"
 
 /// One of an Instances': where it is, in the entity's space, and its color, which multiplies its
-/// Material's and its Geometry's vertex colors, and its alpha.
+/// Material's and its Geometry's vertex colors, and its alpha: any under 1 has the whole Instances
+/// blend, as a Mesh's does, unless its Material says how, and not cast.
 Public Struct Instance
     Public Field Matrix: Mat4
     Public Field Color: Color
@@ -28,7 +29,11 @@ End Struct
 /// An entity that draws a Geometry many times over, each Instance with its own matrix and color.
 /// Those out of view go a cluster at a time, near each other as they're set, so the CPU's cost is
 /// far below an entity each. A matrix mustn't mirror: it'd show its back. A Geometry with a skin or
-/// morph targets draws as its vertices are; what blends isn't sorted among itself.
+/// morph targets draws as its vertices are; what blends isn't sorted among itself. Its Geometry's
+/// levels of detail go by each cluster, as big as the biggest of it where it's nearest. It's drawn
+/// and it casts, but it's one thing to the rest of the World: a collision's automatic shape is an
+/// ellipsoid at the entity's place, a mesh pick finds none of it, and only its entity's picked by
+/// its box.
 Public Final Class Instances Extends Entity
     /// A new Instances drawing `geometry`, or nothing for Null, with none of them yet, the last
     /// child of `parent`, or at the top of the current World when `parent` is Null.
@@ -43,6 +48,8 @@ Public Final Class Instances Extends Entity
     End New
 
     Override Package Method KindName(): String => "Instances"
+
+    Override Package Method KindWithArticle(): String => "an Instances"
 
     /// Makes it draw `geometry`, or nothing for Null.
     @MainThread @PanicsAtCaller
