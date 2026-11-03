@@ -279,6 +279,81 @@ Function AChangedFileMakesItsSpawnsAgain() Throws IOError
     Expect(root.Find("door") != Null)
 End Function
 
+// A glTF of a mesh, "body", skinned by a joint under it, "bone", and with a camera on its node, and
+// a clip moving the bone.
+Function Skinned(): UInt8[]
+    Local times = [0, 0, 0, 0, 0, 0, 0x80, 0x3F] As UInt8[]
+    Local values = Buffered(1)
+    // Three vertices' joints, all 0, as UInt8s, then their weights, 1 on the first.
+    Local bound: UInt8[] = []
+    bound.AddAll([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[])
+    For vertex = 1 To 3
+        bound.AddAll([0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[])
+    End For
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+            "\"buffers\":[{{\"byteLength\":102,\"uri\":\"{values}\"}}," +
+            "{{\"byteLength\":8,\"uri\":\"data:application/octet-stream;base64," +
+            "{Base64.Encode(times)}\"}},{{\"byteLength\":60,\"uri\":" +
+            "\"data:application/octet-stream;base64,{Base64.Encode(bound)}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":96,\"byteLength\":6}}," +
+            "{{\"buffer\":1,\"byteLength\":8}},{{\"buffer\":0,\"byteLength\":24}}," +
+            "{{\"buffer\":2,\"byteLength\":12}}," +
+            "{{\"buffer\":2,\"byteOffset\":12,\"byteLength\":48}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3," +
+            "\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]}}," +
+            "{{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}}," +
+            "{{\"bufferView\":2,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"," +
+            "\"min\":[0],\"max\":[1]}}," +
+            "{{\"bufferView\":3,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}}," +
+            "{{\"bufferView\":4,\"componentType\":5121,\"count\":3,\"type\":\"VEC4\"}}," +
+            "{{\"bufferView\":5,\"componentType\":5126,\"count\":3,\"type\":\"VEC4\"}}]," +
+            "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0,\"JOINTS_0\":4,\"WEIGHTS_0\":5}}," +
+            "\"indices\":1}}]}}]," +
+            "\"cameras\":[{{\"type\":\"orthographic\",\"orthographic\":{{\"xmag\":2,\"ymag\":3," +
+            "\"znear\":0.5,\"zfar\":9}}}}]," +
+            "\"skins\":[{{\"joints\":[1]}}]," +
+            "\"animations\":[{{\"name\":\"wave\",\"samplers\":[{{\"input\":2,\"output\":3}}]," +
+            "\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":1,\"path\":\"translation\"}}}}]}}]," +
+            "\"nodes\":[{{\"name\":\"body\",\"mesh\":0,\"skin\":0,\"camera\":0,\"children\":[1]}}," +
+            "{{\"name\":\"bone\"}}],\"scenes\":[{{\"nodes\":[0]}}]}}").Bytes
+End Function
+
+@Test
+Function ASpawnsMeshIsSkinnedAndItsCameraIsUnderIt() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://skinned", {"body.gltf": Skinned()})
+    Defer Assets.Unmount("res://skinned")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://skinned/body.gltf")
+    Defer model.Free()
+    Expect(model.Skins().Count == 1)
+    Expect(model.Clips().Count == 1)
+    Local root = Try model.Spawn()
+    Local body = root.Find("body")
+    Expect(body Is Mesh)
+    If !(body Is Mesh) Then Return
+    Local mesh = body As Mesh
+    Local skin = mesh.Skin()
+    Expect(skin != Null && RefEquals(skin, model.Skins()[0]))
+    Expect(mesh.Palette().Count == 1)
+    // A node's camera, beside its mesh, is an entity under it.
+    Local found = False
+    For child In mesh.Children()
+        If child Is Camera
+            found = True
+            Local camera = child As Camera
+            Expect(camera.Projection() == Projection.ORTHOGRAPHIC)
+            Expect(camera.OrthographicHeight() == 6.0)
+            Expect(camera.Near() == 0.5)
+            Expect(camera.Far() == 9.0)
+        End If
+    End For
+    Expect(found)
+End Function
+
 @Test
 Function AStoppedGpusModelIsLoadedAgain() Throws IOError
     If NoGpu() Then Skip("no GPU here")
