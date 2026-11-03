@@ -9,12 +9,19 @@ Import std.math
 Const RATE: Int = 22050
 Const TAU: Float = 6.283185307179586
 
+// Sine, cosine, and exponent through the double-precision libm, whose results round the same on
+// every machine this far down, where the single-precision ones differ.
+Function Sine(x: Float): Float => Sin(x As Float64) As Float
+Function Cosine(x: Float): Float => Cos(x As Float64) As Float
+Function Decay(x: Float): Float => Exp(x As Float64) As Float
+
 // Noise from a seed, the same each time, from -1 to 1.
 Final Class Hiss
     Field state: UInt32
 
     New(seed: UInt32)
-        state = seed | 1
+        // Odd, as a shift register's state can't be 0, and each seed its own.
+        state = seed * 2 + 1
     End New
 
     Method Next(): Float
@@ -35,20 +42,38 @@ Final Class Smooth
     End Method
 End Class
 
-// `samples` with their last `fade` seconds faded over their first, so they loop without a click.
-Function Looped(samples: Float[], fade: Float): Float[]
+// `samples` with their last `fade` seconds faded over their first, so they loop without a click, at
+// equal power, as what's faded isn't the same.
+Public Function Looped(samples: Float[], fade: Float): Float[]
     Local count = (fade * (RATE As Float)) As Int
     Local whole = samples.Count - count
     Local looped: Float[] = []
     For at = 0 Until whole
         If at < count
-            Local mix = (at As Float) / (count As Float)
-            looped.Add(samples[at] * mix + samples[whole + at] * (1.0 - mix))
+            Local mix = (at As Float) / (count As Float) * TAU / 4.0
+            looped.Add(samples[at] * Sine(mix) + samples[whole + at] * Cosine(mix))
         Else
             looped.Add(samples[at])
         End If
     End For
     Return looped
+End Function
+
+// `samples` around 0, and scaled so the loudest is at `peak`, under what a WAV can hold.
+Function Leveled(samples: Float[], peak: Float): Float[]
+    Local mean = 0.0
+    For sample In samples
+        mean += sample / (samples.Count As Float)
+    End For
+    Local loudest = 0.0
+    For sample In samples
+        loudest = Max(loudest, Abs(sample - mean))
+    End For
+    Local leveled: Float[] = []
+    For sample In samples
+        leveled.Add((sample - mean) / loudest * peak)
+    End For
+    Return leveled
 End Function
 
 // Writes `samples`, from -1 to 1, as a WAV.
@@ -87,49 +112,49 @@ End Function
 Function Samples(seconds: Float): Int => (seconds * (RATE As Float)) As Int
 
 // Wind: noise, swelling, through a filter that opens as it does.
-Function Wind(): Float[]
+Public Function Wind(): Float[]
     Local hiss = Hiss(1)
     Local low = Smooth()
     Local made: Float[] = []
     For at = 0 Until Samples(7.0)
         Local t = (at As Float) / (RATE As Float)
-        Local swell = 0.55 + 0.25 * Sin(t * 0.9) + 0.2 * Sin(t * 2.3 + 1.0)
-        made.Add(low.Next(hiss.Next(), 0.02 + swell * 0.05) * (0.8 + swell) * 2.0)
+        Local swell = 0.55 + 0.25 * Sine(t * 0.9) + 0.2 * Sine(t * 2.3 + 1.0)
+        made.Add(low.Next(hiss.Next(), 0.02 + swell * 0.05) * (0.8 + swell))
     End For
-    Return Looped(made, 1.0)
+    Return Leveled(Looped(made, 1.0), 0.7)
 End Function
 
 // The sea: darker noise, in slow waves.
-Function Sea(): Float[]
+Public Function Sea(): Float[]
     Local hiss = Hiss(2)
     Local low = Smooth()
     Local made: Float[] = []
     For at = 0 Until Samples(7.0)
         Local t = (at As Float) / (RATE As Float)
-        Local crest = 0.5 + 0.5 * Sin(t * TAU / 3.0)
+        Local crest = 0.5 + 0.5 * Sine(t * TAU / 3.0)
         Local wave = crest * crest
-        made.Add(low.Next(hiss.Next(), 0.015 + wave * 0.06) * (0.5 + wave) * 2.5)
+        made.Add(low.Next(hiss.Next(), 0.015 + wave * 0.06) * (0.5 + wave))
     End For
-    Return Looped(made, 1.0)
+    Return Leveled(Looped(made, 1.0), 0.7)
 End Function
 
 // A gull's call: a falling cry, twice.
-Function Gull(): Float[]
+Public Function Gull(): Float[]
     Local made: Float[] = []
     Local phase = 0.0
     For at = 0 Until Samples(0.7)
         Local t = (at As Float) / (RATE As Float)
         Local part = Fract(t / 0.35)
-        Local pitch = 1500.0 - part * 500.0 + Sin(t * 70.0) * 60.0
+        Local pitch = 1500.0 - part * 500.0 + Sine(t * 70.0) * 60.0
         phase += pitch * TAU / (RATE As Float)
-        Local envelope = Sin(part * 3.14159) * 0.5
-        made.Add((Sin(phase) + 0.4 * Sin(phase * 2.0)) * envelope)
+        Local envelope = Sine(part * 3.14159)
+        made.Add((Sine(phase) + 0.4 * Sine(phase * 2.0)) * envelope)
     End For
-    Return made
+    Return Leveled(made, 0.6)
 End Function
 
 // Wood creaking: a low tone in stutters.
-Function Creak(): Float[]
+Public Function Creak(): Float[]
     Local hiss = Hiss(3)
     Local made: Float[] = []
     Local phase = 0.0
@@ -137,52 +162,53 @@ Function Creak(): Float[]
         Local t = (at As Float) / (RATE As Float)
         phase += (180.0 + t * 90.0) * TAU / (RATE As Float)
         Local stutter = Fract(t * 22.0) < 0.35 ? 1.0 : 0.15
-        Local fade = Sin(t / 0.5 * 3.14159)
-        made.Add((Sin(phase) * 0.6 + hiss.Next() * 0.1) * stutter * fade * 0.7)
+        Local fade = Sine(t / 0.5 * 3.14159)
+        made.Add((Sine(phase) * 0.6 + hiss.Next() * 0.1) * stutter * fade)
     End For
-    Return made
+    Return Leveled(made, 0.6)
 End Function
 
-// The wheel: a slow thump, and water, turning once in its length.
-Function Wheel(): Float[]
+// The wheel: a slow thump, and water, turning once in its length, which is whole beats once its
+// fade's taken off.
+Public Function Wheel(): Float[]
     Local hiss = Hiss(4)
     Local low = Smooth()
     Local made: Float[] = []
-    For at = 0 Until Samples(2.0)
+    For at = 0 Until Samples(2.25)
         Local t = (at As Float) / (RATE As Float)
         Local beat = Fract(t * 2.0)
-        Local thump = Sin(beat * TAU * 3.0) * Exp(-beat * 9.0) * 0.8
+        Local thump = Sine(beat * TAU * 3.0) * Decay(-beat * 9.0) * 0.8
         made.Add(thump + low.Next(hiss.Next(), 0.1) * 0.5)
     End For
-    Return made
+    Return Leveled(Looped(made, 0.25), 0.7)
 End Function
 
 // A step on rock: a click and a little noise, a seed for each of three.
-Function Step(seed: UInt32): Float[]
+Public Function Step(seed: UInt32): Float[]
     Local hiss = Hiss(seed)
     Local low = Smooth()
     Local made: Float[] = []
     For at = 0 Until Samples(0.14)
         Local t = (at As Float) / (RATE As Float)
-        made.Add(low.Next(hiss.Next(), 0.25) * Exp(-t * 38.0) * 1.6)
+        made.Add(low.Next(hiss.Next(), 0.25) * Decay(-t * 38.0))
     End For
-    Return made
+    Return Leveled(made, 0.7)
 End Function
 
-// A splash: noise opening and dying away.
-Function Splash(): Float[]
+// A splash: noise, bright at first, darkening and dying away.
+Public Function Splash(): Float[]
     Local hiss = Hiss(8)
     Local low = Smooth()
     Local made: Float[] = []
     For at = 0 Until Samples(0.9)
         Local t = (at As Float) / (RATE As Float)
-        made.Add(low.Next(hiss.Next(), 0.5 * Exp(-t * 4.0) + 0.03) * Exp(-t * 4.5) * 1.1)
+        made.Add(low.Next(hiss.Next(), 0.5 * Decay(-t * 4.0) + 0.03) * Decay(-t * 4.5))
     End For
-    Return made
+    Return Leveled(made, 0.8)
 End Function
 
-/// Writes every sound in `folder`, and gives how many there are.
-Public Function WriteSounds(folder: Path): Int Throws IOError
+/// Writes every sound in `folder`.
+Public Function WriteSounds(folder: Path) Throws IOError
     Try WriteWav(folder / "wind.wav", Wind())
     Try WriteWav(folder / "sea.wav", Sea())
     Try WriteWav(folder / "gull.wav", Gull())
@@ -192,5 +218,4 @@ Public Function WriteSounds(folder: Path): Int Throws IOError
     Try WriteWav(folder / "step_2.wav", Step(6))
     Try WriteWav(folder / "step_3.wav", Step(7))
     Try WriteWav(folder / "splash.wav", Splash())
-    Return 9
 End Function

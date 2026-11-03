@@ -1,0 +1,373 @@
+// The flow alone, with no window: each walk's whole transcript, the flood, the sweep, stranding,
+// parts lost, the warning, keys after the end, and what a mistake says; the island's numbers beside
+// it; and the keys' gamepad bindings.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import std.text
+Import fbengine
+Import slack_water.checks
+Import slack_water.controls
+Import slack_water.flow
+Import slack_water.ground
+Import slack_water.walks
+
+// A flow, keeping what it says.
+Function Told(lines: String[]): Flow
+    Return Flow(Function(line: String)
+        lines.Add(line)
+    End Function)
+End Function
+
+// Moves it on until it's `clock` seconds in.
+Function RunTo(flow: Flow, clock: Float64)
+    If clock > flow.Clock() Then flow.Step(clock - flow.Clock())
+End Function
+
+// Walks to the end of this leg.
+Function Arrive(flow: Flow)
+    While flow.Walking() && flow.Ended() == Ending.NONE
+        flow.Step(0.1)
+    End While
+    flow.Step(5.2)
+End Function
+
+// Plays a walk on the flow, as `--walk` does by keys, and gives how many seconds it took.
+Function Played(name: String, flow: Flow): Float64
+    Local seconds: Float64 = 0.0
+    Local steps = WalkOf(name) ?? []
+    Local next = 0
+    While flow.Ended() == Ending.NONE
+        If next < steps.Count && WalkReady(flow, steps[next])
+            Select steps[next]
+                Case "W"
+                    flow.GoOut()
+                Case "S"
+                    flow.GoBack()
+                Case "E"
+                    flow.Use()
+                Case "Q"
+                    flow.Hand()
+            End Select
+            next += 1
+        End If
+        flow.Step(0.1)
+        seconds += 0.1
+    End While
+    Return seconds
+End Function
+
+// What's in a walk's kept transcript, line by line.
+Function Kept(text: UInt8[]): String[]
+    Local lines: String[] = []
+    For line In (String.FromUtf8(text) ?? "").Split("\n")
+        Local clean = line.Trim()
+        If clean != "" Then lines.Add(clean)
+    End For
+    Return lines
+End Function
+
+@Test
+Function EachWalksTranscriptIsWhatsKept()
+    For walk In [("bright", Kept(Embed("walk_bright.txt"))),
+                 ("dim", Kept(Embed("walk_dim.txt"))),
+                 ("dark", Kept(Embed("walk_dark.txt")))]
+        Local lines: String[] = []
+        Played(walk.0, Told(lines))
+        Expect(lines == walk.1)
+    End For
+End Function
+
+@Test
+Function TheWalksEndAsTheySay()
+    Local bright = Told([])
+    Played("bright", bright)
+    Expect(bright.Ended() == Ending.BRIGHT)
+    Local dim = Told([])
+    Played("dim", dim)
+    Expect(dim.Ended() == Ending.DIM)
+    Local dark = Told([])
+    Played("dark", dark)
+    Expect(dark.Ended() == Ending.DARK)
+End Function
+
+@Test
+Function TheClockSaysTheFloodThenTheTide()
+    Local lines: String[] = []
+    Local flow = Told(lines)
+    Expect(flow.ClockLine() == "7:00 until the causeway floods")
+    RunTo(flow, 419.0)
+    Expect(flow.FloodLeft() > 0.0)
+    Expect(!flow.Flooded())
+    RunTo(flow, 420.0)
+    Expect(flow.FloodLeft() == 0.0)
+    Expect(flow.Flooded())
+    Expect(flow.ClockLine().EndsWith("until the tide's in"))
+    // It's warned of before it floods.
+    Local warned = lines.IndexOf("[5:00] the water's rising: the causeway floods in two minutes")
+    Local flooded = lines.IndexOf("[7:00] the causeway floods")
+    Expect(warned != Null && flooded != Null)
+    If warned != Null && flooded != Null Then Expect(warned < flooded)
+End Function
+
+// Setting off from each place just before the flood.
+@Test
+Function WhereTheFloodLeavesYouIsWhichSideIsNearer()
+    // From the far rock, just gone: back there.
+    Local lines: String[] = []
+    Local fromFar = Told(lines)
+    For step = 1 To 3
+        fromFar.GoOut()
+        Arrive(fromFar)
+    End For
+    RunTo(fromFar, 419.9)
+    fromFar.GoBack()
+    RunTo(fromFar, 421.0)
+    Expect(fromFar.At() == Area.FAR_ROCK)
+    Expect(!fromFar.Walking())
+    Expect(lines.Contains("[7:00] the water carries you to the far rock"))
+    fromFar.GoBack()
+    Expect(fromFar.At() == Area.FAR_ROCK)
+    // From the causeway, just gone: the yard's nearer.
+    Local fromMiddle = Told([])
+    fromMiddle.GoOut()
+    Arrive(fromMiddle)
+    fromMiddle.GoOut()
+    Arrive(fromMiddle)
+    RunTo(fromMiddle, 419.9)
+    fromMiddle.GoOut()
+    RunTo(fromMiddle, 421.0)
+    Expect(fromMiddle.At() == Area.YARD)
+    // From the yard, just gone: back to it.
+    Local fromYard = Told([])
+    fromYard.GoOut()
+    Arrive(fromYard)
+    RunTo(fromYard, 419.9)
+    fromYard.GoOut()
+    RunTo(fromYard, 421.0)
+    Expect(fromYard.At() == Area.YARD)
+    // Standing on the causeway: to the yard, or by your feet, past its middle, to the far rock.
+    Local standing = Told([])
+    standing.Arrive(Area.CAUSEWAY)
+    RunTo(standing, 421.0)
+    Expect(standing.At() == Area.YARD)
+    Local past = Told([])
+    past.Arrive(Area.CAUSEWAY, True)
+    RunTo(past, 421.0)
+    Expect(past.At() == Area.FAR_ROCK)
+End Function
+
+// Pip past the flood, with what Pip holds, doesn't come back over it.
+@Test
+Function PipPastTheFloodStaysThere()
+    Local lines: String[] = []
+    Local flow = Told(lines)
+    For step = 1 To 3
+        flow.GoOut()
+        Arrive(flow)
+    End For
+    flow.Use()
+    Expect(flow.Held() == Part.BELT)
+    flow.Hand()
+    Expect(flow.PipHolds() == Part.BELT)
+    // Over the causeway, and on, so you're past its middle, and Pip's still on the far rock.
+    RunTo(flow, 350.0)
+    flow.GoBack()
+    While flow.Walking()
+        flow.Step(0.1)
+    End While
+    flow.GoBack()
+    RunTo(flow, 421.0)
+    Expect(flow.At() == Area.YARD)
+    Expect(flow.PipAt() == Area.FAR_ROCK)
+    Expect(flow.PipHolds() == Part.BELT)
+    flow.Step(1.0)
+    Expect(flow.PipAt() == Area.FAR_ROCK)
+    Expect(flow.PipHolds() == Part.BELT)
+    flow.Hand()
+    Expect(lines[lines.Count - 1].EndsWith("Pip isn't here yet"))
+End Function
+
+@Test
+Function TheSeaTakesWhatsPastTheFlood()
+    Local lines: String[] = []
+    Local flow = Told(lines)
+    // You're standing on the far rock, and it still goes.
+    For step = 1 To 3
+        flow.GoOut()
+        Arrive(flow)
+    End For
+    RunTo(flow, 421.0)
+    Expect(flow.Lying(Part.PADDLE) == Null)
+    Expect(flow.Lying(Part.BELT) == Null)
+    Expect(lines.Contains("[7:00] the sea takes the sluice paddle"))
+    Expect(lines.Contains("[7:00] the sea takes the drive belt"))
+    // What's in the yard stays.
+    Expect(flow.Lying(Part.GEAR) == Area.YARD)
+End Function
+
+// Nothing after the end.
+@Test
+Function KeysDoNothingOnceItsEnded()
+    Local lines: String[] = []
+    Local flow = Told(lines)
+    RunTo(flow, 600.0)
+    Expect(flow.Ended() == Ending.DARK)
+    Local count = lines.Count
+    Local clock = flow.Clock()
+    flow.GoOut()
+    flow.GoBack()
+    flow.Use()
+    flow.Hand()
+    flow.Arrive(Area.YARD)
+    flow.Step(10.0)
+    Expect(lines.Count == count)
+    Expect(flow.At() == Area.INSIDE)
+    Expect(!flow.Walking())
+    Expect(!flow.SluiceOpen())
+    Expect(flow.Clock() == clock)
+End Function
+
+// A frame that takes half a minute, across the flood.
+@Test
+Function ALongStepKeepsWhatHappensInItsOrder()
+    Local lines: String[] = []
+    Local flow = Told(lines)
+    flow.GoOut()
+    Arrive(flow)
+    RunTo(flow, 410.0)
+    flow.GoOut()
+    flow.Step(30.0)
+    Expect(flow.At() == Area.YARD)
+    Expect(lines.Contains("[7:00] the causeway floods"))
+End Function
+
+// Once nothing can change how it ends, the tide doesn't take minutes more.
+@Test
+Function ItDoesntWaitOnceItsSettled()
+    Local lines: String[] = []
+    Local flow = Told(lines)
+    // All three fitted, and open, the clock's ten minutes go by in far less.
+    Expect(Played("bright", flow) < 430.0)
+    Expect(flow.Ended() == Ending.BRIGHT)
+    Local fitted = -1
+    For at = 0 Until lines.Count
+        If lines[at].Contains("nothing left to do") Then fitted = at
+    End For
+    Expect(fitted > 0)
+    // A dark one's as quick, once a part it needs has gone.
+    Local dark = Told([])
+    dark.GoOut()
+    RunTo(dark, 421.0)
+    Expect(dark.Clock() < 600.0)
+    Local seconds = 0
+    While dark.Ended() == Ending.NONE && seconds < 30
+        dark.Step(1.0)
+        seconds += 1
+    End While
+    Expect(dark.Ended() == Ending.DARK)
+End Function
+
+// What a mistake says.
+@Test
+Function MistakesSaySo()
+    Local lines: String[] = []
+    Local flow = Told(lines)
+    flow.Use()
+    Expect(lines.Contains("[0:00] there's nothing to do here yet"))
+    flow.GoBack()
+    Expect(lines.Contains("[0:00] you're at the mill"))
+    flow.Hand()
+    Expect(lines.Contains("[0:00] neither of you is carrying anything"))
+    flow.GoOut()
+    flow.GoOut()
+    flow.Use()
+    Expect(lines.Contains("[0:00] you're on your way already"))
+    Expect(lines.Contains("[0:00] you can't do that while you're walking"))
+    flow.Hand()
+    Expect(lines.Contains("[0:00] Pip isn't here yet"))
+End Function
+
+// The sluice, told of as soon as it can be opened.
+@Test
+Function TheSluiceIsToldOf()
+    Local lines: String[] = []
+    Played("dim", Told(lines))
+    Local fit = lines.Count
+    For at = 0 Until lines.Count
+        If lines[at].Contains("the sluice can be opened now") Then fit = at
+    End For
+    Expect(fit < lines.Count)
+End Function
+
+@Test
+Function EveryEdgeOfTheGroundIsUnderWater()
+    Local half = SIDE / 2
+    For along = -half To half
+        Expect(GroundHeight(along As Float, -half As Float) < 0.0)
+        Expect(GroundHeight(along As Float, half As Float) < 0.0)
+        Expect(GroundHeight(-half As Float, along As Float) < 0.0)
+        Expect(GroundHeight(half As Float, along As Float) < 0.0)
+    End For
+End Function
+
+// The sea tops the causeway exactly as the flow says it floods, by enough to see.
+@Test
+Function TheSeaFloodsTheCausewayWhenTheFlowSays()
+    Local crossing = LowestCrossing()
+    Expect(crossing > 0.0)
+    For second = 0 To 419
+        Expect(SeaHeight(second As Float64) < crossing)
+    End For
+    Expect(SeaHeight(419.99) < crossing)
+    Expect(SeaHeight(FLOOD_AT) > crossing + 0.05)
+    Expect(SeaHeight(TIDE_IN_AT) < GroundHeight(MAIN_X, 0.0))
+    Expect(SeaHeight(RISING_AT) == 0.0)
+    Expect(SeaHeight(RISING_AT + 60.0) > 0.0)
+End Function
+
+@Test
+Function TheGamepadPlaysItToo()
+    Local text = TextControls()
+    Expect(text.Out.Reads(Binding.OfGamepadButton(GamepadButton.NORTH)))
+    Expect(text.Back.Reads(Binding.OfGamepadButton(GamepadButton.EAST)))
+    Expect(text.Use.Reads(Binding.OfGamepadButton(GamepadButton.SOUTH)))
+    Expect(text.Hand.Reads(Binding.OfGamepadButton(GamepadButton.WEST)))
+    Local foot = Controls()
+    Expect(foot.Use.Reads(Binding.OfGamepadButton(GamepadButton.SOUTH)))
+    Expect(foot.Hand.Reads(Binding.OfGamepadButton(GamepadButton.WEST)))
+    Expect(foot.Move.Reads(Binding.OfGamepadAxis(GamepadAxis.LEFT_X)))
+    Expect(foot.Move.Reads(Binding.OfGamepadAxis(GamepadAxis.LEFT_Y, -1.0)))
+End Function
+
+// A hitch of half a minute counts for a quarter of a second.
+@Test
+Function AFrameIsCapped()
+    Expect(FrameStep(0.016) == 0.016)
+    Expect(FrameStep(30.0) == 0.25)
+End Function
+
+// A WAV of the tools' header and `samples`, two bytes each of `byte`.
+Function Wav(samples: Int, low: UInt8, high: UInt8): UInt8[]
+    Local bytes: UInt8[] = []
+    For at = 1 To 44
+        bytes.Add(0)
+    End For
+    For at = 1 To samples
+        bytes.Add(low)
+        bytes.Add(high)
+    End For
+    Return bytes
+End Function
+
+// An emptied or silenced WAV, or one that clips, is a fault, which fails its check.
+@Test
+Function ABadSoundIsAFault()
+    Expect(SoundFault(Wav(0, 0, 0)) == "it has no samples")
+    Expect(SoundFault(Wav(100, 0, 0)) == "it's silent")
+    Expect(SoundFault(Wav(100, 0xFF, 0x7F)) == "it clips")
+    Expect(SoundFault(Wav(100, 0x01, 0x80)) == "it clips")
+    Expect(SoundFault(Wav(100, 0x00, 0x40)) == Null)
+End Function

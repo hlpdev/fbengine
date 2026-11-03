@@ -18,9 +18,13 @@ End Function
 
 // Value noise at (`x`, `y`), each from 0 to 1 across the tile, of `cells` cells a side, smooth
 // between them, and the same at opposite edges.
-Function Noise(x: Float, y: Float, cells: Int, seed: Int): Float
+Function Noise(x: Float, y: Float, cells: Int, seed: Int): Float => Stretched(x, y, cells, cells,
+                                                                              seed)
+
+// The same, of `cells` cells across and `rows` down.
+Function Stretched(x: Float, y: Float, cells: Int, rows: Int, seed: Int): Float
     Local across = x * (cells As Float)
-    Local down = y * (cells As Float)
+    Local down = y * (rows As Float)
     Local left = Floor(across) As Int
     Local top = Floor(down) As Int
     Local u = across - (left As Float)
@@ -28,10 +32,11 @@ Function Noise(x: Float, y: Float, cells: Int, seed: Int): Float
     u = u * u * (3.0 - 2.0 * u)
     v = v * v * (3.0 - 2.0 * v)
     Local wrap = Function(at: Int): Int => ((at % cells) + cells) % cells
-    Local a = Hash(wrap(left), wrap(top), seed)
-    Local b = Hash(wrap(left + 1), wrap(top), seed)
-    Local c = Hash(wrap(left), wrap(top + 1), seed)
-    Local d = Hash(wrap(left + 1), wrap(top + 1), seed)
+    Local wrapDown = Function(at: Int): Int => ((at % rows) + rows) % rows
+    Local a = Hash(wrap(left), wrapDown(top), seed)
+    Local b = Hash(wrap(left + 1), wrapDown(top), seed)
+    Local c = Hash(wrap(left), wrapDown(top + 1), seed)
+    Local d = Hash(wrap(left + 1), wrapDown(top + 1), seed)
     Return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
 End Function
 
@@ -53,7 +58,7 @@ End Function
 Function Byte(value: Float): UInt8 => Clamp(value * 255.0 + 0.5, 0.0, 255.0) As UInt8
 
 // How a material's made: its height, color, and roughness at a point of the tile.
-Interface Maker
+Public Interface Maker
     Method Height(x: Float, y: Float): Float
     Method Albedo(x: Float, y: Float, height: Float): (Float, Float, Float)
     Method Roughness(x: Float, y: Float, height: Float): Float
@@ -91,7 +96,7 @@ Final Class Wood Implements Maker
     // Its grain runs down, bent a little.
     Method Height(x: Float, y: Float): Float
         Local bent = x + (Layered(x, y, 3, 2, 31) - 0.5) * 0.12
-        Local rings = Noise(bent, y, 2, 32) * 0.3 + Noise(bent, y * 0.25, 16, 33) * 0.7
+        Local rings = Noise(bent, y, 2, 32) * 0.3 + Stretched(bent, y, 16, 4, 33) * 0.7
         Return rings
     End Method
 
@@ -130,9 +135,15 @@ Final Class Iron Implements Maker
     End Method
 End Class
 
-// Writes `name`'s three maps in `folder`, `side` across, with what's data's sidecars.
-Function WriteMaterial(folder: Path, name: String, side: Int, maker: Maker,
-                       strength: Float) Throws IOError
+/// A material's name, how many pixels across it is, what makes it, and how strong its normals are.
+Public Function Materials(): (String, Int, Maker, Float)[]
+    Return [("rock", 256, Rock() As Maker, 12.0), ("sand", 256, Sand() As Maker, 3.0),
+            ("wood", 128, Wood() As Maker, 5.0), ("brass", 128, Brass() As Maker, 2.0),
+            ("iron", 128, Iron() As Maker, 4.0)]
+End Function
+
+/// A material's height at each pixel, row after row.
+Public Function Heights(maker: Maker, side: Int): Float[]
     Local heights: Float[] = []
     For y = 0 Until side
         For x = 0 Until side
@@ -140,6 +151,13 @@ Function WriteMaterial(folder: Path, name: String, side: Int, maker: Maker,
                                      (y As Float) / (side As Float)))
         End For
     End For
+    Return heights
+End Function
+
+// Writes `name`'s three maps in `folder`, `side` across, with what's data's sidecars.
+Function WriteMaterial(folder: Path, name: String, side: Int, maker: Maker,
+                       strength: Float) Throws IOError
+    Local heights = Heights(maker, side)
     Local albedo = Image(side, side)
     Local normal = Image(side, side)
     Local rough = Image(side, side)
@@ -171,12 +189,9 @@ Function WriteMaterial(folder: Path, name: String, side: Int, maker: Maker,
     Try File.WriteText(folder / "{name}_rough.png.toml", "srgb = false\n")
 End Function
 
-/// Writes every material's maps in `folder`, and gives how many files of them there are.
-Public Function WriteTextures(folder: Path): Int Throws IOError
-    Try WriteMaterial(folder, "rock", 256, Rock(), 12.0)
-    Try WriteMaterial(folder, "sand", 256, Sand(), 3.0)
-    Try WriteMaterial(folder, "wood", 128, Wood(), 5.0)
-    Try WriteMaterial(folder, "brass", 128, Brass(), 2.0)
-    Try WriteMaterial(folder, "iron", 128, Iron(), 4.0)
-    Return 5 * 3
+/// Writes every material's maps in `folder`.
+Public Function WriteTextures(folder: Path) Throws IOError
+    For material In Materials()
+        Try WriteMaterial(folder, material.0, material.1, material.2, material.3)
+    End For
 End Function

@@ -6,7 +6,9 @@ Import std.collections
 Import std.core
 Import std.math
 Import fbengine
+Import "./controls"
 Import "./flow"
+Import "./ground"
 Import "./island"
 
 // How fast you walk, and Pip, in meters a second, how high your eyes are, and how near a part has
@@ -21,47 +23,6 @@ Const WADE: Float = 0.25
 // How fast the mouse turns you, in radians a unit.
 Const LOOK_SPEED: Float = 0.003
 
-/// A game's keys and mouse, bound to what they do.
-Public Final Class Controls
-    Field Set: ActionSet
-    Field Move: Action
-    Field Look: Action
-    Field Use: Action
-    Field Hand: Action
-
-    Public New()
-        Set = ActionSet()
-        Move = Set.Add("move")
-        Move.Bind(Binding.OfKey(Key.D))
-        Move.Bind(Binding.OfKey(Key.A, -1.0))
-        Move.Bind(Binding.OfGamepadAxis(GamepadAxis.LEFT_X))
-        Move.BindY(Binding.OfKey(Key.W))
-        Move.BindY(Binding.OfKey(Key.S, -1.0))
-        Move.BindY(Binding.OfGamepadAxis(GamepadAxis.LEFT_Y, -1.0))
-        Look = Set.Add("look")
-        Look.Bind(Binding.OfMouseAxis(MouseAxis.X))
-        Look.BindY(Binding.OfMouseAxis(MouseAxis.Y))
-        Use = Set.Add("use")
-        Use.Bind(Binding.OfKey(Key.E))
-        Use.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
-        Hand = Set.Add("hand")
-        Hand.Bind(Binding.OfKey(Key.Q))
-        Hand.Bind(Binding.OfGamepadButton(GamepadButton.WEST))
-    End New
-
-    /// Whether E or its button was pressed.
-    @MainThread Public Method UseHit(): Bool => Use.Hit()
-
-    /// Whether Q or its button was pressed.
-    @MainThread Public Method HandHit(): Bool => Hand.Hit()
-
-    /// Which way you're walking: across, and ahead.
-    @MainThread Public Method Walking(): Vec2 => Move.Vector()
-
-    /// How far the mouse has moved.
-    @MainThread Public Method Looking(): Vec2 => Look.Vector()
-End Class
-
 /// The game: its flow, its island, you, and Pip.
 Public Final Class Game
     Field flow: Flow
@@ -75,12 +36,15 @@ Public Final Class Game
     Field pipZ: Float
     Field pipClip: Int = -1
     Field wheelTurn: Float = 0.0
+    // Where the causeway's middle is, across, past which the water carries you on.
+    Field crossingAt: Float
 
     /// A game from its first moment, inside the mill, saying what happens through `say`.
     @MainThread
     Public New(island: Island, say: Func(String))
         Self.island = island
         flow = Flow(say)
+        crossingAt = CrossingX()
         camera = Camera()
         camera.SetClearColor(SKY)
         camera.SetRange(0.1, 4000.0)
@@ -138,13 +102,21 @@ Public Final Class Game
         Walk(moving.x, moving.y, seconds)
         If controls.UseHit() Then Use()
         If controls.HandHit() Then flow.Hand()
-        Local before = flow.At()
-        flow.Step(seconds)
-        // The water carried you back.
-        If flow.At() != before
-            Local yard = island.PlaceOf(Spot.YARD_EDGE)
-            x = yard.x
-            z = yard.y
+        Local flooded = flow.Flooded()
+        flow.Step(seconds As Float64)
+        // The water carried you to the nearer side, if you were on it, and Pip to Pip's.
+        If flow.Flooded() != flooded
+            If island.PlaceAt(x, z) != flow.At()
+                Local side = SideOf(flow.At())
+                x = side.x
+                z = side.y
+            End If
+            Local pipIs = island.PlaceAt(pipX, pipZ)
+            If pipIs == Area.CAUSEWAY || (pipIs == Area.FAR_ROCK) != (flow.PipAt() == Area.FAR_ROCK)
+                Local side = SideOf(flow.PipAt())
+                pipX = side.x
+                pipZ = side.y
+            End If
         End If
         Seat()
         PlacePip(seconds)
@@ -199,11 +171,25 @@ Public Final Class Game
             Local forwardZ = -Cos(yaw)
             Local nextX = x + (forwardX * ahead - forwardZ * across) * scale
             Local nextZ = z + (forwardZ * ahead + forwardX * across) * scale
-            Local sea = SeaHeight(flow.Clock())
-            If !island.Blocked(nextX, z) && GroundHeight(nextX, z) >= sea - WADE Then x = nextX
-            If !island.Blocked(x, nextZ) && GroundHeight(x, nextZ) >= sea - WADE Then z = nextZ
+            If Walkable(nextX, z) Then x = nextX
+            If Walkable(x, nextZ) Then z = nextZ
         End If
-        flow.Arrive(island.PlaceAt(x, z))
+        flow.Arrive(island.PlaceAt(x, z), x >= crossingAt)
+    End Method
+
+    // Whether there's ground to stand on at (`atX`, `atZ`): not a wall, not the sea past wading, and
+    // not the causeway once it's flooded, however shallow it is yet.
+    @MainThread
+    Method Walkable(atX: Float, atZ: Float): Bool
+        If island.Blocked(atX, atZ) Then Return False
+        If flow.Flooded() && island.PlaceAt(atX, atZ) == Area.CAUSEWAY Then Return False
+        Return GroundHeight(atX, atZ) >= SeaHeight(flow.Clock()) - WADE
+    End Method
+
+    // Where the water leaves someone on the side of `place`.
+    @MainThread
+    Method SideOf(place: Area): Vec2
+        Return island.PlaceOf(place == Area.FAR_ROCK ? Spot.FAR_ROCK : Spot.YARD_EDGE)
     End Method
 
     // Takes what's within reach, or does what the mill's inside lets, as E does.
@@ -239,8 +225,8 @@ Public Final Class Game
         camera.SetRotation(pitch, yaw, 0.0)
     End Method
 
-    // Moves Pip toward you, and plays what suits: idle, walking, or walking while carrying. Past the
-    // water, Pip waits on the mill's side.
+    // Moves Pip toward you, and plays what suits: idle, walking, or walking while carrying. With the
+    // causeway flooded, Pip stays on whichever side Pip's on.
     @MainThread
     Method PlacePip(seconds: Float)
         Local dx = x - pipX
@@ -251,8 +237,7 @@ Public Final Class Game
             Local reach = Min(PIP_SPEED * seconds, length - PIP_KEEPS)
             Local nextX = pipX + dx / length * reach
             Local nextZ = pipZ + dz / length * reach
-            Local sea = SeaHeight(flow.Clock())
-            If reach > 0.0 && GroundHeight(nextX, nextZ) >= sea - WADE
+            If reach > 0.0 && Walkable(nextX, nextZ)
                 If !island.Blocked(nextX, pipZ) Then pipX = nextX
                 If !island.Blocked(pipX, nextZ) Then pipZ = nextZ
                 moving = True

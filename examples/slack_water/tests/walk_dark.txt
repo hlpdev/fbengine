@@ -1,0 +1,19 @@
+[0:00] you set off for the yard
+[0:20] you reach the yard
+[0:20] the gear lies here
+[0:25] Pip catches up
+[0:25] you set off for the causeway
+[1:05] you reach the causeway
+[1:05] the sluice paddle lies here
+[1:10] Pip catches up
+[1:10] you set off for the far rock
+[2:10] you reach the far rock
+[2:10] the drive belt lies here
+[2:15] Pip catches up
+[5:00] the water's rising: the causeway floods in two minutes
+[7:00] the causeway floods
+[7:00] the sea takes the sluice paddle
+[7:00] the sea takes the drive belt
+[7:00] there's nothing left to do but wait for the tide
+[10:00] the tide comes in
+[10:00] the wheel stands still, and the lamp stays dark

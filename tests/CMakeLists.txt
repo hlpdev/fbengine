@@ -384,52 +384,48 @@ if(FBENGINE_FB_TESTS)
                      "cooked astc: sampled or said so True"
                      "a cooked DDS is what it was True")
   # Slack Water, by key presses, offscreen, to each of its endings.
-  foreach(walk IN ITEMS "bright=the wheel turns, and the lamp burns bright\r?\nended BRIGHT"
-                        "dim=the wheel turns slowly, and the lamp burns, dimmer\r?\nended DIM"
-                        "dark=the wheel stands still, and the lamp stays dark\r?\nended DARK")
-    string(FIND "${walk}" "=" split)
-    string(SUBSTRING "${walk}" 0 ${split} name)
-    math(EXPR split "${split} + 1")
-    string(SUBSTRING "${walk}" ${split} -1 printed)
+  foreach(name IN ITEMS bright dim dark)
     add_test(NAME examples.slack_water.walk_${name}
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
-                     -- --walk ${name})
+                     -- --walk ${name}
+                     "${PROJECT_SOURCE_DIR}/examples/slack_water/tests/walk_${name}.txt")
     set_tests_properties(examples.slack_water.walk_${name} PROPERTIES RESOURCE_LOCK slack_water
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                         PASS_REGULAR_EXPRESSION "${printed}\r?\n$" TIMEOUT 300)
-  endforeach()
-  # And the same on the island, walked in 3D.
-  foreach(walk IN ITEMS "bright=the wheel turns, and the lamp burns bright\r?\nended BRIGHT"
-                        "dim=the wheel turns slowly, and the lamp burns, dimmer\r?\nended DIM"
-                        "dark=the wheel stands still, and the lamp stays dark\r?\nended DARK")
-    string(FIND "${walk}" "=" split)
-    string(SUBSTRING "${walk}" 0 ${split} name)
-    math(EXPR split "${split} + 1")
-    string(SUBSTRING "${walk}" ${split} -1 printed)
+                         TIMEOUT 300)
+    # And the same on the island, walked in 3D.
     add_test(NAME examples.slack_water.walk3d_${name}
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
-                     -- --walk3d ${name})
+                     -- --walk3d ${name}
+                     "${PROJECT_SOURCE_DIR}/examples/slack_water/tests/walk3d_${name}.txt")
     set_tests_properties(examples.slack_water.walk3d_${name} PROPERTIES RESOURCE_LOCK slack_water
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                         PASS_REGULAR_EXPRESSION "${printed}\r?\n$"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   endforeach()
-  # And to its best ending, saving what it looks like for a person to see, in its frames' folder.
+  # Its flow, and its tools' sounds and materials, by their numbers, with nothing drawn.
+  add_test(NAME examples.slack_water.rules
+           COMMAND "${FBENGINE_FB}" --color never test "${PROJECT_SOURCE_DIR}/examples/slack_water")
+  set_tests_properties(examples.slack_water.rules PROPERTIES RESOURCE_LOCK slack_water TIMEOUT 300)
+  add_test(NAME examples.slack_water.tools_rules
+           COMMAND "${FBENGINE_FB}" --color never test
+                   "${PROJECT_SOURCE_DIR}/examples/slack_water/tools")
+  set_tests_properties(examples.slack_water.tools_rules PROPERTIES RESOURCE_LOCK slack_water
+                       TIMEOUT 300)
+  # And to its best ending, saving what it looks like for a person to see, in its frames' folder,
+  # which it fails by if what's drawn isn't what the tide says.
   add_test(NAME examples.slack_water.frames
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                    -- --frames "${PROJECT_BINARY_DIR}/example-frames/slack_water")
   set_tests_properties(examples.slack_water.frames PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                       PASS_REGULAR_EXPRESSION "saved 3 frames, ended BRIGHT\r?\nsaved 5 views of the island\r?\nthe causeway's dry at slack water True\r?\nand under as it floods True\r?\nthe mill's dry at high tide True\r?\n[^$]*saved 4 frames of a 3D walk, ended BRIGHT\r?\n$"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   # Its assets: what its tools make, here, and what's kept in the repository, each loaded as the game
-  # loads them.
+  # loads them, and the two the same.
   add_test(NAME examples.slack_water.tools
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water/tools"
                    -- "${PROJECT_BINARY_DIR}/example-frames/slack_water_made")
   set_tests_properties(examples.slack_water.tools PROPERTIES
                        FIXTURES_SETUP slack_water_made TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "15 textures\r?\n9 sounds\r?\n7 joints in Pip\r?\n$")
+                       PASS_REGULAR_EXPRESSION "15 textures\r?\n9 sounds\r?\n8 joints in Pip\r?\n$")
   foreach(checked IN ITEMS "made=${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
                            "kept=${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
     string(FIND "${checked}" "=" split)
@@ -442,9 +438,15 @@ if(FBENGINE_FB_TESTS)
     set_tests_properties(examples.slack_water.${name} PROPERTIES RESOURCE_LOCK slack_water
                          FIXTURES_REQUIRED slack_water_made
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300
-                         PASS_REGULAR_EXPRESSION "the sounds load\r?\nrock: 256 across, RGBA8, RGBA8_LINEAR, RGBA8_LINEAR\r?\nsand: 256 across, RGBA8, RGBA8_LINEAR, RGBA8_LINEAR\r?\nwood: 128 across, RGBA8, RGBA8_LINEAR, RGBA8_LINEAR\r?\nbrass: 128 across, RGBA8, RGBA8_LINEAR, RGBA8_LINEAR\r?\niron: 128 across, RGBA8, RGBA8_LINEAR, RGBA8_LINEAR\r?\nPip: 7 joints, clips idle, walk, carry\r?\n2 surfaces, 1 morph target, 7 bones in its palette\r?\n0[.]8 m high True, on the ground True\r?\nwalking, its leg's turned True\r?\nblinking, its eyes shut True\r?\n$")
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   endforeach()
+  add_test(NAME examples.slack_water.assets_match
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --match "${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
+                   "${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
+  set_tests_properties(examples.slack_water.assets_match PROPERTIES RESOURCE_LOCK slack_water
+                       FIXTURES_REQUIRED slack_water_made
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen" TIMEOUT 300)
   foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures
           textures_by_their_settings)
     add_test(NAME proof.${name}_no_gpu

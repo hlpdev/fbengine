@@ -1,0 +1,34 @@
+// The walks to each ending, as the flow's own words: what a test plays on the flow alone, and what
+// `--walk` plays by keys, so each pins the other.
+
+Import std.collections
+Import std.core
+Import "./flow"
+
+/// What a walk presses, a key at a time, each once you've stopped walking and Pip's caught up: W, S,
+/// E, and Q as they're played. A number is the clock to wait for, in seconds.
+Public Function WalkOf(name: String): String[]?
+    Select name
+        // The gear and the paddle first, with Pip's hands too; then the belt, in time.
+        Case "bright"
+            Return ["W", "E", "Q", "W", "E", "S", "S", "E", "Q", "E", "E",
+                    "W", "W", "W", "E", "S", "S", "S", "E", "E", "600"]
+        // The same, but setting off too late for the belt.
+        Case "dim"
+            Return ["W", "E", "Q", "W", "E", "S", "S", "E", "Q", "E", "E", "E",
+                    "400", "W", "W", "S", "600"]
+        // Out to the far rock, with nothing done, as the causeway floods behind you.
+        Case "dark"
+            Return ["W", "W", "W", "600"]
+        Default
+            Return Null
+    End Select
+End Function
+
+/// Whether a walk's next step can be taken now, and it isn't a wait still waiting.
+Public Function WalkReady(flow: Flow, step: String): Bool
+    If flow.Walking() Then Return False
+    Local until = Int.Parse(step)
+    If until != Null Then Return flow.Clock() >= (until As Float64)
+    Return flow.PipHere() || flow.Flooded()
+End Function

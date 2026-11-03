@@ -155,10 +155,11 @@ End Class
 
 // A key's rotation about X, by `angle` radians, as a glTF's x, y, z, w.
 Function AboutX(parts: Parts, angle: Float)
-    parts.Float(Sin(angle / 2.0))
+    // Through the double-precision libm, whose results round the same on every machine this far down.
+    parts.Float(Sin((angle / 2.0) As Float64) As Float)
     parts.Float(0.0)
     parts.Float(0.0)
-    parts.Float(Cos(angle / 2.0))
+    parts.Float(Cos((angle / 2.0) As Float64) As Float)
 End Function
 
 // A clip's samplers and channels being made, over `times`.
@@ -211,22 +212,37 @@ End Class
 
 Function Joined(parts: String[]): String => ",".Join(parts)
 
+// How high the hips are with the legs swung `angle` radians, so a foot's lowest corner is on the
+// ground: a leg's LEG long and FOOT thick.
+Const LEG: Float = 0.36
+Const FOOT: Float = 0.08
+
+Function HipHeight(angle: Float): Float
+    Return LEG * (Cos(angle As Float64) As Float) +
+           FOOT / 2.0 * (Sin(Abs(angle) As Float64) As Float)
+End Function
+
 /// Writes Pip in `folder`, and gives how many joints it has.
 Public Function WritePip(folder: Path): Int Throws IOError
     // Its joints, as its nodes, by their indices: it stands on y 0, facing +Z, 0.8 m high.
-    Local joints = [Joint("root", -1, 0.0, 0.0, 0.0), Joint("body", 0, 0.0, 0.42, 0.0),
-                    Joint("head", 1, 0.0, 0.2, 0.0), Joint("arm_l", 1, 0.17, 0.12, 0.0),
-                    Joint("arm_r", 1, -0.17, 0.12, 0.0), Joint("leg_l", 0, 0.08, 0.3, 0.0),
-                    Joint("leg_r", 0, -0.08, 0.3, 0.0)]
-    Local body = 1
-    Local head = 2
+    Local joints = [Joint("root", -1, 0.0, 0.0, 0.0), Joint("hips", 0, 0.0, LEG, 0.0),
+                    Joint("body", 1, 0.0, 0.06, 0.0), Joint("head", 2, 0.0, 0.2, 0.0),
+                    Joint("arm_l", 2, 0.16, 0.12, 0.0), Joint("arm_r", 2, -0.16, 0.12, 0.0),
+                    Joint("leg_l", 1, 0.08, 0.0, 0.0), Joint("leg_r", 1, -0.08, 0.0, 0.0)]
+    Local hips = 1
+    Local body = 2
+    Local head = 3
+    Local armL = 4
+    Local armR = 5
+    Local legL = 6
+    Local legR = 7
     Local brass = Shape()
     brass.Box(0.0, 0.5, 0.0, 0.26, 0.28, 0.2, body)
     brass.Box(0.0, 0.72, 0.0, 0.22, 0.16, 0.18, head)
-    brass.Box(0.21, 0.46, 0.0, 0.06, 0.26, 0.06, 3)
-    brass.Box(-0.21, 0.46, 0.0, 0.06, 0.26, 0.06, 4)
-    brass.Box(0.08, 0.15, 0.0, 0.08, 0.3, 0.08, 5)
-    brass.Box(-0.08, 0.15, 0.0, 0.08, 0.3, 0.08, 6)
+    brass.Box(0.16, 0.46, 0.0, 0.06, 0.26, 0.06, armL)
+    brass.Box(-0.16, 0.46, 0.0, 0.06, 0.26, 0.06, armR)
+    brass.Box(0.08, LEG / 2.0, 0.0, FOOT, LEG, FOOT, legL)
+    brass.Box(-0.08, LEG / 2.0, 0.0, FOOT, LEG, FOOT, legR)
     Local eyes = Shape()
     eyes.Box(0.05, 0.74, 0.095, 0.045, 0.05, 0.01, head, -0.045)
     eyes.Box(-0.05, 0.74, 0.095, 0.045, 0.05, 0.01, head, -0.045)
@@ -253,21 +269,25 @@ Public Function WritePip(folder: Path): Int Throws IOError
     End For
     Local binds = parts.Accessor(start, joints.Count, "MAT4", 5126)
 
+    // Its body breathes down into its hips, so no gap opens over its legs. Its hips come down as its
+    // legs swing, so its feet stay on the ground.
     Local idle = Clip(parts, [0.0, 1.0, 2.0])
-    idle.Bob(parts, body, 0.0, [0.42, 0.435, 0.42], 0.0)
+    idle.Bob(parts, body, 0.0, [0.06, 0.045, 0.06], 0.0)
     idle.Turn(parts, head, [0.0, 0.08, 0.0])
     Local walk = Clip(parts, [0.0, 0.25, 0.5, 0.75, 1.0])
-    walk.Turn(parts, 5, [0.5, 0.0, -0.5, 0.0, 0.5])
-    walk.Turn(parts, 6, [-0.5, 0.0, 0.5, 0.0, -0.5])
-    walk.Turn(parts, 3, [-0.3, 0.0, 0.3, 0.0, -0.3])
-    walk.Turn(parts, 4, [0.3, 0.0, -0.3, 0.0, 0.3])
-    walk.Bob(parts, body, 0.0, [0.42, 0.45, 0.42, 0.45, 0.42], 0.0)
+    walk.Turn(parts, legL, [0.5, 0.0, -0.5, 0.0, 0.5])
+    walk.Turn(parts, legR, [-0.5, 0.0, 0.5, 0.0, -0.5])
+    walk.Turn(parts, armL, [-0.3, 0.0, 0.3, 0.0, -0.3])
+    walk.Turn(parts, armR, [0.3, 0.0, -0.3, 0.0, 0.3])
+    Local low = HipHeight(0.5)
+    walk.Bob(parts, hips, 0.0, [low, LEG, low, LEG, low], 0.0)
     Local carry = Clip(parts, [0.0, 0.25, 0.5, 0.75, 1.0])
-    carry.Turn(parts, 5, [0.35, 0.0, -0.35, 0.0, 0.35])
-    carry.Turn(parts, 6, [-0.35, 0.0, 0.35, 0.0, -0.35])
-    carry.Turn(parts, 3, [-1.4, -1.4, -1.4, -1.4, -1.4])
-    carry.Turn(parts, 4, [-1.4, -1.4, -1.4, -1.4, -1.4])
-    carry.Bob(parts, body, 0.0, [0.42, 0.44, 0.42, 0.44, 0.42], 0.0)
+    carry.Turn(parts, legL, [0.35, 0.0, -0.35, 0.0, 0.35])
+    carry.Turn(parts, legR, [-0.35, 0.0, 0.35, 0.0, -0.35])
+    carry.Turn(parts, armL, [-1.4, -1.4, -1.4, -1.4, -1.4])
+    carry.Turn(parts, armR, [-1.4, -1.4, -1.4, -1.4, -1.4])
+    Local lowCarrying = HipHeight(0.35)
+    carry.Bob(parts, hips, 0.0, [lowCarrying, LEG, lowCarrying, LEG, lowCarrying], 0.0)
     Local clips = [idle.Json("idle"), walk.Json("walk"), carry.Json("carry")]
 
     Local nodes: String[] = []

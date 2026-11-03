@@ -1,0 +1,120 @@
+// The island's shape and the sea's height, as numbers, apart from anything drawn: two rocks and a
+// low causeway between them, a sea that rises to top it as the flow says it floods.
+
+Import std.core
+Import std.math
+Import "./flow"
+
+/// How many squares the ground has on a side, each a meter.
+Public Const SIDE: Int = 240
+// How high the causeway's top is, above the sea at slack water.
+Const CAUSEWAY_HEIGHT: Float = 0.5
+// How far over the causeway the sea is as it floods, so what's under doesn't fight with it.
+Const SURGE: Float = 0.1
+// How high the sea rises, by the time the tide's in.
+Const HIGH_WATER: Float = 1.6
+// How far in from the terrain's edge its ground goes under, so no rock has an open side.
+Const EDGE: Float = 14.0
+/// Where things are, in meters from the ground's middle.
+Public Const MAIN_X: Float = -45.0
+Public Const FAR_X: Float = 70.0
+
+// A number from 0 to 1 for a lattice point, the same each time.
+Function Hash(x: Int, y: Int): Float
+    Local mixed: Int64 = (((x As Int64) * 73856093) ^ ((y As Int64) * 19349663)) & 0x7FFFFFFF
+    mixed = ((mixed ^ (mixed >> 13)) * 1274126177) & 0x7FFFFFFF
+    mixed = mixed ^ (mixed >> 16)
+    Return ((mixed & 0xFFFF) As Float) / 65535.0
+End Function
+
+// Value noise, smooth between the whole numbers, from 0 to 1.
+Function Noise(x: Float, y: Float): Float
+    Local left = Floor(x)
+    Local top = Floor(y)
+    Local u = x - left
+    Local v = y - top
+    u = u * u * (3.0 - 2.0 * u)
+    v = v * v * (3.0 - 2.0 * v)
+    Local a = Hash(left As Int, top As Int)
+    Local b = Hash((left As Int) + 1, top As Int)
+    Local c = Hash(left As Int, (top As Int) + 1)
+    Local d = Hash((left As Int) + 1, (top As Int) + 1)
+    Return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+End Function
+
+// Noise of a few octaves, from 0 to 1.
+Function Rough(x: Float, y: Float): Float
+    Return (Noise(x * 0.03, y * 0.03) * 0.57 + Noise(x * 0.09, y * 0.09) * 0.29 +
+            Noise(x * 0.27, y * 0.27) * 0.14)
+End Function
+
+// A rock's shape: 1 at its middle, past 0 inside its `radius`, below it outside, its edge broken.
+Function Mound(x: Float, z: Float, centerX: Float, centerZ: Float, radius: Float): Float
+    Local dx = x - centerX
+    Local dz = z - centerZ
+    Local edge = radius * (0.72 + Rough(x + 300.0, z + 300.0) * 0.56)
+    Return 1.0 - Sqrt(dx * dx + dz * dz) / edge
+End Function
+
+/// How high the ground is at (`x`, `z`), meters from its middle: under the sea, 0 at slack water,
+/// but for the main rock, the far one, and the causeway from one to the other.
+Public Function GroundHeight(x: Float, z: Float): Float
+    Local main = Mound(x, z, MAIN_X, 0.0, 60.0)
+    Local far = Mound(x, z, FAR_X, 8.0, 20.0)
+    Local land = Max(main, far)
+    Local height = land > 0.0 ? 0.6 + land * (5.0 + Rough(x, z) * 9.0) : land * 6.0
+    // The yard's flat, where the mill stands.
+    Local yard = Clamp(1.0 - (Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z) - 22.0) / 14.0, 0.0, 1.0)
+    height = height + (4.0 - height) * yard
+    // The causeway, straight from one to the other, a little above the water at slack.
+    If x > MAIN_X + 30.0 && x < FAR_X - 8.0
+        Local line = z - (x - MAIN_X) / (FAR_X - MAIN_X) * 8.0
+        Local road = Clamp(1.0 - (Abs(line) - 3.0) / 3.0, 0.0, 1.0)
+        height = Max(height, road * CAUSEWAY_HEIGHT + (1.0 - road) * height)
+    End If
+    // Under the water at the terrain's edge.
+    Local half = (SIDE As Float) / 2.0
+    Local inFrom = half - Max(Abs(x), Abs(z))
+    If inFrom < EDGE
+        Local fade = Clamp(inFrom / EDGE, 0.0, 1.0)
+        height = Min(height, -1.0 + (height + 1.0) * fade)
+    End If
+    Return height
+End Function
+
+/// How high the sea is `clock` seconds into the slack water: flat, then rising, still under the
+/// causeway, then over it, in one surge, as the flow says it floods.
+Public Function SeaHeight(clock: Float64): Float
+    If clock <= RISING_AT Then Return 0.0
+    If clock < FLOOD_AT
+        Return ((clock - RISING_AT) / (FLOOD_AT - RISING_AT)) As Float * CAUSEWAY_HEIGHT * 0.98
+    End If
+    Local over = CAUSEWAY_HEIGHT + SURGE
+    Local on = Min((clock - FLOOD_AT) / (TIDE_IN_AT - FLOOD_AT), 1.0) As Float
+    Return over + on * (HIGH_WATER - over)
+End Function
+
+/// Where the crossing's lowest, across, which is the causeway's middle.
+Public Function CrossingX(): Float
+    Local lowest = 1000.0
+    Local at = 0.0
+    For step = 0 To 200
+        Local x = MAIN_X + (FAR_X - MAIN_X) * (step As Float) / 200.0
+        Local height = GroundHeight(x, CrossingZ(x))
+        If height < lowest
+            lowest = height
+            at = x
+        End If
+    End For
+    Return at
+End Function
+
+/// Where the causeway's line is along, at `x`.
+Public Function CrossingZ(x: Float): Float => (x - MAIN_X) / (FAR_X - MAIN_X) * 8.0
+
+/// The lowest the ground gets on the way from the main rock to the far one: what the sea has to top
+/// to cut them off.
+Public Function LowestCrossing(): Float
+    Local x = CrossingX()
+    Return GroundHeight(x, CrossingZ(x))
+End Function

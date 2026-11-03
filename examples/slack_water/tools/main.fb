@@ -1,14 +1,36 @@
 // Makes every asset Slack Water has from nothing but this code, so its history is their provenance:
 // its textures, its sounds, and Pip. `fb run tools -- assets`, from the game's folder, writes them
 // into its assets/, which are kept in the repository so a build needs no step of its own for them;
-// the same seeds make the same files, on a machine's own floating point.
+// examples.slack_water.assets_match has what's kept be what this makes, on every machine. What it
+// says it made it counts, in the folder, after emptying it of what it makes, so what's left of an
+// older run, or a sound it no longer writes, can't pass for made.
 
+Import std.collections
 Import std.core
 Import std.io
 Import std.os
+Import std.text
 Import "./pip"
 Import "./sounds"
 Import "./textures"
+
+// How many of what's in `folder` end in `ending`.
+Function Counted(folder: Path, ending: String): Int Throws IOError
+    Local count = 0
+    For entry In Try Dir.Entries(folder)
+        If entry.Name().EndsWith(ending) Then count += 1
+    End For
+    Return count
+End Function
+
+// Removes what this tool makes from `folder`, and nothing else.
+Function Emptied(folder: Path) Throws IOError
+    For entry In Try Dir.Entries(folder)
+        For ending In [".png", ".toml", ".wav", ".gltf", ".bin"]
+            If entry.Name().EndsWith(ending) Then Try File.Delete(folder / entry.Name())
+        End For
+    End For
+End Function
 
 Local arguments = Process.Arguments()
 If arguments.Count != 1
@@ -18,8 +40,11 @@ End If
 Try
     Local folder = Path(arguments[0])
     Try Dir.CreateAll(folder)
-    Print("{Try WriteTextures(folder)} textures")
-    Print("{Try WriteSounds(folder)} sounds")
+    Try Emptied(folder)
+    Try WriteTextures(folder)
+    Print("{Try Counted(folder, ".png")} textures")
+    Try WriteSounds(folder)
+    Print("{Try Counted(folder, ".wav")} sounds")
     Print("{Try WritePip(folder)} joints in Pip")
 Catch e As IOError
     PrintError("couldn't write them: {e.Message}")
