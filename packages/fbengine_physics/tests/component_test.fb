@@ -1,0 +1,95 @@
+// A body as a component: described, loaded from what's saved, and built.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+Import fbengine_physics
+
+Function FieldOf(kind: ComponentKind, name: String): ComponentField
+    For field In kind.Fields
+        If field.Name == name Then Return field
+    End For
+    Panic("{kind.Name} has no {name}")
+End Function
+
+@Test
+Function ABodyIsAKindOfComponent()
+    Components.Clear()
+    Defer Components.Clear()
+    AddBodyComponent()
+    Local kind = Components.Kinds()[0]
+    Expect(kind.Name == "Body")
+    Expect(FieldOf(kind, "Moves").First.AsString() == "DYNAMIC")
+    Expect(FieldOf(kind, "Moves").Members.Count == 3)
+    Expect(FieldOf(kind, "Form").Members[1] == "SPHERE")
+    // A new one's a size to see.
+    Local size = FieldOf(kind, "Size").First
+    Expect(size["x"]?.AsDouble() == 1 && size["z"]?.AsDouble() == 1, "{size}")
+    // What each says it takes is what its setter does.
+    Expect(FieldOf(kind, "Mass").Above && FieldOf(kind, "Mass").Low == 0)
+    Expect(FieldOf(kind, "Restitution").High == 1)
+    Expect(!FieldOf(kind, "Friction").Above)
+End Function
+
+@Test
+Function ABodyIsBuiltAsItsSaved()
+    Local scene = World()
+    World.SetCurrent(scene)
+    Defer scene.Free()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    AddBodyComponent()
+    Local entity = Pivot()
+    entity.SetPosition(Vec3(1, 2, 3))
+    Local values = Value.Object()
+    values["Mass"] = Value(4.0)
+    values["Friction"] = Value(0.5)
+    values["Restitution"] = Value(0.25)
+    values["GravityFactor"] = Value(0.5)
+    values["LinearDamping"] = Value(0.125)
+    values["AngularDamping"] = Value(0.375)
+    values["Form"] = Value("SPHERE")
+    Expect(Components.Attach(entity, "Body", values) == Null)
+    Local component = entity.Data<BodyComponent>()
+    If component == Null Then Panic("it isn't on it")
+    Expect(component.Size == Vec3(1, 1, 1), "{component.Size}")
+    Local body = component.Build(world, entity)
+    Expect(body.Motion() == Motion.DYNAMIC)
+    Expect(body.Mass() == 4 && body.Friction() == 0.5 && body.Restitution() == 0.25)
+    Expect(body.GravityFactor() == 0.5)
+    Expect(Abs(body.LinearDamping() - 0.125) < 0.001 && Abs(body.AngularDamping() - 0.375) < 0.001)
+    Expect(body.Shape().Kind() == ShapeKind.SPHERE)
+    Expect(Distance(body.Position(), Vec3(1, 2, 3)) < 0.001, "{body.Position()}")
+    Local kept = body.Attached()
+    Expect(kept != Null && RefEquals(kept, entity))
+End Function
+
+@Test
+Function EachFormAndMotionBuilds()
+    Local scene = World()
+    World.SetCurrent(scene)
+    Defer scene.Free()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local shapes = [(BodyShape.BOX, ShapeKind.BOX), (BodyShape.SPHERE, ShapeKind.SPHERE),
+                    (BodyShape.CAPSULE, ShapeKind.CAPSULE),
+                    (BodyShape.CYLINDER, ShapeKind.CYLINDER)]
+    For each In shapes
+        Local component = BodyComponent()
+        component.Form = each.0
+        component.Size = Vec3(1, 2, 3)
+        Expect(component.Build(world, Pivot()).Shape().Kind() == each.1)
+    End For
+    For moves In [Motion.STATIC, Motion.KINEMATIC]
+        Local component = BodyComponent()
+        component.Size = Vec3(1, 1, 1)
+        component.Moves = moves
+        component.Mass = 9
+        Local body = component.Build(world, Pivot())
+        Expect(body.Motion() == moves)
+    End For
+End Function

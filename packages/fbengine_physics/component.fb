@@ -1,0 +1,89 @@
+// A body as a component: what a scene says of one, which the game makes in its world.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./body"
+Import "./shape"
+Import "./world"
+
+/// What a BodyComponent's body touches as.
+Public Enum BodyShape
+    /// A box, as big as Size.
+    BOX
+    /// A ball, of the radius Size.x.
+    SPHERE
+    /// A capsule, of the height Size.y and the radius Size.x.
+    CAPSULE
+    /// A cylinder, of the height Size.y and the radius Size.x.
+    CYLINDER
+End Enum
+
+/// What a scene says of an entity's body, as AddBodyComponent makes it a kind of component called
+/// "Body". Build makes the body itself, which keeps the entity where it is, in a world the game has.
+Public Final Class BodyComponent
+    /// How it moves.
+    Public Field Moves: Motion = Motion.DYNAMIC
+    /// What it touches as.
+    Public Field Form: BodyShape = BodyShape.BOX
+    /// How big that is, 1 by 1 by 1 at first.
+    @Limits(0, Above: True)
+    Public Field Size: Vec3
+    /// Its mass, in kilograms, which a static body has none of.
+    @Limits(0, Above: True)
+    Public Field Mass: Float = 1
+    /// How much it grips what it slides on.
+    @Limits(0)
+    Public Field Friction: Float = 0.2
+    /// How much it bounces.
+    @Limits(0, 1)
+    Public Field Restitution: Float = 0
+    /// How much its speed falls off by itself.
+    @Limits(0)
+    Public Field LinearDamping: Float = 0.05
+    /// How much its turning falls off by itself.
+    @Limits(0)
+    Public Field AngularDamping: Float = 0.05
+    /// How much gravity moves it.
+    Public Field GravityFactor: Float = 1
+
+    /// A size that isn't said is 1 by 1 by 1.
+    Public Method OnLoaded()
+        If Size == Vec3(0, 0, 0) Then Size = Vec3(1, 1, 1)
+    End Method
+
+    /// The body it says, in `world`, kept with `entity`, as Body's New is.
+    @MainThread Public Method Build(world: PhysicsWorld, entity: Entity): Body
+        Local shape = Shaped()
+        Local body = Body(world, shape, Moves, entity)
+        body.SetFriction(Friction)
+        body.SetRestitution(Restitution)
+        // A static one doesn't move, so it has none of the rest.
+        If Moves == Motion.STATIC Then Return body
+        body.SetMass(Mass)
+        body.SetLinearDamping(LinearDamping)
+        body.SetAngularDamping(AngularDamping)
+        body.SetGravityFactor(GravityFactor)
+        Return body
+    End Method
+
+    Method Shaped(): Shape
+        Select Form
+            Case BodyShape.SPHERE
+                Return Shape.Sphere(Size.x)
+            Case BodyShape.CAPSULE
+                Return Shape.Capsule(Size.y, Size.x)
+            Case BodyShape.CYLINDER
+                Return Shape.Cylinder(Size.y, Size.x)
+            Default
+                Return Shape.Box(Size)
+        End Select
+    End Method
+End Class
+
+/// Makes BodyComponent a kind of component called "Body", as a game with bodies in its scenes does in
+/// its program, and its components/main.fb, so the editor knows of it.
+@MainThread @PanicsAtCaller
+Public Function AddBodyComponent()
+    Components.Add<BodyComponent>("Body")
+End Function
