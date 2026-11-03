@@ -1,5 +1,5 @@
 // Cameras: what each sees of its World, and where on its target it draws it. The target is the
-// window; E5 lets a camera draw into a texture.
+// window, or a texture.
 
 Import std.core
 Import std.ffi
@@ -7,6 +7,7 @@ Import std.math
 Import "./c/fbe_scene"
 Import "./entity"
 Import "./light"
+Import "./texture"
 Import "./transform"
 Import "./window"
 
@@ -152,6 +153,18 @@ Public Final Class Camera Extends Entity
     /// Whether the camera draws to the whole window, following its size.
     @MainThread @PanicsAtCaller
     Public Method FillsTarget(): Bool => fbe_camera_whole_target(Live("FillsTarget"))
+
+    /// Sets what the camera draws into: a target with depth, or the screen with Null, as at first.
+    /// Its viewport's in that target's pixels. Another texture, or a freed one, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetRenderTarget(target: Texture?)
+        Local handle: UInt64 = target != Null ? target.Live("SetRenderTarget") : 0
+        If !fbe_camera_set_target(Live("SetRenderTarget"), handle) Then Failed("SetRenderTarget")
+    End Method
+
+    /// What the camera draws into, or Null for the screen.
+    @MainThread @PanicsAtCaller
+    Public Method RenderTarget(): Texture? => TextureOf(fbe_camera_target(Live("RenderTarget")))
 
     /// Sets what the camera clears of its viewport before it draws: its color, to the clear
     /// color, and its depth. A camera that clears neither draws over the cameras before it, as an
@@ -365,6 +378,8 @@ Public Final Class Camera Extends Entity
     // isn't open and the camera has no viewport of its own.
     @PanicsAtCaller
     Package Method Target(call: String): Vec2
+        Local into = RenderTarget()
+        If into != Null Then Return Vec2(into.Width() As Float, into.Height() As Float)
         If !Window.Open() && FillsTarget()
             Panic("{call} on a Camera: the camera's viewport has no size: open the window, or " +
                   "give it a viewport")

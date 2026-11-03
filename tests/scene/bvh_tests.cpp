@@ -101,7 +101,8 @@ TEST_CASE("the tree gives every triangle whose box a box touches, and only those
     const vec3_t min(-2.0F, -2.0F, -2.0F);
     const vec3_t max(3.0F, 1.0F, 2.0F);
     std::set<std::uint32_t> found;
-    tree.overlapping(min, max, [&found](std::uint32_t triangle) { found.insert(triangle); });
+    std::vector<std::uint32_t> stack;
+    tree.overlapping(min, max, stack, [&found](std::uint32_t triangle) { found.insert(triangle); });
     for (std::uint32_t t = 0; t < tree.triangle_count(); ++t) {
         const vec3_t* corners = tree.corners(t);
         bool touches = true;

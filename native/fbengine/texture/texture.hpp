@@ -45,6 +45,8 @@ struct texture_t {
     std::int32_t wrap_u = 0;
     std::int32_t wrap_v = 0;
     std::uint32_t references = 0;
+    /// Whether its alpha's for blending, which a material blending AUTO goes by.
+    bool alpha = false;
     /// How many times its pixels have changed on the GPU, which a CPU copy of them was read at.
     std::uint64_t version = 0;
     /// Whether it's the engine's own, as the frame graph's transient targets' images are, which

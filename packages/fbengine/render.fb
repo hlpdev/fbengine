@@ -11,6 +11,18 @@ Import "./entity"
 Import "./geometry"
 Import "./material"
 Import "./transform"
+Import "./world"
+
+/// How a Draw meets the depth what's drawn before it left.
+Public Enum DepthMode
+    /// It tests it and writes its own, as the scene's opaque draws do.
+    TEST_AND_WRITE = 0
+    /// It tests it only, as what blends in the scene does.
+    TEST = 1
+    /// Neither, as every Material order but 0 does, drawn furthest first, behind the scene or
+    /// over it.
+    NONE = 2
+End Enum
 
 /// One thing a camera draws, as a debug overlay lists them.
 Public Struct Draw Implements Printable
@@ -28,6 +40,12 @@ Public Struct Draw Implements Printable
     Public Field Color: Color
     /// How far in front of the camera its place is, or a Terrain's grid's middle.
     Public Field Depth: Float
+    /// How it meets the depth of what's drawn before it.
+    Public Field DepthMode: DepthMode
+    /// Its pipeline, which draws that share one share, as fbe_render.h lays out its bits: its
+    /// material's shading, blend, alpha cutoff, vertex colors, and sides, the camera's fog, its
+    /// depth mode, and whether its matrix mirrors it.
+    Public Field Pipeline: UInt64
 
     Public Method ToString(): String => "Draw of {Entity} with {Blend} at {Depth}"
 End Struct
@@ -35,14 +53,40 @@ End Struct
 /// Room for as many draws as a camera's had at most, so Draws reads them in one go.
 Global drawRoom = 64
 
+/// Draws every camera of the current World, in their order, `tween` of the way from its last
+/// capture to now, as the frame's passes, which Flip shows. A camera with no target and no window
+/// open, a tween outside 0 to 1, or a GPU that can't start panics.
+@MainThread @PanicsAtCaller
+Public Function RenderWorld(tween: Float = 1)
+    World.Current().Render(tween)
+End Function
+
+Extend World
+    /// Draws every camera of the World, in their order, as RenderWorld does.
+    @MainThread @PanicsAtCaller
+    Public Method Render(tween: Float = 1)
+        If !fbe_render_world(Live("Render"), tween) Then Failed("Render")
+    End Method
+End Extend
+
 Extend Camera
+    /// Draws the camera into its target, `tween` of the way from its World's last capture to now,
+    /// unless it's hidden: first what it clears of its viewport, then every shown Mirror of its
+    /// World's reflection of the scene, then the scene. With no target and no window open, a tween
+    /// outside 0 to 1, or a GPU that can't start, it panics.
+    @MainThread @PanicsAtCaller
+    Public Method Render(tween: Float = 1)
+        If !fbe_render_camera(Live("Render"), tween) Then Failed("Render")
+    End Method
+
     /// What the camera draws, `tween` of the way from its World's last capture to now, seen from
-    /// where it is then, in the order it draws them: by their materials' orders, lower first; in
-    /// an order, what's opaque first, by material, nearest first, then what blends, furthest
-    /// first; ties as the entities were made. Only showing meshes, sprites, ground planes, and
-    /// terrains it might see, with some alpha left after their fade; none for a hidden camera or
-    /// a viewport with no size. With no window open and no viewport of its own, or a tween outside
-    /// 0 to 1, it panics.
+    /// where it is then, in the order it draws them: by their materials' orders, lower first. In
+    /// order 0, the scene's, what's opaque first, by pipeline, by material, and nearest first, then
+    /// what blends, furthest first; in the others, all furthest first, what's opaque first at the
+    /// same depth. Ties as the entities were made, a mesh's surfaces in order. Only showing meshes,
+    /// sprites, ground planes, and terrains it might see, with some alpha left after their fade;
+    /// none for a hidden camera or a viewport with no size. With no window open and no viewport of
+    /// its own, or a tween outside 0 to 1, it panics.
     @MainThread @PanicsAtCaller
     Public Method Draws(tween: Float = 1): Draw[]
         Local camera = Live("Draws")
@@ -73,7 +117,7 @@ Extend Camera
                                 Vec4(m[8], m[9], m[10], m[11]), Vec4(m[12], m[13], m[14], m[15]))
             list.Add(Draw(entity, surface, MaterialOf(draw.material), draw.blend As Blend, matrix,
                           Color(draw.color[0], draw.color[1], draw.color[2], draw.color[3]),
-                          draw.depth))
+                          draw.depth, draw.depth_mode As DepthMode, draw.pipeline))
         End For
         Return list
     End Method

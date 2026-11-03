@@ -39,6 +39,9 @@ struct hit_t {
     bool from_mesh = false;
 };
 
+/// Whether a point on a triangle's plane is inside it.
+bool inside(const triangle_t& triangle, vec3_t p);
+
 /// A box's six faces, two triangles each, facing out, by box_corner's corners.
 inline constexpr std::array<std::array<unsigned, 3>, 12> box_triangles{
     {
