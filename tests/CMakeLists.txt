@@ -158,6 +158,32 @@ if(FBENGINE_FB_TESTS)
     set_property(TEST examples.arcade.golden PROPERTY ENVIRONMENT_MODIFICATION
                  "PATH=path_list_prepend:${fbengine_test_dll_paths}")
   endif()
+  # E7's done-when: Khronos's sample models, skinned and morphed by their files, by numbers against
+  # tests/models/reference.py's, and their frames against their golden images.
+  add_test(NAME models.sample
+           COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/models"
+                   -- --frames "${PROJECT_BINARY_DIR}/example-frames/models")
+  set_tests_properties(models.sample PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       FIXTURES_SETUP model_frames TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "
+21 of 21 frames as worked out\r?\n$")
+  # What masks.bin and worked_out.fb were worked out from, and that it refuses what it can't work out.
+  find_program(FBENGINE_PYTHON NAMES python3 python)
+  if(FBENGINE_PYTHON)
+    add_test(NAME models.reference
+             COMMAND "${FBENGINE_PYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/models/reference.py" --check)
+    set_tests_properties(models.reference PROPERTIES PASS_REGULAR_EXPRESSION "as worked out")
+  endif()
+  add_test(NAME models.golden
+           COMMAND fbengine_gpu_tests "the sample models' frames match their golden images")
+  set_tests_properties(models.golden PROPERTIES
+                       LABELS "gpu;golden" FIXTURES_REQUIRED model_frames
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
+  if(fbengine_test_dll_paths)
+    set_property(TEST models.golden PROPERTY ENVIRONMENT_MODIFICATION
+                 "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+  endif()
   add_test(NAME examples.arcade.rules COMMAND "${FBENGINE_FB}" test "${PROJECT_SOURCE_DIR}/examples/arcade")
   set_tests_properties(examples.arcade.rules PROPERTIES
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
@@ -400,6 +426,18 @@ if(FBENGINE_FB_TESTS)
                          PASS_REGULAR_EXPRESSION "\nno GPU here\r?\n$" TIMEOUT 120)
   endforeach()
 
+  # Section 6's item 14, its receiving side: what a game gets of a converter's glTF.
+  fbengine_add_proof_of_numbers(models_as_a_converter_writes_them
+      "nodes under the figure: Bip01, Bip01 Spine, Bip01 Head, Bip01 HeadNub, body#1"
+      "joints of its skin: Bip01, Bip01 Spine, Bip01 Head"
+      "its clip: walk, at 30 frames a second, 24 frames long"
+      "at frame 6 its spine's at 0.625, its head's turned 45"
+      "at frame 12 its spine's at 0.75, its head's turned 90"
+      "at frame 24 its spine's at 0.5, its head's turned 0"
+      "surface 0: brush brick, reading GFX\\\\brick.bmp, 2 by 2"
+      "surface 1: brush skin, reading skin_01.png, 2 by 2"
+      "surface 0's vertex colors: 1 0 0 1, 0 1 0 0.5, 0 0 1 1, 0.25 0.5 0.75 1"
+      "surface 1's vertex colors: 1 0 0 1, 0 0.2 0.4 1, 0 0 1 1, 1 1 1 1")
   # Those that draw: what each prints, and its --watch, which has to have drawn something.
   fbengine_add_drawn_proof(swept_collisions
                            "a ball falls 100 and rests at 0[.]00, 0[.]50, 0[.]00"
@@ -1306,14 +1344,26 @@ if(FBENGINE_FB_TESTS)
                         "files-device;have 'maps/con\\.txt', which isn't a file's path"
                         "files-file-and-folder;files mounted at res://mf can't be"
                         "files-place;data://mf"
-                        "folder-place;goes above res://")
+                        "folder-place;goes above res://"
+                        "model-material-high;MaterialName on a Model: it has 1 materials; there's no material 1"
+                        "model-material-low;MaterialName on a Model: it has 1 materials; there's no material -1"
+                        "model-texture-high;TextureName on a Model: it has 0 images; there's no image 0"
+                        "model-texture-low;TextureName on a Model: it has 0 images; there's no image -1"
+                        "model-texture-of-high;TextureNameOf on a Model: it has 1 materials; there's no material 1"
+                        "model-texture-of-low;TextureNameOf on a Model: it has 1 materials; there's no material -1"
+                        "model-map-high;TextureOf on a Model: it has 1 materials; there's no material 1"
+                        "model-freed;MaterialName on a Model that was freed"
+                        "model-freed-texture;TextureName on a Model that was freed"
+                        "model-freed-texture-of;TextureNameOf on a Model that was freed")
     list(GET case 0 name)
     list(GET case 1 said)
     add_test(NAME assets.panics.${name}
              COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/assets/panics"
                      -- ${name})
     set_tests_properties(assets.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
-                         "panic: [^\n]*${said}[^\n]* at [^\n]*assets/panics/main\\.fb:")
+                         "panic: [^\n]*${said}[^\n]* at [^\n]*assets/panics/main\\.fb:"
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         SKIP_REGULAR_EXPRESSION "no GPU here")
   endforeach()
 endif()
 
@@ -1739,18 +1789,26 @@ if(FBENGINE_FB_TESTS)
       "drawn raised: red 255 at its hand, 0 where it was"
       "drawn bound: red 255 at its hand, 0 where it went"
       )
+<<<<<<< HEAD
   list(JOIN fbengine_skin_proof "
 ?
 " fbengine_skin_proof_lines)
+=======
+  list(JOIN fbengine_skin_proof "\r?\n" fbengine_skin_proof_lines)
+>>>>>>> origin/master
   add_test(NAME proof.skinned_animation_with_bones_under_game_control
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/proof/skinned_animation_with_bones_under_game_control")
   set_tests_properties(proof.skinned_animation_with_bones_under_game_control PROPERTIES TIMEOUT 120
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "
+<<<<<<< HEAD
 ${fbengine_skin_proof_lines}
 ?
 $")
+=======
+${fbengine_skin_proof_lines}\r?\n$")
+>>>>>>> origin/master
   add_test(NAME proof.skinned_animation_with_bones_under_game_control_watch
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/proof/skinned_animation_with_bones_under_game_control"
@@ -1759,9 +1817,13 @@ $")
                        TIMEOUT 120
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "
+<<<<<<< HEAD
 watched 300 frames
 ?
 $")
+=======
+watched 300 frames\r?\n$")
+>>>>>>> origin/master
   add_test(NAME proof.streamed_and_positional_sound_watch
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/proof/streamed_and_positional_sound"
@@ -1822,9 +1884,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                "${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
 endif()
 fbengine_set_warnings(fbengine_anim_oom_tests)
+# A deadlock is a failure too, as an allocation failing inside a layer's lock was.
 catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
-                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 120)
 
 # A program of the whole of it, as a game would write it.
 if(FBENGINE_FB_TESTS)
@@ -1848,6 +1911,8 @@ if(FBENGINE_FB_TESTS)
       "player-of-freed=Player on a Pivot that was freed"
       "player-entity-freed=SetTime on a Player whose entity was freed"
       "time-nan=SetTime on a Player: a clip's time is a number of seconds, not nan"
+      "frame-no-clip=SetFrame on a Player with no clip playing"
+      "frame-no-rate=SetFrame on a Player: its clip \"no rate\" has no frames a second"
       "update-negative=Update on a World: a world is moved on by 0 seconds or more, not -1"
       "palette-unskinned=Palette on a Mesh skinned by nothing"
       "joint-twice=AddJoint on a Skin: the skin has a joint \"a\" already"

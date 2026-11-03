@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstddef>
+#include <numbers>
 #include <vector>
 
 using fbe::anim::channel_t;
@@ -145,4 +146,17 @@ TEST_CASE("a step rotation between keys comes back at length 1") {
         channel(property_t::ROTATION, interpolation_t::STEP, 4, { 0.0F, 1.0F },
                 { 0.0F, 0.0F, 2.0F, 0.0F, 0.0F, 2.0F, 0.0F, 0.0F });
     CHECK(at(stepping, 0.5F)[2] == Catch::Approx(1.0F));
+}
+
+TEST_CASE("a rotation between its keys turns evenly, on the sphere, not in a line through it") {
+    // No turn to 160 degrees about Z: a quarter of the way is 40 of them, where a line through the
+    // four floats, made length 1, is at 34.5.
+    const float half_turn = 80.0F * std::numbers::pi_v<float> / 180.0F;
+    const channel_t turning =
+        channel(property_t::ROTATION, interpolation_t::LINEAR, 4, { 0.0F, 1.0F },
+                { 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, std::sin(half_turn), std::cos(half_turn) });
+    const std::array<float, 4> quarter = at(turning, 0.25F);
+    const float tenth = half_turn / 4.0F;
+    CHECK(quarter[2] == Catch::Approx(std::sin(tenth)).margin(1e-5));
+    CHECK(quarter[3] == Catch::Approx(std::cos(tenth)).margin(1e-5));
 }
