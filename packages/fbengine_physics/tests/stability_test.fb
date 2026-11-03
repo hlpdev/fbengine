@@ -148,7 +148,8 @@ Function JoltsHeavyOnLightTestStands()
     For i = 0 To 9
         Local under = boxes[i * 2].Position()
         Local over = boxes[i * 2 + 1].Position()
-        Expect(Abs(over.y - under.y - 10) < 0.25 && Abs(over.x - under.x) < 3.5, "{over} on {under}")
+        Expect(Abs(over.y - under.y - 10) < 0.25 && Abs(over.x - under.x) < 3.5,
+               "{over} on {under}")
     End For
 End Function
 
