@@ -73,12 +73,12 @@ Public Final Class Emitter
     End Method
 
     /// Moves it each frame, at Flip, to where `entity` is in the world, as Follow does for a
-    /// function: how a sound goes with what makes it. With `step`, the FixedStep the game's logic
+    /// function: how a sound goes with what makes it. With `step`, the FixedUpdate the game's logic
     /// runs at, it's where the entity is drawn, at the step's Tween, so it moves as smoothly as
     /// what's seen, rather than a step at a time. An entity freed while it's followed is let go at
     /// the next Flip, where it was, at rest; following a freed one panics.
     @MainThread @PanicsAtCaller
-    Public Method Follow(entity: Entity, step: FixedStep? = Null)
+    Public Method Follow(entity: Entity, step: FixedUpdate? = Null)
         Live()
         If entity.Freed() Then Panic("an Emitter can't follow a {entity}")
         Start(Followed(entity, step))
