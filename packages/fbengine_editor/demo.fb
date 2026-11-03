@@ -1,0 +1,86 @@
+// A project and a scene of the editor's own, to show it with: what its --watch plays, and what its
+// golden images are of, so neither needs a game.
+
+Import std.core
+Import std.io
+Import std.math
+Import fbengine
+Import "./component"
+Import "./editor"
+Import "./handles"
+
+// A door, as a game's own program would say one is.
+Enum DemoSwing
+    INWARD
+    OUTWARD
+End Enum
+
+Class DemoDoor
+    @Limits(0, 10)
+    Public Field Speed: Float = 2.5
+    Public Field Label: String = "front door"
+    Public Field Locked: Bool = True
+    Public Field Way: DemoSwing = DemoSwing.OUTWARD
+End Class
+
+/// What's in the demo's scene.
+Public Struct DemoScene
+    /// The floor.
+    Public Field Floor: Entity
+    /// A cube on it.
+    Public Field Crate: Entity
+    /// Another, under the first.
+    Public Field Lid: Entity
+    /// The light.
+    Public Field Lamp: Entity
+    /// A camera.
+    Public Field Lens: Entity
+    /// Something with nothing to show of itself, which a component's on.
+    Public Field Hinge: Entity
+End Struct
+
+/// Makes a project in `folder` that needs nothing.
+Public Function MakeDemoProject(folder: Path) Throws IOError
+    Try Dir.CreateAll(folder)
+    Try File.WriteText(folder / "project.toml", "[project]\nname = \"demo\"\n")
+End Function
+
+/// Fills `editor`'s scene: a floor, a crate with a lid on it, a light and a camera, with what a game's
+/// program would say of a door, the crate being one.
+@MainThread
+Public Function FillDemoScene(editor: Editor): DemoScene
+    Local floor = Mesh(Geometry.Cube())
+    floor.SetName("Floor")
+    floor.SetScale(Vec3(6, 0.1, 6))
+    floor.SetMaterial(Material(Color(0.45, 0.47, 0.5)))
+    Local crate = Mesh(Geometry.Cube())
+    crate.SetName("Crate")
+    crate.SetPosition(Vec3(-1.5, 1, 0.5))
+    crate.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), 0.5))
+    crate.SetMaterial(Material(Color(0.7, 0.42, 0.2)))
+    Local lid = Mesh(Geometry.Cube(), crate)
+    lid.SetName("Lid")
+    lid.SetPosition(Vec3(0, 1.2, 0))
+    lid.SetScale(Vec3(1, 0.2, 1))
+    lid.SetMaterial(Material(Color(0.3, 0.55, 0.8)))
+    Local lamp = Light(LightType.SPOT)
+    lamp.SetName("Lamp")
+    lamp.SetPosition(Vec3(3, 5, 2))
+    lamp.PointAt(Vec3(0, 0, 0))
+    lamp.SetIntensity(30)
+    lamp.SetRange(20)
+    Local lens = Camera()
+    lens.SetName("Lens")
+    lens.SetPosition(Vec3(4, 2, 4))
+    lens.PointAt(Vec3(0, 1, 0))
+    lens.Hide()
+    Local hinge = Pivot()
+    hinge.SetName("Hinge")
+    hinge.SetPosition(Vec3(2, 0.5, -1))
+    Components.Clear()
+    Components.Add<DemoDoor>("Door")
+    editor.Kinds.Set(Components.Kinds())
+    Components.Clear()
+    editor.Tree.MarkChanged()
+    Return DemoScene(floor, crate, lid, lamp, lens, hinge)
+End Function

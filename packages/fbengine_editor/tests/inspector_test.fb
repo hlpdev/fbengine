@@ -1,0 +1,1695 @@
+// The inspector: what reflection finds on each kind, each edited by what suits its type, through undo,
+// driven by Simulate's mouse and keys, offscreen.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import std.time
+Import fbengine
+Import fbengine_editor
+Import fbengine_ui
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+Function Started(settings: TempDir, games: TempDir): Editor Throws IOError, GraphicsError
+    Window.SetHeadless(True)
+    Local folder = games.Path / "game"
+    Try Dir.CreateAll(folder)
+    Try File.WriteText(folder / "project.toml", "[project]\nname = \"game\"\n")
+    Local editor = Try Editor(settings.Path)
+    Try editor.Start(folder)
+    editor.Step()
+    editor.Step()
+    Return editor
+End Function
+
+Function Selecting(editor: Editor, entity: Entity)
+    editor.Edited.SelectOnly(entity)
+    editor.Step()
+    editor.Step()
+End Function
+
+// The title of each row, with a space between.
+Function Titles(editor: Editor): String
+    Local titles = ""
+    For row In editor.Inspector.Rows()
+        titles += row.Title + " "
+    End For
+    Return titles
+End Function
+
+Function RowCalled(editor: Editor, title: String): PropertyRow
+    Local row = editor.Inspector.RowOf(title)
+    If row == Null Then Panic("there's no row {title}, of {Titles(editor)}")
+    Return row
+End Function
+
+Function FieldOf(editor: Editor, title: String, part: Int = 0): TextField
+    Return RowCalled(editor, title).Parts()[part]
+End Function
+
+// Whether there's a row called `title`, as a test of a Widget itself would print all it's in if it
+// fails.
+Function Shows(editor: Editor, title: String): Bool => editor.Inspector.RowOf(title) != Null
+
+// Types `text` in place of what's in a field, not yet taken.
+Function Typing(editor: Editor, field: TextField, text: String) Throws GraphicsError
+    // A field takes text once a frame's seen it focused.
+    editor.Shown.Focus(field)
+    editor.Step()
+    field.SelectAll()
+    If text == ""
+        Try Simulate.PressKey(Key.BACKSPACE)
+    Else
+        Try Simulate.Text(text)
+    End If
+    editor.Step()
+End Function
+
+// Types `text` in a field, and Return.
+Function Entered(editor: Editor, title: String, text: String, part: Int = 0) Throws GraphicsError
+    Try Typing(editor, FieldOf(editor, title, part), text)
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+End Function
+
+Function ClickOn(editor: Editor, box: Rect) Throws GraphicsError
+    Try Simulate.MoveMouse(box.Center.x, box.Center.y)
+    editor.Step()
+    Try Simulate.Click(MouseButton.LEFT)
+    editor.Step()
+    editor.Step()
+End Function
+
+Function Near(one: Float, other: Float): Bool => Abs(one - other) < 0.001
+
+// Enough frames for each row to have looked at what's there, as what changes elsewhere shows by.
+Function Round(editor: Editor)
+    For i = 1 To 60
+        editor.Step()
+    End For
+End Function
+
+@Test
+Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Expect(editor.Inspector.Rows().Count == 0)
+    Local own = "Name Hidden Position Rotation Scale PickMode CollisionShape StepHeight MaxSlope " +
+                "CollisionGroup CastsShadows BlocksSight CollisionRadius "
+    Local light = Light(LightType.SPOT)
+    Selecting(editor, light)
+    Expect(Titles(editor) ==
+           own + "LightType Color ShadowDistance Intensity Range ShadowSize Cascades " +
+           "Shadows Cone ShadowBias ", Titles(editor))
+    Local camera = Camera()
+    Selecting(editor, camera)
+    Expect(Titles(editor) ==
+           own + "Projection FogMode ClearColor FogColor FieldOfView OrthographicHeight FogDensity Order " +
+           "ClearsColor ClearsDepth Range FogRange ",
+           Titles(editor))
+    Local mesh = Mesh(Geometry.Cube())
+    mesh.SetMaterial(Material(Color(1, 0, 0)))
+    Selecting(editor, mesh)
+    // Its own tint, then its material's: an Alpha's in the Color beside it.
+    Expect(Titles(editor) == own + "Color Shading Blend Color Shininess AlphaCutoff Order " +
+           "VertexColors Wireframe TwoSided Fogged ", Titles(editor))
+    Local sprite = Sprite(Material())
+    Selecting(editor, sprite)
+    Expect(Titles(editor) ==
+           own + "ViewMode Color SpriteScale Handle SpriteRotation Shading Blend Color " +
+           "Shininess AlphaCutoff Order VertexColors Wireframe TwoSided Fogged ", Titles(editor))
+    // A terrain's Size clears its heights, so it isn't shown.
+    Local terrain = Terrain(4)
+    Selecting(editor, terrain)
+    Expect(Titles(editor) == own + "Color ", Titles(editor))
+    Local plane = GroundPlane()
+    plane.SetMaterial(Material())
+    Selecting(editor, plane)
+    Expect(Titles(editor) ==
+           own + "Color Segments Shading Blend Color Shininess AlphaCutoff Order " +
+           "VertexColors Wireframe TwoSided Fogged ", Titles(editor))
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Expect(Titles(editor) == own, Titles(editor))
+    editor.Edited.SelectOnly(Null)
+    editor.Step()
+    Expect(editor.Inspector.Rows().Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function ANumberTypedIsOneUndo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local light = Light()
+    light.SetIntensity(2)
+    Selecting(editor, light)
+    Expect(FieldOf(editor, "Intensity").Text() == "2")
+    Try Entered(editor, "Intensity", "3.5")
+    Expect(light.Intensity() == 3.5, "it's {light.Intensity()}")
+    Expect(editor.Edits.UndoName() == "Set Intensity" && editor.Edits.Modified())
+    Expect(FieldOf(editor, "Intensity").Text() == "3.5")
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    Expect(light.Intensity() == 2 && !editor.Edits.CanUndo())
+    Expect(FieldOf(editor, "Intensity").Text() == "2",
+           "it shows {FieldOf(editor, "Intensity").Text()}")
+    Expect(editor.Actions.Run("edit.redo"))
+    editor.Step()
+    Expect(light.Intensity() == 3.5)
+    Expect(FieldOf(editor, "Intensity").Text() == "3.5")
+    editor.Finish()
+End Function
+
+@Test
+Function ANumbersShownAsMuchAsItsWorthReading() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local pivot = Pivot()
+    pivot.SetPosition(Vec3(1.23456789, -0.00001, 0.1))
+    Selecting(editor, pivot)
+    Expect(FieldOf(editor, "Position", 0).Text() == "1.2346", FieldOf(editor, "Position", 0).Text())
+    Expect(FieldOf(editor, "Position", 1).Text() == "0", FieldOf(editor, "Position", 1).Text())
+    Expect(FieldOf(editor, "Position", 2).Text() == "0.1", FieldOf(editor, "Position", 2).Text())
+    // Showing the start of what's more than fits, and an angle's as much as it's worth.
+    Expect(FieldOf(editor, "Position", 0).Cursor() == 0,
+           "it's at {FieldOf(editor, "Position", 0).Cursor()}")
+    pivot.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), 0.5))
+    Round(editor)
+    Expect(FieldOf(editor, "Rotation", 1).Text() == "28.65", FieldOf(editor, "Rotation", 1).Text())
+    Expect(FieldOf(editor, "Rotation", 1).Cursor() == 0)
+    // Going through what's shown keeps what there is, past what's shown.
+    Try Entered(editor, "Position", "1.2346", 0)
+    Expect(!editor.Edits.CanUndo() && pivot.Position().x != 1.2346, "it rounded what's there")
+    editor.Finish()
+End Function
+
+@Test
+Function ClickingElsewhereTakesWhatsTyped() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local light = Light()
+    Selecting(editor, light)
+    Local field = FieldOf(editor, "Name")
+    Try ClickOn(editor, field.Box())
+    Expect(editor.Shown.Focused() != Null && RefEquals(editor.Shown.Focused(), field),
+           "it isn't focused")
+    field.SelectAll()
+    Try Simulate.Text("lamp")
+    editor.Step()
+    // Not yet.
+    Expect(light.Name() == "Light" || light.Name() == "", "it's {light.Name()}")
+    Local had = light.Name()
+    Expect(!editor.Edits.CanUndo())
+    Try ClickOn(editor, FieldOf(editor, "Position", 0).Box())
+    Local gone = editor.Shown.Focused()
+    Expect(gone != Null && RefEquals(gone, FieldOf(editor, "Position", 0)),
+           "the click didn't take it there")
+    Expect(light.Name() == "lamp", "it's {light.Name()}")
+    Expect(editor.Edits.UndoName() == "Set Name")
+    Expect(editor.Actions.Run("edit.undo") && light.Name() == had)
+    editor.Finish()
+End Function
+
+@Test
+Function EscapeLeavesItAsItWas() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local light = Light()
+    light.SetIntensity(2)
+    Selecting(editor, light)
+    Try Typing(editor, FieldOf(editor, "Intensity"), "9")
+    Expect(FieldOf(editor, "Intensity").Text() == "9")
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    editor.Step()
+    Expect(light.Intensity() == 2 && !editor.Edits.CanUndo())
+    Expect(FieldOf(editor, "Intensity").Text() == "2")
+    Expect(editor.Shown.Focused() == Null)
+    // It was for the field: what's selected stays.
+    Expect(editor.Edited.Selected().Count == 1, "Escape let go of what's selected")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatCantBeIsntTaken() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local light = Light()
+    light.SetIntensity(2)
+    Selecting(editor, light)
+    For text In ["-1", "abc", "", "1e30", "inf", "nan", "Inf", "-Inf", "NaN"]
+        Try Entered(editor, "Intensity", text)
+        Expect(light.Intensity() == 2, "{text} made it {light.Intensity()}")
+        Expect(FieldOf(editor, "Intensity").Text() == "2",
+               "{text} left it showing {FieldOf(editor, "Intensity").Text()}")
+        Expect(!editor.Edits.CanUndo(), "{text} made an edit")
+    End For
+    // The same, typed another way, is no change.
+    Try Entered(editor, "Intensity", "2.0")
+    Expect(!editor.Edits.CanUndo(), "the same value made an edit")
+    Expect(FieldOf(editor, "Intensity").Text() == "2")
+    // An entity's scale goes to 0 no more than a handle takes it.
+    Try Entered(editor, "Scale", "0", 0)
+    Expect(light.Scale().x == 1, "it took a scale of nothing")
+    // At the edges of what it takes.
+    Try Entered(editor, "Intensity", "0")
+    Expect(light.Intensity() == 0)
+    Try Entered(editor, "Range", "0")
+    Expect(light.Range() != 0, "a range of 0 panics, and it took it")
+    editor.Finish()
+End Function
+
+// Every field of what's selected, given everything, as a setter that's given what it can't take
+// panics, which would take the editor down.
+Function Everything(editor: Editor, entity: Entity) Throws GraphicsError
+    Selecting(editor, entity)
+    For row In editor.Inspector.Rows()
+        If row.Title == "Name" Then Continue
+        For field In row.Parts()
+            For text In ["-1", "0", "0.5", "1", "2", "1.5707964", "3.1415927", "3.15", "180",
+                         "1023", "1024",
+                         "4097", "-0", "1e-30", "1e30", "-1e30", "1e39", "inf", "-inf", "nan",
+                         "abc", "", " 1 ",
+                         "2147483648", "99999999999999999999", "Inf", "-Inf", "NaN", "1e-39",
+                         "1e-45"]
+                editor.Shown.Focus(field)
+                field.SetText(text)
+                editor.Shown.Focus(Null)
+            End For
+            editor.Step()
+        End For
+    End For
+End Function
+
+@Test
+Function NothingTypedPanics() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Try Everything(editor, Light(LightType.SPOT))
+    Try Everything(editor, Camera())
+    Local mesh = Mesh(Geometry.Cube())
+    mesh.SetMaterial(Material())
+    Try Everything(editor, mesh)
+    Try Everything(editor, Sprite(Material()))
+    Try Everything(editor, Terrain(2))
+    Local plane = GroundPlane()
+    plane.SetMaterial(Material())
+    Try Everything(editor, plane)
+    Try Everything(editor, Pivot())
+    // And all of it comes undone.
+    While editor.Edits.CanUndo()
+        Expect(editor.Actions.Run("edit.undo"))
+    End While
+    editor.Step()
+    editor.Finish()
+End Function
+
+@Test
+Function EachPartOfManyGoesAloneAndBack() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local one = Pivot()
+    one.SetPosition(Vec3(1, 2, 3))
+    Local two = Pivot()
+    two.SetPosition(Vec3(4, 2, 6))
+    Selecting(editor, one)
+    editor.Edited.ToggleSelected(two)
+    editor.Step()
+    editor.Step()
+    // What differs shows nothing; what doesn't, shows.
+    Expect(FieldOf(editor, "Position", 0).Text() == "", FieldOf(editor, "Position", 0).Text())
+    Expect(FieldOf(editor, "Position", 0).Placeholder() == "—")
+    Expect(FieldOf(editor, "Position", 1).Text() == "2")
+    Expect(FieldOf(editor, "Position", 2).Text() == "")
+    // Going through it changes nothing.
+    Try Entered(editor, "Position", "", 0)
+    Expect(!editor.Edits.CanUndo(), "leaving what differs alone made an edit")
+    // Y goes to both, and X and Z stay each its own.
+    Try Entered(editor, "Position", "7", 1)
+    Expect(one.Position() == Vec3(1, 7, 3), "{one.Position()}")
+    Expect(two.Position() == Vec3(4, 7, 6), "{two.Position()}")
+    Try Entered(editor, "Position", "8", 0)
+    Expect(one.Position() == Vec3(8, 7, 3) && two.Position() == Vec3(8, 7, 6))
+    Expect(FieldOf(editor, "Position", 0).Text() == "8")
+    Expect(editor.Actions.Run("edit.undo") && editor.Actions.Run("edit.undo"))
+    Expect(one.Position() == Vec3(1, 2, 3) && two.Position() == Vec3(4, 2, 6))
+    editor.Finish()
+End Function
+
+@Test
+Function ATurnTypedIsInDegreesAndComesBackExactly() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local pivot = Pivot()
+    Local turned = Normalize(Quat.FromAxisAngle(Normalize(Vec3(1, 2, 3)), 0.7))
+    pivot.SetRotation(turned)
+    Selecting(editor, pivot)
+    // Going through what it shows changes nothing, however it rounds.
+    For part = 0 To 2
+        Local field = FieldOf(editor, "Rotation", part)
+        editor.Shown.Focus(field)
+        Try Simulate.PressKey(Key.RETURN)
+        editor.Step()
+        editor.Step()
+    End For
+    Expect(!editor.Edits.CanUndo() && pivot.Rotation() == turned)
+    Try Entered(editor, "Rotation", "90", 1)
+    Local angles = pivot.Rotation().ToEulerDegrees()
+    Expect(Abs(angles.y - 90) < 0.01, "it's {angles}")
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(pivot.Rotation() == turned, "it came back {pivot.Rotation()}, not {turned}")
+    // From level, it's what's typed, about that axis.
+    pivot.SetRotation(Quat.Identity)
+    Round(editor)
+    Try Entered(editor, "Rotation", "90", 1)
+    Local forward = pivot.Rotation() * Vec3(0, 0, -1)
+    Expect(Near(forward.x, -1) && Near(forward.z, 0), "it faces {forward}")
+    editor.Finish()
+End Function
+
+@Test
+Function AnAngleIsKeptInRadiansAndShownInDegrees() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local camera = Camera()
+    camera.SetFieldOfView(Pi / 3)
+    Selecting(editor, camera)
+    Expect(FieldOf(editor, "FieldOfView").Text() == "60", FieldOf(editor, "FieldOfView").Text())
+    Try Entered(editor, "FieldOfView", "90")
+    Expect(Near(camera.FieldOfView(), Pi / 2), "it's {camera.FieldOfView()}")
+    // It's said as a person says it.
+    Expect(editor.Edits.UndoName() == "Set Field Of View", editor.Edits.UndoName() ?? "")
+    Try Entered(editor, "FieldOfView", "180")
+    Expect(Near(camera.FieldOfView(), Pi / 2), "180 degrees panics, and it took it")
+    Try Entered(editor, "FieldOfView", "0")
+    Expect(Near(camera.FieldOfView(), Pi / 2), "0 degrees panics, and it took it")
+    editor.Finish()
+End Function
+
+@Test
+Function TwoNumbersSetAsOneKeepTheirOrder() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local camera = Camera()
+    camera.SetRange(1, 100)
+    Selecting(editor, camera)
+    Try Entered(editor, "Range", "100", 0)
+    Expect(camera.Near() == 1, "a near at its far panics, and it took it")
+    Try Entered(editor, "Range", "0", 0)
+    Expect(camera.Near() == 1, "a near of 0 panics, and it took it")
+    Try Entered(editor, "Range", "1", 1)
+    Expect(camera.Far() == 100, "a far at its near panics, and it took it")
+    Try Entered(editor, "Range", "2", 0)
+    Try Entered(editor, "Range", "50", 1)
+    Expect(camera.Near() == 2 && camera.Far() == 50, "{camera.Near()} to {camera.Far()}")
+    Expect(editor.Actions.Run("edit.undo") && camera.Near() == 2 && camera.Far() == 100)
+    Expect(editor.Actions.Run("edit.undo") && camera.Near() == 1 && camera.Far() == 100)
+    camera.SetFogRange(1, 2)
+    Round(editor)
+    Try Entered(editor, "FogRange", "2", 0)
+    Expect(camera.FogStart() == 1, "a fog from its end panics, and it took it")
+    Try Entered(editor, "FogRange", "0", 0)
+    Expect(camera.FogStart() == 0, "a fog can start at 0")
+    Local spot = Light(LightType.SPOT)
+    spot.SetCone(Pi / 6, Pi / 3)
+    Selecting(editor, spot)
+    Expect(FieldOf(editor, "Cone", 0).Text() == "30" && FieldOf(editor, "Cone", 1).Text() == "60")
+    Try Entered(editor, "Cone", "70", 0)
+    Expect(Near(spot.InnerCone(), Pi / 6), "an inner past its outer panics, and it took it")
+    Try Entered(editor, "Cone", "91", 1)
+    Expect(Near(spot.OuterCone(), Pi / 3), "a cone past 90 degrees panics, and it took it")
+    Try Entered(editor, "Cone", "45", 0)
+    Expect(Near(spot.InnerCone(), Pi / 4) && Near(spot.OuterCone(), Pi / 3))
+    editor.Finish()
+End Function
+
+@Test
+Function AColorsPartsGoAlone() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local light = Light()
+    light.SetColor(Color(0.25, 0.5, 0.75))
+    Selecting(editor, light)
+    Expect(FieldOf(editor, "Color", 0).Text() == "0.25" &&
+           FieldOf(editor, "Color", 2).Text() == "0.75")
+    Try Entered(editor, "Color", "1", 1)
+    Expect(light.Color().r == 0.25 && light.Color().g == 1 && light.Color().b == 0.75)
+    Expect(editor.Actions.Run("edit.undo") && light.Color().g == 0.5)
+    Local mesh = Mesh(Geometry.Cube())
+    Local paint = Material(Color(1, 1, 1, 0.5))
+    mesh.SetMaterial(paint)
+    Selecting(editor, mesh)
+    // The second row called that is the material's, after the mesh's own tint: alpha's 0 to 1.
+    Local rows = editor.Inspector.Rows().Filter(Function(row: PropertyRow) => row.Title == "Color")
+    Expect(rows.Count == 2)
+    Local alpha = rows[1].Parts()[3]
+    Expect(alpha.Text() == "0.5")
+    Try Typing(editor, alpha, "2")
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+    Expect(paint.Color().a == 0.5, "an alpha of 2 panics, and it took it")
+    Try Typing(editor, alpha, "0.25")
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+    Expect(paint.Color().a == 0.25 && paint.Color().r == 1)
+    editor.Finish()
+End Function
+
+@Test
+Function ABoxTicksAllOneWay() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local one = Pivot()
+    Local two = Pivot()
+    two.Hide()
+    Selecting(editor, one)
+    editor.Edited.ToggleSelected(two)
+    editor.Step()
+    editor.Step()
+    Local box = RowCalled(editor, "Hidden") As? ToggleRow
+    If box == Null Then Panic("it's not a box")
+    // As the last selected is.
+    Expect(box.Ticked().On())
+    Try ClickOn(editor, box.Ticked().Box())
+    Expect(!one.Hidden() && !two.Hidden(), "{one.Hidden()} {two.Hidden()}")
+    Expect(!box.Ticked().On())
+    Expect(editor.Edits.UndoName() == "Set Hidden")
+    Try ClickOn(editor, box.Ticked().Box())
+    Expect(one.Hidden() && two.Hidden())
+    Expect(editor.Actions.Run("edit.undo") && editor.Actions.Run("edit.undo"))
+    editor.Step()
+    Expect(!one.Hidden() && two.Hidden())
+    Expect(box.Ticked().On())
+    editor.Finish()
+End Function
+
+@Test
+Function AListChoosesAMember() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local light = Light(LightType.POINT)
+    Selecting(editor, light)
+    Local row = RowCalled(editor, "LightType") As? ChoiceRow<LightType>
+    If row == Null Then Panic("it's not a list")
+    Expect(row.Chooser().Text() == "POINT", row.Chooser().Text())
+    Try ClickOn(editor, row.Chooser().Box())
+    Local list = row.Choices()
+    If list == Null Then Panic("it didn't open")
+    Local members = list.Children()
+    Expect(members.Count == 3, "it has {members.Count}")
+    Expect((members[2] As? Button)?.Text() == "SPOT", (members[2] As? Button)?.Text() ?? "")
+    Local spot = members[2] As? Button
+    If spot == Null Then Panic("it's not a button")
+    Try ClickOn(editor, spot.Box())
+    Expect(light.LightType() == LightType.SPOT)
+    Expect(row.Choices() == Null, "it stayed open")
+    Expect(editor.Shown.Popups().Count == 0, "it's still up")
+    Expect(row.Chooser().Text() == "SPOT")
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    Expect(light.LightType() == LightType.POINT && row.Chooser().Text() == "POINT")
+    // Clicking away chooses nothing.
+    Try ClickOn(editor, row.Chooser().Box())
+    Expect(row.Choices() != Null)
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    editor.Step()
+    Expect(row.Choices() == Null && light.LightType() == LightType.POINT)
+    // What differs shows neither.
+    Local other = Light(LightType.SPOT)
+    editor.Edited.ToggleSelected(other)
+    editor.Step()
+    editor.Step()
+    Local both = RowCalled(editor, "LightType") As? ChoiceRow<LightType>
+    If both == Null Then Panic("it's not a list")
+    Expect(both.Chooser().Text() == "—", both.Chooser().Text())
+    both.Choose(0)
+    Expect(light.LightType() == both.Members()[0] && other.LightType() == both.Members()[0])
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(light.LightType() == LightType.POINT && other.LightType() == LightType.SPOT)
+    editor.Finish()
+End Function
+
+@Test
+Function AMaterialSharedIsEditedOnce() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local shared = Material()
+    Local one = Mesh(Geometry.Cube())
+    one.SetMaterial(shared)
+    Local two = Mesh(Geometry.Cube())
+    two.SetMaterial(shared)
+    Local own = Material()
+    Local three = Mesh(Geometry.Cube())
+    three.SetMaterial(own)
+    Selecting(editor, one)
+    editor.Edited.ToggleSelected(two)
+    editor.Step()
+    editor.Step()
+    Try Entered(editor, "Shininess", "0.5")
+    Expect(shared.Shininess() == 0.5)
+    Expect(own.Shininess() != 0.5, "it changed what isn't selected")
+    Expect(editor.Actions.Run("edit.undo") && shared.Shininess() != 0.5)
+    // Two materials, across what's selected: both, each back to its own.
+    own.SetShininess(0.25)
+    editor.Edited.ToggleSelected(three)
+    editor.Step()
+    editor.Step()
+    Expect(FieldOf(editor, "Shininess").Text() == "",
+           "it shows {FieldOf(editor, "Shininess").Text()}")
+    Local before = shared.Shininess()
+    Try Entered(editor, "Shininess", "0.75")
+    Expect(shared.Shininess() == 0.75 && own.Shininess() == 0.75)
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(shared.Shininess() == before && own.Shininess() == 0.25)
+    // Another material put on what's selected shows, from outside.
+    Selecting(editor, one)
+    Local other = Material()
+    other.SetShininess(0.125)
+    one.SetMaterial(other)
+    editor.Step()
+    editor.Step()
+    Expect(FieldOf(editor, "Shininess").Text() == "0.125", FieldOf(editor, "Shininess").Text())
+    // The game letting go of it, what draws in it still has it, and that's what's edited.
+    other.Free()
+    editor.Step()
+    editor.Step()
+    Expect(FieldOf(editor, "Shininess").Text() == "0.125", FieldOf(editor, "Shininess").Text())
+    Try Entered(editor, "Shininess", "0.5")
+    Local drawn = one.Material()
+    Expect(drawn != Null && drawn.Shininess() == 0.5)
+    // One with none has no such section.
+    one.SetMaterial(Null)
+    editor.Step()
+    editor.Step()
+    Expect(!Shows(editor, "Shininess"))
+    editor.Finish()
+End Function
+
+@Test
+Function ItShowsWhatChangesElsewhereButForWhatsBeingTyped() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    pivot.SetPosition(Vec3(3, 0, 0))
+    Round(editor)
+    Expect(FieldOf(editor, "Position", 0).Text() == "3")
+    Try Typing(editor, FieldOf(editor, "Position", 0), "5")
+    pivot.SetPosition(Vec3(4, 0, 0))
+    Round(editor)
+    Expect(FieldOf(editor, "Position", 0).Text() == "5", "it took away what's being typed")
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+    Expect(pivot.Position().x == 5)
+    Expect(FieldOf(editor, "Position", 0).Text() == "5")
+    // A name set here shows in the tree too, as what's found by it changes.
+    editor.Tree.FindField().SetText("door")
+    editor.Step()
+    editor.Step()
+    Expect(editor.Tree.ShownEntities().Count == 0)
+    Try Entered(editor, "Name", "door")
+    Expect(pivot.Name() == "door")
+    editor.Step()
+    Expect(editor.Tree.ShownEntities().Count == 1, "the tree didn't see its new name")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsTypedGoesToWhatItWasTypedFor() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local one = Light()
+    one.SetIntensity(1)
+    Local two = Light()
+    two.SetIntensity(2)
+    Selecting(editor, one)
+    Try Typing(editor, FieldOf(editor, "Intensity"), "7")
+    editor.Edited.SelectOnly(two)
+    editor.Step()
+    editor.Step()
+    Expect(one.Intensity() == 7, "it's {one.Intensity()}")
+    Expect(two.Intensity() == 2, "it went to what's selected since: {two.Intensity()}")
+    Expect(FieldOf(editor, "Intensity").Text() == "2")
+    Expect(editor.Edits.UndoName() == "Set Intensity")
+    Expect(editor.Actions.Run("edit.undo") && one.Intensity() == 1)
+    // Only once: nothing more comes of its field going.
+    Expect(!editor.Edits.CanUndo())
+    editor.Finish()
+End Function
+
+@Test
+Function ANewSceneDropsWhatsBeingTyped() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local light = Light()
+    Selecting(editor, light)
+    Try Typing(editor, FieldOf(editor, "Intensity"), "7")
+    Expect(editor.Actions.Run("file.close"))
+    editor.Step()
+    editor.Step()
+    Expect(!editor.Edits.CanUndo() && editor.Inspector.Rows().Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsFreedOrTakenOutGoes() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local light = Light()
+    Selecting(editor, light)
+    Try Entered(editor, "Intensity", "5")
+    Expect(editor.Actions.Run("tree.delete"))
+    editor.Step()
+    Expect(editor.Inspector.Rows().Count == 0, "it still shows what's taken out")
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    Expect(editor.Inspector.Rows().Count > 0, "what's back doesn't show")
+    Expect(FieldOf(editor, "Intensity").Text() == "5")
+    // Freed by anything else, with what's being typed in it, and with an edit on it to undo.
+    Try Typing(editor, FieldOf(editor, "Intensity"), "6")
+    light.Free()
+    editor.Step()
+    editor.Step()
+    Expect(editor.Inspector.Rows().Count == 0)
+    While editor.Edits.CanUndo()
+        Expect(editor.Actions.Run("edit.undo"))
+    End While
+    editor.Step()
+    While editor.Edits.CanRedo()
+        Expect(editor.Actions.Run("edit.redo"))
+    End While
+    editor.Step()
+    editor.Finish()
+End Function
+
+@Test
+Function ItsKeysAreItsOwn() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Typing(editor, FieldOf(editor, "Name"), "rwex")
+    Expect(FieldOf(editor, "Name").Text() == "rwex")
+    Try Simulate.PressKey(Key.E)
+    Try Simulate.PressKey(Key.DELETE)
+    editor.Step()
+    editor.Step()
+    Expect(editor.View.Tool == HandleTool.MOVE, "a letter typed changed the tool")
+    Expect(editor.Edited.Selected().Count == 1, "Delete in a field took out what's selected")
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Finish()
+End Function
+
+@Test
+Function AHandleAndAFieldShareOneUndoEach() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Entered(editor, "Position", "5", 0)
+    pivot.SetPosition(Vec3(6, 0, 0))
+    Round(editor)
+    Expect(FieldOf(editor, "Position", 0).Text() == "6", "it doesn't show a move from elsewhere")
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    Expect(pivot.Position().x == 0, "it's {pivot.Position()}")
+    Expect(FieldOf(editor, "Position", 0).Text() == "0")
+    editor.Finish()
+End Function
+
+@Test
+Function ItsRowsAreInItsPane() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local camera = Camera()
+    Selecting(editor, camera)
+    editor.Step()
+    Local pane = editor.Inspector.Box()
+    Expect(pane.Width > 0 && pane.Height > 0)
+    Local name = FieldOf(editor, "Name").Box()
+    Expect(name.X >= pane.X && name.X + name.Width <= pane.X + pane.Width + 1, "{name} of {pane}")
+    Expect(name.Y >= pane.Y && name.Height > 0, "{name} of {pane}")
+    Local x = FieldOf(editor, "Position", 0).Box()
+    Local z = FieldOf(editor, "Position", 2).Box()
+    Expect(z.X > x.X + x.Width - 1, "its parts overlap: {x} and {z}")
+    Expect(z.X + z.Width <= pane.X + pane.Width + 1, "{z} of {pane}")
+    // Closed, what's selected's still shown when it's back, as it's kept up all the while.
+    editor.Docked.Hide("inspector")
+    editor.Step()
+    camera.SetName("seen")
+    Round(editor)
+    editor.Docked.Show("inspector")
+    editor.Step()
+    editor.Step()
+    Expect(editor.Docked.Showing("inspector"))
+    Expect(FieldOf(editor, "Name").Text() == "seen")
+    Expect(FieldOf(editor, "Name").Box().Width > 0, "it isn't laid out")
+    editor.Finish()
+End Function
+
+// A door, as a game's program would say it.
+Class Door
+    @Limits(0, 10)
+    Public Field Speed: Float = 2.5
+    Public Field Label: String = "door"
+    Public Field Open: Bool = False
+    Public Field Panels: Int = 3
+    Public Field Way: Swing = Swing.OUTWARD
+    Public Field At: Vec3
+    Public Field Shade: Color
+    Public Field Corner: Vec2
+    Public Field Parts: Int[] = []
+    @ShownInDegrees
+    Public Field Swings: Float = 0
+End Class
+
+Enum Swing
+    INWARD
+    OUTWARD
+End Enum
+
+Class Latch
+    Public Field Keyed: Bool = True
+End Class
+
+Function KnowingKinds(editor: Editor)
+    Components.Clear()
+    Components.Add<Door>("Door")
+    Components.Add<Latch>("Latch")
+    editor.Kinds.Set(Components.Kinds())
+    Components.Clear()
+    editor.Step()
+    editor.Step()
+End Function
+
+Function Adding(editor: Editor, name: String) Throws GraphicsError
+    Local row = RowCalled(editor, "AddComponent") As? ButtonRow
+    If row == Null Then Panic("there's no way to add one")
+    row.Pressing().Click()
+    editor.Step()
+    editor.Step()
+    Local popups = editor.Shown.Popups()
+    Expect(popups.Count == 1, "its list didn't open")
+    Local item = popups[0].Find("inspector.kind.{name}")
+    Local button = item As? Button
+    If button == Null Then Panic("{name} isn't in its list")
+    button.Click()
+    editor.Step()
+    editor.Step()
+    Expect(editor.Shown.Popups().Count == 0, "its list stayed open")
+End Function
+
+@Test
+Function NoProgramKnowsNoKinds() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Expect(editor.Kinds.Kinds().Count == 0 && !editor.Kinds.Running())
+    Selecting(editor, Pivot())
+    Expect(!Shows(editor, "AddComponent"), "there's a way to add what there isn't")
+    editor.Finish()
+End Function
+
+@Test
+Function AComponentIsAddedAndEditedAndTakenOffThroughUndo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Adding(editor, "Door")
+    Expect(ComponentsOf(pivot).Count == 1 && ComponentsOf(pivot)[0].Kind == "Door")
+    Expect(editor.Edits.UndoName() == "Add Door")
+    // A row for each Field, by what it is.
+    Expect(FieldOf(editor, "Speed").Text() == "2.5", FieldOf(editor, "Speed").Text())
+    Expect(FieldOf(editor, "Label").Text() == "door")
+    Expect(FieldOf(editor, "Panels").Text() == "3")
+    Expect(FieldOf(editor, "At", 2).Text() == "0")
+    Expect(FieldOf(editor, "Corner", 1).Text() == "0")
+    Expect(RowCalled(editor, "Shade").Parts().Count == 4)
+    Expect((RowCalled(editor, "Open") As? ToggleRow) != Null)
+    Expect((RowCalled(editor, "Parts") As? NoteRow) != Null, "there's an editor for what has none")
+    Local way = RowCalled(editor, "Way") As? ChoiceRow<String>
+    If way == Null Then Panic("it's not a list")
+    Expect(way.Chooser().Text() == "OUTWARD")
+    // Edited, it's the data that changes, by what it says it takes.
+    Try Entered(editor, "Speed", "4")
+    Local data = ComponentsOf(pivot)[0]
+    Expect(data.Values["Speed"]?.AsDouble() == 4, "{data.Values}")
+    Try Entered(editor, "Speed", "11")
+    Expect(data.Values["Speed"]?.AsDouble() == 4, "it took what's past its @Limits")
+    Try Entered(editor, "Label", "gate")
+    Expect(data.Values["Label"]?.AsString() == "gate")
+    Try Entered(editor, "Panels", "5")
+    Expect(data.Values["Panels"]?.AsInt() == 5)
+    Try Entered(editor, "At", "7", 1)
+    Local at = data.Values["At"] ?? Value()
+    Expect(at["y"]?.AsDouble() == 7 && at["x"]?.AsDouble() == 0, "{at}")
+    way.Choose(0)
+    editor.Step()
+    Expect(data.Values["Way"]?.AsString() == "INWARD")
+    Try Entered(editor, "Swings", "90")
+    Local swings = data.Values["Swings"]?.AsDouble() ?? 0
+    Expect(Abs(swings - Pi / 2) < 0.001, "@ShownInDegrees keeps radians: {swings}")
+    Expect(editor.Edits.UndoName() == "Set Swings")
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(data.Values["Way"]?.AsString() == "OUTWARD")
+    // Undone and redone, it's the one it was, with what it had.
+    Expect(editor.Actions.Run("edit.undo") && editor.Actions.Run("edit.undo"))
+    Local stepsBack = 0
+    While editor.Edits.CanUndo()
+        Expect(editor.Actions.Run("edit.undo"))
+        stepsBack += 1
+    End While
+    Expect(ComponentsOf(pivot).Count == 0)
+    For i = 1 To stepsBack
+        Expect(editor.Actions.Run("edit.redo"))
+    End For
+    Expect(ComponentsOf(pivot).Count == 1 && RefEquals(ComponentsOf(pivot)[0], data),
+           "it made another")
+    editor.Step()
+    editor.Step()
+    Expect(FieldOf(editor, "Speed").Text() == "4", FieldOf(editor, "Speed").Text())
+    // Taken off, and back in its place, as it was.
+    Try Adding(editor, "Latch")
+    Local remove = RowCalled(editor, "Door") As? ButtonRow
+    If remove == Null Then Panic("there's no way to take it off")
+    remove.Pressing().Click()
+    editor.Step()
+    editor.Step()
+    Expect(ComponentsOf(pivot).Count == 1 && ComponentsOf(pivot)[0].Kind == "Latch")
+    Expect(!Shows(editor, "Speed"), "its rows outlived it")
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    editor.Step()
+    Expect(ComponentsOf(pivot)[0].Kind == "Door" && RefEquals(ComponentsOf(pivot)[0], data))
+    Expect(FieldOf(editor, "Speed").Text() == "4")
+    // Added, undone, it's gone.
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    editor.Step()
+    Expect(ComponentsOf(pivot).Count == 1)
+    editor.Finish()
+End Function
+
+@Test
+Function ManySelectedShareWhatTheyAllHave() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local one = Pivot()
+    Local two = Pivot()
+    Selecting(editor, one)
+    Try Adding(editor, "Door")
+    editor.Edited.ToggleSelected(two)
+    editor.Step()
+    editor.Step()
+    // Only the one has it.
+    Expect(!Shows(editor, "Speed"), "it shows what only one has")
+    // Added to both, it's only added to what hasn't one.
+    Local had = ComponentsOf(one)[0]
+    Try Adding(editor, "Door")
+    Expect(ComponentsOf(one).Count == 1 && RefEquals(ComponentsOf(one)[0], had))
+    Expect(ComponentsOf(two).Count == 1)
+    Try Entered(editor, "Speed", "8")
+    Expect(ComponentsOf(one)[0].Values["Speed"]?.AsDouble() == 8)
+    Expect(ComponentsOf(two)[0].Values["Speed"]?.AsDouble() == 8)
+    Expect(editor.Actions.Run("edit.undo") && editor.Actions.Run("edit.undo"))
+    editor.Step()
+    Expect(ComponentsOf(one).Count == 1 && ComponentsOf(two).Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function ACopyHasItsOwn() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local parent = Pivot()
+    Local child = Pivot(parent)
+    Selecting(editor, child)
+    Try Adding(editor, "Latch")
+    Selecting(editor, parent)
+    Try Adding(editor, "Door")
+    Try Entered(editor, "Speed", "6")
+    Expect(editor.Actions.Run("tree.duplicate"))
+    editor.Step()
+    editor.Step()
+    Local copy = editor.Edited.Selected()[0]
+    Expect(ComponentsOf(copy).Count == 1 &&
+           !RefEquals(ComponentsOf(copy)[0], ComponentsOf(parent)[0]))
+    Expect(ComponentsOf(copy)[0].Values["Speed"]?.AsDouble() == 6)
+    Expect(ComponentsOf(copy.Child(0))[0].Kind == "Latch", "what's under it hasn't its own")
+    // Each its own from here.
+    Try Entered(editor, "Speed", "1")
+    Expect(ComponentsOf(parent)[0].Values["Speed"]?.AsDouble() == 6)
+    editor.Finish()
+End Function
+
+@Test
+Function WhatTheProjectDoesntKnowStaysAsItIs() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Adding(editor, "Door")
+    editor.Kinds.Set([])
+    editor.Step()
+    editor.Step()
+    Expect((RowCalled(editor, "Door.unknown") As? NoteRow) != Null)
+    Expect(!Shows(editor, "Speed"))
+    Expect(ComponentsOf(pivot).Count == 1, "what it can't read of went")
+    Expect(!Shows(editor, "AddComponent"))
+    // Closing the project, it knows of none.
+    KnowingKinds(editor)
+    Expect(editor.Kinds.Kinds().Count == 2)
+    Expect(editor.Actions.Run("file.close"))
+    Expect(editor.Kinds.Kinds().Count == 0, "it kept what the project said")
+    editor.Finish()
+End Function
+
+@Test
+Function ComponentsOfWhatsFreedDoNothing() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Adding(editor, "Door")
+    Local remove = RowCalled(editor, "Door") As? ButtonRow
+    If remove == Null Then Panic("there's no way to take it off")
+    remove.Pressing().Click()
+    editor.Step()
+    pivot.Free()
+    editor.Step()
+    While editor.Edits.CanUndo()
+        Expect(editor.Actions.Run("edit.undo"))
+    End While
+    While editor.Edits.CanRedo()
+        Expect(editor.Actions.Run("edit.redo"))
+    End While
+    editor.Step()
+    editor.Finish()
+End Function
+
+// Where the packages are: where ctest says, or under where a test's been run from by hand.
+Function Packages(): Path? Throws IOError
+    Local said = Env.Get("FBENGINE_PACKAGES")
+    If said != Null && said != "" Then Return Path(said)
+    Local here = (Try Dir.Current()) / "packages"
+    Return File.Exists(here / "fbengine/project.toml") ? here : Null
+End Function
+
+// A game whose components/main.fb is `program`, under `games`, depending on the packages.
+Function GameOf(games: TempDir, packages: Path, program: String): Path Throws IOError
+    Local folder = games.Path / "game"
+    Try Dir.CreateAll(folder / "components")
+    Local dependency = (packages / "fbengine").Text.Replace("\\", "/")
+    Try File.WriteText(folder / "project.toml",
+                       "[project]\nname = \"game\"\nversion = \"0.0.1\"\ntype = \"executable\"\n\n" +
+                       "[dependencies]\nfbengine = {{ path = \"{dependency}\" }}\n")
+    Try File.WriteText(folder / "door.fb",
+                       "Public Class Door\n    Public Field Speed: Float = 2.5\nEnd Class\n")
+    Try File.WriteText(folder / "gate.fb",
+                       "Public Class Gate\n    Public Field Wide: Float = 4\nEnd Class\n")
+    Try File.WriteText(folder / "main.fb", "Print(\"the game\")\n")
+    Try File.WriteText(folder / "components/main.fb", program)
+    Return folder
+End Function
+
+Const SAYS_A_DOOR = "Import fbengine\nImport \"../door\"\n\nComponents.Add<Door>(\"Door\")\nTry Components.Describe()\n"
+
+// An editor on `folder`, whose code it's been told may run.
+Function Trusting(settings: TempDir, folder: Path): Editor Throws IOError, GraphicsError
+    Window.SetHeadless(True)
+    Local editor = Try Editor(settings.Path)
+    editor.Kept.Trust(folder.Text)
+    Try editor.Start(folder)
+    Return editor
+End Function
+
+// Frames until its program's finished, however that goes.
+Function Finishing(editor: Editor)
+    Local watch = Stopwatch.StartNew()
+    While editor.Kinds.Running() && watch.Elapsed.TotalSeconds < 300
+        editor.Step()
+    End While
+    editor.Step()
+    Expect(!editor.Kinds.Running(), "it never finished")
+End Function
+
+@Test
+Function AGamesProgramSaysItsKinds() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local packages = Try Packages()
+    If packages == Null Then Skip("the packages aren't under here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try GameOf(games, packages, SAYS_A_DOOR)
+    Local editor = Try Trusting(settings, folder)
+    Expect(editor.Kinds.Running(), "it didn't start the program")
+    Expect(editor.ShowingDialog() == Null, "it asked about what it's been told")
+    Finishing(editor)
+    Expect(editor.ShowingDialog() == Null, "it failed")
+    Expect(editor.Kinds.Kinds().Count == 1 && editor.Kinds.Kinds()[0].Name == "Door")
+    Selecting(editor, Pivot())
+    Try Adding(editor, "Door")
+    Expect(FieldOf(editor, "Speed").Text() == "2.5")
+    // What's said is read again, by asking, what's edited kept as it is.
+    Try Entered(editor, "Speed", "7")
+    Try File.WriteText(folder / "components/main.fb",
+                       "Import fbengine\nImport \"../door\"\nImport \"../gate\"\n\nComponents.Add<Door>(\"Door\")\n" +
+                       "Components.Add<Gate>(\"Gate\")\nTry Components.Describe()\n")
+    Expect(editor.Actions.Run("file.reload_components"))
+    Expect(editor.Kinds.Running())
+    Finishing(editor)
+    Expect(editor.Kinds.Kinds().Count == 2, "it has {editor.Kinds.Kinds().Count}")
+    editor.Step()
+    editor.Step()
+    Expect(FieldOf(editor, "Speed").Text() == "7", "what's edited went")
+    // One that fails says so, and leaves none, if it's a project opened anew.
+    Try File.WriteText(folder / "components/main.fb", "This isn't FutureBlitz\n")
+    editor.CloseProject()
+    editor.OpenFolder(folder)
+    Finishing(editor)
+    Expect(editor.Kinds.Kinds().Count == 0)
+    Expect(editor.ShowingDialog() != Null, "nothing said it failed")
+    // One that says them, then fails, has failed.
+    Try File.WriteText(folder / "components/main.fb",
+                       "Import std.os\nImport fbengine\nImport \"../door\"\n\nComponents.Add<Door>(\"Door\")\n" +
+                       "Try Components.Describe()\nProcess.Exit(1)\n")
+    editor.CloseProject()
+    editor.OpenFolder(folder)
+    Finishing(editor)
+    Expect(editor.Kinds.Kinds().Count == 0, "it took what a failed program said")
+    Expect(editor.ShowingDialog() != Null, "nothing said it failed")
+    editor.Finish()
+End Function
+
+@Test
+Function AProgramEndsWithItsProject() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local packages = Try Packages()
+    If packages == Null Then Skip("the packages aren't under here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    // Which leaves a mark if it's left alive.
+    Local folder = Try GameOf(games, packages,
+                              "Import std.io\nImport std.time\n\nRealWait(3.Seconds).Wait()\n" +
+                              "Try File.WriteText(Path(\"marked.txt\"), \"it lived on\")\n")
+    Local editor = Try Trusting(settings, folder)
+    Local watch = Stopwatch.StartNew()
+    While !editor.Kinds.ProgramRunning() && watch.Elapsed.TotalSeconds < 300
+        editor.Step()
+    End While
+    Expect(editor.Kinds.ProgramRunning(), "it never ran")
+    editor.CloseProject()
+    Expect(!editor.Kinds.Running(), "it's still running")
+    editor.Finish()
+    RealWait(5.Seconds).Wait()
+    Expect(!File.Exists(folder / "marked.txt"), "the program lived on")
+End Function
+
+// Runs what's at `folder` by itself, to its end, and says what went wrong.
+Function Failure(kinds: GameComponents, folder: Path): String
+    kinds.Start(folder)
+    Local watch = Stopwatch.StartNew()
+    While kinds.Running() && watch.Elapsed.TotalSeconds < 300
+        kinds.Update()
+    End While
+    Expect(!kinds.Running(), "it never finished")
+    Return kinds.TakeFailure() ?? ""
+End Function
+
+@Test
+Function AProgramThatHangsIsStopped() Throws IOError
+    Local packages = Try Packages()
+    If packages == Null Then Skip("the packages aren't under here")
+    Local games = Try TempDir()
+    Local folder = Try GameOf(games, packages, "Import std.time\n\nRealWait(600.Seconds).Wait()\n")
+    Local kinds = GameComponents()
+    kinds.RunSeconds = 0.5
+    Local said = Failure(kinds, folder)
+    Expect(said.Contains("too long running"), said)
+    // What can't even be built, however long it has, is said to be that.
+    Try File.WriteText(folder / "components/main.fb", "This isn't FutureBlitz\n")
+    said = Failure(kinds, folder)
+    Expect(said.Contains("wasn't built"), said)
+    // And it can take too long at that.
+    kinds.BuildSeconds = 0
+    said = Failure(kinds, folder)
+    Expect(said.Contains("too long being built"), said)
+End Function
+
+@Test
+Function AProgramThatSaysTooMuchIsRefused() Throws IOError
+    Local packages = Try Packages()
+    If packages == Null Then Skip("the packages aren't under here")
+    Local games = Try TempDir()
+    Local folder = Try GameOf(games, packages, "Import std.core\nImport std.io\nImport std.os\n\nLocal said = \"          \"\nFor i = 1 To 18\n    said += said\nEnd For\n" +
+                              "Try File.WriteText(Path(Env.Get(\"FBENGINE_COMPONENTS_TO\") ?? \"\"), \"[\" + said + \"]\")\n")
+    Local kinds = GameComponents()
+    Local said = Failure(kinds, folder)
+    Expect(said.Contains("too much"), said)
+    Expect(kinds.Kinds().Count == 0)
+    // Too many kinds, however short each.
+    Local many = "[" + ",".Join(Repeated("{{\"Name\":\"a\",\"Fields\":[]}}", 1025)) + "]"
+    Try File.WriteText(folder / "many.txt", many)
+    Try File.WriteText(folder / "components/main.fb", "Import std.core\nImport std.io\nImport std.os\n\n" +
+                       "Try File.WriteText(Path(Env.Get(\"FBENGINE_COMPONENTS_TO\") ?? \"\"), Try File.ReadText(Path(\"many.txt\")))\n")
+    said = Failure(kinds, folder)
+    Expect(said.Contains("too many"), said)
+    // One that says nothing it can read says so.
+    Try File.WriteText(folder / "components/main.fb", "Import std.core\nImport std.io\nImport std.os\n\n" +
+                       "Try File.WriteText(Path(Env.Get(\"FBENGINE_COMPONENTS_TO\") ?? \"\"), \"not JSON\")\n")
+    said = Failure(kinds, folder)
+    Expect(said.Contains("didn't say"), said)
+    // And one that never writes.
+    Try File.WriteText(folder / "components/main.fb", "Import std.core\n\nPrint(\"nothing\")\n")
+    said = Failure(kinds, folder)
+    Expect(said.Contains("didn't say"), said)
+End Function
+
+Function Repeated(text: String, times: Int): String[]
+    Local all: String[] = []
+    For i = 1 To times
+        all.Add(text)
+    End For
+    Return all
+End Function
+
+@Test
+Function NoFbOnThePathSaysSo() Throws IOError
+    Local packages = Try Packages()
+    If packages == Null Then Skip("the packages aren't under here")
+    Local games = Try TempDir()
+    Local folder = Try GameOf(games, packages, SAYS_A_DOOR)
+    // By another name, as tests run together, and the PATH is all of theirs.
+    Local kinds = GameComponents()
+    kinds.Fb = "there-is-no-such-fb"
+    kinds.Start(folder)
+    Expect(!kinds.Running())
+    Local said = kinds.TakeFailure() ?? ""
+    Expect(said.Contains("Couldn't run fb"), said)
+End Function
+
+@Test
+Function AFolderIsAskedAboutOnceBeforeItsCodeRuns() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local packages = Try Packages()
+    If packages == Null Then Skip("the packages aren't under here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try GameOf(games, packages, SAYS_A_DOOR)
+    Window.SetHeadless(True)
+    Local first = Try Editor(settings.Path)
+    Try first.Start(folder)
+    first.Step()
+    // Nothing runs until it's said to.
+    Expect(!first.Kinds.Running(), "it ran what it wasn't told it could")
+    Expect(first.Kinds.HeldBack)
+    Local asking = first.ShowingDialog()
+    If asking == Null Then Panic("nothing asked")
+    first.Step()
+    // Not now: it runs nothing, and says why it shows nothing.
+    Local notNow = (asking.Find("dialog.Not Now") As? Button)
+    If notNow == Null Then Panic("there's no way not to")
+    notNow.Click()
+    first.Step()
+    first.Step()
+    Expect(!first.Kinds.Running() && first.ShowingDialog() == Null)
+    Selecting(first, Pivot())
+    Expect((RowCalled(first, "Components") As? NoteRow) != Null, "nothing says why there's none")
+    Expect(!first.Kept.Trusted(folder.Text))
+    // Asked again, and yes: it runs, and that's kept.
+    Expect(first.Actions.Run("file.reload_components"))
+    first.Step()
+    Local again = first.ShowingDialog()
+    If again == Null Then Panic("nothing asked again")
+    Local runIt = (again.Find("dialog.Run It") As? Button)
+    If runIt == Null Then Panic("there's no way to")
+    runIt.Click()
+    first.Step()
+    Expect(first.Kinds.Running(), "yes didn't run it")
+    Expect(first.Kept.Trusted(folder.Text))
+    Finishing(first)
+    Expect(first.Kinds.Kinds().Count == 1)
+    Expect(!Shows(first, "Components"), "it still says it wasn't let")
+    first.Finish()
+    // Another run doesn't ask.
+    Local second = Try Editor(settings.Path)
+    Try second.Start(folder)
+    Expect(second.ShowingDialog() == Null, "it asked twice")
+    Expect(second.Kinds.Running())
+    second.Finish()
+    // Another folder does.
+    Local games2 = Try TempDir()
+    Local other = Try GameOf(games2, packages, SAYS_A_DOOR)
+    Local third = Try Editor(settings.Path)
+    Try third.Start(other)
+    Expect(third.ShowingDialog() != Null && !third.Kinds.Running(),
+           "another folder wasn't asked about")
+    // Yes to that is yes to that as well, not in place of the first.
+    third.TrustProject()
+    Expect(third.Kept.Trusted(other.Text) && third.Kept.Trusted(folder.Text),
+           "the first was forgotten")
+    third.Finish()
+End Function
+
+// A kind and a Field called what isn't ASCII, as a Field's own name can't be in FutureBlitz.
+Class Portal
+    @Rename("Größe")
+    Public Field Wide: Float = 1.5
+End Class
+
+@Test
+Function NamesNeedntBeAscii() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Components.Clear()
+    Components.Add<Portal>("Tür")
+    editor.Kinds.Set(Components.Kinds())
+    Components.Clear()
+    editor.Step()
+    Selecting(editor, Pivot())
+    Try Adding(editor, "Tür")
+    Expect(RowCalled(editor, "Tür").Title == "Tür")
+    Try Entered(editor, "Größe", "2.5")
+    Expect(editor.Edits.UndoName() == "Set Größe", editor.Edits.UndoName() ?? "")
+    editor.Finish()
+End Function
+
+Struct Named2
+    Public Field x: String
+    Public Field y: String
+End Struct
+
+Struct Whole2
+    Public Field x: Int
+    Public Field y: Int
+End Struct
+
+Struct Tinted
+    Public Field r: Float
+    Public Field g: Float
+    Public Field b: Float
+    Public Field a: Float
+    Public Field name: String
+End Struct
+
+Class Odd
+    Public Field Words: Named2
+    Public Field Tiles: Whole2
+    Public Field Tint: Tinted
+    Public Field Small: UInt8 = 3
+    @ShownInDegrees
+    Public Field Turns: Vec3
+    @Limits(0, 5)
+    Public Field Speed: Float = 1
+End Class
+
+Function KnowingOdd(editor: Editor)
+    Components.Clear()
+    Components.Add<Odd>("Odd")
+    editor.Kinds.Set(Components.Kinds())
+    Components.Clear()
+    editor.Step()
+End Function
+
+@Test
+Function WhatOnlyLooksLikeAVectorIsntEditedAsOne() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingOdd(editor)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Adding(editor, "Odd")
+    Expect((RowCalled(editor, "Words") As? NoteRow) != Null,
+           "a Struct of Strings is edited as a Vec2")
+    Expect((RowCalled(editor, "Tiles") As? NoteRow) != Null, "a Struct of Ints takes 1.5 as a Vec2")
+    Expect((RowCalled(editor, "Tint") As? NoteRow) != Null, "a Color's Save would lose its name")
+    // An integer type's, in the row: 300 isn't a UInt8.
+    Try Entered(editor, "Small", "300")
+    Expect(FieldOf(editor, "Small").Text() == "3", "it took 300")
+    Try Entered(editor, "Small", "255")
+    Expect(FieldOf(editor, "Small").Text() == "255")
+    // Degrees, of a vector too.
+    Try Entered(editor, "Turns", "90", 1)
+    Local data = ComponentsOf(pivot)[0].Values["Turns"] ?? Value()
+    Expect(Abs((data["y"]?.AsDouble() ?? 0) - Pi / 2) < 0.001, "{data}")
+    Expect(FieldOf(editor, "Turns", 1).Text() == "90", FieldOf(editor, "Turns", 1).Text())
+    // Saved as what it isn't, by a scene edited by hand: a note, not a panic.
+    Local values = Value.Object()
+    values["Speed"] = Value("fast")
+    SetComponentsOf(pivot, [ComponentData("Odd", values)])
+    editor.Step()
+    editor.Step()
+    Expect((RowCalled(editor, "Speed") As? NoteRow) != Null, "it edits what isn't what it says")
+    // A member there isn't, as well.
+    Local door = Pivot()
+    KnowingKinds(editor)
+    Local unknown = Value.Object()
+    unknown["Way"] = Value("SIDEWAYS")
+    SetComponentsOf(door, [ComponentData("Door", unknown)])
+    Selecting(editor, door)
+    Expect((RowCalled(editor, "Way") As? NoteRow) != Null, "it lists what doesn't have what it has")
+    // A kind said by hand, too.
+    editor.Finish()
+End Function
+
+Enum Bits
+    ONE
+    TWO
+End Enum
+
+@Flags
+Enum Rights
+    READ
+    WRITE
+End Enum
+
+Class Allowed
+    Public Field Can: Rights = Rights.READ
+End Class
+
+@Test
+Function AnEnumThatCantBeListedIsntText() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Components.Clear()
+    Components.Add<Allowed>("Allowed")
+    editor.Kinds.Set(Components.Kinds())
+    Components.Clear()
+    editor.Step()
+    Selecting(editor, Pivot())
+    Try Adding(editor, "Allowed")
+    Expect((RowCalled(editor, "Can") As? NoteRow) != Null,
+           "it's free text, or a list that can't be right")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsSaidOfKindsWaitsForWhatsBeingTyped() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Adding(editor, "Door")
+    Local field = FieldOf(editor, "Speed")
+    Try Typing(editor, field, "3")
+    editor.Kinds.Set(editor.Kinds.Kinds())
+    editor.Step()
+    editor.Step()
+    Expect(field.Text() == "3", "it took away what's being typed")
+    Local focused = editor.Shown.Focused()
+    Expect(focused != Null && RefEquals(focused, field), "it took the keyboard")
+    Expect(ComponentsOf(pivot)[0].Values["Speed"]?.AsDouble() == 2.5,
+           "it took half of what's being typed")
+    // Finished, it goes in, and what was said shows.
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+    editor.Step()
+    Expect(ComponentsOf(pivot)[0].Values["Speed"]?.AsDouble() == 3)
+    Expect(!RefEquals(FieldOf(editor, "Speed"), field), "it never showed what was said")
+    editor.Finish()
+End Function
+
+@Test
+Function LimitsAreTheSettersOwn() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Entered(editor, "MaxSlope", "90")
+    Expect(Near(pivot.MaxSlope(), Pi / 2), "a right angle's refused: {pivot.MaxSlope()}")
+    Try Entered(editor, "MaxSlope", "91")
+    Expect(Near(pivot.MaxSlope(), Pi / 2))
+    // A mirrored scale's fine; only nothing, or next to it, isn't.
+    Try Entered(editor, "Scale", "-2", 0)
+    Expect(pivot.Scale().x == -2, "it's {pivot.Scale()}")
+    Try Entered(editor, "Scale", "0.0001", 0)
+    Expect(pivot.Scale().x == -2)
+    Try Entered(editor, "Scale", "-0.0001", 0)
+    Expect(pivot.Scale().x == -2)
+    Local camera = Camera()
+    Selecting(editor, camera)
+    // Right up to what its setter takes, each way.
+    Try Entered(editor, "FieldOfView", "179.95")
+    Expect(Near(camera.FieldOfView(), 179.95 * Pi / 180), "it's {camera.FieldOfView()}")
+    Try Entered(editor, "FieldOfView", "0.01")
+    Expect(Abs(camera.FieldOfView() - 0.01 * Pi / 180) < 0.00001, "it's {camera.FieldOfView()}")
+    Try Entered(editor, "OrthographicHeight", "1e-39")
+    Expect(camera.OrthographicHeight() > 0.0000001)
+    // What a light's shadows take.
+    Local shadowed = Light(LightType.DIRECTIONAL)
+    Selecting(editor, shadowed)
+    Try Entered(editor, "ShadowSize", "8")
+    Expect(shadowed.ShadowSize() != 8, "it took what's too small")
+    Try Entered(editor, "ShadowDistance", "0")
+    Expect(shadowed.ShadowDistance() > 0)
+    Try Entered(editor, "ShadowBias", "3", 1)
+    Expect(shadowed.ShadowNormalBias() == 3)
+    Local depthBias = shadowed.ShadowBias()
+    Try Entered(editor, "ShadowBias", "-1", 0)
+    Expect(shadowed.ShadowBias() == depthBias, "it took a bias below 0")
+    Selecting(editor, camera)
+    // A camera's clearing goes one way at a time.
+    Local depth = RowCalled(editor, "ClearsDepth") As? ToggleRow
+    If depth == Null Then Panic("it's not a box")
+    Expect(camera.ClearsColor() && camera.ClearsDepth())
+    depth.Ticked().Click()
+    editor.Step()
+    Expect(camera.ClearsColor() && !camera.ClearsDepth())
+    Local color = RowCalled(editor, "ClearsColor") As? ToggleRow
+    If color == Null Then Panic("it's not a box")
+    color.Ticked().Click()
+    editor.Step()
+    Expect(!camera.ClearsColor() && !camera.ClearsDepth(), "the other one came back")
+    depth.Ticked().Click()
+    editor.Step()
+    Expect(!camera.ClearsColor() && camera.ClearsDepth(), "the other one came back")
+    // An ellipsoid's two radii.
+    Try Entered(editor, "CollisionRadius", "2", 1)
+    Expect(camera.CollisionRadius() == Vec2(1, 2), "it's {camera.CollisionRadius()}")
+    Try Entered(editor, "CollisionRadius", "0", 0)
+    Expect(camera.CollisionRadius() == Vec2(1, 2))
+    editor.Finish()
+End Function
+
+@Test
+Function OneRowLooksEachFrameHoweverMuchIsSelected() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local first = Pivot()
+    editor.Edited.SelectOnly(first)
+    For i = 1 To 500
+        editor.Edited.ToggleSelected(Pivot())
+    End For
+    editor.Step()
+    editor.Step()
+    Local before = editor.Inspector.Refreshes()
+    For i = 1 To 5
+        editor.Step()
+    End For
+    Expect(editor.Inspector.Refreshes() - before == 5,
+           "{editor.Inspector.Refreshes() - before} in 5 frames")
+    // Something edited shows at once, all of it.
+    Try Entered(editor, "Position", "4", 0)
+    Expect(FieldOf(editor, "Position", 0).Text() == "4")
+    Local rows = editor.Inspector.Rows().Count
+    before = editor.Inspector.Refreshes()
+    editor.Inspector.MarkChanged()
+    editor.Step()
+    Expect(editor.Inspector.Refreshes() - before == rows,
+           "{editor.Inspector.Refreshes() - before} of {rows}")
+    editor.Finish()
+End Function
+
+@Test
+Function AColorsAlphaOnlyShowsIfItDoesAnything() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Selecting(editor, Light())
+    Expect(RowCalled(editor, "Color").Parts().Count == 3, "a light's alpha does nothing")
+    Selecting(editor, Camera())
+    Expect(RowCalled(editor, "FogColor").Parts().Count == 3, "a fog's alpha does nothing")
+    Expect(RowCalled(editor, "ClearColor").Parts().Count == 4)
+    editor.Finish()
+End Function
+
+@Test
+Function ChangeIsJudgedByWhatsTypedNotWhatsShown() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    // What's shown the same, as it rounds, is still another value.
+    Try Entered(editor, "Position", "0.00004", 0)
+    Expect(pivot.Position().x == 0.00004, "it's {pivot.Position()}")
+    Expect(editor.Edits.CanUndo(), "it vanished")
+    pivot.SetPosition(Vec3(1000000.1875, 0, 0))
+    Round(editor)
+    Expect(FieldOf(editor, "Position", 0).Text() == "1000000.1875",
+           FieldOf(editor, "Position", 0).Text())
+    Try Entered(editor, "Position", "1000000.25", 0)
+    Expect(pivot.Position().x == 1000000.25, "it's {pivot.Position()}")
+    // However big, it's a number.
+    pivot.SetPosition(Vec3(100000000000000000000000000000000000.0, 0, 0))
+    Round(editor)
+    Expect(!FieldOf(editor, "Position", 0).Text().Contains("inf"),
+           FieldOf(editor, "Position", 0).Text())
+    editor.Finish()
+End Function
+
+@Test
+Function WhatChangesNothingIsNoUndo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Try Adding(editor, "Door")
+    editor.Edits.Clear()
+    // What it has already.
+    Try Adding(editor, "Door")
+    Expect(!editor.Edits.CanUndo(), "adding what it has made an edit")
+    // The member it is.
+    Local way = RowCalled(editor, "Way") As? ChoiceRow<String>
+    If way == Null Then Panic("it's not a list")
+    way.Choose(1)
+    Expect(!editor.Edits.CanUndo(), "choosing what it is made an edit")
+    way.Choose(0)
+    Expect(editor.Edits.CanUndo())
+    editor.Finish()
+End Function
+
+@Test
+Function ANewComponentSharesNothing()
+    Components.Clear()
+    Components.Add<Door>("Door")
+    Local kind = Components.Kinds()[0]
+    Components.Clear()
+    Local one = ComponentData(kind)
+    Local two = ComponentData(kind)
+    Local at = one.Values["At"]
+    If at == Null Then Panic("there's no At")
+    at["x"] = Value(5.0)
+    Expect((two.Values["At"] ?? Value())["x"]?.AsDouble() == 0,
+           "the first's change is in the second")
+    Expect((kind.Fields[5].First)["x"]?.AsDouble() == 0, "it's in what a new one starts from")
+End Function
+
+@Test
+Function WhatsEmptyIsntWhatDiffers() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local one = Pivot()
+    Selecting(editor, one)
+    Expect(one.Name() == "" && FieldOf(editor, "Name").Placeholder() == "",
+           FieldOf(editor, "Name").Placeholder())
+    Local two = Pivot()
+    two.SetName("two")
+    editor.Edited.ToggleSelected(two)
+    editor.Step()
+    editor.Step()
+    editor.Inspector.MarkChanged()
+    editor.Step()
+    Expect(FieldOf(editor, "Name").Placeholder() == "—", FieldOf(editor, "Name").Placeholder())
+    // Alike again, it's as it was.
+    two.SetName("")
+    editor.Inspector.MarkChanged()
+    editor.Step()
+    Expect(FieldOf(editor, "Name").Placeholder() == "", FieldOf(editor, "Name").Placeholder())
+    editor.Finish()
+End Function

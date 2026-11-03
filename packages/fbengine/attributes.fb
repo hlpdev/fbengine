@@ -1,0 +1,17 @@
+// What a setter or a component's Field says of itself to what edits it by reflection, as the editor's
+// inspector does. A rule of more than one number, as a spot's cone's, has no attribute, and what edits
+// it knows it.
+
+/// What a number takes, or each of a vector's: a setter panics for anything else, and what's past the
+/// defaults, which aren't a setter's own, 32-bit floats can't multiply together in a matrix.
+Public Attribute Limits(Low: Float = -1000000000.0, High: Float = 1000000000.0, Above: Bool = False)
+
+/// An angle, in radians, which people think of in degrees.
+Public Attribute ShownInDegrees
+
+/// A setter that editing by hand doesn't suit: what it sets is set some other way, or setting it
+/// loses what no undo would bring back.
+Public Attribute NotEdited
+
+/// A setter of a Color that leaves its alpha out, so what edits it does too.
+Public Attribute NoAlpha
