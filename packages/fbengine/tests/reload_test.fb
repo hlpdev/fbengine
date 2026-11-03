@@ -213,6 +213,18 @@ Function LinkFolder(link: Path, target: Path) Throws IOError
     End If
 End Function
 
+// A recursive FileWatcher on a Mac is libuv's FSEvents, whose stream starts on a thread of its own a
+// moment after the watcher's made, seeing only what's after that, so what a test writes has to wait
+// for it.
+Function Started()
+    If System.Platform != Platform.MACOS Then Return
+    Local since = Instant.Now()
+    While (Instant.Now() - since) < 1.Seconds
+        Flip()
+        Sleep(5.Milliseconds)
+    End While
+End Function
+
 @Test
 Function ASourceFolderIsMountedAndWatched() Throws IOError
     Local folder = Try TempDir()
@@ -272,6 +284,7 @@ Function AWatchedFolderReloadsWhatChangesInIt() Throws IOError
     Local a = Try Assets.Load<HotPicture>("res://test-watch/a.png")
     Local b = Try Assets.Load<HotPicture>("res://test-watch/sub/b.png")
     reloaded = []
+    Started()
     Try WritePng(folder.Path, "a.png", 4)
     FlipUntil(Function(): Bool => a.Width == 4)
     Expect(a.Width == 4)
@@ -303,6 +316,7 @@ Function AFolderMountedWhileWatchingIsWatched() Throws IOError
     Assets.MountFolder("res://test-later", folder.Path)
     Defer Assets.Unmount("res://test-later")
     Local c = Try Assets.Load<HotPicture>("res://test-later/c.png")
+    Started()
     Try WritePng(folder.Path, "c.png", 4)
     FlipUntil(Function(): Bool => c.Width == 4)
     Expect(c.Width == 4)
@@ -412,10 +426,20 @@ Function AModelReloadsWhenItsBufferDoes() Throws IOError
     If reloaded.Count == 1 Then Expect(reloaded[0].Path == "res://test-buffer/tri.gltf")
     // And so it does when it's watched, and the buffer changes alone.
     Local before = Try File.ReadText(folder.Path / "tri.gltf")
+    Started()
     Try WriteTriangle(folder.Path, "tri", 2)
     Expect((Try File.ReadText(folder.Path / "tri.gltf")) == before)
     FlipUntil(Function(): Bool => model.Reloads > 1)
     Expect(model.Reloads > 1)
+End Function
+
+// How many reloads of `path` there've been, whatever a test before it left to finish.
+Function ReloadsOf(path: String): Int
+    Local count = 0
+    For reload In reloaded
+        If reload.Path == path Then count += 1
+    End For
+    Return count
 End Function
 
 @Test
@@ -429,9 +453,10 @@ Function UnmountingAFolderStopsWatchingIt() Throws IOError
     Local picture = Try Assets.Load<HotPicture>("res://test-unmounted/a.png")
     Expect(Assets.Unmount("res://test-unmounted"))
     reloaded = []
+    Started()
     Try WritePng(folder.Path, "a.png", 4)
     FlipFor(500.Milliseconds)
-    Expect(reloaded.Count == 0)
+    Expect(ReloadsOf("res://test-unmounted/a.png") == 0)
     // Nor is it once another folder's mounted at its place, which is.
     Local other = Try TempDir()
     Defer Try? other.Close()
@@ -444,7 +469,7 @@ Function UnmountingAFolderStopsWatchingIt() Throws IOError
     reloaded = []
     Try WritePng(folder.Path, "a.png", 8)
     FlipFor(500.Milliseconds)
-    Expect(reloaded.Count == 0)
+    Expect(ReloadsOf("res://test-unmounted/a.png") == 0)
     Expect(picture.Width == 2)
     Try WritePng(other.Path, "a.png", 16)
     FlipUntil(Function(): Bool => picture.Width == 16)
@@ -465,6 +490,7 @@ Function AFolderMadeAgainIsWatchedAgain() Throws IOError
     Try Dir.RemoveAll(folder.Path / "sub")
     FlipFor(300.Milliseconds)
     Try Dir.CreateAll(folder.Path / "sub")
+    Started()
     Try WritePng(folder.Path / "sub", "b.png", 4)
     FlipUntil(Function(): Bool => picture.Width == 4)
     Expect(picture.Width == 4)
@@ -484,6 +510,7 @@ Function ATomlAssetReloadsItself() Throws IOError
     Try Assets.WatchFolders()
     Defer Assets.StopWatching()
     Local level = Try Assets.Load<HotText>("res://test-toml/level.toml")
+    Started()
     Try File.WriteText(folder.Path / "level.toml", "name = 'two'")
     FlipUntil(Function(): Bool => level.Reloads > 0)
     Expect(level.Text == "name = 'two'")
@@ -502,6 +529,7 @@ Function AFileBehindALinkIsWatched() Throws IOError
     Try Assets.WatchFolders()
     Defer Assets.StopWatching()
     Local picture = Try Assets.Load<HotPicture>("res://test-linked/linked/x.png")
+    Started()
     Try WritePng(target.Path, "x.png", 4)
     FlipUntil(Function(): Bool => picture.Width == 4)
     Expect(picture.Width == 4)
@@ -522,6 +550,7 @@ Function WhatsHiddenIsntWatched() Throws IOError
     // A hidden link has no watcher of its own, and what changes in a hidden folder is no one's.
     Try LinkFolder(folder.Path / ".linked", target.Path)
     Try Dir.CreateAll(folder.Path / ".hidden")
+    Started()
     Try File.WriteText(folder.Path / ".hidden" / "x", "x")
     FlipFor(500.Milliseconds)
     Expect(Assets.Watching() == watching)
@@ -541,6 +570,7 @@ Function AFolderInAWatchedOneCanBeRenamedAndGoesOnBeingWatched() Throws IOError
     Try Assets.WatchFolders()
     Defer Assets.StopWatching()
     Try File.Move(folder.Path / "sub", folder.Path / "sub2")
+    Started()
     Try WritePng(folder.Path / "sub2" / "deeper", "b.png", 2)
     Local picture = Try Assets.Load<HotPicture>("res://test-renamed/sub2/deeper/b.png")
     Try WritePng(folder.Path / "sub2" / "deeper", "b.png", 4)
@@ -560,6 +590,7 @@ Function TwoLinksThatGoRoundEndWhenWatched() Throws IOError
     Try Assets.WatchFolders()
     Defer Assets.StopWatching()
     Local picture = Try Assets.Load<HotPicture>("res://test-round/a.png")
+    Started()
     Try WritePng(folder.Path, "a.png", 4)
     FlipUntil(Function(): Bool => picture.Width == 4)
     Expect(picture.Width == 4)
