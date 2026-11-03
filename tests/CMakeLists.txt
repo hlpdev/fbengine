@@ -186,6 +186,7 @@ if(FBENGINE_FB_TESTS)
   # starts, each checked against what it prints.
   set(fbengine_input_cases
       "key-out-of-range|panic: Simulate[.]KeyDown[(]9999[)]: SDL has no such key"
+      "sphere-segments|panic: Sphere: a shape has 3 to 100 segments, not 1 at [^\n]*main[.]fb"
       "button-out-of-range|panic: Simulate[.]MouseDown[(]33[)]: a mouse's buttons are 1 to 32"
       "draws-composition|draws False\r?\ndraws True\r?\ndraws True\r?\npanic: who draws the composition is set before"
       "key-name-before-video|A A\r?\npanic: headless is set before"

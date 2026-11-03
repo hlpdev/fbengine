@@ -4,6 +4,7 @@
 Import std.collections
 Import std.core
 Import std.data
+Import std.ffi
 Import std.image
 Import std.io
 Import std.math
@@ -776,5 +777,44 @@ Function ALostAssetBlocksALoadNotAnOpen() Throws IOError, GraphicsError
     // A file itself that's wrong is wrong either way.
     Try File.WriteText(folder.Path / "b.scene", "nonsense")
     Expect(ExpectThrows<IOError>(Scene.Open("res://lost-test/b.scene")) != Null)
+    Try folder.Close()
+End Function
+
+// A morph target on what's changed has no line to go on, so it's refused, not lost.
+@Test
+Function AChangedGeometrysMorphTargetsAreRefused() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    surface.AddVertex(Vertex(Vec3(0, 0, 0), Vec3(0, 0, 1)))
+    surface.AddMorphTarget([Vec3(0, 2, 0)])
+    Local mesh = Mesh(made)
+    mesh.SetName("bent")
+    Local error = ExpectThrows<IOError>(Scene.Text([mesh]))
+    Expect((error?.Message ?? "").Contains("bent: its mesh has morph targets"), error?.Message ?? "")
+End Function
+
+// Replaced whole: what has the file open goes on reading what was there; or it wasn't replaced at all.
+@Test
+Function ASceneIsReplacedWhole() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local folder = Try TempDir()
+    Local file = folder.Path / "kept.scene"
+    Try Scene.Save(file, [Room()])
+    Local had = Try File.ReadText(file)
+    Local reading = Try File.Open(file)
+    Local saved = True
+    Try
+        Try Scene.Save(file, [Pivot()])
+    Catch error As IOError
+        saved = False
+    End Try
+    Local bytes = Buffer<UInt8>(10)
+    Expect((Try reading.Read(bytes)) == 10)
+    Expect(bytes[0] == 102 && bytes[9] == 49, "format = 1, still")
+    reading.Close()
+    If !saved Then Expect((Try File.ReadText(file)) == had)
     Try folder.Close()
 End Function

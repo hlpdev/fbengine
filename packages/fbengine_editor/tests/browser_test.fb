@@ -1146,7 +1146,6 @@ Function WhatsSmallInTheBrowser() Throws IOError, GraphicsError
     editor.Files.Choose("res://x.png")
     editor.Step()
     Expect(!Found(editor, "assets.settings").Visible())
-    Expect(editor.Files.ThumbOf("res://x.png") == Null || True)
     Local name = editor.Files.RowOf("res://empty")?.Find("assets.name") As? Label
     If name == Null Then Panic("its name")
     Expect(name.Text() == "+ empty", name.Text())

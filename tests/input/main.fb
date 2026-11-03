@@ -11,6 +11,8 @@ Function Main() Throws GraphicsError, InputError
     Local arguments = Process.Arguments()
     Local name = arguments.Count > 0 ? arguments[0] : ""
     Select name
+        Case "sphere-segments"
+            Geometry.Sphere(1)
         Case "key-out-of-range"
             Window.SetHeadless(True)
             Try Graphics(320, 200)

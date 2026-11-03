@@ -589,3 +589,24 @@ Function ASpawnsMeshesMorphAsTheFileSays() Throws IOError
     Local weights = mesh.MorphWeights()
     Expect(IsClose(weights[0], 1.0, 0.01) && IsClose(weights[1], 0.5, 0.01))
 End Function
+
+// A mesh's weights go in a scene, with what's morphed by the file it's from.
+@Test
+Function MorphWeightsAreSavedInAScene() Throws IOError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Assets.MountFiles("res://file-scene-morph", {"a.gltf": Morphed()})
+    Defer Assets.Unmount("res://file-scene-morph")
+    Local model = Try Assets.Load<Model>("res://file-scene-morph/a.gltf")
+    Defer model.Free()
+    Local mesh = Mesh(model.Geometries()[0])
+    mesh.SetName("bent")
+    mesh.SetMorphWeights([0.75, 0.125])
+    Local text = Try Scene.Text([mesh])
+    Expect(text.Contains("morph = [0.75, 0.125]"), text)
+    Local read = (Try Scene.FromText(text))[0] As? Mesh
+    Expect(read?.MorphWeights() == [0.75, 0.125] As Float[])
+End Function
