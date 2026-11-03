@@ -69,6 +69,11 @@ struct surface_buffers_t {
     gpu::buffer_t joints;
     /// Its vertices' tangents, for a surface that has them.
     gpu::buffer_t tangents;
+    /// What each of its morph targets moves each of its vertices by, the first target's first, for
+    /// each whether it moves any, and how many vertices each has.
+    gpu::buffer_t targets;
+    std::vector<std::uint8_t> target_moves;
+    std::uint32_t vertex_count = 0;
 };
 
 /// A geometry's surface on the GPU, sent if it's changed since; null if it can't be, with

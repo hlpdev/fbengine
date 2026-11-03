@@ -1,0 +1,239 @@
+// The environment bump old rooms use: a BUMP layer's map shifting the next layer's UVs by its red and
+// green and scaling its light by its blue. It prints each pixel it reads; with --watch, a window of a
+// bumped wall, its shift moving.
+
+Import std.collections
+Import std.core
+From std.image Import Image
+Import std.math
+Import std.os
+Import fbengine
+
+// A square from -1 to 1 facing +Z, `away` wound to face -Z; each corner's first UVs across it, its
+// second all `second`, and its color `color`.
+Function Square(color: Color? = Null, second: Vec2? = Null, away: Bool = False): Geometry
+    Local tint = color ?? Color(1, 1, 1)
+    Local other = second ?? Vec2(0, 0)
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local facing = Vec3(0, 0, away ? -1.0 : 1.0)
+    Local a = surface.AddVertex(Vertex(Vec3(-1, 1, 0), facing, Vec2(0, 0), other, tint))
+    Local b = surface.AddVertex(Vertex(Vec3(1, 1, 0), facing, Vec2(1, 0), other, tint))
+    Local c = surface.AddVertex(Vertex(Vec3(1, -1, 0), facing, Vec2(1, 1), other, tint))
+    Local d = surface.AddVertex(Vertex(Vec3(-1, -1, 0), facing, Vec2(0, 1), other, tint))
+    If away
+        surface.AddTriangle(a, b, c)
+        surface.AddTriangle(a, c, d)
+    Else
+        surface.AddTriangle(a, c, b)
+        surface.AddTriangle(a, d, c)
+    End If
+    Return made
+End Function
+
+// A texture of a row of `pixels`, each exactly itself however it's scaled.
+Function Row(pixels: Color32[]): Texture Throws GraphicsError
+    Local image = Image(pixels.Count, 1)
+    For x = 0 To pixels.Count - 1
+        image[x, 0] = pixels[x]
+    End For
+    Local made = Try Texture.FromImage(image, False)
+    made.SetFilter(TextureFilter.NEAREST)
+    Return made
+End Function
+
+// Prints `what`, and `wanted` if the pixel's within 2 of it each way, as GPUs round; else the pixel.
+Function Check(what: String, got: Color32, wanted: Color32)
+    Local close = Abs((got.r As Int) - (wanted.r As Int)) <= 2 &&
+                  Abs((got.g As Int) - (wanted.g As Int)) <= 2 &&
+                  Abs((got.b As Int) - (wanted.b As Int)) <= 2
+    Print("{what}: {close ? wanted : got}")
+End Function
+
+// A shade of gray, as bytes.
+Function Gray(value: Int): Color32 => Color32(value As UInt8, value As UInt8, value As UInt8, 255)
+
+// A camera into a target 32 square that sees the square at z = -5 exactly, and clears to black.
+Function Flat(target: Texture): Camera
+    Local camera = Camera()
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(2)
+    camera.SetRange(0.1, 100)
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    Return camera
+End Function
+
+// A material of no lighting, white unless given.
+Function Plain(color: Color? = Null): Material
+    Local made = Material()
+    made.SetShading(Shading.UNLIT)
+    made.SetColor(color ?? Color(1, 1, 1))
+    Return made
+End Function
+
+// A map of one pixel, its bytes data, not sRGB's.
+Function Map(red: UInt8, green: UInt8, blue: UInt8): Texture Throws GraphicsError
+    Local made = Try Texture(1, 1, TextureFormat.RGBA8_LINEAR, False)
+    made.WritePixels(0, 0, 1, 1, [red, green, blue, 255])
+    Return made
+End Function
+
+Function Proved() Throws GraphicsError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local target = Try Texture.Target(32, 32, TextureFormat.RGBA8, 1, True)
+    Local camera = Flat(target)
+    Local wall = Plain()
+    Local mesh = Mesh(Square())
+    mesh.SetMaterial(wall)
+    mesh.SetPosition(Vec3(0, 0, -5))
+    // Red on the left, then green, for what it shifts.
+    wall.SetTexture(1, Try Row([Color32(255, 0, 0, 255), Color32(0, 255, 0, 255)]))
+
+    // Middle gray shifts nothing, whatever the matrix.
+    wall.SetTexture(0, Try Map(128, 128, 128))
+    wall.SetLayer(0, LayerBlend.BUMP)
+    wall.SetLayerBump(0, BumpShift(0.5, 0.5, 0.5, 0.5, 0.0, 1.0))
+    camera.Render()
+    Check("a flat map's left", target.ToImage()[8, 16], Color32(255, 0, 0, 255))
+    Check("its right", target.ToImage()[24, 16], Color32(0, 255, 0, 255))
+
+    // Its red, 1 up from the middle, shifts across by M00: a quarter brings the left onto green.
+    wall.SetTexture(0, Try Map(255, 128, 128))
+    wall.SetLayerBump(0, BumpShift(0.25, 0.0, 0.0, 0.0, 0.0, 1.0))
+    camera.Render()
+    Check("shifted a quarter across", target.ToImage()[8, 16], Color32(0, 255, 0, 255))
+    // Its green, by M10, the same way.
+    wall.SetTexture(0, Try Map(128, 255, 128))
+    wall.SetLayerBump(0, BumpShift(0.0, 0.0, 0.25, 0.0, 0.0, 1.0))
+    camera.Render()
+    Check("by its green", target.ToImage()[8, 16], Color32(0, 255, 0, 255))
+    // Down, by M01 and M11, onto a row below.
+    wall.SetTexture(1, Try Column([Color32(255, 0, 0, 255), Color32(0, 0, 255, 255)]))
+    wall.SetTexture(0, Try Map(255, 128, 128))
+    wall.SetLayerBump(0, BumpShift(0.0, 0.25, 0.0, 0.0, 0.0, 1.0))
+    camera.Render()
+    Check("by M01, down", target.ToImage()[16, 8], Color32(0, 0, 255, 255))
+
+    // Its blue, by its scale and offset, scales the next layer's light: 128 / 255 x 1 of 255.
+    wall.SetTexture(1, Try Row([Color32(0, 255, 0, 255)]))
+    wall.SetTexture(0, Try Map(128, 128, 128))
+    wall.SetLayerBump(0, BumpShift(0.0, 0.0, 0.0, 0.0, 1.0, 0.0))
+    camera.Render()
+    Check("half its light, by its blue", target.ToImage()[16, 16], Color32(0, 128, 0, 255))
+    wall.SetLayerBump(0, BumpShift(0.0, 0.0, 0.0, 0.0, 1.0, 0.5))
+    camera.Render()
+    Check("all of it, offset by half", target.ToImage()[16, 16], Color32(0, 255, 0, 255))
+
+    // What a bump's matrix old rooms use does: -0.012 across, up, of a texture wide enough to see it.
+    Local wide: Color32[] = []
+    For x = 0 To 99
+        wide.Add(Gray(x * 2))
+    End For
+    wall.SetTexture(1, Try Row(wide))
+    wall.SetTexture(0, Try Map(128, 128, 128))
+    wall.SetLayerBump(0, BumpShift(-0.012, 0.012, 0.012, -0.012, 1.0, 0.5))
+    camera.Render()
+    Local flat = target.ToImage()[16, 16]
+    wall.SetTexture(0, Try Map(255, 128, 128))
+    camera.Render()
+    Local moved = target.ToImage()[16, 16]
+    Print("its matrix moves a texel or so back {moved.r < flat.r && flat.r - moved.r <= 4}")
+End Function
+
+// A texture of a column of `pixels`.
+Function Column(pixels: Color32[]): Texture Throws GraphicsError
+    Local image = Image(1, pixels.Count)
+    For y = 0 To pixels.Count - 1
+        image[0, y] = pixels[y]
+    End For
+    Local made = Try Texture.FromImage(image, False)
+    made.SetFilter(TextureFilter.NEAREST)
+    Return made
+End Function
+
+// A window of a wall, its bump's shift going back and forth; or `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("bump: Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local camera = Camera()
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    Local bumps = Image(64, 64)
+    Local bricks = Image(64, 64)
+    For y = 0 To 63
+        For x = 0 To 63
+            Local wave = Sin((x As Float) * 0.4) * Cos((y As Float) * 0.4)
+            bumps[x, y] = Color32((128.0 + wave * 127.0) As UInt8, (128.0 - wave * 127.0) As UInt8,
+                                  200, 255)
+            bricks[x, y] = (x / 8 + y / 8) % 2 == 0 ? Color32(180, 90, 60, 255) : Color32(120, 110,
+                                                                                          100, 255)
+        End For
+    End For
+    Local map = Try Texture(64, 64, TextureFormat.RGBA8_LINEAR, False)
+    map.WritePixels(0, 0, 64, 64, bumps.ToBytes())
+    Local wall = Plain()
+    wall.SetTexture(0, map)
+    wall.SetLayer(0, LayerBlend.BUMP)
+    wall.SetTexture(1, Try Texture.FromImage(bricks))
+    Local mesh = Mesh(Square())
+    mesh.SetMaterial(wall)
+    mesh.SetPosition(Vec3(0, 0, -3))
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        time += frames > 0 ? 0.1 : Frame.Delta() As Float
+        Local shift = Sin(time) * 0.03
+        wall.SetLayerBump(0, BumpShift(shift, shift, shift, -shift, 1.0, 0.5))
+        RenderWorld()
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
+
+Local arguments = Process.Arguments()
+If Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+ElseIf arguments.Contains("--watch")
+    Try Watched(Asked(arguments), arguments)
+Else
+    Try Proved()
+End If

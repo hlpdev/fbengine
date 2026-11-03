@@ -5,6 +5,7 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "morph/morph.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
 
@@ -605,7 +606,9 @@ FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, f
     // The box's corners turned and scaled with the mesh, not the box around them.
     fbe::scene::vec3_t min;
     fbe::scene::vec3_t max;
-    fbe::scene::geometry_bounds(s.meshes[s.entities.component[slot]].geometry, min, max);
+    const std::uint32_t geometry = s.meshes[s.entities.component[slot]].geometry;
+    fbe::scene::geometry_bounds(geometry, min, max);
+    fbe::anim::grow_by_targets(geometry, fbe::anim::morph_weights(slot, 1.0F), min, max);
     std::array<fbe::scene::vec3_t, 8> corners;
     for (std::size_t corner = 0; corner < 8; ++corner) {
         const fbe::scene::vec3_t local((corner & 1U) != 0 ? max.x : min.x,

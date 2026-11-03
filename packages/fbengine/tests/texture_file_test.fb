@@ -1,0 +1,209 @@
+// Textures as Assets: what a reload does to what draws with them, from the second review's repros,
+// on the GPU ctest's tests use; a machine with no Vulkan sets FBENGINE_NO_GPU to 1 and skips them.
+
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import std.time
+Import fbengine
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+Function Filled(side: Int, color: Color32): UInt8[]
+    Local image = Image(side, side)
+    image.Fill(color)
+    Return Png.Encode(image)
+End Function
+
+// A cached Texture freed after the GPU stopped, as Defers in the usual order have it.
+@Test
+Function FreeingAStoppedGpusTextureIsntAPanic() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://file-stopfree", {"a.png": Filled(2, Color32(9, 9, 9, 255))})
+    Defer Assets.Unmount("res://file-stopfree")
+    Local texture = Try Assets.Load<Texture>("res://file-stopfree/a.png")
+    Gpu.Stop()
+    texture.Free()
+    Expect(texture.Freed())
+End Function
+
+// A 16-bit PNG, drawn beside an 8-bit one of the same colors.
+@Test
+Function A16BitPngDrawsAsAn8BitOneDoes() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://file-16", {
+        "grey16.png": Embed("data/grey16.png"),
+        "grey8.png": Embed("data/grey8.png"),
+    })
+    Defer Assets.Unmount("res://file-16")
+    Local wide = Try Assets.Load<Texture>("res://file-16/grey16.png")
+    Defer wide.Free()
+    Local narrow = Try Assets.Load<Texture>("res://file-16/grey8.png")
+    Defer narrow.Free()
+    Local target = Try Texture.Target(4, 4)
+    Defer target.Free()
+    Canvas(target).Draw(Sprite2D(wide), 0, 0)
+    Local fromWide = target.ToImage()[1, 1]
+    Canvas(target).Draw(Sprite2D(narrow), 0, 0)
+    Local fromNarrow = target.ToImage()[1, 1]
+    Expect(Abs((fromWide.r As Int) - (fromNarrow.r As Int)) < 4)
+End Function
+
+// Frames of drawing while a reload's in flight, under the validation layers, a sprite's texture
+// changing size and its target drawn each frame.
+@Test
+Function ReloadsWhileDrawingAreClean() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.png", Filled(4, Color32(255, 0, 0, 255)))
+    Assets.MountFolder("res://file-draw", folder.Path)
+    Defer Assets.Unmount("res://file-draw")
+    Local texture = Try Assets.Load<Texture>("res://file-draw/a.png")
+    Defer texture.Free()
+    Local sprite = Sprite2D(texture)
+    Local target = Try Texture.Target(32, 32)
+    Defer target.Free()
+    Local errors = Gpu.ValidationErrors()
+    For round = 1 To 12
+        Try File.WriteBytes(folder.Path / "a.png", Filled(round + 4, Color32(0, 255, 0, 255)))
+        Try Assets.Reload("res://file-draw/a.png")
+        Local since = Instant.Now()
+        While texture.Width() != round + 4 && (Instant.Now() - since) < 20.Seconds
+            Canvas(target).Draw(sprite, 0, 0)
+            Flip()
+        End While
+        Canvas(target).Draw(sprite, 0, 0)
+        Expect(target.ToImage()[1, 1].g > 200)
+    End For
+    Expect(Gpu.ValidationErrors() == errors)
+End Function
+
+// A sheet's sprite, its texture reloaded smaller than a cell.
+@Test
+Function ASheetReloadedSmallerThanACellDraws() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.png", Filled(32, Color32(255, 0, 0, 255)))
+    Assets.MountFolder("res://file-sheet", folder.Path)
+    Defer Assets.Unmount("res://file-sheet")
+    Local texture = Try Assets.Load<Texture>("res://file-sheet/a.png")
+    Defer texture.Free()
+    Local sprite = Sprite2D(texture)
+    sprite.SetFrames(16, 16)
+    Local target = Try Texture.Target(32, 32)
+    Defer target.Free()
+    Canvas(target).Draw(sprite, 0, 0, 3)
+    Try File.WriteBytes(folder.Path / "a.png", Filled(8, Color32(0, 255, 0, 255)))
+    Try Assets.Reload("res://file-sheet/a.png")
+    Local since = Instant.Now()
+    While texture.Width() != 8 && (Instant.Now() - since) < 20.Seconds
+        Flip()
+    End While
+    Expect(texture.Width() == 8)
+    Canvas(target).Draw(sprite, 0, 0, 3)
+End Function
+
+// A texture written, uploaded and not yet submitted, then reloaded.
+@Test
+Function AReloadRightAfterAWriteIsClean() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.png", Filled(4, Color32(255, 0, 0, 255)))
+    Assets.MountFolder("res://file-write", folder.Path)
+    Defer Assets.Unmount("res://file-write")
+    Local texture = Try Assets.Load<Texture>("res://file-write/a.png")
+    Defer texture.Free()
+    Local errors = Gpu.ValidationErrors()
+    Local holder = Try Assets.Load<LoadHolder>("res://file-write/a.png")
+    Local image = Image(4, 4)
+    image.Fill(Color32(0, 0, 255, 255))
+    texture.Write(0, 0, image)
+    Local pixels = texture.LockPixels()
+    pixels.Set(0, 0, Color32(1, 2, 3, 255))
+    pixels.Unlock()
+    Try texture.Reload(holder.Load)
+    Expect(texture.ToImage()[0, 0] == Color32(255, 0, 0, 255))
+    Flip()
+    Expect(Gpu.ValidationErrors() == errors)
+End Function
+
+// What was written into its CPU copy, not sent, as it's reloaded smaller: it goes.
+@Test
+Function UnsentPixelsDontSurviveASmallerReload() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.png", Filled(16, Color32(255, 0, 0, 255)))
+    Assets.MountFolder("res://file-unsent", folder.Path)
+    Defer Assets.Unmount("res://file-unsent")
+    Local texture = Try Assets.Load<Texture>("res://file-unsent/a.png")
+    Defer texture.Free()
+    Local pixels = texture.LockPixels()
+    pixels.Set(15, 15, Color32(0, 0, 255, 255))
+    pixels.Unlock()
+    Try File.WriteBytes(folder.Path / "a.png", Filled(4, Color32(0, 255, 0, 255)))
+    Try Assets.Reload("res://file-unsent/a.png")
+    Local since = Instant.Now()
+    While texture.Width() != 4 && (Instant.Now() - since) < 20.Seconds
+        Flip()
+    End While
+    Expect(texture.Width() == 4)
+    Expect(texture.ToImage()[3, 3] == Color32(0, 255, 0, 255))
+    Expect(texture.ReadPixel(3, 3) == Color32(0, 255, 0, 255))
+End Function
+
+// A sprite's handle in its middle follows a texture that changes size.
+@Test
+Function AMidHandleFollowsAReload() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.png", Filled(32, Color32(255, 0, 0, 255)))
+    Assets.MountFolder("res://file-mid", folder.Path)
+    Defer Assets.Unmount("res://file-mid")
+    Local texture = Try Assets.Load<Texture>("res://file-mid/a.png")
+    Defer texture.Free()
+    Local sprite = Sprite2D(texture)
+    sprite.MidHandle()
+    Expect(sprite.Handle() == Vec2(16, 16))
+    Try File.WriteBytes(folder.Path / "a.png", Filled(8, Color32(0, 255, 0, 255)))
+    Try Assets.Reload("res://file-mid/a.png")
+    Local since = Instant.Now()
+    While texture.Width() != 8 && (Instant.Now() - since) < 20.Seconds
+        Flip()
+    End While
+    Expect(sprite.Handle() == Vec2(4, 4))
+    // SetHandle puts it where it's put.
+    sprite.SetHandle(1, 2)
+    Expect(sprite.Handle() == Vec2(1, 2))
+End Function
+
+// Keeps its load, to reload a texture of by hand.
+Class LoadHolder Implements Asset
+    Field Load: AssetLoad
+
+    New(load: AssetLoad)
+        Self.Load = load
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+
+    Public Static Method FromLoad(load: AssetLoad): LoadHolder Throws IOError
+        Return LoadHolder(load)
+    End Method
+End Class

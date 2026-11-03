@@ -1,0 +1,60 @@
+// glTF files for the tests of Models, made as they're needed.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.os
+Import std.text
+Import std.time
+Import fbengine
+
+// Flips until `done` says so, or 20 seconds have gone.
+Package Function FlipUntil(done: Func(): Bool)
+    Local since = Instant.Now()
+    While !done() && (Instant.Now() - since) < 20.Seconds
+        Flip()
+        Sleep(5.Milliseconds)
+    End While
+End Function
+
+// Three positions, normals, and UVs, and three indices, as a data URI.
+Package Function Buffered(x: Int): String
+    Local one = [0, 0, 0x80, 0x3F] As UInt8[]
+    Local two = [0, 0, 0, 0x40] As UInt8[]
+    Local zero = [0, 0, 0, 0] As UInt8[]
+    Local buffer: UInt8[] = []
+    For part In [zero, zero, zero, x == 2 ? two : one, zero, zero, zero, one, zero,
+                 zero, zero, one, zero, zero, one, zero, zero, one,
+                 zero, zero, one, zero, zero, one]
+        buffer.AddAll(part)
+    End For
+    buffer.AddAll([0, 0, 1, 0, 2, 0] As UInt8[])
+    Return "data:application/octet-stream;base64,{Base64.Encode(buffer)}"
+End Function
+
+// A PNG of a color, as a data URI.
+Package Function PngUri(color: Color32): String
+    Local image = Image(2, 2)
+    image.Fill(color)
+    Return "data:image/png;base64,{Base64.Encode(Png.Encode(image))}"
+End Function
+
+// A glTF of a triangle's mesh, with `rest`, the parts after its meshes.
+Package Function Gltf(x: Int, rest: String): UInt8[]
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+            "\"buffers\":[{{\"byteLength\":102,\"uri\":\"{Buffered(x)}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":72,\"byteLength\":24}}," +
+            "{{\"buffer\":0,\"byteOffset\":96,\"byteLength\":6}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3," +
+            "\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[{x},1,0]}}," +
+            "{{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}}," +
+            "{{\"bufferView\":2,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\"}}," +
+            "{{\"bufferView\":3,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}}]," +
+            "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0,\"NORMAL\":1," +
+            "\"TEXCOORD_0\":2}},\"indices\":3}}]}}]," + rest + "}}").Bytes
+End Function

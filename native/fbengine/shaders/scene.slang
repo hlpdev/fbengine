@@ -50,6 +50,9 @@ static const uint clustersUp = 9;
 static const uint clustersDeep = 24;
 // How tight a highlight is, as fixed-function hardware's was.
 static const float highlightPower = 100.0;
+// How short a morphed normal is, squared, before it's taken to be no normal at all.
+static const float smallestNormalSquared = 1e-12;
+
 // A vertex's joint that's no bone, which leaves it as it is.
 static const uint noBone = 0xFFFF;
 
@@ -76,9 +79,25 @@ struct Tangent
     float xyzw[4];
 };
 
+// What a morph target moves a vertex by, and its normal.
+struct TargetVertex
+{
+    float position[3];
+    float normal[3];
+};
+
+// A target a draw is drawn with, and how much of it.
+struct DrawnTarget
+{
+    uint target;
+    float weight;
+};
+
 // A draw: its matrix to the camera's view, what turns its normals there, its color and alpha, its
-// vertices, its joints and palette if it's skinned, its tangents if it has them, its material's
-// index, its own lights, and how many matrices its palette has, 0 if it isn't skinned.
+// vertices, its joints and palette if it's skinned, its tangents if it has them, its morph targets
+// and which it's drawn with if it's morphed, its material's index, its own lights, how many matrices
+// its palette has, 0 if it isn't skinned, how many targets it's drawn with, and how many vertices
+// each has, and whether it has tangents.
 struct Draw
 {
     float4x4 toView;
@@ -88,10 +107,14 @@ struct Draw
     Joints* joints;
     float4x4* palette;
     Tangent* tangents;
+    TargetVertex* targets;
+    DrawnTarget* drawnTargets;
     uint material;
     uint lightFirst;
     uint lightCount;
     uint jointCount;
+    uint drawnTargetCount;
+    uint targetVertices;
     uint hasTangents;
     uint spare;
 };
@@ -332,6 +355,26 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
     {
         const Tangent stored = draw.tangents[index];
         tangent = float4(stored.xyzw[0], stored.xyzw[1], stored.xyzw[2], stored.xyzw[3]);
+    }
+    // Morphed first, as glTF has it, then skinned.
+    if (draw.drawnTargetCount != 0)
+    {
+        float3 morphed = normal;
+        for (uint i = 0; i < draw.drawnTargetCount; ++i)
+        {
+            const DrawnTarget drawn = draw.drawnTargets[i];
+            const TargetVertex moved = draw.targets[drawn.target * draw.targetVertices + index];
+            position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) *
+                            drawn.weight;
+            morphed += float3(moved.normal[0], moved.normal[1], moved.normal[2]) * drawn.weight;
+        }
+        // Length 1 here, so what's between vertices is as a morph has it, unless targets cancel it
+        // or send it past what a float holds: that leaves no way to face but the vertex's own.
+        const float squared = dot(morphed, morphed);
+        if (squared > smallestNormalSquared && !isinf(squared))
+        {
+            normal = morphed / sqrt(squared);
+        }
     }
     // Skinned before its own matrix, in its mesh's space, as the palette is.
     if (draw.jointCount != 0)

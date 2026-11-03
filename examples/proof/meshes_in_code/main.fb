@@ -1,81 +1,300 @@
 // A mesh made in code: surfaces of vertices with two sets of UVs, colors and alpha, and normals made
 // from its triangles; read back, changed, joined, cloned, and moved as a whole. It prints what each
-// did. It'll draw with --watch once the renderer draws meshes.
+// did; with --watch, a window of a mesh made in code, its colors and alpha over what's behind, and its
+// normals lit, one of its corners going up and down.
 
 Import std.core
+From std.image Import Image, Png
+Import std.io
 Import std.math
 Import fbengine
+Import std.collections
+Import std.os
 
 Function Shown(at: Vec3): String => "{at.x:.2}, {at.y:.2}, {at.z:.2}"
 
-Local world = World()
-World.SetCurrent(world)
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
 
-// A quad, each corner with two sets of UVs, and a color.
-Local made = Geometry()
-Local surface = made.AddSurface()
-Local up = Vec3(0, 1, 0)
-Local a = surface.AddVertex(Vertex(Vec3(0, 0, 0), up, Vec2(0, 0), Vec2(0.5, 0.5),
-                                   Color(1, 0, 0, 1)))
-Local b = surface.AddVertex(Vertex(Vec3(0, 0, -2), up, Vec2(0, 1), Vec2(0.5, 0.75),
-                                   Color(0, 1, 0, 0.5)))
-Local c = surface.AddVertex(Vertex(Vec3(2, 0, -2), up, Vec2(1, 1), Vec2(0.75, 0.75),
-                                   Color(0, 0, 1, 1)))
-Local d = surface.AddVertex(Vertex(Vec3(2, 0, 0), up, Vec2(1, 0), Vec2(0.75, 0.5),
-                                   Color(1, 1, 1, 0)))
-surface.AddTriangle(a, c, b)
-surface.AddTriangle(a, d, c)
-Print("{made.SurfaceCount()} surface, {surface.VertexCount()} vertices, {surface.TriangleCount()} triangles")
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
 
-// What went in comes back.
-Local second = surface.Vertex(b)
-Print("its second UVs {second.Uv1}, first {second.Uv0}")
-Print("its color's alpha {second.Color.a}")
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
 
-// Normals, made from the triangles, whatever they were: a bent quad's are between its faces.
-surface.SetVertexNormal(a, Vec3(1, 0, 0))
-made.UpdateNormals()
-Print("made again {Shown(surface.VertexNormal(a))}")
-surface.SetVertexPosition(d, Vec3(2, 1, 0))
-made.UpdateNormals()
-Local leaning = surface.VertexNormal(d)
-Print("one corner lifted, it leans {leaning.x < 0.0 && leaning.y > 0.0}")
-surface.SetVertexPosition(d, Vec3(2, 0, 0))
-made.UpdateNormals()
+// A material of no lighting.
+Function Painted(color: Color): Material
+    Local made = Material()
+    made.SetShading(Shading.UNLIT)
+    made.SetColor(color)
+    Return made
+End Function
 
-// Its size, and moving it as a whole.
-Local bounds = made.Bounds()
-Print("bounds {Shown(bounds.Min)} to {Shown(bounds.Max)}")
-made.Translate(Vec3(1, 0, 0))
-Print("moved: {Shown(made.Bounds().Min)}")
-made.Scale(Vec3(2, 1, 1))
-Print("scaled: {Shown(made.Bounds().Max)}")
-made.Rotate(Quat.FromEuler(0.0, Deg(90), 0.0))
-Print("turned, it's {made.Bounds().Max.x - made.Bounds().Min.x:.2} across")
-made.Fit(AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1)))
-Print("fitted: {Shown(made.Bounds().Min)} to {Shown(made.Bounds().Max)}")
+// A window's camera at `at`, looking at `looking`, over almost black.
+Function Watching(at: Vec3, looking: Vec3): Camera
+    Local camera = Camera()
+    camera.SetPosition(at)
+    camera.PointAt(looking)
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    Return camera
+End Function
 
-// Flipped: its triangles wound the other way, so a pick from above no longer meets it.
-Local mesh = Mesh(made)
-mesh.SetPickMode(PickMode.MESH)
-Local from = Vec3(0, 5, 0)
-Local to = Vec3(0, -5, 0)
-Local before = world.Pick(from, to) != Null
-made.Flip()
-Print("picked from above {before}, flipped {world.Pick(from, to) != Null}, from below {world.Pick(to, from) != Null}")
-made.Flip()
+// A window of a quad of vertex colors and alpha over a wall, and a lit grid whose middle rises; or
+// `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("meshes in code: Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    world.SetAmbientLight(Color(0.03, 0.03, 0.04))
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local toward = Vec3(0, 0, 1)
+    Local a = surface.AddVertex(Vertex(Vec3(-1, 1, 0), toward, Vec2(0, 0), Vec2(0, 0),
+                                       Color(1, 0, 0, 1)))
+    Local b = surface.AddVertex(Vertex(Vec3(1, 1, 0), toward, Vec2(1, 0), Vec2(1, 0),
+                                       Color(0, 1, 0, 0.5)))
+    Local c = surface.AddVertex(Vertex(Vec3(1, -1, 0), toward, Vec2(1, 1), Vec2(1, 1),
+                                       Color(0, 0, 1, 1)))
+    Local d = surface.AddVertex(Vertex(Vec3(-1, -1, 0), toward, Vec2(0, 1), Vec2(0, 1),
+                                       Color(1, 1, 1, 0)))
+    surface.AddTriangle(a, c, b)
+    surface.AddTriangle(a, d, c)
+    Local colors = Painted(Color(1, 1, 1))
+    colors.SetVertexColors(True)
+    colors.SetBlend(Blend.ALPHA)
+    colors.SetTwoSided(True)
+    Local quad = Mesh(made)
+    quad.SetMaterial(colors)
+    quad.SetPosition(Vec3(-2, 0.5, -5))
+    Local behind = Mesh(Geometry.Plane())
+    behind.SetRotation(Quat.FromEuler(Deg(90), 0.0, 0.0))
+    behind.SetScale(Vec3(4, 1, 2))
+    behind.SetPosition(Vec3(-2, 0.5, -6))
+    behind.SetMaterial(Painted(Color(0.5, 0.5, 0.5)))
+    // A grid, lit per vertex, whose normals are worked out from it as its middle moves.
+    Local grid = Geometry.Plane(8)
+    Local lit = Material()
+    lit.SetShading(Shading.VERTEX)
+    lit.SetColor(Color(0.8, 0.7, 0.5))
+    Local ground = Mesh(grid)
+    ground.SetMaterial(lit)
+    ground.SetPosition(Vec3(2, -0.5, -5))
+    ground.SetScale(Vec3(2, 1, 2))
+    Local lamp = Light(LightType.DIRECTIONAL)
+    lamp.SetRotation(Quat.FromEuler(Deg(-50), Deg(30), 0.0))
+    Local rising = grid.Surface(0)
+    Local middle = rising.VertexCount() / 2
+    Watching(Vec3(0, 1.5, 0), Vec3(0, 0, -5))
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        Local seconds = frames > 0 ? 0.1 : Frame.Delta() As Float
+        time += seconds
+        Local at = rising.Vertex(middle).Position
+        rising.SetVertexPosition(middle, Vec3(at.x, (Sin(time) + 1.0) * 0.5, at.z))
+        grid.UpdateNormals()
+        quad.SetRotation(Quat.FromEuler(0.0, Sin(time * 0.6) * 0.6, 0.0))
+        RenderWorld()
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
 
-// Joined, and cloned: the clone's its own.
-Local clone = made.Clone()
-clone.Translate(Vec3(10, 0, 0))
-Local joined = Geometry.Cube()
-Local vertices = joined.Surface(0).VertexCount()
-joined.Add(made)
-Print("a cube's {vertices} vertices, joined {joined.SurfaceCount()} surfaces")
-Print("the clone moved, the first didn't {Abs(made.Bounds().Max.x - 1.0) < 0.01 && clone.Bounds().Max.x > 10.0}")
+// To a thousandth.
+Function Fine(at: Vec3): String => "{at.x:.3}, {at.y:.3}, {at.z:.3}"
 
-// A box for culling, of its own, not its vertices'.
-made.SetCullBox(AABB(Vec3(-100, -100, -100), Vec3(100, 100, 100)))
-Local cull = made.CullBox()
-Print("its cull box {cull != Null ? cull.Max.x : 0.0:.0}, bounds {made.Bounds().Max.x:.0}")
-world.Free()
+// A vertex as a line, its place and normal to a thousandth.
+Function Whole(vertex: Vertex): String
+    Return "{Fine(vertex.Position)}, {Fine(vertex.Normal)}, {vertex.Uv0}, {vertex.Uv1}, {vertex.Color}"
+End Function
+
+// A vertex in full, turned, flipped, cloned, and joined, and a surface's material.
+Function InFull()
+    Local world = World()
+    World.SetCurrent(world)
+
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local up = Vec3(0, 1, 0)
+    Local a = surface.AddVertex(Vertex(Vec3(0, 0, 0), up, Vec2(0, 0), Vec2(0.5, 0.5),
+                                       Color(1, 0, 0, 1)))
+    Local b = surface.AddVertex(Vertex(Vec3(0, 0, -2), up, Vec2(0, 1), Vec2(0.5, 0.75),
+                                       Color(0, 1, 0, 0.5)))
+    Local c = surface.AddVertex(Vertex(Vec3(2, 0, -2), up, Vec2(1, 1), Vec2(0.75, 0.75),
+                                       Color(0, 0, 1, 1)))
+    surface.AddTriangle(a, c, b)
+    Print("a vertex's whole color {surface.VertexColor(b)}")
+    Print("VertexPosition {Fine(surface.VertexPosition(b))}")
+    surface.SetVertexNormal(c, Vec3(1, 0, 0))
+    Print("SetVertexNormal {Fine(surface.VertexNormal(c))}")
+    made.UpdateNormals()
+    made.Rotate(Quat.FromEuler(0.0, Deg(90), 0.0))
+    Print("turned a quarter: {Fine(surface.VertexPosition(b))}")
+    made.Flip()
+    Print("flipped, a normal {Fine(surface.VertexNormal(a))}, was up")
+    made.Flip()
+    Local clone = made.Clone()
+    Print("a clone's vertex {Whole(clone.Surface(0).Vertex(b))}")
+    Local joined = Geometry.Cube()
+    joined.Add(made)
+    Print("joined: its last surface has {joined.Surface(1).VertexCount()} vertices, {joined.Surface(1).TriangleCount()} triangles, {Whole(joined.Surface(1).Vertex(b))}")
+    Local placed = Geometry()
+    placed.Add(made, Mat4.Translation(Vec3(5, 0, 0)))
+    Print("added by a matrix: {Fine(placed.Bounds().Max)}")
+    Local material = Material()
+    surface.SetMaterial(material)
+    Print("a surface's material read back {surface.Material() == material}")
+    world.Free()
+End Function
+
+// What it draws by: a cull box says what's in view, whatever its vertices do; and a surface's texture
+// says what file it's from. It reads back from a target.
+Function Drawn() Throws GraphicsError, IOError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local target = Try Texture.Target(16, 16, TextureFormat.RGBA8, 1, True)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 1))
+    Local geometry = Geometry.Cube()
+    Local mesh = Mesh(geometry)
+    Local red = Material()
+    red.SetShading(Shading.UNLIT)
+    red.SetColor(Color(1, 0, 0))
+    mesh.SetMaterial(red)
+    mesh.SetPosition(Vec3(0, 0, -6))
+    camera.Render()
+    Print("in view {target.ReadPixel(8, 8)}")
+    geometry.SetCullBox(AABB(Vec3(100, 100, 100), Vec3(101, 101, 101)))
+    camera.Render()
+    Print("its cull box out of view {target.ReadPixel(8, 8)}")
+    geometry.SetCullBox(Null)
+    Local folder = Try TempDir()
+    Local path = folder.Path / "wall.png"
+    Local image = Image(1, 1)
+    image[0, 0] = Color32(10, 200, 30, 255)
+    Try File.WriteBytes(path, Png.Encode(image))
+    Local material = Material()
+    material.SetShading(Shading.UNLIT)
+    material.SetTexture(0, Try Texture.Load(path, False))
+    geometry.Surface(0).SetMaterial(material)
+    mesh.SetMaterial(Null)
+    camera.Render()
+    Print("in its surface's material {target.ReadPixel(8, 8)}")
+    Print("its texture's from wall.png {mesh.Geometry()?.Surface(0)?.Material()?.Texture(0)?.Path() == "{path}"}")
+    Try folder.Close()
+End Function
+
+Local arguments = Process.Arguments()
+If !arguments.Contains("--watch")
+    Local world = World()
+    World.SetCurrent(world)
+
+    // A quad, each corner with two sets of UVs, and a color.
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local up = Vec3(0, 1, 0)
+    Local a = surface.AddVertex(Vertex(Vec3(0, 0, 0), up, Vec2(0, 0), Vec2(0.5, 0.5),
+                                       Color(1, 0, 0, 1)))
+    Local b = surface.AddVertex(Vertex(Vec3(0, 0, -2), up, Vec2(0, 1), Vec2(0.5, 0.75),
+                                       Color(0, 1, 0, 0.5)))
+    Local c = surface.AddVertex(Vertex(Vec3(2, 0, -2), up, Vec2(1, 1), Vec2(0.75, 0.75),
+                                       Color(0, 0, 1, 1)))
+    Local d = surface.AddVertex(Vertex(Vec3(2, 0, 0), up, Vec2(1, 0), Vec2(0.75, 0.5),
+                                       Color(1, 1, 1, 0)))
+    surface.AddTriangle(a, c, b)
+    surface.AddTriangle(a, d, c)
+    Print("{made.SurfaceCount()} surface, {surface.VertexCount()} vertices, {surface.TriangleCount()} triangles")
+
+    // What went in comes back.
+    Local second = surface.Vertex(b)
+    Print("its second UVs {second.Uv1}, first {second.Uv0}")
+    Print("its color's alpha {second.Color.a}")
+
+    // Normals, made from the triangles, whatever they were: a bent quad's are between its faces.
+    surface.SetVertexNormal(a, Vec3(1, 0, 0))
+    made.UpdateNormals()
+    Print("made again {Shown(surface.VertexNormal(a))}")
+    surface.SetVertexPosition(d, Vec3(2, 1, 0))
+    made.UpdateNormals()
+    Local leaning = surface.VertexNormal(d)
+    Print("one corner lifted, it leans {leaning.x < 0.0 && leaning.y > 0.0}")
+    surface.SetVertexPosition(d, Vec3(2, 0, 0))
+    made.UpdateNormals()
+
+    // Its size, and moving it as a whole.
+    Local bounds = made.Bounds()
+    Print("bounds {Shown(bounds.Min)} to {Shown(bounds.Max)}")
+    made.Translate(Vec3(1, 0, 0))
+    Print("moved: {Shown(made.Bounds().Min)}")
+    made.Scale(Vec3(2, 1, 1))
+    Print("scaled: {Shown(made.Bounds().Max)}")
+    made.Rotate(Quat.FromEuler(0.0, Deg(90), 0.0))
+    Print("turned, it's {made.Bounds().Max.x - made.Bounds().Min.x:.2} across")
+    made.Fit(AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1)))
+    Print("fitted: {Shown(made.Bounds().Min)} to {Shown(made.Bounds().Max)}")
+
+    // Flipped: its triangles wound the other way, so a pick from above no longer meets it.
+    Local mesh = Mesh(made)
+    mesh.SetPickMode(PickMode.MESH)
+    Local from = Vec3(0, 5, 0)
+    Local to = Vec3(0, -5, 0)
+    Local before = world.Pick(from, to) != Null
+    made.Flip()
+    Print("picked from above {before}, flipped {world.Pick(from, to) != Null}, from below {world.Pick(to, from) != Null}")
+    made.Flip()
+
+    // Joined, and cloned: the clone's its own.
+    Local clone = made.Clone()
+    clone.Translate(Vec3(10, 0, 0))
+    Local joined = Geometry.Cube()
+    Local vertices = joined.Surface(0).VertexCount()
+    joined.Add(made)
+    Print("a cube's {vertices} vertices, joined {joined.SurfaceCount()} surfaces")
+    Print("the clone moved, the first didn't {Abs(made.Bounds().Max.x - 1.0) < 0.01 && clone.Bounds().Max.x > 10.0}")
+
+    // A box for culling, of its own, not its vertices'.
+    made.SetCullBox(AABB(Vec3(-100, -100, -100), Vec3(100, 100, 100)))
+    Local cull = made.CullBox()
+    Print("its cull box {cull != Null ? cull.Max.x : 0.0:.0}, bounds {made.Bounds().Max.x:.0}")
+    world.Free()
+    InFull()
+    Try Drawn()
+ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+Else
+    Try Watched(Asked(arguments), arguments)
+End If
