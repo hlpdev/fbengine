@@ -80,6 +80,59 @@ std::span<const float> morph_weights(std::uint32_t mesh, float tween) {
     return between;
 }
 
+std::size_t strongest_targets(std::span<const float> weights, std::size_t targets,
+                              std::array<drawn_target_t, drawn_targets>& drawn) {
+    std::size_t count = 0;
+    const std::size_t last = std::min(weights.size(), targets);
+    for (std::size_t t = 0; t < last; ++t) {
+        const float strength = std::abs(weights[t]);
+        if (strength <= 0.0F) {
+            continue;
+        }
+        // Kept strongest first, each after any as strong, so the earlier stays.
+        std::size_t at = count;
+        while (at > 0 && std::abs(drawn[at - 1].weight) < strength) {
+            --at;
+        }
+        if (at == drawn.size()) {
+            continue;
+        }
+        count = std::min(count + 1, drawn.size());
+        for (std::size_t i = count - 1; i > at; --i) {
+            drawn[i] = drawn[i - 1];
+        }
+        drawn[at] = { .target = static_cast<std::uint32_t>(t), .weight = weights[t] };
+    }
+    return count;
+}
+
+void grow_by_targets(std::uint32_t geometry, std::span<const float> weights, scene::vec3_t& min,
+                     scene::vec3_t& max) {
+    const std::vector<scene::surface_t>& surfaces = scene::scene().geometries[geometry].surfaces;
+    for (std::size_t t = 0; t < weights.size(); ++t) {
+        scene::vec3_t low;
+        scene::vec3_t high;
+        // What it moves a vertex of any surface by, the other way for a weight below 0.
+        for (const scene::surface_t& surface : surfaces) {
+            if (t < surface.targets.size()) {
+                const scene::morph_target_t& target = surface.targets[t];
+                const float weight = std::abs(weights[t]);
+                const scene::vec3_t from = target.low * weight;
+                const scene::vec3_t to = target.high * weight;
+                const bool forward = weights[t] >= 0.0F;
+                low = { std::fmin(low.x, forward ? from.x : -to.x),
+                        std::fmin(low.y, forward ? from.y : -to.y),
+                        std::fmin(low.z, forward ? from.z : -to.z) };
+                high = { std::fmax(high.x, forward ? to.x : -from.x),
+                         std::fmax(high.y, forward ? to.y : -from.y),
+                         std::fmax(high.z, forward ? to.z : -from.z) };
+            }
+        }
+        min = min + low;
+        max = max + high;
+    }
+}
+
 } // namespace fbe::anim
 
 using fbe::fail;
@@ -120,6 +173,7 @@ FBE_API int32_t fbe_morph_add_target(uint64_t geometry, int32_t surface, const f
         if (normals != nullptr && count > 0) {
             made.normals = fbe::anim::vectors_of(normals, count);
         }
+        fbe::scene::fit_target_box(made);
         found->targets.push_back(std::move(made));
         fbe::scene::touch_geometry(slot, false);
         return static_cast<int32_t>(found->targets.size()) - 1;

@@ -72,6 +72,7 @@ void transform_surface(surface_t& surface, const mat4_t& m) {
         for (vec3_t& moved : target.positions) {
             moved = transform_vector(m, moved);
         }
+        fit_target_box(target);
         for (std::size_t i = 0; i < target.normals.size() && i < surface.vertices.size(); ++i) {
             target.normals[i] =
                 transform_normal_move(m, vec(surface.vertices[i].normal), target.normals[i]);
@@ -279,6 +280,17 @@ void geometry_bounds(std::uint32_t geometry, vec3_t& min, vec3_t& max) {
     }
     min = found.bounds_min;
     max = found.bounds_max;
+}
+
+void fit_target_box(morph_target_t& target) {
+    target.low = {};
+    target.high = {};
+    for (const vec3_t& moved : target.positions) {
+        target.low = { std::fmin(target.low.x, moved.x), std::fmin(target.low.y, moved.y),
+                       std::fmin(target.low.z, moved.z) };
+        target.high = { std::fmax(target.high.x, moved.x), std::fmax(target.high.y, moved.y),
+                        std::fmax(target.high.z, moved.z) };
+    }
 }
 
 const bvh_t& geometry_tree(std::uint32_t geometry) {

@@ -68,9 +68,12 @@ struct collider_t {
 
 /// A morph target of a surface: what each of its vertices, and its normal, move by at a weight of
 /// 1, as the morph area's C API has them; vertices past them don't move, and normals can be none.
+/// `low` and `high` are the box of what its positions move by, around none.
 struct morph_target_t {
     std::vector<vec3_t> positions;
     std::vector<vec3_t> normals;
+    vec3_t low;
+    vec3_t high;
 };
 
 /// One surface of a geometry: its vertices, as the C API has them, its triangles, three indices
@@ -455,6 +458,8 @@ void release_materials(const std::vector<surface_t>& surfaces);
 
 /// The box around a geometry's vertices, nothing at the origin for none.
 void geometry_bounds(std::uint32_t geometry, vec3_t& min, vec3_t& max);
+/// Works out a morph target's box from its positions.
+void fit_target_box(morph_target_t& target);
 /// The tree over a geometry's triangles, built again if the geometry changed since.
 const bvh_t& geometry_tree(std::uint32_t geometry);
 /// Whether an entity and every entity above it are shown.
@@ -477,6 +482,9 @@ public:
     explicit tweened_t(float tween);
 
     [[nodiscard]] pose_t pose(std::uint32_t entity) const;
+    [[nodiscard]] float tween() const {
+        return m_tween;
+    }
 
 private:
     float m_tween;

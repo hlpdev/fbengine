@@ -13,7 +13,8 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # The examples with a --watch.
-WATCHED = ["arcade", "menu", "controls", "proof/streamed_and_positional_sound"]
+WATCHED = ["arcade", "menu", "controls", "proof/streamed_and_positional_sound",
+           "proof/skinned_animation_with_bones_under_game_control"]
 
 
 def stop(process):

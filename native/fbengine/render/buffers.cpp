@@ -47,7 +47,10 @@ void free_surface(surface_buffers_t& surface) {
     gpu::free_buffer(surface.vertices);
     gpu::free_buffer(surface.indices);
     gpu::free_buffer(surface.joints);
+    gpu::free_buffer(surface.targets);
     surface.index_count = 0;
+    surface.target_count = 0;
+    surface.vertex_count = 0;
 }
 
 /// Everything kept goes as the GPU stops.
@@ -208,6 +211,46 @@ bool piece_vertices(const scene::terrain_t& terrain, const piece_area_t& area, s
     return true;
 }
 
+/// What a morph target moves a vertex by, as the scene shader reads it.
+struct target_vertex_t {
+    std::array<float, 3> position{};
+    std::array<float, 3> normal{};
+};
+static_assert(sizeof(target_vertex_t) == 24, "the scene shader reads these 24 bytes apart");
+
+/// Sends a surface's morph targets, if it has any and it has vertices drawn.
+bool send_targets(surface_buffers_t& buffers, const scene::surface_t& from) {
+    buffers.target_count = 0;
+    buffers.vertex_count = 0;
+    if (from.targets.empty() || buffers.vertices.buffer == VK_NULL_HANDLE) {
+        gpu::free_buffer(buffers.targets);
+        return true;
+    }
+    const std::size_t vertices = from.vertices.size();
+    std::vector<target_vertex_t> flat(vertices * from.targets.size());
+    for (std::size_t t = 0; t < from.targets.size(); ++t) {
+        const scene::morph_target_t& target = from.targets[t];
+        const std::span<target_vertex_t> row = std::span(flat).subspan(t * vertices, vertices);
+        for (std::size_t i = 0; i < std::min(vertices, target.positions.size()); ++i) {
+            row[i].position = {
+                target.positions[i].x,
+                target.positions[i].y,
+                target.positions[i].z,
+            };
+        }
+        for (std::size_t i = 0; i < std::min(vertices, target.normals.size()); ++i) {
+            row[i].normal = { target.normals[i].x, target.normals[i].y, target.normals[i].z };
+        }
+    }
+    if (!send(buffers.targets, std::as_bytes(std::span(flat)),
+              gpu::flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))) {
+        return false;
+    }
+    buffers.target_count = static_cast<std::uint32_t>(from.targets.size());
+    buffers.vertex_count = static_cast<std::uint32_t>(vertices);
+    return true;
+}
+
 } // namespace
 
 const surface_buffers_t* surface_buffers(std::uint64_t geometry, std::size_t surface) {
@@ -240,6 +283,9 @@ const surface_buffers_t* surface_buffers(std::uint64_t geometry, std::size_t sur
                 gpu::free_buffer(buffers.surfaces[i].joints);
             } else if (!send(buffers.surfaces[i].joints, std::as_bytes(std::span(from.joints)),
                              gpu::flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))) {
+                return nullptr;
+            }
+            if (!send_targets(buffers.surfaces[i], from)) {
                 return nullptr;
             }
         }

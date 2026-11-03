@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <numbers>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -1499,4 +1500,561 @@ TEST_CASE("a geometry edited between two cameras is the next frame's, for both",
     while (fbe_entity_freed(some.data(), some.size()) != 0) {}
     fbe_texture_release(second_target);
     fbe_material_release(red);
+}
+
+namespace {
+
+/// A model's vertices and triangles, as a surface holds them.
+struct shape_t {
+    std::vector<fbe_vertex_t> vertices;
+    std::vector<std::uint32_t> indices;
+};
+
+/// A vector through a matrix of 16 floats, its last column's weight `w`.
+std::array<float, 3> through(std::span<const float> m, std::array<float, 3> v, float w) {
+    return {
+        (m[0] * v[0]) + (m[4] * v[1]) + (m[8] * v[2]) + (m[12] * w),
+        (m[1] * v[0]) + (m[5] * v[1]) + (m[9] * v[2]) + (m[13] * w),
+        (m[2] * v[0]) + (m[6] * v[1]) + (m[10] * v[2]) + (m[14] * w),
+    };
+}
+
+/// Triangles between rings of `around` vertices each, `rings` of them, outward as `flip` says.
+void add_rings(shape_t& shape, std::uint32_t rings, std::uint32_t around, bool flip) {
+    for (std::uint32_t ring = 0; ring + 1 < rings; ++ring) {
+        for (std::uint32_t side = 0; side < around; ++side) {
+            const std::uint32_t next = (side + 1) % around;
+            const std::uint32_t a = (ring * around) + side;
+            const std::uint32_t b = (ring * around) + next;
+            const std::uint32_t c = ((ring + 1) * around) + side;
+            const std::uint32_t d = ((ring + 1) * around) + next;
+            if (flip) {
+                shape.indices.insert(shape.indices.end(), { a, c, b, b, c, d });
+            } else {
+                shape.indices.insert(shape.indices.end(), { a, b, c, b, d, c });
+            }
+        }
+    }
+}
+
+/// A tube along X, 4 long and radius 0.5, in 13 rings of 16.
+shape_t arm_shape() {
+    shape_t shape;
+    for (std::uint32_t ring = 0; ring < 13; ++ring) {
+        const float x = -2.0F + (static_cast<float>(ring) / 3.0F);
+        for (std::uint32_t side = 0; side < 16; ++side) {
+            const float turn = 2.0F * std::numbers::pi_v<float> * static_cast<float>(side) / 16.0F;
+            const float y = std::cos(turn);
+            const float z = std::sin(turn);
+            shape.vertices.push_back({
+                .position = { .x = x, .y = y * 0.5F, .z = z * 0.5F },
+                .normal = { .x = 0.0F, .y = y, .z = z },
+                .uv0 = {},
+                .uv1 = {},
+                .color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F },
+            });
+        }
+    }
+    add_rings(shape, 13, 16, true);
+    return shape;
+}
+
+/// A ball of radius 1, in 17 rings of 24, pole to pole along Y.
+shape_t ball_shape() {
+    shape_t shape;
+    for (std::uint32_t ring = 0; ring < 17; ++ring) {
+        const float down = std::numbers::pi_v<float> * static_cast<float>(ring) / 16.0F;
+        for (std::uint32_t side = 0; side < 24; ++side) {
+            const float turn = 2.0F * std::numbers::pi_v<float> * static_cast<float>(side) / 24.0F;
+            const fbe_vec3_t on{
+                .x = std::sin(down) * std::cos(turn),
+                .y = std::cos(down),
+                .z = std::sin(down) * std::sin(turn),
+            };
+            shape.vertices.push_back({
+                .position = on,
+                .normal = on,
+                .uv0 = {},
+                .uv1 = {},
+                .color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F },
+            });
+        }
+    }
+    add_rings(shape, 17, 24, false);
+    return shape;
+}
+
+std::uint64_t geometry_of(const shape_t& shape) {
+    const std::uint64_t geometry = fbe_geometry_create();
+    const std::int32_t surface = fbe_geometry_add_surface(geometry);
+    fbe_surface_add_vertices(geometry, surface, shape.vertices.data(),
+                             static_cast<std::int32_t>(shape.vertices.size()));
+    fbe_surface_add_triangles(geometry, surface, shape.indices.data(),
+                              static_cast<std::int32_t>(shape.indices.size()));
+    return geometry;
+}
+
+/// The ball's targets: its top lifted, with its normals leaning in, and its sides pushed out in X.
+void add_ball_targets(std::uint64_t geometry, const shape_t& shape) {
+    std::vector<float> lifted;
+    std::vector<float> leaned;
+    std::vector<float> wider;
+    for (const fbe_vertex_t& vertex : shape.vertices) {
+        const float top = std::max(vertex.position.y, 0.0F);
+        lifted.insert(lifted.end(), { 0.0F, top * 0.8F, 0.0F });
+        leaned.insert(leaned.end(),
+                      { -vertex.normal.x * top * 0.5F, 0.0F, -vertex.normal.z * top * 0.5F });
+        wider.insert(wider.end(), { vertex.position.x * 0.6F, 0.0F, 0.0F });
+    }
+    const auto count = static_cast<std::int32_t>(shape.vertices.size());
+    require(fbe_morph_add_target(geometry, 0, lifted.data(), leaned.data(), count) == 0);
+    require(fbe_morph_add_target(geometry, 0, wider.data(), nullptr, count) == 1);
+}
+
+/// The arm's joints: "upper" holds it to the left of its elbow, at its middle, "lower" to the
+/// right, and they share it for a ring each side.
+void set_arm_joints(std::uint64_t geometry, const shape_t& shape) {
+    std::vector<fbe_vertex_joints_t> joints(shape.vertices.size());
+    for (std::size_t i = 0; i < joints.size(); ++i) {
+        const float lower =
+            std::clamp((shape.vertices[i].position.x + (1.0F / 3.0F)) * 1.5F, 0.0F, 1.0F);
+        joints[i].joints[0] = 0;
+        joints[i].joints[1] = 1;
+        joints[i].weights[0] = 1.0F - lower;
+        joints[i].weights[1] = lower;
+    }
+    require(fbe_surface_set_joints(geometry, 0, joints.data(),
+                                   static_cast<std::int32_t>(joints.size())));
+}
+
+/// An arm: its root, where it's placed; "upper", at its shoulder; "lower", at its elbow, under it;
+/// its mesh, under the root; its skin; and a clip of a second turning its elbow a quarter turn
+/// about Z, and its shoulder an eighth the other way.
+struct arm_t {
+    std::uint64_t root = 0;
+    std::uint64_t mesh = 0;
+    std::uint64_t skin = 0;
+    std::uint64_t clip = 0;
+    std::uint64_t player = 0;
+
+    arm_t(std::uint64_t world, std::uint64_t geometry) {
+        root = fbe_entity_create(world, 0, FBE_ENTITY_PIVOT);
+        require(fbe_entity_set_position(root, 0.0F, 0.0F, -8.0F, FBE_SPACE_LOCAL));
+        const std::uint64_t upper = fbe_entity_create(world, root, FBE_ENTITY_PIVOT);
+        require(fbe_entity_set_name(upper, "upper"));
+        require(fbe_entity_set_position(upper, -2.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL));
+        const std::uint64_t lower = fbe_entity_create(world, upper, FBE_ENTITY_PIVOT);
+        require(fbe_entity_set_name(lower, "lower"));
+        require(fbe_entity_set_position(lower, 2.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL));
+        mesh = fbe_entity_create(world, root, FBE_ENTITY_MESH);
+        require(fbe_mesh_set_geometry(mesh, geometry));
+        skin = fbe_skin_create();
+        // From the mesh's space to each joint's, where it is in the bind pose.
+        const std::array<float, 16> to_upper{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, 0, 1 };
+        const std::array<float, 16> to_lower{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+        require(fbe_skin_add_joint(skin, "upper", to_upper.data()));
+        require(fbe_skin_add_joint(skin, "lower", to_lower.data()));
+        require(fbe_skin_attach(mesh, skin, root));
+        clip = fbe_clip_create("bend", 0.0F);
+        const std::array<float, 2> times{ 0.0F, 1.0F };
+        const float eighth = std::numbers::pi_v<float> / 8.0F;
+        const float quarter = eighth * 2.0F;
+        const std::array<float, 8> bent{ 0, 0, 0, 1, 0, 0, std::sin(quarter), std::cos(quarter) };
+        const std::array<float, 8> leaned{ 0, 0, 0, 1, 0, 0, -std::sin(eighth), std::cos(eighth) };
+        require(fbe_clip_add_channel(clip, "lower", FBE_CLIP_ROTATION, FBE_CLIP_LINEAR, 4,
+                                     times.data(), bent.data(), 2));
+        require(fbe_clip_add_channel(clip, "upper", FBE_CLIP_ROTATION, FBE_CLIP_LINEAR, 4,
+                                     times.data(), leaned.data(), 2));
+        player = fbe_player_create(root);
+        require(fbe_player_play(player, 0, clip, FBE_PLAYER_ONCE, 1.0F));
+    }
+    arm_t(const arm_t&) = delete;
+    arm_t& operator=(const arm_t&) = delete;
+    arm_t(arm_t&&) = delete;
+    arm_t& operator=(arm_t&&) = delete;
+
+    ~arm_t() {
+        fbe_player_free(player);
+        fbe_clip_release(clip);
+        fbe_skin_release(skin);
+    }
+};
+
+/// A scene lit from above and to the side, with a little ambient, on a dark clear.
+void light_for_shapes(const scene_t& scene) {
+    require(fbe_camera_set_clear_color(scene.camera, 0.05F, 0.05F, 0.1F, 1.0F));
+    require(fbe_world_set_ambient(scene.world, 0.15F, 0.15F, 0.15F));
+    const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 4.0F, 4.0F, 0.0F, 30.0F);
+    require(fbe_light_set_intensity(lamp, 80.0F));
+}
+
+/// `shape` with the vertices its mesh's morph has now, as fbe_morph_vertices reads them.
+shape_t morphed(const shape_t& shape, std::uint64_t mesh) {
+    const auto count = shape.vertices.size();
+    std::vector<float> positions(count * 3);
+    std::vector<float> normals(count * 3);
+    require(fbe_morph_vertices(mesh, 0, positions.data(), normals.data(),
+                               static_cast<std::int32_t>(count)) ==
+            static_cast<std::int32_t>(count));
+    shape_t made = shape;
+    for (std::size_t i = 0; i < count; ++i) {
+        made.vertices[i].position = {
+            .x = positions[i * 3],
+            .y = positions[(i * 3) + 1],
+            .z = positions[(i * 3) + 2],
+        };
+        made.vertices[i].normal = {
+            .x = normals[i * 3],
+            .y = normals[(i * 3) + 1],
+            .z = normals[(i * 3) + 2],
+        };
+    }
+    return made;
+}
+
+/// `shape` with its vertices through the skin of a mesh, by its joints and palette, as a skinning
+/// shader that's right would have them: its positions by a weighted sum of the matrices, and its
+/// normals by that sum's cofactors, with its determinant's sign.
+shape_t skinned(const shape_t& shape, std::uint64_t mesh, std::uint64_t geometry) {
+    std::vector<float> palette(std::size_t{ 64 } * 16);
+    const std::int32_t joints_in_it = fbe_skin_palette(mesh, palette.data(), 64);
+    require(joints_in_it > 0);
+    std::vector<fbe_vertex_joints_t> joints(shape.vertices.size());
+    require(
+        fbe_surface_joints(geometry, 0, joints.data(), static_cast<std::int32_t>(joints.size())) ==
+        static_cast<std::int32_t>(joints.size()));
+    shape_t made = shape;
+    for (std::size_t i = 0; i < joints.size(); ++i) {
+        std::array<float, 16> sum{};
+        for (std::size_t j = 0; j < 4; ++j) {
+            const std::span<const float> matrix = std::span<const float>(palette).subspan(
+                std::size_t{ joints[i].joints[j] } * 16, 16);
+            for (std::size_t k = 0; k < 16; ++k) {
+                sum.at(k) += matrix[k] * joints[i].weights[j];
+            }
+        }
+        const fbe_vec3_t& p = shape.vertices[i].position;
+        const fbe_vec3_t& n = shape.vertices[i].normal;
+        const std::array<float, 3> place = through(sum, { p.x, p.y, p.z }, 1.0F);
+        made.vertices[i].position = { .x = place[0], .y = place[1], .z = place[2] };
+        const auto cross = [](std::array<float, 3> a, std::array<float, 3> b) {
+            return std::array<float, 3>{
+                (a[1] * b[2]) - (a[2] * b[1]),
+                (a[2] * b[0]) - (a[0] * b[2]),
+                (a[0] * b[1]) - (a[1] * b[0]),
+            };
+        };
+        const std::array<float, 3> a{ sum[0], sum[1], sum[2] };
+        const std::array<float, 3> b{ sum[4], sum[5], sum[6] };
+        const std::array<float, 3> c{ sum[8], sum[9], sum[10] };
+        const std::array<float, 3> bc = cross(b, c);
+        const std::array<float, 3> ca = cross(c, a);
+        const std::array<float, 3> ab = cross(a, b);
+        made.vertices[i].normal = {
+            .x = (bc[0] * n.x) + (ca[0] * n.y) + (ab[0] * n.z),
+            .y = (bc[1] * n.x) + (ca[1] * n.y) + (ab[1] * n.z),
+            .z = (bc[2] * n.x) + (ca[2] * n.y) + (ab[2] * n.z),
+        };
+    }
+    return made;
+}
+
+/// What `shape` looks like as plain vertices, with nothing to skin or morph it, in place of a mesh
+/// that's hidden while it's drawn.
+fbe::golden::frame_t drawn_baked(const scene_t& scene, const shape_t& shape, std::uint64_t mesh,
+                                 std::uint64_t parent) {
+    const std::uint64_t geometry = geometry_of(shape);
+    const std::uint64_t baked = fbe_entity_create(scene.world, parent, FBE_ENTITY_MESH);
+    require(fbe_mesh_set_geometry(baked, geometry));
+    fbe_geometry_release(geometry);
+    require(fbe_entity_set_hidden(mesh, true));
+    fbe::golden::frame_t frame = scene.drawn();
+    require(fbe_entity_set_hidden(mesh, false));
+    fbe_entity_free(baked);
+    return frame;
+}
+
+/// `frame` is the same picture as `reference` but for a few pixels at edges, where a vertex's
+/// rounding can tip one.
+void check_same_picture(const fbe::golden::frame_t& reference, const fbe::golden::frame_t& frame) {
+    const fbe::golden::difference_t difference = fbe::golden::compare(reference, frame, 3);
+    CAPTURE(difference.pixels, difference.furthest);
+    CHECK(difference.share <= 0.002);
+}
+
+} // namespace
+
+TEST_CASE("a skinned arm matches its reference frames", "[gpu][scene][golden]") {
+    const scene_t scene;
+    light_for_shapes(scene);
+    const shape_t shape = arm_shape();
+    const std::uint64_t geometry = geometry_of(shape);
+    set_arm_joints(geometry, shape);
+    const arm_t arm(scene.world, geometry);
+    for (const auto& [name, step] : {
+             std::pair{ "anim_arm_start", 0.0F },
+             std::pair{ "anim_arm_half", 0.5F },
+             std::pair{ "anim_arm_end", 0.5F },
+         }) {
+        CAPTURE(name);
+        require(fbe_player_advance(scene.world, step));
+        const fbe::golden::frame_t frame = scene.drawn();
+        fbe::golden::check(name, frame);
+        check_same_picture(
+            drawn_baked(scene, skinned(shape, arm.mesh, geometry), arm.mesh, arm.root), frame);
+    }
+    fbe_geometry_release(geometry);
+}
+
+TEST_CASE("a morphing ball matches its reference frames", "[gpu][scene][golden]") {
+    const scene_t scene;
+    light_for_shapes(scene);
+    const shape_t shape = ball_shape();
+    const std::uint64_t geometry = geometry_of(shape);
+    add_ball_targets(geometry, shape);
+    const std::uint64_t place = fbe_entity_create(scene.world, 0, FBE_ENTITY_PIVOT);
+    require(fbe_entity_set_position(place, 0.0F, 0.0F, -6.0F, FBE_SPACE_LOCAL));
+    const std::uint64_t mesh = fbe_entity_create(scene.world, place, FBE_ENTITY_MESH);
+    require(fbe_mesh_set_geometry(mesh, geometry));
+    fbe_entity_set_name(mesh, "ball");
+    const std::uint64_t clip = fbe_clip_create("breathe", 0.0F);
+    const std::array<float, 2> times{ 0.0F, 1.0F };
+    const std::array<float, 4> keys{ 0.0F, 0.0F, 1.0F, 1.0F };
+    require(fbe_clip_add_channel(clip, "ball", FBE_CLIP_WEIGHTS, FBE_CLIP_LINEAR, 2, times.data(),
+                                 keys.data(), 2));
+    const std::uint64_t player = fbe_player_create(mesh);
+    require(fbe_player_play(player, 0, clip, FBE_PLAYER_ONCE, 1.0F));
+    for (const auto& [name, step] : {
+             std::pair{ "anim_ball_start", 0.0F },
+             std::pair{ "anim_ball_half", 0.5F },
+             std::pair{ "anim_ball_end", 0.5F },
+         }) {
+        CAPTURE(name);
+        require(fbe_player_advance(scene.world, step));
+        const fbe::golden::frame_t frame = scene.drawn();
+        fbe::golden::check(name, frame);
+        check_same_picture(drawn_baked(scene, morphed(shape, mesh), mesh, place), frame);
+    }
+    fbe_player_free(player);
+    fbe_clip_release(clip);
+    fbe_geometry_release(geometry);
+}
+
+TEST_CASE("an arm both morphed and skinned is morphed first", "[gpu][scene][golden]") {
+    const scene_t scene;
+    light_for_shapes(scene);
+    const shape_t shape = arm_shape();
+    const std::uint64_t geometry = geometry_of(shape);
+    set_arm_joints(geometry, shape);
+    // Its forearm grows along X, which a bent elbow takes round with it.
+    std::vector<float> longer;
+    std::vector<float> leaning;
+    for (const fbe_vertex_t& vertex : shape.vertices) {
+        longer.insert(longer.end(), { std::max(vertex.position.x, 0.0F) * 0.5F, 0.0F, 0.0F });
+        leaning.insert(leaning.end(), { std::max(vertex.position.x, 0.0F) * 0.3F, 0.0F, 0.0F });
+    }
+    require(fbe_morph_add_target(geometry, 0, longer.data(), leaning.data(),
+                                 static_cast<std::int32_t>(shape.vertices.size())) == 0);
+    const arm_t arm(scene.world, geometry);
+    const std::array<float, 1> weights{ 1.0F };
+    require(fbe_morph_set_weights(arm.mesh, weights.data(), 1));
+    require(fbe_player_advance(scene.world, 1.0F));
+    const fbe::golden::frame_t frame = scene.drawn();
+    fbe::golden::check("anim_both", frame);
+    const shape_t baked = skinned(morphed(shape, arm.mesh), arm.mesh, geometry);
+    check_same_picture(drawn_baked(scene, baked, arm.mesh, arm.root), frame);
+    fbe_geometry_release(geometry);
+}
+
+namespace {
+
+/// The 4 corners of a wall each move up by `up` in a new target of its surface.
+void add_lift(std::uint64_t geometry, float up) {
+    const std::array<float, 12> lifted{ 0, up, 0, 0, up, 0, 0, up, 0, 0, up, 0 };
+    require(fbe_morph_add_target(geometry, 0, lifted.data(), nullptr, 4) >= 0);
+}
+
+} // namespace
+
+TEST_CASE("a surface is drawn with the 8 targets weighted most", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.2F, red);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    // Eight that move nothing, and a ninth that takes it out of the middle.
+    for (int i = 0; i < 8; ++i) {
+        add_lift(geometry, 0.0F);
+    }
+    add_lift(geometry, 1.0F);
+    // The ninth alone moves it.
+    std::array<float, 9> weights{ 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+    require(fbe_morph_set_weights(mesh, weights.data(), 9));
+    CHECK(middle(scene.drawn()) == rgba_t{ 0, 0, 255, 255 });
+    // With eight stronger, it's left out; with one of them weaker, it's in.
+    weights = { 2, 2, 2, 2, 2, 2, 2, 2, 1 };
+    require(fbe_morph_set_weights(mesh, weights.data(), 9));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    weights = { 2, 2, 2, 2, 2, 2, 2, 0.5F, 1 };
+    require(fbe_morph_set_weights(mesh, weights.data(), 9));
+    CHECK(middle(scene.drawn()) == rgba_t{ 0, 0, 255, 255 });
+    // How strong doesn't care which way it goes.
+    weights = { 2, 2, 2, 2, 2, 2, 2, -2, -3 };
+    require(fbe_morph_set_weights(mesh, weights.data(), 9));
+    CHECK(middle(scene.drawn()) == rgba_t{ 0, 0, 255, 255 });
+    // As strong as eight before it, it's the one left out.
+    weights = { 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+    require(fbe_morph_set_weights(mesh, weights.data(), 9));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    // What reads its vertices has them all.
+    std::array<float, 12> positions{};
+    require(fbe_morph_vertices(mesh, 0, positions.data(), nullptr, 4) == 4);
+    CHECK(positions[1] == -0.2F + 1.0F);
+    fbe_material_release(red);
+}
+
+TEST_CASE("a mesh's weights are its own as it's drawn, tweened from its capture") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t first = wall(scene.world, -3.0F, 0.2F, red);
+    const std::uint64_t geometry = fbe_mesh_geometry(first);
+    add_lift(geometry, 2.0F);
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    // A second of the geometry, lifted, leaves the first where it is; the first lifted leaves both
+    // out of the middle.
+    const std::uint64_t second = fbe_entity_copy(first, 0, 0);
+    const std::array<float, 1> one{ 1.0F };
+    require(fbe_morph_set_weights(second, one.data(), 1));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    require(fbe_morph_set_weights(first, one.data(), 1));
+    CHECK(middle(scene.drawn()) == rgba_t{ 0, 0, 255, 255 });
+    // Past its surface's targets, a weight's nothing.
+    const std::array<float, 2> past{ 0.0F, 1.0F };
+    require(fbe_morph_set_weights(first, past.data(), 2));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    // And it leaves room for the ones it has, however strong it is, a third of the way up its view.
+    const std::array<float, 10> crowded{ 0.5F, 5, 5, 5, 5, 5, 5, 5, 5, 5 };
+    require(fbe_morph_set_weights(first, crowded.data(), 10));
+    const fbe::golden::frame_t crowded_out = scene.drawn();
+    CHECK(middle(crowded_out) == rgba_t{ 0, 0, 255, 255 });
+    CHECK(pixel(crowded_out, frame_size / 2, 27) == rgba_t{ 255, 0, 0, 255 });
+    // Half way from where it was captured, lifted the whole way to 2, it's lifted 1: gone from the
+    // middle, and with only 0.05 of that, in it still.
+    const std::array<float, 1> none{ 0.0F };
+    require(fbe_morph_set_weights(first, none.data(), 1));
+    require(fbe_entity_set_hidden(second, true));
+    require(fbe_world_capture(scene.world));
+    require(fbe_morph_set_weights(first, one.data(), 1));
+    CHECK(middle(scene.drawn(0.5F)) == rgba_t{ 0, 0, 255, 255 });
+    CHECK(middle(scene.drawn(0.05F)) == rgba_t{ 255, 0, 0, 255 });
+    fbe_material_release(red);
+}
+
+TEST_CASE("a morph that takes a mesh into view has it drawn") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    // Far above the view, and brought down into its middle.
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.2F, red);
+    require(fbe_entity_set_position(mesh, 0.0F, 50.0F, -3.0F, FBE_SPACE_WORLD));
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    add_lift(geometry, -50.0F);
+    CHECK(middle(scene.drawn()) == rgba_t{ 0, 0, 255, 255 });
+    const std::array<float, 1> one{ 1.0F };
+    require(fbe_morph_set_weights(mesh, one.data(), 1));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    // The other way, by a weight below 0, from below.
+    const std::array<float, 1> back{ -1.0F };
+    require(fbe_morph_set_weights(mesh, back.data(), 1));
+    require(fbe_entity_set_position(mesh, 0.0F, -50.0F, -3.0F, FBE_SPACE_WORLD));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    // Between steps, half of a capture's way: its tween's what's culled by.
+    const std::array<float, 1> none{ 0.0F };
+    require(fbe_morph_set_weights(mesh, none.data(), 1));
+    require(fbe_entity_set_position(mesh, 0.0F, 25.0F, -3.0F, FBE_SPACE_WORLD));
+    require(fbe_world_capture(scene.world));
+    require(fbe_morph_set_weights(mesh, one.data(), 1));
+    CHECK(middle(scene.drawn(0.5F)) == rgba_t{ 255, 0, 0, 255 });
+    // Going the other way, its weight falling: where it's drawn between them, not where it ends.
+    require(fbe_world_capture(scene.world));
+    require(fbe_morph_set_weights(mesh, none.data(), 1));
+    CHECK(middle(scene.drawn(0.5F)) == rgba_t{ 255, 0, 0, 255 });
+    // Its geometry scaled, its target scales, and what it can reach with it.
+    require(fbe_morph_set_weights(mesh, one.data(), 1));
+    const std::array<float, 16> twice{ 2.0F, 0, 0, 0, 0, 2.0F, 0, 0, 0, 0, 2.0F, 0, 0, 0, 0, 1 };
+    fbe_mat4_t scaled{};
+    std::ranges::copy(twice, std::begin(scaled.m));
+    require(fbe_geometry_transform(geometry, &scaled));
+    require(fbe_entity_set_position(mesh, 0.0F, 100.0F, -3.0F, FBE_SPACE_WORLD));
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    fbe_material_release(red);
+}
+
+TEST_CASE("targets go to the GPU as they change, for only the vertices they had") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.2F, red);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    const std::array<float, 1> one{ 1.0F };
+    require(fbe_morph_set_weights(mesh, one.data(), 1));
+    // No target yet, and one added after it's been drawn.
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    add_lift(geometry, 2.0F);
+    CHECK(middle(scene.drawn()) == rgba_t{ 0, 0, 255, 255 });
+    // Vertices added since, in the middle, stay where they are while the first four go.
+    std::array<fbe_vertex_t, 4> more{};
+    fbe_surface_vertices(geometry, 0, 0, more.data(), 4);
+    fbe_surface_add_vertices(geometry, 0, more.data(), 4);
+    const std::array<std::uint32_t, 6> triangles{ 4, 5, 6, 4, 6, 7 };
+    fbe_surface_add_triangles(geometry, 0, triangles.data(), 6);
+    CHECK(middle(scene.drawn()) == rgba_t{ 255, 0, 0, 255 });
+    fbe_material_release(red);
+}
+
+TEST_CASE("a surface with no targets beside one with them is drawn as it is") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 1.0F, 1.0F));
+    const std::uint64_t red = unlit(1.0F, 0.0F, 0.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.2F, red);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    // Its first surface lifted out of the middle by its target, and a second, in the middle.
+    add_lift(geometry, 1.0F);
+    const std::int32_t second = fbe_geometry_add_surface(geometry);
+    std::array<fbe_vertex_t, 4> same{};
+    fbe_surface_vertices(geometry, 0, 0, same.data(), 4);
+    fbe_surface_add_vertices(geometry, second, same.data(), 4);
+    const std::array<std::uint32_t, 6> triangles{ 0, 1, 2, 0, 2, 3 };
+    fbe_surface_add_triangles(geometry, second, triangles.data(), 6);
+    const std::array<float, 1> one{ 1.0F };
+    require(fbe_morph_set_weights(mesh, one.data(), 1));
+    const fbe::golden::frame_t both = scene.drawn();
+    CHECK(middle(both) == rgba_t{ 255, 0, 0, 255 });
+    // Lifted by 1 at a distance of 3, in a view 3.46 high, 0.58 of the way up its half.
+    CHECK(pixel(both, frame_size / 2, 27) == rgba_t{ 255, 0, 0, 255 });
+    fbe_material_release(red);
+}
+
+TEST_CASE(
+    "a target that cancels a normal lights the vertex's own, as reading its vertices has it") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, 0.0F, 30.0F);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 1.0F, 0);
+    const rgba_t lit = middle(scene.drawn());
+    CHECK(lit[0] > 40);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    const std::array<float, 12> cancels{ 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1 };
+    require(fbe_morph_add_target(geometry, 0, nullptr, cancels.data(), 4) == 0);
+    const std::array<float, 1> one{ 1.0F };
+    require(fbe_morph_set_weights(mesh, one.data(), 1));
+    CHECK(near(middle(scene.drawn()), { lit[0], lit[1], lit[2] }));
+    // Half cancelled, and turned by another, it leans as the numbers say it does.
+    const std::array<float, 12> turned{ 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0 };
+    require(fbe_morph_add_target(geometry, 0, nullptr, turned.data(), 4) == 1);
+    const std::array<float, 2> both{ 0.0F, 100.0F };
+    require(fbe_morph_set_weights(mesh, both.data(), 2));
+    // Nearly along Y, it hardly faces a light in front of it.
+    CHECK(middle(scene.drawn())[0] < lit[0] / 4);
 }
