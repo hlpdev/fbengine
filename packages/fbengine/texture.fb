@@ -74,12 +74,25 @@ Public Final Class Texture
 
     /// A texture of the pixels an image file decodes to, PNG, JPEG, BMP, TGA, GIF, QOI, or WebP,
     /// RGBA8, with mipmaps unless `mipmaps` is False. It throws when the file can't be read or
-    /// decoded, or as New does.
+    /// decoded, or as New does. Path gives the file it was loaded from.
     @MainThread
     Public Static Method Load(path: Path, mipmaps: Bool = True): Texture Throws GraphicsError,
                                                                                 IOError
         Local image = Try Image.Load(path)
-        Return Try FromImage(image, mipmaps)
+        Local made = Try FromImage(image, mipmaps)
+        If !fbe_texture_set_path(made.Live("Load"), "{path}") Then Panic(LastError())
+        Return made
+    End Method
+
+    /// The file it was loaded from, as Load was given it, or Null for one that wasn't, as a game
+    /// finds what a surface is made of by its texture's name.
+    @MainThread @PanicsAtCaller
+    Public Method Path(): String?
+        Local found = ""
+        Unsafe
+            found = fbe_texture_path(Live("Path")).ToString()
+        End Unsafe
+        Return found != "" ? found : Null
     End Method
 
     /// A texture of `image`'s pixels, RGBA8, with mipmaps unless `mipmaps` is False.

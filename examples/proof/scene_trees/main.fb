@@ -2,6 +2,9 @@
 // in the order they were made, copying a whole tree, hiding and showing, and every way of moving. It
 // prints what each did; with --watch, a window of a turning room, its door swinging, a copy beside it,
 // a part hiding and showing.
+//
+// Its degrees and left-handed axes, Blitz's, are a recorded difference: radians, and right-handed, -Z
+// forward.
 
 Import std.core
 Import std.math
@@ -106,6 +109,66 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Print("watched {count} frames")
 End Function
 
+// To a thousandth.
+Function Fine(at: Vec3): String => "{at.x:.3}, {at.y:.3}, {at.z:.3}"
+
+// Every way of moving's sums, what a copy keeps, and alpha 0, which still collides and picks.
+Function WaysAndCopies()
+    Local world = World()
+    World.SetCurrent(world)
+    world.SetCollisionResponse(1, 2, CollisionResponse.STOP)
+
+    Local parent = Pivot()
+    parent.SetPosition(Vec3(10, 0, 0))
+    parent.Turn(0, Deg(90), 0)
+    Local child = Pivot(parent)
+    child.SetPosition(Vec3(0, 0, -2))
+    Print("TransformPoint: {Fine(TransformPoint(Vec3(0, 1, 0), child, Null))}, into the parent {Fine(TransformPoint(Vec3(0, 1, 0), child, parent))}")
+    Print("TransformVector: {Fine(TransformVector(Vec3(0, 0, -1), parent, Null))}")
+    Local at = Pivot()
+    Print("YawTo a place to its left {at.YawTo(Vec3(-1, 0, 0)):.3}, PitchTo above {at.PitchTo(Vec3(0, 1, -1)):.3}")
+    Print("YawOf {YawOf(Vec3(-1, 0, 0)):.3}, PitchOf {PitchOf(Vec3(0, 1, -1)):.3}")
+    at.AlignTo(Vec3(1, 0, 0))
+    Print("AlignTo: forward {Fine(at.Forward())}")
+    at.SetRotation(0, 0, 0)
+    at.Turn(0, Deg(90), 0)
+    at.Turn(Deg(90), 0, 0, Space.WORLD)
+    Print("Turn in the world: forward {Fine(at.Forward())}")
+
+    // A copy collides and picks as its original, and a mesh keeps its geometry and what's hidden.
+    Local room = Pivot()
+    room.SetName("room")
+    Local door = Mesh(Geometry.Cube(), room)
+    door.SetName("door")
+    door.SetCollisionGroup(2)
+    door.SetPickMode(PickMode.MESH)
+    door.SetBlocksSight(True)
+    door.SetAlpha(0.5)
+    Local lamp = Pivot(room)
+    lamp.SetName("lamp")
+    lamp.Hide()
+    Local copy = room.Copy()
+    Local copiedDoor = copy.Find("door") ?? copy
+    Print("a copy's door: kind {copiedDoor.Kind()}, group {copiedDoor.CollisionGroup()}, pick {copiedDoor.PickMode()}, blocks {copiedDoor.BlocksSight()}, bounds {Fine(copiedDoor.Bounds().Max)}")
+    Print("its lamp hidden {(copy.Find("lamp") ?? copy).Hidden()}")
+    copy.Free()
+
+    // Alpha 0: not drawn, but it still collides and picks.
+    door.SetName("the door")
+    door.SetAlpha(0)
+    Local picked = world.Pick(Vec3(0, 5, 0), Vec3(0, -5, 0))
+    Print("alpha 0: showing {door.Showing()}, picked {picked != Null ? picked.Entity.Name() : "nothing"}")
+    Local mover = Pivot()
+    mover.SetCollisionGroup(1)
+    mover.SetCollisionRadius(0.5)
+    mover.SetPosition(Vec3(0, 5, 0))
+    world.Collide()
+    mover.Translate(Vec3(0, -10, 0))
+    world.Collide()
+    Print("alpha 0: a mover rests at {Fine(mover.Position())}")
+    world.Free()
+End Function
+
 Local arguments = Process.Arguments()
 If !arguments.Contains("--watch")
     Local world = World()
@@ -179,6 +242,7 @@ If !arguments.Contains("--watch")
     room.Free()
     Print("freed: the room {room.Freed()}, its handle {handle.Freed()}, the copy's {handleOfCopy?.Freed() ?? True}")
     world.Free()
+    WaysAndCopies()
 ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
     Print("no GPU here")
 Else

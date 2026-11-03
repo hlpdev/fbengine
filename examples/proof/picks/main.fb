@@ -93,6 +93,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     marker.SetMaterial(Painted(Color(1, 0.1, 0.1)))
     Local camera = Watching(Vec3(0, 6, 9), Vec3(0, 0, 0))
     Local font = Font.BuiltIn(18.0)
+    Local drew = False
     Local time: Float = 0.0
     Local count = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
@@ -111,13 +112,79 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             marker.Hide()
         End If
         RenderWorld()
+        If frames > 0 && !drew Then drew = Try Drew()
         Local canvas = Screen.Canvas()
         canvas.SetBlend(Blend2D.ALPHA)
         canvas.SetColor(Color32(230, 232, 235, 255))
         canvas.DrawText(font, pick != Null ? "{Said(pick)}" : "nothing", 16, 16)
     End While
-    Print("drew {Try Drew()}")
+    Print("drew {drew}")
     Print("watched {count} frames")
+End Function
+
+// To a thousandth.
+Function Fine(at: Vec3): String => "{at.x:.3}, {at.y:.3}, {at.z:.3}"
+
+Function FineSaid(pick: Pick?): String
+    If pick == Null Then Return "nothing"
+    Return "{pick.Entity.Name()} at {Fine(pick.Point)}, facing {Fine(pick.Normal)}, {pick.Time:.3} along"
+End Function
+
+// A swept sphere, a tall ellipsoid, a turned mesh, a viewport off its corner, and what's its own.
+Function Shapes()
+    Local world = World()
+    World.SetCurrent(world)
+    Local floor = Mesh(Geometry.Plane(4))
+    floor.SetName("floor")
+    floor.SetScale(Vec3(10, 1, 10))
+    floor.SetPickMode(PickMode.MESH)
+    Print("a sphere swept onto a mesh: {FineSaid(world.Pick(Vec3(1, 5, 3), Vec3(1, -5, 3), 0.5))}")
+
+    Local tall = Pivot()
+    tall.SetName("tall")
+    tall.SetPosition(Vec3(2, 3, 0))
+    tall.SetCollisionRadius(0.5, 2)
+    tall.SetPickMode(PickMode.ELLIPSOID)
+    Print("a tall ellipsoid from above: {FineSaid(world.Pick(Vec3(2, 10, 0), Vec3(2, 0, 0)))}")
+
+    // A turned mesh's normal.
+    Local leaning = Mesh(Geometry.Plane(1))
+    leaning.SetName("leaning")
+    leaning.SetScale(Vec3(5, 1, 5))
+    leaning.SetPosition(Vec3(-30, 0, 0))
+    leaning.Turn(0, 0, Deg(30))
+    leaning.SetPickMode(PickMode.MESH)
+    Print("a turned mesh: {FineSaid(world.Pick(Vec3(-30, 5, 0), Vec3(-30, -5, 0)))}")
+
+    // An entity with a pick mode picking ahead of itself.
+    tall.SetPosition(Vec3(20, 1, 0))
+    Print("ahead of something pickable, from outside its own reach: {FineSaid(tall.Pick(5))}")
+
+    // A camera's pick, off its middle, in a viewport with a corner not at 0, 0.
+    tall.Hide()
+    Local camera = Camera()
+    camera.SetViewport(Rect(100, 50, 800, 600))
+    camera.SetFieldOfView(Deg(90))
+    camera.SetPosition(Vec3(0, 2, 2))
+    camera.Turn(Deg(-45), 0, 0)
+    Print("a camera's middle, looking down: {FineSaid(camera.Pick(Vec2(500, 350)))}")
+    Print("off to its right: {FineSaid(camera.Pick(Vec2(700, 350)))}")
+    Print("off to its left: {FineSaid(camera.Pick(Vec2(300, 350)))}")
+    tall.Show()
+
+    // A mesh whose geometry is ahead of its place: its own Pick doesn't hit it; a triangle's index.
+    Local ahead = Geometry.Cube()
+    ahead.Translate(Vec3(0, 0, -5))
+    Local own = Mesh(ahead)
+    own.SetName("own")
+    own.SetPosition(Vec3(50, 1, 0))
+    own.SetPickMode(PickMode.MESH)
+    Print("ahead of a mesh with its geometry ahead: {FineSaid(own.Pick(10))}")
+    Local onto = world.Pick(Vec3(7, 5, 7), Vec3(7, -5, 7))
+    Print("the floor's triangle there {onto?.Triangle ?? -1}")
+    own.Free()
+
+    world.Free()
 End Function
 
 Local arguments = Process.Arguments()
@@ -169,13 +236,14 @@ If !arguments.Contains("--watch")
     Print("ahead of something: {Said(looker.Pick(10))}")
     Print("ahead, not far enough: {Said(looker.Pick(2))}")
 
-    // Under a point of a camera's view: its middle, looking at the ball, and a corner, at nothing.
+    // Under a point of a camera's view: its middle, looking at the ball, and its top middle, at nothing.
     Local camera = Camera()
     camera.SetViewport(Rect(0, 0, 800, 600))
     camera.SetPosition(Vec3(2, 1, 8))
     Print("the camera's middle: {Said(camera.Pick(Vec2(400, 300)))}")
     Print("high in its view: {Said(camera.Pick(Vec2(400, 0)))}")
     world.Free()
+    Shapes()
 ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
     Print("no GPU here")
 Else

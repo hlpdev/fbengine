@@ -74,18 +74,6 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
-End Function
-
 // A window of a grid, a wall moving across it, and the way through; or `frames` frames offscreen.
 Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Window.SetHeadless(frames > 0)
@@ -134,8 +122,49 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             End For
         End If
     End While
-    Print("drew {Try Drew()}")
+    // Its route's start, in its color, and a wall's middle in its.
+    Local shown = Try Screen.ToImage()
+    Print("drew {shown[12, 12] == Color32(80, 200, 120, 255) && shown[16 * 25 + 12, 18 * 25 - 12] != Color32(24, 28, 36, 255) || count < 3}")
     Print("watched {count} frames")
+End Function
+
+// A route over `links`, each from, to, and cost, as AStar finds it by `guess`.
+Function Over(links: (Int, Int, Int)[], from: Int, to: Int, guess: Func(Int): Int): String
+    Local steps = Function(at: Int): (Int, Int)[]
+        Local found: (Int, Int)[] = []
+        For link In links
+            Local a, b, cost = link
+            If a == at Then found.Add((b, cost))
+        End For
+        Return found
+    End Function
+    Local found = AStar(from, steps, guess, Function(at: Int) => at == to)
+    If found == Null Then Return "none"
+    Return "{found.Nodes}, cost {found.Cost}"
+End Function
+
+// How many waypoints it opens across a grid of `side` squares, to its far corner, by `guess`.
+Function Opened(side: Int, guess: Func(Int): Int): Int
+    Local opened = 0
+    Local steps = Function(at: Int): (Int, Int)[]
+        opened += 1
+        Local found: (Int, Int)[] = []
+        If at % side < side - 1 Then found.Add((at + 1, 1))
+        If at + side < side * side Then found.Add((at + side, 1))
+        Return found
+    End Function
+    AStar(0, steps, guess, Function(at: Int) => at == side * side - 1)
+    Return opened
+End Function
+
+// What only A* does: the cheapest, not the fewest steps; past a guess's favorite; and a good guess
+// opens fewer than none.
+Function ByCost()
+    Print("cheapest with more steps: {Over([(0, 1, 1), (1, 2, 1), (2, 3, 1), (0, 3, 10)], 0, 3, Function(at: Int) => 0)}")
+    Print("past a guess's favorite: {Over([(0, 1, 1), (1, 3, 11), (0, 2, 2), (2, 3, 2)], 0, 3, Function(at: Int) => at == 1 ? 1 : at == 2 ? 2 : 0)}")
+    Local blind = Opened(10, Function(at: Int) => 0)
+    Local guessed = Opened(10, Function(at: Int) => (9 - at % 10) + (9 - at / 10))
+    Print("a good guess opens fewer than none {guessed < blind}")
 End Function
 
 Local arguments = Process.Arguments()
@@ -163,7 +192,7 @@ If !arguments.Contains("--watch")
     map.Link(bend, attic)
     Print("linked: {map.Route(lobby, attic)}")
 
-    // A diagonal's shorter than two sides, so it takes it.
+    // A link straight there's shorter than round by two, so it takes it.
     Local corner = map.Add("corner", 3.0, 0.0)
     Local top = map.Add("top", 3.0, 4.0)
     Local start = map.Add("start", 0.0, 0.0)
@@ -191,6 +220,7 @@ If !arguments.Contains("--watch")
     End For
     Print("over the grid, straight: {grid.Path(0, 39 * 40, [])?.Cost ?? -1.0}")
     Print("over the grid, walled but for its end: {grid.Path(0, 39 * 40, walled)?.Cost ?? -1.0}")
+    ByCost()
 ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
     Print("no GPU here")
 Else

@@ -379,7 +379,24 @@ if(FBENGINE_FB_TESTS)
                            "on a slope, sliding moves it across True, standing True"
                            "over a step of 0[.]3 it reaches z -3[.]00, y 0[.]80"
                            "with a step height of 0[.]1 it stops at z -1[.]55"
-                           "a ball into a rock stops at z -3[.]50, having hit it True")
+                           "a ball into a rock stops at z -3[.]50, y 5[.]00, having hit it True"
+                           "iterations by default 8"
+                           "SLIDE_HORIZONTAL along a wall: 3[.]000, 1[.]000, -3[.]999"
+                           "into a corner: 3[.]999, 1[.]000, -3[.]999, touching 2"
+                           "  a contact, facing 0[.]000, 0[.]000, 1[.]000, at 4[.]000, 1[.]000, -4[.]500"
+                           "  a contact, facing -1[.]000, 0[.]000, 0[.]000, at 4[.]500, 1[.]000, -3[.]999"
+                           "a tall one into a wall: 0[.]000, 2[.]000, -3[.]999, facing 0[.]000, 0[.]000, 1[.]000, at 0[.]000, 2[.]000, -4[.]500"
+                           "past a rock to a wall: 2[.]988, 1[.]000, -2[.]964, touching 1"
+                           "  by group: level False, other True, first's normal 0[.]333, 0[.]000, 0[.]943"
+                           "a tall one onto a tall rock: 0[.]000, 6[.]503, 10[.]000"
+                           "around a ring, 8 iterations: 45[.]443, 1[.]000, -4[.]499, touching 7"
+                           "around a ring, 10 iterations: 45[.]443, 1[.]000, -4[.]499, touching 7"
+                           "a mover into one moving away: -40[.]000, 1[.]000, -1[.]999, the other -40[.]000, 1[.]000, -13[.]000"
+                           "a tall one onto a slope of 30: facing -0[.]500, 0[.]866, 0[.]000"
+                           "a wall, then a rock: touching 2, level True, other True"
+                           "a door moved across the move, this frame: 0[.]000, 1[.]000, -3[.]999"
+                           "by UpdateWorld: 0[.]000, 0[.]501, 0[.]000, touching 1"
+                           "into a box: 38[.]499, 1[.]000, 0[.]000")
   fbengine_add_drawn_proof(picks
                            "down onto the floor: floor at 1[.]00, 0[.]00, 3[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
                            "down onto the ball: ball at 2[.]00, 1[.]50, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]35 along"
@@ -395,7 +412,16 @@ if(FBENGINE_FB_TESTS)
                            "ahead of something: ball at 2[.]00, 1[.]00, 0[.]50, facing 0[.]00, 0[.]00, 1[.]00, 0[.]45 along"
                            "ahead, not far enough: nothing"
                            "the camera's middle: ball at 2[.]00, 1[.]00, 0[.]50, facing 0[.]00, 0[.]00, 1[.]00, 0[.]01 along"
-                           "high in its view: nothing")
+                           "high in its view: nothing"
+                           "a sphere swept onto a mesh: floor at 1[.]000, 0[.]000, 3[.]000, facing 0[.]000, 1[.]000, 0[.]000, 0[.]450 along"
+                           "a tall ellipsoid from above: tall at 2[.]000, 5[.]000, 0[.]000, facing 0[.]000, 1[.]000, 0[.]000, 0[.]500 along"
+                           "a turned mesh: leaning at -30[.]000, 0[.]000, 0[.]000, facing -0[.]500, 0[.]866, 0[.]000, 0[.]500 along"
+                           "ahead of something pickable, from outside its own reach: nothing"
+                           "a camera's middle, looking down: floor at 0[.]000, 0[.]000, 0[.]000, facing 0[.]000, 1[.]000, 0[.]000, 0[.]003 along"
+                           "off to its right: floor at 1[.]886, 0[.]000, 0[.]000, facing 0[.]000, 1[.]000, 0[.]000, 0[.]003 along"
+                           "off to its left: floor at -1[.]886, 0[.]000, 0[.]000, facing 0[.]000, 1[.]000, 0[.]000, 0[.]003 along"
+                           "ahead of a mesh with its geometry ahead: nothing"
+                           "the floor's triangle there 30")
   fbengine_add_drawn_proof(in_view_by_bounds
                            "in front True, behind False"
                            "at its near end True, nearer False"
@@ -410,7 +436,24 @@ if(FBENGINE_FB_TESTS)
                            "a pivot in view True"
                            "behind a wall True"
                            "a line of sight through the wall False"
-                           "with it not blocking True")
+                           "with it not blocking True"
+                           "left False True, right False True"
+                           "bottom False True, top False True"
+                           "a box with every corner outside, around the view: True"
+                           "a mesh with every corner outside, around the view: True"
+                           "a turned bar, its corners outside: False, the box around it True"
+                           "moved, what it faced False, what it faces now True"
+                           "turned about, what it faced False, behind it True"
+                           "a pivot out of view False"
+                           "a pivot past the far plane False"
+                           "a mesh past the far plane False"
+                           "a mesh across the far plane True"
+                           "a mesh hidden in view True"
+                           "through a wall False, a point False, this side of it True"
+                           "the wall hidden True"
+                           "a target that blocks sight, before the wall True"
+                           "past an ellipsoid told to block sight False"
+                           "past a box told to block sight False")
   fbengine_add_drawn_proof(scene_trees
                            "the room has 2, first door, then lamp"
                            "the handle's parent door, the room's none"
@@ -430,7 +473,17 @@ if(FBENGINE_FB_TESTS)
                            "room hidden: the room's showing False, the lamp's False, hidden itself False"
                            "room shown: the lamp's True, the door's still False"
                            "door shown: the handle's True, the copy's door was never hidden True"
-                           "freed: the room True, its handle True, the copy's False")
+                           "freed: the room True, its handle True, the copy's False"
+                           "TransformPoint: 8[.]000, 1[.]000, 0[.]000, into the parent 0[.]000, 1[.]000, -2[.]000"
+                           "TransformVector: -1[.]000, 0[.]000, 0[.]000"
+                           "YawTo a place to its left 1[.]571, PitchTo above 0[.]785"
+                           "YawOf 1[.]571, PitchOf 0[.]785"
+                           "AlignTo: forward 1[.]000, 0[.]000, 0[.]000"
+                           "Turn in the world: forward -1[.]000, 0[.]000, 0[.]000"
+                           "a copy's door: kind MESH, group 2, pick MESH, blocks True, bounds 1[.]000, 1[.]000, 1[.]000"
+                           "its lamp hidden True"
+                           "alpha 0: showing True, picked the door"
+                           "alpha 0: a mover rests at 0[.]000, 1[.]501, 0[.]000")
   fbengine_add_drawn_proof(meshes_in_code
                            "1 surface, 4 vertices, 2 triangles"
                            "its second UVs [(]0[.]5, 0[.]75[)], first [(]0, 1[)]"
@@ -445,7 +498,11 @@ if(FBENGINE_FB_TESTS)
                            "picked from above True, flipped False, from below True"
                            "a cube's 24 vertices, joined 2 surfaces"
                            "the clone moved, the first didn't True"
-                           "its cull box 100, bounds 1")
+                           "its cull box 100, bounds 1"
+                           "in view [(]255, 0, 0, 255[)]"
+                           "its cull box out of view [(]0, 0, 255, 255[)]"
+                           "in its surface's material [(]10, 200, 30, 255[)]"
+                           "its texture's from wall[.]png True")
   fbengine_add_drawn_proof(binary_saves_and_maps
                            "the file's 75 bytes"
                            "its magic MAP1"
@@ -456,7 +513,11 @@ if(FBENGINE_FB_TESTS)
                            "reading past the end throws True"
                            "its first bytes 77, 65, 80, 49"
                            "the seed's low byte 203, as 1234567890123 % 256 is 203"
+                           "an Int32 305419896, a Float32 1"
+                           "a name of 2 bytes is an accented e True"
                            "in its folder: options[.]bin, slot 1/"
+                           "before deleting, it's there True"
+                           "a folder as a file False, a file as a folder False, the folder True"
                            "deleted, it's there False"
                            "its folder removed, it's there False")
   fbengine_add_drawn_proof(pathfinding_over_a_graph
@@ -468,15 +529,28 @@ if(FBENGINE_FB_TESTS)
                            "linked: lobby hall bend attic, 17[.]00 long"
                            "start top, 5[.]00 long"
                            "over the grid, straight: 39"
-                           "over the grid, walled but for its end: 117")
+                           "over the grid, walled but for its end: 117"
+                           "cheapest with more steps: [[]0, 1, 2, 3[]], cost 3"
+                           "past a guess's favorite: [[]0, 2, 3[]], cost 4"
+                           "a good guess opens fewer than none True")
   fbengine_add_drawn_proof(particles_on_sprites
                            "after 1 second, 20 made, 20 alive"
                            "the oldest's risen True, its alpha True"
                            "the newest's nearly at the start True, almost opaque True"
                            "after 5 seconds, 100 made, about 30 alive True"
-                           "drawn by a camera, each of them True"
+                           "in a camera's view, the oldest True"
                            "the same seed goes the same way True"
-                           "with the rate at 0, after 2 seconds, 0 alive")
+                           "with the rate at 0, after 2 seconds, 0 alive"
+                           "mode UPRIGHT, scale [(]0[.]75, 1[.]25[)], rotation 0[.]5, color [(]0[.]6, 0[.]5, 0[.]4, 0[.]25[)]"
+                           "its quad's bounds 1[.]458, 1[.]458, 1[.]458"
+                           "in view True, a point behind the camera False"
+                           "freed one: 2 left, it's freed True"
+                           "100 spread across True"
+                           "another seed goes another way True"
+                           "a rocket gone, 4 sparks, each UPRIGHT, UPRIGHT"
+                           "falling True"
+                           "a sprite's pixel, added, out of the fog [(]255, 12[5-9], 0, 255[)]"
+                           "beside it [(]255, 0, 0, 255[)]")
 
   fbengine_add_drawn_proof(fixed_function_look
                            "a room's lightmap and diffuse, left: [(]125, 110, 102, 255[)]"

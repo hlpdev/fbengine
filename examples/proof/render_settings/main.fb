@@ -215,6 +215,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     cube.SetPosition(Vec3(0, 1.5, -5))
     Local font = Font.BuiltIn(18.0)
     Local script = [Key.DIGIT_1, Key.DIGIT_3, Key.DIGIT_2, Key.M, Key.W, Key.M]
+    Local drew = False
     Local time: Float = 0.0
     Local count = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
@@ -230,6 +231,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         time += frames > 0 ? 0.1 : Frame.Delta() As Float
         cube.SetRotation(Quat.FromEuler(time * 0.5, time, 0.0))
         RenderWorld()
+        If frames > 0 && !drew Then drew = Try Drew()
         Local canvas = Screen.Canvas()
         canvas.SetColor(Color32(230, 232, 235, 255))
         canvas.DrawText(
@@ -237,7 +239,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             16, 16)
     End While
     If frames > 0 Then Print("by its keys: bias {Gpu.LodBias()}, samples {Screen.Samples()}, wireframe {shown.Wireframe()}")
-    Print("drew {Try Drew()}")
+    Print("drew {drew}")
     Print("watched {count} frames")
 End Function
 

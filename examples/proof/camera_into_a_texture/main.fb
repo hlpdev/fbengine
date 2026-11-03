@@ -70,7 +70,12 @@ Function Proved() Throws GraphicsError
     World.SetCurrent(world)
     Defer world.Free()
 
-    // A camera into a texture, in front of the rest, showing a red square on blue, half its view.
+    // The screen's camera, made first, and the monitor's, ordered before it, showing a red square on
+    // blue, half its view.
+    Local player = Camera()
+    player.SetProjection(Projection.ORTHOGRAPHIC)
+    player.SetOrthographicHeight(2)
+    player.SetPosition(Vec3(100, 0, 0))
     Local monitor = Try Texture.Target(32, 32, TextureFormat.RGBA8, 1, True)
     Local watching = Flat(monitor)
     watching.SetOrthographicHeight(4)
@@ -79,16 +84,12 @@ Function Proved() Throws GraphicsError
     Local seen = Mesh(Square())
     seen.SetMaterial(Plain(Color(1, 0, 0)))
     seen.SetPosition(Vec3(0, 0, -5))
-    // The monitor, far off to the side, and the screen's camera looking at it.
+    // The monitor, far off to the side, where the screen's camera looks.
     Local shows = Plain()
     shows.SetTexture(0, monitor)
     Local shown = Mesh(Square())
     shown.SetMaterial(shows)
     shown.SetPosition(Vec3(100, 0, -5))
-    Local player = Camera()
-    player.SetProjection(Projection.ORTHOGRAPHIC)
-    player.SetOrthographicHeight(2)
-    player.SetPosition(Vec3(100, 0, 0))
     Flip()
     RenderWorld()
     Local screen = Try Screen.ToImage()

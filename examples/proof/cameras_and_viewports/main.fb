@@ -132,7 +132,8 @@ Function Proved() Throws GraphicsError
     World.SetCurrent(overlay)
     RenderWorld()
     read = target.ToImage()
-    Check("the overlay", read[3, 3], Color32(255, 255, 0, 255))
+    // From -4 to -2 of its 8 across, and down: 8 pixels of 32, as it wouldn't be with perspective.
+    Check("the overlay", read[7, 7], Color32(255, 255, 0, 255))
     Check("the world under it", read[16, 16], Color32(255, 0, 0, 255))
     Check("its clear under it", read[1, 30], Color32(0, 0, 255, 255))
 
@@ -182,6 +183,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Local badge = Mesh(Square())
     badge.SetMaterial(Plain(Color(1, 0.8, 0)))
     badge.SetPosition(Vec3(-7, 3.5, -5))
+    Local drew = False
     Local time: Float = 0.0
     Local count = 0
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
@@ -193,11 +195,12 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         badge.SetRotation(Quat.FromEuler(0.0, 0.0, time))
         World.SetCurrent(world)
         RenderWorld()
+        If frames > 0 && !drew Then drew = Try Drew()
         World.SetCurrent(overlay)
         RenderWorld()
     End While
     World.SetCurrent(world)
-    Print("drew {Try Drew()}")
+    Print("drew {drew}")
     Print("watched {count} frames")
 End Function
 

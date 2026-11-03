@@ -145,3 +145,28 @@ Function TheScreensPixelsAreLocked() Throws GraphicsError
     Local image = Try Screen.ToImage()
     Expect(image[0, 0] == Color32(255, 0, 0, 255))
 End Function
+
+// A file's texture says where it's from, through what draws with it; one made in code has no path.
+@Test
+Function ATextureLoadedKeepsItsPathThroughItsMaterial() Throws GraphicsError, IOError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Local path = folder.Path / "wall.png"
+    Local image = Image(2, 2)
+    Try File.WriteBytes(path, Png.Encode(image))
+    Local loaded = Try Texture.Load(path, False)
+    Expect(loaded.Path() == "{path}")
+    Expect((Try Texture(1, 1)).Path() == Null)
+    Expect(Sprite2D(loaded).Texture().Path() == "{path}")
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local geometry = Geometry.Cube()
+    Local material = Material()
+    material.SetTexture(0, loaded)
+    geometry.Surface(0).SetMaterial(material)
+    Local mesh = Mesh(geometry)
+    Expect(mesh.Geometry()?.Surface(0)?.Material()?.Texture(0)?.Path() == "{path}")
+    Try folder.Close()
+End Function

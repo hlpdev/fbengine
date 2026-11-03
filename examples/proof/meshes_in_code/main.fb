@@ -4,6 +4,8 @@
 // normals lit, one of its corners going up and down.
 
 Import std.core
+From std.image Import Image, Png
+Import std.io
 Import std.math
 Import fbengine
 Import std.collections
@@ -125,6 +127,92 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Print("watched {count} frames")
 End Function
 
+// To a thousandth.
+Function Fine(at: Vec3): String => "{at.x:.3}, {at.y:.3}, {at.z:.3}"
+
+// A vertex in full, turned, flipped, cloned, and joined, and a surface's material.
+Function InFull()
+    Local world = World()
+    World.SetCurrent(world)
+
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local up = Vec3(0, 1, 0)
+    Local a = surface.AddVertex(Vertex(Vec3(0, 0, 0), up, Vec2(0, 0), Vec2(0.5, 0.5),
+                                       Color(1, 0, 0, 1)))
+    Local b = surface.AddVertex(Vertex(Vec3(0, 0, -2), up, Vec2(0, 1), Vec2(0.5, 0.75),
+                                       Color(0, 1, 0, 0.5)))
+    Local c = surface.AddVertex(Vertex(Vec3(2, 0, -2), up, Vec2(1, 1), Vec2(0.75, 0.75),
+                                       Color(0, 0, 1, 1)))
+    surface.AddTriangle(a, c, b)
+    Print("a vertex's whole color {surface.VertexColor(b)}")
+    Print("VertexPosition {Fine(surface.VertexPosition(b))}")
+    surface.SetVertexNormal(c, Vec3(1, 0, 0))
+    Print("SetVertexNormal {Fine(surface.VertexNormal(c))}")
+    made.UpdateNormals()
+    made.Rotate(Quat.FromEuler(0.0, Deg(90), 0.0))
+    Print("turned a quarter: {Fine(surface.VertexPosition(b))}")
+    made.Flip()
+    Print("flipped, a normal {Fine(surface.VertexNormal(a))}, was up")
+    made.Flip()
+    Local clone = made.Clone()
+    Print("a clone's vertex {clone.Surface(0).Vertex(b)}")
+    Local joined = Geometry.Cube()
+    joined.Add(made)
+    Print("joined: its last surface has {joined.Surface(1).VertexCount()} vertices, {joined.Surface(1).TriangleCount()} triangles, {joined.Surface(1).Vertex(b)}")
+    Local placed = Geometry()
+    placed.Add(made, Mat4.Translation(Vec3(5, 0, 0)))
+    Print("added by a matrix: {Fine(placed.Bounds().Max)}")
+    Local material = Material()
+    surface.SetMaterial(material)
+    Print("a surface's material read back {surface.Material() == material}")
+    world.Free()
+End Function
+
+// What it draws by: a cull box says what's in view, whatever its vertices do; and a surface's texture
+// says what file it's from. It reads back from a target.
+Function Drawn() Throws GraphicsError, IOError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local target = Try Texture.Target(16, 16, TextureFormat.RGBA8, 1, True)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 1))
+    Local geometry = Geometry.Cube()
+    Local mesh = Mesh(geometry)
+    Local red = Material()
+    red.SetShading(Shading.UNLIT)
+    red.SetColor(Color(1, 0, 0))
+    mesh.SetMaterial(red)
+    mesh.SetPosition(Vec3(0, 0, -6))
+    camera.Render()
+    Print("in view {target.ReadPixel(8, 8)}")
+    geometry.SetCullBox(AABB(Vec3(100, 100, 100), Vec3(101, 101, 101)))
+    camera.Render()
+    Print("its cull box out of view {target.ReadPixel(8, 8)}")
+    geometry.SetCullBox(Null)
+    Local folder = Try TempDir()
+    Local path = folder.Path / "wall.png"
+    Local image = Image(1, 1)
+    image[0, 0] = Color32(10, 200, 30, 255)
+    Try File.WriteBytes(path, Png.Encode(image))
+    Local material = Material()
+    material.SetShading(Shading.UNLIT)
+    material.SetTexture(0, Try Texture.Load(path, False))
+    geometry.Surface(0).SetMaterial(material)
+    mesh.SetMaterial(Null)
+    camera.Render()
+    Print("in its surface's material {target.ReadPixel(8, 8)}")
+    Print("its texture's from wall.png {mesh.Geometry()?.Surface(0)?.Material()?.Texture(0)?.Path() == "{path}"}")
+    Try folder.Close()
+End Function
+
 Local arguments = Process.Arguments()
 If !arguments.Contains("--watch")
     Local world = World()
@@ -198,6 +286,7 @@ If !arguments.Contains("--watch")
     Local cull = made.CullBox()
     Print("its cull box {cull != Null ? cull.Max.x : 0.0:.0}, bounds {made.Bounds().Max.x:.0}")
     world.Free()
+    Try Drawn()
 ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
     Print("no GPU here")
 Else

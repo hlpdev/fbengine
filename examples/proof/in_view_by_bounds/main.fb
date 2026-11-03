@@ -1,5 +1,5 @@
-// What a camera might see: an entity by the 8 corners of its bounds, a point, and a box, against the
-// camera's 6 planes, near and far included, with nothing hiding anything; and, apart from that,
+// What a camera might see, wherever it is and however it's turned: an entity by the 8 corners of its
+// bounds, a point, and a box, against the camera's 6 planes, near and far included, with nothing hiding anything; and, apart from that,
 // whether one thing has a line of sight to another. It prints each; with --watch, a window of cubes
 // orbiting a watching camera, seen from above, green while they're in its view.
 
@@ -104,6 +104,87 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Print("watched {count} frames")
 End Function
 
+// Every plane, a camera moved and turned, what's around the whole view, and what blocks sight.
+Function MovedAndTurned()
+    Local world = World()
+    World.SetCurrent(world)
+    Local eye = Camera()
+    eye.SetViewport(Rect(0, 0, 800, 600))
+    eye.SetFieldOfView(Deg(90))
+    eye.SetRange(1, 50)
+    Print("left {eye.InView(Vec3(-14, 0, -10))} {eye.InView(Vec3(-13, 0, -10))}, right {eye.InView(Vec3(14, 0, -10))} {eye.InView(Vec3(13, 0, -10))}")
+    Print("bottom {eye.InView(Vec3(0, -11, -10))} {eye.InView(Vec3(0, -9, -10))}, top {eye.InView(Vec3(0, 11, -10))} {eye.InView(Vec3(0, 9, -10))}")
+    Print("a box with every corner outside, around the view: {eye.InView(AABB(Vec3(-100, -100, -30), Vec3(100, 100, -20)))}")
+    Local wide = Mesh(Geometry.Cube())
+    wide.SetPosition(Vec3(0, 0, -10))
+    wide.SetScale(Vec3(100, 100, 1))
+    Print("a mesh with every corner outside, around the view: {eye.InView(wide)}")
+    wide.Free()
+
+    // A turned mesh's 8 corners: a long thin bar, turned, whose world box reaches into the view though
+    // none of it is in view.
+    Local bar = Mesh(Geometry.Cube())
+    bar.SetScale(Vec3(10.55, 0.1, 0.1))
+    bar.Turn(0, Deg(36.3), 0)
+    bar.SetPosition(Vec3(23.5, 0, -16.25))
+    Print("a turned bar, its corners outside: {eye.InView(bar)}, the box around it {eye.InView(bar.Bounds())}")
+    bar.Free()
+
+    eye.SetPosition(Vec3(100, 0, 0))
+    Print("moved, what it faced {eye.InView(Vec3(0, 0, -10))}, what it faces now {eye.InView(Vec3(100, 0, -10))}")
+    eye.SetPosition(Vec3(0, 0, 0))
+    eye.Turn(0, Deg(180), 0)
+    Print("turned about, what it faced {eye.InView(Vec3(0, 0, -10))}, behind it {eye.InView(Vec3(0, 0, 10))}")
+    eye.SetRotation(0, 0, 0)
+    Local place = Pivot()
+    place.SetPosition(Vec3(0, 0, 10))
+    Print("a pivot out of view {eye.InView(place)}")
+    place.SetPosition(Vec3(0, 0, -60))
+    Print("a pivot past the far plane {eye.InView(place)}")
+    Local mesh = Mesh(Geometry.Cube())
+    mesh.SetPosition(Vec3(0, 0, -60))
+    Print("a mesh past the far plane {eye.InView(mesh)}")
+    mesh.SetPosition(Vec3(0, 0, -50.5))
+    Print("a mesh across the far plane {eye.InView(mesh)}")
+    mesh.SetPosition(Vec3(0, 0, -10))
+    mesh.Hide()
+    Print("a mesh hidden in view {eye.InView(mesh)}")
+    mesh.Show()
+    mesh.Free()
+
+    // Sight: what blocks it, hidden, and a target that itself blocks.
+    place.SetPosition(Vec3(0, 0, -10))
+    Local wall = Mesh(Geometry.Plane())
+    wall.SetScale(Vec3(20, 1, 20))
+    wall.Turn(Deg(90), 0, 0)
+    wall.SetPosition(Vec3(0, 0, -5))
+    wall.SetBlocksSight(True)
+    Print("through a wall {eye.CanSee(place)}, a point {eye.CanSee(Vec3(0, 0, -10))}, this side of it {eye.CanSee(Vec3(0, 0, -2))}")
+    wall.Hide()
+    Print("the wall hidden {eye.CanSee(place)}")
+    wall.Show()
+    Local target = Mesh(Geometry.Cube())
+    target.SetPosition(Vec3(0, 0, -4))
+    target.SetBlocksSight(True)
+    Print("a target that blocks sight, before the wall {eye.CanSee(target)}")
+    target.Free()
+
+    // Something not a mesh with a pick mode, told to block sight.
+    wall.SetBlocksSight(False)
+    Local body = Pivot()
+    body.SetCollisionRadius(1)
+    body.SetPosition(Vec3(0, 0, -5))
+    body.SetPickMode(PickMode.ELLIPSOID)
+    body.SetBlocksSight(True)
+    Print("past an ellipsoid told to block sight {eye.CanSee(place)}")
+    Local boxed = Pivot()
+    boxed.SetPosition(Vec3(0, 0, -7))
+    boxed.SetPickMode(PickMode.BOX)
+    boxed.SetBlocksSight(True)
+    Print("past a box told to block sight {eye.CanSee(place)}")
+    world.Free()
+End Function
+
 Local arguments = Process.Arguments()
 If !arguments.Contains("--watch")
     Local world = World()
@@ -154,6 +235,7 @@ If !arguments.Contains("--watch")
     wall.SetBlocksSight(False)
     Print("with it not blocking {camera.CanSee(place)}")
     world.Free()
+    MovedAndTurned()
 ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
     Print("no GPU here")
 Else

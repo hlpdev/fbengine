@@ -8,6 +8,7 @@
 #include "gpu/vulkan.hpp"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace fbe::texture {
@@ -47,6 +48,8 @@ struct texture_t {
     std::uint32_t references = 0;
     /// Whether its alpha's for blending, which a material blending AUTO goes by.
     bool alpha = false;
+    /// The file it was loaded from, "" for none.
+    std::string path;
     /// How many times its pixels have changed on the GPU, which a CPU copy of them was read at.
     std::uint64_t version = 0;
     /// Whether it's the engine's own, as the frame graph's transient targets' images are, which

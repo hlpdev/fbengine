@@ -50,8 +50,9 @@ Function Saved(path: Path, rooms: Room[], seed: Int64, time: Float64) Throws IOE
 End Function
 
 Function Main() Throws IOError
-    Local folder = (Try Dir.Temp()) / "fbengine_proof_saves"
-    If Dir.Exists(folder) Then Try Dir.RemoveAll(folder)
+    // A folder of its own, so two runs at once don't meet.
+    Local temporary = Try TempDir()
+    Local folder = temporary.Path / "saves"
     Try Dir.CreateAll(folder / "slot 1")
     Local path = folder / "slot 1" / "map.bin"
 
@@ -61,7 +62,6 @@ Function Main() Throws IOError
 
     // Read back as it was written, little-endian whatever the machine.
     Local file = Try File.Open(path)
-    Defer file.Close()
     Local reader = BinaryReader(file)
     Print("its magic {Try reader.ReadText(4)}")
     Print("seed {Try reader.ReadInt64()}, time {Try reader.ReadFloat64()}")
@@ -85,11 +85,26 @@ Function Main() Throws IOError
         ended = True
     End Try
     Print("reading past the end throws {ended}")
+    file.Close()
 
     // Bytes on disk are what they say: a known layout, by hand.
     Local bytes = Try File.ReadBytes(path)
     Print("its first bytes {bytes[0]}, {bytes[1]}, {bytes[2]}, {bytes[3]}")
     Print("the seed's low byte {bytes[4]}, as 1234567890123 % 256 is {(1234567890123 As Int64) % 256}")
+
+    // And the other way: what's read from bytes written by hand, not by its writer.
+    Local known = folder / "known.bin"
+    Try File.WriteBytes(known,
+                        [120 As UInt8, 86 As UInt8, 52 As UInt8, 18 As UInt8, 0 As UInt8,
+                         0 As UInt8,
+                         128 As UInt8, 63 As UInt8, 2 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8,
+                         195 As UInt8, 169 As UInt8])
+    Local byHand = Try File.Open(known)
+    Local handReader = BinaryReader(byHand)
+    Print("an Int32 {Try handReader.ReadInt32()}, a Float32 {Try handReader.ReadFloat32()}")
+    Print("a name of 2 bytes is an accented e {(Try ReadName(handReader)) == "\u{e9}"}")
+    byHand.Close()
+    Try File.Delete(known)
 
     // Folders: what's in one, and each kind.
     Try File.WriteBytes(folder / "options.bin", [1 As UInt8, 2 As UInt8])
@@ -99,10 +114,13 @@ Function Main() Throws IOError
     End For
     names.Sort()
     Print("in its folder: {names.Join(", ")}")
+    Print("before deleting, it's there {File.Exists(folder / "options.bin")}")
+    Print("a folder as a file {File.Exists(folder)}, a file as a folder {Dir.Exists(folder / "options.bin")}, the folder {Dir.Exists(folder)}")
     Try File.Delete(folder / "options.bin")
     Print("deleted, it's there {File.Exists(folder / "options.bin")}")
     Try Dir.RemoveAll(folder)
     Print("its folder removed, it's there {Dir.Exists(folder)}")
+    Try temporary.Close()
 End Function
 
 // Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
@@ -162,10 +180,8 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError
     Defer EndGraphics()
     Window.SetTitle("binary saves and maps: Escape ends it")
     Frame.SetLimit(60)
-    Local folder = (Try Dir.Temp()) / "fbengine_proof_map"
-    Try Dir.CreateAll(folder)
-    Defer Try? Dir.RemoveAll(folder)
-    Local path = folder / "map.bin"
+    Local folder = Try TempDir()
+    Local path = folder.Path / "map.bin"
     Local font = Font.BuiltIn(18.0)
     Local rooms = [Room("lobby", 0, 0, 0.75, 3, False), Room("tunnel", 8, 4, 0.25, 2, True),
                    Room("vault", 16, 8, 0.5, 1, True), Room("hall", 4, 10, 1.0, 4, False)]
@@ -204,6 +220,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError
         End For
     End While
     Print("drew {Try Drew()}")
+    Try folder.Close()
     Print("watched {count} frames")
 End Function
 

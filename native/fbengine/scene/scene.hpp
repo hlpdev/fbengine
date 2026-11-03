@@ -454,6 +454,10 @@ void world_box(std::uint32_t entity, vec3_t local_min, vec3_t local_max, vec3_t&
 /// Keeps an entity's pickables entry as its pick mode and World say: made, let go of, or with its
 /// box to work out again.
 void pickable_changed(std::uint32_t entity);
+/// Whether anything in a world that blocks sight by its pick shape, an ellipsoid or a box, and
+/// isn't a mesh, a terrain, or one of the two entities, crosses the segment.
+bool pick_shape_blocks(std::uint32_t world, vec3_t a, vec3_t b, std::uint32_t first,
+                       std::uint32_t second);
 /// Marks an entity's box, if picks hit it, to be worked out again.
 void pickable_moved(std::uint32_t entity);
 
