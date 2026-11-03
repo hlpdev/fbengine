@@ -112,9 +112,11 @@ Class Writing
             layer["blend"] = Value("{material.LayerBlend(at)}")
             layer["uv_set"] = Value(material.LayerUvSet(at) As Int32)
             Local turn = material.LayerUv(at)
-            layer["uv"] = Numbers([turn.Scale.x, turn.Scale.y, turn.Angle, turn.Offset.x, turn.Offset.y])
+            layer["uv"] = Numbers([turn.Scale.x, turn.Scale.y, turn.Angle, turn.Offset.x,
+                                   turn.Offset.y])
             Local bump = material.LayerBump(at)
-            layer["bump"] = Numbers([bump.M00, bump.M01, bump.M10, bump.M11, bump.Scale, bump.Offset])
+            layer["bump"] = Numbers([bump.M00, bump.M01, bump.M10, bump.M11, bump.Scale,
+                                     bump.Offset])
             layers.Add(layer)
         End For
         If layers.Count > 0 Then table["layers"] = layers
@@ -144,8 +146,10 @@ Class Writing
             Local vertices = Value.Array()
             For at = 0 To surface.VertexCount() - 1
                 Local v = surface.Vertex(at)
-                vertices.Add(Numbers([v.Position.x, v.Position.y, v.Position.z, v.Normal.x, v.Normal.y, v.Normal.z,
-                                      v.Uv0.x, v.Uv0.y, v.Uv1.x, v.Uv1.y, v.Color.r, v.Color.g, v.Color.b,
+                vertices.Add(Numbers([v.Position.x, v.Position.y, v.Position.z, v.Normal.x,
+                                      v.Normal.y, v.Normal.z,
+                                      v.Uv0.x, v.Uv0.y, v.Uv1.x, v.Uv1.y, v.Color.r, v.Color.g,
+                                      v.Color.b,
                                       v.Color.a]))
             End For
             one["vertices"] = vertices
@@ -180,7 +184,8 @@ Class Writing
         Local kind = entity.Kind()
         If kind != EntityKind.PIVOT && kind != EntityKind.MESH && kind != EntityKind.LIGHT &&
            kind != EntityKind.CAMERA && kind != EntityKind.SPRITE
-            Throw IOError(IOErrorKind.INVALID_DATA, "{path} is a {kind}, which a scene can't hold yet")
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{path} is a {kind}, which a scene can't hold yet")
         End If
         table["kind"] = Value("{kind}")
         If entity.Name() != "" Then table["name"] = Value(entity.Name())
@@ -199,7 +204,8 @@ Class Writing
         If radius != Vec2(1, 1) Then table["radius"] = Numbers([radius.x, radius.y])
         Local box = entity.CollisionBox()
         If box != AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1))
-            table["box"] = Numbers([box.Min.x, box.Min.y, box.Min.z, box.Max.x, box.Max.y, box.Max.z])
+            table["box"] = Numbers([box.Min.x, box.Min.y, box.Min.z, box.Max.x, box.Max.y,
+                                    box.Max.z])
         End If
         Local mesh = entity As? Mesh
         If mesh != Null
@@ -300,9 +306,11 @@ Class Reading
         Local made = Material()
         Local where = "the material {id}"
         made.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), where))
-        made.SetShading(Try Named<Shading>(table, "shading", Shading.PBR, [Shading.PBR, Shading.UNLIT, Shading.VERTEX], where))
+        made.SetShading(Try Named<Shading>(table, "shading", Shading.PBR,
+                                           [Shading.PBR, Shading.UNLIT, Shading.VERTEX], where))
         made.SetBlend(Try Named<Blend>(table, "blend", Blend.AUTO,
-                                       [Blend.AUTO, Blend.OPAQUE, Blend.ALPHA, Blend.ADD, Blend.MULTIPLY], where))
+                                       [Blend.AUTO, Blend.OPAQUE, Blend.ALPHA, Blend.ADD,
+                                        Blend.MULTIPLY], where))
         made.SetAlphaCutoff(Try FloatOf(table, "alpha_cutoff", 0.0, where))
         made.SetShininess(Try FloatOf(table, "shininess", 0.0, where))
         made.SetVertexColors(Try BoolOf(table, "vertex_colors", False, where))
@@ -315,14 +323,19 @@ Class Reading
             If index < 0 || index > 7 Then Throw Wrong("{where}: a layer's 0 to 7, not {index}")
             made.SetTexture(index, Try Assets.Load<Texture>(Try Required(layer, "texture", where)))
             made.SetLayer(index, Try Named<LayerBlend>(layer, "blend", LayerBlend.MULTIPLY,
-                                                       [LayerBlend.MULTIPLY, LayerBlend.ADD, LayerBlend.ALPHA,
-                                                        LayerBlend.MULTIPLY_2, LayerBlend.BUMP], where),
+                                                       [LayerBlend.MULTIPLY, LayerBlend.ADD,
+                                                        LayerBlend.ALPHA,
+                                                        LayerBlend.MULTIPLY_2, LayerBlend.BUMP],
+                                                       where),
                           Try IntOf(layer, "uv_set", 0, where))
             Local uv = Try FloatsOf(layer, "uv", 5, where)
-            If uv != Null Then made.SetLayerUv(index, UvTurn(Vec2(uv[0], uv[1]), uv[2], Vec2(uv[3], uv[4])))
+            If uv != Null Then made.SetLayerUv(index,
+                                               UvTurn(Vec2(uv[0], uv[1]), uv[2],
+                                                      Vec2(uv[3], uv[4])))
             Local bump = Try FloatsOf(layer, "bump", 6, where)
             If bump != Null
-                made.SetLayerBump(index, BumpShift(bump[0], bump[1], bump[2], bump[3], bump[4], bump[5]))
+                made.SetLayerBump(index,
+                                  BumpShift(bump[0], bump[1], bump[2], bump[3], bump[4], bump[5]))
             End If
         End For
         Materials[id] = made
@@ -355,7 +368,8 @@ Class Reading
                         f.Add((each.AsDouble() ?? 0.0) As Float32)
                     End For
                     If f.Count != 14 Then Throw Wrong("{at}: a vertex is 14 numbers, not {f.Count}")
-                    vertices.Add(Vertex(Vec3(f[0], f[1], f[2]), Vec3(f[3], f[4], f[5]), Vec2(f[6], f[7]),
+                    vertices.Add(Vertex(Vec3(f[0], f[1], f[2]), Vec3(f[3], f[4], f[5]),
+                                        Vec2(f[6], f[7]),
                                         Vec2(f[8], f[9]), Color(f[10], f[11], f[12], f[13])))
                 End For
                 surface.AddVertices(vertices)
@@ -415,10 +429,12 @@ Class Reading
                 made = Pivot(parent)
             Case "MESH"
                 Local source = table["geometry"]?.AsString()
-                made = source != Null ? Mesh(Try GeometryOf(source, path), parent) : Mesh(Geometry(), parent)
+                made = source != Null ? Mesh(Try GeometryOf(source, path),
+                                             parent) : Mesh(Geometry(), parent)
             Case "LIGHT"
                 made = Light(Try Named<LightType>(table, "light", LightType.POINT,
-                                                  [LightType.DIRECTIONAL, LightType.POINT, LightType.SPOT], path), parent)
+                                                  [LightType.DIRECTIONAL, LightType.POINT,
+                                                   LightType.SPOT], path), parent)
             Case "CAMERA"
                 made = Camera(parent)
             Case "SPRITE"
@@ -440,16 +456,20 @@ Class Reading
         made.SetScale(Try VecOf(table, "scale", Vec3(1, 1, 1), path))
         If Try BoolOf(table, "hidden", False, path) Then made.Hide()
         made.SetPickMode(Try Named<PickMode>(table, "pick", PickMode.NONE,
-                                             [PickMode.NONE, PickMode.ELLIPSOID, PickMode.BOX, PickMode.MESH], path))
+                                             [PickMode.NONE, PickMode.ELLIPSOID, PickMode.BOX,
+                                              PickMode.MESH], path))
         made.SetBlocksSight(Try BoolOf(table, "blocks_sight", False, path))
         made.SetCollisionGroup(Try IntOf(table, "group", 0, path))
         made.SetCollisionShape(Try Named<CollisionShape>(table, "shape", CollisionShape.AUTO,
-                                                         [CollisionShape.AUTO, CollisionShape.ELLIPSOID,
-                                                          CollisionShape.BOX, CollisionShape.MESH], path))
+                                                         [CollisionShape.AUTO,
+                                                          CollisionShape.ELLIPSOID,
+                                                          CollisionShape.BOX, CollisionShape.MESH],
+                                                         path))
         Local radius = Try FloatsOf(table, "radius", 2, path)
         If radius != Null Then made.SetCollisionRadius(radius[0], radius[1])
         Local box = Try FloatsOf(table, "box", 6, path)
-        If box != Null Then made.SetCollisionBox(AABB(Vec3(box[0], box[1], box[2]), Vec3(box[3], box[4], box[5])))
+        If box != Null Then made.SetCollisionBox(AABB(Vec3(box[0], box[1], box[2]),
+                                                      Vec3(box[3], box[4], box[5])))
         Local mesh = made As? Mesh
         If mesh != Null
             Local material = table["material"]?.AsString()
@@ -467,12 +487,15 @@ Class Reading
         Local camera = made As? Camera
         If camera != Null
             camera.SetProjection(Try Named<Projection>(table, "projection", Projection.PERSPECTIVE,
-                                                       [Projection.PERSPECTIVE, Projection.ORTHOGRAPHIC], path))
+                                                       [Projection.PERSPECTIVE,
+                                                        Projection.ORTHOGRAPHIC], path))
             camera.SetFieldOfView(Try FloatOf(table, "field_of_view", camera.FieldOfView(), path))
-            camera.SetOrthographicHeight(Try FloatOf(table, "height", camera.OrthographicHeight(), path))
+            camera.SetOrthographicHeight(Try FloatOf(table, "height", camera.OrthographicHeight(),
+                                                     path))
             Local range = Try FloatsOf(table, "range", 2, path)
             If range != Null Then camera.SetRange(range[0], range[1])
-            camera.SetClear(Try BoolOf(table, "clear", True, path), Try BoolOf(table, "clear_depth", True, path))
+            camera.SetClear(Try BoolOf(table, "clear", True, path),
+                            Try BoolOf(table, "clear_depth", True, path))
             camera.SetClearColor(Try ColorOf(table, "clear_color", camera.ClearColor(), path))
             camera.SetOrder(Try IntOf(table, "order", 0, path))
             camera.SetFogMode(Try Named<FogMode>(table, "fog", FogMode.NONE,
@@ -489,7 +512,8 @@ Class Reading
             If material != Null Then sprite.SetMaterial(Try MaterialOf(material, path))
             sprite.SetColor(Try ColorOf(table, "color", Color(1, 1, 1, 1), path))
             sprite.SetViewMode(Try Named<SpriteViewMode>(table, "view", SpriteViewMode.BILLBOARD,
-                                                         [SpriteViewMode.BILLBOARD, SpriteViewMode.FIXED,
+                                                         [SpriteViewMode.BILLBOARD,
+                                                          SpriteViewMode.FIXED,
                                                           SpriteViewMode.UPRIGHT], path))
             Local size = Try FloatsOf(table, "size", 2, path)
             If size != Null Then sprite.SetSpriteScale(Vec2(size[0], size[1]))
@@ -563,7 +587,8 @@ Function ColorOf(table: Value, key: String, otherwise: Color, at: String): Color
 End Function
 
 // The one of `all` whose name's what `key` says.
-Function Named<E: Printable>(table: Value, key: String, otherwise: E, all: E[], at: String): E Throws IOError
+Function Named<E: Printable>(table: Value, key: String, otherwise: E, all: E[],
+                             at: String): E Throws IOError
     Local text = table[key]?.AsString()
     If text == Null Then Return otherwise
     For each In all
@@ -635,12 +660,14 @@ Public Final Class Scene
     /// The scene in the file at `path`, a res:// path, made under `parent` or at the top of the current
     /// World, giving what's at its top in order. It's an IOError for a file that can't be read, isn't
     /// a scene, or names what can't be found, all that it had made freed.
-    @MainThread Public Static Method Load(path: String, parent: Entity? = Null): Entity[] Throws IOError
+    @MainThread Public Static Method Load(path: String,
+                                          parent: Entity? = Null): Entity[] Throws IOError
         Return Try FromText(Try Assets.ReadText(path), parent)
     End Method
 
     /// The scene `text` is, as Load makes it.
-    @MainThread Public Static Method FromText(text: String, parent: Entity? = Null): Entity[] Throws IOError
+    @MainThread Public Static Method FromText(text: String,
+                                              parent: Entity? = Null): Entity[] Throws IOError
         Local document: Value? = Null
         Try
             document = Try Toml.Read(text)

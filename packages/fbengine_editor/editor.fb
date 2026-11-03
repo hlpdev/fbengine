@@ -629,8 +629,9 @@ Public Final Class Editor
     End Method
 
     Method AddMenus()
-        Menus.AddMenu("File", ["file.open", "file.close", SEPARATOR, "file.new_scene", "file.open_scene",
-                               "file.save", "file.save_as", SEPARATOR, "file.quit"])
+        Menus.AddMenu("File",
+                      ["file.open", "file.close", SEPARATOR, "file.new_scene", "file.open_scene",
+                       "file.save", "file.save_as", SEPARATOR, "file.quit"])
         Menus.AddMenu("Edit",
                       ["edit.undo", "edit.redo", SEPARATOR, "tree.find", "tree.rename",
                        "tree.duplicate", "tree.hide", "tree.delete",

@@ -1,7 +1,9 @@
 // A seeded generator of Blitz3D's numbers, as a game whose maps come from seeds needs, in the game's
 // own code: Park-Miller's, with a multiplier of 48271 by Schrage's method, its floats and whole numbers
-// worked out as Blitz's were, so a seed gives what it always gave. std.math's Random is another
-// generator, PCG32, and gives other numbers.
+// worked out as section 6 of the requirements gives them. Its products are Float32s, as that formula
+// reads: a choice, not checked against a real Blitz3D, and one a Float64 would differ from, as the 26th
+// number from a seed of 42, from 1 to 1000000, would be 710701 and not 710702. std.math's Random is
+// another generator, PCG32, and gives other numbers.
 
 // What its stream is at: from 1 to 2147483646, but as Seed says.
 Public Class ParkMiller
@@ -10,8 +12,8 @@ Public Class ParkMiller
     Public New()
     End New
 
-    /// Starts its stream at `seed`, its low 31 bits, 0 being 1. A seed of 2147483647, which is what
-    /// all ones come to, then gives 0 for good, as it did in Blitz.
+    /// Starts its stream at `seed`, its low 31 bits, 0 being 1, so its top bit alone is 1 too. A seed of
+    /// 2147483647, which is what all ones come to, then gives 0 for good, as it did in Blitz.
     Public Method Seed(seed: Int32)
         Local masked = seed & 0x7FFFFFFF
         state = masked != 0 ? masked : 1
@@ -30,15 +32,17 @@ Public Class ParkMiller
     /// The next number from `from` to `to`.
     Public Method NextFloat(from: Float32, to: Float32): Float32 => Next() * (to - from) + from
 
-    /// The next whole number from `from` to `to`, both in it, in either order.
+    /// The next whole number from `from` to `to`, both in it, in either order, however far apart.
     Public Method NextInt(from: Int32, to: Int32): Int32
         If to < from Then Return NextInt(to, from)
-        Return (Next() * ((to - from + 1) As Float32)) As Int32 + from
+        Local across = (to As Int64) - (from As Int64) + 1
+        Return (((Next() * (across As Float32)) As Int64) + (from As Int64)) As Int32
     End Method
 End Class
 
-/// The number a seed in words comes to: each character's code shifted by its place, up to 23 bits and
-/// around, XORed together.
+/// The number a seed in words comes to, for ASCII's words: each byte shifted by its place, up to 23 bits
+/// and around, XORed together; what isn't ASCII goes by its UTF-8 bytes, as Blitz's strings of bytes
+/// wouldn't have had them.
 Public Function SeedOfWords(words: String): Int32
     Local made: Int32 = 0
     Local shift = 0

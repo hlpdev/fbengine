@@ -3,7 +3,13 @@
 // two texture slots, a lightmap on its second set of UVs and a diffuse on its first, vertices with
 // colors, and triangles; invisible collision meshes; trigger boxes, if its header says so; and point
 // entities. What's opaque also collides, by a hidden copy of itself of both windings; what blends
-// doesn't. A room pixel is (2 x ambient x vertex color + lightmap) x diffuse, on what's stored.
+// doesn't. An opaque room pixel is (2 x ambient x vertex color + lightmap) x diffuse, on what's stored.
+//
+// The file's in Blitz's left-handed space: x right, y up, z forward, a triangle's front clockwise. The
+// engine's is right-handed, so each place has its z negated and each triangle two corners swapped.
+// Each drawn mesh in the original also had an empty first surface; here, surfaces are only those with
+// data, so a surface's number is its mesh's in the file. Bump layers, a light's sprites and pick pivot,
+// and props' files are the game's own, and aren't here.
 
 Import std.collections
 Import std.core
@@ -15,12 +21,6 @@ Import fbengine
 
 /// How many world units one of the file's is: 2048 of them are a room, 8 wide.
 Public Const ROOM_SCALE: Float = 8.0 / 2048.0
-
-// The file name without its folders, as textures are cached by.
-Function BaseName(name: String): String
-    Local parts = name.Replace("\\", "/").Split("/")
-    Return parts[parts.Count - 1]
-End Function
 
 /// A named box the player's tested against, in the room's own world units.
 Public Struct Trigger
@@ -49,6 +49,58 @@ Public Struct Prop
     Public Field Size: Vec3
 End Struct
 
+/// What every room shares: the ambient texture that each's first layer multiplies, which raises them
+/// all at once, as night vision does, and the textures loaded, each once, by its file's name without
+/// its folders, with the blend it was first loaded for.
+Public Class RoomTextures
+    /// The ambient texture.
+    Public Field Ambient: Texture
+    Field loaded: Map<String, (Texture, LayerBlend)>
+    Field blank: Texture? = Null
+
+    /// Its ambient black, with no textures loaded.
+    Public New() Throws GraphicsError
+        Ambient = Try Texture(2, 2, TextureFormat.RGBA8, False)
+        Ambient.Clear(Color(0, 0, 0))
+        loaded = {}
+    End New
+
+    /// How many textures it's loaded.
+    Public Method Count(): Int => loaded.Count
+
+    // The texture of `name`, under `folder`, or Null for one that can't be read; and its blend, `blend`
+    // unless it was loaded before.
+    Method Find(folder: Path, name: String, blend: LayerBlend): (Texture,
+                                                                 LayerBlend)? Throws GraphicsError
+        Local parts = name.Replace("\\", "/").Split("/")
+        Local base = parts[parts.Count - 1]
+        Local had = loaded.Get(base)
+        If had != Null Then Return had
+        Local file = folder
+        For part In parts
+            file = file / part
+        End For
+        Try
+            Local made = (Try Texture.Load(file), blend)
+            loaded[base] = made
+            Return made
+        Catch error As IOError
+            Return Null
+        End Try
+    End Method
+
+    // A 4 by 4 of white, for a slot with nothing in it.
+    Method White(): Texture Throws GraphicsError
+        Local had = blank
+        If had != Null Then Return had
+        Local image = Image(4, 4)
+        image.Fill(Color32(255, 255, 255, 255))
+        Local made = Try Texture.FromImage(image, False)
+        blank = made
+        Return made
+    End Method
+End Class
+
 /// A room's template, which each placing copies: its tree's first child's an empty pivot, its second
 /// the drawn mesh, its third the invisible collision mesh, its fourth and fifth empty pivots, and its
 /// sixth the pivot of collision copies; its lights are under it too. What isn't entities is the room's
@@ -65,117 +117,157 @@ Public Class Room
     Public Field Props: Prop[] = []
     Public Field Lights: Light[] = []
     Public Field Materials: Material[] = []
-    /// The texture every room's first layer multiplies, which raises every room at once.
-    Public Field Ambient: Texture
 
-    Package New(root: Pivot, drawn: Mesh, hidden: Mesh, copies: Pivot, ambient: Texture)
+    Package New(root: Pivot, drawn: Mesh, hidden: Mesh, copies: Pivot)
         Root = root
         Drawn = drawn
         Hidden = hidden
         Copies = copies
-        Ambient = ambient
     End New
 End Class
 
+/// A room's copy, placed, with what isn't entities where it is in the world, for the game to test
+/// against: a trigger's box around its corners as they're turned.
+Public Class PlacedRoom
+    Public Field Root: Entity
+    Public Field Triggers: Trigger[] = []
+    Public Field Waypoints: Vec3[] = []
+    Public Field Screens: Screenful[] = []
+    Public Field Emitters: Emitter[] = []
+
+    Package New(root: Entity)
+        Root = root
+    End New
+End Class
+
+Function Wrong(message: String): IOError => IOError(IOErrorKind.INVALID_DATA,
+                                                    "a room file: {message}")
+
 Function Text(reader: BinaryReader): String Throws IOError
     Local count = Try reader.ReadInt32()
-    If count < 0 Then Throw IOError(IOErrorKind.INVALID_DATA, "a string can't be {count} long")
+    If count < 0 Then Throw Wrong("a string can't be {count} long")
     Return Try reader.ReadText(count As Int64)
 End Function
 
+// How many there are of something, which can't be under 0.
+Function Count(reader: BinaryReader): Int32 Throws IOError
+    Local count = Try reader.ReadInt32()
+    If count < 0 Then Throw Wrong("there can't be {count} of anything")
+    Return count
+End Function
+
+// A place in the file's left-handed space, in the engine's right-handed.
 Function Place(reader: BinaryReader): Vec3 Throws IOError
+    Local x = Try reader.ReadFloat32()
+    Local y = Try reader.ReadFloat32()
+    Local z = Try reader.ReadFloat32()
+    Return Vec3(x, y, -z)
+End Function
+
+// 3 floats as they are, a prop's turn or size.
+Function Three(reader: BinaryReader): Vec3 Throws IOError
     Local x = Try reader.ReadFloat32()
     Local y = Try reader.ReadFloat32()
     Local z = Try reader.ReadFloat32()
     Return Vec3(x, y, z)
 End Function
 
-// A surface of a `Local x, y, z` and triangles, both windings, as collision meshes are.
+// A triangle, its corners checked to be of `count`, each in the file's winding, as the engine's has it
+// turned the other way round.
+Function Corners(reader: BinaryReader, count: Int): (Int, Int, Int) Throws IOError
+    Local a = Try reader.ReadInt32()
+    Local b = Try reader.ReadInt32()
+    Local c = Try reader.ReadInt32()
+    If a < 0 || b < 0 || c < 0 || a >= count || b >= count || c >= count
+        Throw Wrong("a triangle's {a}, {b}, {c} aren't all of its {count} vertices")
+    End If
+    Return (a, c, b)
+End Function
+
+// A surface of places and triangles, both windings, as collision meshes are.
 Function ReadBothWays(reader: BinaryReader, into: Geometry) Throws IOError
     Local surface = into.AddSurface()
-    For i = 1 To Try reader.ReadInt32()
+    Local vertices = Try Count(reader)
+    For i = 1 To vertices
         surface.AddVertex(Try Place(reader))
     End For
-    For i = 1 To Try reader.ReadInt32()
-        Local a = Try reader.ReadInt32()
-        Local b = Try reader.ReadInt32()
-        Local c = Try reader.ReadInt32()
+    For i = 1 To Try Count(reader)
+        Local a, b, c = Try Corners(reader, vertices)
         surface.AddTriangle(a, b, c)
         surface.AddTriangle(c, b, a)
     End For
 End Function
 
-// The textures of a folder, each loaded once, by its file name without its path.
-Class Cache
-    Field Folder: Path
-    Field Loaded: Map<String, Texture>
-
-    New(folder: Path)
-        Folder = folder
-        Loaded = {}
-    End New
-
-    Method Find(name: String): Texture Throws GraphicsError, IOError
-        Local base = BaseName(name)
-        Local had = Loaded.Get(base)
-        If had != Null Then Return had
-        Local made = Try Texture.Load(Folder / base)
-        Loaded[base] = made
-        Return made
-    End Method
-End Class
-
-// The blank white that stands in for a slot with no texture.
-Function White(): Texture Throws GraphicsError
-    Local image = Image(4, 4)
-    image.Fill(Color32(255, 255, 255, 255))
-    Return Try Texture.FromImage(image, False)
+// How a slot's texture blends: by its name if it's a lightmap's, else by its flag.
+Function BlendOf(flag: Int, name: String): LayerBlend
+    If name.ToLower().Contains("_lm") Then Return LayerBlend.ADD
+    Return flag == 1 ? LayerBlend.MULTIPLY_2 : LayerBlend.MULTIPLY
 End Function
 
-// A material as a drawn mesh's slots say. `flags` are each slot's: 0 for none, and 3 for blending.
-Function Look(names: String[], flags: Int[], cache: Cache,
-              ambient: Texture): Material Throws GraphicsError, IOError
+// A material as a drawn mesh's slots say: what blends, its diffuse alone; what has both, the ambient
+// layer and each; one, it in its own slot's layer, white in the other; none, its vertices' colors.
+Function Look(names: String[], flags: Int[], folder: Path,
+              textures: RoomTextures): Material Throws GraphicsError
     Local material = Material()
     material.SetShading(Shading.UNLIT)
     material.SetVertexColors(True)
-    Local blends = flags[0] == 3 || flags[1] == 3
-    If blends
+    Local found: (Texture, LayerBlend)?[] = [Null, Null]
+    For slot = 0 To 1
+        If flags[slot] != 0 Then found[slot] = Try textures.Find(folder, names[slot],
+                                                                 BlendOf(flags[slot], names[slot]))
+    End For
+    If flags[0] == 3 || flags[1] == 3
         material.SetBlend(Blend.ALPHA)
         material.SetTwoSided(True)
-        material.SetTexture(0, flags[1] != 0 ? Try cache.Find(names[1]) : Try White())
+        Local diffuse = found[1]
+        material.SetTexture(0, diffuse != Null ? diffuse.0 : Try textures.White())
         material.SetLayer(0, LayerBlend.MULTIPLY)
         Return material
     End If
-    // A lightmap's name says it adds; what's in slot 0 reads the second UVs, in slot 1 the first.
-    material.SetTexture(0, ambient)
-    material.SetLayer(0, LayerBlend.MULTIPLY_2)
-    Local at = 1
-    For slot = 0 To 1
-        If flags[slot] == 0 Then Continue
-        Local name = names[slot]
-        Local blend = name.ToLower().Contains("_lm") ? LayerBlend.ADD : flags[slot] == 1 ? LayerBlend.MULTIPLY_2 : LayerBlend.MULTIPLY
-        material.SetTexture(at, Try cache.Find(name))
-        material.SetLayer(at, blend, 1 - slot)
-        at += 1
-    End For
+    Local lightmap = found[0]
+    Local diffuse = found[1]
+    If lightmap != Null && diffuse != Null
+        material.SetTexture(0, textures.Ambient)
+        material.SetLayer(0, LayerBlend.MULTIPLY_2)
+        material.SetTexture(1, lightmap.0)
+        material.SetLayer(1, lightmap.1, 1)
+        material.SetTexture(2, diffuse.0)
+        material.SetLayer(2, diffuse.1, 0)
+    ElseIf lightmap != Null
+        material.SetTexture(0, lightmap.0)
+        material.SetLayer(0, lightmap.1, 1)
+        material.SetTexture(1, Try textures.White())
+        material.SetLayer(1, LayerBlend.MULTIPLY)
+    ElseIf diffuse != Null
+        material.SetTexture(0, Try textures.White())
+        material.SetLayer(0, LayerBlend.MULTIPLY)
+        material.SetTexture(1, diffuse.0)
+        material.SetLayer(1, diffuse.1, 0)
+    End If
     Return material
 End Function
 
-/// The room in the file at `path`, its textures from its folder. It throws an IOError for a file
-/// that's short or isn't one, and a GraphicsError if a texture can't be made.
-Public Function LoadRoom(path: Path): Room Throws GraphicsError, IOError
+/// The room in the file at `path`, its textures' names under its folder, from and in `textures`. It
+/// throws an IOError for a file that's short or isn't one, having made nothing, and a GraphicsError if
+/// a texture can't be made. A texture's file that can't be read is a slot with nothing in it.
+Public Function LoadRoom(path: Path, textures: RoomTextures): Room Throws GraphicsError, IOError
+    Local root = Pivot()
     Local file = Try File.Open(path)
     Defer file.Close()
-    Local reader = BinaryReader(file)
+    Try
+        Return Try Read(BinaryReader(file), root, path.Parent() ?? Path("."), textures)
+    Catch error As IOError
+        root.Free()
+        Throw error
+    End Try
+End Function
+
+Function Read(reader: BinaryReader, root: Pivot, folder: Path,
+              textures: RoomTextures): Room Throws GraphicsError, IOError
     Local header = Try Text(reader)
     If header != "RoomMesh" && header != "RoomMesh.HasTriggerBox"
-        Throw IOError(IOErrorKind.INVALID_DATA, "a room file starts RoomMesh, not {header}")
+        Throw Wrong("it starts RoomMesh, not {header}")
     End If
-    Local black = Try Texture(2, 2, TextureFormat.RGBA8, False)
-    black.Clear(Color(0, 0, 0))
-    Local cache = Cache(path.Parent() ?? Path("."))
-
-    Local root = Pivot()
     Pivot(root)
     Local drawnGeometry = Geometry()
     Local hiddenGeometry = Geometry()
@@ -183,19 +275,19 @@ Public Function LoadRoom(path: Path): Room Throws GraphicsError, IOError
     Local materials: Material[] = []
 
     // Drawn meshes.
-    For mesh = 1 To Try reader.ReadInt32()
+    For mesh = 1 To Try Count(reader)
         Local names = ["", ""]
         Local flags = [0, 0]
         For slot = 0 To 1
             flags[slot] = (Try reader.ReadUInt8()) As Int
             If flags[slot] != 0 Then names[slot] = Try Text(reader)
         End For
-        Local material = Try Look(names, flags, cache, black)
+        Local material = Try Look(names, flags, folder, textures)
         materials.Add(material)
         Local surface = drawnGeometry.AddSurface()
         surface.SetMaterial(material)
         Local vertices: Vertex[] = []
-        For i = 1 To Try reader.ReadInt32()
+        For i = 1 To Try Count(reader)
             Local at = Try Place(reader)
             Local u0 = Try reader.ReadFloat32()
             Local v0 = Try reader.ReadFloat32()
@@ -208,17 +300,14 @@ Public Function LoadRoom(path: Path): Room Throws GraphicsError, IOError
                                 Color32(red, green, blue, 255).ToColor()))
         End For
         surface.AddVertices(vertices)
-        Local blends = flags[0] == 3 || flags[1] == 3
-        Local copy = blends ? Null : copyGeometry.AddSurface()
+        Local copy = flags[0] == 3 || flags[1] == 3 ? Null : copyGeometry.AddSurface()
         If copy != Null
             For each In vertices
                 copy.AddVertex(each.Position)
             End For
         End If
-        For i = 1 To Try reader.ReadInt32()
-            Local a = Try reader.ReadInt32()
-            Local b = Try reader.ReadInt32()
-            Local c = Try reader.ReadInt32()
+        For i = 1 To Try Count(reader)
+            Local a, b, c = Try Corners(reader, vertices.Count)
             surface.AddTriangle(a, b, c)
             If copy != Null
                 copy.AddTriangle(a, b, c)
@@ -231,7 +320,7 @@ Public Function LoadRoom(path: Path): Room Throws GraphicsError, IOError
     drawn.SetScale(Vec3(ROOM_SCALE, ROOM_SCALE, ROOM_SCALE))
 
     // Invisible collision meshes.
-    For i = 1 To Try reader.ReadInt32()
+    For i = 1 To Try Count(reader)
         Try ReadBothWays(reader, hiddenGeometry)
     End For
     Local hidden = Mesh(hiddenGeometry, root)
@@ -247,14 +336,14 @@ Public Function LoadRoom(path: Path): Room Throws GraphicsError, IOError
     copied.SetScale(Vec3(ROOM_SCALE, ROOM_SCALE, ROOM_SCALE))
     copied.SetAlpha(0)
 
-    Local room = Room(root, drawn, hidden, copies, black)
+    Local room = Room(root, drawn, hidden, copies)
     room.Materials = materials
 
     // Trigger boxes: the box of each's surfaces.
     If header == "RoomMesh.HasTriggerBox"
-        For i = 1 To Try reader.ReadInt32()
+        For i = 1 To Try Count(reader)
             Local shape = Geometry()
-            For j = 1 To Try reader.ReadInt32()
+            For j = 1 To Try Count(reader)
                 Try ReadBothWays(reader, shape)
             End For
             Local name = Try Text(reader)
@@ -265,7 +354,7 @@ Public Function LoadRoom(path: Path): Room Throws GraphicsError, IOError
     End If
 
     // Point entities, in the file's units but for playerstart's and model's.
-    For i = 1 To Try reader.ReadInt32()
+    For i = 1 To Try Count(reader)
         Local kind = Try Text(reader)
         Select kind
             Case "screen"
@@ -287,8 +376,7 @@ Public Function LoadRoom(path: Path): Room Throws GraphicsError, IOError
                 End If
                 If at != Vec3.Zero()
                     Local parts = color.Split(" ")
-                    If parts.Count != 3 Then Throw IOError(IOErrorKind.INVALID_DATA,
-                                                           "a light's color is r g b, not {color}")
+                    If parts.Count != 3 Then Throw Wrong("a light's color is r g b, not {color}")
                     Local light = Light(LightType.POINT, root)
                     light.SetPosition(at * ROOM_SCALE)
                     light.SetRange(range)
@@ -311,26 +399,54 @@ Public Function LoadRoom(path: Path): Room Throws GraphicsError, IOError
                 Local name = Try Text(reader)
                 Local at = Try Place(reader)
                 If name != ""
-                    Local turn = Try Place(reader)
-                    Local size = Try Place(reader)
+                    Local turn = Try Three(reader)
+                    Local size = Try Three(reader)
                     room.Props.Add(Prop(name, at, turn, size))
                 End If
             Default
-                Throw IOError(IOErrorKind.INVALID_DATA, "a room's entities have no {kind}")
+                Throw Wrong("its entities have no {kind}")
         End Select
     End For
     Return room
 End Function
 
 /// A room's template placed: its copy, showing whether or not the template is, at `at`, turned, its
-/// collision meshes colliding as `group` and picked by their triangles.
-Public Function PlaceRoom(room: Room, at: Vec3, yaw: Float, group: Int): Entity
-    Local placed = room.Root.Copy()
-    placed.Show()
-    placed.SetPosition(at)
-    placed.Turn(0, yaw, 0)
-    SetLevel(placed, group)
+/// collision meshes colliding as `group` and picked by their triangles, and what isn't entities where
+/// that puts it in the world.
+Public Function PlaceRoom(room: Room, at: Vec3, yaw: Float, group: Int): PlacedRoom
+    Local root = room.Root.Copy()
+    root.Show()
+    root.SetPosition(at)
+    root.Turn(0, yaw, 0)
+    SetLevel(root, group)
+    Local placed = PlacedRoom(root)
+    For each In room.Waypoints
+        placed.Waypoints.Add(TransformPoint(each, root, Null))
+    End For
+    For each In room.Screens
+        placed.Screens.Add(Screenful(each.Image, TransformPoint(each.At, root, Null)))
+    End For
+    For each In room.Emitters
+        placed.Emitters.Add(Emitter(each.Sound, TransformPoint(each.At, root, Null), each.Range))
+    End For
+    For each In room.Triggers
+        placed.Triggers.Add(Trigger(each.Name, TurnedBox(each.Box, root)))
+    End For
     Return placed
+End Function
+
+// The box around `box`'s corners under `root`, in the world.
+Function TurnedBox(box: AABB, root: Entity): AABB
+    Local low = Vec3(Inf, Inf, Inf)
+    Local high = Vec3(-Inf, -Inf, -Inf)
+    For i = 0 To 7
+        Local corner = TransformPoint(Vec3((i & 1) != 0 ? box.Max.x : box.Min.x,
+                                           (i & 2) != 0 ? box.Max.y : box.Min.y,
+                                           (i & 4) != 0 ? box.Max.z : box.Min.z), root, Null)
+        low = Vec3(Min(low.x, corner.x), Min(low.y, corner.y), Min(low.z, corner.z))
+        high = Vec3(Max(high.x, corner.x), Max(high.y, corner.y), Max(high.z, corner.z))
+    End For
+    Return AABB(low, high)
 End Function
 
 // Each mesh of a tree colliding as `group` and picked by its triangles, but what's drawn.

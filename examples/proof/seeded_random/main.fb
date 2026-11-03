@@ -85,13 +85,28 @@ Function Proved()
     Print("a seed of 0 is {dice.State()}")
     dice.Seed(-2147483647)
     Print("a seed with its top bit is {dice.State()}")
+    dice.Seed(-2147483648)
+    Print("a seed of its top bit alone is {dice.State()}")
     dice.Seed(-1)
     Print("a seed of all ones is {dice.State()}")
     Print("then {dice.Next()}, its state {dice.State()}, and {dice.Next()}")
 
-    // A seed in words: 97 ^ (98 << 1) ^ (99 << 2), and around after 24 characters.
+    // Float32's products, a choice: its 26th from 42, where a Float64's would be 710701.
+    dice.Seed(42)
+    For i = 1 To 25
+        dice.Next()
+    End For
+    Print("the 26th from 42, from 1 to 1000000, {dice.NextInt(1, 1000000)}")
+
+    // However far apart: the 2147483648 from 0 to the most there is.
+    dice.Seed(42)
+    Print("from 0 to the most {dice.NextInt(0, 2147483647)}")
+
+    // A seed in words: 97 ^ (98 << 1) ^ (99 << 2), and around after 24 characters; and by its bytes, an
+    // accented e's two.
     Print("the seed of abc {SeedOfWords("abc")}")
     Print("of 25 a's {SeedOfWords("aaaaaaaaaaaaaaaaaaaaaaaaa")}")
+    Print("of an accented e {SeedOfWords("\u{e9}")}")
 
     // What it isn't: std.math's Random, from the same seed, gives others.
     Local other32 = Random(42)
@@ -142,6 +157,17 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         canvas.SetColor(Color32(230, 232, 235, 255))
         canvas.DrawText(font, "32 bars from seed 42, its state {dice.State()}", 16, 16)
     End While
+    If frames > 0
+        Local least = bars[0]
+        Local sum = 0
+        Local most = 0
+        For each In bars
+            least = Min(least, each)
+            most = Max(most, each)
+            sum += each
+        End For
+        Print("its bars {least}, {most}, {sum}")
+    End If
     Print("drew {Try Drew()}")
     Print("watched {count} frames")
 End Function

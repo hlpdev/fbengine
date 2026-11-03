@@ -115,7 +115,8 @@ Public Final Class Geometry
     End Method
 
     /// A cube from -1 to 1 on each axis, flat-shaded, each face's UVs from 0 to 1.
-    @MainThread Public Static Method Cube(): Geometry => Sourced(Made(fbe_geometry_cube(), "Cube"), "builtin:cube")
+    @MainThread Public Static Method Cube(): Geometry => Sourced(Made(fbe_geometry_cube(), "Cube"),
+                                                                 "builtin:cube")
 
     /// A sphere of radius 1, of `segments` rings from pole to pole and twice as many around, from 3
     /// to 100.

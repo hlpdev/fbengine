@@ -161,13 +161,16 @@ Function EachKindKeepsWhatItsSetTo() Throws IOError
     Local smoke = roots[1] As? Sprite
     If smoke == Null Then Panic("a Sprite")
     Expect(smoke.Color() == Color(0.5, 0.5, 1, 0.25) && smoke.ViewMode() == SpriteViewMode.UPRIGHT)
-    Expect(smoke.SpriteScale() == Vec2(2, 3) && smoke.Handle() == Vec2(0.5, 0.25) && smoke.SpriteRotation() == 0.5)
+    Expect(smoke.SpriteScale() == Vec2(2, 3) && smoke.Handle() == Vec2(0.5, 0.25) &&
+           smoke.SpriteRotation() == 0.5)
     Expect(smoke.CollisionRadius() == Vec2(0.5, 2) && smoke.CollisionShape() == CollisionShape.BOX)
     Expect(smoke.CollisionBox() == AABB(Vec3(-2, -1, -1), Vec3(1, 3, 1)) && smoke.BlocksSight())
     Local read = smoke.Material()
     If read == Null Then Panic("its Material")
-    Expect(read.Color() == Color(0.25, 0.5, 0.75, 0.5) && read.Shading() == Shading.VERTEX && read.Blend() == Blend.ADD)
-    Expect(read.AlphaCutoff() == 0.25 && read.Shininess() == 0.75 && read.VertexColors() && read.Wireframe())
+    Expect(read.Color() == Color(0.25, 0.5, 0.75, 0.5) && read.Shading() == Shading.VERTEX &&
+           read.Blend() == Blend.ADD)
+    Expect(read.AlphaCutoff() == 0.25 && read.Shininess() == 0.75 && read.VertexColors() &&
+           read.Wireframe())
     Expect(read.TwoSided() && !read.Fogged() && read.Order() == -2)
     Local one = roots[2] As? Mesh
     If one == Null Then Panic("a Mesh")
@@ -186,7 +189,8 @@ Function AGeometryChangedIsSavedByItsVertices() Throws IOError
     Local made = Geometry()
     Local surface = made.AddSurface()
     Local up = Vec3(0, 1, 0)
-    Local a = surface.AddVertex(Vertex(Vec3(0.1, 0, 0), up, Vec2(0, 0.25), Vec2(0.5, 0.75), Color(1, 0, 0, 0.5)))
+    Local a = surface.AddVertex(Vertex(Vec3(0.1, 0, 0), up, Vec2(0, 0.25), Vec2(0.5, 0.75),
+                                       Color(1, 0, 0, 0.5)))
     Local b = surface.AddVertex(Vertex(Vec3(1, 0, 0), up, Vec2(1, 0), Vec2(0, 0), Color(0, 1, 0)))
     Local c = surface.AddVertex(Vertex(Vec3(0, 0, 1), up, Vec2(0, 1), Vec2(0, 0), Color(0, 0, 1)))
     surface.AddTriangle(a, c, b)
@@ -213,7 +217,8 @@ Function AGeometryChangedIsSavedByItsVertices() Throws IOError
     Local read = one.Geometry()?.Surface(0)
     If read == Null Then Panic("a surface")
     Expect(read.VertexCount() == 3 && read.TriangleCount() == 1)
-    Expect(read.Vertex(0) == Vertex(Vec3(0.1, 0, 0), up, Vec2(0, 0.25), Vec2(0.5, 0.75), Color(1, 0, 0, 0.5)))
+    Expect(read.Vertex(0) ==
+           Vertex(Vec3(0.1, 0, 0), up, Vec2(0, 0.25), Vec2(0.5, 0.75), Color(1, 0, 0, 0.5)))
     Expect(read.Triangle(0) == Vec3i(a, c, b))
     Expect(read.Material()?.Color() == Color(0.5, 0.5, 0.5))
     Local moved = three.Geometry()
@@ -262,15 +267,26 @@ Function WhatIsntASceneLeavesNothing()
     Local good = "[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\n"
     For each In [("format = 2\n", "format 2"), ("nonsense", "a scene"),
                  ("format = 1\n" + good + "[[entity]]\npath = \"a\"\nkind = \"PIVOT\"\n", "twice"),
-                 ("format = 1\n" + good + "[[entity]]\npath = \"gone/b\"\nkind = \"PIVOT\"\n", "under"),
-                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"DRAGON\"\n", "DRAGON"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"gone/b\"\nkind = \"PIVOT\"\n",
+                  "under"),
+                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"DRAGON\"\n",
+                  "DRAGON"),
                  ("format = 1\n" + good + "[[entity]]\nkind = \"PIVOT\"\n", "no path"),
-                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"PIVOT\"\nposition = [1, 2]\n", "position"),
-                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"PIVOT\"\npick = \"NOSE\"\n", "NOSE"),
-                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"builtin:cheese\"\n", "cheese"),
-                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"geometry:nope\"\n", "nope"),
-                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"MESH\"\nmaterial = \"nope\"\n", "nope"),
-                 ("format = 1\n" + good + "[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"res://none.glb\"\n", "isn't what")]
+                 ("format = 1\n" + good +
+                  "[[entity]]\npath = \"b\"\nkind = \"PIVOT\"\nposition = [1, 2]\n", "position"),
+                 ("format = 1\n" + good +
+                  "[[entity]]\npath = \"b\"\nkind = \"PIVOT\"\npick = \"NOSE\"\n", "NOSE"),
+                 ("format = 1\n" + good +
+                  "[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"builtin:cheese\"\n",
+                  "cheese"),
+                 ("format = 1\n" + good +
+                  "[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"geometry:nope\"\n",
+                  "nope"),
+                 ("format = 1\n" + good +
+                  "[[entity]]\npath = \"b\"\nkind = \"MESH\"\nmaterial = \"nope\"\n", "nope"),
+                 ("format = 1\n" + good +
+                  "[[entity]]\npath = \"b\"\nkind = \"MESH\"\ngeometry = \"res://none.glb\"\n",
+                  "isn't what")]
         Local text, says = each
         Local said = Refused(text)
         Expect(said.Contains(says), said)

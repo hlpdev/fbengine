@@ -314,7 +314,8 @@ Public Final Class AssetBrowser Extends Widget
             Local model = Try Assets.Load<Model>(path)
             Defer model.Free()
             Local spawned = Try model.Spawn()
-            Local target = Try Texture.Target(THUMB_PIXELS, THUMB_PIXELS, TextureFormat.RGBA8, 1, True)
+            Local target = Try Texture.Target(THUMB_PIXELS, THUMB_PIXELS, TextureFormat.RGBA8, 1,
+                                              True)
             Local box = spawned.Bounds()
             Local middle = (box.Min + box.Max) * 0.5
             Local reach = Max(Length(box.Max - box.Min), 0.001)
@@ -402,14 +403,18 @@ Public Final Class AssetBrowser Extends Widget
         For entry In entries
             names.Add(entry.Name)
         End For
-        Local folders = entries.Filter(Function(entry: AssetEntry) => entry.Kind == FileKind.DIRECTORY)
-        Local files = entries.Filter(Function(entry: AssetEntry) => entry.Kind != FileKind.DIRECTORY)
+        Local folders = entries.Filter(Function(entry: AssetEntry) => entry.Kind ==
+                                       FileKind.DIRECTORY)
+        Local files = entries.Filter(Function(entry: AssetEntry) => entry.Kind !=
+                                     FileKind.DIRECTORY)
         For entry In folders
             found.Add((entry.Path, entry.Name, depth, True, disk / entry.Name))
-            If open.Contains(entry.Path) Then Walked(entry.Path, disk / entry.Name, depth + 1, found)
+            If open.Contains(entry.Path) Then Walked(entry.Path, disk / entry.Name, depth + 1,
+                                                     found)
         End For
         For entry In files
-            If entry.Name.EndsWith(".toml") && names.Contains(entry.Name.Slice(0, entry.Name.Length - 5))
+            If entry.Name.EndsWith(".toml") &&
+               names.Contains(entry.Name.Slice(0, entry.Name.Length - 5))
                 Continue
             End If
             found.Add((entry.Path, entry.Name, depth, False, disk / entry.Name))
@@ -485,7 +490,8 @@ Public Final Class AssetBrowser Extends Widget
         settings.Add(button)
     End Method
 
-    Method AddSlider(key: String, title: String, now: Float32, low: Float32, high: Float32, fallback: Float32)
+    Method AddSlider(key: String, title: String, now: Float32, low: Float32, high: Float32,
+                     fallback: Float32)
         Local row = Node("assets.{key}.row")
         row.SetArrangement(Arrangement.ROW)
         row.SetGap(8.0)
@@ -573,7 +579,8 @@ Final Class AssetRow Extends Widget
             image.SetSize(THUMB, THUMB)
             Add(image)
         End If
-        Local title = Label(folder ? (owner.IsOpen(path) ? "- " : "+ ") + name : name, "assets.name")
+        Local title = Label(folder ? (owner.IsOpen(path) ? "- " : "+ ") + name : name,
+                            "assets.name")
         title.SetTranslates(False)
         Add(title)
     End New
