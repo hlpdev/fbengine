@@ -10,6 +10,7 @@
 
 #include <exception>
 #include <format>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -79,6 +80,30 @@ const assets::load_t* loaded(uint64_t handle, assets::load_kind_t kind) {
     return load != nullptr && load->done && !load->error && load->kind == kind ? load : nullptr;
 }
 
+// Starts `load` on the workers, and gives its handle, or 0 for one that failed to be made.
+uint64_t on_the_workers(std::shared_ptr<assets::load_t> load) {
+    if (load == nullptr) {
+        return 0;
+    }
+    const uint64_t handle = assets::loads().add(load);
+    fbe::jobs_t& jobs = fbe::jobs();
+    assets::load_t& started = *load;
+    try {
+        started.job = jobs.run([&jobs, load = std::move(load), handle] mutable {
+            assets::run_load(*load, &jobs);
+            // A load freed meanwhile is done all the same, and its ticket goes to no one.
+            jobs.to_main([load = std::move(load), handle] {
+                load->done = true;
+                fbe::hand_to_fb(handle);
+            });
+        });
+    } catch (const std::exception&) {
+        assets::loads().remove(handle);
+        throw;
+    }
+    return handle;
+}
+
 } // namespace
 
 extern "C" {
@@ -96,28 +121,17 @@ FBE_API uint64_t fbe_assets_load(int32_t kind, const char* path, bool linear, bo
 }
 
 FBE_API uint64_t fbe_assets_load_async(int32_t kind, const char* path, bool linear, bool settings) {
+    return guarded<uint64_t>(
+        0, [&] -> uint64_t { return on_the_workers(made(kind, path, linear, settings)); });
+}
+
+FBE_API uint64_t fbe_assets_read_async(const char* path) {
     return guarded<uint64_t>(0, [&] -> uint64_t {
-        std::shared_ptr<assets::load_t> load = made(kind, path, linear, settings);
-        if (load == nullptr) {
-            return 0;
+        std::shared_ptr<assets::load_t> load = made(FBE_ASSETS_BYTES, path, false, false);
+        if (load != nullptr) {
+            load->options.most = std::numeric_limits<int32_t>::max();
         }
-        const uint64_t handle = assets::loads().add(load);
-        fbe::jobs_t& jobs = fbe::jobs();
-        assets::load_t& started = *load;
-        try {
-            started.job = jobs.run([&jobs, load = std::move(load), handle] mutable {
-                assets::run_load(*load, &jobs);
-                // A load freed meanwhile is done all the same, and its ticket goes to no one.
-                jobs.to_main([load = std::move(load), handle] {
-                    load->done = true;
-                    fbe::hand_to_fb(handle);
-                });
-            });
-        } catch (const std::exception&) {
-            assets::loads().remove(handle);
-            throw;
-        }
-        return handle;
+        return on_the_workers(std::move(load));
     });
 }
 

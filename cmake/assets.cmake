@@ -1,3 +1,29 @@
+# Builds `patched` in `target` in place of its source `relative` in `folder`, with that source's
+# options, as what's patched is only part of a project that's fetched.
+function(fbengine_replace_source target folder relative patched)
+  set(original "${folder}/${relative}")
+  get_target_property(sources ${target} SOURCES)
+  set(replaced "")
+  set(found FALSE)
+  foreach(source IN LISTS sources)
+    if(source STREQUAL "${original}" OR source STREQUAL "${relative}")
+      list(APPEND replaced "${patched}")
+      set(found TRUE)
+    else()
+      list(APPEND replaced "${source}")
+    endif()
+  endforeach()
+  if(NOT found)
+    message(FATAL_ERROR "${target} doesn't build ${relative}, which a patch replaces")
+  endif()
+  set_property(TARGET ${target} PROPERTY SOURCES "${replaced}")
+  get_source_file_property(options "${original}" DIRECTORY "${folder}" COMPILE_OPTIONS)
+  if(options)
+    set_source_files_properties("${patched}" TARGET_DIRECTORY ${target} PROPERTIES COMPILE_OPTIONS
+                                "${options}")
+  endif()
+endfunction()
+
 # The loaders' libraries, built into fbengine_native statically: stb_image for PNG and JPEG,
 # KTX-Software's libktx for KTX2 and its Basis Universal transcoder, and fastgltf for glTF. Each is
 # left out of the build until something links it: the DLL links libktx's reader, and the tests its
@@ -126,6 +152,32 @@ foreach(fbengine_patch RANGE 0 5 3)
 endforeach()
 target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_fastgltf_patched}")
 
+# Its URIs too, in a noexcept constructor, where a URI of a scheme and an authority with nothing
+# after it, as "x://y" or "x://", takes a substring from past its end, which ends the process, in
+# a game's Load too. Nothing after the authority is an empty path.
+file(READ "${fastgltf_SOURCE_DIR}/src/fastgltf.cpp" fbengine_text)
+# Not a list, as a '[' in one keeps what follows it from being its next item.
+function(fbengine_patch_text from to)
+  string(FIND "${fbengine_text}" "${from}" first)
+  string(FIND "${fbengine_text}" "${from}" last REVERSE)
+  if(first EQUAL -1 OR NOT first EQUAL last)
+    message(FATAL_ERROR "fastgltf.cpp doesn't have, once, what a patch expects: ${from}")
+  endif()
+  string(REPLACE "${from}" "${to}" patched "${fbengine_text}")
+  set(fbengine_text "${patched}" PARENT_SCOPE)
+endfunction()
+fbengine_patch_text("\t\tif (view[idx] == '[') {" "\t\tif (idx < view.size() && view[idx] == '[') {")
+fbengine_patch_text("\t\t\t++idx;\n\t\t\t_host = view.substr(idx, hostEnd - idx);"
+                    "\t\t\tif (idx < view.size()) ++idx;\n\t\t\t_host = view.substr(idx, hostEnd - idx);")
+fbengine_patch_text("\t\tidx = nextSlash; // Path includes this slash"
+                    "\t\tidx = nextSlash == std::string::npos ? view.size() : nextSlash; // Path includes this slash")
+file(WRITE "${fbengine_fastgltf_patched}/fastgltf.cpp.in" "${fbengine_text}")
+configure_file("${fbengine_fastgltf_patched}/fastgltf.cpp.in"
+               "${fbengine_fastgltf_patched}/fastgltf.cpp" COPYONLY)
+fbengine_replace_source(fastgltf "${fastgltf_SOURCE_DIR}" src/fastgltf.cpp
+                        "${fbengine_fastgltf_patched}/fastgltf.cpp")
+target_include_directories(fastgltf PRIVATE "${fastgltf_SOURCE_DIR}/src")
+
 # libktx's own zstd_errors.h is in a folder it includes as a system's, after what a Mac's compiler
 # may find of Homebrew's zstd, whose header no longer has ZSTD_getErrorCode. A copy comes first in
 # its targets, as a folder of its own, since CMake keeps a system's folder a system's.
@@ -137,9 +189,9 @@ target_include_directories(ktx_read BEFORE PRIVATE "${fbengine_ktx_first}")
 # basisu's job pool, in libktx's encoder, which each UASTC cook makes one of, sets its kill flag
 # without its mutex as it goes, so a worker between its wait's check and its wait misses the
 # notify, and the pool's join waits for it forever, as a loaded machine's cooks do. The patched
-# copy sets it under the mutex, and is built in libktx's writer in place of basisu_enc.cpp, with
-# that file's options, finding its headers beside the original; the patch's text has to be there,
-# once, or configuring fails.
+# copy sets it under the mutex, and is built in libktx's writer in place of basisu_enc.cpp,
+# finding its headers beside the original; the patch's text has to be there, once, or configuring
+# fails.
 set(fbengine_basisu_source "${ktx_SOURCE_DIR}/external/basisu/encoder/basisu_enc.cpp")
 file(READ "${fbengine_basisu_source}" fbengine_basisu)
 set(fbengine_basisu_from "\t\t// Notify all workers that they need to die right now.\n\t\tm_kill_flag = true;\n")
@@ -155,28 +207,8 @@ string(REPLACE "${fbengine_basisu_from}" "${fbengine_basisu_to}" fbengine_basisu
 set(fbengine_basisu_patched "${CMAKE_BINARY_DIR}/ktx-patched/basisu_enc.cpp")
 file(WRITE "${fbengine_basisu_patched}.in" "${fbengine_basisu}")
 configure_file("${fbengine_basisu_patched}.in" "${fbengine_basisu_patched}" COPYONLY)
-get_target_property(fbengine_ktx_sources ktx SOURCES)
-set(fbengine_ktx_patched_sources "")
-set(fbengine_basisu_found FALSE)
-foreach(fbengine_source IN LISTS fbengine_ktx_sources)
-  if(fbengine_source STREQUAL "${fbengine_basisu_source}" OR
-     fbengine_source STREQUAL "external/basisu/encoder/basisu_enc.cpp")
-    list(APPEND fbengine_ktx_patched_sources "${fbengine_basisu_patched}")
-    set(fbengine_basisu_found TRUE)
-  else()
-    list(APPEND fbengine_ktx_patched_sources "${fbengine_source}")
-  endif()
-endforeach()
-if(NOT fbengine_basisu_found)
-  message(FATAL_ERROR "libktx's writer doesn't build basisu_enc.cpp, which its patch replaces")
-endif()
-set_property(TARGET ktx PROPERTY SOURCES "${fbengine_ktx_patched_sources}")
-get_source_file_property(fbengine_basisu_options "${fbengine_basisu_source}" DIRECTORY
-                         "${ktx_SOURCE_DIR}" COMPILE_OPTIONS)
-if(fbengine_basisu_options)
-  set_source_files_properties("${fbengine_basisu_patched}" TARGET_DIRECTORY ktx PROPERTIES
-                              COMPILE_OPTIONS "${fbengine_basisu_options}")
-endif()
+fbengine_replace_source(ktx "${ktx_SOURCE_DIR}" external/basisu/encoder/basisu_enc.cpp
+                        "${fbengine_basisu_patched}")
 target_include_directories(ktx PRIVATE "${ktx_SOURCE_DIR}/external/basisu/encoder")
 
 # fbengine's DLLs are UCRT's (cmake/native.cmake), so libktx is built for UCRT too: its encoder's
