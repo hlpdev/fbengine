@@ -6,6 +6,7 @@
 #include "cook/cook.hpp"
 
 #include <algorithm>
+#include <basisu_enc.h>
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
@@ -188,4 +189,16 @@ TEST_CASE("an image bigger than the engine loads, or of a quality not 0 to 4, do
     REQUIRE(tools::cook_image(test::bytes("not an image"), { .format = FBE_COOK_BC7 })
                 .error()
                 .failure == tools::failure_t::INVALID_DATA);
+}
+
+TEST_CASE("basisu's job pools, which each UASTC cook makes, go without waiting forever",
+          "[tools]") {
+    // A worker between its wait's check and its wait missed a kill flag set without the pool's
+    // mutex, so the pool's join waited for it forever, as a loaded machine's cooks did.
+    for (int i = 0; i < 2000; ++i) {
+        basisu::job_pool pool(16);
+        pool.add_job([] {});
+        pool.wait_for_all();
+    }
+    SUCCEED();
 }

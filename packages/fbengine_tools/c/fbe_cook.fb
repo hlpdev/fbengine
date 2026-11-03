@@ -22,4 +22,8 @@ Public Extern "C" Lib "fbengine_tools_native"
     Function fbe_cook_image(from: CString, to: CString, options: Ptr<fbe_cook_image_t>): Bool
     Function fbe_cook_model(from: CString, to: CString, root: CString,
                             options: Ptr<fbe_cook_model_t>): Bool
+    Function fbe_cook_pak_open(to: CString): UInt64
+    Function fbe_cook_pak_add(pak: UInt64, name: CString, from: CString): Bool
+    Function fbe_cook_pak_finish(pak: UInt64): Bool
+    Function fbe_cook_pak_free(pak: UInt64)
 End Extern

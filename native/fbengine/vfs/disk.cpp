@@ -45,9 +45,10 @@ kind_t followed(const std::filesystem::path& path) {
     return std::filesystem::is_regular_file(status) ? kind_t::FILE : kind_t::NONE;
 }
 
-// The code points of UTF-8, with U+FFFD for each byte that doesn't start a well-formed one.
-std::u32string decoded(std::string_view text) {
-    std::u32string points;
+// Calls `visit` with each code point of UTF-8, with U+FFFD for each byte that doesn't start a
+// well-formed one.
+template <typename Visit>
+void each_point(std::string_view text, Visit visit) {
     std::size_t at = 0;
     while (at < text.size()) {
         const auto lead = static_cast<std::uint8_t>(text[at]);
@@ -77,71 +78,102 @@ std::u32string decoded(std::string_view text) {
             point = (point << 6U) | (next & 0x3FU);
         }
         good = good && point >= least && point <= 0x10'FFFF && (point < 0xD800 || point > 0xDFFF);
-        points.push_back(good ? point : replacement);
+        visit(good ? point : replacement);
         at += good ? length : 1;
     }
-    return points;
 }
 
-std::string encoded(std::u32string_view points) {
-    std::string text;
-    for (const char32_t point : points) {
-        if (point < 0x80) {
-            text += static_cast<char>(point);
-        } else if (point < 0x800) {
-            text += static_cast<char>(0xC0U | (point >> 6U));
-            text += static_cast<char>(0x80U | (point & 0x3FU));
-        } else if (point < 0x1'0000) {
-            text += static_cast<char>(0xE0U | (point >> 12U));
-            text += static_cast<char>(0x80U | ((point >> 6U) & 0x3FU));
-            text += static_cast<char>(0x80U | (point & 0x3FU));
-        } else {
-            text += static_cast<char>(0xF0U | (point >> 18U));
-            text += static_cast<char>(0x80U | ((point >> 12U) & 0x3FU));
-            text += static_cast<char>(0x80U | ((point >> 6U) & 0x3FU));
-            text += static_cast<char>(0x80U | (point & 0x3FU));
-        }
+void encode(std::string& text, char32_t point) {
+    if (point < 0x80) {
+        text += static_cast<char>(point);
+    } else if (point < 0x800) {
+        text += static_cast<char>(0xC0U | (point >> 6U));
+        text += static_cast<char>(0x80U | (point & 0x3FU));
+    } else if (point < 0x1'0000) {
+        text += static_cast<char>(0xE0U | (point >> 12U));
+        text += static_cast<char>(0x80U | ((point >> 6U) & 0x3FU));
+        text += static_cast<char>(0x80U | (point & 0x3FU));
+    } else {
+        text += static_cast<char>(0xF0U | (point >> 18U));
+        text += static_cast<char>(0x80U | ((point >> 12U) & 0x3FU));
+        text += static_cast<char>(0x80U | ((point >> 6U) & 0x3FU));
+        text += static_cast<char>(0x80U | (point & 0x3FU));
     }
-    return text;
 }
 
 } // namespace
 
 std::string well_formed(std::string_view bytes) {
-    return encoded(decoded(bytes));
+    std::string text;
+    text.reserve(well_formed_size(bytes));
+    each_point(bytes, [&](char32_t point) { encode(text, point); });
+    return text;
+}
+
+std::filesystem::path real_path(const std::filesystem::path& path) {
+#ifdef _WIN32
+    HANDLE file = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                              OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return path;
+    }
+    const DWORD needed = GetFinalPathNameByHandleW(file, nullptr, 0, VOLUME_NAME_DOS);
+    std::wstring found(needed, L'\0');
+    const DWORD written = GetFinalPathNameByHandleW(file, found.data(), needed, VOLUME_NAME_DOS);
+    CloseHandle(file);
+    if (needed == 0 || written == 0 || written >= needed) {
+        return path;
+    }
+    found.resize(written);
+    return found;
+#else
+    std::error_code error;
+    std::filesystem::path found = std::filesystem::canonical(path, error);
+    return error ? path : found;
+#endif
+}
+
+std::uint64_t well_formed_size(std::string_view bytes) {
+    std::uint64_t size = 0;
+    each_point(bytes, [&](char32_t point) {
+        size += 1U + (point >= 0x80 ? 1U : 0U) + (point >= 0x800 ? 1U : 0U) +
+                (point >= 0x1'0000 ? 1U : 0U);
+    });
+    return size;
 }
 
 #ifdef _WIN32
 
 std::filesystem::path disk_path(std::string_view utf8) {
     std::wstring wide;
-    for (const char32_t point : decoded(utf8)) {
+    each_point(utf8, [&](char32_t point) {
         if (point < 0x1'0000) {
             wide += static_cast<wchar_t>(point);
         } else {
             wide += static_cast<wchar_t>(0xD800U + ((point - 0x1'0000U) >> 10U));
             wide += static_cast<wchar_t>(0xDC00U + ((point - 0x1'0000U) & 0x3FFU));
         }
-    }
+    });
     return { wide };
 }
 
 std::string utf8(const std::filesystem::path& path) {
     const std::wstring& wide = path.native();
-    std::u32string points;
+    std::string text;
     for (std::size_t i = 0; i < wide.size(); ++i) {
         const auto unit = static_cast<char32_t>(wide[i]);
         if (unit >= 0xD800 && unit <= 0xDBFF && i + 1 < wide.size() &&
             static_cast<char32_t>(wide[i + 1]) >= 0xDC00 &&
             static_cast<char32_t>(wide[i + 1]) <= 0xDFFF) {
-            points.push_back(0x1'0000U + ((unit - 0xD800U) << 10U) +
+            encode(text, 0x1'0000U + ((unit - 0xD800U) << 10U) +
                              (static_cast<char32_t>(wide[i + 1]) - 0xDC00U));
             ++i;
         } else {
-            points.push_back(unit >= 0xD800 && unit <= 0xDFFF ? replacement : unit);
+            encode(text, unit >= 0xD800 && unit <= 0xDFFF ? replacement : unit);
         }
     }
-    return encoded(points);
+    return text;
 }
 
 std::optional<folder_time_t> folder_time(const std::filesystem::path& path) {

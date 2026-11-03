@@ -2,10 +2,12 @@
 // let go once what it made has what it needs.
 
 Import std.collections
+Import std.compress
 Import std.core
 Import std.image.image
 Import std.image.png
 Import std.io
+Import std.os
 Import std.test
 Import std.text
 Import std.time
@@ -191,4 +193,83 @@ Function ALoadThatIsntMadeSaysHow() Throws IOError
     Expect(fbe_assets_load_failure() == FBE_ASSETS_OTHER)
     Expect(ExpectThrows<IOError>(Assets.Load<Picture>("not a path"))?.Kind ==
            IOErrorKind.INVALID_PATH)
+End Function
+
+@Test
+Function AReleasesPakIsBesideTheExecutableOrInItsBundle() Throws IOError
+    Local name = "fbengine-test-release"
+    Local folder = Path(Folders.Executable ?? "").Parent()
+    Local writer = ZipWriter()
+    Local beside = folder / "{name}.pak"
+    Local resources = folder.Parent() / "Resources"
+    Expect(ExpectThrows<IOError>(Assets.MountRelease(name))?.Kind == IOErrorKind.NOT_FOUND)
+    // Where it was built, last.
+    Local built = Try TempDir()
+    Defer Try? built.Close()
+    writer.Add("built.txt", "built".Bytes, ZipMethod.STORE)
+    Try File.WriteBytes(built.Path / "game.pak", writer.Finish())
+    Try Assets.MountRelease(name, (built.Path / "game.pak").Text)
+    Expect((Try Assets.ReadText("res://built.txt")) == "built")
+    Expect(Assets.Unmount("res://"))
+    // A macOS bundle's Resources, the folder beside the executable's.
+    Local made = !Dir.Exists(resources)
+    Try Dir.CreateAll(resources)
+    Defer If made Then Try? Dir.RemoveAll(resources)
+    writer.Add("bundle.txt", "bundle".Bytes, ZipMethod.STORE)
+    Try File.WriteBytes(resources / "{name}.pak", writer.Finish())
+    Defer Try? File.Delete(resources / "{name}.pak")
+    Try Assets.MountRelease(name, (built.Path / "game.pak").Text)
+    // Only a Mac has them; elsewhere that's the built one still.
+    If System.Platform == Platform.MACOS
+        Expect((Try Assets.ReadText("res://bundle.txt")) == "bundle")
+    Else
+        Expect((Try Assets.ReadText("res://built.txt")) == "built")
+    End If
+    Expect(Assets.Unmount("res://"))
+    // Beside it comes first.
+    writer.Add("beside.txt", "beside".Bytes, ZipMethod.STORE)
+    Try File.WriteBytes(beside, writer.Finish())
+    Defer Try? File.Delete(beside)
+    Try Assets.MountRelease(name)
+    Expect((Try Assets.ReadText("res://beside.txt")) == "beside")
+    Expect(!Assets.Exists("res://bundle.txt"))
+    Expect(Assets.Unmount("res://"))
+End Function
+
+@Test
+Function AUriOfASchemeAndNothingElseDoesntEndALoad() Throws IOError
+    Local gltf = String.FromUtf8(Triangle()) ?? ""
+    Local at = gltf.Find("data:") ?? 0
+    Local end = gltf.Find("\"", at) ?? 0
+    Local data = gltf.Slice(at, end)
+    For uri In ["x://y", "x://", "x://a@", "res://nothing"]
+        Local buffer = gltf.Replace(data, uri)
+        Local image = gltf.Replace("\"meshes\"", "\"images\":[{{\"uri\":\"{uri}\"}}],\"meshes\"")
+        Assets.MountFiles("res://test-uris",
+                          {"buffer.gltf": buffer.Bytes, "image.gltf": image.Bytes})
+        For name In ["buffer.gltf", "image.gltf"]
+            // It's refused, or loads: what it can't do is end the program.
+            Local path = "res://test-uris/{name}"
+            Try? Assets.Load<Model>(path)
+            Try? Assets.LoadAsync<Model>(path).Wait()
+        End For
+        Expect(Assets.Unmount("res://test-uris"))
+    End For
+End Function
+
+@Test
+Function APakBesideThatsOlderThanTheBuiltOneIsStale() Throws IOError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local beside = folder.Path / "beside.pak"
+    Local built = folder.Path / "built.pak"
+    Try File.WriteText(beside, "old")
+    // More than a clock's step later.
+    Sleep(2100.Milliseconds)
+    Try File.WriteText(built, "new")
+    Expect(Assets.StalePak(beside, built))
+    Expect(!Assets.StalePak(built, beside))
+    Expect(!Assets.StalePak(beside, beside))
+    Expect(!Assets.StalePak(beside, Path("")))
+    Expect(!Assets.StalePak(folder.Path / "none.pak", built))
 End Function
