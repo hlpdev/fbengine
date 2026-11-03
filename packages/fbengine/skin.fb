@@ -37,8 +37,8 @@ Public Final Class Skin
 
     /// A Skin of the skin at `index`, from 0, of the glTF a model load decoded, its joints named as
     /// their nodes, with their inverse binds. A load that isn't a model's, or an index outside 0 to
-    /// its model's Skins - 1, panics. What's wrong in the file, a joint whose node has no name, or the
-    /// name of one before it, throws an IOError of INVALID_DATA.
+    /// its model's Skins - 1, panics. What's wrong in the file, a joint that's the
+    /// node of one before it, throws an IOError of INVALID_DATA.
     @MainThread @PanicsAtCaller
     Public Static Method FromModel(load: AssetLoad, index: Int): Skin Throws IOError
         Local handle = fbe_skin_from_model(load.Handle, index)

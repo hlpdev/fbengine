@@ -1,0 +1,271 @@
+// Textures as Assets: PNGs and JPEGs read through res://, kept by the cache, drawn, and reloaded in
+// place, on the GPU ctest's tests use; a machine with no Vulkan sets FBENGINE_NO_GPU to 1 and skips
+// them.
+
+Import std.core
+Import std.image.image
+Import std.image.jpeg
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.time
+Import fbengine
+Import "./watching"
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+Function Filled(side: Int, color: Color32): UInt8[]
+    Local image = Image(side, side)
+    image.Fill(color)
+    Return Png.Encode(image)
+End Function
+
+// Flips until `done` says so, or 30 seconds have gone.
+Function FlipUntil(done: Func(): Bool)
+    Local since = Instant.Now()
+    While !done() && (Instant.Now() - since) < 30.Seconds
+        Flip()
+        Sleep(5.Milliseconds)
+    End While
+End Function
+
+@Test
+Function APngIsATextureOfItsPixels() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://png", {"hero.png": Filled(4, Color32(255, 0, 0, 255))})
+    Defer Assets.Unmount("res://png")
+    Local texture = Try Assets.Load<Texture>("res://png/hero.png")
+    Defer texture.Free()
+    Expect(texture.Width() == 4)
+    Expect(texture.Height() == 4)
+    Expect(texture.Format() == TextureFormat.RGBA8)
+    Expect(texture.VulkanFormat() == 43)
+    // Its mipmaps are made of its one level, as its settings' default says.
+    Expect(texture.Levels() == 3)
+    Expect(texture.ToImage()[3, 3] == Color32(255, 0, 0, 255))
+    Expect(texture.ReadPixels(2)[0] == 255)
+    // It draws, sampled, as any texture does.
+    Local target = Try Texture.Target(4, 4)
+    Defer target.Free()
+    Canvas(target).Draw(Sprite2D(texture), 0, 0)
+    Expect(target.ToImage()[1, 1] == Color32(255, 0, 0, 255))
+End Function
+
+@Test
+Function AJpegIsATexture() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local image = Image(8, 8)
+    image.Fill(Color32(255, 255, 255, 255))
+    Assets.MountFiles("res://jpeg", {"hud.jpg": Jpeg.Encode(image)})
+    Defer Assets.Unmount("res://jpeg")
+    Local texture = Try Assets.Load<Texture>("res://jpeg/hud.jpg")
+    Defer texture.Free()
+    Expect(texture.Width() == 8)
+    Expect(texture.Format() == TextureFormat.RGBA8)
+    Expect(texture.ToImage()[4, 4].r >= 250)
+End Function
+
+@Test
+Function ASidecarSaysWhatATextureIs() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://sidecar", {
+        "normal.png": Filled(4, Color32(128, 128, 255, 255)),
+        "normal.png.toml": "srgb = false\nmipmaps = false".Bytes,
+    })
+    Defer Assets.Unmount("res://sidecar")
+    Local texture = Try Assets.Load<Texture>("res://sidecar/normal.png")
+    Defer texture.Free()
+    Expect(texture.Format() == TextureFormat.RGBA8_LINEAR)
+    Expect(texture.VulkanFormat() == 37)
+    Expect(texture.Levels() == 1)
+End Function
+
+@Test
+Function APngsAlphaIsSeen() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local clear = Image(2, 2)
+    clear.Fill(Color32(255, 0, 0, 255))
+    clear[1, 1] = Color32(255, 0, 0, 128)
+    Assets.MountFiles("res://alpha", {
+        "clear.png": Png.Encode(clear),
+        "whole.png": Filled(2, Color32(255, 0, 0, 255)),
+    })
+    Defer Assets.Unmount("res://alpha")
+    Local see = Try Assets.Load<Texture>("res://alpha/clear.png")
+    Defer see.Free()
+    Expect(see.Alpha())
+    Local solid = Try Assets.Load<Texture>("res://alpha/whole.png")
+    Defer solid.Free()
+    Expect(!solid.Alpha())
+End Function
+
+@Test
+Function ASidecarClampsATexture() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://clamp", {
+        "across.png": Filled(4, Color32(255, 0, 0, 255)),
+        "across.png.toml": "clamp_across = true".Bytes,
+    })
+    Defer Assets.Unmount("res://clamp")
+    Local texture = Try Assets.Load<Texture>("res://clamp/across.png")
+    Defer texture.Free()
+    Expect(texture.WrapAcross() == TextureWrap.CLAMP)
+    Expect(texture.WrapDown() == TextureWrap.REPEAT)
+End Function
+
+@Test
+Function TheCacheHasOneTextureOfAFile() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://held", {"a.png": Filled(2, Color32(0, 255, 0, 255))})
+    Defer Assets.Unmount("res://held")
+    Local before = Texture.Count()
+    Local first = Try Assets.Load<Texture>("res://held/a.png")
+    Local second = Try Assets.Load<Texture>("res://HELD\\A.png")
+    Expect(RefEquals(first, second))
+    Expect(Texture.Count() == before + 1)
+    // Each load's hold is let go of by a Free, and the last frees it.
+    first.Free()
+    Expect(!second.Freed())
+    Expect(second.Width() == 2)
+    second.Free()
+    Expect(second.Freed())
+    Expect(Texture.Count() == before)
+    // So the next load makes another.
+    Local third = Try Assets.Load<Texture>("res://held/a.png")
+    Expect(!RefEquals(first, third))
+    third.Free()
+End Function
+
+@Test
+Function AnImageNoLoadGaveIsFreedAtOnce() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local texture = Try Texture(2, 2)
+    texture.Free()
+    Expect(texture.Freed())
+End Function
+
+@Test
+Function ATextureLoadsOnTheWorkers() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://async", {"a.png": Filled(4, Color32(0, 0, 255, 255))})
+    Defer Assets.Unmount("res://async")
+    Local progress = LoadProgress()
+    Local task = Assets.LoadAsync<Texture>("res://async/a.png", progress)
+    Expect(progress.Count() == 1)
+    Local texture = Try task.Wait()
+    Defer texture.Free()
+    Expect(progress.Done())
+    Expect(texture.ToImage()[0, 0] == Color32(0, 0, 255, 255))
+End Function
+
+@Test
+Function WhatIsntAnImageThrows()
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://bad", {"a.png": "not an image".Bytes})
+    Defer Assets.Unmount("res://bad")
+    Local thrown = ExpectThrows<IOError>(Assets.Load<Texture>("res://bad/a.png"))
+    Expect(thrown?.Kind == IOErrorKind.INVALID_DATA)
+    Expect(ExpectThrows<IOError>(Assets.Load<Texture>("res://bad/none.png"))?.Kind ==
+           IOErrorKind.NOT_FOUND)
+End Function
+
+@Test
+Function AStoppedGpusTextureIsLoadedAgain() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://stop", {"a.png": Filled(2, Color32(9, 9, 9, 255))})
+    Defer Assets.Unmount("res://stop")
+    Local first = Try Assets.Load<Texture>("res://stop/a.png")
+    Gpu.Stop()
+    Expect(first.Freed())
+    Expect((Try Assets.Find<Texture>("res://stop/a.png")) == Null)
+    Local second = Try Assets.Load<Texture>("res://stop/a.png")
+    Defer second.Free()
+    Expect(!RefEquals(first, second))
+    Expect(!second.Freed())
+    Expect(second.Width() == 2)
+End Function
+
+@Test
+Function AChangedFileReloadsItsTextureInPlace() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "hero.png", Filled(2, Color32(255, 0, 0, 255)))
+    Assets.MountFolder("res://hot", folder.Path)
+    Defer Assets.Unmount("res://hot")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Local texture = Try Assets.Load<Texture>("res://hot/hero.png")
+    Defer texture.Free()
+    texture.SetFilter(TextureFilter.NEAREST)
+    texture.SetWrap(TextureWrap.CLAMP, TextureWrap.MIRROR)
+    // A material or a sprite holds it from before, and has the new one.
+    Local sprite = Sprite2D(texture)
+    Local target = Try Texture.Target(4, 4)
+    Defer target.Free()
+    Local count = Texture.Count()
+    Local pixels = texture.LockPixels()
+    pixels.Unlock()
+    Try WatcherStarted(folder.Path, "res://hot")
+    Try File.WriteBytesAtomic(folder.Path / "hero.png", Filled(4, Color32(0, 255, 0, 255)))
+    FlipUntil(Function(): Bool => texture.Width() == 4)
+    Expect(texture.Width() == 4)
+    Expect(texture.Levels() == 3)
+    Expect(texture.Filter() == TextureFilter.NEAREST)
+    Expect(texture.WrapAcross() == TextureWrap.CLAMP)
+    Expect(texture.WrapDown() == TextureWrap.MIRROR)
+    Expect(Texture.Count() == count)
+    Expect(texture.ToImage()[3, 3] == Color32(0, 255, 0, 255))
+    // Its CPU copy is the new one's, not the one from before.
+    Expect(texture.ReadPixel(3, 3) == Color32(0, 255, 0, 255))
+    Canvas(target).Draw(sprite, 0, 0)
+    Expect(target.ToImage()[3, 3] == Color32(0, 255, 0, 255))
+    // What doesn't load leaves it as it was.
+    Try File.WriteBytesAtomic(folder.Path / "hero.png", "not an image".Bytes)
+    Local failed = False
+    FlipUntil(Function(): Bool
+        For reload In Assets.Reloaded()
+            If reload.Error != Null Then failed = True
+        End For
+        Return failed
+    End Function)
+    Expect(failed)
+    Expect(texture.ToImage()[3, 3] == Color32(0, 255, 0, 255))
+End Function
+
+@Test
+Function ReloadsLeaveNoSlotBehind() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.png", Filled(2, Color32(1, 0, 0, 255)))
+    Assets.MountFolder("res://again", folder.Path)
+    Defer Assets.Unmount("res://again")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Local texture = Try Assets.Load<Texture>("res://again/a.png")
+    Defer texture.Free()
+    Local count = Texture.Count()
+    For side = 3 To 6
+        Try File.WriteBytesAtomic(folder.Path / "a.png",
+                                  Filled(side, Color32(side As UInt8, 0, 0, 255)))
+        FlipUntil(Function(): Bool => texture.Width() == side)
+        Expect(texture.Width() == side)
+        Expect(texture.ToImage()[0, 0].r == side)
+        Expect(Texture.Count() == count)
+    End For
+End Function

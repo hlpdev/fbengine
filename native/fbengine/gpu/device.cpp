@@ -53,6 +53,8 @@ std::string why_failed;
 std::uint32_t leftovers = 0;
 /// The failure a test made happen next.
 fbe::gpu::fault_t injected = fbe::gpu::fault_t::NONE;
+/// How many times the GPU's been stopped.
+std::uint64_t stops = 0;
 
 bool validating = false;
 std::int32_t validation_errors = 0;
@@ -464,13 +466,15 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         .timelineSemaphore = VK_TRUE,
         .bufferDeviceAddress = VK_TRUE,
     };
-    // Anisotropic filtering and wireframes, where the device has them.
+    // Anisotropic filtering, wireframes, and files' compressed textures, where the device has them.
     const VkPhysicalDeviceFeatures2 features{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         .pNext = &vulkan12,
         .features = {
             .fillModeNonSolid = supported.fillModeNonSolid,
             .samplerAnisotropy = supported.samplerAnisotropy,
+            .textureCompressionASTC_LDR = supported.textureCompressionASTC_LDR,
+            .textureCompressionBC = supported.textureCompressionBC,
         },
     };
     const float priority = 1.0F;
@@ -692,6 +696,7 @@ std::vector<void (*)()>& stoppers() {
 
 void stop() {
     if (started) {
+        ++stops;
         vkDeviceWaitIdle(current.device);
         stop_graph();
         for (void (*free)() : stoppers()) {
@@ -829,6 +834,10 @@ FBE_API bool fbe_gpu_start(void) {
 
 FBE_API bool fbe_gpu_started(void) {
     return started;
+}
+
+FBE_API uint64_t fbe_gpu_stops(void) {
+    return stops;
 }
 
 FBE_API void fbe_gpu_stop(void) {

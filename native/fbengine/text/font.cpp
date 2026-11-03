@@ -365,6 +365,20 @@ FBE_API uint64_t fbe_text_resize_font(uint64_t font, float size, int32_t style) 
     return fbe::text::add_font(std::move(resized));
 }
 
+FBE_API bool fbe_text_replace_font(uint64_t font, uint64_t made) {
+    font_t* held = fbe::text::found(font);
+    const font_t* with = fbe::text::found(made);
+    if (held == nullptr || with == nullptr || font == made) {
+        return font != made ? false : fbe::fail("a font isn't replaced by itself");
+    }
+    held->face = with->face;
+    held->size = with->size;
+    held->style = with->style;
+    held->bolder = with->bolder;
+    held->slanted = with->slanted;
+    return fbe_text_free_font(made);
+}
+
 FBE_API bool fbe_text_free_font(uint64_t font) {
     if (fbe::text::found(font) == nullptr) {
         return false;

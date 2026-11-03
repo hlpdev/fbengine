@@ -6,6 +6,7 @@
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "jobs/jobs.hpp"
+#include "texture/texture.hpp"
 #include "vfs/vfs.hpp"
 
 #include <exception>
@@ -70,6 +71,7 @@ std::shared_ptr<assets::load_t> made(int32_t kind, const char* path, bool linear
     load->path = std::move(*parsed);
     load->options.linear = linear;
     load->options.settings = settings;
+    load->options.transcode = fbe::texture::device_transcode();
     load->files = fbe::vfs::files().view();
     return load;
 }

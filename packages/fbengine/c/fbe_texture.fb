@@ -5,6 +5,7 @@ Public Const FBE_TEXTURE_RGBA8: Int32 = 0
 Public Const FBE_TEXTURE_RGBA8_LINEAR: Int32 = 1
 Public Const FBE_TEXTURE_R8: Int32 = 2
 Public Const FBE_TEXTURE_RGBA16F: Int32 = 3
+Public Const FBE_TEXTURE_FROM_FILE: Int32 = 4
 Public Const FBE_TEXTURE_NEAREST: Int32 = 0
 Public Const FBE_TEXTURE_LINEAR: Int32 = 1
 Public Const FBE_TEXTURE_REPEAT: Int32 = 0
@@ -45,4 +46,10 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_texture_wrap_u(texture: UInt64): Int32
     Function fbe_texture_wrap_v(texture: UInt64): Int32
     Function fbe_texture_count(): Int32
+    Function fbe_texture_start_loads(): Bool
+    Function fbe_texture_from_load(load: UInt64, srgb: Bool, mipmaps: Bool): UInt64
+    Function fbe_texture_reload(texture: UInt64, load: UInt64, srgb: Bool, mipmaps: Bool): Bool
+    Function fbe_texture_from_model(load: UInt64, index: Int32, mipmaps: Bool): UInt64
+    Function fbe_texture_load_invalid(): Bool
+    Function fbe_texture_vulkan_format(texture: UInt64): UInt32
 End Extern
