@@ -78,6 +78,9 @@ End Class
 Interface AnyCache
     // Loads `key`'s asset again, if it has one, as a changed file's is.
     Async Method Reload(key: String)
+
+    // Lets go of what it has under `place`, so the next load of it loads it again.
+    Method Forget(place: String)
 End Interface
 
 // The cache of one type's assets, by normalized path, one a type, as a generic Class's Static Field
@@ -161,6 +164,16 @@ Final Class TypedCache<T> Implements AnyCache
         End If
     End Method
 
+    // What it has under `place`, a normalized path, is let go of; holds of it go on being good.
+    Method Forget(place: String)
+        Local under = place.EndsWith("/") ? place : place + "/"
+        Entries.RemoveWhere(Function(key: String, cached: Cached<T>): Bool
+            Local going = key == place || key.StartsWith(under)
+            If going Then cached.Released = True
+            Return going
+        End Function)
+    End Method
+
     // Takes out what's gone: made, and its asset let go, from here and the index.
     Method Prune()
         Entries.RemoveWhere(Function(key: String, cached: Cached<T>): Bool
@@ -242,7 +255,7 @@ Public Final Class Assets
     // and, for a folder's, its folder on the disk; what hot reload watches, while it does; and
     // what it reloaded that the game hasn't been told of.
     Static Field caches: AnyCache[] = []
-    Static Field mounts: (String, Path?)[] = []
+    Static Field mounts: (String, Path?, UInt64)[] = []
     Static Field watch: FolderWatch? = Null
     Static Field fromSource: Bool = False
     Static Field reloads: AssetReload[] = []
@@ -256,15 +269,16 @@ Public Final Class Assets
     /// asked, so it sees what changes in it, and is empty while it isn't there. A name is found in
     /// any case: of the names in the folder that differ from it only in case, the first by its
     /// bytes, as a pak of the folder would have it. What's hidden, its name starting with '.', as
-    /// .git and .DS_Store are, isn't there, since a cooked pak hasn't it either. Panics when `at`
-    /// isn't a res:// path.
+    /// .git and .DS_Store are, isn't there, since a cooked pak hasn't it either. It gives a number
+    /// for Unmount to take this mount out by. Panics when `at` isn't a res:// path.
     @MainThread @PanicsAtCaller
-    Public Static Method MountFolder(at: String, folder: Path)
+    Public Static Method MountFolder(at: String, folder: Path): UInt64
         If !fbe_vfs_mount_folder(at, folder.Text) Then Panic(LastError())
         Local place = Mounted(at, folder)
         Local watching = watch
         If watching != Null Then Try? WatchTree(watching, folder, place, folder.Text, 0,
                                                 Set<String>(), False)
+        Return fbe_vfs_last_mount()
     End Method
 
     /// Mounts the pak file at `file` at `at`, over what's mounted, reading its index now. A pak is
@@ -395,6 +409,36 @@ Public Final Class Assets
         End If
         If fbe_vfs_failure() == FBE_VFS_INVALID_PATH Then Panic(LastError())
         Return False
+    End Method
+
+    /// Takes out the mount MountFolder gave the number of, whatever's been mounted over it, and gives
+    /// whether it was there still.
+    @MainThread
+    Public Static Method Unmount(mount: UInt64): Bool
+        If !fbe_vfs_unmount_id(mount) Then Return False
+        For i = mounts.Count - 1 To 0 Step -1
+            If mounts[i].2 == mount
+                Local place = mounts[i].0
+                Local folder = mounts[i].1
+                mounts.RemoveAt(i)
+                Local watching = watch
+                If watching != Null && folder != Null Then Unplace(watching, place, folder.Text)
+                Break
+            End If
+        End For
+        Return True
+    End Method
+
+    /// Lets go of what the cache has loaded from under `at`, so the next Load of it reads its file
+    /// again, as what's mounted there has changed. What's held of it goes on being good, until it's
+    /// let go. Panics when `at` isn't a res:// path.
+    @MainThread @PanicsAtCaller
+    Public Static Method ForgetLoaded(at: String)
+        Local place = Try? Normalize(at)
+        If place == Null Then Panic(LastError())
+        For cache In caches
+            cache.Forget(place)
+        End For
     End Method
 
     /// Watches the folders mounted with MountFolder, and those mounted after, for what changes in
@@ -723,7 +767,7 @@ Public Final Class Assets
     @MainThread
     Static Method Mounted(at: String, folder: Path?): String
         Local place = (Try? Normalize(at)) ?? at
-        mounts.Add((place, folder))
+        mounts.Add((place, folder, fbe_vfs_last_mount()))
         Return place
     End Method
 

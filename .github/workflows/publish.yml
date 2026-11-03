@@ -94,15 +94,16 @@ jobs:
               test -d "packages/$package/native/$target"
             done
           done
-          # fbengine first, since the others depend on it. A package's first version is published
-          # from the user's `fb login`, as trusted publishing only publishes packages already on
-          # the registry that trust this workflow.
+          # fbengine first, since the others depend on it, and fbengine_editor last, as it depends on
+          # them. A package's first version is published from the user's `fb login`, as trusted
+          # publishing only publishes packages already on the registry that trust this workflow.
           fb publish packages/fbengine --registry "$INDEX"
           for package in packages/*/; do
-            if [ "$package" != packages/fbengine/ ]; then
+            if [ "$package" != packages/fbengine/ ] && [ "$package" != packages/fbengine_editor/ ]; then
               fb publish "$package" --registry "$INDEX"
             fi
           done
+          fb publish packages/fbengine_editor --registry "$INDEX"
 
   check:
     name: check ${{ matrix.target }}

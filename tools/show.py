@@ -23,7 +23,8 @@ WATCHED = ["arcade", "menu", "controls", "room", "cooked_game",
            "proof/cameras_and_viewports", "proof/camera_into_a_texture", "proof/bump",
            "proof/render_settings", "proof/gamma", "proof/textures_by_their_settings",
            "proof/streamed_and_positional_sound",
-           "proof/skinned_animation_with_bones_under_game_control"]
+           "proof/skinned_animation_with_bones_under_game_control", "falling_boxes",
+           "proof/two_videos_at_startup", "proof/stack_and_joints"]
 
 
 def stop(process):

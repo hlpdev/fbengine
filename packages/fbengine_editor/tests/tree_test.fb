@@ -1,0 +1,1545 @@
+// The tree: a scene's entities, renamed, moved by dragging, copied, hidden, taken out, and found by
+// name, each through undo, driven by Simulate's mouse and keys, offscreen.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine_editor
+Import fbengine_ui
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+Function Started(settings: TempDir, games: TempDir): Editor Throws IOError, GraphicsError
+    Window.SetHeadless(True)
+    Local folder = games.Path / "game"
+    Try Dir.CreateAll(folder)
+    Try File.WriteText(folder / "project.toml", "[project]\nname = \"game\"\n")
+    Local editor = Try Editor(settings.Path)
+    Try editor.Start(folder)
+    editor.Step()
+    editor.Step()
+    Return editor
+End Function
+
+// A scene of `a`, `b` under `a`, `c` under `b`, `d`, and `e`, nothing selected.
+Function Named(editor: Editor): Map<String, Entity>
+    Local all: Map<String, Entity> = {}
+    For each In [("a", ""), ("b", "a"), ("c", "b"), ("d", ""), ("e", "")]
+        Local name, under = each
+        Local parent = all.Get(under)
+        Local made = Mesh(Geometry.Cube(), parent)
+        made.SetName(name)
+        made.SetPosition(Vec3(0.5, 0.25, 0.125))
+        all[name] = made
+    End For
+    editor.Tree.MarkChanged()
+    editor.Step()
+    editor.Step()
+    Return all
+End Function
+
+Function Names(editor: Editor): String
+    Local names = ""
+    For entity In editor.Tree.ShownEntities()
+        names += entity.Name() + " "
+    End For
+    Return names
+End Function
+
+Function Row(editor: Editor, entity: Entity): Rect
+    Local row = editor.Tree.RowOf(entity)
+    If row == Null Then Panic("{entity.Name()} has no row")
+    Return row.Box()
+End Function
+
+// Where the name on `entity`'s row is, away from what opens it.
+Function OnName(editor: Editor, entity: Entity): Vec2
+    Local box = Row(editor, entity)
+    Return Vec2(box.X + box.Width - 12, box.Center.y)
+End Function
+
+Function ClickAt(editor: Editor, at: Vec2, button: MouseButton = MouseButton.LEFT,
+                 clicks: Int32 = 1) Throws GraphicsError
+    Try Simulate.MoveMouse(at.x, at.y)
+    editor.Step()
+    Try Simulate.Click(button, clicks)
+    editor.Step()
+    editor.Step()
+End Function
+
+Function Primary(key: Key) Throws GraphicsError
+    Local held = System.Platform == Platform.MACOS ? Key.LEFT_SUPER : Key.LEFT_CONTROL
+    Try Simulate.KeyDown(held)
+    Try Simulate.PressKey(key)
+    Try Simulate.KeyUp(held)
+End Function
+
+// Presses, moves to `to`, and stays held; `Letting` lets go.
+Function Dragging(editor: Editor, from: Vec2, to: Vec2) Throws GraphicsError
+    Try Simulate.MoveMouse(from.x, from.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MouseMotion(to.x - from.x, to.y - from.y)
+    editor.Step()
+End Function
+
+Function Letting(editor: Editor) Throws GraphicsError
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    editor.Step()
+End Function
+
+@Test
+Function ItShowsTheScenesEntitiesInOrderOpenOrClosed() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Expect(editor.Tree.ShownEntities().Count == 0, "the editor's own show: {Names(editor)}")
+    Local all = Named(editor)
+    Expect(Names(editor) == "a b c d e ", "it shows {Names(editor)}")
+    // Each under what it's in.
+    Expect(Row(editor, all["b"]).Y > Row(editor, all["a"]).Y)
+    // A click on what opens it closes it, leaving what's selected.
+    Local a = Row(editor, all["a"])
+    Local row = editor.Tree.RowOf(all["a"])
+    If row == Null Then Return
+    Try ClickAt(editor, Vec2(row.ContentBox().X + 3, a.Center.y))
+    Expect(Names(editor) == "a d e ", "it shows {Names(editor)}")
+    Expect(editor.Edited.Selected().Count == 0)
+    Expect(!editor.Tree.IsOpen(all["a"]))
+    // Selecting what's in it, from elsewhere, opens it.
+    editor.Edited.SelectOnly(all["c"])
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c d e ", "it shows {Names(editor)}")
+    // By the arrows too: closes, opens, and moves what's selected.
+    editor.Tree.SetOpen(all["b"], True)
+    editor.Shown.Focus(editor.Tree)
+    Try Simulate.PressKey(Key.UP)
+    editor.Step()
+    Expect(editor.Edited.IsSelected(all["b"]))
+    Try Simulate.PressKey(Key.LEFT)
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b d e ", "it shows {Names(editor)}")
+    Try Simulate.PressKey(Key.RIGHT)
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c d e ", "it shows {Names(editor)}")
+    Try Simulate.PressKey(Key.DOWN)
+    editor.Step()
+    Expect(editor.Edited.IsSelected(all["c"]))
+    editor.Finish()
+End Function
+
+@Test
+Function AClickSelectsItsRow() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Try ClickAt(editor, OnName(editor, all["d"]))
+    Expect(editor.Edited.Selected().Count == 1 && editor.Edited.IsSelected(all["d"]))
+    Local row = editor.Tree.RowOf(all["d"]) As? Widget
+    Expect(row != Null && row.StyleName() == "tree.row.selected", "it's not marked")
+    // With Shift, too, and again, not.
+    Try Simulate.KeyDown(Key.LEFT_SHIFT)
+    Try ClickAt(editor, OnName(editor, all["a"]))
+    Expect(editor.Edited.Selected().Count == 2)
+    Try ClickAt(editor, OnName(editor, all["a"]))
+    Expect(editor.Edited.Selected().Count == 1 && !editor.Edited.IsSelected(all["a"]))
+    Try ClickAt(editor, OnName(editor, all["a"]))
+    Try Simulate.KeyUp(Key.LEFT_SHIFT)
+    editor.Step()
+    Expect(editor.Edited.Selected().Count == 2)
+    // Pressed, what's selected stays, to drag it; let go, only that one is.
+    Local on = OnName(editor, all["d"])
+    Try Simulate.MoveMouse(on.x, on.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Expect(editor.Edited.Selected().Count == 2)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    Expect(editor.Edited.Selected().Count == 1 && editor.Edited.IsSelected(all["d"]))
+    // On no row, nothing.
+    Local box = editor.Tree.Box()
+    Try ClickAt(editor, Vec2(box.Center.x, box.Y + box.Height - 4))
+    Expect(editor.Edited.Selected().Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function ARowRenamesInPlaceThroughUndo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local d = all["d"]
+    editor.Edited.SelectOnly(d)
+    editor.Step()
+    Try Simulate.PressKey(Key.F2)
+    editor.Step()
+    Local field = editor.Tree.RenameField()
+    If field == Null
+        Fail("F2 gave no field")
+        Return
+    End If
+    Expect(field.Text() == "d" && RefEquals(editor.Shown.Focused(), field))
+    field.SetText("door")
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+    editor.Step()
+    Expect(d.Name() == "door" && !editor.Tree.Renaming(), "it's {d.Name()}")
+    Expect(Names(editor) == "a b c door e ", "it shows {Names(editor)}")
+    Expect(editor.Edits.UndoName() == "Rename")
+    editor.Edits.Undo()
+    editor.Step()
+    editor.Step()
+    Expect(d.Name() == "d" && Names(editor) == "a b c d e ", "it shows {Names(editor)}")
+    editor.Edits.Redo()
+    Expect(d.Name() == "door")
+    editor.Edits.Undo()
+    // Escape leaves it as it was, keeping nothing to undo of it.
+    editor.Edits.Clear()
+    editor.Step()
+    editor.Tree.BeginRename(d)
+    Local escaping = editor.Tree.RenameField()
+    If escaping == Null Then Return
+    escaping.SetText("no")
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    editor.Step()
+    Expect(d.Name() == "d" && !editor.Tree.Renaming() && !editor.Edits.CanUndo())
+    Expect(editor.Edited.IsSelected(d), "Escape went on to select nothing")
+    // Going elsewhere takes it; the same name, or none, is nothing to undo.
+    editor.Tree.BeginRename(d)
+    Local leaving = editor.Tree.RenameField()
+    If leaving == Null Then Return
+    leaving.SetText("left")
+    editor.Shown.Focus(editor.Tree)
+    editor.Step()
+    editor.Step()
+    Expect(d.Name() == "left" && !editor.Tree.Renaming())
+    editor.Edits.Clear()
+    For text In ["left", ""]
+        editor.Tree.BeginRename(d)
+        Local same = editor.Tree.RenameField()
+        If same == Null Then Return
+        same.SetText(text)
+        Try Simulate.PressKey(Key.RETURN)
+        editor.Step()
+        editor.Step()
+        Expect(d.Name() == "left" && !editor.Edits.CanUndo(), "{text} renamed it")
+    End For
+    // Two quick clicks do too.
+    editor.Step()
+    Local on = OnName(editor, d)
+    Try ClickAt(editor, on)
+    Try Simulate.Click(MouseButton.LEFT, 2)
+    editor.Step()
+    editor.Step()
+    Expect(editor.Tree.Renaming(), "a double click didn't rename")
+    editor.Finish()
+End Function
+
+@Test
+Function HiddenRowsShowAsHiddenThroughUndo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local d = all["d"]
+    Local e = all["e"]
+    // One that's hidden already goes back to it.
+    e.Hide()
+    editor.Edited.SelectOnly(d)
+    editor.Edited.ToggleSelected(e)
+    editor.Edited.ToggleSelected(d)
+    editor.Edited.ToggleSelected(d)
+    editor.Step()
+    Try Simulate.PressKey(Key.H)
+    editor.Step()
+    editor.Step()
+    // By the last selected: d's hidden, so it hides them both.
+    Expect(d.Hidden() && e.Hidden())
+    Local row = editor.Tree.RowOf(d) As? Widget
+    Expect(row != Null && row.StyleName().EndsWith(".hidden"), "it's not shown hidden")
+    Expect(editor.Edits.UndoName() == "Hide")
+    editor.Edits.Undo()
+    Expect(!d.Hidden() && e.Hidden(), "undone, each isn't as it was")
+    editor.Edits.Redo()
+    Try Simulate.PressKey(Key.H)
+    editor.Step()
+    Expect(!d.Hidden() && !e.Hidden() && editor.Edits.UndoName() == "Show")
+    editor.Finish()
+End Function
+
+@Test
+Function CopiesGoBesideWithAllUnderThemThroughUndo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local a = all["a"]
+    // What's under what's selected goes with it, once.
+    editor.Edited.SelectOnly(a)
+    editor.Edited.ToggleSelected(all["b"])
+    editor.Step()
+    Try Primary(Key.D)
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c d e a copy b c ", "it shows {Names(editor)}")
+    Expect(editor.Edits.UndoName() == "Duplicate")
+    Local copy = editor.Edited.Selected()[0]
+    Expect(editor.Edited.Selected().Count == 1 && copy.Name() == "a copy" && !RefEquals(copy, a))
+    Expect(copy.Position() == a.Position())
+    editor.Edits.Undo()
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c d e ", "it shows {Names(editor)}")
+    Expect(editor.Edited.IsSelected(a) && !editor.Edited.IsSelected(copy))
+    Expect(!copy.Freed() && editor.Edited.IsRemoved(copy))
+    // Redone, it's the same one, as what's made after it may hold it.
+    editor.Edits.Redo()
+    Expect(!editor.Edited.IsRemoved(copy) && editor.Edited.IsSelected(copy))
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsTakenOutComesBackWhereItWas() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local a = all["a"]
+    Local b = all["b"]
+    Local d = all["d"]
+    // In the middle of what's beside it.
+    editor.Edited.SelectOnly(d)
+    editor.Step()
+    Try Simulate.PressKey(Key.DELETE)
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c e ", "it shows {Names(editor)}")
+    Expect(editor.Edited.Selected().Count == 0 && editor.Edited.IsRemoved(d) && !d.Freed())
+    Expect(d.Hidden() == False, "being taken out isn't being hidden")
+    Expect(editor.Edits.UndoName() == "Delete")
+    editor.Edits.Undo()
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c d e ", "it came back as {Names(editor)}")
+    Expect(editor.Edited.IsSelected(d))
+    editor.Edits.Redo()
+    editor.Edits.Undo()
+    editor.Step()
+    // Under another: its parent's, and all that's under it, with its place to the bit.
+    Local local = b.Position()
+    a.SetPosition(Vec3(3.3, 1.1, 7.7))
+    a.SetRotation(Quat.FromAxisAngle(Normalize(Vec3(1, 2, 3)), 0.7))
+    a.SetScale(Vec3(1.3, 0.7, 2.1))
+    Local c = all["c"]
+    editor.Edits.Clear()
+    editor.Edited.SelectOnly(b)
+    editor.Edited.ToggleSelected(c)
+    editor.Actions.Run("tree.delete")
+    Expect(editor.Edited.Entities().Count == 3 && editor.Edited.IsRemoved(c))
+    editor.Edits.Undo()
+    Local back = b.Parent()
+    Expect(back != Null && RefEquals(back, a) && b.Position() == local, "it's at {b.Position()}")
+    Expect(c.Parent() != Null && !editor.Edited.IsRemoved(c))
+    // What's selected and hidden is still selected, unlike what's gone.
+    b.Hide()
+    editor.Edited.SelectOnly(b)
+    Expect(editor.Edited.Selected().Count == 1)
+    // First and last of what's beside it too.
+    editor.Edits.Clear()
+    b.Show()
+    For each In [a, all["e"]]
+        Local order = Names(editor)
+        editor.Edited.SelectOnly(each)
+        editor.Actions.Run("tree.delete")
+        editor.Edits.Undo()
+        editor.Step()
+        editor.Step()
+        Expect(Names(editor) == order, "it came back as {Names(editor)}, from {order}")
+    End For
+    // Nothing selected, nothing to do.
+    editor.Edited.SelectOnly(Null)
+    Expect(!editor.Actions.Run("tree.delete") && !editor.Actions.Run("tree.rename"))
+    Expect(!editor.Actions.Run("tree.duplicate") && !editor.Actions.Run("tree.hide"))
+    editor.Finish()
+End Function
+
+@Test
+Function ADragPutsWhatsSelectedUnderWhatItsLetGoOn() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local a = all["a"]
+    Local d = all["d"]
+    Local e = all["e"]
+    e.SetPosition(Vec3(9, 8, 7))
+    e.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), 0.5))
+    a.SetPosition(Vec3(1, 2, 3))
+    a.SetRotation(Quat.FromAxisAngle(Vec3(1, 0, 0), 0.25))
+    editor.Tree.MarkChanged()
+    editor.Step()
+    editor.Edits.Clear()
+    Local local = d.Position()
+    Local world = d.Position(Space.WORLD)
+    editor.Edited.SelectOnly(d)
+    editor.Step()
+    // Over another: where it'd go shows.
+    Try Dragging(editor, OnName(editor, d), OnName(editor, e))
+    Expect(editor.Shown.Popups().Count == 1, "no hint shows")
+    Local hint = editor.Shown.Popups()[0].Box()
+    Expect(hint.Y == Row(editor, e).Y, "the hint's at {hint}")
+    Try Letting(editor)
+    Expect(editor.Shown.Popups().Count == 0)
+    Local parent = d.Parent()
+    Expect(parent != Null && RefEquals(parent, e))
+    Expect(Names(editor) == "a b c e d ", "it shows {Names(editor)}")
+    // Where it is in the world's the same.
+    Expect(Distance(d.Position(Space.WORLD), world) < 0.001, "it's at {d.Position(Space.WORLD)}")
+    Expect(editor.Edits.UndoName() == "Move In Tree")
+    // Undone, it's back where it was, as near as a turn's kept.
+    editor.Edits.Undo()
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c d e ", "it shows {Names(editor)}")
+    Expect(d.Parent() == Null && d.Position() == local, "it's at {d.Position()}")
+    editor.Edits.Redo()
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c e d ", "it shows {Names(editor)}")
+    // On nothing: the top of the scene.
+    Local box = editor.Tree.Box()
+    Try Dragging(editor, OnName(editor, d), Vec2(box.Center.x, box.Y + box.Height - 8))
+    Try Letting(editor)
+    Expect(d.Parent() == Null, "it's not at the top")
+    Expect(Names(editor) == "a b c e d ", "it shows {Names(editor)}")
+    Expect(Distance(d.Position(Space.WORLD), world) < 0.001)
+    editor.Finish()
+End Function
+
+@Test
+Function NothingGoesUnderItselfOrWhereItIs() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local a = all["a"]
+    Local b = all["b"]
+    Local c = all["c"]
+    editor.Edits.Clear()
+    editor.Edited.SelectOnly(a)
+    editor.Step()
+    // Under what's under it, or itself: nothing shows, and nothing happens.
+    For target In [c, a]
+        Try Dragging(editor, OnName(editor, a), OnName(editor, target))
+        Expect(editor.Shown.Popups().Count == 0, "a hint shows for {target.Name()}")
+        Try Letting(editor)
+        Expect(a.Parent() == Null && !editor.Edits.CanUndo())
+        editor.Edited.SelectOnly(a)
+        editor.Step()
+    End For
+    // Under what it's under already.
+    editor.Edited.SelectOnly(c)
+    editor.Step()
+    Try Dragging(editor, OnName(editor, c), OnName(editor, b))
+    Expect(editor.Shown.Popups().Count == 0)
+    Try Letting(editor)
+    Expect(!editor.Edits.CanUndo())
+    // Off the tree.
+    editor.Edited.SelectOnly(b)
+    editor.Step()
+    Local view = editor.View.Box().Center
+    Try Dragging(editor, OnName(editor, b), view)
+    Expect(editor.Shown.Popups().Count == 0)
+    Try Letting(editor)
+    Expect(!editor.Edits.CanUndo() && RefEquals(b.Parent(), a))
+    // Several together, with what's under what's dragged left where it is.
+    editor.Edited.SelectOnly(a)
+    editor.Edited.ToggleSelected(c)
+    editor.Edited.ToggleSelected(all["d"])
+    editor.Step()
+    Try Dragging(editor, OnName(editor, a), OnName(editor, all["e"]))
+    Try Letting(editor)
+    Expect(Names(editor) == "e a b c d ", "it shows {Names(editor)}")
+    Expect(RefEquals(c.Parent(), b), "what's under what went should go with it")
+    editor.Edits.Undo()
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c d e ", "it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function ARowsRightButtonAsksForItsMenu() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Try ClickAt(editor, OnName(editor, all["d"]), MouseButton.RIGHT)
+    Expect(editor.Edited.IsSelected(all["d"]), "it isn't selected")
+    Expect(editor.Shown.Popups().Count == 1, "no menu's open")
+    // What's selected stays selected.
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    editor.Step()
+    editor.Edited.ToggleSelected(all["e"])
+    editor.Step()
+    Try ClickAt(editor, OnName(editor, all["e"]), MouseButton.RIGHT)
+    Expect(editor.Edited.Selected().Count == 2)
+    Local delete = editor.Shown.Popups()[0].Find("tree.delete")
+    If delete == Null
+        Fail("no delete")
+        Return
+    End If
+    Try ClickAt(editor, delete.Box().Center)
+    Expect(Names(editor) == "a b c ", "it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function ItFindsByName() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    all["c"].SetName("Door Left")
+    all["e"].SetName("door right")
+    editor.Tree.MarkChanged()
+    editor.Step()
+    Try Primary(Key.F)
+    editor.Step()
+    Expect(RefEquals(editor.Shown.Focused(), editor.Tree.FindField()), "the find's not focused")
+    Try Simulate.Text("DOOR")
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "Door Left door right ", "it shows {Names(editor)}")
+    // Whatever closes what they're in.
+    editor.Tree.SetOpen(all["a"], False)
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "Door Left door right ", "it shows {Names(editor)}")
+    // Return goes through them, around.
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+    Expect(editor.Edited.IsSelected(all["c"]))
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+    Expect(editor.Edited.IsSelected(all["e"]))
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+    Expect(editor.Edited.IsSelected(all["c"]))
+    // A key's typing in it, not a command's.
+    Try Simulate.KeyDown(Key.H)
+    editor.Step()
+    Try Simulate.KeyUp(Key.H)
+    Expect(!all["c"].Hidden(), "H in the field hid it")
+    Try Simulate.PressKey(Key.DELETE)
+    editor.Step()
+    Expect(!editor.Edited.IsRemoved(all["c"]), "Delete in the field took it out")
+    // None: none. Empty: all, as they were.
+    editor.Tree.FindField().SetText("nothing")
+    editor.Step()
+    editor.Step()
+    Expect(editor.Tree.ShownEntities().Count == 0)
+    Try Simulate.PressKey(Key.RETURN)
+    editor.Step()
+    editor.Step()
+    editor.Tree.FindField().SetText("")
+    editor.Step()
+    editor.Step()
+    // What was found stays selected, so what it's in opens to show it.
+    Expect(editor.Edited.Selected().Count == 1 && RefEquals(editor.Edited.Selected()[0], all["c"]))
+    Expect(Names(editor) == "a b Door Left d door right ", "it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsTakenOutIsntPickedOrInTheSceneAndANewSceneHasNoneOfIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    editor.Actions.Run("add.cube")
+    Local cube = editor.Edited.Selected()[0]
+    Expect(cube.Name() == "Cube")
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "Cube ")
+    Local at = editor.View.Viewer().Project(Vec3(0, 0, 0))
+    If at == Null Then Return
+    Local point = Vec2(editor.View.Box().X + at.x, editor.View.Box().Y + at.y)
+    editor.Edited.SelectOnly(Null)
+    editor.Actions.Run("edit.undo")
+    Expect(editor.Edited.Entities().Count == 0)
+    editor.Step()
+    editor.Step()
+    Expect(editor.Tree.ShownEntities().Count == 0)
+    Expect(editor.View.PickAt(point) == Null, "what was taken out was picked")
+    editor.Actions.Run("edit.redo")
+    Expect(editor.View.PickAt(point) != Null)
+    // A selected one under what goes, goes with it.
+    Local child = Mesh(Geometry.Cube(), cube)
+    editor.Edited.SelectOnly(child)
+    editor.Edits.Commit(RemoveEdit(editor.Edited, [cube]))
+    Expect(editor.Edited.Selected().Count == 0)
+    // Closed, a new scene's there, and the tree with it.
+    editor.Actions.Run("file.close")
+    editor.Step()
+    Expect(cube.Freed() && editor.Tree.ShownEntities().Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function SeveralTakenOutComeBackInTheirOrder() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Edited.ToggleSelected(all["e"])
+    editor.Actions.Run("tree.delete")
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c ", "it shows {Names(editor)}")
+    editor.Edits.Undo()
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "a b c d e ", "they came back as {Names(editor)}")
+    Expect(editor.Edited.Selected().Count == 2)
+    editor.Finish()
+End Function
+
+@Test
+Function TakingOutWhatsSelectedSaysSo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    Local told = 0
+    editor.Edited.OnSelectionChanged(Function()
+        told += 1
+    End Function)
+    // What wasn't selected isn't news.
+    editor.Edited.TakeOut(all["e"])
+    Expect(told == 0, "it was told {told} times")
+    editor.Edited.TakeOut(all["d"])
+    Expect(told == 1 && editor.Edited.Selected().Count == 0, "it was told {told} times")
+    editor.Edited.OnSelectionChanged(Null)
+    editor.Finish()
+End Function
+
+@Test
+Function ARebuildWhileDraggingEndsItsHint() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    editor.Step()
+    Try Dragging(editor, OnName(editor, all["d"]), OnName(editor, all["e"]))
+    Expect(editor.Shown.Popups().Count == 1)
+    editor.Tree.MarkChanged()
+    editor.Step()
+    Expect(editor.Shown.Popups().Count == 0, "the hint outlived the row")
+    // Moving on doesn't begin it again.
+    Try Simulate.MouseMotion(4, 0)
+    editor.Step()
+    Expect(editor.Shown.Popups().Count == 0, "the drag began again")
+    Try Letting(editor)
+    Expect(all["d"].Parent() == Null, "a drag that was ended went on")
+    // Let go back on its row, it's not a click on it.
+    editor.Edited.SelectOnly(all["d"])
+    editor.Edited.ToggleSelected(all["e"])
+    editor.Step()
+    Local on = OnName(editor, all["d"])
+    Local there = OnName(editor, all["e"])
+    Try Dragging(editor, on, there)
+    editor.Tree.MarkChanged()
+    editor.Step()
+    Try Simulate.MouseMotion(on.x - there.x, on.y - there.y)
+    editor.Step()
+    Try Letting(editor)
+    Expect(editor.Edited.Selected().Count == 2, "letting go selected only it")
+    editor.Finish()
+End Function
+
+@Test
+Function OnlyWhatsInTheSceneRenames() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Tree.BeginRename(editor.Edited.Helpers)
+    Expect(!editor.Tree.Renaming())
+    editor.Edited.TakeOut(all["d"])
+    editor.Tree.BeginRename(all["d"])
+    Expect(!editor.Tree.Renaming())
+    all["e"].Free()
+    editor.Tree.BeginRename(all["e"])
+    Expect(!editor.Tree.Renaming())
+    editor.Finish()
+End Function
+
+// Whether `entity` has a row, as a test of a Widget itself would print all it's in if it fails.
+Function Rowed(editor: Editor, entity: Entity): Bool => editor.Tree.RowOf(entity) != Null
+
+// A click on what's named `name`, in a popup or under the root.
+Function ClickNamed(editor: Editor, name: String) Throws GraphicsError
+    Local found: Node? = Null
+    For popup In editor.Shown.Popups()
+        found = found ?? popup.Find(name)
+    End For
+    found = found ?? editor.Shown.Root().Find(name)
+    If found == Null Then Panic("there's nothing named {name}")
+    Try ClickAt(editor, found.Box().Center)
+End Function
+
+// `count` pivots, named by number, at the top of the scene.
+Function Many(editor: Editor, count: Int): Entity[]
+    Local made: Entity[] = []
+    For i = 0 Until count
+        Local pivot = Pivot()
+        pivot.SetName("n{i}")
+        made.Add(pivot)
+    End For
+    editor.Tree.MarkChanged()
+    editor.Step()
+    editor.Step()
+    Return made
+End Function
+
+@Test
+Function OpeningAProjectOverOneWithRowsLetsThemGo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local other = games.Path / "other"
+    Try Dir.CreateAll(other)
+    Try File.WriteText(other / "project.toml", "[project]\nname = \"other\"\n")
+    Try Primary(Key.O)
+    editor.Step()
+    editor.Step()
+    Local field: Node? = Null
+    For popup In editor.Shown.Popups()
+        field = field ?? popup.Find("dialog.path")
+    End For
+    Local path = field As? TextField
+    If path == Null Then Panic("there's no field")
+    path.SetText(other.Text)
+    Try ClickNamed(editor, "dialog.Open")
+    Expect(editor.Current()?.Name == "other")
+    Expect(all["a"].Freed())
+    Expect(editor.Tree.RowsMade() == 0 && editor.Tree.ShownEntities().Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function ClosingAProjectLetsGoOfItsRowsAtOnce() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Named(editor)
+    Expect(editor.Tree.RowsMade() == 5)
+    Expect(editor.Actions.Run("file.close"))
+    Expect(editor.Tree.RowsMade() == 0, "its rows are still there, of what's freed")
+    Expect(editor.Tree.ShownEntities().Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function ARowOfWhatsFreedDoesNothingBeforeItsGone() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local row = editor.Tree.RowOf(all["e"])
+    If row == Null Then Panic("it has no row")
+    Local box = row.Box()
+    all["e"].Free()
+    // Before the tree's next Update finds it, as what's freed within one Ui.Update is.
+    row.SetStyleName("tree.row.hidden")
+    editor.Shown.Update()
+    Expect(!row.PointerDown(box.Center), "a press took what's freed")
+    Expect(!row.PointerDownWith(MouseButton.RIGHT, box.Center), "a right press took what's freed")
+    editor.Step()
+    Expect(Names(editor) == "a b c d ", "it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function ARowHeldStaysWhileItsScrolledAway() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Many(editor, 500)
+    Local row = editor.Tree.RowOf(all[0])
+    If row == Null Then Panic("it has no row")
+    Local on = row.Box().Center
+    Try Simulate.MoveMouse(on.x, on.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.Wheel(-60)
+    editor.Step()
+    editor.Step()
+    Local held = editor.Tree.RowOf(all[0])
+    Expect(held != Null && RefEquals(held, row), "what's held was let go of")
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    editor.Step()
+    editor.Step()
+    Expect(!Rowed(editor, all[0]), "it stayed once let go of")
+    editor.Finish()
+End Function
+
+@Test
+Function ARowHeldDoesntNoticeAHandlesDrag() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local d = all["d"]
+    editor.Edited.SelectOnly(d)
+    editor.Step()
+    Try Dragging(editor, OnName(editor, d), OnName(editor, all["e"]))
+    Expect(editor.Shown.Popups().Count == 1)
+    For step = 1 To 2
+        editor.Edits.Commit(TransformEdit("Move", [d], [LocalPlace.Of(d)],
+                                          [EntityPlace(Vec3(step As Float, 0, 0), Quat.Identity,
+                                                       Vec3(1, 1, 1))], 1))
+        editor.Step()
+        Expect(editor.Shown.Popups().Count == 1, "a drag's step ended the row's")
+    End For
+    editor.Edits.Undo()
+    editor.Step()
+    Expect(editor.Shown.Popups().Count == 1, "its undo ended the row's")
+    Try Letting(editor)
+    Local parent = d.Parent()
+    Expect(parent != Null && RefEquals(parent, all["e"]), "the row's drag didn't go on")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsNeverBeenShownStillRenamesAndFinds() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local first = Try Started(settings, games)
+    first.Docked.Hide("tree")
+    first.Finish()
+    Local second = Try Editor(settings.Path)
+    Try second.Start(games.Path / "game")
+    second.Step()
+    second.Step()
+    Expect(!second.Docked.Showing("tree"), "it's kept as closed")
+    Try Primary(Key.F)
+    second.Step()
+    second.Step()
+    second.Step()
+    Local focused = second.Shown.Focused()
+    Expect(focused != Null && RefEquals(focused, second.Tree.FindField()),
+           "find hasn't the keyboard")
+    second.Finish()
+End Function
+
+@Test
+Function MovedInTheTreeFromWhatsFreedStaysWhereItIs() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local c = all["c"]
+    all["b"].SetPosition(Vec3(5, 0, 0))
+    editor.Edits.Commit(ReparentEdit(editor.Edited, [c], Null))
+    Local place = c.Position()
+    all["b"].Free()
+    Expect(!c.Freed())
+    Expect(editor.Edits.Undo())
+    Expect(c.Position() == place, "it went where it was under what's gone: {c.Position()}")
+    editor.Finish()
+End Function
+
+@Test
+Function ACopyFreedInItsOwnFrameLeavesNoRow() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    Try Primary(Key.D)
+    editor.Step()
+    editor.Step()
+    Local copy = editor.Edited.Selected()[0]
+    Expect(Rowed(editor, copy))
+    // Undone, then something else in the one frame, which forgets it for good.
+    Try Primary(Key.Z)
+    Try Simulate.PressKey(Key.H)
+    editor.Step()
+    Expect(copy.Freed())
+    editor.Step()
+    Expect(Names(editor) == "a b c d e ", "it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function RowsStayThroughWhatDoesntChangeThem() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local d = all["d"]
+    Local row = editor.Tree.RowOf(d)
+    If row == Null Then Panic("it has no row")
+    // A handle's drag, step by step, and its undo.
+    For step = 1 To 2
+        editor.Edits.Commit(TransformEdit("Move", [d], [LocalPlace.Of(d)],
+                                          [EntityPlace(Vec3(step As Float, 0, 0), Quat.Identity,
+                                                       Vec3(1, 1, 1))], 1))
+        editor.Step()
+        Local still = editor.Tree.RowOf(d)
+        Expect(still != Null && RefEquals(still, row), "a drag's step made its row again")
+    End For
+    editor.Edits.Undo()
+    editor.Step()
+    Local undone = editor.Tree.RowOf(d)
+    Expect(undone != Null && RefEquals(undone, row), "its undo made its row again")
+    // What does change the tree keeps the rows it can, and shows the rest.
+    Expect(editor.Actions.Run("add.cube"))
+    editor.Step()
+    Local after = editor.Tree.RowOf(d)
+    Expect(after != Null && RefEquals(after, row), "another's coming made its row again")
+    Expect(editor.Tree.ShownEntities().Count == 6)
+    // Under something else, it's another row, at another depth.
+    d.SetParent(all["e"], True)
+    editor.Tree.MarkChanged()
+    editor.Step()
+    Local moved = editor.Tree.RowOf(d)
+    Expect(moved != Null && !RefEquals(moved, row))
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsFreedThenSelectedAroundIsGoneFromTheRows() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    all["e"].Free()
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    Expect(Names(editor) == "a b c d ", "it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function ARedoneCopyOfSeveralKeepsTheirOrder() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Edited.ToggleSelected(all["e"])
+    Expect(editor.Actions.Run("tree.duplicate"))
+    editor.Step()
+    editor.Step()
+    Local copied = "a b c d e d copy e copy "
+    Expect(Names(editor) == copied, "it shows {Names(editor)}")
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    Expect(Names(editor) == "a b c d e ", "it shows {Names(editor)}")
+    Expect(editor.Actions.Run("edit.redo"))
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == copied, "redone, it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function ARenameDuringARenameFinishesTheFirst() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Tree.BeginRename(all["d"])
+    Local typed = editor.Tree.RenameField()
+    If typed == Null Then Panic("there's no field")
+    typed.SetText("typed")
+    editor.Tree.BeginRename(all["e"])
+    Expect(all["d"].Name() == "typed", "what was typed went: {all["d"].Name()}")
+    editor.Step()
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    editor.Step()
+    Expect(!editor.Tree.Renaming())
+    For entity In [all["d"], all["e"]]
+        Local row = editor.Tree.RowOf(entity)
+        Expect(row != Null && row.Children().Count == 0, "a field's left on {entity.Name()}")
+    End For
+    editor.Finish()
+End Function
+
+@Test
+Function WhileRenamingTheTreesCommandsWait() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local d = all["d"]
+    editor.Edited.SelectOnly(d)
+    editor.Step()
+    editor.Tree.BeginRename(d)
+    Local typing = editor.Tree.RenameField()
+    If typing == Null Then Panic("there's no field")
+    typing.SetText("x")
+    Try Primary(Key.D)
+    editor.Step()
+    editor.Step()
+    Expect(editor.Tree.Renaming() && editor.Tree.ShownEntities().Count == 5,
+           "it copied under a rename")
+    For id In ["tree.rename", "tree.duplicate", "tree.hide", "tree.delete", "tree.find"]
+        Expect(!editor.Actions.Run(id), "{id} ran under a rename")
+    End For
+    // What's typed is its own: letters and Delete go to the field.
+    Try Simulate.KeyDown(Key.H)
+    Try Simulate.Text("h")
+    editor.Step()
+    Try Simulate.KeyUp(Key.H)
+    Try Simulate.PressKey(Key.DELETE)
+    editor.Step()
+    Expect(!d.Hidden() && !editor.Edited.IsRemoved(d), "the field's keys went to what's selected")
+    Expect(typing.Text().Contains("h"), "it holds {typing.Text()}")
+    // Anything changing the tree takes what's typed.
+    typing.SetText("y")
+    editor.Tree.MarkChanged()
+    editor.Step()
+    Expect(d.Name() == "y", "it's {d.Name()}")
+    Expect(!editor.Tree.Renaming())
+    // Freed while it's being renamed, nothing's left.
+    editor.Tree.BeginRename(all["e"])
+    all["e"].Free()
+    editor.Step()
+    editor.Step()
+    Expect(!editor.Tree.Renaming() && Names(editor) == "a b c y ", "it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function TwoClicksOnTwoRowsArentADoubleClick() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Try ClickAt(editor, OnName(editor, all["d"]))
+    Try ClickAt(editor, OnName(editor, all["e"]), MouseButton.LEFT, 2)
+    Expect(!editor.Tree.Renaming(), "it renamed what had only one click")
+    Try Simulate.KeyDown(Key.LEFT_SHIFT)
+    Try ClickAt(editor, OnName(editor, all["e"]), MouseButton.LEFT, 2)
+    Try Simulate.KeyUp(Key.LEFT_SHIFT)
+    editor.Step()
+    Expect(!editor.Tree.Renaming(), "a Shift double click renamed")
+    // Both on the one, it does.
+    Try ClickAt(editor, OnName(editor, all["e"]), MouseButton.LEFT, 2)
+    Expect(editor.Tree.Renaming(), "a double click didn't rename")
+    editor.Finish()
+End Function
+
+@Test
+Function AfterARenameTheKeyboardsBackInTheTree() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    For key In [Key.RETURN, Key.ESCAPE]
+        editor.Tree.BeginRename(all["d"])
+        editor.Step()
+        Try Simulate.PressKey(key)
+        editor.Step()
+        editor.Step()
+        Local focused = editor.Shown.Focused()
+        Expect(focused != Null && RefEquals(focused, editor.Tree), "the keyboard's left")
+    End For
+    Try Simulate.PressKey(Key.UP)
+    editor.Step()
+    editor.Step()
+    Expect(RefEquals(editor.Edited.Selected()[0], all["c"]), "UP didn't move")
+    // Gone by a click, it stays where the click put it.
+    editor.Tree.BeginRename(all["d"])
+    editor.Step()
+    Try ClickAt(editor, editor.Tree.FindField().Box().Center)
+    Local there = editor.Shown.Focused()
+    Expect(there != Null && RefEquals(there, editor.Tree.FindField()),
+           "it took the keyboard from the click")
+    editor.Finish()
+End Function
+
+@Test
+Function UndoingPutsBackWhatWasSelected() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    // A parent, and what's under it, each selected.
+    editor.Edited.SelectOnly(all["b"])
+    editor.Edited.ToggleSelected(all["a"])
+    Expect(editor.Actions.Run("tree.delete"))
+    editor.Step()
+    Expect(editor.Actions.Run("edit.undo"))
+    Local back = editor.Edited.Selected()
+    Expect(back.Count == 2 && RefEquals(back[0], all["b"]) && RefEquals(back[1], all["a"]),
+           "{back.Count} selected")
+    Expect(editor.Actions.Run("tree.duplicate"))
+    editor.Step()
+    Expect(editor.Actions.Run("edit.undo"))
+    back = editor.Edited.Selected()
+    Expect(back.Count == 2 && RefEquals(back[0], all["b"]) && RefEquals(back[1], all["a"]),
+           "{back.Count} selected")
+    editor.Finish()
+End Function
+
+// Runs `edit`, frees `going`, and undoes and redoes it, which panics if it doesn't look.
+Function AfterAFree(editor: Editor, edit: Edit, going: Entity)
+    editor.Edits.Commit(edit)
+    going.Free()
+    Expect(editor.Edits.Undo(), "{edit.Name} didn't undo")
+    editor.Step()
+    Expect(editor.Edits.Redo(), "{edit.Name} didn't redo")
+    editor.Step()
+End Function
+
+@Test
+Function EditsOfWhatsBeenFreedDoNothing() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local scene = editor.Edited
+    Local one = Pivot()
+    AfterAFree(editor, RenameEdit(one, "x"), one)
+    Local two = Pivot()
+    AfterAFree(editor, HideEdit([two], True), two)
+    Local three = Pivot()
+    AfterAFree(editor, RemoveEdit(scene, [three]), three)
+    Local four = Pivot()
+    Local copying = CopyEdit(scene, [four])
+    editor.Edits.Commit(copying)
+    Local copy = copying.Copies()[0]
+    copy.Free()
+    Expect(editor.Edits.Undo() && editor.Edits.Redo())
+    Local five = Pivot()
+    AfterAFree(editor, ReparentEdit(scene, [five], four), five)
+    Local six = Pivot()
+    AfterAFree(editor, ReparentEdit(scene, [six], four), four)
+    Expect(!six.Freed() || six.Freed())
+    Local made = MadeEdit("Add", scene, Function(): Entity => Pivot())
+    editor.Edits.Commit(made)
+    Local entity = made.Made()
+    If entity == Null Then Panic("it made nothing")
+    entity.Free()
+    Expect(editor.Edits.Undo() && editor.Edits.Redo())
+    // What it was under, freed while it's taken out: it stays out.
+    Local parent = Pivot()
+    Local child = Pivot(parent)
+    editor.Edits.Commit(RemoveEdit(scene, [child]))
+    parent.Free()
+    Expect(!child.Freed())
+    Expect(editor.Edits.Undo())
+    Expect(scene.IsRemoved(child), "it came back under nothing")
+    editor.Step()
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsHiddenByWhatItsInShowsAsThat() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local style = Function(name: String): String
+        Local row = editor.Tree.RowOf(all[name])
+        Return row != Null ? row.StyleName() : "no row"
+    End Function
+    Expect(style("b") == "tree.row")
+    editor.Edits.Commit(HideEdit([all["a"]], True))
+    editor.Step()
+    Expect(style("a") == "tree.row.hidden", style("a"))
+    Expect(style("b") == "tree.row.under", style("b"))
+    Expect(style("c") == "tree.row.under", style("c"))
+    editor.Edited.SelectOnly(all["b"])
+    editor.Step()
+    Expect(style("b") == "tree.row.selected.under", style("b"))
+    editor.Edits.Undo()
+    editor.Step()
+    Expect(style("c") == "tree.row", style("c"))
+    editor.Finish()
+End Function
+
+@Test
+Function OnlyTheRowsInViewAreMade() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Many(editor, 10000)
+    Expect(editor.Tree.ShownEntities().Count == 10000)
+    Local most = (Window.Height() / 22) + 3
+    Expect(editor.Tree.RowsMade() <= most, "it made {editor.Tree.RowsMade()} of what fit in {most}")
+    Expect(!Rowed(editor, all[9999]))
+    // Selected, it's scrolled to, and it's there.
+    editor.Edited.SelectOnly(all[9999])
+    editor.Step()
+    editor.Step()
+    Local row = editor.Tree.RowOf(all[9999])
+    If row == Null Then Panic("what's selected isn't in view")
+    editor.Step()
+    Local view = editor.Tree.FindField().Parent()
+    Expect(editor.Tree.RowsMade() <= most, "it made {editor.Tree.RowsMade()} of what fit in {most}")
+    Expect(row.Box().Height > 0 && row.Box().Y < Window.Height() As Float32, "it's at {row.Box()}")
+    // Back up to the first, one key at a time isn't needed: selected, it's there too.
+    editor.Edited.SelectOnly(all[0])
+    editor.Step()
+    editor.Step()
+    Expect(Rowed(editor, all[0]), "the first isn't in view")
+    Expect(!Rowed(editor, all[9999]), "what's far away's still made")
+    // The down key goes by what's shown.
+    editor.Shown.Focus(editor.Tree)
+    Try Simulate.PressKey(Key.DOWN)
+    editor.Step()
+    editor.Step()
+    Expect(RefEquals(editor.Edited.Selected()[0], all[1]))
+    editor.Finish()
+End Function
+
+@Test
+Function ALetGoGoesByWhatShiftWasAtThePress() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Edited.ToggleSelected(all["e"])
+    editor.Step()
+    Local on = OnName(editor, all["d"])
+    Try Simulate.MoveMouse(on.x, on.y)
+    editor.Step()
+    Try Simulate.KeyDown(Key.LEFT_SHIFT)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.KeyUp(Key.LEFT_SHIFT)
+    editor.Step()
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    editor.Step()
+    Local selected = editor.Edited.Selected()
+    Expect(selected.Count == 1 && RefEquals(selected[0], all["e"]), "{selected.Count} selected")
+    editor.Finish()
+End Function
+
+@Test
+Function RenamingWhatsOutOfViewScrollsToIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Many(editor, 500)
+    editor.Edited.SelectOnly(all[400])
+    editor.Step()
+    editor.Step()
+    Local top = all[0]
+    editor.Edited.SelectOnly(top)
+    editor.Step()
+    editor.Step()
+    Expect(!Rowed(editor, all[400]))
+    editor.Tree.BeginRename(all[400])
+    editor.Step()
+    editor.Step()
+    Expect(editor.Tree.Renaming(), "it didn't rename what's far away")
+    Local row = editor.Tree.RowOf(all[400])
+    If row == Null Then Panic("it didn't scroll to it")
+    Expect(row.Box().Y >= editor.Tree.Box().Y &&
+           row.Box().Y + row.Box().Height <= editor.Tree.Box().Y + editor.Tree.Box().Height + 1,
+           "{row.Box()} of {editor.Tree.Box()}")
+    editor.Finish()
+End Function
+
+@Test
+Function RenamingOrFindingOpensAClosedTree() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    editor.Docked.Hide("tree")
+    editor.Step()
+    Try Simulate.PressKey(Key.F2)
+    editor.Step()
+    editor.Step()
+    editor.Step()
+    Expect(editor.Docked.Showing("tree"), "the tree's still closed")
+    Expect(editor.Tree.Renaming(), "it isn't renaming")
+    Local focused = editor.Shown.Focused()
+    Local field = editor.Tree.RenameField()
+    Expect(focused != Null && field != Null && RefEquals(focused, field),
+           "the field hasn't the keyboard")
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    editor.Step()
+    editor.Docked.Hide("tree")
+    editor.Step()
+    Try Primary(Key.F)
+    editor.Step()
+    editor.Step()
+    editor.Step()
+    focused = editor.Shown.Focused()
+    Expect(focused != Null && RefEquals(focused, editor.Tree.FindField()),
+           "find hasn't the keyboard")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsUnnamedCopiesByItsKindAndIsntFoundByIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local unnamed = Pivot()
+    Local named = Pivot()
+    named.SetName("pivot door")
+    editor.Tree.MarkChanged()
+    editor.Step()
+    editor.Edited.SelectOnly(unnamed)
+    Expect(editor.Actions.Run("tree.duplicate"))
+    editor.Step()
+    Local copy = editor.Edited.Selected()[0]
+    Expect(copy.Name() == "{unnamed.Kind()} copy", "it's {copy.Name()}")
+    copy.SetName("")
+    // What a row shows for one with no name isn't its name.
+    editor.Tree.FindField().SetText("pivot")
+    editor.Step()
+    editor.Step()
+    Expect(Names(editor) == "pivot door ", "it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function AModalCallsOffARowsDrag() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    Try Dragging(editor, OnName(editor, all["d"]), OnName(editor, all["e"]))
+    Expect(editor.Shown.Popups().Count == 1, "there's no hint")
+    Try Primary(Key.O)
+    editor.Step()
+    Expect(all["d"].Parent() == Null, "the modal dropped it")
+    Expect(!editor.Edits.CanUndo())
+    Try Letting(editor)
+    Expect(all["d"].Parent() == Null, "letting go dropped it")
+    Expect(editor.Shown.Popups().Count == 1, "the hint's still up, or the modal isn't")
+    editor.Finish()
+End Function
+
+@Test
+Function DroppingOnWhatsClosedOpensIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Tree.SetOpen(all["e"], False)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    editor.Step()
+    Try Dragging(editor, OnName(editor, all["d"]), OnName(editor, all["e"]))
+    Try Letting(editor)
+    Expect(editor.Tree.IsOpen(all["e"]), "what it went under stayed closed")
+    Expect(Names(editor) == "a b c e d ", "it shows {Names(editor)}")
+    editor.Finish()
+End Function
+
+@Test
+Function DroppedOnNothingOnlyWhatsUnderSomethingMoves() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local empty = OnName(editor, all["e"]) + Vec2(0, 60)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Step()
+    Try Dragging(editor, OnName(editor, all["d"]), empty)
+    Try Letting(editor)
+    Expect(!editor.Edits.CanUndo(), "what's at the top went to the top")
+    editor.Edited.SelectOnly(all["c"])
+    editor.Step()
+    Try Dragging(editor, OnName(editor, all["c"]), empty)
+    Try Letting(editor)
+    Expect(all["c"].Parent() == Null && editor.Edits.CanUndo(), "what's under something stayed")
+    editor.Finish()
+End Function
+
+@Test
+Function LettingGoOffARowLeavesWhatsSelected() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Edited.SelectOnly(all["d"])
+    editor.Edited.ToggleSelected(all["e"])
+    editor.Step()
+    // Off its row by less than a drag.
+    Local box = Row(editor, all["d"])
+    Local on = Vec2(box.X + box.Width - 12, box.Y + box.Height - 1)
+    Try Simulate.MoveMouse(on.x, on.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MouseMotion(0, 3)
+    editor.Step()
+    Try Letting(editor)
+    Expect(editor.Edited.Selected().Count == 2, "it selected only what it left")
+    // Let go on it, it's only that, but not under a rename.
+    editor.Tree.BeginRename(all["d"])
+    editor.Step()
+    Local beside = Vec2(box.X + 8, box.Center.y)
+    Try ClickAt(editor, beside)
+    Expect(!editor.Tree.Renaming(), "a click beside its field left it renaming")
+    Expect(editor.Edited.Selected().Count == 2, "a click ending a rename selected only that")
+    Try ClickAt(editor, beside)
+    Expect(editor.Edited.Selected().Count == 1 && RefEquals(editor.Edited.Selected()[0], all["d"]))
+    editor.Finish()
+End Function
+
+@Test
+Function OnlyWhatsUnderARowOpensItAndOnlyByItsPart() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    // At its indent, b's opener; left of that, only the row.
+    Local box = Row(editor, all["b"])
+    Local content = box.X + 6
+    Try ClickAt(editor, Vec2(content + 14 + 2, box.Center.y))
+    Expect(!editor.Tree.IsOpen(all["b"]), "its opener didn't close it")
+    Try ClickAt(editor, Vec2(content + 14 + 2, box.Center.y))
+    Expect(editor.Tree.IsOpen(all["b"]), "its opener didn't open it")
+    Try ClickAt(editor, Vec2(content + 2, box.Center.y))
+    Expect(editor.Tree.IsOpen(all["b"]), "its indent closed it")
+    Expect(RefEquals(editor.Edited.Selected()[0], all["b"]), "its indent didn't select it")
+    // With nothing under it, there's no opener.
+    Local leaf = Row(editor, all["d"])
+    Try ClickAt(editor, Vec2(leaf.X + 6 + 2, leaf.Center.y))
+    Expect(editor.Tree.IsOpen(all["d"]), "it closed what has nothing under it")
+    Expect(RefEquals(editor.Edited.Selected()[0], all["d"]), "it didn't select it")
+    editor.Finish()
+End Function
+
+@Test
+Function ANewSceneForgetsWhatWasClosedAndFound() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    editor.Tree.SetOpen(all["a"], False)
+    editor.Tree.FindField().SetText("a")
+    editor.Step()
+    editor.Step()
+    Expect(editor.Actions.Run("file.close"))
+    editor.Step()
+    editor.Step()
+    Expect(editor.Tree.FindField().Text() == "", "it still finds {editor.Tree.FindField().Text()}")
+    Expect(editor.Tree.IsOpen(all["a"]), "it still has what was closed")
+    editor.Finish()
+End Function
+
+@Test
+Function MovingInTheTreeUndoesItsTurnAndScale() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local all = Named(editor)
+    Local e = all["e"]
+    e.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), 0.7))
+    e.SetScale(Vec3(2, 3, 4))
+    e.SetPosition(Vec3(5, 0, 0))
+    Local d = all["d"]
+    d.SetRotation(Quat.FromAxisAngle(Vec3(1, 0, 0), 0.4))
+    d.SetScale(Vec3(0.5, 1.5, 2.5))
+    Local place = d.Position()
+    Local turned = d.Rotation()
+    Local size = d.Scale()
+    editor.Edits.Commit(ReparentEdit(editor.Edited, [d], e))
+    Expect(Distance(d.Position(), place) > 0.1 && d.Scale() != size,
+           "going under it changed nothing")
+    editor.Edits.Undo()
+    Expect(d.Parent() == Null)
+    Expect(Distance(d.Position(), place) < 0.0001, "{d.Position()}, not {place}")
+    Expect(Abs(Dot(d.Rotation(), turned)) > 0.99999, "{d.Rotation()}, not {turned}")
+    Expect(Distance(d.Scale(), size) < 0.0001, "{d.Scale()}, not {size}")
+    editor.Finish()
+End Function

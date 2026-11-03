@@ -515,6 +515,21 @@ FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_w
     return true;
 }
 
+FBE_API bool fbe_entity_set_sibling_index(uint64_t entity, int32_t index) {
+    const std::uint32_t slot = entity_slot(entity);
+    if (slot == none) {
+        return false;
+    }
+    std::vector<std::uint32_t>& siblings = fbe::scene::siblings_of(slot);
+    if (index < 0 || static_cast<std::size_t>(index) >= siblings.size()) {
+        return fbe::fail(std::format("a place among {} siblings is 0 to {}, not {}",
+                                     siblings.size(), siblings.size() - 1, index));
+    }
+    std::erase(siblings, slot);
+    siblings.insert(siblings.begin() + index, slot);
+    return true;
+}
+
 FBE_API uint64_t fbe_entity_parent(uint64_t entity) {
     const std::uint32_t slot = entity_slot(entity);
     if (slot == none) {

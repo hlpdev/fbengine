@@ -357,7 +357,9 @@ Function AParticlesRollIsSet()
     Local world = Fresh()
     Defer world.Free()
     Particles().SetRoll(Pi)
+End Function
 
+@Test
 Function InstancesHoldWhatTheyreSet()
     Local world = Fresh()
     Defer world.Free()

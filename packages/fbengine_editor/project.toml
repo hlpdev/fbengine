@@ -1,0 +1,13 @@
+[project]
+name = "fbengine_editor"
+version = "0.1.1"
+type = "executable"
+license = "Apache-2.0"
+description = "fbengine's editor, a program on its packages, which opens a game's project folder."
+readme = "README.md"
+repository = "https://github.com/hlpdev/fbengine"
+keywords = ["engine", "game", "editor", "tools"]
+
+[dependencies]
+fbengine = { path = "../fbengine" }
+fbengine_ui = { path = "../fbengine_ui" }

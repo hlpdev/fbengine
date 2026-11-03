@@ -135,6 +135,14 @@ Public Class Entity Implements Printable
         If !fbe_entity_set_parent(entity, to, keepWorld) Then Failed("SetParent")
     End Method
 
+    /// Puts the entity at `index` among what's beside it, under its parent or at the top of its
+    /// World, 0 first, which moves nothing, so its collisions don't know. Outside those panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetSiblingIndex(index: Int)
+        Local entity = Live("SetSiblingIndex")
+        If !fbe_entity_set_sibling_index(entity, index As Int32) Then Failed("SetSiblingIndex")
+    End Method
+
     /// The entity's parent, Null at the top of its World.
     @MainThread @PanicsAtCaller
     Public Method Parent(): Entity? => EntityOf(fbe_entity_parent(Live("Parent")))
