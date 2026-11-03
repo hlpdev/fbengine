@@ -334,7 +334,8 @@ FBE_API bool fbe_window_set_size(int32_t width, int32_t height) {
         return fbe::fail("there's no window to size");
     }
     if (width <= 0 || height <= 0) {
-        return fbe::fail(std::format("a window is more than 0 each way, not {} by {}", width, height));
+        return fbe::fail(
+            std::format("a window is more than 0 each way, not {} by {}", width, height));
     }
     if (current_mode != FBE_WINDOW_WINDOWED) {
         return fbe::fail("a fullscreen window's size is its mode's");

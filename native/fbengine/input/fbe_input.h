@@ -124,14 +124,14 @@ FBE_API void fbe_input_flush_mouse(void);
 // Puts the mouse at `x`, `y` in the window's units; false without a window.
 FBE_API bool fbe_input_move_mouse(float x, float y);
 // The OS's cursors.
-#define FBE_INPUT_CURSOR_ARROW 0
-#define FBE_INPUT_CURSOR_TEXT 1
-#define FBE_INPUT_CURSOR_WAIT 2
-#define FBE_INPUT_CURSOR_CROSSHAIR 3
-#define FBE_INPUT_CURSOR_HAND 4
-#define FBE_INPUT_CURSOR_MOVE 5
-#define FBE_INPUT_CURSOR_RESIZE_EW 6
-#define FBE_INPUT_CURSOR_RESIZE_NS 7
+#define FBE_INPUT_CURSOR_ARROW       0
+#define FBE_INPUT_CURSOR_TEXT        1
+#define FBE_INPUT_CURSOR_WAIT        2
+#define FBE_INPUT_CURSOR_CROSSHAIR   3
+#define FBE_INPUT_CURSOR_HAND        4
+#define FBE_INPUT_CURSOR_MOVE        5
+#define FBE_INPUT_CURSOR_RESIZE_EW   6
+#define FBE_INPUT_CURSOR_RESIZE_NS   7
 #define FBE_INPUT_CURSOR_RESIZE_NWSE 8
 #define FBE_INPUT_CURSOR_RESIZE_NESW 9
 #define FBE_INPUT_CURSOR_NOT_ALLOWED 10
