@@ -600,8 +600,10 @@ Public Final Class Assets
     @MainThread
     Public Static Method DirExists(path: String): Bool => (Try? KindOf(path)) == FileKind.DIRECTORY
 
-    /// What's in the folder at `path`, from every mount that has it, and the mounts in it, by
-    /// their names in lower case. A name two mounts have is the last one's. A folder no mount has
+    /// What's in the folder at `path`, from every mount that has it, and the mounts in it, each by
+    /// its name as it's on disk, as its Path is, though an AssetReload's Path is in lower case, so
+    /// Normalize tells one's the other's. A name two mounts have is the last one's. A folder no mount
+    /// has
     /// throws an IOError of NOT_FOUND, a file one of NOT_A_DIRECTORY, and a path that isn't a
     /// res:// path one of INVALID_PATH.
     @MainThread

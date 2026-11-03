@@ -1,6 +1,7 @@
 // Models: glTF files as Assets, whose meshes, materials, images, skins, and clips are the engine's,
 // and whose scenes are made into entities as many times as a game wants.
 
+Import std.collections
 Import std.core
 Import std.ffi
 Import std.io
@@ -9,14 +10,19 @@ Import "./c/fbe_model"
 Import "./c/fbe_gpu"
 Import "./c/fbe_scene"
 Import "./c/fbe_texture"
+Import "./camera"
 Import "./clip"
 Import "./entity"
 Import "./geometry"
+Import "./light"
 Import "./loads"
 Import "./material"
+Import "./mesh"
+Import "./morph"
 Import "./player"
 Import "./skin"
 Import "./texture"
+Import "./transform"
 Import "./window"
 
 /// What a model's material reads a Texture for.
@@ -100,11 +106,14 @@ Public Final Class Model Implements Asset
         Return model
     End Method
 
-    /// Takes the file `load` read in place of its own, and makes what each Spawn made again from
-    /// it, under its root, which stays; what's under a root is freed, a game's own entities there
-    /// too. A Player on a root goes on, each clip it plays the new file's of that name, where it
-    /// was, or stopped for none. It gives True. It throws as FromLoad does, and an IOError of
-    /// INVALID_DATA for a file without a scene a Spawn was of, which leaves it as it was.
+    /// Takes the file `load` read in place of its own, and brings what each Spawn made up to date
+    /// with it, under its root, which stays: each node the file still has goes on being the entity
+    /// it was, by the name the file has for it and its kind, whatever it's been named since, set as
+    /// the file says; what's new is made; what the file's lost is freed, and what a game's put under
+    /// that goes up to what it was under, for a game's own entities are never freed. A Player on a
+    /// root goes on, each clip it plays the new file's of that name, where it was, or stopped for
+    /// none. It gives True. It throws as FromLoad does, and an IOError of INVALID_DATA for a file
+    /// without a scene a Spawn was of, which leaves it as it was.
     @MainThread
     Public Method Reload(load: AssetLoad): Bool Throws IOError
         Local made = Model(load)
@@ -129,9 +138,8 @@ Public Final Class Model Implements Asset
             Local root = spawned.Alive()
             If root == Null Then Continue
             roots.Add(spawned)
-            FreeUnder(root)
             Try
-                Try SpawnInto(root, spawned.Scene)
+                Try Remade(root, spawned.Scene)
             Catch e As IOError
                 failure = e
             End Try
@@ -342,6 +350,129 @@ Public Final Class Model Implements Asset
         Return IOError(kind, "{load.Path()}: {LastError()}", load.Path())
     End Method
 
+    // What's kept that's skinned, for once what's under its root's settled.
+    Field skinning: (Mesh, Skin)[] = []
+
+    // What's under `root` brought up to date with scene `scene` of this file.
+    @MainThread
+    Method Remade(root: Entity, scene: Int) Throws IOError
+        Local fresh = Pivot(root)
+        Try
+            Try SpawnInto(fresh, scene)
+        Catch e As IOError
+            fresh.Free()
+            Throw e
+        End Try
+        Mapped(root, fresh)
+        fresh.Free()
+        Reskinned(root, root)
+        For each In skinning
+            Local mesh, skin = each
+            mesh.SetSkin(skin, root)
+        End For
+        skinning = []
+    End Method
+
+    // What's under `into` made what's under `from` is: each its match, or moved here for none.
+    @MainThread
+    Method Mapped(into: Entity, from: Entity)
+        Local had = into.Children().Filter(Function(each: Entity) => each.FileNode() != "")
+        Local used: Entity[] = []
+        For child In from.Children()
+            Local match: Entity? = Null
+            For each In had
+                If each.FileNode() == child.FileNode() && each.Kind() == child.Kind() &&
+                   !used.Any(Function(taken: Entity) => RefEquals(taken, each))
+                    match = each
+                    Break
+                End If
+            End For
+            If match == Null
+                child.SetParent(into, False)
+            Else
+                used.Add(match)
+                Settled(child, match)
+                Mapped(match, child)
+            End If
+        End For
+        For each In had
+            If !used.Any(Function(taken: Entity) => RefEquals(taken, each))
+                Evicted(each, into)
+                each.Free()
+            End If
+        End For
+    End Method
+
+    // What a game's put under `going`, or under anything of the file's under it, moved to `to`.
+    @MainThread
+    Method Evicted(going: Entity, to: Entity)
+        For child In going.Children()
+            If child.FileNode() == ""
+                child.SetParent(to, True)
+            Else
+                Evicted(child, to)
+            End If
+        End For
+    End Method
+
+    // `to` set as `from`, the same kind, is, by the file: all but its name.
+    @MainThread
+    Method Settled(from: Entity, to: Entity)
+        to.SetPosition(from.Position())
+        to.SetRotation(from.Rotation())
+        to.SetScale(from.Scale())
+        Local mesh = from As? Mesh
+        Local toMesh = to As? Mesh
+        If mesh != Null && toMesh != Null
+            toMesh.SetGeometry(mesh.Geometry())
+            toMesh.SetMaterial(mesh.Material())
+            toMesh.SetMorphWeights(mesh.MorphWeights())
+            Local skin = mesh.Skin()
+            If skin != Null
+                skinning.Add((toMesh, skin))
+            ElseIf toMesh.Skin() != Null
+                toMesh.RemoveSkin()
+            End If
+        End If
+        Local light = from As? Light
+        Local toLight = to As? Light
+        If light != Null && toLight != Null
+            toLight.SetLightType(light.LightType())
+            toLight.SetColor(light.Color())
+            toLight.SetIntensity(light.Intensity())
+            toLight.SetRange(light.Range())
+            toLight.SetCone(light.InnerCone(), light.OuterCone())
+        End If
+        Local camera = from As? Camera
+        Local toCamera = to As? Camera
+        If camera != Null && toCamera != Null
+            toCamera.SetProjection(camera.Projection())
+            toCamera.SetFieldOfView(camera.FieldOfView())
+            toCamera.SetOrthographicHeight(camera.OrthographicHeight())
+            toCamera.SetRange(camera.Near(), camera.Far())
+        End If
+    End Method
+
+    // Each mesh under `at` of the file's skinned over what's under `root`, the tree it's in now.
+    @MainThread
+    Method Reskinned(at: Entity, root: Entity)
+        For child In at.Children()
+            Local mesh = child As? Mesh
+            Local skin = mesh?.Skin()
+            If mesh != Null && skin != Null && child.FileNode() != "" Then mesh.SetSkin(skin, root)
+            Reskinned(child, root)
+        End For
+    End Method
+
+    // Each of what's under `at`, marked with the name the file has for it.
+    @MainThread
+    Method MarkNodes(at: Entity)
+        For child In at.Children()
+            child.SetFileNode(child.Name())
+            MarkNodes(child)
+        End For
+    End Method
+
     // Makes scene `scene`'s nodes under `root`.
     @MainThread
     Method SpawnInto(root: Entity, scene: Int) Throws IOError
@@ -363,6 +494,7 @@ Public Final Class Model Implements Asset
             FreeUnder(root)
             Throw failure
         End If
+        MarkNodes(root)
     End Method
 
     // Frees what's under `root`.

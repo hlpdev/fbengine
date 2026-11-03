@@ -79,6 +79,7 @@ Public Class Entity Implements Printable
     Field attached: Attached? = Null
     Field components: Map<String, Value>? = Null
     Field strays: String[] = []
+    Field fileNode: String = ""
 
     // Made by a Class extending it, for a handle C made, which it keeps as the handle's wrapper.
     Package New(handle: UInt64)
@@ -276,6 +277,13 @@ Public Class Entity Implements Printable
         End For
         names.Sort()
         Return names
+    End Method
+
+    // The name its model's file has for it, if it came from one, whatever it's been named since.
+    Package Method FileNode(): String => fileNode
+
+    Package Method SetFileNode(name: String)
+        fileNode = name
     End Method
 
     // What the file it came from said of it that a save couldn't write back.
