@@ -76,8 +76,11 @@ using job_t = std::uint64_t;
 /// waits for one that runs after it, which would wait forever.
 class jobs_t {
 public:
-    /// Starts `workers` worker threads, at least one.
-    explicit jobs_t(int workers);
+    /// Starts `workers` worker threads, at least one, and waits for them to have started, so it's
+    /// never for a static initializer or DllMain, where it would wait forever under the loader's
+    /// lock. A thread that can't start throws its std::system_error, after stopping the rest;
+    /// `fail_after` makes that happen at that thread, for the tests.
+    explicit jobs_t(int workers, int fail_after = -1);
     /// Waits for every job, those they start too, and runs the work handed to the main thread that
     /// hasn't run, in turn until neither has any left, so none is lost; then stops the workers.
     ~jobs_t();
@@ -153,6 +156,9 @@ private:
     std::deque<job_t> m_queue;
     std::size_t m_unfinished = 0;
     bool m_stopping = false;
+    // How many threads have started, which the constructor waits for.
+    int m_started = 0;
+    std::condition_variable m_all_started;
     std::uint64_t m_searches = 0;
     // The jobs a search has still to look at.
     std::vector<job_t> m_search;

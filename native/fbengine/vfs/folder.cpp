@@ -2,7 +2,8 @@
 // case: at each name, every name in the folders so far that folds to it, by their real names on
 // the disk, first by bytes, so "Data" and "data" are one folder, and neither spelling in a path,
 // nor Windows' own names for a file (a short 8.3 name, a dot at the end, a device), finds what a
-// pak of the same files wouldn't. Each folder's listing is kept, and listed again only once the
+// pak of the same files wouldn't, nor do hidden names, starting with '.', which the cooker leaves
+// out of a pak. Each folder's listing is kept, and listed again only once the
 // folder has changed, so a read takes a stat of each folder on its path.
 
 #include "vfs/disk.hpp"
@@ -31,7 +32,8 @@ public:
     explicit folder_source_t(fs::path folder) : m_folder(std::move(folder)) {}
 
     result_t<std::optional<bytes_t>> read(std::span<const std::string> /*names*/,
-                                          std::span<const std::string> keys) override {
+                                          std::span<const std::string> keys,
+                                          std::uint64_t most) override {
         if (keys.empty()) {
             return std::optional<bytes_t>{};
         }
@@ -51,6 +53,9 @@ public:
                 .failure = failure_t::OTHER,
                 .message = std::format("couldn't read {}", utf8(file)),
             });
+        }
+        if (opened->size() > most) {
+            return std::unexpected(too_big(utf8(file), opened->size()));
         }
         try {
             if (faulted(fault_t::OUT_OF_MEMORY)) {
@@ -154,7 +159,7 @@ private:
         auto listed = std::make_shared<listing_t>();
         listed->time = *time;
         for (found_t& entry : *entries) {
-            if (nameable(entry.name)) {
+            if (nameable(entry.name) && !entry.name.starts_with('.')) {
                 listed->names[fold(entry.name)].push_back(std::move(entry));
             }
         }

@@ -148,6 +148,12 @@ good modern engine on its own. Every structural choice is checked against both.
   for a retro look). Texture layers with blend modes and their own UV sets, lightmaps (SCP:CB's
   rooms are lightmapped), fog, and alpha all go through the same pipelines, as specialization
   constants, so any mix of them draws in the same pass.
+  UNLIT and VERTEX are the fixed-function look, so they work in encoded values: layers, ADD, ×2,
+  and fog on what's stored, with only the final color converted to linear for the target; PBR is
+  linear throughout. VERTEX's light is `min(range / distance, 1)` with no end, clamped per vertex
+  before texturing, from the first 8 shown lights in the tree's order; PIXEL and PBR keep
+  KHR_lights_punctual's window, which clusters need. Range means each in its model. A Texture has
+  an alpha flag, which AUTO blending honors.
 - **Lights**: clustered forward, so the many small lights of a facility work, per pixel or per
   vertex. A point or spot light ends at its range, as clustering needs, and falls off inside it as
   glTF's KHR_lights_punctual says, the inverse square windowed to 0 at the range, in every shading
@@ -184,8 +190,14 @@ good modern engine on its own. Every structural choice is checked against both.
   Task completes on the main thread at a Flip, or at a tick of the main scheduler while FB waits.
 - A cache keyed by normalized path hands out the same asset again, refcounted; `Free()` and the
   last reference let it go.
-- The cooker, typed references, and hot reload are E8's, and need a package build step from
-  FutureBlitz, which 1.1 adds.
+- A game's `[build]` names fbengine_tools' step, `step/game.fb`. Its files are in `assets/`, and
+  each build the step writes its module `res`, the typed references to them, with a `Mount`: a
+  debug build mounts `assets/` and watches it for hot reload, and a release cooks it into
+  `build/<name>.pak`, each file again only when it or its settings change, and mounts the pak
+  beside the executable or in a macOS bundle's Resources. The cooker's written paks are stored
+  zips, a file at a time, with Zip64 where sizes or counts need it. Names starting with '.' aren't
+  in a folder mount, a pak, or the references, and Thumbs.db and desktop.ini aren't in the last
+  two.
 - The engine loads modern formats only: glTF for meshes, scenes, and animation; KTX2, PNG, and
   JPEG for textures; OGG, WAV, and FLAC for sound. Converting anything else is a game's own
   tooling, outside the engine and the language (the user, 2026-10-31).

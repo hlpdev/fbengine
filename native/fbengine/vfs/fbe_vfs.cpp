@@ -11,6 +11,7 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -152,14 +153,21 @@ int64_t read(const char* path, bool text) {
         failed(parsed.error());
         return -1;
     }
-    vfs::result_t<vfs::bytes_t> bytes = vfs::files().read(*parsed);
+    // What fb's arrays hold, Int's range.
+    constexpr std::uint64_t most = std::numeric_limits<int32_t>::max();
+    vfs::result_t<vfs::bytes_t> bytes = vfs::files().read(*parsed, most);
     if (!bytes) {
         failed(bytes.error());
         return -1;
     }
     if (text) {
-        const std::string well = vfs::well_formed(
-            std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+        const std::string_view raw(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+        // U+FFFD is longer than a byte it stands for, so it's counted before it's made.
+        if (const std::uint64_t size = vfs::well_formed_size(raw); size > most) {
+            failed(vfs::too_big(parsed->text(), size));
+            return -1;
+        }
+        const std::string well = vfs::well_formed(raw);
         read_bytes.assign(well.begin(), well.end());
     } else {
         read_bytes = std::move(*bytes);
@@ -221,6 +229,14 @@ FBE_API bool fbe_vfs_normalize(const char* path) {
 
 FBE_API const char* fbe_vfs_normalized(void) {
     return normalized.c_str();
+}
+
+FBE_API bool fbe_vfs_real_path(const char* path) {
+    normalized.clear();
+    return guarded(false, [&] {
+        normalized = vfs::utf8(vfs::real_path(vfs::disk_path(path)));
+        return true;
+    });
 }
 
 FBE_API int32_t fbe_vfs_kind(const char* path) {

@@ -7,6 +7,8 @@ Import std.core
 Import std.io
 Import std.text
 Import fbengine
+Import "./cook"
+Import "./left_out"
 
 /// Writes the module of typed references to a game's files: each file's res:// path, by its
 /// folders and its name, as `Res.Textures.Walls.Stone` is "res://Textures/Walls/Stone.png" once
@@ -15,10 +17,13 @@ Import fbengine
 /// folders' names joined by '_', as Textures_Walls, which no name has. A name is its file's
 /// without its extension, each word capitalized, as "stone_wall.png" is StoneWall; one that two
 /// files would have, or a folder, or that's FutureBlitz's own, a keyword or a built-in type, has
-/// its extension too, as StonePng. Sidecars aren't named, nor what no res:// path can name, and of
-/// names that differ only in case, the first by its bytes is, as res:// finds it. It follows
-/// links, as the folder mount does, and a folder more than 32 deep, as links that go round make,
-/// throws an IOError of INVALID_DATA.
+/// its extension too, as StonePng. Sidecars aren't named, nor what's hidden, its name starting
+/// with '.', as .DS_Store's does, nor Windows' Thumbs.db and desktop.ini, which the cooker leaves
+/// out, nor what a glTF names as a buffer, which a release has in it, nor what no res:// path can
+/// name;
+/// and of names that differ only in case, the first by its bytes is, as res:// finds it. It
+/// follows links, as the folder mount does, and a folder more than 32 deep, as links that go
+/// round make, throws an IOError of INVALID_DATA.
 ///
 /// # Examples
 ///
@@ -44,11 +49,27 @@ Public Final Class References
     /// The module of the files in the folder `source`, all the way down, as Write writes it.
     @MainThread
     Public Static Method Of(source: Path): String Throws IOError
+        Return Try Module(source, "Import std.core\n")
+    End Method
+
+    /// The module of the files in the folder `source`, as Of gives it, with a Function Mount that
+    /// runs the statement `mount`, for a game's build step, which has fbengine as FbEngine.
+    @MainThread
+    Public Static Method OfGame(source: Path, mount: String): String Throws IOError
+        Return Try Module(source, "Import std.core\nImport fbengine As FbEngine\n\n" +
+                          "/// Mounts the game's files at res://, as this build has them.\n" +
+                          "Public Function Mount() Throws IOError\n    {mount}\n" +
+                          "End Function\n")
+    End Method
+
+    // The module of the files in the folder `source`, its typed references after `start`.
+    Static Method Module(source: Path, start: String): String Throws IOError
         Local root = Try Listed(source, "res://", 0)
+        Pruned(root, Try Cooker.BuffersIn(source))
         Local text =
             "// Typed references to the game's files in res://, written by fbengine_tools'\n" +
             "// References: write them again when the files change, rather than editing them.\n\n" +
-            "Import std.core\n"
+            start
         Local names = NamesOf(root, Null)
         // Every Class's name, which a deeper one's is numbered against.
         Local classes = Set<String>()
@@ -64,6 +85,19 @@ Public Final Class References
             text += Try ClassOf(folder, names[root.Files.Count + at], True, classes)
         End For
         Return text
+    End Method
+
+    // Takes out of `folder`, and the folders in it, the files of `buffers`, by their names folded,
+    // which a release has in the glTFs that name them.
+    Static Method Pruned(folder: ListedFolder, buffers: Set<String>)
+        Local kept: (String, String)[] = []
+        For file In folder.Files
+            If !buffers.Contains(Folded(file.1).Slice(6, file.1.Length)) Then kept.Add(file)
+        End For
+        folder.Files = kept
+        For deeper In folder.Folders
+            Pruned(deeper, buffers)
+        End For
     End Method
 
     // What's in the folder `path`, which is `res`, a res:// path, `depth` folders deep, and in
@@ -84,8 +118,9 @@ Public Final Class References
         For entry In entries
             Local name = entry.Name()
             Local named = res == "res://" ? res + name : res + "/" + name
-            // What no res:// path names, and the second of two names that differ only in case.
-            If name.Contains("\\") || !seen.Add(Folded(name)) Then Continue
+            // What the cooker leaves out, what no res:// path names, and the
+            // second of two names that differ only in case.
+            If LeftOut(name) || name.Contains("\\") || !seen.Add(Folded(name)) Then Continue
             If (Try? Assets.Normalize(named)) == Null Then Continue
             Local kind = KindOf(entry)
             If kind == FileKind.DIRECTORY
@@ -223,6 +258,8 @@ Public Final Class References
     // Whether `name` is one of FutureBlitz's keywords, which can't be an identifier, or its built-in
     // types, which the module's own names would hide.
     Static Method Reserved(name: String): Bool
+        // A game's module has these of its own.
+        If name == "Mount" || name == "FbEngine" || name == "IOError" Then Return True
         Local types = ["Bool", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32",
                        "UInt64", "CLong", "CULong", "CWChar", "Float32", "Float64", "String",
                        "CString", "Char", "Byte", "Int", "Long", "Float", "Double"]
