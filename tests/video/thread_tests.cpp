@@ -317,6 +317,23 @@ TEST_CASE("a seek to a looping video's end keeps its clock in the loop it shows"
     CHECK(std::abs(fbe_video_time(video.get()) - frame) < 1e-6);
 }
 
+// A clock a hair short of a loop's end shows the next's first picture, and is in that loop, so a
+// loop turned off then goes on from there.
+TEST_CASE("a clock a hair short of a loop's end is in the next") {
+    control_t control;
+    const video_handle_t video(control);
+    fbe_video_set_loop(video.get(), true);
+    fbe_video_seek(video.get(), static_cast<double>(frames - 1) * frame);
+    fbe_video_play(video.get());
+    let_it_decode();
+    REQUIRE(fbe_video_update(video.get(), frame - 1e-6));
+    CHECK(fbe_video_frame_number(video.get()) == 0);
+    fbe_video_set_loop(video.get(), false);
+    REQUIRE(fbe_video_update(video.get(), frame));
+    CHECK(fbe_video_frame_number(video.get()) == 1);
+    CHECK(std::abs(fbe_video_time(video.get()) - frame) < 1e-3);
+}
+
 // Looping turned off as the thread starts the next loop by itself ends this one.
 TEST_CASE("a loop turned off as the thread starts the next by itself ends at the end") {
     control_t control;

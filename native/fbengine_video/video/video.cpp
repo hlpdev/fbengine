@@ -224,8 +224,9 @@ struct video_t {
     // Moves the clock on by `seconds`, a looping video's whole loops into its count of them.
     void move_clock(double seconds) {
         clock += seconds;
-        if (loop && clock >= duration) {
-            const double loops = std::floor(clock / duration);
+        // A hair short of the end is the next loop, as its first picture's due by then.
+        if (loop && clock + slack >= duration) {
+            const double loops = std::floor((clock + slack) / duration);
             clock_loop += static_cast<std::int64_t>(loops);
             clock = std::max(0.0, clock - (loops * duration));
         }
