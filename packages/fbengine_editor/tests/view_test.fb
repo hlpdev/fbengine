@@ -683,15 +683,17 @@ Function TurnsAndScalesSnapToo() Throws IOError, GraphicsError
     Try Simulate.PressKey(Key.E)
     editor.Step()
     Local grab = Vec2(0, 0)
+    Local to = Vec2(0, 0)
     Local found = False
     For i = 0 To 63
         Local angle = (i As Float) / 64 * 2 * Pi
         For r = 1 To 60
-            Local at = Shown(editor,
-                             Vec3(Cos(angle) * (r As Float) * 0.1, 1,
-                                  Sin(angle) * (r As Float) * 0.1))
+            Local radius = (r As Float) * 0.1
+            Local at = Shown(editor, Vec3(Cos(angle) * radius, 1, Sin(angle) * radius))
             If editor.View.HandleAt(at) == 1
                 grab = at
+                // Around the ring, about a sixth of the way, not out from it.
+                to = Shown(editor, Vec3(Cos(angle + 1.0) * radius, 1, Sin(angle + 1.0) * radius))
                 found = True
                 Break
             End If
@@ -699,7 +701,7 @@ Function TurnsAndScalesSnapToo() Throws IOError, GraphicsError
         If found Then Break
     End For
     Expect(found, "there's no Y ring")
-    Try Drag(editor, grab, grab + Vec2(120, 40))
+    Try Drag(editor, grab, to)
     Local turned = cube.Rotation(Space.WORLD)
     // A turn about Y's half angle is its w's and its y's.
     Local angle = Atan2(turned.y, turned.w) * 2
