@@ -442,6 +442,56 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DEXAMPLE=${PROJECT_SOURCE_DIR}/examples/video_player"
                    -P "${CMAKE_CURRENT_SOURCE_DIR}/video/player_usage.cmake")
   set_tests_properties(examples.video_player.usage PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
+  # E14's proofs of this lane's: what each prints, line by line, and its --watch walked offscreen.
+  function(fbengine_add_lane_proof name)
+    list(JOIN ARGN "?
+" printed)
+    set(folder "${PROJECT_SOURCE_DIR}/examples/proof/${name}")
+    add_test(NAME proof.${name} COMMAND "${FBENGINE_FB}" --color never run "${folder}")
+    set_tests_properties(proof.${name} PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "
+${printed}?
+$"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
+    add_test(NAME proof.${name}_watch
+             COMMAND "${FBENGINE_FB}" --color never run "${folder}" -- --watch --frames 40)
+    set_tests_properties(proof.${name}_watch PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "
+watched 40 frames?
+$"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
+  endfunction()
+  fbengine_add_lane_proof(two_videos_at_startup
+                          "the first: 64 by 48, 2.08 s, its own sound True"
+                          "at 0.25 s of its sound, red"
+                          "at 0.75 s of its sound, green"
+                          "at 1.25 s of its sound, blue"
+                          "at 1.75 s of its sound, white"
+                          "it ended True, heard True, its clock on its sound True"
+                          "the second: its own sound False, then one beside it"
+                          "at 0.25 s of its sound, red"
+                          "at 0.75 s of its sound, green"
+                          "at 1.25 s of its sound, blue"
+                          "at 1.75 s of its sound, white"
+                          "it ended True, heard True, its clock on its sound True"
+                          "fitted to 200 by 96: 128 by 96, at 36, 0"
+                          "its bars black, black, its middle white"
+                          "skipped at half a second: heard True, then False")
+  fbengine_add_lane_proof(stack_and_joints
+                          "the stack stands, at rest: True"
+                          "the block's held where it was: True"
+                          "the door's opened a quarter turn: True"
+                          "the lift's 4 m up: True"
+                          "the crate's on it: True"
+                          "the fan's turning at its motor's speed: True"
+                          "let go, the block's knocked at least five of the stack away: True"
+                          "the chain's held together: True"
+                          "the door's swung back: True"
+                          "the lift's come back down: True"
+                          "every entity's on its body: True"
+                          "twice over, it all ends alike: True")
   add_test(NAME examples.crate_on_a_lift
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/crate_on_a_lift")
