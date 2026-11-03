@@ -6,6 +6,7 @@ Import std.core
 Import std.data
 Import std.io
 Import std.math
+Import std.text
 Import fbengine
 Import fbengine_ui
 Import "./browser"
@@ -51,7 +52,9 @@ Public Final Class Editor
     Field titled: String = ""
     // The file the scene's saved in, a res:// path and where that is on disk.
     Field sceneFile: String? = Null
-    Field sceneDisk: Path? = Null
+    // What the scene's file said when it was last read or written here, to tell another's changing it.
+    Field sceneText: String? = Null
+    Field assetsHaveKeys: Bool = False
     Field retired: EditedScene[] = []
 
     /// An editor keeping what it keeps in `settings`, or the OS's folder for settings. It's an
@@ -63,7 +66,7 @@ Public Final Class Editor
         Edited = EditedScene()
         View = SceneView(Edited, Edits)
         Tree = SceneTree(Edited, Edits)
-        Files = AssetBrowser(Edits)
+        Files = AssetBrowser()
         Docked = Dock()
         Menus = MenuBar(Actions)
         welcome = Widget("welcome", "welcome")
@@ -122,6 +125,7 @@ Public Final Class Editor
         Retired()
         Files.Update()
         Shown.Update()
+        KeysLooked()
         Menus.Update()
         View.Update(Frame.Delta())
         Local showing = dialog
@@ -220,7 +224,7 @@ Public Final Class Editor
     Method NewScene()
         Replaced(EditedScene())
         sceneFile = Null
-        sceneDisk = Null
+        sceneText = Null
     End Method
 
     // `scene` in place of what's there, with nothing to undo in it.
@@ -253,9 +257,12 @@ Public Final Class Editor
         If open == Null Then Return
         Try
             Local disk = Try DiskOf(open, path)
-            Replaced(Try LoadEdited(path))
+            Local loaded, problems = Try LoadEdited(path)
+            Replaced(loaded)
             sceneFile = path
-            sceneDisk = disk
+            sceneText = Try? File.ReadText(disk)
+            Held()
+            If problems.Count > 0 Then Said("Some of what that scene's made of is lost", problems.Join("\n"))
         Catch error As IOError
             Said("Couldn't open that scene", error.Message)
             Return
@@ -263,23 +270,78 @@ Public Final Class Editor
         Tree.MarkChanged()
     End Method
 
+    // Holds each model the scene's meshes are from, so they go on being their files', and has each
+    // drawn as its model's now.
+    Method Held()
+        For root In Edited.SiblingsOf(Null)
+            Rebound(root)
+        End For
+    End Method
+
+    Method Rebound(at: Entity)
+        Local mesh = at As? Mesh
+        Local source = mesh?.Geometry()?.Source()
+        If mesh != Null && source != Null && source.StartsWith("res://")
+            Local marked = source.Split("#")
+            Local number = Int.Parse(marked[marked.Count - 1])
+            marked.RemoveAt(marked.Count - 1)
+            Local model = Try? Files.ModelOf(marked.Join("#"))
+            If model != Null && number != Null && number >= 0 && number < model.Geometries().Count
+                Local part = model.Geometries()[number]
+                If mesh.Geometry() != part Then mesh.SetGeometry(part)
+            End If
+        End If
+        For child In at.Children()
+            Rebound(child)
+        End For
+    End Method
+
     /// Saves the scene being edited in its file, whole or not at all, as `path`, a res:// path, if
-    /// that's given; one that can't be saved says why in a dialog, and is as it was.
-    Public Method SaveScene(path: String? = Null)
+    /// that's given, then does `after`; one that can't be saved says why in a dialog, and is as it was.
+    /// If its file's been changed by something else since, it asks first.
+    Public Method SaveScene(path: String? = Null, after: (Func())? = Null)
         Local open = project
         Local to = path ?? sceneFile
         If open == Null || to == Null Then Return
         Try
-            Local disk = DiskOf(open, to)
+            Local disk = Try DiskOf(open, to)
+            Local was = sceneText
+            If to == sceneFile && was != Null && File.Exists(disk) && (Try File.ReadText(disk)) != was
+                Local asking = Dialog("Its file's changed", "{to} has been changed since this read it. " +
+                                      "Saving replaces what it says now.")
+                asking.AddButton("Cancel")
+                Local same = to
+                asking.AddButton("Replace", Function[Weak Self]()
+                    Self?.WrittenTo(same, after)
+                End Function)
+                Showed(asking)
+                Return
+            End If
+        Catch error As IOError
+            Said("Couldn't save that scene", error.Message)
+            Return
+        End Try
+        WrittenTo(to, after)
+    End Method
+
+    // The scene written to `to`, with its project's assets made and mounted for one that had none.
+    Method WrittenTo(to: String, after: (Func())?)
+        Local open = project
+        If open == Null Then Return
+        Try
+            Local disk = Try DiskOf(open, to)
             Local folder = disk.Parent()
             If folder != Null Then Try Dir.CreateAll(folder)
+            If open.Mount() Then Files.SetFolder(open.Folder / "assets")
             Try SaveEdited(Edited, disk)
             sceneFile = to
-            sceneDisk = disk
+            sceneText = Try File.ReadText(disk)
             Edits.MarkSaved()
         Catch error As IOError
             Said("Couldn't save that scene", error.Message)
+            Return
         End Try
+        If after != Null Then after()
     End Method
 
     // `action`, after asking whether to save what's changed, if anything has.
@@ -297,8 +359,7 @@ Public Final Class Editor
             If own.sceneFile == Null
                 own.AskForSceneFile(action)
             Else
-                own.SaveScene()
-                If !own.Edits.Modified() Then action()
+                own.SaveScene(Null, action)
             End If
         End Function)
         Showed(asking)
@@ -314,12 +375,46 @@ Public Final Class Editor
         asking.AddButton("Cancel")
         Local saving = asking.AddButton("Save", Function[Weak Self]()
             Local own = Self
-            If own == Null || field.Text() == "" Then Return
-            own.SaveScene(field.Text())
-            If after != Null && !own.Edits.Modified() Then after()
+            If own != Null && field.Text() != "" Then own.SavedAs(field.Text(), after)
         End Function)
         asking.SubmitWith(field, saving)
         Showed(asking)
+    End Method
+
+    // Saves at `typed`, a scene's by its extension, after asking if that'd replace another's file.
+    Method SavedAs(typed: String, after: (Func())?)
+        Local open = project
+        If open == Null Then Return
+        Local to = typed.ToLower().EndsWith(".scene") ? typed : typed + ".scene"
+        Try
+            Local disk = Try DiskOf(open, to)
+            Local here = sceneFile
+            Local same = here != Null && (Try DiskOf(open, here)) == disk
+            If !same && (File.Exists(disk) || Dir.Exists(disk))
+                Local asking = Dialog("There's a file there", "{to} is there already. Saving replaces it.")
+                asking.AddButton("Cancel")
+                asking.AddButton("Replace", Function[Weak Self]()
+                    Self?.WrittenTo(to, after)
+                End Function)
+                Showed(asking)
+                Return
+            End If
+        Catch error As IOError
+            Said("Couldn't save that scene", error.Message)
+            Return
+        End Try
+        WrittenTo(to, after)
+    End Method
+
+    // What the undo commands act on: the sidecars', while what was last pressed was in the Assets pane
+    // and left it having the keys, else the scene's.
+    Method Undoing(): History => assetsHaveKeys ? Files.Edits : Edits
+
+    // A press anywhere but the Assets pane takes the keys from it.
+    Method KeysLooked()
+        If MouseHit(MouseButton.LEFT) && !Files.Box().Contains(Vec2(MouseX(), MouseY()))
+            assetsHaveKeys = False
+        End If
     End Method
 
     // Asks for a res:// path to open.
@@ -349,6 +444,7 @@ Public Final Class Editor
             Local spawned = Try model.Spawn()
             spawned.SetName(NameOf(path))
             spawned.SetPosition(DropPlace(from, way))
+            assetsHaveKeys = False
             Edits.Commit(MadeEdit("Add {NameOf(path)}", Edited, Function(): Entity => spawned))
         Catch error As IOError
             Said("Couldn't add that model", error.Message)
@@ -445,9 +541,15 @@ Public Final Class Editor
         End Function, Function[Weak Self](path: String, point: Vec2)
             Self?.DropModel(path, point)
         End Function)
+        Files.OnPressed(Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.assetsHaveKeys = True
+        End Function)
         Files.OnReloaded(Function[Weak Self]()
             Local own = Self
-            If own != Null Then own.Tree.MarkChanged()
+            If own == Null Then Return
+            own.Held()
+            own.Tree.MarkChanged()
         End Function)
         For each In [("inspector", "Inspector"), ("output", "Output")]
             Local id, title = each
@@ -496,17 +598,17 @@ Public Final Class Editor
         End Function, PrimaryKey(Key.Q))
         Actions.Add("edit.undo", "Undo", Function[Weak Self]()
             Local own = Self
-            If own != Null Then own.Edits.Undo()
+            If own != Null Then own.Undoing().Undo()
         End Function, PrimaryKey(Key.Z), Function[Weak Self](): Bool
             Local own = Self
-            Return own != Null && own.Edits.CanUndo() && !own.View.HandleHeld()
+            Return own != Null && own.Undoing().CanUndo() && !own.View.HandleHeld()
         End Function, True)
         Actions.Add("edit.redo", "Redo", Function[Weak Self]()
             Local own = Self
-            If own != Null Then own.Edits.Redo()
+            If own != Null Then own.Undoing().Redo()
         End Function, PrimaryKey(Key.Z, True), Function[Weak Self](): Bool
             Local own = Self
-            Return own != Null && own.Edits.CanRedo() && !own.View.HandleHeld()
+            Return own != Null && own.Undoing().CanRedo() && !own.View.HandleHeld()
         End Function, True)
         For pane In Docked.Panes()
             Local id = pane.Id

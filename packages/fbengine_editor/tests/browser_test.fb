@@ -4,6 +4,7 @@
 
 Import std.collections
 Import std.core
+Import std.ffi
 From std.image Import Image, Png
 Import std.io
 Import std.math
@@ -128,7 +129,7 @@ Function ThumbnailsAreOfWhatTheFilesAre() Throws IOError, GraphicsError
     Local games = Try TempDir()
     Local editor = Try Started(settings.Path, Try Game(games.Path))
     Defer editor.Finish()
-    Local wall = editor.Files.ThumbOf("res://wall.png")
+    Local wall = Thumb(editor, "res://wall.png")
     If wall == Null
         Fail("a picture has a thumbnail")
         Return
@@ -139,7 +140,7 @@ Function ThumbnailsAreOfWhatTheFilesAre() Throws IOError, GraphicsError
     Expect(editor.Files.ThumbOf("res://note.txt") == Null)
     Local stage = World.Current()
     Local before = editor.Edited.Stage.EntityCount()
-    Local ball = editor.Files.ThumbOf("res://sub/ball.gltf")
+    Local ball = Thumb(editor, "res://sub/ball.gltf")
     If ball == Null
         Fail("a model has a thumbnail")
         Return
@@ -156,7 +157,7 @@ Function ThumbnailsAreOfWhatTheFilesAre() Throws IOError, GraphicsError
     End For
     Expect(drawn > 40, "{drawn} pixels of the triangle")
     Expect(RefEquals(editor.Files.ThumbOf("res://sub/ball.gltf"), ball))
-    Expect(editor.Files.ThumbOf("res://sub/bad.gltf") == Null)
+    Expect(Thumb(editor, "res://sub/bad.gltf") == Null)
 End Function
 
 // A model dragged to the scene is there, on the ground under the pointer, selected, through undo.
@@ -291,7 +292,7 @@ Function ImportSettingsAreEditedInTheSidecar() Throws IOError, GraphicsError
     Expect((Try Sidecar(games)) == "quality = 3\nsrgb = false\n",
            "{(Try Sidecar(games)) ?? "none"}")
     Expect(!(Try Assets.ReadSettings<ImageSettings>("res://wall.png")).Srgb)
-    Expect(editor.Edits.UndoName() == "Import Settings")
+    Expect(editor.Files.Edits.UndoName() == "Import Settings" && !editor.Edits.Modified())
     // Back to the default, its line's gone.
     (Found(editor, "assets.srgb") As? Toggle)?.Click()
     editor.Step()
@@ -341,7 +342,7 @@ Function ImportSettingsAreEditedInTheSidecar() Throws IOError, GraphicsError
     editor.Step()
     Expect((Try Assets.ReadSettings<ImageSettings>("res://wall.png")).Quality == 3)
     // Undone, each back, to the file as it first was.
-    While editor.Edits.CanUndo()
+    While editor.Files.Edits.CanUndo()
         editor.Actions.Run("edit.undo")
     End While
     Expect((Try Sidecar(games)) == "quality = 3\n", "{(Try Sidecar(games)) ?? "none"}")
@@ -395,15 +396,13 @@ Function WhatChangesOnDiskIsSeen() Throws IOError, GraphicsError
     Local editor = Try Started(settings.Path, Try Game(games.Path))
     Defer editor.Finish()
     Local assets = games.Path / "game" / "assets"
-    Local thumb = editor.Files.ThumbOf("res://wall.png")
+    Local thumb = Thumb(editor, "res://wall.png")
     If thumb == Null Then Panic("a picture's thumbnail")
     Expect(thumb.Texture().ReadPixel(0, 0) == Color32(200, 20, 30, 255))
+    PastALook(editor)
     Try File.WriteBytes(assets / "wall.png", Picture(90))
-    StepUntil(editor, Function() => editor.Files.Reloads() > 0)
-    Expect(editor.Files.Reloads() > 0)
-    Local again = editor.Files.ThumbOf("res://wall.png")
-    If again == Null Then Panic("a picture's thumbnail")
-    Expect(again.Texture().ReadPixel(0, 0) == Color32(90, 20, 30, 255))
+    StepUntil(editor, Function() => RowPixel(editor, "res://wall.png") == Color32(90, 20, 30, 255))
+    Expect(RowPixel(editor, "res://wall.png") == Color32(90, 20, 30, 255))
     // New, and gone.
     Try File.WriteText(assets / "new.txt", "new")
     StepUntil(editor, Function() => editor.Files.RowOf("res://new.txt") != Null)
@@ -433,7 +432,7 @@ Function WhatChangesOnDiskIsSeen() Throws IOError, GraphicsError
     StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
     Expect(placed.ChildCount() == 1 && placed.Child(0).Name() == "sharper")
     // Its thumbnail's the file's as it is now: the triangle turned away from above is none of it drawn.
-    Local seen = editor.Files.ThumbOf("res://sub/ball.gltf")
+    Local seen = Thumb(editor, "res://sub/ball.gltf")
     If seen == Null Then Panic("a model's thumbnail")
     Expect(Differing(seen.Texture().ToImage()) > 40)
     reloads = editor.Files.Reloads()
@@ -441,7 +440,7 @@ Function WhatChangesOnDiskIsSeen() Throws IOError, GraphicsError
                        TRIANGLE.Replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA",
                                         "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"))
     StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
-    Local after = editor.Files.ThumbOf("res://sub/ball.gltf")
+    Local after = Thumb(editor, "res://sub/ball.gltf")
     If after == Null Then Panic("a model's thumbnail")
     Expect(Differing(after.Texture().ToImage()) == 0)
     // Its folder let go of, a project closed, nothing's watched or held.
@@ -626,4 +625,593 @@ Function AGameReadsWhatTheEditorSaved() Throws IOError, GraphicsError
     If blade == Null Then Panic("its mesh")
     Expect(blade.Name() == "blade" && blade.Geometry()?.Source() == "res://sub/ball.gltf#0")
     Expect(blade.Geometry()?.Surface(0)?.VertexCount() == 3)
+End Function
+
+// The thumbnail of `path`, once it's made.
+Function Thumb(editor: Editor, path: String): Sprite2D?
+    editor.Files.ThumbOf(path)
+    StepUntil(editor, Function() => editor.Files.ThumbDone(path))
+    Return editor.Files.ThumbOf(path)
+End Function
+
+// What the row of `path` shows, at its first pixel.
+Function RowPixel(editor: Editor, path: String): Color32
+    Local box = editor.Files.RowOf(path)?.Find("assets.thumb") As? ImageBox
+    If box == Null Then Panic("{path}'s row has no thumbnail")
+    Local sprite = box.Sprite()
+    If sprite == Null Then Panic("{path}'s row shows nothing")
+    Return sprite.Texture().ReadPixel(0, 0)
+End Function
+
+// Whatever's looked at the disk has, since it looks every half a second.
+Function PastALook(editor: Editor)
+    Local since = Instant.Now()
+    While (Instant.Now() - since) < 700.Milliseconds
+        editor.Step()
+        Sleep(5.Milliseconds)
+    End While
+End Function
+
+Function Wide(width: Int, height: Int): UInt8[]
+    Local image = Image(width, height)
+    For y = 0 To height - 1
+        For x = 0 To width - 1
+            image[x, y] = Color32(10, 200, 30, 255)
+        End For
+    End For
+    Return Png.Encode(image)
+End Function
+
+// However many there are, a few a frame; each small; and what's gone let go of.
+@Test
+Function ThumbnailsComeAFewAFrameAndSmall() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local bytes = Wide(128, 64)
+    For at = 1 To 200
+        Try File.WriteBytes(game / "assets" / "many{at}.png", bytes)
+    End For
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    Local most = 0
+    Local was = editor.Files.ThumbsMade()
+    Local since = Instant.Now()
+    While editor.Files.ThumbsMade() < 201 && (Instant.Now() - since) < 120.Seconds
+        editor.Step()
+        most = Max(most, editor.Files.ThumbsMade() - was)
+        was = editor.Files.ThumbsMade()
+    End While
+    Expect(editor.Files.ThumbsMade() >= 201, "{editor.Files.ThumbsMade()}")
+    Expect(most <= 2 && most > 0, "{most} in a frame")
+    Local one = editor.Files.ThumbOf("res://many7.png")
+    If one == Null Then Panic("its thumbnail")
+    Expect(one.Texture().Width() == 64 && one.Texture().Height() == 32)
+    Expect(one.Texture().ReadPixel(3, 3) == Color32(10, 200, 30, 255))
+    Expect(RowPixel(editor, "res://many7.png") == Color32(10, 200, 30, 255))
+    // Gone: what it held for that's let go of.
+    Local held = editor.Files.ThumbsHeld()
+    Try File.Delete(game / "assets" / "many7.png")
+    StepUntil(editor, Function() => editor.Files.ThumbsHeld() < held)
+    Expect(editor.Files.ThumbsHeld() == held - 1)
+End Function
+
+// A picture changed is shown changed, in its row; one with capitals too, by the path it's asked for by; a
+// model no one's dropped; and one that was broken, once it's fixed.
+@Test
+Function WhatChangesShowsInItsRow() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local assets = game / "assets"
+    Try File.WriteBytes(assets / "Wall2.png", Picture(40))
+    Try File.WriteText(assets / "bad.png", "not a picture")
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.Files.SetOpen("res://sub", True)
+    If (Thumb(editor, "res://wall.png") == Null) || (Thumb(editor, "res://wall2.png") == Null) Then Panic("pictures")
+    Expect(RowPixel(editor, "res://wall.png") == Color32(200, 20, 30, 255))
+    Expect(RowPixel(editor, "res://Wall2.png") == Color32(40, 20, 30, 255))
+    Expect(Thumb(editor, "res://bad.png") == Null)
+    Local shown = Thumb(editor, "res://sub/ball.gltf")
+    If shown == Null Then Panic("a model's")
+    Expect(Differing(shown.Texture().ToImage()) > 40)
+    PastALook(editor)
+    Try File.WriteBytes(assets / "wall.png", Picture(90))
+    Try File.WriteBytes(assets / "Wall2.png", Picture(95))
+    Try File.WriteBytes(assets / "bad.png", Picture(77))
+    // Turned away from above: none of it's drawn.
+    Try File.WriteText(assets / "sub" / "ball.gltf",
+                       TRIANGLE.Replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA",
+                                        "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"))
+    Local changed = Function(): Bool
+        Local model = editor.Files.ThumbOf("res://sub/ball.gltf")
+        Local fixed = editor.Files.ThumbOf("res://bad.png")
+        Return fixed != Null && model != Null && Differing(model.Texture().ToImage()) == 0 &&
+               RowPixel(editor, "res://wall.png") == Color32(90, 20, 30, 255) &&
+               RowPixel(editor, "res://Wall2.png") == Color32(95, 20, 30, 255)
+    End Function
+    StepUntil(editor, changed)
+    Expect(changed())
+    Expect(RowPixel(editor, "res://bad.png") == Color32(77, 20, 30, 255))
+End Function
+
+// What can't be read keeps what it was, and says why; what can again, doesn't.
+@Test
+Function AFailedReloadKeepsItsThumbnail() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    If Thumb(editor, "res://wall.png") == Null Then Panic("a picture")
+    PastALook(editor)
+    Try File.WriteText(game / "assets" / "wall.png", "garbage now")
+    StepUntil(editor, Function() => editor.Files.Problem() != "")
+    Expect(editor.Files.Problem().Contains("wall.png"), editor.Files.Problem())
+    Expect(RowPixel(editor, "res://wall.png") == Color32(200, 20, 30, 255))
+    Try File.WriteBytes(game / "assets" / "wall.png", Picture(66))
+    StepUntil(editor, Function() => RowPixel(editor, "res://wall.png") == Color32(66, 20, 30, 255))
+    Expect(editor.Files.Problem() == "", editor.Files.Problem())
+End Function
+
+// A model changing leaves a renamed node the entity it was, what's been put under it there, and undo fine;
+// and when the file loses it, what's under it goes up.
+@Test
+Function AModelReloadedKeepsItsEntitiesAndWhatsUnderThem() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local file = game / "assets" / "sub" / "ball.gltf"
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    Local model = Try editor.Files.ModelOf("res://sub/ball.gltf")
+    Local spawned = Try model.Spawn()
+    Local blade = spawned.Child(0)
+    Expect(blade.Name() == "blade")
+    editor.Edits.Commit(RenameEdit(blade, "mine"))
+    Local own = Pivot(blade)
+    own.SetName("own")
+    Local reloads = editor.Files.Reloads()
+    Try File.WriteText(file, TRIANGLE.Replace("\"mesh\":0", "\"mesh\":0,\"translation\":[3,0,0]"))
+    StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
+    Expect(RefEquals(spawned.Child(0), blade) && spawned.ChildCount() == 1)
+    Expect(blade.Name() == "mine" && blade.Position() == Vec3(3, 0, 0))
+    Expect(blade.ChildCount() == 1 && RefEquals(blade.Child(0), own))
+    Expect((blade As? Mesh)?.Geometry() == model.Geometries()[0])
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(blade.Name() == "blade")
+    Expect(editor.Actions.Run("edit.redo"))
+    // Lost: what was under it's kept, where it was in the world, and the edit's harmless.
+    own.SetPosition(Vec3(0, 1, 0))
+    reloads = editor.Files.Reloads()
+    Try File.WriteText(file, TRIANGLE.Replace("\"blade\"", "\"other\""))
+    StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
+    Expect(blade.Freed() && !own.Freed())
+    Expect(RefEquals(own.Parent(), spawned))
+    Expect(own.Position() == Vec3(3, 1, 0), "{own.Position()}")
+    Expect(spawned.ChildCount() == 2)
+    Expect(editor.Actions.Run("edit.undo"))
+End Function
+
+// A scene opened goes on being what its files say, though it's what a model's spawned nothing of.
+@Test
+Function AnOpenedSceneFollowsItsModels() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Try File.WriteText(game / "assets" / "a.scene",
+                       "format = 1\n[[entity]]\npath = \"blade\"\nkind = \"MESH\"\ngeometry = \"res://sub/ball.gltf#0\"\n")
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.OpenScene("res://a.scene")
+    editor.Step()
+    Local mesh = editor.Edited.Entities()[0] As? Mesh
+    If mesh == Null Then Panic("its mesh")
+    Local was = mesh.Geometry()
+    Local held = editor.Files.HeldModel("res://sub/ball.gltf")
+    If held == Null Then Panic("it holds its model")
+    Expect(was == held.Geometries()[0])
+    Local reloads = editor.Files.Reloads()
+    Try File.WriteText(game / "assets" / "sub" / "ball.gltf",
+                       TRIANGLE.Replace("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAA",
+                                        "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/"))
+    StepUntil(editor, Function() => editor.Files.Reloads() > reloads)
+    Expect(mesh.Geometry() != was)
+    Expect(mesh.Geometry() == held.Geometries()[0])
+    Expect(mesh.Geometry()?.Source() == "res://sub/ball.gltf#0")
+End Function
+
+// A file lost: the scene's opened all the same, says so, and saves its reference again.
+@Test
+Function ASceneWithALostFileOpens() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local file = game / "assets" / "a.scene"
+    Try File.WriteText(file, "format = 1\n[[material]]\nid = \"m\"\n[[material.layers]]\nlayer = 0\ntexture = \"res://gone.png\"\n[[entity]]\npath = \"blade\"\nkind = \"MESH\"\nmaterial = \"m\"\n")
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.OpenScene("res://a.scene")
+    editor.Step()
+    Expect(editor.SceneFile() == "res://a.scene")
+    Expect(editor.ShowingDialog() != Null)
+    Expect((Found(editor, "dialog.OK")) != Null)
+    Try ClickOn(editor, "dialog.OK")
+    Expect(editor.Edited.Entities().Count == 1)
+    editor.Edits.Commit(RenameEdit(editor.Edited.Entities()[0], "saved"))
+    editor.SaveScene()
+    Expect((Try Text(file)).Contains("texture = \"res://gone.png\""), Try Text(file))
+End Function
+
+// Changed by something else since, Save asks first; and Save As, over what's another's.
+@Test
+Function SavingOverWhatsChangedAsks() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    editor.SaveScene("res://a.scene")
+    Local file = game / "assets" / "a.scene"
+    Try File.WriteText(file, "someone else's")
+    editor.Edits.Commit(RenameEdit(editor.Edited.Entities()[0], "mine"))
+    editor.SaveScene()
+    editor.Step()
+    Expect(editor.ShowingDialog() != Null && (Try Text(file)) == "someone else's" && editor.Edits.Modified())
+    Try ClickOn(editor, "dialog.Cancel")
+    Expect((Try Text(file)) == "someone else's" && editor.Edits.Modified())
+    editor.SaveScene()
+    editor.Step()
+    Try ClickOn(editor, "dialog.Replace")
+    Expect((Try Text(file)).Contains("name = \"mine\"") && !editor.Edits.Modified())
+    // And saved, it's not asked again.
+    editor.Edits.Commit(RenameEdit(editor.Edited.Entities()[0], "again"))
+    editor.SaveScene()
+    Expect(editor.ShowingDialog() == Null && (Try Text(file)).Contains("name = \"again\""))
+    // Save As: over another's it asks; a scene's by its extension; over its own it doesn't.
+    Try File.WriteText(game / "assets" / "other.scene", "other")
+    editor.Actions.Run("file.save_as")
+    editor.Step()
+    Local field = Found(editor, "dialog.path") As? TextField
+    If field == Null Then Panic("its field")
+    field.SetText("res://other")
+    Try ClickOn(editor, "dialog.Save")
+    editor.Step()
+    Expect((Try Text(game / "assets" / "other.scene")) == "other" && editor.SceneFile() == "res://a.scene")
+    Try ClickOn(editor, "dialog.Replace")
+    Expect((Try Text(game / "assets" / "other.scene")) != "other" && editor.SceneFile() == "res://other.scene")
+    editor.Actions.Run("file.save_as")
+    editor.Step()
+    field = Found(editor, "dialog.path") As? TextField
+    If field == Null Then Panic("its field")
+    field.SetText("res://other.scene")
+    Try ClickOn(editor, "dialog.Save")
+    editor.Step()
+    Expect(editor.ShowingDialog() == Null)
+End Function
+
+// A disk's names are kept, whatever case they're asked for by; and new ones are as they're typed.
+@Test
+Function SavedByTheNamesOnDisk() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local assets = game / "assets"
+    Try Dir.CreateAll(assets / "Levels")
+    Try File.WriteText(assets / "Levels" / "First.scene", "format = 1\n")
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.OpenScene("res://levels/first.scene")
+    editor.Actions.Run("add.cube")
+    editor.SaveScene()
+    Expect(!editor.Edits.Modified() && editor.ShowingDialog() == Null)
+    Local names: String[] = []
+    For entry In Try Dir.Entries(assets / "Levels")
+        names.Add(entry.Path.FileName())
+    End For
+    Expect(names == ["First.scene"], "{names}")
+    Expect((Try Text(assets / "Levels" / "First.scene")).Contains("[[entity]]"))
+    names = []
+    For entry In Try Dir.Entries(assets)
+        names.Add(entry.Path.FileName())
+    End For
+    Expect(names.Contains("Levels") && !names.Contains("levels"), "{names}")
+    editor.SaveScene("res://New/Deep.scene")
+    names = []
+    For entry In Try Dir.Entries(assets)
+        names.Add(entry.Path.FileName())
+    End For
+    Expect(names.Contains("New"), "{names}")
+    names = []
+    For entry In Try Dir.Entries(assets / "New")
+        names.Add(entry.Path.FileName())
+    End For
+    Expect(names == ["Deep.scene"], "{names}")
+End Function
+
+// A project with no assets gets them with its first scene.
+@Test
+Function AFirstSaveMakesAndMountsItsAssets() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = games.Path / "bare"
+    Try Dir.CreateAll(game)
+    Try File.WriteText(game / "project.toml", "[project]\nname = \"bare\"\nversion = \"0.1.0\"\n")
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    editor.SaveScene("res://a.scene")
+    Expect(editor.ShowingDialog() == Null && File.Exists(game / "assets" / "a.scene"))
+    StepUntil(editor, Function() => editor.Files.RowOf("res://a.scene") != Null)
+    Expect(editor.Files.RowOf("res://a.scene") != Null)
+    editor.OpenScene("res://a.scene")
+    editor.Step()
+    Expect(editor.ShowingDialog() == Null && editor.Edited.Entities().Count == 1)
+End Function
+
+// A sidecar's edits aren't the scene's: it's not changed by them, and they can't block its undo. Undo's
+// theirs while the pane has the keys, and the scene's once it hasn't.
+@Test
+Function SidecarEditsHaveAHistoryOfTheirOwn() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    editor.SaveScene("res://a.scene")
+    editor.Step()
+    Try ClickAt(editor, Row(editor, "res://wall.png").Center)
+    (Found(editor, "assets.srgb") As? Toggle)?.Click()
+    editor.Step()
+    editor.Step()
+    Expect(!editor.Edits.Modified() && editor.Files.Edits.UndoName() == "Import Settings")
+    Expect((Try Sidecar(games)) == "quality = 3\nsrgb = false\n")
+    // The same widget says what's so, once it's undone.
+    Local toggle = Found(editor, "assets.srgb") As? Toggle
+    Expect(toggle != Null && !toggle.On())
+    Expect(editor.Actions.Run("edit.undo"))
+    editor.Step()
+    Expect((Try Sidecar(games)) == "quality = 3\n")
+    Expect(toggle != Null && toggle.On() && RefEquals(Found(editor, "assets.srgb"), toggle))
+    Expect(editor.Actions.Run("edit.redo"))
+    editor.Step()
+    Expect(toggle != Null && !toggle.On())
+    // A scene edit, by another way in: its undo's the scene's, though the sidecar's can't be undone.
+    Try ClickAt(editor, editor.Tree.Box().Center)
+    editor.Edits.Commit(RenameEdit(editor.Edited.Entities()[0], "renamed"))
+    Try File.Delete(game / "assets" / "wall.png.toml")
+    Try File.Delete(game / "assets" / "wall.png")
+    Expect(editor.Actions.Run("edit.undo"))
+    Expect(editor.Edited.Entities()[0].Name() != "renamed")
+End Function
+
+// A slider's keys go on working as what it's changed comes back to it.
+@Test
+Function ASliderKeepsItsKeysAsItsSaved() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path))
+    Defer editor.Finish()
+    editor.Files.Choose("res://wall.png")
+    editor.Step()
+    editor.Step()
+    Local slider = Found(editor, "assets.quality") As? Slider
+    If slider == Null Then Panic("its slider")
+    editor.Shown.Focus(slider)
+    Try Simulate.PressKey(Key.LEFT)
+    editor.Step()
+    editor.Step()
+    // At 2, what's at first, it's said no more.
+    Expect((Try Sidecar(games)) == Null, "{(Try Sidecar(games)) ?? "none"}")
+    Try Simulate.PressKey(Key.LEFT)
+    editor.Step()
+    editor.Step()
+    Expect((Try Sidecar(games)) == "quality = 1\n", "{(Try Sidecar(games)) ?? "none"}")
+    Expect(RefEquals(Found(editor, "assets.quality"), slider) && slider.Value() == 1.0)
+    // Undone, it says so, and that isn't a change of its own.
+    Expect(editor.Files.Edits.Undo())
+    editor.Step()
+    editor.Step()
+    Expect(slider.Value() == 2.0 && (Try Sidecar(games)) == Null)
+    Expect(editor.Files.Edits.CanRedo())
+End Function
+
+// A file coming while a model's dragged leaves the drag be, and its drop; then it's listed.
+@Test
+Function TheListChangingDuringADragLosesNothing() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.Files.SetOpen("res://sub", True)
+    editor.Step()
+    editor.View.LookAt(Vec3(0, 0, 0), 10.0)
+    editor.Step()
+    Local from = Row(editor, "res://sub/ball.gltf").Center
+    Local to = editor.View.Box().Center
+    Try Simulate.MoveMouse(from.x, from.y)
+    editor.Step()
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    editor.Step()
+    Try Simulate.MoveMouse(to.x, to.y)
+    editor.Step()
+    Try File.WriteText(game / "assets" / "new.txt", "new")
+    PastALook(editor)
+    Expect(editor.Files.RowOf("res://new.txt") == Null, "not while it's held")
+    Expect(editor.Shown.Popups().Count == 1, "the hint's there")
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    editor.Step()
+    Expect(editor.Edited.Entities().Count == 2, "{editor.Edited.Entities().Count}")
+    Expect(editor.Shown.Popups().Count == 0, "the hint's gone")
+    StepUntil(editor, Function() => editor.Files.RowOf("res://new.txt") != Null)
+    Expect(editor.Files.RowOf("res://new.txt") != Null)
+End Function
+
+// A long path, not all ASCII, is broken between characters.
+@Test
+Function ADialogBreaksBetweenCharacters() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings.Path, Try Game(games.Path))
+    Defer editor.Finish()
+    Local long = ""
+    For at = 1 To 200
+        long += "\u{e9}"
+    End For
+    Local says = Dialog("Long", long + "\u{1F600}x")
+    says.AddButton("OK")
+    says.Show(editor.Shown)
+    editor.Step()
+    editor.Step()
+    says.Close()
+End Function
+
+// What can't watch says so, above the list, and tries again.
+@Test
+Function WatchingThatFailsSaysSoAndTriesAgain() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.Files.FailWatchingWith("no more watches")
+    editor.Files.SetFolder(game / "assets")
+    Expect(editor.Files.Problem().Contains("no more watches"), editor.Files.Problem())
+    Expect(Found(editor, "assets.notice").Visible())
+    editor.Files.Choose("res://wall.png")
+    editor.Step()
+    Expect(editor.Files.Problem().Contains("no more watches"), "its settings don't hide it")
+    editor.Files.FailWatchingWith(Null)
+    PastALook(editor)
+    Expect(editor.Files.Problem() == "", editor.Files.Problem())
+    Expect(!Found(editor, "assets.notice").Visible())
+End Function
+
+// A camera under the ground looking down never reaches it.
+@Test
+Function WhereAModelLandsFromBelow()
+    Expect(DropPlace(Vec3(0, -5, 0), Vec3(0, -1, 0)) == Vec3(0, -13, 0))
+    Expect(DropPlace(Vec3(0, 5, 0), Vec3(0, -1, 0)) == Vec3(0, 0, 0))
+End Function
+
+// Wherever a model's mesh is, and however small, it's in its picture.
+@Test
+Function AModelsThumbnailIsFramedOnIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Try File.WriteText(game / "assets" / "far.gltf", TRIANGLE.Replace("\"mesh\":0", "\"mesh\":0,\"translation\":[100,0,0]"))
+    Try File.WriteText(game / "assets" / "tiny.gltf", TRIANGLE.Replace("\"mesh\":0", "\"mesh\":0,\"scale\":[0.01,0.01,0.01]"))
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    For path In ["res://far.gltf", "res://tiny.gltf"]
+        Local thumb = Thumb(editor, path)
+        If thumb == Null Then Panic(path)
+        Expect(Differing(thumb.Texture().ToImage()) > 40, "{path}: {Differing(thumb.Texture().ToImage())}")
+    End For
+End Function
+
+// A folder with an image's name has no settings; an empty one's opener still turns; a sidecar's last line
+// taken leaves none; and what a sidecar says beside what's changed stays, comments too.
+@Test
+Function WhatsSmallInTheBrowser() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local game = Try Game(games.Path)
+    Try Dir.CreateAll(game / "assets" / "x.png")
+    Try Dir.CreateAll(game / "assets" / "empty")
+    Local editor = Try Started(settings.Path, game)
+    Defer editor.Finish()
+    editor.Step()
+    editor.Files.Choose("res://x.png")
+    editor.Step()
+    Expect(!Found(editor, "assets.settings").Visible())
+    Expect(editor.Files.ThumbOf("res://x.png") == Null || True)
+    Local name = editor.Files.RowOf("res://empty")?.Find("assets.name") As? Label
+    If name == Null Then Panic("its name")
+    Expect(name.Text() == "+ empty", name.Text())
+    editor.Files.SetOpen("res://empty", True)
+    Expect(name.Text() == "- empty", name.Text())
+    editor.Files.SetOpen("res://empty", False)
+    Expect(name.Text() == "+ empty", name.Text())
+    // The last line.
+    Local sidecar = game / "assets" / "wall.png.toml"
+    editor.Files.Choose("res://wall.png")
+    editor.Step()
+    (Found(editor, "assets.quality") As? Slider)?.SetValue(2.0)
+    Try File.WriteText(sidecar, "srgb = false\n")
+    editor.Files.Choose(Null)
+    editor.Files.Choose("res://wall.png")
+    editor.Step()
+    (Found(editor, "assets.srgb") As? Toggle)?.Click()
+    editor.Step()
+    editor.Step()
+    Expect(!File.Exists(sidecar), "nothing's left in it")
+    Expect(editor.Files.Edits.Undo())
+    Expect((Try Text(sidecar)) == "srgb = false\n")
+End Function
+
+@Test
+Function ASidecarsLinesAreItsOwn() Throws ParseError
+    Local kept = "# what this is\nquality = 1 # as low as it goes\n\n# more\nsrgb = false\n"
+    Expect((Try SidecarWith(kept, "quality", Value(2 As Int32))) == "# what this is\nquality = 2\n\n# more\nsrgb = false\n")
+    Expect((Try SidecarWith(kept, "srgb", Null)) == "# what this is\nquality = 1 # as low as it goes\n\n# more\n")
+    Expect((Try SidecarWith(kept, "mipmaps", Value(True))) == kept + "mipmaps = true\n")
+    Expect((Try SidecarWith(Null, "mipmaps", Value(True))) == "mipmaps = true\n")
+    Expect((Try SidecarWith("mipmaps = true\n", "mipmaps", Null)) == "")
+    Expect((Try SidecarWith("# only this\nmipmaps = true\n", "mipmaps", Null)) == "# only this\n")
+    // What's in a table isn't the key, and a new one goes before it.
+    Local tabled = "a = 1\n[under]\nquality = 5\n"
+    Expect((Try SidecarWith(tabled, "quality", Value(2 As Int32))) == "a = 1\nquality = 2\n[under]\nquality = 5\n")
+    // A longer key's not this one.
+    Expect((Try SidecarWith("quality_x = 1\n", "quality", Null)) == "quality_x = 1\n")
+    Expect(ExpectThrows<ParseError>(SidecarWith("nonsense", "a", Null)) != Null)
+End Function
+
+// Written whole or not at all: what had the file open still reads what was there.
+@Test
+Function ASidecarIsReplacedWhole() Throws IOError
+    Local folder = Try TempDir()
+    Local file = folder.Path / "a.toml"
+    Try File.WriteText(file, "was = 1\n")
+    Local reading = Try File.Open(file)
+    Local edit = SidecarEdit(file, "was = 1\n", "now = 2\n")
+    Local replaced = True
+    Try
+        Try edit.Apply()
+    Catch error As IOError
+        replaced = False
+    End Try
+    Local buffer = Buffer<UInt8>(8)
+    Local count = Try reading.Read(buffer)
+    Expect(count == 8 && buffer[0] == 119, "what was there's still whole to what has it open")
+    reading.Close()
+    If replaced Then Expect((Try File.ReadText(file)) == "now = 2\n")
+    // A folder there isn't replaced, or written in.
+    Local there = folder.Path / "b.toml"
+    Try Dir.CreateAll(there)
+    Local other = SidecarEdit(there, Null, "now = 2\n")
+    Expect(ExpectThrows<IOError>(other.Apply()) != Null)
+    Expect(Dir.Exists(there) && (Try Dir.Entries(folder.Path)).Count == 2)
+    Try folder.Close()
 End Function

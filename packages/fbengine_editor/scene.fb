@@ -266,12 +266,13 @@ Public Final Class RenameEdit Extends Edit
         Super.New("Rename")
     End New
 
+    // Either way, none if what's named has gone, as a node its model's file has lost has.
     Public Override Method Apply() Throws IOError
-        entity.SetName(to)
+        If !entity.Freed() Then entity.SetName(to)
     End Method
 
     Public Override Method Undo() Throws IOError
-        entity.SetName(from)
+        If !entity.Freed() Then entity.SetName(from)
     End Method
 End Class
 
@@ -293,12 +294,14 @@ Public Final Class HideEdit Extends Edit
 
     Public Override Method Apply() Throws IOError
         For entity In entities
+            If entity.Freed() Then Continue
             If hiding Then entity.Hide() Else entity.Show()
         End For
     End Method
 
     Public Override Method Undo() Throws IOError
         For i = 0 To entities.Count - 1
+            If entities[i].Freed() Then Continue
             If before[i] Then entities[i].Hide() Else entities[i].Show()
         End For
     End Method

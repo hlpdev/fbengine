@@ -16,11 +16,16 @@ Import "./project"
 Import "./scene"
 
 // How far a row's indented under its folder, how big a thumbnail is, in the UI's units and its
-// texture's pixels, and how often the disk's looked at.
+// texture's pixels, how often the disk's looked at, how many thumbnails are begun and made in a
+// frame, and loading at a time.
 Const INDENT: Float32 = 14.0
 Const THUMB: Float32 = 32.0
 Const THUMB_PIXELS: Int32 = 64
 Const LOOKS: Float64 = 0.5
+Const THUMBS_A_FRAME: Int = 2
+Const THUMBS_LOADING: Int = 4
+
+Const WATCH_FAILED = "what changes on disk won't be seen: "
 
 /// What kind of thing a file is, by its extension.
 Public Enum AssetSort
@@ -44,7 +49,7 @@ Public Function SortOf(name: String): AssetSort
     Return AssetSort.OTHER
 End Function
 
-/// A sidecar written, or put back as it was, or taken away if there wasn't one.
+/// A sidecar written, or put back as it was, or taken away if there wasn't one, or nothing's left.
 Public Final Class SidecarEdit Extends Edit
     Field file: Path
     Field before: String?
@@ -59,37 +64,126 @@ Public Final Class SidecarEdit Extends Edit
     End New
 
     Public Override Method Apply() Throws IOError
-        Try File.WriteTextAtomic(file, after)
+        Try Written(after)
     End Method
 
     Public Override Method Undo() Throws IOError
-        Local was = before
-        If was != Null
-            Try File.WriteTextAtomic(file, was)
-        Else
+        Try Written(before ?? "")
+    End Method
+
+    Method Written(text: String) Throws IOError
+        If text != ""
+            Try File.WriteTextAtomic(file, text)
+        ElseIf File.Exists(file)
             Try File.Delete(file)
         End If
     End Method
 End Class
 
-/// `key` set to `value` in the sidecar text `text`, or taken out of it when it's Null, leaving what
-/// else it says. It's a ParseError for what isn't TOML.
+/// `key` set to `value` in the sidecar text `text`, or taken out of it when it's Null, by its own line,
+/// leaving what else it says, comments too; "" for one with nothing left in it. It's a ParseError for
+/// what isn't TOML.
 Public Function SidecarWith(text: String?, key: String, value: Value?): String Throws ParseError
-    Local table = text != Null ? Try Toml.Read(text) : Value.Object()
+    Local was = text ?? ""
+    Try Toml.Read(was)
+    Local line: String? = Null
     If value != Null
-        table[key] = value
-    Else
-        table.Remove(key)
+        Local one = Value.Object()
+        one[key] = value
+        line = Toml.Write(one).TrimEnd()
     End If
-    Return Toml.Write(table)
+    Local lines = was.SplitLines()
+    Local out: String[] = []
+    // What's after a table's heading isn't what a top-level key's in, so a new line goes before it.
+    Local placed = False
+    Local top = True
+    For each In lines
+        Local plain = each.Trim()
+        If plain.StartsWith("[") && top
+            top = False
+            Local said = line
+            If !placed && said != Null
+                out.Add(said)
+                placed = True
+            End If
+        End If
+        If top && (plain == key || plain.StartsWith("{key} ") || plain.StartsWith("{key}="))
+            Local said = line
+            If said != Null && !placed
+                out.Add(said)
+                placed = True
+            End If
+            Continue
+        End If
+        out.Add(each)
+    End For
+    Local said = line
+    If !placed && said != Null Then out.Add(said)
+    If out.All(Function(each: String) => each.Trim() == "") Then Return ""
+    Return out.Join("\n") + "\n"
 End Function
 
-/// res:// as a tree, each file with a thumbnail where it has one: a click selects, a double click on a
-/// scene asks OnOpen, a model dragged and let go asks OnDrop, and what's selected shows its import
-/// settings beside them, each change a sidecar written through undo. Update, each frame before the Ui's,
-/// looks at the disk now and then, and takes what's been loaded again.
+// The file or folder `plain`, a normalized res:// path, is under `folder`: each part by the name it
+// has on disk, for a disk that minds, or as `typed` says for what isn't there yet.
+Function RealPath(folder: Path, plain: String, typed: String): Path
+    Local parts = plain.Slice(6, plain.Length).Split("/")
+    Local asked = typed.StartsWith("res://") ? typed.Slice(6, typed.Length).Split("/") : parts
+    Local at = folder
+    For i = 0 To parts.Count - 1
+        If parts[i] == "" Then Continue
+        Local name = asked.Count == parts.Count ? asked[i] : parts[i]
+        Local entries = Try? Dir.Entries(at)
+        If entries != Null
+            For entry In entries
+                If entry.Path.FileName().ToLower() == parts[i]
+                    name = entry.Path.FileName()
+                    Break
+                End If
+            End For
+        End If
+        at = at / name
+    End For
+    Return at
+End Function
+
+// What `image` shows, at most THUMB_PIXELS across, each pixel the mean of up to 4 by 4 of its own.
+Function Shrunk(image: Image): Image
+    Local most = Max(image.Width, image.Height) As Int
+    If most <= THUMB_PIXELS Then Return image
+    Local wide = Max((image.Width * THUMB_PIXELS) / most, 1)
+    Local high = Max((image.Height * THUMB_PIXELS) / most, 1)
+    Local made = Image(wide, high)
+    For y = 0 To high - 1
+        For x = 0 To wide - 1
+            Local red = 0
+            Local green = 0
+            Local blue = 0
+            Local alpha = 0
+            For down = 0 To 3
+                For across = 0 To 3
+                    Local read = image[(x * image.Width + (across * image.Width) / 4) / wide,
+                                       (y * image.Height + (down * image.Height) / 4) / high]
+                    red += read.r
+                    green += read.g
+                    blue += read.b
+                    alpha += read.a
+                End For
+            End For
+            made[x, y] = Color32((red / 16) As UInt8, (green / 16) As UInt8, (blue / 16) As UInt8,
+                                 (alpha / 16) As UInt8)
+        End For
+    End For
+    Return made
+End Function
+
+/// res:// as a tree, each file with a thumbnail where it has one, made a few a frame: a click selects,
+/// a double click on a scene asks OnOpen, a model dragged and let go asks OnDrop, and what's selected
+/// shows its import settings beside them, each change a sidecar written through its own Edits, apart
+/// from any scene's. Update, each frame before the Ui's, looks at the disk now and then, and takes what's
+/// been loaded again.
 Public Final Class AssetBrowser Extends Widget
-    Field history: History
+    /// The sidecars' undo, which isn't any scene's.
+    Public ReadOnly Field Edits: History
     Field root: Path? = Null
     Field scroller: ScrollView
     Field list: Node
@@ -99,8 +193,20 @@ Public Final Class AssetBrowser Extends Widget
     Field shownList: String = ""
     Field selected: String? = Null
     Field selectedDisk: Path? = Null
+    Field selectedFolder: Bool = False
+    // What the settings shown are of.
+    Field settled: String? = Null
+    Field choices: Map<String, String>
+    // Each by Normalize of its path: its thumbnail, and the time of the file that was of, for what's
+    // been asked for; what's waiting, what's loaded to be made one, and the textures they draw.
     Field thumbs: Map<String, Sprite2D>
-    Field tried: Set<String>
+    Field stamps: Map<String, Timestamp?>
+    Field pending: Set<String>
+    Field queue: String[] = []
+    Field landed: (String, Texture?, Model?, String)[] = []
+    Field loading: Int = 0
+    Field flights: Int = 0
+    Field made: Int = 0
     // The sliders of what's selected, and what one's been moved to while it's held.
     Field sliders: (String, Slider, Float32)[] = []
     Field moved: (String, Slider, Float32)? = Null
@@ -110,33 +216,52 @@ Public Final Class AssetBrowser Extends Widget
     Field onDrop: (Func(String, Vec2))? = Null
     Field onDropOver: (Func(Vec2): Bool)? = Null
     Field onReloaded: (Func())? = Null
+    Field onPressed: (Func())? = Null
     Field looked: Stopwatch
     Field hint: Widget
     Field problem: Label
+    Field notice: Label
     Field reloads: Int = 0
     Field watching: Bool = False
+    Field watchFails: String? = Null
 
-    /// A browser with nothing in it, whose edits go in `edits`.
-    Public New(edits: History)
-        history = edits
+    /// A browser with nothing in it.
+    Public New()
+        Edits = History()
         scroller = ScrollView("assets.scroller")
         list = Node("assets.list")
         settings = Widget("assets.settings", "assets.settings")
         hint = Widget("tree.hint", "assets.hint")
         problem = Label("", "assets.problem")
+        notice = Label("", "assets.notice")
         open = Set<String>()
+        choices = {}
         thumbs = {}
-        tried = Set<String>()
+        stamps = {}
+        pending = Set<String>()
         held = {}
         models = {}
         looked = Stopwatch.StartNew()
         Super.New("assets", "assets")
         // Side by side, so showing a file's settings doesn't move its row.
         SetArrangement(Arrangement.ROW)
+        Local left = Node("assets.left")
+        left.SetWidth(Sizing.Fill())
+        left.SetHeight(Sizing.Fill())
+        notice.SetTranslates(False)
+        notice.SetVisible(False)
+        left.Add(notice)
         scroller.SetWidth(Sizing.Fill())
         scroller.SetHeight(Sizing.Fill())
         scroller.Add(list)
-        Add(scroller)
+        left.Add(scroller)
+        Add(left)
+        Edits.OnChanged(Function[Weak Self]()
+            Self?.Resettled()
+        End Function)
+        Edits.OnFailed(Function[Weak Self](edit: Edit, error: IOError)
+            Self?.Noticed(error.Message)
+        End Function)
         settings.SetWidth(Sizing.Fixed(240.0))
         settings.SetGap(4.0)
         settings.SetVisible(False)
@@ -149,26 +274,50 @@ Public Final Class AssetBrowser Extends Widget
     /// watches them for what changes while it can.
     Public Method SetFolder(folder: Path?)
         Forgotten()
+        Local ui = Owner()
+        If ui != Null Then ui.ClosePopup(hint)
         root = folder
         open.Clear()
         // Nothing it could list.
         shownList = "|"
         selected = Null
         selectedDisk = Null
+        selectedFolder = False
+        Edits.Clear()
+        Noticed("")
         If watching
             Assets.StopWatching()
             watching = False
         End If
-        If folder != Null
-            Try
-                Try Assets.WatchFolders()
-                watching = True
-            Catch error As IOError
-                problem.SetText("what changes on disk won't be seen: {error.Message}")
-            End Try
-        End If
-        Relisted()
+        Watched()
+        Relisted(True)
         Resettled()
+    End Method
+
+    // Watches what's on disk, if it isn't already, or says why it can't, for the next look to try again.
+    Method Watched()
+        If watching || root == Null Then Return
+        Try
+            Local fails = watchFails
+            If fails != Null Then Throw IOError(IOErrorKind.OTHER, fails)
+            Try Assets.WatchFolders()
+            watching = True
+            If notice.Text().StartsWith(WATCH_FAILED) Then Noticed("")
+        Catch error As IOError
+            Noticed("{WATCH_FAILED}{error.Message}")
+        End Try
+    End Method
+
+    /// Has watching what's on disk fail, saying `message`, as an OS out of watches would, or not with
+    /// Null, for a test.
+    Public Method FailWatchingWith(message: String?)
+        watchFails = message
+    End Method
+
+    // Says `message` above the list, or nothing for "".
+    Method Noticed(message: String)
+        notice.SetText(message)
+        notice.SetVisible(message != "")
     End Method
 
     /// Runs `handler` with a scene's path when it's opened by a double click.
@@ -181,6 +330,11 @@ Public Final Class AssetBrowser Extends Widget
     Public Method OnDrop(over: (Func(Vec2): Bool)?, handler: (Func(String, Vec2))?)
         onDropOver = over
         onDrop = handler
+    End Method
+
+    /// Runs `handler` when a row's pressed.
+    Public Method OnPressed(handler: (Func())?)
+        onPressed = handler
     End Method
 
     /// Runs `handler` after what's on disk has been loaded again.
@@ -225,8 +379,12 @@ Public Final Class AssetBrowser Extends Widget
     Public Method Choose(path: String?)
         selected = path
         selectedDisk = Null
+        selectedFolder = False
         For row In rows
-            If row.Res == path Then selectedDisk = row.Disk
+            If row.Res == path
+                selectedDisk = row.Disk
+                selectedFolder = row.IsFolder()
+            End If
         End For
         Restyled()
         Resettled()
@@ -235,52 +393,53 @@ Public Final Class AssetBrowser Extends Widget
     /// How many files have been loaded again since it was given its folder.
     Public Method Reloads(): Int => reloads
 
-    /// What's wrong with what's selected's settings, or "".
-    Public Method Problem(): String => problem.Text()
+    /// What's wrong with what's selected's settings, or what it can't see or couldn't load, or "".
+    Public Method Problem(): String => problem.Text() != "" ? problem.Text() : notice.Text()
 
-    /// The thumbnail of `path`, made the first time it's asked for: an image's own, or a model's seen
-    /// from above in a world of its own; Null for what has none, or can't be read.
+    /// The thumbnail of `path`, asked for the first time it's asked for, and made in a frame to come: an
+    /// image's, at most 64 across, or a model's seen from above in a world of its own; Null for what has
+    /// none, or can't be read, or isn't made yet, as ThumbDone says.
     Public Method ThumbOf(path: String): Sprite2D?
-        If tried.Contains(path) Then Return thumbs.Get(path)
-        tried.Add(path)
-        Local made: Sprite2D? = Null
-        Select SortOf(path)
-            Case AssetSort.IMAGE
-                Try
-                    Local texture = Try Assets.Load<Texture>(path)
-                    held[path] = texture
-                    made = Sprite2D(texture)
-                Catch error As IOError
-                    made = Null
-                End Try
-            Case AssetSort.MODEL
-                made = ModelThumb(path)
-            Default
-                made = Null
-        End Select
-        If made != Null Then thumbs[path] = made
-        Return made
+        Local sort = SortOf(path)
+        If sort != AssetSort.IMAGE && sort != AssetSort.MODEL Then Return Null
+        Local key = KeyOf(path)
+        If !stamps.Contains(key) Then Asked(key)
+        Return thumbs.Get(key)
     End Method
+
+    /// Whether what ThumbOf(path) gives is all it's going to give until the file changes.
+    Public Method ThumbDone(path: String): Bool => !pending.Contains(KeyOf(path))
+
+    /// How many thumbnails it holds now.
+    Public Method ThumbsHeld(): Int => held.Count
+
+    /// How many thumbnails it's made since it was made.
+    Public Method ThumbsMade(): Int => made
 
     /// The model at `path`, which it holds until its folder's let go of, so what's spawned of it goes
     /// on changing with its file. It's an IOError for one that can't be read.
     Public Method ModelOf(path: String): Model Throws IOError
-        Local had = models.Get(path)
+        Local key = KeyOf(path)
+        Local had = models.Get(key)
         If had != Null Then Return had
         Local model = Try Assets.Load<Model>(path)
-        models[path] = model
+        models[key] = model
         Return model
     End Method
 
-    /// One frame's worth: what's been loaded again, and now and then, what's on disk.
+    /// The model at `path`, if it's holding it.
+    Public Method HeldModel(path: String): Model? => models.Get(KeyOf(path))
+
+    /// One frame's worth: a few thumbnails, what's been loaded again, and now and then, what's on disk.
     Public Method Update()
         If root == Null Then Return
         SliderMoved()
+        Thumbed()
         Local again = Assets.Reloaded()
         If again.Count > 0
             reloads += again.Count
             For each In again
-                ForgetThumb(each.Path)
+                If stamps.Contains(KeyOf(each.Path)) Then Asked(KeyOf(each.Path))
             End For
             Relisted()
             Resettled()
@@ -288,8 +447,142 @@ Public Final Class AssetBrowser Extends Widget
             If handler != Null Then handler()
         ElseIf looked.Elapsed.TotalSeconds >= LOOKS
             looked = Stopwatch.StartNew()
+            Watched()
             Relisted()
+            Looked()
         End If
+    End Method
+
+    // `path` as what it's known by; a path that's wrong is its own.
+    Method KeyOf(path: String): String => (Try? Assets.Normalize(path)) ?? path
+
+    // When the file of `key` was last changed, or Null for what isn't there to tell.
+    Method StampOf(key: String): Timestamp?
+        Local folder = root
+        If folder == Null Then Return Null
+        Return (Try? File.Metadata(RealPath(folder, key, key)))?.Modified
+    End Method
+
+    // Its thumbnail, to be made or made again.
+    Method Asked(key: String)
+        stamps[key] = StampOf(key)
+        If pending.Contains(key) Then Return
+        pending.Add(key)
+        queue.Add(key)
+    End Method
+
+    // What's asked for that's changed since is asked for again, and what's gone is let go of.
+    Method Looked()
+        Local keys: String[] = []
+        For key In stamps.Keys()
+            keys.Add(key)
+        End For
+        For key In keys
+            If pending.Contains(key) Then Continue
+            If !Assets.Exists(key)
+                ThumbGone(key)
+            ElseIf StampOf(key) != stamps.Get(key)
+                Asked(key)
+            End If
+        End For
+    End Method
+
+    Method ThumbGone(key: String)
+        stamps.Remove(key)
+        thumbs.Remove(key)
+        Local texture = held.Get(key)
+        If texture != Null
+            texture.Free()
+            held.Remove(key)
+        End If
+    End Method
+
+    // This frame's worth: what's loaded made thumbnails, and more begun.
+    Method Thumbed()
+        Local count = Min(landed.Count, THUMBS_A_FRAME)
+        For at = 1 To count
+            Local key, texture, model, failure = landed[0]
+            landed.RemoveAt(0)
+            pending.Remove(key)
+            Landed(key, texture, model, failure)
+        End For
+        Local begun = 0
+        While queue.Count > 0 && loading < THUMBS_LOADING && begun < THUMBS_A_FRAME
+            Local key = queue[0]
+            queue.RemoveAt(0)
+            loading += 1
+            begun += 1
+            Flown(key, flights)
+        End While
+    End Method
+
+    // Loads the file of `key`, as its kind, on the I/O thread, for a frame to make its thumbnail of. A
+    // flight that's outlived the folder it was for lets go of what it loaded.
+    Async Method Flown(key: String, flight: Int)
+        Local texture: Texture? = Null
+        Local model: Model? = Null
+        Local failure = ""
+        Try
+            If SortOf(key) == AssetSort.IMAGE
+                texture = Try Await Assets.LoadAsync<Texture>(key)
+            Else
+                model = Try Await Assets.LoadAsync<Model>(key)
+            End If
+        Catch error As IOError
+            failure = error.Message
+        End Try
+        If flight != flights
+            texture?.Free()
+            model?.Free()
+            Return
+        End If
+        loading -= 1
+        landed.Add((key, texture, model, failure))
+    End Method
+
+    // What was loaded, made a thumbnail in place of any it had, and its row's. What can't be, keeps
+    // any it had, and says so.
+    Method Landed(key: String, texture: Texture?, model: Model?, failure: String)
+        Local says = failure
+        If texture != Null
+            Local kept: Texture? = Null
+            If texture.Format() == TextureFormat.RGBA8 || texture.Format() == TextureFormat.RGBA8_LINEAR
+                Try
+                    Local small = Shrunk(texture.ToImage())
+                    Local drawn = Try Texture(small.Width, small.Height, texture.Format(), False)
+                    drawn.Write(0, 0, small)
+                    kept = drawn
+                Catch error As GraphicsError
+                    says = error.Message
+                End Try
+                texture.Free()
+            Else
+                // What's compressed can't be read back to make smaller, and is small already.
+                kept = texture
+            End If
+            If kept != Null Then Replaced(key, kept)
+        ElseIf model != Null
+            Local target = ModelThumb(model)
+            model.Free()
+            If target != Null Then Replaced(key, target)
+        End If
+        If says != ""
+            If thumbs.Contains(key) Then Noticed(says)
+        ElseIf !notice.Text().StartsWith(WATCH_FAILED)
+            Noticed("")
+        End If
+    End Method
+
+    Method Replaced(key: String, texture: Texture)
+        Local sprite = Sprite2D(texture)
+        thumbs[key] = sprite
+        made += 1
+        For row In rows
+            If KeyOf(row.Res) == key Then row.ShowThumb(sprite)
+        End For
+        Local old = held.Get(key)
+        If old != Null Then old.Free()
+        held[key] = texture
     End Method
 
     // A slider's change is one, once it's let go of.
@@ -307,28 +600,24 @@ Public Final Class AssetBrowser Extends Widget
         Changed(key, slider.Value() != fallback ? Value(slider.Value() As Int32) : Null)
     End Method
 
-    // A model seen from above, in a world of its own, into a texture of its own.
-    Method ModelThumb(path: String): Sprite2D?
+    // A model seen from above, in a world of its own, into a texture of its own, framed by where its
+    // spawn's meshes are.
+    Method ModelThumb(model: Model): Texture?
         Local previous = World.Current()
         Local world = World()
         World.SetCurrent(world)
         Defer World.SetCurrent(previous)
         Defer world.Free()
         Try
-            Local model = Try Assets.Load<Model>(path)
-            Defer model.Free()
-            Try model.Spawn()
+            Local spawned = Try model.Spawn()
             Local target = Try Texture.Target(THUMB_PIXELS, THUMB_PIXELS, TextureFormat.RGBA8, 1,
                                               True)
-            Local box = AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1))
-            If model.Geometries().Count > 0 Then box = model.Geometries()[0].Bounds()
-            For each In model.Geometries()
-                box = box.Union(each.Bounds())
-            End For
+            Local box = MeshesBox(spawned) ?? AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1))
             Local middle = (box.Min + box.Max) * 0.5
             Local reach = Max(Length(box.Max - box.Min), 0.001)
             Local camera = Camera()
             camera.SetRenderTarget(target)
+            camera.SetRange(reach * 0.01, reach * 4.0)
             camera.SetClearColor(Color(0.05, 0.06, 0.08))
             camera.SetPosition(middle + Vec3(0.5, 0.7, 0.5) * reach)
             camera.PointAt(middle)
@@ -337,21 +626,26 @@ Public Final Class AssetBrowser Extends Widget
             lamp.PointAt(Vec3(0, 0, 0))
             world.SetAmbientLight(Color(0.3, 0.3, 0.35))
             camera.Render()
-            Return Sprite2D(target)
+            Return target
         Catch error As Error
             Return Null
         End Try
     End Method
 
-    Method ForgetThumb(path: String)
-        thumbs.Remove(path)
-        tried.Remove(path)
-        Local texture = held.Get(path)
-        If texture != Null
-            texture.Free()
-            held.Remove(path)
-        End If
+    // The box in the world around the meshes at `at` and under it, or Null for none.
+    Method MeshesBox(at: Entity): AABB?
+        Local box: AABB? = At(at)
+        For child In at.Children()
+            Local under = MeshesBox(child)
+            If under != Null
+                Local had = box
+                box = had != Null ? had.Union(under) : under
+            End If
+        End For
+        Return box
     End Method
+
+    Method At(at: Entity): AABB? => (at As? Mesh)?.Geometry() != Null ? at.Bounds() : Null
 
     // Lets go of all it holds.
     Method Forgotten()
@@ -360,32 +654,55 @@ Public Final Class AssetBrowser Extends Widget
         End For
         held.Clear()
         thumbs.Clear()
-        tried.Clear()
+        stamps.Clear()
+        pending.Clear()
+        queue = []
+        For each In landed
+            Local key, texture, model, failure = each
+            texture?.Free()
+            model?.Free()
+        End For
+        landed = []
+        loading = 0
+        flights += 1
         For each In models.Values()
             each.Free()
         End For
         models.Clear()
     End Method
 
-    // What's in the folders open, as rows, unless that's as it was.
-    Method Relisted()
+    // What's in the folders open, as rows, each that's still there the row it was, unless that's as it
+    // was. Not while a row's held, unless it's `forced`, for what it's dragging, and its drop.
+    Method Relisted(forced: Bool = False)
+        Local ui = Owner()
+        If !forced && ui != Null
+            Local holding = ui.Pressed()
+            If holding != Null && rows.Any(Function(row: AssetRow) => RefEquals(row, holding)) Then Return
+        End If
         Local found: (String, String, Int, Bool, Path)[] = []
         Local folder = root
         If folder != Null Then Walked("res://", folder, 0, found)
         Local says = ""
         For each In found
             Local path, name, depth, isFolder, disk = each
-            says += "{path}|{isFolder}\n"
+            says += "{path}|{name}|{depth}|{isFolder}|{open.Contains(path)}\n"
         End For
         If says == shownList Then Return
         shownList = says
         For child In list.Children()
             list.Remove(child)
         End For
+        Local had = rows
         rows = []
         For each In found
             Local path, name, depth, isFolder, disk = each
-            Local row = AssetRow(Self, path, name, depth, isFolder, disk)
+            Local row: AssetRow? = Null
+            For old In had
+                If old.Res == path && old.IsFolder() == isFolder Then row = old
+            End For
+            If row == Null Then row = AssetRow(Self, path, name, isFolder, disk)
+            row.Placed(name, depth, open.Contains(path))
+            If !isFolder Then row.ShowThumb(ThumbOf(path))
             rows.Add(row)
             list.Add(row)
         End For
@@ -393,6 +710,7 @@ Public Final Class AssetBrowser Extends Widget
         If chosen != Null && !rows.Any(Function(row: AssetRow) => row.Res == chosen)
             selected = Null
             selectedDisk = Null
+            selectedFolder = False
             Resettled()
         End If
         Restyled()
@@ -435,18 +753,23 @@ Public Final Class AssetBrowser Extends Widget
         End For
     End Method
 
-    // What's selected's settings, as what can change them.
+    // What's selected's settings, as what can change them: the same widgets with what they say brought
+    // up to date while it's the same that's selected, so a slider keeps its keys; new ones else.
     Method Resettled()
-        For child In settings.Children()
-            settings.Remove(child)
-        End For
-        sliders = []
-        moved = Null
-        problem.SetText("")
         Local path = selected
         Local disk = selectedDisk
-        settings.SetVisible(False)
-        If path == Null || disk == Null Then Return
+        Local same = settled == path && path != Null && problem.Text() == ""
+        If !same
+            For child In settings.Children()
+                settings.Remove(child)
+            End For
+            sliders = []
+            moved = Null
+            problem.SetText("")
+            settings.SetVisible(False)
+        End If
+        settled = path
+        If path == Null || disk == Null || selectedFolder Then Return
         Try
             Select SortOf(path)
                 Case AssetSort.IMAGE
@@ -472,6 +795,10 @@ Public Final Class AssetBrowser Extends Widget
                     Return
             End Select
         Catch error As IOError
+            For child In settings.Children()
+                settings.Remove(child)
+            End For
+            sliders = []
             problem.SetText(error.Message)
             settings.Add(problem)
         End Try
@@ -479,6 +806,11 @@ Public Final Class AssetBrowser Extends Widget
     End Method
 
     Method AddSwitch(key: String, title: String, on: Bool, fallback: Bool)
+        Local had = settings.Find("assets.{key}") As? Toggle
+        If had != Null
+            had.SetOn(on)
+            Return
+        End If
         Local toggle = Toggle(title, on, "assets.{key}")
         toggle.SetTranslates(False)
         toggle.OnClick(Function[Weak Self](pressed: Button)
@@ -489,18 +821,31 @@ Public Final Class AssetBrowser Extends Widget
     End Method
 
     Method AddChoice(key: String, title: String, now: String, all: String[], fallback: String)
+        choices[key] = now
+        Local had = settings.Find("assets.{key}") As? Button
+        If had != Null
+            had.SetText("{title}: {now}")
+            Return
+        End If
         Local button = Button("{title}: {now}", "assets.{key}")
         button.SetTranslates(False)
-        Local at = all.IndexOf(now) ?? 0
         button.OnClick(Function[Weak Self](pressed: Button)
+            Local own = Self
+            If own == Null Then Return
+            Local at = all.IndexOf(own.choices.Get(key) ?? fallback) ?? 0
             Local next = all[(at + 1) % all.Count]
-            Self?.Changed(key, next != fallback ? Value(next.ToLower()) : Null)
+            own.Changed(key, next != fallback ? Value(next.ToLower()) : Null)
         End Function)
         settings.Add(button)
     End Method
 
     Method AddSlider(key: String, title: String, now: Float32, low: Float32, high: Float32,
                      fallback: Float32)
+        Local had = settings.Find("assets.{key}") As? Slider
+        If had != Null
+            had.SetValue(now)
+            Return
+        End If
         Local row = Node("assets.{key}.row")
         row.SetArrangement(Arrangement.ROW)
         row.SetGap(8.0)
@@ -524,16 +869,19 @@ Public Final Class AssetBrowser Extends Widget
         Local was: String? = Null
         Try
             If File.Exists(sidecar) Then was = Try File.ReadText(sidecar)
-            history.Commit(SidecarEdit(sidecar, was, Try SidecarWith(was, key, value)))
+            Edits.Commit(SidecarEdit(sidecar, was, Try SidecarWith(was, key, value)))
+            Local pressed = onPressed
+            If pressed != Null Then pressed()
         Catch error As Error
             problem.SetText(error.Message)
             Return
         End Try
-        Resettled()
     End Method
 
     Package Method RowPressed(path: String, isFolder: Bool, double: Bool)
         Choose(path)
+        Local pressed = onPressed
+        If pressed != Null Then pressed()
         If isFolder Then Return
         If double && SortOf(path) == AssetSort.SCENE
             Local handler = onOpen
@@ -569,28 +917,50 @@ Final Class AssetRow Extends Widget
     Field Disk: Path
     Field isFolder: Bool
     Field dragging: Bool = False
+    Field slot: Node
+    Field image: ImageBox? = Null
+    Field title: Label
 
-    New(owner: AssetBrowser, path: String, name: String, depth: Int, folder: Bool, disk: Path)
+    New(owner: AssetBrowser, path: String, name: String, folder: Bool, disk: Path)
         browser = owner
         Res = path
         Disk = disk
         isFolder = folder
+        slot = Node("assets.slot")
+        title = Label(name, "assets.name")
         Super.New("tree.row", "assets.row")
         SetArrangement(Arrangement.ROW)
         SetGap(6.0)
         SetAlign(Align.CENTER)
-        SetPadding(Insets((depth As Float32) * INDENT + 4.0, 2.0, 4.0, 2.0))
-        Local thumb = folder ? Null : owner.ThumbOf(path)
-        If thumb != Null
-            Local image = ImageBox(thumb, "assets.thumb")
-            image.SetSize(THUMB, THUMB)
-            Add(image)
+        // So that a thumbnail coming doesn't move what's beside it.
+        Local sort = SortOf(path)
+        If !folder && (sort == AssetSort.IMAGE || sort == AssetSort.MODEL)
+            slot.SetSize(THUMB, THUMB)
+            Add(slot)
         End If
-        Local title = Label(folder ? (owner.IsOpen(path) ? "- " : "+ ") + name : name,
-                            "assets.name")
         title.SetTranslates(False)
         Add(title)
     End New
+
+    // Where it is, and what it's called and shows there.
+    Package Method Placed(name: String, depth: Int, opened: Bool)
+        SetPadding(Insets((depth As Float32) * INDENT + 4.0, 2.0, 4.0, 2.0))
+        title.SetText(isFolder ? (opened ? "- " : "+ ") + name : name)
+    End Method
+
+    // Shows `thumb`, if it has one.
+    Package Method ShowThumb(thumb: Sprite2D?)
+        If thumb == Null Then Return
+        Local had = image
+        If had != Null
+            had.SetSprite(thumb)
+            Return
+        End If
+        Local box = ImageBox(thumb, "assets.thumb")
+        box.SetSize(THUMB, THUMB)
+        slot.Add(box)
+        image = box
+    End Method
 
     /// Whether it's a folder.
     Package Method IsFolder(): Bool => isFolder
@@ -599,10 +969,10 @@ Final Class AssetRow Extends Widget
         Local own = browser
         If own == Null Then Return False
         dragging = False
+        own.RowPressed(Res, isFolder, MouseDoubleClick(MouseButton.LEFT))
         If isFolder
             own.SetOpen(Res, !own.IsOpen(Res))
         End If
-        own.RowPressed(Res, isFolder, MouseDoubleClick(MouseButton.LEFT))
         Return True
     End Method
 
@@ -629,26 +999,28 @@ Public Function SaveEdited(edited: EditedScene, file: Path) Throws IOError
     Try Scene.Save(file, edited.SiblingsOf(Null))
 End Function
 
-/// A new scene, of what's in the file at `path`, a res:// path, with the current World left as it was
-/// if it can't be read, which is an IOError.
-Public Function LoadEdited(path: String): EditedScene Throws IOError
+/// A new scene, of what's in the file at `path`, a res:// path, and what of it was lost, with the
+/// current World left as it was if it can't be read, which is an IOError. What it refers to that can't
+/// be loaded stands in, keeping its reference.
+Public Function LoadEdited(path: String): (EditedScene, String[]) Throws IOError
     Local previous = World.Current()
     Local edited = EditedScene()
     Try
-        Try Scene.Load(path)
+        Local opened = Try Scene.Open(path)
+        Return (edited, opened.Problems)
     Catch error As IOError
         edited.Free()
         World.SetCurrent(previous)
         Throw error
     End Try
-    Return edited
 End Function
 
-/// The file a res:// path is, under `project`'s assets; Assets lower-cases what it's given, so a folder
-/// or file of the same letters is found by its own name's case on a disk that minds.
+/// The file a res:// path is, under `project`'s assets; Assets lower-cases what it's given, so each
+/// folder or file of the same letters is found by its own name's case on a disk that minds, and what
+/// isn't there yet is as it's typed.
 Public Function DiskOf(project: GameProject, path: String): Path Throws IOError
     Local plain = Try Assets.Normalize(path)
-    Return project.Folder / "assets" / plain.Slice(6, plain.Length)
+    Return RealPath(project.Folder / "assets", plain, path)
 End Function
 
 /// A file's name without its folders or extension.
@@ -661,11 +1033,11 @@ Public Function NameOf(path: String): String
 End Function
 
 /// Where a model let go at `from`, going along `way`, lands: on the ground, y 0, if it's going to
-/// reach it within 1000 units, else 8 units along.
+/// reach it within 1000 units, going forward, else 8 units along.
 Public Function DropPlace(from: Vec3, way: Vec3): Vec3
     If way.y < -0.0001
         Local far = -from.y / way.y
-        If far <= 1000.0 Then Return from + way * far
+        If far >= 0.0 && far <= 1000.0 Then Return from + way * far
     End If
     Return from + way * 8.0
 End Function
