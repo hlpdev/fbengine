@@ -1789,26 +1789,14 @@ if(FBENGINE_FB_TESTS)
       "drawn raised: red 255 at its hand, 0 where it was"
       "drawn bound: red 255 at its hand, 0 where it went"
       )
-<<<<<<< HEAD
-  list(JOIN fbengine_skin_proof "
-?
-" fbengine_skin_proof_lines)
-=======
   list(JOIN fbengine_skin_proof "\r?\n" fbengine_skin_proof_lines)
->>>>>>> origin/master
   add_test(NAME proof.skinned_animation_with_bones_under_game_control
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/proof/skinned_animation_with_bones_under_game_control")
   set_tests_properties(proof.skinned_animation_with_bones_under_game_control PROPERTIES TIMEOUT 120
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "
-<<<<<<< HEAD
-${fbengine_skin_proof_lines}
-?
-$")
-=======
 ${fbengine_skin_proof_lines}\r?\n$")
->>>>>>> origin/master
   add_test(NAME proof.skinned_animation_with_bones_under_game_control_watch
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/proof/skinned_animation_with_bones_under_game_control"
@@ -1817,13 +1805,7 @@ ${fbengine_skin_proof_lines}\r?\n$")
                        TIMEOUT 120
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "
-<<<<<<< HEAD
-watched 300 frames
-?
-$")
-=======
 watched 300 frames\r?\n$")
->>>>>>> origin/master
   add_test(NAME proof.streamed_and_positional_sound_watch
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/proof/streamed_and_positional_sound"
