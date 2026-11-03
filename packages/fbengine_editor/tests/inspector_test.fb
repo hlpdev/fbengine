@@ -1020,25 +1020,19 @@ Function ComponentsOfWhatsFreedDoNothing() Throws IOError, GraphicsError
     editor.Finish()
 End Function
 
-// Where the packages are, up from where the tests run; Null if that's not in the repository.
+// Where the packages are: where ctest says, or under where a test's been run from by hand.
 Function Packages(): Path? Throws IOError
-    Local at: Path? = Try Dir.Current()
-    While at != Null
-        If File.Exists(at / "packages/fbengine/project.toml") Then Return at / "packages"
-        Local up = at.Parent()
-        If up == Null || up == at Then Return Null
-        at = up
-    End While
-    Return Null
+    Local said = Env.Get("FBENGINE_PACKAGES")
+    If said != Null && said != "" Then Return Path(said)
+    Local here = (Try Dir.Current()) / "packages"
+    Return File.Exists(here / "fbengine/project.toml") ? here : Null
 End Function
 
 @Test
 Function AGamesProgramSaysItsKinds() Throws IOError, GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Local packages = Try Packages()
-    If packages == Null Then Skip("the packages aren't up from here")
-    Local fb = Env.Get("FBENGINE_NO_FB")
-    If fb == "1" Then Skip("no fb here")
+    If packages == Null Then Skip("the packages aren't under here")
     Local settings = Try TempDir()
     Local games = Try TempDir()
     Local folder = games.Path / "game"
@@ -1083,7 +1077,7 @@ Function AGamesProgramSaysItsKinds() Throws IOError, GraphicsError
     // One that says them, then fails, has failed.
     Try File.WriteText(folder / "components/main.fb",
                        "Import std.os\nImport fbengine\nImport \"../door\"\n\nComponents.Add<Door>(\"Door\")\n" +
-                       "Try Components.Describe()\nSystem.Exit(1)\n")
+                       "Try Components.Describe()\nProcess.Exit(1)\n")
     editor.CloseProject()
     editor.OpenFolder(second)
     watch = Stopwatch.StartNew()
