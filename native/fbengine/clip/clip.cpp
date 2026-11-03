@@ -160,6 +160,10 @@ clip_t clip_of(const assets::model_t& model, const assets::clip_t& from) {
     made.frame_rate = from.frame_rate;
     for (const assets::channel_t& channel : from.channels) {
         const std::string& named = model.nodes[channel.node].name;
+        // Named "", a clip's channel is of what plays it, which a model's unnamed node isn't.
+        if (named.empty()) {
+            continue;
+        }
         const auto at = std::ranges::find(made.nodes, named);
         channel_t& to = made.channels.emplace_back();
         to.node = static_cast<std::uint32_t>(at - made.nodes.begin());

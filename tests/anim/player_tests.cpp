@@ -817,3 +817,20 @@ TEST_CASE("a bone released is the game's until it's reclaimed, and what's under 
     fbe_clip_release(clip);
     fbe_world_free(world);
 }
+
+TEST_CASE("a node of no name is the entity that plays the clip, whatever it's called") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t named = pivot(world, 0, "door");
+    const std::uint64_t unnamed = fbe_entity_create(world, 0, FBE_ENTITY_PIVOT);
+    const std::uint64_t clip = sliding(1.0F, 1.0F, 1.0F, "");
+    const std::uint64_t first = fbe_player_create(named);
+    const std::uint64_t second = fbe_player_create(unnamed);
+    REQUIRE(fbe_player_play(first, 0, clip, FBE_PLAYER_ONCE, 1.0F));
+    REQUIRE(fbe_player_play(second, 0, clip, FBE_PLAYER_ONCE, 1.0F));
+    CHECK(position(named).x == 1.0F);
+    CHECK(position(unnamed).x == 1.0F);
+    fbe_player_free(first);
+    fbe_player_free(second);
+    fbe_clip_release(clip);
+    fbe_world_free(world);
+}

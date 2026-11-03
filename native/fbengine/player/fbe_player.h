@@ -4,9 +4,10 @@
 // Players: what plays clips on an entity and the entities under it, in layers, each over the ones
 // before it. A clip's nodes are bound to entities by name as it's played, or after it changes: the
 // entity itself if it has the name, else the first under it that has it, depth first, each parent
-// before its children, as fbe_entity_find finds them; a node no entity has is left out, as is an
-// entity freed since. A player lives while its handle is held; once its entity is freed it plays
-// nothing, and its calls fail.
+// before its children, as fbe_entity_find finds them; a node of "" is the entity itself, a node no
+// entity has is left out, as is an entity freed since. A clip's morph weights move a mesh's, and
+// are left out of any other entity. A player lives while its handle is held; once its entity is
+// freed it plays nothing, and its calls fail.
 //
 // A layer plays a clip, or more than one while a crossfade goes from one to the next, each at a
 // weight going where it's going over the crossfade's seconds. Its pose is their weighted mean,

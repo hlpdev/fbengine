@@ -1,0 +1,133 @@
+// Morph targets: how a Mesh's vertices move toward other shapes, each Surface's targets shared by
+// every Mesh drawing its Geometry, and each Mesh's weights its own, which Clips move.
+
+Import std.ffi
+Import std.math
+Import "./c/fbe_morph"
+Import "./geometry"
+Import "./mesh"
+
+Extend Surface
+    /// Adds a morph target, and gives its index: `positions` is what each of the Surface's vertices
+    /// moves by at a weight of 1, and `normals`, if it's given, what its normal does. Vertices added
+    /// since don't move in it, and Clear(), which takes its vertices, takes its targets. Not one for
+    /// each vertex, or vectors that aren't numbers, panic.
+    @MainThread @PanicsAtCaller
+    Public Method AddMorphTarget(positions: Vec3[], normals: Vec3[] = []): Int
+        Local geometry = Owner.Live("AddMorphTarget")
+        If normals.Count != 0 && normals.Count != positions.Count
+            Panic("AddMorphTarget on a Surface: a normal for each position, not {normals.Count} " +
+                  "for {positions.Count}")
+        End If
+        Local moved = Flat(positions)
+        Local turned = Flat(normals)
+        Local index = -1
+        Unsafe
+            If normals.Count == 0
+                index = fbe_morph_add_target(geometry, Index, moved.Pointer(), Null,
+                                             positions.Count)
+            Else
+                index = fbe_morph_add_target(geometry, Index, moved.Pointer(), turned.Pointer(),
+                                             positions.Count)
+            End If
+        End Unsafe
+        If index < 0 Then Owner.Failed("AddMorphTarget")
+        Return index
+    End Method
+
+    /// How many morph targets it has.
+    @MainThread @PanicsAtCaller
+    Public Method MorphTargetCount(): Int
+        Local count = fbe_morph_target_count(Owner.Live("MorphTargetCount"), Index)
+        If count < 0 Then Owner.Failed("MorphTargetCount")
+        Return count
+    End Method
+End Extend
+
+Extend Mesh
+    /// Sets the mesh's morph weights, one for each target from the first, 0 past them, which can be
+    /// outside 0 to 1, pushing a shape past its target. Its copies start with them. Weights that
+    /// aren't numbers panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetMorphWeights(weights: Float[])
+        Local mesh = Live("SetMorphWeights")
+        Local floats = Buffer<Float32>(weights.Count)
+        For i = 0 Until weights.Count
+            floats[i] = weights[i]
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_morph_set_weights(mesh, floats.Pointer(), weights.Count)
+        End Unsafe
+        If !done Then Failed("SetMorphWeights")
+    End Method
+
+    /// The mesh's morph weights, `tween` of the way, 0 to 1, from its World's last capture to now,
+    /// as drawing between steps draws them. A tween outside that panics.
+    @MainThread @PanicsAtCaller
+    Public Method MorphWeights(tween: Float = 1): Float[]
+        Local mesh = Live("MorphWeights")
+        Local room = Buffer<Float32>(16)
+        Local count = 0
+        Unsafe
+            count = fbe_morph_weights(mesh, tween, room.Pointer(), 16)
+        End Unsafe
+        If count < 0 Then Failed("MorphWeights")
+        If count > 16
+            room = Buffer<Float32>(count)
+            Unsafe
+                fbe_morph_weights(mesh, tween, room.Pointer(), count)
+            End Unsafe
+        End If
+        Local weights: Float[] = []
+        For i = 0 Until count
+            weights.Add(room[i])
+        End For
+        Return weights
+    End Method
+
+    /// Where the vertices of the surface at `surface`, from 0, are as its weights move them now.
+    /// A mesh drawing nothing, or a surface out of range, panics.
+    @MainThread @PanicsAtCaller
+    Public Method MorphedPositions(surface: Int = 0): Vec3[] => Morphed(surface, False,
+                                                                        "MorphedPositions")
+
+    /// Which way the vertices of the surface at `surface` face as its weights move them now.
+    @MainThread @PanicsAtCaller
+    Public Method MorphedNormals(surface: Int = 0): Vec3[] => Morphed(surface, True,
+                                                                      "MorphedNormals")
+
+    // The surface's morphed positions, or normals.
+    @PanicsAtCaller
+    Method Morphed(surface: Int, normals: Bool, call: String): Vec3[]
+        Local mesh = Live(call)
+        Local geometry = Geometry()
+        If geometry == Null Then Panic("{call} on a Mesh that draws nothing")
+        Local count = geometry.Surface(surface).VertexCount()
+        Local floats = Buffer<Float32>(count * 3)
+        Local written = 0
+        Unsafe
+            If normals
+                written = fbe_morph_vertices(mesh, surface, Null, floats.Pointer(), count)
+            Else
+                written = fbe_morph_vertices(mesh, surface, floats.Pointer(), Null, count)
+            End If
+        End Unsafe
+        If written < 0 Then Failed(call)
+        Local vectors: Vec3[] = []
+        For i = 0 Until written
+            vectors.Add(Vec3(floats[i * 3], floats[i * 3 + 1], floats[i * 3 + 2]))
+        End For
+        Return vectors
+    End Method
+End Extend
+
+Function Flat(vectors: Vec3[]): Buffer<Float32>
+    Local floats = Buffer<Float32>(vectors.Count * 3)
+    For i = 0 Until vectors.Count
+        floats[i * 3] = vectors[i].x
+        floats[i * 3 + 1] = vectors[i].y
+        floats[i * 3 + 2] = vectors[i].z
+    End For
+    Return floats
+End Function

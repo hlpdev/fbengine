@@ -39,7 +39,8 @@ struct bone_t {
     scene::vec3_t position;
     scene::quat_t rotation;
     scene::vec3_t scale{ 1.0F, 1.0F, 1.0F };
-    std::array<bool, 3> moving{};
+    std::vector<float> weights;
+    std::array<bool, 4> moving{};
 };
 
 /// What one of a clip's channels moves: its bone, or none, and the key it sampled last.
@@ -100,16 +101,20 @@ struct sum_t {
     float weight = 0.0F;
 };
 
-/// What a pose works in, kept from one to the next so a frame's poses allocate nothing: each bone's
-/// entity's slot, or none, its transform so far, whether a clip's moved each property, and what the
-/// layer being worked out makes of it.
+/// What a pose works in, kept from one to the next so a frame's poses allocate little: each bone's
+/// entity's slot, or none, its transform and morph weights so far, whether a clip's moved each
+/// property, and what the layer being worked out makes of it.
 struct scratch_t {
     std::vector<std::uint32_t> slots;
     std::vector<scene::vec3_t> positions;
     std::vector<scene::quat_t> rotations;
     std::vector<scene::vec3_t> scales;
-    std::vector<std::array<bool, 3>> moved;
+    std::vector<std::vector<float>> weights;
+    std::vector<std::array<bool, 4>> moved;
     std::vector<std::array<sum_t, 3>> sums;
+    std::vector<std::vector<float>> weight_sums;
+    std::vector<float> weight_totals;
+    std::vector<float> sampled;
     std::vector<bool> allowed;
 };
 
@@ -209,15 +214,15 @@ void stop_all(player_t& player) {
 /// Once tracks have gone, forgets that a clip's moving what none of those left moves, so what's
 /// done with it now is where the next clip to move it begins.
 void note_still_moved(player_t& player) {
-    std::vector<std::array<bool, 3>>& moved = players().scratch.moved;
+    std::vector<std::array<bool, 4>>& moved = players().scratch.moved;
     moved.assign(player.bones.size(), {});
     for (const layer_t& layer : player.layers) {
         for (const track_t& track : layer.tracks) {
             const std::vector<channel_t>& channels = kept_clip(track.clip).clip.channels;
             for (std::size_t c = 0; c < track.bound.size(); ++c) {
-                const property_t property = channels[c].property;
-                if (property != property_t::WEIGHTS && track.bound[c].bone != scene::none) {
-                    moved[track.bound[c].bone][static_cast<std::size_t>(property)] = true;
+                if (track.bound[c].bone != scene::none) {
+                    moved[track.bound[c].bone][static_cast<std::size_t>(channels[c].property)] =
+                        true;
                 }
             }
         }
@@ -230,12 +235,9 @@ void note_still_moved(player_t& player) {
 }
 
 /// The entity named `name`: the player's own, in slot `root`, or the first under it with the name,
-/// depth first; none has no name.
+/// depth first; "" is the player's own, whatever its name.
 std::uint64_t named(const player_t& player, std::uint32_t root, const std::string& name) {
-    if (name.empty()) {
-        return 0;
-    }
-    if (scene::scene().entities.name[root] == name) {
+    if (name.empty() || scene::scene().entities.name[root] == name) {
         return player.entity;
     }
     return fbe_entity_find(player.entity, name.c_str());
@@ -461,8 +463,15 @@ void begin_moving(bone_t& bone, std::size_t bone_index, std::size_t property) {
         scratch.scales[bone_index] = bone.scale;
         break;
     case property_t::WEIGHTS:
+        bone.weights = scene::scene().meshes[entities.component[slot]].weights;
+        scratch.weights[bone_index] = bone.weights;
         break;
     }
+}
+
+/// Whether an entity has morph weights to move.
+bool has_weights(std::uint32_t slot) {
+    return scene::scene().entities.kind[slot] == FBE_ENTITY_MESH;
 }
 
 /// Sums what a layer's tracks make of each bone's properties into the scratch's sums, marking what
@@ -476,8 +485,8 @@ void sum_tracks(player_t& player, layer_t& layer) {
         for (std::size_t c = 0; c < clip.channels.size(); ++c) {
             const channel_t& channel = clip.channels[c];
             const std::uint32_t bone = track.bound[c].bone;
-            if (channel.property == property_t::WEIGHTS || bone == scene::none ||
-                !scratch.allowed[bone]) {
+            if (bone == scene::none || !scratch.allowed[bone] ||
+                (channel.property == property_t::WEIGHTS && !has_weights(scratch.slots[bone]))) {
                 continue;
             }
             const auto property = static_cast<std::size_t>(channel.property);
@@ -488,6 +497,17 @@ void sum_tracks(player_t& player, layer_t& layer) {
                 }
             }
             if (weight <= 0.0F) {
+                continue;
+            }
+            if (channel.property == property_t::WEIGHTS) {
+                scratch.sampled.resize(channel.width);
+                sample(channel, track.time, track.bound[c].cursor, scratch.sampled);
+                std::vector<float>& sum = scratch.weight_sums[bone];
+                sum.resize(std::max<std::size_t>(sum.size(), channel.width), 0.0F);
+                for (std::size_t k = 0; k < channel.width; ++k) {
+                    sum[k] += scratch.sampled[k] * weight;
+                }
+                scratch.weight_totals[bone] += weight;
                 continue;
             }
             sum_t& sum = scratch.sums[bone][property];
@@ -533,6 +553,16 @@ void lay_over(float weight, std::size_t count) {
                                       growing.value[2] / growing.weight };
             scratch.scales[i] = lerp(scratch.scales[i], mean, t);
         }
+        const float total = scratch.weight_totals[i];
+        if (total > 0.0F) {
+            const float t = weight * std::min(total, 1.0F);
+            const std::vector<float>& sum = scratch.weight_sums[i];
+            std::vector<float>& weights = scratch.weights[i];
+            weights.resize(std::max(weights.size(), sum.size()), 0.0F);
+            for (std::size_t k = 0; k < sum.size(); ++k) {
+                weights[k] += ((sum[k] / total) - weights[k]) * t;
+            }
+        }
     }
 }
 
@@ -554,6 +584,9 @@ void pose(player_t& player, std::uint32_t root) {
     scratch.positions.resize(count);
     scratch.rotations.resize(count);
     scratch.scales.resize(count);
+    scratch.weights.resize(count);
+    scratch.weight_sums.resize(count);
+    scratch.weight_totals.resize(count);
     scratch.moved.assign(count, {});
     scratch.sums.resize(count);
     scratch.allowed.resize(count);
@@ -563,6 +596,7 @@ void pose(player_t& player, std::uint32_t root) {
         scratch.positions[i] = bone.position;
         scratch.rotations[i] = bone.rotation;
         scratch.scales[i] = bone.scale;
+        scratch.weights[i] = bone.weights;
     }
     for (layer_t& layer : player.layers) {
         if (layer.tracks.empty()) {
@@ -570,6 +604,8 @@ void pose(player_t& player, std::uint32_t root) {
         }
         for (std::size_t i = 0; i < count; ++i) {
             scratch.sums[i] = {};
+            scratch.weight_sums[i].clear();
+            scratch.weight_totals[i] = 0.0F;
             scratch.allowed[i] = scratch.slots[i] != scene::none &&
                                  masked_in(layer, scratch.slots[i]) &&
                                  !std::ranges::contains(player.released, player.bones[i].entity);
@@ -578,9 +614,12 @@ void pose(player_t& player, std::uint32_t root) {
         lay_over(layer.weight, count);
     }
     for (std::size_t i = 0; i < count; ++i) {
-        const std::array<bool, 3>& moved = scratch.moved[i];
+        const std::array<bool, 4>& moved = scratch.moved[i];
         player.bones[i].moving = moved;
         const std::uint32_t slot = scratch.slots[i];
+        if (slot != scene::none && moved[3]) {
+            scene::scene().meshes[entities.component[slot]].weights = scratch.weights[i];
+        }
         if (slot == scene::none || (!moved[0] && !moved[1] && !moved[2])) {
             continue;
         }

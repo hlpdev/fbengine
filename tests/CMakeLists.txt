@@ -670,7 +670,7 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 # E7's animation: sampling, apart from the DLL, and the clip, player, and skin areas through
 # fbengine's C API, with no window or GPU.
 add_executable(fbengine_anim_tests anim/sample_tests.cpp anim/clip_tests.cpp anim/player_tests.cpp
-               anim/skin_tests.cpp anim/model_tests.cpp
+               anim/skin_tests.cpp anim/model_tests.cpp anim/morph_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
 target_link_libraries(fbengine_anim_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_anim_tests)
@@ -696,6 +696,9 @@ if(FBENGINE_FB_TESTS)
       "joint-twice=AddJoint on a Skin: the skin has a joint \"a\" already"
       "joint-out-of-range=JointName\\(0\\) on a Skin with 0 joints"
       "release-freed=Release on a Pivot that was freed"
+      "weights-uneven=AddWeights on a Clip: as many weights for each key's time, not 3 for 2"
+      "target-short=AddMorphTarget on a Geometry: a target moves each of the surface's 0 vertices, not 1"
+      "morphed-nothing=MorphedPositions on a Mesh that draws nothing"
       "layer-out-of-range=Layer\\(16\\) on a Player: its layers are 0 to 15"
       "crossfade-negative=Crossfade on a Player: a fade takes 0 seconds or more, not -1"
       "weight-outside=SetWeight on a Player: a layer's weight is from 0 to 1, not 2"

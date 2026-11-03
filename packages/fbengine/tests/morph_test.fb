@@ -1,0 +1,148 @@
+// Morph targets and node animation of whole entities: a surface's targets, a mesh's weights, Clips
+// moving them, and Clips on an entity whatever it's named; with no window or GPU.
+
+Import std.math
+Import std.test
+Import fbengine
+
+Function Fresh(): World
+    Local world = World()
+    World.SetCurrent(world)
+    Return world
+End Function
+
+Function Same(a: Float[], b: Float[]): Bool => a == b
+
+// A triangle, facing +z, with a target pushing its first vertex up, and turning its normal to +y.
+Function Smile(): Geometry
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    surface.AddVertex(Vertex(Vec3(0, 0, 0), Vec3(0, 0, 1)))
+    surface.AddVertex(Vertex(Vec3(1, 0, 0), Vec3(0, 0, 1)))
+    surface.AddVertex(Vertex(Vec3(0, 1, 0), Vec3(0, 0, 1)))
+    Local nothing = Vec3(0, 0, 0)
+    Expect(surface.AddMorphTarget([Vec3(0, 2, 0), nothing, nothing],
+                                  [Vec3(0, 1, -1), nothing, nothing]) == 0)
+    Expect(surface.AddMorphTarget([nothing, Vec3(4, 0, 0), nothing]) == 1)
+    Expect(surface.MorphTargetCount() == 2)
+    Return geometry
+End Function
+
+@Test
+Function AMeshsWeightsMoveItsVertices()
+    Local world = Fresh()
+    Defer world.Free()
+    Local mesh = Mesh(Smile())
+    Expect(mesh.MorphWeights().Count == 0)
+    Expect(mesh.MorphedPositions()[0] == Vec3(0, 0, 0))
+    mesh.SetMorphWeights([0.5, 0.25])
+    Expect(Same(mesh.MorphWeights(), [0.5, 0.25]))
+    Local moved = mesh.MorphedPositions()
+    Expect(IsClose(moved[0], Vec3(0, 1, 0)) && IsClose(moved[1], Vec3(2, 0, 0)) &&
+           moved[2] == Vec3(0, 1, 0))
+    mesh.SetMorphWeights([1])
+    Expect(IsClose(mesh.MorphedNormals()[0], Vec3(0, 1, 0)))
+    // Each Mesh's weights are its own; a copy starts with them, and shares the targets.
+    Local copy = mesh.Copy() As Mesh
+    Expect(Same(copy.MorphWeights(), [1]))
+    copy.SetMorphWeights([0])
+    Expect(Same(mesh.MorphWeights(), [1]) && copy.MorphedPositions()[0] == Vec3(0, 0, 0))
+End Function
+
+@Test
+Function AClipMovesAMeshsWeights()
+    Local world = Fresh()
+    Defer world.Free()
+    Local mesh = Mesh(Smile())
+    mesh.SetName("face")
+    Local clip = Clip("grin")
+    clip.AddWeights("face", [0, 1], [0, 0, 1, 2])
+    Expect(clip.ChannelCount() == 1)
+    mesh.Player().Play(clip, PlayMode.ONCE)
+    UpdateWorld(0.5)
+    Expect(Same(mesh.MorphWeights(), [0.5, 1]))
+    Expect(IsClose(mesh.MorphedPositions()[0], Vec3(0, 1, 0)))
+    UpdateWorld(5)
+    Expect(Same(mesh.MorphWeights(), [1, 2]))
+    // Faded out, it's back where it was.
+    mesh.Player().Stop(1)
+    UpdateWorld(0.5)
+    Expect(IsClose(mesh.MorphWeights()[0], 0.5))
+    UpdateWorld(0.5)
+    // It had none, so it has none, which is 0 for every target.
+    Expect(mesh.MorphWeights().Count == 0)
+    Expect(mesh.MorphedPositions()[0] == Vec3(0, 0, 0))
+End Function
+
+@Test
+Function WeightsTweenFromTheCapture()
+    Local world = Fresh()
+    Defer world.Free()
+    Local mesh = Mesh(Smile())
+    mesh.SetMorphWeights([1])
+    CaptureWorld()
+    mesh.SetMorphWeights([3, 2])
+    Expect(Same(mesh.MorphWeights(0.5), [2, 1]))
+    Expect(Same(mesh.MorphWeights(1), [3, 2]))
+End Function
+
+// A Geometry changed after its targets were added keeps them in step.
+@Test
+Function TargetsGoWithTheGeometry()
+    Local world = Fresh()
+    Defer world.Free()
+    Local geometry = Smile()
+    Local clone = geometry.Clone()
+    Expect(clone.Surface(0).MorphTargetCount() == 2)
+    geometry.Transform(Mat4.Scale(Vec3(2, 2, 2)))
+    Local mesh = Mesh(geometry)
+    mesh.SetMorphWeights([1])
+    Expect(IsClose(mesh.MorphedPositions()[0], Vec3(0, 4, 0)))
+    Expect(IsClose(mesh.MorphedNormals()[0], Vec3(0, 1, 0)))
+    geometry.Flip()
+    Expect(IsClose(mesh.MorphedNormals()[0], Vec3(0, -1, 0)))
+    geometry.Surface(0).Clear()
+    Expect(geometry.Surface(0).MorphTargetCount() == 0)
+    Expect(clone.Surface(0).MorphTargetCount() == 2)
+End Function
+
+// A Clip of no name's node moves whatever plays it, a door whatever it's called, or a light.
+@Test
+Function AClipMovesAWholeEntityWhateverItsCalled()
+    Local world = Fresh()
+    Defer world.Free()
+    Local swing = Clip("swing")
+    swing.AddRotations("", [0, 1], [Quat.Identity, Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(90))])
+    swing.AddPositions("", [0, 1], [Vec3(0, 0, 0), Vec3(0, 2, 0)])
+    Local door = Pivot()
+    door.SetName("cell door")
+    Local gate = Pivot()
+    Local lamp = Light()
+    door.Player().Play(swing, PlayMode.ONCE)
+    gate.Player().Play(swing, PlayMode.ONCE)
+    lamp.Player().Play(swing, PlayMode.ONCE)
+    UpdateWorld(1)
+    For each In [door, gate, lamp As Entity]
+        Expect(IsClose(each.Position(), Vec3(0, 2, 0)))
+        Expect(IsClose(each.Forward(), Vec3(-1, 0, 0)))
+    End For
+End Function
+
+// What's under a whole entity's goes with it, and a named part moves by its name.
+@Test
+Function AClipMovesAnEntityAndAPartOfIt()
+    Local world = Fresh()
+    Defer world.Free()
+    Local mill = Pivot()
+    Local blades = Pivot(mill)
+    blades.SetName("blades")
+    blades.SetPosition(Vec3(0, 3, 0))
+    Local turning = Clip()
+    turning.AddPositions("", [0, 1], [Vec3(0, 0, 0), Vec3(1, 0, 0)])
+    turning.AddRotations("blades", [0, 1],
+                         [Quat.Identity, Quat.FromAxisAngle(Vec3(0, 0, 1), Deg(90))])
+    mill.Player().Play(turning, PlayMode.ONCE)
+    UpdateWorld(1)
+    Expect(IsClose(blades.Position(Space.WORLD), Vec3(1, 3, 0)))
+    Expect(IsClose(blades.Rotation() * Vec3(1, 0, 0), Vec3(0, 1, 0)))
+End Function

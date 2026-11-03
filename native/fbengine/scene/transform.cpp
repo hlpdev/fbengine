@@ -454,6 +454,10 @@ FBE_API bool fbe_world_capture(uint64_t world) {
         entities.captured_rotation[entity] = entities.rotation[entity];
         entities.captured_scale[entity] = entities.scale[entity];
         entities.captured[entity] = true;
+        if (entities.kind[entity] == FBE_ENTITY_MESH) {
+            fbe::scene::mesh_t& mesh = scene().meshes[entities.component[entity]];
+            mesh.captured_weights = mesh.weights;
+        }
     }
     return true;
 }

@@ -66,11 +66,19 @@ struct collider_t {
     std::vector<contact_t> contacts;
 };
 
-/// One surface of a geometry: its vertices, as the C API has them, and its triangles, three
-/// indices into them each, counterclockwise seen from the front.
+/// A morph target of a surface: what each of its vertices, and its normal, move by at a weight of
+/// 1, as the morph area's C API has them; vertices past them don't move, and normals can be none.
+struct morph_target_t {
+    std::vector<vec3_t> positions;
+    std::vector<vec3_t> normals;
+};
+
+/// One surface of a geometry: its vertices, as the C API has them, its triangles, three indices
+/// into them each, counterclockwise seen from the front, and its morph targets.
 struct surface_t {
     std::vector<fbe_vertex_t> vertices;
     std::vector<std::uint32_t> indices;
+    std::vector<morph_target_t> targets;
     /// The material it's drawn in, by slot, which it holds, or none for the default.
     std::uint32_t material = none;
 };
@@ -132,6 +140,10 @@ struct mesh_t {
     std::uint32_t material = none;
     /// Its own color and alpha, which multiply its materials', white at first.
     std::array<float, 4> tint{ 1.0F, 1.0F, 1.0F, 1.0F };
+    /// Its morph targets' weights, one a target from the first, 0 past them, and as they were at
+    /// its World's last capture.
+    std::vector<float> weights;
+    std::vector<float> captured_weights;
 };
 
 /// A sprite: its quad's material, which it holds, or none, its own color, how it turns toward the
