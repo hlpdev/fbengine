@@ -3,6 +3,7 @@
 // geometry and pipeline go together as instances, each instance a draw of the list.
 
 #include "core/engine.hpp"
+#include "environment/environment.hpp"
 #include "fbengine.h"
 #include "gpu/buffer.hpp"
 #include "gpu/graph.hpp"
@@ -41,8 +42,8 @@ using scene::vec3_t;
 
 /// A draw as the scene shader reads it: its matrix to the camera's view; the rows of what turns
 /// its normals there; its color and alpha; its vertices' address; its joints' and palette's, if
-/// it's skinned; its material's index in the camera's; its own lights; and how many matrices its
-/// palette has, 0 if it isn't skinned.
+/// it's skinned, and its tangents', if it has them; its material's index in the camera's; its own
+/// lights; how many matrices its palette has, 0 if it isn't skinned; and whether it has tangents.
 struct draw_data_t {
     std::array<float, 16> to_view;
     std::array<std::array<float, 4>, 3> normals;
@@ -50,12 +51,15 @@ struct draw_data_t {
     VkDeviceAddress vertices;
     VkDeviceAddress joints;
     VkDeviceAddress palette;
+    VkDeviceAddress tangents;
     std::uint32_t material;
     std::uint32_t light_first;
     std::uint32_t light_count;
     std::uint32_t joint_count;
+    std::uint32_t has_tangents;
+    std::uint32_t spare;
 };
-static_assert(sizeof(draw_data_t) == 168, "the scene shader reads draws 168 bytes apart");
+static_assert(sizeof(draw_data_t) == 184, "the scene shader reads draws 184 bytes apart");
 
 /// A layer as the scene shader reads it: its texture's and sampler's indices in the bindless set,
 /// how a bump layer scales the next layer's light, what turns its UVs, by rows, with in their last
@@ -80,8 +84,16 @@ struct material_data_t {
     std::uint32_t no_alpha;
     std::uint32_t spare;
     std::array<layer_data_t, FBE_MATERIAL_LAYERS> layers;
+    float metallic;
+    float roughness;
+    float normal_scale;
+    float occlusion_strength;
+    std::array<float, 3> emissive;
+    /// Which of its maps it has, a bit for each FBE_MAP_.
+    std::uint32_t maps;
+    std::array<layer_data_t, FBE_MATERIAL_MAPS> map_layers;
 };
-static_assert(sizeof(material_data_t) == 544, "the scene shader reads materials 544 bytes apart");
+static_assert(sizeof(material_data_t) == 832, "the scene shader reads materials 832 bytes apart");
 
 /// A camera as the scene shader reads it.
 struct camera_data_t {
@@ -104,8 +116,14 @@ struct camera_data_t {
     VkDeviceAddress clusters;
     VkDeviceAddress cluster_lights;
     VkDeviceAddress draw_lights;
+    /// What it's lit by, and whether it's lit by it; and the rows of what turns its view's
+    /// directions into the world's, which an environment's are in.
+    environment::shader_data_t environment;
+    std::uint32_t has_environment;
+    std::uint32_t spare_too;
+    std::array<std::array<float, 4>, 3> to_world;
 };
-static_assert(sizeof(camera_data_t) == 192, "the scene shader reads a camera of 192 bytes");
+static_assert(sizeof(camera_data_t) == 272, "the scene shader reads a camera of 272 bytes");
 static_assert(sizeof(fbe_draw_light_t) == 64, "the scene shader reads lights 64 bytes apart");
 static_assert(sizeof(fbe_vertex_t) == 56, "the scene shader reads vertices 56 bytes apart");
 
@@ -271,10 +289,43 @@ gpu::slice_t in_ring(std::span<const Item> found, bool& failed) {
     return slice;
 }
 
+/// A layer or a map as the scene shader reads it, what it samples added to `sampled`.
+layer_data_t layer_data(const scene::layer_t& layer, std::uint64_t target,
+                        std::vector<std::uint64_t>& sampled) {
+    layer_data_t out{};
+    const texture::texture_t* image =
+        layer.texture != target ? texture::find(layer.texture) : nullptr;
+    if (image != nullptr) {
+        out.texture = texture::index_of(layer.texture);
+        out.sampler = texture::sampler_of(*image);
+        sampled.push_back(layer.texture);
+    } else {
+        out.texture = texture::white;
+        out.sampler =
+            gpu::sampler_index(FBE_TEXTURE_NEAREST, FBE_TEXTURE_REPEAT, FBE_TEXTURE_REPEAT);
+    }
+    out.luminance_scale = layer.bump_scale;
+    out.luminance_offset = layer.bump_offset;
+    out.bump = layer.bump;
+    // As Blitz's: scaled down by its scale, so 2 looks twice as big, turned back by its angle,
+    // and moved back by its offset.
+    const float across = 1.0F / layer.uv_scale[0];
+    const float down = 1.0F / layer.uv_scale[1];
+    const float cosine = std::cos(-layer.uv_angle);
+    const float sine = std::sin(-layer.uv_angle);
+    const bool decodes = image != nullptr && image->format == FBE_TEXTURE_RGBA8;
+    const float neutral = image != nullptr ? 0.0F : 1.0F;
+    const float across_u = across * cosine;
+    const float across_v = across * sine;
+    out.uv_across = { across_u, across_v, -layer.uv_offset[0], decodes ? 1.0F : 0.0F };
+    out.uv_down = { -down * sine, down * cosine, -layer.uv_offset[1], neutral };
+    return out;
+}
+
 /// What a material is as the scene shader reads it, its layers those with textures, in order, as
 /// its draws' pipeline key has them, and the textures it samples added to `sampled`. A layer can't
 /// sample what the pass draws into, so leaves what's under it as it is, as a layer does whose
-/// texture has gone with the GPU.
+/// texture has gone with the GPU; and a map that can't is no map.
 material_data_t material_data(std::uint32_t material, std::uint64_t target,
                               std::vector<std::uint64_t>& sampled) {
     const scene::material_t standard;
@@ -287,36 +338,24 @@ material_data_t material_data(std::uint32_t material, std::uint64_t target,
     data.no_alpha = found.blend == FBE_BLEND_OPAQUE ? 1U : 0U;
     std::size_t at = 0;
     for (const scene::layer_t& layer : found.layers) {
-        if (layer.texture == 0) {
-            continue;
+        if (layer.texture != 0) {
+            data.layers[at++] = layer_data(layer, target, sampled);
         }
-        layer_data_t& out = data.layers[at++];
-        const texture::texture_t* image =
-            layer.texture != target ? texture::find(layer.texture) : nullptr;
-        if (image != nullptr) {
-            out.texture = texture::index_of(layer.texture);
-            out.sampler = texture::sampler_of(*image);
-            sampled.push_back(layer.texture);
-        } else {
-            out.texture = texture::white;
-            out.sampler =
-                gpu::sampler_index(FBE_TEXTURE_NEAREST, FBE_TEXTURE_REPEAT, FBE_TEXTURE_REPEAT);
+    }
+    data.metallic = found.metallic;
+    data.roughness = found.roughness;
+    data.normal_scale = found.normal_scale;
+    data.occlusion_strength = found.occlusion_strength;
+    data.emissive = found.emissive;
+    for (std::size_t map = 0; map < found.maps.size(); ++map) {
+        const scene::layer_t& layer = found.maps.at(map);
+        if (layer.texture != 0 && layer.texture != target &&
+            texture::find(layer.texture) != nullptr) {
+            data.map_layers.at(map) = layer_data(layer, target, sampled);
+            // Its UV set's in what the pipeline key is for layers; here, the unused place.
+            data.map_layers.at(map).bump[0] = static_cast<float>(layer.uv_set);
+            data.maps |= 1U << map;
         }
-        out.luminance_scale = layer.bump_scale;
-        out.luminance_offset = layer.bump_offset;
-        out.bump = layer.bump;
-        // As Blitz's: scaled down by its scale, so 2 looks twice as big, turned back by its angle,
-        // and moved back by its offset.
-        const float across = 1.0F / layer.uv_scale[0];
-        const float down = 1.0F / layer.uv_scale[1];
-        const float cosine = std::cos(-layer.uv_angle);
-        const float sine = std::sin(-layer.uv_angle);
-        const bool decodes = image != nullptr && image->format == FBE_TEXTURE_RGBA8;
-        const float neutral = image != nullptr ? 0.0F : 1.0F;
-        const float across_u = across * cosine;
-        const float across_v = across * sine;
-        out.uv_across = { across_u, across_v, -layer.uv_offset[0], decodes ? 1.0F : 0.0F };
-        out.uv_down = { -down * sine, down * cosine, -layer.uv_offset[1], neutral };
     }
     return data;
 }
@@ -457,6 +496,10 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             data.vertices = surface->vertices.address;
             batch.indices = surface->indices.buffer;
             batch.index_count = surface->index_count;
+            if (surface->tangents.buffer != VK_NULL_HANDLE) {
+                data.tangents = surface->tangents.address;
+                data.has_tangents = 1U;
+            }
             if (surface->joints.buffer != VK_NULL_HANDLE) {
                 // Each mesh's once, however many surfaces it has, its surfaces one after another
                 // or apart.
@@ -557,6 +600,24 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
     }
     data.flipped = flipped ? 1U : 0U;
     data.directional = directional;
+    const scene::world_t& world = s.worlds[s.entities.world[camera.entity]];
+    if (world.environment != 0 && environment::shader_data(world.environment, data.environment)) {
+        data.environment.intensity = world.environment_intensity;
+        data.has_environment = 1U;
+        for (const std::uint64_t texture : {
+                 fbe_environment_irradiance(world.environment),
+                 fbe_environment_specular(world.environment),
+                 fbe_environment_table(world.environment),
+             }) {
+            sampled.push_back(texture);
+        }
+    }
+    const vec3_t right = view.rotation * vec3_t(1.0F, 0.0F, 0.0F);
+    const vec3_t up = view.rotation * vec3_t(0.0F, 1.0F, 0.0F);
+    const vec3_t back_way = view.rotation * vec3_t(0.0F, 0.0F, 1.0F);
+    data.to_world[0] = { right.x, up.x, back_way.x, 0.0F };
+    data.to_world[1] = { right.y, up.y, back_way.y, 0.0F };
+    data.to_world[2] = { right.z, up.z, back_way.z, 0.0F };
     bool failed = false;
     data.draws = in_ring<draw_data_t>(draws, failed).address;
     data.materials = in_ring<material_data_t>(materials, failed).address;

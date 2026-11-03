@@ -4,12 +4,14 @@
 // camera's, which gives its draws', materials', and lights'; each draw, by its instance, gives its
 // vertices'. Lighting is in the camera's view, x right, y up, looking down -z.
 //
-// PBR works in linear light. UNLIT and VERTEX are the fixed-function look, which worked on what was
+// PBR works in linear light, its color and layers its base color, shaded by pbr.slang. UNLIT and
+// VERTEX are the fixed-function look, which worked on what was
 // stored: their colors, textures, adds, doublings, and fog are all in encoded values, sRGB's, each
 // stage clamped to 0 to 1, as its stages were, and only the color they end with is made linear for
 // the target. A room's 50 doubled is 100, as it was, not linear light's 71.
 
 import bindless;
+import pbr;
 
 // A pipeline's constants, render/draw.cpp's desc_of's order: its FBE_SHADING_; its FBE_BLEND_;
 // whether it has an alpha cutoff, takes vertex colors, and is two-sided; its FBE_FOG_; how many
@@ -37,6 +39,10 @@ static const uint layerAdd = 1;
 static const uint layerAlpha = 2;
 static const uint layerMultiply2 = 3;
 static const uint layerBump = 4;
+static const uint mapMetalRough = 0;
+static const uint mapNormal = 1;
+static const uint mapOcclusion = 2;
+static const uint mapEmissive = 3;
 static const uint lightDirectional = 0;
 static const uint lightSpot = 2;
 static const uint clustersAcross = 16;
@@ -64,9 +70,15 @@ struct Joints
     float weights[4];
 };
 
+// A vertex's tangent, its floats loose.
+struct Tangent
+{
+    float xyzw[4];
+};
+
 // A draw: its matrix to the camera's view, what turns its normals there, its color and alpha, its
-// vertices, its joints and palette if it's skinned, its material's index, its own lights, and how
-// many matrices its palette has, 0 if it isn't skinned.
+// vertices, its joints and palette if it's skinned, its tangents if it has them, its material's
+// index, its own lights, and how many matrices its palette has, 0 if it isn't skinned.
 struct Draw
 {
     float4x4 toView;
@@ -75,10 +87,13 @@ struct Draw
     Vertex* vertices;
     Joints* joints;
     float4x4* palette;
+    Tangent* tangents;
     uint material;
     uint lightFirst;
     uint lightCount;
     uint jointCount;
+    uint hasTangents;
+    uint spare;
 };
 
 // A layer: its texture and sampler in the bindless set; how a bump layer scales the next layer's
@@ -105,6 +120,14 @@ struct Material
     uint noAlpha;
     uint spare;
     Layer layers[8];
+    float metallic;
+    float roughness;
+    float normalScale;
+    float occlusionStrength;
+    float3 emissive;
+    // Which of its maps it has, a bit for each, whose UV sets are in their bumps' x.
+    uint maps;
+    Layer mapLayers[4];
 };
 
 // fbe_draw_light_t, its floats loose.
@@ -151,6 +174,11 @@ struct Camera
     Cluster* clusters;
     uint* clusterLights;
     uint* drawLights;
+    Environment environment;
+    uint hasEnvironment;
+    uint spareToo;
+    // The rows of what turns its view's directions into the world's.
+    float4 toWorld[3];
 };
 
 struct Push
@@ -170,6 +198,8 @@ struct Corner
     float2 uv1 : TEXCOORD1;
     float4 color : COLOR;
     float3 lit : LIT;
+    // Its tangent in the camera's view, w its bitangent's way; 0 in w for none.
+    float4 tangent : TANGENT;
     nointerpolation uint draw : DRAW;
 };
 
@@ -204,14 +234,12 @@ float3 whole(float3 normal)
     return squared > 0.0 ? normal / sqrt(squared) : normal;
 }
 
-// The light that reaches a place from a light, on a normal: what falls on it, and what its
-// highlight adds. Per pixel, as glTF's KHR_lights_punctual has it, which ends at its range, as
-// clusters need; per vertex, as fixed-function hardware's did, whole within its range and falling as
-// range over distance past it, with no end, in encoded values.
-void addLight(Light light, float3 place, float3 normal, float3 eye, float shininess,
-              inout float3 diffuse, inout float3 highlight)
+// A light at a place: the way to it, and the light that reaches it. Per pixel, as glTF's
+// KHR_lights_punctual has it, which ends at its range, as clusters need; per vertex, as
+// fixed-function hardware's did, whole within its range and falling as range over distance past it,
+// with no end, in encoded values.
+void lightAt(Light light, float3 place, out float3 way, out float3 color)
 {
-    float3 way;
     float falling = 1.0;
     if (light.type == int(lightDirectional))
     {
@@ -241,9 +269,18 @@ void addLight(Light light, float3 place, float3 normal, float3 eye, float shinin
             falling *= inCone * inCone;
         }
     }
-    const float facing = saturate(dot(normal, way));
     const float3 linear = float3(light.color[0], light.color[1], light.color[2]);
-    const float3 color = (shading == shadingVertex ? toEncoded(linear) : linear) * falling;
+    color = (shading == shadingVertex ? toEncoded(linear) : linear) * falling;
+}
+
+// What a light adds to a fixed-function vertex: what falls on it, and what its highlight adds.
+void addLight(Light light, float3 place, float3 normal, float3 eye, float shininess,
+              inout float3 diffuse, inout float3 highlight)
+{
+    float3 way;
+    float3 color;
+    lightAt(light, place, way, color);
+    const float facing = saturate(dot(normal, way));
     diffuse += color * facing;
     if (shininess > 0.0 && facing > 0.0)
     {
@@ -321,6 +358,33 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
     }
     corner.draw = instance;
     corner.lit = float3(1.0, 1.0, 1.0);
+    corner.tangent = float4(0.0, 0.0, 0.0, 0.0);
+    if (!fixedLook() && draw.hasTangents != 0)
+    {
+        const Tangent tangent = draw.tangents[index];
+        float3 along = float3(tangent.xyzw[0], tangent.xyzw[1], tangent.xyzw[2]);
+        if (draw.jointCount != 0)
+        {
+            const Joints joints = draw.joints[index];
+            float4x4 skin = float4x4(0.0);
+            for (uint joint = 0; joint < 4; ++joint)
+            {
+                const uint which = (joints.joints[joint / 2] >> (16 * (joint % 2))) & 0xFFFF;
+                skin += (which == noBone
+                             ? float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+                             : draw.palette[min(which, draw.jointCount - 1)]) *
+                        joints.weights[joint];
+            }
+            along = mul(skin, float4(along, 0.0)).xyz;
+        }
+        const float3 viewed = mul(draw.toView, float4(along, 0.0)).xyz;
+        // A mirror turns its bitangent with it.
+        const float3 x = draw.toView[0].xyz;
+        const float3 y = draw.toView[1].xyz;
+        const float3 z = draw.toView[2].xyz;
+        const float mirrored = dot(cross(x, y), z) < 0.0 ? -1.0 : 1.0;
+        corner.tangent = float4(viewed, tangent.xyzw[3] * mirrored);
+    }
     if (shading == shadingVertex)
     {
         // Lit here, by the draw's own lights, and clamped here, before any texture.
@@ -339,13 +403,69 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
     return corner;
 }
 
-// What lights a pixel per pixel: the ambient light, every directional light, and its cluster's.
-float3 pixelLit(Camera* camera, float2 pixel, float3 place, float3 normal, float shininess)
+// A map's UVs at a corner, and its texel there.
+float2 mapUv(Layer map, Corner corner)
 {
+    const float3 uv = float3(map.bump.x != 0.0 ? corner.uv1 : corner.uv0, 1.0);
+    return float2(dot(map.uvAcross.xyz, uv), dot(map.uvDown.xyz, uv));
+}
+
+float4 mapTexel(Layer map, Corner corner)
+{
+    return sampleTexture(map.texture, map.sampler, mapUv(map, corner));
+}
+
+// What a pixel looks like, shaded by pbr.slang: its base color by its environment and ambient light,
+// each directional light, and its cluster's, what it emits on top.
+float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 baseColor, bool front)
+{
+    const float3 place = corner.place;
     const float3 eye = toEye(camera, place);
-    float3 diffuse = camera.ambient;
-    float3 highlight = float3(0.0, 0.0, 0.0);
-    float2 across = (pixel - camera.viewport.xy) / camera.viewport.zw;
+    float3 normal = whole(corner.normal);
+    if (twoSided != 0 && !front)
+    {
+        normal = -normal;
+    }
+    float metallic = material.metallic;
+    float roughness = material.roughness;
+    float occlusion = 1.0;
+    float3 emissive = material.emissive;
+    const bool hasNormal = dot(normal, normal) > 0.0;
+    if ((material.maps & (1 << mapMetalRough)) != 0)
+    {
+        const float4 texel = mapTexel(material.mapLayers[mapMetalRough], corner);
+        roughness *= texel.g;
+        metallic *= texel.b;
+    }
+    if ((material.maps & (1 << mapOcclusion)) != 0)
+    {
+        occlusion = 1.0 + (material.occlusionStrength * (mapTexel(material.mapLayers[mapOcclusion], corner).r - 1.0));
+    }
+    if ((material.maps & (1 << mapEmissive)) != 0)
+    {
+        emissive *= mapTexel(material.mapLayers[mapEmissive], corner).rgb;
+    }
+    if (hasNormal && (material.maps & (1 << mapNormal)) != 0)
+    {
+        const Layer map = material.mapLayers[mapNormal];
+        const float4 tangent = corner.tangent.w != 0.0 ? corner.tangent
+                                                       : tangentFromDerivatives(normal, place, mapUv(map, corner));
+        normal = normalFromMap(normal, tangent, mapTexel(map, corner).rgb, material.normalScale);
+    }
+    // No normal, as a sprite's: only ambient light lights that.
+    float3 color = baseColor * camera.ambient * occlusion;
+    if (!hasNormal)
+    {
+        return color + emissive;
+    }
+    Surface surface;
+    surface.baseColor = baseColor;
+    surface.metallic = saturate(metallic);
+    surface.roughness = saturate(roughness);
+    surface.normal = normal;
+    surface.occlusion = occlusion;
+    surface.emissive = emissive;
+    float2 across = (corner.position.xy - camera.viewport.xy) / camera.viewport.zw;
     if (camera.flipped != 0)
     {
         across.x = 1.0 - across.x;
@@ -360,15 +480,30 @@ float3 pixelLit(Camera* camera, float2 pixel, float3 place, float3 normal, float
     const Cluster cluster = camera.clusters[column + clustersAcross * (row + clustersUp * slice)];
     for (uint i = 0; i < cluster.count; ++i)
     {
-        addLight(camera.lights[camera.clusterLights[cluster.first + i]], place, normal, eye,
-                 shininess, diffuse, highlight);
+        float3 way;
+        float3 reaching;
+        lightAt(camera.lights[camera.clusterLights[cluster.first + i]], place, way, reaching);
+        color += shadePunctual(surface, eye, way, reaching);
     }
     // The directional lights, which no cluster lists, come first in the lights.
     for (uint i = 0; i < camera.directional; ++i)
     {
-        addLight(camera.lights[i], place, normal, eye, shininess, diffuse, highlight);
+        float3 way;
+        float3 reaching;
+        lightAt(camera.lights[i], place, way, reaching);
+        color += shadePunctual(surface, eye, way, reaching);
     }
-    return diffuse + highlight;
+    if (camera.hasEnvironment != 0)
+    {
+        // An environment's directions are the world's, and a surface's the view's.
+        Surface inWorld = surface;
+        inWorld.normal = float3(dot(camera.toWorld[0].xyz, normal), dot(camera.toWorld[1].xyz, normal),
+                                dot(camera.toWorld[2].xyz, normal));
+        const float3 eyeInWorld = float3(dot(camera.toWorld[0].xyz, eye), dot(camera.toWorld[1].xyz, eye),
+                                         dot(camera.toWorld[2].xyz, eye));
+        color += shadeEnvironment(inWorld, eyeInWorld, camera.environment);
+    }
+    return color + emissive;
 }
 
 [shader("fragment")]
@@ -391,18 +526,12 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
     {
         current.a = draw.color.a;
     }
-    float3 lit = corner.lit;
-    if (!encoded)
+    if (encoded)
     {
-        float3 normal = whole(corner.normal);
-        if (twoSided != 0 && !front)
-        {
-            normal = -normal;
-        }
-        lit = pixelLit(camera, corner.position.xy, corner.place, normal, material.shininess);
+        current.rgb *= corner.lit;
     }
-    current.rgb *= lit;
-    // Each layer over what's under it, the lit color first, as fixed-function stages were.
+    // Each layer over what's under it, the lit color first, as fixed-function stages were; PBR's
+    // make its base color, which is lit after.
     float2 shift = float2(0.0, 0.0);
     float light = 1.0;
     for (uint i = 0; i < layerCount; ++i)
@@ -466,6 +595,10 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
     if (alphaTest != 0 && current.a < material.cutoff)
     {
         discard;
+    }
+    if (!encoded)
+    {
+        current.rgb = pixelShaded(camera, material, corner, current.rgb, front);
     }
     if (fog != 0)
     {

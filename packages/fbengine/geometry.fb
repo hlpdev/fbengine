@@ -532,6 +532,45 @@ Public Struct Surface
         If !done Then Owner.Failed("SetJoints")
     End Method
 
+    /// Sets its vertices' tangents, one for each, or none, for a normal map to turn its normals
+    /// by, as glTF's TANGENT has them: along its UVs' u, and w, +1 or -1, the way its bitangent goes
+    /// across its normal and tangent. Vertices added since or cleared let go of them. Another count
+    /// panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetTangents(tangents: Vec4[])
+        Local geometry = Owner.Live("SetTangents")
+        Local taken = Buffer<fbe_vertex_tangent_t>(tangents.Count)
+        For i, one In tangents
+            taken[i] = fbe_vertex_tangent_t(one.x, one.y, one.z, one.w)
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_surface_set_tangents(geometry, Index, taken.Pointer(),
+                                            tangents.Count As Int32)
+        End Unsafe
+        If !done Then Owner.Failed("SetTangents")
+    End Method
+
+    /// Its vertices' tangents, one for each, or none.
+    @MainThread @PanicsAtCaller
+    Public Method Tangents(): Vec4[]
+        Local geometry = Owner.Live("Tangents")
+        Local count = 0
+        Unsafe
+            count = fbe_surface_tangents(geometry, Index, Null, 0)
+        End Unsafe
+        If count < 0 Then Owner.Failed("Tangents")
+        Local found = Buffer<fbe_vertex_tangent_t>(count)
+        Unsafe
+            fbe_surface_tangents(geometry, Index, found.Pointer(), count)
+        End Unsafe
+        Local tangents: Vec4[] = []
+        For one In found
+            tangents.Add(Vec4(one.x, one.y, one.z, one.w))
+        End For
+        Return tangents
+    End Method
+
     /// Its vertices' joints, one for each, or none.
     @MainThread @PanicsAtCaller
     Public Method Joints(): VertexJoints[]

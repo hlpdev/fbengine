@@ -67,6 +67,8 @@ struct surface_buffers_t {
     std::uint32_t index_count = 0;
     /// Its vertices' joints, for a surface that has them.
     gpu::buffer_t joints;
+    /// Its vertices' tangents, for a surface that has them.
+    gpu::buffer_t tangents;
 };
 
 /// A geometry's surface on the GPU, sent if it's changed since; null if it can't be, with

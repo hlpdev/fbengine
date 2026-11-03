@@ -28,6 +28,9 @@ struct world_t {
     std::vector<std::uint32_t> roots;
     std::int32_t count = 0;
     std::array<float, 3> ambient{ 0.2158605F, 0.2158605F, 0.2158605F };
+    /// The environment its PBR materials are lit by, 0 for none, and what its light's times.
+    std::uint64_t environment = 0;
+    float environment_intensity = 1.0F;
     /// Each pair of collision groups that collide, source in the high 16 bits and target in the
     /// low, and the FBE_RESPONSE_ the source makes; a game has a few.
     std::vector<std::pair<std::uint32_t, std::int32_t>> collisions;
@@ -79,6 +82,8 @@ struct surface_t {
     std::vector<fbe_vertex_t> vertices;
     /// Its vertices' joints, one for each, or none.
     std::vector<fbe_vertex_joints_t> joints;
+    /// Its vertices' tangents, one for each, or none.
+    std::vector<fbe_vertex_tangent_t> tangents;
     std::vector<std::uint32_t> indices;
     std::vector<morph_target_t> targets;
     /// The material it's drawn in, by slot, which it holds, or none for the default.
@@ -115,6 +120,14 @@ struct material_t {
     bool wireframe = false;
     std::int32_t order = 0;
     std::array<layer_t, FBE_MATERIAL_LAYERS> layers{};
+    /// What a PBR material is beyond its color, and its maps, by FBE_MAP_, as layers but for their
+    /// blend and bump.
+    float metallic = 0.0F;
+    float roughness = 1.0F;
+    std::array<float, 3> emissive{ 0.0F, 0.0F, 0.0F };
+    float normal_scale = 1.0F;
+    float occlusion_strength = 1.0F;
+    std::array<layer_t, FBE_MATERIAL_MAPS> maps{};
 };
 
 /// A geometry: surfaces, shared by every mesh drawing it. It lives while the FB side holds its

@@ -63,3 +63,36 @@ Function AnHdrFileLoadsAsLight() Throws GraphicsError, IOError
     Expect(bytes[0] == 0 && bytes[1] == 0x44)
     Expect((Try Environment.Bake(sky, 16, 4)).Levels() == 2)
 End Function
+
+// A World holds what it's lit by.
+@Test
+Function AWorldIsLitByAnEnvironment() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = World()
+    Expect(world.LitBy() == Null)
+    Local sky = Try Texture(4, 2, TextureFormat.RGBA16F, False)
+    Local baked = Try Environment.Bake(sky, 16, 4)
+    world.SetEnvironment(baked, 0.5)
+    Expect(world.LitBy() == baked)
+    Expect(world.EnvironmentIntensity() == 0.5)
+    world.SetEnvironment(Null)
+    Expect(world.LitBy() == Null)
+    world.Free()
+End Function
+
+// A surface's tangents, one for each vertex.
+@Test
+Function ASurfaceHasTangents()
+    Local geometry = Geometry.Cube()
+    Local surface = geometry.Surface(0)
+    Expect(surface.Tangents().Count == 0)
+    Local tangents: Vec4[] = []
+    For i = 1 To surface.VertexCount()
+        tangents.Add(Vec4(1.0, 0.0, 0.0, -1.0))
+    End For
+    surface.SetTangents(tangents)
+    Expect(surface.Tangents() == tangents)
+    surface.SetTangents([])
+    Expect(surface.Tangents().Count == 0)
+End Function

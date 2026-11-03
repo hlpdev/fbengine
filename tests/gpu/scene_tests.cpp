@@ -91,7 +91,31 @@ std::uint8_t srgb(float linear) {
     return static_cast<std::uint8_t>(std::lround(encoded * 255.0F));
 }
 
-/// How tight the scene shader's highlight is.
+/// What glTF's BRDF, height-correlated as pbr.slang's, gives one channel of a light, times the
+/// cosine, by the dots of its normal with the light, the view, and what's halfway, and of the view
+/// with what's halfway.
+float brdf(float base, float metallic, float roughness, float n_l, float n_v, float n_h,
+           float v_h) {
+    const float alpha = std::max(roughness * roughness, 0.002F);
+    const float squared = alpha * alpha;
+    const float across = (n_h * n_h * (squared - 1.0F)) + 1.0F;
+    const float distribution = squared / (std::numbers::pi_v<float> * across * across);
+    const float viewed = n_l * std::sqrt((n_v * n_v * (1.0F - squared)) + squared);
+    const float lit = n_v * std::sqrt((n_l * n_l * (1.0F - squared)) + squared);
+    const float visibility = 0.5F / (viewed + lit);
+    const float f0 = 0.04F + ((base - 0.04F) * metallic);
+    const float fresnel = f0 + ((1.0F - f0) * std::pow(1.0F - v_h, 5.0F));
+    const float diffuse = (1.0F - fresnel) * base * (1.0F - metallic) / std::numbers::pi_v<float>;
+    return (diffuse + (fresnel * visibility * distribution)) * n_l;
+}
+
+/// What it gives a surface a new material's, white and a rough dielectric, lit from the eye, seen
+/// at a cosine of `facing`.
+float rough_white(float facing) {
+    return brdf(1.0F, 0.0F, 1.0F, facing, facing, facing, 1.0F);
+}
+
+/// How tight the scene shader's fixed-function highlight is.
 constexpr float highlight_power = 100.0F;
 
 /// What's stored for an encoded value 0 to 1, as UNLIT and VERTEX work in.
@@ -445,7 +469,7 @@ TEST_CASE("point lights fall off per pixel as glTF's", "[gpu][scene]") {
     // 2 straight in front of the wall's middle, range 8.
     const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 0.0F, 0.0F, -4.0F, 8.0F);
     require(fbe_light_set_intensity(lamp, 2.0F));
-    const float expected = 2.0F * falloff(2.0F, 8.0F);
+    const float expected = 2.0F * falloff(2.0F, 8.0F) * rough_white(1.0F);
     CHECK(near(middle(scene.drawn()), { srgb(expected), srgb(expected), srgb(expected) }));
     // Past its range: nothing but the ambient, which there isn't.
     require(fbe_light_set_range(lamp, 1.5F));
@@ -491,26 +515,48 @@ TEST_CASE("per vertex lighting is worked out at the vertices", "[gpu][scene]") {
     fbe_material_release(material);
 }
 
-TEST_CASE("a highlight's where a surface turns its light to the eye, as its shininess says",
-          "[gpu][scene]") {
+// As roughness says, on PBR: a peak head on, falling away at the view's edge, where the way halfway
+// to the eye is 15 degrees off the normal.
+TEST_CASE("a highlight's where a surface turns its light to the eye", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t material = fbe_material_create();
     wall(scene.world, -3.0F, 10.0F, material);
-    // A sun from the eye's side, whose reflection comes back to the eye at the wall's middle, past
-    // white with a highlight, and falls away from it at the wall's edge of the view.
     const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
     require(fbe_light_set_intensity(sun, 0.25F));
-    const float plain = 0.25F;
-    CHECK(near(middle(scene.drawn()), { srgb(plain), srgb(plain), srgb(plain) }));
-    require(fbe_material_set_shininess(material, 1.0F));
+    const auto at_middle = [](float roughness) {
+        return srgb(0.25F * brdf(1.0F, 0.0F, roughness, 1.0F, 1.0F, 1.0F, 1.0F));
+    };
+    require(fbe_material_set_metal_rough(material, 0.0F, 0.3F));
     const fbe::golden::frame_t shiny = scene.drawn();
-    const float highlight = 0.25F + 0.25F;
-    CHECK(near(middle(shiny), { srgb(highlight), srgb(highlight), srgb(highlight) }));
-    // At the view's edge, the way halfway to the eye is 15 degrees off the normal, and 100 powers
-    // of that cosine are about 0.03 of it.
-    const float off = 0.25F * std::pow(std::cos(0.2618F), highlight_power);
-    const std::uint8_t edge = srgb(plain + off);
-    CHECK(near(pixel(shiny, 1, frame_size / 2), { edge, edge, edge }, 3));
+    const std::uint8_t peak = at_middle(0.3F);
+    CHECK(near(middle(shiny), { peak, peak, peak }, 4));
+    const float half_way = 0.2618F;
+    const std::uint8_t edge = srgb(0.25F * brdf(1.0F, 0.0F, 0.3F, 1.0F, std::cos(half_way * 2.0F),
+                                                std::cos(half_way), std::cos(half_way)));
+    CHECK(near(pixel(shiny, 1, frame_size / 2), { edge, edge, edge }, 4));
+    fbe_material_release(material);
+}
+
+// Per vertex, in what's stored: its highlight's as bright as its light, at its middle, and only as
+// its shininess says. A PBR material's shininess is nothing.
+TEST_CASE("a VERTEX material's highlight is at its vertices, as its shininess says",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_shading(material, FBE_SHADING_VERTEX));
+    wall(scene.world, -3.0F, 0.05F, material);
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    require(fbe_light_set_intensity(sun, 0.25F));
+    const float color = static_cast<float>(srgb(0.25F)) / 255.0F;
+    const std::uint8_t plain = stored(color);
+    CHECK(near(middle(scene.drawn()), { plain, plain, plain }));
+    require(fbe_material_set_shininess(material, 1.0F));
+    const float off = std::pow(std::cos(0.0167F), highlight_power);
+    const std::uint8_t shiny = stored(color * (1.0F + off));
+    CHECK(near(middle(scene.drawn()), { shiny, shiny, shiny }, 3));
+    require(fbe_material_set_shading(material, FBE_SHADING_PBR));
+    const std::uint8_t lit = srgb(0.25F * rough_white(1.0F));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
     fbe_material_release(material);
 }
 
@@ -562,8 +608,9 @@ TEST_CASE("a spot light has its cones, a directional one its way, and ambient li
     require(fbe_world_set_ambient(scene.world, 0.0F, 0.0F, 0.0F));
     // A directional light along its -Z, straight onto the wall's front.
     const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
-    require(fbe_light_set_intensity(sun, 0.5F));
-    CHECK(near(middle(scene.drawn()), { srgb(0.5F), srgb(0.5F), srgb(0.5F) }));
+    require(fbe_light_set_intensity(sun, 2.0F));
+    const std::uint8_t lit = srgb(2.0F * rough_white(1.0F));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
     // From behind the wall's front: nothing.
     require(fbe_entity_set_rotation(sun, 0.0F, 1.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
     CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
@@ -572,7 +619,7 @@ TEST_CASE("a spot light has its cones, a directional one its way, and ambient li
     const std::uint64_t spot = light(scene.world, FBE_LIGHT_SPOT, 0.0F, 0.0F, -2.0F, 100.0F);
     require(fbe_light_set_cone(spot, 0.1F, 0.2F));
     const fbe::golden::frame_t frame = scene.drawn();
-    const std::uint8_t whole = srgb(falloff(1.0F, 100.0F));
+    const std::uint8_t whole = srgb(falloff(1.0F, 100.0F) * rough_white(1.0F));
     CHECK(near(middle(frame), { whole, whole, whole }));
     CHECK(near(pixel(frame, 2, frame_size / 2), { 0, 0, 0 }));
     fbe_material_release(material);
@@ -1358,7 +1405,8 @@ TEST_CASE("a skinned normal leans as a bone scaled along an axis has it", "[gpu]
     // The cofactor's (1/4, 0, 1) direction: its normal's z of 1 over the length of that.
     const float x = lean / 4.0F;
     const float facing = lean / std::sqrt((x * x) + (lean * lean));
-    CHECK(near(middle(scene.drawn()), { srgb(facing), srgb(facing), srgb(facing) }));
+    const std::uint8_t lit = srgb(rough_white(facing));
+    CHECK(near(middle(scene.drawn()), { lit, lit, lit }));
     fbe_skin_release(made.skin);
     fbe_material_release(material);
 }
@@ -1505,4 +1553,426 @@ TEST_CASE("a geometry edited between two cameras is the next frame's, for both",
     while (fbe_entity_freed(some.data(), some.size()) != 0) {}
     fbe_texture_release(second_target);
     fbe_material_release(red);
+}
+
+namespace {
+
+/// An RGBA16F texture of one color, of light past what a byte holds.
+std::uint64_t even_light(float r, float g, float b, std::int32_t width = 4,
+                         std::int32_t height = 2) {
+    const std::uint64_t texture = fbe_texture_create(width, height, FBE_TEXTURE_RGBA16F, false);
+    require(texture != 0);
+    std::vector<float> pixels;
+    for (std::int32_t at = 0; at < width * height; ++at) {
+        pixels.insert(pixels.end(), { r, g, b, 1.0F });
+    }
+    require(fbe_texture_write_floats(texture, 0, 0, width, height, pixels.data()));
+    return texture;
+}
+
+/// A surface's tangents, all of them the same: +X, w as given.
+void tangents_of(std::uint64_t mesh, float w) {
+    const std::array<fbe_vertex_tangent_t, 4> tangents{
+        fbe_vertex_tangent_t{ .x = 1.0F, .y = 0.0F, .z = 0.0F, .w = w },
+        fbe_vertex_tangent_t{ .x = 1.0F, .y = 0.0F, .z = 0.0F, .w = w },
+        fbe_vertex_tangent_t{ .x = 1.0F, .y = 0.0F, .z = 0.0F, .w = w },
+        fbe_vertex_tangent_t{ .x = 1.0F, .y = 0.0F, .z = 0.0F, .w = w },
+    };
+    require(fbe_surface_set_tangents(fbe_mesh_geometry(mesh), 0, tangents.data(), 4));
+}
+
+} // namespace
+
+TEST_CASE("a PBR material's settings are what they're set to, and hold its maps", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    CHECK(fbe_material_metallic(material) == 0.0F);
+    CHECK(fbe_material_roughness(material) == 1.0F);
+    CHECK(fbe_material_normal_scale(material) == 1.0F);
+    CHECK(fbe_material_occlusion_strength(material) == 1.0F);
+    fbe_color_t color{};
+    CHECK(fbe_material_emissive(material, &color));
+    CHECK(color.r == 0.0F);
+    CHECK(fbe_material_set_metal_rough(material, 0.25F, 0.75F));
+    CHECK(fbe_material_metallic(material) == 0.25F);
+    CHECK(fbe_material_roughness(material) == 0.75F);
+    CHECK(!fbe_material_set_metal_rough(material, -0.1F, 0.5F));
+    CHECK(!fbe_material_set_metal_rough(material, 0.5F, 1.5F));
+    CHECK(!fbe_material_set_metal_rough(material, std::nanf(""), 0.5F));
+    CHECK(fbe_material_metallic(material) == 0.25F);
+    CHECK(fbe_material_set_emissive(material, 2.0F, 3.0F, 4.0F));
+    CHECK(fbe_material_emissive(material, &color));
+    CHECK(color.b == 4.0F);
+    CHECK(!fbe_material_set_emissive(material, -1.0F, 0.0F, 0.0F));
+    CHECK(fbe_material_set_normal_scale(material, -2.0F));
+    CHECK(fbe_material_normal_scale(material) == -2.0F);
+    CHECK(!fbe_material_set_normal_scale(material, std::nanf("")));
+    CHECK(fbe_material_set_occlusion_strength(material, 0.5F));
+    CHECK(fbe_material_occlusion_strength(material) == 0.5F);
+    CHECK(!fbe_material_set_occlusion_strength(material, 1.5F));
+
+    const std::uint64_t texture = flat_texture(255, 255, 255, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    const std::int32_t textures = fbe_texture_count();
+    CHECK(fbe_material_map(material, FBE_MAP_NORMAL) == 0);
+    CHECK(fbe_material_set_map(material, FBE_MAP_NORMAL, texture, 1));
+    CHECK(fbe_material_map(material, FBE_MAP_NORMAL) == texture);
+    CHECK(fbe_material_map_uv_set(material, FBE_MAP_NORMAL) == 1);
+    CHECK(!fbe_material_set_map(material, FBE_MAP_NORMAL, texture, 2));
+    CHECK(!fbe_material_set_map(material, FBE_MATERIAL_MAPS, texture, 0));
+    CHECK(!fbe_material_set_map(material, -1, texture, 0));
+    CHECK(fbe_material_set_map_uv(material, FBE_MAP_NORMAL, 2.0F, 3.0F, 0.5F, 0.25F, 0.125F));
+    std::array<float, 5> uv{};
+    CHECK(fbe_material_map_uv(material, FBE_MAP_NORMAL, uv.data()));
+    CHECK(uv == std::array{ 2.0F, 3.0F, 0.5F, 0.25F, 0.125F });
+    CHECK(!fbe_material_set_map_uv(material, FBE_MAP_NORMAL, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F));
+    // A clone holds its maps too, and each holds it apart: the last to go lets it go.
+    const std::uint64_t clone = fbe_material_clone(material);
+    CHECK(fbe_material_map(clone, FBE_MAP_NORMAL) == texture);
+    CHECK(fbe_material_metallic(clone) == 0.25F);
+    require(fbe_texture_release(texture));
+    CHECK(fbe_texture_count() == textures);
+    fbe_material_release(material);
+    CHECK(fbe_texture_count() == textures);
+    fbe_material_release(clone);
+    CHECK(fbe_texture_count() == textures - 1);
+}
+
+TEST_CASE("a surface's tangents are one for each of its vertices, or none", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 1.0F);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    CHECK(fbe_surface_tangents(geometry, 0, nullptr, 0) == 0);
+    tangents_of(mesh, -1.0F);
+    std::array<fbe_vertex_tangent_t, 4> found{};
+    CHECK(fbe_surface_tangents(geometry, 0, found.data(), 4) == 4);
+    CHECK(found[3].w == -1.0F);
+    CHECK(!fbe_surface_set_tangents(geometry, 0, found.data(), 3));
+    CHECK(fbe_surface_set_tangents(geometry, 0, nullptr, 0));
+    CHECK(fbe_surface_tangents(geometry, 0, nullptr, 0) == 0);
+    // Vertices added let go of them.
+    tangents_of(mesh, 1.0F);
+    const fbe_vertex_t another{};
+    CHECK(fbe_surface_add_vertices(geometry, 0, &another, 1) == 4);
+    CHECK(fbe_surface_tangents(geometry, 0, nullptr, 0) == 0);
+}
+
+// Colored, at each metalness and roughness, against the same equations in the test.
+TEST_CASE("metal and roughness shade as glTF's BRDF says", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_color(material, 0.8F, 0.5F, 0.2F, 1.0F));
+    wall(scene.world, -3.0F, 10.0F, material);
+    light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    for (const auto& [metallic, roughness] :
+         { std::pair{ 0.0F, 1.0F }, std::pair{ 1.0F, 0.5F }, std::pair{ 0.5F, 0.7F } }) {
+        INFO("metallic " << metallic << ", roughness " << roughness);
+        require(fbe_material_set_metal_rough(material, metallic, roughness));
+        const auto channel = [metallic, roughness](float base) {
+            return srgb(brdf(base, metallic, roughness, 1.0F, 1.0F, 1.0F, 1.0F));
+        };
+        CHECK(near(middle(scene.drawn()), { channel(0.8F), channel(0.5F), channel(0.2F) }, 3));
+    }
+    fbe_material_release(material);
+}
+
+// A map's green multiplies roughness and its blue metalness, its red being nothing; occlusion's red
+// darkens ambient and environment light and not a light's; and emission's on top of it all.
+TEST_CASE("a PBR material's maps do as glTF's do", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    wall(scene.world, -3.0F, 10.0F, material);
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    require(fbe_material_set_metal_rough(material, 1.0F, 1.0F));
+    const std::uint64_t mixed = flat_texture(9, 128, 128, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    require(fbe_material_set_map(material, FBE_MAP_METAL_ROUGH, mixed, 0));
+    const float half = 128.0F / 255.0F;
+    const std::uint8_t both = srgb(brdf(1.0F, half, half, 1.0F, 1.0F, 1.0F, 1.0F));
+    CHECK(near(middle(scene.drawn()), { both, both, both }, 3));
+    require(fbe_material_set_map(material, FBE_MAP_METAL_ROUGH, 0, 0));
+
+    // Occlusion: all of a light, and half of ambient at a texel of 0.5, or none at no strength.
+    require(fbe_material_set_metal_rough(material, 0.0F, 1.0F));
+    require(fbe_world_set_ambient(scene.world, 0.5F, 0.5F, 0.5F));
+    const std::uint64_t occluded = flat_texture(128, 9, 9, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    require(fbe_material_set_map(material, FBE_MAP_OCCLUSION, occluded, 0));
+    const std::uint8_t darkened = srgb(rough_white(1.0F) + (0.5F * half));
+    CHECK(near(middle(scene.drawn()), { darkened, darkened, darkened }, 3));
+    require(fbe_material_set_occlusion_strength(material, 0.0F));
+    const std::uint8_t whole = srgb(rough_white(1.0F) + 0.5F);
+    CHECK(near(middle(scene.drawn()), { whole, whole, whole }, 3));
+    require(fbe_world_set_ambient(scene.world, 0.0F, 0.0F, 0.0F));
+    fbe_entity_free(sun);
+
+    // Emission, sRGB in its map, multiplying what it emits, with nothing lighting it, past white
+    // where it's bright.
+    require(fbe_material_set_emissive(material, 0.5F, 2.0F, 0.0F));
+    CHECK(near(middle(scene.drawn()), { srgb(0.5F), 255, 0 }));
+    const std::uint64_t glow = flat_texture(128, 128, 128, 255, FBE_TEXTURE_RGBA8);
+    require(fbe_material_set_map(material, FBE_MAP_EMISSIVE, glow, 0));
+    const float decoded = 0.2158605F;
+    CHECK(near(middle(scene.drawn()), { srgb(0.5F * decoded), srgb(2.0F * decoded), 0 }, 3));
+    for (const std::uint64_t texture : { mixed, occluded, glow }) {
+        fbe_texture_release(texture);
+    }
+    fbe_material_release(material);
+}
+
+// A map's own UV set and turn: red on its left half, read by the second set scaled to its right.
+TEST_CASE("a map reads the UV set it says, through what turns them", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 10.0F, material);
+    const std::uint64_t geometry = fbe_mesh_geometry(mesh);
+    std::array<fbe_vertex_t, 4> vertices{};
+    require(fbe_surface_vertices(geometry, 0, 0, vertices.data(), 4));
+    for (fbe_vertex_t& vertex : vertices) {
+        vertex.uv0 = { .x = 0.25F, .y = 0.25F };
+        vertex.uv1 = { .x = 0.75F, .y = 0.25F };
+    }
+    require(fbe_surface_set_vertices(geometry, 0, 0, vertices.data(), 4));
+    require(fbe_material_set_emissive(material, 1.0F, 1.0F, 1.0F));
+    const rgba_t red{ 255, 0, 0, 255 };
+    const rgba_t green{ 0, 255, 0, 255 };
+    const std::uint64_t texture = four_pixels(red, green, red, green);
+    require(fbe_texture_set_filter(texture, FBE_TEXTURE_NEAREST));
+    require(fbe_material_set_map(material, FBE_MAP_EMISSIVE, texture, 0));
+    CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+    require(fbe_material_set_map(material, FBE_MAP_EMISSIVE, texture, 1));
+    CHECK(near(middle(scene.drawn()), { 0, 255, 0 }));
+    // Moved back by half: the left again.
+    require(fbe_material_set_map_uv(material, FBE_MAP_EMISSIVE, 1.0F, 1.0F, 0.0F, 0.5F, 0.0F));
+    CHECK(near(middle(scene.drawn()), { 255, 0, 0 }));
+    fbe_texture_release(texture);
+    fbe_material_release(material);
+}
+
+// A flat map's nothing; a tilted one turns the normal up its tangent frame: red along a model's
+// tangent, green along its bitangent, the way its w says, against what the UVs go down, and what a
+// pixel's UVs make of them when it has no tangents the same as a model's.
+TEST_CASE("a normal map turns a surface in its tangent frame", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 10.0F, material);
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    const float root = std::numbers::sqrt2_v<float> / 2.0F;
+    const auto shine_from = [&](float x, float y) {
+        // Turned so it shines from (x, y, root), from +X with x, +Y with y.
+        const float half = std::atan2(std::hypot(x, y), root) / 2.0F;
+        const float sine = std::sin(half);
+        const float apart = std::hypot(x, y);
+        require(fbe_entity_set_rotation(sun, -y / apart * sine, x / apart * sine, 0.0F,
+                                        std::cos(half), FBE_SPACE_WORLD));
+    };
+    const std::uint64_t flat = flat_texture(128, 128, 255, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    const std::uint64_t right = flat_texture(255, 128, 255, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    const std::uint64_t up = flat_texture(128, 255, 255, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    // Against the same pixel of no map at all, under a light it's turned toward.
+    shine_from(root, 0.0F);
+    const std::uint8_t plain = middle(scene.drawn())[0];
+    require(fbe_material_set_map(material, FBE_MAP_NORMAL, flat, 0));
+    CHECK(near(middle(scene.drawn()), { plain, plain, plain }, 1));
+    tangents_of(mesh, 1.0F);
+    CHECK(near(middle(scene.drawn()), { plain, plain, plain }, 1));
+
+    // Turned to +X, toward the light, by its tangent, or with none, by its UVs' u.
+    const auto toward = [&](std::uint64_t map) {
+        require(fbe_material_set_map(material, FBE_MAP_NORMAL, map, 0));
+        return middle(scene.drawn())[0];
+    };
+    const std::uint8_t model_right = toward(right);
+    CHECK(model_right > plain + 10);
+    require(fbe_surface_set_tangents(fbe_mesh_geometry(mesh), 0, nullptr, 0));
+    CHECK(std::abs(toward(right) - model_right) <= 1);
+
+    // Up, +Y, against the UVs' v, by w of +1 toward a light above, and -1 away from it.
+    shine_from(0.0F, root);
+    const std::uint8_t from_above = toward(up);
+    CHECK(from_above > plain + 10);
+    tangents_of(mesh, 1.0F);
+    CHECK(std::abs(toward(up) - from_above) <= 1);
+    tangents_of(mesh, -1.0F);
+    CHECK(toward(up) < plain - 10);
+
+    // Its scale takes it back to flat.
+    require(fbe_material_set_normal_scale(material, 0.0F));
+    CHECK(near(middle(scene.drawn()), { plain, plain, plain }, 1));
+    require(fbe_material_set_normal_scale(material, 1.0F));
+
+    // A mirror across X turns its tangent with it, and from the front, its bitangent stays up.
+    tangents_of(mesh, 1.0F);
+    require(fbe_entity_set_scale(mesh, -1.0F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+    require(fbe_material_set_two_sided(material, true));
+    const std::uint8_t mirrored_model = toward(up);
+    require(fbe_surface_set_tangents(fbe_mesh_geometry(mesh), 0, nullptr, 0));
+    CHECK(std::abs(toward(up) - mirrored_model) <= 1);
+    for (const std::uint64_t texture : { flat, right, up }) {
+        fbe_texture_release(texture);
+    }
+    fbe_material_release(material);
+}
+
+// A bone's turn turns a surface's tangents with its normals.
+TEST_CASE("a skin turns a surface's tangents", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    const skinned_wall_t made = skinned_wall(scene.world, material, -3.0F, 10.0F);
+    all_on(made.geometry, 1, 1.0F);
+    tangents_of(made.mesh, 1.0F);
+    const std::uint64_t right = flat_texture(255, 128, 255, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    require(fbe_material_set_map(material, FBE_MAP_NORMAL, right, 0));
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    // A half turn about Z, in its plane: its tangent's -X, so a light from +X is away from it, and
+    // from -X toward it.
+    require(fbe_entity_set_rotation(made.moving, 0.0F, 0.0F, 1.0F, 0.0F, FBE_SPACE_WORLD));
+    const float half = 0.3927F;
+    require(
+        fbe_entity_set_rotation(sun, 0.0F, std::sin(half), 0.0F, std::cos(half), FBE_SPACE_WORLD));
+    const std::uint8_t from_right = middle(scene.drawn())[0];
+    require(
+        fbe_entity_set_rotation(sun, 0.0F, -std::sin(half), 0.0F, std::cos(half), FBE_SPACE_WORLD));
+    const std::uint8_t from_left = middle(scene.drawn())[0];
+    CHECK(from_left > from_right + 10);
+    fbe_texture_release(right);
+    fbe_skin_release(made.skin);
+    fbe_material_release(material);
+}
+
+// An even environment on a surface in it comes back as its own color, metal or not; dimmed by its
+// intensity; none once it's freed.
+TEST_CASE("a World's environment lights its PBR materials", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    wall(scene.world, -3.0F, 10.0F, material);
+    const std::uint64_t source = even_light(0.5F, 0.25F, 1.0F);
+    const std::uint64_t environment = fbe_environment_bake(source, 16, 16);
+    REQUIRE(environment != 0);
+    fbe_texture_release(source);
+    CHECK(fbe_world_environment(scene.world) == 0);
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    require(fbe_world_set_environment(scene.world, environment, 1.0F));
+    CHECK(fbe_world_environment(scene.world) == environment);
+    CHECK(fbe_world_environment_intensity(scene.world) == 1.0F);
+    for (const float metallic : { 0.0F, 1.0F }) {
+        INFO("metallic " << metallic);
+        require(fbe_material_set_metal_rough(material, metallic, 0.5F));
+        CHECK(near(middle(scene.drawn()), { srgb(0.5F), srgb(0.25F), srgb(1.0F) }, 3));
+    }
+    require(fbe_world_set_environment(scene.world, environment, 0.5F));
+    CHECK(near(middle(scene.drawn()), { srgb(0.25F), srgb(0.125F), srgb(0.5F) }, 3));
+    CHECK(!fbe_world_set_environment(scene.world, environment, -1.0F));
+    CHECK(!fbe_world_set_environment(scene.world, scene.world, 1.0F));
+    // UNLIT and VERTEX aren't lit by it.
+    require(fbe_material_set_shading(material, FBE_SHADING_VERTEX));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    require(fbe_material_set_shading(material, FBE_SHADING_PBR));
+    require(fbe_environment_free(environment));
+    CHECK(near(middle(scene.drawn()), { 0, 0, 0 }));
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(material);
+}
+
+// What's lit comes from the world's way, whichever way the camera looks: a sky above and dark
+// below, on a surface facing up and on one facing down, seen from a camera turned to each.
+TEST_CASE("an environment's directions are the world's, however the camera's turned",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_metal_rough(material, 0.0F, 1.0F));
+    const std::uint64_t mesh = wall(scene.world, 0.0F, 10.0F, material);
+    const std::uint64_t source = fbe_texture_create(4, 4, FBE_TEXTURE_RGBA16F, false);
+    REQUIRE(source != 0);
+    std::vector<float> pixels;
+    for (std::int32_t y = 0; y < 4; ++y) {
+        for (std::int32_t x = 0; x < 4; ++x) {
+            const float lit = y < 2 ? 1.0F : 0.0F;
+            pixels.insert(pixels.end(), { lit, lit, lit, 1.0F });
+        }
+    }
+    require(fbe_texture_write_floats(source, 0, 0, 4, 4, pixels.data()));
+    const std::uint64_t environment = fbe_environment_bake(source, 16, 64);
+    REQUIRE(environment != 0);
+    fbe_texture_release(source);
+    require(fbe_world_set_environment(scene.world, environment, 1.0F));
+    const float root = std::numbers::sqrt2_v<float> / 2.0F;
+    // The camera 3 from the wall, looking at its front, whichever way it's turned.
+    const auto seen = [&](float x, float y, float z, float w, float along_x, float along_y,
+                          float along_z) {
+        require(fbe_entity_set_rotation(mesh, x, y, z, w, FBE_SPACE_WORLD));
+        require(fbe_entity_set_rotation(scene.camera, x, y, z, w, FBE_SPACE_WORLD));
+        require(fbe_entity_set_position(scene.camera, along_x * 3.0F, along_y * 3.0F,
+                                        along_z * 3.0F, FBE_SPACE_WORLD));
+        return middle(scene.drawn())[0];
+    };
+    // Its +Z up: seen from above, the whole sky. Its +Z down: seen from below, none of it.
+    const std::uint8_t up = seen(-root, 0.0F, 0.0F, root, 0.0F, 1.0F, 0.0F);
+    const std::uint8_t down = seen(root, 0.0F, 0.0F, root, 0.0F, -1.0F, 0.0F);
+    CHECK(up > srgb(0.9F));
+    CHECK(down < srgb(0.1F));
+    // Its +Z along the horizon, whichever way: half the sky.
+    const std::uint8_t facing = seen(0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F);
+    const std::uint8_t turned_round = seen(0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, -1.0F);
+    const std::uint8_t half_sky = srgb(0.5F);
+    CHECK(near({ facing, facing, facing, 255 }, { half_sky, half_sky, half_sky }, 6));
+    CHECK(near({ turned_round, turned_round, turned_round, 255 }, { half_sky, half_sky, half_sky },
+               6));
+    fbe_environment_free(environment);
+    fbe_material_release(material);
+}
+
+// Spheres, the scene's own, smooth to rough across and dielectric to metal up, under a sky and a
+// sun, as the shaders' own test has them on analytic ones.
+TEST_CASE("a scene of PBR spheres matches its golden image", "[gpu][scene][golden]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.02F, 0.02F, 0.03F, 1.0F));
+    constexpr std::int32_t across = 512;
+    constexpr std::int32_t down = 256;
+    const std::uint64_t sky = fbe_texture_create(across, down, FBE_TEXTURE_RGBA16F, true);
+    REQUIRE(sky != 0);
+    std::vector<float> pixels;
+    pixels.reserve(std::size_t{ across } * down * 4);
+    for (std::int32_t y = 0; y < down; ++y) {
+        for (std::int32_t x = 0; x < across; ++x) {
+            const float height = 1.0F - (static_cast<float>(y) / (down / 2.0F));
+            const bool sun = std::abs(x - 160) < 8 && std::abs(y - 70) < 8;
+            const float blue = 0.3F + (0.4F * std::max(height, 0.0F));
+            std::array<float, 3> color{ 0.1F, 0.08F, 0.06F };
+            if (sun) {
+                color = { 20.0F, 19.0F, 16.0F };
+            } else if (height > 0.0F) {
+                color = { 0.7F - (blue / 2.0F), 0.8F - (blue / 3.0F), 1.0F };
+            }
+            pixels.insert(pixels.end(), { color[0], color[1], color[2], 1.0F });
+        }
+    }
+    require(fbe_texture_write_floats(sky, 0, 0, across, down, pixels.data()));
+    const std::uint64_t environment = fbe_environment_bake(sky, 64, 128);
+    REQUIRE(environment != 0);
+    fbe_texture_release(sky);
+    require(fbe_world_set_environment(scene.world, environment, 1.0F));
+    const std::uint64_t ball = fbe_geometry_sphere(24);
+    std::vector<std::uint64_t> materials;
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            const std::uint64_t material = fbe_material_create();
+            require(fbe_material_set_color(material, 1.0F, 0.6F, 0.2F, 1.0F));
+            require(fbe_material_set_metal_rough(material, static_cast<float>(row) / 2.0F,
+                                                 static_cast<float>(column) / 2.0F));
+            const std::uint64_t mesh = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+            require(fbe_mesh_set_geometry(mesh, ball));
+            require(fbe_mesh_set_material(mesh, material));
+            require(fbe_entity_set_position(mesh, (static_cast<float>(column) - 1.0F) * 2.2F,
+                                            (static_cast<float>(row) - 1.0F) * 2.2F, -8.0F,
+                                            FBE_SPACE_WORLD));
+            materials.push_back(material);
+        }
+    }
+    fbe_geometry_release(ball);
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    require(fbe_entity_set_rotation(sun, -0.2F, 0.3F, 0.0F, 0.93F, FBE_SPACE_WORLD));
+    fbe::golden::check("scene_pbr", scene.drawn());
+    CHECK(fbe_gpu_validation_errors() == 0);
+    for (const std::uint64_t material : materials) {
+        fbe_material_release(material);
+    }
+    fbe_environment_free(environment);
 }

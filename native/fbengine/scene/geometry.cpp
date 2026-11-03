@@ -575,6 +575,7 @@ FBE_API int32_t fbe_surface_add_vertices(uint64_t geometry, int32_t surface,
     const auto first = static_cast<std::int32_t>(found->vertices.size());
     found->vertices.insert(found->vertices.end(), vertices, vertices + count);
     found->joints.clear();
+    found->tangents.clear();
     fbe::scene::touch_geometry(geometry_slot(geometry), false);
     return first;
 }
@@ -627,6 +628,34 @@ FBE_API bool fbe_surface_vertices(uint64_t geometry, int32_t surface, int32_t fi
     }
     std::copy_n(found->vertices.begin() + first, count, vertices);
     return true;
+}
+
+FBE_API bool fbe_surface_set_tangents(uint64_t geometry, int32_t surface,
+                                      const fbe_vertex_tangent_t* tangents, int32_t count) {
+    surface_t* found = fbe::scene::surface_of(geometry, surface);
+    if (found == nullptr) {
+        return false;
+    }
+    if (count != 0 && std::cmp_not_equal(count, found->vertices.size())) {
+        return fbe::fail(
+            std::format("a surface of {} vertices has as many tangents, or none, not {}",
+                        found->vertices.size(), count));
+    }
+    found->tangents.assign(tangents, tangents + count);
+    fbe::scene::touch_geometry(geometry_slot(geometry), false);
+    return true;
+}
+
+FBE_API int32_t fbe_surface_tangents(uint64_t geometry, int32_t surface,
+                                     fbe_vertex_tangent_t* tangents, int32_t capacity) {
+    const surface_t* found = fbe::scene::surface_of(geometry, surface);
+    if (found == nullptr) {
+        return -1;
+    }
+    const auto count =
+        std::min(found->tangents.size(), static_cast<std::size_t>(std::max(capacity, 0)));
+    std::copy_n(found->tangents.begin(), count, tangents);
+    return static_cast<std::int32_t>(found->tangents.size());
 }
 
 FBE_API bool fbe_surface_set_joints(uint64_t geometry, int32_t surface,
@@ -706,6 +735,7 @@ FBE_API bool fbe_surface_clear(uint64_t geometry, int32_t surface, bool vertices
     if (vertices) {
         found->vertices.clear();
         found->joints.clear();
+        found->tangents.clear();
         found->targets.clear();
     }
     fbe::scene::touch_geometry(geometry_slot(geometry), true);

@@ -60,6 +60,26 @@ public float3 normalFromMap(float3 normal, float4 tangent, float3 texel, float s
     return turnedSquared < DEGENERATE ? n : turned / sqrt(turnedSquared);
 }
 
+/// A tangent for a surface with none, along its UVs' u, from how its place and UVs change over a
+/// pixel, its w the way its bitangent goes against their v, as glTF's +Y is: as good as a pixel's
+/// triangle says, which is flat, so its seams show where a model's own wouldn't. No tangent at all,
+/// as a triangle whose UVs don't change has.
+public float4 tangentFromDerivatives(float3 normal, float3 place, float2 uv)
+{
+    const float3 placeAcross = ddx(place);
+    const float3 placeDown = ddy(place);
+    const float2 uvAcross = ddx(uv);
+    const float2 uvDown = ddy(uv);
+    const float across = (uvAcross.x * uvDown.y) - (uvDown.x * uvAcross.y);
+    if (abs(across) < 1e-20)
+    {
+        return float4(0.0, 0.0, 0.0, 1.0);
+    }
+    const float3 tangent = ((placeAcross * uvDown.y) - (placeDown * uvAcross.y)) / across;
+    const float3 alongV = ((placeDown * uvAcross.x) - (placeAcross * uvDown.x)) / across;
+    return float4(tangent, dot(cross(normal, tangent), alongV) < 0.0 ? 1.0 : -1.0);
+}
+
 /// How much of the light Fresnel reflects at normal incidence: 4% for a dielectric, its base color
 /// for a metal.
 float3 reflectanceOf(Surface surface)
