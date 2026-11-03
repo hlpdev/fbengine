@@ -1,0 +1,79 @@
+// A dialog: a box of text and buttons in the middle of a window, which nothing under it gets past.
+
+Import std.collections
+Import std.core
+Import fbengine
+Import fbengine_ui
+
+/// A title, text, what else it's given, and a row of buttons, each of which closes it, over `ui`.
+/// Escape closes it too, Update, each frame after the Ui's, seeing to that.
+Public Final Class Dialog Extends Widget
+    Field body: Node
+    Field buttons: Node
+    Field cancelled: (Func())? = Null
+    Field shown: Weak<Ui>
+
+    /// A dialog titled `title`, saying `text`. `cancelled`, if it's given, is what Escape does.
+    Public New(title: String, text: String, onCancel: (Func())? = Null)
+        cancelled = onCancel
+        body = Node("dialog.body")
+        buttons = Node("dialog.buttons")
+        Super.New("dialog", "dialog")
+        SetAnchors(Anchors.Point(0.5, 0.5))
+        SetGap(10.0)
+        Local heading = Label(title)
+        heading.SetStyleName("dialog.title")
+        heading.SetTranslates(False)
+        Add(heading)
+        Local said = Label(text)
+        said.SetTranslates(False)
+        Add(said)
+        body.SetGap(6.0)
+        Add(body)
+        buttons.SetArrangement(Arrangement.ROW)
+        buttons.SetJustify(Justify.END)
+        buttons.SetGap(8.0)
+        Add(buttons)
+    End New
+
+    /// Adds `node` above the buttons.
+    Public Method AddContent(node: Node)
+        body.Add(node)
+    End Method
+
+    /// Adds a button showing `text`, which closes it, then runs `action`.
+    Public Method AddButton(text: String, action: (Func())? = Null): Button
+        Local button = Button(text, "dialog." + text)
+        button.SetTranslates(False)
+        button.OnClick(Function[Weak Self](pressed: Button)
+            Self?.Close()
+            If action != Null Then action()
+        End Function)
+        buttons.Add(button)
+        Return button
+    End Method
+
+    /// Shows it over `ui`.
+    Public Method Show(ui: Ui)
+        shown = ui
+        ui.OpenPopup(Self, PopupKind.MODAL)
+    End Method
+
+    /// Whether it's showing.
+    Public Method Showing(): Bool => Parent() != Null
+
+    /// Closes it.
+    Public Method Close()
+        Local ui = shown
+        If ui != Null Then ui.ClosePopup(Self)
+    End Method
+
+    /// Closes it if the last Ui.Update read Escape, and does what's to be done then.
+    Public Method Update()
+        Local ui = shown
+        If ui == Null || !Showing() || !ui.Back() Then Return
+        Close()
+        Local handler = cancelled
+        If handler != Null Then handler()
+    End Method
+End Class

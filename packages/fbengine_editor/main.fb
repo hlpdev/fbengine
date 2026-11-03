@@ -1,0 +1,33 @@
+// fbengine's editor: `fb run packages/fbengine_editor -- <a game's folder>`.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.os
+Import fbengine
+Import "./commands"
+Import "./dialog"
+Import "./dock"
+Import "./editor"
+Import "./history"
+Import "./menu"
+Import "./project"
+Import "./session"
+
+Function Run() Throws IOError, GraphicsError
+    Local arguments = Process.Arguments()
+    Local editor = Try Editor()
+    Try editor.Start(arguments.Count > 0 ? Path(arguments[0]) : Null)
+    Frame.SetLimit(60)
+    While !editor.Quitting()
+        editor.Step()
+    End While
+    editor.Finish()
+End Function
+
+Try
+    Try Run()
+Catch error As Error
+    PrintError("the editor couldn't start: {error.Message}")
+    Process.Exit(1)
+End Try

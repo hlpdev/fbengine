@@ -988,6 +988,27 @@ if(FBENGINE_FB_TESTS)
                          "panic: Video\\.${said}" TIMEOUT 60)
   endforeach()
 endif()
+# What fbengine_editor panics for, each by a run of its panics/main.fb, which says it.
+if(FBENGINE_FB_TESTS)
+  foreach(case IN ITEMS "history-none;History: it keeps more than 0 edits"
+                        "commit-in-an-edit;History.Commit: an edit can't make another"
+                        "undo-in-a-group;History.Undo: a group's begun"
+                        "redo-in-a-group;History.Redo: a group's begun"
+                        "end-no-group;History.EndGroup: no group's begun"
+                        "command-twice;Commands.Add: there's a command a already"
+                        "command-unknown;Commands.Run: there's no command a"
+                        "pane-twice;Dock.AddPane: there's a pane a already"
+                        "show-unknown;Dock.Show: there's no pane b"
+                        "activate-no-tab;Dock.Activate: a has no tab"
+                        "menu-entry-unknown;a menu's entry a isn't a command")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME editor.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run
+                     "${PROJECT_SOURCE_DIR}/packages/fbengine_editor/panics/main.fb" -- ${name})
+    set_tests_properties(editor.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION "panic: ${said}" TIMEOUT 60)
+  endforeach()
+endif()
 # text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
 # test fonts.
 file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")

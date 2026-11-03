@@ -1,0 +1,231 @@
+// Commands, and edits that undo and redo.
+
+Import std.collections
+Import std.core
+Import std.os
+Import std.test
+Import fbengine
+Import fbengine_editor
+
+// An edit that adds `amount` to what's in `sum`, merging with one of the same name if `merges`.
+Class Adding Extends Edit
+    Field sum: Int[]
+    Field amount: Int
+    Field merges: Bool
+
+    New(total: Int[], by: Int, merging: Bool = False)
+        sum = total
+        amount = by
+        merges = merging
+        Super.New("add {by}")
+    End New
+
+    Public Override Method Apply()
+        sum[0] += amount
+    End Method
+
+    Public Override Method Undo()
+        sum[0] -= amount
+    End Method
+
+    Public Override Method Merge(later: Edit): Bool
+        Local other = later As? Adding
+        If !merges || other == Null Then Return False
+        amount += other.amount
+        Return True
+    End Method
+End Class
+
+@Test
+Function EditsUndoAndRedoInOrder()
+    Local sum = [0]
+    Local history = History()
+    Expect(!history.CanUndo() && !history.CanRedo())
+    Expect(!history.Undo() && !history.Redo())
+    history.Commit(Adding(sum, 1))
+    history.Commit(Adding(sum, 10))
+    Expect(sum[0] == 11)
+    Expect(history.UndoName() == "add 10" && history.RedoName() == Null)
+    Expect(history.Undo())
+    Expect(sum[0] == 1 && history.UndoName() == "add 1" && history.RedoName() == "add 10")
+    Expect(history.Undo())
+    Expect(sum[0] == 0 && !history.CanUndo() && history.CanRedo())
+    Expect(history.Redo() && history.Redo() && !history.Redo())
+    Expect(sum[0] == 11)
+End Function
+
+@Test
+Function ANewEditLeavesNothingToRedo()
+    Local sum = [0]
+    Local history = History()
+    history.Commit(Adding(sum, 1))
+    history.Undo()
+    history.Commit(Adding(sum, 5))
+    Expect(!history.CanRedo() && sum[0] == 5)
+    history.Undo()
+    Expect(sum[0] == 0 && !history.CanUndo())
+End Function
+
+@Test
+Function AGroupIsOneUndo()
+    Local sum = [0]
+    Local history = History()
+    history.BeginGroup("paste")
+    history.Commit(Adding(sum, 1))
+    history.BeginGroup("inner")
+    history.Commit(Adding(sum, 2))
+    history.EndGroup()
+    Expect(!history.CanUndo(), "it's undoable before the group ends")
+    history.Commit(Adding(sum, 4))
+    history.EndGroup()
+    Expect(sum[0] == 7 && history.UndoName() == "paste")
+    history.Undo()
+    Expect(sum[0] == 0 && !history.CanUndo())
+    history.Redo()
+    Expect(sum[0] == 7)
+    // One with nothing in it isn't there.
+    history.BeginGroup("nothing")
+    history.EndGroup()
+    Expect(history.UndoName() == "paste")
+End Function
+
+@Test
+Function AnEditCanMergeWithTheOneBefore()
+    Local sum = [0]
+    Local history = History()
+    For i = 1 To 5
+        history.Commit(Adding(sum, 1, True))
+    End For
+    Expect(sum[0] == 5)
+    history.Undo()
+    Expect(sum[0] == 0 && !history.CanUndo(), "a drag's five steps took more than one undo")
+End Function
+
+@Test
+Function ModifiedIsAgainstWhatWasSaved()
+    Local sum = [0]
+    Local history = History()
+    Expect(!history.Modified())
+    history.Commit(Adding(sum, 1))
+    Expect(history.Modified())
+    history.MarkSaved()
+    Expect(!history.Modified())
+    history.Commit(Adding(sum, 2))
+    Expect(history.Modified())
+    history.Undo()
+    Expect(!history.Modified(), "undone back to what was saved, it's modified")
+    history.Undo()
+    Expect(history.Modified())
+    history.Redo()
+    Expect(!history.Modified())
+    // Undone past what's saved, then something new: there's no getting back to it.
+    history.Undo()
+    history.Commit(Adding(sum, 3))
+    Expect(history.Modified())
+    history.Undo()
+    Expect(history.Modified())
+End Function
+
+@Test
+Function AMergeDoesntLoseWhatWasSaved()
+    Local sum = [0]
+    Local history = History()
+    history.Commit(Adding(sum, 1, True))
+    history.MarkSaved()
+    history.Commit(Adding(sum, 1, True))
+    Expect(history.Modified())
+    history.Undo()
+    Expect(sum[0] == 1 && !history.Modified(), "it merged across what was saved")
+End Function
+
+@Test
+Function ItKeepsTheLastEditsItsToKeep()
+    Local sum = [0]
+    Local history = History(3)
+    history.Commit(Adding(sum, 1))
+    history.MarkSaved()
+    For i = 1 To 5
+        history.Commit(Adding(sum, 1))
+    End For
+    Expect(history.Undo() && history.Undo() && history.Undo() && !history.Undo())
+    Expect(sum[0] == 3)
+    // What was saved is out of reach.
+    Expect(history.Modified())
+End Function
+
+@Test
+Function ClearForgetsEverything()
+    Local sum = [0]
+    Local history = History()
+    Local changes = 0
+    history.OnChanged(Function()
+        changes += 1
+    End Function)
+    history.Commit(Adding(sum, 1))
+    Expect(changes == 1)
+    history.Clear()
+    Expect(changes == 2)
+    Expect(!history.CanUndo() && !history.Modified())
+End Function
+
+@Test
+Function EditOfRunsItsFunctions()
+    Local at = 0
+    Local history = History()
+    history.Commit(EditOf("move", Function()
+        at = 5
+    End Function, Function()
+        at = 0
+    End Function))
+    Expect(at == 5)
+    history.Undo()
+    Expect(at == 0)
+    history.Redo()
+    Expect(at == 5)
+End Function
+
+@Test
+Function CommandsRunWhenTheyCan()
+    Local commands = Commands()
+    Local runs = 0
+    Local can = True
+    Local command = commands.Add("a.b", "A B", Function()
+        runs += 1
+    End Function, Null, Function(): Bool => can)
+    Expect(commands.Find("a.b") == command && commands.Find("c") == Null)
+    Expect(commands.All().Count == 1)
+    Expect(commands.Run("a.b") && runs == 1)
+    can = False
+    Expect(!command.Enabled() && !commands.Run("a.b") && runs == 1)
+End Function
+
+Function Stroke(kind: KeystrokeKind, key: Key, control: Bool, shift: Bool): Keystroke
+    Return Keystroke(kind, key, "", shift, control, False, False)
+End Function
+
+@Test
+Function AKeyRunsItsCommand()
+    Local commands = Commands()
+    Local undos = 0
+    Local opens = 0
+    commands.Add("undo", "Undo", Function()
+        undos += 1
+    End Function, Shortcut(Key.Z, True, False, False), Null, True)
+    commands.Add("open", "Open", Function()
+        opens += 1
+    End Function, Shortcut(Key.O, True, False, False))
+    // Primary is Command on macOS.
+    Local mac = System.Platform == Platform.MACOS
+    Local press = Keystroke(KeystrokeKind.PRESS, Key.Z, "", False, !mac, False, mac)
+    Expect(commands.Seen(press) && undos == 1)
+    Expect(!commands.Seen(Keystroke(KeystrokeKind.PRESS, Key.Z, "", False, False, False, False)))
+    Expect(!commands.Seen(Keystroke(KeystrokeKind.PRESS, Key.Z, "", True, !mac, False, mac)),
+           "shift's another key")
+    Expect(undos == 1)
+    // A repeat runs what repeats, and is used either way.
+    Expect(commands.Seen(Keystroke(KeystrokeKind.REPEAT, Key.Z, "", False, !mac, False, mac)) &&
+           undos == 2)
+    Expect(commands.Seen(Keystroke(KeystrokeKind.REPEAT, Key.O, "", False, !mac, False, mac)) &&
+           opens == 0)
+    Expect("{Shortcut(Key.Z, True, True, False)}" == (mac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z"))
+End Function

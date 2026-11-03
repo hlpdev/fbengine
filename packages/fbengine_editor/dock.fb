@@ -1,0 +1,611 @@
+// Panes that dock: a tree of splits and groups of tabs, in one window, resized by dragging what's
+// between them, moved by dragging their tabs, and saved as text.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+Import fbengine_ui
+
+// How wide what's between two sides is, how small either goes, and how far a tab's dragged before
+// it's moving.
+Const SPLITTER: Float32 = 5.0
+Const SMALLEST: Float32 = 80.0
+Const DRAGGED: Float32 = 6.0
+
+/// What's in a dock: a Node shown under a tab, by a name that's saved.
+Public Final Class Pane
+    Public ReadOnly Field Id: String
+    Public ReadOnly Field Title: String
+    Public ReadOnly Field Content: Node
+
+    Public New(id: String, title: String, content: Node)
+        Id = id
+        Title = title
+        Content = content
+    End New
+End Class
+
+/// Where a pane goes against another: among its tabs, or beside it, splitting where it is.
+Public Enum DockSide
+    CENTER
+    LEFT
+    RIGHT
+    TOP
+    BOTTOM
+End Enum
+
+Class DockItem
+End Class
+
+// A group of tabs, by their panes' ids.
+Class TabsItem Extends DockItem
+    Field ids: String[]
+    Field active: Int = 0
+
+    New(tabs: String[])
+        ids = tabs
+        Super.New()
+    End New
+End Class
+
+// Two sides: left and right when across, else top and bottom, the first `ratio` of the way.
+Class SplitItem Extends DockItem
+    Field across: Bool
+    Field ratio: Float32
+    Field first: DockItem
+    Field second: DockItem
+
+    New(sideBySide: Bool, part: Float32, one: DockItem, other: DockItem)
+        across = sideBySide
+        ratio = part
+        first = one
+        second = other
+        Super.New()
+    End New
+End Class
+
+/// Panes, shown in a tree of splits and groups of tabs that fills it. Its Layout is that tree as a
+/// Value, which Restore puts back. Dragging a tab takes a pane to another group, or beside one,
+/// as its Over and Drop say; what happens when a tab's pressed with the right button is OnTabMenu's.
+Public Final Class Dock Extends Node
+    Field panes: Pane[] = []
+    Field top: DockItem? = Null
+    // The groups as they're shown, each its Node.
+    Field groups: (TabsItem, Node)[] = []
+    Field current: String = ""
+    Field tabMenu: (Func(Ui, String, Vec2))? = Null
+    Field hint: Node
+    Field changed: (Func())? = Null
+
+    Public New()
+        hint = Widget("dock.hint", "dock.hint")
+        Super.New("dock")
+        hint.SetAnchors(Anchors.Point(0.0, 0.0))
+        SetArrangement(Arrangement.STACK)
+    End New
+
+    /// Gives it `pane` to show, which isn't shown until Show says.
+    @PanicsAtCaller
+    Public Method AddPane(pane: Pane)
+        If FindPane(pane.Id) != Null Then Panic("Dock.AddPane: there's a pane {pane.Id} already")
+        panes.Add(pane)
+    End Method
+
+    /// The pane `id`, or Null.
+    Public Method FindPane(id: String): Pane?
+        For pane In panes
+            If pane.Id == id Then Return pane
+        End For
+        Return Null
+    End Method
+
+    /// Every pane it's been given, shown or not.
+    Public Method Panes(): Pane[] => panes.Clone()
+
+    /// Runs `handler` after each change to what's shown or where, not a resize.
+    Public Method OnChanged(handler: (Func())?)
+        changed = handler
+    End Method
+
+    /// Runs `handler` with the pane when a tab's pressed with the right button, at that point.
+    Public Method OnTabMenu(handler: (Func(Ui, String, Vec2))?)
+        tabMenu = handler
+    End Method
+
+    /// Whether the pane `id` has a tab.
+    Public Method Showing(id: String): Bool => GroupOf(top, id) != Null
+
+    /// The panes with tabs, in the tree's order.
+    Public Method ShownPanes(): String[]
+        Local shown: String[] = []
+        Collect(top, shown)
+        Return shown
+    End Method
+
+    /// The pane last activated, "" for none shown.
+    Public Method CurrentPane(): String => current
+
+    /// Whether the pane `id` is the one its group shows.
+    Public Method Active(id: String): Bool
+        Local group = GroupOf(top, id)
+        Return group != Null && group.ids[group.active] == id
+    End Method
+
+    /// Gives the pane `id` a tab, in the group of the current pane, or as the whole dock with none,
+    /// and shows it. Panics for one it hasn't been given.
+    @PanicsAtCaller
+    Public Method Show(id: String)
+        Needed("Show", id)
+        If !Showing(id)
+            Local into = GroupOf(top, current)
+            If into != Null
+                into.ids.Add(id)
+            Else
+                Local first = FirstGroup(top)
+                If first != Null
+                    first.ids.Add(id)
+                Else
+                    top = TabsItem([id])
+                End If
+            End If
+        End If
+        Activate(id)
+    End Method
+
+    /// Takes the pane `id`'s tab away, and what it leaves empty.
+    @PanicsAtCaller
+    Public Method Hide(id: String)
+        Needed("Hide", id)
+        If !Showing(id) Then Return
+        top = Without(top, id)
+        If current == id
+            Local shown = ShownPanes()
+            current = shown.Count > 0 ? shown[0] : ""
+        End If
+        Rebuilt()
+    End Method
+
+    /// Shows the pane `id` in its group, and it's current. Panics for one with no tab.
+    @PanicsAtCaller
+    Public Method Activate(id: String)
+        Local group = GroupOf(top, id)
+        If group == Null Then Panic("Dock.Activate: {id} has no tab")
+        For i = 0 To group.ids.Count - 1
+            If group.ids[i] == id Then group.active = i
+        End For
+        current = id
+        Rebuilt()
+    End Method
+
+    /// Puts the pane `id` against the pane `target`, on `side`, `share` of the room there, kept from 0
+    /// to 1, if it's beside it; False, doing nothing, if it's where that is, or the same pane.
+    @PanicsAtCaller
+    Public Method Move(id: String, target: String, side: DockSide, share: Float32 = 0.5): Bool
+        Needed("Move", id)
+        Needed("Move", target)
+        If id == target || !Showing(target) Then Return False
+        Local to = GroupOf(top, target)
+        If to == Null Then Return False
+        If side == DockSide.CENTER && to.ids.Contains(id) Then Return False
+        top = Without(top, id)
+        Local group = GroupOf(top, target)
+        If group == Null Then Return False
+        If side == DockSide.CENTER
+            group.ids.Add(id)
+        Else
+            Local beside = TabsItem([id])
+            Local first = side == DockSide.LEFT || side == DockSide.TOP
+            Local across = side == DockSide.LEFT || side == DockSide.RIGHT
+            Local part = Clamp(share, 0.0, 1.0)
+            Local split = SplitItem(across, first ? part : 1.0 - part, first ? beside : group,
+                                    first ? group : beside)
+            top = Replaced(top, group, split)
+        End If
+        Activate(id)
+        Return True
+    End Method
+
+    /// The ratio of the split nearest the top of the tree that has the pane `id` on its first side,
+    /// or Null, as a test asks.
+    Public Method SplitRatio(id: String): Float32?
+        Local at = top
+        While True
+            Local split = at As? SplitItem
+            If split == Null Then Return Null
+            If GroupOf(split.first, id) != Null Then Return split.ratio
+            at = split.second
+        End While
+        Return Null
+    End Method
+
+    /// The tree as a Value: a group's tabs and active, a split's across, ratio, first, and second.
+    /// With nothing shown, an empty Object.
+    Public Method Saved(): Value
+        Local item = top
+        If item == Null Then Return Value.Object()
+        Return Written(item)
+    End Method
+
+    /// Puts back the tree `saved` has, leaving out panes it hasn't been given, and any it's seen
+    /// twice; False, leaving it as it is, for one with no pane left in it, or that isn't one.
+    Public Method Restore(saved: Value): Bool
+        Local seen = Set<String>()
+        Local item = Read(saved, seen, 0)
+        If item == Null Then Return False
+        top = item
+        Local shown = ShownPanes()
+        current = shown.Count > 0 ? shown[0] : ""
+        Rebuilt()
+        Return True
+    End Method
+
+    /// Takes every tab away.
+    Public Method Clear()
+        top = Null
+        current = ""
+        Rebuilt()
+    End Method
+
+    // The tab `id`'s been dragged to `point`: shows where it would go, or nothing.
+    Package Method Over(ui: Ui, id: String, point: Vec2)
+        Local at = Target(point)
+        Local hintAt = at == Null || Against(at.0, id) == Null ? Null : HintBox(at.0, at.1)
+        If hintAt == Null
+            ui.ClosePopup(hint)
+            Return
+        End If
+        hint.SetMargin(Insets(hintAt.X, hintAt.Y, 0.0, 0.0))
+        hint.SetSize(hintAt.Width, hintAt.Height)
+        If hint.Parent() == Null Then ui.OpenPopup(hint, PopupKind.TIP)
+    End Method
+
+    // The tab `id`'s been let go of at `point`.
+    Package Method Drop(ui: Ui, id: String, point: Vec2)
+        ui.ClosePopup(hint)
+        Local at = Target(point)
+        If at == Null Then Return
+        Local target = Against(at.0, id)
+        If target != Null Then Move(id, target, at.1)
+    End Method
+
+    // The pane in `group` that the pane `id` goes against: another than itself, or Null for a group
+    // that's all it.
+    Method Against(group: TabsItem, id: String): String?
+        For each In group.ids
+            If each != id Then Return each
+        End For
+        Return Null
+    End Method
+
+    Package Method TabPressed(ui: Ui, id: String, point: Vec2)
+        Activate(id)
+        Local handler = tabMenu
+        If handler != Null Then handler(ui, id, point)
+    End Method
+
+    // The group at `point`, and the side of it: its outer quarter's its side, and its tabs and its
+    // middle, its center.
+    Method Target(point: Vec2): (TabsItem, DockSide)?
+        For each In groups
+            Local item, node = each
+            Local box = node.Box()
+            If !box.Contains(point) Then Continue
+            Local x = (point.x - box.X) / box.Width
+            Local y = (point.y - box.Y) / box.Height
+            If point.y < box.Y + BarHeight(node) Then Return (item, DockSide.CENTER)
+            If x < 0.25 Then Return (item, DockSide.LEFT)
+            If x > 0.75 Then Return (item, DockSide.RIGHT)
+            If y < 0.25 Then Return (item, DockSide.TOP)
+            If y > 0.75 Then Return (item, DockSide.BOTTOM)
+            Return (item, DockSide.CENTER)
+        End For
+        Return Null
+    End Method
+
+    Method BarHeight(node: Node): Float32
+        Local bars = node.Children()
+        Return bars.Count > 0 ? bars[0].Box().Height : 0.0
+    End Method
+
+    Method HintBox(item: TabsItem, side: DockSide): Rect?
+        For each In groups
+            Local group, node = each
+            If !RefEquals(group, item) Then Continue
+            Local box = node.Box()
+            Select side
+                Case DockSide.LEFT
+                    Return Rect(box.X, box.Y, box.Width / 2, box.Height)
+                Case DockSide.RIGHT
+                    Return Rect(box.X + box.Width / 2, box.Y, box.Width / 2, box.Height)
+                Case DockSide.TOP
+                    Return Rect(box.X, box.Y, box.Width, box.Height / 2)
+                Case DockSide.BOTTOM
+                    Return Rect(box.X, box.Y + box.Height / 2, box.Width, box.Height / 2)
+                Default
+                    Return box
+            End Select
+        End For
+        Return Null
+    End Method
+
+    @PanicsAtCaller
+    Method Needed(what: String, id: String)
+        If FindPane(id) == Null Then Panic("Dock.{what}: there's no pane {id}")
+    End Method
+
+    Method Collect(item: DockItem?, into: String[])
+        Local tabs = item As? TabsItem
+        If tabs != Null
+            into.AddAll(tabs.ids)
+            Return
+        End If
+        Local split = item As? SplitItem
+        If split != Null
+            Collect(split.first, into)
+            Collect(split.second, into)
+        End If
+    End Method
+
+    Method GroupOf(item: DockItem?, id: String): TabsItem?
+        Local tabs = item As? TabsItem
+        If tabs != Null Then Return tabs.ids.Contains(id) ? tabs : Null
+        Local split = item As? SplitItem
+        If split == Null Then Return Null
+        Return GroupOf(split.first, id) ?? GroupOf(split.second, id)
+    End Method
+
+    Method FirstGroup(item: DockItem?): TabsItem?
+        Local tabs = item As? TabsItem
+        If tabs != Null Then Return tabs
+        Local split = item As? SplitItem
+        Return split == Null ? Null : FirstGroup(split.first)
+    End Method
+
+    // `item` without the tab `id`, and what that leaves empty.
+    Method Without(item: DockItem?, id: String): DockItem?
+        Local tabs = item As? TabsItem
+        If tabs != Null
+            For i = 0 To tabs.ids.Count - 1
+                If tabs.ids[i] == id
+                    tabs.ids.RemoveAt(i)
+                    If tabs.active >= tabs.ids.Count Then tabs.active = Max(tabs.ids.Count - 1, 0)
+                    Return tabs.ids.Count > 0 ? tabs : Null
+                End If
+            End For
+            Return tabs
+        End If
+        Local split = item As? SplitItem
+        If split == Null Then Return Null
+        Local first = Without(split.first, id)
+        Local second = Without(split.second, id)
+        If first == Null Then Return second
+        If second == Null Then Return first
+        split.first = first
+        split.second = second
+        Return split
+    End Method
+
+    Method Replaced(item: DockItem?, old: DockItem, with: DockItem): DockItem?
+        If item != Null && RefEquals(item, old) Then Return with
+        Local split = item As? SplitItem
+        If split != Null
+            split.first = Replaced(split.first, old, with) ?? split.first
+            split.second = Replaced(split.second, old, with) ?? split.second
+        End If
+        Return item
+    End Method
+
+    Method Written(item: DockItem): Value
+        Local value = Value.Object()
+        Local tabs = item As? TabsItem
+        If tabs != Null
+            Local ids = Value.Array()
+            For id In tabs.ids
+                ids.Add(Value(id))
+            End For
+            value["tabs"] = ids
+            value["active"] = Value(tabs.active)
+            Return value
+        End If
+        Local split = item As? SplitItem
+        If split != Null
+            value["across"] = Value(split.across)
+            value["ratio"] = Value(split.ratio As Double)
+            value["first"] = Written(split.first)
+            value["second"] = Written(split.second)
+        End If
+        Return value
+    End Method
+
+    Method Read(value: Value?, seen: Set<String>, deep: Int): DockItem?
+        If value == Null || deep > 64 Then Return Null
+        Local tabs = value["tabs"]?.AsArray()
+        If tabs != Null
+            Local ids: String[] = []
+            For each In tabs
+                Local id = each.AsString()
+                If id != Null && FindPane(id) != Null && !seen.Contains(id)
+                    seen.Add(id)
+                    ids.Add(id)
+                End If
+            End For
+            If ids.Count == 0 Then Return Null
+            Local item = TabsItem(ids)
+            item.active = Clamp(value["active"]?.AsInt() ?? 0, 0, ids.Count - 1)
+            Return item
+        End If
+        Local first = Read(value["first"], seen, deep + 1)
+        Local second = Read(value["second"], seen, deep + 1)
+        If first == Null Then Return second
+        If second == Null Then Return first
+        Local ratio = value["ratio"]?.AsDouble() ?? 0.5
+        If !IsFinite(ratio) Then ratio = 0.5
+        Return SplitItem(value["across"]?.AsBool() ?? True, Clamp(ratio, 0.0, 1.0) As Float32,
+                         first, second)
+    End Method
+
+    // Shows the tree as it is now.
+    Method Rebuilt()
+        For pane In panes
+            pane.Content.Parent()?.Remove(pane.Content)
+        End For
+        For child In Children()
+            Remove(child)
+        End For
+        groups = []
+        Local item = top
+        If item != Null
+            Local built = Built(item)
+            built.SetAnchors(Anchors.Fill())
+            Add(built)
+        End If
+        Local handler = changed
+        If handler != Null Then handler()
+    End Method
+
+    Method Built(item: DockItem): Node
+        Local split = item As? SplitItem
+        If split != Null Then Return SplitNode(split, Built(split.first), Built(split.second))
+        Local tabs = item As TabsItem
+        Local group = Node("dock.group")
+        Local bar = Widget("dock.bar")
+        bar.SetArrangement(Arrangement.ROW)
+        bar.SetHeight(Sizing.Fit())
+        For i = 0 To tabs.ids.Count - 1
+            Local pane = FindPane(tabs.ids[i])
+            If pane != Null Then bar.Add(DockTab(Self, pane, i == tabs.active))
+        End For
+        group.Add(bar)
+        Local body = Widget("dock.pane")
+        body.SetHeight(Sizing.Fill())
+        Local shown = FindPane(tabs.ids[tabs.active])
+        If shown != Null
+            shown.Content.SetHeight(Sizing.Fill())
+            body.Add(shown.Content)
+        End If
+        group.Add(body)
+        groups.Add((tabs, group))
+        Return group
+    End Method
+End Class
+
+// Two sides of a dock, and what's dragged between them.
+Class SplitNode Extends Node
+    Field item: SplitItem
+    Field first: Node
+    Field second: Node
+    Field between: Splitter
+
+    New(split: SplitItem, one: Node, other: Node)
+        item = split
+        first = one
+        second = other
+        between = Splitter(split.across)
+        Super.New("dock.split")
+        Add(first)
+        Add(between)
+        Add(second)
+    End New
+
+    Package Method DragTo(point: Vec2)
+        Local box = ContentBox()
+        Local room = (item.across ? box.Width : box.Height) - SPLITTER
+        If room <= 0.0 Then Return
+        Local at = item.across ? point.x - box.X : point.y - box.Y
+        item.ratio = Clamp(at - SPLITTER / 2, Min(SMALLEST, room / 2),
+                           Max(room - SMALLEST, room / 2)) / room
+        Reflow()
+    End Method
+
+    Public Override Method ArrangeChildren(content: Rect)
+        Local room = (item.across ? content.Width : content.Height) - SPLITTER
+        Local least = Min(SMALLEST, Max(room, 0.0) / 2)
+        Local size = Clamp(Round(room * item.ratio), least, Max(room - least, least))
+        If item.across
+            first.Place(Rect(content.X, content.Y, size, content.Height))
+            between.Place(Rect(content.X + size, content.Y, SPLITTER, content.Height))
+            second.Place(Rect(content.X + size + SPLITTER, content.Y, room - size, content.Height))
+        Else
+            first.Place(Rect(content.X, content.Y, content.Width, size))
+            between.Place(Rect(content.X, content.Y + size, content.Width, SPLITTER))
+            second.Place(Rect(content.X, content.Y + size + SPLITTER, content.Width, room - size))
+        End If
+    End Method
+End Class
+
+// What's between a split's sides.
+Class Splitter Extends Widget
+    Field across: Bool
+
+    New(sideBySide: Bool)
+        across = sideBySide
+        Super.New("dock.splitter")
+    End New
+
+    Public Override Method PointerDown(point: Vec2): Bool => True
+
+    Public Override Method KeepsFocus(): Bool => True
+
+    Public Override Method PointerCursor(): MouseCursor? =>
+        across ? MouseCursor.RESIZE_EW : MouseCursor.RESIZE_NS
+
+    Public Override Method PointerDrag(point: Vec2)
+        Local split = Parent() As? SplitNode
+        If split != Null Then split.DragTo(point)
+    End Method
+End Class
+
+// A pane's tab, which a click shows, and a drag takes elsewhere.
+Class DockTab Extends Button
+    Field dock: Weak<Dock>
+    Field id: String
+    Field from: Vec2
+    Field dragging: Bool = False
+
+    New(owner: Dock, pane: Pane, active: Bool)
+        dock = owner
+        id = pane.Id
+        Super.New(pane.Title, "tab." + pane.Id)
+        SetStyleName(active ? "dock.tab.active" : "dock.tab")
+        SetTranslates(False)
+    End New
+
+    Public Override Method PointerDown(point: Vec2): Bool
+        from = point
+        dragging = False
+        Return True
+    End Method
+
+    Public Override Method PointerDownWith(button: MouseButton, point: Vec2): Bool
+        Local own = dock
+        Local ui = Owner()
+        If button == MouseButton.RIGHT && own != Null && ui != Null Then own.TabPressed(ui, id,
+                                                                                        point)
+        Return False
+    End Method
+
+    Public Override Method PointerDrag(point: Vec2)
+        If !dragging && Distance(point, from) < DRAGGED Then Return
+        dragging = True
+        Local own = dock
+        Local ui = Owner()
+        If own != Null && ui != Null Then own.Over(ui, id, point)
+    End Method
+
+    Public Override Method PointerUp(point: Vec2, over: Bool)
+        Local own = dock
+        Local ui = Owner()
+        If dragging
+            dragging = False
+            If own != Null && ui != Null Then own.Drop(ui, id, point)
+        ElseIf over && own != Null
+            own.Activate(id)
+        End If
+    End Method
+
+    Public Override Method Activate()
+        Local own = dock
+        If own != Null Then own.Activate(id)
+    End Method
+End Class

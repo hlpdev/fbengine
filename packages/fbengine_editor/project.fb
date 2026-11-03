@@ -1,0 +1,59 @@
+// A game's project, as the editor has it open: its folder, its name, and its assets mounted.
+
+Import std.core
+Import std.data
+Import std.io
+Import fbengine
+
+/// A folder that can't be opened as a project.
+Public Class ProjectError Extends Error
+    Public New(message: String)
+        Super.New(message)
+    End New
+End Class
+
+/// A game's folder, with its project.toml, whose assets/ is res:// while it's open, as it is in the
+/// game when it's built.
+Public Final Class GameProject
+    /// Its project.toml's name.
+    Public ReadOnly Field Name: String
+    /// Its folder, absolute.
+    Public ReadOnly Field Folder: Path
+    Field mounted: Bool = False
+
+    Private New(name: String, folder: Path, mounted: Bool)
+        Name = name
+        Folder = folder
+        Self.mounted = mounted
+    End New
+
+    /// Opens the project in `folder`, mounting its assets/ at res://, if it has one. It's a
+    /// ProjectError for a folder that isn't there or has no project.toml with a name.
+    Public Static Method Open(folder: Path): GameProject Throws ProjectError
+        Local absolute = folder
+        Try
+            absolute = Try folder.Absolute()
+        Catch error As IOError
+            Throw ProjectError("{folder} can't be found: {error.Message}")
+        End Try
+        If !Dir.Exists(absolute) Then Throw ProjectError("there's no folder {absolute}")
+        Local manifest = absolute / "project.toml"
+        Local name: String? = Null
+        Try
+            name = (Try Toml.Read(Try File.ReadText(manifest))).Path("project.name")?.AsString()
+        Catch error As Error
+            Throw ProjectError("{absolute} isn't a game's project: {error.Message}")
+        End Try
+        If name == Null Then Throw ProjectError("{manifest} has no project's name")
+        Local assets = absolute / "assets"
+        Local mounting = Dir.Exists(assets)
+        If mounting Then Assets.MountFolder("res://", assets)
+        Return GameProject(name, absolute, mounting)
+    End Method
+
+    /// Takes its assets back out of res://.
+    Public Method Close()
+        If mounted Then Assets.Unmount("res://")
+        mounted = False
+    End Method
+End Class
