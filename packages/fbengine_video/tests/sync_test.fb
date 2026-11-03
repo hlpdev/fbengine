@@ -527,3 +527,57 @@ Function DrawFittedLeavesACanvasAsItWasAndDrawsItsBarsSolid() Throws VideoError,
     Expect(drawn[10, 48].a == 255 && drawn[10, 48].r == 0, "its bars are {drawn[10, 48]}")
     Expect(drawn[100, 48].r > 50, "its middle is {drawn[100, 48]}")
 End Function
+
+// What E12 was to do: a video plays into a texture with its sound in sync. Each frame's the one due
+// at what's been mixed of its sound, whatever the Updates between say, and in the texture.
+@Test @MainThread
+Function AVideoPlaysIntoATextureWithItsSoundInSync() Throws VideoError, AudioError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local video = Try Video.Load(Embed("media/colors.mpg"))
+    Defer video.Free()
+    Local texture = Try video.Texture()
+    video.Play()
+    For i = 1 To 49
+        Audio.Mix(frameOfMix)
+        video.Update(0.02 + ((i % 3) As Float64) * 0.03)
+        Flip(False)
+        Local position = video.SoundChannel().Position()
+        // Thirteen frames of each color, as a frame's shown a thousandth of itself early.
+        Local due = Floor(position * 25 + 0.001) As Int64
+        Expect(video.FrameNumber() == due,
+               "at {position} s of sound it's frame {video.FrameNumber()}, not {due}")
+        Local shown = texture.ToImage()[32, 24]
+        Expect(shown == video.Frame()[32, 24],
+               "the texture's {shown}, the frame {video.Frame()[32, 24]}")
+    End For
+End Function
+
+// What's heard and what's seen, not only the clocks: late.mpg's tone begins at half a second, as
+// near as a frame to its first green picture, at 0.52 s. A sound decoded late, or pictures timed
+// early, would keep the clocks together and still be apart here.
+@Test @MainThread
+Function WhatsHeardAndWhatsSeenBeginTogether() Throws VideoError, AudioError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local video = Try Video.Load(Embed("media/late.mpg"))
+    Defer video.Free()
+    video.Play()
+    Local mixed: Float64 = 0
+    Local heard: Float64 = -1
+    Local seen: Float64 = -1
+    For i = 1 To 150
+        Local sound = Audio.Mix(441)
+        For j = 0 To sound.Count - 1
+            If heard < 0 && Abs(sound[j]) > 0.02 Then heard = mixed + ((j / 2) As Float64) / 44100
+        End For
+        mixed += 0.01
+        video.Update(0.01)
+        Local shown = video.Frame()[32, 24]
+        If seen < 0 && shown.g > 200 && shown.r < 60 Then seen = mixed
+    End For
+    Expect(heard > 0 && seen > 0, "heard at {heard}, seen at {seen}")
+    Expect(Abs(heard - seen) <= 1.0 / 25, "heard at {heard} s, seen at {seen} s")
+End Function

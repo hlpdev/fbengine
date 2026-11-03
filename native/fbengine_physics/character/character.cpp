@@ -142,6 +142,12 @@ void save_characters(const world_t& world, JPH::StateRecorder& state) {
     }
 }
 
+void hash_characters(const world_t& world, JPH::StateRecorder& state) {
+    for (const std::uint64_t handle : world.characters) {
+        characters().get(handle)->character->SaveState(state);
+    }
+}
+
 bool restore_characters(const world_t& world, JPH::StateRecorder& state) {
     std::vector<std::uint64_t> handles = world.characters;
     std::ranges::sort(handles);
