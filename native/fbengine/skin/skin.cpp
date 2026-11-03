@@ -143,6 +143,34 @@ void forget_skin(std::uint32_t mesh) {
     });
 }
 
+bool skin_joints_box(std::uint32_t mesh, const scene::tweened_t& tweened, scene::vec3_t& min,
+                     scene::vec3_t& max) {
+    skinned_t* found = skinned_of(scene::scene().entities.slots.handle(mesh));
+    if (found == nullptr) {
+        return false;
+    }
+    if (found->version != skins().kept[found->skin].version) {
+        bind(*found);
+    }
+    const scene::entities_t& entities = scene::scene().entities;
+    bool any = false;
+    for (const std::uint64_t handle : found->joints) {
+        const auto joint = entities.slots.find(handle);
+        if (!joint) {
+            continue;
+        }
+        const scene::vec3_t at = tweened.pose(*joint).matrix.axis(3);
+        min = any ? scene::vec3_t(std::fmin(min.x, at.x), std::fmin(min.y, at.y),
+                                  std::fmin(min.z, at.z))
+                  : at;
+        max = any ? scene::vec3_t(std::fmax(max.x, at.x), std::fmax(max.y, at.y),
+                                  std::fmax(max.z, at.z))
+                  : at;
+        any = true;
+    }
+    return any;
+}
+
 std::span<const scene::mat4_t> skin_palette(std::uint32_t mesh, const scene::tweened_t& tweened) {
     skinned_t* found = skinned_of(scene::scene().entities.slots.handle(mesh));
     if (found == nullptr) {

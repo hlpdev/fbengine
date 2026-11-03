@@ -105,9 +105,12 @@ public:
     /// `front_only`, only those it meets from their front; false for none.
     bool nearest(vec3_t a, vec3_t b, bool front_only, segment_hit_t& hit) const;
 
-    /// Calls `visit` with each triangle's index whose box touches the box from `min` to `max`.
+    /// Calls `visit` with each triangle's index whose box touches the box from `min` to `max`,
+    /// searching with `stack`, the caller's, kept from search to search so a search doesn't
+    /// allocate.
     template <typename Visit>
-    void overlapping(vec3_t min, vec3_t max, Visit&& visit) const;
+    void overlapping(vec3_t min, vec3_t max, std::vector<std::uint32_t>& stack,
+                     Visit&& visit) const;
 
     /// Calls `visit` with each triangle's index in a leaf whose box the segment from `a` to `b`
     /// passes within `grow` of, along each axis, before the part of it `until()` gives, 0 to 1,
@@ -147,12 +150,11 @@ private:
 };
 
 template <typename Visit>
-void bvh_t::overlapping(vec3_t min, vec3_t max, Visit&& visit) const {
+void bvh_t::overlapping(vec3_t min, vec3_t max, std::vector<std::uint32_t>& stack,
+                        Visit&& visit) const {
     if (m_nodes.empty()) {
         return;
     }
-    // Kept for the next search, so a search doesn't allocate.
-    thread_local std::vector<std::uint32_t> stack;
     stack.assign(1, 0);
     while (!stack.empty()) {
         const node_t& node = m_nodes[stack.back()];

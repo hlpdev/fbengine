@@ -372,3 +372,117 @@ TEST_CASE("draws that tie keep their order when something else is freed", "[rend
     REQUIRE(fbe_entity_free(gone));
     CHECK(order() == made_order);
 }
+
+TEST_CASE("a draw's depth mode and pipeline say how it's drawn, and order the scene's",
+          "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    fbe_camera_set_fog_mode(camera, FBE_FOG_LINEAR);
+    // A sky behind the scene and an overlay over it, both nearer than the scene's cubes.
+    const std::uint64_t behind = fbe_material_create();
+    fbe_material_set_order(behind, -1);
+    const std::uint64_t over = fbe_material_create();
+    fbe_material_set_order(over, 1);
+    const std::uint64_t sky_near = cube(world.handle, 0.0F, 0.0F, -3.0F, behind);
+    const std::uint64_t sky_far = cube(world.handle, 2.0F, 0.0F, -9.0F, behind);
+    const std::uint64_t overlay = cube(world.handle, -2.0F, 0.0F, -4.0F, over);
+    // In the scene: plain cubes near and far, one in an unlit material between, and glass.
+    const std::uint64_t unlit = fbe_material_create();
+    fbe_material_set_shading(unlit, FBE_SHADING_UNLIT);
+    const std::uint64_t near_cube = cube(world.handle, 0.0F, 0.0F, -6.0F);
+    const std::uint64_t middle = cube(world.handle, 1.0F, 1.0F, -7.0F, unlit);
+    const std::uint64_t far_cube = cube(world.handle, -1.0F, 0.0F, -8.0F);
+    const std::uint64_t glass = fbe_material_create();
+    fbe_material_set_blend(glass, FBE_BLEND_ADD);
+    fbe_material_set_alpha_cutoff(glass, 0.5F);
+    fbe_material_set_vertex_colors(glass, true);
+    fbe_material_set_two_sided(glass, true);
+    fbe_material_set_fogged(glass, false);
+    const std::uint64_t pane = cube(world.handle, 3.0F, 0.0F, -10.0F, glass);
+    const std::vector<fbe_draw_t> found = draws(camera);
+    REQUIRE(found.size() == 7);
+    // The sky far first, then the scene's opaque by pipeline, the default material's before the
+    // unlit one's, nearest first, then the glass, then the overlay.
+    const std::array order{ sky_far, sky_near, near_cube, far_cube, middle, pane, overlay };
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        CAPTURE(i);
+        CHECK(found[i].entity == order[i]);
+    }
+    CHECK(found[0].depth_mode == FBE_DEPTH_NONE);
+    CHECK(found[2].depth_mode == FBE_DEPTH_TEST_AND_WRITE);
+    CHECK(found[5].depth_mode == FBE_DEPTH_TEST);
+    CHECK(found[6].depth_mode == FBE_DEPTH_NONE);
+    // A new material's pipeline: PBR, opaque, fogged linearly, testing and writing depth.
+    const auto bits = [](std::int32_t value, unsigned at) {
+        return static_cast<std::uint64_t>(value) << at;
+    };
+    const std::uint64_t plain = bits(FBE_SHADING_PBR, 0) | bits(FBE_BLEND_OPAQUE, 2) |
+                                bits(FBE_FOG_LINEAR, 8) | bits(FBE_DEPTH_TEST_AND_WRITE, 10);
+    CHECK(found[2].pipeline == plain);
+    CHECK(found[4].pipeline == (plain | bits(FBE_SHADING_UNLIT, 0)));
+    // The glass: added, cut off, vertex colored, two-sided, no fog, and depth tested only.
+    const std::uint64_t added = bits(FBE_SHADING_PBR, 0) | bits(FBE_BLEND_ADD, 2) | bits(1, 5) |
+                                bits(1, 6) | bits(1, 7) | bits(FBE_FOG_NONE, 8) |
+                                bits(FBE_DEPTH_TEST, 10);
+    CHECK(found[5].pipeline == added);
+    for (const std::uint64_t material : { behind, over, unlit, glass }) {
+        fbe_material_release(material);
+    }
+}
+
+TEST_CASE("a mirrored draw keys and sorts apart from an unmirrored one", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t plain = cube(world.handle, -2.0F, 0.0F, -6.0F);
+    const std::uint64_t mirrored = cube(world.handle, 2.0F, 0.0F, -9.0F);
+    fbe_entity_set_scale(mirrored, -1.0F, 1.0F, 1.0F, FBE_SPACE_WORLD);
+    const std::uint64_t twice = cube(world.handle, 0.0F, 0.0F, -12.0F);
+    fbe_entity_set_scale(twice, -1.0F, -1.0F, 1.0F, FBE_SPACE_WORLD);
+    const std::uint64_t nearer = cube(world.handle, 0.0F, 2.0F, -4.0F);
+    fbe_entity_set_scale(nearer, 1.0F, 1.0F, -1.0F, FBE_SPACE_WORLD);
+    const std::vector<fbe_draw_t> found = draws(camera);
+    REQUIRE(found.size() == 4);
+    // Unmirrored first though further, each pipeline nearest first; two flips aren't a mirror.
+    CHECK(found[0].entity == plain);
+    CHECK(found[1].entity == twice);
+    CHECK(found[2].entity == nearer);
+    CHECK(found[3].entity == mirrored);
+    constexpr std::uint64_t bit = 1ULL << 12U;
+    CHECK(found[1].pipeline == found[0].pipeline);
+    CHECK(found[3].pipeline == found[2].pipeline);
+    CHECK(found[2].pipeline == (found[0].pipeline | bit));
+    CHECK((found[0].pipeline & bit) == 0);
+}
+
+TEST_CASE("in an order but 0, what's opaque draws before what blends at its depth", "[render]") {
+    const test_world_t world;
+    const std::uint64_t camera = fbe_entity_create(world.handle, 0, FBE_ENTITY_CAMERA);
+    const std::uint64_t geometry = fbe_geometry_cube();
+    fbe_mat4_t identity{};
+    identity.m[0] = 1.0F;
+    identity.m[5] = 1.0F;
+    identity.m[10] = 1.0F;
+    identity.m[15] = 1.0F;
+    fbe_geometry_add(geometry, geometry, &identity);
+    const std::uint64_t clouds = fbe_material_create();
+    fbe_material_set_blend(clouds, FBE_BLEND_ALPHA);
+    fbe_material_set_order(clouds, -1);
+    const std::uint64_t sky = fbe_material_create();
+    fbe_material_set_order(sky, -1);
+    fbe_surface_set_material(geometry, 0, clouds);
+    fbe_surface_set_material(geometry, 1, sky);
+    const std::uint64_t dome = fbe_entity_create(world.handle, 0, FBE_ENTITY_MESH);
+    fbe_mesh_set_geometry(dome, geometry);
+    fbe_geometry_release(geometry);
+    fbe_entity_set_position(dome, 0.0F, 0.0F, -5.0F, FBE_SPACE_WORLD);
+    const std::vector<fbe_draw_t> found = draws(camera);
+    REQUIRE(found.size() == 2);
+    CHECK(found[0].surface == 1);
+    CHECK(found[0].blend == FBE_BLEND_OPAQUE);
+    CHECK(found[1].surface == 0);
+    CHECK(found[1].blend == FBE_BLEND_ALPHA);
+    CHECK(found[0].depth_mode == FBE_DEPTH_NONE);
+    CHECK(found[1].depth_mode == FBE_DEPTH_NONE);
+    fbe_material_release(clouds);
+    fbe_material_release(sky);
+}

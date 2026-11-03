@@ -68,7 +68,7 @@ TEST_CASE("a material's settings take only what they can be", "[scene]") {
     const std::uint64_t material = fbe_material_create();
     CHECK_FALSE(fbe_material_set_layer(material, 8, FBE_LAYER_ADD, 0));
     CHECK(std::string_view(fbe_error()) == "a material's layers are 0 to 7, not 8");
-    CHECK_FALSE(fbe_material_set_layer(material, 0, 4, 0));
+    CHECK_FALSE(fbe_material_set_layer(material, 0, FBE_LAYER_BUMP + 1, 0));
     CHECK_FALSE(fbe_material_set_layer(material, 0, FBE_LAYER_ADD, 2));
     CHECK(fbe_material_layer_blend(material, -1) == -1);
     CHECK_FALSE(fbe_material_set_shininess(material, std::numeric_limits<float>::quiet_NaN()));

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -17,6 +18,7 @@
 #include <Jolt/Core/Memory.h>
 #include <Jolt/RegisterTypes.h>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -27,18 +29,9 @@ using namespace fbe::physics;
 
 thread_local std::string last_error;
 
-// Jolt's broad phase layers, one for each object layer.
-constexpr JPH::BroadPhaseLayer not_moving_broad_phase{ 0 };
-constexpr JPH::BroadPhaseLayer moving_broad_phase{ 1 };
-constexpr std::uint32_t broad_phase_layer_count = 2;
-
 // What a step's jobs can be, as Jolt's samples have them.
 constexpr std::uint32_t max_jobs = 2048;
 constexpr std::uint32_t max_barriers = 64;
-// The most collision steps one of Jolt's updates takes, all of whose jobs it makes at its start:
-// at Jolt's widest, 32 at once, a collision step makes up to 300 of the 2048, so 4 leave room for
-// the jobs a step makes as it goes. More are taken in several updates, the same on every machine.
-constexpr std::int32_t collision_steps_an_update = 4;
 // A step's memory, past which it takes from the heap.
 constexpr std::uint32_t step_memory_size = 16U * 1024U * 1024U;
 // The fewest pairs of touching bodies, and contacts between them, a world keeps room for; past
@@ -81,8 +74,25 @@ bool assert_failed(const char* expression, const char* message, const char* file
 }
 #endif
 
+// The floating point mode fbengine's work runs in, set as it's made and never put back, for Jolt's
+// threads to keep: a union doesn't destroy what's in it.
+union kept_mode_t {
+    kept_mode_t() : mode() {}
+    ~kept_mode_t() {}
+    kept_mode_t(const kept_mode_t&) = delete;
+    kept_mode_t& operator=(const kept_mode_t&) = delete;
+    kept_mode_t(kept_mode_t&&) = delete;
+    kept_mode_t& operator=(kept_mode_t&&) = delete;
+
+    fp_mode_t mode;
+};
+
 // Jolt's allocator, its types, and the job system: started once, and never stopped, since a
-// process ending stops its threads before a DLL could.
+// process ending stops its threads before a DLL could. A process can end as soon as its first
+// world's made, as a game that panics then does, and a thread stopped as it starts can hold a lock
+// of the C++ runtime's, which the DLL's end then waits on for ever; so the job system's threads
+// have all started before it's used, and keep their mode in no thread_local, whose destructor each
+// would give the runtime under that lock.
 struct jolt_t {
     struct registered_t {
         registered_t() {
@@ -94,9 +104,39 @@ struct jolt_t {
         }
     };
 
+    jolt_t() {
+        // Jolt's threads, as they start, take the mode its work runs in, which they keep.
+        jobs.SetThreadInitFunction([this](int) {
+            const kept_mode_t kept;
+            {
+                const std::scoped_lock hold(lock);
+                ++running;
+            }
+            ready.notify_all();
+        });
+        const std::int32_t threads = thread_count();
+        start(threads, [this, threads] { jobs.Init(max_jobs, max_barriers, threads); });
+    }
+
+    // Starts the job system's `threads` by `starting`, and waits until they have.
+    template <typename Starting>
+    void start(std::int32_t threads, Starting starting) {
+        {
+            const std::scoped_lock hold(lock);
+            running = 0;
+        }
+        starting();
+        std::unique_lock hold(lock);
+        ready.wait(hold, [this, threads] { return running == threads; });
+    }
+
     registered_t registered;
     JPH::TempAllocatorImplWithMallocFallback memory{ step_memory_size };
-    JPH::JobSystemThreadPool jobs{ max_jobs, max_barriers, thread_count() };
+    // How many of the job system's threads have started.
+    std::mutex lock;
+    std::condition_variable ready;
+    std::int32_t running = 0;
+    JPH::JobSystemThreadPool jobs;
 };
 
 jolt_t* started = nullptr;
@@ -109,8 +149,10 @@ jolt_t& jolt() {
 }
 
 pool_t<world_t>& worlds() {
-    static pool_t<world_t> pool(WORLD_KIND);
-    return pool;
+    // Never freed, as Jolt isn't: statics freed as the process ends go in any order, and a world
+    // left then would free its bodies into a pool that had gone.
+    static auto* pool = new pool_t<world_t>(WORLD_KIND);
+    return *pool;
 }
 
 bool finite(const fbe_physics_vec3_t& v) {
@@ -146,19 +188,18 @@ bool normalized(float x, float y, float z, float w, JPH::Quat& made) {
     return true;
 }
 
-world_t::world_t(std::uint32_t max_bodies)
-    : broad_phase_layers(object_layer_count, broad_phase_layer_count),
-      object_layers(object_layer_count) {
-    broad_phase_layers.MapObjectToBroadPhaseLayer(not_moving_layer, not_moving_broad_phase);
-    broad_phase_layers.MapObjectToBroadPhaseLayer(moving_layer, moving_broad_phase);
-    object_layers.EnableCollision(not_moving_layer, moving_layer);
-    object_layers.EnableCollision(moving_layer, moving_layer);
-    // It reads the layers as it's made.
-    object_vs_broad_phase = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilterTable>(
-        broad_phase_layers, broad_phase_layer_count, object_layers, object_layer_count);
+world_t::world_t(std::uint32_t max_bodies) {
     system.Init(max_bodies, 0, std::max(max_bodies, fewest_pairs),
-                std::max(max_bodies / 2, fewest_pairs), broad_phase_layers, *object_vs_broad_phase,
-                object_layers);
+                std::max(max_bodies / 2, fewest_pairs), broad_phase, object_vs_broad_phase, layers);
+    system.SetContactListener(&contact_listener);
+}
+
+// Its joints go before the bodies they join, and its characters, which own theirs, before the
+// rest of its bodies.
+world_t::~world_t() {
+    free_joints(*this);
+    free_characters(*this);
+    free_bodies(*this);
 }
 
 bool fail(std::string_view message) {
@@ -205,7 +246,7 @@ FBE_PHYSICS_API bool fbe_physics_set_threads(int32_t threads) {
     }
     threads_wanted = threads;
     if (started != nullptr && started->jobs.GetMaxConcurrency() - 1 != threads) {
-        started->jobs.SetNumThreads(threads);
+        started->start(threads, [threads] { started->jobs.SetNumThreads(threads); });
     }
     return true;
 }
@@ -225,11 +266,10 @@ FBE_PHYSICS_API uint64_t fbe_physics_new(uint32_t max_bodies) {
 }
 
 FBE_PHYSICS_API bool fbe_physics_free(uint64_t world) {
-    world_t* found = find_world(world);
+    const world_t* found = find_world(world);
     if (found == nullptr) {
         return false;
     }
-    free_bodies(*found);
     return worlds().remove(world);
 }
 
@@ -239,6 +279,7 @@ FBE_PHYSICS_API int32_t fbe_physics_bodies(uint64_t world) {
 }
 
 FBE_PHYSICS_API bool fbe_physics_optimize(uint64_t world) {
+    const fp_mode_t fp_mode;
     world_t* found = find_world(world);
     if (found == nullptr) {
         return false;
@@ -254,6 +295,7 @@ FBE_PHYSICS_API uint32_t fbe_physics_max_bodies(uint64_t world) {
 }
 
 FBE_PHYSICS_API bool fbe_physics_set_gravity(uint64_t world, const fbe_physics_vec3_t* gravity) {
+    const fp_mode_t fp_mode;
     world_t* found = find_world(world);
     if (found == nullptr) {
         return false;
@@ -266,6 +308,7 @@ FBE_PHYSICS_API bool fbe_physics_set_gravity(uint64_t world, const fbe_physics_v
 }
 
 FBE_PHYSICS_API bool fbe_physics_gravity(uint64_t world, fbe_physics_vec3_t* gravity) {
+    const fp_mode_t fp_mode;
     const world_t* found = find_world(world);
     if (found == nullptr) {
         return false;
@@ -276,6 +319,7 @@ FBE_PHYSICS_API bool fbe_physics_gravity(uint64_t world, fbe_physics_vec3_t* gra
 }
 
 FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t collision_steps) {
+    const fp_mode_t fp_mode;
     world_t* found = find_world(world);
     if (found == nullptr) {
         return false;
@@ -287,18 +331,29 @@ FBE_PHYSICS_API bool fbe_physics_step(uint64_t world, float seconds, int32_t col
         return fail(std::format("a step finds collisions 1 to {} times, not {}",
                                 FBE_PHYSICS_MAX_COLLISION_STEPS, collision_steps));
     }
+    found->began.clear();
+    found->ended.clear();
+    // Each collision step is an update of Jolt's of its own, whose contacts are taken as it ends:
+    // in one, a pair of parts begins or ends touching at most once, so sorting them puts them in
+    // the order they happened, the same however Jolt's threads ran, and an update's jobs, all made
+    // as it starts, always fit.
+    const float part = seconds / static_cast<float>(collision_steps);
     JPH::EPhysicsUpdateError errors = JPH::EPhysicsUpdateError::None;
-    for (std::int32_t done = 0; done < collision_steps;) {
-        const std::int32_t these = std::min(collision_steps - done, collision_steps_an_update);
-        const float part =
-            seconds * static_cast<float>(these) / static_cast<float>(collision_steps);
-        errors |= found->system.Update(part, these, &step_memory(), &jobs());
-        done += these;
+    for (std::int32_t i = 0; i < collision_steps; ++i) {
+        before_contacts(*found);
+        errors |= found->system.Update(part, 1, &step_memory(), &jobs());
+        take_contacts(*found);
     }
     found->overflowed = errors != JPH::EPhysicsUpdateError::None;
     found->changes = 0;
     ++found->steps;
+    ++found->moves;
     return true;
+}
+
+FBE_PHYSICS_API int64_t fbe_physics_moves(uint64_t world) {
+    const world_t* found = find_world(world);
+    return found != nullptr ? found->moves : -1;
 }
 
 FBE_PHYSICS_API int64_t fbe_physics_steps(uint64_t world) {
@@ -309,6 +364,30 @@ FBE_PHYSICS_API int64_t fbe_physics_steps(uint64_t world) {
 FBE_PHYSICS_API bool fbe_physics_overflowed(uint64_t world) {
     const world_t* found = find_world(world);
     return found != nullptr && found->overflowed;
+}
+
+FBE_PHYSICS_API bool fbe_physics_set_collides(uint64_t world, int32_t a, int32_t b, bool collides) {
+    world_t* found = find_world(world);
+    if (found == nullptr) {
+        return false;
+    }
+    if (a < 0 || a >= FBE_PHYSICS_LAYERS || b < 0 || b >= FBE_PHYSICS_LAYERS) {
+        return fail(std::format("a layer is 0 to {}, not {} and {}", FBE_PHYSICS_LAYERS - 1, a, b));
+    }
+    found->layers.set_collides(static_cast<std::uint32_t>(a), static_cast<std::uint32_t>(b),
+                               collides);
+    return true;
+}
+
+FBE_PHYSICS_API bool fbe_physics_collides(uint64_t world, int32_t a, int32_t b) {
+    const world_t* found = find_world(world);
+    if (found == nullptr) {
+        return false;
+    }
+    if (a < 0 || a >= FBE_PHYSICS_LAYERS || b < 0 || b >= FBE_PHYSICS_LAYERS) {
+        return fail(std::format("a layer is 0 to {}, not {} and {}", FBE_PHYSICS_LAYERS - 1, a, b));
+    }
+    return found->layers.collides(static_cast<std::uint32_t>(a), static_cast<std::uint32_t>(b));
 }
 
 } // extern "C"

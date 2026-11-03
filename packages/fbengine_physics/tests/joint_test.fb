@@ -1,0 +1,205 @@
+// Joints: each kind holding its bodies as it should, limits, springs, motors, and joints going with
+// their bodies.
+
+Import std.core
+Import std.math
+Import std.test
+Import fbengine_physics
+Import fbengine_physics.c.fbe_body
+Import fbengine_physics.c.fbe_joint
+Import fbengine_physics.c.fbe_physics
+Import fbengine_physics.c.fbe_shape
+
+Function Near(a: Float, b: Float, within: Float = 0.01): Bool => Abs(a - b) <= within
+
+Function Near(a: Vec3, b: Vec3, within: Float = 0.01): Bool => Distance(a, b) <= within
+
+Function Run(world: PhysicsWorld, seconds: Float64)
+    For i = 1 To Round(seconds * 60) As Int
+        world.Step(1.0 / 60)
+    End For
+End Function
+
+@Test
+Function AFixedJointHoldsABodyWhereItIs()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local sign = Body(world, Shape.Box(Vec3(1, 0.5, 0.1)), Motion.DYNAMIC, Vec3(0, 3, 0))
+    Local weld = Joint.Fixed(sign, Null)
+    Expect(weld.Kind() == JointKind.FIXED)
+    Expect(weld.A() == sign && weld.B() == Null)
+    Run(world, 1.0)
+    Expect(Near(sign.Position(), Vec3(0, 3, 0), 0.02))
+    // Off, it falls.
+    weld.SetEnabled(False)
+    Expect(!weld.Enabled())
+    Run(world, 0.5)
+    Expect(sign.Position().y < 2)
+End Function
+
+@Test
+Function APointJointSwingsABodyAboutItAtItsLength()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local ball = Body(world, Shape.Sphere(0.1), Motion.DYNAMIC, Vec3(1, 5, 0))
+    Joint.Point(ball, Null, Vec3(0, 5, 0))
+    Local lowest: Float = 5
+    For i = 1 To 120
+        world.Step(1.0 / 60)
+        Expect(Near(Distance(ball.Position(), Vec3(0, 5, 0)), 1, 0.02))
+        lowest = Min(lowest, ball.Position().y)
+    End For
+    // It swung down, under the point.
+    Expect(lowest < 4.1)
+End Function
+
+@Test
+Function AHingeTurnsOnlyAboutItsAxisWithinItsLimits()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    world.SetGravity(Vec3(0, 0, 0))
+    Local door = Body(world, Shape.Box(Vec3(1, 2, 0.1)), Motion.DYNAMIC, Vec3(0.5, 1, 0))
+    Local hinge = Joint.Hinge(door, Null, Vec3(0, 1, 0), Vec3(0, 1, 0))
+    Expect(Near(hinge.Position(), 0))
+    hinge.SetLimits(-Pi / 4, Pi / 4)
+    // Pushed at its far edge along -Z, it turns about +Y, as the right-hand rule says.
+    door.AddImpulseAt(Vec3(0, 0, -200), Vec3(1, 1, 0))
+    Local furthest: Float = 0
+    For i = 1 To 120
+        world.Step(1.0 / 60)
+        furthest = Max(furthest, hinge.Position())
+        Expect(hinge.Position() >= -0.01)
+    End For
+    // It swung open as far as its limit, and no further, and its edge stayed on the hinge.
+    Expect(furthest <= Pi / 4 + 0.02 && furthest > Pi / 4 - 0.05, "it turned as far as {furthest}")
+    Expect(Near(door.Position().y, 1, 0.02))
+End Function
+
+@Test
+Function AHingesMotorTurnsItToItsTarget()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local door = Body(world, Shape.Box(Vec3(1, 2, 0.1)), Motion.DYNAMIC, Vec3(0.5, 1, 0))
+    Local hinge = Joint.Hinge(door, Null, Vec3(0, 1, 0), Vec3(0, 1, 0))
+    hinge.SetMotorTarget(Pi / 2, 10000)
+    Run(world, 3.0)
+    Expect(Near(hinge.Position(), Pi / 2, 0.05), "it turned to {hinge.Position()}")
+    hinge.SetMotorSpeed(-1, 10000)
+    Run(world, 0.5)
+    Expect(hinge.Position() < Pi / 2 - 0.3)
+    hinge.StopMotor()
+End Function
+
+@Test
+Function ASliderSlidesAlongItsAxisAsItsMotorDrivesIt()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    world.SetGravity(Vec3(0, 0, 0))
+    Local drawer = Body(world, Shape.Box(Vec3(0.5, 0.2, 0.5)), Motion.DYNAMIC, Vec3(0, 1, 0))
+    Local slider = Joint.Slider(drawer, Null, Vec3(1, 0, 0))
+    slider.SetMotorSpeed(1, 1000)
+    Run(world, 1.0)
+    Expect(Near(slider.Position(), 1, 0.05))
+    Expect(Near(drawer.Position().y, 1) && Near(drawer.Position().z, 0))
+    // Its limits stop it.
+    slider.SetLimits(0, 1.5)
+    Run(world, 1.0)
+    Expect(Near(slider.Position(), 1.5, 0.02))
+End Function
+
+@Test
+Function ARopesLimitsHoldABodyNoFurtherThanItsLength()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local lamp = Body(world, Shape.Sphere(0.2), Motion.DYNAMIC, Vec3(0, 4, 0))
+    Local rope = Joint.Distance(lamp, Null, Vec3(0, 4, 0), Vec3(0, 5, 0))
+    Expect(Near(rope.Position(), 1))
+    rope.SetLimits(0, 2)
+    Run(world, 2.0)
+    // It fell to the rope's end, and hangs there.
+    Expect(Near(rope.Position(), 2, 0.03))
+    Expect(Near(lamp.Position().y, 3, 0.03))
+    rope.SetSpring(2, 0.5)
+End Function
+
+@Test
+Function ABodysJointsGoWithIt()
+    Local world = PhysicsWorld()
+    Local crate = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 5, 0))
+    Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(2, 5, 0))
+    Local link = Joint.Distance(crate, ball, Vec3(0, 5, 0), Vec3(2, 5, 0))
+    Local hook = Joint.Point(ball, Null, Vec3(2, 6, 0))
+    Expect(link.B() == ball)
+    crate.Free()
+    Expect(link.Freed())
+    Expect(!hook.Freed())
+    world.Step(1.0 / 60)
+    hook.Free()
+    Expect(hook.Freed())
+    Local again = Joint.Fixed(ball, Null)
+    world.Free()
+    Expect(again.Freed())
+    // Freeing one that's freed is nothing.
+    again.Free()
+End Function
+
+@Test @MainThread
+Function TheCApiRefusesJointsItDoesntTake()
+    Local first = fbe_physics_new(10)
+    Local second = fbe_physics_new(10)
+    Defer fbe_physics_free(first)
+    Defer fbe_physics_free(second)
+    Local ball = fbe_shape_sphere(0.5)
+    Defer fbe_shape_free(ball)
+    Local at = fbe_body_vec3_t(0, 0, 0)
+    Local unturned = fbe_body_quat_t(0, 0, 0, 1)
+    Local a: UInt64 = 0
+    Local b: UInt64 = 0
+    Local wall: UInt64 = 0
+    Local other: UInt64 = 0
+    Unsafe
+        a = fbe_body_add(first, ball, FBE_BODY_DYNAMIC, AddressOf(at), AddressOf(unturned))
+        b = fbe_body_add(first, ball, FBE_BODY_DYNAMIC, AddressOf(at), AddressOf(unturned))
+        wall = fbe_body_add(first, ball, FBE_BODY_STATIC, AddressOf(at), AddressOf(unturned))
+        other = fbe_body_add(second, ball, FBE_BODY_DYNAMIC, AddressOf(at), AddressOf(unturned))
+    End Unsafe
+    Expect(fbe_joint_fixed(a, other) == 0)
+    Expect(Error() == "a joint's bodies are of one world")
+    Expect(fbe_joint_fixed(wall, 0) == 0)
+    Expect(Error() == "a joint has a body that moves")
+    Expect(fbe_joint_fixed(a, a) == 0)
+    Expect(fbe_joint_fixed(0, a) == 0)
+    Expect(Error() == "there's no body")
+    Local zero = fbe_joint_vec3_t(0, 0, 0)
+    Local up = fbe_joint_vec3_t(0, 1, 0)
+    Local hinge: UInt64 = 0
+    Unsafe
+        Expect(fbe_joint_hinge(a, b, AddressOf(zero), AddressOf(zero)) == 0)
+        Expect(Error() == "a joint's axis isn't 0")
+        hinge = fbe_joint_hinge(a, b, AddressOf(zero), AddressOf(up))
+    End Unsafe
+    Expect(hinge != 0)
+    Expect(fbe_joint_kind(hinge) == FBE_JOINT_HINGE)
+    Expect(!fbe_joint_set_limits(hinge, 1, 2))
+    Expect(Error() == "a hinge's limits are -pi to 0 and 0 to pi, not 1 and 2")
+    Expect(!fbe_joint_set_motor(hinge, 3, 0, 1))
+    Expect(!fbe_joint_set_motor(hinge, FBE_JOINT_MOTOR_SPEED, 1, 0))
+    Expect(!fbe_joint_set_spring(hinge, -1, 0))
+    Local weld = fbe_joint_fixed(a, b)
+    Expect(!fbe_joint_set_motor(weld, FBE_JOINT_MOTOR_SPEED, 1, 1))
+    Expect(Error() == "only a hinge or a slider has a motor")
+    Local where: Float = 0
+    Unsafe
+        Expect(!fbe_joint_position(weld, AddressOf(where)))
+    End Unsafe
+    Expect(fbe_joint_free(weld))
+    Expect(!fbe_joint_free(weld))
+    Expect(Error() == "the joint was freed")
+    Expect(fbe_joint_kind(a) == 0)
+End Function
+
+@MainThread Function Error(): String
+    Unsafe
+        Return fbe_physics_error().ToString()
+    End Unsafe
+End Function

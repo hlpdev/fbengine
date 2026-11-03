@@ -88,7 +88,7 @@ bool terrain_blocks(const terrain_t& terrain, vec3_t a, vec3_t b) {
     // In pieces of a few squares each, as picks go, so a long line tries only the squares near it.
     const vec3_t across = b - a;
     const float span = std::fmax(std::fabs(across.x), std::fabs(across.z));
-    const int pieces = std::clamp(static_cast<int>(std::ceil(span / 4.0F)), 1, 4096);
+    const int pieces = terrain_line_pieces(span);
     std::vector<std::array<vec3_t, 3>> under;
     for (int piece = 0; piece < pieces; ++piece) {
         const vec3_t p0 = a + across * (static_cast<float>(piece) / static_cast<float>(pieces));
@@ -111,14 +111,15 @@ void terrain_under(const terrain_t& terrain, vec3_t min, vec3_t max,
                    std::vector<std::array<vec3_t, 3>>& triangles) {
     // The squares the box's footprint is on, in the grid's own space: a point's own square too,
     // and one on the grid's far edge, its last.
-    const auto first_x =
-        std::clamp(static_cast<std::int32_t>(std::floor(min.x)), 0, terrain.size - 1);
-    const auto first_z =
-        std::clamp(static_cast<std::int32_t>(std::floor(min.z)), 0, terrain.size - 1);
-    const auto last_x =
-        std::clamp(static_cast<std::int32_t>(std::floor(max.x)) + 1, 0, terrain.size);
-    const auto last_z =
-        std::clamp(static_cast<std::int32_t>(std::floor(max.z)) + 1, 0, terrain.size);
+    const auto square_at = [](float at, std::int32_t past, std::int32_t most) {
+        // In float first, since a box can be further out than an int counts.
+        return static_cast<std::int32_t>(std::fmin(
+            std::fmax(std::floor(at) + static_cast<float>(past), 0.0F), static_cast<float>(most)));
+    };
+    const std::int32_t first_x = square_at(min.x, 0, terrain.size - 1);
+    const std::int32_t first_z = square_at(min.z, 0, terrain.size - 1);
+    const std::int32_t last_x = square_at(max.x, 1, terrain.size);
+    const std::int32_t last_z = square_at(max.z, 1, terrain.size);
     for (std::int32_t z = first_z; z < last_z; ++z) {
         for (std::int32_t x = first_x; x < last_x; ++x) {
             for (const auto& corners : square(terrain, x, z)) {

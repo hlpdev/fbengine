@@ -116,6 +116,7 @@ void add_camera(std::uint32_t entity) {
 void remove_camera(std::uint32_t entity) {
     scene_t& s = scene();
     const std::uint32_t index = s.entities.component[entity];
+    release_texture(s.cameras[index].target);
     if (index != s.cameras.size() - 1) {
         s.cameras[index] = s.cameras.back();
         s.entities.component[s.cameras[index].entity] = index;
@@ -373,6 +374,30 @@ FBE_API bool fbe_camera_clear_color(uint64_t camera, fbe_color_t* color) {
         .a = found->clear_color[3],
     };
     return true;
+}
+
+FBE_API bool fbe_camera_set_target(uint64_t camera, uint64_t texture) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (texture != 0) {
+        if (!fbe_texture_is_target(texture)) {
+            return fbe::fail("a camera draws into a target, not another texture");
+        }
+        if (!fbe_texture_has_depth(texture)) {
+            return fbe::fail("a camera draws into a target with depth");
+        }
+        fbe_texture_retain(texture);
+    }
+    fbe::scene::release_texture(found->target);
+    found->target = texture;
+    return true;
+}
+
+FBE_API uint64_t fbe_camera_target(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->target : 0;
 }
 
 FBE_API bool fbe_camera_set_order(uint64_t camera, int32_t order) {

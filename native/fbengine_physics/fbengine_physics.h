@@ -6,6 +6,8 @@
 // packages/fbengine_physics/c/.
 
 #include "body/fbe_body.h"
+#include "character/fbe_character.h"
+#include "joint/fbe_joint.h"
 #include "physics/fbe_physics.h"
 #include "shape/fbe_shape.h"
 

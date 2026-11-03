@@ -1,5 +1,6 @@
 // The scene's part of a frame: UpdateWorld steps it, CaptureWorld keeps where everything is for
-// drawing between steps, and FixedStep runs a game's logic at a fixed rate whatever the frame rate.
+// drawing between steps, and FixedUpdate runs a game's logic at a fixed rate whatever the frame
+// rate.
 
 Import std.core
 Import std.math
@@ -62,7 +63,7 @@ End Extend
 /// A game's logic at a fixed rate, however fast frames come: each frame runs as many steps as the
 /// time since holds, keeping what's left over, and draws its Tween between the last two steps.
 ///
-///     Local logic = FixedStep(60)
+///     Local logic = FixedUpdate(60)
 ///     While !Window.Closed()
 ///         For step = 1 To logic.Steps(Frame.Delta())
 ///             CaptureWorld()
@@ -72,7 +73,11 @@ End Extend
 ///         RenderWorld(logic.Tween())
 ///         Flip()
 ///     End While
-Public Final Class FixedStep
+///
+/// A physics world's Step goes after UpdateWorld, as `UpdateGame`'s last, so what a body drives is
+/// where its body is for the next capture; UpdateWorld's collisions moving a driven entity last
+/// only until its body next moves.
+Public Final Class FixedUpdate
     Private Field rate: Float64
     Private Field most: Int
     Private Field banked: Float64 = 0
@@ -83,9 +88,9 @@ Public Final Class FixedStep
     @PanicsAtCaller
     Public New(rate: Float64, most: Int = 5)
         If !(rate > 0 && IsFinite(rate))
-            Panic("FixedStep: a rate is above 0 steps a second, not {rate}")
+            Panic("FixedUpdate: a rate is above 0 steps a second, not {rate}")
         End If
-        If most < 1 Then Panic("FixedStep: a frame takes at most 1 step or more, not {most}")
+        If most < 1 Then Panic("FixedUpdate: a frame takes at most 1 step or more, not {most}")
         Self.rate = rate
         Self.most = most
     End New
@@ -95,7 +100,7 @@ Public Final Class FixedStep
     @PanicsAtCaller
     Public Method Steps(seconds: Float64): Int
         If !(seconds >= 0 && IsFinite(seconds))
-            Panic("Steps on a FixedStep: a frame takes 0 seconds or more, finite, not {seconds}")
+            Panic("Steps on a FixedUpdate: a frame takes 0 seconds or more, finite, not {seconds}")
         End If
         banked += seconds * rate
         // A frame long enough to overflow runs the most steps; what's past them is dropped.

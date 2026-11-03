@@ -435,7 +435,7 @@ Function AFreedEntityIsLetGoWhereItWas()
     Expect(emitter.Position() == Vec3(1, 0, 0))
 End Function
 
-// Following an entity with the FixedStep its logic runs at is following where it's drawn, at the
+// Following an entity with the FixedUpdate its logic runs at is following where it's drawn, at the
 // step's Tween between the World's capture before the step and now, as the frames between steps
 // draw it; and turned as it's drawn.
 @Test
@@ -443,7 +443,7 @@ Function FollowingWithAStepIsWhereTheEntityIsDrawn()
     Defer PutBack()
     Local world = Fresh()
     Defer world.Free()
-    Local logic = FixedStep(50)
+    Local logic = FixedUpdate(50)
     Local car = Pivot()
     Local emitter = Emitter()
     Defer emitter.Free()
@@ -476,7 +476,7 @@ End Function
 Function ManyEmittersOnEntitiesArePlacedAtOnce()
     Local world = Fresh()
     Defer world.Free()
-    Local logic = FixedStep(50)
+    Local logic = FixedUpdate(50)
     Local cars: Pivot[] = []
     Local emitters: Emitter[] = []
     CaptureWorld()

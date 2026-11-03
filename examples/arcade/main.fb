@@ -1,0 +1,107 @@
+// Runs Starfall (starfall.fb). Played, it's the arrow keys and the space bar, and Escape, at 60
+// steps a second however fast the display is. With `-- --watch`, as tools/show.py runs it, the
+// pilot plays at the same rate, a game after another, until the window closes or Escape; with
+// `--steps <n>` after it, as ctest walks it, n steps of that, headless, a step a frame. With
+// `-- --frames <folder>`, as ctest runs it, it plays itself, headless, the same every time, a step
+// a frame, and saves frames 1, 150, and 300 as PNGs there; with `--idle` after it the ship just sits
+// there until the game's over, and it saves the frame a rock's crossing the ground and the last.
+// ctest compares them with their golden images.
+
+Import std.core
+Import std.io
+Import std.os
+Import std.text
+Import fbengine
+Import "./starfall"
+
+// Says how it's run, and ends: anything else mustn't open a window, as playing does.
+Function Refuse()
+    PrintError("usage: arcade [--watch [--steps <n>] | --frames <folder> [--idle]]")
+    Process.Exit(2)
+End Function
+
+// The pilot's run: frames 1, 150, and 300, and the score.
+Function Attract(game: Game, frames: String) Throws GraphicsError, IOError
+    For frame = 1 To 300
+        Local move = game.Pilot()
+        game.Step(move.Across, move.Firing)
+        game.Draw()
+        If frame == 1 || frame == 150 || frame == 300
+            Try Screen.Save(Path("{frames}/frame_{frame}.png"))
+        End If
+        Flip(False)
+    End For
+End Function
+
+// A ship no one's flying, hit until the game's over: a rock crossing the ground, and the last frame.
+Function Idle(game: Game, frames: String) Throws GraphicsError, IOError
+    Local crossed = False
+    While game.Lives > 0
+        game.Step(0, False)
+        game.Draw()
+        If !crossed && game.RockCrossing()
+            crossed = True
+            Try Screen.Save(Path("{frames}/frame_ground.png"))
+        End If
+        Flip(False)
+    End While
+    game.Draw()
+    Try Screen.Save(Path("{frames}/frame_over.png"))
+End Function
+
+Function Main() Throws GraphicsError, IOError
+    Local arguments = Process.Arguments()
+    Local count = arguments.Count
+    Local scripted = (count == 2 || (count == 3 && arguments[2] == "--idle")) &&
+                     arguments[0] == "--frames" && !arguments[1].StartsWith("-")
+    Local walked = count == 3 && arguments[0] == "--watch" && arguments[1] == "--steps"
+    Local steps = walked ? Int.Parse(arguments[2]) ?? 0 : 0
+    Local watching = (count == 1 && arguments[0] == "--watch") || steps > 0
+    If count != 0 && !scripted && !watching Then Refuse()
+    If scripted || steps > 0 Then Window.SetHeadless(True)
+    Window.SetTitle("Starfall")
+    // Its own small screen, scaled by whole pixels into whatever the window is: what's drawn is
+    // the same however big the window is, or however dense its display's pixels are.
+    Local scale = scripted || steps > 0 ? 2 : 3
+    Try Graphics(WIDTH * scale, HEIGHT * scale)
+    Defer EndGraphics()
+    Screen.SetSize(WIDTH, HEIGHT)
+    Screen.SetScaling(Scaling.INTEGER, False)
+    Local game = Try Game()
+    If scripted
+        Try Dir.CreateAll(Path(arguments[1]))
+        If count == 3
+            Try Idle(game, arguments[1])
+        Else
+            Try Attract(game, arguments[1])
+        End If
+        Print("score {game.Score}, lives {game.Lives}")
+        Return
+    End If
+    If steps > 0
+        For at = 1 To steps
+            game.Watch()
+            game.Draw()
+            Flip(False)
+        End For
+        Print("watched {steps} steps, score {game.Score}, lives {game.Lives}")
+        Return
+    End If
+    Local logic = FixedUpdate(60)
+    While !Window.Closed() && !KeyDown(Key.ESCAPE)
+        Local across: Float32 = 0
+        If KeyDown(Key.LEFT) Then across -= 2.5
+        If KeyDown(Key.RIGHT) Then across += 2.5
+        For step = 1 To logic.Steps(Frame.Delta())
+            If watching
+                game.Watch()
+            Else
+                game.Step(across, KeyDown(Key.SPACE))
+            End If
+        End For
+        game.Draw()
+        Flip()
+    End While
+End Function
+
+Try Main()

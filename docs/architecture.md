@@ -85,7 +85,7 @@ good modern engine on its own. Every structural choice is checked against both.
   and a game or the editor can make more (a preview scene, a scene rendered to a texture). A Camera
   renders the World it's in.
 - `UpdateWorld(seconds)` steps animation and the scene's collisions; `RenderWorld()` draws every
-  camera; both are the game's to call, in its own loop. A fixed-step helper (`FixedStep(rate)`)
+  camera; both are the game's to call, in its own loop. A fixed-step helper (`FixedUpdate(rate)`)
   gives a game logic at a fixed rate with tweening between steps, as SCP:CB's needs.
 - **Collisions and picks** are the scene's own, for games that don't need a physics engine:
   swept spheres and ellipsoids against meshes, boxes, and spheres, with stop and slide responses,
@@ -161,6 +161,11 @@ good modern engine on its own. Every structural choice is checked against both.
   that reach them, at most 8 in the tree's order, so a light by an off-screen vertex still lights
   it. A mirrored world matrix is a pipeline key bit of its own, as the front face is baked into a
   pipeline. Shadows come with E6.
+- **Order and depth**: material orders other than 0 neither test nor write depth and draw
+  furthest first, behind the scene or over it, as Blitz's EntityOrder did; in order 0, opaque
+  draws test and write depth, by pipeline, material, and nearest first, and what blends only
+  tests it, furthest first. Each draw carries its pipeline key (shading, blend, alpha cutoff,
+  vertex colors, sides, fog, depth), which a texture layer's part joins when textures land.
 - **Render to texture**: any Camera can render into a Texture (security monitors, mirrors,
   portals), and post effects run per camera.
 - **2D** draws after 3D, in the same frame graph, into the window or into a Texture; pixel
