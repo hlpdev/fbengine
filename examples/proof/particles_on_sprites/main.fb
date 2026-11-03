@@ -6,6 +6,7 @@
 
 Import std.collections
 Import std.core
+From std.image Import Image
 Import std.math
 Import fbengine
 Import std.os
@@ -154,8 +155,9 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     World.SetCurrent(world)
     Defer world.Free()
     Local left = Emitter(Vec3(-2, -1.5, -6), 20.0, 1.5, 42)
-    Local sparks = Template(Color(1, 0.7, 0.2), 3.0, SpriteViewMode.BILLBOARD, Glowing())
-    Local rockets = Template(Color(1, 0.3, 0.1), 0.0, SpriteViewMode.UPRIGHT, Glowing())
+    Local round = Try Soft()
+    Local sparks = Template(Color(1, 0.7, 0.2), 3.0, SpriteViewMode.BILLBOARD, Glowing(round))
+    Local rockets = Template(Color(1, 0.3, 0.1), 0.0, SpriteViewMode.UPRIGHT, Glowing(round))
     rockets.Burst = sparks
     rockets.BurstCount = 6
     Local right = Emitter(Vec3(2, -1.5, -6), 3.0, 1.0, 7, rockets)
@@ -176,10 +178,25 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Print("watched {count} frames")
 End Function
 
-// A look of its own: glowing, full bright, and out of the fog.
-Function Glowing(): Material
+// A round soft texture, brightest in its middle.
+Function Soft(): Texture Throws GraphicsError
+    Local image = Image(16, 16)
+    For y = 0 To 15
+        For x = 0 To 15
+            Local away = Min(Sqrt((((x As Float) - 7.5) ** 2 + ((y As Float) - 7.5) ** 2)) / 7.5,
+                             1.0)
+            Local value = ((1.0 - away) * 255.0) As UInt8
+            image[x, y] = Color32(value, value, value, 255)
+        End For
+    End For
+    Return Try Texture.FromImage(image)
+End Function
+
+// A look of its own: `texture`, glowing, full bright, and out of the fog.
+Function Glowing(texture: Texture): Material
     Local look = Material()
     look.SetShading(Shading.UNLIT)
+    look.SetTexture(0, texture)
     look.SetBlend(Blend.ADD)
     look.SetFogged(False)
     Return look
@@ -245,7 +262,8 @@ Function Kept() Throws GraphicsError
     End For
     Print("falling {rocket.Alive[0].Velocity.y < 0.0}")
 
-    // In a target, full bright: a template's color; its texture's; added over what's there, out of fog.
+    // In a target, full bright and out of the fog, added over red: 0.214 in linear light is half of
+    // what's stored, times its texture's 128 is 64, whose light's added, so 64 again.
     If Env.Get("FBENGINE_NO_GPU") == "1"
         Print("no GPU here")
         Return
@@ -261,7 +279,9 @@ Function Kept() Throws GraphicsError
     seeing.SetFogRange(0, 1)
     camera.Hide()
     sprite.Hide()
-    Local glow = Glowing()
+    Local gray = Image(1, 1)
+    gray[0, 0] = Color32(128, 128, 128, 255)
+    Local glow = Glowing(Try Texture.FromImage(gray, False))
     glow.SetColor(Color(0, 0.214, 0))
     Local shown = Sprite(glow)
     shown.SetPosition(Vec3(0, 0, 97))

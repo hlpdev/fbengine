@@ -558,7 +558,7 @@ if(FBENGINE_FB_TESTS)
                            "another seed goes another way True"
                            "a rocket gone, 4 sparks, each UPRIGHT, UPRIGHT"
                            "falling True"
-                           "a sprite's pixel, added, out of the fog [(]255, 12[5-9], 0, 255[)]"
+                           "a sprite's pixel, added, out of the fog [(]255, 6[2-6], 0, 255[)]"
                            "beside it [(]255, 0, 0, 255[)]")
 
   fbengine_add_drawn_proof(fixed_function_look
@@ -944,14 +944,16 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.video_player.usage PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
   # E14's proofs of this lane's: what each prints, line by line, and its --watch walked offscreen.
   function(fbengine_add_lane_proof name)
-    list(JOIN ARGN "?
+    list(JOIN ARGN "
+?
 " printed)
     set(folder "${PROJECT_SOURCE_DIR}/examples/proof/${name}")
     add_test(NAME proof.${name} COMMAND "${FBENGINE_FB}" --color never run "${folder}")
     set_tests_properties(proof.${name} PROPERTIES
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          PASS_REGULAR_EXPRESSION "
-${printed}?
+${printed}
+?
 $"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
     add_test(NAME proof.${name}_watch
@@ -959,7 +961,8 @@ $"
     set_tests_properties(proof.${name}_watch PROPERTIES
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          PASS_REGULAR_EXPRESSION "
-watched 40 frames?
+watched 40 frames
+?
 $"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
   endfunction()
