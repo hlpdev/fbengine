@@ -1,0 +1,70 @@
+// Environments: the light around a scene, baked for image-based lighting.
+
+Import "./c/fbe_environment"
+Import "./texture"
+Import "./window"
+
+/// The light around a scene, baked on the GPU from an image of it, for glTF's metal-rough materials
+/// to read as image-based lighting. It lives while the game holds it; Free lets go of it at once.
+///
+///     Local sky = Try Texture.Load(Path("sky.hdr"))
+///     Local environment = Try Environment.Bake(sky)
+Public Final Class Environment
+    Field handle: UInt64
+
+    Package New(handle: UInt64)
+        Self.handle = handle
+    End New
+
+    Method Destroy()
+        If handle != 0 Then fbe_environment_free(handle)
+    End Method
+
+    /// Bakes `source`, an image of the light all around, y up, +X at its middle and the sky along
+    /// its top, in the frame's commands, so what's drawn after it reads it: its specular light
+    /// `size` texels across, a power of 2 from 16 to 2048, each texel taking `samples` samples, 1 to
+    /// 4096, which take the time the GPU takes: a big bake's submitted a part at a time, which it
+    /// waits for, so the GPU's never kept long. Mipmaps on `source` make few samples less noisy, and
+    /// a small sun count for what it should; its light past 8192 is read as 8192. A frame that fails
+    /// to run it runs it in the next. It panics for a size or samples out of range, or a source that
+    /// was freed, and throws when the GPU can't bake it. Stopping the GPU loses what it baked.
+    @MainThread @PanicsAtCaller
+    Public Static Method Bake(source: Texture, size: Int32 = 256,
+                              samples: Int32 = 256): Environment Throws GraphicsError
+        If size < 16 || size > 2048 || (size & (size - 1)) != 0
+            Panic("an environment's size is a power of 2 from 16 to 2048, not {size}")
+        End If
+        If samples < 1 || samples > 4096
+            Panic("an environment takes 1 to 4096 samples, not {samples}")
+        End If
+        Local made = fbe_environment_bake(source.Live("Bake"), size, samples)
+        If made == 0 Then Throw GraphicsError(LastError())
+        Return Environment(made)
+    End Method
+
+    /// The highest level of its specular light that's read, at a roughness of 1. It panics for an
+    /// environment that was freed.
+    @MainThread @PanicsAtCaller
+    Public Method Levels(): Int32
+        Local levels = fbe_environment_levels(Live("Levels"))
+        If levels < 0 Then Panic(LastError())
+        Return levels
+    End Method
+
+    /// Frees it; it panics for one that was freed already.
+    @MainThread @PanicsAtCaller
+    Public Method Free()
+        If !fbe_environment_free(Live("Free")) Then Panic(LastError())
+        handle = 0
+    End Method
+
+    /// How many environments there are.
+    @MainThread Public Static Method Count(): Int32 => fbe_environment_count()
+
+    // The handle, or a panic naming the call for an Environment that was freed.
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call} on an Environment that was freed")
+        Return handle
+    End Method
+End Class

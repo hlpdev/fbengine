@@ -24,6 +24,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_texture_height(texture: UInt64): Int32
     Function fbe_texture_format(texture: UInt64): Int32
     Function fbe_texture_levels(texture: UInt64): Int32
+    Function fbe_texture_write_floats(texture: UInt64, x: Int32, y: Int32, width: Int32,
+                                      height: Int32, pixels: Ptr<Float32>): Bool
     Function fbe_texture_write(texture: UInt64, x: Int32, y: Int32, width: Int32, height: Int32,
                                pixels: Ptr<UInt8>, pitch: Int32): Bool
     Function fbe_texture_clear(texture: UInt64, red: Float32, green: Float32, blue: Float32,
