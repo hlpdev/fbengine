@@ -1,0 +1,269 @@
+// 2D over a scene: a camera projecting a cube's corners, and over them images with a key color made
+// transparent, of either color, whole, by regions, by frames from a strip and from a file, resized,
+// turned, scaled, and with a handle; shapes, text in the engine's font and a TrueType file's sized
+// by its cell, its width, and whether they overlap, by rectangles and by masks. It reads its pixels
+// back and prints them; with --watch, a window of them moving. The cube's lines until the renderer
+// draws meshes: this requirement stays open until E5, when this renders one, draws over it, and reads
+// back a pixel of each.
+
+Import std.collections
+Import std.core
+From std.image Import Image, Png, ResizeFilter
+Import std.io
+Import std.math
+Import std.os
+Import fbengine
+
+Global background: Color32 = Color32(24, 28, 36, 255)
+Global key: Color32 = Color32(255, 0, 255, 255)
+
+// A strip of `frames` frames, 8 square: each key-colored, with a solid block as wide as its number.
+Function Strip(frames: Int): Image
+    Local image = Image(frames * 8, 8)
+    image.Fill(key)
+    For frame = 0 To frames - 1
+        For y = 2 To 5
+            For x = 0 To frame
+                image[frame * 8 + x, y] = Color32(255, 200, 80, 255)
+            End For
+        End For
+    End For
+    Return image
+End Function
+
+// A cube's edges, as `camera` projects them: the scene that the 2D goes over, until the renderer
+// draws meshes.
+Function DrawCube(canvas: Canvas, camera: Camera, turn: Float)
+    Local corners: Vec2?[] = []
+    For each In [(-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1), (-1, -1, 1), (1, -1, 1),
+                 (1, 1, 1), (-1, 1, 1)]
+        Local x, y, z = each
+        Local world = Vec3((x As Float) * Cos(turn) - (z As Float) * Sin(turn), y As Float,
+                           (x As Float) * Sin(turn) + (z As Float) * Cos(turn))
+        Local shown = camera.Project(world)
+        corners.Add(shown != Null ? Vec2(shown.x, shown.y) : Null)
+    End For
+    canvas.SetColor(Color32(120, 130, 150, 255))
+    For edge In [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5),
+                 (2, 6), (3, 7)]
+        Local from, to = edge
+        Local a = corners[from]
+        Local b = corners[to]
+        If a != Null && b != Null
+            canvas.DrawLine(a.x As Int32, a.y As Int32, b.x As Int32, b.y As Int32)
+        End If
+    End For
+End Function
+
+// A camera 6 back from the scene's middle, looking at it.
+Function Looking(): Camera
+    Local camera = Camera()
+    camera.SetPosition(Vec3(0.0, 0.0, 6.0))
+    camera.PointAt(Vec3(0.0, 0.0, 0.0))
+    Return camera
+End Function
+
+Function Proved() Throws GraphicsError, IOError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+    Try Graphics(320, 180)
+    Defer EndGraphics()
+    Local camera = Looking()
+    Flip()
+    Local canvas = Screen.Canvas()
+    canvas.SetColor(background)
+    canvas.Clear()
+    DrawCube(canvas, camera, 0.0)
+    Local middle = camera.Project(Vec3(0.0, 0.0, 0.0))
+    Print("the scene's middle is at {middle?.x ?? -1.0}, {middle?.y ?? -1.0}")
+    Local corner = camera.Project(Vec3(-1.0, -1.0, -1.0))
+    If corner == Null Then Panic("the cube's corner is in view")
+    Try Show("a corner of the scene", [(corner.x As Int, corner.y As Int)])
+    canvas.SetBlend(Blend2D.ALPHA)
+    canvas.SetColor(Color32(255, 255, 255, 255))
+
+    // A strip's frames, each from the key color made transparent.
+    Local strip = Try Sprite2D.FromImage(Strip(4), key)
+    strip.SetFrames(8, 8)
+    canvas.Draw(strip, 10.0, 10.0, 0)
+    canvas.Draw(strip, 20.0, 10.0, 3)
+    Try Show("a frame's block, and what's keyed", [(10, 12), (11, 12)])
+    Try Show("the last frame's", [(23, 12), (24, 12)])
+
+    // A region, scaled twice, from a handle at its middle.
+    Local whole = Try Sprite2D.FromImage(Strip(4), key)
+    whole.SetRegion(24, 0, 8, 8)
+    whole.MidHandle()
+    canvas.SetScale(2.0, 2.0)
+    canvas.Draw(whole, 48.0, 18.0)
+    canvas.SetScale(1.0, 1.0)
+    Try Show("scaled from its handle", [(40, 14), (47, 14), (48, 14)])
+
+    // A quarter turn about its handle: the block that was across is down.
+    canvas.SetRotation(Deg(90))
+    canvas.Draw(whole, 70.0, 18.0)
+    canvas.SetRotation(0.0)
+    Try Show("turned a quarter", [(69, 14), (69, 17), (72, 14)])
+
+    // Shapes, added to what's there.
+    canvas.SetColor(Color32(200, 40, 40, 255))
+    canvas.DrawRect(100, 10, 10, 10)
+    canvas.DrawOval(120, 10, 10, 10)
+    canvas.DrawLine(140, 10, 149, 19)
+    Try Show("a rect, an oval's middle and corner, a line",
+             [(105, 15), (125, 15), (120, 10), (145, 15)])
+
+    // Text, in the engine's font, and its width: its pixels of full ink are its color, in its box.
+    Local font = Font.BuiltIn(16.0)
+    canvas.SetColor(Color32(255, 255, 255, 255))
+    canvas.DrawText(font, "Score", 10, 40)
+    Print("its width {font.Width("Score"):.2}, of \"ScoreScore\" {font.Width("ScoreScore"):.2}")
+    Print("its ink's the pen's {Try Inked(10, 40, 42, 20)}, beside it {Try Inked(60, 40, 20, 20)}")
+
+    // A TrueType file's, sized by its cell's height, as GDI sized them.
+    Local folder = Env.Get("FBENGINE_OWN_TEST_FONTS")
+    If folder != Null
+        Local cell = Try SizedToCell("{folder}/FbeTestText-Regular.ttf", 20.0)
+        Print("a font of a cell of 20: its ascent and descent {cell.Ascent() + cell.Descent():.1}")
+        canvas.DrawText(cell, "Hi", 90, 40)
+        Print("its ink's the pen's {Try Inked(90, 40, 30, 24)}")
+    End If
+
+    // The other key color, resized by a game's code, and at a handle anywhere.
+    Local yellow = Color32(255, 255, 0, 255)
+    Local solid = Color32(50, 90, 200, 255)
+    Local small = Image(2, 1)
+    small[0, 0] = solid
+    small[1, 0] = yellow
+    small.Resize(8, 4, ResizeFilter.NEAREST)
+    canvas.Draw(Try Sprite2D.FromImage(small, yellow), 10.0, 70.0)
+    Try Show("resized, its other key color", [(10, 70), (13, 73), (14, 70), (17, 73)])
+    Local handled = Try Sprite2D.FromImage(Strip(4), key)
+    handled.SetRegion(24, 0, 8, 8)
+    handled.SetHandle(1.0, 2.0)
+    canvas.Draw(handled, 30.0, 70.0)
+    Try Show("its block's corner at its handle", [(29, 70), (32, 73), (33, 70), (29, 69), (29, 74)])
+
+    // Frames from a file.
+    Local path = (Try Dir.Temp()) / "fbengine_proof_strip.png"
+    Try File.WriteBytes(path, Png.Encode(Strip(4)))
+    Local loaded = Try Sprite2D.FromImage(Try Image.Load(path), key)
+    Try File.Delete(path)
+    loaded.SetFrames(8, 8)
+    canvas.Draw(loaded, 50.0, 70.0, 1)
+    Try Show("frame 1 of a file", [(51, 72), (52, 72), (51, 71)])
+
+    // Whether they overlap, by rectangles, then to the pixel, the key color left out.
+    Print("rects {RectsOverlap(Rect(0.0, 0.0, 10.0, 10.0), Rect(9.0, 9.0, 2.0, 2.0))}, touching {RectsOverlap(Rect(0.0, 0.0, 10.0, 10.0), Rect(10.0, 0.0, 2.0, 2.0))}")
+    Local frames = Mask.Frames(Strip(4), 8, 8, masked: key)
+    Print("each frame's solid pixels {frames[0].SolidCount()}, {frames[3].SolidCount()}")
+    Local big = frames[3]
+    Print("a block on a block {big.Collides(Placement.At(0.0, 0.0), big, Placement.At(0.0, 1.0))}, off it {big.Collides(Placement.At(0.0, 0.0), big, Placement.At(0.0, 8.0))}")
+    // Their bounds overlap, 2 rows of nothing but key color on each.
+    Print("bounds apart by the key color: overlap {big.Overlaps(Placement.At(0.0, 0.0), big, Placement.At(0.0, 6.0))}, collide {big.Collides(Placement.At(0.0, 0.0), big, Placement.At(0.0, 6.0))}")
+    Print("a rect on its key color {big.CollidesRect(Placement.At(0.0, 0.0), Rect(5.0, 0.0, 2.0, 2.0))}, on its block {big.CollidesRect(Placement.At(0.0, 0.0), Rect(1.0, 3.0, 2.0, 2.0))}")
+End Function
+
+// The font in the file at `path` at the size GDI gave `cell` as a height: the em, whose ascent and
+// descent are the cell's height. The name and the sum are this sample's, a game's own.
+Function SizedToCell(path: String, cell: Float32): Font Throws IOError
+    Local probe = Try Font.Load(path, cell)
+    Return probe.Sized(cell * cell / (probe.Ascent() + probe.Descent()))
+End Function
+
+// Whether a pixel of `width` by `height` of the screen at `x`, `y` is the canvas's white, as text's
+// full ink is.
+Function Inked(x: Int, y: Int, width: Int, height: Int): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    For down = y To y + height - 1
+        For across = x To x + width - 1
+            If image[across, down] == Color32(255, 255, 255, 255) Then Return True
+        End For
+    End For
+    Return False
+End Function
+
+// Prints the screen's pixels at `points`: what's behind says so, and what's drawn its color.
+Function Show(what: String, points: (Int, Int)[]) Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local said: String[] = []
+    For each In points
+        Local x, y = each
+        said.Add(image[x, y] == background ? "behind" : "{image[x, y]}")
+    End For
+    Print("{what}: {said.Join(", ")}")
+End Function
+
+// A window of them moving; or `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("sprites over a scene: Escape ends it")
+    Frame.SetLimit(60)
+    Local camera = Looking()
+    Local strip = Try Sprite2D.FromImage(Strip(4), key)
+    strip.SetFrames(8, 8)
+    strip.MidHandle()
+    Local font = Font.BuiltIn(18.0)
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        time += frames > 0 ? 0.1 : Frame.Delta() As Float
+        If Screen.Texture() == Null Then Continue
+        Local canvas = Screen.Canvas()
+        canvas.SetBlend(Blend2D.SOLID)
+        canvas.SetColor(background)
+        canvas.Clear()
+        DrawCube(canvas, camera, time)
+        canvas.SetBlend(Blend2D.ALPHA)
+        canvas.SetColor(Color32(255, 255, 255, 255))
+        Local frame = (Floor(time * 4.0) As Int32) % 4
+        canvas.SetScale(6.0, 6.0)
+        canvas.Draw(strip, 120.0, 120.0, frame)
+        canvas.SetRotation(time)
+        canvas.Draw(strip, 400.0, 225.0, 3)
+        canvas.SetRotation(0.0)
+        canvas.SetScale(1.0, 1.0)
+        canvas.SetColor(Color32(200, 40, 40, 160))
+        canvas.DrawOval(600, 80, 120, 80)
+        canvas.DrawRect(600, 200, 120, 80)
+        canvas.SetColor(Color32(230, 232, 235, 255))
+        canvas.DrawText(font, "2D over the scene: a strip's frames, turned, faded shapes, and text",
+                        16, 416)
+    End While
+    Print("watched {count} frames")
+End Function
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try Watched(Asked(arguments), arguments)
+Else
+    Try Proved()
+End If

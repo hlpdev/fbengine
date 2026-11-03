@@ -1,0 +1,147 @@
+// What E10 was to do, together: Jolt's sample scenes stay stable, deterministic runs repeat, and
+// bodies drive entities. A pyramid, a wall, a chain, and a crate on a lift, each piece an entity's,
+// stepped for ten seconds of frames by Update, twice over.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import fbengine
+Import fbengine_physics
+
+// A body of `shape` kept with an entity of its own, made at `at`.
+Function Shown(world: PhysicsWorld, shape: Shape, motion: Motion, at: Vec3, turned: Quat): Body
+    Local entity = Pivot()
+    entity.SetPosition(at)
+    entity.SetRotation(turned)
+    Return Body(world, shape, motion, entity)
+End Function
+
+Function Shown(world: PhysicsWorld, shape: Shape, motion: Motion, at: Vec3): Body =>
+    Shown(world, shape, motion, at, Quat.Identity)
+
+Function Pyramid(world: PhysicsWorld, standing: Body[], starts: Vec3[])
+    Local box = Shape.Box(Vec3(1, 1, 1))
+    For layer = 0 To 9
+        For i = 0 To 9 - layer
+            Local at = Vec3((i As Float) - ((9 - layer) As Float) / 2, 0.5 + (layer As Float), 0)
+            standing.Add(Shown(world, box, Motion.DYNAMIC, at))
+            starts.Add(at)
+        End For
+    End For
+End Function
+
+Function Wall(world: PhysicsWorld, standing: Body[], starts: Vec3[])
+    Local brick = Shape.Box(Vec3(1, 0.5, 0.5))
+    For row = 0 To 7
+        Local offset = (row % 2) == 0 ? 0.0 : 0.5
+        For i = 0 To 11 - (row % 2)
+            Local at = Vec3((i As Float) + offset - 6, 0.25 + (row As Float) * 0.5, 20)
+            standing.Add(Shown(world, brick, Motion.DYNAMIC, at))
+            starts.Add(at)
+        End For
+    End For
+End Function
+
+// Twenty links of 0.5 m along X from a hook at (-30, 20, 0), each held to the last at their ends.
+Const LINK: Float = 0.5
+
+Function Hook(): Vec3 => Vec3(-30, 20, 0)
+
+Function Chain(world: PhysicsWorld): Body[]
+    Local link = Shape.Capsule(LINK, 0.05)
+    // A quarter turn about Z, as its digits, not a sine's, which a target's libm could round apart.
+    Local turned = Quat(0, 0, 0.70710678, 0.70710678)
+    Local links: Body[] = []
+    For i = 0 To 19
+        Local along = Hook() + Vec3((i As Float) * LINK, 0, 0)
+        Local made = Shown(world, link, Motion.DYNAMIC, along + Vec3(LINK / 2, 0, 0), turned)
+        Joint.Point(made, i == 0 ? Null : links[i - 1], along)
+        links.Add(made)
+    End For
+    Return links
+End Function
+
+// What a run of the scene ends with: where every entity's been left, and how fast its body goes,
+// to the bit, and its StateHash. Not a Save's bytes, which hold the world's handles, another world's
+// being others.
+Function Played(): (String, UInt64)
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Body(world, Shape.Box(Vec3(100, 1, 100)), Motion.STATIC, Vec3(0, -0.5, 0))
+    Local standing: Body[] = []
+    Local starts: Vec3[] = []
+    Pyramid(world, standing, starts)
+    Wall(world, standing, starts)
+    Local links = Chain(world)
+    // A lift the game moves, which its body follows, and a crate that rides it up 3 m in 2 s.
+    Local lift = Pivot()
+    lift.SetPosition(Vec3(20, 0.5, 0))
+    Body(world, Shape.Box(Vec3(4, 1, 4)), Motion.KINEMATIC, lift)
+    Local crate = Shown(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(20, 1.5, 0))
+    For frame = 1 To 600
+        If frame <= 120 Then lift.SetPosition(Vec3(20, 0.5 + (frame As Float) * 0.025, 0))
+        world.Update(1.0 / 60)
+    End For
+    Expect(!world.Overflowed())
+    // The pyramid and the wall stand, at rest.
+    For i = 0 To standing.Count - 1
+        Local moved = Distance(standing[i].Position(), starts[i])
+        Expect(moved < 0.05, "piece {i} moved {moved} m, to {standing[i].Position()}")
+        Local turned = standing[i].Rotation()
+        Local tilt = Sqrt(turned.x * turned.x + turned.y * turned.y + turned.z * turned.z)
+        Expect(tilt < 0.01, "piece {i} is turned by {tilt}")
+        Expect(!standing[i].Active(), "piece {i} is awake")
+    End For
+    // The chain's still on its hook, and however it's swinging, no further from it than it's long,
+    // the links end to end.
+    Expect(Distance(links[0].Position(), Hook()) < 0.3, "its first link's at {links[0].Position()}")
+    Local reach = Distance(links[19].Position(), Hook())
+    Expect(reach < 20 * LINK + 0.1, "its end's {reach} m from the hook")
+    Expect(links[19].Position().y > 9, "its end is at {links[19].Position()}")
+    For i = 1 To 19
+        Local apart = Distance(links[i].Position(), links[i - 1].Position())
+        Expect(Abs(apart - 0.5) < 0.05, "links {i - 1} and {i} are {apart} apart")
+    End For
+    // The crate's on the lift, 3 m up.
+    Expect(Abs(crate.Position().y - 4.5) < 0.1, "the crate's at {crate.Position()}")
+    Expect(Abs(crate.Position().x - 20) < 0.1, "the crate's at {crate.Position()}")
+    // Every entity's where its body is, at the last step's end.
+    Local where = ""
+    For bodies In [standing, links, [crate]]
+        For body In bodies
+            Local entity = body.Attached()
+            If entity == Null
+                Fail("a body's lost its entity")
+                Continue
+            End If
+            Expect(entity.Position(Space.WORLD) == body.Position(),
+                   "an entity's at {entity.Position(Space.WORLD)}, its body at {body.Position()}")
+            Expect(IsClose(entity.Rotation(Space.WORLD), body.Rotation()))
+            where +=
+                " {entity.Position(Space.WORLD)} {entity.Rotation(Space.WORLD)} {body.Velocity()}"
+        End For
+    End For
+    Return (where, world.StateHash())
+End Function
+
+Function Golden(text: String): Int64
+    Local hash: Int64 = 7
+    For byte In text.Bytes
+        hash = (hash * 131 + (byte As Int64)) % 2147483647
+    End For
+    Return hash
+End Function
+
+@Test @MainThread
+Function JoltsScenesStandAndRepeatAndDriveTheirEntities()
+    Local stage = World()
+    World.SetCurrent(stage)
+    Defer stage.Free()
+    Local first, firstHash = Played()
+    Local second, secondHash = Played()
+    Expect(first == second, "a second run ended elsewhere")
+    Expect(firstHash == secondHash, "a second run hashed otherwise")
+    // And where any run's ended, on any target, in any process.
+    Expect(Golden(first) == 2139276039, "it ended at {Golden(first)}")
+End Function

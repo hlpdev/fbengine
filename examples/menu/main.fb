@@ -253,7 +253,7 @@ End Function
 
 // A window for a person to watch, walking a step every 0.7 seconds, to its end; or `frames` frames,
 // offscreen, a step each, as a test walks it.
-Function Watched(frames: Int) Throws GraphicsError
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Window.SetHeadless(frames > 0)
     Try Graphics(1024, 576)
     Defer EndGraphics()
@@ -268,11 +268,10 @@ Function Watched(frames: Int) Throws GraphicsError
     Local sawConsole = False
     Local sawMenu = False
     While !Window.Closed() && (frames == 0 || count < frames)
-        // Escape's the options' way back, the console's and the game's to the menu, then the end.
-        If KeyHit(Key.ESCAPE) && game.menu.Visible() Then Break
-        If KeyHit(Key.ESCAPE) && game.hud.Visible() Then game.ToMenu()
+        Local onMenu = game.menu.Visible()
         waited += Frame.Delta()
         count += 1
+        Try Driven(arguments, count)
         Local stepping = frames > 0 || waited >= 0.7
         game.Step(Function()
             If !stepping Then Return
@@ -280,6 +279,10 @@ Function Watched(frames: Int) Throws GraphicsError
             step += 1
         End Function)
         If stepping Then waited = 0.0
+        // Escape's the options' way back, which the step did, the game's to the menu, and the
+        // menu's, if it was on it already, the end.
+        If KeyHit(Key.ESCAPE) && onMenu Then Break
+        If KeyHit(Key.ESCAPE) && game.hud.Visible() Then game.ToMenu()
         sawOptions = sawOptions || game.settings.Visible()
         sawPlaying = sawPlaying || game.hud.Visible()
         sawConsole = sawConsole || game.console.Visible()
@@ -287,6 +290,15 @@ Function Watched(frames: Int) Throws GraphicsError
     End While
     game.ui.Unroute(game.controls)
     Print("watched {count} frames: options {sawOptions}, playing {sawPlaying}, console {sawConsole}, menu again {sawMenu}")
+End Function
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
 End Function
 
 // How many frames `arguments` asks for after --frames, 0 for no end.
@@ -308,7 +320,7 @@ End Function
 
 Local arguments = Process.Arguments()
 If arguments.Contains("--watch")
-    Try Watched(Asked(arguments))
+    Try Watched(Asked(arguments), arguments)
 Else
     Try Played()
 End If

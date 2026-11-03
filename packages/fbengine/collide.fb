@@ -6,6 +6,7 @@ Import std.ffi
 Import std.image
 Import std.math
 Import "./c/fbe_collide"
+Import "./sprite2d"
 Import "./texture"
 Import "./window"
 
@@ -52,10 +53,12 @@ Public Final Class Mask Implements Printable
     End Method
 
     /// A mask of `image`'s pixels, each solid whose alpha is `threshold` or more, 1 at first for
-    /// every one that shows; or of `region` of it, as a frame of a sheet. Panics for a threshold
-    /// outside 1 to 255, or a region that isn't whole pixels inside the image.
+    /// every one that shows; or of `region` of it, as a frame of a sheet; every pixel of exactly
+    /// `masked`'s red, green, and blue isn't solid, as Sprite2D.FromImage draws it. Panics for a
+    /// threshold outside 1 to 255, or a region that isn't whole pixels inside the image.
     @MainThread Public Static Method FromImage(image: Image, threshold: Int32 = 1,
-                                               region: Rect? = Null): Mask
+                                               region: Rect? = Null, masked: Color32? = Null): Mask
+        If masked != Null Then Return FromImage(Keyed(image, masked), threshold, region)
         Local part = region ?? Rect(0.0, 0.0, image.Width As Float32, image.Height As Float32)
         // Checked as Float64s, before any's an integer, so none of it overflows.
         Local left = part.X As Float64
@@ -112,19 +115,20 @@ Public Final Class Mask Implements Printable
     End Method
 
     /// A mask of each frame of a sheet, cells `cellWidth` by `cellHeight` from its top left, left
-    /// to right then down, a cell that's cut off left out, as Sprite.SetFrames cuts them. Panics
-    /// for a cell that isn't 1 pixel or more.
+    /// to right then down, a cell that's cut off left out, as Sprite.SetFrames cuts them; `masked`
+    /// as FromImage's. Panics for a cell that isn't 1 pixel or more.
     @MainThread Public Static Method Frames(image: Image, cellWidth: Int32, cellHeight: Int32,
-                                            threshold: Int32 = 1): Mask[]
+                                            threshold: Int32 = 1, masked: Color32? = Null): Mask[]
         If cellWidth < 1 || cellHeight < 1
             Panic("Mask.Frames: a cell is 1 pixel or more across and down, not {cellWidth} by {cellHeight}")
         End If
+        Local sheet = masked != Null ? Keyed(image, masked) : image
         Local frames: Mask[] = []
         For row = 0 To image.Height / cellHeight - 1
             For column = 0 To image.Width / cellWidth - 1
                 Local cell = Rect((column * cellWidth) As Float32, (row * cellHeight) As Float32,
                                   cellWidth As Float32, cellHeight As Float32)
-                frames.Add(FromImage(image, threshold, cell))
+                frames.Add(FromImage(sheet, threshold, cell))
             End For
         End For
         Return frames

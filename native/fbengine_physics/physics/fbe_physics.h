@@ -200,6 +200,11 @@ FBE_PHYSICS_API int64_t fbe_physics_save(uint64_t world, double carried);
 // isn't a world.
 FBE_PHYSICS_API int64_t fbe_physics_saved(uint64_t world, uint8_t* bytes, int64_t capacity);
 
+// Sets `hash` to a hash of what fbe_physics_save holds of `world`, with `carried`, but for the
+// handles in it, so worlds made and stepped alike have the same whatever else the program's made.
+// False, saying why, for a world that's gone.
+FBE_PHYSICS_API bool fbe_physics_state_hash(uint64_t world, double carried, uint64_t* hash);
+
 // Restores `world` from the `size` bytes of a state at `bytes`, putting what it carried in
 // `carried`; false, leaving the world as it was, if they aren't the state of this world's bodies,
 // joints, and characters as they are, saved by this version of fbengine_physics, as it saved

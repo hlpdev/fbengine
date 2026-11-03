@@ -495,6 +495,21 @@ Public Final Class PhysicsWorld
         Return PhysicsState(saved.ToArray())
     End Method
 
+    /// A hash of all a Save holds but its handles, so two worlds made and stepped by the same calls
+    /// have the same, wherever they are, unless they've gone apart, by as little as a bit, as
+    /// games played in lockstep can compare to know they have. It's no use between versions of
+    /// fbengine_physics, or of the bytes of a PhysicsState.
+    @MainThread Public Method StateHash(): UInt64
+        Local world = Live("PhysicsWorld.StateHash")
+        Local hash: UInt64 = 0
+        Local ok = False
+        Unsafe
+            ok = fbe_physics_state_hash(world, owed, AddressOf(hash))
+        End Unsafe
+        If !ok Then Panic("PhysicsWorld.StateHash: {LastError()}")
+        Return hash
+    End Method
+
     /// Puts the world back as it was when `state` was saved, its bodies, joints, and characters
     /// where they were and moving as they were, so its steps go on exactly as they did from there.
     /// It's a PhysicsStateError, leaving the world as it is, if the state isn't this world's, the

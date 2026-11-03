@@ -72,6 +72,7 @@ Public Extern "C" Lib "fbengine_physics_native"
                                  bodies: Ptr<UInt64>, capacity: Int32): Int32
     Function fbe_physics_save(world: UInt64, carried: Float64): Int64
     Function fbe_physics_saved(world: UInt64, bytes: Ptr<UInt8>, capacity: Int64): Int64
+    Function fbe_physics_state_hash(world: UInt64, carried: Float64, hash: Ptr<UInt64>): Bool
     Function fbe_physics_restore(world: UInt64, bytes: Ptr<UInt8>, size: Int64,
                                  carried: Ptr<Float64>): Bool
     Function fbe_physics_began(world: UInt64, contacts: Ptr<fbe_physics_contact_t>,

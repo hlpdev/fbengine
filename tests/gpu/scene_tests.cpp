@@ -942,6 +942,12 @@ TEST_CASE("a geometry changed is drawn changed, and one freed is let go of", "[g
 
 TEST_CASE("a lightmapped, fogged, lit room matches its golden image", "[gpu][scene][golden]") {
     const scene_t scene;
+    // Off to a side and a little turned, so nothing in the room's square to it: with the camera in
+    // the middle, the checks' edges land on pixels' centers, where a driver's rounding picks a
+    // side.
+    require(fbe_entity_set_position(scene.camera, 0.137F, 0.071F, -0.21F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_rotation(scene.camera, 0.0123F, 0.0271F, 0.0057F, 0.99954F,
+                                    FBE_SPACE_WORLD));
     require(fbe_camera_set_clear_color(scene.camera, 0.02F, 0.02F, 0.04F, 1.0F));
     require(fbe_camera_set_fog_mode(scene.camera, FBE_FOG_LINEAR));
     require(fbe_camera_set_fog_range(scene.camera, 4.0F, 30.0F));

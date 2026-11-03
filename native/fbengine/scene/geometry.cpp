@@ -717,8 +717,8 @@ FBE_API bool fbe_surface_clear(uint64_t geometry, int32_t surface, bool vertices
     found->indices.clear();
     if (vertices) {
         found->vertices.clear();
-        found->targets.clear();
         found->joints.clear();
+        found->targets.clear();
     }
     fbe::scene::touch_geometry(geometry_slot(geometry), true);
     return true;
