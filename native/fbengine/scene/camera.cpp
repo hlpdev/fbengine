@@ -74,35 +74,89 @@ void half_extents(const camera_t& camera, const view_t& view, float& half_width,
     half_width = view.sized ? half_height * (view.width / view.height) : half_height;
 }
 
-/// Whether some of the points might be in view: not all of them behind one of the view's six
-/// planes, near and far included.
-bool in_view(const camera_t& camera, const view_t& view, const vec3_t* points, std::size_t count) {
+frustum_t frustum_of(const camera_t& camera, const view_t& view) {
     float half_width = 0.0F;
     float half_height = 0.0F;
     half_extents(camera, view, half_width, half_height);
-    const bool perspective = camera.projection == FBE_PROJECTION_PERSPECTIVE;
-    const quat_t back = inverse(view.rotation);
-    // How far in front of each plane each point is, by plane: near, far, left, right, bottom, top.
-    std::array<bool, 6> all_behind{ true, true, true, true, true, true };
-    for (std::size_t i = 0; i < count; ++i) {
-        const vec3_t offset = points[i] - view.position;
-        const vec3_t seen = back * offset;
-        const float depth = -seen.z;
-        const float across = perspective ? half_width * depth : half_width;
-        const float up = perspective ? half_height * depth : half_height;
-        const std::array<float, 6> in_front{
-            depth - camera.nearest,
-            camera.farthest - depth,
-            seen.x + across,
-            across - seen.x,
-            seen.y + up,
-            up - seen.y,
-        };
-        for (std::size_t plane = 0; plane < 6; ++plane) {
-            all_behind[plane] = all_behind[plane] && in_front[plane] < 0.0F;
+    const vec3_t right = view.rotation * vec3_t(1.0F, 0.0F, 0.0F);
+    const vec3_t up = view.rotation * vec3_t(0.0F, 1.0F, 0.0F);
+    const vec3_t forward = view.rotation * vec3_t(0.0F, 0.0F, -1.0F);
+    frustum_t frustum;
+    frustum.eye = view.position;
+    frustum.normals[0] = forward;
+    frustum.distances[0] = -camera.nearest;
+    frustum.normals[1] = -forward;
+    frustum.distances[1] = camera.farthest;
+    if (camera.projection == FBE_PROJECTION_PERSPECTIVE) {
+        frustum.normals[2] = right + forward * half_width;
+        frustum.normals[3] = forward * half_width - right;
+        frustum.normals[4] = up + forward * half_height;
+        frustum.normals[5] = forward * half_height - up;
+    } else {
+        frustum.normals[2] = right;
+        frustum.distances[2] = half_width;
+        frustum.normals[3] = -right;
+        frustum.distances[3] = half_width;
+        frustum.normals[4] = up;
+        frustum.distances[4] = half_height;
+        frustum.normals[5] = -up;
+        frustum.distances[5] = half_height;
+    }
+    return frustum;
+}
+
+bool in_frustum(const frustum_t& frustum, const vec3_t* points, std::size_t count) {
+    for (std::size_t side = 0; side < frustum.normals.size(); ++side) {
+        bool all_behind = true;
+        for (std::size_t i = 0; i < count && all_behind; ++i) {
+            const vec3_t offset = points[i] - frustum.eye;
+            all_behind = dot(offset, frustum.normals[side]) + frustum.distances[side] < 0.0F;
+        }
+        if (all_behind) {
+            return false;
         }
     }
-    return std::ranges::none_of(all_behind, [](bool behind) { return behind; });
+    return true;
+}
+
+bool box_in_frustum(const frustum_t& frustum, vec3_t min, vec3_t max) {
+    for (std::size_t side = 0; side < frustum.normals.size(); ++side) {
+        // Its corner furthest in front of the side: if that's behind, they all are.
+        const vec3_t normal = frustum.normals[side];
+        const vec3_t corner(normal.x >= 0.0F ? max.x : min.x, normal.y >= 0.0F ? max.y : min.y,
+                            normal.z >= 0.0F ? max.z : min.z);
+        const vec3_t offset = corner - frustum.eye;
+        if (dot(offset, normal) + frustum.distances[side] < 0.0F) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Whether some of the points might be in view: not all of them behind one of the view
+/// planes, near and far included.
+bool in_view(const camera_t& camera, const view_t& view, const vec3_t* points, std::size_t count) {
+    return in_frustum(frustum_of(camera, view), points, count);
+}
+
+std::uint32_t lod_for(std::uint32_t geometry, vec3_t center, float radius, const camera_t& camera,
+                      vec3_t eye, float half_height) {
+    const std::vector<lod_t>& lods = scene().geometries[geometry].lods;
+    if (lods.empty()) {
+        return geometry;
+    }
+    float share = radius / half_height;
+    if (camera.projection == FBE_PROJECTION_PERSPECTIVE) {
+        share /= std::fmax(length(center - eye), camera.nearest);
+    }
+    std::uint32_t drawn = geometry;
+    for (const lod_t& lod : lods) {
+        if (share >= lod.share) {
+            break;
+        }
+        drawn = lod.geometry;
+    }
+    return drawn;
 }
 
 void add_camera(std::uint32_t entity) {
@@ -280,6 +334,20 @@ FBE_API float fbe_camera_nearest(uint64_t camera) {
 FBE_API float fbe_camera_farthest(uint64_t camera) {
     const camera_t* found = camera_of(camera);
     return found != nullptr ? found->farthest : 0.0F;
+}
+
+FBE_API bool fbe_camera_set_occlusion(uint64_t camera, bool occlusion) {
+    camera_t* found = fbe::scene::camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    found->occlusion = occlusion;
+    return true;
+}
+
+FBE_API bool fbe_camera_occlusion(uint64_t camera) {
+    const camera_t* found = fbe::scene::camera_of(camera);
+    return found != nullptr && found->occlusion;
 }
 
 FBE_API bool fbe_camera_set_viewport(uint64_t camera, float x, float y, float width, float height) {
@@ -577,7 +645,8 @@ FBE_API int32_t fbe_camera_entity_in_view(uint64_t camera, float target_width, f
             fbe::scene::transform_normal(m, fbe::scene::vec3_t(0.0F, 1.0F, 0.0F));
         return fbe::scene::plane_in_view(*found, view, m.axis(3), up) ? 1 : 0;
     }
-    if (s.entities.kind[slot] == FBE_ENTITY_PARTICLES) {
+    if (s.entities.kind[slot] == FBE_ENTITY_INSTANCES ||
+        s.entities.kind[slot] == FBE_ENTITY_PARTICLES) {
         fbe_aabb_t box{};
         if (!fbe_entity_bounds(entity, &box)) {
             return -1;

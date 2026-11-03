@@ -97,8 +97,8 @@ FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds) {
     }
     vec3_t min;
     vec3_t max;
-    vec3_t spread_min;
-    vec3_t spread_max;
+    vec3_t local_box_min;
+    vec3_t local_box_max;
     const fbe::scene::scene_t& s = scene();
     if (s.entities.kind[slot] == FBE_ENTITY_PLANE) {
         // It goes on forever, as collisions and picks find it.
@@ -115,12 +115,17 @@ FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds) {
         fbe::scene::world_box(slot, local_min, local_max, world_min, world_max);
         min = world_min;
         max = world_max;
+    } else if (s.entities.kind[slot] == FBE_ENTITY_INSTANCES &&
+               fbe::scene::instances_bounds(
+                   fbe::scene::scene().instances[s.entities.component[slot]], local_box_min,
+                   local_box_max)) {
+        fbe::scene::world_box(slot, local_box_min, local_box_max, min, max);
     } else if (s.entities.kind[slot] == FBE_ENTITY_PARTICLES &&
-               fbe::scene::particles_bounds(s.particles[s.entities.component[slot]], spread_min,
-                                            spread_max)) {
+               fbe::scene::particles_bounds(s.particles[s.entities.component[slot]], local_box_min,
+                                            local_box_max)) {
         // Particles are in the world, however their emitter's turned.
-        min = spread_min;
-        max = spread_max;
+        min = local_box_min;
+        max = local_box_max;
     } else if (s.entities.kind[slot] == FBE_ENTITY_SPRITE) {
         fbe::scene::sprite_bounds(slot, min, max);
     } else if (s.entities.kind[slot] == FBE_ENTITY_TERRAIN) {
@@ -134,6 +139,20 @@ FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds) {
     }
     *bounds = { .min = fbe::scene::c_vec(min), .max = fbe::scene::c_vec(max) };
     return true;
+}
+
+FBE_API bool fbe_entity_set_occluder(uint64_t entity, bool occluder) {
+    const std::uint32_t slot = fbe::scene::entity_slot(entity);
+    if (slot == none) {
+        return false;
+    }
+    scene().entities.occluder[slot] = occluder;
+    return true;
+}
+
+FBE_API bool fbe_entity_occluder(uint64_t entity) {
+    const std::uint32_t slot = fbe::scene::entity_slot(entity);
+    return slot != none && scene().entities.occluder[slot];
 }
 
 FBE_API bool fbe_entity_set_casts_shadows(uint64_t entity, bool casts) {

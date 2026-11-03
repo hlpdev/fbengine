@@ -182,6 +182,8 @@ struct caster_t {
     float radius = 0.0F;
     std::uint32_t entity = none;
     bool fades = false;
+    std::uint32_t instance_first = 0;
+    std::uint32_t instance_count = 0;
 };
 
 /// The key of a caster's pipeline, as fbe_render.h lays its bits out: only what the shadow pass
@@ -227,8 +229,10 @@ gathered_t& gathered() {
 }
 
 /// Every mesh surface and terrain of a world that casts, sorted so what can go together does. A
-/// material's only there for a cut-out, which is all that reads one.
-bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
+/// material's only there for a cut-out, which is all that reads one. A mesh with levels of detail
+/// casts what the camera draws of it, so those aren't kept between cameras.
+bool gather_casters(const scene::camera_t& camera, const scene::view_t& view, std::uint32_t world,
+                    const scene::tweened_t& tweened) {
     gathered_t& found = gathered();
     if (found.have && found.world == world && found.tween == tweened.tween()) {
         return true;
@@ -237,6 +241,10 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
     casters.clear();
     found.sampled.clear();
     const scene::scene_t& s = scene::scene();
+    float half_width = 0.0F;
+    float half_height = 0.0F;
+    scene::half_extents(camera, view, half_width, half_height);
+    bool any_lods = false;
     std::vector<material_data_t> materials;
     std::unordered_map<std::uint32_t, std::uint32_t> material_index;
     std::unordered_map<std::uint32_t, std::pair<VkDeviceAddress, std::uint32_t>> palettes;
@@ -261,7 +269,6 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
             continue;
         }
         const mat4_t matrix = tweened.pose(mesh.entity).matrix;
-        const scene::geometry_t& geometry = s.geometries[mesh.geometry];
         vec3_t low;
         vec3_t high;
         scene::geometry_bounds(mesh.geometry, low, high);
@@ -282,6 +289,13 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
             center = both_joints * 0.5F;
             radius += (scene::length(joints_high - joints_low) * 0.5F) + radius;
         }
+        any_lods = any_lods || !s.geometries[mesh.geometry].lods.empty();
+        const std::uint32_t drawn =
+            scene::lod_for(mesh.geometry, center, radius, camera, view.position, half_height);
+        if (drawn == none) {
+            continue;
+        }
+        const scene::geometry_t& geometry = s.geometries[drawn];
         for (std::size_t surface = 0; surface < geometry.surfaces.size(); ++surface) {
             if (geometry.surfaces[surface].indices.empty()) {
                 continue;
@@ -294,7 +308,7 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
                 continue;
             }
             const surface_buffers_t* buffers =
-                surface_buffers(s.geometry_slots.handle(mesh.geometry), surface);
+                surface_buffers(s.geometry_slots.handle(drawn), surface);
             if (buffers == nullptr) {
                 return false;
             }
@@ -353,6 +367,58 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
             casters.push_back(caster);
         }
     }
+    for (scene::instances_t& found_instances : scene::scene().instances) {
+        if (found_instances.geometry == none || !casts(found_instances.entity)) {
+            continue;
+        }
+        const mat4_t matrix = tweened.pose(found_instances.entity).matrix;
+        const std::vector<scene::instance_cluster_t>& clusters =
+            scene::instance_clusters(found_instances);
+        const VkDeviceAddress records = instances_buffer(found_instances);
+        if (records == 0) {
+            return false;
+        }
+        const scene::geometry_t& geometry = s.geometries[found_instances.geometry];
+        const float scale =
+            std::fmax(std::fmax(scene::length(matrix.axis(0)), scene::length(matrix.axis(1))),
+                      scene::length(matrix.axis(2)));
+        for (std::size_t surface = 0; surface < geometry.surfaces.size(); ++surface) {
+            const std::uint32_t slot = found_instances.material != none
+                                           ? found_instances.material
+                                           : geometry.surfaces[surface].material;
+            const scene::material_t& material = slot != none ? s.materials[slot] : standard;
+            if (material.order != 0 || scene::drawn_blend(slot, 1.0F) != FBE_BLEND_OPAQUE) {
+                continue;
+            }
+            const surface_buffers_t* buffers =
+                surface_buffers(s.geometry_slots.handle(found_instances.geometry), surface);
+            if (buffers == nullptr) {
+                return false;
+            }
+            if (buffers->index_count == 0) {
+                continue;
+            }
+            for (const scene::instance_cluster_t& cluster : clusters) {
+                const vec3_t both = cluster.low + cluster.high;
+                caster_t caster;
+                caster.data.to_view = matrix.m;
+                caster.data.color = { 1.0F, 1.0F, 1.0F, 1.0F };
+                caster.data.vertices = buffers->vertices.address;
+                caster.data.instances = records;
+                caster.data.material = index_of(slot, material);
+                caster.key = caster_key(material) | (std::uint64_t{ 1 } << 51U);
+                caster.indices = buffers->indices.buffer;
+                caster.index_count = buffers->index_count;
+                caster.center = scene::transform_point(matrix, both * 0.5F);
+                caster.radius = scene::length(cluster.high - cluster.low) * 0.5F * scale;
+                caster.entity = found_instances.entity;
+                caster.fades = s.entities.fade_far[found_instances.entity] > 0.0F;
+                caster.instance_first = cluster.first;
+                caster.instance_count = cluster.count;
+                casters.push_back(caster);
+            }
+        }
+    }
     for (const scene::terrain_t& terrain : s.terrains) {
         if (!casts(terrain.entity) || terrain.tint[3] < 1.0F) {
             continue;
@@ -406,7 +472,7 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
     if (failed) {
         return false;
     }
-    found.have = found.keep;
+    found.have = found.keep && !any_lods;
     found.world = world;
     found.tween = tweened.tween();
     return true;
@@ -742,7 +808,7 @@ bool draw_shadows(const scene::camera_t& camera, std::span<const scene::view_t> 
         }
         most = side / 2;
     }
-    if (!gather_casters(world, tweened)) {
+    if (!gather_casters(camera, views.back(), world, tweened)) {
         return false;
     }
     const std::vector<caster_t>& casters = gathered().casters;
@@ -831,7 +897,7 @@ bool draw_shadows(const scene::camera_t& camera, std::span<const scene::view_t> 
                 if (!seen) {
                     continue;
                 }
-                if (!view_batches.batches.empty()) {
+                if (!view_batches.batches.empty() && caster.instance_count == 0) {
                     batch_t& last = view_batches.batches.back();
                     if (last.key == caster.key && last.indices == caster.indices &&
                         last.index_offset == caster.index_offset &&
@@ -847,6 +913,8 @@ bool draw_shadows(const scene::camera_t& camera, std::span<const scene::view_t> 
                 batch.index_offset = caster.index_offset;
                 batch.index_count = caster.index_count;
                 batch.first_draw = i;
+                batch.instance_first = caster.instance_first;
+                batch.instance_count = caster.instance_count;
                 view_batches.batches.push_back(batch);
             }
             pass->views.push_back(std::move(view_batches));

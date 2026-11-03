@@ -1,0 +1,123 @@
+// Instances: one entity drawing a Geometry many times over, in bulk, for what an entity each would
+// cost too much for: grass, debris, a crowd's props.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_scene"
+Import "./entity"
+Import "./geometry"
+Import "./material"
+Import "./window"
+
+/// One of an Instances': where it is, in the entity's space, and its color, which multiplies its
+/// Material's and its Geometry's vertex colors, and its alpha.
+Public Struct Instance
+    Public Field Matrix: Mat4
+    Public Field Color: Color
+
+    Public New(matrix: Mat4, color: Color)
+        Matrix = matrix
+        Color = color
+    End New
+
+    /// One at a matrix, in white.
+    Public Static Method At(matrix: Mat4): Instance => Instance(matrix, WhiteColor())
+End Struct
+
+/// An entity that draws a Geometry many times over, each Instance with its own matrix and color.
+/// Those out of view go a cluster at a time, near each other as they're set, so the CPU's cost is
+/// far below an entity each. A matrix mustn't mirror: it'd show its back. A Geometry with a skin or
+/// morph targets draws as its vertices are; what blends isn't sorted among itself.
+Public Final Class Instances Extends Entity
+    /// A new Instances drawing `geometry`, or nothing for Null, with none of them yet, the last
+    /// child of `parent`, or at the top of the current World when `parent` is Null.
+    @MainThread @PanicsAtCaller
+    Public New(geometry: Geometry?, parent: Entity? = Null)
+        Super.New(Create(parent, FBE_ENTITY_INSTANCES))
+        SetGeometry(geometry)
+    End New
+
+    Package New(handle: UInt64)
+        Super.New(handle)
+    End New
+
+    Override Package Method KindName(): String => "Instances"
+
+    /// Makes it draw `geometry`, or nothing for Null.
+    @MainThread @PanicsAtCaller
+    Public Method SetGeometry(geometry: Geometry?)
+        Local drawn: UInt64 = geometry != Null ? geometry.Live("SetGeometry") : 0
+        If !fbe_instances_set_geometry(Live("SetGeometry"), drawn) Then Failed("SetGeometry")
+    End Method
+
+    /// The Geometry it draws, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Geometry(): Geometry? => GeometryOf(fbe_instances_geometry(Live("Geometry")))
+
+    /// Makes it draw in `material`, or its Geometry's surfaces' with Null.
+    @MainThread @PanicsAtCaller
+    Public Method SetMaterial(material: Material?)
+        Local drawn: UInt64 = material != Null ? material.Live("SetMaterial") : 0
+        If !fbe_instances_set_material(Live("SetMaterial"), drawn) Then Failed("SetMaterial")
+    End Method
+
+    /// What it draws in, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Material(): Material? => MaterialOf(fbe_instances_material(Live("Material")))
+
+    /// Sets all of them, at most 4194304, in place of what it had: the way to set many.
+    @MainThread @PanicsAtCaller
+    Public Method Set(all: Instance[])
+        Local taken = Buffer<fbe_instance_t>(all.Count)
+        For i, one In all
+            taken[i] = CInstanceOf(one)
+        End For
+        Local done = False
+        Unsafe
+            done = fbe_instances_set(Live("Set"), taken.Pointer(), all.Count As Int32)
+        End Unsafe
+        If !done Then Failed("Set")
+    End Method
+
+    /// How many it has.
+    @MainThread @PanicsAtCaller
+    Public Method Count(): Int => fbe_instances_count(Live("Count"))
+
+    /// Changes one, by where it was in what was Set. Its neighbors stay as they were set: to move
+    /// many far, Set them again. One it doesn't have panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetOne(index: Int, one: Instance)
+        Local given = CInstanceOf(one)
+        Local done = False
+        Unsafe
+            done = fbe_instances_set_one(Live("SetOne"), index As Int32, AddressOf(given))
+        End Unsafe
+        If !done Then Failed("SetOne")
+    End Method
+
+    /// One of them, by where it was in what was Set. One it doesn't have panics.
+    @MainThread @PanicsAtCaller
+    Public Method Get(index: Int): Instance
+        Local found = fbe_instance_t()
+        Local done = False
+        Unsafe
+            done = fbe_instances_get(Live("Get"), index As Int32, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("Get")
+        Local m = found.matrix.m
+        Return Instance(
+            Mat4(Vec4(m[0], m[1], m[2], m[3]), Vec4(m[4], m[5], m[6], m[7]),
+                 Vec4(m[8], m[9], m[10], m[11]), Vec4(m[12], m[13], m[14], m[15])),
+            Color(found.color.r, found.color.g, found.color.b, found.color.a))
+    End Method
+End Class
+
+Function WhiteColor(): Color => Color(1, 1, 1, 1)
+
+Function CInstanceOf(one: Instance): fbe_instance_t
+    Local found = fbe_instance_t()
+    found.matrix = MatrixOf(one.Matrix)
+    found.color = fbe_color_t(one.Color.r, one.Color.g, one.Color.b, one.Color.a)
+    Return found
+End Function

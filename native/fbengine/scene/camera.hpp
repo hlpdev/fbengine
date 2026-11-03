@@ -5,6 +5,7 @@
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
 
+#include <array>
 #include <cstddef>
 
 namespace fbe::scene {
@@ -29,6 +30,23 @@ bool view_of(const camera_t& camera, float target_width, float target_height, vi
 /// for an orthographic one.
 void half_extents(const camera_t& camera, const view_t& view, float& half_width,
                   float& half_height);
+
+/// A view's six sides in the world, near, far, left, right, bottom, top, for many tests of what's
+/// in it: how far in front of a side a point is, from the eye, is its normal's dot with the point's
+/// offset, plus its distance.
+struct frustum_t {
+    vec3_t eye;
+    std::array<vec3_t, 6> normals;
+    std::array<float, 6> distances{};
+};
+
+frustum_t frustum_of(const camera_t& camera, const view_t& view);
+
+/// Whether a frustum might have any of some points: false only when every one is behind one side.
+bool in_frustum(const frustum_t& frustum, const vec3_t* points, std::size_t count);
+
+/// Whether a frustum might have any of a box, along the world's axes: as in_frustum of its corners.
+bool box_in_frustum(const frustum_t& frustum, vec3_t min, vec3_t max);
 
 /// Whether a camera might see any of some points, by the six planes of its frustum: false only
 /// when every one is behind one plane.

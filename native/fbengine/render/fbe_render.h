@@ -93,7 +93,7 @@ typedef struct fbe_cluster_t {
 
 // What a camera draws in a target of this size, `tween` of the way from its World's last capture
 // to now, in the order it draws them: by their materials' orders, lower first. In order 0, the
-// scene's, what's opaque first, by pipeline, by material, and nearest first, then what blends,
+// scene's, what's opaque first, by pipeline, by geometry, and nearest first, then what blends,
 // furthest first; in the others, all furthest first, what's opaque first at one depth. Ties as the
 // entities were made, a mesh's surfaces in order. Only the showing meshes, sprites, ground planes,
 // and terrains of its World it might see, with some alpha left after their fade; none for a hidden

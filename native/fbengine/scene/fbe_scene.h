@@ -24,6 +24,7 @@ extern "C" {
 #define FBE_ENTITY_MIRROR    6
 #define FBE_ENTITY_TERRAIN   7
 #define FBE_ENTITY_PARTICLES 8
+#define FBE_ENTITY_INSTANCES 9
 
 // The space a transform is in: the entity's parent's, or the world's.
 #define FBE_SPACE_LOCAL 0
@@ -179,6 +180,13 @@ typedef struct fbe_vertex_t {
     fbe_vec2_t uv1;
     fbe_color_t color;
 } fbe_vertex_t;
+
+// An instance of an Instances entity: where it is, in the entity's space, and its color and alpha,
+// which multiply its material's and its geometry's vertex colors.
+typedef struct fbe_instance_t {
+    fbe_mat4_t matrix;
+    fbe_color_t color;
+} fbe_instance_t;
 
 // A vertex's joints, beside its fbe_vertex_t: which four of its skin's joints move it, as glTF's
 // JOINTS_0 indexes them, and how much of each, as its WEIGHTS_0. FBE_NO_JOINT is no bone, which
@@ -521,6 +529,16 @@ FBE_API uint64_t fbe_geometry_plane(int32_t segments);
 
 // A surface's vertices and triangles, by the geometry and the surface's index.
 // Adds `count` vertices and gives the first's index, -1 if it can't.
+// A geometry's levels of detail: what a mesh draws of it where it's small in its camera's view,
+// `share` being how much of the view's height its bounds' sphere takes at its distance. Each level
+// is a geometry it holds, or, with 0, drawing nothing, and has a share below the one before it. A
+// level's geometry has no levels of its own, and what has some isn't anyone's. False otherwise, or
+// for a level past the end by more than one. Collisions, picks, and bounds keep the geometry
+// itself.
+FBE_API bool fbe_geometry_set_lod(uint64_t geometry, int32_t level, uint64_t coarser, float share);
+FBE_API int32_t fbe_geometry_lod_count(uint64_t geometry);
+FBE_API bool fbe_geometry_lod(uint64_t geometry, int32_t level, uint64_t* coarser, float* share);
+FBE_API bool fbe_geometry_clear_lods(uint64_t geometry);
 FBE_API int32_t fbe_surface_add_vertices(uint64_t geometry, int32_t surface,
                                          const fbe_vertex_t* vertices, int32_t count);
 // Adds `count` indices, three to a triangle, each of a vertex the surface has, and gives the first
@@ -692,6 +710,33 @@ FBE_API bool fbe_terrain_set_material(uint64_t terrain, uint64_t material);
 FBE_API uint64_t fbe_terrain_material(uint64_t terrain);
 FBE_API bool fbe_terrain_set_tint(uint64_t terrain, float r, float g, float b, float a);
 FBE_API bool fbe_terrain_tint(uint64_t terrain, fbe_color_t* tint);
+
+// Instances: an entity that draws a geometry many times over, each with its own matrix and color,
+// in bulk, those out of view going a cluster at a time. It holds its geometry and material, 0 for
+// none, when it draws its geometry's surfaces' materials. A matrix mustn't mirror: it'd show its
+// back. A skin or a morph isn't drawn, and what blends isn't sorted among itself.
+FBE_API bool fbe_instances_set_geometry(uint64_t instances, uint64_t geometry);
+FBE_API uint64_t fbe_instances_geometry(uint64_t instances);
+FBE_API bool fbe_instances_set_material(uint64_t instances, uint64_t material);
+FBE_API uint64_t fbe_instances_material(uint64_t instances);
+// Sets all of them, 0 to 4194304, in place of what it had: the way to set many, kept in an order
+// where those near each other are together.
+FBE_API bool fbe_instances_set(uint64_t instances, const fbe_instance_t* all, int32_t count);
+FBE_API int32_t fbe_instances_count(uint64_t instances);
+// One of them, by where it was in what was set; its neighbors stay as they were set, and false for
+// one it doesn't have.
+FBE_API bool fbe_instances_set_one(uint64_t instances, int32_t index, const fbe_instance_t* one);
+FBE_API bool fbe_instances_get(uint64_t instances, int32_t index, fbe_instance_t* one);
+
+// Whether a mesh is an occluder, as it isn't at first: drawn into what each view tests what's
+// behind it against, so what's wholly behind isn't drawn, it and what it casts aside. For big,
+// plain, solid meshes: walls, floors, hills; opaque, in order 0, and neither skinned, morphed, nor
+// fading, with a few thousand triangles between a view's. Only a mesh's, by the triangles that face
+// the view. And whether a camera tests what it draws against them, as it does at first.
+FBE_API bool fbe_entity_set_occluder(uint64_t entity, bool occluder);
+FBE_API bool fbe_entity_occluder(uint64_t entity);
+FBE_API bool fbe_camera_set_occlusion(uint64_t camera, bool occlusion);
+FBE_API bool fbe_camera_occlusion(uint64_t camera);
 
 // Particles: entities that spawn them along their forward axis, each drawn as a quad facing the
 // camera, moved on the GPU by a formula from its birth, so its cost to the CPU is only its birth;

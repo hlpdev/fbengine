@@ -8,6 +8,7 @@ Import "./c/fbe_scene"
 Import "./camera"
 Import "./light"
 Import "./mesh"
+Import "./instances"
 Import "./mirror"
 Import "./particles"
 Import "./plane"
@@ -36,6 +37,8 @@ Public Enum EntityKind
     TERRAIN = 7
     /// A Particles, which spawns them.
     PARTICLES = 8
+    /// An Instances, which draws a Geometry many times over.
+    INSTANCES = 9
 End Enum
 
 // One wrapper for each live entity, by its handle's slot.
@@ -312,6 +315,8 @@ Package Function EntityOf(handle: UInt64): Entity?
             Return Terrain(handle)
         Case FBE_ENTITY_PARTICLES
             Return Particles(handle)
+        Case FBE_ENTITY_INSTANCES
+            Return Instances(handle)
     End Select
     Panic("an entity of kind {kind} has no wrapper")
 End Function

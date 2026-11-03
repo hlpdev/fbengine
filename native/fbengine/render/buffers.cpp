@@ -6,6 +6,7 @@
 #include "fbengine.h"
 #include "gpu/buffer.hpp"
 #include "gpu/vulkan.hpp"
+#include "render/drawing.hpp"
 #include "render/render.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
@@ -51,6 +52,18 @@ struct particles_buffer_t {
     std::uint64_t generation = UINT64_MAX;
 };
 
+/// An Instances entity's instances on the GPU, by its entity's handle, and the version they're of.
+struct instances_buffer_t {
+    gpu::buffer_t buffer;
+    std::uint64_t version = UINT64_MAX;
+    std::size_t count = 0;
+};
+
+std::unordered_map<std::uint64_t, instances_buffer_t>& kept_instances() {
+    static std::unordered_map<std::uint64_t, instances_buffer_t> made;
+    return made;
+}
+
 /// A terrain's coarse pieces' errors, by its entity's handle, and what they're of.
 struct coarse_errors_t {
     std::uint64_t version = UINT64_MAX;
@@ -91,6 +104,10 @@ void stop_buffers() {
         gpu::free_buffer(particles.buffer);
     }
     kept_particles().clear();
+    for (auto& [handle, instances] : kept_instances()) {
+        gpu::free_buffer(instances.buffer);
+    }
+    kept_instances().clear();
 }
 
 /// Bytes into a buffer, made anew unless it's their size: false, with fbe_error's why, if it can't.
@@ -483,8 +500,57 @@ VkDeviceAddress particles_buffer(scene::particles_t& particles) {
     return kept_one.buffer.address;
 }
 
+VkDeviceAddress instances_buffer(const scene::instances_t& instances) {
+    if (!registered) {
+        gpu::at_stop(stop_buffers);
+        registered = true;
+    }
+    const scene::scene_t& s = scene::scene();
+    instances_buffer_t& kept_one = kept_instances()[s.entities.slots.handle(instances.entity)];
+    if (kept_one.version == instances.version && kept_one.buffer.buffer != VK_NULL_HANDLE) {
+        return kept_one.buffer.address;
+    }
+    const std::size_t count = std::max<std::size_t>(instances.items.size(), 1);
+    if (kept_one.count != count || kept_one.buffer.buffer == VK_NULL_HANDLE) {
+        gpu::free_buffer(kept_one.buffer);
+        kept_one.buffer =
+            gpu::make_buffer(static_cast<VkDeviceSize>(count) * sizeof(instance_data_t),
+                             gpu::flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT));
+        if (kept_one.buffer.buffer == VK_NULL_HANDLE) {
+            return 0;
+        }
+        kept_one.count = count;
+    }
+    std::vector<instance_data_t> records;
+    records.reserve(instances.items.size());
+    for (const fbe_instance_t& one : instances.items) {
+        const float* m = one.matrix.m;
+        const std::array<float, 4> across{ m[0], m[4], m[8], m[12] };
+        const std::array<float, 4> up{ m[1], m[5], m[9], m[13] };
+        const std::array<float, 4> back{ m[2], m[6], m[10], m[14] };
+        records.push_back({
+            .rows = { across, up, back },
+            .color = { one.color.r, one.color.g, one.color.b, one.color.a },
+        });
+    }
+    if (!records.empty() &&
+        !gpu::write_buffer(kept_one.buffer, 0, std::as_bytes(std::span(records)))) {
+        return 0;
+    }
+    kept_one.version = instances.version;
+    return kept_one.buffer.address;
+}
+
 void forget_freed_geometries() {
     const scene::scene_t& s = scene::scene();
+    for (auto it = kept_instances().begin(); it != kept_instances().end();) {
+        if (!s.entities.slots.find(it->first)) {
+            gpu::free_buffer(it->second.buffer);
+            it = kept_instances().erase(it);
+        } else {
+            ++it;
+        }
+    }
     for (auto it = kept_particles().begin(); it != kept_particles().end();) {
         if (!s.entities.slots.find(it->first)) {
             gpu::free_buffer(it->second.buffer);

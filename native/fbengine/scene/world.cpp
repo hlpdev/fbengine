@@ -24,7 +24,7 @@ namespace {
 
 /// The kinds fbe_entity_create takes.
 bool valid_kind(std::int32_t kind) {
-    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_PARTICLES;
+    return kind >= FBE_ENTITY_PIVOT && kind <= FBE_ENTITY_INSTANCES;
 }
 
 /// Where an entity sits: its parent's children, or its world's roots.
@@ -75,6 +75,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.component.push_back(none);
         entities.blocks_sight.push_back(false);
         entities.casts_shadows.push_back(true);
+        entities.occluder.push_back(false);
         entities.colliders.emplace_back();
         entities.pickable.push_back(none);
         entities.captured_position.emplace_back();
@@ -93,6 +94,7 @@ std::uint32_t make_entity(std::uint32_t world, std::int32_t kind) {
         entities.hidden[entity] = false;
         entities.blocks_sight[entity] = false;
         entities.casts_shadows[entity] = true;
+        entities.occluder[entity] = false;
         entities.colliders[entity] = {};
         entities.captured[entity] = false;
         entities.fade_near[entity] = 0.0F;
@@ -604,6 +606,7 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         entities.scale[copy] = entities.scale[original];
         entities.blocks_sight[copy] = entities.blocks_sight[original];
         entities.casts_shadows[copy] = entities.casts_shadows[original];
+        entities.occluder[copy] = entities.occluder[original];
         entities.fade_near[copy] = entities.fade_near[original];
         entities.fade_far[copy] = entities.fade_far[original];
         // A copy collides as its original does, from where it is, with nothing touched yet.
