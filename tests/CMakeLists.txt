@@ -915,6 +915,53 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_panic")
   set_tests_properties(examples.audio_panic PROPERTIES TIMEOUT 60
                        PASS_REGULAR_EXPRESSION "panic: a mistake, with the audio started at [^\n]*\n.*exited with code 101")
+  # Section 6's item 15, by numbers, on no device and the null backend; --watch, for a person to
+  # hear, keeps to the null backend under --frames.
+  set(fbengine_sound_proof
+      "a Channel of a held 0.5: 0.5, 0.5"
+      "at half its volume: 0.25, 0.25"
+      "panned left: 0.5, 0"
+      "panned right: 0, 0.5"
+      "at pitch 2, a tenth of a second plays 0.2 of it"
+      "paused: 0, 0, playing True, paused True, held where it was True"
+      "resumed: 0.5, 0.5, on from there True"
+      "stopped: 0, 0, playing False"
+      "a finished Channel's volume, set: 0"
+      "64 at once at 44100 Hz: 64 playing, heard 0.5, 0.5"
+      "Ogg Vorbis decoded: streamed False, 0.25 seconds"
+      "heard True, then over True"
+      "Ogg Vorbis streamed: streamed True, 0.25 seconds"
+      "after twice its length: playing True, come round True, heard True"
+      "a stream of a held 0.5: 0.5, 0.5"
+      "at half its volume: 0.25, 0.25"
+      "panned left: 0.5, 0"
+      "paused: 0, 0, held where it was True"
+      "resumed: 0.5, 0.5"
+      "the first piece: 0.5, 0.5"
+      "half way through the crossfade: 0.375, 0.375"
+      "after it: 0.25, 0.25, the first playing False, the second True"
+      "following a car 1 ahead: 0.25, 0.25"
+      "2 ahead, twice as far: 0.125, 0.125"
+      "to the right: heard on the right"
+      "the camera turned toward it: heard ahead"
+      "the camera turned round: heard on the left"
+      "the car coming: moving toward the camera True"
+      "at half the speed of sound, a tenth of a second plays 0.2 of it"
+      "the car freed: following False, still heard True"
+      "on the null backend: played to its end True, frames mixed True"
+      )
+  list(JOIN fbengine_sound_proof "\r?\n" fbengine_sound_proof_lines)
+  add_test(NAME proof.streamed_and_positional_sound
+           COMMAND "${FBENGINE_FB}" --color never run
+                   "${PROJECT_SOURCE_DIR}/examples/proof/streamed_and_positional_sound")
+  set_tests_properties(proof.streamed_and_positional_sound PROPERTIES TIMEOUT 120
+                       PASS_REGULAR_EXPRESSION "\n${fbengine_sound_proof_lines}\r?\n$")
+  add_test(NAME proof.streamed_and_positional_sound_watch
+           COMMAND "${FBENGINE_FB}" --color never run
+                   "${PROJECT_SOURCE_DIR}/examples/proof/streamed_and_positional_sound"
+                   -- --watch --frames 960)
+  set_tests_properties(proof.streamed_and_positional_sound_watch PROPERTIES TIMEOUT 120
+                       PASS_REGULAR_EXPRESSION "\nwatched 960 frames\r?\n$")
   # 64 channels at 44100 Hz under a game's load, within the budget.
   add_test(NAME examples.audio_stress
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress")
@@ -943,12 +990,28 @@ catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
 # E7's animation: sampling, apart from the DLL, and the clip, player, and skin areas through
 # fbengine's C API, with no window or GPU.
 add_executable(fbengine_anim_tests anim/sample_tests.cpp anim/clip_tests.cpp anim/player_tests.cpp
-               anim/skin_tests.cpp anim/model_tests.cpp
+               anim/skin_tests.cpp anim/model_tests.cpp anim/morph_tests.cpp anim/fuzz_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
 target_link_libraries(fbengine_anim_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_anim_tests)
 catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
+
+# Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as
+# operator new is this test's.
+add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
+target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_anim_oom_tests)
+catch_discover_tests(fbengine_anim_oom_tests TEST_PREFIX "anim."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
+# A program of the whole of it, as a game would write it.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME examples.animation
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/animation")
+  set_tests_properties(examples.animation PROPERTIES PASS_REGULAR_EXPRESSION
+                       "Running animation[^\n]*\nstep in walk\r?\nwalked to 1.5\r?\nwaving at 0.5\r?\nlooking ahead\r?\nstep in walk\r?\nstopped: still\r?\n$")
+endif()
 
 # Animation's panics, each a case of tests/anim/panics run on its own, which has to panic saying
 # what it does.
@@ -968,6 +1031,10 @@ if(FBENGINE_FB_TESTS)
       "palette-unskinned=Palette on a Mesh skinned by nothing"
       "joint-twice=AddJoint on a Skin: the skin has a joint \"a\" already"
       "joint-out-of-range=JointName\\(0\\) on a Skin with 0 joints"
+      "release-freed=Release on a Pivot that was freed"
+      "weights-uneven=AddWeights on a Clip: as many weights for each key's time, not 3 for 2"
+      "target-short=AddMorphTarget on a Geometry: a target moves each of the surface's 0 vertices, not 1"
+      "morphed-nothing=MorphedPositions on a Mesh that draws nothing"
       "layer-out-of-range=Layer\\(16\\) on a Player: its layers are 0 to 15"
       "crossfade-negative=Crossfade on a Player: a fade takes 0 seconds or more, not -1"
       "weight-outside=SetWeight on a Player: a layer's weight is from 0 to 1, not 2"

@@ -88,10 +88,15 @@ bool fit(std::span<const float> times, std::span<const float> values) {
 std::uint32_t make_clip() {
     auto& made = clips();
     const std::uint32_t slot = made.slots.make();
-    if (slot == made.kept.size()) {
-        made.kept.emplace_back();
-    } else {
-        made.kept[slot] = {};
+    try {
+        if (slot == made.kept.size()) {
+            made.kept.emplace_back();
+        } else {
+            made.kept[slot] = {};
+        }
+    } catch (...) {
+        made.slots.free(slot);
+        throw;
     }
     made.kept[slot].references = 1;
     return slot;
@@ -160,6 +165,10 @@ clip_t clip_of(const assets::model_t& model, const assets::clip_t& from) {
     made.frame_rate = from.frame_rate;
     for (const assets::channel_t& channel : from.channels) {
         const std::string& named = model.nodes[channel.node].name;
+        // Named "", a clip's channel is of what plays it, which a model's unnamed node isn't.
+        if (named.empty()) {
+            continue;
+        }
         const auto at = std::ranges::find(made.nodes, named);
         channel_t& to = made.channels.emplace_back();
         to.node = static_cast<std::uint32_t>(at - made.nodes.begin());
@@ -220,11 +229,17 @@ FBE_API uint64_t fbe_clip_create(const char* name, float frame_rate) {
         fail(std::format("a clip's frames a second are 0 or more, not {}", frame_rate));
         return 0;
     }
-    const std::uint32_t slot = fbe::anim::make_clip();
-    kept_clip_t& clip = kept_clip(slot);
-    clip.clip.name = name != nullptr ? name : "";
-    clip.clip.frame_rate = frame_rate;
-    return clips().slots.handle(slot);
+    try {
+        std::string named = name != nullptr ? name : "";
+        const std::uint32_t slot = fbe::anim::make_clip();
+        kept_clip_t& clip = kept_clip(slot);
+        clip.clip.name = std::move(named);
+        clip.clip.frame_rate = frame_rate;
+        return clips().slots.handle(slot);
+    } catch (const std::bad_alloc&) {
+        fail("out of memory");
+        return 0;
+    }
 }
 
 FBE_API uint64_t fbe_clip_from_model(uint64_t load, int32_t index) {
@@ -322,31 +337,46 @@ FBE_API bool fbe_clip_add_channel(uint64_t clip, const char* node, int32_t prope
     if (!fbe::anim::fit(key_times, key_values)) {
         return false;
     }
-    fbe::anim::clip_t& found = kept_clip(slot).clip;
-    const std::string named = node != nullptr ? node : "";
-    auto at = std::ranges::find(found.nodes, named);
-    const auto index = static_cast<std::uint32_t>(at - found.nodes.begin());
-    const bool moved = std::ranges::any_of(found.channels, [&](const fbe::anim::channel_t& was) {
-        return was.node == index && was.property == moves;
-    });
-    if (at != found.nodes.end() && moved) {
-        return fail(std::format("the clip moves the {} of \"{}\" already",
-                                fbe::anim::name_of(moves), named));
+    try {
+        fbe::anim::clip_t& found = kept_clip(slot).clip;
+        const std::string named = node != nullptr ? node : "";
+        const auto at = std::ranges::find(found.nodes, named);
+        const auto index = static_cast<std::uint32_t>(at - found.nodes.begin());
+        const bool moved =
+            std::ranges::any_of(found.channels, [&](const fbe::anim::channel_t& was) {
+                return was.node == index && was.property == moves;
+            });
+        if (at != found.nodes.end() && moved) {
+            return fail(std::format("the clip moves the {} of \"{}\" already",
+                                    fbe::anim::name_of(moves), named));
+        }
+        // All that can run out of memory first, so running out leaves the clip as it was.
+        fbe::anim::channel_t made;
+        made.node = index;
+        made.property = moves;
+        made.interpolation = goes;
+        made.width = static_cast<std::uint32_t>(width);
+        made.times.assign(key_times.begin(), key_times.end());
+        made.values.assign(key_values.begin(), key_values.end());
+        fbe::anim::normalize_keys(made);
+        const bool new_node = at == found.nodes.end();
+        if (new_node) {
+            found.nodes.push_back(named);
+        }
+        try {
+            found.channels.push_back(std::move(made));
+        } catch (...) {
+            if (new_node) {
+                found.nodes.pop_back();
+            }
+            throw;
+        }
+        found.length = std::max(found.length, key_times.back());
+        ++kept_clip(slot).version;
+        return true;
+    } catch (const std::bad_alloc&) {
+        return fail("out of memory");
     }
-    if (at == found.nodes.end()) {
-        found.nodes.push_back(named);
-    }
-    fbe::anim::channel_t& made = found.channels.emplace_back();
-    made.node = index;
-    made.property = moves;
-    made.interpolation = goes;
-    made.width = static_cast<std::uint32_t>(width);
-    made.times.assign(key_times.begin(), key_times.end());
-    made.values.assign(key_values.begin(), key_values.end());
-    fbe::anim::normalize_keys(made);
-    found.length = std::max(found.length, key_times.back());
-    ++kept_clip(slot).version;
-    return true;
 }
 
 FBE_API bool fbe_clip_add_event(uint64_t clip, const char* name, float time) {
