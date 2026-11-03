@@ -4,6 +4,7 @@ Import std.collections
 Import std.core
 Import std.math
 Import std.test
+Import std.text
 Import fbengine
 Import fbengine_physics
 
@@ -209,4 +210,20 @@ Function WhatsMovedIsWhatsSaid()
     values["Size"] = nothing
     Local said = Components.Attach(Pivot(), "Body", values)
     Expect(said != Null, "it took a size of nothing")
+End Function
+
+@Test
+Function ASizeThatCantBeIsntLoaded()
+    Local part = Value.Object()
+    part["x"] = Value(-1.0)
+    part["y"] = Value(1.0)
+    part["z"] = Value(1.0)
+    Local values = Value.Object()
+    values["Size"] = part
+    Try
+        Try Load<BodyComponent>(values)
+        Panic("it took a size below nothing")
+    Catch error As ParseError
+        Expect(error.Message.Contains("Size"), error.Message)
+    End Try
 End Function

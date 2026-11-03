@@ -402,6 +402,8 @@ Function AnAngleIsKeptInRadiansAndShownInDegrees() Throws IOError, GraphicsError
     Expect(FieldOf(editor, "FieldOfView").Text() == "60", FieldOf(editor, "FieldOfView").Text())
     Try Entered(editor, "FieldOfView", "90")
     Expect(Near(camera.FieldOfView(), Pi / 2), "it's {camera.FieldOfView()}")
+    // It's said as a person says it.
+    Expect(editor.Edits.UndoName() == "Set Field Of View", editor.Edits.UndoName() ?? "")
     Try Entered(editor, "FieldOfView", "180")
     Expect(Near(camera.FieldOfView(), Pi / 2), "180 degrees panics, and it took it")
     Try Entered(editor, "FieldOfView", "0")
@@ -1211,8 +1213,8 @@ Function AProgramThatSaysTooMuchIsRefused() Throws IOError
     Local packages = Try Packages()
     If packages == Null Then Skip("the packages aren't under here")
     Local games = Try TempDir()
-    Local folder = Try GameOf(games, packages, "Import std.core\nImport std.io\nImport std.os\n\nLocal said = \"[\"\nFor i = 1 To 200000\n    said += \"          \"\nEnd For\n" +
-                              "Try File.WriteText(Path(Env.Get(\"FBENGINE_COMPONENTS_TO\") ?? \"\"), said + \"]\")\n")
+    Local folder = Try GameOf(games, packages, "Import std.core\nImport std.io\nImport std.os\n\nLocal said = \"          \"\nFor i = 1 To 18\n    said += said\nEnd For\n" +
+                              "Try File.WriteText(Path(Env.Get(\"FBENGINE_COMPONENTS_TO\") ?? \"\"), \"[\" + said + \"]\")\n")
     Local kinds = GameComponents()
     Local said = Failure(kinds, folder)
     Expect(said.Contains("too much"), said)
@@ -1314,6 +1316,10 @@ Function AFolderIsAskedAboutOnceBeforeItsCodeRuns() Throws IOError, GraphicsErro
     Try third.Start(other)
     Expect(third.ShowingDialog() != Null && !third.Kinds.Running(),
            "another folder wasn't asked about")
+    // Yes to that is yes to that as well, not in place of the first.
+    third.TrustProject()
+    Expect(third.Kept.Trusted(other.Text) && third.Kept.Trusted(folder.Text),
+           "the first was forgotten")
     third.Finish()
 End Function
 
@@ -1410,6 +1416,14 @@ Function WhatOnlyLooksLikeAVectorIsntEditedAsOne() Throws IOError, GraphicsError
     editor.Step()
     editor.Step()
     Expect((RowCalled(editor, "Speed") As? NoteRow) != Null, "it edits what isn't what it says")
+    // A member there isn't, as well.
+    Local door = Pivot()
+    KnowingKinds(editor)
+    Local unknown = Value.Object()
+    unknown["Way"] = Value("SIDEWAYS")
+    SetComponentsOf(door, [ComponentData("Door", unknown)])
+    Selecting(editor, door)
+    Expect((RowCalled(editor, "Way") As? NoteRow) != Null, "it lists what doesn't have what it has")
     // A kind said by hand, too.
     editor.Finish()
 End Function
@@ -1498,8 +1512,11 @@ Function LimitsAreTheSettersOwn() Throws IOError, GraphicsError
     Expect(pivot.Scale().x == -2)
     Local camera = Camera()
     Selecting(editor, camera)
-    Try Entered(editor, "FieldOfView", "179.9")
-    Expect(Near(camera.FieldOfView(), 179.9 * Pi / 180), "it's {camera.FieldOfView()}")
+    // Right up to what its setter takes, each way.
+    Try Entered(editor, "FieldOfView", "179.95")
+    Expect(Near(camera.FieldOfView(), 179.95 * Pi / 180), "it's {camera.FieldOfView()}")
+    Try Entered(editor, "FieldOfView", "0.01")
+    Expect(Abs(camera.FieldOfView() - 0.01 * Pi / 180) < 0.00001, "it's {camera.FieldOfView()}")
     Try Entered(editor, "OrthographicHeight", "1e-39")
     Expect(camera.OrthographicHeight() > 0.0000001)
     // A camera's clearing goes one way at a time.
@@ -1509,6 +1526,14 @@ Function LimitsAreTheSettersOwn() Throws IOError, GraphicsError
     depth.Ticked().Click()
     editor.Step()
     Expect(camera.ClearsColor() && !camera.ClearsDepth())
+    Local color = RowCalled(editor, "ClearsColor") As? ToggleRow
+    If color == Null Then Panic("it's not a box")
+    color.Ticked().Click()
+    editor.Step()
+    Expect(!camera.ClearsColor() && !camera.ClearsDepth(), "the other one came back")
+    depth.Ticked().Click()
+    editor.Step()
+    Expect(!camera.ClearsColor() && camera.ClearsDepth(), "the other one came back")
     // An ellipsoid's two radii.
     Try Entered(editor, "CollisionRadius", "2", 1)
     Expect(camera.CollisionRadius() == Vec2(1, 2), "it's {camera.CollisionRadius()}")
@@ -1646,5 +1671,10 @@ Function WhatsEmptyIsntWhatDiffers() Throws IOError, GraphicsError
     editor.Inspector.MarkChanged()
     editor.Step()
     Expect(FieldOf(editor, "Name").Placeholder() == "—", FieldOf(editor, "Name").Placeholder())
+    // Alike again, it's as it was.
+    two.SetName("")
+    editor.Inspector.MarkChanged()
+    editor.Step()
+    Expect(FieldOf(editor, "Name").Placeholder() == "", FieldOf(editor, "Name").Placeholder())
     editor.Finish()
 End Function
