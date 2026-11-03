@@ -219,6 +219,8 @@ enum class fault_t : std::uint8_t {
     NONE,
     /// Making an image's view.
     VIEW,
+    /// Listing the devices: there are none, as with no driver, until the GPU's stopped.
+    NO_DRIVER,
     /// Submitting a frame.
     SUBMIT,
     /// Making the device.
