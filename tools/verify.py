@@ -220,6 +220,12 @@ def check_bindings():
         fail("the bindings aren't what their headers make; run tools/bindgen.sh")
 
 
+def check_line_ends():
+    """A raw carriage return in a CMake file is a regular expression that can't match, silently."""
+    step("line ends")
+    for path in [ROOT / "CMakeLists.txt", *(ROOT / "cmake").glob("*.cmake"), *(ROOT / "tests").glob("CMakeLists.txt")]:
+        if b"\r" in path.read_bytes():
+            fail(f"{path.relative_to(ROOT)} has a carriage return")
 def check_metal(build):
     step("the shaders' Metal")
     if run([sys.executable, str(ROOT / "tools" / "check_msl.py"), str(build)]) != 0:
@@ -291,6 +297,7 @@ def main():
         check_tests(build)
         check_exports()
     check_bindings()
+    check_line_ends()
     check_metal(build)
     check_format()
     if not options.no_tidy and built:

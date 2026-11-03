@@ -40,6 +40,14 @@ Select arguments[0]
         Local player = pivot.Player()
         pivot.Free()
         player.SetTime(1)
+    Case "frame-no-clip"
+        Pivot().Player().SetFrame(1)
+    Case "frame-no-rate"
+        Local clip = Clip("no rate")
+        clip.AddPositions("a", [0, 1], [Vec3(0, 0, 0), Vec3(1, 0, 0)])
+        Local player = Pivot().Player()
+        player.Play(clip)
+        player.SetFrame(1)
     Case "time-nan"
         Pivot().Player().SetTime(NaN)
     Case "update-negative"

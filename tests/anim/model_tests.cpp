@@ -260,3 +260,16 @@ TEST_CASE("nodes of no name, or of one name, are told apart, and a clip moves ea
     fbe_skin_release(unnamed);
     fbe_assets_free(load);
 }
+
+TEST_CASE("a model's names of what isn't there are nothing, either side of it") {
+    const std::uint64_t load =
+        fbe_assets_load(FBE_ASSETS_MODEL, "res://anim-rig/rig.gltf", false, false);
+    REQUIRE(load != 0);
+    CHECK(std::string_view(fbe_model_material_name(load, -1)).empty());
+    CHECK(std::string_view(fbe_model_image_name(load, -1)).empty());
+    CHECK(std::string_view(fbe_model_material_name(load, 1000)).empty());
+    CHECK(std::string_view(fbe_model_image_name(load, 1000)).empty());
+    fbe_assets_free(load);
+    CHECK(std::string_view(fbe_model_material_name(load, 0)).empty());
+    CHECK(std::string_view(fbe_model_image_name(load, 0)).empty());
+}

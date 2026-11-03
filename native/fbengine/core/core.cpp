@@ -1,6 +1,7 @@
 #include "core/engine.hpp"
 #include "fbengine.h"
 
+#include <exception>
 #include <format>
 #include <SDL3/SDL.h>
 #include <string>
@@ -17,8 +18,14 @@ bool video = false;
 
 namespace fbe {
 
-bool fail(std::string_view message) {
-    last_error = message;
+// NOLINTNEXTLINE(bugprone-exception-escape): what it assigns second fits in any string as it is.
+bool fail(std::string_view message) noexcept {
+    try {
+        last_error = message;
+    } catch (const std::exception&) {
+        // No memory for it, or more than a string holds.
+        last_error = "out of memory";
+    }
     return false;
 }
 

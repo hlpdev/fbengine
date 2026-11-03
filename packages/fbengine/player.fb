@@ -117,6 +117,12 @@ Public Final Class Player
         Return PlayerLayer(Self, index)
     End Method
 
+    /// Puts layer 0's clip at a frame, as its layer's SetFrame does.
+    @MainThread @PanicsAtCaller
+    Public Method SetFrame(frame: Float)
+        Layer(0).SetFrame(frame)
+    End Method
+
     /// Plays `clip` on layer 0, as its layer's Play does.
     @MainThread @PanicsAtCaller
     Public Method Play(clip: Clip, mode: PlayMode = PlayMode.LOOP, speed: Float = 1)
@@ -259,6 +265,19 @@ Public Struct PlayerLayer
             owner.Failed("Crossfade")
         End If
         owner.currents[index] = clip
+    End Method
+
+    /// Puts the layer's clip at a frame, by the frames a second it was made at, which can be a
+    /// fraction of one. No clip, or one made with no frames a second, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetFrame(frame: Float)
+        Local playing = Clip()
+        If playing == Null Then Panic("SetFrame on a Player with no clip playing")
+        Local rate = playing.FrameRate()
+        If rate <= 0
+            Panic("SetFrame on a Player: its clip \"{playing.Name()}\" has no frames a second")
+        End If
+        SetTime(frame / rate)
     End Method
 
     /// Fades out what the layer plays over `seconds`, back to where what it moved was before, or
