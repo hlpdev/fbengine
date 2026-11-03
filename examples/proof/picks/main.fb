@@ -1,0 +1,69 @@
+// Picks: a line through the world, a line with a radius, what's ahead of an entity, and what's under
+// a point of a camera's view, with what each reports. It prints them. It'll draw with --watch once
+// the renderer draws meshes.
+
+Import std.core
+Import std.math
+Import fbengine
+
+Function Shown(at: Vec3): String => "{at.x:.2}, {at.y:.2}, {at.z:.2}"
+
+Function Said(pick: Pick?): String
+    If pick == Null Then Return "nothing"
+    Return "{pick.Entity.Name()} at {Shown(pick.Point)}, facing {Shown(pick.Normal)}, {pick.Time:.2} along"
+End Function
+
+Local world = World()
+World.SetCurrent(world)
+Local floor = Mesh(Geometry.Plane(4))
+floor.SetName("floor")
+floor.SetScale(Vec3(10, 1, 10))
+floor.SetPickMode(PickMode.MESH)
+Local ball = Pivot()
+ball.SetName("ball")
+ball.SetPosition(Vec3(2, 1, 0))
+ball.SetCollisionRadius(0.5)
+ball.SetPickMode(PickMode.ELLIPSOID)
+Local crate = Pivot()
+crate.SetName("crate")
+crate.SetPosition(Vec3(-3, 1, 0))
+crate.SetCollisionBox(AABB(Vec3(-1, -1, -1), Vec3(1, 1, 1)))
+crate.SetPickMode(PickMode.BOX)
+Local ignored = Pivot()
+ignored.SetName("not pickable")
+ignored.SetPosition(Vec3(0, 3, 3))
+ignored.SetCollisionRadius(1)
+
+// A line: the nearest thing it meets, and each of the three kinds.
+Print("down onto the floor: {Said(world.Pick(Vec3(1, 5, 3), Vec3(1, -5, 3)))}")
+Print("down onto the ball: {Said(world.Pick(Vec3(2, 5, 0), Vec3(2, -5, 0)))}")
+Print("down onto the crate: {Said(world.Pick(Vec3(-3, 5, 0), Vec3(-3, -5, 0)))}")
+Local hit = world.Pick(Vec3(1, 5, 3), Vec3(1, -5, 3))
+Print("the floor's surface {hit?.Surface != Null}, a triangle {(hit?.Triangle ?? -1) >= 0}")
+Print("the ball's surface {world.Pick(Vec3(2, 5, 0), Vec3(2, -5, 0))?.Surface == Null}")
+
+// What doesn't count: an entity with no pick mode, one hidden, one left out, and a mesh's back.
+Print("through what isn't pickable: {Said(world.Pick(Vec3(0, 5, 3), Vec3(0, -5, 3)))}")
+Print("from under the floor: {Said(world.Pick(Vec3(1, -5, 3), Vec3(1, 5, 3)))}")
+Print("ignoring the ball: {Said(world.Pick(Vec3(2, 5, 0), Vec3(2, -5, 0), 0, ball))}")
+ball.Hide()
+Print("with the ball hidden: {Said(world.Pick(Vec3(2, 5, 0), Vec3(2, -5, 0)))}")
+ball.Show()
+
+// With a radius: a line that misses the ball, swept wide enough, meets it.
+Print("a line beside the ball: {Said(world.Pick(Vec3(2.8, 5, 0), Vec3(2.8, 1.5, 0)))}")
+Print("a line of radius 0.5 beside it: {Said(world.Pick(Vec3(2.8, 5, 0), Vec3(2.8, 1.5, 0), 0.5))}")
+
+// Ahead of an entity, as far as its range.
+Local looker = Pivot()
+looker.SetPosition(Vec3(2, 1, 5))
+Print("ahead of something: {Said(looker.Pick(10))}")
+Print("ahead, not far enough: {Said(looker.Pick(2))}")
+
+// Under a point of a camera's view: its middle, looking at the ball, and a corner, at nothing.
+Local camera = Camera()
+camera.SetViewport(Rect(0, 0, 800, 600))
+camera.SetPosition(Vec3(2, 1, 8))
+Print("the camera's middle: {Said(camera.Pick(Vec2(400, 300)))}")
+Print("high in its view: {Said(camera.Pick(Vec2(400, 0)))}")
+world.Free()

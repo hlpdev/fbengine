@@ -220,6 +220,258 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.controls PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
                        PASS_REGULAR_EXPRESSION "Running controls[^\n]*\nmove [(]0, -1[)], jump True\r?\nmove [(]1, 0[)], jump True\r?\n$")
 
+  # E14's proofs, each of a requirement: what each prints, line by line, and its --watch walked
+  # offscreen. One that needs a GPU says so on a machine with none, and is skipped.
+  # A --watch, walked offscreen, with what a person would do at its frames, and how it ends.
+  function(fbengine_add_watched test folder driving printed)
+    add_test(NAME ${test}
+             COMMAND "${FBENGINE_FB}" --color never run "${folder}" -- --watch --frames 40 ${driving})
+    set_tests_properties(${test} PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "${printed}"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
+  endfunction()
+  function(fbengine_add_proof_of_numbers name)
+    list(JOIN ARGN "\r?\n" printed)
+    add_test(NAME proof.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/proof/${name}")
+    set_tests_properties(proof.${name} PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "\n${printed}\r?\n$"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
+  endfunction()
+  function(fbengine_add_proof name)
+    fbengine_add_proof_of_numbers(${name} ${ARGN})
+    set(folder "${PROJECT_SOURCE_DIR}/examples/proof/${name}")
+    add_test(NAME proof.${name}_watch
+             COMMAND "${FBENGINE_FB}" --color never run "${folder}" -- --watch --frames 40)
+    set_tests_properties(proof.${name}_watch PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "\nwatched 40 frames\r?\n$"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
+    fbengine_add_watched(proof.${name}_escape "${folder}" "--press-at;1" "\nwatched 2 frames\r?\n$")
+    fbengine_add_watched(proof.${name}_close "${folder}" "--close-at;1" "\nwatched 2 frames\r?\n$")
+  endfunction()
+  fbengine_add_proof(frame_timing_and_input
+                     "after a sleep of 20 ms, the clock's gone 15 or more True"
+                     "Flip[(]False[)] waits False"
+                     "Flip[(][)] waits True"
+                     "frames 3"
+                     "10 frames at a limit of 100 took a tenth of a second or more True"
+                     "the last one's delta 9 ms or more True"
+                     "W down True, hit True"
+                     "then down True, hit False"
+                     "then down False, up True"
+                     "flushed, hit False"
+                     "of 10 binds, held alone 10"
+                     "mouse 110, 45, speed 10, -5"
+                     "hit True, wheel 2"
+                     "a button down True, hit True then False"
+                     "then down False"
+                     "moved 200, 100, speed 0, 0"
+                     "cursor shown False"
+                     "relative True, speed 4, -2"
+                     "focused False then True")
+  fbengine_add_proof(sprites_over_a_scene
+                     "the scene's middle is at 160, 90"
+                     "a corner of the scene: [(]120, 130, 150, 255[)]"
+                     "a frame's block, and what's keyed: [(]255, 200, 80, 255[)], behind"
+                     "the last frame's: [(]255, 200, 80, 255[)], behind"
+                     "scaled from its handle: [(]255, 200, 80, 255[)], [(]255, 200, 80, 255[)], behind"
+                     "turned a quarter: [(]255, 200, 80, 255[)], [(]255, 200, 80, 255[)], behind"
+                     "a rect, an oval's middle and corner, a line: [(]200, 40, 40, 255[)], [(]200, 40, 40, 255[)], behind, [(]200, 40, 40, 255[)]"
+                     "its width 41[.]46, of \"ScoreScore\" 82[.]91"
+                     "its ink's the pen's True, beside it False"
+                     "a font of a cell of 20: its ascent and descent 20[.]0"
+                     "its ink's the pen's True"
+                     "resized, its other key color: [(]50, 90, 200, 255[)], [(]50, 90, 200, 255[)], behind, behind"
+                     "its block's corner at its handle: [(]255, 200, 80, 255[)], [(]255, 200, 80, 255[)], behind, behind, behind"
+                     "frame 1 of a file: [(]255, 200, 80, 255[)], behind, behind"
+                     "rects True, touching False"
+                     "each frame's solid pixels 4, 16"
+                     "a block on a block True, off it False"
+                     "bounds apart by the key color: overlap True, collide False"
+                     "a rect on its key color False, on its block True")
+  fbengine_add_proof(pixels_of_images_and_textures
+                     "the image's red adds up to 30720"
+                     "a pixel from the GPU [(]80, 144, 0, 255[)]"
+                     "locked 32 by 32"
+                     "as written [(]24, 32, 128, 255[)]"
+                     "unlocked, from the GPU [(]24, 32, 128, 255[)]"
+                     "a plain texture's alpha from the GPU [(]255, 255, 255, 128[)]"
+                     "drawn over black [(]0, 0, 0, 255[)], [(]137, 137, 137, 255[)], [(]188, 188, 188, 255[)], [(]255, 255, 255, 255[)]"
+                     "drawn, then read [(]255, 0, 0, 255[)]"
+                     "a part of it 4 by 4: [(]255, 0, 0, 255[)], [(]104, 104, 128, 255[)]"
+                     "the screen's [(]1, 2, 3, 255[)]"
+                     "a million written in under 10 seconds True")
+  fbengine_add_proof(display_modes
+                     "there's a display True"
+                     "its desktop's a size True"
+                     "its modes for fullscreen 0"
+                     "windowed at first WINDOWED, 640 by 360"
+                     "asked for BORDERLESS: BORDERLESS, 1024 by 768, the desktop's True"
+                     "asked for WINDOWED: WINDOWED, 640 by 360, the desktop's False"
+                     "asked for FULLSCREEN: FULLSCREEN, 1024 by 768, the desktop's True"
+                     "asked for WINDOWED: WINDOWED, 640 by 360, the desktop's False"
+                     "the screen's 320 by 180, its own True"
+                     "shown in 640 by 360 of the window"
+                     "the window's again 640 by 360, True")
+  fbengine_add_proof(text_input
+                     "off, typed \"\""
+                     "on, typed \"a\", in order TEXT, PRESS"
+                     "text input off without a field True"
+                     "a field's focus turns it on True"
+                     "the name \"Cabin 7 save\", changed True"
+                     "edited \"ACabin 7 sav\", cursor 1"
+                     "\"e\" and its accent are 1 long"
+                     "the line has the focus True"
+                     "submitted True: \"noclip on\""
+                     "no focus, text input False")
+  fbengine_add_proof(debug_ui_and_console
+                     "rows [[]frame, speed, noclip, respawn[]]"
+                     "a watched row's the frame's True, then the next's True"
+                     "noclip True, rows [[]frame, speed, noclip, respawn, only with noclip[]]"
+                     "noclip False, rows [[]frame, speed, noclip, respawn[]]"
+                     "respawns 1"
+                     "speed by End 20"
+                     "speed by command 7"
+                     "finished \"speed \""
+                     "recalled \"nosuch\""
+                     "printed [[]> speed 7, speed is 7, > fail, fail: it can't be done, > nosuch, there's no command nosuch. help lists them[]]"
+                     "run [[]speed 7, fail, nosuch[]]"
+                     "closed True, focus none"
+                     "the game's band beside the panel [(]76, 141, 255, 255[)]"
+                     "the panel over it True, [(]28, 31, 36, 255[)]")
+
+  # A --watch's own keys, each pressed by the walk.
+  set_tests_properties(proof.frame_timing_and_input_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nby its keys: relative True, shown False, vsync False, moved True, flushed True\r?\nwatched 40 frames\r?\n$")
+  # Escape with the console open closes it, and a second ends the program.
+  fbengine_add_watched(proof.debug_ui_and_console_escape_console
+                       "${PROJECT_SOURCE_DIR}/examples/proof/debug_ui_and_console"
+                       "--press-at;4;--press-at;6" "\nwatched 7 frames\r?\n$")
+  # With no GPU, those that need one to make what they draw say so, and the rest draw nothing.
+  foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures)
+    add_test(NAME proof.${name}_no_gpu
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/proof/${name}"
+                     -- --watch --frames 2)
+    set_tests_properties(proof.${name}_no_gpu PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_NO_GPU=1"
+                         PASS_REGULAR_EXPRESSION "\nno GPU here\r?\n$" TIMEOUT 120)
+  endforeach()
+
+  # Those with no --watch until the renderer draws meshes and sprites, or that have nothing to draw.
+  fbengine_add_proof_of_numbers(swept_collisions
+                                "a ball falls 100 and rests at 0[.]00, 0[.]50, 0[.]00"
+                                "it touched 1, the floor True, facing 0[.]00, 1[.]00, 0[.]00, at 0[.]00, 0[.]00, 0[.]00"
+                                "what it hit has it too True"
+                                "a tall one rests at 4[.]00, 1[.]50, 4[.]00"
+                                "sliding along a wall ends at 3[.]00, 1[.]00, -4[.]00"
+                                "touching the wall True, facing 0[.]00, 0[.]00, 1[.]00"
+                                "stopping at it ends at 1[.]20, 1[.]00, -4[.]00"
+                                "with none it ends at 0[.]00, 1[.]00, -10[.]00, touching 0"
+                                "on a slope, sliding moves it across True, standing True"
+                                "over a step of 0[.]3 it reaches z -3[.]00, y 0[.]80"
+                                "with a step height of 0[.]1 it stops at z -1[.]55"
+                                "a ball into a rock stops at z -3[.]50, having hit it True")
+  fbengine_add_proof_of_numbers(picks
+                                "down onto the floor: floor at 1[.]00, 0[.]00, 3[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
+                                "down onto the ball: ball at 2[.]00, 1[.]50, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]35 along"
+                                "down onto the crate: crate at -3[.]00, 2[.]00, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]30 along"
+                                "the floor's surface True, a triangle True"
+                                "the ball's surface True"
+                                "through what isn't pickable: floor at 0[.]00, 0[.]00, 3[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
+                                "from under the floor: nothing"
+                                "ignoring the ball: floor at 2[.]00, 0[.]00, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
+                                "with the ball hidden: floor at 2[.]00, 0[.]00, 0[.]00, facing 0[.]00, 1[.]00, 0[.]00, 0[.]50 along"
+                                "a line beside the ball: nothing"
+                                "a line of radius 0[.]5 beside it: ball at 2[.]40, 1[.]30, 0[.]00, facing 0[.]80, 0[.]60, 0[.]00, 0[.]97 along"
+                                "ahead of something: ball at 2[.]00, 1[.]00, 0[.]50, facing 0[.]00, 0[.]00, 1[.]00, 0[.]45 along"
+                                "ahead, not far enough: nothing"
+                                "the camera's middle: ball at 2[.]00, 1[.]00, 0[.]50, facing 0[.]00, 0[.]00, 1[.]00, 0[.]01 along"
+                                "high in its view: nothing")
+  fbengine_add_proof_of_numbers(in_view_by_bounds
+                                "in front True, behind False"
+                                "at its near end True, nearer False"
+                                "at its far end True, farther False"
+                                "past its top False, inside it True"
+                                "a box inside True"
+                                "a box half out True"
+                                "a box out False"
+                                "its bounds are 8 to 28 across"
+                                "a long mesh with only its end in view True, its middle False"
+                                "moved out False"
+                                "a pivot in view True"
+                                "behind a wall True"
+                                "a line of sight through the wall False"
+                                "with it not blocking True")
+  fbengine_add_proof_of_numbers(scene_trees
+                                "the room has 2, first door, then lamp"
+                                "the handle's parent door, the room's none"
+                                "found under the room True, not there True"
+                                "the handle's own place 0[.]00, 1[.]00, 0[.]00, in the world 12[.]00, 1[.]00, 0[.]00"
+                                "the room turned a quarter: 10[.]00, 1[.]00, -2[.]00"
+                                "scaled twice: 14[.]00, 2[.]00, 0[.]00"
+                                "under the lamp, world kept: 12[.]00, 1[.]00, 0[.]00, own 2[.]00, 1[.]00, 0[.]00"
+                                "back, own kept: 2[.]00, 1[.]00, 0[.]00, world 14[.]00, 1[.]00, 0[.]00"
+                                "moved forward, turned a quarter: -1[.]00, 0[.]00, 0[.]00"
+                                "translated, whichever way it faces: 0[.]00, 0[.]00, -1[.]00"
+                                "pointed at [+]Z, forward is -?0[.]00, -?0[.]00, 1[.]00"
+                                "distance to the door 12[.]00"
+                                "a copy has 2, its handle True, not the same one True"
+                                "in its order: door, lamp"
+                                "its handle in the world -8[.]00, 1[.]00, 0[.]00, the first's 12[.]00, 1[.]00, 0[.]00"
+                                "room hidden: the room's showing False, the lamp's False, hidden itself False"
+                                "room shown: the lamp's True, the door's still False"
+                                "door shown: the handle's True, the copy's door was never hidden True"
+                                "freed: the room True, its handle True, the copy's False")
+  fbengine_add_proof_of_numbers(meshes_in_code
+                                "1 surface, 4 vertices, 2 triangles"
+                                "its second UVs [(]0[.]5, 0[.]75[)], first [(]0, 1[)]"
+                                "its color's alpha 0[.]5"
+                                "made again 0[.]00, 1[.]00, 0[.]00"
+                                "one corner lifted, it leans True"
+                                "bounds 0[.]00, 0[.]00, -2[.]00 to 2[.]00, 0[.]00, 0[.]00"
+                                "moved: 1[.]00, 0[.]00, -2[.]00"
+                                "scaled: 6[.]00, 0[.]00, 0[.]00"
+                                "turned, it's 2[.]00 across"
+                                "fitted: -1[.]00, 0[.]00, -1[.]00 to 1[.]00, 0[.]00, 1[.]00"
+                                "picked from above True, flipped False, from below True"
+                                "a cube's 24 vertices, joined 2 surfaces"
+                                "the clone moved, the first didn't True"
+                                "its cull box 100, bounds 1")
+  fbengine_add_proof_of_numbers(binary_saves_and_maps
+                                "the file's 75 bytes"
+                                "its magic MAP1"
+                                "seed 1234567890123, time 61[.]5"
+                                "2 rooms"
+                                "lobby at 0, 0, light 0[.]75, doors 3, locked False"
+                                "tunnel, .+ at -8, 16, light 0[.]25, doors 2, locked True"
+                                "reading past the end throws True"
+                                "its first bytes 77, 65, 80, 49"
+                                "the seed's low byte 203, as 1234567890123 % 256 is 203"
+                                "in its folder: options[.]bin, slot 1/"
+                                "deleted, it's there False"
+                                "its folder removed, it's there False")
+  fbengine_add_proof_of_numbers(pathfinding_over_a_graph
+                                "lobby door vault, 8[.]00 long"
+                                "the door closed: lobby hall bend vault, 20[.]00 long"
+                                "both closed: no way"
+                                "to itself: lobby, 0[.]00 long"
+                                "to a room with no link: no way"
+                                "linked: lobby hall bend attic, 17[.]00 long"
+                                "start top, 5[.]00 long"
+                                "over the grid, straight: 39"
+                                "over the grid, walled but for its end: 117")
+  fbengine_add_proof_of_numbers(particles_on_sprites
+                                "after 1 second, 20 made, 20 alive"
+                                "the oldest's risen True, its alpha True"
+                                "the newest's nearly at the start True, almost opaque True"
+                                "after 5 seconds, 100 made, about 30 alive True"
+                                "drawn by a camera, each of them True"
+                                "the same seed goes the same way True"
+                                "with the rate at 0, after 2 seconds, 0 alive")
+
   # Their --watch, which a person watches in a window (tools/show.py), walked here offscreen, a step
   # each frame.
   add_test(NAME examples.controls_watch
@@ -234,6 +486,18 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.menu_watch PROPERTIES
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "\nwatched 60 frames: options True, playing True, console True, menu again True\r?\n$")
+  # Escape and the close button end a --watch; on the menu's options Escape goes back, on the game to
+  # the menu, and on the menu, there already, it ends it.
+  set(fbengine_controls "${PROJECT_SOURCE_DIR}/examples/controls")
+  set(fbengine_menu "${PROJECT_SOURCE_DIR}/examples/menu")
+  fbengine_add_watched(examples.controls_escape "${fbengine_controls}" "--press-at;3" "\nwatched 4 frames, ")
+  fbengine_add_watched(examples.controls_close "${fbengine_controls}" "--close-at;3" "\nwatched 4 frames, ")
+  fbengine_add_watched(examples.menu_close "${fbengine_menu}" "--close-at;3" "\nwatched 3 frames: ")
+  fbengine_add_watched(examples.menu_escape_on_options "${fbengine_menu}" "--press-at;5" "\nwatched 40 frames: ")
+  fbengine_add_watched(examples.menu_escape_on_options_then_menu "${fbengine_menu}"
+                       "--press-at;5;--press-at;7" "\nwatched 7 frames: options True, playing False")
+  fbengine_add_watched(examples.menu_escape_on_game_then_menu "${fbengine_menu}"
+                       "--press-at;17;--press-at;19" "\nwatched 19 frames: options True, playing True")
 
   add_test(NAME examples.menu
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/menu")

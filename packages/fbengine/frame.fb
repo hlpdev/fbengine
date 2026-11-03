@@ -68,6 +68,9 @@ Public Final Class Frame
     /// How many seconds the last frame took, from one Flip to the next, 0 before the second.
     @MainThread Public Static Method Delta(): Float64 => fbe_frame_delta()
 
+    /// Whether the last Flip asked to wait for the display, True before the first.
+    @MainThread Public Static Method Vsync(): Bool => fbe_frame_vsync()
+
     /// How many frames have been flipped.
     @MainThread Public Static Method Count(): Int64 => fbe_frame_count()
 

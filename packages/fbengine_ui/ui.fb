@@ -522,12 +522,15 @@ Public Final Class Ui
                 at = WidgetAbove(at)
             End While
             pressed = taking
-            // A press focuses what it pressed, or nothing, as a click on the background does.
-            Local focusing: Widget? = taking
-            While focusing != Null && !focusing.Focusable()
-                focusing = WidgetAbove(focusing)
-            End While
-            Focus(focusing)
+            // A press focuses what it pressed, or nothing, as a click on the background does, but
+            // for one that leaves it alone.
+            If taking == Null || !taking.KeepsFocus()
+                Local focusing: Widget? = taking
+                While focusing != Null && !focusing.Focusable()
+                    focusing = WidgetAbove(focusing)
+                End While
+                Focus(focusing)
+            End If
         End If
         Local holding = pressed
         If holding != Null && (MouseXSpeed() != 0.0 || MouseYSpeed() != 0.0)

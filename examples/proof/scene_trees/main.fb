@@ -1,0 +1,81 @@
+// The scene as a tree: parents and children, what's inherited, names and finding by them, children
+// in the order they were made, copying a whole tree, hiding and showing, and every way of moving. It
+// prints what each did. It'll draw with --watch once the renderer draws meshes.
+
+Import std.core
+Import std.math
+Import fbengine
+
+Function Shown(at: Vec3): String => "{at.x:.2}, {at.y:.2}, {at.z:.2}"
+
+Local world = World()
+World.SetCurrent(world)
+
+// A room, its door, and the door's handle, by names.
+Local room = Pivot()
+room.SetName("room")
+room.SetPosition(Vec3(10, 0, 0))
+Local door = Mesh(Geometry.Cube(), room)
+door.SetName("door")
+door.SetPosition(Vec3(2, 0, 0))
+Local handle = Pivot(door)
+handle.SetName("handle")
+handle.SetPosition(Vec3(0, 1, 0))
+Local lamp = Pivot(room)
+lamp.SetName("lamp")
+Print("the room has {room.ChildCount()}, first {room.Child(0).Name()}, then {room.Child(1).Name()}")
+Print("the handle's parent {handle.Parent()?.Name() ?? "none"}, the room's {room.Parent()?.Name() ?? "none"}")
+Print(
+    "found under the room {room.Find("handle") == handle}, not there {room.Find("window") == Null}")
+
+// Where it is: its own place, and through its parents.
+Print("the handle's own place {Shown(handle.Position())}, in the world {Shown(handle.Position(Space.WORLD))}")
+room.Turn(0, Deg(90), 0)
+Print("the room turned a quarter: {Shown(handle.Position(Space.WORLD))}")
+room.SetRotation(0, 0, 0)
+room.SetScale(Vec3(2, 2, 2))
+Print("scaled twice: {Shown(handle.Position(Space.WORLD))}")
+room.SetScale(Vec3(1, 1, 1))
+
+// Between parents: where it is in the world kept, or not.
+handle.SetParent(lamp)
+Print("under the lamp, world kept: {Shown(handle.Position(Space.WORLD))}, own {Shown(handle.Position())}")
+handle.SetParent(door, False)
+Print("back, own kept: {Shown(handle.Position())}, world {Shown(handle.Position(Space.WORLD))}")
+handle.SetPosition(Vec3(0, 1, 0))
+
+// Moving: along its own axes or the world's, by turning, and pointing at something.
+Local mover = Pivot()
+mover.Turn(0, Deg(90), 0)
+mover.Move(Vec3(0, 0, -1))
+Print("moved forward, turned a quarter: {Shown(mover.Position())}")
+mover.SetPosition(Vec3(0, 0, 0))
+mover.Translate(Vec3(0, 0, -1))
+Print("translated, whichever way it faces: {Shown(mover.Position())}")
+mover.SetPosition(Vec3(0, 0, 0))
+mover.PointAt(Vec3(0, 0, 5))
+Local forward = mover.Forward()
+Print("pointed at +Z, forward is {Shown(forward)}")
+Print("distance to the door {mover.DistanceTo(door):.2}")
+
+// A copy of a whole tree: its children and names, and its own after that.
+Local copy = room.Copy()
+copy.SetPosition(Vec3(-10, 0, 0))
+Print("a copy has {copy.ChildCount()}, its handle {copy.Find("handle") != Null}, not the same one {copy.Find("handle") != handle}")
+Print("in its order: {copy.Child(0).Name()}, {copy.Child(1).Name()}")
+Print("its handle in the world {Shown((copy.Find("handle") ?? copy).Position(Space.WORLD))}, the first's {Shown(handle.Position(Space.WORLD))}")
+
+// Hiding: what's in it goes too, but keeps its own say for when it's shown.
+door.Hide()
+room.Hide()
+Print("room hidden: the room's showing {room.Showing()}, the lamp's {lamp.Showing()}, hidden itself {lamp.Hidden()}")
+room.Show()
+Print("room shown: the lamp's {lamp.Showing()}, the door's still {door.Showing()}")
+door.Show()
+Print("door shown: the handle's {handle.Showing()}, the copy's door was never hidden {(copy.Find("door") ?? copy).Showing()}")
+
+// Freeing a tree frees what's in it, and the copy stays.
+Local handleOfCopy = copy.Find("handle")
+room.Free()
+Print("freed: the room {room.Freed()}, its handle {handle.Freed()}, the copy's {handleOfCopy?.Freed() ?? True}")
+world.Free()
