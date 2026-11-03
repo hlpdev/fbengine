@@ -1,0 +1,202 @@
+// Slack Water: you keep a tide-mill, and have one slack water to restart it, with Pip, your small
+// brass helper. For now it's its flow, in text, in a window: W goes out toward the far rock, S goes
+// back toward the mill, E takes, fits, and opens the sluice, Q hands things to Pip and takes them
+// back, Escape ends it. With `--walk <bright|dim|dark>`, as ctest runs it, it's offscreen, played
+// by key presses to that ending, ten steps a second, as fast as they go. With `--frames <folder>`,
+// the same to its bright ending, saving a PNG there at each moment that shows something.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import fbengine
+Import "./flow"
+
+// A game's keys, bound to what they do.
+Final Class Controls
+    Field Set: ActionSet
+    Field Out: Action
+    Field Back: Action
+    Field Use: Action
+    Field Hand: Action
+
+    New()
+        Set = ActionSet()
+        Out = Set.Add("out")
+        Out.Bind(Binding.OfKey(Key.W))
+        Out.Bind(Binding.OfGamepadButton(GamepadButton.NORTH))
+        Back = Set.Add("back")
+        Back.Bind(Binding.OfKey(Key.S))
+        Back.Bind(Binding.OfGamepadButton(GamepadButton.EAST))
+        Use = Set.Add("use")
+        Use.Bind(Binding.OfKey(Key.E))
+        Use.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+        Hand = Set.Add("hand")
+        Hand.Bind(Binding.OfKey(Key.Q))
+        Hand.Bind(Binding.OfGamepadButton(GamepadButton.WEST))
+    End New
+
+    // Does to `flow` what was pressed since the last Flip.
+    Method Apply(flow: Flow)
+        If Out.Hit() Then flow.GoOut()
+        If Back.Hit() Then flow.GoBack()
+        If Use.Hit() Then flow.Use()
+        If Hand.Hit() Then flow.Hand()
+    End Method
+End Class
+
+// What a walk presses, a key at a time, each once you've stopped walking and Pip's caught up: W, S,
+// E, and Q as they're played. A number is the clock to wait for, in seconds.
+Function WalkOf(name: String): String[]?
+    Select name
+        // The gear and the paddle first, with Pip's hands too; then the belt, in time.
+        Case "bright"
+            Return ["W", "E", "Q", "W", "E", "S", "S", "E", "Q", "E", "E",
+                    "W", "W", "W", "E", "S", "S", "S", "E", "E", "600"]
+        // The same, but setting off too late for the belt.
+        Case "dim"
+            Return ["W", "E", "Q", "W", "E", "S", "S", "E", "Q", "E", "E", "E",
+                    "430", "W", "W", "S", "600"]
+        // Out to the far rock, with nothing done, as the causeway floods behind you.
+        Case "dark"
+            Return ["W", "W", "W", "600"]
+        Default
+            Return Null
+    End Select
+End Function
+
+// Plays `walk` to its end, by key presses, offscreen, and gives how it ended, each step told to
+// `stepped` once the flow's moved on.
+Function Walked(walk: String[], lines: String[], stepped: Func(Flow)): Ending Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(960, 540)
+    Defer EndGraphics()
+    Local controls = Controls()
+    Local flow = Flow(Function(line: String)
+        Print(line)
+        lines.Add(line)
+    End Function)
+    Local next = 0
+    While flow.Ended() == Ending.NONE
+        If next < walk.Count && !flow.Walking() && flow.PipHere()
+            Local step = walk[next]
+            Local until = Int.Parse(step)
+            If until != Null
+                If flow.Clock() >= (until As Float) Then next += 1
+            Else
+                Select step
+                    Case "W"
+                        Try Simulate.PressKey(Key.W)
+                    Case "S"
+                        Try Simulate.PressKey(Key.S)
+                    Case "E"
+                        Try Simulate.PressKey(Key.E)
+                    Default
+                        Try Simulate.PressKey(Key.Q)
+                End Select
+                next += 1
+            End If
+        End If
+        Flip(False)
+        controls.Apply(flow)
+        flow.Step(0.1)
+        stepped(flow)
+    End While
+    Return flow.Ended()
+End Function
+
+// The screen: how long's left, where you are, and the last of what's happened.
+Function Draw(flow: Flow, lines: String[], font: Font)
+    Local canvas = Screen.Canvas()
+    canvas.SetColor(Color32(20, 28, 36, 255))
+    canvas.Clear()
+    canvas.SetColor(Color32(236, 232, 220, 255))
+    canvas.DrawText(font, "{flow.Left() As Int} seconds of slack water, at {PlaceName(flow.At())}",
+                    24, 20)
+    Local first = Max(lines.Count - 18, 0)
+    For at = first Until lines.Count
+        canvas.DrawText(font, lines[at], 24, 60 + (at - first) * 26)
+    End For
+End Function
+
+// The bright walk, saving the screen in `folder` when you first hold something, when the causeway
+// floods, and at its end.
+Function Framed(folder: Path) Throws GraphicsError, IOError
+    Try Dir.CreateAll(folder)
+    Local lines: String[] = []
+    Local font = Font.BuiltIn(20.0)
+    Local holding = False
+    Local flooded = False
+    Local saved = 0
+    Local failure = ""
+    Local save = Function(flow: Flow, name: String)
+        Draw(flow, lines, font)
+        Try
+            Try Screen.Save(folder / "{name}.png")
+            saved += 1
+        Catch e As GraphicsError
+            failure = e.Message
+        Catch e As IOError
+            failure = e.Message
+        End Try
+    End Function
+    Local ended = Try Walked(WalkOf("bright") ?? [], lines, Function(flow: Flow)
+        If !holding && flow.Held() != Null
+            holding = True
+            save(flow, "holding")
+        End If
+        If !flooded && flow.Clock() >= FLOOD_AT
+            flooded = True
+            save(flow, "flooded")
+        End If
+        If flow.Ended() != Ending.NONE Then save(flow, "ended")
+    End Function)
+    If failure != "" Then Throw IOError(IOErrorKind.OTHER, failure)
+    Print("saved {saved} frames, ended {ended}")
+End Function
+
+// The game, in a window of its lines of text, for a person.
+Function Played() Throws GraphicsError
+    Try Graphics(960, 540)
+    Defer EndGraphics()
+    Window.SetTitle("Slack Water")
+    Frame.SetLimit(60)
+    Local controls = Controls()
+    Local lines: String[] = []
+    Local flow = Flow(Function(line: String)
+        lines.Add(line)
+    End Function)
+    Local font = Font.BuiltIn(20.0)
+    While !Window.Closed() && !KeyHit(Key.ESCAPE)
+        Flip()
+        controls.Apply(flow)
+        flow.Step(Frame.Delta() As Float)
+        If Screen.Texture() != Null Then Draw(flow, lines, font)
+    End While
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Count == 2 && arguments[0] == "--walk"
+    Local walk = WalkOf(arguments[1])
+    If walk == Null
+        PrintError("usage: slack_water [--walk <bright|dim|dark> | --frames <folder>]")
+        Process.Exit(2)
+    Else
+        Local lines: String[] = []
+        Local ended = Try Walked(walk, lines, Function(flow: Flow)
+        End Function)
+        Print("ended {ended}")
+    End If
+ElseIf arguments.Count == 2 && arguments[0] == "--frames"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try Framed(Path(arguments[1]))
+    End If
+ElseIf arguments.Count == 0
+    Try Played()
+Else
+    PrintError("usage: slack_water [--walk <bright|dim|dark> | --frames <folder>]")
+    Process.Exit(2)
+End If

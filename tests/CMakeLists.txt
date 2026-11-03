@@ -377,6 +377,29 @@ if(FBENGINE_FB_TESTS)
                      "cooked bc7: sampled or said so True"
                      "cooked astc: sampled or said so True"
                      "a cooked DDS is what it was True")
+  # Slack Water, by key presses, offscreen, to each of its endings.
+  foreach(walk IN ITEMS "bright=the wheel turns, and the lamp burns bright\r?\nended BRIGHT"
+                        "dim=the wheel turns slowly, and the lamp burns, dimmer\r?\nended DIM"
+                        "dark=the wheel stands still, and the lamp stays dark\r?\nended DARK")
+    string(FIND "${walk}" "=" split)
+    string(SUBSTRING "${walk}" 0 ${split} name)
+    math(EXPR split "${split} + 1")
+    string(SUBSTRING "${walk}" ${split} -1 printed)
+    add_test(NAME examples.slack_water.walk_${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                     -- --walk ${name})
+    set_tests_properties(examples.slack_water.walk_${name} PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "${printed}\r?\n$" TIMEOUT 120)
+  endforeach()
+  # And to its best ending, saving what it looks like for a person to see, in its frames' folder.
+  add_test(NAME examples.slack_water.frames
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --frames "${PROJECT_BINARY_DIR}/example-frames/slack_water")
+  set_tests_properties(examples.slack_water.frames PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "saved 3 frames, ended BRIGHT\r?\n$"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
   foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures
           textures_by_their_settings)
     add_test(NAME proof.${name}_no_gpu

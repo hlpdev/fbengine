@@ -1,0 +1,293 @@
+// What happens in Slack Water, apart from how it's drawn: where you are, what's where, the tide's
+// clock, and how it ends. Each thing that happens is said as a line of text, which is the whole
+// game until the island's drawn.
+
+Import std.collections
+Import std.core
+Import std.math
+
+/// The places along the island, each leading to the next: the mill's inside, its yard, the
+/// causeway, and the far rock.
+Public Enum Place
+    INSIDE = 0
+    YARD = 1
+    CAUSEWAY = 2
+    FAR_ROCK = 3
+End Enum
+
+/// What the mill needs, which the last storm scattered.
+Public Enum Part
+    GEAR = 0
+    PADDLE = 1
+    BELT = 2
+End Enum
+
+/// How the game can end, and NONE until it does.
+Public Enum Ending
+    NONE = 0
+    /// The sluice is open with all three fitted: the lamp burns bright.
+    BRIGHT = 1
+    /// It's open without the belt, which the sea has: the lamp burns, dimmer.
+    DIM = 2
+    /// The tide came in with the sluice shut.
+    DARK = 3
+End Enum
+
+// How many seconds the tide gives: until the causeway floods, and until the water's back.
+Public Const FLOOD_AT: Float = 420.0
+Public Const TIDE_IN_AT: Float = 600.0
+// How long Pip takes to catch up with you.
+Const PIP_LAG: Float = 5.0
+
+// The name of a place, as a line says it.
+Public Function PlaceName(place: Place): String
+    Select place
+        Case Place.INSIDE
+            Return "the mill"
+        Case Place.YARD
+            Return "the yard"
+        Case Place.CAUSEWAY
+            Return "the causeway"
+        Default
+            Return "the far rock"
+    End Select
+End Function
+
+// The name of a part, as a line says it.
+Public Function PartName(part: Part): String
+    Select part
+        Case Part.GEAR
+            Return "the gear"
+        Case Part.PADDLE
+            Return "the sluice paddle"
+        Default
+            Return "the drive belt"
+    End Select
+End Function
+
+// How many seconds it is from `place` to the next, away from the mill.
+Function LegSeconds(place: Place): Float
+    Select place
+        Case Place.INSIDE
+            Return 20.0
+        Case Place.YARD
+            Return 40.0
+        Default
+            Return 60.0
+    End Select
+End Function
+
+/// The game, moved on by Step and told what the player does, saying what happens through `say`.
+Public Final Class Flow
+    Field say: Func(String)
+    Field clock: Float = 0.0
+    Field at: Place = Place.INSIDE
+    // Where you're walking to, and how long is left of it, or Null.
+    Field walkingTo: Place? = Null
+    Field walkLeft: Float = 0.0
+    Field held: Part? = Null
+    Field pipAt: Place = Place.INSIDE
+    Field pipLeft: Float = 0.0
+    Field pipHolds: Part? = Null
+    // Where each part lies, by its number, or Null once something has it, or the sea does.
+    Field lying: Place?[]
+    Field fitted: Bool[]
+    Field flooded: Bool = False
+    Field sluiceOpen: Bool = False
+    Field ending: Ending = Ending.NONE
+
+    Public New(say: Func(String))
+        Self.say = say
+        lying = [Place.YARD, Place.CAUSEWAY, Place.FAR_ROCK]
+        fitted = [False, False, False]
+    End New
+
+    /// How far the tide's clock has gone, in seconds.
+    Public Method Clock(): Float => clock
+
+    /// Where you are, or were last, while you're walking.
+    Public Method At(): Place => at
+
+    /// Whether you're walking between places.
+    Public Method Walking(): Bool => walkingTo != Null
+
+    /// Whether Pip's with you.
+    Public Method PipHere(): Bool => pipAt == at && pipLeft <= 0.0 && walkingTo == Null
+
+    /// How it's ended, NONE until it does.
+    Public Method Ended(): Ending => ending
+
+    /// How many seconds are left until the tide's in.
+    Public Method Left(): Float => Max(TIDE_IN_AT - clock, 0.0)
+
+    /// What you're carrying, or Null.
+    Public Method Held(): Part? => held
+
+    /// What Pip's carrying, or Null.
+    Public Method PipHolds(): Part? => pipHolds
+
+    /// Whether the part's on the mill.
+    Public Method Fitted(part: Part): Bool => fitted[part As Int]
+
+    /// Whether the sluice is open.
+    Public Method SluiceOpen(): Bool => sluiceOpen
+
+    /// Moves it on `seconds`: your walk, Pip's, the causeway flooding, and the tide coming in.
+    Public Method Step(seconds: Float)
+        If ending != Ending.NONE Then Return
+        clock += seconds
+        Local going = walkingTo
+        If going != Null
+            walkLeft -= seconds
+            If walkLeft <= 0.0
+                at = going
+                walkingTo = Null
+                pipLeft = PIP_LAG
+                Say("you reach {PlaceName(at)}")
+                Local lies = LyingHere()
+                If lies != Null Then Say("{PartName(lies)} lies here")
+            End If
+        End If
+        If pipAt != at || pipLeft > 0.0
+            pipLeft -= seconds
+            If pipLeft <= 0.0 && walkingTo == Null && pipAt != at
+                If flooded && (at As Int) >= (Place.CAUSEWAY As Int)
+                    pipLeft = 0.0
+                Else
+                    pipAt = at
+                    Say("Pip catches up")
+                End If
+            End If
+        End If
+        If !flooded && clock >= FLOOD_AT Then Flood()
+        If clock >= TIDE_IN_AT Then TideIn()
+    End Method
+
+    /// Walks toward the far rock, if there's a way and you're not walking.
+    Public Method GoOut()
+        If walkingTo != Null || at == Place.FAR_ROCK Then Return
+        Local next = ((at As Int) + 1) As Place
+        If flooded && (next As Int) >= (Place.CAUSEWAY As Int)
+            Say("the causeway's under water")
+            Return
+        End If
+        Say("you set off for {PlaceName(next)}")
+        walkingTo = next
+        walkLeft = LegSeconds(at)
+    End Method
+
+    /// Walks back toward the mill, if there's a way and you're not walking.
+    Public Method GoBack()
+        If walkingTo != Null || at == Place.INSIDE Then Return
+        Local next = ((at As Int) - 1) As Place
+        If flooded && at == Place.FAR_ROCK
+            Say("the causeway's under water")
+            Return
+        End If
+        Say("you set off for {PlaceName(next)}")
+        walkingTo = next
+        walkLeft = LegSeconds(next)
+    End Method
+
+    /// Takes what lies here, or fits what you're holding, or opens the sluice, as what's here lets.
+    Public Method Use()
+        If walkingTo != Null Then Return
+        If at == Place.INSIDE
+            Local holding = held
+            If holding != Null
+                fitted[holding As Int] = True
+                held = Null
+                Say("you fit {PartName(holding)}")
+                Return
+            End If
+            If !sluiceOpen && fitted[Part.GEAR As Int] && fitted[Part.PADDLE As Int]
+                sluiceOpen = True
+                Say("you open the sluice, and wait for the water")
+                Return
+            End If
+            Say("there's nothing to do here yet")
+            Return
+        End If
+        Local lies = LyingHere()
+        If lies == Null
+            Say("there's nothing here")
+            Return
+        End If
+        If held != Null
+            Say("your hands are full")
+            Return
+        End If
+        lying[lies As Int] = Null
+        held = lies
+        Say("you pick up {PartName(lies)}")
+    End Method
+
+    /// Hands what you're holding to Pip, or takes what Pip's holding, if Pip's with you.
+    Public Method Hand()
+        If !PipHere() Then Return
+        Local holding = held
+        Local holds = pipHolds
+        If holding != Null && holds == Null
+            pipHolds = holding
+            held = Null
+            Say("you hand Pip {PartName(holding)}")
+        ElseIf holding == Null && holds != Null
+            held = holds
+            pipHolds = Null
+            Say("you take {PartName(holds)} from Pip")
+        End If
+    End Method
+
+    // The part lying where you are, if there is one.
+    Method LyingHere(): Part?
+        For part = 0 Until lying.Count
+            Local place = lying[part]
+            If place != Null && place == at Then Return part As Part
+        End For
+        Return Null
+    End Method
+
+    // The causeway goes under: what's on it or past it is the sea's, and someone crossing goes back
+    // to the yard.
+    Method Flood()
+        flooded = True
+        Say("the causeway floods")
+        For part = 0 Until lying.Count
+            Local place = lying[part]
+            If place != Null && (place As Int) >= (Place.CAUSEWAY As Int) && at != place
+                lying[part] = Null
+            End If
+        End For
+        Local going = walkingTo
+        Local crossing = going != Null && ((going As Int) >= (Place.CAUSEWAY As Int) ||
+                                           (at As Int) >= (Place.CAUSEWAY As Int))
+        If crossing || at == Place.CAUSEWAY
+            at = Place.YARD
+            walkingTo = Null
+            Say("the water carries you back to the yard")
+        End If
+    End Method
+
+    // The water's back, and it ends, by what's on the mill.
+    Method TideIn()
+        Say("the tide comes in")
+        If !sluiceOpen
+            ending = Ending.DARK
+            Say("the wheel stands still, and the lamp stays dark")
+        ElseIf fitted[Part.BELT As Int]
+            ending = Ending.BRIGHT
+            Say("the wheel turns, and the lamp burns bright")
+        Else
+            ending = Ending.DIM
+            Say("the wheel turns slowly, and the lamp burns, dimmer")
+        End If
+    End Method
+
+    // Says a line, with the time on the clock.
+    Method Say(line: String)
+        Local whole = clock As Int
+        Local seconds = whole % 60
+        Local zero = seconds < 10 ? "0" : ""
+        say("[{whole / 60}:{zero}{seconds}] {line}")
+    End Method
+End Class
