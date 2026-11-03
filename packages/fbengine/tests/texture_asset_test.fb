@@ -106,6 +106,21 @@ Function APngsAlphaIsSeen() Throws IOError, GraphicsError
 End Function
 
 @Test
+Function ASidecarClampsATexture() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://clamp", {
+        "across.png": Filled(4, Color32(255, 0, 0, 255)),
+        "across.png.toml": "clamp_across = true".Bytes,
+    })
+    Defer Assets.Unmount("res://clamp")
+    Local texture = Try Assets.Load<Texture>("res://clamp/across.png")
+    Defer texture.Free()
+    Expect(texture.WrapAcross() == TextureWrap.CLAMP)
+    Expect(texture.WrapDown() == TextureWrap.REPEAT)
+End Function
+
+@Test
 Function TheCacheHasOneTextureOfAFile() Throws IOError, GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Window.SetHeadless(True)

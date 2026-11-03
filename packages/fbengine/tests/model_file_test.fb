@@ -500,3 +500,92 @@ Function WhatAModelNoLongerReadsDoesntReloadIt() Throws IOError
     Try Assets.Reload("res://file-depends/two.bin")
     Expect(reloads() == 1)
 End Function
+
+// A triangle of two morph targets, the second of normals alone, weighted by its mesh, and a clip
+// moving their weights.
+Function Morphed(): UInt8[]
+    Local one = [0, 0, 0x80, 0x3F] As UInt8[]
+    Local half = [0, 0, 0, 0x3F] As UInt8[]
+    Local zero = [0, 0, 0, 0] As UInt8[]
+    Local bytes: UInt8[] = []
+    // Each vertex moves along x by 1, in the first target; normals, in the second, by y.
+    For vertex = 1 To 3
+        bytes.AddAll(one)
+        bytes.AddAll(zero)
+        bytes.AddAll(zero)
+    End For
+    For vertex = 1 To 3
+        bytes.AddAll(zero)
+        bytes.AddAll(one)
+        bytes.AddAll(zero)
+    End For
+    // Keys at 0 and 1, and each one's two weights: (0, 0), then (1, 0.5).
+    bytes.AddAll(zero)
+    bytes.AddAll(one)
+    bytes.AddAll(zero)
+    bytes.AddAll(zero)
+    bytes.AddAll(one)
+    bytes.AddAll(half)
+    Local uri = "data:application/octet-stream;base64,{Base64.Encode(bytes)}"
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+            "\"buffers\":[{{\"byteLength\":102,\"uri\":\"{Buffered(1)}\"}}," +
+            "{{\"byteLength\":96,\"uri\":\"{uri}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":96,\"byteLength\":6}}," +
+            "{{\"buffer\":1,\"byteLength\":36}}," +
+            "{{\"buffer\":1,\"byteOffset\":36,\"byteLength\":36}}," +
+            "{{\"buffer\":1,\"byteOffset\":72,\"byteLength\":8}}," +
+            "{{\"buffer\":1,\"byteOffset\":80,\"byteLength\":16}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3," +
+            "\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]}}," +
+            "{{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}}," +
+            "{{\"bufferView\":2,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}}," +
+            "{{\"bufferView\":3,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"," +
+            "\"min\":[1,0,0],\"max\":[1,0,0]}}," +
+            "{{\"bufferView\":4,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}}," +
+            "{{\"bufferView\":5,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"," +
+            "\"min\":[0],\"max\":[1]}}," +
+            "{{\"bufferView\":6,\"componentType\":5126,\"count\":4,\"type\":\"SCALAR\"}}]," +
+            "\"meshes\":[{{\"weights\":[0.5,0.25],\"primitives\":[{{\"attributes\":" +
+            "{{\"POSITION\":0,\"NORMAL\":1}},\"indices\":2,\"targets\":[{{\"POSITION\":3}}," +
+            "{{\"NORMAL\":4}}]}}]}}]," +
+            "\"animations\":[{{\"name\":\"go\",\"samplers\":[{{\"input\":5,\"output\":6}}]," +
+            "\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"weights\"}}}}]}}]," +
+            "\"nodes\":[{{\"name\":\"m\",\"mesh\":0}},{{\"name\":\"own\",\"mesh\":0," +
+            "\"weights\":[1,0]}}],\"scenes\":[{{\"nodes\":[0,1]}}]}}").Bytes
+End Function
+
+@Test
+Function ASpawnsMeshesMorphAsTheFileSays() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://file-morph", {"a.gltf": Morphed()})
+    Defer Assets.Unmount("res://file-morph")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-morph/a.gltf")
+    Defer model.Free()
+    Expect(model.Geometries()[0].Surface(0).MorphTargetCount() == 2)
+    Local root = Try model.Spawn()
+    Local found = root.Find("m")
+    Local other = root.Find("own")
+    Expect(found Is Mesh && other Is Mesh)
+    If !(found Is Mesh) || !(other Is Mesh) Then Return
+    Local mesh = found As Mesh
+    // Its mesh's weights, by default, and what they move.
+    Expect(mesh.MorphWeights() == [0.5, 0.25] As Float[])
+    Expect(IsClose(mesh.MorphedPositions()[0].x, 0.5, 0.001))
+    // A node's own, over its mesh's.
+    Expect((other As Mesh).MorphWeights() == [1.0, 0.0] As Float[])
+    Expect(IsClose((other As Mesh).MorphedPositions()[0].x, 1.0, 0.001))
+    // A target of normals alone turns a normal, and moves no vertex.
+    Expect(mesh.MorphedNormals()[0].y > 0.0)
+    Expect(IsClose(mesh.MorphedPositions()[0].y, 0.0, 0.001))
+    // A clip moves them.
+    Local player = root.Player()
+    player.Play(model.Clips()[0], PlayMode.ONCE)
+    UpdateWorld(1.0)
+    Local weights = mesh.MorphWeights()
+    Expect(IsClose(weights[0], 1.0, 0.01) && IsClose(weights[1], 0.5, 0.01))
+End Function

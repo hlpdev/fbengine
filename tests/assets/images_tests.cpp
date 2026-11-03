@@ -462,3 +462,31 @@ TEST_CASE("a KTX2's sample of 32 bits or more isn't loaded", "[assets]") {
     wide[dfd + 4 + 24 + 2] = 32;
     REQUIRE(message(wide).contains("32 bits"));
 }
+
+TEST_CASE("a BMP decodes, whatever it's called, and a DDS is refused, saying so", "[assets]") {
+    // A BMP's headers, 1 by 1, 24 bits, then its pixel, blue first, padded to 4 bytes.
+    bytes_t bmp(58, 0);
+    bmp[0] = 'B';
+    bmp[1] = 'M';
+    bmp[2] = 58;
+    bmp[10] = 54;
+    bmp[14] = 40;
+    bmp[18] = 1;
+    bmp[22] = 1;
+    bmp[26] = 1;
+    bmp[28] = 24;
+    bmp[34] = 4;
+    bmp[54] = 3;
+    bmp[55] = 2;
+    bmp[56] = 1;
+    const assets::image_t image = decoded(bmp);
+    REQUIRE(image.format == assets::formats::rgba8_srgb);
+    REQUIRE(image.width == 1);
+    REQUIRE(image.texels[0] == 1);
+    REQUIRE(image.texels[1] == 2);
+    REQUIRE(image.texels[2] == 3);
+    REQUIRE(image.texels[3] == 255);
+    const bytes_t dds{ 'D', 'D', 'S', ' ', 0, 0, 0, 0 };
+    REQUIRE(message(dds).contains("DDS"));
+    REQUIRE(failure(dds) == assets::failure_t::INVALID_DATA);
+}

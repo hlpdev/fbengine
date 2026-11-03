@@ -351,6 +351,13 @@ file_kind_t kind_of(std::span<const std::uint8_t> bytes) {
     if (bytes.size() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
         return file_kind_t::JPEG;
     }
+    if (bytes.size() >= 2 && bytes[0] == 'B' && bytes[1] == 'M') {
+        return file_kind_t::BMP;
+    }
+    if (bytes.size() >= 4 && bytes[0] == 'D' && bytes[1] == 'D' && bytes[2] == 'S' &&
+        bytes[3] == ' ') {
+        return file_kind_t::DDS;
+    }
     if (starts(bytes, ktx2_signature)) {
         return file_kind_t::KTX2;
     }
@@ -372,7 +379,12 @@ result_t<image_t> decode_image(std::span<const std::uint8_t> bytes, const image_
     switch (kind_of(bytes)) {
     case file_kind_t::PNG:
     case file_kind_t::JPEG:
+    case file_kind_t::BMP:
         return decode_stb(bytes, options, name);
+    case file_kind_t::DDS:
+        return std::unexpected(invalid(
+            name,
+            "is a DDS, which the engine doesn't load: a game's tools make it a KTX2 or a PNG"));
     case file_kind_t::KTX2:
         return decode_ktx2(bytes, options, name);
     case file_kind_t::GLB:

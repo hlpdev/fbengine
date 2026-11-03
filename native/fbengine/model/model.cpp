@@ -121,6 +121,23 @@ bool add_primitive(std::uint64_t geometry, const assets::primitive_t& from,
                                   static_cast<std::int32_t>(from.indices.size())) < 0) {
         return false;
     }
+    // A target's positions, zeros for one of normals alone, as a surface's targets are by their
+    // indices.
+    for (const assets::morph_target_t& target : from.targets) {
+        if ((!target.positions.empty() && target.positions.size() != vertices.size()) ||
+            (!target.normals.empty() && target.normals.size() != vertices.size())) {
+            return refused("a morph target has some of its primitive's vertices");
+        }
+        const std::vector<assets::vec3_t> nothing(target.positions.empty() ? vertices.size() : 0,
+                                                  assets::vec3_t{ 0, 0, 0 });
+        const std::vector<assets::vec3_t>& moved =
+            target.positions.empty() ? nothing : target.positions;
+        if (fbe_morph_add_target(geometry, surface, moved.front().data(),
+                                 target.normals.empty() ? nullptr : target.normals.front().data(),
+                                 static_cast<std::int32_t>(vertices.size())) < 0) {
+            return false;
+        }
+    }
     if (from.joints.empty()) {
         return true;
     }
@@ -299,6 +316,16 @@ std::uint64_t make_node(const spawn_t& spawn, const assets::node_t& node, std::u
     if (mesh &&
         !fbe_mesh_set_geometry(entity, spawn.geometries[static_cast<std::size_t>(node.mesh)])) {
         return 0;
+    }
+    if (mesh) {
+        // The node's own weights, or its mesh's.
+        const std::vector<float>& weights =
+            node.weights.empty() ? model.meshes[static_cast<std::size_t>(node.mesh)].weights
+                                 : node.weights;
+        if (!weights.empty() && !fbe_morph_set_weights(entity, weights.data(),
+                                                       static_cast<std::int32_t>(weights.size()))) {
+            return 0;
+        }
     }
     // What's more on a node is an entity under it, of its name.
     std::uint64_t as_camera = kind == FBE_ENTITY_CAMERA ? entity : 0;

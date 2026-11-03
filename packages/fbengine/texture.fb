@@ -150,6 +150,7 @@ Public Final Class Texture Implements Asset
         If handle == 0 Then Throw LoadError(load)
         If settings.Alpha Then fbe_texture_set_alpha(handle, True)
         Local made = Texture(handle)
+        If settings.ClampAcross || settings.ClampDown Then made.ClampedAs(settings)
         If settings.Compression != ImageCompression.NONE && Assets.FromSource()
             made.cookedWithout = load.Path()
         End If
@@ -166,11 +167,19 @@ Public Final Class Texture Implements Asset
             Throw LoadError(load)
         End If
         If settings.Alpha Then fbe_texture_set_alpha(handle, True)
+        If settings.ClampAcross || settings.ClampDown Then ClampedAs(settings)
         Return True
     End Method
 
     /// Whether it's gone, freed as the GPU stopped, so Assets makes a new one.
     @MainThread Public Method Stale(): Bool => Freed()
+
+    // Wraps as `settings` say.
+    @MainThread
+    Method ClampedAs(settings: ImageSettings)
+        SetWrap(settings.ClampAcross ? TextureWrap.CLAMP : TextureWrap.REPEAT,
+                settings.ClampDown ? TextureWrap.CLAMP : TextureWrap.REPEAT)
+    End Method
 
     // A panic for a file's own format, which is only sampled, saying how to keep its pixels; and a
     // warning, once, in development, for an image whose cook will be that, so what works here does

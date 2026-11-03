@@ -351,7 +351,32 @@ if(FBENGINE_FB_TESTS)
                        "${PROJECT_SOURCE_DIR}/examples/proof/debug_ui_and_console"
                        "--press-at;4;--press-at;6" "\nwatched 7 frames\r?\n$")
   # With no GPU, those that need one to make what they draw say so, and the rest draw nothing.
-  foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures)
+  fbengine_add_proof(textures_by_their_settings
+                     "a [.]cwm's sound of 4800 frames"
+                     "by default 5 levels, RGBA8, REPEAT"
+                     "mipmaps = false, 1 level"
+                     "srgb = false, RGBA8_LINEAR"
+                     "alpha in its pixels True"
+                     "alpha in a whole one False"
+                     "clamped CLAMP, CLAMP"
+                     "a strip of 4 frames"
+                     "frame 0 [(]255, 0, 0, 255[)]"
+                     "frame 1 [(]0, 255, 0, 255[)]"
+                     "frame 2 [(]0, 0, 255, 255[)]"
+                     "frame 3 [(]255, 255, 255, 255[)]"
+                     "a JPEG 8 across, its red over 250 True"
+                     "a BMP [(]255, 128, 0, 255[)]"
+                     "a [.]pt [(]255, 0, 255, 255[)], by a path of backslashes"
+                     "a [.]it 4 across"
+                     "a DDS: INVALID_DATA, says DDS True"
+                     "cooked platform, red True, 5 levels"
+                     "cooked uastc, red True, 5 levels"
+                     "cooked none, red True, 5 levels"
+                     "cooked bc7: sampled or said so True"
+                     "cooked astc: sampled or said so True"
+                     "a cooked DDS is what it was True")
+  foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures
+          textures_by_their_settings)
     add_test(NAME proof.${name}_no_gpu
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/proof/${name}"
                      -- --watch --frames 2)

@@ -30,6 +30,10 @@ Public Struct ImageSettings
     Public Field Compression: ImageCompression = ImageCompression.PLATFORM
     /// How hard the cooker's encoder works: 0, fastest, to 4, best.
     Public Field Quality: Int32 = 2
+    /// Whether it's clamped at its left and right edges, and at its top and bottom, rather than
+    /// repeated, as Texture.SetWrap sets.
+    Public Field ClampAcross: Bool = False
+    Public Field ClampDown: Bool = False
     /// Whether its alpha's for blending, as a Material blending AUTO goes by (Texture.SetAlpha),
     /// when it's a KTX2 of a compressed format, whose blocks aren't read to see. What isn't
     /// compressed is seen, whatever this says.

@@ -110,8 +110,8 @@ TEST_CASE("a model's clip plays on entities named as its nodes") {
     CHECK(std::string_view(fbe_clip_name(clip)) == "walk");
     CHECK(fbe_clip_frame_rate(clip) == 24.0F);
     CHECK(fbe_clip_length(clip) == 1.0F);
-    // The unnamed node's channel is left out.
-    CHECK(fbe_clip_channel_count(clip) == 2);
+    // The unnamed node's channel too, by the name it's given.
+    CHECK(fbe_clip_channel_count(clip) == 3);
     // It lives on its own once the load's gone.
     fbe_assets_free(load);
     const std::uint64_t world = fbe_world_create();

@@ -23,10 +23,10 @@ using vfs::failure_t;
 using vfs::result_t;
 
 /// What a file's bytes say it is, whatever its name says.
-enum class file_kind_t : std::uint8_t { UNKNOWN, PNG, JPEG, KTX2, GLB, GLTF };
+enum class file_kind_t : std::uint8_t { UNKNOWN, PNG, JPEG, BMP, DDS, KTX2, GLB, GLTF };
 
-/// What `bytes` start as: a PNG's, a JPEG's, or a KTX2's signature, a binary glTF's, or the JSON
-/// object a glTF is.
+/// What `bytes` start as: a PNG's, a JPEG's, a BMP's, a DDS's, or a KTX2's signature, a binary
+/// glTF's, or the JSON object a glTF is.
 file_kind_t kind_of(std::span<const std::uint8_t> bytes);
 
 /// Vulkan's numbers for the formats PNGs and JPEGs decode to, and those Basis Universal's KTX2
