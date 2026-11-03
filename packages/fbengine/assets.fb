@@ -115,7 +115,8 @@ Final Class TypedCache<T> Implements AnyCache
             cached.Again = True
             Return
         End If
-        If cached.Made == Null Then Return
+        Local before = cached.Made
+        If before == Null || before.Stale() Then Return
         cached.Reloading = True
         Local load = fbe_assets_load_async(T.LoadKind() As Int32, key, False, True)
         If load == 0
@@ -127,7 +128,8 @@ Final Class TypedCache<T> Implements AnyCache
         cached.Reloading = False
         Local current = Entries.Get(key)
         Local made = cached.Made
-        If cached.Released || current == Null || !RefEquals(current, cached) || made == Null
+        If cached.Released || current == Null || !RefEquals(current, cached) || made == Null ||
+           made.Stale()
             Return
         End If
         If fbe_assets_failed(load)
@@ -242,6 +244,7 @@ Public Final Class Assets
     Static Field caches: AnyCache[] = []
     Static Field mounts: (String, Path?)[] = []
     Static Field watch: FolderWatch? = Null
+    Static Field fromSource: Bool = False
     Static Field reloads: AssetReload[] = []
     // The assets whose loads read a file besides their own, by its path, as a glTF's buffers.
     Static Field dependents: Map<String, Set<String>> = Map<String, Set<String>>()
@@ -329,7 +332,12 @@ Public Final Class Assets
     Public Static Method MountSource(folder: String) Throws IOError
         MountFolder("res://", Path(folder))
         Try WatchFolders()
+        fromSource = True
     End Method
+
+    // Whether the game runs from its files as they are, not cooked, as a debug build's does.
+    @MainThread
+    Package Static Method FromSource(): Bool => fromSource
 
     /// Mounts a release's files at res://: the pak `name`.pak beside the executable, or in a macOS
     /// bundle's Resources on macOS, the folder beside the executable's, or else the pak at `built`,
@@ -375,6 +383,7 @@ Public Final Class Assets
                 If mounts[i].0 == place
                     Local folder = mounts[i].1
                     mounts.RemoveAt(i)
+                    If place == "res://" Then fromSource = False
                     Local watching = watch
                     If watching != Null && folder != Null && place != Null
                         Unplace(watching, place, folder.Text)
@@ -456,6 +465,10 @@ Public Final Class Assets
     // of those changes.
     @MainThread
     Static Method Depends(key: String, load: UInt64)
+        // What it read before it was loaded again, which it doesn't depend on now if it isn't below.
+        For reading In dependents
+            reading.1.Remove(key)
+        End For
         For at = 0 Until fbe_assets_reads(load)
             Local read = ""
             Unsafe
@@ -579,7 +592,7 @@ Public Final Class Assets
     Public Static Method Load<T>(path: String): T Throws IOError
         Where T: Asset & Class & Hashable
         Local key = Try Normalize(path)
-        Local cached = TypedCache<T>.Of().Entries.Get(key)
+        Local cached = Entry<T>(key)
         If cached != Null && cached.Load != 0
             // It's loading on the workers still, and is finished here, now.
             fbe_assets_wait(cached.Load)
@@ -602,7 +615,7 @@ Public Final Class Assets
                                             progress: LoadProgress? = Null): T Throws IOError
         Where T: Asset & Class & Hashable
         Local key = Try Normalize(path)
-        Local cached = TypedCache<T>.Of().Entries.Get(key)
+        Local cached = Entry<T>(key)
         If cached == Null || (cached.Load == 0 && cached.Made == Null)
             Local load = fbe_assets_load_async(T.LoadKind() As Int32, path, False, True)
             If load == 0 Then Throw IOError(FailureKind(fbe_assets_load_failure()), LastError(),
@@ -626,7 +639,7 @@ Public Final Class Assets
     @MainThread
     Public Static Method Find<T>(path: String): T? Throws IOError
         Where T: Asset & Class & Hashable
-        Local cached = TypedCache<T>.Of().Entries.Get(Try Normalize(path))
+        Local cached = Entry<T>(Try Normalize(path))
         If cached == Null || cached.Released Then Return Null
         Return cached.Made
     End Method
@@ -976,6 +989,20 @@ Public Final Class Assets
             Forget<T>(key, cached)
             Throw e
         End Try
+    End Method
+
+    // T's cache's entry of `key`, letting go of one whose asset is stale.
+    @MainThread
+    Static Method Entry<T>(key: String): Cached<T>?
+        Where T: Asset & Class & Hashable
+        Local cached = TypedCache<T>.Of().Entries.Get(key)
+        If cached == Null Then Return Null
+        Local made = cached.Made
+        If made == Null || !made.Stale() Then Return cached
+        cached.Released = True
+        Forget<T>(key, cached)
+        Unindex(cached)
+        Return Null
     End Method
 
     // Takes `cached` out of T's cache, if it's still the entry of `key`.

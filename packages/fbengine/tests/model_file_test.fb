@@ -1,0 +1,591 @@
+// Models as Assets: what their files can be, and what a reload does to what's spawned of them,
+// from the second review's repros, on the GPU ctest's tests use; a machine with no Vulkan sets
+// FBENGINE_NO_GPU to 1 and skips them.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import std.time
+Import fbengine
+Import "./gltfs"
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// An image no material reads: a valid glTF.
+@Test
+Function AnImageNoMaterialReadsDoesntRefuseTheModel() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local file = Gltf(1, "\"images\":[{{\"uri\":\"{PngUri(Color32(255, 0, 0, 255))}\"}}]," +
+                      "\"nodes\":[{{\"name\":\"a\",\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+    Assets.MountFiles("res://file-unused", {"a.gltf": file})
+    Defer Assets.Unmount("res://file-unused")
+    Local model = Try Assets.Load<Model>("res://file-unused/a.gltf")
+    Defer model.Free()
+    Expect(model.Textures().Count <= 1)
+End Function
+
+// A joint with no name: SimpleSkin, of Khronos's samples, has them.
+@Test
+Function ASkinWithUnnamedJointsLoads() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local file = Gltf(1, "\"skins\":[{{\"joints\":[1]}}]," +
+                      "\"nodes\":[{{\"mesh\":0,\"name\":\"m\"}},{{}}],\"scenes\":[{{\"nodes\":[0,1]}}]")
+    Assets.MountFiles("res://file-unnamed", {"a.gltf": file})
+    Defer Assets.Unmount("res://file-unnamed")
+    Local model = Try Assets.Load<Model>("res://file-unnamed/a.gltf")
+    Defer model.Free()
+    Expect(model.Skins().Count == 1)
+End Function
+
+Function TimesUri(): String
+    Local bytes: UInt8[] = []
+    bytes.AddAll([0, 0, 0, 0, 0, 0, 0x80, 0x3F] As UInt8[])
+    // Values: two VEC3s, (0, 0, 0) and (1, 0, 0).
+    bytes.AddAll([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[])
+    bytes.AddAll([0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[])
+    Return "data:application/octet-stream;base64,{Base64.Encode(bytes)}"
+End Function
+
+// A clip moving node 0 along x, with `names`, the nodes and scenes.
+Function Animated(names: String): UInt8[]
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+            "\"buffers\":[{{\"byteLength\":32,\"uri\":\"{TimesUri()}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":8}}," +
+            "{{\"buffer\":0,\"byteOffset\":8,\"byteLength\":24}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\",\"min\":[0],\"max\":[1]}}," +
+            "{{\"bufferView\":1,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}}]," +
+            "\"animations\":[{{\"name\":\"go\",\"samplers\":[{{\"input\":0,\"output\":1}}]," +
+            "\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"translation\"}}}}]}}]," +
+            names + "}}").Bytes
+End Function
+
+@Test
+Function AClipOfAnUnnamedNodeMovesIt() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://file-unclip",
+                      {"a.gltf": Animated("\"nodes\":[{{}}],\"scenes\":[{{\"nodes\":[0]}}]")})
+    Defer Assets.Unmount("res://file-unclip")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-unclip/a.gltf")
+    Defer model.Free()
+    Local root = Try model.Spawn()
+    Local player = root.Player()
+    player.Play(model.Clips()[0], PlayMode.ONCE)
+    UpdateWorld(0.5)
+    Local node = root.Children()[0]
+    Expect(node.Position().x > 0.25)
+End Function
+
+// Two nodes of one name, the clip on the second in the tree: the first's moved in its place.
+@Test
+Function AClipMovesTheNodeItNames() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://file-dup", {"a.gltf": Animated(
+        "\"nodes\":[{{\"name\":\"n\"}},{{\"name\":\"n\"}}],\"scenes\":[{{\"nodes\":[1,0]}}]")})
+    Defer Assets.Unmount("res://file-dup")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-dup/a.gltf")
+    Defer model.Free()
+    Local root = Try model.Spawn()
+    Local player = root.Player()
+    player.Play(model.Clips()[0], PlayMode.ONCE)
+    UpdateWorld(0.5)
+    Local children = root.Children()
+    // Node 0 is the second child; node 1, first, doesn't move.
+    Expect(children[1].Position().x > 0.25)
+    Expect(children[0].Position().x == 0.0)
+End Function
+
+// A Player playing a Spawn's clip, when its file's reloaded.
+@Test
+Function AReloadKeepsAPlayerMovingWhatsSpawned() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local file = Animated("\"nodes\":[{{\"name\":\"n\"}}],\"scenes\":[{{\"nodes\":[0]}}]")
+    Try File.WriteBytes(folder.Path / "a.gltf", file)
+    Assets.MountFolder("res://file-player", folder.Path)
+    Defer Assets.Unmount("res://file-player")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-player/a.gltf")
+    Defer model.Free()
+    Local root = Try model.Spawn()
+    Local player = root.Player()
+    Local clip = model.Clips()[0]
+    player.Play(clip, PlayMode.LOOP)
+    UpdateWorld(0.25)
+    Local before = root.Find("n")
+    Expect(before != Null && before.Position().x > 0.1)
+    Local old = model.Clips()[0]
+    Try Assets.Reload("res://file-player/a.gltf")
+    FlipUntil(Function(): Bool => !RefEquals(model.Clips()[0], old))
+    Expect(!RefEquals(model.Clips()[0], old))
+    UpdateWorld(0.25)
+    Local now = root.Find("n")
+    Local after = now != Null ? now.Position().x : -1.0
+    Expect(after > 0.1)
+End Function
+
+// A file that builds but whose camera can't spawn: Reload's doc says it leaves it as it was.
+@Test
+Function AFileThatCantSpawnLeavesItAsItWas() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local good = Gltf(1, "\"nodes\":[{{\"name\":\"m\",\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+    Local bad = Gltf(2, "\"cameras\":[{{\"type\":\"perspective\",\"perspective\":{{\"yfov\":1,\"znear\":5,\"zfar\":1}}}}]," +
+                     "\"nodes\":[{{\"name\":\"m\",\"mesh\":0,\"camera\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+    Try File.WriteBytes(folder.Path / "a.gltf", good)
+    Assets.MountFolder("res://file-nospawn", folder.Path)
+    Defer Assets.Unmount("res://file-nospawn")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-nospawn/a.gltf")
+    Defer model.Free()
+    Local root = Try model.Spawn()
+    Local geometry = model.Geometries()[0]
+    Assets.Reloaded()
+    Try File.WriteBytes(folder.Path / "a.gltf", bad)
+    Try Assets.Reload("res://file-nospawn/a.gltf")
+    Local error: IOError? = Null
+    Local done = False
+    FlipUntil(Function(): Bool
+        For reload In Assets.Reloaded()
+            done = True
+            error = reload.Error
+        End For
+        Return done
+    End Function)
+    Expect(done)
+    Expect(error != Null)
+    Expect(RefEquals(model.Geometries()[0], geometry))
+    Expect(root.Find("m") != Null)
+End Function
+
+// A reload to a file of fewer scenes.
+@Test
+Function AReloadWithFewerScenesSaysSo() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local two = Gltf(1, "\"nodes\":[{{\"name\":\"m\",\"mesh\":0}},{{\"name\":\"k\"}}],\"scenes\":[{{\"nodes\":[0]}},{{\"nodes\":[1]}}]")
+    Local one = Gltf(1, "\"nodes\":[{{\"name\":\"m\",\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+    Try File.WriteBytes(folder.Path / "a.gltf", two)
+    Assets.MountFolder("res://file-scenes", folder.Path)
+    Defer Assets.Unmount("res://file-scenes")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-scenes/a.gltf")
+    Defer model.Free()
+    Local root = Try model.Spawn(Null, 1)
+    Assets.Reloaded()
+    Try File.WriteBytes(folder.Path / "a.gltf", one)
+    Try Assets.Reload("res://file-scenes/a.gltf")
+    Local error: IOError? = Null
+    Local done = False
+    FlipUntil(Function(): Bool
+        For reload In Assets.Reloaded()
+            done = True
+            error = reload.Error
+        End For
+        Return done
+    End Function)
+    Expect(done)
+    Expect((error?.Kind ?? IOErrorKind.INVALID_DATA) == IOErrorKind.INVALID_DATA)
+    Expect(root.Children().Count > 0)
+End Function
+
+// NaN positions from a buffer reach the scene.
+Function NanBuffer(): String
+    Local nan = [0, 0, 0xC0, 0x7F] As UInt8[]
+    Local buffer: UInt8[] = []
+    For at = 0 Until 9
+        buffer.AddAll(nan)
+    End For
+    buffer.AddAll([0, 0, 1, 0, 2, 0] As UInt8[])
+    Return "data:application/octet-stream;base64,{Base64.Encode(buffer)}"
+End Function
+
+// Two animated nodes of one name, a valid glTF.
+@Test
+Function TwoAnimatedNodesOfOneNameLoad() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local bytes: UInt8[] = []
+    bytes.AddAll([0, 0, 0, 0, 0, 0, 0x80, 0x3F] As UInt8[])
+    bytes.AddAll([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[])
+    bytes.AddAll([0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[])
+    Local uri = "data:application/octet-stream;base64,{Base64.Encode(bytes)}"
+    Local file = ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+                  "\"buffers\":[{{\"byteLength\":32,\"uri\":\"{uri}\"}}]," +
+                  "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":8}},{{\"buffer\":0,\"byteOffset\":8,\"byteLength\":24}}]," +
+                  "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\",\"min\":[0],\"max\":[1]}}," +
+                  "{{\"bufferView\":1,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}}]," +
+                  "\"animations\":[{{\"name\":\"go\",\"samplers\":[{{\"input\":0,\"output\":1}}]," +
+                  "\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"translation\"}}}}," +
+                  "{{\"sampler\":0,\"target\":{{\"node\":1,\"path\":\"translation\"}}}}]}}]," +
+                  "\"nodes\":[{{\"name\":\"Cube\"}},{{\"name\":\"Cube\"}}],\"scenes\":[{{\"nodes\":[0,1]}}]}}").Bytes
+    Assets.MountFiles("res://file-two", {"a.gltf": file})
+    Defer Assets.Unmount("res://file-two")
+    Local model = Try Assets.Load<Model>("res://file-two/a.gltf")
+    model.Free()
+End Function
+
+// KHR_texture_basisu, as its spec has it: a KTX2, and a PNG for what can't read it.
+@Test
+Function AKtx2WithAPngFallbackLoads() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local ktx2 = Embed("data/uastc.ktx2")
+    Local file = Gltf(1, "\"extensionsUsed\":[\"KHR_texture_basisu\"]," +
+                      "\"materials\":[{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}}}]," +
+                      "\"textures\":[{{\"source\":0,\"extensions\":{{\"KHR_texture_basisu\":{{\"source\":1}}}}}}]," +
+                      "\"images\":[{{\"uri\":\"{PngUri(Color32(255, 0, 0, 255))}\"}}," +
+                      "{{\"uri\":\"data:image/ktx2;base64,{Base64.Encode(ktx2)}\"}}]," +
+                      "\"nodes\":[{{\"name\":\"m\",\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+    Assets.MountFiles("res://file-basisu", {"a.gltf": file})
+    Defer Assets.Unmount("res://file-basisu")
+    Local model = Try Assets.Load<Model>("res://file-basisu/a.gltf")
+    model.Free()
+End Function
+
+// A model of no images, hot reloaded with the GPU stopped.
+@Test
+Function AReloadDoesntStartAStoppedGpu() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local file = Gltf(1, "\"nodes\":[{{\"name\":\"m\",\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}]")
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "a.gltf", file)
+    Assets.MountFolder("res://file-restart", folder.Path)
+    Defer Assets.Unmount("res://file-restart")
+    Local model = Try Assets.Load<Model>("res://file-restart/a.gltf")
+    Defer model.Free()
+    Gpu.Stop()
+    Expect(!Gpu.Started())
+    Assets.Reloaded()
+    Try Assets.Reload("res://file-restart/a.gltf")
+    // A stale one's let go of, not loaded again, so nothing's told of.
+    Local since = Instant.Now()
+    While (Instant.Now() - since) < 200.Milliseconds
+        Flip()
+    End While
+    Expect(!Gpu.Started())
+End Function
+
+// A glTF of a mesh, "body", skinned by a joint under it, "bone", and with a camera on its node, and
+// a clip moving the bone.
+Function Skinned(): UInt8[]
+    Local times = [0, 0, 0, 0, 0, 0, 0x80, 0x3F] As UInt8[]
+    Local values = Buffered(1)
+    // Three vertices' joints, all 0, as UInt8s, then their weights, 1 on the first.
+    Local bound: UInt8[] = []
+    bound.AddAll([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[])
+    For vertex = 1 To 3
+        bound.AddAll([0, 0, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] As UInt8[])
+    End For
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+            "\"buffers\":[{{\"byteLength\":102,\"uri\":\"{values}\"}}," +
+            "{{\"byteLength\":8,\"uri\":\"data:application/octet-stream;base64," +
+            "{Base64.Encode(times)}\"}},{{\"byteLength\":60,\"uri\":" +
+            "\"data:application/octet-stream;base64,{Base64.Encode(bound)}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":96,\"byteLength\":6}}," +
+            "{{\"buffer\":1,\"byteLength\":8}},{{\"buffer\":0,\"byteLength\":24}}," +
+            "{{\"buffer\":2,\"byteLength\":12}}," +
+            "{{\"buffer\":2,\"byteOffset\":12,\"byteLength\":48}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3," +
+            "\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]}}," +
+            "{{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}}," +
+            "{{\"bufferView\":2,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"," +
+            "\"min\":[0],\"max\":[1]}}," +
+            "{{\"bufferView\":3,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}}," +
+            "{{\"bufferView\":4,\"componentType\":5121,\"count\":3,\"type\":\"VEC4\"}}," +
+            "{{\"bufferView\":5,\"componentType\":5126,\"count\":3,\"type\":\"VEC4\"}}]," +
+            "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0,\"JOINTS_0\":4,\"WEIGHTS_0\":5}}," +
+            "\"indices\":1}}]}}]," +
+            "\"cameras\":[{{\"type\":\"orthographic\",\"orthographic\":{{\"xmag\":2,\"ymag\":3," +
+            "\"znear\":0.5,\"zfar\":9}}}}]," +
+            "\"skins\":[{{\"joints\":[1]}}]," +
+            "\"animations\":[{{\"name\":\"wave\",\"samplers\":[{{\"input\":2,\"output\":3}}]," +
+            "\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":1,\"path\":\"translation\"}}}}]}}]," +
+            "\"nodes\":[{{\"name\":\"body\",\"mesh\":0,\"skin\":0,\"camera\":0,\"children\":[1]}}," +
+            "{{\"name\":\"bone\"}}],\"scenes\":[{{\"nodes\":[0]}}]}}").Bytes
+End Function
+
+// NaN positions, in a corrupted buffer, which the scene's bounds and picking can't take.
+@Test
+Function NonFinitePositionsArentLoaded()
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local file = ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+                  "\"buffers\":[{{\"byteLength\":42,\"uri\":\"{NanBuffer()}\"}}]," +
+                  "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+                  "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6}}]," +
+                  "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3," +
+                  "\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,1]}}," +
+                  "{{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}}]," +
+                  "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}}," +
+                  "\"indices\":1}}]}}],\"nodes\":[{{\"name\":\"m\",\"mesh\":0}}]," +
+                  "\"scenes\":[{{\"nodes\":[0]}}]}}").Bytes
+    Assets.MountFiles("res://file-nan", {"a.gltf": file})
+    Defer Assets.Unmount("res://file-nan")
+    Expect(ExpectThrows<IOError>(Assets.Load<Model>("res://file-nan/a.gltf"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+End Function
+
+// A node's turn, a camera's and a light's numbers, a material's blend and shading, and the nodes
+// of a file of no scenes, each as its file says.
+@Test
+Function WhatAFileSaysIsWhatsSpawned() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local file = Gltf(1, "\"extensionsUsed\":[\"KHR_lights_punctual\",\"KHR_materials_unlit\"]," +
+                      "\"extensions\":{{\"KHR_lights_punctual\":{{\"lights\":[{{\"type\":" +
+                      "\"spot\",\"color\":[1,0.5,0.25],\"intensity\":3,\"range\":7,\"spot\":" +
+                      "{{\"innerConeAngle\":0.25,\"outerConeAngle\":0.5}}}}]}}}}," +
+                      "\"materials\":[{{\"alphaMode\":\"BLEND\"}},{{\"alphaMode\":\"OPAQUE\"," +
+                      "\"extensions\":{{\"KHR_materials_unlit\":{{}}}}}}," +
+                      "{{\"alphaMode\":\"MASK\"}}]," +
+                      "\"cameras\":[{{\"type\":\"perspective\",\"perspective\":{{\"yfov\":0.75," +
+                      "\"znear\":0.5}}}}]," +
+                      "\"nodes\":[{{\"name\":\"turned\",\"rotation\":[0.6,0,0,0.8]}}," +
+                      "{{\"name\":\"lamp\",\"extensions\":{{\"KHR_lights_punctual\":" +
+                      "{{\"light\":0}}}},\"children\":[2]}},{{\"name\":\"eye\",\"camera\":0}}]")
+    Assets.MountFiles("res://file-said", {"a.gltf": file})
+    Defer Assets.Unmount("res://file-said")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-said/a.gltf")
+    Defer model.Free()
+    Local root = Try model.Spawn()
+    // No scenes: its nodes in no other node, and those under them.
+    Expect(root.Children().Count == 2)
+    Local turned = root.Find("turned")
+    Expect(turned != Null)
+    If turned != Null
+        Local turn = turned.Rotation()
+        Expect(IsClose(turn.x, 0.6, 0.001) && IsClose(turn.w, 0.8, 0.001))
+        Expect(IsClose(turn.y, 0, 0.001) && IsClose(turn.z, 0, 0.001))
+    End If
+    Local lamp = root.Find("lamp")
+    Expect(lamp Is Light)
+    If lamp Is Light
+        Local light = lamp As Light
+        Expect(light.LightType() == LightType.SPOT)
+        Expect(IsClose(light.Color().g, 0.5, 0.001) && IsClose(light.Color().b, 0.25, 0.001))
+        Expect(light.Range() == 7.0)
+        Expect(light.InnerCone() == 0.25)
+        Expect(light.OuterCone() == 0.5)
+    End If
+    // A file's camera is hidden, so it doesn't draw over the game's, as the file says otherwise.
+    Local eye = root.Find("eye")
+    Expect(eye Is Camera)
+    If eye Is Camera
+        Local camera = eye As Camera
+        Expect(camera.Hidden())
+        Expect(camera.FieldOfView() == 0.75)
+        Expect(camera.Near() == 0.5)
+        // A file's says no far: as far as a new camera's.
+        Expect(camera.Far() == 1000.0)
+    End If
+    Local materials = model.Materials()
+    Expect(materials[0].Blend() == Blend.ALPHA)
+    Expect(materials[0].Shading() == Shading.PBR)
+    Expect(materials[1].Blend() == Blend.OPAQUE)
+    Expect(materials[1].Shading() == Shading.UNLIT)
+    Expect(materials[2].Blend() == Blend.AUTO)
+End Function
+
+// Two materials reading one image with different samplers, one of them NEAREST_MIPMAP_LINEAR.
+@Test
+Function EachMaterialReadsItsImageAsItsSamplerSays() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local file = Gltf(1, "\"images\":[{{\"uri\":\"{PngUri(Color32(255, 0, 0, 255))}\"}}]," +
+                      "\"samplers\":[{{\"minFilter\":9986,\"wrapS\":33071}}," +
+                      "{{\"magFilter\":9729,\"minFilter\":9987,\"wrapS\":33648}}]," +
+                      "\"textures\":[{{\"source\":0,\"sampler\":0}},{{\"source\":0,\"sampler\":1}}]," +
+                      "\"materials\":[{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":" +
+                      "{{\"index\":0}}}}}},{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":" +
+                      "{{\"index\":1}}}}}}]")
+    Assets.MountFiles("res://file-sampled", {"a.gltf": file})
+    Defer Assets.Unmount("res://file-sampled")
+    Local before = Texture.Count()
+    Local model = Try Assets.Load<Model>("res://file-sampled/a.gltf")
+    Local first = model.Materials()[0].Texture(0)
+    Local second = model.Materials()[1].Texture(0)
+    Expect(first != Null && second != Null && !RefEquals(first, second))
+    If first != Null && second != Null
+        Expect(first.Filter() == TextureFilter.NEAREST)
+        Expect(first.WrapAcross() == TextureWrap.CLAMP)
+        Expect(second.Filter() == TextureFilter.LINEAR)
+        Expect(second.WrapAcross() == TextureWrap.MIRROR)
+    End If
+    // Each goes with it.
+    model.Free()
+    Expect(Texture.Count() == before)
+End Function
+
+// Joints and weights go on the surface, for the renderer.
+@Test
+Function ASpawnsVerticesHaveTheirJoints() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://file-joints", {"body.gltf": Skinned()})
+    Defer Assets.Unmount("res://file-joints")
+    Local model = Try Assets.Load<Model>("res://file-joints/body.gltf")
+    Defer model.Free()
+    Expect(model.Geometries()[0].Surface(0).Joints().Count == 3)
+End Function
+
+// A model whose buffer's changed for another: what it read before isn't why it reloads now.
+@Test
+Function WhatAModelNoLongerReadsDoesntReloadIt() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local bytes = Base64.Decode(Buffered(1).Split(",")[1]) ?? []
+    Local file = Function(name: String): UInt8[]
+        Return String.FromUtf8(Gltf(1, "\"nodes\":[{{\"mesh\":0}}]"))?.Replace(
+            Buffered(1), name)?.Bytes ?? []
+    End Function
+    Try File.WriteBytes(folder.Path / "one.bin", bytes)
+    Try File.WriteBytes(folder.Path / "two.bin", bytes)
+    Try File.WriteBytes(folder.Path / "a.gltf", file("one.bin"))
+    Assets.MountFolder("res://file-depends", folder.Path)
+    Defer Assets.Unmount("res://file-depends")
+    Local model = Try Assets.Load<Model>("res://file-depends/a.gltf")
+    Defer model.Free()
+    Local reloads = Function(): Int
+        Local done = 0
+        FlipUntil(Function(): Bool
+            done += Assets.Reloaded().Count
+            Return done > 0
+        End Function)
+        Return done
+    End Function
+    Try Assets.Reload("res://file-depends/one.bin")
+    Expect(reloads() == 1)
+    Try File.WriteBytes(folder.Path / "a.gltf", file("two.bin"))
+    Try Assets.Reload("res://file-depends/a.gltf")
+    Expect(reloads() == 1)
+    // It reads two now, not one, so one's a file like any.
+    Try Assets.Reload("res://file-depends/one.bin")
+    Local since = Instant.Now()
+    Local done = 0
+    While (Instant.Now() - since) < 500.Milliseconds
+        Flip()
+        done += Assets.Reloaded().Count
+    End While
+    Expect(done == 0)
+    Try Assets.Reload("res://file-depends/two.bin")
+    Expect(reloads() == 1)
+End Function
+
+// A triangle of two morph targets, the second of normals alone, weighted by its mesh, and a clip
+// moving their weights.
+Function Morphed(): UInt8[]
+    Local one = [0, 0, 0x80, 0x3F] As UInt8[]
+    Local half = [0, 0, 0, 0x3F] As UInt8[]
+    Local zero = [0, 0, 0, 0] As UInt8[]
+    Local bytes: UInt8[] = []
+    // Each vertex moves along x by 1, in the first target; normals, in the second, by y.
+    For vertex = 1 To 3
+        bytes.AddAll(one)
+        bytes.AddAll(zero)
+        bytes.AddAll(zero)
+    End For
+    For vertex = 1 To 3
+        bytes.AddAll(zero)
+        bytes.AddAll(one)
+        bytes.AddAll(zero)
+    End For
+    // Keys at 0 and 1, and each one's two weights: (0, 0), then (1, 0.5).
+    bytes.AddAll(zero)
+    bytes.AddAll(one)
+    bytes.AddAll(zero)
+    bytes.AddAll(zero)
+    bytes.AddAll(one)
+    bytes.AddAll(half)
+    Local uri = "data:application/octet-stream;base64,{Base64.Encode(bytes)}"
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+            "\"buffers\":[{{\"byteLength\":102,\"uri\":\"{Buffered(1)}\"}}," +
+            "{{\"byteLength\":96,\"uri\":\"{uri}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":96,\"byteLength\":6}}," +
+            "{{\"buffer\":1,\"byteLength\":36}}," +
+            "{{\"buffer\":1,\"byteOffset\":36,\"byteLength\":36}}," +
+            "{{\"buffer\":1,\"byteOffset\":72,\"byteLength\":8}}," +
+            "{{\"buffer\":1,\"byteOffset\":80,\"byteLength\":16}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3," +
+            "\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]}}," +
+            "{{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}}," +
+            "{{\"bufferView\":2,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}}," +
+            "{{\"bufferView\":3,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"," +
+            "\"min\":[1,0,0],\"max\":[1,0,0]}}," +
+            "{{\"bufferView\":4,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}}," +
+            "{{\"bufferView\":5,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\"," +
+            "\"min\":[0],\"max\":[1]}}," +
+            "{{\"bufferView\":6,\"componentType\":5126,\"count\":4,\"type\":\"SCALAR\"}}]," +
+            "\"meshes\":[{{\"weights\":[0.5,0.25],\"primitives\":[{{\"attributes\":" +
+            "{{\"POSITION\":0,\"NORMAL\":1}},\"indices\":2,\"targets\":[{{\"POSITION\":3}}," +
+            "{{\"NORMAL\":4}}]}}]}}]," +
+            "\"animations\":[{{\"name\":\"go\",\"samplers\":[{{\"input\":5,\"output\":6}}]," +
+            "\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"weights\"}}}}]}}]," +
+            "\"nodes\":[{{\"name\":\"m\",\"mesh\":0}},{{\"name\":\"own\",\"mesh\":0," +
+            "\"weights\":[1,0]}}],\"scenes\":[{{\"nodes\":[0,1]}}]}}").Bytes
+End Function
+
+@Test
+Function ASpawnsMeshesMorphAsTheFileSays() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://file-morph", {"a.gltf": Morphed()})
+    Defer Assets.Unmount("res://file-morph")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://file-morph/a.gltf")
+    Defer model.Free()
+    Expect(model.Geometries()[0].Surface(0).MorphTargetCount() == 2)
+    Local root = Try model.Spawn()
+    Local found = root.Find("m")
+    Local other = root.Find("own")
+    Expect(found Is Mesh && other Is Mesh)
+    If !(found Is Mesh) || !(other Is Mesh) Then Return
+    Local mesh = found As Mesh
+    // Its mesh's weights, by default, and what they move.
+    Expect(mesh.MorphWeights() == [0.5, 0.25] As Float[])
+    Expect(IsClose(mesh.MorphedPositions()[0].x, 0.5, 0.001))
+    // A node's own, over its mesh's.
+    Expect((other As Mesh).MorphWeights() == [1.0, 0.0] As Float[])
+    Expect(IsClose((other As Mesh).MorphedPositions()[0].x, 1.0, 0.001))
+    // A target of normals alone turns a normal, and moves no vertex.
+    Expect(mesh.MorphedNormals()[0].y > 0.0)
+    Expect(IsClose(mesh.MorphedPositions()[0].y, 0.0, 0.001))
+    // A clip moves them.
+    Local player = root.Player()
+    player.Play(model.Clips()[0], PlayMode.ONCE)
+    UpdateWorld(1.0)
+    Local weights = mesh.MorphWeights()
+    Expect(IsClose(weights[0], 1.0, 0.01) && IsClose(weights[1], 0.5, 0.01))
+End Function

@@ -1,64 +1,130 @@
-// A game run from its files in `assets/`, by fbengine_tools' build step, as its project.toml says.
-// `fb run` reads them as they are, and reloads what changes as it runs; `fb run --release` reads them
-// cooked into its pak. With `--change <file>`, it writes over its hero there, and waits to see that
-// reload, as a game's developer saving a file would.
+// A game run from its files in `assets/`, by fbengine_tools' build step, as its project.toml says:
+// `fb run` reads them as they are, and reloads what changes as it runs; `fb run --release` reads
+// them cooked into its pak. It draws its hero and a model offscreen, and says what it drew. With `--change
+// <file>`, it writes over its hero there, and waits to see the reload, as a game's developer saving
+// a file would, and draws it again, and puts it back. With --watch, a window for a person to watch, which draws the
+// hero as it is, a saved file showing as it's saved (tools/show.py plays it), or `--frames` of it
+// offscreen, as a test does.
 
+Import std.collections
 Import std.core
 Import std.image.image
 Import std.image.png
 Import std.io
+Import std.math
 Import std.os
 Import std.time
 Import fbengine
 Import "./res" As Res
 
-// BC7's Vulkan formats, what the cooker makes of an image by default.
-Const BC7_LINEAR: UInt32 = 145
-Const BC7_SRGB: UInt32 = 146
+// What a pixel of the hero looks like, for a test to read.
+Function Named(pixel: Color32): String
+    If pixel.r > 200 && pixel.g < 60 && pixel.b < 60 Then Return "red"
+    If pixel.b > 200 && pixel.r < 60 && pixel.g < 60 Then Return "blue"
+    If pixel.g > 200 && pixel.r < 60 && pixel.b < 60 Then Return "green"
+    Return "something else, {pixel}"
+End Function
 
-// An image's size and format, which its Reload takes in place, so what holds it has the new one.
-Class Picture Implements Asset
-    Field Width: UInt32
-    Field Format: UInt32
-    Field Reloads: Int
+// Draws `hero` into a target, as a frame of the game does, and gives what's in its middle.
+Function Drawn(hero: Texture): String Throws GraphicsError
+    Local target = Try Texture.Target(hero.Width(), hero.Height())
+    Defer target.Free()
+    Canvas(target).Draw(Sprite2D(hero), 0, 0)
+    Return Named(target.ToImage()[hero.Width() / 2, hero.Height() / 2])
+End Function
 
-    New(width: UInt32, format: UInt32)
-        Width = width
-        Format = format
-        Reloads = 0
-    End New
+// The scene of the model in the game's files, in front of a camera drawing into `target`, or the
+// screen with Null.
+Function Scene(target: Texture?): Camera Throws IOError
+    Local model = Try Assets.Load<Model>(Res.CrateGltf)
+    Local root = Try model.Spawn()
+    root.SetPosition(Vec3(0, 0, -4))
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    Return camera
+End Function
 
-    Public Static Method LoadKind(): AssetKind => AssetKind.IMAGE
+// Draws the model from the game's files into a target, and gives what's in its middle.
+Function DrawnModel(): String Throws GraphicsError, IOError
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local target = Try Texture.Target(32, 32, TextureFormat.RGBA8, 1, True)
+    Defer target.Free()
+    Local camera = Try Scene(target)
+    camera.Render()
+    Return Named(target.ToImage()[16, 16])
+End Function
 
-    Public Static Method FromLoad(load: AssetLoad): Picture Throws IOError
-        Return Picture(load.Image().Width, load.Image().Format)
-    End Method
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
 
-    Method Reload(load: AssetLoad): Bool Throws IOError
-        Width = load.Image().Width
-        Format = load.Image().Format
-        Reloads += 1
-        Return True
-    End Method
-End Class
+// A window for a person to watch, or `frames` of it offscreen.
+Function Watched(frames: Int) Throws GraphicsError, IOError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(320, 240)
+    Defer EndGraphics()
+    Frame.SetLimit(60)
+    Local hero = Try Assets.Load<Texture>(Res.Hero)
+    Local sprite = Sprite2D(hero)
+    sprite.MidHandle()
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Try Scene(Null)
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        If Screen.Texture() != Null
+            world.Render()
+            Local canvas = Screen.Canvas()
+            canvas.SetColor(Color32(255, 255, 255, 255))
+            canvas.Draw(sprite, 40, 40)
+        End If
+        Flip()
+        count += 1
+    End While
+    Print("watched {count} frames of a hero {hero.Width()} wide")
+End Function
 
 Try
     Res.Mount()
     Print(Try Assets.ReadText(Res.Level))
-    Local hero = Try Assets.Load<Picture>(Res.Hero)
-    Local cooked = hero.Format == BC7_LINEAR || hero.Format == BC7_SRGB
+    // A KTX2's signature, what the cooker makes of an image.
+    Local cooked = (Try Assets.ReadBytes(Res.Hero))[0] == 0xAB
     Print(cooked ? "hero, cooked" : "hero, as it is")
 
     Local arguments = Process.Arguments()
+    If arguments.Contains("--watch")
+        Try Watched(Asked(arguments))
+        Return
+    End If
+    Window.SetHeadless(True)
+    Local hero = Try Assets.Load<Texture>(Res.Hero)
+    Print("drew {Try Drawn(hero)}")
+    Print("drew a {Try DrawnModel()} crate")
+
     If arguments.Count == 2 && arguments[0] == "--change"
-        Try File.WriteBytesAtomic(Path(arguments[1]), Png.Encode(Image(8, 8)))
+        Local blue = Image(8, 8)
+        blue.Fill(Color32(0, 0, 255, 255))
+        Local saved = Try File.ReadBytes(Path(arguments[1]))
+        Try File.WriteBytesAtomic(Path(arguments[1]), Png.Encode(blue))
         Local since = Instant.Now()
-        While hero.Reloads == 0 && (Instant.Now() - since) < 30.Seconds
+        While hero.Width() != 8 && (Instant.Now() - since) < 30.Seconds
             Flip()
             Sleep(5.Milliseconds)
         End While
-        Print(hero.Reloads > 0 ? "hero reloaded, {hero.Width} wide" : "hero didn't reload")
+        Print(hero.Width() == 8 ? "hero reloaded, {hero.Width()} wide" : "hero didn't reload")
+        Print("drew {Try Drawn(hero)}")
+        // As it was, for what runs next.
+        Try File.WriteBytesAtomic(Path(arguments[1]), saved)
     End If
+Catch e As GraphicsError
+    Print("no GPU: {e.Message}")
 Catch e As IOError
-    Print("couldn't read them: {e.Message}")
+    Print(e.Kind == IOErrorKind.OTHER ? "no GPU: {e.Message}" : "couldn't read them: {e.Message}")
 End Try

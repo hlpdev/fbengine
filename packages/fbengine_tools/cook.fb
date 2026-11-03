@@ -54,7 +54,7 @@ Public Final Class Cooker
     End New
 
     /// Cooks the image at `from`, a PNG or a JPEG, into the KTX2 at `to`, as `settings` say:
-    /// PLATFORM compression is BC7, which every desktop GPU reads. One that isn't a PNG or a JPEG,
+    /// PLATFORM compression is UASTC, which transcodes to what any GPU reads. One that isn't a PNG or a JPEG,
     /// won't decode, is bigger than the engine loads (16384 across or high), or whose settings'
     /// Quality isn't 0 to 4 throws an IOError of INVALID_DATA, and one that can't be read or
     /// written one of OTHER, which leaves `to` as it was.
@@ -578,15 +578,15 @@ Public Final Class Cooker
     // The cooker's format for a compression.
     Static Method FormatOf(compression: ImageCompression): Int32
         Select compression
-            Case ImageCompression.UASTC
-                Return FBE_COOK_UASTC
+            Case ImageCompression.BC7
+                Return FBE_COOK_BC7
             Case ImageCompression.ASTC
                 Return FBE_COOK_ASTC
             Case ImageCompression.NONE
                 Return FBE_COOK_RGBA8
             Default
-                // PLATFORM, and BC7: every desktop GPU reads BC7, Apple's on macOS too.
-                Return FBE_COOK_BC7
+                // PLATFORM, and UASTC: a KTX2 of it transcodes as it loads, on any GPU.
+                Return FBE_COOK_UASTC
         End Select
     End Method
 

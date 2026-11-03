@@ -6,6 +6,7 @@
 
 #include "texture/texture.hpp"
 
+#include "assets/loads.hpp"
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/graph.hpp"
@@ -20,6 +21,8 @@
 #include <cstring>
 #include <deque>
 #include <format>
+#include <optional>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -284,6 +287,15 @@ struct spec_t {
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     bool depth = false;
     bool engine = false;
+    /// A file's image, which it's made of, of this format; its levels, and more made from the
+    /// first if `mipmaps`, in place of being cleared.
+    const fbe::assets::image_t* image = nullptr;
+    VkFormat vk_format = VK_FORMAT_UNDEFINED;
+    /// Whether its alpha's for blending.
+    bool alpha = false;
+    /// Whether its view goes in the bindless set, as a slot past the set's end, a reload's,
+    /// doesn't.
+    bool bound = true;
 };
 
 /// The half float nearest `value`, from 0 to the largest finite one; NaN's 0.
@@ -304,11 +316,15 @@ std::uint16_t half_of(float value) {
                                       (((bits & 0x7FFFFFU) + 0x1000U) >> 13U));
 }
 
+VkFormat vk_format_of(const spec_t& spec) {
+    return spec.image != nullptr ? spec.vk_format : vk_format_of(spec.format);
+}
+
 /// Whether the device can make a texture of `spec`; false, with fbe_error's why, if not.
 bool supports(const spec_t& spec) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     VkFormatProperties support{};
-    vkGetPhysicalDeviceFormatProperties(gpu.physical, vk_format_of(spec.format), &support);
+    vkGetPhysicalDeviceFormatProperties(gpu.physical, vk_format_of(spec), &support);
     const auto mipmappable =
         flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_BLIT_SRC_BIT) |
         flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_BLIT_DST_BIT) |
@@ -331,27 +347,108 @@ bool supports(const spec_t& spec) {
     return true;
 }
 
-/// Makes a texture in `slot`: its image, transparent black, every level SHADER_READ_ONLY, a
-/// target's attachments, cleared, and its view in the bindless set; false, with fbe_error's why,
-/// if it can't.
+/// A buffer to upload through, mapped, which is freed after the frame.
+struct staging_t {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    std::uint8_t* to = nullptr;
+    VmaAllocation memory = VK_NULL_HANDLE;
+};
+
+/// A new buffer of `size` bytes to upload through; none, with fbe_error's why, if it can't be made.
+staging_t make_staging(VkDeviceSize size) {
+    const fbe::gpu::device_t& gpu = *fbe::gpu::device();
+    const VkBufferCreateInfo buffer_info{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_TRANSFER_SRC_BIT),
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    const VmaAllocationCreateInfo allocation_info{
+        .flags =
+            flag<VmaAllocationCreateFlags>(VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT) |
+            flag<VmaAllocationCreateFlags>(VMA_ALLOCATION_CREATE_MAPPED_BIT),
+        .usage = VMA_MEMORY_USAGE_AUTO,
+    };
+    staging_t staging;
+    VmaAllocationInfo mapped{};
+    const VkResult made = fbe::gpu::faulted(fbe::gpu::fault_t::UPLOAD)
+                              ? VK_ERROR_OUT_OF_DEVICE_MEMORY
+                              : vmaCreateBuffer(gpu.allocator, &buffer_info, &allocation_info,
+                                                &staging.buffer, &staging.memory, &mapped);
+    if (made != VK_SUCCESS) {
+        fbe::gpu::fail_vulkan("couldn't make a buffer to upload a texture through", made);
+        return {};
+    }
+    staging.to = static_cast<std::uint8_t*>(mapped.pMappedData);
+    fbe::gpu::after_frame([buffer = staging.buffer, memory = staging.memory] {
+        vmaDestroyBuffer(fbe::gpu::device()->allocator, buffer, memory);
+    });
+    fbe::gpu::count_upload(size);
+    return staging;
+}
+
+/// What's written of a file's image: its levels, packed into a buffer, and where each goes.
+struct image_copy_t {
+    staging_t staging;
+    std::vector<VkBufferImageCopy> regions;
+};
+
+/// A buffer of `image`'s levels, each where a copy can read it; no buffer, with fbe_error's why, if
+/// it can't be made.
+image_copy_t staged_image(const fbe::assets::image_t& image) {
+    // Every format's block is 16 bytes or fewer, and divides this.
+    constexpr VkDeviceSize alignment = 16;
+    image_copy_t staged;
+    VkDeviceSize size = 0;
+    for (const fbe::assets::level_t& level : image.levels) {
+        const auto at = static_cast<std::uint32_t>(staged.regions.size());
+        staged.regions.push_back({
+            .bufferOffset = size,
+            .imageSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = at,
+                .layerCount = 1,
+            },
+            .imageExtent = { .width = level.width, .height = level.height, .depth = 1 },
+        });
+        size = (size + level.size + alignment - 1) / alignment * alignment;
+    }
+    staged.staging = make_staging(size);
+    if (staged.staging.buffer == VK_NULL_HANDLE) {
+        return staged;
+    }
+    for (std::size_t at = 0; at < image.levels.size(); ++at) {
+        std::memcpy(staged.staging.to + staged.regions[at].bufferOffset,
+                    image.texels.data() + image.levels[at].offset, image.levels[at].size);
+    }
+    vmaFlushAllocation(fbe::gpu::device()->allocator, staged.staging.memory, 0, VK_WHOLE_SIZE);
+    return staged;
+}
+
+/// Makes a texture in `slot`: its image, transparent black or a file's, every level
+/// SHADER_READ_ONLY, a target's attachments, cleared, and its view in the bindless set; false, with
+/// fbe_error's why, if it can't.
 bool make(std::uint32_t slot, const spec_t& spec) {
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     if (!supports(spec)) {
         return false;
     }
     texture_t& texture = textures[slot];
+    const auto file_levels =
+        spec.image != nullptr ? static_cast<std::uint32_t>(spec.image->levels.size()) : 1U;
     texture = {
         .format = spec.format,
-        .vk_format = vk_format_of(spec.format),
+        .vk_format = vk_format_of(spec),
         .width = spec.width,
         .height = spec.height,
         .levels = spec.mipmaps ? static_cast<std::uint32_t>(
                                      std::bit_width(std::max(spec.width, spec.height)))
-                               : 1U,
+                               : file_levels,
         .filter = FBE_TEXTURE_LINEAR,
         .wrap_u = FBE_TEXTURE_REPEAT,
         .wrap_v = FBE_TEXTURE_REPEAT,
         .references = 1,
+        .alpha = spec.alpha,
         .engine = spec.engine,
         .target = spec.target,
         .samples = spec.samples,
@@ -412,23 +509,43 @@ bool make(std::uint32_t slot, const spec_t& spec) {
         return false;
     }
 
+    // Before any commands use the image, so it can still go.
+    image_copy_t file;
+    if (spec.image != nullptr) {
+        file = staged_image(*spec.image);
+        if (file.staging.buffer == VK_NULL_HANDLE) {
+            destroy(texture);
+            return false;
+        }
+    }
     VkCommandBuffer commands = fbe::gpu::upload_commands();
     const VkImageMemoryBarrier2 to_clear =
         levels_barrier(texture.image, 0, texture.levels, VK_IMAGE_LAYOUT_UNDEFINED,
                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, transfer, 0, transfer, transfer_write);
     fbe::gpu::barrier(commands, to_clear);
     const VkClearColorValue black{};
-    const VkImageSubresourceRange everything{
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .levelCount = texture.levels,
-        .layerCount = 1,
-    };
-    vkCmdClearColorImage(commands, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1,
-                         &everything);
-    fbe::gpu::barrier(commands, levels_barrier(texture.image, 0, texture.levels,
-                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer,
-                                               transfer_write, resting_stages, shader_read));
+    if (spec.image != nullptr) {
+        vkCmdCopyBufferToImage(
+            commands, file.staging.buffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            static_cast<std::uint32_t>(file.regions.size()), file.regions.data());
+    } else {
+        const VkImageSubresourceRange everything{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .levelCount = texture.levels,
+            .layerCount = 1,
+        };
+        vkCmdClearColorImage(commands, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black,
+                             1, &everything);
+    }
+    if (spec.image != nullptr && spec.mipmaps) {
+        record_mipmaps(commands, texture);
+    } else {
+        fbe::gpu::barrier(commands,
+                          levels_barrier(texture.image, 0, texture.levels,
+                                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, transfer,
+                                         transfer_write, resting_stages, shader_read));
+    }
     // A multisampled color rests drawn into, and depth rests as depth, cleared to the farthest.
     if (texture.msaa != VK_NULL_HANDLE) {
         fbe::gpu::barrier(commands,
@@ -467,7 +584,9 @@ bool make(std::uint32_t slot, const spec_t& spec) {
                                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, transfer,
                                         transfer_write));
     }
-    fbe::gpu::write_texture(slot, texture.view);
+    if (spec.bound) {
+        fbe::gpu::write_texture(slot, texture.view);
+    }
     live[slot] = true;
     textures_made += spec.engine ? 0 : 1;
     return true;
@@ -481,39 +600,18 @@ bool make(std::uint32_t slot, const spec_t& spec) {
 bool upload(std::uint64_t handle, const texture_t& texture, std::uint32_t x, std::uint32_t y,
             std::uint32_t width, std::uint32_t height, const std::uint8_t* pixels,
             std::uint32_t pitch, bool ahead = false) {
-    const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     fbe::texture::changed_on_gpu(handle);
     const std::uint32_t row = width * fbe::texture::pixel_size(texture.format);
-    const VkBufferCreateInfo buffer_info{
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = VkDeviceSize{ row } * height,
-        .usage = flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_TRANSFER_SRC_BIT),
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-    };
-    const VmaAllocationCreateInfo allocation_info{
-        .flags =
-            flag<VmaAllocationCreateFlags>(VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT) |
-            flag<VmaAllocationCreateFlags>(VMA_ALLOCATION_CREATE_MAPPED_BIT),
-        .usage = VMA_MEMORY_USAGE_AUTO,
-    };
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VmaAllocation memory = VK_NULL_HANDLE;
-    VmaAllocationInfo mapped{};
-    const VkResult made = fbe::gpu::faulted(fbe::gpu::fault_t::UPLOAD)
-                              ? VK_ERROR_OUT_OF_DEVICE_MEMORY
-                              : vmaCreateBuffer(gpu.allocator, &buffer_info, &allocation_info,
-                                                &buffer, &memory, &mapped);
-    if (made != VK_SUCCESS) {
-        return fbe::gpu::fail_vulkan("couldn't make a buffer to upload a texture through", made);
+    const staging_t staging = make_staging(VkDeviceSize{ row } * height);
+    if (staging.buffer == VK_NULL_HANDLE) {
+        return false;
     }
-    auto* to = static_cast<std::uint8_t*>(mapped.pMappedData);
+    VkBuffer buffer = staging.buffer;
     for (std::uint32_t line = 0; line < height; ++line) {
-        std::memcpy(to + (std::size_t{ line } * row), pixels + (std::size_t{ line } * pitch), row);
+        std::memcpy(staging.to + (std::size_t{ line } * row),
+                    pixels + (std::size_t{ line } * pitch), row);
     }
-    vmaFlushAllocation(gpu.allocator, memory, 0, VK_WHOLE_SIZE);
-    fbe::gpu::after_frame(
-        [buffer, memory] { vmaDestroyBuffer(fbe::gpu::device()->allocator, buffer, memory); });
-    fbe::gpu::count_upload(buffer_info.size);
+    vmaFlushAllocation(fbe::gpu::device()->allocator, staging.memory, 0, VK_WHOLE_SIZE);
 
     const VkBufferImageCopy region{
         .imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .layerCount = 1 },
@@ -647,6 +745,177 @@ bool inside(const texture_t& texture, std::int32_t x, std::int32_t y, std::int32
     return true;
 }
 
+/// False, with fbe_error's why, for a texture of a format a file has, which is only sampled.
+bool has_pixels(const texture_t& texture) {
+    return texture.format != FBE_TEXTURE_FROM_FILE ||
+           fbe::fail("a texture of a file's own format is only sampled: `compression = \"none\"` "
+                     "in its sidecar keeps its pixels");
+}
+
+/// A format a file's image can be: its FBE_TEXTURE_ format, and how many texels a side its blocks
+/// are, and bytes each is.
+struct file_format_t {
+    std::int32_t format = FBE_TEXTURE_FROM_FILE;
+    std::uint32_t block = 1;
+    std::uint32_t bytes = 0;
+};
+
+/// What the Vulkan number a file gives is, if it's a format fbengine samples, which it knows the
+/// size of, so what the file says of its levels' sizes can be checked before a copy reads them.
+std::optional<file_format_t> file_format(std::uint32_t format) {
+    switch (static_cast<VkFormat>(format)) {
+    case VK_FORMAT_R8G8B8A8_SRGB:
+        return file_format_t{ .format = FBE_TEXTURE_RGBA8, .bytes = 4 };
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        return file_format_t{ .format = FBE_TEXTURE_RGBA8_LINEAR, .bytes = 4 };
+    case VK_FORMAT_R8_UNORM:
+        return file_format_t{ .format = FBE_TEXTURE_R8, .bytes = 1 };
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        return file_format_t{ .format = FBE_TEXTURE_RGBA16F, .bytes = 8 };
+    case VK_FORMAT_R16G16B16A16_UNORM:
+        return file_format_t{ .bytes = 8 };
+    case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
+    case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
+    case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+    case VK_FORMAT_BC1_RGBA_SRGB_BLOCK:
+    case VK_FORMAT_BC4_UNORM_BLOCK:
+    case VK_FORMAT_BC4_SNORM_BLOCK:
+        return file_format_t{ .block = 4, .bytes = 8 };
+    case VK_FORMAT_BC2_UNORM_BLOCK:
+    case VK_FORMAT_BC2_SRGB_BLOCK:
+    case VK_FORMAT_BC3_UNORM_BLOCK:
+    case VK_FORMAT_BC3_SRGB_BLOCK:
+    case VK_FORMAT_BC5_UNORM_BLOCK:
+    case VK_FORMAT_BC5_SNORM_BLOCK:
+    case VK_FORMAT_BC6H_UFLOAT_BLOCK:
+    case VK_FORMAT_BC6H_SFLOAT_BLOCK:
+    case VK_FORMAT_BC7_UNORM_BLOCK:
+    case VK_FORMAT_BC7_SRGB_BLOCK:
+    case VK_FORMAT_ASTC_4x4_UNORM_BLOCK:
+    case VK_FORMAT_ASTC_4x4_SRGB_BLOCK:
+        return file_format_t{ .block = 4, .bytes = 16 };
+    default:
+        return std::nullopt;
+    }
+}
+
+/// Whether the last load's texture failed for what's in its file.
+bool load_invalid = false;
+
+/// False, with fbe_error's why, said to be its file's: what's wrong with an image.
+bool invalid_image(const std::string& why) {
+    load_invalid = true;
+    return fbe::fail(why);
+}
+
+/// Whether an image's layout is one texture's: one 2D image, whose levels are the sizes its format
+/// says, within its texels; false, with fbe_error's why, if not.
+bool well_formed(const fbe::assets::image_t& image, const file_format_t& format) {
+    if (image.depth != 1 || image.layers != 1 || image.faces != 1) {
+        return invalid_image("a texture is one 2D image, not an array, a cube, or a volume");
+    }
+    if (image.levels.empty() || image.levels.size() > static_cast<std::size_t>(std::bit_width(
+                                                          std::max(image.width, image.height)))) {
+        return invalid_image(std::format("a {}x{} image doesn't have {} levels", image.width,
+                                         image.height, image.levels.size()));
+    }
+    for (const fbe::assets::level_t& level : image.levels) {
+        const std::uint64_t across =
+            (std::uint64_t{ level.width } + format.block - 1) / format.block;
+        const std::uint64_t down =
+            (std::uint64_t{ level.height } + format.block - 1) / format.block;
+        if (across * down * format.bytes != level.size || level.offset > image.texels.size() ||
+            level.size > image.texels.size() - level.offset) {
+            return invalid_image("the image's levels aren't the sizes its format says");
+        }
+    }
+    return true;
+}
+
+/// The image load done and loaded that a handle is; nullptr, with fbe_error's why, if it isn't.
+const fbe::assets::image_t* image_of(std::uint64_t handle) {
+    load_invalid = false;
+    const fbe::assets::load_t* load = fbe::assets::loads().get(handle);
+    if (load == nullptr || !load->done || load->error ||
+        load->kind != fbe::assets::load_kind_t::IMAGE) {
+        fbe::fail("the load isn't an image load done and loaded");
+        return nullptr;
+    }
+    return &load->image;
+}
+
+/// Whether any pixel of an 8-bit RGBA image's first level isn't whole. What's compressed is taken
+/// to be whole, as its blocks would have to be decoded to say, unless its settings say otherwise.
+bool has_alpha(const fbe::assets::image_t& image, std::int32_t format) {
+    if (format != FBE_TEXTURE_RGBA8 && format != FBE_TEXTURE_RGBA8_LINEAR) {
+        return false;
+    }
+    const fbe::assets::level_t& level = image.levels.front();
+    for (std::size_t at = 3; at < level.size; at += 4) {
+        if (image.texels[level.offset + at] != 255) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// What a texture of a file's image is, starting the GPU if it hasn't; nothing, with fbe_error's
+/// why, if it can't be one.
+std::optional<spec_t> spec_of(const fbe::assets::image_t& image, bool srgb, bool mipmaps) {
+    if (!fbe::gpu::start_with_window()) {
+        return std::nullopt;
+    }
+    if (fbe::gpu::lost()) {
+        fbe::gpu::fail_lost();
+        return std::nullopt;
+    }
+    std::optional<file_format_t> format = file_format(image.format);
+    if (!format) {
+        invalid_image(std::format("a texture isn't of the image's Vulkan format {}", image.format));
+        return std::nullopt;
+    }
+    if (!well_formed(image, *format)) {
+        return std::nullopt;
+    }
+    auto vk_format = static_cast<VkFormat>(image.format);
+    if (vk_format == VK_FORMAT_R8G8B8A8_SRGB && !srgb) {
+        vk_format = VK_FORMAT_R8G8B8A8_UNORM;
+        format->format = FBE_TEXTURE_RGBA8_LINEAR;
+    }
+    const fbe::gpu::device_t& gpu = *fbe::gpu::device();
+    VkFormatProperties support{};
+    vkGetPhysicalDeviceFormatProperties(gpu.physical, vk_format, &support);
+    const auto sampled =
+        flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) |
+        flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
+    if (fbe::gpu::faulted(fbe::gpu::fault_t::NO_FILE_FORMAT) ||
+        (support.optimalTilingFeatures & sampled) != sampled) {
+        fbe::fail(std::format("this GPU doesn't sample the image's Vulkan format {}: its sidecar's "
+                              "`compression = \"uastc\"` is transcoded to what any GPU samples",
+                              image.format));
+        return std::nullopt;
+    }
+    if (image.width > gpu.properties.limits.maxImageDimension2D ||
+        image.height > gpu.properties.limits.maxImageDimension2D) {
+        fbe::fail(std::format("this GPU's textures are at most {} pixels on a side, not {}x{}",
+                              gpu.properties.limits.maxImageDimension2D, image.width,
+                              image.height));
+        return std::nullopt;
+    }
+    const auto blitted = flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_BLIT_SRC_BIT) |
+                         flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_BLIT_DST_BIT);
+    return spec_t{
+        .width = image.width,
+        .height = image.height,
+        .format = format->format,
+        .mipmaps = mipmaps && image.levels.size() == 1 && format->block == 1 &&
+                   (support.optimalTilingFeatures & blitted) == blitted,
+        .image = &image,
+        .vk_format = vk_format,
+        .alpha = has_alpha(image, format->format),
+    };
+}
+
 } // namespace
 
 namespace fbe::texture {
@@ -668,7 +937,7 @@ std::uint32_t sampler_of(const texture_t& texture) {
 std::vector<std::uint8_t> read(std::uint64_t handle, std::uint32_t level) {
     send_pixels(handle);
     const texture_t* texture = find(handle);
-    if (texture == nullptr) {
+    if (texture == nullptr || !has_pixels(*texture)) {
         return {};
     }
     if (level >= texture->levels) {
@@ -771,6 +1040,28 @@ bool write_ahead(std::uint64_t handle, std::uint32_t x, std::uint32_t y, std::ui
         return fbe::fail("a write ahead is to a part of a texture without mipmaps");
     }
     return upload(handle, *found, x, y, width, height, pixels, pitch, true);
+}
+
+assets::transcode_t device_transcode() {
+    const gpu::device_t* gpu = gpu::device();
+    if (gpu == nullptr || gpu::faulted(gpu::fault_t::NO_COMPRESSED)) {
+        return assets::transcode_t::RGBA8;
+    }
+    const auto samples = [gpu](VkFormat format) {
+        const auto sampled =
+            flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) |
+            flag<VkFormatFeatureFlags>(VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
+        VkFormatProperties support{};
+        vkGetPhysicalDeviceFormatProperties(gpu->physical, format, &support);
+        return (support.optimalTilingFeatures & sampled) == sampled;
+    };
+    if (samples(VK_FORMAT_BC7_SRGB_BLOCK) && samples(VK_FORMAT_BC7_UNORM_BLOCK)) {
+        return assets::transcode_t::BC7;
+    }
+    if (samples(VK_FORMAT_ASTC_4x4_SRGB_BLOCK) && samples(VK_FORMAT_ASTC_4x4_UNORM_BLOCK)) {
+        return assets::transcode_t::ASTC_4X4;
+    }
+    return assets::transcode_t::RGBA8;
 }
 
 std::uint32_t pixel_size(std::int32_t format) {
@@ -883,7 +1174,7 @@ FBE_API bool fbe_texture_has_depth(uint64_t texture) {
 
 FBE_API bool fbe_texture_clear(uint64_t texture, float r, float g, float b, float a) {
     const texture_t* found = fbe::texture::find(texture);
-    if (found == nullptr) {
+    if (found == nullptr || !has_pixels(*found)) {
         return false;
     }
     const fbe::gpu::resource_t cleared = fbe::gpu::texture_resource(texture);
@@ -920,7 +1211,7 @@ FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, 
                               int32_t from_y, int32_t width, int32_t height) {
     texture_t* target = fbe::texture::find(to);
     const texture_t* source = target != nullptr ? fbe::texture::find(from) : nullptr;
-    if (target == nullptr || source == nullptr) {
+    if (target == nullptr || source == nullptr || !has_pixels(*target) || !has_pixels(*source)) {
         return false;
     }
     if (target->msaa != VK_NULL_HANDLE) {
@@ -966,7 +1257,7 @@ FBE_API bool fbe_texture_copy(uint64_t to, int32_t x, int32_t y, uint64_t from, 
 
 FBE_API uint8_t* fbe_texture_pixels(uint64_t texture, int64_t* size) {
     const texture_t* found = fbe::texture::find(texture);
-    if (found == nullptr) {
+    if (found == nullptr || !has_pixels(*found)) {
         return nullptr;
     }
     if (found->msaa != VK_NULL_HANDLE) {
@@ -1150,7 +1441,7 @@ FBE_API int32_t fbe_texture_levels(uint64_t texture) {
 FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t width,
                                int32_t height, const uint8_t* pixels, int32_t pitch) {
     texture_t* found = fbe::texture::find(texture);
-    if (found == nullptr) {
+    if (found == nullptr || !has_pixels(*found)) {
         return false;
     }
     if (found->msaa != VK_NULL_HANDLE) {
@@ -1245,6 +1536,109 @@ FBE_API int32_t fbe_texture_wrap_v(uint64_t texture) {
 
 FBE_API int32_t fbe_texture_count(void) {
     return textures_made;
+}
+
+FBE_API bool fbe_texture_start_loads(void) {
+    return fbe::gpu::start_with_window();
+}
+
+FBE_API uint64_t fbe_texture_from_load(uint64_t load, bool srgb, bool mipmaps) {
+    const fbe::assets::image_t* image = image_of(load);
+    if (image == nullptr) {
+        return 0;
+    }
+    const std::optional<spec_t> spec = spec_of(*image, srgb, mipmaps);
+    return spec ? create(*spec) : 0;
+}
+
+FBE_API uint64_t fbe_texture_from_model(uint64_t load, int32_t index, bool mipmaps) {
+    load_invalid = false;
+    const fbe::assets::load_t* found = fbe::assets::loads().get(load);
+    if (found == nullptr || !found->done || found->error ||
+        found->kind != fbe::assets::load_kind_t::MODEL) {
+        fbe::fail("the load isn't a model load done and loaded");
+        return 0;
+    }
+    if (index < 0 || std::cmp_greater_equal(index, found->model.images.size())) {
+        fbe::fail(std::format("the model has {} images; there's no image {}",
+                              found->model.images.size(), index));
+        return 0;
+    }
+    const std::optional<spec_t> spec =
+        spec_of(found->model.images[static_cast<std::size_t>(index)], true, mipmaps);
+    return spec ? create(*spec) : 0;
+}
+
+FBE_API bool fbe_texture_reload(uint64_t texture, uint64_t load, bool srgb, bool mipmaps) {
+    const texture_t* reloaded = fbe::texture::find(texture);
+    if (reloaded == nullptr) {
+        return false;
+    }
+    if (reloaded->target) {
+        return fbe::fail("a target is drawn into, not reloaded");
+    }
+    const fbe::assets::image_t* image = image_of(load);
+    if (image == nullptr) {
+        return false;
+    }
+    std::optional<spec_t> spec = spec_of(*image, srgb, mipmaps);
+    if (!spec) {
+        return false;
+    }
+    // Frames in flight draw with its slot's view, whose descriptor can't change under them, and a
+    // slot goes on being drawn from, so nothing's waited for but all of them.
+    if (!fbe::gpu::finish_frame()) {
+        return false;
+    }
+    const VkResult idle = vkDeviceWaitIdle(fbe::gpu::device()->device);
+    if (idle != VK_SUCCESS) {
+        return fbe::gpu::fail_vulkan("the GPU couldn't finish", idle);
+    }
+    // Finishing the frame can make transient targets' images.
+    if (fbe::texture::find(texture) == nullptr) {
+        return false;
+    }
+    // It's made in a slot of its own, past the others, which may be the bindless set's last, so
+    // it doesn't go in the set, and it's gone again below.
+    const auto scratch = static_cast<std::uint32_t>(textures.size());
+    textures.emplace_back();
+    generations.push_back(1);
+    live.push_back(false);
+    const auto give_back = [] {
+        textures.pop_back();
+        generations.pop_back();
+        live.pop_back();
+    };
+    spec->engine = true;
+    spec->bound = false;
+    if (!make(scratch, *spec)) {
+        give_back();
+        return false;
+    }
+    const auto slot = static_cast<std::uint32_t>(texture);
+    texture_t& held = textures[slot];
+    texture_t& made = textures[scratch];
+    made.filter = held.filter;
+    made.wrap_u = held.wrap_u;
+    made.wrap_v = held.wrap_v;
+    made.references = held.references;
+    made.version = held.version + 1;
+    made.engine = held.engine;
+    std::swap(held, made);
+    fbe::gpu::write_texture(slot, held.view);
+    destroy(made);
+    give_back();
+    drop_copy(slot);
+    return true;
+}
+
+FBE_API bool fbe_texture_load_invalid(void) {
+    return load_invalid;
+}
+
+FBE_API uint32_t fbe_texture_vulkan_format(uint64_t texture) {
+    const texture_t* found = fbe::texture::find(texture);
+    return found != nullptr ? static_cast<std::uint32_t>(found->vk_format) : 0;
 }
 
 } // extern "C"

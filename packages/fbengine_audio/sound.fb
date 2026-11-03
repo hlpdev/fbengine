@@ -4,6 +4,7 @@
 Import std.core
 Import std.ffi
 Import std.io
+Import fbengine
 Import "./audio"
 Import "./bus"
 Import "./c/fbe_sound"
@@ -13,12 +14,26 @@ Import "./channel"
 Public Class SoundError Extends Error
 End Class
 
+/// A sound's import settings, from its sidecar, as `music.ogg.toml` is music.ogg's:
+///
+/// ```toml
+/// streamed = true
+/// ```
+Public Struct SoundSettings
+    /// Whether it's kept and decoded as each Channel plays it, as music is, not decoded whole.
+    Public Field Streamed: Bool = False
+End Struct
+
 /// A sound, which plays any number of times at once, each on a Channel of its own: decoded whole
 /// into memory, for the short sounds a game plays often, or streamed, its file kept and decoded as
 /// each Channel plays it, for music and long sounds, which would take many times the memory
 /// decoded. What it plays at is its own volume, pan, pitch, and looping, which each play starts
 /// with and its Channel can change.
-Public Final Class Sound
+///
+/// It's an Asset: `Assets.Load<Sound>("res://door.ogg")` reads one through res://, as its
+/// SoundSettings say, and hot reload puts a changed file in its place, keeping what it plays at,
+/// for its next plays; what's playing plays on to its end.
+Public Final Class Sound Implements Asset
     Field handle: UInt64
     Field volume: Float32 = 1.0
     Field pan: Float32 = 0.0
@@ -55,6 +70,33 @@ Public Final Class Sound
         Return Try Make(bytes, True, "")
     End Method
 
+    /// Assets' kind of load for one, its file's bytes.
+    Public Static Method LoadKind(): AssetKind => AssetKind.BYTES
+
+    /// One of the sound file `load` read, as its sidecar's SoundSettings say. It throws an IOError
+    /// of INVALID_DATA for bytes that aren't WAV, FLAC, or Ogg Vorbis.
+    @MainThread
+    Public Static Method FromLoad(load: AssetLoad): Sound Throws IOError
+        Local settings = Try load.Settings<SoundSettings>()
+        Local bytes = Try load.Bytes()
+        Try
+            Return Try Make(bytes, settings.Streamed, "{load.Path()}: ")
+        Catch e As SoundError
+            Throw IOError(IOErrorKind.INVALID_DATA, e.Message, load.Path())
+        End Try
+    End Method
+
+    /// Takes the sound file `load` read in place of its own, and gives True. It throws as FromLoad
+    /// does, which leaves it as it was.
+    @MainThread
+    Public Method Reload(load: AssetLoad): Bool Throws IOError
+        Local made = Try FromLoad(load)
+        If handle != 0 Then fbe_sound_free(handle)
+        handle = made.handle
+        made.handle = 0
+        Return True
+    End Method
+
     @MainThread Static Method Make(bytes: UInt8[], streamed: Bool,
                                    from: String): Sound Throws SoundError
         Local handle: UInt64 = 0
@@ -79,6 +121,7 @@ Public Final Class Sound
     /// panics. Freeing it again does nothing. It's freed when nothing has it any more, too.
     @MainThread Public Method Free()
         If handle != 0
+            If !Assets.Release(Self) Then Return
             fbe_sound_free(handle)
             handle = 0
         End If
