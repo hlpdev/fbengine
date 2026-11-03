@@ -31,6 +31,18 @@ End Enum
 /// a pixel covering from its whole coordinates to the next. Sprites it draws are rotated and scaled
 /// as it says, 0 radians and 1 unless set, and tinted by its color. What it draws into one target
 /// goes to the GPU together, in its turn with whatever else the frame does.
+///
+/// std.image has a Canvas of its own, which draws into an Image on the CPU, so a file importing
+/// both says which it means, by importing only what it uses of the other:
+///
+/// ```vb
+/// From std.image Import Image
+/// Import fbengine
+///
+/// Local canvas = Screen.Canvas()
+/// canvas.SetColor(Color32(255, 0, 0, 255))
+/// canvas.DrawRect(10, 10, 100, 50)
+/// ```
 Public Final Class Canvas
     Field texture: Texture?
     Field pen: fbe_2d_pen_t

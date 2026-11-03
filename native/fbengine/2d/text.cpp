@@ -46,8 +46,9 @@ void release(page_texture_t& page) {
 }
 
 /// Uploads what's been written into the atlas's pages since they were last uploaded, its dirty
-/// rectangle and the transparent pixel around it, which a page made again has its old texture's
-/// pixels in; making a texture for a new page, or a page's again where it's another size or format
+/// rectangle and the transparent pixel around it, which a page emptied in place has its old
+/// texels in, though nothing samples them; making a texture for a new page, or a page dropped and
+/// made again, or a page's again where it's another size or format
 /// or the GPU's started again, and uploading all of it. False, with fbe_error's why, if one can't
 /// be made.
 bool upload_pages() {

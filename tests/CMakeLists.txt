@@ -198,9 +198,25 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.controls PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
                        PASS_REGULAR_EXPRESSION "Running controls[^\n]*\nmove [(]0, -1[)], jump True\r?\nmove [(]1, 0[)], jump True\r?\n$")
 
+  # Their --watch, which a person watches in a window (tools/show.py), walked here offscreen, a step
+  # each frame.
+  add_test(NAME examples.controls_watch
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/controls"
+                   -- --watch --frames 30)
+  set_tests_properties(examples.controls_watch PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "\nwatched 30 frames, moved True, jumped True\r?\n$")
+  add_test(NAME examples.menu_watch
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/menu"
+                   -- --watch --frames 60)
+  set_tests_properties(examples.menu_watch PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "\nwatched 60 frames: options True, playing True, console True, menu again True\r?\n$")
+
   add_test(NAME examples.menu
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/menu")
-  set_tests_properties(examples.menu PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+  set_tests_properties(examples.menu PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "Running menu[^\n]*\noptions open: True\r?\nvolume 0[.]65, fullscreen True, name Ada\r?\nmenu again: True\r?\nplaying: True, focus none\r?\na jump: score 100\r?\nconsole: [[]> give 50, gave 50[]], score 150, typed \" \"\r?\nclosed, a jump: score 250\r?\n$")
 endif()
 
@@ -521,6 +537,11 @@ target_include_directories(fbengine_collide_tests PRIVATE "${PROJECT_SOURCE_DIR}
 target_compile_definitions(fbengine_collide_tests PRIVATE FBE_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_collide_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
+# Its float arithmetic as written, never fused, as fbengine_native's is, so its corners and the
+# GPU's it's checked against round alike on every target.
+if(NOT MSVC)
+  target_compile_options(fbengine_collide_tests PRIVATE -ffp-contract=off)
+endif()
 fbengine_set_warnings(fbengine_collide_tests)
 catch_discover_tests(fbengine_collide_tests TEST_PREFIX "collide."
                      DL_PATHS "${fbengine_test_dll_paths}")
@@ -565,6 +586,22 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- ${name})
     set_tests_properties(ui.${name} PROPERTIES PASS_REGULAR_EXPRESSION "${printed}" TIMEOUT 120)
   endforeach()
+  # The IME's composition, set before the window opens, drawn at a field's cursor.
+  add_test(NAME ui.composition
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- composition)
+  set_tests_properties(ui.composition PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "underlined True, cursor True, typed a\r?\nhalf size, underlined True" TIMEOUT 120)
+  add_test(NAME ui.composition-moved
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- composition-moved)
+  set_tests_properties(ui.composition-moved PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "composing bb, then none" TIMEOUT 120)
+  add_test(NAME ui.pop-clip-too-many
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- pop-clip-too-many)
+  set_tests_properties(ui.pop-clip-too-many PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "Painter[.]PopClip: Node \"greedy\" ends a clip it didn't push" TIMEOUT 120)
 endif()
 
 # The cooker's C++, built into the tests from its own sources, which read back what it makes with
@@ -702,3 +739,49 @@ target_link_libraries(fbengine_core_tests PRIVATE fbengine_native Catch2::Catch2
 fbengine_set_warnings(fbengine_core_tests)
 catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_native>")
+
+# E7's animation: sampling, apart from the DLL, and the clip, player, and skin areas through
+# fbengine's C API, with no window or GPU.
+add_executable(fbengine_anim_tests anim/sample_tests.cpp anim/clip_tests.cpp anim/player_tests.cpp
+               anim/skin_tests.cpp anim/model_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
+target_link_libraries(fbengine_anim_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_anim_tests)
+catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
+                     DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
+
+# Animation's panics, each a case of tests/anim/panics run on its own, which has to panic saying
+# what it does.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_anim_panics
+      "frame-rate=Clip: a clip's frames a second are 0 or more, not -1"
+      "unpaired=AddPositions on a Clip: a key's time for each value, not 2 for 1"
+      "untangented=AddRotations on a Clip: a CUBIC channel's keys have tangents"
+      "tangents-unpaired=AddScales on a Clip: a key's time and tangents for each value"
+      "times-falling=AddPositions on a Clip: each key's time is after the last: 1 isn't after 1"
+      "moved-twice=AddScales on a Clip: the clip moves the scale of \"a\" already"
+      "clip-freed=Length on a Clip that was freed"
+      "player-of-freed=Player on a Pivot that was freed"
+      "player-entity-freed=SetTime on a Player whose entity was freed"
+      "time-nan=SetTime on a Player: a clip's time is a number of seconds, not nan"
+      "update-negative=Update on a World: a world is moved on by 0 seconds or more, not -1"
+      "palette-unskinned=Palette on a Mesh skinned by nothing"
+      "joint-twice=AddJoint on a Skin: the skin has a joint \"a\" already"
+      "joint-out-of-range=JointName\\(0\\) on a Skin with 0 joints"
+      "layer-out-of-range=Layer\\(16\\) on a Player: its layers are 0 to 15"
+      "crossfade-negative=Crossfade on a Player: a fade takes 0 seconds or more, not -1"
+      "weight-outside=SetWeight on a Player: a layer's weight is from 0 to 1, not 2"
+      "event-out-of-range=EventName\\(0\\) on a Clip with 0 events"
+      "slice-backward=Slice on a Clip: a clip's part is from 0 seconds or more to then or later, not 2 to 1")
+  foreach(case IN LISTS fbengine_anim_panics)
+    string(FIND "${case}" "=" split)
+    string(SUBSTRING "${case}" 0 ${split} name)
+    math(EXPR split "${split} + 1")
+    string(SUBSTRING "${case}" ${split} -1 message)
+    add_test(NAME anim.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/anim/panics"
+                     -- ${name})
+    set_tests_properties(anim.panics.${name} PROPERTIES TIMEOUT 60
+                         PASS_REGULAR_EXPRESSION "panic: ${message}")
+  endforeach()
+endif()
