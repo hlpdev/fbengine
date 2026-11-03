@@ -56,3 +56,7 @@ each on its branch (lane-<name>) in its own worktree. The coordinator reviews an
 - Intel Macs have no GPU job: no Metal on their runners, no lavapipe in Homebrew's Mesa.
 - Publishing: `gh workflow run publish.yml --ref v<version> -f registry=staging` on a tag of the
   version in every package's project.toml.
+
+
+- No iostreams in a DLL (fstream, stringstream): the DLLs compile with _UCRT, where mbstate_t is
+  another size than in the static libstdc++'s, so their layouts differ and a Release build crashes.
