@@ -45,4 +45,7 @@ Try Components.Describe()
 A game with no such program just has none. `@Limits` and `@ShownInDegrees` on a Field say what they
 say on a setter, and `@Skip` leaves one out. fbengine_physics's "Body" is one of these.
 
+`-- --watch` plays a scene of its own by itself, keeping nothing of yours, for anyone to look at (`python
+tools/show.py ../packages/fbengine_editor`).
+
 The asset browser, scenes on disk, and playing the game come in the steps after this one.

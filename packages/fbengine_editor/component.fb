@@ -30,10 +30,10 @@ Public Final Class ComponentData
         End For
     End New
 
-    // One the same as `other`.
-    Package New(other: ComponentData)
-        Kind = other.Kind
-        Values = other.Values.Clone()
+    /// One of the kind called `kind`, with `values`, as what's saved of it, as a scene loading has.
+    Public New(kind: String, values: Value)
+        Kind = kind
+        Values = values
     End New
 End Class
 
@@ -49,13 +49,21 @@ Public Function ComponentsOf(entity: Entity): ComponentData[]
     Return kept != Null ? kept.Items.Clone() : []
 End Function
 
+/// Makes what components `entity` has `items`, in order, as a scene being loaded does.
+@MainThread @PanicsAtCaller
+Public Function SetComponentsOf(entity: Entity, items: ComponentData[])
+    Local kept = EntityComponents()
+    kept.Items = items.Clone()
+    entity.SetData(kept)
+End Function
+
 // Gives `entity` what `from` has, as a copy of it, and what's under it what's under `from` has.
 Package Function CopyComponents(from: Entity, entity: Entity)
     Local kept = from.Data<EntityComponents>()
     If kept != Null
         Local made = EntityComponents()
         For item In kept.Items
-            made.Items.Add(ComponentData(item))
+            made.Items.Add(ComponentData(item.Kind, item.Values.Clone()))
         End For
         entity.SetData(made)
     End If

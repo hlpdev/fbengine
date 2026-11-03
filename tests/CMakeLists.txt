@@ -1210,6 +1210,30 @@ if(FBENGINE_FB_TESTS)
 endif()
 # What fbengine_editor panics for, each by a run of its panics/main.fb, which says it.
 if(FBENGINE_FB_TESTS)
+  # Its panes against their golden images, its --save saving them first; and its --watch.
+  add_test(NAME editor.frames
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/packages/fbengine_editor"
+                   -- --save "${PROJECT_BINARY_DIR}/example-frames/editor")
+  set_tests_properties(editor.frames PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       FIXTURES_SETUP editor_frames TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "\nsaved\r?\n$"
+                       SKIP_REGULAR_EXPRESSION "no GPU here")
+  add_test(NAME editor.golden
+           COMMAND fbengine_gpu_tests "the editor's frames match their golden images")
+  set_tests_properties(editor.golden PROPERTIES
+                       LABELS "gpu;golden" FIXTURES_REQUIRED editor_frames
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
+  if(fbengine_test_dll_paths)
+    set_property(TEST editor.golden PROPERTY ENVIRONMENT_MODIFICATION
+                 "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+  endif()
+  set(fbengine_editor_folder "${PROJECT_SOURCE_DIR}/packages/fbengine_editor")
+  fbengine_add_watched(editor.watch "${fbengine_editor_folder}" "" "\nwatched 40 frames\r?\n$")
+  fbengine_add_watched(editor.watch_escape "${fbengine_editor_folder}" "--press-at;1"
+                       "\nwatched 2 frames\r?\n$")
+  fbengine_add_watched(editor.watch_close "${fbengine_editor_folder}" "--close-at;1"
+                       "\nwatched 2 frames\r?\n$")
   foreach(case IN ITEMS "mark-in-an-edit;History.MarkSaved: an edit can't make another"
                         "end-group-in-an-edit;History.EndGroup: an edit can't make another"
                         "move-nan;Dock.Move: a share is a number"

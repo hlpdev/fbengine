@@ -166,6 +166,13 @@ Function ANumbersShownAsMuchAsItsWorthReading() Throws IOError, GraphicsError
     Expect(FieldOf(editor, "Position", 0).Text() == "1.2346", FieldOf(editor, "Position", 0).Text())
     Expect(FieldOf(editor, "Position", 1).Text() == "0", FieldOf(editor, "Position", 1).Text())
     Expect(FieldOf(editor, "Position", 2).Text() == "0.1", FieldOf(editor, "Position", 2).Text())
+    // Showing the start of what's more than fits, and an angle's as much as it's worth.
+    Expect(FieldOf(editor, "Position", 0).Cursor() == 0,
+           "it's at {FieldOf(editor, "Position", 0).Cursor()}")
+    pivot.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), 0.5))
+    editor.Step()
+    Expect(FieldOf(editor, "Rotation", 1).Text() == "28.65", FieldOf(editor, "Rotation", 1).Text())
+    Expect(FieldOf(editor, "Rotation", 1).Cursor() == 0)
     // Going through what's shown keeps what there is, past what's shown.
     Try Entered(editor, "Position", "1.2346", 0)
     Expect(!editor.Edits.CanUndo() && pivot.Position().x != 1.2346, "it rounded what's there")
@@ -1093,5 +1100,32 @@ Function AGamesProgramSaysItsKinds() Throws IOError, GraphicsError
     editor.OpenFolder(second)
     editor.CloseProject()
     Expect(!editor.Kinds.Running(), "it's still running")
+    editor.Finish()
+End Function
+
+@Test
+Function WhatsLoadedIsPutBackAsItsSaved() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    KnowingKinds(editor)
+    Local pivot = Pivot()
+    Local values = Value.Object()
+    values["Speed"] = Value(9.0)
+    // As a scene loading does, what it saved taken as it is, even of what's gone from the kind.
+    values["Gone"] = Value("kept")
+    SetComponentsOf(pivot, [ComponentData("Door", values)])
+    Selecting(editor, pivot)
+    Expect(FieldOf(editor, "Speed").Text() == "9", FieldOf(editor, "Speed").Text())
+    // What wasn't saved shows as a new one has it, and stays unsaved until it's set.
+    Expect(FieldOf(editor, "Label").Text() == "door", FieldOf(editor, "Label").Text())
+    Expect(ComponentsOf(pivot)[0].Values["Label"] == Null)
+    Expect(ComponentsOf(pivot)[0].Values["Gone"]?.AsString() == "kept",
+           "it lost what it can't read")
+    // Set to none, it has none.
+    SetComponentsOf(pivot, [])
+    editor.Step()
+    Expect(ComponentsOf(pivot).Count == 0 && !Shows(editor, "Speed"))
     editor.Finish()
 End Function

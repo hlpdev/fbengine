@@ -39,6 +39,20 @@ fbe::golden::frame_t saved(const std::filesystem::path& path) {
 
 } // namespace
 
+// The editor's panes, and what opens over them, as `--save` saves them.
+TEST_CASE("the editor's frames match their golden images", "[.example]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_start());
+    for (const std::string_view frame : { "welcome", "nothing_selected", "move", "turn", "scale",
+                                          "component", "light", "camera", "many", "menu", "dialog" }) {
+        INFO("frame " << frame);
+        const std::filesystem::path path = std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /
+                                           "editor" / std::format("frame_{}.png", frame);
+        fbe::golden::check(std::format("editor_{}", frame), saved(path));
+    }
+    stop_gpu();
+}
+
 // The arcade example's frames: its pilot's run's 1, 150, and 300; and with no one flying, a rock
 // crossing the ground and the game's end. The GPU started here is the one the example drew on, as
 // ctest gives both the same Vulkan, which says how strictly they're compared.

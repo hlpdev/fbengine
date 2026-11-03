@@ -1,0 +1,287 @@
+// Every command there is, done as a person does: by its keys if it has any, and by its menu, offscreen.
+// One that's added with neither checked here fails this, so each has what shows it did what it says.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import fbengine
+Import fbengine_editor
+Import fbengine_ui
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// What a command needs first, what shows it worked, and which of its keys and its menu it has.
+Class Driving
+    Public Field Prepare: Func(Editor, DemoScene)
+    Public Field Did: Func(Editor, DemoScene): Bool
+
+    New(prepare: Func(Editor, DemoScene), did: Func(Editor, DemoScene): Bool)
+        Prepare = prepare
+        Did = did
+    End New
+End Class
+
+Function Nothing(editor: Editor, scene: DemoScene)
+End Function
+
+Function Selected(editor: Editor, scene: DemoScene)
+    editor.Edited.SelectOnly(scene.Crate)
+End Function
+
+Function Added(editor: Editor, scene: DemoScene)
+    editor.Actions.Run("add.cube")
+End Function
+
+Function AddedAndUndone(editor: Editor, scene: DemoScene)
+    editor.Actions.Run("add.cube")
+    editor.Actions.Run("edit.undo")
+End Function
+
+// A scene's entities, counted.
+Function Count(editor: Editor): Int => editor.Edited.Entities().Count
+
+Function Pane(id: String): Driving
+    Return Driving(Nothing,
+                   Function(editor: Editor, scene: DemoScene) => !editor.Docked.Showing(id))
+End Function
+
+// What's expected of each. The demo's scene has 6, before anything's added.
+Function Drivings(): Map<String, Driving>
+    Local all: Map<String, Driving> = {}
+    all["file.open"] = Driving(Nothing,
+                               Function(editor: Editor,
+                                        scene: DemoScene) => editor.ShowingDialog() != Null)
+    all["file.close"] = Driving(Nothing,
+                                Function(editor: Editor, scene: DemoScene) => editor.Current() ==
+                                Null)
+    all["file.quit"] = Driving(Nothing,
+                               Function(editor: Editor, scene: DemoScene) => editor.Quitting())
+    all["edit.undo"] = Driving(Added,
+                               Function(editor: Editor,
+                                        scene: DemoScene) => editor.Edits.CanRedo() &&
+                               Count(editor) == 6)
+    all["edit.redo"] = Driving(AddedAndUndone,
+                               Function(editor: Editor,
+                                        scene: DemoScene) => !editor.Edits.CanRedo() &&
+                               Count(editor) == 7)
+    For pane In ["scene", "tree", "inspector", "output"]
+        all["view.{pane}"] = Pane(pane)
+    End For
+    // What's behind another's shown, in front.
+    all["view.assets"] = Driving(Nothing,
+                                 Function(editor: Editor,
+                                          scene: DemoScene) => editor.Docked.Active("assets"))
+    all["view.reset"] = Driving(Function(editor: Editor, scene: DemoScene)
+        editor.Docked.Hide("tree")
+    End Function, Function(editor: Editor, scene: DemoScene) => editor.Docked.Showing("tree"))
+    all["view.frame"] = Driving(Selected, Function(editor: Editor, scene: DemoScene)
+        Return Distance(editor.View.Focus(), scene.Crate.Position(Space.WORLD)) < 1.5
+    End Function)
+    // On a tab's own menu, which has what's only there.
+    all["view.close"] = Driving(Nothing,
+                                Function(editor: Editor,
+                                         scene: DemoScene) => !editor.Docked.Showing("tree"))
+    all["view.close_others"] = Driving(Nothing, Function(editor: Editor, scene: DemoScene)
+        Return editor.Docked.Showing("tree") && !editor.Docked.Showing("scene") &&
+               !editor.Docked.Showing("inspector")
+    End Function)
+    all["tool.turn"] = Driving(Nothing,
+                               Function(editor: Editor, scene: DemoScene) => editor.View.Tool ==
+                               HandleTool.TURN)
+    all["tool.scale"] = Driving(Nothing,
+                                Function(editor: Editor, scene: DemoScene) => editor.View.Tool ==
+                                HandleTool.SCALE)
+    all["tool.move"] = Driving(Function(editor: Editor, scene: DemoScene)
+        editor.View.Tool = HandleTool.SCALE
+    End Function, Function(editor: Editor, scene: DemoScene) => editor.View.Tool == HandleTool.MOVE)
+    all["tool.space"] = Driving(Nothing,
+                                Function(editor: Editor, scene: DemoScene) => editor.View.Axes ==
+                                HandleSpace.LOCAL)
+    all["tool.snap"] = Driving(Nothing,
+                               Function(editor: Editor, scene: DemoScene) => editor.View.Snap.On)
+    all["select.none"] = Driving(Selected,
+                                 Function(editor: Editor,
+                                          scene: DemoScene) => editor.Edited.Selected().Count == 0)
+    all["add.cube"] = Driving(Nothing, Function(editor: Editor, scene: DemoScene)
+        Return Count(editor) == 7 && editor.Edits.UndoName() == "Add Cube" &&
+               (editor.Edited.Selected()[0] As? Mesh) != Null
+    End Function)
+    all["add.light"] = Driving(Nothing, Function(editor: Editor, scene: DemoScene)
+        Return Count(editor) == 7 && editor.Edits.UndoName() == "Add Light" &&
+               (editor.Edited.Selected()[0] As? Light) != Null
+    End Function)
+    all["tree.rename"] = Driving(Selected,
+                                 Function(editor: Editor,
+                                          scene: DemoScene) => editor.Tree.Renaming())
+    all["tree.duplicate"] = Driving(Selected, Function(editor: Editor, scene: DemoScene)
+        Return Count(editor) == 8 && editor.Edits.UndoName() == "Duplicate"
+    End Function)
+    all["tree.hide"] = Driving(Selected,
+                               Function(editor: Editor, scene: DemoScene) => scene.Crate.Hidden())
+    all["tree.delete"] = Driving(Selected,
+                                 Function(editor: Editor,
+                                          scene: DemoScene) => editor.Edited.IsRemoved(scene.Crate))
+    all["tree.find"] = Driving(Nothing, Function(editor: Editor, scene: DemoScene)
+        Local focused = editor.Shown.Focused()
+        Return focused != Null && RefEquals(focused, editor.Tree.FindField())
+    End Function)
+    Return all
+End Function
+
+// An editor on a project of its own, with the demo's scene.
+Function Opened(settings: TempDir, games: TempDir): Editor Throws IOError, GraphicsError
+    Window.SetHeadless(True)
+    Try MakeDemoProject(games.Path / "game")
+    Local editor = Try Editor(settings.Path)
+    Try editor.Start(games.Path / "game")
+    editor.Step()
+    Return editor
+End Function
+
+Function Click(editor: Editor, node: Node?,
+               button: MouseButton = MouseButton.LEFT) Throws GraphicsError
+    If node == Null Then Panic("there's nothing there to click")
+    editor.Step()
+    Local at = node.Box().Center
+    Try Simulate.MoveMouse(at.x, at.y)
+    editor.Step()
+    Try Simulate.Click(button)
+    editor.Step()
+End Function
+
+// Its keys, as they're pressed.
+Function Keyed(keys: Shortcut) Throws GraphicsError
+    Local primary = System.Platform == Platform.MACOS ? Key.LEFT_SUPER : Key.LEFT_CONTROL
+    If keys.Primary Then Try Simulate.KeyDown(primary)
+    If keys.Shift Then Try Simulate.KeyDown(Key.LEFT_SHIFT)
+    If keys.Alt Then Try Simulate.KeyDown(Key.LEFT_ALT)
+    Try Simulate.PressKey(keys.Key)
+    If keys.Alt Then Try Simulate.KeyUp(Key.LEFT_ALT)
+    If keys.Shift Then Try Simulate.KeyUp(Key.LEFT_SHIFT)
+    If keys.Primary Then Try Simulate.KeyUp(primary)
+End Function
+
+// Whether a menu of the menu bar has it, which is left open if it has.
+Function Menued(editor: Editor, id: String): Node? Throws GraphicsError
+    For title In ["File", "Edit", "Add", "Tools", "View"]
+        Try Click(editor, editor.Shown.Root().Find("menu.{title}"))
+        Local popups = editor.Shown.Popups()
+        If popups.Count > 0
+            Local item = popups[0].Find(id)
+            If item != Null Then Return item
+        End If
+        Try Simulate.PressKey(Key.ESCAPE)
+        editor.Step()
+    End For
+    Return Null
+End Function
+
+// A fresh editor, with `id` ready to run, and what's expected of it.
+Function Each(id: String, driving: Driving, run: Func(Editor): Bool,
+              how: String) Throws IOError, GraphicsError
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Opened(settings, games)
+    Local scene = FillDemoScene(editor)
+    editor.Step()
+    driving.Prepare(editor, scene)
+    editor.Step()
+    If run(editor)
+        editor.Step()
+        editor.Step()
+        editor.Step()
+        Expect(driving.Did(editor, scene), "{id} by {how} did nothing")
+    End If
+    editor.Finish()
+End Function
+
+@Test
+Function EveryCommandIsCheckedHere() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Opened(settings, games)
+    Local checked = Drivings()
+    For command In editor.Actions.All()
+        Expect(checked.Get(command.Id) != Null, "nothing here checks {command.Id}")
+    End For
+    For id In checked.Keys()
+        Expect(editor.Actions.Find(id) != Null, "there's no {id} any more")
+    End For
+    editor.Finish()
+End Function
+
+@Test
+Function EveryCommandsKeysDoIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local list = Try Opened(settings, games)
+    Local commands = list.Actions.All()
+    list.Finish()
+    Local checked = Drivings()
+    Local count = 0
+    For command In commands
+        Local keys = command.Keys
+        Local driving = checked.Get(command.Id)
+        If keys == Null || driving == Null Then Continue
+        count += 1
+        Local pressed: Shortcut = keys
+        Try Each(command.Id, driving, Function(editor: Editor): Bool
+            Try
+                Try Keyed(pressed)
+            Catch error As GraphicsError
+                Panic(error.Message)
+            End Try
+            Return True
+        End Function, "its keys")
+    End For
+    Expect(count > 15, "only {count} have keys")
+End Function
+
+@Test
+Function EveryCommandsMenuDoesIt() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local checked = Drivings()
+    Local count = 0
+    For id In checked.Keys()
+        // These two are a tab's.
+        If id == "view.close" || id == "view.close_others" Then Continue
+        Local driving = checked[id]
+        Try Each(id, driving, Function(editor: Editor): Bool
+            Try
+                Local item = Try Menued(editor, id)
+                If item == Null Then Panic("no menu has {id}")
+                Try Click(editor, item)
+                count += 1
+            Catch error As GraphicsError
+                Panic(error.Message)
+            End Try
+            Return True
+        End Function, "its menu")
+    End For
+    Expect(count == checked.Count - 2, "{count} of {checked.Count}")
+End Function
+
+@Test
+Function ATabsMenuClosesItAndTheOthers() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local checked = Drivings()
+    For id In ["view.close", "view.close_others"]
+        Local driving = checked[id]
+        Try Each(id, driving, Function(editor: Editor): Bool
+            Try
+                Try Click(editor, editor.Shown.Root().Find("tab.tree"), MouseButton.RIGHT)
+                Local popups = editor.Shown.Popups()
+                If popups.Count == 0 Then Panic("a tab's menu didn't open")
+                Try Click(editor, popups[0].Find(id))
+            Catch error As GraphicsError
+                Panic(error.Message)
+            End Try
+            Return True
+        End Function, "a tab's menu")
+    End For
+End Function

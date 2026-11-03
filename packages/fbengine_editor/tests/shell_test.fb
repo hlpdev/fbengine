@@ -652,3 +652,13 @@ Function WhatsTypedForAFolderLeavesTheDialogWhereItIs() Throws IOError, Graphics
     Expect(field.Box().Width == 420, "it's {field.Box()}")
     editor.Finish()
 End Function
+
+@Test
+Function AShortcutsWrittenAsAPersonWrites()
+    Expect("{Shortcut(Key.DELETE, False, False, False)}" == "Delete")
+    Expect("{Shortcut(Key.ESCAPE, False, False, False)}" == "Escape")
+    Expect("{Shortcut(Key.PAGE_UP, False, False, False)}" == "Page Up")
+    Expect("{Shortcut(Key.F2, False, False, False)}" == "F2")
+    Local primary = System.Platform == Platform.MACOS ? "Cmd" : "Ctrl"
+    Expect("{PrimaryKey(Key.Z, True)}" == "{primary}+Shift+Z", "{PrimaryKey(Key.Z, True)}")
+End Function

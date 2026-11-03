@@ -12,7 +12,7 @@ Import "./history"
 Import "./scene"
 
 // How wide a row's title is.
-Const TITLE_WIDTH: Float32 = 110.0
+Const TITLE_WIDTH: Float32 = 136.0
 
 // What shows in a field while what's selected differ.
 Const MIXED = "—"
@@ -22,6 +22,11 @@ Const DEGREES: Float = 180.0 / Pi
 // Whether `value` is in `bounds`, which a NaN isn't.
 Function Takes(bounds: Limits, value: Float): Bool
     Return (bounds.Above ? value > bounds.Low : value >= bounds.Low) && value <= bounds.High
+End Function
+
+// An angle in degrees as it's shown, which needs less of it than ShownNumber does.
+Function ShownAngle(value: Float): String
+    Return ShownNumber(Round(value * 100) / 100)
 End Function
 
 // `value` as it's shown: enough of it to read, the same each time it's shown.
@@ -201,6 +206,7 @@ Public Class PropertyRow Extends Widget
         SetGap(6.0)
         Local label = Label(Spaced(title), "inspector.title")
         label.SetTranslates(False)
+        label.SetStyleName("inspector.title")
         label.SetWidth(Sizing.Fixed(TITLE_WIDTH))
         Add(label)
     End New
@@ -318,7 +324,11 @@ Public Final Class FieldsRow<V> Extends PropertyRow
             End For
             If ui != Null && IsFocused(ui, entries[part]) Then Continue
             held[part] = text
-            If entries[part].Text() != text Then entries[part].SetText(text)
+            If entries[part].Text() != text
+                entries[part].SetText(text)
+                // Its start, if there's more of it than shows.
+                entries[part].SelectRange(0, 0)
+            End If
         End For
     End Method
 End Class
@@ -348,6 +358,7 @@ Public Final Class NoteRow Extends PropertyRow
         Super.New(title)
         Local note = Label(text, "inspector.note")
         note.SetTranslates(False)
+        note.SetStyleName("inspector.note")
         Add(note)
     End New
 End Class
@@ -621,11 +632,13 @@ Public Final Class SceneInspector Extends Widget
         If entities.Count == 0
             Local nothing = Label("Nothing's selected", "inspector.nothing")
             nothing.SetTranslates(False)
+            nothing.SetStyleName("inspector.nothing")
             list.Add(nothing)
             Return
         End If
         Local there = Function(entity: Entity) => !entity.Freed()
-        Heading(entities.Count == 1 ? "{entities[0].Kind()}" : "{entities.Count} selected")
+        // One's kind is in the headings further down.
+        If entities.Count > 1 Then Heading("{entities.Count} selected")
         AddTransform(entities)
         Local seen = Set<String>()
         seen.Add("Name")
@@ -853,7 +866,7 @@ Public Final Class SceneInspector Extends Widget
             lights[index].SetCone(angles.x, angles.y)
         End Function, Function(index: Int) => !lights[index].Freed())
         Added(FieldsRow<Vec2>(cone, history, 2, Function(angles: Vec2, part: Int)
-            Return ShownNumber(part == 0 ? angles.x * DEGREES : angles.y * DEGREES)
+            Return ShownAngle(part == 0 ? angles.x * DEGREES : angles.y * DEGREES)
         End Function, Function(angles: Vec2, part: Int, text: String): Vec2?
             Local typed = Parsed(text, Limits(0, Pi / 2), DEGREES)
             If typed == Null Then Return Null
@@ -884,7 +897,9 @@ End Class
 Function NumberRow(changed: Editable<Float>, edits: History): FieldsRow<Float>
     Local scale: Float = changed.Degrees ? DEGREES : 1
     Return FieldsRow<Float>(changed, edits, 1,
-                            Function(value: Float, part: Int) => ShownNumber(value * scale),
+                            Function(value: Float,
+                                     part: Int) => changed.Degrees ? ShownAngle(value * scale)
+                                                                   : ShownNumber(value),
                             Function(value: Float, part: Int, text: String): Float?
         Return Parsed(text, changed.Bounds, scale)
     End Function)
@@ -944,7 +959,7 @@ End Function
 // typed, and undoing gives it back exactly.
 Function RotationRow(changed: Editable<Quat>, edits: History): FieldsRow<Quat>
     Return FieldsRow<Quat>(changed, edits, 3, Function(value: Quat, part: Int)
-        Return ShownNumber(value.ToEulerDegrees()[part])
+        Return ShownAngle(value.ToEulerDegrees()[part])
     End Function, Function(value: Quat, part: Int, text: String): Quat?
         Local typed = Parsed(text, changed.Bounds, DEGREES)
         If typed == Null Then Return Null

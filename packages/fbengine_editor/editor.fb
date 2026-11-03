@@ -263,7 +263,7 @@ Public Final Class Editor
         End For
         If project != Null Then Return
         Local title = Label("fbengine")
-        title.SetStyleName("dialog.title")
+        title.SetStyleName("welcome.title")
         title.SetTranslates(False)
         welcome.Add(title)
         Local open = Button("Open a project…", "welcome.open")
@@ -602,8 +602,35 @@ Function EditorTheme(): Theme
     dialog.CornerRadius = 6.0
     dialog.Padding = Insets.All(16.0)
     theme.SetFields("dialog", dialog)
+    // What's in a dialog is in its box, with none of its own, as its name would give it.
+    Local plainly = StyleFields()
+    plainly.Background = Color(0, 0, 0, 0)
+    plainly.Border = Color(0, 0, 0, 0)
+    plainly.BorderWidth = 0.0
+    plainly.Padding = Insets.All(0.0)
+    theme.SetFields("dialog.said", plainly)
+    theme.SetFields("dialog.text", plainly)
     Local heading = StyleFields()
+    heading.Background = Color(0, 0, 0, 0)
+    heading.Border = Color(0, 0, 0, 0)
+    heading.BorderWidth = 0.0
+    heading.Padding = Insets.All(0.0)
     heading.FontSize = 20.0
     theme.SetFields("dialog.title", heading)
+    theme.SetFields("welcome.title", heading)
+    // A field's smaller than the dark theme's, as the inspector has rows of them.
+    Local field = StyleFields()
+    field.Background = Color.Hex("#14161a")
+    field.Border = Color.Hex("#30353d")
+    field.BorderWidth = 1.0
+    field.CornerRadius = 4.0
+    field.Padding = Insets.Symmetric(6.0, 3.0)
+    field.FontSize = 14.0
+    theme.SetFields("field", field)
+    Local small = StyleFields()
+    small.FontSize = 14.0
+    theme.SetFields("inspector.title", small)
+    theme.SetFields("inspector.note", small)
+    theme.SetFields("inspector.nothing", small)
     Return theme
 End Function
