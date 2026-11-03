@@ -240,6 +240,43 @@ Public Final Class Model Implements Asset
         Return textures[image]
     End Method
 
+    /// What its file calls its material at `index`, "" for nothing.
+    @MainThread @PanicsAtCaller
+    Public Method MaterialName(index: Int): String
+        Live("MaterialName")
+        If index < 0 || index >= materials.Count
+            Panic("the model has {materials.Count} materials; there's no material {index}")
+        End If
+        Unsafe
+            Return fbe_model_material_name(load.Handle, index).ToString()
+        End Unsafe
+    End Method
+
+    /// What its file calls its image at `index`, by the indices Textures has them: its name, or
+    /// for none, its URI as the file has it, or "" for an image inside it with neither.
+    @MainThread @PanicsAtCaller
+    Public Method TextureName(index: Int): String
+        Live("TextureName")
+        If index < 0 || index >= textures.Count
+            Panic("the model has {textures.Count} images; there's no image {index}")
+        End If
+        Unsafe
+            Return fbe_model_image_name(load.Handle, index).ToString()
+        End Unsafe
+    End Method
+
+    /// What its file calls the image its material at `index` reads for `map`, "" for none, as
+    /// TextureName says.
+    @MainThread @PanicsAtCaller
+    Public Method TextureNameOf(index: Int, map: ModelMap = ModelMap.BASE_COLOR): String
+        Live("TextureNameOf")
+        If index < 0 || index >= materials.Count
+            Panic("the model has {materials.Count} materials; there's no material {index}")
+        End If
+        Local image = fbe_model_material_image(load.Handle, index, map As Int32)
+        Return image >= 0 && image < textures.Count ? TextureName(image) : ""
+    End Method
+
     // Makes what its load has. What fails frees what it made.
     @MainThread
     Method Build() Throws IOError

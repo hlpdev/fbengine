@@ -1,0 +1,94 @@
+// A glTF as a converter of older formats writes one, and what reaches a game of what it kept: its
+// nodes' and bones' names, as they were, spaces and all; its frames, by its clip's frames a second,
+// so a game counts in them; a surface's material and what its texture was called; and its vertices'
+// colors, exactly, as floats or bytes. The converter's a game's own, never the engine's.
+
+Import std.core
+Import std.math
+Import std.text
+Import fbengine
+
+// To three places, with no -0.
+Function Rounded(value: Float): Float => Round(value * 1000) / 1000 + 0
+
+// The names of what's under `entity`, depth first.
+Function AddNames(entity: Entity, names: String[])
+    For child In entity.Children()
+        names.Add(child.Name())
+        AddNames(child, names)
+    End For
+End Function
+
+Function Joined(parts: String[]): String
+    Local joined = ""
+    For i = 0 Until parts.Count
+        joined += (i > 0 ? ", " : "") + parts[i]
+    End For
+    Return joined
+End Function
+
+// Where its bones are at a frame, counted as the file's converter counted them.
+Function ShowFrame(player: Player, clip: Clip, spine: Entity, head: Entity, frame: Float)
+    player.SetTime(frame / clip.FrameRate())
+    Local facing = head.Rotation() * Vec3(0, 0, -1)
+    Local turned = Atan2(-facing.x, -facing.z) * 180 / Pi
+    Print("at frame {frame} its spine's at {Rounded(spine.Position().y)}, " +
+          "its head's turned {Rounded(turned)}")
+End Function
+
+Window.SetHeadless(True)
+Assets.MountFiles("res://figure", {"figure.gltf": Embed("figure.gltf"),
+                                   "brick.png": Embed("brick.png"),
+                                   "skin_01.png": Embed("skin_01.png")})
+Local model = Try Assets.Load<Model>("res://figure/figure.gltf")
+Local root = Try model.Spawn()
+
+Local names: String[] = []
+AddNames(root, names)
+Print("nodes under the figure: {Joined(names)}")
+
+Local skin = model.Skins()[0]
+Local joints: String[] = []
+For i = 0 Until skin.JointCount()
+    joints.Add(skin.JointName(i))
+End For
+Print("joints of its skin: {Joined(joints)}")
+
+Local clip = model.Clips()[0]
+Print("its clip: {clip.Name()}, at {clip.FrameRate()} frames a second, " +
+      "{Round(clip.Length() * clip.FrameRate())} frames long")
+Local spine = root.Find("Bip01 Spine")
+Local head = root.Find("Bip01 Head")
+If spine == Null || head == Null Then Panic("a bone's name didn't reach it")
+Local player = root.Player()
+player.Play(clip, PlayMode.ONCE)
+For frame In [6.0, 12.0, 24.0]
+    ShowFrame(player, clip, spine, head, frame As Float)
+End For
+
+// A surface's material, by the file's index, and what its texture was called.
+Local geometry = model.Geometries()[0]
+Local materials = model.Materials()
+For s = 0 Until geometry.SurfaceCount()
+    Local surface = geometry.Surface(s)
+    Local drawn = surface.Material()
+    For m = 0 Until materials.Count
+        If drawn != materials[m] Then Continue
+        Local texture = model.TextureOf(m)
+        If texture == Null Then Panic("a material lost its texture")
+        Print("surface {s}: {model.MaterialName(m)}, reading {model.TextureNameOf(m)}, " +
+              "{texture.Width()} by {texture.Height()}")
+    End For
+End For
+
+For s = 0 Until geometry.SurfaceCount()
+    Local colors: String[] = []
+    For vertex In geometry.Surface(s).Vertices()
+        Local c = vertex.Color
+        colors.Add("{Rounded(c.r)} {Rounded(c.g)} {Rounded(c.b)} {Rounded(c.a)}")
+    End For
+    Print("surface {s}'s vertex colors: {Joined(colors)}")
+End For
+
+model.Free()
+Assets.Unmount("res://figure")

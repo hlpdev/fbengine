@@ -388,6 +388,18 @@ if(FBENGINE_FB_TESTS)
   endforeach()
 
   # Those with no --watch until the renderer draws meshes and sprites, or that have nothing to draw.
+  # Section 6's item 14, its receiving side: what a game gets of a converter's glTF.
+  fbengine_add_proof_of_numbers(models_as_a_converter_writes_them
+      "nodes under the figure: Bip01, Bip01 Spine, Bip01 Head, Bip01 HeadNub, body#1"
+      "joints of its skin: Bip01, Bip01 Spine, Bip01 Head"
+      "its clip: walk, at 30 frames a second, 24 frames long"
+      "at frame 6 its spine's at 0.625, its head's turned 45"
+      "at frame 12 its spine's at 0.75, its head's turned 90"
+      "at frame 24 its spine's at 0.5, its head's turned 0"
+      "surface 0: brush brick, reading GFX\\\\brick.bmp, 2 by 2"
+      "surface 1: brush skin, reading skin_01.png, 2 by 2"
+      "surface 0's vertex colors: 1 0 0 1, 0 1 0 0.5, 0 0 1 1, 0.25 0.5 0.75 1"
+      "surface 1's vertex colors: 1 0 0 1, 0 0.2 0.4 1, 0 0 1 1, 1 1 1 1")
   fbengine_add_proof_of_numbers(swept_collisions
                                 "a ball falls 100 and rests at 0[.]00, 0[.]50, 0[.]00"
                                 "it touched 1, the floor True, facing 0[.]00, 1[.]00, 0[.]00, at 0[.]00, 0[.]00, 0[.]00"
