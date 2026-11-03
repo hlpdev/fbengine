@@ -4,6 +4,7 @@
 // picks, and collisions search instead of every triangle: each box holds the boxes or the few
 // triangles under it, split at the median of their centers along their longest side.
 
+#include "scene/kept.hpp"
 #include "scene/math.hpp"
 
 #include <cstddef>
@@ -152,7 +153,8 @@ void bvh_t::overlapping(vec3_t min, vec3_t max, Visit&& visit) const {
         return;
     }
     // Kept for the next search, so a search doesn't allocate.
-    thread_local std::vector<std::uint32_t> stack;
+    thread_local std::vector<std::uint32_t>* kept = nullptr;
+    std::vector<std::uint32_t>& stack = kept_by_thread(kept);
     stack.assign(1, 0);
     while (!stack.empty()) {
         const node_t& node = m_nodes[stack.back()];

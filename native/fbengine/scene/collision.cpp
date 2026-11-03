@@ -9,12 +9,14 @@
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "jobs/jobs.hpp"
+#include "scene/kept.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
 #include "scene/sweep.hpp"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -62,7 +64,18 @@ struct mover_t {
     float step = 0.0F;
     /// The least a normal faces up, its y in the world, on ground: its max slope's cosine.
     float ground = 0.70710678F;
+    /// How many parents it has.
+    std::uint32_t depth = 0;
 };
+
+std::uint32_t depth_of(std::uint32_t entity) {
+    const entities_t& entities = scene().entities;
+    std::uint32_t depth = 0;
+    for (std::uint32_t at = entities.parent[entity]; at != none; at = entities.parent[at]) {
+        ++depth;
+    }
+    return depth;
+}
 
 /// Where a move ended, and what it touched, with the targets' indices.
 struct result_t {
@@ -77,27 +90,44 @@ struct snapshot_t {
     std::vector<target_t> targets;
 };
 
-/// Runs `work` for each move, on the job system's workers when there are enough to be worth
-/// waking them, a few to a job, and waits for them all: a move takes a couple of microseconds, so
-/// a room of 41 movers is done before workers would be, and 400 take a third of the time on them.
-/// Each reads only the snapshot, everything it reads worked out before (trees, world matrices,
-/// terrains' ranges), and writes only its own result, so the moves come out the same whatever runs
-/// them in whatever order.
+/// How moves are run: by what's worth it, or, for tests, one way.
+move_path_t move_path = move_path_t::AS_WORTH;
+
+/// Runs `work` for each move, the first few here, timed, and the rest here too unless they'd take
+/// longer than waking the job system's workers costs, a few to a job, waiting for them all: an
+/// open field's move takes half a microsecond, a crowded room's two, and a long one over a terrain
+/// many, so how many there are doesn't say which is worth it. Each reads the snapshot, the trees,
+/// world matrices, and terrains' ranges worked out before it, and the scene's arrays those are
+/// found through, which nothing changes while the main thread waits here, and writes only its own
+/// result and its thread's scratch, so the moves come out the same whatever runs them in whatever
+/// order.
 template <typename Work>
 void for_each_move(std::size_t count, Work&& work) {
-    constexpr std::size_t worth = 64;
     constexpr std::size_t grain = 16;
-    if (count < worth) {
-        for (std::size_t i = 0; i < count; ++i) {
-            work(i);
-        }
-        return;
-    }
-    jobs_t& engine = jobs();
-    engine.wait(engine.run_for(count, grain, [&work](std::size_t begin, std::size_t end) {
+    constexpr double waking_seconds = 0.0001;
+    const auto run = [&work](std::size_t begin, std::size_t end) {
         for (std::size_t i = begin; i < end; ++i) {
             work(i);
         }
+    };
+    const std::size_t first = move_path == move_path_t::WORKERS ? 0 : std::min(count, grain);
+    const auto started = std::chrono::steady_clock::now();
+    run(0, first);
+    const std::size_t rest = count - first;
+    if (rest == 0) {
+        return;
+    }
+    if (move_path != move_path_t::WORKERS) {
+        const std::chrono::duration<double> taken = std::chrono::steady_clock::now() - started;
+        const double each = taken.count() / static_cast<double>(first);
+        if (move_path == move_path_t::HERE || each * static_cast<double>(rest) < waking_seconds) {
+            run(first, count);
+            return;
+        }
+    }
+    jobs_t& engine = jobs();
+    engine.wait(engine.run_for(rest, grain, [&run, first](std::size_t begin, std::size_t end) {
+        run(first + begin, first + end);
     }));
 }
 
@@ -136,6 +166,20 @@ struct nearby_t {
     std::vector<std::uint32_t> indices;
     std::vector<std::array<vec3_t, 3>> under;
 };
+
+/// The most of anything a thread's scratch keeps past a move, so one long sweep over a big terrain
+/// doesn't hold its memory on every worker from then on.
+constexpr std::size_t kept_past_a_move = std::size_t{ 1 } << 16U;
+
+/// Each thread's scratch, kept for its next move.
+thread_local nearby_t* nearby_scratch = nullptr;
+
+template <typename Item>
+void keep_some(std::vector<Item>& scratch) {
+    if (scratch.capacity() > kept_past_a_move) {
+        std::vector<Item>().swap(scratch);
+    }
+}
 
 /// Adds a world triangle, squashed into sphere space, turning it if its target mirrors.
 void add_triangle(nearby_t& nearby, std::array<vec3_t, 3> corners, float squash,
@@ -485,7 +529,7 @@ result_t move(const snapshot_t& snapshot, const mover_t& mover) {
                         std::fmax(mover.horizontal, mover.vertical) +
                         snapshot.world->collision_skin;
     // Each mover's own while it moves, kept for the next, so gathering doesn't allocate again.
-    thread_local nearby_t nearby;
+    nearby_t& nearby = kept_by_thread(nearby_scratch);
     gather(snapshot, mover, reach, nearby);
     const vec3_t start = into(mover.from);
     const vec3_t wanted = into(mover.to) - start;
@@ -521,6 +565,10 @@ result_t move(const snapshot_t& snapshot, const mover_t& mover) {
         }
     }
 
+    keep_some(nearby.triangles);
+    keep_some(nearby.ellipsoids);
+    keep_some(nearby.indices);
+    keep_some(nearby.under);
     result_t result;
     result.end = out(end);
     for (const hit_t& hit : hits) {
@@ -586,6 +634,7 @@ void collide(std::uint32_t world_slot) {
                 .vertical = collider.vertical,
                 .step = collider.step_height,
                 .ground = std::cos(collider.max_slope),
+                .depth = depth_of(entity),
             });
         }
 
@@ -652,14 +701,24 @@ void collide(std::uint32_t world_slot) {
     std::vector<result_t> results(movers.size());
     for_each_move(movers.size(), [&](std::size_t i) { results[i] = move(snapshot, movers[i]); });
 
-    for (std::size_t i = 0; i < movers.size(); ++i) {
+    // Parents first, since moving one takes its children with it, and each child's end is where
+    // it is in the world once its parent's at its own; those of one depth don't meet.
+    std::vector<std::uint32_t> applying(movers.size());
+    for (std::size_t i = 0; i < applying.size(); ++i) {
+        applying[i] = static_cast<std::uint32_t>(i);
+    }
+    std::ranges::stable_sort(applying, {}, [&movers](std::uint32_t i) { return movers[i].depth; });
+    for (const std::uint32_t i : applying) {
         const mover_t& mover = movers[i];
-        collider_t& collider = entities.colliders[mover.entity];
         const vec3_t end = results[i].end;
         if (end.x != mover.to.x || end.y != mover.to.y || end.z != mover.to.z) {
             set_world_position(mover.entity, end);
         }
-        collider.previous = end;
+        entities.colliders[mover.entity].previous = end;
+    }
+    for (std::size_t i = 0; i < movers.size(); ++i) {
+        const mover_t& mover = movers[i];
+        collider_t& collider = entities.colliders[mover.entity];
         for (std::size_t c = 0; c < results[i].contacts.size(); ++c) {
             const contact_t& contact = results[i].contacts[c];
             collider.contacts.push_back(contact);
@@ -681,6 +740,20 @@ collider_t* collider_of(std::uint64_t entity) {
 }
 
 } // namespace
+
+void set_move_path(move_path_t path) {
+    move_path = path;
+}
+
+std::size_t move_scratch_kept() {
+    const nearby_t& scratch = kept_by_thread(nearby_scratch);
+    return std::max({
+        scratch.triangles.capacity(),
+        scratch.ellipsoids.capacity(),
+        scratch.indices.capacity(),
+        scratch.under.capacity(),
+    });
+}
 
 } // namespace fbe::scene
 

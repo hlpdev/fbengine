@@ -687,8 +687,8 @@ FBE_API int32_t fbe_entity_can_see(uint64_t entity, uint64_t target);
 // in a frame and passes over its middle first. A mover already within its radius of a face, an
 // edge, or a corner touches it only going further in. A slide along ground, within the mover's max
 // slope of level, may raise it as far as the slope goes; along anything steeper, edges and corners
-// too, no more than the move's own rise and its step height. Each move is worked out on its own, so
-// the order entities are in changes nothing.
+// too, no more than the move's own rise and its step height. Each move is worked out on its own;
+// what it touches at one time goes by the order those entities were made.
 //
 // An entity's group, 0 for none, at first. Setting one forgets where its last move ended.
 FBE_API bool fbe_entity_set_collision_group(uint64_t entity, int32_t group);

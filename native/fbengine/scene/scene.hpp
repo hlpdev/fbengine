@@ -341,6 +341,16 @@ void renumber_cameras(const std::vector<std::pair<std::uint32_t, std::size_t>>& 
                       const std::vector<std::uint32_t>& copies);
 /// The live light a handle is for, or null, with fbe_error saying so.
 light_t* light_of(std::uint64_t handle);
+/// How a World's moves are run: by what's worth it, here or on the job system's workers, or, for
+/// tests, all here or all on the workers.
+enum class move_path_t : std::uint8_t {
+    AS_WORTH,
+    HERE,
+    WORKERS,
+};
+void set_move_path(move_path_t path);
+/// The most of anything the calling thread's moves' scratch has kept for its next.
+std::size_t move_scratch_kept();
 /// The lights among some entities and under them in the tree's order, depth first, each parent
 /// before its children, by a stack of their own, so no tree is too deep.
 void lights_in(const std::vector<std::uint32_t>& among, std::vector<std::uint32_t>& found);

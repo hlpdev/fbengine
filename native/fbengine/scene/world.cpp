@@ -593,6 +593,16 @@ FBE_API uint64_t fbe_entity_copy(uint64_t entity, uint64_t world, uint64_t paren
         copies[i] = copy;
     }
     fbe::scene::renumber_cameras(tree, copies);
+    // Made anew in the order their originals were, so what goes by that goes as it did for them.
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> made;
+    made.reserve(copies.size());
+    for (std::size_t i = 0; i < copies.size(); ++i) {
+        made.emplace_back(entities.made[tree[i].first], copies[i]);
+    }
+    std::ranges::sort(made);
+    for (const auto& [when, copy] : made) {
+        entities.made[copy] = ++entities.mades;
+    }
     return entities.slots.handle(copies[0]);
 }
 

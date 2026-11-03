@@ -774,7 +774,7 @@ TEST_CASE("a mover just its radius from a box's edge goes away from it", "[scene
     CHECK(ways_out(world.handle, made) == 8);
 }
 
-TEST_CASE("many movers move on the job system's workers, as they would one at a time", "[scene]") {
+TEST_CASE("many movers come out the same in two worlds alike, none in a wall", "[scene]") {
     // Enough to go to the workers: two worlds alike, the second's entities in the first's freed
     // slots, every mover walking into the others and the walls of a box, come out bit for bit the
     // same, however the workers took the moves; and none has its middle in a wall or the floor,
@@ -837,4 +837,151 @@ TEST_CASE("many movers move on the job system's workers, as they would one at a 
     }
     CHECK(differ == 0);
     CHECK(out == 0);
+}
+
+TEST_CASE("one more mover far away changes nothing for the others", "[scene]") {
+    // 63 against the same with a 64th that goes nowhere near them: however many there are, and so
+    // whatever runs them, their ends and contacts are the same, bit for bit.
+    const auto walk = [](bool one_more) {
+        const test_world_t world;
+        fbe_world_set_collision(world.handle, mover_group, mover_group, FBE_RESPONSE_SLIDE);
+        box(world.handle, extent(-12.0F, -1.0F, -12.0F, 12.0F, 0.0F, 12.0F));
+        std::mt19937 random(9); // NOLINT(bugprone-random-generator-seed)
+        std::uniform_real_distribution<float> pace(-0.1F, 0.1F);
+        std::vector<std::uint64_t> movers;
+        std::vector<fbe_vec3_t> paces;
+        for (int i = 0; i < 63; ++i) {
+            const int across = i % 15;
+            const int along = i / 15;
+            movers.push_back(mover(world.handle, -9.0F + (1.25F * static_cast<float>(across)), 1.0F,
+                                   -9.0F + (1.25F * static_cast<float>(along)), 0.3F));
+            const float x = pace(random);
+            const float z = pace(random);
+            paces.push_back({ .x = x, .y = -0.05F, .z = z });
+        }
+        const std::uint64_t far = one_more ? mover(world.handle, 900.0F, 1.0F, 900.0F, 0.3F) : 0;
+        std::vector<std::uint32_t> bits;
+        for (int frame = 0; frame < 60; ++frame) {
+            for (std::size_t i = 0; i < movers.size(); ++i) {
+                fbe_entity_translate(movers[i], paces[i].x, paces[i].y, paces[i].z,
+                                     FBE_SPACE_WORLD);
+            }
+            if (far != 0) {
+                fbe_entity_translate(far, 0.1F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+            }
+            fbe_world_collide(world.handle);
+            for (const std::uint64_t made : movers) {
+                const fbe_vec3_t at = position(made);
+                bits.push_back(std::bit_cast<std::uint32_t>(at.x));
+                bits.push_back(std::bit_cast<std::uint32_t>(at.y));
+                bits.push_back(std::bit_cast<std::uint32_t>(at.z));
+                std::array<fbe_collision_t, 16> touched{};
+                const std::int32_t count =
+                    fbe_entity_collisions(made, touched.data(), touched.size());
+                bits.push_back(static_cast<std::uint32_t>(count));
+                for (std::int32_t c = 0; c < count && c < 16; ++c) {
+                    const fbe_collision_t& one = touched[static_cast<std::size_t>(c)];
+                    bits.push_back(std::bit_cast<std::uint32_t>(one.point.x));
+                    bits.push_back(std::bit_cast<std::uint32_t>(one.point.y));
+                    bits.push_back(std::bit_cast<std::uint32_t>(one.point.z));
+                    bits.push_back(std::bit_cast<std::uint32_t>(one.normal.x));
+                    bits.push_back(std::bit_cast<std::uint32_t>(one.normal.y));
+                    bits.push_back(std::bit_cast<std::uint32_t>(one.normal.z));
+                    bits.push_back(std::bit_cast<std::uint32_t>(one.time));
+                }
+            }
+        }
+        return bits;
+    };
+    CHECK(walk(false) == walk(true));
+}
+
+TEST_CASE("a mover and its child, both blocked, end alike whichever was made first", "[scene]") {
+    const auto run = [](bool parent_first) {
+        const test_world_t world;
+        fbe_world_set_collision(world.handle, 1, 2, FBE_RESPONSE_SLIDE);
+        const auto wall = [&](float x0, float z0) {
+            const std::uint64_t made = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+            fbe_entity_set_collision_group(made, 2);
+            fbe_entity_set_collision_shape(made, FBE_COLLISION_BOX);
+            const fbe_vec3_t low{ .x = x0, .y = -5.0F, .z = z0 };
+            const fbe_vec3_t high{ .x = x0 + 2.0F, .y = 5.0F, .z = z0 + 2.0F };
+            const fbe_aabb_t extent{ .min = low, .max = high };
+            fbe_entity_set_collision_box(made, &extent);
+        };
+        wall(10.0F, -1.0F);
+        wall(12.0F, 1.0F);
+        const auto pivot = [&](float x, float z) {
+            const std::uint64_t made = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+            fbe_entity_set_collision_group(made, 1);
+            fbe_entity_set_collision_radius(made, 0.5F, 0.5F);
+            fbe_entity_set_position(made, x, 0.0F, z, FBE_SPACE_WORLD);
+            return made;
+        };
+        std::uint64_t parent = 0;
+        std::uint64_t child = 0;
+        if (parent_first) {
+            parent = pivot(9.0F, 0.0F);
+            child = pivot(11.0F, 2.0F);
+        } else {
+            child = pivot(11.0F, 2.0F);
+            parent = pivot(9.0F, 0.0F);
+        }
+        fbe_entity_set_parent(child, parent, true);
+        fbe_world_collide(world.handle);
+        for (int frame = 0; frame < 3; ++frame) {
+            fbe_entity_translate(parent, 0.8F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+            fbe_entity_translate(child, 0.3F, 0.0F, 0.0F, FBE_SPACE_WORLD);
+            fbe_world_collide(world.handle);
+        }
+        return std::pair{ position(parent), position(child) };
+    };
+    const auto [first_parent, first_child] = run(true);
+    const auto [second_parent, second_child] = run(false);
+    CHECK(first_parent.x == second_parent.x);
+    CHECK(first_child.x == second_child.x);
+    CHECK(first_parent.x < 9.6F);
+    CHECK(first_child.x < 11.6F);
+}
+
+TEST_CASE("a copied tree's movers touch ties as its original's do", "[scene]") {
+    const auto rules = [](std::uint64_t world) {
+        fbe_world_set_collision(world, 1, 2, FBE_RESPONSE_SLIDE);
+        fbe_world_set_collision(world, 1, 3, FBE_RESPONSE_STOP);
+    };
+    const auto floor = [](std::uint64_t world, std::int32_t group) {
+        const std::uint64_t made = fbe_entity_create(world, 0, FBE_ENTITY_PIVOT);
+        fbe_entity_set_collision_group(made, group);
+        fbe_entity_set_collision_shape(made, FBE_COLLISION_BOX);
+        const fbe_vec3_t low{ .x = -50.0F, .y = -1.0F, .z = -50.0F };
+        const fbe_vec3_t high{ .x = 50.0F, .y = 0.0F, .z = 50.0F };
+        const fbe_aabb_t extent{ .min = low, .max = high };
+        fbe_entity_set_collision_box(made, &extent);
+        return made;
+    };
+    const auto walk = [](std::uint64_t world) {
+        const std::uint64_t made = fbe_entity_create(world, 0, FBE_ENTITY_PIVOT);
+        fbe_entity_set_collision_group(made, 1);
+        fbe_entity_set_collision_radius(made, 0.5F, 0.5F);
+        fbe_entity_set_position(made, 0.0F, 1.0F, 0.0F, FBE_SPACE_WORLD);
+        fbe_world_collide(world);
+        fbe_entity_translate(made, 2.0F, -1.0F, 0.0F, FBE_SPACE_WORLD);
+        fbe_world_collide(world);
+        return position(made);
+    };
+    // The floor it stops at made first, but second among the pivot's children.
+    const test_world_t world;
+    rules(world.handle);
+    const std::uint64_t stops = floor(world.handle, 3);
+    const std::uint64_t slides = floor(world.handle, 2);
+    const std::uint64_t pivot = fbe_entity_create(world.handle, 0, FBE_ENTITY_PIVOT);
+    fbe_entity_set_parent(slides, pivot, true);
+    fbe_entity_set_parent(stops, pivot, true);
+    const test_world_t other;
+    rules(other.handle);
+    REQUIRE(fbe_entity_copy(pivot, other.handle, 0) != 0);
+    const fbe_vec3_t original = walk(world.handle);
+    const fbe_vec3_t copied = walk(other.handle);
+    CHECK(original.x == copied.x);
+    CHECK(original.y == copied.y);
 }

@@ -83,6 +83,16 @@ catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
 
+# The scene's insides, built in from fbengine_internal: how moves are run, and their scratch.
+add_executable(fbengine_scene_internal_tests scene/moves_tests.cpp)
+target_link_libraries(fbengine_scene_internal_tests PRIVATE volk Vulkan::Headers
+                      Catch2::Catch2WithMain fbengine_internal)
+target_include_directories(fbengine_scene_internal_tests PRIVATE
+                           "${PROJECT_SOURCE_DIR}/native/fbengine")
+fbengine_set_warnings(fbengine_scene_internal_tests)
+catch_discover_tests(fbengine_scene_internal_tests TEST_PREFIX "scene.internal."
+                     DL_PATHS "${fbengine_test_dll_paths}")
+
 # A golden image update takes only a passing test's images: the hidden test that fails after its
 # check, run updating, has to leave its image unwritten.
 add_test(NAME gpu.golden_updates_only_from_passing_tests
@@ -216,6 +226,23 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
+# bvh.cpp, built here too, rounds as the DLL's does.
+if(NOT MSVC)
+  target_compile_options(fbengine_scene_tests PRIVATE -ffp-contract=off)
+endif()
+# A program that ends at once with its moves' workers still running: it has to end.
+add_executable(fbengine_scene_ends scene/ends_main.cpp)
+target_link_libraries(fbengine_scene_ends PRIVATE fbengine_native)
+fbengine_set_warnings(fbengine_scene_ends)
+add_test(NAME scene.ends_with_workers_running COMMAND fbengine_scene_ends)
+set_tests_properties(scene.ends_with_workers_running PROPERTIES
+                     PASS_REGULAR_EXPRESSION "moved" TIMEOUT 60)
+set_property(TEST scene.ends_with_workers_running PROPERTY ENVIRONMENT_MODIFICATION
+             "PATH=path_list_prepend:$<TARGET_FILE_DIR:fbengine_native>")
+if(fbengine_test_dll_paths)
+  set_property(TEST scene.ends_with_workers_running APPEND PROPERTY ENVIRONMENT_MODIFICATION
+               "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+endif()
 catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
                      DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
 

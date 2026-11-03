@@ -41,26 +41,27 @@ vec3_t stretch(const mat4_t& m) {
 /// of it, instead of from its start, so a long pick's edge and corner terms keep their precision,
 /// and keeps the hit, its time along the whole pick, if it's the nearest. A triangle is hit from
 /// in front of it, and a pick that began behind it passes out through it, untouched until it's
-/// clear of it, its radius in front, as one starting in it does: so it's swept from there, and
-/// whether it began behind is worked out where it enters, the same however far back it began.
+/// clear of it, its radius in front, as one starting in it does: so it's swept from there. One that
+/// began in front is swept from where it comes within its radius of the plane, if that's before
+/// `enter`, which is only as good as the rounding of a long line, so it never starts behind.
 void sweep_from(vec3_t from, vec3_t along, float enter, float radius, const triangle_t& triangle,
                 hit_t& hit, bool& found) {
     const vec3_t n = triangle.normal;
-    // How far in front of its plane it is where it enters, and, the plane's distance changing
-    // evenly along it, where it began.
     const float closing = dot(n, along);
-    const float ahead = dot(n, from + along * enter - triangle.corners[0]);
-    if (ahead - (closing * enter) < 0.0F && ahead < radius) {
-        if (closing <= 0.0F) {
-            return;
+    const float began = dot(n, from - triangle.corners[0]);
+    if (began < 0.0F) {
+        const float ahead = dot(n, from + along * enter - triangle.corners[0]);
+        if (ahead < radius) {
+            if (closing <= 0.0F) {
+                return;
+            }
+            enter += (radius - ahead) / closing;
+            if (enter >= 1.0F) {
+                return;
+            }
         }
-        enter += (radius - ahead) / closing;
-        if (enter >= 1.0F) {
-            return;
-        }
-    } else if (ahead < 0.0F) {
-        // It went behind it before it came within reach, so it's never in front of it again.
-        return;
+    } else if (closing < 0.0F) {
+        enter = std::fmin(enter, std::fmax((began - radius) / -closing, 0.0F));
     }
     if (enter <= 0.0F) {
         sweep_triangle(from, along, radius, triangle, hit, found);
@@ -147,7 +148,9 @@ void pick_entity(std::uint32_t entity, vec3_t from, vec3_t along, float radius, 
         const vec3_t b = transform_point(into, from + along);
         const vec3_t margin = stretch(into) * radius;
         const float span = std::fmax(std::fabs(b.x - a.x), std::fabs(b.z - a.z));
-        const int pieces = std::clamp(static_cast<int>(std::ceil(span / 4.0F)), 1, 4096);
+        // In float first, since a line can be longer than an int counts.
+        const int pieces =
+            static_cast<int>(std::fmin(std::fmax(std::ceil(span / 4.0F), 1.0F), 4096.0F));
         std::vector<std::array<vec3_t, 3>> under;
         const segment_t segment(a, b - a);
         for (int piece = 0; piece < pieces; ++piece) {

@@ -375,3 +375,62 @@ TEST_CASE("a pick straight down on a flat terrain hits it, at any height", "[sce
         }
     }
 }
+
+TEST_CASE("a long line onto a flat terrain hits it, however it rounds", "[scene]") {
+    struct scan_t {
+        float y_scale;
+        float scale;
+        float height;
+        float reach;
+    };
+    const std::array scans{
+        scan_t{ .y_scale = 0.001F, .scale = 1.0F, .height = 2.0F, .reach = 10.0F },
+        scan_t{ .y_scale = 0.001F, .scale = 1.0F, .height = 2.0F, .reach = 100.0F },
+        scan_t{ .y_scale = 0.0001F, .scale = 1.0F, .height = 2.0F, .reach = 10.0F },
+        scan_t{ .y_scale = 0.00001F, .scale = 1.0F, .height = 2.0F, .reach = 10.0F },
+        scan_t{ .y_scale = 1.0F, .scale = 1.0F, .height = 0.7F, .reach = 100000.0F },
+        scan_t{ .y_scale = 1.0F, .scale = 1.0F, .height = 1000.7F, .reach = 100000.0F },
+        scan_t{ .y_scale = 1.0F, .scale = 1.0F, .height = 0.7F, .reach = 1000000.0F },
+        scan_t{ .y_scale = 1.0F, .scale = 1.0F, .height = 1000.7F, .reach = 1000000.0F },
+    };
+    for (const scan_t& scan : scans) {
+        const test_world_t world;
+        const std::uint64_t terrain = fbe_entity_create(world.handle, 0, FBE_ENTITY_TERRAIN);
+        REQUIRE(fbe_terrain_set_size(terrain, 16));
+        REQUIRE(fbe_entity_set_pick_mode(terrain, FBE_PICK_MESH));
+        REQUIRE(
+            fbe_entity_set_scale(terrain, scan.scale, scan.y_scale, scan.scale, FBE_SPACE_LOCAL));
+        const std::vector<float> heights(std::size_t{ 17 } * 17, scan.height);
+        REQUIRE(fbe_terrain_set_heights(terrain, heights.data(),
+                                        static_cast<std::int32_t>(heights.size())));
+        int missed = 0;
+        for (int top = 0; top < 40; ++top) {
+            for (int bottom = 0; bottom < 10; ++bottom) {
+                const float from_y = scan.reach + static_cast<float>(top);
+                const float to_y = -scan.reach - static_cast<float>(bottom);
+                // Straight down, and slanted across a few squares.
+                for (const float slant : { 0.0F, 2.0F }) {
+                    const fbe_vec3_t from{ .x = 5.5F - slant, .y = from_y, .z = 5.5F - slant };
+                    const fbe_vec3_t to{ .x = 5.5F + slant, .y = to_y, .z = 5.5F + slant };
+                    fbe_pick_t hit{};
+                    missed += fbe_world_pick(world.handle, &from, &to, 0.0F, 0, &hit) == 1 ? 0 : 1;
+                }
+            }
+        }
+        CAPTURE(scan.y_scale, scan.height, scan.reach);
+        CHECK(missed == 0);
+    }
+}
+
+TEST_CASE("a line longer than an int counts still finds a terrain", "[scene]") {
+    const test_world_t world;
+    const std::uint64_t terrain = fbe_entity_create(world.handle, 0, FBE_ENTITY_TERRAIN);
+    REQUIRE(fbe_terrain_set_size(terrain, 16));
+    REQUIRE(fbe_entity_set_pick_mode(terrain, FBE_PICK_MESH));
+    REQUIRE(fbe_entity_set_position(terrain, -8.0F, 0.0F, -8.0F, FBE_SPACE_WORLD));
+    const fbe_vec3_t from{ .x = -6e9F, .y = 6e9F, .z = 0.5F };
+    const fbe_vec3_t to{ .x = 6e9F, .y = -6e9F, .z = 0.5F };
+    fbe_pick_t hit{};
+    CHECK(fbe_world_pick(world.handle, &from, &to, 0.0F, 0, &hit) == 1);
+    CHECK(hit.entity == terrain);
+}

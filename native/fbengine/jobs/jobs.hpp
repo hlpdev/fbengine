@@ -169,7 +169,8 @@ int engine_workers();
 /// The engine's jobs, started the first time they're asked for, and never stopped: on Windows a
 /// DLL's statics end after the OS has ended its threads, and on Linux and macOS exit() ends a
 /// library's statics while its threads still run. So the workers run until the program ends, and
-/// a job never touches a static that has a destructor.
+/// a job touches a static that has a destructor, as the scene's, only while the main thread waits
+/// for it, which the job then can't outlive.
 jobs_t& jobs();
 
 /// Runs the work the engine's jobs handed to the main thread, which hands the FB side the tickets
