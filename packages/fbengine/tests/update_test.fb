@@ -1,4 +1,4 @@
-// The frame's scene calls: UpdateWorld, CaptureWorld and the tween, and FixedStep, with no GPU.
+// The frame's scene calls: UpdateWorld, CaptureWorld and the tween, and FixedUpdate, with no GPU.
 
 Import std.core
 Import std.math
@@ -52,8 +52,8 @@ Function DrawingTweensFromTheCapture()
 End Function
 
 @Test
-Function AFixedStepRunsWhatTheFramesHold()
-    Local logic = FixedStep(60)
+Function AFixedUpdateRunsWhatTheFramesHold()
+    Local logic = FixedUpdate(60)
     Expect(logic.Rate() == 60 && IsClose(logic.Seconds(), 1.0 / 60, 1e-12))
     // A 30 Hz frame is two steps; a 120 Hz one is half of one, banked.
     Expect(logic.Steps(1.0 / 30) == 2)
@@ -62,13 +62,13 @@ Function AFixedStepRunsWhatTheFramesHold()
     // A second's stall runs at most 5, and drops the rest.
     Expect(logic.Steps(1) == 5 && logic.Tween() < 1)
     Expect(logic.Steps(0) == 0)
-    Local slow = FixedStep(10, 2)
+    Local slow = FixedUpdate(10, 2)
     Expect(slow.Steps(0.25) == 2 && IsClose(slow.Tween(), 0.5, 0.0001))
 End Function
 
 @Test
-Function AFixedStepTakesAFrameTooLongToCount()
-    Local logic = FixedStep(60)
+Function AFixedUpdateTakesAFrameTooLongToCount()
+    Local logic = FixedUpdate(60)
     // So long that its steps overflow: the most it runs, the rest dropped.
     Expect(logic.Steps(1e308) == 5 && logic.Tween() == 0)
     Expect(logic.Steps(1.0 / 60) == 1)

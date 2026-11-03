@@ -227,13 +227,13 @@ Select arguments[0]
         gone.Free()
         gone.Capture()
     Case "fixed-step-rate"
-        FixedStep(0)
+        FixedUpdate(0)
     Case "fixed-step-most"
-        FixedStep(60, 0)
+        FixedUpdate(60, 0)
     Case "fixed-step-steps"
-        FixedStep(60).Steps(-1)
+        FixedUpdate(60).Steps(-1)
     Case "fixed-step-infinite"
-        FixedStep(60).Steps(Inf)
+        FixedUpdate(60).Steps(Inf)
     Case "plane-segments"
         GroundPlane(17)
     Case "auto-fade"
