@@ -50,7 +50,7 @@ bool blocked(std::uint32_t world, vec3_t a, vec3_t b, std::uint32_t first, std::
             return true;
         }
     }
-    return false;
+    return pick_shape_blocks(world, a, b, first, second);
 }
 
 vec3_t world_position(std::uint32_t entity) {

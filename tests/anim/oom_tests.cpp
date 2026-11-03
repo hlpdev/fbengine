@@ -404,3 +404,53 @@ TEST_CASE("freeing a mesh doesn't allocate what it can run out of") {
     }
     FAIL("a call never got to the end of its allocations");
 }
+
+TEST_CASE("drawing what runs out of memory says so, and the next frame draws", "[gpu]") {
+    // Started, with what every frame needs made.
+    const auto drawn_after = [](bool by_camera, const std::function<void(const rig_t&)>& each) {
+        for (long which = 0; which < 5000; ++which) {
+            const rig_t rig;
+            const std::uint64_t target =
+                fbe_texture_create_target(16, 16, FBE_TEXTURE_RGBA8, 1, true);
+            const std::uint64_t camera = fbe_entity_create(rig.world, 0, FBE_ENTITY_CAMERA);
+            REQUIRE(fbe_camera_set_target(camera, target));
+            fbe_entity_set_position(rig.body, 0.0F, 0.0F, -3.0F, FBE_SPACE_LOCAL);
+            const std::array<std::uint32_t, 3> triangle{ 0, 0, 0 };
+            fbe_surface_add_triangles(rig.geometry, 0, triangle.data(), 3);
+            each(rig);
+            allocated = 0;
+            failed = false;
+            failing = which;
+            const bool done =
+                by_camera ? fbe_render_camera(camera, 1.0F) : fbe_render_world(rig.world, 1.0F);
+            failing = -1;
+            fbe_frame_flip(false);
+            const bool had_failed = failed;
+            if (had_failed) {
+                CHECK(!done);
+                CHECK(std::string_view(fbe_error()).contains("out of memory"));
+                // Whatever it didn't send, the next frame sends.
+                CHECK(fbe_render_world(rig.world, 1.0F));
+                fbe_frame_flip(false);
+            } else {
+                CHECK(done);
+            }
+            fbe_entity_free(camera);
+            fbe_texture_release(target);
+            if (!had_failed) {
+                return;
+            }
+        }
+        FAIL("a call never got to the end of its allocations");
+    };
+    for (const bool by_camera : { false, true }) {
+        drawn_after(by_camera, [](const rig_t&) {});
+        drawn_after(by_camera, [](const rig_t& rig) {
+            const std::array<float, 3> moved{ 1.0F, 0.0F, 0.0F };
+            REQUIRE(fbe_morph_add_target(rig.geometry, 0, moved.data(), moved.data(), 1) == 0);
+            const std::array<float, 1> one{ 1.0F };
+            REQUIRE(fbe_morph_set_weights(rig.mesh, one.data(), 1));
+        });
+    }
+    fbe_gpu_stop();
+}

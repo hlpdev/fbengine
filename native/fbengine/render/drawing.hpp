@@ -6,6 +6,7 @@
 #include "fbengine.h"
 #include "gpu/buffer.hpp"
 #include "gpu/vulkan.hpp"
+#include "morph/morph.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
@@ -23,8 +24,10 @@ namespace fbe::render {
 
 /// A draw as the scene shader reads it: its matrix to the camera's view; the rows of what turns
 /// its normals there; its color and alpha; its vertices' address; its joints' and palette's, if
-/// it's skinned; its material's index in the camera's; its own lights; and how many matrices its
-/// palette has, 0 if it isn't skinned.
+/// it's skinned; its morph targets' and the ones it's drawn with, if it's morphed; its emitter's,
+/// if it's particles; its material's index in the camera's; its own lights; how many matrices its
+/// palette has, 0 if it isn't skinned; and how many targets it's drawn with, and how many vertices
+/// each has.
 struct draw_data_t {
     std::array<float, 16> to_view;
     std::array<std::array<float, 4>, 3> normals;
@@ -32,13 +35,18 @@ struct draw_data_t {
     VkDeviceAddress vertices;
     VkDeviceAddress joints;
     VkDeviceAddress palette;
+    VkDeviceAddress targets;
+    VkDeviceAddress drawn_targets;
     VkDeviceAddress particles;
     std::uint32_t material;
     std::uint32_t light_first;
     std::uint32_t light_count;
     std::uint32_t joint_count;
+    std::uint32_t drawn_target_count;
+    std::uint32_t target_vertices;
 };
-static_assert(sizeof(draw_data_t) == 176, "the scene shader reads draws 176 bytes apart");
+static_assert(sizeof(draw_data_t) == 200, "the scene shader reads draws 200 bytes apart");
+static_assert(sizeof(anim::drawn_target_t) == 8, "the scene shader reads targets 8 bytes apart");
 
 /// An emitter's particles as the scene shader reads them: their address, gravity, drag, their
 /// colors and half-sizes from birth to death, its clock now, and when that wraps.

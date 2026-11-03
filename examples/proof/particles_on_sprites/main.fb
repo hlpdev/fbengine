@@ -1,29 +1,51 @@
-// Particles as a game's own code, over the engine's Sprites: a seeded emitter of sprites that rise,
-// slow, fade, turn, grow, and go, each frame, for smoke; none of it the engine's beyond the Sprite. It
-// prints how many there were, and where they went. It'll draw with --watch once the renderer draws
-// sprites.
+// Particles as a game's own code, over the engine's Sprites: seeded emitters over time, of a template:
+// its color, gravity, view mode, material, with its texture, blend, full brightness and no fog, and a
+// sub-template that bursts from each as it goes. Each rises, slows, fades, turns, grows, and goes, each
+// frame; none of it's the engine's beyond the Sprite. It prints how many there were and where they
+// went, a target's pixels of them; with --watch, a window of its smoke and sparks.
 
 Import std.collections
 Import std.core
+From std.image Import Image
 Import std.math
 Import fbengine
+Import std.os
 
-// One particle: its sprite, how it moves, and how long it has.
+// What a kind of particle is, and what it bursts into as it goes, if anything.
+Class Template
+    Field Tint: Color
+    Field Gravity: Float32
+    Field Mode: SpriteViewMode
+    Field Look: Material?
+    Field Burst: Template? = Null
+    Field BurstCount: Int = 0
+
+    New(tint: Color, gravity: Float32, mode: SpriteViewMode, look: Material?)
+        Tint = tint
+        Gravity = gravity
+        Mode = mode
+        Look = look
+    End New
+End Class
+
+// One particle: its sprite, what it is, how it moves, and how long it has.
 Class Particle
     Field Sprite: Sprite
+    Field Kind: Template
     Field Velocity: Vec3
     Field Left: Float32
     Field Life: Float32
 
-    New(sprite: Sprite, velocity: Vec3, life: Float32)
+    New(sprite: Sprite, kind: Template, velocity: Vec3, life: Float32)
         Self.Sprite = sprite
+        Kind = kind
         Velocity = velocity
         Left = life
         Life = life
     End New
 End Class
 
-// A smoke emitter: `rate` a second, each living `life` seconds.
+// An emitter, of smoke unless given a template: `rate` a second, each living `life` seconds.
 Class Emitter
     Field At: Vec3
     Field Rate: Float32
@@ -32,8 +54,10 @@ Class Emitter
     Field Alive: Particle[] = []
     Field Made: Int = 0
     Field Dice: Random
+    Field Kind: Template
 
-    New(at: Vec3, rate: Float32, life: Float32, seed: Int64)
+    New(at: Vec3, rate: Float32, life: Float32, seed: Int64, kind: Template? = Null)
+        Self.Kind = kind ?? Template(Color(0.6, 0.6, 0.6), 0.0, SpriteViewMode.BILLBOARD, Null)
         At = at
         Rate = rate
         LifeOf = life
@@ -44,74 +68,275 @@ Class Emitter
         Owed += Rate * seconds
         While Owed >= 1.0
             Owed -= 1.0
-            Emit()
+            Emit(Kind, At)
         End While
         For i = Alive.Count - 1 To 0 Step -1
             Local each = Alive[i]
             each.Left -= seconds
             If each.Left <= 0.0
+                Local burst = each.Kind.Burst
+                If burst != Null
+                    For j = 1 To each.Kind.BurstCount
+                        Emit(burst, each.Sprite.Position())
+                    End For
+                End If
                 each.Sprite.Free()
-                Alive.RemoveAt(i)
+                Alive.Remove(each)
                 Continue
             End If
             // It slows as it rises, and fades and grows as it goes.
-            each.Velocity = each.Velocity * (1.0 - 0.5 * seconds)
+            each.Velocity = each.Velocity * (1.0 - 0.5 * seconds) -
+                            Vec3(0, each.Kind.Gravity * seconds, 0)
             each.Sprite.Translate(each.Velocity * seconds)
             Local gone = 1.0 - each.Left / each.Life
-            each.Sprite.SetColor(Color(0.6, 0.6, 0.6, 1.0 - gone))
+            each.Sprite.SetColor(Color(each.Kind.Tint.r, each.Kind.Tint.g, each.Kind.Tint.b,
+                                       1.0 - gone))
             each.Sprite.SetSpriteScale(Vec2(0.5 + gone, 0.5 + gone))
             each.Sprite.SetSpriteRotation(gone * 2.0)
         End For
     End Method
 
-    Method Emit()
-        Local sprite = Sprite()
-        sprite.SetPosition(At)
-        sprite.SetViewMode(SpriteViewMode.BILLBOARD)
-        Alive.Add(Particle(sprite,
+    Method Emit(kind: Template, from: Vec3)
+        Local sprite = Sprite(kind.Look)
+        sprite.SetPosition(from)
+        sprite.SetViewMode(kind.Mode)
+        Alive.Add(Particle(sprite, kind,
                            Vec3((Dice.Float() - 0.5) As Float32, 2.0,
                                 (Dice.Float() - 0.5) As Float32), LifeOf))
         Made += 1
     End Method
 End Class
 
-Local world = World()
-World.SetCurrent(world)
-Local emitter = Emitter(Vec3(0, 0, 0), 20.0, 1.5, 42)
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
 
-// 60 frames a second, for a second: 20 made, none gone.
-For frame = 1 To 60
-    emitter.Step(1.0 / 60.0)
-End For
-Print("after 1 second, {emitter.Made} made, {emitter.Alive.Count} alive")
-Local oldest = emitter.Alive[0]
-Print("the oldest's risen {oldest.Sprite.Position().y > 1.0}, its alpha {oldest.Sprite.Color().a < 0.5 && oldest.Sprite.Color().a > 0.2}")
-Local newest = emitter.Alive[emitter.Alive.Count - 1]
-Print("the newest's nearly at the start {newest.Sprite.Position().y < 0.2}, almost opaque {newest.Sprite.Color().a > 0.9}")
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
 
-// On to a steady state: as many made as gone, at rate times life.
-For frame = 1 To 240
-    emitter.Step(1.0 / 60.0)
-End For
-Print("after 5 seconds, {emitter.Made} made, about 30 alive {Abs(emitter.Alive.Count - 30) <= 1}")
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
 
-// A camera sees each as it's turned to face it.
-Local camera = Camera()
-camera.SetViewport(Rect(0, 0, 800, 600))
-camera.SetPosition(Vec3(0, 1, 10))
-Print("drawn by a camera, each of them {camera.InView(emitter.Alive[0].Sprite.Position())}")
+// A window's camera at `at`, looking at `looking`, over almost black.
+Function Watching(at: Vec3, looking: Vec3): Camera
+    Local camera = Camera()
+    camera.SetPosition(at)
+    camera.PointAt(looking)
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    Return camera
+End Function
 
-// Seeded, so the same every run: where the first of a new one goes.
-Local first = Emitter(Vec3(0, 0, 0), 60.0, 1.0, 42)
-first.Step(1.0 / 60.0)
-Local again = Emitter(Vec3(10, 0, 0), 60.0, 1.0, 42)
-again.Step(1.0 / 60.0)
-Print("the same seed goes the same way {first.Alive[0].Velocity == again.Alive[0].Velocity}")
+// A window of its smoke, going up from two emitters; or `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("particles on sprites: Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local left = Emitter(Vec3(-2, -1.5, -6), 20.0, 1.5, 42)
+    Local round = Try Soft()
+    Local sparks = Template(Color(1, 0.7, 0.2), 3.0, SpriteViewMode.BILLBOARD, Glowing(round))
+    Local rockets = Template(Color(1, 0.3, 0.1), 0.0, SpriteViewMode.UPRIGHT, Glowing(round))
+    rockets.Burst = sparks
+    rockets.BurstCount = 6
+    Local right = Emitter(Vec3(2, -1.5, -6), 3.0, 1.0, 7, rockets)
+    Watching(Vec3(0, 0, 0), Vec3(0, 0, -6))
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        Local seconds = frames > 0 ? 0.1 : Frame.Delta() As Float
+        time += seconds
+        left.Step(seconds)
+        right.Step(seconds)
+        RenderWorld()
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
 
-// Ended: its sprites freed with its particles.
-emitter.Rate = 0.0
-For frame = 1 To 120
-    emitter.Step(1.0 / 60.0)
-End For
-Print("with the rate at 0, after 2 seconds, {emitter.Alive.Count} alive")
-world.Free()
+// A round soft texture, brightest in its middle.
+Function Soft(): Texture Throws GraphicsError
+    Local image = Image(16, 16)
+    For y = 0 To 15
+        For x = 0 To 15
+            Local away = Min(Sqrt((((x As Float) - 7.5) ** 2 + ((y As Float) - 7.5) ** 2)) / 7.5,
+                             1.0)
+            Local value = ((1.0 - away) * 255.0) As UInt8
+            image[x, y] = Color32(value, value, value, 255)
+        End For
+    End For
+    Return Try Texture.FromImage(image)
+End Function
+
+// A look of its own: `texture`, glowing, full bright, and out of the fog.
+Function Glowing(texture: Texture): Material
+    Local look = Material()
+    look.SetShading(Shading.UNLIT)
+    look.SetTexture(0, texture)
+    look.SetBlend(Blend.ADD)
+    look.SetFogged(False)
+    Return look
+End Function
+
+// To a thousandth.
+Function Fine(at: Vec3): String => "{at.x:.3}, {at.y:.3}, {at.z:.3}"
+
+// What one sprite keeps, freed sprites gone from their parents, the seeds' spread, gravity, a burst,
+// and what's drawn, from a target.
+Function Kept() Throws GraphicsError
+    Local world = World()
+    World.SetCurrent(world)
+    Local camera = Camera()
+    camera.SetViewport(Rect(0, 0, 800, 600))
+    camera.SetPosition(Vec3(0, 1, 10))
+
+    Local sprite = Sprite()
+    sprite.SetPosition(Vec3(0, 0, 0))
+    sprite.SetViewMode(SpriteViewMode.UPRIGHT)
+    sprite.SetSpriteScale(Vec2(0.75, 1.25))
+    sprite.SetSpriteRotation(0.5)
+    sprite.SetColor(Color(0.6, 0.5, 0.4, 0.25))
+    Print("mode {sprite.ViewMode()}, scale {sprite.SpriteScale()}, rotation {sprite.SpriteRotation()}, color {sprite.Color()}")
+    Print("its quad's bounds {Fine(sprite.Bounds().Max)}")
+    Print("in view {camera.InView(sprite)}, a point behind the camera {camera.InView(Vec3(0, 1, 20))}")
+
+    Local parent = Pivot()
+    Local kids = 3
+    For i = 1 To kids
+        Sprite(Null, parent)
+    End For
+    Local first = parent.Child(0)
+    first.Free()
+    Print("freed one: {parent.ChildCount()} left, it's freed {first.Freed()}")
+
+    // The velocities of one seed are spread, and another's are others.
+    Local spreads = Emitter(Vec3(0, 0, 0), 600.0, 9.0, 42)
+    spreads.Step(1.0 / 6.0)
+    Local low: Float32 = 1.0
+    Local high: Float32 = -1.0
+    For each In spreads.Alive
+        low = Min(low, each.Velocity.x)
+        high = Max(high, each.Velocity.x)
+    End For
+    Print("{spreads.Made} spread across {low < -0.4 && high > 0.4}")
+    Local other = Emitter(Vec3(0, 0, 0), 60.0, 1.0, 7)
+    other.Step(1.0 / 60.0)
+    Print("another seed goes another way {other.Alive[0].Velocity != spreads.Alive[0].Velocity}")
+
+    // Gravity brings it down; a burst, as it goes, leaves as many of another kind.
+    Local falling = Template(Color(1, 1, 1), 10.0, SpriteViewMode.UPRIGHT, Null)
+    Local burster = Template(Color(1, 0, 0), 0.0, SpriteViewMode.BILLBOARD, Null)
+    burster.Burst = falling
+    burster.BurstCount = 4
+    Local rocket = Emitter(Vec3(0, 0, 0), 10.0, 0.5, 1, burster)
+    rocket.Step(0.1)
+    rocket.Rate = 0.0
+    rocket.Step(0.5)
+    Print("a rocket gone, {rocket.Alive.Count} sparks, each {rocket.Alive[0].Kind.Mode}, {rocket.Alive[0].Sprite.ViewMode()}")
+    For i = 1 To 4
+        rocket.Step(0.1)
+    End For
+    Print("falling {rocket.Alive[0].Velocity.y < 0.0}")
+
+    // In a target, full bright and out of the fog, added over red: 0.214 in linear light is half of
+    // what's stored, times its texture's 128 is 64, whose light's added, so 64 again.
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(16, 16, TextureFormat.RGBA8, 1, True)
+    Local seeing = Camera()
+    seeing.SetRenderTarget(target)
+    seeing.SetPosition(Vec3(0, 0, 100))
+    seeing.SetClearColor(Color(1, 0, 0))
+    seeing.SetFogMode(FogMode.LINEAR)
+    seeing.SetFogColor(Color(1, 1, 1))
+    seeing.SetFogRange(0, 1)
+    camera.Hide()
+    sprite.Hide()
+    Local gray = Image(1, 1)
+    gray[0, 0] = Color32(128, 128, 128, 255)
+    Local glow = Glowing(Try Texture.FromImage(gray, False))
+    glow.SetColor(Color(0, 0.214, 0))
+    Local shown = Sprite(glow)
+    shown.SetPosition(Vec3(0, 0, 97))
+    seeing.Render()
+    Print("a sprite's pixel, added, out of the fog {target.ReadPixel(8, 8)}")
+    Print("beside it {target.ReadPixel(0, 0)}")
+    world.Free()
+End Function
+
+Local arguments = Process.Arguments()
+If !arguments.Contains("--watch")
+    Local world = World()
+    World.SetCurrent(world)
+    Local emitter = Emitter(Vec3(0, 0, 0), 20.0, 1.5, 42)
+
+    // 60 frames a second, for a second: 20 made, none gone.
+    For frame = 1 To 60
+        emitter.Step(1.0 / 60.0)
+    End For
+    Print("after 1 second, {emitter.Made} made, {emitter.Alive.Count} alive")
+    Local oldest = emitter.Alive[0]
+    Print("the oldest's risen {oldest.Sprite.Position().y > 1.0}, its alpha {oldest.Sprite.Color().a < 0.5 && oldest.Sprite.Color().a > 0.2}")
+    Local newest = emitter.Alive[emitter.Alive.Count - 1]
+    Print("the newest's nearly at the start {newest.Sprite.Position().y < 0.2}, almost opaque {newest.Sprite.Color().a > 0.9}")
+
+    // On to a steady state: as many made as gone, at rate times life.
+    For frame = 1 To 240
+        emitter.Step(1.0 / 60.0)
+    End For
+    Print(
+        "after 5 seconds, {emitter.Made} made, about 30 alive {Abs(emitter.Alive.Count - 30) <= 1}")
+
+    // A camera might see it, by its place.
+    Local camera = Camera()
+    camera.SetViewport(Rect(0, 0, 800, 600))
+    camera.SetPosition(Vec3(0, 1, 10))
+    Print("in a camera's view, the oldest {camera.InView(emitter.Alive[0].Sprite.Position())}")
+
+    // Seeded, so the same every run: where the first of a new one goes.
+    Local first = Emitter(Vec3(0, 0, 0), 60.0, 1.0, 42)
+    first.Step(1.0 / 60.0)
+    Local again = Emitter(Vec3(10, 0, 0), 60.0, 1.0, 42)
+    again.Step(1.0 / 60.0)
+    Print("the same seed goes the same way {first.Alive[0].Velocity == again.Alive[0].Velocity}")
+
+    // Ended: its sprites freed with its particles.
+    emitter.Rate = 0.0
+    For frame = 1 To 120
+        emitter.Step(1.0 / 60.0)
+    End For
+    Print("with the rate at 0, after 2 seconds, {emitter.Alive.Count} alive")
+    world.Free()
+    Try Kept()
+ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+Else
+    Try Watched(Asked(arguments), arguments)
+End If

@@ -8,6 +8,7 @@
 #include "gpu/graph.hpp"
 #include "gpu/pipeline.hpp"
 #include "gpu/vulkan.hpp"
+#include "morph/morph.hpp"
 #include "render/drawing.hpp"
 #include "render/render.hpp"
 #include "scene/camera.hpp"
@@ -25,6 +26,7 @@
 #include <engine_shaders.hpp>
 #include <format>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -487,6 +489,24 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                     data.joint_count = palette->second.second;
                 }
             }
+            if (!surface->target_moves.empty()) {
+                std::array<anim::drawn_target_t, anim::drawn_targets> strongest;
+                const std::size_t count =
+                    anim::strongest_targets(anim::morph_weights(item.entity, tweened.tween()),
+                                            surface->target_moves, strongest);
+                if (count != 0) {
+                    bool no_room = false;
+                    data.drawn_targets =
+                        in_ring<anim::drawn_target_t>(std::span(strongest).first(count), no_room)
+                            .address;
+                    if (no_room) {
+                        return false;
+                    }
+                    data.targets = surface->targets.address;
+                    data.drawn_target_count = static_cast<std::uint32_t>(count);
+                    data.target_vertices = surface->vertex_count;
+                }
+            }
         } else if (item.draw.kind == FBE_ENTITY_SPRITE) {
             const surface_buffers_t* quad = sprite_quad();
             if (quad == nullptr) {
@@ -804,7 +824,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
 
 extern "C" {
 
-FBE_API bool fbe_render_camera(uint64_t camera, float tween) {
+FBE_API bool fbe_render_camera(uint64_t camera, float tween) try {
     std::uint32_t slot = fbe::scene::none;
     fbe::scene::view_t view;
     bool shows = false;
@@ -815,9 +835,11 @@ FBE_API bool fbe_render_camera(uint64_t camera, float tween) {
     fbe::render::forget_freed_geometries();
     fbe::render::forget_unused_atlas();
     return (fbe_gpu_started() || fbe_gpu_start()) && fbe::render::draw_camera(slot, tween);
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
-FBE_API bool fbe_render_world(uint64_t world, float tween) {
+FBE_API bool fbe_render_world(uint64_t world, float tween) try {
     const std::int32_t count = fbe_world_cameras(world, nullptr, 0);
     if (count < 0) {
         return false;
@@ -830,6 +852,9 @@ FBE_API bool fbe_render_world(uint64_t world, float tween) {
         cameras, [tween](std::uint64_t camera) { return fbe_render_camera(camera, tween); });
     fbe::render::keep_shadow_casters(false);
     return drawn;
+} catch (const std::bad_alloc&) {
+    fbe::render::keep_shadow_casters(false);
+    return fbe::fail("out of memory");
 }
 
 } // extern "C"

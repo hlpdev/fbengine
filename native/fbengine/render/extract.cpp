@@ -3,6 +3,7 @@
 
 #include "core/engine.hpp"
 #include "fbengine.h"
+#include "morph/morph.hpp"
 #include "render/render.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
@@ -130,6 +131,8 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         vec3_t max = geometry.cull_max;
         if (!geometry.has_cull_box) {
             scene::geometry_bounds(mesh.geometry, min, max);
+            anim::grow_by_targets(mesh.geometry, anim::morph_weights(mesh.entity, tweened.tween()),
+                                  min, max);
         }
         std::array<vec3_t, 8> corners = corners_of(matrix, min, max);
         // Skinned, it's where its joints are: its bind pose's whole size around them.

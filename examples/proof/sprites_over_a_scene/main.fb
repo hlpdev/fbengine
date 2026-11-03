@@ -1,10 +1,8 @@
-// 2D over a scene: a camera projecting a cube's corners, and over them images with a key color made
+// 2D over 3D: a mesh a camera renders, and over it images with a key color made
 // transparent, of either color, whole, by regions, by frames from a strip and from a file, resized,
 // turned, scaled, and with a handle; shapes, text in the engine's font and a TrueType file's sized
 // by its cell, its width, and whether they overlap, by rectangles and by masks. It reads its pixels
-// back and prints them; with --watch, a window of them moving. The cube's lines until the renderer
-// draws meshes: this requirement stays open until E5, when this renders one, draws over it, and reads
-// back a pixel of each.
+// back and prints them, of the mesh and of what's over it; with --watch, a window of them moving.
 
 Import std.collections
 Import std.core
@@ -31,36 +29,24 @@ Function Strip(frames: Int): Image
     Return image
 End Function
 
-// A cube's edges, as `camera` projects them: the scene that the 2D goes over, until the renderer
-// draws meshes.
-Function DrawCube(canvas: Canvas, camera: Camera, turn: Float)
-    Local corners: Vec2?[] = []
-    For each In [(-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1), (-1, -1, 1), (1, -1, 1),
-                 (1, 1, 1), (-1, 1, 1)]
-        Local x, y, z = each
-        Local world = Vec3((x As Float) * Cos(turn) - (z As Float) * Sin(turn), y As Float,
-                           (x As Float) * Sin(turn) + (z As Float) * Cos(turn))
-        Local shown = camera.Project(world)
-        corners.Add(shown != Null ? Vec2(shown.x, shown.y) : Null)
-    End For
-    canvas.SetColor(Color32(120, 130, 150, 255))
-    For edge In [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5),
-                 (2, 6), (3, 7)]
-        Local from, to = edge
-        Local a = corners[from]
-        Local b = corners[to]
-        If a != Null && b != Null
-            canvas.DrawLine(a.x As Int32, a.y As Int32, b.x As Int32, b.y As Int32)
-        End If
-    End For
-End Function
-
 // A camera 6 back from the scene's middle, looking at it.
 Function Looking(): Camera
     Local camera = Camera()
     camera.SetPosition(Vec3(0.0, 0.0, 6.0))
     camera.PointAt(Vec3(0.0, 0.0, 0.0))
+    // What the canvas cleared is what's behind it, the scene's depth its own.
+    camera.SetClear(False, True)
     Return camera
+End Function
+
+// A cube at the scene's middle, of no lighting.
+Function Cube(): Mesh
+    Local cube = Mesh(Geometry.Cube())
+    Local material = Material()
+    material.SetShading(Shading.UNLIT)
+    material.SetColor(Color.Srgb(120.0 / 255.0, 130.0 / 255.0, 150.0 / 255.0))
+    cube.SetMaterial(material)
+    Return cube
 End Function
 
 Function Proved() Throws GraphicsError, IOError
@@ -71,17 +57,23 @@ Function Proved() Throws GraphicsError, IOError
     Window.SetHeadless(True)
     Try Graphics(320, 180)
     Defer EndGraphics()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
     Local camera = Looking()
+    Cube()
     Flip()
     Local canvas = Screen.Canvas()
     canvas.SetColor(background)
     canvas.Clear()
-    DrawCube(canvas, camera, 0.0)
+    RenderWorld()
     Local middle = camera.Project(Vec3(0.0, 0.0, 0.0))
     Print("the scene's middle is at {middle?.x ?? -1.0}, {middle?.y ?? -1.0}")
-    Local corner = camera.Project(Vec3(-1.0, -1.0, -1.0))
-    If corner == Null Then Panic("the cube's corner is in view")
-    Try Show("a corner of the scene", [(corner.x As Int, corner.y As Int)])
+    Try Show("the mesh's middle, and off it", [(160, 90), (10, 170)])
+    // 2D over the mesh, with the mesh around it.
+    canvas.SetColor(Color32(10, 200, 30, 255))
+    canvas.DrawRect(158, 88, 4, 4)
+    Try Show("2D over the mesh, and the mesh beside it", [(159, 89), (164, 90)])
     canvas.SetBlend(Blend2D.ALPHA)
     canvas.SetColor(Color32(255, 255, 255, 255))
 
@@ -208,7 +200,11 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Defer EndGraphics()
     Window.SetTitle("sprites over a scene: Escape ends it")
     Frame.SetLimit(60)
-    Local camera = Looking()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Looking()
+    Local cube = Cube()
     Local strip = Try Sprite2D.FromImage(Strip(4), key)
     strip.SetFrames(8, 8)
     strip.MidHandle()
@@ -225,7 +221,8 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         canvas.SetBlend(Blend2D.SOLID)
         canvas.SetColor(background)
         canvas.Clear()
-        DrawCube(canvas, camera, time)
+        cube.SetRotation(Quat.FromEuler(time * 0.5, time, 0.0))
+        RenderWorld()
         canvas.SetBlend(Blend2D.ALPHA)
         canvas.SetColor(Color32(255, 255, 255, 255))
         Local frame = (Floor(time * 4.0) As Int32) % 4
@@ -239,7 +236,7 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         canvas.DrawOval(600, 80, 120, 80)
         canvas.DrawRect(600, 200, 120, 80)
         canvas.SetColor(Color32(230, 232, 235, 255))
-        canvas.DrawText(font, "2D over the scene: a strip's frames, turned, faded shapes, and text",
+        canvas.DrawText(font, "2D over a mesh: a strip's frames, turned, faded shapes, and text",
                         16, 416)
     End While
     Print("watched {count} frames")

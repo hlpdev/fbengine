@@ -1,0 +1,187 @@
+// Gamma as a game does it itself: a frame's copy added over it to brighten it, a gray multiplied over
+// it to darken it, and a real curve, a pixel at a time, by a table; the engine has no gamma of its own
+// until E6's tonemap. It prints each pixel it reads against the sums, the canvas blending in linear
+// light; with --watch, a window of a ramp, its keys changing it.
+
+Import std.collections
+Import std.core
+From std.image Import Image
+Import std.math
+Import std.os
+Import fbengine
+
+// Prints `what`, and `wanted` if the pixel's within 2 of it each way, as GPUs round; else the pixel.
+Function Check(what: String, got: Color32, wanted: Color32)
+    Local close = Abs((got.r As Int) - (wanted.r As Int)) <= 2 &&
+                  Abs((got.g As Int) - (wanted.g As Int)) <= 2 &&
+                  Abs((got.b As Int) - (wanted.b As Int)) <= 2
+    Print("{what}: {close ? wanted : got}")
+End Function
+
+// A shade of gray, as bytes.
+Function Gray(value: Int): Color32 => Color32(value As UInt8, value As UInt8, value As UInt8, 255)
+
+// sRGB's byte for a value in linear light, and back.
+Function Stored(linear: Float): Int
+    Local encoded = linear <= 0.0031308 ? linear * 12.92 : 1.055 * linear ** (1.0 / 2.4) - 0.055
+    Return Round(encoded * 255.0) As Int
+End Function
+
+Function Linear(stored: Int): Float
+    Local value = (stored As Float) / 255.0
+    Return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+End Function
+
+// The frame made brighter, its own copy added over it by `amount`, as a game's gamma above 1 does.
+Function Brighter(target: Texture, copy: Texture, amount: Float)
+    copy.CopyFrom(target, 0, 0, target.Width(), target.Height())
+    Local canvas = Canvas(target)
+    canvas.SetBlend(Blend2D.ADD)
+    canvas.SetColor(Color32(255, 255, 255, (amount * 255.0) As UInt8))
+    canvas.Draw(Sprite2D(copy), 0.0, 0.0)
+End Function
+
+// The frame made darker, `gray` multiplied over it, as a game's gamma below 1 does.
+Function Darker(target: Texture, gray: Int)
+    Local canvas = Canvas(target)
+    canvas.SetBlend(Blend2D.MULTIPLY)
+    canvas.SetColor(Gray(gray))
+    canvas.DrawRect(0, 0, target.Width(), target.Height())
+End Function
+
+// A table of what each byte comes to, by a gamma curve on what's stored.
+Function Curve(gamma: Float): UInt8[]
+    Local table: UInt8[] = []
+    For value = 0 To 255
+        table.Add(Round(255.0 * ((value As Float) / 255.0) ** (1.0 / gamma)) As UInt8)
+    End For
+    Return table
+End Function
+
+// A target of a pixel of 100, and one each side, 0 and 255.
+Function Frame3(): Texture Throws GraphicsError
+    Local target = Try Texture.Target(3, 1)
+    Local canvas = Canvas(target)
+    canvas.SetColor(Gray(100))
+    canvas.Clear()
+    canvas.SetColor(Gray(0))
+    canvas.Plot(0, 0)
+    canvas.SetColor(Gray(255))
+    canvas.Plot(2, 0)
+    Return target
+End Function
+
+Function Proved() Throws GraphicsError
+    Window.SetHeadless(True)
+    // Half of itself added: 100's light times 1.5.
+    Local target = Try Frame3()
+    Local copy = Try Texture.Target(3, 1)
+    Brighter(target, copy, 128.0 / 255.0)
+    Local added = Linear(100) * (1.0 + 128.0 / 255.0)
+    Print("the sum for adding half {Stored(added)}")
+    Check("brighter", target.ReadPixel(1, 0), Gray(Stored(added)))
+    Check("black stays", target.ReadPixel(0, 0), Gray(0))
+    Check("white stays", target.ReadPixel(2, 0), Gray(255))
+
+    // Multiplied by 128's light.
+    target = Try Frame3()
+    Darker(target, 128)
+    Local multiplied = Linear(100) * Linear(128)
+    Print("the sum for multiplying by 128 {Stored(multiplied)}")
+    Check("darker", target.ReadPixel(1, 0), Gray(Stored(multiplied)))
+    Check("black stays, darkened", target.ReadPixel(0, 0), Gray(0))
+    Check("white comes to the gray", target.ReadPixel(2, 0), Gray(128))
+
+    // A real curve on what's stored: 255 x (100 / 255)^(1 / 2) = 160, by the pixel.
+    target = Try Frame3()
+    Local table = Curve(2.0)
+    Local pixels = target.LockPixels()
+    For x = 0 To 2
+        Local was = pixels.Get(x, 0)
+        pixels.Set(x, 0,
+                   Color32(table[was.r As Int], table[was.g As Int], table[was.b As Int], was.a))
+    End For
+    pixels.Unlock()
+    Check("by a curve", target.ReadPixel(1, 0), Gray(160))
+    Check("its ends stay", target.ReadPixel(0, 0), Gray(0))
+    Check("and the other", target.ReadPixel(2, 0), Gray(255))
+End Function
+
+// A window of a ramp of grays, by each pass: B brighter, D darker, which change how much; or `frames`
+// frames offscreen, which press each.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("gamma: B brighter, D darker, Escape ends it")
+    Frame.SetLimit(60)
+    Local font = Font.BuiltIn(18.0)
+    Local frame = Try Texture.Target(800, 450)
+    Local copy = Try Texture.Target(800, 450)
+    Local shown = Sprite2D(frame)
+    Local gamma: Float = 1.0
+    Local script = [Key.B, Key.B, Key.D]
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        If KeyHit(Key.B) Then gamma = Min(gamma + 0.25, 2.0)
+        If KeyHit(Key.D) Then gamma = Max(gamma - 0.25, 0.25)
+        If frames > 0 && count <= script.Count Then Try Simulate.PressKey(script[count - 1])
+        Local pen = Canvas(frame)
+        For x = 0 To 15
+            pen.SetColor(Gray(x * 17))
+            pen.DrawRect(x * 50, 0, 50, 450)
+        End For
+        If gamma > 1.0 Then Brighter(frame, copy, gamma - 1.0)
+        If gamma < 1.0 Then Darker(frame, (gamma * 255.0) As Int)
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(255, 255, 255, 255))
+        canvas.Draw(shown, 0.0, 0.0)
+        canvas.SetBlend(Blend2D.ALPHA)
+        canvas.SetColor(Color32(255, 60, 60, 255))
+        canvas.DrawText(font, "gamma {gamma:.2}", 16, 16)
+        canvas.SetBlend(Blend2D.SOLID)
+    End While
+    If frames > 0 Then Print("by its keys: gamma {gamma:.2}")
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
+
+Local arguments = Process.Arguments()
+If Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+ElseIf arguments.Contains("--watch")
+    Try Watched(Asked(arguments), arguments)
+Else
+    Try Proved()
+End If

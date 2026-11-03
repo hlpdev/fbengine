@@ -74,9 +74,12 @@ struct collider_t {
 
 /// A morph target of a surface: what each of its vertices, and its normal, move by at a weight of
 /// 1, as the morph area's C API has them; vertices past them don't move, and normals can be none.
+/// `low` and `high` are the box of what its positions move by, around none.
 struct morph_target_t {
     std::vector<vec3_t> positions;
     std::vector<vec3_t> normals;
+    vec3_t low;
+    vec3_t high;
 };
 
 /// One surface of a geometry: its vertices, as the C API has them, its triangles, three indices
@@ -546,6 +549,8 @@ void release_materials(const std::vector<surface_t>& surfaces);
 
 /// The box around a geometry's vertices, nothing at the origin for none.
 void geometry_bounds(std::uint32_t geometry, vec3_t& min, vec3_t& max);
+/// Works out a morph target's box from its positions.
+void fit_target_box(morph_target_t& target);
 /// The tree over a geometry's triangles, built again if the geometry changed since.
 const bvh_t& geometry_tree(std::uint32_t geometry);
 /// Whether an entity and every entity above it are shown.
@@ -557,6 +562,10 @@ void world_box(std::uint32_t entity, vec3_t local_min, vec3_t local_max, vec3_t&
 /// Keeps an entity's pickables entry as its pick mode and World say: made, let go of, or with its
 /// box to work out again.
 void pickable_changed(std::uint32_t entity);
+/// Whether anything in a world that blocks sight by its pick shape, an ellipsoid or a box, and
+/// isn't a mesh, a terrain, or one of the two entities, crosses the segment.
+bool pick_shape_blocks(std::uint32_t world, vec3_t a, vec3_t b, std::uint32_t first,
+                       std::uint32_t second);
 /// Marks an entity's box, if picks hit it, to be worked out again.
 void pickable_moved(std::uint32_t entity);
 

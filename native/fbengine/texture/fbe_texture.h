@@ -120,6 +120,10 @@ FBE_API bool fbe_texture_read(uint64_t texture, int32_t level, uint8_t* pixels, 
 // first; false for a freed texture.
 FBE_API bool fbe_texture_set_alpha(uint64_t texture, bool alpha);
 FBE_API bool fbe_texture_alpha(uint64_t texture);
+// The file it was loaded from, "" for none and for a freed texture; the text is the texture's until
+// its path's set again or it's freed.
+FBE_API bool fbe_texture_set_path(uint64_t texture, const char* path);
+FBE_API const char* fbe_texture_path(uint64_t texture);
 FBE_API bool fbe_texture_set_filter(uint64_t texture, int32_t filter);
 FBE_API int32_t fbe_texture_filter(uint64_t texture);
 FBE_API bool fbe_texture_set_wrap(uint64_t texture, int32_t wrap_u, int32_t wrap_v);

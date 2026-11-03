@@ -79,8 +79,9 @@ Extend Entity
     @MainThread @PanicsAtCaller
     Public Method CastsShadows(): Bool => fbe_entity_casts_shadows(Live("CastsShadows"))
 
-    /// Makes the entity block line of sight, or not, as it doesn't at first: a Mesh by its
-    /// triangles, from either side, while it's showing, as walls and doors do.
+    /// Makes the entity block line of sight, or not, as it doesn't at first, while it's showing: a
+    /// Mesh or a Terrain by its triangles, from either side, as walls and doors do; anything else
+    /// by its pick shape, if its PickMode's ELLIPSOID or BOX, from outside it.
     @MainThread @PanicsAtCaller
     Public Method SetBlocksSight(blocks: Bool)
         If !fbe_entity_set_blocks_sight(Live("SetBlocksSight"), blocks)

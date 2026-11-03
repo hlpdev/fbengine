@@ -265,6 +265,8 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
         vec3_t low;
         vec3_t high;
         scene::geometry_bounds(mesh.geometry, low, high);
+        const std::span<const float> weights = anim::morph_weights(mesh.entity, tweened.tween());
+        anim::grow_by_targets(mesh.geometry, weights, low, high);
         const vec3_t both = low + high;
         const vec3_t middle = scene::transform_point(matrix, both * 0.5F);
         const float scale =
@@ -322,6 +324,23 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
                     caster.data.joints = buffers->joints.address;
                     caster.data.palette = palette->second.first;
                     caster.data.joint_count = palette->second.second;
+                }
+            }
+            if (!buffers->target_moves.empty()) {
+                std::array<anim::drawn_target_t, anim::drawn_targets> strongest;
+                const std::size_t count =
+                    anim::strongest_targets(weights, buffers->target_moves, strongest);
+                if (count != 0) {
+                    bool no_room = false;
+                    caster.data.drawn_targets =
+                        in_ring<anim::drawn_target_t>(std::span(strongest).first(count), no_room)
+                            .address;
+                    if (no_room) {
+                        return false;
+                    }
+                    caster.data.targets = buffers->targets.address;
+                    caster.data.drawn_target_count = static_cast<std::uint32_t>(count);
+                    caster.data.target_vertices = buffers->vertex_count;
                 }
             }
             caster.key = caster_key(material);
