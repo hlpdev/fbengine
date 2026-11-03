@@ -147,6 +147,9 @@ Function DraggingWhatsBetweenTwoSidesResizesThem() Throws GraphicsError
     Expect(a.Box().Width == 80, "a's {a.Box()}")
     Try Drag(ui, Vec2(a.Box().Width + 2, 300), Vec2(799, 300))
     Expect(a.Box().Width == 715, "a's {a.Box()}")
+    // And so what's kept is that, not what the pointer went to.
+    Local ratio = dock.SplitRatio("a") ?? 0
+    Expect(Abs(ratio - 715.0 / 795.0) < 0.001, "it's {ratio}")
     Try Simulate.MoveMouse(400, 300)
     Update(ui)
     Expect(ShownMouseCursor() == MouseCursor.ARROW)

@@ -650,13 +650,12 @@ Public Final Class Ui
 
     // What Escape, or a gamepad's EAST, does that no widget used: closes the top MENU, or it's back.
     @MainThread Method Escaped()
+        // None's ever under a MODAL, which closes them as it opens.
         For i = open.Count - 1 To 0 Step -1
-            If open[i].kind == PopupKind.TIP Then Continue
             If open[i].kind == PopupKind.MENU
                 Closing(i)
                 Return
             End If
-            Break
         End For
         back = True
     End Method

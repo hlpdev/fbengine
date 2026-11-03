@@ -156,7 +156,6 @@ Public Final Class Editor
         Kept.AddRecent(opened.Folder.Text)
         Local saved = Kept.Kept(opened.Folder.Text)
         If saved == Null || !Docked.Restore(saved["layout"] ?? Value.Object()) Then DefaultLayout()
-        Edits.Clear()
         ShowWelcome()
     End Method
 
@@ -171,7 +170,6 @@ Public Final Class Editor
         project = Null
         Docked.Clear()
         NewScene()
-        Edits.Clear()
         ShowWelcome()
     End Method
 

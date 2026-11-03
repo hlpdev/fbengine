@@ -78,8 +78,6 @@ Public Final Class Dock Extends Node
     Field hint: Node
     // The Ui a drag's hint is over, while it's shown.
     Field hinted: Weak<Ui>
-    // How many times it's been built, which a tab of before then is out of.
-    Field builds: Int = 0
     Field changed: (Func())? = Null
 
     Public New()
@@ -251,9 +249,6 @@ Public Final Class Dock Extends Node
         current = ""
         Rebuilt()
     End Method
-
-    // How many times it's been built.
-    Package Method Builds(): Int => builds
 
     // Gives the tab of `id` the focus, as the one that had it's gone with the last build.
     Package Method FocusTab(ui: Ui, id: String)
@@ -470,7 +465,6 @@ Public Final Class Dock Extends Node
 
     // Shows the tree as it is now, which ends a drag: its tab's gone.
     Method Rebuilt()
-        builds += 1
         Local ui = hinted
         If ui != Null Then ui.ClosePopup(hint)
         hinted = Null
@@ -590,12 +584,10 @@ Class DockTab Extends Button
     Field id: String
     Field from: Vec2
     Field dragging: Bool = False
-    Field built: Int
 
     New(owner: Dock, pane: Pane, active: Bool)
         dock = owner
         id = pane.Id
-        built = owner.Builds()
         Super.New(pane.Title, "tab." + pane.Id)
         SetStyleName(active ? "dock.tab.active" : "dock.tab")
         SetTranslates(False)
@@ -619,7 +611,7 @@ Class DockTab Extends Button
         If !dragging && Distance(point, from) < DRAGGED Then Return
         Local own = dock
         Local ui = Owner()
-        If own == Null || ui == Null || own.Builds() != built Then Return
+        If own == Null || ui == Null Then Return
         dragging = True
         own.Over(ui, id, point)
     End Method
@@ -629,8 +621,7 @@ Class DockTab Extends Button
         Local ui = Owner()
         Local wasDragging = dragging
         dragging = False
-        // A rebuild since it was pressed ended the drag.
-        If own == Null || ui == Null || own.Builds() != built Then Return
+        If own == Null || ui == Null Then Return
         If wasDragging
             own.Drop(ui, id, point)
         ElseIf over

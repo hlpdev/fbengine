@@ -205,7 +205,6 @@ Public Final Class History
         If !Ran(edit, True) Then Return False
         undone.RemoveAt(undone.Count - 1)
         done.Add(edit)
-        sealed = True
         Changed()
         Return True
     End Method
