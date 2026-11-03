@@ -13,7 +13,8 @@
 - FbeTestSbix-Regular.ttf: "Fbe Test Sbix", an sbix PNG of a at 32 pixels an em, which FreeType
   isn't built to read here, over an outline of it.
 
-Run it again with `python tests/fonts/make_fonts.py` if they change.
+Run it again with `python tests/fonts/make_fonts.py` if they change. It needs fontTools 4.68.0
+(`pip install fonttools==4.68.0`); the tests and the build use only the fonts it wrote.
 """
 
 import pathlib

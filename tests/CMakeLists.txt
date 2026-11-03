@@ -162,9 +162,25 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.controls PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
                        PASS_REGULAR_EXPRESSION "Running controls[^\n]*\nmove [(]0, -1[)], jump True\r?\nmove [(]1, 0[)], jump True\r?\n$")
 
+  # Their --watch, which a person watches in a window (tools/show.py), walked here offscreen, a step
+  # each frame.
+  add_test(NAME examples.controls_watch
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/controls"
+                   -- --watch --frames 30)
+  set_tests_properties(examples.controls_watch PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "\nwatched 30 frames, moved True, jumped True\r?\n$")
+  add_test(NAME examples.menu_watch
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/menu"
+                   -- --watch --frames 60)
+  set_tests_properties(examples.menu_watch PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "\nwatched 60 frames: options True, playing True, console True, menu again True\r?\n$")
+
   add_test(NAME examples.menu
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/menu")
-  set_tests_properties(examples.menu PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+  set_tests_properties(examples.menu PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "Running menu[^\n]*\noptions open: True\r?\nvolume 0[.]65, fullscreen True, name Ada\r?\nmenu again: True\r?\nplaying: True, focus none\r?\na jump: score 100\r?\nconsole: [[]> give 50, gave 50[]], score 150, typed \" \"\r?\nclosed, a jump: score 250\r?\n$")
 endif()
 
@@ -485,6 +501,11 @@ target_include_directories(fbengine_collide_tests PRIVATE "${PROJECT_SOURCE_DIR}
 target_compile_definitions(fbengine_collide_tests PRIVATE FBE_BUILDING
                            FBE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fbengine_collide_tests PRIVATE SDL3::SDL3-static Catch2::Catch2WithMain)
+# Its float arithmetic as written, never fused, as fbengine_native's is, so its corners and the
+# GPU's it's checked against round alike on every target.
+if(NOT MSVC)
+  target_compile_options(fbengine_collide_tests PRIVATE -ffp-contract=off)
+endif()
 fbengine_set_warnings(fbengine_collide_tests)
 catch_discover_tests(fbengine_collide_tests TEST_PREFIX "collide."
                      DL_PATHS "${fbengine_test_dll_paths}")
@@ -529,6 +550,22 @@ if(FBENGINE_FB_TESTS)
              COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- ${name})
     set_tests_properties(ui.${name} PROPERTIES PASS_REGULAR_EXPRESSION "${printed}" TIMEOUT 120)
   endforeach()
+  # The IME's composition, set before the window opens, drawn at a field's cursor.
+  add_test(NAME ui.composition
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- composition)
+  set_tests_properties(ui.composition PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "underlined True, cursor True, typed a\r?\nhalf size, underlined True" TIMEOUT 120)
+  add_test(NAME ui.composition-moved
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- composition-moved)
+  set_tests_properties(ui.composition-moved PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "composing bb, then none" TIMEOUT 120)
+  add_test(NAME ui.pop-clip-too-many
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/tests/ui" -- pop-clip-too-many)
+  set_tests_properties(ui.pop-clip-too-many PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "Painter[.]PopClip: Node \"greedy\" ends a clip it didn't push" TIMEOUT 120)
 endif()
 
 # The cooker's C++, built into the tests from its own sources, which read back what it makes with
