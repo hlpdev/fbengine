@@ -126,6 +126,15 @@ foreach(fbengine_patch RANGE 0 5 3)
 endforeach()
 target_include_directories(fastgltf BEFORE PRIVATE "${fbengine_fastgltf_patched}")
 
+# libktx's own zstd_errors.h is in a folder it includes as a system's, after what a Mac's compiler
+# may find of Homebrew's zstd, whose header no longer has ZSTD_getErrorCode. A copy comes first in
+# its targets, as a folder of its own, since CMake keeps a system's folder a system's.
+set(fbengine_ktx_first "${CMAKE_BINARY_DIR}/ktx-first")
+configure_file("${ktx_SOURCE_DIR}/other_include/zstd_errors.h"
+               "${fbengine_ktx_first}/zstd_errors.h" COPYONLY)
+target_include_directories(ktx BEFORE PRIVATE "${fbengine_ktx_first}")
+target_include_directories(ktx_read BEFORE PRIVATE "${fbengine_ktx_first}")
+
 # fbengine's DLLs are UCRT's (cmake/native.cmake), so libktx is built for UCRT too: its encoder's
 # sprintf_s is UCRT's, inlined from the headers, which msvcrt's has no export of. What links the
 # writer links UCRT, as the assets tests do.
