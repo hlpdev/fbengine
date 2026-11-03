@@ -20,11 +20,13 @@ Import fbengine
 Import fbengine_audio
 Import "./checks"
 Import "./controls"
+Import "./cues"
 Import "./flow"
 Import "./game"
 Import "./ground"
 Import "./island"
 Import "./res" As Res
+Import "./soundscape"
 Import "./walks"
 
 // Plays `walk` to its end, by key presses, offscreen, and gives how it ended, each step told to
@@ -435,13 +437,19 @@ End Function
 // to each place itself, as a person's mouse would; `stepped` hears of each step, with what's just
 // been done.
 Function Walked3d(island: Island, walk: String[], lines: String[],
-                  stepped: Func(Game, String)): Ending Throws GraphicsError
+                  stepped: Func(Game, String)): Ending Throws GraphicsError, IOError, AudioError
     Local controls = Controls()
     Local game = Game(island, Function(line: String)
         Print(line)
         lines.Add(line)
     End Function)
     Defer game.Free()
+    // Heard as a person would, mixed here, as nothing's to play it to.
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local scape = Try Soundscape.Make(game, island)
+    Defer scape.Free()
+    Local loudest: Float = 0.0
     Local next = 0
     Local doing = ""
     Local walking = False
@@ -485,11 +493,45 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
         End If
         Flip(False)
         game.Step(controls, 0.1)
+        scape.Update(game, 0.1)
+        For sample In Audio.Mix(256)
+            loudest = Max(loudest, Abs(sample))
+        End For
         stepped(game, doing)
     End While
     If walking Then Try Simulate.KeyUp(Key.W)
     stepped(game, "ended")
+    Heard(scape, game.Story(), loudest)
     Return game.Story().Ended()
+End Function
+
+// What the wheel's pitch should be by how it ended, 0 if it's still.
+Function WheelPitchOf(ended: Ending): Float
+    Select ended
+        Case Ending.BRIGHT
+            Return 1.0
+        Case Ending.DIM
+            Return 0.76
+        Default
+            Return 0.0
+    End Select
+End Function
+
+// Whether what a walk heard is what it should be: the wind and sea all along, your feet, and the
+// flood; the wheel by how it ended; and something in the mix itself.
+Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
+    Checks("the wind and sea are streamed, and playing", scape.AroundYou())
+    Checks("at their levels for the tide",
+           IsClose(scape.WindNow(), WindLevel(flow.Clock()), 0.001) &&
+           IsClose(scape.SeaNow(), SeaLevel(flow.Clock(), flow.At() == Area.INSIDE), 0.001))
+    Checks("your steps are heard", scape.Played(Cue.STEP_1) > 0 && scape.Played(Cue.STEP_2) > 0 &&
+           scape.Played(Cue.STEP_3) > 0)
+    Checks("the flood splashes, once", scape.Played(Cue.SPLASH) == 1)
+    Checks("the wheel turns by how it ended",
+           IsClose(scape.WheelPitch(), WheelPitchOf(flow.Ended()), 0.001))
+    Checks("what's outside is muffled only from inside the mill",
+           scape.OutsideNow() == OutsideLowPass(flow.At() == Area.INSIDE))
+    Checks("the mix isn't silent, and doesn't clip", loudest > 0.01 && loudest < 1.0)
 End Function
 
 // Opens what a walk draws on, offscreen, and the island.
@@ -501,7 +543,8 @@ Function Opened(): Island Throws GraphicsError, IOError
 End Function
 
 // A 3D walk, with nothing saved, as ctest runs one to each ending.
-Function Walked3dBy(walk: String[], lines: String[]): Ending Throws GraphicsError, IOError
+Function Walked3dBy(walk: String[], lines: String[]): Ending Throws GraphicsError, IOError,
+                                                                    AudioError
     Local island = Try Opened()
     Defer EndGraphics()
     Defer Assets.StopWatching()
@@ -511,7 +554,7 @@ Function Walked3dBy(walk: String[], lines: String[]): Ending Throws GraphicsErro
 End Function
 
 // The bright 3D walk, saving what you see at each moment that shows something.
-Function SaveWalk(folder: Path) Throws GraphicsError, IOError
+Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     Local island = Try Opened()
     Defer EndGraphics()
     Defer Assets.StopWatching()
@@ -566,7 +609,7 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError
 End Function
 
 // The game, in a window, for a person: WASD and the mouse, E, Q, and Escape.
-Function Played() Throws GraphicsError, IOError, InputError
+Function Played() Throws GraphicsError, IOError, InputError, AudioError
     Try Graphics(1280, 720)
     Defer EndGraphics()
     Window.SetTitle("Slack Water")
@@ -582,10 +625,23 @@ Function Played() Throws GraphicsError, IOError, InputError
         last = line
     End Function)
     Defer game.Free()
+    // A machine with no sound still plays it, in silence.
+    Local device = AudioDevice.DEFAULT
+    Try
+        Try Audio.Start(device)
+    Catch e As AudioError
+        PrintError("no sound: {e.Message}")
+        Try Audio.Start(AudioDevice.SILENT)
+    End Try
+    Defer Audio.Stop()
+    Local scape = Try Soundscape.Make(game, island)
+    Defer scape.Free()
     Local font = Font.BuiltIn(20.0)
     While !Window.Closed() && !KeyHit(Key.ESCAPE)
         Flip()
-        game.Step(controls, FrameStep(Frame.Delta()) As Float)
+        Local seconds = FrameStep(Frame.Delta()) As Float
+        game.Step(controls, seconds)
+        scape.Update(game, seconds)
         If Screen.Texture() == Null Then Continue
         island.Scene().Render()
         Local canvas = Screen.Canvas()

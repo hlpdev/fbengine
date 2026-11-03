@@ -1,0 +1,126 @@
+// When the game makes each sound, by its flow and your feet, with no device.
+
+Import std.collections
+Import std.core
+Import std.test
+Import slack_water.cues
+Import slack_water.flow
+
+// A flow that says nothing to anyone.
+Function Quiet(): Flow
+    Return Flow(Function(line: String)
+    End Function)
+End Function
+
+// How many of `cue` are in `cues`.
+Function Count(cues: Cue[], cue: Cue): Int
+    Local count = 0
+    For one In cues
+        If one == cue Then count += 1
+    End For
+    Return count
+End Function
+
+@Test
+Function StepsAreByHowFarYouWalkNeverTheSameTwice()
+    Local cues = Cues()
+    Local flow = Quiet()
+    Local steps: Cue[] = []
+    // Standing still, none.
+    For tick = 1 To 50
+        Expect(!cues.Step(flow, 0.0, 0.1).Contains(Cue.STEP_1))
+    End For
+    // Ten seconds at 4 m/s: 40 m, 22 strides of 1.8.
+    For tick = 1 To 100
+        For cue In cues.Step(flow, 0.4, 0.1)
+            If cue != Cue.GULL && cue != Cue.CREAK Then steps.Add(cue)
+        End For
+    End For
+    Expect(steps.Count == 22)
+    For at = 1 Until steps.Count
+        Expect(steps[at] != steps[at - 1])
+    End For
+End Function
+
+// The water carrying you isn't walking.
+@Test
+Function ACarryIsntSteps()
+    Local cues = Cues()
+    Local heard = cues.Step(Quiet(), 80.0, 0.1)
+    Expect(!heard.Contains(Cue.STEP_1))
+End Function
+
+// Gulls call now and then, until the flood; there's one splash, at it.
+@Test
+Function GullsStopAtTheFloodWhichSplashes()
+    Local cues = Cues()
+    Local flow = Quiet()
+    Local gulls = 0
+    Local splashes = 0
+    For tick = 1 To 2000
+        flow.Step(0.1)
+        Local heard = cues.Step(flow, 0.0, 0.1)
+        gulls += Count(heard, Cue.GULL)
+        splashes += Count(heard, Cue.SPLASH)
+    End For
+    // 200 s, at one each 5 to 14 s.
+    Expect(gulls >= 14 && gulls <= 40)
+    Expect(splashes == 0)
+    flow.Step(221.0)
+    Expect(flow.Flooded())
+    Local after = cues.Step(flow, 0.0, 100.0)
+    Expect(Count(after, Cue.SPLASH) == 1)
+    Expect(Count(after, Cue.GULL) == 0)
+    Expect(Count(cues.Step(flow, 0.0, 100.0), Cue.SPLASH) == 0)
+End Function
+
+// Creaks are inside the mill, not out on the rocks.
+@Test
+Function CreaksAreAtTheMill()
+    Local inside = Cues()
+    Local flow = Quiet()
+    Local creaks = 0
+    For tick = 1 To 300
+        creaks += Count(inside.Step(flow, 0.0, 0.1), Cue.CREAK)
+    End For
+    Expect(creaks >= 3)
+    Local outside = Cues()
+    flow.GoOut()
+    flow.Step(21.0)
+    Expect(flow.At() == Area.YARD)
+    creaks = 0
+    For tick = 1 To 300
+        creaks += Count(outside.Step(flow, 0.0, 0.1), Cue.CREAK)
+    End For
+    Expect(creaks == 0)
+End Function
+
+@Test
+Function TheWindAndSeaRiseWithTheTide()
+    Expect(WindLevel(0.0) < WindLevel(300.0))
+    Expect(WindLevel(300.0) < WindLevel(600.0))
+    Expect(SeaLevel(0.0, False) == SeaLevel(300.0, False))
+    Expect(SeaLevel(300.0, False) < SeaLevel(450.0, False))
+    Expect(SeaLevel(450.0, False) < SeaLevel(600.0, False))
+    // All of it at once, each at the tools' peak, doesn't clip.
+    Local loudest = (WindLevel(600.0) + SeaLevel(600.0, False)) * 0.7 + WheelLevel(1.0) * 0.7 +
+                    CueLevel(Cue.STEP_1) * 0.7 + CueLevel(Cue.GULL) * 0.6 +
+                    CueLevel(Cue.CREAK) * 0.6 + CueLevel(Cue.SPLASH) * 0.8
+    Expect(loudest < 1.0)
+    Expect(SeaLevel(450.0, True) < SeaLevel(450.0, False))
+End Function
+
+@Test
+Function TheWheelTurnsByHowItEnded()
+    Expect(WheelSpeed(Ending.NONE) == 0.0)
+    Expect(WheelSpeed(Ending.DARK) == 0.0)
+    Expect(WheelSpeed(Ending.DIM) > 0.0)
+    Expect(WheelSpeed(Ending.DIM) < WheelSpeed(Ending.BRIGHT))
+End Function
+
+// What's outside is muffled from inside the mill.
+@Test
+Function InsideIsMuffled()
+    Expect(OutsideLowPass(True) > 0.0)
+    Expect(OutsideLowPass(False) == 0.0)
+End Function

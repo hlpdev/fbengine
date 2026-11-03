@@ -1,0 +1,130 @@
+// When the game makes each sound, and how loud, apart from any audio: what its flow and your feet
+// say, so a test can hear it with no device.
+
+Import std.collections
+Import std.core
+Import std.math
+Import "./flow"
+
+/// A sound played once, when something happens.
+Public Enum Cue
+    STEP_1 = 0
+    STEP_2 = 1
+    STEP_3 = 2
+    GULL = 3
+    CREAK = 4
+    SPLASH = 5
+End Enum
+
+// How far you walk to a step, in meters, and how far a move can be before it's the water carrying you.
+Const STRIDE: Float = 1.8
+Const FARTHEST_MOVE: Float = 1.0
+// How long it is from one gull to the next, and one creak to the next, at least, and how much longer
+// it can be.
+Const GULL_AT_LEAST: Float = 5.0
+Const GULL_MORE: Float = 9.0
+Const CREAK_AT_LEAST: Float = 3.0
+Const CREAK_MORE: Float = 5.0
+
+// How much of the mix what's all around you takes, and the wheel, so that with everything at its
+// loudest at once, it doesn't clip.
+Const AMBIENCE: Float = 0.21
+Const WHEEL: Float = 0.25
+
+/// How loud a cue plays.
+Public Function CueLevel(cue: Cue): Float
+    Select cue
+        Case Cue.GULL
+            Return 0.14
+        Case Cue.CREAK
+            Return 0.17
+        Case Cue.SPLASH
+            Return 0.28
+        Default
+            Return 0.14
+    End Select
+End Function
+
+/// How loud the wind is, by the tide's clock: it rises with the storm.
+Public Function WindLevel(clock: Float64): Float
+    Return (0.35 + 0.5 * (Min(clock / TIDE_IN_AT, 1.0) As Float)) * AMBIENCE
+End Function
+
+/// How loud the sea is, by the tide's clock, as it comes in, and less inside the mill.
+Public Function SeaLevel(clock: Float64, inside: Bool): Float
+    Local rising = Clamp(((clock - RISING_AT) / (TIDE_IN_AT - RISING_AT)) As Float, 0.0, 1.0)
+    Return (0.3 + 0.6 * rising) * (inside ? 0.45 : 1.0) * AMBIENCE
+End Function
+
+/// The low-pass on what's outside, in hertz, muffled while you're inside the mill, and 0 for none.
+Public Function OutsideLowPass(inside: Bool): Float => inside ? 900.0 : 0.0
+
+/// How fast the wheel turns, as how it ended says: 0 until the water's back, 1 for all three fitted.
+Public Function WheelSpeed(ended: Ending): Float
+    Select ended
+        Case Ending.BRIGHT
+            Return 1.0
+        Case Ending.DIM
+            Return 0.4
+        Default
+            Return 0.0
+    End Select
+End Function
+
+/// How loud the wheel is, turning at `speed`.
+Public Function WheelLevel(speed: Float): Float => (0.3 + 0.7 * speed) * WHEEL
+
+/// What's to be played, as the game goes on: steps by how far you've walked, never the same one
+/// twice running; gulls until the flood; creaks inside the mill, or from the turning wheel; and the
+/// splash of the flood.
+Public Final Class Cues
+    Field state: UInt32 = 2463534242
+    Field walked: Float = 0.0
+    Field foot: Int = 0
+    Field untilGull: Float
+    Field untilCreak: Float
+    Field flooded: Bool = False
+
+    Public New()
+        untilGull = GULL_AT_LEAST + Random() * GULL_MORE
+        untilCreak = CREAK_AT_LEAST + Random() * CREAK_MORE
+    End New
+
+    /// What to play now, `seconds` on, with you `moved` meters further.
+    Public Method Step(flow: Flow, moved: Float, seconds: Float): Cue[]
+        Local cues: Cue[] = []
+        If moved <= FARTHEST_MOVE Then walked += moved
+        If walked >= STRIDE
+            walked -= STRIDE
+            cues.Add(foot As Cue)
+            foot = (foot + 1) % 3
+        End If
+        If !flow.Flooded()
+            untilGull -= seconds
+            If untilGull <= 0.0
+                cues.Add(Cue.GULL)
+                untilGull = GULL_AT_LEAST + Random() * GULL_MORE
+            End If
+        End If
+        If flow.At() == Area.INSIDE || WheelSpeed(flow.Ended()) > 0.0
+            untilCreak -= seconds
+            If untilCreak <= 0.0
+                cues.Add(Cue.CREAK)
+                untilCreak = CREAK_AT_LEAST + Random() * CREAK_MORE
+            End If
+        End If
+        If !flooded && flow.Flooded()
+            flooded = True
+            cues.Add(Cue.SPLASH)
+        End If
+        Return cues
+    End Method
+
+    // A number from 0 to 1, the same each game, so a test hears what a person does.
+    Method Random(): Float
+        state = state ^ (state << 13)
+        state = state ^ (state >> 17)
+        state = state ^ (state << 5)
+        Return ((state & 0xFFFF) As Float) / 65535.0
+    End Method
+End Class

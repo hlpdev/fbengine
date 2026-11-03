@@ -210,7 +210,9 @@ End Function
 /// Writes every sound in `folder`.
 Public Function WriteSounds(folder: Path) Throws IOError
     Try WriteWav(folder / "wind.wav", Wind())
+    Try File.WriteText(folder / "wind.wav.toml", "streamed = true\n")
     Try WriteWav(folder / "sea.wav", Sea())
+    Try File.WriteText(folder / "sea.wav.toml", "streamed = true\n")
     Try WriteWav(folder / "gull.wav", Gull())
     Try WriteWav(folder / "creak.wav", Creak())
     Try WriteWav(folder / "wheel.wav", Wheel())
