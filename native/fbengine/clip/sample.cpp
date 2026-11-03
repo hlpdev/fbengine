@@ -94,6 +94,9 @@ void sample(const channel_t& channel, float time, std::size_t& cursor, std::span
     }
     if (channel.interpolation == interpolation_t::STEP) {
         std::copy_n(value_of(channel, key).begin(), width, out.begin());
+        if (rotation) {
+            write(out, scene::normalize(quat_of(out)));
+        }
         return;
     }
     const float gap = times[key + 1] - times[key];

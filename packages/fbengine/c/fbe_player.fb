@@ -34,4 +34,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_player_event_layer(player: UInt64, event: Int32): Int32
     Function fbe_player_event_time(player: UInt64, event: Int32): Float32
     Function fbe_player_clear_events(player: UInt64): Bool
+    Function fbe_player_orphans(players: Ptr<UInt64>, capacity: Int32): Int32
+    Function fbe_player_count(): Int64
+    Function fbe_player_bone_count(player: UInt64): Int32
 End Extern

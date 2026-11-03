@@ -208,12 +208,12 @@ TEST_CASE("a player's entity freed leaves it playing nothing, and its calls fail
 
 namespace {
 
-/// A clip moving "hips" along x from `from` to `to` over `seconds`.
-std::uint64_t sliding(float from, float to, float seconds) {
+/// A clip moving `node` along x from `from` to `to` over `seconds`.
+std::uint64_t sliding(float from, float to, float seconds, const char* node = "hips") {
     const std::uint64_t clip = fbe_clip_create("slide", 0.0F);
     const std::array<float, 2> times{ 0.0F, seconds };
     const std::array<float, 6> places{ from, 0.0F, 0.0F, to, 0.0F, 0.0F };
-    fbe_clip_add_channel(clip, "hips", FBE_CLIP_TRANSLATION, FBE_CLIP_LINEAR, 3, times.data(),
+    fbe_clip_add_channel(clip, node, FBE_CLIP_TRANSLATION, FBE_CLIP_LINEAR, 3, times.data(),
                          places.data(), 2);
     return clip;
 }
@@ -475,5 +475,300 @@ TEST_CASE("what a layer can't take is refused, saying why") {
     CHECK(says("was freed"));
     fbe_player_free(player);
     fbe_clip_release(clip);
+    fbe_world_free(world);
+}
+
+TEST_CASE("playing the clip a layer's playing each frame goes on") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t hips = pivot(world, 0, "hips");
+    const std::uint64_t player = fbe_player_create(hips);
+    const std::uint64_t walk = sliding(0.0F, 4.0F, 2.0F);
+    for (int frame = 0; frame < 30; ++frame) {
+        REQUIRE(fbe_player_play(player, 0, walk, FBE_PLAYER_LOOP, 1.0F));
+        fbe_player_advance(world, 1.0F / 60.0F);
+    }
+    CHECK(fbe_player_time(player, 0) == Catch::Approx(0.5F));
+    CHECK(position(hips).x == Catch::Approx(1.0F));
+    // One a crossfade has faded out isn't playing: played, it starts again, and the other goes.
+    const std::uint64_t other = sliding(9.0F, 9.0F, 2.0F);
+    fbe_player_crossfade(player, 0, other, 1.0F, FBE_PLAYER_LOOP, 1.0F);
+    fbe_player_advance(world, 0.25F);
+    REQUIRE(fbe_player_play(player, 0, walk, FBE_PLAYER_LOOP, 1.0F));
+    CHECK(fbe_player_time(player, 0) == 0.0F);
+    CHECK(position(hips).x == 0.0F);
+    fbe_clip_release(other);
+    CHECK(!fbe_clip_alive(other));
+    fbe_player_free(player);
+    fbe_clip_release(walk);
+    fbe_world_free(world);
+}
+
+TEST_CASE("a clip being faded in, played or crossfaded to each frame, goes on and goes on fading") {
+    for (const bool crossfading : { false, true }) {
+        const std::uint64_t world = fbe_world_create();
+        const std::uint64_t hips = pivot(world, 0, "hips");
+        const std::uint64_t player = fbe_player_create(hips);
+        const std::uint64_t still = sliding(0.0F, 0.0F, 8.0F);
+        const std::uint64_t away = sliding(4.0F, 4.0F, 8.0F);
+        fbe_player_play(player, 0, still, FBE_PLAYER_LOOP, 1.0F);
+        fbe_player_crossfade(player, 0, away, 1.0F, FBE_PLAYER_LOOP, 1.0F);
+        for (int frame = 0; frame < 15; ++frame) {
+            if (crossfading) {
+                fbe_player_crossfade(player, 0, away, 1.0F, FBE_PLAYER_LOOP, 2.0F);
+            } else {
+                fbe_player_play(player, 0, away, FBE_PLAYER_LOOP, 2.0F);
+            }
+            fbe_player_advance(world, 1.0F / 30.0F);
+        }
+        // Half a second at twice as fast, and half way faded.
+        CHECK(fbe_player_time(player, 0) == Catch::Approx(1.0F));
+        CHECK(position(hips).x == Catch::Approx(2.0F));
+        fbe_player_advance(world, 0.5F);
+        CHECK(position(hips).x == Catch::Approx(4.0F));
+        fbe_clip_release(still);
+        CHECK(!fbe_clip_alive(still));
+        fbe_player_free(player);
+        fbe_clip_release(away);
+        fbe_world_free(world);
+    }
+}
+
+TEST_CASE("a ping-pong on its way back, played in another mode, goes on forward") {
+    for (const bool crossfading : { false, true }) {
+        for (const std::int32_t mode : { FBE_PLAYER_LOOP, FBE_PLAYER_ONCE }) {
+            const std::uint64_t world = fbe_world_create();
+            const std::uint64_t hips = pivot(world, 0, "hips");
+            const std::uint64_t player = fbe_player_create(hips);
+            const std::uint64_t clip = sliding(0.0F, 2.0F, 2.0F);
+            const std::uint64_t other = sliding(0.0F, 2.0F, 2.0F);
+            fbe_player_play(player, 0, clip, FBE_PLAYER_PING_PONG, 1.0F);
+            fbe_player_advance(world, 2.5F);
+            CHECK(fbe_player_time(player, 0) == Catch::Approx(1.5F));
+            if (crossfading) {
+                // Faded away from and back, so it's an older track coming back.
+                fbe_player_crossfade(player, 0, other, 1.0F, FBE_PLAYER_LOOP, 1.0F);
+                fbe_player_crossfade(player, 0, clip, 1.0F, mode, 1.0F);
+            } else {
+                fbe_player_play(player, 0, clip, mode, 1.0F);
+            }
+            fbe_player_advance(world, 0.25F);
+            CHECK(fbe_player_time(player, 0) == Catch::Approx(1.75F));
+            if (mode == FBE_PLAYER_ONCE) {
+                fbe_player_advance(world, 5.0F);
+                CHECK(fbe_player_time(player, 0) == 2.0F);
+                CHECK(!fbe_player_playing(player, 0));
+            }
+            fbe_player_free(player);
+            fbe_clip_release(clip);
+            fbe_clip_release(other);
+            fbe_world_free(world);
+        }
+    }
+}
+
+TEST_CASE("setting the time at a negative speed goes on backward") {
+    const auto after = [](std::int32_t mode, float time) {
+        const std::uint64_t world = fbe_world_create();
+        const std::uint64_t hips = pivot(world, 0, "hips");
+        const std::uint64_t player = fbe_player_create(hips);
+        const std::uint64_t clip = sliding(0.0F, 2.0F, 2.0F);
+        fbe_player_play(player, 0, clip, mode, -1.0F);
+        fbe_player_set_time(player, 0, time);
+        fbe_player_advance(world, 0.25F);
+        const float found = fbe_player_time(player, 0);
+        fbe_player_free(player);
+        fbe_clip_release(clip);
+        fbe_world_free(world);
+        return found;
+    };
+    CHECK(after(FBE_PLAYER_ONCE, 1.0F) == Catch::Approx(0.75F));
+    CHECK(after(FBE_PLAYER_LOOP, 1.0F) == Catch::Approx(0.75F));
+    CHECK(after(FBE_PLAYER_PING_PONG, 1.0F) == Catch::Approx(0.75F));
+    // Past the bounce, at 3 of its there and back's 4: at 1, on the way back, and so, backward,
+    // going up it.
+    CHECK(after(FBE_PLAYER_PING_PONG, 3.0F) == Catch::Approx(1.25F));
+    // Round a loop: 5 is 1.
+    CHECK(after(FBE_PLAYER_LOOP, 5.0F) == Catch::Approx(0.75F));
+}
+
+TEST_CASE("a clip played once stays at its end when played again; a stop then a play replays it") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t hips = pivot(world, 0, "hips");
+    const std::uint64_t player = fbe_player_create(hips);
+    const std::uint64_t door = sliding(0.0F, 2.0F, 2.0F);
+    fbe_clip_add_event(door, "start", 0.0F);
+    fbe_player_play(player, 0, door, FBE_PLAYER_ONCE, 1.0F);
+    fbe_player_advance(world, 3.0F);
+    CHECK(reached(player) == std::vector<std::string>{ "start@0" });
+    CHECK(!fbe_player_playing(player, 0));
+    // A game asking for its death each frame doesn't die over and over.
+    for (int frame = 0; frame < 30; ++frame) {
+        fbe_player_play(player, 0, door, FBE_PLAYER_ONCE, 1.0F);
+        fbe_player_advance(world, 0.1F);
+        CHECK(fbe_player_time(player, 0) == 2.0F);
+    }
+    CHECK(fbe_player_event_count(player) == 0);
+    // A crossfade to it changes nothing either.
+    fbe_player_crossfade(player, 0, door, 1.0F, FBE_PLAYER_ONCE, 1.0F);
+    CHECK(fbe_player_time(player, 0) == 2.0F);
+    // The door played again, by a stop then a play.
+    fbe_player_stop(player, 0, 0.0F);
+    fbe_player_play(player, 0, door, FBE_PLAYER_ONCE, 1.0F);
+    CHECK(fbe_player_time(player, 0) == 0.0F);
+    CHECK(fbe_player_playing(player, 0));
+    fbe_player_advance(world, 1.0F);
+    CHECK(reached(player) == std::vector<std::string>{ "start@0" });
+    fbe_player_free(player);
+    fbe_clip_release(door);
+    fbe_world_free(world);
+}
+
+TEST_CASE(
+    "a layer at no weight leaves what only it moves at its rest, and the rest as they're given") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t hips = pivot(world, 0, "hips");
+    const std::uint64_t arm = pivot(world, hips, "arm");
+    const std::uint64_t leg = pivot(world, hips, "leg");
+    fbe_entity_set_position(arm, 10.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL);
+    const std::uint64_t player = fbe_player_create(hips);
+    const std::uint64_t walk = sliding(1.0F, 1.0F, 1.0F, "leg");
+    const std::uint64_t wave = fbe_clip_create("", 0.0F);
+    const std::array<float, 1> times{ 0.0F };
+    const std::array<float, 3> place{ 4.0F, 0.0F, 0.0F };
+    fbe_clip_add_channel(wave, "arm", FBE_CLIP_TRANSLATION, FBE_CLIP_STEP, 3, times.data(),
+                         place.data(), 1);
+    fbe_clip_add_channel(wave, "leg", FBE_CLIP_TRANSLATION, FBE_CLIP_STEP, 3, times.data(),
+                         place.data(), 1);
+    fbe_player_play(player, 0, walk, FBE_PLAYER_LOOP, 1.0F);
+    fbe_player_play(player, 1, wave, FBE_PLAYER_LOOP, 1.0F);
+    CHECK(position(arm).x == 4.0F);
+    CHECK(position(leg).x == 4.0F);
+    fbe_player_set_weight(player, 1, 0.0F);
+    fbe_player_advance(world, 0.1F);
+    CHECK(position(arm).x == 10.0F);
+    CHECK(position(leg).x == 1.0F);
+    fbe_player_free(player);
+    fbe_clip_release(walk);
+    fbe_clip_release(wave);
+    fbe_world_free(world);
+}
+
+TEST_CASE("each property's rest is where it was when a clip began moving it") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t hips = pivot(world, 0, "hips");
+    const std::uint64_t player = fbe_player_create(hips);
+    // A clip that only turns the hips: the position's the game's.
+    const std::uint64_t turn = turned_to({ 0.0F, std::sqrt(0.5F), 0.0F, std::sqrt(0.5F) });
+    fbe_player_play(player, 0, turn, FBE_PLAYER_LOOP, 1.0F);
+    fbe_entity_set_position(hips, 10.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL);
+    fbe_player_advance(world, 0.1F);
+    CHECK(position(hips).x == 10.0F);
+    const std::uint64_t slide = sliding(4.0F, 4.0F, 1.0F);
+    fbe_player_crossfade(player, 0, slide, 1.0F, FBE_PLAYER_LOOP, 1.0F);
+    CHECK(position(hips).x == 10.0F);
+    fbe_player_advance(world, 0.5F);
+    CHECK(position(hips).x == Catch::Approx(7.0F));
+    // Stopped where it is, then moved by the game: a new clip fades in from there.
+    fbe_player_stop(player, 0, 0.0F);
+    fbe_entity_set_position(hips, 20.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL);
+    fbe_player_crossfade(player, 0, slide, 1.0F, FBE_PLAYER_LOOP, 1.0F);
+    CHECK(position(hips).x == 20.0F);
+    fbe_player_advance(world, 0.5F);
+    CHECK(position(hips).x == Catch::Approx(12.0F));
+    // Faded out, it's back there; moved by the game, a new clip fades in from there.
+    fbe_player_stop(player, 0, 1.0F);
+    fbe_player_advance(world, 1.0F);
+    CHECK(position(hips).x == Catch::Approx(20.0F));
+    fbe_entity_set_position(hips, 30.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL);
+    fbe_player_crossfade(player, 0, slide, 1.0F, FBE_PLAYER_LOOP, 1.0F);
+    CHECK(position(hips).x == 30.0F);
+    fbe_player_free(player);
+    fbe_clip_release(turn);
+    fbe_clip_release(slide);
+    // A bone a mask keeps out is the game's to move, until it's let in.
+    const std::uint64_t spine = pivot(world, hips, "spine");
+    const std::uint64_t arm = pivot(world, hips, "arm");
+    const std::uint64_t masked = fbe_player_create(hips);
+    const std::uint64_t wave = sliding(4.0F, 4.0F, 1.0F, "arm");
+    fbe_player_set_mask(masked, 0, &spine, 1);
+    fbe_player_play(masked, 0, wave, FBE_PLAYER_LOOP, 1.0F);
+    fbe_entity_set_position(arm, 10.0F, 0.0F, 0.0F, FBE_SPACE_LOCAL);
+    fbe_player_advance(world, 0.1F);
+    CHECK(position(arm).x == 10.0F);
+    fbe_player_set_mask(masked, 0, nullptr, 0);
+    fbe_player_set_weight(masked, 0, 0.5F);
+    fbe_player_advance(world, 0.1F);
+    CHECK(position(arm).x == Catch::Approx(7.0F));
+    fbe_player_free(masked);
+    fbe_clip_release(wave);
+    fbe_world_free(world);
+}
+
+TEST_CASE("a crossfade of next to no time, and a speed too fast to multiply, stay numbers") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t hips = pivot(world, 0, "hips");
+    const std::uint64_t player = fbe_player_create(hips);
+    const std::uint64_t a = sliding(1.0F, 1.0F, 1.0F);
+    const std::uint64_t b = sliding(5.0F, 5.0F, 1.0F);
+    fbe_player_play(player, 0, a, FBE_PLAYER_LOOP, 1.0F);
+    fbe_player_crossfade(player, 0, b, 1e-40F, FBE_PLAYER_LOOP, 1.0F);
+    fbe_player_advance(world, 0.0F);
+    fbe_player_advance(world, 1.0F);
+    CHECK(position(hips).x == 5.0F);
+    fbe_player_stop(player, 0, 0.0F);
+    fbe_clip_add_event(a, "tick", 0.5F);
+    fbe_player_play(player, 0, a, FBE_PLAYER_LOOP, std::numeric_limits<float>::max());
+    fbe_player_advance(world, 10.0F);
+    CHECK(fbe_player_event_count(player) <= 3);
+    CHECK(std::isfinite(fbe_player_time(player, 0)));
+    fbe_player_free(player);
+    fbe_clip_release(a);
+    fbe_clip_release(b);
+    fbe_world_free(world);
+}
+
+TEST_CASE("a bone freed and made again doesn't add to what a player keeps") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t hips = pivot(world, 0, "hips");
+    const std::uint64_t player = fbe_player_create(hips);
+    const std::uint64_t clip = sliding(4.0F, 4.0F, 1.0F, "gun");
+    const std::uint64_t other = sliding(5.0F, 5.0F, 1.0F, "gun");
+    for (int i = 0; i < 100; ++i) {
+        const std::uint64_t gun = pivot(world, hips, "gun");
+        fbe_player_play(player, 0, i % 2 == 0 ? clip : other, FBE_PLAYER_LOOP, 1.0F);
+        CHECK(position(gun).x == (i % 2 == 0 ? 4.0F : 5.0F));
+        fbe_entity_free(gun);
+    }
+    CHECK(fbe_player_bone_count(player) <= 1);
+    fbe_player_free(player);
+    fbe_clip_release(clip);
+    fbe_clip_release(other);
+    fbe_world_free(world);
+}
+
+TEST_CASE("an advance hands over the players whose entities were freed, once each") {
+    const std::uint64_t world = fbe_world_create();
+    const std::int64_t before = fbe_player_count();
+    const std::uint64_t hips = pivot(world, 0, "hips");
+    const std::uint64_t kept = pivot(world, 0, "kept");
+    const std::uint64_t player = fbe_player_create(hips);
+    const std::uint64_t still = fbe_player_create(kept);
+    CHECK(fbe_player_count() == before + 2);
+    std::array<std::uint64_t, 4> taken{};
+    fbe_player_advance(world, 0.1F);
+    CHECK(fbe_player_orphans(taken.data(), taken.size()) == 0);
+    fbe_entity_free(hips);
+    fbe_player_advance(world, 0.1F);
+    REQUIRE(fbe_player_orphans(taken.data(), taken.size()) == 1);
+    CHECK(taken[0] == player);
+    fbe_player_advance(world, 0.1F);
+    CHECK(fbe_player_orphans(taken.data(), taken.size()) == 0);
+    // One freed before it's taken is taken by no one.
+    fbe_entity_free(kept);
+    fbe_player_advance(world, 0.1F);
+    fbe_player_free(still);
+    CHECK(fbe_player_orphans(taken.data(), taken.size()) == 0);
+    CHECK(fbe_player_free(player));
+    CHECK(fbe_player_count() == before);
     fbe_world_free(world);
 }

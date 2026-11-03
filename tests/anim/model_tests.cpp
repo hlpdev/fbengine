@@ -21,46 +21,8 @@ bool says(std::string_view message) {
     return std::string_view(fbe_error()).contains(message);
 }
 
-/// A rig's glTF and its buffer, in a folder of its own named `name`, mounted at res://anim-rig:
-/// nodes "hips", with "knee" under it, and one with no name; a skin of the hips and knee; and a
-/// clip "walk", at 24 frames a second, its keys at `times`, moving the hips from x 0 to 2,
-/// stepping the knee to a half turn about Y, and scaling the unnamed node.
-class rig_t {
-public:
-    explicit rig_t(std::string_view name, std::array<float, 2> times = { 0.0F, 1.0F })
-        : m_folder(std::filesystem::temp_directory_path() / name) {
-        std::filesystem::create_directories(m_folder);
-        std::vector<float> floats(times.begin(), times.end());
-        floats.insert(floats.end(), { 0, 0, 0, 2, 0, 0 });
-        floats.insert(floats.end(), { 0, 0, 0, 1, 0, 1, 0, 0 });
-        floats.insert(floats.end(), { 1, 1, 1, 3, 3, 3 });
-        floats.insert(floats.end(), { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 });
-        floats.insert(floats.end(), { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -1, 0, 1 });
-        std::ofstream bin(m_folder / "rig.bin", std::ios::binary);
-        for (const float value : floats) {
-            const auto bits = std::bit_cast<std::array<char, 4>>(value);
-            bin.write(bits.data(), bits.size());
-        }
-        bin.close();
-        std::ofstream(m_folder / "rig.gltf") << gltf;
-        fbe_vfs_mount_folder("res://anim-rig", m_folder.string().c_str());
-    }
-
-    rig_t(const rig_t&) = delete;
-    rig_t& operator=(const rig_t&) = delete;
-    rig_t(rig_t&&) = delete;
-    rig_t& operator=(rig_t&&) = delete;
-
-    // Only remove_all's allocations can throw, which end the tests.
-    // NOLINTNEXTLINE(bugprone-exception-escape)
-    ~rig_t() {
-        fbe_vfs_unmount("res://anim-rig");
-        std::error_code ignored;
-        std::filesystem::remove_all(m_folder, ignored);
-    }
-
-private:
-    static constexpr std::string_view gltf = R"({
+/// A rig's glTF.
+constexpr std::string_view whole = R"({
         "asset": {"version": "2.0"},
         "buffers": [{"byteLength": 216, "uri": "rig.bin"}],
         "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 8},
@@ -86,6 +48,46 @@ private:
                                      {"sampler": 2, "target": {"node": 2, "path": "scale"}}]}]
     })";
 
+/// A rig's glTF and its buffer, in a folder of its own named `name`, mounted at res://anim-rig:
+/// nodes "hips", with "knee" under it, and one with no name; a skin of the hips and knee; and a
+/// clip "walk", at 24 frames a second, its keys at `times`, moving the hips from x 0 to 2,
+/// stepping the knee to a half turn about Y, and scaling the unnamed node.
+class rig_t {
+public:
+    explicit rig_t(std::string_view name, std::array<float, 2> times = { 0.0F, 1.0F },
+                   std::string_view file = whole)
+        : m_folder(std::filesystem::temp_directory_path() / name) {
+        std::filesystem::create_directories(m_folder);
+        std::vector<float> floats(times.begin(), times.end());
+        floats.insert(floats.end(), { 0, 0, 0, 2, 0, 0 });
+        floats.insert(floats.end(), { 0, 0, 0, 1, 0, 1, 0, 0 });
+        floats.insert(floats.end(), { 1, 1, 1, 3, 3, 3 });
+        floats.insert(floats.end(), { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 });
+        floats.insert(floats.end(), { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -1, 0, 1 });
+        std::ofstream bin(m_folder / "rig.bin", std::ios::binary);
+        for (const float value : floats) {
+            const auto bits = std::bit_cast<std::array<char, 4>>(value);
+            bin.write(bits.data(), bits.size());
+        }
+        bin.close();
+        std::ofstream(m_folder / "rig.gltf") << file;
+        fbe_vfs_mount_folder("res://anim-rig", m_folder.string().c_str());
+    }
+
+    rig_t(const rig_t&) = delete;
+    rig_t& operator=(const rig_t&) = delete;
+    rig_t(rig_t&&) = delete;
+    rig_t& operator=(rig_t&&) = delete;
+
+    // Only remove_all's allocations can throw, which end the tests.
+    // NOLINTNEXTLINE(bugprone-exception-escape)
+    ~rig_t() {
+        fbe_vfs_unmount("res://anim-rig");
+        std::error_code ignored;
+        std::filesystem::remove_all(m_folder, ignored);
+    }
+
+private:
     std::filesystem::path m_folder;
 };
 
@@ -186,5 +188,69 @@ TEST_CASE("a model's clip with keys a clip can't sample is refused, as one made 
     REQUIRE(!fbe_assets_failed(load));
     CHECK(fbe_clip_from_model(load, 0) == 0);
     CHECK(says("0.5 isn't after 1"));
+    fbe_assets_free(load);
+}
+
+TEST_CASE("what's wrong in a model's file is said apart from a mistake in asking for it") {
+    const rig_t rig("fbengine-anim-kinds");
+    const std::uint64_t load =
+        fbe_assets_load(FBE_ASSETS_MODEL, "res://anim-rig/rig.gltf", false, false);
+    REQUIRE(fbe_clip_from_model(load, 0) != 0);
+    CHECK(!fbe_clip_model_invalid());
+    CHECK(fbe_clip_from_model(load, 7) == 0);
+    CHECK(!fbe_clip_model_invalid());
+    CHECK(fbe_skin_from_model(load, 7) == 0);
+    CHECK(!fbe_skin_model_invalid());
+    fbe_assets_free(load);
+    const rig_t falling("fbengine-anim-kinds-falling", { 1.0F, 0.5F });
+    const std::uint64_t bad =
+        fbe_assets_load(FBE_ASSETS_MODEL, "res://anim-rig/rig.gltf", false, false);
+    CHECK(fbe_clip_from_model(bad, 0) == 0);
+    CHECK(fbe_clip_model_invalid());
+    fbe_assets_free(bad);
+}
+
+TEST_CASE("a model moving one name's property twice, or a skin of unnamed joints, is refused") {
+    // Two nodes named "a", each moved; two named "b", one a joint, the other too; and one unnamed.
+    constexpr std::string_view twice = R"({
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": 216, "uri": "rig.bin"}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 8},
+                        {"buffer": 0, "byteOffset": 8, "byteLength": 24},
+                        {"buffer": 0, "byteOffset": 88, "byteLength": 128}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR",
+                       "min": [0], "max": [1]},
+                      {"bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3"},
+                      {"bufferView": 2, "componentType": 5126, "count": 2, "type": "MAT4"}],
+        "nodes": [{"name": "a"}, {"name": "a"}, {}, {}],
+        "skins": [{"joints": [0, 1], "inverseBindMatrices": 2},
+                  {"joints": [2, 0], "inverseBindMatrices": 2}],
+        "animations": [{"samplers": [{"input": 0, "output": 1}],
+                        "channels": [{"sampler": 0, "target": {"node": 0, "path": "translation"}},
+                                     {"sampler": 0, "target": {"node": 1, "path": "translation"}}]},
+                       {"samplers": [{"input": 0, "output": 1}],
+                        "channels": [{"sampler": 0, "target": {"node": 2, "path": "translation"}},
+                                     {"sampler": 0, "target": {"node": 3, "path": "translation"}},
+                                     {"sampler": 0, "target": {"node": 0, "path": "scale"}},
+                                     {"sampler": 0, "target": {"node": 1, "path": "translation"}}]}]
+    })";
+    const rig_t rig("fbengine-anim-twice", { 0.0F, 1.0F }, twice);
+    const std::uint64_t load =
+        fbe_assets_load(FBE_ASSETS_MODEL, "res://anim-rig/rig.gltf", false, false);
+    REQUIRE(!fbe_assets_failed(load));
+    CHECK(fbe_clip_from_model(load, 0) == 0);
+    CHECK(fbe_clip_model_invalid());
+    CHECK(says("moves the position of \"a\" twice"));
+    // Unnamed nodes move nothing, so they're no clash, nor are a name's other properties.
+    const std::uint64_t fine = fbe_clip_from_model(load, 1);
+    CHECK(fine != 0);
+    CHECK(!fbe_clip_model_invalid());
+    fbe_clip_release(fine);
+    CHECK(fbe_skin_from_model(load, 0) == 0);
+    CHECK(fbe_skin_model_invalid());
+    CHECK(says("two joints named \"a\""));
+    CHECK(fbe_skin_from_model(load, 1) == 0);
+    CHECK(fbe_skin_model_invalid());
+    CHECK(says("a node with no name"));
     fbe_assets_free(load);
 }

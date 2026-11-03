@@ -12,8 +12,8 @@
 // weight going where it's going over the crossfade's seconds. Its pose is their weighted mean,
 // the position and scale in a line and the rotation the short way round, over the layers before
 // it by its weight times its clips' together, 1 at most; a layer with a mask moves only the
-// entities it names and those under them. What a clip moves starts from where it was before the
-// player first moved it, so a clip faded out leaves it there; what no clip moves is left as it is.
+// entities it names and those under them. Each property a clip moves starts from where it was when
+// a clip began moving it, so a clip faded out leaves it there; what no clip moves is left as it is.
 //
 // Players are handles of their own kind; the entities and clips they're given are the scene's and
 // the clip area's.
@@ -42,14 +42,15 @@ FBE_API uint64_t fbe_player_entity(uint64_t player);
 // Each of these takes a layer, from 0 to FBE_PLAYER_LAYERS - 1, and fails for one that isn't, or
 // a player freed, or its entity.
 
-// Plays `clip` on the layer in `mode` at `speed` times, from its start, or from its end at a speed
-// below 0, in place of what the layer played, posing what it moves at once; the clip the layer
-// plays already, and only it, goes on where it is, in its new mode and speed. False too for a clip
-// freed, a mode that isn't one, or a speed that isn't finite.
+// Plays `clip` on the layer in `mode` at `speed` times, in place of what the layer played, posing
+// what it moves at once, from its start, or its end at a speed below 0. If it's what the layer's
+// playing already, the one it played last and not stopping, even at its end or fading in, it only
+// takes the new mode and speed, so a game can ask for it every frame; fbe_player_stop first plays
+// it again. False too for a clip freed, a mode that isn't one, or a speed that isn't finite.
 FBE_API bool fbe_player_play(uint64_t player, int32_t layer, uint64_t clip, int32_t mode,
                              float speed);
 // Plays `clip` as fbe_player_play does, fading it in over `seconds` while what the layer played
-// fades out; a clip the layer plays already goes on where it is, fading back in. With 0 seconds,
+// fades out; one being faded out goes on where it is, fading back in. With 0 seconds,
 // it's fbe_player_play. False too for seconds below 0 or not finite.
 FBE_API bool fbe_player_crossfade(uint64_t player, int32_t layer, uint64_t clip, float seconds,
                                   int32_t mode, float speed);
@@ -66,8 +67,8 @@ FBE_API bool fbe_player_playing(uint64_t player, int32_t layer);
 FBE_API bool fbe_player_set_time(uint64_t player, int32_t layer, float time);
 // Where the layer is in its clip, in seconds, 0 for none.
 FBE_API float fbe_player_time(uint64_t player, int32_t layer);
-// Sets how many times as fast as made the layer plays its clip, backward below 0, or for ping-pong
-// the other way from where it's going. False too for a speed that isn't finite.
+// Sets how many times as fast as made the layer plays its clip, backward below 0. False too for a
+// speed that isn't finite.
 FBE_API bool fbe_player_set_speed(uint64_t player, int32_t layer, float speed);
 FBE_API float fbe_player_speed(uint64_t player, int32_t layer);
 // Sets how much of the layer's pose is over the layers before it, from 0 to 1, as it starts. False
@@ -87,7 +88,8 @@ FBE_API bool fbe_player_advance(uint64_t world, float seconds);
 // The players with events kept, up to `capacity` of them into `players`; gives how many there are.
 FBE_API int32_t fbe_player_evented(uint64_t* players, int32_t capacity);
 // How many events the player reached since they were last let go of, and the one at `event`'s
-// name, its clip's name, both valid until they're let go of, its layer, and its time in its clip;
+// name, its clip's name, both valid until the player next moves or they're let go of, its layer,
+// and its time in its clip;
 // "", "", -1, and 0 for one out of range, or a freed player.
 FBE_API int32_t fbe_player_event_count(uint64_t player);
 FBE_API const char* fbe_player_event_name(uint64_t player, int32_t event);
@@ -96,6 +98,14 @@ FBE_API int32_t fbe_player_event_layer(uint64_t player, int32_t event);
 FBE_API float fbe_player_event_time(uint64_t player, int32_t event);
 // Lets go of the events the player reached.
 FBE_API bool fbe_player_clear_events(uint64_t player);
+
+// Takes the players an advance found their entities freed, up to `capacity` of them into `players`,
+// each once, as the FB side lets go of what it keeps for them; gives how many it took.
+FBE_API int32_t fbe_player_orphans(uint64_t* players, int32_t capacity);
+// How many players there are, not freed.
+FBE_API int64_t fbe_player_count(void);
+// How many entities the player's clips name, kept as bones, 0 for a freed player.
+FBE_API int32_t fbe_player_bone_count(uint64_t player);
 
 #ifdef __cplusplus
 }

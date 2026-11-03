@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -222,4 +223,14 @@ TEST_CASE("a copy of a skinned mesh alone follows its original's bones") {
     std::array<float, 32> palette{};
     REQUIRE(fbe_skin_palette(copy, palette.data(), 2) == 2);
     CHECK(through(palette, 0, 0.0F, 1.0F, 0.0F)[1] == Catch::Approx(2.0F));
+}
+
+TEST_CASE("a joint's name asked for after the skin changes is its name") {
+    const leg_t leg;
+    for (int joint = 0; joint < 40; ++joint) {
+        const std::string name = "joint" + std::to_string(joint);
+        fbe_skin_add_joint(leg.skin, name.c_str(), moving(0, 0, 0).data());
+    }
+    CHECK(std::string_view(fbe_skin_joint_name(leg.skin, 0)) == "hips");
+    CHECK(std::string_view(fbe_skin_joint_name(leg.skin, 41)) == "joint39");
 }

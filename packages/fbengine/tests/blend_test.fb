@@ -1,7 +1,6 @@
 // Players' layers and how a Clip goes on: modes, speeds, crossfades, masks, weights, a Clip's
 // slices, and the events UpdateWorld hands a Player's handler; with no window or GPU.
 
-Import std.core
 Import std.math
 Import std.test
 Import fbengine
@@ -159,4 +158,79 @@ Function ASlicePlaysAsTheClipDidThere()
     Expect(IsClose(hips.Position().x, 1))
     UpdateWorld(1)
     Expect(IsClose(hips.Position().x, 3))
+End Function
+
+// A handler that ends the level: the World it frees has collided by then, and Update returns.
+Global level: World? = Null
+
+Function EndsTheLevel(event: ClipEvent)
+    heard.Add(event.Name)
+    Local kept = level
+    If kept != Null Then kept.Free()
+End Function
+
+@Test
+Function AnEventsHandlerCanFreeTheWorld()
+    Defer heard.Clear()
+    Local world = Fresh()
+    level = world
+    Defer ClearLevel()
+    Local hips = Body()
+    Local die = Slide("hips", 0, 1, 1)
+    die.AddEvent("over", 0.5)
+    hips.Player().OnEvent(EndsTheLevel)
+    hips.Player().Play(die, PlayMode.ONCE)
+    UpdateWorld(0.75)
+    Expect(heard == ["over"] && world.Freed())
+End Function
+
+Function ClearLevel()
+    level = Null
+End Function
+
+// A handler that stops at the first event hears no more; one that frees the entity hears on, as
+// those events were reached.
+Global listening: Player? = Null
+Global dying: Pivot? = Null
+
+Function StopsListening(event: ClipEvent)
+    heard.Add(event.Name)
+    Local kept = listening
+    If kept != Null Then kept.OnEvent(Null)
+End Function
+
+Function FreesIt(event: ClipEvent)
+    heard.Add(event.Name)
+    Local kept = dying
+    If kept != Null && !kept.Freed() Then kept.Free()
+End Function
+
+Function ForgetListeners()
+    listening = Null
+    dying = Null
+    heard.Clear()
+End Function
+
+@Test
+Function AHandlerStoppingHearsNoMoreOfThatUpdate()
+    Defer ForgetListeners()
+    Local world = Fresh()
+    Defer world.Free()
+    Local hips = Body()
+    Local walk = Slide("hips", 0, 1, 1)
+    walk.AddEvent("a", 0.2)
+    walk.AddEvent("b", 0.4)
+    walk.AddEvent("c", 0.6)
+    Local player = hips.Player()
+    listening = player
+    player.OnEvent(StopsListening)
+    player.Play(walk, PlayMode.ONCE)
+    UpdateWorld(1)
+    Expect(heard == ["a"])
+    heard.Clear()
+    dying = hips
+    player.OnEvent(FreesIt)
+    player.SetTime(0)
+    UpdateWorld(1)
+    Expect(heard == ["a", "b", "c"])
 End Function

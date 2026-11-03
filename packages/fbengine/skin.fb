@@ -36,13 +36,17 @@ Public Final Class Skin
     End New
 
     /// A Skin of the skin at `index`, from 0, of the glTF a model load decoded, its joints named as
-    /// their nodes, with their inverse binds. A load that isn't a model's, an index outside 0 to its
-    /// model's Skins - 1, or a joint whose node has no name, or the name of one before it, panics.
+    /// their nodes, with their inverse binds. A load that isn't a model's, or an index outside 0 to
+    /// its model's Skins - 1, panics. What's wrong in the file, a joint whose node has no name, or the
+    /// name of one before it, throws an IOError of INVALID_DATA.
     @MainThread @PanicsAtCaller
-    Public Static Method FromModel(load: AssetLoad, index: Int): Skin
+    Public Static Method FromModel(load: AssetLoad, index: Int): Skin Throws IOError
         Local handle = fbe_skin_from_model(load.Handle, index)
-        If handle == 0 Then Panic("Skin.FromModel: {LastError()}")
-        Return Skin(handle)
+        If handle != 0 Then Return Skin(handle)
+        If fbe_skin_model_invalid()
+            Throw IOError(IOErrorKind.INVALID_DATA, LastError(), load.Path())
+        End If
+        Panic("Skin.FromModel: {LastError()}")
     End Method
 
     Method Destroy()

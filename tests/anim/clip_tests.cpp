@@ -238,3 +238,32 @@ TEST_CASE("a slice of a clip samples as the clip did there, whatever its interpo
     fbe_clip_release(moment);
     fbe_clip_release(clip);
 }
+
+TEST_CASE("a rotation's keys are made length 1, unless they're a curve's") {
+    const std::array<float, 2> times{ 0.0F, 1.0F };
+    // Between its keys, a step's holds the first at length 1.
+    const std::uint64_t stepping = fbe_clip_create("", 0.0F);
+    const std::array<float, 8> long_keys{ 0, 0, 2, 0, 0, 0, 0, 2 };
+    fbe_clip_add_channel(stepping, "n", FBE_CLIP_ROTATION, FBE_CLIP_STEP, 4, times.data(),
+                         long_keys.data(), 2);
+    std::array<float, 4> out{};
+    fbe_clip_sample(stepping, 0, 0.5F, out.data(), out.size());
+    CHECK(out[2] == Catch::Approx(1.0F));
+    fbe_clip_release(stepping);
+    // On the arc between them, and a slice agrees.
+    const std::uint64_t clip = fbe_clip_create("", 0.0F);
+    const std::array<float, 8> keys{ 2, 0, 0, 0, 1, 1, 0, 0 };
+    fbe_clip_add_channel(clip, "n", FBE_CLIP_ROTATION, FBE_CLIP_LINEAR, 4, times.data(),
+                         keys.data(), 2);
+    const std::uint64_t part = fbe_clip_slice(clip, 0.25F, 1.0F);
+    for (const float at : { 0.0F, 0.25F, 0.5F, 0.75F }) {
+        std::array<float, 4> whole{};
+        std::array<float, 4> cut{};
+        fbe_clip_sample(clip, 0, 0.25F + at, whole.data(), whole.size());
+        fbe_clip_sample(part, 0, at, cut.data(), cut.size());
+        CHECK(whole[0] == Catch::Approx(cut[0]).margin(1e-5));
+        CHECK(whole[1] == Catch::Approx(cut[1]).margin(1e-5));
+    }
+    fbe_clip_release(part);
+    fbe_clip_release(clip);
+}

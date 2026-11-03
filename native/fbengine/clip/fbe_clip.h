@@ -47,18 +47,21 @@ FBE_API bool fbe_clip_add_channel(uint64_t clip, const char* node, int32_t prope
 
 // A new clip of clip `index` of a model load's glTF, its channels' nodes by their names, so it
 // plays on the entities made from the model and on any others with those names; a channel of an
-// unnamed node moves nothing. 0 for a load that isn't a model load done and loaded, or an index
-// out of range.
+// unnamed node moves nothing. 0 for a load that isn't a model load done and loaded, an index out
+// of range, or what's in the file: keys a clip made in code couldn't have, or one name's property
+// moved twice.
 FBE_API uint64_t fbe_clip_from_model(uint64_t load, int32_t index);
+// Whether the last fbe_clip_from_model gave 0 for what's in the file, rather than how it was asked.
+FBE_API bool fbe_clip_model_invalid(void);
 
-// Its name, valid until it changes, or "" for a freed clip.
+// Its name, valid until the next clip's made, or "" for a freed clip.
 FBE_API const char* fbe_clip_name(uint64_t clip);
 // Adds an event named `name` at `time` seconds, which a player playing the clip reports reaching
 // there; a clip's events can share a time, or a name. False for a freed clip, an empty name, or a
 // time below 0 or not finite.
 FBE_API bool fbe_clip_add_event(uint64_t clip, const char* name, float time);
-// How many events it has, 0 for a freed clip; event `event`'s name, valid until the clip's freed,
-// and time, by the order of their times, "" and 0 for one out of range.
+// How many events it has, 0 for a freed clip; event `event`'s name, valid until the clip changes
+// or is freed, and time, by the order of their times, "" and 0 for one out of range.
 FBE_API int32_t fbe_clip_event_count(uint64_t clip);
 FBE_API const char* fbe_clip_event_name(uint64_t clip, int32_t event);
 FBE_API float fbe_clip_event_time(uint64_t clip, int32_t event);

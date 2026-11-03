@@ -15,8 +15,10 @@
 #include <cstdint>
 #include <format>
 #include <new>
+#include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -27,6 +29,8 @@ namespace {
 struct clips_t {
     handle_slots_t slots{ CLIP_KIND };
     std::vector<kept_clip_t> kept;
+    /// Whether the last clip from a model was refused for what's in its file.
+    bool model_invalid = false;
 };
 
 clips_t& clips() {
@@ -98,6 +102,23 @@ static_assert(static_cast<int>(assets::property_t::WEIGHTS) ==
 static_assert(static_cast<int>(assets::interpolation_t::CUBIC) ==
               static_cast<int>(interpolation_t::CUBIC));
 
+/// A rotation channel's keys at length 1, as the arcs between them are; a curve's are only made so
+/// where it's sampled, its values and tangents together being what it goes through.
+void normalize_keys(channel_t& channel) {
+    if (channel.property != property_t::ROTATION ||
+        channel.interpolation == interpolation_t::CUBIC) {
+        return;
+    }
+    for (std::size_t at = 0; at + 4 <= channel.values.size(); at += 4) {
+        const std::span<float> key = std::span<float>(channel.values).subspan(at, 4);
+        const scene::quat_t q = scene::normalize({ key[0], key[1], key[2], key[3] });
+        key[0] = q.x;
+        key[1] = q.y;
+        key[2] = q.z;
+        key[3] = q.w;
+    }
+}
+
 /// Whether a model's channel is one a clip made in code could be: a node the model has, its
 /// property's width, a key or more, as many values as its keys take, and fit to sample; false with
 /// fbe_error saying what's wrong.
@@ -115,6 +136,20 @@ bool fits(const assets::model_t& model, const assets::channel_t& channel, std::s
                                 index, name_of(property)));
     }
     return fit(channel.times, channel.values);
+}
+
+/// Whether a model's clip moves no name's property twice, as fbe_clip_add_channel refuses; a node
+/// with no name moves nothing, so it clashes with nothing. False with fbe_error saying which.
+bool once_each(const assets::model_t& model, const assets::clip_t& from) {
+    std::set<std::pair<std::string_view, assets::property_t>> moved;
+    for (const assets::channel_t& channel : from.channels) {
+        const std::string& named = model.nodes[channel.node].name;
+        if (!named.empty() && !moved.emplace(named, channel.property).second) {
+            return fail(std::format("the clip moves the {} of \"{}\" twice",
+                                    name_of(static_cast<property_t>(channel.property)), named));
+        }
+    }
+    return true;
 }
 
 /// A model's clip as the clip area keeps it: each channel's node by its name, the names each once.
@@ -136,6 +171,7 @@ clip_t clip_of(const assets::model_t& model, const assets::clip_t& from) {
         to.width = channel.width;
         to.times = channel.times;
         to.values = channel.values;
+        normalize_keys(to);
     }
     return made;
 }
@@ -192,6 +228,7 @@ FBE_API uint64_t fbe_clip_create(const char* name, float frame_rate) {
 }
 
 FBE_API uint64_t fbe_clip_from_model(uint64_t load, int32_t index) {
+    clips().model_invalid = false;
     const fbe::assets::load_t* found = fbe::assets::loads().get(load);
     if (found == nullptr || !found->done || found->error ||
         found->kind != fbe::assets::load_kind_t::MODEL) {
@@ -206,10 +243,15 @@ FBE_API uint64_t fbe_clip_from_model(uint64_t load, int32_t index) {
     const fbe::assets::clip_t& clip = from[static_cast<std::size_t>(index)];
     for (std::size_t i = 0; i < clip.channels.size(); ++i) {
         if (!fbe::anim::fits(found->model, clip.channels[i], i)) {
+            clips().model_invalid = true;
             return 0;
         }
     }
     try {
+        if (!fbe::anim::once_each(found->model, clip)) {
+            clips().model_invalid = true;
+            return 0;
+        }
         fbe::anim::clip_t made = fbe::anim::clip_of(found->model, clip);
         const std::uint32_t slot = fbe::anim::make_clip();
         kept_clip(slot).clip = std::move(made);
@@ -218,6 +260,10 @@ FBE_API uint64_t fbe_clip_from_model(uint64_t load, int32_t index) {
         fail("out of memory");
         return 0;
     }
+}
+
+FBE_API bool fbe_clip_model_invalid(void) {
+    return clips().model_invalid;
 }
 
 FBE_API bool fbe_clip_retain(uint64_t clip) {
@@ -297,6 +343,7 @@ FBE_API bool fbe_clip_add_channel(uint64_t clip, const char* node, int32_t prope
     made.width = static_cast<std::uint32_t>(width);
     made.times.assign(key_times.begin(), key_times.end());
     made.values.assign(key_values.begin(), key_values.end());
+    fbe::anim::normalize_keys(made);
     found.length = std::max(found.length, key_times.back());
     ++kept_clip(slot).version;
     return true;

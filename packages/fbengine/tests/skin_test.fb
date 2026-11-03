@@ -1,7 +1,6 @@
 // Skins: joints bound to entities by name, and the palette a skinned Mesh is drawn with, posed by a
 // Player; with no window or GPU.
 
-Import std.core
 Import std.math
 Import std.test
 Import fbengine

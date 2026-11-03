@@ -139,3 +139,10 @@ TEST_CASE("keys are found from the last one, playing on, and searched for after 
     CHECK(out[0] == Catch::Approx(0.5F));
     CHECK(cursor == 0);
 }
+
+TEST_CASE("a step rotation between keys comes back at length 1") {
+    const channel_t stepping =
+        channel(property_t::ROTATION, interpolation_t::STEP, 4, { 0.0F, 1.0F },
+                { 0.0F, 0.0F, 2.0F, 0.0F, 0.0F, 2.0F, 0.0F, 0.0F });
+    CHECK(at(stepping, 0.5F)[2] == Catch::Approx(1.0F));
+}

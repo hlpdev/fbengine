@@ -50,6 +50,8 @@ struct skins_t {
     handle_slots_t slots{ SKIN_KIND };
     std::vector<skin_t> kept;
     std::vector<skinned_t> skinned;
+    /// Whether the last skin from a model was refused for what's in its file.
+    bool model_invalid = false;
 };
 
 skins_t& skins() {
@@ -188,7 +190,12 @@ FBE_API uint64_t fbe_skin_create(void) {
     return made.slots.handle(slot);
 }
 
+FBE_API bool fbe_skin_model_invalid(void) {
+    return skins().model_invalid;
+}
+
 FBE_API uint64_t fbe_skin_from_model(uint64_t load, int32_t index) {
+    skins().model_invalid = false;
     const fbe::assets::load_t* found = fbe::assets::loads().get(load);
     if (found == nullptr || !found->done || found->error ||
         found->kind != fbe::assets::load_kind_t::MODEL) {
@@ -201,30 +208,32 @@ FBE_API uint64_t fbe_skin_from_model(uint64_t load, int32_t index) {
         return 0;
     }
     const fbe::assets::skin_t& from = model.skins[static_cast<std::size_t>(index)];
+    // What's in the file: refused, and said to be why.
+    const auto invalid = [](const std::string& why) {
+        skins().model_invalid = true;
+        fail(why);
+        return std::uint64_t{ 0 };
+    };
     if (from.inverse_binds.size() != from.joints.size()) {
-        fail("the skin has an inverse bind for each joint");
-        return 0;
+        return invalid("the skin has an inverse bind for each joint");
     }
     try {
         fbe::anim::skin_t made;
         for (std::size_t i = 0; i < from.joints.size(); ++i) {
             if (from.joints[i] >= model.nodes.size()) {
-                fail(std::format("the skin's joint {} is no node of the model's", i));
-                return 0;
+                return invalid(std::format("the skin's joint {} is no node of the model's", i));
             }
             const std::string& named = model.nodes[from.joints[i]].name;
             if (named.empty()) {
-                fail(std::format("the skin's joint {} is a node with no name", i));
-                return 0;
+                return invalid(std::format("the skin's joint {} is a node with no name", i));
             }
             if (std::ranges::find(made.joints, named) != made.joints.end()) {
-                fail(std::format("the skin has two joints named \"{}\"", named));
-                return 0;
+                return invalid(std::format("the skin has two joints named \"{}\"", named));
             }
             if (!std::ranges::all_of(from.inverse_binds[i],
                                      [](float value) { return std::isfinite(value); })) {
-                fail(std::format("the skin's joint {}'s inverse bind matrix is numbers", i));
-                return 0;
+                return invalid(
+                    std::format("the skin's joint {}'s inverse bind matrix is numbers", i));
             }
             made.joints.push_back(named);
             mat4_t matrix;

@@ -2,7 +2,6 @@
 // drawing between steps, and FixedStep runs a game's logic at a fixed rate whatever the frame rate.
 
 Import std.core
-Import std.ffi
 Import std.math
 Import "./c/fbe_scene"
 Import "./collision"
@@ -11,7 +10,8 @@ Import "./player"
 Import "./transform"
 Import "./world"
 
-/// Steps the current World by `seconds`, 0 or more: its Players move on by them, then it collides.
+/// Steps the current World by `seconds`, 0 or more: its Players move on by them, it collides, then
+/// its Players' handlers hear the events they reached.
 @MainThread @PanicsAtCaller
 Public Function UpdateWorld(seconds: Float64 = 0)
     World.Current().Update(seconds)
@@ -25,12 +25,14 @@ Public Function CaptureWorld()
 End Function
 
 Extend World
-    /// Steps the World by `seconds`, 0 or more: the Players on its entities move on by them, then
-    /// it collides. Below 0, or not finite, panics.
+    /// Steps the World by `seconds`, 0 or more: the Players on its entities move on by them, it
+    /// collides, then their handlers hear the events they reached, which can free the World. Below
+    /// 0, or not finite, panics.
     @MainThread @PanicsAtCaller
     Public Method Update(seconds: Float64 = 0)
         Animate(seconds)
         Collide()
+        HandEvents()
     End Method
 
     /// Keeps where every entity of the World is, for drawing between then and later.

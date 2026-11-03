@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <iterator>
 #include <new>
 #include <ranges>
 #include <span>
@@ -31,13 +32,14 @@ enum class play_mode_t : std::uint8_t { ONCE, LOOP, PING_PONG };
 /// skipped.
 constexpr int most_rounds = 64;
 
-/// An entity a player moves, as it was before the player first moved it, which a clip fading out
-/// fades back to.
+/// An entity a player's clips name: each of its properties where it was when a clip began moving
+/// it, which a clip fading out fades back to, and whether a clip moved it in the last pose.
 struct bone_t {
     std::uint64_t entity = 0;
     scene::vec3_t position;
     scene::quat_t rotation;
     scene::vec3_t scale{ 1.0F, 1.0F, 1.0F };
+    std::array<bool, 3> moving{};
 };
 
 /// What one of a clip's channels moves: its bone, or none, and the key it sampled last.
@@ -80,13 +82,33 @@ struct reached_t {
     float time = 0.0F;
 };
 
-/// A player: its entity, 0 for a free slot, its layers, the bones its clips move, and the events
-/// they reached since the FB side took them.
+/// A player: its entity, 0 for a free slot, its layers, the bones its clips move, the events they
+/// reached since the FB side took them, and whether an advance found its entity freed.
 struct player_t {
     std::uint64_t entity = 0;
     std::array<layer_t, FBE_PLAYER_LAYERS> layers;
     std::vector<bone_t> bones;
     std::vector<reached_t> events;
+    bool orphaned = false;
+};
+
+/// What a layer makes of one bone's property: its tracks' values summed by their weights.
+struct sum_t {
+    std::array<float, 4> value{};
+    float weight = 0.0F;
+};
+
+/// What a pose works in, kept from one to the next so a frame's poses allocate nothing: each bone's
+/// entity's slot, or none, its transform so far, whether a clip's moved each property, and what the
+/// layer being worked out makes of it.
+struct scratch_t {
+    std::vector<std::uint32_t> slots;
+    std::vector<scene::vec3_t> positions;
+    std::vector<scene::quat_t> rotations;
+    std::vector<scene::vec3_t> scales;
+    std::vector<std::array<bool, 3>> moved;
+    std::vector<std::array<sum_t, 3>> sums;
+    std::vector<bool> allowed;
 };
 
 struct players_t {
@@ -94,6 +116,10 @@ struct players_t {
     std::vector<player_t> kept;
     /// The slots of the players with events kept.
     std::vector<std::uint32_t> evented;
+    /// The slots of the players an advance found their entities freed, until the FB side takes
+    /// them.
+    std::vector<std::uint32_t> orphans;
+    scratch_t scratch;
 };
 
 players_t& players() {
@@ -178,6 +204,29 @@ void stop_all(player_t& player) {
     player.events.clear();
 }
 
+/// Once tracks have gone, forgets that a clip's moving what none of those left moves, so what's
+/// done with it now is where the next clip to move it begins.
+void note_still_moved(player_t& player) {
+    std::vector<std::array<bool, 3>>& moved = players().scratch.moved;
+    moved.assign(player.bones.size(), {});
+    for (const layer_t& layer : player.layers) {
+        for (const track_t& track : layer.tracks) {
+            const std::vector<channel_t>& channels = kept_clip(track.clip).clip.channels;
+            for (std::size_t c = 0; c < track.bound.size(); ++c) {
+                const property_t property = channels[c].property;
+                if (property != property_t::WEIGHTS && track.bound[c].bone != scene::none) {
+                    moved[track.bound[c].bone][static_cast<std::size_t>(property)] = true;
+                }
+            }
+        }
+    }
+    for (std::size_t i = 0; i < player.bones.size(); ++i) {
+        for (std::size_t p = 0; p < moved[i].size(); ++p) {
+            player.bones[i].moving[p] = player.bones[i].moving[p] && moved[i][p];
+        }
+    }
+}
+
 /// The entity named `name`: the player's own, in slot `root`, or the first under it with the name,
 /// depth first; none has no name.
 std::uint64_t named(const player_t& player, std::uint32_t root, const std::string& name) {
@@ -190,31 +239,20 @@ std::uint64_t named(const player_t& player, std::uint32_t root, const std::strin
     return fbe_entity_find(player.entity, name.c_str());
 }
 
-/// The bone of an entity, made with where it is now if the player hasn't moved it yet; none for
-/// one freed.
+/// The bone of an entity, made if it hasn't one yet.
 std::uint32_t bone_of(player_t& player, std::uint64_t entity) {
     const auto found = std::ranges::find_if(
         player.bones, [&](const bone_t& bone) { return bone.entity == entity; });
     if (found != player.bones.end()) {
         return static_cast<std::uint32_t>(found - player.bones.begin());
     }
-    const scene::entities_t& entities = scene::scene().entities;
-    const auto slot = entities.slots.find(entity);
-    if (!slot) {
-        return scene::none;
-    }
-    player.bones.push_back({
-        .entity = entity,
-        .position = entities.position[*slot],
-        .rotation = entities.rotation[*slot],
-        .scale = entities.scale[*slot],
-    });
+    player.bones.push_back({ .entity = entity });
     return static_cast<std::uint32_t>(player.bones.size() - 1);
 }
 
 /// Binds each of a track's clip's channels to the bone of the entity its node names, under the
 /// player's entity, in slot `root`.
-void bind(player_t& player, track_t& track, std::uint32_t root) {
+void bind_channels(player_t& player, track_t& track, std::uint32_t root) {
     const kept_clip_t& kept = kept_clip(track.clip);
     std::vector<std::uint32_t> nodes;
     nodes.reserve(kept.clip.nodes.size());
@@ -229,16 +267,33 @@ void bind(player_t& player, track_t& track, std::uint32_t root) {
     track.version = kept.version;
 }
 
+/// Binds a track as bind_channels does, first forgetting the bones of entities freed since, and
+/// binding the other tracks again to what's left of them.
+void bind(player_t& player, track_t& track, std::uint32_t root) {
+    const scene::entities_t& entities = scene::scene().entities;
+    const std::size_t erased = std::erase_if(player.bones, [&](const bone_t& bone) {
+        return !entities.slots.find(bone.entity).has_value();
+    });
+    if (erased > 0) {
+        for (layer_t& layer : player.layers) {
+            for (track_t& other : layer.tracks) {
+                bind_channels(player, other, root);
+            }
+        }
+    }
+    bind_channels(player, track, root);
+}
+
 /// A new track of a clip, held, at its start, or its end going backward, bound.
 track_t track_of(player_t& player, std::uint32_t root, std::uint32_t clip, play_mode_t mode,
                  float speed) {
-    retain_clip(clip);
     track_t made;
     made.clip = clip;
     made.mode = mode;
     made.speed = speed;
     made.time = speed < 0.0F ? kept_clip(clip).clip.length : 0.0F;
     bind(player, made, root);
+    retain_clip(clip);
     return made;
 }
 
@@ -269,13 +324,22 @@ float placed(const track_t& track, float time, bool& backward) {
     return time;
 }
 
+/// Where a track is reaching events from: its player's slot, and its layer.
+struct reacher_t {
+    std::uint32_t player = 0;
+    std::int32_t layer = 0;
+};
+
 /// The events of `clip` a track passes going from `from` to `to`, forward or back, in the order
 /// it reaches them: after `from`, or at it too with `at_from`, up to `to`.
-void reach(const clip_t& clip, float from, float to, bool forward, bool at_from, std::int32_t layer,
-           std::vector<reached_t>& events) {
+void reach(const clip_t& clip, float from, float to, bool forward, bool at_from, reacher_t by) {
+    std::vector<reached_t>& events = players().kept[by.player].events;
     const auto add = [&](const event_t& event) {
+        if (events.empty()) {
+            players().evented.push_back(by.player);
+        }
         events.push_back(
-            { .name = event.name, .clip = clip.name, .layer = layer, .time = event.time });
+            { .name = event.name, .clip = clip.name, .layer = by.layer, .time = event.time });
     };
     if (forward) {
         for (const event_t& event : clip.events) {
@@ -294,8 +358,8 @@ void reach(const clip_t& clip, float from, float to, bool forward, bool at_from,
 
 /// Moves a track on by `seconds`: its weight toward where it's going, and its time as its speed
 /// and mode say, keeping the events it reaches.
-void move_on(track_t& track, float seconds, std::int32_t layer, std::vector<reached_t>& events) {
-    if (track.weight != track.target) {
+void move_on(track_t& track, float seconds, reacher_t by) {
+    if (track.weight != track.target && seconds > 0.0F) {
         const float step = track.rate * seconds;
         track.weight = track.weight < track.target ? std::min(track.weight + step, track.target)
                                                    : std::max(track.weight - step, track.target);
@@ -307,7 +371,7 @@ void move_on(track_t& track, float seconds, std::int32_t layer, std::vector<reac
     if (length <= 0.0F) {
         track.time = 0.0F;
         if (at_start) {
-            reach(clip, 0.0F, 0.0F, true, true, layer, events);
+            reach(clip, 0.0F, 0.0F, true, true, by);
         }
         return;
     }
@@ -317,7 +381,9 @@ void move_on(track_t& track, float seconds, std::int32_t layer, std::vector<reac
     float at = track.time;
     // Past many rounds, the ones between are skipped: their events once, not thousands of times.
     const float round = track.mode == play_mode_t::PING_PONG ? 2.0F * length : length;
-    if (track.mode != play_mode_t::ONCE && left > round * static_cast<float>(most_rounds)) {
+    if (!std::isfinite(left)) {
+        left = round;
+    } else if (track.mode != play_mode_t::ONCE && left > round * static_cast<float>(most_rounds)) {
         left = std::fmod(left, round) + round;
     }
     for (int rounds = 0; rounds <= 2 * most_rounds; ++rounds) {
@@ -325,12 +391,12 @@ void move_on(track_t& track, float seconds, std::int32_t layer, std::vector<reac
         if (left <= room || track.mode == play_mode_t::ONCE) {
             const float to = forward ? at + std::min(left, room) : at - std::min(left, room);
             if (to != at || at_from) {
-                reach(clip, at, to, forward, at_from, layer, events);
+                reach(clip, at, to, forward, at_from, by);
             }
             at = to;
             break;
         }
-        reach(clip, at, forward ? length : 0.0F, forward, at_from, layer, events);
+        reach(clip, at, forward ? length : 0.0F, forward, at_from, by);
         left -= room;
         if (track.mode == play_mode_t::LOOP) {
             at = forward ? 0.0F : length;
@@ -345,16 +411,14 @@ void move_on(track_t& track, float seconds, std::int32_t layer, std::vector<reac
     track.backward = forward != (track.speed >= 0.0F);
 }
 
-/// Whether bone `bone` is one a layer moves: all for no mask, else those its mask names and
-/// those under them.
-bool masked_in(const layer_t& layer, const bone_t& bone) {
+/// Whether the entity in `slot` is one a layer moves: all for no mask, else those its mask names
+/// and those under them.
+bool masked_in(const layer_t& layer, std::uint32_t slot) {
     if (layer.mask.empty()) {
         return true;
     }
     const scene::entities_t& entities = scene::scene().entities;
-    const auto slot = entities.slots.find(bone.entity);
-    for (std::uint32_t at = slot ? *slot : scene::none; at != scene::none;
-         at = entities.parent[at]) {
+    for (std::uint32_t at = slot; at != scene::none; at = entities.parent[at]) {
         if (std::ranges::contains(layer.mask, entities.slots.handle(at))) {
             return true;
         }
@@ -375,17 +439,104 @@ scene::quat_t nlerp(scene::quat_t a, scene::quat_t b, float t) {
                               (a.z * (1.0F - t)) + (b.z * to), (a.w * (1.0F - t)) + (b.w * to) });
 }
 
-/// What a layer makes of one bone's property: its tracks' values summed by their weights, and
-/// whether a track moves it at all, as one faded all the way out still does, back to its rest.
-struct sum_t {
-    std::array<float, 4> value{};
-    float weight = 0.0F;
-    bool moved = false;
-};
+/// A clip's about to move a bone's property that no clip moved in the last pose: it starts from
+/// where the entity is now.
+void begin_moving(bone_t& bone, std::size_t bone_index, std::size_t property) {
+    scene::entities_t& entities = scene::scene().entities;
+    scratch_t& scratch = players().scratch;
+    const std::uint32_t slot = scratch.slots[bone_index];
+    switch (static_cast<property_t>(property)) {
+    case property_t::TRANSLATION:
+        bone.position = entities.position[slot];
+        scratch.positions[bone_index] = bone.position;
+        break;
+    case property_t::ROTATION:
+        bone.rotation = entities.rotation[slot];
+        scratch.rotations[bone_index] = bone.rotation;
+        break;
+    case property_t::SCALE:
+        bone.scale = entities.scale[slot];
+        scratch.scales[bone_index] = bone.scale;
+        break;
+    case property_t::WEIGHTS:
+        break;
+    }
+}
 
-/// Poses the entities a player's clips move: each bone from where it was before the player moved
-/// it, each layer over the ones before; a bone no clip moves now is left as it is. Its entity is
-/// in slot `root`, and tracks whose clips changed are bound again first.
+/// Sums what a layer's tracks make of each bone's properties into the scratch's sums, marking what
+/// they move, whatever their weights: at none, they take it back to where it began.
+void sum_tracks(player_t& player, layer_t& layer) {
+    scratch_t& scratch = players().scratch;
+    std::array<float, 4> value{};
+    for (track_t& track : layer.tracks) {
+        const clip_t& clip = kept_clip(track.clip).clip;
+        const float weight = layer.weight > 0.0F ? track.weight : 0.0F;
+        for (std::size_t c = 0; c < clip.channels.size(); ++c) {
+            const channel_t& channel = clip.channels[c];
+            const std::uint32_t bone = track.bound[c].bone;
+            if (channel.property == property_t::WEIGHTS || bone == scene::none ||
+                !scratch.allowed[bone]) {
+                continue;
+            }
+            const auto property = static_cast<std::size_t>(channel.property);
+            if (!scratch.moved[bone][property]) {
+                scratch.moved[bone][property] = true;
+                if (!player.bones[bone].moving[property]) {
+                    begin_moving(player.bones[bone], bone, property);
+                }
+            }
+            if (weight <= 0.0F) {
+                continue;
+            }
+            sum_t& sum = scratch.sums[bone][property];
+            sample(channel, track.time, track.bound[c].cursor, value);
+            float w = weight;
+            // Each rotation the same way round as those before it, so they don't cancel.
+            if (channel.property == property_t::ROTATION && sum.weight > 0.0F &&
+                (sum.value[0] * value[0]) + (sum.value[1] * value[1]) + (sum.value[2] * value[2]) +
+                        (sum.value[3] * value[3]) <
+                    0.0F) {
+                w = -w;
+            }
+            for (std::size_t k = 0; k < channel.width; ++k) {
+                sum.value[k] += value[k] * w;
+            }
+            sum.weight += weight;
+        }
+    }
+}
+
+/// Lays a layer's sums over what the layers before it made.
+void lay_over(float weight, std::size_t count) {
+    scratch_t& scratch = players().scratch;
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& [moving, turning, growing] = scratch.sums[i];
+        if (moving.weight > 0.0F) {
+            const float t = weight * std::min(moving.weight, 1.0F);
+            const scene::vec3_t mean{ moving.value[0] / moving.weight,
+                                      moving.value[1] / moving.weight,
+                                      moving.value[2] / moving.weight };
+            scratch.positions[i] = lerp(scratch.positions[i], mean, t);
+        }
+        if (turning.weight > 0.0F) {
+            const float t = weight * std::min(turning.weight, 1.0F);
+            const scene::quat_t mean = scene::normalize(
+                { turning.value[0], turning.value[1], turning.value[2], turning.value[3] });
+            scratch.rotations[i] = nlerp(scratch.rotations[i], mean, t);
+        }
+        if (growing.weight > 0.0F) {
+            const float t = weight * std::min(growing.weight, 1.0F);
+            const scene::vec3_t mean{ growing.value[0] / growing.weight,
+                                      growing.value[1] / growing.weight,
+                                      growing.value[2] / growing.weight };
+            scratch.scales[i] = lerp(scratch.scales[i], mean, t);
+        }
+    }
+}
+
+/// Poses the entities a player's clips move: each property from where it was when a clip began
+/// moving it, each layer over the ones before; what no clip moves now is left as it is. Its entity
+/// is in slot `root`, and tracks whose clips changed are bound again first.
 void pose(player_t& player, std::uint32_t root) {
     for (layer_t& layer : player.layers) {
         for (track_t& track : layer.tracks) {
@@ -394,121 +545,97 @@ void pose(player_t& player, std::uint32_t root) {
             }
         }
     }
+    scene::entities_t& entities = scene::scene().entities;
+    scratch_t& scratch = players().scratch;
     const std::size_t count = player.bones.size();
-    std::vector<scene::vec3_t> positions(count);
-    std::vector<scene::quat_t> rotations(count);
-    std::vector<scene::vec3_t> scales(count);
-    std::vector<std::array<bool, 3>> moved(count);
+    scratch.slots.resize(count);
+    scratch.positions.resize(count);
+    scratch.rotations.resize(count);
+    scratch.scales.resize(count);
+    scratch.moved.assign(count, {});
+    scratch.sums.resize(count);
+    scratch.allowed.resize(count);
     for (std::size_t i = 0; i < count; ++i) {
-        positions[i] = player.bones[i].position;
-        rotations[i] = player.bones[i].rotation;
-        scales[i] = player.bones[i].scale;
+        const bone_t& bone = player.bones[i];
+        scratch.slots[i] = entities.slots.find(bone.entity).value_or(scene::none);
+        scratch.positions[i] = bone.position;
+        scratch.rotations[i] = bone.rotation;
+        scratch.scales[i] = bone.scale;
     }
-    std::vector<std::array<sum_t, 3>> sums(count);
-    std::vector<bool> allowed(count);
-    std::array<float, 4> value{};
-    const scene::entities_t& entities = scene::scene().entities;
     for (layer_t& layer : player.layers) {
-        if (layer.tracks.empty() || layer.weight <= 0.0F) {
+        if (layer.tracks.empty()) {
             continue;
         }
         for (std::size_t i = 0; i < count; ++i) {
-            sums[i] = {};
-            allowed[i] = masked_in(layer, player.bones[i]) &&
-                         entities.slots.find(player.bones[i].entity).has_value();
+            scratch.sums[i] = {};
+            scratch.allowed[i] =
+                scratch.slots[i] != scene::none && masked_in(layer, scratch.slots[i]);
         }
-        for (track_t& track : layer.tracks) {
-            const clip_t& clip = kept_clip(track.clip).clip;
-            for (std::size_t c = 0; c < clip.channels.size(); ++c) {
-                const channel_t& channel = clip.channels[c];
-                const std::uint32_t bone = track.bound[c].bone;
-                if (channel.property == property_t::WEIGHTS || bone == scene::none ||
-                    !allowed[bone]) {
-                    continue;
-                }
-                sum_t& sum = sums[bone][static_cast<std::size_t>(channel.property)];
-                sum.moved = true;
-                if (track.weight <= 0.0F) {
-                    continue;
-                }
-                sample(channel, track.time, track.bound[c].cursor, value);
-                float w = track.weight;
-                // Each rotation the same way round as those before it, so they don't cancel.
-                if (channel.property == property_t::ROTATION && sum.weight > 0.0F &&
-                    (sum.value[0] * value[0]) + (sum.value[1] * value[1]) +
-                            (sum.value[2] * value[2]) + (sum.value[3] * value[3]) <
-                        0.0F) {
-                    w = -w;
-                }
-                for (std::size_t k = 0; k < channel.width; ++k) {
-                    sum.value[k] += value[k] * w;
-                }
-                sum.weight += track.weight;
-            }
-        }
-        for (std::size_t i = 0; i < count; ++i) {
-            const std::array<sum_t, 3>& sum = sums[i];
-            const auto& [moving, turning, growing] = sum;
-            if (moving.weight > 0.0F) {
-                const float t = layer.weight * std::min(moving.weight, 1.0F);
-                const scene::vec3_t mean{ moving.value[0] / moving.weight,
-                                          moving.value[1] / moving.weight,
-                                          moving.value[2] / moving.weight };
-                positions[i] = lerp(positions[i], mean, t);
-            }
-            if (turning.weight > 0.0F) {
-                const float t = layer.weight * std::min(turning.weight, 1.0F);
-                const scene::quat_t mean = scene::normalize(
-                    { turning.value[0], turning.value[1], turning.value[2], turning.value[3] });
-                rotations[i] = nlerp(rotations[i], mean, t);
-            }
-            if (growing.weight > 0.0F) {
-                const float t = layer.weight * std::min(growing.weight, 1.0F);
-                const scene::vec3_t mean{ growing.value[0] / growing.weight,
-                                          growing.value[1] / growing.weight,
-                                          growing.value[2] / growing.weight };
-                scales[i] = lerp(scales[i], mean, t);
-            }
-            moved[i][0] = moved[i][0] || moving.moved;
-            moved[i][1] = moved[i][1] || turning.moved;
-            moved[i][2] = moved[i][2] || growing.moved;
-        }
+        sum_tracks(player, layer);
+        lay_over(layer.weight, count);
     }
-    scene::entities_t& writing = scene::scene().entities;
     for (std::size_t i = 0; i < count; ++i) {
-        const auto slot = writing.slots.find(player.bones[i].entity);
-        if (!slot || (!moved[i][0] && !moved[i][1] && !moved[i][2])) {
+        const std::array<bool, 3>& moved = scratch.moved[i];
+        player.bones[i].moving = moved;
+        const std::uint32_t slot = scratch.slots[i];
+        if (slot == scene::none || (!moved[0] && !moved[1] && !moved[2])) {
             continue;
         }
-        if (moved[i][0]) {
-            writing.position[*slot] = positions[i];
+        if (moved[0]) {
+            entities.position[slot] = scratch.positions[i];
         }
-        if (moved[i][1]) {
-            writing.rotation[*slot] = rotations[i];
+        if (moved[1]) {
+            entities.rotation[slot] = scratch.rotations[i];
         }
-        if (moved[i][2]) {
-            writing.scale[*slot] = scales[i];
+        if (moved[2]) {
+            entities.scale[slot] = scratch.scales[i];
         }
-        scene::mark_moved(*slot);
+        scene::mark_moved(slot);
     }
 }
 
-/// Lets go of the tracks of a layer that have faded out.
-void drop_faded(layer_t& layer) {
-    std::erase_if(layer.tracks, [](const track_t& track) {
-        if (track.target > 0.0F || track.weight > 0.0F) {
-            return false;
-        }
-        release_clip(track.clip);
-        return true;
-    });
+/// Lets go of the tracks of a layer that have faded out; gives whether any have.
+bool drop_faded(layer_t& layer) {
+    return std::erase_if(layer.tracks, [](const track_t& track) {
+               if (track.target > 0.0F || track.weight > 0.0F) {
+                   return false;
+               }
+               release_clip(track.clip);
+               return true;
+           }) > 0;
 }
 
-/// A layer's track of `clip`, or null.
-track_t* track_playing(layer_t& layer, std::uint32_t clip) {
-    const auto found = std::ranges::find_if(
-        layer.tracks, [&](const track_t& track) { return track.clip == clip; });
-    return found != layer.tracks.end() ? &*found : nullptr;
+/// Whether a track's clip has somewhere still to go: not one played once and at its end, which
+/// stays there until it's stopped.
+bool still_playing(const track_t& track) {
+    if (track.mode != play_mode_t::ONCE) {
+        return true;
+    }
+    return track.speed >= 0.0F ? track.time < length_of(track) : track.time > 0.0F;
+}
+
+/// Where in a layer's tracks the last of `clip` is, or their end.
+std::vector<track_t>::iterator track_of_clip(layer_t& layer, std::uint32_t clip) {
+    const auto found =
+        std::ranges::find_if(std::views::reverse(layer.tracks),
+                             [&](const track_t& track) { return track.clip == clip; });
+    return found != std::views::reverse(layer.tracks).end() ? std::prev(found.base())
+                                                            : layer.tracks.end();
+}
+
+/// Whether `clip` is what a layer's playing: the track played last, not stopping.
+bool is_playing(const layer_t& layer, std::uint32_t clip) {
+    return !layer.tracks.empty() && layer.tracks.back().clip == clip &&
+           layer.tracks.back().target > 0.0F;
+}
+
+/// A track going on in `mode` at `speed`, forward unless ping-pong has it on its way back.
+void set_going(track_t& track, play_mode_t mode, float speed) {
+    if (mode != play_mode_t::PING_PONG) {
+        track.backward = false;
+    }
+    track.mode = mode;
+    track.speed = speed;
 }
 
 /// The track a layer played last, which it plays or fades in, or null for none, or one stopping.
@@ -576,6 +703,7 @@ FBE_API bool fbe_player_free(uint64_t player) {
     fbe::anim::stop_all(players().kept[slot]);
     players().kept[slot] = {};
     std::erase(players().evented, slot);
+    std::erase(players().orphans, slot);
     players().slots.free(slot);
     return true;
 }
@@ -603,18 +731,13 @@ FBE_API bool fbe_player_play(uint64_t player, int32_t layer, uint64_t clip, int3
     }
     try {
         const auto playing = static_cast<play_mode_t>(mode);
-        if (on->tracks.size() == 1 && on->tracks.back().clip == slot &&
-            on->tracks.back().target > 0.0F) {
-            track_t& track = on->tracks.back();
-            track.mode = playing;
-            track.speed = speed;
-            track.weight = 1.0F;
-            track.target = 1.0F;
-        } else {
-            track_t made = fbe::anim::track_of(*found, root, slot, playing, speed);
-            fbe::anim::clear(*on);
-            on->tracks.push_back(std::move(made));
+        if (fbe::anim::is_playing(*on, slot)) {
+            fbe::anim::set_going(on->tracks.back(), playing, speed);
+            return true;
         }
+        track_t made = fbe::anim::track_of(*found, root, slot, playing, speed);
+        fbe::anim::clear(*on);
+        on->tracks.push_back(std::move(made));
         fbe::anim::pose(*found, root);
         return true;
     } catch (const std::bad_alloc&) {
@@ -641,18 +764,21 @@ FBE_API bool fbe_player_crossfade(uint64_t player, int32_t layer, uint64_t clip,
         return false;
     }
     try {
-        const track_t* again = fbe::anim::track_playing(*on, slot);
+        const auto playing = static_cast<play_mode_t>(mode);
+        if (fbe::anim::is_playing(*on, slot)) {
+            fbe::anim::set_going(on->tracks.back(), playing, speed);
+            return true;
+        }
+        const auto again = fbe::anim::track_of_clip(*on, slot);
         track_t coming;
-        if (again != nullptr) {
-            const auto at = on->tracks.begin() + (again - on->tracks.data());
-            coming = std::move(*at);
-            on->tracks.erase(at);
+        if (again != on->tracks.end()) {
+            coming = std::move(*again);
+            on->tracks.erase(again);
+            fbe::anim::set_going(coming, playing, speed);
         } else {
-            coming = fbe::anim::track_of(*found, root, slot, static_cast<play_mode_t>(mode), speed);
+            coming = fbe::anim::track_of(*found, root, slot, playing, speed);
             coming.weight = 0.0F;
         }
-        coming.mode = static_cast<play_mode_t>(mode);
-        coming.speed = speed;
         coming.target = 1.0F;
         coming.rate = (1.0F - coming.weight) / seconds;
         for (track_t& going : on->tracks) {
@@ -676,6 +802,7 @@ FBE_API bool fbe_player_stop(uint64_t player, int32_t layer, float seconds) {
     }
     if (seconds == 0.0F) {
         fbe::anim::clear(*on);
+        fbe::anim::note_still_moved(*found);
         return true;
     }
     for (track_t& going : on->tracks) {
@@ -698,14 +825,7 @@ FBE_API bool fbe_player_playing(uint64_t player, int32_t layer) {
     std::uint32_t root = none;
     layer_t* on = fbe::anim::live_layer(player, layer, found, root);
     const track_t* track = on != nullptr ? fbe::anim::newest(*on) : nullptr;
-    if (track == nullptr) {
-        return false;
-    }
-    if (track->mode != play_mode_t::ONCE) {
-        return true;
-    }
-    const bool forward = track->speed >= 0.0F;
-    return forward ? track->time < fbe::anim::length_of(*track) : track->time > 0.0F;
+    return track != nullptr && fbe::anim::still_playing(*track);
 }
 
 FBE_API bool fbe_player_set_time(uint64_t player, int32_t layer, float time) {
@@ -723,9 +843,6 @@ FBE_API bool fbe_player_set_time(uint64_t player, int32_t layer, float time) {
         return true;
     }
     track->time = fbe::anim::placed(*track, time, track->backward);
-    if (track->speed < 0.0F) {
-        track->backward = !track->backward;
-    }
     track->started = true;
     fbe::anim::pose(*found, root);
     return true;
@@ -822,33 +939,38 @@ FBE_API bool fbe_player_advance(uint64_t world, float seconds) {
                 continue;
             }
             const auto root = entities.slots.find(player.entity);
-            // One whose entity was freed lets go of what it played.
+            // One whose entity was freed lets go of what it played, once.
             if (!root) {
-                fbe::anim::stop_all(player);
-                std::erase(all.evented, slot);
+                if (!player.orphaned) {
+                    player.orphaned = true;
+                    fbe::anim::stop_all(player);
+                    std::erase(all.evented, slot);
+                    all.orphans.push_back(slot);
+                }
                 continue;
             }
             if (entities.world[*root] != in) {
                 continue;
             }
-            const std::size_t had = player.events.size();
             bool playing = false;
             for (std::size_t index = 0; index < player.layers.size(); ++index) {
                 layer_t& layer = player.layers[index];
                 for (track_t& track : layer.tracks) {
-                    fbe::anim::move_on(track, seconds, static_cast<std::int32_t>(index),
-                                       player.events);
+                    fbe::anim::move_on(
+                        track, seconds,
+                        { .player = slot, .layer = static_cast<std::int32_t>(index) });
                 }
                 playing = playing || !layer.tracks.empty();
             }
             if (playing) {
                 fbe::anim::pose(player, *root);
             }
+            bool dropped = false;
             for (layer_t& layer : player.layers) {
-                fbe::anim::drop_faded(layer);
+                dropped = fbe::anim::drop_faded(layer) || dropped;
             }
-            if (had == 0 && !player.events.empty()) {
-                all.evented.push_back(slot);
+            if (dropped) {
+                fbe::anim::note_still_moved(player);
             }
         }
         return true;
@@ -866,6 +988,29 @@ FBE_API int32_t fbe_player_evented(uint64_t* handles, int32_t capacity) {
         out[i] = all.slots.handle(all.evented[i]);
     }
     return static_cast<int32_t>(all.evented.size());
+}
+
+FBE_API int32_t fbe_player_orphans(uint64_t* handles, int32_t capacity) {
+    auto& all = players();
+    const std::size_t room =
+        handles != nullptr && capacity > 0 ? static_cast<std::size_t>(capacity) : 0;
+    const std::span<uint64_t> out(handles, std::min(room, all.orphans.size()));
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        out[i] = all.slots.handle(all.orphans[i]);
+    }
+    all.orphans.erase(all.orphans.begin(),
+                      all.orphans.begin() + static_cast<std::ptrdiff_t>(out.size()));
+    return static_cast<int32_t>(out.size());
+}
+
+FBE_API int64_t fbe_player_count(void) {
+    return static_cast<int64_t>(std::ranges::count_if(
+        players().kept, [](const player_t& player) { return player.entity != 0; }));
+}
+
+FBE_API int32_t fbe_player_bone_count(uint64_t player) {
+    const std::uint32_t slot = fbe::anim::player_slot(player);
+    return slot != none ? static_cast<int32_t>(players().kept[slot].bones.size()) : 0;
 }
 
 FBE_API int32_t fbe_player_event_count(uint64_t player) {

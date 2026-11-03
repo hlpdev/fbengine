@@ -27,15 +27,18 @@ FBE_API bool fbe_skin_release(uint64_t skin);
 FBE_API bool fbe_skin_alive(uint64_t skin);
 
 // A new skin of skin `index` of a model load's glTF, its joints by their nodes' names, with its
-// inverse binds; 0 for a load that isn't a model load done and loaded, an index out of range, or a
-// joint whose node has no name, or the name of one before it.
+// inverse binds; 0 for a load that isn't a model load done and loaded, an index out of range, or
+// what's in the file: a joint whose node has no name, or the name of one before it, or inverse
+// binds that aren't one a joint, or numbers.
 FBE_API uint64_t fbe_skin_from_model(uint64_t load, int32_t index);
+// Whether the last fbe_skin_from_model gave 0 for what's in the file, rather than how it was asked.
+FBE_API bool fbe_skin_model_invalid(void);
 
 // Adds a joint named `name`, the inverse of its bind matrix in `inverse_bind`'s 16 floats. False
 // for a freed skin, a name that's empty or a joint's already, or a matrix that isn't numbers.
 FBE_API bool fbe_skin_add_joint(uint64_t skin, const char* name, const float* inverse_bind);
-// How many joints it has, 0 for a freed skin; joint `joint`'s name, valid until the skin's freed,
-// or "" for one out of range.
+// How many joints it has, 0 for a freed skin; joint `joint`'s name, valid until the skin changes or
+// is freed, or "" for one out of range.
 FBE_API int32_t fbe_skin_joint_count(uint64_t skin);
 FBE_API const char* fbe_skin_joint_name(uint64_t skin, int32_t joint);
 
