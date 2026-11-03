@@ -12,6 +12,7 @@
 #include "video/decoder.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +39,7 @@ constexpr std::int64_t samples_per_frame = 1152;
 // Start codes, 00 00 01 and a byte, which MPEG-1 video has nowhere else.
 constexpr std::uint32_t picture_start_code = 0x00000100U;
 constexpr std::uint32_t group_start_code = 0x000001B8U;
+constexpr std::uint32_t sequence_start_code = 0x000001B3U;
 
 // How much silence a sound's times can make, past its own frames, in seconds: the video's length,
 // but at least the one and at most the other.
@@ -157,6 +159,24 @@ void find_groups(stream_t& stream) {
     if (stream.groups.empty() || stream.groups.front().first != 0) {
         stream.groups.insert(stream.groups.begin(), group_t{});
     }
+}
+
+// How wide the pixels of the video's elementary stream `video` are shown against how high: its
+// first sequence header's aspect code says how high against how wide. 1 if it says nothing.
+double pixel_aspect_of(std::span<const std::uint8_t> video) {
+    static constexpr std::array<double, 16> heights{
+        1.0,    1.0,    0.6735, 0.7031, 0.7615, 0.8055, 0.8437, 0.8935,
+        0.9157, 0.9815, 1.0255, 1.0695, 1.0950, 1.1575, 1.2015, 1.0,
+    };
+    std::uint32_t last = 0xFFFFFFFFU;
+    for (std::size_t i = 0; i < video.size(); ++i) {
+        last = (last << 8U) | video[i];
+        if (last == sequence_start_code) {
+            // 12 bits of width and of height, then the code, 3 bytes on.
+            return i + 4 < video.size() ? 1.0 / heights.at(video[i + 4] >> 4U) : 1.0;
+        }
+    }
+    return 1.0;
 }
 
 // The program stream `bytes`, taken apart.
@@ -451,6 +471,10 @@ public:
 
     [[nodiscard]] double duration() const override {
         return static_cast<double>(m_stream.pictures) / m_frame_rate;
+    }
+
+    [[nodiscard]] double pixel_aspect() const override {
+        return pixel_aspect_of(m_stream.bytes);
     }
 
     [[nodiscard]] std::int64_t next_start(std::int64_t number) const override {

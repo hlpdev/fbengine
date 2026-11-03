@@ -737,3 +737,61 @@ Function BodiesKeptWithEntitiesRepeatBitForBit() Throws PhysicsStateError
     End For
     Expect(runs[0] == runs[1], "{runs[0]}, then {runs[1]}")
 End Function
+
+// A parent moved each frame, faster than steps come: each Flip has its driven child where its body
+// is, though no step's moved anything.
+@Test @MainThread
+Function AParentedEntityIsWhereItsBodyIsAfterEachFlip()
+    Local scene = World()
+    World.SetCurrent(scene)
+    Defer scene.Free()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    world.SetGravity(Vec3(0, 0, 0))
+    Local holder = Pivot()
+    Local child = Pivot(holder)
+    child.SetPosition(Vec3(0, 3, 0))
+    Local body = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, child)
+    For frame = 1 To 24
+        holder.SetPosition(Vec3((frame As Float) * 0.1, 0, 0))
+        world.Update(1.0 / 240)
+        Flip(False)
+        Expect(Near(child.Position(Space.WORLD), body.Position(), 2e-4),
+               "at frame {frame} it's at {child.Position(Space.WORLD)}, not {body.Position()}")
+    End For
+    // Its parent let go of, a Flip with no step notices.
+    child.SetParent(Null, False)
+    Flip(False)
+    Expect(Near(child.Position(Space.WORLD), body.Position(), 2e-4),
+           "it's at {child.Position(Space.WORLD)}, not {body.Position()}")
+End Function
+
+// A Restore has every entity kept where its body is: a sleeper's the game moved, and one under a
+// followed lift, whichever order they come.
+@Test @MainThread
+Function ARestorePutsEveryKeptEntityWhereItsBodyIs() Throws PhysicsStateError
+    Local scene = World()
+    World.SetCurrent(scene)
+    Defer scene.Free()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    world.SetGravity(Vec3(0, 0, 0))
+    Local sleeper = Pivot()
+    Local sleeping = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, sleeper)
+    sleeping.Sleep()
+    Local lift = Pivot()
+    Local lifting = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.KINEMATIC, lift)
+    Local rider = Pivot(lift)
+    rider.SetPosition(Vec3(0, 3, 0))
+    Local riding = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, rider)
+    world.Sync()
+    Local saved = world.Save()
+    sleeper.SetPosition(Vec3(5, 0, 0))
+    lift.SetPosition(Vec3(6, 0, 0))
+    world.Step(1.0 / 60)
+    Try world.Restore(saved)
+    Expect(sleeper.Position() == sleeping.Position(), "the sleeper's at {sleeper.Position()}")
+    Expect(lift.Position() == lifting.Position(), "the lift's at {lift.Position()}")
+    Expect(Near(rider.Position(Space.WORLD), riding.Position(), 2e-4),
+           "the rider's at {rider.Position(Space.WORLD)}, not {riding.Position()}")
+End Function

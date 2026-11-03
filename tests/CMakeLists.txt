@@ -553,6 +553,23 @@ target_link_libraries(fbengine_video_thread_tests PRIVATE Catch2::Catch2WithMain
 fbengine_set_warnings(fbengine_video_thread_tests)
 catch_discover_tests(fbengine_video_thread_tests TEST_PREFIX "video."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# What fbengine_video panics for, each by a run of tests/video/panics, which says it.
+if(FBENGINE_FB_TESTS)
+  foreach(case IN ITEMS "update-huge;Update: a video's clock moves on by 0 to a billion"
+                        "update-huge-with-sound;Update: a video's clock moves on by 0 to a billion"
+                        "volume-negative;SetVolume: a volume is 0 or more"
+                        "volume-infinite;SetVolume: a volume is 0 or more"
+                        "fit-nothing;Fit: a video's fitted into more than 0 by 0")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME video.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/video/panics"
+                     -- ${name} "${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media/colors.mpg")
+    set_tests_properties(video.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION
+                         "panic: Video\\.${said}" TIMEOUT 60)
+  endforeach()
+endif()
 # text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
 # test fonts.
 file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")

@@ -458,6 +458,11 @@ FBE_VIDEO_API double fbe_video_duration(uint64_t video) {
     return found != nullptr ? found->duration : 0.0;
 }
 
+FBE_VIDEO_API double fbe_video_pixel_aspect(uint64_t video) {
+    const video_t* found = find(video);
+    return found != nullptr ? found->decoder->pixel_aspect() : 0.0;
+}
+
 FBE_VIDEO_API bool fbe_video_has_sound(uint64_t video) {
     const video_t* found = find(video);
     return found != nullptr && found->sound_rate > 0;

@@ -13,6 +13,7 @@ Public Extern "C" Lib "fbengine_video_native"
     Function fbe_video_height(video: UInt64): Int32
     Function fbe_video_frame_rate(video: UInt64): Float64
     Function fbe_video_duration(video: UInt64): Float64
+    Function fbe_video_pixel_aspect(video: UInt64): Float64
     Function fbe_video_has_sound(video: UInt64): Bool
     Function fbe_video_sound_rate(video: UInt64): Int32
     Function fbe_video_sound_channels(video: UInt64): Int32

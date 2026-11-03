@@ -18,6 +18,7 @@ Import fbengine
 Import fbengine_audio
 Import fbengine_video
 
+Try Graphics(1280, 720)
 Try Audio.Start()
 Local intro = Try Video.Open("intro.mpg")
 intro.Play()

@@ -64,6 +64,10 @@ public:
     [[nodiscard]] virtual std::int64_t frames() const = 0;
     /// How long it is, in seconds.
     [[nodiscard]] virtual double duration() const = 0;
+    /// How wide its pixels are shown against how high.
+    [[nodiscard]] virtual double pixel_aspect() const {
+        return 1.0;
+    }
 
     /// The number of the first picture after `number` that a seek starts decoding at, past which
     /// a seek's quicker than decoding on; the most an int64_t holds if there's none.

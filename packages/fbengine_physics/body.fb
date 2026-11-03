@@ -168,7 +168,13 @@ Public Final Class Body
     /// Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 5, 0))
     /// Local shown = Pivot()
     /// ball.Drive(shown)
-    /// world.Update(0.5)
+    /// Local logic = FixedStep(60)
+    /// For step = 1 To logic.Steps(0.5)
+    ///     CaptureWorld()
+    ///     // The game's logic goes here, then the scene's collisions, then the world's step.
+    ///     UpdateWorld(logic.Seconds())
+    ///     world.Step(logic.Seconds())
+    /// End For
     /// Expect(shown.Position(Space.WORLD) == ball.Position())
     /// world.Free()
     /// scene.Free()

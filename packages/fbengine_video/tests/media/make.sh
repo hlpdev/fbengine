@@ -15,6 +15,7 @@
 #               B-frames before each P-frame, and a tone.
 #   opengop.mpg: count.mpg's pictures with countb.mpg's B-frames, so its groups after the first
 #               are open, and 2 s of pink noise at 64 kb/s.
+#   wide.mpg:   count.mpg's pictures, its pixels shown for a shape of 16 by 9.
 #   longgroup.mpg: 320 by 240, 30 frames a second, 4 s of gray noise in one group of 120
 #               pictures, so a seek near its end decodes them all.
 # Made from them by hand, as a review found them, and checked in as they are:
@@ -60,3 +61,5 @@ ffmpeg -v error -y -f lavfi -i "$count" -f lavfi -i "anoisesrc=d=2:c=pink:r=4410
     -ac 2 -c:v mpeg1video -q:v 2 -g 12 -bf 2 -sc_threshold 1000000000 -c:a mp2 -b:a 64k -f mpeg opengop.mpg
 ffmpeg -v error -y -f lavfi -i "color=c=gray:s=320x240:r=30:d=4,noise=alls=20:allf=t" \
     -an -c:v mpeg1video -q:v 31 -g 120 -sc_threshold 1000000000 -f mpeg longgroup.mpg
+ffmpeg -v error -y -f lavfi -i "$count" \
+    -an -c:v mpeg1video -q:v 2 -g 12 -aspect 16:9 -sc_threshold 1000000000 -f mpeg wide.mpg

@@ -514,8 +514,9 @@ Public Final Class PhysicsWorld
         owed = carried
         began.Clear()
         ended.Clear()
-        attachments.Drive(fbe_physics_moves(world))
         attachments.FollowersToBodies()
+        attachments.ForgetDriven()
+        attachments.Drive(fbe_physics_moves(world))
     End Method
 
     // What began and ended in the step just taken.

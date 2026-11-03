@@ -59,6 +59,8 @@ Package Final Class Attachments
     Field followersStale: Bool = False
     // The world's count of what's moved its bodies at the last batch.
     Field lastMoves: Int64 = -1
+    // Whether any entity a body drives has a parent, which can move with no count of its own.
+    Field parented: Bool = False
     // How many entities' poses have been written, for what's tested of them.
     Package Field writes: Int64 = 0
 
@@ -106,9 +108,17 @@ Package Final Class Attachments
     End Method
 
     /// Drive, unless the world's count of what moves its bodies is what it was at the last one,
-    /// `moves` now, and nothing's been attached since.
+    /// `moves` now, nothing's been attached since, and no entity it drives has a parent.
     @MainThread Package Method DriveIfMoved(moves: Int64)
-        If moves != lastMoves || stale Then Drive(moves)
+        If moves != lastMoves || stale || parented Then Drive(moves)
+    End Method
+
+    /// Has the next Drive write them all, wherever they've been put, as a Restore does.
+    Package Method ForgetDriven()
+        For attached In driving
+            attached.unread = True
+        End For
+        stale = True
     End Method
 
     /// Puts each entity of a driving body whose pose changed where its body is, in the world:
@@ -241,8 +251,10 @@ Package Final Class Attachments
     @MainThread Method InOrder(): Bool
         Local ordered = True
         Local last = 0
+        parented = False
         For attached In driving
             Local depth = DepthOf(attached.entity)
+            If depth > 0 Then parented = True
             If depth != attached.depth
                 attached.depth = depth
                 attached.unread = True

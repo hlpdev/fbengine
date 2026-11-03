@@ -53,6 +53,10 @@ FBE_VIDEO_API int32_t fbe_video_height(uint64_t video);
 FBE_VIDEO_API double fbe_video_frame_rate(uint64_t video);
 FBE_VIDEO_API double fbe_video_duration(uint64_t video);
 
+// How wide `video`'s pixels are shown against how high, as its file says, 1 for square, 0 if it
+// isn't a video.
+FBE_VIDEO_API double fbe_video_pixel_aspect(uint64_t video);
+
 // Whether `video` has sound, and its frames a second and channels; 0 for a video without, or what
 // isn't a video.
 FBE_VIDEO_API bool fbe_video_has_sound(uint64_t video);
