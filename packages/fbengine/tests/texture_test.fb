@@ -159,6 +159,10 @@ Function ATextureLoadedKeepsItsPathThroughItsMaterial() Throws GraphicsError, IO
     Local loaded = Try Texture.Load(path, False)
     Expect(loaded.Path() == "{path}")
     Expect((Try Texture(1, 1)).Path() == Null)
+    // An HDR file's the same.
+    Local bright = folder.Path / "sky.hdr"
+    Try File.WriteBytes(bright, Hdr.Encode(HdrImage(2, 2)))
+    Expect((Try Texture.Load(bright, False)).Path() == "{bright}")
     Expect(Sprite2D(loaded).Texture().Path() == "{path}")
     Local world = World()
     World.SetCurrent(world)

@@ -7,6 +7,7 @@ Import std.ffi
 Import std.image
 Import std.io
 Import std.math
+Import std.text
 Import "./c/fbe_texture"
 Import "./pixels"
 Import "./window"
@@ -73,13 +74,17 @@ Public Final Class Texture
     End New
 
     /// A texture of the pixels an image file decodes to, PNG, JPEG, BMP, TGA, GIF, QOI, or WebP,
-    /// RGBA8, with mipmaps unless `mipmaps` is False. It throws when the file can't be read or
-    /// decoded, or as New does. Path gives the file it was loaded from.
+    /// RGBA8, or HDR, as FromHdr makes it, with mipmaps unless `mipmaps` is False. It throws when
+    /// the file can't be read or decoded, or as New does. Path gives the file it was loaded from.
     @MainThread
     Public Static Method Load(path: Path, mipmaps: Bool = True): Texture Throws GraphicsError,
                                                                                 IOError
-        Local image = Try Image.Load(path)
-        Local made = Try FromImage(image, mipmaps)
+        Local made: Texture
+        If path.Extension().ToLower() == ".hdr"
+            made = Try FromHdr(Try Hdr.Decode(Try File.ReadBytes(path)), mipmaps)
+        Else
+            made = Try FromImage(Try Image.Load(path), mipmaps)
+        End If
         If !fbe_texture_set_path(made.Live("Load"), "{path}") Then Panic(LastError())
         Return made
     End Method
@@ -93,6 +98,23 @@ Public Final Class Texture
             found = fbe_texture_path(Live("Path")).ToString()
         End Unsafe
         Return found != "" ? found : Null
+    End Method
+
+    /// A texture of `image`'s light, RGBA16F, with mipmaps unless `mipmaps` is False, for an
+    /// Environment to bake. A half float holds up to 65504: what's brighter is that, and what's
+    /// less than none, or NaN, is 0. It throws as New does.
+    @MainThread
+    Public Static Method FromHdr(image: HdrImage,
+                                 mipmaps: Bool = True): Texture Throws GraphicsError
+        Local texture = Try Texture(image.Width As Int32, image.Height As Int32,
+                                    TextureFormat.RGBA16F, mipmaps)
+        Local written = False
+        Unsafe
+            written = fbe_texture_write_floats(texture.Live("FromHdr"), 0, 0, image.Width As Int32,
+                                               image.Height As Int32, image.Pixels.Pointer())
+        End Unsafe
+        If !written Then Panic(LastError())
+        Return texture
     End Method
 
     /// A texture of `image`'s pixels, RGBA8, with mipmaps unless `mipmaps` is False.
