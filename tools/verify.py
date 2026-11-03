@@ -220,6 +220,12 @@ def check_bindings():
         fail("the bindings aren't what their headers make; run tools/bindgen.sh")
 
 
+def check_metal(build):
+    step("the shaders' Metal")
+    if run([sys.executable, str(ROOT / "tools" / "check_msl.py"), str(build)]) != 0:
+        fail("a shader comes out as Metal that doesn't compile")
+
+
 def check_format():
     step(f"clang-format {CLANG_FORMAT_VERSION}")
     clang_format = pinned_clang_format()
@@ -285,6 +291,7 @@ def main():
         check_tests(build)
         check_exports()
     check_bindings()
+    check_metal(build)
     check_format()
     if not options.no_tidy and built:
         check_tidy(build, options.base)
