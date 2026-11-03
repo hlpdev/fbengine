@@ -87,7 +87,7 @@ Function Main() Throws GraphicsError, IOError
         Print("watched {steps} steps, score {game.Score}, lives {game.Lives}")
         Return
     End If
-    Local logic = FixedStep(60)
+    Local logic = FixedUpdate(60)
     While !Window.Closed() && !KeyDown(Key.ESCAPE)
         Local across: Float32 = 0
         If KeyDown(Key.LEFT) Then across -= 2.5

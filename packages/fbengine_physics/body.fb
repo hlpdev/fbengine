@@ -153,7 +153,7 @@ Public Final Class Body
     /// overwrites, as the last to step says. A frame's order is a Capture, the game's logic,
     /// UpdateWorld, then Step, as UpdateEachFrame does at the Flip: UpdateWorld's Collide moving a
     /// driven entity lasts only until its body next moves. Update draws between steps by Alpha; a
-    /// FixedStep that calls Step does by its own capture and Tween.
+    /// FixedUpdate that calls Step does by its own capture and Tween.
     ///
     /// # Examples
     ///
@@ -168,7 +168,7 @@ Public Final Class Body
     /// Local ball = Body(world, Shape.Sphere(0.5), Motion.DYNAMIC, Vec3(0, 5, 0))
     /// Local shown = Pivot()
     /// ball.Drive(shown)
-    /// Local logic = FixedStep(60)
+    /// Local logic = FixedUpdate(60)
     /// For step = 1 To logic.Steps(0.5)
     ///     CaptureWorld()
     ///     // The game's logic goes here, then the scene's collisions, then the world's step.

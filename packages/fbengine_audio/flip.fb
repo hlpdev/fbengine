@@ -20,7 +20,7 @@ Package Final Class Followed
     Package Field where: (Func(): Vec3)? = Null
     Package Field turned: (Func(): Quat)? = Null
     Package Field entity: Entity? = Null
-    Package Field step: FixedStep? = Null
+    Package Field step: FixedUpdate? = Null
     Field from: Vec3
     Field before: Bool
 
@@ -29,7 +29,7 @@ Package Final Class Followed
         Self.turned = turned
     End New
 
-    Package New(entity: Entity, step: FixedStep?)
+    Package New(entity: Entity, step: FixedUpdate?)
         Self.entity = entity
         Self.step = step
     End New
