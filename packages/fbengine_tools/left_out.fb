@@ -1,0 +1,11 @@
+// What the cooker and typed references leave out of a game's folder: what isn't the game's.
+
+Import std.text
+
+// Whether a file or folder named `name` isn't the game's: hidden, its name starting with '.', as
+// .git and .DS_Store are, or one of the files Windows' Explorer leaves in a folder.
+Package Function LeftOut(name: String): Bool
+    If name.StartsWith(".") Then Return True
+    Local folded = name.ToLower()
+    Return folded == "thumbs.db" || folded == "desktop.ini"
+End Function

@@ -782,10 +782,15 @@ add_executable(fbengine_tools_tests tools/cook_tests.cpp tools/model_tests.cpp a
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/disk.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/folder.cpp"
                "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/pak.cpp"
-               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp")
+               "${PROJECT_SOURCE_DIR}/native/fbengine/vfs/vfs.cpp"
+               tools/pak_tests.cpp "${PROJECT_SOURCE_DIR}/native/fbengine_tools/cook/pak.cpp"
+               "${PROJECT_SOURCE_DIR}/native/fbengine_tools/tools/atomic.cpp")
 target_include_directories(fbengine_tools_tests PRIVATE
                            "${PROJECT_SOURCE_DIR}/native/fbengine_tools"
                            "${PROJECT_SOURCE_DIR}/native/fbengine")
+# basisu's job pool, which libktx's encoder is patched in (cmake/assets.cmake).
+target_include_directories(fbengine_tools_tests SYSTEM PRIVATE
+                           "${ktx_SOURCE_DIR}/external/basisu/encoder")
 target_compile_definitions(fbengine_tools_tests PRIVATE
                            FBENGINE_ASSETS_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/assets/fixtures")
 target_link_libraries(fbengine_tools_tests PRIVATE Catch2::Catch2WithMain fbengine_stb_write ktx
@@ -824,6 +829,53 @@ if(FBENGINE_FB_TESTS)
                          FIXTURES_REQUIRED fbengine_references PASS_REGULAR_EXPRESSION
                          "\nbuilt\r?\n$")
   endforeach()
+endif()
+
+# The job system's threads, started as the process ends, which mustn't hang its exit.
+if(FBENGINE_FB_TESTS)
+  add_test(NAME jobs.ends COMMAND "${FBENGINE_FB}" --color never run
+           "${CMAKE_CURRENT_SOURCE_DIR}/jobs/ends")
+  set_tests_properties(jobs.ends PROPERTIES TIMEOUT 180
+                       PASS_REGULAR_EXPRESSION "
+each ended
+?
+$")
+endif()
+
+# E8's done-when, a game whose build step is fbengine_tools', built each way, one at a time, as they
+# share its build folder: its files as they are, one reloading as it changes, then cooked into its
+# pak.
+if(FBENGINE_FB_TESTS)
+  # The cooker's threads, which can't hold up a whole run if they ever hang again.
+  set_tests_properties(fbengine_tools.package PROPERTIES TIMEOUT 600)
+  set_tests_properties(fbengine.package PROPERTIES TIMEOUT 1800)
+  # A copy, whose path dependencies are the packages', and whose file a run can change.
+  set(fbengine_game "${CMAKE_CURRENT_BINARY_DIR}/cooked_game")
+  set(fbengine_game_source "${PROJECT_SOURCE_DIR}/examples/cooked_game")
+  file(READ "${fbengine_game_source}/project.toml" fbengine_game_project)
+  string(REPLACE "../../packages" "${PROJECT_SOURCE_DIR}/packages" fbengine_game_project
+                 "${fbengine_game_project}")
+  configure_file("${fbengine_game_source}/main.fb" "${fbengine_game}/main.fb" COPYONLY)
+  file(COPY "${fbengine_game_source}/assets" DESTINATION "${fbengine_game}")
+  file(CONFIGURE OUTPUT "${fbengine_game}/project.toml" CONTENT "${fbengine_game_project}" @ONLY)
+  add_test(NAME examples.cooked_game.debug
+           COMMAND "${FBENGINE_FB}" --color never run "${fbengine_game}" -- --change
+                   "${fbengine_game}/assets/hero.png")
+  set_tests_properties(examples.cooked_game.debug PROPERTIES RESOURCE_LOCK fbengine_game TIMEOUT 300
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen" PASS_REGULAR_EXPRESSION
+                       "\nlevel one\r?\nhero, as it is\r?\nhero reloaded, 8 wide\r?\n$")
+  add_test(NAME examples.cooked_game.release
+           COMMAND "${FBENGINE_FB}" --color never run --release "${fbengine_game}")
+  set_tests_properties(examples.cooked_game.release PROPERTIES RESOURCE_LOCK fbengine_game
+                       TIMEOUT 300 ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
+                       PASS_REGULAR_EXPRESSION "\nlevel one\r?\nhero, cooked\r?\n$")
+  # One without its assets/, whose step fails, saying so.
+  set(fbengine_game_bare "${CMAKE_CURRENT_BINARY_DIR}/cooked_game_bare")
+  configure_file("${fbengine_game_source}/main.fb" "${fbengine_game_bare}/main.fb" COPYONLY)
+  file(CONFIGURE OUTPUT "${fbengine_game_bare}/project.toml" CONTENT "${fbengine_game_project}" @ONLY)
+  add_test(NAME tools.game.bare COMMAND "${FBENGINE_FB}" --color never build "${fbengine_game_bare}")
+  set_tests_properties(tools.game.bare PROPERTIES PASS_REGULAR_EXPRESSION
+                       "assets isn't there: it holds what cooked_game has at res://")
 endif()
 
 # fbengine_audio's own C++, where it's subtle: what's in its headers, and miniaudio's backends.

@@ -31,6 +31,8 @@ struct load_options_t {
     /// Whether it reads its file's sidecar, as an Asset's load does, for its import settings.
     bool settings = false;
     transcode_t transcode = transcode_t::RGBA8;
+    /// A file of more bytes than this is failed before they're allocated.
+    std::uint64_t most = UINT64_MAX;
 };
 
 /// A load, and what it made once it's done: its kind's result and its file's import settings, or

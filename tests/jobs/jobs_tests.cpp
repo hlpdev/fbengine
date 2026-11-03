@@ -16,6 +16,7 @@
 #include <mutex>
 #include <random>
 #include <span>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -576,4 +577,12 @@ TEST_CASE("a wait for a long chain runs it without going deeper", "[jobs]") {
     }
     jobs.wait(jobs.run([] {}, layer));
     REQUIRE(ran == 5'000 + (30 * 8));
+}
+
+TEST_CASE("a thread that can't start stops the rest, and says so", "[jobs]") {
+    REQUIRE_THROWS_AS(fbe::jobs_t(4, 2), std::system_error);
+    REQUIRE_THROWS_AS(fbe::jobs_t(4, 0), std::system_error);
+    // And with none of that, every one has.
+    const fbe::jobs_t jobs(4);
+    SUCCEED();
 }
