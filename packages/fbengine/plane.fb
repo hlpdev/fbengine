@@ -3,6 +3,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./entity"
 Import "./light"
@@ -26,6 +27,7 @@ Public Final Class GroundPlane Extends Entity
     Override Package Method KindName(): String => "GroundPlane"
 
     /// Sets how many segments a side the plane is drawn in, 1 to 16, 1 at first. Others panic.
+    @Limits(1, 16)
     @MainThread @PanicsAtCaller
     Public Method SetSegments(segments: Int)
         If !fbe_plane_set_segments(Live("SetSegments"), segments) Then Failed("SetSegments")

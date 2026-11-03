@@ -25,13 +25,14 @@ Function Takes(bounds: Limits, value: Float): Bool
 End Function
 
 // An angle in degrees as it's shown, which needs less of it than ShownNumber does.
-Function ShownAngle(value: Float): String
-    Return ShownNumber(Round(value * 100) / 100)
-End Function
+Function ShownAngle(value: Float): String => Rounded(value, 100)
 
 // `value` as it's shown: enough of it to read, the same each time it's shown.
-Function ShownNumber(value: Float): String
-    Local rounded = Round(value * 10000) / 10000
+Function ShownNumber(value: Float): String => Rounded(value, 10000)
+
+// `value` as text, to the nearest 1/`parts`, in Doubles, which have room for it however big it is.
+Function Rounded(value: Float, parts: Double): String
+    Local rounded = Round((value As Double) * parts) / parts
     If rounded == 0 Then Return "0"
     Return "{rounded}"
 End Function
@@ -39,10 +40,9 @@ End Function
 // "FieldOfView" as "Field Of View".
 Function Spaced(name: String): String
     Local spaced = ""
-    For i = 0 To name.Length - 1
-        Local letter = name.Slice(i, i + 1)
-        If i > 0 && letter >= "A" && letter <= "Z" Then spaced += " "
-        spaced += letter
+    For letter In name.Chars
+        If spaced != "" && letter.IsUpper() Then spaced += " "
+        spaced += "{letter}"
     End For
     Return spaced
 End Function
@@ -65,19 +65,23 @@ Public Final Class Editable<V>
     Public ReadOnly Field Bounds: Limits
     /// Whether it's an angle in radians, which it shows in degrees.
     Public ReadOnly Field Degrees: Bool
+    /// Whether it's a Color whose alpha does nothing.
+    Public ReadOnly Field NoAlpha: Bool
     Field reading: Func(Int): V
     Field writing: Func(Int, V)
     Field there: Func(Int): Bool
 
     /// The property `name` of `count` things, each by its index, read by `read`, written by `write`,
     /// which neither is if `alive` says it's gone, a number taking `bounds`, shown in degrees if
-    /// `degrees`.
+    /// `degrees`, a Color leaving out its alpha if `noAlpha`.
     Public New(name: String, count: Int, read: Func(Int): V, write: Func(Int, V),
-               alive: Func(Int): Bool, bounds: Limits? = Null, degrees: Bool = False)
+               alive: Func(Int): Bool, bounds: Limits? = Null, degrees: Bool = False,
+               noAlpha: Bool = False)
         Name = name
         Count = count
         Bounds = bounds ?? Limits()
         Degrees = degrees
+        NoAlpha = noAlpha
         reading = read
         writing = write
         there = alive
@@ -139,11 +143,50 @@ Function Pairs<T, V>(things: T[], alive: Func(T): Bool): Editable<V>[]
                     set.Call(things[index], value)
                 End Function, Function(index: Int) => alive(things[index]),
                                       set.Attribute(Limits),
-                                      set.Has(ShownInDegrees)))
+                                      set.Has(ShownInDegrees), set.Has(NoAlpha)))
             End If
         End For
     End For
     Return found
+End Function
+
+// Whether all of `values` are what `test` looks for.
+Function AllAre(values: Value[], test: Func(Value): Bool): Bool
+    For value In values
+        If !test(value) Then Return False
+    End For
+    Return True
+End Function
+
+// Whether all of `values` Load as a `V`.
+Function Loads<V>(values: Value[]): Bool
+    For value In values
+        Try
+            Try Load<V>(value)
+        Catch error As ParseError
+            Return False
+        End Try
+    End For
+    Return True
+End Function
+
+// Whether all of `values` are names among `members`.
+Function AllMembers(values: Value[], members: String[]): Bool
+    For value In values
+        Local name = value.AsString()
+        If name == Null || !members.Contains(name) Then Return False
+    End For
+    Return True
+End Function
+
+// Whether `value`'s an Object of `keys` and nothing else, each a number that isn't a whole one's type.
+Function HasOnly(value: Value, keys: String[]): Bool
+    If !value.IsObject || value.Count != keys.Count Then Return False
+    For key In keys
+        Local part = value[key]
+        If part == Null || !part.IsNumber || part.IsInteger Then Return False
+    End For
+    Return True
 End Function
 
 // A Field of each of `items`, as what Load makes of what's kept, or what it is at first.
@@ -163,7 +206,7 @@ Function Stored<V>(field: ComponentField, items: ComponentData[], bounds: Limits
 End Function
 
 // `all` as what they all are, or Null if one isn't.
-Function AllAre<T: Class>(all: Entity[]): T[]?
+Function EachIs<T: Class>(all: Entity[]): T[]?
     Local them: T[] = []
     For entity In all
         Local one = entity As? T
@@ -178,7 +221,7 @@ Class EntryField Extends TextField
     Field leaving: (Func())? = Null
 
     New(name: String)
-        Super.New("", MIXED, name)
+        Super.New("", "", name)
         SetTranslates(False)
         SetWidth(Sizing.Fill())
     End New
@@ -214,7 +257,12 @@ Public Class PropertyRow Extends Widget
     /// The fields it types in, or none.
     Public Method Parts(): TextField[] => []
 
+    // Sees to what's been done to it, which is little enough for each row, each frame.
     Package Method Update(ui: Ui?)
+    End Method
+
+    // Shows what's there now, which reads all of what's selected.
+    Package Method Refresh(ui: Ui?)
     End Method
 
     // Finishes what's being typed if `keep`, as what it's editing is about to go.
@@ -275,6 +323,9 @@ Public Final Class FieldsRow<V> Extends PropertyRow
                 ui.Focus(Null)
             End If
         End For
+    End Method
+
+    Override Package Method Refresh(ui: Ui?)
         Refreshed(ui)
     End Method
 
@@ -303,9 +354,13 @@ Public Final Class FieldsRow<V> Extends PropertyRow
             End If
             after.Add((each.0, value))
             // The same value typed another way, as 2.0 for 2, is no change.
-            If shown(value, part) != shown(each.1, part) Then changes = True
+            If Save(value) != Save(each.1) Then changes = True
         End For
-        If changes Then history.Commit(ValueEdit<V>(edited, after))
+        If changes
+            history.Commit(ValueEdit<V>(edited, after))
+        Else
+            entries[part].SetText(held[part])
+        End If
     End Method
 
     // Each field showing what's there, but for one being typed in.
@@ -313,15 +368,21 @@ Public Final Class FieldsRow<V> Extends PropertyRow
         Local values = edited.Values()
         For part = 0 Until entries.Count
             Local text = ""
+            Local mixed = False
             For i = 0 Until values.Count
                 Local here = shown(values[i].1, part)
                 If i == 0
                     text = here
                 ElseIf here != text
                     text = ""
+                    mixed = True
                     Break
                 End If
             End For
+            // What's empty for all of them is empty, and doesn't look as if they differ.
+            If mixed != (entries[part].Placeholder() == MIXED)
+                entries[part].SetPlaceholder(mixed ? MIXED : "")
+            End If
             If ui != Null && IsFocused(ui, entries[part]) Then Continue
             held[part] = text
             If entries[part].Text() != text
@@ -390,6 +451,9 @@ Public Final Class ToggleRow Extends PropertyRow
             End For
             history.Commit(ValueEdit<Bool>(edited, after))
         End If
+    End Method
+
+    Override Package Method Refresh(ui: Ui?)
         Refreshed()
     End Method
 
@@ -435,17 +499,19 @@ Public Final Class ChoiceRow<E: Printable> Extends PropertyRow
     /// Makes what's selected the member at `index`, as a click in its list does.
     Public Method Choose(index: Int)
         Local after: (Int, E)[] = []
+        Local changes = False
         For each In edited.Values()
             after.Add((each.0, members[index]))
+            If "{each.1}" != "{members[index]}" Then changes = True
         End For
-        history.Commit(ValueEdit<E>(edited, after))
+        If changes Then history.Commit(ValueEdit<E>(edited, after))
         Local ui = Owner()
         Local open = list
         If ui != Null && open != Null Then ui.ClosePopup(open)
         list = Null
     End Method
 
-    Override Package Method Update(ui: Ui?)
+    Override Package Method Refresh(ui: Ui?)
         Refreshed()
     End Method
 
@@ -509,6 +575,10 @@ Public Final Class SceneInspector Extends Widget
     Field knownKinds: Int = 0
     Field shownData: ComponentData[] = []
     Field menu: Node? = Null
+    // Which row's next, as one's looked at each frame; whether they all should be, and how many have.
+    Field turn: Int = 0
+    Field changed: Bool = False
+    Field refreshes: Int = 0
 
     /// The inspector of what's selected in `seen`, whose edits go in `edits`, of what components
     /// `known` knows.
@@ -536,6 +606,15 @@ Public Final Class SceneInspector Extends Widget
         Rebuilt()
     End Method
 
+    /// Says something's been edited, as the History does, so the next Update shows it all; what
+    /// changes otherwise shows one row a frame, whose cost is however much is selected.
+    Public Method MarkChanged()
+        changed = True
+    End Method
+
+    /// How many times a row's looked at what it shows, of all that's ever been selected.
+    Public Method Refreshes(): Int => refreshes
+
     /// The rows it's showing, in order.
     Public Method Rows(): PropertyRow[] => rows.Clone()
 
@@ -551,17 +630,31 @@ Public Final Class SceneInspector Extends Widget
     /// which lays out what's shown.
     Public Method Update()
         Local selected = scene.Selected()
+        Local ui = Owner()
+        // What's said of the kinds can wait for what's being typed to finish.
+        Local typing = (ui?.Focused() As? EntryField) != Null
         If !SameAs(selected, entities) || !SameMaterials(MaterialsOf(selected)) ||
-           knownKinds != kinds.Changes() || !SameData(DataOf(selected))
+           (knownKinds != kinds.Changes() && !typing) || !SameData(DataOf(selected))
             For row In rows
                 row.Close(True)
             End For
             Rebuilt()
         End If
-        Local ui = Owner()
         For row In rows
             row.Update(ui)
         End For
+        If rows.Count == 0 Then Return
+        If changed
+            changed = False
+            For row In rows
+                row.Refresh(ui)
+            End For
+            refreshes += rows.Count
+        Else
+            turn = (turn + 1) % rows.Count
+            rows[turn].Refresh(ui)
+            refreshes += 1
+        End If
     End Method
 
     Method SameAs(one: Entity[], other: Entity[]): Bool
@@ -643,6 +736,7 @@ Public Final Class SceneInspector Extends Widget
         Local seen = Set<String>()
         seen.Add("Name")
         AddSection<Entity>("Collision", entities, there, seen)
+        AddCollisionRadius(entities)
         AddKinds(there, seen)
         If materials.Count > 0
             AddSection<Material>("Material", materials,
@@ -671,6 +765,9 @@ Public Final Class SceneInspector Extends Widget
             End Function))
             AddFields(name, together)
         End For
+        If kinds.HeldBack
+            Added(NoteRow("Components", "Not read, as this project's code hasn't been let run"))
+        End If
         If kinds.Kinds().Count == 0 Then Return
         Added(ButtonRow("AddComponent", "Add…", Function[Weak Self](pressed: Button)
             Self?.ChoosingKind(pressed)
@@ -690,28 +787,44 @@ Public Final Class SceneInspector Extends Widget
         End For
     End Method
 
+    // A row by what `field` is, as its First and what each of `items` has show it, or a note if nothing
+    // here edits it, or what's saved of it isn't what it says it is.
     Method AddField(field: ComponentField, items: ComponentData[])
         Local bounds = Limits(field.Low, field.High, field.Above)
         Local first = field.First
-        If field.Members.Count > 0
-            Added(ChoiceRow<String>(Stored<String>(field, items, bounds), history, field.Members))
-        ElseIf first.IsBool
+        Local all = [first]
+        For item In items
+            all.Add(item.Values[field.Name] ?? first)
+        End For
+        If field.Enumerated
+            If field.Members.Count > 0 && AllMembers(all, field.Members)
+                Added(ChoiceRow<String>(Stored<String>(field, items, bounds), history,
+                                        field.Members))
+                Return
+            End If
+        ElseIf AllAre(all, Function(value: Value) => value.IsBool)
             Added(ToggleRow(Stored<Bool>(field, items, bounds), history))
-        ElseIf first.IsInteger
+            Return
+        ElseIf AllAre(all, Function(value: Value) => value.IsInteger) && Loads<Int>(all)
             Added(WholeRow(Stored<Int>(field, items, bounds), history))
-        ElseIf first.IsNumber
+            Return
+        ElseIf AllAre(all, Function(value: Value) => value.IsNumber)
             Added(NumberRow(Stored<Float>(field, items, bounds), history))
-        ElseIf first.IsString
+            Return
+        ElseIf AllAre(all, Function(value: Value) => value.IsString)
             Added(TextRow(Stored<String>(field, items, bounds), history))
-        ElseIf first.IsObject && first.Count == 3 && first["x"] != Null && first["z"] != Null
+            Return
+        ElseIf AllAre(all, Function(value: Value) => HasOnly(value, ["x", "y", "z"]))
             Added(Vec3Row(Stored<Vec3>(field, items, bounds), history))
-        ElseIf first.IsObject && first.Count == 2 && first["x"] != Null && first["y"] != Null
+            Return
+        ElseIf AllAre(all, Function(value: Value) => HasOnly(value, ["x", "y"]))
             Added(Vec2Row(Stored<Vec2>(field, items, bounds), history))
-        ElseIf first.IsObject && first["r"] != Null && first["a"] != Null
+            Return
+        ElseIf AllAre(all, Function(value: Value) => HasOnly(value, ["r", "g", "b", "a"]))
             Added(ColorRow(Stored<Color>(field, items, bounds), history))
-        Else
-            Added(NoteRow(field.Name, "Edited in its own program"))
+            Return
         End If
+        Added(NoteRow(field.Name, "Nothing here edits this"))
     End Method
 
     // The list of what can be added, under `pressed`.
@@ -727,7 +840,16 @@ Public Final Class SceneInspector Extends Widget
                 Local own = Self
                 If own == Null Then Return
                 own.ClosingMenu()
-                own.history.Commit(AddComponentEdit(own.entities, kind))
+                // What they all have already is nothing to add.
+                Local lacking = False
+                For entity In own.entities
+                    Local has = False
+                    For component In ComponentsOf(entity)
+                        If component.Kind == kind.Name Then has = True
+                    End For
+                    If !has Then lacking = True
+                End For
+                If lacking Then own.history.Commit(AddComponentEdit(own.entities, kind))
             End Function)
             column.Add(item)
         End For
@@ -749,24 +871,29 @@ Public Final Class SceneInspector Extends Widget
 
     // What's particular to one kind, when all that's selected is of it.
     Method AddKinds(there: Func(Entity): Bool, seen: Set<String>)
-        Local lights = AllAre<Light>(entities)
+        Local lights = EachIs<Light>(entities)
         If lights != Null
             AddSection<Light>("Light", lights, Function(light: Light) => there(light), seen)
             AddCone(lights)
         End If
-        Local cameras = AllAre<Camera>(entities)
+        Local cameras = EachIs<Camera>(entities)
         If cameras != Null
             AddSection<Camera>("Camera", cameras, Function(camera: Camera) => there(camera), seen)
             AddRanges(cameras)
         End If
-        Local meshes = AllAre<Mesh>(entities)
+        Local meshes = EachIs<Mesh>(entities)
         If meshes != Null Then AddSection<Mesh>("Mesh", meshes, Function(mesh: Mesh) => there(mesh),
                                                 seen)
-        Local sprites = AllAre<Sprite>(entities)
+        Local planes = EachIs<GroundPlane>(entities)
+        If planes != Null
+            AddSection<GroundPlane>("Ground Plane", planes,
+                                    Function(plane: GroundPlane) => there(plane), seen)
+        End If
+        Local sprites = EachIs<Sprite>(entities)
         If sprites != Null
             AddSection<Sprite>("Sprite", sprites, Function(sprite: Sprite) => there(sprite), seen)
         End If
-        Local terrains = AllAre<Terrain>(entities)
+        Local terrains = EachIs<Terrain>(entities)
         If terrains != Null
             AddSection<Terrain>("Terrain", terrains, Function(terrain: Terrain) => there(terrain),
                                 seen)
@@ -790,6 +917,9 @@ Public Final Class SceneInspector Extends Widget
     Method AddSection<T>(title: String, things: T[], alive: Func(T): Bool, seen: Set<String>)
         Local before = rows.Count
         Local at = list.Children().Count
+        AddChoices<T, PickMode>(things, alive, seen)
+        AddChoices<T, CollisionShape>(things, alive, seen)
+        AddChoices<T, SpriteViewMode>(things, alive, seen)
         AddChoices<T, LightType>(things, alive, seen)
         AddChoices<T, Projection>(things, alive, seen)
         AddChoices<T, FogMode>(things, alive, seen)
@@ -822,7 +952,7 @@ Public Final Class SceneInspector Extends Widget
 
     Method AddChoices<T, E: Printable>(things: T[], alive: Func(T): Bool, seen: Set<String>)
         For each In Pairs<T, E>(things, alive)
-            If seen.Add(each.Name) Then Added(ChoiceRow<E>(each, history, MembersOf<E>()))
+            If seen.Add(each.Name) Then Added(ChoiceRow<E>(each, history, MembersOf<E>(64)))
         End For
     End Method
 
@@ -850,11 +980,20 @@ Public Final Class SceneInspector Extends Widget
                                          Function(index: Int, turned: Quat)
             all[index].SetRotation(turned)
         End Function, alive), history))
-        Added(Vec3Row(Editable<Vec3>("Scale", all.Count,
-                                     Function(index: Int) => all[index].Scale(),
-                                     Function(index: Int, size: Vec3)
+        Added(ScaleRow(Editable<Vec3>("Scale", all.Count,
+                                      Function(index: Int) => all[index].Scale(),
+                                      Function(index: Int, size: Vec3)
             all[index].SetScale(size)
-        End Function, alive, Limits(0.001)), history))
+        End Function, alive), history))
+    End Method
+
+    // An entity's ellipsoid, set as one, as its setter's two numbers are.
+    Method AddCollisionRadius(all: Entity[])
+        Added(Vec2Row(Editable<Vec2>("CollisionRadius", all.Count,
+                                     Function(index: Int) => all[index].CollisionRadius(),
+                                     Function(index: Int, radius: Vec2)
+            all[index].SetCollisionRadius(radius.x, radius.y)
+        End Function, Function(index: Int) => !all[index].Freed(), Limits(0.000001)), history))
     End Method
 
     // A spot's cone, set as one, inner within outer.
@@ -876,9 +1015,20 @@ Public Final Class SceneInspector Extends Widget
         End Function))
     End Method
 
-    // A camera's range and its fog's, each two numbers set as one, the first below the second.
+    // A camera's range and its fog's, each two numbers set as one, the first below the second, and
+    // what it clears, two as one.
     Method AddRanges(cameras: Camera[])
         Local alive = Function(index: Int) => !cameras[index].Freed()
+        Added(ToggleRow(Editable<Bool>("ClearsColor", cameras.Count,
+                                       Function(index: Int) => cameras[index].ClearsColor(),
+                                       Function(index: Int, on: Bool)
+            cameras[index].SetClear(on, cameras[index].ClearsDepth())
+        End Function, alive), history))
+        Added(ToggleRow(Editable<Bool>("ClearsDepth", cameras.Count,
+                                       Function(index: Int) => cameras[index].ClearsDepth(),
+                                       Function(index: Int, on: Bool)
+            cameras[index].SetClear(cameras[index].ClearsColor(), on)
+        End Function, alive), history))
         Added(RangeRow(Editable<Vec2>("Range", cameras.Count,
                                       Function(index: Int) => Vec2(cameras[index].Near(),
                                                                    cameras[index].Far()),
@@ -921,7 +1071,8 @@ End Function
 
 // A row of a color's red, green, blue, and alpha, which is 0 to 1.
 Function ColorRow(changed: Editable<Color>, edits: History): FieldsRow<Color>
-    Return FieldsRow<Color>(changed, edits, 4, Function(value: Color, part: Int)
+    Return FieldsRow<Color>(changed, edits, changed.NoAlpha ? 3 : 4,
+                            Function(value: Color, part: Int)
         Return ShownNumber(part == 0 ? value.r : part == 1 ? value.g : part == 2 ? value.b
                                                                                  : value.a)
     End Function, Function(value: Color, part: Int, text: String): Color?
@@ -932,12 +1083,29 @@ Function ColorRow(changed: Editable<Color>, edits: History): FieldsRow<Color>
     End Function)
 End Function
 
-// A row of a Vec3's x, y, and z.
-Function Vec3Row(changed: Editable<Vec3>, edits: History): FieldsRow<Vec3>
+// A row of a scale's x, y, and z, each anything but nothing, as a mirrored one's below 0.
+Function ScaleRow(changed: Editable<Vec3>, edits: History): FieldsRow<Vec3>
     Return FieldsRow<Vec3>(changed, edits, 3, Function(value: Vec3, part: Int)
         Return ShownNumber(value[part])
     End Function, Function(value: Vec3, part: Int, text: String): Vec3?
         Local typed = Parsed(text, changed.Bounds)
+        If typed == Null || Abs(typed) < 0.001 Then Return Null
+        Return Vec3(part == 0 ? typed : value.x, part == 1 ? typed : value.y,
+                    part == 2 ? typed : value.z)
+    End Function)
+End Function
+
+// A number of a vector as it's shown, in degrees if it's an angle.
+Function ShownPart(value: Float, degrees: Bool): String
+    Return degrees ? ShownAngle(value * DEGREES) : ShownNumber(value)
+End Function
+
+// A row of a Vec3's x, y, and z.
+Function Vec3Row(changed: Editable<Vec3>, edits: History): FieldsRow<Vec3>
+    Return FieldsRow<Vec3>(changed, edits, 3, Function(value: Vec3, part: Int)
+        Return ShownPart(value[part], changed.Degrees)
+    End Function, Function(value: Vec3, part: Int, text: String): Vec3?
+        Local typed = Parsed(text, changed.Bounds, changed.Degrees ? DEGREES : 1)
         If typed == Null Then Return Null
         Return Vec3(part == 0 ? typed : value.x, part == 1 ? typed : value.y,
                     part == 2 ? typed : value.z)
@@ -947,9 +1115,9 @@ End Function
 // A row of a Vec2's x and y.
 Function Vec2Row(changed: Editable<Vec2>, edits: History): FieldsRow<Vec2>
     Return FieldsRow<Vec2>(changed, edits, 2, Function(value: Vec2, part: Int)
-        Return ShownNumber(value[part])
+        Return ShownPart(value[part], changed.Degrees)
     End Function, Function(value: Vec2, part: Int, text: String): Vec2?
-        Local typed = Parsed(text, changed.Bounds)
+        Local typed = Parsed(text, changed.Bounds, changed.Degrees ? DEGREES : 1)
         If typed == Null Then Return Null
         Return Vec2(part == 0 ? typed : value.x, part == 1 ? typed : value.y)
     End Function)

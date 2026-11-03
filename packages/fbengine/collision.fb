@@ -176,7 +176,7 @@ Extend Entity
     /// Sets how steep a slope, in radians from level, a sliding mover climbs as ground, as a
     /// ramp is: Deg(45) at first. Sliding along ground may raise it as far as the slope goes, and
     /// a step up lands only on ground. Outside 0 to Pi / 2 panics.
-    @Limits(0, 1.5707963) @ShownInDegrees
+    @Limits(0, 1.5707964) @ShownInDegrees
     @MainThread @PanicsAtCaller
     Public Method SetMaxSlope(radians: Float)
         If !fbe_entity_set_max_slope(Live("SetMaxSlope"), radians) Then Failed("SetMaxSlope")

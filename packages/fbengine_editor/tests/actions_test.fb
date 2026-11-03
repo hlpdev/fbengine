@@ -57,6 +57,10 @@ Function Drivings(): Map<String, Driving>
     all["file.close"] = Driving(Nothing,
                                 Function(editor: Editor, scene: DemoScene) => editor.Current() ==
                                 Null)
+    // With no program it has nothing to do, and it's enabled; its work's in inspector_test.
+    all["file.reload_components"] = Driving(Nothing,
+                                            Function(editor: Editor,
+                                                     scene: DemoScene) => !editor.Kinds.Running())
     all["file.quit"] = Driving(Nothing,
                                Function(editor: Editor, scene: DemoScene) => editor.Quitting())
     all["edit.undo"] = Driving(Added,

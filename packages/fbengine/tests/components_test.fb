@@ -7,6 +7,7 @@ Import std.io
 Import std.math
 Import std.os
 Import std.test
+Import std.text
 Import fbengine
 
 Enum Swing
@@ -136,4 +137,129 @@ Function MembersAreAnEnumsOnly()
     Expect(MembersOf<Float>().Count == 0)
     Expect(MembersOf<Int>().Count == 0)
     Expect(MembersOf<Bool>().Count == 0)
+End Function
+
+Enum Medal
+    BRONZE = 1
+    SILVER = 2
+End Enum
+
+Enum Gapped
+    LOW = 0
+    HIGH = 10
+End Enum
+
+@Flags
+Enum Access
+    READ
+    WRITE
+End Enum
+
+Class Awards
+    Public Field Won: Medal = Medal.SILVER
+    Public Field Level: Gapped = Gapped.HIGH
+    Public Field Rights: Access = Access.READ
+    Public Field Plain: String = "OUTWARD"
+End Class
+
+@Test
+Function EnumsWithGapsHaveAllTheirMembers()
+    Expect(MembersOf<Medal>().Count == 2 && MembersOf<Medal>()[0] == Medal.BRONZE)
+    Expect(MembersOf<Gapped>().Count == 2 && MembersOf<Gapped>()[1] == Gapped.HIGH)
+    // What has more values than members can't be listed by them.
+    Expect(MembersOf<Access>().Count == 0)
+    Expect(MembersOf<String>().Count == 0)
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Awards>("Awards")
+    Local kind = Components.Kinds()[0]
+    Local won = FieldOf(kind, "Won")
+    Expect(won.Enumerated && won.Members.Count == 2 && won.Members[1] == "SILVER", "{won.Members}")
+    Local level = FieldOf(kind, "Level")
+    Expect(level.Enumerated && level.Members[1] == "HIGH", "{level.Members}")
+    // It's an Enum, though nothing can list it, so it isn't to be typed as text.
+    Local rights = FieldOf(kind, "Rights")
+    Expect(rights.Enumerated && rights.Members.Count == 0, "{rights.Members}")
+    Local plain = FieldOf(kind, "Plain")
+    Expect(!plain.Enumerated && plain.Members.Count == 0)
+End Function
+
+Class Sized
+    Public Field Small: UInt8 = 3
+    Public Field Signed: Int8 = -3
+    Public Field Wide: UInt16 = 3
+    Public Field Plain: Int = 3
+End Class
+
+@Test
+Function AWholeNumberGoesOnlyAsFarAsItsType()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Sized>("Sized")
+    Local kind = Components.Kinds()[0]
+    Local small = FieldOf(kind, "Small")
+    Expect(small.Low == 0 && small.High == 255, "{small.Low} to {small.High}")
+    Local signed = FieldOf(kind, "Signed")
+    Expect(signed.Low == -128 && signed.High == 127, "{signed.Low} to {signed.High}")
+    Expect(FieldOf(kind, "Wide").High == 65535)
+    Expect(FieldOf(kind, "Plain").High > 65535)
+End Function
+
+Class Spaced
+    @Limits(0, 10)
+    Public Field Speed: Float = 2.5
+    @Limits(1, 5)
+    Public Field Parts: Vec3
+    Public Field Free: Float = 0
+
+    Public Method OnLoaded()
+        If Parts == Vec3(0, 0, 0) Then Parts = Vec3(2, 2, 2)
+    End Method
+End Class
+
+@Test
+Function AttachRefusesWhatsPastItsLimits()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Spaced>("Spaced")
+    Local pivot = Pivot()
+    Local below = Value.Object()
+    below["Speed"] = Value(-1.0)
+    Local said = Components.Attach(pivot, "Spaced", below)
+    Expect(said != Null && said.Contains("Speed"), said ?? "")
+    Expect(pivot.Data<Spaced>() == Null, "it put on what it refused")
+    Local above = Value.Object()
+    above["Speed"] = Value(10.5)
+    Expect(Components.Attach(pivot, "Spaced", above) != Null)
+    // Each number of a vector.
+    Local part = Value.Object()
+    Local parts = Value.Object()
+    parts["x"] = Value(3.0)
+    parts["y"] = Value(9.0)
+    parts["z"] = Value(3.0)
+    part["Parts"] = parts
+    Expect(Components.Attach(pivot, "Spaced", part) != Null, "it took a part past its limit")
+    // At the edges, and with what isn't said, it does.
+    Local edges = Value.Object()
+    edges["Speed"] = Value(10.0)
+    edges["Free"] = Value(-99.0)
+    Expect(Components.Attach(pivot, "Spaced", edges) == Null)
+    Local spaced = pivot.Data<Spaced>()
+    Expect(spaced != Null && spaced.Speed == 10 && spaced.Parts == Vec3(2, 2, 2))
+End Function
+
+Class Renamed2
+    @Rename("key")
+    Public Field Named: Float = 1
+End Class
+
+@Test
+Function AFieldIsKnownByTheKeyItsSavedBy()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Renamed2>("Renamed")
+    Expect(Components.Kinds()[0].Fields[0].Name == "key", Components.Kinds()[0].Fields[0].Name)
 End Function

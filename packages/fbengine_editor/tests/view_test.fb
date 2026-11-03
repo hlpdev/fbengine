@@ -1690,3 +1690,37 @@ Function ACopyStillThereIsntFreedWhenItsEditsForgotten() Throws IOError, Graphic
     Expect(!copy.Freed(), "it's in the scene, and it was freed")
     editor.Finish()
 End Function
+
+@Test
+Function WhatsTypedGoesInBeforeAHandleTakesHold() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Cube(editor, Vec3(0, 1, 0))
+    editor.Edited.SelectOnly(cube)
+    editor.Step()
+    editor.Step()
+    Local row = editor.Inspector.RowOf("Position")
+    If row == Null Then Panic("there's no row")
+    Local field = row.Parts()[1]
+    editor.Shown.Focus(field)
+    editor.Step()
+    field.SelectAll()
+    // A little, so its handle stays under the pointer.
+    Try Simulate.Text("1.01")
+    editor.Step()
+    Expect(cube.Position().y == 1, "it took it before it's finished")
+    Local tip = OnHandle(editor, Vec3(0, 1, 0), Vec3(1, 0, 0), 0)
+    Try Drag(editor, tip, tip + Vec2(30, 0))
+    Expect(cube.Position().x > 0.01, "the handle didn't take: {cube.Position()}")
+    Expect(Abs(cube.Position().y - 1.01) < 0.0001, "what was typed went: {cube.Position()}")
+    // One undo each.
+    Expect(editor.Edits.UndoName() == "Move")
+    editor.Edits.Undo()
+    Expect(Abs(cube.Position().y - 1.01) < 0.0001 && cube.Position().x == 0, "{cube.Position()}")
+    Expect(editor.Edits.UndoName() == "Set Position")
+    editor.Edits.Undo()
+    Expect(cube.Position().y == 1)
+    editor.Finish()
+End Function

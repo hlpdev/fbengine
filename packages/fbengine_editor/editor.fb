@@ -87,7 +87,9 @@ Public Final Class Editor
         End Function)
         Edits.OnChanged(Function[Weak Self]()
             Local own = Self
-            If own != Null && own.Edits.TreeChanged() Then own.Tree.MarkChanged()
+            If own == Null Then Return
+            If own.Edits.TreeChanged() Then own.Tree.MarkChanged()
+            own.Inspector.MarkChanged()
         End Function)
         Edits.OnFailed(Function[Weak Self](edit: Edit, error: IOError)
             Self?.Said("Couldn't {edit.Name}", error.Message)
@@ -174,11 +176,41 @@ Public Final Class Editor
         opened.Mount()
         project = opened
         NewScene()
-        Kinds.Start(opened.Folder)
+
         Kept.AddRecent(opened.Folder.Text)
         Local saved = Kept.Kept(opened.Folder.Text)
         If saved == Null || !Docked.Restore(saved["layout"] ?? Value.Object()) Then DefaultLayout()
         ShowWelcome()
+        ReadKinds()
+    End Method
+
+    /// Says the project open may run its code, as asking did, from now on, and reads what kinds of
+    /// component it has.
+    Public Method TrustProject()
+        Local open = project
+        If open == Null Then Return
+        Kept.Trust(open.Folder.Text)
+        Kinds.Start(open.Folder)
+    End Method
+
+    // Reads what kinds of component the project has, which runs its code, so a project is asked about
+    // once, as a folder from anywhere might be anything.
+    Method ReadKinds()
+        Local open = project
+        If open == Null || !GameComponents.HasProgram(open.Folder) Then Return
+        If Kept.Trusted(open.Folder.Text)
+            Kinds.Start(open.Folder)
+            Return
+        End If
+        Kinds.HeldBack = True
+        Kinds.Set(Kinds.Kinds())
+        Local asking = Dialog("Run this project's code?",
+                              "{open.Folder} has a program that says what components it has. To show them, the editor builds and runs it, which can do anything a program can. Run it only if you trust where this project came from.")
+        asking.AddButton("Not Now")
+        asking.AddButton("Run It", Function[Weak Self]()
+            Self?.TrustProject()
+        End Function)
+        Showed(asking)
     End Method
 
     /// Keeps what's open in the project, and closes it.
@@ -321,6 +353,9 @@ Public Final Class Editor
         Actions.Add("file.close", "Close Project", Function[Weak Self]()
             Local own = Self
             If own != Null Then own.CloseProject()
+        End Function, Null, hasProject)
+        Actions.Add("file.reload_components", "Reload Components", Function[Weak Self]()
+            Self?.ReadKinds()
         End Function, Null, hasProject)
         Actions.Add("file.quit", "Quit", Function[Weak Self]()
             Local own = Self
@@ -484,7 +519,9 @@ Public Final Class Editor
     End Method
 
     Method AddMenus()
-        Menus.AddMenu("File", ["file.open", "file.close", SEPARATOR, "file.quit"])
+        Menus.AddMenu("File",
+                      ["file.open", "file.close", SEPARATOR, "file.reload_components", SEPARATOR,
+                       "file.quit"])
         Menus.AddMenu("Edit",
                       ["edit.undo", "edit.redo", SEPARATOR, "tree.find", "tree.rename",
                        "tree.duplicate", "tree.hide", "tree.delete",

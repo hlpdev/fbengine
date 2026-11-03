@@ -14,6 +14,15 @@ Function FieldOf(kind: ComponentKind, name: String): ComponentField
     Panic("{kind.Name} has no {name}")
 End Function
 
+// What's in a new one's Fields, as Load makes it from nothing.
+Function Fresh(): BodyComponent
+    Try
+        Return Try Load<BodyComponent>(Value.Object())
+    Catch error As ParseError
+        Panic("a new one can't be made: {error.Message}")
+    End Try
+End Function
+
 @Test
 Function ABodyIsAKindOfComponent()
     Components.Clear()
@@ -28,9 +37,16 @@ Function ABodyIsAKindOfComponent()
     Local size = FieldOf(kind, "Size").First
     Expect(size["x"]?.AsDouble() == 1 && size["z"]?.AsDouble() == 1, "{size}")
     // What each says it takes is what its setter does.
-    Expect(FieldOf(kind, "Mass").Above && FieldOf(kind, "Mass").Low == 0)
+    For each In [("Mass", 0.0, False), ("Friction", 0.0, False), ("Restitution", 0.0, False),
+                 ("LinearDamping", 0.0, False), ("AngularDamping", 0.0, False),
+                 ("Layer", 0.0, False), ("Size", 0.001, False)]
+        Local field = FieldOf(kind, each.0)
+        Expect(Abs(field.Low - (each.1 As Float)) < 0.0001 && field.Above == each.2,
+               "{each.0}: {field.Low}, {field.Above}")
+    End For
     Expect(FieldOf(kind, "Restitution").High == 1)
-    Expect(!FieldOf(kind, "Friction").Above)
+    Expect(FieldOf(kind, "Layer").High == 31)
+    Expect(FieldOf(kind, "GravityFactor").Low < -1000)
 End Function
 
 @Test
@@ -53,6 +69,9 @@ Function ABodyIsBuiltAsItsSaved()
     values["LinearDamping"] = Value(0.125)
     values["AngularDamping"] = Value(0.375)
     values["Form"] = Value("SPHERE")
+    values["Layer"] = Value(3 As Int64)
+    values["Continuous"] = Value(True)
+    values["CanSleep"] = Value(False)
     Expect(Components.Attach(entity, "Body", values) == Null)
     Local component = entity.Data<BodyComponent>()
     If component == Null Then Panic("it isn't on it")
@@ -62,34 +81,132 @@ Function ABodyIsBuiltAsItsSaved()
     Expect(body.Mass() == 4 && body.Friction() == 0.5 && body.Restitution() == 0.25)
     Expect(body.GravityFactor() == 0.5)
     Expect(Abs(body.LinearDamping() - 0.125) < 0.001 && Abs(body.AngularDamping() - 0.375) < 0.001)
+    Expect(body.Layer() == 3 && body.Continuous() && !body.CanSleep() && !body.Sensor())
     Expect(body.Shape().Kind() == ShapeKind.SPHERE)
     Expect(Distance(body.Position(), Vec3(1, 2, 3)) < 0.001, "{body.Position()}")
     Local kept = body.Attached()
     Expect(kept != Null && RefEquals(kept, entity))
+    // A sensor, which isn't continuous, however it's asked.
+    Local sensing = Fresh()
+    sensing.Sensor = True
+    sensing.Continuous = True
+    Local sensor = sensing.Build(world, Pivot())
+    Expect(sensor.Sensor() && !sensor.Continuous())
 End Function
 
+// How big what `shape`'s bounds are.
+Function Across(shape: Shape): Vec3
+    Local low, high = shape.Bounds()
+    Return high - low
+End Function
+
+Function Near(one: Vec3, other: Vec3): Bool => Distance(one, other) < 0.02
+
 @Test
-Function EachFormAndMotionBuilds()
+Function EachFormBuildsFromANewOneAndIsTheSizeItSays()
     Local scene = World()
     World.SetCurrent(scene)
     Defer scene.Free()
     Local world = PhysicsWorld()
     Defer world.Free()
-    Local shapes = [(BodyShape.BOX, ShapeKind.BOX), (BodyShape.SPHERE, ShapeKind.SPHERE),
-                    (BodyShape.CAPSULE, ShapeKind.CAPSULE),
-                    (BodyShape.CYLINDER, ShapeKind.CYLINDER)]
-    For each In shapes
-        Local component = BodyComponent()
-        component.Form = each.0
-        component.Size = Vec3(1, 2, 3)
-        Expect(component.Build(world, Pivot()).Shape().Kind() == each.1)
+    For form In [BodyShape.BOX, BodyShape.SPHERE, BodyShape.CAPSULE, BodyShape.CYLINDER]
+        Local fresh = Fresh()
+        fresh.Form = form
+        Expect(fresh.Build(world, Pivot()).Shape().Volume() > 0)
     End For
+    Local box = Fresh()
+    box.Size = Vec3(1, 2, 3)
+    Expect(Near(Across(box.Build(world, Pivot()).Shape()), Vec3(1, 2, 3)), "a box")
+    Local sphere = Fresh()
+    sphere.Form = BodyShape.SPHERE
+    sphere.Size = Vec3(1, 2, 3)
+    Expect(Near(Across(sphere.Build(world, Pivot()).Shape()), Vec3(2, 2, 2)),
+           "a sphere's radius is x")
+    Local cylinder = Fresh()
+    cylinder.Form = BodyShape.CYLINDER
+    cylinder.Size = Vec3(1, 3, 1)
+    Expect(Near(Across(cylinder.Build(world, Pivot()).Shape()), Vec3(2, 3, 2)),
+           "a cylinder's height is y, its radius x")
+    Local capsule = Fresh()
+    capsule.Form = BodyShape.CAPSULE
+    capsule.Size = Vec3(1, 5, 1)
+    Expect(Near(Across(capsule.Build(world, Pivot()).Shape()), Vec3(2, 5, 2)),
+           "a capsule's height is y, its radius x")
+    // Shorter than its radius lets it be, it's as tall as it can be.
+    Local short = Fresh()
+    short.Form = BodyShape.CAPSULE
+    short.Size = Vec3(1, 1, 1)
+    Expect(Near(Across(short.Build(world, Pivot()).Shape()), Vec3(2, 2, 2)))
+End Function
+
+@Test
+Function EveryFieldsEdgesBuild()
+    Local scene = World()
+    World.SetCurrent(scene)
+    Defer scene.Free()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    For form In [BodyShape.BOX, BodyShape.SPHERE, BodyShape.CAPSULE, BodyShape.CYLINDER]
+        For size In [0.001 As Float, 100000]
+            For moves In [Motion.DYNAMIC, Motion.KINEMATIC, Motion.STATIC]
+                Local edge = Fresh()
+                edge.Form = form
+                edge.Moves = moves
+                edge.Size = Vec3(size, size, size)
+                edge.Mass = size
+                edge.Friction = size
+                edge.Restitution = 1
+                edge.LinearDamping = size
+                edge.AngularDamping = size
+                edge.GravityFactor = -size
+                edge.Layer = 31
+                edge.Continuous = True
+                edge.Sensor = moves == Motion.STATIC
+                edge.Build(world, Pivot())
+            End For
+        End For
+    End For
+End Function
+
+@Test
+Function AMassOfNothingIsWhatItsVolumeMakesIt()
+    Local scene = World()
+    World.SetCurrent(scene)
+    Defer scene.Free()
+    Local world = PhysicsWorld()
+    Defer world.Free()
+    Local byVolume = Fresh()
+    Expect(byVolume.Mass == 0)
+    Local body = byVolume.Build(world, Pivot())
+    Local made = Body(world, Shape.Box(Vec3(1, 1, 1)), Motion.DYNAMIC, Vec3(0, 0, 0))
+    Expect(body.Mass() == made.Mass(), "{body.Mass()}, not {made.Mass()}")
+    Expect(body.Mass() > 100, "it's {body.Mass()}")
+End Function
+
+@Test
+Function WhatsMovedIsWhatsSaid()
+    Local scene = World()
+    World.SetCurrent(scene)
+    Defer scene.Free()
+    Local world = PhysicsWorld()
+    Defer world.Free()
     For moves In [Motion.STATIC, Motion.KINEMATIC]
-        Local component = BodyComponent()
-        component.Size = Vec3(1, 1, 1)
+        Local component = Fresh()
         component.Moves = moves
         component.Mass = 9
         Local body = component.Build(world, Pivot())
         Expect(body.Motion() == moves)
     End For
+    // A size of nothing in what's saved isn't taken for one that isn't said.
+    Components.Clear()
+    Defer Components.Clear()
+    AddBodyComponent()
+    Local nothing = Value.Object()
+    nothing["x"] = Value(0.0)
+    nothing["y"] = Value(0.0)
+    nothing["z"] = Value(0.0)
+    Local values = Value.Object()
+    values["Size"] = nothing
+    Local said = Components.Attach(Pivot(), "Body", values)
+    Expect(said != Null, "it took a size of nothing")
 End Function

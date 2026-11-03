@@ -6,6 +6,7 @@ Import std.core
 Import std.data
 Import std.io
 Import std.os
+Import std.text
 Import "./attributes"
 Import "./entity"
 
@@ -19,7 +20,9 @@ Public Struct ComponentField
     /// What it is at first, as what's saved of it is: a Bool, a number, a String, the name of an
     /// Enum's member, or an Object of a Struct's Fields.
     Public Field First: Value
-    /// An Enum's members' names, in order, or none.
+    /// Whether it's an Enum, though its First is only a name.
+    Public Field Enumerated: Bool
+    /// An Enum's members' names, in order; none if MembersOf can't say.
     Public Field Members: String[]
     /// What its @Limits says.
     Public Field Low: Float
@@ -52,19 +55,78 @@ End Class
 
 Global registered: Registered[] = []
 
-/// Every member of an Enum, in order, as Load takes each by its number; none of anything else.
-Public Function MembersOf<E>(): E[]
+/// The members of an Enum, by number, as Load takes each, from 0 until `upTo`; none of anything else, nor
+/// of an @Open or a @Flags Enum, which has more values than members. FutureBlitz has no way to list an
+/// Enum's members yet, so one numbered below 0 or from `upTo` on isn't found.
+Public Function MembersOf<E>(upTo: Int = 4096): E[]
+    If !IsEnum<E>() Then Return []
     Local all: E[] = []
-    For at = 0 To 255
+    For at = 0 Until upTo
         Try
             Local member = Try Load<E>(Value(at As Int64))
-            If !Save(member).IsString Then Return []
+            Local name = Save(member).AsString()
+            If name == Null || name.Contains(" | ") Then Return []
             all.Add(member)
         Catch error As ParseError
-            Break
+            // A number no member has, which there can be some of between those that are.
         End Try
     End For
     Return all
+End Function
+
+// Whether `E` saves as a name, and only takes one it knows.
+Function IsEnum<E>(): Bool
+    Try
+        Try Load<E>(Value("no member's called this"))
+        Return False
+    Catch error As ParseError
+    End Try
+    Try
+        Return Save(Try Load<E>(Value(0 As Int64))).IsString
+    Catch error As ParseError
+        // Nothing's numbered 0, which is what's left of what isn't an Enum.
+        Return True
+    End Try
+End Function
+
+// What an integer type's values go between, as Load takes them, unless it says otherwise.
+Function WholeBounds<F>(): Limits
+    Local high: Int64 = 0
+    For top In [127 As Int64, 255, 32767, 65535]
+        Try
+            Try Load<F>(Value(top + 1))
+        Catch error As ParseError
+            high = top
+            Break
+        End Try
+    End For
+    If high == 0 Then Return Limits()
+    Try
+        Try Load<F>(Value(-1 As Int64))
+        Return Limits(-(high As Float) - 1, high As Float)
+    Catch error As ParseError
+        Return Limits(0, high As Float)
+    End Try
+End Function
+
+// What's wrong with `value` for `field`, or Null: a number past what it takes, or one of an Object's.
+Function OutOfLimits(field: ComponentField, value: Value): String?
+    Local bounds = Limits(field.Low, field.High, field.Above)
+    Local number = value.AsDouble()
+    If number != Null && value.IsNumber
+        Local float = number As Float
+        Local takes = (bounds.Above ? float > bounds.Low : float >= bounds.Low) &&
+                      float <= bounds.High
+        Return takes ? Null : "{field.Name} can't be {number}"
+    End If
+    If !value.IsObject Then Return Null
+    For key In value.Keys()
+        Local part = value[key]
+        If part == Null Then Continue
+        Local said = OutOfLimits(field, part)
+        If said != Null Then Return said
+    End For
+    Return Null
 End Function
 
 // What's known of `T` by its Public Fields, what they are at first as Load makes them from nothing.
@@ -81,14 +143,17 @@ Function Described<T: Class>(name: String): ComponentKind
         If f.Has(Skip) Then Continue
         Local first = Save(f.Get(made))
         Local members: String[] = []
-        If first.IsString
+        Local named = first.IsString && IsEnum<F>()
+        If named
             For member In MembersOf<F>()
                 members.Add(Save(member).AsString() ?? "")
             End For
         End If
-        Local limits = f.Attribute(Limits) ?? Limits()
-        fields.Add(ComponentField(f.Name, first, members, limits.Low, limits.High, limits.Above,
-                                  f.Has(ShownInDegrees)))
+        Local limits = f.Attribute(Limits) ?? (first.IsInteger ? WholeBounds<F>() : Limits())
+        // By the key Save and Load know it by.
+        Local key = f.Attribute(Rename)?.Name ?? f.Name
+        fields.Add(ComponentField(key, first, named, members, limits.Low, limits.High,
+                                  limits.Above, f.Has(ShownInDegrees)))
     End For
     Return ComponentKind(name, fields)
 End Function
@@ -134,12 +199,18 @@ Public Final Class Components
     End Method
 
     /// Puts a new component of the kind called `name` on `entity`, as Entity.Data gives it back, made
-    /// from `values`, what's in an Object of its Fields. Gives what went wrong: a kind there isn't, or
-    /// what can't be loaded; Null if it went well.
+    /// from `values`, what's in an Object of its Fields. Gives what went wrong: a kind there isn't, a
+    /// number past its `@Limits`, or what can't be loaded; Null if it went well.
     @MainThread @PanicsAtCaller
     Public Static Method Attach(entity: Entity, name: String, values: Value): String?
         For each In registered
-            If each.kind.Name == name Then Return each.attach(entity, values)
+            If each.kind.Name != name Then Continue
+            For field In each.kind.Fields
+                Local value = values[field.Name]
+                Local said = value != Null ? OutOfLimits(field, value) : Null
+                If said != Null Then Return "a {name}'s {said}"
+            End For
+            Return each.attach(entity, values)
         End For
         Return "there's no kind of component called {name}"
     End Method

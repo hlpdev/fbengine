@@ -29,8 +29,9 @@ that part of it alone.
 
 A game's components show there too: Classes of its own, kept on an entity as `Entity.Data<T>()` gives
 back, each edited as data, by what its Public Fields are. The editor can't run a game's code in itself,
-so a game's `components/main.fb` says what kinds it has, and the editor runs it, by `fb` on the PATH, as
-a project opens:
+so a game's `components/main.fb` says what kinds it has, and the editor builds and runs it, by `fb` on the
+PATH, as a project opens, once you've said that folder's code may run, and asks once per folder; File's
+Reload Components reads them again:
 
 ```
 Import fbengine
@@ -43,7 +44,9 @@ Try Components.Describe()
 ```
 
 A game with no such program just has none. `@Limits` and `@ShownInDegrees` on a Field say what they
-say on a setter, and `@Skip` leaves one out. fbengine_physics's "Body" is one of these.
+say on a setter, of each number of a vector too, and `@Skip` leaves one out. What's edited is a Bool, a
+number, a String, an Enum whose members FutureBlitz's Load can find, a Vec2, a Vec3, or a Color; anything
+else shows a note. fbengine_physics's "Body" is one of these.
 
 `-- --watch` plays a scene of its own by itself, keeping nothing of yours, for anyone to look at (`python
 tools/show.py ../packages/fbengine_editor`).

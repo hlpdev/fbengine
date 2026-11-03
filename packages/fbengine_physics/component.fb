@@ -27,11 +27,12 @@ Public Final Class BodyComponent
     /// What it touches as.
     Public Field Form: BodyShape = BodyShape.BOX
     /// How big that is, 1 by 1 by 1 at first.
-    @Limits(0, Above: True)
+    @Limits(0.001, 100000)
     Public Field Size: Vec3
-    /// Its mass, in kilograms, which a static body has none of.
-    @Limits(0, Above: True)
-    Public Field Mass: Float = 1
+    /// Its mass, in kilograms, or what its volume makes it with 0, as a body made in code has. A static
+    /// body has none.
+    @Limits(0)
+    Public Field Mass: Float = 0
     /// How much it grips what it slides on.
     @Limits(0)
     Public Field Friction: Float = 0.2
@@ -46,24 +47,41 @@ Public Final Class BodyComponent
     Public Field AngularDamping: Float = 0.05
     /// How much gravity moves it.
     Public Field GravityFactor: Float = 1
+    /// The layer it's in.
+    @Limits(0, 31)
+    Public Field Layer: Int32 = 0
+    /// Whether it collides with nothing, but notices what comes into it.
+    Public Field Sensor: Bool = False
+    /// Whether its collisions are found along the way it moves, as a fast one's want.
+    Public Field Continuous: Bool = False
+    /// Whether it sleeps once it's rested a while.
+    Public Field CanSleep: Bool = True
 
-    /// A size that isn't said is 1 by 1 by 1.
-    Public Method OnLoaded()
+    /// A size that isn't said is 1 by 1 by 1; none of it may be below what it takes.
+    Public Method OnLoaded() Throws ParseError
         If Size == Vec3(0, 0, 0) Then Size = Vec3(1, 1, 1)
+        If !(Size.x > 0 && Size.y > 0 && Size.z > 0)
+            Throw ParseError(ParseErrorKind.OUT_OF_RANGE, "a body's Size is above 0, not {Size}")
+        End If
     End Method
 
-    /// The body it says, in `world`, kept with `entity`, as Body's New is.
-    @MainThread Public Method Build(world: PhysicsWorld, entity: Entity): Body
-        Local shape = Shaped()
-        Local body = Body(world, shape, Moves, entity)
+    /// The body it says, in `world`, kept with `entity`, as Body's New is. A capsule's as tall as its
+    /// radius lets it be, if its Size says less. Panics if `world` can't take it, as Body's New does.
+    @MainThread @PanicsAtCaller
+    Public Method Build(world: PhysicsWorld, entity: Entity): Body
+        Local body = Body(world, Shaped(), Moves, entity)
         body.SetFriction(Friction)
         body.SetRestitution(Restitution)
+        body.SetLayer(Layer)
+        body.SetSensor(Sensor)
         // A static one doesn't move, so it has none of the rest.
         If Moves == Motion.STATIC Then Return body
-        body.SetMass(Mass)
+        If Mass > 0 Then body.SetMass(Mass)
         body.SetLinearDamping(LinearDamping)
         body.SetAngularDamping(AngularDamping)
         body.SetGravityFactor(GravityFactor)
+        body.SetCanSleep(CanSleep)
+        If Moves == Motion.DYNAMIC && !Sensor Then body.SetContinuous(Continuous)
         Return body
     End Method
 
@@ -72,7 +90,7 @@ Public Final Class BodyComponent
             Case BodyShape.SPHERE
                 Return Shape.Sphere(Size.x)
             Case BodyShape.CAPSULE
-                Return Shape.Capsule(Size.y, Size.x)
+                Return Shape.Capsule(Max(Size.y, Size.x * 2), Size.x)
             Case BodyShape.CYLINDER
                 Return Shape.Cylinder(Size.y, Size.x)
             Default

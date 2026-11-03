@@ -48,6 +48,7 @@ Public Final Class Light Extends Entity
 
     /// Sets the light's color, linear, as std.math's Color is; its alpha is left out. A color
     /// below 0 takes light away, as dark spots want.
+    @NoAlpha
     @MainThread @PanicsAtCaller
     Public Method SetColor(color: Color)
         If !fbe_light_set_color(Live("SetColor"), color.r, color.g, color.b) Then Failed("SetColor")
