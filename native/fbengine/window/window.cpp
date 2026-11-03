@@ -333,9 +333,9 @@ FBE_API bool fbe_window_set_size(int32_t width, int32_t height) {
     if (window == nullptr) {
         return fbe::fail("there's no window to size");
     }
-    if (width <= 0 || height <= 0) {
+    if (width < 1 || height < 1 || width > largest || height > largest) {
         return fbe::fail(
-            std::format("a window is more than 0 each way, not {} by {}", width, height));
+            std::format("a window is 1 to {} pixels on a side, not {}x{}", largest, width, height));
     }
     if (current_mode != FBE_WINDOW_WINDOWED) {
         return fbe::fail("a fullscreen window's size is its mode's");
@@ -345,6 +345,52 @@ FBE_API bool fbe_window_set_size(int32_t width, int32_t height) {
     }
     SDL_SyncWindow(window);
     return true;
+}
+
+FBE_API bool fbe_window_place_shows(int32_t x, int32_t y, int32_t width, int32_t height) {
+    if (!fbe::start_video() || width < 1 || height < 1) {
+        return false;
+    }
+    const SDL_Rect place{ .x = x, .y = y, .w = width, .h = height };
+    const SDL_DisplayID display = SDL_GetDisplayForRect(&place);
+    SDL_Rect bounds{};
+    if (display == 0 || !SDL_GetDisplayBounds(display, &bounds)) {
+        return false;
+    }
+    // Enough of it to take hold of.
+    constexpr int enough = 32;
+    SDL_Rect both{};
+    return SDL_GetRectIntersection(&place, &bounds, &both) && both.w >= enough && both.h >= enough;
+}
+
+FBE_API bool fbe_window_set_minimum_size(int32_t width, int32_t height) {
+    if (window == nullptr) {
+        return fbe::fail("there's no window to give a least size");
+    }
+    if (width < 0 || height < 0 || width > largest || height > largest) {
+        return fbe::fail(std::format("a window's least size is 0 to {} on a side, not {}x{}",
+                                     largest, width, height));
+    }
+    if (!SDL_SetWindowMinimumSize(window, width, height)) {
+        return fbe::fail_sdl("couldn't give the window a least size");
+    }
+    return true;
+}
+
+FBE_API int32_t fbe_window_minimum_width(void) {
+    int width = 0;
+    if (window != nullptr) {
+        SDL_GetWindowMinimumSize(window, &width, nullptr);
+    }
+    return width;
+}
+
+FBE_API int32_t fbe_window_minimum_height(void) {
+    int height = 0;
+    if (window != nullptr) {
+        SDL_GetWindowMinimumSize(window, nullptr, &height);
+    }
+    return height;
 }
 
 FBE_API void fbe_window_set_resizable(bool on) {

@@ -132,7 +132,7 @@ Function AWindowsSizedAndMoved() Throws GraphicsError
         Try Window.SetSize(0, 300)
     Catch error As GraphicsError
         refused = True
-        Expect(error.Message.Contains("more than 0"), error.Message)
+        Expect(error.Message.Contains("1 to 16384"), error.Message)
     End Try
     Expect(refused && Window.Width() == 800)
 End Function
@@ -169,4 +169,60 @@ Function NoWindowIsSizedOrMoved()
         refused += 1
     End Try
     Expect(refused == 2)
+End Function
+
+@Test
+Function AWindowIsnSizedPastWhatItCanBeOpenedAt() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Local refused = 0
+    For size In [(16385, 100), (100, 16385), (0, 100), (100, -1)]
+        Try
+            Try Window.SetSize(size.0, size.1)
+        Catch error As GraphicsError
+            refused += 1
+            Expect(error.Message.Contains("1 to 16384"), error.Message)
+        End Try
+    End For
+    Expect(refused == 4 && Window.Width() == 640)
+End Function
+
+@Test
+Function AWindowHasAMinimumSize() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Expect(Window.MinimumWidth() == 0 && Window.MinimumHeight() == 0)
+    Try Window.SetMinimumSize(200, 100)
+    Expect(Window.MinimumWidth() == 200 && Window.MinimumHeight() == 100)
+    Local refused = False
+    Try
+        Try Window.SetMinimumSize(-1, 100)
+    Catch error As GraphicsError
+        refused = True
+    End Try
+    Expect(refused && Window.MinimumWidth() == 200)
+    EndGraphics()
+    Expect(Window.MinimumWidth() == 0)
+    refused = False
+    Try
+        Try Window.SetMinimumSize(10, 10)
+    Catch error As GraphicsError
+        refused = True
+    End Try
+    Expect(refused, "it set the least of no window")
+End Function
+
+@Test
+Function APlaceShowsIfItsOnADisplay() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 480)
+    Defer EndGraphics()
+    Expect(Window.PlaceShows(10, 10, 640, 480))
+    Expect(!Window.PlaceShows(100000, 100000, 640, 480))
+    Expect(!Window.PlaceShows(-100000, 10, 640, 480))
+    // Only a sliver on it is off it.
+    Expect(!Window.PlaceShows(-636, 10, 640, 480))
+    Expect(!Window.PlaceShows(10, 10, 0, 480))
 End Function

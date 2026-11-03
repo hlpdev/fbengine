@@ -141,11 +141,27 @@ result_t<path_t> resolve(const path_t& base, std::string_view relative) {
     return add_names(std::move(folder), relative, relative);
 }
 
-void vfs_t::mount(const path_t& at, std::shared_ptr<source_t> source) {
+std::uint64_t vfs_t::mount(const path_t& at, std::shared_ptr<source_t> source) {
     const std::scoped_lock lock(m_mutex);
+    const std::uint64_t id = m_next_id++;
     auto changed = std::make_shared<view_t::mounts_t>(*m_mounts);
-    changed->push_back({ .at = at, .source = std::move(source) });
+    changed->push_back({ .at = at, .source = std::move(source), .id = id });
     m_mounts = std::move(changed);
+    return id;
+}
+
+bool vfs_t::unmount(std::uint64_t id) {
+    const std::scoped_lock lock(m_mutex);
+    const view_t::mounts_t& mounts = *m_mounts;
+    for (std::size_t i = mounts.size(); i-- > 0;) {
+        if (mounts[i].id == id) {
+            auto changed = std::make_shared<view_t::mounts_t>(*m_mounts);
+            changed->erase(changed->begin() + static_cast<std::ptrdiff_t>(i));
+            m_mounts = std::move(changed);
+            return true;
+        }
+    }
+    return false;
 }
 
 bool vfs_t::unmount(const path_t& at) {
