@@ -331,10 +331,12 @@ Function ShadowsAtlasHasALimit()
 End Function
 
 @Test
-Function AWorldTakesASkyTexture()
+Function AWorldTakesASkyTexture() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
     Local world = Fresh()
     Defer world.Free()
-    Local picture = Texture(2, 2)
+    Local picture = Try Texture(2, 2)
     world.SetSkyTexture(picture, 0.5)
     world.ClearSky()
 End Function

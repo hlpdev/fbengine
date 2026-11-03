@@ -19,7 +19,9 @@ Select arguments[0]
     Case "decal-limit"
         world.Decal(Mat4.Scale(Vec3(1, 1, 1)), 0, 2)
     Case "sky-texture-brightness"
-        world.SetSkyTexture(Texture(2, 2), -1)
+        Local picture = Try? Texture(2, 2)
+        If picture == Null Then Panic("no texture")
+        world.SetSkyTexture(picture, -1)
     Case "particles-capacity"
         Particles(0)
     Case "particles-rate"
