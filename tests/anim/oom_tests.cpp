@@ -23,6 +23,10 @@
 #include <dlfcn.h>
 #endif
 
+#ifdef __linux__
+#include <dlfcn.h>
+#endif
+
 namespace {
 
 /// Which of this thread's allocations fails, -1 for none, how many there have been, and whether
