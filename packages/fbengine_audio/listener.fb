@@ -39,12 +39,12 @@ Public Final Class Listener
 
     /// Moves it each frame, at Flip, to where `entity` is in the world, turned as it is, at the
     /// velocity of the move over the frame: how it stays with a camera, which faces -Z with Y up as
-    /// it does. With `step`, the FixedStep the game's logic runs at, it's where the entity is drawn,
-    /// at the step's Tween, so it moves as smoothly as what's seen, rather than a step at a time. An
-    /// entity freed while it's followed is let go at the next Flip, where it was, at rest; following
-    /// a freed one panics.
+    /// it does. With `step`, the FixedUpdate the game's logic runs at, it's where the entity is
+    /// drawn, at the step's Tween, so it moves as smoothly as what's seen, rather than a step at a
+    /// time. An entity freed while it's followed is let go at the next Flip, where it was, at rest;
+    /// following a freed one panics.
     @MainThread @PanicsAtCaller
-    Public Static Method Follow(entity: Entity, step: FixedStep? = Null)
+    Public Static Method Follow(entity: Entity, step: FixedUpdate? = Null)
         If entity.Freed() Then Panic("the Listener can't follow a {entity}")
         Start(Followed(entity, step))
     End Method

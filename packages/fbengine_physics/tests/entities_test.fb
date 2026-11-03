@@ -282,7 +282,7 @@ Function AWorldDroppedLeavesFlipsAndItsEntitiesAlone()
     Expect(!entity.Freed())
 End Function
 
-// Drawing between steps is the scene's: a FixedStep's capture before each Step, and its Tween.
+// Drawing between steps is the scene's: a FixedUpdate's capture before each Step, and its Tween.
 @Test @MainThread
 Function ADrivenEntityTweensBetweenSteps()
     Local world = PhysicsWorld()
