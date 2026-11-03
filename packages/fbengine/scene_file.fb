@@ -37,7 +37,8 @@ Const OF_CAMERA = ["projection", "field_of_view", "height", "range", "clear", "c
                    "clear_color", "order", "fog", "fog_color", "fog_range", "fog_density"]
 Const OF_SPRITE = ["material", "color", "view", "size", "handle", "turn"]
 Const OF_DOCUMENT = ["format", "material", "geometry", "entity"]
-Const OF_MATERIAL = ["id", "color", "shading", "blend", "alpha_cutoff", "shininess", "vertex_colors",
+Const OF_MATERIAL = ["id", "color", "shading", "blend", "alpha_cutoff", "shininess",
+                     "vertex_colors",
                      "wireframe", "two_sided", "fogged", "order", "layers"]
 Const OF_LAYER = ["layer", "texture", "blend", "uv_set", "uv", "bump"]
 Const OF_GEOMETRY = ["id", "source", "surfaces", "cull_box"]
@@ -226,7 +227,8 @@ Class Writing
         Else
             Local box = geometry.CullBox()
             If box != Null
-                table["cull_box"] = Try Numbers([box.Min.x, box.Min.y, box.Min.z, box.Max.x, box.Max.y,
+                table["cull_box"] = Try Numbers([box.Min.x, box.Min.y, box.Min.z, box.Max.x,
+                                                 box.Max.y,
                                                  box.Max.z])
             End If
             Local surfaces = Value.Array()
@@ -246,7 +248,8 @@ Class Writing
                     Local v = surface.Vertex(at)
                     vertices.Add(Try Numbers([v.Position.x, v.Position.y, v.Position.z, v.Normal.x,
                                               v.Normal.y, v.Normal.z,
-                                              v.Uv0.x, v.Uv0.y, v.Uv1.x, v.Uv1.y, v.Color.r, v.Color.g,
+                                              v.Uv0.x, v.Uv0.y, v.Uv1.x, v.Uv1.y, v.Color.r,
+                                              v.Color.g,
                                               v.Color.b,
                                               v.Color.a]))
                 End For
@@ -516,7 +519,8 @@ Class Reading
             If table == Null Then Throw Wrong("{at}: there's no geometry {id}")
             Local from = Try TextOf(table, "source", "the geometry {id}")
             If from != Null
-                Local whole = from.StartsWith("builtin:") ? Try Builtin(from, at) : Try Making(from, at)
+                Local whole = from.StartsWith("builtin:") ? Try Builtin(from, at) : Try Making(from,
+                                                                                               at)
                 whole.SetSceneId(id)
                 Return whole
             End If
@@ -561,7 +565,8 @@ Class Reading
             End For
             Local box = Try FloatsOf(table, "cull_box", 6, where)
             If box != Null
-                Try Must(box[0] <= box[3] && box[1] <= box[4] && box[2] <= box[5], where, "cull_box",
+                Try Must(box[0] <= box[3] && box[1] <= box[4] && box[2] <= box[5], where,
+                         "cull_box",
                          "has its least corner first")
                 made.SetCullBox(AABB(Vec3(box[0], box[1], box[2]), Vec3(box[3], box[4], box[5])))
             End If
@@ -624,7 +629,8 @@ Class Reading
             Case "MESH"
                 own = OF_MESH
                 Local source = Try TextOf(table, "geometry", path)
-                made = source != Null ? Mesh(Try GeometryOf(source, path), parent) : Mesh(Null, parent)
+                made = source != Null ? Mesh(Try GeometryOf(source, path), parent) : Mesh(Null,
+                                                                                          parent)
             Case "LIGHT"
                 own = OF_LIGHT
                 made = Light(Try Named<LightType>(table, "light", LightType.POINT,
@@ -689,7 +695,8 @@ Class Reading
         made.SetMaxSlope(slope)
         Local fade = Try FloatsOf(table, "auto_fade", 2, path)
         If fade != Null
-            Try Must((fade[0] == 0.0 && fade[1] == 0.0) || (fade[0] >= 0.0 && fade[0] < fade[1]), path,
+            Try Must((fade[0] == 0.0 && fade[1] == 0.0) || (fade[0] >= 0.0 && fade[0] < fade[1]),
+                     path,
                      "auto_fade", "is 0 <= start < end, or 0 and 0")
             made.SetAutoFade(fade[0], fade[1])
         End If
@@ -742,7 +749,8 @@ Class Reading
             End If
             camera.SetClear(Try BoolOf(table, "clear", True, path),
                             Try BoolOf(table, "clear_depth", True, path))
-            camera.SetClearColor(Try ColorOf(table, "clear_color", camera.ClearColor(), path, False))
+            camera.SetClearColor(Try ColorOf(table, "clear_color", camera.ClearColor(), path,
+                                             False))
             camera.SetOrder(Try IntOf(table, "order", 0, path))
             camera.SetFogMode(Try Named<FogMode>(table, "fog", FogMode.NONE,
                                                  [FogMode.NONE, FogMode.LINEAR, FogMode.EXPONENTIAL,
@@ -1008,7 +1016,8 @@ Public Final Class Scene
         Return Try Reading_(Try Assets.ReadText(path), parent, True)
     End Method
 
-    Private Static Method Reading_(text: String, parent: Entity?, tolerant: Bool): OpenedScene Throws IOError
+    Private Static Method Reading_(text: String, parent: Entity?,
+                                   tolerant: Bool): OpenedScene Throws IOError
         Local document: Value? = Null
         Try
             document = Try Toml.Read(text)

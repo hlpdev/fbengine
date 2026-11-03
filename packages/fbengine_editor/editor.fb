@@ -262,7 +262,8 @@ Public Final Class Editor
             sceneFile = path
             sceneText = Try? File.ReadText(disk)
             Held()
-            If problems.Count > 0 Then Said("Some of what that scene's made of is lost", problems.Join("\n"))
+            If problems.Count > 0 Then Said("Some of what that scene's made of is lost",
+                                            problems.Join("\n"))
         Catch error As IOError
             Said("Couldn't open that scene", error.Message)
             Return
@@ -306,8 +307,10 @@ Public Final Class Editor
         Try
             Local disk = Try DiskOf(open, to)
             Local was = sceneText
-            If to == sceneFile && was != Null && File.Exists(disk) && (Try File.ReadText(disk)) != was
-                Local asking = Dialog("Its file's changed", "{to} has been changed since this read it. " +
+            If to == sceneFile && was != Null && File.Exists(disk) &&
+               (Try File.ReadText(disk)) != was
+                Local asking = Dialog("Its file's changed",
+                                      "{to} has been changed since this read it. " +
                                       "Saving replaces what it says now.")
                 asking.AddButton("Cancel")
                 Local same = to
@@ -391,7 +394,8 @@ Public Final Class Editor
             Local here = sceneFile
             Local same = here != Null && (Try DiskOf(open, here)) == disk
             If !same && (File.Exists(disk) || Dir.Exists(disk))
-                Local asking = Dialog("There's a file there", "{to} is there already. Saving replaces it.")
+                Local asking = Dialog("There's a file there",
+                                      "{to} is there already. Saving replaces it.")
                 asking.AddButton("Cancel")
                 asking.AddButton("Replace", Function[Weak Self]()
                     Self?.WrittenTo(to, after)

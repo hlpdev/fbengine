@@ -678,7 +678,11 @@ Function ThumbnailsComeAFewAFrameAndSmall() Throws IOError, GraphicsError
     Local most = 0
     Local was = editor.Files.ThumbsMade()
     Local since = Instant.Now()
+    Local steps = 0
     While editor.Files.ThumbsMade() < 201 && (Instant.Now() - since) < 120.Seconds
+        // Now and then, a frame long enough for all that's loading to be done by the next.
+        steps += 1
+        If steps % 3 == 0 Then Sleep(30.Milliseconds)
         editor.Step()
         most = Max(most, editor.Files.ThumbsMade() - was)
         was = editor.Files.ThumbsMade()
@@ -707,6 +711,7 @@ Function WhatChangesShowsInItsRow() Throws IOError, GraphicsError
     Local game = Try Game(games.Path)
     Local assets = game / "assets"
     Try File.WriteBytes(assets / "Wall2.png", Picture(40))
+    Try File.WriteBytes(assets / "Wall3.png", Picture(41))
     Try File.WriteText(assets / "bad.png", "not a picture")
     Local editor = Try Started(settings.Path, game)
     Defer editor.Finish()
@@ -714,6 +719,10 @@ Function WhatChangesShowsInItsRow() Throws IOError, GraphicsError
     If (Thumb(editor, "res://wall.png") == Null) || (Thumb(editor, "res://wall2.png") == Null) Then Panic("pictures")
     Expect(RowPixel(editor, "res://wall.png") == Color32(200, 20, 30, 255))
     Expect(RowPixel(editor, "res://Wall2.png") == Color32(40, 20, 30, 255))
+    // Asked for by nothing but its row, whose path has its capitals.
+    StepUntil(editor,
+              Function() => editor.Files.RowOf("res://Wall3.png")?.Find("assets.thumb") != Null)
+    Expect(RowPixel(editor, "res://Wall3.png") == Color32(41, 20, 30, 255))
     Expect(Thumb(editor, "res://bad.png") == Null)
     Local shown = Thumb(editor, "res://sub/ball.gltf")
     If shown == Null Then Panic("a model's")
@@ -866,7 +875,8 @@ Function SavingOverWhatsChangedAsks() Throws IOError, GraphicsError
     editor.Edits.Commit(RenameEdit(editor.Edited.Entities()[0], "mine"))
     editor.SaveScene()
     editor.Step()
-    Expect(editor.ShowingDialog() != Null && (Try Text(file)) == "someone else's" && editor.Edits.Modified())
+    Expect(editor.ShowingDialog() != Null && (Try Text(file)) == "someone else's" &&
+           editor.Edits.Modified())
     Try ClickOn(editor, "dialog.Cancel")
     Expect((Try Text(file)) == "someone else's" && editor.Edits.Modified())
     editor.SaveScene()
@@ -886,9 +896,11 @@ Function SavingOverWhatsChangedAsks() Throws IOError, GraphicsError
     field.SetText("res://other")
     Try ClickOn(editor, "dialog.Save")
     editor.Step()
-    Expect((Try Text(game / "assets" / "other.scene")) == "other" && editor.SceneFile() == "res://a.scene")
+    Expect((Try Text(game / "assets" / "other.scene")) == "other" &&
+           editor.SceneFile() == "res://a.scene")
     Try ClickOn(editor, "dialog.Replace")
-    Expect((Try Text(game / "assets" / "other.scene")) != "other" && editor.SceneFile() == "res://other.scene")
+    Expect((Try Text(game / "assets" / "other.scene")) != "other" &&
+           editor.SceneFile() == "res://other.scene")
     editor.Actions.Run("file.save_as")
     editor.Step()
     field = Found(editor, "dialog.path") As? TextField
@@ -1119,14 +1131,17 @@ Function AModelsThumbnailIsFramedOnIt() Throws IOError, GraphicsError
     Local settings = Try TempDir()
     Local games = Try TempDir()
     Local game = Try Game(games.Path)
-    Try File.WriteText(game / "assets" / "far.gltf", TRIANGLE.Replace("\"mesh\":0", "\"mesh\":0,\"translation\":[100,0,0]"))
-    Try File.WriteText(game / "assets" / "tiny.gltf", TRIANGLE.Replace("\"mesh\":0", "\"mesh\":0,\"scale\":[0.01,0.01,0.01]"))
+    Try File.WriteText(game / "assets" / "far.gltf",
+                       TRIANGLE.Replace("\"mesh\":0", "\"mesh\":0,\"translation\":[100,0,0]"))
+    Try File.WriteText(game / "assets" / "tiny.gltf",
+                       TRIANGLE.Replace("\"mesh\":0", "\"mesh\":0,\"scale\":[0.01,0.01,0.01]"))
     Local editor = Try Started(settings.Path, game)
     Defer editor.Finish()
     For path In ["res://far.gltf", "res://tiny.gltf"]
         Local thumb = Thumb(editor, path)
         If thumb == Null Then Panic(path)
-        Expect(Differing(thumb.Texture().ToImage()) > 40, "{path}: {Differing(thumb.Texture().ToImage())}")
+        Expect(Differing(thumb.Texture().ToImage()) > 40,
+               "{path}: {Differing(thumb.Texture().ToImage())}")
     End For
 End Function
 
@@ -1173,15 +1188,18 @@ End Function
 @Test
 Function ASidecarsLinesAreItsOwn() Throws ParseError
     Local kept = "# what this is\nquality = 1 # as low as it goes\n\n# more\nsrgb = false\n"
-    Expect((Try SidecarWith(kept, "quality", Value(2 As Int32))) == "# what this is\nquality = 2\n\n# more\nsrgb = false\n")
-    Expect((Try SidecarWith(kept, "srgb", Null)) == "# what this is\nquality = 1 # as low as it goes\n\n# more\n")
+    Expect((Try SidecarWith(kept, "quality", Value(2 As Int32))) ==
+           "# what this is\nquality = 2\n\n# more\nsrgb = false\n")
+    Expect((Try SidecarWith(kept, "srgb", Null)) ==
+           "# what this is\nquality = 1 # as low as it goes\n\n# more\n")
     Expect((Try SidecarWith(kept, "mipmaps", Value(True))) == kept + "mipmaps = true\n")
     Expect((Try SidecarWith(Null, "mipmaps", Value(True))) == "mipmaps = true\n")
     Expect((Try SidecarWith("mipmaps = true\n", "mipmaps", Null)) == "")
     Expect((Try SidecarWith("# only this\nmipmaps = true\n", "mipmaps", Null)) == "# only this\n")
     // What's in a table isn't the key, and a new one goes before it.
     Local tabled = "a = 1\n[under]\nquality = 5\n"
-    Expect((Try SidecarWith(tabled, "quality", Value(2 As Int32))) == "a = 1\nquality = 2\n[under]\nquality = 5\n")
+    Expect((Try SidecarWith(tabled, "quality", Value(2 As Int32))) ==
+           "a = 1\nquality = 2\n[under]\nquality = 5\n")
     // A longer key's not this one.
     Expect((Try SidecarWith("quality_x = 1\n", "quality", Null)) == "quality_x = 1\n")
     Expect(ExpectThrows<ParseError>(SidecarWith("nonsense", "a", Null)) != Null)

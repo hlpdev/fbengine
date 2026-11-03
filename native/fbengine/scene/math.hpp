@@ -6,8 +6,8 @@
 
 #include <array>
 #include <cmath>
-#include <limits>
 #include <cstddef>
+#include <limits>
 #include <numbers>
 
 namespace fbe::scene {
@@ -149,7 +149,7 @@ inline quat_t normalize(quat_t q) {
 inline quat_t unit(quat_t q) {
     const float square = (q.x * q.x) + (q.y * q.y) + (q.z * q.z) + (q.w * q.w);
     return std::abs(square - 1.0F) <= 4.0F * std::numeric_limits<float>::epsilon() ? q
-                                                                                    : normalize(q);
+                                                                                   : normalize(q);
 }
 inline quat_t axis_angle(vec3_t axis, float angle) {
     const vec3_t unit = normalize(axis);

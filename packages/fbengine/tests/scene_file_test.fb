@@ -364,7 +364,8 @@ Function WhatASetterWouldPanicAtIsRefused()
     Defer world.Free()
     Local top = "format = 1\n"
     Local entity = "[[entity]]\npath = \"b\"\nkind = "
-    Local material = "[[entity]]\npath = \"b\"\nkind = \"MESH\"\nmaterial = \"m\"\n[[material]]\nid = \"m\"\n"
+    Local material =
+        "[[entity]]\npath = \"b\"\nkind = \"MESH\"\nmaterial = \"m\"\n[[material]]\nid = \"m\"\n"
     For each In [("\"PIVOT\"\ngroup = 1024\n", "group"), ("\"PIVOT\"\ngroup = -1\n", "group"),
                  ("\"PIVOT\"\nradius = [0.0, 1.0]\n", "radius"),
                  ("\"PIVOT\"\nradius = [1.0, -1.0]\n", "radius"),
@@ -407,7 +408,8 @@ Function WhatASetterWouldPanicAtIsRefused()
                  ("cheese = 5\n", "cheese"),
                  ("[[material.layers]]\nlayer = 0\nuv_set = 5\n", "uv_set"),
                  ("[[material.layers]]\nlayer = 0\nuv = [0.0, 1.0, 0.0, 0.0, 0.0]\n", "uv"),
-                 ("[[material.layers]]\nlayer = 0\nbump = [inf, 0.0, 0.0, 0.0, 0.0, 0.0]\n", "bump"),
+                 ("[[material.layers]]\nlayer = 0\nbump = [inf, 0.0, 0.0, 0.0, 0.0, 0.0]\n",
+                  "bump"),
                  ("[[material.layers]]\nlayer = 8\n", "a layer's"),
                  ("[[material.layers]]\nlayer = 0\ntexture = 5\n", "texture")]
         Local line, says = each
@@ -429,7 +431,8 @@ Function WhatASetterWouldPanicAtIsRefused()
     // Twice the same id; what's not a list; what the file says that a scene hasn't.
     For each In [("[[material]]\nid = \"a\"\n[[material]]\nid = \"a\"\n", "twice"),
                  ("[[geometry]]\nid = \"a\"\n[[geometry]]\nid = \"a\"\n", "twice"),
-                 ("material = 5\n", "material"), ("geometry = 5\n", "geometry"), ("entity = 5\n", "entity"),
+                 ("material = 5\n", "material"), ("geometry = 5\n", "geometry"),
+                 ("entity = 5\n", "entity"),
                  ("cheese = 5\n", "cheese")]
         Local line, says = each
         Local said = Refused(top + line)
@@ -502,7 +505,8 @@ Function ABuiltInGivenAMaterialOrCullBoxIsSavedWhole() Throws IOError
     Local again = Fresh()
     Defer again.Free()
     Local read = Try Scene.FromText(text)
-    Expect((read[0] As? Mesh)?.Geometry()?.Surface(0)?.Material()?.Color() == Color(0.5, 0.25, 0.125))
+    Expect((read[0] As? Mesh)?.Geometry()?.Surface(0)?.Material()?.Color() ==
+           Color(0.5, 0.25, 0.125))
     Expect((read[1] As? Mesh)?.Geometry()?.CullBox() == AABB(Vec3(-2, -3, -4), Vec3(2, 3, 4)))
     Expect((Try Scene.Text(read)) == text)
 End Function
@@ -541,9 +545,11 @@ Function ComponentsAreKeptAndStrayKeysRefuseTheSave() Throws IOError
     If kept == Null Then Panic("its component")
     Expect(kept.Path("filter.layers")?.Count == 2)
     Expect((Try Scene.Text(read)) == text)
-    Local strays = Try Scene.FromText("format = 1\n[[entity]]\npath = \"p\"\nkind = \"PIVOT\"\nfuture = 1\nintensity = 2.0\n")
+    Local strays = Try Scene.FromText(
+        "format = 1\n[[entity]]\npath = \"p\"\nkind = \"PIVOT\"\nfuture = 1\nintensity = 2.0\n")
     Local error = ExpectThrows<IOError>(Scene.Text(strays))
-    Expect((error?.Message ?? "").Contains("entity: its file says future, intensity"), error?.Message ?? "")
+    Expect((error?.Message ?? "").Contains("entity: its file says future, intensity"),
+           error?.Message ?? "")
 End Function
 
 // What's been left out, each away from what it is at first.
@@ -569,7 +575,8 @@ Function WhatCameLaterIsSavedToo() Throws IOError
     Local again = Fresh()
     Defer again.Free()
     Local read = Try Scene.FromText(text)
-    Expect(read[0].StepHeight() == 0.5 && read[0].MaxSlope() == 0.25 && read[0].AutoFade() == Vec2(2, 9))
+    Expect(read[0].StepHeight() == 0.5 && read[0].MaxSlope() == 0.25 &&
+           read[0].AutoFade() == Vec2(2, 9))
     Local light = read[1] As? Light
     Expect(light?.Intensity() == 3.5 && light?.InnerCone() == 0.25 && light?.OuterCone() == 0.75)
     Local kept = read[2] As? Mesh
@@ -582,7 +589,8 @@ Function WhatCameLaterIsSavedToo() Throws IOError
     Expect((Try Scene.Text(read)) == text)
     // What's at first isn't said.
     Local plain = Try Scene.Text([Pivot()])
-    Expect(!plain.Contains("step_height") && !plain.Contains("max_slope") && !plain.Contains("auto_fade"))
+    Expect(!plain.Contains("step_height") && !plain.Contains("max_slope") &&
+           !plain.Contains("auto_fade"))
 End Function
 
 // Two cubes are two; one cube two meshes draw is one, by the file's saying so.
@@ -649,10 +657,19 @@ Function IdsStayWhatTheyWere() Throws IOError
     other.SetName("one")
     other.SetMaterial(Material(Color(1, 0, 0)))
     Local both = Try Scene.Text([other, read[0], read[1]])
-    Expect(both.Contains("id = \"one.material-2\"") && both.Contains("id = \"one.material\"\ncolor = [0.25"), both)
+    Expect(both.Contains("id = \"one.material-2\"") &&
+           both.Contains("id = \"one.material\"\ncolor = [0.25"), both)
     Local third = Fresh()
     Defer third.Free()
     Expect((Try Scene.FromText(both)).Count == 3)
+    // The same file read twice has two of what's the same id: one keeps it, and they stay two.
+    Local twice = Try Scene.FromText(text)
+    For each In Try Scene.FromText(text)
+        twice.Add(each)
+    End For
+    Local doubled = Try Scene.Text(twice)
+    Local again2 = Try Scene.FromText(doubled)
+    Expect((again2[0] As? Mesh)?.Material() != (again2[2] As? Mesh)?.Material(), doubled)
 End Function
 
 // One geometry's numbers are a line an array, as std's Toml writes them, until it writes long ones an
@@ -674,7 +691,8 @@ End Function
 Function ANameCanBeAnything() Throws IOError
     Local world = Fresh()
     Defer world.Free()
-    Local names = ["say \"hi\"", "two\nlines", "back\\slash", "hash#1", "caf\u{e9} \u{1F600}", "a/b", "tab\there"]
+    Local names = ["say \"hi\"", "two\nlines", "back\\slash", "hash#1", "caf\u{e9} \u{1F600}",
+                   "a/b", "tab\there"]
     Local roots: Entity[] = []
     For name In names
         Local made = Pivot()
@@ -703,13 +721,16 @@ Function ASameNamedSiblingPutFirstShiftsTheOthers() Throws IOError
     Local old = Pivot(room)
     old.SetName("twin")
     old.SetPosition(Vec3(1, 0, 0))
-    Expect((Try Scene.Text([room])).Contains("path = \"room/twin\"\nkind = \"PIVOT\"\nname = \"twin\"\nposition = [1.0, 0.0, 0.0]"))
+    Expect((Try Scene.Text([room])).Contains(
+        "path = \"room/twin\"\nkind = \"PIVOT\"\nname = \"twin\"\nposition = [1.0, 0.0, 0.0]"))
     Local added = Pivot(room)
     added.SetName("twin")
     old.SetParent(Null)
     old.SetParent(room)
     Local text = Try Scene.Text([room])
-    Expect(text.Contains("path = \"room/twin#2\"\nkind = \"PIVOT\"\nname = \"twin\"\nposition = [1.0, 0.0, 0.0]"), text)
+    Expect(text.Contains(
+        "path = \"room/twin#2\"\nkind = \"PIVOT\"\nname = \"twin\"\nposition = [1.0, 0.0, 0.0]"),
+           text)
 End Function
 
 // A folder, or a file that can't be replaced, is as it was, and leaves nothing beside it.
@@ -746,7 +767,8 @@ Function WhatsOutsideResIsRefusedNamingItsEntity() Throws IOError, GraphicsError
     wall.SetName("wall")
     wall.SetMaterial(material)
     Local error = ExpectThrows<IOError>(Scene.Text([room]))
-    Expect((error?.Message ?? "").Contains("room/wall") && (error?.Message ?? "").Contains("res://"), error?.Message ?? "")
+    Expect((error?.Message ?? "").Contains("room/wall") &&
+           (error?.Message ?? "").Contains("res://"), error?.Message ?? "")
     Try folder.Close()
 End Function
 
@@ -764,7 +786,8 @@ Function ALostAssetBlocksALoadNotAnOpen() Throws IOError, GraphicsError
     Local text = "format = 1\n[[material]]\nid = \"m\"\n[[material.layers]]\nlayer = 0\ntexture = \"res://lost-test/gone.png\"\n[[entity]]\npath = \"wall\"\nkind = \"MESH\"\ngeometry = \"res://lost-test/gone#1.glb#0\"\nmaterial = \"m\"\n"
     Try File.WriteText(folder.Path / "a.scene", text)
     Local error = ExpectThrows<IOError>(Scene.Load("res://lost-test/a.scene"))
-    Expect((error?.Message ?? "").Contains("wall") && (error?.Message ?? "").Contains("gone"), error?.Message ?? "")
+    Expect((error?.Message ?? "").Contains("wall") && (error?.Message ?? "").Contains("gone"),
+           error?.Message ?? "")
     Expect(world.Roots().Count == 0)
     Local opened = Try Scene.Open("res://lost-test/a.scene")
     Expect(opened.Roots.Count == 1 && opened.Problems.Count == 2, "{opened.Problems}")
@@ -773,7 +796,19 @@ Function ALostAssetBlocksALoadNotAnOpen() Throws IOError, GraphicsError
     Expect(mesh?.Geometry()?.Source() == "res://lost-test/gone#1.glb#0")
     Expect(mesh?.Material()?.Texture(0)?.Path() == "res://lost-test/gone.png")
     Local again = Try Scene.Text(opened.Roots)
-    Expect(again.Contains("geometry = \"res://lost-test/gone#1.glb#0\"") && again.Contains("texture = \"res://lost-test/gone.png\""), again)
+    Expect(again.Contains("geometry = \"res://lost-test/gone#1.glb#0\"") &&
+           again.Contains("texture = \"res://lost-test/gone.png\""), again)
+    // A texture alone lost is an error too, and what's not under res:// opens, but can't be saved.
+    Try File.WriteText(folder.Path / "t.scene", "format = 1\n[[material]]\nid = \"m\"\n[[material.layers]]\nlayer = 0\ntexture = \"res://lost-test/gone.png\"\n[[entity]]\npath = \"lamp\"\nkind = \"MESH\"\nmaterial = \"m\"\n")
+    error = ExpectThrows<IOError>(Scene.Load("res://lost-test/t.scene"))
+    Expect((error?.Message ?? "").Contains("lamp"), error?.Message ?? "")
+    Try File.WriteText(
+        folder.Path / "c.scene",
+        "format = 1\n[[entity]]\npath = \"far\"\nkind = \"MESH\"\ngeometry = \"C:/x.glb#0\"\n")
+    Local outside = Try Scene.Open("res://lost-test/c.scene")
+    error = ExpectThrows<IOError>(Scene.Text(outside.Roots))
+    Expect((error?.Message ?? "").Contains("entity: its mesh is from C:/x.glb#0"),
+           error?.Message ?? "")
     // A file itself that's wrong is wrong either way.
     Try File.WriteText(folder.Path / "b.scene", "nonsense")
     Expect(ExpectThrows<IOError>(Scene.Open("res://lost-test/b.scene")) != Null)
@@ -792,7 +827,8 @@ Function AChangedGeometrysMorphTargetsAreRefused() Throws IOError
     Local mesh = Mesh(made)
     mesh.SetName("bent")
     Local error = ExpectThrows<IOError>(Scene.Text([mesh]))
-    Expect((error?.Message ?? "").Contains("bent: its mesh has morph targets"), error?.Message ?? "")
+    Expect((error?.Message ?? "").Contains("bent: its mesh has morph targets"),
+           error?.Message ?? "")
 End Function
 
 // Replaced whole: what has the file open goes on reading what was there; or it wasn't replaced at all.
@@ -811,9 +847,12 @@ Function ASceneIsReplacedWhole() Throws IOError
     Catch error As IOError
         saved = False
     End Try
-    Local bytes = Buffer<UInt8>(10)
-    Expect((Try reading.Read(bytes)) == 10)
-    Expect(bytes[0] == 102 && bytes[9] == 49, "format = 1, still")
+    // Past what any scene's file begins with.
+    Local bytes = Buffer<UInt8>(40)
+    Expect((Try reading.Read(bytes)) == 40)
+    For at = 0 To 39
+        Expect(bytes[at] == had.Bytes[at], "{at}")
+    End For
     reading.Close()
     If !saved Then Expect((Try File.ReadText(file)) == had)
     Try folder.Close()

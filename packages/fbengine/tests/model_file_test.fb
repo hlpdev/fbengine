@@ -598,7 +598,7 @@ Function MorphWeightsAreSavedInAScene() Throws IOError
     Local world = World()
     World.SetCurrent(world)
     Defer world.Free()
-    Assets.MountFiles("res://file-scene-morph", {"a.gltf": Morphed()})
+    Assets.MountFiles("res://file-scene-morph", {"a.gltf": Morphed(), "b#1.gltf": Morphed()})
     Defer Assets.Unmount("res://file-scene-morph")
     Local model = Try Assets.Load<Model>("res://file-scene-morph/a.gltf")
     Defer model.Free()
@@ -609,4 +609,7 @@ Function MorphWeightsAreSavedInAScene() Throws IOError
     Expect(text.Contains("morph = [0.75, 0.125]"), text)
     Local read = (Try Scene.FromText(text))[0] As? Mesh
     Expect(read?.MorphWeights() == [0.75, 0.125] As Float[])
+    // Its number's after a file's last #.
+    Local marked = (Try Scene.FromText("format = 1\n[[entity]]\npath = \"m\"\nkind = \"MESH\"\ngeometry = \"res://file-scene-morph/b#1.gltf#0\"\n"))[0] As? Mesh
+    Expect(marked?.Geometry()?.Source() == "res://file-scene-morph/b#1.gltf#0")
 End Function

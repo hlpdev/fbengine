@@ -546,7 +546,8 @@ Public Final Class AssetBrowser Extends Widget
         Local says = failure
         If texture != Null
             Local kept: Texture? = Null
-            If texture.Format() == TextureFormat.RGBA8 || texture.Format() == TextureFormat.RGBA8_LINEAR
+            If texture.Format() == TextureFormat.RGBA8 ||
+               texture.Format() == TextureFormat.RGBA8_LINEAR
                 Try
                     Local small = Shrunk(texture.ToImage())
                     Local drawn = Try Texture(small.Width, small.Height, texture.Format(), False)
