@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <new>
 #include <optional>
 #include <ranges>
 #include <string_view>
@@ -123,11 +124,10 @@ std::vector<std::pair<std::uint32_t, std::size_t>> list_tree(std::uint32_t entit
     return tree;
 }
 
-/// Frees an entity and what's under it, which are already out of the tree but for the entity's
-/// own children.
-void free_tree(std::uint32_t entity) {
+/// Frees what list_tree listed, which is already out of the tree but for its first's own children.
+void free_listed(const std::vector<std::pair<std::uint32_t, std::size_t>>& tree) {
     entities_t& entities = scene().entities;
-    for (const auto& [at, parent] : list_tree(entity)) {
+    for (const auto& [at, parent] : tree) {
         entities.children[at].clear();
         entities.name[at].clear();
         entities.name[at].shrink_to_fit();
@@ -138,6 +138,11 @@ void free_tree(std::uint32_t entity) {
         scene().freed.push_back(entities.slots.handle(at));
         entities.slots.free(at);
     }
+}
+
+/// Frees an entity and what's under it, as free_listed does.
+void free_tree(std::uint32_t entity) {
+    free_listed(list_tree(entity));
 }
 
 /// Sets the world of an entity and what's under it, moving their counts.
@@ -403,9 +408,19 @@ FBE_API bool fbe_entity_free(uint64_t entity) {
     if (slot == none) {
         return false;
     }
-    fbe::scene::detach(slot);
-    fbe::scene::free_tree(slot);
-    return true;
+    try {
+        // All it allocates comes first, so running out of memory frees nothing.
+        const auto tree = fbe::scene::list_tree(slot);
+        std::vector<std::uint64_t>& freed = scene().freed;
+        if (freed.capacity() - freed.size() < tree.size()) {
+            freed.reserve(std::max(freed.capacity() * 2, freed.size() + tree.size()));
+        }
+        fbe::scene::detach(slot);
+        fbe::scene::free_listed(tree);
+        return true;
+    } catch (const std::bad_alloc&) {
+        return fbe::fail("out of memory");
+    }
 }
 
 FBE_API bool fbe_entity_alive(uint64_t entity) {

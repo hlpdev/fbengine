@@ -48,7 +48,7 @@ Function Played() Throws GraphicsError, InputError
 End Function
 
 // A window for a person to watch, to its end, or `frames` frames, offscreen, as a test walks it.
-Function Watched(frames: Int) Throws GraphicsError, InputError
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, InputError
     Window.SetHeadless(frames > 0)
     Try Graphics(800, 450)
     Defer EndGraphics()
@@ -66,6 +66,7 @@ Function Watched(frames: Int) Throws GraphicsError, InputError
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         Flip()
         count += 1
+        Try Driven(arguments, count)
         // A test's frames are a step each, of a quarter of a second, to see it all.
         Local delta = frames > 0 ? 0.25 : Frame.Delta() As Float32
         seconds += delta
@@ -97,6 +98,15 @@ Function Watched(frames: Int) Throws GraphicsError, InputError
     Print("watched {count} frames, moved {moved}, jumped {jumped}")
 End Function
 
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
 // How many frames `arguments` asks for after --frames, 0 for no end.
 Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
@@ -106,7 +116,7 @@ End Function
 
 Local arguments = Process.Arguments()
 If arguments.Contains("--watch")
-    Try Watched(Asked(arguments))
+    Try Watched(Asked(arguments), arguments)
 Else
     Try Played()
 End If

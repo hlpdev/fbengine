@@ -30,6 +30,7 @@ End Struct
     Public Field rotation: Float32
     Public Field scale_x: Float32
     Public Field scale_y: Float32
+    Public Field keyed: Int32
 End Struct
 
 Public Extern "C" Lib "fbengine_native"

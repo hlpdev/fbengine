@@ -1220,7 +1220,7 @@ Prioritized: P0 blocks the first playable room; P1 blocks the whole game; P2 is 
 | # | Pri | Requirement | Plan |
 |---|---|---|---|
 | 1 | P0 | A Blitz-compatible random generator: Park-Miller with multiplier 48271 (Schrage's 44488 / 3399), the float `(state & 65535) / 65536 + 0.5 / 65536`, `Rand(a, b) = Int(rnd x (b - a + 1)) + a` with a swap when b < a, `SeedRnd` masked to 31 bits (0 becomes 1), seeded 0x1234 at start (blitz3d/bbruntime/bbmath.cpp:5-54); the game reseeds from `MilliSecs` at start (Main.bb:203) and from the map seed in `CreateMap`. Same seed, same map; the generator, events, chunks, and gameplay share one stream. std.math's `Random` is PCG32 | **MISSING**: a small game-side or fbengine compatibility module |
-| 2 | P0 | Blitz's collisions: swept ellipsoids against polygons and ellipsoids, responses 1-3, 10 contacts, epsilon backing, y-scaled radii, collision against the targets' previous transforms, `CountCollisions`, `CollisionX/Y/Z`, `EntityCollided`, `ResetEntity`; done once per `UpdateWorld` | E4 |
+| 2 | P0 | Blitz's collisions: swept ellipsoids against polygons and ellipsoids, responses 1-3, 10 contacts, epsilon backing, y-scaled radii, collision against the targets' previous transforms, `CountCollisions`, `CollisionX/Y/Z`, `EntityCollided`, `ResetEntity`; done once per `UpdateWorld` | E4 Differs on purpose, by architecture.md: targets tested where they are now, 8 iterations by default (10 by SetCollisionIterations), using them up settles the mover, riding an edge by SetStepHeight. |
 | 3 | P0 | Picks and visibility: `LinePick` (with radius), `EntityPick`, `CameraPick`, `PickedX/Y/Z/NX/NY/NZ`, `PickedEntity`, `EntityPickMode` 1 and 2 with the obscurer flag, `EntityVisible` | E4 |
 | 4 | P0 | `EntityInView` exactly as Blitz: the mesh's bounding box's 8 corners (or the position, for non-meshes) against the camera's 6 frustum planes, near and far included, no occlusion | E4 (the 173 test: make it a named fixture) |
 | 5 | P0 | The scene: entities, pivots, hierarchy, `CopyEntity` of hierarchies (rooms, NPCs), hide and show, names, `FindChild`, `GetChild` by index in creation order, `EntityAlpha 0` meaning "not drawn but still collides and picks", every transform (`TurnEntity`, `MoveEntity`, `TranslateEntity`, `PointEntity`, `AlignToVector`, `TFormPoint`, `TFormVector`, `DeltaYaw`, `DeltaPitch`, `VectorYaw`, `EntityDistance`), Blitz's degrees and left-handed axes | E4 |
@@ -1270,6 +1270,8 @@ milestone.
    10 contacts and its epsilon (world.cpp:147-301), plus the double-sided collision copies and
    invisible ramps in .rmesh. Jolt's character controller (E10) won't feel the same; E4 must
    reproduce Blitz's algorithm, numerically close, against the same triangle soups.
+   fbengine doesn't reproduce Blitz's algorithm line for line: item 2 names how it differs, and
+   its proof pins each difference; the remake tunes its feel on these.
 3. **SCP-173's "seen" test.** It's a frustum test of a bounding box with no occlusion, cut off at
    the camera's far plane (which shrinks with the fog to as little as 9 units) and gated by the
    blink timer between -6 and -16. Any change (a different box, a different FOV at a different

@@ -1,0 +1,44 @@
+// A body made in code walking, stopping to wave with its upper half, and looking at something: a
+// Clip each, played by the body's Player, with a footstep heard as it's reached.
+
+Import std.core
+Import std.math
+Import fbengine
+
+Function Heard(event: ClipEvent)
+    Print("{event.Name} in {event.ClipName}")
+End Function
+
+Local hips = Pivot()
+hips.SetName("hips")
+Local spine = Pivot(hips)
+spine.SetName("spine")
+Local head = Pivot(spine)
+head.SetName("head")
+head.SetPosition(Vec3(0, 1, 0))
+
+Local walk = Clip("walk")
+walk.AddPositions("hips", [0, 1], [Vec3(0, 0, 0), Vec3(2, 0, 0)])
+walk.AddEvent("step", 0.5)
+Local wave = Clip("wave")
+wave.AddPositions("spine", [0, 1], [Vec3(0, 0, 0), Vec3(0, 1, 0)])
+
+Local player = hips.Player()
+player.OnEvent(Heard)
+player.Play(walk)
+UpdateWorld(0.75)
+Print("walked to {hips.Position().x}")
+
+Local upper = player.Layer(1)
+upper.SetMask([spine])
+upper.Play(wave, PlayMode.ONCE)
+UpdateWorld(0.5)
+Print("waving at {spine.Position().y}")
+
+// What's posed is the game's to change until the next update.
+head.PointAt(Vec3(hips.Position().x, 1.5, 5))
+Print("looking {head.Forward().z > 0 ? "ahead" : "away"}")
+
+player.Crossfade(Clip("still"), 0.5)
+UpdateWorld(0.5)
+Print("stopped: {player.Clip()?.Name() ?? "nothing"}")

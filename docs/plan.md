@@ -22,7 +22,7 @@ original 1.3.11, and ue5-additions.md what v5 adds; the steps below cover both.
 | **E2** | The GPU core | E1 step 1 | golden images of a triangle, a textured quad, and a readback match on lavapipe |
 | **E3** | 2D | E2 | a small arcade game runs, and its frames match their golden images |
 | **E4** | The scene | E1 step 2 | done (2026-10-31) |
-| **E5** | Drawing the scene | E2, E4 | a lightmapped, fogged, lit room with cameras rendering to textures matches its golden images |
+| **E5** | Drawing the scene | E2, E4 | landed (2026-11-02), CI to confirm: a lightmapped, fogged, lit room with cameras rendering to textures matches its golden images |
 | **E6** | The modern renderer | E5 | Khronos's glTF sample models match their references, with shadows and post effects |
 | **E7** | Animation | E4 (E5 to draw it) | skinned and morphing sample models match their reference frames |
 | **E8** | Assets | E2, E4; a FutureBlitz build step for its last steps | a game runs from cooked paks, and reloads changed files in development |
@@ -121,7 +121,7 @@ Steps 1 to 5 done (2026-11-01: 1, 2, 4, and 3's drawing landed at e9d02d6; 3's c
    responses, step-up, several contacts per update, by collision groups; results per entity.
 9. Picks: rays and spheres against entities and geometry, with pick modes, and the hit's
    position, normal, entity, and triangle.
-10. Sprites and billboards as entities; `UpdateWorld(seconds)` and `FixedStep(rate)` with
+10. Sprites and billboards as entities; `UpdateWorld(seconds)` and `FixedUpdate(rate)` with
     tweening.
 11. Loose ends and E4's review: ground planes, mirrors, fading by distance, meshes crossing.
 12. Terrain: a heightmap entity made in code or from an image (E8's loading), its height and
@@ -224,8 +224,24 @@ e9d02d6).
 
 A scene and asset editor, a FutureBlitz program on the packages and fbengine_ui: a scene view,
 the tree, an inspector, an asset browser, play in the editor. Code stays in VS Code and fb-lsp.
-Its steps are planned when E5, E7, E8, and E11 land; the inspector needs FutureBlitz's
-reflection to set Properties first.
+It's a package, fbengine_editor, whose program opens a game's project folder.
+
+1. The shell: panes on fbengine_ui that dock and resize, a project opened by its folder and
+   mounted, what's open kept between runs, every action a command with undo and redo.
+2. The scene view: a camera rendering into a pane's texture, flown and orbited, a grid, selection
+   by a pick, handles to move, turn, and scale in world or local space, snapping.
+3. The tree: a scene's entities, renamed, reparented by dragging, copied, hidden, freed, found by
+   name, each through undo.
+4. The inspector: each thing's Properties by FutureBlitz's reflection, with editors by type;
+   materials, lights, cameras, bodies, and a game's own components.
+5. The asset browser: res:// as a tree with thumbnails, a model dragged into the scene, import
+   settings' sidecars edited, what changes on disk reloaded.
+6. Scenes on disk: a text format diffs and merges well, written whole or not at all, with
+   references by res:// path; `Scene.Load` in the engine for a game to read what's saved.
+7. Play in the editor: the game's own program built by fb and run on the saved scene, stopped from
+   the editor, its output shown; the scene's never changed by a run.
+8. Loose ends and E13's review: every action driven headless by Simulate, each pane's look in
+   golden images, and a `--watch`.
 
 ### E14: The proof
 
@@ -265,6 +281,12 @@ that waits on another lane's step builds what it can without it, and the rest on
 E8 step 0, the job system, comes first in the assets lane, since scene's collisions and assets'
 loading both run on it: a worker per core less one, jobs and their dependencies, and finished work
 handed to the main thread at Flip. E14 comes last, after every lane's milestones.
+
+**After E5** (2026-11-02): E6 goes to two lanes, so its steps don't wait on one: gpu takes steps 1, 3,
+4, 7, and 8 (PBR, HDR, post effects, materials' own shaders, the review), and scene takes 2, 5, and 6
+(shadows; GPU particles, decals, and sky; instancing, LOD, and occlusion culling). audio finishes E7
+by drawing what assets' Model loads. physics builds E13. input, then whichever lane's free, builds
+E14's samples under examples/proof/.
 
 **Shared files**: the top CMakeLists.txt, `.github/workflows/`, `tests/CMakeLists.txt`, and
 `native/fbengine/frame/frame.cpp` take additions at the end of a list, one call per lane in

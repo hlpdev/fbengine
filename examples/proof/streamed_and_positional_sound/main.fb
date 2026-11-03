@@ -1,0 +1,350 @@
+// A game's sound: sounds decoded from Ogg Vorbis and made in code, Channels with volume, pan, and
+// pitch, pause and resume, 64 at once mixed at 44100, streams that loop, music crossfaded, and sound
+// in the world, following entities. Mixed on no device, it prints what it heard, by numbers, then
+// plays a sound on the null backend, as a device's pace has it. With --watch, it plays through the
+// real output, for a person to hear; --frames, as a test runs it, keeps that to the null backend.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import std.time
+Import fbengine
+Import fbengine_audio
+
+// A mono 16-bit WAV at 44100 Hz of `samples`.
+Function Wav(samples: Int[]): UInt8[]
+    Local bytes: UInt8[] = []
+    bytes.AddAll("RIFF".Bytes)
+    AddInt(bytes, 36 + samples.Count * 2, 4)
+    bytes.AddAll("WAVEfmt ".Bytes)
+    AddInt(bytes, 16, 4)
+    AddInt(bytes, 1, 2)
+    AddInt(bytes, 1, 2)
+    AddInt(bytes, 44100, 4)
+    AddInt(bytes, 88200, 4)
+    AddInt(bytes, 2, 2)
+    AddInt(bytes, 16, 2)
+    bytes.AddAll("data".Bytes)
+    AddInt(bytes, samples.Count * 2, 4)
+    For sample In samples
+        AddInt(bytes, sample, 2)
+    End For
+    Return bytes
+End Function
+
+// `value`'s `count` low bytes, the lowest first.
+Function AddInt(bytes: UInt8[], value: Int, count: Int)
+    For i = 0 Until count
+        bytes.Add(((value >> (8 * i)) & 0xFF) As UInt8)
+    End For
+End Function
+
+// A sound that holds `level`, of 32768, for a second, so what's mixed is how loud it's heard.
+Function Held(level: Int): UInt8[]
+    Local samples: Int[] = []
+    For i = 1 To 44100
+        samples.Add(level)
+    End For
+    Return Wav(samples)
+End Function
+
+// A note of `hertz` for `seconds`, fading out at its end so it doesn't click.
+Function Note(hertz: Float64, seconds: Float64): UInt8[]
+    Local samples: Int[] = []
+    Local count = (seconds * 44100.0) As Int
+    For i = 0 Until count
+        Local fade = Min((count - i) As Float64 / 2000.0, 1.0)
+        samples.Add((Sin(2.0 * Pi64 * hertz * (i As Float64) / 44100.0) * 9000.0 * fade) As Int)
+    End For
+    Return Wav(samples)
+End Function
+
+Function Rounded(value: Float32): Float32 => Round(value * 1000.0) / 1000.0
+
+// What's heard on each side, after a tenth of a second so that what was just set has settled.
+Function Heard(): String
+    Local mixed = Audio.Mix(4410)
+    Return "{Rounded(mixed[8818])}, {Rounded(mixed[8819])}"
+End Function
+
+// Whether it's louder on the right than the left, or the other way, or neither.
+Function Side(): String
+    Local mixed = Audio.Mix(4410)
+    If mixed[8819] > mixed[8818] * 1.5 Then Return "right"
+    If mixed[8818] > mixed[8819] * 1.5 Then Return "left"
+    Return "ahead"
+End Function
+
+// How loud the loudest of `mixed` is.
+Function Loudest(mixed: Float32[]): Float32
+    Local loudest: Float32 = 0
+    For sample In mixed
+        loudest = Max(loudest, Abs(sample))
+    End For
+    Return loudest
+End Function
+
+// Flips at 100 frames a second, each with a Delta.
+Function Flips(count: Int)
+    Frame.SetLimit(100)
+    For i = 1 To count
+        Flip(False)
+    End For
+    Frame.SetLimit(0)
+End Function
+
+Function ProvedChannels() Throws SoundError
+    Local sound = Try Sound.FromBytes(Held(16384))
+    sound.SetLoop(True)
+    Local channel = sound.Play()
+    Print("a Channel of a held 0.5: {Heard()}")
+    channel.SetVolume(0.5)
+    Print("at half its volume: {Heard()}")
+    channel.SetVolume(1)
+    channel.SetPan(-1)
+    Print("panned left: {Heard()}")
+    channel.SetPan(1)
+    Print("panned right: {Heard()}")
+    channel.SetPan(0)
+
+    // At twice the pitch, a tenth of a second plays two tenths of its sound.
+    channel.Seek(0)
+    channel.SetPitch(2)
+    Audio.Mix(4410)
+    Print("at pitch 2, a tenth of a second plays {Rounded(channel.Position() As Float32)} of it")
+    channel.SetPitch(1)
+
+    channel.Pause()
+    Audio.Mix(4410)
+    Local paused = channel.Position()
+    Print("paused: {Heard()}, playing {channel.Playing()}, paused {channel.Paused()}, " +
+          "held where it was {channel.Position() == paused}")
+    channel.Resume()
+    Print("resumed: {Heard()}, on from there {channel.Position() > paused}")
+    channel.Stop()
+    Print("stopped: {Heard()}, playing {channel.Playing()}")
+    // A finished Channel takes any call, and says nothing of it.
+    channel.SetVolume(0.25)
+    Print("a finished Channel's volume, set: {channel.Volume()}")
+
+    // 64 at once, each of 1/128, make a half.
+    Local quiet = Try Sound.FromBytes(Held(256))
+    quiet.SetLoop(True)
+    Local many: Channel[] = []
+    For i = 1 To 64
+        many.Add(quiet.Play())
+    End For
+    Print("64 at once at {Audio.SampleRate()} Hz: {Audio.Playing()} playing, heard {Heard()}")
+    For each In many
+        each.Stop()
+    End For
+    Audio.Mix(4410)
+End Function
+
+Function ProvedStreams() Throws SoundError
+    // An Ogg Vorbis file, decoded whole.
+    Local whole = Try Sound.FromBytes(Embed("tone.ogg"))
+    Print("Ogg Vorbis decoded: streamed {whole.Streamed()}, {whole.Length()} seconds")
+    Local once = whole.Play()
+    Local heard = Loudest(Audio.Mix(4410)) > 0.01
+    Audio.Mix(11025)
+    Print("heard {heard}, then over {!once.Playing()}")
+
+    // The same, decoded as it plays, looping.
+    Local music = Try Sound.StreamBytes(Embed("tone.ogg"))
+    music.SetLoop(True)
+    Print("Ogg Vorbis streamed: streamed {music.Streamed()}, {music.Length()} seconds")
+    Local looping = music.Play()
+    Audio.Mix(22050)
+    Print("after twice its length: playing {looping.Playing()}, " +
+          "come round {looping.Position() < 0.25}, heard {Loudest(Audio.Mix(4410)) > 0.01}")
+    looping.Stop()
+    Audio.Mix(4410)
+
+    // A stream of a held 0.5, with a volume, a pan, and a pause.
+    Local held = Try Sound.StreamBytes(Held(16384))
+    held.SetLoop(True)
+    Local playing = held.Play()
+    Print("a stream of a held 0.5: {Heard()}")
+    playing.SetVolume(0.5)
+    Print("at half its volume: {Heard()}")
+    playing.SetVolume(1)
+    playing.SetPan(-1)
+    Print("panned left: {Heard()}")
+    playing.SetPan(0)
+    playing.Pause()
+    Audio.Mix(4410)
+    Local paused = playing.Position()
+    Print("paused: {Heard()}, held where it was {playing.Position() == paused}")
+    playing.Resume()
+    Print("resumed: {Heard()}")
+    playing.Stop()
+    Audio.Mix(4410)
+
+    // One piece of music into another over a second: half of each, half way.
+    Local first = Try Sound.StreamBytes(Held(16384))
+    Local second = Try Sound.StreamBytes(Held(8192))
+    first.SetLoop(True)
+    second.SetLoop(True)
+    Local going = first.Play()
+    Print("the first piece: {Heard()}")
+    going.FadeOut(1)
+    Local coming = second.Play(False, 1)
+    Audio.Mix(17640)
+    Print("half way through the crossfade: {Heard()}")
+    Audio.Mix(22050)
+    Print("after it: {Heard()}, the first playing {going.Playing()}, the second {coming.Playing()}")
+    coming.Stop()
+    Audio.Mix(4410)
+End Function
+
+Function ProvedTheWorld() Throws SoundError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local camera = Pivot()
+    Local car = Pivot()
+    car.SetPosition(Vec3(0, 0, -1))
+    Local engine = Emitter()
+    Defer engine.Free()
+    engine.Follow(car)
+    Listener.Follow(camera)
+    Defer Listener.Unfollow()
+    Flips(2)
+    Local sound = Try Sound.FromBytes(Held(16384))
+    sound.SetLoop(True)
+    Local running = engine.Play(sound)
+    Print("following a car 1 ahead: {Heard()}")
+    car.SetPosition(Vec3(0, 0, -2))
+    Flips(1)
+    Print("2 ahead, twice as far: {Heard()}")
+    car.SetPosition(Vec3(4, 0, 0))
+    Flips(1)
+    Print("to the right: heard on the {Side()}")
+    // Turned a quarter to its right, the camera has the car ahead; turned round, on its left.
+    camera.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(-90)))
+    Flips(1)
+    Print("the camera turned toward it: heard {Side()}")
+    camera.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(180)))
+    Flips(1)
+    Print("the camera turned round: heard on the {Side()}")
+    camera.SetRotation(Quat.Identity)
+    Flips(1)
+
+    // A moving entity has a velocity from how it moved, which pitches what it plays.
+    car.SetPosition(Vec3(0, 0, -10))
+    Flips(1)
+    car.SetPosition(Vec3(0, 0, -9))
+    Flips(1)
+    Print("the car coming: moving toward the camera {engine.Velocity().z > 0.0}")
+
+    // Coming at half the speed of sound, a tenth of a second plays two tenths of its sound.
+    Local siren = Emitter()
+    Defer siren.Free()
+    siren.SetPosition(Vec3(0, 0, -10))
+    siren.SetVelocity(Vec3(0, 0, Listener.SpeedOfSound() / 2.0))
+    Local wailing = siren.Play(sound)
+    Audio.Mix(4410)
+    Print("at half the speed of sound, a tenth of a second plays {Rounded(wailing.Position() As Float32)} of it")
+    wailing.Stop()
+
+    // Freed with what made it, a sound plays on where it was.
+    car.Free()
+    Flips(1)
+    Print("the car freed: following {engine.Following()}, still heard {running.Playing()}")
+    running.Stop()
+    Audio.Mix(4410)
+End Function
+
+Function Proved() Throws AudioError, SoundError
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Try ProvedChannels()
+    Try ProvedStreams()
+    Try ProvedTheWorld()
+    Audio.Stop()
+
+    // On the null backend, which mixes at a device's pace, and no one hears.
+    Try Audio.Start(AudioDevice.SILENT, 44100, 2)
+    Defer Audio.Stop()
+    Local tone = Try Sound.FromBytes(Embed("tone.ogg"))
+    Local channel = tone.Play()
+    Local clock = Stopwatch.StartNew()
+    While channel.Playing() && clock.Elapsed.TotalSeconds < 10.0
+        Sleep(10.Milliseconds)
+    End While
+    Print("on the null backend: played to its end {!channel.Playing()}, " +
+          "frames mixed {Audio.Frames() >= tone.Frames()}")
+End Function
+
+// Sounds in turn for a person to hear, or, for `frames` above 0, on the null backend and quicker.
+Function Watch(frames: Int) Throws AudioError, SoundError
+    // A test's run is heard by no one; a person's is on the real output.
+    Try Audio.Start(frames > 0 ? AudioDevice.SILENT : AudioDevice.DEFAULT, 44100, 2)
+    Defer Audio.Stop()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local camera = Pivot()
+    Listener.Follow(camera)
+    Defer Listener.Unfollow()
+    Local car = Pivot()
+    Local engine = Emitter()
+    Defer engine.Free()
+    engine.Follow(car)
+    engine.SetDoppler(8)
+
+    Local blip = Try Sound.FromBytes(Note(660, 0.15))
+    Local hum = Try Sound.FromBytes(Note(110, 1))
+    hum.SetLoop(True)
+    Local first = Try Sound.StreamBytes(Note(220, 2))
+    Local second = Try Sound.StreamBytes(Note(330, 2))
+    first.SetLoop(True)
+    second.SetLoop(True)
+    Local music: Channel? = Null
+    Local next: Channel? = Null
+    Local running: Channel? = Null
+
+    Frame.SetLimit(frames > 0 ? 1000 : 60)
+    Defer Frame.SetLimit(0)
+    Local total = frames > 0 ? frames : 960
+    For frame = 1 To total
+        Local seconds = (frame As Float32) / 60.0
+        // Two seconds of blips from left to right, rising; then music, and into other music.
+        If frame <= 120 && frame % 15 == 1
+            Local channel = blip.Play()
+            channel.SetPan(seconds - 1.0)
+            channel.SetPitch(0.75 + seconds / 2.0)
+        End If
+
+        If frame == 150 Then music = first.Play(False, 0.5)
+        If frame == 270 && music != Null Then music.Pause()
+        If frame == 300 && music != Null Then music.Resume()
+        If frame == 390 && music != Null
+            music.FadeOut(2)
+            next = second.Play(False, 2)
+        End If
+
+        If frame == 540 && next != Null Then next.FadeOut(1)
+        // A car passing from left to right, its pitch falling as it goes by.
+        If frame >= 600 Then car.SetPosition(Vec3((seconds - 12.5) * 6.0, 0, -2))
+        If frame == 600 Then running = engine.Play(hum)
+        If frame == 930 && running != Null Then running.FadeOut(0.5)
+        Flip(False)
+    End For
+    Print("watched {total} frames")
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function FramesOf(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try Watch(FramesOf(arguments))
+Else
+    Try Proved()
+End If

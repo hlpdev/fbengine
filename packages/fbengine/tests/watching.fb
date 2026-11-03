@@ -1,0 +1,57 @@
+// What a test of hot reload waits for before its first write. A recursive FileWatcher on a Mac is
+// libuv's FSEvents, whose stream starts on a thread of its own a moment after the watcher's made:
+// what's written before that isn't told of, and what was written just before can be told of late.
+
+Import std.core
+Import std.io
+Import std.text
+Import std.time
+Import fbengine
+
+// A file's bytes, unread, and how many times hot reload's loaded it again.
+Class Probe Implements Asset
+    Field Reloads: Int
+
+    New()
+        Reloads = 0
+    End New
+
+    Public Static Method LoadKind(): AssetKind => AssetKind.BYTES
+
+    Public Static Method FromLoad(load: AssetLoad): Probe Throws IOError => Probe()
+
+    Method Reload(load: AssetLoad): Bool Throws IOError
+        Reloads += 1
+        Return True
+    End Method
+End Class
+
+// Writes a file in the watched `folder`, which is `place` in res://, again and again until hot
+// reload's told of it, and once more after that, so what was told of late, ahead of it, is done
+// and forgotten; then takes it away. It throws an IOError of OTHER if 10 seconds aren't enough,
+// which is the watcher's fault, not the test's.
+Package Function WatcherStarted(folder: Path, place: String) Throws IOError
+    Local name = "watcher-probe.bin"
+    Local file = folder / name
+    Try File.WriteBytes(file, [1] As UInt8[])
+    Local path = place.EndsWith("/") ? place + name : place + "/" + name
+    Local probe = Try Assets.Load<Probe>(path)
+    Local since = Instant.Now()
+    For round = 1 To 2
+        While probe.Reloads < round
+            If (Instant.Now() - since) >= 10.Seconds
+                Throw IOError(IOErrorKind.OTHER, "the watcher of {folder} told of nothing in " +
+                              "10 seconds, {probe.Reloads} times", path)
+            End If
+            Try File.WriteBytes(file, [1] As UInt8[])
+            Local wrote = Instant.Now()
+            While probe.Reloads < round && (Instant.Now() - wrote) < 250.Milliseconds
+                Flip()
+                Sleep(5.Milliseconds)
+            End While
+        End While
+    End For
+    Assets.Release(probe)
+    Try? File.Delete(file)
+    Assets.Reloaded()
+End Function

@@ -60,13 +60,14 @@ static_assert(sizeof(quad_t) == 80, "the canvas shader reads quads 80 bytes apar
 /// A quad's flags: it's a line; steeper than it's long, its longer axis down; its texels are kept
 /// in its part, half a texel in from its edges, so filtering doesn't reach a neighbor's; it's
 /// tiles, its uv where the tiles start and how big they are, from which the shader works out each
-/// pixel's, wrapped into its part if it has one; and its texture's coverage, its red the alpha of
-/// its color.
+/// pixel's, wrapped into its part if it has one; its texture's coverage, its red the alpha of its
+/// color; and a texel of no alpha leaves what's there, whatever the blend.
 constexpr std::uint32_t line_flag = 1;
 constexpr std::uint32_t steep_flag = 2;
 constexpr std::uint32_t part_flag = 4;
 constexpr std::uint32_t tile_flag = 8;
 constexpr std::uint32_t coverage_flag = 16;
+constexpr std::uint32_t key_flag = 32;
 /// No blend but the pen's, for begin.
 constexpr std::int32_t pens_blend = -1;
 /// The longest line the shader's 32-bit arithmetic draws, and the furthest from 0 its ends can be.
@@ -834,7 +835,7 @@ FBE_API bool fbe_2d_texture(uint64_t target, const fbe_2d_pen_t* pen, uint64_t t
                    source.region[2] / source.width,
                    source.region[3] / source.height,
                },
-               source, false, part_flag);
+               source, false, part_flag | (sprite->keyed != 0 ? key_flag : 0U));
     return true;
 }
 
@@ -867,6 +868,8 @@ FBE_API bool fbe_2d_tile(uint64_t target, const fbe_2d_pen_t* pen, uint64_t text
     // position, so floats keep its texels however far away the position is.
     const bool whole = source.region[0] == 0.0F && source.region[1] == 0.0F &&
                        source.region[2] == source.width && source.region[3] == source.height;
+    const std::uint32_t flags =
+        (whole ? tile_flag : part_flag | tile_flag) | (sprite->keyed != 0 ? key_flag : 0U);
     for (std::int64_t strip_top = clip.top; strip_top < clip.bottom; strip_top += widest_tiles) {
         const std::int64_t strip_bottom = std::min(strip_top + widest_tiles, clip.bottom);
         const auto t = static_cast<double>(strip_top);
@@ -887,7 +890,7 @@ FBE_API bool fbe_2d_tile(uint64_t target, const fbe_2d_pen_t* pen, uint64_t text
                            static_cast<float>(across),
                            static_cast<float>(down),
                        },
-                       source, whole, whole ? tile_flag : part_flag | tile_flag);
+                       source, whole, flags);
         }
     }
     return true;

@@ -1,0 +1,104 @@
+// A game's saves and maps, as binary files, through std: ints, floats, bools, and strings with their
+// lengths, in folders it makes, lists, and cleans up. It prints what it read back.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.text
+
+// A room of a map: a name, where it is, and which doors it has.
+Struct Room
+    Field Name: String
+    Field X: Int32
+    Field Z: Int32
+    Field Light: Float32
+    Field Doors: UInt8
+    Field Locked: Bool
+End Struct
+
+// A string as its length, then its bytes.
+Function WriteName(writer: BinaryWriter, name: String) Throws IOError
+    Try writer.WriteInt32(name.Length)
+    Try writer.WriteText(name)
+End Function
+
+Function ReadName(reader: BinaryReader): String Throws IOError
+    Local length = Try reader.ReadInt32()
+    Return Try reader.ReadText(length As Int64)
+End Function
+
+Function Saved(path: Path, rooms: Room[], seed: Int64, time: Float64) Throws IOError
+    Local file = Try File.Create(path)
+    Defer file.Close()
+    Local writer = BinaryWriter(file)
+    Try writer.WriteText("MAP1")
+    Try writer.WriteInt64(seed)
+    Try writer.WriteFloat64(time)
+    Try writer.WriteInt32(rooms.Count)
+    For room In rooms
+        Try WriteName(writer, room.Name)
+        Try writer.WriteInt32(room.X)
+        Try writer.WriteInt32(room.Z)
+        Try writer.WriteFloat32(room.Light)
+        Try writer.WriteUInt8(room.Doors)
+        Try writer.WriteBool(room.Locked)
+    End For
+End Function
+
+Function Main() Throws IOError
+    Local folder = (Try Dir.Temp()) / "fbengine_proof_saves"
+    If Dir.Exists(folder) Then Try Dir.RemoveAll(folder)
+    Try Dir.CreateAll(folder / "slot 1")
+    Local path = folder / "slot 1" / "map.bin"
+
+    Local rooms = [Room("lobby", 0, 0, 0.75, 3, False), Room("tunnel, é", -8, 16, 0.25, 2, True)]
+    Try Saved(path, rooms, 1234567890123, 61.5)
+    Print("the file's {(Try File.ReadBytes(path)).Count} bytes")
+
+    // Read back as it was written, little-endian whatever the machine.
+    Local file = Try File.Open(path)
+    Defer file.Close()
+    Local reader = BinaryReader(file)
+    Print("its magic {Try reader.ReadText(4)}")
+    Print("seed {Try reader.ReadInt64()}, time {Try reader.ReadFloat64()}")
+    Local count = Try reader.ReadInt32()
+    Print("{count} rooms")
+    For i = 1 To count
+        Local name = Try ReadName(reader)
+        Local x = Try reader.ReadInt32()
+        Local z = Try reader.ReadInt32()
+        Local light = Try reader.ReadFloat32()
+        Local doors = Try reader.ReadUInt8()
+        Local locked = Try reader.ReadBool()
+        Print("{name} at {x}, {z}, light {light}, doors {doors}, locked {locked}")
+    End For
+
+    // Past its end is an error, not a zero.
+    Local ended = False
+    Try
+        Try reader.ReadInt32()
+    Catch e As IOError
+        ended = True
+    End Try
+    Print("reading past the end throws {ended}")
+
+    // Bytes on disk are what they say: a known layout, by hand.
+    Local bytes = Try File.ReadBytes(path)
+    Print("its first bytes {bytes[0]}, {bytes[1]}, {bytes[2]}, {bytes[3]}")
+    Print("the seed's low byte {bytes[4]}, as 1234567890123 % 256 is {(1234567890123 As Int64) % 256}")
+
+    // Folders: what's in one, and each kind.
+    Try File.WriteBytes(folder / "options.bin", [1 As UInt8, 2 As UInt8])
+    Local names: String[] = []
+    For entry In Try Dir.Entries(folder)
+        names.Add("{entry.Name()}{entry.IsDirectory() ? "/" : ""}")
+    End For
+    names.Sort()
+    Print("in its folder: {names.Join(", ")}")
+    Try File.Delete(folder / "options.bin")
+    Print("deleted, it's there {File.Exists(folder / "options.bin")}")
+    Try Dir.RemoveAll(folder)
+    Print("its folder removed, it's there {Dir.Exists(folder)}")
+End Function
+
+Try Main()

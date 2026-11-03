@@ -85,7 +85,7 @@ good modern engine on its own. Every structural choice is checked against both.
   and a game or the editor can make more (a preview scene, a scene rendered to a texture). A Camera
   renders the World it's in.
 - `UpdateWorld(seconds)` steps animation and the scene's collisions; `RenderWorld()` draws every
-  camera; both are the game's to call, in its own loop. A fixed-step helper (`FixedStep(rate)`)
+  camera; both are the game's to call, in its own loop. A fixed-step helper (`FixedUpdate(rate)`)
   gives a game logic at a fixed rate with tweening between steps, as SCP:CB's needs.
 - **Collisions and picks** are the scene's own, for games that don't need a physics engine:
   swept spheres and ellipsoids against meshes, boxes, and spheres, with stop and slide responses,
