@@ -747,7 +747,68 @@ if(FBENGINE_FB_TESTS)
   add_test(NAME examples.video_player
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/video_player")
   set_tests_properties(examples.video_player PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
-                       PASS_REGULAR_EXPRESSION "\nit played to its end: True, in [0-9]+ frames shown\r?\n$")
+                       PASS_REGULAR_EXPRESSION "\nit played to its end: True, in 52 frames shown\r?\n$")
+  add_test(NAME examples.video_player.watch
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/video_player"
+                   -- --watch --steps 120)
+  set_tests_properties(examples.video_player.watch PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "\nwatched 52 frames, 53 shown, 1 loops, ended: False\r?\n$")
+  add_test(NAME examples.video_player.usage
+           COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DEXAMPLE=${PROJECT_SOURCE_DIR}/examples/video_player"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/video/player_usage.cmake")
+  set_tests_properties(examples.video_player.usage PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
+  # E14's proofs of this lane's: what each prints, line by line, and its --watch walked offscreen.
+  function(fbengine_add_lane_proof name)
+    list(JOIN ARGN "?
+" printed)
+    set(folder "${PROJECT_SOURCE_DIR}/examples/proof/${name}")
+    add_test(NAME proof.${name} COMMAND "${FBENGINE_FB}" --color never run "${folder}")
+    set_tests_properties(proof.${name} PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "
+${printed}?
+$"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
+    add_test(NAME proof.${name}_watch
+             COMMAND "${FBENGINE_FB}" --color never run "${folder}" -- --watch --frames 40)
+    set_tests_properties(proof.${name}_watch PROPERTIES
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "
+watched 40 frames?
+$"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
+  endfunction()
+  fbengine_add_lane_proof(two_videos_at_startup
+                          "the first: 64 by 48, 2.08 s, its own sound True"
+                          "at 0.25 s of its sound, red"
+                          "at 0.75 s of its sound, green"
+                          "at 1.25 s of its sound, blue"
+                          "at 1.75 s of its sound, white"
+                          "it ended True, heard True, its clock on its sound True"
+                          "the second: its own sound False, then one beside it"
+                          "at 0.25 s of its sound, red"
+                          "at 0.75 s of its sound, green"
+                          "at 1.25 s of its sound, blue"
+                          "at 1.75 s of its sound, white"
+                          "it ended True, heard True, its clock on its sound True"
+                          "fitted to 200 by 96: 128 by 96, at 36, 0"
+                          "its bars black, black, its middle white"
+                          "skipped at half a second: heard True, then False")
+  fbengine_add_lane_proof(stack_and_joints
+                          "the stack stands, at rest: True"
+                          "the block's held where it was: True"
+                          "the door's opened a quarter turn: True"
+                          "the lift's 4 m up: True"
+                          "the crate's on it: True"
+                          "the fan's turning at its motor's speed: True"
+                          "let go, the block's knocked at least five of the stack away: True"
+                          "the chain's held together: True"
+                          "the door's swung back: True"
+                          "the lift's come back down: True"
+                          "every entity's on its body: True"
+                          "twice over, it all ends alike: True")
   add_test(NAME examples.crate_on_a_lift
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/crate_on_a_lift")
@@ -801,7 +862,7 @@ target_link_libraries(fbengine_physics_ends PRIVATE fbengine_physics_native)
 fbengine_set_warnings(fbengine_physics_ends)
 add_test(NAME physics.ends
          COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_physics_ends>"
-                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_physics_native>"
+                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_physics_native>;${fbengine_test_dll_paths}"
                  -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/ends.cmake")
 set_tests_properties(physics.ends PROPERTIES TIMEOUT 600)
 # The job system, built into the tests from its own source, since the DLL exports only its C API.
@@ -917,6 +978,18 @@ target_link_libraries(fbengine_video_thread_tests PRIVATE Catch2::Catch2WithMain
 fbengine_set_warnings(fbengine_video_thread_tests)
 catch_discover_tests(fbengine_video_thread_tests TEST_PREFIX "video."
                      DL_PATHS "${fbengine_test_dll_paths}")
+
+# A program that opens a video and ends at once, its thread decoding, run again and again.
+add_executable(fbengine_video_ends video/ends.cpp)
+target_link_libraries(fbengine_video_ends PRIVATE fbengine_video_native)
+target_compile_definitions(fbengine_video_ends PRIVATE
+                           FBE_VIDEO_MEDIA="${PROJECT_SOURCE_DIR}/packages/fbengine_video/tests/media")
+fbengine_set_warnings(fbengine_video_ends)
+add_test(NAME video.ends
+         COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:fbengine_video_ends>"
+                 -DRUNS=150 "-DDLLS=$<TARGET_FILE_DIR:fbengine_video_native>;${fbengine_test_dll_paths}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/physics/ends.cmake")
+set_tests_properties(video.ends PROPERTIES TIMEOUT 600)
 
 # What fbengine_video panics for, each by a run of tests/video/panics, which says it.
 if(FBENGINE_FB_TESTS)

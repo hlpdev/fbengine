@@ -1,7 +1,7 @@
 #!/bin/sh
 # Makes the test videos again with ffmpeg; the tests read the ones checked in, never this.
-#   colors.mpg: 64 by 48, 25 frames a second, 2 s: half a second each of red, green, blue, and
-#               white, with a 440 Hz tone in both channels at 44100 Hz.
+#   colors.mpg: 64 by 48, 25 frames a second, 2.08 s: 13 frames, 0.52 s, each of red, green, blue,
+#               and white, with a 440 Hz tone in both channels at 44100 Hz.
 #   silent.mpg: the same pictures, with no sound.
 #   late.mpg:   the same, its tone starting half a second after its pictures.
 #   count.mpg:  64 by 48, 25 frames a second, 2 s, each frame's luma 16 and 4 times its number,
