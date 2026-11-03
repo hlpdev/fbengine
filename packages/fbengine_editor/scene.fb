@@ -5,6 +5,7 @@ Import std.collections
 Import std.core
 Import std.math
 Import fbengine
+Import "./component"
 Import "./history"
 
 /// A World being edited. The camera and the light the editor sees it by are in it, under Helpers,
@@ -387,6 +388,7 @@ Public Final Class CopyEdit Extends Edit
                 Local copy = entity.Copy(entity.Parent())
                 Local name = entity.Name()
                 copy.SetName(name != "" ? "{name} copy" : "{entity.Kind()} copy")
+                CopyComponents(entity, copy)
                 copies.Add(copy)
             End For
         Else

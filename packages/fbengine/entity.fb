@@ -79,7 +79,7 @@ End Class
 /// Classes are Final, so a game keeps its own object on an entity with SetData.
 Public Class Entity Implements Printable
     Field handle: UInt64
-    Field attached: Attached? = Null
+    Field attached: Attached[] = []
     Field components: Map<String, Value>? = Null
     Field strays: String[] = []
     Field fileNode: String = ""
@@ -239,19 +239,24 @@ Public Class Entity Implements Printable
         End While
     End Method
 
-    /// Keeps the game's own object on the entity, as Data<T>() gives it back, or lets it go with
-    /// Null.
+    /// Keeps the game's own object on the entity, one of each type, as Data<T>() gives it back, in
+    /// place of any it kept of that type, or lets that go with Null.
     @MainThread @PanicsAtCaller
     Public Method SetData<T: Class>(data: T?)
         Live("SetData")
-        attached = data != Null ? Attachment<T>(data) : Null
+        attached = attached.Filter(Function(each: Attached) => (each As? Attachment<T>) == Null)
+        If data != Null Then attached.Add(Attachment<T>(data))
     End Method
 
     /// The object SetData kept, if it was set as a T, or Null.
     @MainThread @PanicsAtCaller
     Public Method Data<T: Class>(): T?
         Live("Data")
-        Return (attached As? Attachment<T>)?.value
+        For each In attached
+            Local kept = each As? Attachment<T>
+            If kept != Null Then Return kept.value
+        End For
+        Return Null
     End Method
 
     /// The component of the entity's that's called `name`, or Null: what a scene file keeps for it
@@ -328,13 +333,13 @@ Public Class Entity Implements Printable
 
     // Lets go of what was attached, keeping the handle.
     Package Method LetGo()
-        attached = Null
+        attached = []
     End Method
 
     // Lets go of the handle and what was attached, once C has freed it.
     Package Method Forget()
         handle = 0
-        attached = Null
+        attached = []
         components = Null
     End Method
 End Class

@@ -11,10 +11,12 @@ Import fbengine
 Import fbengine_ui
 Import "./browser"
 Import "./commands"
+Import "./component"
 Import "./dialog"
 Import "./dock"
 Import "./handles"
 Import "./history"
+Import "./inspector"
 Import "./menu"
 Import "./project"
 Import "./scene"
@@ -45,6 +47,10 @@ Public Final Class Editor
     Public ReadOnly Field Tree: SceneTree
     /// Its files.
     Public ReadOnly Field Files: AssetBrowser
+    /// What's selected and its properties.
+    Public ReadOnly Field Inspector: SceneInspector
+    /// What kinds of component the project has.
+    Public ReadOnly Field Kinds: GameComponents
     Field project: GameProject? = Null
     Field dialog: Dialog? = Null
     Field welcome: Node
@@ -67,6 +73,8 @@ Public Final Class Editor
         View = SceneView(Edited, Edits)
         Tree = SceneTree(Edited, Edits)
         Files = AssetBrowser()
+        Kinds = GameComponents()
+        Inspector = SceneInspector(Edited, Edits, Kinds)
         Docked = Dock()
         Menus = MenuBar(Actions)
         welcome = Widget("welcome", "welcome")
@@ -90,7 +98,9 @@ Public Final Class Editor
         End Function)
         Edits.OnChanged(Function[Weak Self]()
             Local own = Self
-            If own != Null && own.Edits.TreeChanged() Then own.Tree.MarkChanged()
+            If own == Null Then Return
+            If own.Edits.TreeChanged() Then own.Tree.MarkChanged()
+            own.Inspector.MarkChanged()
         End Function)
         Edits.OnFailed(Function[Weak Self](edit: Edit, error: IOError)
             Self?.Said("Couldn't {edit.Name}", error.Message)
@@ -124,6 +134,10 @@ Public Final Class Editor
         Tree.Update()
         Retired()
         Files.Update()
+        Kinds.Update()
+        Local failure = Kinds.TakeFailure()
+        If failure != Null Then Said("Couldn't read the game's components", failure)
+        Inspector.Update()
         Shown.Update()
         KeysLooked()
         Menus.Update()
@@ -186,6 +200,36 @@ Public Final Class Editor
             If scene != Null && Assets.Exists(scene) Then OpenScene(scene)
         End If
         ShowWelcome()
+        ReadKinds()
+    End Method
+
+    /// Says the project open may run its code, as asking did, from now on, and reads what kinds of
+    /// component it has.
+    Public Method TrustProject()
+        Local open = project
+        If open == Null Then Return
+        Kept.Trust(open.Folder.Text)
+        Kinds.Start(open.Folder)
+    End Method
+
+    // Reads what kinds of component the project has, which runs its code, so a project is asked about
+    // once, as a folder from anywhere might be anything.
+    Method ReadKinds()
+        Local open = project
+        If open == Null || !GameComponents.HasProgram(open.Folder) Then Return
+        If Kept.Trusted(open.Folder.Text)
+            Kinds.Start(open.Folder)
+            Return
+        End If
+        Kinds.HeldBack = True
+        Kinds.Set(Kinds.Kinds())
+        Local asking = Dialog("Run this project's code?",
+                              "{open.Folder} has a program that says what components it has. To show them, the editor builds and runs it, which can do anything a program can. Run it only if you trust where this project came from.")
+        asking.AddButton("Not Now")
+        asking.AddButton("Run It", Function[Weak Self]()
+            Self?.TrustProject()
+        End Function)
+        Showed(asking)
     End Method
 
     /// Keeps what's open in the project, and closes it.
@@ -200,6 +244,8 @@ Public Final Class Editor
         Files.SetFolder(Null)
         open.Close()
         project = Null
+        Kinds.Stop()
+        Kinds.Set([])
         Docked.Clear()
         NewScene()
         ShowWelcome()
@@ -234,6 +280,7 @@ Public Final Class Editor
         Edited = scene
         View.SetScene(Edited)
         Tree.SetScene(Edited)
+        Inspector.SetScene(Edited)
         // It goes after the tree's next Update, as this can be in the UI's own, with rows of it laid out.
         retired.Add(old)
         World.SetCurrent(Edited.Stage)
@@ -495,7 +542,7 @@ Public Final Class Editor
         End For
         If project != Null Then Return
         Local title = Label("fbengine")
-        title.SetStyleName("dialog.title")
+        title.SetStyleName("welcome.title")
         title.SetTranslates(False)
         welcome.Add(title)
         Local open = Button("Open a project…", "welcome.open")
@@ -556,7 +603,9 @@ Public Final Class Editor
             own.Held()
             own.Tree.MarkChanged()
         End Function)
-        For each In [("inspector", "Inspector"), ("output", "Output")]
+        Inspector.SetWidth(Sizing.Fill())
+        Docked.AddPane(Pane("inspector", "Inspector", Inspector))
+        For each In [("output", "Output")]
             Local id, title = each
             Local content = Widget("pane", "pane." + id)
             Docked.AddPane(Pane(id, title, content))
@@ -596,6 +645,9 @@ Public Final Class Editor
         Actions.Add("file.close", "Close Project", Function[Weak Self]()
             Local own = Self
             If own != Null Then own.CloseProject()
+        End Function, Null, hasProject)
+        Actions.Add("file.reload_components", "Reload Components", Function[Weak Self]()
+            Self?.ReadKinds()
         End Function, Null, hasProject)
         Actions.Add("file.quit", "Quit", Function[Weak Self]()
             Local own = Self
@@ -761,7 +813,8 @@ Public Final Class Editor
     Method AddMenus()
         Menus.AddMenu("File",
                       ["file.open", "file.close", SEPARATOR, "file.new_scene", "file.open_scene",
-                       "file.save", "file.save_as", SEPARATOR, "file.quit"])
+                       "file.save", "file.save_as", SEPARATOR, "file.reload_components",
+                       SEPARATOR, "file.quit"])
         Menus.AddMenu("Edit",
                       ["edit.undo", "edit.redo", SEPARATOR, "tree.find", "tree.rename",
                        "tree.duplicate", "tree.hide", "tree.delete",
@@ -858,6 +911,14 @@ Function EditorTheme(): Theme
     Local tree = StyleFields()
     tree.Background = Color.Hex("#14161a")
     theme.SetFields("tree", tree)
+    theme.SetFields("inspector", tree)
+    Local titled = StyleFields()
+    titled.FontSize = 14.0
+    titled.Padding = Insets.Symmetric(6.0, 4.0)
+    theme.SetFields("inspector.heading", titled)
+    Local inspected = StyleFields()
+    inspected.Padding = Insets.Symmetric(6.0, 1.0)
+    theme.SetFields("inspector.row", inspected)
     Local hint = StyleFields()
     hint.Background = Color(0.3, 0.55, 1.0, 0.3)
     hint.Border = Color.Hex("#4c8dff")
@@ -871,8 +932,35 @@ Function EditorTheme(): Theme
     dialog.CornerRadius = 6.0
     dialog.Padding = Insets.All(16.0)
     theme.SetFields("dialog", dialog)
+    // What's in a dialog is in its box, with none of its own, as its name would give it.
+    Local plainly = StyleFields()
+    plainly.Background = Color(0, 0, 0, 0)
+    plainly.Border = Color(0, 0, 0, 0)
+    plainly.BorderWidth = 0.0
+    plainly.Padding = Insets.All(0.0)
+    theme.SetFields("dialog.said", plainly)
+    theme.SetFields("dialog.text", plainly)
     Local heading = StyleFields()
+    heading.Background = Color(0, 0, 0, 0)
+    heading.Border = Color(0, 0, 0, 0)
+    heading.BorderWidth = 0.0
+    heading.Padding = Insets.All(0.0)
     heading.FontSize = 20.0
     theme.SetFields("dialog.title", heading)
+    theme.SetFields("welcome.title", heading)
+    // A field's smaller than the dark theme's, as the inspector has rows of them.
+    Local field = StyleFields()
+    field.Background = Color.Hex("#14161a")
+    field.Border = Color.Hex("#30353d")
+    field.BorderWidth = 1.0
+    field.CornerRadius = 4.0
+    field.Padding = Insets.Symmetric(6.0, 3.0)
+    field.FontSize = 14.0
+    theme.SetFields("field", field)
+    Local small = StyleFields()
+    small.FontSize = 14.0
+    theme.SetFields("inspector.title", small)
+    theme.SetFields("inspector.note", small)
+    theme.SetFields("inspector.nothing", small)
     Return theme
 End Function

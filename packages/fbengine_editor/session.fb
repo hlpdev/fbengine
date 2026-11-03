@@ -103,6 +103,20 @@ Public Final Class Session
         Try? kept.Save()
     End Method
 
+    /// Whether the person said the project at `path` may run its code.
+    Public Method Trusted(path: String): Bool
+        Local lines = Try? File.ReadLines(folder / "trusted.txt")
+        Return lines != Null && lines.Contains(Folded(path))
+    End Method
+
+    /// Keeps that the project at `path` may run its code, whole or not at all.
+    Public Method Trust(path: String)
+        If Trusted(path) Then Return
+        Local text = (Try? File.ReadText(folder / "trusted.txt")) ?? ""
+        Try? Dir.CreateAll(folder)
+        Try? File.WriteTextAtomic(folder / "trusted.txt", text + Folded(path) + "\n")
+    End Method
+
     /// What's kept for the project at `path`, as Keep had it, or Null.
     Public Method Kept(path: String): Value?
         Local file = FileFor(path)

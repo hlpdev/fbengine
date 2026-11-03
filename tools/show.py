@@ -16,10 +16,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def watched():
-    """The examples with a `--watch`, whose main.fb asks for it, in their folders' order."""
+    """The examples with a `--watch`, whose main.fb asks for it, in their folders' order, and the editor."""
     examples = ROOT / "examples"
     return [main.parent.relative_to(examples).as_posix() for main in sorted(examples.rglob("main.fb"))
-            if '"--watch"' in main.read_text(encoding="utf-8")]
+            if '"--watch"' in main.read_text(encoding="utf-8")] + ["../packages/fbengine_editor"]
 
 
 def stop(process):

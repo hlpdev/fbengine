@@ -25,4 +25,35 @@ what a file's imported as beside the list, each change a line in its sidecar, un
 while the Assets pane has the keys. A model dragged to the scene goes on being its file's. Scenes are
 files, as docs/scene-files.md says: New, Open, Save, and Save As, in File.
 
-The inspector and playing the game come in the steps after this one.
+The inspector shows what's selected: what's every entity's, then what's particular to its kind when
+all that's selected is of it, then its material's. Each property is what has both an X() and a SetX(),
+found by reflection, and a setter's own attributes (`@Limits`, `@ShownInDegrees`, `@NotEdited`) say
+what it takes. What's typed takes on Return or going elsewhere, Escape leaves it as it was, and each is
+one undo. What differs between what's selected shows nothing, and what's typed there goes to all of it,
+that part of it alone.
+
+A game's components show there too: Classes of its own, kept on an entity as `Entity.Data<T>()` gives
+back, each edited as data, by what its Public Fields are. The editor can't run a game's code in itself,
+so a game's `components/main.fb` says what kinds it has, and the editor builds and runs it, by `fb` on the
+PATH, as a project opens, once you've said that folder's code may run, and asks once per folder; File's
+Reload Components reads them again:
+
+```
+Import fbengine
+Import fbengine_physics
+Import "../door"
+
+Components.Add<Door>("Door")
+AddBodyComponent()
+Try Components.Describe()
+```
+
+A game with no such program just has none. `@Limits` and `@ShownInDegrees` on a Field say what they
+say on a setter, of each number of a vector too, and `@Skip` leaves one out. What's edited is a Bool, a
+number, a String, an Enum whose members FutureBlitz's Load can find, a Vec2, a Vec3, or a Color; anything
+else shows a note. fbengine_physics's "Body" is one of these.
+
+`-- --watch` plays a scene of its own by itself, keeping nothing of yours, for anyone to look at (`python
+tools/show.py ../packages/fbengine_editor`).
+
+Playing the game comes in the step after this one.

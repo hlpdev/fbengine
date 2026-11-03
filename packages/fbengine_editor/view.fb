@@ -328,6 +328,8 @@ Public Final Class SceneView Extends Widget
         dragging == Dragging.PANNING ? MouseCursor.MOVE : Null
 
     Public Override Method PointerDown(point: Vec2): Bool
+        // What's being typed elsewhere goes first, so a handle starts from it.
+        Owner()?.Focus(Null)
         last = point
         axis = HandleAt(point)
         If axis >= 0
