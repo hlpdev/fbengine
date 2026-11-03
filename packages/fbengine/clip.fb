@@ -1,0 +1,284 @@
+// Clips: what moves an entity and the entities under it over time, each found by its name, made in
+// code a channel at a time, which Players play.
+
+Import std.core
+Import std.ffi
+Import std.math
+Import "./c/fbe_clip"
+Import "./loads"
+Import "./window"
+
+/// How a Clip's channel goes from one key to the next.
+Public Enum Interpolation
+    /// Holding each key's value until the next.
+    STEP = 0
+    /// In a line, a rotation the short way round.
+    LINEAR = 1
+    /// On glTF's cubic spline, through each key's tangents in and out.
+    CUBIC = 2
+End Enum
+
+/// What moves an entity and the entities under it over time: channels, each moving one entity's
+/// position, rotation, or scale, found by its name, through keys at times in seconds from 0. A
+/// Player plays it on any entity whose tree has those names; every Player playing one shares it,
+/// so a channel added to it is added to them all. It lives while the game holds it, or a Player
+/// plays it.
+Public Final Class Clip
+    Field handle: UInt64
+
+    /// A new Clip with no channels, named, made at `frameRate` frames a second, 0 for none given,
+    /// for a game that counts in frames. Below 0, or not finite, panics.
+    @MainThread @PanicsAtCaller
+    Public New(name: String = "", frameRate: Float = 0)
+        handle = fbe_clip_create(name, frameRate)
+        If handle == 0 Then Panic("Clip: {LastError()}")
+    End New
+
+    // A wrapper for a handle C made, which holds it once.
+    New(handle: UInt64)
+        Self.handle = handle
+    End New
+
+    /// A Clip of the clip at `index`, from 0, of the glTF a model load decoded, each channel's
+    /// entity found by its node's name, so it plays on entities named as the model's nodes; a
+    /// channel of a node with no name moves nothing. A load that isn't a model's, or an index
+    /// outside 0 to its model's Clips - 1, panics. What's wrong in the file, keys a Clip made in code
+    /// couldn't have or one name's property moved twice, throws an IOError of INVALID_DATA.
+    @MainThread @PanicsAtCaller
+    Public Static Method FromModel(load: AssetLoad, index: Int): Clip Throws IOError
+        Local handle = fbe_clip_from_model(load.Handle, index)
+        If handle != 0 Then Return Clip(handle)
+        If fbe_clip_model_invalid()
+            Throw IOError(IOErrorKind.INVALID_DATA, LastError(), load.Path())
+        End If
+        Panic("Clip.FromModel: {LastError()}")
+    End Method
+
+    Method Destroy()
+        If handle != 0 Then fbe_clip_release(handle)
+    End Method
+
+    /// Lets go of the Clip now; Players playing it keep it. Using it after panics.
+    @MainThread @PanicsAtCaller
+    Public Method Free()
+        If !fbe_clip_release(Live("Free")) Then Failed("Free")
+        handle = 0
+    End Method
+
+    /// Whether Free let go of it.
+    @MainThread Public Method Freed(): Bool => handle == 0
+
+    /// Its name.
+    @MainThread @PanicsAtCaller
+    Public Method Name(): String
+        Local clip = Live("Name")
+        Unsafe
+            Return fbe_clip_name(clip).ToString()
+        End Unsafe
+    End Method
+
+    /// How long it is, in seconds: its last key's or event's time.
+    @MainThread @PanicsAtCaller
+    Public Method Length(): Float => fbe_clip_length(Live("Length"))
+
+    /// The frames a second it was made at, 0 for none given.
+    @MainThread @PanicsAtCaller
+    Public Method FrameRate(): Float => fbe_clip_frame_rate(Live("FrameRate"))
+
+    /// How many channels it has.
+    @MainThread @PanicsAtCaller
+    Public Method ChannelCount(): Int => fbe_clip_channel_count(Live("ChannelCount"))
+
+    /// Adds an event named `name` at `seconds` into it, which a Player playing it hands the game
+    /// as it reaches it, through its OnEvent: a footstep's sound, or a hit's moment. Events can
+    /// share a time, or a name. An empty name, or seconds below 0 or not finite, panic.
+    @MainThread @PanicsAtCaller
+    Public Method AddEvent(name: String, seconds: Float)
+        If !fbe_clip_add_event(Live("AddEvent"), name, seconds) Then Failed("AddEvent")
+    End Method
+
+    /// How many events it has.
+    @MainThread @PanicsAtCaller
+    Public Method EventCount(): Int => fbe_clip_event_count(Live("EventCount"))
+
+    /// The name of its event at `index`, from 0, in the order of their times. One outside 0 to
+    /// EventCount() - 1 panics.
+    @MainThread @PanicsAtCaller
+    Public Method EventName(index: Int): String
+        Local clip = Live("EventName")
+        CheckEvent(index, "EventName")
+        Unsafe
+            Return fbe_clip_event_name(clip, index).ToString()
+        End Unsafe
+    End Method
+
+    /// The time of its event at `index`, in seconds, as EventName orders them.
+    @MainThread @PanicsAtCaller
+    Public Method EventTime(index: Int): Float
+        Local clip = Live("EventTime")
+        CheckEvent(index, "EventTime")
+        Return fbe_clip_event_time(clip, index)
+    End Method
+
+    /// A new Clip of the part of it from `start` to `end` seconds, moved to start at 0, which plays
+    /// as it did there: a walk's first step out of a whole walk. Its events between them, or at
+    /// either end, come with it. A start below 0, an end before it, or either not finite, panics.
+    @MainThread @PanicsAtCaller
+    Public Method Slice(start: Float, end: Float): Clip
+        Local made = fbe_clip_slice(Live("Slice"), start, end)
+        If made == 0 Then Failed("Slice")
+        Return Clip(made)
+    End Method
+
+    /// Moves `node`'s position through a key at each of `times`, in seconds from 0, each after the
+    /// last, to the position at its index there, going between them as `interpolation` says; CUBIC
+    /// takes tangents, which the other AddPositions does. Times and positions that don't pair up,
+    /// or aren't numbers, or a node whose position it moves already, panic.
+    @MainThread @PanicsAtCaller
+    Public Method AddPositions(node: String, times: Float[], positions: Vec3[],
+                               interpolation: Interpolation = Interpolation.LINEAR)
+        Pair(times, positions.Count, interpolation, "AddPositions")
+        Add(node, FBE_CLIP_TRANSLATION, interpolation, times, Vectors(positions), "AddPositions")
+    End Method
+
+    /// Moves `node`'s position on glTF's cubic spline through a key at each of `times`, at the
+    /// position at its index, leaving it and arriving at the next along its tangents, in units a
+    /// second. Counts that don't pair up panic, as AddPositions' do.
+    @MainThread @PanicsAtCaller
+    Public Method AddPositions(node: String, times: Float[], positions: Vec3[], inTangents: Vec3[],
+                               outTangents: Vec3[])
+        Tangents(times, positions.Count, inTangents.Count, outTangents.Count, "AddPositions")
+        Local keys = Vectors(Interleaved(inTangents, positions, outTangents))
+        Add(node, FBE_CLIP_TRANSLATION, Interpolation.CUBIC, times, keys, "AddPositions")
+    End Method
+
+    /// Turns `node` through a key at each of `times` to the rotation at its index there, as
+    /// AddPositions moves one.
+    @MainThread @PanicsAtCaller
+    Public Method AddRotations(node: String, times: Float[], rotations: Quat[],
+                               interpolation: Interpolation = Interpolation.LINEAR)
+        Pair(times, rotations.Count, interpolation, "AddRotations")
+        Add(node, FBE_CLIP_ROTATION, interpolation, times, Rotations(rotations), "AddRotations")
+    End Method
+
+    /// Turns `node` on glTF's cubic spline, as AddPositions with tangents moves one; each rotation
+    /// comes out at length 1.
+    @MainThread @PanicsAtCaller
+    Public Method AddRotations(node: String, times: Float[], rotations: Quat[], inTangents: Quat[],
+                               outTangents: Quat[])
+        Tangents(times, rotations.Count, inTangents.Count, outTangents.Count, "AddRotations")
+        Local keys = Rotations(Interleaved(inTangents, rotations, outTangents))
+        Add(node, FBE_CLIP_ROTATION, Interpolation.CUBIC, times, keys, "AddRotations")
+    End Method
+
+    /// Scales `node` through a key at each of `times` to the scale at its index there, as
+    /// AddPositions moves one.
+    @MainThread @PanicsAtCaller
+    Public Method AddScales(node: String, times: Float[], scales: Vec3[],
+                            interpolation: Interpolation = Interpolation.LINEAR)
+        Pair(times, scales.Count, interpolation, "AddScales")
+        Add(node, FBE_CLIP_SCALE, interpolation, times, Vectors(scales), "AddScales")
+    End Method
+
+    /// Scales `node` on glTF's cubic spline, as AddPositions with tangents moves one.
+    @MainThread @PanicsAtCaller
+    Public Method AddScales(node: String, times: Float[], scales: Vec3[], inTangents: Vec3[],
+                            outTangents: Vec3[])
+        Tangents(times, scales.Count, inTangents.Count, outTangents.Count, "AddScales")
+        Local keys = Vectors(Interleaved(inTangents, scales, outTangents))
+        Add(node, FBE_CLIP_SCALE, Interpolation.CUBIC, times, keys, "AddScales")
+    End Method
+
+    // A channel of `values`, each key's floats after the last's, or a panic naming the call.
+    @PanicsAtCaller
+    Method Add(node: String, property: Int32, interpolation: Interpolation, times: Float[],
+               values: Buffer<Float32>, call: String)
+        Local clip = Live(call)
+        Local keys = Buffer<Float32>(times.Count)
+        For i = 0 Until times.Count
+            keys[i] = times[i]
+        End For
+        Local width: Int32 = property == FBE_CLIP_ROTATION ? 4 : 3
+        Local done = False
+        Unsafe
+            done = fbe_clip_add_channel(clip, node, property, interpolation As Int32, width,
+                                        keys.Pointer(), values.Pointer(), times.Count)
+        End Unsafe
+        If !done Then Failed(call)
+    End Method
+
+    // A panic naming the call for an event that isn't one of its.
+    @PanicsAtCaller
+    Method CheckEvent(index: Int, call: String)
+        Local count = EventCount()
+        If index < 0 || index >= count
+            Panic("{call}({index}) on a Clip with {count} {count == 1 ? "event" : "events"}")
+        End If
+    End Method
+
+    // A panic naming the call, with what C said went wrong.
+    @PanicsAtCaller
+    Package Method Failed(call: String)
+        Panic("{call} on a Clip: {LastError()}")
+    End Method
+
+    // The handle, or a panic naming the call for a Clip that was freed.
+    @PanicsAtCaller
+    Package Method Live(call: String): UInt64
+        If handle == 0 Then Panic("{call} on a Clip that was freed")
+        Return handle
+    End Method
+End Class
+
+// Times and values that pair up, a key each, or a panic naming the call; CUBIC's keys have
+// tangents, which another overload takes.
+@PanicsAtCaller
+Function Pair(times: Float[], values: Int, interpolation: Interpolation, call: String)
+    If times.Count != values
+        Panic("{call} on a Clip: a key's time for each value, not {times.Count} for {values}")
+    End If
+    If interpolation == Interpolation.CUBIC
+        Panic("{call} on a Clip: a CUBIC channel's keys have tangents, which the {call} with them takes")
+    End If
+End Function
+
+// Times, values, and tangents in and out that pair up, or a panic naming the call.
+@PanicsAtCaller
+Function Tangents(times: Float[], values: Int, ins: Int, outs: Int, call: String)
+    If times.Count != values || ins != values || outs != values
+        Panic("{call} on a Clip: a key's time and tangents for each value, not {times.Count} " +
+              "times and {ins} and {outs} tangents for {values}")
+    End If
+End Function
+
+// Each key's tangent in, value, and tangent out, one key after another, as glTF has them.
+Function Interleaved<T>(ins: T[], values: T[], outs: T[]): T[]
+    Local keys: T[] = []
+    For i = 0 Until values.Count
+        keys.Add(ins[i])
+        keys.Add(values[i])
+        keys.Add(outs[i])
+    End For
+    Return keys
+End Function
+
+Function Vectors(vectors: Vec3[]): Buffer<Float32>
+    Local floats = Buffer<Float32>(vectors.Count * 3)
+    For i = 0 Until vectors.Count
+        floats[i * 3] = vectors[i].x
+        floats[i * 3 + 1] = vectors[i].y
+        floats[i * 3 + 2] = vectors[i].z
+    End For
+    Return floats
+End Function
+
+Function Rotations(rotations: Quat[]): Buffer<Float32>
+    Local floats = Buffer<Float32>(rotations.Count * 4)
+    For i = 0 Until rotations.Count
+        floats[i * 4] = rotations[i].x
+        floats[i * 4 + 1] = rotations[i].y
+        floats[i * 4 + 2] = rotations[i].z
+        floats[i * 4 + 3] = rotations[i].w
+    End For
+    Return floats
+End Function

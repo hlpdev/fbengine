@@ -788,3 +788,49 @@ target_link_libraries(fbengine_core_tests PRIVATE fbengine_native Catch2::Catch2
 fbengine_set_warnings(fbengine_core_tests)
 catch_discover_tests(fbengine_core_tests TEST_PREFIX "core."
                      DL_PATHS "${fbengine_test_dll_paths};$<TARGET_FILE_DIR:fbengine_native>")
+
+# E7's animation: sampling, apart from the DLL, and the clip, player, and skin areas through
+# fbengine's C API, with no window or GPU.
+add_executable(fbengine_anim_tests anim/sample_tests.cpp anim/clip_tests.cpp anim/player_tests.cpp
+               anim/skin_tests.cpp anim/model_tests.cpp
+               "${PROJECT_SOURCE_DIR}/native/fbengine/clip/sample.cpp")
+target_link_libraries(fbengine_anim_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_anim_tests)
+catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
+                     DL_PATHS "${fbengine_test_dll_paths}" "${PROJECT_BINARY_DIR}/native/fbengine")
+
+# Animation's panics, each a case of tests/anim/panics run on its own, which has to panic saying
+# what it does.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_anim_panics
+      "frame-rate=Clip: a clip's frames a second are 0 or more, not -1"
+      "unpaired=AddPositions on a Clip: a key's time for each value, not 2 for 1"
+      "untangented=AddRotations on a Clip: a CUBIC channel's keys have tangents"
+      "tangents-unpaired=AddScales on a Clip: a key's time and tangents for each value"
+      "times-falling=AddPositions on a Clip: each key's time is after the last: 1 isn't after 1"
+      "moved-twice=AddScales on a Clip: the clip moves the scale of \"a\" already"
+      "clip-freed=Length on a Clip that was freed"
+      "player-of-freed=Player on a Pivot that was freed"
+      "player-entity-freed=SetTime on a Player whose entity was freed"
+      "time-nan=SetTime on a Player: a clip's time is a number of seconds, not nan"
+      "update-negative=Update on a World: a world is moved on by 0 seconds or more, not -1"
+      "palette-unskinned=Palette on a Mesh skinned by nothing"
+      "joint-twice=AddJoint on a Skin: the skin has a joint \"a\" already"
+      "joint-out-of-range=JointName\\(0\\) on a Skin with 0 joints"
+      "layer-out-of-range=Layer\\(16\\) on a Player: its layers are 0 to 15"
+      "crossfade-negative=Crossfade on a Player: a fade takes 0 seconds or more, not -1"
+      "weight-outside=SetWeight on a Player: a layer's weight is from 0 to 1, not 2"
+      "event-out-of-range=EventName\\(0\\) on a Clip with 0 events"
+      "slice-backward=Slice on a Clip: a clip's part is from 0 seconds or more to then or later, not 2 to 1")
+  foreach(case IN LISTS fbengine_anim_panics)
+    string(FIND "${case}" "=" split)
+    string(SUBSTRING "${case}" 0 ${split} name)
+    math(EXPR split "${split} + 1")
+    string(SUBSTRING "${case}" ${split} -1 message)
+    add_test(NAME anim.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/anim/panics"
+                     -- ${name})
+    set_tests_properties(anim.panics.${name} PROPERTIES TIMEOUT 60
+                         PASS_REGULAR_EXPRESSION "panic: ${message}")
+  endforeach()
+endif()
