@@ -13,6 +13,7 @@ Import "./dialog"
 Import "./dock"
 Import "./handles"
 Import "./history"
+Import "./inspector"
 Import "./menu"
 Import "./project"
 Import "./scene"
@@ -41,6 +42,8 @@ Public Final Class Editor
     Public ReadOnly Field View: SceneView
     /// Its entities.
     Public ReadOnly Field Tree: SceneTree
+    /// What's selected and its properties.
+    Public ReadOnly Field Inspector: SceneInspector
     Field project: GameProject? = Null
     Field dialog: Dialog? = Null
     Field welcome: Node
@@ -56,6 +59,7 @@ Public Final Class Editor
         Edited = EditedScene()
         View = SceneView(Edited, Edits)
         Tree = SceneTree(Edited, Edits)
+        Inspector = SceneInspector(Edited, Edits)
         Docked = Dock()
         Menus = MenuBar(Actions)
         welcome = Widget("welcome", "welcome")
@@ -111,6 +115,7 @@ Public Final Class Editor
     Public Method Step()
         Flip()
         Tree.Update()
+        Inspector.Update()
         Shown.Update()
         Menus.Update()
         View.Update(Frame.Delta())
@@ -204,6 +209,7 @@ Public Final Class Editor
         Edited = EditedScene()
         View.SetScene(Edited)
         Tree.SetScene(Edited)
+        Inspector.SetScene(Edited)
         old.Free()
     End Method
 
@@ -283,7 +289,9 @@ Public Final Class Editor
         Docked.AddPane(Pane("scene", "Scene", View))
         Tree.SetWidth(Sizing.Fill())
         Docked.AddPane(Pane("tree", "Tree", Tree))
-        For each In [("inspector", "Inspector"), ("assets", "Assets"), ("output", "Output")]
+        Inspector.SetWidth(Sizing.Fill())
+        Docked.AddPane(Pane("inspector", "Inspector", Inspector))
+        For each In [("assets", "Assets"), ("output", "Output")]
             Local id, title = each
             Local content = Widget("pane", "pane." + id)
             Docked.AddPane(Pane(id, title, content))
@@ -562,6 +570,14 @@ Function EditorTheme(): Theme
     Local tree = StyleFields()
     tree.Background = Color.Hex("#14161a")
     theme.SetFields("tree", tree)
+    theme.SetFields("inspector", tree)
+    Local titled = StyleFields()
+    titled.FontSize = 14.0
+    titled.Padding = Insets.Symmetric(6.0, 4.0)
+    theme.SetFields("inspector.heading", titled)
+    Local inspected = StyleFields()
+    inspected.Padding = Insets.Symmetric(6.0, 1.0)
+    theme.SetFields("inspector.row", inspected)
     Local hint = StyleFields()
     hint.Background = Color(0.3, 0.55, 1.0, 0.3)
     hint.Border = Color.Hex("#4c8dff")

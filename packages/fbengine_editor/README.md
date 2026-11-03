@@ -20,5 +20,11 @@ In the tree, a click selects, with Shift adds to that, and a drag takes what's s
 it's let go on, or to the top of the scene on nothing. F2, or a double click, renames, Control D
 duplicates, H hides or shows, Delete takes out, and Control F finds by name, each through undo.
 
-The inspector, the asset browser, scenes on disk, and playing the game come in the steps after this
-one.
+The inspector shows what's selected: what's every entity's, then what's particular to its kind when
+all that's selected is of it, then its material's. Each property is what has both an X() and a SetX(),
+found by reflection, and a setter's own attributes (`@Limits`, `@ShownInDegrees`, `@NotEdited`) say
+what it takes. What's typed takes on Return or going elsewhere, Escape leaves it as it was, and each is
+one undo. What differs between what's selected shows nothing, and what's typed there goes to all of it,
+that part of it alone.
+
+The asset browser, scenes on disk, and playing the game come in the steps after this one.
