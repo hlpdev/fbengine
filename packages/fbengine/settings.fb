@@ -31,6 +31,22 @@ Public Struct ImageSettings
     Public Field Quality: Int32 = 2
 End Struct
 
+/// A font's import settings, from its sidecar, as `title.ttf.toml` is title.ttf's:
+///
+/// ```toml
+/// size = 32
+/// bold = true
+/// ```
+Public Struct FontSettings
+    /// Its em's height, in the game's units; Font.Sized makes others.
+    Public Field Size: Float32 = 16.0
+    Public Field Bold: Bool = False
+    Public Field Italic: Bool = False
+    Public Field Underline: Bool = False
+    /// Which face of a collection it is, from 0.
+    Public Field Face: Int32 = 0
+End Struct
+
 /// A glTF's import settings, from its sidecar, as `door.gltf.toml` is door.gltf's:
 ///
 /// ```toml

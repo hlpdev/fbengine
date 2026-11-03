@@ -1,14 +1,17 @@
-// Textures: images on the GPU, which 2D draws and materials sample, made empty or from a
-// std.image Image, written a region at a time, with mipmaps made from their first level; targets,
-// textures drawn into; and clearing, copying, and reading them back.
+// Textures: images on the GPU, which 2D draws and materials sample, made empty, from a std.image
+// Image, or as Assets, from files in res://, written a region at a time, with mipmaps made from
+// their first level; targets, textures drawn into; and clearing, copying, and reading them back.
 
 Import std.core
 Import std.ffi
 Import std.image
 Import std.io
 Import std.math
+Import "./assets"
 Import "./c/fbe_texture"
+Import "./loads"
 Import "./pixels"
+Import "./settings"
 Import "./window"
 
 /// What a texture's pixels are.
@@ -23,6 +26,9 @@ Public Enum TextureFormat
     R8 = 2
     /// 16-bit floating-point red, green, blue, and alpha, for light brighter than white.
     RGBA16F = 3
+    /// One an image file has, as BC7 or ASTC, which VulkanFormat says: only sampled, so it isn't
+    /// written, cleared, copied, or read.
+    FROM_FILE = 4
 End Enum
 
 /// How a texture's pixels are blended where it's drawn bigger or smaller than it is.
@@ -51,7 +57,14 @@ Global textures: Weak<Texture>[] = []
 /// from its own pixels. It lives while the game holds it or a material draws with it; Free lets
 /// go of it at once. Stopping the GPU frees every texture. New, it's filtered LINEAR and wrapped
 /// REPEAT.
-Public Final Class Texture
+///
+/// It's an Asset: `Assets.Load<Texture>("res://hero.ktx2")` makes one of a PNG, a JPEG, or a KTX2
+/// read through res://, with a file's own levels, or mipmaps made of its one level if it can have
+/// them and its ImageSettings say so, and the sRGB they say for a PNG's or JPEG's. A KTX2 of BC7 or
+/// ASTC 4x4 is that format, if the GPU samples it; of UASTC, what the GPU samples, BC7, ASTC 4x4,
+/// or RGBA8. Loading starts the GPU if it hasn't. Hot reload puts a changed file in its place, so
+/// what draws with it draws the new one, once what the GPU has of it is done.
+Public Final Class Texture Implements Asset
     Field handle: UInt64
 
     /// A texture `width` by `height` pixels of `format`, transparent black, with mipmaps unless
@@ -108,14 +121,56 @@ Public Final Class Texture
         Return Texture(handle)
     End Method
 
+    /// Assets' kind of load for one, an image's, on a GPU started, so a KTX2 of UASTC is
+    /// transcoded to what it samples. A GPU that can't start is what FromLoad throws.
+    @MainThread
+    Public Static Method LoadKind(): AssetKind
+        fbe_texture_start_loads()
+        Return AssetKind.IMAGE
+    End Method
+
+    /// One of what `load` read: see Texture's own docs. It throws an IOError of INVALID_DATA for an
+    /// image no texture can be, as a cube map, and of OTHER when the GPU can't make it.
+    @MainThread
+    Public Static Method FromLoad(load: AssetLoad): Texture Throws IOError
+        Local settings = Try load.Settings<ImageSettings>()
+        Local handle = fbe_texture_from_load(load.Handle, settings.Srgb, settings.Mipmaps)
+        If handle == 0 Then Throw LoadError(load)
+        Return Texture(handle)
+    End Method
+
+    /// Takes the image `load` read in place of its own, keeping how it's filtered and wrapped, and
+    /// gives True, waiting for the GPU to finish what it's doing. It throws as FromLoad does, which
+    /// leaves it as it was.
+    @MainThread
+    Public Method Reload(load: AssetLoad): Bool Throws IOError
+        Local settings = Try load.Settings<ImageSettings>()
+        If !fbe_texture_reload(handle, load.Handle, settings.Srgb, settings.Mipmaps)
+            Throw LoadError(load)
+        End If
+        Return True
+    End Method
+
+    /// Whether it's gone, freed as the GPU stopped, so Assets makes a new one.
+    @MainThread Public Method Stale(): Bool => Freed()
+
+    // Why what `load` read isn't a texture, as C said.
+    Static Method LoadError(load: AssetLoad): IOError
+        Local kind = fbe_texture_load_invalid() ? IOErrorKind.INVALID_DATA : IOErrorKind.OTHER
+        Return IOError(kind, "{load.Path()}: {LastError()}", load.Path())
+    End Method
+
     Method Destroy()
         If handle != 0 Then fbe_texture_release(handle)
     End Method
 
     /// Lets go of the texture now; a material that draws with it keeps it. Using it after panics.
+    /// One Assets gave is let go of once, and goes with the last of its loads' holds.
     @MainThread @PanicsAtCaller
     Public Method Free()
-        If !fbe_texture_release(Live("Free")) Then Panic(LastError())
+        Local held = Live("Free")
+        If !Assets.Release(Self) Then Return
+        If !fbe_texture_release(held) Then Panic(LastError())
         Local gone: Texture? = Null
         textures[Slot(handle)] = gone
         handle = 0
@@ -136,6 +191,14 @@ Public Final Class Texture
     @MainThread @PanicsAtCaller
     Public Method Format(): TextureFormat =>
         Checked(fbe_texture_format(Live("Format"))) As TextureFormat
+
+    /// Vulkan's number for what its pixels are, as a file's AssetLoad.Image() says it.
+    @MainThread @PanicsAtCaller
+    Public Method VulkanFormat(): UInt32
+        Local format = Live("VulkanFormat")
+        Checked(fbe_texture_format(format))
+        Return fbe_texture_vulkan_format(format)
+    End Method
 
     /// How many mipmap levels it has, the first its own size, each after half the one before, down
     /// to a pixel; 1 without mipmaps.

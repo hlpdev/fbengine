@@ -1,0 +1,123 @@
+// What the cooker makes, drawn: BC7, ASTC, and UASTC's KTX2s, and a pak's files, as the engine's
+// Textures and Models, on the GPU ctest's tests use; a machine with no Vulkan sets FBENGINE_NO_GPU
+// to 1 and skips them. Each test stops the GPU, as what's loaded without one isn't transcoded for it.
+
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+Import fbengine_tools
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// A red PNG `side` across.
+Function RedPng(side: Int): UInt8[]
+    Local image = Image(side, side)
+    image.Fill(Color32(255, 0, 0, 255))
+    Return Png.Encode(image)
+End Function
+
+// Whether `pixel` is red, as near as a compressed format gets to it.
+Function IsRed(pixel: Color32): Bool => pixel.r > 240 && pixel.g < 16 && pixel.b < 16
+
+// `compression`'s cook of a red PNG, as a Texture, drawn and read back: the Texture's Vulkan
+// format, or 0 for a format this GPU doesn't sample, which says so.
+Function CookedAndDrawn(compression: ImageCompression): UInt32 Throws IOError, GraphicsError
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "source.png", RedPng(16))
+    Local settings = ImageSettings()
+    settings.Compression = compression
+    Try Cooker.CookImage(folder.Path / "source.png", folder.Path / "cooked.png", settings)
+    Assets.MountFolder("res://cooked-texture", folder.Path)
+    Defer Assets.Unmount("res://cooked-texture")
+    Try
+        Local texture = Try Assets.Load<Texture>("res://cooked-texture/cooked.png")
+        Defer texture.Free()
+        Expect(texture.Width() == 16)
+        Expect(texture.Levels() == 5)
+        Local target = Try Texture.Target(16, 16)
+        Defer target.Free()
+        Canvas(target).Draw(Sprite2D(texture), 0, 0)
+        Expect(IsRed(target.ToImage()[8, 8]))
+        Return texture.VulkanFormat()
+    Catch e As IOError
+        If e.Kind != IOErrorKind.OTHER || !e.Message.Contains("doesn't sample") Then Throw e
+        Return 0
+    End Try
+End Function
+
+@Test
+Function ACookedBc7IsTheTexturesOwnFormat() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Defer Gpu.Stop()
+    Local format = Try CookedAndDrawn(ImageCompression.BC7)
+    Expect(format == 146 || format == 0)
+End Function
+
+@Test
+Function ACookedAstcIsTheTexturesOwnFormat() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Defer Gpu.Stop()
+    Local format = Try CookedAndDrawn(ImageCompression.ASTC)
+    Expect(format == 158 || format == 0)
+End Function
+
+@Test
+Function CookedUastcIsTranscodedToWhatTheGpuSamples() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Defer Gpu.Stop()
+    Local format = Try CookedAndDrawn(ImageCompression.UASTC)
+    // BC7 if it samples that, else ASTC 4x4, else RGBA8, and never "doesn't sample".
+    Expect(format == 146 || format == 158 || format == 43)
+End Function
+
+@Test
+Function UncompressedKeepsItsOwnMips() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Defer Gpu.Stop()
+    Expect((Try CookedAndDrawn(ImageCompression.NONE)) == 43)
+End Function
+
+@Test
+Function APaksFilesAreTexturesAndModels() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Defer Gpu.Stop()
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Local source = folder.Path / "source"
+    Try Dir.Create(source)
+    Try File.WriteBytes(source / "hero.png", RedPng(8))
+    Try File.WriteText(source / "hero.png.toml", "compression = \"uastc\"")
+    Try File.WriteBytes(source / "tri.png", RedPng(4))
+    Try File.WriteText(source / "tri.gltf",
+                       "{{\"asset\":{{\"version\":\"2.0\"}},\"images\":[{{\"uri\":\"tri.png\"}}]," +
+                       "\"textures\":[{{\"source\":0}}],\"materials\":[{{" +
+                       "\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}}}]," +
+                       "\"nodes\":[{{\"name\":\"only\"}}],\"scenes\":[{{\"nodes\":[0]}}]}}")
+    Try Cooker.CookFolder(source, folder.Path / "game.pak")
+    Try Assets.MountPak("res://pak", folder.Path / "game.pak")
+    Defer Assets.Unmount("res://pak")
+    Local hero = Try Assets.LoadAsync<Texture>("res://pak/hero.png").Wait()
+    Defer hero.Free()
+    Local target = Try Texture.Target(8, 8)
+    Defer target.Free()
+    Canvas(target).Draw(Sprite2D(hero), 0, 0)
+    Expect(IsRed(target.ToImage()[4, 4]))
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://pak/tri.gltf")
+    Defer model.Free()
+    Expect((Try model.Spawn()).Find("only") != Null)
+    Expect(model.TextureOf(0) != Null)
+End Function

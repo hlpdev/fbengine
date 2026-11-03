@@ -657,17 +657,40 @@ if(FBENGINE_FB_TESTS)
   configure_file("${fbengine_game_source}/main.fb" "${fbengine_game}/main.fb" COPYONLY)
   file(COPY "${fbengine_game_source}/assets" DESTINATION "${fbengine_game}")
   file(CONFIGURE OUTPUT "${fbengine_game}/project.toml" CONTENT "${fbengine_game_project}" @ONLY)
+  # Intel Macs have no Vulkan to draw with, which the game says, in place of what it drew.
+  set(fbengine_game_red "drew red\r?\n")
+  set(fbengine_game_blue "hero reloaded, 8 wide\r?\ndrew blue\r?\n")
+  if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    set(fbengine_game_red "no GPU[^\n]*\n")
+    set(fbengine_game_blue "")
+  endif()
+  # The debug run writes over its hero, which each run starts without.
+  add_test(NAME examples.cooked_game.hero
+           COMMAND "${CMAKE_COMMAND}" -E copy "${fbengine_game_source}/assets/hero.png"
+                   "${fbengine_game}/assets/hero.png")
+  set_tests_properties(examples.cooked_game.hero PROPERTIES RESOURCE_LOCK fbengine_game
+                       FIXTURES_SETUP fbengine_game_hero)
   add_test(NAME examples.cooked_game.debug
            COMMAND "${FBENGINE_FB}" --color never run "${fbengine_game}" -- --change
                    "${fbengine_game}/assets/hero.png")
   set_tests_properties(examples.cooked_game.debug PROPERTIES RESOURCE_LOCK fbengine_game TIMEOUT 300
-                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen" PASS_REGULAR_EXPRESSION
-                       "\nlevel one\r?\nhero, as it is\r?\nhero reloaded, 8 wide\r?\n$")
+                       FIXTURES_REQUIRED fbengine_game_hero
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION
+                       "\nlevel one\r?\nhero, as it is\r?\n${fbengine_game_red}${fbengine_game_blue}$")
+  add_test(NAME examples.cooked_game.watch
+           COMMAND "${FBENGINE_FB}" --color never run "${fbengine_game}" -- --watch --frames 3)
+  set_tests_properties(examples.cooked_game.watch PROPERTIES RESOURCE_LOCK fbengine_game TIMEOUT 300
+                       FIXTURES_REQUIRED fbengine_game_hero
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "\nhero, as it is\r?\n[^\n]*\n$")
   add_test(NAME examples.cooked_game.release
            COMMAND "${FBENGINE_FB}" --color never run --release "${fbengine_game}")
   set_tests_properties(examples.cooked_game.release PROPERTIES RESOURCE_LOCK fbengine_game
-                       TIMEOUT 300 ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
-                       PASS_REGULAR_EXPRESSION "\nlevel one\r?\nhero, cooked\r?\n$")
+                       TIMEOUT 300 FIXTURES_REQUIRED fbengine_game_hero
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION
+                       "\nlevel one\r?\nhero, cooked\r?\n${fbengine_game_red}$")
   # One without its assets/, whose step fails, saying so.
   set(fbengine_game_bare "${CMAKE_CURRENT_BINARY_DIR}/cooked_game_bare")
   configure_file("${fbengine_game_source}/main.fb" "${fbengine_game_bare}/main.fb" COPYONLY)

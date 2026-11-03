@@ -7,7 +7,10 @@ Import std.core
 Import std.ffi
 Import std.io
 Import std.math
+Import "./assets"
 Import "./c/fbe_text"
+Import "./loads"
+Import "./settings"
 Import "./window"
 
 /// What a font's style asks for: bold and italic, which a face that isn't is made, though not its
@@ -34,7 +37,10 @@ End Struct
 /// Local title = body.Sized(32, FontStyle(True, False, False))
 /// Local size = title.Measure("Main menu")
 /// ```
-Public Final Class Font Implements Printable
+///
+/// It's an Asset: `Assets.Load<Font>("res://fonts/Inter.ttf")` reads one through res://, at the
+/// size, style, and face its FontSettings say, and hot reload puts a changed file in its place.
+Public Final Class Font Implements Printable, Asset
     Field handle: UInt64
     Field metrics: fbe_text_metrics_t
     Field fallbacks: Font[] = []
@@ -70,6 +76,36 @@ Public Final Class Font Implements Printable
                                                face: Int32 = 0): Font Throws IOError
         CheckSize("Font.FromBytes", size)
         Return Try Loaded(bytes, "", size, style, face)
+    End Method
+
+    /// Assets' kind of load for one, its file's bytes.
+    Public Static Method LoadKind(): AssetKind => AssetKind.BYTES
+
+    /// One of the font file `load` read, at the size, style, and face its sidecar's FontSettings
+    /// say. It throws an IOError of INVALID_DATA for bytes that aren't a font, or haven't that
+    /// face, or a size that isn't over 0.
+    @MainThread
+    Public Static Method FromLoad(load: AssetLoad): Font Throws IOError
+        Local settings = Try load.Settings<FontSettings>()
+        If !(settings.Size > 0.0 && IsFinite(settings.Size))
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{load.Path()}'s size is over 0, and finite, not {settings.Size}",
+                          load.Path())
+        End If
+        Local style = FontStyle(settings.Bold, settings.Italic, settings.Underline)
+        Return Try Loaded(Try load.Bytes(), load.Path(), settings.Size, style, settings.Face)
+    End Method
+
+    /// Takes the font file `load` read in place of its own, keeping its fallbacks, and gives True;
+    /// Sized's fonts stay as they were. It throws as FromLoad does, which leaves it as it was.
+    @MainThread
+    Public Method Reload(load: AssetLoad): Bool Throws IOError
+        Local made = Try FromLoad(load)
+        If handle != 0 Then fbe_text_free_font(handle)
+        handle = made.handle
+        metrics = made.metrics
+        made.handle = 0
+        Return True
     End Method
 
     /// The OS's font of `family`, as "Arial", or of a family and a style as its fonts name them,
@@ -231,6 +267,7 @@ Public Final Class Font Implements Printable
     /// Frees it now, rather than when nothing holds it; then it can't be used.
     @MainThread Public Method Free()
         If handle == 0 Then Return
+        If !Assets.Release(Self) Then Return
         fbe_text_free_font(handle)
         handle = 0
     End Method

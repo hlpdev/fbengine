@@ -1,0 +1,295 @@
+// Models as Assets: a glTF's scene made into entities, and its geometry, materials, and images the
+// engine's, on the GPU ctest's tests use; a machine with no Vulkan sets FBENGINE_NO_GPU to 1 and
+// skips them.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import std.time
+Import fbengine
+
+Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
+
+// Flips until `done` says so, or 30 seconds have gone.
+Function FlipUntil(done: Func(): Bool)
+    Local since = Instant.Now()
+    While !done() && (Instant.Now() - since) < 30.Seconds
+        Flip()
+        Sleep(5.Milliseconds)
+    End While
+End Function
+
+// Three positions, normals, and UVs, and three indices, as a data URI: (0, 0, 0), (`x`, 0, 0),
+// (0, 1, 0), normals of (0, 0, 1), UVs of (0, 0), (1, 0), (0, 1), and 0, 1, 2 as UInt16s; `x` is 1
+// or 2, 2 being 0x40000000.
+Function Buffered(x: Int): String
+    Local one = [0, 0, 0x80, 0x3F] As UInt8[]
+    Local two = [0, 0, 0, 0x40] As UInt8[]
+    Local zero = [0, 0, 0, 0] As UInt8[]
+    Local buffer: UInt8[] = []
+    For part In [zero, zero, zero, x == 2 ? two : one, zero, zero, zero, one, zero,
+                 zero, zero, one, zero, zero, one, zero, zero, one,
+                 zero, zero, one, zero, zero, one]
+        buffer.AddAll(part)
+    End For
+    buffer.AddAll([0, 0, 1, 0, 2, 0] As UInt8[])
+    Return "data:application/octet-stream;base64,{Base64.Encode(buffer)}"
+End Function
+
+// A glTF of a door: a node "door" with a mesh, turned and moved, over "handle", a pivot, and
+// "lamp", a spot light, and "eye", a camera; a second scene of the handle alone; and a material
+// reading an image, red.
+Function Door(x: Int = 1): UInt8[]
+    Local image = Image(2, 2)
+    image.Fill(Color32(255, 0, 0, 255))
+    Local picture = "data:image/png;base64,{Base64.Encode(Png.Encode(image))}"
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+            "\"buffers\":[{{\"byteLength\":102,\"uri\":\"{Buffered(x)}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":72,\"byteLength\":24}}," +
+            "{{\"buffer\":0,\"byteOffset\":96,\"byteLength\":6}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3," +
+            "\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[{x},1,0]}}," +
+            "{{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}}," +
+            "{{\"bufferView\":2,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\"}}," +
+            "{{\"bufferView\":3,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}}]," +
+            "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0,\"NORMAL\":1," +
+            "\"TEXCOORD_0\":2}},\"indices\":3,\"material\":0}}]}}]," +
+            "\"materials\":[{{\"name\":\"paint\",\"alphaMode\":\"MASK\",\"alphaCutoff\":0.25," +
+            "\"doubleSided\":true,\"pbrMetallicRoughness\":{{\"roughnessFactor\":0.75," +
+            "\"baseColorFactor\":[0.5,0.25,1,1],\"baseColorTexture\":{{\"index\":0}}}}}}]," +
+            "\"samplers\":[{{\"magFilter\":9728,\"wrapS\":33071,\"wrapT\":33648}}]," +
+            "\"textures\":[{{\"source\":0,\"sampler\":0}}]," +
+            "\"images\":[{{\"uri\":\"{picture}\"}}]," +
+            "\"cameras\":[{{\"type\":\"perspective\",\"perspective\":{{\"yfov\":1,\"znear\":0.5," +
+            "\"zfar\":50}}}}]," +
+            "\"extensionsUsed\":[\"KHR_lights_punctual\"]," +
+            "\"extensions\":{{\"KHR_lights_punctual\":{{\"lights\":[{{\"type\":\"spot\"," +
+            "\"color\":[1,0,0],\"intensity\":3,\"range\":7," +
+            "\"spot\":{{\"innerConeAngle\":0.25,\"outerConeAngle\":0.5}}}}]}}}}," +
+            "\"nodes\":[{{\"name\":\"door\",\"mesh\":0,\"translation\":[1,2,3]," +
+            "\"scale\":[2,2,2],\"children\":[1,2,3]}},{{\"name\":\"handle\"," +
+            "\"translation\":[0,1,0]}},{{\"name\":\"lamp\",\"extensions\":" +
+            "{{\"KHR_lights_punctual\":{{\"light\":0}}}}}},{{\"name\":\"eye\",\"camera\":0}}," +
+            "{{\"name\":\"knob\"}}]," +
+            "\"scenes\":[{{\"nodes\":[4]}},{{\"nodes\":[0]}}],\"scene\":1}}").Bytes
+End Function
+
+// A recursive FileWatcher on a Mac is libuv's FSEvents, whose stream starts on a thread of its own a
+// moment after the watcher's made, seeing only what's after that, so what a test writes has to wait
+// for it.
+Function Started()
+    If System.Platform != Platform.MACOS Then Return
+    Local since = Instant.Now()
+    While (Instant.Now() - since) < 1.Seconds
+        Flip()
+        Sleep(5.Milliseconds)
+    End While
+End Function
+
+@Test
+Function AModelSpawnsItsSceneAsEntities() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://door", {"door.gltf": Door()})
+    Defer Assets.Unmount("res://door")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://door/door.gltf")
+    Defer model.Free()
+    Expect(model.Scenes() == 2)
+    Local root = Try model.Spawn(Null)
+    // The scene its file says to show.
+    Local door = root.Find("door")
+    Expect(door != Null)
+    If door == Null Then Return
+    Expect(door Is Mesh)
+    Expect(door.Position() == Vec3(1, 2, 3))
+    Expect(door.Scale() == Vec3(2, 2, 2))
+    Expect(root.Find("knob") == Null)
+    Expect(door.Children().Count == 3)
+    // Its mesh draws its geometry, whose surface draws its material.
+    Local geometry = (door As Mesh).Geometry()
+    Expect(geometry != Null && RefEquals(geometry, model.Geometries()[0]))
+    If geometry != Null
+        Expect(geometry.SurfaceCount() == 1)
+        Expect(geometry.Bounds().Max == Vec3(1, 1, 0))
+    End If
+    Local paint = model.Materials()[0]
+    Expect(paint.Color().g == 0.25)
+    Expect(paint.Shininess() == 0.25)
+    Expect(paint.AlphaCutoff() == 0.25)
+    Expect(paint.TwoSided())
+    // A light and a camera as the file says.
+    Local lamp = root.Find("lamp")
+    Expect(lamp Is Light)
+    If lamp Is Light Then Expect((lamp As Light).Intensity() == 3.0)
+    Local eye = root.Find("eye")
+    Expect(eye Is Camera)
+    If eye Is Camera Then Expect((eye As Camera).Far() == 50.0)
+End Function
+
+@Test
+Function AnotherSceneSpawnsAndEachSpawnIsItsOwn() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://scenes", {"door.gltf": Door()})
+    Defer Assets.Unmount("res://scenes")
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://scenes/door.gltf")
+    Defer model.Free()
+    Local knob = Try model.Spawn(Null, 0)
+    Expect(knob.Find("knob") != Null)
+    Expect(knob.Find("door") == Null)
+    Local parent = Pivot()
+    Local first = Try model.Spawn(parent)
+    Local second = Try model.Spawn(parent)
+    Expect(parent.Children().Count == 2)
+    Expect(!RefEquals(first.Find("door"), second.Find("door")))
+End Function
+
+@Test
+Function AModelsImagesAreItsTextures() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://painted", {"door.gltf": Door()})
+    Defer Assets.Unmount("res://painted")
+    Local before = Texture.Count()
+    Local model = Try Assets.Load<Model>("res://painted/door.gltf")
+    Expect(Texture.Count() == before + 1)
+    Local texture = model.TextureOf(0)
+    Expect(texture != Null)
+    If texture != Null
+        Expect(texture.ToImage()[1, 1] == Color32(255, 0, 0, 255))
+        Expect(texture.Filter() == TextureFilter.NEAREST)
+        Expect(texture.WrapAcross() == TextureWrap.CLAMP)
+        Expect(texture.WrapDown() == TextureWrap.MIRROR)
+        // A base color's sRGB, as a file's color is.
+        Expect(texture.Format() == TextureFormat.RGBA8)
+    End If
+    Expect(model.TextureOf(0, ModelMap.NORMAL) == Null)
+    // Letting go of it lets go of them.
+    model.Free()
+    Expect(model.Freed())
+    Expect(Texture.Count() == before)
+End Function
+
+@Test
+Function TheCacheHasOneModelOfAFile() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://held-model", {"door.gltf": Door()})
+    Defer Assets.Unmount("res://held-model")
+    Local first = Try Assets.Load<Model>("res://held-model/door.gltf")
+    Local second = Try Assets.Load<Model>("res://held-model/door.gltf")
+    Expect(RefEquals(first, second))
+    first.Free()
+    Expect(!second.Freed())
+    second.Free()
+    Expect(second.Freed())
+End Function
+
+@Test
+Function AModelLoadsOnTheWorkers() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://async-model", {"door.gltf": Door()})
+    Defer Assets.Unmount("res://async-model")
+    Local model = Try Assets.LoadAsync<Model>("res://async-model/door.gltf").Wait()
+    Defer model.Free()
+    Expect(model.Scenes() == 2)
+End Function
+
+@Test
+Function WhatsWrongInAModelsNodesThrows() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local nodes =
+        "{{\"asset\":{{\"version\":\"2.0\"}},\"nodes\":[{{\"name\":\"a\",\"children\":[1]}}," +
+        "{{\"name\":\"b\",\"children\":[0]}}],\"scenes\":[{{\"nodes\":[0]}}]}}"
+    Assets.MountFiles("res://round", {"round.gltf": nodes.Bytes, "bad.gltf": "not a glTF".Bytes})
+    Defer Assets.Unmount("res://round")
+    Local world = World()
+    Defer world.Free()
+    Expect(ExpectThrows<IOError>(Assets.Load<Model>("res://round/bad.gltf"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    // Refused as it's decoded, or as it spawns, and either way no Pivot's left behind.
+    Local count = world.EntityCount()
+    Try
+        Local model = Try Assets.Load<Model>("res://round/round.gltf")
+        Defer model.Free()
+        Expect(ExpectThrows<IOError>(model.Spawn())?.Kind == IOErrorKind.INVALID_DATA)
+    Catch e As IOError
+        Expect(e.Kind == IOErrorKind.INVALID_DATA)
+    End Try
+    Expect(world.EntityCount() == count)
+End Function
+
+@Test
+Function AChangedFileMakesItsSpawnsAgain() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Defer Try? folder.Close()
+    Try File.WriteBytes(folder.Path / "door.gltf", Door(1))
+    Assets.MountFolder("res://hot-model", folder.Path)
+    Defer Assets.Unmount("res://hot-model")
+    Try Assets.WatchFolders()
+    Defer Assets.StopWatching()
+    Local world = World()
+    Defer world.Free()
+    Local model = Try Assets.Load<Model>("res://hot-model/door.gltf")
+    Defer model.Free()
+    Local root = Try model.Spawn()
+    root.SetPosition(Vec3(5, 0, 0))
+    Local texturesBefore = Texture.Count()
+    Local old = model.Geometries()[0]
+    Started()
+    Try File.WriteBytesAtomic(folder.Path / "door.gltf", Door(2))
+    FlipUntil(Function(): Bool => !RefEquals(model.Geometries()[0], old))
+    Local geometry = model.Geometries()[0]
+    Expect(!RefEquals(geometry, old))
+    Expect(geometry.Bounds().Max == Vec3(2, 1, 0))
+    // The root stays where the game put it, and what's under it is the new file's.
+    Expect(!root.Freed())
+    Expect(root.Position() == Vec3(5, 0, 0))
+    Expect(root.Children().Count == 1)
+    Local door = root.Find("door")
+    Expect(door Is Mesh && RefEquals((door As Mesh).Geometry(), geometry))
+    Expect(Texture.Count() == texturesBefore)
+    // What doesn't load leaves it as it was.
+    Try File.WriteBytesAtomic(folder.Path / "door.gltf", "not a glTF".Bytes)
+    Local failed = False
+    FlipUntil(Function(): Bool
+        For reload In Assets.Reloaded()
+            If reload.Error != Null Then failed = True
+        End For
+        Return failed
+    End Function)
+    Expect(failed)
+    Expect(RefEquals(model.Geometries()[0], geometry))
+    Expect(root.Find("door") != Null)
+End Function
+
+@Test
+Function AStoppedGpusModelIsLoadedAgain() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://stop-model", {"door.gltf": Door()})
+    Defer Assets.Unmount("res://stop-model")
+    Local first = Try Assets.Load<Model>("res://stop-model/door.gltf")
+    Gpu.Stop()
+    Local second = Try Assets.Load<Model>("res://stop-model/door.gltf")
+    Defer second.Free()
+    Expect(!RefEquals(first, second))
+    Local texture = second.TextureOf(0)
+    Expect(texture != Null && !texture.Freed())
+End Function

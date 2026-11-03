@@ -464,13 +464,15 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         .timelineSemaphore = VK_TRUE,
         .bufferDeviceAddress = VK_TRUE,
     };
-    // Anisotropic filtering and wireframes, where the device has them.
+    // Anisotropic filtering, wireframes, and files' compressed textures, where the device has them.
     const VkPhysicalDeviceFeatures2 features{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         .pNext = &vulkan12,
         .features = {
             .fillModeNonSolid = supported.fillModeNonSolid,
             .samplerAnisotropy = supported.samplerAnisotropy,
+            .textureCompressionASTC_LDR = supported.textureCompressionASTC_LDR,
+            .textureCompressionBC = supported.textureCompressionBC,
         },
     };
     const float priority = 1.0F;

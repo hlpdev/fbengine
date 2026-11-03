@@ -115,7 +115,8 @@ Final Class TypedCache<T> Implements AnyCache
             cached.Again = True
             Return
         End If
-        If cached.Made == Null Then Return
+        Local before = cached.Made
+        If before == Null || before.Stale() Then Return
         cached.Reloading = True
         Local load = fbe_assets_load_async(T.LoadKind() As Int32, key, False, True)
         If load == 0
@@ -127,7 +128,8 @@ Final Class TypedCache<T> Implements AnyCache
         cached.Reloading = False
         Local current = Entries.Get(key)
         Local made = cached.Made
-        If cached.Released || current == Null || !RefEquals(current, cached) || made == Null
+        If cached.Released || current == Null || !RefEquals(current, cached) || made == Null ||
+           made.Stale()
             Return
         End If
         If fbe_assets_failed(load)
@@ -579,7 +581,7 @@ Public Final Class Assets
     Public Static Method Load<T>(path: String): T Throws IOError
         Where T: Asset & Class & Hashable
         Local key = Try Normalize(path)
-        Local cached = TypedCache<T>.Of().Entries.Get(key)
+        Local cached = Entry<T>(key)
         If cached != Null && cached.Load != 0
             // It's loading on the workers still, and is finished here, now.
             fbe_assets_wait(cached.Load)
@@ -602,7 +604,7 @@ Public Final Class Assets
                                             progress: LoadProgress? = Null): T Throws IOError
         Where T: Asset & Class & Hashable
         Local key = Try Normalize(path)
-        Local cached = TypedCache<T>.Of().Entries.Get(key)
+        Local cached = Entry<T>(key)
         If cached == Null || (cached.Load == 0 && cached.Made == Null)
             Local load = fbe_assets_load_async(T.LoadKind() As Int32, path, False, True)
             If load == 0 Then Throw IOError(FailureKind(fbe_assets_load_failure()), LastError(),
@@ -626,7 +628,7 @@ Public Final Class Assets
     @MainThread
     Public Static Method Find<T>(path: String): T? Throws IOError
         Where T: Asset & Class & Hashable
-        Local cached = TypedCache<T>.Of().Entries.Get(Try Normalize(path))
+        Local cached = Entry<T>(Try Normalize(path))
         If cached == Null || cached.Released Then Return Null
         Return cached.Made
     End Method
@@ -976,6 +978,20 @@ Public Final Class Assets
             Forget<T>(key, cached)
             Throw e
         End Try
+    End Method
+
+    // T's cache's entry of `key`, letting go of one whose asset is stale.
+    @MainThread
+    Static Method Entry<T>(key: String): Cached<T>?
+        Where T: Asset & Class & Hashable
+        Local cached = TypedCache<T>.Of().Entries.Get(key)
+        If cached == Null Then Return Null
+        Local made = cached.Made
+        If made == Null || !made.Stale() Then Return cached
+        cached.Released = True
+        Forget<T>(key, cached)
+        Unindex(cached)
+        Return Null
     End Method
 
     // Takes `cached` out of T's cache, if it's still the entry of `key`.
