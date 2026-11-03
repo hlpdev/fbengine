@@ -1,0 +1,149 @@
+// Text a player types: a console's line and a save's name, with the window's text input on while one
+// has the focus, and the raw keys and text a game reads itself. Driven by Simulate, it prints what
+// it holds; with --watch, a window to type in.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import std.text
+Import fbengine
+Import fbengine_ui
+
+Function Layout(fields: Node[]): Ui
+    Local root = Node("root")
+    root.SetArrangement(Arrangement.STACK)
+    Local panel = Widget("panel")
+    panel.SetAnchors(Anchors.Point(0.5, 0.5))
+    panel.SetGap(8.0)
+    panel.SetAlign(Align.STRETCH)
+    panel.SetMinSize(320.0, 0.0)
+    For each In fields
+        panel.Add(each)
+    End For
+    root.Add(panel)
+    Return Ui(root)
+End Function
+
+Function Step(ui: Ui)
+    Flip()
+    ui.Update()
+    If Screen.Texture() != Null
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(24, 28, 36, 255))
+        canvas.Clear()
+        ui.Draw()
+    End If
+End Function
+
+Function Proved() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+
+    // What a game reads itself: nothing typed until text input's on.
+    Try Simulate.Text("lost")
+    Flip()
+    Print("off, typed \"{TextInput()}\"")
+    StartTextInput()
+    Try Simulate.Text("a")
+    Try Simulate.PressKey(Key.BACKSPACE)
+    Flip()
+    Local kinds: String[] = []
+    For stroke In Keystrokes()
+        kinds.Add("{stroke.Kind}")
+    End For
+    Print("on, typed \"{TextInput()}\", in order {kinds.Join(", ")}")
+    StopTextInput()
+
+    // A save's name: at most 12, with what's after it left out, and its keys editing it.
+    Local name = TextField("", "name your save")
+    name.SetTranslates(False)
+    name.SetMaxLength(12)
+    Local line = TextField("", "a command")
+    line.SetTranslates(False)
+    Local ui = Layout([name, line])
+    Step(ui)
+    Print("text input off without a field {!TextInputActive()}")
+    ui.Focus(name)
+    Step(ui)
+    Print("a field's focus turns it on {TextInputActive()}")
+    Try Simulate.Text("Site 19 save, the long one")
+    Step(ui)
+    Print("the name \"{name.Text()}\", changed {name.Changed()}")
+    Try Simulate.PressKey(Key.BACKSPACE)
+    Step(ui)
+    Try Simulate.PressKey(Key.HOME)
+    Step(ui)
+    Try Simulate.Text("A ")
+    Step(ui)
+    Print("edited \"{name.Text()}\", cursor {name.Cursor()}")
+    // An accent and its letter are one to the cursor, and to the most.
+    name.SetText("e\u{301}")
+    Print("\"e\" and its accent are {name.Length()} long")
+
+    // Tab goes on to the console's line, which submits on Return.
+    Try Simulate.PressKey(Key.TAB)
+    Step(ui)
+    Print("the line has the focus {ui.Focused() != Null && RefEquals(ui.Focused(), line)}")
+    Try Simulate.Text("noclip on")
+    Try Simulate.PressKey(Key.RETURN)
+    Step(ui)
+    Print("submitted {line.Submitted()}: \"{line.Text()}\"")
+    // Its focus gone, text input's off.
+    ui.Focus(Null)
+    Step(ui)
+    Print("no focus, text input {TextInputActive()}")
+End Function
+
+// A window to type in; or `frames` frames offscreen, which type by themselves.
+Function Watched(frames: Int) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("text input: Escape ends it")
+    Frame.SetLimit(60)
+    Local title = Label("Type: Tab moves on, Return submits")
+    title.SetTranslates(False)
+    Local name = TextField("", "name your save")
+    name.SetTranslates(False)
+    name.SetMaxLength(24)
+    Local line = TextField("", "a command")
+    line.SetTranslates(False)
+    Local said = Label("nothing submitted")
+    said.SetTranslates(False)
+    Local ui = Layout([title, name, line, said])
+    ui.Focus(name)
+    Local count = 0
+    Local script = "Site 19 save"
+    Local typed = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Step(ui)
+        count += 1
+        // Types for itself until a key's pressed, a letter every so often.
+        If KeysHit().Count > 0 Then typed = script.Length
+        If typed < script.Length && count % 8 == 0
+            typed += 1
+            name.SetText(script.Slice(0, typed))
+        End If
+        If line.Submitted()
+            said.SetText("submitted: {line.Text()}")
+            line.SetText("")
+        End If
+    End While
+    Print("watched {count} frames")
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try Watched(Asked(arguments))
+Else
+    Try Proved()
+End If

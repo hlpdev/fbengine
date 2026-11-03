@@ -11,9 +11,10 @@ Import "./widget"
 
 /// A view of what's in it, its one child, which it lays out as tall as that wants and its own
 /// width, and shows from Offset down: the wheel scrolls it, and ScrollIntoView brings a part of
-/// it into view. A child outside the view isn't found by NodeAt, as it isn't drawn; a thumb at its
-/// right shows where it's scrolled to while what it shows is taller than it: style "scroll", its
-/// thumb "scroll.thumb".
+/// it into view. A child outside the view isn't found by NodeAt, as it isn't drawn. While what it
+/// shows is taller than it, a thumb at its right shows where it's scrolled to, which the pointer
+/// drags, and a press beside the thumb brings the thumb there; the 8 units at its right are for
+/// this, over what it shows: style "scroll", its thumb "scroll.thumb".
 Public Class ScrollView Extends Widget
     Field offset: Float32 = 0.0
     // The offset asked for, which each Layout keeps to what it shows.
@@ -21,6 +22,8 @@ Public Class ScrollView Extends Widget
     Field step: Float32 = 40.0
     Field extent: Float32 = 0.0
     Field view: Float32 = 0.0
+    // How far down the thumb the pointer's holding it, or under 0 when it isn't.
+    Field holding: Float32 = -1.0
 
     /// An empty view; Add gives it what it shows.
     @MainThread Public New(name: String = "")
@@ -80,12 +83,57 @@ Public Class ScrollView Extends Widget
     End Method
 
     @MainThread Public Override Method DrawOver(paint: Painter)
-        Local farthest = MaxOffset()
-        If farthest <= 0.0 Then Return
+        If MaxOffset() <= 0.0 Then Return
         Local content = ContentBox()
-        Local tall = Max(view * view / extent, Min(16.0, view))
-        Local top = content.Y + (view - tall) * offset / farthest
-        paint.Panel(Rect(content.X + content.Width - 4.0, top, 4.0, tall), PartStyle("thumb"))
+        paint.Panel(Rect(content.X + content.Width - 4.0, ThumbTop(), 4.0, ThumbTall()),
+                    PartStyle("thumb"))
+    End Method
+
+    // The thumb's strip takes the pointer from what it shows.
+    @MainThread Public Override Method NodeAt(point: Vec2): Node?
+        If Visible() && OnStrip(point) Then Return Self
+        Return Super.NodeAt(point)
+    End Method
+
+    @MainThread Public Override Method PointerDown(point: Vec2): Bool
+        If !OnStrip(point) Then Return False
+        Local top = ThumbTop()
+        Local tall = ThumbTall()
+        // On the thumb, it's held where it was pressed; beside it, it comes there, by its middle.
+        holding = point.y >= top && point.y < top + tall ? point.y - top : tall / 2.0
+        Dragged(point)
+        Return True
+    End Method
+
+    @MainThread Public Override Method PointerDrag(point: Vec2)
+        If holding >= 0.0 Then Dragged(point)
+    End Method
+
+    @MainThread Public Override Method PointerUp(point: Vec2, over: Bool)
+        holding = -1.0
+    End Method
+
+    // Whether `point` is on the strip the thumb goes along, while it shows.
+    @MainThread Method OnStrip(point: Vec2): Bool
+        If MaxOffset() <= 0.0 Then Return False
+        Local content = ContentBox()
+        Return content.Contains(point) && point.x >= content.X + content.Width - 8.0
+    End Method
+
+    // How tall its thumb is, in proportion to how much it shows, but not too small to hold.
+    @MainThread Method ThumbTall(): Float32 => Max(view * view / extent, Min(16.0, view))
+
+    // Where its thumb's top is.
+    @MainThread Method ThumbTop(): Float32
+        Local farthest = MaxOffset()
+        Return ContentBox().Y + (farthest > 0.0 ? (view - ThumbTall()) * offset / farthest : 0.0)
+    End Method
+
+    // Scrolls so the thumb's where the pointer holds it.
+    @MainThread Method Dragged(point: Vec2)
+        Local room = view - ThumbTall()
+        If room <= 0.0 Then Return
+        SetOffset((point.y - holding - ContentBox().Y) / room * MaxOffset())
     End Method
 
     // What it shows is only in its content box.

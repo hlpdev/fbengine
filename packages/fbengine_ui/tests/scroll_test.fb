@@ -345,3 +345,65 @@ Function AScrollViewsPaddingIsItsOwn() Throws GraphicsError
     Local inside = view.NodeAt(Vec2(box.X + 20.0, box.Y + 15.0))
     Expect(inside != Null && inside != view)
 End Function
+
+@Test
+Function AThumbIsDraggedAndAPressBesideItBringsIt() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(400, 300)
+    Defer EndGraphics()
+    // 420 tall in a view of 100, 200 across: a thumb a little under 24 tall, at the view's right.
+    Local rows = Rows(20)
+    Local button = Button("under")
+    rows.Add(button)
+    button.SetHeight(Sizing.Fixed(20.0))
+    Local view = Viewed(rows, 100.0)
+    view.SetWidth(Sizing.Fixed(200.0))
+    Local root = Node("root")
+    root.SetAlign(Align.START)
+    root.Add(view)
+    Local ui = Ui(root)
+    Flip()
+    ui.Update()
+    Local farthest = view.MaxOffset()
+    Expect(farthest == 320.0)
+    // Held 2 down it, and dragged halfway down the 76 or so it can go.
+    Try Simulate.MoveMouse(198.0, 2.0)
+    Try Simulate.MouseDown(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == 0.0)
+    Expect(ui.Pressed() != Null && RefEquals(ui.Pressed(), view))
+    Try Simulate.MoveMouse(198.0, 39.5)
+    Flip()
+    ui.Update()
+    Local room: Float32 = 100.0 - 10000.0 / 420.0
+    Expect(IsClose(view.Offset(), 37.5 / room * 320.0, 0.01))
+    // Past the end, it's kept; and it goes on off the view, as it's holding the pointer.
+    Try Simulate.MoveMouse(300.0, 250.0)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == farthest)
+    Try Simulate.MouseUp(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    // Let go, moving does nothing.
+    Try Simulate.MoveMouse(198.0, 2.0)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == farthest)
+    // A press beside it brings its middle there.
+    Try Simulate.Click(MouseButton.LEFT)
+    Flip()
+    ui.Update()
+    Expect(view.Offset() == 0.0)
+    Flip()
+    ui.Update()
+    // Left of its strip, what it shows has the pointer; and with nothing to scroll, so does it.
+    Local under = view.NodeAt(Vec2(100.0, 5.0))
+    Expect(under != Null && !RefEquals(under, view))
+    Local short = Viewed(Rows(2), 100.0)
+    short.SetWidth(Sizing.Fixed(200.0))
+    short.Layout(Rect(0.0, 0.0, 200.0, 100.0))
+    Local kept = short.NodeAt(Vec2(198.0, 5.0))
+    Expect(kept != Null && !RefEquals(kept, short))
+End Function

@@ -1,0 +1,126 @@
+// A game's window, frame timing, and input: a millisecond clock, Flip with and without vsync, a
+// frame limit, keys down and hit and flushed, the mouse's place, speed, buttons, and wheel, moving
+// and hiding it, relative mode, and focus. Driven by Simulate, it prints what it read; with --watch,
+// a window that shows each as a person uses them.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import std.time
+Import fbengine
+
+Function Proved() Throws GraphicsError, InputError
+    Window.SetHeadless(True)
+    Try Graphics(640, 360)
+    Defer EndGraphics()
+
+    // The clock, and Flip without vsync; then a limit, which holds frames back.
+    Local started = Frame.Count()
+    Local clock = Stopwatch.StartNew()
+    For i = 1 To 3
+        Flip(False)
+    End For
+    Print("frames {Frame.Count() - started}, the clock went on {clock.Elapsed.TotalSeconds >= 0.0}")
+    Frame.SetLimit(100)
+    clock = Stopwatch.StartNew()
+    For i = 1 To 11
+        Flip(False)
+    End For
+    Local limited = clock.Elapsed.TotalSeconds
+    Frame.SetLimit(0)
+    Print("10 frames at a limit of 100 took a tenth of a second or more {limited >= 0.09}")
+
+    // A key: down and hit the frame it goes down, down only after, and up the frame it comes up.
+    Try Simulate.KeyDown(Key.W)
+    Flip(False)
+    Print("{KeyName(Key.W)} down {KeyDown(Key.W)}, hit {KeyHit(Key.W)}")
+    Flip(False)
+    Print("then down {KeyDown(Key.W)}, hit {KeyHit(Key.W)}")
+    Try Simulate.KeyUp(Key.W)
+    Flip(False)
+    Print("then down {KeyDown(Key.W)}, up {KeyUp(Key.W)}")
+    Try Simulate.PressKey(Key.SPACE)
+    Flip(False)
+    FlushKeys()
+    Print("flushed, hit {KeyHit(Key.SPACE)}")
+
+    // The mouse: its place and speed, a click, the wheel, and being moved, which isn't motion.
+    Try Simulate.MoveMouse(100.0, 50.0)
+    Flip(False)
+    Try Simulate.MoveMouse(110.0, 45.0)
+    Flip(False)
+    Print("mouse {MouseX()}, {MouseY()}, speed {MouseXSpeed()}, {MouseYSpeed()}")
+    Try Simulate.Click(MouseButton.LEFT)
+    Try Simulate.Wheel(2.0)
+    Flip(False)
+    Print("hit {MouseHit(MouseButton.LEFT)}, wheel {MouseWheelSteps()}")
+    MoveMouse(200.0, 100.0)
+    Flip(False)
+    Print("moved {MouseX()}, {MouseY()}, speed {MouseXSpeed()}, {MouseYSpeed()}")
+    SetCursorVisible(False)
+    Print("cursor shown {CursorVisible()}")
+    SetCursorVisible(True)
+
+    // Mouse look: raw counts, while the pointer's held.
+    Try SetMouseRelative(True)
+    Try Simulate.MouseMotion(4.0, -2.0)
+    Flip(False)
+    Print("relative {MouseRelative()}, speed {MouseXSpeed()}, {MouseYSpeed()}")
+    Try SetMouseRelative(False)
+
+    // Focus.
+    Try Simulate.BlurWindow()
+    Flip(False)
+    Local blurred = Window.Focused()
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Print("focused {blurred} then {Window.Focused()}")
+End Function
+
+// A window for a person to use, showing what each frame read; or `frames` frames offscreen.
+Function Watched(frames: Int) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("frame timing and input: Escape ends it")
+    Frame.SetLimit(60)
+    Local font = Font.BuiltIn(18.0)
+    Local clock = Stopwatch.StartNew()
+    Local hits = 0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        hits += KeysHit().Count
+        If Screen.Texture() == Null Then Continue
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(24, 28, 36, 255))
+        canvas.Clear()
+        canvas.SetColor(Color32(230, 232, 235, 255))
+        Local lines = ["clock {(clock.Elapsed.TotalSeconds * 1000.0) As Int} ms, frame {Frame.Count()}, {Frame.Rate():.1} a second",
+                       "keys hit {hits}", "mouse {MouseX():.0}, {MouseY():.0}, speed {MouseXSpeed():.0}, {MouseYSpeed():.0}",
+                       "left down {MouseDown(MouseButton.LEFT)}, wheel {MouseWheel()}", "focused {Window.Focused()}"]
+        For i = 0 To lines.Count - 1
+            canvas.DrawText(font, lines[i], 16, 16 + (i As Int32) * 28)
+        End For
+        // Where the mouse is, as a game's own pointer.
+        canvas.SetColor(Color32(76, 141, 255, 255))
+        canvas.DrawRect((MouseX() As Int32) - 4, (MouseY() As Int32) - 4, 8, 8)
+    End While
+    Print("watched {count} frames")
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try Watched(Asked(arguments))
+Else
+    Try Proved()
+End If

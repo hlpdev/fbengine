@@ -204,6 +204,34 @@ Function TextEndsAtANul() Throws GraphicsError, IOError
 End Function
 
 @Test
+Function ASpritesKeyColorIsTransparent() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local image = Image(2, 1)
+    image[0, 0] = Color32(255, 0, 255, 255)
+    image[1, 0] = Color32(255, 0, 254, 255)
+    Local target = Try Texture.Target(4, 4)
+    Local canvas = Canvas(target)
+    canvas.SetColor(Color32(0, 0, 0, 255))
+    canvas.Clear()
+    canvas.SetBlend(Blend2D.ALPHA)
+    canvas.SetColor(Color32(255, 255, 255, 255))
+    canvas.Draw(Try Sprite2D.FromImage(image, Color32(255, 0, 255, 255)), 0, 0)
+    Local read = target.ToImage()
+    Expect(read[0, 0] == Color32(0, 0, 0, 255))
+    // Only exactly it, and its image isn't changed.
+    Expect(read[1, 0] == Color32(255, 0, 254, 255))
+    Expect(image[0, 0] == Color32(255, 0, 255, 255))
+    // With none, nothing's keyed.
+    canvas.Draw(Try Sprite2D.FromImage(image), 0, 2)
+    Expect(target.ToImage()[0, 2] == Color32(255, 0, 255, 255))
+    // Scaled up, its key doesn't bleed into its edge.
+    canvas.SetColor(Color32(255, 255, 255, 255))
+    Local keyed = Try Sprite2D.FromImage(image, Color32(255, 0, 255, 255))
+    Expect(keyed.Texture().Filter() == TextureFilter.NEAREST)
+End Function
+
+@Test
 Function TheEnginesOwnFontDrawsWithNoFile() Throws GraphicsError
     If NoGpu() Then Skip("no GPU here")
     Window.SetHeadless(True)

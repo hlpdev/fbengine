@@ -1,0 +1,7 @@
+[project]
+name = "debug_ui_and_console"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../../packages/fbengine" }
+fbengine_ui = { path = "../../../packages/fbengine_ui" }
