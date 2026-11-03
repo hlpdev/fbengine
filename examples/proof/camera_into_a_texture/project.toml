@@ -1,0 +1,6 @@
+[project]
+name = "camera_into_a_texture"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../../packages/fbengine" }

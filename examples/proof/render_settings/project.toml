@@ -1,0 +1,6 @@
+[project]
+name = "render_settings"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../../packages/fbengine" }

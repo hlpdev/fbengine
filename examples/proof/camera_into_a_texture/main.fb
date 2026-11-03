@@ -1,0 +1,227 @@
+// Drawing into textures: a camera's target, shown on a mesh another camera sees, as a security monitor
+// is; the frame copied into a texture, and drawn back, as a blur is; drawing and clearing into a
+// texture; and copying a part of one to another. It prints each pixel it reads; with --watch, a window
+// of a monitor showing a turning cube, the frame fed back over it.
+
+Import std.collections
+Import std.core
+From std.image Import Image
+Import std.math
+Import std.os
+Import fbengine
+
+// A square from -1 to 1 facing +Z, `away` wound to face -Z; each corner's first UVs across it, its
+// second all `second`, and its color `color`.
+Function Square(color: Color? = Null, second: Vec2? = Null, away: Bool = False): Geometry
+    Local tint = color ?? Color(1, 1, 1)
+    Local other = second ?? Vec2(0, 0)
+    Local made = Geometry()
+    Local surface = made.AddSurface()
+    Local facing = Vec3(0, 0, away ? -1.0 : 1.0)
+    Local a = surface.AddVertex(Vertex(Vec3(-1, 1, 0), facing, Vec2(0, 0), other, tint))
+    Local b = surface.AddVertex(Vertex(Vec3(1, 1, 0), facing, Vec2(1, 0), other, tint))
+    Local c = surface.AddVertex(Vertex(Vec3(1, -1, 0), facing, Vec2(1, 1), other, tint))
+    Local d = surface.AddVertex(Vertex(Vec3(-1, -1, 0), facing, Vec2(0, 1), other, tint))
+    If away
+        surface.AddTriangle(a, b, c)
+        surface.AddTriangle(a, c, d)
+    Else
+        surface.AddTriangle(a, c, b)
+        surface.AddTriangle(a, d, c)
+    End If
+    Return made
+End Function
+
+// Prints `what`, and `wanted` if the pixel's within 2 of it each way, as GPUs round; else the pixel.
+Function Check(what: String, got: Color32, wanted: Color32)
+    Local close = Abs((got.r As Int) - (wanted.r As Int)) <= 2 &&
+                  Abs((got.g As Int) - (wanted.g As Int)) <= 2 &&
+                  Abs((got.b As Int) - (wanted.b As Int)) <= 2
+    Print("{what}: {close ? wanted : got}")
+End Function
+
+// A shade of gray, as bytes.
+Function Gray(value: Int): Color32 => Color32(value As UInt8, value As UInt8, value As UInt8, 255)
+
+// A camera into a target 32 square that sees the square at z = -5 exactly, and clears to black.
+Function Flat(target: Texture): Camera
+    Local camera = Camera()
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(2)
+    camera.SetRange(0.1, 100)
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    Return camera
+End Function
+
+// A material of no lighting, white unless given.
+Function Plain(color: Color? = Null): Material
+    Local made = Material()
+    made.SetShading(Shading.UNLIT)
+    made.SetColor(color ?? Color(1, 1, 1))
+    Return made
+End Function
+
+Function Proved() Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(32, 32)
+    Defer EndGraphics()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+
+    // The screen's camera, made first, and the monitor's, ordered before it, showing a red square on
+    // blue, half its view.
+    Local player = Camera()
+    player.SetProjection(Projection.ORTHOGRAPHIC)
+    player.SetOrthographicHeight(2)
+    player.SetPosition(Vec3(100, 0, 0))
+    Local monitor = Try Texture.Target(32, 32, TextureFormat.RGBA8, 1, True)
+    Local watching = Flat(monitor)
+    watching.SetOrthographicHeight(4)
+    watching.SetClearColor(Color(0, 0, 1))
+    watching.SetOrder(-1)
+    Local seen = Mesh(Square())
+    seen.SetMaterial(Plain(Color(1, 0, 0)))
+    seen.SetPosition(Vec3(0, 0, -5))
+    // The monitor, far off to the side, where the screen's camera looks.
+    Local shows = Plain()
+    shows.SetTexture(0, monitor)
+    Local shown = Mesh(Square())
+    shown.SetMaterial(shows)
+    shown.SetPosition(Vec3(100, 0, -5))
+    Flip()
+    RenderWorld()
+    Local screen = Try Screen.ToImage()
+    Check("the monitor's middle on the screen", screen[16, 16], Color32(255, 0, 0, 255))
+    Check("its corner", screen[1, 1], Color32(0, 0, 255, 255))
+
+    // The frame copied into a texture stays when the screen goes on.
+    Local shot = Try Texture.Target(32, 32)
+    Local frame = Screen.Texture()
+    If frame == Null Then Panic("there's a window, so a screen")
+    shot.CopyFrom(frame, 0, 0, 32, 32)
+    Check("the frame, copied", shot.ReadPixel(16, 16), Color32(255, 0, 0, 255))
+    Flip()
+    Local canvas = Screen.Canvas()
+    canvas.SetColor(Gray(0))
+    canvas.Clear()
+    Check("the screen goes on", (Try Screen.ToImage())[16, 16], Gray(0))
+    Check("and the copy stays", shot.ReadPixel(16, 16), Color32(255, 0, 0, 255))
+
+    // Drawn back at half alpha over the frame, as a blur's feedback is: half red in linear light, 188.
+    canvas.SetBlend(Blend2D.ALPHA)
+    canvas.SetColor(Color32(255, 255, 255, 128))
+    canvas.Draw(Sprite2D(shot), 0.0, 0.0)
+    canvas.SetBlend(Blend2D.SOLID)
+    Check("drawn back at half", (Try Screen.ToImage())[16, 16], Color32(188, 0, 0, 255))
+
+    // Drawing and clearing into a texture, as into the screen.
+    Local sheet = Try Texture.Target(16, 16)
+    Local pen = Canvas(sheet)
+    pen.SetColor(Color32(10, 20, 30, 255))
+    pen.Clear()
+    pen.SetColor(Color32(200, 100, 50, 255))
+    pen.DrawRect(4, 4, 4, 4)
+    Check("cleared", sheet.ReadPixel(0, 0), Color32(10, 20, 30, 255))
+    Check("drawn into", sheet.ReadPixel(5, 5), Color32(200, 100, 50, 255))
+
+    // A part of it to another, to the pixel, and over itself.
+    Local copy = Try Texture.Target(8, 8)
+    copy.CopyFrom(sheet, 4, 4, 2, 2, 1, 1)
+    Check("a part copied", copy.ReadPixel(2, 2), Color32(200, 100, 50, 255))
+    Check("beside it", copy.ReadPixel(3, 3), Color32(0, 0, 0, 0))
+    sheet.CopyFrom(sheet, 4, 4, 4, 4, 6, 6)
+    Check("over itself", sheet.ReadPixel(9, 9), Color32(200, 100, 50, 255))
+End Function
+
+// A window of a monitor showing a turning cube, and the frame fed back over itself; or `frames` frames
+// offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("a camera into a texture: Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local monitor = Try Texture.Target(256, 256, TextureFormat.RGBA8, 1, True)
+    Local watching = Camera()
+    watching.SetRenderTarget(monitor)
+    watching.SetClearColor(Color(0.01, 0.03, 0.02))
+    watching.SetOrder(-1)
+    Local cube = Mesh(Geometry.Cube())
+    cube.SetMaterial(Plain(Color(0.2, 0.8, 0.3)))
+    cube.SetPosition(Vec3(0, 0, -4))
+    Local shows = Plain()
+    shows.SetTexture(0, monitor)
+    Local shown = Mesh(Square())
+    shown.SetMaterial(shows)
+    shown.SetPosition(Vec3(100, 0, -5))
+    Local player = Camera()
+    player.SetPosition(Vec3(100, 0, 0))
+    player.SetClearColor(Color(0.02, 0.02, 0.03))
+    Local shot = Try Texture.Target(800, 450)
+    Local trail = Sprite2D(shot)
+    Local time: Float = 0.0
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        time += frames > 0 ? 0.1 : Frame.Delta() As Float
+        cube.SetRotation(Quat.FromEuler(time * 0.5, time, 0.0))
+        shown.SetRotation(Quat.FromEuler(0.0, Sin(time * 0.3) * 0.5, 0.0))
+        RenderWorld()
+        // Last frame's, faded over this one's: a blur, as a game feeds its frames back.
+        Local canvas = Screen.Canvas()
+        canvas.SetBlend(Blend2D.ALPHA)
+        canvas.SetColor(Color32(255, 255, 255, 180))
+        Local across = Min(Screen.Width(), 800)
+        Local down = Min(Screen.Height(), 450)
+        canvas.Draw(trail, 0.0, 0.0)
+        canvas.SetBlend(Blend2D.SOLID)
+        Local frame = Screen.Texture()
+        If frame != Null Then shot.CopyFrom(frame, 0, 0, across, down)
+    End While
+    Print("drew {Try Drew()}")
+    Print("watched {count} frames")
+End Function
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
+
+Local arguments = Process.Arguments()
+If Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+ElseIf arguments.Contains("--watch")
+    Try Watched(Asked(arguments), arguments)
+Else
+    Try Proved()
+End If
