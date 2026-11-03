@@ -188,7 +188,7 @@ struct model_t {
     std::vector<mesh_t> meshes;
     std::vector<material_t> materials;
     std::vector<image_t> images;
-    /// What each image's called: its name, or for none, its URI as its file has it, or "".
+    /// What each image's called: its name, or for none, its URI, percents decoded, or "".
     std::vector<std::string> image_names;
     std::vector<sampler_t> samplers;
     std::vector<node_t> nodes;

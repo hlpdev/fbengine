@@ -28,7 +28,7 @@ fbe::golden::frame_t saved(const std::filesystem::path& path) {
     int height = 0;
     int channels = 0;
     stbi_uc* loaded = stbi_load(path.string().c_str(), &width, &height, &channels, 4);
-    INFO(path.string() << " is the example's, which examples.arcade saves");
+    INFO(path.string() << " is what the test before this saves");
     REQUIRE(loaded != nullptr);
     fbe::golden::frame_t frame{
         .width = static_cast<std::uint32_t>(width),
@@ -62,9 +62,9 @@ TEST_CASE("the sample models' frames match their golden images", "[.example]") {
     REQUIRE(fbe_window_set_headless(true));
     require(fbe_gpu_start());
     for (const auto& [name, frames] : {
-             std::pair{ "SimpleSkin", 4 },
-             std::pair{ "SimpleMorph", 4 },
-             std::pair{ "RiggedSimple", 3 },
+             std::pair{ "SimpleSkin", 6 },
+             std::pair{ "SimpleMorph", 7 },
+             std::pair{ "RiggedSimple", 5 },
              std::pair{ "MorphPrimitivesTest", 3 },
          }) {
         for (int frame = 0; frame < frames; ++frame) {

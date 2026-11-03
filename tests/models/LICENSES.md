@@ -11,3 +11,6 @@ commit 8f492390ddc7a2ae221a1369ef560589cf8c70fb, unchanged, with its own LICENSE
 | MorphPrimitivesTest | glTF-Binary/MorphPrimitivesTest.glb | CC-BY-4.0 | ft-lab, 2018 |
 
 They're test data, never part of a package.
+
+`tests/golden/model_RiggedSimple_*.png` and `tests/golden/model_MorphPrimitivesTest_*.png` are
+renderings of those two models, modified from them by being drawn, and are CC-BY-4.0, as they are.

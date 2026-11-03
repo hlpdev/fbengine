@@ -215,6 +215,14 @@ def check_bindings():
         fail("the bindings aren't what their headers make; run tools/bindgen.sh")
 
 
+def check_line_ends():
+    """A raw carriage return in a CMake file is a regular expression that can't match, silently."""
+    step("line ends")
+    for path in [ROOT / "CMakeLists.txt", *(ROOT / "cmake").glob("*.cmake"), *(ROOT / "tests").glob("CMakeLists.txt")]:
+        if b"\r" in path.read_bytes():
+            fail(f"{path.relative_to(ROOT)} has a carriage return")
+
+
 def check_format():
     step(f"clang-format {CLANG_FORMAT_VERSION}")
     clang_format = pinned_clang_format()
@@ -280,6 +288,7 @@ def main():
         check_tests(build)
         check_exports()
     check_bindings()
+    check_line_ends()
     check_format()
     if not options.no_tidy and built:
         check_tidy(build, options.base)

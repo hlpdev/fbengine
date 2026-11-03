@@ -28,8 +28,8 @@ Function Joined(parts: String[]): String
 End Function
 
 // Where its bones are at a frame, counted as the file's converter counted them.
-Function ShowFrame(player: Player, clip: Clip, spine: Entity, head: Entity, frame: Float)
-    player.SetTime(frame / clip.FrameRate())
+Function ShowFrame(player: Player, spine: Entity, head: Entity, frame: Float)
+    player.SetFrame(frame)
     Local facing = head.Rotation() * Vec3(0, 0, -1)
     Local turned = Atan2(-facing.x, -facing.z) * 180 / Pi
     Print("at frame {frame} its spine's at {Rounded(spine.Position().y)}, " +
@@ -63,7 +63,7 @@ If spine == Null || head == Null Then Panic("a bone's name didn't reach it")
 Local player = root.Player()
 player.Play(clip, PlayMode.ONCE)
 For frame In [6.0, 12.0, 24.0]
-    ShowFrame(player, clip, spine, head, frame As Float)
+    ShowFrame(player, spine, head, frame As Float)
 End For
 
 // A surface's material, by the file's index, and what its texture was called.

@@ -52,8 +52,8 @@ FBE_API int32_t fbe_model_material_image(uint64_t load, int32_t material, int32_
 FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t material,
                                          const uint64_t* textures, int32_t count, uint64_t* other);
 // What the model's file calls its material at `index`, and its image at `index`: an image's name,
-// or for none, its URI as the file has it. "" for none, and for what's not there; valid while the
-// load is.
+// or for none, its URI, its percents decoded, up to any NUL. "" for none, and for what's not there;
+// valid while the load is.
 FBE_API const char* fbe_model_material_name(uint64_t load, int32_t index);
 FBE_API const char* fbe_model_image_name(uint64_t load, int32_t index);
 // The scene the model's file says to show, -1 for a file of no scenes, and how many it has; -1 for

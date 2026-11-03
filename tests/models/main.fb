@@ -1,7 +1,12 @@
 // Khronos's sample models through Model, skinned and morphed by what's in their files, against where
-// the glTF specification alone says each frame should be (reference.py's, in worked_out.fb): every
-// triangle corner's box and mean in the world, as the engine's skins and morphs place them, and what
-// they cover drawn. With --frames, it saves each frame there too, which their golden images check.
+// the glTF specification says each frame should be (reference.py's, in worked_out.fb and masks.bin).
+// Exactly which pixels are drawn is what the shader did with those files, skins and morphs together.
+// Each triangle corner's box and mean, by the palette and weights the engine gives its shader,
+// blended here as the specification does, say which side of that a difference is. With --frames, it
+// saves each frame there too, which their golden images check.
+//
+// The golden images hold how the scene shader lights now, which isn't yet glTF's PBR: they're
+// recorded again when that's in, and until then say nothing of whether the lighting's right.
 
 Import std.collections
 Import std.core
@@ -10,6 +15,7 @@ Import std.image.png
 Import std.io
 Import std.math
 Import std.os
+Import std.text
 Import fbengine
 Import "./worked_out"
 
@@ -57,29 +63,36 @@ Function Corners(mesh: Mesh): Vec3[]
     Return corners
 End Function
 
-// What's not the clear's color in a frame: left, top, right, and bottom, or -1s for nothing.
-Function CoveredIn(pixels: UInt8[]): Int[]
-    Local left = SIZE
-    Local top = SIZE
-    Local right = -1
-    Local bottom = -1
-    For y = 0 Until SIZE
-        For x = 0 Until SIZE
-            Local at = (y * SIZE + x) * 4
-            Local same = pixels[at] == pixels[0] && pixels[at + 1] == pixels[1] &&
-                         pixels[at + 2] == pixels[2]
-            If same Then Continue
-            left = Min(left, x)
-            top = Min(top, y)
-            right = Max(right, x)
-            bottom = Max(bottom, y)
+// How many of a frame's pixels differ from its mask in whether they're the clear's color, and how
+// many it covers.
+Function MaskDifference(frame: Worked, pixels: UInt8[], masks: UInt8[]): (Int, Int)
+    Local differing = 0
+    Local covered = 0
+    Local at = 0
+    Local value = False
+    For run = 0 Until frame.RunCount
+        Local here = frame.Runs + run * 2
+        Local count = (masks[here] As Int) | ((masks[here + 1] As Int) << 8)
+        For i = 0 Until count
+            Local byte = at * 4
+            Local drawn = pixels[byte] != pixels[0] || pixels[byte + 1] != pixels[1] ||
+                          pixels[byte + 2] != pixels[2]
+            If drawn != value Then differing += 1
+            If value Then covered += 1
+            at += 1
         End For
+        value = !value
     End For
-    Return [left, top, right, bottom]
+    Return (differing, covered)
+End Function
+
+// Whether what's drawing is lavapipe, whose frames are the same everywhere.
+Function OnLavapipe(): Bool Throws GraphicsError
+    Return (Try Gpu.Devices())[Gpu.Device()].Name.StartsWith("llvmpipe")
 End Function
 
 // Compares a frame with what was worked out, saying so of whatever differs; gives whether it agrees.
-Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[]): Bool
+Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[], masks: UInt8[], exact: Bool): Bool
     Local low = corners[0]
     Local high = corners[0]
     Local sum = Vec3(0, 0, 0)
@@ -89,7 +102,6 @@ Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[]): Bool
         sum = sum + place
     End For
     Local mean = sum * (1 / (corners.Count As Float))
-    Local covered = CoveredIn(pixels)
     Local name = "{frame.Folder} frame {frame.Index}"
     Local agrees = True
     If !Near(low, frame.Low) || !Near(high, frame.High)
@@ -100,11 +112,11 @@ Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[]): Bool
         Print("{name}'s mean is {mean}, not {frame.Mean}")
         agrees = False
     End If
-    // By a pixel or two: the box of its corners, whose edges rasterizing rounds.
-    If Abs(covered[0] - frame.Left) > 2 || Abs(covered[1] - frame.Top) > 2 ||
-       Abs(covered[2] - frame.Right) > 2 || Abs(covered[3] - frame.Bottom) > 2
-        Print("{name} covers {covered[0]}, {covered[1]} to {covered[2]}, {covered[3]}, not " +
-              "{frame.Left}, {frame.Top} to {frame.Right}, {frame.Bottom}")
+    // Exactly, on lavapipe; elsewhere, a GPU's rounding at the edges.
+    Local difference = MaskDifference(frame, pixels, masks)
+    Local allowed = exact ? 0 : difference.1 / 100
+    If difference.0 > allowed
+        Print("{name} differs from its mask at {difference.0} pixels of {difference.1}")
         agrees = False
     End If
     Return agrees
@@ -120,6 +132,8 @@ Function Run(saving: String?) Throws GraphicsError, IOError
     Window.SetHeadless(True)
     Local good = 0
     Local frames = WorkedOut()
+    Local masks = Embed("masks.bin")
+    Local exact = False
     Local target = Try Texture.Target(SIZE, SIZE, TextureFormat.RGBA8, 1, True)
     For frame In frames
         // Each from a new World, as its file says.
@@ -149,8 +163,9 @@ Function Run(saving: String?) Throws GraphicsError, IOError
         light.SetRange(100)
         light.SetIntensity(frame.Folder == "RiggedSimple" ? 400 : 40)
         RenderWorld()
+        exact = Try OnLavapipe()
         Local pixels = target.ReadPixels()
-        If Agrees(frame, Corners(mesh), pixels) Then good += 1
+        If Agrees(frame, Corners(mesh), pixels, masks, exact) Then good += 1
         If saving != Null Then Try Saved(saving, "model_{frame.Folder}_{frame.Index}", pixels)
         Flip(False)
         model.Free()
