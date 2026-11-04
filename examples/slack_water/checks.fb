@@ -45,3 +45,22 @@ Public Function Share(image: Image, test: Func(Color32): Bool): Float
     End For
     Return (count As Float) / ((image.Width * image.Height) As Float)
 End Function
+
+/// How close two images of a size are, in decibels of PSNR over their colors: higher's closer, and
+/// 100 for the same.
+Public Function PsnrOf(one: Image, other: Image): Float
+    Local sum: Float64 = 0.0
+    For y = 0 Until one.Height
+        For x = 0 Until one.Width
+            Local a = one[x, y]
+            Local b = other[x, y]
+            Local dr = (a.r As Float64) - (b.r As Float64)
+            Local dg = (a.g As Float64) - (b.g As Float64)
+            Local db = (a.b As Float64) - (b.b As Float64)
+            sum += dr * dr + dg * dg + db * db
+        End For
+    End For
+    If sum == 0.0 Then Return 100.0
+    Local mean = sum / ((one.Width * one.Height * 3) As Float64)
+    Return (10.0 * Log10(255.0 * 255.0 / mean)) As Float
+End Function

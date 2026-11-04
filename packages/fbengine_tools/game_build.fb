@@ -55,16 +55,36 @@ Public Final Class GameBuild
             Try SweptIn(out)
             Local cooked = out / "{name}.pak"
             Local pak = build / "{name}.pak"
-            Try Cooker.CookFolder(assets, cooked, out / "cook-cache")
+            // The game's version, stamped in the pak, and said to Mount.
+            Print("fb:rerun-if-changed=project.toml")
+            Local version = Try VersionIn(folder)
+            Try Cooker.CookFolder(assets, cooked, out / "cook-cache", version)
             // The pak's own place is out, so one taken from beside the executable comes back: fb
             // runs this again when it's gone, and then it's the same, or no use.
             Print("fb:rerun-if-changed={pak}")
             If !Try SameFile(cooked, pak) Then Try File.Copy(cooked, pak)
+            Local stamped = version != "" ? ", \"{Literal(version)}\"" : ""
             mount = "Try FbEngine.Assets.MountRelease(\"{Literal(name)}\", " +
-                    "\"{Literal(pak.Text)}\")"
+                    "\"{Literal(pak.Text)}\"{stamped})"
         End If
         Try Dir.CreateAll(out)
         Try File.WriteText(out / "res.fb", Try References.OfGame(assets, mount))
+    End Method
+
+    // The version the project.toml in `folder` says of its [project], or "" with none.
+    Static Method VersionIn(folder: Path): String Throws IOError
+        Local file = folder / "project.toml"
+        If !File.Exists(file) Then Return ""
+        Local section = ""
+        For line In (Try File.ReadText(file)).Split("\n")
+            Local clean = line.Trim()
+            If clean.StartsWith("[") Then section = clean
+            If section == "[project]" && clean.StartsWith("version")
+                Local parts = clean.Split("\"")
+                If parts.Count >= 2 Then Return parts[1]
+            End If
+        End For
+        Return ""
     End Method
 
     // Takes out what a cook that was ended left in `folder`, under fb's lock on a step.

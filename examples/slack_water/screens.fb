@@ -52,6 +52,17 @@ Public Final Class EndScreen
     /// What it says, title and all, as one string.
     @MainThread Public Method Says(): String => "{title.Text()}\n{words.Text()}\n{tally.Text()}"
 
+    /// Puts the focus on Play again.
+    @MainThread
+    Public Method Focus()
+        ui.Focus(again)
+    End Method
+
+    /// Where its panel is on the screen, and its Leave button's middle.
+    @MainThread Public Method PanelBox(): Rect => panel.Box()
+
+    @MainThread Public Method LeaveAt(): Vec2 => leave.Box().Center
+
     /// Whether Play again was chosen in its last Update, and Leave.
     @MainThread Public Method AgainChosen(): Bool => shown && again.Clicked()
 
@@ -69,7 +80,7 @@ Public Final Class EndScreen
         waited += seconds
         If !shown && waited >= END_WAIT
             shown = True
-            Local said = EndingWords(flow.Ended())
+            Local said = EndingWords(flow)
             title.SetText(said.0)
             words.SetText(said.1)
             tally.SetText(EndingTally(flow))

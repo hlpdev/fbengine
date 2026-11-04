@@ -99,15 +99,20 @@ Public Function RoadEndAlong(far: Bool): Float64 => (ToRoadEnd(far) / WALK_SPEED
 // How many seconds of walking the middle of what floods is from the mill: where the paddle lies.
 Function FloodsMiddle(): Float64 => Along(Area.CAUSEWAY)
 
-/// What the end says of how it ended: its title, and a line.
-Public Function EndingWords(ending: Ending): (String, String)
-    Select ending
+/// What the end says of how `flow` ended: its title, and a line, which says where the belt went.
+Public Function EndingWords(flow: Flow): (String, String)
+    Select flow.Ended()
         Case Ending.BRIGHT
             Return ("The lamp burns bright",
                     "All three fitted, and the wheel turning, as the storm comes in.")
         Case Ending.DIM
-            Return ("The lamp burns, dimmer",
-                    "The wheel turns slowly, without its belt, which the sea has.")
+            Local title = "The lamp burns, dimmer"
+            If flow.Held() == Part.BELT
+                Return (title, "The wheel turns slowly, its belt still in your hands.")
+            ElseIf flow.PipHolds() == Part.BELT
+                Return (title, "The wheel turns slowly, its belt still in Pip's hands.")
+            End If
+            Return (title, "The wheel turns slowly, without its belt, which the sea has.")
         Case Ending.DARK
             Return ("The lamp stays dark", "The tide came in with the sluice shut.")
         Default

@@ -229,6 +229,9 @@ Public Struct AssetEntry Implements Printable
     Public Method ToString(): String => Path
 End Struct
 
+/// What Cooker.CookFolder calls the file in a pak that stamps it with its game's version.
+Public Const GAME_VERSION_FILE: String = "fbengine-game-version.txt"
+
 /// The game's files and assets, at res:// paths: "res://", then names with '/' or '\' between
 /// them, in any case, so "res://GFX\Map\door.png" and "res://gfx/map/DOOR.png" are one file on
 /// every OS. Folders and pak files are mounted at places in res://, a later mount over an earlier
@@ -353,15 +356,25 @@ Public Final Class Assets
     @MainThread
     Package Static Method FromSource(): Bool => fromSource
 
-    /// Mounts a release's files at res://: the pak `name`.pak beside the executable, or in a macOS
-    /// bundle's Resources on macOS, the folder beside the executable's, or else the pak at `built`,
-    /// where it was built, for a build whose executable is elsewhere, as `fb run`'s is, as a game's
-    /// module `res` from fbengine_tools' build step does. An executable built elsewhere with
-    /// `fb build -o` needs its pak copied beside it each time, and one beside it that's older than
-    /// `built` prints a warning, and is what's mounted. None throws an IOError of NOT_FOUND that
-    /// names them, and one that isn't a pak throws as MountPak does.
+    /// Whether `executable`, in the OS's folder `temp` for temporary files, is one `fb run` built and
+    /// runs, which it keeps in a folder of its own under temp's `futureblitz`, and which only it does.
     @MainThread
-    Public Static Method MountRelease(name: String, built: String = "") Throws IOError
+    Public Static Method RunByFb(executable: Path, temp: Path): Bool
+        Local own = executable.Parent().Parent()
+        Return own.FileName() == "futureblitz" && RealPath(own.Parent()) == RealPath(temp)
+    End Method
+
+    /// Mounts a release's files at res://: the pak `name`.pak beside the executable, or in a macOS
+    /// bundle's Resources on macOS, the folder beside the executable's, or else, only for what
+    /// `fb run` runs, whose executable is elsewhere, the pak at `built`, where it was built, as a
+    /// game's module `res` from fbengine_tools' build step does. An executable built elsewhere with
+    /// `fb build -o` needs its pak copied beside it each time, and never reads the one where it was
+    /// built. None throws an IOError of NOT_FOUND that names them, and one that isn't a pak throws as
+    /// MountPak does. With a `version`, the game's, a pak not stamped with it, by Cooker.CookFolder,
+    /// throws an IOError of INVALID_DATA that says both, and isn't left mounted.
+    @MainThread
+    Public Static Method MountRelease(name: String, built: String = "",
+                                      version: String = "") Throws IOError
         Local executable = Folders.Executable
         If executable == Null
             Throw IOError(IOErrorKind.NOT_FOUND, "the OS doesn't say where this program is", name)
@@ -369,22 +382,40 @@ Public Final Class Assets
         Local folder = Path(executable).Parent()
         Local beside = folder / "{name}.pak"
         Local resources = folder.Parent() / "Resources" / "{name}.pak"
-        If StalePak(beside, Path(built))
-            Print("warning: {beside} is older than {built}, as this game's been built again: " +
-                  "copy that one here")
-        End If
         Local paks = [beside]
         If System.Platform == Platform.MACOS Then paks.Add(resources)
-        paks.Add(Path(built))
+        Local temp = Folders.Temp
+        Local fromBuilt = built != "" && temp != Null && RunByFb(Path(executable), Path(temp))
+        If fromBuilt
+            If StalePak(beside, Path(built))
+                Print("warning: {beside} is older than {built}, as this game's been built again: " +
+                      "copy that one here")
+            End If
+            paks.Add(Path(built))
+        End If
         For pak In paks
-            If pak.Text != "" && File.Exists(pak)
+            If File.Exists(pak)
                 Try MountPak("res://", pak)
+                If version != "" Then Try CheckStamp(pak, version)
                 Return
             End If
         End For
-        Local tried = built == "" ? "" : ", or {built}"
+        Local tried = fromBuilt ? ", or {built}" : ""
         Throw IOError(IOErrorKind.NOT_FOUND, "there's no {beside} or {resources}{tried}",
                       beside.Text)
+    End Method
+
+    // Takes `pak`, mounted at res://, out again, and throws, unless it's stamped with `version`.
+    @MainThread
+    Static Method CheckStamp(pak: Path, version: String) Throws IOError
+        Local stamp = "res://{GAME_VERSION_FILE}"
+        Local stamped = Exists(stamp) ? Try ReadText(stamp) : "no version"
+        If stamped != version
+            Unmount("res://")
+            Throw IOError(IOErrorKind.INVALID_DATA,
+                          "{pak} is of {stamped}, and this game's of {version}: copy its own here",
+                          pak.Text)
+        End If
     End Method
 
     /// Takes out the last mount at `at`, and gives whether there was one. Panics when `at` isn't

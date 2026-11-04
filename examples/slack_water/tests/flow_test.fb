@@ -3,6 +3,7 @@
 // it; and the keys' gamepad bindings.
 
 Import std.collections
+Import std.image.image
 Import std.core
 Import std.math
 Import std.test
@@ -732,14 +733,86 @@ End Function
 // What the end says of each ending, and of how it went.
 @Test
 Function TheEndSaysHowItEnded()
-    Expect(EndingWords(Ending.BRIGHT).0 == "The lamp burns bright")
-    Expect(EndingWords(Ending.DIM).0 == "The lamp burns, dimmer")
-    Expect(EndingWords(Ending.DARK).0 == "The lamp stays dark")
     Local flow = Told([])
     Played("dim", flow)
     Expect(flow.Ended() == Ending.DIM)
+    Expect(EndingWords(flow).0 == "The lamp burns, dimmer")
+    Expect(EndingWords(flow).1.Contains("the sea has"))
     Expect(EndingTally(flow) == "2 of 3 parts fitted")
     Local bright = Told([])
     Played("bright", bright)
+    Expect(EndingWords(bright).0 == "The lamp burns bright")
+    Expect(EndingWords(bright).1.Contains("All three"))
     Expect(EndingTally(bright) == "3 of 3 parts fitted")
+    Local dark = Told([])
+    Played("dark", dark)
+    Expect(EndingWords(dark).0 == "The lamp stays dark")
+    Expect(EndingWords(dark).1.Contains("sluice shut"))
+End Function
+
+// Gear and paddle fitted, the sluice open, and the belt fetched, but not fitted, by a walk's keys.
+Function WithTheBeltKept(flow: Flow, give: Bool)
+    For key In ["W", "E", "Q", "W", "E", "S", "S", "E", "Q", "E", "E", "W", "W", "W", "E"]
+        While !WalkReady(flow, key)
+            flow.Step(0.1)
+        End While
+        Select key
+            Case "W"
+                flow.GoOut()
+            Case "S"
+                flow.GoBack()
+            Case "E"
+                flow.Use()
+            Default
+                flow.Hand()
+        End Select
+        flow.Step(0.1)
+    End For
+    If give
+        While !flow.PipHere()
+            flow.Step(0.1)
+        End While
+        flow.Hand()
+    End If
+    While flow.Ended() == Ending.NONE
+        flow.Step(0.1)
+    End While
+End Function
+
+// The belt in a hand at the end isn't the sea's.
+@Test
+Function ABeltKeptIsntTheSeas()
+    Local holding = Told([])
+    WithTheBeltKept(holding, False)
+    Expect(holding.Ended() == Ending.DIM)
+    Expect(holding.Held() == Part.BELT)
+    Expect(EndingWords(holding).1.Contains("your hands"))
+    Expect(!EndingWords(holding).1.Contains("sea"))
+    Local giving = Told([])
+    WithTheBeltKept(giving, True)
+    Expect(giving.Ended() == Ending.DIM)
+    Expect(giving.PipHolds() == Part.BELT)
+    Expect(EndingWords(giving).1.Contains("Pip's hands"))
+    Expect(!EndingWords(giving).1.Contains("sea"))
+End Function
+
+// Two images' PSNR says how close they are.
+@Test
+Function ThePsnrOfImages()
+    Local one = Image(8, 8)
+    Local two = Image(8, 8)
+    Expect(PsnrOf(one, two) == 100.0)
+    For y = 0 Until 8
+        For x = 0 Until 8
+            two[x, y] = Color32(10, 10, 10, 255)
+        End For
+    End For
+    Local near = PsnrOf(one, two)
+    Expect(near > 25.0 && near < 30.0)
+    For y = 0 Until 8
+        For x = 0 Until 8
+            two[x, y] = Color32(255, 255, 255, 255)
+        End For
+    End For
+    Expect(PsnrOf(one, two) < 1.0)
 End Function
