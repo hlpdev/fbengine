@@ -597,6 +597,10 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                 continue;
             }
             data.vertices = surface->vertices.address;
+            if (surface->tangents.buffer != VK_NULL_HANDLE) {
+                data.tangents = surface->tangents.address;
+                data.has_tangents = 1U;
+            }
             data.instances = records;
             if (surface->tangents.buffer != VK_NULL_HANDLE) {
                 data.tangents = surface->tangents.address;

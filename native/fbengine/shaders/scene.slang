@@ -131,9 +131,8 @@ struct DrawnTarget
 // A draw: its matrix to the camera's view, what turns its normals there, its color and alpha, its
 // vertices, its joints and palette if it's skinned, its tangents if it has them, its morph targets
 // and which it's drawn with if it's morphed, its emitter if it's particles, its instances if it has
-// them, its material's index, its own lights, how many matrices its palette has, 0 if it isn't
-// skinned, how many targets it's drawn with, and how many vertices each has, and whether it has
-// tangents.
+// them, its material's index, its own lights, how many matrices its palette has, 0 if it isn't skinned,
+// how many targets it's drawn with, and how many vertices each has, and whether it has tangents.
 struct Draw
 {
     float4x4 toView;
@@ -343,6 +342,9 @@ struct Corner
     // Its tangent in the camera's view, w its bitangent's way; 0 in w for none.
     float4 tangent : TANGENT;
     nointerpolation uint draw : DRAW;
+    // Whether what's drawn mirrors its triangles where its pipeline can't say so, as one instance of
+    // many can: which side of them is its front is the other way.
+    nointerpolation uint mirrored : MIRRORED;
 };
 
 // Whether this pipeline's the fixed-function look, in encoded values.
@@ -461,8 +463,8 @@ float3 skinnedNormal(float4x4 skin, float3 normal)
 }
 
 // A draw's corner, from where it is in its mesh's space and how it's turned there.
-Corner litCorner(Camera* camera, Draw draw, uint drawIndex, float4 position, float3 normal,
-                 float4 tangent, Vertex vertex, float4 color)
+Corner litCorner(Camera* camera, Draw draw, uint drawIndex, float4 position, float3 normal, Vertex vertex,
+                 float4 color, float4 tangent)
 {
     const float4 place = mul(draw.toView, position);
     Corner corner;
@@ -478,11 +480,11 @@ Corner litCorner(Camera* camera, Draw draw, uint drawIndex, float4 position, flo
         corner.color.rgb = toEncoded(corner.color.rgb);
     }
     corner.draw = drawIndex;
+    corner.mirrored = 0;
     corner.lit = float3(1.0, 1.0, 1.0);
-    corner.tangent = !fixedLook() && draw.hasTangents != 0
-                         ? float4(mul(draw.toView, float4(tangent.xyz, 0.0)).xyz,
-                                  tangent.w * mirroring(draw.toView))
-                         : float4(0.0, 0.0, 0.0, 0.0);
+    corner.tangent = tangent.w != 0.0 ? float4(mul(draw.toView, float4(tangent.xyz, 0.0)).xyz,
+                                               tangent.w * mirroring(draw.toView))
+                                      : float4(0.0, 0.0, 0.0, 0.0);
     if (shading == shadingVertex)
     {
         // Lit here, by the draw's own lights, and clamped here, before any texture.
@@ -563,7 +565,7 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
         tangent = float4(mul(skin, float4(tangent.xyz, 0.0)).xyz, tangent.w * mirroring(skin));
     }
     const float4 color = float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]);
-    return litCorner(camera, draw, instance, position, normal, tangent, vertex, color);
+    return litCorner(camera, draw, instance, position, normal, vertex, color, tangent);
 }
 
 // An instance of an Instances entity: its vertex through its own matrix, then as any draw's.
@@ -596,7 +598,18 @@ Corner instanceVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
     }
     const float4 color = float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]) *
                          one.color;
-    return litCorner(camera, draw, push.draw, position, normal, tangent, vertex, color);
+    float4 tangent = float4(0.0, 0.0, 0.0, 0.0);
+    if (!fixedLook() && draw.hasTangents != 0)
+    {
+        // Its matrix turns it as it does what's along a surface, and its bitangent if it mirrors.
+        const Tangent stored = tangentAt(draw.tangents, index);
+        const float4 along = float4(stored.xyzw[0], stored.xyzw[1], stored.xyzw[2], 0.0);
+        tangent = float4(dot(one.rows[0], along), dot(one.rows[1], along), dot(one.rows[2], along),
+                         stored.xyzw[3] * (dot(a, x) < 0.0 ? -1.0 : 1.0));
+    }
+    Corner corner = litCorner(camera, draw, push.draw, position, normal, vertex, color, tangent);
+    corner.mirrored = dot(a, x) < 0.0 ? 1 : 0;
+    return corner;
 }
 
 // A quad's two triangles, from its corners' bits: x, then y.
@@ -622,6 +635,7 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
     corner.lit = float3(1.0, 1.0, 1.0);
     corner.tangent = float4(0.0, 0.0, 0.0, 0.0);
     corner.draw = instance;
+    corner.mirrored = 0;
     float age = emitter.now - particle.birth;
     if (age < 0.0)
     {
@@ -1020,7 +1034,7 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
     // Before it's discarded, as maps' levels and a tangent's derivatives need their neighbors.
     if (!encoded)
     {
-        current.rgb = pixelShaded(camera, material, corner, current.rgb, front);
+        current.rgb = pixelShaded(camera, material, corner, current.rgb, front != (corner.mirrored != 0));
     }
     if (alphaTest != 0 && current.a < material.cutoff)
     {
