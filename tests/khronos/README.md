@@ -8,6 +8,19 @@ kept here. CMake fetches the models and their reference images at configure, fro
 checked by its SHA-256 (`tests/CMakeLists.txt`, `fetch.cmake`). Offline they're left out with a warning, and
 `FBENGINE_REQUIRE_KHRONOS`, which CI sets, makes that fatal. `tests/models/LICENSES.md` has their licenses.
 
+On Linux, `khronos.golden` lets four frames differ, as what's measured there says, since golden images are
+Mesa 26.2.4's and Linux's CI has Ubuntu's 25.2.8. The same natives on 25.2.8 on Windows give what Linux x64
+gives, to the pixel, so it's the driver, and it's mipmaps: 25.2.8's `vkCmdBlitImage` makes each level of an
+8-bit linear format half a 255th brighter than the mean of what's under it, 2 by level 4, where 26.2.4's is
+within 0.01, and both make sRGB's the same. What differs is what normal and metal-rough maps do from far off.
+
+| Frame | Pixels more than 2 away, x64, arm64 | Most away | Let differ |
+| --- | --- | --- | --- |
+| AlphaBlendModeTest | 0.63%, 1.39% | 20 | 1.5% |
+| NormalTangentMirrorTest | 0.15%, 0.44% | 96 | 0.5% |
+| NormalTangentTest | 0.056%, 0.061% | 85 | 0.1% |
+| TextureTransformMultiTest | 0.004%, 0.071% | 24 | 0.1% |
+
 ## What the checks can say
 
 Each model's checks are of three kinds, strictest first:
