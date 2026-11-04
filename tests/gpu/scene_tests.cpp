@@ -621,6 +621,12 @@ TEST_CASE("a layer's UVs turn and scale as Blitz's did", "[gpu][scene]") {
     CHECK(pixel(frame, low, low) == reds);
     CHECK(pixel(frame, high, low) == blues);
     CHECK(pixel(frame, low, high) == reds);
+    // Scaled first, then turned: a scale of 2 across and a quarter turn take a UV of (0.625, 0.375)
+    // to (-0.375, 0.3125), so the first row, where turning first would take it to (-0.1875, 0.625),
+    // the second.
+    require(fbe_material_set_layer_uv(material, 0, 2.0F, 1.0F, 1.5707964F, 0.0F, 0.0F));
+    frame = scene.drawn();
+    CHECK(pixel(frame, high, low) == reds);
     fbe_texture_release(texture);
     fbe_material_release(material);
 }
@@ -7850,6 +7856,56 @@ TEST_CASE("an Instances' normals turn with each one, and it's lit", "[gpu][scene
     const rgba_t seen = pixel(scene.drawn(), 64 + 8, 64);
     const float lit = rough_white(c);
     CHECK(near(seen, { srgb(lit), srgb(lit), srgb(lit) }, 4));
+    fbe_material_release(paint);
+}
+
+TEST_CASE("an Instances' tangents turn with each one, as a mesh's do", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t paint = fbe_material_create();
+    const std::uint64_t shining = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    (void)shining;
+    // Up each face that's seen, which a normal map leans.
+    const std::uint64_t geometry = fbe_geometry_cube();
+    for (std::int32_t surface = 0; surface < fbe_geometry_surface_count(geometry); ++surface) {
+        const std::vector<fbe_vertex_tangent_t> tangents(
+            static_cast<std::size_t>(fbe_surface_vertex_count(geometry, surface)),
+            fbe_vertex_tangent_t{ .x = 0.0F, .y = 1.0F, .z = 0.0F, .w = 1.0F });
+        require(fbe_surface_set_tangents(geometry, surface, tangents.data(),
+                                         static_cast<std::int32_t>(tangents.size())));
+    }
+    const std::uint64_t leaning = flat_texture(128, 220, 180, 255, FBE_TEXTURE_RGBA8_LINEAR);
+    require(fbe_material_set_map(paint, FBE_MAP_NORMAL, leaning, 0));
+    const float c = std::cos(std::numbers::pi_v<float> / 4.0F);
+    const float half_sine = std::sin(std::numbers::pi_v<float> / 8.0F);
+    const float half_cosine = std::cos(std::numbers::pi_v<float> / 8.0F);
+    const std::uint64_t mesh = fbe_entity_create(scene.world, 0, FBE_ENTITY_MESH);
+    require(fbe_mesh_set_geometry(mesh, geometry));
+    require(fbe_mesh_set_material(mesh, paint));
+    require(fbe_entity_set_position(mesh, 0.0F, 0.0F, -6.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_rotation(mesh, 0.0F, half_sine, 0.0F, half_cosine, FBE_SPACE_WORLD));
+    const rgba_t drawn = pixel(scene.drawn(), 64 + 8, 64);
+    fbe_entity_free(mesh);
+    fbe_instance_t turned = instance_at(0.0F, 0.0F, -6.0F);
+    turned.matrix.m[0] = c;
+    turned.matrix.m[2] = -c;
+    turned.matrix.m[8] = c;
+    turned.matrix.m[10] = c;
+    const std::uint64_t many = fbe_entity_create(scene.world, 0, FBE_ENTITY_INSTANCES);
+    require(fbe_instances_set_geometry(many, geometry));
+    require(fbe_instances_set_material(many, paint));
+    require(fbe_instances_set(many, &turned, 1));
+    const rgba_t instanced = pixel(scene.drawn(), 64 + 8, 64);
+    // With no map, it's as the face's own normal has it, which the map's leaned from.
+    require(fbe_material_set_map(paint, FBE_MAP_NORMAL, 0, 0));
+    const rgba_t flat = pixel(scene.drawn(), 64 + 8, 64);
+    fbe_entity_free(many);
+    INFO("instanced " << int{ instanced[0] } << ", drawn " << int{ drawn[0] } << ", flat "
+                      << int{ flat[0] });
+    CHECK(near(instanced, { drawn[0], drawn[1], drawn[2] }, 2));
+    CHECK(std::abs(int{ drawn[0] } - int{ flat[0] }) > 8);
+    fbe_geometry_release(geometry);
+    fbe_texture_release(leaning);
     fbe_material_release(paint);
 }
 

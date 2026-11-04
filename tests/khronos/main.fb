@@ -1,0 +1,659 @@
+// Khronos's sample models through the renderer, against what they show of themselves and their
+// reference images: `-- --models <folder> --frames <folder>`, the models' folder being what CMake
+// fetched. README.md says what each is held to, and which differences are expected.
+
+Import std.collections
+Import std.core
+Import std.image.hdr
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.text
+Import fbengine
+
+Const SIZE: Int = 512
+// What's compared against a reference image, each cut to what's drawn: this many squares a side.
+Const GRID: Int = 64
+
+// The light all around that they're lit by: a sky over ground, with a clear horizon, as
+// NormalTangentTest's notes ask, and a sun to make a highlight of. It isn't their references', which
+// Khronos's repository doesn't hold with the models.
+Function Sky(): Environment Throws GraphicsError
+    Local wide = 512
+    Local high = 256
+    Local image = HdrImage(wide, high)
+    For y = 0 Until high
+        For x = 0 Until wide
+            Local up = 1.0 - 2.0 * ((y As Float) + 0.5) / (high As Float)
+            Local along = ((x As Float) + 0.5) / (wide As Float) * 2.0 * Pi
+            Local color = up >= 0 ? Color(0.45 + 0.35 * up, 0.6 + 0.3 * up, 0.95, 1) : Color(0.25,
+                                                                                             0.2,
+                                                                                             0.15,
+                                                                                             1)
+            Local flat = Sqrt(1 - up * up)
+            Local toward = Vec3(Cos(along) * flat, up, Sin(along) * flat)
+            If Dot(toward, Normalize(Vec3(0.5, 0.7, 0.5))) > 0.995 Then color = Color(40, 38, 34, 1)
+            image[x, y] = color
+        End For
+    End For
+    Local source = Try Texture.FromHdr(image, True)
+    Return Try Environment.Bake(source, 256, 1024)
+End Function
+
+// The box around what's under `entity`, in the world: its middle, and how far out it goes.
+Function Around(entity: Entity): (Vec3, Vec3)
+    Local low = Vec3(Inf, Inf, Inf)
+    Local high = Vec3(-Inf, -Inf, -Inf)
+    Walk(entity, Function(at: Vec3)
+        low = Vec3(Min(low.x, at.x), Min(low.y, at.y), Min(low.z, at.z))
+        high = Vec3(Max(high.x, at.x), Max(high.y, at.y), Max(high.z, at.z))
+    End Function)
+    Return ((low + high) * 0.5, (high - low) * 0.5)
+End Function
+
+Function Walk(entity: Entity, add: Func(Vec3))
+    Local mesh = entity As? Mesh
+    Local geometry = mesh?.Geometry()
+    If geometry != Null
+        Local box = geometry.Bounds()
+        Local world = entity.Matrix(Space.WORLD)
+        For x In [box.Min.x, box.Max.x]
+            For y In [box.Min.y, box.Max.y]
+                For z In [box.Min.z, box.Max.z]
+                    add(world.TransformPoint(Vec3(x, y, z)))
+                End For
+            End For
+        End For
+    End If
+    For child In entity.Children()
+        Walk(child, add)
+    End For
+End Function
+
+// `name` drawn from around it, by `yaw` and `pitch` in degrees, as the sample viewer's camera frames a
+// model, in `sky`, or for Null in the dark with no tonemap, so a pixel's only what it emits, encoded:
+// its pixels, RGBA, top row first.
+Function Drawn(models: Path, name: String, yaw: Float, pitch: Float, sky: Environment?,
+               target: Texture,
+               also: Func(World, Camera)? = Null): UInt8[] Throws GraphicsError, IOError
+    Local world = World()
+    World.SetCurrent(world)
+    If sky != Null Then world.SetEnvironment(sky)
+    Local at = "res://khronos/{name}"
+    Local number = Assets.MountFolder(at, models)
+    // It's the one that's only separate files in its repository.
+    Local ending = name == "TextureTransformTest" ? "gltf" : "glb"
+    Local model = Try Assets.Load<Model>("{at}/{name}.{ending}")
+    Local root = Try model.Spawn()
+    Local center, reach = Around(root)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    If sky != Null
+        camera.SetHdr(True)
+        camera.SetTonemap(Tonemap.NEUTRAL)
+    End If
+    camera.SetClearColor(sky != Null ? Color(0.05, 0.05, 0.1) : Color(0, 0, 0))
+    camera.SetFieldOfView(Pi / 4)
+    Local radius = Length(reach)
+    Local away = Quat.FromEuler(pitch * Pi / 180, yaw * Pi / 180, 0) * Vec3(0, 0, 1)
+    camera.SetRange(radius * 0.01, radius * 10)
+    camera.SetPosition(center + away * (radius / Sin(Pi / 8)))
+    camera.PointAt(center)
+    If also != Null Then also(world, camera)
+    // Only this camera: a file can bring its own.
+    camera.Render()
+    Local pixels = target.ReadPixels()
+    Flip(False)
+    model.Free()
+    Assets.Unmount(number)
+    world.Free()
+    Return pixels
+End Function
+
+// sRGB's encoding of a linear value 0 to 1, in 255ths, and its decoding, with none of the engine's
+// code: IEC 61966-2-1, as glTF's specification says its colors are.
+Function Encoded(linear: Float): Float
+    Local kept = Clamp(linear, 0, 1)
+    Return 255 * (kept <= 0.0031308 ? kept * 12.92 : 1.055 * Exp(Log(kept) / 2.4) - 0.055)
+End Function
+
+Function Decoded(byte: Float): Float
+    Local value = byte / 255
+    Return value <= 0.04045 ? value / 12.92 : Exp(Log((value + 0.055) / 1.055) * 2.4)
+End Function
+
+// A material of the model whose colors are worked out by hand: what its cell should be, in 255ths.
+Struct Cell
+    Field Name: String
+    Field Json: String
+    Field Expected: Vec3
+End Struct
+
+// A cell's texture, a 2 by 2 image of one color. Base color and emissive read images of their own,
+// as one read as a color by either would be decoded for both.
+Function Solid(r: Int, g: Int, b: Int): String
+    Local image = Image(2, 2)
+    image.Fill(Color32(r As UInt8, g As UInt8, b As UInt8, 255))
+    Return "{{\"uri\":\"data:image/png;base64,{Base64.Encode(Png.Encode(image))}\"}}"
+End Function
+
+// What's in the worked-out model, each cell a unit quad facing +Z, drawn lit by an ambient light of
+// 1 and nothing else, with no tonemap: a dielectric's color is its base color by what reaches it, on
+// top of which it emits, and each is that, encoded.
+Function Cells(): Cell[]
+    Local mid = Vec3(200, 100, 50)
+    Local half = Vec3(Encoded(0.5), Encoded(0.25), Encoded(0.125))
+    Local halved = Vec3(Encoded(Decoded(200) * 0.5), Encoded(Decoded(100) * 0.5),
+                        Encoded(Decoded(50) * 0.5))
+    // 128 in a map that holds no color is 128 / 255, not decoded.
+    Local gray: Float = 128.0 / 255
+    Local black = "\"pbrMetallicRoughness\":{{\"baseColorFactor\":[0,0,0,1],\"metallicFactor\":0}}"
+    Local wall = "\"metallicFactor\":0,\"roughnessFactor\":1"
+    Return [
+        Cell("emissive factor", "{{{black},\"emissiveFactor\":[0.5,0.25,0.125]}}", half),
+        Cell("emissive strength",
+             "{{{black},\"emissiveFactor\":[0.25,0.125,0.0625],\"extensions\":" +
+             "{{\"KHR_materials_emissive_strength\":{{\"emissiveStrength\":2}}}}}}", half),
+        Cell("emissive map", "{{{black},\"emissiveFactor\":[1,1,1],\"emissiveTexture\":{{\"index\":2}}}}", mid),
+        Cell("emissive map by its factor",
+             "{{{black},\"emissiveFactor\":[0.5,0.5,0.5],\"emissiveTexture\":{{\"index\":2}}}}", halved),
+        Cell("base color factor",
+             "{{\"pbrMetallicRoughness\":{{\"baseColorFactor\":[0.5,0.25,0.125,1],{wall}}}}}", half),
+        Cell("base color map",
+             "{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}},{wall}}}}}", mid),
+        Cell("base color map by its factor",
+             "{{\"pbrMetallicRoughness\":{{\"baseColorFactor\":[0.5,0.5,0.5,1]," +
+             "\"baseColorTexture\":{{\"index\":0}},{wall}}}}}", halved),
+        Cell("unlit base color map",
+             "{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}," +
+             "\"extensions\":{{\"KHR_materials_unlit\":{{}}}}}}", mid),
+        Cell("occlusion map",
+             "{{\"pbrMetallicRoughness\":{{{wall}}},\"occlusionTexture\":{{\"index\":1}}}}",
+             Vec3(Encoded(gray), Encoded(gray), Encoded(gray))),
+        Cell("occlusion map by half its strength",
+             "{{\"pbrMetallicRoughness\":{{{wall}}},\"occlusionTexture\":{{\"index\":1," +
+             "\"strength\":0.5}}}}",
+             Vec3(Encoded(0.5 + gray / 2), Encoded(0.5 + gray / 2), Encoded(0.5 + gray / 2))),
+        Cell("a mask's alpha past its cutoff",
+             "{{\"alphaMode\":\"MASK\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":[1,1,1,0.8]," +
+             "{wall}}}}}", Vec3(255, 255, 255)),
+        Cell("a mask's alpha short of its cutoff",
+             "{{\"alphaMode\":\"MASK\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":[1,1,1,0.25]," +
+             "{wall}}}}}", Vec3(0, 0, 0)),
+        Cell("a mask of a cutoff of 0",
+             "{{\"alphaMode\":\"MASK\",\"alphaCutoff\":0,\"pbrMetallicRoughness\":" +
+             "{{\"baseColorFactor\":[1,1,1,0.25],{wall}}}}}", Vec3(255, 255, 255)),
+    ]
+End Function
+
+// The worked-out model's file: `cells`, a mesh and a node each, 4 to a row, 1.25 apart.
+Function WorkedFile(cells: Cell[]): UInt8[]
+    Local floats = [-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0, 0, 0, 1, 0, 0, 1, 0, 0,
+                    1, 0, 0, 1,
+                    0, 1, 1, 1, 1, 0, 0, 0] As Float32[]
+    Local bytes: UInt8[] = []
+    For each In floats
+        Local bits = each.ToBits()
+        For shift In [0, 8, 16, 24]
+            bytes.Add(((bits >> shift) & 0xFF) As UInt8)
+        End For
+    End For
+    bytes.AddAll([0, 0, 1, 0, 2, 0, 0, 0, 2, 0, 3, 0] As UInt8[])
+    Local materials: String[] = []
+    Local meshes: String[] = []
+    Local nodes: String[] = []
+    Local names: String[] = []
+    For at = 0 Until cells.Count
+        materials.Add(cells[at].Json)
+        meshes.Add("{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0,\"NORMAL\":1," +
+                   "\"TEXCOORD_0\":2}},\"indices\":3,\"material\":{at}}}]}}")
+        Local x = (at % 4 As Float) * 1.25
+        Local y = -((at / 4) As Float) * 1.25
+        nodes.Add("{{\"mesh\":{at},\"translation\":[{x},{y},0]}}")
+        names.Add("{at}")
+    End For
+    Local data = "data:application/octet-stream;base64,{Base64.Encode(bytes)}"
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+            "\"extensionsUsed\":[\"KHR_materials_unlit\",\"KHR_materials_emissive_strength\"]," +
+            "\"buffers\":[{{\"byteLength\":{bytes.Count},\"uri\":\"{data}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":48}}," +
+            "{{\"buffer\":0,\"byteOffset\":48,\"byteLength\":48}}," +
+            "{{\"buffer\":0,\"byteOffset\":96,\"byteLength\":32}}," +
+            "{{\"buffer\":0,\"byteOffset\":128,\"byteLength\":12}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":4," +
+            "\"type\":\"VEC3\",\"min\":[-0.5,-0.5,0],\"max\":[0.5,0.5,0]}}," +
+            "{{\"bufferView\":1,\"componentType\":5126,\"count\":4,\"type\":\"VEC3\"}}," +
+            "{{\"bufferView\":2,\"componentType\":5126,\"count\":4,\"type\":\"VEC2\"}}," +
+            "{{\"bufferView\":3,\"componentType\":5123,\"count\":6,\"type\":\"SCALAR\"}}]," +
+            "\"images\":[{Solid(200, 100, 50)},{Solid(128, 128, 128)},{Solid(200, 100, 50)}]," +
+            "\"textures\":[{{\"source\":0}},{{\"source\":1}},{{\"source\":2}}]," +
+            "\"materials\":[{",".Join(materials)}],\"meshes\":[{",".Join(meshes)}]," +
+            "\"nodes\":[{",".Join(nodes)}],\"scenes\":[{{\"nodes\":[{",".Join(names)}]}}],\"scene\":0}}").Bytes
+End Function
+
+// Each worked-out cell against what it should be, the furthest of its channels. It's saved like any
+// frame.
+Function Worked(tally: Tally, target: Texture, frames: String) Throws GraphicsError, IOError
+    Local cells = Cells()
+    Local world = World()
+    World.SetCurrent(world)
+    world.SetAmbientLight(Color(1, 1, 1))
+    Assets.MountFiles("res://khronos/worked", {"worked.gltf": WorkedFile(cells)})
+    Local model = Try Assets.Load<Model>("res://khronos/worked/worked.gltf")
+    Local root = Try model.Spawn()
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    camera.SetFieldOfView(Pi / 4)
+    Local middle = Vec3(1.875, -1.875, 0)
+    camera.SetPosition(middle + Vec3(0, 0, 8))
+    camera.Render()
+    Local pixels = target.ReadPixels()
+    Try File.WriteBytes(Path("{frames}/frame_Worked.png"),
+                        Png.Encode(Image.FromBytes(SIZE, SIZE, pixels)))
+    For at = 0 Until cells.Count
+        Local center = Vec3((at % 4 As Float) * 1.25, -((at / 4) As Float) * 1.25, 0)
+        Local seen = camera.Project(center)
+        If seen == Null Then Panic("a cell of the worked-out model isn't in view")
+        Local x = Round(seen.x) As Int
+        Local y = Round(seen.y) As Int
+        Local want = cells[at].Expected
+        Local away = Max(Abs(At(pixels, SIZE, x, y, 0) - want.x),
+                         Abs(At(pixels, SIZE, x, y, 1) - want.y))
+        tally.AtMost("Worked out: {cells[at].Name}",
+                     Max(away, Abs(At(pixels, SIZE, x, y, 2) - want.z)), 3)
+    End For
+    Flip(False)
+    model.Free()
+    Assets.Unmount("res://khronos/worked")
+    world.Free()
+End Function
+
+// A channel of a pixel, 0 to 255.
+Function At(pixels: UInt8[], wide: Int, x: Int, y: Int, channel: Int): Float
+    Return pixels[(y * wide + x) * 4 + channel] As Float
+End Function
+
+// How far a square of `half` around one point is from one around another, a channel of a pixel at a
+// time, on average, in 255ths.
+Function Apart(pixels: UInt8[], ax: Int, ay: Int, bx: Int, by: Int, half: Int): Float
+    Local sum: Float = 0
+    Local count = 0
+    For dy = -half To half
+        For dx = -half To half
+            For channel = 0 To 2
+                sum += Abs(At(pixels, SIZE, ax + dx, ay + dy, channel) -
+                           At(pixels, SIZE, bx + dx, by + dy, channel))
+                count += 1
+            End For
+        End For
+    End For
+    Return sum / (count As Float)
+End Function
+
+// How bright a square of `half` around a point is, in 255ths, on average.
+Function Bright(pixels: UInt8[], x: Int, y: Int, half: Int): Float
+    Local sum: Float = 0
+    Local count = 0
+    For dy = -half To half
+        For dx = -half To half
+            For channel = 0 To 2
+                sum += At(pixels, SIZE, x + dx, y + dy, channel)
+                count += 1
+            End For
+        End For
+    End For
+    Return sum / (count As Float)
+End Function
+
+// How sharply a column through a point changes, most of all, in 255ths a pixel: a reflected horizon's
+// edge, on a sphere.
+Function Sharpest(pixels: UInt8[], x: Int, y: Int, half: Int): Float
+    Local most: Float = 0
+    For dy = -half Until half
+        most = Max(most, Abs(At(pixels, SIZE, x, y + dy + 1, 1) - At(pixels, SIZE, x, y + dy, 1)))
+    End For
+    Return most
+End Function
+
+// One thing held to a tolerance, which it prints.
+Class Tally
+    Public Field Good: Int = 0
+    Public Field All: Int = 0
+
+    Public Method AtMost(what: String, value: Float, most: Float)
+        All += 1
+        If value <= most Then Good += 1
+        Print("{value <= most ? "ok" : "OFF"} {what}: {value} (at most {most})")
+    End Method
+
+    Public Method AtLeast(what: String, value: Float, least: Float)
+        All += 1
+        If value >= least Then Good += 1
+        Print("{value >= least ? "ok" : "OFF"} {what}: {value} (at least {least})")
+    End Method
+End Class
+
+// What's drawn of `pixels`, `wide` by `high`: what's unlike its corner, cut to that, in GRID by GRID
+// squares of their colors, with how much of each is drawn.
+Struct Shape2D
+    Public Field Colors: Float[]
+    Public Field Covered: Float[]
+End Struct
+
+Function Shaped(pixels: UInt8[], wide: Int, high: Int, whole: Bool = False): Shape2D
+    Local drawn = Function(x: Int, y: Int): Bool
+        If whole Then Return True
+        Local away: Float = 0
+        For channel = 0 To 2
+            away += Abs(At(pixels, wide, x, y, channel) - At(pixels, wide, 2, 2, channel))
+        End For
+        Return away > 24
+    End Function
+    Local left = wide
+    Local right = -1
+    Local top = high
+    Local bottom = -1
+    For y = 0 Until high
+        For x = 0 Until wide
+            If drawn(x, y)
+                left = Min(left, x)
+                right = Max(right, x)
+                top = Min(top, y)
+                bottom = Max(bottom, y)
+            End If
+        End For
+    End For
+    Local colors: Float[] = []
+    Local covered: Float[] = []
+    For cell = 0 Until GRID * GRID * 3
+        colors.Add(0)
+    End For
+    For cell = 0 Until GRID * GRID
+        covered.Add(0)
+    End For
+    Local counts: Int[] = []
+    For cell = 0 Until GRID * GRID
+        counts.Add(0)
+    End For
+    Local across = Max(right - left + 1, 1)
+    Local down = Max(bottom - top + 1, 1)
+    For y = top To bottom
+        For x = left To right
+            Local cx = (x - left) * GRID / across
+            Local cy = (y - top) * GRID / down
+            Local cell = cy * GRID + cx
+            counts[cell] += 1
+            If drawn(x, y) Then covered[cell] += 1
+            For channel = 0 To 2
+                colors[cell * 3 + channel] += At(pixels, wide, x, y, channel)
+            End For
+        End For
+    End For
+    For cell = 0 Until GRID * GRID
+        If counts[cell] == 0 Then Continue
+        covered[cell] /= counts[cell] As Float
+        For channel = 0 To 2
+            colors[cell * 3 + channel] /= counts[cell] As Float
+        End For
+    End For
+    Return Shape2D(colors, covered)
+End Function
+
+// How `pixels` is against its reference image: how much of what's drawn in either is drawn in both, and
+// how its brightness goes with the reference's, 1 for together.
+Function Against(tally: Tally, name: String, pixels: UInt8[], reference: Path, overlap: Float,
+                 together: Float) Throws IOError
+    Local image = Try Image.Load(reference)
+    Local ours = Shaped(pixels, SIZE, SIZE)
+    // With no overlap to ask for, its background's no plain color to cut it out by.
+    Local theirs = Shaped(image.ToBytes(), image.Width, image.Height, overlap == 0)
+    If overlap > 0
+        Local both: Float = 0
+        Local either: Float = 0
+        For cell = 0 Until GRID * GRID
+            both += Min(ours.Covered[cell], theirs.Covered[cell])
+            either += Max(ours.Covered[cell], theirs.Covered[cell])
+        End For
+        tally.AtLeast("{name}: what's drawn in both", both / Max(either, 1), overlap)
+    End If
+    Local sumA: Float = 0
+    Local sumB: Float = 0
+    Local count: Float = 0
+    Local values: (Float, Float)[] = []
+    For cell = 0 Until GRID * GRID
+        If Min(ours.Covered[cell], theirs.Covered[cell]) < 0.5 Then Continue
+        Local a = ours.Colors[cell * 3] + ours.Colors[cell * 3 + 1] + ours.Colors[cell * 3 + 2]
+        Local b = theirs.Colors[cell * 3] + theirs.Colors[cell * 3 + 1] +
+                  theirs.Colors[cell * 3 + 2]
+        values.Add((a, b))
+        sumA += a
+        sumB += b
+        count += 1
+    End For
+    Local meanA = sumA / Max(count, 1)
+    Local meanB = sumB / Max(count, 1)
+    Local ab: Float = 0
+    Local aa: Float = 0
+    Local bb: Float = 0
+    For each In values
+        ab += (each.0 - meanA) * (each.1 - meanB)
+        aa += (each.0 - meanA) * (each.0 - meanA)
+        bb += (each.1 - meanB) * (each.1 - meanB)
+    End For
+    tally.AtLeast("{name}: how its brightness goes with its reference's",
+                  ab / Max(Sqrt(aa * bb), 1), together)
+End Function
+
+// Each cell of a column of NormalTangentTest's kind against the geometry beside it.
+Function Pairs(tally: Tally, name: String, pixels: UInt8[], geometry: Int[], normals: Int[],
+               rows: Int[],
+               half: Int, most: Float)
+    For g = 0 Until geometry.Count
+        Local worst: Float = 0
+        For row In rows
+            worst = Max(worst, Apart(pixels, geometry[g], row, normals[g], row, half))
+        End For
+        tally.AtMost(
+            "{name}: the normal map at x {normals[g]} against the geometry at x {geometry[g]}",
+            worst, most)
+    End For
+End Function
+
+Function Run(arguments: String[]) Throws GraphicsError, IOError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+    Local models = Path(arguments[1])
+    Local frames = arguments[3]
+    Try Dir.CreateAll(Path(frames))
+    Local target = Try Texture.Target(SIZE As Int32, SIZE As Int32, TextureFormat.RGBA8, 1, True)
+    Local sky = Try Sky()
+    Flip(False)
+    Local tally = Tally()
+    Local Saved = Function(name: String, yaw: Float, pitch: Float, lit: Bool): UInt8[]
+        Try
+            Local pixels = Try Drawn(models, name, yaw, pitch, lit ? sky : Null, target)
+            Try File.WriteBytes(Path("{frames}/frame_{name}.png"),
+                                Png.Encode(Image.FromBytes(SIZE, SIZE, pixels)))
+            Return pixels
+        Catch error As Error
+            Panic("{name}: {error.Message}")
+        End Try
+    End Function
+    Local Draw = Function(name: String, yaw: Float, pitch: Float): UInt8[]
+        Return Saved(name, yaw, pitch, True)
+    End Function
+    Try Worked(tally, target, frames)
+    // Its top row's each the color of what its offset moves to, and yellow if it's not moved. Its
+    // bottom row's arrows go to their green markers: over the arrows, it's black, and red's
+    // marker, of a rotation the wrong way, would put them elsewhere.
+    Local transforms = Draw("TextureTransformTest", 0, 0)
+    For quad In [("U", 70, 135, 1), ("V", 205, 135, 2)]
+        tally.AtLeast("TextureTransformTest: {quad.0} is its own color",
+                      At(transforms, SIZE, quad.1, quad.2, quad.3) -
+                      At(transforms, SIZE, quad.1, quad.2, 0), 100)
+    End For
+    tally.AtLeast("TextureTransformTest: UV is its own color",
+                  At(transforms, SIZE, 340, 135, 2) - At(transforms, SIZE, 340, 135, 0), 100)
+    tally.AtLeast("TextureTransformTest: UV is its own color's green",
+                  At(transforms, SIZE, 340, 135, 1) - At(transforms, SIZE, 340, 135, 0), 100)
+    For arrow In [("its rotation", 90, 325), ("its rotation, nearer its tip", 103, 350),
+                  ("its scale", 225, 287), ("its scale, nearer its tip", 240, 303),
+                  ("all at once", 366, 313), ("all at once, nearer its tip", 374, 332)]
+        tally.AtMost("TextureTransformTest: the arrow of {arrow.0}",
+                     Bright(transforms, arrow.1, arrow.2, 1), 40)
+    End For
+    // Each row's three tiles alike: a transform unapplied shows a crossed-out circle, and a wrong
+    // one an X, against its control's check mark.
+    Local multi = Draw("TextureTransformMultiTest", 0, 0)
+    For row In [("BaseColor", 112), ("Emission", 150), ("Normal", 188), ("Metal/Rough", 226),
+                ("Occlusion", 264), ("Unlit", 302)]
+        tally.AtMost("TextureTransformMultiTest: {row.0}'s UV 0 against its Sample",
+                     Apart(multi, 271, row.1, 347, row.1, 13), 16)
+        tally.AtMost("TextureTransformMultiTest: {row.0}'s UV 1 against its Sample",
+                     Apart(multi, 309, row.1, 347, row.1, 13), 16)
+    End For
+    // Its color's by UV set 0 and its logo by set 1, which emits: the logo's past what's around it.
+    Local uvs = Draw("MultiUVTest", 0, 0)
+    tally.AtLeast("MultiUVTest: its logo, by UV set 1, past its color, by set 0",
+                  At(uvs, SIZE, 241, 250, 1) - At(uvs, SIZE, 110, 110, 1), 20)
+    // Two spheres alike in the dark, one's 0.5 of a factor, and one's a map of 0 and 255 between its
+    // texels, interpolated after decoding, so 0.5 too.
+    Local spheres2 = Saved("TextureLinearInterpolationTest", 0, 0, False)
+    For sphere In [("its factor", 167), ("its map", 345)]
+        tally.AtMost("TextureLinearInterpolationTest: {sphere.0}'s green against 0.5, encoded",
+                     Abs(At(spheres2, SIZE, sphere.1, 344, 1) - Encoded(0.5)), 4)
+        tally.AtMost("TextureLinearInterpolationTest: {sphere.0}'s red",
+                     At(spheres2, SIZE, sphere.1, 344, 0), 2)
+    End For
+    // Each of its Test column's cells against its Sample pass column's beside it.
+    Local settings = Draw("TextureSettingsTest", 0, 0)
+    Local worst: Float = 0
+    For row In [153, 187, 221, 255, 289, 323, 357, 391]
+        worst = Max(worst, Apart(settings, 271, row, 341, row, 12))
+    End For
+    tally.AtMost("TextureSettingsTest: its Test column's cells against its Sample pass's", worst,
+                 20)
+    // Which are what they should be, not only alike: a tick shows white with green on it, and clamp's
+    // whole cell's green.
+    tally.AtLeast("TextureSettingsTest: a tick cell's white", At(settings, SIZE, 260, 145, 0), 150)
+    tally.AtMost("TextureSettingsTest: a clamp cell's green", At(settings, SIZE, 271, 221, 0), 60)
+    Try Against(tally, "TextureSettingsTest", settings, models / "TextureSettingsTest.png", 0, 0.85)
+    // Each normal map against the geometry it's a map of, whatever the light.
+    Local tangent = Draw("NormalTangentTest", 0, 0)
+    Pairs(tally, "NormalTangentTest", tangent, [110, 232, 353], [159, 281, 402],
+          [115, 176, 237, 298, 358], 18, 10)
+    Try Against(tally, "NormalTangentTest", tangent, models / "NormalTangentTest.png", 0.85, 0.2)
+    Local mirror = Draw("NormalTangentMirrorTest", 0, 0)
+    Pairs(tally, "NormalTangentMirrorTest", mirror, [91, 91, 91, 295, 295, 295],
+          [133, 175, 219, 337, 379, 421], [142, 194, 246, 298, 349], 14, 14)
+    // A smooth metal shows what's around it, and a rough one less, down to nothing much.
+    Local spheres = Draw("MetalRoughSpheres", 0, 0)
+    Local xs = [125, 169, 213, 258, 302, 347, 391]
+    Print("MetalRoughSpheres: sharpness along its top row")
+    For x In xs
+        Print("  {x}: {Sharpest(spheres, x, 112, 9)}")
+    End For
+    tally.AtLeast("MetalRoughSpheres: a smooth metal's reflection against a rough one's",
+                  Sharpest(spheres, xs[0], 112, 9) / Max(Sharpest(spheres, xs[6], 112, 9), 1), 3)
+    tally.AtLeast("MetalRoughSpheres: a smooth metal's reflection against a smooth non-metal's",
+                  Sharpest(spheres, xs[0], 112, 9) / Max(Sharpest(spheres, xs[0], 378, 9), 1), 3)
+    Try Against(tally, "MetalRoughSpheres", spheres, models / "MetalRoughSpheres.png", 0, 0.5)
+    Local plain = Draw("MetalRoughSpheresNoTextures", 0, 0)
+    Print("MetalRoughSpheresNoTextures: sharpness along its top row")
+    Local apart = [125, 172, 219, 266, 313, 360, 407]
+    For x In apart
+        Print("  {x}: {Sharpest(plain, x, 102, 9)}")
+    End For
+    tally.AtLeast("MetalRoughSpheresNoTextures: a smooth metal's reflection against a rough one's",
+                  Sharpest(plain, apart[0], 102, 9) / Max(Sharpest(plain, apart[6], 102, 9), 1), 3)
+    // As its screenshot's turned.
+    Local helmet = Draw("DamagedHelmet", 40, 10)
+    Try Against(tally, "DamagedHelmet", helmet, models / "DamagedHelmet.png", 0.8, 0.35)
+    // Its visor's lights emit, against the same spot with its emissive map's own colors.
+    tally.AtLeast("DamagedHelmet: its emissive ring against what's beside it",
+                  Bright(helmet, 160, 214, 2) - Bright(helmet, 178, 214, 2), 10)
+    Local alpha = Draw("AlphaBlendModeTest", 0, 0)
+    Try Against(tally, "AlphaBlendModeTest", alpha, models / "AlphaBlendModeTest.png", 0.9, 0.5)
+    // Panel against panel, by what's behind them, light wall, and their own stripes, with hardly any
+    // red. Opaque's whole; each cutoff's gone above its own mark and whole below; and blended's a
+    // ramp, neither.
+    Local at = Function(x: Int, y: Int): Float
+        Return Bright(alpha, x, y, 3)
+    End Function
+    For gone In [("25%", 262, 226), ("the default", 342, 240), ("75%", 421, 252)]
+        tally.AtLeast("AlphaBlendModeTest: its cutoff of {gone.0} gone above its mark",
+                      at(gone.1, gone.2) - at(96, gone.2), 8)
+    End For
+    For whole In [("25%", 262, 262), ("the default", 342, 285), ("75%", 421, 293)]
+        tally.AtMost("AlphaBlendModeTest: its cutoff of {whole.0} whole below its mark",
+                     Abs(at(whole.1, whole.2) - at(96, whole.2)), 4)
+    End For
+    tally.AtMost("AlphaBlendModeTest: its opaque panel's whole, top to bottom",
+                 Abs(at(96, 222) - at(96, 295)), 3)
+    tally.AtLeast("AlphaBlendModeTest: its blended panel's a ramp, top to bottom",
+                  at(183, 222) - at(183, 295), 15)
+    Local Effect = Function(shadows: Bool, bloom: Bool, tonemap: Tonemap): UInt8[]
+        Local also = Function(world: World, camera: Camera)
+            camera.SetTonemap(tonemap)
+            If bloom Then camera.SetBloom(1, 1)
+            Local sun = Light(LightType.DIRECTIONAL)
+            sun.SetIntensity(3)
+            sun.SetShadows(shadows)
+            sun.SetPosition(camera.Position(Space.WORLD))
+            sun.PointAt(Vec3(0.5, -0.5, 0))
+        End Function
+        Try
+            Return Try Drawn(models, "EmissiveStrengthTest", 0, 0, sky, target, also)
+        Catch error As Error
+            Panic("EmissiveStrengthTest: {error.Message}")
+        End Try
+    End Function
+    // One model, with a shadow, bloom, and a tonemap on, against itself with each off.
+    Local plainly = Effect(False, False, Tonemap.NEUTRAL)
+    Local shaded = Effect(True, False, Tonemap.NEUTRAL)
+    Local bloomed = Effect(False, True, Tonemap.NEUTRAL)
+    Local raw = Effect(False, False, Tonemap.NONE)
+    Local darker = 0
+    Local lighter = 0
+    Local glows = 0
+    For y = 0 Until SIZE
+        For x = 0 Until SIZE
+            If At(shaded, SIZE, x, y, 1) + 8 < At(plainly, SIZE, x, y, 1) Then darker += 1
+            If At(shaded, SIZE, x, y, 1) > At(plainly, SIZE, x, y, 1) + 2 Then lighter += 1
+            If At(bloomed, SIZE, x, y, 1) > At(plainly, SIZE, x, y, 1) + 3 Then glows += 1
+        End For
+    End For
+    tally.AtLeast("Effects: a shadow's pixels", darker As Float, 200)
+    tally.AtMost("Effects: a shadow lights nothing", lighter As Float, 0)
+    tally.AtLeast("Effects: bloom's pixels", glows As Float, 200)
+    tally.AtLeast("Effects: Neutral against none, at its brightest cube",
+                  Abs(At(raw, SIZE, 403, 231, 1) - At(plainly, SIZE, 403, 231, 1)), 3)
+    // Each cube past the first brighter, by the file's emissive strength.
+    Local emissive = Draw("EmissiveStrengthTest", 0, 0)
+    Local cubes = [108, 182, 256, 330, 403]
+    Print("EmissiveStrengthTest: how bright each cube is")
+    For x In cubes
+        Print("  {x}: {Bright(emissive, x, 231, 8)}")
+    End For
+    tally.AtLeast("EmissiveStrengthTest: the first cube's light",
+                  Bright(emissive, cubes[0], 231, 8), 60)
+    For i = 1 Until cubes.Count
+        tally.AtLeast("EmissiveStrengthTest: cube {i} past the one before",
+                      Bright(emissive, cubes[i], 231, 8) - Bright(emissive, cubes[i - 1], 231, 8),
+                      1)
+    End For
+    target.Free()
+    If tally.Good == tally.All
+        Print("all {tally.All} as expected")
+    Else
+        Print("{tally.Good} of {tally.All} as expected")
+    End If
+End Function
+
+Try Run(Process.Arguments())

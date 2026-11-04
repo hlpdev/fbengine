@@ -35,11 +35,15 @@ layer_t* layer_of(std::uint64_t material, std::int32_t index) {
     return &found->layers[static_cast<std::size_t>(index)];
 }
 
-/// Whether a map reads what's in a texture of a format as it should: what's stored as color would
-/// be decoded from sRGB, which only what it emits is, and bends a flat normal 40 degrees.
-bool map_takes(std::int32_t map, std::int32_t format) {
+/// Whether a map reads what's in a texture as it should: what's stored as color would be decoded
+/// from sRGB, which only what it emits is, and bends a flat normal 40 degrees. A file's own format
+/// says for itself.
+bool map_takes(std::int32_t map, std::uint64_t texture) {
+    const std::int32_t format = fbe_texture_format(texture);
     return map == FBE_MAP_EMISSIVE || format == FBE_TEXTURE_RGBA8_LINEAR ||
-           format == FBE_TEXTURE_RGBA16F || (map == FBE_MAP_OCCLUSION && format == FBE_TEXTURE_R8);
+           format == FBE_TEXTURE_RGBA16F ||
+           (map == FBE_MAP_OCCLUSION && format == FBE_TEXTURE_R8) ||
+           (format == FBE_TEXTURE_FROM_FILE && !fbe_texture_srgb(texture));
 }
 
 /// Whether a value's 0 to 1, as NaN isn't.
@@ -172,15 +176,16 @@ std::int32_t drawn_blend(std::uint32_t material, float alpha) {
     const material_t& drawn = scene().materials[material];
     switch (drawn.blend) {
     case FBE_BLEND_AUTO:
+        // A cutoff takes its color's and a texture's alpha as a mask instead.
+        if (drawn.alpha_cutoff > 0.0F) {
+            return alpha < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
+        }
         if (drawn.color[3] * alpha < 1.0F) {
             return FBE_BLEND_ALPHA;
         }
-        // A cutoff takes a texture's alpha as a mask instead.
-        if (drawn.alpha_cutoff <= 0.0F) {
-            for (const layer_t& layer : drawn.layers) {
-                if (layer.texture != 0 && fbe_texture_alpha(layer.texture)) {
-                    return FBE_BLEND_ALPHA;
-                }
+        for (const layer_t& layer : drawn.layers) {
+            if (layer.texture != 0 && fbe_texture_alpha(layer.texture)) {
+                return FBE_BLEND_ALPHA;
             }
         }
         return FBE_BLEND_OPAQUE;
@@ -602,10 +607,10 @@ FBE_API bool fbe_material_set_map(uint64_t material, int32_t map, uint64_t textu
     if (uv_set != 0 && uv_set != 1) {
         return fbe::fail(std::format("a map's UV set is 0 or 1, not {}", uv_set));
     }
-    if (texture != 0 && fbe_texture_format(texture) >= 0 &&
-        !fbe::scene::map_takes(map, fbe_texture_format(texture))) {
-        return fbe::fail("a material's metal-rough, normal, and occlusion maps are RGBA8_LINEAR or "
-                         "RGBA16F, and an occlusion map can be R8: they aren't colors");
+    if (texture != 0 && fbe_texture_format(texture) >= 0 && !fbe::scene::map_takes(map, texture)) {
+        return fbe::fail("a material's metal-rough, normal, and occlusion maps are RGBA8_LINEAR, "
+                         "RGBA16F, or a file's own format that isn't sRGB, and an occlusion map "
+                         "can be R8: they aren't colors");
     }
     if (texture != 0 && !fbe_texture_retain(texture)) {
         return false;
