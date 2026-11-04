@@ -10,6 +10,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <limits>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -72,7 +73,7 @@ TEST_CASE("a mesh's material lives with it and its copies", "[scene]") {
 TEST_CASE("a material's settings take only what they can be", "[scene]") {
     const std::uint64_t material = fbe_material_create();
     CHECK_FALSE(fbe_material_set_layer(material, 8, FBE_LAYER_ADD, 0));
-    CHECK(std::string_view(fbe_error()) == "a material's layers are 0 to 7, not 8");
+    CHECK(std::string_view(fbe_error()) == "a material's layers are 0 to 7");
     CHECK_FALSE(fbe_material_set_layer(material, 0, FBE_LAYER_BUMP + 1, 0));
     CHECK_FALSE(fbe_material_set_layer(material, 0, FBE_LAYER_ADD, 2));
     CHECK(fbe_material_layer_blend(material, -1) == -1);
@@ -183,9 +184,9 @@ std::vector<std::uint32_t> good_spirv() {
     });
 }
 
-/// A cooked shader's bytes: for a version, and SPIR-V's words.
-std::vector<std::uint8_t> cooked(std::string_view version,
-                                 const std::vector<std::uint32_t>& words) {
+/// A cooked shader's bytes: for a version, and SPIR-V's words, of the sources it says.
+std::vector<std::uint8_t> cooked(std::string_view version, const std::vector<std::uint32_t>& words,
+                                 std::string_view stamp = fbe_shader_stamp()) {
     std::vector<std::uint8_t> bytes;
     const std::string_view magic = "FBESHADR";
     bytes.insert(bytes.end(), magic.begin(), magic.end());
@@ -193,6 +194,7 @@ std::vector<std::uint8_t> cooked(std::string_view version,
     bytes.resize(bytes.size() + sizeof(length));
     std::memcpy(bytes.data() + magic.size(), &length, sizeof(length));
     bytes.insert(bytes.end(), version.begin(), version.end());
+    bytes.insert(bytes.end(), stamp.begin(), stamp.end());
     const std::size_t at = bytes.size();
     bytes.resize(at + (words.size() * sizeof(std::uint32_t)));
     std::memcpy(bytes.data() + at, words.data(), words.size() * sizeof(std::uint32_t));
@@ -200,7 +202,7 @@ std::vector<std::uint8_t> cooked(std::string_view version,
 }
 
 std::uint64_t shader_of(const std::vector<std::uint8_t>& bytes) {
-    return fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()));
+    return fbe_shader_create(bytes.data(), static_cast<std::int64_t>(bytes.size()), "a test's");
 }
 
 bool error_says(std::string_view what) {
@@ -217,7 +219,7 @@ TEST_CASE("a shader's file is one cooked for this engine, with the scene's entry
     CHECK_FALSE(fbe_shader_alive(made));
     CHECK_FALSE(fbe_shader_release(made));
 
-    CHECK(fbe_shader_create(nullptr, 4) == 0);
+    CHECK(fbe_shader_create(nullptr, 4, "a test's") == 0);
     const std::string_view source = "float4 shade(Surface surface)";
     CHECK(shader_of({ source.begin(), source.end() }) == 0);
     CHECK(error_says("isn't a cooked shader"));
@@ -265,6 +267,54 @@ TEST_CASE("a shader's file is one cooked for this engine, with the scene's entry
     long_version[11] = 127;
     CHECK(shader_of(long_version) == 0);
     CHECK(error_says("cut short"));
+    // Of this version, but other sources' layout, or as old as this stamp would need more of it.
+    const std::string other_stamp(std::string_view(fbe_shader_stamp()).size(), '0');
+    CHECK(shader_of(cooked(fbe_version(), good_spirv(), other_stamp)) == 0);
+    CHECK(error_says("other sources"));
+    const std::vector<std::uint8_t> no_stamp = cooked(fbe_version(), {}, "");
+    CHECK(shader_of(no_stamp) == 0);
+    CHECK(error_says("cut short"));
+    // Of another version that goes on and on, only so much of it's said.
+    const std::string rambling(4000, 'x');
+    CHECK(shader_of(cooked(rambling, good_spirv())) == 0);
+    CHECK(error_says("cooked for fbengine xxx"));
+    CHECK(std::string_view(fbe_error()).size() < 200);
+}
+
+TEST_CASE("a shader binds only what the scene's pipelines have") {
+    const auto decorated = [](std::uint32_t kind, std::uint32_t value) {
+        std::vector<std::uint32_t> words = good_spirv();
+        words.insert(words.end(), { (4U << 16U) | 71U, 9, kind, value });
+        return cooked(fbe_version(), words);
+    };
+    const std::vector<std::uint8_t> good = decorated(33, 1);
+    const std::uint64_t made = shader_of(good);
+    CHECK(made != 0);
+    fbe_shader_release(made);
+    CHECK(fbe_shader_check(good.data(), static_cast<std::int64_t>(good.size())));
+    CHECK(shader_of(decorated(33, 0)) != 0);
+    CHECK(shader_of(decorated(34, 0)) != 0);
+    // A global's, as Slang gives one, a texture's, and a set of its own.
+    CHECK(shader_of(decorated(33, 2)) == 0);
+    CHECK(error_says("don't bind"));
+    CHECK(shader_of(decorated(33, 3)) == 0);
+    CHECK(shader_of(decorated(34, 1)) == 0);
+    const std::vector<std::uint8_t> bad = decorated(33, 2);
+    CHECK_FALSE(fbe_shader_check(bad.data(), static_cast<std::int64_t>(bad.size())));
+    CHECK(error_says("don't bind"));
+    // A check keeps nothing, and refuses what creating it does.
+    const std::vector<std::uint8_t> source{ 1, 2, 3 };
+    CHECK_FALSE(fbe_shader_check(source.data(), 3));
+    CHECK_FALSE(fbe_shader_check(nullptr, 4));
+}
+
+TEST_CASE("the same bytes again and again aren't more than a game's shaders can be") {
+    const std::vector<std::uint8_t> good = cooked(fbe_version(), good_spirv());
+    for (int i = 0; i < 9000; ++i) {
+        const std::uint64_t made = shader_of(good);
+        REQUIRE(made != 0);
+        REQUIRE(fbe_shader_release(made));
+    }
 }
 
 TEST_CASE("a material holds its shader, which goes with the last of what holds it") {
@@ -295,12 +345,13 @@ TEST_CASE("a material holds its shader, which goes with the last of what holds i
 TEST_CASE("a shader replaced stays itself, and refusing leaves it as it was") {
     const std::vector<std::uint8_t> good = cooked(fbe_version(), good_spirv());
     const std::uint64_t shader = shader_of(good);
-    CHECK(fbe_shader_replace(shader, good.data(), static_cast<std::int64_t>(good.size())));
+    CHECK(fbe_shader_replace(shader, good.data(), static_cast<std::int64_t>(good.size()), "new"));
     const std::vector<std::uint8_t> bad{ 1, 2, 3 };
-    CHECK_FALSE(fbe_shader_replace(shader, bad.data(), 3));
+    CHECK_FALSE(fbe_shader_replace(shader, bad.data(), 3, "new"));
     CHECK(fbe_shader_alive(shader));
     CHECK(fbe_shader_release(shader));
-    CHECK_FALSE(fbe_shader_replace(shader, good.data(), static_cast<std::int64_t>(good.size())));
+    CHECK_FALSE(
+        fbe_shader_replace(shader, good.data(), static_cast<std::int64_t>(good.size()), "new"));
 }
 
 TEST_CASE("a material's parameters are its own, 8 of them, of numbers") {
@@ -314,8 +365,18 @@ TEST_CASE("a material's parameters are its own, 8 of them, of numbers") {
     CHECK_FALSE(fbe_material_set_parameter(material, 8, 0.0F, 0.0F, 0.0F, 0.0F));
     CHECK_FALSE(fbe_material_set_parameter(material, -1, 0.0F, 0.0F, 0.0F, 0.0F));
     CHECK_FALSE(fbe_material_parameter(material, 8, read.data()));
-    const float none = std::numeric_limits<float>::infinity();
-    CHECK_FALSE(fbe_material_set_parameter(material, 0, none, 0.0F, 0.0F, 0.0F));
+    for (const float none : {
+             std::numeric_limits<float>::infinity(),
+             -std::numeric_limits<float>::infinity(),
+             std::numeric_limits<float>::quiet_NaN(),
+         }) {
+        CHECK_FALSE(fbe_material_set_parameter(material, 0, none, 0.0F, 0.0F, 0.0F));
+        CHECK_FALSE(fbe_material_set_parameter(material, 0, 0.0F, none, 0.0F, 0.0F));
+        CHECK_FALSE(fbe_material_set_parameter(material, 0, 0.0F, 0.0F, none, 0.0F));
+        CHECK_FALSE(fbe_material_set_parameter(material, 0, 0.0F, 0.0F, 0.0F, none));
+    }
+    CHECK(fbe_material_parameter(material, 0, read.data()));
+    CHECK(read == std::array<float, 4>{ 0.0F, 0.0F, 0.0F, 0.0F });
     const std::uint64_t clone = fbe_material_clone(material);
     CHECK(fbe_material_set_parameter(material, 7, 5.0F, 5.0F, 5.0F, 5.0F));
     CHECK(fbe_material_parameter(clone, 7, read.data()));

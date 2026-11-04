@@ -14,6 +14,16 @@ Import fbengine_tools
 
 Function NoSlangc(): Bool => Env.Get("FBENGINE_SLANGC") == Null
 
+// The stand-ins ctest builds, each of which says a release, and notes each compile.
+Function NoFake(): Bool => Env.Get("FBENGINE_FAKE_SLANGC") == Null
+
+// How many compiles the stand-in's noted.
+Function FakeCompiles(): Int Throws IOError
+    Local log = Path(Env.Get("FBENGINE_FAKE_SLANGC_LOG") ?? "")
+    If !File.Exists(log) Then Return 0
+    Return (Try File.ReadText(log)).SplitLines().Count
+End Function
+
 Const FLAT = "float4 shade(Surface surface)\n{{\n    return float4(0.5, 0.25, 1.0, 1.0);\n}}\n"
 
 @Test
@@ -62,6 +72,52 @@ Function WhatSlangWontCompileSaysSo() Throws IOError
     End Try
 End Function
 
+// A byte order mark at its start, which a Windows editor leaves, is neither a symbol nor a line.
+@Test
+Function AMarkAtAFilesStartIsLeftOut() Throws IOError
+    If NoSlangc() Then Skip("no slangc here")
+    Local folder = Try TempDir()
+    Local from = folder.Path / "marked.slang"
+    Local bytes: UInt8[] = [0xEF, 0xBB, 0xBF]
+    bytes.AddAll(FLAT.Bytes)
+    Try File.WriteBytes(from, bytes)
+    Try Cooker.CookShader(from, folder.Path / "out")
+    Expect(File.Exists(folder.Path / "out"))
+    // Nor moves what Slang says of its lines.
+    Local broken: UInt8[] = [0xEF, 0xBB, 0xBF]
+    broken.AddAll("float4 shade(Surface surface)\n{{\n    return nonsense;\n}}\n".Bytes)
+    Try File.WriteBytes(from, broken)
+    Try
+        Try Cooker.CookShader(from, folder.Path / "out")
+        Expect(False)
+    Catch e As IOError
+        Expect(e.Message.Contains("marked.slang:3:"))
+    End Try
+End Function
+
+// What a game's shader can't have, as no pipeline could be made with it, whose file's named.
+@Test
+Function WhatTheScenesPipelinesDontBindIsRefused() Throws IOError
+    If NoSlangc() Then Skip("no slangc here")
+    Local folder = Try TempDir()
+    Local from = folder.Path / "bound.slang"
+    For source In ["float tint = 0.5;\nfloat4 shade(Surface surface)\n" +
+                   "{{\n    return float4(tint, tint, tint, 1.0);\n}}\n",
+                   "Texture2D own;\nfloat4 shade(Surface surface)\n" +
+                   "{{\n    return own.Load(int3(0, 0, 0));\n}}\n"]
+        Try File.WriteText(from, source)
+        Try
+            Try Cooker.CookShader(from, folder.Path / "out")
+            Expect(False)
+        Catch e As IOError
+            Expect(e.Kind == IOErrorKind.INVALID_DATA)
+            Expect(e.Message.Contains("bound.slang"))
+            Expect(e.Message.Contains("don't bind"))
+        End Try
+    End For
+    Expect(!File.Exists(folder.Path / "out"))
+End Function
+
 @Test
 Function AShaderWithoutShadeSaysSo() Throws IOError
     If NoSlangc() Then Skip("no slangc here")
@@ -73,8 +129,147 @@ Function AShaderWithoutShadeSaysSo() Throws IOError
         Expect(False)
     Catch e As IOError
         Expect(e.Kind == IOErrorKind.INVALID_DATA)
-        Expect(e.Message.Contains("shade"))
+        Expect(e.Message.Contains("empty.slang"))
+        Expect(e.Message.Contains("float4 shade(Surface surface)"))
+        // Fbengine's own file, by that name, not a folder that's gone by now.
+        Expect(e.Message.Contains("fbengine's scene.slang"))
+        Expect(!e.Message.Contains("/scene.slang"))
+        Expect(!e.Message.Contains("\\scene.slang"))
     End Try
+End Function
+
+@Test
+Function AShaderThatSaysItMovesAndDoesntSaysSo() Throws IOError
+    If NoSlangc() Then Skip("no slangc here")
+    Local folder = Try TempDir()
+    Local from = folder.Path / "still.slang"
+    Try File.WriteText(from, "#define FBE_MOVES_VERTICES\n" + FLAT)
+    Try
+        Try Cooker.CookShader(from, folder.Path / "out")
+        Expect(False)
+    Catch e As IOError
+        Expect(e.Kind == IOErrorKind.INVALID_DATA)
+        Expect(e.Message.Contains("void move("))
+    End Try
+End Function
+
+@Test
+Function WhatSlangSaysOfTheScratchFolderDoesntSayIt()
+    Local said =
+        Cooker.SlangSaid("C:/temp/here/scene.slang:3: warning\nC:\\temp\\here\\own.slang\n",
+                         Path("C:/temp/here"))
+    Expect(said.Contains("fbengine's scene.slang:3: warning"))
+    Expect(!said.Contains("temp/here"))
+End Function
+
+@Test
+Function ADepfileNamesWhatItsTargetReads()
+    Local names =
+        Cooker.DepfileNames("own.spv: C\\:\\\\a\\\\b.slang c\\ d.hlsl \\\n  e.inc.slang\n")
+    Expect(names.Count == 3)
+    Expect(names[0] == "C:\\a\\b.slang")
+    Expect(names[1] == "c d.hlsl")
+    Expect(names[2] == "e.inc.slang")
+    Expect(Cooker.DepfileNames("").Count == 0)
+    Expect(Cooker.DepfileNames("own.spv:\n").Count == 0)
+End Function
+
+// No compiler there, and one of another release, each saying which to get.
+@Test
+Function ACompilerThatIsntTheOneAskedForSaysSo() Throws IOError
+    If NoFake() Then Skip("no stand-in here")
+    Local file = Path("water.slang")
+    Local fake = Env.Get("FBENGINE_FAKE_SLANGC") ?? ""
+    Expect((Try Cooker.Slangc(file, fake)) == fake)
+    Try
+        Try Cooker.Slangc(file, Env.Get("FBENGINE_WRONG_SLANGC") ?? "")
+        Expect(False)
+    Catch e As IOError
+        Expect(e.Kind == IOErrorKind.NOT_FOUND)
+        Expect(e.Message.Contains("is release 0.0.1"))
+        Expect(e.Message.Contains("water.slang"))
+    End Try
+    Try
+        Try Cooker.Slangc(file, "there-is-no-program-of-this-name")
+        Expect(False)
+    Catch e As IOError
+        Expect(e.Kind == IOErrorKind.NOT_FOUND)
+        Expect(!e.Message.Contains("is release"))
+        Expect(e.Message.Contains("slangc"))
+    End Try
+End Function
+
+// A debug build's shaders are what's changed, and no more; and so's a cache's by the sources' stamp.
+@Test
+Function WhatsCookedIsKeptUntilItsShaderOrStampChange() Throws IOError
+    If NoFake() Then Skip("no stand-in here")
+    Local fake = Env.Get("FBENGINE_FAKE_SLANGC") ?? ""
+    Local source = Try TempDir()
+    Local out = Try TempDir()
+    Local into = out.Path / "shaders"
+    Local cache = out.Path / "cook-cache"
+    Try File.WriteText(source.Path / "one.slang", FLAT)
+    Try File.WriteText(source.Path / "two.slang", FLAT + "// Another.\n")
+    Local before = Try FakeCompiles()
+    Expect((Try Cooker.CookShadersInto(source.Path, into, cache, fake)) == 2)
+    Expect((Try FakeCompiles()) == before + 2)
+    Local at = (Try File.Metadata(into / "one.slang")).Modified
+    // Anything else in the folder changing doesn't compile any, nor write what a game's watching.
+    Try File.WriteText(source.Path / "notes.txt", "another asset")
+    Expect((Try Cooker.CookShadersInto(source.Path, into, cache, fake)) == 2)
+    Expect((Try FakeCompiles()) == before + 2)
+    Expect((Try File.Metadata(into / "one.slang")).Modified == at)
+    // One changing compiles it alone.
+    Try File.WriteText(source.Path / "two.slang", FLAT + "// Changed.\n")
+    Expect((Try Cooker.CookShadersInto(source.Path, into, cache, fake)) == 2)
+    Expect((Try FakeCompiles()) == before + 3)
+    Expect((Try File.Metadata(into / "one.slang")).Modified == at)
+    // One gone goes from what's compiled, and from the cache; the folder stays.
+    Try File.Delete(source.Path / "two.slang")
+    Expect((Try Cooker.CookShadersInto(source.Path, into, cache, fake)) == 1)
+    Expect(!File.Exists(into / "two.slang"))
+    Expect(File.Exists(into / "one.slang"))
+    // Another stamp of the same source is another file, compiled, and the first still its own.
+    Local scratch = Try TempDir()
+    Local used = Set<String>()
+    Local file = source.Path / "one.slang"
+    Local count = Try FakeCompiles()
+    Local same = Try Cooker.CookedShader(file, "one.slang", cache, scratch.Path, used,
+                                         Cooker.ShaderStamp(), fake)
+    Expect((Try FakeCompiles()) == count)
+    Local other = Try Cooker.CookedShader(file, "one.slang", cache, scratch.Path, used, "stale",
+                                          fake)
+    Expect((Try FakeCompiles()) == count + 1)
+    Expect(same != other)
+End Function
+
+// What's included from outside the folder, or not named .slang, keeps what's cooked as well.
+@Test
+Function ACacheGoesByWhatAShaderIncludesWhereverItIs() Throws IOError
+    If NoSlangc() Then Skip("no slangc here")
+    Local top = Try TempDir()
+    Local source = top.Path / "assets"
+    Try Dir.CreateAll(source)
+    Try Dir.CreateAll(top.Path / "shared")
+    Local built = Try TempDir()
+    Local cache = built.Path / "cache"
+    Try File.WriteText(source / "noise.hlsl", "static const float a = 0.5;\n")
+    Try File.WriteText(top.Path / "shared" / "more.slang", "static const float b = 0.5;\n")
+    Try File.WriteText(source / "tinted.slang",
+                       "#include \"noise.hlsl\"\n#include \"../shared/more.slang\"\n" +
+                       "float4 shade(Surface surface)\n{{\n    return float4(a, b, 1.0, 1.0);\n}}\n")
+    Try Cooker.CookFolder(source, built.Path / "game.pak", cache)
+    For changed In [source / "noise.hlsl", top.Path / "shared" / "more.slang"]
+        Local kept = Try File.ReadText(changed)
+        Try File.WriteText(changed, "static const float gone = nothing;\n")
+        Try
+            Try Cooker.CookFolder(source, built.Path / "game.pak", cache)
+            Expect(False)
+        Catch e As IOError
+            Expect(e.Kind == IOErrorKind.INVALID_DATA)
+        End Try
+        Try File.WriteText(changed, kept)
+    End For
 End Function
 
 // A pak has what's compiled at the file's own path, and what it includes as it is.
@@ -92,9 +287,11 @@ Function AFoldersShadersAreCookedIntoItsPak() Throws IOError
     Try Assets.MountPak("res://shader-pak", built.Path / "game.pak")
     Local shader = Try Assets.Load<Shader>("res://shader-pak/tinted.slang")
     shader.Free()
-    Expect((Try Assets.ReadText("res://shader-pak/tinted.inc.slang")).Contains("tint"))
+    // What it includes is in what's compiled, so it isn't in the pak.
+    Expect(!Assets.Exists("res://shader-pak/tinted.inc.slang"))
     Expect(Assets.Unmount("res://shader-pak"))
-    Expect((Try Dir.Entries(cache)).Count == 1)
+    // The file, and what it read.
+    Expect((Try Dir.Entries(cache)).Count == 2)
     // What it includes changing compiles it again, as this no longer does, the cache or not.
     Try File.WriteText(source.Path / "tinted.inc.slang", "static const float tint = nothing;\n")
     Try
@@ -147,6 +344,63 @@ Function AShaderCookedAgainReloads() Throws IOError, GraphicsError
     Local again = source.Path / "again"
     Try Cooker.CookShader(from, again)
     Try File.WriteBytesAtomic(cooked, Try File.ReadBytes(again))
+    Local since = Instant.Now()
+    Local green = False
+    While !green && (Instant.Now() - since) < 20.Seconds
+        Flip(False)
+        RenderWorld()
+        Local pixels = target.ReadPixels()
+        green = pixels[at] == 0 && pixels[at + 1] == 255
+        Sleep(5.Milliseconds)
+    End While
+    Expect(green)
+    Flip(False)
+End Function
+
+// A build while a game runs, as a debug build's res.fb mounts it: its folder stays, watched, and
+// what's drawn is what's built.
+@Test
+Function ABuildWhileAGameRunsReloadsWhatsChanged() Throws IOError, GraphicsError
+    If NoSlangc() Then Skip("no slangc here")
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try Dir.CreateAll(game.Path / "assets")
+    Local out = game.Path / "out"
+    Try File.WriteText(game.Path / "assets" / "built.slang",
+                       "float4 shade(Surface surface)\n{{\n    return float4(1, 0, 0, 1);\n}}\n")
+    Try File.WriteText(game.Path / "assets" / "same.slang", FLAT)
+    Try GameBuild.Run("game", game.Path, out, "debug")
+    Local same = (Try File.Metadata(out / "shaders" / "same.slang")).Modified
+    Try Assets.MountSource((game.Path / "assets").Text)
+    Defer Assets.Unmount("res://")
+    Try Assets.MountSource((out / "shaders").Text)
+    Defer Assets.Unmount("res://")
+    Defer Assets.StopWatching()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local target = Try Texture.Target(16, 16, TextureFormat.RGBA8, 1, True)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 1))
+    Local material = Material()
+    Local shader = Try Assets.Load<Shader>("res://built.slang")
+    Defer shader.Free()
+    material.SetShader(shader)
+    Local mesh = Mesh(Geometry.Cube())
+    mesh.SetMaterial(material)
+    mesh.SetPosition(Vec3(0, 0, -6))
+    RenderWorld()
+    Local at = (8 * 16 + 8) * 4
+    Expect(target.ReadPixels()[at] == 255)
+    Flip(False)
+    Try File.WriteText(game.Path / "assets" / "built.slang",
+                       "float4 shade(Surface surface)\n{{\n    return float4(0, 1, 0, 1);\n}}\n")
+    Try GameBuild.Run("game", game.Path, out, "debug")
+    // What's the same isn't written, so nothing watching it hears of it, nor is its folder taken away.
+    Expect((Try File.Metadata(out / "shaders" / "same.slang")).Modified == same)
     Local since = Instant.Now()
     Local green = False
     While !green && (Instant.Now() - since) < 20.Seconds

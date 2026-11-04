@@ -104,19 +104,54 @@ Public Final Class Cooker
 
     /// Compiles the shader at `from`, a `.slang` file that writes a material's own `shade`, with
     /// the engine's scene shader, into the file at `to`, which Assets.Load<Shader> loads, for this
-    /// version of fbengine only. It reads what it includes from beside it. It needs Slang's compiler,
-    /// of the one release the engine's are compiled with, from the environment's FBENGINE_SLANGC, or
-    /// slangc on the PATH: with none, or another release, it throws an IOError of NOT_FOUND saying
-    /// which to get. What Slang won't compile throws one of INVALID_DATA, with what Slang said.
+    /// version of fbengine and these sources of its shaders only. It reads what it includes from
+    /// beside it. It needs Slang's compiler, of the one release the engine's are compiled with, from
+    /// the environment's FBENGINE_SLANGC, or slangc on the PATH: with none, or another release, it
+    /// throws an IOError of NOT_FOUND saying which to get. What Slang won't compile, or what the
+    /// engine wouldn't load, throws one of INVALID_DATA, saying what's wrong and where, and Slang's
+    /// warnings go to the error stream.
     ///
-    /// A shader writes `float4 shade(Surface surface)`, given what the material would draw there,
-    /// and for vertices of its own, says `#define FBE_MOVES_VERTICES` first and writes
-    /// `void move(inout float3 position, inout float3 normal, MovingVertex vertex)`. What's in a
-    /// Surface and a MovingVertex is `own_shader.slang`'s, which fbengine has with its shaders.
+    /// A shader writes `float4 shade(Surface surface)`, which returns the pixel's color, in linear
+    /// light, and its alpha for the material's cutoff, blend, and fog to go on with:
+    ///
+    /// - `surface.place`, `float3`: in the camera's view, x right, y up, looking down -z.
+    /// - `surface.normal`, `float3`: length 1, or 0 for what has none, facing the camera for a
+    ///   two-sided material's back.
+    /// - `surface.uv0`, `surface.uv1`, `float2`.
+    /// - `surface.vertexColor`, `float4`: whether the material takes vertex colors or not.
+    /// - `surface.color`, `float4`: what the material would draw here with no shader: its colors and
+    ///   layers, lit.
+    /// - `surface.pixel`, `float2`: in the target's.
+    /// - `surface.parameter(index)`, `float4`: what Material.SetParameter set, the last for an index
+    ///   past 7.
+    /// - `surface.texture(index, uv)`, `float4`: a layer's texture, white for one it hasn't.
+    /// - `surface.light(toward, shininess)`, `float3`: the light that reaches here on a normal, per
+    ///   pixel and linear, whatever the material's shading.
+    ///
+    /// For vertices of its own, it says `#define FBE_MOVES_VERTICES` first and writes
+    /// `void move(inout float3 position, inout float3 normal, MovingVertex vertex)`, for each vertex
+    /// of what's drawn but particles, morphed and skinned, and of its shadow: `vertex.uv0`,
+    /// `vertex.uv1`, `vertex.color`, and `vertex.parameter(index)`. The view culls by a Geometry's
+    /// bounds, not where this moves it, so one moved further wants a SetCullBox; a Terrain has none,
+    /// so moving one stays near its heights. A shadow's cut out by the material's own alpha, not what
+    /// `shade` returns.
+    ///
+    /// It reads only those: a texture of its own, or a global that isn't `static`, which the scene's
+    /// pipelines don't bind, throws one of INVALID_DATA.
     @MainThread
     Public Static Method CookShader(from: Path, to: Path) Throws IOError
-        Local slangc = Try Slangc(from)
+        Try CookShaderReading(from, to, SlangcNamed())
+    End Method
+
+    // CookShader by the compiler `named`, giving the files it read of the game's, which Slang says, for
+    // a cache to keep it by.
+    Package Static Method CookShaderReading(from: Path, to: Path,
+                                            named: String): Path[] Throws IOError
+        Local slangc = Try Slangc(from, named)
         Local text = Try File.ReadText(from)
+        // At a file's very start only: past the #line below, Slang would read it as a symbol.
+        If text.StartsWith("\u{FEFF}") Then text = text.Slice("\u{FEFF}".Bytes.Count,
+                                                              text.Bytes.Count)
         Local scratch = Try TempDir()
         Defer Try? scratch.Close()
         For at = 0 Until fbe_cook_shader_source_count()
@@ -134,6 +169,7 @@ Public Final Class Cooker
         Try File.WriteText(scratch.Path / "fbe_own.slang",
                            "#define FBE_OWN_SHADER\n#include \"scene.slang\"\n")
         Local compiled = scratch.Path / "own.spv"
+        Local depfile = scratch.Path / "own.d"
         Local version = ""
         Unsafe
             version = fbe_cook_slang_version().ToString()
@@ -142,14 +178,17 @@ Public Final Class Cooker
         For argument In [(scratch.Path / "fbe_own.slang").Text, "-target", "spirv", "-profile",
                          "spirv_1_5", "-fvk-use-entrypoint-name", "-matrix-layout-column-major",
                          "-O2", "-warnings-disable", "41012", "-I", scratch.Path.Text, "-I",
-                         from.Parent().Text, "-DFBENGINE_SLANG={version}", "-o", compiled.Text]
+                         from.Parent().Text, "-DFBENGINE_SLANG={version}", "-o", compiled.Text,
+                         "-depfile", depfile.Text]
             command.Arg(argument)
         End For
         Local ran = Try command.Output()
+        Local said = SlangSaid(ran.ErrorText, scratch.Path)
         If ran.Status.Code != 0 || !File.Exists(compiled)
             Throw IOError(IOErrorKind.INVALID_DATA,
-                          "{from} doesn't compile: {ran.ErrorText}", from.Text)
+                          "{from} doesn't compile: {Unwritten(said)}{said}", from.Text)
         End If
+        If said.Trim() != "" Then PrintError("{from}: {said}")
         Local cooked: UInt8[] = []
         cooked.AddAll(SHADER_MAGIC.Bytes)
         Local engine = ToolsVersion().Bytes
@@ -157,17 +196,133 @@ Public Final Class Cooker
             cooked.Add(((engine.Count >> shift) & 0xFF) As UInt8)
         End For
         cooked.AddAll(engine)
+        cooked.AddAll(ShaderStamp().Bytes)
         cooked.AddAll(Try File.ReadBytes(compiled))
+        Try Shader.Check(cooked, from.Text)
         Try File.WriteBytes(to, cooked)
+        Local reads: Path[] = []
+        If File.Exists(depfile)
+            For name In DepfileNames(Try File.ReadText(depfile))
+                If !name.Replace("\\", "/").StartsWith(scratch.Path.Text.Replace("\\", "/"))
+                    reads.Add(Path(name))
+                End If
+            End For
+        End If
+        Return reads
     End Method
 
-    // Slang's compiler, of the release the engine's shaders are compiled with, for compiling `file`.
-    Static Method Slangc(file: Path): String Throws IOError
+    // What Slang said, where it says the scratch folder saying fbengine's own shaders' place, which
+    // is gone by the time anyone reads it.
+    Package Static Method SlangSaid(said: String, scratch: Path): String
+        Local forward = said.Replace(scratch.Text.Replace("\\", "/") + "/", "fbengine's ")
+        Return forward.Replace(scratch.Text + "\\", "fbengine's ").Trim()
+    End Method
+
+    // What a shader that doesn't write what the scene's shader calls is missing, by what Slang said.
+    Static Method Unwritten(said: String): String
+        If said.Contains("undefined identifier 'shade'")
+            Return "it has no `float4 shade(Surface surface)`: "
+        End If
+        If said.Contains("undefined identifier 'move'")
+            Return "it says FBE_MOVES_VERTICES, and has no `void move(inout float3 position, " +
+                   "inout float3 normal, MovingVertex vertex)`: "
+        End If
+        Return ""
+    End Method
+
+    // The files a make-style depfile `text` names after its target, with its escapes taken out.
+    Package Static Method DepfileNames(text: String): String[]
+        Local names: String[] = []
+        Local name: UInt8[] = []
+        Local past = False
+        Local bytes = text.Bytes
+        Local at = 0
+        While at < bytes.Count
+            Local byte = bytes[at]
+            Local next: UInt8 = at + 1 < bytes.Count ? bytes[at + 1] : 0
+            If byte == 92 && (next == 92 || next == 32 || next == 58 || next == 35)
+                name.Add(next)
+                at += 2
+                Continue
+            End If
+            If byte == 92 && (next == 10 || next == 13)
+                at += 1
+                Continue
+            End If
+            If byte == 32 || byte == 10 || byte == 13 || byte == 9
+                If name.Count > 0
+                    Local word = String.FromUtf8(name) ?? ""
+                    If past Then names.Add(word)
+                    past = past || word.EndsWith(":")
+                    name = []
+                End If
+            Else
+                name.Add(byte)
+            End If
+            at += 1
+        End While
+        If name.Count > 0 && past Then names.Add(String.FromUtf8(name) ?? "")
+        Return names
+    End Method
+
+    // What the engine's stamped with, as the tools were built with the same sources.
+    Package Static Method ShaderStamp(): String
+        Unsafe
+            Return fbe_cook_shader_stamp().ToString()
+        End Unsafe
+    End Method
+
+    // The cooked file of the shader `file`, named `name` in its folder: from `cache` if it has one for
+    // `stamp` and for what it last read, or else compiled, into `scratch` without a cache, what it
+    // used of a cache added to `used`.
+    Package Static Method CookedShader(file: Path, name: String, cache: Path?, scratch: Path,
+                                       used: Set<String>, stamp: String,
+                                       slangc: String): Path Throws IOError
+        Local key = "shader {stamp}"
+        Local made = scratch / "cooked.shader"
+        If cache == Null
+            Try CookShaderReading(file, made, slangc)
+            Return made
+        End If
+        Try Dir.CreateAll(cache)
+        Local listing = cache / (Hex.Encode(Blake3.Hash("{key} {name}".Bytes, 16)) + ".reads")
+        If File.Exists(listing)
+            Local reads = [file]
+            For line In (Try File.ReadText(listing)).SplitLines()
+                If line != "" Then reads.Add(Path(line))
+            End For
+            Local kept = CachedAs(cache, key, reads, ".shader")
+            If kept != Null && File.Exists(kept)
+                used.Add(listing.FileName())
+                used.Add(kept.FileName())
+                Return kept
+            End If
+        End If
+        Local reads = [file]
+        reads.AddAll(Try CookShaderReading(file, made, slangc))
+        Local lines: String[] = []
+        For read In reads[1..reads.Count]
+            lines.Add(read.Text)
+        End For
+        Try File.WriteText(listing, "\n".Join(lines))
+        used.Add(listing.FileName())
+        Local kept = CachedAs(cache, key, reads, ".shader")
+        If kept == Null Then Return made
+        Try File.Copy(made, kept)
+        used.Add(kept.FileName())
+        Return kept
+    End Method
+
+    // The compiler a shader's compiled by: the one the environment names, or the PATH's.
+    Package Static Method SlangcNamed(): String => Env.Get("FBENGINE_SLANGC") ?? "slangc"
+
+    // Slang's compiler `slangc`, if it's there and of the release the engine's shaders are compiled
+    // with, for compiling `file`.
+    Package Static Method Slangc(file: Path, slangc: String): String Throws IOError
         Local version = ""
         Unsafe
             version = fbe_cook_slang_version().ToString()
         End Unsafe
-        Local slangc = Env.Get("FBENGINE_SLANGC") ?? "slangc"
         Local told = "{file} is a shader, which needs Slang's slangc, release {version}, " +
                      "from https://github.com/shader-slang/slang/releases, on the PATH or named " +
                      "by FBENGINE_SLANGC"
@@ -192,29 +347,53 @@ Public Final Class Cooker
     End Method
 
     // Compiles each shader of the folder `source`, all the way down, into `into`, each at its path
-    // from the folder; gives how many. A debug build mounts them over the folder.
-    Package Static Method CookShadersInto(source: Path, into: Path): Int Throws IOError
+    // from the folder, keeping what's cooked in `cache`; gives how many. A debug build mounts them over
+    // the folder, and watches them, so `into` stays there, a file written only when it's changed, and
+    // whole, and taken out only when its shader is.
+    Package Static Method CookShadersInto(source: Path, into: Path, cache: Path,
+                                          slangc: String): Int Throws IOError
         Local files: (Path, String)[] = []
         Try Listed(source, "", 0, files)
-        Local cooked = 0
+        Local scratch = Try TempDir()
+        Defer Try? scratch.Close()
+        Local used = Set<String>()
+        Local wanted = Set<String>()
         For file In files
             If !IsShader(file.1) Then Continue
+            wanted.Add(file.1)
+            Local cooked = Try CookedShader(file.0, file.1, cache, scratch.Path, used,
+                                            ShaderStamp(),
+                                            slangc)
             Local to = into / file.1
             Try Dir.CreateAll(to.Parent())
-            Try CookShader(file.0, to)
-            cooked += 1
+            If !File.Exists(to) || (Try File.ReadBytes(to)) != (Try File.ReadBytes(cooked))
+                Try File.WriteBytesAtomic(to, Try File.ReadBytes(cooked))
+            End If
         End For
-        Return cooked
+        If Dir.Exists(into)
+            Local there: (Path, String)[] = []
+            Try Listed(into, "", 0, there)
+            For file In there
+                If !wanted.Contains(file.1) Then Try File.Delete(file.0)
+            End For
+        End If
+        If Dir.Exists(cache)
+            For entry In Try Dir.Entries(cache)
+                If !used.Contains(entry.Name()) Then Try File.Delete(entry.Path)
+            End For
+        End If
+        Return wanted.Count
     End Method
 
     /// Cooks the files in the folder `source`, all the way down, following links as its mount
     /// does, into the pak at `pak`, making its folder, each at its own path from the folder: its
     /// images, PNGs and JPEGs by their bytes, by their sidecars' ImageSettings; its glTFs, named
     /// .gltf or .glb, by their ModelSettings, which leaves out the buffers they name, now in them;
-    /// its shaders, named .slang but for a .inc.slang, which is what they include, as CookShader
-    /// compiles them; and every other file, sidecars too, as it is, but the pak itself, if it's in the folder,
-    /// and what isn't the game's: what's hidden, its name starting with '.', as .git and .DS_Store
-    /// are, and Windows' Thumbs.db and desktop.ini. The pak is
+    /// its shaders, named .slang, as CookShader compiles them; and every other file, sidecars too, as
+    /// it is, but the pak itself, if it's in the folder, what shaders include, named .inc.slang, whose
+    /// text is in what's compiled, and what isn't the game's: what's hidden, its name starting with
+    /// '.', as .git and .DS_Store are, and Windows' Thumbs.db and desktop.ini. A shader's code the GPU
+    /// runs, so a pak is as trusted as the game. The pak is
     /// written a file at a time, so it can be bigger than memory, and whole or not at all. A
     /// sidecar that isn't its file's settings throws an IOError of INVALID_DATA, as
     /// Assets.ReadSettings does, and so do a glTF the engine wouldn't load, two names that differ
@@ -225,8 +404,9 @@ Public Final Class Cooker
     /// load from the pak, and so do a file and a folder, or two folders, whose names differ only in
     /// case. A glTF of more than 2 GB can't be cooked, and throws one of OTHER; a binary glTF whose
     /// JSON is more than 256 MB leaves the buffers it names in the pak. With a `cache`, a folder it
-    /// keeps, an image or glTF is cooked again only when its bytes, its settings, what it reads, or
-    /// this package's version change, and what no file uses any more is taken out of it, so two
+    /// keeps, an image, glTF, or shader is cooked again only when its bytes, its settings, what it
+    /// reads, this package's version, or a shader's fbengine sources change, and what no file uses any
+    /// more is taken out of it, so two
     /// cooks at once can't share one. A native change to the cooker at one version isn't noticed:
     /// an engine developer's is taken out by hand.
     @MainThread
@@ -324,15 +504,8 @@ Public Final Class Cooker
                 used.Add(from.FileName())
                 If kept == Null || !File.Exists(from) Then Try CookImage(file.0, from, settings)
             ElseIf kind == CookedAs.SHADER
-                // Kept by every .slang of the folder, whichever of them it includes.
-                Local reads = [file.0]
-                For other In files
-                    If other.1.EndsWith(".slang") && other.1 != file.1 Then reads.Add(other.0)
-                End For
-                Local kept = CachedAs(cache, "shader", reads, ".shader")
-                from = kept ?? (scratch.Path / "cooked.shader")
-                used.Add(from.FileName())
-                If kept == Null || !File.Exists(from) Then Try CookShader(file.0, from)
+                from = Try CookedShader(file.0, file.1, cache, scratch.Path, used, ShaderStamp(),
+                                        SlangcNamed())
             ElseIf kind == CookedAs.MODEL
                 Local settings = Try Assets.ReadSettings<ModelSettings>("{place}/{file.1}")
                 Local images = ImageOptions(settings.Images ?? ImageSettings())

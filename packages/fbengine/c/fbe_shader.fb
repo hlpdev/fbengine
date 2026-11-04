@@ -4,11 +4,13 @@
 Public Const FBE_MATERIAL_PARAMETERS: Int32 = 8
 
 Public Extern "C" Lib "fbengine_native"
-    Function fbe_shader_create(bytes: Ptr<UInt8>, size: Int64): UInt64
+    Function fbe_shader_stamp(): CString
+    Function fbe_shader_check(bytes: Ptr<UInt8>, size: Int64): Bool
+    Function fbe_shader_create(bytes: Ptr<UInt8>, size: Int64, name: CString): UInt64
     Function fbe_shader_retain(shader: UInt64): Bool
     Function fbe_shader_release(shader: UInt64): Bool
     Function fbe_shader_alive(shader: UInt64): Bool
-    Function fbe_shader_replace(shader: UInt64, bytes: Ptr<UInt8>, size: Int64): Bool
+    Function fbe_shader_replace(shader: UInt64, bytes: Ptr<UInt8>, size: Int64, name: CString): Bool
     Function fbe_material_set_shader(material: UInt64, shader: UInt64): Bool
     Function fbe_material_shader(material: UInt64): UInt64
     Function fbe_material_set_parameter(material: UInt64, index: Int32, x: Float32, y: Float32,

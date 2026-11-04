@@ -318,7 +318,7 @@ float3 whole(float3 normal)
 // clusters need; per vertex, as fixed-function hardware's did, whole within its range and falling as
 // range over distance past it, with no end, in encoded values.
 void addLight(Light light, float3 place, float3 normal, float3 eye, float shininess, float reached,
-              inout float3 diffuse, inout float3 highlight)
+              bool perVertex, inout float3 diffuse, inout float3 highlight)
 {
     float3 way;
     float falling = 1.0;
@@ -332,7 +332,7 @@ void addLight(Light light, float3 place, float3 normal, float3 eye, float shinin
         const float squared = dot(to, to);
         const float apart = sqrt(squared);
         way = apart > 0.0 ? to / apart : float3(0.0, 0.0, 1.0);
-        if (shading == shadingVertex)
+        if (perVertex)
         {
             falling = min(light.range / max(apart, 0.0001), 1.0);
         }
@@ -352,7 +352,7 @@ void addLight(Light light, float3 place, float3 normal, float3 eye, float shinin
     }
     const float facing = saturate(dot(normal, way));
     const float3 linear = float3(light.color[0], light.color[1], light.color[2]);
-    const float3 color = (shading == shadingVertex ? toEncoded(linear) : linear) * falling * reached;
+    const float3 color = (perVertex ? toEncoded(linear) : linear) * falling * reached;
     diffuse += color * facing;
     if (shininess > 0.0 && facing > 0.0)
     {
@@ -486,7 +486,7 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
         for (uint i = 0; i < draw.lightCount; ++i)
         {
             addLight(camera.lights[camera.drawLights[draw.lightFirst + i]], place.xyz, unit, eye,
-                     shininess, 1.0, diffuse, highlight);
+                     shininess, 1.0, true, diffuse, highlight);
         }
         corner.lit = saturate(diffuse + highlight);
     }
@@ -705,15 +705,15 @@ float3 pixelLit(Camera* camera, float2 pixel, float3 place, float3 normal, float
     for (uint i = 0; i < cluster.count; ++i)
     {
         const Light light = camera.lights[camera.clusterLights[cluster.first + i]];
-        addLight(light, place, normal, eye, shininess, reachedBy(camera, light, place, normal), diffuse,
-                 highlight);
+        addLight(light, place, normal, eye, shininess, reachedBy(camera, light, place, normal), false,
+                 diffuse, highlight);
     }
     // The directional lights, which no cluster lists, come first in the lights.
     for (uint i = 0; i < camera.directional; ++i)
     {
         const Light light = camera.lights[i];
-        addLight(light, place, normal, eye, shininess, reachedBy(camera, light, place, normal), diffuse,
-                 highlight);
+        addLight(light, place, normal, eye, shininess, reachedBy(camera, light, place, normal), false,
+                 diffuse, highlight);
     }
     return diffuse + highlight;
 }
@@ -835,11 +835,12 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
     {
         current.rgb = toEncoded(current.rgb);
     }
-#endif
+#else
     if (material.noAlpha != 0)
     {
         current.a = draw.color.a;
     }
+#endif
     if (alphaTest != 0 && current.a < material.cutoff)
     {
         discard;

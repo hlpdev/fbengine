@@ -22,7 +22,8 @@ Import "./references"
 /// ```
 ///
 /// A debug build mounts `assets/` itself, watching it, so what changes there reloads as the game
-/// runs, but for its shaders, which it compiles each build, for the next build to change. A release build cooks it into `build/<name>.pak`, which a game ships beside its executable,
+/// runs, but for its shaders, which each build compiles those of that have changed, so a game running
+/// reloads them when that build ends. A release build cooks it into `build/<name>.pak`, which a game ships beside its executable,
 /// or in a macOS bundle's Resources, and mounts that, or where it was built, for `fb run --release`,
 /// whose executable is elsewhere; one built with `fb build -o` needs its pak copied beside it. Each
 /// file is cooked again only when it or its settings change, as
@@ -65,11 +66,11 @@ Public Final Class GameBuild
         End If
         Try Dir.CreateAll(out)
         // A debug build reads assets/ as it is, but for its shaders, which only ever run compiled:
-        // those, compiled afresh, go over it.
+        // those go over it, in a folder that stays, as a game running is watching it.
         If mode != "release"
             Local shaders = out / "shaders"
-            If Dir.Exists(shaders) Then Try Dir.RemoveAll(shaders)
-            If (Try Cooker.CookShadersInto(assets, shaders)) > 0
+            If (Try Cooker.CookShadersInto(assets, shaders, out / "cook-cache",
+                                           Cooker.SlangcNamed())) > 0
                 mount += "\n    Try FbEngine.Assets.MountSource(\"{Literal(shaders.Text)}\")"
             End If
         End If

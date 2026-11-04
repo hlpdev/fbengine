@@ -10,12 +10,20 @@
 //
 //     void move(inout float3 position, inout float3 normal, MovingVertex vertex)
 //
-// which takes each vertex of a mesh or terrain, morphed and skinned, in its mesh's space, for what's
-// drawn and its shadow; the view culls by the Geometry's bounds, not where this moves it, so a
-// Geometry moved further than they reach wants a SetCullBox. Whatever `shade` returns goes on as the
-// scene's own color does: to the material's alpha cutoff, fog, and blend. Colors are in linear light,
-// whatever the material's shading. A shadow's cut out by the material's own alpha, as `shade` can
-// light what it draws, and a shadow's pass has no lights.
+// which takes each vertex of what's drawn but particles, morphed and skinned, in its own space, and
+// of its shadow, in meters and radians, never °. The view culls by the Geometry's bounds, not
+// where this moves it, so a Geometry moved further than they reach wants a SetCullBox; a Terrain has
+// none, and is culled where its heights have it, so moving one stays near them.
+//
+// Whatever `shade` returns goes on as the scene's own color does: its alpha to the material's cutoff,
+// then fog and blend. Colors are in linear light, whatever the material's shading. A material's blend
+// doesn't look at what `shade` returns: BLEND AUTO goes by the material's color and textures, so a
+// shader whose alpha is to blend sets BLEND ALPHA on it. A shadow's cut out by the material's own
+// alpha, as `shade` can light what it draws, and a shadow's pass has no lights.
+//
+// It reads only what's here. A texture of its own, or a global that isn't `static`, is something the
+// scene's pipelines don't bind, which CookShader refuses: parameters and a material's layers are how
+// a game gives it things.
 
 // A pixel of what a material draws, as a shader's given it.
 struct Surface
@@ -35,22 +43,26 @@ struct Surface
     // Which of the camera's materials and draws it is, for what's below.
     uint material;
 
-    // A parameter Material.SetParameter set.
+    // A parameter Material.SetParameter set, the last for an index past them.
     float4 parameter(uint index)
     {
-        return push.camera.materials[material].parameters[index];
+        return push.camera.materials[material].parameters[min(index, 7)];
     }
 
     // Layer `index`'s texture, of those the material has, at a UV, as a layer's own UVs don't move
     // it; white for one it hasn't.
     float4 texture(uint index, float2 uv)
     {
+        if (index >= layerCount)
+        {
+            return float4(1.0, 1.0, 1.0, 1.0);
+        }
         const Layer layer = push.camera.materials[material].layers[index];
-        return index < layerCount ? sampleTexture(layer.texture, layer.sampler, uv)
-                                  : float4(1.0, 1.0, 1.0, 1.0);
+        return sampleTexture(layer.texture, layer.sampler, uv);
     }
 
-    // The light that reaches here on a normal, as the scene's own lights it, in linear light.
+    // The light that reaches here on a normal, per pixel and in linear light, whatever the material's
+    // shading.
     float3 light(float3 toward, float shininess)
     {
         return pixelLit(push.camera, pixel, place, toward, shininess);
@@ -65,8 +77,9 @@ struct MovingVertex
     float4 color;
     uint material;
 
+    // A parameter Material.SetParameter set, the last for an index past them.
     float4 parameter(uint index)
     {
-        return push.camera.materials[material].parameters[index];
+        return push.camera.materials[material].parameters[min(index, 7)];
     }
 };

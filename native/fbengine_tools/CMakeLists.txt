@@ -23,10 +23,8 @@ target_link_libraries(fbengine_tools_native PRIVATE fbengine_stb ktx fastgltf::f
 # The engine's shaders' sources, which a game's shader is compiled with.
 set(fbengine_shader_sources_folder "${CMAKE_CURRENT_BINARY_DIR}/shader_sources")
 file(MAKE_DIRECTORY "${fbengine_shader_sources_folder}")
-set(fbengine_shader_sources
-    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/scene.slang"
-    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/own_shader.slang"
-    "${PROJECT_SOURCE_DIR}/native/fbengine/shaders/bindless.slang")
+set_source_files_properties(cook/shaders.cpp PROPERTIES COMPILE_DEFINITIONS
+                            "FBE_SHADER_STAMP=\"${fbengine_shader_stamp}\"")
 string(REPLACE ";" "|" fbengine_shader_sources_list "${fbengine_shader_sources}")
 add_custom_command(
   OUTPUT "${fbengine_shader_sources_folder}/shader_sources.hpp"

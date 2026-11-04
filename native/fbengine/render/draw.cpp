@@ -164,6 +164,15 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
                     gpu::pipeline(batch.sky != 0 ? sky_desc(pass.format, pass.samples)
                                                  : desc_of(batch.key, pass.format, pass.samples,
                                                            view.flipped, pass.shadows));
+                const auto code = static_cast<std::uint32_t>(batch.key >> 51U);
+                // A game's shader no pipeline can be made of isn't tried again: its draws go on as
+                // the scene's own, under the same key.
+                if (made == VK_NULL_HANDLE && batch.sky == 0 &&
+                    shaders_own::shader_of(code) != nullptr) {
+                    shaders_own::refuse(code);
+                    made = gpu::pipeline(
+                        desc_of(batch.key, pass.format, pass.samples, view.flipped, pass.shadows));
+                }
                 usable = made != VK_NULL_HANDLE;
                 if (usable) {
                     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, made);

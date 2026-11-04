@@ -82,7 +82,9 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      HEADER test_shaders.hpp
                      SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang
                              gpu/shaders/shape.slang gpu/shaders/points.slang
-                             gpu/shaders/spheres.slang gpu/shaders/poles.slang)
+                             gpu/shaders/spheres.slang gpu/shaders/poles.slang
+                             gpu/shaders/game_shader.slang
+                     INCLUDES gpu/shaders/own)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 300)
@@ -117,6 +119,18 @@ option(FBENGINE_FB_TESTS "Test the packages and the examples with fb" ON)
 if(FBENGINE_FB_TESTS)
   find_program(FBENGINE_FB fb REQUIRED DOC "The fb that builds and tests the packages")
 
+  # Slang's compiler as a test needs it, of the release that's asked for and of another.
+  add_executable(fbengine_fake_slangc tools/fake_slangc.cpp)
+  target_compile_definitions(fbengine_fake_slangc PRIVATE
+                             FBE_SLANG_VERSION="${fbengine_slang_version}")
+  add_executable(fbengine_wrong_slangc tools/fake_slangc.cpp)
+  target_compile_definitions(fbengine_wrong_slangc PRIVATE FBE_SLANG_VERSION="0.0.1")
+  if(MINGW)
+    # Run from anywhere, with no DLLs of MinGW's on the PATH.
+    target_link_options(fbengine_fake_slangc PRIVATE -static -mcrtdll=ucrt)
+    target_link_options(fbengine_wrong_slangc PRIVATE -static -mcrtdll=ucrt)
+  endif()
+
   # Every package's own tests, with SDL's offscreen video, so no test opens a window, as each test
   # asks too.
   file(GLOB fbengine_packages CONFIGURE_DEPENDS LIST_DIRECTORIES true
@@ -126,7 +140,7 @@ if(FBENGINE_FB_TESTS)
       cmake_path(GET package FILENAME name)
       add_test(NAME ${name}.package COMMAND "${FBENGINE_FB}" test "${package}")
       set_tests_properties(${name}.package PROPERTIES ENVIRONMENT
-                           "FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
+                           "FBENGINE_FAKE_SLANGC=$<TARGET_FILE:fbengine_fake_slangc>;FBENGINE_WRONG_SLANGC=$<TARGET_FILE:fbengine_wrong_slangc>;FBENGINE_FAKE_SLANGC_LOG=${CMAKE_CURRENT_BINARY_DIR}/fake_slangc.log;FBENGINE_FAKE_SLANGC_SPV=${CMAKE_CURRENT_BINARY_DIR}/test_shaders/game_shader.spv;FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
     endif()
   endforeach()
 
@@ -930,7 +944,7 @@ if(FBENGINE_FB_TESTS)
       "render-no-target=Render on a World: a camera with no target draws into the screen, and there's no window open"
       "render-bad-tween=Render on a World: a tween is 0 to 1, not 2"
       "layer-uv-zero=SetLayerUv on a Material: a layer's UV scale is finite and not 0, not \\(0, 1\\)"
-      "layer-texture-out-of-range=SetTexture on a Material: a material's layers are 0 to 7, not 8"
+      "layer-texture-out-of-range=SetTexture on a Material: a material's layers are 0 to 7"
       "joints-wrong-count=SetJoints on a Geometry: a surface of 24 vertices has as many joints, or none, not 1"
       "freed-entity=SetName on a Pivot that was freed"
       "freed-with-parent=Name on a Pivot that was freed"
@@ -973,7 +987,7 @@ if(FBENGINE_FB_TESTS)
       "mesh-freed-geometry=SetGeometry on a Geometry that was freed"
       "shininess=SetShininess on a Material: a material's shininess is 0 to 1, not 2"
       "alpha-cutoff=SetAlphaCutoff on a Material: an alpha cutoff is 0 to 1, not -1"
-      "layer=SetLayer on a Material: a material's layers are 0 to 7, not 8"
+      "layer=SetLayer on a Material: a material's layers are 0 to 7"
       "layer-uv-set=SetLayer on a Material: a layer's UV set is 0 or 1, not 2"
       "material-alpha=SetAlpha on a Material: a material's alpha is 0 to 1, not 2"
       "color-alpha=SetColor on a Material: a material's alpha is 0 to 1, not 1.5"

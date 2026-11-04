@@ -18,9 +18,13 @@ Global shaders: Weak<Shader>[] = []
 /// A shader of a game's own, for Materials to draw with: a `.slang` file in its assets, which its
 /// build step compiles (fbengine_tools' CookShader), so `Assets.Load<Shader>("res://water.slang")`
 /// loads what that made, and a change to the file reaches the game at its next build. A file that
-/// went round the build step, or that was compiled for another version of fbengine, throws an
-/// IOError of INVALID_DATA, saying so. It lives while the game holds it, or a Material draws with it;
-/// a game that wants it reloaded holds it, as Assets reloads only what's held.
+/// went round the build step, or that was compiled for another version of fbengine or against other
+/// sources of its shaders, throws an IOError of INVALID_DATA, saying so. It lives while the game holds
+/// it, or a Material draws with it; a game that wants it reloaded holds it, as Assets reloads only
+/// what's held. The same file loaded again is the same code, so a game can load and let go of one as
+/// often as it likes. A shader's code the GPU runs: what's in a pak is as trusted as the game, so a
+/// game that mounts paks from elsewhere trusts them with that. One no pipeline can be made of, which
+/// only a driver knows, says so once, on the error stream, and draws as a Material with none does.
 Public Final Class Shader Implements Asset
     Field handle: UInt64
 
@@ -34,12 +38,27 @@ Public Final Class Shader Implements Asset
     @MainThread
     Public Static Method LoadKind(): AssetKind => AssetKind.BYTES
 
+    /// Whether a cooked file's `bytes` would load, throwing as FromLoad does with what's wrong, `name`
+    /// saying which it is. Nothing's kept: it's what the cooker asks of what it's made.
+    @MainThread
+    Public Static Method Check(bytes: UInt8[], name: String) Throws IOError
+        Local copied = Buffer<UInt8>(bytes.Count)
+        For at = 0 Until bytes.Count
+            copied[at] = bytes[at]
+        End For
+        Local fine = False
+        Unsafe
+            fine = fbe_shader_check(copied.Pointer(), bytes.Count)
+        End Unsafe
+        If !fine Then Throw IOError(IOErrorKind.INVALID_DATA, "{name}: {LastError()}", name)
+    End Method
+
     /// One of what `load` read.
     @MainThread
     Public Static Method FromLoad(load: AssetLoad): Shader Throws IOError
         Local made: UInt64 = 0
         Unsafe
-            made = fbe_shader_create(load.BytesPointer(), load.Size())
+            made = fbe_shader_create(load.BytesPointer(), load.Size(), load.Path())
         End Unsafe
         If made == 0 Then Throw IOError(IOErrorKind.INVALID_DATA, LastError(), load.Path())
         Return Shader(made)
@@ -51,7 +70,7 @@ Public Final Class Shader Implements Asset
     Public Method Reload(load: AssetLoad): Bool Throws IOError
         Local done = False
         Unsafe
-            done = fbe_shader_replace(Live("Reload"), load.BytesPointer(), load.Size())
+            done = fbe_shader_replace(Live("Reload"), load.BytesPointer(), load.Size(), load.Path())
         End Unsafe
         If !done Then Throw IOError(IOErrorKind.INVALID_DATA, LastError(), load.Path())
         Return True
@@ -108,7 +127,8 @@ End Function
 Extend Material
     /// Has it draw with `shader`, which it holds, or as the scene's own does with Null. What it
     /// draws is still its colors, layers, shading, blend, cutoff, and fog; the shader takes what
-    /// those make of each pixel, before its cutoff, fog, and blend.
+    /// those make of each pixel, before its cutoff, fog, and blend. BLEND AUTO goes by its color and
+    /// textures, not what the shader returns, so a shader whose alpha is to blend wants BLEND ALPHA.
     @MainThread @PanicsAtCaller
     Public Method SetShader(shader: Shader?)
         Local drawn: UInt64 = shader != Null ? shader.Live("SetShader") : 0

@@ -25,6 +25,7 @@ Public Extern "C" Lib "fbengine_tools_native"
     Function fbe_cook_shader_source_count(): Int32
     Function fbe_cook_shader_source_name(index: Int32): CString
     Function fbe_cook_shader_source_text(index: Int32): CString
+    Function fbe_cook_shader_stamp(): CString
     Function fbe_cook_slang_version(): CString
     Function fbe_cook_pak_open(to: CString): UInt64
     Function fbe_cook_pak_add(pak: UInt64, name: CString, from: CString): Bool

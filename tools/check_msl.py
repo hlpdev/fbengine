@@ -44,7 +44,8 @@ def main():
         return 0
     failed = False
     build = pathlib.Path(sys.argv[1])
-    shaders = sorted((build / "native").rglob("*.spv"))
+    # A game's shader too, whose draws read through the same addresses.
+    shaders = sorted((build / "native").rglob("*.spv")) + sorted((build / "tests").rglob("game_shader.spv"))
     for shader in shaders:
         listed = subprocess.run([tool, str(shader), "--reflect"], capture_output=True, text=True, check=True)
         entries = re.findall(r'"name" : "(\w+)",\s*"mode" : "(\w+)"', listed.stdout)

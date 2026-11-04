@@ -29,8 +29,7 @@ layer_t* layer_of(std::uint64_t material, std::int32_t index) {
         return nullptr;
     }
     if (index < 0 || index >= FBE_MATERIAL_LAYERS) {
-        fail(
-            std::format("a material's layers are 0 to {}, not {}", FBE_MATERIAL_LAYERS - 1, index));
+        fail("a material's layers are 0 to 7");
         return nullptr;
     }
     return &found->layers[static_cast<std::size_t>(index)];

@@ -37,6 +37,10 @@ namespace {
 
 using fbe::gpu::flag;
 
+/// What fbe::gpu::refuse_pipelines_of said, for a test.
+std::string refused_name;
+std::uint32_t refused_count = 0;
+
 struct hash_t {
     std::size_t operator()(const fbe::gpu::pipeline_desc_t& desc) const {
         std::size_t hash = std::hash<const void*>{}(desc.shader);
@@ -269,6 +273,11 @@ VkPipelineColorBlendAttachmentState blend_state(fbe::gpu::blend_t blend) {
 }
 
 VkPipeline make_pipeline(const fbe::gpu::device_t& gpu, const fbe::gpu::pipeline_desc_t& desc) {
+    if (!refused_name.empty() && desc.shader->name == refused_name) {
+        ++refused_count;
+        fbe::fail(std::format("couldn't make a pipeline of {}", desc.shader->name));
+        return VK_NULL_HANDLE;
+    }
     VkPipelineLayout pipeline_layout = fbe::gpu::pipeline_layout();
     if (pipeline_layout == VK_NULL_HANDLE) {
         return VK_NULL_HANDLE;
@@ -411,6 +420,15 @@ VkPipelineLayout pipeline_layout() {
         fail_vulkan("couldn't make the pipelines' layout", result);
     }
     return layout;
+}
+
+void refuse_pipelines_of(std::string_view name) {
+    refused_name = name;
+    refused_count = 0;
+}
+
+std::uint32_t pipelines_refused() {
+    return refused_count;
 }
 
 VkPipeline pipeline(const pipeline_desc_t& desc) {

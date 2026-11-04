@@ -60,6 +60,9 @@ FBE_TOOLS_API bool fbe_cook_model(const char* from, const char* to, const char* 
 FBE_TOOLS_API int32_t fbe_cook_shader_source_count(void);
 FBE_TOOLS_API const char* fbe_cook_shader_source_name(int32_t index);
 FBE_TOOLS_API const char* fbe_cook_shader_source_text(int32_t index);
+// What a cooked shader's stamped with, as fbe_shader_stamp says the engine's: a hash of those
+// sources and Slang's release.
+FBE_TOOLS_API const char* fbe_cook_shader_stamp(void);
 // The release of Slang the engine's own shaders are compiled with, and a game's have to be.
 FBE_TOOLS_API const char* fbe_cook_slang_version(void);
 // A pak, its files stored as the engine's res:// reads them, written a file at a time, so it can

@@ -36,6 +36,10 @@ FBE_TOOLS_API const char* fbe_cook_shader_source_text(int32_t index) {
     return found != nullptr ? found->text : "";
 }
 
+FBE_TOOLS_API const char* fbe_cook_shader_stamp(void) {
+    return FBE_SHADER_STAMP;
+}
+
 FBE_TOOLS_API const char* fbe_cook_slang_version(void) {
     return FBE_SLANG_VERSION;
 }

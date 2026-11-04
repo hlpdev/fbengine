@@ -33,6 +33,10 @@ if(FBENGINE_BUILD_TESTS)
   endif()
 endif()
 
+# The one file that reads it, so a shader's change doesn't build the whole engine again.
+set_source_files_properties(shader/shader.cpp PROPERTIES COMPILE_DEFINITIONS
+                            "FBE_SHADER_STAMP=\"${fbengine_shader_stamp}\"")
+
 # The engine's own shaders, embedded in the DLL, and in its sources' static library for the tests.
 set(fbengine_shader_targets fbengine_native)
 if(TARGET fbengine_internal)
