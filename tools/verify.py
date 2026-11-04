@@ -12,8 +12,9 @@ how many checks failed; a landing's push waits on that line.
 Four verifies run at a time on a machine: each waits for its turn before it builds, since six at
 once have left Windows unable to start programs, each failure a dialog on the user's screen. Its
 build folder is held the whole run, so a second verify of that folder is refused. --only runs
-just the tests matching a regular expression, in its turn, for what a fix touches; it never prints
-"everything passed", which only the whole check does.
+just the tests matching a regular expression, in its turn, then the bindings, the Metal, and the
+lint: what a fix or a landing needs of what's known good, as CI runs the whole of it after. It
+never prints "everything passed", which only the whole check does.
 
 clang-format and clang-tidy come from $CLANG_FORMAT and $CLANG_TIDY, or PATH, or where the user's
 machine has them.
@@ -72,6 +73,16 @@ def try_lock(file):
     except OSError:
         return False
     return True
+
+
+def no_error_dialogs():
+    """On Windows, a program that fails to start or crashes says so by its exit code, not a dialog
+    on the user's screen. What this process starts inherits it, through ctest and fb."""
+    if os.name == "nt":
+        import ctypes
+
+        # SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX, SEM_NOOPENFILEERRORBOX
+        ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
 
 
 def lock_file(name):
@@ -278,6 +289,7 @@ def main():
     parser.add_argument("--no-tidy", action="store_true", help="skip clang-tidy")
     parser.add_argument("--only", help="build, and run only the tests this regular expression matches")
     options = parser.parse_args()
+    no_error_dialogs()
     build = (ROOT / options.build).resolve()
     # Held until this process exits.
     held = [hold_build(build), wait_for_turn()]
@@ -286,10 +298,20 @@ def main():
     if options.only is not None:
         if built:
             check_tests(build, options.only)
+        check_bindings()
+        check_line_ends()
+        check_metal(build)
+        check_format()
+        if not options.no_tidy and built:
+            check_tidy(build, options.base)
+        check_fb_format()
         if failures:
+            print(f"{len(failures)} failure(s):")
+            for message in failures:
+                print(f"  {message}")
             sys.exit(1)
         print()
-        print("those tests passed; this isn't a landing's check")
+        print("those tests and the lint passed")
         del held
         return
     check_locks()
