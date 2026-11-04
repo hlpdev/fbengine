@@ -53,3 +53,27 @@ public float4 sampleTextureLevel(uint index, uint sampler, float2 uv, float leve
 {
     return textures[NonUniformResourceIndex(index)].SampleLevel(samplers[NonUniformResourceIndex(sampler)], uv, level);
 }
+
+/// Whether a float's NaN, or an infinity, by its bits, which a driver's fast math can't assume away.
+public bool isNotANumber(float value)
+{
+    return (asuint(value) & 0x7FFFFFFF) > 0x7F800000;
+}
+
+public bool isInfinite(float value)
+{
+    return (asuint(value) & 0x7FFFFFFF) == 0x7F800000;
+}
+
+/// Light as a number: no NaN or light below none, which are none, nor past what a half float holds,
+/// as an infinity's taken to be.
+public float wholeLight(float light)
+{
+    const float brightest = 65504.0;
+    return isNotANumber(light) ? 0.0 : (isInfinite(light) ? (light > 0.0 ? brightest : 0.0) : clamp(light, 0.0, brightest));
+}
+
+public float3 wholeLight(float3 light)
+{
+    return float3(wholeLight(light.r), wholeLight(light.g), wholeLight(light.b));
+}

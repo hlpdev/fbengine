@@ -28,6 +28,10 @@ struct world_t {
     std::vector<std::uint32_t> roots;
     std::int32_t count = 0;
     std::array<float, 3> ambient{ 0.2158605F, 0.2158605F, 0.2158605F };
+    /// The environment its PBR materials are lit by, 0 for none, and what its light's times.
+    std::uint64_t environment = 0;
+    float environment_intensity = 1.0F;
+
     /// Its sky: none, its atmosphere, or a texture, which it holds; the light whose way's the
     /// sun's, by handle, 0 for straight up; and how bright.
     std::int32_t sky = 0;
@@ -90,6 +94,8 @@ struct surface_t {
     std::vector<fbe_vertex_t> vertices;
     /// Its vertices' joints, one for each, or none.
     std::vector<fbe_vertex_joints_t> joints;
+    /// Its vertices' tangents, one for each, or none.
+    std::vector<fbe_vertex_tangent_t> tangents;
     std::vector<std::uint32_t> indices;
     std::vector<morph_target_t> targets;
     /// The material it's drawn in, by slot, which it holds, or none for the default.
@@ -126,6 +132,14 @@ struct material_t {
     bool wireframe = false;
     std::int32_t order = 0;
     std::array<layer_t, FBE_MATERIAL_LAYERS> layers{};
+    /// What a PBR material is beyond its color, and its maps, by FBE_MAP_, as layers but for their
+    /// blend and bump.
+    float metallic = 0.0F;
+    float roughness = 1.0F;
+    std::array<float, 3> emissive{ 0.0F, 0.0F, 0.0F };
+    float normal_scale = 1.0F;
+    float occlusion_strength = 1.0F;
+    std::array<layer_t, FBE_MATERIAL_MAPS> maps{};
 };
 
 /// A level of detail of a geometry.
@@ -422,6 +436,18 @@ struct camera_t {
     float fog_start = 1.0F;
     float fog_end = 100.0F;
     float fog_density = 0.02F;
+    /// Whether it draws into an HDR image, and what that comes to in its target.
+    bool hdr = false;
+    float exposure = 1.0F;
+    std::int32_t tonemap = FBE_TONEMAP_NONE;
+    float gamma = 1.0F;
+    /// Its bloom, and its color grade.
+    float bloom_intensity = 0.0F;
+    float bloom_threshold = 1.0F;
+    std::array<float, 3> grade_slope{ 1.0F, 1.0F, 1.0F };
+    std::array<float, 3> grade_offset{ 0.0F, 0.0F, 0.0F };
+    std::array<float, 3> grade_power{ 1.0F, 1.0F, 1.0F };
+    float grade_saturation = 1.0F;
 };
 
 /// A light: what kind, its color and its intensity, the range where a point or spot light ends, and
