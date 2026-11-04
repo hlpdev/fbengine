@@ -1,0 +1,604 @@
+// A map from a seed, as a game's own code over its generator (park_miller.fb, seeded_random's): on a
+// grid of 18 by 18, a winding corridor from the bottom middle up, of horizontal runs of up to 10 to 15,
+// as the sides allow, 4 or 5 branches up, at least 5 dead ends, and one 4-way forced in; each cell's
+// shape from its neighbors and how it's turned; the start and the exit by how far apart they are, the
+// rest by a table of chances for its shape; doors on the edges they share, open by chance; and each
+// placed as an entity, 8 units a cell, built of its shape turned. The same seed gives the same map,
+// drawn here as its rows, which seed "fb" must match; a tool apart from it, in Python, gives the same.
+// One stream, as the requirement says: it's given its generator, and what's next carries on from it.
+// It prints what it found of it; with --watch, a window of a map from above, a new seed every so often.
+//
+// What the original's has and this hasn't: its zones, checkpoints, and fixed rooms by rank, one corner a
+// zone, Gate A, the pocket dimension, adjacency links, and the forest, tunnel, and chunk grids. Its
+// doors here are data, drawn by nothing.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import std.text
+Import "./park_miller"
+Import fbengine
+
+Const SIDE = 18
+Const CELL: Float = 8.0
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
+
+// Whether a cell's in the grid.
+Function InGrid(x: Int, y: Int): Bool => x >= 0 && y >= 0 && x < SIDE && y < SIDE
+
+// A map's cells, on or off; each one's room; and each edge's door, open or not.
+Class GameMap
+    Field Cells: Bool[] = []
+    Field Kinds: String[] = []
+    // Each cell's shape: 1, 2, C, 3, or 4; and its turn, in quarters.
+    Field Shapes: String[] = []
+    Field Turns: Int[] = []
+    // By the lower cell's index and its way, 0 to the right and 1 down: -1 for no edge.
+    Field Doors: Int[] = []
+    Field Start: Int = -1
+    Field Exit: Int = -1
+
+    // A map from `dice`, wherever it's got to.
+    New(dice: ParkMiller)
+        For i = 1 To SIDE * SIDE
+            Cells.Add(False)
+            Kinds.Add("")
+            Shapes.Add("")
+            Turns.Add(0)
+            Doors.Add(-1)
+            Doors.Add(-1)
+        End For
+        Corridor(dice)
+        Branches(dice)
+        DeadEnds(dice)
+        FourWay()
+        Rooms(dice)
+        EdgesAndDoors(dice)
+    End New
+
+    Method At(x: Int, y: Int): Bool => InGrid(x, y) && Cells[y * SIDE + x]
+
+    Method Mark(x: Int, y: Int)
+        Cells[y * SIDE + x] = True
+    End Method
+
+    // From the bottom middle up, each run across as far as it's told, kept off the sides, and up 2 or
+    // 3 from where it ends.
+    Method Corridor(dice: ParkMiller)
+        Local x = SIDE / 2
+        Local y = SIDE - 1
+        Mark(x, y)
+        y -= 1
+        While y >= 1
+            Mark(x, y)
+            Local across = dice.NextInt(10, 15)
+            Local way = x < SIDE / 2 ? 1 : -1
+            For i = 1 To across
+                If x + way < 1 || x + way > SIDE - 2 Then Break
+                x += way
+                Mark(x, y)
+            End For
+            Local up = dice.NextInt(2, 3)
+            For i = 1 To up
+                If y - 1 < 1 Then Break
+                y -= 1
+                Mark(x, y)
+            End For
+            If y <= 1 Then Break
+        End While
+    End Method
+
+    // 4 or 5 tries up from cells of the corridor, picked by chance.
+    Method Branches(dice: ParkMiller)
+        Local count = dice.NextInt(4, 5)
+        Local made = 0
+        Local tries = 0
+        While made < count && tries < 200
+            tries += 1
+            Local x = dice.NextInt(1, SIDE - 2)
+            Local y = dice.NextInt(2, SIDE - 2)
+            If !At(x, y) || At(x, y - 1) || At(x - 1, y - 1) || At(x + 1, y - 1) Then Continue
+            Mark(x, y - 1)
+            made += 1
+        End While
+    End Method
+
+    // How many cells of it `x`, `y` has beside it.
+    Method Beside(x: Int, y: Int): Int
+        Local count = 0
+        For way In [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            Local across, down = way
+            If At(x + across, y + down) Then count += 1
+        End For
+        Return count
+    End Method
+
+    Method Count(beside: Int): Int
+        Local count = 0
+        For y = 0 To SIDE - 1
+            For x = 0 To SIDE - 1
+                If At(x, y) && Beside(x, y) == beside Then count += 1
+            End For
+        End For
+        Return count
+    End Method
+
+    // At least 5 dead ends, by a cell off an empty place that touches only one.
+    Method DeadEnds(dice: ParkMiller)
+        Local tries = 0
+        While Count(1) < 5 && tries < 2000
+            tries += 1
+            Local x = dice.NextInt(0, SIDE - 1)
+            Local y = dice.NextInt(0, SIDE - 1)
+            If !At(x, y) && Beside(x, y) == 1 Then Mark(x, y)
+        End While
+    End Method
+
+    // A 4-way, if it hasn't one: the first 3-way, in the rows' order, filled in on its empty side, where
+    // that touches nothing else; failing that, whatever it touches; failing that, a straight's both
+    // sides, as there's always a straight.
+    Method FourWay()
+        If Count(4) > 0 Then Return
+        For y = 0 To SIDE - 1
+            For x = 0 To SIDE - 1
+                If !At(x, y) || Beside(x, y) != 3 Then Continue
+                For way In [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                    Local across, down = way
+                    If InGrid(x + across, y + down) && !At(x + across, y + down) &&
+                       Beside(x + across, y + down) == 1
+                        Mark(x + across, y + down)
+                        Return
+                    End If
+                End For
+            End For
+        End For
+        For y = 0 To SIDE - 1
+            For x = 0 To SIDE - 1
+                If !At(x, y) || Beside(x, y) != 3 Then Continue
+                For way In [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                    Local across, down = way
+                    If InGrid(x + across, y + down) && !At(x + across, y + down)
+                        Mark(x + across, y + down)
+                        Return
+                    End If
+                End For
+            End For
+        End For
+        For y = 1 To SIDE - 2
+            For x = 1 To SIDE - 2
+                If At(x, y) && Beside(x, y) == 2
+                    For way In [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                        Local across, down = way
+                        Mark(x + across, y + down)
+                    End For
+                    Return
+                End If
+            End For
+        End For
+    End Method
+
+    // How many steps each cell is from `from`, -1 for none.
+    Method Steps(from: Int): Int[]
+        Local steps: Int[] = []
+        For i = 1 To SIDE * SIDE
+            steps.Add(-1)
+        End For
+        steps[from] = 0
+        Local queue = [from]
+        Local head = 0
+        While head < queue.Count
+            Local at = queue[head]
+            head += 1
+            For way In [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                Local across, down = way
+                Local x = at % SIDE + across
+                Local y = at / SIDE + down
+                If At(x, y) && steps[y * SIDE + x] < 0
+                    steps[y * SIDE + x] = steps[at] + 1
+                    queue.Add(y * SIDE + x)
+                End If
+            End For
+        End While
+        Return steps
+    End Method
+
+    // Each cell's shape and how it's turned, by its neighbors, one way or the other of a straight by
+    // chance; the start's at the bottom middle, the exit's the dead end farthest from it, and the others
+    // are of a kind for their shape, by the table's chances.
+    Method Rooms(dice: ParkMiller)
+        Start = (SIDE - 1) * SIDE + SIDE / 2
+        Local steps = Steps(Start)
+        Local farthest = -1
+        For i = 0 To SIDE * SIDE - 1
+            If Cells[i] && i != Start && Beside(i % SIDE, i / SIDE) == 1 &&
+               (Exit < 0 || steps[i] > farthest)
+                Exit = i
+                farthest = steps[i]
+            End If
+        End For
+        For i = 0 To SIDE * SIDE - 1
+            If !Cells[i] Then Continue
+            Local x = i % SIDE
+            Local y = i / SIDE
+            Local right = At(x + 1, y)
+            Local up = At(x, y - 1)
+            Local left = At(x - 1, y)
+            Local down = At(x, y + 1)
+            Select Beside(x, y)
+                Case 1
+                    Shapes[i] = "1"
+                    Turns[i] = right ? 3 : up ? 0 : left ? 1 : 2
+                Case 2
+                    If right && left
+                        Shapes[i] = "2"
+                        Turns[i] = 1 + 2 * dice.NextInt(0, 1)
+                    ElseIf up && down
+                        Shapes[i] = "2"
+                        Turns[i] = 2 * dice.NextInt(0, 1)
+                    Else
+                        Shapes[i] = "C"
+                        Turns[i] = up && right ? 3 : up && left ? 0 : left && down ? 1 : 2
+                    End If
+                Case 3
+                    Shapes[i] = "3"
+                    Turns[i] = !down ? 0 : !right ? 1 : !up ? 2 : 3
+                Default
+                    Shapes[i] = "4"
+                    Turns[i] = dice.NextInt(0, 3)
+            End Select
+            Kinds[i] = KindOf(Shapes[i], dice.NextInt(1, 100))
+        End For
+        Kinds[Start] = "S"
+        If Exit >= 0 Then Kinds[Exit] = "E"
+    End Method
+
+    // A door on each edge two cells share, open with a chance of 1 in 5, as Max(Rand(-3, 1), 0) is.
+    Method EdgesAndDoors(dice: ParkMiller)
+        For y = 0 To SIDE - 1
+            For x = 0 To SIDE - 1
+                If !At(x, y) Then Continue
+                If At(x + 1, y) Then Doors[(y * SIDE + x) * 2] = Max(dice.NextInt(-3, 1), 0)
+                If At(x, y + 1) Then Doors[(y * SIDE + x) * 2 + 1] = Max(dice.NextInt(-3, 1), 0)
+            End For
+        End For
+    End Method
+
+    // Its rows, a dot for each empty cell.
+    Method Rows(): String[]
+        Local rows: String[] = []
+        For y = 0 To SIDE - 1
+            Local row = ""
+            For x = 0 To SIDE - 1
+                row += Cells[y * SIDE + x] ? Kinds[y * SIDE + x] : "."
+            End For
+            rows.Add(row)
+        End For
+        Return rows
+    End Method
+
+    // A number from everything it's made of: FNV-1a over its rooms, turns, and doors.
+    Method Digest(): Int64
+        Local hash: UInt64 = 2166136261
+        For i = 0 To SIDE * SIDE - 1
+            For byte In "{Kinds[i]}{Turns[i]}{Doors[i * 2]}{Doors[i * 2 + 1]}".Bytes
+                hash = ((hash ^ (byte As UInt64)) * 16777619) & 0xFFFFFFFF
+            End For
+        End For
+        Return hash As Int64
+    End Method
+End Class
+
+// What each shape's kinds are, by their chances of 100: a letter each, so a map's rows are its rooms'.
+Function KindOf(shape: String, roll: Int): String
+    Local table = [("1", [("a", 50), ("b", 30), ("c", 20)]),
+                   ("2", [("d", 60), ("e", 30), ("f", 10)]),
+                   ("C", [("g", 70), ("h", 30)]), ("3", [("i", 60), ("j", 40)]),
+                   ("4", [("k", 75), ("l", 25)])]
+    For each In table
+        Local name, kinds = each
+        If name != shape Then Continue
+        Local left = roll
+        For kind In kinds
+            Local letter, chance = kind
+            If left <= chance Then Return letter
+            left -= chance
+        End For
+    End For
+    Panic("a roll of {roll} is past {shape}'s table")
+End Function
+
+// Which ways a shape's first turn goes out, across and down the grid: up, then each turn a quarter on.
+Function WaysOut(shape: String): (Int, Int)[]
+    Select shape
+        Case "1"
+            Return [(0, -1)]
+        Case "2"
+            Return [(0, -1), (0, 1)]
+        Case "C"
+            Return [(0, -1), (-1, 0)]
+        Case "3"
+            Return [(0, -1), (-1, 0), (1, 0)]
+        Default
+            Return [(0, -1), (-1, 0), (1, 0), (0, 1)]
+    End Select
+End Function
+
+// A room's way out of its cell, as a box from its middle to an edge, a bit short of it so rooms stay
+// apart: x across, z down the grid, y up.
+Function Arm(geometry: Geometry, across: Int, down: Int)
+    Local arm = Geometry.Cube()
+    arm.Scale(Vec3((across != 0 ? 1.9 : 0.6), 0.4, (down != 0 ? 1.9 : 0.6)))
+    arm.Translate(Vec3((across As Float) * 2.0, 0, (down As Float) * 2.0))
+    geometry.Add(arm)
+End Function
+
+// The room at a cell: a middle and an arm for each way out of its shape, turned as it is.
+Function Room(map: GameMap, index: Int, painted: Map<String, Material>): Mesh
+    Local x = index % SIDE
+    Local y = index / SIDE
+    Local made = Geometry.Cube()
+    made.Scale(Vec3(1.5, 0.5, 1.5))
+    For way In WaysOut(map.Shapes[index])
+        Local across, down = way
+        Arm(made, across, down)
+    End For
+    Local mesh = Mesh(made)
+    mesh.Turn(0, Deg(90.0 * (map.Turns[index] As Float)), 0)
+    mesh.SetName("{map.Kinds[index]} {x},{y}")
+    mesh.SetPosition(Vec3((x As Float) * CELL, 0, (y As Float) * CELL))
+    mesh.SetPickMode(PickMode.MESH)
+    mesh.SetMaterial(painted[map.Kinds[index] == "S" ? "start" : map.Kinds[index] == "E" ? "exit"
+                                                                                         : "room"])
+    Return mesh
+End Function
+
+// The materials rooms are drawn in.
+Function Painted(): Map<String, Material>
+    Local materials: Map<String, Material> = {}
+    For each In [("start", Color(0.1, 0.8, 0.2)), ("exit", Color(0.9, 0.2, 0.1)),
+                 ("room", Color(0.4, 0.45, 0.55))]
+        Local name, color = each
+        Local made = Material()
+        made.SetShading(Shading.UNLIT)
+        made.SetColor(color)
+        materials[name] = made
+    End For
+    Return materials
+End Function
+
+// Each of `map`'s rooms, as entities.
+Function Placed(map: GameMap): Mesh[]
+    Local painted = Painted()
+    Local rooms: Mesh[] = []
+    For i = 0 To SIDE * SIDE - 1
+        If map.Cells[i] Then rooms.Add(Room(map, i, painted))
+    End For
+    Return rooms
+End Function
+
+// How many of the rooms' boxes reach into each other's.
+Function Overlaps(rooms: Mesh[]): Int
+    Local count = 0
+    For i = 0 To rooms.Count - 1
+        Local a = rooms[i].Bounds()
+        For j = i + 1 To rooms.Count - 1
+            Local b = rooms[j].Bounds()
+            If a.Min.x < b.Max.x && b.Min.x < a.Max.x && a.Min.y < b.Max.y && b.Min.y < a.Max.y &&
+               a.Min.z < b.Max.z && b.Min.z < a.Max.z
+                count += 1
+            End If
+        End For
+    End For
+    Return count
+End Function
+
+// How many of the edges rooms share are through what's placed: from each, a pick down 3.5 toward the
+// other meets it, as a line down onto its arm; and how many arms go somewhere there's no room.
+Function Walkable(world: World, map: GameMap): (Int, Int)
+    Local edges = 0
+    Local strays = 0
+    For y = 0 To SIDE - 1
+        For x = 0 To SIDE - 1
+            If !map.At(x, y) Then Continue
+            For way In [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                Local across, down = way
+                Local atX = (x As Float) * CELL + (across As Float) * 3.5
+                Local atZ = (y As Float) * CELL + (down As Float) * 3.5
+                Local hit = world.Pick(Vec3(atX, 5, atZ), Vec3(atX, -5, atZ))
+                If map.At(x + across, y + down)
+                    If hit != Null Then edges += 1
+                ElseIf hit != Null
+                    strays += 1
+                End If
+            End For
+        End For
+    End For
+    Return (edges, strays)
+End Function
+
+Function Proved() Throws GraphicsError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local dice = ParkMiller()
+    dice.Seed(SeedOfWords("fb"))
+    Local map = GameMap(dice)
+    For row In map.Rows()
+        Print(row)
+    End For
+    Print("the seed's {SeedOfWords("fb")}, its digest {map.Digest()}")
+    // One stream: what comes next carries on from the map.
+    Print("then its state {dice.State()}, and next {dice.NextInt(1, 1000)}")
+    Print("the same seed the same {Of("fb").Digest() == map.Digest()}, others others {Of("fc").Digest() != map.Digest() && Of("bf").Digest() != map.Digest()}")
+    Print("rooms: dead ends {map.Count(1)}, 2-ways {map.Count(2)}, 3-ways {map.Count(3)}, 4-ways {map.Count(4)}")
+    Local open = 0
+    Local doors = 0
+    For each In map.Doors
+        If each >= 0 Then doors += 1
+        If each == 1 Then open += 1
+    End For
+    Print("doors {doors}, open {open}")
+    Local steps = map.Steps(map.Start)
+    Local cells = 0
+    Local linked = 0
+    Local exits = 0
+    For i = 0 To SIDE * SIDE - 1
+        If map.Cells[i] Then cells += 1
+        If map.Cells[i] && steps[i] >= 0 Then linked += 1
+    End For
+    Print("its {cells} cells, {linked} of them linked to the start, the exit {steps[map.Exit]} steps away")
+
+    // Placed.
+    Local rooms = Placed(map)
+    Local edges, strays = Walkable(world, map)
+    Print("placed {rooms.Count}, overlapping {Overlaps(rooms)}, {edges} ways across its {doors} doors, each from both sides, {strays} going nowhere")
+    Local exit = rooms[0]
+    For each In rooms
+        If each.Name().StartsWith("E ") Then exit = each
+    End For
+    Print("the exit's at {exit.Position()}, {exit.Name()}")
+    Local down = world.Pick(Vec3(exit.Position().x, 5, exit.Position().z),
+                            Vec3(exit.Position().x, -5, exit.Position().z))
+    Print("picked from above, the exit {down != Null && RefEquals(down.Entity, exit)}")
+    Local empty = -1
+    For i = 0 To SIDE * SIDE - 1
+        If !map.Cells[i] Then empty = i
+    End For
+    Local x = ((empty % SIDE) As Float) * CELL
+    Local z = ((empty / SIDE) As Float) * CELL
+    Print("an empty cell, nothing {world.Pick(Vec3(x, 5, z), Vec3(x, -5, z)) == Null}")
+    For each In rooms
+        each.Free()
+    End For
+
+    // Forty seeds, each one placed: its rooms all linked, its dead ends, its 4-way, its meshes apart and
+    // walkable through, both ways across each door, and how many of each kind for each shape.
+    Local good = 0
+    Local fourWays = 0
+    Local walkable = 0
+    Local apart = 0
+    Local digests: Int64[] = []
+    Local kinds: Map<String, Int> = {}
+    For i = 1 To 40
+        Local other = Of("seed {i}")
+        Local fromStart = other.Steps(other.Start)
+        Local all = True
+        For j = 0 To SIDE * SIDE - 1
+            If other.Cells[j] && fromStart[j] < 0 Then all = False
+            If other.Cells[j] Then kinds[other.Kinds[j]] = (kinds.Get(other.Kinds[j]) ?? 0) + 1
+        End For
+        If all && other.Count(1) >= 5 Then good += 1
+        If other.Count(4) >= 1 Then fourWays += 1
+        If !digests.Contains(other.Digest()) Then digests.Add(other.Digest())
+        Local made = Placed(other)
+        If Overlaps(made) == 0 Then apart += 1
+        Local across, stray = Walkable(world, other)
+        Local shared = 0
+        For each In other.Doors
+            If each >= 0 Then shared += 1
+        End For
+        If across == shared * 2 && stray == 0 Then walkable += 1
+        For each In made
+            each.Free()
+        End For
+    End For
+    Print("of 40 seeds: linked with 5 dead ends {good}, with a 4-way {fourWays}, apart {apart}, walkable {walkable}, different {digests.Count}")
+    Local counted: String[] = []
+    For letter In ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
+        counted.Add("{letter} {kinds.Get(letter) ?? 0}")
+    End For
+    Print("kinds {counted.Join(", ")}")
+End Function
+
+// The map of `words`, by a generator of its own.
+Function Of(words: String): GameMap
+    Local dice = ParkMiller()
+    dice.Seed(SeedOfWords(words))
+    Return GameMap(dice)
+End Function
+
+// A window of a map from above, a new seed each 3 seconds; or `frames` frames offscreen, one a frame
+// for the first 5.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("a procedural map: Escape ends it")
+    Frame.SetLimit(60)
+    Local font = Font.BuiltIn(18.0)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local camera = Camera()
+    camera.SetPosition(Vec3(68, 90, 110))
+    camera.PointAt(Vec3(68, 0, 68))
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    Local rooms: Mesh[] = []
+    Local seed = 0
+    Local waited: Float = 3.0
+    Local count = 0
+    Local drew = False
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        waited += frames > 0 ? (count <= 5 ? 3.0 : 0.0) : Frame.Delta() As Float
+        If waited >= 3.0
+            waited = 0.0
+            seed += 1
+            For each In rooms
+                each.Free()
+            End For
+            rooms = Placed(Of("seed {seed}"))
+        End If
+        RenderWorld()
+        If frames > 0 && count == 1 Then drew = Try Drew()
+        Local canvas = Screen.Canvas()
+        canvas.SetBlend(Blend2D.ALPHA)
+        canvas.SetColor(Color32(230, 232, 235, 255))
+        canvas.DrawText(font, "seed {seed}, {rooms.Count} rooms", 16, 16)
+        canvas.SetBlend(Blend2D.SOLID)
+    End While
+    If frames > 0
+        Print("its last seed {seed}, {rooms.Count} rooms of {Of("seed {seed}").Rows().Join("").Replace(".", "").Length}, in the world {world.EntityCount() - 1}")
+        Print("drew {drew}")
+    End If
+    Print("watched {count} frames")
+End Function
+
+Local arguments = Process.Arguments()
+If !arguments.Contains("--watch")
+    Try Proved()
+ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+Else
+    Try Watched(Asked(arguments), arguments)
+End If

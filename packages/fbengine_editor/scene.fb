@@ -275,6 +275,7 @@ Public Final Class RenameEdit Extends Edit
         Super.New("Rename")
     End New
 
+    // Either way, none if what's named has gone, as a node its model's file has lost has.
     Public Override Method Apply() Throws IOError
         If !entity.Freed() Then entity.SetName(to)
     End Method

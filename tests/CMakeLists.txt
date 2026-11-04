@@ -231,6 +231,7 @@ if(FBENGINE_FB_TESTS)
   # starts, each checked against what it prints.
   set(fbengine_input_cases
       "key-out-of-range|panic: Simulate[.]KeyDown[(]9999[)]: SDL has no such key"
+      "sphere-segments|panic: Sphere: a shape has 3 to 100 segments, not 1 at [^\n]*main[.]fb"
       "button-out-of-range|panic: Simulate[.]MouseDown[(]33[)]: a mouse's buttons are 1 to 32"
       "draws-composition|draws False\r?\ndraws True\r?\ndraws True\r?\npanic: who draws the composition is set before"
       "key-name-before-video|A A\r?\npanic: headless is set before"
@@ -272,8 +273,10 @@ if(FBENGINE_FB_TESTS)
   # A --watch, walked offscreen, with what a person would do at its frames, and how it ends.
   function(fbengine_add_watched test folder driving printed)
     add_test(NAME ${test}
-             COMMAND "${FBENGINE_FB}" --color never run "${folder}" -- --watch --frames 40 ${driving})
+             COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DFOLDER=${folder}"
+                     "-DARGUMENTS=--;--watch;--frames;40;${driving}" -P "${CMAKE_CURRENT_SOURCE_DIR}/proof_exit.cmake")
     set_tests_properties(${test} PROPERTIES
+                         FAIL_REGULAR_EXPRESSION "exit code [^0]"
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          PASS_REGULAR_EXPRESSION "${printed}"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
@@ -281,8 +284,10 @@ if(FBENGINE_FB_TESTS)
   function(fbengine_add_proof_of_numbers name)
     list(JOIN ARGN "\r?\n" printed)
     add_test(NAME proof.${name}
-             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/proof/${name}")
+             COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DFOLDER=${PROJECT_SOURCE_DIR}/examples/proof/${name}"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/proof_exit.cmake")
     set_tests_properties(proof.${name} PROPERTIES
+                         FAIL_REGULAR_EXPRESSION "exit code [^0]"
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;${fbengine_vulkan_environment}"
                          PASS_REGULAR_EXPRESSION "\n${printed}\r?\n$"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
@@ -291,8 +296,10 @@ if(FBENGINE_FB_TESTS)
     fbengine_add_proof_of_numbers(${name} ${ARGN})
     set(folder "${PROJECT_SOURCE_DIR}/examples/proof/${name}")
     add_test(NAME proof.${name}_watch
-             COMMAND "${FBENGINE_FB}" --color never run "${folder}" -- --watch --frames 40)
+             COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DFOLDER=${folder}"
+                     "-DARGUMENTS=--;--watch;--frames;40" -P "${CMAKE_CURRENT_SOURCE_DIR}/proof_exit.cmake")
     set_tests_properties(proof.${name}_watch PROPERTIES
+                         FAIL_REGULAR_EXPRESSION "exit code [^0]"
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          PASS_REGULAR_EXPRESSION "\nwatched 40 frames\r?\n$"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
@@ -899,7 +906,146 @@ if(FBENGINE_FB_TESTS)
                            "by a curve: [(]160, 160, 160, 255[)]"
                            "its ends stay: [(]0, 0, 0, 255[)]"
                            "and the other: [(]255, 255, 255, 255[)]")
-  # Their --watch's own keys, each pressed by the walk.
+  fbengine_add_drawn_proof(seeded_random
+                           "at first its state 4660"
+                           "its first numbers 0[.]35565948, 0[.]7478714, 0[.]31705475, 0[.]40476227, 0[.]5803604"
+                           "then its state 1446483090"
+                           "the 10000th from 1 399268537"
+                           "from 1 to 6 6, 3, 1, 3, 6, 5, 4, 3"
+                           "from -3 to 1 1, -1, -3, -2, 1, 0, -1, -1"
+                           "from 1 to -3, the same 1, -1, -3, -2, 1, 0, -1, -1"
+                           "floats from -5 to 5 4[.]3540, -0[.]8167, -3[.]6881, -1[.]3026"
+                           "the same seed the same True, another another True"
+                           "a seed of 0 is 1"
+                           "a seed with its top bit is 1"
+                           "a seed of its top bit alone is 1"
+                           "a seed of all ones is 2147483647"
+                           "then 7[.]6293945e-6, its state 0, and 7[.]6293945e-6"
+                           "the 26th from 42, from 1 to 1000000, 710702"
+                           "from 0 to the most 2008760320"
+                           "the seed of abc 297"
+                           "of 25 a's 553648062"
+                           "of an accented e 401"
+                           "std's Random from 42 isn't it True")
+  fbengine_add_drawn_proof(ini_settings
+                           "its own key 3"
+                           "its sections [[]version, window, keys, room ambience[]]"
+                           "a key with a space, in a section with one GFX.map.a[.]rmesh"
+                           "width 1280, height 720"
+                           "fullscreen True, vsync False"
+                           "title \"  a game  \""
+                           "scale 1[.]5"
+                           "a key given again 57"
+                           "missing 24, default, True"
+                           "not a number 7"
+                           "as written, 194 bytes, its first line version = 3, then [[]window[]]"
+                           "read again the same True"
+                           "width 1920, volume 0[.]75, title \"  a game  \""
+                           "written twice the same True"
+                           "not an INI file: line 2")
+  fbengine_add_drawn_proof(procedural_map
+                           "[.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.]"
+                           "[.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.]E[.]"
+                           "[.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.]d[.]"
+                           "[.][.][.][.][.][.][.]a[.][.]a[.][.][.][.][.]d[.]"
+                           "[.][.][.][.][.]hdideieddedg[.]"
+                           "[.][.][.][.][.]d[.][.][.][.][.][.][.][.][.][.][.][.]"
+                           "[.][.][.][.][.]gdddeddeedfh[.]"
+                           "[.][.]c[.][.][.][.][.][.][.][.][.][.][.][.][.]d[.]"
+                           "[.]bleeddeddfefdedg[.]"
+                           "[.][.]e[.][.][.][.][.][.][.][.][.][.][.][.][.][.][.]"
+                           "[.][.]gdeeddeededddg[.][.]"
+                           "[.][.][.][.][.][.][.][.][.][.][.][.][.][.][.]d[.][.]"
+                           "[.][.][.][.][.][.][.][.][.][.][.][.]a[.][.]e[.][.]"
+                           "[.]gdffdeedddeiddh[.][.]"
+                           "[.]e[.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.]"
+                           "[.]d[.][.][.][.][.][.][.][.][.][.][.][.][.][.][.][.]"
+                           "[.]heedddedh[.][.][.][.][.][.][.][.]"
+                           "[.][.][.][.][.][.][.][.][.]S[.][.][.][.][.][.][.][.]"
+                           "the seed's 162, its digest 3100503262"
+                           "then its state 890016407, and next 81"
+                           "the same seed the same True, others others True"
+                           "rooms: dead ends 7, 2-ways 82, 3-ways 3, 4-ways 1"
+                           "doors 92, open 26"
+                           "its 93 cells, 93 of them linked to the start, the exit 87 steps away"
+                           "placed 93, overlapping 0, 184 ways across its 92 doors, each from both sides, 0 going nowhere"
+                           "the exit's at [(]128, 0, 8[)], E 16,1"
+                           "picked from above, the exit True"
+                           "an empty cell, nothing True"
+                           "of 40 seeds: linked with 5 dead ends 40, with a 4-way 40, apart 40, walkable 40, different 29"
+                           "kinds a 84, b 52, c 30, d 1767, e 869, f 299, g 345, h 146, i 164, j 78, k 30, l 10")
+  fbengine_add_drawn_proof(room_files
+                           "its children [[]PIVOT , MESH drawn, MESH collision, PIVOT , PIVOT , PIVOT copies, LIGHT , LIGHT []]"
+                           "2 surfaces, the floor's 4 vertices, 2 triangles"
+                           "a corner [(]1024, 0, -1024[)], its UVs [(]1, 1[)] and [(]0[.]25, 0[.]5[)], stored [(]128, 64, 32, 255[)]"
+                           "its first triangle, 0 2 1 in the file, [(]0, 1, 2[)]"
+                           "in the world, across 4[.]000"
+                           "the floor's layers MULTIPLY_2 0, ADD 1, MULTIPLY 0"
+                           "its diffuse from its own folder True, the ambient everyone's True"
+                           "the pane's MULTIPLY 0, ALPHA, two sided True"
+                           "the file's [+]z side [(]2[345], 1[567], 1[123], 255[)]"
+                           "its -z side [(]4[678], 3[012], 2[234], 255[)]"
+                           "the pane over its right [(]1[678], 18[789], [678], 255[)]"
+                           "with ambient 15 [(][56][0-9], 3[678], 2[567], 255[)]"
+                           "textures loaded, 3, and the second's are the first's True"
+                           "from below, the floor's back [(][01], [01], 25[45], 255[)], the pane [(][01], 18[789], 18[678], 255[)]"
+                           "both flag 1 [(][01], [01], [01], 255[)]"
+                           "flag 2, a name with _LM, adds [(]4[678], 3[012], 2[234], 255[)]"
+                           "flag 3 alone, blank white [(]12[789], 6[345], 3[123], 255[)]"
+                           "flag 3, its diffuse [(][0-9]+, [45][0-9], 2[456], 255[)]"
+                           "none, its vertices [(]12[789], 6[345], 3[123], 255[)]"
+                           "a diffuse alone [(][0-9]+, [45][0-9], 2[456], 255[)]"
+                           "a lightmap alone [(]18[789], 10[345], 6[123], 255[)]"
+                           "a file that isn't there is a slot with nothing [(]18[789], 10[345], 6[123], 255[)]"
+                           "a texture's blend stays its first [(]20[012], [0-9]+, [45][0-9], 255[)]"
+                           "another folder's of the same name, the first's [(]20[012], 1?[0-9]+, 5[012], 255[)]"
+                           "placed, showing True, the template False"
+                           "what falls rests on its floor 40[.]000, 0[.]251, 0[.]000"
+                           "through the pane, to the floor 42[.]000, 0[.]251, 0[.]000"
+                           "against the hidden wall 39[.]251, 1[.]000, 0[.]000"
+                           "inside the hidden wall 38[.]251, 1[.]000, 0[.]000"
+                           "from under the floor 43[.]000, -0[.]251, 0[.]000"
+                           "picked from above, past the pane, collision copy at y 0[.]000"
+                           "turned, its wall's met at z 2[.]000 by collision"
+                           "its waypoint 78[.]000, 0[.]000, -2[.]000, its screen 80[.]000, 1[.]000, -1[.]000, its 8th emitter 80[.]000, 0[.]000, -8[.]000"
+                           "its trigger by the door, 76[.]000, 0[.]000, -4[.]000 to 78[.]000, 2[.]000, -2[.]000"
+                           "its first light 79[.]000, 2[.]000, -1[.]000, LIGHT"
+                           "triggers 1: by the door, 2[.]000, 0[.]000, -4[.]000 to 4[.]000, 2[.]000, -2[.]000"
+                           "waypoints 2[.]000, 0[.]000, -2[.]000"
+                           "screens 1: note[.]png at 1[.]000, 1[.]000, -?0[.]000"
+                           "lights 2, each POINT POINT"
+                           "range 2[.]000, at 1[.]000, 2[.]000, -1[.]000, intensity 0[.]400, and 1[.]000"
+                           "its color [(]255, 128, 0, 255[)]"
+                           "emitters 8 of 12: the 8th 8, range 6[.]5, at 8[.]000, 0[.]000, -?0[.]000"
+                           "props 1: chair[.]mesh, at [(]16, 32, -64[)], turned [(]0, 90, 0[)], size [(]2, 2, 2[)]"
+                           "with no triggers, 0, and the rest the same 1 2"
+                           "a wrong header: a room file: it starts RoomMesh, not Mesh"
+                           "cut short anywhere, it throws True of 1721 bytes"
+                           "an entity it doesn't know: a room file: its entities have no dragon"
+                           "a string of -1: a room file: a string can't be -1 long"
+                           "a triangle past its vertices: a room file: a triangle's 9, 0, 0 aren't all of its 0 vertices")
+  # A proof that says all it should and then ends badly fails.
+  add_test(NAME proof.an_exit_code_fails
+           COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DFOLDER=${CMAKE_CURRENT_SOURCE_DIR}/proof_exit_fails"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/proof_exit.cmake")
+  set_tests_properties(proof.an_exit_code_fails PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nall it should\r?\n$"
+                       FAIL_REGULAR_EXPRESSION "exit code [^0]" WILL_FAIL True TIMEOUT 120)
+  # With no GPU, a room file's proof is skipped, not failed.
+  add_test(NAME proof.room_files_no_gpu
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/proof/room_files")
+  set_tests_properties(proof.room_files_no_gpu PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_NO_GPU=1"
+                       PASS_REGULAR_EXPRESSION "\nno GPU here\r?\n$" TIMEOUT 120)
+  # Their --watch's own keys and what they end with, each done by the walk.
+  set_tests_properties(proof.ini_settings_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nthe volume 3\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.seeded_random_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nits bars 217, 284, 8000\r?\nthe foot of its first [(]76, 141, 255, 255[)]\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.procedural_map_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nits last seed 5, 103 rooms of 103, in the world 103\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
+  set_tests_properties(proof.room_files_watch PROPERTIES
+                       PASS_REGULAR_EXPRESSION "\nthe middle room's forward -1[.]000, -?0[.]000, 0[.]029\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
   set_tests_properties(proof.render_settings_watch PROPERTIES
                        PASS_REGULAR_EXPRESSION "\nby its keys: bias 0, samples 1, wireframe True\r?\ndrew True\r?\nwatched 40 frames\r?\n$")
   set_tests_properties(proof.gamma_watch PROPERTIES
