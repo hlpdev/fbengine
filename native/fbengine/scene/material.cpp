@@ -117,7 +117,11 @@ void release_materials(const std::vector<surface_t>& surfaces) {
 }
 
 std::int32_t drawn_blend(std::uint32_t material, float alpha) {
-    const material_t drawn = material != none ? scene().materials[material] : material_t();
+    // A new material's is AUTO, solid, and has no layers.
+    if (material == none) {
+        return alpha < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
+    }
+    const material_t& drawn = scene().materials[material];
     switch (drawn.blend) {
     case FBE_BLEND_AUTO:
         if (drawn.color[3] * alpha < 1.0F) {

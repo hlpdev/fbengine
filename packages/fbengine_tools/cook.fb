@@ -133,7 +133,8 @@ Public Final Class Cooker
     /// of what's drawn but particles, morphed and skinned, and of its shadow: `vertex.uv0`,
     /// `vertex.uv1`, `vertex.color`, and `vertex.parameter(index)`. The view culls by a Geometry's
     /// bounds, not where this moves it, so one moved further wants a SetCullBox; a Terrain has none,
-    /// so moving one stays near its heights. A shadow's cut out by the material's own alpha, not what
+    /// so moving one stays near its heights, as moving an Instances stays near its instances, each
+    /// moved in its own space, before its matrix. A shadow's cut out by the material's own alpha, not what
     /// `shade` returns.
     ///
     /// It reads only those: a texture of its own, or a global that isn't `static`, which the scene's

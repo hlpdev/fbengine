@@ -3,7 +3,8 @@
 
 // Drawing the scene: what each camera draws, and what lights it, read from the scene into lists
 // once a frame, so drawing never reads the live scene, and a render thread could take drawing
-// over without the API changing.
+// over without the API changing. Meshes, sprites, emitters, Instances, ground planes, and terrains
+// it might see go in them, past what's wholly behind its occluders, in material order 0.
 
 #include "../core/fbe_core.h"
 
@@ -43,12 +44,12 @@ extern "C" {
 // determinant below 0, which turns its triangles' winding around, 13 to 16 how many of its
 // material's layers have textures, and from 17 those layers', four bits each from the lowest, the
 // FBE_LAYER_ blend and over it the UV set, 49 whether it's wireframe, 50 whether it's an emitter's
-// particles, and from 51 the number of its material's shader of its own's code, 0 for the scene's
-// own; the default material is a new one's, but for a sprite or an emitter, which is full-bright
-// with none. A target's format and samples aren't in it, since a camera's draws all go into one
-// target, and they're in the pipeline a pass makes of it. An FBE_SHADING_VERTEX draw has its own
-// lights, `light_count` of fbe_render_draw_lights' indices from `light_first`; any other, 0 of
-// them, as it's lit by its clusters.
+// particles, 51 whether it's an Instances', and from 52 the number of its material's shader of its
+// own's code, 0 for the scene's own; the default material is a new one's, but for a sprite or an
+// emitter, which is full-bright with none. A target's format and samples aren't in it, since a
+// camera's draws all go into one target, and they're in the pipeline a pass makes of it. An
+// FBE_SHADING_VERTEX draw has its own lights, `light_count` of fbe_render_draw_lights' indices from
+// `light_first`; any other, 0 of them, as it's lit by its clusters.
 typedef struct fbe_draw_t {
     uint64_t entity;
     int32_t kind;
@@ -94,7 +95,7 @@ typedef struct fbe_cluster_t {
 
 // What a camera draws in a target of this size, `tween` of the way from its World's last capture
 // to now, in the order it draws them: by their materials' orders, lower first. In order 0, the
-// scene's, what's opaque first, by pipeline, by material, and nearest first, then what blends,
+// scene's, what's opaque first, by pipeline, by geometry, and nearest first, then what blends,
 // furthest first; in the others, all furthest first, what's opaque first at one depth. Ties as the
 // entities were made, a mesh's surfaces in order. Only the showing meshes, sprites, ground planes,
 // and terrains of its World it might see, with some alpha left after their fade; none for a hidden

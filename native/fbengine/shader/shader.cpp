@@ -39,8 +39,8 @@ constexpr std::string_view stamp = FBE_SHADER_STAMP;
 /// The most of a file's version a message says, as it's whatever the file has.
 constexpr std::size_t most_said = 32;
 
-/// How many codes a pipeline key's 13 bits can number.
-constexpr std::size_t most_codes = 8191;
+/// How many codes a pipeline key's 12 bits can number.
+constexpr std::size_t most_codes = 4095;
 
 constexpr std::uint32_t spirv_magic = 0x07230203;
 constexpr std::uint32_t op_entry_point = 15;
@@ -55,13 +55,15 @@ struct entry_t {
     std::string_view name;
     std::uint32_t model;
 };
-constexpr std::array<entry_t, 5> entries{
+constexpr std::array<entry_t, 7> entries{
     {
         { .name = "vertexMain", .model = model_vertex },
         { .name = "fragmentMain", .model = model_fragment },
         { .name = "particleVertex", .model = model_vertex },
         { .name = "shadowVertex", .model = model_vertex },
         { .name = "shadowFragment", .model = model_fragment },
+        { .name = "instanceVertex", .model = model_vertex },
+        { .name = "shadowInstanceVertex", .model = model_vertex },
     },
 };
 

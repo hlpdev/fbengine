@@ -13,7 +13,8 @@
 // which takes each vertex of what's drawn but particles, morphed and skinned, in its own space, and
 // of its shadow, in meters and radians, never °. The view culls by the Geometry's bounds, not
 // where this moves it, so a Geometry moved further than they reach wants a SetCullBox; a Terrain has
-// none, and is culled where its heights have it, so moving one stays near them.
+// none, and is culled where its heights have it, so moving one stays near them; and an Instances is
+// culled by where each of its instances is, moved in its own space before its matrix, so the same.
 //
 // Whatever `shade` returns goes on as the scene's own color does: its alpha to the material's cutoff,
 // then fog and blend. Colors are in linear light, whatever the material's shading. A material's blend

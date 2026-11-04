@@ -181,6 +181,8 @@ std::vector<std::uint32_t> good_spirv() {
         { 0, "particleVertex" },
         { 0, "shadowVertex" },
         { 4, "shadowFragment" },
+        { 0, "instanceVertex" },
+        { 0, "shadowInstanceVertex" },
     });
 }
 
@@ -240,6 +242,19 @@ TEST_CASE("a shader's file is one cooked for this engine, with the scene's entry
                                                      { 0, "particleVertex" },
                                                      { 0, "shadowVertex" } }))) == 0);
     CHECK(error_says("hasn't the scene's shadowFragment"));
+    CHECK(shader_of(cooked(fbe_version(), spirv_of({ { 0, "vertexMain" },
+                                                     { 4, "fragmentMain" },
+                                                     { 0, "particleVertex" },
+                                                     { 0, "shadowVertex" },
+                                                     { 4, "shadowFragment" } }))) == 0);
+    CHECK(error_says("hasn't the scene's instanceVertex"));
+    CHECK(shader_of(cooked(fbe_version(), spirv_of({ { 0, "vertexMain" },
+                                                     { 4, "fragmentMain" },
+                                                     { 0, "particleVertex" },
+                                                     { 0, "shadowVertex" },
+                                                     { 4, "shadowFragment" },
+                                                     { 0, "instanceVertex" } }))) == 0);
+    CHECK(error_says("hasn't the scene's shadowInstanceVertex"));
     // Named right, for the wrong stage.
     CHECK(shader_of(cooked(fbe_version(), spirv_of({ { 4, "vertexMain" },
                                                      { 0, "fragmentMain" },

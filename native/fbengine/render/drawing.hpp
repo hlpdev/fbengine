@@ -38,6 +38,7 @@ struct draw_data_t {
     VkDeviceAddress targets;
     VkDeviceAddress drawn_targets;
     VkDeviceAddress particles;
+    VkDeviceAddress instances;
     std::uint32_t material;
     std::uint32_t light_first;
     std::uint32_t light_count;
@@ -45,7 +46,14 @@ struct draw_data_t {
     std::uint32_t drawn_target_count;
     std::uint32_t target_vertices;
 };
-static_assert(sizeof(draw_data_t) == 200, "the scene shader reads draws 200 bytes apart");
+static_assert(sizeof(draw_data_t) == 208, "the scene shader reads draws 208 bytes apart");
+
+/// An instance as the scene shader reads it: its matrix's three rows, and its color.
+struct instance_data_t {
+    std::array<std::array<float, 4>, 3> rows;
+    std::array<float, 4> color;
+};
+static_assert(sizeof(instance_data_t) == 64, "the scene shader reads instances 64 bytes apart");
 static_assert(sizeof(anim::drawn_target_t) == 8, "the scene shader reads targets 8 bytes apart");
 
 /// An emitter's particles as the scene shader reads them: their address, gravity, drag, their
@@ -174,6 +182,9 @@ struct batch_t {
     std::uint32_t vertex_count = 0;
     /// For the sky: its address, which its shader takes in place of the camera's.
     VkDeviceAddress sky = 0;
+    /// Of an Instances entity: which of its instances, and `first_draw` is its one draw.
+    std::uint32_t instance_first = 0;
+    std::uint32_t instance_count = 0;
 };
 
 /// What a pass draws from one view of a camera: the camera's address, whether the view's mirrored

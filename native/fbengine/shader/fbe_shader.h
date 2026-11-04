@@ -5,7 +5,7 @@
 // scene's own shader, fbengine_tools' Cooker.CookShader, so nothing compiles at run time, and each
 // is a family of pipelines as the scene's is. What's loaded is what that wrote: the engine's
 // version it was compiled for, a stamp of the sources it was compiled against, which are the only
-// ones its draws' layout is sure to be right for, and its SPIR-V, with the scene's five entry
+// ones its draws' layout is sure to be right for, and its SPIR-V, with the scene's seven entry
 // points and nothing bound that the scene's pipelines haven't. A shader's code the GPU runs, so a
 // pak's shaders are as trusted as the game.
 
@@ -22,7 +22,7 @@ FBE_API const char* fbe_shader_stamp(void);
 // what the scene's pipelines don't bind, as fbe_error says. Nothing's kept.
 FBE_API bool fbe_shader_check(const uint8_t* bytes, int64_t size);
 // A new shader of a cooked file's `size` bytes; 0 for what fbe_shader_check refuses, or more
-// different shaders than a game can have, 8191. `name` says which it is, where an error does. The
+// different shaders than a game can have, 4095. `name` says which it is, where an error does. The
 // same bytes again are the same code, whatever their name, so no more of what's kept and no
 // pipelines to make.
 FBE_API uint64_t fbe_shader_create(const uint8_t* bytes, int64_t size, const char* name);
