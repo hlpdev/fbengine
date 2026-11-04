@@ -3921,6 +3921,108 @@ TEST_CASE("culling sums targets, adds surfaces, goes every way, and takes skinne
     fbe_material_release(red);
 }
 
+TEST_CASE("what casts goes as far as its morph, as what's drawn does", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    const auto shadowed = [&](float tween = 1.0F) { return middle(scene.drawn(tween))[0] == 0; };
+    // Every one of these ends at 5, 0, -5, on a light's way to the wall's middle, and starts far
+    // from it.
+    const auto caster = [&](float x, float y, float z) {
+        const std::uint64_t quad = wall(scene.world, -5.0F, 3.0F, paint);
+        require(fbe_entity_set_position(quad, x, y, z, FBE_SPACE_WORLD));
+        return quad;
+    };
+    const std::array<float, 1> one{ 1.0F };
+    const std::array<float, 1> back{ -1.0F };
+    SECTION("a sun's") {
+        sun_from_right(scene.world);
+        CHECK_FALSE(shadowed());
+        // Two targets, each its own, bring it down from 60.
+        const std::uint64_t summed = caster(5.0F, 60.0F, -5.0F);
+        add_lift(fbe_mesh_geometry(summed), -20.0F);
+        add_lift(fbe_mesh_geometry(summed), -40.0F);
+        CHECK_FALSE(shadowed());
+        const std::array<float, 2> both{ 1.0F, 1.0F };
+        require(fbe_morph_set_weights(summed, both.data(), 2));
+        CHECK(shadowed());
+        require(fbe_entity_set_hidden(summed, true));
+        // In X, by a weight below 0.
+        const std::uint64_t side = caster(55.0F, 0.0F, -5.0F);
+        const std::array<float, 12> over{ 50, 0, 0, 50, 0, 0, 50, 0, 0, 50, 0, 0 };
+        require(fbe_morph_add_target(fbe_mesh_geometry(side), 0, over.data(), nullptr, 4) == 0);
+        CHECK_FALSE(shadowed());
+        require(fbe_morph_set_weights(side, back.data(), 1));
+        CHECK(shadowed());
+        require(fbe_entity_set_hidden(side, true));
+        // In Z, the same, from behind the wall.
+        const std::uint64_t far_off = caster(5.0F, 0.0F, -105.0F);
+        const std::array<float, 12> away{ 0, 0, -100, 0, 0, -100, 0, 0, -100, 0, 0, -100 };
+        require(fbe_morph_add_target(fbe_mesh_geometry(far_off), 0, away.data(), nullptr, 4) == 0);
+        CHECK_FALSE(shadowed());
+        require(fbe_morph_set_weights(far_off, back.data(), 1));
+        CHECK(shadowed());
+        require(fbe_entity_set_hidden(far_off, true));
+        // Its second surface's target, its first having none.
+        const std::uint64_t two = caster(5.0F, 50.0F, -5.0F);
+        const std::uint64_t two_geometry = fbe_mesh_geometry(two);
+        const std::int32_t second = fbe_geometry_add_surface(two_geometry);
+        std::array<fbe_vertex_t, 4> same{};
+        require(fbe_surface_vertices(two_geometry, 0, 0, same.data(), 4));
+        fbe_surface_add_vertices(two_geometry, second, same.data(), 4);
+        const std::array<std::uint32_t, 6> triangles{ 0, 1, 2, 0, 2, 3 };
+        fbe_surface_add_triangles(two_geometry, second, triangles.data(), 6);
+        const std::array<float, 12> down{ 0, -50, 0, 0, -50, 0, 0, -50, 0, 0, -50, 0 };
+        require(fbe_morph_add_target(two_geometry, second, down.data(), nullptr, 4) == 0);
+        CHECK_FALSE(shadowed());
+        require(fbe_morph_set_weights(two, one.data(), 1));
+        CHECK(shadowed());
+        require(fbe_entity_set_hidden(two, true));
+        // The 8 weighted most, not a 9th that'd take it far above, though culling allows for it.
+        const std::uint64_t many = caster(5.0F, 40.0F, -5.0F);
+        for (int i = 0; i < 8; ++i) {
+            add_lift(fbe_mesh_geometry(many), -5.0F);
+        }
+        add_lift(fbe_mesh_geometry(many), 1000.0F);
+        const std::array<float, 9> weights{ 1, 1, 1, 1, 1, 1, 1, 1, 0.5F };
+        require(fbe_morph_set_weights(many, weights.data(), 9));
+        CHECK(shadowed());
+        require(fbe_entity_set_hidden(many, true));
+        // Between steps, half of a capture's way: lifted the whole way 60 down, it's 30 down here,
+        // and at the step's end past its place.
+        const std::uint64_t tweened = caster(5.0F, 30.0F, -5.0F);
+        add_lift(fbe_mesh_geometry(tweened), -30.0F);
+        require(fbe_world_capture(scene.world));
+        const std::array<float, 1> two_of{ 2.0F };
+        require(fbe_morph_set_weights(tweened, two_of.data(), 1));
+        CHECK(shadowed(0.5F));
+        CHECK_FALSE(shadowed());
+        require(fbe_entity_set_hidden(tweened, true));
+        // Skinned and morphed: its joints far above, its morph bringing it down.
+        const skinned_wall_t skinned = skinned_wall(scene.world, paint, -5.0F, 3.0F);
+        require(fbe_entity_set_position(skinned.still, 5.0F, 50.0F, -5.0F, FBE_SPACE_WORLD));
+        require(fbe_entity_set_position(skinned.moving, 5.0F, 50.0F, -5.0F, FBE_SPACE_WORLD));
+        all_on(skinned.geometry, 0, 1.0F);
+        add_lift(skinned.geometry, -50.0F);
+        CHECK_FALSE(shadowed());
+        require(fbe_morph_set_weights(skinned.mesh, one.data(), 1));
+        CHECK(shadowed());
+        fbe_skin_release(skinned.skin);
+    }
+    SECTION("a lamp's") {
+        const std::uint64_t lamp = light(scene.world, FBE_LIGHT_POINT, 10.0F, 0.0F, 0.0F, 25.0F);
+        require(fbe_light_set_intensity(lamp, 30.0F));
+        require(fbe_light_set_shadows(lamp, true));
+        const std::uint64_t quad = caster(5.0F, 60.0F, -5.0F);
+        add_lift(fbe_mesh_geometry(quad), -60.0F);
+        CHECK_FALSE(shadowed());
+        require(fbe_morph_set_weights(quad, one.data(), 1));
+        CHECK(shadowed());
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(paint);
+}
+
 namespace {
 
 /// A sky of a texture of `width` by `height` of bytes from a function of the column and row.
