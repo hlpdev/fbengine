@@ -44,7 +44,7 @@ REQUIRED_TESTS = ["examples.hello", "examples.arcade", "examples.arcade.idle", "
 failures = []
 # One lock for each verify that may run at a time on this machine.
 # A build's jobs: each compile holds about a gigabyte, and several verifies build at once.
-BUILD_JOBS = 8
+BUILD_JOBS = 6
 TURNS = ["turn.lock", "turn2.lock", "turn3.lock", "turn4.lock"]
 
 

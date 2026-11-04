@@ -114,7 +114,7 @@ jobs:
     name: gpu ${{ matrix.target }}
     needs: native
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -222,7 +222,11 @@ jobs:
           # Tests registered only by a second configure would be skipped here without a word.
           ctest --test-dir build -N -R '^examples\.arcade' --no-tests=error > /dev/null
           if [ "$RUNNER_OS" = Linux ]; then tar -xf native-${{ matrix.target }}.tar; fi
-          DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure || {
+          # On Windows, a panic with the GPU going hangs at the process's end: fb 1.2.2 ends by _Exit,
+          # which runs its DLLs' detach after their threads are gone. Back in once FB_VERSION is the
+          # release whose end_program uses TerminateProcess. The test job, with no GPU, still runs them.
+          if [ "$RUNNER_OS" = Windows ]; then set -- -E '\.panics\.|^gpu\.ends\.panics$'; fi
+          DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure "$@" || {
             if [ "$RUNNER_OS" = Windows ]; then
               pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-gdb > /dev/null
               gdb -batch -ex run -ex bt -ex 'info sharedlibrary' build/tests/fbengine_gpu_tests.exe

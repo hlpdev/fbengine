@@ -1,0 +1,33 @@
+[0:00] you set off for the yard
+[0:06] you reach the yard
+[0:06] the gear lies here
+[0:11] Pip catches up
+[0:11] you pick up the gear
+[0:11] you hand Pip the gear
+[0:11] you set off for the causeway
+[0:21] you reach the causeway
+[0:21] the sluice paddle lies here
+[0:26] Pip catches up
+[0:26] you pick up the sluice paddle
+[0:26] you set off for the yard
+[0:37] you reach the yard
+[0:42] Pip catches up
+[0:42] you set off for the mill
+[0:48] you reach the mill
+[0:53] Pip catches up
+[0:53] you fit the sluice paddle
+[0:53] you take the gear from Pip
+[0:53] you fit the gear
+[0:53] the sluice can be opened now
+[0:53] you open the sluice, and wait for the water
+[0:53] the sluice is open
+[1:10] the water's rising: the causeway floods in a minute
+[2:00] you set off for the yard
+[2:06] you reach the yard
+[2:10] the causeway floods
+[2:10] the sea takes the drive belt
+[2:10] there's nothing left to do but wait for the tide
+[2:10] the causeway's under water
+[2:13] you set off for the mill
+[4:00] the tide comes in
+[4:00] the wheel turns slowly, and the lamp burns, dimmer

@@ -1,6 +1,7 @@
 // The window and the displays, offscreen, as every test's are.
 
 Import std.core
+Import std.os
 Import std.test
 Import std.text
 Import fbengine
@@ -119,8 +120,15 @@ Function AWindowsSizedAndMoved() Throws GraphicsError
     Expect(Window.Width() == 800 && Window.Height() == 300,
            "it's {Window.Width()} by {Window.Height()}")
     Flip(False)
-    Expect(Screen.Width() == 800 && Screen.Height() == 300,
-           "its screen's {Screen.Width()} by {Screen.Height()}")
+    // The screen's the texture the GPU draws, so with no GPU, there's a window, and no screen.
+    If Screen.Texture() == Null
+        Expect(Env.Get("FBENGINE_NO_GPU") == "1", "there's a GPU here, and no screen")
+        Expect(Screen.Width() == 0 && Screen.Height() == 0,
+               "its screen's {Screen.Width()} by {Screen.Height()}")
+    Else
+        Expect(Screen.Width() == 800 && Screen.Height() == 300,
+               "its screen's {Screen.Width()} by {Screen.Height()}")
+    End If
     // Offscreen, nothing's moved, and that's no failure.
     Local x = Window.X()
     Local y = Window.Y()

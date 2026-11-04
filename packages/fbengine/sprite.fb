@@ -4,6 +4,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./camera"
 Import "./entity"
@@ -87,6 +88,7 @@ Public Final Class Sprite Extends Entity
 
     /// Sets the quad's half-width and half-height, 1 and 1 at first, apart from the entity's
     /// scale, which BILLBOARD and UPRIGHT leave out. Below 0 panics.
+    @Limits(0)
     @MainThread @PanicsAtCaller
     Public Method SetSpriteScale(size: Vec2)
         If !fbe_sprite_set_size(Live("SetSpriteScale"), size.x, size.y)
@@ -129,6 +131,7 @@ Public Final Class Sprite Extends Entity
 
     /// Turns the quad in its own plane by `radians`, counterclockwise as seen, on top of its view
     /// mode's turn: 0 at first.
+    @ShownInDegrees
     @MainThread @PanicsAtCaller
     Public Method SetSpriteRotation(radians: Float)
         If !fbe_sprite_set_roll(Live("SetSpriteRotation"), radians) Then Failed("SetSpriteRotation")

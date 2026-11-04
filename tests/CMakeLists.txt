@@ -130,6 +130,24 @@ if(FBENGINE_FB_TESTS)
     endif()
   endforeach()
 
+  # A program that ends with the GPU going, each way it can, and has to end: Windows' ending a process
+  # with it going seems to have waited for good on CI. An end of its own stops the GPU first, and says
+  # so; a panic and Process.Exit end by the runtime's _Exit, past what the engine can hook.
+  if(WIN32)
+    foreach(case IN ITEMS ends panics exits)
+      add_test(NAME gpu.ends.${case}
+               COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/gpu/ends"
+                       -- ${case})
+      set_tests_properties(gpu.ends.${case} PROPERTIES
+                           LABELS "gpu" TIMEOUT 120
+                           ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_SAY_THE_END=1;${fbengine_vulkan_environment}")
+    endforeach()
+    set_tests_properties(gpu.ends.ends PROPERTIES
+                         PASS_REGULAR_EXPRESSION "stopped the GPU as the process ended")
+    set_tests_properties(gpu.ends.panics PROPERTIES
+                         PASS_REGULAR_EXPRESSION "panic: the program panics")
+  endif()
+
   # E3's arcade example, playing itself headless, the same every time, its pilot's run and a run
   # with no one flying, saving the frames that examples.arcade.golden, a hidden test of
   # fbengine_gpu_tests run after them, compares with their golden images, all on the tests' Vulkan.
@@ -409,6 +427,84 @@ if(FBENGINE_FB_TESTS)
                      "cooked bc7: sampled or said so True"
                      "cooked astc: sampled or said so True"
                      "a cooked DDS is what it was True")
+  # Slack Water, by key presses, offscreen, to each of its endings.
+  foreach(name IN ITEMS bright dim dark)
+    add_test(NAME examples.slack_water.walk_${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                     -- --walk ${name}
+                     "${PROJECT_SOURCE_DIR}/examples/slack_water/tests/walk_${name}.txt")
+    set_tests_properties(examples.slack_water.walk_${name} PROPERTIES RESOURCE_LOCK slack_water
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         TIMEOUT 300)
+  endforeach()
+  # And on the island, walked in 3D: to each ending, then the road as it floods.
+  foreach(name IN ITEMS bright dim dark cut swept wing far_end)
+    add_test(NAME examples.slack_water.walk3d_${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                     -- --walk3d ${name}
+                     "${PROJECT_SOURCE_DIR}/examples/slack_water/tests/walk3d_${name}.txt")
+    set_tests_properties(examples.slack_water.walk3d_${name} PROPERTIES RESOURCE_LOCK slack_water
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  endforeach()
+  add_test(NAME examples.slack_water.hear
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --hear)
+  set_tests_properties(examples.slack_water.hear PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  add_test(NAME examples.slack_water.feel
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --feel)
+  set_tests_properties(examples.slack_water.feel PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  # Its flow, and its tools' sounds and materials, by their numbers, with nothing drawn.
+  add_test(NAME examples.slack_water.rules
+           COMMAND "${FBENGINE_FB}" --color never test "${PROJECT_SOURCE_DIR}/examples/slack_water")
+  set_tests_properties(examples.slack_water.rules PROPERTIES RESOURCE_LOCK slack_water TIMEOUT 300)
+  add_test(NAME examples.slack_water.tools_rules
+           COMMAND "${FBENGINE_FB}" --color never test
+                   "${PROJECT_SOURCE_DIR}/examples/slack_water/tools")
+  set_tests_properties(examples.slack_water.tools_rules PROPERTIES RESOURCE_LOCK slack_water
+                       TIMEOUT 300)
+  # And to its best ending, saving what it looks like for a person to see, in its frames' folder,
+  # which it fails by if what's drawn isn't what the tide says.
+  add_test(NAME examples.slack_water.frames
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --frames "${PROJECT_BINARY_DIR}/example-frames/slack_water")
+  set_tests_properties(examples.slack_water.frames PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  # Its assets: what its tools make, here, and what's kept in the repository, each loaded as the game
+  # loads them, and the two the same.
+  add_test(NAME examples.slack_water.tools
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water/tools"
+                   -- "${PROJECT_BINARY_DIR}/example-frames/slack_water_made")
+  set_tests_properties(examples.slack_water.tools PROPERTIES
+                       FIXTURES_SETUP slack_water_made TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "15 textures\r?\n13 sounds\r?\n8 joints in Pip\r?\n$")
+  foreach(checked IN ITEMS "made=${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
+                           "kept=${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
+    string(FIND "${checked}" "=" split)
+    string(SUBSTRING "${checked}" 0 ${split} name)
+    math(EXPR split "${split} + 1")
+    string(SUBSTRING "${checked}" ${split} -1 folder)
+    add_test(NAME examples.slack_water.${name}
+             COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                     -- --check "${folder}")
+    set_tests_properties(examples.slack_water.${name} PROPERTIES RESOURCE_LOCK slack_water
+                         FIXTURES_REQUIRED slack_water_made
+                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  endforeach()
+  add_test(NAME examples.slack_water.assets_match
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --match "${PROJECT_BINARY_DIR}/example-frames/slack_water_made"
+                   "${PROJECT_SOURCE_DIR}/examples/slack_water/assets")
+  set_tests_properties(examples.slack_water.assets_match PROPERTIES RESOURCE_LOCK slack_water
+                       FIXTURES_REQUIRED slack_water_made
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen" TIMEOUT 300)
   foreach(name IN ITEMS sprites_over_a_scene pixels_of_images_and_textures
           textures_by_their_settings)
     add_test(NAME proof.${name}_no_gpu
@@ -1290,6 +1386,30 @@ if(FBENGINE_FB_TESTS)
 endif()
 # What fbengine_editor panics for, each by a run of its panics/main.fb, which says it.
 if(FBENGINE_FB_TESTS)
+  # Its panes against their golden images, its --save saving them first; and its --watch.
+  add_test(NAME editor.frames
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/packages/fbengine_editor"
+                   -- --save "${PROJECT_BINARY_DIR}/example-frames/editor")
+  set_tests_properties(editor.frames PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       FIXTURES_SETUP editor_frames TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "\nsaved\r?\n$"
+                       SKIP_REGULAR_EXPRESSION "no GPU here")
+  add_test(NAME editor.golden
+           COMMAND fbengine_gpu_tests "the editor's frames match their golden images")
+  set_tests_properties(editor.golden PROPERTIES
+                       LABELS "gpu;golden" FIXTURES_REQUIRED editor_frames
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
+  if(fbengine_test_dll_paths)
+    set_property(TEST editor.golden PROPERTY ENVIRONMENT_MODIFICATION
+                 "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+  endif()
+  set(fbengine_editor_folder "${PROJECT_SOURCE_DIR}/packages/fbengine_editor")
+  fbengine_add_watched(editor.watch "${fbengine_editor_folder}" "" "\nwatched 40 frames\r?\n$")
+  fbengine_add_watched(editor.watch_escape "${fbengine_editor_folder}" "--press-at;1"
+                       "\nwatched 2 frames\r?\n$")
+  fbengine_add_watched(editor.watch_close "${fbengine_editor_folder}" "--close-at;1"
+                       "\nwatched 2 frames\r?\n$")
   foreach(case IN ITEMS "mark-in-an-edit;History.MarkSaved: an edit can't make another"
                         "end-group-in-an-edit;History.EndGroup: an edit can't make another"
                         "move-nan;Dock.Move: a share is a number"
@@ -1483,7 +1603,8 @@ endif()
 if(FBENGINE_FB_TESTS)
   # The cooker's threads, which can't hold up a whole run if they ever hang again.
   set_tests_properties(fbengine_tools.package PROPERTIES TIMEOUT 600)
-  set_tests_properties(fbengine.package PROPERTIES TIMEOUT 1800)
+  # 40 seconds here; one that hangs shouldn't take the job's hour with it.
+  set_tests_properties(fbengine.package PROPERTIES TIMEOUT 600)
   # A copy, whose path dependencies are the packages', and whose file a run can change.
   set(fbengine_game "${CMAKE_CURRENT_BINARY_DIR}/cooked_game")
   set(fbengine_game_source "${PROJECT_SOURCE_DIR}/examples/cooked_game")
@@ -1723,6 +1844,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                       "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
   set_property(TARGET fbengine_anim_oom_tests APPEND PROPERTY LINK_DEPENDS
                "${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.map")
+elseif(APPLE)
+  target_link_options(fbengine_anim_oom_tests PRIVATE
+                      "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.exports")
+  set_property(TARGET fbengine_anim_oom_tests APPEND PROPERTY LINK_DEPENDS
+               "${CMAKE_CURRENT_SOURCE_DIR}/anim/own_new.exports")
 endif()
 fbengine_set_warnings(fbengine_anim_oom_tests)
 # A deadlock is a failure too, as an allocation failing inside a layer's lock was.
@@ -1779,3 +1905,15 @@ if(FBENGINE_FB_TESTS)
                          PASS_REGULAR_EXPRESSION "panic: ${message}")
   endforeach()
 endif()
+
+# A test of a panic that hangs at the program's end, as one with the GPU going can on Windows, fails
+# in a minute, not ctest's 25, which all together would take the job's hour. One that says its own
+# limit keeps it.
+get_property(fbengine_all_tests DIRECTORY PROPERTY TESTS)
+foreach(test IN LISTS fbengine_all_tests)
+  get_test_property("${test}" PASS_REGULAR_EXPRESSION said)
+  get_test_property("${test}" TIMEOUT limit)
+  if(said MATCHES "panic" AND NOT limit)
+    set_tests_properties("${test}" PROPERTIES TIMEOUT 60)
+  endif()
+endforeach()

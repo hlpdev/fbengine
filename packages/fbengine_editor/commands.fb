@@ -4,6 +4,7 @@
 Import std.collections
 Import std.core
 Import std.os
+Import std.text
 Import fbengine
 
 /// A key, and what's held with it, that runs a command. Primary is Control, or Command on macOS.
@@ -28,7 +29,15 @@ Public Struct Shortcut Implements Printable
         If Primary Then shown += System.Platform == Platform.MACOS ? "Cmd+" : "Ctrl+"
         If Shift Then shown += "Shift+"
         If Alt Then shown += "Alt+"
-        Return shown + "{Key}"
+        // As a person writes it: Delete, Page Up.
+        Local name = "{Key}"
+        Local first = True
+        For word In name.Split("_")
+            shown += first ? "" : " "
+            first = False
+            shown += word.Slice(0, 1) + word.Slice(1, word.Length).ToLower()
+        End For
+        Return shown
     End Method
 End Struct
 
