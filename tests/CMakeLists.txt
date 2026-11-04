@@ -1822,3 +1822,15 @@ if(FBENGINE_FB_TESTS)
                          PASS_REGULAR_EXPRESSION "panic: ${message}")
   endforeach()
 endif()
+
+# A test of a panic that hangs at the program's end, as one with the GPU going can on Windows, fails
+# in a minute, not ctest's 25, which all together would take the job's hour. One that says its own
+# limit keeps it.
+get_property(fbengine_all_tests DIRECTORY PROPERTY TESTS)
+foreach(test IN LISTS fbengine_all_tests)
+  get_test_property("${test}" PASS_REGULAR_EXPRESSION said)
+  get_test_property("${test}" TIMEOUT limit)
+  if(said MATCHES "panic" AND NOT limit)
+    set_tests_properties("${test}" PROPERTIES TIMEOUT 60)
+  endif()
+endforeach()
