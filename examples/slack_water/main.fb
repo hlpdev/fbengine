@@ -5,7 +5,9 @@
 // go, and what it said is compared with what's kept; `--walk3d <bright|dim|dark|cut|swept|wing|far_end>
 // [<kept>]` does the same on the island, in 3D, checking how it stands at every step. With `--frames
 // <folder>`, the same to its bright ending, saving a PNG there at each moment that shows something, and
-// checking what's drawn. `--feel` tries its keys, mouse, and gamepad, and `--hear` what's in its mix.
+// checking what's drawn. `--feel` tries its keys, mouse, and gamepad, `--hear` what's in its mix, and
+// `--end <folder>` its end screen. `--cooked <kept> <folder>`, in a release, walks and draws it from its
+// pak.
 // With `--check <folder>`, it loads the assets its tools made there, and checks what they are; with
 // `--match <made> <kept>`, that two folders of them are the same. Whatever a check finds wrong is its
 // exit code.
@@ -30,6 +32,7 @@ Import "./ground"
 Import "./island"
 Import "./map"
 Import "./res" As Res
+Import "./screens"
 Import "./soundscape"
 Import "./walks"
 
@@ -1099,6 +1102,167 @@ Function Felt() Throws GraphicsError, IOError, InputError
     second.Free()
 End Function
 
+// A game being played, and played again: its island, keys, Game, sounds, and what's shown over it.
+Final Class Session
+    Field island: Island
+    Field controls: Controls
+    Field game: Game
+    Field scape: Soundscape
+    Field ending: EndScreen
+    // The last thing said, in what its Games say it through.
+    Field last: String[]
+    Field font: Font
+    Field left: Bool = False
+
+    New(island: Island, last: String[], game: Game, scape: Soundscape)
+        Self.island = island
+        Self.last = last
+        controls = Controls()
+        Self.game = game
+        Self.scape = scape
+        ending = EndScreen()
+        font = Font.BuiltIn(20.0)
+    End New
+
+    // One at its first moment, on `island`, with the audio started.
+    @MainThread
+    Static Method Make(island: Island): Session Throws IOError
+        Local last = [""]
+        Local game = Game(island, Function(line: String)
+            last[0] = line
+        End Function)
+        Return Session(island, last, game, Try Soundscape.Make(game, island))
+    End Method
+
+    // Moves it all on `seconds`, whether the window's in front or not, and plays it again if that's
+    // been chosen.
+    @MainThread
+    Method Step(seconds: Float) Throws IOError
+        scape.Update(game, Moved(game, controls, seconds) ? seconds : 0.0)
+        ending.Update(game.Story(), seconds)
+        If ending.LeaveChosen() Then left = True
+        If ending.AgainChosen()
+            scape.Free()
+            game.Free()
+            Local said = last
+            said[0] = ""
+            game = Game(island, Function(line: String)
+                said[0] = line
+            End Function)
+            scape = Try Soundscape.Make(game, island)
+            ending.Update(game.Story(), 0.0)
+        End If
+    End Method
+
+    // Draws what it says over what's drawn.
+    @MainThread
+    Method Draw()
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(236, 232, 220, 255))
+        canvas.DrawText(font, game.Story().ClockLine(), 24, 20)
+        canvas.DrawText(font, Untimed(last[0]), 24, 48)
+        canvas.DrawText(font, game.Prompt(), 24, 680)
+        ending.Draw()
+    End Method
+
+    @MainThread
+    Method Free()
+        scape.Free()
+        game.Free()
+    End Method
+End Class
+
+// The end screen, a thing at a time, offscreen: not shown until it's been a little while, what it says,
+// and playing again, by the keyboard, from a world put back as it was; then leaving, in `folder`,
+// saving what it looks like.
+Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError
+    Try Dir.CreateAll(folder)
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island)
+    Defer session.Free()
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Local stepped = Function(steps: Int)
+        For step = 1 To steps
+            Flip(False)
+            Try
+                session.Step(0.1)
+            Catch e As IOError
+                Checks("a Session's step throws nothing: {e.Message}", False)
+            End Try
+            Audio.Mix(4410)
+        End For
+    End Function
+    stepped(5)
+    Checks("nothing's shown while it's played", !session.ending.Showing())
+    session.game.Story().Step(TIDE_IN_AT)
+    Local before = session.game.Story().Ended()
+    Checks("it's ended, dark, with nothing done", before == Ending.DARK)
+    stepped(5)
+    Checks("nothing's shown just after", !session.ending.Showing())
+    stepped(30)
+    Checks("it's shown after a while", session.ending.Showing())
+    Checks("it says how it ended", session.ending.Says() ==
+           "The lamp stays dark\nThe tide came in with the sluice shut.\n0 of 3 parts fitted")
+    // What it looks like: over the world, not all over it.
+    island.Scene().Render()
+    Local bare = Try Screen.ToImage()
+    session.Draw()
+    Try Screen.Save(folder / "end_dark.png")
+    Local over = Try Screen.ToImage()
+    Local differ = 0
+    For y = 0 Until over.Height
+        For x = 0 Until over.Width
+            Local one = over[x, y]
+            Local two = bare[x, y]
+            If one.r != two.r || one.g != two.g || one.b != two.b Then differ += 1
+        End For
+    End For
+    Local share = (differ As Float) / ((over.Width * over.Height) As Float)
+    Print("the end screen covers {share} of it")
+    Checks("it's drawn, over part of the world", share > 0.02 && share < 0.6)
+    // Play again, by the key on what's focused.
+    Try Simulate.PressKey(Key.SPACE)
+    stepped(2)
+    Checks("playing again begins again", session.game.Story().Ended() == Ending.NONE &&
+           session.game.Story().Clock() < 1.0)
+    Checks("and the end's gone", !session.ending.Showing())
+    Checks("from a world as it was",
+           !island.LampLit() && island.PartEntity(Part.GEAR).Parent() == Null &&
+           !island.PartEntity(Part.BELT).Hidden())
+    // Then to the end again, and Leave, by Tab.
+    session.game.Story().Step(TIDE_IN_AT)
+    stepped(35)
+    Checks("it's shown a second time", session.ending.Showing())
+    Try Simulate.PressKey(Key.TAB)
+    stepped(1)
+    Try Simulate.PressKey(Key.SPACE)
+    stepped(2)
+    Checks("Leave leaves", session.left)
+End Function
+
+// A release, from its pak: what's in it is cooked, a walk goes as it should, against what's `kept`, and
+// the island's drawn as it should be, in `folder`.
+Function CookedWalk(kept: Path, folder: Path) Throws GraphicsError, IOError, AudioError
+    Try Res.Mount()
+    // A KTX2's signature, what the cooker makes of an image.
+    Local first = (Try Assets.ReadBytes(Res.RockAlbedo))[0]
+    Print("the rock's first byte is {first}")
+    Checks("it's from its pak, cooked", first == 0xAB)
+    Assets.StopWatching()
+    Local lines: String[] = []
+    Local ended = Try Walked3dBy(Walk3dOf("bright") ?? [], lines)
+    Checks("a walk from it ends BRIGHT", ended == Ending.BRIGHT)
+    Try Pinned(lines, kept, False)
+    Try Dir.CreateAll(folder)
+    Try SaveViews(folder)
+End Function
+
 // The game, in a window, for a person: WASD and the mouse, E, Q, and Escape.
 Function Played() Throws GraphicsError, IOError, InputError, AudioError
     Try Graphics(1280, 720)
@@ -1110,12 +1274,6 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
     Defer Assets.StopWatching()
     Local island = Try Island.Make()
     Defer island.Free()
-    Local controls = Controls()
-    Local last = ""
-    Local game = Game(island, Function(line: String)
-        last = line
-    End Function)
-    Defer game.Free()
     // A machine with no sound still plays it, in silence.
     Local device = AudioDevice.DEFAULT
     Try
@@ -1125,27 +1283,27 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
         Try Audio.Start(AudioDevice.SILENT)
     End Try
     Defer Audio.Stop()
-    Local scape = Try Soundscape.Make(game, island)
-    Defer scape.Free()
-    Local font = Font.BuiltIn(20.0)
-    While !Window.Closed() && !KeyHit(Key.ESCAPE)
+    Local session = Try Session.Make(island)
+    Defer session.Free()
+    Local pointing = False
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && !session.left
         Flip()
-        Local seconds = FrameStep(Frame.Delta()) As Float
-        scape.Update(game, Moved(game, controls, seconds) ? seconds : 0.0)
+        Try session.Step(FrameStep(Frame.Delta()) As Float)
+        // The end screen's for the mouse to point at.
+        If session.ending.Showing() != pointing
+            pointing = session.ending.Showing()
+            Try SetMouseRelative(!pointing)
+        End If
         If Screen.Texture() == Null Then Continue
         island.Scene().Render()
-        Local canvas = Screen.Canvas()
-        canvas.SetColor(Color32(236, 232, 220, 255))
-        Local flow = game.Story()
-        canvas.DrawText(font, flow.ClockLine(), 24, 20)
-        canvas.DrawText(font, Untimed(last), 24, 48)
-        canvas.DrawText(font, game.Prompt(), 24, 680)
+        session.Draw()
     End While
 End Function
 
 Local arguments = Process.Arguments()
 Const USAGE = "usage: slack_water [--walk <bright|dim|dark> [<kept>] | --walk3d " +
               "<bright|dim|dark|cut|swept|wing|far_end> [<kept>] | --feel | --hear | " +
+              "--end <folder> | --cooked <kept> <folder> | " +
               "--frames <folder> | --check <folder> | --match <made> <kept>]"
 If arguments.Count >= 2 && arguments.Count <= 3 && arguments[0] == "--walk"
     Local walk = WalkOf(arguments[1])
@@ -1170,6 +1328,18 @@ ElseIf arguments.Count >= 2 && arguments.Count <= 3 && arguments[0] == "--walk3d
         Local lines: String[] = []
         Print("ended {Try Walked3dBy(walk, lines)}")
         If arguments.Count == 3 Then Try Pinned(lines, Path(arguments[2]), False)
+    End If
+ElseIf arguments.Count == 2 && arguments[0] == "--end"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try EndShown(Path(arguments[1]))
+    End If
+ElseIf arguments.Count == 3 && arguments[0] == "--cooked"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try CookedWalk(Path(arguments[1]), Path(arguments[2]))
     End If
 ElseIf arguments.Count == 1 && arguments[0] == "--hear"
     If Env.Get("FBENGINE_NO_GPU") == "1"

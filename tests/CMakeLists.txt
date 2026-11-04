@@ -403,6 +403,21 @@ if(FBENGINE_FB_TESTS)
                          ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                          SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
   endforeach()
+  add_test(NAME examples.slack_water.end_screen
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --end "${PROJECT_BINARY_DIR}/example-frames/slack_water")
+  set_tests_properties(examples.slack_water.end_screen PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 300)
+  # As it ships: a release, from its cooked pak.
+  add_test(NAME examples.slack_water.cooked
+           COMMAND "${FBENGINE_FB}" --color never run --release
+                   "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --cooked "${PROJECT_SOURCE_DIR}/examples/slack_water/tests/walk3d_bright.txt"
+                   "${PROJECT_BINARY_DIR}/example-frames/slack_water_cooked")
+  set_tests_properties(examples.slack_water.cooked PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600)
   add_test(NAME examples.slack_water.hear
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                    -- --hear)

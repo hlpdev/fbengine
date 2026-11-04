@@ -99,6 +99,31 @@ Public Function RoadEndAlong(far: Bool): Float64 => (ToRoadEnd(far) / WALK_SPEED
 // How many seconds of walking the middle of what floods is from the mill: where the paddle lies.
 Function FloodsMiddle(): Float64 => Along(Area.CAUSEWAY)
 
+/// What the end says of how it ended: its title, and a line.
+Public Function EndingWords(ending: Ending): (String, String)
+    Select ending
+        Case Ending.BRIGHT
+            Return ("The lamp burns bright",
+                    "All three fitted, and the wheel turning, as the storm comes in.")
+        Case Ending.DIM
+            Return ("The lamp burns, dimmer",
+                    "The wheel turns slowly, without its belt, which the sea has.")
+        Case Ending.DARK
+            Return ("The lamp stays dark", "The tide came in with the sluice shut.")
+        Default
+            Return ("", "")
+    End Select
+End Function
+
+/// What the end counts of how `flow` went: how much it mended.
+Public Function EndingTally(flow: Flow): String
+    Local fitted = 0
+    For number = 0 To 2
+        If flow.Fitted(number As Part) Then fitted += 1
+    End For
+    Return "{fitted} of 3 parts fitted"
+End Function
+
 // Seconds as minutes and seconds.
 Function Time(seconds: Float64): String
     // To the nearest tenth first, as tenths summed fall just short.

@@ -1,0 +1,87 @@
+// What's shown over the game: the end screen, a little after it ends, which says how it ended, and
+// plays it again, or leaves, by the mouse, the keyboard, or a gamepad.
+
+Import std.core
+Import std.math
+Import fbengine
+Import fbengine_ui
+Import "./flow"
+
+// How long after the end you can look at the lamp before it's shown.
+Public Const END_WAIT: Float = 3.0
+
+/// What's shown when it's ended.
+Public Final Class EndScreen
+    Field panel: Node
+    Field title: Label
+    Field words: Label
+    Field tally: Label
+    Field again: Button
+    Field leave: Button
+    Field ui: Ui
+    Field waited: Float = 0.0
+    Field shown: Bool = False
+
+    @MainThread
+    Public New()
+        Local screen = Node("screen")
+        screen.SetArrangement(Arrangement.STACK)
+        panel = Widget("panel", "end")
+        panel.SetAnchors(Anchors.Point(0.5, 0.5))
+        panel.SetGap(8.0)
+        panel.SetPadding(Insets.All(16.0))
+        panel.SetAlign(Align.STRETCH)
+        panel.SetVisible(False)
+        title = Label("")
+        words = Label("")
+        tally = Label("")
+        again = Button("Play again")
+        leave = Button("Leave")
+        panel.Add(title)
+        panel.Add(words)
+        panel.Add(tally)
+        panel.Add(again)
+        panel.Add(leave)
+        screen.Add(panel)
+        ui = Ui(screen)
+    End New
+
+    /// Whether it's shown.
+    @MainThread Public Method Showing(): Bool => shown
+
+    /// What it says, title and all, as one string.
+    @MainThread Public Method Says(): String => "{title.Text()}\n{words.Text()}\n{tally.Text()}"
+
+    /// Whether Play again was chosen in its last Update, and Leave.
+    @MainThread Public Method AgainChosen(): Bool => shown && again.Clicked()
+
+    @MainThread Public Method LeaveChosen(): Bool => shown && leave.Clicked()
+
+    /// Moves it on `seconds`, by how `flow` stands: nothing until it's ended, and a little after.
+    @MainThread
+    Public Method Update(flow: Flow, seconds: Float)
+        If flow.Ended() == Ending.NONE
+            waited = 0.0
+            shown = False
+            panel.SetVisible(False)
+            Return
+        End If
+        waited += seconds
+        If !shown && waited >= END_WAIT
+            shown = True
+            Local said = EndingWords(flow.Ended())
+            title.SetText(said.0)
+            words.SetText(said.1)
+            tally.SetText(EndingTally(flow))
+            panel.SetVisible(True)
+            ui.Focus(again)
+        End If
+        If shown Then ui.Update()
+    End Method
+
+    /// Draws it over what's drawn, if it's shown.
+    @MainThread
+    Public Method Draw()
+        If shown Then ui.Draw()
+    End Method
+End Class

@@ -728,3 +728,18 @@ Function PipDoesntStallAcrossAWall()
         Expect(PipWithYou(at.x, at.y, you.x, you.y))
     End For
 End Function
+
+// What the end says of each ending, and of how it went.
+@Test
+Function TheEndSaysHowItEnded()
+    Expect(EndingWords(Ending.BRIGHT).0 == "The lamp burns bright")
+    Expect(EndingWords(Ending.DIM).0 == "The lamp burns, dimmer")
+    Expect(EndingWords(Ending.DARK).0 == "The lamp stays dark")
+    Local flow = Told([])
+    Played("dim", flow)
+    Expect(flow.Ended() == Ending.DIM)
+    Expect(EndingTally(flow) == "2 of 3 parts fitted")
+    Local bright = Told([])
+    Played("bright", bright)
+    Expect(EndingTally(bright) == "3 of 3 parts fitted")
+End Function
