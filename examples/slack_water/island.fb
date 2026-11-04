@@ -21,8 +21,9 @@ Const HELD_SIZE: Float = 0.35
 Public Const SKY: Color = Color(0.62, 0.72, 0.8)
 // How bright the sky is, how bright the sun, what a camera's light's multiplied by, and its bloom, how
 // much, and from how bright.
-Const SKY_LIGHT: Float = 1.5
-Const SUN_LIGHT: Float = 3.2
+Const SKY_LIGHT: Float = 1.2
+Const AROUND_LIGHT: Float = 0.45
+Const SUN_LIGHT: Float = 4.5
 Const EXPOSURE: Float = 0.8
 Const BLOOM: Float = 0.5
 Const BLOOM_FROM: Float = 1.5
@@ -97,9 +98,9 @@ Public Function SkyImage(): HdrImage
         // From 1, straight up, to -1, straight down.
         Local up = 1.0 - 2.0 * ((y As Float) + 0.5) / (height As Float)
         Local haze = 1.0 - Clamp(Abs(up) * 3.0, 0.0, 1.0)
-        Local r = up >= 0.0 ? 0.32 + (SKY.r - 0.32) * haze : 0.04 + (SKY.r - 0.04) * haze
+        Local r = up >= 0.0 ? 0.36 + (SKY.r - 0.36) * haze : 0.08 + (SKY.r - 0.08) * haze
         Local g = up >= 0.0 ? 0.5 + (SKY.g - 0.5) * haze : 0.16 + (SKY.g - 0.16) * haze
-        Local b = up >= 0.0 ? 0.82 + (SKY.b - 0.82) * haze : 0.2 + (SKY.b - 0.2) * haze
+        Local b = up >= 0.0 ? 0.74 + (SKY.b - 0.74) * haze : 0.2 + (SKY.b - 0.2) * haze
         For x = 0 Until width
             values.Add(r * SKY_LIGHT)
             values.Add(g * SKY_LIGHT)
@@ -246,10 +247,10 @@ Public Final Class Island
         held.Add(skyTexture)
         scene.SetSkyTexture(skyTexture)
         Local around = Try Environment.Bake(skyTexture, 128, 64)
-        scene.SetEnvironment(around)
+        scene.SetEnvironment(around, AROUND_LIGHT)
 
         Local sun = Light(LightType.DIRECTIONAL)
-        sun.SetColor(Color(1.0, 0.92, 0.78))
+        sun.SetColor(Color(1.0, 0.88, 0.7))
         sun.SetIntensity(SUN_LIGHT)
         sun.SetShadows(True)
         sun.SetShadowDistance(180.0)
@@ -280,6 +281,8 @@ Public Final Class Island
 
         Local model = Try Assets.Load<Model>(Res.Pip)
         Local pip = Try model.Spawn()
+        // Its own brass, tarnished, for what its file only has a color of.
+        model.Geometries()[0].Surface(0).SetMaterial(Try Brass(held))
         pip.SetPosition(Vec3(MAIN_X + 2.0, GroundHeight(MAIN_X + 2.0, 13.0), 13.0))
         // Facing the yard's view, as glTF's front is +Z.
         pip.SetRotation(0.0, ToRadians(20.0), 0.0)
@@ -388,7 +391,7 @@ Public Final Class Island
     /// Takes the normal maps off, or the light around, to see what they've done.
     @MainThread
     Public Method SetAround(on: Bool)
-        scene.SetEnvironment(on ? around : Null)
+        scene.SetEnvironment(on ? around : Null, AROUND_LIGHT)
     End Method
 
     /// How far the wheel's turned.

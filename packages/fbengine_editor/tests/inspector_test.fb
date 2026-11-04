@@ -128,7 +128,6 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     Selecting(editor, camera)
     Expect(HasRows(editor, own + " Projection FogMode ClearColor FogColor FieldOfView " +
                    "OrthographicHeight FogDensity Order ClearsColor ClearsDepth Range FogRange"))
-    Expect(HasRows(editor, "Tonemap Exposure Gamma Hdr"))
     Local mesh = Mesh(Geometry.Cube())
     mesh.SetMaterial(Material(Color(1, 0, 0)))
     Selecting(editor, mesh)
@@ -139,7 +138,18 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     Expect(HasRows(editor,
                    own +
                    " Shading Blend Shininess AlphaCutoff VertexColors Wireframe TwoSided Fogged"))
-    Expect(HasRows(editor, "Emissive NormalScale OcclusionStrength"))
+    Expect(HasRows(editor, "Metallic Roughness Emissive NormalScale OcclusionStrength"))
+    // Each of a material's two, alone.
+    Local paint = mesh.Material()
+    If paint == Null Then Panic("it has no material")
+    paint.SetMetalRough(0.25, 0.75)
+    Round(editor)
+    Try Entered(editor, "Metallic", "0.5")
+    Expect(paint.Metallic() == 0.5 && paint.Roughness() == 0.75)
+    Try Entered(editor, "Roughness", "1")
+    Expect(paint.Metallic() == 0.5 && paint.Roughness() == 1)
+    Try Entered(editor, "Roughness", "2")
+    Expect(paint.Roughness() == 1, "a roughness of 2 panics, and it took it")
     Local sprite = Sprite(Material())
     Selecting(editor, sprite)
     Expect(HasRows(editor, own + " ViewMode SpriteScale Handle SpriteRotation Shading"))

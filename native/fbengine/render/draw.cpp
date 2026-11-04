@@ -239,10 +239,8 @@ layer_data_t layer_data(const scene::layer_t& layer, std::uint64_t target,
     const float sine = std::sin(-layer.uv_angle);
     const bool decodes = image != nullptr && image->format == FBE_TEXTURE_RGBA8;
     const float neutral = image != nullptr ? 0.0F : 1.0F;
-    const float across_u = across * cosine;
-    const float across_v = across * sine;
-    out.uv_across = { across_u, across_v, -layer.uv_offset[0], decodes ? 1.0F : 0.0F };
-    out.uv_down = { -down * sine, down * cosine, -layer.uv_offset[1], neutral };
+    out.uv_across = { across * cosine, down * sine, -layer.uv_offset[0], decodes ? 1.0F : 0.0F };
+    out.uv_down = { -across * sine, down * cosine, -layer.uv_offset[1], neutral };
     return out;
 }
 

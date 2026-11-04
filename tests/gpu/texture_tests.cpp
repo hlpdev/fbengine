@@ -19,6 +19,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <test_shaders.hpp>
 #include <texture/texture.hpp>
 #include <utility>
@@ -609,6 +610,173 @@ TEST_CASE("a file's BC7 is sampled, and nothing else", "[gpu]") {
     stop_gpu();
 }
 
+TEST_CASE("a file's own format is a map that holds no color unless it's sRGB", "[gpu]") {
+    start();
+    if (!samples_format(VK_FORMAT_BC7_SRGB_BLOCK) || !samples_format(VK_FORMAT_BC7_UNORM_BLOCK)) {
+        stop_gpu();
+        SKIP("this GPU doesn't sample BC7");
+    }
+    const std::vector<std::uint8_t> bytes(16, 0x40);
+    const std::uint64_t color_load = image_load(block_image(assets::formats::bc7_srgb, 16), bytes);
+    const std::uint64_t plain_load = image_load(block_image(assets::formats::bc7, 16), bytes);
+    const std::uint64_t color = fbe_texture_from_load(color_load, true, true);
+    const std::uint64_t plain = fbe_texture_from_load(plain_load, true, true);
+    INFO(fbe_error());
+    REQUIRE(color != 0);
+    REQUIRE(plain != 0);
+    CHECK(fbe_texture_srgb(color));
+    CHECK(!fbe_texture_srgb(plain));
+    CHECK(!fbe_texture_srgb(0));
+    // Whatever the format, as far as this GPU samples them.
+    struct format_t {
+        VkFormat format;
+        std::size_t bytes;
+        bool srgb;
+    };
+    for (const format_t& each : {
+             format_t{ .format = VK_FORMAT_R8G8B8A8_SRGB, .bytes = 64, .srgb = true },
+             format_t{ .format = VK_FORMAT_R8G8B8A8_UNORM, .bytes = 64, .srgb = false },
+             format_t{ .format = VK_FORMAT_BC1_RGB_SRGB_BLOCK, .bytes = 8, .srgb = true },
+             format_t{ .format = VK_FORMAT_BC1_RGB_UNORM_BLOCK, .bytes = 8, .srgb = false },
+             format_t{ .format = VK_FORMAT_BC1_RGBA_SRGB_BLOCK, .bytes = 8, .srgb = true },
+             format_t{ .format = VK_FORMAT_BC2_SRGB_BLOCK, .bytes = 16, .srgb = true },
+             format_t{ .format = VK_FORMAT_BC3_SRGB_BLOCK, .bytes = 16, .srgb = true },
+             format_t{ .format = VK_FORMAT_BC5_UNORM_BLOCK, .bytes = 16, .srgb = false },
+             format_t{ .format = VK_FORMAT_ASTC_4x4_SRGB_BLOCK, .bytes = 16, .srgb = true },
+         }) {
+        if (!samples_format(each.format)) {
+            continue;
+        }
+        const std::vector<std::uint8_t> texels(each.bytes, 0x40);
+        const std::uint64_t load =
+            image_load(block_image(static_cast<std::uint32_t>(each.format), each.bytes), texels);
+        const std::uint64_t texture = fbe_texture_from_load(load, true, false);
+        INFO("the Vulkan format " << static_cast<int>(each.format) << ": " << fbe_error());
+        REQUIRE(texture != 0);
+        CHECK(fbe_texture_srgb(texture) == each.srgb);
+        CHECK(fbe_texture_release(texture));
+        CHECK(fbe_assets_free(load));
+    }
+    const std::uint64_t material = fbe_material_create();
+    for (const std::int32_t map : { FBE_MAP_METAL_ROUGH, FBE_MAP_NORMAL, FBE_MAP_OCCLUSION }) {
+        CHECK(!fbe_material_set_map(material, map, color, 0));
+        CHECK(fbe_material_map(material, map) == 0);
+        CHECK(fbe_material_set_map(material, map, plain, 0));
+        CHECK(fbe_material_map(material, map) == plain);
+    }
+    CHECK(fbe_material_set_map(material, FBE_MAP_EMISSIVE, color, 0));
+    CHECK(fbe_material_release(material));
+    CHECK(fbe_texture_release(color));
+    CHECK(fbe_texture_release(plain));
+    CHECK(fbe_assets_free(color_load));
+    CHECK(fbe_assets_free(plain_load));
+    stop_gpu();
+}
+
+TEST_CASE("a model's own formats read as their maps say, or say which can't", "[gpu]") {
+    start();
+    if (!samples_format(VK_FORMAT_BC7_SRGB_BLOCK) || !samples_format(VK_FORMAT_BC7_UNORM_BLOCK)) {
+        stop_gpu();
+        SKIP("this GPU doesn't sample BC7");
+    }
+    const std::vector<std::uint8_t> bytes(16, 0x40);
+    /// A model of one image of `format`, and a material of it.
+    const auto load_of = [&](std::uint32_t format, const assets::material_t& material) {
+        assets::image_t image = block_image(format, 16);
+        image.texels = assets::texels_t(nullptr, std::span(bytes));
+        auto load = std::make_shared<assets::load_t>();
+        load->kind = assets::load_kind_t::MODEL;
+        load->model.images.push_back(std::move(image));
+        load->model.materials.push_back(material);
+        load->done = true;
+        return assets::loads().add(std::move(load));
+    };
+    std::array<std::uint64_t, FBE_MODEL_MAPS> others{};
+    std::array<std::int32_t, FBE_MODEL_MAPS> images{};
+    const auto read = [&](std::uint64_t load, std::uint64_t material, std::uint64_t texture,
+                          std::int32_t& made) {
+        made = 0;
+        return fbe_model_material_textures(load, 0, material, &texture, 1, others.data(),
+                                           images.data(), FBE_MODEL_MAPS, &made);
+    };
+    // A color and a map of one sRGB image: the map reads its twin, of the same bytes.
+    assets::material_t both;
+    both.base_color_texture.image = 0;
+    both.metallic_roughness_texture.image = 0;
+    std::uint64_t load = load_of(assets::formats::bc7_srgb, both);
+    std::uint64_t material = fbe_model_material(load, 0);
+    std::uint64_t texture = fbe_model_texture(load, 0, true);
+    REQUIRE(texture != 0);
+    std::int32_t made = 0;
+    INFO(fbe_error());
+    CHECK(read(load, material, texture, made));
+    REQUIRE(made == 1);
+    CHECK(images[0] == 0);
+    CHECK(fbe_material_texture(material, 0) == texture);
+    CHECK(fbe_material_map(material, FBE_MAP_METAL_ROUGH) == others[0]);
+    CHECK(fbe_texture_vulkan_format(texture) == assets::formats::bc7_srgb);
+    CHECK(fbe_texture_vulkan_format(others[0]) == assets::formats::bc7);
+    CHECK(!fbe_texture_srgb(others[0]));
+    fbe_material_release(material);
+    fbe_texture_release(others[0]);
+    fbe_texture_release(texture);
+    CHECK(fbe_assets_free(load));
+    // A map alone of an sRGB image is its file's mistake, and no copy hides it.
+    assets::material_t map;
+    map.normal_texture.image = 0;
+    load = load_of(assets::formats::bc7_srgb, map);
+    material = fbe_model_material(load, 0);
+    texture = fbe_model_texture(load, 0, true);
+    CHECK(!read(load, material, texture, made));
+    CHECK(fbe_model_invalid());
+    CHECK(made == 0);
+    CHECK(std::string_view(fbe_error()).contains("normal"));
+    fbe_material_release(material);
+    fbe_texture_release(texture);
+    CHECK(fbe_assets_free(load));
+    // A color of a UNORM image can't be decoded, so it says which it is.
+    assets::material_t color;
+    color.base_color_texture.image = 0;
+    load = load_of(assets::formats::bc7, color);
+    material = fbe_model_material(load, 0);
+    texture = fbe_model_texture(load, 0, true);
+    CHECK(!read(load, material, texture, made));
+    CHECK(fbe_model_invalid());
+    CHECK(std::string_view(fbe_error()).contains("base color"));
+    fbe_material_release(material);
+    fbe_texture_release(texture);
+    CHECK(fbe_assets_free(load));
+    stop_gpu();
+}
+
+TEST_CASE("glTF's default material is only its surfaces', and goes with them", "[gpu]") {
+    start();
+    assets::primitive_t primitive;
+    primitive.positions = { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 } };
+    primitive.indices = { 0, 1, 2 };
+    assets::mesh_t mesh;
+    mesh.primitives = { primitive, primitive };
+    auto made = std::make_shared<assets::load_t>();
+    made->kind = assets::load_kind_t::MODEL;
+    made->model.meshes.push_back(std::move(mesh));
+    made->done = true;
+    const std::uint64_t load = assets::loads().add(std::move(made));
+    const std::uint64_t geometry = fbe_model_geometry(load, 0, nullptr, 0);
+    INFO(fbe_error());
+    REQUIRE(geometry != 0);
+    const std::uint64_t plain = fbe_surface_material(geometry, 0);
+    REQUIRE(plain != 0);
+    // One for a geometry's primitives, however many.
+    CHECK(fbe_surface_material(geometry, 1) == plain);
+    CHECK(fbe_material_metallic(plain) == 1.0F);
+    CHECK(fbe_material_roughness(plain) == 1.0F);
+    CHECK(fbe_geometry_release(geometry));
+    // Nothing's left holding it.
+    CHECK(!fbe_material_set_metal_rough(plain, 0.5F, 0.5F));
+    CHECK(fbe_assets_free(load));
+    stop_gpu();
+}
+
 TEST_CASE("a file's levels are its texture's, and one level is made a chain", "[gpu]") {
     start();
     const std::vector<std::uint8_t> bytes(20, 0xFF);
@@ -691,7 +859,7 @@ TEST_CASE("a load that isn't an image's makes no texture", "[gpu]") {
     bytes_load->done = true;
     const std::uint64_t load = assets::loads().add(std::move(bytes_load));
     CHECK(fbe_texture_from_load(load, true, true) == 0);
-    CHECK(fbe_texture_from_model(load, 0, true) == 0);
+    CHECK(fbe_texture_from_model(load, 0, true, true) == 0);
     CHECK(fbe_assets_free(load));
     stop_gpu();
 }
