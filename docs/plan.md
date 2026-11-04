@@ -232,8 +232,11 @@ It's a package, fbengine_editor, whose program opens a game's project folder.
    by a pick, handles to move, turn, and scale in world or local space, snapping.
 3. The tree: a scene's entities, renamed, reparented by dragging, copied, hidden, freed, found by
    name, each through undo.
-4. The inspector: each thing's Properties by FutureBlitz's reflection, with editors by type;
-   materials, lights, cameras, bodies, and a game's own components.
+4. The inspector: each thing's properties by FutureBlitz's reflection, what has both an X() and a
+   SetX(), with editors by type, and what each setter takes by attributes on it (`@Limits`,
+   `@ShownInDegrees`, `@NotEdited`); materials, lights, cameras, bodies, and a game's own components,
+   which are data: a game's small program, its components/main.fb, says what kinds it has, and
+   fbengine_physics adds "Body" the same way.
 5. The asset browser: res:// as a tree with thumbnails, a model dragged into the scene, import
    settings' sidecars edited, what changes on disk reloaded.
 6. Scenes on disk: a text format diffs and merges well, written whole or not at all, with

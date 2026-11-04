@@ -284,3 +284,27 @@ Function AChainThousandsDeepIsFoundCopiedAndFreed()
     Expect(at.Freed())
     Expect(world.EntityCount() == 5001)
 End Function
+
+Class Door
+    Public Field Open: Bool = False
+End Class
+
+@Test
+Function DataKeepsOneOfEachType()
+    Local world = Fresh()
+    Defer world.Free()
+    Local pivot = Pivot()
+    Local npc = Npc(1)
+    Local door = Door()
+    pivot.SetData(npc)
+    pivot.SetData(door)
+    Expect(pivot.Data<Npc>() == npc && pivot.Data<Door>() == door)
+    // Another of a type takes that one's place alone.
+    Local other = Npc(2)
+    pivot.SetData(other)
+    Expect(pivot.Data<Npc>() == other && pivot.Data<Door>() == door)
+    pivot.SetData<Door>(Null)
+    Expect(pivot.Data<Door>() == Null && pivot.Data<Npc>() == other)
+    pivot.SetData<Npc>(Null)
+    Expect(pivot.Data<Npc>() == Null)
+End Function

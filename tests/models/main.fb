@@ -1,0 +1,180 @@
+// Khronos's sample models through Model, skinned and morphed by what's in their files, against where
+// the glTF specification says each frame should be (reference.py's, in worked_out.fb and masks.bin).
+// Exactly which pixels are drawn is what the shader did with those files, skins and morphs together.
+// Each triangle corner's box and mean, by the palette and weights the engine gives its shader,
+// blended here as the specification does, say which side of that a difference is. With --frames, it
+// saves each frame there too, which their golden images check.
+//
+// The golden images hold how the scene shader lights now, which isn't yet glTF's PBR: they're
+// recorded again when that's in, and until then say nothing of whether the lighting's right.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.text
+Import fbengine
+Import "./worked_out"
+
+Const SIZE: Int = 256
+
+Function Near(a: Vec3, b: Vec3): Bool => Abs(a.x - b.x) < 0.002 && Abs(a.y - b.y) < 0.002 &&
+                                         Abs(a.z - b.z) < 0.002
+
+Function FileOf(folder: String): UInt8[]
+    If folder == "SimpleSkin" Then Return Embed("SimpleSkin/SimpleSkin.gltf")
+    If folder == "SimpleMorph" Then Return Embed("SimpleMorph/SimpleMorph.gltf")
+    If folder == "RiggedSimple" Then Return Embed("RiggedSimple/RiggedSimple.glb")
+    Return Embed("MorphPrimitivesTest/MorphPrimitivesTest.glb")
+End Function
+
+Function NameOf(folder: String): String
+    Return folder + (folder == "RiggedSimple" || folder == "MorphPrimitivesTest" ? ".glb" : ".gltf")
+End Function
+
+// Each triangle corner of `mesh` where its skin and morph targets put it in the world.
+Function Corners(mesh: Mesh): Vec3[]
+    Local corners: Vec3[] = []
+    Local geometry = mesh.Geometry()
+    If geometry == Null Then Panic("the model's mesh has no geometry")
+    Local world = mesh.Matrix(Space.WORLD)
+    Local skinned = mesh.Skin() != Null
+    Local palette = skinned ? mesh.Palette() : [] As Mat4[]
+    For s = 0 Until geometry.SurfaceCount()
+        Local surface = geometry.Surface(s)
+        Local places = mesh.MorphedPositions(s)
+        Local joints = skinned ? surface.Joints() : [] As VertexJoints[]
+        For index In surface.Triangles()
+            Local place = places[index]
+            If skinned
+                Local j = joints[index]
+                Local sum = palette[j.Joint0 As Int].TransformPoint(place) * j.Weights.x
+                If j.Weights.y != 0 Then sum = sum + palette[j.Joint1 As Int].TransformPoint(place) * j.Weights.y
+                If j.Weights.z != 0 Then sum = sum + palette[j.Joint2 As Int].TransformPoint(place) * j.Weights.z
+                If j.Weights.w != 0 Then sum = sum + palette[j.Joint3 As Int].TransformPoint(place) * j.Weights.w
+                place = sum
+            End If
+            corners.Add(world.TransformPoint(place))
+        End For
+    End For
+    Return corners
+End Function
+
+// How many of a frame's pixels differ from its mask in whether they're the clear's color, and how
+// many it covers.
+Function MaskDifference(frame: Worked, pixels: UInt8[], masks: UInt8[]): (Int, Int)
+    Local differing = 0
+    Local covered = 0
+    Local at = 0
+    Local value = False
+    For run = 0 Until frame.RunCount
+        Local here = frame.Runs + run * 2
+        Local count = (masks[here] As Int) | ((masks[here + 1] As Int) << 8)
+        For i = 0 Until count
+            Local byte = at * 4
+            Local drawn = pixels[byte] != pixels[0] || pixels[byte + 1] != pixels[1] ||
+                          pixels[byte + 2] != pixels[2]
+            If drawn != value Then differing += 1
+            If value Then covered += 1
+            at += 1
+        End For
+        value = !value
+    End For
+    Return (differing, covered)
+End Function
+
+// Whether what's drawing is lavapipe, whose frames are the same everywhere.
+Function OnLavapipe(): Bool Throws GraphicsError
+    Return (Try Gpu.Devices())[Gpu.Device()].Name.StartsWith("llvmpipe")
+End Function
+
+// Compares a frame with what was worked out, saying so of whatever differs; gives whether it agrees.
+Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[], masks: UInt8[], exact: Bool): Bool
+    Local low = corners[0]
+    Local high = corners[0]
+    Local sum = Vec3(0, 0, 0)
+    For place In corners
+        low = Vec3(Min(low.x, place.x), Min(low.y, place.y), Min(low.z, place.z))
+        high = Vec3(Max(high.x, place.x), Max(high.y, place.y), Max(high.z, place.z))
+        sum = sum + place
+    End For
+    Local mean = sum * (1 / (corners.Count As Float))
+    Local name = "{frame.Folder} frame {frame.Index}"
+    Local agrees = True
+    If !Near(low, frame.Low) || !Near(high, frame.High)
+        Print("{name}'s box is {low} to {high}, not {frame.Low} to {frame.High}")
+        agrees = False
+    End If
+    If !Near(mean, frame.Mean)
+        Print("{name}'s mean is {mean}, not {frame.Mean}")
+        agrees = False
+    End If
+    // Exactly, on lavapipe; elsewhere, a GPU's rounding at the edges.
+    Local difference = MaskDifference(frame, pixels, masks)
+    Local allowed = exact ? 0 : difference.1 / 100
+    If difference.0 > allowed
+        Print("{name} differs from its mask at {difference.0} pixels of {difference.1}")
+        agrees = False
+    End If
+    Return agrees
+End Function
+
+Function Saved(folder: String, name: String, pixels: UInt8[]) Throws IOError
+    Try Dir.CreateAll(Path(folder))
+    Try File.WriteBytes(Path("{folder}/{name}.png"),
+                        Png.Encode(Image.FromBytes(SIZE, SIZE, pixels)))
+End Function
+
+Function Run(saving: String?) Throws GraphicsError, IOError
+    Window.SetHeadless(True)
+    Local good = 0
+    Local frames = WorkedOut()
+    Local masks = Embed("masks.bin")
+    Local exact = False
+    Local target = Try Texture.Target(SIZE, SIZE, TextureFormat.RGBA8, 1, True)
+    For frame In frames
+        // Each from a new World, as its file says.
+        Local world = World()
+        World.SetCurrent(world)
+        world.SetAmbientLight(Color(0.3, 0.3, 0.3))
+        Local at = "res://sample/{frame.Folder}"
+        Assets.MountFiles(at, {NameOf(frame.Folder): FileOf(frame.Folder)})
+        Local model = Try Assets.Load<Model>("{at}/{NameOf(frame.Folder)}")
+        Local root = Try model.Spawn()
+        Local found = root.Find(frame.Node)
+        If found == Null Then Panic("{frame.Folder} has no node {frame.Node}")
+        Local mesh = found As Mesh
+        If frame.Time >= 0
+            root.Player().Play(model.Clips()[0], PlayMode.ONCE)
+            root.Player().SetTime(frame.Time)
+        End If
+        If frame.Weight >= 0 Then mesh.SetMorphWeights([frame.Weight])
+
+        Local camera = Camera()
+        camera.SetRenderTarget(target)
+        camera.SetClearColor(Color(0.05, 0.05, 0.1))
+        camera.SetPosition(frame.Camera)
+        camera.PointAt(frame.Look)
+        Local light = Light(LightType.POINT)
+        light.SetPosition(frame.Camera + Vec3(3, 4, 0))
+        light.SetRange(100)
+        light.SetIntensity(frame.Folder == "RiggedSimple" ? 400 : 40)
+        RenderWorld()
+        exact = Try OnLavapipe()
+        Local pixels = target.ReadPixels()
+        If Agrees(frame, Corners(mesh), pixels, masks, exact) Then good += 1
+        If saving != Null Then Try Saved(saving, "model_{frame.Folder}_{frame.Index}", pixels)
+        Flip(False)
+        model.Free()
+        Assets.Unmount(at)
+        world.Free()
+    End For
+    target.Free()
+    Print("{good} of {frames.Count} frames as worked out")
+End Function
+
+Local arguments = Process.Arguments()
+Try Run(arguments.Count == 2 && arguments[0] == "--frames" ? arguments[1] : Null)

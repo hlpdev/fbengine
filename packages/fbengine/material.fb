@@ -4,6 +4,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./geometry"
 Import "./light"
@@ -171,6 +172,7 @@ Public Final Class Material
     End Method
 
     /// Sets its alpha alone, from 0, unseen, to 1, opaque. Outside 0 to 1 panics.
+    @NotEdited
     @MainThread @PanicsAtCaller
     Public Method SetAlpha(alpha: Float)
         Local material = Live("SetAlpha")
@@ -186,6 +188,7 @@ Public Final Class Material
 
     /// Sets how sharp and bright a VERTEX material's highlights are, 0 for none to 1, or it panics.
     /// A PBR material's are its roughness's.
+    @Limits(0, 1)
     @MainThread @PanicsAtCaller
     Public Method SetShininess(shininess: Float)
         If !fbe_material_set_shininess(Live("SetShininess"), shininess) Then Failed("SetShininess")
@@ -217,6 +220,7 @@ Public Final Class Material
 
     /// Sets the alpha below which a pixel isn't drawn at all, as a mask's holes want, from 0, for
     /// none, to 1. Outside 0 to 1 panics.
+    @Limits(0, 1)
     @MainThread @PanicsAtCaller
     Public Method SetAlphaCutoff(cutoff: Float)
         If !fbe_material_set_alpha_cutoff(Live("SetAlphaCutoff"), cutoff)
@@ -350,6 +354,7 @@ Public Final Class Material
 
     /// Sets how much a PBR material's occlusion map darkens its light from the environment and
     /// ambient light, 0 to 1, or it panics: 1 at first.
+    @Limits(0, 1)
     @MainThread @PanicsAtCaller
     Public Method SetOcclusionStrength(strength: Float)
         If !fbe_material_set_occlusion_strength(Live("SetOcclusionStrength"), strength)
@@ -555,6 +560,7 @@ Extend Mesh
 
     /// Sets the mesh's own alpha alone, which fades it whatever its materials' blends, as their
     /// docs say: at 0 it isn't drawn, but it still collides and picks. Outside 0 to 1 panics.
+    @NotEdited
     @MainThread @PanicsAtCaller
     Public Method SetAlpha(alpha: Float)
         Local mesh = Live("SetAlpha")

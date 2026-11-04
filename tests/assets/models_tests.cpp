@@ -802,3 +802,16 @@ TEST_CASE("a sparse morph target with no buffer view decodes", "[assets]") {
     CHECK(target.positions[0] == assets::vec3_t{ 0, 0, 0 });
     CHECK(target.positions[2] == assets::vec3_t{ 7, 8, 9 });
 }
+
+TEST_CASE("a glTF's images are called their names, or their URIs, or nothing", "[assets]") {
+    const std::string image =
+        "data:image/png;base64," + test::base64(test::png(1, 1, 4, { 255, 0, 0, 255 }));
+    builder_t built;
+    built.positions({ 0, 0, 0 });
+    const std::string rest = R"(,"images":[{"name":"GFX\\old.bmp","uri":")" + image +
+                             R"("},{"uri":")" + image + R"("}])";
+    const assets::model_t model = decoded(built.json(rest, built.data_uri()));
+    REQUIRE(model.image_names.size() == 2);
+    CHECK(model.image_names[0] == "GFX\\old.bmp");
+    CHECK(model.image_names[1].empty());
+}
