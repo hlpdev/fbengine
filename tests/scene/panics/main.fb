@@ -150,6 +150,10 @@ Select arguments[0]
         Camera().SetViewport(Rect(0, 0, 0, 10))
     Case "no-window"
         Camera().Project(Vec3(0, 0, -1))
+    Case "ambient-occlusion-negative"
+        Camera().SetAmbientOcclusion(-1)
+    Case "ambient-occlusion-radius-zero"
+        Camera().SetAmbientOcclusionRadius(0)
     Case "camera-freed"
         Local camera = Camera()
         camera.Free()

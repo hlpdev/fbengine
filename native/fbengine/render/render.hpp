@@ -58,6 +58,13 @@ bool read_lists(std::uint64_t camera, float target_width, float target_height, f
 void read_view(const scene::camera_t& camera, const scene::view_t& view,
                const scene::tweened_t& tweened, lists_t& lists);
 
+/// Lets go of the histories of cameras that have gone or no longer antialias by them; and, for
+/// tests, how many there are.
+void forget_unused_histories();
+std::size_t history_count();
+/// A camera's history's textures' width, 0 for none, for tests.
+std::uint32_t history_width(std::uint64_t camera);
+
 /// Adds the passes that bring a camera's HDR image to `into`, a target of `size`, `format`, and
 /// `samples`, in `scissor`, blending it by its alpha if the camera doesn't clear what's there;
 /// false, with fbe_error's why, if they can't be added.

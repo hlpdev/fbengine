@@ -305,6 +305,58 @@ Public Final Class Camera Extends Entity
     @MainThread @PanicsAtCaller
     Public Method Hdr(): Bool => fbe_camera_hdr(Live("Hdr"))
 
+    /// Sets how much ambient occlusion it has: how open the sky of what's opaque in its view is,
+    /// by the depth of what's around it, raised to this; 0, at first, for none, which costs
+    /// nothing. It darkens the ambient and environment light of PBR materials only: direct light,
+    /// what blends, other orders, UNLIT and VERTEX materials, and reflections in mirrors take none,
+    /// and a normal map's bumps give none. Below 0 panics.
+    @Limits(0)
+    @MainThread @PanicsAtCaller
+    Public Method SetAmbientOcclusion(strength: Float)
+        If !fbe_camera_set_ambient_occlusion(Live("SetAmbientOcclusion"), strength)
+            Failed("SetAmbientOcclusion")
+        End If
+    End Method
+
+    /// How much ambient occlusion it has.
+    @MainThread @PanicsAtCaller
+    Public Method AmbientOcclusion(): Float =>
+        fbe_camera_ambient_occlusion(Live("AmbientOcclusion"))
+
+    /// Sets how far its ambient occlusion reaches, in the world, 1 at first. Not above 0 panics.
+    @Limits(0, Above: True)
+    @MainThread @PanicsAtCaller
+    Public Method SetAmbientOcclusionRadius(radius: Float)
+        If !fbe_camera_set_ambient_occlusion_radius(Live("SetAmbientOcclusionRadius"), radius)
+            Failed("SetAmbientOcclusionRadius")
+        End If
+    End Method
+
+    /// How far its ambient occlusion reaches.
+    @MainThread @PanicsAtCaller
+    Public Method AmbientOcclusionRadius(): Float =>
+        fbe_camera_ambient_occlusion_radius(Live("AmbientOcclusionRadius"))
+
+    /// Sets whether an HDR camera antialiases over frames, False at first: its projection a part
+    /// of a pixel off each frame, and what's drawn blended over what the frames before had there,
+    /// moved as its entities and skins have moved since. Particles, what blends, morphs, an
+    /// Instances' own instances, and reflections have no motion of their own.
+    @MainThread @PanicsAtCaller
+    Public Method SetTemporalAA(on: Bool)
+        If !fbe_camera_set_temporal_aa(Live("SetTemporalAA"), on) Then Failed("SetTemporalAA")
+    End Method
+
+    /// Whether it antialiases over frames.
+    @MainThread @PanicsAtCaller
+    Public Method TemporalAA(): Bool => fbe_camera_temporal_aa(Live("TemporalAA"))
+
+    /// Has it forget what the frames before had, for a cut, where nothing's where it was. Its size
+    /// or viewport changing does the same.
+    @MainThread @PanicsAtCaller
+    Public Method ResetHistory()
+        If !fbe_camera_reset_history(Live("ResetHistory")) Then Failed("ResetHistory")
+    End Method
+
     /// Sets what an HDR camera's light is multiplied by, 1 at first. Below 0, or not finite, panics.
     @MainThread @PanicsAtCaller
     Public Method SetExposure(exposure: Float)

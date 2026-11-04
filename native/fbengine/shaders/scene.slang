@@ -26,6 +26,7 @@ import pbr;
 [vk::constant_id(6)] const uint layerCount = 0;
 [vk::constant_id(7)] const uint layerBlends = 0;
 [vk::constant_id(8)] const uint layerSets = 0;
+[vk::constant_id(9)] const uint inPrepass = 0;
 
 static const uint shadingUnlit = 1;
 static const uint shadingVertex = 2;
@@ -154,7 +155,7 @@ struct Draw
     uint drawnTargetCount;
     uint targetVertices;
     uint hasTangents;
-    uint spare;
+    uint previous;
 };
 
 // Reads through what a draw has the address of, each in a function of its own. Inlined, an optimizer
@@ -290,6 +291,16 @@ struct Shadow
 // A camera's frame: how its view goes to clip space; its viewport in the target's pixels; its fog;
 // the ambient light; how a depth finds its cluster; whether its view's mirrored across, as a
 // reflection's is; how many of its lights, first, are directional; and its lists.
+// An entity as it was last frame: from its space to clip space then, and its skin's palette then,
+// if it had the same one.
+struct Previous
+{
+    float4x4 toClip;
+    float4x4* palette;
+    uint hasPalette;
+    uint spare;
+};
+
 struct Camera
 {
     float4x4 projection;
@@ -320,6 +331,12 @@ struct Camera
     uint spareToo;
     // The rows of what turns its view's directions into the world's.
     float4 toWorld[3];
+    // What its entities were last frame, if it goes by that; how far its projection's off, as its
+    // clip space goes; and what its ambient occlusion's raised to, 0 for none.
+    Previous* previous;
+    float2 jitter;
+    float ambientOcclusion;
+    uint moving;
 };
 
 // The camera, and, as instances number their instances, not draws, which draw they're of.
@@ -327,6 +344,8 @@ struct Push
 {
     Camera* camera;
     uint draw;
+    // Its ambient occlusion's texture, if it has any.
+    uint occlusion;
 };
 
 [[vk::push_constant]]
@@ -461,6 +480,29 @@ float3 skinnedNormal(float4x4 skin, float3 normal)
     return whole(dot(a, across) < 0.0 ? -turned : turned);
 }
 
+// What a vertex's joints make of a palette.
+float4x4 skinOf(Draw draw, float4x4* palette, uint index)
+{
+    const Joints joints = jointsAt(draw.joints, index);
+    float4x4 skin = float4x4(0.0);
+    for (uint joint = 0; joint < 4; ++joint)
+    {
+        const uint which = (joints.joints[joint / 2] >> (16 * (joint % 2))) & 0xFFFF;
+        const float weight = joints.weights[joint];
+        if (which == noBone)
+        {
+            skin += float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+                             1.0) * weight;
+        }
+        else
+        {
+            // One past the palette is a mistake in a model, never a read past its end.
+            skin += paletteAt(palette, min(which, draw.jointCount - 1)) * weight;
+        }
+    }
+    return skin;
+}
+
 // A draw's corner, from where it is in its mesh's space and how it's turned there.
 Corner litCorner(Camera* camera, Draw draw, uint drawIndex, float4 position, float3 normal,
                  float4 tangent, Vertex vertex, float4 color)
@@ -540,23 +582,7 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
     // Skinned before its own matrix, in its mesh's space, as the palette is.
     if (draw.jointCount != 0)
     {
-        const Joints joints = jointsAt(draw.joints, index);
-        float4x4 skin = float4x4(0.0);
-        for (uint joint = 0; joint < 4; ++joint)
-        {
-            const uint which = (joints.joints[joint / 2] >> (16 * (joint % 2))) & 0xFFFF;
-            const float weight = joints.weights[joint];
-            if (which == noBone)
-            {
-                skin += float4x4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
-                                 0.0, 1.0) * weight;
-            }
-            else
-            {
-                // One past the palette is a mistake in a model, never a read past its end.
-                skin += paletteAt(draw.palette, min(which, draw.jointCount - 1)) * weight;
-            }
-        }
+        const float4x4 skin = skinOf(draw, draw.palette, index);
         position = mul(skin, position);
         normal = skinnedNormal(skin, normal);
         // A bone that mirrors turns its bitangent with it, as it does its normal.
@@ -830,6 +856,11 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     float roughness = material.roughness;
     float occlusion = 1.0;
     float3 emissive = material.emissive;
+    if (inPrepass != 0 && camera.ambientOcclusion > 0.0)
+    {
+        const float open = loadTexel(push.occlusion, int2(corner.position.xy)).r;
+        occlusion = pow(open, camera.ambientOcclusion);
+    }
     const bool hasNormal = dot(normal, normal) > 0.0;
     if ((material.maps & (1 << mapMetalRough)) != 0)
     {
@@ -839,7 +870,7 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     }
     if ((material.maps & (1 << mapOcclusion)) != 0)
     {
-        occlusion = 1.0 + (material.occlusionStrength * (mapTexel(material.mapLayers[mapOcclusion], corner).r - 1.0));
+        occlusion *= 1.0 + (material.occlusionStrength * (mapTexel(material.mapLayers[mapOcclusion], corner).r - 1.0));
     }
     if ((material.maps & (1 << mapEmissive)) != 0)
     {
@@ -1076,6 +1107,107 @@ float4 fragmentMain(Corner corner, bool front : SV_IsFrontFace) : SV_Target
         current.a = 1.0;
     }
     return current;
+}
+
+// What a camera's prepass has of a corner: where it is, and where it was on its view, neither off
+// by the jitter, as w's say; how far along its view it is; and what a cut-out goes by.
+struct PrepassCorner
+{
+    float4 position : SV_Position;
+    float3 now : NOW;
+    float3 then : THEN;
+    float depth : DEPTH_ALONG;
+    float2 uv0 : TEXCOORD0;
+    float2 uv1 : TEXCOORD1;
+    float alpha : ALPHA;
+    nointerpolation uint draw : DRAW;
+};
+
+// A corner of the prepass, from where it is in its mesh's space now, and then.
+PrepassCorner prepassCorner(Camera* camera, Draw draw, uint drawIndex, float4 now, float4 then,
+                            Vertex vertex, float alpha)
+{
+    const float4 place = mul(draw.toView, now);
+    PrepassCorner corner;
+    corner.position = mul(camera.projection, place);
+    corner.now = float3(corner.position.xy - (camera.jitter * corner.position.w), corner.position.w);
+    corner.then = corner.now;
+    if (camera.moving != 0)
+    {
+        const float4 clip = mul(camera.previous[draw.previous].toClip, then);
+        corner.then = float3(clip.xy, clip.w);
+    }
+    corner.depth = -place.z;
+    corner.uv0 = float2(vertex.uv0[0], vertex.uv0[1]);
+    corner.uv1 = float2(vertex.uv1[0], vertex.uv1[1]);
+    corner.alpha = alpha;
+    corner.draw = drawIndex;
+    return corner;
+}
+
+[shader("vertex")]
+PrepassCorner prepassVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+{
+    Camera* camera = push.camera;
+    const Draw draw = camera.draws[instance];
+    const Vertex vertex = vertexAt(draw.vertices, index);
+    float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    for (uint i = 0; i < draw.drawnTargetCount; ++i)
+    {
+        const DrawnTarget drawn = drawnTargetAt(draw.drawnTargets, i);
+        const TargetVertex moved =
+            targetVertexAt(draw.targets, drawn.target * draw.targetVertices + index);
+        position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) * drawn.weight;
+    }
+    float4 then = position;
+    if (draw.jointCount != 0)
+    {
+        const float4x4 skin = skinOf(draw, draw.palette, index);
+        const Previous previous = camera.previous[draw.previous];
+        const bool hadSkin = camera.moving != 0 && previous.hasPalette != 0;
+        then = mul(hadSkin ? skinOf(draw, previous.palette, index) : skin, position);
+        position = mul(skin, position);
+    }
+    return prepassCorner(camera, draw, instance, position, then, vertex, vertex.color[3]);
+}
+
+[shader("vertex")]
+PrepassCorner prepassInstanceVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+{
+    Camera* camera = push.camera;
+    const Draw draw = camera.draws[push.draw];
+    const Vertex vertex = vertexAt(draw.vertices, index);
+    const Instance one = instanceAt(draw.instances, instance);
+    const float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
+                                   dot(one.rows[2], start), 1.0);
+    return prepassCorner(camera, draw, push.draw, position, position, vertex,
+                         vertex.color[3] * one.color.a);
+}
+
+[shader("fragment")]
+float4 prepassFragment(PrepassCorner corner) : SV_Target
+{
+    if (alphaTest != 0)
+    {
+        // Cut out as it's drawn, by the same alpha.
+        Camera* camera = push.camera;
+        const Draw draw = camera.draws[corner.draw];
+        const Material material = camera.materials[draw.material];
+        const float4 start = float4(1.0, 1.0, 1.0, startingAlpha(material, draw, corner.alpha));
+        const float alpha = material.noAlpha != 0
+                                ? draw.color.a
+                                : overLayers(material, corner.uv0, corner.uv1, start).a;
+        if (alpha < material.cutoff)
+        {
+            discard;
+        }
+    }
+    // Behind where it could have been, it has no motion to go by.
+    const float2 moved = corner.then.z > 0.0
+                             ? ((corner.now.xy / corner.now.z) - (corner.then.xy / corner.then.z)) * 0.5
+                             : float2(0.0, 0.0);
+    return float4(clamp(corner.depth, 0.001, 60000.0), 0.0, moved);
 }
 
 // A shadow's tile: what's nearest the light, kept as its depth, drawn with the camera's projection the

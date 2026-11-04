@@ -41,4 +41,5 @@ endif()
 fbengine_add_shaders(TARGETS ${fbengine_shader_targets} NAMESPACE fbe::shaders
                      HEADER engine_shaders.hpp SHADERS shaders/present.slang
                      shaders/canvas.slang shaders/environment.slang shaders/scene.slang
-                     shaders/sky.slang shaders/tonemap.slang shaders/bloom.slang)
+                     shaders/sky.slang shaders/tonemap.slang shaders/bloom.slang
+                     shaders/ssao.slang shaders/taa.slang)

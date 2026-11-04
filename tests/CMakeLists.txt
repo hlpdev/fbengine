@@ -927,6 +927,8 @@ if(FBENGINE_FB_TESTS)
       "no-window=Project on a Camera: the camera's viewport has no size: open the window, or give it a viewport"
       "horizontal-no-window=HorizontalFieldOfView on a Camera: the camera's viewport has no size"
       "camera-freed=SetOrder on a Camera that was freed"
+      "ambient-occlusion-negative=SetAmbientOcclusion on a Camera: ambient occlusion's strength is 0 or more, not -1"
+      "ambient-occlusion-radius-zero=SetAmbientOcclusionRadius on a Camera: ambient occlusion's radius is above 0, not 0"
       "intensity=SetIntensity on a Light: a light's intensity is 0 or more, not -1"
       "light-range=SetRange on a Light: a light's range is above 0, not 0"
       "cone=SetCone on a Light: a spot light's cone is 0 <= inner <= outer <= Pi / 2"

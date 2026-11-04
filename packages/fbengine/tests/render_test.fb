@@ -232,6 +232,23 @@ Function ATexturesAlphaAndAWireframeAreWhatTheyreSetTo() Throws GraphicsError
 End Function
 
 @Test
+Function ACamerasAmbientOcclusionAndAntialiasingAreWhatTheyreSetTo()
+    Local world = Fresh()
+    Defer world.Free()
+    Local camera = Camera()
+    Expect(camera.AmbientOcclusion() == 0)
+    Expect(camera.AmbientOcclusionRadius() == 1)
+    Expect(!camera.TemporalAA())
+    camera.SetAmbientOcclusion(2)
+    camera.SetAmbientOcclusionRadius(0.5)
+    camera.SetTemporalAA(True)
+    camera.ResetHistory()
+    Expect(camera.AmbientOcclusion() == 2)
+    Expect(camera.AmbientOcclusionRadius() == 0.5)
+    Expect(camera.TemporalAA())
+End Function
+
+@Test
 Function ALightsShadowsAreWhatTheyreSetTo()
     Local world = Fresh()
     Defer world.Free()

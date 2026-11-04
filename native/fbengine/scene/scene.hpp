@@ -437,6 +437,12 @@ struct camera_t {
     float fog_density = 0.02F;
     /// Whether it draws into an HDR image, and what that comes to in its target.
     bool hdr = false;
+    /// What its ambient occlusion's raised to, 0 for none, and how far it reaches in the world.
+    float ambient_occlusion = 0.0F;
+    float ambient_occlusion_radius = 1.0F;
+    /// Whether an HDR camera antialiases over frames, and how many times it's been told to forget.
+    bool temporal_aa = false;
+    std::uint64_t history_resets = 0;
     float exposure = 1.0F;
     std::int32_t tonemap = FBE_TONEMAP_NONE;
     float gamma = 1.0F;
