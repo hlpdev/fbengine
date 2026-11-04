@@ -72,10 +72,13 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
         sets |= (packed >> 3U) << layer;
     }
     const bool particles = ((key >> 50U) & 1U) != 0;
-    const std::string_view lit_vertex = particles ? "particleVertex" : "vertexMain";
+    const bool instances = ((key >> 51U) & 1U) != 0;
+    const std::string_view cast_vertex = instances ? "shadowInstanceVertex" : "shadowVertex";
+    const std::string_view plain_vertex = instances ? "instanceVertex" : "vertexMain";
+    const std::string_view lit_vertex = particles ? "particleVertex" : plain_vertex;
     gpu::pipeline_desc_t desc{
         .shader = &shaders::scene,
-        .vertex = shadows ? "shadowVertex" : lit_vertex,
+        .vertex = shadows ? cast_vertex : lit_vertex,
         .fragment = shadows ? "shadowFragment" : "fragmentMain",
         .color = format,
         .depth = texture::depth_format,
@@ -192,6 +195,16 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
                 vkCmdBindIndexBuffer(commands, batch.indices, batch.index_offset,
                                      VK_INDEX_TYPE_UINT32);
             }
+            if (batch.instance_count != 0) {
+                // Its instance numbers its instances, so its draw's told apart.
+                vkCmdPushConstants(commands, layout, flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL),
+                                   sizeof(VkDeviceAddress), sizeof(std::uint32_t),
+                                   &batch.first_draw);
+                vkCmdDrawIndexed(commands, batch.index_count, batch.instance_count, 0, 0,
+                                 batch.instance_first);
+                gpu::count_draws(1, std::uint64_t{ batch.index_count } / 3 * batch.instance_count);
+                continue;
+            }
             vkCmdDrawIndexed(commands, batch.index_count, batch.draws, 0, 0, batch.first_draw);
             gpu::count_draws(1, std::uint64_t{ batch.index_count } / 3 * batch.draws);
         }
@@ -278,6 +291,15 @@ draw_data_t draw_data(const fbe_draw_t& draw, const mat4_t& view) {
     mat4_t world;
     std::ranges::copy(draw.matrix, world.m.begin());
     const mat4_t to_view = view * world;
+    draw_data_t data{};
+    data.to_view = to_view.m;
+    std::ranges::copy(draw.color, data.color.begin());
+    data.light_first = draw.light_first;
+    data.light_count = draw.light_count;
+    // A sprite has no normals to turn.
+    if (draw.kind == FBE_ENTITY_SPRITE) {
+        return data;
+    }
     const vec3_t a = to_view.axis(0);
     const vec3_t b = to_view.axis(1);
     const vec3_t c = to_view.axis(2);
@@ -287,14 +309,9 @@ draw_data_t draw_data(const fbe_draw_t& draw, const mat4_t& view) {
     const vec3_t x = scene::cross(b, c) * sign;
     const vec3_t y = scene::cross(c, a) * sign;
     const vec3_t z = scene::cross(a, b) * sign;
-    draw_data_t data{};
-    data.to_view = to_view.m;
     data.normals[0] = { x.x, y.x, z.x, 0.0F };
     data.normals[1] = { x.y, y.y, z.y, 0.0F };
     data.normals[2] = { x.z, y.z, z.z, 0.0F };
-    std::ranges::copy(draw.color, data.color.begin());
-    data.light_first = draw.light_first;
-    data.light_count = draw.light_count;
     return data;
 }
 
@@ -373,6 +390,19 @@ bool plane_grid(const scene::camera_t& camera, const scene::view_t& view, const 
     return true;
 }
 
+/// A cluster's box's corners, through its entity's matrix.
+std::array<vec3_t, 8> cluster_corners(const mat4_t& world,
+                                      const scene::instance_cluster_t& cluster) {
+    std::array<vec3_t, 8> corners;
+    for (unsigned corner = 0; corner < 8; ++corner) {
+        corners[corner] = scene::transform_point(
+            world, vec3_t((corner & 1U) != 0 ? cluster.high.x : cluster.low.x,
+                          (corner & 2U) != 0 ? cluster.high.y : cluster.low.y,
+                          (corner & 4U) != 0 ? cluster.high.z : cluster.low.z));
+    }
+    return corners;
+}
+
 /// A world's sky as its shader reads it, from a view, the `own`th of as many as the mirrors' planes
 /// and the scene's last; its texture's added to `sampled`. Each view keeps to what's through its
 /// mirror's plane before any other's, and the scene's to what's through none.
@@ -442,8 +472,11 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
     const scene::quat_t back = scene::inverse(view.rotation);
     const mat4_t view_matrix =
         scene::compose(back * -view.position, back, vec3_t(1.0F, 1.0F, 1.0F));
+    const scene::frustum_t frustum = scene::frustum_of(camera, view);
     out.batches.reserve(lists.items.size());
     // The sky goes after what's opaque in the scene, and before all that blends and what's over it.
+    std::uint32_t last_material = none;
+    std::uint32_t last_index = 0;
     bool sky_owed = s.worlds[s.entities.world[camera.entity]].sky != 0;
     const auto draw_sky = [&] {
         sky_owed = false;
@@ -461,13 +494,18 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
         if (sky_owed && (item.order > 0 || (item.order == 0 && item.blended)) && !draw_sky()) {
             return false;
         }
-        const auto [index, added] =
-            material_index.try_emplace(item.material, static_cast<std::uint32_t>(materials.size()));
-        if (added) {
-            materials.push_back(material_data(item.material, target, sampled));
+        // The last one's as likely as not, as a run of sprites is.
+        if (item.material != last_material || materials.empty()) {
+            const auto [index, added] = material_index.try_emplace(
+                item.material, static_cast<std::uint32_t>(materials.size()));
+            if (added) {
+                materials.push_back(material_data(item.material, target, sampled));
+            }
+            last_material = item.material;
+            last_index = index->second;
         }
         draw_data_t data = draw_data(item.draw, view_matrix);
-        data.material = index->second;
+        data.material = last_index;
         batch_t batch;
         batch.key = item.draw.pipeline;
         batch.first_draw = static_cast<std::uint32_t>(draws.size());
@@ -547,6 +585,49 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             if (!plane_grid(camera, view, item, plane.segments, data, batch)) {
                 return false;
             }
+        } else if (item.draw.kind == FBE_ENTITY_INSTANCES) {
+            scene::instances_t& found = scene::scene().instances[s.entities.component[item.entity]];
+            const surface_buffers_t* surface =
+                surface_buffers(item.draw.geometry, static_cast<std::size_t>(item.draw.surface));
+            const VkDeviceAddress records = instances_buffer(found);
+            if (surface == nullptr || records == 0) {
+                return false;
+            }
+            if (surface->index_count == 0) {
+                continue;
+            }
+            data.vertices = surface->vertices.address;
+            data.instances = records;
+            batch.indices = surface->indices.buffer;
+            batch.index_count = surface->index_count;
+            draws.push_back(data);
+            mat4_t world;
+            std::ranges::copy(item.draw.matrix, world.m.begin());
+            // What's in view of its clusters, those one after another going together.
+            batch_t* running = nullptr;
+            const auto level = s.geometry_slots.find(item.draw.geometry);
+            float half_width = 0.0F;
+            float half_height = 0.0F;
+            scene::half_extents(camera, view, half_width, half_height);
+            for (const scene::instance_cluster_t& cluster : scene::instance_clusters(found)) {
+                const std::array<vec3_t, 8> corners = cluster_corners(world, cluster);
+                if (!scene::in_frustum(frustum, corners.data(), corners.size()) ||
+                    !level.has_value() ||
+                    scene::cluster_lod(found, cluster, world, camera, frustum.eye, half_height) !=
+                        *level) {
+                    running = nullptr;
+                    continue;
+                }
+                if (running != nullptr) {
+                    running->instance_count += cluster.count;
+                    continue;
+                }
+                batch.instance_first = cluster.first;
+                batch.instance_count = cluster.count;
+                out.batches.push_back(batch);
+                running = &out.batches.back();
+            }
+            continue;
         } else if (item.draw.kind == FBE_ENTITY_PARTICLES) {
             scene::particles_t& particles =
                 scene::scene().particles[s.entities.component[item.entity]];

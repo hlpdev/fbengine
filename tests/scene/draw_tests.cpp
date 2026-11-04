@@ -60,6 +60,8 @@ TEST_CASE("a camera draws what it sees, opaque nearest first, then blended furth
     fbe_material_set_blend(glass, FBE_BLEND_ALPHA);
     const std::uint64_t far = cube(world.handle, 0.0F, 0.0F, -20.0F);
     const std::uint64_t close = cube(world.handle, 0.0F, 0.0F, -5.0F);
+    // By geometry before depth: drawn of one, they go nearest first.
+    fbe_mesh_set_geometry(far, fbe_mesh_geometry(close));
     const std::uint64_t pane_far = cube(world.handle, 2.0F, 0.0F, -15.0F, glass);
     const std::uint64_t pane_close = cube(world.handle, -2.0F, 0.0F, -8.0F, glass);
     // Behind the camera, hidden, in another World, faded out, or alpha 0: not drawn.
@@ -355,8 +357,11 @@ TEST_CASE("draws that tie keep their order when something else is freed", "[rend
     // Made first, so freeing it moves the meshes' last into its place in their pool.
     const std::uint64_t gone = cube(world.handle, 0.0F, 0.0F, -50.0F);
     std::array<std::uint64_t, 3> tied{};
+    // Drawn of one, as they go by geometry before anything that can tie.
+    const std::uint64_t shared = fbe_mesh_geometry(gone);
     for (std::uint64_t& made : tied) {
         made = cube(world.handle, 0.0F, 0.0F, -5.0F);
+        fbe_mesh_set_geometry(made, shared);
     }
     const auto order = [&] {
         std::vector<std::uint64_t> found;
@@ -440,6 +445,11 @@ TEST_CASE("a mirrored draw keys and sorts apart from an unmirrored one", "[rende
     fbe_entity_set_scale(twice, -1.0F, -1.0F, 1.0F, FBE_SPACE_WORLD);
     const std::uint64_t nearer = cube(world.handle, 0.0F, 2.0F, -4.0F);
     fbe_entity_set_scale(nearer, 1.0F, 1.0F, -1.0F, FBE_SPACE_WORLD);
+    // By geometry before depth: drawn of one, each pipeline's nearest first.
+    const std::uint64_t shared = fbe_mesh_geometry(plain);
+    fbe_mesh_set_geometry(mirrored, shared);
+    fbe_mesh_set_geometry(twice, shared);
+    fbe_mesh_set_geometry(nearer, shared);
     const std::vector<fbe_draw_t> found = draws(camera);
     REQUIRE(found.size() == 4);
     // Unmirrored first though further, each pipeline nearest first; two flips aren't a mirror.

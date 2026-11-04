@@ -60,6 +60,12 @@ mat4_t sprite_matrix(std::uint32_t entity, std::uint32_t camera) {
 }
 
 mat4_t sprite_matrix(std::uint32_t entity, const mat4_t& own, quat_t eye) {
+    return sprite_matrix(entity, own, eye * vec3_t(1.0F, 0.0F, 0.0F),
+                         eye * vec3_t(0.0F, 1.0F, 0.0F), eye * vec3_t(0.0F, 0.0F, 1.0F));
+}
+
+mat4_t sprite_matrix(std::uint32_t entity, const mat4_t& own, vec3_t eye_x, vec3_t eye_y,
+                     vec3_t eye_z) {
     const scene_t& s = scene();
     const sprite_t& sprite = s.sprites[s.entities.component[entity]];
     const vec3_t place = own.axis(3);
@@ -74,19 +80,18 @@ mat4_t sprite_matrix(std::uint32_t entity, const mat4_t& own, quat_t eye) {
     } else if (sprite.view_mode == FBE_SPRITE_UPRIGHT) {
         // Its own up, and toward the camera as far as that lets it.
         y = direction(own.axis(1), vec3_t(0.0F, 1.0F, 0.0F));
-        const vec3_t back = eye * vec3_t(0.0F, 0.0F, 1.0F);
-        z = direction(back - y * dot(back, y), direction(own.axis(2), vec3_t(0.0F, 0.0F, 1.0F)));
+        z = direction(eye_z - y * dot(eye_z, y), direction(own.axis(2), vec3_t(0.0F, 0.0F, 1.0F)));
         x = cross(y, z);
     } else {
         // Parallel to the camera's view, whatever the entity's own turn and scale: the camera's
         // turn alone, as its view has it, so a mirror above the camera doesn't mirror it.
-        x = eye * vec3_t(1.0F, 0.0F, 0.0F);
-        y = eye * vec3_t(0.0F, 1.0F, 0.0F);
-        z = eye * vec3_t(0.0F, 0.0F, 1.0F);
+        x = eye_x;
+        y = eye_y;
+        z = eye_z;
     }
     // Rolled in its plane, counterclockwise as seen, sized, and moved by its handle.
-    const float c = std::cos(sprite.roll);
-    const float r = std::sin(sprite.roll);
+    const float c = sprite.roll != 0.0F ? std::cos(sprite.roll) : 1.0F;
+    const float r = sprite.roll != 0.0F ? std::sin(sprite.roll) : 0.0F;
     const vec3_t rolled_x = x * c + y * r;
     const vec3_t rolled_y = y * c - x * r;
     const vec3_t across = rolled_x * sprite.size_x;
