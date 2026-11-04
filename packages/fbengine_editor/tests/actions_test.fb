@@ -7,6 +7,8 @@ Import std.io
 Import std.math
 Import std.os
 Import std.test
+Import std.time
+Import std.os As os
 Import fbengine
 Import fbengine_editor
 Import fbengine_ui
@@ -48,6 +50,29 @@ Function Pane(id: String): Driving
                    Function(editor: Editor, scene: DemoScene) => !editor.Docked.Showing(id))
 End Function
 
+// A program that goes on for a minute, built once.
+Global lasting: TempDir? = Null
+
+Function Lasting(): String
+    Try
+        Local had = lasting
+        If had == Null
+            Local made = Try TempDir()
+            lasting = made
+            had = made
+            Try File.WriteText(made.Path / "project.toml",
+                               "[project]\nname = \"lasting\"\nversion = \"0.1.0\"\ntype = \"executable\"\n")
+            Try File.WriteText(made.Path / "main.fb",
+                               "Import std.time\n\nFor at = 1 To 6000\n    Sleep(10.Milliseconds)\nEnd For\n")
+            Local status = Try os.Command("fb").Args(["--color", "never", "build", made.Path.Text, "-o", (made.Path / "lasting.exe").Text]).Status()
+            If !status.Success Then Panic("it wasn't built: {status}")
+        End If
+        Return (had.Path / "lasting.exe").Text
+    Catch error As IOError
+        Panic(error.Message)
+    End Try
+End Function
+
 // What's expected of each. The demo's scene has 6, before anything's added.
 Function Drivings(): Map<String, Driving>
     Local all: Map<String, Driving> = {}
@@ -74,12 +99,20 @@ Function Drivings(): Map<String, Driving>
     all["play.run"] = Driving(Nothing,
                               Function(editor: Editor,
                                        scene: DemoScene) => editor.ShowingDialog() != Null)
-    // A build with nothing to build can end before the menu's open, so nothing's going after is all
-    // this can say; play_test's PlayAndStopHaveKeysAndAMenu stops a game that goes on.
+    // Building with what goes on until it's stopped, so it's only stopped by this.
     all["play.stop"] = Driving(Function(editor: Editor, scene: DemoScene)
         Local open = editor.Current()
-        If open != Null Then editor.Run.Start(open, "res://none.scene")
-    End Function, Function(editor: Editor, scene: DemoScene) => !editor.Run.Going())
+        If open == Null Then Panic("its project")
+        editor.Run.Fb = Lasting()
+        editor.Run.Start(open, "res://none.scene")
+        If !editor.Run.Going() Then Panic("it didn't start")
+    End Function, Function(editor: Editor, scene: DemoScene)
+        Local since = Stopwatch.StartNew()
+        While editor.Run.Going() && since.Elapsed.TotalSeconds < 10.0
+            editor.Step()
+        End While
+        Return editor.Run.State() == PlayState.STOPPED
+    End Function)
     // With no program it has nothing to do, and it's enabled; its work's in inspector_test.
     all["file.reload_components"] = Driving(Nothing,
                                             Function(editor: Editor,

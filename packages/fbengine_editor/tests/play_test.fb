@@ -10,6 +10,7 @@ Import std.os
 Import std.test
 Import std.text
 Import std.time
+Import std.os As os
 Import fbengine
 Import fbengine_editor
 Import fbengine_ui
@@ -17,8 +18,9 @@ Import fbengine_ui
 Function NoGpu(): Bool => Env.Get("FBENGINE_NO_GPU") == "1"
 
 // A game of std alone, quick to build: it says its arguments, on both streams; with `ends` it ends
-// with that code; else it goes on, adding to a file named `beat` as it does, so it shows it's alive.
-Const PLAIN = "Import std.collections\nImport std.core\nImport std.io\nImport std.os\nImport std.time\n\nLocal arguments = Process.Arguments()\nPrint(\"it says {{arguments.Join(\" \")}}\")\nPrintError(\"its error\")\nIf File.Exists(Path(\"ends\"))\n    Process.Exit(3)\nEnd If\nTry? File.WriteText(Path(\"started\"), \"yes\")\nLocal count = 0\nWhile True\n    count += 1\n    Try? File.WriteText(Path(\"beat\"), \"{{count}}\")\n    Sleep(10.Milliseconds)\nEnd While\n"
+// with that code; else it goes on, adding to a file named `beat` as it does, so it shows it's alive,
+// for 2 minutes, so a test that's failed or been killed doesn't leave it going for ever.
+Const PLAIN = "Import std.collections\nImport std.core\nImport std.io\nImport std.os\nImport std.time\n\nLocal arguments = Process.Arguments()\nPrint(\"it says {{arguments.Join(\" \")}}\")\nPrintError(\"its error\")\nIf File.Exists(Path(\"ends\"))\n    Process.Exit(3)\nEnd If\nTry? File.WriteText(Path(\"started\"), \"yes\")\nLocal count = 0\nWhile count < 12000\n    count += 1\n    Try? File.WriteText(Path(\"beat\"), \"{{count}}\")\n    Sleep(10.Milliseconds)\nEnd While\n"
 
 Function Game(at: Path, name: String, program: String,
               dependencies: String = ""): Path Throws IOError
@@ -87,11 +89,71 @@ Function ItsLinesAreWhatsWrittenByTheirEnds()
     bytes[0] = 255
     log.Feed(bytes, 1)
     log.Flush()
-    Expect(log.Total() == 5 && log.Lines()[2] != "")
+    Expect(log.Total() == 5 && log.Lines()[2] == String.FromUtf8([239, 191, 189]), "{log.Lines()}")
     log.Flush()
     Expect(log.Total() == 5)
     log.Clear()
     Expect(log.Lines().Count == 0 && log.Total() == 0 && log.Dropped() == 0)
+End Function
+
+// `text` given to `log`, as the stream numbered `stream`.
+Function Fed(log: OutputLog, text: UInt8[], stream: Int = 0)
+    Local bytes = Buffer<UInt8>(Max(text.Count, 1))
+    For at = 0 Until text.Count
+        bytes[at] = text[at]
+    End For
+    log.Feed(bytes, text.Count, stream)
+End Function
+
+// Each stream's its own, so one's line isn't cut by the other's, nor a character.
+@Test
+Function EachStreamHasItsOwnLines()
+    Local log = OutputLog()
+    Fed(log, "ab".Bytes, 0)
+    Fed(log, "cd\n".Bytes, 1)
+    Fed(log, "ef\n".Bytes, 0)
+    Expect(log.Lines() == ["cd", "abef"], "{log.Lines()}")
+    Fed(log, [195], 0)
+    Fed(log, "x\n".Bytes, 1)
+    Fed(log, [169, 10], 0)
+    Expect(log.Lines() == ["cd", "abef", "x", "é"], "{log.Lines()}")
+    // A stream's end ends both's.
+    Fed(log, "o".Bytes, 0)
+    Fed(log, "e".Bytes, 1)
+    log.Flush()
+    Expect(log.Lines().Count == 6 && log.Waiting(0) == 0 && log.Waiting(1) == 0)
+End Function
+
+// A return ends a line, as a progress bar's does, and with a newline after is one end, however it's cut.
+@Test
+Function AReturnEndsALine()
+    Local log = OutputLog()
+    Fed(log, "10%\r20%\r".Bytes)
+    Expect(log.Lines() == ["10%", "20%"], "{log.Lines()}")
+    Fed(log, "\n30%\r\n".Bytes)
+    Expect(log.Lines() == ["10%", "20%", "30%"], "{log.Lines()}")
+    Fed(log, "\n".Bytes)
+    Expect(log.Lines().Count == 4 && log.Lines()[3] == "", "{log.Lines()}")
+End Function
+
+// A line with no end is cut, so what's waiting never grows, and a character isn't cut with it.
+@Test
+Function ALineWithNoEndIsBounded()
+    Local log = OutputLog()
+    Local bytes = Buffer<UInt8>(65536)
+    For at = 0 Until 65536
+        bytes[at] = 120
+    End For
+    For at = 1 To 160
+        log.Feed(bytes, 65536)
+        Expect(log.Waiting() < 65536, "{log.Waiting()}")
+    End For
+    Expect(log.Total() == 160 && log.Lines()[0].Bytes.Count == 65536, "{log.Total()}")
+    log.Clear()
+    log.Feed(bytes, 65535)
+    Fed(log, [195, 169, 10])
+    Expect(log.Lines().Count == 2 && log.Lines()[0].Bytes.Count == 65535 && log.Lines()[1] == "é",
+           "{log.Lines().Count}")
 End Function
 
 Function Found(editor: Editor, name: String): Node
@@ -186,10 +248,10 @@ Function AStoppedGameIsNeverLeftBehind() Throws IOError, GraphicsError
     Expect(editor.Run.State() == PlayState.RUNNING, Said(editor))
     Expect(!(Try Dead(folder)), "it's going")
     Expect(editor.Run.ProcessId() != Null)
-    // By the command: at once.
+    // By the command.
     Expect(editor.Actions.Run("play.stop"))
-    Expect(editor.Run.State() == PlayState.STOPPED && !editor.Run.Going() &&
-           editor.Run.ProcessId() == Null)
+    StepUntil(editor, Function() => !editor.Run.Going())
+    Expect(editor.Run.State() == PlayState.STOPPED && editor.Run.ProcessId() == Null)
     Expect(editor.Run.ExitCode() == Null && Said(editor).EndsWith("Stopped."), Said(editor))
     Expect(Try Dead(folder))
     Expect(!editor.Actions.Run("play.stop"), "there's nothing to stop")
@@ -199,6 +261,7 @@ Function AStoppedGameIsNeverLeftBehind() Throws IOError, GraphicsError
     StepUntil(editor, Function() => File.Exists(beat) || !editor.Run.Going())
     Local first = editor.Run.ProcessId()
     editor.Play()
+    StepUntil(editor, Function() => editor.Run.State() == PlayState.BUILDING)
     Expect(editor.Run.State() == PlayState.BUILDING && editor.Run.ProcessId() != first)
     Expect(Try Dead(folder))
     // Stopped while it's building, it isn't run after.
@@ -449,12 +512,14 @@ Function PlayAndStopHaveKeysAndAMenu() Throws IOError, GraphicsError
     Try Simulate.PressKey(Key.F5)
     editor.Step()
     Try Simulate.KeyUp(Key.LEFT_SHIFT)
+    StepUntil(editor, Function() => !editor.Run.Going())
     Expect(editor.Run.State() == PlayState.STOPPED, "{editor.Run.State()}")
     editor.Play()
     StepUntil(editor, Function() => File.Exists(folder / "beat") || !editor.Run.Going())
     Expect(editor.Run.State() == PlayState.RUNNING, Said(editor))
     Try Clicked(editor, Found(editor, "menu.Play"))
     Try Clicked(editor, Found(editor, "play.stop"))
+    StepUntil(editor, Function() => !editor.Run.Going())
     Expect(editor.Run.State() == PlayState.STOPPED, "{editor.Run.State()}")
     Expect(Try Dead(folder))
 End Function
@@ -508,7 +573,7 @@ End Function
 
 // What it says, however much, never holds it up; and something it started that holds its pipes never
 // holds the editor up, nor is what that says after taken for the next run's.
-Const NOISY = "Import std.collections\nImport std.core\nImport std.io\nImport std.os\nImport std.time\n\nFor at = 1 To 40000\n    Print(\"line {{at}}\")\nEnd For\nIf Process.Arguments().Contains(\"--hold\")\n    Sleep(1500.Milliseconds)\n    Print(\"late\")\n    Try? File.WriteText(Path(\"held\"), \"yes\")\n    Process.Exit(0)\nEnd If\nIf File.Exists(Path(\"hold\"))\n    Local holding = Try? Command(Folders.Executable ?? \"\").Arg(\"--hold\").Stdin(Stdio.NONE).Spawn()\nEnd If\nProcess.Exit(0)\n"
+Const NOISY = "Import std.collections\nImport std.core\nImport std.io\nImport std.os\nImport std.time\n\nIf Process.Arguments().Contains(\"--hold\")\n    Local waited = 0\n    While !File.Exists(Path(\"go\")) && waited < 60000\n        waited += 1\n        Sleep(10.Milliseconds)\n    End While\n    For at = 1 To 20000\n        Print(\"late late late late late late late late late late late late\")\n    End For\n    Try? File.WriteText(Path(\"held\"), \"yes\")\n    Process.Exit(0)\nEnd If\nFor at = 1 To 40000\n    Print(\"line {{at}}\")\nEnd For\nIf File.Exists(Path(\"hold\"))\n    Local holding = Try? Command(Folders.Executable ?? \"\").Arg(\"--hold\").Stdin(Stdio.NONE).Spawn()\nEnd If\nIf File.Exists(Path(\"linger\"))\n    Try? File.WriteText(Path(\"lingering\"), \"yes\")\n    For at = 1 To 12000\n        Sleep(10.Milliseconds)\n    End For\nEnd If\nProcess.Exit(0)\n"
 
 @Test
 Function ANoisyGameAndOneThatLeavesItsPipesHeldHoldNothingUp() Throws IOError, GraphicsError
@@ -532,17 +597,312 @@ Function ANoisyGameAndOneThatLeavesItsPipesHeldHoldNothingUp() Throws IOError, G
     editor.Play()
     StepUntil(editor, Function() => !editor.Run.Going())
     Expect(editor.Run.State() == PlayState.ENDED, Said(editor))
-    Expect(!File.Exists(folder / "held"), "it's gone on before that's done")
-    Local since = Instant.Now()
-    While !File.Exists(folder / "held") && (Instant.Now() - since) < 30.Seconds
-        editor.Step()
-        Sleep(5.Milliseconds)
-    End While
+    Expect(!File.Exists(folder / "held"), "it's gone on before it's told to")
+    // What it has to say after is more than a pipe holds, so it finishes only if that's still read.
+    Try LetHolderFinish(editor, folder)
+End Function
+
+// Tells a game's process that holds its pipes to say what it has to say, and sees that it's finished,
+// with none of it taken for the run's.
+Function LetHolderFinish(editor: Editor, folder: Path) Throws IOError
+    Try File.WriteText(folder / "go", "")
+    StepUntil(editor, Function() => File.Exists(folder / "held"))
     For i = 1 To 40
         editor.Step()
         Sleep(5.Milliseconds)
     End For
     Expect(File.Exists(folder / "held") && !Said(editor).Contains("late"), Said(editor))
+End Function
+
+// Stopped, what it was building with is gone too, not only what would have come after.
+@Test
+Function StoppingABuildEndsWhatsBuilding() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "as_fb", PLAIN)
+    Local beat = folder / "beat"
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    Saved(editor)
+    editor.Play()
+    StepUntil(editor, Function() => File.Exists(beat) || !editor.Run.Going())
+    Expect(editor.Run.State() == PlayState.RUNNING, Said(editor))
+    Local built = editor.Run.Program()
+    If built == Null Then Panic("its program")
+    editor.Run.StopNow()
+    Try File.Delete(beat)
+    // It builds with what goes on until it's stopped, and says so by its file.
+    editor.Run.Fb = built.Text
+    Local open = editor.Current()
+    If open == Null Then Panic("its project")
+    editor.Run.Start(open, "res://level.scene")
+    StepUntil(editor, Function() => File.Exists(beat) || !editor.Run.Going())
+    Expect(editor.Run.State() == PlayState.BUILDING && !(Try Dead(folder)), Said(editor))
+    editor.Run.Stop()
+    StepUntil(editor, Function() => !editor.Run.Going())
+    Expect(editor.Run.State() == PlayState.STOPPED, Said(editor))
+    Expect(Try Dead(folder))
+End Function
+
+// What can't be stopped is still shown as going, its process known of, and nothing takes its place.
+@Test
+Function WhatCantBeStoppedStaysKnownOf() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "stuck", PLAIN)
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    Saved(editor)
+    editor.Play()
+    StepUntil(editor, Function() => File.Exists(folder / "beat") || !editor.Run.Going())
+    Local first = editor.Run.ProcessId()
+    Expect(first != Null && editor.Run.State() == PlayState.RUNNING, Said(editor))
+    editor.Run.FailStoppingWith("it won't")
+    editor.Run.Stop()
+    Expect(editor.Run.State() == PlayState.RUNNING && editor.Run.ProcessId() == first)
+    Expect(Said(editor).Contains("It couldn't be stopped: it won't"), Said(editor))
+    editor.Play()
+    Expect(editor.Run.State() == PlayState.RUNNING && editor.Run.ProcessId() == first, Said(editor))
+    Expect(Said(editor).Contains("it says --scene"), "it was cleared: {Said(editor)}")
+    Expect(!(Try Dead(folder)))
+    editor.Run.FailStoppingWith(Null)
+    editor.Run.StopNow()
+    Expect(!editor.Run.Going() && (Try Dead(folder)))
+End Function
+
+// Stopping what's left its output held doesn't hold up a frame: it's stopping, playing again waits for
+// that, and what's next starts when it's done.
+@Test
+Function StoppingNeverHoldsUpAFrame() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "lingers", NOISY)
+    Try File.WriteText(folder / "hold", "")
+    Try File.WriteText(folder / "linger", "")
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    Saved(editor)
+    editor.Play()
+    StepUntil(editor, Function() => File.Exists(folder / "lingering") || !editor.Run.Going())
+    Expect(editor.Run.State() == PlayState.RUNNING, Said(editor))
+    Local since = Instant.Now()
+    editor.Run.Stop()
+    Expect((Instant.Now() - since) < 750.Milliseconds, "it took {Instant.Now() - since}")
+    Expect(editor.Run.State() == PlayState.STOPPING && editor.Run.Going(), Said(editor))
+    since = Instant.Now()
+    editor.Step()
+    Expect((Instant.Now() - since) < 750.Milliseconds, "a frame took {Instant.Now() - since}")
+    Expect(editor.Output.Heading() == "Stopping")
+    Local open = editor.Current()
+    If open == Null Then Panic("its project")
+    editor.Run.Start(open, "res://level.scene")
+    Expect(editor.Run.State() == PlayState.STOPPING, Said(editor))
+    StepUntil(editor, Function() => editor.Run.State() != PlayState.STOPPING)
+    Expect(editor.Run.State() == PlayState.BUILDING, Said(editor))
+    editor.Run.StopNow()
+    Expect(!editor.Run.Going())
+    Try LetHolderFinish(editor, folder)
+End Function
+
+// Closing its project waits for a run to go, however long what it left takes to let go of its output.
+@Test
+Function ClosingAProjectWaitsForItsRunToGo() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "closes", NOISY)
+    Try File.WriteText(folder / "hold", "")
+    Try File.WriteText(folder / "linger", "")
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    Saved(editor)
+    editor.Play()
+    StepUntil(editor, Function() => File.Exists(folder / "lingering") || !editor.Run.Going())
+    Expect(editor.Run.State() == PlayState.RUNNING, Said(editor))
+    editor.CloseProject()
+    Expect(editor.Run.State() == PlayState.STOPPED, "{editor.Run.State()}")
+    Try LetHolderFinish(editor, folder)
+End Function
+
+// Quitting doesn't wait for what a game left with its output, which needn't ever close.
+@Test
+Function QuittingDoesntWaitForWhatHoldsAGamesOutput() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "leaves", NOISY)
+    Try File.WriteText(folder / "hold", "")
+    Local program = (Try Engine()).Parent() ?? Path("")
+    Local run = Try os.Command("fb").Args(["--color", "never", "run", (program / "fbengine_editor").Text, "--",
+                                        "--play", folder.Text]).Stdin(Stdio.NONE).Stdout(Stdio.NONE).Stderr(Stdio.NONE).Spawn()
+    Local since = Instant.Now()
+    Local ended = run.TryWait()
+    While ended == Null && (Instant.Now() - since) < 240.Seconds
+        Sleep(50.Milliseconds)
+        ended = run.TryWait()
+    End While
+    // Whichever, it isn't left holding on after this.
+    Try File.WriteText(folder / "go", "")
+    Expect(ended?.Success == True, ended != Null ? "it failed" : "it hadn't ended")
+    Expect(File.Exists(folder / "assets" / "level.scene") && Dir.Exists(folder / "build" / "play"))
+End Function
+
+// However fast a game says things, it isn't kept waiting.
+Const LOUD = "Import std.core\nImport std.os\n\nLocal line = \"\"\nFor at = 1 To 100\n    line += \"0123456789\"\nEnd For\nFor at = 1 To 8000\n    Print(line)\nEnd For\nProcess.Exit(0)\n"
+
+@Test
+Function AGameSayingALotIsntKeptWaiting() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "loud", LOUD)
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    Saved(editor)
+    Frame.SetLimit(60)
+    Defer Frame.SetLimit(0)
+    editor.Play()
+    StepUntil(editor, Function() => editor.Run.State() != PlayState.BUILDING)
+    Local since = Instant.Now()
+    StepUntil(editor, Function() => !editor.Run.Going())
+    Expect(editor.Run.State() == PlayState.ENDED, Said(editor))
+    Expect((Instant.Now() - since) < 15.Seconds, "8 MB took {Instant.Now() - since}")
+End Function
+
+// Its folder and its scene can be called anything.
+@Test
+Function ANameCanHaveSpacesAndBeInAnyLanguage() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path / "gämes ü 日本", "plain", PLAIN)
+    Try File.WriteText(folder / "ends", "")
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    editor.SaveScene("res://a level.scene")
+    editor.Play()
+    StepUntil(editor, Function() => !editor.Run.Going())
+    Expect(editor.Run.ExitCode() == 3, Said(editor))
+    Expect(Said(editor).Contains("it says --scene res://a level.scene"), Said(editor))
+End Function
+
+// A yes that can't be kept holds for now, and it says why.
+@Test
+Function AYesThatCantBeKeptHoldsForNow() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "unkept", PLAIN)
+    Try File.WriteText(folder / "ends", "")
+    Try Dir.CreateAll(settings.Path / "trusted.txt")
+    Local editor = Try Editor(settings.Path)
+    Try editor.Start(folder)
+    editor.Step()
+    Saved(editor)
+    editor.Play()
+    editor.Step()
+    Pressed(editor.ShowingDialog(), "Run It")
+    Expect(editor.Run.Going() && editor.Kept.Trusted(folder.Text))
+    Expect(editor.ShowingDialog() != Null, "it doesn't say it wasn't kept")
+    Pressed(editor.ShowingDialog(), "OK")
+    editor.Step()
+    editor.Step()
+    StepUntil(editor, Function() => !editor.Run.Going())
+    editor.Play()
+    editor.Step()
+    Expect(editor.ShowingDialog() == Null && editor.Run.Going(), "it asked again")
+    editor.Finish()
+    // It's gone with the editor.
+    editor = Try Editor(settings.Path)
+    Defer editor.Finish()
+    Expect(!editor.Kept.Trusted(folder.Text))
+End Function
+
+// A yes is to that folder as it's named and built: what would run differently is asked about again.
+@Test
+Function AChangedBuildStepAsksAgain() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "changing", PLAIN)
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    Saved(editor)
+    Local file = folder / "project.toml"
+    Local first = Try File.ReadText(file)
+    Expect(editor.Kept.Trusted(folder.Text))
+    Try File.WriteText(file, first + "\n[build]\nstep = \"something else\"\n")
+    Expect(!editor.Kept.Trusted(folder.Text))
+    editor.Play()
+    editor.Step()
+    Expect(editor.ShowingDialog() != Null && !editor.Run.Going(), "it ran without asking")
+    Pressed(editor.ShowingDialog(), "Not Now")
+    editor.Step()
+    editor.Step()
+    editor.Kept.Trust(folder.Text)
+    Expect(editor.Kept.Trusted(folder.Text))
+    // Another section isn't how it's built; another name is another project.
+    Local stepped = Try File.ReadText(file)
+    Try File.WriteText(file, stepped + "\n[other]\nnote = 1\n")
+    Expect(editor.Kept.Trusted(folder.Text))
+    Try File.WriteText(file, stepped.Replace("name = \"changing\"", "name = \"another\""))
+    Expect(!editor.Kept.Trusted(folder.Text))
+End Function
+
+// What's been deleted is saved again, so there's something to play.
+@Test
+Function PlayingADeletedSceneSavesItAgain() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "deleted", PLAIN)
+    Try File.WriteText(folder / "ends", "")
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    Saved(editor)
+    Local file = folder / "assets" / "level.scene"
+    Expect(!editor.Edits.Modified())
+    Try File.Delete(file)
+    editor.Play()
+    Expect(File.Exists(file) && editor.Run.Going(), Said(editor))
+End Function
+
+// Scrolled up to read, it stays there; at the bottom, it follows.
+@Test
+Function ThePaneFollowsOnlyFromTheBottom() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path, "scrolled", PLAIN)
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    editor.Docked.Show("output")
+    For at = 1 To 200
+        editor.Run.Log.Say("line {at}")
+    End For
+    editor.Step()
+    editor.Step()
+    Local scroller = Found(editor, "output.scroller") As? ScrollView
+    If scroller == Null Then Panic("its scroller")
+    Expect(scroller.MaxOffset() > 100.0 && scroller.Offset() == scroller.MaxOffset())
+    scroller.SetOffset(50)
+    editor.Step()
+    Expect(scroller.Offset() == 50.0, "{scroller.Offset()}")
+    editor.Run.Log.Say("more")
+    editor.Step()
+    editor.Step()
+    Expect(scroller.Offset() == 50.0, "{scroller.Offset()}")
+    scroller.SetOffset(scroller.MaxOffset())
+    editor.Step()
+    editor.Run.Log.Say("and more")
+    editor.Step()
+    editor.Step()
+    Expect(scroller.Offset() == scroller.MaxOffset(), "{scroller.Offset()} of {scroller.MaxOffset()}")
+    Expect(editor.Output.ShownLines()[editor.Output.ShownLines().Count - 1] == "and more")
 End Function
 
 // The engine's package: where ctest says, since what's above its build folder can be another
@@ -565,7 +925,7 @@ Function ARealGameReadsTheSavedScene() Throws IOError, GraphicsError
     Local settings = Try TempDir()
     Local games = Try TempDir()
     Local engine = Try Engine()
-    Local program = "Import std.collections\nImport std.core\nImport std.io\nImport fbengine\n\nFunction Main() Throws IOError, GraphicsError\n    Window.SetHeadless(True)\n    Try Graphics(64, 64)\n    Assets.MountFolder(\"res://\", Path(\"assets\"))\n    Local asked = Scene.Requested()\n    If asked == Null Then Panic(\"no scene asked for\")\n    Local roots = Try Scene.Load(asked)\n    Print(\"read {{roots.Count}}, {{roots[0].Name()}} at {{roots[0].Position()}}\")\n    EndGraphics()\nEnd Function\n\nTry Main()\n"
+    Local program = "Import std.collections\nImport std.core\nImport std.io\nImport fbengine\n\nFunction Main() Throws IOError, GraphicsError\n    Window.SetHeadless(True)\n    Try Graphics(64, 64)\n    Assets.MountFolder(\"res://\", Path(\"assets\"))\n    Local asked = Try Scene.Requested()\n    If asked == Null Then Panic(\"no scene asked for\")\n    Local roots = Try Scene.Load(asked)\n    Print(\"read {{roots.Count}}, {{roots[0].Name()}} at {{roots[0].Position()}}\")\n    EndGraphics()\nEnd Function\n\nTry Main()\n"
     Local folder = Try Game(games.Path, "real", program,
                             "fbengine = {{ path = \"{engine.Text.Replace("\\", "/")}\" }}\n")
     Local editor = Try Started(settings.Path, folder)

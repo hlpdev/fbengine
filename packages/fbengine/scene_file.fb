@@ -970,12 +970,25 @@ Public Final Class Scene
     End New
 
     /// The scene the program's been asked to run on, as the editor's Play asks with `--scene` and a
-    /// res:// path; Null if it hasn't. It looks in `arguments`, or the program's.
-    Public Static Method Requested(arguments: String[]? = Null): String?
+    /// res:// path; Null if it hasn't. It looks in `arguments`, or the program's. It's an IOError of
+    /// INVALID_DATA for a `--scene` with no res:// path after it.
+    ///
+    /// ```vb
+    /// Local asked = Try Scene.Requested()
+    /// Local roots = Try Scene.Load(asked ?? "res://levels/first.scene")
+    /// ```
+    Public Static Method Requested(arguments: String[]? = Null): String? Throws IOError
         Local given = arguments ?? Process.Arguments()
         Local at = given.IndexOf("--scene")
-        If at == Null || at + 1 >= given.Count Then Return Null
-        Return given[at + 1]
+        If at == Null Then Return Null
+        If at + 1 >= given.Count
+            Throw IOError(IOErrorKind.INVALID_DATA, "--scene needs a res:// path after it")
+        End If
+        Local asked = given[at + 1]
+        If !asked.StartsWith("res://")
+            Throw IOError(IOErrorKind.INVALID_DATA, "--scene needs a res:// path, not {asked}")
+        End If
+        Return asked
     End Method
 
     /// `roots`, and all under each, as a scene's text. It's an IOError of INVALID_DATA for what can't

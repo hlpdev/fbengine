@@ -62,6 +62,8 @@ Public Final Class Editor
     Field quitting: Bool = False
     Field titled: String = ""
     // The file the scene's saved in, a res:// path and where that is on disk.
+    // Why the last yes to a folder's code couldn't be kept, until that's been said.
+    Field notKept: String? = Null
     Field sceneFile: String? = Null
     // What the scene's file said when it was last read or written here, to tell another's changing it.
     Field sceneText: String? = Null
@@ -217,7 +219,7 @@ Public Final Class Editor
     Public Method TrustProject()
         Local open = project
         If open == Null Then Return
-        Kept.Trust(open.Folder.Text)
+        notKept = Kept.Trust(open.Folder.Text)
         If GameComponents.HasProgram(open.Folder) Then Kinds.Start(open.Folder)
     End Method
 
@@ -227,10 +229,26 @@ Public Final Class Editor
         Local asking = Dialog("Run this project's code?", why)
         asking.AddButton("Not Now")
         asking.AddButton("Run It", Function[Weak Self]()
-            Self?.TrustProject()
+            Local own = Self
+            If own == Null Then Return
+            own.TrustProject()
             If then != Null Then then()
+            own.SayWhyNotKept()
         End Function)
         Showed(asking)
+    End Method
+
+    // Says that a yes holds only for now, and why, without taking the place of what's being asked.
+    Method SayWhyNotKept()
+        Local why = notKept
+        If why == Null Then Return
+        notKept = Null
+        Local says = "This folder's yes couldn't be kept, so it holds until the editor closes: {why}"
+        If ShowingDialog() == Null
+            Said("Couldn't keep that", says)
+        Else
+            Run.Log.Say(says)
+        End If
     End Method
 
     // Reads what kinds of component the project has, which runs its code, so a project is asked about
@@ -251,7 +269,7 @@ Public Final Class Editor
     Public Method CloseProject()
         Local open = project
         If open == Null Then Return
-        Run.Stop()
+        Run.StopNow()
         Local kept = Value.Object()
         kept["layout"] = Docked.Saved()
         Local scene = sceneFile
@@ -423,11 +441,12 @@ Public Final Class Editor
             End Function)
             Return
         End If
-        If sceneFile == Null
+        Local scene = sceneFile
+        If scene == Null
             AskForSceneFile(Function[Weak Self]()
                 Self?.Played()
             End Function)
-        ElseIf Edits.Modified()
+        ElseIf Edits.Modified() || !Assets.Exists(scene)
             SaveScene(Null, Function[Weak Self]()
                 Self?.Played()
             End Function)

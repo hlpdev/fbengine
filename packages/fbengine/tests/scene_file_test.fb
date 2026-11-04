@@ -860,10 +860,15 @@ End Function
 
 // What a program's asked to run on, as the editor's Play asks.
 @Test
-Function TheSceneAskedForIsWhatFollowsItsOption()
-    Expect(Scene.Requested(["--scene", "res://a.scene"]) == "res://a.scene")
-    Expect(Scene.Requested(["x", "--scene", "res://a.scene", "y"]) == "res://a.scene")
-    Expect(Scene.Requested(["x", "--scene"]) == Null)
-    Expect(Scene.Requested(["x"]) == Null)
-    Expect(Scene.Requested() == Null)
+Function TheSceneAskedForIsWhatFollowsItsOption() Throws IOError
+    Expect((Try Scene.Requested(["--scene", "res://a.scene"])) == "res://a.scene")
+    Expect((Try Scene.Requested(["x", "--scene", "res://a.scene", "y"])) == "res://a.scene")
+    Expect((Try Scene.Requested(["x"])) == Null)
+    Expect((Try Scene.Requested()) == Null)
+    // What's after it has to be one.
+    For wrong In [["x", "--scene"], ["--scene", "--x"], ["--scene", "level.scene"]]
+        Local error = ExpectThrows<IOError>(Scene.Requested(wrong))
+        Expect((error?.Message ?? "").Contains("--scene needs a res:// path"), error?.Message ?? "")
+    End For
+    Expect((ExpectThrows<IOError>(Scene.Requested(["--scene", "--x"]))?.Message ?? "").Contains("--x"))
 End Function

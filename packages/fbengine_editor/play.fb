@@ -13,11 +13,19 @@ From fbengine_ui Import Label, Node, ScrollView, Sizing, Widget
 Import fbengine
 Import "./project"
 
-// How many lines of what a run says are kept, how long stopping waits for the last of its output, and
-// how much is read at once.
+// How many lines of what a run says are kept, and how long one can be, in bytes; how long what's ended
+// waits for the last of its output, and how long stopping holds up a frame for it, in seconds; and how
+// much of a stream is read at once, which is as much as it gets a frame.
 Const MOST_LINES = 1000
-Const CHUNK: Int64 = 4096
+Const MOST_LINE_BYTES = 65536
 Const LAST_OUTPUT: Float64 = 1.0
+Const STOP_WAIT: Float64 = 0.05
+Const CHUNK: Int64 = 65536
+// How long a frame gives to reading what's coming fast, in seconds: a pipe gives what it holds, little
+// at a read however much is asked for, and a frame's one read would keep a game waiting to print.
+Const READ_WAIT: Float64 = 0.003
+// How long closing a project or quitting waits for what's been killed.
+Const STOP_NOW_WAIT: Float64 = 2.0
 
 /// What a run's got to.
 Public Enum PlayState
@@ -33,15 +41,25 @@ Public Enum PlayState
     BUILD_FAILED
     /// Something couldn't be started, as its output says.
     COULDNT_START
+    /// It's been killed, and hasn't gone yet, or something it started has its output still.
+    STOPPING
     /// It was stopped.
     STOPPED
 End Enum
 
-/// What a run says, as lines: bytes as they come, split at each line's end, what isn't UTF-8 shown as
-/// it can be, and only the last so many kept.
+// What's come of a stream that hasn't ended its line.
+Final Class Unfinished
+    Package Field Bytes: UInt8[] = []
+    // Whether what came last was a return, so a newline next is part of that line's end.
+    Package Field AfterReturn: Bool = False
+End Class
+
+/// What a run says, as lines: bytes as they come, each stream's split at each line's end, a newline, a
+/// return, or both, and what's too long for a line cut, what isn't UTF-8 shown as it can be, and only
+/// the last so many kept.
 Public Final Class OutputLog
     Field lines: String[] = []
-    Field partial: UInt8[] = []
+    Field streams: Unfinished[]
     Field dropped: Int = 0
     Field added: Int = 0
     Field cleared: Int = 0
@@ -50,6 +68,7 @@ Public Final Class OutputLog
     /// A log keeping `most` lines.
     Public New(most: Int = MOST_LINES)
         Self.most = most
+        streams = [Unfinished(), Unfinished()]
     End New
 
     /// What it's kept, oldest first.
@@ -64,14 +83,24 @@ Public Final Class OutputLog
     /// How many lines it's let go of.
     Public Method Dropped(): Int => dropped
 
-    /// Adds `count` of `bytes`, as much of them as ends a line.
-    Public Method Feed(bytes: Buffer<UInt8>, count: Int64)
+    /// How many bytes of the stream numbered `stream` haven't ended their line.
+    Public Method Waiting(stream: Int = 0): Int => streams[stream].Bytes.Count
+
+    /// Adds `count` of `bytes` of the stream numbered `stream`, 0 or 1, as much of them as ends a line.
+    Public Method Feed(bytes: Buffer<UInt8>, count: Int64, stream: Int = 0)
+        Local of = streams[stream]
         For at = 0 To count - 1
             Local byte = bytes[at]
+            Local after = of.AfterReturn
+            of.AfterReturn = False
             If byte == 10
-                Finish()
+                If !after Then Finish(of)
+            ElseIf byte == 13
+                Finish(of)
+                of.AfterReturn = True
             Else
-                partial.Add(byte)
+                of.Bytes.Add(byte)
+                If of.Bytes.Count >= MOST_LINE_BYTES Then Cut(of)
             End If
         End For
     End Method
@@ -84,22 +113,51 @@ Public Final Class OutputLog
 
     /// Ends what hasn't ended its line, as a stream that's closed has.
     Public Method Flush()
-        If partial.Count > 0 Then Finish()
+        For of In streams
+            If of.Bytes.Count > 0 Then Finish(of)
+            of.AfterReturn = False
+        End For
     End Method
 
     /// Empties it.
     Public Method Clear()
         lines.Clear()
-        partial.Clear()
+        For of In streams
+            of.Bytes.Clear()
+            of.AfterReturn = False
+        End For
         dropped = 0
         added = 0
         cleared += 1
     End Method
 
-    Method Finish()
-        If partial.Count > 0 && partial[partial.Count - 1] == 13 Then partial.RemoveAt(partial.Count - 1)
-        Added(Shown(partial))
-        partial.Clear()
+    Method Finish(of: Unfinished)
+        Added(Shown(of.Bytes))
+        of.Bytes.Clear()
+    End Method
+
+    // A line as long as one gets, ended before a character that's only begun, which starts the next.
+    Method Cut(of: Unfinished)
+        Local bytes = of.Bytes
+        Local start = bytes.Count - 1
+        While start > 0 && start > bytes.Count - 4 && (bytes[start] & 192) == 128
+            start -= 1
+        End While
+        Local lead = bytes[start]
+        Local length = lead >= 240 ? 4 : (lead >= 224 ? 3 : (lead >= 192 ? 2 : 1))
+        If start + length <= bytes.Count
+            Finish(of)
+            Return
+        End If
+        Local rest: UInt8[] = []
+        For at = start Until bytes.Count
+            rest.Add(bytes[at])
+        End For
+        While bytes.Count > start
+            bytes.RemoveAt(bytes.Count - 1)
+        End While
+        Finish(of)
+        of.Bytes = rest
     End Method
 
     Method Added(line: String)
@@ -143,20 +201,37 @@ Public Final Class GameRun
     Field folder: Path? = Null
     Field program: Path? = Null
     Field scene: String = ""
+    // How a process that's gone ended, while what it started may still have its output, and for how long.
+    Field finished: ExitStatus? = Null
+    Field draining: Stopwatch
     // How many of its pipes are still being read, and which of its processes those are of: a pipe
-    // that something it started still holds is let go of, and what comes after is dropped.
+    // that something it started still holds is let go of, and what comes after is read and dropped.
     Field reading: Int = 0
     Field pumped: Int = 0
+    // How many reads have brought something, and how many had by the last Update.
+    Field reads: Int = 0
+    Field readsBefore: Int = 0
+    // What's to start once what's been killed has gone.
+    Field nextProject: GameProject? = Null
+    Field nextScene: String = ""
+    Field stopFails: String? = Null
 
     Public New()
         Log = OutputLog()
+        draining = Stopwatch.StartNew()
     End New
 
     /// What it's got to.
     Public Method State(): PlayState => state
 
     /// Whether a process of it may be going.
-    Public Method Going(): Bool => state == PlayState.BUILDING || state == PlayState.RUNNING
+    Public Method Going(): Bool => state == PlayState.BUILDING || state == PlayState.RUNNING ||
+                                   state == PlayState.STOPPING
+
+    /// Makes each Stop fail, with `message`, as the OS might, or not, with Null, for a test.
+    Public Method FailStoppingWith(message: String?)
+        stopFails = message
+    End Method
 
     /// Where its program's built to, once it's started.
     Public Method Program(): Path? => program
@@ -171,9 +246,19 @@ Public Final Class GameRun
     End Method
 
     /// Builds the game in `project` and runs it on `sceneFile`, a res:// path, after stopping what's
-    /// going. It starts now, and Update goes on with it.
+    /// going: now, or by Update once that's gone. If what's going couldn't be stopped, which the log
+    /// says, this does nothing, so nothing's left going without being known of.
     Public Method Start(project: GameProject, sceneFile: String)
         Stop()
+        If state == PlayState.STOPPING
+            nextProject = project
+            nextScene = sceneFile
+            Return
+        End If
+        If !Going() Then Begin(project, sceneFile)
+    End Method
+
+    Method Begin(project: GameProject, sceneFile: String)
         Log.Clear()
         code = Null
         folder = project.Folder
@@ -183,51 +268,87 @@ Public Final Class GameRun
         program = built
         Log.Say("Building {project.Name}…")
         Spawned(Command(Fb).Args(["--color", "never", "build", project.Folder.Text, "-o",
-                                  built.Text]),
+                                  built.Text]).Folder(project.Folder.Text),
                 PlayState.BUILDING)
     End Method
 
-    /// Ends what's going, at once, and waits for it, with the last of what it said. It's left as it
-    /// is if nothing's going.
+    /// Kills what's going, and gives it a moment; if it, or what it started that has its output, needs
+    /// longer, it's STOPPING, and Update ends that. It's left as it is if nothing's going, or if it
+    /// can't be killed, which the log says, and what Start's waiting to start doesn't start.
     Public Method Stop()
+        nextProject = Null
+        If state == PlayState.STOPPING || !Going() Then Return
         Local going = child
-        If going == Null Then Return
         Try
-            Try going.Kill()
+            Local fails = stopFails
+            If fails != Null Then Throw IOError(IOErrorKind.PERMISSION_DENIED, fails)
+            If going != Null Then Try going.Kill()
         Catch error As IOError
             // Still going, as far as anyone can tell, so it's still shown as that.
             Log.Say("It couldn't be stopped: {error.Message}")
             Return
         End Try
-        going.Wait()
-        child = Null
-        Drained()
-        Log.Flush()
-        Log.Say("Stopped.")
-        state = PlayState.STOPPED
+        state = PlayState.STOPPING
+        Local since = Stopwatch.StartNew()
+        While state == PlayState.STOPPING && since.Elapsed.TotalSeconds < STOP_WAIT
+            Update()
+            If state != PlayState.STOPPING Then Break
+            Scheduler.Main.Step()
+            Sleep(1.Milliseconds)
+        End While
     End Method
 
-    /// Moves it on: from what's built to its program, and from what's ended to how it did.
+    /// Stops what's going, and waits for it as long as it's sensible to, as closing a project does,
+    /// whose run has nothing to end it after.
+    Public Method StopNow()
+        Stop()
+        Local since = Stopwatch.StartNew()
+        While state == PlayState.STOPPING && since.Elapsed.TotalSeconds < STOP_NOW_WAIT
+            Update()
+            Scheduler.Main.Step()
+            Sleep(1.Milliseconds)
+        End While
+    End Method
+
+    /// Moves it on, never holding up a frame: from what's built to its program, from what's ended to how
+    /// it did, and from what's been killed to its being gone.
     Public Method Update()
+        ReadMore()
         Local going = child
-        If going == Null Then Return
-        Local ended = going.TryWait()
-        If ended == Null Then Return
-        child = Null
-        Drained()
-        Log.Flush()
-        If state == PlayState.BUILDING
-            If ended.Success
-                Run()
-            Else
-                Log.Say("It couldn't be built.")
-                state = PlayState.BUILD_FAILED
-            End If
-            Return
+        If going != Null
+            Local ended = going.TryWait()
+            If ended == Null Then Return
+            child = Null
+            finished = ended
+            draining = Stopwatch.StartNew()
         End If
-        code = ended.Code
-        Log.Say("It ended, with {ended}.")
-        state = PlayState.ENDED
+        Local status = finished
+        If status == Null Then Return
+        // Its pipes finish as what's ended has closed them, unless something it started holds them.
+        If reading > 0 && draining.Elapsed.TotalSeconds < LAST_OUTPUT Then Return
+        finished = Null
+        pumped += 1
+        reading = 0
+        Log.Flush()
+        Select state
+            Case PlayState.STOPPING
+                Log.Say("Stopped.")
+                state = PlayState.STOPPED
+                Local project = nextProject
+                nextProject = Null
+                If project != Null Then Begin(project, nextScene)
+            Case PlayState.BUILDING
+                If status.Success
+                    Run()
+                Else
+                    Log.Say("It couldn't be built.")
+                    state = PlayState.BUILD_FAILED
+                End If
+            Default
+                code = status.Code
+                Log.Say("It ended, with {status}.")
+                state = PlayState.ENDED
+        End Select
     End Method
 
     // The game's own program, on the scene, in its folder.
@@ -248,41 +369,41 @@ Public Final Class GameRun
             state = next
             Local out = made.Stdout
             Local err = made.Stderr
-            If out != Null Then Pump(out, pumped)
-            If err != Null Then Pump(err, pumped)
+            If out != Null Then Pump(out, pumped, 0)
+            If err != Null Then Pump(err, pumped, 1)
         Catch error As IOError
             Log.Say("It couldn't be started: {error.Message}")
             state = PlayState.COULDNT_START
         End Try
     End Method
 
-    // Goes on reading `stream` until it closes, as it's written, at each Flip.
-    Async Method Pump(stream: ChildOutput, of: Int)
+    // Gives what's coming fast a little longer, and what's quiet nothing.
+    Method ReadMore()
+        If reading > 0 && reads != readsBefore
+            Local since = Stopwatch.StartNew()
+            While since.Elapsed.TotalSeconds < READ_WAIT
+                Scheduler.Main.Step()
+            End While
+        End If
+        readsBefore = reads
+    End Method
+
+    // Goes on reading `stream` until it closes, as it's written, at each Flip; once that's a process
+    // that's gone, what it says is dropped, but it's still read, so what has it can finish.
+    Async Method Pump(stream: ChildOutput, of: Int, number: Int)
         reading += 1
         Local bytes = Buffer<UInt8>(CHUNK)
         Try
             While True
                 Local count = Await stream.ReadAsync(bytes)
-                If of != pumped Then Return
                 If count <= 0 Then Break
-                Log.Feed(bytes, count)
+                reads += 1
+                If of == pumped Then Log.Feed(bytes, count, number)
             End While
         Catch error As IOError
-            If of != pumped Then Return
-            Log.Say("Its output couldn't be read: {error.Message}")
+            If of == pumped Then Log.Say("Its output couldn't be read: {error.Message}")
         End Try
-        reading -= 1
-    End Method
-
-    // Lets its pipes finish, as what's ended has closed them, unless something it started holds them.
-    Method Drained()
-        Local since = Stopwatch.StartNew()
-        While reading > 0 && since.Elapsed.TotalSeconds < LAST_OUTPUT
-            Scheduler.Main.Step()
-            Sleep(1.Milliseconds)
-        End While
-        pumped += 1
-        reading = 0
+        If of == pumped Then reading -= 1
     End Method
 End Class
 
@@ -301,6 +422,8 @@ Function HeadingOf(state: PlayState): String
             Return "Couldn't be built"
         Case PlayState.COULDNT_START
             Return "Couldn't be started"
+        Case PlayState.STOPPING
+            Return "Stopping"
         Case PlayState.STOPPED
             Return "Stopped"
     End Select
@@ -345,7 +468,10 @@ Public Final Class OutputPane Extends Widget
     Public Method Update()
         heading.SetText(HeadingOf(run.State()))
         Local log = run.Log
+        // It follows what's new only if that's where it's been left, so what's above can be read.
+        Local following = scroller.Offset() >= scroller.MaxOffset() - 1.0
         If log.Cleared() != cleared
+            following = True
             cleared = log.Cleared()
             shown = 0
             For row In list.Children()
@@ -366,6 +492,6 @@ Public Final Class OutputPane Extends Widget
         For at = 0 To rows.Count - MOST_LINES - 1
             list.Remove(rows[at])
         End For
-        scroller.SetOffset(Inf)
+        If following Then scroller.SetOffset(Inf)
     End Method
 End Class

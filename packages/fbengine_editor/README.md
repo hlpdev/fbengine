@@ -59,6 +59,6 @@ tools/show.py ../packages/fbengine_editor`).
 Play's F5 builds the game with `fb` and runs its program, in a process of its own, on the scene as it's
 saved, saving what's changed first, so nothing a run does touches what's being edited. Its folder is asked
 about once, the same yes as for its components. A program finds the scene it's asked for by
-`Scene.Requested()`, from `--scene`. What it says shows in the Output pane; Shift F5 stops it, as playing
+`Scene.Requested()`, from `--scene`, which refuses what isn't a res:// path. What it says shows in the Output pane; Shift F5 stops it, as playing
 again, closing its project, and quitting do. A game's own processes, and a run left by the editor crashing,
 aren't stopped.
