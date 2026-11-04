@@ -63,15 +63,34 @@ void* operator new[](std::size_t size, const std::nothrow_t& /*nothrow*/) noexce
 
 namespace {
 
+/// One of an Instances' at a place along X.
+fbe_instance_t instance_at(float x) {
+    fbe_instance_t made{};
+    made.matrix.m[0] = 1.0F;
+    made.matrix.m[5] = 1.0F;
+    made.matrix.m[10] = 1.0F;
+    made.matrix.m[12] = x;
+    made.matrix.m[15] = 1.0F;
+    made.color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F };
+    return made;
+}
+
 /// What the calls work on: an emitter with some alive, and a cube a decal can go on.
 struct rig_t {
     std::uint64_t world = fbe_world_create();
     std::uint64_t emitter = fbe_entity_create(world, 0, FBE_ENTITY_PARTICLES);
     std::uint64_t mesh = fbe_entity_create(world, 0, FBE_ENTITY_MESH);
     std::uint64_t geometry = fbe_geometry_cube();
+    std::uint64_t instances = fbe_entity_create(world, 0, FBE_ENTITY_INSTANCES);
+    std::uint64_t coarser = fbe_geometry_cube();
+    std::uint64_t with_levels = fbe_geometry_cube();
 
     rig_t() {
         fbe_mesh_set_geometry(mesh, geometry);
+        fbe_instances_set_geometry(instances, geometry);
+        const std::array<fbe_instance_t, 2> two{ instance_at(1.0F), instance_at(2.0F) };
+        fbe_instances_set(instances, two.data(), 2);
+        fbe_geometry_set_lod(with_levels, 0, coarser, 0.5F);
         fbe_particles_set_rate(emitter, 100.0F);
         fbe_particles_set_life(emitter, 10.0F, 10.0F);
         fbe_particles_burst(emitter, 8);
@@ -83,6 +102,8 @@ struct rig_t {
     rig_t& operator=(rig_t&&) = delete;
 
     ~rig_t() {
+        fbe_geometry_release(with_levels);
+        fbe_geometry_release(coarser);
         fbe_geometry_release(geometry);
         fbe_world_free(world);
     }
@@ -109,6 +130,16 @@ void still_works(const rig_t& rig) {
     REQUIRE(made != 0);
     CHECK(fbe_surface_vertex_count(made, 0) > 0);
     fbe_geometry_release(made);
+    // Its Instances are all there, in step, whatever failed.
+    const std::int32_t count = fbe_instances_count(rig.instances);
+    REQUIRE(count > 0);
+    for (std::int32_t i = 0; i < count; ++i) {
+        fbe_instance_t one{};
+        CHECK(fbe_instances_get(rig.instances, i, &one));
+    }
+    fbe_aabb_t bounds{};
+    CHECK(fbe_entity_bounds(rig.instances, &bounds));
+    CHECK(fbe_geometry_lod_count(rig.with_levels) == 1);
 }
 
 /// Runs `call` on a new rig with its first allocation failing, then its second, and so on, until
@@ -149,6 +180,59 @@ TEST_CASE("setting what it holds out of memory leaves it as it was", "[scene][oo
         // It holds what it did, or 16, and either way writes in what it has.
         CHECK((fbe_particles_capacity(rig.emitter) == 16) == done);
         return done;
+    });
+}
+
+TEST_CASE("an Instances set out of memory stays as it was", "[scene][oom]") {
+    sweep([](const rig_t& rig) {
+        std::array<fbe_instance_t, 200> all{};
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            all[i] = instance_at(static_cast<float>(i));
+        }
+        const bool done = fbe_instances_set(rig.instances, all.data(), 200);
+        CHECK(fbe_instances_count(rig.instances) == (done ? 200 : 2));
+        return done;
+    });
+}
+
+TEST_CASE("an Instances' bounds out of memory say so", "[scene][oom]") {
+    sweep([](const rig_t& rig) {
+        fbe_aabb_t box{};
+        return fbe_entity_bounds(rig.instances, &box);
+    });
+}
+
+TEST_CASE("one of an Instances set out of memory is set, and worked out with the rest",
+          "[scene][oom]") {
+    for (long at = 0; at < 4; ++at) {
+        const rig_t rig;
+        fbe_aabb_t box{};
+        REQUIRE(fbe_entity_bounds(rig.instances, &box));
+        allocated = 0;
+        failing = at;
+        const fbe_instance_t moved = instance_at(50.0F);
+        const bool done = fbe_instances_set_one(rig.instances, 1, &moved);
+        failing = -1;
+        CHECK(done);
+        REQUIRE(fbe_entity_bounds(rig.instances, &box));
+        CHECK(box.max.x == 51.0F);
+    }
+}
+
+TEST_CASE("a level of detail out of memory says so", "[scene][oom]") {
+    sweep(
+        [](const rig_t& rig) { return fbe_geometry_set_lod(rig.geometry, 0, rig.coarser, 0.5F); });
+}
+
+TEST_CASE("a copy of a geometry with levels out of memory says so", "[scene][oom]") {
+    sweep([](const rig_t& rig) {
+        const std::uint64_t made = fbe_geometry_clone(rig.with_levels);
+        if (made == 0) {
+            return false;
+        }
+        CHECK(fbe_geometry_lod_count(made) == 1);
+        fbe_geometry_release(made);
+        return true;
     });
 }
 

@@ -22,6 +22,17 @@ Select arguments[0]
         Local picture = Try? Texture(2, 2)
         If picture == Null Then Panic("no texture")
         world.SetSkyTexture(picture, -1)
+    Case "instance-out-of-range"
+        Instances(Null).Get(0)
+    Case "instance-set-out-of-range"
+        Instances(Null).SetOne(0, Instance.At(Mat4.Identity))
+    Case "lod-past-next"
+        Geometry.Cube().SetLod(1, Null, 0.5)
+    Case "lod-share"
+        Geometry.Cube().SetLod(0, Null, 0)
+    Case "lod-of-itself"
+        Local cube = Geometry.Cube()
+        cube.SetLod(0, cube, 0.5)
     Case "particles-capacity"
         Particles(0)
     Case "particles-rate"
