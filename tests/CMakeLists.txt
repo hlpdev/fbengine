@@ -655,6 +655,36 @@ if(FBENGINE_FB_TESTS)
       "audio[.]music volume: 0[.]5"
       "read back, what's unchanged is: True"
       "a broken header: .*")
+  # Section 6's item 8, each number from section 3 worked by hand, in the sample's comments.
+  fbengine_add_proof_of_numbers(room_format
+      "its header: RoomMesh[.]HasTriggerBox"
+      "2 drawn meshes, 1 hidden, 1 trigger"
+      "its lightmap walls_LM1[.]png, as ADD, by its name"
+      "its diffuse concrete[.]png, as MULTIPLY, by its flag"
+      "a vertex's two UVs: [(]0[.]5, 0[.]5[)] and [(]0, 0[.]5[)], its color [(]200, 200, 200, 255[)]"
+      "2 triangles of 4 vertices"
+      "the other's alpha True, the first False"
+      "a hidden mesh's triangle, both ways: 2"
+      "a trigger: door_trigger, of 1 surface"
+      "screen at [(]1, 0, -2[)] shows map[.]jpg"
+      "waypoint at [(]2, 0[.]5, 0[)]"
+      "light, a point light at [(]4, 0, 0[)], range 0[.]5, color 80, 40, 20"
+      "spotlight, a point light at [(]0, 2, 0[)], range 1, color 255, 128, 0"
+      "sound 4 at [(]0, 1, 0[)], range 12[.]5"
+      "where a player starts, not scaled, [(]1, 2, 3[)], angles 0 90 0"
+      "model crate[.]b3d, not scaled, at [(]1, 2, 3[)], turned [(]4, 5, 6[)], scaled [(]7, 8, 9[)]"
+      "that isn't a room: RoomMesh2"
+      "a point entity of a class no one knows: trapdoor"
+      "child 2 of the room's the drawn mesh: True"
+      "baked, left: [(]32, 0, 0, 255[)]"
+      "baked, right: [(]0, 48, 0, 255[)]"
+      "lifted, left: [(]44, 12, 12, 255[)]"
+      "lifted, right: [(]12, 60, 12, 255[)]"
+      "a pick from in front hits the hidden one: True, at z -4"
+      "and from behind: True, at z -4"
+      "beside it, the drawn one's copy: True, at z -5"
+      "where the alpha one would be: True"
+      "validation errors 0")
   # Section 6's item 14, its receiving side: what a game gets of a converter's glTF.
   fbengine_add_proof_of_numbers(models_as_a_converter_writes_them
       "nodes under the figure: Bip01, Bip01 Spine, Bip01 Head, Bip01 HeadNub, body#1"
