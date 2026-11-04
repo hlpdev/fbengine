@@ -1,0 +1,256 @@
+// How Pip goes after you, apart from anything drawn: around the mill's walls, by its door, and
+// which clip that takes, at what speed, with its head and its eyes.
+
+Import std.core
+Import std.math
+Import "./flow"
+Import "./ground"
+Import "./map"
+
+/// How fast Pip goes, in meters a second; how far it stays; and how near counts as with you.
+Public Const PIP_SPEED: Float = 4.6
+Public Const PIP_NEAR: Float = 4.0
+Const STOPS_AT: Float = 2.0
+Const STARTS_AT: Float = 2.1
+/// How far Pip's clips go over the ground in a turn of each: tools/pip.fb's swing, as a test checks.
+Public Const WALK_STRIDE: Float = 0.93
+Public Const CARRY_STRIDE: Float = 0.69
+/// Where in the carry clip it stands still, holding, with its legs straight.
+Public Const CARRY_STILL_AT: Float = 0.25
+// How far it can turn its head, and how often it blinks, for how long.
+Const HEAD_TURNS: Float = 1.2
+Const BLINK_EVERY: Float = 4.0
+Const BLINK_FOR: Float = 0.2
+
+/// Pip's clips, by their numbers.
+Public Enum PipClip
+    IDLE = 0
+    WALK = 1
+    CARRY = 2
+End Enum
+
+/// How far its head turns from how it's facing, to look at something at `toward`, radians about Y.
+Public Function HeadTurn(toward: Float, facing: Float): Float
+    Local turn = toward - facing
+    While turn > 3.14159
+        turn -= 6.28318
+    End While
+    While turn < -3.14159
+        turn += 6.28318
+    End While
+    Return Clamp(turn, -HEAD_TURNS, HEAD_TURNS)
+End Function
+
+/// How shut its eyes are, from 0 to 1, `seconds` in.
+Public Function BlinkWeight(seconds: Float): Float
+    Local into = seconds - Floor(seconds / BLINK_EVERY) * BLINK_EVERY
+    If into >= BLINK_FOR Then Return 0.0
+    Local halfway = BLINK_FOR / 2.0
+    Return 1.0 - Abs(into - halfway) / halfway
+End Function
+
+/// Whether Pip at (`pipX`, `pipZ`) is with you at (`x`, `z`): near, and on your side of the mill's wall.
+Public Function PipWithYou(pipX: Float, pipZ: Float, x: Float, z: Float): Bool
+    Local dx = x - pipX
+    Local dz = z - pipZ
+    Return dx * dx + dz * dz <= PIP_NEAR * PIP_NEAR && InMill(pipX, pipZ) == InMill(x, z)
+End Function
+
+// A box to go around, across and along: the mill, with room to pass its walls and wheel, or its works.
+Struct Box
+    Field West: Float
+    Field East: Float
+    Field South: Float
+    Field North: Float
+End Struct
+
+Function MillBox(): Box
+    Return Box(MAIN_X - MILL_W - 1.2, MAIN_X + 9.5, -MILL_D - 1.2, MILL_D + 1.2)
+End Function
+
+Function WorksBox(): Box => Box(MAIN_X + 1.7, MAIN_X + 5.3, -4.8, -1.2)
+
+// Whether a straight line from one place to another goes through `box`.
+Function Crosses(box: Box, fromX: Float, fromZ: Float, toX: Float, toZ: Float): Bool
+    Local enter = 0.0
+    Local leave = 1.0
+    Local dx = toX - fromX
+    Local dz = toZ - fromZ
+    If Abs(dx) < 0.0001
+        If fromX <= box.West + 0.01 || fromX >= box.East - 0.01 Then Return False
+    Else
+        Local a = (box.West + 0.01 - fromX) / dx
+        Local b = (box.East - 0.01 - fromX) / dx
+        enter = Max(enter, Min(a, b))
+        leave = Min(leave, Max(a, b))
+    End If
+    If Abs(dz) < 0.0001
+        If fromZ <= box.South + 0.01 || fromZ >= box.North - 0.01 Then Return False
+    Else
+        Local a = (box.South + 0.01 - fromZ) / dz
+        Local b = (box.North - 0.01 - fromZ) / dz
+        enter = Max(enter, Min(a, b))
+        leave = Min(leave, Max(a, b))
+    End If
+    Return enter < leave
+End Function
+
+// Where to go next, from (`x`, `z`) to (`toX`, `toZ`), with `box` between: to the corner of it that's
+// in sight, from which the way around is shortest.
+Function AroundBox(box: Box, x: Float, z: Float, toX: Float, toZ: Float): Vec2
+    Local corners = [Vec2(box.West, box.South), Vec2(box.East, box.South),
+                     Vec2(box.East, box.North),
+                     Vec2(box.West, box.North)]
+    Local best = Vec2(toX, toZ)
+    Local shortest = 1000000.0
+    For first = 0 To 3
+        Local corner = corners[first]
+        If Crosses(box, x, z, corner.x, corner.y) Then Continue
+        Local leading = Length(x - corner.x, z - corner.y)
+        // At it already, it's on to the next.
+        If leading < 0.05 Then Continue
+        // Each way around from it, until you're in sight.
+        For way In [1, 3]
+            Local along = leading
+            Local at = first
+            For hop = 0 To 3
+                Local here = corners[at]
+                If !Crosses(box, here.x, here.y, toX, toZ)
+                    along += Length(toX - here.x, toZ - here.y)
+                    If along < shortest
+                        shortest = along
+                        best = corner
+                    End If
+                    Break
+                End If
+                Local next = corners[(at + way) % 4]
+                along += Length(next.x - here.x, next.y - here.y)
+                at = (at + way) % 4
+            End For
+        End For
+    End For
+    Return best
+End Function
+
+Function Length(x: Float, z: Float): Float => Sqrt(x * x + z * z)
+
+/// Pip, going after you.
+Public Final Class Follower
+    Field x: Float
+    Field z: Float
+    Field walking: Bool = False
+    Field moved: Float = 0.0
+    Field facing: Float = 0.0
+
+    Public New(x: Float, z: Float)
+        Self.x = x
+        Self.z = z
+    End New
+
+    /// Where it is.
+    Public Method Location(): Vec2 => Vec2(x, z)
+
+    /// Which way it's facing, radians about Y.
+    Public Method Facing(): Float => facing
+
+    /// How far it went in its last Step.
+    Public Method Moved(): Float => moved
+
+    /// Puts it at (`atX`, `atZ`), as the water does.
+    Public Method Put(atX: Float, atZ: Float)
+        x = atX
+        z = atZ
+    End Method
+
+    /// Which clip suits what it did in its last Step, carrying or not.
+    Public Method Clip(holding: Bool): PipClip
+        If holding Then Return PipClip.CARRY
+        Return moved > 0.0 ? PipClip.WALK : PipClip.IDLE
+    End Method
+
+    /// How fast a clip plays, for its feet to keep to the ground, over a Step of `seconds`: by how far
+    /// it went, 0 for a carry standing still, and 1 for an idle.
+    Public Method ClipSpeed(holding: Bool, seconds: Float): Float
+        If moved <= 0.0 Then Return holding ? 0.0 : 1.0
+        Return moved / Max(seconds, 0.001) / (holding ? CARRY_STRIDE : WALK_STRIDE)
+    End Method
+
+    /// Moves it on `seconds` toward (`toX`, `toZ`), `clock` seconds in. With the road flooded between
+    /// you, it goes to its own shore's landing, above the tide, and stays.
+    Public Method Step(toX: Float, toZ: Float, seconds: Float, clock: Float64, flooded: Bool)
+        moved = 0.0
+        Local apart = Length(toX - x, toZ - z)
+        Local stops = STOPS_AT
+        Local starts = STARTS_AT
+        Local goalX = toX
+        Local goalZ = toZ
+        If flooded && (PlaceAt(x, z) == Area.FAR_ROCK) != (PlaceAt(toX, toZ) == Area.FAR_ROCK)
+            Local side = PipLanding(PlaceAt(x, z) == Area.FAR_ROCK)
+            goalX = side.x
+            goalZ = side.y
+            apart = Length(goalX - x, goalZ - z)
+            stops = 0.1
+            starts = 0.2
+        End If
+        // Near isn't near through a wall.
+        If InMill(x, z) == InMill(goalX, goalZ)
+            If !walking && apart > starts Then walking = True
+            If walking && apart < stops Then walking = False
+        Else
+            walking = True
+        End If
+        If !walking Then Return
+        Local aim = Aim(goalX, goalZ)
+        Local toAim = Length(aim.x - x, aim.y - z)
+        If toAim < 0.001 Then Return
+        Local reach = PIP_SPEED * seconds
+        // To where it stops short of you, if it's you it's aiming at.
+        If aim.x == goalX && aim.y == goalZ
+            If toAim - stops < 0.01
+                walking = False
+                Return
+            End If
+            reach = Min(reach, toAim - stops)
+        End If
+        reach = Min(reach, toAim)
+        Local fromX = x
+        Local fromZ = z
+        Slide((aim.x - x) / toAim * reach, (aim.y - z) / toAim * reach, clock, flooded)
+        moved = Length(x - fromX, z - fromZ)
+        If moved > 0.0 Then facing = Atan2(x - fromX, z - fromZ)
+    End Method
+
+    // Where it's going next: to you if it can see you; through the door if the mill's wall is between
+    // you; around the mill, or its works, if they are.
+    Method Aim(toX: Float, toZ: Float): Vec2
+        Local mill = MillBox()
+        If InMill(x, z) || InMill(toX, toZ)
+            If InMill(x, z) != InMill(toX, toZ)
+                If !InMill(x, z) && Abs(x - MAIN_X) < DOOR_W - 0.5 && z > 0.0 && z < MILL_D + 2.0
+                    Return Vec2(MAIN_X, MILL_D - 1.0)
+                End If
+                If InMill(x, z) Then Return Vec2(MAIN_X, MILL_D + 1.5)
+                If Crosses(mill, x, z, MAIN_X, MILL_D + 1.5)
+                    Return AroundBox(mill, x, z, MAIN_X, MILL_D + 1.5)
+                End If
+                Return Vec2(MAIN_X, MILL_D + 1.5)
+            End If
+            If Crosses(WorksBox(), x, z, toX, toZ) Then Return AroundBox(WorksBox(), x, z, toX, toZ)
+            Return Vec2(toX, toZ)
+        End If
+        // In the doorway, out of it first.
+        If Abs(x - MAIN_X) < DOOR_W && z > 0.0 && z < mill.North
+            Return Vec2(MAIN_X, mill.North + 0.2)
+        End If
+        If Crosses(mill, x, z, toX, toZ) Then Return AroundBox(mill, x, z, toX, toZ)
+        Return Vec2(toX, toZ)
+    End Method
+
+    // Each way it can go by itself, so a wall slides it along.
+    Method Slide(byX: Float, byZ: Float, clock: Float64, flooded: Bool)
+        Local nextX = x + byX
+        If !Blocked(nextX, z) && CanWade(x, z, nextX, z, clock, flooded) Then x = nextX
+        Local nextZ = z + byZ
+        If !Blocked(x, nextZ) && CanWade(x, z, x, nextZ, clock, flooded) Then z = nextZ
+    End Method
+End Class

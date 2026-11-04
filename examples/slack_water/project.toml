@@ -1,0 +1,12 @@
+[project]
+name = "slack_water"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../packages/fbengine" }
+fbengine_audio = { path = "../../packages/fbengine_audio" }
+fbengine_tools = { path = "../../packages/fbengine_tools" }
+
+[build]
+package = "fbengine_tools"
+program = "step/game.fb"

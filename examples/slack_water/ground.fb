@@ -1,0 +1,182 @@
+// The island's shape and the sea's height, as numbers, apart from anything drawn: two rocks and a
+// low road between them, a sea that rises to top it as the flow says it floods, and where someone
+// can walk, and which of the flow's places that is.
+
+Import std.core
+Import std.math
+Import "./flow"
+Import "./map"
+
+/// How many squares the ground has on a side, each a meter.
+Public Const SIDE: Int = 240
+// How high the road's top is, above the sea at slack water.
+Const ROAD_HEIGHT: Float = 0.5
+// How far over the road the sea is as it floods, so what's under doesn't fight with it.
+Const SURGE: Float = 0.1
+// How high the sea rises, by the time the tide's in.
+Const HIGH_WATER: Float = 1.6
+// How far in from the terrain's edge its ground goes under, so no rock has an open side.
+Const EDGE: Float = 14.0
+// How wide each rock is, about.
+Const MAIN_RADIUS: Float = 42.0
+Const FAR_RADIUS: Float = 20.0
+// How far past its shores the road's ground runs, into each rock, so no gap's left.
+Const ROAD_INTO: Float = 14.0
+// How far in the sea you can wade, and how far past a line you have to go for it to count as crossed.
+Const WADE: Float = 0.25
+Const LINGER: Float = 1.0
+
+// A number from 0 to 1 for a lattice point, the same each time.
+Function Hash(x: Int, y: Int): Float
+    Local mixed: Int64 = (((x As Int64) * 73856093) ^ ((y As Int64) * 19349663)) & 0x7FFFFFFF
+    mixed = ((mixed ^ (mixed >> 13)) * 1274126177) & 0x7FFFFFFF
+    mixed = mixed ^ (mixed >> 16)
+    Return ((mixed & 0xFFFF) As Float) / 65535.0
+End Function
+
+// Value noise, smooth between the whole numbers, from 0 to 1.
+Function Noise(x: Float, y: Float): Float
+    Local left = Floor(x)
+    Local top = Floor(y)
+    Local u = x - left
+    Local v = y - top
+    u = u * u * (3.0 - 2.0 * u)
+    v = v * v * (3.0 - 2.0 * v)
+    Local a = Hash(left As Int, top As Int)
+    Local b = Hash((left As Int) + 1, top As Int)
+    Local c = Hash(left As Int, (top As Int) + 1)
+    Local d = Hash((left As Int) + 1, (top As Int) + 1)
+    Return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+End Function
+
+// Noise of a few octaves, from 0 to 1.
+Function Rough(x: Float, y: Float): Float
+    Return (Noise(x * 0.03, y * 0.03) * 0.57 + Noise(x * 0.09, y * 0.09) * 0.29 +
+            Noise(x * 0.27, y * 0.27) * 0.14)
+End Function
+
+// A rock's shape: 1 at its middle, past 0 inside its `radius`, below it outside, its edge broken.
+Function Mound(x: Float, z: Float, centerX: Float, centerZ: Float, radius: Float): Float
+    Local dx = x - centerX
+    Local dz = z - centerZ
+    Local edge = radius * (0.72 + Rough(x + 300.0, z + 300.0) * 0.56)
+    Return 1.0 - Sqrt(dx * dx + dz * dz) / edge
+End Function
+
+// How high the ground is at (`x`, `z`), but for the road.
+Public Function RockHeight(x: Float, z: Float): Float
+    Local land = Max(Mound(x, z, MAIN_X, 0.0, MAIN_RADIUS), Mound(x, z, FAR_X, FAR_Z, FAR_RADIUS))
+    Local height = land > 0.0 ? land * (5.0 + Rough(x, z) * 9.0) : land * 6.0
+    // The yard's flat, where the mill stands.
+    Local yard = Clamp(1.0 - (Sqrt((x - MAIN_X) * (x - MAIN_X) + z * z) - 22.0) / 14.0, 0.0, 1.0)
+    Return height + (4.0 - height) * yard
+End Function
+
+/// How high the ground is at (`x`, `z`), meters from its middle: under the sea, 0 at slack water,
+/// but for the main rock, the far one, and the road from one to the other.
+Public Function GroundHeight(x: Float, z: Float): Float
+    Local height = RockHeight(x, z)
+    If x > ROAD_WEST - ROAD_INTO && x < ROAD_EAST + ROAD_INTO
+        Local road = Clamp(1.0 - (Abs(z - RoadZ(x)) - 3.0) / 3.0, 0.0, 1.0)
+        height = Max(height, road * ROAD_HEIGHT + (1.0 - road) * height)
+    End If
+    // Under the water at the terrain's edge.
+    Local half = (SIDE As Float) / 2.0
+    Local inFrom = half - Max(Abs(x), Abs(z))
+    If inFrom < EDGE
+        Local fade = Clamp(inFrom / EDGE, 0.0, 1.0)
+        height = Min(height, -1.0 + (height + 1.0) * fade)
+    End If
+    Return height
+End Function
+
+/// How high the sea is `clock` seconds into the slack water: flat, then rising, still under the
+/// road, then over it, in one surge, as the flow says it floods.
+Public Function SeaHeight(clock: Float64): Float
+    If clock <= RISING_AT Then Return 0.0
+    If clock < FLOOD_AT
+        Return ((clock - RISING_AT) / (FLOOD_AT - RISING_AT)) As Float * ROAD_HEIGHT * 0.98
+    End If
+    Local over = ROAD_HEIGHT + SURGE
+    Local on = Min((clock - FLOOD_AT) / (TIDE_IN_AT - FLOOD_AT), 1.0) As Float
+    Return over + on * (HIGH_WATER - over)
+End Function
+
+/// The lowest the ground gets along the road: what the sea has to top to cut the rocks off.
+Public Function LowestCrossing(): Float
+    Local lowest = 1000.0
+    For step = 0 To 200
+        Local x = ROAD_WEST + (ROAD_EAST - ROAD_WEST) * (step As Float) / 200.0
+        lowest = Min(lowest, GroundHeight(x, RoadZ(x)))
+    End For
+    Return lowest
+End Function
+
+/// Whether (`x`, `z`) is inside the mill's walls.
+Public Function InMill(x: Float, z: Float): Bool => Abs(x - MAIN_X) < MILL_W + 0.3 &&
+                                                    Abs(z) < MILL_D + 0.3
+
+/// Whether (`x`, `z`) is on the road, between its shores and within its sides.
+Public Function OnRoad(x: Float, z: Float): Bool
+    Return x > ROAD_WEST && x < ROAD_EAST && Abs(z - RoadZ(x)) < ROAD_SIDE
+End Function
+
+/// Which of the flow's places (`x`, `z`) is in: the mill, the road, or whichever rock it's by.
+Public Function PlaceAt(x: Float, z: Float): Area
+    If InMill(x, z) Then Return Area.INSIDE
+    If OnRoad(x, z) Then Return Area.CAUSEWAY
+    If Mound(x, z, FAR_X, FAR_Z, FAR_RADIUS) > Mound(x, z, MAIN_X, 0.0, MAIN_RADIUS)
+        Return Area.FAR_ROCK
+    End If
+    Return Area.YARD
+End Function
+
+/// Which place someone who was in `current` is in at (`x`, `z`): still that one, until they're a
+/// little past its line, so walking along one doesn't say so over and over.
+Public Function PlaceHeld(current: Area, x: Float, z: Float): Area
+    Local at = PlaceAt(x, z)
+    If at == current Then Return at
+    // The mill's only got its door to linger in; along a wall, you're outside.
+    If current == Area.INSIDE && Abs(x - MAIN_X) >= DOOR_W Then Return at
+    If PlaceAt(x - LINGER, z) == current || PlaceAt(x + LINGER, z) == current Then Return current
+    If PlaceAt(x, z - LINGER) == current || PlaceAt(x, z + LINGER) == current Then Return current
+    Return at
+End Function
+
+/// Whether someone on the road at (`x`, `z`) is nearer the far rock's shore than the mill's.
+Public Function NearerFar(x: Float, z: Float): Bool => x - ROAD_WEST > ROAD_EAST - x
+
+/// Whether the flood takes someone at (`x`, `z`), with the sea at `sea`: on the road, or too deep beside
+/// it, in its span.
+Public Function SweptAt(x: Float, z: Float, sea: Float): Bool
+    If OnRoad(x, z) Then Return True
+    Return x > ROAD_WEST && x < ROAD_EAST && GroundHeight(x, z) < sea - WADE
+End Function
+
+/// Whether walking onto (`x`, `z`) goes through the mill's walls, or anything else solid.
+Public Function Blocked(x: Float, z: Float): Bool
+    Local dx = Abs(x - MAIN_X)
+    // Its outer walls, as far as a person's width.
+    Local inWalls = dx < MILL_W + 0.9 && Abs(z) < MILL_D + 0.9
+    Local inside = dx < MILL_W - 0.3 && Abs(z) < MILL_D - 0.3
+    Local door = dx < DOOR_W - 0.3 && z > 0.0
+    If inWalls && !inside && !door Then Return True
+    // The works, inside, and the wheel, outside its east wall.
+    If Abs(x - (MAIN_X + 3.5)) < 1.6 && Abs(z + 3.0) < 1.6 Then Return True
+    Return Abs(x - (MAIN_X + 8.0)) < 0.9 && Abs(z) < 3.4
+End Function
+
+/// Whether someone can step from ground as high as `from` to ground as high as `to`, with the sea at
+/// `sea`: not deeper than wading, unless it's no deeper than where they are.
+Public Function CanStep(from: Float, to: Float, sea: Float): Bool
+    Return to >= sea - WADE || to >= from
+End Function
+
+/// Whether someone can step from (`fromX`, `fromZ`) to (`x`, `z`), `clock` seconds in, not onto a
+/// flooded road, however shallow it is yet, and not into the sea past wading; walls are the caller's,
+/// as it slides along them.
+Public Function CanWade(fromX: Float, fromZ: Float, x: Float, z: Float, clock: Float64,
+                        flooded: Bool): Bool
+    If flooded && OnRoad(x, z) Then Return False
+    Return CanStep(GroundHeight(fromX, fromZ), GroundHeight(x, z), SeaHeight(clock))
+End Function

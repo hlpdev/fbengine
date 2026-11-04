@@ -473,6 +473,81 @@ FBE_API bool fbe_particles_set_colors(uint64_t particles, const fbe_color_t* sta
     return true;
 }
 
+FBE_API float fbe_particles_life_least(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->life_min : -1.0F;
+}
+
+FBE_API float fbe_particles_life_most(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->life_max : -1.0F;
+}
+
+FBE_API float fbe_particles_speed_least(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->speed_min : -1.0F;
+}
+
+FBE_API float fbe_particles_speed_most(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->speed_max : -1.0F;
+}
+
+FBE_API float fbe_particles_spread(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->spread : -1.0F;
+}
+
+FBE_API float fbe_particles_spin(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->spin : -1.0F;
+}
+
+FBE_API float fbe_particles_gravity_x(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->gravity.x : -1.0F;
+}
+
+FBE_API float fbe_particles_gravity_y(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->gravity.y : -1.0F;
+}
+
+FBE_API float fbe_particles_gravity_z(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->gravity.z : -1.0F;
+}
+
+FBE_API float fbe_particles_drag(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->drag : -1.0F;
+}
+
+FBE_API float fbe_particles_size_start(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->size_start : -1.0F;
+}
+
+FBE_API float fbe_particles_size_end(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->size_end : -1.0F;
+}
+
+FBE_API float fbe_particles_roll(uint64_t particles) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    return found != nullptr ? found->roll : -1.0F;
+}
+
+FBE_API bool fbe_particles_color(uint64_t particles, bool end, fbe_color_t* color) {
+    const particles_t* found = fbe::scene::particles_of(particles);
+    if (found == nullptr) {
+        return false;
+    }
+    const std::array<float, 4>& kept = end ? found->color_end : found->color_start;
+    *color = { .r = kept[0], .g = kept[1], .b = kept[2], .a = kept[3] };
+    return true;
+}
+
 FBE_API bool fbe_particles_set_roll(uint64_t particles, float most) {
     particles_t* found = fbe::scene::particles_of(particles);
     if (found == nullptr) {

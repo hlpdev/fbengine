@@ -1,0 +1,14 @@
+[0:01] you reach the yard
+[0:02] Pip catches up
+[0:05] the gear lies here
+[0:11] you reach the causeway
+[0:11] Pip catches up
+[0:15] the sluice paddle lies here
+[0:16] you pick up the sluice paddle
+[0:21] you reach the yard
+[0:22] Pip catches up
+[1:10] the water's rising: the causeway floods in a minute
+[2:10] the causeway floods
+[2:10] the sea takes the drive belt
+[4:00] the tide comes in
+[4:00] the wheel stands still, and the lamp stays dark
