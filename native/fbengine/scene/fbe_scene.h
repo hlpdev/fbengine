@@ -557,6 +557,12 @@ FBE_API bool fbe_geometry_release(uint64_t geometry);
 FBE_API bool fbe_geometry_alive(uint64_t geometry);
 // A new geometry with copies of another's surfaces, held once.
 FBE_API uint64_t fbe_geometry_clone(uint64_t geometry);
+// What a geometry's known to be made of, as a scene file names it, "" for what isn't known, as one
+// that's changed since it was set, or was freed. The text is the geometry's until it's set again.
+FBE_API bool fbe_geometry_set_source(uint64_t geometry, const char* source);
+FBE_API const char* fbe_geometry_source(uint64_t geometry);
+FBE_API bool fbe_geometry_set_scene_id(uint64_t geometry, const char* id);
+FBE_API const char* fbe_geometry_scene_id(uint64_t geometry);
 // How many times the geometry has changed, which collision trees use to know they're stale.
 FBE_API uint64_t fbe_geometry_version(uint64_t geometry);
 
@@ -695,6 +701,8 @@ FBE_API bool fbe_material_fogged(uint64_t material);
 // first, so a sky is behind everything and an overlay over it.
 FBE_API bool fbe_material_set_order(uint64_t material, int32_t order);
 FBE_API int32_t fbe_material_order(uint64_t material);
+FBE_API bool fbe_material_set_scene_id(uint64_t material, const char* id);
+FBE_API const char* fbe_material_scene_id(uint64_t material);
 // A texture layer's texture, which it holds, 0 for none, for layers 0 to FBE_MATERIAL_LAYERS - 1:
 // what's drawn is the lit color with each layer that has a texture over it, in order.
 FBE_API bool fbe_material_set_texture(uint64_t material, int32_t layer, uint64_t texture);

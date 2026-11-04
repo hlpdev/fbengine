@@ -107,7 +107,7 @@ void set_position_in(std::uint32_t entity, vec3_t position, std::int32_t space) 
 
 void set_rotation_in(std::uint32_t entity, quat_t rotation, std::int32_t space) {
     if (space == FBE_SPACE_LOCAL) {
-        scene().entities.rotation[entity] = normalize(rotation);
+        scene().entities.rotation[entity] = unit(rotation);
         mark_moved(entity);
     } else {
         set_world_rotation(entity, rotation);

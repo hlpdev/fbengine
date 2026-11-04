@@ -1,0 +1,496 @@
+// A room file, a game's own format and a game's own loader (room_file.fb), written here by hand with
+// std's BinaryWriter so it's no game's file, with its textures, and read back: its two sets of UVs and
+// its layers by exact pixels, its collision by a mover, its picks, what's left out by each kind of
+// entity, and files that aren't. It prints each; with --watch, a window of placed rooms, turning.
+
+Import std.collections
+Import std.core
+From std.image Import Image, Png
+Import std.io
+Import std.math
+Import std.os
+Import "./room_file"
+Import fbengine
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
+
+Const LEVEL = 2
+Const MOVER = 1
+
+// A string as the format has it.
+Function Say(writer: BinaryWriter, text: String) Throws IOError
+    Try writer.WriteInt32(text.Bytes.Count As Int32)
+    Try writer.WriteBytes(text.Bytes)
+End Function
+
+Function At(writer: BinaryWriter, x: Float32, y: Float32, z: Float32) Throws IOError
+    Try writer.WriteFloat32(x)
+    Try writer.WriteFloat32(y)
+    Try writer.WriteFloat32(z)
+End Function
+
+// A vertex of a drawn mesh, as the file has it.
+Function Corner(writer: BinaryWriter, x: Float32, y: Float32, z: Float32, u0: Float32, v0: Float32,
+                u1: Float32, v1: Float32, shade: Color32) Throws IOError
+    Try At(writer, x, y, z)
+    Try writer.WriteFloat32(u0)
+    Try writer.WriteFloat32(v0)
+    Try writer.WriteFloat32(u1)
+    Try writer.WriteFloat32(v1)
+    Try writer.WriteUInt8(shade.r)
+    Try writer.WriteUInt8(shade.g)
+    Try writer.WriteUInt8(shade.b)
+End Function
+
+Function Triangles(writer: BinaryWriter, indexes: Int32[]) Throws IOError
+    Try writer.WriteInt32((indexes.Count / 3) As Int32)
+    For each In indexes
+        Try writer.WriteInt32(each)
+    End For
+End Function
+
+// A box's 8 corners and 12 triangles, of only positions, as collision and triggers have them.
+Function Box(writer: BinaryWriter, low: Vec3, high: Vec3) Throws IOError
+    Try writer.WriteInt32(8)
+    For i = 0 To 7
+        Try At(writer, (i & 1) != 0 ? high.x : low.x, (i & 2) != 0 ? high.y : low.y,
+               (i & 4) != 0 ? high.z : low.z)
+    End For
+    Try Triangles(writer,
+                  [0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2,
+                   2, 4, 6, 1, 3, 5, 3, 7, 5])
+End Function
+
+// A texture as a PNG, its rows of `pixels`, in `folder`, whose folders it makes.
+Function Png1(folder: Path, name: String, rows: Color32[][]) Throws IOError
+    Local file = folder / name
+    Local above = file.Parent()
+    If above != Null Then Try Dir.CreateAll(above)
+    Local image = Image(rows[0].Count, rows.Count)
+    For y = 0 To rows.Count - 1
+        For x = 0 To rows[y].Count - 1
+            image[x, y] = rows[y][x]
+        End For
+    End For
+    Try File.WriteBytes(file, Png.Encode(image))
+End Function
+
+Function Gray(value: Int): Color32 => Color32(value As UInt8, value As UInt8, value As UInt8, 255)
+
+// A slot as the file has it: its flag, and its name unless that's 0.
+Function Slot(writer: BinaryWriter, flag: UInt8, name: String) Throws IOError
+    Try writer.WriteUInt8(flag)
+    If flag != 0 Then Try Say(writer, name)
+End Function
+
+// A quad the size of a room at `y`, its winding the file's, a clockwise front from above; UV0 across it.
+Function Quad(writer: BinaryWriter, y: Float32, low: Float32, shade: Color32, u1: Float32,
+              v1: Float32) Throws IOError
+    Try writer.WriteInt32(4)
+    Try Corner(writer, low, y, -1024, 0, 0, u1, v1, shade)
+    Try Corner(writer, 1024, y, -1024, 1, 0, u1, v1, shade)
+    Try Corner(writer, 1024, y, 1024, 1, 1, u1, v1, shade)
+    Try Corner(writer, low, y, 1024, 0, 1, u1, v1, shade)
+    Try Triangles(writer, [0, 2, 1, 0, 3, 2])
+End Function
+
+// A room 2048 wide, in `folder`: a floor at 0, its lightmap by its own UVs and its diffuse by its first,
+// which differs across and by z; a pane that blends, over x 0 to 1024 at 512 up, that doesn't collide;
+// a hidden blocker at x -512 to -256; a trigger box near file z +1024; and one of each entity, some to
+// be left out.
+Function Fixture(folder: Path, trigger: Bool = True): Path Throws IOError
+    Local bright = [Gray(200), Gray(200), Gray(120), Gray(120)]
+    Local dim = [Gray(100), Gray(100), Gray(60), Gray(60)]
+    Try Png1(folder, "floor_lm.png", [[Color32(60, 40, 30, 255), Gray(200)]])
+    Try Png1(folder, "some/folder/floor.png", [bright, bright, dim, dim])
+    Try Png1(folder, "glass.png", [[Color32(0, 255, 0, 128)]])
+    Local path = folder / "room.bin"
+    Local file = Try File.Create(path)
+    Defer file.Close()
+    Local writer = BinaryWriter(file)
+    Try Say(writer, trigger ? "RoomMesh.HasTriggerBox" : "RoomMesh")
+    Try writer.WriteInt32(2)
+    Try Slot(writer, 1, "floor_lm.png")
+    Try Slot(writer, 2, "some\\folder/floor.png")
+    Try Quad(writer, 0, -1024, Color32(128, 64, 32, 255), 0.25, 0.5)
+    Try Slot(writer, 0, "")
+    Try Slot(writer, 3, "glass.png")
+    Try Quad(writer, 512, 0, Gray(255), 0, 0)
+    Try writer.WriteInt32(1)
+    Try Box(writer, Vec3(-512, 0, -1024), Vec3(-256, 1024, 1024))
+    If trigger
+        Try writer.WriteInt32(1)
+        Try writer.WriteInt32(1)
+        Try Box(writer, Vec3(512, 0, 512), Vec3(1024, 512, 1024))
+        Try Say(writer, "by the door")
+    End If
+    Try writer.WriteInt32(21)
+    Try Say(writer, "screen")
+    Try At(writer, 256, 256, 0)
+    Try Say(writer, "note.png")
+    Try Say(writer, "screen")
+    Try At(writer, 0, 0, 0)
+    Try Say(writer, "left out.png")
+    Try Say(writer, "waypoint")
+    Try At(writer, 512, 0, 512)
+    Try Say(writer, "light")
+    Try At(writer, 256, 512, 256)
+    Try writer.WriteFloat32(4000)
+    Try Say(writer, "255 128 0")
+    Try writer.WriteFloat32(0.5)
+    Try Say(writer, "light")
+    Try At(writer, 0, 0, 0)
+    Try writer.WriteFloat32(4000)
+    Try Say(writer, "1 2 3")
+    Try writer.WriteFloat32(0.5)
+    Try Say(writer, "spotlight")
+    Try At(writer, -256, 512, 256)
+    Try writer.WriteFloat32(2000)
+    Try Say(writer, "255 255 255")
+    Try writer.WriteFloat32(9)
+    Try Say(writer, "90 0 0")
+    Try writer.WriteInt32(10)
+    Try writer.WriteInt32(20)
+    Try Say(writer, "playerstart")
+    Try At(writer, 1, 2, 3)
+    Try Say(writer, "0 0 0")
+    Try Say(writer, "model")
+    Try Say(writer, "chair.mesh")
+    Try At(writer, 16, 32, 64)
+    Try At(writer, 0, 90, 0)
+    Try At(writer, 2, 2, 2)
+    Try Say(writer, "model")
+    Try Say(writer, "")
+    Try At(writer, 7, 7, 7)
+    For i = 1 To 12
+        Try Say(writer, "soundemitter")
+        Try At(writer, (i As Float32) * 256.0, 0, 0)
+        Try writer.WriteInt32(i As Int32)
+        Try writer.WriteFloat32(6.5)
+    End For
+    Return path
+End Function
+
+// A file of one quad with those slots, and what's in a target's middle, of a room with those.
+Function Slots(folder: Path, shared: RoomTextures, camera: Camera, first: UInt8, firstName: String,
+               second: UInt8, secondName: String): Color32 Throws GraphicsError, IOError
+    Local path = folder / "slots.bin"
+    Local file = Try File.Create(path)
+    Local writer = BinaryWriter(file)
+    Try Say(writer, "RoomMesh")
+    Try writer.WriteInt32(1)
+    Try Slot(writer, first, firstName)
+    Try Slot(writer, second, secondName)
+    Try Quad(writer, 0, -1024, Color32(128, 64, 32, 255), 0, 0)
+    For i = 1 To 2
+        Try writer.WriteInt32(0)
+    End For
+    file.Close()
+    Local room = Try LoadRoom(path, shared)
+    camera.Render()
+    Local seen = camera.RenderTarget()
+    If seen == Null Then Panic("a camera with a target")
+    Local read = seen.ToImage()[16, 16]
+    room.Root.Free()
+    Return read
+End Function
+
+// A file of `bytes`, and what loading it says, with nothing left of it in the world.
+Function Refused(folder: Path, bytes: UInt8[], shared: RoomTextures): String Throws GraphicsError
+    Local path = folder / "bad.bin"
+    Local before = World.Current().Roots().Count
+    Try
+        Try File.WriteBytes(path, bytes)
+        Local room = Try LoadRoom(path, shared)
+        room.Root.Free()
+        Return "loaded"
+    Catch error As IOError
+        If World.Current().Roots().Count != before Then Return "left something"
+        Return error.Message
+    End Try
+End Function
+
+// A string's bytes in the format.
+Function Bytes(text: String): UInt8[]
+    Local made = [text.Bytes.Count As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8]
+    made.AddAll(text.Bytes)
+    Return made
+End Function
+
+Function Fine(at: Vec3): String => "{at.x:.3}, {at.y:.3}, {at.z:.3}"
+
+Function Proved() Throws GraphicsError, IOError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    world.SetAmbientLight(Color(0, 0, 0))
+    Local folder = Try TempDir()
+    Local shared = Try RoomTextures()
+    Local path = Try Fixture(folder.Path)
+    Local room = Try LoadRoom(path, shared)
+
+    // Its tree, in the order the game's code counts on.
+    Local names: String[] = []
+    For i = 0 To room.Root.ChildCount() - 1
+        names.Add("{room.Root.Child(i).Kind()} {room.Root.Child(i).Name()}")
+    End For
+    Print("its children {names}")
+
+    // Its vertices and surfaces, as the file has them, in the engine's handedness: z negated, two of each
+    // triangle's corners swapped.
+    Local floor = room.Drawn.Geometry()?.Surface(0)
+    If floor == Null Then Panic("a room's drawn")
+    Print("{room.Drawn.Geometry()?.SurfaceCount() ?? 0} surfaces, the floor's {floor.VertexCount()} vertices, {floor.TriangleCount()} triangles")
+    Local corner = floor.Vertex(2)
+    Print("a corner {corner.Position}, its UVs {corner.Uv0} and {corner.Uv1}, stored {corner.Color.ToColor32()}")
+    Print("its first triangle, 0 2 1 in the file, {floor.Triangle(0)}")
+    Print("in the world, across {room.Drawn.Bounds().Max.x:.3}")
+
+    // Each material: a floor's layers and each reading its set, a pane's its one, and textures cached.
+    Local material = room.Materials[0]
+    Print("the floor's layers {material.LayerBlend(0)} {material.LayerUvSet(0)}, {material.LayerBlend(1)} {material.LayerUvSet(1)}, {material.LayerBlend(2)} {material.LayerUvSet(2)}")
+    Print("its diffuse from its own folder {(material.Texture(2)?.Path() ?? "") == "{folder.Path / "some" / "folder" / "floor.png"}"}, the ambient everyone's {material.Texture(0) == shared.Ambient}")
+    Print("the pane's {room.Materials[1].LayerBlend(0)} {room.Materials[1].LayerUvSet(0)}, {room.Materials[1].Blend()}, two sided {room.Materials[1].TwoSided()}")
+
+    // By pixels, seen from above, its top at the world's -z, the file's +z: (2 x 0 x 128 + 60) x 100 / 255
+    // there, where v's 0.75, and x 200 at the bottom, where a filter's two texels are equal; its hidden
+    // wall above it not drawn; x 120 on the right, under the pane's half green, in linear light; and with
+    // the ambient at 15, as a game's night vision has it, 2 x 15 x 128 / 255 is 15 more before the
+    // diffuse, its vertices' red, green, and blue each their own.
+    Local target = Try Texture.Target(32, 32, TextureFormat.RGBA8, 1, True)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetProjection(Projection.ORTHOGRAPHIC)
+    camera.SetOrthographicHeight(8)
+    camera.SetPosition(Vec3(0, 20, 0))
+    camera.Turn(Deg(-90), 0, 0)
+    camera.SetClearColor(Color(0, 0, 1))
+    camera.Render()
+    Local read = target.ToImage()
+    Print("the file's +z side {read[8, 8]}")
+    Print("its -z side {read[8, 24]}")
+    Print("the pane over its right {read[24, 24]}")
+    shared.Ambient.Clear(Color32(15, 15, 15, 255).ToColor())
+    camera.Render()
+    Print("with ambient 15 {target.ToImage()[8, 24]}")
+
+    // A second file's rooms have the same ambient and the same textures, by the name without folders.
+    Local second = Try LoadRoom(path, shared)
+    Print("textures loaded, {shared.Count()}, and the second's are the first's {second.Materials[0].Texture(2) == material.Texture(2)}")
+    second.Root.Free()
+    shared.Ambient.Clear(Color(0, 0, 0))
+
+    // From below: the floor's one sided, so what's beyond it, the clear color; the pane's two, half green
+    // over it, in linear light.
+    camera.Hide()
+    Local under = Camera()
+    under.SetRenderTarget(target)
+    under.SetProjection(Projection.ORTHOGRAPHIC)
+    under.SetOrthographicHeight(8)
+    under.SetPosition(Vec3(0, -20, 0))
+    under.Turn(Deg(90), 0, 0)
+    under.SetClearColor(Color(0, 0, 1))
+    under.Render()
+    Local below = target.ToImage()
+    Print("from below, the floor's back {below[8, 16]}, the pane {below[24, 16]}")
+    under.Free()
+    camera.Show()
+    room.Root.Hide()
+
+    // Slots, each way: both flags 1, which double black ambient's nothing; a name of any case that adds;
+    // what blends by either slot; only one; and none.
+    Try Png1(folder.Path, "flat.png", [[Gray(200)]])
+    Try Png1(folder.Path, "plain.png", [[Gray(200)]])
+    Try Png1(folder.Path, "light_LM.png", [[Color32(60, 40, 30, 255)]])
+    Local kinds = Try RoomTextures()
+    Print("both flag 1 {Try Slots(folder.Path, kinds, camera, 1, "flat.png", 1, "flat.png")}")
+    Print("flag 2, a name with _LM, adds {Try Slots(folder.Path, kinds, camera, 2, "light_LM.png", 2, "plain.png")}")
+    Print("flag 3 alone, blank white {Try Slots(folder.Path, kinds, camera, 3, "flat.png", 0, "")}")
+    Print(
+        "flag 3, its diffuse {Try Slots(folder.Path, kinds, camera, 3, "flat.png", 1, "flat.png")}")
+    Print("none, its vertices {Try Slots(folder.Path, kinds, camera, 0, "", 0, "")}")
+    Print("a diffuse alone {Try Slots(folder.Path, kinds, camera, 0, "", 2, "plain.png")}")
+    Print("a lightmap alone {Try Slots(folder.Path, kinds, camera, 1, "light_LM.png", 0, "")}")
+    Print("a file that isn't there is a slot with nothing {Try Slots(folder.Path, kinds, camera, 2, "light_LM.png", 2, "gone.png")}")
+    // Its blend's the one it was first loaded for, flag 1's doubling, whatever a later file's flag says.
+    Print("a texture's blend stays its first {Try Slots(folder.Path, kinds, camera, 0, "", 2, "flat.png")}")
+
+    // By the name without its folders, what's in another folder of that name is the first's.
+    Try Png1(folder.Path, "other/flat.png", [[Color32(255, 0, 0, 255)]])
+    Print("another folder's of the same name, the first's {Try Slots(folder.Path, kinds, camera, 0, "", 2, "other/flat.png")}")
+
+    // Placed: a copy at a cell, its collision reached by what moves and what picks, by group.
+    camera.Hide()
+    Local placed = PlaceRoom(room, Vec3(40, 0, 0), 0.0, LEVEL)
+    Print("placed, showing {placed.Root.Showing()}, the template {room.Root.Showing()}")
+    world.SetCollisionResponse(MOVER, LEVEL, CollisionResponse.SLIDE)
+    Local mover = Pivot()
+    mover.SetCollisionGroup(MOVER)
+    mover.SetCollisionRadius(0.25)
+    mover.SetPosition(Vec3(40, 3, 0))
+    world.Collide()
+    mover.Translate(Vec3(0, -10, 0))
+    world.Collide()
+    Print("what falls rests on its floor {Fine(mover.Position())}")
+    mover.SetPosition(Vec3(40 + 2, 3, 0))
+    mover.ResetCollisions()
+    world.Collide()
+    mover.Translate(Vec3(0, -5, 0))
+    world.Collide()
+    Print("through the pane, to the floor {Fine(mover.Position())}")
+    mover.SetPosition(Vec3(40 + 0.5, 1, 0))
+    mover.ResetCollisions()
+    world.Collide()
+    mover.Translate(Vec3(-3, 0, 0))
+    world.Collide()
+    Print("against the hidden wall {Fine(mover.Position())}")
+    // Inside it, by its other winding: it's closed both ways, from -2 to -1.
+    mover.SetPosition(Vec3(40 - 1.5, 1, 0))
+    mover.ResetCollisions()
+    world.Collide()
+    mover.Translate(Vec3(-3, 0, 0))
+    world.Collide()
+    Print("inside the hidden wall {Fine(mover.Position())}")
+    mover.SetPosition(Vec3(40 + 3, -2, 0))
+    mover.ResetCollisions()
+    world.Collide()
+    mover.Translate(Vec3(0, 5, 0))
+    world.Collide()
+    Print("from under the floor {Fine(mover.Position())}")
+    Local down = world.Pick(Vec3(40 + 3, 5, 0), Vec3(40 + 3, -5, 0))
+    Print("picked from above, past the pane, {down != Null ? down.Entity.Name() : "nothing"} at y {down != Null ? down.Point.y : -1.0:.3}")
+
+    // Turned a quarter, what isn't entities turns with it: a place of x, y, z is at 80 + z, y, -x.
+    Local turned = PlaceRoom(room, Vec3(80, 0, 0), Deg(90), LEVEL)
+    Local pickedTurned = world.Pick(Vec3(80, 1, 3), Vec3(80, 1, -3))
+    Print("turned, its wall's met at z {pickedTurned != Null ? pickedTurned.Point.z : -9.0:.3} by {pickedTurned != Null ? pickedTurned.Entity.Name() : "nothing"}")
+    Print("its waypoint {Fine(turned.Waypoints[0])}, its screen {Fine(turned.Screens[0].At)}, its 8th emitter {Fine(turned.Emitters[7].At)}")
+    Print("its trigger {turned.Triggers[0].Name}, {Fine(turned.Triggers[0].Box.Min)} to {Fine(turned.Triggers[0].Box.Max)}")
+    Local lit = turned.Root.Child(6)
+    Print("its first light {Fine(lit.Position(Space.WORLD))}, {lit.Kind()}")
+
+    // What isn't entities in the template, with what the file left out left out: the file's z, negated.
+    Print("triggers {room.Triggers.Count}: {room.Triggers[0].Name}, {Fine(room.Triggers[0].Box.Min)} to {Fine(room.Triggers[0].Box.Max)}")
+    Print("waypoints {Fine(room.Waypoints[0])}")
+    Print("screens {room.Screens.Count}: {room.Screens[0].Image} at {Fine(room.Screens[0].At)}")
+    Print("lights {room.Lights.Count}, each {room.Lights[0].LightType()} {room.Lights[1].LightType()}")
+    Print("range {room.Lights[0].Range():.3}, at {Fine(room.Lights[0].Position())}, intensity {room.Lights[0].Intensity():.3}, and {room.Lights[1].Intensity():.3}")
+    Print("its color {room.Lights[0].Color().ToColor32()}")
+    Print("emitters {room.Emitters.Count} of 12: the 8th {room.Emitters[7].Sound}, range {room.Emitters[7].Range}, at {Fine(room.Emitters[7].At)}")
+    Print("props {room.Props.Count}: {room.Props[0].File}, at {room.Props[0].At}, turned {room.Props[0].Turn}, size {room.Props[0].Size}")
+
+    // Without its trigger header, none.
+    Local other = Try TempDir()
+    Local plain = Try LoadRoom(Try Fixture(other.Path, False), Try RoomTextures())
+    Print("with no triggers, {plain.Triggers.Count}, and the rest the same {plain.Waypoints.Count} {plain.Lights.Count}")
+    Try other.Close()
+
+    // What isn't one, each saying so and leaving nothing.
+    Local bad = Try RoomTextures()
+    Print("a wrong header: {Try Refused(folder.Path, Bytes("Mesh"), bad)}")
+    Local whole = Try File.ReadBytes(path)
+    Local cuts = 0
+    Local thrown = 0
+    Local at = 1
+    While at < whole.Count
+        cuts += 1
+        Local part: UInt8[] = []
+        For i = 0 To at - 1
+            part.Add(whole[i])
+        End For
+        If (Try Refused(folder.Path, part, bad)) != "loaded" Then thrown += 1
+        at += 13
+    End While
+    Print("cut short anywhere, it throws {cuts == thrown} of {whole.Count} bytes")
+    Local odd = Bytes("RoomMesh")
+    odd.AddAll([0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8,
+                0 As UInt8, 1 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8])
+    odd.AddAll(Bytes("dragon"))
+    Print("an entity it doesn't know: {Try Refused(folder.Path, odd, bad)}")
+    Local minus = [255 As UInt8, 255 As UInt8, 255 As UInt8, 255 As UInt8]
+    Print("a string of -1: {Try Refused(folder.Path, minus, bad)}")
+    Local crooked = Bytes("RoomMesh")
+    crooked.AddAll([0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8, 1 As UInt8, 0 As UInt8,
+                    0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8,
+                    1 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8, 9 As UInt8, 0 As UInt8,
+                    0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8,
+                    0 As UInt8, 0 As UInt8, 0 As UInt8, 0 As UInt8])
+    Print("a triangle past its vertices: {Try Refused(folder.Path, crooked, bad)}")
+    Try folder.Close()
+End Function
+
+// A window of a room's copies, turning, with a camera going round; or `frames` frames offscreen.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("room files: Escape ends it")
+    Frame.SetLimit(60)
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local folder = Try TempDir()
+    Local room = Try LoadRoom(Try Fixture(folder.Path), Try RoomTextures())
+    Local rooms = [PlaceRoom(room, Vec3(-9, 0, 0), 0.0, LEVEL),
+                   PlaceRoom(room, Vec3(0, 0, 0), Deg(90), LEVEL),
+                   PlaceRoom(room, Vec3(9, 0, 0), Deg(180), LEVEL)]
+    room.Root.Hide()
+    Local camera = Camera()
+    camera.SetClearColor(Color(0.02, 0.02, 0.03))
+    Local time: Float = 0.0
+    Local count = 0
+    Local drew = False
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        time += frames > 0 ? 0.1 : Frame.Delta() As Float
+        camera.SetPosition(Vec3(Sin(time * 0.3) * 16.0, 9, Cos(time * 0.3) * 16.0))
+        camera.PointAt(Vec3(0, 0, 0))
+        rooms[1].Root.SetRotation(Quat.FromEuler(0.0, time * 0.4, 0.0))
+        RenderWorld()
+        If frames > 0 && count == 1 Then drew = Try Drew()
+    End While
+    If frames > 0
+        // 40 frames of a tenth of a second, at 0.4 radians a second, on from a quarter's being replaced.
+        Print("the middle room's forward {Fine(rooms[1].Root.Forward())}")
+        Print("drew {drew}")
+    End If
+    Try folder.Close()
+    Print("watched {count} frames")
+End Function
+
+Local arguments = Process.Arguments()
+If Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+ElseIf !arguments.Contains("--watch")
+    Try Proved()
+Else
+    Try Watched(Asked(arguments), arguments)
+End If

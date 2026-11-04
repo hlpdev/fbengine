@@ -1,0 +1,7 @@
+// What a proof that says all it should and then ends badly looks like, for its test to fail.
+
+Import std.core
+Import std.os
+
+Print("all it should")
+Process.Exit(3)

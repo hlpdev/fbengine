@@ -308,6 +308,10 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_geometry_release(geometry: UInt64): Bool
     Function fbe_geometry_alive(geometry: UInt64): Bool
     Function fbe_geometry_clone(geometry: UInt64): UInt64
+    Function fbe_geometry_set_source(geometry: UInt64, source: CString): Bool
+    Function fbe_geometry_source(geometry: UInt64): CString
+    Function fbe_geometry_set_scene_id(geometry: UInt64, id: CString): Bool
+    Function fbe_geometry_scene_id(geometry: UInt64): CString
     Function fbe_geometry_version(geometry: UInt64): UInt64
     Function fbe_geometry_surface_count(geometry: UInt64): Int32
     Function fbe_geometry_add_surface(geometry: UInt64): Int32
@@ -380,6 +384,8 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_material_fogged(material: UInt64): Bool
     Function fbe_material_set_order(material: UInt64, order: Int32): Bool
     Function fbe_material_order(material: UInt64): Int32
+    Function fbe_material_set_scene_id(material: UInt64, id: CString): Bool
+    Function fbe_material_scene_id(material: UInt64): CString
     Function fbe_material_set_texture(material: UInt64, layer: Int32, texture: UInt64): Bool
     Function fbe_material_texture(material: UInt64, layer: Int32): UInt64
     Function fbe_material_set_layer_uv(material: UInt64, layer: Int32, scale_u: Float32,

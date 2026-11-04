@@ -1,0 +1,5 @@
+[project]
+name = "proof_exit_fails"
+version = "0.1.0"
+
+[dependencies]

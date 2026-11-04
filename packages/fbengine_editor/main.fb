@@ -1,7 +1,8 @@
 // fbengine's editor: `fb run packages/fbengine_editor -- <a game's folder>`. With `-- --watch`, as
 // tools/show.py runs it, it plays a scene of its own in a window, doing what a person would, until
 // it's closed or Escape; `--frames <n>` after that, as a test runs it, keeps it headless for that
-// many. With `-- --save <folder>`, as ctest runs it, it saves its panes, headless, as PNGs there.
+// many. With `-- --save <folder>`, as ctest runs it, it saves its panes, headless, as PNGs there. With
+// `-- --play <folder>`, as a test runs it, it plays that game on a scene of its own, headless, and ends.
 
 Import std.collections
 Import std.core
@@ -9,6 +10,7 @@ Import std.io
 Import std.math
 Import std.os
 Import fbengine
+Import "./browser"
 Import "./commands"
 Import "./component"
 Import "./demo"
@@ -19,6 +21,7 @@ Import "./handles"
 Import "./history"
 Import "./inspector"
 Import "./menu"
+Import "./play"
 Import "./project"
 Import "./scene"
 Import "./session"
@@ -109,6 +112,27 @@ Function Watched(arguments: String[]) Throws IOError, GraphicsError
     Print("watched {count} frames")
 End Function
 
+// Plays the game in `folder` until it's ended, keeping nothing of the person's.
+Function PlayedOnce(folder: Path) Throws IOError, GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+    Local settings = Try TempDir()
+    Local editor = Try Editor(settings.Path)
+    editor.Kept.Trust(folder.Text)
+    Try editor.Start(folder)
+    editor.Step()
+    editor.Actions.Run("add.cube")
+    editor.SaveScene("res://level.scene")
+    editor.Play()
+    While editor.Run.Going()
+        editor.Step()
+    End While
+    editor.Finish()
+End Function
+
 // A frame of the editor, as it's settled.
 Function Saved(editor: Editor, folder: String, name: String) Throws IOError, GraphicsError
     editor.Step()
@@ -181,6 +205,8 @@ Try
         Try Watched(arguments)
     ElseIf arguments.Count == 2 && arguments[0] == "--save"
         Try Saving(arguments[1])
+    ElseIf arguments.Count == 2 && arguments[0] == "--play"
+        Try PlayedOnce(Path(arguments[1]))
     Else
         Try Run(arguments)
     End If
@@ -188,3 +214,6 @@ Catch error As Error
     PrintError("the editor couldn't start: {error.Message}")
     Process.Exit(1)
 End Try
+// Now, as ending by itself waits for every read that's been asked for, and something a game started can
+// hold its output for as long as it likes. All that's to be kept has been.
+Process.Exit(0)

@@ -4,6 +4,7 @@
 
 Import std.collections
 Import std.core
+Import std.crypto
 Import std.data
 Import std.io
 Import std.os
@@ -14,6 +15,16 @@ Const RECENT = 8
 
 // Whether `value` can be a window's place.
 Function Fits(value: Int64): Bool => value >= -2147483648 && value <= 2147483647
+
+// What's said yes to of the project at `path`: its folder, and its name and how it's built, so one
+// that's been put there since, or whose [build] has changed, is asked about again.
+Function TrustKey(path: String): String
+    Local text = (Try? File.ReadText(Path(path) / "project.toml")) ?? ""
+    Local read = Try? Toml.Read(text)
+    Local says = text
+    If read != Null Then says = "{read.Path("project.name")?.AsString() ?? ""}\n{read["build"] ?? Value()}"
+    Return "{Folded(path)} {Hex.Encode(Sha256.Hash(says))}"
+End Function
 
 // `path` as it's compared: on Windows, whose files are found in any case, in one case.
 Function Folded(path: String): String => System.Platform == Platform.WINDOWS ? path.ToLower() : path
@@ -29,6 +40,8 @@ End Struct
 /// What's kept between runs. A file that can't be read, or has been changed to nonsense, is as if
 /// it weren't there, and is left as it is; one that can't be written is only not kept.
 Public Final Class Session
+    // What's been said yes to, whether or not it could be kept.
+    Field trusted: Set<String>
     Field folder: Path
     // Null when they can't be read, when nothing's kept in them.
     Field preferences: Preferences?
@@ -36,6 +49,7 @@ Public Final Class Session
     /// What's kept in `folder`, or the OS's folder for settings. It's an IOError if the OS doesn't
     /// say where that is.
     Public New(folder: Path? = Null) Throws IOError
+        trusted = Set<String>()
         Local where = folder
         If where == Null
             Local config = Folders.Config
@@ -103,18 +117,29 @@ Public Final Class Session
         Try? kept.Save()
     End Method
 
-    /// Whether the person said the project at `path` may run its code.
+    /// Whether the person said the project at `path` may run its code: that folder, as it's named and
+    /// built when they did.
     Public Method Trusted(path: String): Bool
+        Local key = TrustKey(path)
+        If trusted.Contains(key) Then Return True
         Local lines = Try? File.ReadLines(folder / "trusted.txt")
-        Return lines != Null && lines.Contains(Folded(path))
+        Return lines != Null && lines.Contains(key)
     End Method
 
-    /// Keeps that the project at `path` may run its code, whole or not at all.
-    Public Method Trust(path: String)
-        If Trusted(path) Then Return
+    /// Says the project at `path` may run its code, from now on, kept whole or not at all. What it gives
+    /// is why it couldn't be kept, or Null: it holds until this is gone, even so.
+    Public Method Trust(path: String): String?
+        If Trusted(path) Then Return Null
+        Local key = TrustKey(path)
+        trusted.Add(key)
         Local text = (Try? File.ReadText(folder / "trusted.txt")) ?? ""
-        Try? Dir.CreateAll(folder)
-        Try? File.WriteTextAtomic(folder / "trusted.txt", text + Folded(path) + "\n")
+        Try
+            Try Dir.CreateAll(folder)
+            Try File.WriteTextAtomic(folder / "trusted.txt", text + key + "\n")
+        Catch error As IOError
+            Return error.Message
+        End Try
+        Return Null
     End Method
 
     /// What's kept for the project at `path`, as Keep had it, or Null.
