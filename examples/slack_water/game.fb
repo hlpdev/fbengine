@@ -58,6 +58,7 @@ Public Final Class Game
         pip = Follower(x + 1.5, z + 1.0)
         Seat()
         PlacePip(0.0)
+        island.Update(flow.Clock())
         Sync()
     End New
 

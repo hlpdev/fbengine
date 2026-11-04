@@ -85,3 +85,5 @@ instead); saves; depth of field.
   Pip holds.
 - **The wait.** Once nothing can change how it ends, the clock runs thirty times as fast, saying so, so
   finishing early isn't minutes of nothing.
+- **The end.** Three seconds after it ends, a screen says how it ended and how many parts were fitted,
+  and offers playing again or leaving, by the mouse, the keyboard, or a gamepad.

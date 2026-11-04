@@ -5,10 +5,14 @@
 // go, and what it said is compared with what's kept; `--walk3d <bright|dim|dark|cut|swept|wing|far_end>
 // [<kept>]` does the same on the island, in 3D, checking how it stands at every step. With `--frames
 // <folder>`, the same to its bright ending, saving a PNG there at each moment that shows something, and
-// checking what's drawn. `--feel` tries its keys, mouse, and gamepad, and `--hear` what's in its mix.
+// checking what's drawn. `--feel` tries its keys, mouse, and gamepad, `--hear` what's in its mix, and
+// `--end <folder>` its end screen. `--cooked <kept> <folder>`, in a release, walks and draws it from its
+// pak.
 // With `--check <folder>`, it loads the assets its tools made there, and checks what they are; with
-// `--match <made> <kept>`, that two folders of them are the same. Whatever a check finds wrong is its
-// exit code.
+// `--match <made> <kept>`, that two folders of them are the same; with `--alike <one> <other> <floor>`,
+// that two folders of views are, by their PSNR. All of those but `--cooked` are for its tests, which set
+// SLACK_WATER_CHECKS=1, and do nothing in a game without it. Whatever a check finds wrong is its exit
+// code. README.md says how it's built and shipped.
 
 Import std.collections
 Import std.core
@@ -30,6 +34,7 @@ Import "./ground"
 Import "./island"
 Import "./map"
 Import "./res" As Res
+Import "./screens"
 Import "./soundscape"
 Import "./walks"
 
@@ -478,6 +483,63 @@ Function WalkTarget(island: Island, step: String): Vec2?
     End Select
 End Function
 
+// A walk being walked, a thing at a time, by keys pressed.
+Final Class Walker
+    Field walk: String[]
+    Field next: Int = 0
+    Field walking: Bool = False
+
+    New(walk: String[])
+        Self.walk = walk
+    End New
+
+    // Presses what's next, turning you to where it goes, as a person's mouse would, and gives what's
+    // just been pressed, or "".
+    @MainThread
+    Method Next(game: Game, island: Island): String Throws GraphicsError
+        If next >= walk.Count Then Return ""
+        Local step = walk[next]
+        Local target = WalkTarget(island, step)
+        Local until = Int.Parse(step)
+        If target != Null
+            Local here = game.Location()
+            Local dx = target.x - here.x
+            Local dz = target.y - here.y
+            // Within a step of it, or within reach of what lies there.
+            If dx * dx + dz * dz < 1.0
+                Try Stop()
+                next += 1
+            Else
+                game.Face(target.x, target.y)
+                If !walking
+                    Try Simulate.KeyDown(Key.W)
+                    walking = True
+                End If
+            End If
+        ElseIf until != Null
+            If game.Story().Clock() >= (until As Float64) Then next += 1
+        ElseIf step == "Q"
+            If game.Story().PipHere()
+                Try Simulate.PressKey(Key.Q)
+                next += 1
+                Return step
+            End If
+        Else
+            Try Simulate.PressKey(Key.E)
+            next += 1
+            Return step
+        End If
+        Return ""
+    End Method
+
+    // Lets go of W, if it's held.
+    @MainThread
+    Method Stop() Throws GraphicsError
+        If walking Then Try Simulate.KeyUp(Key.W)
+        walking = False
+    End Method
+End Class
+
 // What's wrong with how the game stands, by what the flow says, or Null: where you and Pip are, how
 // near Pip is, what's on the flooded road, where each part is, what you see from, and Pip's clip.
 Function Fault(game: Game, island: Island): String?
@@ -547,49 +609,12 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
     Local mixedFrom = Audio.Frames()
     Local steps = 0
     Local loudest: Float = 0.0
-    Local next = 0
+    Local walker = Walker(walk)
     Local doing = ""
-    Local walking = False
     Local fault: String? = Null
     Local flooded = False
     While game.Story().Ended() == Ending.NONE
-        doing = ""
-        If next < walk.Count
-            Local step = walk[next]
-            Local target = WalkTarget(island, step)
-            Local until = Int.Parse(step)
-            If target != Null
-                Local here = game.Location()
-                Local dx = target.x - here.x
-                Local dz = target.y - here.y
-                // Within a step of it, or within reach of what lies there.
-                If dx * dx + dz * dz < 1.0
-                    If walking
-                        Try Simulate.KeyUp(Key.W)
-                        walking = False
-                    End If
-                    next += 1
-                Else
-                    game.Face(target.x, target.y)
-                    If !walking
-                        Try Simulate.KeyDown(Key.W)
-                        walking = True
-                    End If
-                End If
-            ElseIf until != Null
-                If game.Story().Clock() >= (until As Float64) Then next += 1
-            ElseIf step == "Q"
-                If game.Story().PipHere()
-                    Try Simulate.PressKey(Key.Q)
-                    doing = step
-                    next += 1
-                End If
-            Else
-                Try Simulate.PressKey(Key.E)
-                doing = step
-                next += 1
-            End If
-        End If
+        doing = Try walker.Next(game, island)
         Flip(False)
         game.Step(controls, 0.1)
         scape.Update(game, 0.1)
@@ -610,7 +635,7 @@ Function Walked3d(island: Island, walk: String[], lines: String[],
         End If
         stepped(game, doing)
     End While
-    If walking Then Try Simulate.KeyUp(Key.W)
+    Try walker.Stop()
     stepped(game, "ended")
     Checks("it stood as the flow says, all along", fault == Null)
     Heard(scape, game.Story(), loudest)
@@ -824,6 +849,17 @@ Function Listened() Throws GraphicsError, IOError, AudioError
     End For
     Print("the largest step's {largestBefore}, and {largestDuring} through the door")
     Checks("the door doesn't click", largestDuring <= 1.5 * largestBefore)
+End Function
+
+// Whether the PNGs of each view in `one` are close to the same in `other`, by their PSNR, in decibels.
+Function AlikeViews(one: Path, other: Path, floor: Float) Throws IOError
+    For name In ["island", "island_high_tide", "yard", "pip", "mill_inside"]
+        Local first = Try Png.Decode(Try File.ReadBytes(one / "{name}.png"))
+        Local second = Try Png.Decode(Try File.ReadBytes(other / "{name}.png"))
+        Local psnr = PsnrOf(first, second)
+        Print("{name}: {psnr} dB")
+        Checks("{name} is alike in both", psnr >= floor)
+    End For
 End Function
 
 // The largest change from a sample to the next on the same channel.
@@ -1099,23 +1135,286 @@ Function Felt() Throws GraphicsError, IOError, InputError
     second.Free()
 End Function
 
+// A game being played, and played again: its island, keys, Game, sounds, and what's shown over it.
+Final Class Session
+    Field island: Island
+    Field controls: Controls
+    Field game: Game
+    Field scape: Soundscape
+    Field ending: EndScreen
+    // The last thing said, in what its Games say it through.
+    Field last: String[]
+    Field font: Font
+    Field left: Bool = False
+    // Whether the mouse is free, to point at the end screen.
+    Field pointing: Bool = False
+
+    New(island: Island, last: String[], game: Game, scape: Soundscape)
+        Self.island = island
+        Self.last = last
+        controls = Controls()
+        Self.game = game
+        Self.scape = scape
+        ending = EndScreen()
+        font = Font.BuiltIn(20.0)
+    End New
+
+    // One at its first moment, on `island`, with the audio started.
+    @MainThread
+    Static Method Make(island: Island): Session Throws IOError, InputError
+        Try SetMouseRelative(True)
+        Local last = [""]
+        Local game = Game(island, Function(line: String)
+            last[0] = line
+        End Function)
+        Return Session(island, last, game, Try Soundscape.Make(game, island))
+    End Method
+
+    // Moves it all on `seconds`, whether the window's in front or not. With the end screen shown, the
+    // mouse and keys are its, not the game's. It plays again if that's been chosen.
+    @MainThread
+    Method Step(seconds: Float) Throws IOError, InputError
+        controls.Set.SetEnabled(!ending.Showing())
+        scape.Update(game, Moved(game, controls, seconds) ? seconds : 0.0)
+        ending.Update(game.Story(), seconds)
+        If ending.LeaveChosen() Then left = True
+        If ending.AgainChosen()
+            scape.Free()
+            game.Free()
+            Local said = last
+            said[0] = ""
+            game = Game(island, Function(line: String)
+                said[0] = line
+            End Function)
+            scape = Try Soundscape.Make(game, island)
+            ending.Update(game.Story(), 0.0)
+        End If
+        If ending.Showing() != pointing
+            pointing = ending.Showing()
+            Try SetMouseRelative(!pointing)
+        End If
+    End Method
+
+    // Draws what it says over what's drawn.
+    @MainThread
+    Method Draw()
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(236, 232, 220, 255))
+        canvas.DrawText(font, game.Story().ClockLine(), 24, 20)
+        canvas.DrawText(font, Untimed(last[0]), 24, 48)
+        canvas.DrawText(font, game.Prompt(), 24, 680)
+        ending.Draw()
+    End Method
+
+    @MainThread
+    Method Free()
+        scape.Free()
+        game.Free()
+    End Method
+End Class
+
+// Steps `session` on `steps` tenths of a second, offscreen, mixing what it plays.
+Function Stepped(session: Session, steps: Int) Throws IOError, InputError
+    For step = 1 To steps
+        Flip(False)
+        Try session.Step(0.1)
+        Audio.Mix(4410)
+    End For
+End Function
+
+// Walks `session` to how `walk` ends, by its keys.
+Function WalkedToEnd(session: Session, walk: String[]) Throws GraphicsError, IOError, InputError
+    Local walker = Walker(walk)
+    While session.game.Story().Ended() == Ending.NONE
+        Try walker.Next(session.game, session.island)
+        Try Stepped(session, 1)
+    End While
+    Try walker.Stop()
+End Function
+
+// Steps `session` on until playing again has happened, and says so, whose step it gives no more than.
+Function SteppedToAgain(session: Session, ended: Flow): Bool Throws IOError, InputError
+    For step = 1 To 5
+        Try Stepped(session, 1)
+        If session.game.Story() != ended Then Return True
+    End For
+    Return False
+End Function
+
+// That the end's as it should be for how `said` says it ended, and that playing again, by the key on
+// what's focused, begins again from a world as it was at `wheelAtFirst`.
+Function EndAndAgain(session: Session, said: String, wheelAtFirst: Quat) Throws GraphicsError,
+                                                                                IOError,
+                                                                                InputError
+    Local island = session.island
+    Local flow = session.game.Story()
+    Checks("nothing's shown just after it ends", !session.ending.Showing())
+    Try Stepped(session, 35)
+    Checks("it's shown after a while", session.ending.Showing())
+    Checks("it says how it ended: {said}", session.ending.Says() == said)
+    Checks("the mouse is free to point at it", !MouseRelative())
+    // The mouse and keys are its: you don't turn, or walk.
+    Local yaw = session.game.Yaw()
+    Local at = session.game.Location()
+    Try Simulate.MouseMotion(200.0, 50.0)
+    Try Simulate.KeyDown(Key.W)
+    Try Stepped(session, 5)
+    Try Simulate.KeyUp(Key.W)
+    Try Stepped(session, 1)
+    Checks("under it, the mouse doesn't turn you", session.game.Yaw() == yaw)
+    Checks("nor do keys walk you", session.game.Location() == at)
+    // E, with it: not a key the new game hears.
+    Try Simulate.PressKey(Key.E)
+    Try Simulate.PressKey(Key.SPACE)
+    Checks("playing again begins again", Try SteppedToAgain(session, flow))
+    Checks("the sea's back as soon as it does", island.SeaDrawnAt() == SeaHeight(0.0))
+    Checks("and the mouse is the game's", MouseRelative())
+    Try Stepped(session, 1)
+    Checks("and hears nothing of the end's keys", session.last[0] == "")
+    Local fresh = session.game.Story()
+    Checks("from its first moment", fresh.Ended() == Ending.NONE && fresh.Clock() < 1.0)
+    Checks("and the end's gone", !session.ending.Showing())
+    Checks("with its wheel still", session.scape.WheelPitch() == 0.0)
+    Checks("as it was drawn at first", island.WheelTurned() == wheelAtFirst)
+    Checks("its lamp as it was", !island.LampLit() && island.LampAsUnlit())
+    Checks("every part lying", island.PartEntity(Part.GEAR).Parent() == Null &&
+           !island.PartEntity(Part.BELT).Hidden())
+End Function
+
+// The end screen, a thing at a time, offscreen: not shown until it's been a little while; what it says,
+// walked to each ending; what it looks like, in `folder`; playing again from each; then leaving, by
+// the keyboard, the mouse, and a gamepad.
+Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, InputError
+    Try Dir.CreateAll(folder)
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local session = Try Session.Make(island)
+    Defer session.Free()
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Local wheelAtFirst = island.WheelTurned()
+    Checks("it starts with the mouse the game's", MouseRelative())
+    Try Stepped(session, 5)
+    Checks("nothing's shown while it's played", !session.ending.Showing())
+
+    Try WalkedToEnd(session, Walk3dOf("bright") ?? [])
+    Checks("walked to its bright ending", session.game.Story().Ended() == Ending.BRIGHT)
+    Try EndAndAgain(session, "The lamp burns bright\n" +
+                    "All three fitted, and the wheel turning, as the storm comes in.\n" +
+                    "3 of 3 parts fitted", wheelAtFirst)
+    Try WalkedToEnd(session, Walk3dOf("dim") ?? [])
+    Checks("walked to its dim ending", session.game.Story().Ended() == Ending.DIM)
+    Try EndAndAgain(session, "The lamp burns, dimmer\n" +
+                    "The wheel turns slowly, without its belt, which the sea has.\n" +
+                    "2 of 3 parts fitted", wheelAtFirst)
+
+    // Dark, and what it looks like: its panel where it says, with something in it, and nothing else
+    // touched.
+    session.game.Story().Step(TIDE_IN_AT)
+    Checks("it's ended, dark, with nothing done", session.game.Story().Ended() == Ending.DARK)
+    Try Stepped(session, 35)
+    Checks("dark says so", session.ending.Says() ==
+           "The lamp stays dark\nThe tide came in with the sluice shut.\n0 of 3 parts fitted")
+    island.Scene().Render()
+    Local bare = Try Screen.ToImage()
+    session.ending.Draw()
+    Try Screen.Save(folder / "end_dark.png")
+    Local over = Try Screen.ToImage()
+    Local box = session.ending.PanelBox()
+    Local title = session.ending.TitleBox()
+    Local inside = 0
+    Local outside = 0
+    Local colors = Set<Int>()
+    For y = 0 Until over.Height
+        For x = 0 Until over.Width
+            Local one = over[x, y]
+            Local two = bare[x, y]
+            Local changed = one.r != two.r || one.g != two.g || one.b != two.b
+            Local within = (x As Float) >= box.X - 1.0 && (x As Float) <= box.X + box.Width + 1.0 &&
+                           (y As Float) >= box.Y - 1.0 && (y As Float) <= box.Y + box.Height + 1.0
+            If changed && within Then inside += 1
+            If changed && !within Then outside += 1
+            // Its words, where its title's laid out.
+            Local inTitle = (x As Float) >= title.X && (x As Float) <= title.X + title.Width &&
+                            (y As Float) >= title.Y && (y As Float) <= title.Y + title.Height
+            If inTitle
+                colors.Add(((one.r As Int) << 16) | ((one.g As Int) << 8) | (one.b As Int))
+            End If
+        End For
+    End For
+    Local center = box.Center
+    Checks("its panel's in the middle of the screen", Abs(center.x - 640.0) < 40.0 &&
+           Abs(center.y - 360.0) < 60.0)
+    Checks("it's drawn over its panel", inside > 2000)
+    Checks("and nothing outside it", outside == 0)
+    Checks("with words in it, not a blank box", colors.Count > 8)
+
+    // Leave, by the mouse.
+    Local leaving = session.ending.LeaveAt()
+    Try Simulate.MoveMouse(leaving.x, leaving.y)
+    Try Simulate.Click(MouseButton.LEFT)
+    Try Stepped(session, 2)
+    Checks("Leave leaves, by the mouse", session.left)
+    session.left = False
+    // And by the keyboard's Tab, from Play again.
+    session.ending.Focus()
+    Try Simulate.PressKey(Key.TAB)
+    Try Stepped(session, 1)
+    Try Simulate.PressKey(Key.SPACE)
+    Try Stepped(session, 2)
+    Checks("Leave leaves, by the keyboard", session.left)
+    session.left = False
+    // Play again, by a gamepad's button on what's focused, Tab having gone to and fro.
+    Local pad = Try Simulate.ConnectGamepad()
+    Defer pad.Unplug()
+    Flip(False)
+    session.ending.Focus()
+    Local flow = session.game.Story()
+    pad.SetButton(GamepadButton.SOUTH, True)
+    Try Stepped(session, 2)
+    pad.SetButton(GamepadButton.SOUTH, False)
+    Try Stepped(session, 2)
+    Checks("Play again, by a gamepad", session.game.Story() != flow)
+End Function
+
+// A release, from its pak: what's in it is cooked, a walk goes as it should, against what's `kept`, and
+// the island's drawn as it should be, in `folder`.
+Function CookedWalk(kept: Path, folder: Path) Throws GraphicsError, IOError, AudioError
+    Try Res.Mount()
+    // A KTX2's signature, what the cooker makes of an image.
+    Local first = (Try Assets.ReadBytes(Res.RockAlbedo))[0]
+    Print("the rock's first byte is {first}")
+    Checks("it's from its pak, cooked", first == 0xAB)
+    Assets.StopWatching()
+    Local lines: String[] = []
+    // Its transcript says how it ended.
+    Try Walked3dBy(Walk3dOf("bright") ?? [], lines)
+    Try Pinned(lines, kept, False)
+    Try Dir.CreateAll(folder)
+    Try SaveViews(folder)
+    Checks("the views from it are saved", File.Exists(folder / "island.png"))
+End Function
+
 // The game, in a window, for a person: WASD and the mouse, E, Q, and Escape.
 Function Played() Throws GraphicsError, IOError, InputError, AudioError
+    // Its files first, so a game missing them says so, with no window.
+    Try
+        Try Res.Mount()
+    Catch e As IOError
+        PrintError("Slack Water can't read its files: {e.Message}")
+        Process.Exit(1)
+    End Try
+    Defer Assets.StopWatching()
     Try Graphics(1280, 720)
     Defer EndGraphics()
     Window.SetTitle("Slack Water")
-    Try SetMouseRelative(True)
     Frame.SetLimit(60)
-    Try Res.Mount()
-    Defer Assets.StopWatching()
     Local island = Try Island.Make()
     Defer island.Free()
-    Local controls = Controls()
-    Local last = ""
-    Local game = Game(island, Function(line: String)
-        last = line
-    End Function)
-    Defer game.Free()
     // A machine with no sound still plays it, in silence.
     Local device = AudioDevice.DEFAULT
     Try
@@ -1125,29 +1424,36 @@ Function Played() Throws GraphicsError, IOError, InputError, AudioError
         Try Audio.Start(AudioDevice.SILENT)
     End Try
     Defer Audio.Stop()
-    Local scape = Try Soundscape.Make(game, island)
-    Defer scape.Free()
-    Local font = Font.BuiltIn(20.0)
-    While !Window.Closed() && !KeyHit(Key.ESCAPE)
+    Local session = Try Session.Make(island)
+    Defer session.Free()
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && !session.left
         Flip()
-        Local seconds = FrameStep(Frame.Delta()) As Float
-        scape.Update(game, Moved(game, controls, seconds) ? seconds : 0.0)
+        Try session.Step(FrameStep(Frame.Delta()) As Float)
         If Screen.Texture() == Null Then Continue
         island.Scene().Render()
-        Local canvas = Screen.Canvas()
-        canvas.SetColor(Color32(236, 232, 220, 255))
-        Local flow = game.Story()
-        canvas.DrawText(font, flow.ClockLine(), 24, 20)
-        canvas.DrawText(font, Untimed(last), 24, 48)
-        canvas.DrawText(font, game.Prompt(), 24, 680)
+        session.Draw()
     End While
 End Function
 
 Local arguments = Process.Arguments()
 Const USAGE = "usage: slack_water [--walk <bright|dim|dark> [<kept>] | --walk3d " +
               "<bright|dim|dark|cut|swept|wing|far_end> [<kept>] | --feel | --hear | " +
+              "--end <folder> | --cooked <kept> <folder> | " +
               "--frames <folder> | --check <folder> | --match <made> <kept>]"
-If arguments.Count >= 2 && arguments.Count <= 3 && arguments[0] == "--walk"
+// What's for its tests only, so a game on a player's machine can't be made to write anywhere else.
+Local checking = Env.Get("SLACK_WATER_CHECKS") == "1"
+If arguments.Count == 0
+    Try Played()
+ElseIf arguments.Count == 3 && arguments[0] == "--cooked"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try CookedWalk(Path(arguments[1]), Path(arguments[2]))
+    End If
+ElseIf !checking
+    PrintError(USAGE)
+    Process.Exit(2)
+ElseIf arguments.Count >= 2 && arguments.Count <= 3 && arguments[0] == "--walk"
     Local walk = WalkOf(arguments[1])
     If walk == Null
         PrintError(USAGE)
@@ -1170,6 +1476,12 @@ ElseIf arguments.Count >= 2 && arguments.Count <= 3 && arguments[0] == "--walk3d
         Local lines: String[] = []
         Print("ended {Try Walked3dBy(walk, lines)}")
         If arguments.Count == 3 Then Try Pinned(lines, Path(arguments[2]), False)
+    End If
+ElseIf arguments.Count == 2 && arguments[0] == "--end"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try EndShown(Path(arguments[1]))
     End If
 ElseIf arguments.Count == 1 && arguments[0] == "--hear"
     If Env.Get("FBENGINE_NO_GPU") == "1"
@@ -1194,8 +1506,8 @@ ElseIf arguments.Count == 2 && arguments[0] == "--frames"
         Try Framed(Path(arguments[1]))
         Try SaveWalk(Path(arguments[1]))
     End If
-ElseIf arguments.Count == 0
-    Try Played()
+ElseIf arguments.Count == 4 && arguments[0] == "--alike"
+    Try AlikeViews(Path(arguments[1]), Path(arguments[2]), Float.Parse(arguments[3]) ?? 100.0)
 Else
     PrintError(USAGE)
     Process.Exit(2)
