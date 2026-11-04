@@ -25,6 +25,7 @@
 #include <cstring>
 #include <limits>
 #include <numbers>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -5498,6 +5499,8 @@ TEST_CASE("a color grade's what its formula says", "[gpu][scene]") {
     CHECK(near(seen({ 2, 2, 2, -0.5F, -0.25F, 0, 2, 2, 2, 1 }),
                { srgb((slope_offset - 0.5F) * (slope_offset - 0.5F)), srgb(0.0625F), srgb(0.04F) },
                1));
+    // What an offset takes below 0 has no power to go through: it's 0, not what 0.1 squared is.
+    CHECK(near(seen({ 1, 1, 1, -0.6F, 0, 0, 2, 1, 1, 1 }), { 0, srgb(0.25F), srgb(0.1F) }, 1));
     // Not HDR, it isn't there.
     require(fbe_camera_set_hdr(scene.camera, false));
     CHECK(near(seen({ 2, 2, 2, 0, 0, 0, 1, 1, 1, 1 }), { srgb(0.5F), srgb(0.25F), srgb(0.1F) }, 1));
@@ -7066,6 +7069,23 @@ TEST_CASE("a grade's offset lights no empty pixel", "[gpu][scene]") {
     fbe_material_release(adding);
 }
 
+// Past 1, saturation takes a channel below 0, which is 0: what an offset leaves with no light has
+// no less than none of it to take from what's added.
+TEST_CASE("a grade's saturation adds no light by what it takes from none", "[gpu][scene]") {
+    const scene_t scene;
+    under_it(scene, 0.2F, 0.3F, 0.4F);
+    require(fbe_camera_set_hdr(scene.camera, true));
+    const std::array grade{ 1.0F, 1.0F, 1.0F, 0.5F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F, 2.0F };
+    require(fbe_camera_set_grade(scene.camera, grade.data()));
+    const std::uint64_t adding = fbe_material_create();
+    require(fbe_material_set_emissive(adding, 0.0F, 0.1F, 0.0F));
+    require(fbe_material_set_blend(adding, FBE_BLEND_ADD));
+    wall(scene.world, -3.0F, 10.0F, adding);
+    // (0.5, 0.1, 0) has a luma of 0.17782, so its green's 0.2 - that; (0.5, 0, 0)'s green is 0.
+    CHECK(near(middle(scene.drawn()), { srgb(0.2F), srgb(0.3F + 0.2F - 0.17782F), srgb(0.4F) }, 1));
+    fbe_material_release(adding);
+}
+
 TEST_CASE("a clearing camera's offset stores nothing above its clear alpha of 0", "[gpu][scene]") {
     const scene_t scene;
     const std::uint64_t floats =
@@ -7267,6 +7287,36 @@ TEST_CASE("a normal map doesn't let a shadowing light past what its surface face
     shine_from(sun, 0.5F, 0.0F, 0.866F);
     const rgba_t lit = middle(scene.drawn());
     require(fbe_light_set_shadows(sun, true));
+    CHECK(near(middle(scene.drawn()), { lit[0], lit[1], lit[2] }, 1));
+    fbe_material_release(paint);
+    fbe_texture_release(leaning);
+}
+
+TEST_CASE("a normal map doesn't let a spot light past what its surface faces from",
+          "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    wall(scene.world, -10.0F, 30.0F, paint);
+    const std::uint64_t leaning = normal_map(0.9F, 0.0F);
+    require(fbe_material_set_map(paint, FBE_MAP_NORMAL, leaning, 0));
+    const auto spot_at = [&](float x, float z) {
+        const std::uint64_t spot = light(scene.world, FBE_LIGHT_SPOT, x, 0.0F, -10.0F + z, 40.0F);
+        require(fbe_light_set_cone(spot, 0.5F, 0.7F));
+        require(fbe_light_set_intensity(spot, 200.0F));
+        shine_from(spot, x / 10.0F, 0.0F, z / 10.0F);
+        return spot;
+    };
+    // Behind it, leaning to the light by its map: lit, with nothing to say otherwise.
+    const std::uint64_t behind = spot_at(8.66F, -5.0F);
+    CHECK(middle(scene.drawn())[0] > 40);
+    require(fbe_light_set_shadows(behind, true));
+    CHECK(middle(scene.drawn())[0] == 0);
+    fbe_entity_free(behind);
+    // In front, leaning from the light by a little: what the map shades it, shadowed by nothing.
+    const std::uint64_t in_front = spot_at(5.0F, 8.66F);
+    const rgba_t lit = middle(scene.drawn());
+    CHECK(lit[0] > 40);
+    require(fbe_light_set_shadows(in_front, true));
     CHECK(near(middle(scene.drawn()), { lit[0], lit[1], lit[2] }, 1));
     fbe_material_release(paint);
     fbe_texture_release(leaning);
@@ -8614,8 +8664,10 @@ TEST_CASE("an Instances' PBR is a mesh's, tangents and all", "[gpu][scene]") {
             .matrix = { -1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -3, 1 },
         },
     };
-    for (const placed_t& placed : cases) {
-        CAPTURE(placed.name);
+    // Those of a w of 1 are what a pixel makes of its UVs too; only those of -1 show they're sent.
+    for (const auto& [placed, way] :
+         std::views::cartesian_product(cases, std::array{ 1.0F, -1.0F })) {
+        CAPTURE(placed.name, way);
         const scene_t scene;
         require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
         off_to_a_side(scene.world);
@@ -8623,7 +8675,7 @@ TEST_CASE("an Instances' PBR is a mesh's, tangents and all", "[gpu][scene]") {
         const std::uint64_t paint = all_of_pbr(leaning);
         require(fbe_material_set_two_sided(paint, true));
         const std::uint64_t mesh = wall(scene.world, -3.0F, 0.75F, paint);
-        tangents_of(mesh, 1.0F);
+        tangents_of(mesh, way);
         require(fbe_entity_set_rotation(mesh, placed.turn[0], placed.turn[1], placed.turn[2],
                                         placed.turn[3], FBE_SPACE_WORLD));
         require(fbe_entity_set_scale(mesh, placed.scale[0], placed.scale[1], placed.scale[2],
