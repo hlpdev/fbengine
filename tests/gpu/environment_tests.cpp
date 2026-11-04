@@ -486,6 +486,26 @@ TEST_CASE("what has no direction shades finitely", "[gpu]") {
     no_direction.radiance[3] = 1.0F;
     no_direction.texel = { 0.5F, 0.5F, 0.5F, 1.0F };
     CHECK(draw(no_direction).values == plain.values);
+    // NaN's no direction either; nor is a tangent short all over a mistake, as a part of itself.
+    spheres_t nan_tangent = lit;
+    nan_tangent.radiance[3] = 3.0F;
+    nan_tangent.environment.intensity = std::numeric_limits<float>::quiet_NaN();
+    nan_tangent.texel = { 0.75F, 0.75F, 1.0F, 1.0F };
+    CHECK(draw(nan_tangent).values == plain.values);
+    spheres_t short_tangent = lit;
+    short_tangent.radiance[3] = 3.0F;
+    short_tangent.environment.intensity = 1e-5F;
+    short_tangent.texel = { 0.75F, 0.5F, 1.0F, 1.0F };
+    spheres_t long_tangent = short_tangent;
+    long_tangent.environment.intensity = 1.0F;
+    CHECK(draw(short_tangent).values == draw(long_tangent).values);
+    // A scale that great's a square past what a float holds, as far over as a tilt goes.
+    spheres_t greatest = lit;
+    greatest.radiance[3] = 1.0F;
+    greatest.texel = { 0.75F, 0.5F, 1.0F, 1e30F };
+    for (const float value : draw(greatest).values) {
+        CHECK(std::isfinite(value));
+    }
 
     // A texel pointing straight into the surface, and a light behind it: head on, the view and the
     // light are opposite. The BRDF there, with the normal as its halfway: all of Fresnel, GGX's
@@ -1183,8 +1203,8 @@ TEST_CASE("PBR spheres match their golden image", "[gpu][golden]") {
             .grid = { -1.0F, 5.0F, 5.0F, 1.0F },
         },
         environment, 200);
-    // Tonemapped to what a golden image holds, as the frame's tonemap will be in E6's step 3: a
-    // plain Reinhard's, then sRGB's curve.
+    // Tonemapped to what a golden image holds, by the test itself, not by a camera's: a plain
+    // Reinhard's, then sRGB's curve.
     fbe::golden::frame_t golden{ .width = frame.width, .height = frame.height };
     golden.rgba.reserve(std::size_t{ frame.width } * frame.height * 4);
     for (std::uint32_t y = 0; y < frame.height; ++y) {

@@ -68,7 +68,8 @@ add_executable(fbengine_gpu_tests gpu/vulkan_tests.cpp gpu/present_tests.cpp
 target_link_libraries(fbengine_gpu_tests PRIVATE volk Vulkan::Headers Catch2::Catch2WithMain
                       fbengine_internal)
 target_include_directories(fbengine_gpu_tests SYSTEM PRIVATE "${stb_SOURCE_DIR}")
-target_include_directories(fbengine_gpu_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(fbengine_gpu_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                           "${PROJECT_BINARY_DIR}/native/fbengine/engine_shaders")
 target_compile_definitions(fbengine_gpu_tests PRIVATE
                            FBE_TEST_FONTS="${harfbuzz_SOURCE_DIR}/test/api/fonts"
                            FBE_OWN_TEST_FONTS="${CMAKE_CURRENT_SOURCE_DIR}/fonts"
@@ -1073,6 +1074,9 @@ if(FBENGINE_FB_TESTS)
       "shadow-bias=SetShadowBias on a Light: a shadow's biases are 0 or more, not -1 and 0"
       "render-no-target=Render on a World: a camera with no target draws into the screen, and there's no window open"
       "render-bad-tween=Render on a World: a tween is 0 to 1, not 2"
+      "lit-by-freed=LitBy on a World that was freed"
+      "map-as-color=SetMap on a Material: a material's metal-rough, normal, and occlusion maps are RGBA8_LINEAR"
+      "tangent-w=SetTangents on a Geometry: a tangent's w is 1 or -1, not 0.25"
       "layer-uv-zero=SetLayerUv on a Material: a layer's UV scale is finite and not 0, not \\(0, 1\\)"
       "layer-texture-out-of-range=SetTexture on a Material: a material's layers are 0 to 7, not 8"
       "joints-wrong-count=SetJoints on a Geometry: a surface of 24 vertices has as many joints, or none, not 1"
@@ -1105,6 +1109,15 @@ if(FBENGINE_FB_TESTS)
       "cone=SetCone on a Light: a spot light's cone is 0 <= inner <= outer <= Pi / 2"
       "fog-range=SetFogRange on a Camera: a fog's range is 0 <= start < end, finite, not 5 to 5"
       "fog-density=SetFogDensity on a Camera: a fog's density is 0 or more"
+      "bloom-negative=SetBloom on a Camera: a camera's bloom's intensity and threshold are 0 or more, not -1 and 1"
+      "bloom-not-finite=SetBloom on a Camera: a camera's bloom's intensity and threshold are 0 or more, not 1 and"
+      "bloom-freed=SetBloom on a Camera that was freed"
+      "grade-power=SetGrade on a Camera: a camera's color grade's slope is 0 or more, and its power above 0"
+      "grade-freed=Grade on a Camera that was freed"
+      "exposure-negative=SetExposure on a Camera: a camera's exposure is 0 or more, not -1"
+      "gamma-zero=SetGamma on a Camera: a camera's gamma is above 0, not 0"
+      "tonemap-range=the value isn't one of Tonemap's"
+      "exposure-freed=SetExposure on a Camera that was freed"
       "light-freed=SetColor on a Light that was freed"
       "segments=Sphere: a shape has 3 to 100 segments, not 2"
       "triangle-index=AddTriangle on a Geometry: the surface's vertices are 0 to 2, not 5"

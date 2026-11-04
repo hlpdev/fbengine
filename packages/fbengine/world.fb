@@ -7,6 +7,7 @@ Import std.math
 Import "./c/fbe_scene"
 Import "./camera"
 Import "./entity"
+Import "./environment"
 Import "./light"
 Import "./window"
 
@@ -19,6 +20,7 @@ Public Final Class World
     Static Field current: World? = Null
 
     Field handle: UInt64
+    Field lighting: Environment? = Null
 
     /// A new World, with no entities.
     @MainThread Public New()
@@ -55,6 +57,7 @@ Public Final Class World
     @MainThread @PanicsAtCaller
     Public Method Free()
         If !fbe_world_free(Live("Free")) Then Failed("Free")
+        lighting = Null
         DropFreed()
         worlds[Slot(handle)] = Null
         handle = 0
@@ -110,6 +113,31 @@ Public Final Class World
             found.Add(entity As Light)
         End For
         Return found
+    End Method
+
+    /// Sets the Environment the World's PBR materials are lit by, as well as its Lights and ambient
+    /// light, which it holds, Null for none, as at first; its light times `intensity`, 0 or more, or
+    /// it panics. One that's freed, or that stopping the GPU lost, lights nothing.
+    @MainThread @PanicsAtCaller
+    Public Method SetEnvironment(environment: Environment?, intensity: Float = 1.0)
+        Local handle: UInt64 = environment != Null ? environment.Live("SetEnvironment") : 0
+        If !fbe_world_set_environment(Live("SetEnvironment"), handle, intensity)
+            Failed("SetEnvironment")
+        End If
+        lighting = environment
+    End Method
+
+    /// The Environment it's lit by, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method LitBy(): Environment?
+        Live("LitBy")
+        Return lighting
+    End Method
+
+    /// What its Environment's light is times.
+    @MainThread @PanicsAtCaller
+    Public Method EnvironmentIntensity(): Float
+        Return fbe_world_environment_intensity(Live("EnvironmentIntensity"))
     End Method
 
     /// Sets the World's ambient light, which lights everything a little, from everywhere:
