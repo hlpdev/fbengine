@@ -816,3 +816,20 @@ Function ThePsnrOfImages()
     End For
     Expect(PsnrOf(one, two) < 1.0)
 End Function
+
+// The storm comes with the water, and the sun lowers as it does.
+@Test
+Function TheStormAndSunGoByTheClock()
+    Expect(StormAt(0.0) == 0.0)
+    Expect(StormAt(RISING_AT) == 0.0)
+    Expect(StormAt(FLOOD_AT) > 0.0)
+    Expect(StormAt(TIDE_IN_AT) == 1.0)
+    Expect(StormAt(TIDE_IN_AT + 100.0) == 1.0)
+    Local first = SunAt(0.0)
+    Local last = SunAt(TIDE_IN_AT)
+    Expect(first.0 > last.0)
+    // Still above the horizon, so the yard's lit to the end.
+    Expect(last.0 > 0.2)
+    Expect(first.1 != last.1)
+    Expect(SunAt(TIDE_IN_AT + 100.0).0 == last.0)
+End Function

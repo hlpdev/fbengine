@@ -87,3 +87,7 @@ instead); saves; depth of field.
   finishing early isn't minutes of nothing.
 - **The end.** Three seconds after it ends, a screen says how it ended and how many parts were fitted,
   and offers playing again or leaving, by the mouse, the keyboard, or a gamepad.
+- **The look.** PBR throughout, each surface with its albedo, normal, and roughness maps; a sky of its
+  own, baked for the light around, which is what brass reflects; a sun with shadows, lowering by the
+  clock; HDR, ACES, and bloom on the lamp; a grade as the storm comes, by the clock. Depth of field,
+  the first the design said to cut if it's long, isn't in.

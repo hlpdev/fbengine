@@ -6,7 +6,7 @@
 // [<kept>]` does the same on the island, in 3D, checking how it stands at every step. With `--frames
 // <folder>`, the same to its bright ending, saving a PNG there at each moment that shows something, and
 // checking what's drawn. `--feel` tries its keys, mouse, and gamepad, `--hear` what's in its mix, and
-// `--end <folder>` its end screen. `--cooked <kept> <folder>`, in a release, walks and draws it from its
+// `--end <folder>` its end screen; `--fps <device> <frames>` says what a frame costs at 1080p. `--cooked <kept> <folder>`, in a release, walks and draws it from its
 // pak.
 // With `--check <folder>`, it loads the assets its tools made there, and checks what they are; with
 // `--match <made> <kept>`, that two folders of them are the same; with `--alike <one> <other> <floor>`,
@@ -185,12 +185,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Local island = Try Island.Make()
     Defer island.Free()
     Local camera = Camera()
-    camera.SetClearColor(SKY)
-    camera.SetRange(0.1, 4000.0)
-    // The sea's far edge goes into the haze, with no line.
-    camera.SetFogMode(FogMode.LINEAR)
-    camera.SetFogColor(SKY)
-    camera.SetFogRange(200.0, 1400.0)
+    Looked(camera)
     Local saved = 0
     Local images = Map<String, Image>()
     For view In Views()
@@ -257,6 +252,70 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Checks("Pip's brass is in the middle of his view",
            pipPixel.r > pipPixel.g && pipPixel.g > pipPixel.b)
     Checks("no sky's seen from the mill's inside", Share(images["mill_inside"], IsSky) < 0.01)
+
+    // The look: what each of its parts does, by turning it off, from Pip's view, where brass is.
+    island.Update(0.0)
+    Local pipView = Views()[2]
+    camera.SetPosition(pipView.1)
+    camera.PointAt(pipView.2)
+    island.Scene().Render()
+    Local lit = Try Screen.ToImage()
+    Flip(False)
+    island.SetAround(False)
+    island.Scene().Render()
+    Local unlit = Try Screen.ToImage()
+    Flip(False)
+    island.SetAround(True)
+    Checks("the light around it reaches Pip's brass",
+           Brightness(lit[640, 360]) > Brightness(unlit[640, 360]) + 30)
+    Checks("the camera's in HDR, and tonemapped", camera.Hdr() && camera.Tonemap() == Tonemap.ACES)
+    camera.SetHdr(False)
+    island.Scene().Render()
+    Local flat = Try Screen.ToImage()
+    Flip(False)
+    camera.SetHdr(True)
+    Checks("and that's what's drawn", Different(lit, flat) > 0.5)
+    // The sun's moved by the tide's end, and its shadow's fallen across the yard.
+    Local yardView = Views()[1]
+    camera.SetPosition(yardView.1)
+    camera.PointAt(yardView.2)
+    Local early = island.SunTurned()
+    island.Scene().Render()
+    Local yardEarly = Try Screen.ToImage()
+    Flip(False)
+    island.Update(TIDE_IN_AT)
+    Checks("the sun moves by the clock", island.SunTurned() != early)
+    island.Scene().Render()
+    Local yardLate = Try Screen.ToImage()
+    Flip(False)
+    Checks("and what's lit with it", Different(yardEarly, yardLate) > 0.1)
+    // The storm's grade: greyer, by its saturation, and darker.
+    camera.SetGrade(StormGrade(0.0))
+    island.Scene().Render()
+    Local clear = Try Screen.ToImage()
+    Flip(False)
+    camera.SetGrade(StormGrade(1.0))
+    island.Scene().Render()
+    Local stormy = Try Screen.ToImage()
+    Flip(False)
+    Try Screen.Save(folder / "storm.png")
+    Checks("the storm darkens what's seen", Brightness(stormy[640, 4]) < Brightness(clear[640, 4]))
+End Function
+
+// How much of two images of a size differ, by more than a little, from 0 to 1.
+Function Different(one: Image, other: Image): Float
+    Local count = 0
+    For y = 0 Until one.Height
+        For x = 0 Until one.Width
+            Local a = one[x, y]
+            Local b = other[x, y]
+            If Abs((a.r As Int) - (b.r As Int)) + Abs((a.g As Int) - (b.g As Int)) +
+               Abs((a.b As Int) - (b.b As Int)) > 6
+                count += 1
+            End If
+        End For
+    End For
+    Return (count As Float) / ((one.Width * one.Height) As Float)
 End Function
 
 // Loads every asset the tools make from `folder`, as the game will, and says what they are: what's
@@ -964,6 +1023,21 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
                     Local dim = PixelOf(game.View(), Try Screen.ToImage(), island.LampAt())
                     Checks("the lamp's brighter lit than dim", lamp != Null && dim != Null &&
                            Brightness(lamp) > Brightness(dim))
+                // Its bloom: the sky just beside it's lighter with it than without.
+                island.LightLamp(True)
+                island.Scene().Render()
+                Local bloomed = Try Screen.ToImage()
+                game.View().SetBloom(0.0, 1.0)
+                island.Scene().Render()
+                Local plain = Try Screen.ToImage()
+                Looked(game.View())
+                Local beside = game.View().Project(island.LampAt() + Vec3(0.0, 0.9, 0.0))
+                If beside != Null
+                    Local x = beside.x As Int
+                    Local y = beside.y As Int
+                    Checks("the lamp blooms over what's beside it",
+                           Brightness(bloomed[x, y]) > Brightness(plain[x, y]) + 3)
+                End If
                 Catch e As GraphicsError
                     failure = e.Message
                 End Try
@@ -973,6 +1047,47 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
     End Function)
     If failure != "" Then Throw IOError(IOErrorKind.OTHER, failure)
     Checks("saved 4 frames of a 3D walk, ended BRIGHT", saved == 4 && ended == Ending.BRIGHT)
+End Function
+
+// How much a frame of it costs on GPU `device`, at 1920 by 1080, with no window, by the GPU's own
+// timestamps, walking the island and looking back at it, as a game does: the median of the frames after
+// its first, and its worst. Run as a release, with nothing else on the GPU, it's the number for 60 fps.
+Function FrameCost(device: Int32, frames: Int) Throws GraphicsError, IOError, AudioError
+    Window.SetHeadless(True)
+    Gpu.SetDevice(device)
+    Try Graphics(1920, 1080)
+    Defer EndGraphics()
+    Try Res.Mount()
+    Defer Assets.StopWatching()
+    Local island = Try Island.Make()
+    Defer island.Free()
+    Local game = Game(island, Function(line: String)
+    End Function)
+    Defer game.Free()
+    Local controls = Controls()
+    Local costs: Float[] = []
+    Local door = DoorSpot()
+    Local gear = GearSpot()
+    Local road = PaddleSpot()
+    Local spots = [door, gear, road]
+    For frame = 1 To frames
+        // Out of the door, and along toward the road, a view of each for a third of them each.
+        Local spot = spots[(frame * spots.Count - 1) / frames]
+        game.Face(spot.x, spot.y)
+        Flip(False)
+        game.Step(controls, 1.0 / 60.0)
+        island.Scene().Render()
+        If frame > 10 Then costs.Add(Gpu.Counters().GpuMilliseconds)
+    End For
+    costs.Sort()
+    Local median = costs[costs.Count / 2]
+    Local worst = costs[costs.Count - 1]
+    Local counters = Gpu.Counters()
+    Print("{Gpu.Name()}, {Gpu.Kind()}: {median} ms a frame, {worst} at most, at 1920 by 1080; " +
+          "{counters.Draws} draws, {counters.Triangles} triangles")
+    If Gpu.Kind() != GpuKind.CPU
+        Checks("under 16.6 ms a frame, for 60 fps", worst < 16.6)
+    End If
 End Function
 
 // One frame of the game for a person, which doesn't go on while the window's not in front.
@@ -1476,6 +1591,12 @@ ElseIf arguments.Count >= 2 && arguments.Count <= 3 && arguments[0] == "--walk3d
         Local lines: String[] = []
         Print("ended {Try Walked3dBy(walk, lines)}")
         If arguments.Count == 3 Then Try Pinned(lines, Path(arguments[2]), False)
+    End If
+ElseIf arguments.Count == 3 && arguments[0] == "--fps"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try FrameCost(Int.Parse(arguments[1]) ?? 0, Int.Parse(arguments[2]) ?? 100)
     End If
 ElseIf arguments.Count == 2 && arguments[0] == "--end"
     If Env.Get("FBENGINE_NO_GPU") == "1"

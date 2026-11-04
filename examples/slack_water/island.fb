@@ -3,6 +3,7 @@
 // parts; and Pip.
 
 Import std.core
+Import std.image.hdr
 Import std.math
 Import fbengine
 Import "./flow"
@@ -16,8 +17,16 @@ Const FLOOR: Float = 0.1
 // How much smaller a part is in your hand, close to you, so it stays this side of a wall.
 Const HELD_SIZE: Float = 0.35
 
-/// The sky's color, which the fog goes into.
+/// The sky's color at the horizon, which the fog goes into.
 Public Const SKY: Color = Color(0.62, 0.72, 0.8)
+// How bright the sky is, how bright the sun, what a camera's light's multiplied by, and its bloom, how
+// much, and from how bright.
+Const SKY_LIGHT: Float = 1.5
+Const SUN_LIGHT: Float = 3.2
+Const EXPOSURE: Float = 0.8
+Const BLOOM: Float = 0.5
+Const BLOOM_FROM: Float = 1.5
+Const LAMP_GLOW: Float = 4.0
 
 /// Places on the island a game goes to, and walks through.
 Public Enum Spot
@@ -29,17 +38,97 @@ Public Enum Spot
     WORKS = 5
 End Enum
 
-// A material of `path`'s texture, kept in `held`, tinted `color`, each repeat of it `size` units of
-// UV across.
+// A surface of PBR's: `albedo`, its color, under `color`; its normal and roughness maps; how much of a
+// metal it is; and each repeat of them `size` units of UV across. What's loaded's kept in `held`.
 @MainThread
-Function Textured(held: Texture[], path: String, color: Color,
-                  size: Float): Material Throws IOError
-    Local texture = Try Assets.Load<Texture>(path)
-    held.Add(texture)
+Function Surfaced(held: Texture[], albedo: String, normal: String, rough: String, metal: Float,
+                  color: Color, size: Float): Material Throws IOError
     Local material = Material(color)
-    material.SetTexture(0, texture)
-    If size != 1.0 Then material.SetLayerUv(0, UvTurn(Vec2(size, size), 0.0, Vec2(0.0, 0.0)))
+    Local turn = UvTurn(Vec2(size, size), 0.0, Vec2(0.0, 0.0))
+    Local shown = Try Assets.Load<Texture>(albedo)
+    held.Add(shown)
+    material.SetTexture(0, shown)
+    Local bumps = Try Assets.Load<Texture>(normal)
+    held.Add(bumps)
+    material.SetMap(MaterialMap.NORMAL, bumps)
+    Local roughness = Try Assets.Load<Texture>(rough)
+    held.Add(roughness)
+    material.SetMap(MaterialMap.METAL_ROUGH, roughness)
+    If size != 1.0
+        material.SetLayerUv(0, turn)
+        material.SetMapUv(MaterialMap.NORMAL, turn)
+        material.SetMapUv(MaterialMap.METAL_ROUGH, turn)
+    End If
+    // What's in the maps is multiplied by these: all of their roughness, and this much of their metal.
+    material.SetMetalRough(metal, 1.0)
     Return material
+End Function
+
+@MainThread
+Function Rock(held: Texture[], color: Color, size: Float): Material Throws IOError
+    Return Try Surfaced(held, Res.RockAlbedo, Res.RockNormal, Res.RockRough, 0.0, color, size)
+End Function
+
+@MainThread
+Function Wood(held: Texture[]): Material Throws IOError
+    Return Try Surfaced(held, Res.WoodAlbedo, Res.WoodNormal, Res.WoodRough, 0.0,
+                        Color(1.0, 1.0, 1.0), 1.0)
+End Function
+
+@MainThread
+Function Brass(held: Texture[]): Material Throws IOError
+    Return Try Surfaced(held, Res.BrassAlbedo, Res.BrassNormal, Res.BrassRough, 1.0,
+                        Color(1.0, 1.0, 1.0), 1.0)
+End Function
+
+@MainThread
+Function Iron(held: Texture[], color: Color): Material Throws IOError
+    Return Try Surfaced(held, Res.IronAlbedo, Res.IronNormal, Res.IronRough, 1.0, color, 1.0)
+End Function
+
+/// The light all around, from straight up, through the haze at the horizon, to the sea below it, by
+/// height alone, so it's the same whichever way a sky or Environment takes as ahead: light past 1's
+/// what's kept in it, so a metal has something bright to reflect.
+Public Function SkyImage(): HdrImage
+    Local width = 64
+    Local height = 128
+    Local values: Float32[] = []
+    For y = 0 Until height
+        // From 1, straight up, to -1, straight down.
+        Local up = 1.0 - 2.0 * ((y As Float) + 0.5) / (height As Float)
+        Local haze = 1.0 - Clamp(Abs(up) * 3.0, 0.0, 1.0)
+        Local r = up >= 0.0 ? 0.32 + (SKY.r - 0.32) * haze : 0.04 + (SKY.r - 0.04) * haze
+        Local g = up >= 0.0 ? 0.5 + (SKY.g - 0.5) * haze : 0.16 + (SKY.g - 0.16) * haze
+        Local b = up >= 0.0 ? 0.82 + (SKY.b - 0.82) * haze : 0.2 + (SKY.b - 0.2) * haze
+        For x = 0 Until width
+            values.Add(r * SKY_LIGHT)
+            values.Add(g * SKY_LIGHT)
+            values.Add(b * SKY_LIGHT)
+            values.Add(1.0)
+        End For
+    End For
+    Return HdrImage.FromFloats(width, height, values)
+End Function
+
+/// Sets `camera` to see as the game does: into an HDR image, its light past white rolled off, bloom on
+/// what's brightest, and its far edge into the haze.
+@MainThread
+Public Function Looked(camera: Camera)
+    camera.SetClearColor(SKY)
+    camera.SetRange(0.1, 4000.0)
+    camera.SetFogMode(FogMode.LINEAR)
+    camera.SetFogColor(Color(SKY.r * SKY_LIGHT, SKY.g * SKY_LIGHT, SKY.b * SKY_LIGHT))
+    camera.SetFogRange(200.0, 1400.0)
+    camera.SetHdr(True)
+    camera.SetTonemap(Tonemap.ACES)
+    camera.SetExposure(EXPOSURE)
+    camera.SetBloom(BLOOM, BLOOM_FROM)
+End Function
+
+/// What the storm does to what's seen: `storm`, from 0 to 1, greys it, cools it, and darkens it.
+Public Function StormGrade(storm: Float): ColorGrade
+    Return ColorGrade(Vec3(1.0 - 0.3 * storm, 1.0 - 0.22 * storm, 1.0 - 0.12 * storm),
+                      Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 1.0), 1.0 - 0.35 * storm)
 End Function
 
 // A box, its middle at (`x`, `y`, `z`) from the mill's floor, half `w`, `h`, and `d` across.
@@ -56,11 +145,10 @@ End Function
 // wall, and the lamp on top; gives its pivot, its wheel, and its lamp.
 @MainThread
 Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh) Throws IOError
-    Local white = Color(1.0, 1.0, 1.0)
-    Local wood = Try Textured(held, Res.WoodAlbedo, white, 1.0)
-    Local iron = Try Textured(held, Res.IronAlbedo, white, 1.0)
-    Local stone = Try Textured(held, Res.RockAlbedo, Color(0.8, 0.8, 0.82), 0.5)
-    Local brass = Try Textured(held, Res.BrassAlbedo, white, 1.0)
+    Local wood = Try Wood(held)
+    Local iron = Try Iron(held, Color(1.0, 1.0, 1.0))
+    Local stone = Try Rock(held, Color(0.8, 0.8, 0.82), 0.5)
+    Local brass = Try Brass(held)
     Local mill = Pivot()
     mill.SetPosition(Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0), 0.0))
     // Its floor, a little above the yard, so they don't fight.
@@ -91,15 +179,14 @@ End Function
 // The parts, each lying where it does, by its number: the gear, the paddle, and the belt.
 @MainThread
 Function BuildParts(held: Texture[]): Mesh[] Throws IOError
-    Local white = Color(1.0, 1.0, 1.0)
     Local gear = Mesh(Geometry.Cylinder(12))
-    gear.SetMaterial(Try Textured(held, Res.BrassAlbedo, white, 1.0))
+    gear.SetMaterial(Try Brass(held))
     gear.SetScale(Vec3(0.3, 0.06, 0.3))
     Local paddle = Mesh(Geometry.Cube())
-    paddle.SetMaterial(Try Textured(held, Res.WoodAlbedo, white, 1.0))
+    paddle.SetMaterial(Try Wood(held))
     paddle.SetScale(Vec3(0.3, 0.05, 0.42))
     Local belt = Mesh(Geometry.Cylinder(16))
-    belt.SetMaterial(Try Textured(held, Res.IronAlbedo, Color(0.5, 0.45, 0.4), 1.0))
+    belt.SetMaterial(Try Iron(held, Color(0.5, 0.45, 0.4)))
     belt.SetScale(Vec3(0.36, 0.08, 0.36))
     Return [gear, paddle, belt]
 End Function
@@ -116,6 +203,8 @@ Public Final Class Island
     Field wheel: Mesh
     Field lamp: Mesh
     Field parts: Mesh[]
+    Field sun: Light
+    Field around: Environment
     Field lampLight: Light? = Null
     Field lampUnlit: Material
     Field sizes: Vec3[] = []
@@ -123,7 +212,7 @@ Public Final Class Island
     Field pipMesh: Mesh
 
     New(scene: World, ground: Terrain, sea: Mesh, model: Model, pip: Entity, held: Texture[],
-        mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[])
+        mill: Pivot, wheel: Mesh, lamp: Mesh, parts: Mesh[], sun: Light, around: Environment)
         Self.scene = scene
         Self.ground = ground
         Self.sea = sea
@@ -134,6 +223,8 @@ Public Final Class Island
         Self.wheel = wheel
         Self.lamp = lamp
         Self.parts = parts
+        Self.sun = sun
+        Self.around = around
         lampUnlit = lamp.Material() ?? Material(Color(1.0, 1.0, 1.0))
         pipHead = pip.Find("head") ?? pip
         pipMesh = (pip.Find("pip") ?? pip) As Mesh
@@ -146,17 +237,25 @@ Public Final Class Island
 
     /// Makes it, from the game's files, which Res has mounted.
     @MainThread
-    Public Static Method Make(): Island Throws IOError
+    Public Static Method Make(): Island Throws IOError, GraphicsError
         Local scene = World()
         World.SetCurrent(scene)
-        scene.SetAmbientLight(Color(0.42, 0.46, 0.52))
         Local held: Texture[] = []
+        // The light around it, which is the sky seen, and what a metal reflects.
+        Local skyTexture = Try Texture.FromHdr(SkyImage())
+        held.Add(skyTexture)
+        scene.SetSkyTexture(skyTexture)
+        Local around = Try Environment.Bake(skyTexture, 128, 64)
+        scene.SetEnvironment(around)
 
         Local sun = Light(LightType.DIRECTIONAL)
         sun.SetColor(Color(1.0, 0.92, 0.78))
-        sun.SetIntensity(1.1)
-        // Low, from the south, on the mill's door.
-        sun.SetRotation(ToRadians(-38.0), ToRadians(30.0), 0.0)
+        sun.SetIntensity(SUN_LIGHT)
+        sun.SetShadows(True)
+        sun.SetShadowDistance(180.0)
+        // Low, from the south, on the mill's door, and lowering.
+        Local height, around2 = SunAt(0.0)
+        sun.SetRotation(-height, around2, 0.0)
 
         Local ground = Terrain(SIDE)
         ground.SetPosition(Vec3(-(SIDE As Float) / 2.0, 0.0, -(SIDE As Float) / 2.0))
@@ -167,12 +266,13 @@ Public Final Class Island
             End For
         End For
         ground.SetHeights(heights)
-        ground.SetMaterial(Try Textured(held, Res.RockAlbedo, Color(1.0, 1.0, 1.0), 12.0))
+        ground.SetMaterial(Try Rock(held, Color(1.0, 1.0, 1.0), 12.0))
 
         Local sea = Mesh(Geometry.Plane(1))
         sea.SetScale(Vec3(3000.0, 1.0, 3000.0))
-        Local water = Material(Color(0.07, 0.24, 0.3))
-        water.SetShininess(0.8)
+        // Smooth, so it's the sky it shows.
+        Local water = Material(Color(0.03, 0.15, 0.2))
+        water.SetMetalRough(0.0, 0.18)
         sea.SetMaterial(water)
 
         Local mill, wheel, lamp = Try BuildMill(held)
@@ -184,7 +284,7 @@ Public Final Class Island
         // Facing the yard's view, as glTF's front is +Z.
         pip.SetRotation(0.0, ToRadians(20.0), 0.0)
         pip.Player().Play(model.Clips()[0])
-        Return Island(scene, ground, sea, model, pip, held, mill, wheel, lamp, parts)
+        Return Island(scene, ground, sea, model, pip, held, mill, wheel, lamp, parts, sun, around)
     End Method
 
     /// The World it's in.
@@ -259,6 +359,8 @@ Public Final Class Island
     @MainThread
     Public Method Update(clock: Float64)
         sea.SetPosition(Vec3(0.0, SeaHeight(clock), 0.0))
+        Local height, turned = SunAt(clock)
+        sun.SetRotation(-height, turned, 0.0)
     End Method
 
     /// Puts a part on the mill's works, each in its place.
@@ -277,6 +379,18 @@ Public Final Class Island
         wheel.SetRotation(angle, 0.0, ToRadians(90.0))
     End Method
 
+    /// What the sun's light does now, its rotation.
+    @MainThread Public Method SunTurned(): Quat => sun.Rotation()
+
+    /// The World's light all around.
+    @MainThread Public Method Around(): Environment? => scene.LitBy()
+
+    /// Takes the normal maps off, or the light around, to see what they've done.
+    @MainThread
+    Public Method SetAround(on: Bool)
+        scene.SetEnvironment(on ? around : Null)
+    End Method
+
     /// How far the wheel's turned.
     @MainThread Public Method WheelTurned(): Quat => wheel.Rotation()
 
@@ -284,8 +398,9 @@ Public Final Class Island
     @MainThread
     Public Method LightLamp(bright: Bool)
         Local glow = bright ? Color(3.0, 2.6, 1.6) : Color(1.4, 1.1, 0.6)
-        Local material = Material(glow)
-        material.SetShading(Shading.UNLIT)
+        // Brighter than white, which is what bloom's for.
+        Local material = Material(Color(0.0, 0.0, 0.0))
+        material.SetEmissive(Color(glow.r * LAMP_GLOW, glow.g * LAMP_GLOW, glow.b * LAMP_GLOW))
         lamp.SetMaterial(material)
         Local light = lampLight ?? Light(LightType.POINT, lamp)
         lampLight = light
@@ -384,6 +499,7 @@ Public Final Class Island
     Public Method Free()
         model.Free()
         scene.Free()
+        around.Free()
         For texture In held
             texture.Free()
         End For
