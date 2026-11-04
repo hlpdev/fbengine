@@ -207,10 +207,7 @@ bool write_buffer_regions(const buffer_t& buffer, std::span<const std::byte> byt
     }
     count_upload(bytes.size());
     VkCommandBuffer commands = upload_commands();
-    // After what reads it, and after what last wrote it, as a write's order isn't kept by the reads
-    // between them.
-    buffer_barrier(commands, buffer.buffer, readers | transfer, transfer_write, transfer,
-                   transfer_write);
+    buffer_barrier(commands, buffer.buffer, readers, 0, transfer, transfer_write);
     vkCmdCopyBuffer(commands, staging.buffer, buffer.buffer,
                     static_cast<std::uint32_t>(regions.size()), regions.data());
     buffer_barrier(commands, buffer.buffer, transfer, transfer_write, readers, reads);
