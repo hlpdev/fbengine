@@ -25,7 +25,6 @@
 #include <cstring>
 #include <limits>
 #include <numbers>
-#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -8665,35 +8664,36 @@ TEST_CASE("an Instances' PBR is a mesh's, tangents and all", "[gpu][scene]") {
         },
     };
     // Those of a w of 1 are what a pixel makes of its UVs too; only those of -1 show they're sent.
-    for (const auto& [placed, way] :
-         std::views::cartesian_product(cases, std::array{ 1.0F, -1.0F })) {
-        CAPTURE(placed.name, way);
-        const scene_t scene;
-        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
-        off_to_a_side(scene.world);
-        const std::uint64_t leaning = normal_map(0.6F, 0.2F);
-        const std::uint64_t paint = all_of_pbr(leaning);
-        require(fbe_material_set_two_sided(paint, true));
-        const std::uint64_t mesh = wall(scene.world, -3.0F, 0.75F, paint);
-        tangents_of(mesh, way);
-        require(fbe_entity_set_rotation(mesh, placed.turn[0], placed.turn[1], placed.turn[2],
-                                        placed.turn[3], FBE_SPACE_WORLD));
-        require(fbe_entity_set_scale(mesh, placed.scale[0], placed.scale[1], placed.scale[2],
-                                     FBE_SPACE_WORLD));
-        const fbe::golden::frame_t as_a_mesh = scene.drawn();
-        CHECK(middle(as_a_mesh)[0] > 20);
-        fbe_entity_set_hidden(mesh, true);
-        const std::uint64_t many = fbe_entity_create(scene.world, 0, FBE_ENTITY_INSTANCES);
-        require(fbe_instances_set_geometry(many, fbe_mesh_geometry(mesh)));
-        require(fbe_instances_set_material(many, paint));
-        fbe_instance_t one{};
-        std::ranges::copy(placed.matrix, std::begin(one.matrix.m));
-        one.color = fbe_color_t{ .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F };
-        require(fbe_instances_set(many, &one, 1));
-        CHECK(frames_apart(as_a_mesh, scene.drawn(), 2) == 0);
-        CHECK(fbe_gpu_validation_errors() == 0);
-        fbe_material_release(paint);
-        fbe_texture_release(leaning);
+    for (const auto& placed : cases) {
+        for (const float way : { 1.0F, -1.0F }) {
+            CAPTURE(placed.name, way);
+            const scene_t scene;
+            require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+            off_to_a_side(scene.world);
+            const std::uint64_t leaning = normal_map(0.6F, 0.2F);
+            const std::uint64_t paint = all_of_pbr(leaning);
+            require(fbe_material_set_two_sided(paint, true));
+            const std::uint64_t mesh = wall(scene.world, -3.0F, 0.75F, paint);
+            tangents_of(mesh, way);
+            require(fbe_entity_set_rotation(mesh, placed.turn[0], placed.turn[1], placed.turn[2],
+                                            placed.turn[3], FBE_SPACE_WORLD));
+            require(fbe_entity_set_scale(mesh, placed.scale[0], placed.scale[1], placed.scale[2],
+                                         FBE_SPACE_WORLD));
+            const fbe::golden::frame_t as_a_mesh = scene.drawn();
+            CHECK(middle(as_a_mesh)[0] > 20);
+            fbe_entity_set_hidden(mesh, true);
+            const std::uint64_t many = fbe_entity_create(scene.world, 0, FBE_ENTITY_INSTANCES);
+            require(fbe_instances_set_geometry(many, fbe_mesh_geometry(mesh)));
+            require(fbe_instances_set_material(many, paint));
+            fbe_instance_t one{};
+            std::ranges::copy(placed.matrix, std::begin(one.matrix.m));
+            one.color = fbe_color_t{ .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F };
+            require(fbe_instances_set(many, &one, 1));
+            CHECK(frames_apart(as_a_mesh, scene.drawn(), 2) == 0);
+            CHECK(fbe_gpu_validation_errors() == 0);
+            fbe_material_release(paint);
+            fbe_texture_release(leaning);
+        }
     }
 }
 
