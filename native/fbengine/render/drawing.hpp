@@ -26,9 +26,9 @@ namespace fbe::render {
 /// A draw as the scene shader reads it: its matrix to the camera's view; the rows of what turns
 /// its normals there; its color and alpha; its vertices' address; its joints' and palette's, if
 /// it's skinned; its tangents', if it has them; its morph targets' and the ones it's drawn with, if
-/// it's morphed; its emitter's, if it's particles; its material's index in the camera's; its own
-/// lights; how many matrices its palette has, 0 if it isn't skinned; how many targets it's drawn
-/// with, and how many vertices each has; and whether it has tangents.
+/// it's morphed; its emitter's, if it's particles; its instances', if it has them; its material's
+/// index in the camera's; its own lights; how many matrices its palette has, 0 if it isn't skinned;
+/// how many targets it's drawn with, and how many vertices each has; and whether it has tangents.
 struct draw_data_t {
     std::array<float, 16> to_view;
     std::array<std::array<float, 4>, 3> normals;
