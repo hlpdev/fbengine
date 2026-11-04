@@ -53,6 +53,25 @@ Function AReleaseBuildCooksItsPakWhereTheExecutableGoes() Throws IOError
     Expect((Try Assets.ReadBytes("res://test-game/wall.png"))[0] == 0xAB)
 End Function
 
+// A game with a version says it to Mount, and stamps its pak with it.
+@Test
+Function AReleaseIsStampedWithItsGamesVersion() Throws IOError
+    Local game = Try TempDir()
+    Defer Try? game.Close()
+    Try Dir.CreateAll(game.Path / "assets")
+    Try File.WriteBytes(game.Path / "assets" / "wall.png", Png.Encode(Image(4, 4)))
+    Try File.WriteText(game.Path / "project.toml",
+                       "[other]\nversion = \"9\"\n[project]\nname = \"game\"\nversion = \"1.2.3\"\n")
+    Local out = OutOf(game.Path, "release")
+    Try GameBuild.Run("game", game.Path, out, "release")
+    Local pak = game.Path / "build" / "game.pak"
+    Expect((Try File.ReadText(out / "res.fb")).Contains(
+        "FbEngine.Assets.MountRelease(\"game\", \"{pak}\", \"1.2.3\")"))
+    Try Assets.MountPak("res://stamped-game", pak)
+    Defer Assets.Unmount("res://stamped-game")
+    Expect((Try Assets.ReadText("res://stamped-game/{GAME_VERSION_FILE}")) == "1.2.3")
+End Function
+
 @Test
 Function AGameWithoutItsFolderSaysSo() Throws IOError
     Local game = Try TempDir()

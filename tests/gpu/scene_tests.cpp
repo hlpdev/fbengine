@@ -22,7 +22,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <gpu/graph.hpp>
 #include <limits>
 #include <memory>
 #include <numbers>
@@ -9902,4 +9901,127 @@ TEST_CASE("an Instances that mirrors casts, and is in the prepass, as a mesh is"
     }
     CHECK(fbe_gpu_validation_errors() == 0);
     fbe_material_release(paint);
+}
+
+namespace {
+
+/// How many pixels of two frames are apart by more than `within`.
+int frames_apart(const fbe::golden::frame_t& one, const fbe::golden::frame_t& other, int within) {
+    int apart = 0;
+    for (std::size_t at = 0; at < one.rgba.size(); ++at) {
+        apart += std::abs(one.rgba[at] - other.rgba[at]) > within ? 1 : 0;
+    }
+    return apart;
+}
+
+/// A material with all of PBR's on it: a color, how it's metal and rough, what it emits, and a
+/// normal map leaning off its surface's tangent.
+std::uint64_t all_of_pbr(std::uint64_t leaning) {
+    const std::uint64_t material = fbe_material_create();
+    require(fbe_material_set_color(material, 0.8F, 0.5F, 0.3F, 1.0F));
+    require(fbe_material_set_metal_rough(material, 0.3F, 0.4F));
+    require(fbe_material_set_emissive(material, 0.05F, 0.0F, 0.1F));
+    require(fbe_material_set_map(material, FBE_MAP_NORMAL, leaning, 0));
+    return material;
+}
+
+/// A sun off to one side, so what a normal map leans to shows.
+void off_to_a_side(std::uint64_t world) {
+    const std::uint64_t sun = light(world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 3.0F);
+    shine_from(sun, 0.6F, 0.3F, 0.7416198F);
+}
+
+} // namespace
+
+// What came of instances meeting PBR: one of an Instances is what a mesh there is, by its own
+// tangents.
+TEST_CASE("an Instances' PBR is a mesh's, tangents and all", "[gpu][scene]") {
+    // Each of these as a mesh's turn and scale, and as an instance's matrix.
+    const float c = std::cos(0.6F);
+    const float n = std::sin(0.6F);
+    const float half = std::sin(0.3F);
+    struct placed_t {
+        const char* name;
+        std::array<float, 4> turn;
+        std::array<float, 3> scale;
+        std::array<float, 16> matrix;
+    };
+    const float w = std::cos(0.3F);
+    const std::array cases{
+        placed_t{
+            .name = "where it is",
+            .turn = { 0.0F, 0.0F, 0.0F, 1.0F },
+            .scale = { 1.0F, 1.0F, 1.0F },
+            .matrix = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -3, 1 },
+        },
+        placed_t{
+            .name = "turned",
+            .turn = { 0.0F, 0.0F, half, w },
+            .scale = { 1.0F, 1.0F, 1.0F },
+            .matrix = { c, n, 0, 0, -n, c, 0, 0, 0, 0, 1, 0, 0, 0, -3, 1 },
+        },
+        placed_t{
+            .name = "mirrored",
+            .turn = { 0.0F, 0.0F, 0.0F, 1.0F },
+            .scale = { -1.0F, 1.0F, 1.0F },
+            .matrix = { -1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, -3, 1 },
+        },
+    };
+    for (const placed_t& placed : cases) {
+        CAPTURE(placed.name);
+        const scene_t scene;
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        off_to_a_side(scene.world);
+        const std::uint64_t leaning = normal_map(0.6F, 0.2F);
+        const std::uint64_t paint = all_of_pbr(leaning);
+        require(fbe_material_set_two_sided(paint, true));
+        const std::uint64_t mesh = wall(scene.world, -3.0F, 0.75F, paint);
+        tangents_of(mesh, 1.0F);
+        require(fbe_entity_set_rotation(mesh, placed.turn[0], placed.turn[1], placed.turn[2],
+                                        placed.turn[3], FBE_SPACE_WORLD));
+        require(fbe_entity_set_scale(mesh, placed.scale[0], placed.scale[1], placed.scale[2],
+                                     FBE_SPACE_WORLD));
+        const fbe::golden::frame_t as_a_mesh = scene.drawn();
+        CHECK(middle(as_a_mesh)[0] > 20);
+        fbe_entity_set_hidden(mesh, true);
+        const std::uint64_t many = fbe_entity_create(scene.world, 0, FBE_ENTITY_INSTANCES);
+        require(fbe_instances_set_geometry(many, fbe_mesh_geometry(mesh)));
+        require(fbe_instances_set_material(many, paint));
+        fbe_instance_t one{};
+        std::ranges::copy(placed.matrix, std::begin(one.matrix.m));
+        one.color = fbe_color_t{ .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = 1.0F };
+        require(fbe_instances_set(many, &one, 1));
+        CHECK(frames_apart(as_a_mesh, scene.drawn(), 2) == 0);
+        CHECK(fbe_gpu_validation_errors() == 0);
+        fbe_material_release(paint);
+        fbe_texture_release(leaning);
+    }
+}
+
+// And levels of detail: what a level draws is PBR by its own surface's tangents and materials.
+TEST_CASE("a level of detail's PBR is its own surface's, tangents and all", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    off_to_a_side(scene.world);
+    const std::uint64_t leaning = normal_map(0.6F, 0.2F);
+    const std::uint64_t paint = all_of_pbr(leaning);
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.75F, paint);
+    tangents_of(mesh, 1.0F);
+    // The level's a wall of its own, whose tangents have its bitangent the other way.
+    const std::uint64_t level = wall(scene.world, -3.0F, 0.75F, paint);
+    tangents_of(level, -1.0F);
+    fbe_entity_set_hidden(level, true);
+    const fbe::golden::frame_t by_its_own = scene.drawn();
+    CHECK(middle(by_its_own)[0] > 20);
+    fbe_entity_set_hidden(level, false);
+    fbe_entity_set_hidden(mesh, true);
+    const fbe::golden::frame_t by_the_levels = scene.drawn();
+    CHECK(frames_apart(by_its_own, by_the_levels, 2) > 0);
+    // Small in the view, the mesh draws its level, as that wall alone draws.
+    fbe_entity_set_hidden(level, true);
+    fbe_entity_set_hidden(mesh, false);
+    require(fbe_geometry_set_lod(fbe_mesh_geometry(mesh), 0, fbe_mesh_geometry(level), 100.0F));
+    CHECK(frames_apart(by_the_levels, scene.drawn(), 2) == 0);
+    fbe_material_release(paint);
+    fbe_texture_release(leaning);
 }

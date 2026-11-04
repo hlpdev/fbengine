@@ -192,14 +192,6 @@ typedef struct fbe_vertex_t {
     fbe_color_t color;
 } fbe_vertex_t;
 
-// An instance of an Instances entity: where it is, in the entity's space, and its color and alpha,
-// which multiply its material's and its geometry's vertex colors. Any alpha under 1 has the whole
-// entity blend, as a mesh's does, unless its material says how, and not cast.
-typedef struct fbe_instance_t {
-    fbe_mat4_t matrix;
-    fbe_color_t color;
-} fbe_instance_t;
-
 // A vertex's tangent, beside its fbe_vertex_t, for normal maps, as glTF's TANGENT has it: along its
 // UVs' u, its bitangent the way of w, +1 or -1, across its normal and tangent.
 typedef struct fbe_vertex_tangent_t {
@@ -208,6 +200,14 @@ typedef struct fbe_vertex_tangent_t {
     float z;
     float w;
 } fbe_vertex_tangent_t;
+
+// An instance of an Instances entity: where it is, in the entity's space, and its color and alpha,
+// which multiply its material's and its geometry's vertex colors. Any alpha under 1 has the whole
+// entity blend, as a mesh's does, unless its material says how, and not cast.
+typedef struct fbe_instance_t {
+    fbe_mat4_t matrix;
+    fbe_color_t color;
+} fbe_instance_t;
 
 // A vertex's joints, beside its fbe_vertex_t: which four of its skin's joints move it, as glTF's
 // JOINTS_0 indexes them, and how much of each, as its WEIGHTS_0. FBE_NO_JOINT is no bone, which
@@ -626,14 +626,6 @@ FBE_API uint64_t fbe_geometry_cylinder(int32_t segments, bool capped);
 FBE_API uint64_t fbe_geometry_cone(int32_t segments, bool capped);
 FBE_API uint64_t fbe_geometry_plane(int32_t segments);
 
-// A surface's tangents, one for each of its vertices, or none, each finite and its w 1 or -1:
-// vertices added since or cleared let go of them. Reading them gives how many there are, and writes
-// as many as `capacity`.
-FBE_API bool fbe_surface_set_tangents(uint64_t geometry, int32_t surface,
-                                      const fbe_vertex_tangent_t* tangents, int32_t count);
-FBE_API int32_t fbe_surface_tangents(uint64_t geometry, int32_t surface,
-                                     fbe_vertex_tangent_t* tangents, int32_t capacity);
-
 // A geometry's levels of detail: what a mesh draws of it where it's small in its camera's view,
 // `share` being how much of the view's height its bounds' sphere takes at its distance. Each level
 // is a geometry it holds, or, with 0, drawing nothing, and has a share below the one before it. A
@@ -644,6 +636,15 @@ FBE_API bool fbe_geometry_set_lod(uint64_t geometry, int32_t level, uint64_t coa
 FBE_API int32_t fbe_geometry_lod_count(uint64_t geometry);
 FBE_API bool fbe_geometry_lod(uint64_t geometry, int32_t level, uint64_t* coarser, float* share);
 FBE_API bool fbe_geometry_clear_lods(uint64_t geometry);
+
+// A surface's tangents, one for each of its vertices, or none, each finite and its w 1 or -1:
+// vertices added since or cleared let go of them. Reading them gives how many there are, and writes
+// as many as `capacity`.
+FBE_API bool fbe_surface_set_tangents(uint64_t geometry, int32_t surface,
+                                      const fbe_vertex_tangent_t* tangents, int32_t count);
+FBE_API int32_t fbe_surface_tangents(uint64_t geometry, int32_t surface,
+                                     fbe_vertex_tangent_t* tangents, int32_t capacity);
+
 // A surface's vertices and triangles, by the geometry and the surface's index.
 // Adds `count` vertices and gives the first's index, -1 if it can't.
 FBE_API int32_t fbe_surface_add_vertices(uint64_t geometry, int32_t surface,

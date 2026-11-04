@@ -117,6 +117,7 @@ Public Final Class Island
     Field lamp: Mesh
     Field parts: Mesh[]
     Field lampLight: Light? = Null
+    Field lampUnlit: Material
     Field sizes: Vec3[] = []
     Field pipHead: Entity
     Field pipMesh: Mesh
@@ -133,6 +134,7 @@ Public Final Class Island
         Self.wheel = wheel
         Self.lamp = lamp
         Self.parts = parts
+        lampUnlit = lamp.Material() ?? Material(Color(1.0, 1.0, 1.0))
         pipHead = pip.Find("head") ?? pip
         pipMesh = (pip.Find("pip") ?? pip) As Mesh
         pip.Player().Release(pipHead)
@@ -317,10 +319,22 @@ Public Final Class Island
         thing.Show()
     End Method
 
+    /// Whether the lamp's lit.
+    @MainThread Public Method LampLit(): Bool => lampLight != Null
+
+    /// Whether the lamp's as it is unlit: its material, and no light left on it.
+    @MainThread
+    Public Method LampAsUnlit(): Bool => lamp.Material() == lampUnlit && lamp.Children().Count == 0
+
     /// Puts it all back as it was at first, so another Game can begin on it: the parts where they lie,
-    /// and the lamp and wheel as they were.
+    /// and the lamp and wheel as they were; a Game's first Step says where the sea is.
     @MainThread
     Public Method Reset()
+        lamp.SetMaterial(lampUnlit)
+        Local light = lampLight
+        If light != Null Then light.Free()
+        lampLight = Null
+        TurnWheel(0.0)
         For number = 0 To 2
             Local spot = PartSpot(number As Part)
             Local thing = parts[number]

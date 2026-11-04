@@ -362,6 +362,8 @@ struct Corner
     // Its tangent in the camera's view, w its bitangent's way; 0 in w for none.
     float4 tangent : TANGENT;
     nointerpolation uint draw : DRAW;
+    // Whether what's drawn mirrors its triangles where its pipeline can't say so, as one instance of
+    // many can: which side of them is its front is the other way.
 };
 
 // Whether this pipeline's the fixed-function look, in encoded values.
@@ -503,8 +505,8 @@ float4x4 skinOf(Draw draw, float4x4* palette, uint index)
 }
 
 // A draw's corner, from where it is in its mesh's space and how it's turned there.
-Corner litCorner(Camera* camera, Draw draw, uint drawIndex, float4 position, float3 normal,
-                 float4 tangent, Vertex vertex, float4 color)
+Corner litCorner(Camera* camera, Draw draw, uint drawIndex, float4 position, float3 normal, Vertex vertex,
+                 float4 color, float4 tangent)
 {
     const float4 place = mul(draw.toView, position);
     Corner corner;
@@ -588,7 +590,7 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
         tangent = float4(mul(skin, float4(tangent.xyz, 0.0)).xyz, tangent.w * mirroring(skin));
     }
     const float4 color = float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]);
-    return litCorner(camera, draw, instance, position, normal, tangent, vertex, color);
+    return litCorner(camera, draw, instance, position, normal, vertex, color, tangent);
 }
 
 // An instance of an Instances entity: its vertex through its own matrix, then as any draw's.
@@ -615,13 +617,13 @@ Corner instanceVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
     float4 tangent = float4(0.0, 0.0, 0.0, 0.0);
     if (!fixedLook() && draw.hasTangents != 0)
     {
+        // Its matrix turns it as it does what's along a surface, and its bitangent if it mirrors.
         const Tangent stored = tangentAt(draw.tangents, index);
-        const float3 along = float3(stored.xyzw[0], stored.xyzw[1], stored.xyzw[2]);
-        tangent = float4(dot(one.rows[0].xyz, along), dot(one.rows[1].xyz, along),
-                         dot(one.rows[2].xyz, along),
+        const float4 along = float4(stored.xyzw[0], stored.xyzw[1], stored.xyzw[2], 0.0);
+        tangent = float4(dot(one.rows[0], along), dot(one.rows[1], along), dot(one.rows[2], along),
                          stored.xyzw[3] * (dot(a, x) < 0.0 ? -1.0 : 1.0));
     }
-    return litCorner(camera, draw, push.draw, position, normal, tangent, vertex, color);
+    return litCorner(camera, draw, push.draw, position, normal, vertex, color, tangent);
 }
 
 // A quad's two triangles, from its corners' bits: x, then y.
