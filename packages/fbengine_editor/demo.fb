@@ -47,7 +47,8 @@ Public Function MakeDemoProject(folder: Path) Throws IOError
     Local checks = Image(16, 16)
     For y = 0 Until 16
         For x = 0 Until 16
-            checks[x, y] = (x / 4 + y / 4) % 2 == 0 ? Color32(190, 150, 90, 255) : Color32(70, 90, 120, 255)
+            checks[x, y] = (x / 4 + y / 4) % 2 == 0 ? Color32(190, 150, 90, 255) : Color32(70, 90,
+                                                                                           120, 255)
         End For
     End For
     Try File.WriteBytes(folder / "assets" / "checks.png", Png.Encode(checks))

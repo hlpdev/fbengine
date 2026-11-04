@@ -1251,7 +1251,8 @@ Function ComponentsAreSavedAndOpenedAsData() Throws IOError, GraphicsError
     SetComponentsOf(cube, [ComponentData("Door", door), ComponentData("Odd", Value("kept"))])
     editor.SaveScene("res://kept.scene")
     Local text = Try File.ReadText(folder / "assets" / "kept.scene")
-    Expect(text.Contains("[entity.components.Door]\nSpeed = 7.0\n") && text.Contains("Odd = \"kept\""), text)
+    Expect(text.Contains("[entity.components.Door]\nSpeed = 7.0\n") &&
+           text.Contains("Odd = \"kept\""), text)
     // Taken off, it's gone from the file too.
     SetComponentsOf(cube, [ComponentData("Door", door)])
     editor.SaveScene("res://kept.scene")
@@ -1268,6 +1269,7 @@ Function ComponentsAreSavedAndOpenedAsData() Throws IOError, GraphicsError
     Expect(read.ComponentNames().Count == 0)
     Local before = Try File.ReadText(folder / "assets" / "kept.scene")
     editor.SaveScene("res://kept.scene")
-    Expect((Try File.ReadText(folder / "assets" / "kept.scene")) == before, "saved again, it changed")
+    Expect((Try File.ReadText(folder / "assets" / "kept.scene")) == before,
+           "saved again, it changed")
     Expect(ComponentsOf(read).Count == 2)
 End Function

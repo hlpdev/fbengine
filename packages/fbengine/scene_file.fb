@@ -1073,7 +1073,7 @@ Public Final Class Scene
             For table In Try Items(document, "entity", "the file")
                 Try reading.Entity(table)
             End For
-            If !tolerant Then Try reading.Attached()
+            Try reading.Attached()
         Catch error As IOError
             reading.Undone()
             Throw error

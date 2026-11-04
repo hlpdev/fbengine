@@ -221,7 +221,8 @@ Function Saving(to: String) Throws IOError, GraphicsError
     editor.Docked.Activate("assets")
     editor.Files.SetOpen("res://levels", True)
     Local waited = 0
-    While !editor.Files.ThumbDone("res://checks.png") || editor.Files.ThumbOf("res://checks.png") == Null
+    While !editor.Files.ThumbDone("res://checks.png") ||
+          editor.Files.ThumbOf("res://checks.png") == Null
         waited += 1
         If waited > 1000 Then Panic("the picture's thumbnail never came")
         editor.Step()
