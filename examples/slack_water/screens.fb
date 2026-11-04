@@ -58,6 +58,9 @@ Public Final Class EndScreen
         ui.Focus(again)
     End Method
 
+    /// Where its title is on the screen.
+    @MainThread Public Method TitleBox(): Rect => title.Box()
+
     /// Where its panel is on the screen, and its Leave button's middle.
     @MainThread Public Method PanelBox(): Rect => panel.Box()
 

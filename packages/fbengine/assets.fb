@@ -356,10 +356,14 @@ Public Final Class Assets
     @MainThread
     Package Static Method FromSource(): Bool => fromSource
 
-    /// Whether `executable`, in the OS's folder `temp` for temporary files, is one `fb run` built and
-    /// runs, which it keeps in a folder of its own under temp's `futureblitz`, and which only it does.
+    /// Whether this program is one `fb run` or `fb test` runs: fb sets FUTUREBLITZ_RUN=1 for it, from
+    /// 1.2.3. Before that, whether `executable`, in the OS's folder `temp` for temporary files, is in a
+    /// folder of its own under temp's `futureblitz`, where only fb keeps one.
     @MainThread
     Public Static Method RunByFb(executable: Path, temp: Path): Bool
+        If Env.Get("FUTUREBLITZ_RUN") == "1" Then Return True
+        // For fb before 1.2.3, which sets no variable: this goes once tools/verify.py's and CI's
+        // FB_VERSION are 1.2.3 or later, as it knows where fb keeps what it runs, which is fb's own.
         Local own = executable.Parent().Parent()
         Return own.FileName() == "futureblitz" && RealPath(own.Parent()) == RealPath(temp)
     End Method

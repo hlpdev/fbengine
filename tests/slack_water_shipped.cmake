@@ -2,7 +2,9 @@
 # in a folder of their own, the copy taken away, so nothing's left to read but those, and run from
 # there. Takes FB, SOURCE, PACKAGES, WORK, and SUFFIX; BUNDLE, to lay it out as a macOS bundle; and
 # PAK, as MISSING, BROKEN, or OLD, another version's, to run it as a player would, with no arguments,
-# which says what's wrong before it opens a window, and fails.
+# which says what's wrong before it opens a window, and fails. MISSING leaves the pak where it was built,
+# which a player's machine wouldn't have, and it mustn't read.
+unset(ENV{FUTUREBLITZ_RUN})
 set(game "${WORK}/game")
 set(shipped "${WORK}/shipped")
 file(REMOVE_RECURSE "${WORK}")
@@ -48,7 +50,9 @@ elseif(PAK STREQUAL "BROKEN")
 elseif(NOT PAK STREQUAL "MISSING")
   file(COPY "${game}/build/slack_water.pak" DESTINATION "${paks}")
 endif()
-file(REMOVE_RECURSE "${game}")
+if(NOT PAK STREQUAL "MISSING")
+  file(REMOVE_RECURSE "${game}")
+endif()
 
 if(PAK)
   execute_process(COMMAND "${executable}" WORKING_DIRECTORY "${from}" RESULT_VARIABLE ran)

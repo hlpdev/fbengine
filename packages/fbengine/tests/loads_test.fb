@@ -258,6 +258,10 @@ End Function
 
 @Test
 Function OnlyWhatFbRunsIsRunByFb() Throws IOError
+    // As fb says, or doesn't, whatever it says of this test.
+    Local said = Env.Get("FUTUREBLITZ_RUN")
+    Defer If said != Null Then Env.Set("FUTUREBLITZ_RUN", said) Else Env.Unset("FUTUREBLITZ_RUN")
+    Env.Unset("FUTUREBLITZ_RUN")
     Local temp = Try TempDir()
     Defer Try? temp.Close()
     Local under = temp.Path / "futureblitz" / "game-26cc205e"
@@ -268,6 +272,11 @@ Function OnlyWhatFbRunsIsRunByFb() Throws IOError
     Defer Try? other.Close()
     Expect(!Assets.RunByFb(under / "game.exe", other.Path))
     Try Dir.CreateAll(temp.Path / "shipped")
+    Expect(!Assets.RunByFb(temp.Path / "shipped" / "game.exe", temp.Path))
+    // With fb's word for it, anywhere is; with anything else, it isn't.
+    Env.Set("FUTUREBLITZ_RUN", "1")
+    Expect(Assets.RunByFb(temp.Path / "shipped" / "game.exe", temp.Path))
+    Env.Set("FUTUREBLITZ_RUN", "0")
     Expect(!Assets.RunByFb(temp.Path / "shipped" / "game.exe", temp.Path))
 End Function
 

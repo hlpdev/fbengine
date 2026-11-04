@@ -1188,7 +1188,6 @@ Final Class Session
             End Function)
             scape = Try Soundscape.Make(game, island)
             ending.Update(game.Story(), 0.0)
-            controls.Set.Flush()
         End If
         If ending.Showing() != pointing
             pointing = ending.Showing()
@@ -1264,11 +1263,14 @@ Function EndAndAgain(session: Session, said: String, wheelAtFirst: Quat) Throws 
     Try Stepped(session, 1)
     Checks("under it, the mouse doesn't turn you", session.game.Yaw() == yaw)
     Checks("nor do keys walk you", session.game.Location() == at)
+    // E, with it: not a key the new game hears.
+    Try Simulate.PressKey(Key.E)
     Try Simulate.PressKey(Key.SPACE)
     Checks("playing again begins again", Try SteppedToAgain(session, flow))
     Checks("the sea's back as soon as it does", island.SeaDrawnAt() == SeaHeight(0.0))
     Checks("and the mouse is the game's", MouseRelative())
     Try Stepped(session, 1)
+    Checks("and hears nothing of the end's keys", session.last[0] == "")
     Local fresh = session.game.Story()
     Checks("from its first moment", fresh.Ended() == Ending.NONE && fresh.Clock() < 1.0)
     Checks("and the end's gone", !session.ending.Showing())
@@ -1323,6 +1325,7 @@ Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, Input
     Try Screen.Save(folder / "end_dark.png")
     Local over = Try Screen.ToImage()
     Local box = session.ending.PanelBox()
+    Local title = session.ending.TitleBox()
     Local inside = 0
     Local outside = 0
     Local colors = Set<Int>()
@@ -1335,7 +1338,12 @@ Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError, Input
                            (y As Float) >= box.Y - 1.0 && (y As Float) <= box.Y + box.Height + 1.0
             If changed && within Then inside += 1
             If changed && !within Then outside += 1
-            If within Then colors.Add(((one.r As Int) << 16) | ((one.g As Int) << 8) | (one.b As Int))
+            // Its words, where its title's laid out.
+            Local inTitle = (x As Float) >= title.X && (x As Float) <= title.X + title.Width &&
+                            (y As Float) >= title.Y && (y As Float) <= title.Y + title.Height
+            If inTitle
+                colors.Add(((one.r As Int) << 16) | ((one.g As Int) << 8) | (one.b As Int))
+            End If
         End For
     End For
     Local center = box.Center
