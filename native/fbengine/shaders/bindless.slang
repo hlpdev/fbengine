@@ -15,6 +15,14 @@ public float4 sampleTexture(uint index, uint sampler, float2 uv)
     return textures[NonUniformResourceIndex(index)].Sample(samplers[NonUniformResourceIndex(sampler)], uv);
 }
 
+/// Texture `index` at `uv`, through sampler `sampler`, its mipmaps biased by `bias`, on top of what the
+/// sampler has of it.
+public float4 sampleTextureBiased(uint index, uint sampler, float2 uv, float bias)
+{
+    return textures[NonUniformResourceIndex(index)].SampleBias(samplers[NonUniformResourceIndex(sampler)], uv,
+                                                               bias);
+}
+
 /// Texture `index` at `uv`, through sampler `sampler`, as if uv changed by `across` and `down` to
 /// the next pixel across and down.
 public float4 sampleTextureGrad(uint index, uint sampler, float2 uv, float2 across, float2 down)

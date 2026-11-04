@@ -368,6 +368,23 @@ if(FBENGINE_FB_TESTS)
                      "the screen's 320 by 180, its own True"
                      "shown in 640 by 360 of the window"
                      "the window's again 640 by 360, True")
+  # A real display's modes, and a switch to one, which opens a window, so it's only ever made where
+  # FBENGINE_REAL_DISPLAY is set, as CI's runners do, and never on a person's machine; without it, the
+  # program refuses, opening nothing.
+  add_test(NAME proof.display_modes_refuses
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/proof/display_modes"
+                   -- --real-display)
+  set_tests_properties(proof.display_modes_refuses PROPERTIES TIMEOUT 300
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_REAL_DISPLAY="
+                       PASS_REGULAR_EXPRESSION "--real-display opens a window: it's for CI")
+  if(DEFINED ENV{FBENGINE_REAL_DISPLAY} AND "$ENV{FBENGINE_REAL_DISPLAY}" STREQUAL "1")
+    add_test(NAME proof.display_modes_real
+             COMMAND "${FBENGINE_FB}" --color never run
+                     "${PROJECT_SOURCE_DIR}/examples/proof/display_modes" -- --real-display)
+    set_tests_properties(proof.display_modes_real PROPERTIES TIMEOUT 300
+                         ENVIRONMENT "FBENGINE_REAL_DISPLAY=1;${fbengine_vulkan_environment}"
+                         PASS_REGULAR_EXPRESSION "the real display's modes are real True")
+  endif()
   fbengine_add_proof(text_input
                      "off, typed \"\""
                      "on, typed \"a\", in order TEXT, PRESS"
@@ -411,11 +428,21 @@ if(FBENGINE_FB_TESTS)
                      "alpha in its pixels True"
                      "alpha in a whole one False"
                      "clamped CLAMP, CLAMP"
+                     "clamped across alone CLAMP, REPEAT"
+                     "clamped down alone REPEAT, CLAMP"
+                     "across alone, past its right green, past its bottom red"
+                     "down alone, past its right red, past its bottom blue"
+                     "both, past its right green, past its bottom blue"
+                     "neither, past its right red, past its bottom red"
                      "a strip of 4 frames"
                      "frame 0 [(]255, 0, 0, 255[)]"
                      "frame 1 [(]0, 255, 0, 255[)]"
                      "frame 2 [(]0, 0, 255, 255[)]"
                      "frame 3 [(]255, 255, 255, 255[)]"
+                     "on a 3D material's layer, frame 0 red"
+                     "on a 3D material's layer, frame 1 green"
+                     "on a 3D material's layer, frame 2 blue"
+                     "on a 3D material's layer, frame 3 white"
                      "a JPEG 8 across, its red over 250 True"
                      "a BMP [(]255, 128, 0, 255[)]"
                      "a [.]pt [(]255, 0, 255, 255[)], by a path of backslashes"
@@ -867,16 +894,10 @@ if(FBENGINE_FB_TESTS)
                            "half its light, by its blue: [(]0, 128, 0, 255[)]"
                            "all of it, offset by half: [(]0, 255, 0, 255[)]"
                            "its matrix moves a texel or so back True")
-  # A Mac's samplers have no LOD bias.
-  if(APPLE)
-    set(fbengine_lod_bias False)
-  else()
-    set(fbengine_lod_bias True)
-  endif()
   fbengine_add_drawn_proof(render_settings
                            "by itself, its pixels are within 8 of each other True"
                            "the bias -3"
-                           "sharper, they're apart by over 64 ${fbengine_lod_bias}"
+                           "sharper, they're apart by over 64 True"
                            "blurrier, within 8 True"
                            "1 sample, between 0"
                            "4 samples 4, between over 10 True"

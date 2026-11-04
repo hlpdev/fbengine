@@ -283,7 +283,8 @@ struct Camera
     uint* drawLights;
     Shadow* shadows;
     uint shadowAtlas;
-    uint shadowSpare;
+    // What's left of the LOD bias, which the samplers couldn't take, as Metal's can't.
+    float lodBias;
     float4 worldRows[3];
 };
 
@@ -776,7 +777,7 @@ float4 overLayers(Material material, float2 uv0, float2 uv1, float4 current)
         const float2 raw = ((layerSets >> i) & 1) != 0 ? uv1 : uv0;
         const float3 uv = float3(raw, 1.0);
         const float2 turned = float2(dot(layer.uvAcross.xyz, uv), dot(layer.uvDown.xyz, uv)) + shift;
-        float4 texel = sampleTexture(layer.texture, layer.sampler, turned);
+        float4 texel = sampleTextureBiased(layer.texture, layer.sampler, turned, push.camera->lodBias);
         // A map's offsets and every fixed-function color are what's stored.
         if (layer.uvAcross.w != 0.0 && (fixedLook() || kind == layerBump))
         {
