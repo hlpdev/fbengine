@@ -4,6 +4,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./entity"
 Import "./light"
@@ -66,6 +67,7 @@ Public Final Class Camera Extends Entity
     /// Sets the camera's field of view: the angle from the bottom of its view to the top, in
     /// radians, from 0 to Pi, with the angle across following its viewport's shape, so a wider
     /// window sees more at the sides. Outside 0 to Pi panics.
+    @Limits(0.000001, 3.1415925) @ShownInDegrees
     @MainThread @PanicsAtCaller
     Public Method SetFieldOfView(angle: Float)
         If !fbe_camera_set_field_of_view(Live("SetFieldOfView"), angle)
@@ -90,6 +92,7 @@ Public Final Class Camera Extends Entity
 
     /// Sets how many world units high the camera's view is when it's orthographic, its width
     /// following its viewport's shape. One not above 0 panics.
+    @Limits(0.000001)
     @MainThread @PanicsAtCaller
     Public Method SetOrthographicHeight(height: Float)
         If !fbe_camera_set_orthographic_height(Live("SetOrthographicHeight"), height)
@@ -227,6 +230,7 @@ Public Final Class Camera Extends Entity
     Public Method FogMode(): FogMode => fbe_camera_fog_mode(Live("FogMode")) As FogMode
 
     /// Sets the color the camera's fog blends toward, black at first; its alpha is left out.
+    @NoAlpha
     @MainThread @PanicsAtCaller
     Public Method SetFogColor(color: Color)
         If !fbe_camera_set_fog_color(Live("SetFogColor"), color.r, color.g, color.b)
@@ -263,6 +267,7 @@ Public Final Class Camera Extends Entity
     Public Method FogEnd(): Float => fbe_camera_fog_end(Live("FogEnd"))
 
     /// Sets how thick exponential fog is, 0.02 at first. Below 0 panics.
+    @Limits(0)
     @MainThread @PanicsAtCaller
     Public Method SetFogDensity(density: Float)
         If !fbe_camera_set_fog_density(Live("SetFogDensity"), density) Then Failed("SetFogDensity")

@@ -3,6 +3,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./entity"
 Import "./light"
@@ -28,6 +29,7 @@ Public Final Class Terrain Extends Entity
     Override Package Method KindName(): String => "Terrain"
 
     /// Makes the grid `size` squares a side, 1 to 4096, every corner at 0 again. Others panic.
+    @NotEdited
     @MainThread @PanicsAtCaller
     Public Method SetSize(size: Int)
         If !fbe_terrain_set_size(Live("SetSize"), size) Then Failed("SetSize")

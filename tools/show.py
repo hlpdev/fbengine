@@ -12,6 +12,7 @@ import pathlib
 import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# Under examples/, so the editor, which is a package, is by its way there.
 # The examples with a --watch.
 WATCHED = ["arcade", "menu", "controls", "room", "cooked_game",
            "proof/frame_timing_and_input",
@@ -24,7 +25,7 @@ WATCHED = ["arcade", "menu", "controls", "room", "cooked_game",
            "proof/render_settings", "proof/gamma", "proof/textures_by_their_settings",
            "proof/streamed_and_positional_sound",
            "proof/skinned_animation_with_bones_under_game_control", "falling_boxes",
-           "proof/two_videos_at_startup", "proof/stack_and_joints"]
+           "proof/two_videos_at_startup", "proof/stack_and_joints", "../packages/fbengine_editor"]
 
 
 def stop(process):

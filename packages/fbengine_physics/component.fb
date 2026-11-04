@@ -1,0 +1,107 @@
+// A body as a component: what a scene says of one, which the game makes in its world.
+
+Import std.core
+Import std.math
+Import fbengine
+Import "./body"
+Import "./shape"
+Import "./world"
+
+/// What a BodyComponent's body touches as.
+Public Enum BodyShape
+    /// A box, as big as Size.
+    BOX
+    /// A ball, of the radius Size.x.
+    SPHERE
+    /// A capsule, of the height Size.y and the radius Size.x.
+    CAPSULE
+    /// A cylinder, of the height Size.y and the radius Size.x.
+    CYLINDER
+End Enum
+
+/// What a scene says of an entity's body, as AddBodyComponent makes it a kind of component called
+/// "Body". Build makes the body itself, which keeps the entity where it is, in a world the game has.
+Public Final Class BodyComponent
+    /// How it moves.
+    Public Field Moves: Motion = Motion.DYNAMIC
+    /// What it touches as.
+    Public Field Form: BodyShape = BodyShape.BOX
+    /// How big that is, 1 by 1 by 1 at first.
+    @Limits(0.001, 100000)
+    Public Field Size: Vec3
+    /// Its mass, in kilograms, or what its volume makes it with 0, as a body made in code has. A static
+    /// body has none.
+    @Limits(0)
+    Public Field Mass: Float = 0
+    /// How much it grips what it slides on.
+    @Limits(0)
+    Public Field Friction: Float = 0.2
+    /// How much it bounces.
+    @Limits(0, 1)
+    Public Field Restitution: Float = 0
+    /// How much its speed falls off by itself.
+    @Limits(0)
+    Public Field LinearDamping: Float = 0.05
+    /// How much its turning falls off by itself.
+    @Limits(0)
+    Public Field AngularDamping: Float = 0.05
+    /// How much gravity moves it.
+    Public Field GravityFactor: Float = 1
+    /// The layer it's in.
+    @Limits(0, 31)
+    Public Field Layer: Int32 = 0
+    /// Whether it collides with nothing, but notices what comes into it.
+    Public Field Sensor: Bool = False
+    /// Whether its collisions are found along the way it moves, as a fast one's want.
+    Public Field Continuous: Bool = False
+    /// Whether it sleeps once it's rested a while.
+    Public Field CanSleep: Bool = True
+
+    /// A size that isn't said is 1 by 1 by 1; none of it may be below what it takes.
+    Public Method OnLoaded() Throws ParseError
+        If Size == Vec3(0, 0, 0) Then Size = Vec3(1, 1, 1)
+        If !(Size.x > 0 && Size.y > 0 && Size.z > 0)
+            Throw ParseError(ParseErrorKind.OUT_OF_RANGE, "a body's Size is above 0, not {Size}")
+        End If
+    End Method
+
+    /// The body it says, in `world`, kept with `entity`, as Body's New is. A capsule's as tall as its
+    /// radius lets it be, if its Size says less. Panics if `world` can't take it, as Body's New does.
+    @MainThread @PanicsAtCaller
+    Public Method Build(world: PhysicsWorld, entity: Entity): Body
+        Local body = Body(world, Shaped(), Moves, entity)
+        body.SetFriction(Friction)
+        body.SetRestitution(Restitution)
+        body.SetLayer(Layer)
+        body.SetSensor(Sensor)
+        // A static one doesn't move, so it has none of the rest.
+        If Moves == Motion.STATIC Then Return body
+        If Mass > 0 Then body.SetMass(Mass)
+        body.SetLinearDamping(LinearDamping)
+        body.SetAngularDamping(AngularDamping)
+        body.SetGravityFactor(GravityFactor)
+        body.SetCanSleep(CanSleep)
+        If Moves == Motion.DYNAMIC && !Sensor Then body.SetContinuous(Continuous)
+        Return body
+    End Method
+
+    Method Shaped(): Shape
+        Select Form
+            Case BodyShape.SPHERE
+                Return Shape.Sphere(Size.x)
+            Case BodyShape.CAPSULE
+                Return Shape.Capsule(Max(Size.y, Size.x * 2), Size.x)
+            Case BodyShape.CYLINDER
+                Return Shape.Cylinder(Size.y, Size.x)
+            Default
+                Return Shape.Box(Size)
+        End Select
+    End Method
+End Class
+
+/// Makes BodyComponent a kind of component called "Body", as a game with bodies in its scenes does in
+/// its program, and its components/main.fb, so the editor knows of it.
+@MainThread @PanicsAtCaller
+Public Function AddBodyComponent()
+    Components.Add<BodyComponent>("Body")
+End Function

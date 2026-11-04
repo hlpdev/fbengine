@@ -1,0 +1,26 @@
+// A program with the GPU going, drawn with, ending each way a program can: by its end, by a panic, and
+// by Process.Exit, which ctest runs with a case's name. Each has to end, as a process ending with the
+// GPU going seems to have waited for good on Windows' CI; tests/CMakeLists.txt has what each says.
+
+Import std.core
+Import std.math
+Import std.os
+Import fbengine
+
+Local arguments = Process.Arguments()
+If arguments.Count != 1 Then Panic("give the case to run")
+
+Window.SetHeadless(True)
+Try Graphics(64, 48)
+Local canvas = Screen.Canvas()
+canvas.SetColor(Color32(255, 0, 0, 255))
+canvas.DrawRect(0, 0, 8, 8)
+Flip(False)
+Select arguments[0]
+    Case "ends"
+        Print("the program ends")
+    Case "panics"
+        Panic("the program panics")
+    Case "exits"
+        Process.Exit(0)
+End Select

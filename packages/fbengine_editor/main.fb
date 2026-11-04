@@ -1,16 +1,23 @@
-// fbengine's editor: `fb run packages/fbengine_editor -- <a game's folder>`.
+// fbengine's editor: `fb run packages/fbengine_editor -- <a game's folder>`. With `-- --watch`, as
+// tools/show.py runs it, it plays a scene of its own in a window, doing what a person would, until
+// it's closed or Escape; `--frames <n>` after that, as a test runs it, keeps it headless for that
+// many. With `-- --save <folder>`, as ctest runs it, it saves its panes, headless, as PNGs there.
 
 Import std.collections
 Import std.core
 Import std.io
+Import std.math
 Import std.os
 Import fbengine
 Import "./commands"
+Import "./component"
+Import "./demo"
 Import "./dialog"
 Import "./dock"
 Import "./editor"
 Import "./handles"
 Import "./history"
+Import "./inspector"
 Import "./menu"
 Import "./project"
 Import "./scene"
@@ -18,8 +25,7 @@ Import "./session"
 Import "./tree"
 Import "./view"
 
-Function Run() Throws IOError, GraphicsError
-    Local arguments = Process.Arguments()
+Function Run(arguments: String[]) Throws IOError, GraphicsError
     Local editor = Try Editor()
     Try editor.Start(arguments.Count > 0 ? Path(arguments[0]) : Null)
     Frame.SetLimit(60)
@@ -29,8 +35,154 @@ Function Run() Throws IOError, GraphicsError
     editor.Finish()
 End Function
 
+// What's after `name` in `arguments` as a number, or 0.
+Function Asked(arguments: String[], name: String): Int
+    For i = 0 Until arguments.Count - 1
+        If arguments[i] == name Then Return Int.Parse(arguments[i + 1]) ?? 0
+    End For
+    Return 0
+End Function
+
+// An editor of its own, keeping nothing of the person's, on a project of its own with the demo's
+// scene, and `folder`'s what keeps them both.
+Function Demonstrating(folder: Path, headless: Bool): Editor Throws IOError, GraphicsError
+    Window.SetHeadless(headless)
+    Try MakeDemoProject(folder / "game")
+    Local editor = Try Editor(folder / "settings")
+    Try editor.Start(folder / "game")
+    Return editor
+End Function
+
+// What a person would do, one each second or so, around and around.
+Function Doing(editor: Editor, scene: DemoScene, turn: Int)
+    Select turn % 12
+        Case 0
+            editor.Edited.SelectOnly(scene.Crate)
+        Case 1
+            editor.Actions.Run("tool.turn")
+        Case 2
+            editor.Actions.Run("tool.scale")
+        Case 3
+            editor.Actions.Run("tool.move")
+        Case 4
+            editor.Actions.Run("view.frame")
+        Case 5
+            editor.Edited.SelectOnly(scene.Lamp)
+        Case 6
+            editor.Actions.Run("add.cube")
+        Case 7
+            editor.Actions.Run("edit.undo")
+        Case 8
+            editor.Edited.SelectOnly(scene.Lid)
+        Case 9
+            editor.Actions.Run("tree.duplicate")
+        Case 10
+            editor.Actions.Run("edit.undo")
+        Default
+            editor.Edited.SelectOnly(Null)
+    End Select
+End Function
+
+Function Watched(arguments: String[]) Throws IOError, GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Local frames = Asked(arguments, "--frames")
+    Local folder = Try TempDir()
+    Local editor = Try Demonstrating(folder.Path, frames > 0)
+    Window.SetTitle("fbengine's editor, playing by itself: Escape ends it")
+    Frame.SetLimit(60)
+    editor.Step()
+    Local scene = FillDemoScene(editor)
+    Local count = 0
+    While !editor.Quitting() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        // By the frame, however fast, so each is seen; a test's are all it has.
+        If count % (frames > 0 ? 3 : 60) == 0 Then Doing(editor, scene,
+                                                         count / (frames > 0 ? 3 : 60))
+        If count == Asked(arguments, "--press-at") && count > 0 Then Try Simulate.PressKey(Key.ESCAPE)
+        If count == Asked(arguments, "--close-at") && count > 0 Then Try Simulate.CloseWindow()
+        editor.Step()
+        count += 1
+    End While
+    editor.Finish()
+    Print("watched {count} frames")
+End Function
+
+// A frame of the editor, as it's settled.
+Function Saved(editor: Editor, folder: String, name: String) Throws IOError, GraphicsError
+    editor.Step()
+    editor.Step()
+    Try Screen.Save(Path("{folder}/frame_{name}.png"))
+End Function
+
+// Its panes and what opens over them, each as a golden image is of it.
+Function Saving(to: String) Throws IOError, GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Try Dir.CreateAll(Path(to))
+    Local folder = Try TempDir()
+    Window.SetHeadless(True)
+    Try MakeDemoProject(folder.Path / "game")
+    Local editor = Try Editor(folder.Path / "settings")
+    Try editor.Start()
+    Try Simulate.MoveMouse(640, 700)
+    Try Saved(editor, to, "welcome")
+    editor.OpenFolder(folder.Path / "game")
+    editor.Step()
+    Local scene = FillDemoScene(editor)
+    editor.View.LookAt(Vec3(0, 0.5, 0), 12)
+    Try Saved(editor, to, "nothing_selected")
+    editor.Edited.SelectOnly(scene.Crate)
+    Try Saved(editor, to, "move")
+    editor.Actions.Run("tool.turn")
+    Try Saved(editor, to, "turn")
+    editor.Actions.Run("tool.scale")
+    Try Saved(editor, to, "scale")
+    editor.Actions.Run("tool.move")
+    editor.Edits.Commit(AddComponentEdit([scene.Hinge], editor.Kinds.Kinds()[0]))
+    editor.Edited.SelectOnly(scene.Hinge)
+    Try Saved(editor, to, "component")
+    editor.Edited.SelectOnly(scene.Lamp)
+    Try Saved(editor, to, "light")
+    editor.Edited.SelectOnly(scene.Lens)
+    Try Saved(editor, to, "camera")
+    editor.Edited.SelectOnly(scene.Crate)
+    editor.Edited.ToggleSelected(scene.Lid)
+    Try Saved(editor, to, "many")
+    editor.Edited.SelectOnly(Null)
+    editor.Step()
+    // What opens over them, each by a click.
+    Local title = editor.Shown.Root().Find("menu.Edit")
+    If title == Null Then Panic("there's no Edit menu")
+    Local on = title.Box().Center
+    Try Simulate.MoveMouse(on.x, on.y)
+    editor.Step()
+    Try Simulate.Click(MouseButton.LEFT)
+    Try Saved(editor, to, "menu")
+    Try Simulate.PressKey(Key.ESCAPE)
+    Try Simulate.MoveMouse(640, 700)
+    editor.Step()
+    editor.Actions.Run("file.open")
+    editor.Step()
+    // Without its field's cursor, which blinks.
+    editor.Shown.Focus(Null)
+    Try Saved(editor, to, "dialog")
+    editor.Finish()
+    Print("saved")
+End Function
+
 Try
-    Try Run()
+    Local arguments = Process.Arguments()
+    If arguments.Contains("--watch")
+        Try Watched(arguments)
+    ElseIf arguments.Count == 2 && arguments[0] == "--save"
+        Try Saving(arguments[1])
+    Else
+        Try Run(arguments)
+    End If
 Catch error As Error
     PrintError("the editor couldn't start: {error.Message}")
     Process.Exit(1)
