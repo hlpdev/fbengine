@@ -645,7 +645,8 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             scene::half_extents(camera, view, half_width, half_height);
             for (const scene::instance_cluster_t& cluster : scene::instance_clusters(found)) {
                 const std::array<vec3_t, 8> corners = cluster_corners(world, cluster);
-                if (!scene::in_frustum(frustum, corners.data(), corners.size()) ||
+                if (cluster.mirrored != item.instances_mirrored ||
+                    !scene::in_frustum(frustum, corners.data(), corners.size()) ||
                     !level.has_value() ||
                     scene::cluster_lod(found, cluster, world, camera, frustum.eye, half_height) !=
                         *level) {

@@ -853,11 +853,13 @@ FBE_API bool fbe_terrain_tint(uint64_t terrain, fbe_color_t* tint);
 
 // Instances: an entity that draws a geometry many times over, each with its own matrix and color,
 // in bulk, those out of view going a cluster at a time. It holds its geometry and material, 0 for
-// none, when it draws its geometry's surfaces' materials. A matrix mustn't mirror: it'd show its
-// back. A skin or a morph isn't drawn, and what blends isn't sorted among itself. Its geometry's
-// levels of detail go by each cluster, as big as the biggest of it where it's nearest. It draws and
-// casts, but it's one thing to the rest of the world: FBE_COLLISION's automatic shape is an
-// ellipsoid at the entity's place, a mesh pick finds none of it, and only its entity's picked.
+// none, when it draws its geometry's surfaces' materials. A matrix that mirrors draws as a mesh's
+// does, with those like it; one set to mirror where it didn't, or not where it did, puts them all
+// in order again. A skin or a morph isn't drawn, and what blends isn't sorted among itself. Its
+// geometry's levels of detail go by each cluster, as big as the biggest of it where it's nearest.
+// It draws and casts, but it's one thing to the rest of the world: FBE_COLLISION's automatic shape
+// is an ellipsoid at the entity's place, a mesh pick finds none of it, and only its entity's
+// picked.
 FBE_API bool fbe_instances_set_geometry(uint64_t instances, uint64_t geometry);
 FBE_API uint64_t fbe_instances_geometry(uint64_t instances);
 FBE_API bool fbe_instances_set_material(uint64_t instances, uint64_t material);

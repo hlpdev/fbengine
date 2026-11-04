@@ -22,6 +22,8 @@ struct item_t {
     std::int32_t order = 0;
     bool blended = false;
     bool mirrored = false;
+    /// Of an Instances: whether this item's of its instances that mirror, by their own matrices.
+    bool instances_mirrored = false;
     bool vertex_lit = false;
     std::uint32_t material = scene::none;
     std::uint32_t entity = scene::none;

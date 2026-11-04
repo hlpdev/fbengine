@@ -6603,6 +6603,7 @@ TEST_CASE("an Instances' normals are a mesh's with its matrix", "[gpu][scene]") 
 
 TEST_CASE("an Instances' normal map's a mesh's, by its tangents through its matrix",
           "[gpu][scene]") {
+    const float x_scale = GENERATE(2.0F, -2.0F);
     const scene_t scene;
     require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
     const std::uint64_t paint = fbe_material_create();
@@ -6619,7 +6620,7 @@ TEST_CASE("an Instances' normal map's a mesh's, by its tangents through its matr
     require(
         fbe_surface_set_tangents(geometry, 0, along.data(), static_cast<std::int32_t>(vertices)));
     set_yaw_then_pitch(mesh, 0.7F, 0.4F);
-    require(fbe_entity_set_scale(mesh, 2.0F, 0.5F, 1.0F, FBE_SPACE_WORLD));
+    require(fbe_entity_set_scale(mesh, x_scale, 0.5F, 1.0F, FBE_SPACE_WORLD));
     const fbe::golden::frame_t by_mesh = scene.drawn();
     fbe_mat4_t matrix{};
     require(fbe_entity_matrix(mesh, FBE_SPACE_WORLD, &matrix));
@@ -9657,6 +9658,247 @@ TEST_CASE("fxaa softens an edge by what it says, and nothing else", "[gpu][scene
         const std::uint8_t blue = clears ? 0 : 255;
         CHECK(near(pixel(over, 40, 64), { 0, 0, blue }, 1));
         CHECK(near(pixel(over, 90, 64), { 255, 255, 255 }, 1));
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(paint);
+}
+
+namespace {
+
+/// An instance at a place, of a matrix that mirrors along X, or not, and is turned, so it's seen on
+/// more than one side.
+fbe_instance_t mirrored_at(float x, float y, float z, float scale = 1.0F) {
+    fbe_instance_t made = instance_at(x, y, z, scale);
+    made.matrix.m[0] = -scale;
+    return made;
+}
+
+} // namespace
+
+TEST_CASE("a one-sided Instances that mirrors draws as a mesh does", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t sun = light(scene.world, FBE_LIGHT_DIRECTIONAL, 0.0F, 0.0F, 0.0F, 1.0F);
+    turn_about(sun, 0.3F, 1.0F, 0.2F, 0.5F);
+    const std::uint64_t paint = fbe_material_create();
+    const std::uint64_t mesh = wall(scene.world, -3.0F, 0.75F, paint);
+    require(fbe_entity_set_scale(mesh, -1.0F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+    const fbe::golden::frame_t as_a_mesh = scene.drawn();
+    REQUIRE(middle(as_a_mesh)[0] > 20);
+    require(fbe_entity_set_hidden(mesh, true));
+    const std::uint64_t many = fbe_entity_create(scene.world, 0, FBE_ENTITY_INSTANCES);
+    require(fbe_instances_set_geometry(many, fbe_mesh_geometry(mesh)));
+    require(fbe_instances_set_material(many, paint));
+    fbe_instance_t one = mirrored_at(0.0F, 0.0F, -3.0F);
+    require(fbe_instances_set(many, &one, 1));
+    CHECK(fbe::golden::compare(as_a_mesh, scene.drawn(), 2).pixels == 0);
+    const auto pipeline = [&] {
+        std::array<fbe_draw_t, 4> draws{};
+        REQUIRE(fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 4) == 1);
+        return draws[0].pipeline;
+    };
+    const std::uint64_t front_bit = std::uint64_t{ 1 } << 12U;
+    CHECK((pipeline() & front_bit) != 0);
+    SECTION("and its entity mirroring too has it as it was") {
+        require(fbe_entity_set_scale(many, -1.0F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+        // At -3 still, as X's nothing to it: mirrored twice, its front's where a plain one's is.
+        CHECK((pipeline() & front_bit) == 0);
+        CHECK(middle(scene.drawn())[0] > 20);
+    }
+    SECTION("an entity mirroring what doesn't has what does") {
+        one = instance_at(0.0F, 0.0F, -3.0F);
+        require(fbe_instances_set(many, &one, 1));
+        CHECK((pipeline() & front_bit) == 0);
+        require(fbe_entity_set_scale(many, -1.0F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+        CHECK((pipeline() & front_bit) != 0);
+        CHECK(fbe::golden::compare(as_a_mesh, scene.drawn(), 2).pixels == 0);
+    }
+    SECTION("two-sided, seen from behind or not, lit as a mesh is") {
+        const std::uint64_t both_sides = fbe_material_create();
+        require(fbe_material_set_two_sided(both_sides, true));
+        require(fbe_mesh_set_material(mesh, both_sides));
+        require(fbe_instances_set_material(many, both_sides));
+        const float turn = GENERATE(0.0F, 3.0F);
+        turn_about(mesh, 0.0F, 1.0F, 0.0F, turn);
+        turn_about(many, 0.0F, 0.0F, 1.0F, 0.0F);
+        require(fbe_entity_set_hidden(many, true));
+        require(fbe_entity_set_hidden(mesh, false));
+        const fbe::golden::frame_t mesh_frame = scene.drawn();
+        require(fbe_entity_set_hidden(mesh, true));
+        require(fbe_entity_set_hidden(many, false));
+        fbe_mat4_t matrix{};
+        require(fbe_entity_matrix(mesh, FBE_SPACE_WORLD, &matrix));
+        one.matrix = matrix;
+        require(fbe_instances_set(many, &one, 1));
+        CHECK(fbe::golden::compare(mesh_frame, scene.drawn(), 2).pixels == 0);
+        fbe_material_release(both_sides);
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("an Instances' mirrored and unmirrored go in two draws, sorted", "[gpu][scene]") {
+    const scene_t scene;
+    require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+    const std::uint64_t paint = unlit(1.0F, 1.0F, 1.0F);
+    std::vector<fbe_instance_t> all;
+    all.reserve(400);
+    // Indices one of each by turns, so where each goes isn't where it was given.
+    for (int i = 0; i < 400; ++i) {
+        const auto x = static_cast<float>(i % 20) - 10.0F;
+        const float y = std::floor(static_cast<float>(i) / 20.0F) - 10.0F;
+        all.push_back(i % 2 == 0 ? instance_at(x, y, -30.0F, 0.2F)
+                                 : mirrored_at(x, y, -30.0F, 0.2F));
+    }
+    const std::uint64_t made = cubes_at(scene.world, paint, all);
+    std::array<fbe_draw_t, 4> draws{};
+    REQUIRE(fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 4) == 2);
+    const std::uint64_t front_bit = std::uint64_t{ 1 } << 12U;
+    CHECK((draws[0].pipeline & front_bit) != (draws[1].pipeline & front_bit));
+    CHECK(draws[0].entity == made);
+    CHECK(draws[1].entity == made);
+    // Every one's drawn, once.
+    (void)scene.drawn();
+    fbe_gpu_counters_t counters{};
+    (void)scene.drawn();
+    require(fbe_gpu_counters(&counters));
+    CHECK(counters.triangles == std::int64_t{ 400 } * 12);
+    // Each by what it was given as, wherever it went.
+    for (int i = 0; i < 400; i += 37) {
+        fbe_instance_t got{};
+        require(fbe_instances_get(made, i, &got));
+        CHECK(got.matrix.m[0] == all[static_cast<std::size_t>(i)].matrix.m[0]);
+        CHECK(got.matrix.m[12] == all[static_cast<std::size_t>(i)].matrix.m[12]);
+    }
+    SECTION("all of one kind's one draw") {
+        const std::vector<fbe_instance_t> plain(10, instance_at(0.0F, 0.0F, -30.0F));
+        require(fbe_instances_set(made, plain.data(), 10));
+        CHECK(fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 4) == 1);
+        const std::vector<fbe_instance_t> mirrored(10, mirrored_at(0.0F, 0.0F, -30.0F));
+        require(fbe_instances_set(made, mirrored.data(), 10));
+        CHECK(fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 4) == 1);
+    }
+    SECTION("one set to mirror where it didn't goes with those that do") {
+        const std::vector<fbe_instance_t> plain(10, instance_at(0.0F, 0.0F, -30.0F));
+        require(fbe_instances_set(made, plain.data(), 10));
+        const fbe_instance_t turned = mirrored_at(3.0F, 0.0F, -30.0F);
+        require(fbe_instances_set_one(made, 4, &turned));
+        CHECK(fbe_instances_count(made) == 10);
+        CHECK(fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 4) == 2);
+        fbe_instance_t got{};
+        require(fbe_instances_get(made, 4, &got));
+        CHECK(got.matrix.m[0] == -1.0F);
+        CHECK(got.matrix.m[12] == 3.0F);
+        CHECK(reds_above(scene.drawn(), 0) > 0);
+        // And back: one draw again, and what it was.
+        const fbe_instance_t back = instance_at(0.0F, 0.0F, -30.0F);
+        require(fbe_instances_set_one(made, 4, &back));
+        CHECK(fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, draws.data(), 4) == 1);
+        require(fbe_instances_get(made, 4, &got));
+        CHECK(got.matrix.m[0] == 1.0F);
+    }
+    SECTION("one of those after moved takes its own cluster with it") {
+        const fbe_instance_t far_off = mirrored_at(1000.0F, 0.0F, -30.0F);
+        (void)scene.drawn();
+        fbe_aabb_t box{};
+        require(fbe_entity_bounds(made, &box));
+        require(fbe_instances_set_one(made, 1, &far_off));
+        require(fbe_entity_bounds(made, &box));
+        CHECK(box.max.x > 999.0F);
+        const fbe_instance_t back = all[1];
+        require(fbe_instances_set_one(made, 1, &back));
+        require(fbe_entity_bounds(made, &box));
+        CHECK(box.max.x < 11.0F);
+    }
+    SECTION("a level for each of its kinds") {
+        const std::uint64_t geometry = fbe_instances_geometry(made);
+        const std::uint64_t coarse = fbe_geometry_cube();
+        const float half_height = std::tan(1.0471976F / 2.0F);
+        require(fbe_geometry_set_lod(geometry, 0, coarse,
+                                     std::numbers::sqrt3_v<float> * 0.2F / (half_height * 2.0F)));
+        std::array<fbe_draw_t, 8> found{};
+        const std::int32_t count =
+            fbe_render_draws(scene.camera, 128.0F, 128.0F, 1.0F, found.data(), 8);
+        CHECK(count == 2);
+        CHECK(found[0].geometry == coarse);
+        CHECK(found[1].geometry == coarse);
+        fbe_geometry_release(coarse);
+    }
+    CHECK(fbe_gpu_validation_errors() == 0);
+    fbe_material_release(paint);
+}
+
+TEST_CASE("an Instances that mirrors casts, and is in the prepass, as a mesh is", "[gpu][scene]") {
+    const scene_t scene;
+    const std::uint64_t paint = fbe_material_create();
+    const std::uint64_t mesh = cube(scene.world, 0.0F, 0.0F, -9.0F, paint);
+    require(fbe_entity_set_scale(mesh, -1.0F, 1.0F, 1.0F, FBE_SPACE_WORLD));
+    wall(scene.world, -10.0F, 30.0F, paint);
+    const auto with_instance_for_mesh = [&](auto&& check) {
+        const fbe::golden::frame_t by_mesh = scene.drawn();
+        require(fbe_entity_set_hidden(mesh, true));
+        const std::uint64_t made = cubes_at(scene.world, paint, { mirrored_at(0.0F, 0.0F, -9.0F) });
+        const fbe::golden::frame_t by_instance = scene.drawn();
+        check(by_mesh, by_instance);
+        require(fbe_entity_set_hidden(mesh, false));
+        require(fbe_entity_free(made));
+    };
+    SECTION("its shadow") {
+        const std::uint64_t sun = sun_from_right(scene.world);
+        require(fbe_entity_set_position(mesh, 5.0F, 0.0F, -5.0F, FBE_SPACE_WORLD));
+        const fbe::golden::frame_t by_mesh = scene.drawn();
+        REQUIRE(middle(by_mesh)[0] == 0);
+        require(fbe_entity_set_hidden(mesh, true));
+        const std::uint64_t made = cubes_at(scene.world, paint, { mirrored_at(5.0F, 0.0F, -5.0F) });
+        CHECK(fbe::golden::compare(by_mesh, scene.drawn(), 2).pixels == 0);
+        // Each of a mix casts once, of its own kind's.
+        require(fbe_light_set_cascades(sun, 1));
+        const std::array mixed{ mirrored_at(5.0F, 0.0F, -5.0F), instance_at(5.0F, 0.0F, -8.0F) };
+        require(fbe_instances_set(made, mixed.data(), 2));
+        fbe_gpu_counters_t counters{};
+        (void)scene.drawn();
+        (void)scene.drawn();
+        require(fbe_gpu_counters(&counters));
+        const std::int64_t casting = counters.triangles;
+        require(fbe_entity_set_casts_shadows(made, false));
+        (void)scene.drawn();
+        (void)scene.drawn();
+        require(fbe_gpu_counters(&counters));
+        CHECK(casting - counters.triangles == 24);
+    }
+    SECTION("its ambient occlusion") {
+        require(fbe_world_set_ambient(scene.world, 0.25F, 0.25F, 0.25F));
+        require(fbe_camera_set_ambient_occlusion_radius(scene.camera, 3.0F));
+        require(fbe_camera_set_ambient_occlusion(scene.camera, 1.0F));
+        with_instance_for_mesh(
+            [](const fbe::golden::frame_t& by_mesh, const fbe::golden::frame_t& by_instance) {
+                REQUIRE(pixel(by_mesh, 64 + 16, 64)[0] < srgb(0.25F) - 8);
+                CHECK(fbe::golden::compare(by_mesh, by_instance, 1).pixels == 0);
+            });
+    }
+    SECTION("its motion") {
+        require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
+        require(fbe_camera_set_hdr(scene.camera, true));
+        require(fbe_camera_set_temporal_aa(scene.camera, true));
+        require(fbe_entity_set_hidden(mesh, true));
+        const std::uint64_t white = unlit(1.0F, 1.0F, 1.0F);
+        const std::uint64_t made =
+            cubes_at(scene.world, white, { mirrored_at(0.0F, 0.0F, 0.0F, 3.0F) });
+        // Its front's at 7 from the eye; two whole pixels a frame.
+        const float across = std::tan(std::numbers::pi_v<float> / 6.0F) * 7.0F / 64.0F;
+        require(fbe_entity_set_position(scene.camera, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+        fbe::golden::frame_t last;
+        for (int frame = 0; frame <= 24; ++frame) {
+            const float pixels = static_cast<float>(frame - 24) * 2.0F;
+            require(fbe_entity_set_position(made, 3.0F + ((0.5F + pixels) * across), 0.0F, -10.0F,
+                                            FBE_SPACE_WORLD));
+            last = scene.drawn();
+        }
+        const float value = static_cast<float>(pixel(last, 64, 64)[0]) / 255.0F;
+        CAPTURE(value);
+        CHECK(value > 0.4F);
+        CHECK(value < 0.9F);
+        fbe_material_release(white);
     }
     CHECK(fbe_gpu_validation_errors() == 0);
     fbe_material_release(paint);
