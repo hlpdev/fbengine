@@ -1,6 +1,7 @@
 // The bindless set every pipeline reads textures through: a few samplers, one for each filter and
-// wrap, made with the global LOD bias and anisotropy, and every texture's image, by its index,
-// written as textures are made, while frames that don't read it are in flight.
+// wrap, made with the global LOD bias and anisotropy; the engine's multisampled images, whose
+// samples a shader reads one by one; and every texture's image, by its index, written as textures
+// are made, while frames that don't read it are in flight.
 
 #include "core/engine.hpp"
 #include "fbengine.h"
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <format>
+#include <vector>
 
 namespace {
 
@@ -29,6 +31,7 @@ VkDescriptorPool pool = VK_NULL_HANDLE;
 VkDescriptorSet set = VK_NULL_HANDLE;
 std::uint32_t capacity = 0;
 std::array<VkSampler, fbe::gpu::sampler_slots> samplers{};
+std::vector<std::uint32_t> free_samples_slots;
 
 float lod_bias = 0.0F;
 float anisotropy = 1.0F;
@@ -148,11 +151,14 @@ bool start_bindless() {
         .pNext = &vulkan11,
     };
     vkGetPhysicalDeviceProperties2(gpu.physical, &properties);
-    capacity = std::min({
-        most_textures,
-        vulkan12.maxDescriptorSetUpdateAfterBindSampledImages,
-        vulkan12.maxPerStageDescriptorUpdateAfterBindSampledImages,
-    });
+    const std::uint32_t images =
+        std::min(vulkan12.maxDescriptorSetUpdateAfterBindSampledImages,
+                 vulkan12.maxPerStageDescriptorUpdateAfterBindSampledImages);
+    capacity = std::min(most_textures, images > samples_slots ? images - samples_slots : 0U);
+    free_samples_slots.clear();
+    for (std::uint32_t slot = samples_slots; slot-- > 0;) {
+        free_samples_slots.push_back(slot);
+    }
 
     const auto every_stage = flag<VkShaderStageFlags>(VK_SHADER_STAGE_ALL);
     std::array bindings{
@@ -160,6 +166,12 @@ bool start_bindless() {
             .binding = sampler_binding,
             .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
             .descriptorCount = sampler_slots,
+            .stageFlags = every_stage,
+        },
+        VkDescriptorSetLayoutBinding{
+            .binding = samples_binding,
+            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+            .descriptorCount = samples_slots,
             .stageFlags = every_stage,
         },
         VkDescriptorSetLayoutBinding{
@@ -174,6 +186,7 @@ bool start_bindless() {
         flag<VkDescriptorBindingFlags>(VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT) |
         flag<VkDescriptorBindingFlags>(VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT);
     const std::array binding_flags{
+        after_bind,
         after_bind,
         after_bind |
             flag<VkDescriptorBindingFlags>(VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT),
@@ -196,17 +209,18 @@ bool start_bindless() {
     const bool fewest_fault = faulted(fault_t::FEWEST_DESCRIPTORS);
     const bool promised_fault = faulted(fault_t::PROMISED_DESCRIPTORS);
     std::uint32_t promised = vulkan11.maxPerSetDescriptors;
+    const std::uint32_t besides = sampler_slots + samples_slots;
     if (promised_fault || fewest_fault) {
-        promised = fewest_fault ? fewest_textures + sampler_slots - 1 : 1212;
+        promised = fewest_fault ? fewest_textures + besides - 1 : 1212;
     }
-    if (capacity + sampler_slots > promised) {
+    if (capacity + besides > promised) {
         VkDescriptorSetLayoutSupport support{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_SUPPORT,
         };
         vkGetDescriptorSetLayoutSupport(gpu.device, &layout_info, &support);
         if (support.supported != VK_TRUE || promised_fault || fewest_fault) {
-            capacity = promised > sampler_slots ? promised - sampler_slots : 0;
-            bindings.at(1).descriptorCount = capacity;
+            capacity = promised > besides ? promised - besides : 0;
+            bindings.at(2).descriptorCount = capacity;
         }
     }
     if (capacity < fewest_textures ||
@@ -225,7 +239,7 @@ bool start_bindless() {
         },
         VkDescriptorPoolSize{
             .type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-            .descriptorCount = capacity,
+            .descriptorCount = capacity + samples_slots,
         },
     };
     const VkDescriptorPoolCreateInfo pool_info{
@@ -296,6 +310,33 @@ void write_texture(std::uint32_t index, VkImageView view) {
         .pImageInfo = &image,
     };
     vkUpdateDescriptorSets(device()->device, 1, &write, 0, nullptr);
+}
+
+std::uint32_t take_samples_slot(VkImageView view) {
+    if (free_samples_slots.empty()) {
+        return no_samples_slot;
+    }
+    const std::uint32_t slot = free_samples_slots.back();
+    free_samples_slots.pop_back();
+    const VkDescriptorImageInfo image{
+        .imageView = view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+    const VkWriteDescriptorSet write{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = set,
+        .dstBinding = samples_binding,
+        .dstArrayElement = slot,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+        .pImageInfo = &image,
+    };
+    vkUpdateDescriptorSets(device()->device, 1, &write, 0, nullptr);
+    return slot;
+}
+
+void give_samples_slot(std::uint32_t slot) {
+    free_samples_slots.push_back(slot);
 }
 
 std::uint32_t sampler_index(std::int32_t filter, std::int32_t wrap_u, std::int32_t wrap_v) {

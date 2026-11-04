@@ -275,6 +275,35 @@ TEST_CASE("textures sampled at rest need no barriers", "[gpu]") {
     stop_gpu();
 }
 
+TEST_CASE("only a multisampled transient target's samples are read", "[gpu]") {
+    start();
+    const auto reads = [](resource_t resource) {
+        return fbe::gpu::add_pass({
+            .name = "reads",
+            .uses = { { resource, fbe::gpu::use_t::SAMPLES_READ } },
+        });
+    };
+    const std::uint64_t own = fbe_texture_create_target(8, 8, FBE_TEXTURE_RGBA8, 4, false);
+    require(own != 0);
+    CHECK(!reads(fbe::gpu::texture_resource(own)));
+    CHECK(fbe_error() ==
+          std::string("what has samples to read is a multisampled transient target"));
+    CHECK(!reads(fbe::gpu::transient_resource({
+        .width = 8,
+        .height = 8,
+        .format = FBE_TEXTURE_RGBA16F,
+    })));
+    CHECK(reads(fbe::gpu::transient_resource({
+        .width = 8,
+        .height = 8,
+        .format = FBE_TEXTURE_RGBA16F,
+        .samples = 4,
+    })));
+    fbe::gpu::drop_passes();
+    fbe_texture_release(own);
+    stop_gpu();
+}
+
 TEST_CASE("what's done to a texture is done in the order it's asked for", "[gpu]") {
     begin_test();
     const std::uint64_t made = target(8, 8);

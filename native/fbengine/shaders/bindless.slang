@@ -1,13 +1,22 @@
 // The bindless set every pipeline reads textures through, set 0: the samplers, one for each filter
-// and wrap, and every texture, by its index, the white one at 0. gpu/vulkan.hpp's sampler_binding
-// and texture_binding say the same.
+// and wrap; the engine's multisampled images; and every texture, by its index, the white one at 0.
+// gpu/vulkan.hpp's sampler_binding, samples_binding, and texture_binding say the same.
 module bindless;
 
 [[vk::binding(0, 0)]]
 public SamplerState samplers[32];
 
 [[vk::binding(1, 0)]]
+public Texture2DMS<float4> multisampled[64];
+
+[[vk::binding(2, 0)]]
 public Texture2D textures[];
+
+/// Sample `sample` of multisampled image `index`'s texel at `at`, as it's stored.
+public float4 loadSample(uint index, int2 at, int sample)
+{
+    return multisampled[NonUniformResourceIndex(index)].Load(at, sample);
+}
 
 /// Texture `index` at `uv`, through sampler `sampler`.
 public float4 sampleTexture(uint index, uint sampler, float2 uv)

@@ -67,6 +67,8 @@ struct texture_t {
     /// stored values; nothing for any other texture.
     VkImageView stored_view = VK_NULL_HANDLE;
     VkImageView stored_msaa_view = VK_NULL_HANDLE;
+    /// Where a shader reads those samples, one by one, if it can: the engine's own only.
+    std::uint32_t samples_slot = fbe::gpu::no_samples_slot;
     /// A target's depth, if it has one: 32-bit floats, reversed, 1 nearest and 0 farthest, as
     /// many samples as it draws.
     VkImage depth = VK_NULL_HANDLE;

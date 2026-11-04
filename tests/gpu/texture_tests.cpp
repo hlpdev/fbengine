@@ -412,7 +412,7 @@ TEST_CASE("a GPU with no LOD bias draws with none", "[gpu]") {
 TEST_CASE("the textures are as many as the device's set holds", "[gpu]") {
     fbe::gpu::inject(fbe::gpu::fault_t::PROMISED_DESCRIPTORS);
     start();
-    CHECK(fbe::gpu::texture_capacity() == 1212 - fbe::gpu::sampler_slots);
+    CHECK(fbe::gpu::texture_capacity() == 1212 - fbe::gpu::sampler_slots - fbe::gpu::samples_slots);
     const std::vector<std::uint8_t> pixels = card();
     const std::uint64_t texture = make(8, 8, FBE_TEXTURE_RGBA8_LINEAR, false);
     require(fbe_texture_write(texture, 0, 0, 8, 8, pixels.data(), 32));
