@@ -306,6 +306,7 @@ Public Final Class Camera Extends Entity
     Public Method Hdr(): Bool => fbe_camera_hdr(Live("Hdr"))
 
     /// Sets what an HDR camera's light is multiplied by, 1 at first. Below 0, or not finite, panics.
+    @Limits(0)
     @MainThread @PanicsAtCaller
     Public Method SetExposure(exposure: Float)
         If !fbe_camera_set_exposure(Live("SetExposure"), exposure) Then Failed("SetExposure")
@@ -327,6 +328,7 @@ Public Final Class Camera Extends Entity
 
     /// Sets what an HDR camera's color's raised to one over, last of all, as a game's brightness
     /// setting wants: 1 at first. 0 or below, or too small to take one over, or not finite, panics.
+    @Limits(0.000001)
     @MainThread @PanicsAtCaller
     Public Method SetGamma(gamma: Float)
         If !fbe_camera_set_gamma(Live("SetGamma"), gamma) Then Failed("SetGamma")

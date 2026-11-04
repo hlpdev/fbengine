@@ -319,6 +319,7 @@ Public Final Class Material
 
     /// Sets what a PBR material emits, linear: any finite color 0 or more, or it panics, past 1 for
     /// what's brighter than white. Its alpha is left out. None at first.
+    @Limits(0) @NoAlpha
     @MainThread @PanicsAtCaller
     Public Method SetEmissive(color: Color)
         If !fbe_material_set_emissive(Live("SetEmissive"), color.r, color.g, color.b)
@@ -354,6 +355,7 @@ Public Final Class Material
 
     /// Sets how much a PBR material's occlusion map darkens its light from the environment and
     /// ambient light, 0 to 1, or it panics: 1 at first.
+    @Limits(0, 1)
     @MainThread @PanicsAtCaller
     Public Method SetOcclusionStrength(strength: Float)
         If !fbe_material_set_occlusion_strength(Live("SetOcclusionStrength"), strength)
