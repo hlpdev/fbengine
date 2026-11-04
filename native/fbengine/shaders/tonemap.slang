@@ -24,6 +24,8 @@ struct Tonemap
     float4 slope;
     float4 offset;
     float4 power;
+    /// The viewport bloom came of, in pixels: from, and how much.
+    float4 bloomRect;
 };
 
 [[vk::push_constant]]
@@ -64,21 +66,19 @@ float3 neutral(float3 light)
     return lerp(color, float3(newPeak), toWhite);
 }
 
-[shader("fragment")]
-float4 fragmentMain(float4 position : SV_Position) : SV_Target
+/// A color through the color decision list: slope, offset, power, then saturation, on what's after
+/// the tonemap. What overflows its power is as bright as there is, not a NaN through its luma.
+float3 graded(float3 color)
 {
-    const float2 uv = position.xy / tonemap.size;
-    const float4 texel = sampleTextureLevel(tonemap.image, tonemap.sampler, uv, 0.0);
-    const float alpha = isNotANumber(texel.a) ? 0.0 : saturate(texel.a);
-    float3 light = wholeLight(texel.rgb);
-    if (tonemap.bloomIntensity > 0.0)
-    {
-        light += sampleTextureLevel(tonemap.bloom, tonemap.bloomSampler, uv, 0.0).rgb * tonemap.bloomIntensity;
-    }
-    // What's blended over nothing is its color times its alpha, and a curve's of its color: so it's
-    // what's under the alpha that goes through it, unless there's no alpha at all, as what adds has.
-    const bool partly = alpha > 0.0 && alpha < 1.0;
-    float3 color = wholeLight(wholeLight(partly ? light / alpha : light) * tonemap.exposure);
+    color = wholeLight(pow(max((color * tonemap.slope.rgb) + tonemap.offset.rgb, float3(0.0)), tonemap.power.rgb));
+    const float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+    return max(lerp(float3(luma), color, tonemap.slope.a), float3(0.0));
+}
+
+/// Light through the exposure and the tonemap, and graded.
+float3 throughGrade(float3 light)
+{
+    float3 color = wholeLight(wholeLight(light) * tonemap.exposure);
     if (tonemap.kind == tonemapReinhard)
     {
         color = color / (color + 1.0);
@@ -91,9 +91,47 @@ float4 fragmentMain(float4 position : SV_Position) : SV_Target
     {
         color = neutral(color);
     }
-    color = pow(max((color * tonemap.slope.rgb) + tonemap.offset.rgb, float3(0.0)), tonemap.power.rgb);
-    const float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
-    color = max(lerp(float3(luma), color, tonemap.slope.a), float3(0.0));
-    color = wholeLight(pow(color, 1.0 / tonemap.gamma));
-    return float4(partly ? color * alpha : color, alpha);
+    return graded(color);
+}
+
+/// What comes of light that's all a pixel has.
+float3 whole(float3 light)
+{
+    return wholeLight(pow(throughGrade(light), 1.0 / tonemap.gamma));
+}
+
+/// What comes of light added over what's under it, which light of 0 leaves as it is, whatever a
+/// grade's offset does to what's there.
+float3 added(float3 light)
+{
+    const float3 lifted = max(throughGrade(light) - graded(float3(0.0)), float3(0.0));
+    return wholeLight(pow(lifted, 1.0 / tonemap.gamma));
+}
+
+[shader("fragment")]
+float4 fragmentMain(float4 position : SV_Position) : SV_Target
+{
+    const float2 uv = position.xy / tonemap.size;
+    const float4 texel = sampleTextureLevel(tonemap.image, tonemap.sampler, uv, 0.0);
+    const float alpha = isNotANumber(texel.a) ? 0.0 : saturate(texel.a);
+    const float3 light = wholeLight(texel.rgb);
+    float3 glow = float3(0.0);
+    if (tonemap.bloomIntensity > 0.0)
+    {
+        const float2 across = (position.xy - tonemap.bloomRect.xy) / tonemap.bloomRect.zw;
+        glow = sampleTextureLevel(tonemap.bloom, tonemap.bloomSampler, across, 0.0).rgb * tonemap.bloomIntensity;
+    }
+    // None of a surface, it's light added over what's under it, as what adds is.
+    if (alpha <= 0.0)
+    {
+        return float4(added(light + glow), 0.0);
+    }
+    if (alpha >= 1.0)
+    {
+        return float4(whole(light + glow), 1.0);
+    }
+    // What's blended over nothing is its color times its alpha, and a curve's of its color, so it's
+    // what's under the alpha that goes through it; and bloom's a layer of its own over it all, that's
+    // the same on the surface as off it.
+    return float4((whole((light / alpha) + glow) * alpha) + (added(glow) * (1.0 - alpha)), alpha);
 }

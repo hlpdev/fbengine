@@ -21,6 +21,13 @@ struct Bloom
     float spread;
     /// Whether this is the first level, which takes what's past the threshold.
     uint first;
+    uint spare;
+    /// Where what's read is in the source, in UVs, from and how much of it: a camera's viewport, on
+    /// the first level; and its texels' middles at either end, which nothing's read past.
+    float2 from;
+    float2 scale;
+    float2 least;
+    float2 most;
 };
 
 [[vk::push_constant]]
@@ -45,7 +52,7 @@ Corner vertexMain(uint index : SV_VulkanVertexID)
 /// A texel of the source as a number.
 float3 sourceAt(float2 uv)
 {
-    return wholeLight(sampleTextureLevel(bloom.source, bloom.sampler, uv, 0.0).rgb);
+    return wholeLight(sampleTextureLevel(bloom.source, bloom.sampler, clamp(uv, bloom.least, bloom.most), 0.0).rgb);
 }
 
 /// How bright a color is, as the threshold goes by.
@@ -82,7 +89,7 @@ float3 groupOf(float3 a, float3 b, float3 c, float3 d)
 [shader("fragment")]
 float4 downMain(Corner corner) : SV_Target
 {
-    const float2 uv = corner.uv;
+    const float2 uv = bloom.from + (corner.uv * bloom.scale);
     const float2 t = bloom.texel;
     const float3 a = sourceAt(uv + float2(-2.0, -2.0) * t);
     const float3 b = sourceAt(uv + float2(0.0, -2.0) * t);

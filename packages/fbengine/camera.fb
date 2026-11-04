@@ -338,11 +338,13 @@ Public Final Class Camera Extends Entity
     @MainThread @PanicsAtCaller
     Public Method Gamma(): Float => fbe_camera_gamma(Live("Gamma"))
 
-    /// Sets what an HDR camera's bright light does around it: what's past `threshold` blurred out
-    /// over much of its view and added to its light times `intensity`, before its exposure. An
-    /// intensity of 0, none, at first, with a threshold of 1. Below 0 panics.
+    /// Sets what an HDR camera's bright light does around it: what's past `threshold`, and fading
+    /// in from half of it, blurred out over much of its viewport, by a part of it that's the same at
+    /// any size, and added to its light times `intensity`, before its exposure. An intensity of 0,
+    /// none, at first, with a threshold of 1. A viewport under 16 pixels on its short side has none.
+    /// Below 0, or not finite, panics.
     @MainThread @PanicsAtCaller
-    Public Method SetBloom(intensity: Float, threshold: Float = 1.0)
+    Public Method SetBloom(intensity: Float, threshold: Float)
         If !fbe_camera_set_bloom(Live("SetBloom"), intensity, threshold) Then Failed("SetBloom")
     End Method
 
@@ -350,7 +352,7 @@ Public Final Class Camera Extends Entity
     @MainThread @PanicsAtCaller
     Public Method BloomIntensity(): Float => fbe_camera_bloom_intensity(Live("BloomIntensity"))
 
-    /// Where its bloom starts.
+    /// Where its bloom's past: it fades in from half of this.
     @MainThread @PanicsAtCaller
     Public Method BloomThreshold(): Float => fbe_camera_bloom_threshold(Live("BloomThreshold"))
 

@@ -504,16 +504,20 @@ FBE_API bool fbe_camera_set_gamma(uint64_t camera, float gamma);
 FBE_API float fbe_camera_gamma(uint64_t camera);
 
 // What an HDR camera's bright light does around it, its bloom: what's past `threshold`, 0 or more,
-// blurred out over much of its view, added to its light times `intensity`, 0 or more, before its
-// exposure. None at first, an intensity of 0, with a threshold of 1. A pixel far brighter than
-// those around it, a firefly, counts for about as much as they do, and doesn't flicker.
+// and fading in from half of it, blurred out over much of its viewport, by a part of it that's the
+// same at any size, added to its light times `intensity`, 0 or more, before its exposure. None at
+// first, an intensity of 0, with a threshold of 1. A pixel far brighter than those around it, a
+// firefly, counts for about as much as they do, and doesn't flicker. A viewport under 16 pixels on
+// its short side has none. Each is finite.
 FBE_API bool fbe_camera_set_bloom(uint64_t camera, float intensity, float threshold);
 FBE_API float fbe_camera_bloom_intensity(uint64_t camera);
 FBE_API float fbe_camera_bloom_threshold(uint64_t camera);
 // An HDR camera's color grade, after its tonemap and before its gamma, as a color decision list has
 // it: each channel times its slope, 0 or more, plus its offset, raised to its power, above 0; then
-// saturation, 0 or more, from its luma, 0 for gray and 1 as it was. As it is at first: slope 1,
-// offset 0, power 1, and saturation 1. `values` are ten, slope's three, offset's, power's, and
+// saturation, 0 or more, from its luma, 0 for gray and 1 as it was, on the linear values after the
+// tonemap. As it is at first: slope 1, offset 0, power 1, and saturation 1. What's light added over
+// what's under it, as an empty pixel of a camera that doesn't clear is, is graded by what that
+// adds, so an offset lights no empty pixel. `values` are ten, slope's three, offset's, power's, and
 // saturation, for setting and for reading.
 FBE_API bool fbe_camera_set_grade(uint64_t camera, const float* values);
 FBE_API bool fbe_camera_grade(uint64_t camera, float* values);
