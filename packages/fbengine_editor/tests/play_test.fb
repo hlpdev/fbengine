@@ -566,7 +566,8 @@ Function ARealGameReadsTheSavedScene() Throws IOError, GraphicsError
     Local games = Try TempDir()
     Local engine = Try Engine()
     Local program = "Import std.collections\nImport std.core\nImport std.io\nImport fbengine\n\nFunction Main() Throws IOError, GraphicsError\n    Window.SetHeadless(True)\n    Try Graphics(64, 64)\n    Assets.MountFolder(\"res://\", Path(\"assets\"))\n    Local asked = Scene.Requested()\n    If asked == Null Then Panic(\"no scene asked for\")\n    Local roots = Try Scene.Load(asked)\n    Print(\"read {{roots.Count}}, {{roots[0].Name()}} at {{roots[0].Position()}}\")\n    EndGraphics()\nEnd Function\n\nTry Main()\n"
-    Local folder = Try Game(games.Path, "real", program, "fbengine = {{ path = \"{engine.Text.Replace("\\", "/")}\" }}\n")
+    Local folder = Try Game(games.Path, "real", program,
+                            "fbengine = {{ path = \"{engine.Text.Replace("\\", "/")}\" }}\n")
     Local editor = Try Started(settings.Path, folder)
     Defer editor.Finish()
     editor.Actions.Run("add.cube")
