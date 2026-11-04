@@ -4,6 +4,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./entity"
 Import "./light"
@@ -33,6 +34,7 @@ Public Final Class Particles Extends Entity
 
     /// Sets how many it holds at once, 1 to 1048576, losing those it has; the oldest go first when
     /// more are born. Others panic.
+    @Limits(1, 1048576)
     @MainThread @PanicsAtCaller
     Public Method SetCapacity(capacity: Int)
         If !fbe_particles_set_capacity(Live("SetCapacity"), capacity) Then Failed("SetCapacity")
@@ -56,6 +58,7 @@ Public Final Class Particles Extends Entity
     Public Method Material(): Material? => MaterialOf(fbe_particles_material(Live("Material")))
 
     /// Sets how many are born a second, 0 or more, as World.Update's steps go by. Below 0 panics.
+    @Limits(0)
     @MainThread @PanicsAtCaller
     Public Method SetRate(perSecond: Float)
         If !fbe_particles_set_rate(Live("SetRate"), perSecond) Then Failed("SetRate")
@@ -71,6 +74,13 @@ Public Final Class Particles Extends Entity
         If !fbe_particles_set_life(Live("SetLife"), least, most) Then Failed("SetLife")
     End Method
 
+    /// How long each lives, chosen between these: the least, then the most.
+    @MainThread @PanicsAtCaller
+    Public Method Life(): Vec2
+        Local particles = Live("Life")
+        Return Vec2(fbe_particles_life_least(particles), fbe_particles_life_most(particles))
+    End Method
+
     /// Sets how they set off: a speed between these, out to `spread` radians off its forward axis,
     /// up to Pi for all around, and a spin up to this each way, in radians a second. Others panic.
     @MainThread @PanicsAtCaller
@@ -79,6 +89,21 @@ Public Final Class Particles Extends Entity
             Failed("SetMotion")
         End If
     End Method
+
+    /// The speeds they set off between: the least, then the most.
+    @MainThread @PanicsAtCaller
+    Public Method Speeds(): Vec2
+        Local particles = Live("Speeds")
+        Return Vec2(fbe_particles_speed_least(particles), fbe_particles_speed_most(particles))
+    End Method
+
+    /// How far off its forward axis they set off, in radians.
+    @MainThread @PanicsAtCaller
+    Public Method Spread(): Float => fbe_particles_spread(Live("Spread"))
+
+    /// The most spin each way, in radians a second.
+    @MainThread @PanicsAtCaller
+    Public Method Spin(): Float => fbe_particles_spin(Live("Spin"))
 
     /// Sets what acts on them after: gravity in the world, in units a second a second, and drag, 0
     /// or more, of which 1 slows them to a little over a third in a second. Others panic.
@@ -89,10 +114,29 @@ Public Final Class Particles Extends Entity
         End If
     End Method
 
+    /// The gravity on them, in the world.
+    @MainThread @PanicsAtCaller
+    Public Method Gravity(): Vec3
+        Local particles = Live("Gravity")
+        Return Vec3(fbe_particles_gravity_x(particles), fbe_particles_gravity_y(particles),
+                    fbe_particles_gravity_z(particles))
+    End Method
+
+    /// The drag on them.
+    @MainThread @PanicsAtCaller
+    Public Method Drag(): Float => fbe_particles_drag(Live("Drag"))
+
     /// Sets each one's half-size, from its birth to its death. Below 0 panics.
     @MainThread @PanicsAtCaller
     Public Method SetSizes(start: Float, finish: Float)
         If !fbe_particles_set_sizes(Live("SetSizes"), start, finish) Then Failed("SetSizes")
+    End Method
+
+    /// Each one's half-size: at its birth, then at its death.
+    @MainThread @PanicsAtCaller
+    Public Method Sizes(): Vec2
+        Local particles = Live("Sizes")
+        Return Vec2(fbe_particles_size_start(particles), fbe_particles_size_end(particles))
     End Method
 
     /// Sets each one's color and alpha, from its birth to its death. A color that isn't finite, or an
@@ -116,12 +160,35 @@ Public Final Class Particles Extends Entity
         If !done Then Failed("SetColors")
     End Method
 
+    /// Each one's color and alpha at its birth.
+    @MainThread @PanicsAtCaller
+    Public Method StartColor(): Color => ColorAt(False, "StartColor")
+
+    /// Each one's color and alpha at its death.
+    @MainThread @PanicsAtCaller
+    Public Method EndColor(): Color => ColorAt(True, "EndColor")
+
+    @PanicsAtCaller
+    Method ColorAt(end: Bool, call: String): Color
+        Local found = fbe_color_t()
+        Local done = False
+        Unsafe
+            done = fbe_particles_color(Live(call), end, AddressOf(found))
+        End Unsafe
+        If !done Then Failed(call)
+        Return Color(found.r, found.g, found.b, found.a)
+    End Method
+
     /// Sets how far each's turned at its birth, up to `most` radians each way, 0 to Pi, 0 at first.
     /// Others panic.
     @MainThread @PanicsAtCaller
     Public Method SetRoll(most: Float)
         If !fbe_particles_set_roll(Live("SetRoll"), most) Then Failed("SetRoll")
     End Method
+
+    /// How far each's turned at its birth, at most, each way: Roll is an Entity's own.
+    @MainThread @PanicsAtCaller
+    Public Method BirthRoll(): Float => fbe_particles_roll(Live("BirthRoll"))
 
     /// Sets what its random numbers follow from, so a run can be the same again.
     @MainThread @PanicsAtCaller

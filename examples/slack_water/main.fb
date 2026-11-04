@@ -1,0 +1,1203 @@
+// Slack Water: you keep a tide-mill, and have one slack water to restart it, with Pip, your small
+// brass helper. WASD and the mouse walk the island, E takes, fits, and opens the sluice, Q hands
+// things to Pip and takes them back, Escape ends it. With `--walk <bright|dim|dark> [<kept>]`, as ctest
+// runs it, it's offscreen, played by key presses to that ending, ten steps a second, as fast as they
+// go, and what it said is compared with what's kept; `--walk3d <bright|dim|dark|cut|swept|wing|far_end>
+// [<kept>]` does the same on the island, in 3D, checking how it stands at every step. With `--frames
+// <folder>`, the same to its bright ending, saving a PNG there at each moment that shows something, and
+// checking what's drawn. `--feel` tries its keys, mouse, and gamepad, and `--hear` what's in its mix.
+// With `--check <folder>`, it loads the assets its tools made there, and checks what they are; with
+// `--match <made> <kept>`, that two folders of them are the same. Whatever a check finds wrong is its
+// exit code.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import std.text
+Import fbengine
+Import fbengine_audio
+Import "./checks"
+Import "./controls"
+Import "./cues"
+Import "./flow"
+Import "./follow"
+Import "./game"
+Import "./ground"
+Import "./island"
+Import "./map"
+Import "./res" As Res
+Import "./soundscape"
+Import "./walks"
+
+// Plays `walk` to its end, by key presses, offscreen, and gives how it ended, each step told to
+// `stepped` once the flow's moved on.
+Function Walked(walk: String[], lines: String[], stepped: Func(Flow)): Ending Throws GraphicsError
+    Window.SetHeadless(True)
+    Try Graphics(960, 540)
+    Defer EndGraphics()
+    Local controls = TextControls()
+    Local flow = Flow(Function(line: String)
+        Print(line)
+        lines.Add(line)
+    End Function)
+    Local next = 0
+    While flow.Ended() == Ending.NONE
+        If next < walk.Count && WalkReady(flow, walk[next])
+            Local step = walk[next]
+            If Int.Parse(step) != Null
+                next += 1
+            Else
+                Select step
+                    Case "W"
+                        Try Simulate.PressKey(Key.W)
+                    Case "S"
+                        Try Simulate.PressKey(Key.S)
+                    Case "E"
+                        Try Simulate.PressKey(Key.E)
+                    Default
+                        Try Simulate.PressKey(Key.Q)
+                End Select
+                next += 1
+            End If
+        End If
+        Flip(False)
+        controls.Apply(flow)
+        flow.Step(0.1)
+        stepped(flow)
+    End While
+    Return flow.Ended()
+End Function
+
+// Whether what a walk said is what's kept in `kept`, line by line, without the clock's part if not
+// `timed`, as a walk on foot goes by the ground's numbers.
+Function Pinned(lines: String[], kept: Path, timed: Bool) Throws IOError
+    Local wanted: String[] = []
+    For line In (Try File.ReadText(kept)).Split("\n")
+        Local clean = line.Trim()
+        If clean != "" Then wanted.Add(timed ? clean : Untimed(clean))
+    End For
+    Local said: String[] = []
+    For line In lines
+        said.Add(timed ? line : Untimed(line))
+    End For
+    If said != wanted
+        For at = 0 Until Max(said.Count, wanted.Count)
+            Local one = at < said.Count ? said[at] : "(nothing)"
+            Local two = at < wanted.Count ? wanted[at] : "(nothing)"
+            If one != two Then Print("line {at}: said {one}, kept {two}")
+        End For
+    End If
+    Checks("what the walk said is what's kept", said == wanted)
+End Function
+
+// A line, without its clock.
+Function Untimed(line: String): String
+    Local parts = line.Split("] ")
+    Return parts[parts.Count - 1]
+End Function
+
+// The screen: how long's left, where you are, and the last of what's happened.
+Function Draw(flow: Flow, lines: String[], font: Font)
+    Local canvas = Screen.Canvas()
+    canvas.SetColor(Color32(20, 28, 36, 255))
+    canvas.Clear()
+    canvas.SetColor(Color32(236, 232, 220, 255))
+    canvas.DrawText(font, "{flow.ClockLine()}, at {PlaceName(flow.At())}", 24, 20)
+    Local first = Max(lines.Count - 18, 0)
+    For at = first Until lines.Count
+        canvas.DrawText(font, lines[at], 24, 60 + (at - first) * 26)
+    End For
+End Function
+
+// The bright walk, saving the screen in `folder` when you first hold something, when the causeway
+// floods, and at its end.
+Function Framed(folder: Path) Throws GraphicsError, IOError
+    Try Dir.CreateAll(folder)
+    Local lines: String[] = []
+    Local font = Font.BuiltIn(20.0)
+    Local holding = False
+    Local flooded = False
+    Local saved = 0
+    Local failure = ""
+    Local save = Function(flow: Flow, name: String)
+        Draw(flow, lines, font)
+        Try
+            Try Screen.Save(folder / "{name}.png")
+            saved += 1
+        Catch e As GraphicsError
+            failure = e.Message
+        Catch e As IOError
+            failure = e.Message
+        End Try
+    End Function
+    Local ended = Try Walked(WalkOf("bright") ?? [], lines, Function(flow: Flow)
+        If !holding && flow.Held() != Null
+            holding = True
+            save(flow, "holding")
+        End If
+        If !flooded && flow.Flooded()
+            flooded = True
+            save(flow, "flooded")
+        End If
+        If flow.Ended() != Ending.NONE Then save(flow, "ended")
+    End Function)
+    If failure != "" Then Throw IOError(IOErrorKind.OTHER, failure)
+    Checks("saved 3 frames, ended BRIGHT", saved == 3 && ended == Ending.BRIGHT)
+    Try SaveViews(folder)
+End Function
+
+// Global: whether any check of what's made went wrong, which is the program's exit code.
+Global failed: Bool = False
+
+// Says a check's result, and remembers a failure.
+Function Checks(what: String, held: Bool)
+    Print("{what} {held}")
+    If !held Then failed = True
+End Function
+
+// The pixel a place in the world's drawn at, by the camera that drew it, or Null off the image.
+Function PixelOf(camera: Camera, image: Image, place: Vec3): Color32?
+    Local at = camera.Project(place)
+    If at == Null Then Return Null
+    Local x = at.x As Int
+    Local y = at.y As Int
+    If x < 0 || y < 0 || x >= image.Width || y >= image.Height Then Return Null
+    Return image[x, y]
+End Function
+
+// The island, in `folder`, from each of its views, at slack water and at high tide; and whether
+// what was drawn is what it should be, as the flow has the tide, by the pixels themselves.
+Function SaveViews(folder: Path) Throws GraphicsError, IOError
+    Window.SetHeadless(True)
+    Try Graphics(1280, 720)
+    Defer EndGraphics()
+    Try Res.Mount()
+    Defer Assets.StopWatching()
+    Local island = Try Island.Make()
+    Defer island.Free()
+    Local camera = Camera()
+    camera.SetClearColor(SKY)
+    camera.SetRange(0.1, 4000.0)
+    // The sea's far edge goes into the haze, with no line.
+    camera.SetFogMode(FogMode.LINEAR)
+    camera.SetFogColor(SKY)
+    camera.SetFogRange(200.0, 1400.0)
+    Local saved = 0
+    Local images = Map<String, Image>()
+    For view In Views()
+        camera.SetPosition(view.1)
+        camera.PointAt(view.2)
+        island.Scene().Render()
+        Try Screen.Save(folder / "{view.0}.png")
+        images[view.0] = Try Screen.ToImage()
+        saved += 1
+        Flip(False)
+    End For
+    // High tide, from the island's view.
+    Local first = Views()[0]
+    camera.SetPosition(first.1)
+    camera.PointAt(first.2)
+    island.Update(TIDE_IN_AT)
+    island.Scene().Render()
+    Try Screen.Save(folder / "island_high_tide.png")
+    Local high = Try Screen.ToImage()
+    saved += 1
+    Flip(False)
+    Checks("saved 5 views of the island", saved == 5)
+
+    // The numbers the flow goes by, as drawn.
+    Local allAgree = True
+    For second = 0 To TIDE_IN_AT As Int
+        island.Update(second As Float64)
+        If Abs(island.SeaDrawnAt() - SeaHeight(second As Float64)) > 0.0001 Then allAgree = False
+    End For
+    Checks("the sea's drawn at the tide's height", allAgree)
+    Local crossX = Round(PaddleSpot().x)
+    Local crossZ = Round(RoadZ(crossX))
+    Local crossing = island.GroundDrawnAt(crossX, crossZ)
+    Checks("the causeway's drawn at its height",
+           crossing != Null && Abs(crossing - GroundHeight(crossX, crossZ)) < 0.01)
+    Local millAt = island.GroundDrawnAt(MAIN_X, 0.0)
+    Checks("the mill's ground's drawn at its height",
+           millAt != Null && Abs(millAt - GroundHeight(MAIN_X, 0.0)) < 0.01)
+
+    // The pixels: the causeway's there at slack, and gone at high; the far rock, and the roof, at
+    // both; and the land's share falls, by what a rising sea would take.
+    Local slack = images["island"]
+    Local road = Vec3(PaddleSpot().x, SeaHeight(0.0) + 0.5, PaddleSpot().y)
+    Local dry = PixelOf(camera, slack, road)
+    Checks("the causeway's land at slack water", dry != Null && !IsSea(dry))
+    Local under = PixelOf(camera, high, Vec3(road.x, SeaHeight(TIDE_IN_AT), road.z))
+    Checks("the causeway's sea at high tide", under != Null && IsSea(under))
+    Local farRock = Vec3(FAR_X, GroundHeight(FAR_X, FAR_Z), FAR_Z)
+    Local farSlack = PixelOf(camera, slack, farRock)
+    Local farHigh = PixelOf(camera, high, farRock)
+    Checks("the far rock's land at both",
+           farSlack != Null && farHigh != Null && !IsSea(farSlack) && !IsSea(farHigh))
+    Local roof = Vec3(MAIN_X, GroundHeight(MAIN_X, 0.0) + 5.6, 0.0)
+    Local roofSlack = PixelOf(camera, slack, roof)
+    Local roofHigh = PixelOf(camera, high, roof)
+    Checks("the roof's land at both",
+           roofSlack != Null && roofHigh != Null && !IsSea(roofSlack) && !IsSea(roofHigh))
+    Local land = Function(pixel: Color32): Bool => !IsSea(pixel) && !IsSky(pixel)
+    Local ratio = Share(high, land) / Max(Share(slack, land), 0.0001)
+    Checks("the tide takes some of the land", ratio > 0.6 && ratio < 0.95)
+    Checks("the sky's at the top of the yard's view", IsSky(images["yard"][640, 4]))
+    Checks("the yard's middle isn't sky", !IsSky(images["yard"][640, 360]))
+    Local pipPixel = images["pip"][640, 360]
+    Checks("Pip's brass is in the middle of his view",
+           pipPixel.r > pipPixel.g && pipPixel.g > pipPixel.b)
+    Checks("no sky's seen from the mill's inside", Share(images["mill_inside"], IsSky) < 0.01)
+End Function
+
+// Loads every asset the tools make from `folder`, as the game will, and says what they are: what's
+// wrong is a failure, as a sound with no sound in it, or one that clips.
+Function Checked(folder: Path) Throws GraphicsError, IOError
+    Assets.MountFolder("res://made", folder)
+    Defer Assets.Unmount("res://made")
+    Local soundsGood = True
+    For name In ["wind", "sea", "gull", "creak", "wheel", "step_1", "step_2", "step_3", "floor_1",
+                 "floor_2", "wade_1", "wade_2", "splash"]
+        Local sound = Try Assets.Load<Sound>("res://made/{name}.wav")
+        Local fault = SoundFault(Try Assets.ReadBytes("res://made/{name}.wav"))
+        If fault != Null
+            Print("{name}: {fault}")
+            soundsGood = False
+        End If
+        sound.Free()
+    End For
+    Checks("the sounds load, none silent, none clipping", soundsGood)
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+    For material In ["rock", "sand", "wood", "brass", "iron"]
+        Local albedo = Try Assets.Load<Texture>("res://made/{material}_albedo.png")
+        Local normal = Try Assets.Load<Texture>("res://made/{material}_normal.png")
+        Local rough = Try Assets.Load<Texture>("res://made/{material}_rough.png")
+        Checks("{material}'s textures load as what they are",
+               albedo.Width() == (material == "rock" || material == "sand" ? 256 : 128) &&
+               albedo.Format() == TextureFormat.RGBA8 &&
+               normal.Format() == TextureFormat.RGBA8_LINEAR &&
+               rough.Format() == TextureFormat.RGBA8_LINEAR)
+        albedo.Free()
+        normal.Free()
+        rough.Free()
+    End For
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local pip = Try Assets.Load<Model>("res://made/pip.gltf")
+    Defer pip.Free()
+    Local root = Try pip.Spawn()
+    Local found = root.Find("pip")
+    Local clips: String[] = []
+    For clip In pip.Clips()
+        clips.Add(clip.Name())
+    End For
+    Checks("Pip's joints and clips are what they are", pip.Skins()[0].JointCount() == 8 &&
+           ", ".Join(clips) == "idle, walk, carry")
+    If !(found Is Mesh)
+        Checks("Pip's a mesh", False)
+        Return
+    End If
+    Local mesh = found As Mesh
+    Local geometry = pip.Geometries()[0]
+    Checks("its surfaces, morphs, and bones are what they are", geometry.SurfaceCount() == 2 &&
+           geometry.Surface(0).MorphTargetCount() == 1 && mesh.Palette().Count == 8)
+    Local bounds = geometry.Bounds()
+    Checks("it's 0.8 m high, on the ground",
+           IsClose(bounds.Max.y, 0.8, 0.001) && IsClose(bounds.Min.y, 0.0, 0.001))
+    // No clip: every joint where it was bound, so its palette's all identity.
+    Local identity = True
+    For matrix In mesh.Palette()
+        Local origin = matrix.TransformPoint(Vec3(0.3, 0.4, 0.5))
+        If !IsClose(origin, Vec3(0.3, 0.4, 0.5), 0.00001) Then identity = False
+    End For
+    Checks("at rest, its palette moves nothing", identity)
+    // Walking, at a key: a leg's foot moves, and the head's vertices don't, as the body's not bobbing
+    // at that key. Joints: root 0, hips 1, body 2, head 3, arms 4 and 5, legs 6 and 7.
+    Local player = root.Player()
+    player.Play(pip.Clips()[1])
+    player.SetTime(0.5)
+    UpdateWorld(0.0)
+    Local palette = mesh.Palette()
+    Local foot = palette[7].TransformPoint(Vec3(-0.08, 0.0, 0.0))
+    Local head = palette[3].TransformPoint(Vec3(0.0, 0.72, 0.0))
+    Checks("walking, its foot moves", Abs(foot.z) > 0.05)
+    Checks("and its head stays over it", Abs(head.x) < 0.001 && Abs(head.z) < 0.001)
+    // How far a turn of its walk takes a foot is what the game goes by, so its feet don't slide, and
+    // its carry too.
+    Local legR = 7
+    Local footAt = Vec3(-0.08, 0.0, 0.0)
+    Local firstFoot = palette[legR].TransformPoint(footAt).z
+    player.SetTime(0.0)
+    UpdateWorld(0.0)
+    Local stride = 2.0 * Abs(mesh.Palette()[legR].TransformPoint(footAt).z - firstFoot) * 1.0
+    Checks("its walk's stride is what the game goes by {stride}", Abs(stride - WALK_STRIDE) < 0.03)
+    player.Play(pip.Clips()[2])
+    player.SetTime(0.0)
+    UpdateWorld(0.0)
+    Local carryFrom = mesh.Palette()[legR].TransformPoint(footAt).z
+    player.SetTime(0.5)
+    UpdateWorld(0.0)
+    Local carrying = 2.0 * Abs(mesh.Palette()[legR].TransformPoint(footAt).z - carryFrom)
+    Checks("its carry's stride is too {carrying}", Abs(carrying - CARRY_STRIDE) < 0.03)
+    player.Play(pip.Clips()[1])
+    // At each of its walk's keys, its lowest point's on the ground, within a centimeter.
+    Local grounded = True
+    Local vertices = geometry.Surface(0).Vertices()
+    Local joints = geometry.Surface(0).Joints()
+    For key = 0 To 4
+        player.SetTime((key As Float) * 0.25)
+        UpdateWorld(0.0)
+        Local posed = mesh.Palette()
+        Local lowest = 1000.0
+        For at = 0 Until vertices.Count
+            Local placed = posed[joints[at].Joint0 As Int].TransformPoint(vertices[at].Position)
+            lowest = Min(lowest, placed.y)
+        End For
+        If Abs(lowest) > 0.01
+            Print("at key {key} it's {lowest} up")
+            grounded = False
+        End If
+    End For
+    Checks("at each key of its walk, it's on the ground", grounded)
+    // The blink shuts its eyes: their tops come down.
+    Local open = mesh.MorphedPositions(1)
+    mesh.SetMorphWeights([1.0])
+    Local shut = mesh.MorphedPositions(1)
+    Local moved = False
+    For at = 0 Until open.Count
+        If shut[at].y < open[at].y Then moved = True
+    End For
+    Checks("blinking, its eyes shut", moved)
+End Function
+
+// Whether two folders' files are the same: every byte, but for PNGs, whose pixels are, as a PNG's
+// bytes are its zlib's.
+Function Matched(made: Path, kept: Path) Throws IOError
+    Local same = True
+    Local names: String[] = []
+    For entry In Try Dir.Entries(kept)
+        names.Add(entry.Name())
+    End For
+    Local madeNames: String[] = []
+    For entry In Try Dir.Entries(made)
+        madeNames.Add(entry.Name())
+    End For
+    If names.Count != madeNames.Count
+        Print("{names.Count} files kept, {madeNames.Count} made")
+        same = False
+    End If
+    For name In names
+        If !madeNames.Contains(name)
+            Print("{name} isn't made")
+            same = False
+            Continue
+        End If
+        Local one = Try File.ReadBytes(made / name)
+        Local two = Try File.ReadBytes(kept / name)
+        If name.EndsWith(".png")
+            Local first = Try Png.Decode(one)
+            Local second = Try Png.Decode(two)
+            If first.Pixels.ToArray() != second.Pixels.ToArray()
+                Print("{name}'s pixels differ")
+                same = False
+            End If
+        ElseIf one != two
+            Print("{name} differs")
+            same = False
+        End If
+    End For
+    Checks("what's kept is what the tools make", same)
+End Function
+
+// What a 3D walk does, a thing at a time: walks to a Spot or a part by its name, presses E or Q, or
+// waits for the clock.
+Function Walk3dOf(name: String): String[]?
+    Select name
+        // The gear and the paddle first, the gear in Pip's hands; then the belt, in time.
+        Case "bright"
+            Return ["door", "gear", "E", "Q", "crossing", "E", "door", "inside", "E", "Q", "E", "E",
+                    "door", "crossing", "belt", "E", "crossing", "door", "inside", "E", "240"]
+        // The same, but never going for the belt.
+        Case "dim"
+            Return ["door", "gear", "E", "Q", "crossing", "E", "door", "inside", "E", "Q", "E", "E",
+                    "240"]
+        // Out to the far rock, as the road floods behind you, and trying to walk back.
+        Case "dark"
+            Return ["door", "crossing", "belt", "131", "door", "240"]
+        // With the paddle in hand on the mill's side, and the sluice shut, so nothing's settled, at
+        // the flooded road, which holds you back.
+        Case "cut"
+            Return ["door", "crossing", "E", "shore", "131", "crossing", "240"]
+        // Standing on the road near its mill end as it floods, Pip with you, which takes you the short
+        // way.
+        Case "swept"
+            Return ["door", "near_west", "240"]
+        // Beside the road, in its span, too deep once it floods.
+        Case "wing"
+            Return ["door", "crossing", "wing", "240"]
+        // Just past the road's far end as it floods, which takes you nowhere.
+        Case "far_end"
+            Return ["door", "crossing", "far_end", "240"]
+        Default
+            Return Null
+    End Select
+End Function
+
+// Where a walk's step goes, or Null if it isn't a place.
+Function WalkTarget(island: Island, step: String): Vec2?
+    Select step
+        Case "inside"
+            Return island.PlaceOf(Spot.INSIDE)
+        Case "door"
+            Return island.PlaceOf(Spot.DOOR)
+        Case "crossing"
+            Return island.PlaceOf(Spot.CROSSING)
+        Case "shore"
+            Return Landing(False)
+        Case "near_west"
+            Return Vec2(ROAD_WEST + 6.0, RoadZ(ROAD_WEST + 6.0))
+        Case "wing"
+            Return Vec2(15.0, RoadZ(15.0) - 3.8)
+        Case "far_end"
+            Return Vec2(ROAD_EAST + 0.8, RoadZ(ROAD_EAST + 0.8))
+        Case "gear"
+            Return island.PartSpot(Part.GEAR)
+        Case "belt"
+            Return island.PartSpot(Part.BELT)
+        Default
+            Return Null
+    End Select
+End Function
+
+// What's wrong with how the game stands, by what the flow says, or Null: where you and Pip are, how
+// near Pip is, what's on the flooded road, where each part is, what you see from, and Pip's clip.
+Function Fault(game: Game, island: Island): String?
+    Local flow = game.Story()
+    Local here = game.Location()
+    Local pip = game.PipLocation()
+    If flow.Ended() == Ending.NONE
+        If PlaceHeld(flow.At(), here.x, here.y) != flow.At()
+            Return "you're at {here.x}, {here.y}, not {PlaceName(flow.At())}"
+        End If
+        If PlaceHeld(flow.PipAt(), pip.x, pip.y) != flow.PipAt()
+            Return "Pip's at {pip.x}, {pip.y}, not {PlaceName(flow.PipAt())}"
+        End If
+    End If
+    If flow.PipHere() && !PipWithYou(pip.x, pip.y, here.x, here.y)
+        Return "Pip's too far to be here"
+    End If
+    If game.EyeAt() <= SeaHeight(flow.Clock()) Then Return "your eyes are under the sea"
+    If flow.Flooded() && (OnRoad(here.x, here.y) || OnRoad(pip.x, pip.y))
+        Return "someone's on the flooded road"
+    End If
+    For number = 0 To 2
+        Local part = number As Part
+        Local thing = island.PartEntity(part)
+        Local parent = thing.Parent()
+        If flow.Fitted(part)
+            If parent != island.Works() || thing.Hidden() Then Return "{PartName(part)} isn't fitted"
+        ElseIf flow.Held() == part
+            If parent != (game.View() As Entity) || thing.Hidden()
+                Return "{PartName(part)} isn't in your hand"
+            End If
+        ElseIf flow.PipHolds() == part
+            If parent != island.PipEntity() || thing.Hidden()
+                Return "{PartName(part)} isn't in Pip's hands"
+            End If
+        ElseIf flow.Lying(part) != Null
+            If parent != Null || thing.Hidden() Then Return "{PartName(part)} isn't lying"
+        ElseIf !thing.Hidden()
+            Return "{PartName(part)} isn't the sea's"
+        End If
+    End For
+    Local seen = game.View().Position()
+    If !IsClose(seen, Vec3(here.x, game.EyeAt(), here.y), 0.001) Then Return "you see from {seen}"
+    Local wanted = flow.PipHolds() != Null ? "carry" : game.PipMoved() > 0.0 ? "walk" : "idle"
+    If island.PipClipName() != wanted Then Return "Pip's playing {island.PipClipName()}, not {wanted}"
+    Return Null
+End Function
+
+// Walks `walk` to its end, by W, E, and Q pressed, offscreen, and gives how it ended, checking how it
+// stands at every step. It turns you to each place itself, as a person's mouse would; `stepped` hears
+// of each step, with what's just been done.
+Function Walked3d(island: Island, walk: String[], lines: String[],
+                  stepped: Func(Game, String)): Ending Throws GraphicsError, IOError, AudioError
+    Local controls = Controls()
+    Local game = Game(island, Function(line: String)
+        Print(line)
+        lines.Add(line)
+    End Function)
+    Defer game.Free()
+    // Heard as a person would, mixed here, as nothing's to play it to.
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local scape = Try Soundscape.Make(game, island)
+    Defer scape.Free()
+    // Before anything's said its level, it's already not loud.
+    Checks("it starts quiet, before its first step", PeakOf(Audio.Mix(1024)) < 0.2)
+    Local mixedFrom = Audio.Frames()
+    Local steps = 0
+    Local loudest: Float = 0.0
+    Local next = 0
+    Local doing = ""
+    Local walking = False
+    Local fault: String? = Null
+    Local flooded = False
+    While game.Story().Ended() == Ending.NONE
+        doing = ""
+        If next < walk.Count
+            Local step = walk[next]
+            Local target = WalkTarget(island, step)
+            Local until = Int.Parse(step)
+            If target != Null
+                Local here = game.Location()
+                Local dx = target.x - here.x
+                Local dz = target.y - here.y
+                // Within a step of it, or within reach of what lies there.
+                If dx * dx + dz * dz < 1.0
+                    If walking
+                        Try Simulate.KeyUp(Key.W)
+                        walking = False
+                    End If
+                    next += 1
+                Else
+                    game.Face(target.x, target.y)
+                    If !walking
+                        Try Simulate.KeyDown(Key.W)
+                        walking = True
+                    End If
+                End If
+            ElseIf until != Null
+                If game.Story().Clock() >= (until As Float64) Then next += 1
+            ElseIf step == "Q"
+                If game.Story().PipHere()
+                    Try Simulate.PressKey(Key.Q)
+                    doing = step
+                    next += 1
+                End If
+            Else
+                Try Simulate.PressKey(Key.E)
+                doing = step
+                next += 1
+            End If
+        End If
+        Flip(False)
+        game.Step(controls, 0.1)
+        scape.Update(game, 0.1)
+        // Mixed at the pace it's played, a tenth of a second a step.
+        loudest = Max(loudest, PeakOf(Audio.Mix(4410)))
+        steps += 1
+        If !flooded && game.Story().Flooded()
+            flooded = True
+            Local you = game.Location()
+            Local pip = game.PipLocation()
+            Local apart = Sqrt((you.x - pip.x) * (you.x - pip.x) +
+                               (you.y - pip.y) * (you.y - pip.y))
+            If apart < 1.0 Then fault = "you and Pip landed on one spot"
+        End If
+        If fault == Null
+            fault = Fault(game, island)
+            If fault != Null Then Print("{game.Story().Clock()}: {fault}")
+        End If
+        stepped(game, doing)
+    End While
+    If walking Then Try Simulate.KeyUp(Key.W)
+    stepped(game, "ended")
+    Checks("it stood as the flow says, all along", fault == Null)
+    Heard(scape, game.Story(), loudest)
+    Flip(False)
+    Checks("you hear from where you see", IsClose(Listener.Position(), game.View().Position(), 1.0))
+    Checks("its mix went at the pace of the game",
+           Audio.Frames() - mixedFrom == (steps As Int64) * 4410)
+    // Once it's ended, nothing more can happen, nor is anything offered, though the wheel goes round.
+    Local said = lines.Count
+    Local ended = game.Story().Ended()
+    Local wheelWas = island.WheelTurned()
+    Try Simulate.PressKey(Key.E)
+    Try Simulate.PressKey(Key.Q)
+    Flip(False)
+    game.Step(controls, 0.1)
+    Checks("nothing's done after the end", lines.Count == said && game.Story().Ended() == ended)
+    Checks("nothing's offered after the end", game.Prompt() == "")
+    Checks("the wheel turns only if it was mended",
+           (WheelSpeed(ended) > 0.0) == (island.WheelTurned() != wheelWas))
+    // Walking out of the mill, after the end, is hearing outside.
+    If InMill(game.Location().x, game.Location().y)
+        Local door = DoorSpot()
+        Try WalkedTo(game, controls, door.x, door.y + 3.0, 100)
+        For step = 1 To 10
+            Flip(False)
+            game.Step(controls, 0.1)
+            scape.Update(game, 0.1)
+        End For
+        Checks("out of the door, after the end, it's not muffled",
+               scape.OutsideNow() == OutsideCutoff(False))
+        Checks("nor quieter", IsClose(scape.SeaNow(), SeaLevel(game.Story().Clock(), False), 0.001))
+    End If
+    Return ended
+End Function
+
+// The largest of `samples`, either way.
+Function PeakOf(samples: Float[]): Float
+    Local peak = 0.0
+    For sample In samples
+        peak = Max(peak, Abs(sample))
+    End For
+    Return peak
+End Function
+
+// How loud `samples` are, on average.
+Function RmsOf(samples: Float[]): Float
+    Local sum = 0.0
+    For sample In samples
+        sum += sample * sample
+    End For
+    Return Sqrt(sum / Max(samples.Count As Float, 1.0))
+End Function
+
+// How much `samples` change, from a sample to the next on the same channel, on average: how much of
+// their highs there are.
+Function HighsOf(samples: Float[]): Float
+    Local sum = 0.0
+    For at = 2 Until samples.Count
+        Local step = samples[at] - samples[at - 2]
+        sum += step * step
+    End For
+    Return Sqrt(sum / Max(samples.Count As Float, 1.0))
+End Function
+
+// Whether what a walk heard is what it should be: the wind and sea all along, your feet, and the
+// flood; the wheel by how it ended; and a mix that's not silent, and doesn't clip.
+Function Heard(scape: Soundscape, flow: Flow, loudest: Float)
+    Checks("the wind and sea are streamed, and playing", scape.AroundYou())
+    Checks("your steps are heard", scape.Played(Cue.STEP_1) > 0 && scape.Played(Cue.STEP_2) > 0 &&
+           scape.Played(Cue.STEP_3) > 0)
+    Checks("the flood splashes, once", scape.Played(Cue.SPLASH) == 1)
+    Checks("the wheel's pitch is its speed",
+           IsClose(scape.WheelPitch(), WheelSpeed(flow.Ended()), 0.001))
+    Print("its loudest was {loudest}")
+    Checks("the mix isn't silent, and doesn't clip", loudest > 0.05 && loudest < 1.0)
+End Function
+
+// Hears what's in the mix by itself, offscreen: each cue in its band, with the wind and sea at
+// nothing; that an emitter's fainter from further, and to its side; that nothing's left playing; that
+// what's outside is muffled from inside, with no click at the door; and the gulls over the wind.
+Function Listened() Throws GraphicsError, IOError, AudioError
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Local game = Game(island, Function(line: String)
+    End Function)
+    Defer game.Free()
+    Try Audio.Start(AudioDevice.MANUAL, 44100, 2)
+    Defer Audio.Stop()
+    Local scape = Try Soundscape.Make(game, island)
+    Defer scape.Free()
+    Listener.Unfollow()
+    Local rate = 44100
+    // A settled bed's what's left to measure against: the first second's what it opens with.
+    Local door = DoorSpot()
+    Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    Audio.Mix(rate)
+    Local bed = RmsOf(Audio.Mix(rate))
+    Checks("the wind and sea are heard at slack water", bed > 0.005)
+    // A gull, off over the water, over them.
+    Local gullOver = 0
+    For call = 1 To 6
+        scape.Play(Cue.GULL, door)
+        If PeakOf(Audio.Mix(rate)) > 1.5 * bed Then gullOver += 1
+    End For
+    Checks("a gull's heard over them", gullOver >= 3)
+    scape.SetBeds(0.0)
+    Audio.Mix(rate)
+    Audio.Mix(rate)
+    Checks("with the beds at nothing, it's silent", PeakOf(Audio.Mix(1024)) < 0.0005)
+    // Each cue, by itself, in its band, from nearby.
+    Local mill = scape.MillAt()
+    Local road = scape.SplashAt()
+    For cue In [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3, Cue.FLOOR_1, Cue.FLOOR_2, Cue.WADE_1,
+                Cue.WADE_2,
+                Cue.CREAK, Cue.SPLASH]
+        Local near = cue == Cue.SPLASH ? road : mill
+        Listener.SetPosition(Vec3(near.x, near.y, near.z + 1.0))
+        scape.Play(cue, door)
+        Local peak = PeakOf(Audio.Mix(rate))
+        Checks("cue {cue As Int} reaches the mix", peak > 0.05 && peak < 0.5)
+    End For
+    // A gull, out over the water, heard from where you stand.
+    Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    scape.Play(Cue.GULL, door)
+    Local gullPeak = PeakOf(Audio.Mix(rate))
+    Checks("a gull reaches the mix", gullPeak > 0.01 && gullPeak < 0.5)
+    Checks("what's outside is on its bus", scape.OutsideOnItsBus())
+    Local works = island.PlaceOf(Spot.WORKS)
+    Checks("a creak's at the mill's works",
+           IsClose(mill.x, works.x, 0.01) && IsClose(mill.z, works.y, 0.01))
+    // Fainter from further.
+    Listener.SetPosition(Vec3(mill.x, mill.y, mill.z + 5.0))
+    scape.Play(Cue.CREAK, door)
+    Local nearPeak = PeakOf(Audio.Mix(rate))
+    Listener.SetPosition(Vec3(mill.x, mill.y, mill.z + 50.0))
+    scape.Play(Cue.CREAK, door)
+    Local farPeak = PeakOf(Audio.Mix(rate))
+    Checks("a creak's fainter from further", nearPeak > 2.0 * farPeak && farPeak >= 0.0)
+    // And to its side.
+    Listener.SetPosition(Vec3(mill.x - 6.0, mill.y, mill.z))
+    scape.Play(Cue.CREAK, door)
+    Local mixed = Audio.Mix(rate)
+    Local leftPeak = 0.0
+    Local rightPeak = 0.0
+    For at = 0 Until mixed.Count / 2
+        leftPeak = Max(leftPeak, Abs(mixed[at * 2]))
+        rightPeak = Max(rightPeak, Abs(mixed[at * 2 + 1]))
+    End For
+    Checks("a creak to your right's on your right", rightPeak > 1.5 * leftPeak)
+    // Nothing's left playing, some seconds after: nothing's looping that shouldn't.
+    For second = 1 To 3
+        Audio.Mix(rate)
+    End For
+    Checks("only the wind and sea play on", Audio.Playing() == 2)
+    // The wheel's where it's drawn, and heard outside.
+    Local wheel = scape.WheelAt()
+    Local drawn = island.WheelAt()
+    Checks("the wheel's heard where it's drawn", IsClose(wheel, drawn, 0.001))
+    // Muffled from inside, on the bus: quieter, and with far less of its highs.
+    scape.SetBeds(1.0)
+    Listener.SetPosition(Vec3(door.x, 5.0, door.y))
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Local outsideMix = Audio.Mix(rate)
+    For step = 1 To 60
+        scape.Surroundings(0.0, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Local insideMix = Audio.Mix(rate)
+    Local lower = 20.0 * Log10((RmsOf(outsideMix) / Max(RmsOf(insideMix), 0.00001)) As Float64)
+    Print("from inside, it's {lower} dB lower")
+    Checks("from inside, it's at least 6 dB lower", lower >= 6.0)
+    Checks("and has less of its highs", HighsOf(outsideMix) > 2.0 * HighsOf(insideMix))
+    // A splash goes through it too.
+    scape.SetBeds(0.0)
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    Listener.SetPosition(Vec3(road.x, road.y, road.z + 1.0))
+    scape.Play(Cue.SPLASH, door)
+    Local openSplash = HighsOf(Audio.Mix(rate))
+    For step = 1 To 60
+        scape.Surroundings(0.0, True, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    scape.Play(Cue.SPLASH, door)
+    Checks("the splash is muffled from inside", openSplash > 2.0 * HighsOf(Audio.Mix(rate)))
+    // Through the door and back, a frame at a time, with no click: no sample's step stands out.
+    scape.SetBeds(1.0)
+    For step = 1 To 60
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        Audio.Mix(735)
+    End For
+    // Over as long as its waves take.
+    Local largestBefore = 0.0
+    For step = 1 To 240
+        scape.Surroundings(0.0, False, 1.0 / 60.0)
+        largestBefore = Max(largestBefore, LargestStep(Audio.Mix(735)))
+    End For
+    Local largestDuring = 0.0
+    For flip In [True, False, True, False]
+        For step = 1 To 30
+            scape.Surroundings(0.0, flip, 1.0 / 60.0)
+            largestDuring = Max(largestDuring, LargestStep(Audio.Mix(735)))
+        End For
+    End For
+    Print("the largest step's {largestBefore}, and {largestDuring} through the door")
+    Checks("the door doesn't click", largestDuring <= 1.5 * largestBefore)
+End Function
+
+// The largest change from a sample to the next on the same channel.
+Function LargestStep(samples: Float[]): Float
+    Local largest = 0.0
+    For at = 2 Until samples.Count
+        largest = Max(largest, Abs(samples[at] - samples[at - 2]))
+    End For
+    Return largest
+End Function
+
+// Opens what a walk draws on, offscreen, and the island.
+Function Opened(): Island Throws GraphicsError, IOError
+    Window.SetHeadless(True)
+    Try Graphics(1280, 720)
+    Try Res.Mount()
+    Return Try Island.Make()
+End Function
+
+// A 3D walk, with nothing saved, as ctest runs one to each ending.
+Function Walked3dBy(walk: String[], lines: String[]): Ending Throws GraphicsError, IOError,
+                                                                    AudioError
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Return Try Walked3d(island, walk, lines, Function(game: Game, doing: String)
+    End Function)
+End Function
+
+// Whether a color's warm, as brass and oiled wood are, and not gray.
+Function IsWarm(pixel: Color32): Bool => (pixel.r As Int) > (pixel.b As Int) + 20
+
+// How bright a color is, adding its channels.
+Function Brightness(pixel: Color32): Int => (pixel.r As Int) + (pixel.g As Int) + (pixel.b As Int)
+
+// The bright 3D walk, saving what you see at each moment that shows something, and looking at what
+// was saved: what's in your hand, what's fitted, the wheel, and the lamp, brighter than dim.
+Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Local saved = 0
+    Local failure = ""
+    Local save = Function(game: Game, name: String): Image?
+        game.View().SetRenderTarget(Null)
+        island.Scene().Render()
+        Try
+            Try Screen.Save(folder / "{name}.png")
+            saved += 1
+            Return Try Screen.ToImage()
+        Catch e As GraphicsError
+            failure = e.Message
+        Catch e As IOError
+            failure = e.Message
+        End Try
+        Return Null
+    End Function
+    Local looksWarm = Function(game: Game, image: Image?, part: Part, what: String)
+        If image != Null
+            Local pixel = PixelOf(game.View(), image, island.PartEntity(part).Position(Space.WORLD))
+            Checks(what, pixel != Null && IsWarm(pixel))
+        End If
+    End Function
+    Local holding = False
+    Local carrying = False
+    Local fitted = False
+    Local lines: String[] = []
+    Local ended = Try Walked3d(island, Walk3dOf("bright") ?? [], lines,
+                               Function(game: Game, doing: String)
+        Local flow = game.Story()
+        If !holding && flow.Held() != Null
+            holding = True
+            looksWarm(game, save(game, "walk_holding"), Part.GEAR, "the gear's seen in your hand")
+        End If
+        If !carrying && flow.PipHolds() != Null
+            carrying = True
+            game.FacePip()
+            save(game, "walk_pip_carrying")
+        End If
+        If !fitted && flow.Fitted(Part.PADDLE)
+            fitted = True
+            Local works = island.PlaceOf(Spot.WORKS)
+            game.Face(works.x, works.y)
+            game.Look(-0.1)
+            looksWarm(game, save(game, "walk_fitting"), Part.PADDLE, "the paddle's seen, fitted")
+        End If
+        If doing == "ended"
+            // From outside, to see the lamp and the wheel.
+            Local view = LitView()
+            game.View().SetPosition(view.0)
+            game.View().PointAt(view.1)
+            Local lit = save(game, "walk_lit")
+            If lit != Null
+                Local wheel = PixelOf(game.View(), lit, island.WheelAt())
+                Checks("the wheel's seen", wheel != Null && IsWarm(wheel))
+                Local lamp = PixelOf(game.View(), lit, island.LampAt())
+                island.LightLamp(False)
+                island.Scene().Render()
+                Try
+                    Local dim = PixelOf(game.View(), Try Screen.ToImage(), island.LampAt())
+                    Checks("the lamp's brighter lit than dim", lamp != Null && dim != Null &&
+                           Brightness(lamp) > Brightness(dim))
+                Catch e As GraphicsError
+                    failure = e.Message
+                End Try
+                island.LightLamp(True)
+            End If
+        End If
+    End Function)
+    If failure != "" Then Throw IOError(IOErrorKind.OTHER, failure)
+    Checks("saved 4 frames of a 3D walk, ended BRIGHT", saved == 4 && ended == Ending.BRIGHT)
+End Function
+
+// One frame of the game for a person, which doesn't go on while the window's not in front.
+Function Moved(game: Game, controls: Controls, seconds: Float): Bool
+    If !Window.Focused() Then Return False
+    game.Step(controls, seconds)
+    Return True
+End Function
+
+// Walks you to (`toX`, `toZ`), by W, within a meter, at most `steps` steps.
+Function WalkedTo(game: Game, controls: Controls, toX: Float, toZ: Float,
+                  steps: Int) Throws GraphicsError
+    Try Simulate.KeyDown(Key.W)
+    For step = 1 To steps
+        Local here = game.Location()
+        Local dx = toX - here.x
+        Local dz = toZ - here.y
+        If dx * dx + dz * dz < 1.0 Then Break
+        game.Face(toX, toZ)
+        Flip(False)
+        game.Step(controls, 0.1)
+    End For
+    Try Simulate.KeyUp(Key.W)
+    Flip(False)
+End Function
+
+// Holds `key` down for five steps, and gives how far that went.
+Function WentBy(game: Game, controls: Controls, key: Key): Vec2 Throws GraphicsError
+    Local from = game.Location()
+    Try Simulate.KeyDown(key)
+    For step = 1 To 5
+        Flip(False)
+        game.Step(controls, 0.1)
+    End For
+    Try Simulate.KeyUp(key)
+    Flip(False)
+    Local to = game.Location()
+    Return Vec2(to.x - from.x, to.y - from.y)
+End Function
+
+// How the game feels, a thing at a time, offscreen: its keys, mouse, and gamepad; what E says with
+// nothing near; a part in your hand against a wall; the clock when the window's not in front; and a
+// second Game on one Island.
+Function Felt() Throws GraphicsError, IOError, InputError
+    Local island = Try Opened()
+    Defer EndGraphics()
+    Defer Assets.StopWatching()
+    Defer island.Free()
+    Local controls = Controls()
+    Local lines: String[] = []
+    Local game = Game(island, Function(line: String)
+        lines.Add(line)
+    End Function)
+    // Pip's head turns to you, and it blinks, as it stands.
+    For step = 1 To 41
+        Flip(False)
+        game.Step(controls, 0.1)
+    End For
+    Local turned0 = island.PipHeadTurned()
+    Checks("Pip's head turns to you", Abs(turned0.y) > 0.1)
+    Checks("Pip blinks", island.PipBlink() > 0.5)
+    // Facing out of the door, +Z, inside the mill, whose right is -X.
+    Local ahead = Try WentBy(game, controls, Key.W)
+    Checks("W goes ahead", ahead.y > 1.0 && Abs(ahead.x) < 0.01)
+    Local back = Try WentBy(game, controls, Key.S)
+    Checks("S goes back", back.y < -1.0 && Abs(back.x) < 0.01)
+    Local right = Try WentBy(game, controls, Key.D)
+    Checks("D goes right", right.x < -1.0 && Abs(right.y) < 0.01)
+    Local left = Try WentBy(game, controls, Key.A)
+    Checks("A goes left", left.x > 1.0 && Abs(left.y) < 0.01)
+    // The mouse, to the right, turns you right, and down, down, as far as it goes.
+    Local yaw = game.Yaw()
+    Try Simulate.MouseMotion(100.0, 0.0)
+    Flip(False)
+    game.Step(controls, 0.1)
+    Checks("the mouse going right turns you right", IsClose(game.Yaw(), yaw - 0.3, 0.001))
+    Try Simulate.MouseMotion(0.0, 10000.0)
+    Flip(False)
+    game.Step(controls, 0.1)
+    Checks("the mouse going down looks down, as far as it goes", IsClose(game.Pitch(), -1.4, 0.001))
+    Try Simulate.MouseMotion(0.0, -20000.0)
+    Flip(False)
+    game.Step(controls, 0.1)
+    Checks("and up, as far as it goes", IsClose(game.Pitch(), 1.4, 0.001))
+    game.Look(0.0)
+    // A stick turns you by the second, however many steps they are.
+    Local pad = Try Simulate.ConnectGamepad()
+    pad.SetAxis(GamepadAxis.RIGHT_X, 1.0)
+    Flip(False)
+    Local turned: Float[] = []
+    For rate In [30, 120]
+        Local from = game.Yaw()
+        For step = 1 To rate
+            game.Step(controls, 1.0 / (rate As Float))
+        End For
+        turned.Add(from - game.Yaw())
+    End For
+    pad.SetAxis(GamepadAxis.RIGHT_X, 0.0)
+    pad.SetAxis(GamepadAxis.RIGHT_Y, -1.0)
+    Flip(False)
+    game.Step(controls, 0.1)
+    Checks("a stick looks up", game.Pitch() > 0.1)
+    pad.SetAxis(GamepadAxis.RIGHT_Y, 0.0)
+    Flip(False)
+    Checks("a stick turns you the same at 30 and at 120 steps a second",
+           turned[0] > 1.0 && IsClose(turned[0], turned[1], 0.01))
+    // You stand on what's drawn, where it's between its grid's points too.
+    Local onDrawn = True
+    For step = 0 To 40
+        Local x = MAIN_X + 20.0 + (step As Float) * 0.77
+        Local z = 3.3 + (step As Float) * 0.13
+        Local drawn = island.GroundDrawnAt(x, z)
+        If drawn == Null || Abs(island.FloorAt(x, z) - drawn) > 0.0001 Then onDrawn = False
+    End For
+    Checks("what you stand on is what's drawn", onDrawn)
+    // With nothing near, E says so.
+    Local door = DoorSpot()
+    Try WalkedTo(game, controls, door.x, door.y, 80)
+    Try Simulate.PressKey(Key.E)
+    Flip(False)
+    game.Step(controls, 0.1)
+    Checks("at the door, E says there's nothing near",
+           lines[lines.Count - 1].EndsWith("there's nothing within reach"))
+    // The gear in hand, into a wall, and it's seen this side of it.
+    Local gear = GearSpot()
+    Try WalkedTo(game, controls, gear.x, gear.y, 100)
+    Try Simulate.PressKey(Key.E)
+    Flip(False)
+    game.Step(controls, 0.1)
+    Checks("E takes the gear", game.Story().Held() == Part.GEAR)
+    Try WalkedTo(game, controls, door.x, door.y, 100)
+    Try WalkedTo(game, controls, MAIN_X, 0.0, 60)
+    game.Face(MAIN_X, -100.0)
+    Local into = Vec2(0.0, 0.0)
+    For push = 1 To 4
+        into = Try WentBy(game, controls, Key.W)
+    End For
+    Checks("the wall stops you", Abs(into.y) < 0.01)
+    island.Scene().Render()
+    Local image = Try Screen.ToImage()
+    Local held = PixelOf(game.View(), image, island.PartEntity(Part.GEAR).Position(Space.WORLD))
+    Checks("what's in your hand is seen against a wall", held != Null && IsWarm(held))
+    // Not in front, the tide waits.
+    Try Simulate.BlurWindow()
+    Flip(False)
+    Local clock = game.Story().Clock()
+    Checks("not in front, it doesn't step", !Moved(game, controls, 0.1))
+    Checks("and the clock stands still", game.Story().Clock() == clock)
+    Try Simulate.FocusWindow()
+    Flip(False)
+    Checks("in front, it does", Moved(game, controls, 0.1) && game.Story().Clock() > clock)
+    // Another Game on it, with the first's gear back where it lay.
+    game.Free()
+    Local second = Game(island, Function(line: String)
+    End Function)
+    Checks("another Game begins with every part lying",
+           island.PartEntity(Part.GEAR).Parent() == Null)
+    Flip(False)
+    second.Step(controls, 0.1)
+    second.Free()
+End Function
+
+// The game, in a window, for a person: WASD and the mouse, E, Q, and Escape.
+Function Played() Throws GraphicsError, IOError, InputError, AudioError
+    Try Graphics(1280, 720)
+    Defer EndGraphics()
+    Window.SetTitle("Slack Water")
+    Try SetMouseRelative(True)
+    Frame.SetLimit(60)
+    Try Res.Mount()
+    Defer Assets.StopWatching()
+    Local island = Try Island.Make()
+    Defer island.Free()
+    Local controls = Controls()
+    Local last = ""
+    Local game = Game(island, Function(line: String)
+        last = line
+    End Function)
+    Defer game.Free()
+    // A machine with no sound still plays it, in silence.
+    Local device = AudioDevice.DEFAULT
+    Try
+        Try Audio.Start(device)
+    Catch e As AudioError
+        PrintError("no sound: {e.Message}")
+        Try Audio.Start(AudioDevice.SILENT)
+    End Try
+    Defer Audio.Stop()
+    Local scape = Try Soundscape.Make(game, island)
+    Defer scape.Free()
+    Local font = Font.BuiltIn(20.0)
+    While !Window.Closed() && !KeyHit(Key.ESCAPE)
+        Flip()
+        Local seconds = FrameStep(Frame.Delta()) As Float
+        scape.Update(game, Moved(game, controls, seconds) ? seconds : 0.0)
+        If Screen.Texture() == Null Then Continue
+        island.Scene().Render()
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(236, 232, 220, 255))
+        Local flow = game.Story()
+        canvas.DrawText(font, flow.ClockLine(), 24, 20)
+        canvas.DrawText(font, Untimed(last), 24, 48)
+        canvas.DrawText(font, game.Prompt(), 24, 680)
+    End While
+End Function
+
+Local arguments = Process.Arguments()
+Const USAGE = "usage: slack_water [--walk <bright|dim|dark> [<kept>] | --walk3d " +
+              "<bright|dim|dark|cut|swept|wing|far_end> [<kept>] | --feel | --hear | " +
+              "--frames <folder> | --check <folder> | --match <made> <kept>]"
+If arguments.Count >= 2 && arguments.Count <= 3 && arguments[0] == "--walk"
+    Local walk = WalkOf(arguments[1])
+    If walk == Null
+        PrintError(USAGE)
+        Process.Exit(2)
+    Else
+        Local lines: String[] = []
+        Local ended = Try Walked(walk, lines, Function(flow: Flow)
+        End Function)
+        Print("ended {ended}")
+        If arguments.Count == 3 Then Try Pinned(lines, Path(arguments[2]), True)
+    End If
+ElseIf arguments.Count >= 2 && arguments.Count <= 3 && arguments[0] == "--walk3d"
+    Local walk = Walk3dOf(arguments[1])
+    If walk == Null
+        PrintError(USAGE)
+        Process.Exit(2)
+    ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Local lines: String[] = []
+        Print("ended {Try Walked3dBy(walk, lines)}")
+        If arguments.Count == 3 Then Try Pinned(lines, Path(arguments[2]), False)
+    End If
+ElseIf arguments.Count == 1 && arguments[0] == "--hear"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try Listened()
+    End If
+ElseIf arguments.Count == 1 && arguments[0] == "--feel"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try Felt()
+    End If
+ElseIf arguments.Count == 3 && arguments[0] == "--match"
+    Try Matched(Path(arguments[1]), Path(arguments[2]))
+ElseIf arguments.Count == 2 && arguments[0] == "--check"
+    Try Checked(Path(arguments[1]))
+ElseIf arguments.Count == 2 && arguments[0] == "--frames"
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+    Else
+        Try Framed(Path(arguments[1]))
+        Try SaveWalk(Path(arguments[1]))
+    End If
+ElseIf arguments.Count == 0
+    Try Played()
+Else
+    PrintError(USAGE)
+    Process.Exit(2)
+End If
+If failed Then Process.Exit(1)
