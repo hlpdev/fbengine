@@ -128,6 +128,7 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     Selecting(editor, camera)
     Expect(HasRows(editor, own + " Projection FogMode ClearColor FogColor FieldOfView " +
                    "OrthographicHeight FogDensity Order ClearsColor ClearsDepth Range FogRange"))
+    Expect(HasRows(editor, "Tonemap Exposure Gamma Hdr"))
     Local mesh = Mesh(Geometry.Cube())
     mesh.SetMaterial(Material(Color(1, 0, 0)))
     Selecting(editor, mesh)
@@ -138,6 +139,7 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     Expect(HasRows(editor,
                    own +
                    " Shading Blend Shininess AlphaCutoff VertexColors Wireframe TwoSided Fogged"))
+    Expect(HasRows(editor, "Emissive NormalScale OcclusionStrength"))
     Local sprite = Sprite(Material())
     Selecting(editor, sprite)
     Expect(HasRows(editor, own + " ViewMode SpriteScale Handle SpriteRotation Shading"))

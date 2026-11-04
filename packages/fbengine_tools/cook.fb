@@ -409,9 +409,11 @@ Public Final Class Cooker
     /// reads, this package's version, or a shader's fbengine sources change, and what no file uses any
     /// more is taken out of it, so two
     /// cooks at once can't share one. A native change to the cooker at one version isn't noticed:
-    /// an engine developer's is taken out by hand.
+    /// an engine developer's is taken out by hand. With a `version`, the game's, the pak's stamped with
+    /// it, for Assets.MountRelease to refuse one of another.
     @MainThread
-    Public Static Method CookFolder(source: Path, pak: Path, cache: Path? = Null) Throws IOError
+    Public Static Method CookFolder(source: Path, pak: Path, cache: Path? = Null,
+                                    version: String = "") Throws IOError
         cooks += 1
         Local place = "res://fbengine-cooking-{cooks}"
         Assets.MountFolder(place, source)
@@ -530,6 +532,13 @@ Public Final Class Cooker
             End If
             If !fbe_cook_pak_add(written, file.1, from.Text) Then Throw ToolsFailed(file.0.Text)
         End For
+        If version != ""
+            Local stamp = scratch.Path / "version.txt"
+            Try File.WriteText(stamp, version)
+            If !fbe_cook_pak_add(written, GAME_VERSION_FILE, stamp.Text)
+                Throw ToolsFailed(pak.Text)
+            End If
+        End If
         If !fbe_cook_pak_finish(written) Then Throw ToolsFailed(pak.Text)
         If cache != Null && Dir.Exists(cache)
             For entry In Try Dir.Entries(cache)

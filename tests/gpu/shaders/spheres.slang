@@ -11,7 +11,7 @@ struct Spheres
     /// The light's direction, unit length, and whether there's an environment to read.
     float4 toLight;
     /// What the light gives, and the normal map's tangent's w: +X its tangent, 0 for no normal map,
-    /// and 2 for a tangent of no length.
+    /// 2 for a tangent of no length, and 3 for one whose x is the environment's intensity.
     float4 radiance;
     /// The base color, and the metallic if it isn't below 0.
     float4 baseColor;
@@ -45,7 +45,7 @@ float4 fragmentMain(float4 position : SV_Position) : SV_Target
     {
         return float4(0.0);
     }
-    Surface surface;
+    PbrSurface surface;
     surface.baseColor = spheres.baseColor.rgb;
     surface.metallic = spheres.baseColor.a >= 0.0 ? spheres.baseColor.a : which.y / max(count.y - 1.0, 1.0);
     surface.roughness = spheres.grid.x >= 0.0 ? spheres.grid.x : which.x / max(count.x - 1.0, 1.0);
@@ -54,7 +54,11 @@ float4 fragmentMain(float4 position : SV_Position) : SV_Target
     surface.emissive = spheres.emissive.rgb;
     if (spheres.radiance.w != 0.0)
     {
-        const float4 tangent = spheres.radiance.w == 2.0 ? float4(0.0, 0.0, 0.0, 1.0) : float4(1.0, 0.0, 0.0, spheres.radiance.w);
+        float4 tangent = spheres.radiance.w == 2.0 ? float4(0.0, 0.0, 0.0, 1.0) : float4(1.0, 0.0, 0.0, spheres.radiance.w);
+        if (spheres.radiance.w == 3.0)
+        {
+            tangent = float4(spheres.environment.intensity, 0.0, 0.0, 1.0);
+        }
         surface.normal = normalFromMap(surface.normal, tangent, spheres.texel.xyz, spheres.texel.w);
     }
     const float3 view = float3(0.0, 0.0, 1.0);

@@ -932,6 +932,7 @@ Public Final Class SceneInspector Extends Widget
         AddChoices<T, FogMode>(things, alive, seen)
         AddChoices<T, Shading>(things, alive, seen)
         AddChoices<T, Blend>(things, alive, seen)
+        AddChoices<T, Tonemap>(things, alive, seen)
         For each In Pairs<T, Color>(things, alive)
             If seen.Add(each.Name) Then Added(ColorRow(each, history))
         End For

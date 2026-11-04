@@ -253,7 +253,16 @@ built from fbengine's own features (lightmapped and fogged rooms, cameras into t
 cameras a frame, swept collisions with sliding, picks and in-view tests, meshes built in code with
 two UV sets, skinned animation with bones under game control, streamed and positional sound,
 video, a console), so every feature the remake will need is known to work; and a modern
-showcase game. Planned when E13 lands. The remake itself is a separate, later project.
+showcase game. The remake itself is a separate, later project.
+
+1. The samples, under examples/proof/, whose README maps each folder to its items. Each proves its
+   item's named things with numbers worked out apart from the code, on all three systems; what a
+   game owns (Blitz's random generator, the .rmesh reader, a map from a seed) is the sample's own
+   code, never the engine's.
+2. A camera that draws in stored values, off by default, as DirectX 7 blended them: what items 7,
+   12, and 27 mean by the look Blitz had.
+3. A real display's modes, in a test only CI runs, as nothing may open a window on the user's PC.
+4. Slack Water, the showcase, in examples/slack_water and docs/slack-water.md.
 
 ## Lanes
 
