@@ -1965,7 +1965,18 @@ watched 300 frames\r?\n$")
   # 64 channels at 44100 Hz under a game's load, within the budget.
   add_test(NAME examples.audio_stress
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress")
-  set_tests_properties(examples.audio_stress PROPERTIES TIMEOUT 120
+  # What it holds the game's calls to still fails what really is slow, each way, every time.
+  add_test(NAME examples.audio_stress_stalled_every_frame
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress"
+                   -- --stall-every-frame)
+  set_tests_properties(examples.audio_stress_stalled_every_frame PROPERTIES TIMEOUT 240
+                       PASS_REGULAR_EXPRESSION "run 3: the game's calls take more than audio's 0[.]5 ms a frame\r?\n.*panic: the game's calls take more than")
+  add_test(NAME examples.audio_stress_stalled_now_and_then
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/audio_stress"
+                   -- --stall-now-and-then)
+  set_tests_properties(examples.audio_stress_stalled_now_and_then PROPERTIES TIMEOUT 240
+                       PASS_REGULAR_EXPRESSION "run 3: the game's calls stalled in 60 of 600 frames\r?\n.*panic: the game's calls stalled")
+  set_tests_properties(examples.audio_stress PROPERTIES TIMEOUT 240
                        PASS_REGULAR_EXPRESSION "600 frames on no device, up to 64 channels at once\r?\n.*within the budget\r?\n$")
   # What fbengine_audio panics for with fbengine's entities, each by a run of tests/audio/panics.
   foreach(case IN ITEMS "emitter-follows-freed;an Emitter can't follow a freed Pivot"
