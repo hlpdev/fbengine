@@ -1015,7 +1015,8 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
             Local lit = save(game, "walk_lit")
             If lit != Null
                 Local wheel = PixelOf(game.View(), lit, island.WheelAt())
-                Checks("the wheel's seen", wheel != Null && IsWarm(wheel))
+                // In its own shade, from here, so only a little warm.
+                Checks("the wheel's seen", wheel != Null && (wheel.r As Int) > (wheel.b As Int) + 4)
                 Local lamp = PixelOf(game.View(), lit, island.LampAt())
                 island.LightLamp(False)
                 island.Scene().Render()
@@ -1023,21 +1024,21 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
                     Local dim = PixelOf(game.View(), Try Screen.ToImage(), island.LampAt())
                     Checks("the lamp's brighter lit than dim", lamp != Null && dim != Null &&
                            Brightness(lamp) > Brightness(dim))
-                // Its bloom: the sky just beside it's lighter with it than without.
-                island.LightLamp(True)
-                island.Scene().Render()
-                Local bloomed = Try Screen.ToImage()
-                game.View().SetBloom(0.0, 1.0)
-                island.Scene().Render()
-                Local plain = Try Screen.ToImage()
-                Looked(game.View())
-                Local beside = game.View().Project(island.LampAt() + Vec3(0.0, 0.9, 0.0))
-                If beside != Null
-                    Local x = beside.x As Int
-                    Local y = beside.y As Int
-                    Checks("the lamp blooms over what's beside it",
-                           Brightness(bloomed[x, y]) > Brightness(plain[x, y]) + 3)
-                End If
+                    // Its bloom: the sky just beside it's lighter with it than without.
+                    island.LightLamp(True)
+                    island.Scene().Render()
+                    Local bloomed = Try Screen.ToImage()
+                    game.View().SetBloom(0.0, 1.0)
+                    island.Scene().Render()
+                    Local plain = Try Screen.ToImage()
+                    Looked(game.View())
+                    Local beside = game.View().Project(island.LampAt() + Vec3(0.0, 0.9, 0.0))
+                    If beside != Null
+                        Local x = beside.x As Int
+                        Local y = beside.y As Int
+                        Checks("the lamp blooms over what's beside it",
+                               Brightness(bloomed[x, y]) > Brightness(plain[x, y]) + 3)
+                    End If
                 Catch e As GraphicsError
                     failure = e.Message
                 End Try

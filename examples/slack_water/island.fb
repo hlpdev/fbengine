@@ -169,6 +169,12 @@ Function BuildMill(held: Texture[]): (Pivot, Mesh, Mesh) Throws IOError
     wheel.SetPosition(Vec3(8.0, 2.4, 0.0))
     wheel.SetRotation(0.0, 0.0, ToRadians(90.0))
     wheel.SetScale(Vec3(3.0, 0.5, 3.0))
+    // A lantern over the works, so what's fitted can be seen, as the walls keep the sky out.
+    Local lantern = Light(LightType.POINT, mill)
+    lantern.SetColor(Color(1.0, 0.72, 0.42))
+    lantern.SetIntensity(30.0)
+    lantern.SetRange(14.0)
+    lantern.SetPosition(Vec3(0.5, 3.8, 0.0))
     // The lamp on the roof, unlit until the water's back.
     Local lamp = Mesh(Geometry.Sphere(10), mill)
     lamp.SetMaterial(brass)
