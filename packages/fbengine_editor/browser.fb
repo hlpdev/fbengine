@@ -11,6 +11,7 @@ Import std.text
 Import std.time
 Import fbengine
 Import fbengine_ui
+Import "./component"
 Import "./history"
 Import "./project"
 Import "./scene"
@@ -995,8 +996,17 @@ Final Class AssetRow Extends Widget
 End Class
 
 /// The scene in `edited` written to `file`, whole or not at all: what isn't the editor's. It's an
-/// IOError for what a scene can't hold, or the OS won't.
+/// IOError for what a scene can't hold, or the OS won't. What ComponentsOf gives is what's saved of
+/// each entity's components, in their names' order.
 Public Function SaveEdited(edited: EditedScene, file: Path) Throws IOError
+    For entity In edited.Entities()
+        For name In entity.ComponentNames()
+            entity.SetComponent(name, Null)
+        End For
+        For item In ComponentsOf(entity)
+            entity.SetComponent(item.Kind, item.Values)
+        End For
+    End For
     Try Scene.Save(file, edited.SiblingsOf(Null))
 End Function
 
@@ -1008,6 +1018,15 @@ Public Function LoadEdited(path: String): (EditedScene, String[]) Throws IOError
     Local edited = EditedScene()
     Try
         Local opened = Try Scene.Open(path)
+        // As data, as the editor has them; a kind it doesn't know is kept as it is.
+        For entity In edited.Entities()
+            Local items: ComponentData[] = []
+            For name In entity.ComponentNames()
+                items.Add(ComponentData(name, entity.Component(name) ?? Value()))
+                entity.SetComponent(name, Null)
+            End For
+            If items.Count > 0 Then SetComponentsOf(entity, items)
+        End For
         Return (edited, opened.Problems)
     Catch error As IOError
         edited.Free()

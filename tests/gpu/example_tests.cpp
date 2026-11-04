@@ -81,8 +81,12 @@ TEST_CASE("the editor's frames match their golden images", "[.example]") {
              "turn",
              "scale",
              "inspector",
+             "inspector_mesh",
              "menu",
              "dialog",
+             "tree_found",
+             "assets",
+             "output",
          }) {
         INFO("frame " << frame);
         const std::filesystem::path path = std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /

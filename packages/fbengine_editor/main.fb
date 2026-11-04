@@ -58,7 +58,7 @@ End Function
 
 // What a person would do, one each second or so, around and around.
 Function Doing(editor: Editor, scene: DemoScene, turn: Int)
-    Select turn % 12
+    Select turn % 16
         Case 0
             editor.Edited.SelectOnly(scene.Crate)
         Case 1
@@ -81,6 +81,15 @@ Function Doing(editor: Editor, scene: DemoScene, turn: Int)
             editor.Actions.Run("tree.duplicate")
         Case 10
             editor.Actions.Run("edit.undo")
+        Case 11
+            editor.Edited.SelectOnly(scene.Hinge)
+            editor.Edits.Commit(AddComponentEdit([scene.Hinge], editor.Kinds.Kinds()[0]))
+        Case 12
+            editor.Actions.Run("edit.undo")
+        Case 13
+            editor.Actions.Run("view.assets")
+        Case 14
+            editor.Actions.Run("view.output")
         Default
             editor.Edited.SelectOnly(Null)
     End Select
@@ -101,8 +110,8 @@ Function Watched(arguments: String[]) Throws IOError, GraphicsError
     Local count = 0
     While !editor.Quitting() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         // By the frame, however fast, so each is seen; a test's are all it has.
-        If count % (frames > 0 ? 3 : 60) == 0 Then Doing(editor, scene,
-                                                         count / (frames > 0 ? 3 : 60))
+        If count % (frames > 0 ? 2 : 60) == 0 Then Doing(editor, scene,
+                                                         count / (frames > 0 ? 2 : 60))
         If count == Asked(arguments, "--press-at") && count > 0 Then Try Simulate.PressKey(Key.ESCAPE)
         If count == Asked(arguments, "--close-at") && count > 0 Then Try Simulate.CloseWindow()
         editor.Step()
@@ -175,6 +184,8 @@ Function Saving(to: String) Throws IOError, GraphicsError
     editor.Edits.Commit(AddComponentEdit([scene.Hinge], editor.Kinds.Kinds()[0]))
     editor.Edited.SelectOnly(scene.Hinge)
     Try Saved(editor, to, "inspector")
+    editor.Edited.SelectOnly(scene.Crate)
+    Try Saved(editor, to, "inspector_mesh")
     editor.Docked.Hide("inspector")
     editor.Docked.Show("assets")
     editor.Edited.SelectOnly(Null)
@@ -195,6 +206,39 @@ Function Saving(to: String) Throws IOError, GraphicsError
     // Without its field's cursor, which blinks.
     editor.Shown.Focus(Null)
     Try Saved(editor, to, "dialog")
+    Try Simulate.PressKey(Key.ESCAPE)
+    editor.Step()
+    If editor.ShowingDialog() != Null Then Panic("the dialog's still there")
+    editor.Actions.Run("view.reset")
+    editor.Step()
+    // What's found, in the tree.
+    editor.Tree.FindField().SetText("l")
+    editor.Step()
+    editor.Shown.Focus(Null)
+    Try Saved(editor, to, "tree_found")
+    editor.Tree.FindField().SetText("")
+    // The files, a picture's thumbnail come.
+    editor.Docked.Activate("assets")
+    editor.Files.SetOpen("res://levels", True)
+    Local waited = 0
+    While !editor.Files.ThumbDone("res://checks.png") || editor.Files.ThumbOf("res://checks.png") == Null
+        waited += 1
+        If waited > 1000 Then Panic("the picture's thumbnail never came")
+        editor.Step()
+    End While
+    editor.Files.Choose("res://notes.txt")
+    Try Saved(editor, to, "assets")
+    // What a run says, of one that can't start, so nothing's left over.
+    editor.Docked.Activate("output")
+    Local open = editor.Current()
+    If open == Null Then Panic("there's no project")
+    editor.Run.Fb = "no such program"
+    editor.Run.Start(open, "res://level.scene")
+    editor.Run.Log.Clear()
+    For line In ["Building demo…", "   Compiling demo v0.1.0", "read 1, Crate at (1.5, 2, -3)"]
+        editor.Run.Log.Say(line)
+    End For
+    Try Saved(editor, to, "output")
     editor.Finish()
     Print("saved")
 End Function

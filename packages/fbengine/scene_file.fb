@@ -10,6 +10,7 @@ Import std.os
 Import std.text
 Import "./camera"
 Import "./collision"
+Import "./components"
 Import "./entity"
 Import "./geometry"
 Import "./light"
@@ -395,6 +396,8 @@ Class Reading
     Field Roots: Entity[] = []
     Field Tolerant: Bool
     Field Problems: String[] = []
+    // What's to be attached once all's made: which, where it's from, its kind, and what it has.
+    Field Attaching: (Entity, String, String, Value)[] = []
 
     New(document: Value, tolerant: Bool) Throws IOError
         Tolerant = tolerant
@@ -425,6 +428,15 @@ Class Reading
             each.Free()
         End For
         Models.Clear()
+    End Method
+
+    // Each component on what it's for, as a game has them, and it's what can't be that's wrong.
+    Method Attached() Throws IOError
+        For each In Attaching
+            Local entity, path, kind, values = each
+            Local said = Components.Attach(entity, kind, values)
+            If said != Null Then Throw Wrong("{path}: its {kind}: {said}")
+        End For
     End Method
 
     // What it had made, for a file that couldn't be finished.
@@ -705,7 +717,9 @@ Class Reading
         If components != Null
             Try Must(components.IsObject, path, "components", "is a table")
             For key In components.Keys()
-                made.SetComponent(key, components[key])
+                Local values = components[key] ?? Value()
+                made.SetComponent(key, values)
+                If !Tolerant Then Attaching.Add((made, path, key, values))
             End For
         End If
         Local mesh = made As? Mesh
@@ -956,7 +970,7 @@ End Class
 /// vertices are a line to each array of them, so two edits of those don't merge.
 ///
 /// A scene holds Pivots, Meshes, Lights, Cameras, and Sprites, with what each is set to, and each one's
-/// components, whatever they're for; a Mesh by what it's made of: a file's mesh, as a model's that
+/// components, which Load puts on it by Components.Attach; a Mesh by what it's made of: a file's mesh, as a model's that
 /// hasn't changed since it loaded, by its res:// path and number; built in, as Geometry.Cube's is; or
 /// else by its vertices, in the file. What's drawn in a Material by a table of it, its textures by the
 /// res:// files they're from. A Skin and a game's own SetData aren't saved, so a model's skinned Mesh
@@ -1018,8 +1032,10 @@ Public Final Class Scene
     End Method
 
     /// The scene in the file at `path`, a res:// path, made under `parent` or at the top of the current
-    /// World, giving what's at its top in order. It's an IOError for a file that can't be read, isn't
-    /// a scene, or names what can't be found, all that it had made freed.
+    /// World, giving what's at its top in order, each entity's components attached, as Entity.Data
+    /// gives them, so a game adds its kinds to Components first. It's an IOError for a file that can't
+    /// be read, isn't a scene, names what can't be found, or has a component that can't be attached,
+    /// which it names with its entity, all that it had made freed.
     @MainThread Public Static Method Load(path: String,
                                           parent: Entity? = Null): Entity[] Throws IOError
         Return Try FromText(Try Assets.ReadText(path), parent)
@@ -1033,7 +1049,8 @@ Public Final Class Scene
 
     /// The scene in the file at `path`, as an editor wants it: as Load, but a texture or model that
     /// can't be loaded stands in as a plain one, keeping its reference for saving again, and is said
-    /// in Problems. What's wrong with the file itself is still an IOError.
+    /// in Problems, and components stay what Entity.Component gives, attached to nothing, as an editor
+    /// has no game's kinds. What's wrong with the file itself is still an IOError.
     @MainThread Public Static Method Open(path: String,
                                           parent: Entity? = Null): OpenedScene Throws IOError
         Return Try Reading_(Try Assets.ReadText(path), parent, True)
@@ -1056,6 +1073,7 @@ Public Final Class Scene
             For table In Try Items(document, "entity", "the file")
                 Try reading.Entity(table)
             End For
+            If !tolerant Then Try reading.Attached()
         Catch error As IOError
             reading.Undone()
             Throw error

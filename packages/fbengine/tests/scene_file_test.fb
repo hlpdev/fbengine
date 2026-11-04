@@ -539,7 +539,12 @@ Function ComponentsAreKeptAndStrayKeysRefuseTheSave() Throws IOError
     Expect(text.Contains("[entity.components.body]\nmass = 2.5\n"), text)
     Local again = Fresh()
     Defer again.Free()
-    Local read = Try Scene.FromText(text)
+    Local folder = Try TempDir()
+    Try File.WriteText(folder.Path / "kept.scene", text)
+    Assets.MountFolder("res://kept", folder.Path)
+    Defer Assets.Unmount("res://kept")
+    // As an editor reads it, with none of these kinds known.
+    Local read = (Try Scene.Open("res://kept/kept.scene")).Roots
     Expect(read[0].Component("anything")?.AsString() == "at all")
     Local kept = read[0].Component("body")
     If kept == Null Then Panic("its component")
@@ -550,6 +555,90 @@ Function ComponentsAreKeptAndStrayKeysRefuseTheSave() Throws IOError
     Local error = ExpectThrows<IOError>(Scene.Text(strays))
     Expect((error?.Message ?? "").Contains("entity: its file says future, intensity"),
            error?.Message ?? "")
+End Function
+
+Enum Swing
+    INWARD
+    OUTWARD
+End Enum
+
+Class Door
+    @Limits(0, 10)
+    Public Field Speed: Float = 2.5
+    Public Field Label: String = "front"
+    Public Field Way: Swing = Swing.INWARD
+End Class
+
+Class Latch
+    Public Field Stuck: Bool = False
+End Class
+
+Const WITH_A_DOOR = "format = 1\n[[entity]]\npath = \"gate\"\nkind = \"PIVOT\"\n[[entity]]\npath = \"gate/leaf\"\nkind = \"PIVOT\"\n[entity.components.Door]\nSpeed = 4.0\nWay = \"OUTWARD\"\n[entity.components.Latch]\nStuck = true\n"
+
+// A game's Load puts each on what it's for, what's left out being what a new one has, and what's read
+// is what's written back.
+@Test
+Function ALoadedSceneHasItsComponentsAttached() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Door>("Door")
+    Components.Add<Latch>("Latch")
+    Local read = Try Scene.FromText(WITH_A_DOOR)
+    Local gate = read[0]
+    Expect(gate.Data<Door>() == Null)
+    Local leaf = gate.Child(0)
+    Local door = leaf.Data<Door>()
+    If door == Null Then Panic("its door")
+    Expect(door.Speed == 4 && door.Way == Swing.OUTWARD && door.Label == "front")
+    Expect(leaf.Data<Latch>()?.Stuck == True)
+    Expect(leaf.ComponentNames() == ["Door", "Latch"])
+    Local again = Fresh()
+    Defer again.Free()
+    Local more = Try Scene.FromText(Try Scene.Text(read))
+    Expect((more[0].Child(0).Data<Door>()?.Speed ?? 0) == 4)
+End Function
+
+// What can't be attached is an error that names its entity and kind, and leaves nothing.
+@Test
+Function WhatCantBeAttachedIsRefusedAndLeavesNothing()
+    Local world = Fresh()
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Door>("Door")
+    For wrong In [("Latch", "Stuck = true", "there's no kind of component called Latch"),
+                  ("Door", "Speed = 99.0", "Speed can't be 99"),
+                  ("Door", "Way = \"SIDEWAYS\"", ""),
+                  ("Door", "Label = 3", "")]
+        Local kind, line, says = wrong
+        Local text = "format = 1\n[[entity]]\npath = \"first\"\nkind = \"PIVOT\"\n[[entity]]\npath = \"first/leaf\"\nkind = \"PIVOT\"\n[entity.components.{kind}]\n{line}\n"
+        Local error = ExpectThrows<IOError>(Scene.FromText(text))
+        Local message = error?.Message ?? ""
+        Expect(error?.Kind == IOErrorKind.INVALID_DATA, message)
+        Expect(message.Contains("first/leaf: its {kind}: ") && message.Contains(says), message)
+        Expect(world.Roots().Count == 0, "{kind} left {world.Roots().Count}")
+    End For
+End Function
+
+// An editor has none of a game's kinds, and what it reads isn't refused for that, nor attached.
+@Test
+Function OpeningASceneAttachesNothing() Throws IOError
+    Local world = Fresh()
+    Defer world.Free()
+    Local folder = Try TempDir()
+    Try File.WriteText(folder.Path / "door.scene", WITH_A_DOOR)
+    Assets.MountFolder("res://doors", folder.Path)
+    Defer Assets.Unmount("res://doors")
+    Components.Clear()
+    Defer Components.Clear()
+    Local unknown = Try Scene.Open("res://doors/door.scene")
+    Expect(unknown.Roots[0].Child(0).ComponentNames() == ["Door", "Latch"])
+    Components.Add<Door>("Door")
+    Local known = Try Scene.Open("res://doors/door.scene")
+    Expect(known.Roots[0].Child(0).Data<Door>() == Null)
+    Expect(known.Roots[0].Child(0).Component("Door")?.Path("Speed")?.AsDouble() == 4)
 End Function
 
 // What's been left out, each away from what it is at first.

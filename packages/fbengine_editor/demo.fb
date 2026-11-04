@@ -2,6 +2,7 @@
 // golden images are of, so neither needs a game.
 
 Import std.core
+Import std.image
 Import std.io
 Import std.math
 Import fbengine
@@ -39,10 +40,19 @@ Public Struct DemoScene
     Public Field Hinge: Entity
 End Struct
 
-/// Makes a project in `folder` that needs nothing.
+/// Makes a project in `folder` that needs nothing, with some files to show.
 Public Function MakeDemoProject(folder: Path) Throws IOError
-    Try Dir.CreateAll(folder)
+    Try Dir.CreateAll(folder / "assets" / "levels")
     Try File.WriteText(folder / "project.toml", "[project]\nname = \"demo\"\n")
+    Local checks = Image(16, 16)
+    For y = 0 Until 16
+        For x = 0 Until 16
+            checks[x, y] = (x / 4 + y / 4) % 2 == 0 ? Color32(190, 150, 90, 255) : Color32(70, 90, 120, 255)
+        End For
+    End For
+    Try File.WriteBytes(folder / "assets" / "checks.png", Png.Encode(checks))
+    Try File.WriteText(folder / "assets" / "notes.txt", "what's left to do\n")
+    Try File.WriteText(folder / "assets" / "levels" / "first.scene", "format = 1\n")
 End Function
 
 /// Fills `editor`'s scene: a floor, a crate with a lid on it, a light and a camera, with what a game's

@@ -49,6 +49,8 @@ material = "room/crate.material"
   `kind` is PIVOT, MESH, LIGHT, CAMERA, or SPRITE. What's left out is as a new one of that kind has it, and
   all but the transform and what's a Light's, Camera's, or Sprite's own are written only when they aren't that.
 - **[entity.components.\<name\>]**: whatever's set by `Entity.SetComponent`, read and written as it is.
+  `Scene.Load` also makes each with `Components.Attach`, by the kind called `<name>`, and it's an error if it
+  can't; `Scene.Open`, as the editor reads a scene, doesn't.
 - **geometry** of a mesh: `builtin:cube`, `builtin:sphere:<segments>`, `builtin:plane:<segments>`,
   `builtin:cylinder:<segments>:capped` or `:open`, `builtin:cone:...`, a mesh of its own each; a model's mesh,
   `res://door.glb#0`, its number after the last `#`; or `geometry:<id>` for a `[[geometry]]`, shared by what

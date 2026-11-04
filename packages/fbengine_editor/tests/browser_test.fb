@@ -1234,3 +1234,40 @@ Function ASidecarIsReplacedWhole() Throws IOError
     Expect(Dir.Exists(there) && (Try Dir.Entries(folder.Path)).Count == 2)
     Try folder.Close()
 End Function
+
+// A component's what's saved of it, and read, as data: a kind that isn't known, and one taken off.
+@Test
+Function ComponentsAreSavedAndOpenedAsData() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local folder = Try Game(games.Path)
+    Local editor = Try Started(settings.Path, folder)
+    Defer editor.Finish()
+    editor.Actions.Run("add.cube")
+    Local cube = editor.Edited.Entities()[0]
+    Local door = Value.Object()
+    door["Speed"] = Value(7.0)
+    SetComponentsOf(cube, [ComponentData("Door", door), ComponentData("Odd", Value("kept"))])
+    editor.SaveScene("res://kept.scene")
+    Local text = Try File.ReadText(folder / "assets" / "kept.scene")
+    Expect(text.Contains("[entity.components.Door]\nSpeed = 7.0\n") && text.Contains("Odd = \"kept\""), text)
+    // Taken off, it's gone from the file too.
+    SetComponentsOf(cube, [ComponentData("Door", door)])
+    editor.SaveScene("res://kept.scene")
+    text = Try File.ReadText(folder / "assets" / "kept.scene")
+    Expect(text.Contains("[entity.components.Door]") && !text.Contains("Odd"), text)
+    SetComponentsOf(cube, [ComponentData("Door", door), ComponentData("Odd", Value("kept"))])
+    editor.SaveScene("res://kept.scene")
+    editor.OpenScene("res://kept.scene")
+    Local read = editor.Edited.Entities()[0]
+    Local items = ComponentsOf(read)
+    Expect(items.Count == 2 && items[0].Kind == "Door" && items[1].Kind == "Odd")
+    Expect(items[0].Values["Speed"]?.AsDouble() == 7 && items[1].Values.AsString() == "kept")
+    // They're the editor's data now, not left behind as well, and a copy has its own.
+    Expect(read.ComponentNames().Count == 0)
+    Local before = Try File.ReadText(folder / "assets" / "kept.scene")
+    editor.SaveScene("res://kept.scene")
+    Expect((Try File.ReadText(folder / "assets" / "kept.scene")) == before, "saved again, it changed")
+    Expect(ComponentsOf(read).Count == 2)
+End Function
