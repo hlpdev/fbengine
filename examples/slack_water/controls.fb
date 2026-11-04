@@ -1,0 +1,93 @@
+// What the game's keys, mouse, and gamepad do: its flow's walks by text, and the island on foot.
+
+Import std.math
+Import fbengine
+Import "./flow"
+
+// How fast a stick held all the way over turns you, in radians a second.
+Const TURN_SPEED: Float = 2.4
+
+/// How far a stick held over by `stick` turns you in `seconds`, in radians.
+Public Function StickTurn(stick: Float, seconds: Float): Float => stick * TURN_SPEED * seconds
+
+/// The text flow's keys and buttons, bound to what they do.
+Public Final Class TextControls
+    Public Field Set: ActionSet
+    Public Field Out: Action
+    Public Field Back: Action
+    Public Field Use: Action
+    Public Field Hand: Action
+
+    Public New()
+        Set = ActionSet()
+        Out = Set.Add("out")
+        Out.Bind(Binding.OfKey(Key.W))
+        Out.Bind(Binding.OfGamepadButton(GamepadButton.NORTH))
+        Back = Set.Add("back")
+        Back.Bind(Binding.OfKey(Key.S))
+        Back.Bind(Binding.OfGamepadButton(GamepadButton.EAST))
+        Use = Set.Add("use")
+        Use.Bind(Binding.OfKey(Key.E))
+        Use.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+        Hand = Set.Add("hand")
+        Hand.Bind(Binding.OfKey(Key.Q))
+        Hand.Bind(Binding.OfGamepadButton(GamepadButton.WEST))
+    End New
+
+    /// Does to `flow` what was pressed since the last Flip.
+    @MainThread
+    Public Method Apply(flow: Flow)
+        If Out.Hit() Then flow.GoOut()
+        If Back.Hit() Then flow.GoBack()
+        If Use.Hit() Then flow.Use()
+        If Hand.Hit() Then flow.Hand()
+    End Method
+End Class
+
+/// A game's keys, mouse, and gamepad on the island, bound to what they do.
+Public Final Class Controls
+    Public Field Set: ActionSet
+    Public Field Move: Action
+    Public Field Look: Action
+    Public Field Turn: Action
+    Public Field Use: Action
+    Public Field Hand: Action
+
+    Public New()
+        Set = ActionSet()
+        Move = Set.Add("move")
+        Move.Bind(Binding.OfKey(Key.D))
+        Move.Bind(Binding.OfKey(Key.A, -1.0))
+        Move.Bind(Binding.OfGamepadAxis(GamepadAxis.LEFT_X))
+        Move.BindY(Binding.OfKey(Key.W))
+        Move.BindY(Binding.OfKey(Key.S, -1.0))
+        Move.BindY(Binding.OfGamepadAxis(GamepadAxis.LEFT_Y, -1.0))
+        Look = Set.Add("look")
+        Look.Bind(Binding.OfMouseAxis(MouseAxis.X))
+        Look.BindY(Binding.OfMouseAxis(MouseAxis.Y))
+        Turn = Set.Add("turn")
+        Turn.Bind(Binding.OfGamepadAxis(GamepadAxis.RIGHT_X))
+        Turn.BindY(Binding.OfGamepadAxis(GamepadAxis.RIGHT_Y))
+        Use = Set.Add("use")
+        Use.Bind(Binding.OfKey(Key.E))
+        Use.Bind(Binding.OfGamepadButton(GamepadButton.SOUTH))
+        Hand = Set.Add("hand")
+        Hand.Bind(Binding.OfKey(Key.Q))
+        Hand.Bind(Binding.OfGamepadButton(GamepadButton.WEST))
+    End New
+
+    /// Whether E or its button was pressed.
+    @MainThread Public Method UseHit(): Bool => Use.Hit()
+
+    /// Whether Q or its button was pressed.
+    @MainThread Public Method HandHit(): Bool => Hand.Hit()
+
+    /// Which way you're walking: across, and ahead.
+    @MainThread Public Method Walking(): Vec2 => Move.Vector()
+
+    /// How far the mouse has moved.
+    @MainThread Public Method Looking(): Vec2 => Look.Vector()
+
+    /// How far a stick's held over, from -1 to 1 each way.
+    @MainThread Public Method Turning(): Vec2 => Turn.Vector()
+End Class
