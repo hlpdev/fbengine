@@ -64,7 +64,9 @@ Function Lasting(): String
                                "[project]\nname = \"lasting\"\nversion = \"0.1.0\"\ntype = \"executable\"\n")
             Try File.WriteText(made.Path / "main.fb",
                                "Import std.time\n\nFor at = 1 To 6000\n    Sleep(10.Milliseconds)\nEnd For\n")
-            Local status = Try os.Command("fb").Args(["--color", "never", "build", made.Path.Text, "-o", (made.Path / "lasting.exe").Text]).Status()
+            Local status = Try os.Command("fb").Args(["--color", "never", "build", made.Path.Text,
+                                                      "-o",
+                                                      (made.Path / "lasting.exe").Text]).Status()
             If !status.Success Then Panic("it wasn't built: {status}")
         End If
         Return (had.Path / "lasting.exe").Text

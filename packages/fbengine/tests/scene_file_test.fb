@@ -870,5 +870,6 @@ Function TheSceneAskedForIsWhatFollowsItsOption() Throws IOError
         Local error = ExpectThrows<IOError>(Scene.Requested(wrong))
         Expect((error?.Message ?? "").Contains("--scene needs a res:// path"), error?.Message ?? "")
     End For
-    Expect((ExpectThrows<IOError>(Scene.Requested(["--scene", "--x"]))?.Message ?? "").Contains("--x"))
+    Expect((ExpectThrows<IOError>(Scene.Requested(["--scene", "--x"]))?.Message ??
+            "").Contains("--x"))
 End Function

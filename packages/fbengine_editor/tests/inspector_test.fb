@@ -1800,6 +1800,7 @@ Function WhatsASceneFilesOwnIsntShown() Throws IOError, GraphicsError
     Selecting(editor, cube)
     Local titles = Titles(editor)
     Expect(titles.Contains("Position"), titles)
-    Expect(titles.Contains("PickMode") && !titles.Contains("FileNode") && !titles.Contains("SceneId"), titles)
+    Expect(titles.Contains("PickMode") && !titles.Contains("FileNode") &&
+           !titles.Contains("SceneId"), titles)
     editor.Finish()
 End Function

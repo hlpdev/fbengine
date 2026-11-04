@@ -243,7 +243,8 @@ Public Final Class Editor
         Local why = notKept
         If why == Null Then Return
         notKept = Null
-        Local says = "This folder's yes couldn't be kept, so it holds until the editor closes: {why}"
+        Local says =
+            "This folder's yes couldn't be kept, so it holds until the editor closes: {why}"
         If ShowingDialog() == Null
             Said("Couldn't keep that", says)
         Else

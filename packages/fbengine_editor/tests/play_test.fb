@@ -735,8 +735,11 @@ Function QuittingDoesntWaitForWhatHoldsAGamesOutput() Throws IOError, GraphicsEr
     Local folder = Try Game(games.Path, "leaves", NOISY)
     Try File.WriteText(folder / "hold", "")
     Local program = (Try Engine()).Parent() ?? Path("")
-    Local run = Try os.Command("fb").Args(["--color", "never", "run", (program / "fbengine_editor").Text, "--",
-                                        "--play", folder.Text]).Stdin(Stdio.NONE).Stdout(Stdio.NONE).Stderr(Stdio.NONE).Spawn()
+    Local run = Try os.Command("fb").Args(["--color", "never", "run",
+                                           (program / "fbengine_editor").Text, "--",
+                                           "--play",
+                                           folder.Text]).Stdin(Stdio.NONE).Stdout(
+                                               Stdio.NONE).Stderr(Stdio.NONE).Spawn()
     Local since = Instant.Now()
     Local ended = run.TryWait()
     While ended == Null && (Instant.Now() - since) < 240.Seconds
@@ -901,7 +904,8 @@ Function ThePaneFollowsOnlyFromTheBottom() Throws IOError, GraphicsError
     editor.Run.Log.Say("and more")
     editor.Step()
     editor.Step()
-    Expect(scroller.Offset() == scroller.MaxOffset(), "{scroller.Offset()} of {scroller.MaxOffset()}")
+    Expect(scroller.Offset() == scroller.MaxOffset(),
+           "{scroller.Offset()} of {scroller.MaxOffset()}")
     Expect(editor.Output.ShownLines()[editor.Output.ShownLines().Count - 1] == "and more")
 End Function
 
