@@ -63,3 +63,57 @@ Function AnHdrFileLoadsAsLight() Throws GraphicsError, IOError
     Expect(bytes[0] == 0 && bytes[1] == 0x44)
     Expect((Try Environment.Bake(sky, 16, 4)).Levels() == 2)
 End Function
+
+// A World holds what it's lit by.
+@Test
+Function AWorldIsLitByAnEnvironment() Throws GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = World()
+    Expect(world.LitBy() == Null)
+    Local sky = Try Texture(4, 2, TextureFormat.RGBA16F, False)
+    Local baked = Try Environment.Bake(sky, 16, 4)
+    world.SetEnvironment(baked, 0.5)
+    Expect(world.LitBy() == baked)
+    Expect(world.EnvironmentIntensity() == 0.5)
+    world.SetEnvironment(Null)
+    Expect(world.LitBy() == Null)
+    world.Free()
+End Function
+
+// A surface's tangents, one for each vertex.
+@Test
+Function ASurfaceHasTangents()
+    Local geometry = Geometry.Cube()
+    Local surface = geometry.Surface(0)
+    Expect(surface.Tangents().Count == 0)
+    Local tangents: Vec4[] = []
+    For i = 1 To surface.VertexCount()
+        tangents.Add(Vec4(1.0, 0.0, 0.0, -1.0))
+    End For
+    surface.SetTangents(tangents)
+    Expect(surface.Tangents() == tangents)
+    surface.SetTangents([])
+    Expect(surface.Tangents().Count == 0)
+End Function
+
+// A normal map from a file holds numbers, as it's loaded to; and it's color at first.
+@Test
+Function AFileLoadsAsColorOrAsNumbers() Throws GraphicsError, IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local folder = Try TempDir()
+    Local image = Image.FromBytes(1, 1, [128, 128, 255, 255])
+    Local path = folder.Path / "flat.png"
+    Try File.WriteBytes(path, Png.Encode(image))
+    Local color = Try Texture.Load(path, False)
+    Expect(color.Format() == TextureFormat.RGBA8)
+    Local numbers = Try Texture.Load(path, False, TextureFormat.RGBA8_LINEAR)
+    Expect(numbers.Format() == TextureFormat.RGBA8_LINEAR)
+    Expect(numbers.ReadPixels()[0] == 128)
+    Local material = Material()
+    material.SetMap(MaterialMap.NORMAL, numbers)
+    Expect(material.Map(MaterialMap.NORMAL) == numbers)
+    Local made = Try Texture.FromImage(image, False, TextureFormat.RGBA8_LINEAR)
+    Expect(made.Format() == TextureFormat.RGBA8_LINEAR)
+End Function

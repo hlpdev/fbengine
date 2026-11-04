@@ -230,6 +230,52 @@ Function ATexturesAlphaAndAWireframeAreWhatTheyreSetTo() Throws GraphicsError
     Expect(material.Wireframe())
 End Function
 
+// A Camera's HDR settings, through to its target: light past white, exposed and tonemapped.
+@Test
+Function ACameraDrawsHdrLight() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local world = World()
+    World.SetCurrent(world)
+    Local camera = Camera()
+    Expect(!camera.Hdr() && camera.Exposure() == 1.0)
+    Expect(camera.Tonemap() == Tonemap.NONE && camera.Gamma() == 1.0)
+    camera.SetHdr(True)
+    camera.SetExposure(0.5)
+    camera.SetTonemap(Tonemap.NEUTRAL)
+    camera.SetGamma(2.0)
+    Expect(camera.Hdr() && camera.Exposure() == 0.5)
+    Expect(camera.Tonemap() == Tonemap.NEUTRAL && camera.Gamma() == 2.0)
+    Expect(camera.BloomIntensity() == 0.0 && camera.BloomThreshold() == 1.0)
+    camera.SetBloom(0.5, 2.0)
+    Expect(camera.BloomIntensity() == 0.5 && camera.BloomThreshold() == 2.0)
+    Local grade = ColorGrade(Vec3(2.0, 1.0, 0.5), Vec3(0.1, 0.0, -0.1), Vec3(1.0, 2.0, 0.5), 0.5)
+    camera.SetGrade(grade)
+    Expect(camera.Grade() == grade)
+    // Through to its target: light past white, exposed, tonemapped, in bytes.
+    camera.SetBloom(0.0)
+    camera.SetGrade(ColorGrade(Vec3(1.0, 1.0, 1.0), Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 1.0), 1.0))
+    camera.SetGamma(1.0)
+    camera.SetTonemap(Tonemap.REINHARD)
+    camera.SetExposure(0.5)
+    Local target = Try Texture.Target(32, 32, TextureFormat.RGBA8_LINEAR, 1, True)
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    Local glowing = Material()
+    glowing.SetEmissive(Color(2.0, 2.0, 2.0))
+    Local cube = Mesh(Geometry.Cube())
+    cube.SetMaterial(glowing)
+    cube.SetPosition(Vec3(0, 0, -6))
+    world.SetAmbientLight(Color(0, 0, 0))
+    camera.Render()
+    // 2 at half exposure is 1, and Reinhard's of 1 is a half.
+    Local pixels = target.ReadPixels()
+    Expect(Abs(Red(pixels, 16, 16) - 128) <= 1)
+    camera.SetRenderTarget(Null)
+    World.SetCurrent(World.Main())
+    world.Free()
+End Function
+
 @Test
 Function ALightsShadowsAreWhatTheyreSetTo()
     Local world = Fresh()

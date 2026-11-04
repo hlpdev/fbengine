@@ -2,6 +2,7 @@
 
 Import std.core
 Import std.math
+Import std.os
 Import std.test
 Import fbengine
 
@@ -156,4 +157,38 @@ Function AMeshsSurfacesBlendAsTheirAlphaSays()
     imported.SetAlpha(0.25)
     imported.SetColor(Color.White)
     Expect(imported.Alpha() == 1.0)
+End Function
+
+@Test
+Function APbrMaterialHasItsSettings()
+    Local material = Material()
+    Expect(material.Metallic() == 0.0 && material.Roughness() == 1.0)
+    Expect(material.NormalScale() == 1.0 && material.OcclusionStrength() == 1.0)
+    Expect(material.Emissive() == Color.Black)
+    Expect(material.Map(MaterialMap.NORMAL) == Null)
+    material.SetMetalRough(0.25, 0.5)
+    Expect(material.Metallic() == 0.25 && material.Roughness() == 0.5)
+    material.SetEmissive(Color(2.0, 0.5, 0.0, 1.0))
+    Expect(material.Emissive() == Color(2.0, 0.5, 0.0, 1.0))
+    material.SetNormalScale(2.0)
+    Expect(material.NormalScale() == 2.0)
+    material.SetOcclusionStrength(0.5)
+    Expect(material.OcclusionStrength() == 0.5)
+    material.SetMapUv(MaterialMap.EMISSIVE, UvTurn(Vec2(2.0, 3.0), 0.5, Vec2(0.25, 0.125)))
+    Local uv = material.MapUv(MaterialMap.EMISSIVE)
+    Expect(uv.Scale == Vec2(2.0, 3.0) && uv.Angle == 0.5 && uv.Offset == Vec2(0.25, 0.125))
+    Expect(material.MapUvSet(MaterialMap.NORMAL) == 0)
+End Function
+
+@Test
+Function AMaterialHoldsItsMaps() Throws GraphicsError
+    If Env.Get("FBENGINE_NO_GPU") == "1" Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local material = Material()
+    Local map = Try Texture(4, 4, TextureFormat.RGBA8_LINEAR, False)
+    material.SetMap(MaterialMap.METAL_ROUGH, map, 1)
+    Expect(material.Map(MaterialMap.METAL_ROUGH) == map)
+    Expect(material.MapUvSet(MaterialMap.METAL_ROUGH) == 1)
+    material.SetMap(MaterialMap.METAL_ROUGH, Null)
+    Expect(material.Map(MaterialMap.METAL_ROUGH) == Null)
 End Function

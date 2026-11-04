@@ -20,6 +20,30 @@ Public Enum Projection
     ORTHOGRAPHIC = 1
 End Enum
 
+/// What a Camera's HDR image's colors go through, after its tonemap, as a color decision list has
+/// it: each channel times its slope, plus its offset, raised to its power; then its saturation, from
+/// its luma, 0 for gray and 1 as it was. A Camera's is a slope of 1, an offset of 0, a power of 1, and
+/// a saturation of 1 at first, which is none.
+Public Struct ColorGrade
+    Public Field Slope: Vec3
+    Public Field Offset: Vec3
+    Public Field Power: Vec3
+    Public Field Saturation: Float
+End Struct
+
+/// How an HDR Camera's light past white comes to fit its target.
+Public Enum Tonemap
+    /// Not at all: a target stored as bytes clamps it at white, and one of half floats keeps it.
+    NONE = 0
+    /// Reinhard's, light over light plus one, which never quite reaches white.
+    REINHARD = 1
+    /// Narkowicz's fit of ACES's filmic curve, with its contrast and its colors toward white, after
+    /// the exposure of 0.6 he says matches ACES's own, which isn't in his fit: light of 1 is 0.673.
+    ACES = 2
+    /// Khronos's PBR Neutral, which leaves a base color as it is, as a product's picture wants.
+    NEUTRAL = 3
+End Enum
+
 /// How a camera's fog thickens with depth in front of it.
 Public Enum FogMode
     /// No fog.
@@ -265,6 +289,98 @@ Public Final Class Camera Extends Entity
     /// Where linear fog is whole.
     @MainThread @PanicsAtCaller
     Public Method FogEnd(): Float => fbe_camera_fog_end(Live("FogEnd"))
+
+    /// Sets whether it draws into an HDR image of its target's size, of half floats, whose light
+    /// past white is kept, rather than into its target: False at first. Exposure, its Tonemap, and
+    /// gamma are only what an HDR camera's image comes to in its target. All it draws goes through
+    /// them, UNLIT and VERTEX materials and its clear color too: white's 0.869 through NEUTRAL, 0.673
+    /// through ACES, and 0.5 through REINHARD, so what has to stay white wants NONE, or a camera of
+    /// its own. What multiplies what's behind it, in a camera that doesn't clear, draws nothing.
+    @MainThread @PanicsAtCaller
+    Public Method SetHdr(hdr: Bool)
+        If !fbe_camera_set_hdr(Live("SetHdr"), hdr) Then Failed("SetHdr")
+    End Method
+
+    /// Whether it draws into an HDR image.
+    @MainThread @PanicsAtCaller
+    Public Method Hdr(): Bool => fbe_camera_hdr(Live("Hdr"))
+
+    /// Sets what an HDR camera's light is multiplied by, 1 at first. Below 0, or not finite, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetExposure(exposure: Float)
+        If !fbe_camera_set_exposure(Live("SetExposure"), exposure) Then Failed("SetExposure")
+    End Method
+
+    /// What its light's multiplied by.
+    @MainThread @PanicsAtCaller
+    Public Method Exposure(): Float => fbe_camera_exposure(Live("Exposure"))
+
+    /// Sets how an HDR camera's light past white comes to fit a target's: Tonemap.NONE at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetTonemap(tonemap: Tonemap)
+        If !fbe_camera_set_tonemap(Live("SetTonemap"), tonemap As Int32) Then Failed("SetTonemap")
+    End Method
+
+    /// How its light past white comes to fit a target's.
+    @MainThread @PanicsAtCaller
+    Public Method Tonemap(): Tonemap => fbe_camera_tonemap(Live("Tonemap")) As Tonemap
+
+    /// Sets what an HDR camera's color's raised to one over, last of all, as a game's brightness
+    /// setting wants: 1 at first. 0 or below, or too small to take one over, or not finite, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetGamma(gamma: Float)
+        If !fbe_camera_set_gamma(Live("SetGamma"), gamma) Then Failed("SetGamma")
+    End Method
+
+    /// What its color's raised to one over.
+    @MainThread @PanicsAtCaller
+    Public Method Gamma(): Float => fbe_camera_gamma(Live("Gamma"))
+
+    /// Sets what an HDR camera's bright light does around it: what's past `threshold` blurred out
+    /// over much of its view and added to its light times `intensity`, before its exposure. An
+    /// intensity of 0, none, at first, with a threshold of 1. Below 0 panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetBloom(intensity: Float, threshold: Float = 1.0)
+        If !fbe_camera_set_bloom(Live("SetBloom"), intensity, threshold) Then Failed("SetBloom")
+    End Method
+
+    /// How much its bloom adds.
+    @MainThread @PanicsAtCaller
+    Public Method BloomIntensity(): Float => fbe_camera_bloom_intensity(Live("BloomIntensity"))
+
+    /// Where its bloom starts.
+    @MainThread @PanicsAtCaller
+    Public Method BloomThreshold(): Float => fbe_camera_bloom_threshold(Live("BloomThreshold"))
+
+    /// Sets an HDR camera's color grade, after its tonemap and before its gamma. A slope below 0, a
+    /// power of 0 or below, a saturation below 0, or anything not finite panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetGrade(grade: ColorGrade)
+        Local values = Buffer<Float>.From([grade.Slope.x, grade.Slope.y, grade.Slope.z,
+                                           grade.Offset.x,
+                                           grade.Offset.y, grade.Offset.z, grade.Power.x,
+                                           grade.Power.y,
+                                           grade.Power.z, grade.Saturation])
+        Local done = False
+        Unsafe
+            done = fbe_camera_set_grade(Live("SetGrade"), values.Pointer())
+        End Unsafe
+        If !done Then Failed("SetGrade")
+    End Method
+
+    /// Its color grade.
+    @MainThread @PanicsAtCaller
+    Public Method Grade(): ColorGrade
+        Local values = Buffer<Float>(10)
+        Local done = False
+        Unsafe
+            done = fbe_camera_grade(Live("Grade"), values.Pointer())
+        End Unsafe
+        If !done Then Failed("Grade")
+        Return ColorGrade(Vec3(values[0], values[1], values[2]),
+                          Vec3(values[3], values[4], values[5]),
+                          Vec3(values[6], values[7], values[8]), values[9])
+    End Method
 
     /// Sets how thick exponential fog is, 0.02 at first. Below 0 panics.
     @Limits(0)

@@ -23,10 +23,19 @@ Public Const FBE_PROJECTION_ORTHOGRAPHIC: Int32 = 1
 Public Const FBE_LIGHT_DIRECTIONAL: Int32 = 0
 Public Const FBE_LIGHT_POINT: Int32 = 1
 Public Const FBE_LIGHT_SPOT: Int32 = 2
+Public Const FBE_TONEMAP_NONE: Int32 = 0
+Public Const FBE_TONEMAP_REINHARD: Int32 = 1
+Public Const FBE_TONEMAP_ACES: Int32 = 2
+Public Const FBE_TONEMAP_NEUTRAL: Int32 = 3
 Public Const FBE_FOG_NONE: Int32 = 0
 Public Const FBE_FOG_LINEAR: Int32 = 1
 Public Const FBE_FOG_EXPONENTIAL: Int32 = 2
 Public Const FBE_FOG_EXPONENTIAL_SQUARED: Int32 = 3
+Public Const FBE_MATERIAL_MAPS: Int32 = 4
+Public Const FBE_MAP_METAL_ROUGH: Int32 = 0
+Public Const FBE_MAP_NORMAL: Int32 = 1
+Public Const FBE_MAP_OCCLUSION: Int32 = 2
+Public Const FBE_MAP_EMISSIVE: Int32 = 3
 Public Const FBE_SHADING_PBR: Int32 = 0
 Public Const FBE_SHADING_UNLIT: Int32 = 1
 Public Const FBE_SHADING_VERTEX: Int32 = 2
@@ -105,6 +114,13 @@ End Struct
     Public Field uv0: fbe_vec2_t
     Public Field uv1: fbe_vec2_t
     Public Field color: fbe_color_t
+End Struct
+
+@CLayout Public Struct fbe_vertex_tangent_t
+    Public Field x: Float32
+    Public Field y: Float32
+    Public Field z: Float32
+    Public Field w: Float32
 End Struct
 
 Public Const FBE_NO_JOINT: Int32 = 65535
@@ -253,8 +269,24 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_light_inner_cone(light: UInt64): Float32
     Function fbe_light_outer_cone(light: UInt64): Float32
     Function fbe_world_lights(world: UInt64, lights: Ptr<UInt64>, capacity: Int32): Int32
+    Function fbe_world_set_environment(world: UInt64, environment: UInt64, intensity: Float32): Bool
+    Function fbe_world_environment(world: UInt64): UInt64
+    Function fbe_world_environment_intensity(world: UInt64): Float32
     Function fbe_world_set_ambient(world: UInt64, r: Float32, g: Float32, b: Float32): Bool
     Function fbe_world_ambient(world: UInt64, color: Ptr<fbe_color_t>): Bool
+    Function fbe_camera_set_hdr(camera: UInt64, hdr: Bool): Bool
+    Function fbe_camera_hdr(camera: UInt64): Bool
+    Function fbe_camera_set_exposure(camera: UInt64, exposure: Float32): Bool
+    Function fbe_camera_exposure(camera: UInt64): Float32
+    Function fbe_camera_set_tonemap(camera: UInt64, tonemap: Int32): Bool
+    Function fbe_camera_tonemap(camera: UInt64): Int32
+    Function fbe_camera_set_gamma(camera: UInt64, gamma: Float32): Bool
+    Function fbe_camera_gamma(camera: UInt64): Float32
+    Function fbe_camera_set_bloom(camera: UInt64, intensity: Float32, threshold: Float32): Bool
+    Function fbe_camera_bloom_intensity(camera: UInt64): Float32
+    Function fbe_camera_bloom_threshold(camera: UInt64): Float32
+    Function fbe_camera_set_grade(camera: UInt64, values: Ptr<Float32>): Bool
+    Function fbe_camera_grade(camera: UInt64, values: Ptr<Float32>): Bool
     Function fbe_camera_set_fog_mode(camera: UInt64, mode: Int32): Bool
     Function fbe_camera_fog_mode(camera: UInt64): Int32
     Function fbe_camera_set_fog_color(camera: UInt64, r: Float32, g: Float32, b: Float32): Bool
@@ -286,6 +318,10 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_geometry_cylinder(segments: Int32, capped: Bool): UInt64
     Function fbe_geometry_cone(segments: Int32, capped: Bool): UInt64
     Function fbe_geometry_plane(segments: Int32): UInt64
+    Function fbe_surface_set_tangents(geometry: UInt64, surface: Int32,
+                                      tangents: Ptr<fbe_vertex_tangent_t>, count: Int32): Bool
+    Function fbe_surface_tangents(geometry: UInt64, surface: Int32,
+                                  tangents: Ptr<fbe_vertex_tangent_t>, capacity: Int32): Int32
     Function fbe_surface_add_vertices(geometry: UInt64, surface: Int32, vertices: Ptr<fbe_vertex_t>,
                                       count: Int32): Int32
     Function fbe_surface_add_triangles(geometry: UInt64, surface: Int32, indices: Ptr<UInt32>,
@@ -345,6 +381,24 @@ Public Extern "C" Lib "fbengine_native"
                                     uv_set: Int32): Bool
     Function fbe_material_layer_blend(material: UInt64, layer: Int32): Int32
     Function fbe_material_layer_uv_set(material: UInt64, layer: Int32): Int32
+    Function fbe_material_set_metal_rough(material: UInt64, metallic: Float32,
+                                          roughness: Float32): Bool
+    Function fbe_material_metallic(material: UInt64): Float32
+    Function fbe_material_roughness(material: UInt64): Float32
+    Function fbe_material_set_emissive(material: UInt64, r: Float32, g: Float32, b: Float32): Bool
+    Function fbe_material_emissive(material: UInt64, color: Ptr<fbe_color_t>): Bool
+    Function fbe_material_set_normal_scale(material: UInt64, scale: Float32): Bool
+    Function fbe_material_normal_scale(material: UInt64): Float32
+    Function fbe_material_set_occlusion_strength(material: UInt64, strength: Float32): Bool
+    Function fbe_material_occlusion_strength(material: UInt64): Float32
+    Function fbe_material_set_map(material: UInt64, map: Int32, texture: UInt64,
+                                  uv_set: Int32): Bool
+    Function fbe_material_map(material: UInt64, map: Int32): UInt64
+    Function fbe_material_map_uv_set(material: UInt64, map: Int32): Int32
+    Function fbe_material_set_map_uv(material: UInt64, map: Int32, scale_u: Float32,
+                                     scale_v: Float32, angle: Float32, offset_u: Float32,
+                                     offset_v: Float32): Bool
+    Function fbe_material_map_uv(material: UInt64, map: Int32, values: Ptr<Float32>): Bool
     Function fbe_surface_set_material(geometry: UInt64, surface: Int32, material: UInt64): Bool
     Function fbe_surface_material(geometry: UInt64, surface: Int32): UInt64
     Function fbe_mesh_set_material(mesh: UInt64, material: UInt64): Bool

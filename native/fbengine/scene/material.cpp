@@ -35,6 +35,50 @@ layer_t* layer_of(std::uint64_t material, std::int32_t index) {
     return &found->layers[static_cast<std::size_t>(index)];
 }
 
+/// Whether a map reads what's in a texture of a format as it should: what's stored as color would
+/// be decoded from sRGB, which only what it emits is, and bends a flat normal 40 degrees.
+bool map_takes(std::int32_t map, std::int32_t format) {
+    return map == FBE_MAP_EMISSIVE || format == FBE_TEXTURE_RGBA8_LINEAR ||
+           format == FBE_TEXTURE_RGBA16F || (map == FBE_MAP_OCCLUSION && format == FBE_TEXTURE_R8);
+}
+
+/// Whether a value's 0 to 1, as NaN isn't.
+bool from_0_to_1(float value) {
+    return value >= 0.0F && value <= 1.0F;
+}
+
+/// The map at `index` of a material, or null.
+layer_t* map_of(std::uint64_t material, std::int32_t index) {
+    material_t* found = material_of(material);
+    if (found == nullptr) {
+        return nullptr;
+    }
+    if (index < 0 || index >= FBE_MATERIAL_MAPS) {
+        fail(std::format("a material's maps are 0 to {}, not {}", FBE_MATERIAL_MAPS - 1, index));
+        return nullptr;
+    }
+    return &found->maps[static_cast<std::size_t>(index)];
+}
+
+/// Sets what a layer's or map's UVs go through; false, with fbe_error's why, if they can't.
+bool set_uv(layer_t& layer, float scale_u, float scale_v, float angle, float offset_u,
+            float offset_v) {
+    // What drawing divides by it has to be finite too, which too small a scale's isn't.
+    if (!std::isfinite(scale_u) || !std::isfinite(scale_v) || scale_u == 0.0F || scale_v == 0.0F ||
+        !std::isfinite(1.0F / scale_u) || !std::isfinite(1.0F / scale_v)) {
+        return fail(
+            std::format("a layer's UV scale is finite and not 0, not ({}, {})", scale_u, scale_v));
+    }
+    if (!std::isfinite(angle) || !std::isfinite(offset_u) || !std::isfinite(offset_v)) {
+        return fail(std::format("a layer's UV angle and offset are finite, not {}, ({}, {})", angle,
+                                offset_u, offset_v));
+    }
+    layer.uv_scale = { scale_u, scale_v };
+    layer.uv_angle = angle;
+    layer.uv_offset = { offset_u, offset_v };
+    return true;
+}
+
 /// The material slot of a handle that can be 0 for none: true with it, or false for a freed one.
 bool optional_material(std::uint64_t handle, std::uint32_t& slot) {
     slot = none;
@@ -97,6 +141,10 @@ void release_material(std::uint32_t material) {
         for (layer_t& layer : scene().materials[material].layers) {
             release_texture(layer.texture);
             layer.texture = 0;
+        }
+        for (layer_t& map : scene().materials[material].maps) {
+            release_texture(map.texture);
+            map.texture = 0;
         }
         scene().material_slots.free(material);
     }
@@ -186,6 +234,11 @@ FBE_API uint64_t fbe_material_clone(uint64_t material) {
     for (const fbe::scene::layer_t& layer : original.layers) {
         if (layer.texture != 0) {
             fbe_texture_retain(layer.texture);
+        }
+    }
+    for (const fbe::scene::layer_t& map : original.maps) {
+        if (map.texture != 0) {
+            fbe_texture_retain(map.texture);
         }
     }
     return scene().material_slots.handle(copy);
@@ -374,18 +427,7 @@ FBE_API bool fbe_material_set_layer_uv(uint64_t material, int32_t layer, float s
     if (found == nullptr) {
         return false;
     }
-    if (!std::isfinite(scale_u) || !std::isfinite(scale_v) || scale_u == 0.0F || scale_v == 0.0F) {
-        return fbe::fail(
-            std::format("a layer's UV scale is finite and not 0, not ({}, {})", scale_u, scale_v));
-    }
-    if (!std::isfinite(angle) || !std::isfinite(offset_u) || !std::isfinite(offset_v)) {
-        return fbe::fail(std::format("a layer's UV angle and offset are finite, not {}, ({}, {})",
-                                     angle, offset_u, offset_v));
-    }
-    found->uv_scale = { scale_u, scale_v };
-    found->uv_angle = angle;
-    found->uv_offset = { offset_u, offset_v };
-    return true;
+    return fbe::scene::set_uv(*found, scale_u, scale_v, angle, offset_u, offset_v);
 }
 
 FBE_API bool fbe_material_layer_uv(uint64_t material, int32_t layer, float* values) {
@@ -456,6 +498,145 @@ FBE_API int32_t fbe_material_layer_blend(uint64_t material, int32_t layer) {
 FBE_API int32_t fbe_material_layer_uv_set(uint64_t material, int32_t layer) {
     const layer_t* found = fbe::scene::layer_of(material, layer);
     return found != nullptr ? found->uv_set : -1;
+}
+
+FBE_API bool fbe_material_set_metal_rough(uint64_t material, float metallic, float roughness) {
+    material_t* found = fbe::scene::material_of(material);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!fbe::scene::from_0_to_1(metallic) || !fbe::scene::from_0_to_1(roughness)) {
+        return fbe::fail(std::format("a material's metalness and roughness are 0 to 1, not {}, {}",
+                                     metallic, roughness));
+    }
+    found->metallic = metallic;
+    found->roughness = roughness;
+    return true;
+}
+
+FBE_API float fbe_material_metallic(uint64_t material) {
+    const material_t* found = fbe::scene::material_of(material);
+    return found != nullptr ? found->metallic : 0.0F;
+}
+
+FBE_API float fbe_material_roughness(uint64_t material) {
+    const material_t* found = fbe::scene::material_of(material);
+    return found != nullptr ? found->roughness : 0.0F;
+}
+
+FBE_API bool fbe_material_set_emissive(uint64_t material, float r, float g, float b) {
+    material_t* found = fbe::scene::material_of(material);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(r) || !std::isfinite(g) || !std::isfinite(b) || r < 0.0F || g < 0.0F ||
+        b < 0.0F) {
+        return fbe::fail("what a material emits is finite, and 0 or more");
+    }
+    found->emissive = { r, g, b };
+    return true;
+}
+
+FBE_API bool fbe_material_emissive(uint64_t material, fbe_color_t* color) {
+    const material_t* found = fbe::scene::material_of(material);
+    if (found == nullptr) {
+        return false;
+    }
+    *color = {
+        .r = found->emissive[0],
+        .g = found->emissive[1],
+        .b = found->emissive[2],
+        .a = 1.0F,
+    };
+    return true;
+}
+
+FBE_API bool fbe_material_set_normal_scale(uint64_t material, float scale) {
+    material_t* found = fbe::scene::material_of(material);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(scale)) {
+        return fbe::fail("a material's normal scale is finite");
+    }
+    found->normal_scale = scale;
+    return true;
+}
+
+FBE_API float fbe_material_normal_scale(uint64_t material) {
+    const material_t* found = fbe::scene::material_of(material);
+    return found != nullptr ? found->normal_scale : 0.0F;
+}
+
+FBE_API bool fbe_material_set_occlusion_strength(uint64_t material, float strength) {
+    material_t* found = fbe::scene::material_of(material);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!fbe::scene::from_0_to_1(strength)) {
+        return fbe::fail(
+            std::format("a material's occlusion strength is 0 to 1, not {}", strength));
+    }
+    found->occlusion_strength = strength;
+    return true;
+}
+
+FBE_API float fbe_material_occlusion_strength(uint64_t material) {
+    const material_t* found = fbe::scene::material_of(material);
+    return found != nullptr ? found->occlusion_strength : 0.0F;
+}
+
+FBE_API bool fbe_material_set_map(uint64_t material, int32_t map, uint64_t texture,
+                                  int32_t uv_set) {
+    layer_t* found = fbe::scene::map_of(material, map);
+    if (found == nullptr) {
+        return false;
+    }
+    if (uv_set != 0 && uv_set != 1) {
+        return fbe::fail(std::format("a map's UV set is 0 or 1, not {}", uv_set));
+    }
+    if (texture != 0 && fbe_texture_format(texture) >= 0 &&
+        !fbe::scene::map_takes(map, fbe_texture_format(texture))) {
+        return fbe::fail("a material's metal-rough, normal, and occlusion maps are RGBA8_LINEAR or "
+                         "RGBA16F, and an occlusion map can be R8: they aren't colors");
+    }
+    if (texture != 0 && !fbe_texture_retain(texture)) {
+        return false;
+    }
+    fbe::scene::release_texture(found->texture);
+    found->texture = texture;
+    found->uv_set = uv_set;
+    return true;
+}
+
+FBE_API uint64_t fbe_material_map(uint64_t material, int32_t map) {
+    const layer_t* found = fbe::scene::map_of(material, map);
+    return found != nullptr ? found->texture : 0;
+}
+
+FBE_API int32_t fbe_material_map_uv_set(uint64_t material, int32_t map) {
+    const layer_t* found = fbe::scene::map_of(material, map);
+    return found != nullptr ? found->uv_set : -1;
+}
+
+FBE_API bool fbe_material_set_map_uv(uint64_t material, int32_t map, float scale_u, float scale_v,
+                                     float angle, float offset_u, float offset_v) {
+    layer_t* found = fbe::scene::map_of(material, map);
+    return found != nullptr &&
+           fbe::scene::set_uv(*found, scale_u, scale_v, angle, offset_u, offset_v);
+}
+
+FBE_API bool fbe_material_map_uv(uint64_t material, int32_t map, float* values) {
+    const layer_t* found = fbe::scene::map_of(material, map);
+    if (found == nullptr) {
+        return false;
+    }
+    values[0] = found->uv_scale[0];
+    values[1] = found->uv_scale[1];
+    values[2] = found->uv_angle;
+    values[3] = found->uv_offset[0];
+    values[4] = found->uv_offset[1];
+    return true;
 }
 
 FBE_API bool fbe_surface_set_material(uint64_t geometry, int32_t surface, uint64_t material) {

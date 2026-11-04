@@ -848,6 +848,26 @@ bool in_graph(std::uint64_t handle) {
     return by_handle().contains(handle);
 }
 
+bool reserve_transient(const transient_t& target) {
+    if (std::ranges::any_of(
+            pool, [&target](const pooled_t& pooled) { return pooled.target == target; })) {
+        return true;
+    }
+    const std::uint64_t handle = fbe::texture::create_engine_target(
+        target.width, target.height, target.format,
+        static_cast<VkSampleCountFlagBits>(target.samples), target.depth);
+    if (handle == 0) {
+        return false;
+    }
+    pool.push_back({
+        .target = target,
+        .handle = handle,
+        .states = texture_states(),
+        .asked = frames,
+    });
+    return true;
+}
+
 bool add_pass(pass_t pass) {
     if (recording) {
         return fail("a pass isn't added as the frame's graph is recorded");
