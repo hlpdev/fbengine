@@ -279,6 +279,32 @@ FBE_API int32_t fbe_world_lights(uint64_t world, uint64_t* lights, int32_t capac
     return static_cast<std::int32_t>(found.size());
 }
 
+FBE_API bool fbe_world_set_environment(uint64_t world, uint64_t environment, float intensity) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    if (slot == fbe::scene::none) {
+        return false;
+    }
+    if (!(intensity >= 0.0F) || !std::isfinite(intensity)) {
+        return fbe::fail(std::format("an environment's intensity is 0 or more, not {}", intensity));
+    }
+    if (environment != 0 && fbe_environment_levels(environment) < 0) {
+        return false;
+    }
+    fbe::scene::scene().worlds[slot].environment = environment;
+    fbe::scene::scene().worlds[slot].environment_intensity = intensity;
+    return true;
+}
+
+FBE_API uint64_t fbe_world_environment(uint64_t world) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    return slot != fbe::scene::none ? fbe::scene::scene().worlds[slot].environment : 0;
+}
+
+FBE_API float fbe_world_environment_intensity(uint64_t world) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    return slot != fbe::scene::none ? fbe::scene::scene().worlds[slot].environment_intensity : 0.0F;
+}
+
 FBE_API bool fbe_world_set_sky_atmosphere(uint64_t world, uint64_t sun, float brightness) {
     const std::uint32_t slot = fbe::scene::world_slot(world);
     if (slot == fbe::scene::none) {
@@ -429,6 +455,136 @@ FBE_API float fbe_camera_fog_start(uint64_t camera) {
 FBE_API float fbe_camera_fog_end(uint64_t camera) {
     const camera_t* found = camera_of(camera);
     return found != nullptr ? found->fog_end : 0.0F;
+}
+
+FBE_API bool fbe_camera_set_hdr(uint64_t camera, bool hdr) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    found->hdr = hdr;
+    return true;
+}
+
+FBE_API bool fbe_camera_hdr(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr && found->hdr;
+}
+
+FBE_API bool fbe_camera_set_exposure(uint64_t camera, float exposure) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!(exposure >= 0.0F) || !std::isfinite(exposure)) {
+        return fbe::fail(std::format("a camera's exposure is 0 or more, not {}", exposure));
+    }
+    found->exposure = exposure;
+    return true;
+}
+
+FBE_API float fbe_camera_exposure(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->exposure : 0.0F;
+}
+
+FBE_API bool fbe_camera_set_tonemap(uint64_t camera, int32_t tonemap) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (tonemap < FBE_TONEMAP_NONE || tonemap > FBE_TONEMAP_NEUTRAL) {
+        return fbe::fail(std::format("there's no tonemap {}", tonemap));
+    }
+    found->tonemap = tonemap;
+    return true;
+}
+
+FBE_API int32_t fbe_camera_tonemap(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->tonemap : -1;
+}
+
+FBE_API bool fbe_camera_set_gamma(uint64_t camera, float gamma) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    // What it's raised to is one over it, which too small a gamma's isn't a number.
+    if (!(gamma > 0.0F) || !std::isfinite(gamma) || !std::isfinite(1.0F / gamma)) {
+        return fbe::fail(std::format("a camera's gamma is above 0, not {}", gamma));
+    }
+    found->gamma = gamma;
+    return true;
+}
+
+FBE_API float fbe_camera_gamma(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->gamma : 0.0F;
+}
+
+FBE_API bool fbe_camera_set_bloom(uint64_t camera, float intensity, float threshold) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!(intensity >= 0.0F) || !std::isfinite(intensity) || !(threshold >= 0.0F) ||
+        !std::isfinite(threshold)) {
+        return fbe::fail(
+            std::format("a camera's bloom's intensity and threshold are 0 or more, not "
+                        "{} and {}",
+                        intensity, threshold));
+    }
+    found->bloom_intensity = intensity;
+    found->bloom_threshold = threshold;
+    return true;
+}
+
+FBE_API float fbe_camera_bloom_intensity(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->bloom_intensity : 0.0F;
+}
+
+FBE_API float fbe_camera_bloom_threshold(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr ? found->bloom_threshold : 0.0F;
+}
+
+FBE_API bool fbe_camera_set_grade(uint64_t camera, const float* values) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    for (int at = 0; at < 10; ++at) {
+        if (!std::isfinite(values[at])) {
+            return fbe::fail("a camera's color grade is finite");
+        }
+    }
+    for (int at = 0; at < 3; ++at) {
+        if (values[at] < 0.0F || values[6 + at] <= 0.0F) {
+            return fbe::fail("a camera's color grade's slope is 0 or more, and its power above 0");
+        }
+    }
+    if (values[9] < 0.0F) {
+        return fbe::fail("a camera's color grade's saturation is 0 or more");
+    }
+    found->grade_slope = { values[0], values[1], values[2] };
+    found->grade_offset = { values[3], values[4], values[5] };
+    found->grade_power = { values[6], values[7], values[8] };
+    found->grade_saturation = values[9];
+    return true;
+}
+
+FBE_API bool fbe_camera_grade(uint64_t camera, float* values) {
+    const camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    std::ranges::copy(found->grade_slope, values);
+    std::ranges::copy(found->grade_offset, values + 3);
+    std::ranges::copy(found->grade_power, values + 6);
+    values[9] = found->grade_saturation;
+    return true;
 }
 
 FBE_API bool fbe_camera_set_fog_density(uint64_t camera, float density) {

@@ -35,6 +35,9 @@ namespace formats {
 constexpr std::uint32_t rgba8 = 37;
 constexpr std::uint32_t rgba8_srgb = 43;
 constexpr std::uint32_t rgba16 = 91;
+constexpr std::uint32_t rgba16f = 97;
+constexpr std::uint32_t bc6h_ufloat = 143;
+constexpr std::uint32_t bc6h_sfloat = 144;
 constexpr std::uint32_t bc7 = 145;
 constexpr std::uint32_t bc7_srgb = 146;
 constexpr std::uint32_t astc_4x4 = 157;

@@ -129,6 +129,12 @@ bool in_graph(std::uint64_t handle);
 /// twice, or its targets don't match.
 bool add_pass(pass_t pass);
 
+/// Makes sure there are `count` images for transient targets of `target`, which passes that ask for
+/// them in the frame's graph then have, as many as are needed at once: false, with fbe_error's why,
+/// if one can't be made now, where what asks can say so, rather than the frame dropping its passes
+/// when it's recorded.
+bool reserve_transient(const transient_t& target, std::uint32_t count = 1);
+
 /// A texture's or transient target's index in the bindless set, which a pass's `record` gives its
 /// shaders to sample it by, its format, and its texture's handle; while the graph's recorded only.
 std::uint32_t resource_index(resource_t resource);
@@ -156,7 +162,7 @@ void carry_passes();
 
 /// What the graph's last recording did: the passes it recorded, by name, in order, and the level
 /// each was in; how many it dropped; the image barriers it placed, and the commands that placed
-/// them; and the transient targets' images it made.
+/// them; the transient targets' images it made; and the size of each transient target it gave one.
 struct recorded_t {
     std::vector<std::string_view> passes;
     std::vector<std::uint32_t> levels;
@@ -164,6 +170,7 @@ struct recorded_t {
     std::uint32_t barriers = 0;
     std::uint32_t batches = 0;
     std::uint32_t made = 0;
+    std::vector<std::array<std::uint32_t, 2>> transient_sizes;
 };
 
 const recorded_t& last_recorded();

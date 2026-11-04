@@ -160,6 +160,25 @@ good modern engine on its own. Every structural choice is checked against both.
 - **Extract, then draw**: after UpdateWorld, the scene is read into render lists (visible
   objects, sorted), so drawing never reads the live scene; a render thread can take drawing over
   later without changing the API.
+- **PBR** is pbr.slang: color and layers its base color; metal-rough, normal, occlusion, and
+  emissive maps read at run time, not by pipeline key; a surface's optional tangent stream, or a
+  pixel's derivatives; a World's environment beside its ambient; a PBR base color is saturated.
+- **A camera's HDR** is its own choice, off at first: an image of half floats at its target's
+  size, then a full-screen pass into its target, so light past white is kept until then. All it
+  draws goes through this, UNLIT, VERTEX, and its clear color too: white is 0.869 through NEUTRAL,
+  0.673 through ACES, 0.5 through REINHARD, so what has to stay white wants NONE or a camera of its
+  own, and an exposure of 0 clears to black. The order in that pass: light plus bloom, exposure,
+  tonemap, color grade, gamma; a target stored as sRGB then encodes it. The grade is the ASC color
+  decision list, slope, offset, power, then saturation, on linear values after the tonemap. For
+  partly covered pixels the curves run on rgb over alpha, multiplied back after. At alpha 0, light
+  is added over what's under it, graded by what that adds, so an offset lights no empty pixel and a
+  non-clearing camera leaves what's under it alone.
+- **Bloom**: what's past a threshold, fading in from half of it, down a chain from the camera's
+  viewport to 8 to 15 texels on its short side, 13 taps down with Karis's average on the first
+  level, a tent up. A level's worth is fixed from the coarsest, 0.8 of what's left by the one
+  before, with the finest taking the rest, so the glow is at the same part of a view at any size.
+  It's added before exposure, and over partly covered pixels as a layer of its own. A viewport
+  under 16 pixels on its short side has none.
 - **One material system, three shading models**: PBR, UNLIT, and VERTEX (per-vertex lighting,
   for a retro look). Texture layers with blend modes and their own UV sets, lightmaps (SCP:CB's
   rooms are lightmapped), fog, and alpha all go through the same pipelines, as specialization
@@ -167,13 +186,13 @@ good modern engine on its own. Every structural choice is checked against both.
   UNLIT and VERTEX are the fixed-function look, so they work in encoded values: layers, ADD, ×2,
   and fog on what's stored, with only the final color converted to linear for the target; PBR is
   linear throughout. VERTEX's light is `min(range / distance, 1)` with no end, clamped per vertex
-  before texturing, from the first 8 shown lights in the tree's order; PIXEL and PBR keep
+  before texturing, from the first 8 shown lights in the tree's order; PBR keeps
   KHR_lights_punctual's window, which clusters need. Range means each in its model. A Texture has
   an alpha flag, which AUTO blending honors.
 - **Lights**: clustered forward, so the many small lights of a facility work, per pixel or per
   vertex. A point or spot light ends at its range, as clustering needs, and falls off inside it as
   glTF's KHR_lights_punctual says, the inverse square windowed to 0 at the range, in every shading
-  model. PIXEL draws take the clusters' lights; VERTEX draws take lists of their own, the lights
+  model. PBR draws take the clusters' lights; VERTEX draws take lists of their own, the lights
   that reach them, at most 8 in the tree's order, so a light by an off-screen vertex still lights
   it. A mirrored world matrix is a pipeline key bit of its own, as the front face is baked into a
   pipeline. Shadows come with E6.

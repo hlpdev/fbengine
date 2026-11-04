@@ -11,7 +11,8 @@ static const float SMOOTHEST = 0.002;
 /// How near a pole a direction's across, squared, to be at it: 0.0001 radians, well inside a texel of
 /// the largest map.
 static const float POLE = 1e-8;
-/// How short a vector's square has to be for it to have no direction to speak of.
+/// How short a vector's square has to be, as a part of what it came from, for it to have no direction
+/// to speak of.
 static const float DEGENERATE = 1e-8;
 
 /// What a surface is at a point, as glTF's metal-rough material says.
@@ -51,16 +52,42 @@ public float3 normalFromMap(float3 normal, float4 tangent, float3 texel, float s
     const float3 n = normalize(normal);
     const float3 along = tangent.xyz - (n * dot(n, tangent.xyz));
     const float alongSquared = dot(along, along);
-    if (alongSquared < DEGENERATE)
+    // So too for NaN, which isn't above anything: as a part of it, as an entity scaled small has
+    // tangents short all over.
+    if (!(alongSquared > DEGENERATE * dot(tangent.xyz, tangent.xyz)))
     {
         return n;
     }
     const float3 t = along / sqrt(alongSquared);
-    const float3 b = cross(n, t) * tangent.w;
+    const float3 b = cross(n, t) * (tangent.w < 0.0 ? -1.0 : 1.0);
     const float3 mapped = ((texel * 2.0) - 1.0) * float3(scale, scale, 1.0);
-    const float3 turned = (t * mapped.x) + (b * mapped.y) + (n * mapped.z);
-    const float turnedSquared = dot(turned, turned);
-    return turnedSquared < DEGENERATE ? n : turned / sqrt(turnedSquared);
+    // As a part of its largest, so however great its scale, its square's in range.
+    const float largest = max(abs(mapped.x), max(abs(mapped.y), abs(mapped.z)));
+    if (!(largest > 0.0))
+    {
+        return n;
+    }
+    return normalize((t * (mapped.x / largest)) + (b * (mapped.y / largest)) + (n * (mapped.z / largest)));
+}
+
+/// A tangent for a surface with none, along its UVs' u, from how its place and UVs change over a
+/// pixel, its w the way its bitangent goes against their v, as glTF's +Y is: as good as a pixel's
+/// triangle says, which is flat, so its seams show where a model's own wouldn't. No tangent at all,
+/// as a triangle whose UVs don't change has.
+public float4 tangentFromDerivatives(float3 normal, float3 place, float2 uv)
+{
+    const float3 placeAcross = ddx(place);
+    const float3 placeDown = ddy(place);
+    const float2 uvAcross = ddx(uv);
+    const float2 uvDown = ddy(uv);
+    const float across = (uvAcross.x * uvDown.y) - (uvDown.x * uvAcross.y);
+    if (abs(across) < 1e-20)
+    {
+        return float4(0.0, 0.0, 0.0, 1.0);
+    }
+    const float3 tangent = ((placeAcross * uvDown.y) - (placeDown * uvAcross.y)) / across;
+    const float3 alongV = ((placeDown * uvAcross.x) - (placeAcross * uvDown.x)) / across;
+    return float4(tangent, dot(cross(normal, tangent), alongV) < 0.0 ? 1.0 : -1.0);
 }
 
 /// How much of the light Fresnel reflects at normal incidence: 4% for a dielectric, its base color

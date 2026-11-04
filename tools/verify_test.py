@@ -2,6 +2,7 @@
 and what show.py finds to play."""
 
 import importlib.util
+import os
 import pathlib
 import subprocess
 import sys
@@ -47,6 +48,17 @@ def show_finds_what_has_a_watch():
     print("show.py finds what has a --watch")
 
 
+def check_no_error_dialogs(verify):
+    """What verify starts inherits its error mode, through what starts it in turn, as cmake's libuv."""
+    if os.name != "nt":
+        return
+    verify.no_error_dialogs()
+    code = "import ctypes; print(ctypes.windll.kernel32.GetErrorMode())"
+    for command in ([sys.executable, "-c", code], ["cmake", "-E", "env", sys.executable, "-c", code]):
+        done = subprocess.run(command, capture_output=True, text=True, check=True)
+        assert int(done.stdout) & 0x8003 == 0x8003, f"{command[0]} started a program that can show a dialog"
+
+
 def main():
     show_finds_what_has_a_watch()
     verify = load()
@@ -57,6 +69,7 @@ def main():
     held.close()
     assert other_process_takes(name), "a lock let go of couldn't be taken"
     assert len(set(verify.TURNS)) == 4, "four verifies at a time take four locks"
+    check_no_error_dialogs(verify)
     print("verify's locks hold")
 
 

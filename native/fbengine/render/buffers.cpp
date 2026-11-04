@@ -85,6 +85,7 @@ void free_surface(surface_buffers_t& surface) {
     gpu::free_buffer(surface.vertices);
     gpu::free_buffer(surface.indices);
     gpu::free_buffer(surface.joints);
+    gpu::free_buffer(surface.tangents);
     gpu::free_buffer(surface.targets);
     surface.index_count = 0;
     surface.target_moves.clear();
@@ -397,6 +398,12 @@ const surface_buffers_t* surface_buffers(std::uint64_t geometry, std::size_t sur
             if (from.joints.size() != from.vertices.size() || from.indices.empty()) {
                 gpu::free_buffer(buffers.surfaces[i].joints);
             } else if (!send(buffers.surfaces[i].joints, std::as_bytes(std::span(from.joints)),
+                             gpu::flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))) {
+                return nullptr;
+            }
+            if (from.tangents.size() != from.vertices.size() || from.indices.empty()) {
+                gpu::free_buffer(buffers.surfaces[i].tangents);
+            } else if (!send(buffers.surfaces[i].tangents, std::as_bytes(std::span(from.tangents)),
                              gpu::flag<VkBufferUsageFlags>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))) {
                 return nullptr;
             }

@@ -633,12 +633,15 @@ TEST_CASE("a model's parts that are tied to each other agree", "[assets]") {
                                   std::string(texture) + "}}]" + image,
                               uri);
         };
-        // The first set, which it has, and the second, which it hasn't, or a third.
+        // The first set, which it has, and the second, which it hasn't; a third, which a surface
+        // doesn't keep, is the material's to leave out, whichever it has.
         const std::string first = R"(,"TEXCOORD_0":)" + p(uvs);
         REQUIRE(decoded(with(first, R"({"index":0})")).materials.size() == 1);
         REQUIRE(failure(with(first, R"({"index":0,"texCoord":1})")) == failure_t::INVALID_DATA);
-        REQUIRE(failure(with(first + R"(,"TEXCOORD_1":)" + p(uvs) + R"(,"TEXCOORD_2":)" + p(uvs),
-                             R"({"index":0,"texCoord":2})")) == failure_t::INVALID_DATA);
+        REQUIRE(decoded(with(first + R"(,"TEXCOORD_1":)" + p(uvs) + R"(,"TEXCOORD_2":)" + p(uvs),
+                             R"({"index":0,"texCoord":2})"))
+                    .materials.size() == 1);
+        REQUIRE(decoded(with(first, R"({"index":0,"texCoord":2})")).materials.size() == 1);
         REQUIRE(failure(with("", R"({"index":0})")) == failure_t::INVALID_DATA);
     }
 }

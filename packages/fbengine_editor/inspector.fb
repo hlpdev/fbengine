@@ -742,6 +742,7 @@ Public Final Class SceneInspector Extends Widget
             AddSection<Material>("Material", materials,
                                  Function(material: Material) => !material.Freed(),
                                  Set<String>())
+            AddMetalRough(materials)
         End If
         AddComponents()
     End Method
@@ -930,8 +931,10 @@ Public Final Class SceneInspector Extends Widget
         AddChoices<T, LightType>(things, alive, seen)
         AddChoices<T, Projection>(things, alive, seen)
         AddChoices<T, FogMode>(things, alive, seen)
+        AddChoices<T, Tonemap>(things, alive, seen)
         AddChoices<T, Shading>(things, alive, seen)
         AddChoices<T, Blend>(things, alive, seen)
+        AddChoices<T, Tonemap>(things, alive, seen)
         For each In Pairs<T, Color>(things, alive)
             If seen.Add(each.Name) Then Added(ColorRow(each, history))
         End For
@@ -1067,6 +1070,21 @@ Public Final Class SceneInspector Extends Widget
                                        Function(index: Int, color: Color)
             all[index].SetColors(all[index].StartColor(), color)
         End Function, alive), history))
+    End Method
+
+    // A material's metalness and roughness, which are set as one.
+    Method AddMetalRough(all: Material[])
+        Local alive = Function(index: Int) => !all[index].Freed()
+        Added(NumberRow(Editable<Float>("Metallic", all.Count,
+                                        Function(index: Int) => all[index].Metallic(),
+                                        Function(index: Int, metallic: Float)
+            all[index].SetMetalRough(metallic, all[index].Roughness())
+        End Function, alive, Limits(0, 1)), history))
+        Added(NumberRow(Editable<Float>("Roughness", all.Count,
+                                        Function(index: Int) => all[index].Roughness(),
+                                        Function(index: Int, roughness: Float)
+            all[index].SetMetalRough(all[index].Metallic(), roughness)
+        End Function, alive, Limits(0, 1)), history))
     End Method
 
     // A spot's cone, set as one, inner within outer.

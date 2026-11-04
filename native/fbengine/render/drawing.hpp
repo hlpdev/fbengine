@@ -3,6 +3,7 @@
 // What drawing a camera and drawing its shadows share: what the scene shader reads, the frame's
 // ring, and a pass's draws.
 
+#include "environment/environment.hpp"
 #include "fbengine.h"
 #include "gpu/buffer.hpp"
 #include "gpu/vulkan.hpp"
@@ -24,10 +25,10 @@ namespace fbe::render {
 
 /// A draw as the scene shader reads it: its matrix to the camera's view; the rows of what turns
 /// its normals there; its color and alpha; its vertices' address; its joints' and palette's, if
-/// it's skinned; its morph targets' and the ones it's drawn with, if it's morphed; its emitter's,
-/// if it's particles; its material's index in the camera's; its own lights; how many matrices its
-/// palette has, 0 if it isn't skinned; and how many targets it's drawn with, and how many vertices
-/// each has.
+/// it's skinned; its tangents', if it has them; its morph targets' and the ones it's drawn with, if
+/// it's morphed; its emitter's, if it's particles; its instances', if it has them; its material's
+/// index in the camera's; its own lights; how many matrices its palette has, 0 if it isn't skinned;
+/// how many targets it's drawn with, and how many vertices each has; and whether it has tangents.
 struct draw_data_t {
     std::array<float, 16> to_view;
     std::array<std::array<float, 4>, 3> normals;
@@ -35,6 +36,7 @@ struct draw_data_t {
     VkDeviceAddress vertices;
     VkDeviceAddress joints;
     VkDeviceAddress palette;
+    VkDeviceAddress tangents;
     VkDeviceAddress targets;
     VkDeviceAddress drawn_targets;
     VkDeviceAddress particles;
@@ -45,8 +47,10 @@ struct draw_data_t {
     std::uint32_t joint_count;
     std::uint32_t drawn_target_count;
     std::uint32_t target_vertices;
+    std::uint32_t has_tangents;
+    std::uint32_t spare;
 };
-static_assert(sizeof(draw_data_t) == 208, "the scene shader reads draws 208 bytes apart");
+static_assert(sizeof(draw_data_t) == 224, "the scene shader reads draws 224 bytes apart");
 
 /// An instance as the scene shader reads it: its matrix's three rows, and its color.
 struct instance_data_t {
@@ -115,8 +119,16 @@ struct material_data_t {
     std::uint32_t no_alpha;
     std::uint32_t spare;
     std::array<layer_data_t, FBE_MATERIAL_LAYERS> layers;
+    float metallic;
+    float roughness;
+    float normal_scale;
+    float occlusion_strength;
+    std::array<float, 3> emissive;
+    /// Which of its maps it has, a bit for each FBE_MAP_.
+    std::uint32_t maps;
+    std::array<layer_data_t, FBE_MATERIAL_MAPS> map_layers;
 };
-static_assert(sizeof(material_data_t) == 544, "the scene shader reads materials 544 bytes apart");
+static_assert(sizeof(material_data_t) == 832, "the scene shader reads materials 832 bytes apart");
 
 /// A camera as the scene shader reads it.
 struct camera_data_t {
@@ -142,9 +154,15 @@ struct camera_data_t {
     VkDeviceAddress shadows;
     std::uint32_t shadow_atlas;
     std::uint32_t shadow_spare;
+    /// The rows of what turns its view's directions into the world's, which an environment's are
+    /// in.
     std::array<std::array<float, 4>, 3> world_rows;
+    /// What it's lit by, and whether it's lit by it.
+    environment::shader_data_t environment;
+    std::uint32_t has_environment;
+    std::uint32_t spare_too;
 };
-static_assert(sizeof(camera_data_t) == 256, "the scene shader reads a camera of 256 bytes");
+static_assert(sizeof(camera_data_t) == 288, "the scene shader reads a camera of 288 bytes");
 static_assert(sizeof(fbe_draw_light_t) == 64, "the scene shader reads lights 64 bytes apart");
 static_assert(sizeof(fbe_vertex_t) == 56, "the scene shader reads vertices 56 bytes apart");
 
