@@ -617,6 +617,12 @@ TEST_CASE("a layer's UVs turn and scale as Blitz's did", "[gpu][scene]") {
     CHECK(pixel(frame, low, low) == reds);
     CHECK(pixel(frame, high, low) == blues);
     CHECK(pixel(frame, low, high) == reds);
+    // Scaled first, then turned: a scale of 2 across and a quarter turn take a UV of (0.625, 0.375)
+    // to (-0.375, 0.3125), so the first row, where turning first would take it to (-0.1875, 0.625),
+    // the second.
+    require(fbe_material_set_layer_uv(material, 0, 2.0F, 1.0F, 1.5707964F, 0.0F, 0.0F));
+    frame = scene.drawn();
+    CHECK(pixel(frame, high, low) == reds);
     fbe_texture_release(texture);
     fbe_material_release(material);
 }

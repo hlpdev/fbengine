@@ -12,10 +12,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <format>
 #include <limits>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -49,10 +51,12 @@ bool refused(const std::string& why) {
 bool set_material(std::uint64_t material, const assets::material_t& from) {
     const auto& color = from.base_color;
     const bool is_mask = from.alpha == assets::alpha_t::MASK;
+    // A mask's all there or all gone, whatever its alpha, so it never blends: by its cutoff, or for
+    // a cutoff of 0, which everything's past, whole.
     std::int32_t blend = FBE_BLEND_OPAQUE;
     if (from.alpha == assets::alpha_t::BLEND) {
         blend = FBE_BLEND_ALPHA;
-    } else if (is_mask) {
+    } else if (is_mask && from.alpha_cutoff > 0.0F) {
         blend = FBE_BLEND_AUTO;
     }
     return fbe_material_set_color(material, color[0], color[1], color[2], color[3]) &&
@@ -253,73 +257,109 @@ void set_sampling(std::uint64_t texture, const sampling_t& sampling) {
     fbe_texture_set_wrap(texture, sampling.wrap_u, sampling.wrap_v);
 }
 
-/// A new texture of an image, made for a material that can't read the one all of them share, and
-/// what it was made for, so another map of that material can read it too.
-struct other_texture_t {
-    std::int32_t image = -1;
-    sampling_t sampling;
-    bool color = false;
-    std::uint64_t texture = 0;
-};
-
-/// What one material has made so far, of what it can't share, out of the caller's `held`.
+/// What a model's materials have made so far, of what they can't share, in the caller's lists.
 struct others_t {
     std::uint64_t* held = nullptr;
-    std::array<other_texture_t, FBE_MODEL_MAPS> made;
-    std::size_t count = 0;
+    std::int32_t* images = nullptr;
+    std::int32_t capacity = 0;
+    std::int32_t* made = nullptr;
 };
 
-/// The texture a material reads for `read`, as a color or not: what's in `textures`, unless that's
-/// sampled otherwise or decoded as a color it isn't, for which it's a new texture, if the caller
-/// takes them. 0, with fbe_error's why, if there's none.
+/// Whether any of a model's materials reads an image as a color.
+bool read_as_color(const assets::model_t& model, std::int32_t image) {
+    return std::ranges::any_of(model.materials, [&](const assets::material_t& material) {
+        return material.base_color_texture.image == image ||
+               material.emissive_texture.image == image;
+    });
+}
+
+/// Whether a Vulkan format holds light as it is, so nothing decodes it, and it's no color's fault.
+bool holds_light(std::uint32_t format) {
+    return format == assets::formats::rgba16f || format == assets::formats::bc6h_ufloat ||
+           format == assets::formats::bc6h_sfloat;
+}
+
+/// The texture a material reads for `read`, called `name`, as a color or not: what's in `textures`,
+/// unless that's sampled otherwise or decoded as a color it isn't, for which it's a new texture, or
+/// one another map has made, if the caller takes them. 0, with fbe_error's why, if there's none.
 std::uint64_t texture_to_read(std::uint64_t load, const assets::model_t& model, std::int32_t index,
-                              const assets::texture_ref_t& read, bool color,
-                              std::span<const std::uint64_t> textures, others_t& others) {
+                              const assets::texture_ref_t& read, std::string_view name, bool color,
+                              std::span<const std::uint64_t> textures, const others_t& others) {
     if (std::cmp_greater_equal(read.image, textures.size()) ||
         textures[static_cast<std::size_t>(read.image)] == 0) {
         refused(std::format("the material {}'s image {} isn't there", index, read.image));
         return 0;
     }
     // A file scales UVs up and moves them on, and a layer or a map says how much it scales them
-    // down and moves them back; its turn is the file's already.
+    // down and moves them back.
     if (read.scale[0] == 0.0F || read.scale[1] == 0.0F) {
-        refused(std::format("the material {}'s texture has a scale of 0", index));
+        refused(std::format("the material {}'s {} has a scale of 0", index, name));
         return 0;
     }
     const std::uint64_t shared = textures[static_cast<std::size_t>(read.image)];
+    const bool srgb = fbe_texture_srgb(shared);
+    if (color && !srgb && !holds_light(fbe_texture_vulkan_format(shared))) {
+        refused(std::format("the material {}'s {} is a color, and its image {} isn't sRGB", index,
+                            name, read.image));
+        return 0;
+    }
     // A texture has one sampler, the first of its materials', and one color space, a color's if
-    // any of them reads it as one, so another's reads a copy.
+    // any of them reads it as one, so another's reads a copy. Where nothing reads it as a color,
+    // an sRGB image is the file's mistake, which a map refuses.
+    const bool wanted = srgb && (color || !read_as_color(model, read.image));
     const sampling_t sampling = sampling_of(model, read);
     const sampling_t has{
         .filter = fbe_texture_filter(shared),
         .wrap_u = fbe_texture_wrap_u(shared),
         .wrap_v = fbe_texture_wrap_v(shared),
     };
-    const bool decoded = fbe_texture_format(shared) == FBE_TEXTURE_RGBA8;
-    if (others.held == nullptr || (has == sampling && (color || !decoded))) {
+    if (others.held == nullptr || (has == sampling && srgb == wanted)) {
         return shared;
     }
-    for (std::size_t at = 0; at < others.count; ++at) {
-        const other_texture_t& other = others.made.at(at);
-        if (other.image == read.image && other.sampling == sampling && other.color == color) {
-            return other.texture;
+    for (std::int32_t at = 0; at < *others.made; ++at) {
+        const std::uint64_t other = others.held[at];
+        const sampling_t its{
+            .filter = fbe_texture_filter(other),
+            .wrap_u = fbe_texture_wrap_u(other),
+            .wrap_v = fbe_texture_wrap_v(other),
+        };
+        if (others.images[at] == read.image && its == sampling &&
+            fbe_texture_srgb(other) == wanted) {
+            return other;
         }
     }
-    const std::uint64_t texture = fbe_texture_from_model(load, read.image, color, true);
+    if (*others.made >= others.capacity) {
+        fbe::fail(std::format("there's room for {} other textures, and no more", others.capacity));
+        return 0;
+    }
+    const std::uint64_t texture = fbe_texture_from_model(load, read.image, wanted, true);
     if (texture == 0) {
         invalid = fbe_texture_load_invalid();
         return 0;
     }
     set_sampling(texture, sampling);
-    others.made.at(others.count) = {
-        .image = read.image,
-        .sampling = sampling,
-        .color = color,
-        .texture = texture,
-    };
-    others.held[others.count] = texture;
-    ++others.count;
+    others.held[*others.made] = texture;
+    others.images[*others.made] = read.image;
+    ++*others.made;
     return texture;
+}
+
+/// Whether a map's on a UV set no surface has, which it says once a load.
+bool beyond_uv_sets(std::uint64_t load, std::int32_t index, const assets::texture_ref_t& read,
+                    std::string_view name) {
+    static std::uint64_t said = 0;
+    if (read.uv_set <= 1) {
+        return false;
+    }
+    if (said != load) {
+        said = load;
+        std::fputs(std::format("a model's material {} draws without its {} map, which reads "
+                               "TEXCOORD_{}: a surface has 2 UV sets\n",
+                               index, name, read.uv_set)
+                       .c_str(),
+                   stderr);
+    }
+    return true;
 }
 
 /// Filters and wraps a texture of an image as the first of the model's materials to read it says,
@@ -655,11 +695,8 @@ FBE_API bool fbe_model_drop_images(uint64_t load) {
 }
 
 FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t material,
-                                         const uint64_t* textures, int32_t count,
-                                         uint64_t* others) {
-    if (others != nullptr) {
-        std::fill_n(others, FBE_MODEL_MAPS, std::uint64_t{ 0 });
-    }
+                                         const uint64_t* textures, int32_t count, uint64_t* others,
+                                         int32_t* other_images, int32_t capacity, int32_t* made) {
     const assets::model_t* model = model_of(load);
     if (model == nullptr) {
         return false;
@@ -671,53 +708,67 @@ FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t 
     const assets::material_t& from = model->materials[static_cast<std::size_t>(index)];
     const std::span<const std::uint64_t> given(
         textures, textures != nullptr ? static_cast<std::size_t>(std::max(count, 0)) : 0);
-    others_t made{ .held = others };
+    const others_t kept{
+        .held = others,
+        .images = other_images,
+        .capacity = capacity,
+        .made = made,
+    };
     const assets::texture_ref_t& base = from.base_color_texture;
-    if (base.image >= 0) {
-        const std::uint64_t texture = texture_to_read(load, *model, index, base, true, given, made);
+    if (base.image >= 0 && !beyond_uv_sets(load, index, base, "base color")) {
+        const std::uint64_t texture =
+            texture_to_read(load, *model, index, base, "base color", true, given, kept);
         if (texture == 0) {
             return false;
         }
         if (!fbe_material_set_texture(material, 0, texture) ||
             !fbe_material_set_layer(material, 0, FBE_LAYER_MULTIPLY,
                                     static_cast<std::int32_t>(base.uv_set))) {
-            return refused(std::format("the material {}'s texture can't be as its file says: {}",
+            return refused(std::format("the material {}'s base color can't be as its file says: {}",
                                        index, fbe_error()));
         }
+        // A file's rotation turns UVs the other way from a layer's.
         if (!fbe_material_set_layer_uv(material, 0, 1.0F / base.scale[0], 1.0F / base.scale[1],
-                                       base.rotation, -base.offset[0], -base.offset[1])) {
+                                       -base.rotation, -base.offset[0], -base.offset[1])) {
             return refused(
-                std::format("the material {}'s texture can't be moved as its file says: {}", index,
-                            fbe_error()));
+                std::format("the material {}'s base color can't be moved as its file says: {}",
+                            index, fbe_error()));
         }
     }
     struct map_t {
         std::int32_t in_file;
         std::int32_t on_material;
+        std::string_view name;
     };
     for (const map_t& map : {
-             map_t{ .in_file = FBE_MODEL_METALLIC_ROUGHNESS, .on_material = FBE_MAP_METAL_ROUGH },
-             map_t{ .in_file = FBE_MODEL_NORMAL, .on_material = FBE_MAP_NORMAL },
-             map_t{ .in_file = FBE_MODEL_OCCLUSION, .on_material = FBE_MAP_OCCLUSION },
-             map_t{ .in_file = FBE_MODEL_EMISSIVE, .on_material = FBE_MAP_EMISSIVE },
+             map_t{ .in_file = FBE_MODEL_METALLIC_ROUGHNESS,
+                    .on_material = FBE_MAP_METAL_ROUGH,
+                    .name = "metal-rough" },
+             map_t{ .in_file = FBE_MODEL_NORMAL, .on_material = FBE_MAP_NORMAL, .name = "normal" },
+             map_t{ .in_file = FBE_MODEL_OCCLUSION,
+                    .on_material = FBE_MAP_OCCLUSION,
+                    .name = "occlusion" },
+             map_t{ .in_file = FBE_MODEL_EMISSIVE,
+                    .on_material = FBE_MAP_EMISSIVE,
+                    .name = "emissive" },
          }) {
         const assets::texture_ref_t& read = *map_of(from, map.in_file);
-        if (read.image < 0) {
+        if (read.image < 0 || beyond_uv_sets(load, index, read, map.name)) {
             continue;
         }
         const bool color = map.on_material == FBE_MAP_EMISSIVE;
         const std::uint64_t texture =
-            texture_to_read(load, *model, index, read, color, given, made);
+            texture_to_read(load, *model, index, read, map.name, color, given, kept);
         if (texture == 0) {
             return false;
         }
         if (!fbe_material_set_map(material, map.on_material, texture,
                                   static_cast<std::int32_t>(read.uv_set)) ||
             !fbe_material_set_map_uv(material, map.on_material, 1.0F / read.scale[0],
-                                     1.0F / read.scale[1], read.rotation, -read.offset[0],
+                                     1.0F / read.scale[1], -read.rotation, -read.offset[0],
                                      -read.offset[1])) {
-            return refused(std::format("the material {}'s map {} can't be as its file says: {}",
-                                       index, map.in_file, fbe_error()));
+            return refused(std::format("the material {}'s {} map can't be as its file says: {}",
+                                       index, map.name, fbe_error()));
         }
     }
     return true;

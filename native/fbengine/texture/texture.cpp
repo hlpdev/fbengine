@@ -863,6 +863,28 @@ bool has_alpha(const fbe::assets::image_t& image, std::int32_t format) {
 
 /// What a texture of a file's image is, starting the GPU if it hasn't; nothing, with fbe_error's
 /// why, if it can't be one.
+/// The format of the same bytes, not decoded from sRGB as they're read.
+VkFormat undecoded(VkFormat format) {
+    switch (format) {
+    case VK_FORMAT_R8G8B8A8_SRGB:
+        return VK_FORMAT_R8G8B8A8_UNORM;
+    case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
+        return VK_FORMAT_BC1_RGB_UNORM_BLOCK;
+    case VK_FORMAT_BC1_RGBA_SRGB_BLOCK:
+        return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    case VK_FORMAT_BC2_SRGB_BLOCK:
+        return VK_FORMAT_BC2_UNORM_BLOCK;
+    case VK_FORMAT_BC3_SRGB_BLOCK:
+        return VK_FORMAT_BC3_UNORM_BLOCK;
+    case VK_FORMAT_BC7_SRGB_BLOCK:
+        return VK_FORMAT_BC7_UNORM_BLOCK;
+    case VK_FORMAT_ASTC_4x4_SRGB_BLOCK:
+        return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+    default:
+        return format;
+    }
+}
+
 std::optional<spec_t> spec_of(const fbe::assets::image_t& image, bool srgb, bool mipmaps) {
     if (!fbe::gpu::start_with_window()) {
         return std::nullopt;
@@ -880,9 +902,11 @@ std::optional<spec_t> spec_of(const fbe::assets::image_t& image, bool srgb, bool
         return std::nullopt;
     }
     auto vk_format = static_cast<VkFormat>(image.format);
-    if (vk_format == VK_FORMAT_R8G8B8A8_SRGB && !srgb) {
-        vk_format = VK_FORMAT_R8G8B8A8_UNORM;
-        format->format = FBE_TEXTURE_RGBA8_LINEAR;
+    if (!srgb) {
+        vk_format = undecoded(vk_format);
+        if (vk_format == VK_FORMAT_R8G8B8A8_UNORM) {
+            format->format = FBE_TEXTURE_RGBA8_LINEAR;
+        }
     }
     const fbe::gpu::device_t& gpu = *fbe::gpu::device();
     VkFormatProperties support{};

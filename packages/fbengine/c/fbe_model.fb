@@ -18,8 +18,9 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_model_texture(load: UInt64, index: Int32, mipmaps: Bool): UInt64
     Function fbe_model_material_image(load: UInt64, material: Int32, map: Int32): Int32
     Function fbe_model_material_textures(load: UInt64, index: Int32, material: UInt64,
-                                         textures: Ptr<UInt64>, count: Int32,
-                                         others: Ptr<UInt64>): Bool
+                                         textures: Ptr<UInt64>, count: Int32, others: Ptr<UInt64>,
+                                         other_images: Ptr<Int32>, capacity: Int32,
+                                         made: Ptr<Int32>): Bool
     Function fbe_model_material_name(load: UInt64, index: Int32): CString
     Function fbe_model_image_name(load: UInt64, index: Int32): CString
     Function fbe_model_scene(load: UInt64): Int32

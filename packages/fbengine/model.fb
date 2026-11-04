@@ -231,16 +231,27 @@ Public Final Class Model Implements Asset
         Return clips.Clone()
     End Method
 
-    /// The Texture its material at `index` reads for `map`, or Null for none.
+    /// The Texture its material at `index` reads for `map`, as it's bound, which for an image read
+    /// two ways needn't be the one in Textures, or Null for none.
     @MainThread @PanicsAtCaller
     Public Method TextureOf(index: Int, map: ModelMap = ModelMap.BASE_COLOR): Texture?
         Live("TextureOf")
         If index < 0 || index >= materials.Count
             Panic("TextureOf on a Model: it has {materials.Count} materials; there's no material {index}")
         End If
-        Local image = fbe_model_material_image(load.Handle, index, map As Int32)
-        If image < 0 || image >= textures.Count Then Return Null
-        Return textures[image]
+        Local material = materials[index]
+        Select map
+            Case ModelMap.BASE_COLOR
+                Return material.Texture(0)
+            Case ModelMap.METALLIC_ROUGHNESS
+                Return material.Map(MaterialMap.METAL_ROUGH)
+            Case ModelMap.NORMAL
+                Return material.Map(MaterialMap.NORMAL)
+            Case ModelMap.OCCLUSION
+                Return material.Map(MaterialMap.OCCLUSION)
+            Case ModelMap.EMISSIVE
+                Return material.Map(MaterialMap.EMISSIVE)
+        End Select
     End Method
 
     /// What its file calls its material at `index`, "" for nothing.
@@ -325,19 +336,28 @@ Public Final Class Model Implements Asset
             Local texture = textures[at]
             read[at] = texture != Null ? texture.Live("FromLoad") : 0
         End For
-        Local made = Buffer<UInt64>(FBE_MODEL_MAPS As Int64)
+        Local capacity = info.Materials * FBE_MODEL_MAPS
+        Local kept = Buffer<UInt64>(capacity As Int64 + 1)
+        Local images = Buffer<Int32>(capacity As Int64 + 1)
+        Local made: Int32 = 0
+        Local failure: IOError? = Null
         For at = 0 Until info.Materials
             Local bound = False
             Unsafe
                 bound = fbe_model_material_textures(load.Handle, at, handles[at], read.Pointer(),
-                                                    info.Images, made.Pointer())
+                                                    info.Images, kept.Pointer(), images.Pointer(),
+                                                    capacity, AddressOf(made))
             End Unsafe
-            // What it made is here to let go of, even if it then couldn't.
-            For each = 0 Until FBE_MODEL_MAPS
-                If made[each] != 0 Then others.Add(Texture(made[each]))
-            End For
-            If !bound Then Throw PartError()
+            If !bound
+                failure = PartError()
+                Break
+            End If
         End For
+        // What it made is here to let go of, even if it then couldn't.
+        For at = 0 Until made
+            others.Add(Texture(kept[at]))
+        End For
+        If failure != Null Then Throw failure
         For at = 0 Until info.Skins
             skins.Add(Try Skin.FromModel(load, at))
         End For

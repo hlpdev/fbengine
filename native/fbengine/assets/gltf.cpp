@@ -673,8 +673,9 @@ private:
             if (texture->image < 0) {
                 continue;
             }
+            // Legal, and past the two a surface keeps: that map's left out when a material's made.
             if (texture->uv_set > 1) {
-                return fail("a texture's UV set is past the two the engine keeps");
+                continue;
             }
             if ((texture->uv_set == 0 ? primitive.uv0 : primitive.uv1).empty()) {
                 return fail(std::format("a primitive's material reads UV set {}, which it hasn't",

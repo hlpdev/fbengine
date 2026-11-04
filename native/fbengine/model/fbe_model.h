@@ -50,11 +50,14 @@ FBE_API int32_t fbe_model_material_image(uint64_t load, int32_t material, int32_
 // of its UV set, its UVs moved as its file says, from `textures`, what fbe_model_texture gave,
 // `count` of them, by the model's indices. Where a texture's sampled otherwise than this material
 // says, as when two materials read one image, or is decoded as a color for a map that holds none,
-// as when one image is both, it reads a new texture of the image, held once. Those go in `others`,
-// FBE_MODEL_MAPS of them, 0 past the last, for the caller to let go of, whatever it returns. False
-// if it can't, and for one reading nothing, true.
+// as when one image is both, it reads another texture of the image: one in `others`, or a new one,
+// held once, added there with its image's index in `other_images`, each with room for `capacity`,
+// and `made` counting them, which the caller starts at 0, for all its materials, and lets go of
+// whatever this returns. A map on a UV set past 1 is left out, said once on stderr. False if it
+// can't, and for one reading nothing, true.
 FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t material,
-                                         const uint64_t* textures, int32_t count, uint64_t* others);
+                                         const uint64_t* textures, int32_t count, uint64_t* others,
+                                         int32_t* other_images, int32_t capacity, int32_t* made);
 // What the model's file calls its material at `index`, and its image at `index`: an image's name,
 // or for none, its URI, its percents decoded, up to any NUL. "" for none, and for what's not there;
 // valid while the load is.

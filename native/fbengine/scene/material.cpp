@@ -170,15 +170,16 @@ std::int32_t drawn_blend(std::uint32_t material, float alpha) {
     const material_t drawn = material != none ? scene().materials[material] : material_t();
     switch (drawn.blend) {
     case FBE_BLEND_AUTO:
+        // A cutoff takes its color's and a texture's alpha as a mask instead.
+        if (drawn.alpha_cutoff > 0.0F) {
+            return alpha < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
+        }
         if (drawn.color[3] * alpha < 1.0F) {
             return FBE_BLEND_ALPHA;
         }
-        // A cutoff takes a texture's alpha as a mask instead.
-        if (drawn.alpha_cutoff <= 0.0F) {
-            for (const layer_t& layer : drawn.layers) {
-                if (layer.texture != 0 && fbe_texture_alpha(layer.texture)) {
-                    return FBE_BLEND_ALPHA;
-                }
+        for (const layer_t& layer : drawn.layers) {
+            if (layer.texture != 0 && fbe_texture_alpha(layer.texture)) {
+                return FBE_BLEND_ALPHA;
             }
         }
         return FBE_BLEND_OPAQUE;
