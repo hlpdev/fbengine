@@ -57,6 +57,26 @@ Function Drivings(): Map<String, Driving>
     all["file.close"] = Driving(Nothing,
                                 Function(editor: Editor, scene: DemoScene) => editor.Current() ==
                                 Null)
+    all["file.new_scene"] = Driving(Nothing,
+                                    Function(editor: Editor, scene: DemoScene) => Count(editor) == 0)
+    all["file.open_scene"] = Driving(Nothing,
+                                     Function(editor: Editor,
+                                              scene: DemoScene) => editor.ShowingDialog() != Null)
+    // Never saved, each asks where; browser_test has the rest.
+    all["file.save"] = Driving(Nothing,
+                               Function(editor: Editor,
+                                        scene: DemoScene) => editor.ShowingDialog() != Null)
+    all["file.save_as"] = Driving(Nothing,
+                                  Function(editor: Editor,
+                                           scene: DemoScene) => editor.ShowingDialog() != Null)
+    // Its folder's not been asked about, so it asks; play_test has the rest.
+    all["play.run"] = Driving(Nothing,
+                              Function(editor: Editor,
+                                       scene: DemoScene) => editor.ShowingDialog() != Null)
+    all["play.stop"] = Driving(Function(editor: Editor, scene: DemoScene)
+        Local open = editor.Current()
+        If open != Null Then editor.Run.Start(open, "res://none.scene")
+    End Function, Function(editor: Editor, scene: DemoScene) => editor.Run.State() == PlayState.STOPPED)
     // With no program it has nothing to do, and it's enabled; its work's in inspector_test.
     all["file.reload_components"] = Driving(Nothing,
                                             Function(editor: Editor,
@@ -170,7 +190,7 @@ End Function
 
 // Whether a menu of the menu bar has it, which is left open if it has.
 Function Menued(editor: Editor, id: String): Node? Throws GraphicsError
-    For title In ["File", "Edit", "Add", "Tools", "View"]
+    For title In ["File", "Edit", "Add", "Play", "Tools", "View"]
         Try Click(editor, editor.Shown.Root().Find("menu.{title}"))
         Local popups = editor.Shown.Popups()
         If popups.Count > 0

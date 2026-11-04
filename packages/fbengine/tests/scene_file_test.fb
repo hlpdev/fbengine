@@ -857,3 +857,13 @@ Function ASceneIsReplacedWhole() Throws IOError
     If !saved Then Expect((Try File.ReadText(file)) == had)
     Try folder.Close()
 End Function
+
+// What a program's asked to run on, as the editor's Play asks.
+@Test
+Function TheSceneAskedForIsWhatFollowsItsOption()
+    Expect(Scene.Requested(["--scene", "res://a.scene"]) == "res://a.scene")
+    Expect(Scene.Requested(["x", "--scene", "res://a.scene", "y"]) == "res://a.scene")
+    Expect(Scene.Requested(["x", "--scene"]) == Null)
+    Expect(Scene.Requested(["x"]) == Null)
+    Expect(Scene.Requested() == Null)
+End Function

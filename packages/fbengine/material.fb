@@ -281,7 +281,7 @@ Public Final Class Material
         Return found
     End Method
 
-    @MainThread
+    @MainThread @NotEdited
     Package Method SetSceneId(id: String)
         fbe_material_set_scene_id(Live("SetSceneId"), id)
     End Method

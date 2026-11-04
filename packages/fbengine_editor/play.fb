@@ -1,0 +1,368 @@
+// Play in the editor: the game's own program, built by fb and run on the saved scene, in a process of
+// its own, its output shown, stopped from here; nothing it does touches what's being edited.
+
+Import std.collections
+Import std.core
+Import std.ffi
+Import std.io
+Import std.math
+Import std.os
+Import std.text
+Import std.time
+From fbengine_ui Import Label, Node, ScrollView, Sizing, Widget
+Import fbengine
+Import "./project"
+
+// How many lines of what a run says are kept, how long stopping waits for the last of its output, and
+// how much is read at once.
+Const MOST_LINES = 1000
+Const CHUNK: Int64 = 4096
+Const LAST_OUTPUT: Float64 = 1.0
+
+/// What a run's got to.
+Public Enum PlayState
+    /// Nothing's been run, or it's been cleared.
+    IDLE
+    /// fb's building it.
+    BUILDING
+    /// It's running.
+    RUNNING
+    /// It ended by itself, as ExitCode says.
+    ENDED
+    /// fb couldn't build it.
+    BUILD_FAILED
+    /// Something couldn't be started, as its output says.
+    COULDNT_START
+    /// It was stopped.
+    STOPPED
+End Enum
+
+/// What a run says, as lines: bytes as they come, split at each line's end, what isn't UTF-8 shown as
+/// it can be, and only the last so many kept.
+Public Final Class OutputLog
+    Field lines: String[] = []
+    Field partial: UInt8[] = []
+    Field dropped: Int = 0
+    Field added: Int = 0
+    Field cleared: Int = 0
+    Field most: Int
+
+    /// A log keeping `most` lines.
+    Public New(most: Int = MOST_LINES)
+        Self.most = most
+    End New
+
+    /// What it's kept, oldest first.
+    Public Method Lines(): String[] => lines.Clone()
+
+    /// How many lines there have been, those it's let go of among them.
+    Public Method Total(): Int => added
+
+    /// How many times it's been emptied.
+    Public Method Cleared(): Int => cleared
+
+    /// How many lines it's let go of.
+    Public Method Dropped(): Int => dropped
+
+    /// Adds `count` of `bytes`, as much of them as ends a line.
+    Public Method Feed(bytes: Buffer<UInt8>, count: Int64)
+        For at = 0 To count - 1
+            Local byte = bytes[at]
+            If byte == 10
+                Finish()
+            Else
+                partial.Add(byte)
+            End If
+        End For
+    End Method
+
+    /// Adds `line`, as a line of its own, after what's unfinished.
+    Public Method Say(line: String)
+        Flush()
+        Added(line)
+    End Method
+
+    /// Ends what hasn't ended its line, as a stream that's closed has.
+    Public Method Flush()
+        If partial.Count > 0 Then Finish()
+    End Method
+
+    /// Empties it.
+    Public Method Clear()
+        lines.Clear()
+        partial.Clear()
+        dropped = 0
+        added = 0
+        cleared += 1
+    End Method
+
+    Method Finish()
+        If partial.Count > 0 && partial[partial.Count - 1] == 13 Then partial.RemoveAt(partial.Count - 1)
+        Added(Shown(partial))
+        partial.Clear()
+    End Method
+
+    Method Added(line: String)
+        lines.Add(line)
+        added += 1
+        If lines.Count > most
+            lines.RemoveAt(0)
+            dropped += 1
+        End If
+    End Method
+End Class
+
+// `bytes` as text, each byte of what isn't UTF-8 past ASCII shown as U+FFFD.
+Function Shown(bytes: UInt8[]): String
+    Local text = String.FromUtf8(bytes)
+    If text != Null Then Return text
+    Local shown: UInt8[] = []
+    For each In bytes
+        If each < 128
+            shown.Add(each)
+        Else
+            shown.Add(239)
+            shown.Add(191)
+            shown.Add(189)
+        End If
+    End For
+    Return String.FromUtf8(shown) ?? ""
+End Function
+
+/// A run of a game: build, then its program, one process at a time, each piped to Log, and each ended
+/// by Stop, so none goes on without it. Its Update, each frame, moves it on. A game's asked for the
+/// scene by `--scene` and its res:// path, which Scene.Requested gives it.
+Public Final Class GameRun
+    /// What it's said.
+    Public ReadOnly Field Log: OutputLog
+    /// The fb it builds with, as GameComponents' is.
+    Public Field Fb: String = "fb"
+    Field child: Child? = Null
+    Field state: PlayState = PlayState.IDLE
+    Field code: Int64? = Null
+    Field folder: Path? = Null
+    Field program: Path? = Null
+    Field scene: String = ""
+    // How many of its pipes are still being read, and which of its processes those are of: a pipe
+    // that something it started still holds is let go of, and what comes after is dropped.
+    Field reading: Int = 0
+    Field pumped: Int = 0
+
+    Public New()
+        Log = OutputLog()
+    End New
+
+    /// What it's got to.
+    Public Method State(): PlayState => state
+
+    /// Whether a process of it may be going.
+    Public Method Going(): Bool => state == PlayState.BUILDING || state == PlayState.RUNNING
+
+    /// Where its program's built to, once it's started.
+    Public Method Program(): Path? => program
+
+    /// How its program ended by itself, or Null for one that didn't, as one that's going or stopped.
+    Public Method ExitCode(): Int64? => code
+
+    /// The OS's number for the process that's going, or Null.
+    Public Method ProcessId(): Int64?
+        Local going = child
+        Return going != Null ? going.Id : Null
+    End Method
+
+    /// Builds the game in `project` and runs it on `sceneFile`, a res:// path, after stopping what's
+    /// going. It starts now, and Update goes on with it.
+    Public Method Start(project: GameProject, sceneFile: String)
+        Stop()
+        Log.Clear()
+        code = Null
+        folder = project.Folder
+        scene = sceneFile
+        Local built = project.Folder / "build" / "play" / (project.Name + (System.Platform == Platform.WINDOWS ? ".exe" : ""))
+        program = built
+        Log.Say("Building {project.Name}…")
+        Spawned(Command(Fb).Args(["--color", "never", "build", project.Folder.Text, "-o", built.Text]),
+                PlayState.BUILDING)
+    End Method
+
+    /// Ends what's going, at once, and waits for it, with the last of what it said. It's left as it
+    /// is if nothing's going.
+    Public Method Stop()
+        Local going = child
+        If going == Null Then Return
+        Try
+            Try going.Kill()
+        Catch error As IOError
+            // Still going, as far as anyone can tell, so it's still shown as that.
+            Log.Say("It couldn't be stopped: {error.Message}")
+            Return
+        End Try
+        going.Wait()
+        child = Null
+        Drained()
+        Log.Flush()
+        Log.Say("Stopped.")
+        state = PlayState.STOPPED
+    End Method
+
+    /// Moves it on: from what's built to its program, and from what's ended to how it did.
+    Public Method Update()
+        Local going = child
+        If going == Null Then Return
+        Local ended = going.TryWait()
+        If ended == Null Then Return
+        child = Null
+        Drained()
+        Log.Flush()
+        If state == PlayState.BUILDING
+            If ended.Success
+                Run()
+            Else
+                Log.Say("It couldn't be built.")
+                state = PlayState.BUILD_FAILED
+            End If
+            Return
+        End If
+        code = ended.Code
+        Log.Say("It ended, with {ended}.")
+        state = PlayState.ENDED
+    End Method
+
+    // The game's own program, on the scene, in its folder.
+    Method Run()
+        Local built = program
+        Local home = folder
+        If built == Null || home == Null Then Return
+        Log.Say("Running {scene}…")
+        Spawned(Command(built.Text).Args(["--scene", scene]).Folder(home.Text), PlayState.RUNNING)
+    End Method
+
+    // `command`, its output piped here, or the reason it can't start.
+    Method Spawned(command: Command, next: PlayState)
+        Try
+            Local made = Try command.Stdin(Stdio.NONE).Stdout(Stdio.PIPED).Stderr(Stdio.PIPED).Spawn()
+            child = made
+            state = next
+            Local out = made.Stdout
+            Local err = made.Stderr
+            If out != Null Then Pump(out, pumped)
+            If err != Null Then Pump(err, pumped)
+        Catch error As IOError
+            Log.Say("It couldn't be started: {error.Message}")
+            state = PlayState.COULDNT_START
+        End Try
+    End Method
+
+    // Goes on reading `stream` until it closes, as it's written, at each Flip.
+    Async Method Pump(stream: ChildOutput, of: Int)
+        reading += 1
+        Local bytes = Buffer<UInt8>(CHUNK)
+        Try
+            While True
+                Local count = Await stream.ReadAsync(bytes)
+                If of != pumped Then Return
+                If count <= 0 Then Break
+                Log.Feed(bytes, count)
+            End While
+        Catch error As IOError
+            If of != pumped Then Return
+            Log.Say("Its output couldn't be read: {error.Message}")
+        End Try
+        reading -= 1
+    End Method
+
+    // Lets its pipes finish, as what's ended has closed them, unless something it started holds them.
+    Method Drained()
+        Local since = Stopwatch.StartNew()
+        While reading > 0 && since.Elapsed.TotalSeconds < LAST_OUTPUT
+            Scheduler.Main.Step()
+            Sleep(1.Milliseconds)
+        End While
+        pumped += 1
+        reading = 0
+    End Method
+End Class
+
+// What the pane says of `state`.
+Function HeadingOf(state: PlayState): String
+    Select state
+    Case PlayState.IDLE
+        Return "Not run"
+    Case PlayState.BUILDING
+        Return "Building"
+    Case PlayState.RUNNING
+        Return "Running"
+    Case PlayState.ENDED
+        Return "Ended"
+    Case PlayState.BUILD_FAILED
+        Return "Couldn't be built"
+    Case PlayState.COULDNT_START
+        Return "Couldn't be started"
+    Case PlayState.STOPPED
+        Return "Stopped"
+    End Select
+End Function
+
+/// What a run says, in a pane: what it's got to, and its lines, the newest showing.
+Public Final Class OutputPane Extends Widget
+    Field run: GameRun
+    Field heading: Label
+    Field scroller: ScrollView
+    Field list: Node
+    Field shown: Int = 0
+    Field cleared: Int = 0
+
+    /// The pane of `run`.
+    Public New(shows: GameRun)
+        run = shows
+        heading = Label("", "output.state")
+        scroller = ScrollView("output.scroller")
+        list = Node("output.list")
+        Super.New("pane", "pane.output")
+        heading.SetTranslates(False)
+        Add(heading)
+        scroller.SetHeight(Sizing.Fill())
+        scroller.Add(list)
+        Add(scroller)
+    End New
+
+    /// What it shows, line by line.
+    Public Method ShownLines(): String[]
+        Local lines: String[] = []
+        For row In list.Children()
+            lines.Add((row As? Label)?.Text() ?? "")
+        End For
+        Return lines
+    End Method
+
+    /// What it says the run's got to.
+    Public Method Heading(): String => heading.Text()
+
+    /// Shows what's new.
+    Public Method Update()
+        heading.SetText(HeadingOf(run.State()))
+        Local log = run.Log
+        If log.Cleared() != cleared
+            cleared = log.Cleared()
+            shown = 0
+            For row In list.Children()
+                list.Remove(row)
+            End For
+        End If
+        Local total = log.Total()
+        If total == shown Then Return
+        Local lines = log.Lines()
+        For at = Max(lines.Count - (total - shown), 0) To lines.Count - 1
+            Local row = Label(lines[at])
+            row.SetStyleName("output.line")
+            row.SetTranslates(False)
+            list.Add(row)
+        End For
+        shown = total
+        Local rows = list.Children()
+        For at = 0 To rows.Count - MOST_LINES - 1
+            list.Remove(rows[at])
+        End For
+        scroller.SetOffset(Inf)
+    End Method
+End Class

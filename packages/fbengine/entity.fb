@@ -6,6 +6,7 @@ Import std.collections
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./camera"
 Import "./light"
@@ -298,6 +299,7 @@ Public Class Entity Implements Printable
     // The name its model's file has for it, if it came from one, whatever it's been named since.
     Package Method FileNode(): String => fileNode
 
+    @NotEdited
     Package Method SetFileNode(name: String)
         fileNode = name
     End Method

@@ -56,4 +56,9 @@ else shows a note. fbengine_physics's "Body" is one of these.
 `-- --watch` plays a scene of its own by itself, keeping nothing of yours, for anyone to look at (`python
 tools/show.py ../packages/fbengine_editor`).
 
-Playing the game comes in the step after this one.
+Play's F5 builds the game with `fb` and runs its program, in a process of its own, on the scene as it's
+saved, saving what's changed first, so nothing a run does touches what's being edited. Its folder is asked
+about once, the same yes as for its components. A program finds the scene it's asked for by
+`Scene.Requested()`, from `--scene`. What it says shows in the Output pane; Shift F5 stops it, as playing
+again, closing its project, and quitting do. A game's own processes, and a run left by the editor crashing,
+aren't stopped.

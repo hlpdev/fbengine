@@ -18,6 +18,7 @@ Import "./handles"
 Import "./history"
 Import "./inspector"
 Import "./menu"
+Import "./play"
 Import "./project"
 Import "./scene"
 Import "./session"
@@ -51,6 +52,10 @@ Public Final Class Editor
     Public ReadOnly Field Inspector: SceneInspector
     /// What kinds of component the project has.
     Public ReadOnly Field Kinds: GameComponents
+    /// The game's run, if there's been one.
+    Public ReadOnly Field Run: GameRun
+    /// What the game's run says.
+    Public ReadOnly Field Output: OutputPane
     Field project: GameProject? = Null
     Field dialog: Dialog? = Null
     Field welcome: Node
@@ -75,6 +80,8 @@ Public Final Class Editor
         Files = AssetBrowser()
         Kinds = GameComponents()
         Inspector = SceneInspector(Edited, Edits, Kinds)
+        Run = GameRun()
+        Output = OutputPane(Run)
         Docked = Dock()
         Menus = MenuBar(Actions)
         welcome = Widget("welcome", "welcome")
@@ -138,6 +145,8 @@ Public Final Class Editor
         Local failure = Kinds.TakeFailure()
         If failure != Null Then Said("Couldn't read the game's components", failure)
         Inspector.Update()
+        Run.Update()
+        Output.Update()
         Shown.Update()
         KeysLooked()
         Menus.Update()
@@ -209,7 +218,19 @@ Public Final Class Editor
         Local open = project
         If open == Null Then Return
         Kept.Trust(open.Folder.Text)
-        Kinds.Start(open.Folder)
+        If GameComponents.HasProgram(open.Folder) Then Kinds.Start(open.Folder)
+    End Method
+
+    // Asks whether the project's code may run, saying what for, and on a yes, kept for its folder from
+    // then on, does `then`. Reading its kinds and playing it go by this, so it's one yes a folder.
+    Method AskedToRun(why: String, then: (Func())? = Null)
+        Local asking = Dialog("Run this project's code?", why)
+        asking.AddButton("Not Now")
+        asking.AddButton("Run It", Function[Weak Self]()
+            Self?.TrustProject()
+            If then != Null Then then()
+        End Function)
+        Showed(asking)
     End Method
 
     // Reads what kinds of component the project has, which runs its code, so a project is asked about
@@ -223,19 +244,14 @@ Public Final Class Editor
         End If
         Kinds.HeldBack = True
         Kinds.Set(Kinds.Kinds())
-        Local asking = Dialog("Run this project's code?",
-                              "{open.Folder} has a program that says what components it has. To show them, the editor builds and runs it, which can do anything a program can. Run it only if you trust where this project came from.")
-        asking.AddButton("Not Now")
-        asking.AddButton("Run It", Function[Weak Self]()
-            Self?.TrustProject()
-        End Function)
-        Showed(asking)
+        AskedToRun("{open.Folder} has a program that says what components it has. To show them, the editor builds and runs it, which can do anything a program can. Run it only if you trust where this project came from.")
     End Method
 
     /// Keeps what's open in the project, and closes it.
     Public Method CloseProject()
         Local open = project
         If open == Null Then Return
+        Run.Stop()
         Local kept = Value.Object()
         kept["layout"] = Docked.Saved()
         Local scene = sceneFile
@@ -392,6 +408,41 @@ Public Final Class Editor
             Return
         End Try
         If after != Null Then after()
+    End Method
+
+    /// Plays the game on the scene being edited, once its folder's been said to run its code, saved
+    /// first if it's changed, and asked where if it's never been; one that can't be saved says why, and
+    /// doesn't run. What's playing is stopped first. Its output's shown in the Output pane.
+    Public Method Play()
+        Local open = project
+        If open == Null Then Return
+        If !Kept.Trusted(open.Folder.Text)
+            AskedToRun("To play {open.Folder}, the editor builds and runs its code, which can do anything a program can. Run it only if you trust where this project came from.",
+                       Function[Weak Self]()
+                Self?.Play()
+            End Function)
+            Return
+        End If
+        If sceneFile == Null
+            AskForSceneFile(Function[Weak Self]()
+                Self?.Played()
+            End Function)
+        ElseIf Edits.Modified()
+            SaveScene(Null, Function[Weak Self]()
+                Self?.Played()
+            End Function)
+        Else
+            Played()
+        End If
+    End Method
+
+    // The game run on the scene as it's saved.
+    Method Played()
+        Local open = project
+        Local scene = sceneFile
+        If open == Null || scene == Null Then Return
+        Docked.Show("output")
+        Run.Start(open, scene)
     End Method
 
     // `action`, after asking whether to save what's changed, if anything has.
@@ -605,11 +656,8 @@ Public Final Class Editor
         End Function)
         Inspector.SetWidth(Sizing.Fill())
         Docked.AddPane(Pane("inspector", "Inspector", Inspector))
-        For each In [("output", "Output")]
-            Local id, title = each
-            Local content = Widget("pane", "pane." + id)
-            Docked.AddPane(Pane(id, title, content))
-        End For
+        Output.SetWidth(Sizing.Fill())
+        Docked.AddPane(Pane("output", "Output", Output))
     End Method
 
     Method AddCommands()
@@ -642,6 +690,16 @@ Public Final Class Editor
             Local own = Self
             If own != Null Then own.AskForSceneFile()
         End Function, PrimaryKey(Key.S, True), hasProject)
+        Actions.Add("play.run", "Play", Function[Weak Self]()
+            Self?.Play()
+        End Function, Shortcut(Key.F5, False, False, False), hasProject)
+        Actions.Add("play.stop", "Stop", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Run.Stop()
+        End Function, Shortcut(Key.F5, False, True, False), Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Run.Going()
+        End Function)
         Actions.Add("file.close", "Close Project", Function[Weak Self]()
             Local own = Self
             If own != Null Then own.CloseProject()
@@ -820,6 +878,7 @@ Public Final Class Editor
                        "tree.duplicate", "tree.hide", "tree.delete",
                        SEPARATOR, "select.none"])
         Menus.AddMenu("Add", ["add.cube", "add.light"])
+        Menus.AddMenu("Play", ["play.run", "play.stop"])
         Menus.AddMenu("Tools",
                       ["tool.move", "tool.turn", "tool.scale", SEPARATOR, "tool.space",
                        "tool.snap"])

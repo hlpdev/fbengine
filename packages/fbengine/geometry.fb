@@ -4,6 +4,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./transform"
 Import "./window"
@@ -170,7 +171,7 @@ Public Final Class Geometry
         Return found
     End Method
 
-    @MainThread
+    @MainThread @NotEdited
     Package Method SetSceneId(id: String)
         fbe_geometry_set_scene_id(Live("SetSceneId"), id)
     End Method
