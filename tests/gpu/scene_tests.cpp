@@ -5989,8 +5989,10 @@ TEST_CASE("a shader of its own draws an Instances, each moved in its own space",
         require(fbe_camera_set_clear_color(scene.camera, 0.0F, 0.0F, 0.0F, 1.0F));
         require(fbe_material_set_shading(material, FBE_SHADING_UNLIT));
         require(fbe_material_set_parameter(material, 0, 5.0F, 0.0F, 0.0F, 0.0F));
-        std::vector<fbe_instance_t> all{ instance_at(-3.0F, 0.0F, -10.0F),
-                                         instance_at(3.0F, 0.0F, -10.0F) };
+        std::vector<fbe_instance_t> all{
+            instance_at(-3.0F, 0.0F, -10.0F),
+            instance_at(3.0F, 0.0F, -10.0F),
+        };
         all[1].color = { .r = 1.0F, .g = 0.0F, .b = 0.0F, .a = 1.0F };
         cubes_at(scene.world, material, all);
         const std::uint64_t greens = by_game_shader();
