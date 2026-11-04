@@ -78,8 +78,10 @@ float4 historyAt(float2 uv)
     const uint image = temporal.history;
     const uint sampler = temporal.sampler;
     const float4 sum =
-        (sampleTextureLevel(image, sampler, float2(between.x, before.y), 0.0) * middle.x * first.y) +
-        (sampleTextureLevel(image, sampler, float2(before.x, between.y), 0.0) * first.x * middle.y) +
+        (sampleTextureLevel(image, sampler, float2(between.x, before.y), 0.0) * middle.x *
+         first.y) +
+        (sampleTextureLevel(image, sampler, float2(before.x, between.y), 0.0) * first.x *
+         middle.y) +
         (sampleTextureLevel(image, sampler, between, 0.0) * middle.x * middle.y) +
         (sampleTextureLevel(image, sampler, float2(after.x, between.y), 0.0) * fourth.x *
          middle.y) +

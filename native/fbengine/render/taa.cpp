@@ -28,6 +28,9 @@ namespace {
 using scene::mat4_t;
 using scene::vec3_t;
 
+/// How many frames can go undrawn with what's been still good to go by, as a camera drawn every
+/// other frame has.
+constexpr std::int64_t most_frames_undrawn = 2;
 /// How much of what's now goes in, once there's enough of what's been to go by.
 constexpr float settled_weight = 0.1F;
 constexpr std::uint32_t jitter_count = 8;
@@ -82,7 +85,7 @@ float halton(std::uint32_t index, std::uint32_t base) {
 
 } // namespace
 
-history_t* history_of(const scene::camera_t& camera, VkExtent2D size,
+history_t* history_of(const scene::camera_t& camera, std::uint64_t target, VkExtent2D size,
                       const std::array<float, 4>& viewport) {
     if (!registered) {
         gpu::at_stop(forget_histories);
@@ -106,9 +109,13 @@ history_t* history_of(const scene::camera_t& camera, VkExtent2D size,
         }
         history.frames = 0;
     }
-    if (history.viewport != viewport || history.resets != camera.history_resets) {
+    const std::int64_t frame = fbe_frame_count();
+    if (history.viewport != viewport || history.resets != camera.history_resets ||
+        history.target != target || frame - history.last_frame > most_frames_undrawn) {
         history.frames = 0;
     }
+    history.target = target;
+    history.last_frame = frame;
     history.size = size;
     history.viewport = viewport;
     history.resets = camera.history_resets;

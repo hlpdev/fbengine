@@ -323,8 +323,9 @@ Public Final Class Camera Extends Entity
     Public Method AmbientOcclusion(): Float =>
         fbe_camera_ambient_occlusion(Live("AmbientOcclusion"))
 
-    /// Sets how far its ambient occlusion reaches, in the world, 1 at first. Not above 0 panics.
-    @Limits(0, Above: True)
+    /// Sets how far its ambient occlusion reaches, in the world, 1 at first; its samples reach no
+    /// more than a tenth of its view's height, so close up they cover less. Under 0.0001 panics.
+    @Limits(0.0001)
     @MainThread @PanicsAtCaller
     Public Method SetAmbientOcclusionRadius(radius: Float)
         If !fbe_camera_set_ambient_occlusion_radius(Live("SetAmbientOcclusionRadius"), radius)
@@ -337,10 +338,24 @@ Public Final Class Camera Extends Entity
     Public Method AmbientOcclusionRadius(): Float =>
         fbe_camera_ambient_occlusion_radius(Live("AmbientOcclusionRadius"))
 
+    /// Sets whether its picture's antialiased from itself, False at first, after all else it does:
+    /// one triangle over its target, no prepass or history, so what a low GPU can spend. It softens
+    /// what's sharp in the picture, text too. It goes to its target through an image of its own, so
+    /// what multiplies what's behind it, in a camera that doesn't clear, draws nothing.
+    @MainThread @PanicsAtCaller
+    Public Method SetFxaa(on: Bool)
+        If !fbe_camera_set_fxaa(Live("SetFxaa"), on) Then Failed("SetFxaa")
+    End Method
+
+    /// Whether its picture's antialiased from itself.
+    @MainThread @PanicsAtCaller
+    Public Method Fxaa(): Bool => fbe_camera_fxaa(Live("Fxaa"))
+
     /// Sets whether an HDR camera antialiases over frames, False at first: its projection a part
     /// of a pixel off each frame, and what's drawn blended over what the frames before had there,
-    /// moved as its entities and skins have moved since. Particles, what blends, morphs, an
-    /// Instances' own instances, and reflections have no motion of their own.
+    /// moved as its entities and skins have moved since. Particles, what blends, other orders,
+    /// morphs, an Instances' own instances, and reflections have no motion of their own: a HUD in
+    /// another order softens as it pans.
     @MainThread @PanicsAtCaller
     Public Method SetTemporalAA(on: Bool)
         If !fbe_camera_set_temporal_aa(Live("SetTemporalAA"), on) Then Failed("SetTemporalAA")
@@ -350,8 +365,8 @@ Public Final Class Camera Extends Entity
     @MainThread @PanicsAtCaller
     Public Method TemporalAA(): Bool => fbe_camera_temporal_aa(Live("TemporalAA"))
 
-    /// Has it forget what the frames before had, for a cut, where nothing's where it was. Its size
-    /// or viewport changing does the same.
+    /// Has it forget what the frames before had, for a cut, where nothing's where it was. Its
+    /// size, viewport, or target changing does the same, as does more than 2 frames undrawn.
     @MainThread @PanicsAtCaller
     Public Method ResetHistory()
         If !fbe_camera_reset_history(Live("ResetHistory")) Then Failed("ResetHistory")

@@ -246,6 +246,9 @@ Function ACamerasAmbientOcclusionAndAntialiasingAreWhatTheyreSetTo()
     Expect(camera.AmbientOcclusion() == 2)
     Expect(camera.AmbientOcclusionRadius() == 0.5)
     Expect(camera.TemporalAA())
+    Expect(!camera.Fxaa())
+    camera.SetFxaa(True)
+    Expect(camera.Fxaa())
 End Function
 
 @Test

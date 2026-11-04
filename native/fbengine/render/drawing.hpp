@@ -310,14 +310,17 @@ struct motion_t {
 };
 
 /// A camera's temporal antialiasing as it stands: its two textures, which is newest, and what it
-/// went by; how many frames there are in it, 0 for none; how many it's been jittered, and this
-/// one's, in its clip space; and how its last view was turned, from the world.
+/// went by, the frame it was last drawn in among them; how many frames there are in it, 0 for none;
+/// how many it's been jittered, and this one's, in its clip space; and how its last view was
+/// turned, from the world.
 struct history_t {
     std::array<std::uint64_t, 2> textures{};
     std::size_t newest = 0;
     VkExtent2D size{};
     std::array<float, 4> viewport{};
     std::uint64_t resets = 0;
+    std::uint64_t target = 0;
+    std::int64_t last_frame = 0;
     std::uint32_t frames = 0;
     std::uint32_t jittered = 0;
     std::array<float, 2> jitter{};
@@ -325,10 +328,10 @@ struct history_t {
     motion_t motion;
 };
 
-/// A camera's history for this frame, made if it has to be, with no frames in it if its target's
-/// size or viewport or what it's been told have changed: null, with fbe_error's why, if it can't
-/// be.
-history_t* history_of(const scene::camera_t& camera, VkExtent2D size,
+/// A camera's history for this frame, made if it has to be, with no frames in it if its target,
+/// its size, or its viewport, or what it's been told have changed, or it's gone a while undrawn:
+/// null, with fbe_error's why, if it can't be.
+history_t* history_of(const scene::camera_t& camera, std::uint64_t target, VkExtent2D size,
                       const std::array<float, 4>& viewport);
 
 /// Which of `motion`'s records is an item's entity's, added if it isn't there; `failed` if there's
@@ -338,8 +341,10 @@ std::uint32_t previous_of(motion_t& motion, const item_t& item, const scene::twe
 void finish_motion(motion_t& motion, const scene::mat4_t& to_clip_now);
 
 /// Adds a camera's prepass, of its main view's opaque draws, as render/prepass.cpp has it, before
-/// its scene pass: its target, or no_resource, with fbe_error's why.
+/// its scene pass, sampling what `uses` says, as a cut-out's layers are: its target, or
+/// no_resource, with fbe_error's why.
 gpu::resource_t add_prepass(const view_batches_t& view, const recorded_pass_t& scene_pass,
+                            std::vector<std::pair<gpu::resource_t, gpu::use_t>> uses,
                             VkExtent2D size);
 
 /// Adds a camera's ambient occlusion's passes, from its prepass: what they leave, or no_resource,
@@ -348,6 +353,10 @@ gpu::resource_t add_ambient_occlusion(const scene::camera_t& camera, const scene
                                       gpu::resource_t prepass, const recorded_pass_t& scene_pass,
                                       const std::array<float, 2>& jitter, std::uint32_t frame,
                                       VkExtent2D size);
+
+/// Adds a camera's FXAA, from a picture done but for it: false, with fbe_error's why, if it can't.
+bool add_fxaa(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
+              VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples, VkRect2D scissor);
 
 /// Adds what resolves a camera's image over its history: what comes of it, which the camera's post
 /// processing reads in its image's place, or no_resource, with fbe_error's why.

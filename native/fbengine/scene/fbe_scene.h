@@ -509,17 +509,26 @@ FBE_API bool fbe_camera_hdr(uint64_t camera);
 // what's around it within a radius, in the world, 1 at first, darkening the ambient and environment
 // light of PBR materials only, raised to `strength`, 0 or more; 0, at first, for none, which costs
 // nothing. Direct light, what blends, other orders, UNLIT and VERTEX materials, and reflections in
-// mirrors take none, and a normal map's bumps give none. False for what's not finite or out of
-// range.
+// mirrors take none, and a normal map's bumps give none. A radius is 0.0001 or more, and its
+// samples reach no more than a tenth of a view's height, so close up they cover less than it says.
+// False for what's not finite or out of range.
 FBE_API bool fbe_camera_set_ambient_occlusion(uint64_t camera, float strength);
 FBE_API float fbe_camera_ambient_occlusion(uint64_t camera);
 FBE_API bool fbe_camera_set_ambient_occlusion_radius(uint64_t camera, float radius);
 FBE_API float fbe_camera_ambient_occlusion_radius(uint64_t camera);
 // Whether an HDR camera antialiases over frames, as it doesn't at first: its projection a part of a
 // pixel off each frame, and what's drawn blended over what the frames before had there, moved as
-// its entities and skins have moved since. Particles, what blends, morphs, an Instances' own
-// instances, and reflections have no motion of their own, so they go by their surroundings'. Its
-// history's dropped as its size or viewport changes, and by fbe_camera_reset_history, for a cut.
+// its entities and skins have moved since. Particles, what blends, other orders, morphs, an
+// Instances' own instances, and reflections have no motion of their own, so they go by their
+// surroundings': a HUD in another order softens as its camera pans. Its history's dropped as its
+// size, viewport, or target changes, when it's gone more than 2 frames undrawn, and by
+// fbe_camera_reset_history, for a cut.
+// Whether a camera's picture is antialiased from itself, as it isn't at first, after all else it
+// does: a triangle over its target, with no prepass or history, so what a low GPU can spend; its
+// picture goes to its target through an image of its own, and what multiplies what's behind it, in
+// a camera that doesn't clear, draws nothing. It softens what's sharp in the picture, text too.
+FBE_API bool fbe_camera_set_fxaa(uint64_t camera, bool on);
+FBE_API bool fbe_camera_fxaa(uint64_t camera);
 FBE_API bool fbe_camera_set_temporal_aa(uint64_t camera, bool on);
 FBE_API bool fbe_camera_temporal_aa(uint64_t camera);
 FBE_API bool fbe_camera_reset_history(uint64_t camera);

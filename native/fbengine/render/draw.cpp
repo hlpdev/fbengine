@@ -871,7 +871,22 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const auto width = static_cast<float>(found->width);
     const auto height = static_cast<float>(found->height);
     const VkFormat target_format = found->vk_format;
-    const VkFormat format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : target_format;
+    // FXAA reads what's done, so it goes through an image of its own, as near the target as there
+    // is.
+    const bool srgb_target =
+        target_format == VK_FORMAT_R8G8B8A8_SRGB || target_format == VK_FORMAT_B8G8R8A8_SRGB;
+    const bool float_target = target_format == VK_FORMAT_R16G16B16A16_SFLOAT;
+    std::int32_t picture_format = srgb_target ? FBE_TEXTURE_RGBA8 : FBE_TEXTURE_RGBA8_LINEAR;
+    VkFormat picture_vk_format = srgb_target ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+    if (float_target) {
+        picture_format = FBE_TEXTURE_RGBA16F;
+        picture_vk_format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    }
+    const bool aside = camera.hdr || camera.fxaa;
+    VkFormat format = target_format;
+    if (aside) {
+        format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : picture_vk_format;
+    }
     const VkSampleCountFlagBits samples = found->samples;
     const std::uint32_t target_width = found->width;
     const std::uint32_t target_height = found->height;
@@ -955,9 +970,9 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const bool temporal = camera.hdr && camera.temporal_aa;
     const bool occludes = camera.ambient_occlusion > 0.0F;
     const VkExtent2D full_size{ .width = target_width, .height = target_height };
-    history_t* history =
-        temporal ? history_of(camera, full_size, { view.x, view.y, view.width, view.height })
-                 : nullptr;
+    history_t* history = temporal ? history_of(camera, target, full_size,
+                                               { view.x, view.y, view.width, view.height })
+                                  : nullptr;
     if (temporal && history == nullptr) {
         return false;
     }
@@ -988,7 +1003,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const std::array<float, 4> clear_rgba = camera.clear_color;
     // An HDR image is all the camera's, so all of it's cleared: to nothing, if what's in its target
     // shows through.
-    pass->clear_color = camera.clears_color && !whole && !camera.hdr;
+    pass->clear_color = camera.clears_color && !whole && !aside;
     pass->clear_depth = camera.clears_depth && !whole;
     pass->clear_rgba = clear_rgba;
     std::ranges::sort(sampled);
@@ -1006,8 +1021,9 @@ bool draw_camera(std::uint32_t slot, float tween) {
     if (into == gpu::no_resource) {
         return false;
     }
-    const gpu::resource_t prepass =
-        temporal || occludes ? add_prepass(pass->views.back(), *pass, full_size) : gpu::no_resource;
+    const gpu::resource_t prepass = temporal || occludes
+                                        ? add_prepass(pass->views.back(), *pass, uses, full_size)
+                                        : gpu::no_resource;
     if ((temporal || occludes) && prepass == gpu::no_resource) {
         return false;
     }
@@ -1023,13 +1039,13 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const gpu::transient_t image_target{
         .width = target_width,
         .height = target_height,
-        .format = FBE_TEXTURE_RGBA16F,
+        .format = camera.hdr ? FBE_TEXTURE_RGBA16F : picture_format,
         .samples = static_cast<std::uint32_t>(samples),
     };
-    if (camera.hdr && !gpu::reserve_transient(image_target)) {
+    if (aside && !gpu::reserve_transient(image_target)) {
         return false;
     }
-    const gpu::resource_t image = camera.hdr ? gpu::transient_resource(image_target) : into;
+    const gpu::resource_t image = aside ? gpu::transient_resource(image_target) : into;
     if (image == gpu::no_resource) {
         return false;
     }
@@ -1037,7 +1053,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
         .name = "camera",
         .colors = { {
             .target = image,
-            .clear = camera.hdr || (camera.clears_color && whole),
+            .clear = aside || (camera.clears_color && whole),
             .rgba = camera.clears_color ? clear_rgba : std::array<float, 4>{},
         }, },
         .depth = into,
@@ -1045,16 +1061,34 @@ bool draw_camera(std::uint32_t slot, float tween) {
         .uses = std::move(uses),
         .record = [pass](VkCommandBuffer commands) { record_pass(commands, *pass); },
     });
-    if (!drawn || !camera.hdr) {
+    if (!drawn || !aside) {
         return drawn;
+    }
+    if (!camera.hdr) {
+        return add_fxaa(camera, image, into, full_size, target_format, samples, pass->scissor);
     }
     const gpu::resource_t resolved =
         temporal ? add_resolve(*history, camera, view, image, prepass, *pass) : image;
     if (resolved == gpu::no_resource) {
         return false;
     }
-    return add_post_passes(camera, resolved, into, full_size, target_format, samples,
-                           pass->scissor);
+    if (!camera.fxaa) {
+        return add_post_passes(camera, resolved, into, full_size, target_format, samples,
+                               pass->scissor);
+    }
+    const gpu::transient_t picture_target{
+        .width = target_width,
+        .height = target_height,
+        .format = picture_format,
+    };
+    if (!gpu::reserve_transient(picture_target)) {
+        return false;
+    }
+    const gpu::resource_t picture = gpu::transient_resource(picture_target);
+    return picture != gpu::no_resource &&
+           add_post_passes(camera, resolved, picture, full_size, picture_vk_format,
+                           VK_SAMPLE_COUNT_1_BIT, pass->scissor, true) &&
+           add_fxaa(camera, picture, into, full_size, target_format, samples, pass->scissor);
 }
 
 } // namespace fbe::render

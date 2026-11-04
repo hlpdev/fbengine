@@ -1,9 +1,10 @@
 // What a camera with ambient occlusion or temporal antialiasing draws before its scene: its opaque
 // draws again, into a target of half floats, one sample, with depth of its own. Red is how far each
-// pixel is along the view, 0 for nothing, to a part in 2048 of itself, which ambient occlusion's
-// bias keeps it above; blue and alpha how far it's moved on its view since the last frame, as parts
-// of it. One target, as a pipeline has, and depth's all the normals these want. Particles and what
-// blends aren't in it, so they have no motion.
+// pixel is along the view, 0 for nothing, as near as 16 bits come; green what they lose of it, over
+// what's in red, times 1024, so it's good to about 21 bits, as normals from a pixel's change in
+// depth need at any resolution; blue and alpha how far it's moved on its view since the last frame,
+// as parts of it. One target, as a pipeline has. Particles and what blends aren't in it, so they
+// have no motion.
 
 #include "fbengine.h"
 #include "gpu/graph.hpp"
@@ -13,10 +14,12 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <vector>
 
 namespace fbe::render {
 
 gpu::resource_t add_prepass(const view_batches_t& view, const recorded_pass_t& scene_pass,
+                            std::vector<std::pair<gpu::resource_t, gpu::use_t>> uses,
                             VkExtent2D size) {
     const gpu::transient_t target{
         .width = size.width,
@@ -55,6 +58,7 @@ gpu::resource_t add_prepass(const view_batches_t& view, const recorded_pass_t& s
         }, },
         .depth = made,
         .clear_depth = true,
+        .uses = std::move(uses),
         .record = [pass](VkCommandBuffer commands) { record_pass(commands, *pass); },
     });
     return added ? made : gpu::no_resource;

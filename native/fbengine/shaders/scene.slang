@@ -1205,7 +1205,11 @@ float4 prepassFragment(PrepassCorner corner) : SV_Target
     const float2 moved = corner.then.z > 0.0
                              ? ((corner.now.xy / corner.now.z) - (corner.then.xy / corner.then.z)) * 0.5
                              : float2(0.0, 0.0);
-    return float4(clamp(corner.depth, 0.001, 60000.0), 0.0, moved);
+    // As far as 16 bits have it, exactly, then what they lost of it, which render/prepass.cpp says.
+    const float depth = clamp(corner.depth, 0.001, 60000.0);
+    const float place = pow(2.0, floor(log2(depth)) - 10.0);
+    const float kept = round(depth / place) * place;
+    return float4(kept, ((depth - kept) / kept) * 1024.0, moved);
 }
 
 // A shadow's tile: what's nearest the light, kept as its depth, drawn with the camera's projection the

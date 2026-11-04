@@ -744,8 +744,9 @@ FBE_API bool fbe_camera_set_ambient_occlusion_radius(uint64_t camera, float radi
     if (found == nullptr) {
         return false;
     }
-    if (!std::isfinite(radius) || radius <= 0.0F) {
-        return fbe::fail(std::format("ambient occlusion's radius is above 0, not {}", radius));
+    if (!std::isfinite(radius) || radius < 0.0001F) {
+        return fbe::fail(
+            std::format("ambient occlusion's radius is 0.0001 or more, not {}", radius));
     }
     found->ambient_occlusion_radius = radius;
     return true;
@@ -754,6 +755,20 @@ FBE_API bool fbe_camera_set_ambient_occlusion_radius(uint64_t camera, float radi
 FBE_API float fbe_camera_ambient_occlusion_radius(uint64_t camera) {
     const camera_t* found = camera_of(camera);
     return found != nullptr ? found->ambient_occlusion_radius : 0.0F;
+}
+
+FBE_API bool fbe_camera_set_fxaa(uint64_t camera, bool on) {
+    camera_t* found = camera_of(camera);
+    if (found == nullptr) {
+        return false;
+    }
+    found->fxaa = on;
+    return true;
+}
+
+FBE_API bool fbe_camera_fxaa(uint64_t camera) {
+    const camera_t* found = camera_of(camera);
+    return found != nullptr && found->fxaa;
 }
 
 FBE_API bool fbe_camera_set_temporal_aa(uint64_t camera, bool on) {
