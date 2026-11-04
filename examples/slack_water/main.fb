@@ -1226,12 +1226,19 @@ Function EndShown(folder: Path) Throws GraphicsError, IOError, AudioError
     Local share = (differ As Float) / ((over.Width * over.Height) As Float)
     Print("the end screen covers {share} of it")
     Checks("it's drawn, over part of the world", share > 0.02 && share < 0.6)
-    // Play again, by the key on what's focused.
+    // Play again, by the key on what's focused, from a mended mill, as a bright ending leaves it.
+    island.LightLamp(True)
+    island.TurnWheel(1.0)
+    Local mended = island.WheelTurned()
+    Local endedStory = session.game.Story()
     Try Simulate.PressKey(Key.SPACE)
     stepped(2)
     Checks("playing again begins again", session.game.Story().Ended() == Ending.NONE &&
            session.game.Story().Clock() < 1.0)
     Checks("and the end's gone", !session.ending.Showing())
+    Checks("the same game isn't kept", session.game.Story() != endedStory)
+    Checks("with its wheel back", island.WheelTurned() != mended)
+    Checks("its lamp as it was", island.LampAsUnlit())
     Checks("from a world as it was",
            !island.LampLit() && island.PartEntity(Part.GEAR).Parent() == Null &&
            !island.PartEntity(Part.BELT).Hidden())
@@ -1256,11 +1263,13 @@ Function CookedWalk(kept: Path, folder: Path) Throws GraphicsError, IOError, Aud
     Checks("it's from its pak, cooked", first == 0xAB)
     Assets.StopWatching()
     Local lines: String[] = []
-    Local ended = Try Walked3dBy(Walk3dOf("bright") ?? [], lines)
-    Checks("a walk from it ends BRIGHT", ended == Ending.BRIGHT)
+    // Its transcript says how it ended.
+    Try Walked3dBy(Walk3dOf("bright") ?? [], lines)
     Try Pinned(lines, kept, False)
+    If Dir.Exists(folder) Then Try Dir.RemoveAll(folder)
     Try Dir.CreateAll(folder)
     Try SaveViews(folder)
+    Checks("the views from it are saved", File.Exists(folder / "island.png"))
 End Function
 
 // The game, in a window, for a person: WASD and the mouse, E, Q, and Escape.

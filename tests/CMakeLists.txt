@@ -418,6 +418,31 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.slack_water.cooked PROPERTIES RESOURCE_LOCK slack_water
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600)
+  # Which is to say something: not from a pak, or against another walk's words, that fails.
+  add_test(NAME examples.slack_water.cooked_not
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --cooked "${PROJECT_SOURCE_DIR}/examples/slack_water/tests/walk3d_bright.txt"
+                   "${PROJECT_BINARY_DIR}/example-frames/slack_water_cooked_not")
+  add_test(NAME examples.slack_water.cooked_other_walk
+           COMMAND "${FBENGINE_FB}" --color never run --release
+                   "${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   -- --cooked "${PROJECT_SOURCE_DIR}/examples/slack_water/tests/walk3d_dark.txt"
+                   "${PROJECT_BINARY_DIR}/example-frames/slack_water_cooked_other")
+  set_tests_properties(examples.slack_water.cooked_not examples.slack_water.cooked_other_walk
+                       PROPERTIES RESOURCE_LOCK slack_water WILL_FAIL TRUE
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600)
+  # And as a player has it: its executable and pak in a folder of their own, with nothing else left.
+  add_test(NAME examples.slack_water.shipped
+           COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}"
+                   "-DSOURCE=${PROJECT_SOURCE_DIR}/examples/slack_water"
+                   "-DPACKAGES=${PROJECT_SOURCE_DIR}/packages"
+                   "-DWORK=${PROJECT_BINARY_DIR}/example-frames/slack_water_shipped"
+                   "-DSUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/slack_water_shipped.cmake")
+  set_tests_properties(examples.slack_water.shipped PROPERTIES RESOURCE_LOCK slack_water
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 600)
   add_test(NAME examples.slack_water.hear
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/slack_water"
                    -- --hear)
