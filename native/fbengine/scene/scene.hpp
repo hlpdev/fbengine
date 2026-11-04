@@ -140,6 +140,10 @@ struct material_t {
     float normal_scale = 1.0F;
     float occlusion_strength = 1.0F;
     std::array<layer_t, FBE_MATERIAL_MAPS> maps{};
+    /// The shader of its own it draws with, which it holds, or 0 for the scene's, and what's for
+    /// that shader to read.
+    std::uint64_t shader = 0;
+    std::array<std::array<float, 4>, FBE_MATERIAL_PARAMETERS> parameters{};
 };
 
 /// A level of detail of a geometry.

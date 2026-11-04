@@ -1,0 +1,66 @@
+// A game's settings in an INI file, through std's Ini, with nothing of the engine: read, changed,
+// written to a file, and read back. It prints each value as it came, and the file it wrote.
+
+Import std.core
+Import std.data
+Import std.io
+Import std.text
+
+// As a game's options are, with what INI lets a file do: comments, spaces, both of its separators, a
+// value in quotes that keeps its spaces, and Windows' line ends.
+Const OPTIONS = "; what the options menu saves\r\n" +
+                "version = 1.3.11\r\n" +
+                "\r\n" +
+                "[graphics]\r\n" +
+                "width = 1280\r\n" +
+                "height: 720\r\n" +
+                "  gamma   =   1.25  \r\n" +
+                "# a comment on the line before\r\n" +
+                "title = \"  a name, with spaces  \"\r\n" +
+                "[audio]\r\n" +
+                "music volume = 0.5\r\n"
+
+Function Say(config: Value, path: String)
+    Print("{path}: {config.Path(path)?.AsString() ?? "isn't there"}")
+End Function
+
+Function Main() Throws IOError, ParseError
+    Local config = Try Ini.Read(OPTIONS)
+    Say(config, "version")
+    Say(config, "graphics.width")
+    Say(config, "graphics.height")
+    Say(config, "graphics.gamma")
+    Say(config, "graphics.title")
+    Say(config, "audio.music volume")
+    Say(config, "audio.nothing")
+
+    // What a game does with them.
+    Local width = Int.Parse(config.Path("graphics.width")?.AsString() ?? "0") ?? 0
+    Print("as a number, doubled: {width * 2}")
+
+    // Changed, saved, and read back from the file.
+    Local graphics = config["graphics"]
+    If graphics != Null Then graphics["width"] = Value("1920")
+    Local folder = Try TempDir()
+    Local file = folder.Path / "options.ini"
+    Try File.WriteText(file, Ini.Write(config))
+    Local written = Try File.ReadText(file)
+    For line In written.SplitLines()
+        Print("| {line}")
+    End For
+    Local again = Try Ini.Read(written)
+    Say(again, "graphics.width")
+    Say(again, "graphics.title")
+    Say(again, "audio.music volume")
+    Print("read back, what's unchanged is: {Ini.Write(again) == written}")
+
+    // A line that's none of what INI has says where.
+    Try
+        Try Ini.Read("[graphics\nwidth = 1\n")
+        Print("a broken header read")
+    Catch error As ParseError
+        Print("a broken header: {error.Message}")
+    End Try
+End Function
+
+Try Main()
