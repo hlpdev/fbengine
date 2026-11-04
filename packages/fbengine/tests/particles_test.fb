@@ -20,7 +20,7 @@ Function WhatsSetCanBeReadBack()
     Expect(particles.Life() == Vec2(1, 2) && particles.Speeds() == Vec2(3, 4))
     Expect(particles.Spread() == 0.5 && particles.Spin() == 6)
     Expect(particles.Gravity() == Vec3(7, 8, 9) && particles.Drag() == 10)
-    Expect(particles.Sizes() == Vec2(11, 12) && particles.Roll() == 1.5)
+    Expect(particles.Sizes() == Vec2(11, 12) && particles.BirthRoll() == 1.5)
     Expect(particles.StartColor() == Color(0.1, 0.2, 0.3, 0.4))
     Expect(particles.EndColor() == Color(0.5, 0.6, 0.7, 0.8))
 End Function

@@ -144,11 +144,15 @@ Function Saving(to: String) Throws IOError, GraphicsError
     editor.Actions.Run("tool.scale")
     Try Saved(editor, to, "scale")
     editor.Actions.Run("tool.move")
+    // What's below it is out of the way too, so all of a component's rows show.
     editor.Docked.Show("inspector")
+    editor.Docked.Hide("assets")
+    editor.Docked.Hide("output")
     editor.Edits.Commit(AddComponentEdit([scene.Hinge], editor.Kinds.Kinds()[0]))
     editor.Edited.SelectOnly(scene.Hinge)
     Try Saved(editor, to, "inspector")
     editor.Docked.Hide("inspector")
+    editor.Docked.Show("assets")
     editor.Edited.SelectOnly(Null)
     editor.Step()
     // What opens over them, each by a click.

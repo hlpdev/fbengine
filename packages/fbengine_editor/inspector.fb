@@ -1052,6 +1052,11 @@ Public Final Class SceneInspector Extends Widget
                                      Function(index: Int, sizes: Vec2)
             all[index].SetSizes(sizes.x, sizes.y)
         End Function, alive, Limits(0)), history))
+        Added(NumberRow(Editable<Float>("Roll", all.Count,
+                                        Function(index: Int) => all[index].BirthRoll(),
+                                        Function(index: Int, roll: Float)
+            all[index].SetRoll(roll)
+        End Function, alive, Limits(0, 3.1415927), True), history))
         Added(ColorRow(Editable<Color>("StartColor", all.Count,
                                        Function(index: Int) => all[index].StartColor(),
                                        Function(index: Int, color: Color)

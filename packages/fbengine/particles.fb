@@ -181,15 +181,14 @@ Public Final Class Particles Extends Entity
 
     /// Sets how far each's turned at its birth, up to `most` radians each way, 0 to Pi, 0 at first.
     /// Others panic.
-    @Limits(0, 3.1415927) @ShownInDegrees
     @MainThread @PanicsAtCaller
     Public Method SetRoll(most: Float)
         If !fbe_particles_set_roll(Live("SetRoll"), most) Then Failed("SetRoll")
     End Method
 
-    /// How far each's turned at its birth, at most, each way.
+    /// How far each's turned at its birth, at most, each way: Roll is an Entity's own.
     @MainThread @PanicsAtCaller
-    Public Method Roll(): Float => fbe_particles_roll(Live("Roll"))
+    Public Method BirthRoll(): Float => fbe_particles_roll(Live("BirthRoll"))
 
     /// Sets what its random numbers follow from, so a run can be the same again.
     @MainThread @PanicsAtCaller

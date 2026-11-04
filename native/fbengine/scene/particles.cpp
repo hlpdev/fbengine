@@ -544,7 +544,7 @@ FBE_API bool fbe_particles_color(uint64_t particles, bool end, fbe_color_t* colo
         return false;
     }
     const std::array<float, 4>& kept = end ? found->color_end : found->color_start;
-    *color = { kept[0], kept[1], kept[2], kept[3] };
+    *color = { .r = kept[0], .g = kept[1], .b = kept[2], .a = kept[3] };
     return true;
 }
 
