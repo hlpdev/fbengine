@@ -225,7 +225,9 @@ jobs:
           # On Windows, a panic with the GPU going hangs at the process's end: fb 1.2.2 ends by _Exit,
           # which runs its DLLs' detach after their threads are gone. Back in once FB_VERSION is the
           # release whose end_program uses TerminateProcess. The test job, with no GPU, still runs them.
-          if [ "$RUNNER_OS" = Windows ]; then set -- -E '\.panics\.|^gpu\.ends\.(panics|exits)$'; fi
+          # Slack Water's cooked_not and cooked_other_walk go the same way, failing on purpose by
+          # Process.Exit(1), and come back with them.
+          if [ "$RUNNER_OS" = Windows ]; then set -- -E '\.panics\.|^gpu\.ends\.(panics|exits)$|^examples\.slack_water\.(cooked_not|cooked_other_walk)$'; fi
           DYLD_FALLBACK_LIBRARY_PATH="${VULKAN_LIBRARIES:-}" ctest --test-dir build --output-on-failure "$@"
 
   format:
