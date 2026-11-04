@@ -127,9 +127,27 @@ if(FBENGINE_FB_TESTS)
       cmake_path(GET package FILENAME name)
       add_test(NAME ${name}.package COMMAND "${FBENGINE_FB}" test "${package}")
       set_tests_properties(${name}.package PROPERTIES ENVIRONMENT
-                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts")
+                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
     endif()
   endforeach()
+
+  # A program that ends with the GPU going, each way it can, and has to end: Windows' ending a process
+  # with it going seems to have waited for good on CI. An end of its own stops the GPU first, and says
+  # so; a panic and Process.Exit end by the runtime's _Exit, past what the engine can hook.
+  if(WIN32)
+    foreach(case IN ITEMS ends panics exits)
+      add_test(NAME gpu.ends.${case}
+               COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/gpu/ends"
+                       -- ${case})
+      set_tests_properties(gpu.ends.${case} PROPERTIES
+                           LABELS "gpu" TIMEOUT 120
+                           ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;FBENGINE_SAY_THE_END=1;${fbengine_vulkan_environment}")
+    endforeach()
+    set_tests_properties(gpu.ends.ends PROPERTIES
+                         PASS_REGULAR_EXPRESSION "stopped the GPU as the process ended")
+    set_tests_properties(gpu.ends.panics PROPERTIES
+                         PASS_REGULAR_EXPRESSION "panic: the program panics")
+  endif()
 
   # E3's arcade example, playing itself headless, the same every time, its pilot's run and a run
   # with no one flying, saving the frames that examples.arcade.golden, a hidden test of
@@ -701,6 +719,12 @@ if(FBENGINE_FB_TESTS)
   set_tests_properties(examples.controls_watch PROPERTIES
                        ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
                        PASS_REGULAR_EXPRESSION "\nwatched 30 frames, moved True, jumped True\r?\n$")
+  add_test(NAME examples.room_watch
+           COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/room"
+                   -- --watch --frames 30)
+  set_tests_properties(examples.room_watch PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "\nwatched 30 frames, [0-9]+ draws in the last\r?\n$")
   add_test(NAME examples.menu_watch
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/menu"
                    -- --watch --frames 60)
@@ -771,7 +795,7 @@ add_executable(fbengine_scene_tests scene/world_tests.cpp scene/transform_tests.
                scene/material_tests.cpp scene/bvh_tests.cpp scene/collision_tests.cpp
                scene/handles_tests.cpp scene/pick_tests.cpp scene/sprite_tests.cpp
                scene/plane_tests.cpp scene/draw_tests.cpp
-               scene/terrain_tests.cpp scene/clusters_tests.cpp
+               scene/terrain_tests.cpp scene/clusters_tests.cpp scene/effects_tests.cpp
                "${PROJECT_SOURCE_DIR}/native/fbengine/scene/bvh.cpp")
 target_link_libraries(fbengine_scene_tests PRIVATE fbengine_native Catch2::Catch2WithMain)
 fbengine_set_warnings(fbengine_scene_tests)
@@ -809,6 +833,25 @@ catch_discover_tests(fbengine_scene_tests TEST_PREFIX "scene."
 # what it does.
 if(FBENGINE_FB_TESTS)
   set(fbengine_scene_panics
+      "particles-colors=SetColors on a Particles: a particle's alpha is 0 to 1, not 2"
+      "particles-roll=SetRoll on a Particles: a particle's roll is up to 0 to Pi each way, not -1"
+      "decal-limit=Decal: a decal's limit is above 0 and up to Pi / 2, not 2"
+      "sky-texture-brightness=SetSkyTexture on a World: a sky's brightness is 0 or more, not -1"
+      "particles-capacity=SetCapacity on a Particles: an emitter holds 1 to 1048576 particles, not 0"
+      "particles-rate=SetRate on a Particles: particles are born at 0 a second or more, not -1"
+      "particles-life=SetLife on a Particles: a particle lives above 0 seconds, the least to the most, up to 512, not 2 to 1"
+      "particles-motion=SetMotion on a Particles: a particle's speeds are 0 or more, least to most, its spread 0 to Pi from its axis, and its spin 0 or more, not 2 to 1, 0, 0"
+      "particles-forces=SetForces on a Particles: a particle's gravity is finite and its drag 0 or more, not -1"
+      "particles-sizes=SetSizes on a Particles: a particle's half-size is 0 or more, not -1 to 0"
+      "particles-burst=Burst on a Particles: a burst is 0 particles or more, not -1"
+      "sky-brightness=SetAtmosphere on a World: a sky's brightness is 0 or more, not -1"
+      "sky-sun=SetAtmosphere on a World: a sky's sun is a directional light"
+      "decal-box=Decal: a decal's box has an inverse"
+      "shadow-atlas-limit=SetShadowAtlasLimit: a shadow atlas's side is at most 256 to 8192, not 128"
+      "shadow-size=SetShadowSize on a Light: a shadow's tile is 16 to 8192 texels a side, not 8"
+      "cascades=SetCascades on a Light: a light has 1 to 4 cascades, not 5"
+      "shadow-distance=SetShadowDistance on a Light: a shadow reaches a distance above 0, not 0"
+      "shadow-bias=SetShadowBias on a Light: a shadow's biases are 0 or more, not -1 and 0"
       "render-no-target=Render on a World: a camera with no target draws into the screen, and there's no window open"
       "render-bad-tween=Render on a World: a tween is 0 to 1, not 2"
       "lit-by-freed=LitBy on a World that was freed"
@@ -957,6 +1000,12 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${FBENGINE_FB}" --color never run "${PROJECT_SOURCE_DIR}/examples/falling_boxes")
   set_tests_properties(examples.falling_boxes PROPERTIES PASS_REGULAR_EXPRESSION
                        "\n200 boxes fell, 200 came to rest, 100 on others\r?\n$")
+  fbengine_add_watched(examples.falling_boxes.watch "${PROJECT_SOURCE_DIR}/examples/falling_boxes" ""
+                       "\n201 drawn, the highest box's mesh has fallen: True\r?\nwatched 40 frames\r?\n$")
+  fbengine_add_watched(examples.falling_boxes.escape "${PROJECT_SOURCE_DIR}/examples/falling_boxes"
+                       "--press-at;1" "\nwatched 2 frames\r?\n$")
+  fbengine_add_watched(examples.falling_boxes.close "${PROJECT_SOURCE_DIR}/examples/falling_boxes"
+                       "--close-at;1" "\nwatched 2 frames\r?\n$")
   add_test(NAME examples.door_and_trigger
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/door_and_trigger")
@@ -977,31 +1026,7 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${CMAKE_COMMAND}" "-DFB=${FBENGINE_FB}" "-DEXAMPLE=${PROJECT_SOURCE_DIR}/examples/video_player"
                    -P "${CMAKE_CURRENT_SOURCE_DIR}/video/player_usage.cmake")
   set_tests_properties(examples.video_player.usage PROPERTIES ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen")
-  # E14's proofs of this lane's: what each prints, line by line, and its --watch walked offscreen.
-  function(fbengine_add_lane_proof name)
-    list(JOIN ARGN "
-?
-" printed)
-    set(folder "${PROJECT_SOURCE_DIR}/examples/proof/${name}")
-    add_test(NAME proof.${name} COMMAND "${FBENGINE_FB}" --color never run "${folder}")
-    set_tests_properties(proof.${name} PROPERTIES
-                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                         PASS_REGULAR_EXPRESSION "
-${printed}
-?
-$"
-                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
-    add_test(NAME proof.${name}_watch
-             COMMAND "${FBENGINE_FB}" --color never run "${folder}" -- --watch --frames 40)
-    set_tests_properties(proof.${name}_watch PROPERTIES
-                         ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
-                         PASS_REGULAR_EXPRESSION "
-watched 40 frames
-?
-$"
-                         SKIP_REGULAR_EXPRESSION "no GPU here" TIMEOUT 120)
-  endfunction()
-  fbengine_add_lane_proof(two_videos_at_startup
+  fbengine_add_proof(two_videos_at_startup
                           "the first: 64 by 48, 2.08 s, its own sound True"
                           "at 0.25 s of its sound, red"
                           "at 0.75 s of its sound, green"
@@ -1017,7 +1042,10 @@ $"
                           "fitted to 200 by 96: 128 by 96, at 36, 0"
                           "its bars black, black, its middle white"
                           "skipped at half a second: heard True, then False")
-  fbengine_add_lane_proof(stack_and_joints
+  fbengine_add_watched(proof.two_videos_at_startup_skipped
+                       "${PROJECT_SOURCE_DIR}/examples/proof/two_videos_at_startup" "--skip-at;10"
+                       "\nthe 2th video, at its frame [0-9]+\r?\nwatched 40 frames\r?\n$")
+  fbengine_add_proof(stack_and_joints
                           "the stack stands, at rest: True"
                           "the block's held where it was: True"
                           "the door's opened a quarter turn: True"
@@ -1030,6 +1058,9 @@ $"
                           "the lift's come back down: True"
                           "every entity's on its body: True"
                           "twice over, it all ends alike: True")
+  fbengine_add_watched(proof.stack_and_joints_drawn "${PROJECT_SOURCE_DIR}/examples/proof/stack_and_joints"
+                       "--again-at;20"
+                       "\n32 of 32 pieces drawn\r?\nthe block's drawn red: True\r?\nwatched 40 frames\r?\n$")
   add_test(NAME examples.crate_on_a_lift
            COMMAND "${FBENGINE_FB}" --color never run
                    "${PROJECT_SOURCE_DIR}/examples/crate_on_a_lift")
@@ -1228,6 +1259,30 @@ if(FBENGINE_FB_TESTS)
                          "panic: Video\\.${said}" TIMEOUT 60)
   endforeach()
 endif()
+# What fbengine_editor panics for, each by a run of its panics/main.fb, which says it.
+if(FBENGINE_FB_TESTS)
+  foreach(case IN ITEMS "mark-in-an-edit;History.MarkSaved: an edit can't make another"
+                        "end-group-in-an-edit;History.EndGroup: an edit can't make another"
+                        "move-nan;Dock.Move: a share is a number"
+                        "history-none;History: it keeps more than 0 edits"
+                        "commit-in-an-edit;History.Commit: an edit can't make another"
+                        "undo-in-a-group;History.Undo: a group's begun"
+                        "redo-in-a-group;History.Redo: a group's begun"
+                        "end-no-group;History.EndGroup: no group's begun"
+                        "command-twice;Commands.Add: there's a command a already"
+                        "command-unknown;Commands.Run: there's no command a"
+                        "pane-twice;Dock.AddPane: there's a pane a already"
+                        "show-unknown;Dock.Show: there's no pane b"
+                        "activate-no-tab;Dock.Activate: a has no tab"
+                        "menu-entry-unknown;a menu's entry a isn't a command")
+    list(GET case 0 name)
+    list(GET case 1 said)
+    add_test(NAME editor.panics.${name}
+             COMMAND "${FBENGINE_FB}" --color never run
+                     "${PROJECT_SOURCE_DIR}/packages/fbengine_editor/panics/main.fb" -- ${name})
+    set_tests_properties(editor.panics.${name} PROPERTIES PASS_REGULAR_EXPRESSION "panic: ${said}" TIMEOUT 60)
+  endforeach()
+endif()
 # text's atlas and layouts, as the canvas reads them, from its sources and core's, on HarfBuzz's
 # test fonts.
 file(GLOB fbengine_text_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/native/fbengine/text/*.cpp")
@@ -1399,7 +1454,8 @@ endif()
 if(FBENGINE_FB_TESTS)
   # The cooker's threads, which can't hold up a whole run if they ever hang again.
   set_tests_properties(fbengine_tools.package PROPERTIES TIMEOUT 600)
-  set_tests_properties(fbengine.package PROPERTIES TIMEOUT 1800)
+  # 40 seconds here; one that hangs shouldn't take the job's hour with it.
+  set_tests_properties(fbengine.package PROPERTIES TIMEOUT 600)
   # A copy, whose path dependencies are the packages', and whose file a run can change.
   set(fbengine_game "${CMAKE_CURRENT_BINARY_DIR}/cooked_game")
   set(fbengine_game_source "${PROJECT_SOURCE_DIR}/examples/cooked_game")
@@ -1627,6 +1683,13 @@ catch_discover_tests(fbengine_anim_tests TEST_PREFIX "anim."
 
 # Animation's C API with each of a call's allocations failing in turn, with fbengine's sources, as
 # operator new is this test's.
+add_executable(fbengine_effects_oom_tests scene/effects_oom_tests.cpp)
+target_link_libraries(fbengine_effects_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain)
+fbengine_set_warnings(fbengine_effects_oom_tests)
+catch_discover_tests(fbengine_effects_oom_tests TEST_PREFIX "scene." ADD_TAGS_AS_LABELS
+                     DL_PATHS "${fbengine_test_dll_paths}"
+                     PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}")
+
 add_executable(fbengine_anim_oom_tests anim/oom_tests.cpp)
 target_link_libraries(fbengine_anim_oom_tests PRIVATE fbengine_internal Catch2::Catch2WithMain
                       ${CMAKE_DL_LIBS})

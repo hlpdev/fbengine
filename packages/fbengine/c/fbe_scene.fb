@@ -9,6 +9,7 @@ Public Const FBE_ENTITY_SPRITE: Int32 = 4
 Public Const FBE_ENTITY_PLANE: Int32 = 5
 Public Const FBE_ENTITY_MIRROR: Int32 = 6
 Public Const FBE_ENTITY_TERRAIN: Int32 = 7
+Public Const FBE_ENTITY_PARTICLES: Int32 = 8
 Public Const FBE_SPACE_LOCAL: Int32 = 0
 Public Const FBE_SPACE_WORLD: Int32 = 1
 Public Const FBE_AXIS_RIGHT: Int32 = 0
@@ -172,6 +173,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_entity_set_name(entity: UInt64, name: CString): Bool
     Function fbe_entity_name(entity: UInt64): CString
     Function fbe_entity_set_parent(entity: UInt64, parent: UInt64, keep_world: Bool): Bool
+    Function fbe_entity_set_sibling_index(entity: UInt64, index: Int32): Bool
     Function fbe_entity_parent(entity: UInt64): UInt64
     Function fbe_entity_child_count(entity: UInt64): Int32
     Function fbe_entity_child(entity: UInt64, index: Int32): UInt64
@@ -248,6 +250,17 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_light_type(light: UInt64): Int32
     Function fbe_light_set_color(light: UInt64, r: Float32, g: Float32, b: Float32): Bool
     Function fbe_light_color(light: UInt64, color: Ptr<fbe_color_t>): Bool
+    Function fbe_light_set_shadows(light: UInt64, shadows: Bool): Bool
+    Function fbe_light_shadows(light: UInt64): Bool
+    Function fbe_light_set_shadow_size(light: UInt64, size: Int32): Bool
+    Function fbe_light_shadow_size(light: UInt64): Int32
+    Function fbe_light_set_shadow_bias(light: UInt64, depth: Float32, normal: Float32): Bool
+    Function fbe_light_shadow_bias(light: UInt64): Float32
+    Function fbe_light_shadow_normal_bias(light: UInt64): Float32
+    Function fbe_light_set_cascades(light: UInt64, cascades: Int32): Bool
+    Function fbe_light_cascades(light: UInt64): Int32
+    Function fbe_light_set_shadow_distance(light: UInt64, distance: Float32): Bool
+    Function fbe_light_shadow_distance(light: UInt64): Float32
     Function fbe_light_set_intensity(light: UInt64, intensity: Float32): Bool
     Function fbe_light_intensity(light: UInt64): Float32
     Function fbe_light_set_range(light: UInt64, range: Float32): Bool
@@ -425,6 +438,30 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_terrain_set_tint(terrain: UInt64, r: Float32, g: Float32, b: Float32,
                                   a: Float32): Bool
     Function fbe_terrain_tint(terrain: UInt64, tint: Ptr<fbe_color_t>): Bool
+    Function fbe_world_step_particles(world: UInt64, seconds: Float32): Bool
+    Function fbe_particles_set_material(particles: UInt64, material: UInt64): Bool
+    Function fbe_particles_material(particles: UInt64): UInt64
+    Function fbe_particles_set_capacity(particles: UInt64, capacity: Int32): Bool
+    Function fbe_particles_capacity(particles: UInt64): Int32
+    Function fbe_particles_set_rate(particles: UInt64, per_second: Float32): Bool
+    Function fbe_particles_rate(particles: UInt64): Float32
+    Function fbe_particles_set_life(particles: UInt64, least: Float32, most: Float32): Bool
+    Function fbe_particles_set_motion(particles: UInt64, least_speed: Float32, most_speed: Float32,
+                                      spread: Float32, spin: Float32): Bool
+    Function fbe_particles_set_forces(particles: UInt64, x: Float32, y: Float32, z: Float32,
+                                      drag: Float32): Bool
+    Function fbe_particles_set_sizes(particles: UInt64, start: Float32, end: Float32): Bool
+    Function fbe_particles_set_colors(particles: UInt64, start: Ptr<fbe_color_t>,
+                                      end: Ptr<fbe_color_t>): Bool
+    Function fbe_particles_set_roll(particles: UInt64, most: Float32): Bool
+    Function fbe_particles_set_seed(particles: UInt64, seed: UInt32): Bool
+    Function fbe_particles_burst(particles: UInt64, count: Int32): Bool
+    Function fbe_particles_alive(particles: UInt64): Int32
+    Function fbe_world_set_sky_atmosphere(world: UInt64, sun: UInt64, brightness: Float32): Bool
+    Function fbe_world_set_sky_texture(world: UInt64, texture: UInt64, brightness: Float32): Bool
+    Function fbe_world_clear_sky(world: UInt64): Bool
+    Function fbe_geometry_decal(world: UInt64, box: Ptr<fbe_mat4_t>, lift: Float32,
+                                limit: Float32): UInt64
     Function fbe_mirror_reflection(mirror: UInt64, matrix: Ptr<fbe_mat4_t>): Bool
     Function fbe_entity_set_auto_fade(entity: UInt64, start: Float32, end: Float32): Bool
     Function fbe_entity_auto_fade(entity: UInt64, fade: Ptr<fbe_vec2_t>): Bool
@@ -441,6 +478,8 @@ Public Extern "C" Lib "fbengine_native"
                                     box: Ptr<fbe_aabb_t>): Int32
     Function fbe_entity_bounds(entity: UInt64, bounds: Ptr<fbe_aabb_t>): Bool
     Function fbe_entity_set_blocks_sight(entity: UInt64, blocks: Bool): Bool
+    Function fbe_entity_set_casts_shadows(entity: UInt64, casts: Bool): Bool
+    Function fbe_entity_casts_shadows(entity: UInt64): Bool
     Function fbe_entity_blocks_sight(entity: UInt64): Bool
     Function fbe_entity_can_see_point(entity: UInt64, x: Float32, y: Float32, z: Float32): Int32
     Function fbe_entity_can_see(entity: UInt64, target: UInt64): Int32

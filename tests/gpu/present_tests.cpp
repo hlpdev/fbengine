@@ -82,9 +82,11 @@ TEST_CASE("the GPU validates when FBE_GPU_VALIDATION is 1", "[gpu]") {
     stop_gpu();
 }
 
-// The loader's filter, which it takes even from an administrator, as its driver lists it doesn't.
+// As the loader's filter says, where it takes it, which CI's for an administrator doesn't, and as a
+// fault says where it doesn't: either way there's no device, and no GPU.
 TEST_CASE("with no driver, the GPU doesn't start, and says why each time", "[gpu]") {
     set_variable("VK_LOADER_DRIVERS_DISABLE", "*");
+    fbe::gpu::inject(fbe::gpu::fault_t::NO_DRIVER);
     REQUIRE(fbe_window_set_headless(true));
     CHECK(!fbe_gpu_start());
     const std::string why = fbe_error();

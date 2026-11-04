@@ -154,3 +154,22 @@ Function ABinaryFileReadsWhole() Throws IOError
     Expect((Try Assets.ReadBytes("res://test-binary/data.bin")) == bytes)
     Expect((Try Assets.ReadBytes("res://test-binary/empty.bin")).Count == 0)
 End Function
+
+@Test
+Function AMountsTakenOutByItsNumberWhateversOverIt() Throws IOError
+    Local under = Try TempDir()
+    Local over = Try TempDir()
+    Try File.WriteText(under.Path / "said.txt", "under")
+    Try File.WriteText(over.Path / "said.txt", "over")
+    Local first = Assets.MountFolder("res://test-numbered", under.Path)
+    Local second = Assets.MountFolder("res://test-numbered", over.Path)
+    Expect(first != second)
+    Expect((Try Assets.ReadText("res://test-numbered/said.txt")) == "over")
+    Expect(Assets.Unmount(first))
+    Expect((Try Assets.ReadText("res://test-numbered/said.txt")) == "over",
+           "it took out what's over it")
+    Expect(!Assets.Unmount(first), "it's gone")
+    Expect(Assets.Unmount(second))
+    Expect(!Assets.Exists("res://test-numbered/said.txt"))
+    Expect(!Assets.Unmount("res://test-numbered"))
+End Function

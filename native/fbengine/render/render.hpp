@@ -88,6 +88,10 @@ struct surface_buffers_t {
 /// fbe_error's why, or the geometry's been freed.
 const surface_buffers_t* surface_buffers(std::uint64_t geometry, std::size_t surface);
 
+/// An emitter's particles on the GPU, with what's been born since sent: their address, or 0, with
+/// fbe_error's why, if there's no memory for them.
+VkDeviceAddress particles_buffer(scene::particles_t& particles);
+
 /// The quad a sprite draws: -1 to 1 in x and y, facing +Z, UV 0, 0 at its top left.
 const surface_buffers_t* sprite_quad();
 
@@ -101,7 +105,15 @@ struct terrain_piece_t {
     VkBuffer indices = VK_NULL_HANDLE;
     VkDeviceSize index_offset = 0;
     std::uint32_t index_count = 0;
+    /// The sphere it's within, in the world, where a shadow's asked for it.
+    scene::vec3_t center;
+    float radius = 0.0F;
 };
+
+/// A terrain in coarse pieces, all of them, whatever's seen, for shadows: false, with fbe_error's
+/// why, if there's no memory for them.
+bool terrain_coarse_pieces(const scene::mat4_t& world, const scene::terrain_t& terrain,
+                           std::vector<terrain_piece_t>& pieces);
 
 /// The pieces of a terrain a view sees, nearer ones finer: false, with fbe_error's why, if there's
 /// no memory for them.

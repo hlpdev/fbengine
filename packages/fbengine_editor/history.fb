@@ -1,0 +1,344 @@
+// What's changed, as edits that can be undone and done again.
+
+Import std.collections
+Import std.core
+
+/// A change a person made, which knows how to take itself back. Applied, and undone, it holds what
+/// it needs of before and after, not a copy of the whole.
+Public Class Edit
+    /// What a menu says of it, as "Undo Move".
+    Public ReadOnly Field Name: String
+
+    Public New(name: String)
+        Name = name
+    End New
+
+    /// Makes the change, the first time and each time it's done again, or throws, having made none
+    /// of it, as a write to the disk can, and History keeps nothing of it.
+    Public Method Apply() Throws IOError
+    End Method
+
+    /// Takes it back, or throws, having taken none of it back.
+    Public Method Undo() Throws IOError
+    End Method
+
+    /// Takes `later`, the edit made after it, into itself, as a drag's steps are one undo; True if
+    /// it did, so `later` isn't kept. `later` has been applied. False at first.
+    Public Method Merge(later: Edit): Bool => False
+
+    /// Whether it comes to no change now, as a drag back to where it began does, so it's not kept
+    /// once it's merged. False at first.
+    Public Method IsNothing(): Bool => False
+
+    /// Whether it changes what a tree of the scene shows: which there are, their names, or where
+    /// they are in it.
+    Public Method ChangesTree(): Bool => True
+
+    /// The History's let go of it, for good, `applied` as it is now: it won't be run again, so what
+    /// only it could put back can go. Nothing at first.
+    Public Method Forgotten(applied: Bool)
+    End Method
+End Class
+
+// An edit of two functions.
+Class FunctionEdit Extends Edit
+    Field applying: Func()
+    Field undoing: Func()
+
+    New(name: String, forward: Func(), back: Func())
+        applying = forward
+        undoing = back
+        Super.New(name)
+    End New
+
+    Public Override Method Apply() Throws IOError
+        applying()
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        undoing()
+    End Method
+End Class
+
+// Edits as one.
+Class GroupEdit Extends Edit
+    Field edits: Edit[] = []
+
+    New(name: String)
+        Super.New(name)
+    End New
+
+    Method Add(edit: Edit)
+        edits.Add(edit)
+    End Method
+
+    Method Empty(): Bool => edits.Count == 0
+
+    Public Override Method ChangesTree(): Bool
+        For edit In edits
+            If edit.ChangesTree() Then Return True
+        End For
+        Return False
+    End Method
+
+    Public Override Method Forgotten(applied: Bool)
+        For i = edits.Count - 1 To 0 Step -1
+            edits[i].Forgotten(applied)
+        End For
+    End Method
+
+    // All of them or none: one that throws takes those before it back.
+    Public Override Method Apply() Throws IOError
+        For i = 0 To edits.Count - 1
+            Try
+                Try edits[i].Apply()
+            Catch error As IOError
+                For back = i - 1 To 0 Step -1
+                    Try? edits[back].Undo()
+                End For
+                Throw error
+            End Try
+        End For
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        For i = edits.Count - 1 To 0 Step -1
+            Try
+                Try edits[i].Undo()
+            Catch error As IOError
+                For again = i + 1 To edits.Count - 1
+                    Try? edits[again].Apply()
+                End For
+                Throw error
+            End Try
+        End For
+    End Method
+End Class
+
+/// An edit named `name` that `applying` makes and `undoing` takes back.
+Public Function EditOf(name: String, applying: Func(), undoing: Func()): Edit =>
+    FunctionEdit(name, applying, undoing)
+
+/// The edits made, in order, which undo and redo go back and on through, and whether it's as it was
+/// when last saved.
+Public Final Class History
+    Field treeChanged: Bool = True
+    Field done: Edit[] = []
+    Field undone: Edit[] = []
+    // How many of `done` were there when it was saved, -1 when no undoing gets back there.
+    Field saved: Int = 0
+    Field most: Int = 1000
+    Field group: GroupEdit? = Null
+    Field depth: Int = 0
+    // Whether an edit's running, which can't make another.
+    Field busy: Bool = False
+    Field changed: (Func())? = Null
+    Field failed: (Func(Edit, IOError))? = Null
+    // Whether the last edit's closed to merging, as an undo or the end of a drag closes it.
+    Field sealed: Bool = False
+    // Whether what a group makes is what's saved, as MarkSaved was told while it was open.
+    Field savedAfterGroup: Bool = False
+
+    /// A history keeping the last `most` edits, more than 0.
+    @PanicsAtCaller
+    Public New(most: Int = 1000)
+        If most <= 0 Then Panic("History: it keeps more than 0 edits, not {most}")
+        Self.most = most
+    End New
+
+    /// Runs `handler` after each change to what can be undone or redone.
+    Public Method OnChanged(handler: (Func())?)
+        changed = handler
+    End Method
+
+    /// Runs `handler` with an edit that threw, and what it threw, which is all that says so.
+    Public Method OnFailed(handler: (Func(Edit, IOError))?)
+        failed = handler
+    End Method
+
+    /// Applies `edit` and keeps it to undo, leaving nothing to redo; merged with the last if that
+    /// takes it, unless an undo, a redo, or EndMerge has come since. Whether it did: one that throws
+    /// is kept nowhere, and leaves what there is to undo and redo. Panics from inside an edit.
+    @PanicsAtCaller
+    Public Method Commit(edit: Edit): Bool
+        Check("Commit")
+        If !Ran(edit, True) Then Return False
+        Local into = group
+        If into != Null
+            into.Add(edit)
+            Return True
+        End If
+        Keep(edit)
+        Return True
+    End Method
+
+    /// Closes the last edit to merging, as a drag does as it's let go, so the next drag is an undo
+    /// of its own.
+    Public Method EndMerge()
+        sealed = True
+    End Method
+
+    /// Makes the edits Committed until the matching EndGroup one, called `name`, as a paste of ten
+    /// things is one undo. Groups nest, the outer one's name the one kept. Undo and Redo panic
+    /// until it ends.
+    @PanicsAtCaller
+    Public Method BeginGroup(name: String)
+        Check("BeginGroup")
+        If depth == 0 Then group = GroupEdit(name)
+        depth += 1
+    End Method
+
+    /// Ends what BeginGroup began. Panics with none begun, or inside an edit.
+    @PanicsAtCaller
+    Public Method EndGroup()
+        Check("EndGroup")
+        If depth == 0 Then Panic("History.EndGroup: no group's begun")
+        depth -= 1
+        If depth > 0 Then Return
+        Local ended = group
+        group = Null
+        If ended != Null && !ended.Empty() Then Keep(ended)
+        If savedAfterGroup
+            savedAfterGroup = False
+            saved = done.Count
+            Changed()
+        End If
+    End Method
+
+    /// Takes back the last edit; whether it did, as there was one and it didn't throw. Panics in a
+    /// group, or inside an edit.
+    @PanicsAtCaller
+    Public Method Undo(): Bool
+        Check("Undo")
+        If depth > 0 Then Panic("History.Undo: a group's begun")
+        If done.Count == 0 Then Return False
+        Local edit = done[done.Count - 1]
+        If !Ran(edit, False) Then Return False
+        done.RemoveAt(done.Count - 1)
+        undone.Add(edit)
+        sealed = True
+        Changed(edit)
+        Return True
+    End Method
+
+    /// Makes the last edit undone again; whether it did, as there was one and it didn't throw.
+    /// Panics in a group, or inside an edit.
+    @PanicsAtCaller
+    Public Method Redo(): Bool
+        Check("Redo")
+        If depth > 0 Then Panic("History.Redo: a group's begun")
+        If undone.Count == 0 Then Return False
+        Local edit = undone[undone.Count - 1]
+        If !Ran(edit, True) Then Return False
+        undone.RemoveAt(undone.Count - 1)
+        done.Add(edit)
+        Changed(edit)
+        Return True
+    End Method
+
+    /// Whether Undo can run now: there's an edit, no group's open, and no edit's running.
+    Public Method CanUndo(): Bool => depth == 0 && !busy && done.Count > 0
+
+    /// Whether Redo can run now: there's an edit, no group's open, and no edit's running.
+    Public Method CanRedo(): Bool => depth == 0 && !busy && undone.Count > 0
+
+    /// The name of the edit Undo would take back, or Null as CanUndo says.
+    Public Method UndoName(): String? => CanUndo() ? done[done.Count - 1].Name : Null
+
+    /// The name of the edit Redo would make again, or Null as CanRedo says.
+    Public Method RedoName(): String? => CanRedo() ? undone[undone.Count - 1].Name : Null
+
+    /// Says what's there now is what's saved, or in a group, what's there as it ends. Panics inside
+    /// an edit.
+    @PanicsAtCaller
+    Public Method MarkSaved()
+        Check("MarkSaved")
+        If depth > 0
+            savedAfterGroup = True
+            Return
+        End If
+        saved = done.Count
+        sealed = True
+        Changed()
+    End Method
+
+    /// Whether it's other than when last saved, as a group that's open and has edits makes it;
+    /// undoing back to then, it isn't.
+    Public Method Modified(): Bool
+        Local open = group
+        Return saved != done.Count || (open != Null && !open.Empty())
+    End Method
+
+    /// Whether what OnChanged last said changed what a tree of the scene shows.
+    Public Method TreeChanged(): Bool => treeChanged
+
+    /// Forgets every edit, as what they were of has gone: nothing's modified.
+    @PanicsAtCaller
+    Public Method Clear()
+        Check("Clear")
+        Forget(undone, False)
+        Forget(done, True)
+        saved = 0
+        group = Null
+        depth = 0
+        sealed = False
+        savedAfterGroup = False
+        Changed()
+    End Method
+
+    @PanicsAtCaller
+    Method Check(what: String)
+        If busy Then Panic("History.{what}: an edit can't make another")
+    End Method
+
+    // Runs `edit`, forward or back; whether it did, as what threw is told.
+    Method Ran(edit: Edit, forward: Bool): Bool
+        busy = True
+        Try
+            If forward
+                Try edit.Apply()
+            Else
+                Try edit.Undo()
+            End If
+        Catch error As IOError
+            busy = False
+            Local handler = failed
+            If handler != Null Then handler(edit, error)
+            Return False
+        End Try
+        busy = False
+        Return True
+    End Method
+
+    Method Keep(edit: Edit)
+        // What's saved is no merge away, nor is it once what was undone to get to it has gone.
+        Local merged = !sealed && done.Count > 0 && saved != done.Count &&
+                       done[done.Count - 1].Merge(edit)
+        sealed = False
+        If saved > done.Count Then saved = -1
+        If !merged Then done.Add(edit)
+        // Merged back to where it began, there's nothing to undo of it.
+        If merged && done[done.Count - 1].IsNothing() Then done.RemoveAt(done.Count - 1)
+        Forget(undone, False)
+        If done.Count > most
+            done[0].Forgotten(True)
+            done.RemoveAt(0)
+            If saved >= 0 Then saved -= 1
+        End If
+        Changed(edit)
+    End Method
+
+    // Lets go of all of `edits`, the last made first.
+    Method Forget(edits: Edit[], applied: Bool)
+        For i = edits.Count - 1 To 0 Step -1
+            edits[i].Forgotten(applied)
+        End For
+        edits.Clear()
+    End Method
+
+    Method Changed(edit: Edit? = Null)
+        treeChanged = edit == Null || edit.ChangesTree()
+        Local handler = changed
+        If handler != Null Then handler()
+    End Method
+End Class

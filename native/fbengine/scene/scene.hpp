@@ -31,6 +31,15 @@ struct world_t {
     /// The environment its PBR materials are lit by, 0 for none, and what its light's times.
     std::uint64_t environment = 0;
     float environment_intensity = 1.0F;
+
+    /// Its sky: none, its atmosphere, or a texture, which it holds; the light whose way's the
+    /// sun's, by handle, 0 for straight up; and how bright.
+    std::int32_t sky = 0;
+    std::uint64_t sky_light = 0;
+    std::uint64_t sky_texture = 0;
+    /// Which way the sun is, kept from the last it was looked at, so one freed leaves it there.
+    vec3_t sky_sun{ 0.0F, 1.0F, 0.0F };
+    float sky_brightness = 1.0F;
     /// Each pair of collision groups that collide, source in the high 16 bits and target in the
     /// low, and the FBE_RESPONSE_ the source makes; a game has a few.
     std::vector<std::pair<std::uint32_t, std::int32_t>> collisions;
@@ -137,6 +146,9 @@ struct material_t {
 /// handle or a mesh draws it, which its references count.
 struct geometry_t {
     std::vector<surface_t> surfaces;
+    /// How much of its way to the eye it's drawn nearer, as a decal on a terrain is, so what it's
+    /// on doesn't come up through it where it's coarser, far off.
+    float eye_pull = 0.0F;
     std::uint32_t references = 0;
     /// Goes up at every change, so what's worked out from it, as collision trees, knows when it's
     /// stale.
@@ -196,6 +208,11 @@ struct plane_t {
     std::int32_t segments = 1;
 };
 
+/// How many squares across a terrain's piece draws, at most, and how many of its widths away one's
+/// drawn whole rather than as four finer ones.
+constexpr std::int32_t terrain_piece_cells = 16;
+constexpr float terrain_whole_from = 1.5F;
+
 /// A terrain: its grid's size, its corners' heights row by row along Z, and how it's drawn; its
 /// version goes up at every change.
 struct terrain_t {
@@ -210,6 +227,75 @@ struct terrain_t {
     mutable float low = 0.0F;
     mutable float high = 0.0F;
     mutable bool range_stale = false;
+};
+
+/// A particle as the GPU keeps it: where it was born, when, on its emitter's clock, how fast and
+/// which way, how long it lives, and how it's turned then and spins.
+struct particle_t {
+    std::array<float, 3> position{};
+    float birth = 0.0F;
+    std::array<float, 3> velocity{};
+    float life = 0.0F;
+    float roll = 0.0F;
+    float spin = 0.0F;
+};
+static_assert(sizeof(particle_t) == 40, "the scene shader reads particles 40 bytes apart");
+
+/// What an emitter's clock reaches before it starts again, which a float keeps to an
+/// eight-thousandth of a second, and a particle's life is at most half of.
+constexpr float particles_wrap = 1024.0F;
+
+/// The box what was born in a stretch of time can reach by its speed alone.
+struct bounds_slice_t {
+    bool any = false;
+    vec3_t low;
+    vec3_t high;
+};
+
+/// A particle emitter: how it's drawn and how they go, then its clock, what's been born and not yet
+/// sent to the GPU, each with its slot, when each slot's dies, and where they've been born lately.
+struct particles_t {
+    std::uint32_t entity = none;
+    std::uint32_t material = none;
+    std::int32_t capacity = 1024;
+    float rate = 32.0F;
+    float life_min = 1.0F;
+    float life_max = 1.0F;
+    float speed_min = 1.0F;
+    float speed_max = 1.0F;
+    float spread = 0.0F;
+    float spin = 0.0F;
+    float roll = 0.0F;
+    vec3_t gravity;
+    float drag = 0.0F;
+    float size_start = 0.1F;
+    float size_end = 0.1F;
+    std::array<float, 4> color_start{ 1.0F, 1.0F, 1.0F, 1.0F };
+    std::array<float, 4> color_end{ 1.0F, 1.0F, 1.0F, 0.0F };
+    std::uint32_t random = 1;
+    float clock = 0.0F;
+    float captured_clock = 0.0F;
+    double total = 0.0;
+    /// How many times half the wrap has gone by, at each of which what's dead is cleared, since a
+    /// dead one's birth would otherwise come round again; and the longest life it's had since.
+    std::uint64_t sweeps = 0;
+    float longest = 1.0F;
+    /// When the last of what was born with a longer life than it has now dies, and the latest any
+    /// dies.
+    double long_until = 0.0;
+    double latest_death = 0.0;
+    /// How many of its slots have had one.
+    std::int32_t born = 0;
+    float owed = 0.0F;
+    bool moved = false;
+    vec3_t last_place;
+    std::size_t next = 0;
+    std::uint64_t generation = 0;
+    std::vector<std::pair<std::uint32_t, particle_t>> pending;
+    std::vector<double> deaths;
+    std::array<bounds_slice_t, 9> slices{};
+    std::size_t slice = 0;
+    float slice_age = 0.0F;
 };
 
 /// Every entity's data, a field to an array, indexed by slot.
@@ -238,6 +324,8 @@ struct entities_t {
     std::vector<std::uint32_t> component;
     /// Whether it blocks line of sight, by its triangles for a mesh.
     std::vector<bool> blocks_sight;
+    /// Whether it casts shadows.
+    std::vector<bool> casts_shadows;
     std::vector<collider_t> colliders;
     /// Its entry in scene_t's pickables, or none.
     std::vector<std::uint32_t> pickable;
@@ -324,6 +412,15 @@ struct light_t {
     float range = 10.0F;
     float inner_cone = 0.0F;
     float outer_cone = 0.78539816F;
+    /// Its shadows: whether it has them, a tile's side in texels, how far off a surface they're
+    /// compared, in depth, world units, and along the normal, texels, and a directional light's
+    /// cascades, and how far from the camera they reach.
+    bool shadows = false;
+    std::int32_t shadow_size = 1024;
+    float shadow_bias = 0.02F;
+    float shadow_normal_bias = 1.5F;
+    std::int32_t cascades = 3;
+    float shadow_distance = 100.0F;
 };
 
 /// Where an entity is in the world: its matrix, and its turn and scale, a mirror in the scale's
@@ -347,6 +444,8 @@ struct scene_t {
     std::vector<mesh_t> meshes;
     std::vector<sprite_t> sprites;
     std::vector<plane_t> planes;
+    /// Every particle emitter, in no order, each knowing its entity.
+    std::vector<particles_t> particles;
     std::vector<terrain_t> terrains;
     slots_t geometry_slots{ GEOMETRY_KIND };
     std::vector<geometry_t> geometries;
@@ -440,6 +539,25 @@ void terrain_under(const terrain_t& terrain, vec3_t min, vec3_t max,
 /// The point on a terrain's surface over a point in its own space, and the surface's normal there;
 /// false off its grid.
 bool terrain_surface(const terrain_t& terrain, vec3_t local, vec3_t& point, vec3_t& normal);
+/// The live particle emitter a handle is for, or null, with fbe_error saying so.
+particles_t* particles_of(std::uint64_t handle);
+void add_particles(std::uint32_t entity);
+void remove_particles(std::uint32_t entity);
+void copy_particles(std::uint32_t from, std::uint32_t to);
+void capture_particles(std::uint32_t entity);
+/// An emitter's clock `tween` of the way from its capture to now.
+float particles_clock(const particles_t& found, float tween);
+/// The box in the world what's alive of an emitter's in: false for none lately.
+bool particles_bounds(const particles_t& found, vec3_t& min, vec3_t& max);
+/// Whether a color's channels are finite, which can be any, and its alpha 0 to 1: false, with
+/// fbe_error saying why, naming `what` it's a color of.
+bool valid_color(float r, float g, float b, float a, const char* what);
+/// How far a terrain's coarser pieces can come up over what's in a box, in its own space, as a part
+/// of how far off they're drawn, a square `reach_scale` wide: what's on it wants to be that much
+/// nearer.
+float terrain_coarse_rise(const terrain_t& terrain, vec3_t min, vec3_t max, float reach_scale);
+/// The normal of a terrain's surface at a corner of its grid, in its own space.
+vec3_t terrain_corner_normal(const terrain_t& terrain, std::int32_t x, std::int32_t z);
 void add_plane(std::uint32_t entity);
 void remove_plane(std::uint32_t entity);
 /// The live ground plane a handle is for, or null, with fbe_error saying so.

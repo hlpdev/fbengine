@@ -26,6 +26,14 @@ void free_buffer(buffer_t& buffer);
 /// they're not in it.
 bool write_buffer(const buffer_t& buffer, VkDeviceSize offset, std::span<const std::byte> bytes);
 
+/// Writes `bytes` into a buffer as `regions` say, whose sources are offsets into `bytes` and whose
+/// destinations don't overlap, through one staging buffer and one barrier around them all.
+bool write_buffer_regions(const buffer_t& buffer, std::span<const std::byte> bytes,
+                          std::span<const VkBufferCopy> regions);
+
+/// How many staging buffers have been made for writes, for tests.
+std::uint64_t staging_buffers_made();
+
 /// A buffer's bytes, read back after what the frame's recorded so far; empty, with fbe_error's
 /// why, if they can't be.
 std::vector<std::byte> read_buffer(const buffer_t& buffer);

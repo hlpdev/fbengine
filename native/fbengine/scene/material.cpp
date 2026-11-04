@@ -93,6 +93,8 @@ fbe_color_t color_of(const std::array<float, 4>& rgba) {
     return { .r = rgba[0], .g = rgba[1], .b = rgba[2], .a = rgba[3] };
 }
 
+} // namespace
+
 /// Whether a color's channels are finite, which can be any, and its alpha 0 to 1; false with
 /// fbe_error saying why, naming `what` it's a color of.
 bool valid_color(float r, float g, float b, float a, const char* what) {
@@ -104,8 +106,6 @@ bool valid_color(float r, float g, float b, float a, const char* what) {
     }
     return true;
 }
-
-} // namespace
 
 std::uint32_t make_material() {
     scene_t& s = scene();

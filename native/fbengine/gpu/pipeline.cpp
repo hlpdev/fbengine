@@ -55,6 +55,7 @@ struct hash_t {
         mix(static_cast<std::size_t>(desc.blend));
         mix(static_cast<std::size_t>(desc.depth_test) | (std::size_t{ desc.depth_write } << 1U));
         mix(static_cast<std::size_t>(desc.depth_compare));
+        mix(static_cast<std::size_t>(desc.depth_clamp));
         for (std::uint32_t i = 0; i < desc.constant_count; ++i) {
             mix(static_cast<std::size_t>(desc.constants[i]));
         }
@@ -323,6 +324,7 @@ VkPipeline make_pipeline(const fbe::gpu::device_t& gpu, const fbe::gpu::pipeline
     };
     const VkPipelineRasterizationStateCreateInfo rasterization{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .depthClampEnable = desc.depth_clamp ? VK_TRUE : VK_FALSE,
         .polygonMode = desc.polygon,
         .cullMode = desc.cull,
         .frontFace = desc.front,

@@ -87,6 +87,8 @@ struct device_t {
     float max_anisotropy = 0.0F;
     /// Whether it can draw triangles as lines.
     bool wireframe = false;
+    /// Whether a pipeline can hold depth to the depth range instead of clipping there.
+    bool depth_clamp = false;
     /// The furthest its samplers bias a texture's mipmaps, 0 if they can't, as Metal's can't.
     float max_lod_bias = 0.0F;
     /// How many bits of a timestamp its queue writes, 0 if it writes none, and how many
@@ -217,6 +219,8 @@ enum class fault_t : std::uint8_t {
     NONE,
     /// Making an image's view.
     VIEW,
+    /// Listing the devices: there are none, as with no driver, until the GPU's stopped.
+    NO_DRIVER,
     /// Submitting a frame.
     SUBMIT,
     /// Making the device.

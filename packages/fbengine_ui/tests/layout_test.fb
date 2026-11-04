@@ -404,3 +404,24 @@ Function ANodeWithChildrenIsMeasuredByThem()
     Expect(counted.measures == 1)
     Expect(counted.Box() == Rect(0.0, 0.0, 30.0, 10.0))
 End Function
+
+@Test
+Function RemoveAllLetsGoOfThemAtOnce()
+    Local parent = Node("parent")
+    Local children = [Node("a"), Node("b"), Node("c")]
+    For child In children
+        parent.Add(child)
+    End For
+    parent.RemoveAll()
+    Expect(parent.Children().Count == 0)
+    For child In children
+        Expect(child.Parent() == Null, "{child} still has a parent")
+    End For
+    // They can go elsewhere, as any let go of can.
+    Local other = Node("other")
+    other.Add(children[0])
+    Expect(children[0].Parent() != Null)
+    // With none, it's nothing.
+    parent.RemoveAll()
+    Expect(parent.Children().Count == 0)
+End Function

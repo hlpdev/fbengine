@@ -4,6 +4,12 @@
 // VK_KHR_portability_subset's structures, which Vulkan's headers keep with its beta extensions.
 #define VK_ENABLE_BETA_EXTENSIONS
 
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "gpu/graph.hpp"
@@ -322,15 +328,23 @@ std::string lacks_of(VkPhysicalDevice physical, const VkPhysicalDeviceProperties
     return lacks;
 }
 
+/// Whether a test has it that there's no driver, until the GPU's stopped.
+bool no_driver = false;
+
 /// Lists the devices, and what each lacks; false, with fbe_error's why, if Vulkan can't start.
 bool list_devices(VkSurfaceKHR surface) {
     if (fbe::gpu::instance() == VK_NULL_HANDLE) {
         return false;
     }
+    no_driver = no_driver || fbe::gpu::faulted(fbe::gpu::fault_t::NO_DRIVER);
     std::uint32_t count = 0;
-    vkEnumeratePhysicalDevices(vulkan, &count, nullptr);
+    if (!no_driver) {
+        vkEnumeratePhysicalDevices(vulkan, &count, nullptr);
+    }
     std::vector<VkPhysicalDevice> physicals(count);
-    vkEnumeratePhysicalDevices(vulkan, &count, physicals.data());
+    if (count != 0) {
+        vkEnumeratePhysicalDevices(vulkan, &count, physicals.data());
+    }
     candidates.clear();
     // A test makes every device lack something, as a GPU from before Vulkan 1.3 might.
     const bool lacking = fbe::gpu::faulted(fbe::gpu::fault_t::LACKS);
@@ -466,11 +480,13 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
         .timelineSemaphore = VK_TRUE,
         .bufferDeviceAddress = VK_TRUE,
     };
-    // Anisotropic filtering, wireframes, and files' compressed textures, where the device has them.
+    // Anisotropic filtering, wireframes, depth clamping, and files' compressed textures, where the
+    // device has them.
     const VkPhysicalDeviceFeatures2 features{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         .pNext = &vulkan12,
         .features = {
+            .depthClamp = supported.depthClamp,
             .fillModeNonSolid = supported.fillModeNonSolid,
             .samplerAnisotropy = supported.samplerAnisotropy,
             .textureCompressionASTC_LDR = supported.textureCompressionASTC_LDR,
@@ -502,6 +518,7 @@ bool make_device(const candidate_t& candidate, VkSurfaceKHR surface) {
     volkLoadDevice(current.device);
     vkGetDeviceQueue(current.device, current.family, 0, &current.queue);
     current.wireframe = supported.fillModeNonSolid == VK_TRUE;
+    current.depth_clamp = supported.depthClamp == VK_TRUE;
     current.max_anisotropy = supported.samplerAnisotropy == VK_TRUE
                                  ? candidate.properties.limits.maxSamplerAnisotropy
                                  : 0.0F;
@@ -624,6 +641,38 @@ std::int32_t kind_of(VkPhysicalDeviceType type) {
     }
 }
 
+#ifdef _WIN32
+/// Stops a GPU that's still going, while its driver's and layers' threads still are: Windows'
+/// ending the process kills them first, and a fbengine.package left to that never ended on CI.
+void stop_at_the_end() {
+    if (!started) {
+        return;
+    }
+    fbe::gpu::stop();
+    if (SDL_getenv("FBENGINE_SAY_THE_END") != nullptr) {
+        std::fputs("stopped the GPU as the process ended\n", stderr);
+    }
+}
+#endif
+
+/// Has a GPU that's still going when the program ends stopped first: by exit, in the C runtime the
+/// program itself has, as this DLL's own atexit would run with the threads gone. A program ends
+/// with it going as a rule, since a window's closing doesn't stop it. A panic and FB's Process.Exit
+/// end by _Exit, which runs none of this.
+void stop_as_the_process_ends() {
+#ifdef _WIN32
+    static const bool asked = [] {
+        using add_t = int(__cdecl*)(void(__cdecl*)());
+        const HMODULE runtime = GetModuleHandleW(L"ucrtbase.dll");
+        void* const found = runtime != nullptr
+                                ? reinterpret_cast<void*>(GetProcAddress(runtime, "_crt_atexit"))
+                                : nullptr;
+        return found != nullptr && reinterpret_cast<add_t>(found)(stop_at_the_end) == 0;
+    }();
+    (void)asked;
+#endif
+}
+
 /// The device at `index`, if there is one, listing them the first time.
 const candidate_t* candidate_at(std::int32_t index) {
     if (candidates.empty() && !list_devices(VK_NULL_HANDLE)) {
@@ -675,6 +724,7 @@ bool start(VkSurfaceKHR surface) {
     }
     picked = index;
     started = true;
+    stop_as_the_process_ends();
     start_pipeline_cache();
     if (!start_bindless() || !start_textures()) {
         why_failed = fbe_error();
@@ -713,6 +763,7 @@ void stop() {
         picked = -1;
     }
     gpu_lost = false;
+    no_driver = false;
     candidates.clear();
     if (vulkan != VK_NULL_HANDLE) {
         if (messenger != VK_NULL_HANDLE) {
