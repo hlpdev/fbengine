@@ -253,7 +253,7 @@ Function ACameraDrawsHdrLight() Throws GraphicsError
     camera.SetGrade(grade)
     Expect(camera.Grade() == grade)
     // Through to its target: light past white, exposed, tonemapped, in bytes.
-    camera.SetBloom(0.0)
+    camera.SetBloom(0.0, camera.BloomThreshold())
     camera.SetGrade(ColorGrade(Vec3(1.0, 1.0, 1.0), Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 1.0), 1.0))
     camera.SetGamma(1.0)
     camera.SetTonemap(Tonemap.REINHARD)
@@ -271,6 +271,18 @@ Function ACameraDrawsHdrLight() Throws GraphicsError
     // 2 at half exposure is 1, and Reinhard's of 1 is a half.
     Local pixels = target.ReadPixels()
     Expect(Abs(Red(pixels, 16, 16) - 128) <= 1)
+    // Its grade after that: half of a half.
+    camera.SetGrade(ColorGrade(Vec3(0.5, 0.5, 0.5), Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 1.0), 1.0))
+    camera.Render()
+    Expect(Abs(Red(target.ReadPixels(), 16, 16) - 64) <= 1)
+    camera.SetGrade(ColorGrade(Vec3(1.0, 1.0, 1.0), Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 1.0), 1.0))
+    // Its bloom adds to it: a threshold's kept, spelled by what it is.
+    camera.SetBloom(0.5, 2.0)
+    camera.SetBloom(1.0, camera.BloomThreshold())
+    Expect(camera.BloomIntensity() == 1.0 && camera.BloomThreshold() == 2.0)
+    camera.SetBloom(1.0, 0.5)
+    camera.Render()
+    Expect(Red(target.ReadPixels(), 16, 16) > 128)
     camera.SetRenderTarget(Null)
     World.SetCurrent(World.Main())
     world.Free()

@@ -112,20 +112,22 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     Local camera = Camera()
     Selecting(editor, camera)
     Expect(Titles(editor) ==
-           own + "Projection FogMode ClearColor FogColor FieldOfView OrthographicHeight FogDensity Order " +
-           "ClearsColor ClearsDepth Range FogRange ",
+           own + "Projection FogMode Tonemap ClearColor FogColor FieldOfView OrthographicHeight " +
+           "Exposure Gamma FogDensity Order Hdr ClearsColor ClearsDepth Range FogRange ",
            Titles(editor))
     Local mesh = Mesh(Geometry.Cube())
     mesh.SetMaterial(Material(Color(1, 0, 0)))
     Selecting(editor, mesh)
     // Its own tint, then its material's: an Alpha's in the Color beside it.
-    Expect(Titles(editor) == own + "Color Shading Blend Color Shininess AlphaCutoff Order " +
-           "VertexColors Wireframe TwoSided Fogged ", Titles(editor))
+    Expect(Titles(editor) == own + "Color Shading Blend Color Emissive Shininess AlphaCutoff " +
+           "NormalScale OcclusionStrength Order VertexColors Wireframe TwoSided Fogged ",
+           Titles(editor))
     Local sprite = Sprite(Material())
     Selecting(editor, sprite)
     Expect(Titles(editor) ==
-           own + "ViewMode Color SpriteScale Handle SpriteRotation Shading Blend Color " +
-           "Shininess AlphaCutoff Order VertexColors Wireframe TwoSided Fogged ", Titles(editor))
+           own + "ViewMode Color SpriteScale Handle SpriteRotation Shading Blend Color Emissive " +
+           "Shininess AlphaCutoff NormalScale OcclusionStrength Order VertexColors Wireframe " +
+           "TwoSided Fogged ", Titles(editor))
     // A terrain's Size clears its heights, so it isn't shown.
     Local terrain = Terrain(4)
     Selecting(editor, terrain)
@@ -134,8 +136,8 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     plane.SetMaterial(Material())
     Selecting(editor, plane)
     Expect(Titles(editor) ==
-           own + "Color Segments Shading Blend Color Shininess AlphaCutoff Order " +
-           "VertexColors Wireframe TwoSided Fogged ", Titles(editor))
+           own + "Color Segments Shading Blend Color Emissive Shininess AlphaCutoff NormalScale " +
+           "OcclusionStrength Order VertexColors Wireframe TwoSided Fogged ", Titles(editor))
     Local pivot = Pivot()
     Selecting(editor, pivot)
     Expect(Titles(editor) == own, Titles(editor))
