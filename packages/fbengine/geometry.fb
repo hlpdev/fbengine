@@ -4,6 +4,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./transform"
 Import "./window"
@@ -115,34 +116,64 @@ Public Final Class Geometry
     End Method
 
     /// A cube from -1 to 1 on each axis, flat-shaded, each face's UVs from 0 to 1.
-    @MainThread Public Static Method Cube(): Geometry => Made(fbe_geometry_cube(), "Cube")
+    @MainThread Public Static Method Cube(): Geometry => Sourced(Made(fbe_geometry_cube(), "Cube"),
+                                                                 "builtin:cube")
 
     /// A sphere of radius 1, of `segments` rings from pole to pole and twice as many around, from 3
     /// to 100.
     @MainThread @PanicsAtCaller
     Public Static Method Sphere(segments: Int = 16): Geometry
-        Return Made(fbe_geometry_sphere(segments), "Sphere")
+        Return Sourced(Made(fbe_geometry_sphere(segments), "Sphere"), "builtin:sphere:{segments}")
     End Method
 
     /// A cylinder of radius 1 from y -1 to 1, of `segments` around, from 3 to 100, with its ends
     /// closed when `capped`.
     @MainThread @PanicsAtCaller
     Public Static Method Cylinder(segments: Int = 16, capped: Bool = True): Geometry
-        Return Made(fbe_geometry_cylinder(segments, capped), "Cylinder")
+        Return Sourced(Made(fbe_geometry_cylinder(segments, capped), "Cylinder"),
+                       "builtin:cylinder:{segments}:{capped ? "capped" : "open"}")
     End Method
 
     /// A cone of radius 1 at y -1, to its point at y 1, of `segments` around, from 3 to 100, with
     /// its base closed when `capped`.
     @MainThread @PanicsAtCaller
     Public Static Method Cone(segments: Int = 16, capped: Bool = True): Geometry
-        Return Made(fbe_geometry_cone(segments, capped), "Cone")
+        Return Sourced(Made(fbe_geometry_cone(segments, capped), "Cone"),
+                       "builtin:cone:{segments}:{capped ? "capped" : "open"}")
     End Method
 
     /// A square from -1 to 1 in X and Z, facing up, of `segments` squares along each side, from 1
     /// to 100.
     @MainThread @PanicsAtCaller
     Public Static Method Plane(segments: Int = 1): Geometry
-        Return Made(fbe_geometry_plane(segments), "Plane")
+        Return Sourced(Made(fbe_geometry_plane(segments), "Plane"), "builtin:plane:{segments}")
+    End Method
+
+    /// What it's known to be made of, as a scene file names it: "builtin:cube" and the like, as what
+    /// its Static Methods made is, or a model's file and mesh number, as `res://door.glb#0` is; Null
+    /// for anything else, as one that's been changed since, whose vertices are what it is.
+    @MainThread @PanicsAtCaller
+    Public Method Source(): String?
+        Local found = ""
+        Unsafe
+            found = fbe_geometry_source(Live("Source")).ToString()
+        End Unsafe
+        Return found != "" ? found : Null
+    End Method
+
+    // What a scene file calls it, or "".
+    @MainThread
+    Package Method SceneId(): String
+        Local found = ""
+        Unsafe
+            found = fbe_geometry_scene_id(Live("SceneId")).ToString()
+        End Unsafe
+        Return found
+    End Method
+
+    @MainThread @NotEdited
+    Package Method SetSceneId(id: String)
+        fbe_geometry_set_scene_id(Live("SetSceneId"), id)
     End Method
 
     /// Lets go of the geometry now; Meshes drawing it keep it. Using it after panics.
@@ -736,6 +767,12 @@ Public Struct Surface
         End If
     End Method
 End Struct
+
+// `geometry`, known to be made of what `source` says.
+Package Function Sourced(geometry: Geometry, source: String): Geometry
+    If !fbe_geometry_set_source(geometry.Live("Source"), source) Then Panic(LastError())
+    Return geometry
+End Function
 
 /// A new Geometry for a handle a call made, or a panic naming the call when it made none.
 @PanicsAtCaller

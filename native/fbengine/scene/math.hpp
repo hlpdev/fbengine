@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <numbers>
 
 namespace fbe::scene {
@@ -142,6 +143,13 @@ inline quat_t normalize(quat_t q) {
     }
     const float scale = 1.0F / size;
     return { q.x * scale, q.y * scale, q.z * scale, q.w * scale };
+}
+/// `q` at length 1, exactly as it is if it's that within a few epsilons, since normalizing again
+/// moves what's already normal, so what's read back from a rotation set is what setting it gives.
+inline quat_t unit(quat_t q) {
+    const float square = (q.x * q.x) + (q.y * q.y) + (q.z * q.z) + (q.w * q.w);
+    return std::abs(square - 1.0F) <= 4.0F * std::numeric_limits<float>::epsilon() ? q
+                                                                                   : normalize(q);
 }
 inline quat_t axis_angle(vec3_t axis, float angle) {
     const vec3_t unit = normalize(axis);

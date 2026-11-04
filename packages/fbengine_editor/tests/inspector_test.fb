@@ -1799,3 +1799,20 @@ Function WhatsEmptyIsntWhatDiffers() Throws IOError, GraphicsError
     Expect(FieldOf(editor, "Name").Placeholder() == "", FieldOf(editor, "Name").Placeholder())
     editor.Finish()
 End Function
+
+// What a scene's saved with for its own use isn't anyone's to type.
+@Test
+Function WhatsASceneFilesOwnIsntShown() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local cube = Mesh(Geometry.Cube())
+    cube.SetMaterial(Material(Color(1, 0, 0)))
+    Selecting(editor, cube)
+    Local titles = Titles(editor)
+    Expect(titles.Contains("Position"), titles)
+    Expect(titles.Contains("PickMode") && !titles.Contains("FileNode") &&
+           !titles.Contains("SceneId"), titles)
+    editor.Finish()
+End Function

@@ -1,0 +1,164 @@
+// A game's settings as an INI file, through std: read, each kind turned to what the game holds, what's
+// missing its default, changed, written, and read again; and a file that isn't one, by its line. It
+// prints what each gave; with --watch, a window of settings saved each time one changes.
+
+Import std.collections
+Import std.core
+Import std.data.ini
+Import std.io
+Import std.math
+Import std.os
+Import std.text
+Import fbengine
+
+// Presses Escape, or closes the window, at the frames `arguments` says, as a person would: a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
+Function Drew(): Bool Throws GraphicsError
+    Local image = Try Screen.ToImage()
+    Local behind = image[0, 0]
+    For y = 0 To image.Height - 1
+        For x = 0 To image.Width - 1
+            If image[x, y] != behind Then Return True
+        End For
+    End For
+    Return False
+End Function
+
+// The string at `path`, or `otherwise`.
+Function Text(settings: Value, path: String, otherwise: String): String
+    Return settings.Path(path)?.AsString() ?? otherwise
+End Function
+
+// The whole number at `path`, or `otherwise` when it's missing or isn't one.
+Function Whole(settings: Value, path: String, otherwise: Int): Int
+    Return Int.Parse(Text(settings, path, "")) ?? otherwise
+End Function
+
+// The number at `path`, or `otherwise`.
+Function Number(settings: Value, path: String, otherwise: Float): Float
+    Return Float32.Parse(Text(settings, path, "")) ?? otherwise
+End Function
+
+// The switch at `path`: true, 1, on, or yes, of any case; or `otherwise`.
+Function Switch(settings: Value, path: String, otherwise: Bool): Bool
+    Local said = settings.Path(path)?.AsString()
+    If said == Null Then Return otherwise
+    Return ["true", "1", "on", "yes"].Contains(said.ToLower())
+End Function
+
+// `settings` with its section `section`'s `key` set, the section made if it's new.
+Function Set(settings: Value, section: String, key: String, value: String)
+    If !settings.Contains(section) Then settings[section] = Value.Object()
+    Local held = settings[section]
+    If held != Null Then held[key] = Value(value)
+End Function
+
+Function Proved() Throws IOError, ParseError
+    Local folder = Try TempDir()
+    Local path = folder.Path / "options.ini"
+    // By hand, with what files have: comments of each kind, spaces, ':', CRLF and CR, quotes, a key
+    // before any section, a section named again, and a key given again.
+    Try File.WriteText(path, "version = 3\r\n; the window\r\n[window]\r\nwidth=1280\r\n  height  :  720  \r# it's a comment\r\n\nfullscreen = YES\ntitle = \"  a game  \"\nscale = 1.5\n[keys]\njump = 44\njump = 57\n[window]\nvsync = 0\n[room ambience]\nmesh path = GFX\\map\\a.rmesh\n")
+    Local settings = Try Ini.Read(Try File.ReadText(path))
+    Print("its own key {Text(settings, "version", "")}")
+    Print("its sections {settings.Keys()}")
+    Print(
+        "a key with a space, in a section with one {Text(settings, "room ambience.mesh path", "")}")
+    Print(
+        "width {Whole(settings, "window.width", 0)}, height {Whole(settings, "window.height", 0)}")
+    Print("fullscreen {Switch(settings, "window.fullscreen", False)}, vsync {Switch(settings, "window.vsync", True)}")
+    Print("title \"{Text(settings, "window.title", "")}\"")
+    Print("scale {Number(settings, "window.scale", 0.0)}")
+    Print("a key given again {Whole(settings, "keys.jump", 0)}")
+
+    // What's missing is its default, and what isn't a number too.
+    Print("missing {Whole(settings, "window.depth", 24)}, {Text(settings, "audio.device", "default")}, {Switch(settings, "audio.mute", True)}")
+    Print("not a number {Whole(settings, "window.title", 7)}")
+
+    // Changed, written, and read again as it was.
+    Set(settings, "window", "width", "1920")
+    Set(settings, "audio", "volume", "0.75")
+    Local written = Ini.Write(settings)
+    Print("as written, {written.Length} bytes, its first line {written.Split("\n")[0]}, then {written.Split("\n")[2]}")
+    Try File.WriteText(path, written)
+    Local again = Try Ini.Read(Try File.ReadText(path))
+    Print("read again the same {again == settings}")
+    Print("width {Whole(again, "window.width", 0)}, volume {Number(again, "audio.volume", 0.0)}, title \"{Text(again, "window.title", "")}\"")
+    Print("written twice the same {Ini.Write(again) == written}")
+
+    // A file that isn't one says where.
+    Local line = -1
+    Try
+        Try Ini.Read("a = 1\nthis isn't a line\n")
+    Catch e As ParseError
+        line = e.Line
+    End Try
+    Print("not an INI file: line {line}")
+    Try folder.Close()
+End Function
+
+// A window of its settings, saved and read back each time one changes; or `frames` frames offscreen,
+// which change one every 5.
+Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError, ParseError
+    Window.SetHeadless(frames > 0)
+    Try Graphics(800, 450)
+    Defer EndGraphics()
+    Window.SetTitle("INI settings: Space changes one, Escape ends it")
+    Frame.SetLimit(60)
+    Local font = Font.BuiltIn(18.0)
+    Local folder = Try TempDir()
+    Local path = folder.Path / "options.ini"
+    Local settings = Try Ini.Read("[window]\nwidth = 800\nheight = 450\n[audio]\nvolume = 5\n")
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        If frames > 0 && count == 2 Then Try Simulate.PressKey(Key.SPACE)
+        If KeyHit(Key.SPACE) || frames > 0 && count % 5 == 0
+            Set(settings, "audio", "volume", "{(Whole(settings, "audio.volume", 0) + 1) % 11}")
+            Try File.WriteText(path, Ini.Write(settings))
+            settings = Try Ini.Read(Try File.ReadText(path))
+        End If
+        Local canvas = Screen.Canvas()
+        canvas.SetColor(Color32(24, 28, 36, 255))
+        canvas.Clear()
+        canvas.SetBlend(Blend2D.ALPHA)
+        canvas.SetColor(Color32(230, 232, 235, 255))
+        Local lines = Ini.Write(settings).Split("\n")
+        For i = 0 To lines.Count - 1
+            canvas.DrawText(font, lines[i], 16, 16 + (i As Int32) * 24)
+        End For
+        canvas.SetBlend(Blend2D.SOLID)
+        canvas.SetColor(Color32(76, 141, 255, 255))
+        canvas.DrawRect(16, 400, (Whole(settings, "audio.volume", 0) As Int32) * 60, 24)
+    End While
+    If frames > 0 Then Print("the volume {Text(settings, "audio.volume", "")}")
+    Print("drew {Try Drew()}")
+    Try folder.Close()
+    Print("watched {count} frames")
+End Function
+
+Local arguments = Process.Arguments()
+If !arguments.Contains("--watch")
+    Try Proved()
+ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
+    Print("no GPU here")
+Else
+    Try Watched(Asked(arguments), arguments)
+End If

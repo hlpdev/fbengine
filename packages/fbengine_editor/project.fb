@@ -48,10 +48,12 @@ Public Final Class GameProject
         Return GameProject(name, absolute)
     End Method
 
-    /// Mounts its assets/ at res://, if it has one.
-    Public Method Mount()
+    /// Mounts its assets/ at res://, if it has one and that isn't already; whether it did.
+    Public Method Mount(): Bool
         Local assets = Folder / "assets"
-        If mount == 0 && Dir.Exists(assets) Then mount = Assets.MountFolder("res://", assets)
+        If mount != 0 || !Dir.Exists(assets) Then Return False
+        mount = Assets.MountFolder("res://", assets)
+        Return True
     End Method
 
     /// Takes its own mount back out of res://, whatever's been mounted over it, and lets go of what

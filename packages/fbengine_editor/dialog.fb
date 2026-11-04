@@ -78,11 +78,14 @@ Class WrappedText Extends Widget
         Return lines
     End Method
 
-    // How many of the first characters of `word`, at least 1, fit its width.
+    // How many of the first bytes of `word`, at least a character's, fit its width.
     Method Fitting(word: String): Int
-        Local fits = 1
+        Local bytes = word.Bytes
+        Local fits = 0
         For length = 1 To word.Length
-            If TextSize(word.Slice(0, length)).x > wide Then Break
+            // Between characters only, what follows not going on with this one.
+            If length < word.Length && (bytes[length] & 0xC0) == 0x80 Then Continue
+            If fits > 0 && TextSize(word.Slice(0, length)).x > wide Then Break
             fits = length
         End For
         Return fits

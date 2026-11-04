@@ -5,6 +5,8 @@
 Import std.collections
 Import std.core
 Import std.ffi
+Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./camera"
 Import "./light"
@@ -62,6 +64,9 @@ End Class
 
 Global wrappers = Wrappers()
 
+// Whether anything's ever had a component, or a copy has none to look for.
+Global anyComponents = False
+
 // What a game attached with SetData, of the type it was set as.
 Interface Attached
 End Interface
@@ -79,6 +84,9 @@ End Class
 Public Class Entity Implements Printable
     Field handle: UInt64
     Field attached: Attached[] = []
+    Field components: Map<String, Value>? = Null
+    Field strays: String[] = []
+    Field fileNode: String = ""
 
     // Made by a Class extending it, for a handle C made, which it keeps as the handle's wrapper.
     Package New(handle: UInt64)
@@ -202,7 +210,7 @@ Public Class Entity Implements Printable
 
     /// A copy of the entity and everything under it, the last child of `parent`, or at the top of
     /// the current World when `parent` is Null. Each copy has its original's name, transform, and
-    /// settings, and shares its geometry, but not what SetData attached.
+    /// settings and components, and shares its geometry, but not what SetData attached.
     @MainThread @PanicsAtCaller
     Public Method Copy(parent: Entity? = Null): Entity
         Local entity = Live("Copy")
@@ -213,7 +221,26 @@ Public Class Entity Implements Printable
         Else
             world = CurrentWorld().Live("Copy")
         End If
-        Return Present(EntityOf(fbe_entity_copy(entity, world, under)), Self, "Copy")
+        Local copy = Present(EntityOf(fbe_entity_copy(entity, world, under)), Self, "Copy")
+        ComponentsTo(copy)
+        Return copy
+    End Method
+
+    // Its components, and what's under it's, on what's its copy, if anything has any: a tree can be
+    // thousands deep, and copied under itself, so its first children are its original's.
+    Method ComponentsTo(copy: Entity)
+        If !anyComponents Then Return
+        Local going: (Entity, Entity)[] = [(Self, copy)]
+        While going.Count > 0
+            Local from, to = going[going.Count - 1]
+            going.RemoveAt(going.Count - 1)
+            For name In from.ComponentNames()
+                to.SetComponent(name, from.Component(name))
+            End For
+            For at = 0 To Min(from.ChildCount(), to.ChildCount()) - 1
+                going.Add((from.Child(at), to.Child(at)))
+            End For
+        End While
     End Method
 
     /// Keeps the game's own object on the entity, one of each type, as Data<T>() gives it back, in
@@ -234,6 +261,57 @@ Public Class Entity Implements Printable
             If kept != Null Then Return kept.value
         End For
         Return Null
+    End Method
+
+    /// The component of the entity's that's called `name`, or Null: what a scene file keeps for it
+    /// whatever it's for, under `[entity.components.<name>]`, read and written as it is.
+    @MainThread @PanicsAtCaller
+    Public Method Component(name: String): Value?
+        Live("Component")
+        Return components?.Get(name)
+    End Method
+
+    /// Sets the component called `name`, or takes it away with Null.
+    @MainThread @PanicsAtCaller
+    Public Method SetComponent(name: String, value: Value?)
+        Live("SetComponent")
+        anyComponents = True
+        Local all = components ?? {}
+        If value != Null
+            all[name] = value
+        Else
+            all.Remove(name)
+        End If
+        components = all
+    End Method
+
+    /// What its components are called, in order.
+    @MainThread @PanicsAtCaller
+    Public Method ComponentNames(): String[]
+        Live("ComponentNames")
+        Local names: String[] = []
+        Local all = components
+        If all == Null Then Return names
+        For name In all.Keys()
+            names.Add(name)
+        End For
+        names.Sort()
+        Return names
+    End Method
+
+    // The name its model's file has for it, if it came from one, whatever it's been named since.
+    Package Method FileNode(): String => fileNode
+
+    @NotEdited
+    Package Method SetFileNode(name: String)
+        fileNode = name
+    End Method
+
+    // What the file it came from said of it that a save couldn't write back.
+    Package Method Strays(): String[] => strays
+
+    Package Method SetStrays(keys: String[])
+        strays = keys
     End Method
 
     /// The entity's name and kind, as `Pivot "door"`, or `freed Pivot`.
@@ -270,6 +348,7 @@ Public Class Entity Implements Printable
     Package Method Forget()
         handle = 0
         attached = []
+        components = Null
     End Method
 End Class
 

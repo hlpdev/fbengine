@@ -121,6 +121,8 @@ struct layer_t {
 /// references count, as a geometry's do.
 struct material_t {
     std::uint32_t references = 0;
+    /// What a scene file calls it, kept from one save to the next.
+    std::string scene_id;
     std::array<float, 4> color{ 1.0F, 1.0F, 1.0F, 1.0F };
     float shininess = 0.0F;
     std::int32_t shading = 0;
@@ -169,6 +171,11 @@ struct geometry_t {
     /// A box drawing culls it by instead of its bounds, as a skinned mesh's, whose vertices move
     /// out of them, wants.
     bool has_cull_box = false;
+    /// What it's known to be made of, a scene file's name for it, while it's as it was then.
+    std::string source;
+    std::uint64_t source_version = 0;
+    /// What a scene file calls it, kept from one save to the next.
+    std::string scene_id;
     vec3_t cull_min;
     vec3_t cull_max;
     /// Goes up when its triangles come or go, as against only moving, which a tree can be
