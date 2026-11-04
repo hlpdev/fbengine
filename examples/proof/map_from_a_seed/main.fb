@@ -1,0 +1,145 @@
+// A map made from a seed, as a game does it, needing nothing of the engine but its own stream: the
+// seed's text made a number a byte at a time, each shifted a bit further, 0 to 23, and then a corridor
+// across a grid from the bottom middle to the top, in runs, with branches up from it. It prints the
+// map; tests/CMakeLists.txt has what it should be, worked out with no FB in sight.
+
+Import std.core
+
+Const SIZE = 18
+
+// Blitz's stream, as examples/proof/blitz_random has it, and shows.
+Final Class BlitzRandom
+    Field state: Int = 0x1234
+
+    Method Seed(seed: Int)
+        Local masked = seed & 0x7FFFFFFF
+        state = masked != 0 ? masked : 1
+    End Method
+
+    Method Float(): Float32
+        state = 48271 * (state % 44488) - 3399 * (state / 44488)
+        If state < 0 Then state += 2147483647
+        Local low = (state & 65535) As Float32
+        Return low / (65536.0 As Float32) + (0.5 As Float32) / (65536.0 As Float32)
+    End Method
+
+    Method Rand(low: Int, high: Int): Int
+        If high < low Then Return Rand(high, low)
+        Return (Float() * ((high - low + 1) As Float32)) As Int + low
+    End Method
+End Class
+
+// The number a seed's text is: each byte's bits XORed in, a bit further along than the last.
+Function SeedNumber(text: String): Int
+    Local number: Int = 0
+    Local shift = 0
+    For byte In text.Bytes
+        number ^= (byte As Int) << shift
+        shift = (shift + 1) % 24
+    End For
+    Return number
+End Function
+
+// The map of a seed, a row at a time from the top.
+Function MapOf(text: String): Bool[][]
+    Local stream = BlitzRandom()
+    stream.Seed(SeedNumber(text))
+    Local grid: Bool[][] = []
+    For y = 0 Until SIZE
+        Local row: Bool[] = []
+        For x = 0 Until SIZE
+            row.Add(False)
+        End For
+        grid.Add(row)
+    End For
+    Local x = SIZE / 2
+    Local y = SIZE - 1
+    grid[y][x] = True
+    // Runs across and back, away from the side it's on, each joined to the next by a way up.
+    While y > 0
+        Local run = stream.Rand(10, 15)
+        Local to = x >= SIZE / 2 ? Max(x - run, 1) : Min(x + run, SIZE - 2)
+        For across = Min(x, to) To Max(x, to)
+            grid[y][across] = True
+        End For
+        x = to
+        Local up = Min(stream.Rand(2, 3), y)
+        For down = 1 To up
+            grid[y - down][x] = True
+        End For
+        y -= up
+    End While
+    // Branches, each up from the first of a column at or above a row.
+    For branch = 1 To stream.Rand(4, 5)
+        Local column = stream.Rand(1, SIZE - 2)
+        Local row = stream.Rand(2, SIZE - 1)
+        Local grown = stream.Rand(1, 3)
+        While row > 0 && !grid[row][column]
+            row -= 1
+        End While
+        For up = 1 To grown
+            If row - up >= 0 Then grid[row - up][column] = True
+        End For
+    End For
+    Return grid
+End Function
+
+Function Rooms(grid: Bool[][]): Int
+    Local rooms = 0
+    For row In grid
+        For cell In row
+            If cell Then rooms += 1
+        End For
+    End For
+    Return rooms
+End Function
+
+// How many rooms have one way out.
+Function DeadEnds(grid: Bool[][]): Int
+    Local ends = 0
+    For y = 0 Until SIZE
+        For x = 0 Until SIZE
+            If !grid[y][x] Then Continue
+            Local ways = 0
+            If x > 0 && grid[y][x - 1] Then ways += 1
+            If x < SIZE - 1 && grid[y][x + 1] Then ways += 1
+            If y > 0 && grid[y - 1][x] Then ways += 1
+            If y < SIZE - 1 && grid[y + 1][x] Then ways += 1
+            If ways == 1 Then ends += 1
+        End For
+    End For
+    Return ends
+End Function
+
+Function Same(a: Bool[][], b: Bool[][]): Bool
+    For y = 0 Until SIZE
+        For x = 0 Until SIZE
+            If a[y][x] != b[y][x] Then Return False
+        End For
+    End For
+    Return True
+End Function
+
+Function Show(text: String)
+    Local grid = MapOf(text)
+    Print("{text}, seed {SeedNumber(text)}: {Rooms(grid)} rooms, {DeadEnds(grid)} dead ends")
+    For row In grid
+        Local line = ""
+        For cell In row
+            line += cell ? "#" : "."
+        End For
+        Print(line)
+    End For
+End Function
+
+Function Main()
+    For text In ["a", "ab", "abcdefghijklmnopqrstuvwxyz"]
+        Print("{text}'s number: {SeedNumber(text)}")
+    End For
+    Show("SCP")
+    Show("173")
+    Print("the same seed, the same map: {Same(MapOf("SCP"), MapOf("SCP"))}")
+    Print("another seed, the same map: {Same(MapOf("SCP"), MapOf("173"))}")
+End Function
+
+Main()
