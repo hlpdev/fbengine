@@ -1,0 +1,298 @@
+// The game in 3D: you, walking the island in first person; Pip, following you; and the parts, as
+// things lying where the flow says, carried, handed over, and fitted, with the flow deciding what
+// happens, and what's drawn following what it says.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+Import "./controls"
+Import "./cues"
+Import "./flow"
+Import "./follow"
+Import "./ground"
+Import "./island"
+Import "./map"
+
+// How high your eyes are, and how near a part has to be to take it.
+Const EYE_HEIGHT: Float = 1.6
+Const REACH: Float = 3.5
+// How fast the mouse turns you, in radians a unit, and how fast the wheel's drawn turning, in radians a
+// second, at full speed.
+Const LOOK_SPEED: Float = 0.003
+Const WHEEL_TURNS: Float = 1.2
+
+/// The game: its flow, its island, you, and Pip.
+Public Final Class Game
+    Field flow: Flow
+    Field island: Island
+    Field camera: Camera
+    Field x: Float
+    Field z: Float
+    Field yaw: Float = 3.14159
+    Field pitch: Float = 0.0
+    Field pip: Follower
+    Field place: Area = Area.INSIDE
+    Field pipPlace: Area = Area.INSIDE
+    Field pipClip: Int = -1
+    Field wheelTurn: Float = 0.0
+    Field blinking: Float = 0.0
+    // Which parts it's said lie here, by their numbers.
+    Field told: Bool[]
+
+    /// A game from its first moment, inside the mill, saying what happens through `say`.
+    @MainThread
+    Public New(island: Island, say: Func(String))
+        Self.island = island
+        flow = Flow(say)
+        told = [False, False, False]
+        camera = Camera()
+        camera.SetClearColor(SKY)
+        camera.SetRange(0.1, 4000.0)
+        camera.SetFogMode(FogMode.LINEAR)
+        camera.SetFogColor(SKY)
+        camera.SetFogRange(200.0, 1400.0)
+        Local start = island.PlaceOf(Spot.INSIDE)
+        x = start.x
+        z = start.y
+        pip = Follower(x + 1.5, z + 1.0)
+        Seat()
+        PlacePip(0.0)
+        Sync()
+    End New
+
+    /// Its flow, which says what's happening.
+    @MainThread Public Method Story(): Flow => flow
+
+    /// The camera you see through.
+    @MainThread Public Method View(): Camera => camera
+
+    /// Where you are, on the ground.
+    @MainThread Public Method Location(): Vec2 => Vec2(x, z)
+
+    /// Where Pip is, on the ground.
+    @MainThread Public Method PipLocation(): Vec2 => pip.Location()
+
+    /// How far Pip went in its last step.
+    @MainThread Public Method PipMoved(): Float => pip.Moved()
+
+    /// How high your eyes should be, on what you stand on.
+    @MainThread Public Method EyeAt(): Float => island.FloorAt(x, z) + EYE_HEIGHT
+
+    /// Turns you to face (`toX`, `toZ`), level.
+    @MainThread
+    Public Method Face(toX: Float, toZ: Float)
+        yaw = Atan2(x - toX, z - toZ)
+        pitch = 0.0
+        Seat()
+    End Method
+
+    /// Tilts your view, up or down, in radians.
+    @MainThread
+    Public Method Look(tilt: Float)
+        pitch = tilt
+        Seat()
+    End Method
+
+    /// Which way you're turned, and tilted.
+    @MainThread Public Method Yaw(): Float => yaw
+
+    @MainThread Public Method Pitch(): Float => pitch
+
+    /// Turns you to look at Pip.
+    @MainThread
+    Public Method FacePip()
+        Local at = pip.Location()
+        Face(at.x, at.y)
+        pitch = -0.35
+        Seat()
+    End Method
+
+    /// Moves it all on `seconds`, by what `controls` read at the last Flip.
+    @MainThread
+    Public Method Step(controls: Controls, seconds: Float)
+        Local look = controls.Looking()
+        Local turn = controls.Turning()
+        yaw -= look.x * LOOK_SPEED + StickTurn(turn.x, seconds)
+        pitch = Clamp(pitch - look.y * LOOK_SPEED - StickTurn(turn.y, seconds), -1.4, 1.4)
+        Local moving = controls.Walking()
+        Walk(moving.x, moving.y, seconds)
+        If controls.UseHit() Then Use()
+        If controls.HandHit() && flow.Ended() == Ending.NONE Then flow.Hand()
+        Local flooded = flow.Flooded()
+        flow.Step(seconds As Float64)
+        // The water carries you to the nearer shore, if it reached you, and Pip to Pip's.
+        If flow.Flooded() != flooded
+            Local sea = SeaHeight(flow.Clock())
+            If SweptAt(x, z, sea)
+                Local far = NearerFar(x, z)
+                Local side = Landing(far)
+                x = side.x
+                z = side.y
+                place = far ? Area.FAR_ROCK : Area.YARD
+                flow.Arrive(place, far)
+            ElseIf flow.At() != place
+                place = flow.At()
+            End If
+            Local pipIs = pip.Location()
+            If SweptAt(pipIs.x, pipIs.y, sea)
+                Local side = PipLanding(NearerFar(pipIs.x, pipIs.y))
+                pip.Put(side.x, side.y)
+                pipPlace = PlaceAt(side.x, side.y)
+            End If
+        End If
+        Seat()
+        PlacePip(seconds)
+        island.Update(flow.Clock())
+        Sync()
+        TellWhatLies()
+        // The wheel turns once the water's back to it, and the lamp's lit by how it ended.
+        Local ended = flow.Ended()
+        If ended == Ending.BRIGHT || ended == Ending.DIM
+            wheelTurn += seconds * WheelSpeed(ended) * WHEEL_TURNS
+            island.TurnWheel(wheelTurn)
+            island.LightLamp(ended == Ending.BRIGHT)
+        End If
+        UpdateWorld(seconds As Float64)
+    End Method
+
+    /// What can be done where you are now, for the screen to say.
+    @MainThread
+    Public Method Prompt(): String
+        If flow.Ended() != Ending.NONE Then Return ""
+        Local near = NearPart()
+        If flow.Held() == Null && near != Null Then Return "E: pick up {PartName(near)}"
+        Local holding = flow.Held()
+        If flow.At() == Area.INSIDE
+            If holding != Null Then Return "E: fit {PartName(holding)}"
+            If !flow.SluiceOpen() && flow.Fitted(Part.GEAR) && flow.Fitted(Part.PADDLE)
+                Return "E: open the sluice"
+            End If
+        End If
+        If flow.PipHere() && holding != Null && flow.PipHolds() == Null
+            Return "Q: hand Pip {PartName(holding)}"
+        End If
+        Local holds = flow.PipHolds()
+        If flow.PipHere() && holding == Null && holds != Null
+            Return "Q: take {PartName(holds)} from Pip"
+        End If
+        Return ""
+    End Method
+
+    /// Frees it, but for its island, which it leaves for another Game.
+    @MainThread
+    Public Method Free()
+        island.Reset()
+        camera.Free()
+    End Method
+
+    // Walks by `across` and `ahead`, each from -1 to 1, not through the mill's walls, nor into the sea
+    // past wading, and tells the flow where that is.
+    @MainThread
+    Method Walk(across: Float, ahead: Float, seconds: Float)
+        Local length = Sqrt(across * across + ahead * ahead)
+        If length > 0.001
+            Local scale = Min(1.0 / length, 1.0) * WALK_SPEED * seconds
+            Local forwardX = -Sin(yaw)
+            Local forwardZ = -Cos(yaw)
+            Local nextX = x + (forwardX * ahead - forwardZ * across) * scale
+            Local nextZ = z + (forwardZ * ahead + forwardX * across) * scale
+            Local clock = flow.Clock()
+            Local flooded = flow.Flooded()
+            If !Blocked(nextX, z) && CanWade(x, z, nextX, z, clock, flooded) Then x = nextX
+            If !Blocked(x, nextZ) && CanWade(x, z, x, nextZ, clock, flooded) Then z = nextZ
+        End If
+        place = PlaceHeld(place, x, z)
+        flow.Arrive(place, NearerFar(x, z))
+    End Method
+
+    // Takes what's within reach, or does what the mill's inside lets, as E does, or says why not.
+    @MainThread
+    Method Use()
+        If flow.Ended() != Ending.NONE Then Return
+        If flow.At() == Area.INSIDE || NearPart() != Null
+            flow.Use()
+        ElseIf flow.Held() != Null
+            flow.Say("you're not at the mill")
+        Else
+            flow.Say("there's nothing within reach")
+        End If
+    End Method
+
+    // The part lying within your reach, if there is one.
+    @MainThread
+    Method NearPart(): Part?
+        For number = 0 To 2
+            Local part = number As Part
+            Local lies = flow.Lying(part)
+            If lies == Null Then Continue
+            Local spot = island.PartSpot(part)
+            Local dx = spot.x - x
+            Local dz = spot.y - z
+            If dx * dx + dz * dz <= REACH * REACH Then Return part
+        End For
+        Return Null
+    End Method
+
+    // Says what lies within your reach, the first time.
+    @MainThread
+    Method TellWhatLies()
+        Local near = NearPart()
+        If near != Null && !told[near As Int] && flow.Ended() == Ending.NONE
+            told[near As Int] = True
+            flow.Say("{PartName(near)} lies here")
+        End If
+    End Method
+
+    // Puts the camera where your eyes are.
+    @MainThread
+    Method Seat()
+        camera.SetPosition(Vec3(x, EyeAt(), z))
+        camera.SetRotation(pitch, yaw, 0.0)
+    End Method
+
+    // Moves Pip toward you, tells the flow where Pip is, and plays what suits: idle, walking, or
+    // carrying, its head turned to you, blinking.
+    @MainThread
+    Method PlacePip(seconds: Float)
+        pip.Step(x, z, seconds, flow.Clock(), flow.Flooded())
+        Local at = pip.Location()
+        Local dx = x - at.x
+        Local dz = z - at.y
+        pipPlace = PlaceHeld(pipPlace, at.x, at.y)
+        flow.PipArrive(pipPlace, PipWithYou(at.x, at.y, x, z))
+        Local entity = island.PipEntity()
+        entity.SetPosition(Vec3(at.x, island.FloorAt(at.x, at.y), at.y))
+        entity.SetRotation(0.0, pip.Facing(), 0.0)
+        Local holding = flow.PipHolds() != Null
+        Local clip = pip.Clip(holding) As Int
+        If clip != pipClip
+            pipClip = clip
+            island.PlayPip(clip)
+        End If
+        island.SetPipPace(pip.ClipSpeed(holding, seconds), CARRY_STILL_AT)
+        island.TurnPipHead(HeadTurn(Atan2(dx, dz), pip.Facing()))
+        blinking += seconds
+        island.BlinkPip(BlinkWeight(blinking))
+    End Method
+
+    // Puts each part where the flow says it is.
+    @MainThread
+    Method Sync()
+        For number = 0 To 2
+            Local part = number As Part
+            Local thing = island.PartEntity(part)
+            If flow.Fitted(part)
+                island.FitPart(part)
+                thing.Show()
+            ElseIf flow.Held() == part
+                island.HoldPart(part, camera)
+            ElseIf flow.PipHolds() == part
+                island.GivePart(part)
+            ElseIf flow.Lying(part) == Null
+                // The sea has it.
+                thing.Hide()
+            End If
+        End For
+    End Method
+End Class

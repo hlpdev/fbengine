@@ -136,6 +136,18 @@ struct Draw
 // makes one access chain through the draw's address and this one, which SPIRV-Cross, as MoltenVK runs
 // it, writes as Metal that doesn't compile, adding the two indices.
 [noinline]
+Emitter emitterOf(Emitter* emitter)
+{
+    return emitter[0];
+}
+
+[noinline]
+Particle particleAt(Particle* records, uint index)
+{
+    return records[index];
+}
+
+[noinline]
 Vertex vertexAt(Vertex* vertices, uint index)
 {
     return vertices[index];
@@ -504,8 +516,8 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
 {
     Camera* camera = push.camera;
     const Draw draw = camera.draws[instance];
-    const Emitter emitter = draw.emitter[0];
-    const Particle particle = emitter.records[index / 6];
+    const Emitter emitter = emitterOf(draw.emitter);
+    const Particle particle = particleAt(emitter.records, index / 6);
     Corner corner;
     corner.position = float4(0.0, 0.0, 0.0, 1.0);
     corner.place = float3(0.0, 0.0, 0.0);

@@ -1,0 +1,326 @@
+// Pip, as a glTF: a small two-legged brass helper of boxes, each moved by one joint, its eyes with
+// a morph target that shuts them, and its idle, walk, and carry clips, in pip.gltf and pip.bin.
+
+Import std.collections
+Import std.core
+Import std.io
+Import std.math
+Import std.text
+
+// A joint: its name, its parent's index or -1, and where it is, in its parent's space.
+Struct Joint
+    Field Name: String
+    Field Parent: Int
+    Field X: Float
+    Field Y: Float
+    Field Z: Float
+End Struct
+
+// What's in pip.bin, a part after another, each 4-byte aligned, and each one's JSON.
+Final Class Parts
+    Field Bytes: UInt8[] = []
+    Field Views: String[] = []
+    Field Accessors: String[] = []
+
+    // A float at its end.
+    Method Float(value: Float)
+        Local bits = (value As Float32).ToBits()
+        For at = 0 To 3
+            Bytes.Add(((bits >> (at * 8)) & 0xFF) As UInt8)
+        End For
+    End Method
+
+    // An accessor over what's been added since `start`, `count` of `type`, of `component`; gives its
+    // index. `bounds` is what's added after its other keys, as POSITION's min and max.
+    Method Accessor(start: Int, count: Int, type: String, component: Int, bounds: String = ""): Int
+        While Bytes.Count % 4 != 0
+            Bytes.Add(0)
+        End While
+        Views.Add("{{\"buffer\":0,\"byteOffset\":{start},\"byteLength\":{Bytes.Count - start}}}")
+        Accessors.Add("{{\"bufferView\":{Views.Count - 1},\"componentType\":{component}," +
+                      "\"count\":{count},\"type\":\"{type}\"{bounds}}}")
+        Return Accessors.Count - 1
+    End Method
+End Class
+
+// A surface being made: its vertices, each by its joint, and its triangles.
+Final Class Shape
+    Field Positions: Float[] = []
+    Field Normals: Float[] = []
+    Field Uvs: Float[] = []
+    Field Joints: Int[] = []
+    Field Indices: Int[] = []
+    // What a shut eye moves each vertex by, on y, and 0 for what doesn't.
+    Field Shut: Float[] = []
+
+    // A box, its middle at (`x`, `y`, `z`), `w`, `h`, and `d` across, moved by `joint`, with `shut`
+    // telling how far down its top vertices move when its eyes shut.
+    Method Box(x: Float, y: Float, z: Float, w: Float, h: Float, d: Float, joint: Int,
+               shut: Float = 0.0)
+        // A face's normal, then its two directions across, as it's seen from outside.
+        Local faces = [[0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                       [0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                       [1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0],
+                       [-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+                       [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0],
+                       [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]]
+        For face In faces
+            Local first = Joints.Count
+            For corner = 0 To 3
+                Local su = corner == 1 || corner == 2 ? 1.0 : -1.0
+                Local sv = corner >= 2 ? 1.0 : -1.0
+                Local px = face[0] + face[3] * su + face[6] * sv
+                Local py = face[1] + face[4] * su + face[7] * sv
+                Local pz = face[2] + face[5] * su + face[8] * sv
+                Positions.Add(x + px * w * 0.5)
+                Positions.Add(y + py * h * 0.5)
+                Positions.Add(z + pz * d * 0.5)
+                Normals.Add(face[0])
+                Normals.Add(face[1])
+                Normals.Add(face[2])
+                Uvs.Add((su + 1.0) * 0.5)
+                Uvs.Add((1.0 - sv) * 0.5)
+                Joints.Add(joint)
+                Shut.Add(py > 0.0 ? shut : 0.0)
+            End For
+            For index In [0, 1, 2, 0, 2, 3]
+                Indices.Add(first + index)
+            End For
+        End For
+    End Method
+
+    // Its attributes and indices in `parts`, as one primitive of a glTF's mesh, in `material`.
+    Method Primitive(parts: Parts, material: Int): String
+        Local vertices = Joints.Count
+        Local start = parts.Bytes.Count
+        Local low = [1000000.0, 1000000.0, 1000000.0]
+        Local high = [-1000000.0, -1000000.0, -1000000.0]
+        For at = 0 Until Positions.Count
+            parts.Float(Positions[at])
+            low[at % 3] = Min(low[at % 3], Positions[at])
+            high[at % 3] = Max(high[at % 3], Positions[at])
+        End For
+        Local position = parts.Accessor(start, vertices, "VEC3", 5126,
+                                        ",\"min\":[{low[0]},{low[1]}," +
+                                        "{low[2]}],\"max\":[{high[0]},{high[1]},{high[2]}]")
+        start = parts.Bytes.Count
+        For value In Normals
+            parts.Float(value)
+        End For
+        Local normal = parts.Accessor(start, vertices, "VEC3", 5126)
+        start = parts.Bytes.Count
+        For value In Uvs
+            parts.Float(value)
+        End For
+        Local uv = parts.Accessor(start, vertices, "VEC2", 5126)
+        start = parts.Bytes.Count
+        For joint In Joints
+            parts.Bytes.Add(joint As UInt8)
+            parts.Bytes.Add(0)
+            parts.Bytes.Add(0)
+            parts.Bytes.Add(0)
+        End For
+        Local joints = parts.Accessor(start, vertices, "VEC4", 5121)
+        start = parts.Bytes.Count
+        For vertex = 1 To vertices
+            parts.Float(1.0)
+            parts.Float(0.0)
+            parts.Float(0.0)
+            parts.Float(0.0)
+        End For
+        Local weights = parts.Accessor(start, vertices, "VEC4", 5126)
+        // The blink: its min and max are glTF's rule for a target's positions.
+        start = parts.Bytes.Count
+        Local lowest = 0.0
+        For value In Shut
+            parts.Float(0.0)
+            parts.Float(value)
+            parts.Float(0.0)
+            lowest = Min(lowest, value)
+        End For
+        Local blink = parts.Accessor(start, vertices, "VEC3", 5126,
+                                     ",\"min\":[0,{lowest},0],\"max\":[0,0,0]")
+        start = parts.Bytes.Count
+        For index In Indices
+            Local value = index
+            parts.Bytes.Add((value & 0xFF) As UInt8)
+            parts.Bytes.Add(((value >> 8) & 0xFF) As UInt8)
+        End For
+        Local indices = parts.Accessor(start, Indices.Count, "SCALAR", 5123)
+        Return "{{\"attributes\":{{\"POSITION\":{position},\"NORMAL\":{normal},\"TEXCOORD_0\":{uv}," +
+               "\"JOINTS_0\":{joints},\"WEIGHTS_0\":{weights}}},\"indices\":{indices}," +
+               "\"material\":{material},\"targets\":[{{\"POSITION\":{blink}}}]}}"
+    End Method
+End Class
+
+// A key's rotation about X, by `angle` radians, as a glTF's x, y, z, w.
+Function AboutX(parts: Parts, angle: Float)
+    // Through the double-precision libm, whose results round the same on every machine this far down.
+    parts.Float(Sin((angle / 2.0) As Float64) As Float)
+    parts.Float(0.0)
+    parts.Float(0.0)
+    parts.Float(Cos((angle / 2.0) As Float64) As Float)
+End Function
+
+// A clip's samplers and channels being made, over `times`.
+Final Class Clip
+    Field Samplers: String[] = []
+    Field Channels: String[] = []
+    Field Input: Int
+
+    New(parts: Parts, times: Float[])
+        Local start = parts.Bytes.Count
+        For time In times
+            parts.Float(time)
+        End For
+        Input = parts.Accessor(start, times.Count, "SCALAR", 5126,
+                               ",\"min\":[{times[0]}],\"max\":[{times[times.Count - 1]}]")
+    End New
+
+    // A joint turned about X to each of `angles` at its times.
+    Method Turn(parts: Parts, joint: Int, angles: Float[])
+        Local start = parts.Bytes.Count
+        For angle In angles
+            AboutX(parts, angle)
+        End For
+        Local output = parts.Accessor(start, angles.Count, "VEC4", 5126)
+        Samplers.Add("{{\"input\":{Input},\"output\":{output}}}")
+        Channels.Add("{{\"sampler\":{Samplers.Count - 1},\"target\":{{\"node\":{joint}," +
+                     "\"path\":\"rotation\"}}}}")
+    End Method
+
+    // A joint moved to (`x`, each of `heights`, `z`), at its times.
+    Method Bob(parts: Parts, joint: Int, x: Float, heights: Float[], z: Float)
+        Local start = parts.Bytes.Count
+        For height In heights
+            parts.Float(x)
+            parts.Float(height)
+            parts.Float(z)
+        End For
+        Local output = parts.Accessor(start, heights.Count, "VEC3", 5126)
+        Samplers.Add("{{\"input\":{Input},\"output\":{output}}}")
+        Channels.Add("{{\"sampler\":{Samplers.Count - 1},\"target\":{{\"node\":{joint}," +
+                     "\"path\":\"translation\"}}}}")
+    End Method
+
+    // What a glTF says of it.
+    Method Json(name: String): String
+        Return "{{\"name\":\"{name}\",\"samplers\":[{Joined(Samplers)}]," +
+               "\"channels\":[{Joined(Channels)}]}}"
+    End Method
+End Class
+
+Function Joined(parts: String[]): String => ",".Join(parts)
+
+// How high the hips are with the legs swung `angle` radians, so a foot's lowest corner is on the
+// ground: a leg's LEG long and FOOT thick.
+Const LEG: Float = 0.36
+Const FOOT: Float = 0.08
+
+Function HipHeight(angle: Float): Float
+    Return LEG * (Cos(angle As Float64) As Float) +
+           FOOT / 2.0 * (Sin(Abs(angle) As Float64) As Float)
+End Function
+
+/// Writes Pip in `folder`, and gives how many joints it has.
+Public Function WritePip(folder: Path): Int Throws IOError
+    // Its joints, as its nodes, by their indices: it stands on y 0, facing +Z, 0.8 m high.
+    Local joints = [Joint("root", -1, 0.0, 0.0, 0.0), Joint("hips", 0, 0.0, LEG, 0.0),
+                    Joint("body", 1, 0.0, 0.06, 0.0), Joint("head", 2, 0.0, 0.2, 0.0),
+                    Joint("arm_l", 2, 0.16, 0.12, 0.0), Joint("arm_r", 2, -0.16, 0.12, 0.0),
+                    Joint("leg_l", 1, 0.08, 0.0, 0.0), Joint("leg_r", 1, -0.08, 0.0, 0.0)]
+    Local hips = 1
+    Local body = 2
+    Local head = 3
+    Local armL = 4
+    Local armR = 5
+    Local legL = 6
+    Local legR = 7
+    Local brass = Shape()
+    brass.Box(0.0, 0.5, 0.0, 0.26, 0.28, 0.2, body)
+    brass.Box(0.0, 0.72, 0.0, 0.22, 0.16, 0.18, head)
+    brass.Box(0.16, 0.46, 0.0, 0.06, 0.26, 0.06, armL)
+    brass.Box(-0.16, 0.46, 0.0, 0.06, 0.26, 0.06, armR)
+    brass.Box(0.08, LEG / 2.0, 0.0, FOOT, LEG, FOOT, legL)
+    brass.Box(-0.08, LEG / 2.0, 0.0, FOOT, LEG, FOOT, legR)
+    Local eyes = Shape()
+    eyes.Box(0.05, 0.74, 0.095, 0.045, 0.05, 0.01, head, -0.045)
+    eyes.Box(-0.05, 0.74, 0.095, 0.045, 0.05, 0.01, head, -0.045)
+
+    Local parts = Parts()
+    Local primitives = [brass.Primitive(parts, 0), eyes.Primitive(parts, 1)]
+
+    // Each joint's inverse bind: taking the mesh's space to its own, by where it is in the whole.
+    Local start = parts.Bytes.Count
+    For at = 0 Until joints.Count
+        Local x = 0.0
+        Local y = 0.0
+        Local z = 0.0
+        Local up = at
+        While up >= 0
+            x += joints[up].X
+            y += joints[up].Y
+            z += joints[up].Z
+            up = joints[up].Parent
+        End While
+        For value In [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -x, -y, -z, 1.0]
+            parts.Float(value)
+        End For
+    End For
+    Local binds = parts.Accessor(start, joints.Count, "MAT4", 5126)
+
+    // Its body breathes down into its hips, so no gap opens over its legs. Its hips come down as its
+    // legs swing, so its feet stay on the ground.
+    Local idle = Clip(parts, [0.0, 1.0, 2.0])
+    idle.Bob(parts, body, 0.0, [0.06, 0.045, 0.06], 0.0)
+    idle.Turn(parts, head, [0.0, 0.08, 0.0])
+    Local walk = Clip(parts, [0.0, 0.25, 0.5, 0.75, 1.0])
+    walk.Turn(parts, legL, [0.7, 0.0, -0.7, 0.0, 0.7])
+    walk.Turn(parts, legR, [-0.7, 0.0, 0.7, 0.0, -0.7])
+    walk.Turn(parts, armL, [-0.3, 0.0, 0.3, 0.0, -0.3])
+    walk.Turn(parts, armR, [0.3, 0.0, -0.3, 0.0, 0.3])
+    Local low = HipHeight(0.7)
+    walk.Bob(parts, hips, 0.0, [low, LEG, low, LEG, low], 0.0)
+    Local carry = Clip(parts, [0.0, 0.25, 0.5, 0.75, 1.0])
+    carry.Turn(parts, legL, [0.5, 0.0, -0.5, 0.0, 0.5])
+    carry.Turn(parts, legR, [-0.5, 0.0, 0.5, 0.0, -0.5])
+    carry.Turn(parts, armL, [-1.4, -1.4, -1.4, -1.4, -1.4])
+    carry.Turn(parts, armR, [-1.4, -1.4, -1.4, -1.4, -1.4])
+    Local lowCarrying = HipHeight(0.5)
+    carry.Bob(parts, hips, 0.0, [lowCarrying, LEG, lowCarrying, LEG, lowCarrying], 0.0)
+    Local clips = [idle.Json("idle"), walk.Json("walk"), carry.Json("carry")]
+
+    Local nodes: String[] = []
+    For at = 0 Until joints.Count
+        Local joint = joints[at]
+        Local children: String[] = []
+        For child = 0 Until joints.Count
+            If joints[child].Parent == at Then children.Add("{child}")
+        End For
+        Local under = children.Count > 0 ? ",\"children\":[{Joined(children)}]" : ""
+        nodes.Add(
+            "{{\"name\":\"{joint.Name}\",\"translation\":[{joint.X},{joint.Y},{joint.Z}]{under}}}")
+    End For
+    nodes.Add("{{\"name\":\"pip\",\"mesh\":0,\"skin\":0}}")
+
+    Local names: String[] = []
+    For at = 0 Until joints.Count
+        names.Add("{at}")
+    End For
+    Local gltf = "{{\"asset\":{{\"version\":\"2.0\",\"generator\":\"slack_water_tools\"}}," +
+                 "\"scene\":0,\"scenes\":[{{\"nodes\":[0,{joints.Count}]}}]," +
+                 "\"nodes\":[{Joined(nodes)}]," +
+                 "\"meshes\":[{{\"name\":\"pip\",\"weights\":[0],\"primitives\":[{Joined(primitives)}]}}]," +
+                 "\"skins\":[{{\"joints\":[{Joined(names)}],\"skeleton\":0," +
+                 "\"inverseBindMatrices\":{binds}}}]," +
+                 "\"animations\":[{Joined(clips)}]," +
+                 "\"materials\":[{{\"name\":\"brass\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":" +
+                 "[0.86,0.66,0.3,1],\"metallicFactor\":1,\"roughnessFactor\":0.38}}}}," +
+                 "{{\"name\":\"eye\",\"pbrMetallicRoughness\":{{\"baseColorFactor\":" +
+                 "[0.02,0.02,0.03,1],\"metallicFactor\":0,\"roughnessFactor\":0.2}}}}]," +
+                 "\"accessors\":[{Joined(parts.Accessors)}],\"bufferViews\":[{Joined(parts.Views)}]," +
+                 "\"buffers\":[{{\"uri\":\"pip.bin\",\"byteLength\":{parts.Bytes.Count}}}]}}\n"
+    Try File.WriteBytes(folder / "pip.bin", parts.Bytes)
+    Try File.WriteText(folder / "pip.gltf", gltf)
+    Return joints.Count
+End Function
