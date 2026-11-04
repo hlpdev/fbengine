@@ -307,8 +307,9 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
         const std::array<float, 4> white{ 1.0F, 1.0F, 1.0F, 1.0F };
         const vec3_t both = min + max;
         const vec3_t middle = scene::transform_point(matrix, both * 0.5F);
-        for (const std::uint32_t level :
+        for (const scene::instance_level_t& range :
              scene::instances_levels(found, matrix, camera, frustum.eye, half_height)) {
+            const std::uint32_t level = range.level;
             const std::vector<scene::surface_t>& surfaces = s.geometries[level].surfaces;
             for (std::size_t surface = 0; surface < surfaces.size(); ++surface) {
                 if (surfaces[surface].indices.empty()) {
@@ -320,6 +321,9 @@ std::vector<item_t> extract(const camera_t& camera, const scene::view_t& view,
                     continue;
                 }
                 item_t item = item_of(found.entity, material, matrix, white, fade, frustum);
+                // Its entity's matrix and theirs: what's mirrored twice is as it was.
+                item.mirrored = item.mirrored != range.mirrored;
+                item.instances_mirrored = range.mirrored;
                 // Any of them with an alpha has them all blend, unless its material says.
                 item.draw.blend = scene::drawn_blend(material, found.faded != 0 ? 0.5F : fade);
                 item.blended = item.draw.blend != FBE_BLEND_OPAQUE;
