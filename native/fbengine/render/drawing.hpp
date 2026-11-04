@@ -127,8 +127,9 @@ struct material_data_t {
     /// Which of its maps it has, a bit for each FBE_MAP_.
     std::uint32_t maps;
     std::array<layer_data_t, FBE_MATERIAL_MAPS> map_layers;
+    std::array<std::array<float, 4>, FBE_MATERIAL_PARAMETERS> parameters;
 };
-static_assert(sizeof(material_data_t) == 832, "the scene shader reads materials 832 bytes apart");
+static_assert(sizeof(material_data_t) == 960, "the scene shader reads materials 960 bytes apart");
 
 /// A camera as the scene shader reads it.
 struct camera_data_t {

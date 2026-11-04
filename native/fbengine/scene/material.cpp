@@ -4,6 +4,7 @@
 #include "core/engine.hpp"
 #include "fbengine.h"
 #include "scene/scene.hpp"
+#include "shader/shader.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -28,8 +29,7 @@ layer_t* layer_of(std::uint64_t material, std::int32_t index) {
         return nullptr;
     }
     if (index < 0 || index >= FBE_MATERIAL_LAYERS) {
-        fail(
-            std::format("a material's layers are 0 to {}, not {}", FBE_MATERIAL_LAYERS - 1, index));
+        fail("a material's layers are 0 to 7");
         return nullptr;
     }
     return &found->layers[static_cast<std::size_t>(index)];
@@ -150,6 +150,8 @@ void release_material(std::uint32_t material) {
             release_texture(map.texture);
             map.texture = 0;
         }
+        fbe::shaders_own::release(scene().materials[material].shader);
+        scene().materials[material].shader = 0;
         scene().material_slots.free(material);
     }
 }
@@ -251,6 +253,7 @@ FBE_API uint64_t fbe_material_clone(uint64_t material) {
             fbe_texture_retain(map.texture);
         }
     }
+    fbe::shaders_own::retain(original.shader);
     return scene().material_slots.handle(copy);
 }
 

@@ -8,6 +8,7 @@
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
+#include "shader/shader.hpp"
 #include "skin/skin.hpp"
 
 #include <algorithm>
@@ -94,7 +95,8 @@ std::uint64_t pipeline_of(const item_t& item, const camera_t& camera) {
            (static_cast<std::uint64_t>(item.mirrored ? 1 : 0) << 12U) | (layer_count << 13U) |
            (layers << 17U) | (static_cast<std::uint64_t>(material.wireframe ? 1 : 0) << 49U) |
            (static_cast<std::uint64_t>(particles ? 1 : 0) << 50U) |
-           (static_cast<std::uint64_t>(instances ? 1 : 0) << 51U);
+           (static_cast<std::uint64_t>(instances ? 1 : 0) << 51U) |
+           (static_cast<std::uint64_t>(shaders_own::code_of(material.shader)) << 52U);
 }
 
 /// What items sort by, and which it's of, so they don't move till they're in order.

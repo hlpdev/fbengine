@@ -83,7 +83,9 @@ fbengine_add_shaders(TARGETS fbengine_gpu_tests NAMESPACE fbe::test_shaders
                      HEADER test_shaders.hpp
                      SHADERS gpu/shaders/triangle.slang gpu/shaders/textured.slang
                              gpu/shaders/shape.slang gpu/shaders/points.slang
-                             gpu/shaders/spheres.slang gpu/shaders/poles.slang)
+                             gpu/shaders/spheres.slang gpu/shaders/poles.slang
+                             gpu/shaders/game_shader.slang gpu/shaders/game_pass.slang
+                     INCLUDES gpu/shaders/own)
 catch_discover_tests(fbengine_gpu_tests TEST_PREFIX "gpu." ADD_TAGS_AS_LABELS
                      DL_PATHS "${fbengine_test_dll_paths}"
                      PROPERTIES ENVIRONMENT "${fbengine_vulkan_environment}" TIMEOUT 300)
@@ -118,6 +120,18 @@ option(FBENGINE_FB_TESTS "Test the packages and the examples with fb" ON)
 if(FBENGINE_FB_TESTS)
   find_program(FBENGINE_FB fb REQUIRED DOC "The fb that builds and tests the packages")
 
+  # Slang's compiler as a test needs it, of the release that's asked for and of another.
+  add_executable(fbengine_fake_slangc tools/fake_slangc.cpp)
+  target_compile_definitions(fbengine_fake_slangc PRIVATE
+                             FBE_SLANG_VERSION="${fbengine_slang_version}")
+  add_executable(fbengine_wrong_slangc tools/fake_slangc.cpp)
+  target_compile_definitions(fbengine_wrong_slangc PRIVATE FBE_SLANG_VERSION="0.0.1")
+  if(MINGW)
+    # Run from anywhere, with no DLLs of MinGW's on the PATH.
+    target_link_options(fbengine_fake_slangc PRIVATE -static -mcrtdll=ucrt)
+    target_link_options(fbengine_wrong_slangc PRIVATE -static -mcrtdll=ucrt)
+  endif()
+
   # Every package's own tests, with SDL's offscreen video, so no test opens a window, as each test
   # asks too.
   file(GLOB fbengine_packages CONFIGURE_DEPENDS LIST_DIRECTORIES true
@@ -127,7 +141,7 @@ if(FBENGINE_FB_TESTS)
       cmake_path(GET package FILENAME name)
       add_test(NAME ${name}.package COMMAND "${FBENGINE_FB}" test "${package}")
       set_tests_properties(${name}.package PROPERTIES ENVIRONMENT
-                           "SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
+                           "FBENGINE_FAKE_SLANGC=$<TARGET_FILE:fbengine_fake_slangc>;FBENGINE_WRONG_SLANGC=$<TARGET_FILE:fbengine_wrong_slangc>;FBENGINE_FAKE_SLANGC_LOG=${CMAKE_CURRENT_BINARY_DIR}/fake_slangc.log;FBENGINE_FAKE_SLANGC_SPV=${CMAKE_CURRENT_BINARY_DIR}/test_shaders/game_shader.spv;FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;FBENGINE_TEST_FONTS=${harfbuzz_SOURCE_DIR}/test/api/fonts;FBENGINE_OWN_TEST_FONTS=${CMAKE_CURRENT_SOURCE_DIR}/fonts;FBENGINE_PACKAGES=${PROJECT_SOURCE_DIR}/packages")
     endif()
   endforeach()
 
@@ -601,6 +615,137 @@ if(FBENGINE_FB_TESTS)
                          PASS_REGULAR_EXPRESSION "\nno GPU here\r?\n$" TIMEOUT 120)
   endforeach()
 
+  # E6's materials with their own shaders, its build step compiling them with the pinned slangc.
+  set(fbengine_own_shaders "${PROJECT_SOURCE_DIR}/examples/proof/materials_with_their_own_shaders")
+  # Linear 0.5 is 187.5 in sRGB's bytes, either side of which is right; 0.25 is 137 and 0.125 is 99.
+  set(fbengine_own_shader_proof
+      "the scene's own: 137, 18[78], 255"
+      "a shader of its own: 255, 18[78], 137"
+      "its parameter: \\(1, 0[.]5, 0[.]25, 1\\), its shader's the one given True"
+      "under half of a black fog: 18[78], 13[67], 9[89]"
+      "whatever its shading: 255, 18[78], 137"
+      "its UVs, a half each: 18[789], 18[789], 0"
+      "its normal, toward the camera: 18[78], 18[78], 255"
+      "its vertices' color, a half each: 18[78], 18[78], 18[78]"
+      "what it would have drawn, with no layer: 137, 18[78], 255"
+      "its layer's texture, a half each: 18[789], 18[789], 18[789]"
+      "the light on it, the ambient's 0[.]25 each: 137, 137, 137"
+      "its alpha, below a cutoff: 0, 0, 0"
+      "and above one: 255, 255, 255"
+      "its vertices moved away: 0, 0, 0"
+      "and not: 137, 137, 137"
+      "with none again: 137, 18[78], 255, its shader none"
+      "nothing on the sun's way: True"
+      "its shadow, moved onto it: False"
+      "and away: True"
+      "shaders done")
+  list(JOIN fbengine_own_shader_proof "\r?\n" fbengine_own_shader_lines)
+  set(fbengine_own_shader_lines "\n${fbengine_own_shader_lines}\r?\n$")
+  add_test(NAME proof.materials_with_their_own_shaders
+           COMMAND "${FBENGINE_FB}" --color never run "${fbengine_own_shaders}")
+  set_tests_properties(proof.materials_with_their_own_shaders PROPERTIES TIMEOUT 300
+                       RESOURCE_LOCK fbengine_own_shaders
+                       ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "${fbengine_own_shader_lines}")
+  add_test(NAME proof.materials_with_their_own_shaders_watch
+           COMMAND "${FBENGINE_FB}" --color never run "${fbengine_own_shaders}" -- --watch --frames 40)
+  set_tests_properties(proof.materials_with_their_own_shaders_watch PROPERTIES TIMEOUT 300
+                       RESOURCE_LOCK fbengine_own_shaders
+                       ENVIRONMENT "FBENGINE_SLANGC=${FBENGINE_SLANGC};SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       PASS_REGULAR_EXPRESSION "\nwatched 40 frames\r?\n$")
+  # Section 6's item 1: its numbers worked from its formula apart from the sample, exactly and by
+  # Float32s, with the audit's the same.
+  fbengine_add_proof_of_numbers(blitz_random
+      "unseeded: 224942860, 539475828, 650989866"
+      "0x1234's states: 224942860, 539475828, 650989866"
+      "its floats: 0[.]35565948, 0[.]7478714, 0[.]31705475"
+      "Rand[(]1, 100[)]: 36, 75, 32"
+      "Rand[(]100, 1[)]: 36, 75, 32"
+      "Rand[(]-3, 1[)]: -2, 0, -2"
+      "Rnd[(]-1, 1[)]: -0[.]28868103"
+      "seed 0 is seed 1: 48271"
+      "as seed 1 is: 48271"
+      "seed -5 is 2147483643: 2147483643, then 2147290563"
+      "as 2147483643 is: 2147483643, then 2147290563"
+      "0x7FFFFFFE's next: 2147435376"
+      "seeded again, the same: True")
+  # Section 6's item 23, the same way: its maps worked out apart from the sample.
+  set(fbengine_map_rows
+      "a's number: 97"
+      "ab's number: 165"
+      "abcdefghijklmnopqrstuvwxyz's number: 713262292"
+      "SCP, seed 405: 120 rooms, 1 dead ends"
+      "...............##."
+      ".################."
+      ".#...........#...."
+      ".##############..."
+      ".............##..."
+      "....###########..."
+      "....#........#...."
+      "....############.."
+      "....#........###.."
+      ".###############.."
+      ".#................"
+      ".#................"
+      ".#############...."
+      ".............#...."
+      ".............#...."
+      ".#############...."
+      ".#................"
+      ".#########........"
+      "173, seed 147: 123 rooms, 3 dead ends"
+      "............#....."
+      ".############....."
+      ".#................"
+      ".##############..."
+      "..............#..."
+      "...############..."
+      "...#.........#..#."
+      "...##############."
+      "................#."
+      ".################."
+      ".##..............."
+      ".##..............."
+      ".################."
+      "................#."
+      "................#."
+      ".################."
+      ".#................"
+      ".#########........"
+      "the same seed, the same map: True"
+      "another seed, the same map: False")
+  list(TRANSFORM fbengine_map_rows REPLACE "[.]" "[.]")
+  fbengine_add_proof_of_numbers(map_from_a_seed ${fbengine_map_rows})
+  # Section 6's item 8, each number from section 3 worked by hand, in the sample's comments.
+  fbengine_add_proof_of_numbers(room_format
+      "its header: RoomMesh[.]HasTriggerBox"
+      "2 drawn meshes, 1 hidden, 1 trigger"
+      "its lightmap walls_LM1[.]png, as ADD, by its name"
+      "its diffuse concrete[.]png, as MULTIPLY, by its flag"
+      "a vertex's two UVs: [(]0[.]5, 0[.]5[)] and [(]0, 0[.]5[)], its color [(]200, 200, 200, 255[)]"
+      "2 triangles of 4 vertices"
+      "the other's alpha True, the first False"
+      "a hidden mesh's triangle, both ways: 2"
+      "a trigger: door_trigger, of 1 surface"
+      "screen at [(]1, 0, -2[)] shows map[.]jpg"
+      "waypoint at [(]2, 0[.]5, 0[)]"
+      "light, a point light at [(]4, 0, 0[)], range 0[.]5, color 80, 40, 20"
+      "spotlight, a point light at [(]0, 2, 0[)], range 1, color 255, 128, 0"
+      "sound 4 at [(]0, 1, 0[)], range 12[.]5"
+      "where a player starts, not scaled, [(]1, 2, 3[)], angles 0 90 0"
+      "model crate[.]b3d, not scaled, at [(]1, 2, 3[)], turned [(]4, 5, 6[)], scaled [(]7, 8, 9[)]"
+      "that isn't a room: RoomMesh2"
+      "a point entity of a class no one knows: trapdoor"
+      "child 2 of the room's the drawn mesh: True"
+      "baked, left: [(]32, 0, 0, 255[)]"
+      "baked, right: [(]0, 48, 0, 255[)]"
+      "lifted, left: [(]44, 12, 12, 255[)]"
+      "lifted, right: [(]12, 60, 12, 255[)]"
+      "a pick from in front hits the hidden one: True, at z -4"
+      "and from behind: True, at z -4"
+      "beside it, the drawn one's copy: True, at z -5"
+      "where the alpha one would be: True"
+      "validation errors 0")
   # Section 6's item 14, its receiving side: what a game gets of a converter's glTF.
   fbengine_add_proof_of_numbers(models_as_a_converter_writes_them
       "nodes under the figure: Bip01, Bip01 Spine, Bip01 Head, Bip01 HeadNub, body#1"
@@ -1202,8 +1347,9 @@ if(FBENGINE_FB_TESTS)
       "lit-by-freed=LitBy on a World that was freed"
       "map-as-color=SetMap on a Material: a material's metal-rough, normal, and occlusion maps are RGBA8_LINEAR"
       "tangent-w=SetTangents on a Geometry: a tangent's w is 1 or -1, not 0.25"
+      "remove-pass-none=RemovePass on a Camera: that isn't one of the camera's passes"
       "layer-uv-zero=SetLayerUv on a Material: a layer's UV scale is finite and not 0, not \\(0, 1\\)"
-      "layer-texture-out-of-range=SetTexture on a Material: a material's layers are 0 to 7, not 8"
+      "layer-texture-out-of-range=SetTexture on a Material: a material's layers are 0 to 7"
       "joints-wrong-count=SetJoints on a Geometry: a surface of 24 vertices has as many joints, or none, not 1"
       "freed-entity=SetName on a Pivot that was freed"
       "freed-with-parent=Name on a Pivot that was freed"
@@ -1255,7 +1401,7 @@ if(FBENGINE_FB_TESTS)
       "mesh-freed-geometry=SetGeometry on a Geometry that was freed"
       "shininess=SetShininess on a Material: a material's shininess is 0 to 1, not 2"
       "alpha-cutoff=SetAlphaCutoff on a Material: an alpha cutoff is 0 to 1, not -1"
-      "layer=SetLayer on a Material: a material's layers are 0 to 7, not 8"
+      "layer=SetLayer on a Material: a material's layers are 0 to 7"
       "layer-uv-set=SetLayer on a Material: a layer's UV set is 0 or 1, not 2"
       "material-alpha=SetAlpha on a Material: a material's alpha is 0 to 1, not 2"
       "color-alpha=SetColor on a Material: a material's alpha is 0 to 1, not 1.5"

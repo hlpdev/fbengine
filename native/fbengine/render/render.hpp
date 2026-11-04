@@ -5,6 +5,7 @@
 
 #include "fbengine.h"
 #include "gpu/graph.hpp"
+#include "gpu/shader.hpp"
 #include "gpu/vulkan.hpp"
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
@@ -12,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace fbe::render {
@@ -61,6 +63,23 @@ void read_view(const scene::camera_t& camera, const scene::view_t& view,
 /// Adds the passes that bring a camera's HDR image to `into`, a target of `size`, `format`, and
 /// `samples`, in `scissor`, blending it by its alpha if the camera doesn't clear what's there;
 /// false, with fbe_error's why, if they can't be added.
+/// A camera's full-screen pass, ready to run: the material it reads, and its code.
+struct game_pass_t {
+    std::uint64_t material = 0;
+    const gpu::shader_t* shader = nullptr;
+};
+
+/// The camera's full-screen passes that can be made, for a target of `format` of `samples`, each of
+/// the others saying so once.
+std::vector<game_pass_t> game_passes(const scene::camera_t& camera, VkFormat format,
+                                     VkSampleCountFlagBits samples);
+
+/// What's in `source`, what the camera drew, through its full-screen passes in turn, into `into`,
+/// its `target`, whose depth they read: false, with fbe_error's why, if it can't.
+bool add_game_passes(const scene::camera_t& camera, std::span<const game_pass_t> passes,
+                     gpu::resource_t source, gpu::resource_t into, std::uint64_t target,
+                     const scene::view_t& view, VkRect2D scissor);
+
 bool add_post_passes(const scene::camera_t& camera, gpu::resource_t image, gpu::resource_t into,
                      VkExtent2D size, VkFormat format, VkSampleCountFlagBits samples,
                      VkRect2D scissor);
