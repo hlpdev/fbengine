@@ -25,7 +25,8 @@ Public Enum Shading
     VERTEX = 2
 End Enum
 
-/// A PBR material's maps, as glTF's: each but EMISSIVE an RGBA8_LINEAR Texture, and it an RGBA8 one.
+/// A PBR material's maps, as glTF's: each but EMISSIVE an RGBA8_LINEAR Texture, or a file's own
+/// format that isn't sRGB, and it an RGBA8 one.
 Public Enum MaterialMap
     /// Its green multiplies the material's roughness, and its blue its metalness.
     METAL_ROUGH = 0

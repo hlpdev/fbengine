@@ -61,6 +61,9 @@ FBE_API int32_t fbe_texture_width(uint64_t texture);
 FBE_API int32_t fbe_texture_height(uint64_t texture);
 FBE_API int32_t fbe_texture_format(uint64_t texture);
 FBE_API int32_t fbe_texture_levels(uint64_t texture);
+// Whether its texels are decoded from sRGB as they're read, whatever its format is; false if the
+// handle isn't a texture's.
+FBE_API bool fbe_texture_srgb(uint64_t texture);
 
 // As fbe_texture_write, for an RGBA16F texture, from floats, 4 a pixel, rows packed: what a half
 // float can't hold is the nearest it can, from 0, for no less light than none, to
@@ -148,8 +151,9 @@ FBE_API uint64_t fbe_texture_from_load(uint64_t load, bool srgb, bool mipmaps);
 // so what draws with it draws the new one; false, leaving it as it was, if it can't.
 FBE_API bool fbe_texture_reload(uint64_t texture, uint64_t load, bool srgb, bool mipmaps);
 // Makes a texture of the image at `index` of a model load's model, as fbe_texture_from_load makes
-// one, its color as the model's file says it reads it.
-FBE_API uint64_t fbe_texture_from_model(uint64_t load, int32_t index, bool mipmaps);
+// one: its color as the model's file says it reads it, or if not `srgb`, an image decoded as a
+// color isn't, as for a map holding none that reads the image of one that does.
+FBE_API uint64_t fbe_texture_from_model(uint64_t load, int32_t index, bool srgb, bool mipmaps);
 // Whether the last fbe_texture_from_load, fbe_texture_from_model, or fbe_texture_reload failed for
 // what's in its file.
 FBE_API bool fbe_texture_load_invalid(void);

@@ -607,6 +607,39 @@ TEST_CASE("a file's BC7 is sampled, and nothing else", "[gpu]") {
     stop_gpu();
 }
 
+TEST_CASE("a file's own format is a map that holds no color unless it's sRGB", "[gpu]") {
+    start();
+    if (!samples_format(VK_FORMAT_BC7_SRGB_BLOCK) || !samples_format(VK_FORMAT_BC7_UNORM_BLOCK)) {
+        stop_gpu();
+        SKIP("this GPU doesn't sample BC7");
+    }
+    const std::vector<std::uint8_t> bytes(16, 0x40);
+    const std::uint64_t color_load = image_load(block_image(assets::formats::bc7_srgb, 16), bytes);
+    const std::uint64_t plain_load = image_load(block_image(assets::formats::bc7, 16), bytes);
+    const std::uint64_t color = fbe_texture_from_load(color_load, true, true);
+    const std::uint64_t plain = fbe_texture_from_load(plain_load, true, true);
+    INFO(fbe_error());
+    REQUIRE(color != 0);
+    REQUIRE(plain != 0);
+    CHECK(fbe_texture_srgb(color));
+    CHECK(!fbe_texture_srgb(plain));
+    CHECK(!fbe_texture_srgb(0));
+    const std::uint64_t material = fbe_material_create();
+    for (const std::int32_t map : { FBE_MAP_METAL_ROUGH, FBE_MAP_NORMAL, FBE_MAP_OCCLUSION }) {
+        CHECK(!fbe_material_set_map(material, map, color, 0));
+        CHECK(fbe_material_map(material, map) == 0);
+        CHECK(fbe_material_set_map(material, map, plain, 0));
+        CHECK(fbe_material_map(material, map) == plain);
+    }
+    CHECK(fbe_material_set_map(material, FBE_MAP_EMISSIVE, color, 0));
+    CHECK(fbe_material_release(material));
+    CHECK(fbe_texture_release(color));
+    CHECK(fbe_texture_release(plain));
+    CHECK(fbe_assets_free(color_load));
+    CHECK(fbe_assets_free(plain_load));
+    stop_gpu();
+}
+
 TEST_CASE("a file's levels are its texture's, and one level is made a chain", "[gpu]") {
     start();
     const std::vector<std::uint8_t> bytes(20, 0xFF);
@@ -689,7 +722,7 @@ TEST_CASE("a load that isn't an image's makes no texture", "[gpu]") {
     bytes_load->done = true;
     const std::uint64_t load = assets::loads().add(std::move(bytes_load));
     CHECK(fbe_texture_from_load(load, true, true) == 0);
-    CHECK(fbe_texture_from_model(load, 0, true) == 0);
+    CHECK(fbe_texture_from_model(load, 0, true, true) == 0);
     CHECK(fbe_assets_free(load));
     stop_gpu();
 }

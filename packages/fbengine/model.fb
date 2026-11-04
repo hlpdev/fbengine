@@ -52,8 +52,10 @@ End Class
 /// Hot reload puts a changed file in its place, and what each Spawn made is made again from it,
 /// under the root that Spawn gave, which stays where it is.
 ///
-/// Its Materials read their base colors' Textures, drawn as a glTF unlit one's are, or as the
-/// renderer lights its PBR ones; what they read for their other maps, TextureOf says.
+/// Its Materials are what its file says, each map read from the Texture TextureOf says, with its
+/// UV set and what its UVs go through, drawn as a glTF unlit one's are, or as the renderer lights
+/// its PBR ones. Its surfaces have their tangents if the file does, and one that names no material
+/// draws in glTF's default, a white metal as rough as can be, not one of its Materials.
 Public Final Class Model Implements Asset
     Field load: AssetLoad
     Field geometries: Geometry[]
@@ -61,7 +63,8 @@ Public Final Class Model Implements Asset
     // Null for an image no material reads, as a KTX2's PNG fallback, so they're by the file's
     // indices.
     Field textures: Texture?[]
-    // Textures of images two materials read with different samplers, past the first's.
+    // Textures of images read with different samplers, past the first's, or as no color by a map
+    // when another reads them as one.
     Field others: Texture[]
     // How many times the GPU had stopped when it was made.
     Field stops: UInt64
@@ -322,15 +325,18 @@ Public Final Class Model Implements Asset
             Local texture = textures[at]
             read[at] = texture != Null ? texture.Live("FromLoad") : 0
         End For
+        Local made = Buffer<UInt64>(FBE_MODEL_MAPS As Int64)
         For at = 0 Until info.Materials
             Local bound = False
-            Local other: UInt64 = 0
             Unsafe
                 bound = fbe_model_material_textures(load.Handle, at, handles[at], read.Pointer(),
-                                                    info.Images, AddressOf(other))
+                                                    info.Images, made.Pointer())
             End Unsafe
+            // What it made is here to let go of, even if it then couldn't.
+            For each = 0 Until FBE_MODEL_MAPS
+                If made[each] != 0 Then others.Add(Texture(made[each]))
+            End For
             If !bound Then Throw PartError()
-            If other != 0 Then others.Add(Texture(other))
         End For
         For at = 0 Until info.Skins
             skins.Add(Try Skin.FromModel(load, at))

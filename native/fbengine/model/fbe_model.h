@@ -17,16 +17,19 @@ extern "C" {
 #define FBE_MODEL_NORMAL             2
 #define FBE_MODEL_OCCLUSION          3
 #define FBE_MODEL_EMISSIVE           4
+#define FBE_MODEL_MAPS               5
 
 // Whether the last call here failed for what's in its file, as fbe_error says, not for its
 // arguments or what the engine could do.
 FBE_API bool fbe_model_invalid(void);
 // A new material of the model's material at `index`: its color, how much it shines, its shading,
-// blend, alpha cutoff, and sides; 0 if there's no such material.
+// blend, alpha cutoff, sides, metalness, roughness, what it emits, its normal scale, and its
+// occlusion strength; 0 if there's no such material.
 FBE_API uint64_t fbe_model_material(uint64_t load, int32_t index);
 // A new geometry of the model's mesh at `index`, a surface a primitive, in their order, each of
-// the `materials`, what fbe_model_material gave, `count` of them, by the model's indices, and its
-// vertices and triangles, empty for lines and points; 0 if it can't be.
+// the `materials`, what fbe_model_material gave, `count` of them, by the model's indices, or for
+// one that names none, glTF's default, which its surfaces hold, and its vertices, tangents if the
+// file has them, and triangles, empty for lines and points; 0 if it can't be.
 FBE_API uint64_t fbe_model_geometry(uint64_t load, int32_t index, const uint64_t* materials,
                                     int32_t count);
 // How many levels the model's image at `index` has, 0 for one no material reads, as a KTX2's PNG
@@ -43,14 +46,15 @@ FBE_API uint64_t fbe_model_texture(uint64_t load, int32_t index, bool mipmaps);
 // or a map that isn't there.
 FBE_API int32_t fbe_model_material_image(uint64_t load, int32_t material, int32_t map);
 // Has a material, what fbe_model_material gave of the model's material at `index`, read what it
-// reads that the renderer takes, its base color, as its layer 0, multiplied, of its UV set, its
-// UVs moved as its file says, from `textures`, what fbe_model_texture gave, `count` of them, by
-// the model's indices. Where that texture's sampled otherwise than this material says, as when two
-// materials read one image, it reads a new texture of the image, held once, in `other`, for the
-// caller to let go of, or 0. The other maps are the modern renderer's, for it to take. False if it
-// can't, and for one of no base color's texture, true.
+// reads: its base color, as its layer 0, multiplied, and its other maps, as its FBE_MAP_ maps, each
+// of its UV set, its UVs moved as its file says, from `textures`, what fbe_model_texture gave,
+// `count` of them, by the model's indices. Where a texture's sampled otherwise than this material
+// says, as when two materials read one image, or is decoded as a color for a map that holds none,
+// as when one image is both, it reads a new texture of the image, held once. Those go in `others`,
+// FBE_MODEL_MAPS of them, 0 past the last, for the caller to let go of, whatever it returns. False
+// if it can't, and for one reading nothing, true.
 FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t material,
-                                         const uint64_t* textures, int32_t count, uint64_t* other);
+                                         const uint64_t* textures, int32_t count, uint64_t* others);
 // What the model's file calls its material at `index`, and its image at `index`: an image's name,
 // or for none, its URI, its percents decoded, up to any NUL. "" for none, and for what's not there;
 // valid while the load is.

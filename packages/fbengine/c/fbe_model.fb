@@ -6,6 +6,7 @@ Public Const FBE_MODEL_METALLIC_ROUGHNESS: Int32 = 1
 Public Const FBE_MODEL_NORMAL: Int32 = 2
 Public Const FBE_MODEL_OCCLUSION: Int32 = 3
 Public Const FBE_MODEL_EMISSIVE: Int32 = 4
+Public Const FBE_MODEL_MAPS: Int32 = 5
 
 Public Extern "C" Lib "fbengine_native"
     Function fbe_model_invalid(): Bool
@@ -18,7 +19,7 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_model_material_image(load: UInt64, material: Int32, map: Int32): Int32
     Function fbe_model_material_textures(load: UInt64, index: Int32, material: UInt64,
                                          textures: Ptr<UInt64>, count: Int32,
-                                         other: Ptr<UInt64>): Bool
+                                         others: Ptr<UInt64>): Bool
     Function fbe_model_material_name(load: UInt64, index: Int32): CString
     Function fbe_model_image_name(load: UInt64, index: Int32): CString
     Function fbe_model_scene(load: UInt64): Int32

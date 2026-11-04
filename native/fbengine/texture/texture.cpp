@@ -1441,6 +1441,25 @@ FBE_API int32_t fbe_texture_levels(uint64_t texture) {
     return found != nullptr ? static_cast<std::int32_t>(found->levels) : -1;
 }
 
+FBE_API bool fbe_texture_srgb(uint64_t texture) {
+    const texture_t* found = fbe::texture::find(texture);
+    if (found == nullptr) {
+        return false;
+    }
+    switch (found->vk_format) {
+    case VK_FORMAT_R8G8B8A8_SRGB:
+    case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
+    case VK_FORMAT_BC1_RGBA_SRGB_BLOCK:
+    case VK_FORMAT_BC2_SRGB_BLOCK:
+    case VK_FORMAT_BC3_SRGB_BLOCK:
+    case VK_FORMAT_BC7_SRGB_BLOCK:
+    case VK_FORMAT_ASTC_4x4_SRGB_BLOCK:
+        return true;
+    default:
+        return false;
+    }
+}
+
 FBE_API bool fbe_texture_write(uint64_t texture, int32_t x, int32_t y, int32_t width,
                                int32_t height, const uint8_t* pixels, int32_t pitch) {
     texture_t* found = fbe::texture::find(texture);
@@ -1554,7 +1573,7 @@ FBE_API uint64_t fbe_texture_from_load(uint64_t load, bool srgb, bool mipmaps) {
     return spec ? create(*spec) : 0;
 }
 
-FBE_API uint64_t fbe_texture_from_model(uint64_t load, int32_t index, bool mipmaps) {
+FBE_API uint64_t fbe_texture_from_model(uint64_t load, int32_t index, bool srgb, bool mipmaps) {
     load_invalid = false;
     const fbe::assets::load_t* found = fbe::assets::loads().get(load);
     if (found == nullptr || !found->done || found->error ||
@@ -1568,7 +1587,7 @@ FBE_API uint64_t fbe_texture_from_model(uint64_t load, int32_t index, bool mipma
         return 0;
     }
     const std::optional<spec_t> spec =
-        spec_of(found->model.images[static_cast<std::size_t>(index)], true, mipmaps);
+        spec_of(found->model.images[static_cast<std::size_t>(index)], srgb, mipmaps);
     return spec ? create(*spec) : 0;
 }
 

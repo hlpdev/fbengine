@@ -210,6 +210,209 @@ Function AModelsMaterialDrawsItsBaseColorsTexture() Throws IOError, GraphicsErro
     Expect(image[1, 1] == Color32(0, 0, 255, 255))
 End Function
 
+// A 2 by 2 image of one color, as a data URI.
+Function Picture(color: Color32): String
+    Local image = Image(2, 2)
+    image.Fill(color)
+    Return "data:image/png;base64,{Base64.Encode(Png.Encode(image))}"
+End Function
+
+// A glTF of two triangles as Buffered makes them, the second with colors, each with tangents of
+// (1, 0, 0, 1), (0, 1, 0, -1), and (0, 0, 1, -0.5), in `material`, or in none for ""; with images of
+// red, green, and blue, and the `textures` and `samplers` given.
+Function Dressed(material: String, textures: String = "", samplers: String = ""): UInt8[]
+    Local one = [0, 0, 0x80, 0x3F] As UInt8[]
+    Local minus = [0, 0, 0x80, 0xBF] As UInt8[]
+    Local half = [0, 0, 0, 0xBF] As UInt8[]
+    Local zero = [0, 0, 0, 0] As UInt8[]
+    Local tangents: UInt8[] = []
+    For part In [one, zero, zero, one, zero, one, zero, minus, zero, zero, one, half]
+        tangents.AddAll(part)
+    End For
+    Local named = material != "" ? ",\"material\":0" : ""
+    Local attributes = "\"POSITION\":0,\"NORMAL\":1,\"TEXCOORD_0\":2,\"TEXCOORD_1\":2,\"TANGENT\":4"
+    Local parts = material != "" ? "\"materials\":[{material}]," : ""
+    If textures != "" Then parts = parts + "\"textures\":[{textures}],"
+    If samplers != "" Then parts = parts + "\"samplers\":[{samplers}],"
+    Return ("{{\"asset\":{{\"version\":\"2.0\"}}," +
+            "\"extensionsUsed\":[\"KHR_texture_transform\",\"KHR_materials_emissive_strength\"]," +
+            "\"buffers\":[{{\"byteLength\":102,\"uri\":\"{Buffered(1)}\"}}," +
+            "{{\"byteLength\":48,\"uri\":\"data:application/octet-stream;base64," +
+            "{Base64.Encode(tangents)}\"}}]," +
+            "\"bufferViews\":[{{\"buffer\":0,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":36,\"byteLength\":36}}," +
+            "{{\"buffer\":0,\"byteOffset\":72,\"byteLength\":24}}," +
+            "{{\"buffer\":0,\"byteOffset\":96,\"byteLength\":6}}," +
+            "{{\"buffer\":1,\"byteLength\":48}}]," +
+            "\"accessors\":[{{\"bufferView\":0,\"componentType\":5126,\"count\":3," +
+            "\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]}}," +
+            "{{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}}," +
+            "{{\"bufferView\":2,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\"}}," +
+            "{{\"bufferView\":3,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}}," +
+            "{{\"bufferView\":4,\"componentType\":5126,\"count\":3,\"type\":\"VEC4\"}}]," +
+            "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{{attributes}}},\"indices\":3{named}}}," +
+            "{{\"attributes\":{{{attributes},\"COLOR_0\":4}},\"indices\":3{named}}}]}}]," +
+            parts +
+            "\"images\":[{{\"uri\":\"{Picture(Color32(255, 0, 0, 255))}\"}}," +
+            "{{\"uri\":\"{Picture(Color32(0, 255, 0, 255))}\"}}," +
+            "{{\"uri\":\"{Picture(Color32(0, 0, 255, 255))}\"}}]," +
+            "\"nodes\":[{{\"mesh\":0}}],\"scenes\":[{{\"nodes\":[0]}}],\"scene\":0}}").Bytes
+End Function
+
+@Test
+Function AModelsMaterialIsWhatItsFileSays() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local material =
+        "{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}},\"metallicFactor\":0.25," +
+        "\"roughnessFactor\":0.75,\"metallicRoughnessTexture\":{{\"index\":1,\"texCoord\":1}}}}," +
+        "\"normalTexture\":{{\"index\":1,\"scale\":0.5,\"extensions\":{{\"KHR_texture_transform\":" +
+        "{{\"scale\":[2,4],\"offset\":[0.5,0.25],\"rotation\":0.125}}}}}}," +
+        "\"occlusionTexture\":{{\"index\":2,\"strength\":0.25,\"texCoord\":1}}," +
+        "\"emissiveFactor\":[0.5,0.25,1],\"emissiveTexture\":{{\"index\":0}}," +
+        "\"extensions\":{{\"KHR_materials_emissive_strength\":{{\"emissiveStrength\":2}}}}}}"
+    Local textures = "{{\"source\":0}},{{\"source\":1}},{{\"source\":2}}"
+    Assets.MountFiles("res://dressed", {"it.gltf": Dressed(material, textures)})
+    Defer Assets.Unmount("res://dressed")
+    Local model = Try Assets.Load<Model>("res://dressed/it.gltf")
+    Defer model.Free()
+    Local paint = model.Materials()[0]
+    Expect(paint.Shading() == Shading.PBR)
+    Expect(paint.Metallic() == 0.25)
+    Expect(paint.Roughness() == 0.75)
+    Expect(paint.NormalScale() == 0.5)
+    Expect(paint.OcclusionStrength() == 0.25)
+    Local emits = paint.Emissive()
+    Expect(emits.r == 1 && emits.g == 0.5 && emits.b == 2)
+    // Each map the Texture TextureOf says, with its own UV set.
+    For map In [(MaterialMap.METAL_ROUGH, ModelMap.METALLIC_ROUGHNESS, 1),
+                (MaterialMap.NORMAL, ModelMap.NORMAL, 0),
+                (MaterialMap.OCCLUSION, ModelMap.OCCLUSION, 1),
+                (MaterialMap.EMISSIVE, ModelMap.EMISSIVE, 0)]
+        Local read = paint.Map(map.0)
+        Expect(read != Null && RefEquals(read, model.TextureOf(0, map.1)))
+        Expect(paint.MapUvSet(map.0) == map.2)
+    End For
+    Expect(paint.Map(MaterialMap.NORMAL)?.Format() == TextureFormat.RGBA8_LINEAR)
+    Expect(paint.Map(MaterialMap.EMISSIVE)?.Format() == TextureFormat.RGBA8)
+    // A file scales UVs up and moves them on, and a map says how much it scales them down and
+    // moves them back; each map only what its own texture info says.
+    Local moved = paint.MapUv(MaterialMap.NORMAL)
+    Expect(moved.Scale.x == 0.5 && moved.Scale.y == 0.25)
+    Expect(moved.Angle == 0.125)
+    Expect(moved.Offset.x == -0.5 && moved.Offset.y == -0.25)
+    Local still = paint.MapUv(MaterialMap.METAL_ROUGH)
+    Expect(still.Scale.x == 1 && still.Scale.y == 1 && still.Angle == 0)
+    Expect(still.Offset.x == 0 && still.Offset.y == 0)
+End Function
+
+@Test
+Function AnImageReadAsAColorAndAsNoneIsTwoTextures() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local before = Texture.Count()
+    Local material =
+        "{{\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}," +
+        "\"metallicRoughnessTexture\":{{\"index\":0}}}},\"normalTexture\":{{\"index\":0}}}}"
+    Assets.MountFiles("res://shared", {"it.gltf": Dressed(material, "{{\"source\":0}}")})
+    Defer Assets.Unmount("res://shared")
+    Local model = Try Assets.Load<Model>("res://shared/it.gltf")
+    Local paint = model.Materials()[0]
+    Local colored = paint.Texture(0)
+    Local rough = paint.Map(MaterialMap.METAL_ROUGH)
+    Local normal = paint.Map(MaterialMap.NORMAL)
+    Expect(colored?.Format() == TextureFormat.RGBA8)
+    Expect(rough?.Format() == TextureFormat.RGBA8_LINEAR)
+    // The maps that hold no color share one, and it isn't the color's.
+    Expect(rough != Null && normal != Null && RefEquals(rough, normal))
+    Expect(colored != Null && rough != Null && !RefEquals(colored, rough))
+    Expect(colored != Null && RefEquals(colored, model.TextureOf(0)))
+    // It goes with the model.
+    model.Free()
+    Expect(Texture.Count() == before)
+End Function
+
+@Test
+Function AMapSampledOtherwiseReadsItsOwnTexture() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local material =
+        "{{\"pbrMetallicRoughness\":{{\"metallicRoughnessTexture\":{{\"index\":0}}}}," +
+        "\"normalTexture\":{{\"index\":1}},\"occlusionTexture\":{{\"index\":1}}}}"
+    Local textures = "{{\"source\":1,\"sampler\":0}},{{\"source\":1,\"sampler\":1}}"
+    Local samplers = "{{\"wrapS\":33071,\"wrapT\":33071}},{{\"magFilter\":9728,\"wrapS\":33648}}"
+    Assets.MountFiles("res://sampled", {"it.gltf": Dressed(material, textures, samplers)})
+    Defer Assets.Unmount("res://sampled")
+    Local model = Try Assets.Load<Model>("res://sampled/it.gltf")
+    Defer model.Free()
+    Local paint = model.Materials()[0]
+    Local rough = paint.Map(MaterialMap.METAL_ROUGH)
+    Local normal = paint.Map(MaterialMap.NORMAL)
+    Expect(rough?.WrapAcross() == TextureWrap.CLAMP)
+    Expect(rough?.Filter() == TextureFilter.LINEAR)
+    Expect(normal?.WrapAcross() == TextureWrap.MIRROR)
+    Expect(normal?.Filter() == TextureFilter.NEAREST)
+    // And a map sampled as another of its material's is reads that one.
+    Local occlusion = paint.Map(MaterialMap.OCCLUSION)
+    Expect(normal != Null && occlusion != Null && RefEquals(normal, occlusion))
+End Function
+
+@Test
+Function APrimitiveOfNoMaterialDrawsInGltfsDefault() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://plain", {"it.gltf": Dressed("")})
+    Defer Assets.Unmount("res://plain")
+    Local model = Try Assets.Load<Model>("res://plain/it.gltf")
+    Defer model.Free()
+    Expect(model.Materials().Count == 0)
+    Local geometry = model.Geometries()[0]
+    Local plain = geometry.Surface(0).Material()
+    Expect(plain?.Shading() == Shading.PBR)
+    Expect(plain?.Metallic() == 1.0)
+    Expect(plain?.Roughness() == 1.0)
+    Local color = plain?.Color()
+    Expect(color != Null && color.r == 1 && color.g == 1 && color.b == 1 && color.a == 1)
+    Local colored = geometry.Surface(1).Material()
+    Expect(colored?.VertexColors() == True)
+End Function
+
+@Test
+Function ASurfaceHasItsFilesTangents() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Assets.MountFiles("res://tangents", {"it.gltf": Dressed("")})
+    Defer Assets.Unmount("res://tangents")
+    Local model = Try Assets.Load<Model>("res://tangents/it.gltf")
+    Defer model.Free()
+    Local tangents = model.Geometries()[0].Surface(0).Tangents()
+    Expect(tangents.Count == 3)
+    Expect(tangents[0].x == 1 && tangents[0].w == 1)
+    Expect(tangents[1].y == 1 && tangents[1].w == -1)
+    // What's in a file's w is only which way, and a surface's is 1 or -1.
+    Expect(tangents[2].z == 1 && tangents[2].w == -1)
+End Function
+
+@Test
+Function WhatAModelsMaterialCantBeThrows() Throws IOError
+    If NoGpu() Then Skip("no GPU here")
+    Window.SetHeadless(True)
+    Local flat =
+        "{{\"normalTexture\":{{\"index\":0,\"extensions\":{{\"KHR_texture_transform\":" +
+        "{{\"scale\":[0,1]}}}}}}}}"
+    Local metal = "{{\"pbrMetallicRoughness\":{{\"metallicFactor\":2}}}}"
+    Local before = Texture.Count()
+    Assets.MountFiles("res://wrong",
+                      {"flat.gltf": Dressed(flat, "{{\"source\":0}}"),
+                       "metal.gltf": Dressed(metal)})
+    Defer Assets.Unmount("res://wrong")
+    Expect(ExpectThrows<IOError>(Assets.Load<Model>("res://wrong/flat.gltf"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(ExpectThrows<IOError>(Assets.Load<Model>("res://wrong/metal.gltf"))?.Kind ==
+           IOErrorKind.INVALID_DATA)
+    Expect(Texture.Count() == before)
+End Function
+
 @Test
 Function TheCacheHasOneModelOfAFile() Throws IOError
     If NoGpu() Then Skip("no GPU here")

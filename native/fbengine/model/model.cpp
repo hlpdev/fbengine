@@ -8,6 +8,7 @@
 #include "fbengine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -57,31 +58,50 @@ bool set_material(std::uint64_t material, const assets::material_t& from) {
     return fbe_material_set_color(material, color[0], color[1], color[2], color[3]) &&
            fbe_material_set_shininess(material, 1.0F - from.roughness) &&
            fbe_material_set_shading(material, from.unlit ? FBE_SHADING_UNLIT : FBE_SHADING_PBR) &&
+           fbe_material_set_metal_rough(material, from.metallic, from.roughness) &&
+           fbe_material_set_emissive(material, from.emissive[0], from.emissive[1],
+                                     from.emissive[2]) &&
+           fbe_material_set_normal_scale(material, from.normal_scale) &&
+           fbe_material_set_occlusion_strength(material, from.occlusion_strength) &&
            fbe_material_set_blend(material, blend) &&
            fbe_material_set_alpha_cutoff(material, is_mask ? from.alpha_cutoff : 0.0F) &&
            fbe_material_set_two_sided(material, from.double_sided);
 }
 
+/// The material of a geometry's primitives that name none, glTF's default: white, and a metal as
+/// rough as can be, made the first time, in `plain`. 0, with fbe_error's why, if it can't be.
+std::uint64_t plain_material(std::uint64_t& plain) {
+    if (plain == 0) {
+        plain = fbe_material_create();
+        if (plain != 0 && !fbe_material_set_metal_rough(plain, 1.0F, 1.0F)) {
+            fbe_material_release(plain);
+            plain = 0;
+        }
+    }
+    return plain;
+}
+
 /// Adds a primitive to a geometry as a surface, empty for lines and points, whose vertices are
-/// what a surface's are, with the white of a file that gives no color; false, with fbe_error's
-/// why, if it can't be.
+/// what a surface's are, with the white of a file that gives no color, and its tangents, if the
+/// file gives them; one of no material draws in `plain`, made if it has to be. False, with
+/// fbe_error's why, if it can't be.
 bool add_primitive(std::uint64_t geometry, const assets::primitive_t& from,
-                   std::span<const std::uint64_t> materials) {
+                   std::span<const std::uint64_t> materials, std::uint64_t& plain) {
     const std::int32_t surface = fbe_geometry_add_surface(geometry);
     if (surface < 0) {
         return false;
     }
-    if (from.material >= 0) {
-        if (std::cmp_greater_equal(from.material, materials.size())) {
-            return refused(std::format("a primitive's material {} isn't there", from.material));
-        }
-        const std::uint64_t material = materials[static_cast<std::size_t>(from.material)];
-        if (!fbe_surface_set_material(geometry, surface, material)) {
-            return false;
-        }
-        if (!from.colors.empty() && !fbe_material_set_vertex_colors(material, true)) {
-            return false;
-        }
+    if (std::cmp_greater_equal(from.material, materials.size())) {
+        return refused(std::format("a primitive's material {} isn't there", from.material));
+    }
+    const std::uint64_t material = from.material >= 0
+                                       ? materials[static_cast<std::size_t>(from.material)]
+                                       : plain_material(plain);
+    if (material == 0 || !fbe_surface_set_material(geometry, surface, material)) {
+        return false;
+    }
+    if (!from.colors.empty() && !fbe_material_set_vertex_colors(material, true)) {
+        return false;
     }
     if (from.topology != assets::topology_t::TRIANGLES || from.positions.empty()) {
         return true;
@@ -114,6 +134,25 @@ bool add_primitive(std::uint64_t geometry, const assets::primitive_t& from,
     if (fbe_surface_add_vertices(geometry, surface, vertices.data(),
                                  static_cast<std::int32_t>(vertices.size())) < 0) {
         return false;
+    }
+    if (!from.tangents.empty()) {
+        if (from.tangents.size() != vertices.size()) {
+            return refused("a primitive has tangents for some of its vertices");
+        }
+        // A file's w says which way its bitangent goes, and a surface's is exactly 1 or -1.
+        std::vector<fbe_vertex_tangent_t> tangents(from.tangents.size());
+        std::ranges::transform(from.tangents, tangents.begin(), [](const assets::vec4_t& tangent) {
+            return fbe_vertex_tangent_t{
+                .x = tangent[0],
+                .y = tangent[1],
+                .z = tangent[2],
+                .w = tangent[3] < 0.0F ? -1.0F : 1.0F,
+            };
+        });
+        if (!fbe_surface_set_tangents(geometry, surface, tangents.data(),
+                                      static_cast<std::int32_t>(tangents.size()))) {
+            return refused(std::format("a primitive's tangents can't be: {}", fbe_error()));
+        }
     }
     // Decoding gives every primitive its indices, checked against its vertices.
     if (!from.indices.empty() &&
@@ -212,6 +251,75 @@ sampling_t sampling_of(const assets::model_t& model, const assets::texture_ref_t
 void set_sampling(std::uint64_t texture, const sampling_t& sampling) {
     fbe_texture_set_filter(texture, sampling.filter);
     fbe_texture_set_wrap(texture, sampling.wrap_u, sampling.wrap_v);
+}
+
+/// A new texture of an image, made for a material that can't read the one all of them share, and
+/// what it was made for, so another map of that material can read it too.
+struct other_texture_t {
+    std::int32_t image = -1;
+    sampling_t sampling;
+    bool color = false;
+    std::uint64_t texture = 0;
+};
+
+/// What one material has made so far, of what it can't share, out of the caller's `held`.
+struct others_t {
+    std::uint64_t* held = nullptr;
+    std::array<other_texture_t, FBE_MODEL_MAPS> made;
+    std::size_t count = 0;
+};
+
+/// The texture a material reads for `read`, as a color or not: what's in `textures`, unless that's
+/// sampled otherwise or decoded as a color it isn't, for which it's a new texture, if the caller
+/// takes them. 0, with fbe_error's why, if there's none.
+std::uint64_t texture_to_read(std::uint64_t load, const assets::model_t& model, std::int32_t index,
+                              const assets::texture_ref_t& read, bool color,
+                              std::span<const std::uint64_t> textures, others_t& others) {
+    if (std::cmp_greater_equal(read.image, textures.size()) ||
+        textures[static_cast<std::size_t>(read.image)] == 0) {
+        refused(std::format("the material {}'s image {} isn't there", index, read.image));
+        return 0;
+    }
+    // A file scales UVs up and moves them on, and a layer or a map says how much it scales them
+    // down and moves them back; its turn is the file's already.
+    if (read.scale[0] == 0.0F || read.scale[1] == 0.0F) {
+        refused(std::format("the material {}'s texture has a scale of 0", index));
+        return 0;
+    }
+    const std::uint64_t shared = textures[static_cast<std::size_t>(read.image)];
+    // A texture has one sampler, the first of its materials', and one color space, a color's if
+    // any of them reads it as one, so another's reads a copy.
+    const sampling_t sampling = sampling_of(model, read);
+    const sampling_t has{
+        .filter = fbe_texture_filter(shared),
+        .wrap_u = fbe_texture_wrap_u(shared),
+        .wrap_v = fbe_texture_wrap_v(shared),
+    };
+    const bool decoded = fbe_texture_format(shared) == FBE_TEXTURE_RGBA8;
+    if (others.held == nullptr || (has == sampling && (color || !decoded))) {
+        return shared;
+    }
+    for (std::size_t at = 0; at < others.count; ++at) {
+        const other_texture_t& other = others.made.at(at);
+        if (other.image == read.image && other.sampling == sampling && other.color == color) {
+            return other.texture;
+        }
+    }
+    const std::uint64_t texture = fbe_texture_from_model(load, read.image, color, true);
+    if (texture == 0) {
+        invalid = fbe_texture_load_invalid();
+        return 0;
+    }
+    set_sampling(texture, sampling);
+    others.made.at(others.count) = {
+        .image = read.image,
+        .sampling = sampling,
+        .color = color,
+        .texture = texture,
+    };
+    others.held[others.count] = texture;
+    ++others.count;
+    return texture;
 }
 
 /// Filters and wraps a texture of an image as the first of the model's materials to read it says,
@@ -469,14 +577,22 @@ FBE_API uint64_t fbe_model_geometry(uint64_t load, int32_t index, const uint64_t
         return 0;
     }
     const std::span<const std::uint64_t> given(materials, static_cast<std::size_t>(count));
+    // Its surfaces hold it, so it goes as they do.
+    std::uint64_t plain = 0;
     for (const assets::primitive_t& primitive :
          model->meshes[static_cast<std::size_t>(index)].primitives) {
-        if (!add_primitive(geometry, primitive, given)) {
+        if (!add_primitive(geometry, primitive, given, plain)) {
             const std::string why = fbe_error();
             fbe_geometry_release(geometry);
+            if (plain != 0) {
+                fbe_material_release(plain);
+            }
             fbe::fail(why);
             return 0;
         }
+    }
+    if (plain != 0) {
+        fbe_material_release(plain);
     }
     return geometry;
 }
@@ -486,7 +602,7 @@ FBE_API uint64_t fbe_model_texture(uint64_t load, int32_t index, bool mipmaps) {
     if (model == nullptr) {
         return 0;
     }
-    const std::uint64_t texture = fbe_texture_from_model(load, index, mipmaps);
+    const std::uint64_t texture = fbe_texture_from_model(load, index, true, mipmaps);
     if (texture == 0) {
         invalid = fbe_texture_load_invalid();
         return 0;
@@ -539,57 +655,72 @@ FBE_API bool fbe_model_drop_images(uint64_t load) {
 }
 
 FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t material,
-                                         const uint64_t* textures, int32_t count, uint64_t* other) {
+                                         const uint64_t* textures, int32_t count,
+                                         uint64_t* others) {
+    if (others != nullptr) {
+        std::fill_n(others, FBE_MODEL_MAPS, std::uint64_t{ 0 });
+    }
     const assets::model_t* model = model_of(load);
     if (model == nullptr) {
         return false;
-    }
-    if (other != nullptr) {
-        *other = 0;
     }
     if (index < 0 || std::cmp_greater_equal(index, model->materials.size())) {
         return fbe::fail(std::format("the model has {} materials; there's no material {}",
                                      model->materials.size(), index));
     }
-    const assets::texture_ref_t& read =
-        model->materials[static_cast<std::size_t>(index)].base_color_texture;
-    if (read.image < 0) {
-        return true;
-    }
-    if (textures == nullptr || read.image >= count || textures[read.image] == 0) {
-        return refused(std::format("the material {}'s image {} isn't there", index, read.image));
-    }
-    // A file scales UVs up and moves them on, and a layer says how much it scales them down and
-    // moves them back; its turn is the file's already.
-    if (read.scale[0] == 0.0F || read.scale[1] == 0.0F) {
-        return refused(std::format("the material {}'s texture has a scale of 0", index));
-    }
-    // A texture has one sampler, the first of its materials', so another's reads a copy.
-    std::uint64_t texture = textures[read.image];
-    const sampling_t sampling = sampling_of(*model, read);
-    const sampling_t has{
-        .filter = fbe_texture_filter(texture),
-        .wrap_u = fbe_texture_wrap_u(texture),
-        .wrap_v = fbe_texture_wrap_v(texture),
-    };
-    if (has != sampling && other != nullptr) {
-        texture = fbe_model_texture(load, read.image, true);
+    const assets::material_t& from = model->materials[static_cast<std::size_t>(index)];
+    const std::span<const std::uint64_t> given(
+        textures, textures != nullptr ? static_cast<std::size_t>(std::max(count, 0)) : 0);
+    others_t made{ .held = others };
+    const assets::texture_ref_t& base = from.base_color_texture;
+    if (base.image >= 0) {
+        const std::uint64_t texture = texture_to_read(load, *model, index, base, true, given, made);
         if (texture == 0) {
             return false;
         }
-        set_sampling(texture, sampling);
-        *other = texture;
+        if (!fbe_material_set_texture(material, 0, texture) ||
+            !fbe_material_set_layer(material, 0, FBE_LAYER_MULTIPLY,
+                                    static_cast<std::int32_t>(base.uv_set))) {
+            return refused(std::format("the material {}'s texture can't be as its file says: {}",
+                                       index, fbe_error()));
+        }
+        if (!fbe_material_set_layer_uv(material, 0, 1.0F / base.scale[0], 1.0F / base.scale[1],
+                                       base.rotation, -base.offset[0], -base.offset[1])) {
+            return refused(
+                std::format("the material {}'s texture can't be moved as its file says: {}", index,
+                            fbe_error()));
+        }
     }
-    if (!fbe_material_set_texture(material, 0, texture) ||
-        !fbe_material_set_layer(material, 0, FBE_LAYER_MULTIPLY,
-                                static_cast<std::int32_t>(read.uv_set))) {
-        return refused(std::format("the material {}'s texture can't be as its file says: {}", index,
-                                   fbe_error()));
+    struct map_t {
+        std::int32_t in_file;
+        std::int32_t on_material;
+    };
+    for (const map_t& map : {
+             map_t{ .in_file = FBE_MODEL_METALLIC_ROUGHNESS, .on_material = FBE_MAP_METAL_ROUGH },
+             map_t{ .in_file = FBE_MODEL_NORMAL, .on_material = FBE_MAP_NORMAL },
+             map_t{ .in_file = FBE_MODEL_OCCLUSION, .on_material = FBE_MAP_OCCLUSION },
+             map_t{ .in_file = FBE_MODEL_EMISSIVE, .on_material = FBE_MAP_EMISSIVE },
+         }) {
+        const assets::texture_ref_t& read = *map_of(from, map.in_file);
+        if (read.image < 0) {
+            continue;
+        }
+        const bool color = map.on_material == FBE_MAP_EMISSIVE;
+        const std::uint64_t texture =
+            texture_to_read(load, *model, index, read, color, given, made);
+        if (texture == 0) {
+            return false;
+        }
+        if (!fbe_material_set_map(material, map.on_material, texture,
+                                  static_cast<std::int32_t>(read.uv_set)) ||
+            !fbe_material_set_map_uv(material, map.on_material, 1.0F / read.scale[0],
+                                     1.0F / read.scale[1], read.rotation, -read.offset[0],
+                                     -read.offset[1])) {
+            return refused(std::format("the material {}'s map {} can't be as its file says: {}",
+                                       index, map.in_file, fbe_error()));
+        }
     }
-    return fbe_material_set_layer_uv(material, 0, 1.0F / read.scale[0], 1.0F / read.scale[1],
-                                     read.rotation, -read.offset[0], -read.offset[1]) ||
-           refused(std::format("the material {}'s texture can't be moved as its file says: {}",
-                               index, fbe_error()));
+    return true;
 }
 
 FBE_API int32_t fbe_model_scene(uint64_t load) {
