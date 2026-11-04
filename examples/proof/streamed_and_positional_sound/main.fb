@@ -62,6 +62,11 @@ End Function
 
 Function Rounded(value: Float32): Float32 => Round(value * 1000.0) / 1000.0
 
+// What pitch plays `sound` at `hertz`, as a game coming from Blitz's says it.
+Function PitchOfHertz(hertz: Int, sound: Sound): Float32
+    Return (hertz As Float32) / (sound.SampleRate() As Float32)
+End Function
+
 // What's heard on each side, after a tenth of a second so that what was just set has settled.
 Function Heard(): String
     Local mixed = Audio.Mix(4410)
@@ -113,6 +118,11 @@ Function ProvedChannels() Throws SoundError
     channel.SetPitch(2)
     Audio.Mix(4410)
     Print("at pitch 2, a tenth of a second plays {Rounded(channel.Position() As Float32)} of it")
+    // By its rate, as a game coming from Blitz's says it: 22050 Hz of a 44100 Hz sound.
+    channel.Seek(0)
+    channel.SetPitch(PitchOfHertz(22050, sound))
+    Audio.Mix(4410)
+    Print("at 22050 Hz, a tenth of a second plays {Rounded(channel.Position() As Float32)} of it")
     channel.SetPitch(1)
 
     channel.Pause()

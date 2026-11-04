@@ -137,6 +137,31 @@ Function Proved() Throws GraphicsError
     Check("the world under it", read[16, 16], Color32(255, 0, 0, 255))
     Check("its clear under it", read[1, 30], Color32(0, 0, 255, 255))
 
+    // What clearing is for: something of the overlay's deeper than the box, over the box. It's hidden
+    // by the box's depth unless the overlay's camera clears that, whatever it does of its colors.
+    World.SetCurrent(overlay)
+    over.SetRange(0.1, 100)
+    over.SetClearColor(Color(0, 1, 0))
+    Local deep = Mesh(Square())
+    deep.SetMaterial(Plain(Color(0, 1, 1)))
+    deep.SetPosition(Vec3(0, 0, -99))
+    For asked In [(False, False, "not clearing either"), (False, True, "clearing depth"),
+                  (True, False, "clearing color"), (True, True, "clearing both")]
+        over.SetClear(asked.0, asked.1)
+        World.SetCurrent(world)
+        RenderWorld()
+        World.SetCurrent(overlay)
+        RenderWorld()
+        read = target.ToImage()
+        Local unhidden = asked.0 ? Color32(0, 255, 0, 255) : Color32(255, 0, 0, 255)
+        Check("deeper, {asked.2}", read[16, 16], asked.1 ? Color32(0, 255, 255, 255) : unhidden)
+    End For
+    deep.Free()
+    over.SetClear(False, True)
+    World.SetCurrent(world)
+    // Its own again, over what the last of those cleared.
+    RenderWorld()
+
     // Hidden, a camera draws nothing: what it drew stays, and the next draws what's its own.
     World.SetCurrent(world)
     left.Hide()

@@ -113,7 +113,7 @@ End Function
 Function Fine(at: Vec3): String => "{at.x:.3}, {at.y:.3}, {at.z:.3}"
 
 // Every way of moving's sums, what a copy keeps, and alpha 0, which still collides and picks.
-Function WaysAndCopies()
+Function WaysAndCopies() Throws GraphicsError
     Local world = World()
     World.SetCurrent(world)
     world.SetCollisionResponse(1, 2, CollisionResponse.STOP)
@@ -166,6 +166,32 @@ Function WaysAndCopies()
     mover.Translate(Vec3(0, -10, 0))
     world.Collide()
     Print("alpha 0: a mover rests at {Fine(mover.Position())}")
+
+    // And not drawn: what's looked down on is the door at alpha 1, and what's behind it at 0.
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        world.Free()
+        Return
+    End If
+    Window.SetHeadless(True)
+    Local target = Try Texture.Target(16, 16, TextureFormat.RGBA8, 1, True)
+    Local above = Camera()
+    above.SetRenderTarget(target)
+    above.SetClearColor(Color(0, 0, 1))
+    above.SetPosition(Vec3(0, 5, 0))
+    above.SetRotation(Quat.FromAxisAngle(Vec3(1, 0, 0), Deg(-90)))
+    Local painted = Material()
+    painted.SetShading(Shading.UNLIT)
+    painted.SetColor(Color(1, 0, 0))
+    door.SetMaterial(painted)
+    door.SetAlpha(1)
+    above.Render()
+    Print("alpha 1: what's over it {target.ToImage()[8, 8]}")
+    Flip(False)
+    door.SetAlpha(0)
+    above.Render()
+    Print("alpha 0: what's over it {target.ToImage()[8, 8]}")
+    Flip(False)
     world.Free()
 End Function
 
@@ -242,7 +268,7 @@ If !arguments.Contains("--watch")
     room.Free()
     Print("freed: the room {room.Freed()}, its handle {handle.Freed()}, the copy's {handleOfCopy?.Freed() ?? True}")
     world.Free()
-    WaysAndCopies()
+    Try WaysAndCopies()
 ElseIf Env.Get("FBENGINE_NO_GPU") == "1"
     Print("no GPU here")
 Else

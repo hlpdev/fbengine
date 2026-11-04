@@ -54,6 +54,7 @@ Public Const FBE_COLLISION_GROUPS: Int32 = 1024
 Public Const FBE_SPRITE_BILLBOARD: Int32 = 0
 Public Const FBE_SPRITE_FIXED: Int32 = 1
 Public Const FBE_SPRITE_UPRIGHT: Int32 = 2
+Public Const FBE_SPRITE_UPRIGHT_YAW: Int32 = 3
 Public Const FBE_PICK_NONE: Int32 = 0
 Public Const FBE_PICK_ELLIPSOID: Int32 = 1
 Public Const FBE_PICK_BOX: Int32 = 2

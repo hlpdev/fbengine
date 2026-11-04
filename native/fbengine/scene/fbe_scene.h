@@ -110,11 +110,13 @@ extern "C" {
 #define FBE_COLLISION_GROUPS 1024
 
 // How a sprite turns toward the camera drawing it: parallel to the camera's view, whatever the
-// entity's own turn and scale; as the entity is turned and scaled; or upright on the entity's own
-// up, turned toward the camera about it.
-#define FBE_SPRITE_BILLBOARD 0
-#define FBE_SPRITE_FIXED     1
-#define FBE_SPRITE_UPRIGHT   2
+// entity's own turn and scale; as the entity is turned and scaled; upright on the entity's own up,
+// turned toward the camera about it, whatever its scale; or as the entity is turned and scaled, and
+// then by the camera's yaw alone.
+#define FBE_SPRITE_BILLBOARD   0
+#define FBE_SPRITE_FIXED       1
+#define FBE_SPRITE_UPRIGHT     2
+#define FBE_SPRITE_UPRIGHT_YAW 3
 
 // What picks hit an entity as: nothing; its collision ellipsoid; its collision box; or its mesh's
 // triangles, from their fronts.

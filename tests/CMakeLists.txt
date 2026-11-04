@@ -328,6 +328,8 @@ if(FBENGINE_FB_TESTS)
                      "then down True, hit False"
                      "then down False, up True"
                      "flushed, hit False"
+                     "by their numbers: 17 W, 30 A, 31 S, 32 D, 57 SPACE, 42 LEFT_SHIFT, 15 TAB, 29 LEFT_CONTROL, 63 F5, 61 F3"
+                     "a number with no key: True"
                      "of 10 binds, held alone 10"
                      "mouse 110, 45, speed 10, -5"
                      "hit True, wheel 2"
@@ -722,6 +724,8 @@ if(FBENGINE_FB_TESTS)
                            "a tall one onto a tall rock: 0[.]000, 6[.]503, 10[.]000"
                            "around a ring, 8 iterations: 45[.]443, 1[.]000, -4[.]499, touching 7"
                            "around a ring, 10 iterations: 45[.]443, 1[.]000, -4[.]499, touching 7"
+                           "around a tight ring, 8 iterations: 74[.]0[0-9][0-9], 1[.]000, -2[.]0[0-9][0-9], touching 8"
+                           "around a tight ring, 10 iterations: 73[.]8[0-9][0-9], 1[.]000, -2[.]4[0-9][0-9], touching 10"
                            "a mover into one moving away: -40[.]000, 1[.]000, -1[.]999, the other -40[.]000, 1[.]000, -13[.]000"
                            "a tall one onto a slope of 30: facing -0[.]500, 0[.]866, 0[.]000"
                            "a wall, then a rock: touching 2, level True, other True"
@@ -784,7 +788,11 @@ if(FBENGINE_FB_TESTS)
                            "the wall hidden True"
                            "a target that blocks sight, before the wall True"
                            "past an ellipsoid told to block sight False"
-                           "past a box told to block sight False")
+                           "past a box told to block sight False"
+                           "at zoom 1, x 9[.]9 True, 10[.]1 False"
+                           "y 7[.]4 True, 7[.]6 False"
+                           "at zoom 1[.]1, 84[.]5 degrees across"
+                           "x 9 True, 9[.]2 False")
   fbengine_add_drawn_proof(scene_trees
                            "the room has 2, first door, then lamp"
                            "the handle's parent door, the room's none"
@@ -814,7 +822,9 @@ if(FBENGINE_FB_TESTS)
                            "a copy's door: kind MESH, group 2, pick MESH, blocks True, bounds 1[.]000, 1[.]000, 1[.]000"
                            "its lamp hidden True"
                            "alpha 0: showing True, picked the door"
-                           "alpha 0: a mover rests at 0[.]000, 1[.]501, 0[.]000")
+                           "alpha 0: a mover rests at 0[.]000, 1[.]501, 0[.]000"
+                           "alpha 1: what's over it [(]255, 0, 0, 255[)]"
+                           "alpha 0: what's over it [(]0, 0, 255, 255[)]")
   fbengine_add_drawn_proof(meshes_in_code
                            "1 surface, 4 vertices, 2 triangles"
                            "its second UVs [(]0[.]5, 0[.]75[)], first [(]0, 1[)]"
@@ -896,6 +906,7 @@ if(FBENGINE_FB_TESTS)
                            "a room's lightmap and diffuse, left: [(]125, 110, 102, 255[)]"
                            "and right, its lightmap's UVs its own: [(]75, 66, 61, 255[)]"
                            "a stage's clamped: [(]120, 120, 120, 255[)]"
+                           "four layers, over vertex colors and light: [(]36, 20, 20, 255[)]"
                            "a layer by its alpha: [(]127, 0, 128, 255[)]"
                            "full bright: [(]255, 255, 255, 255[)]"
                            "lit, with no light: [(]0, 0, 0, 255[)]"
@@ -920,7 +931,12 @@ if(FBENGINE_FB_TESTS)
                            "sorted far to near: [(]137, 188, 0, 255[)]"
                            "a sprite BILLBOARD, 32 across"
                            "a sprite FIXED, [56] across"
-                           "a sprite UPRIGHT, 32 across")
+                           "a sprite UPRIGHT, 32 across"
+                           "a sprite UPRIGHT_YAW, [56] across"
+                           "BILLBOARD from above and aside: 32 across, 32 high"
+                           "FIXED from above and aside: 0 across, 0 high"
+                           "UPRIGHT from above and aside: 32 across, 16 high"
+                           "UPRIGHT_YAW from above and aside: 16 across, 8 high")
   fbengine_add_drawn_proof(cameras_and_viewports
                            "the left camera's middle: [(]255, 0, 0, 255[)]"
                            "its clear: [(]0, 0, 255, 255[)]"
@@ -936,6 +952,10 @@ if(FBENGINE_FB_TESTS)
                            "the overlay: [(]255, 255, 0, 255[)]"
                            "the world under it: [(]255, 0, 0, 255[)]"
                            "its clear under it: [(]0, 0, 255, 255[)]"
+                           "deeper, not clearing either: [(]255, 0, 0, 255[)]"
+                           "deeper, clearing depth: [(]0, 255, 255, 255[)]"
+                           "deeper, clearing color: [(]0, 255, 0, 255[)]"
+                           "deeper, clearing both: [(]0, 255, 255, 255[)]"
                            "a hidden camera's part stays: [(]0, 0, 255, 255[)]"
                            "the other's changes: [(]255, 0, 255, 255[)]")
   fbengine_add_drawn_proof(camera_into_a_texture
@@ -1889,6 +1909,7 @@ if(FBENGINE_FB_TESTS)
       "panned left: 0.5, 0"
       "panned right: 0, 0.5"
       "at pitch 2, a tenth of a second plays 0.2 of it"
+      "at 22050 Hz, a tenth of a second plays 0.05 of it"
       "paused: 0, 0, playing True, paused True, held where it was True"
       "resumed: 0.5, 0.5, on from there True"
       "stopped: 0, 0, playing False"
