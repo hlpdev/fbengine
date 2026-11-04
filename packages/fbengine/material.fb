@@ -14,7 +14,7 @@ Import "./world"
 
 /// How a material is lit.
 Public Enum Shading
-    /// Physically, as glTF's metal and roughness have it.
+    /// Physically, as glTF's metal and roughness have it: its color and layers are its base color.
     PBR = 0
     /// Not at all: its color is what's drawn, as full-bright signs and screens want. Its textures,
     /// doublings, adds, and fog work on what's stored, as VERTEX's do: 50 doubled is 100.
@@ -22,6 +22,19 @@ Public Enum Shading
     /// Per vertex, as fixed-function hardware lit, for an old look: by the first eight shown Lights
     /// in the tree's order, whatever they reach, on what's stored, as UNLIT's are.
     VERTEX = 2
+End Enum
+
+/// A PBR material's maps, as glTF's: each but EMISSIVE an RGBA8_LINEAR Texture, and it an RGBA8 one.
+Public Enum MaterialMap
+    /// Its green multiplies the material's roughness, and its blue its metalness.
+    METAL_ROUGH = 0
+    /// Which way the surface faces: tangent space, +Y up, from a surface's tangents, or, for one with
+    /// none, what its UVs and places make of a pixel.
+    NORMAL = 1
+    /// Its red is how much of the environment's and ambient light reach the surface.
+    OCCLUSION = 2
+    /// It multiplies what the material emits.
+    EMISSIVE = 3
 End Enum
 
 /// How a material blends with what's drawn behind it.
@@ -86,8 +99,9 @@ Global materials: Weak<Material>[] = []
 /// how and when it's drawn. Every surface and Mesh drawing in one shares it, so changing it changes
 /// them all, and Clone makes one of their own; a Mesh's tint changes it for that Mesh alone. It
 /// lives while the game holds it or something draws in it; Free lets go of it at once. New, it's
-/// white and opaque, PBR, blending AUTO, with no shininess, alpha cutoff, or vertex colors,
-/// one-sided, fogged, and in order 0, its 8 layers multiplying, each reading UV set 0.
+/// white and opaque, PBR, a dielectric as rough as can be, emitting nothing, with no maps, blending
+/// AUTO, with no shininess, alpha cutoff, or vertex colors, one-sided, fogged, and in order 0, its 8
+/// layers multiplying, each reading UV set 0.
 Public Final Class Material
     Field handle: UInt64
 
@@ -170,13 +184,14 @@ Public Final Class Material
     @MainThread @PanicsAtCaller
     Public Method Alpha(): Float => Color().a
 
-    /// Sets how sharp and bright its highlights are, from 0, none, to 1. Outside 0 to 1 panics.
+    /// Sets how sharp and bright a VERTEX material's highlights are, 0 for none to 1, or it panics.
+    /// A PBR material's are its roughness's.
     @MainThread @PanicsAtCaller
     Public Method SetShininess(shininess: Float)
         If !fbe_material_set_shininess(Live("SetShininess"), shininess) Then Failed("SetShininess")
     End Method
 
-    /// How sharp and bright its highlights are.
+    /// How sharp and bright a VERTEX material's highlights are.
     @MainThread @PanicsAtCaller
     Public Method Shininess(): Float => fbe_material_shininess(Live("Shininess"))
 
@@ -280,6 +295,115 @@ Public Final Class Material
     @MainThread @PanicsAtCaller
     Public Method Texture(layer: Int): Texture? => TextureOf(fbe_material_texture(Live("Texture"),
                                                                                   layer))
+
+    /// Sets how much of a metal a PBR material is, and how rough, each 0 to 1, or it panics: a
+    /// dielectric as rough as can be at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetMetalRough(metallic: Float, roughness: Float)
+        If !fbe_material_set_metal_rough(Live("SetMetalRough"), metallic, roughness)
+            Failed("SetMetalRough")
+        End If
+    End Method
+
+    /// How much of a metal it is.
+    @MainThread @PanicsAtCaller
+    Public Method Metallic(): Float => fbe_material_metallic(Live("Metallic"))
+
+    /// How rough it is.
+    @MainThread @PanicsAtCaller
+    Public Method Roughness(): Float => fbe_material_roughness(Live("Roughness"))
+
+    /// Sets what a PBR material emits, linear: any finite color 0 or more, or it panics, past 1 for
+    /// what's brighter than white. Its alpha is left out. None at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetEmissive(color: Color)
+        If !fbe_material_set_emissive(Live("SetEmissive"), color.r, color.g, color.b)
+            Failed("SetEmissive")
+        End If
+    End Method
+
+    /// What it emits, with an alpha of 1.
+    @MainThread @PanicsAtCaller
+    Public Method Emissive(): Color
+        Local material = Live("Emissive")
+        Local found = fbe_color_t(0, 0, 0, 0)
+        Local done = False
+        Unsafe
+            done = fbe_material_emissive(material, AddressOf(found))
+        End Unsafe
+        If !done Then Failed("Emissive")
+        Return ColorOf(found)
+    End Method
+
+    /// Sets how far a PBR material's normal map's X and Y turn its normal, any finite amount, or it
+    /// panics: 1 at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetNormalScale(scale: Float)
+        If !fbe_material_set_normal_scale(Live("SetNormalScale"), scale)
+            Failed("SetNormalScale")
+        End If
+    End Method
+
+    /// How far its normal map turns its normal.
+    @MainThread @PanicsAtCaller
+    Public Method NormalScale(): Float => fbe_material_normal_scale(Live("NormalScale"))
+
+    /// Sets how much a PBR material's occlusion map darkens its light from the environment and
+    /// ambient light, 0 to 1, or it panics: 1 at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetOcclusionStrength(strength: Float)
+        If !fbe_material_set_occlusion_strength(Live("SetOcclusionStrength"), strength)
+            Failed("SetOcclusionStrength")
+        End If
+    End Method
+
+    /// How much its occlusion map darkens it.
+    @MainThread @PanicsAtCaller
+    Public Method OcclusionStrength(): Float
+        Return fbe_material_occlusion_strength(Live("OcclusionStrength"))
+    End Method
+
+    /// Sets a PBR material's map's Texture, which it holds, Null for none, and the UV set it reads,
+    /// 0 or 1, or it panics; as it does for any but EMISSIVE that's stored as color, RGBA8: load
+    /// one with Texture.Load(path, format = TextureFormat.RGBA8_LINEAR).
+    @MainThread @PanicsAtCaller
+    Public Method SetMap(map: MaterialMap, texture: Texture?, uvSet: Int = 0)
+        Local handle: UInt64 = texture != Null ? texture.Live("SetMap") : 0
+        If !fbe_material_set_map(Live("SetMap"), map As Int32, handle, uvSet) Then Failed("SetMap")
+    End Method
+
+    /// A map's Texture, or Null.
+    @MainThread @PanicsAtCaller
+    Public Method Map(map: MaterialMap): Texture?
+        Return TextureOf(fbe_material_map(Live("Map"), map As Int32))
+    End Method
+
+    /// The UV set a map reads.
+    @MainThread @PanicsAtCaller
+    Public Method MapUvSet(map: MaterialMap): Int => fbe_material_map_uv_set(Live("MapUvSet"),
+                                                                             map As Int32)
+
+    /// Sets what a map's UVs go through. A scale of 0, or anything not finite, panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetMapUv(map: MaterialMap, uv: UvTurn)
+        If !fbe_material_set_map_uv(Live("SetMapUv"), map As Int32, uv.Scale.x, uv.Scale.y,
+                                    uv.Angle,
+                                    uv.Offset.x, uv.Offset.y)
+            Failed("SetMapUv")
+        End If
+    End Method
+
+    /// What a map's UVs go through.
+    @MainThread @PanicsAtCaller
+    Public Method MapUv(map: MaterialMap): UvTurn
+        Local values = Buffer<Float>(5)
+        Local done = False
+        Unsafe
+            done = fbe_material_map_uv(Live("MapUv"), map As Int32, values.Pointer())
+        End Unsafe
+        If !done Then Failed("MapUv")
+        Return UvTurn(Vec2(values[0], values[1]), values[2], Vec2(values[3], values[4]))
+    End Method
 
     /// Sets what a texture layer's UVs go through. A scale of 0, or anything not finite, panics.
     @MainThread @PanicsAtCaller
