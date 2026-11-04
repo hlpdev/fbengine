@@ -67,11 +67,21 @@ constexpr std::array<entry_t, 7> entries{
     },
 };
 
+/// What a game's full-screen pass runs by, in place of those.
+constexpr std::array<entry_t, 2> pass_entries{
+    {
+        { .name = "passVertex", .model = model_vertex },
+        { .name = "passFragment", .model = model_fragment },
+    },
+};
+
 struct kept_code_t {
     std::vector<std::uint32_t> words;
     std::string name;
     gpu::shader_t shader;
     bool refused = false;
+    /// Whether it's a full-screen pass's, not a material's.
+    bool pass = false;
 };
 
 struct shader_t {
@@ -187,7 +197,9 @@ std::optional<std::vector<std::uint32_t>> words_of(const std::uint8_t* bytes, st
         fail("the cooked shader's SPIR-V isn't SPIR-V");
         return std::nullopt;
     }
-    for (const entry_t& entry : entries) {
+    const bool pass = has_entry(words, pass_entries[1].name, pass_entries[1].model);
+    for (const entry_t& entry : std::span<const entry_t>(
+             pass ? std::span<const entry_t>(pass_entries) : std::span<const entry_t>(entries))) {
         if (!has_entry(words, entry.name, entry.model)) {
             fail(std::format("the cooked shader's SPIR-V hasn't the scene's {}: cook it again",
                              entry.name));
@@ -220,17 +232,28 @@ std::uint32_t keep(std::vector<std::uint32_t> words, const char* name) {
     kept.words = std::move(words);
     kept.name = std::move(named);
     kept.shader = { .name = kept.name, .code = kept.words };
+    kept.pass = has_entry(kept.words, pass_entries[1].name, pass_entries[1].model);
     return static_cast<std::uint32_t>(shaders.codes.size());
 }
 
 } // namespace
 
-std::uint32_t code_of(std::uint64_t shader) {
+std::uint32_t any_code_of(std::uint64_t shader) {
     if (shader == 0) {
         return 0;
     }
     const auto slot = all().slots.find(shader);
     return slot ? all().kept[*slot].code : 0;
+}
+
+std::uint32_t code_of(std::uint64_t shader) {
+    const std::uint32_t code = any_code_of(shader);
+    return code != 0 && !all().codes[code - 1].pass ? code : 0;
+}
+
+std::uint32_t pass_code_of(std::uint64_t shader) {
+    const std::uint32_t code = any_code_of(shader);
+    return code != 0 && all().codes[code - 1].pass ? code : 0;
 }
 
 const gpu::shader_t* shader_of(std::uint32_t code) {
@@ -321,6 +344,10 @@ FBE_API bool fbe_shader_release(uint64_t shader) {
     }
     own::release(shader);
     return true;
+}
+
+FBE_API bool fbe_shader_is_pass(uint64_t shader) {
+    return fbe::shaders_own::pass_code_of(shader) != 0;
 }
 
 FBE_API bool fbe_shader_alive(uint64_t shader) {

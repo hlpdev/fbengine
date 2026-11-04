@@ -8,8 +8,12 @@
 
 namespace fbe::shaders_own {
 
-/// The number in a pipeline's key of the code a shader has now, from 1; 0 for none, or a freed one.
+/// The number in a pipeline's key of the code a shader has now, from 1; 0 for none, a freed one, or
+/// a full-screen pass's, which draws nothing a material does.
 std::uint32_t code_of(std::uint64_t shader);
+
+/// The number of the code a shader has now if it's a full-screen pass's, from 1, or 0.
+std::uint32_t pass_code_of(std::uint64_t shader);
 
 /// The code a pipeline's key numbers, which is kept until the DLL's unloaded, since a pipeline is
 /// made of it whenever it's first asked for; null for 0, or one a pipeline couldn't be made of.

@@ -6,8 +6,8 @@
 // is a family of pipelines as the scene's is. What's loaded is what that wrote: the engine's
 // version it was compiled for, a stamp of the sources it was compiled against, which are the only
 // ones its draws' layout is sure to be right for, and its SPIR-V, with the scene's seven entry
-// points and nothing bound that the scene's pipelines haven't. A shader's code the GPU runs, so a
-// pak's shaders are as trusted as the game.
+// points, or a full-screen pass's two, and nothing bound that the scene's pipelines haven't. A
+// shader's code the GPU runs, so a pak's shaders are as trusted as the game.
 
 #include "../core/fbe_core.h"
 
@@ -29,6 +29,9 @@ FBE_API uint64_t fbe_shader_create(const uint8_t* bytes, int64_t size, const cha
 FBE_API bool fbe_shader_retain(uint64_t shader);
 FBE_API bool fbe_shader_release(uint64_t shader);
 FBE_API bool fbe_shader_alive(uint64_t shader);
+// Whether a shader's a full-screen pass's, as fbe_camera_add_pass runs, and a material with it
+// draws as one with none does.
+FBE_API bool fbe_shader_is_pass(uint64_t shader);
 // Puts a cooked file's bytes in the shader's place, for what draws with it from the next frame on;
 // false, leaving it as it was, as fbe_shader_create gives 0.
 FBE_API bool fbe_shader_replace(uint64_t shader, const uint8_t* bytes, int64_t size,

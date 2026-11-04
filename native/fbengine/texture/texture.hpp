@@ -68,6 +68,8 @@ struct texture_t {
     VkImage depth = VK_NULL_HANDLE;
     VmaAllocation depth_memory = VK_NULL_HANDLE;
     VkImageView depth_view = VK_NULL_HANDLE;
+    /// A texture of its depth to read, made when a full-screen pass first asks, which it holds.
+    std::uint64_t depth_read = 0;
 };
 
 /// A target's depth's format.
@@ -115,6 +117,14 @@ std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, st
 /// started GPU.
 std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format,
                                     bool mipmaps = false);
+
+/// A target's depth's copy, for a shader to read, of one sample each, made the first time it's asked
+/// for and let go of with it; 0, with fbe_error's why, if it can't be made.
+std::uint64_t depth_read_of(std::uint64_t target);
+
+/// Records a target's depth into its copy, leaving its depth as it was and the copy to be sampled:
+/// by a copy, or for one of many samples, its first sample, by a resolve.
+void record_depth_read(VkCommandBuffer commands, const texture_t& target);
 
 /// Writes `width` by `height` pixels at `x`, `y` into level 0 of a texture without mipmaps, rows
 /// `pitch` bytes apart, in the frame's uploads, before its commands, even where a pass of the

@@ -6,7 +6,9 @@ Import std.ffi
 Import std.io
 Import std.math
 Import "./assets"
+Import "./c/fbe_scene"
 Import "./c/fbe_shader"
+Import "./camera"
 Import "./loads"
 Import "./material"
 Import "./window"
@@ -92,6 +94,10 @@ Public Final Class Shader Implements Asset
         handle = 0
     End Method
 
+    /// Whether it's a full-screen pass's, whose file says `#define FBE_PASS`, for Camera.AddPass; a
+    /// Material with one draws as one with none does.
+    @MainThread Public Method IsPass(): Bool => fbe_shader_is_pass(Live("IsPass"))
+
     /// Whether Free let go of it.
     @MainThread Public Method Freed(): Bool => handle == 0
 
@@ -159,5 +165,41 @@ Extend Material
         End Unsafe
         If !done Then Failed("Parameter")
         Return Vec4(floats[0], floats[1], floats[2], floats[3])
+    End Method
+End Extend
+
+/// A Camera's full-screen passes.
+Extend Camera
+    /// Runs a full-screen pass after what it draws: after its tonemap and its grade, if it's HDR, and
+    /// after those before it, on its own target. `shader` is one whose file says `#define FBE_PASS`,
+    /// and it gives back the Material it holds it by, whose SetParameter and layers' SetTexture are
+    /// what that reads: `parameter(index)` and `layer(index, uv)` there. One no pipeline can be made
+    /// of says so once, on the error stream, and is left out. Any other shader panics.
+    @MainThread @PanicsAtCaller
+    Public Method AddPass(shader: Shader): Material
+        Local pass = Material()
+        pass.SetShader(shader)
+        If !fbe_camera_add_pass(Live("AddPass"), pass.Live("AddPass")) Then Failed("AddPass")
+        Return pass
+    End Method
+
+    /// Stops running a pass AddPass gave. One that isn't this camera's panics.
+    @MainThread @PanicsAtCaller
+    Public Method RemovePass(pass: Material)
+        If !fbe_camera_remove_pass(Live("RemovePass"), pass.Live("RemovePass"))
+            Failed("RemovePass")
+        End If
+    End Method
+
+    /// Its passes, in the order they run.
+    @MainThread @PanicsAtCaller
+    Public Method Passes(): Material[]
+        Local camera = Live("Passes")
+        Local all: Material[] = []
+        For at = 0 Until fbe_camera_pass_count(camera)
+            Local pass = MaterialOf(fbe_camera_pass(camera, at))
+            If pass != Null Then all.Add(pass)
+        End For
+        Return all
     End Method
 End Extend

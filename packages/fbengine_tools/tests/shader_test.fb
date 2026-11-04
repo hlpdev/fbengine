@@ -413,3 +413,54 @@ Function ABuildWhileAGameRunsReloadsWhatsChanged() Throws IOError, GraphicsError
     Expect(green)
     Flip(False)
 End Function
+
+Const INVERTS =
+    "#define FBE_PASS\nfloat4 pass(float2 uv, float4 color, float depth)\n{{\n" +
+    "    return float4(parameter(0).rgb - color.rgb, 1.0);\n}}\n"
+
+@Test
+Function ACamerasPassRunsAndGoes() Throws IOError, GraphicsError
+    If NoSlangc() Then Skip("no slangc here")
+    Local folder = Try TempDir()
+    Local from = folder.Path / "inverts.slang"
+    Local to = folder.Path / "inverts.cooked"
+    Try File.WriteText(from, INVERTS)
+    Try Cooker.CookShader(from, to)
+    Assets.MountFiles("res://shader-pass", {"inverts.slang": Try File.ReadBytes(to)})
+    Defer Assets.Unmount("res://shader-pass")
+    Local shader = Try Assets.Load<Shader>("res://shader-pass/inverts.slang")
+    Expect(shader.IsPass())
+    Local world = World()
+    Defer world.Free()
+    World.SetCurrent(world)
+    Local target = Try Texture.Target(16, 16, TextureFormat.RGBA8, 1, True)
+    Defer target.Free()
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(1, 1, 1))
+    Local pass = camera.AddPass(shader)
+    pass.SetParameter(0, Vec4(1, 1, 1, 1))
+    Expect(camera.Passes().Count == 1)
+    Expect(RefEquals(camera.Passes()[0], pass))
+    camera.Render()
+    Expect(target.ToImage()[8, 8] == Color32(0, 0, 0, 255))
+    camera.RemovePass(pass)
+    Expect(camera.Passes().Count == 0)
+    camera.Render()
+    Expect(target.ToImage()[8, 8] == Color32(255, 255, 255, 255))
+End Function
+
+@Test
+Function APassThatWritesNoPassSaysSo() Throws IOError
+    If NoSlangc() Then Skip("no slangc here")
+    Local folder = Try TempDir()
+    Local from = folder.Path / "none.slang"
+    Try File.WriteText(from, "#define FBE_PASS\n")
+    Try
+        Try Cooker.CookShader(from, folder.Path / "none.cooked")
+        Expect(False)
+    Catch e As IOError
+        Expect(e.Kind == IOErrorKind.INVALID_DATA)
+        Expect(e.Message.Contains("has no `float4 pass("))
+    End Try
+End Function
