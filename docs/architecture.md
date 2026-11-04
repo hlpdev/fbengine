@@ -138,7 +138,10 @@ good modern engine on its own. Every structural choice is checked against both.
 - **Vulkan 1.2** with dynamic rendering, synchronization2, descriptor indexing (bindless
   textures), and buffer device addresses (shaders read buffers through addresses in push
   constants), through volk and VMA; MoltenVK on macOS supports that set. Two frames in flight.
-  The window's images and the screen are sRGB, so drawing is in linear light.
+  The window's images and the screen are sRGB, so drawing is in linear light. A camera can draw in
+  stored values instead, off by default: textures read as stored, lit and blended as stored, into
+  a UNORM target, with no tonemap, and an HDR camera refuses it. DirectX 7 blended stored values,
+  so a game keeping that look (forced alpha 128 giving 128, not 188) needs it.
   A portability driver holds what it promises: on MoltenVK the bindless set is 1180 textures
   against 16384 elsewhere, and samplers take no LOD bias, which SetLodBias keeps and doesn't draw.
 - **What it runs on** (the user, 2026-10-31): Vulkan 1.2 GPUs (2016 onward), Windows 10, Linux
