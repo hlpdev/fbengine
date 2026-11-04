@@ -776,6 +776,22 @@ FBE_API bool fbe_particles_set_forces(uint64_t particles, float x, float y, floa
 FBE_API bool fbe_particles_set_sizes(uint64_t particles, float start, float end);
 FBE_API bool fbe_particles_set_colors(uint64_t particles, const fbe_color_t* start,
                                       const fbe_color_t* end);
+// What SetLife, SetMotion, SetForces, SetSizes, and SetRoll set; -1 for a freed one.
+FBE_API float fbe_particles_life_least(uint64_t particles);
+FBE_API float fbe_particles_life_most(uint64_t particles);
+FBE_API float fbe_particles_speed_least(uint64_t particles);
+FBE_API float fbe_particles_speed_most(uint64_t particles);
+FBE_API float fbe_particles_spread(uint64_t particles);
+FBE_API float fbe_particles_spin(uint64_t particles);
+FBE_API float fbe_particles_gravity_x(uint64_t particles);
+FBE_API float fbe_particles_gravity_y(uint64_t particles);
+FBE_API float fbe_particles_gravity_z(uint64_t particles);
+FBE_API float fbe_particles_drag(uint64_t particles);
+FBE_API float fbe_particles_size_start(uint64_t particles);
+FBE_API float fbe_particles_size_end(uint64_t particles);
+FBE_API float fbe_particles_roll(uint64_t particles);
+// Each one's color at its birth, or at its death with `end`; false for a freed one.
+FBE_API bool fbe_particles_color(uint64_t particles, bool end, fbe_color_t* color);
 // How far each's turned at its birth, up to this each way, 0 to Pi, 0 at first.
 FBE_API bool fbe_particles_set_roll(uint64_t particles, float most);
 // What its random numbers follow from, which a run the same again sets.

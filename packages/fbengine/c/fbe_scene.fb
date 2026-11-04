@@ -423,6 +423,20 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_particles_set_sizes(particles: UInt64, start: Float32, end: Float32): Bool
     Function fbe_particles_set_colors(particles: UInt64, start: Ptr<fbe_color_t>,
                                       end: Ptr<fbe_color_t>): Bool
+    Function fbe_particles_life_least(particles: UInt64): Float32
+    Function fbe_particles_life_most(particles: UInt64): Float32
+    Function fbe_particles_speed_least(particles: UInt64): Float32
+    Function fbe_particles_speed_most(particles: UInt64): Float32
+    Function fbe_particles_spread(particles: UInt64): Float32
+    Function fbe_particles_spin(particles: UInt64): Float32
+    Function fbe_particles_gravity_x(particles: UInt64): Float32
+    Function fbe_particles_gravity_y(particles: UInt64): Float32
+    Function fbe_particles_gravity_z(particles: UInt64): Float32
+    Function fbe_particles_drag(particles: UInt64): Float32
+    Function fbe_particles_size_start(particles: UInt64): Float32
+    Function fbe_particles_size_end(particles: UInt64): Float32
+    Function fbe_particles_roll(particles: UInt64): Float32
+    Function fbe_particles_color(particles: UInt64, end: Bool, color: Ptr<fbe_color_t>): Bool
     Function fbe_particles_set_roll(particles: UInt64, most: Float32): Bool
     Function fbe_particles_set_seed(particles: UInt64, seed: UInt32): Bool
     Function fbe_particles_burst(particles: UInt64, count: Int32): Bool
