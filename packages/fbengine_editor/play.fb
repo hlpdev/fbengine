@@ -178,10 +178,12 @@ Public Final Class GameRun
         code = Null
         folder = project.Folder
         scene = sceneFile
-        Local built = project.Folder / "build" / "play" / (project.Name + (System.Platform == Platform.WINDOWS ? ".exe" : ""))
+        Local built = project.Folder / "build" / "play" /
+                      (project.Name + (System.Platform == Platform.WINDOWS ? ".exe" : ""))
         program = built
         Log.Say("Building {project.Name}…")
-        Spawned(Command(Fb).Args(["--color", "never", "build", project.Folder.Text, "-o", built.Text]),
+        Spawned(Command(Fb).Args(["--color", "never", "build", project.Folder.Text, "-o",
+                                  built.Text]),
                 PlayState.BUILDING)
     End Method
 
@@ -240,7 +242,8 @@ Public Final Class GameRun
     // `command`, its output piped here, or the reason it can't start.
     Method Spawned(command: Command, next: PlayState)
         Try
-            Local made = Try command.Stdin(Stdio.NONE).Stdout(Stdio.PIPED).Stderr(Stdio.PIPED).Spawn()
+            Local made =
+                Try command.Stdin(Stdio.NONE).Stdout(Stdio.PIPED).Stderr(Stdio.PIPED).Spawn()
             child = made
             state = next
             Local out = made.Stdout
@@ -286,20 +289,20 @@ End Class
 // What the pane says of `state`.
 Function HeadingOf(state: PlayState): String
     Select state
-    Case PlayState.IDLE
-        Return "Not run"
-    Case PlayState.BUILDING
-        Return "Building"
-    Case PlayState.RUNNING
-        Return "Running"
-    Case PlayState.ENDED
-        Return "Ended"
-    Case PlayState.BUILD_FAILED
-        Return "Couldn't be built"
-    Case PlayState.COULDNT_START
-        Return "Couldn't be started"
-    Case PlayState.STOPPED
-        Return "Stopped"
+        Case PlayState.IDLE
+            Return "Not run"
+        Case PlayState.BUILDING
+            Return "Building"
+        Case PlayState.RUNNING
+            Return "Running"
+        Case PlayState.ENDED
+            Return "Ended"
+        Case PlayState.BUILD_FAILED
+            Return "Couldn't be built"
+        Case PlayState.COULDNT_START
+            Return "Couldn't be started"
+        Case PlayState.STOPPED
+            Return "Stopped"
     End Select
 End Function
 

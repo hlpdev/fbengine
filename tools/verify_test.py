@@ -43,6 +43,7 @@ def show_finds_what_has_a_watch():
     listed = done.stdout.split()
     assert "menu" in listed and "proof/room_files" in listed, listed
     assert "hello" not in listed, "an example with no --watch was listed"
+    assert listed[-1] == "../packages/fbengine_editor", listed
     print("show.py finds what has a --watch")
 
 

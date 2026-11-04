@@ -58,7 +58,8 @@ Function Drivings(): Map<String, Driving>
                                 Function(editor: Editor, scene: DemoScene) => editor.Current() ==
                                 Null)
     all["file.new_scene"] = Driving(Nothing,
-                                    Function(editor: Editor, scene: DemoScene) => Count(editor) == 0)
+                                    Function(editor: Editor, scene: DemoScene) => Count(editor) ==
+                                    0)
     all["file.open_scene"] = Driving(Nothing,
                                      Function(editor: Editor,
                                               scene: DemoScene) => editor.ShowingDialog() != Null)
@@ -73,10 +74,12 @@ Function Drivings(): Map<String, Driving>
     all["play.run"] = Driving(Nothing,
                               Function(editor: Editor,
                                        scene: DemoScene) => editor.ShowingDialog() != Null)
+    // A build with nothing to build can end before the menu's open, so nothing's going after is all
+    // this can say; play_test's PlayAndStopHaveKeysAndAMenu stops a game that goes on.
     all["play.stop"] = Driving(Function(editor: Editor, scene: DemoScene)
         Local open = editor.Current()
         If open != Null Then editor.Run.Start(open, "res://none.scene")
-    End Function, Function(editor: Editor, scene: DemoScene) => editor.Run.State() == PlayState.STOPPED)
+    End Function, Function(editor: Editor, scene: DemoScene) => !editor.Run.Going())
     // With no program it has nothing to do, and it's enabled; its work's in inspector_test.
     all["file.reload_components"] = Driving(Nothing,
                                             Function(editor: Editor,

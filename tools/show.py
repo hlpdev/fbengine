@@ -13,13 +13,15 @@ import pathlib
 import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# Under examples/, by its way there, since the editor's a package.
+EDITOR = "../packages/fbengine_editor"
 
 
 def watched():
-    """The examples with a `--watch`, whose main.fb asks for it, in their folders' order, and the editor."""
+    """The examples with a `--watch`, whose main.fb asks for it, in their folders' order."""
     examples = ROOT / "examples"
     return [main.parent.relative_to(examples).as_posix() for main in sorted(examples.rglob("main.fb"))
-            if '"--watch"' in main.read_text(encoding="utf-8")] + ["../packages/fbengine_editor"]
+            if '"--watch"' in main.read_text(encoding="utf-8")]
 
 
 def stop(process):
@@ -37,7 +39,7 @@ def main():
     parser.add_argument("--list", action="store_true", help="print which it would play, and play none")
     parser.add_argument("examples", nargs="*", help="which to play (default: all)")
     options = parser.parse_args()
-    examples = options.examples or watched()
+    examples = options.examples or watched() + [EDITOR]
     if options.list:
         print("\n".join(examples))
         return
