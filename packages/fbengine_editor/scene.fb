@@ -1,0 +1,543 @@
+// The scene being edited: its World, what's selected in it, and what the editor keeps in it that
+// isn't the game's.
+
+Import std.collections
+Import std.core
+Import std.math
+Import fbengine
+Import "./component"
+Import "./history"
+
+/// A World being edited. The camera and the light the editor sees it by are in it, under Helpers,
+/// which isn't the game's, with what's been taken out of the scene and could be put back, hidden, so
+/// an undo can: nothing else that's the editor's goes in it. What's selected is an order of entities,
+/// the last the one handles go by.
+Public Final Class EditedScene
+    /// What's in the scene.
+    Public ReadOnly Field Stage: World
+    /// What the editor keeps in Stage, which is no part of the scene.
+    Public ReadOnly Field Helpers: Entity
+    /// The camera it's seen by.
+    Public ReadOnly Field Viewer: Camera
+    /// What it's lit by while the scene has no light of its own showing.
+    Public ReadOnly Field Lamp: Light
+    Field selected: Entity[] = []
+    Field changed: (Func())? = Null
+    // What's been taken out, which keeps it hidden.
+    Field removed: Entity
+
+    Public New()
+        Stage = World()
+        World.SetCurrent(Stage)
+        Stage.SetAmbientLight(Color(0.2, 0.2, 0.24))
+        Helpers = Pivot()
+        Helpers.SetName("editor")
+        removed = Pivot(Helpers)
+        removed.SetName("removed")
+        removed.Hide()
+        Viewer = Camera(Helpers)
+        Viewer.SetClearColor(Color(0.01, 0.012, 0.018))
+        Lamp = Light(LightType.DIRECTIONAL, Helpers)
+        Lamp.SetPosition(Vec3(4, 8, 6))
+        Lamp.PointAt(Vec3(0, 0, 0))
+    End New
+
+    /// Frees it and all that's in it.
+    Public Method Free()
+        selected.Clear()
+        Stage.Free()
+    End Method
+
+    /// Runs `handler` after each change to what's selected.
+    Public Method OnSelectionChanged(handler: (Func())?)
+        changed = handler
+    End Method
+
+    /// What's selected, in the order it was, the last the one handles go by.
+    Public Method Selected(): Entity[]
+        Forgetting()
+        Return selected.Clone()
+    End Method
+
+    /// What's selected without what's under anything else that is: what acting on them all acts on.
+    Public Method SelectedTops(): Entity[]
+        Forgetting()
+        Local tops: Entity[] = []
+        For entity In selected
+            Local above = entity.Parent()
+            Local under = False
+            While above != Null && !under
+                under = IsSelected(above)
+                above = above.Parent()
+            End While
+            If !under Then tops.Add(entity)
+        End For
+        Return tops
+    End Method
+
+    /// Shows the editor's lamp while the scene has no light of its own showing, and hides it else.
+    Public Method KeepLamp()
+        Local own = False
+        For light In Stage.Lights()
+            If !RefEquals(light, Lamp) && light.Showing() Then own = True
+        End For
+        If own != Lamp.Hidden()
+            If own Then Lamp.Hide() Else Lamp.Show()
+        End If
+    End Method
+
+    /// Whether `entity` is under what's been taken out of the scene.
+    Public Method IsRemoved(entity: Entity): Bool
+        Local at: Entity? = entity
+        While at != Null
+            If RefEquals(at, removed) Then Return True
+            at = at.Parent()
+        End While
+        Return False
+    End Method
+
+    /// Whether `entity` is in the scene, and not the editor's.
+    Public Method Has(entity: Entity): Bool
+        If entity.Freed() Then Return False
+        Local at: Entity? = entity
+        While at != Null
+            If RefEquals(at, Helpers) Then Return False
+            at = at.Parent()
+        End While
+        Return True
+    End Method
+
+    /// What's beside each other under `parent`, or at the top of the scene with Null, in order.
+    Public Method SiblingsOf(parent: Entity?): Entity[]
+        If parent != Null Then Return parent.Children()
+        Local tops: Entity[] = []
+        For root In Stage.Roots()
+            If !RefEquals(root, Helpers) Then tops.Add(root)
+        End For
+        Return tops
+    End Method
+
+    /// Where `entity` is in the tree.
+    Public Method PlaceOf(entity: Entity): TreePlace
+        Local parent = entity.Parent()
+        Local siblings = SiblingsOf(parent)
+        For i = 0 To siblings.Count - 1
+            If RefEquals(siblings[i], entity) Then Return TreePlace(parent, i)
+        End For
+        Return TreePlace(parent, siblings.Count)
+    End Method
+
+    /// Takes `entity`, and all under it, out of the scene, and out of what's selected, its transform
+    /// as it is, and gives where it was.
+    Public Method TakeOut(entity: Entity): TreePlace
+        Local place = PlaceOf(entity)
+        entity.SetParent(removed, False)
+        Local had = selected.Count
+        Forgetting()
+        selected = selected.Filter(Function[Weak Self](each: Entity): Bool
+            Local own = Self
+            Return own == Null || !own.IsRemoved(each)
+        End Function)
+        If selected.Count != had Then Changed()
+        Return place
+    End Method
+
+    /// Puts `entity` at `place`, whatever's beside it there now, its transform under its parent as it
+    /// is, as what's before it there is what was; if it, or what it was under, has been freed, it
+    /// stays as it is.
+    Public Method PutBack(entity: Entity, place: TreePlace)
+        Local parent = place.Parent
+        If entity.Freed() || (parent != Null && parent.Freed()) Then Return
+        entity.SetParent(parent, False)
+        // At the top of the scene, Helpers has a place too.
+        Local all = parent != Null ? parent.Children() : Stage.Roots()
+        Local index = place.Index
+        For i = 0 Until all.Count
+            If parent == Null && RefEquals(all[i], Helpers) && i <= index Then index += 1
+        End For
+        entity.SetSiblingIndex(Min(index, all.Count - 1))
+    End Method
+
+    /// Selects `entities` that are still there, in place of what's selected, in that order.
+    Public Method SelectAll(entities: Entity[])
+        selected = entities.Filter(Function(each: Entity) => !each.Freed())
+        Changed()
+    End Method
+
+    /// Whether `entity` is selected.
+    Public Method IsSelected(entity: Entity): Bool
+        For each In selected
+            If RefEquals(each, entity) Then Return True
+        End For
+        Return False
+    End Method
+
+    /// Selects `entity` alone, or Null for nothing.
+    Public Method SelectOnly(entity: Entity?)
+        selected.Clear()
+        If entity != Null Then selected.Add(entity)
+        Changed()
+    End Method
+
+    /// Selects `entity` too, or takes it out if it's selected.
+    Public Method ToggleSelected(entity: Entity)
+        For i = 0 To selected.Count - 1
+            If RefEquals(selected[i], entity)
+                selected.RemoveAt(i)
+                Changed()
+                Return
+            End If
+        End For
+        selected.Add(entity)
+        Changed()
+    End Method
+
+    /// What's in the scene, each entity and those under it, in the tree's order, without Helpers.
+    Public Method Entities(): Entity[]
+        Local all: Entity[] = []
+        For root In Stage.Roots()
+            If !RefEquals(root, Helpers) Then Collected(root, all)
+        End For
+        Return all
+    End Method
+
+    // Lets go of what's selected that's been freed.
+    Method Forgetting()
+        selected = selected.Filter(Function(each: Entity) => !each.Freed())
+    End Method
+
+    Method Collected(entity: Entity, into: Entity[])
+        into.Add(entity)
+        For child In entity.Children()
+            Collected(child, into)
+        End For
+    End Method
+
+    Method Changed()
+        Local handler = changed
+        If handler != Null Then handler()
+    End Method
+End Class
+
+/// An entity made in the scene, which undoing takes out, as what's made after it may be holding it,
+/// and redoing puts back.
+Public Final Class MadeEdit Extends Edit
+    Field scene: EditedScene
+    Field make: Func(): Entity
+    Field made: Entity? = Null
+    Field place: TreePlace? = Null
+
+    /// An edit named `name` that makes what `making` makes, and selects it.
+    Public New(name: String, into: EditedScene, making: Func(): Entity)
+        scene = into
+        make = making
+        Super.New(name)
+    End New
+
+    /// What it made, Null before it's applied.
+    Public Method Made(): Entity? => made
+
+    Public Override Method Apply() Throws IOError
+        Local entity = made
+        Local where = place
+        If entity == Null
+            entity = make()
+            made = entity
+        ElseIf where != Null
+            scene.PutBack(entity, where)
+        End If
+        scene.SelectOnly(entity)
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        Local entity = made
+        If entity != Null && !entity.Freed() Then place = scene.TakeOut(entity)
+    End Method
+
+    // Undone for good, nothing can put it back.
+    Public Override Method Forgotten(applied: Bool)
+        Local entity = made
+        If !applied && entity != Null && !entity.Freed() Then entity.Free()
+    End Method
+End Class
+
+/// An entity given another name.
+Public Final Class RenameEdit Extends Edit
+    Field entity: Entity
+    Field from: String
+    Field to: String
+
+    /// `renamed` called `name` from now on.
+    Public New(renamed: Entity, name: String)
+        entity = renamed
+        from = renamed.Name()
+        to = name
+        Super.New("Rename")
+    End New
+
+    Public Override Method Apply() Throws IOError
+        If !entity.Freed() Then entity.SetName(to)
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        If !entity.Freed() Then entity.SetName(from)
+    End Method
+End Class
+
+/// Entities hidden, or shown, each back to as it was.
+Public Final Class HideEdit Extends Edit
+    Field entities: Entity[]
+    Field before: Bool[] = []
+    Field hiding: Bool
+
+    /// `changed` hidden if `hide`, else shown.
+    Public New(changed: Entity[], hide: Bool)
+        entities = changed
+        hiding = hide
+        Super.New(hide ? "Hide" : "Show")
+        For entity In changed
+            before.Add(entity.Hidden())
+        End For
+    End New
+
+    Public Override Method Apply() Throws IOError
+        For entity In entities
+            If entity.Freed() Then Continue
+            If hiding Then entity.Hide() Else entity.Show()
+        End For
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        For i = 0 To entities.Count - 1
+            If entities[i].Freed() Then Continue
+            If before[i] Then entities[i].Hide() Else entities[i].Show()
+        End For
+    End Method
+End Class
+
+/// Entities taken out of the scene, each put back where it was among what's beside it.
+Public Final Class RemoveEdit Extends Edit
+    Field scene: EditedScene
+    Field entities: Entity[]
+    Field places: TreePlace[] = []
+    Field selection: Entity[] = []
+
+    /// `going` taken out of `from`.
+    Public New(from: EditedScene, going: Entity[])
+        scene = from
+        entities = going
+        Super.New("Delete")
+    End New
+
+    Public Override Method Apply() Throws IOError
+        selection = scene.Selected()
+        places = []
+        For entity In entities
+            places.Add(entity.Freed() ? TreePlace(Null, 0) : scene.TakeOut(entity))
+        End For
+    End Method
+
+    // Done for good, nothing can put them back.
+    Public Override Method Forgotten(applied: Bool)
+        If !applied Then Return
+        For entity In entities
+            If !entity.Freed() Then entity.Free()
+        End For
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        For i = entities.Count - 1 To 0 Step -1
+            scene.PutBack(entities[i], places[i])
+        End For
+        scene.SelectAll(selection)
+    End Method
+End Class
+
+/// Copies of entities, and all under them, last among what's beside them, selected in their place.
+Public Final Class CopyEdit Extends Edit
+    Field scene: EditedScene
+    Field entities: Entity[]
+    Field copies: Entity[] = []
+    Field places: TreePlace[] = []
+    Field selection: Entity[] = []
+
+    /// Copies of `copying` in `from`.
+    Public New(from: EditedScene, copying: Entity[])
+        scene = from
+        entities = copying
+        Super.New("Duplicate")
+    End New
+
+    // Undone for good, nothing can put them back.
+    Public Override Method Forgotten(applied: Bool)
+        If applied Then Return
+        For copy In copies
+            If !copy.Freed() Then copy.Free()
+        End For
+    End Method
+
+    /// The copies, in order; none before it's applied.
+    Public Method Copies(): Entity[] => copies.Clone()
+
+    Public Override Method Apply() Throws IOError
+        selection = scene.Selected()
+        If copies.Count == 0
+            For entity In entities
+                If entity.Freed() Then Continue
+                Local copy = entity.Copy(entity.Parent())
+                Local name = entity.Name()
+                copy.SetName(name != "" ? "{name} copy" : "{entity.Kind()} copy")
+                CopyComponents(entity, copy)
+                copies.Add(copy)
+            End For
+        Else
+            // The last first, as each was taken out with those after it still there.
+            For i = copies.Count - 1 To 0 Step -1
+                scene.PutBack(copies[i], places[i])
+            End For
+        End If
+        scene.SelectAll(copies)
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        places = []
+        For copy In copies
+            places.Add(copy.Freed() ? TreePlace(Null, 0) : scene.TakeOut(copy))
+        End For
+        scene.SelectAll(selection)
+    End Method
+End Class
+
+/// Entities moved to under another, or to the top of the scene, staying where they are in the world.
+Public Final Class ReparentEdit Extends Edit
+    Field scene: EditedScene
+    Field entities: Entity[]
+    Field target: Entity?
+    Field places: TreePlace[] = []
+    Field locals: LocalPlace[] = []
+
+    /// `moving` the last children of `to`, in order, or at the top of `from` with Null.
+    Public New(from: EditedScene, moving: Entity[], to: Entity?)
+        scene = from
+        entities = moving
+        target = to
+        Super.New("Move In Tree")
+    End New
+
+    Public Override Method Apply() Throws IOError
+        places = []
+        locals = []
+        Local under = target
+        For entity In entities
+            If entity.Freed() || (under != Null && under.Freed())
+                places.Add(TreePlace(Null, 0))
+                locals.Add(LocalPlace(Vec3(0, 0, 0), Quat.Identity, Vec3(1, 1, 1)))
+                Continue
+            End If
+            places.Add(scene.PlaceOf(entity))
+            locals.Add(LocalPlace.Of(entity))
+            entity.SetParent(under, True)
+        End For
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        For i = entities.Count - 1 To 0 Step -1
+            Local parent = places[i].Parent
+            If entities[i].Freed() || (parent != Null && parent.Freed()) Then Continue
+            scene.PutBack(entities[i], places[i])
+            locals[i].PutOn(entities[i])
+        End For
+    End Method
+End Class
+
+/// Where an entity is under its parent, as going through the world and back would round it.
+Public Struct LocalPlace
+    Public Field Position: Vec3
+    Public Field Rotation: Quat
+    Public Field Scale: Vec3
+
+    /// Where `entity` is now.
+    Public Static Method Of(entity: Entity): LocalPlace
+        Return LocalPlace(entity.Position(), entity.Rotation(), entity.Scale())
+    End Method
+
+    /// Puts `entity` there.
+    Public Method PutOn(entity: Entity)
+        entity.SetPosition(Position)
+        entity.SetRotation(Rotation)
+        entity.SetScale(Scale)
+    End Method
+End Struct
+
+/// Where an entity goes in the tree: under what, Null for the top of the scene, and how many of
+/// what's there before it.
+Public Struct TreePlace
+    Public Field Parent: Entity?
+    Public Field Index: Int
+End Struct
+
+/// Entities moved, turned, or scaled, from where they were to where they are, each drag's steps one
+/// undo, none if it ends where it began.
+Public Final Class TransformEdit Extends Edit
+    Field entities: Entity[]
+    Field before: LocalPlace[]
+    Field after: EntityPlace[]
+    Field drag: Int
+    Field nothing: Bool
+
+    /// `entities` going from `from`, exactly, to `to`, in `drag`, a number for the drag it's a step
+    /// of, which `same` says leaves them where they began.
+    Public New(name: String, moving: Entity[], from: LocalPlace[], to: EntityPlace[], number: Int,
+               same: Bool = False)
+        entities = moving
+        before = from
+        after = to
+        drag = number
+        nothing = same
+        Super.New(name)
+    End New
+
+    Public Override Method Apply() Throws IOError
+        For i = 0 To entities.Count - 1
+            If !entities[i].Freed() Then after[i].PutOn(entities[i])
+        End For
+    End Method
+
+    Public Override Method Undo() Throws IOError
+        For i = entities.Count - 1 To 0 Step -1
+            If !entities[i].Freed() Then before[i].PutOn(entities[i])
+        End For
+    End Method
+
+    Public Override Method Merge(later: Edit): Bool
+        Local other = later As? TransformEdit
+        If other == Null || other.drag != drag Then Return False
+        after = other.after
+        nothing = other.nothing
+        Return True
+    End Method
+
+    Public Override Method IsNothing(): Bool => nothing
+
+    Public Override Method ChangesTree(): Bool => False
+End Class
+
+/// Where an entity is in the world, how it's turned, and its own scale.
+Public Struct EntityPlace
+    Public Field Position: Vec3
+    Public Field Rotation: Quat
+    Public Field Scale: Vec3
+
+    /// Where `entity` is now.
+    Public Static Method Of(entity: Entity): EntityPlace
+        Return EntityPlace(entity.Position(Space.WORLD), entity.Rotation(Space.WORLD),
+                           entity.Scale())
+    End Method
+
+    /// Puts `entity` there.
+    Public Method PutOn(entity: Entity)
+        entity.SetPosition(Position, Space.WORLD)
+        entity.SetRotation(Rotation, Space.WORLD)
+        entity.SetScale(Scale)
+    End Method
+End Struct

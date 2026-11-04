@@ -141,6 +141,7 @@ private:
     struct mount_t {
         path_t at;
         std::shared_ptr<source_t> source;
+        std::uint64_t id = 0;
     };
     using mounts_t = std::vector<mount_t>;
 
@@ -153,9 +154,12 @@ private:
 /// reads the mounts there were when it began, whatever's mounted meanwhile.
 class vfs_t {
 public:
-    void mount(const path_t& at, std::shared_ptr<source_t> source);
+    std::uint64_t mount(const path_t& at, std::shared_ptr<source_t> source);
     /// Takes out the last mount at `at`, and gives whether there was one.
     bool unmount(const path_t& at);
+
+    /// Takes out the mount `mount` gave `id`, wherever it is; false if it's gone.
+    bool unmount(std::uint64_t id);
 
     /// The mounts there are now.
     [[nodiscard]] view_t view() const;
@@ -174,6 +178,7 @@ public:
 private:
     mutable std::mutex m_mutex;
     // The mounts, replaced whole by each mount and unmount, so a view keeps the ones it was of.
+    std::uint64_t m_next_id = 1;
     std::shared_ptr<const view_t::mounts_t> m_mounts = std::make_shared<const view_t::mounts_t>();
 };
 

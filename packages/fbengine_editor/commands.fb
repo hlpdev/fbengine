@@ -1,0 +1,132 @@
+// What the editor does, each by a name, with a title and a shortcut, in one list that its menus and
+// keys run, and a test can too.
+
+Import std.collections
+Import std.core
+Import std.os
+Import std.text
+Import fbengine
+
+/// A key, and what's held with it, that runs a command. Primary is Control, or Command on macOS.
+Public Struct Shortcut Implements Printable
+    Public Field Key: Key
+    Public Field Primary: Bool
+    Public Field Shift: Bool
+    Public Field Alt: Bool
+
+    /// Whether `stroke` is it.
+    Public Method Matches(stroke: Keystroke): Bool
+        Local mac = System.Platform == Platform.MACOS
+        Local primary = mac ? stroke.Meta : stroke.Control
+        Local other = mac ? stroke.Control : stroke.Meta
+        Return stroke.Key == Key && primary == Primary && !other && stroke.Shift == Shift &&
+               stroke.Alt == Alt
+    End Method
+
+    /// As a menu shows it, "Ctrl+Shift+Z".
+    Public Method ToString(): String
+        Local shown = ""
+        If Primary Then shown += System.Platform == Platform.MACOS ? "Cmd+" : "Ctrl+"
+        If Shift Then shown += "Shift+"
+        If Alt Then shown += "Alt+"
+        // As a person writes it: Delete, Page Up.
+        Local name = "{Key}"
+        Local first = True
+        For word In name.Split("_")
+            shown += first ? "" : " "
+            first = False
+            shown += word.Slice(0, 1) + word.Slice(1, word.Length).ToLower()
+        End For
+        Return shown
+    End Method
+End Struct
+
+/// `key` with Primary held.
+Public Function PrimaryKey(key: Key, shift: Bool = False): Shortcut => Shortcut(key, True, shift,
+                                                                                False)
+
+/// Something the editor does.
+Public Final Class EditorCommand
+    /// Its name, as "edit.undo".
+    Public ReadOnly Field Id: String
+    /// What a menu calls it.
+    Public ReadOnly Field Title: String
+    /// The key that runs it, or Null.
+    Public ReadOnly Field Keys: Shortcut?
+    /// Whether holding its key runs it again, as undoing does.
+    Public ReadOnly Field Repeats: Bool
+    Field action: Func()
+    Field enabled: (Func(): Bool)?
+
+    Package New(id: String, title: String, keys: Shortcut?, repeats: Bool, action: Func(),
+                enabled: (Func(): Bool)?)
+        Id = id
+        Title = title
+        Keys = keys
+        Repeats = repeats
+        Self.action = action
+        Self.enabled = enabled
+    End New
+
+    /// Whether it can run now.
+    Public Method Enabled(): Bool
+        Local asking = enabled
+        Return asking == Null || asking()
+    End Method
+
+    /// Runs it, if it can now; whether it did.
+    Public Method Run(): Bool
+        If !Enabled() Then Return False
+        action()
+        Return True
+    End Method
+End Class
+
+/// Every command the editor has, in the order they were added.
+Public Final Class Commands
+    Field all: EditorCommand[] = []
+
+    Public New()
+    End New
+
+    /// Adds a command. Panics for an `id` it has.
+    @PanicsAtCaller
+    Public Method Add(id: String, title: String, action: Func(), keys: Shortcut? = Null,
+                      enabled: (Func(): Bool)? = Null, repeats: Bool = False): EditorCommand
+        If Find(id) != Null Then Panic("Commands.Add: there's a command {id} already")
+        Local command = EditorCommand(id, title, keys, repeats, action, enabled)
+        all.Add(command)
+        Return command
+    End Method
+
+    /// The command `id`, or Null.
+    Public Method Find(id: String): EditorCommand?
+        For command In all
+            If command.Id == id Then Return command
+        End For
+        Return Null
+    End Method
+
+    /// Every command, in the order they were added.
+    Public Method All(): EditorCommand[] => all.Clone()
+
+    /// Runs the command `id`, if it can now; whether it did. Panics for one it doesn't have.
+    @PanicsAtCaller
+    Public Method Run(id: String): Bool
+        Local command = Find(id)
+        If command == Null Then Panic("Commands.Run: there's no command {id}")
+        Return command.Run()
+    End Method
+
+    /// Runs the command whose key `stroke` is, as Ui.SetShortcuts asks; whether one was. A key held
+    /// runs only one that Repeats, and one that can't run now still has the key.
+    Public Method Seen(stroke: Keystroke): Bool
+        For command In all
+            Local keys = command.Keys
+            If keys == Null || !keys.Matches(stroke) Then Continue
+            If stroke.Kind == KeystrokeKind.PRESS || command.Repeats Then command.Run()
+            Return True
+        End For
+        Return False
+    End Method
+End Class

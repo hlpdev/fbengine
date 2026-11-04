@@ -35,6 +35,10 @@ FBE_API bool fbe_vfs_mount_pak(const char* at, const char* file);
 FBE_API bool fbe_vfs_mount_pak_bytes(const char* at, const uint8_t* bytes, int64_t size);
 // Takes out the last mount at `at`; false if there's none there.
 FBE_API bool fbe_vfs_unmount(const char* at);
+// The number of the last mount this thread made, for fbe_vfs_unmount_id.
+FBE_API uint64_t fbe_vfs_last_mount(void);
+// Takes out the mount of that number, whatever's over it; false if it's gone.
+FBE_API bool fbe_vfs_unmount_id(uint64_t mount);
 // How the last call that failed on this thread failed: FBE_VFS_NOT_FOUND and the rest.
 FBE_API int32_t fbe_vfs_failure(void);
 

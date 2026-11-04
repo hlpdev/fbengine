@@ -636,3 +636,26 @@ Function ASidecarsDeeperTablesAreNamedToo() Throws IOError
     Expect(Refused<ByMaterial5>("[materials.wood]\nalpha_cutof = 0.25\n"))
     Expect(Refused<ByMaterial5>("[lod]\nalpha_cutof = 0.25\n"))
 End Function
+
+@Test
+Function WhatsLoadedFromUnderAPlaceCanBeLetGoOf() Throws IOError
+    MountSprites("res://test-forget")
+    Defer Assets.Unmount("res://test-forget")
+    MountSprites("res://test-forget-not")
+    Defer Assets.Unmount("res://test-forget-not")
+    Local kept = Try Assets.Load<Sprite>("res://test-forget-not/hero.png")
+    Local first = Try Assets.Load<Sprite>("res://test-forget/hero.png")
+    Assets.ForgetLoaded("res://test-forget")
+    Expect((Try Assets.Find<Sprite>("res://test-forget/hero.png")) == Null)
+    // Not what's beside it, whose name starts the same.
+    Expect((Try Assets.Find<Sprite>("res://test-forget-not/hero.png")) != Null)
+    // A new one, and what was held goes on being good until it's let go of.
+    Local second = Try Assets.Load<Sprite>("res://test-forget/hero.png")
+    Expect(!RefEquals(first, second) && !first.Freed)
+    first.Free()
+    Expect(first.Freed)
+    Expect((Try Assets.Find<Sprite>("res://test-forget/hero.png")) != Null,
+           "letting go of the old let go of the new")
+    second.Free()
+    kept.Free()
+End Function

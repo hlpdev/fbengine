@@ -9,6 +9,7 @@
 #include "gpu/vulkan.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <format>
@@ -113,6 +114,9 @@ bool make_host_buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool reading,
     return true;
 }
 
+/// How many staging buffers writes have made.
+std::uint64_t staging_made = 0;
+
 } // namespace
 
 namespace fbe::gpu {
@@ -146,10 +150,16 @@ buffer_t make_buffer(VkDeviceSize size, VkBufferUsageFlags usage) {
         return {};
     }
     made.address = address_of(made.buffer);
-    VkCommandBuffer commands = upload_commands();
-    buffer_barrier(commands, made.buffer, readers, 0, transfer, transfer_write);
-    vkCmdFillBuffer(commands, made.buffer, 0, VK_WHOLE_SIZE, 0);
-    buffer_barrier(commands, made.buffer, transfer, transfer_write, readers, reads);
+    try {
+        VkCommandBuffer commands = upload_commands();
+        buffer_barrier(commands, made.buffer, readers, 0, transfer, transfer_write);
+        vkCmdFillBuffer(commands, made.buffer, 0, VK_WHOLE_SIZE, 0);
+        buffer_barrier(commands, made.buffer, transfer, transfer_write, readers, reads);
+    } catch (...) {
+        // Out of memory, before any command that names it.
+        vmaDestroyBuffer(gpu->allocator, made.buffer, made.memory);
+        throw;
+    }
     return made;
 }
 
@@ -161,13 +171,22 @@ void free_buffer(buffer_t& buffer) {
     buffer = {};
 }
 
-bool write_buffer(const buffer_t& buffer, VkDeviceSize offset, std::span<const std::byte> bytes) {
+bool write_buffer_regions(const buffer_t& buffer, std::span<const std::byte> bytes,
+                          std::span<const VkBufferCopy> regions) {
     if (device() == nullptr || buffer.buffer == VK_NULL_HANDLE) {
         return fail("there's no such buffer");
     }
-    if (bytes.empty() || offset > buffer.size || bytes.size() > buffer.size - offset) {
-        return fail(std::format("{} bytes at {} aren't in a buffer of {}", bytes.size(), offset,
-                                buffer.size));
+    for (const VkBufferCopy& region : regions) {
+        if (region.size == 0 || region.srcOffset > bytes.size() ||
+            region.size > bytes.size() - region.srcOffset || region.dstOffset > buffer.size ||
+            region.size > buffer.size - region.dstOffset) {
+            return fail(std::format("{} bytes at {} aren't in a buffer of {}", region.size,
+                                    region.dstOffset, buffer.size));
+        }
+    }
+    if (bytes.empty() || regions.empty()) {
+        return fail(std::format("{} bytes in {} regions is nothing to write", bytes.size(),
+                                regions.size()));
     }
     buffer_t staging{};
     std::byte* mapped = nullptr;
@@ -176,16 +195,39 @@ bool write_buffer(const buffer_t& buffer, VkDeviceSize offset, std::span<const s
         mapped == nullptr) {
         return false;
     }
+    ++staging_made;
     std::memcpy(mapped, bytes.data(), bytes.size());
-    after_frame(
-        [staging] { vmaDestroyBuffer(device()->allocator, staging.buffer, staging.memory); });
+    try {
+        after_frame(
+            [staging] { vmaDestroyBuffer(device()->allocator, staging.buffer, staging.memory); });
+    } catch (...) {
+        // Out of memory, before any command that names it.
+        vmaDestroyBuffer(device()->allocator, staging.buffer, staging.memory);
+        throw;
+    }
     count_upload(bytes.size());
     VkCommandBuffer commands = upload_commands();
     buffer_barrier(commands, buffer.buffer, readers, 0, transfer, transfer_write);
-    const VkBufferCopy region{ .dstOffset = offset, .size = bytes.size() };
-    vkCmdCopyBuffer(commands, staging.buffer, buffer.buffer, 1, &region);
+    vkCmdCopyBuffer(commands, staging.buffer, buffer.buffer,
+                    static_cast<std::uint32_t>(regions.size()), regions.data());
     buffer_barrier(commands, buffer.buffer, transfer, transfer_write, readers, reads);
     return true;
+}
+
+bool write_buffer(const buffer_t& buffer, VkDeviceSize offset, std::span<const std::byte> bytes) {
+    if (bytes.empty() || offset > buffer.size || bytes.size() > buffer.size - offset) {
+        if (device() == nullptr || buffer.buffer == VK_NULL_HANDLE) {
+            return fail("there's no such buffer");
+        }
+        return fail(std::format("{} bytes at {} aren't in a buffer of {}", bytes.size(), offset,
+                                buffer.size));
+    }
+    const std::array regions{ VkBufferCopy{ .dstOffset = offset, .size = bytes.size() } };
+    return write_buffer_regions(buffer, bytes, regions);
+}
+
+std::uint64_t staging_buffers_made() {
+    return staging_made;
 }
 
 std::vector<std::byte> read_buffer(const buffer_t& buffer) {
@@ -203,6 +245,9 @@ std::vector<std::byte> read_buffer(const buffer_t& buffer) {
         return {};
     }
     const bool ran = run_now([&](VkCommandBuffer commands) {
+        // After what wrote it, which left it for shaders to read, not for this.
+        buffer_barrier(commands, buffer.buffer, readers | transfer, reads | transfer_write,
+                       transfer, flag<VkAccessFlags2>(VK_ACCESS_2_TRANSFER_READ_BIT));
         const VkBufferCopy region{ .size = buffer.size };
         vkCmdCopyBuffer(commands, buffer.buffer, host.buffer, 1, &region);
         buffer_barrier(commands, host.buffer, transfer, transfer_write,
@@ -210,8 +255,13 @@ std::vector<std::byte> read_buffer(const buffer_t& buffer) {
                        flag<VkAccessFlags2>(VK_ACCESS_2_HOST_READ_BIT));
     });
     std::vector<std::byte> bytes;
-    if (ran) {
-        bytes.assign(mapped, mapped + buffer.size);
+    try {
+        if (ran) {
+            bytes.assign(mapped, mapped + buffer.size);
+        }
+    } catch (...) {
+        vmaDestroyBuffer(device()->allocator, host.buffer, host.memory);
+        throw;
     }
     vmaDestroyBuffer(device()->allocator, host.buffer, host.memory);
     return bytes;
@@ -237,9 +287,15 @@ slice_t frame_memory(VkDeviceSize size, VkDeviceSize alignment) {
             return {};
         }
         if (frame.ring.buffer != VK_NULL_HANDLE) {
-            after_frame([old = frame.ring] {
-                vmaDestroyBuffer(device()->allocator, old.buffer, old.memory);
-            });
+            try {
+                after_frame([old = frame.ring] {
+                    vmaDestroyBuffer(device()->allocator, old.buffer, old.memory);
+                });
+            } catch (...) {
+                // Out of memory, so the frame keeps the ring it has.
+                vmaDestroyBuffer(device()->allocator, ring.buffer, ring.memory);
+                throw;
+            }
         }
         ring.address = address_of(ring.buffer);
         frame.ring = ring;

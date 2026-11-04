@@ -2,6 +2,7 @@
 // whether it's shown. Every entity has one wrapper while it lives, so whatever gives one back, a
 // parent, a find, or a pick, gives the object the game has.
 
+Import std.collections
 Import std.core
 Import std.ffi
 Import "./c/fbe_scene"
@@ -9,6 +10,7 @@ Import "./camera"
 Import "./light"
 Import "./mesh"
 Import "./mirror"
+Import "./particles"
 Import "./plane"
 Import "./sprite"
 Import "./terrain"
@@ -33,6 +35,8 @@ Public Enum EntityKind
     MIRROR = 6
     /// A Terrain, a grid of heights.
     TERRAIN = 7
+    /// A Particles, which spawns them.
+    PARTICLES = 8
 End Enum
 
 // One wrapper for each live entity, by its handle's slot.
@@ -71,7 +75,7 @@ End Class
 /// Classes are Final, so a game keeps its own object on an entity with SetData.
 Public Class Entity Implements Printable
     Field handle: UInt64
-    Field attached: Attached? = Null
+    Field attached: Attached[] = []
 
     // Made by a Class extending it, for a handle C made, which it keeps as the handle's wrapper.
     Package New(handle: UInt64)
@@ -127,6 +131,14 @@ Public Class Entity Implements Printable
         Local entity = Live("SetParent")
         Local to: UInt64 = parent != Null ? parent.Live("SetParent") : 0
         If !fbe_entity_set_parent(entity, to, keepWorld) Then Failed("SetParent")
+    End Method
+
+    /// Puts the entity at `index` among what's beside it, under its parent or at the top of its
+    /// World, 0 first, which moves nothing, so its collisions don't know. Outside those panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetSiblingIndex(index: Int)
+        Local entity = Live("SetSiblingIndex")
+        If !fbe_entity_set_sibling_index(entity, index As Int32) Then Failed("SetSiblingIndex")
     End Method
 
     /// The entity's parent, Null at the top of its World.
@@ -201,19 +213,24 @@ Public Class Entity Implements Printable
         Return Present(EntityOf(fbe_entity_copy(entity, world, under)), Self, "Copy")
     End Method
 
-    /// Keeps the game's own object on the entity, as Data<T>() gives it back, or lets it go with
-    /// Null.
+    /// Keeps the game's own object on the entity, one of each type, as Data<T>() gives it back, in
+    /// place of any it kept of that type, or lets that go with Null.
     @MainThread @PanicsAtCaller
     Public Method SetData<T: Class>(data: T?)
         Live("SetData")
-        attached = data != Null ? Attachment<T>(data) : Null
+        attached = attached.Filter(Function(each: Attached) => (each As? Attachment<T>) == Null)
+        If data != Null Then attached.Add(Attachment<T>(data))
     End Method
 
     /// The object SetData kept, if it was set as a T, or Null.
     @MainThread @PanicsAtCaller
     Public Method Data<T: Class>(): T?
         Live("Data")
-        Return (attached As? Attachment<T>)?.value
+        For each In attached
+            Local kept = each As? Attachment<T>
+            If kept != Null Then Return kept.value
+        End For
+        Return Null
     End Method
 
     /// The entity's name and kind, as `Pivot "door"`, or `freed Pivot`.
@@ -240,13 +257,13 @@ Public Class Entity Implements Printable
 
     // Lets go of what was attached, keeping the handle.
     Package Method LetGo()
-        attached = Null
+        attached = []
     End Method
 
     // Lets go of the handle and what was attached, once C has freed it.
     Package Method Forget()
         handle = 0
-        attached = Null
+        attached = []
     End Method
 End Class
 
@@ -307,6 +324,8 @@ Package Function EntityOf(handle: UInt64): Entity?
             Return Mirror(handle)
         Case FBE_ENTITY_TERRAIN
             Return Terrain(handle)
+        Case FBE_ENTITY_PARTICLES
+            Return Particles(handle)
     End Select
     Panic("an entity of kind {kind} has no wrapper")
 End Function

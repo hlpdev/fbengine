@@ -56,13 +56,13 @@ Public Class Screen
         If !fbe_gpu_set_render_size(width, height) Then Panic(LastError())
     End Method
 
-    /// How wide the screen is in pixels, 0 without a window.
+    /// How wide the screen is in pixels, 0 without a window, or a GPU to draw it.
     @MainThread Public Static Method Width(): Int32
         Local shown = Texture()
         Return shown != Null ? shown.Width() : 0
     End Method
 
-    /// How high the screen is in pixels, 0 without a window.
+    /// How high the screen is in pixels, 0 without a window, or a GPU to draw it.
     @MainThread Public Static Method Height(): Int32
         Local shown = Texture()
         Return shown != Null ? shown.Height() : 0

@@ -506,6 +506,20 @@ FBE_API int32_t fbe_model_material_image(uint64_t load, int32_t material, int32_
     return read != nullptr ? read->image : -1;
 }
 
+FBE_API const char* fbe_model_material_name(uint64_t load, int32_t index) {
+    const assets::model_t* model = model_of(load);
+    return model != nullptr && index >= 0 && std::cmp_less(index, model->materials.size())
+               ? model->materials[static_cast<std::size_t>(index)].name.c_str()
+               : "";
+}
+
+FBE_API const char* fbe_model_image_name(uint64_t load, int32_t index) {
+    const assets::model_t* model = model_of(load);
+    return model != nullptr && index >= 0 && std::cmp_less(index, model->image_names.size())
+               ? model->image_names[static_cast<std::size_t>(index)].c_str()
+               : "";
+}
+
 FBE_API int32_t fbe_model_image_levels(uint64_t load, int32_t index) {
     const assets::model_t* model = model_of(load);
     if (model == nullptr || index < 0 || std::cmp_greater_equal(index, model->images.size())) {

@@ -1,0 +1,673 @@
+// The editor: its window, its menus and commands, what can be undone, its panes, and the project
+// open in them.
+
+Import std.collections
+Import std.core
+Import std.data
+Import std.io
+Import std.math
+Import fbengine
+Import fbengine_ui
+Import "./commands"
+Import "./component"
+Import "./dialog"
+Import "./dock"
+Import "./handles"
+Import "./history"
+Import "./inspector"
+Import "./menu"
+Import "./project"
+Import "./scene"
+Import "./session"
+Import "./tree"
+Import "./view"
+
+/// fbengine's editor. Start opens its window; then each frame, Step, until Quitting, then Finish.
+/// Everything it does is a command in Actions, so a test runs them as its menus and keys do.
+Public Final Class Editor
+    /// What it does.
+    Public ReadOnly Field Actions: Commands
+    /// What can be undone.
+    Public ReadOnly Field Edits: History
+    /// Its panes.
+    Public ReadOnly Field Docked: Dock
+    /// Its menus.
+    Public ReadOnly Field Menus: MenuBar
+    /// Its UI.
+    Public ReadOnly Field Shown: Ui
+    /// What's kept between runs.
+    Public ReadOnly Field Kept: Session
+    /// The scene being edited.
+    Public Field Edited: EditedScene
+    /// The view of it.
+    Public ReadOnly Field View: SceneView
+    /// Its entities.
+    Public ReadOnly Field Tree: SceneTree
+    /// What's selected and its properties.
+    Public ReadOnly Field Inspector: SceneInspector
+    /// What kinds of component the project has.
+    Public ReadOnly Field Kinds: GameComponents
+    Field project: GameProject? = Null
+    Field dialog: Dialog? = Null
+    Field welcome: Node
+    Field quitting: Bool = False
+    Field titled: String = ""
+
+    /// An editor keeping what it keeps in `settings`, or the OS's folder for settings. It's an
+    /// IOError if that can't be read.
+    Public New(settings: Path? = Null) Throws IOError
+        Kept = Try Session(settings)
+        Actions = Commands()
+        Edits = History()
+        Edited = EditedScene()
+        View = SceneView(Edited, Edits)
+        Tree = SceneTree(Edited, Edits)
+        Kinds = GameComponents()
+        Inspector = SceneInspector(Edited, Edits, Kinds)
+        Docked = Dock()
+        Menus = MenuBar(Actions)
+        welcome = Widget("welcome", "welcome")
+        Local root = Node("root")
+        root.SetGap(0.0)
+        root.Add(Menus)
+        Local area = Node("area")
+        area.SetArrangement(Arrangement.STACK)
+        area.SetHeight(Sizing.Fill())
+        Docked.SetAnchors(Anchors.Fill())
+        area.Add(Docked)
+        welcome.SetAnchors(Anchors.Fill())
+        welcome.SetGap(8.0)
+        area.Add(welcome)
+        root.Add(area)
+        Shown = Ui(root, EditorTheme())
+        Local actions = Actions
+        Shown.SetShortcuts(Function[Weak actions](stroke: Keystroke): Bool
+            Local own = actions
+            Return own != Null && own.Seen(stroke)
+        End Function)
+        Edits.OnChanged(Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            If own.Edits.TreeChanged() Then own.Tree.MarkChanged()
+            own.Inspector.MarkChanged()
+        End Function)
+        Edits.OnFailed(Function[Weak Self](edit: Edit, error: IOError)
+            Self?.Said("Couldn't {edit.Name}", error.Message)
+        End Function)
+        AddPanes()
+        AddCommands()
+        AddMenus()
+        ShowWelcome()
+    End New
+
+    /// Opens its window as it last was, and the project in `folder`, if it's given. It's a
+    /// GraphicsError if the window can't open.
+    Public Method Start(folder: Path? = Null) Throws GraphicsError
+        Local place = Kept.Window()
+        Window.SetResizable(True)
+        Try Graphics(place.Width, place.Height)
+        Try Window.SetMinimumSize(640, 400)
+        Local x = place.X
+        Local y = place.Y
+        // Where a display that's gone was, it's left where it opened.
+        If x != Null && y != Null && Window.PlaceShows(x, y, place.Width, place.Height)
+            Try Window.SetPosition(x, y)
+        End If
+        Retitled()
+        If folder != Null Then OpenFolder(folder)
+    End Method
+
+    /// One frame: what the window's read, what it does, and its UI drawn.
+    Public Method Step()
+        Flip()
+        Tree.Update()
+        Kinds.Update()
+        Local failure = Kinds.TakeFailure()
+        If failure != Null Then Said("Couldn't read the game's components", failure)
+        Inspector.Update()
+        Shown.Update()
+        Menus.Update()
+        View.Update(Frame.Delta())
+        Local showing = dialog
+        If showing != Null Then showing.Update()
+        Retitled()
+        If Window.Closed() Then quitting = True
+        If Screen.Texture() == Null Then Return
+        If Docked.Active("scene") && project != Null Then View.Render()
+        Screen.Canvas().Clear()
+        Shown.Draw()
+    End Method
+
+    /// Whether it's been asked to end.
+    Public Method Quitting(): Bool => quitting
+
+    /// Keeps what's kept, closes the project, and its window.
+    Public Method Finish()
+        CloseProject()
+        If Window.Open() Then Kept.SetWindow(Window.X(), Window.Y(), Window.Width(),
+                                             Window.Height())
+        View.Free()
+        Edited.Free()
+        EndGraphics()
+    End Method
+
+    /// The project open, or Null.
+    Public Method Current(): GameProject? => project
+
+    /// The dialog showing, or Null.
+    Public Method ShowingDialog(): Dialog?
+        Local own = dialog
+        Return own != Null && own.Showing() ? own : Null
+    End Method
+
+    /// Opens the project in `folder`, in place of the one open, and puts back what was open in it.
+    /// One that can't be says why in a dialog, leaving the one open as it is.
+    Public Method OpenFolder(folder: Path)
+        Local opened: GameProject? = Null
+        Try
+            opened = Try GameProject.Check(folder)
+        Catch error As ProjectError
+            // The one that's open stays open.
+            Said("Couldn't open that project", error.Message)
+            Return
+        End Try
+        If opened == Null Then Return
+        CloseProject()
+        opened.Mount()
+        project = opened
+        NewScene()
+
+        Kept.AddRecent(opened.Folder.Text)
+        Local saved = Kept.Kept(opened.Folder.Text)
+        If saved == Null || !Docked.Restore(saved["layout"] ?? Value.Object()) Then DefaultLayout()
+        ShowWelcome()
+        ReadKinds()
+    End Method
+
+    /// Says the project open may run its code, as asking did, from now on, and reads what kinds of
+    /// component it has.
+    Public Method TrustProject()
+        Local open = project
+        If open == Null Then Return
+        Kept.Trust(open.Folder.Text)
+        Kinds.Start(open.Folder)
+    End Method
+
+    // Reads what kinds of component the project has, which runs its code, so a project is asked about
+    // once, as a folder from anywhere might be anything.
+    Method ReadKinds()
+        Local open = project
+        If open == Null || !GameComponents.HasProgram(open.Folder) Then Return
+        If Kept.Trusted(open.Folder.Text)
+            Kinds.Start(open.Folder)
+            Return
+        End If
+        Kinds.HeldBack = True
+        Kinds.Set(Kinds.Kinds())
+        Local asking = Dialog("Run this project's code?",
+                              "{open.Folder} has a program that says what components it has. To show them, the editor builds and runs it, which can do anything a program can. Run it only if you trust where this project came from.")
+        asking.AddButton("Not Now")
+        asking.AddButton("Run It", Function[Weak Self]()
+            Self?.TrustProject()
+        End Function)
+        Showed(asking)
+    End Method
+
+    /// Keeps what's open in the project, and closes it.
+    Public Method CloseProject()
+        Local open = project
+        If open == Null Then Return
+        Local kept = Value.Object()
+        kept["layout"] = Docked.Saved()
+        Kept.Keep(open.Folder.Text, kept)
+        open.Close()
+        project = Null
+        Kinds.Stop()
+        Kinds.Set([])
+        Docked.Clear()
+        NewScene()
+        ShowWelcome()
+    End Method
+
+    /// Puts the panes as they are at first.
+    Public Method DefaultLayout()
+        Docked.Clear()
+        Docked.Show("scene")
+        Docked.Show("tree")
+        Docked.Move("tree", "scene", DockSide.LEFT, 0.2)
+        Docked.Show("inspector")
+        Docked.Move("inspector", "scene", DockSide.RIGHT, 0.3)
+        Docked.Show("assets")
+        Docked.Move("assets", "scene", DockSide.BOTTOM, 0.3)
+        Docked.Show("output")
+        Docked.Move("output", "assets", DockSide.CENTER)
+        Docked.Activate("scene")
+    End Method
+
+    // A scene with nothing in it, in place of what's there, with nothing to undo in it.
+    Method NewScene()
+        Edits.Clear()
+        Local old = Edited
+        Edited = EditedScene()
+        View.SetScene(Edited)
+        Tree.SetScene(Edited)
+        Inspector.SetScene(Edited)
+        old.Free()
+    End Method
+
+    Method Said(title: String, text: String)
+        Local says = Dialog(title, text)
+        says.AddButton("OK")
+        Showed(says)
+    End Method
+
+    // Shows `showing`, in place of what dialog's showing.
+    Method Showed(showing: Dialog)
+        Local old = dialog
+        If old != Null Then old.Close()
+        dialog = showing
+        showing.Show(Shown)
+    End Method
+
+    // Asks for a project's folder.
+    Method AskForFolder()
+        Local asking = Dialog("Open a project", "The folder with its project.toml:")
+        Local field = TextField("", "", "dialog.path")
+        field.SetTranslates(False)
+        // As wide whatever's typed, which scrolls, so the dialog stays where it is.
+        field.SetWidth(Sizing.Fixed(420.0))
+        asking.AddContent(field)
+        asking.AddButton("Cancel")
+        Local opening = asking.AddButton("Open", Function[Weak Self]()
+            Local own = Self
+            If own != Null && field.Text() != "" Then own.OpenFolder(Path(field.Text()))
+        End Function)
+        asking.SubmitWith(field, opening)
+        Showed(asking)
+    End Method
+
+    // What's shown with no project: the ways to open one.
+    Method ShowWelcome()
+        welcome.SetVisible(project == Null)
+        Docked.SetVisible(project != Null)
+        For child In welcome.Children()
+            welcome.Remove(child)
+        End For
+        If project != Null Then Return
+        Local title = Label("fbengine")
+        title.SetStyleName("welcome.title")
+        title.SetTranslates(False)
+        welcome.Add(title)
+        Local open = Button("Open a project…", "welcome.open")
+        open.SetTranslates(False)
+        open.SetAlignSelf(Align.START)
+        open.OnClick(Function[Weak Self](pressed: Button)
+            Local own = Self
+            If own != Null Then own.Actions.Run("file.open")
+        End Function)
+        welcome.Add(open)
+        For path In Kept.Recent()
+            Local recent = Button(path, "welcome.recent")
+            recent.SetTranslates(False)
+            recent.SetAlignSelf(Align.START)
+            recent.OnClick(Function[Weak Self](pressed: Button)
+                Local own = Self
+                If own != Null Then own.OpenFolder(Path(path))
+            End Function)
+            welcome.Add(recent)
+        End For
+    End Method
+
+    Method Retitled()
+        Local open = project
+        Local title = open == Null ? "fbengine editor" : "{open.Name}{Edits.Modified() ? " *" : ""} - fbengine editor"
+        If title == titled Then Return
+        titled = title
+        Window.SetTitle(title)
+    End Method
+
+    // A pane for each thing, which the steps after this one fill.
+    Method AddPanes()
+        View.SetWidth(Sizing.Fill())
+        Docked.AddPane(Pane("scene", "Scene", View))
+        Tree.SetWidth(Sizing.Fill())
+        Docked.AddPane(Pane("tree", "Tree", Tree))
+        Inspector.SetWidth(Sizing.Fill())
+        Docked.AddPane(Pane("inspector", "Inspector", Inspector))
+        For each In [("assets", "Assets"), ("output", "Output")]
+            Local id, title = each
+            Local content = Widget("pane", "pane." + id)
+            Docked.AddPane(Pane(id, title, content))
+        End For
+    End Method
+
+    Method AddCommands()
+        Local hasProject = Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Current() != Null
+        End Function
+        Actions.Add("file.open", "Open Project…", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.AskForFolder()
+        End Function, PrimaryKey(Key.O))
+        Actions.Add("file.close", "Close Project", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.CloseProject()
+        End Function, Null, hasProject)
+        Actions.Add("file.reload_components", "Reload Components", Function[Weak Self]()
+            Self?.ReadKinds()
+        End Function, Null, hasProject)
+        Actions.Add("file.quit", "Quit", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.quitting = True
+        End Function, PrimaryKey(Key.Q))
+        Actions.Add("edit.undo", "Undo", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Undo()
+        End Function, PrimaryKey(Key.Z), Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Edits.CanUndo() && !own.View.HandleHeld()
+        End Function, True)
+        Actions.Add("edit.redo", "Redo", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Redo()
+        End Function, PrimaryKey(Key.Z, True), Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Edits.CanRedo() && !own.View.HandleHeld()
+        End Function, True)
+        For pane In Docked.Panes()
+            Local id = pane.Id
+            Actions.Add("view.{id}", pane.Title, Function[Weak Self]()
+                Local own = Self
+                If own == Null Then Return
+                If own.Docked.Showing(id) && own.Docked.Active(id)
+                    own.Docked.Hide(id)
+                Else
+                    own.Docked.Show(id)
+                End If
+            End Function, Null, hasProject)
+        End For
+        Actions.Add("view.close", "Close Pane", Function[Weak Self]()
+            Local own = Self
+            If own != Null && own.Docked.CurrentPane() != "" Then own.Docked.Hide(own.Docked.CurrentPane())
+        End Function, Null, hasProject)
+        Actions.Add("view.close_others", "Close Other Panes", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            For id In own.Docked.ShownPanes()
+                If id != own.Docked.CurrentPane() Then own.Docked.Hide(id)
+            End For
+        End Function, Null, hasProject)
+        Actions.Add("view.reset", "Reset Layout", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.DefaultLayout()
+        End Function, Null, hasProject)
+        Local notFlying = Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Current() != Null && !own.View.Busy() &&
+                   own.Docked.Active("scene")
+        End Function
+        Actions.Add("tool.move", "Move", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.View.Tool = HandleTool.MOVE
+        End Function, Shortcut(Key.W, False, False, False), notFlying)
+        Actions.Add("tool.turn", "Turn", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.View.Tool = HandleTool.TURN
+        End Function, Shortcut(Key.E, False, False, False), notFlying)
+        Actions.Add("tool.scale", "Scale", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.View.Tool = HandleTool.SCALE
+        End Function, Shortcut(Key.R, False, False, False), notFlying)
+        Actions.Add("tool.space", "World or Local", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            own.View.Axes =
+                own.View.Axes == HandleSpace.WORLD ? HandleSpace.LOCAL : HandleSpace.WORLD
+        End Function, Shortcut(Key.X, False, False, False), notFlying)
+        Actions.Add("tool.snap", "Snap", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.View.Snap.On = !own.View.Snap.On
+        End Function, Shortcut(Key.G, False, False, False), notFlying)
+        Actions.Add("view.frame", "Frame Selected", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.View.FrameSelected()
+        End Function, Shortcut(Key.F, False, False, False), notFlying)
+        Actions.Add("select.none", "Select Nothing", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edited.SelectOnly(Null)
+        End Function, Shortcut(Key.ESCAPE, False, False, False), Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Current() != Null && !own.View.HandleHeld()
+        End Function)
+        Actions.Add("add.cube", "Cube", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(MadeEdit("Add Cube", own.Edited, Function(): Entity
+                Local cube = Mesh(Geometry.Cube())
+                cube.SetName("Cube")
+                cube.SetMaterial(Material(Color(0.5, 0.5, 0.5)))
+                Return cube
+            End Function))
+        End Function, Null, hasProject)
+        Actions.Add("add.light", "Light", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(MadeEdit("Add Light", own.Edited,
+                                                          Function(): Entity
+                Local light = Light(LightType.POINT)
+                light.SetName("Light")
+                Return light
+            End Function))
+        End Function, Null, hasProject)
+        Local anySelected = Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Edited.Selected().Count > 0 && !own.View.HandleHeld() &&
+                   !own.Tree.Renaming()
+        End Function
+        Actions.Add("tree.rename", "Rename", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            Local selected = own.Edited.Selected()
+            If selected.Count == 0 Then Return
+            If own.Docked.Showing("tree") && own.Docked.Active("tree")
+                own.Tree.BeginRename(selected[selected.Count - 1])
+            Else
+                own.Docked.Show("tree")
+                own.Tree.RenameSoon(selected[selected.Count - 1])
+            End If
+        End Function, Shortcut(Key.F2, False, False, False), anySelected)
+        Actions.Add("tree.duplicate", "Duplicate", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(CopyEdit(own.Edited, own.Edited.SelectedTops()))
+        End Function, PrimaryKey(Key.D), anySelected)
+        Actions.Add("tree.hide", "Hide or Show", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            Local selected = own.Edited.Selected()
+            If selected.Count == 0 Then Return
+            own.Edits.Commit(HideEdit(selected, !selected[selected.Count - 1].Hidden()))
+        End Function, Shortcut(Key.H, False, False, False), Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Edited.Selected().Count > 0 && !own.View.Busy() &&
+                   !own.Tree.Renaming()
+        End Function)
+        Actions.Add("tree.delete", "Delete", Function[Weak Self]()
+            Local own = Self
+            If own != Null Then own.Edits.Commit(RemoveEdit(own.Edited, own.Edited.SelectedTops()))
+        End Function, Shortcut(Key.DELETE, False, False, False), anySelected)
+        Actions.Add("tree.find", "Find", Function[Weak Self]()
+            Local own = Self
+            If own == Null Then Return
+            own.Docked.Show("tree")
+            own.Tree.FocusFind()
+        End Function, PrimaryKey(Key.F), Function[Weak Self](): Bool
+            Local own = Self
+            Return own != Null && own.Current() != Null && !own.Tree.Renaming()
+        End Function)
+        Tree.OnRowMenu(Function[Weak Self](ui: Ui, point: Vec2)
+            Local own = Self
+            If own != Null
+                OpenMenu(ui, own.Actions,
+                         ["tree.rename", "tree.duplicate", "tree.hide", SEPARATOR, "tree.delete"],
+                         point)
+            End If
+        End Function)
+        Docked.OnTabMenu(Function[Weak Self](ui: Ui, id: String, point: Vec2)
+            Local own = Self
+            If own != Null Then OpenMenu(ui, own.Actions, ["view.close", "view.close_others"],
+                                         point)
+        End Function)
+    End Method
+
+    Method AddMenus()
+        Menus.AddMenu("File",
+                      ["file.open", "file.close", SEPARATOR, "file.reload_components", SEPARATOR,
+                       "file.quit"])
+        Menus.AddMenu("Edit",
+                      ["edit.undo", "edit.redo", SEPARATOR, "tree.find", "tree.rename",
+                       "tree.duplicate", "tree.hide", "tree.delete",
+                       SEPARATOR, "select.none"])
+        Menus.AddMenu("Add", ["add.cube", "add.light"])
+        Menus.AddMenu("Tools",
+                      ["tool.move", "tool.turn", "tool.scale", SEPARATOR, "tool.space",
+                       "tool.snap"])
+        Local views: String[] = []
+        For pane In Docked.Panes()
+            views.Add("view.{pane.Id}")
+        End For
+        views.Add(SEPARATOR)
+        views.Add("view.frame")
+        views.Add("view.reset")
+        Menus.AddMenu("View", views)
+    End Method
+End Class
+
+// The dark theme, with what the editor's own widgets look like.
+Function EditorTheme(): Theme
+    Local theme = Theme.Dark()
+    Local plain = StyleFields()
+    plain.Background = Color.Hex("#1c1f24")
+    theme.SetFields("menubar", plain)
+    theme.SetFields("dock.bar", plain)
+    Local title = StyleFields()
+    title.Padding = Insets.Symmetric(10.0, 4.0)
+    title.FontSize = 14.0
+    theme.SetFields("menubar.title", title)
+    theme.SetFields("dock.tab", title)
+    theme.SetFields("dock.tab.active", title)
+    Local hovered = StyleFields()
+    hovered.Background = Color.Hex("#2b3038")
+    theme.SetFields("menubar.title", hovered, WidgetState.HOVERED)
+    theme.SetFields("dock.tab", hovered, WidgetState.HOVERED)
+    theme.SetFields("menu.item", hovered, WidgetState.HOVERED)
+    theme.SetFields("menu.item", hovered, WidgetState.FOCUSED)
+    Local active = StyleFields()
+    active.Background = Color.Hex("#30353d")
+    theme.SetFields("dock.tab.active", active)
+    Local body = StyleFields()
+    body.Background = Color.Hex("#14161a")
+    body.Padding = Insets.All(16.0)
+    theme.SetFields("welcome", body)
+    Local pane = StyleFields()
+    pane.Background = Color.Hex("#14161a")
+    theme.SetFields("dock.pane", pane)
+    Local menu = StyleFields()
+    menu.Background = Color.Hex("#1c1f24")
+    menu.Border = Color.Hex("#30353d")
+    menu.BorderWidth = 1.0
+    menu.Padding = Insets.All(4.0)
+    theme.SetFields("menu", menu)
+    Local item = StyleFields()
+    item.Padding = Insets.Symmetric(10.0, 4.0)
+    item.FontSize = 14.0
+    theme.SetFields("menu.item", item)
+    Local line = StyleFields()
+    line.Background = Color.Hex("#30353d")
+    theme.SetFields("menu.separator", line)
+    Local splitter = StyleFields()
+    splitter.Background = Color.Hex("#0d0e11")
+    theme.SetFields("dock.splitter", splitter)
+    Local grabbing = StyleFields()
+    grabbing.Background = Color.Hex("#4c8dff")
+    theme.SetFields("dock.splitter", grabbing, WidgetState.HOVERED)
+    theme.SetFields("dock.splitter", grabbing, WidgetState.PRESSED)
+    Local row = StyleFields()
+    row.Padding = Insets.Symmetric(6.0, 2.0)
+    row.FontSize = 14.0
+    For name In ["tree.row", "tree.row.selected", "tree.row.hidden", "tree.row.selected.hidden",
+                 "tree.row.under", "tree.row.selected.under"]
+        theme.SetFields(name, row)
+    End For
+    Local rowOver = StyleFields()
+    rowOver.Background = Color.Hex("#2b3038")
+    theme.SetFields("tree.row", rowOver, WidgetState.HOVERED)
+    theme.SetFields("tree.row.hidden", rowOver, WidgetState.HOVERED)
+    theme.SetFields("tree.row.under", rowOver, WidgetState.HOVERED)
+    Local chosen = StyleFields()
+    chosen.Background = Color.Hex("#2f4a7a")
+    theme.SetFields("tree.row.selected", chosen)
+    theme.SetFields("tree.row.selected.hidden", chosen)
+    theme.SetFields("tree.row.selected.under", chosen)
+    Local dim = StyleFields()
+    dim.Foreground = Color.Hex("#7d838c")
+    theme.SetFields("tree.row.hidden", dim)
+    theme.SetFields("tree.row.selected.hidden", dim)
+    Local underDim = StyleFields()
+    underDim.Foreground = Color.Hex("#a3a8b0")
+    theme.SetFields("tree.row.under", underDim)
+    theme.SetFields("tree.row.selected.under", underDim)
+    Local tree = StyleFields()
+    tree.Background = Color.Hex("#14161a")
+    theme.SetFields("tree", tree)
+    theme.SetFields("inspector", tree)
+    Local titled = StyleFields()
+    titled.FontSize = 14.0
+    titled.Padding = Insets.Symmetric(6.0, 4.0)
+    theme.SetFields("inspector.heading", titled)
+    Local inspected = StyleFields()
+    inspected.Padding = Insets.Symmetric(6.0, 1.0)
+    theme.SetFields("inspector.row", inspected)
+    Local hint = StyleFields()
+    hint.Background = Color(0.3, 0.55, 1.0, 0.3)
+    hint.Border = Color.Hex("#4c8dff")
+    hint.BorderWidth = 2.0
+    theme.SetFields("dock.hint", hint)
+    theme.SetFields("tree.hint", hint)
+    Local dialog = StyleFields()
+    dialog.Background = Color.Hex("#1c1f24")
+    dialog.Border = Color.Hex("#4c8dff")
+    dialog.BorderWidth = 1.0
+    dialog.CornerRadius = 6.0
+    dialog.Padding = Insets.All(16.0)
+    theme.SetFields("dialog", dialog)
+    // What's in a dialog is in its box, with none of its own, as its name would give it.
+    Local plainly = StyleFields()
+    plainly.Background = Color(0, 0, 0, 0)
+    plainly.Border = Color(0, 0, 0, 0)
+    plainly.BorderWidth = 0.0
+    plainly.Padding = Insets.All(0.0)
+    theme.SetFields("dialog.said", plainly)
+    theme.SetFields("dialog.text", plainly)
+    Local heading = StyleFields()
+    heading.Background = Color(0, 0, 0, 0)
+    heading.Border = Color(0, 0, 0, 0)
+    heading.BorderWidth = 0.0
+    heading.Padding = Insets.All(0.0)
+    heading.FontSize = 20.0
+    theme.SetFields("dialog.title", heading)
+    theme.SetFields("welcome.title", heading)
+    // A field's smaller than the dark theme's, as the inspector has rows of them.
+    Local field = StyleFields()
+    field.Background = Color.Hex("#14161a")
+    field.Border = Color.Hex("#30353d")
+    field.BorderWidth = 1.0
+    field.CornerRadius = 4.0
+    field.Padding = Insets.Symmetric(6.0, 3.0)
+    field.FontSize = 14.0
+    theme.SetFields("field", field)
+    Local small = StyleFields()
+    small.FontSize = 14.0
+    theme.SetFields("inspector.title", small)
+    theme.SetFields("inspector.note", small)
+    theme.SetFields("inspector.nothing", small)
+    Return theme
+End Function

@@ -203,3 +203,70 @@ TEST_CASE("moves on the workers keep to scratches made before they start", "[sce
     CHECK(fbe::scene::move_scratch_count() == count);
     CHECK(first == second);
 }
+
+TEST_CASE("a decal leaves a far mesh's tree unmade", "[scene][decal]") {
+    const std::uint64_t world = fbe_world_create();
+    const std::uint64_t mesh = fbe_entity_create(world, 0, FBE_ENTITY_MESH);
+    const std::uint64_t geometry = fbe_geometry_cube();
+    REQUIRE(fbe_mesh_set_geometry(mesh, geometry));
+    REQUIRE(fbe_entity_set_position(mesh, 1000.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    fbe_mat4_t box{};
+    box.m[0] = 1.0F;
+    box.m[5] = 1.0F;
+    box.m[10] = 1.0F;
+    box.m[15] = 1.0F;
+    const std::uint64_t made = fbe_geometry_decal(world, &box, 0.0F, 1.3F);
+    REQUIRE(made != 0);
+    const std::uint32_t slot = fbe::scene::geometry_slot(geometry);
+    CHECK(fbe::scene::scene().geometries[slot].tree_version == UINT64_MAX);
+    // And it's made for what's near, the check that says so.
+    REQUIRE(fbe_entity_set_position(mesh, 0.0F, 0.0F, 0.0F, FBE_SPACE_WORLD));
+    const std::uint64_t near_one = fbe_geometry_decal(world, &box, 0.0F, 1.3F);
+    CHECK(fbe::scene::scene().geometries[slot].tree_version != UINT64_MAX);
+    fbe_geometry_release(made);
+    fbe_geometry_release(near_one);
+    fbe_geometry_release(geometry);
+    fbe_world_free(world);
+    std::array<std::uint64_t, 4> some{};
+    while (fbe_entity_freed(some.data(), some.size()) != 0) {}
+}
+
+TEST_CASE("a place among siblings moves nothing", "[scene]") {
+    const std::uint64_t world = fbe_world_create();
+    const auto pivot = [&](std::uint64_t parent) {
+        return fbe_entity_create(world, parent, FBE_ENTITY_PIVOT);
+    };
+    const std::uint64_t parent = pivot(0);
+    const std::array<std::uint64_t, 3> children{ pivot(parent), pivot(parent), pivot(parent) };
+    const std::uint64_t under = pivot(children[2]);
+    fbe::scene::entities_t& entities = fbe::scene::scene().entities;
+    const auto slot = [](std::uint64_t entity) { return fbe::scene::entity_slot(entity); };
+    for (const std::uint64_t each : { children[0], children[1], children[2], under }) {
+        fbe::scene::update_world(slot(each));
+        REQUIRE_FALSE(entities.moved[slot(each)]);
+    }
+    REQUIRE(fbe_entity_set_sibling_index(children[2], 0));
+    CHECK(fbe_entity_child(parent, 0) == children[2]);
+    CHECK(fbe_entity_child(parent, 1) == children[0]);
+    CHECK(fbe_entity_child(parent, 2) == children[1]);
+    for (const std::uint64_t each : { children[0], children[1], children[2], under }) {
+        CHECK_FALSE(entities.moved[slot(each)]);
+    }
+    REQUIRE(fbe_entity_set_sibling_index(children[2], 2));
+    CHECK(fbe_entity_child(parent, 2) == children[2]);
+    // Where it is already, nothing, and outside what's there, it says so.
+    REQUIRE(fbe_entity_set_sibling_index(children[2], 2));
+    CHECK(fbe_entity_child(parent, 2) == children[2]);
+    CHECK_FALSE(fbe_entity_set_sibling_index(children[2], 3));
+    CHECK_FALSE(fbe_entity_set_sibling_index(children[2], -1));
+    CHECK(fbe_entity_child(parent, 2) == children[2]);
+    // At the top of its World, among its roots.
+    const std::uint64_t second = pivot(0);
+    REQUIRE(fbe_entity_set_sibling_index(second, 0));
+    std::array<std::uint64_t, 2> roots{};
+    REQUIRE(fbe_world_roots(world, roots.data(), 2) == 2);
+    CHECK(roots[0] == second);
+    CHECK(roots[1] == parent);
+    free_world(world);
+    CHECK_FALSE(fbe_entity_set_sibling_index(second, 0));
+}

@@ -3,6 +3,7 @@
 Import std.core
 Import std.ffi
 Import std.math
+Import "./attributes"
 Import "./c/fbe_scene"
 Import "./entity"
 Import "./window"
@@ -47,6 +48,7 @@ Public Final Class Light Extends Entity
 
     /// Sets the light's color, linear, as std.math's Color is; its alpha is left out. A color
     /// below 0 takes light away, as dark spots want.
+    @NoAlpha
     @MainThread @PanicsAtCaller
     Public Method SetColor(color: Color)
         If !fbe_light_set_color(Live("SetColor"), color.r, color.g, color.b) Then Failed("SetColor")
@@ -65,7 +67,76 @@ Public Final Class Light Extends Entity
         Return ColorOf(found)
     End Method
 
+    /// Sets whether the light has shadows, on what's drawn per pixel: UNLIT and VERTEX, the
+    /// fixed-function look, have none.
+    @MainThread @PanicsAtCaller
+    Public Method SetShadows(on: Bool)
+        If !fbe_light_set_shadows(Live("SetShadows"), on) Then Failed("SetShadows")
+    End Method
+
+    /// Whether the light has shadows.
+    @MainThread @PanicsAtCaller
+    Public Method Shadows(): Bool => fbe_light_shadows(Live("Shadows"))
+
+    /// Sets how many texels a side its shadows' tiles have, 16 to 8192, 1024 at first: a directional
+    /// light has one for each cascade and a point light six. Lights past what the atlas holds have
+    /// no shadows, the last first. Others panic.
+    @Limits(16, 8192)
+    @MainThread @PanicsAtCaller
+    Public Method SetShadowSize(size: Int32)
+        If !fbe_light_set_shadow_size(Live("SetShadowSize"), size) Then Failed("SetShadowSize")
+    End Method
+
+    /// How many texels a side its shadows' tiles have.
+    @MainThread @PanicsAtCaller
+    Public Method ShadowSize(): Int32 => fbe_light_shadow_size(Live("ShadowSize"))
+
+    /// Sets how far from a surface its shadows are compared, in depth, in world units, 0.02 at first,
+    /// and along its normal, in texels, 1.5 at first, against a surface shadowing itself. Below 0
+    /// panics.
+    @MainThread @PanicsAtCaller
+    Public Method SetShadowBias(depth: Float, normal: Float)
+        If !fbe_light_set_shadow_bias(Live("SetShadowBias"), depth, normal)
+            Failed("SetShadowBias")
+        End If
+    End Method
+
+    /// How far from a surface in depth its shadows are compared, in world units.
+    @MainThread @PanicsAtCaller
+    Public Method ShadowBias(): Float => fbe_light_shadow_bias(Live("ShadowBias"))
+
+    /// How far along a surface's normal its shadows are compared, in texels.
+    @MainThread @PanicsAtCaller
+    Public Method ShadowNormalBias(): Float =>
+        fbe_light_shadow_normal_bias(Live("ShadowNormalBias"))
+
+    /// Sets how many cascades a directional light's shadows have, 1 to 4, 3 at first. Others panic.
+    @Limits(1, 4)
+    @MainThread @PanicsAtCaller
+    Public Method SetCascades(cascades: Int32)
+        If !fbe_light_set_cascades(Live("SetCascades"), cascades) Then Failed("SetCascades")
+    End Method
+
+    /// How many cascades a directional light's shadows have.
+    @MainThread @PanicsAtCaller
+    Public Method Cascades(): Int32 => fbe_light_cascades(Live("Cascades"))
+
+    /// Sets how far from the camera a directional light's shadows reach, 100 at first, or its far
+    /// plane. One not above 0 panics.
+    @Limits(0.000001)
+    @MainThread @PanicsAtCaller
+    Public Method SetShadowDistance(distance: Float)
+        If !fbe_light_set_shadow_distance(Live("SetShadowDistance"), distance)
+            Failed("SetShadowDistance")
+        End If
+    End Method
+
+    /// How far from the camera a directional light's shadows reach.
+    @MainThread @PanicsAtCaller
+    Public Method ShadowDistance(): Float => fbe_light_shadow_distance(Live("ShadowDistance"))
+
     /// Sets how bright the light is, its color times this. Below 0 panics.
+    @Limits(0)
     @MainThread @PanicsAtCaller
     Public Method SetIntensity(intensity: Float)
         If !fbe_light_set_intensity(Live("SetIntensity"), intensity) Then Failed("SetIntensity")
@@ -80,6 +151,7 @@ Public Final Class Light Extends Entity
     /// `clamp(1 - (d / range)^4, 0, 1)^2 / max(d^2, 0.0001)`. Per vertex, Shading.VERTEX, it's where
     /// it starts to fall, `min(range / d, 1)`, with no end, as Blitz's LightRange. One not above 0
     /// panics.
+    @Limits(0, Above: True)
     @MainThread @PanicsAtCaller
     Public Method SetRange(range: Float)
         If !fbe_light_set_range(Live("SetRange"), range) Then Failed("SetRange")

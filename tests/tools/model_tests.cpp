@@ -11,12 +11,15 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <meshoptimizer.h>
 #include <random>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -374,4 +377,108 @@ TEST_CASE("a cooked glTF keeps its clips' frame rates", "[tools]") {
         FAIL(after.error().message);
     }
     REQUIRE(after->clips.at(0).frame_rate == 30);
+}
+
+namespace {
+
+/// `name` as a JSON string's insides.
+std::string json_string(std::string_view name) {
+    std::string out;
+    for (const char c : name) {
+        if (c == '"' || c == '\\') {
+            out += '\\';
+            out += c;
+        } else if (c == '\t') {
+            out += "\\t";
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
+/// A triangle's glTF, with `rest` after its first brace.
+std::string triangle_gltf(const test::temp_folder_t& folder, std::string_view rest) {
+    bytes_t buffer;
+    test::append<float>(buffer, { 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1 });
+    folder.write("tri.bin", buffer);
+    return std::string(
+               R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":60,"uri":"tri.bin"}],)") +
+           R"("bufferViews":[{"buffer":0,"byteLength":36},)" +
+           R"({"buffer":0,"byteOffset":36,"byteLength":24}],)" +
+           R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3",)" +
+           R"("min":[0,0,0],"max":[1,1,0]},)" +
+           R"({"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}],)" +
+           R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"material":0}]}],)" +
+           std::string(rest) + "}";
+}
+
+/// `json` at res://a.gltf, cooked, and decoded by what the engine decodes it with.
+assets::model_t cooked_model(const test::temp_folder_t& folder, const std::string& json) {
+    folder.write("a.gltf", json);
+    vfs::vfs_t files;
+    files.mount(path("res://"), vfs::folder(folder.path));
+    const vfs::bytes_t source = *files.read(path("res://a.gltf"));
+    std::expected<tools::bytes_t, tools::error_t> bytes =
+        tools::cook_model(source, path("res://a.gltf"), files.view(), { .optimize = false });
+    if (!bytes) {
+        FAIL(bytes.error().message);
+    }
+    assets::result_t<assets::model_t> model =
+        assets::decode_model(path("res://a.gltf"), *bytes, files.view(), {});
+    if (!model) {
+        FAIL(model.error().message);
+    }
+    return std::move(*model);
+}
+
+} // namespace
+
+TEST_CASE("a cook keeps names as they were, whatever they have in them", "[tools]") {
+    for (const std::string_view name : {
+             R"(a\brick.bmp)",
+             R"(\server\x.bmp)",
+             R"(a""b)",
+             R"(a\"b)",
+             "tab\there",
+             "plain",
+             "\\",
+         }) {
+        CAPTURE(name);
+        const test::temp_folder_t folder;
+        folder.write("tex.png", test::png(1, 1, 4, { 9, 9, 9, 255 }));
+        const std::string escaped = json_string(name);
+        std::string rest = R"("materials":[{"name":")";
+        rest += escaped;
+        rest += R"(","pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],)";
+        rest += R"("textures":[{"source":0}],"images":[{"name":")";
+        rest += escaped;
+        rest += R"(","uri":"tex.png"}],"nodes":[{"name":")";
+        rest += escaped;
+        rest += R"(","mesh":0}],"scenes":[{"nodes":[0]}])";
+        const assets::model_t model = cooked_model(folder, triangle_gltf(folder, rest));
+        CHECK(model.materials.at(0).name == name);
+        CHECK(model.image_names.at(0) == name);
+        CHECK(model.nodes.at(0).name == name);
+    }
+}
+
+TEST_CASE("a URI is called as it decodes, and a cook keeps its file", "[tools]") {
+    for (const auto& [uri, file] : {
+             std::pair{ "maps/my%20b.png", "maps/my b.png" },
+             std::pair{ "100%25.png", "100%.png" },
+             std::pair{ "plain.png", "plain.png" },
+         }) {
+        CAPTURE(uri);
+        const test::temp_folder_t folder;
+        folder.write(file, test::png(1, 1, 4, { 9, 9, 9, 255 }));
+        std::string rest = R"("materials":[{"pbrMetallicRoughness":)";
+        rest +=
+            R"({"baseColorTexture":{"index":0}}}],"textures":[{"source":0}],"images":[{"uri":")";
+        rest += uri;
+        rest += R"("}],"nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}])";
+        const assets::model_t model = cooked_model(folder, triangle_gltf(folder, rest));
+        CHECK(model.image_names.at(0) == file);
+        CHECK(model.images.at(0).width == 1);
+    }
 }

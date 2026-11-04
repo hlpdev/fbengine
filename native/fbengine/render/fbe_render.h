@@ -42,8 +42,9 @@ extern "C" {
 // material isn't fogged, 10 and 11 its FBE_DEPTH_, and 12 whether its matrix mirrors it, its
 // determinant below 0, which turns its triangles' winding around, 13 to 16 how many of its
 // material's layers have textures, and from 17 those layers', four bits each from the lowest, the
-// FBE_LAYER_ blend and over it the UV set, and 49 whether it's wireframe; the default material is a
-// new one's, but for a sprite, which is full-bright with none. A target's format and samples aren't
+// FBE_LAYER_ blend and over it the UV set, 49 whether it's wireframe, and 50 whether it's an
+// emitter's particles; the default material is a new one's, but for a sprite or an emitter, which
+// is full-bright with none. A target's format and samples aren't
 // in it, since a camera's draws all go into one target, and they're in the pipeline a pass makes of
 // it. An FBE_SHADING_VERTEX draw has its own lights, `light_count` of fbe_render_draw_lights'
 // indices from `light_first`; any other, 0 of them, as it's lit by its clusters.
@@ -80,6 +81,7 @@ typedef struct fbe_draw_light_t {
     float range;
     float inner_cosine;
     float outer_cosine;
+    int32_t shadow;
 } fbe_draw_light_t;
 
 // A cluster's lights: `count` of the light indices from `first`.
@@ -132,6 +134,10 @@ FBE_API int32_t fbe_render_draw_lights(uint64_t camera, float target_width, floa
 // with fbe_error's why, for a freed camera, a tween outside 0 to 1, a GPU that can't start, or with
 // no target and no window.
 FBE_API bool fbe_render_camera(uint64_t camera, float tween);
+// The most a side of the atlas shadows share can be, 256 to 8192, 4096 at first, up to what the
+// device goes to. It's as big as they need up to there, and let go of once they're gone.
+FBE_API bool fbe_render_set_shadow_atlas_limit(int32_t side);
+FBE_API int32_t fbe_render_shadow_atlas_limit(void);
 // Draws every one of a World's cameras, in their order; false as fbe_render_camera is, or for a
 // freed World.
 FBE_API bool fbe_render_world(uint64_t world, float tween);

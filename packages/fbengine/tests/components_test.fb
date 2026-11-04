@@ -1,0 +1,274 @@
+// Components: what's known of a kind by reflection, and one made from what's saved.
+
+Import std.collections
+Import std.core
+Import std.data
+Import std.io
+Import std.math
+Import std.os
+Import std.test
+Import std.text
+Import fbengine
+
+Enum Swing
+    INWARD
+    OUTWARD
+End Enum
+
+Class Hinge
+    @Limits(0, 10, Above: True)
+    Public Field Speed: Float = 2.5
+    Public Field Name: String = "door"
+    Public Field Open: Bool = False
+    Public Field Panels: Int = 3
+    Public Field Way: Swing = Swing.OUTWARD
+    @ShownInDegrees
+    Public Field Angle: Float = 0
+    @Skip
+    Public Field Cached: Int = 7
+    Field secret: Int = 9
+
+    Public Method Secret(): Int => secret
+End Class
+
+Class Placed
+    Public Field At: Vec3
+End Class
+
+Class NeedsSomething
+    Public Field Needed: String
+
+    Public Method OnLoaded() Throws ParseError
+        If Needed == "" Then Throw ParseError(ParseErrorKind.MISSING, "it needs something")
+    End Method
+End Class
+
+Function FieldOf(kind: ComponentKind, name: String): ComponentField
+    For field In kind.Fields
+        If field.Name == name Then Return field
+    End For
+    Panic("{kind.Name} has no {name}")
+End Function
+
+@Test
+Function AKindIsDescribedByItsPublicFields()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Hinge>("Hinge")
+    Local kind = Components.Kinds()[0]
+    Expect(kind.Name == "Hinge")
+    Local names = ""
+    For field In kind.Fields
+        names += field.Name + " "
+    End For
+    // Not what's kept to itself, nor what's @Skip.
+    Expect(names == "Speed Name Open Panels Way Angle ", names)
+    Expect(FieldOf(kind, "Speed").First.AsDouble() == 2.5)
+    Expect(FieldOf(kind, "Name").First.AsString() == "door")
+    Expect(FieldOf(kind, "Open").First.AsBool() == False)
+    Expect(FieldOf(kind, "Panels").First.AsInt() == 3)
+    Local way = FieldOf(kind, "Way")
+    Expect(way.First.AsString() == "OUTWARD")
+    Expect(way.Members.Count == 2 && way.Members[0] == "INWARD" && way.Members[1] == "OUTWARD")
+    // A String has no members, however it's saved.
+    Expect(FieldOf(kind, "Name").Members.Count == 0)
+    Local speed = FieldOf(kind, "Speed")
+    Expect(speed.Low == 0 && speed.High == 10 && speed.Above,
+           "{speed.Low} {speed.High} {speed.Above}")
+    Local panels = FieldOf(kind, "Panels")
+    Expect(panels.Low < -1000 && panels.High > 1000 && !panels.Above)
+    Expect(FieldOf(kind, "Angle").Degrees && !speed.Degrees)
+End Function
+
+@Test
+Function ItsDescriptionReadsBack() Throws IOError, ParseError
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Hinge>("Hinge")
+    Components.Add<Placed>("Placed")
+    Local kinds = Try Json.Read<ComponentKind[]>(Components.Description())
+    Expect(kinds.Count == 2 && kinds[0].Name == "Hinge" && kinds[1].Name == "Placed")
+    Expect(FieldOf(kinds[0], "Way").Members[1] == "OUTWARD")
+    Expect(FieldOf(kinds[0], "Speed").Above)
+    // A Struct is an Object of its Fields.
+    Local at = FieldOf(kinds[1], "At").First
+    Expect(at.IsObject && at["x"]?.AsDouble() == 0, "{at}")
+    // Where it's asked, it's written there.
+    Local temp = Try TempDir()
+    Local to = temp.Path / "kinds.json"
+    Env.Set("FBENGINE_COMPONENTS_TO", to.Text)
+    Defer Env.Unset("FBENGINE_COMPONENTS_TO")
+    Try Components.Describe()
+    Expect((Try File.ReadText(to)) == Components.Description())
+End Function
+
+@Test
+Function AttachMakesOneFromWhatsSaved()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Hinge>("Hinge")
+    Local pivot = Pivot()
+    Local values = Value.Object()
+    values["Speed"] = Value(7.0)
+    values["Way"] = Value("INWARD")
+    Expect(Components.Attach(pivot, "Hinge", values) == Null)
+    Local hinge = pivot.Data<Hinge>()
+    If hinge == Null Then Panic("it isn't on it")
+    Expect(hinge.Speed == 7 && hinge.Way == Swing.INWARD)
+    // What isn't saved is what a new one has, private or not.
+    Expect(hinge.Panels == 3 && hinge.Name == "door" && hinge.Secret() == 9 && hinge.Cached == 7)
+    // What it can't be says so, and leaves what's there.
+    Local bad = Value.Object()
+    bad["Way"] = Value("SIDEWAYS")
+    Local said = Components.Attach(pivot, "Hinge", bad)
+    Expect(said != Null, "it took a member there isn't")
+    Local still = pivot.Data<Hinge>()
+    Expect(still != Null && still.Speed == 7)
+    Expect(Components.Attach(pivot, "Nothing", values) ==
+           "there's no kind of component called Nothing")
+End Function
+
+@Test
+Function MembersAreAnEnumsOnly()
+    Expect(MembersOf<Swing>().Count == 2)
+    Expect(MembersOf<Float>().Count == 0)
+    Expect(MembersOf<Int>().Count == 0)
+    Expect(MembersOf<Bool>().Count == 0)
+End Function
+
+Enum Medal
+    BRONZE = 1
+    SILVER = 2
+End Enum
+
+Enum Gapped
+    LOW = 0
+    HIGH = 10
+End Enum
+
+@Flags
+Enum Access
+    READ
+    WRITE
+End Enum
+
+@Flags
+Enum Modes
+    NONE = 0
+    FAST
+    QUIET
+End Enum
+
+Class Awards
+    Public Field Won: Medal = Medal.SILVER
+    Public Field Level: Gapped = Gapped.HIGH
+    Public Field Rights: Access = Access.READ
+    Public Field Plain: String = "OUTWARD"
+End Class
+
+@Test
+Function EnumsWithGapsHaveAllTheirMembers()
+    Expect(MembersOf<Medal>().Count == 2 && MembersOf<Medal>()[0] == Medal.BRONZE)
+    Expect(MembersOf<Gapped>().Count == 2 && MembersOf<Gapped>()[1] == Gapped.HIGH)
+    // What has more values than members can't be listed by them.
+    Expect(MembersOf<Access>().Count == 0)
+    // One with a name for none, whose every combination's a name of a kind too.
+    Expect(MembersOf<Modes>().Count == 0, "{MembersOf<Modes>()}")
+    Expect(MembersOf<String>().Count == 0)
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Awards>("Awards")
+    Local kind = Components.Kinds()[0]
+    Local won = FieldOf(kind, "Won")
+    Expect(won.Enumerated && won.Members.Count == 2 && won.Members[1] == "SILVER", "{won.Members}")
+    Local level = FieldOf(kind, "Level")
+    Expect(level.Enumerated && level.Members[1] == "HIGH", "{level.Members}")
+    // It's an Enum, though nothing can list it, so it isn't to be typed as text.
+    Local rights = FieldOf(kind, "Rights")
+    Expect(rights.Enumerated && rights.Members.Count == 0, "{rights.Members}")
+    Local plain = FieldOf(kind, "Plain")
+    Expect(!plain.Enumerated && plain.Members.Count == 0)
+End Function
+
+Class Sized
+    Public Field Small: UInt8 = 3
+    Public Field Signed: Int8 = -3
+    Public Field Wide: UInt16 = 3
+    Public Field Plain: Int = 3
+End Class
+
+@Test
+Function AWholeNumberGoesOnlyAsFarAsItsType()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Sized>("Sized")
+    Local kind = Components.Kinds()[0]
+    Local small = FieldOf(kind, "Small")
+    Expect(small.Low == 0 && small.High == 255, "{small.Low} to {small.High}")
+    Local signed = FieldOf(kind, "Signed")
+    Expect(signed.Low == -128 && signed.High == 127, "{signed.Low} to {signed.High}")
+    Expect(FieldOf(kind, "Wide").High == 65535)
+    Expect(FieldOf(kind, "Plain").High > 65535)
+End Function
+
+Class Spaced
+    @Limits(0, 10)
+    Public Field Speed: Float = 2.5
+    @Limits(1, 5)
+    Public Field Parts: Vec3
+    Public Field Free: Float = 0
+
+    Public Method OnLoaded()
+        If Parts == Vec3(0, 0, 0) Then Parts = Vec3(2, 2, 2)
+    End Method
+End Class
+
+@Test
+Function AttachRefusesWhatsPastItsLimits()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Spaced>("Spaced")
+    Local pivot = Pivot()
+    Local below = Value.Object()
+    below["Speed"] = Value(-1.0)
+    Local said = Components.Attach(pivot, "Spaced", below)
+    Expect(said != Null && said.Contains("Speed"), said ?? "")
+    Expect(pivot.Data<Spaced>() == Null, "it put on what it refused")
+    Local above = Value.Object()
+    above["Speed"] = Value(10.5)
+    Expect(Components.Attach(pivot, "Spaced", above) != Null)
+    // Each number of a vector.
+    Local part = Value.Object()
+    Local parts = Value.Object()
+    parts["x"] = Value(3.0)
+    parts["y"] = Value(9.0)
+    parts["z"] = Value(3.0)
+    part["Parts"] = parts
+    Expect(Components.Attach(pivot, "Spaced", part) != Null, "it took a part past its limit")
+    // At the edges, and with what isn't said, it does.
+    Local edges = Value.Object()
+    edges["Speed"] = Value(10.0)
+    edges["Free"] = Value(-99.0)
+    Expect(Components.Attach(pivot, "Spaced", edges) == Null)
+    Local spaced = pivot.Data<Spaced>()
+    Expect(spaced != Null && spaced.Speed == 10 && spaced.Parts == Vec3(2, 2, 2))
+End Function
+
+Class Renamed2
+    @Rename("key")
+    Public Field Named: Float = 1
+End Class
+
+@Test
+Function AFieldIsKnownByTheKeyItsSavedBy()
+    Components.Clear()
+    Defer Components.Clear()
+    Components.Add<Renamed2>("Renamed")
+    Expect(Components.Kinds()[0].Fields[0].Name == "key", Components.Kinds()[0].Fields[0].Name)
+End Function

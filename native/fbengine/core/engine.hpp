@@ -16,7 +16,7 @@ void window_event(const SDL_Event& event);
 SDL_Window* window();
 
 /// Keeps `message` for fbe_error(), and returns false, for a call that failed.
-bool fail(std::string_view message);
+bool fail(std::string_view message) noexcept;
 
 /// SDL's last error, for fbe_error(), with what was being done, and returns false.
 bool fail_sdl(std::string_view doing);

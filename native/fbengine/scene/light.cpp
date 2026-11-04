@@ -117,6 +117,95 @@ FBE_API bool fbe_light_color(uint64_t light, fbe_color_t* color) {
     return true;
 }
 
+FBE_API bool fbe_light_set_shadows(uint64_t light, bool shadows) {
+    light_t* found = fbe::scene::light_of(light);
+    if (found == nullptr) {
+        return false;
+    }
+    found->shadows = shadows;
+    return true;
+}
+
+FBE_API bool fbe_light_shadows(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr && found->shadows;
+}
+
+FBE_API bool fbe_light_set_shadow_size(uint64_t light, int32_t size) {
+    light_t* found = fbe::scene::light_of(light);
+    if (found == nullptr) {
+        return false;
+    }
+    if (size < 16 || size > 8192) {
+        return fbe::fail(std::format("a shadow's tile is 16 to 8192 texels a side, not {}", size));
+    }
+    found->shadow_size = size;
+    return true;
+}
+
+FBE_API int32_t fbe_light_shadow_size(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr ? found->shadow_size : 0;
+}
+
+FBE_API bool fbe_light_set_shadow_bias(uint64_t light, float depth, float normal) {
+    light_t* found = fbe::scene::light_of(light);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(depth) || !std::isfinite(normal) || depth < 0.0F || normal < 0.0F) {
+        return fbe::fail(
+            std::format("a shadow's biases are 0 or more, not {} and {}", depth, normal));
+    }
+    found->shadow_bias = depth;
+    found->shadow_normal_bias = normal;
+    return true;
+}
+
+FBE_API float fbe_light_shadow_bias(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr ? found->shadow_bias : 0.0F;
+}
+
+FBE_API float fbe_light_shadow_normal_bias(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr ? found->shadow_normal_bias : 0.0F;
+}
+
+FBE_API bool fbe_light_set_cascades(uint64_t light, int32_t cascades) {
+    light_t* found = fbe::scene::light_of(light);
+    if (found == nullptr) {
+        return false;
+    }
+    if (cascades < 1 || cascades > 4) {
+        return fbe::fail(std::format("a light has 1 to 4 cascades, not {}", cascades));
+    }
+    found->cascades = cascades;
+    return true;
+}
+
+FBE_API int32_t fbe_light_cascades(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr ? found->cascades : 0;
+}
+
+FBE_API bool fbe_light_set_shadow_distance(uint64_t light, float distance) {
+    light_t* found = fbe::scene::light_of(light);
+    if (found == nullptr) {
+        return false;
+    }
+    if (!std::isfinite(distance) || distance <= 0.0F) {
+        return fbe::fail(std::format("a shadow reaches a distance above 0, not {}", distance));
+    }
+    found->shadow_distance = distance;
+    return true;
+}
+
+FBE_API float fbe_light_shadow_distance(uint64_t light) {
+    const light_t* found = fbe::scene::light_of(light);
+    return found != nullptr ? found->shadow_distance : 0.0F;
+}
+
 FBE_API bool fbe_light_set_intensity(uint64_t light, float intensity) {
     light_t* found = light_of(light);
     if (found == nullptr) {
@@ -188,6 +277,75 @@ FBE_API int32_t fbe_world_lights(uint64_t world, uint64_t* lights, int32_t capac
         lights[i] = fbe::scene::scene().entities.slots.handle(found[i]);
     }
     return static_cast<std::int32_t>(found.size());
+}
+
+FBE_API bool fbe_world_set_sky_atmosphere(uint64_t world, uint64_t sun, float brightness) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    if (slot == fbe::scene::none) {
+        return false;
+    }
+    if (sun != 0) {
+        const light_t* found = fbe::scene::light_of(sun);
+        if (found == nullptr) {
+            return false;
+        }
+        if (found->type != FBE_LIGHT_DIRECTIONAL) {
+            return fbe::fail("a sky's sun is a directional light");
+        }
+        if (fbe::scene::scene().entities.world[found->entity] != slot) {
+            return fbe::fail("a sky's sun is in its World");
+        }
+    }
+    if (!std::isfinite(brightness) || brightness < 0.0F) {
+        return fbe::fail(std::format("a sky's brightness is 0 or more, not {}", brightness));
+    }
+    fbe::scene::world_t& found = fbe::scene::scene().worlds[slot];
+    fbe::scene::release_texture(found.sky_texture);
+    found.sky_texture = 0;
+    found.sky = 1;
+    found.sky_light = sun;
+    found.sky_brightness = brightness;
+    found.sky_sun = fbe::scene::vec3_t(0.0F, 1.0F, 0.0F);
+    if (sun != 0) {
+        const std::uint32_t entity = fbe::scene::entity_slot(sun);
+        fbe::scene::update_world(entity);
+        found.sky_sun = fbe::scene::scene().entities.world_rotation[entity] *
+                        fbe::scene::vec3_t(0.0F, 0.0F, 1.0F);
+    }
+    return true;
+}
+
+FBE_API bool fbe_world_set_sky_texture(uint64_t world, uint64_t texture, float brightness) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    if (slot == fbe::scene::none) {
+        return false;
+    }
+    if (!std::isfinite(brightness) || brightness < 0.0F) {
+        return fbe::fail(std::format("a sky's brightness is 0 or more, not {}", brightness));
+    }
+    if (!fbe_texture_retain(texture)) {
+        return false;
+    }
+    fbe::scene::world_t& found = fbe::scene::scene().worlds[slot];
+    fbe::scene::release_texture(found.sky_texture);
+    found.sky_texture = texture;
+    found.sky = 2;
+    found.sky_light = 0;
+    found.sky_brightness = brightness;
+    return true;
+}
+
+FBE_API bool fbe_world_clear_sky(uint64_t world) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    if (slot == fbe::scene::none) {
+        return false;
+    }
+    fbe::scene::world_t& found = fbe::scene::scene().worlds[slot];
+    fbe::scene::release_texture(found.sky_texture);
+    found.sky_texture = 0;
+    found.sky = 0;
+    found.sky_light = 0;
+    return true;
 }
 
 FBE_API bool fbe_world_set_ambient(uint64_t world, float r, float g, float b) {

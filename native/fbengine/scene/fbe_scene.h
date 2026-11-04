@@ -15,14 +15,15 @@ extern "C" {
 #endif
 
 // What an entity is.
-#define FBE_ENTITY_PIVOT   0
-#define FBE_ENTITY_CAMERA  1
-#define FBE_ENTITY_LIGHT   2
-#define FBE_ENTITY_MESH    3
-#define FBE_ENTITY_SPRITE  4
-#define FBE_ENTITY_PLANE   5
-#define FBE_ENTITY_MIRROR  6
-#define FBE_ENTITY_TERRAIN 7
+#define FBE_ENTITY_PIVOT     0
+#define FBE_ENTITY_CAMERA    1
+#define FBE_ENTITY_LIGHT     2
+#define FBE_ENTITY_MESH      3
+#define FBE_ENTITY_SPRITE    4
+#define FBE_ENTITY_PLANE     5
+#define FBE_ENTITY_MIRROR    6
+#define FBE_ENTITY_TERRAIN   7
+#define FBE_ENTITY_PARTICLES 8
 
 // The space a transform is in: the entity's parent's, or the world's.
 #define FBE_SPACE_LOCAL 0
@@ -263,6 +264,9 @@ FBE_API const char* fbe_entity_name(uint64_t entity);
 // With `keep_world`, it stays where it is in the world and its local transform changes; without,
 // its local transform stays. False if the parent is the entity or under it.
 FBE_API bool fbe_entity_set_parent(uint64_t entity, uint64_t parent, bool keep_world);
+// Puts an entity at `index` among what's beside it, 0 first, which moves nothing, so its transform,
+// what's under it, and its collisions don't know. False if `index` isn't one of its siblings'.
+FBE_API bool fbe_entity_set_sibling_index(uint64_t entity, int32_t index);
 // An entity's parent, 0 at the top of its World.
 FBE_API uint64_t fbe_entity_parent(uint64_t entity);
 // How many children an entity has, -1 for a freed one.
@@ -409,6 +413,26 @@ FBE_API bool fbe_light_set_type(uint64_t light, int32_t type);
 FBE_API int32_t fbe_light_type(uint64_t light);
 FBE_API bool fbe_light_set_color(uint64_t light, float r, float g, float b);
 FBE_API bool fbe_light_color(uint64_t light, fbe_color_t* color);
+// Whether a light has shadows, off at first, on what's drawn per pixel: UNLIT and VERTEX, the
+// fixed-function look, have none. Its side of a tile in texels, 16 to 8192, 1024 at first, of which
+// a point light has six and a directional light one for each of its cascades, and each of a
+// mirror's reflections its own. The atlas has its directional lights first, then what's nearest the
+// camera; a light it has no room for at its size shrinks to a quarter of it, then goes without, and
+// a light that reaches nothing the camera sees has no tiles. How far from a surface it's compared:
+// in depth, world units, 0.02 at first, and along its normal, in texels, 1.5 at first; each 0 or
+// more. A directional light's cascades, 1 to 4, 3 at first, reaching this far from the camera, 100
+// at first, or its far plane.
+FBE_API bool fbe_light_set_shadows(uint64_t light, bool shadows);
+FBE_API bool fbe_light_shadows(uint64_t light);
+FBE_API bool fbe_light_set_shadow_size(uint64_t light, int32_t size);
+FBE_API int32_t fbe_light_shadow_size(uint64_t light);
+FBE_API bool fbe_light_set_shadow_bias(uint64_t light, float depth, float normal);
+FBE_API float fbe_light_shadow_bias(uint64_t light);
+FBE_API float fbe_light_shadow_normal_bias(uint64_t light);
+FBE_API bool fbe_light_set_cascades(uint64_t light, int32_t cascades);
+FBE_API int32_t fbe_light_cascades(uint64_t light);
+FBE_API bool fbe_light_set_shadow_distance(uint64_t light, float distance);
+FBE_API float fbe_light_shadow_distance(uint64_t light);
 // False below 0.
 FBE_API bool fbe_light_set_intensity(uint64_t light, float intensity);
 FBE_API float fbe_light_intensity(uint64_t light);
@@ -672,6 +696,86 @@ FBE_API uint64_t fbe_terrain_material(uint64_t terrain);
 FBE_API bool fbe_terrain_set_tint(uint64_t terrain, float r, float g, float b, float a);
 FBE_API bool fbe_terrain_tint(uint64_t terrain, fbe_color_t* tint);
 
+// Particles: entities that spawn them along their forward axis, each drawn as a quad facing the
+// camera, moved on the GPU by a formula from its birth, so its cost to the CPU is only its birth;
+// in the world, however the emitter moves after. Born as fbe_world_step_particles' steps come, of
+// which each counts for 1000000 seconds at most, and at fbe_particles_burst. New, one holds 1024,
+// born at 32 a second, living 1 second, speed 1 straight out, half-size 0.1, no roll, white fading
+// out, in no material: full-bright and blending by alpha. The oldest go first when more are born
+// than it holds. FBE_BLEND_AUTO is alpha for them, and a particle's color is taken as a vertex
+// color. A hidden or freed emitter's particles are gone at once from what's drawn; those that blend
+// aren't sorted among themselves; they cast no shadows, and only ambient light lights them, as a
+// sprite.
+FBE_API bool fbe_world_step_particles(uint64_t world, float seconds);
+FBE_API bool fbe_particles_set_material(uint64_t particles, uint64_t material);
+FBE_API uint64_t fbe_particles_material(uint64_t particles);
+// How many at once, 1 to 1048576; setting it loses those it has.
+FBE_API bool fbe_particles_set_capacity(uint64_t particles, int32_t capacity);
+FBE_API int32_t fbe_particles_capacity(uint64_t particles);
+// How many are born a second, 0 or more.
+FBE_API bool fbe_particles_set_rate(uint64_t particles, float per_second);
+FBE_API float fbe_particles_rate(uint64_t particles);
+// How long each lives, chosen between these, in seconds, above 0, up to 512.
+FBE_API bool fbe_particles_set_life(uint64_t particles, float least, float most);
+// How each sets off: a speed between these, up to `spread` radians off its axis, 0 to Pi; and a
+// spin up to this each way, radians a second.
+FBE_API bool fbe_particles_set_motion(uint64_t particles, float least_speed, float most_speed,
+                                      float spread, float spin);
+// What acts on them after: gravity in the world, units a second a second, and drag, 0 or more, of
+// which 1 slows them to a little over a third in a second.
+FBE_API bool fbe_particles_set_forces(uint64_t particles, float x, float y, float z, float drag);
+// Each one's half-size from its birth to its death, and its color, finite, and alpha, 0 to 1,
+// linear.
+FBE_API bool fbe_particles_set_sizes(uint64_t particles, float start, float end);
+FBE_API bool fbe_particles_set_colors(uint64_t particles, const fbe_color_t* start,
+                                      const fbe_color_t* end);
+// What SetLife, SetMotion, SetForces, SetSizes, and SetRoll set; -1 for a freed one.
+FBE_API float fbe_particles_life_least(uint64_t particles);
+FBE_API float fbe_particles_life_most(uint64_t particles);
+FBE_API float fbe_particles_speed_least(uint64_t particles);
+FBE_API float fbe_particles_speed_most(uint64_t particles);
+FBE_API float fbe_particles_spread(uint64_t particles);
+FBE_API float fbe_particles_spin(uint64_t particles);
+FBE_API float fbe_particles_gravity_x(uint64_t particles);
+FBE_API float fbe_particles_gravity_y(uint64_t particles);
+FBE_API float fbe_particles_gravity_z(uint64_t particles);
+FBE_API float fbe_particles_drag(uint64_t particles);
+FBE_API float fbe_particles_size_start(uint64_t particles);
+FBE_API float fbe_particles_size_end(uint64_t particles);
+FBE_API float fbe_particles_roll(uint64_t particles);
+// Each one's color at its birth, or at its death with `end`; false for a freed one.
+FBE_API bool fbe_particles_color(uint64_t particles, bool end, fbe_color_t* color);
+// How far each's turned at its birth, up to this each way, 0 to Pi, 0 at first.
+FBE_API bool fbe_particles_set_roll(uint64_t particles, float most);
+// What its random numbers follow from, which a run the same again sets.
+FBE_API bool fbe_particles_set_seed(uint64_t particles, uint32_t seed);
+// Spawns `count` now, as many as it holds at most, and how many are alive.
+FBE_API bool fbe_particles_burst(uint64_t particles, int32_t count);
+FBE_API int32_t fbe_particles_alive(uint64_t particles);
+
+// A World's sky, behind what's opaque and in front of each camera's clear color: the atmosphere,
+// one scattering marched per pixel, the sun along a directional light's way, or straight up with 0;
+// or an equirectangular texture, its middle straight ahead along -Z, which it holds; each times its
+// // brightness, 0 or more. It covers what's in an order below 0, and what's opaque covers it;
+// through a mirror's plane is the mirror's reflection of it. Its texture wraps around the world,
+// however it's set, and stops at its top and bottom. A sun that's freed leaves the sky as it last
+// was. Clearing goes back to no sky, as at first.
+FBE_API bool fbe_world_set_sky_atmosphere(uint64_t world, uint64_t sun, float brightness);
+FBE_API bool fbe_world_set_sky_texture(uint64_t world, uint64_t texture, float brightness);
+FBE_API bool fbe_world_clear_sky(uint64_t world);
+
+// A new geometry of what's opaque in a World's showing meshes, ground planes, and terrains inside a
+// box, a matrix from a cube of -1 to 1 to the world, on faces toward its +Z, a two-sided one's back
+// counting, up to `limit` radians off it, above 0 and up to Pi / 2, clipped to it: its UVs across
+// its X and down its Y, in both sets, its normals what it's on has there, each vertex lifted
+// `lift`, 0 or more, along its normal, and its vertex alpha fading to 0 over the last 0.26 radians
+// to the limit. A decal: bullet holes, stains, scorches, drawn by a mesh at the top of a World, in
+// a blended material, as they were when it's made, a skinned mesh in its bind pose. It's in the
+// world's coordinates: to follow what it's on, it's parented keeping its place in the world.
+// Blended ones aren't what it's on, so another decal isn't. Its handle's held as
+// fbe_geometry_create's is; 0 for a freed World, or a box with no inverse.
+FBE_API uint64_t fbe_geometry_decal(uint64_t world, const fbe_mat4_t* box, float lift, float limit);
+
 // Mirrors: entities that reflect the scene through their own XZ plane, as fbe_render_camera draws
 // them. The matrix that reflects the world through a mirror's plane, which a camera's view takes
 // first to draw what's in it.
@@ -717,6 +821,9 @@ FBE_API bool fbe_entity_bounds(uint64_t entity, fbe_aabb_t* bounds);
 // Whether an entity blocks line of sight: a mesh by its triangles, from either side, while it's
 // showing. No entity blocks it at first.
 FBE_API bool fbe_entity_set_blocks_sight(uint64_t entity, bool blocks);
+// Whether a mesh or terrain casts shadows, when it's opaque or cut out, in order 0: true at first.
+FBE_API bool fbe_entity_set_casts_shadows(uint64_t entity, bool casts);
+FBE_API bool fbe_entity_casts_shadows(uint64_t entity);
 FBE_API bool fbe_entity_blocks_sight(uint64_t entity);
 // Whether nothing that blocks sight in its World is between an entity's position and a point,
 // or another entity's position; the two themselves don't block it, and an entity in another

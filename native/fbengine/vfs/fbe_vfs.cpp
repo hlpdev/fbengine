@@ -24,6 +24,7 @@ namespace {
 namespace vfs = fbe::vfs;
 
 thread_local int32_t last_failure = FBE_VFS_OTHER;
+thread_local std::uint64_t last_mount = 0;
 thread_local std::string normalized;
 thread_local vfs::bytes_t read_bytes;
 thread_local std::vector<vfs::entry_t> listed;
@@ -70,7 +71,7 @@ bool mount(const char* at, Open open) {
     if (!source) {
         return failed(source.error());
     }
-    vfs::files().mount(*place, std::move(*source));
+    last_mount = vfs::files().mount(*place, std::move(*source));
     return true;
 }
 
@@ -217,6 +218,20 @@ FBE_API bool fbe_vfs_mount_pak_bytes(const char* at, const uint8_t* bytes, int64
 
 FBE_API bool fbe_vfs_unmount(const char* at) {
     return guarded(false, [&] { return unmount(at); });
+}
+
+FBE_API uint64_t fbe_vfs_last_mount(void) {
+    return last_mount;
+}
+
+FBE_API bool fbe_vfs_unmount_id(uint64_t mount) {
+    return guarded(false, [&] {
+        if (!vfs::files().unmount(mount)) {
+            last_failure = FBE_VFS_NOT_FOUND;
+            return fbe::fail("that mount has been taken out");
+        }
+        return true;
+    });
 }
 
 FBE_API int32_t fbe_vfs_failure(void) {

@@ -44,7 +44,7 @@ REQUIRED_TESTS = ["examples.hello", "examples.arcade", "examples.arcade.idle", "
 failures = []
 # One lock for each verify that may run at a time on this machine.
 # A build's jobs: each compile holds about a gigabyte, and several verifies build at once.
-BUILD_JOBS = 8
+BUILD_JOBS = 6
 TURNS = ["turn.lock", "turn2.lock", "turn3.lock", "turn4.lock"]
 
 
@@ -171,7 +171,12 @@ def check_tests(build, only=None):
     for name in REQUIRED_TESTS:
         if name not in listed:
             fail(f"ctest doesn't list {name}")
-    environment = dict(os.environ, SDL_VIDEO_DRIVER="offscreen")
+    # A temp folder of the run's own: lavapipe leaves a file there per use, and at GetTempFileName's
+    # 65,535 of a prefix every GPU test crawls.
+    temp = pathlib.Path(build).resolve() / "test-temp"
+    shutil.rmtree(temp, ignore_errors=True)
+    temp.mkdir(parents=True, exist_ok=True)
+    environment = dict(os.environ, SDL_VIDEO_DRIVER="offscreen", TEMP=str(temp), TMP=str(temp), TMPDIR=str(temp))
     command = ["ctest", "--test-dir", str(build), "--output-on-failure"]
     if only is not None:
         command += ["--no-tests=error", "-R", only]
@@ -213,6 +218,18 @@ def check_bindings():
     step("bindings")
     if run(["sh", "tools/bindgen.sh", "--check"]) != 0:
         fail("the bindings aren't what their headers make; run tools/bindgen.sh")
+
+
+def check_line_ends():
+    """A raw carriage return in a CMake file is a regular expression that can't match, silently."""
+    step("line ends")
+    for path in [ROOT / "CMakeLists.txt", *(ROOT / "cmake").glob("*.cmake"), *(ROOT / "tests").glob("CMakeLists.txt")]:
+        if b"\r" in path.read_bytes():
+            fail(f"{path.relative_to(ROOT)} has a carriage return")
+def check_metal(build):
+    step("the shaders' Metal")
+    if run([sys.executable, str(ROOT / "tools" / "check_msl.py"), str(build)]) != 0:
+        fail("a shader comes out as Metal that doesn't compile")
 
 
 def check_format():
@@ -280,6 +297,8 @@ def main():
         check_tests(build)
         check_exports()
     check_bindings()
+    check_line_ends()
+    check_metal(build)
     check_format()
     if not options.no_tidy and built:
         check_tidy(build, options.base)

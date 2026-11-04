@@ -1,0 +1,61 @@
+// What fbengine_editor panics for, one a run, by its argument, which ctest checks the message of.
+// It's in the package, as a program isn't a dependency.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.os
+Import fbengine_ui
+Import "../commands"
+Import "../dock"
+Import "../history"
+Import "../menu"
+
+Function Nothing()
+End Function
+
+Local history = History()
+Local commands = Commands()
+Local dock = Dock()
+dock.AddPane(Pane("a", "A", Node()))
+Select Process.Arguments()[0]
+    Case "mark-in-an-edit"
+        history.Commit(EditOf("outer", Function()
+            history.MarkSaved()
+        End Function, Nothing))
+    Case "end-group-in-an-edit"
+        history.BeginGroup("group")
+        history.Commit(EditOf("outer", Function()
+            history.EndGroup()
+        End Function, Nothing))
+    Case "move-nan"
+        dock.Move("a", "a", DockSide.LEFT, 0.0 / Sin(0.0))
+    Case "history-none"
+        History(0)
+    Case "commit-in-an-edit"
+        history.Commit(EditOf("outer", Function()
+            history.Commit(EditOf("inner", Nothing, Nothing))
+        End Function, Nothing))
+    Case "undo-in-a-group"
+        history.BeginGroup("group")
+        history.Undo()
+    Case "redo-in-a-group"
+        history.BeginGroup("group")
+        history.Redo()
+    Case "end-no-group"
+        history.EndGroup()
+    Case "command-twice"
+        commands.Add("a", "A", Nothing)
+        commands.Add("a", "A", Nothing)
+    Case "command-unknown"
+        commands.Run("a")
+    Case "pane-twice"
+        dock.AddPane(Pane("a", "A", Node()))
+    Case "show-unknown"
+        dock.Show("b")
+    Case "activate-no-tab"
+        dock.Activate("a")
+    Case "menu-entry-unknown"
+        OpenMenu(Ui(Node()), commands, ["a"], Vec2(0, 0))
+End Select
+Print("{Process.Arguments()[0]} didn't panic")

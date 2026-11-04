@@ -89,6 +89,46 @@ Public Final Class Window
     /// the window isn't open.
     @MainThread Public Static Method Scale(): Float32 => fbe_window_scale()
 
+    /// Where the window's top left is on the desktop, across, in the desktop's units, 0 when it
+    /// isn't open.
+    @MainThread Public Static Method X(): Int32 => fbe_window_x()
+
+    /// Where the window's top left is on the desktop, down.
+    @MainThread Public Static Method Y(): Int32 => fbe_window_y()
+
+    /// Moves the open window, as a program does that puts itself back where it was. A desktop that
+    /// doesn't let it (Wayland's, or offscreen) leaves it where it is, so X and Y say where it went.
+    /// Without a window, it throws.
+    @MainThread Public Static Method SetPosition(x: Int32, y: Int32) Throws GraphicsError
+        If !fbe_window_set_position(x, y) Then Throw GraphicsError(LastError())
+    End Method
+
+    /// Sizes the open window, in the desktop's units, 1 to 16384 each way, which the screen follows
+    /// if it hasn't a size of its own. Without a window, or for a fullscreen one, whose size is its
+    /// mode's, it throws.
+    @MainThread Public Static Method SetSize(width: Int32, height: Int32) Throws GraphicsError
+        If !fbe_window_set_size(width, height) Then Throw GraphicsError(LastError())
+    End Method
+
+    /// Whether a window at `x`, `y`, that big, would be on a display, enough of it to take hold of,
+    /// as a place kept from a display that's gone wouldn't be.
+    @MainThread Public Static Method PlaceShows(x: Int32, y: Int32, width: Int32,
+                                                height: Int32): Bool =>
+        fbe_window_place_shows(x, y, width, height)
+
+    /// Sets the least the open window can be sized to, by a person or SetSize, 0 for no least. Without
+    /// a window it throws.
+    @MainThread Public Static Method SetMinimumSize(width: Int32,
+                                                    height: Int32) Throws GraphicsError
+        If !fbe_window_set_minimum_size(width, height) Then Throw GraphicsError(LastError())
+    End Method
+
+    /// The least the window can be, across, 0 for no least.
+    @MainThread Public Static Method MinimumWidth(): Int32 => fbe_window_minimum_width()
+
+    /// The least the window can be, down.
+    @MainThread Public Static Method MinimumHeight(): Int32 => fbe_window_minimum_height()
+
     /// How the window fills the screen.
     @MainThread Public Static Method Mode(): WindowMode => fbe_window_mode() As WindowMode
 

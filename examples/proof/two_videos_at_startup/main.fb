@@ -1,7 +1,8 @@
 // Two videos at startup, MPEG-1 here: the first with its sound in the file, the second beside a
 // sound of its own, each into a texture, fitted to what it's drawn on, and a key skips one. Mixed on
 // no device, it prints what was shown at what's been heard. With --watch, a window plays them in
-// turn, for a person to see and hear; --frames, as a test runs it, keeps that headless and silent.
+// turn, for a person to see and hear; --frames, as a test runs it, keeps that headless, on a mix by
+// hand.
 
 Import std.collections
 Import std.core
@@ -109,50 +110,67 @@ Function Opened(which: Int, beside: Sound): Video Throws VideoError
     Return video
 End Function
 
-// The videos in turn, until the window's closed or Escape's pressed, or for `count` frames if it's
-// not 0, then with a video skipped now and then, as no one's pressing Space.
-Function Watched(count: Int) Throws VideoError, AudioError, SoundError, GraphicsError
+// The videos in turn, until the window's closed or Escape's pressed, Space skipping one, or for
+// `frames` frames if it's not 0, on a mix by hand, a 25th of a second a frame.
+Function Watched(frames: Int, arguments: String[]) Throws VideoError, AudioError, SoundError,
+                                                          GraphicsError
     If Env.Get("FBENGINE_NO_GPU") == "1"
         Print("no GPU here")
         Return
     End If
-    If count > 0 Then Window.SetHeadless(True)
-    Try Audio.Start(count > 0 ? AudioDevice.SILENT : AudioDevice.DEFAULT)
+    Window.SetHeadless(frames > 0)
+    Try Audio.Start(frames > 0 ? AudioDevice.MANUAL : AudioDevice.DEFAULT, 44100, 2)
     Try Graphics(640, 480)
+    Window.SetTitle("two videos at startup: Space skips, Escape ends it")
+    Frame.SetLimit(60)
     Local canvas = Screen.Canvas()
     Local beside = Try Sound.FromBytes(Embed("beside.ogg"))
-    Local which = 0
-    Local video = Try Opened(which, beside)
-    Local frames = 0
-    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (count == 0 || frames < count)
-        video.Update(Frame.Delta())
+    Local played = 1
+    Local video = Try Opened(0, beside)
+    Local count = 0
+    While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
+        Flip()
+        count += 1
+        Try Driven(arguments, count)
+        If frames > 0 Then Audio.Mix(FRAME_OF_MIX)
+        video.Update(frames > 0 ? 1.0 / 25 : Frame.Delta())
         canvas.Clear()
         Try video.DrawFitted(canvas, Screen.Width(), Screen.Height())
-        Flip()
-        frames += 1
-        If video.Ended() || KeyHit(Key.SPACE) || (count > 0 && frames % 15 == 0)
+        If video.Ended() || KeyHit(Key.SPACE)
             video.Free()
-            which = 1 - which
-            video = Try Opened(which, beside)
+            video = Try Opened(played % 2, beside)
+            played += 1
         End If
     End While
+    If count == frames Then Print("the {played}th video, at its frame {video.FrameNumber()}")
     video.Free()
-    Print("watched {frames} frames")
+    Print("watched {count} frames")
     Audio.Stop()
     EndGraphics()
 End Function
 
+// Presses Space, or Escape, or closes the window, at the frames `arguments` says, as a person would:
+// a test's.
+Function Driven(arguments: String[], frame: Int) Throws GraphicsError
+    For i = 0 To arguments.Count - 2
+        If arguments[i + 1] != "{frame}" Then Continue
+        If arguments[i] == "--skip-at" Then Try Simulate.PressKey(Key.SPACE)
+        If arguments[i] == "--press-at" Then Try Simulate.PressKey(Key.ESCAPE)
+        If arguments[i] == "--close-at" Then Try Simulate.CloseWindow()
+    End For
+End Function
+
 // How many frames `arguments` asks for after --frames, 0 for no end.
-Function FramesAsked(arguments: String[]): Int
-    Local at = arguments.IndexOf("--frames") ?? arguments.Count
-    If at + 1 >= arguments.Count Then Return 0
+Function Asked(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
 Local arguments = Process.Arguments()
 Try
     If arguments.Contains("--watch")
-        Try Watched(FramesAsked(arguments))
+        Try Watched(Asked(arguments), arguments)
     Else
         Try Proved()
     End If

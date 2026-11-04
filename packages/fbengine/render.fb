@@ -11,6 +11,7 @@ Import "./entity"
 Import "./geometry"
 Import "./material"
 Import "./transform"
+Import "./window"
 Import "./world"
 
 /// How a Draw meets the depth what's drawn before it left.
@@ -52,6 +53,19 @@ End Struct
 
 /// Room for as many draws as a camera's had at most, so Draws reads them in one go.
 Global drawRoom = 64
+
+/// Sets the most a side of the atlas that shadows share can be, 256 to 8192, 4096 at first, up to
+/// what the device goes to. Lights it can't hold shrink, then go without. Others panic.
+@MainThread @PanicsAtCaller
+Public Function SetShadowAtlasLimit(side: Int)
+    If !fbe_render_set_shadow_atlas_limit(side)
+        Panic("SetShadowAtlasLimit: {LastError()}")
+    End If
+End Function
+
+/// The most a side of the atlas that shadows share can be.
+@MainThread
+Public Function ShadowAtlasLimit(): Int => fbe_render_shadow_atlas_limit()
 
 /// Draws every camera of the current World, in their order, `tween` of the way from its last
 /// capture to now, as the frame's passes, which Flip shows. A camera with no target and no window
