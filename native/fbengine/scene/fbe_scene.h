@@ -762,8 +762,9 @@ FBE_API float fbe_material_occlusion_strength(uint64_t material);
 // roughness and its blue its metalness; FBE_MAP_NORMAL is tangent space, +Y up, from a surface's
 // tangents, or, for one with none, what its UVs and places make of a pixel; FBE_MAP_OCCLUSION's red
 // is how much of its environment and ambient light reach it; and FBE_MAP_EMISSIVE multiplies what
-// it emits. All but the emissive map hold no color, so are RGBA8_LINEAR or RGBA16F, and an
-// occlusion map can be R8, or setting them's false; an emissive map is RGBA8 as a rule.
+// it emits. All but the emissive map hold no color, so are RGBA8_LINEAR, RGBA16F, or a file's own
+// format that isn't sRGB, and an occlusion map can be R8, or setting them's false; an emissive map
+// is RGBA8 as a rule.
 //
 // A map's texture, which it holds, 0 for none, and the UV set it reads, 0 or 1; and what its UVs go
 // through, as a layer's do. A surface's own tangents go with its UV set 0, and turn with what its
