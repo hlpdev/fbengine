@@ -1309,6 +1309,52 @@ if(FBENGINE_FB_TESTS)
                          "panic: Video\\.${said}" TIMEOUT 60)
   endforeach()
 endif()
+# E6 step 8: Khronos's sample models against what they show of themselves and their reference images,
+# as tests/khronos/README.md says, fetched at a commit, each by its hash; and the frames it saves
+# against their golden images.
+if(FBENGINE_FB_TESTS)
+  set(fbengine_khronos_commit 8f492390ddc7a2ae221a1369ef560589cf8c70fb)
+  set(fbengine_khronos "${PROJECT_BINARY_DIR}/khronos")
+  foreach(each IN ITEMS
+       "Models/AlphaBlendModeTest/glTF-Binary/AlphaBlendModeTest.glb;AlphaBlendModeTest.glb;37c3577d143071b42dd46e9d942b157837eb25c6340112171d7faecaa987b14e"
+       "Models/DamagedHelmet/glTF-Binary/DamagedHelmet.glb;DamagedHelmet.glb;a1e3b04de97b11de564ce6e53b95f02954a297f0008183ac63a4f5974f6b32d8"
+       "Models/EmissiveStrengthTest/glTF-Binary/EmissiveStrengthTest.glb;EmissiveStrengthTest.glb;074898ec4c3636230faffe0cacac7403c3f6135db61f943da28ffaa88ca2a39f"
+       "Models/MetalRoughSpheres/glTF-Binary/MetalRoughSpheres.glb;MetalRoughSpheres.glb;450c05557b0823a10835e32c05caf77a7b175eba94516555c1c9bb084f563f01"
+       "Models/MetalRoughSpheresNoTextures/glTF-Binary/MetalRoughSpheresNoTextures.glb;MetalRoughSpheresNoTextures.glb;5e677f260ec0f366967a6e9545de2f3dab2a160e307b9bcb9d050cd2028f63f8"
+       "Models/NormalTangentMirrorTest/glTF-Binary/NormalTangentMirrorTest.glb;NormalTangentMirrorTest.glb;31ce5f3c873fc55531a17ccacf001e3d1d482a508695aa826fa79cc196e0ce78"
+       "Models/NormalTangentTest/glTF-Binary/NormalTangentTest.glb;NormalTangentTest.glb;5ac0932355ae1ea05a7485eeddcc3f1fbe56c678e00b519075feced80e9e9d6a"
+       "Models/TextureSettingsTest/glTF-Binary/TextureSettingsTest.glb;TextureSettingsTest.glb;44013a0602cbbdcaf703905ed47cc6b6fb49f067d7de0e1a0a568a5bbfa9d769"
+       "Models/AlphaBlendModeTest/screenshot/screenshot.png;AlphaBlendModeTest.png;856768a419da4be144fbaa3bf49c9fa456d63d916218d11e981c0a053a6ea42f"
+       "Models/DamagedHelmet/screenshot/screenshot.png;DamagedHelmet.png;a790182823559d73d6ae684891bf49af9a8d559bba910e1be26c7fe15e3baef2"
+       "Models/MetalRoughSpheres/screenshot/screenshot.png;MetalRoughSpheres.png;365b62345ecf8253e9e25acf605e424b42b4f4805ff3171096888bf7eefd2272"
+       "Models/NormalTangentTest/screenshot/screenshot.png;NormalTangentTest.png;e12d2c83ba814dcab73b44f42da3d7d26fed4d3337b072d0fb59d2d52b8a5752"
+       "Models/TextureSettingsTest/screenshot/screenshot.png;TextureSettingsTest.png;b31f8927ec74ae621cb1a3e8b9c3936a828e9a772b8b50d695f5de4b054c9b8b")
+    list(GET each 0 from)
+    list(GET each 1 to)
+    list(GET each 2 hash)
+    file(DOWNLOAD
+         "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/${fbengine_khronos_commit}/${from}"
+         "${fbengine_khronos}/${to}" EXPECTED_HASH SHA256=${hash} TLS_VERIFY ON)
+  endforeach()
+  add_test(NAME khronos.models
+           COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/khronos"
+                   -- --models "${fbengine_khronos}" --frames "${PROJECT_BINARY_DIR}/example-frames/khronos")
+  set_tests_properties(khronos.models PROPERTIES
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}"
+                       FIXTURES_SETUP khronos_frames TIMEOUT 600
+                       PASS_REGULAR_EXPRESSION "\nall [0-9]+ as expected\r?\n$"
+                       SKIP_REGULAR_EXPRESSION "no GPU here")
+  add_test(NAME khronos.golden
+           COMMAND fbengine_gpu_tests "Khronos's sample models' frames match their golden images")
+  set_tests_properties(khronos.golden PROPERTIES
+                       LABELS "gpu;golden" FIXTURES_REQUIRED khronos_frames
+                       ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen;${fbengine_vulkan_environment}")
+  if(fbengine_test_dll_paths)
+    set_property(TEST khronos.golden PROPERTY ENVIRONMENT_MODIFICATION
+                 "PATH=path_list_prepend:${fbengine_test_dll_paths}")
+  endif()
+endif()
+
 # What fbengine_editor panics for, each by a run of its panics/main.fb, which says it.
 if(FBENGINE_FB_TESTS)
   # Its panes against their golden images, its --save saving them first; and its --watch.

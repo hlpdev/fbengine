@@ -41,6 +41,27 @@ fbe::golden::frame_t saved(const std::filesystem::path& path) {
 
 } // namespace
 
+// Khronos's sample models, as tests/khronos saves them, which holds them to more than this.
+TEST_CASE("Khronos's sample models' frames match their golden images", "[.example]") {
+    REQUIRE(fbe_window_set_headless(true));
+    require(fbe_gpu_start());
+    for (const std::string_view frame : {
+             "AlphaBlendModeTest",
+             "EmissiveStrengthTest",
+             "MetalRoughSpheres",
+             "MetalRoughSpheresNoTextures",
+             "NormalTangentMirrorTest",
+             "NormalTangentTest",
+             "TextureSettingsTest",
+         }) {
+        INFO("frame " << frame);
+        const std::filesystem::path path = std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /
+                                           "khronos" / std::format("frame_{}.png", frame);
+        fbe::golden::check(std::format("khronos_{}", frame), saved(path));
+    }
+    stop_gpu();
+}
+
 // The editor's panes, and what opens over them, as `--save` saves them. Its grid's lines are
 // thinner than a pixel far off, so which pixels they cover is a near thing: at one size of its
 // view, lavapipe on Linux covered 2 others than it does on Windows, from the same camera, whatever

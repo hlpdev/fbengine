@@ -1,0 +1,390 @@
+// Khronos's sample models through the renderer, against what they show of themselves and their
+// reference images: `-- --models <folder> --frames <folder>`, the models' folder being what CMake
+// fetched. README.md says what each is held to, and which differences are expected.
+
+Import std.collections
+Import std.core
+Import std.image.hdr
+Import std.image.image
+Import std.image.png
+Import std.io
+Import std.math
+Import std.os
+Import fbengine
+
+Const SIZE: Int = 512
+// What's compared against a reference image, each cut to what's drawn: this many squares a side.
+Const GRID: Int = 64
+
+// The light all around that they're lit by: a sky over ground, with a clear horizon, as
+// NormalTangentTest's notes ask, and a sun to make a highlight of. It isn't their references', which
+// Khronos's repository doesn't hold with the models.
+Function Sky(): Environment Throws GraphicsError
+    Local wide = 512
+    Local high = 256
+    Local image = HdrImage(wide, high)
+    For y = 0 Until high
+        For x = 0 Until wide
+            Local up = 1.0 - 2.0 * ((y As Float) + 0.5) / (high As Float)
+            Local along = ((x As Float) + 0.5) / (wide As Float) * 2.0 * Pi
+            Local color = up >= 0 ? Color(0.45 + 0.35 * up, 0.6 + 0.3 * up, 0.95, 1) : Color(0.25,
+                                                                                             0.2,
+                                                                                             0.15,
+                                                                                             1)
+            Local flat = Sqrt(1 - up * up)
+            Local toward = Vec3(Cos(along) * flat, up, Sin(along) * flat)
+            If Dot(toward, Normalize(Vec3(0.5, 0.7, 0.5))) > 0.995 Then color = Color(40, 38, 34, 1)
+            image[x, y] = color
+        End For
+    End For
+    Local source = Try Texture.FromHdr(image, True)
+    Return Try Environment.Bake(source, 256, 1024)
+End Function
+
+// The box around what's under `entity`, in the world: its middle, and how far out it goes.
+Function Around(entity: Entity): (Vec3, Vec3)
+    Local low = Vec3(Inf, Inf, Inf)
+    Local high = Vec3(-Inf, -Inf, -Inf)
+    Walk(entity, Function(at: Vec3)
+        low = Vec3(Min(low.x, at.x), Min(low.y, at.y), Min(low.z, at.z))
+        high = Vec3(Max(high.x, at.x), Max(high.y, at.y), Max(high.z, at.z))
+    End Function)
+    Return ((low + high) * 0.5, (high - low) * 0.5)
+End Function
+
+Function Walk(entity: Entity, add: Func(Vec3))
+    Local mesh = entity As? Mesh
+    Local geometry = mesh?.Geometry()
+    If geometry != Null
+        Local box = geometry.Bounds()
+        Local world = entity.Matrix(Space.WORLD)
+        For x In [box.Min.x, box.Max.x]
+            For y In [box.Min.y, box.Max.y]
+                For z In [box.Min.z, box.Max.z]
+                    add(world.TransformPoint(Vec3(x, y, z)))
+                End For
+            End For
+        End For
+    End If
+    For child In entity.Children()
+        Walk(child, add)
+    End For
+End Function
+
+// `name` drawn from around it, by `yaw` and `pitch` in degrees, as the sample viewer's camera frames a
+// model, in `sky`: its pixels, RGBA, top row first.
+Function Drawn(models: Path, name: String, yaw: Float, pitch: Float, sky: Environment,
+               target: Texture): UInt8[] Throws GraphicsError, IOError
+    Local world = World()
+    World.SetCurrent(world)
+    world.SetEnvironment(sky)
+    Local at = "res://khronos/{name}"
+    Local number = Assets.MountFolder(at, models)
+    Local model = Try Assets.Load<Model>("{at}/{name}.glb")
+    Local root = Try model.Spawn()
+    Local center, reach = Around(root)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetHdr(True)
+    camera.SetTonemap(Tonemap.NEUTRAL)
+    camera.SetClearColor(Color(0.05, 0.05, 0.1))
+    camera.SetFieldOfView(Pi / 4)
+    Local radius = Length(reach)
+    Local away = Quat.FromEuler(pitch * Pi / 180, yaw * Pi / 180, 0) * Vec3(0, 0, 1)
+    camera.SetRange(radius * 0.01, radius * 10)
+    camera.SetPosition(center + away * (radius / Sin(Pi / 8)))
+    camera.PointAt(center)
+    RenderWorld()
+    Local pixels = target.ReadPixels()
+    Flip(False)
+    model.Free()
+    Assets.Unmount(number)
+    world.Free()
+    Return pixels
+End Function
+
+// A channel of a pixel, 0 to 255.
+Function At(pixels: UInt8[], wide: Int, x: Int, y: Int, channel: Int): Float
+    Return pixels[(y * wide + x) * 4 + channel] As Float
+End Function
+
+// How far a square of `half` around one point is from one around another, a channel of a pixel at a
+// time, on average, in 255ths.
+Function Apart(pixels: UInt8[], ax: Int, ay: Int, bx: Int, by: Int, half: Int): Float
+    Local sum: Float = 0
+    Local count = 0
+    For dy = -half To half
+        For dx = -half To half
+            For channel = 0 To 2
+                sum += Abs(At(pixels, SIZE, ax + dx, ay + dy, channel) -
+                           At(pixels, SIZE, bx + dx, by + dy, channel))
+                count += 1
+            End For
+        End For
+    End For
+    Return sum / (count As Float)
+End Function
+
+// How bright a square of `half` around a point is, in 255ths, on average.
+Function Bright(pixels: UInt8[], x: Int, y: Int, half: Int): Float
+    Local sum: Float = 0
+    Local count = 0
+    For dy = -half To half
+        For dx = -half To half
+            For channel = 0 To 2
+                sum += At(pixels, SIZE, x + dx, y + dy, channel)
+                count += 1
+            End For
+        End For
+    End For
+    Return sum / (count As Float)
+End Function
+
+// How sharply a column through a point changes, most of all, in 255ths a pixel: a reflected horizon's
+// edge, on a sphere.
+Function Sharpest(pixels: UInt8[], x: Int, y: Int, half: Int): Float
+    Local most: Float = 0
+    For dy = -half Until half
+        most = Max(most, Abs(At(pixels, SIZE, x, y + dy + 1, 1) - At(pixels, SIZE, x, y + dy, 1)))
+    End For
+    Return most
+End Function
+
+// One thing held to a tolerance, which it prints.
+Class Tally
+    Public Field Good: Int = 0
+    Public Field All: Int = 0
+
+    Public Method AtMost(what: String, value: Float, most: Float)
+        All += 1
+        If value <= most Then Good += 1
+        Print("{value <= most ? "ok" : "OFF"} {what}: {value} (at most {most})")
+    End Method
+
+    Public Method AtLeast(what: String, value: Float, least: Float)
+        All += 1
+        If value >= least Then Good += 1
+        Print("{value >= least ? "ok" : "OFF"} {what}: {value} (at least {least})")
+    End Method
+End Class
+
+// What's drawn of `pixels`, `wide` by `high`: what's unlike its corner, cut to that, in GRID by GRID
+// squares of their colors, with how much of each is drawn.
+Struct Shape2D
+    Public Field Colors: Float[]
+    Public Field Covered: Float[]
+End Struct
+
+Function Shaped(pixels: UInt8[], wide: Int, high: Int, whole: Bool = False): Shape2D
+    Local drawn = Function(x: Int, y: Int): Bool
+        If whole Then Return True
+        Local away: Float = 0
+        For channel = 0 To 2
+            away += Abs(At(pixels, wide, x, y, channel) - At(pixels, wide, 2, 2, channel))
+        End For
+        Return away > 24
+    End Function
+    Local left = wide
+    Local right = -1
+    Local top = high
+    Local bottom = -1
+    For y = 0 Until high
+        For x = 0 Until wide
+            If drawn(x, y)
+                left = Min(left, x)
+                right = Max(right, x)
+                top = Min(top, y)
+                bottom = Max(bottom, y)
+            End If
+        End For
+    End For
+    Local colors: Float[] = []
+    Local covered: Float[] = []
+    For cell = 0 Until GRID * GRID * 3
+        colors.Add(0)
+    End For
+    For cell = 0 Until GRID * GRID
+        covered.Add(0)
+    End For
+    Local counts: Int[] = []
+    For cell = 0 Until GRID * GRID
+        counts.Add(0)
+    End For
+    Local across = Max(right - left + 1, 1)
+    Local down = Max(bottom - top + 1, 1)
+    For y = top To bottom
+        For x = left To right
+            Local cx = (x - left) * GRID / across
+            Local cy = (y - top) * GRID / down
+            Local cell = cy * GRID + cx
+            counts[cell] += 1
+            If drawn(x, y) Then covered[cell] += 1
+            For channel = 0 To 2
+                colors[cell * 3 + channel] += At(pixels, wide, x, y, channel)
+            End For
+        End For
+    End For
+    For cell = 0 Until GRID * GRID
+        If counts[cell] == 0 Then Continue
+        covered[cell] /= counts[cell] As Float
+        For channel = 0 To 2
+            colors[cell * 3 + channel] /= counts[cell] As Float
+        End For
+    End For
+    Return Shape2D(colors, covered)
+End Function
+
+// How `pixels` is against its reference image: how much of what's drawn in either is drawn in both, and
+// how its brightness goes with the reference's, 1 for together.
+Function Against(tally: Tally, name: String, pixels: UInt8[], reference: Path, overlap: Float,
+                 together: Float) Throws IOError
+    Local image = Try Image.Load(reference)
+    Local ours = Shaped(pixels, SIZE, SIZE)
+    // With no overlap to ask for, its background's no plain color to cut it out by.
+    Local theirs = Shaped(image.ToBytes(), image.Width, image.Height, overlap == 0)
+    If overlap > 0
+        Local both: Float = 0
+        Local either: Float = 0
+        For cell = 0 Until GRID * GRID
+            both += Min(ours.Covered[cell], theirs.Covered[cell])
+            either += Max(ours.Covered[cell], theirs.Covered[cell])
+        End For
+        tally.AtLeast("{name}: what's drawn in both", both / Max(either, 1), overlap)
+    End If
+    Local sumA: Float = 0
+    Local sumB: Float = 0
+    Local count: Float = 0
+    Local values: (Float, Float)[] = []
+    For cell = 0 Until GRID * GRID
+        If Min(ours.Covered[cell], theirs.Covered[cell]) < 0.5 Then Continue
+        Local a = ours.Colors[cell * 3] + ours.Colors[cell * 3 + 1] + ours.Colors[cell * 3 + 2]
+        Local b = theirs.Colors[cell * 3] + theirs.Colors[cell * 3 + 1] +
+                  theirs.Colors[cell * 3 + 2]
+        values.Add((a, b))
+        sumA += a
+        sumB += b
+        count += 1
+    End For
+    Local meanA = sumA / Max(count, 1)
+    Local meanB = sumB / Max(count, 1)
+    Local ab: Float = 0
+    Local aa: Float = 0
+    Local bb: Float = 0
+    For each In values
+        ab += (each.0 - meanA) * (each.1 - meanB)
+        aa += (each.0 - meanA) * (each.0 - meanA)
+        bb += (each.1 - meanB) * (each.1 - meanB)
+    End For
+    tally.AtLeast("{name}: how its brightness goes with its reference's",
+                  ab / Max(Sqrt(aa * bb), 1), together)
+End Function
+
+// Each cell of a column of NormalTangentTest's kind against the geometry beside it.
+Function Pairs(tally: Tally, name: String, pixels: UInt8[], geometry: Int[], normals: Int[],
+               rows: Int[],
+               half: Int, most: Float)
+    For g = 0 Until geometry.Count
+        Local worst: Float = 0
+        For row In rows
+            worst = Max(worst, Apart(pixels, geometry[g], row, normals[g], row, half))
+        End For
+        tally.AtMost(
+            "{name}: the normal map at x {normals[g]} against the geometry at x {geometry[g]}",
+            worst, most)
+    End For
+End Function
+
+Function Run(arguments: String[]) Throws GraphicsError, IOError
+    If Env.Get("FBENGINE_NO_GPU") == "1"
+        Print("no GPU here")
+        Return
+    End If
+    Window.SetHeadless(True)
+    Local models = Path(arguments[1])
+    Local frames = arguments[3]
+    Try Dir.CreateAll(Path(frames))
+    Local target = Try Texture.Target(SIZE As Int32, SIZE As Int32, TextureFormat.RGBA8, 1, True)
+    Local sky = Try Sky()
+    Flip(False)
+    Local tally = Tally()
+    Local Draw = Function(name: String, yaw: Float, pitch: Float): UInt8[]
+        Try
+            Local pixels = Try Drawn(models, name, yaw, pitch, sky, target)
+            Try File.WriteBytes(Path("{frames}/frame_{name}.png"),
+                                Png.Encode(Image.FromBytes(SIZE, SIZE, pixels)))
+            Return pixels
+        Catch error As Error
+            Panic("{name}: {error.Message}")
+        End Try
+    End Function
+    // Each of its Test column's cells against its Sample pass column's beside it.
+    Local settings = Draw("TextureSettingsTest", 0, 0)
+    Local worst: Float = 0
+    For row In [153, 187, 221, 255, 289, 323, 357, 391]
+        worst = Max(worst, Abs(Bright(settings, 271, row, 12) - Bright(settings, 341, row, 12)))
+    End For
+    tally.AtMost("TextureSettingsTest: its Test column's cells against its Sample pass's", worst, 6)
+    // Which are what they should be, not only alike: a tick shows white with green on it, and clamp's
+    // whole cell's green.
+    tally.AtLeast("TextureSettingsTest: a tick cell's white", At(settings, SIZE, 260, 145, 0), 150)
+    tally.AtMost("TextureSettingsTest: a clamp cell's green", At(settings, SIZE, 271, 221, 0), 60)
+    Try Against(tally, "TextureSettingsTest", settings, models / "TextureSettingsTest.png", 0, 0.85)
+    // Each normal map against the geometry it's a map of, whatever the light.
+    Local tangent = Draw("NormalTangentTest", 0, 0)
+    Pairs(tally, "NormalTangentTest", tangent, [110, 232, 353], [159, 281, 402],
+          [115, 176, 237, 298, 358], 18, 10)
+    Try Against(tally, "NormalTangentTest", tangent, models / "NormalTangentTest.png", 0.85, 0.2)
+    Local mirror = Draw("NormalTangentMirrorTest", 0, 0)
+    Pairs(tally, "NormalTangentMirrorTest", mirror, [91, 91, 91, 295, 295, 295],
+          [133, 175, 219, 337, 379, 421], [142, 194, 246, 298, 349], 14, 14)
+    // A smooth metal shows what's around it, and a rough one less, down to nothing much.
+    Local spheres = Draw("MetalRoughSpheres", 0, 0)
+    Local xs = [125, 169, 213, 258, 302, 347, 391]
+    Print("MetalRoughSpheres: sharpness along its top row")
+    For x In xs
+        Print("  {x}: {Sharpest(spheres, x, 112, 9)}")
+    End For
+    tally.AtLeast("MetalRoughSpheres: a smooth metal's reflection against a rough one's",
+                  Sharpest(spheres, xs[0], 112, 9) / Max(Sharpest(spheres, xs[6], 112, 9), 1), 3)
+    tally.AtLeast("MetalRoughSpheres: a smooth metal's reflection against a smooth non-metal's",
+                  Sharpest(spheres, xs[0], 112, 9) / Max(Sharpest(spheres, xs[0], 378, 9), 1), 3)
+    Try Against(tally, "MetalRoughSpheres", spheres, models / "MetalRoughSpheres.png", 0, 0.5)
+    Local plain = Draw("MetalRoughSpheresNoTextures", 0, 0)
+    Print("MetalRoughSpheresNoTextures: sharpness along its top row")
+    Local apart = [125, 172, 219, 266, 313, 360, 407]
+    For x In apart
+        Print("  {x}: {Sharpest(plain, x, 102, 9)}")
+    End For
+    tally.AtLeast("MetalRoughSpheresNoTextures: a smooth metal's reflection against a rough one's",
+                  Sharpest(plain, apart[0], 102, 9) / Max(Sharpest(plain, apart[6], 102, 9), 1), 3)
+    // As its screenshot's turned.
+    Local helmet = Draw("DamagedHelmet", 40, 10)
+    Try Against(tally, "DamagedHelmet", helmet, models / "DamagedHelmet.png", 0.8, 0.35)
+    // Its visor's lights emit, against the same spot with its emissive map's own colors.
+    tally.AtLeast("DamagedHelmet: its emissive ring against what's beside it",
+                  Bright(helmet, 160, 214, 2) - Bright(helmet, 178, 214, 2), 10)
+    Local alpha = Draw("AlphaBlendModeTest", 0, 0)
+    Try Against(tally, "AlphaBlendModeTest", alpha, models / "AlphaBlendModeTest.png", 0.9, 0.5)
+    // Each cube past the first brighter, by the file's emissive strength.
+    Local emissive = Draw("EmissiveStrengthTest", 0, 0)
+    Local cubes = [108, 182, 256, 330, 403]
+    Print("EmissiveStrengthTest: how bright each cube is")
+    For x In cubes
+        Print("  {x}: {Bright(emissive, x, 231, 8)}")
+    End For
+    tally.AtLeast("EmissiveStrengthTest: the first cube's light",
+                  Bright(emissive, cubes[0], 231, 8), 60)
+    For i = 1 Until cubes.Count
+        tally.AtLeast("EmissiveStrengthTest: cube {i} past the one before",
+                      Bright(emissive, cubes[i], 231, 8) - Bright(emissive, cubes[i - 1], 231, 8),
+                      1)
+    End For
+    target.Free()
+    If tally.Good == tally.All
+        Print("all {tally.All} as expected")
+    Else
+        Print("{tally.Good} of {tally.All} as expected")
+    End If
+End Function
+
+Try Run(Process.Arguments())
