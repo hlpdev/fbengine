@@ -26,9 +26,9 @@ namespace fbe::render {
 /// A draw as the scene shader reads it: its matrix to the camera's view; the rows of what turns
 /// its normals there; its color and alpha; its vertices' address; its joints' and palette's, if
 /// it's skinned; its tangents', if it has them; its morph targets' and the ones it's drawn with, if
-/// it's morphed; its emitter's, if it's particles; its material's index in the camera's; its own
-/// lights; how many matrices its palette has, 0 if it isn't skinned; how many targets it's drawn
-/// with, and how many vertices each has; and whether it has tangents.
+/// it's morphed; its emitter's, if it's particles; its instances', if it has them; its material's
+/// index in the camera's; its own lights; how many matrices its palette has, 0 if it isn't skinned;
+/// how many targets it's drawn with, and how many vertices each has; and whether it has tangents.
 struct draw_data_t {
     std::array<float, 16> to_view;
     std::array<std::array<float, 4>, 3> normals;
@@ -40,6 +40,7 @@ struct draw_data_t {
     VkDeviceAddress targets;
     VkDeviceAddress drawn_targets;
     VkDeviceAddress particles;
+    VkDeviceAddress instances;
     std::uint32_t material;
     std::uint32_t light_first;
     std::uint32_t light_count;
@@ -49,7 +50,14 @@ struct draw_data_t {
     std::uint32_t has_tangents;
     std::uint32_t spare;
 };
-static_assert(sizeof(draw_data_t) == 216, "the scene shader reads draws 216 bytes apart");
+static_assert(sizeof(draw_data_t) == 224, "the scene shader reads draws 224 bytes apart");
+
+/// An instance as the scene shader reads it: its matrix's three rows, and its color.
+struct instance_data_t {
+    std::array<std::array<float, 4>, 3> rows;
+    std::array<float, 4> color;
+};
+static_assert(sizeof(instance_data_t) == 64, "the scene shader reads instances 64 bytes apart");
 static_assert(sizeof(anim::drawn_target_t) == 8, "the scene shader reads targets 8 bytes apart");
 
 /// An emitter's particles as the scene shader reads them: their address, gravity, drag, their
@@ -191,6 +199,9 @@ struct batch_t {
     std::uint32_t vertex_count = 0;
     /// For the sky: its address, which its shader takes in place of the camera's.
     VkDeviceAddress sky = 0;
+    /// Of an Instances entity: which of its instances, and `first_draw` is its one draw.
+    std::uint32_t instance_first = 0;
+    std::uint32_t instance_count = 0;
 };
 
 /// What a pass draws from one view of a camera: the camera's address, whether the view's mirrored

@@ -92,6 +92,31 @@ const surface_buffers_t* surface_buffers(std::uint64_t geometry, std::size_t sur
 /// fbe_error's why, if there's no memory for them.
 VkDeviceAddress particles_buffer(scene::particles_t& particles);
 
+/// An Instances entity's instances on the GPU, sent if they've changed: their address, or 0, with
+/// fbe_error's why, if there's no memory for them.
+VkDeviceAddress instances_buffer(scene::instances_t& instances);
+
+/// Rasterizes the occluders a view has, for occluded's tests: false if it has none.
+bool fill_occlusion(const scene::camera_t& camera, const scene::view_t& view,
+                    const scene::tweened_t& tweened, const scene::frustum_t& frustum);
+
+/// Whether all of what's within some points is behind the last view's occluders.
+bool occluded(const scene::vec3_t* points, std::size_t count);
+
+/// Lets go of what's kept of geometries that have gone; and, for tests, how many times what's next
+/// to what in an occluder's been worked out, how many it's kept for, and how many pixels the last
+/// view's looked at.
+void forget_freed_occluders();
+std::uint64_t occluder_edges_worked_out();
+std::size_t occluder_edges_kept();
+std::int64_t occluder_pixels();
+
+/// Which of its levels of detail a mesh draws in a view, none for nothing, as its size there says:
+/// what it draws, casts, and occludes with.
+std::uint32_t mesh_lod(const scene::mesh_t& mesh, const scene::mat4_t& matrix,
+                       const scene::tweened_t& tweened, const scene::camera_t& camera,
+                       const scene::view_t& view);
+
 /// The quad a sprite draws: -1 to 1 in x and y, facing +Z, UV 0, 0 at its top left.
 const surface_buffers_t* sprite_quad();
 

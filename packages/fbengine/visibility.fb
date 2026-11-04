@@ -66,7 +66,20 @@ Extend Entity
         Return AABB(VecOf(found.min), VecOf(found.max))
     End Method
 
-    /// Sets whether a Mesh or Terrain casts shadows, when it's opaque or cut out, in order 0, as
+    /// Makes a Mesh an occluder, or not, as it isn't at first: what's wholly behind it from a Camera
+    /// isn't drawn. For big, plain, solid meshes, walls and floors; opaque, in order 0, and neither
+    /// skinned, morphed, nor fading, with a few thousand triangles between a view's.
+    @MainThread @PanicsAtCaller
+    Public Method SetOccluder(occluder: Bool)
+        If !fbe_entity_set_occluder(Live("SetOccluder"), occluder) Then Failed("SetOccluder")
+    End Method
+
+    /// Whether it's an occluder.
+    @MainThread @PanicsAtCaller
+    Public Method Occluder(): Bool => fbe_entity_occluder(Live("Occluder"))
+
+    /// Sets whether a Mesh, Instances, or Terrain casts shadows, when it's opaque or cut out, in
+    /// order 0, as
     /// it does at first.
     @MainThread @PanicsAtCaller
     Public Method SetCastsShadows(casts: Bool)

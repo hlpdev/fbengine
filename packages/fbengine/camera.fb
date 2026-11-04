@@ -511,6 +511,16 @@ Public Final Class Camera Extends Entity
         End If
         Return TargetSize()
     End Method
+
+    /// Sets whether what it draws is tested against occluders, as it is at first.
+    @MainThread @PanicsAtCaller
+    Public Method SetOcclusion(occlusion: Bool)
+        If !fbe_camera_set_occlusion(Live("SetOcclusion"), occlusion) Then Failed("SetOcclusion")
+    End Method
+
+    /// Whether what it draws is tested against occluders.
+    @MainThread @PanicsAtCaller
+    Public Method Occlusion(): Bool => fbe_camera_occlusion(Live("Occlusion"))
 End Class
 
 /// The size of what cameras draw to: the window, in its units.
