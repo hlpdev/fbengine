@@ -1,0 +1,47 @@
+// What says whether what's made and drawn is right, apart from any GPU: a WAV's bytes, and pixels by
+// what they show, with wide thresholds, so a black frame fails, and a change of light doesn't.
+
+Import std.core
+Import std.image.image
+Import std.math
+
+// How many bytes a WAV has before its samples, as the tools write it.
+Const WAV_HEADER: Int = 44
+// A sound's samples can't reach this, or they've clipped.
+Const CLIPS: Int = 32767
+
+/// What's wrong with a 16-bit WAV, by its bytes, or Null: no samples, no sound in them, or clipping.
+Public Function SoundFault(bytes: UInt8[]): String?
+    If bytes.Count <= WAV_HEADER Then Return "it has no samples"
+    Local peak = 0
+    Local at = WAV_HEADER
+    While at + 1 < bytes.Count
+        Local value = (bytes[at] As Int) | ((bytes[at + 1] As Int) << 8)
+        If value >= 32768 Then value -= 65536
+        peak = Max(peak, Abs(value))
+        at += 2
+    End While
+    If peak == 0 Then Return "it's silent"
+    If peak >= CLIPS Then Return "it clips"
+    Return Null
+End Function
+
+/// Whether a color's the sea's, which is blue-green, and dark in its red.
+Public Function IsSea(pixel: Color32): Bool
+    Return (pixel.g As Int) > (pixel.r As Int) + 15 && (pixel.b As Int) > (pixel.r As Int) + 15 &&
+           pixel.r < 140
+End Function
+
+/// Whether a color's the sky's, which is pale.
+Public Function IsSky(pixel: Color32): Bool => pixel.b > 170 && pixel.r > 130
+
+/// How much of an image's pixels `test` holds for, from 0 to 1.
+Public Function Share(image: Image, test: Func(Color32): Bool): Float
+    Local count = 0
+    For y = 0 Until image.Height
+        For x = 0 Until image.Width
+            If test(image[x, y]) Then count += 1
+        End For
+    End For
+    Return (count As Float) / ((image.Width * image.Height) As Float)
+End Function

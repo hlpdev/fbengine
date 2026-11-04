@@ -19,11 +19,7 @@
 #include <string_view>
 #include <vector>
 
-#ifdef __linux__
-#include <dlfcn.h>
-#endif
-
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #include <dlfcn.h>
 #endif
 
@@ -419,14 +415,31 @@ TEST_CASE("freeing a mesh doesn't allocate what it can run out of") {
     FAIL("a call never got to the end of its allocations");
 }
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 // What's failing is this test's own: a library opened at run time, as a driver or a validation
-// layer is, gets libstdc++'s operator new, and throwing inside one, which it can't survive, is no
-// test of the engine. Windows' DLLs have their own already. As own_new.map has it.
-TEST_CASE("what's opened at run time keeps its own operator new") {
+// layer is, gets its C++ library's operator new, and throwing inside one, which it can't survive,
+// is no test of the engine. Nor does it get what's instantiated here and calls that, as std::string
+// is by GCC 13. Windows' DLLs have their own already. As own_new.map and own_new.exports have it.
+TEST_CASE("what's opened at run time keeps its own operator new, and what calls it") {
     using new_t = void* (*)(std::size_t);
-    const auto mine = static_cast<new_t>(&::operator new);
-    CHECK(reinterpret_cast<void*>(mine) != dlsym(RTLD_DEFAULT, "_Znwm"));
+    Dl_info mine{};
+    REQUIRE(dladdr(reinterpret_cast<void*>(static_cast<new_t>(&::operator new)), &mine) != 0);
+    for (const char* name : {
+             "_Znwm",
+             "_Znam",
+             "_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE9_M_createERmm",
+             "_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE9_M_mutateEmmPKcm",
+         }) {
+        INFO(name);
+        void* found = dlsym(RTLD_DEFAULT, name);
+        Dl_info from{};
+        if (found != nullptr) {
+            REQUIRE(dladdr(found, &from) != 0);
+            CHECK(from.dli_fbase != mine.dli_fbase);
+        }
+    }
+    // Nor anything else of the test's.
+    CHECK(dlsym(RTLD_DEFAULT, "fbe_gpu_start") == nullptr);
 }
 #endif
 

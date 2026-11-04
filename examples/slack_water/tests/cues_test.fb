@@ -1,0 +1,235 @@
+// When the game makes each sound, by its flow and your feet, with no device.
+
+Import std.collections
+Import std.core
+Import std.math
+Import std.test
+Import slack_water.cues
+Import slack_water.flow
+Import slack_water.ground
+Import slack_water.map
+Import slack_water.walks
+
+// A flow that says nothing to anyone.
+Function Quiet(): Flow
+    Return Flow(Function(line: String)
+    End Function)
+End Function
+
+// How many of `cue` are in `cues`.
+Function Count(cues: Cue[], cue: Cue): Int
+    Local count = 0
+    For one In cues
+        If one == cue Then count += 1
+    End For
+    Return count
+End Function
+
+// Whether a cue's a step.
+Function IsStep(cue: Cue): Bool => cue != Cue.GULL && cue != Cue.CREAK && cue != Cue.SPLASH
+
+@Test
+Function StepsAreByHowFarYouWalkNeverTheSameTwice()
+    Local cues = Cues()
+    Local flow = Quiet()
+    Local steps: Cue[] = []
+    // Standing still, none.
+    For tick = 1 To 50
+        For cue In cues.Step(flow, 0.0, 0.1, Surface.ROCK, False)
+            Expect(!IsStep(cue))
+        End For
+    End For
+    // Ten seconds at 4 m/s: 40 m, 22 strides of 1.8.
+    For tick = 1 To 100
+        For cue In cues.Step(flow, 0.4, 0.1, Surface.ROCK, False)
+            If IsStep(cue) Then steps.Add(cue)
+        End For
+    End For
+    Expect(steps.Count == 22)
+    For at = 1 Until steps.Count
+        Expect(steps[at] != steps[at - 1])
+    End For
+    // They don't go round in order.
+    Local inOrder = True
+    For at = 3 Until steps.Count
+        If steps[at] != steps[at - 3] Then inOrder = False
+    End For
+    Expect(!inOrder)
+End Function
+
+// What you're on says which steps those are.
+@Test
+Function StepsAreByTheSurface()
+    Expect(SurfaceAt(MAIN_X, 0.0, True, 0.0) == Surface.FLOOR)
+    Expect(SurfaceAt(PaddleSpot().x, PaddleSpot().y, False, 0.0) == Surface.ROAD)
+    Expect(SurfaceAt(MAIN_X, 12.0, False, 0.0) == Surface.ROCK)
+    Expect(SurfaceAt(PaddleSpot().x, PaddleSpot().y, False, 0.6) == Surface.SHALLOWS)
+    Expect(StepPitch(Surface.ROAD) < StepPitch(Surface.ROCK))
+    Local banks = [(Surface.FLOOR, [Cue.FLOOR_1, Cue.FLOOR_2]),
+                   (Surface.SHALLOWS, [Cue.WADE_1, Cue.WADE_2]),
+                   (Surface.ROCK, [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3]),
+                   (Surface.ROAD, [Cue.STEP_1, Cue.STEP_2, Cue.STEP_3])]
+    For pair In banks
+        Local cues = Cues()
+        Local flow = Quiet()
+        For tick = 1 To 50
+            For cue In cues.Step(flow, 0.4, 0.1, pair.0, False)
+                If IsStep(cue) Then Expect(pair.1.Contains(cue))
+            End For
+        End For
+    End For
+End Function
+
+// The water carrying you isn't walking.
+@Test
+Function ACarryIsntSteps()
+    Local cues = Cues()
+    For cue In cues.Step(Quiet(), 80.0, 0.1, Surface.ROCK, False)
+        Expect(!IsStep(cue))
+    End For
+End Function
+
+// Gulls call now and then, until the flood; there's one splash, at it.
+@Test
+Function GullsStopAtTheFloodWhichSplashes()
+    Local cues = Cues()
+    Local flow = Quiet()
+    Local gulls = 0
+    Local splashes = 0
+    For tick = 1 To 1000
+        flow.Step(0.1)
+        Local heard = cues.Step(flow, 0.0, 0.1, Surface.ROCK, False)
+        gulls += Count(heard, Cue.GULL)
+        splashes += Count(heard, Cue.SPLASH)
+    End For
+    // 100 s, at one each 5 to 14 s.
+    Expect(gulls >= 7 && gulls <= 20)
+    Expect(splashes == 0)
+    flow.Step(FLOOD_AT - 100.0 + 1.0)
+    Expect(flow.Flooded())
+    Local after = cues.Step(flow, 0.0, 100.0, Surface.ROCK, False)
+    Expect(Count(after, Cue.SPLASH) == 1)
+    Expect(Count(after, Cue.GULL) == 0)
+    Expect(Count(cues.Step(flow, 0.0, 100.0, Surface.ROCK, False), Cue.SPLASH) == 0)
+End Function
+
+// A gull's off over the water, on different sides, from anywhere on the walk.
+@Test
+Function GullsAreOverTheWater()
+    Local cues = Cues()
+    For place In [DoorSpot(), GearSpot(), PaddleSpot(), BeltSpot()]
+        Local first = cues.GullAt(place.x, place.y)
+        Local apart = 0.0
+        For call = 1 To 40
+            Local at = cues.GullAt(place.x, place.y)
+            Expect(GroundHeight(at.x, at.y) < 0.0)
+            Local dx = at.x - first.x
+            Local dz = at.y - first.y
+            apart = Max(apart, dx * dx + dz * dz)
+        End For
+        // Not all from the one place: at least ten meters apart.
+        Expect(apart > 100.0)
+    End For
+End Function
+
+// Creaks are inside the mill, or by the turning wheel, not out on the rocks.
+@Test
+Function CreaksAreAtTheMill()
+    Local inside = Cues()
+    Local flow = Quiet()
+    Local creaks = 0
+    For tick = 1 To 300
+        creaks += Count(inside.Step(flow, 0.0, 0.1, Surface.FLOOR, True), Cue.CREAK)
+    End For
+    Expect(creaks >= 3)
+    Local outside = Cues()
+    creaks = 0
+    For tick = 1 To 300
+        creaks += Count(outside.Step(flow, 0.0, 0.1, Surface.ROCK, False), Cue.CREAK)
+    End For
+    Expect(creaks == 0)
+End Function
+
+// With the wheel turning, its creaks are heard from outside too.
+@Test
+Function TheWheelCreaks()
+    Local flow = Quiet()
+    Local steps = WalkOf("bright") ?? []
+    Local next = 0
+    While flow.Ended() == Ending.NONE
+        If next < steps.Count && WalkReady(flow, steps[next])
+            Select steps[next]
+                Case "W"
+                    flow.GoOut()
+                Case "S"
+                    flow.GoBack()
+                Case "E"
+                    flow.Use()
+                Case "Q"
+                    flow.Hand()
+            End Select
+            next += 1
+        End If
+        flow.Step(0.1)
+    End While
+    Local cues = Cues()
+    Local creaks = 0
+    For tick = 1 To 300
+        creaks += Count(cues.Step(flow, 0.0, 0.1, Surface.ROCK, False), Cue.CREAK)
+    End For
+    Expect(creaks >= 3)
+End Function
+
+@Test
+Function TheWindAndSeaRiseWithTheTide()
+    Expect(WindLevel(0.0, False) < WindLevel(RISING_AT, False))
+    Expect(WindLevel(RISING_AT, False) < WindLevel(TIDE_IN_AT, False))
+    Expect(WindLevel(FLOOD_AT, True) < WindLevel(FLOOD_AT, False))
+    Expect(SeaLevel(0.0, False) == SeaLevel(RISING_AT, False))
+    Expect(SeaLevel(RISING_AT, False) < SeaLevel(FLOOD_AT, False))
+    Expect(SeaLevel(FLOOD_AT, False) < SeaLevel(TIDE_IN_AT, False))
+    Expect(SeaLevel(FLOOD_AT, True) < SeaLevel(FLOOD_AT, False))
+End Function
+
+// What can sound at once, each at the tools' peak, doesn't clip: to the end, and at the flood.
+@Test
+Function NothingAtOnceClips()
+    Local toTheEnd = (WindLevel(TIDE_IN_AT, False) + SeaLevel(TIDE_IN_AT, False)) * 0.7 +
+                     WheelLevel(1.0) * 0.7 + CueLevel(Cue.STEP_1) * 0.7 + CueLevel(Cue.CREAK) * 0.6
+    Expect(toTheEnd < 1.0)
+    Local atTheFlood = (WindLevel(FLOOD_AT, False) + SeaLevel(FLOOD_AT, False)) * 0.7 +
+                       CueLevel(Cue.SPLASH) * 0.8 + CueLevel(Cue.STEP_1) * 0.7 +
+                       CueLevel(Cue.GULL) * 0.6
+    Expect(atTheFlood < 1.0)
+End Function
+
+// The low-pass goes from open to muffled, by its octaves, over about a third of a second, and never to
+// nothing.
+@Test
+Function TheCutoffRamps()
+    Expect(OutsideCutoff(True) >= 300.0 && OutsideCutoff(True) <= 400.0)
+    Expect(OutsideCutoff(False) > 0.0)
+    Local open = OutsideCutoff(False)
+    Local muffled = OutsideCutoff(True)
+    Local at = open
+    Local steps = 0
+    While at != muffled && steps < 100
+        Local next = CutoffToward(at, muffled, 1.0 / 60.0)
+        Expect(next < at)
+        Expect(next / at > 0.5)
+        at = next
+        steps += 1
+    End While
+    Expect(at == muffled)
+    Expect(steps >= 10)
+    Expect(CutoffToward(muffled, open, 0.5) == open)
+End Function
+
+// The wheel's heard and drawn at one speed, so its pitch and turning keep their ratio.
+@Test
+Function TheWheelTurnsByHowItEnded()
+    Expect(WheelSpeed(Ending.NONE) == 0.0)
+    Expect(WheelSpeed(Ending.DARK) == 0.0)
+    Expect(WheelSpeed(Ending.DIM) > 0.0)
+    Expect(WheelSpeed(Ending.DIM) < WheelSpeed(Ending.BRIGHT))
+End Function
