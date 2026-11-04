@@ -41,8 +41,12 @@ fbe::golden::frame_t saved(const std::filesystem::path& path) {
 
 } // namespace
 
-// The editor's panes, and what opens over them, as `--save` saves them.
+// The editor's panes, and what opens over them, as `--save` saves them. Its grid's lines are
+// thinner than a pixel far off, so which pixels they cover is a near thing: at one size of its
+// view, lavapipe on Linux covered 2 others than it does on Windows, from the same camera, whatever
+// its Mesa or the natives' build. So 8 of a frame's pixels can differ.
 TEST_CASE("the editor's frames match their golden images", "[.example]") {
+    constexpr fbe::golden::tolerance_t near_thing{ .channel = 2, .share = 8.0 / (1280.0 * 720.0) };
     REQUIRE(fbe_window_set_headless(true));
     require(fbe_gpu_start());
     for (const std::string_view frame : {
@@ -58,7 +62,7 @@ TEST_CASE("the editor's frames match their golden images", "[.example]") {
         INFO("frame " << frame);
         const std::filesystem::path path = std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /
                                            "editor" / std::format("frame_{}.png", frame);
-        fbe::golden::check(std::format("editor_{}", frame), saved(path));
+        fbe::golden::check(std::format("editor_{}", frame), saved(path), near_thing);
     }
     stop_gpu();
 }
