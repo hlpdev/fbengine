@@ -306,6 +306,27 @@ Public Final Class Geometry
         Return AABB(VecOf(found.min), VecOf(found.max))
     End Method
 
+    /// Sets a level of detail, or adds one with the next level: what a Mesh draws of this where it's
+    /// small in its Camera's view, `share` being how much of the view's height its bounds take at its
+    /// distance: below it, it draws `coarser`, or nothing for Null. Each share's below the one
+    /// before. A level's Geometry has none of its own. Collisions, picks, and bounds keep this one.
+    /// Others panic.
+    @MainThread @PanicsAtCaller
+    Public Method SetLod(level: Int, coarser: Geometry?, share: Float)
+        Local drawn: UInt64 = coarser != Null ? coarser.Live("SetLod") : 0
+        If !fbe_geometry_set_lod(Live("SetLod"), level As Int32, drawn, share) Then Failed("SetLod")
+    End Method
+
+    /// How many levels of detail it has.
+    @MainThread @PanicsAtCaller
+    Public Method LodCount(): Int => fbe_geometry_lod_count(Live("LodCount"))
+
+    /// Lets go of its levels of detail.
+    @MainThread @PanicsAtCaller
+    Public Method ClearLods()
+        If !fbe_geometry_clear_lods(Live("ClearLods")) Then Failed("ClearLods")
+    End Method
+
     /// Sets the box, in its own space, its meshes are culled by when drawn instead of its bounds,
     /// as a skinned mesh's, whose vertices move out of them, wants, or its bounds again for Null.
     /// InView and Bounds keep its bounds; copies keep it. A backward box panics.

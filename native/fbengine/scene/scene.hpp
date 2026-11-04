@@ -130,6 +130,13 @@ struct material_t {
     std::array<layer_t, FBE_MATERIAL_LAYERS> layers{};
 };
 
+/// A level of detail of a geometry.
+struct lod_t {
+    /// The geometry it draws, by slot, which it holds, or none for nothing.
+    std::uint32_t geometry = none;
+    float share = 0.0F;
+};
+
 /// A geometry: surfaces, shared by every mesh drawing it. It lives while the FB side holds its
 /// handle or a mesh draws it, which its references count.
 struct geometry_t {
@@ -137,6 +144,9 @@ struct geometry_t {
     /// How much of its way to the eye it's drawn nearer, as a decal on a terrain is, so what it's
     /// on doesn't come up through it where it's coarser, far off.
     float eye_pull = 0.0F;
+    /// Its levels of detail, their shares going down, and how many geometries have it as one.
+    std::vector<lod_t> lods;
+    std::uint32_t lod_uses = 0;
     std::uint32_t references = 0;
     /// Goes up at every change, so what's worked out from it, as collision trees, knows when it's
     /// stale.
@@ -291,6 +301,40 @@ struct particles_t {
     float slice_age = 0.0F;
 };
 
+/// A run of an Instances entity's instances near each other, and the box they're in, in its space.
+struct instance_cluster_t {
+    std::uint32_t first = 0;
+    std::uint32_t count = 0;
+    vec3_t low;
+    vec3_t high;
+    /// The biggest sphere one of them is in, which is what its size in a view goes by.
+    float radius = 0.0F;
+};
+
+/// An Instances entity: what it draws, in, and its instances, in an order where those near each
+/// other are together, with where each index went and whose each place is; and its clusters, worked
+/// out again when they or its geometry's changed.
+struct instances_t {
+    std::uint32_t entity = none;
+    std::uint32_t geometry = none;
+    std::uint32_t material = none;
+    std::vector<fbe_instance_t> items;
+    std::vector<std::uint32_t> slots;
+    std::vector<std::uint32_t> indices;
+    std::uint64_t version = 0;
+    std::vector<instance_cluster_t> clusters;
+    std::uint32_t clusters_geometry = none;
+    std::uint64_t clusters_version = 0;
+    bool clusters_stale = true;
+    /// Which clusters have changed, if not all of them have.
+    std::vector<std::uint32_t> stale_clusters;
+    /// How many of them have an alpha under 1.
+    std::size_t faded = 0;
+    /// Where in `items` they've changed since they went to the GPU, if not all of them have.
+    std::vector<std::uint32_t> changed;
+    bool all_changed = true;
+};
+
 /// Every entity's data, a field to an array, indexed by slot.
 struct entities_t {
     slots_t slots{ ENTITY_KIND };
@@ -319,6 +363,8 @@ struct entities_t {
     std::vector<bool> blocks_sight;
     /// Whether it casts shadows.
     std::vector<bool> casts_shadows;
+    /// Whether it's an occluder.
+    std::vector<bool> occluder;
     std::vector<collider_t> colliders;
     /// Its entry in scene_t's pickables, or none.
     std::vector<std::uint32_t> pickable;
@@ -360,6 +406,8 @@ struct camera_t {
     std::int32_t projection = 0;
     float field_of_view = 1.0471976F;
     float orthographic_height = 10.0F;
+    /// Whether what it draws is tested against occluders.
+    bool occlusion = true;
     float nearest = 0.1F;
     float farthest = 1000.0F;
     /// Without a viewport of its own, it draws to the whole of its target, whatever its size.
@@ -427,6 +475,8 @@ struct scene_t {
     std::vector<plane_t> planes;
     /// Every particle emitter, in no order, each knowing its entity.
     std::vector<particles_t> particles;
+    /// Every Instances entity, in no order, each knowing its entity.
+    std::vector<instances_t> instances;
     std::vector<terrain_t> terrains;
     slots_t geometry_slots{ GEOMETRY_KIND };
     std::vector<geometry_t> geometries;
@@ -520,6 +570,31 @@ void terrain_under(const terrain_t& terrain, vec3_t min, vec3_t max,
 /// The point on a terrain's surface over a point in its own space, and the surface's normal there;
 /// false off its grid.
 bool terrain_surface(const terrain_t& terrain, vec3_t local, vec3_t& point, vec3_t& normal);
+/// The live Instances entity a handle is for, or null, with fbe_error saying so.
+instances_t* instances_of(std::uint64_t handle);
+void add_instances(std::uint32_t entity);
+void remove_instances(std::uint32_t entity);
+void copy_instances(std::uint32_t from, std::uint32_t to);
+/// Its clusters, worked out again if they're stale.
+const std::vector<instance_cluster_t>& instance_clusters(instances_t& found);
+/// The box its instances are in, in its space: false for none.
+bool instances_bounds(instances_t& found, vec3_t& min, vec3_t& max);
+/// Which of its geometry's levels of detail a cluster draws, by the size of the biggest of it where
+/// it's nearest, none for nothing.
+std::uint32_t cluster_lod(const instances_t& found, const instance_cluster_t& cluster,
+                          const mat4_t& matrix, const camera_t& camera, vec3_t eye,
+                          float half_height);
+/// The levels some cluster of it draws.
+std::vector<std::uint32_t> instances_levels(instances_t& found, const mat4_t& matrix,
+                                            const camera_t& camera, vec3_t eye, float half_height);
+/// The geometry to draw of one with levels of detail, by slot, or none for nothing, at a place and
+/// size in the world, from an eye, by how the camera's view spreads: half its height at a depth of
+/// 1, or in world units.
+std::uint32_t lod_for(std::uint32_t geometry, vec3_t center, float radius, const camera_t& camera,
+                      vec3_t eye, float half_height);
+/// As lod_for, at a distance from the eye.
+std::uint32_t lod_at(std::uint32_t geometry, float distance, float radius, const camera_t& camera,
+                     float half_height);
 /// The live particle emitter a handle is for, or null, with fbe_error saying so.
 particles_t* particles_of(std::uint64_t handle);
 void add_particles(std::uint32_t entity);
@@ -554,6 +629,9 @@ mat4_t sprite_matrix(std::uint32_t entity, std::uint32_t camera);
 /// A sprite's quad's matrix in the world, its own matrix to the world `own`, seen by a camera
 /// turned `eye`.
 mat4_t sprite_matrix(std::uint32_t entity, const mat4_t& own, quat_t eye);
+/// The same with the camera's axes given, which are the same for a view's every sprite.
+mat4_t sprite_matrix(std::uint32_t entity, const mat4_t& own, vec3_t eye_x, vec3_t eye_y,
+                     vec3_t eye_z);
 /// The box in the world a sprite's quad stays in, however it turns.
 void sprite_bounds(std::uint32_t entity, vec3_t& min, vec3_t& max);
 /// The box in the world a sprite's quad stays in, however it turns, its own matrix to the world
@@ -566,6 +644,8 @@ std::uint32_t make_geometry();
 std::uint32_t geometry_slot(std::uint64_t handle);
 /// Holds a geometry once more, or lets it go once, freeing it after its last.
 void retain_geometry(std::uint32_t geometry);
+/// Lets go of a geometry's levels of detail.
+void clear_lods(std::uint32_t geometry);
 void release_geometry(std::uint32_t geometry);
 /// Marks a geometry changed: `reshaped` when triangles or surfaces came or went, else only moved.
 void touch_geometry(std::uint32_t geometry, bool reshaped);

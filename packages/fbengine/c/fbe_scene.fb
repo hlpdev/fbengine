@@ -10,6 +10,7 @@ Public Const FBE_ENTITY_PLANE: Int32 = 5
 Public Const FBE_ENTITY_MIRROR: Int32 = 6
 Public Const FBE_ENTITY_TERRAIN: Int32 = 7
 Public Const FBE_ENTITY_PARTICLES: Int32 = 8
+Public Const FBE_ENTITY_INSTANCES: Int32 = 9
 Public Const FBE_SPACE_LOCAL: Int32 = 0
 Public Const FBE_SPACE_WORLD: Int32 = 1
 Public Const FBE_AXIS_RIGHT: Int32 = 0
@@ -104,6 +105,11 @@ End Struct
     Public Field normal: fbe_vec3_t
     Public Field uv0: fbe_vec2_t
     Public Field uv1: fbe_vec2_t
+    Public Field color: fbe_color_t
+End Struct
+
+@CLayout Public Struct fbe_instance_t
+    Public Field matrix: fbe_mat4_t
     Public Field color: fbe_color_t
 End Struct
 
@@ -290,6 +296,12 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_geometry_cylinder(segments: Int32, capped: Bool): UInt64
     Function fbe_geometry_cone(segments: Int32, capped: Bool): UInt64
     Function fbe_geometry_plane(segments: Int32): UInt64
+    Function fbe_geometry_set_lod(geometry: UInt64, level: Int32, coarser: UInt64,
+                                  share: Float32): Bool
+    Function fbe_geometry_lod_count(geometry: UInt64): Int32
+    Function fbe_geometry_lod(geometry: UInt64, level: Int32, coarser: Ptr<UInt64>,
+                              share: Ptr<Float32>): Bool
+    Function fbe_geometry_clear_lods(geometry: UInt64): Bool
     Function fbe_surface_add_vertices(geometry: UInt64, surface: Int32, vertices: Ptr<fbe_vertex_t>,
                                       count: Int32): Int32
     Function fbe_surface_add_triangles(geometry: UInt64, surface: Int32, indices: Ptr<UInt32>,
@@ -390,6 +402,18 @@ Public Extern "C" Lib "fbengine_native"
     Function fbe_terrain_set_tint(terrain: UInt64, r: Float32, g: Float32, b: Float32,
                                   a: Float32): Bool
     Function fbe_terrain_tint(terrain: UInt64, tint: Ptr<fbe_color_t>): Bool
+    Function fbe_instances_set_geometry(instances: UInt64, geometry: UInt64): Bool
+    Function fbe_instances_geometry(instances: UInt64): UInt64
+    Function fbe_instances_set_material(instances: UInt64, material: UInt64): Bool
+    Function fbe_instances_material(instances: UInt64): UInt64
+    Function fbe_instances_set(instances: UInt64, all: Ptr<fbe_instance_t>, count: Int32): Bool
+    Function fbe_instances_count(instances: UInt64): Int32
+    Function fbe_instances_set_one(instances: UInt64, index: Int32, one: Ptr<fbe_instance_t>): Bool
+    Function fbe_instances_get(instances: UInt64, index: Int32, one: Ptr<fbe_instance_t>): Bool
+    Function fbe_entity_set_occluder(entity: UInt64, occluder: Bool): Bool
+    Function fbe_entity_occluder(entity: UInt64): Bool
+    Function fbe_camera_set_occlusion(camera: UInt64, occlusion: Bool): Bool
+    Function fbe_camera_occlusion(camera: UInt64): Bool
     Function fbe_world_step_particles(world: UInt64, seconds: Float32): Bool
     Function fbe_particles_set_material(particles: UInt64, material: UInt64): Bool
     Function fbe_particles_material(particles: UInt64): UInt64

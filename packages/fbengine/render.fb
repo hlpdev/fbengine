@@ -95,12 +95,13 @@ Extend Camera
 
     /// What the camera draws, `tween` of the way from its World's last capture to now, seen from
     /// where it is then, in the order it draws them: by their materials' orders, lower first. In
-    /// order 0, the scene's, what's opaque first, by pipeline, by material, and nearest first, then
+    /// order 0, the scene's, what's opaque first, by pipeline, by geometry, and nearest first, then
     /// what blends, furthest first; in the others, all furthest first, what's opaque first at the
     /// same depth. Ties as the entities were made, a mesh's surfaces in order. Only showing meshes,
-    /// sprites, ground planes, and terrains it might see, with some alpha left after their fade;
-    /// none for a hidden camera or a viewport with no size. With no window open and no viewport of
-    /// its own, or a tween outside 0 to 1, it panics.
+    /// sprites, emitters, Instances, ground planes, and terrains it might see, past what's wholly
+    /// behind its occluders, in order 0, with some alpha left after their fade; none for a hidden
+    /// camera or a viewport with no size. With no window open and no viewport of its own, or a
+    /// tween outside 0 to 1, it panics.
     @MainThread @PanicsAtCaller
     Public Method Draws(tween: Float = 1): Draw[]
         Local camera = Live("Draws")

@@ -95,6 +95,13 @@ struct Emitter
     float wrap;
 };
 
+// An instance: its matrix's three rows, and its color.
+struct Instance
+{
+    float4 rows[3];
+    float4 color;
+};
+
 // What a morph target moves a vertex by, and its normal.
 struct TargetVertex
 {
@@ -111,7 +118,8 @@ struct DrawnTarget
 
 // A draw: its matrix to the camera's view, what turns its normals there, its color and alpha, its
 // vertices, its joints and palette if it's skinned, its morph targets and which it's drawn with if
-// it's morphed, its emitter if it's particles, its material's index, its own lights, how many matrices its palette has, 0 if it
+// it's morphed, its emitter if it's particles, its instances if it has them, its material's index,
+// its own lights, how many matrices its palette has, 0 if it
 // isn't skinned, and how many targets it's drawn with, and how many vertices each has.
 struct Draw
 {
@@ -124,6 +132,7 @@ struct Draw
     TargetVertex* targets;
     DrawnTarget* drawnTargets;
     Emitter* emitter;
+    Instance* instances;
     uint material;
     uint lightFirst;
     uint lightCount;
@@ -135,6 +144,24 @@ struct Draw
 // Reads through what a draw has the address of, each in a function of its own. Inlined, an optimizer
 // makes one access chain through the draw's address and this one, which SPIRV-Cross, as MoltenVK runs
 // it, writes as Metal that doesn't compile, adding the two indices.
+[noinline]
+Instance instanceAt(Instance* instances, uint index)
+{
+    return instances[index];
+}
+
+[noinline]
+Emitter emitterOf(Emitter* emitter)
+{
+    return emitter[0];
+}
+
+[noinline]
+Particle particleAt(Particle* records, uint index)
+{
+    return records[index];
+}
+
 [noinline]
 Vertex vertexAt(Vertex* vertices, uint index)
 {
@@ -260,9 +287,11 @@ struct Camera
     float4 worldRows[3];
 };
 
+// The camera, and, as instances number their instances, not draws, which draw they're of.
 struct Push
 {
     Camera* camera;
+    uint draw;
 };
 
 [[vk::push_constant]]
@@ -382,6 +411,43 @@ float3 skinnedNormal(float4x4 skin, float3 normal)
     return whole(dot(a, across) < 0.0 ? -turned : turned);
 }
 
+// A draw's corner, from where it is in its mesh's space and how it's turned there.
+Corner litCorner(Camera* camera, Draw draw, uint drawIndex, float4 position, float3 normal, Vertex vertex,
+                 float4 color)
+{
+    const float4 place = mul(draw.toView, position);
+    Corner corner;
+    corner.position = mul(camera.projection, place);
+    corner.place = place.xyz;
+    corner.normal = float3(dot(draw.normals[0].xyz, normal), dot(draw.normals[1].xyz, normal),
+                           dot(draw.normals[2].xyz, normal));
+    corner.uv0 = float2(vertex.uv0[0], vertex.uv0[1]);
+    corner.uv1 = float2(vertex.uv1[0], vertex.uv1[1]);
+    corner.color = color;
+    if (fixedLook())
+    {
+        corner.color.rgb = toEncoded(corner.color.rgb);
+    }
+    corner.draw = drawIndex;
+    corner.lit = float3(1.0, 1.0, 1.0);
+    if (shading == shadingVertex)
+    {
+        // Lit here, by the draw's own lights, and clamped here, before any texture.
+        const float3 unit = whole(corner.normal);
+        const float3 eye = toEye(camera, place.xyz);
+        const float shininess = camera.materials[draw.material].shininess;
+        float3 diffuse = toEncoded(camera.ambient);
+        float3 highlight = float3(0.0, 0.0, 0.0);
+        for (uint i = 0; i < draw.lightCount; ++i)
+        {
+            addLight(camera.lights[camera.drawLights[draw.lightFirst + i]], place.xyz, unit, eye,
+                     shininess, 1.0, diffuse, highlight);
+        }
+        corner.lit = saturate(diffuse + highlight);
+    }
+    return corner;
+}
+
 [shader("vertex")]
 Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
 {
@@ -434,37 +500,32 @@ Corner vertexMain(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInsta
         position = mul(skin, position);
         normal = skinnedNormal(skin, normal);
     }
-    const float4 place = mul(draw.toView, position);
-    Corner corner;
-    corner.position = mul(camera.projection, place);
-    corner.place = place.xyz;
-    corner.normal = float3(dot(draw.normals[0].xyz, normal), dot(draw.normals[1].xyz, normal),
-                           dot(draw.normals[2].xyz, normal));
-    corner.uv0 = float2(vertex.uv0[0], vertex.uv0[1]);
-    corner.uv1 = float2(vertex.uv1[0], vertex.uv1[1]);
-    corner.color = float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]);
-    if (fixedLook())
-    {
-        corner.color.rgb = toEncoded(corner.color.rgb);
-    }
-    corner.draw = instance;
-    corner.lit = float3(1.0, 1.0, 1.0);
-    if (shading == shadingVertex)
-    {
-        // Lit here, by the draw's own lights, and clamped here, before any texture.
-        const float3 unit = whole(corner.normal);
-        const float3 eye = toEye(camera, place.xyz);
-        const float shininess = camera.materials[draw.material].shininess;
-        float3 diffuse = toEncoded(camera.ambient);
-        float3 highlight = float3(0.0, 0.0, 0.0);
-        for (uint i = 0; i < draw.lightCount; ++i)
-        {
-            addLight(camera.lights[camera.drawLights[draw.lightFirst + i]], place.xyz, unit, eye,
-                     shininess, 1.0, diffuse, highlight);
-        }
-        corner.lit = saturate(diffuse + highlight);
-    }
-    return corner;
+    const float4 color = float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]);
+    return litCorner(camera, draw, instance, position, normal, vertex, color);
+}
+
+// An instance of an Instances entity: its vertex through its own matrix, then as any draw's.
+[shader("vertex")]
+Corner instanceVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+{
+    Camera* camera = push.camera;
+    const Draw draw = camera.draws[push.draw];
+    const Vertex vertex = vertexAt(draw.vertices, index);
+    const Instance one = instanceAt(draw.instances, instance);
+    const float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
+                                   dot(one.rows[2], start), 1.0);
+    // Its matrix's columns, whose cofactors turn a normal.
+    const float3 a = float3(one.rows[0].x, one.rows[1].x, one.rows[2].x);
+    const float3 b = float3(one.rows[0].y, one.rows[1].y, one.rows[2].y);
+    const float3 c = float3(one.rows[0].z, one.rows[1].z, one.rows[2].z);
+    const float3 x = cross(b, c);
+    const float3 given = float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]);
+    const float3 turned = x * given.x + cross(c, a) * given.y + cross(a, b) * given.z;
+    const float3 normal = whole(dot(a, x) < 0.0 ? -turned : turned);
+    const float4 color = float4(vertex.color[0], vertex.color[1], vertex.color[2], vertex.color[3]) *
+                         one.color;
+    return litCorner(camera, draw, push.draw, position, normal, vertex, color);
 }
 
 // A quad's two triangles, from its corners' bits: x, then y.
@@ -478,8 +539,8 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
 {
     Camera* camera = push.camera;
     const Draw draw = camera.draws[instance];
-    const Emitter emitter = draw.emitter[0];
-    const Particle particle = emitter.records[index / 6];
+    const Emitter emitter = emitterOf(draw.emitter);
+    const Particle particle = particleAt(emitter.records, index / 6);
     Corner corner;
     corner.position = float4(0.0, 0.0, 0.0, 1.0);
     corner.place = float3(0.0, 0.0, 0.0);
@@ -867,17 +928,18 @@ ShadowCorner shadowVertex(uint index : SV_VulkanVertexID, uint instance : SV_Vul
 {
     Camera* camera = push.camera;
     const Draw draw = camera.draws[instance];
-    const Vertex vertex = draw.vertices[index];
+    const Vertex vertex = vertexAt(draw.vertices, index);
     float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     for (uint i = 0; i < draw.drawnTargetCount; ++i)
     {
-        const DrawnTarget drawn = draw.drawnTargets[i];
-        const TargetVertex moved = draw.targets[drawn.target * draw.targetVertices + index];
+        const DrawnTarget drawn = drawnTargetAt(draw.drawnTargets, i);
+        const TargetVertex moved =
+            targetVertexAt(draw.targets, drawn.target * draw.targetVertices + index);
         position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) * drawn.weight;
     }
     if (draw.jointCount != 0)
     {
-        const Joints joints = draw.joints[index];
+        const Joints joints = jointsAt(draw.joints, index);
         float4x4 skin = float4x4(0.0);
         for (uint joint = 0; joint < 4; ++joint)
         {
@@ -890,7 +952,7 @@ ShadowCorner shadowVertex(uint index : SV_VulkanVertexID, uint instance : SV_Vul
             }
             else
             {
-                skin += draw.palette[min(which, draw.jointCount - 1)] * weight;
+                skin += paletteAt(draw.palette, min(which, draw.jointCount - 1)) * weight;
             }
         }
         position = mul(skin, position);
@@ -901,6 +963,26 @@ ShadowCorner shadowVertex(uint index : SV_VulkanVertexID, uint instance : SV_Vul
     corner.uv0 = float2(vertex.uv0[0], vertex.uv0[1]);
     corner.uv1 = float2(vertex.uv1[0], vertex.uv1[1]);
     corner.draw = instance;
+    return corner;
+}
+
+// An instance's, as the shadow pass has it.
+[shader("vertex")]
+ShadowCorner shadowInstanceVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanInstanceID)
+{
+    Camera* camera = push.camera;
+    const Draw draw = camera.draws[push.draw];
+    const Vertex vertex = vertexAt(draw.vertices, index);
+    const Instance one = instanceAt(draw.instances, instance);
+    const float4 start = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    const float4 position = float4(dot(one.rows[0], start), dot(one.rows[1], start),
+                                   dot(one.rows[2], start), 1.0);
+    ShadowCorner corner;
+    corner.position = mul(camera.projection, mul(draw.toView, position));
+    corner.alpha = vertex.color[3] * one.color.a;
+    corner.uv0 = float2(vertex.uv0[0], vertex.uv0[1]);
+    corner.uv1 = float2(vertex.uv1[0], vertex.uv1[1]);
+    corner.draw = push.draw;
     return corner;
 }
 

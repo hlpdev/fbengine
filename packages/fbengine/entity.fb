@@ -11,6 +11,7 @@ Import "./c/fbe_scene"
 Import "./camera"
 Import "./light"
 Import "./mesh"
+Import "./instances"
 Import "./mirror"
 Import "./particles"
 Import "./plane"
@@ -39,6 +40,8 @@ Public Enum EntityKind
     TERRAIN = 7
     /// A Particles, which spawns them.
     PARTICLES = 8
+    /// An Instances, which draws a Geometry many times over.
+    INSTANCES = 9
 End Enum
 
 // One wrapper for each live entity, by its handle's slot.
@@ -164,8 +167,8 @@ Public Class Entity Implements Printable
         Local child = fbe_entity_child(Live("Child"), index)
         If child == 0
             Local count = ChildCount()
-            Panic(
-                "Child({index}) on a {KindName()} with {count} {count == 1 ? "child" : "children"}")
+            Local children = count == 1 ? "child" : "children"
+            Panic("Child({index}) on {KindWithArticle()} with {count} {children}")
         End If
         Return Present(EntityOf(child), Self, "Child")
     End Method
@@ -320,6 +323,9 @@ Public Class Entity Implements Printable
     // What the entity is, as panics name it.
     Package Method KindName(): String => "Entity"
 
+    Package Method KindWithArticle(): String =>
+        KindName() == "Entity" ? "an Entity" : "a {KindName()}"
+
     // The handle, or a panic naming the call for an entity that was freed.
     @PanicsAtCaller
     Package Method Live(call: String): UInt64
@@ -330,7 +336,7 @@ Public Class Entity Implements Printable
     // A panic naming the call and the entity's kind, with what C said went wrong.
     @PanicsAtCaller
     Package Method Failed(call: String)
-        Panic("{call} on a {KindName()}: {LastError()}")
+        Panic("{call} on {KindWithArticle()}: {LastError()}")
     End Method
 
     // Lets go of what was attached, keeping the handle.
@@ -405,6 +411,8 @@ Package Function EntityOf(handle: UInt64): Entity?
             Return Terrain(handle)
         Case FBE_ENTITY_PARTICLES
             Return Particles(handle)
+        Case FBE_ENTITY_INSTANCES
+            Return Instances(handle)
     End Select
     Panic("an entity of kind {kind} has no wrapper")
 End Function

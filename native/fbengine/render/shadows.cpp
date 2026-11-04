@@ -170,10 +170,11 @@ bool pack(const std::vector<std::uint32_t>& sizes, std::uint32_t side,
     return true;
 }
 
-/// What casts: a draw of the shadow pass's list, the sphere it's within, in the world, and whether
-/// a camera can fade it out.
+/// What casts: a draw of the shadow pass's list, which those of an Instances' clusters share, the
+/// sphere it's within, in the world, and whether a camera can fade it out.
 struct caster_t {
     draw_data_t data{};
+    std::uint32_t draw = 0;
     std::uint64_t key = 0;
     VkBuffer indices = VK_NULL_HANDLE;
     VkDeviceSize index_offset = 0;
@@ -182,6 +183,8 @@ struct caster_t {
     float radius = 0.0F;
     std::uint32_t entity = none;
     bool fades = false;
+    std::uint32_t instance_first = 0;
+    std::uint32_t instance_count = 0;
 };
 
 /// The key of a caster's pipeline, as fbe_render.h lays its bits out: only what the shadow pass
@@ -227,8 +230,10 @@ gathered_t& gathered() {
 }
 
 /// Every mesh surface and terrain of a world that casts, sorted so what can go together does. A
-/// material's only there for a cut-out, which is all that reads one.
-bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
+/// material's only there for a cut-out, which is all that reads one. A mesh with levels of detail
+/// casts what the camera draws of it, so those aren't kept between cameras.
+bool gather_casters(const scene::camera_t& camera, const scene::view_t& view, std::uint32_t world,
+                    const scene::tweened_t& tweened) {
     gathered_t& found = gathered();
     if (found.have && found.world == world && found.tween == tweened.tween()) {
         return true;
@@ -237,6 +242,10 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
     casters.clear();
     found.sampled.clear();
     const scene::scene_t& s = scene::scene();
+    float half_width = 0.0F;
+    float half_height = 0.0F;
+    scene::half_extents(camera, view, half_width, half_height);
+    bool any_lods = false;
     std::vector<material_data_t> materials;
     std::unordered_map<std::uint32_t, std::uint32_t> material_index;
     std::unordered_map<std::uint32_t, std::pair<VkDeviceAddress, std::uint32_t>> palettes;
@@ -261,7 +270,11 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
             continue;
         }
         const mat4_t matrix = tweened.pose(mesh.entity).matrix;
-        const scene::geometry_t& geometry = s.geometries[mesh.geometry];
+        any_lods = any_lods || !s.geometries[mesh.geometry].lods.empty();
+        const std::uint32_t drawn = mesh_lod(mesh, matrix, tweened, camera, view);
+        if (drawn == none) {
+            continue;
+        }
         vec3_t low;
         vec3_t high;
         scene::geometry_bounds(mesh.geometry, low, high);
@@ -282,6 +295,7 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
             center = both_joints * 0.5F;
             radius += (scene::length(joints_high - joints_low) * 0.5F) + radius;
         }
+        const scene::geometry_t& geometry = s.geometries[drawn];
         for (std::size_t surface = 0; surface < geometry.surfaces.size(); ++surface) {
             if (geometry.surfaces[surface].indices.empty()) {
                 continue;
@@ -294,7 +308,7 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
                 continue;
             }
             const surface_buffers_t* buffers =
-                surface_buffers(s.geometry_slots.handle(mesh.geometry), surface);
+                surface_buffers(s.geometry_slots.handle(drawn), surface);
             if (buffers == nullptr) {
                 return false;
             }
@@ -353,6 +367,68 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
             casters.push_back(caster);
         }
     }
+    for (scene::instances_t& found_instances : scene::scene().instances) {
+        if (found_instances.geometry == none || !casts(found_instances.entity)) {
+            continue;
+        }
+        const mat4_t matrix = tweened.pose(found_instances.entity).matrix;
+        const std::vector<scene::instance_cluster_t>& clusters =
+            scene::instance_clusters(found_instances);
+        const VkDeviceAddress records = instances_buffer(found_instances);
+        if (records == 0) {
+            return false;
+        }
+        const float scale =
+            std::fmax(std::fmax(scene::length(matrix.axis(0)), scene::length(matrix.axis(1))),
+                      scene::length(matrix.axis(2)));
+        any_lods = any_lods || !s.geometries[found_instances.geometry].lods.empty();
+        // Any of them with an alpha has them all blend, as it draws them, which doesn't cast.
+        const float alpha = found_instances.faded != 0 ? 0.5F : 1.0F;
+        for (const std::uint32_t level :
+             scene::instances_levels(found_instances, matrix, camera, view.position, half_height)) {
+            const scene::geometry_t& geometry = s.geometries[level];
+            for (std::size_t surface = 0; surface < geometry.surfaces.size(); ++surface) {
+                const std::uint32_t slot = found_instances.material != none
+                                               ? found_instances.material
+                                               : geometry.surfaces[surface].material;
+                const scene::material_t& material = slot != none ? s.materials[slot] : standard;
+                if (material.order != 0 || scene::drawn_blend(slot, alpha) != FBE_BLEND_OPAQUE) {
+                    continue;
+                }
+                const surface_buffers_t* buffers =
+                    surface_buffers(s.geometry_slots.handle(level), surface);
+                if (buffers == nullptr) {
+                    return false;
+                }
+                if (buffers->index_count == 0) {
+                    continue;
+                }
+                for (const scene::instance_cluster_t& cluster : clusters) {
+                    if (scene::cluster_lod(found_instances, cluster, matrix, camera, view.position,
+                                           half_height) != level) {
+                        continue;
+                    }
+                    const vec3_t both = cluster.low + cluster.high;
+                    caster_t caster;
+                    caster.data.to_view = matrix.m;
+                    caster.data.color = { 1.0F, 1.0F, 1.0F, 1.0F };
+                    caster.data.vertices = buffers->vertices.address;
+                    caster.data.instances = records;
+                    caster.data.material = index_of(slot, material);
+                    caster.key = caster_key(material) | (std::uint64_t{ 1 } << 51U);
+                    caster.indices = buffers->indices.buffer;
+                    caster.index_count = buffers->index_count;
+                    caster.center = scene::transform_point(matrix, both * 0.5F);
+                    caster.radius = scene::length(cluster.high - cluster.low) * 0.5F * scale;
+                    caster.entity = found_instances.entity;
+                    caster.fades = s.entities.fade_far[found_instances.entity] > 0.0F;
+                    caster.instance_first = cluster.first;
+                    caster.instance_count = cluster.count;
+                    casters.push_back(caster);
+                }
+            }
+        }
+    }
     for (const scene::terrain_t& terrain : s.terrains) {
         if (!casts(terrain.entity) || terrain.tint[3] < 1.0F) {
             continue;
@@ -395,10 +471,21 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
         }
         return a.index_offset < b.index_offset;
     });
+    // An Instances' clusters, each of which went next to the last, share a draw.
     std::vector<draw_data_t> draws;
     draws.reserve(casters.size());
-    for (const caster_t& caster : casters) {
-        draws.push_back(caster.data);
+    const caster_t* last_caster = nullptr;
+    for (caster_t& caster : casters) {
+        const bool shares = last_caster != nullptr && caster.instance_count != 0 &&
+                            last_caster->instance_count != 0 &&
+                            last_caster->entity == caster.entity &&
+                            last_caster->indices == caster.indices &&
+                            last_caster->data.material == caster.data.material;
+        if (!shares) {
+            draws.push_back(caster.data);
+        }
+        caster.draw = static_cast<std::uint32_t>(draws.size() - 1);
+        last_caster = &caster;
     }
     bool failed = false;
     found.draws = in_ring<draw_data_t>(draws, failed).address;
@@ -406,7 +493,7 @@ bool gather_casters(std::uint32_t world, const scene::tweened_t& tweened) {
     if (failed) {
         return false;
     }
-    found.have = found.keep;
+    found.have = found.keep && !any_lods;
     found.world = world;
     found.tween = tweened.tween();
     return true;
@@ -742,7 +829,7 @@ bool draw_shadows(const scene::camera_t& camera, std::span<const scene::view_t> 
         }
         most = side / 2;
     }
-    if (!gather_casters(world, tweened)) {
+    if (!gather_casters(camera, views.back(), world, tweened)) {
         return false;
     }
     const std::vector<caster_t>& casters = gathered().casters;
@@ -833,11 +920,17 @@ bool draw_shadows(const scene::camera_t& camera, std::span<const scene::view_t> 
                 }
                 if (!view_batches.batches.empty()) {
                     batch_t& last = view_batches.batches.back();
-                    if (last.key == caster.key && last.indices == caster.indices &&
-                        last.index_offset == caster.index_offset &&
-                        last.index_count == caster.index_count &&
-                        last.first_draw + last.draws == i) {
+                    const bool alike = last.key == caster.key && last.indices == caster.indices &&
+                                       last.index_offset == caster.index_offset &&
+                                       last.index_count == caster.index_count;
+                    if (alike && caster.instance_count == 0 &&
+                        last.first_draw + last.draws == caster.draw) {
                         ++last.draws;
+                        continue;
+                    }
+                    if (alike && caster.instance_count != 0 && last.first_draw == caster.draw &&
+                        last.instance_first + last.instance_count == caster.instance_first) {
+                        last.instance_count += caster.instance_count;
                         continue;
                     }
                 }
@@ -846,7 +939,9 @@ bool draw_shadows(const scene::camera_t& camera, std::span<const scene::view_t> 
                 batch.indices = caster.indices;
                 batch.index_offset = caster.index_offset;
                 batch.index_count = caster.index_count;
-                batch.first_draw = i;
+                batch.first_draw = caster.draw;
+                batch.instance_first = caster.instance_first;
+                batch.instance_count = caster.instance_count;
                 view_batches.batches.push_back(batch);
             }
             pass->views.push_back(std::move(view_batches));

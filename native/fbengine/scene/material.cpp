@@ -115,7 +115,11 @@ void release_materials(const std::vector<surface_t>& surfaces) {
 }
 
 std::int32_t drawn_blend(std::uint32_t material, float alpha) {
-    const material_t drawn = material != none ? scene().materials[material] : material_t();
+    // A new material's is AUTO, solid, and has no layers.
+    if (material == none) {
+        return alpha < 1.0F ? FBE_BLEND_ALPHA : FBE_BLEND_OPAQUE;
+    }
+    const material_t& drawn = scene().materials[material];
     switch (drawn.blend) {
     case FBE_BLEND_AUTO:
         if (drawn.color[3] * alpha < 1.0F) {
@@ -351,13 +355,15 @@ FBE_API int32_t fbe_material_order(uint64_t material) {
     return found != nullptr ? found->order : 0;
 }
 
-FBE_API bool fbe_material_set_scene_id(uint64_t material, const char* id) {
+FBE_API bool fbe_material_set_scene_id(uint64_t material, const char* id) try {
     material_t* found = material_of(material);
     if (found == nullptr || id == nullptr) {
         return false;
     }
     found->scene_id = id;
     return true;
+} catch (const std::bad_alloc&) {
+    return fbe::fail("out of memory");
 }
 
 FBE_API const char* fbe_material_scene_id(uint64_t material) {

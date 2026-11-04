@@ -3,7 +3,8 @@
 
 // Drawing the scene: what each camera draws, and what lights it, read from the scene into lists
 // once a frame, so drawing never reads the live scene, and a render thread could take drawing
-// over without the API changing.
+// over without the API changing. Meshes, sprites, emitters, Instances, ground planes, and terrains
+// it might see go in them, past what's wholly behind its occluders, in material order 0.
 
 #include "../core/fbe_core.h"
 
@@ -93,7 +94,7 @@ typedef struct fbe_cluster_t {
 
 // What a camera draws in a target of this size, `tween` of the way from its World's last capture
 // to now, in the order it draws them: by their materials' orders, lower first. In order 0, the
-// scene's, what's opaque first, by pipeline, by material, and nearest first, then what blends,
+// scene's, what's opaque first, by pipeline, by geometry, and nearest first, then what blends,
 // furthest first; in the others, all furthest first, what's opaque first at one depth. Ties as the
 // entities were made, a mesh's surfaces in order. Only the showing meshes, sprites, ground planes,
 // and terrains of its World it might see, with some alpha left after their fade; none for a hidden
