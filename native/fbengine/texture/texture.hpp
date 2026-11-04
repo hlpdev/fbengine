@@ -118,8 +118,8 @@ std::uint64_t create_engine_target(std::uint32_t width, std::uint32_t height, st
 std::uint64_t create_engine_texture(std::uint32_t width, std::uint32_t height, std::int32_t format,
                                     bool mipmaps = false);
 
-/// A target's depth's copy, for a shader to read, of one sample each, made the first time it's asked
-/// for and let go of with it; 0, with fbe_error's why, if it can't be made.
+/// A target's depth's copy, for a shader to read, of one sample each, made the first time it's
+/// asked for and let go of with it; 0, with fbe_error's why, if it can't be made.
 std::uint64_t depth_read_of(std::uint64_t target);
 
 /// Records a target's depth into its copy, leaving its depth as it was and the copy to be sampled:
