@@ -15,6 +15,7 @@
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
+#include "shader/shader.hpp"
 #include "skin/skin.hpp"
 #include "texture/texture.hpp"
 
@@ -72,12 +73,13 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
         sets |= (packed >> 3U) << layer;
     }
     const bool particles = ((key >> 50U) & 1U) != 0;
+    const gpu::shader_t* own = shaders_own::shader_of(static_cast<std::uint32_t>(key >> 52U));
     const bool instances = ((key >> 51U) & 1U) != 0;
     const std::string_view cast_vertex = instances ? "shadowInstanceVertex" : "shadowVertex";
     const std::string_view plain_vertex = instances ? "instanceVertex" : "vertexMain";
     const std::string_view lit_vertex = particles ? "particleVertex" : plain_vertex;
     gpu::pipeline_desc_t desc{
-        .shader = &shaders::scene,
+        .shader = own != nullptr ? own : &shaders::scene,
         .vertex = shadows ? cast_vertex : lit_vertex,
         .fragment = shadows ? "shadowFragment" : "fragmentMain",
         .color = format,
@@ -166,6 +168,15 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
                     gpu::pipeline(batch.sky != 0 ? sky_desc(pass.format, pass.samples)
                                                  : desc_of(batch.key, pass.format, pass.samples,
                                                            view.flipped, pass.shadows));
+                const auto code = static_cast<std::uint32_t>(batch.key >> 52U);
+                // A game's shader no pipeline can be made of isn't tried again: its draws go on as
+                // the scene's own, under the same key.
+                if (made == VK_NULL_HANDLE && batch.sky == 0 &&
+                    shaders_own::shader_of(code) != nullptr) {
+                    shaders_own::refuse(code);
+                    made = gpu::pipeline(
+                        desc_of(batch.key, pass.format, pass.samples, view.flipped, pass.shadows));
+                }
                 usable = made != VK_NULL_HANDLE;
                 if (usable) {
                     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, made);
@@ -260,6 +271,7 @@ material_data_t material_data(std::uint32_t material, std::uint64_t target,
     data.shininess = found.shininess;
     data.cutoff = found.alpha_cutoff;
     data.no_alpha = found.blend == FBE_BLEND_OPAQUE ? 1U : 0U;
+    data.parameters = found.parameters;
     std::size_t at = 0;
     for (const scene::layer_t& layer : found.layers) {
         if (layer.texture != 0) {
@@ -826,10 +838,33 @@ bool draw_camera(std::uint32_t slot, float tween) {
     const auto width = static_cast<float>(found->width);
     const auto height = static_cast<float>(found->height);
     const VkFormat target_format = found->vk_format;
-    const VkFormat format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : target_format;
     const VkSampleCountFlagBits samples = found->samples;
+    const std::int32_t target_kind = found->format;
+    const std::vector<game_pass_t> passes = camera.passes.empty()
+                                                ? std::vector<game_pass_t>{}
+                                                : game_passes(camera, target_format, samples);
+    // What it's all drawn into first, if there's more to it than what it draws.
+    const bool apart = camera.hdr || !passes.empty();
     const std::uint32_t target_width = found->width;
     const std::uint32_t target_height = found->height;
+    // Before what it draws, whose first pass names its target; a game's passes read what's in it.
+    const gpu::transient_t chain_target{
+        .width = target_width,
+        .height = target_height,
+        .format = target_kind,
+        .samples = static_cast<std::uint32_t>(camera.hdr ? VK_SAMPLE_COUNT_1_BIT : samples),
+    };
+    if (!passes.empty() && !gpu::reserve_transient(chain_target)) {
+        return false;
+    }
+    const gpu::resource_t chain =
+        passes.empty() ? gpu::no_resource : gpu::transient_resource(chain_target);
+    if (!passes.empty() && chain == gpu::no_resource) {
+        return false;
+    }
+    // What it's drawn into is its target's own format, which a transient's isn't known as until
+    // it's recorded.
+    const VkFormat format = camera.hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : target_format;
     scene::view_t view;
     bool shows = false;
     std::uint32_t own = none;
@@ -924,8 +959,8 @@ bool draw_camera(std::uint32_t slot, float tween) {
                        pass->scissor.extent.height == target_height;
     const std::array<float, 4> clear_rgba = camera.clear_color;
     // An HDR image is all the camera's, so all of it's cleared: to nothing, if what's in its target
-    // shows through.
-    pass->clear_color = camera.clears_color && !whole && !camera.hdr;
+    // shows through; and what a game's passes read as well.
+    pass->clear_color = camera.clears_color && !whole && !apart;
     pass->clear_depth = camera.clears_depth && !whole;
     pass->clear_rgba = clear_rgba;
     std::ranges::sort(sampled);
@@ -952,7 +987,8 @@ bool draw_camera(std::uint32_t slot, float tween) {
     if (camera.hdr && !gpu::reserve_transient(image_target)) {
         return false;
     }
-    const gpu::resource_t image = camera.hdr ? gpu::transient_resource(image_target) : into;
+    const gpu::resource_t image =
+        camera.hdr ? gpu::transient_resource(image_target) : (passes.empty() ? into : chain);
     if (image == gpu::no_resource) {
         return false;
     }
@@ -960,7 +996,7 @@ bool draw_camera(std::uint32_t slot, float tween) {
         .name = "camera",
         .colors = { {
             .target = image,
-            .clear = camera.hdr || (camera.clears_color && whole),
+            .clear = apart || (camera.clears_color && whole),
             .rgba = camera.clears_color ? clear_rgba : std::array<float, 4>{},
         }, },
         .depth = into,
@@ -968,11 +1004,17 @@ bool draw_camera(std::uint32_t slot, float tween) {
         .uses = std::move(uses),
         .record = [pass](VkCommandBuffer commands) { record_pass(commands, *pass); },
     });
-    if (!drawn || !camera.hdr) {
-        return drawn;
+    if (!drawn) {
+        return false;
     }
-    return add_post_passes(camera, image, into, { .width = target_width, .height = target_height },
-                           target_format, samples, pass->scissor);
+    if (camera.hdr &&
+        !add_post_passes(camera, image, passes.empty() ? into : chain,
+                         { .width = target_width, .height = target_height }, target_format,
+                         passes.empty() ? samples : VK_SAMPLE_COUNT_1_BIT, pass->scissor)) {
+        return false;
+    }
+    return passes.empty() ||
+           add_game_passes(camera, passes, chain, into, target, view, pass->scissor);
 }
 
 } // namespace fbe::render

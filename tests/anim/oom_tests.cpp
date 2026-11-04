@@ -12,11 +12,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <new>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #if defined(__linux__) || defined(__APPLE__)
@@ -222,6 +224,71 @@ TEST_CASE("players' calls that run out of memory say so, and leave things workin
         return fbe_player_set_mask(rig.player, 0, mask.data(), 1);
     });
     sweep([](const rig_t& rig) { return fbe_player_release(rig.player, rig.mesh); });
+}
+
+TEST_CASE("shaders' calls that run out of memory say so, and leave things working") {
+    // SPIR-V's header, and the scene's entry points.
+    std::vector<std::uint32_t> words{ 0x07230203, 0x00010500, 0, 1, 0 };
+    for (const auto& [model, name] : std::array<std::pair<std::uint32_t, std::string_view>, 7>{
+             {
+                 { 0, "vertexMain" },
+                 { 4, "fragmentMain" },
+                 { 0, "particleVertex" },
+                 { 0, "shadowVertex" },
+                 { 4, "shadowFragment" },
+                 { 0, "instanceVertex" },
+                 { 0, "shadowInstanceVertex" },
+             },
+         }) {
+        const std::size_t name_words = (name.size() / 4) + 1;
+        words.push_back(static_cast<std::uint32_t>((3 + name_words) << 16U) | 15U);
+        words.push_back(model);
+        words.push_back(1);
+        std::vector<std::uint32_t> named(name_words, 0);
+        std::memcpy(named.data(), name.data(), name.size());
+        words.insert(words.end(), named.begin(), named.end());
+    }
+    const std::string_view magic = "FBESHADR";
+    const std::string_view version = fbe_version();
+    const std::string_view stamp = fbe_shader_stamp();
+    std::vector<std::uint8_t> bytes(magic.begin(), magic.end());
+    const auto length = static_cast<std::uint32_t>(version.size());
+    bytes.resize(bytes.size() + sizeof(length));
+    std::memcpy(bytes.data() + magic.size(), &length, sizeof(length));
+    bytes.insert(bytes.end(), version.begin(), version.end());
+    bytes.insert(bytes.end(), stamp.begin(), stamp.end());
+    const std::size_t at = bytes.size();
+    bytes.resize(at + (words.size() * sizeof(std::uint32_t)));
+    std::memcpy(bytes.data() + at, words.data(), words.size() * sizeof(std::uint32_t));
+    const auto size = static_cast<std::int64_t>(bytes.size());
+    sweep([&](const rig_t&) {
+        const std::uint64_t made =
+            fbe_shader_create(bytes.data(), size, "a name long enough to be allocated");
+        return made != 0 && fbe_shader_release(made);
+    });
+    sweep([&](const rig_t&) { return fbe_shader_check(bytes.data(), size); });
+    // What's made after the sweep's slots and places are where they should be.
+    const std::uint64_t made = fbe_shader_create(bytes.data(), size, "after");
+    CHECK(made != 0);
+    CHECK(fbe_shader_release(made));
+}
+
+TEST_CASE("an index that isn't there, out of memory, says so without throwing") {
+    const std::uint64_t material = fbe_material_create();
+    std::array<float, 4> read{};
+    for (long which = 0; which < 8; ++which) {
+        allocated = 0;
+        failed = false;
+        failing = which;
+        const bool set = fbe_material_set_parameter(material, 99, 0.0F, 0.0F, 0.0F, 0.0F);
+        const bool got = fbe_material_parameter(material, 99, read.data());
+        const bool layer = fbe_material_set_texture(material, 99, 0);
+        failing = -1;
+        CHECK_FALSE(set);
+        CHECK_FALSE(got);
+        CHECK_FALSE(layer);
+    }
+    fbe_material_release(material);
 }
 
 TEST_CASE("morph targets' calls that run out of memory say so, and leave things working") {

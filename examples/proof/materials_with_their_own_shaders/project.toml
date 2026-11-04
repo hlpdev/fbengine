@@ -1,0 +1,11 @@
+[project]
+name = "materials_with_their_own_shaders"
+version = "0.1.0"
+
+[dependencies]
+fbengine = { path = "../../../packages/fbengine" }
+fbengine_tools = { path = "../../../packages/fbengine_tools" }
+
+[build]
+package = "fbengine_tools"
+program = "step/game.fb"

@@ -45,7 +45,7 @@ float4 fragmentMain(float4 position : SV_Position) : SV_Target
     {
         return float4(0.0);
     }
-    Surface surface;
+    PbrSurface surface;
     surface.baseColor = spheres.baseColor.rgb;
     surface.metallic = spheres.baseColor.a >= 0.0 ? spheres.baseColor.a : which.y / max(count.y - 1.0, 1.0);
     surface.roughness = spheres.grid.x >= 0.0 ? spheres.grid.x : which.x / max(count.x - 1.0, 1.0);

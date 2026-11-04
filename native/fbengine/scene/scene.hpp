@@ -140,6 +140,10 @@ struct material_t {
     float normal_scale = 1.0F;
     float occlusion_strength = 1.0F;
     std::array<layer_t, FBE_MATERIAL_MAPS> maps{};
+    /// The shader of its own it draws with, which it holds, or 0 for the scene's, and what's for
+    /// that shader to read.
+    std::uint64_t shader = 0;
+    std::array<std::array<float, 4>, FBE_MATERIAL_PARAMETERS> parameters{};
 };
 
 /// A level of detail of a geometry.
@@ -444,6 +448,8 @@ struct camera_t {
     /// Its bloom, and its color grade.
     float bloom_intensity = 0.0F;
     float bloom_threshold = 1.0F;
+    /// Its full-screen passes, in order: materials with a pass's shader, which it holds.
+    std::vector<std::uint64_t> passes;
     std::array<float, 3> grade_slope{ 1.0F, 1.0F, 1.0F };
     std::array<float, 3> grade_offset{ 0.0F, 0.0F, 0.0F };
     std::array<float, 3> grade_power{ 1.0F, 1.0F, 1.0F };
