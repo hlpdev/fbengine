@@ -52,7 +52,11 @@ TEST_CASE("Khronos's sample models' frames match their golden images", "[.exampl
              "MetalRoughSpheresNoTextures",
              "NormalTangentMirrorTest",
              "NormalTangentTest",
+             "TextureLinearInterpolationTest",
              "TextureSettingsTest",
+             "TextureTransformMultiTest",
+             "TextureTransformTest",
+             "Worked",
          }) {
         INFO("frame " << frame);
         const std::filesystem::path path = std::filesystem::path(FBENGINE_EXAMPLE_FRAMES) /

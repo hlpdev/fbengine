@@ -25,10 +25,15 @@ commit, each with its `screenshot/screenshot.png` where it's held to one, under 
 | TextureSettingsTest | glTF-Binary/TextureSettingsTest.glb | CC-BY-4.0 | Ed Mackey, Analytical Graphics, 2017 |
 | AlphaBlendModeTest | glTF-Binary/AlphaBlendModeTest.glb | CC-BY-4.0 | Ed Mackey, Analytical Graphics, 2018 |
 | EmissiveStrengthTest | glTF-Binary/EmissiveStrengthTest.glb | CC-BY-4.0 | Ed Mackey, AGI, 2022 |
+| TextureTransformTest | glTF/TextureTransformTest.gltf and its files | CC0-1.0 | Microsoft |
+| TextureTransformMultiTest | glTF-Binary/TextureTransformMultiTest.glb | CC-BY-4.0 | Ed Mackey |
+| MultiUVTest | glTF-Binary/MultiUVTest.glb | CC-BY-4.0, and Khronos's logo, a trademark | Hilo 3D |
+| TextureLinearInterpolationTest | glTF-Binary/TextureLinearInterpolationTest.glb | CC0-1.0 | lexaknyazev |
 
 `tests/golden/khronos_*.png` are renderings of those, modified from them by being drawn, each under its
-model's license. There's none of DamagedHelmet, as its 2016 original is non-commercial: it's only ever
-fetched and drawn by a test, and nothing of it is kept in this repository.
+model's license. There's none of DamagedHelmet, as its 2016 original is non-commercial, or of MultiUVTest, as it's
+mostly Khronos's logo: they're only ever fetched and drawn by a test, and nothing of them is kept in
+this repository.
 
 `tests/golden/model_RiggedSimple_*.png` and `tests/golden/model_MorphPrimitivesTest_*.png` are
 renderings of those two models, modified from them by being drawn, and are CC-BY-4.0, as they are.
