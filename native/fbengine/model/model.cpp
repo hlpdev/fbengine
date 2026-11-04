@@ -741,16 +741,26 @@ FBE_API bool fbe_model_material_textures(uint64_t load, int32_t index, uint64_t 
         std::string_view name;
     };
     for (const map_t& map : {
-             map_t{ .in_file = FBE_MODEL_METALLIC_ROUGHNESS,
-                    .on_material = FBE_MAP_METAL_ROUGH,
-                    .name = "metal-rough" },
-             map_t{ .in_file = FBE_MODEL_NORMAL, .on_material = FBE_MAP_NORMAL, .name = "normal" },
-             map_t{ .in_file = FBE_MODEL_OCCLUSION,
-                    .on_material = FBE_MAP_OCCLUSION,
-                    .name = "occlusion" },
-             map_t{ .in_file = FBE_MODEL_EMISSIVE,
-                    .on_material = FBE_MAP_EMISSIVE,
-                    .name = "emissive" },
+             map_t{
+                 .in_file = FBE_MODEL_METALLIC_ROUGHNESS,
+                 .on_material = FBE_MAP_METAL_ROUGH,
+                 .name = "metal-rough",
+             },
+             map_t{
+                 .in_file = FBE_MODEL_NORMAL,
+                 .on_material = FBE_MAP_NORMAL,
+                 .name = "normal",
+             },
+             map_t{
+                 .in_file = FBE_MODEL_OCCLUSION,
+                 .on_material = FBE_MAP_OCCLUSION,
+                 .name = "occlusion",
+             },
+             map_t{
+                 .in_file = FBE_MODEL_EMISSIVE,
+                 .on_material = FBE_MAP_EMISSIVE,
+                 .name = "emissive",
+             },
          }) {
         const assets::texture_ref_t& read = *map_of(from, map.in_file);
         if (read.image < 0 || beyond_uv_sets(load, index, read, map.name)) {

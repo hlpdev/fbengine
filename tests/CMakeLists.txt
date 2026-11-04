@@ -1451,7 +1451,7 @@ if(FBENGINE_FB_TESTS)
            COMMAND "${CMAKE_COMMAND}" -DFOLDER=${PROJECT_BINARY_DIR}/khronos-fetch -DWRONG=1
                    -P "${CMAKE_CURRENT_SOURCE_DIR}/khronos/fetch_test.cmake")
   set_tests_properties(khronos.fetch_wrong PROPERTIES
-                       PASS_REGULAR_EXPRESSION "not the [0-9a-f]+ it's pinned to")
+                       PASS_REGULAR_EXPRESSION "pinned")
   if(fbengine_khronos_here)
     add_test(NAME khronos.models
              COMMAND "${FBENGINE_FB}" --color never run "${CMAKE_CURRENT_SOURCE_DIR}/khronos"

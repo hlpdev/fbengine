@@ -494,7 +494,7 @@ Corner litCorner(Camera* camera, Draw draw, uint drawIndex, float4 position, flo
         for (uint i = 0; i < draw.lightCount; ++i)
         {
             addLight(camera.lights[camera.drawLights[draw.lightFirst + i]], place.xyz, unit, eye,
-                     shininess, 1.0, diffuse, highlight);
+                     shininess, diffuse, highlight);
         }
         corner.lit = saturate(diffuse + highlight);
     }

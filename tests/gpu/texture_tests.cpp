@@ -728,7 +728,7 @@ TEST_CASE("a model's own formats read as their maps say, or say which can't", "[
     CHECK(!read(load, material, texture, made));
     CHECK(fbe_model_invalid());
     CHECK(made == 0);
-    CHECK(std::string_view(fbe_error()).find("normal") != std::string_view::npos);
+    CHECK(std::string_view(fbe_error()).contains("normal"));
     fbe_material_release(material);
     fbe_texture_release(texture);
     CHECK(fbe_assets_free(load));
@@ -740,7 +740,7 @@ TEST_CASE("a model's own formats read as their maps say, or say which can't", "[
     texture = fbe_model_texture(load, 0, true);
     CHECK(!read(load, material, texture, made));
     CHECK(fbe_model_invalid());
-    CHECK(std::string_view(fbe_error()).find("base color") != std::string_view::npos);
+    CHECK(std::string_view(fbe_error()).contains("base color"));
     fbe_material_release(material);
     fbe_texture_release(texture);
     CHECK(fbe_assets_free(load));
