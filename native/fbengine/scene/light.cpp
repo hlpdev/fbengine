@@ -279,6 +279,32 @@ FBE_API int32_t fbe_world_lights(uint64_t world, uint64_t* lights, int32_t capac
     return static_cast<std::int32_t>(found.size());
 }
 
+FBE_API bool fbe_world_set_environment(uint64_t world, uint64_t environment, float intensity) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    if (slot == fbe::scene::none) {
+        return false;
+    }
+    if (!(intensity >= 0.0F) || !std::isfinite(intensity)) {
+        return fbe::fail(std::format("an environment's intensity is 0 or more, not {}", intensity));
+    }
+    if (environment != 0 && fbe_environment_levels(environment) < 0) {
+        return false;
+    }
+    fbe::scene::scene().worlds[slot].environment = environment;
+    fbe::scene::scene().worlds[slot].environment_intensity = intensity;
+    return true;
+}
+
+FBE_API uint64_t fbe_world_environment(uint64_t world) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    return slot != fbe::scene::none ? fbe::scene::scene().worlds[slot].environment : 0;
+}
+
+FBE_API float fbe_world_environment_intensity(uint64_t world) {
+    const std::uint32_t slot = fbe::scene::world_slot(world);
+    return slot != fbe::scene::none ? fbe::scene::scene().worlds[slot].environment_intensity : 0.0F;
+}
+
 FBE_API bool fbe_world_set_sky_atmosphere(uint64_t world, uint64_t sun, float brightness) {
     const std::uint32_t slot = fbe::scene::world_slot(world);
     if (slot == fbe::scene::none) {
@@ -346,32 +372,6 @@ FBE_API bool fbe_world_clear_sky(uint64_t world) {
     found.sky = 0;
     found.sky_light = 0;
     return true;
-}
-
-FBE_API bool fbe_world_set_environment(uint64_t world, uint64_t environment, float intensity) {
-    const std::uint32_t slot = fbe::scene::world_slot(world);
-    if (slot == fbe::scene::none) {
-        return false;
-    }
-    if (!(intensity >= 0.0F) || !std::isfinite(intensity)) {
-        return fbe::fail(std::format("an environment's intensity is 0 or more, not {}", intensity));
-    }
-    if (environment != 0 && fbe_environment_levels(environment) < 0) {
-        return false;
-    }
-    fbe::scene::scene().worlds[slot].environment = environment;
-    fbe::scene::scene().worlds[slot].environment_intensity = intensity;
-    return true;
-}
-
-FBE_API uint64_t fbe_world_environment(uint64_t world) {
-    const std::uint32_t slot = fbe::scene::world_slot(world);
-    return slot != fbe::scene::none ? fbe::scene::scene().worlds[slot].environment : 0;
-}
-
-FBE_API float fbe_world_environment_intensity(uint64_t world) {
-    const std::uint32_t slot = fbe::scene::world_slot(world);
-    return slot != fbe::scene::none ? fbe::scene::scene().worlds[slot].environment_intensity : 0.0F;
 }
 
 FBE_API bool fbe_world_set_ambient(uint64_t world, float r, float g, float b) {

@@ -76,6 +76,12 @@ struct Joints
     float weights[4];
 };
 
+// A vertex's tangent, its floats loose.
+struct Tangent
+{
+    float xyzw[4];
+};
+
 // A particle, as its emitter wrote it when it was born.
 struct Particle
 {
@@ -107,12 +113,6 @@ struct Instance
 {
     float4 rows[3];
     float4 color;
-};
-
-// A vertex's tangent, its floats loose.
-struct Tangent
-{
-    float xyzw[4];
 };
 
 // What a morph target moves a vertex by, and its normal.
@@ -180,12 +180,6 @@ Particle particleAt(Particle* records, uint index)
 }
 
 [noinline]
-Tangent tangentAt(Tangent* tangents, uint index)
-{
-    return tangents[index];
-}
-
-[noinline]
 Vertex vertexAt(Vertex* vertices, uint index)
 {
     return vertices[index];
@@ -201,6 +195,12 @@ Joints jointsAt(Joints* joints, uint index)
 float4x4 paletteAt(float4x4* palette, uint index)
 {
     return palette[index];
+}
+
+[noinline]
+Tangent tangentAt(Tangent* tangents, uint index)
+{
+    return tangents[index];
 }
 
 [noinline]
@@ -325,12 +325,11 @@ struct Camera
     Shadow* shadows;
     uint shadowAtlas;
     uint shadowSpare;
+    // The rows of what turns its view's directions into the world's.
     float4 worldRows[3];
     Environment environment;
     uint hasEnvironment;
     uint spareToo;
-    // The rows of what turns its view's directions into the world's.
-    float4 toWorld[3];
     // What its entities were last frame, if it goes by that; how far its projection's off, as its
     // clip space goes; and what its ambient occlusion's raised to, 0 for none.
     Previous* previous;
@@ -848,8 +847,8 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     const float3 place = corner.place;
     const float3 eye = toEye(camera, place);
     float3 normal = whole(corner.normal);
-    // What shadows go by: the surface's own, which a map's bumps don't lift out of them.
-    float3 geometric = normal;
+    // Which way it faces, whatever its map says: what its shadows go by.
+    const float3 facingNormal = twoSided != 0 && !front ? -normal : normal;
     // How much light it gives back of what falls on it, which no more than all of it can be.
     const float3 reflecting = saturate(baseColor);
     float metallic = material.metallic;
@@ -889,7 +888,6 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
     if (twoSided != 0 && !front)
     {
         normal = -normal;
-        geometric = -geometric;
     }
     // No normal, as a sprite's: only ambient light lights that.
     float3 color = reflecting * camera.ambient * occlusion;
@@ -924,7 +922,7 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
         float3 reaching;
         lightAt(light, place, way, reaching);
         color += shadePunctual(surface, eye, way,
-                               reaching * reachedBy(camera, light, place, geometric));
+                               reaching * reachedBy(camera, light, place, facingNormal));
     }
     // The directional lights, which no cluster lists, come first in the lights.
     for (uint i = 0; i < camera.directional; ++i)
@@ -934,16 +932,16 @@ float3 pixelShaded(Camera* camera, Material material, Corner corner, float3 base
         float3 reaching;
         lightAt(light, place, way, reaching);
         color += shadePunctual(surface, eye, way,
-                               reaching * reachedBy(camera, light, place, geometric));
+                               reaching * reachedBy(camera, light, place, facingNormal));
     }
     if (camera.hasEnvironment != 0)
     {
         // An environment's directions are the world's, and a surface's the view's.
         Surface inWorld = surface;
-        inWorld.normal = float3(dot(camera.toWorld[0].xyz, normal), dot(camera.toWorld[1].xyz, normal),
-                                dot(camera.toWorld[2].xyz, normal));
-        const float3 eyeInWorld = float3(dot(camera.toWorld[0].xyz, eye), dot(camera.toWorld[1].xyz, eye),
-                                         dot(camera.toWorld[2].xyz, eye));
+        inWorld.normal = float3(dot(camera.worldRows[0].xyz, normal), dot(camera.worldRows[1].xyz, normal),
+                                dot(camera.worldRows[2].xyz, normal));
+        const float3 eyeInWorld = float3(dot(camera.worldRows[0].xyz, eye), dot(camera.worldRows[1].xyz, eye),
+                                         dot(camera.worldRows[2].xyz, eye));
         color += shadeEnvironment(inWorld, eyeInWorld, camera.environment);
     }
     return color + emissive;

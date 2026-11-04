@@ -128,7 +128,7 @@ struct material_data_t {
     float normal_scale;
     float occlusion_strength;
     std::array<float, 3> emissive;
-    /// Which of its maps it has, a bit for each, whose UV sets are in their bumps' first.
+    /// Which of its maps it has, a bit for each FBE_MAP_.
     std::uint32_t maps;
     std::array<layer_data_t, FBE_MATERIAL_MAPS> map_layers;
 };
@@ -158,12 +158,13 @@ struct camera_data_t {
     VkDeviceAddress shadows;
     std::uint32_t shadow_atlas;
     std::uint32_t shadow_spare;
+    /// The rows of what turns its view's directions into the world's, which an environment's are
+    /// in.
     std::array<std::array<float, 4>, 3> world_rows;
+    /// What it's lit by, and whether it's lit by it.
     environment::shader_data_t environment;
     std::uint32_t has_environment;
     std::uint32_t spare_too;
-    /// The rows of what turns its view's directions into the world's.
-    std::array<std::array<float, 4>, 3> to_world;
     /// What its entities were last frame, if it goes by that; how far its projection's off, as
     /// its clip space goes; and what its ambient occlusion's raised to, 0 for none.
     VkDeviceAddress previous;
@@ -171,7 +172,7 @@ struct camera_data_t {
     float ambient_occlusion;
     std::uint32_t moving;
 };
-static_assert(sizeof(camera_data_t) == 360, "the scene shader reads a camera of 360 bytes");
+static_assert(sizeof(camera_data_t) == 312, "the scene shader reads a camera of 312 bytes");
 
 /// An entity as it was last frame, as the scene shader's prepass reads it: from its space to clip
 /// space then, and its skin's palette then, if it had the same one.

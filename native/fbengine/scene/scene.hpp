@@ -28,6 +28,10 @@ struct world_t {
     std::vector<std::uint32_t> roots;
     std::int32_t count = 0;
     std::array<float, 3> ambient{ 0.2158605F, 0.2158605F, 0.2158605F };
+    /// The environment its PBR materials are lit by, 0 for none, and what its light's times.
+    std::uint64_t environment = 0;
+    float environment_intensity = 1.0F;
+
     /// Its sky: none, its atmosphere, or a texture, which it holds; the light whose way's the
     /// sun's, by handle, 0 for straight up; and how bright.
     std::int32_t sky = 0;
@@ -36,9 +40,6 @@ struct world_t {
     /// Which way the sun is, kept from the last it was looked at, so one freed leaves it there.
     vec3_t sky_sun{ 0.0F, 1.0F, 0.0F };
     float sky_brightness = 1.0F;
-    /// The environment its PBR materials are lit by, 0 for none, and what its light's times.
-    std::uint64_t environment = 0;
-    float environment_intensity = 1.0F;
     /// Each pair of collision groups that collide, source in the high 16 bits and target in the
     /// low, and the FBE_RESPONSE_ the source makes; a game has a few.
     std::vector<std::pair<std::uint32_t, std::int32_t>> collisions;

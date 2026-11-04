@@ -531,6 +531,7 @@ bool give_images() {
             found = pool.end() - 1;
             ++recorded.made;
         }
+        recorded.transient_sizes.push_back({ resource.transient.width, resource.transient.height });
         found->busy = resource.last;
         found->asked = frames;
         resource.handle = found->handle;
@@ -848,23 +849,23 @@ bool in_graph(std::uint64_t handle) {
     return by_handle().contains(handle);
 }
 
-bool reserve_transient(const transient_t& target) {
-    if (std::ranges::any_of(
-            pool, [&target](const pooled_t& pooled) { return pooled.target == target; })) {
-        return true;
+bool reserve_transient(const transient_t& target, std::uint32_t count) {
+    auto have = static_cast<std::uint32_t>(std::ranges::count_if(
+        pool, [&target](const pooled_t& pooled) { return pooled.target == target; }));
+    for (; have < count; ++have) {
+        const std::uint64_t handle = fbe::texture::create_engine_target(
+            target.width, target.height, target.format,
+            static_cast<VkSampleCountFlagBits>(target.samples), target.depth);
+        if (handle == 0) {
+            return false;
+        }
+        pool.push_back({
+            .target = target,
+            .handle = handle,
+            .states = texture_states(),
+            .asked = frames,
+        });
     }
-    const std::uint64_t handle = fbe::texture::create_engine_target(
-        target.width, target.height, target.format,
-        static_cast<VkSampleCountFlagBits>(target.samples), target.depth);
-    if (handle == 0) {
-        return false;
-    }
-    pool.push_back({
-        .target = target,
-        .handle = handle,
-        .states = texture_states(),
-        .asked = frames,
-    });
     return true;
 }
 

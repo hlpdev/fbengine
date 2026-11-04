@@ -222,9 +222,11 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
     }
 }
 
+namespace {
+
 /// A layer or a map as the scene shader reads it, what it samples added to `sampled`.
-static layer_data_t layer_data(const scene::layer_t& layer, std::uint64_t target,
-                               std::vector<std::uint64_t>& sampled) {
+layer_data_t layer_data(const scene::layer_t& layer, std::uint64_t target,
+                        std::vector<std::uint64_t>& sampled) {
     layer_data_t out{};
     const texture::texture_t* image =
         layer.texture != target ? texture::find(layer.texture) : nullptr;
@@ -254,6 +256,8 @@ static layer_data_t layer_data(const scene::layer_t& layer, std::uint64_t target
     out.uv_down = { -down * sine, down * cosine, -layer.uv_offset[1], neutral };
     return out;
 }
+
+} // namespace
 
 /// What a material is as the scene shader reads it, its layers those with textures, in order, as
 /// its draws' pipeline key has them, and the textures it samples added to `sampled`. A layer can't
@@ -544,6 +548,10 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             data.vertices = surface->vertices.address;
             batch.indices = surface->indices.buffer;
             batch.index_count = surface->index_count;
+            if (surface->tangents.buffer != VK_NULL_HANDLE) {
+                data.tangents = surface->tangents.address;
+                data.has_tangents = 1U;
+            }
             // All of it nearer the eye by a part of how far it is: on the same pixels, just nearer.
             const auto drawn_slot = s.geometry_slots.find(item.draw.geometry);
             if (drawn_slot && s.geometries[*drawn_slot].eye_pull > 0.0F) {
@@ -553,10 +561,6 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
                         data.to_view[(column * 4) + row] *= kept;
                     }
                 }
-            }
-            if (surface->tangents.buffer != VK_NULL_HANDLE) {
-                data.tangents = surface->tangents.address;
-                data.has_tangents = 1U;
             }
             if (surface->joints.buffer != VK_NULL_HANDLE) {
                 // Each mesh's once, however many surfaces it has, its surfaces one after another
@@ -778,12 +782,14 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
             sampled.push_back(texture);
         }
     }
-    const vec3_t right = view.rotation * vec3_t(1.0F, 0.0F, 0.0F);
-    const vec3_t up = view.rotation * vec3_t(0.0F, 1.0F, 0.0F);
-    const vec3_t back_way = view.rotation * vec3_t(0.0F, 0.0F, 1.0F);
-    data.to_world[0] = { right.x, up.x, back_way.x, 0.0F };
-    data.to_world[1] = { right.y, up.y, back_way.y, 0.0F };
-    data.to_world[2] = { right.z, up.z, back_way.z, 0.0F };
+    mat4_t to_world;
+    scene::inverse_affine(view_matrix, to_world);
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const vec3_t row(to_world.at(0, static_cast<int>(axis)),
+                         to_world.at(1, static_cast<int>(axis)),
+                         to_world.at(2, static_cast<int>(axis)));
+        data.world_rows[axis] = { row.x, row.y, row.z, 0.0F };
+    }
     bool failed = false;
     data.draws = in_ring<draw_data_t>(draws, failed).address;
     data.materials = in_ring<material_data_t>(materials, failed).address;
@@ -800,8 +806,6 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
     data.draw_lights = in_ring<std::uint32_t>(lists.draw_lights, failed).address;
     // Its shadows' matrices from this view, as its lights are in it.
     if (shadows.atlas != 0) {
-        mat4_t to_world;
-        scene::inverse_affine(view_matrix, to_world);
         std::vector<shadow_data_t> records = shadows.records;
         for (std::size_t i = 0; i < records.size(); ++i) {
             const mat4_t from_view = shadows.world_to_clip[i] * to_world;
@@ -810,12 +814,6 @@ bool write_view(const scene::camera_t& camera, const scene::view_t& view,
         data.shadows = in_ring<shadow_data_t>(records, failed).address;
         data.shadow_atlas = texture::index_of(shadows.atlas);
         sampled.push_back(shadows.atlas);
-        for (std::size_t axis = 0; axis < 3; ++axis) {
-            const vec3_t row(to_world.at(0, static_cast<int>(axis)),
-                             to_world.at(1, static_cast<int>(axis)),
-                             to_world.at(2, static_cast<int>(axis)));
-            data.world_rows[axis] = { row.x, row.y, row.z, 0.0F };
-        }
     }
     if (extras.motion != nullptr) {
         data.previous = in_ring<previous_data_t>(extras.motion->records, failed).address;
