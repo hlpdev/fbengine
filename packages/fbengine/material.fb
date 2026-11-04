@@ -25,7 +25,8 @@ Public Enum Shading
     VERTEX = 2
 End Enum
 
-/// A PBR material's maps, as glTF's: each but EMISSIVE an RGBA8_LINEAR Texture, and it an RGBA8 one.
+/// A PBR material's maps, as glTF's: each but EMISSIVE an RGBA8_LINEAR Texture, or a file's own
+/// format that isn't sRGB, and it an RGBA8 one.
 Public Enum MaterialMap
     /// Its green multiplies the material's roughness, and its blue its metalness.
     METAL_ROUGH = 0
@@ -319,7 +320,7 @@ Public Final Class Material
 
     /// Sets what a PBR material emits, linear: any finite color 0 or more, or it panics, past 1 for
     /// what's brighter than white. Its alpha is left out. None at first.
-    @Limits(0)
+    @Limits(0) @NoAlpha
     @MainThread @PanicsAtCaller
     Public Method SetEmissive(color: Color)
         If !fbe_material_set_emissive(Live("SetEmissive"), color.r, color.g, color.b)

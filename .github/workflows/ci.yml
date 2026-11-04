@@ -215,7 +215,7 @@ jobs:
         run: |
           echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
           export VK_LOADER_DEBUG=error,warn
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFBENGINE_REQUIRE_KHRONOS=ON
           # Every target, so ctest finds every test it lists: the C++ tests, the packages', and the
           # examples'.
           cmake --build build --parallel
