@@ -95,6 +95,18 @@ Function Round(editor: Editor)
     End For
 End Function
 
+// Whether what's selected has a row called each of `titles`, with a space between; a kind's full list
+// isn't pinned, as it grows with each setter any lane adds.
+Function HasRows(editor: Editor, titles: String): Bool
+    For title In titles.Split(" ")
+        If !Shows(editor, title)
+            Print("there's no {title}, of {Titles(editor)}")
+            Return False
+        End If
+    End For
+    Return True
+End Function
+
 @Test
 Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     If NoGpu() Then Skip("no GPU here")
@@ -102,48 +114,129 @@ Function ItShowsWhatReflectionFindsOnEachKind() Throws IOError, GraphicsError
     Local games = Try TempDir()
     Local editor = Try Started(settings, games)
     Expect(editor.Inspector.Rows().Count == 0)
+    // What every entity has, first; what a kind has, after.
     Local own = "Name Hidden Position Rotation Scale PickMode CollisionShape StepHeight MaxSlope " +
-                "CollisionGroup CastsShadows BlocksSight CollisionRadius "
+                "CollisionGroup BlocksSight CollisionRadius"
+    Local pivot = Pivot()
+    Selecting(editor, pivot)
+    Expect(Titles(editor).StartsWith("Name Hidden Position Rotation Scale "), Titles(editor))
+    Expect(HasRows(editor, own))
     Local light = Light(LightType.SPOT)
     Selecting(editor, light)
-    Expect(Titles(editor) ==
-           own + "LightType Color ShadowDistance Intensity Range ShadowSize Cascades " +
-           "Shadows Cone ShadowBias ", Titles(editor))
+    Expect(HasRows(editor, own + " LightType Color Intensity Range Cone ShadowBias"))
     Local camera = Camera()
     Selecting(editor, camera)
-    Expect(Titles(editor) ==
-           own + "Projection FogMode Tonemap ClearColor FogColor FieldOfView OrthographicHeight " +
-           "Exposure Gamma FogDensity Order Hdr ClearsColor ClearsDepth Range FogRange ",
-           Titles(editor))
+    Expect(HasRows(editor, own + " Projection FogMode ClearColor FogColor FieldOfView " +
+                   "OrthographicHeight FogDensity Order ClearsColor ClearsDepth Range FogRange"))
+    Expect(HasRows(editor, "Tonemap Exposure Gamma Hdr"))
     Local mesh = Mesh(Geometry.Cube())
     mesh.SetMaterial(Material(Color(1, 0, 0)))
     Selecting(editor, mesh)
-    // Its own tint, then its material's: an Alpha's in the Color beside it.
-    Expect(Titles(editor) == own + "Color Shading Blend Color Emissive Shininess AlphaCutoff " +
-           "NormalScale OcclusionStrength Order VertexColors Wireframe TwoSided Fogged ",
-           Titles(editor))
+    // Its own tint, then its material's.
+    Local colors = editor.Inspector.Rows().Filter(Function(row: PropertyRow) => row.Title ==
+                                                  "Color")
+    Expect(colors.Count == 2, "it has {colors.Count}")
+    Expect(HasRows(editor,
+                   own +
+                   " Shading Blend Shininess AlphaCutoff VertexColors Wireframe TwoSided Fogged"))
+    Expect(HasRows(editor, "Emissive NormalScale OcclusionStrength"))
     Local sprite = Sprite(Material())
     Selecting(editor, sprite)
-    Expect(Titles(editor) ==
-           own + "ViewMode Color SpriteScale Handle SpriteRotation Shading Blend Color Emissive " +
-           "Shininess AlphaCutoff NormalScale OcclusionStrength Order VertexColors Wireframe " +
-           "TwoSided Fogged ", Titles(editor))
-    // A terrain's Size clears its heights, so it isn't shown.
+    Expect(HasRows(editor, own + " ViewMode SpriteScale Handle SpriteRotation Shading"))
+    // What's set some other way, or would lose what no undo brings back, isn't shown.
+    Expect(!Shows(editor, "Alpha"), "an alpha's in the color beside it")
     Local terrain = Terrain(4)
     Selecting(editor, terrain)
-    Expect(Titles(editor) == own + "Color ", Titles(editor))
+    Expect(!Shows(editor, "Size"), "a terrain's size clears its heights")
     Local plane = GroundPlane()
     plane.SetMaterial(Material())
     Selecting(editor, plane)
-    Expect(Titles(editor) ==
-           own + "Color Segments Shading Blend Color Emissive Shininess AlphaCutoff NormalScale " +
-           "OcclusionStrength Order VertexColors Wireframe TwoSided Fogged ", Titles(editor))
-    Local pivot = Pivot()
-    Selecting(editor, pivot)
-    Expect(Titles(editor) == own, Titles(editor))
+    Expect(HasRows(editor, own + " Segments Shading"))
+    Local particles = Particles()
+    Selecting(editor, particles)
+    Expect(
+        HasRows(
+            editor,
+            own +
+            " Capacity Rate Roll Life Speeds Spread Spin Gravity Drag Sizes StartColor EndColor"))
+    // Many have how many ahead of what they share, and what's particular to one kind only if all are.
+    Selecting(editor, light)
+    editor.Edited.ToggleSelected(camera)
+    editor.Step()
+    editor.Step()
+    Local heading = editor.Inspector.Find("inspector.heading") As? Label
+    Expect(heading != Null && heading.Text() == "2 selected", heading?.Text() ?? "no heading")
+    Expect(!Shows(editor, "Intensity") && !Shows(editor, "FieldOfView"),
+           "it shows what only one has")
+    Expect(HasRows(editor, own))
     editor.Edited.SelectOnly(Null)
     editor.Step()
     Expect(editor.Inspector.Rows().Count == 0)
+    editor.Finish()
+End Function
+
+@Test
+Function ParticlesAreEditedEachNumberAlone() Throws IOError, GraphicsError
+    If NoGpu() Then Skip("no GPU here")
+    Local settings = Try TempDir()
+    Local games = Try TempDir()
+    Local editor = Try Started(settings, games)
+    Local particles = Particles()
+    particles.SetLife(1, 2)
+    particles.SetMotion(3, 4, Pi / 2, 5)
+    particles.SetForces(Vec3(0, -1, 0), 0.5)
+    particles.SetSizes(0.25, 0.75)
+    particles.SetColors(Color(1, 0, 0, 1), Color(0, 1, 0, 0.5))
+    particles.SetRoll(Pi / 2)
+    particles.SetRate(7)
+    Selecting(editor, particles)
+    Expect(FieldOf(editor, "Rate").Text() == "7")
+    Expect(FieldOf(editor, "Roll").Text() == "90", FieldOf(editor, "Roll").Text())
+    Expect(FieldOf(editor, "Spread").Text() == "90", FieldOf(editor, "Spread").Text())
+    Expect(FieldOf(editor, "Life", 1).Text() == "2" && FieldOf(editor, "Speeds", 0).Text() == "3")
+    Expect(FieldOf(editor, "EndColor", 3).Text() == "0.5")
+    // Each going alone, what's set with it stays.
+    Try Entered(editor, "Speeds", "3.5", 0)
+    Expect(particles.Speeds() == Vec2(3.5, 4) && Near(particles.Spread(), Pi / 2) &&
+           particles.Spin() == 5)
+    Try Entered(editor, "Spread", "45")
+    Expect(particles.Speeds() == Vec2(3.5, 4) && Near(particles.Spread(), Pi / 4) &&
+           particles.Spin() == 5)
+    Try Entered(editor, "Spin", "6")
+    Expect(particles.Speeds() == Vec2(3.5, 4) && Near(particles.Spread(), Pi / 4) &&
+           particles.Spin() == 6)
+    Try Entered(editor, "Gravity", "-2", 1)
+    Expect(particles.Gravity() == Vec3(0, -2, 0) && particles.Drag() == 0.5)
+    Try Entered(editor, "Drag", "1")
+    Expect(particles.Gravity() == Vec3(0, -2, 0) && particles.Drag() == 1)
+    Try Entered(editor, "StartColor", "0.5", 1)
+    Expect(particles.StartColor() == Color(1, 0.5, 0, 1) &&
+           particles.EndColor() == Color(0, 1, 0, 0.5))
+    Try Entered(editor, "EndColor", "0.25", 3)
+    Expect(particles.StartColor() == Color(1, 0.5, 0, 1) &&
+           particles.EndColor() == Color(0, 1, 0, 0.25))
+    Try Entered(editor, "Sizes", "1", 1)
+    Expect(particles.Sizes() == Vec2(0.25, 1))
+    Try Entered(editor, "Life", "2", 0)
+    Expect(particles.Life() == Vec2(2, 2), "a life all the same length is fine: {particles.Life()}")
+    // What its setters refuse.
+    Try Entered(editor, "Life", "3", 0)
+    Expect(particles.Life() == Vec2(2, 2), "the least past the most")
+    Try Entered(editor, "Life", "600", 1)
+    Expect(particles.Life() == Vec2(2, 2), "longer than it can live")
+    Try Entered(editor, "Speeds", "5", 0)
+    Expect(particles.Speeds() == Vec2(3.5, 4), "the least past the most")
+    Try Entered(editor, "Capacity", "0")
+    Expect(particles.Capacity() != 0)
+    // And it all comes undone, each back as it was.
+    While editor.Edits.CanUndo()
+        Expect(editor.Actions.Run("edit.undo"))
+    End While
+    Expect(particles.Life() == Vec2(1, 2) && particles.Speeds() == Vec2(3, 4) &&
+           particles.Spin() == 5)
+    Expect(particles.Gravity() == Vec3(0, -1, 0) && particles.Sizes() == Vec2(0.25, 0.75))
+    Expect(particles.StartColor() == Color(1, 0, 0, 1) &&
+           particles.EndColor() == Color(0, 1, 0, 0.5))
     editor.Finish()
 End Function
 
@@ -315,6 +408,7 @@ Function NothingTypedPanics() Throws IOError, GraphicsError
     Try Everything(editor, mesh)
     Try Everything(editor, Sprite(Material()))
     Try Everything(editor, Terrain(2))
+    Try Everything(editor, Particles())
     Local plane = GroundPlane()
     plane.SetMaterial(Material())
     Try Everything(editor, plane)

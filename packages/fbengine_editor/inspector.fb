@@ -890,6 +890,12 @@ Public Final Class SceneInspector Extends Widget
             AddSection<GroundPlane>("Ground Plane", planes,
                                     Function(plane: GroundPlane) => there(plane), seen)
         End If
+        Local emitters = EachIs<Particles>(entities)
+        If emitters != Null
+            AddSection<Particles>("Particles", emitters,
+                                  Function(particles: Particles) => there(particles), seen)
+            AddEmitting(emitters)
+        End If
         Local sprites = EachIs<Sprite>(entities)
         If sprites != Null
             AddSection<Sprite>("Sprite", sprites, Function(sprite: Sprite) => there(sprite), seen)
@@ -1006,6 +1012,62 @@ Public Final Class SceneInspector Extends Widget
                                      Function(index: Int, bias: Vec2)
             lights[index].SetShadowBias(bias.x, bias.y)
         End Function, Function(index: Int) => !lights[index].Freed(), Limits(0)), history))
+    End Method
+
+    // What's set of each Particles together with something else, by hand, as its setters take more
+    // than one number; each number in `read` and `write` of what's kept apart stays as it is.
+    Method AddEmitting(all: Particles[])
+        Local alive = Function(index: Int) => !all[index].Freed()
+        Added(RangeRow(Editable<Vec2>("Life", all.Count, Function(index: Int) => all[index].Life(),
+                                      Function(index: Int, life: Vec2)
+            all[index].SetLife(life.x, life.y)
+        End Function, alive), history, Limits(0.000001, 512), True))
+        Added(RangeRow(Editable<Vec2>("Speeds", all.Count,
+                                      Function(index: Int) => all[index].Speeds(),
+                                      Function(index: Int, speeds: Vec2)
+            all[index].SetMotion(speeds.x, speeds.y, all[index].Spread(), all[index].Spin())
+        End Function, alive), history, Limits(0), True))
+        Added(NumberRow(Editable<Float>("Spread", all.Count,
+                                        Function(index: Int) => all[index].Spread(),
+                                        Function(index: Int, spread: Float)
+            Local speeds = all[index].Speeds()
+            all[index].SetMotion(speeds.x, speeds.y, spread, all[index].Spin())
+        End Function, alive, Limits(0, 3.1415927), True), history))
+        Added(NumberRow(Editable<Float>("Spin", all.Count,
+                                        Function(index: Int) => all[index].Spin(),
+                                        Function(index: Int, spin: Float)
+            Local speeds = all[index].Speeds()
+            all[index].SetMotion(speeds.x, speeds.y, all[index].Spread(), spin)
+        End Function, alive, Limits(0)), history))
+        Added(Vec3Row(Editable<Vec3>("Gravity", all.Count,
+                                     Function(index: Int) => all[index].Gravity(),
+                                     Function(index: Int, gravity: Vec3)
+            all[index].SetForces(gravity, all[index].Drag())
+        End Function, alive), history))
+        Added(NumberRow(Editable<Float>("Drag", all.Count,
+                                        Function(index: Int) => all[index].Drag(),
+                                        Function(index: Int, drag: Float)
+            all[index].SetForces(all[index].Gravity(), drag)
+        End Function, alive, Limits(0)), history))
+        Added(Vec2Row(Editable<Vec2>("Sizes", all.Count, Function(index: Int) => all[index].Sizes(),
+                                     Function(index: Int, sizes: Vec2)
+            all[index].SetSizes(sizes.x, sizes.y)
+        End Function, alive, Limits(0)), history))
+        Added(NumberRow(Editable<Float>("Roll", all.Count,
+                                        Function(index: Int) => all[index].BirthRoll(),
+                                        Function(index: Int, roll: Float)
+            all[index].SetRoll(roll)
+        End Function, alive, Limits(0, 3.1415927), True), history))
+        Added(ColorRow(Editable<Color>("StartColor", all.Count,
+                                       Function(index: Int) => all[index].StartColor(),
+                                       Function(index: Int, color: Color)
+            all[index].SetColors(color, all[index].EndColor())
+        End Function, alive), history))
+        Added(ColorRow(Editable<Color>("EndColor", all.Count,
+                                       Function(index: Int) => all[index].EndColor(),
+                                       Function(index: Int, color: Color)
+            all[index].SetColors(all[index].StartColor(), color)
+        End Function, alive), history))
     End Method
 
     // A spot's cone, set as one, inner within outer.
@@ -1149,8 +1211,10 @@ Function RotationRow(changed: Editable<Quat>, edits: History): FieldsRow<Quat>
     End Function)
 End Function
 
-// A row of two numbers in `bounds`, the first below the second, set as one.
-Function RangeRow(changed: Editable<Vec2>, edits: History, bounds: Limits): FieldsRow<Vec2>
+// A row of two numbers in `bounds`, the first below the second, or if `even`, not above it, set as
+// one.
+Function RangeRow(changed: Editable<Vec2>, edits: History, bounds: Limits,
+                  even: Bool = False): FieldsRow<Vec2>
     Return FieldsRow<Vec2>(changed, edits, 2, Function(value: Vec2, part: Int)
         Return ShownNumber(part == 0 ? value.x : value.y)
     End Function, Function(value: Vec2, part: Int, text: String): Vec2?
@@ -1158,6 +1222,6 @@ Function RangeRow(changed: Editable<Vec2>, edits: History, bounds: Limits): Fiel
         If typed == Null Then Return Null
         Local low = part == 0 ? typed : value.x
         Local high = part == 1 ? typed : value.y
-        Return low < high ? Vec2(low, high) : Null
+        Return low < high || (even && low == high) ? Vec2(low, high) : Null
     End Function)
 End Function

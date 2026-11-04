@@ -1,0 +1,91 @@
+// Where things are, and how fast you go, which the text flow's walks and the island in 3D both go by,
+// so neither can drift from the other: the mill, the road between the two rocks, and the parts.
+
+Import std.core
+Import std.math
+
+/// How fast you walk, in meters a second.
+Public Const WALK_SPEED: Float = 4.0
+/// Where the rocks' middles are, in meters from the ground's middle.
+Public Const MAIN_X: Float = -45.0
+Public Const FAR_X: Float = 50.0
+Public Const FAR_Z: Float = 8.0
+/// How far across the road goes from shore to shore, and how far it is from its line to its side.
+Public Const ROAD_WEST: Float = -9.0
+Public Const ROAD_EAST: Float = 33.0
+Public Const ROAD_SIDE: Float = 3.5
+/// The mill's inside, half its width and depth, from its middle, and its door's half width.
+Public Const MILL_W: Float = 5.7
+Public Const MILL_D: Float = 4.7
+Public Const DOOR_W: Float = 2.0
+// How far past its end you're left on a rock, by the water, and how far apart the gear's from the
+// mill's middle.
+Const LANDING: Float = 6.0
+Const GEAR_X: Float = 16.0
+Const GEAR_Z: Float = 7.0
+
+/// Where the road's line is along, at `x`.
+Public Function RoadZ(x: Float): Float => (x - MAIN_X) / (FAR_X - MAIN_X) * FAR_Z
+
+/// Where the mill's middle is.
+Public Function MillSpot(): Vec2 => Vec2(MAIN_X, 0.0)
+
+/// Where you stand outside the mill's door.
+Public Function DoorSpot(): Vec2 => Vec2(MAIN_X, MILL_D + 3.0)
+
+/// Where the gear lies, in the yard.
+Public Function GearSpot(): Vec2 => Vec2(MAIN_X + GEAR_X, GEAR_Z)
+
+/// Where the paddle lies, in the road's middle.
+Public Function PaddleSpot(): Vec2
+    Local x = (ROAD_WEST + ROAD_EAST) / 2.0
+    Return Vec2(x, RoadZ(x))
+End Function
+
+/// Where the belt lies, on the far rock.
+Public Function BeltSpot(): Vec2 => Vec2(FAR_X, FAR_Z)
+
+/// Where the road's ends are.
+Public Function RoadEnd(far: Bool): Vec2
+    Local x = far ? ROAD_EAST : ROAD_WEST
+    Return Vec2(x, RoadZ(x))
+End Function
+
+/// Where the water leaves Pip, on the mill's side, or the far side: a little further in than you.
+Public Function PipLanding(far: Bool): Vec2
+    Local x = far ? ROAD_EAST + LANDING + 2.0 : ROAD_WEST - LANDING - 2.0
+    Return Vec2(x, RoadZ(x))
+End Function
+
+/// Where the water leaves someone on the mill's side, or the far side.
+Public Function Landing(far: Bool): Vec2
+    Local x = far ? ROAD_EAST + LANDING : ROAD_WEST - LANDING
+    Return Vec2(x, RoadZ(x))
+End Function
+
+// How far it is from one place to another.
+Function Apart(one: Vec2, two: Vec2): Float
+    Local dx = two.x - one.x
+    Local dy = two.y - one.y
+    Return Sqrt(dx * dx + dy * dy)
+End Function
+
+/// How many meters it is from the mill's middle out its door to the gear, from the gear by the road's
+/// end to the paddle, and from the paddle by the road's other end to the belt: the flow's walks.
+Public Function LegMeters(leg: Int): Float
+    Select leg
+        Case 0
+            Return Apart(MillSpot(), DoorSpot()) + Apart(DoorSpot(), GearSpot())
+        Case 1
+            Return Apart(GearSpot(), RoadEnd(False)) + Apart(RoadEnd(False), PaddleSpot())
+        Default
+            Return Apart(PaddleSpot(), RoadEnd(True)) + Apart(RoadEnd(True), BeltSpot())
+    End Select
+End Function
+
+/// How many meters it is from the mill's middle to the road's end, on the mill's side or the far one.
+Public Function ToRoadEnd(far: Bool): Float
+    Local west = LegMeters(0) + Apart(GearSpot(), RoadEnd(False))
+    Return far ? west + Apart(RoadEnd(False), PaddleSpot()) + Apart(PaddleSpot(),
+                                                                    RoadEnd(True)) : west
+End Function

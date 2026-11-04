@@ -152,6 +152,18 @@ struct Draw
 // makes one access chain through the draw's address and this one, which SPIRV-Cross, as MoltenVK runs
 // it, writes as Metal that doesn't compile, adding the two indices.
 [noinline]
+Emitter emitterOf(Emitter* emitter)
+{
+    return emitter[0];
+}
+
+[noinline]
+Particle particleAt(Particle* records, uint index)
+{
+    return records[index];
+}
+
+[noinline]
 Vertex vertexAt(Vertex* vertices, uint index)
 {
     return vertices[index];
@@ -539,8 +551,8 @@ Corner particleVertex(uint index : SV_VulkanVertexID, uint instance : SV_VulkanI
 {
     Camera* camera = push.camera;
     const Draw draw = camera.draws[instance];
-    const Emitter emitter = draw.emitter[0];
-    const Particle particle = emitter.records[index / 6];
+    const Emitter emitter = emitterOf(draw.emitter);
+    const Particle particle = particleAt(emitter.records, index / 6);
     Corner corner;
     corner.position = float4(0.0, 0.0, 0.0, 1.0);
     corner.place = float3(0.0, 0.0, 0.0);
@@ -1022,17 +1034,18 @@ ShadowCorner shadowVertex(uint index : SV_VulkanVertexID, uint instance : SV_Vul
 {
     Camera* camera = push.camera;
     const Draw draw = camera.draws[instance];
-    const Vertex vertex = draw.vertices[index];
+    const Vertex vertex = vertexAt(draw.vertices, index);
     float4 position = float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
     for (uint i = 0; i < draw.drawnTargetCount; ++i)
     {
-        const DrawnTarget drawn = draw.drawnTargets[i];
-        const TargetVertex moved = draw.targets[drawn.target * draw.targetVertices + index];
+        const DrawnTarget drawn = drawnTargetAt(draw.drawnTargets, i);
+        const TargetVertex moved =
+            targetVertexAt(draw.targets, drawn.target * draw.targetVertices + index);
         position.xyz += float3(moved.position[0], moved.position[1], moved.position[2]) * drawn.weight;
     }
     if (draw.jointCount != 0)
     {
-        const Joints joints = draw.joints[index];
+        const Joints joints = jointsAt(draw.joints, index);
         float4x4 skin = float4x4(0.0);
         for (uint joint = 0; joint < 4; ++joint)
         {
@@ -1045,7 +1058,7 @@ ShadowCorner shadowVertex(uint index : SV_VulkanVertexID, uint instance : SV_Vul
             }
             else
             {
-                skin += draw.palette[min(which, draw.jointCount - 1)] * weight;
+                skin += paletteAt(draw.palette, min(which, draw.jointCount - 1)) * weight;
             }
         }
         position = mul(skin, position);
