@@ -1,0 +1,169 @@
+// The sky: its colors by height, clouds over them, lit from where the sun starts, in an image a sky
+// shows and an Environment's baked from, so what's reflected is what's there; and the sun, on its own,
+// as it moves and the clouds don't. None of the sun's in the image: its light's a Light's.
+
+Import std.core
+Import std.image.hdr
+Import std.math
+Import fbengine
+Import "./ground"
+
+/// The sky's color at the horizon, which the fog goes into.
+Public Const SKY: Color = Color(0.62, 0.72, 0.8)
+/// How bright the sky is.
+Public Const SKY_LIGHT: Float = 1.2
+
+Const SKY_WIDTH: Int = 1024
+Const SKY_HEIGHT: Int = 512
+// How far off the sun's drawn, inside any camera's far plane however far it walks, and how wide.
+Const SUN_OFF: Float = 3600.0
+Const SUN_SIZE: Float = 260.0
+// How bright the sun's middle is, far past what bloom starts from.
+Const SUN_GLOW: Color = Color(40.0, 34.0, 26.0)
+// How much of the sky's clouds, by the noise they're past, and how soft their edges are.
+Const CLOUDS_FROM: Float = 0.5
+Const CLOUDS_SOFT: Float = 0.2
+
+// A number from 0 to 1 for a lattice point, the same each time.
+Function Hash(x: Int, y: Int): Float
+    Local mixed: Int64 = (((x As Int64) * 73856093) ^ ((y As Int64) * 19349663)) & 0x7FFFFFFF
+    mixed = ((mixed ^ (mixed >> 13)) * 1274126177) & 0x7FFFFFFF
+    mixed = mixed ^ (mixed >> 16)
+    Return ((mixed & 0xFFFF) As Float) / 65535.0
+End Function
+
+/// Value noise, smooth between the whole numbers, from 0 to 1.
+Public Function SoftNoise(x: Float, y: Float): Float
+    Local left = Floor(x)
+    Local top = Floor(y)
+    Local u = x - left
+    Local v = y - top
+    u = u * u * (3.0 - 2.0 * u)
+    v = v * v * (3.0 - 2.0 * v)
+    Local a = Hash(left As Int, top As Int)
+    Local b = Hash((left As Int) + 1, top As Int)
+    Local c = Hash(left As Int, (top As Int) + 1)
+    Local d = Hash((left As Int) + 1, (top As Int) + 1)
+    Return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+End Function
+
+/// 0 below `from`, 1 past `to`, and smooth between.
+Public Function Smooth(from: Float, to: Float, at: Float): Float
+    Local part = Clamp((at - from) / (to - from), 0.0, 1.0)
+    Return part * part * (3.0 - 2.0 * part)
+End Function
+
+// Noise of five octaves, the large ones most, from 0 to 1.
+Function Billows(x: Float, y: Float): Float
+    Return (SoftNoise(x, y) * 0.52 + SoftNoise(x * 2.03 + 17.0, y * 2.03) * 0.26 +
+            SoftNoise(x * 4.1, y * 4.1 + 31.0) * 0.13 + SoftNoise(x * 8.3 + 5.0, y * 8.3) * 0.06 +
+            SoftNoise(x * 16.7, y * 16.7 + 11.0) * 0.03)
+End Function
+
+/// The way to the sun, `clock` seconds in, opposite to the way its light goes.
+Public Function WayToSun(clock: Float64): Vec3
+    Local height, around = SunAt(clock)
+    Return Vec3(Sin(around) * Cos(height), Sin(height), Cos(around) * Cos(height))
+End Function
+
+/// How much of the way up (`x`, `up`, `z`) is cloud, from 0 to 1, and how much it's lit, from 0 to 1.
+Public Function CloudAt(x: Float, up: Float, z: Float): (Float, Float)
+    If up <= 0.02 Then Return (0.0, 1.0)
+    // Where the way meets a layer overhead, with a little added to how flat it can go, so they shrink
+    // toward the horizon, not to nothing.
+    Local over = 1.6 / (up + 0.14)
+    Local across = x * over
+    Local along = z * over
+    Local thick = Billows(across, along)
+    Local cloud = Smooth(CLOUDS_FROM, CLOUDS_FROM + CLOUDS_SOFT, thick) * Smooth(0.02, 0.16, up)
+    If cloud <= 0.0 Then Return (0.0, 1.0)
+    // Lit where there's less of it toward the sun.
+    Local sun = WayToSun(0.0)
+    Local toward = Billows(across + sun.x * 0.22, along + sun.z * 0.22)
+    Return (cloud, Clamp(0.7 + (thick - toward) * 3.0, 0.0, 1.0))
+End Function
+
+/// The light all around, in latitude and longitude as a sky and an Environment read it: from straight
+/// up, through the haze at the horizon, to the sea below it, with clouds over the part above: light
+/// past 1's what's kept in it, so a metal or the sea has something bright to reflect.
+Public Function SkyImage(): HdrImage
+    Local values: Float32[] = []
+    For y = 0 Until SKY_HEIGHT
+        Local latitude = (0.5 - ((y As Float) + 0.5) / (SKY_HEIGHT As Float)) * 3.14159265
+        Local up = Sin(latitude)
+        Local flat = Cos(latitude)
+        Local haze = 1.0 - Clamp(Abs(up) * 3.0, 0.0, 1.0)
+        Local r = up >= 0.0 ? 0.36 + (SKY.r - 0.36) * haze : 0.08 + (SKY.r - 0.08) * haze
+        Local g = up >= 0.0 ? 0.5 + (SKY.g - 0.5) * haze : 0.16 + (SKY.g - 0.16) * haze
+        Local b = up >= 0.0 ? 0.74 + (SKY.b - 0.74) * haze : 0.2 + (SKY.b - 0.2) * haze
+        For column = 0 Until SKY_WIDTH
+            Local longitude = (((column As Float) + 0.5) / (SKY_WIDTH As Float) - 0.5) * 6.2831853
+            Local cloud, lit = CloudAt(Sin(longitude) * flat, up, -Cos(longitude) * flat)
+            // Under its dark side, slate, and on its lit side, warm and past white.
+            Local shown = 0.55 + 1.05 * lit
+            values.Add(((r + (shown - r) * cloud) * SKY_LIGHT) As Float32)
+            values.Add(((g + (shown * 0.96 - g) * cloud) * SKY_LIGHT) As Float32)
+            values.Add(((b + (shown * 0.93 - b) * cloud) * SKY_LIGHT) As Float32)
+            values.Add(1.0)
+        End For
+    End For
+    Return HdrImage.FromFloats(SKY_WIDTH, SKY_HEIGHT, values)
+End Function
+
+// The sun's look: a round middle, and a glow around it.
+@MainThread
+Function SunLook(): Texture Throws GraphicsError
+    Local side: Int32 = 64
+    Local bytes: UInt8[] = []
+    For y = 0 Until side
+        For x = 0 Until side
+            Local across = ((x As Float) + 0.5) / (side As Float) * 2.0 - 1.0
+            Local down = ((y As Float) + 0.5) / (side As Float) * 2.0 - 1.0
+            Local off = Sqrt(across * across + down * down)
+            Local glow = (1.0 - Smooth(0.1, 0.16, off)) + 0.1 * (1.0 - off) * (1.0 - off)
+            Local level = (Clamp(glow, 0.0, 1.0) * 255.0) As UInt8
+            bytes.Add(level)
+            bytes.Add(level)
+            bytes.Add(level)
+            bytes.Add(255)
+        End For
+    End For
+    Local look = Try Texture(side, side, TextureFormat.RGBA8_LINEAR, True)
+    look.WritePixels(0, 0, side, side, bytes)
+    Return look
+End Function
+
+/// The sun as it's seen, which follows its light.
+Public Final Class SunShown
+    Field shown: Sprite
+
+    New(shown: Sprite)
+        Self.shown = shown
+        Update(0.0)
+    End New
+
+    /// Makes it; what it's made of's kept in `held`.
+    @MainThread
+    Public Static Method Make(held: Texture[]): SunShown Throws GraphicsError
+        Local look = Try SunLook()
+        held.Add(look)
+        Local material = Material(Color(0.0, 0.0, 0.0))
+        material.SetEmissive(SUN_GLOW)
+        material.SetMap(MaterialMap.EMISSIVE, look)
+        material.SetBlend(Blend.ADD)
+        material.SetFogged(False)
+        Local shown = Sprite(material)
+        shown.SetSpriteScale(Vec2(SUN_SIZE, SUN_SIZE))
+        Return SunShown(shown)
+    End Method
+
+    /// Puts it where it is `clock` seconds in.
+    @MainThread
+    Public Method Update(clock: Float64)
+        Local way = WayToSun(clock)
+        shown.SetPosition(Vec3(way.x * SUN_OFF, way.y * SUN_OFF, way.z * SUN_OFF))
+    End Method
+
+    /// Where it's drawn.
+    @MainThread Public Method Place(): Vec3 => shown.Position()
+End Class

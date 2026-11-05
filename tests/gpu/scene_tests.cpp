@@ -3687,6 +3687,84 @@ TEST_CASE("an environment's directions are the world's, however the camera's tur
     fbe_material_release(material);
 }
 
+// One image for both: what a mirror shows, whichever way it's turned, is what's behind whoever
+// looks at it, as the sky has it there. A band of a color each way round, so a quarter turn between
+// them shows.
+TEST_CASE("a World's sky and its environment are the same image, the same way round",
+          "[gpu][scene]") {
+    const scene_t scene;
+    constexpr std::int32_t across = 64;
+    constexpr std::int32_t down = 32;
+    const std::uint64_t source = fbe_texture_create(across, down, FBE_TEXTURE_RGBA16F, false);
+    REQUIRE(source != 0);
+    const std::array<std::array<float, 3>, 4> bands{
+        {
+            { 0.8F, 0.1F, 0.1F },
+            { 0.1F, 0.8F, 0.1F },
+            { 0.1F, 0.1F, 0.8F },
+            { 0.8F, 0.8F, 0.1F },
+        },
+    };
+    std::vector<float> pixels;
+    for (std::int32_t y = 0; y < down; ++y) {
+        for (std::int32_t x = 0; x < across; ++x) {
+            const auto band = bands.at(static_cast<std::size_t>(((x + 8) / 16) % 4));
+            pixels.insert(pixels.end(), { band[0], band[1], band[2], 1.0F });
+        }
+    }
+    require(fbe_texture_write_floats(source, 0, 0, across, down, pixels.data()));
+    const std::uint64_t environment = fbe_environment_bake(source, 64, 64);
+    REQUIRE(environment != 0);
+    require(fbe_world_set_sky_texture(scene.world, source, 1.0F));
+    require(fbe_world_set_environment(scene.world, environment, 1.0F));
+    fbe_texture_release(source);
+    const std::uint64_t mirror = fbe_material_create();
+    require(fbe_material_set_metal_rough(mirror, 1.0F, 0.0F));
+    const std::uint64_t mesh = wall(scene.world, 0.0F, 10.0F, mirror);
+    const float root = std::numbers::sqrt2_v<float> / 2.0F;
+    // A turn about Y, and which way it looks then.
+    struct turn_t {
+        float y;
+        float w;
+        float along_x;
+        float along_z;
+    };
+    const std::array<turn_t, 4> turns{
+        {
+            { .y = 0.0F, .w = 1.0F, .along_x = 0.0F, .along_z = -1.0F },
+            { .y = root, .w = root, .along_x = -1.0F, .along_z = 0.0F },
+            { .y = 1.0F, .w = 0.0F, .along_x = 0.0F, .along_z = 1.0F },
+            { .y = -root, .w = root, .along_x = 1.0F, .along_z = 0.0F },
+        },
+    };
+    std::array<rgba_t, 4> skies{};
+    require(fbe_entity_set_hidden(mesh, true));
+    for (std::size_t at = 0; at < turns.size(); ++at) {
+        require(fbe_entity_set_rotation(scene.camera, 0.0F, turns.at(at).y, 0.0F, turns.at(at).w,
+                                        FBE_SPACE_WORLD));
+        skies.at(at) = middle(scene.drawn());
+    }
+    require(fbe_entity_set_hidden(mesh, false));
+    for (std::size_t at = 0; at < turns.size(); ++at) {
+        const turn_t& turn = turns.at(at);
+        require(fbe_entity_set_rotation(scene.camera, 0.0F, turn.y, 0.0F, turn.w, FBE_SPACE_WORLD));
+        require(fbe_entity_set_rotation(mesh, 0.0F, turn.y, 0.0F, turn.w, FBE_SPACE_WORLD));
+        require(fbe_entity_set_position(mesh, turn.along_x * 3.0F, 0.0F, turn.along_z * 3.0F,
+                                        FBE_SPACE_WORLD));
+        const auto seen = middle(scene.drawn());
+        const auto behind = skies.at((at + 2) % 4);
+        INFO("turn " << at);
+        CHECK(near(seen, { behind[0], behind[1], behind[2] }, 12));
+        // And the four are different, or this says nothing.
+        CHECK(!near(
+            skies.at(at),
+            { skies.at((at + 1) % 4)[0], skies.at((at + 1) % 4)[1], skies.at((at + 1) % 4)[2] },
+            30));
+    }
+    fbe_environment_free(environment);
+    fbe_material_release(mirror);
+}
+
 // Spheres, the scene's own, smooth to rough across and dielectric to metal up, under a sky and a
 // sun, as the shaders' own test has them on analytic ones.
 TEST_CASE("a scene of PBR spheres matches its golden image", "[gpu][scene][golden]") {
