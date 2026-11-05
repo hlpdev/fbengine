@@ -5,10 +5,18 @@
 // at 60 fps, its own thread mixes beside the game's, as a device's does. It prints what the game's
 // calls take a frame on each, and the mix on no device, and holds the calls to audio's own share
 // of the engine's 2 ms frame, 0.5 ms, with room for a debug build on a slow machine.
+//
+// What it holds them to is what a machine's other work doesn't change, as the clock it reads does:
+// the middle frame, as what else is running takes this thread away from few of them, and how many
+// frames stalled, of which that leaves few; and a run over either goes again, up to 3 times, as it
+// can't be chance every time. What's really slow is slow in the middle frame of every run, and what
+// really stalls stalls in more than a twentieth of them, which --stall-every-frame and
+// --stall-now-and-then show, as ctest runs them, by stalling it.
 
 Import std.collections
 Import std.core
 Import std.math
+Import std.os
 Import std.time
 Import fbengine_audio
 
@@ -18,6 +26,13 @@ Const MOST_CHANNELS = 64
 Const STARTS_A_FRAME = 8
 Const RATE = 44100
 Const FRAME = 735
+Const TRIES = 3
+
+// The game's calls in a frame, at most, in the middle frame; a frame of more than a stall's is
+// stalled, and at most a twentieth of them can be.
+Const MOST_CALLS: Float64 = 0.5
+Const A_STALL: Float64 = 10.0
+Const MOST_STALLED = 20
 
 // A mono WAV of `count` frames of a tone at `hertz`, at 44100 Hz.
 Function Tone(hertz: Float, count: Int): UInt8[]
@@ -51,17 +66,35 @@ Function Bytes(bytes: UInt8[], value: Int, count: Int)
     End For
 End Function
 
-// What a run takes a frame, in milliseconds, on average and at most.
+// What a run takes a frame, in milliseconds, in the middle frame and at most; and how many stalled.
 Struct Measured
     Field Busiest: Int
     Field Calls: Float64
     Field SlowestCalls: Float64
+    Field Stalled: Int
     Field Mix: Float64
     Field SlowestMix: Float64
 End Struct
 
+// What's stalled on purpose, to show it's seen: each frame by 2 ms, or each tenth frame by 20.
+Enum Stall
+    NONE
+    EVERY_FRAME
+    NOW_AND_THEN
+End Enum
+
+// The middle of `values`, 0 for none.
+Function Middle(values: Float64[]): Float64
+    If values.Count == 0 Then Return 0
+    Local sorted: Float64[] = []
+    sorted.AddAll(values)
+    sorted.Sort()
+    Return sorted[sorted.Count / 2]
+End Function
+
 // `frames` frames of a game on `device`: mixed by each frame on MANUAL, paced at 60 fps on another.
-Function Measure(device: AudioDevice, frames: Int): Measured Throws AudioError, SoundError
+Function Measure(device: AudioDevice, frames: Int,
+                 stall: Stall): Measured Throws AudioError, SoundError
     Try Audio.Start(device, RATE, 2)
     Local effects = Bus()
     effects.SetVolume(0.5)
@@ -78,8 +111,8 @@ Function Measure(device: AudioDevice, frames: Int): Measured Throws AudioError, 
     music.Play()
 
     Local playing: Channel[] = []
-    Local calls = Duration.Zero()
-    Local mixing = Duration.Zero()
+    Local calls: Float64[] = []
+    Local mixing: Float64[] = []
     Local slowestCalls = Duration.Zero()
     Local slowestMix = Duration.Zero()
     Local busiest = 0
@@ -104,15 +137,17 @@ Function Measure(device: AudioDevice, frames: Int): Measured Throws AudioError, 
         End For
         If playing.Count > 4 && random.Int(4) == 0 Then playing[0].Stop()
         busiest = Max(busiest, Audio.Playing())
+        If stall == Stall.EVERY_FRAME Then Sleep(2.Milliseconds)
+        If stall == Stall.NOW_AND_THEN && frame % 10 == 0 Then Sleep(20.Milliseconds)
         Local took = started.Elapsed
-        calls += took
+        calls.Add(took.TotalMilliseconds)
         slowestCalls = Max(slowestCalls, took)
 
         If device == AudioDevice.MANUAL
             Local before = Instant.Now()
             Local mixed = Audio.Mix(FRAME)
             Local mix = before.Elapsed
-            mixing += mix
+            mixing.Add(mix.TotalMilliseconds)
             slowestMix = Max(slowestMix, mix)
             If mixed.Count != FRAME * 2 Then Panic("frame {frame} mixed {mixed.Count} samples")
         Else
@@ -121,26 +156,58 @@ Function Measure(device: AudioDevice, frames: Int): Measured Throws AudioError, 
         End If
     End For
     Audio.Stop()
-    Return Measured(busiest, calls.TotalMilliseconds / frames, slowestCalls.TotalMilliseconds,
-                    mixing.TotalMilliseconds / frames, slowestMix.TotalMilliseconds)
+    Local stalled = 0
+    For each In calls
+        If each > A_STALL Then stalled += 1
+    End For
+    Return Measured(busiest, Middle(calls), slowestCalls.TotalMilliseconds, stalled, Middle(mixing),
+                    slowestMix.TotalMilliseconds)
 End Function
 
-Function Run() Throws AudioError, SoundError
-    Local manual = Try Measure(AudioDevice.MANUAL, FRAMES)
-    Local paced = Try Measure(AudioDevice.SILENT, PACED_FRAMES)
-    Print("{FRAMES} frames on no device, up to {manual.Busiest} channels at once")
-    Print("the game's calls: {manual.Calls} ms a frame, {manual.SlowestCalls} ms at most")
-    Print("the mix: {manual.Mix} ms a frame, {manual.SlowestMix} ms at most")
-    Print("{PACED_FRAMES} frames on the null backend at 60 fps, up to {paced.Busiest} channels at once")
-    Print("the game's calls: {paced.Calls} ms a frame, {paced.SlowestCalls} ms at most")
-    // The game's calls are within audio's share of the engine's frame, beside the mixing thread
-    // too, and the mix, on a device's own thread, keeps up with the 16.7 ms each frame plays for.
-    If manual.Calls > 0.5 || paced.Calls > 0.5
-        Panic("the game's calls take more than audio's 0.5 ms a frame")
+// What's over the budget in a run of `frames`, "" for nothing.
+Function Over(run: Measured, frames: Int): String
+    If run.Calls > MOST_CALLS Then Return "the game's calls take more than audio's 0.5 ms a frame"
+    If run.Stalled > frames / MOST_STALLED
+        Return "the game's calls stalled in {run.Stalled} of {frames} frames"
     End If
+    If run.Mix > 16.7 Then Return "the mix is slower than it plays"
+    Return ""
+End Function
 
-    If manual.Mix > 16.7 Then Panic("the mix is slower than it plays")
-    Print("within the budget")
+// One run on each, giving what's over the budget, "" for nothing. What's over on no device doesn't
+// wait a paced run's 5 seconds to say so.
+Function Once(stall: Stall): String Throws AudioError, SoundError
+    Local manual = Try Measure(AudioDevice.MANUAL, FRAMES, stall)
+    Print("{FRAMES} frames on no device, up to {manual.Busiest} channels at once")
+    Print("the game's calls: {manual.Calls} ms in the middle frame, {manual.SlowestCalls} ms at most, " +
+          "{manual.Stalled} stalled")
+    Print("the mix: {manual.Mix} ms in the middle frame, {manual.SlowestMix} ms at most")
+    Local over = Over(manual, FRAMES)
+    If over != "" Then Return over
+    Local paced = Try Measure(AudioDevice.SILENT, PACED_FRAMES, stall)
+    Print("{PACED_FRAMES} frames on the null backend at 60 fps, up to {paced.Busiest} channels at once")
+    Print("the game's calls: {paced.Calls} ms in the middle frame, {paced.SlowestCalls} ms at most, " +
+          "{paced.Stalled} stalled")
+    Return Over(paced, PACED_FRAMES)
+End Function
+
+// The game's calls are within audio's share of the engine's frame, beside the mixing thread too, and
+// the mix, on a device's own thread, keeps up with the 16.7 ms each frame plays for.
+Function Run() Throws AudioError, SoundError
+    Local arguments = Process.Arguments()
+    Local stall = Stall.NONE
+    If arguments.Contains("--stall-every-frame") Then stall = Stall.EVERY_FRAME
+    If arguments.Contains("--stall-now-and-then") Then stall = Stall.NOW_AND_THEN
+    Local over = ""
+    For attempt = 1 To TRIES
+        over = Try Once(stall)
+        If over == ""
+            Print("within the budget")
+            Return
+        End If
+        Print("run {attempt}: {over}")
+    End For
+    Panic(over)
 End Function
 
 Try Run()

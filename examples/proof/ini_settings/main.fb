@@ -5,6 +5,7 @@
 Import std.collections
 Import std.core
 Import std.data.ini
+Import std.image.image
 Import std.io
 Import std.math
 Import std.os
@@ -25,18 +26,6 @@ Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
     If at == Null || at + 1 >= arguments.Count Then Return 0
     Return Int.Parse(arguments[at + 1]) ?? 0
-End Function
-
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
 End Function
 
 // The string at `path`, or `otherwise`.
@@ -112,6 +101,23 @@ Function Proved() Throws IOError, ParseError
     Try folder.Close()
 End Function
 
+// How many of the lines 24 apart from `top`, down to the bar, have ink.
+Function Inked(image: Image, top: Int): Int
+    Local found = 0
+    Local y = top
+    While y + 24 < 400
+        Local any = False
+        For x = 16 To 200
+            For down = y To y + 20
+                If image[x, down] != Color32(24, 28, 36, 255) Then any = True
+            End For
+        End For
+        If any Then found += 1
+        y += 24
+    End While
+    Return found
+End Function
+
 // A window of its settings, saved and read back each time one changes; or `frames` frames offscreen,
 // which change one every 5.
 Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError, ParseError
@@ -149,7 +155,12 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError
         canvas.DrawRect(16, 400, (Whole(settings, "audio.volume", 0) As Int32) * 60, 24)
     End While
     If frames > 0 Then Print("the volume {Text(settings, "audio.volume", "")}")
-    Print("drew {Try Drew()}")
+    If count == frames
+        // Its bar's 60 a step, so at 3, ends at 16 + 180; and its lines were written, each below the last.
+        Local shown = Try Screen.ToImage()
+        Print("its bar to {shown[195, 410]}, past it {shown[196, 410]}")
+        Print("{Inked(shown, 16)} lines of text")
+    End If
     Try folder.Close()
     Print("watched {count} frames")
 End Function

@@ -5,8 +5,10 @@
 // blended here as the specification does, say which side of that a difference is. With --frames, it
 // saves each frame there too, which their golden images check.
 //
-// The golden images hold how the scene shader lights now, which isn't yet glTF's PBR: they're
-// recorded again when that's in, and until then say nothing of whether the lighting's right.
+// The light's pinned too: at a few pixels a frame, the color glTF's BRDF gives them, worked out by
+// reference.py from the specification, within 2 levels; the golden images then hold the rest of
+// the frame. A material's texture, as MorphPrimitivesTest's has, reference.py doesn't read, so such
+// a frame's drawn again with its textures off for its light.
 
 Import std.collections
 Import std.core
@@ -28,11 +30,12 @@ Function FileOf(folder: String): UInt8[]
     If folder == "SimpleSkin" Then Return Embed("SimpleSkin/SimpleSkin.gltf")
     If folder == "SimpleMorph" Then Return Embed("SimpleMorph/SimpleMorph.gltf")
     If folder == "RiggedSimple" Then Return Embed("RiggedSimple/RiggedSimple.glb")
+    If folder == "AnimatedMorphCube" Then Return Embed("AnimatedMorphCube/AnimatedMorphCube.glb")
     Return Embed("MorphPrimitivesTest/MorphPrimitivesTest.glb")
 End Function
 
 Function NameOf(folder: String): String
-    Return folder + (folder == "RiggedSimple" || folder == "MorphPrimitivesTest" ? ".glb" : ".gltf")
+    Return folder + (folder == "SimpleSkin" || folder == "SimpleMorph" ? ".gltf" : ".glb")
 End Function
 
 // Each triangle corner of `mesh` where its skin and morph targets put it in the world.
@@ -92,7 +95,8 @@ Function OnLavapipe(): Bool Throws GraphicsError
 End Function
 
 // Compares a frame with what was worked out, saying so of whatever differs; gives whether it agrees.
-Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[], masks: UInt8[], exact: Bool): Bool
+Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[], lit: UInt8[], masks: UInt8[],
+                exact: Bool): Bool
     Local low = corners[0]
     Local high = corners[0]
     Local sum = Vec3(0, 0, 0)
@@ -119,6 +123,19 @@ Function Agrees(frame: Worked, corners: Vec3[], pixels: UInt8[], masks: UInt8[],
         Print("{name} differs from its mask at {difference.0} pixels of {difference.1}")
         agrees = False
     End If
+    // Each lit pixel within 2 levels of the BRDF's.
+    For at = 0 Until frame.Lit.Count / 5
+        Local x = frame.Lit[at * 5]
+        Local y = frame.Lit[at * 5 + 1]
+        Local byte = (y * SIZE + x) * 4
+        For k = 0 To 2
+            If Abs((lit[byte + k] As Int) - frame.Lit[at * 5 + 2 + k]) > 2
+                Print("{name} at {x}, {y} is {lit[byte]}, {lit[byte + 1]}, {lit[byte + 2]}, not {frame.Lit[at * 5 + 2]}, {frame.Lit[at * 5 + 3]}, {frame.Lit[at * 5 + 4]}")
+                agrees = False
+                Break
+            End If
+        End For
+    End For
     Return agrees
 End Function
 
@@ -161,11 +178,29 @@ Function Run(saving: String?) Throws GraphicsError, IOError
         Local light = Light(LightType.POINT)
         light.SetPosition(frame.Camera + Vec3(3, 4, 0))
         light.SetRange(100)
-        light.SetIntensity(frame.Folder == "RiggedSimple" ? 400 : 40)
+        light.SetIntensity(frame.Intensity)
         RenderWorld()
         exact = Try OnLavapipe()
         Local pixels = target.ReadPixels()
-        If Agrees(frame, Corners(mesh), pixels, masks, exact) Then good += 1
+        // Its textures off, for its light, as reference.py works that out without them.
+        Local lit = pixels
+        Local textured = False
+        Local geometry = mesh.Geometry()
+        If geometry != Null
+            Local none: Texture? = Null
+            For s = 0 Until geometry.SurfaceCount()
+                Local material = geometry.Surface(s).Material()
+                If material != Null && material.Texture(0) != Null
+                    material.SetTexture(0, none)
+                    textured = True
+                End If
+            End For
+        End If
+        If textured
+            RenderWorld()
+            lit = target.ReadPixels()
+        End If
+        If Agrees(frame, Corners(mesh), pixels, lit, masks, exact) Then good += 1
         If saving != Null Then Try Saved(saving, "model_{frame.Folder}_{frame.Index}", pixels)
         Flip(False)
         model.Free()

@@ -15,6 +15,7 @@
 #include "scene/camera.hpp"
 #include "scene/math.hpp"
 #include "scene/scene.hpp"
+#include "shader/shader.hpp"
 #include "skin/skin.hpp"
 #include "texture/texture.hpp"
 
@@ -72,6 +73,7 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
         sets |= (packed >> 3U) << layer;
     }
     const bool particles = ((key >> 50U) & 1U) != 0;
+    const gpu::shader_t* own = shaders_own::shader_of(static_cast<std::uint32_t>(key >> 52U));
     const bool instances = ((key >> 51U) & 1U) != 0;
     const std::string_view cast_vertex = instances ? "shadowInstanceVertex" : "shadowVertex";
     const std::string_view plain_vertex = instances ? "instanceVertex" : "vertexMain";
@@ -80,7 +82,7 @@ gpu::pipeline_desc_t desc_of(std::uint64_t key, VkFormat format, VkSampleCountFl
     const std::string_view scene_vertex = prepass ? prepass_vertex : lit_vertex;
     const std::string_view scene_fragment = prepass ? "prepassFragment" : "fragmentMain";
     gpu::pipeline_desc_t desc{
-        .shader = &shaders::scene,
+        .shader = own != nullptr ? own : &shaders::scene,
         .vertex = shadows ? cast_vertex : scene_vertex,
         .fragment = shadows ? "shadowFragment" : scene_fragment,
         .color = format,
@@ -180,6 +182,15 @@ void record_pass(VkCommandBuffer commands, const recorded_pass_t& pass) {
                     batch.sky != 0 ? sky_desc(pass.format, pass.samples, pass.stored)
                                    : desc_of(batch.key, pass.format, pass.samples, view.flipped,
                                              pass.shadows, pass.prepass, pass.stored));
+                const auto code = static_cast<std::uint32_t>(batch.key >> 52U);
+                // A game's shader no pipeline can be made of isn't tried again: its draws go on as
+                // the scene's own, under the same key.
+                if (made == VK_NULL_HANDLE && batch.sky == 0 &&
+                    shaders_own::shader_of(code) != nullptr) {
+                    shaders_own::refuse(code);
+                    made = gpu::pipeline(desc_of(batch.key, pass.format, pass.samples, view.flipped,
+                                                 pass.shadows, pass.prepass, pass.stored));
+                }
                 usable = made != VK_NULL_HANDLE;
                 if (usable) {
                     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, made);
@@ -274,6 +285,7 @@ material_data_t material_data(std::uint32_t material, std::uint64_t target,
     data.shininess = found.shininess;
     data.cutoff = found.alpha_cutoff;
     data.no_alpha = found.blend == FBE_BLEND_OPAQUE ? 1U : 0U;
+    data.parameters = found.parameters;
     std::size_t at = 0;
     for (const scene::layer_t& layer : found.layers) {
         if (layer.texture != 0) {

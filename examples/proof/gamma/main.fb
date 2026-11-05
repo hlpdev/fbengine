@@ -158,7 +158,12 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         canvas.SetBlend(Blend2D.SOLID)
     End While
     If frames > 0 Then Print("by its keys: gamma {gamma:.2}")
-    Print("drew {Try Drew()}")
+    If count == frames
+        // Each bar by the sum for adding a quarter of it, which a canvas does in light: 136 is 0.246,
+        // and a quarter more, 0.308, is stored 151; none stays none, and white stays white.
+        Local image = Try Screen.ToImage()
+        Print("its bars of 0, 136, and 255: {image[25, 300]}, {image[425, 300]}, {image[775, 300]}")
+    End If
     Print("watched {count} frames")
 End Function
 
@@ -176,18 +181,6 @@ Function Asked(arguments: String[]): Int
     Local at = arguments.IndexOf("--frames")
     If at == Null || at + 1 >= arguments.Count Then Return 0
     Return Int.Parse(arguments[at + 1]) ?? 0
-End Function
-
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
 End Function
 
 Local arguments = Process.Arguments()

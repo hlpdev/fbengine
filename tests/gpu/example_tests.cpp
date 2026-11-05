@@ -143,6 +143,7 @@ TEST_CASE("the sample models' frames match their golden images", "[.example]") {
              std::pair{ "SimpleMorph", 7 },
              std::pair{ "RiggedSimple", 5 },
              std::pair{ "MorphPrimitivesTest", 3 },
+             std::pair{ "AnimatedMorphCube", 4 },
          }) {
         for (int frame = 0; frame < frames; ++frame) {
             const std::string file = std::format("model_{}_{}", name, frame);

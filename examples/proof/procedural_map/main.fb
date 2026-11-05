@@ -39,18 +39,6 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
-End Function
-
 // Whether a cell's in the grid.
 Function InGrid(x: Int, y: Int): Bool => x >= 0 && y >= 0 && x < SIDE && y < SIDE
 
@@ -565,7 +553,6 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     Local seed = 0
     Local waited: Float = 3.0
     Local count = 0
-    Local drew = False
     While !Window.Closed() && !KeyHit(Key.ESCAPE) && (frames == 0 || count < frames)
         Flip()
         count += 1
@@ -580,7 +567,6 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             rooms = Placed(Of("seed {seed}"))
         End If
         RenderWorld()
-        If frames > 0 && count == 1 Then drew = Try Drew()
         Local canvas = Screen.Canvas()
         canvas.SetBlend(Blend2D.ALPHA)
         canvas.SetColor(Color32(230, 232, 235, 255))
@@ -589,7 +575,19 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
     End While
     If frames > 0
         Print("its last seed {seed}, {rooms.Count} rooms of {Of("seed {seed}").Rows().Join("").Replace(".", "").Length}, in the world {world.EntityCount() - 1}")
-        Print("drew {drew}")
+        // Every room's above what it clears to, where the camera sees it; far off the map, that's all.
+        Local shown = Try Screen.ToImage()
+        Local seen = 0
+        Local behind = Color32(39, 39, 48, 255)
+        For each In rooms
+            Local at = camera.Project(each.Position(Space.WORLD))
+            If at == Null Then Continue
+            Local x = at.x As Int
+            Local y = at.y As Int
+            If x < 0 || y < 40 || x >= shown.Width || y >= shown.Height Then Continue
+            If shown[x, y] != behind Then seen += 1
+        End For
+        Print("{seen} of its rooms drawn where they are, its corner {shown[2, 447]}")
     End If
     Print("watched {count} frames")
 End Function

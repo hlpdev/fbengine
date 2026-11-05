@@ -26,18 +26,6 @@ Function Asked(arguments: String[]): Int
     Return Int.Parse(arguments[at + 1]) ?? 0
 End Function
 
-// Whether any of the screen's pixels isn't what's in its corner, as what's behind everything is.
-Function Drew(): Bool Throws GraphicsError
-    Local image = Try Screen.ToImage()
-    Local behind = image[0, 0]
-    For y = 0 To image.Height - 1
-        For x = 0 To image.Width - 1
-            If image[x, y] != behind Then Return True
-        End For
-    End For
-    Return False
-End Function
-
 // The next `count` of `next`.
 Function Taken(count: Int, next: Func(): String): String
     Local said: String[] = []
@@ -167,9 +155,19 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
             sum += each
         End For
         Print("its bars {least}, {most}, {sum}")
-        Print("the foot of its first {(Try Screen.ToImage())[26, 429]}")
+        // Each bar's as tall as its count says of the tallest's 360, to the pixel.
+        Local shown = Try Screen.ToImage()
+        Local right = True
+        Local tallest = 0
+        For i = 0 To 31
+            Local tall = (bars[i] * 360 / most) As Int
+            Local x = 26 + i * 24
+            tallest = Max(tallest, tall)
+            If shown[x, 429] != Color32(76, 141, 255, 255) || shown[x, 430 - tall] != Color32(76, 141, 255, 255) Then right = False
+            If shown[x, 429 - tall] != Color32(24, 28, 36, 255) Then right = False
+        End For
+        Print("the foot of its first {shown[26, 429]}, each bar as tall as its count {right}, the tallest {tallest}")
     End If
-    Print("drew {Try Drew()}")
     Print("watched {count} frames")
 End Function
 

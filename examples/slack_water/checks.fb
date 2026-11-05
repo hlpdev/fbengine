@@ -46,6 +46,19 @@ Public Function Share(image: Image, test: Func(Color32): Bool): Float
     Return (count As Float) / ((image.Width * image.Height) As Float)
 End Function
 
+/// How much of the pixels from (`left`, `top`) up to (`right`, `bottom`) `test` holds for, from 0 to 1.
+Public Function ShareWithin(image: Image, test: Func(Color32): Bool, left: Int, top: Int,
+                            right: Int,
+                            bottom: Int): Float
+    Local count = 0
+    For y = top Until bottom
+        For x = left Until right
+            If test(image[x, y]) Then count += 1
+        End For
+    End For
+    Return (count As Float) / (((right - left) * (bottom - top)) As Float)
+End Function
+
 /// How close two images of a size are, in decibels of PSNR over their colors: higher's closer, and
 /// 100 for the same.
 Public Function PsnrOf(one: Image, other: Image): Float

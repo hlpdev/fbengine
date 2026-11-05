@@ -345,15 +345,25 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError, IOError
             Local x = 16 + (at % 3) * 180
             Local y = 16 + (at / 3) * 80
             canvas.SetScale(3.0, 3.0)
-            canvas.Draw(shown[at], (x As Float) / 3.0, (y As Float) / 3.0)
+            canvas.Draw(shown[at], x As Float, y As Float)
             canvas.SetScale(1.0, 1.0)
             canvas.DrawText(font, names[at], x + 56, y + 8)
         End For
         canvas.SetScale(8.0, 8.0)
-        canvas.Draw(strip, 70.0, 10.0, (count / 20) % 4)
+        canvas.Draw(strip, 560.0, 80.0, (count / 20) % 4)
         canvas.SetScale(1.0, 1.0)
         canvas.DrawText(font, "a strip's frames", 560, 160)
     End While
+    If count == frames
+        // Each at 3 to one where it's put; what the numbers run read of them, on the frame.
+        Local image = Try Screen.ToImage()
+        Local read: String[] = []
+        For at = 0 Until names.Count
+            read.Add("{image[16 + (at % 3) * 180 + 4, 16 + (at / 3) * 80 + 4]}")
+        End For
+        Print("each one: {read.Join(", ")}")
+        Print("the strip's frame {(count / 20) % 4}: {image[560 + 32, 80 + 32]}")
+    End If
     Print("watched {count} frames")
 End Function
 

@@ -142,6 +142,16 @@ Function Watched(frames: Int, arguments: String[]) Throws GraphicsError
         canvas.SetScale(1.0, 1.0)
         canvas.DrawText(font, "a texture written a pixel at a time, {at} so far", 16, 416)
     End While
+    If count == frames
+        // 3 of the screen's pixels to one of the paper's, from 208, 20; what's written's there, by its own
+        // sum, in the frame it was written; what it hasn't got to, of the 80 rows of 40 frames, isn't.
+        Local shown = Try Screen.ToImage()
+        Local x = 10
+        Local y = 3
+        Local wave = Sin((x As Float) * 0.2 + 2.0 * 0.05) * Cos((y As Float) * 0.2)
+        Print("{at} written: at 10, 3 {shown[208 + x * 3 + 1, 20 + y * 3 + 1]}, by its sum {Color32((128.0 + wave * 127.0) As UInt8, (x * 2) As UInt8, (y * 2) As UInt8, 255)}")
+        Print("the last row it reached and the next: {shown[208 + 1, 20 + 79 * 3 + 1]}, {shown[208 + 1, 20 + 80 * 3 + 1]}")
+    End If
     Print("watched {count} frames")
 End Function
 

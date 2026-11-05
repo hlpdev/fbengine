@@ -35,6 +35,7 @@ Import "./island"
 Import "./map"
 Import "./res" As Res
 Import "./screens"
+Import "./sky"
 Import "./soundscape"
 Import "./walks"
 
@@ -174,6 +175,176 @@ Function PixelOf(camera: Camera, image: Image, place: Vec3): Color32?
     Return image[x, y]
 End Function
 
+// The color of where the sea's `depth` deep along the shore's south side, from beside the main rock,
+// by what `image` shows of it from `camera`, with the sea at `height`, its channels' bytes summed
+// over how many were seen; and how many.
+Function ColorAtDepth(camera: Camera, image: Image, height: Float, depth: Float): (Vec3, Int)
+    Local sum = Vec3(0.0, 0.0, 0.0)
+    Local seen = 0
+    For across = -20 To 20
+        Local x = MAIN_X + (across As Float)
+        Local z: Float = 0.0
+        While height - GroundHeight(x, z) < depth && z < 100.0
+            z += 0.05
+        End While
+        Local pixel = PixelOf(camera, image, Vec3(x, height, z))
+        If pixel != Null
+            sum = sum + Vec3(pixel.r As Float, pixel.g As Float, pixel.b As Float)
+            seen += 1
+        End If
+    End For
+    Return (seen > 0 ? sum * (1.0 / (seen As Float)) : sum, seen)
+End Function
+
+// How bright the sea is there: its channels' bytes, added.
+Function SeaAtDepth(camera: Camera, image: Image, height: Float, depth: Float): (Float, Int)
+    Local color, seen = ColorAtDepth(camera, image, height, depth)
+    Return (color.x + color.y + color.z, seen)
+End Function
+
+// How far apart two colors are, by their channels' bytes.
+Function Apart(one: Vec3, other: Vec3): Float
+    Return Abs(one.x - other.x) + Abs(one.y - other.y) + Abs(one.z - other.z)
+End Function
+
+// What the island shows now.
+Function Shown(island: Island): Image Throws GraphicsError, IOError
+    island.Scene().Render()
+    Local image = Try Screen.ToImage()
+    Flip(False)
+    Return image
+End Function
+
+// What the island shows now, saved as `name` in `folder`.
+Function SavedAs(island: Island, folder: Path, name: String): Image Throws GraphicsError, IOError
+    island.Scene().Render()
+    Try Screen.Save(folder / "{name}.png")
+    Local image = Try Screen.ToImage()
+    Flip(False)
+    Return image
+End Function
+
+// The sea and the sky, saved to look at, and what each of them's for, by the pixels.
+Function SaveSeaAndSky(folder: Path, camera: Camera, island: Island) Throws GraphicsError, IOError
+    // Over the edge of the main rock, along its south shore.
+    Local shoreZ: Float = 0.0
+    While GroundHeight(MAIN_X, shoreZ) > 0.0
+        shoreZ += 0.25
+    End While
+    camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
+    camera.PointAt(Vec3(MAIN_X + 2.0, 0.0, shoreZ - 1.0))
+    Local shore = Try SavedAs(island, folder, "shore")
+    Local edge, edges = SeaAtDepth(camera, shore, 0.0, 0.05)
+    Local deep, deeps = SeaAtDepth(camera, shore, 0.0, 2.2)
+    Checks("the sea has foam at its edge, none where it's deep",
+           edges > 10 && deeps > 10 && edge > deep + 40.0)
+
+    // It hides what's under it by how deep it is, which shows by taking that away.
+    island.SetGroundHidden(True)
+    Local bare = Try Shown(island)
+    island.SetGroundHidden(False)
+    Local shallowWith, _ = ColorAtDepth(camera, shore, 0.0, 0.3)
+    Local shallowBare, _ = ColorAtDepth(camera, bare, 0.0, 0.3)
+    Local deepWith, _ = ColorAtDepth(camera, shore, 0.0, 2.2)
+    Local deepBare, _ = ColorAtDepth(camera, bare, 0.0, 2.2)
+    Checks("the ground shows through what's shallow", Apart(shallowWith, shallowBare) > 30.0)
+    Checks("and not through what's deep", Apart(deepWith, deepBare) < 25.0)
+
+    // It goes up the shore with the tide.
+    camera.SetPosition(Vec3(MAIN_X - 16.0, 6.0, shoreZ + 9.0))
+    island.Update(TIDE_IN_AT)
+    Local high = Try Shown(island)
+    Local wasEdge, _ = SeaAtDepth(camera, high, SeaHeight(TIDE_IN_AT), SeaHeight(TIDE_IN_AT) + 0.05)
+    Local nowEdge, _ = SeaAtDepth(camera, high, SeaHeight(TIDE_IN_AT), 0.05)
+    Checks("its foam goes up the shore with the tide", nowEdge > wasEdge + 70.0)
+    island.Update(0.0)
+
+    // Its normals move, which only the sea shows.
+    camera.SetPosition(Vec3(MAIN_X - 16.0, 4.5, shoreZ + 9.0))
+    Local before = Try Shown(island)
+    island.Update(0.5)
+    Local after = Try Shown(island)
+    island.Update(0.0)
+    Local moved = Function(from: Int, to: Int): Float
+        Local count = 0
+        For y = from Until to
+            For x = 0 Until before.Width
+                If Abs(Brightness(before[x, y]) - Brightness(after[x, y])) > 12 Then count += 1
+            End For
+        End For
+        Return (count As Float) / (((to - from) * before.Width) As Float)
+    End Function
+    Checks("the sea moves", moved(300, 700) > 0.2)
+    Checks("and the sky doesn't", moved(0, 100) < 0.01)
+
+    // Out to sea, into the sun, which is where its light's from.
+    Local way = WayToSun(0.0)
+    camera.SetPosition(Vec3(MAIN_X, GroundHeight(MAIN_X, shoreZ - 6.0) + 3.0, shoreZ - 6.0))
+    camera.PointAt(Vec3(MAIN_X + way.x * 100.0, 3.0 + way.y * 100.0 - 18.0, shoreZ + way.z * 100.0))
+    Local sky = Try SavedAs(island, folder, "sun")
+    Local sunPixel = PixelOf(camera, sky, island.SunPlace())
+    Checks("the sun's drawn, bright", sunPixel != Null && Brightness(sunPixel) > 720)
+    Local light = island.SunTurned() * Vec3(0.0, 0.0, -1.0)
+    Checks("where its light's from",
+           Abs(light.x + way.x) < 0.001 && Abs(light.y + way.y) < 0.001 &&
+           Abs(light.z + way.z) < 0.001)
+    Local place = island.SunPlace()
+    island.Update(TIDE_IN_AT)
+    Checks("and it moves as that does", Length(island.SunPlace() - place) > 1000.0)
+    island.Update(0.0)
+    Local pale = Function(pixel: Color32): Bool => pixel.r > 190 && pixel.g > 190 && pixel.b > 190
+    Local blue = Function(pixel: Color32): Bool => (pixel.b As Int) > (pixel.r As Int) + 25
+    Checks("there are clouds in the sky, and sky between them",
+           Share(sky, pale) > 0.08 && Share(sky, pale) < 0.7 && Share(sky, blue) > 0.15)
+
+    // What's in the sea is that sky: where a still sea's mirror goes to cloud, it's brighter than
+    // where it goes to none. It's only the Environment that could show it there. A moving one's as
+    // smooth, but for its waves: the sun's glitter on them is past what this could tell apart.
+    island.SetSeaStill(True)
+    Local eye = Vec3(MAIN_X, 12.0, 90.0)
+    camera.SetPosition(eye)
+    camera.PointAt(Vec3(MAIN_X, 0.0, 300.0))
+    Local still = Try SavedAs(island, folder, "still_sea")
+    island.SetSeaStill(False)
+    Checks("a still sea shows the clouds over it", CloudsIn(camera, still, eye) > 40.0)
+    Checks("and a moving one's as smooth", island.SeaRoughness() <= 0.25)
+End Function
+
+// How much brighter, of 765, the sea `image` shows from `eye` is where its mirror goes to cloud than
+// where it goes to clear sky, as far off.
+Function CloudsIn(camera: Camera, image: Image, eye: Vec3): Float
+    Local brighter: Float = 0.0
+    Local cloudyCount = 0
+    For along = 0 Until 40
+        // Along a row, where it's all as far off, so the sky shows as much in each.
+        Local cloudy: Float = 0.0
+        Local clear: Float = 0.0
+        Local cloudyHere = 0
+        Local clearHere = 0
+        For across = -40 To 40
+            Local spot = Vec3(MAIN_X + (across As Float) * 6.0, 0.0, 130.0 + (along As Float) * 5.0)
+            Local to = Normalize(spot - eye)
+            Local cloud, _ = CloudAt(to.x, -to.y, to.z)
+            Local pixel = PixelOf(camera, image, spot)
+            If pixel != Null
+                If cloud > 0.7
+                    cloudy += Brightness(pixel) As Float
+                    cloudyHere += 1
+                ElseIf cloud < 0.02
+                    clear += Brightness(pixel) As Float
+                    clearHere += 1
+                End If
+            End If
+        End For
+        If cloudyHere > 0 && clearHere > 0
+            brighter += (cloudy / (cloudyHere As Float) - clear / (clearHere As Float)) *
+                        (cloudyHere As Float)
+            cloudyCount += cloudyHere
+        End If
+    End For
+    Return cloudyCount > 20 ? brighter / (cloudyCount As Float) : 0.0
+End Function
+
 // The island, in `folder`, from each of its views, at slack water and at high tide; and whether
 // what was drawn is what it should be, as the flow has the tide, by the pixels themselves.
 Function SaveViews(folder: Path) Throws GraphicsError, IOError
@@ -206,6 +377,7 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
         saved += 1
         Flip(False)
     End For
+    Try SaveSeaAndSky(folder, camera, island)
     // High tide, from the island's view.
     Local first = Views()[0]
     camera.SetPosition(first.1)
@@ -253,7 +425,9 @@ Function SaveViews(folder: Path) Throws GraphicsError, IOError
     Checks("the roof's land at both",
            roofSlack != Null && roofHigh != Null && !IsSea(roofSlack) && !IsSea(roofHigh))
     Local land = Function(pixel: Color32): Bool => !IsSea(pixel) && !IsSky(pixel)
-    Local ratio = Share(high, land) / Max(Share(slack, land), 0.0001)
+    // Of what's around the rocks, as a far sea with clouds in it is pale, whatever the tide.
+    Local ratio = ShareWithin(high, land, 300, 250, 900, 480) /
+                  Max(ShareWithin(slack, land, 300, 250, 900, 480), 0.0001)
     Checks("the tide takes some of the land", ratio > 0.6 && ratio < 0.95)
     Checks("the sky's at the top of the yard's view", IsSky(images["yard"][640, 4]))
     Checks("the yard's middle isn't sky", !IsSky(images["yard"][640, 360]))

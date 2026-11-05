@@ -1,0 +1,239 @@
+// Materials with shaders of their own: Slang in the game's assets, which its build step compiles,
+// each a family of the scene's pipelines. It draws a wall into a texture by each, and prints what's
+// stored in the middle of it; with --watch, a surface rippling in a window until that's closed or
+// Escape's pressed, or under --frames, as a test runs it, for that many with no window.
+
+Import std.collections
+Import std.core
+Import std.image.image
+Import std.math
+Import std.os
+Import fbengine
+Import "./res" As Res
+
+Const SIZE: Int = 64
+
+// A wall facing the camera, 6 across, of `across` by `across` squares, vertex colors a half each.
+Function Wall(across: Int): Geometry
+    Local geometry = Geometry()
+    Local surface = geometry.AddSurface()
+    For y = 0 To across
+        For x = 0 To across
+            Local u = (x As Float) / (across As Float)
+            Local v = (y As Float) / (across As Float)
+            surface.AddVertex(Vertex(Vec3(u * 6 - 3, 3 - v * 6, 0), Vec3(0, 0, 1), Vec2(u, v),
+                                     Vec2(u, v), Color(0.5, 0.5, 0.5, 1)))
+        End For
+    End For
+    For y = 0 Until across
+        For x = 0 Until across
+            Local a = y * (across + 1) + x
+            Local b = a + 1
+            Local c = a + across + 1
+            Local d = c + 1
+            surface.AddTriangles([a, c, b, b, c, d])
+        End For
+    End For
+    Return geometry
+End Function
+
+Function Middle(target: Texture): String
+    RenderWorld()
+    Local pixels = target.ReadPixels()
+    Local at = (SIZE / 2 * SIZE + SIZE / 2) * 4
+    Flip(False)
+    Return "{pixels[at]}, {pixels[at + 1]}, {pixels[at + 2]}"
+End Function
+
+Function Proved() Throws GraphicsError, IOError
+    Window.SetHeadless(True)
+    Try Res.Mount()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local target = Try Texture.Target(SIZE, SIZE, TextureFormat.RGBA8, 1, True)
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    camera.SetPosition(Vec3(0, 0, 3))
+    world.SetAmbientLight(Color(0.25, 0.25, 0.25))
+    Local material = Material()
+    material.SetShading(Shading.UNLIT)
+    material.SetColor(Color(0.25, 0.5, 1))
+    Local wall = Mesh(Wall(2))
+    wall.SetMaterial(material)
+
+    // Linear 0.25, 0.5, and 1 are stored in sRGB as 137, 188, and 255.
+    Print("the scene's own: {Middle(target)}")
+    Local flat = Try Assets.Load<Shader>(Res.Flat)
+    material.SetShader(flat)
+    material.SetParameter(0, Vec4(1, 0.5, 0.25, 1))
+    Print("a shader of its own: {Middle(target)}")
+    Print("its parameter: {material.Parameter(0)}, its shader's the one given {material.Shader() == flat}")
+
+    // What it returns goes on as the scene's own color does: fog over it, at a distance of 3 of 6.
+    camera.SetFogMode(FogMode.LINEAR)
+    camera.SetFogRange(0, 6)
+    camera.SetFogColor(Color(0, 0, 0))
+    material.SetShading(Shading.PBR)
+    Print("under half of a black fog: {Middle(target)}")
+    camera.SetFogMode(FogMode.NONE)
+    material.SetShading(Shading.UNLIT)
+
+    // The same by the other shading, whose colors are made in encoded values: it's linear to a shader.
+    material.SetShading(Shading.PBR)
+    Print("whatever its shading: {Middle(target)}")
+    material.SetShading(Shading.UNLIT)
+
+    Local inputs = Try Assets.Load<Shader>(Res.Inputs)
+    material.SetShader(inputs)
+    material.SetParameter(0, Vec4(0, 0, 0, 0))
+    Print("its UVs, a half each: {Middle(target)}")
+    material.SetParameter(0, Vec4(1, 0, 0, 0))
+    Print("its normal, toward the camera: {Middle(target)}")
+    material.SetParameter(0, Vec4(2, 0, 0, 0))
+    Print("its vertices' color, a half each: {Middle(target)}")
+    material.SetParameter(0, Vec4(3, 0, 0, 0))
+    Print("what it would have drawn, with no layer: {Middle(target)}")
+    Local layer = Try Texture(2, 2, TextureFormat.RGBA8, False)
+    layer.Clear(Color(0.5, 0.5, 0.5))
+    material.SetTexture(0, layer)
+    material.SetParameter(0, Vec4(4, 0, 0, 0))
+    Print("its layer's texture, a half each: {Middle(target)}")
+    material.SetTexture(0, Null)
+    material.SetParameter(0, Vec4(5, 0, 0, 0))
+    material.SetShading(Shading.PBR)
+    Print("the light on it, the ambient's 0.25 each: {Middle(target)}")
+
+    // An alpha below a cutoff is cut, of what it returns, not of what the material made.
+    material.SetParameter(0, Vec4(6, 0, 0, 0))
+    material.SetAlphaCutoff(0.75)
+    Print("its alpha, below a cutoff: {Middle(target)}")
+    material.SetAlphaCutoff(0.25)
+    Print("and above one: {Middle(target)}")
+    material.SetAlphaCutoff(0)
+    material.SetParameter(0, Vec4(5, 0, 0, 0))
+
+    // Moved up by 100, the wall's gone from the middle; not moved, it's there, by the ambient.
+    Local ripple = Try Assets.Load<Shader>(Res.Ripple)
+    material.SetShader(ripple)
+    material.SetParameter(1, Vec4(1, 1, 1, 1))
+    material.SetParameter(0, Vec4(100, 0, 1.5708, 0))
+    Print("its vertices moved away: {Middle(target)}")
+    material.SetParameter(0, Vec4(0, 0, 0, 0))
+    Print("and not: {Middle(target)}")
+
+    // Back to the scene's own.
+    material.SetShading(Shading.UNLIT)
+    material.SetShader(Null)
+    Print("with none again: {Middle(target)}, its shader {material.Shader() == Null ? "none" : "still"}")
+    Try ShadowProved(target)
+    Print("shaders done")
+End Function
+
+// A shadow goes where a shader moves a vertex: a sun from the right on a wall, and off to the right
+// of the camera's sight a square, above the sun's way to the wall's middle till its shader brings
+// it down. Its cull box has room for that, as its bounds don't.
+Function ShadowProved(target: Texture) Throws GraphicsError, IOError
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local camera = Camera()
+    camera.SetRenderTarget(target)
+    camera.SetClearColor(Color(0, 0, 0))
+    world.SetAmbientLight(Color(0, 0, 0))
+    Local wall = Mesh(Wall(2))
+    wall.SetScale(Vec3(5, 5, 5))
+    wall.SetPosition(Vec3(0, 0, -10))
+    Local sun = Light(LightType.DIRECTIONAL)
+    sun.SetRotation(Quat.FromAxisAngle(Vec3(0, 1, 0), Deg(45)))
+    sun.SetShadows(True)
+    Local material = Material()
+    material.SetShader(Try Assets.Load<Shader>(Res.Ripple))
+    material.SetParameter(1, Vec4(1, 1, 1, 1))
+    Local geometry = Wall(2)
+    geometry.SetCullBox(AABB(Vec3(-3, -33, -1), Vec3(3, 3, 1)))
+    Local square = Mesh(geometry)
+    square.SetMaterial(material)
+    square.SetPosition(Vec3(5, 30, -5))
+    material.SetParameter(0, Vec4(0, 0, 1.5708, 0))
+    Print("nothing on the sun's way: {Lit(target)}")
+    material.SetParameter(0, Vec4(-30, 0, 1.5708, 0))
+    Print("its shadow, moved onto it: {Lit(target)}")
+    material.SetParameter(0, Vec4(0, 0, 1.5708, 0))
+    Print("and away: {Lit(target)}")
+End Function
+
+// Whether the middle of what's drawn isn't black.
+Function Lit(target: Texture): Bool
+    Return Middle(target) != "0, 0, 0"
+End Function
+
+// A surface rippling, lit, seen from above.
+Function Watched(frames: Int) Throws GraphicsError, IOError
+    Window.SetHeadless(frames > 0)
+    Window.SetTitle("A material with its own shader")
+    Try Graphics(1024, 576)
+    Defer EndGraphics()
+    Frame.SetLimit(60)
+    Try Res.Mount()
+    Local world = World()
+    World.SetCurrent(world)
+    Defer world.Free()
+    Local camera = Camera()
+    camera.SetPosition(Vec3(0, 5, 7))
+    camera.PointAt(Vec3(0, 0, 0))
+    camera.SetClearColor(Color(0.05, 0.07, 0.1))
+    world.SetAmbientLight(Color(0.2, 0.2, 0.25))
+    Local light = Light(LightType.POINT)
+    light.SetPosition(Vec3(3, 6, 3))
+    light.SetRange(30)
+    light.SetIntensity(80)
+    Local material = Material()
+    material.SetShader(Try Assets.Load<Shader>(Res.Ripple))
+    material.SetParameter(1, Vec4(0.2, 0.5, 0.9, 1))
+    Local water = Mesh(Wall(64))
+    water.SetMaterial(material)
+    water.SetRotation(Quat.FromAxisAngle(Vec3(1, 0, 0), Deg(-90)))
+    Local count = 0
+    Local age: Float = 0
+    Local earlier: Image? = Null
+    Local last: Image? = Null
+    While !Window.Closed() && (frames == 0 || count < frames)
+        If KeyHit(Key.ESCAPE) Then Break
+        age += Frame.Delta() As Float
+        count += 1
+        material.SetParameter(0, Vec4(0.4, 18, age * 2, 0))
+        RenderWorld()
+        If frames > 0 && count == frames / 2 Then earlier = Try Screen.ToImage()
+        If frames > 0 && count == frames Then last = Try Screen.ToImage()
+        Flip()
+    End While
+    If last != Null && earlier != Null
+        // Its own shader's water, blue by its second parameter, 0.2, 0.5, 0.9, and its ripple moved on
+        // by the time it's given, so its middle isn't what it was.
+        Local middle = last[512, 288]
+        Local moved = 0
+        For y = 200 To 380
+            For x = 400 To 620
+                If last[x, y] != earlier[x, y] Then moved += 1
+            End For
+        End For
+        Print("its water bluest {middle.b > middle.g && middle.g > middle.r}, its ripple moved {moved > 500}")
+    End If
+    Print("watched {count} frames")
+End Function
+
+// How many frames `arguments` asks for after --frames, 0 for no end.
+Function FramesOf(arguments: String[]): Int
+    Local at = arguments.IndexOf("--frames")
+    If at == Null || at + 1 >= arguments.Count Then Return 0
+    Return Int.Parse(arguments[at + 1]) ?? 0
+End Function
+
+Local arguments = Process.Arguments()
+If arguments.Contains("--watch")
+    Try Watched(FramesOf(arguments))
+Else
+    Try Proved()
+End If
