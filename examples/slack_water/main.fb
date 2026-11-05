@@ -1008,13 +1008,7 @@ Function IsWarm(pixel: Color32): Bool => (pixel.r As Int) > (pixel.b As Int) + 2
 // the middle of a thin part seen from under it is only its underside.
 Function DiffersNear(camera: Camera, with: Image, without: Image, place: Vec3): Bool
     Local at = camera.Project(place)
-    If at == Null Then Return False
-    For y = Max((at.y As Int) - 6, 0) To Min((at.y As Int) + 6, with.Height - 1)
-        For x = Max((at.x As Int) - 6, 0) To Min((at.x As Int) + 6, with.Width - 1)
-            If Abs(Brightness(with[x, y]) - Brightness(without[x, y])) > 24 Then Return True
-        End For
-    End For
-    Return False
+    Return at != Null && DiffersAround(with, without, at.x As Int, at.y As Int)
 End Function
 
 // How bright the mill's ceiling is, as `camera` sees it in `image`, drawn with no lantern, so by nothing
@@ -1110,8 +1104,9 @@ Function SaveWalk(folder: Path) Throws GraphicsError, IOError, AudioError
         Try
             Local without = Try Screen.ToImage()
             Flip(False)
-            Checks(what, image != Null && DiffersNear(game.View(), image, without,
-                                                      thing.Position(Space.WORLD)))
+            Local place = thing.Position(Space.WORLD)
+            Checks(what, image != Null && DiffersNear(game.View(), image, without, place) &&
+                   !DiffersNear(game.View(), without, without, place))
         Catch e As GraphicsError
             failure = e.Message
         End Try

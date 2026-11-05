@@ -889,3 +889,30 @@ Function WhatDrawsWithNoPersonDoesntPickAGpu()
     Expect(MayDrawOn(1))
     Expect(!MayDrawOn(2))
 End Function
+
+@Test
+Function APartIsSeenByWhatItChangesNearIt()
+    Local without = Image(40, 40)
+    Local with = Image(40, 40)
+    For y = 0 Until 40
+        For x = 0 Until 40
+            without[x, y] = Color32(100, 100, 100, 255)
+            with[x, y] = Color32(100, 100, 100, 255)
+        End For
+    End For
+    // Nothing changed, and a frame's little difference, aren't it.
+    Expect(!DiffersAround(with, without, 20, 20))
+    with[20, 20] = Color32(108, 108, 108, 255)
+    Expect(!DiffersAround(with, without, 20, 20))
+    with[20, 20] = Color32(109, 108, 108, 255)
+    Expect(DiffersAround(with, without, 20, 20))
+    // Darker is as much of a change, to the end of how far it looks, and not past it.
+    with[20, 20] = Color32(100, 100, 100, 255)
+    with[26, 14] = Color32(0, 0, 0, 255)
+    Expect(DiffersAround(with, without, 20, 20))
+    Expect(!DiffersAround(with, without, 19, 20))
+    Expect(!DiffersAround(with, without, 20, 21))
+    Expect(DiffersAround(with, without, 32, 8))
+    Expect(!DiffersAround(with, without, 33, 8))
+    Expect(!DiffersAround(with, without, 32, 7))
+End Function

@@ -82,3 +82,18 @@ End Function
 
 /// Whether such a mode may draw, with `devices` shown: not when it would pick one of several for itself.
 Public Function MayDrawOn(devices: Int): Bool => devices <= 1
+
+/// Whether `with` shows something `without` doesn't within 6 pixels of (`x`, `y`): by more than the
+/// little that a frame differs from another of the same thing.
+Public Function DiffersAround(with: Image, without: Image, x: Int, y: Int): Bool
+    For row = Max(y - 6, 0) To Min(y + 6, with.Height - 1)
+        For column = Max(x - 6, 0) To Min(x + 6, with.Width - 1)
+            Local one = with[column, row]
+            Local other = without[column, row]
+            Local change = Abs(((one.r As Int) + (one.g As Int) + (one.b As Int)) -
+                               ((other.r As Int) + (other.g As Int) + (other.b As Int)))
+            If change > 24 Then Return True
+        End For
+    End For
+    Return False
+End Function

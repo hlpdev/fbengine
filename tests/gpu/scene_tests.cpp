@@ -2479,14 +2479,14 @@ std::uint64_t grid_floor(std::uint64_t world, float y, int cells, float cell,
 
 /// A wall whose vertices all have this alpha.
 std::uint64_t alpha_wall(std::uint64_t world, float x, float z, float half, float alpha,
-                         std::uint64_t material) {
+                         std::uint64_t material, float uv_across = 0.0F) {
     const std::uint64_t geometry = fbe_geometry_create();
     const std::int32_t surface = fbe_geometry_add_surface(geometry);
     const auto corner = [&](float across, float up) {
         return fbe_vertex_t{
             .position = { .x = across * half, .y = up * half, .z = 0.0F },
             .normal = { .x = 0.0F, .y = 0.0F, .z = 1.0F },
-            .uv0 = { .x = 0.0F, .y = 0.0F },
+            .uv0 = { .x = (across + 1.0F) * 0.5F * uv_across, .y = (up + 1.0F) * 0.5F * uv_across },
             .uv1 = { .x = 0.0F, .y = 0.0F },
             .color = { .r = 1.0F, .g = 1.0F, .b = 1.0F, .a = alpha },
         };
@@ -2856,7 +2856,8 @@ TEST_CASE("the LOD bias reaches what a cut-out's cut by in its shadow", "[gpu][s
     const std::uint64_t paint = fbe_material_create();
     wall(scene.world, -10.0F, 30.0F, paint);
     sun_from_right(scene.world);
-    // Whole in its middle, so a shadow; a quarter whole by its last level, which the cutoff cuts.
+    // Whole in its middle, so a shadow; a quarter whole by its last level, which the cutoff cuts. A bias
+    // is on a level found from how UVs change, so they have to.
     const std::uint64_t texture = fbe_texture_create(8, 8, FBE_TEXTURE_RGBA8, true);
     std::vector<std::uint8_t> pixels;
     for (int y = 0; y < 8; ++y) {
@@ -2870,7 +2871,7 @@ TEST_CASE("the LOD bias reaches what a cut-out's cut by in its shadow", "[gpu][s
     const std::uint64_t caster = fbe_material_create();
     require(fbe_material_set_alpha_cutoff(caster, 0.5F));
     require(fbe_material_set_texture(caster, 0, texture));
-    alpha_wall(scene.world, 5.0F, -5.0F, 3.0F, 1.0F, caster);
+    alpha_wall(scene.world, 5.0F, -5.0F, 3.0F, 1.0F, caster, 1.0F);
     CHECK(middle(scene.drawn())[0] == 0);
     require(fbe_gpu_set_lod_bias(16.0F));
     CHECK(middle(scene.drawn())[0] > 0);
